@@ -25,6 +25,27 @@
     <ProjectReference Include="..\..\Zeus.Protocol1\Zeus.Protocol1.csproj" />
     <ProjectReference Include="..\..\Zeus.Contracts\Zeus.Contracts.csproj" />
     <ProjectReference Include="..\..\Zeus.Dsp\Zeus.Dsp.csproj" />
+    <!-- HelloWorld sample plugin: built before tests run, but NOT linked
+         into the test assembly. Tests load it the way Zeus does in
+         production — via AssemblyLoadContext after copying the build
+         output into a temp dir. The Reference flags ensure HelloWorld
+         participates in the solution build order without polluting the
+         test's compile-time references. -->
+    <ProjectReference Include="..\..\samples\plugins\HelloWorld\HelloWorld.csproj"
+                      ReferenceOutputAssembly="false"
+                      Private="false" />
   </ItemGroup>
+
+  <Target Name="CopyHelloWorldPluginForTests" AfterTargets="Build">
+    <ItemGroup>
+      <_HelloWorldArtifacts Include="..\..\samples\plugins\HelloWorld\bin\$(Configuration)\net10.0\HelloWorld.dll" />
+      <_HelloWorldArtifacts Include="..\..\samples\plugins\HelloWorld\bin\$(Configuration)\net10.0\HelloWorld.pdb"
+                            Condition="Exists('..\..\samples\plugins\HelloWorld\bin\$(Configuration)\net10.0\HelloWorld.pdb')" />
+      <_HelloWorldArtifacts Include="..\..\samples\plugins\HelloWorld\plugin.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_HelloWorldArtifacts)"
+          DestinationFolder="$(OutputPath)testdata\HelloWorld\"
+          SkipUnchangedFiles="true" />
+  </Target>
 
 </Project>

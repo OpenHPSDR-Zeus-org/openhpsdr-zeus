@@ -6,4 +6,12 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <!-- Plugins/IPluginContext exposes ILogger so plugin authors can write
+         log lines through the host's logging configuration. The
+         Abstractions package is dependency-light and the conventional
+         way to take a logger dependency from a contract assembly. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+
 </Project>

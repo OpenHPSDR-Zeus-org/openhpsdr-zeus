@@ -14,6 +14,7 @@ using Zeus.Dsp.Wdsp;
 using Zeus.PluginHost;
 using Zeus.Protocol1;
 using Zeus.Protocol1.Discovery;
+using Zeus.Server.Plugins;
 using Zeus.Server.Tci;
 
 namespace Zeus.Server;
@@ -201,6 +202,15 @@ public static class ZeusHost
         // requests; hosted-service registration runs ExecuteAsync.
         builder.Services.AddSingleton<RotctldService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<RotctldService>());
+
+        // Plugin foundation (PR-A). PluginManager scans the per-platform XDG
+        // plugin directory at boot, loads each manifest into a collectible
+        // AssemblyLoadContext, and runs IZeusPlugin.InitializeAsync. Plugins
+        // are isolated by failure (one bad plugin can't block boot) but not
+        // by process — capability enforcement and the /api/plugins surface
+        // land in PR-B/C. Disable with --no-plugins or Plugins:Disabled=true.
+        builder.Services.AddSingleton<PluginManager>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<PluginManager>());
 
         // VST plugin-host (Wave 6a). PluginHostManager owns the sidecar
         // lifecycle; VstHostHostedService bridges it to the WDSP TX-mic seam,

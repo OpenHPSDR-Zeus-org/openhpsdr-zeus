@@ -1,0 +1,12 @@
+{
+  "id": "com.openhpsdr.zeus.helloworld",
+  "name": "Hello World",
+  "version": "1.0.0",
+  "author": "OpenHPSDR Zeus contributors",
+  "description": "Sample plugin that logs a friendly greeting on init.",
+  "homepageUrl": null,
+  "assembly": "HelloWorld.dll",
+  "capabilities": [],
+  "resourceLimits": null,
+  "isolation": "inprocess"
+}
