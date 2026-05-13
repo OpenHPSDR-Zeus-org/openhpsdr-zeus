@@ -78,6 +78,7 @@ public sealed class TxAudioIngest : IDisposable
     private readonly ILogger<TxAudioIngest> _log;
     private readonly StreamingHub _hub;
     private readonly Action<ReadOnlyMemory<byte>> _handler;
+    private Action<int>? _onWdspConsumed;
 
     private readonly object _sync = new();
     // Accumulator scratch — sized to at least one WDSP block plus one frontend
@@ -130,12 +131,14 @@ public sealed class TxAudioIngest : IDisposable
         Func<bool> isMoxOn,
         StreamingHub hub,
         ILogger<TxAudioIngest> log,
-        Action<ReadOnlyMemory<float>>? forwardP2 = null)
+        Action<ReadOnlyMemory<float>>? forwardP2 = null,
+        Action<int>? onWdspConsumed = null)
     {
         _ring = ring;
         _engineProvider = engineProvider;
         _isMoxOn = isMoxOn;
         _forwardP2 = forwardP2;
+        _onWdspConsumed = onWdspConsumed;
         _hub = hub;
         _log = log;
         _handler = OnMicPcmBytes;
@@ -144,6 +147,7 @@ public sealed class TxAudioIngest : IDisposable
 
     private readonly Action<ReadOnlyMemory<float>>? _forwardP2;
 
+    internal void SetWdspConsumedCallback(Action<int>? cb) { _onWdspConsumed = cb; }
     public long TotalMicSamples { get { lock (_sync) return _totalMicSamples; } }
     public long TotalTxBlocks { get { lock (_sync) return _totalTxBlocks; } }
     public long DroppedFrames { get { lock (_sync) return _droppedFrames; } }
@@ -263,6 +267,7 @@ public sealed class TxAudioIngest : IDisposable
                         _forwardP2?.Invoke(new ReadOnlyMemory<float>(_scratchIq, 0, 2 * produced));
                     }
                     _totalTxBlocks++;
+                    _onWdspConsumed?.Invoke(blockSize);
 
                     // Accumulate peaks for the 1 Hz diagnostic log.
                     float micPeak = 0f;

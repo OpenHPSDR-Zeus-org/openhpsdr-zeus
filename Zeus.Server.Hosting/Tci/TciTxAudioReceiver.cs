@@ -45,6 +45,7 @@ internal sealed class TciTxAudioReceiver : IDisposable
 
     private readonly Action<ReadOnlyMemory<byte>> _forward;
     private readonly ILogger _log;
+    private readonly Action<int>? _onMonoSamplesQueued;
 
     private readonly object _sync = new();
     private readonly float[] _monoAccumulator = new float[AccumulatorCapacity];
@@ -55,10 +56,11 @@ internal sealed class TciTxAudioReceiver : IDisposable
     private long _totalFramesDropped;
     private long _totalSamplesForwarded;
 
-    public TciTxAudioReceiver(Action<ReadOnlyMemory<byte>> forwardF32leMicBlock, ILogger log)
+    public TciTxAudioReceiver(Action<ReadOnlyMemory<byte>> forwardF32leMicBlock, ILogger log, Action<int>? onMonoSamplesQueued = null)
     {
         _forward = forwardF32leMicBlock ?? throw new ArgumentNullException(nameof(forwardF32leMicBlock));
         _log = log;
+        _onMonoSamplesQueued = onMonoSamplesQueued;
     }
 
     public long TotalFramesAccepted { get { lock (_sync) return _totalFramesAccepted; } }
@@ -101,9 +103,12 @@ internal sealed class TciTxAudioReceiver : IDisposable
             return;
         }
 
-        // Trust the smaller of the declared float count and the actual payload
-        // size in floats — protects against a malformed length field.
-        int floatCount = (int)Math.Min(declaredFloatCount, (uint)(samplePayload.Length / 4));
+        // WSJT-X allocates a buffer of length*sizeof(float)*2 bytes but
+        // readAudioData only writes to the first length floats (length/2
+        // stereo frames via the load() function). The tail is zeroes from
+        // QByteArray::resize. Use declaredFloatCount as the cap so we don't
+        // decode silence as audio.
+        int floatCount = Math.Min((int)(samplePayload.Length / 4), (int)declaredFloatCount);
         if (floatCount <= 0)
         {
             lock (_sync) _totalFramesDropped++;
@@ -111,8 +116,6 @@ internal sealed class TciTxAudioReceiver : IDisposable
         }
         if (channels == 2 && (floatCount & 1) != 0)
         {
-            // Odd float count for stereo means the last L without an R —
-            // truncate by one to keep alignment.
             floatCount--;
         }
 
@@ -155,8 +158,6 @@ internal sealed class TciTxAudioReceiver : IDisposable
             _monoFill += monoSampleCount;
             _totalFramesAccepted++;
 
-            // Drain accumulator in 960-sample blocks. Each block becomes a
-            // 3840-byte f32le buffer dispatched synchronously to TxAudioIngest.
             int writeOffset = 0;
             while (_monoFill - writeOffset >= OutputBlockSamples)
             {
@@ -170,6 +171,10 @@ internal sealed class TciTxAudioReceiver : IDisposable
                 writeOffset += OutputBlockSamples;
                 _totalSamplesForwarded += OutputBlockSamples;
             }
+
+            int forwarded = writeOffset;
+            int netQueued = monoSampleCount - forwarded;
+            _onMonoSamplesQueued?.Invoke(netQueued);
 
             // Shift the remainder (always < 960 samples) to the head.
             int remainder = _monoFill - writeOffset;
