@@ -828,6 +828,10 @@ public class DspPipelineService : BackgroundService,
         var client = new Zeus.Protocol2.Protocol2Client(
             _loggerFactory.CreateLogger<Zeus.Protocol2.Protocol2Client>());
         client.SetNumAdc(numAdc);
+        // Tell the P2 client which board it's talking to so RX-decode quirks
+        // (Hermes-on-P2 48 kHz IQ gain correction; future per-board branches)
+        // are gated correctly. boardKind == Unknown leaves all quirks off.
+        client.SetBoardKind(boardKind);
         await client.ConnectAsync(radioEndpoint, ct).ConfigureAwait(false);
         // Seed the operator's RX front-end (preamp + step attenuator) BEFORE
         // StartAsync so the very first CmdHighPriority emitted inside the

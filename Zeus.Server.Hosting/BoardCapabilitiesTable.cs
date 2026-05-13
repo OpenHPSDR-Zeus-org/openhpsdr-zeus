@@ -90,6 +90,12 @@ internal static class BoardCapabilitiesTable
     };
 
     // Hermes / Metis / ANAN-10 — small-signal Hermes-class single-RX. ~10 W.
+    // Brick2 SDR (Sergey EU1SW) announces as wire byte 0x01 → HpsdrBoardKind.Hermes
+    // and inherits this fingerprint. Brick2's hardware reality (1 ADC, no Alex
+    // BPF, no Apollo LPF, no on-board telemetry, internal step attenuator
+    // 0-31 dB on RX1 only) matches the row exactly; see Zeus issue #171.
+    // MaxPowerWatts=10 is conservative for Brick2 (rated 15 W); operator
+    // overrides per-rig in the PA panel.
     private static readonly BoardCapabilities HermesClass = new(
         RxAdcCount: 1,
         MkiiBpf: false,
