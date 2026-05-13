@@ -43,7 +43,6 @@
 // License for details.
 
 using System.Buffers;
-using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
@@ -459,22 +458,6 @@ public sealed class TciSession : IDisposable
     /// LineOut as outbound-only, and TX_CHRONO (=3) is sent by the server
     /// rather than received. Spec §3.4.
     /// </summary>
-    // TODO(remove): temporary file logger for TCI TX audio debug — remove after WSJT-X TX audio is confirmed working
-    private static int _dbgTxBinaryCount;
-    private static int _dbgTxPayloadBytes;
-    private static float _dbgTxPeakAccum;
-    private static DateTime _dbgTxLastFlush = DateTime.UtcNow;
-    private static readonly object _dbgTxLock = new();
-    private static readonly string _dbgLogPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "zeus-tci-debug.log");
-
-    private static void DbgLog(string msg)
-    {
-        lock (_dbgTxLock)
-        {
-            File.AppendAllText(_dbgLogPath, $"{DateTime.UtcNow:HH:mm:ss.fff} {msg}\n");
-        }
-    }
-
     private void HandleBinaryFrame(ReadOnlySpan<byte> frame)
     {
         if (!TciStreamPayload.TryParseHeader(frame, out var header))
@@ -482,9 +465,6 @@ public sealed class TciSession : IDisposable
             _log.LogDebug("tci binary frame too short or malformed len={Len}", frame.Length);
             return;
         }
-
-        // TODO(remove): log all inbound binary frames for TCI TX audio debug
-        DbgLog($"binary-in type={header.StreamType} recv={header.Receiver} len={header.Length} sr={header.SampleRate} fmt={header.SampleType} bytes={frame.Length}");
 
         if (header.StreamType != TciStreamType.TxAudioStream)
         {
@@ -494,8 +474,6 @@ public sealed class TciSession : IDisposable
 
         if (_txAudioReceiver is null)
         {
-            _log.LogWarning("tci.dbg TX audio receiver is null — no ingest target");
-            DbgLog("TX-audio DROPPED: receiver is null");
             return;
         }
 
@@ -508,43 +486,16 @@ public sealed class TciSession : IDisposable
         }
         if (!sourceIsTci)
         {
-            _log.LogWarning("tci.dbg TX audio dropped: sourceIsTci=false");
-            DbgLog("TX-audio DROPPED: sourceIsTci=false");
+            _log.LogDebug("tci.tx.audio dropped (TRX source != tci)");
             return;
         }
         if (!_tx.IsMoxOn)
         {
-            _log.LogWarning("tci.dbg TX audio dropped: MOX off");
-            DbgLog("TX-audio DROPPED: MOX off");
+            _log.LogDebug("tci.tx.audio dropped (MOX off)");
             return;
         }
 
         var samplePayload = frame.Slice(TciStreamPayload.HeaderSize);
-
-        // TODO(remove): accumulate stats and peak amplitude, flush once per second
-        float framePeak = 0f;
-        int frameFloats = Math.Min((int)header.Length, samplePayload.Length / 4);
-        for (int i = 0; i < frameFloats; i++)
-        {
-            float v = BinaryPrimitives.ReadSingleLittleEndian(samplePayload.Slice(i * 4, 4));
-            if (v < 0) v = -v;
-            if (v > framePeak) framePeak = v;
-        }
-        lock (_dbgTxLock)
-        {
-            _dbgTxBinaryCount++;
-            _dbgTxPayloadBytes += samplePayload.Length;
-            if (framePeak > _dbgTxPeakAccum) _dbgTxPeakAccum = framePeak;
-            if (DateTime.UtcNow - _dbgTxLastFlush >= TimeSpan.FromSeconds(1))
-            {
-                DbgLog($"TX-audio stats: frames={_dbgTxBinaryCount} payloadBytes={_dbgTxPayloadBytes} declaredLen={header.Length} channels={channels} peak={_dbgTxPeakAccum:F4}");
-                _dbgTxBinaryCount = 0;
-                _dbgTxPayloadBytes = 0;
-                _dbgTxPeakAccum = 0f;
-                _dbgTxLastFlush = DateTime.UtcNow;
-            }
-        }
-
         _txAudioReceiver.AcceptTxAudio(
             samplePayload,
             header.SampleType,
