@@ -177,9 +177,14 @@ public static class ZeusEndpoints
                 _ => 192,
             };
 
+            // Plumb the discovered board byte through so RadioService can
+            // surface the real board kind instead of defaulting to OrionMkII
+            // for every P2 connection (issue #171 — Brick2 is Hermes/0x01 on P2).
+            var boardKind = req.BoardId is byte b ? MapBoardByte(b) : HpsdrBoardKind.Unknown;
+
             try
             {
-                await dsp.ConnectP2Async(ipEndpoint, rateKhz, numAdc: 2, ctx.RequestAborted);
+                await dsp.ConnectP2Async(ipEndpoint, rateKhz, numAdc: 2, ctx.RequestAborted, boardKind);
                 return Results.Ok(new { protocol = "P2", endpoint = req.Endpoint, sampleRateKhz = rateKhz });
             }
             catch (InvalidOperationException ex)
@@ -1453,6 +1458,23 @@ public static class ZeusEndpoints
         ep = new IPEndPoint(ip, port);
         return true;
     }
+
+    // Mirrors the byte→enum maps in Zeus.Protocol1.Discovery.ReplyParser and
+    // Zeus.Protocol2.Discovery.ReplyParser. Kept inline (not factored to a
+    // shared helper) because those parsers are deliberately self-contained
+    // per protocol; this is the connect-time projection of the same table.
+    static HpsdrBoardKind MapBoardByte(byte raw) => raw switch
+    {
+        0x00 => HpsdrBoardKind.Metis,
+        0x01 => HpsdrBoardKind.Hermes,
+        0x02 => HpsdrBoardKind.HermesII,
+        0x04 => HpsdrBoardKind.Angelia,
+        0x05 => HpsdrBoardKind.Orion,
+        0x06 => HpsdrBoardKind.HermesLite2,
+        0x0A => HpsdrBoardKind.OrionMkII,
+        0x14 => HpsdrBoardKind.HermesC10,
+        _    => HpsdrBoardKind.Unknown,
+    };
 
     static HpsdrBoardKind? ParseBoardKind(string? raw)
     {

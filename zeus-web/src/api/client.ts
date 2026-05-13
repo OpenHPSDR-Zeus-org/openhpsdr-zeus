@@ -270,6 +270,12 @@ export type ConnectRequest = {
   preampOn?: boolean;
   // Server accepts 0..3 (→ 0/10/20/30 dB attenuation).
   atten?: number;
+  // Raw HPSDR board byte from discovery's details.rawBoardId. Passed to
+  // /api/connect/p2 so the server knows the real board kind instead of
+  // defaulting to OrionMkII for every P2 connection (issue #171 — Brick2
+  // identifies as Hermes/0x01 on P2). Omit for manual connects where the
+  // board is unknown.
+  boardId?: number;
 };
 
 // System.Text.Json can serialize enums as either numbers (default) or strings

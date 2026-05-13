@@ -248,7 +248,13 @@ public sealed record ConnectRequest(
     string Endpoint,
     int SampleRate = 192_000,
     bool? PreampOn = null,
-    int? Atten = null);
+    int? Atten = null,
+    // Raw HPSDR board byte from discovery (P2's reply parser maps this to
+    // <see cref="HpsdrBoardKind"/>). When provided on /api/connect/p2 the
+    // server uses it as the connected board kind instead of the historical
+    // "P2 active ⇒ assume OrionMkII" fallback. Null/omitted = legacy
+    // behaviour. Issue #171.
+    byte? BoardId = null);
 
 public sealed record VfoSetRequest(long Hz);
 

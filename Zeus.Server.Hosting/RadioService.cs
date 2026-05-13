@@ -94,6 +94,12 @@ public sealed class RadioService : IDisposable
     // the user is on a G2 MkII / Saturn (P2 discovery flow skips
     // Protocol1Client entirely).
     private bool _p2Active;
+    // Discovered board kind for the active P2 connection. Set by
+    // MarkProtocol2Connected from the connect-API request byte (issue #171 —
+    // Brick2 is Hermes-on-P2, not OrionMkII). Unknown when the caller didn't
+    // supply a byte, in which case ConnectedBoardKind falls back to OrionMkII
+    // for backward compat.
+    private HpsdrBoardKind _p2BoardKind = HpsdrBoardKind.Unknown;
     private bool _preampOn;
     // Auto-ATT defaults on; the user baseline starts at 0 dB and the control
     // loop ramps _attOffsetDb up to 31 dB on observed ADC overloads (Thetis
@@ -1289,9 +1295,17 @@ public sealed class RadioService : IDisposable
     // Protocol2Client to subscribers of <see cref="P2Connected"/>; passing
     // null keeps the signature backward-compatible for tests that don't
     // need the telemetry surface (issue #174).
-    public void MarkProtocol2Connected(string endpoint, int sampleRateHz, Zeus.Protocol2.Protocol2Client? client = null)
+    public void MarkProtocol2Connected(
+        string endpoint,
+        int sampleRateHz,
+        Zeus.Protocol2.Protocol2Client? client = null,
+        HpsdrBoardKind boardKind = HpsdrBoardKind.Unknown)
     {
-        lock (_sync) _p2Active = true;
+        lock (_sync)
+        {
+            _p2Active = true;
+            _p2BoardKind = boardKind;
+        }
         Mutate(s => s with
         {
             Status = ConnectionStatus.Connected,
@@ -1308,7 +1322,11 @@ public sealed class RadioService : IDisposable
 
     public void MarkProtocol2Disconnected()
     {
-        lock (_sync) _p2Active = false;
+        lock (_sync)
+        {
+            _p2Active = false;
+            _p2BoardKind = HpsdrBoardKind.Unknown;
+        }
         Mutate(s => s with
         {
             Status = ConnectionStatus.Disconnected,
@@ -1344,7 +1362,18 @@ public sealed class RadioService : IDisposable
 
                 // Normal path: use discovery result.
                 if (_activeClient is not null) return _activeClient.BoardKind;
-                if (_p2Active) return HpsdrBoardKind.OrionMkII;
+                if (_p2Active)
+                {
+                    // Brick2 announces as Hermes (0x01) on P2; older Zeus
+                    // assumed every P2 radio was OrionMkII because the connect
+                    // API didn't carry the discovered byte (issue #171). The
+                    // byte is now plumbed through MarkProtocol2Connected — fall
+                    // back to OrionMkII only when the caller didn't supply it
+                    // (legacy tests, older frontends).
+                    return _p2BoardKind != HpsdrBoardKind.Unknown
+                        ? _p2BoardKind
+                        : HpsdrBoardKind.OrionMkII;
+                }
                 return HpsdrBoardKind.Unknown;
             }
         }
