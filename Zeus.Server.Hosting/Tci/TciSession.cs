@@ -43,6 +43,7 @@
 // License for details.
 
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
@@ -461,6 +462,7 @@ public sealed class TciSession : IDisposable
     // TODO(remove): temporary file logger for TCI TX audio debug — remove after WSJT-X TX audio is confirmed working
     private static int _dbgTxBinaryCount;
     private static int _dbgTxPayloadBytes;
+    private static float _dbgTxPeakAccum;
     private static DateTime _dbgTxLastFlush = DateTime.UtcNow;
     private static readonly object _dbgTxLock = new();
     private static readonly string _dbgLogPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "zeus-tci-debug.log");
@@ -519,16 +521,26 @@ public sealed class TciSession : IDisposable
 
         var samplePayload = frame.Slice(TciStreamPayload.HeaderSize);
 
-        // TODO(remove): accumulate stats and flush to log once per second
+        // TODO(remove): accumulate stats and peak amplitude, flush once per second
+        float framePeak = 0f;
+        int frameFloats = Math.Min((int)header.Length, samplePayload.Length / 4);
+        for (int i = 0; i < frameFloats; i++)
+        {
+            float v = BinaryPrimitives.ReadSingleLittleEndian(samplePayload.Slice(i * 4, 4));
+            if (v < 0) v = -v;
+            if (v > framePeak) framePeak = v;
+        }
         lock (_dbgTxLock)
         {
             _dbgTxBinaryCount++;
             _dbgTxPayloadBytes += samplePayload.Length;
+            if (framePeak > _dbgTxPeakAccum) _dbgTxPeakAccum = framePeak;
             if (DateTime.UtcNow - _dbgTxLastFlush >= TimeSpan.FromSeconds(1))
             {
-                DbgLog($"TX-audio stats: frames={_dbgTxBinaryCount} payloadBytes={_dbgTxPayloadBytes} declaredLen={header.Length} channels={channels}");
+                DbgLog($"TX-audio stats: frames={_dbgTxBinaryCount} payloadBytes={_dbgTxPayloadBytes} declaredLen={header.Length} channels={channels} peak={_dbgTxPeakAccum:F4}");
                 _dbgTxBinaryCount = 0;
                 _dbgTxPayloadBytes = 0;
+                _dbgTxPeakAccum = 0f;
                 _dbgTxLastFlush = DateTime.UtcNow;
             }
         }
