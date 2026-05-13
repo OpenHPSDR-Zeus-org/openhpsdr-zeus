@@ -118,14 +118,17 @@ internal static class TciStreamPayload
     /// the client uses this as a "send another TX audio block now" signal per
     /// spec §3.4. Sent periodically by the server while MOX is on AND the
     /// session has TRX source = TCI.
+    /// <paramref name="length"/> is total-float-count (samples * channels)
+    /// matching Thetis modern-length-semantics (TCIServer.cs:5936).
+    /// Default: 2048 samples * 2 channels = 4096 floats.
     /// </summary>
-    public static byte[] BuildTxChrono(int receiver, int sampleRate)
+    public static byte[] BuildTxChrono(int receiver, int sampleRate, int length = 4096)
     {
         return Build(
             receiver,
             sampleRate,
             TciSampleType.Float32,
-            length: 0,
+            length: length,
             streamType: TciStreamType.TxChrono,
             samplePayload: ReadOnlySpan<byte>.Empty);
     }

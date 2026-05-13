@@ -156,7 +156,8 @@ public sealed class TciSession : IDisposable
         DspPipelineService pipeline,
         SpotManager spots,
         TciOptions options,
-        TxAudioIngest? txAudioIngest = null)
+        TxAudioIngest? txAudioIngest = null,
+        TciServer? tciServer = null)
     {
         _id = id;
         _ws = ws;
@@ -168,11 +169,9 @@ public sealed class TciSession : IDisposable
         _options = options;
         _rateLimiter = new TciRateLimiter(options.RateLimitMs, Send);
         _txAudioIngest = txAudioIngest;
-        // Receiver is wired only when an ingest target is available — keeps
-        // unit tests that stand up a session without DI from needing a full
-        // WDSP pipeline.
         _txAudioReceiver = txAudioIngest is not null
-            ? new TciTxAudioReceiver(txAudioIngest.OnMicPcmBytes, log)
+            ? new TciTxAudioReceiver(txAudioIngest.OnMicPcmBytes, log,
+                onMonoSamplesQueued: tciServer is not null ? tciServer.NotifyTxAudioQueued : null)
             : null;
     }
 
@@ -459,6 +458,21 @@ public sealed class TciSession : IDisposable
     /// LineOut as outbound-only, and TX_CHRONO (=3) is sent by the server
     /// rather than received. Spec §3.4.
     /// </summary>
+    // TODO(remove): temporary file logger for TCI TX audio debug — remove after WSJT-X TX audio is confirmed working
+    private static int _dbgTxBinaryCount;
+    private static int _dbgTxPayloadBytes;
+    private static DateTime _dbgTxLastFlush = DateTime.UtcNow;
+    private static readonly object _dbgTxLock = new();
+    private static readonly string _dbgLogPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "zeus-tci-debug.log");
+
+    private static void DbgLog(string msg)
+    {
+        lock (_dbgTxLock)
+        {
+            File.AppendAllText(_dbgLogPath, $"{DateTime.UtcNow:HH:mm:ss.fff} {msg}\n");
+        }
+    }
+
     private void HandleBinaryFrame(ReadOnlySpan<byte> frame)
     {
         if (!TciStreamPayload.TryParseHeader(frame, out var header))
@@ -467,24 +481,22 @@ public sealed class TciSession : IDisposable
             return;
         }
 
+        // TODO(remove): log all inbound binary frames for TCI TX audio debug
+        DbgLog($"binary-in type={header.StreamType} recv={header.Receiver} len={header.Length} sr={header.SampleRate} fmt={header.SampleType} bytes={frame.Length}");
+
         if (header.StreamType != TciStreamType.TxAudioStream)
         {
-            // Spec §7.2: client→server stream types are TX audio only. Anything
-            // else (IQ, RX audio, LineOut, TX_CHRONO) on the inbound path is
-            // protocol-incorrect. Drop quietly.
             _log.LogDebug("tci inbound binary type={Type} ignored (TX audio only)", header.StreamType);
             return;
         }
 
         if (_txAudioReceiver is null)
         {
-            // No DI'd ingest target — usually a unit-test session.
+            _log.LogWarning("tci.dbg TX audio receiver is null — no ingest target");
+            DbgLog("TX-audio DROPPED: receiver is null");
             return;
         }
 
-        // Source / MOX gating. The downstream TxAudioIngest also gates on
-        // MOX, but dropping early avoids wasting cycles decoding a frame
-        // that would never reach the wire.
         bool sourceIsTci;
         int channels;
         lock (_streamLock)
@@ -494,16 +506,33 @@ public sealed class TciSession : IDisposable
         }
         if (!sourceIsTci)
         {
-            _log.LogDebug("tci.tx.audio dropped (TRX source != tci)");
+            _log.LogWarning("tci.dbg TX audio dropped: sourceIsTci=false");
+            DbgLog("TX-audio DROPPED: sourceIsTci=false");
             return;
         }
         if (!_tx.IsMoxOn)
         {
-            _log.LogDebug("tci.tx.audio dropped (MOX off)");
+            _log.LogWarning("tci.dbg TX audio dropped: MOX off");
+            DbgLog("TX-audio DROPPED: MOX off");
             return;
         }
 
         var samplePayload = frame.Slice(TciStreamPayload.HeaderSize);
+
+        // TODO(remove): accumulate stats and flush to log once per second
+        lock (_dbgTxLock)
+        {
+            _dbgTxBinaryCount++;
+            _dbgTxPayloadBytes += samplePayload.Length;
+            if (DateTime.UtcNow - _dbgTxLastFlush >= TimeSpan.FromSeconds(1))
+            {
+                DbgLog($"TX-audio stats: frames={_dbgTxBinaryCount} payloadBytes={_dbgTxPayloadBytes} declaredLen={header.Length} channels={channels}");
+                _dbgTxBinaryCount = 0;
+                _dbgTxPayloadBytes = 0;
+                _dbgTxLastFlush = DateTime.UtcNow;
+            }
+        }
+
         _txAudioReceiver.AcceptTxAudio(
             samplePayload,
             header.SampleType,
@@ -944,6 +973,7 @@ public sealed class TciSession : IDisposable
         if (!on) ResetTxAudio();
 
         _tx.TrySetMox(on, out _);
+        Send(TciProtocol.Command("trx", rx, on));
     }
 
     private void HandleTune(string[] args)
@@ -959,6 +989,7 @@ public sealed class TciSession : IDisposable
         else if (args.Length >= 2 && TciProtocol.TryParseBool(args[1], out bool on))
         {
             _tx.TrySetTun(on, out _);
+            Send(TciProtocol.Command("tune", rx, on));
         }
     }
 

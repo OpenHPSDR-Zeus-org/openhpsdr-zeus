@@ -75,13 +75,37 @@ public sealed class TciServer : IHostedService, IDisposable
     private readonly ConcurrentDictionary<Guid, TciSession> _clients = new();
     private bool _subscribed;
 
-    // TX_CHRONO sync emitter — fires while MOX is on so any session with
-    // TRX source = TCI gets a "send another TX audio block now" signal at
-    // the audio block rate (spec §3.4). 50 ms cadence ≈ 2400 mono samples
-    // at 48 kHz, which lines up with the default 2048-frame TCI block.
-    private const int TxChronoIntervalMs = 50;
+    // TX_CHRONO demand-driven pacing — mirrors Thetis cmaster.serviceTCITxProtocol.
+    // WSJT-X generates all FT8 audio as fast as TX_CHRONO arrives, so we MUST
+    // pace at approximately real-time (1 chrono per ~42ms = 2048 samples @ 48kHz).
+    // Otherwise WSJT-X finishes a 12.6s message in <2s and the rest of TX is silence.
+    private const int TciTxChronoSpacingMs = 42;
+    private const int TciTxBurstCount = 3;
+
+    private int _tciTxChronoOutstanding;
+    private int _tciTxSamplesInPipeline;
+    private long _tciTxLastChronoTickMs;
+    private readonly object _tciTxStateLock = new();
     private Timer? _txChronoTimer;
     private byte[]? _txChronoFrame;
+
+    internal void NotifyTxAudioQueued(int monoSamplesQueued)
+    {
+        lock (_tciTxStateLock)
+        {
+            if (_tciTxChronoOutstanding > 0)
+                _tciTxChronoOutstanding--;
+            _tciTxSamplesInPipeline += monoSamplesQueued;
+        }
+    }
+
+    internal void NotifyWdspConsumed(int monoSamplesConsumed)
+    {
+        lock (_tciTxStateLock)
+        {
+            _tciTxSamplesInPipeline = Math.Max(0, _tciTxSamplesInPipeline - monoSamplesConsumed);
+        }
+    }
 
     public TciServer(
         IOptions<TciOptions> options,
@@ -145,7 +169,7 @@ public sealed class TciServer : IHostedService, IDisposable
             _subscribed = false;
         }
 
-        StopTxChronoTimer();
+        StopTciTxService();
 
         _log.LogInformation("tci.stopping active={Count}", _clients.Count);
 
@@ -185,7 +209,7 @@ public sealed class TciServer : IHostedService, IDisposable
 
         var id = Guid.NewGuid();
         var sessionLog = _loggerFactory.CreateLogger<TciSession>();
-        var session = new TciSession(id, ws, sessionLog, _radio, _tx, _pipeline, _spots, _options, _txAudioIngest);
+        var session = new TciSession(id, ws, sessionLog, _radio, _tx, _pipeline, _spots, _options, _txAudioIngest, this);
 
         _clients[id] = session;
         _log.LogInformation("tci.client.connected id={Id} total={Count}", id, _clients.Count);
@@ -291,6 +315,20 @@ public sealed class TciServer : IHostedService, IDisposable
         }
     }
 
+    // TODO(remove): temporary RX audio debug counters
+    private static int _dbgRxAudioFrames;
+    private static DateTime _dbgRxLastFlush = DateTime.UtcNow;
+    private static readonly object _dbgRxLock = new();
+    private static readonly string _dbgRxLogPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "zeus-tci-debug.log");
+
+    private static void DbgLogRx(string msg)
+    {
+        lock (_dbgRxLock)
+        {
+            File.AppendAllText(_dbgRxLogPath, $"{DateTime.UtcNow:HH:mm:ss.fff} {msg}\n");
+        }
+    }
+
     private void OnRxAudioAvailable(int receiver, int sampleRateHz, ReadOnlyMemory<float> samples)
     {
         if (_clients.IsEmpty) return;
@@ -300,6 +338,19 @@ public sealed class TciServer : IHostedService, IDisposable
         {
             if (session.WantsAudioStream(receiver)) { anyWants = true; break; }
         }
+
+        // TODO(remove): log RX audio availability for debug
+        lock (_dbgRxLock)
+        {
+            _dbgRxAudioFrames++;
+            if (DateTime.UtcNow - _dbgRxLastFlush >= TimeSpan.FromSeconds(2))
+            {
+                DbgLogRx($"RX-audio: frames={_dbgRxAudioFrames} samples={samples.Length} sr={sampleRateHz} anyWants={anyWants} clients={_clients.Count}");
+                _dbgRxAudioFrames = 0;
+                _dbgRxLastFlush = DateTime.UtcNow;
+            }
+        }
+
         if (!anyWants) return;
 
         var payload = TciStreamPayload.BuildAudioFromFloats(receiver, sampleRateHz, samples.Span);
@@ -314,9 +365,10 @@ public sealed class TciServer : IHostedService, IDisposable
     {
         // Standalone TX meter events broadcast to all clients
         // tx_power:<watts> — forward power
-        Broadcast(TciProtocol.Command("tx_power", (int)Math.Round(fwdWatts)));
+        var fwdStr = fwdWatts.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
+        Broadcast(TciProtocol.Command("tx_power", fwdStr));
         // tx_forward_power:<watts> — alias many clients listen for
-        Broadcast(TciProtocol.Command("tx_forward_power", (int)Math.Round(fwdWatts)));
+        Broadcast(TciProtocol.Command("tx_forward_power", fwdStr));
         // tx_swr:<ratio> — SWR ratio (e.g. 1.5 for 1.5:1)
         var swrStr = swr.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
         Broadcast(TciProtocol.Command("tx_swr", swrStr));
@@ -329,11 +381,12 @@ public sealed class TciServer : IHostedService, IDisposable
         // Combined-frame TX telemetry, sent only to clients that opted in via
         // tx_sensors_enable. mic_db isn't carried in TxMetersUpdated; emit 0.
         if (_clients.IsEmpty) return;
+        var refStr = refWatts.ToString("F1", System.Globalization.CultureInfo.InvariantCulture);
         var frame = TciProtocol.Command(
             "tx_sensors",
             0, 0,
-            (int)Math.Round(fwdWatts),
-            (int)Math.Round(refWatts),
+            fwdStr,
+            refStr,
             swrStr);
         foreach (var session in _clients.Values)
         {
@@ -379,39 +432,79 @@ public sealed class TciServer : IHostedService, IDisposable
 
     private void OnMoxChanged(bool moxOn)
     {
-        if (moxOn) StartTxChronoTimer();
-        else StopTxChronoTimer();
+        if (moxOn) StartTciTxService();
+        else StopTciTxService();
     }
 
-    private void StartTxChronoTimer()
+    private void StartTciTxService()
     {
         if (_txChronoTimer is not null) return;
+        lock (_tciTxStateLock)
+        {
+            _tciTxChronoOutstanding = 0;
+            _tciTxSamplesInPipeline = 0;
+            _tciTxLastChronoTickMs = 0;
+        }
         _txChronoFrame ??= TciStreamPayload.BuildTxChrono(receiver: 0, sampleRate: 48000);
-        _txChronoTimer = new Timer(_ => SendTxChronoTick(), null, TxChronoIntervalMs, TxChronoIntervalMs);
-        _log.LogDebug("tci.tx.chrono started interval={Ms}ms", TxChronoIntervalMs);
+        _txChronoTimer = new Timer(_ => ServiceTciTxProtocol(), null, TciTxChronoSpacingMs, TciTxChronoSpacingMs);
+        _txAudioIngest.SetWdspConsumedCallback(NotifyWdspConsumed);
+        _log.LogDebug("tci.tx.chrono started (demand-driven)");
     }
 
-    private void StopTxChronoTimer()
+    private void StopTciTxService()
     {
         var t = Interlocked.Exchange(ref _txChronoTimer, null);
         if (t is null) return;
         t.Dispose();
+        _txAudioIngest.SetWdspConsumedCallback(null);
+        lock (_tciTxStateLock)
+        {
+            _tciTxChronoOutstanding = 0;
+            _tciTxSamplesInPipeline = 0;
+        }
         _log.LogDebug("tci.tx.chrono stopped");
     }
 
-    private void SendTxChronoTick()
+    private void ServiceTciTxProtocol()
     {
+        if (!_tx.IsMoxOn || _clients.IsEmpty) return;
+
         var frame = _txChronoFrame;
-        if (frame is null || _clients.IsEmpty) return;
-        foreach (var session in _clients.Values)
+        if (frame is null) return;
+
+        long nowMs = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
+
+        int sent = 0;
+        while (sent < TciTxBurstCount)
         {
-            if (session.TxSourceIsTci) session.SendBinary(frame);
+            lock (_tciTxStateLock)
+            {
+                // Rate-limit: don't send faster than real-time audio consumption.
+                // One TX_CHRONO = 2048 mono samples @ 48kHz = 42.67ms.
+                long elapsed = nowMs - _tciTxLastChronoTickMs;
+                if (elapsed < TciTxChronoSpacingMs)
+                    break;
+
+                // Don't request more if pipeline already has enough buffered.
+                // Target: ~100ms of audio ahead (4800 samples).
+                if (_tciTxSamplesInPipeline > 4800)
+                    break;
+
+                _tciTxChronoOutstanding++;
+                _tciTxLastChronoTickMs = nowMs;
+            }
+
+            foreach (var session in _clients.Values)
+            {
+                if (session.TxSourceIsTci) session.SendBinary(frame);
+            }
+            sent++;
         }
     }
 
     public void Dispose()
     {
-        StopTxChronoTimer();
+        StopTciTxService();
         foreach (var session in _clients.Values)
         {
             session.Dispose();
