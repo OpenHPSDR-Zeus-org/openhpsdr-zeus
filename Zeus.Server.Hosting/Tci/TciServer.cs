@@ -43,6 +43,7 @@
 // License for details.
 
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net.WebSockets;
 using Microsoft.Extensions.Options;
 using Zeus.Contracts;
@@ -77,14 +78,22 @@ public sealed class TciServer : IHostedService, IDisposable
 
     // TX_CHRONO demand-driven pacing — mirrors Thetis cmaster.serviceTCITxProtocol.
     // WSJT-X generates all FT8 audio as fast as TX_CHRONO arrives, so we MUST
-    // pace at approximately real-time (1 chrono per ~42ms = 2048 samples @ 48kHz).
-    // Otherwise WSJT-X finishes a 12.6s message in <2s and the rest of TX is silence.
-    private const int TciTxChronoSpacingMs = 42;
+    // pace at exactly real-time (1 chrono per 2048 samples @ 48 kHz = 42.6667 ms).
+    // Integer-millisecond pacing leaves a 1.6% rate error that — combined with
+    // any timer drift — overflows TxAudioIngest._accumulator (2048 cap) every
+    // ~1.8 s, dropping a full 42 ms block and breaking FT8 phase continuity.
+    // Compute the spacing in stopwatch ticks (sub-ms) and pace off a monotonic
+    // Stopwatch so DateTime jumps can't disturb TX timing.
+    private const int TciTxBlockSamples = 2048;
+    private const int TciTxBlockRate = 48000;
     private const int TciTxBurstCount = 3;
+    private static readonly long TciTxChronoSpacingSwTicks =
+        (long)Math.Round((double)TciTxBlockSamples * Stopwatch.Frequency / TciTxBlockRate);
 
     private int _tciTxChronoOutstanding;
     private int _tciTxSamplesInPipeline;
-    private long _tciTxLastChronoTickMs;
+    private long _tciTxLastChronoSwTicks;
+    private readonly Stopwatch _txChronoClock = new();
     private readonly object _tciTxStateLock = new();
     private Timer? _txChronoTimer;
     private byte[]? _txChronoFrame;
@@ -439,16 +448,26 @@ public sealed class TciServer : IHostedService, IDisposable
     private void StartTciTxService()
     {
         if (_txChronoTimer is not null) return;
+        _txChronoClock.Restart();
         lock (_tciTxStateLock)
         {
             _tciTxChronoOutstanding = 0;
             _tciTxSamplesInPipeline = 0;
-            _tciTxLastChronoTickMs = 0;
+            // Seed one spacing in the past so the first timer fire sends one
+            // chrono. Any larger initial debt would dump the burst-cap on the
+            // very first tick, which WSJT-X can't usefully consume before MOX
+            // is fully up.
+            _tciTxLastChronoSwTicks = _txChronoClock.ElapsedTicks - TciTxChronoSpacingSwTicks;
         }
         _txChronoFrame ??= TciStreamPayload.BuildTxChrono(receiver: 0, sampleRate: 48000);
-        _txChronoTimer = new Timer(_ => ServiceTciTxProtocol(), null, TciTxChronoSpacingMs, TciTxChronoSpacingMs);
+        // Service the queue at ~half the spacing so a single late OS tick can
+        // still be caught up by the next one without burning the burst budget.
+        // The actual chrono cadence is enforced by the stopwatch math inside
+        // ServiceTciTxProtocol, not by this period.
+        const int ServiceIntervalMs = 20;
+        _txChronoTimer = new Timer(_ => ServiceTciTxProtocol(), null, ServiceIntervalMs, ServiceIntervalMs);
         _txAudioIngest.SetWdspConsumedCallback(NotifyWdspConsumed);
-        _log.LogDebug("tci.tx.chrono started (demand-driven)");
+        _log.LogDebug("tci.tx.chrono started (demand-driven, spacingTicks={Ticks})", TciTxChronoSpacingSwTicks);
     }
 
     private void StopTciTxService()
@@ -472,26 +491,31 @@ public sealed class TciServer : IHostedService, IDisposable
         var frame = _txChronoFrame;
         if (frame is null) return;
 
-        long nowMs = DateTime.UtcNow.Ticks / TimeSpan.TicksPerMillisecond;
-
         int sent = 0;
         while (sent < TciTxBurstCount)
         {
+            long nowTicks = _txChronoClock.ElapsedTicks;
             lock (_tciTxStateLock)
             {
                 // Rate-limit: don't send faster than real-time audio consumption.
-                // One TX_CHRONO = 2048 mono samples @ 48kHz = 42.67ms.
-                long elapsed = nowMs - _tciTxLastChronoTickMs;
-                if (elapsed < TciTxChronoSpacingMs)
+                // One TX_CHRONO = 2048 mono samples @ 48 kHz = 42.6667 ms.
+                long elapsed = nowTicks - _tciTxLastChronoSwTicks;
+                if (elapsed < TciTxChronoSpacingSwTicks)
                     break;
 
                 // Don't request more if pipeline already has enough buffered.
-                // Target: ~100ms of audio ahead (4800 samples).
+                // Target: ~100 ms of audio ahead (4800 samples).
                 if (_tciTxSamplesInPipeline > 4800)
                     break;
 
                 _tciTxChronoOutstanding++;
-                _tciTxLastChronoTickMs = nowMs;
+                // Advance by one spacing in ticks (NOT to nowTicks): the OS
+                // timer fires unevenly, and resetting to nowTicks bakes the
+                // drift in permanently — causing FT8 audio rate to slip ~2%
+                // above real-time and overflow the TxAudioIngest accumulator
+                // every ~1.8 s. Fixed-increment advance lets a late tick
+                // catch up via the burst budget below.
+                _tciTxLastChronoSwTicks += TciTxChronoSpacingSwTicks;
             }
 
             foreach (var session in _clients.Values)
