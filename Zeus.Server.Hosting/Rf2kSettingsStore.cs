@@ -33,7 +33,7 @@ public sealed class Rf2kSettingsStore : IDisposable
     public Rf2kSettingsStore(ILogger<Rf2kSettingsStore> log, string? dbPathOverride = null)
     {
         _log = log;
-        var dbPath = dbPathOverride ?? GetDatabasePath();
+        var dbPath = dbPathOverride ?? PrefsDbPath.Get();
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
             Directory.CreateDirectory(dir);
@@ -107,13 +107,6 @@ public sealed class Rf2kSettingsStore : IDisposable
 
     public void Dispose() => _db.Dispose();
 
-    private static string GetDatabasePath()
-    {
-        var appDataDir = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData,
-            Environment.SpecialFolderOption.Create);
-        return Path.Combine(appDataDir, "Zeus", "zeus-prefs.db");
-    }
 }
 
 public sealed class Rf2kConfigEntry

@@ -1,0 +1,12 @@
+{
+  "sampleWindow_capturedAt": "2026-05-11T12:17:53.714Z",
+  "audioFrameCount": 4174,
+  "audioContext": {
+    "state": "running",
+    "sampleRate": 48000,
+    "baseLatency_ms": 5.333333333333333,
+    "outputLatency_ms": 24
+  },
+  "audio_p50_ms": 33,
+  "rafFps": 60
+}

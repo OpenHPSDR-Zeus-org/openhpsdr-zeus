@@ -44,6 +44,12 @@
 
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+// PERF_PASS_3_DEBUG: expose tx-store + audio client on window so playwright
+// can drive MOX edges from synthetic mode (no radio = no MOX button).
+// Uncommitted local edit; stash before merge.
+import { useTxStore } from './state/tx-store';
+import { getAudioClient } from './audio/audio-client';
+import { decodeAudioFrame } from './audio/frame';
 import './index.css';
 import './styles/tokens.css';
 import './styles/layout.css';
@@ -61,6 +67,22 @@ import { installFetchInterceptor } from './serverUrl';
 // Capacitor / standalone-host builds set localStorage["zeus.serverUrl"]
 // to a LAN address; on plain web this is a no-op (relative paths).
 installFetchInterceptor();
+
+// PERF_PASS_3_DEBUG: window debug helpers for playwright-driven validation.
+(window as unknown as Record<string, unknown>).__zeusPerf3 = {
+  txStore: useTxStore,
+  audioClient: () => getAudioClient(),
+  decodeAudioFrame,
+  setMoxOn: (on: boolean) => useTxStore.getState().setMoxOn(on),
+  captures: [] as Array<{
+    cycle: number;
+    t0_mox_off: number;
+    t4_audio_scheduled?: number;
+    nextPlayTime?: number;
+    now?: number;
+    delta_ms?: number;
+  }>,
+};
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('root element missing');

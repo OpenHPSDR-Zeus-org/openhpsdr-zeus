@@ -140,6 +140,9 @@ public sealed class TxService
         // Order: mute RX before keying TX on MOX-on; reverse on MOX-off.
         // Engine handles the RXA/TXA pair atomically under its own lock.
         _pipeline.SetMox(on);
+        // PERF_PASS_3_DEBUG: t1 — server received MOX edge. Uncommitted.
+        _log.LogInformation("tx.mox.{Edge}.recv ts={Ts}",
+            on ? "on" : "off", System.Diagnostics.Stopwatch.GetTimestamp());
         _radio.SetMox(on);
         // MOX-edge unconditionally deactivates TUN on the drive-source side —
         // MOX-on preempts TUN above, MOX-off should also leave the recompute

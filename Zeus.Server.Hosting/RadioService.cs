@@ -63,6 +63,12 @@ public sealed class RadioService : IDisposable
     private readonly PreferredRadioStore? _preferredRadioStore;
     private readonly PsSettingsStore? _psStore;
     private readonly FilterPresetStore? _filterPresetStore;
+    private readonly RadioStateStore? _radioStateStore;
+    // Debounced state flush. Set to true in every Mutate(); a 1 Hz timer
+    // calls FlushState() which writes to LiteDB and clears the flag.
+    // Avoids hammering LiteDB during rapid VFO scroll or filter drags.
+    private volatile bool _stateDirty;
+    private readonly System.Threading.Timer? _stateFlushTimer;
     // Last-known preset name per mode, preserved across mode switches.
     // Accessed only from inside Mutate (under _sync) or at init.
     private readonly Dictionary<RxMode, string?> _lastPresetPerMode = new();
@@ -167,7 +173,7 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -176,6 +182,7 @@ public sealed class RadioService : IDisposable
         _preferredRadioStore = preferredRadioStore;
         _psStore = psStore;
         _filterPresetStore = filterPresetStore;
+        _radioStateStore = radioStateStore;
         _paStore.Changed += RecomputePaAndPush;
         if (_preferredRadioStore is not null)
             _preferredRadioStore.Changed += RecomputePaAndPush;
@@ -202,29 +209,55 @@ public sealed class RadioService : IDisposable
         // P1 default; ConnectAsync / ConnectP2Async overrides per-radio.
         var ps = _psStore?.Get();
 
+        // RadioStateStore snapshot — hydrates active mode/VFO/filter/volume/zoom
+        // and the per-mode-family filter memory. Null on first run; falls through
+        // to the hardcoded defaults below. Snapshot wins for the fields it knows
+        // about; existing domain stores (DspSettings, PsSettings, etc.) still
+        // hydrate the wider config they own.
+        var rsSnap = _radioStateStore?.Get();
+
+        // Restore per-mode-family filter memory from snapshot if available so
+        // an AM→USB mode-switch at startup recalls the last SSB width, not the
+        // compile-time default.
+        if (rsSnap is not null)
+        {
+            _ssbFilter = new(rsSnap.SsbFilterLoAbs, rsSnap.SsbFilterHiAbs);
+            _amFilter = new(rsSnap.AmFilterLoAbs, rsSnap.AmFilterHiAbs);
+            _fmFilter = new(rsSnap.FmFilterLoAbs, rsSnap.FmFilterHiAbs);
+            _cwFilter = new(rsSnap.CwFilterLoAbs, rsSnap.CwFilterHiAbs);
+            _ssbTxFilter = new(rsSnap.SsbTxFilterLoAbs, rsSnap.SsbTxFilterHiAbs);
+            _amTxFilter = new(rsSnap.AmTxFilterLoAbs, rsSnap.AmTxFilterHiAbs);
+            _fmTxFilter = new(rsSnap.FmTxFilterLoAbs, rsSnap.FmTxFilterHiAbs);
+            _cwTxFilter = new(rsSnap.CwTxFilterLoAbs, rsSnap.CwTxFilterHiAbs);
+        }
+
         _state = new(
             Status: ConnectionStatus.Disconnected,
             Endpoint: null,
-            VfoHz: 14_200_000,
-            Mode: RxMode.USB,
-            FilterLowHz: 100,
-            FilterHighHz: 2850,
-            SampleRate: 192_000,
+            VfoHz: rsSnap?.VfoHz ?? 14_200_000,
+            Mode: rsSnap?.Mode ?? RxMode.USB,
+            FilterLowHz: rsSnap?.FilterLowHz ?? 100,
+            FilterHighHz: rsSnap?.FilterHighHz ?? 2850,
+            SampleRate: 192_000,    // set at connect time; not in global snapshot
             // Maintainer-chosen baseline of 45 dB (Thetis "AGC slow / fast"
             // sits in this range and reads less aggressive than the WDSP
             // 80 dB internal default on quiet bands). Operator overrides
             // persist via DspSettingsStore.SetAgcTopDb so the value sticks
             // across restarts; null on first run gets the 45 dB seed.
             AgcTopDb: _dspSettingsStore.GetAgcTopDb() ?? 45.0,
-            AttenDb: 0,
+            AttenDb: rsSnap?.AttenDb ?? 0,
             Nr: persistedNr,
-            ZoomLevel: 1,
-            AutoAttEnabled: true,
-            AttOffsetDb: 0,
+            ZoomLevel: rsSnap?.ZoomLevel ?? 1,
+            AutoAttEnabled: rsSnap?.AutoAttEnabled ?? true,
+            AttOffsetDb: 0,         // always reset — control-loop accumulator
             AdcOverloadWarning: false,
-            // Zeus default filter (100/2850) maps to the seeded USB VAR1 slot.
-            FilterPresetName: "VAR1",
+            FilterPresetName: rsSnap?.FilterPresetName ?? "VAR1",
             FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false,
+            TxFilterLowHz: rsSnap?.TxFilterLowHz ?? 150,
+            TxFilterHighHz: rsSnap?.TxFilterHighHz ?? 2850,
+            RxAfGainDb: rsSnap?.RxAfGainDb ?? 0.0,
+            AutoAgcEnabled: rsSnap?.AutoAgcEnabled ?? false,
+            AgcOffsetDb: 0.0,       // always reset — control-loop accumulator
             // PS persisted fields (or DTO defaults when not persisted yet).
             // PsEnabled NOT persisted — always starts off each session.
             PsAuto: ps?.Auto ?? true,
@@ -241,6 +274,13 @@ public sealed class RadioService : IDisposable
             TwoToneFreq2: ps?.TwoToneFreq2 ?? 1900.0,
             TwoToneMag: ps?.TwoToneMag ?? 0.49,
             Cfc: persistedCfc);
+
+        // Kick off the debounce flush timer. Fires every 1 s; only writes to
+        // LiteDB when _stateDirty is set (i.e., at least one Mutate() has fired
+        // since the last flush). Keeps RadioService latency unaffected by disk IO
+        // during rapid VFO scroll or filter drags.
+        if (_radioStateStore is not null)
+            _stateFlushTimer = new System.Threading.Timer(_ => FlushState(), null, 1_000, 1_000);
     }
 
     /// <summary>
@@ -359,6 +399,21 @@ public sealed class RadioService : IDisposable
         try
         {
             await client.ConnectAsync(ipEndpoint, ct).ConfigureAwait(false);
+            // Board fingerprint is known after ConnectAsync. Restore the last
+            // sample rate the operator used on this board, if one is stored.
+            // Falls back to the ConnectRequest rate on first connect (or after
+            // /run fresh), so behaviour is identical to pre-#287 builds until
+            // the operator explicitly changes the rate on this board.
+            if (_radioStateStore is not null)
+            {
+                var storedHz = _radioStateStore.GetBoardSampleRate(client.BoardKind, EffectiveOrionMkIIVariant);
+                if (storedHz.HasValue)
+                {
+                    hpsdrRate = MapSampleRate(storedHz.Value);
+                    lock (_sync)
+                        _state = _state with { SampleRate = hpsdrRate.SampleRateHz() };
+                }
+            }
             await client.StartAsync(new StreamConfig(hpsdrRate, _preampOn, _atten), ct).ConfigureAwait(false);
             client.SetVfoAHz(CwOffset.EffectiveLoHz(Snapshot()));
 
@@ -685,6 +740,9 @@ public sealed class RadioService : IDisposable
         int hz = rate.SampleRateHz();
         Mutate(s => s with { SampleRate = hz });
         ActiveClient?.SetSampleRate(rate);
+        var board = ConnectedBoardKind;
+        if (board != HpsdrBoardKind.Unknown)
+            _radioStateStore?.SetBoardSampleRate(board, hz, EffectiveOrionMkIIVariant);
         return Snapshot();
     }
 
@@ -1273,6 +1331,10 @@ public sealed class RadioService : IDisposable
         _paStore.Changed -= RecomputePaAndPush;
         try { DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult(); }
         catch { /* best-effort */ }
+        _stateFlushTimer?.Dispose();
+        // Final flush so the last operator actions survive a clean shutdown.
+        _stateDirty = true;
+        FlushState();
     }
 
     private void Mutate(Func<StateDto, StateDto> fn)
@@ -1283,7 +1345,58 @@ public sealed class RadioService : IDisposable
             next = fn(_state);
             _state = next;
         }
+        _stateDirty = true;
         StateChanged?.Invoke(next);
+    }
+
+    // Debounce flush: called by _stateFlushTimer every 1 s.
+    // Captures the latest StateDto + family-filter memory under _sync and
+    // writes to LiteDB. No-op when nothing has mutated since the last flush.
+    private void FlushState()
+    {
+        if (!_stateDirty || _radioStateStore is null) return;
+        _stateDirty = false;
+
+        StateDto snap;
+        FamilyFilter ssb, am, fm, cw, ssbTx, amTx, fmTx, cwTx;
+        lock (_sync)
+        {
+            snap = _state;
+            ssb = _ssbFilter; am = _amFilter; fm = _fmFilter; cw = _cwFilter;
+            ssbTx = _ssbTxFilter; amTx = _amTxFilter; fmTx = _fmTxFilter; cwTx = _cwTxFilter;
+        }
+
+        try
+        {
+            _radioStateStore.Save(new RadioStateEntry
+            {
+                VfoHz = snap.VfoHz,
+                Mode = snap.Mode,
+                FilterLowHz = snap.FilterLowHz,
+                FilterHighHz = snap.FilterHighHz,
+                TxFilterLowHz = snap.TxFilterLowHz,
+                TxFilterHighHz = snap.TxFilterHighHz,
+                FilterPresetName = snap.FilterPresetName,
+                AutoAttEnabled = snap.AutoAttEnabled,
+                AttenDb = snap.AttenDb,
+                AutoAgcEnabled = snap.AutoAgcEnabled,
+                RxAfGainDb = snap.RxAfGainDb,
+                ZoomLevel = snap.ZoomLevel,
+                SsbFilterLoAbs = ssb.LoAbs,   SsbFilterHiAbs = ssb.HiAbs,
+                AmFilterLoAbs = am.LoAbs,     AmFilterHiAbs = am.HiAbs,
+                FmFilterLoAbs = fm.LoAbs,     FmFilterHiAbs = fm.HiAbs,
+                CwFilterLoAbs = cw.LoAbs,     CwFilterHiAbs = cw.HiAbs,
+                SsbTxFilterLoAbs = ssbTx.LoAbs, SsbTxFilterHiAbs = ssbTx.HiAbs,
+                AmTxFilterLoAbs = amTx.LoAbs,   AmTxFilterHiAbs = amTx.HiAbs,
+                FmTxFilterLoAbs = fmTx.LoAbs,   FmTxFilterHiAbs = fmTx.HiAbs,
+                CwTxFilterLoAbs = cwTx.LoAbs,   CwTxFilterHiAbs = cwTx.HiAbs,
+                UpdatedUtc = DateTime.UtcNow,
+            });
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "radio.state.flush failed");
+        }
     }
 
     // Used by DspPipelineService when a Protocol 2 radio connects or

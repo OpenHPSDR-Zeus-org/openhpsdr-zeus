@@ -1,0 +1,1 @@
+(eval):5: command not found: dotnet-stack

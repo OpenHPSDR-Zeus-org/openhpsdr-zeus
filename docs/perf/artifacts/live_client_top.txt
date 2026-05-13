@@ -1,0 +1,98 @@
+Processes: 794 total, 4 running, 790 sleeping, 4036 threads 
+2026/05/11 13:15:21
+Load Avg: 3.02, 3.74, 3.61 
+CPU usage: 25.14% user, 15.20% sys, 59.64% idle 
+SharedLibs: 777M resident, 151M data, 129M linkedit.
+MemRegions: 159038 total, 4181M resident, 263M private, 1808M shared.
+PhysMem: 13G used (2479M wired, 2636M compressor), 2169M unused.
+VM: 326T vsize, 17G framework vsize, 1161632(0) swapins, 2365973(0) swapouts.
+Networks: packets: 328272461/528G in, 149488673/358G out.
+Disks: 54406091/863G read, 28930348/414G written.
+
+PID    COMMAND          %CPU MEM  #TH  CSW   
+20252  Google Chrome He 0.0  279M 26/1 185207
+20248  Google Chrome He 0.0  315M 21   156387
+Processes: 794 total, 4 running, 790 sleeping, 4057 threads 
+2026/05/11 13:15:26
+Load Avg: 2.94, 3.71, 3.60 
+CPU usage: 14.51% user, 7.12% sys, 78.35% idle 
+SharedLibs: 777M resident, 151M data, 129M linkedit.
+MemRegions: 0 total, 0B resident, 263M private, 1808M shared.
+PhysMem: 13G used (2492M wired, 2636M compressor), 2130M unused.
+VM: 326T vsize, 17G framework vsize, 1161632(0) swapins, 2365973(0) swapouts.
+Networks: packets: 328281531/528G in, 149491949/358G out.
+Disks: 54406098/863G read, 28930626/414G written.
+
+PID    COMMAND          %CPU MEM   #TH  CSW    
+20252  Google Chrome He 26.2 280M+ 26   193026+
+20248  Google Chrome He 11.2 338M+ 21   162227+
+Processes: 794 total, 3 running, 791 sleeping, 4044 threads 
+2026/05/11 13:15:31
+Load Avg: 2.86, 3.68, 3.59 
+CPU usage: 12.72% user, 6.52% sys, 80.75% idle 
+SharedLibs: 777M resident, 151M data, 129M linkedit.
+MemRegions: 0 total, 0B resident, 263M private, 1808M shared.
+PhysMem: 13G used (2467M wired, 2635M compressor), 2148M unused.
+VM: 326T vsize, 17G framework vsize, 1161632(0) swapins, 2365973(0) swapouts.
+Networks: packets: 328290667/528G in, 149495283/358G out.
+Disks: 54406100/863G read, 28930849/414G written.
+
+PID    COMMAND          %CPU MEM   #TH  CSW    
+20252  Google Chrome He 27.4 281M+ 26   200470+
+20248  Google Chrome He 12.0 315M- 21   167946+
+Processes: 794 total, 4 running, 790 sleeping, 4025 threads 
+2026/05/11 13:15:36
+Load Avg: 2.71, 3.63, 3.58 
+CPU usage: 12.76% user, 6.20% sys, 81.2% idle 
+SharedLibs: 777M resident, 151M data, 129M linkedit.
+MemRegions: 0 total, 0B resident, 263M private, 1808M shared.
+PhysMem: 13G used (2462M wired, 2635M compressor), 2040M unused.
+VM: 326T vsize, 17G framework vsize, 1161632(0) swapins, 2365973(0) swapouts.
+Networks: packets: 328299809/528G in, 149498581/358G out.
+Disks: 54406100/863G read, 28930870/414G written.
+
+PID    COMMAND          %CPU MEM   #TH  CSW    
+20252  Google Chrome He 28.3 279M- 26   208091+
+20248  Google Chrome He 13.1 329M+ 21/1 173749+
+Processes: 794 total, 2 running, 1 stuck, 791 sleeping, 4062 threads 
+2026/05/11 13:15:41
+Load Avg: 2.89, 3.66, 3.58 
+CPU usage: 12.57% user, 6.26% sys, 81.16% idle 
+SharedLibs: 777M resident, 151M data, 129M linkedit.
+MemRegions: 0 total, 0B resident, 263M private, 1808M shared.
+PhysMem: 13G used (2461M wired, 2633M compressor), 2012M unused.
+VM: 326T vsize, 17G framework vsize, 1161632(0) swapins, 2365973(0) swapouts.
+Networks: packets: 328309065/528G in, 149502209/358G out.
+Disks: 54406136/863G read, 28930966/414G written.
+
+PID    COMMAND          %CPU MEM   #TH  CSW    
+20252  Google Chrome He 27.5 282M+ 26   215424+
+20248  Google Chrome He 12.3 319M- 21   179465+
+Processes: 794 total, 3 running, 791 sleeping, 4054 threads 
+2026/05/11 13:15:46
+Load Avg: 2.90, 3.65, 3.58 
+CPU usage: 11.79% user, 5.94% sys, 82.25% idle 
+SharedLibs: 777M resident, 151M data, 129M linkedit.
+MemRegions: 0 total, 0B resident, 263M private, 1808M shared.
+PhysMem: 13G used (2458M wired, 2633M compressor), 2030M unused.
+VM: 326T vsize, 17G framework vsize, 1161632(0) swapins, 2365973(0) swapouts.
+Networks: packets: 328318192/528G in, 149505537/358G out.
+Disks: 54406136/863G read, 28930988/414G written.
+
+PID    COMMAND          %CPU MEM   #TH  CSW    
+20252  Google Chrome He 27.1 286M+ 26   222719+
+20248  Google Chrome He 11.8 322M+ 21   185057+
+Processes: 794 total, 2 running, 792 sleeping, 4039 threads 
+2026/05/11 13:15:51
+Load Avg: 2.99, 3.65, 3.58 
+CPU usage: 11.82% user, 6.6% sys, 82.11% idle 
+SharedLibs: 777M resident, 151M data, 129M linkedit.
+MemRegions: 0 total, 0B resident, 263M private, 1808M shared.
+PhysMem: 13G used (2463M wired, 2633M compressor), 2018M unused.
+VM: 326T vsize, 17G framework vsize, 1161632(0) swapins, 2365973(0) swapouts.
+Networks: packets: 328327321/528G in, 149508827/358G out.
+Disks: 54406138/863G read, 28931011/414G written.
+
+PID    COMMAND          %CPU MEM   #TH  CSW    
+20252  Google Chrome He 27.5 287M+ 26   230024+
+20248  Google Chrome He 10.2 313M- 21   190597+

@@ -194,6 +194,33 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public long TotalFrames => Interlocked.Read(ref _totalFrames);
     public long DroppedFrames => Interlocked.Read(ref _droppedFrames);
 
+    // ---- Synchronous RX sink (iter5: collapse pumps onto RxLoop thread) -----
+    // Optional sink attached via AttachRxSink. When non-null, RxLoop calls
+    // sink.OnIqFrame / sink.OnPsFeedbackFrame DIRECTLY instead of writing to
+    // the channels — this eliminates the Channel<T> -> WaitToReadAsync ->
+    // ThreadPool wake-up amplification we measured in iter4. The channel-write
+    // fallback remains when no sink is attached, so tests and in-process
+    // probes continue to work.
+    //
+    // Mirrors the P1 surface; the IqFrame / PsFeedbackFrame types are
+    // per-protocol because the protocol projects do not reference each other.
+    private IRxPacketSink? _rxSink;
+
+    /// <summary>
+    /// Attach a synchronous RX sink. While non-null, the RX loop calls the
+    /// sink directly INSTEAD of writing to <see cref="IqFrames"/> /
+    /// <see cref="PsFeedbackFrames"/>. See <see cref="IRxPacketSink"/> for
+    /// the threading contract.
+    /// </summary>
+    public void AttachRxSink(IRxPacketSink sink)
+    {
+        ArgumentNullException.ThrowIfNull(sink);
+        Interlocked.Exchange(ref _rxSink, sink);
+    }
+
+    /// <summary>Detach the current RX sink, reverting to the channel-write path.</summary>
+    public void DetachRxSink() => Interlocked.Exchange(ref _rxSink, null);
+
     /// <summary>
     /// Raised from the RX loop on every successfully received hi-priority
     /// status packet (UDP 1025, 60 B). Carries the FWD/REF/exciter ADC
@@ -1033,7 +1060,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             TimestampNs: _stopwatch.ElapsedTicks * 1_000_000_000L / Stopwatch.Frequency);
 
         Interlocked.Increment(ref _totalFrames);
-        _iqFrames.Writer.TryWrite(frame);
+        // iter5: prefer the synchronous sink when attached — bypasses the
+        // Channel<T> hop that costs a TP wake-up per frame on the consumer.
+        var sinkSnap = Volatile.Read(ref _rxSink);
+        if (sinkSnap != null)
+        {
+            try { sinkSnap.OnIqFrame(in frame); }
+            catch (Exception ex) { _log.LogError(ex, "p2.rx.sink_threw kind=iq"); }
+        }
+        else
+        {
+            _iqFrames.Writer.TryWrite(frame);
+        }
     }
 
     // 1 Hz log throttle for hi-pri status. The first packet logs immediately
@@ -1173,8 +1211,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 Array.Copy(_psTxQ, txQ, PsFeedbackBlockSize);
                 Array.Copy(_psRxI, rxI, PsFeedbackBlockSize);
                 Array.Copy(_psRxQ, rxQ, PsFeedbackBlockSize);
-                _psFeedbackFrames.Writer.TryWrite(new PsFeedbackFrame(
-                    txI, txQ, rxI, rxQ, _psBlockStartSeq));
+                var psFrame = new PsFeedbackFrame(txI, txQ, rxI, rxQ, _psBlockStartSeq);
+                // iter5: prefer the synchronous sink when attached.
+                var psSinkSnap = Volatile.Read(ref _rxSink);
+                if (psSinkSnap != null)
+                {
+                    try { psSinkSnap.OnPsFeedbackFrame(in psFrame); }
+                    catch (Exception ex) { _log.LogError(ex, "p2.rx.sink_threw kind=psfb"); }
+                }
+                else
+                {
+                    _psFeedbackFrames.Writer.TryWrite(psFrame);
+                }
                 _psBlockFill = 0;
             }
         }

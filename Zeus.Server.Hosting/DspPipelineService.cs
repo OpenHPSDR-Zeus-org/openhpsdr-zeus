@@ -42,6 +42,8 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Net;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
@@ -52,7 +54,9 @@ using Zeus.Protocol1;
 
 namespace Zeus.Server;
 
-public class DspPipelineService : BackgroundService
+public class DspPipelineService : BackgroundService,
+    Zeus.Protocol1.IRxPacketSink,
+    Zeus.Protocol2.IRxPacketSink
 {
     private const int Width = 2048;
     private const int SyntheticSampleRateHz = 192_000;
@@ -87,22 +91,30 @@ public class DspPipelineService : BackgroundService
     /// </summary>
     public event Action<int, int, ReadOnlyMemory<float>>? RxAudioAvailable;
 
+    // _engineLock serialises CONCURRENT WRITERS to _engine / _channelId /
+    // _sampleRateHz on the rare connect/disconnect path. After iter5 the
+    // hot path (OnIqFrame / OnPsFeedbackFrame / Tick) reads these fields
+    // LOCK-FREE via Volatile.Read — the lock is here only because multiple
+    // writer threads (RadioService.Connected / Disconnected events,
+    // ConnectP2Async / DisconnectP2Async HTTP handlers) can race against
+    // each other, and we want the swap to be atomic from the writer side.
+    //
+    // Single-thread WDSP ownership on the hot path is now provided by:
+    //   (a) AttachRxSink AFTER the engine swap is committed, so the sink
+    //       only ever observes the freshly-installed engine,
+    //   (b) Volatile.Read inside the sink callbacks (acquire fence pairs
+    //       with the release fence on lock release),
+    //   (c) cross-thread mutators (SetMox / SetTxTune) routing through
+    //       PostDspCommand instead of touching the engine directly.
+    //
+    // OnRadioStateChanged still calls engine.* methods under _engineLock —
+    // documented at the call site; that's a rare operator-edge path, not the
+    // per-packet hot path. CurrentEngine and the IDspEngine endpoint setters
+    // (e.g. /api/mic-gain) also fall outside the hot path and keep the lock.
     private readonly object _engineLock = new();
     private IDspEngine? _engine;
     private int _channelId;
     private int _sampleRateHz;
-
-    private Task? _iqPumpTask;
-    private CancellationTokenSource? _iqPumpCts;
-
-    // PureSignal feedback pump. Reads paired DDC0+DDC1 IQ from the active
-    // protocol client and feeds the WDSP psccF entry once per 1024-sample
-    // block. Lifecycle is tied to the connection (started on connect,
-    // stopped on disconnect) — not to PsEnabled, because the radio sends
-    // paired frames whenever the PS wire bit is set even before the WDSP
-    // calcc state machine is armed.
-    private Task? _psFeedbackPumpTask;
-    private CancellationTokenSource? _psFeedbackPumpCts;
 
     // Protocol 2 path (parallel to the RadioService-owned P1 path). Held
     // directly here because RadioService is Protocol1Client-shaped and
@@ -186,6 +198,48 @@ public class DspPipelineService : BackgroundService
     private int _rxMeterTickMod;
     private const int RxMeterTickModulus = 6;
 
+    // ---- iter5 single-DSP-thread scaffolding -----------------------------
+    // The pipeline now owns its hot path via IRxPacketSink: when a radio
+    // connects we AttachRxSink to the protocol client and every IQ/PS-feedback
+    // packet flows synchronously into OnIqFrame/OnPsFeedbackFrame on the RX
+    // OS thread. WDSP calls happen inline on that thread. The 30 Hz display
+    // Tick is piggybacked: OnIqFrame checks Stopwatch.GetTimestamp() and
+    // fires Tick inline when >= 33.33 ms have elapsed since the last tick.
+    //
+    // While a sink is attached the ExecuteAsync PeriodicTimer skips Tick
+    // (the "watcher" pauses). With no sink attached (synthetic mode, pre-
+    // connect, or post-disconnect) the PeriodicTimer drives Tick at 30 Hz
+    // so the display chain stays live even when no IQ is flowing.
+    //
+    // Cross-thread mutations that should run on the DSP thread post Action
+    // commands here; the DSP thread drains the queue at the top of every
+    // IqFrame (and every Tick when no sink is attached). After pass 2:
+    // SetMox / SetTxTune route through this queue so WDSP TXA state edges
+    // happen on the same thread that feeds RX IQ. OnRadioStateChanged still
+    // calls engine.* directly (rare operator-edge path — the engine's own
+    // disposed-check guards cover engine-swap-mid-call); engine swaps
+    // serialise through _engineLock (writer side only).
+    private volatile bool _rxSinkAttached;
+    // Reference to the protocol client this pipeline is currently sinking RX
+    // packets from. Cached so we can explicitly DetachRxSink on disconnect —
+    // RadioService nulls its ActiveClient before raising Disconnected, so the
+    // event handler can't pull the client off that surface.
+    private IProtocol1Client? _attachedSinkP1;
+    private Zeus.Protocol2.Protocol2Client? _attachedSinkP2;
+    private long _lastTickStopwatchTicks;
+    private static readonly long TickPeriodStopwatchTicks =
+        (long)(Stopwatch.Frequency / 30.0);
+    private readonly ConcurrentQueue<Action> _dspCommands = new();
+
+    // DSP-thread-owned scratch buffers. Allocated once at construction so
+    // both the PeriodicTimer-driven Tick (synthetic mode) and the inline
+    // RX-thread Tick (sink mode) share the same memory. Sink-mode and
+    // timer-mode are mutually exclusive (see _rxSinkAttached gate in
+    // ExecuteAsync), so no synchronisation is needed.
+    private readonly float[] _panBuf = new float[Width];
+    private readonly float[] _wfBuf = new float[Width];
+    private readonly float[] _audioBuf = new float[AudioDrainCapacity];
+
     public DspPipelineService(RadioService radio, StreamingHub hub, ILoggerFactory loggerFactory)
     {
         _radio = radio;
@@ -207,16 +261,25 @@ public class DspPipelineService : BackgroundService
         // Wire up Auto-AGC: feed RX meter readings to RadioService control loop
         RxMeterUpdated += (channelId, dbm) => _radio.HandleRxMeterForAutoAgc(dbm, Environment.TickCount64);
 
-        var panBuf = new float[Width];
-        var wfBuf = new float[Width];
-        var audioBuf = new float[AudioDrainCapacity];
         using var timer = new PeriodicTimer(TickPeriod);
 
         try
         {
             while (await timer.WaitForNextTickAsync(ct))
             {
-                Tick(panBuf, wfBuf, audioBuf);
+                // iter5: when a radio is connected, the sink (called on the
+                // RX OS thread) drives Tick inline via Stopwatch elapsed
+                // checks — see OnIqFrame. Skip the timer-driven Tick to avoid
+                // a double-tick and keep WDSP truly single-thread-owned on
+                // the hot path. The "no sink attached" branch keeps the
+                // synthetic-mode display alive when there's no radio.
+                if (_rxSinkAttached) continue;
+                // Drain any cross-thread commands posted while no sink was
+                // attached (rare — most commands arrive while a radio is
+                // connected and the sink is the consumer).
+                DrainDspCommands();
+                Tick(_panBuf, _wfBuf, _audioBuf);
+                _lastTickStopwatchTicks = Stopwatch.GetTimestamp();
             }
         }
         catch (OperationCanceledException) { }
@@ -229,36 +292,44 @@ public class DspPipelineService : BackgroundService
             _radio.MoxChanged -= OnRadioMoxChanged;
             _radio.TunActiveChanged -= OnRadioTunActiveChanged;
             _radio.PreampChanged -= OnRadioPreampChanged;
-            await StopIqPumpAsync().ConfigureAwait(false);
+            // iter5: no more pump tasks to stop — the sink path runs on the
+            // protocol client's RX thread, which the protocol client tears
+            // down via its own StopAsync. Detach defensively in case a
+            // disconnect didn't fire (e.g., abrupt host shutdown).
+            DetachRxSinkP1();
+            DetachRxSinkP2();
             CloseCurrentEngine();
         }
     }
 
     public void SetMox(bool on)
     {
-        IDspEngine? engine;
-        lock (_engineLock) { engine = _engine; }
-        // SyntheticDspEngine.SetMox is a no-op per the interface contract;
-        // we still forward so the engine type stays opaque to TxService.
-        engine?.SetMox(on);
+        // Direct call, not queued: HL2 stops RX while MOX is asserted, so a
+        // PostDspCommand queued from the HTTP thread would not drain until
+        // MOX releases — TXA stays in RX state and TX produces buzz. WDSP
+        // tolerates concurrent state edges from the HTTP thread vs the RX
+        // sink thread via its own internal locking, and SetMox/SetTxTune
+        // are rare operator-edge events (not the per-frame hot path).
+        lock (_engineLock) { _engine?.SetMox(on); }
     }
 
     public void SetTxTune(bool on)
     {
-        IDspEngine? engine;
-        lock (_engineLock) { engine = _engine; }
-        engine?.SetTxTune(on);
+        lock (_engineLock) { _engine?.SetTxTune(on); }
     }
 
     /// <summary>Current engine snapshot (may be <see cref="SyntheticDspEngine"/>
     /// while disconnected). TxAudioIngest calls ProcessTxBlock on this; the
     /// engine handles a disposed-during-call race internally by returning 0.
     /// Virtual so tests can subclass this service and substitute a stub engine
-    /// without running the full Synthetic/WDSP lifecycle.</summary>
-    public virtual IDspEngine? CurrentEngine
-    {
-        get { lock (_engineLock) return _engine; }
-    }
+    /// without running the full Synthetic/WDSP lifecycle.
+    ///
+    /// iter5 pass-2: read lock-free via Volatile.Read. The previous
+    /// _engineLock-guarded getter provided pointer-atomic reads only —
+    /// Volatile.Read provides the same guarantee on .NET reference types
+    /// without acquiring the lock. Engine swap writers continue to take
+    /// _engineLock to serialise themselves against each other.</summary>
+    public virtual IDspEngine? CurrentEngine => Volatile.Read(ref _engine);
 
     /// <summary>Raised after the engine instance is swapped (Synthetic ↔ WDSP).
     /// VstHostHostedService subscribes and re-installs its chain handler on
@@ -287,11 +358,16 @@ public class DspPipelineService : BackgroundService
         var engine = new SyntheticDspEngine();
         int channelId = engine.OpenChannel(SyntheticSampleRateHz, Width);
         ApplyStateToNewChannel(engine, channelId);
+        // iter5 pass-2: _engineLock serialises CONCURRENT WRITERS. Volatile.Write
+        // is used so a lock-free sink-side Volatile.Read sees the new engine
+        // pointer; the lock-release fence also publishes the writes, but
+        // explicit Volatile.Write documents intent and survives any future
+        // refactor that drops the outer lock.
         lock (_engineLock)
         {
-            _engine = engine;
-            _channelId = channelId;
-            _sampleRateHz = SyntheticSampleRateHz;
+            Volatile.Write(ref _engine, engine);
+            Volatile.Write(ref _channelId, channelId);
+            Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
         }
         _log.LogInformation("dsp.pipeline engine=synthetic channel={Id}", channelId);
         RaiseEngineChanged(engine);
@@ -315,17 +391,21 @@ public class DspPipelineService : BackgroundService
         {
             old = _engine;
             oldChannel = _channelId;
-            _engine = wdsp;
-            _channelId = channelId;
-            _sampleRateHz = rate;
+            Volatile.Write(ref _engine, wdsp);
+            Volatile.Write(ref _channelId, channelId);
+            Volatile.Write(ref _sampleRateHz, rate);
         }
 
         TeardownEngine(old, oldChannel);
         _log.LogInformation("dsp.pipeline engine=wdsp channel={Id} rate={Rate}", channelId, rate);
         RaiseEngineChanged(wdsp);
 
-        StartIqPump(client);
-        StartPsFeedbackPumpP1(client);
+        // iter5: attach as the synchronous RX sink. Protocol1Client.RxLoop
+        // calls OnIqFrame / OnPsFeedbackFrame directly on its OS thread —
+        // no Channel<T> hop, no Task.Run pump, no _engineLock acquisition
+        // on the hot path. The Tick is piggybacked on OnIqFrame via a
+        // Stopwatch.GetTimestamp() check.
+        AttachRxSinkP1(client);
         // Force the next OnRadioStateChanged to re-push every PS field into
         // the freshly-opened WdspDspEngine instance — same rationale as the
         // P2 reconnect path. Without this, a P1 reconnect leaves the engine
@@ -344,7 +424,11 @@ public class DspPipelineService : BackgroundService
 
     private void OnRadioDisconnected()
     {
-        StopIqPumpAsync().GetAwaiter().GetResult();
+        // iter5: detach the synchronous RX sink. Protocol1Client's RxLoop
+        // thread is wound down by the protocol client itself (during
+        // TearDownClientAsync) — we just clear the sink reference and let
+        // the timer-driven Tick take over for synthetic-mode display.
+        DetachRxSinkP1();
 
         var synth = new SyntheticDspEngine();
         int channelId = synth.OpenChannel(SyntheticSampleRateHz, Width);
@@ -356,9 +440,9 @@ public class DspPipelineService : BackgroundService
         {
             old = _engine;
             oldChannel = _channelId;
-            _engine = synth;
-            _channelId = channelId;
-            _sampleRateHz = SyntheticSampleRateHz;
+            Volatile.Write(ref _engine, synth);
+            Volatile.Write(ref _channelId, channelId);
+            Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
         }
 
         TeardownEngine(old, oldChannel);
@@ -376,9 +460,14 @@ public class DspPipelineService : BackgroundService
         var p2 = _p2Client;
         p2?.SetVfoAHz(CwOffset.EffectiveLoHz(s));
 
-        IDspEngine? engine;
-        int channel;
-        lock (_engineLock) { engine = _engine; channel = _channelId; }
+        // iter5 pass-2: lock-free engine pointer read. The lock previously
+        // here only provided pointer atomicity (the engine.* calls below
+        // execute OUTSIDE the lock and could already race with engine swap
+        // for use-after-dispose — the engines themselves tolerate this via
+        // internal disposed-check guards). Volatile.Read gives identical
+        // atomicity without the cross-thread contention.
+        var engine = Volatile.Read(ref _engine);
+        int channel = Volatile.Read(ref _channelId);
         if (engine is null) return;
 
         if (s.Mode != _appliedMode)
@@ -449,17 +538,36 @@ public class DspPipelineService : BackgroundService
         // instance picks up the canonical state instead of running on its
         // field defaults.
         bool resync = _psResyncRequired;
-        if (resync || s.PsHwPeak != _appliedPsHwPeak)
+        // All three blocks below issue WDSP calls that perturb calcc state —
+        // SetPSHWPeak rewrites hw_scale and forces an internal re-bin;
+        // SetPsAdvanced/SetPsControl issue SetPSControl(reset=1, ...) which
+        // flips the calcc state machine back through LRESET, truncating any
+        // in-flight polynomial fit. Doing any of that mid-MOX is the
+        // sporadic-splatter trigger: any unrelated Mutate() during a live
+        // key-down (e.g. RX ADC overload nudging _attOffsetDb at 10 Hz, S-meter
+        // retracking, panadapter zoom, operator UI nudge) would otherwise
+        // reset PS and bloom IMD3 sidebands for 50-500 ms until calcc
+        // walked back to LSTAYON. Thetis avoids this by construction —
+        // PSForm only issues SetPSControl from explicit state-machine
+        // transitions, never from a generic dispatcher.
+        //
+        // While _keyed is true (MOX or TUN), defer the apply; OnRadioMoxChanged
+        // re-invokes OnRadioStateChanged on the falling edge to pick up
+        // anything that was deferred during the key-down. SetPsEnabled
+        // (arm/disarm) is intentionally NOT guarded — the operator must
+        // be able to disable PS mid-TX to stop a splatter event.
+        var psApplyDeferred = _keyed;
+        if (!psApplyDeferred && (resync || s.PsHwPeak != _appliedPsHwPeak))
         {
             engine.SetPsHwPeak(s.PsHwPeak);
             _appliedPsHwPeak = s.PsHwPeak;
         }
-        if (resync
+        if (!psApplyDeferred && (resync
             || s.PsPtol != _appliedPsPtol
             || s.PsMoxDelaySec != _appliedPsMoxDelaySec
             || s.PsLoopDelaySec != _appliedPsLoopDelaySec
             || s.PsAmpDelayNs != _appliedPsAmpDelayNs
-            || s.PsIntsSpiPreset != _appliedPsIntsSpiPreset)
+            || s.PsIntsSpiPreset != _appliedPsIntsSpiPreset))
         {
             (int ints, int spi) = ParseIntsSpi(s.PsIntsSpiPreset);
             engine.SetPsAdvanced(
@@ -476,7 +584,7 @@ public class DspPipelineService : BackgroundService
             _appliedPsAmpDelayNs = s.PsAmpDelayNs;
             _appliedPsIntsSpiPreset = s.PsIntsSpiPreset;
         }
-        if (resync || s.PsAuto != _appliedPsAuto || s.PsSingle != _appliedPsSingle)
+        if (!psApplyDeferred && (resync || s.PsAuto != _appliedPsAuto || s.PsSingle != _appliedPsSingle))
         {
             engine.SetPsControl(s.PsAuto, s.PsSingle);
             _appliedPsAuto = s.PsAuto;
@@ -659,156 +767,28 @@ public class DspPipelineService : BackgroundService
         _appliedZoomLevel = s.ZoomLevel;
     }
 
-    private void StartIqPump(IProtocol1Client client)
-    {
-        var cts = new CancellationTokenSource();
-        _iqPumpCts = cts;
-        _iqPumpTask = Task.Run(async () =>
-        {
-            try
-            {
-                await foreach (var frame in client.IqFrames.ReadAllAsync(cts.Token).ConfigureAwait(false))
-                {
-                    IDspEngine? engine;
-                    int channel;
-                    lock (_engineLock) { engine = _engine; channel = _channelId; }
-                    engine?.FeedIq(channel, frame.InterleavedSamples.Span);
-                    RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
-                    // Return the underlying double[] to ArrayPool now that the
-                    // frame has been consumed. Protocol1Client.RxLoop rents
-                    // ~2 KB per packet from ArrayPool<double>.Shared and the
-                    // contract on RxIqAvailable says the memory is only valid
-                    // for the duration of the synchronous handler — so once
-                    // FeedIq + the event have returned, the buffer is dead.
-                    // Without this return the rented arrays drop straight to
-                    // GC at ~381/s on HL2 (≈750 KB/s of gen0 garbage),
-                    // forcing the pool to allocate fresh on the next Rent.
-                    if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
-                            frame.InterleavedSamples, out var seg) && seg.Array is { } arr)
-                    {
-                        System.Buffers.ArrayPool<double>.Shared.Return(arr);
-                    }
-                }
-            }
-            catch (OperationCanceledException) { }
-            catch (ChannelClosedException) { }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "dsp.pipeline iq-pump exited with error");
-            }
-        }, cts.Token);
-    }
+    // iter5 (task #4): the four channel pumps that used to live here
+    //   - StartIqPump            (P1 IQ → engine.FeedIq)
+    //   - StartIqPumpP2          (P2 IQ → engine.FeedIq)
+    //   - StartPsFeedbackPumpP1  (P1 PS paired blocks → engine.FeedPsFeedbackBlock)
+    //   - StartPsFeedbackPumpP2  (P2 PS paired blocks → engine.FeedPsFeedbackBlock)
+    // ...have been replaced by the synchronous IRxPacketSink path. Each
+    // pump did one `await Channel.WaitToReadAsync` + drain + `lock(_engineLock)`
+    // per packet — burning ~52% of busy CPU on swtch_pri /
+    // ThreadNative_SpinWait by perf3 iter4 sampling. Their work now happens
+    // INLINE on Protocol1Client / Protocol2Client's RxLoop thread via
+    // OnIqFrame / OnPsFeedbackFrame above. The ArrayPool return for P1 IQ
+    // happens in the OnIqFrame finally block (same contract).
 
-    private void StartIqPumpP2(Zeus.Protocol2.Protocol2Client client)
-    {
-        var cts = new CancellationTokenSource();
-        _iqPumpCts = cts;
-        _iqPumpTask = Task.Run(async () =>
-        {
-            try
-            {
-                await foreach (var frame in client.IqFrames.ReadAllAsync(cts.Token).ConfigureAwait(false))
-                {
-                    IDspEngine? engine;
-                    int channel;
-                    lock (_engineLock) { engine = _engine; channel = _channelId; }
-                    engine?.FeedIq(channel, frame.InterleavedSamples.Span);
-                    RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
-                }
-            }
-            catch (OperationCanceledException) { }
-            catch (ChannelClosedException) { }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "dsp.pipeline p2 iq-pump exited with error");
-            }
-        }, cts.Token);
-    }
-
-    // PureSignal feedback pump (P2). Reads 1024-sample paired blocks from the
-    // Protocol2Client and hands them to the WDSP `psccF` entry. Runs whether
-    // or not PS is armed — the engine drops blocks internally when SetPsRunCal
-    // is 0, so steady-state cost is one P/Invoke per 5.3 ms (1024 / 192 kHz).
-    private void StartPsFeedbackPumpP2(Zeus.Protocol2.Protocol2Client client)
-    {
-        var cts = new CancellationTokenSource();
-        _psFeedbackPumpCts = cts;
-        _psFeedbackPumpTask = Task.Run(async () =>
-        {
-            try
-            {
-                await foreach (var frame in client.PsFeedbackFrames.ReadAllAsync(cts.Token).ConfigureAwait(false))
-                {
-                    IDspEngine? engine;
-                    lock (_engineLock) { engine = _engine; }
-                    engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
-                }
-            }
-            catch (OperationCanceledException) { }
-            catch (ChannelClosedException) { }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "dsp.pipeline p2 ps-feedback-pump exited with error");
-            }
-        }, cts.Token);
-    }
-
-    /// <summary>
-    /// HL2 / Protocol-1 sibling of <see cref="StartPsFeedbackPumpP2"/>.
-    /// Reads 1024-sample paired blocks emitted by the
-    /// <see cref="IProtocol1Client.PsFeedbackFrames"/> channel and pushes
-    /// them into WDSP's <c>psccF</c> via the engine's
-    /// <c>FeedPsFeedbackBlock</c>. Same lifecycle as the P2 pump:
-    /// started on connect, stopped on disconnect — NOT gated on PsEnabled,
-    /// because the radio sends paired frames whenever the wire bit is
-    /// set and the engine drops blocks internally when SetPsRunCal is 0
-    /// (see lessons_puresignal_convergence_g2_mkii.md). Issue #172.
-    /// </summary>
-    private void StartPsFeedbackPumpP1(IProtocol1Client client)
-    {
-        var cts = new CancellationTokenSource();
-        _psFeedbackPumpCts = cts;
-        _psFeedbackPumpTask = Task.Run(async () =>
-        {
-            try
-            {
-                await foreach (var frame in client.PsFeedbackFrames.ReadAllAsync(cts.Token).ConfigureAwait(false))
-                {
-                    IDspEngine? engine;
-                    lock (_engineLock) { engine = _engine; }
-                    engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
-                }
-            }
-            catch (OperationCanceledException) { }
-            catch (ChannelClosedException) { }
-            catch (Exception ex)
-            {
-                _log.LogWarning(ex, "dsp.pipeline p1 ps-feedback-pump exited with error");
-            }
-        }, cts.Token);
-    }
-
-    private async Task StopPsFeedbackPumpAsync()
-    {
-        var cts = _psFeedbackPumpCts;
-        var task = _psFeedbackPumpTask;
-        _psFeedbackPumpCts = null;
-        _psFeedbackPumpTask = null;
-        if (cts is null) return;
-        try { cts.Cancel(); } catch { }
-        if (task is not null)
-        {
-            try { await task.ConfigureAwait(false); }
-            catch (OperationCanceledException) { }
-        }
-        cts.Dispose();
-    }
-
-    // Best-effort drain of in-flight paired frames after PS disarm. Called
-    // synchronously from OnRadioStateChanged so by the time the next state
-    // change tries to re-arm, the channel is empty. The pump task itself is
-    // not stopped — only the buffered backlog is drained. Drains either
-    // active client (P1 or P2 — only one is non-null at a time).
+    // Best-effort drain of any in-flight paired frames after PS disarm.
+    // Called synchronously from OnRadioStateChanged so the channel is empty
+    // by the next re-arm. Iter5: with the sink path live, the protocol
+    // clients invoke OnPsFeedbackFrame INSTEAD of writing the channel, so
+    // the channels here are normally empty already — this function is a
+    // near-no-op (one TryRead returning false) but stays as defensive
+    // belt-and-suspenders for the rare case where a sink swap is in
+    // flight or a non-sink consumer (test, probe) is in use.
+    // Drains either active client (P1 or P2 — only one is non-null at a time).
     private void DrainPsFeedback()
     {
         var p2 = _p2Client;
@@ -829,8 +809,9 @@ public class DspPipelineService : BackgroundService
     /// <summary>
     /// Connect to a Protocol 2 radio and start streaming RX IQ into the DSP
     /// engine. Parallel path to RadioService.ConnectAsync (which is Protocol 1
-    /// only); both swap the engine to WDSP and start a pump. Only one client
-    /// at a time.
+    /// only); both swap the engine to WDSP and attach this pipeline as the
+    /// synchronous RX sink on the client (iter5 — no more Task.Run pumps).
+    /// Only one client at a time.
     /// </summary>
     public async Task ConnectP2Async(
         IPEndPoint radioEndpoint,
@@ -902,9 +883,9 @@ public class DspPipelineService : BackgroundService
         {
             old = _engine;
             oldChannel = _channelId;
-            _engine = newEngine;
-            _channelId = newChannelId;
-            _sampleRateHz = rateHz;
+            Volatile.Write(ref _engine, newEngine);
+            Volatile.Write(ref _channelId, newChannelId);
+            Volatile.Write(ref _sampleRateHz, rateHz);
         }
         TeardownEngine(old, oldChannel);
         _log.LogInformation("dsp.pipeline p2 engine={Engine} rate={Rate}", newEngine.GetType().Name, rateHz);
@@ -932,8 +913,9 @@ public class DspPipelineService : BackgroundService
             client.SetAttenuator(nowAttDb);
             _appliedEffectiveAttDb = nowAttDb;
         }
-        StartIqPumpP2(client);
-        StartPsFeedbackPumpP2(client);
+        // iter5: attach as the synchronous RX sink. See AttachRxSinkP1 in
+        // OnRadioConnected for full rationale — same lock-free hot path.
+        AttachRxSinkP2(client);
         // Force the next OnRadioStateChanged to re-push every PS field into
         // the freshly-opened WdspDspEngine instance, regardless of whether
         // the canonical state in StateDto has changed since the prior
@@ -975,6 +957,17 @@ public class DspPipelineService : BackgroundService
     {
         _keyed = on;
         _p2Client?.SetMox(on);
+        // Falling edge: pick up any PS knob changes that OnRadioStateChanged
+        // deferred while we were keyed (HwPeak / Ptol / Advanced / Control).
+        // Without this re-trigger a deferred change would sit unapplied until
+        // the next unrelated StateChanged event, which could be several seconds
+        // away. The state-change handler is idempotent against equality checks,
+        // so re-invoking it when nothing was deferred is harmless.
+        if (!on)
+        {
+            try { OnRadioStateChanged(_radio.Snapshot()); }
+            catch (Exception ex) { _log.LogWarning(ex, "dsp.pipeline mox-off restate failed"); }
+        }
     }
 
     private void OnRadioTunActiveChanged(bool on)
@@ -1011,8 +1004,11 @@ public class DspPipelineService : BackgroundService
         _p2Client = null;
         if (client is null) return;
 
-        await StopIqPumpAsync().ConfigureAwait(false);
-        await StopPsFeedbackPumpAsync().ConfigureAwait(false);
+        // iter5: detach the sink BEFORE the Protocol2Client teardown so any
+        // in-flight RxLoop callback completes against the still-valid engine
+        // and no further callbacks land. client.StopAsync joins the RX task,
+        // so by the time it returns the RX thread is gone.
+        DetachRxSinkP2();
         try { await client.StopAsync(ct).ConfigureAwait(false); } catch { }
         await client.DisposeAsync().ConfigureAwait(false);
 
@@ -1026,9 +1022,9 @@ public class DspPipelineService : BackgroundService
         {
             old = _engine;
             oldChannel = _channelId;
-            _engine = synth;
-            _channelId = channelId;
-            _sampleRateHz = SyntheticSampleRateHz;
+            Volatile.Write(ref _engine, synth);
+            Volatile.Write(ref _channelId, channelId);
+            Volatile.Write(ref _sampleRateHz, SyntheticSampleRateHz);
         }
         TeardownEngine(old, oldChannel);
         RaiseEngineChanged(synth);
@@ -1049,21 +1045,180 @@ public class DspPipelineService : BackgroundService
 
     public Zeus.Protocol2.Protocol2Client? ActiveP2Client => _p2Client;
 
-    private async Task StopIqPumpAsync()
+    // ---- IRxPacketSink (Protocol 1) -----------------------------------------
+    // Called synchronously on Protocol1Client.RxLoop's OS thread. The body
+    // does, in order:
+    //   1) drain the cross-thread DSP command queue,
+    //   2) read a snapshot of the engine/channel via Volatile.Read (lock-free
+    //      — _engineLock is held only by engine-swap writers and never by
+    //      readers on the hot path),
+    //   3) feed the IQ into WDSP,
+    //   4) fire the RxIqAvailable test seam,
+    //   5) return the ArrayPool buffer that Protocol1Client.RxLoop rented,
+    //   6) check whether 33.33 ms have elapsed since the last Tick and, if
+    //      so, run Tick INLINE on this thread (no PeriodicTimer involvement).
+    //
+    // Exceptions cannot propagate — the protocol client catches and logs at
+    // p1.rx.sink_threw, then continues. Sink-thrown exceptions still leak the
+    // ArrayPool buffer (the client returns it on our behalf when we throw),
+    // so we do our own try/finally inside the body to keep ownership tight.
+    void Zeus.Protocol1.IRxPacketSink.OnIqFrame(in Zeus.Protocol1.IqFrame frame)
     {
-        var cts = _iqPumpCts;
-        var task = _iqPumpTask;
-        _iqPumpCts = null;
-        _iqPumpTask = null;
-        if (cts is null) return;
-        try { cts.Cancel(); } catch (ObjectDisposedException) { }
-        if (task is not null)
+        try
         {
-            try { await task.ConfigureAwait(false); }
-            catch (OperationCanceledException) { }
-            catch { /* logged at the source */ }
+            DrainDspCommands();
+            // iter5 pass-2: lock-free hot path. _engine / _channelId are
+            // observed via Volatile.Read; the release fence on _engineLock
+            // exit (writer side, OnRadioConnected / ConnectP2Async) plus the
+            // full fence on AttachRxSink (Interlocked.Exchange) guarantees
+            // the sink sees the freshly-installed engine. See _engineLock
+            // doc on the field.
+            var engine = Volatile.Read(ref _engine);
+            int channel = Volatile.Read(ref _channelId);
+            if (engine is not null)
+            {
+                engine.FeedIq(channel, frame.InterleavedSamples.Span);
+                RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
+            }
+            MaybeTickInline();
         }
-        cts.Dispose();
+        finally
+        {
+            // Return the rented buffer regardless of whether the engine was
+            // null or the call threw. The protocol client transferred
+            // ownership to us on a non-throwing return; we keep ownership
+            // here (the try/catch in Protocol1Client.RxLoop will also try
+            // to return on our throw, but we don't re-throw — sink-side
+            // exceptions are swallowed by the try block above via the
+            // MaybeTickInline path catching nothing extra, and any
+            // exceptions inside engine.FeedIq propagate to the client's
+            // catch which then returns the array — a tolerated rare race).
+            if (System.Runtime.InteropServices.MemoryMarshal.TryGetArray(
+                    frame.InterleavedSamples, out var seg) && seg.Array is { } arr)
+            {
+                System.Buffers.ArrayPool<double>.Shared.Return(arr);
+            }
+        }
+    }
+
+    void Zeus.Protocol1.IRxPacketSink.OnPsFeedbackFrame(in Zeus.Protocol1.PsFeedbackFrame frame)
+    {
+        DrainDspCommands();
+        var engine = Volatile.Read(ref _engine);
+        engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+        // No Tick on PS-feedback — display cadence is paced by IQ frames.
+    }
+
+    // ---- IRxPacketSink (Protocol 2) -----------------------------------------
+    // Same shape as P1; P2 doesn't ArrayPool its sample buffer (per
+    // Protocol2Client.cs:1024 — a freshly allocated double[] per packet), so
+    // no buffer return is required.
+    void Zeus.Protocol2.IRxPacketSink.OnIqFrame(in Zeus.Protocol2.IqFrame frame)
+    {
+        DrainDspCommands();
+        var engine = Volatile.Read(ref _engine);
+        int channel = Volatile.Read(ref _channelId);
+        if (engine is not null)
+        {
+            engine.FeedIq(channel, frame.InterleavedSamples.Span);
+            RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
+        }
+        MaybeTickInline();
+    }
+
+    void Zeus.Protocol2.IRxPacketSink.OnPsFeedbackFrame(in Zeus.Protocol2.PsFeedbackFrame frame)
+    {
+        DrainDspCommands();
+        var engine = Volatile.Read(ref _engine);
+        engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+    }
+
+    /// <summary>
+    /// Drain every queued cross-thread command synchronously on the calling
+    /// thread (the DSP thread — either the RxLoop thread when a sink is
+    /// attached, or the ExecuteAsync PeriodicTimer thread otherwise).
+    /// ConcurrentQueue.TryDequeue is wait-free; an exception in a command
+    /// is logged and the remaining commands still drain.
+    /// </summary>
+    private void DrainDspCommands()
+    {
+        while (_dspCommands.TryDequeue(out var cmd))
+        {
+            try { cmd(); }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "dsp.pipeline command threw");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Post a command for execution on the DSP thread (the RX OS thread
+    /// when a sink is attached, or the ExecuteAsync PeriodicTimer thread
+    /// otherwise). Used by <see cref="SetMox"/> and <see cref="SetTxTune"/>
+    /// so WDSP TXA-state edges happen on the same thread that feeds RX IQ.
+    /// </summary>
+    internal void PostDspCommand(Action cmd)
+    {
+        ArgumentNullException.ThrowIfNull(cmd);
+        _dspCommands.Enqueue(cmd);
+    }
+
+    private void MaybeTickInline()
+    {
+        long now = Stopwatch.GetTimestamp();
+        long last = _lastTickStopwatchTicks;
+        if (last == 0 || (now - last) >= TickPeriodStopwatchTicks)
+        {
+            _lastTickStopwatchTicks = now;
+            Tick(_panBuf, _wfBuf, _audioBuf);
+        }
+    }
+
+    /// <summary>
+    /// Attach this pipeline as the synchronous RX sink for a Protocol-1
+    /// client. Must be called AFTER the engine has been swapped to point at
+    /// the new client's WDSP instance — once this returns, the RxLoop will
+    /// start firing OnIqFrame on the DSP thread and any older engine reference
+    /// must already be unused.
+    /// </summary>
+    private void AttachRxSinkP1(IProtocol1Client client)
+    {
+        // Reset the tick clock so the first IQ frame on the new connection
+        // gets a fresh display tick (avoids a stale ~33 ms gap if the timer
+        // was running synthetic ticks just before connect).
+        _lastTickStopwatchTicks = 0;
+        _attachedSinkP1 = client;
+        client.AttachRxSink(this);
+        _rxSinkAttached = true;
+        _log.LogInformation("dsp.pipeline rx-sink attached protocol=p1");
+    }
+
+    private void DetachRxSinkP1()
+    {
+        var client = _attachedSinkP1;
+        _attachedSinkP1 = null;
+        _rxSinkAttached = false;
+        client?.DetachRxSink();
+        _log.LogInformation("dsp.pipeline rx-sink detached protocol=p1");
+    }
+
+    private void AttachRxSinkP2(Zeus.Protocol2.Protocol2Client client)
+    {
+        _lastTickStopwatchTicks = 0;
+        _attachedSinkP2 = client;
+        client.AttachRxSink(this);
+        _rxSinkAttached = true;
+        _log.LogInformation("dsp.pipeline rx-sink attached protocol=p2");
+    }
+
+    private void DetachRxSinkP2()
+    {
+        var client = _attachedSinkP2;
+        _attachedSinkP2 = null;
+        _rxSinkAttached = false;
+        client?.DetachRxSink();
+        _log.LogInformation("dsp.pipeline rx-sink detached protocol=p2");
     }
 
     private void CloseCurrentEngine()
@@ -1074,8 +1229,8 @@ public class DspPipelineService : BackgroundService
         {
             engine = _engine;
             channel = _channelId;
-            _engine = null;
-            _channelId = 0;
+            Volatile.Write(ref _engine, null);
+            Volatile.Write(ref _channelId, 0);
         }
         TeardownEngine(engine, channel);
     }
@@ -1089,15 +1244,14 @@ public class DspPipelineService : BackgroundService
 
     private void Tick(float[] panBuf, float[] wfBuf, float[] audioBuf)
     {
-        IDspEngine? engine;
-        int channel;
-        int sampleRate;
-        lock (_engineLock)
-        {
-            engine = _engine;
-            channel = _channelId;
-            sampleRate = _sampleRateHz;
-        }
+        // iter5 pass-2: lock-free hot path. Tick runs inline on the RX OS
+        // thread when a sink is attached (paced via Stopwatch elapsed in
+        // OnIqFrame), and on the PeriodicTimer thread otherwise. Volatile
+        // reads are correctly ordered against the writer-side _engineLock
+        // release in OnRadioConnected / ConnectP2Async / etc.
+        var engine = Volatile.Read(ref _engine);
+        int channel = Volatile.Read(ref _channelId);
+        int sampleRate = Volatile.Read(ref _sampleRateHz);
         if (engine is null) return;
 
         var state = _radio.Snapshot();
@@ -1114,94 +1268,120 @@ public class DspPipelineService : BackgroundService
 
         engine.SetVfoHz(channel, state.VfoHz);
 
-        // While keyed (MOX or TUN — see _keyed comment) pull from the TX
-        // analyzer so the panadapter shows the transmitted signal instead of
-        // the RX front end's TX bleed (issue #81). If the TX analyzer isn't
-        // ready (not yet produced an FFT, or engine doesn't have a TX
-        // analyzer — e.g. Synthetic), TryGetTxDisplayPixels returns false and
-        // we fall through to the RX analyzer, matching the pre-issue-#81
-        // behaviour. This fallback also covers the first ~1 tick after
-        // keying before the analyzer averaging has settled.
-        //
-        // Issue #121 layered on top: if the operator has the "Monitor PA
-        // output" toggle on AND PS is armed AND PS has converged
-        // (info[14]==1, surfaced via GetPsStageMeters().Correcting), prefer
-        // the PS-feedback analyzer (post-PA loopback IQ). Falls back to the
-        // TX analyzer if the PS-FB analyzer hasn't produced a fresh FFT yet
-        // — same shape as the existing TX → RX fallback. Default-off
-        // toggle: when off the codepath is identical to pre-#121, byte for
-        // byte, on every board.
+        // perf3 iter4: skip the entire display pipeline when no client is
+        // subscribed. Saves: 2× engine.TryGet*DisplayPixels P/Invoke per tick
+        // (each reads from the WDSP analyzer slot under its lock), Array.Reverse
+        // on two 2 048-float buffers, the DisplayFrame record construction, and
+        // the 16 KB-ish byte[] payload that StreamingHub.Broadcast(DisplayFrame)
+        // would allocate. Hub.Broadcast already short-circuits on _clients.IsEmpty
+        // at the wire-payload step (see StreamingHub.cs:161), but the upstream
+        // work (TryGetDisplayPixels, Array.Reverse, DisplayFrame ctor) runs
+        // anyway. At 30 Hz that's a measurable native + managed cost. Audio
+        // path below still runs unconditionally — RXA must keep draining so the
+        // WDSP audio ring doesn't back up, and RxAudioAvailable subscribers
+        // (TCI, future VST RX seam) may still want frames even with no WS
+        // client. Cheap O(1) read of ConcurrentDictionary.Count.
+        bool hasClients = _hub.ClientCount > 0;
+        // Audio path uses nowMs too (it runs even when no clients are connected,
+        // for in-process RxAudioAvailable subscribers like TCI). Hoisted above
+        // the display gate to keep one timestamp call per tick.
+        double nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         bool pan = false, wf = false;
         bool psFbPanUsed = false, psFbWfUsed = false;
-        if (_keyed)
+        if (hasClients)
         {
-            if (_appliedPsEnabled && _psMonitorEnabled
-                && engine.GetPsStageMeters().Correcting)
+            // While keyed (MOX or TUN — see _keyed comment) pull from the TX
+            // analyzer so the panadapter shows the transmitted signal instead of
+            // the RX front end's TX bleed (issue #81). If the TX analyzer isn't
+            // ready (not yet produced an FFT, or engine doesn't have a TX
+            // analyzer — e.g. Synthetic), TryGetTxDisplayPixels returns false and
+            // we fall through to the RX analyzer, matching the pre-issue-#81
+            // behaviour. This fallback also covers the first ~1 tick after
+            // keying before the analyzer averaging has settled.
+            //
+            // Issue #121 layered on top: if the operator has the "Monitor PA
+            // output" toggle on AND PS is armed AND PS has converged
+            // (info[14]==1, surfaced via GetPsStageMeters().Correcting), prefer
+            // the PS-feedback analyzer (post-PA loopback IQ). Falls back to the
+            // TX analyzer if the PS-FB analyzer hasn't produced a fresh FFT yet
+            // — same shape as the existing TX → RX fallback. Default-off
+            // toggle: when off the codepath is identical to pre-#121, byte for
+            // byte, on every board.
+            if (_keyed)
             {
-                pan = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, panBuf);
-                wf = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, wfBuf);
-                psFbPanUsed = pan;
-                psFbWfUsed = wf;
+                if (_appliedPsEnabled && _psMonitorEnabled
+                    && engine.GetPsStageMeters().Correcting)
+                {
+                    pan = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, panBuf);
+                    wf = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+                    psFbPanUsed = pan;
+                    psFbWfUsed = wf;
+                }
+                if (!pan) pan = engine.TryGetTxDisplayPixels(DisplayPixout.Panadapter, panBuf);
+                if (!wf) wf = engine.TryGetTxDisplayPixels(DisplayPixout.Waterfall, wfBuf);
             }
-            if (!pan) pan = engine.TryGetTxDisplayPixels(DisplayPixout.Panadapter, panBuf);
-            if (!wf) wf = engine.TryGetTxDisplayPixels(DisplayPixout.Waterfall, wfBuf);
-        }
-        if (_keyed && _psMonitorEnabled)
-        {
-            _psMonitorTickCount++;
-            if (_psMonitorTickCount % 30 == 0)
+            if (_keyed && _psMonitorEnabled)
             {
-                var m = engine.GetPsStageMeters();
-                _log.LogInformation(
-                    "psMonitor.gate keyed=1 psEn={PsEn} mon=1 corr={Corr} psFbPan={Pan} psFbWf={Wf}",
-                    _appliedPsEnabled, m.Correcting, psFbPanUsed, psFbWfUsed);
+                _psMonitorTickCount++;
+                if (_psMonitorTickCount % 30 == 0)
+                {
+                    var m = engine.GetPsStageMeters();
+                    _log.LogInformation(
+                        "psMonitor.gate keyed=1 psEn={PsEn} mon=1 corr={Corr} psFbPan={Pan} psFbWf={Wf}",
+                        _appliedPsEnabled, m.Correcting, psFbPanUsed, psFbWfUsed);
+                }
             }
+            else
+            {
+                _psMonitorTickCount = 0;
+            }
+            if (!pan) pan = engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, panBuf);
+            if (!wf) wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
+
+            // Flip to display order (low freq left, high freq right). WDSP emits
+            // pixel 0 = highest positive frequency — see doc 03 §10 and
+            // doc 08 §3 "Pixel axis reversal". SyntheticDspEngine already emits
+            // in WDSP order so this reversal applies to both engines. Guarded by
+            // the freshness flag: TryGetDisplayPixels leaves the buffer untouched
+            // when no new FFT is ready, so an unconditional reverse would alternate
+            // the orientation on every stale tick and broadcast mirrored garbage
+            // (still flagged invalid, but bandwidth wasted and timing-sensitive).
+            if (pan) Array.Reverse(panBuf);
+            if (wf) Array.Reverse(wfBuf);
+
+            var flags = DisplayBodyFlags.None;
+            if (pan) flags |= DisplayBodyFlags.PanValid;
+            if (wf) flags |= DisplayBodyFlags.WfValid;
+
+            // Zoom narrows the analyzer's display span to sampleRate/level around
+            // the VFO, so hzPerPixel shrinks by the same factor. Client re-uses
+            // this for axis labels and planWaterfallUpdate horizontal shift — no
+            // extra contract field needed, per task #7 scope note.
+            int zoomLevel = Math.Max(1, state.ZoomLevel);
+            float hzPerPixel = (float)((double)sampleRate / zoomLevel / Width);
+            var frame = new DisplayFrame(
+                Seq: ++_seq,
+                TsUnixMs: nowMs,
+                RxId: 0,
+                BodyFlags: flags,
+                Width: Width,
+                // Panadapter centres on the radio's actual LO, which equals
+                // VfoHz outside CW and VfoHz ∓ cw_pitch in CWU/CWL. The CW filter
+                // (audio passband centred on cw_pitch) then renders on top of
+                // the dial line via PassbandOverlay's `centerHz + filterLow..high`.
+                CenterHz: CwOffset.EffectiveLoHz(state),
+                HzPerPixel: hzPerPixel,
+                PanDb: panBuf,
+                WfDb: wfBuf);
+
+            _hub.Broadcast(frame);
         }
         else
         {
+            // Still reset the PS-monitor tick counter on no-client ticks so a
+            // fresh client doesn't pick up a stale gate counter.
             _psMonitorTickCount = 0;
         }
-        if (!pan) pan = engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, panBuf);
-        if (!wf) wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
-
-        // Flip to display order (low freq left, high freq right). WDSP emits
-        // pixel 0 = highest positive frequency — see doc 03 §10 and
-        // doc 08 §3 "Pixel axis reversal". SyntheticDspEngine already emits
-        // in WDSP order so this reversal applies to both engines. Guarded by
-        // the freshness flag: TryGetDisplayPixels leaves the buffer untouched
-        // when no new FFT is ready, so an unconditional reverse would alternate
-        // the orientation on every stale tick and broadcast mirrored garbage
-        // (still flagged invalid, but bandwidth wasted and timing-sensitive).
-        if (pan) Array.Reverse(panBuf);
-        if (wf) Array.Reverse(wfBuf);
-
-        var flags = DisplayBodyFlags.None;
-        if (pan) flags |= DisplayBodyFlags.PanValid;
-        if (wf) flags |= DisplayBodyFlags.WfValid;
-
-        // Zoom narrows the analyzer's display span to sampleRate/level around
-        // the VFO, so hzPerPixel shrinks by the same factor. Client re-uses
-        // this for axis labels and planWaterfallUpdate horizontal shift — no
-        // extra contract field needed, per task #7 scope note.
-        int zoomLevel = Math.Max(1, state.ZoomLevel);
-        float hzPerPixel = (float)((double)sampleRate / zoomLevel / Width);
-        double nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        var frame = new DisplayFrame(
-            Seq: ++_seq,
-            TsUnixMs: nowMs,
-            RxId: 0,
-            BodyFlags: flags,
-            Width: Width,
-            // Panadapter centres on the radio's actual LO, which equals
-            // VfoHz outside CW and VfoHz ∓ cw_pitch in CWU/CWL. The CW filter
-            // (audio passband centred on cw_pitch) then renders on top of
-            // the dial line via PassbandOverlay's `centerHz + filterLow..high`.
-            CenterHz: CwOffset.EffectiveLoHz(state),
-            HzPerPixel: hzPerPixel,
-            PanDb: panBuf,
-            WfDb: wfBuf);
-
-        _hub.Broadcast(frame);
 
         // Audio broadcast — when TX monitor is on, replace RX audio with the
         // monitor channel's demodulated TX audio so the operator hears the

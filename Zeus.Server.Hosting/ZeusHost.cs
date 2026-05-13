@@ -89,6 +89,13 @@ public static class ZeusHost
             tciBindAddress = persistedTci.BindAddress;
             tciPort = persistedTci.Port;
         }
+        // PERF_PASS_3_DEBUG: force-disable TCI bind when running a second
+        // instance on the same box (Brian's main session keeps :40001).
+        // Uncommitted local edit.
+        if (Environment.GetEnvironmentVariable("ZEUS_PERF_TEST") == "1")
+        {
+            tciEnabled = false;
+        }
 
         // HTTPS bind for mobile-browser parity. Browsers refuse getUserMedia on a
         // non-secure context, which kills mic-uplink TX from any phone reaching
@@ -184,6 +191,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<FilterPresetStore>();
         builder.Services.AddSingleton<DisplaySettingsStore>();
         builder.Services.AddSingleton<BottomPinStore>();
+        builder.Services.AddSingleton<RadioStateStore>();
         builder.Services.AddSingleton<QrzService>();
         builder.Services.AddSingleton<LogService>();
 

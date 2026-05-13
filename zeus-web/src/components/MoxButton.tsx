@@ -59,6 +59,8 @@ export function MoxButton() {
 
   const click = useCallback(() => {
     const next = !moxOn;
+    // PERF_PASS_3_DEBUG: t0 — operator-initiated MOX edge wall-clock. Uncommitted.
+    console.log('mox.client.release', performance.now(), 'next=', next);
     setMoxOn(next);
     setMox(next).catch(() => {
       setMoxOn(!next);

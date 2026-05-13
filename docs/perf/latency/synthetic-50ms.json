@@ -1,0 +1,32 @@
+{
+  "comment": "perf-pass-3 latency-validator playwright capture, synthetic mode. BUFFER_TARGET_SECS = 0.05 (post-fix). Captured 2026-05-11.",
+  "branch": "feature/perf_pass_3",
+  "backend": "Zeus.Server Release on :6080, ZEUS_PERF_TEST=1, synthetic engine emitting 2048-sample silence frames at 30 Hz",
+  "frontend": "Vite dev :5193 proxying :6080, Chrome via playwright MCP",
+  "driver": "window.__zeusPerf3.setMoxOn(true) -> sleep 500ms -> setMoxOn(false) -> sleep 500ms, x10",
+  "audioStatsAfter10Cycles": {
+    "available": 23648,
+    "underrunCount": 0,
+    "droppedSamples": 681984,
+    "note": "droppedSamples high because synthetic emits 2048/33ms = 42.7ms of audio every 33ms tick (1.28x speed); BUFFER_MAX_SECS=0.5 drop-far-ahead protection fires. Real HL2 produces 1024 samples / 21.3 ms per tick so the over-production doesn't happen. underrunCount=0 is the metric that matters."
+  },
+  "captures": [
+    {"cycle": 0, "t0_mox_off": 71632.80, "t4_audio_scheduled": 71665.20, "nextPlayTime": 37.874, "now": 37.824, "delta_ms": 49.99999999999716},
+    {"cycle": 1, "t0_mox_off": 72643.80, "t4_audio_scheduled": 72662.50, "nextPlayTime": 38.871, "now": 38.821, "delta_ms": 49.99999999999716},
+    {"cycle": 2, "t0_mox_off": 73647.00, "t4_audio_scheduled": 73679.80, "nextPlayTime": 39.885, "now": 39.835, "delta_ms": 49.99999999999716},
+    {"cycle": 3, "t0_mox_off": 74660.80, "t4_audio_scheduled": 74681.50, "nextPlayTime": 40.887, "now": 40.837, "delta_ms": 49.99999999999716},
+    {"cycle": 4, "t0_mox_off": 75662.80, "t4_audio_scheduled": 75696.00, "nextPlayTime": 41.906, "now": 41.856, "delta_ms": 49.99999999999716},
+    {"cycle": 5, "t0_mox_off": 76665.70, "t4_audio_scheduled": 76687.30, "nextPlayTime": 42.893, "now": 42.843, "delta_ms": 49.99999999999716},
+    {"cycle": 6, "t0_mox_off": 77669.60, "t4_audio_scheduled": 77704.10, "nextPlayTime": 43.911, "now": 43.861, "delta_ms": 49.99999999999716},
+    {"cycle": 7, "t0_mox_off": 78672.10, "t4_audio_scheduled": 78694.50, "nextPlayTime": 44.903, "now": 44.853, "delta_ms": 49.99999999999716},
+    {"cycle": 8, "t0_mox_off": 79679.30, "t4_audio_scheduled": 79700.20, "nextPlayTime": 45.906, "now": 45.856, "delta_ms": 49.99999999999716},
+    {"cycle": 9, "t0_mox_off": 80681.50, "t4_audio_scheduled": 80703.90, "nextPlayTime": 46.909, "now": 46.859, "delta_ms": 49.99999999999716}
+  ],
+  "summary": {
+    "median_delta_ms": 50.0,
+    "all_cycles_identical": true,
+    "wall_clock_t4_minus_t0_ms": [32.4, 18.7, 32.8, 20.7, 33.2, 21.6, 34.5, 22.4, 20.9, 22.4],
+    "wall_clock_median_ms": 22.0,
+    "wall_clock_note": "the variance in wall-clock t4-t0 (19-34ms) is the wait for the next 30 Hz pipeline Tick plus broadcast+decode. Median ~22ms matches the predicted 0-33ms tick wait + ~1-2ms transport."
+  }
+}

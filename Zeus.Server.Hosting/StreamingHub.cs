@@ -341,12 +341,26 @@ public sealed class StreamingHub
 
         private async Task SendLoopAsync(CancellationToken ct)
         {
+            // perf3 iter2: WaitToReadAsync+TryRead drain — see
+            // DspPipelineService.StartIqPump for the rationale. At
+            // ~60 frame/s per client (display+audio+meters combined),
+            // burst arrivals are common (pipeline Tick enqueues display +
+            // optional meters in the same iteration); batching them into
+            // one TP dispatch + a tight TryRead loop is strictly fewer
+            // wake-ups than one ReadAsync continuation per frame. Channel
+            // is CreateBounded(DropOldest, SingleReader=true) so drop-oldest
+            // back-pressure is unchanged; ChannelClosedException is replaced
+            // by WaitToReadAsync returning false after Writer.TryComplete().
+            var reader = _queue.Reader;
             try
             {
-                await foreach (var frame in _queue.Reader.ReadAllAsync(ct))
+                while (await reader.WaitToReadAsync(ct).ConfigureAwait(false))
                 {
-                    if (_ws.State != WebSocketState.Open) break;
-                    await _ws.SendAsync(frame, WebSocketMessageType.Binary, true, ct);
+                    while (reader.TryRead(out var frame))
+                    {
+                        if (_ws.State != WebSocketState.Open) return;
+                        await _ws.SendAsync(frame, WebSocketMessageType.Binary, true, ct).ConfigureAwait(false);
+                    }
                 }
             }
             catch (OperationCanceledException) { }

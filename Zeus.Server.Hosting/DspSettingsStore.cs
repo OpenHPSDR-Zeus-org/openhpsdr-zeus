@@ -21,7 +21,7 @@ public sealed class DspSettingsStore : IDisposable
     public DspSettingsStore(ILogger<DspSettingsStore> log, string? dbPathOverride = null)
     {
         _log = log;
-        var dbPath = dbPathOverride ?? GetDatabasePath();
+        var dbPath = dbPathOverride ?? PrefsDbPath.Get();
 
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -291,13 +291,6 @@ public sealed class DspSettingsStore : IDisposable
 
     public void Dispose() => _db.Dispose();
 
-    private static string GetDatabasePath()
-    {
-        var appDataDir = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData,
-            Environment.SpecialFolderOption.Create);
-        return Path.Combine(appDataDir, "Zeus", "zeus-prefs.db");
-    }
 }
 
 public sealed class DspSettingsEntry

@@ -1,0 +1,102 @@
+Thread (0xBF1715):
+  [Native Frames]
+  System.Private.CoreLib!System.Threading.Monitor.Wait(class System.Object,int32)
+  System.Private.CoreLib!System.Threading.ManualResetEventSlim.Wait(int32,value class System.Threading.CancellationToken)
+  System.Private.CoreLib!System.Threading.Tasks.Task.SpinThenBlockingWait(int32,value class System.Threading.CancellationToken)
+  System.Private.CoreLib!System.Threading.Tasks.Task.InternalWaitCore(int32,value class System.Threading.CancellationToken)
+  System.Private.CoreLib!System.Threading.Tasks.Task.InternalWait(int32,value class System.Threading.CancellationToken)
+  System.Private.CoreLib!System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(class System.Threading.Tasks.Task,value class System.Threading.Tasks.ConfigureAwaitOptions)
+  System.Private.CoreLib!System.Runtime.CompilerServices.TaskAwaiter`1[System.Int32].GetResult()
+  Zeus.Server!Program.<Main>(class System.String[])
+
+Thread (0xBF1733):
+  [Native Frames]
+  System.IO.FileSystem.Watcher!System.IO.FileSystemWatcher+RunningInstance+StaticWatcherRunLoopManager.WatchForFileSystemEventsThreadStart(class System.Threading.ManualResetEventSlim,class Microsoft.Win32.SafeHandles.SafeEventStreamHandle)
+  System.Private.CoreLib!System.Threading.Thread.StartCallback()
+
+Thread (0xBF173D):
+  [Native Frames]
+  Microsoft.Extensions.Logging.Console!Microsoft.Extensions.Logging.Console.ConsoleLoggerProcessor.TryDequeue(value class Microsoft.Extensions.Logging.Console.LogMessageEntry&)
+  Microsoft.Extensions.Logging.Console!Microsoft.Extensions.Logging.Console.ConsoleLoggerProcessor.ProcessLogQueue()
+  System.Private.CoreLib!System.Threading.Thread.StartCallback()
+
+Thread (0xBF174F):
+  [Native Frames]
+  System.Private.CoreLib!System.Threading.ManualResetEventSlim.Wait(int32,value class System.Threading.CancellationToken)
+  Microsoft.AspNetCore.Server.Kestrel.Core!Microsoft.AspNetCore.Server.Kestrel.Core.Internal.Infrastructure.Heartbeat.TimerLoop()
+  System.Private.CoreLib!System.Threading.Thread.StartCallback()
+
+Thread (0xBF173F):
+  [Native Frames]
+  System.Private.CoreLib!System.Threading.WaitHandle.WaitOneNoCheck(int32,bool,class System.Object,value class WaitHandleWaitSourceMap)
+  System.Private.CoreLib!System.Threading.TimerQueue.TimerThread()
+  System.Private.CoreLib!System.Threading.Thread.StartCallback()
+
+Thread (0xBF1741):
+  [Native Frames]
+  System.Private.CoreLib!System.Threading.WaitHandle.WaitOneNoCheck(int32,bool,class System.Object,value class WaitHandleWaitSourceMap)
+  System.Private.CoreLib!System.Threading.PortableThreadPool+GateThread.GateThreadStart()
+  System.Private.CoreLib!System.Threading.Thread.StartCallback()
+
+Thread (0xBF1744):
+  [Native Frames]
+  ?!?
+  System.Net.Sockets!System.Net.Sockets.SocketAsyncEngine.EventLoop()
+  System.Private.CoreLib!System.Threading.Thread.StartCallback()
+
+Thread (0xBF18E3):
+  [Native Frames]
+  System.Private.CoreLib!System.Threading.ManualResetEventSlim.Wait(int32,value class System.Threading.CancellationToken)
+  Zeus.Protocol1!Zeus.Protocol1.Protocol1Client.RxLoop()
+  System.Private.CoreLib!System.Threading.Thread+StartHelper.Callback(class System.Object)
+  System.Private.CoreLib!System.Threading.ExecutionContext.RunInternal(class System.Threading.ExecutionContext,class System.Threading.ContextCallback,class System.Object)
+
+Thread (0xBF18ED):
+  [Native Frames]
+  System.Private.CoreLib!System.Threading.SemaphoreSlim.WaitUntilCountOrTimeout(int64,int64,value class System.Threading.CancellationToken)
+  System.Private.CoreLib!System.Threading.SemaphoreSlim.WaitCore(int64,value class System.Threading.CancellationToken)
+  System.Collections.Concurrent!System.Collections.Concurrent.BlockingCollection`1[System.__Canon].TryTakeWithNoTimeValidation(!0&,int32,value class System.Threading.CancellationToken,class System.Threading.CancellationTokenSource)
+  Zeus.Dsp!Zeus.Dsp.Wdsp.WdspDspEngine.RunWorker(class ChannelState)
+  Zeus.Dsp!Zeus.Dsp.Wdsp.WdspDspEngine+<>c__DisplayClass90_0.<OpenChannel>b__0()
+  System.Private.CoreLib!System.Threading.Thread+StartHelper.Callback(class System.Object)
+  System.Private.CoreLib!System.Threading.ExecutionContext.RunInternal(class System.Threading.ExecutionContext,class System.Threading.ContextCallback,class System.Object)
+
+Thread (0xBF1F2A):
+  [Native Frames]
+  System.Private.CoreLib!System.Threading.WaitHandle.WaitOneNoCheck(int32,bool,class System.Object,value class WaitHandleWaitSourceMap)
+  System.Private.CoreLib!System.Diagnostics.Tracing.CounterGroup.PollForValues()
+  System.Private.CoreLib!System.Threading.Thread.StartCallback()
+
+Thread (0xBF906D):
+  [Native Frames]
+  System.Private.CoreLib!System.Threading.LowLevelLifoSemaphore.WaitForSignal(int32)
+  System.Private.CoreLib!System.Threading.LowLevelLifoSemaphore.Wait(int32,bool)
+  System.Private.CoreLib!System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()
+  System.Private.CoreLib!System.Threading.Thread.StartCallback()
+
+Thread (0xBFD195):
+  [Native Frames]
+  System.Private.CoreLib!System.Threading.LowLevelLifoSemaphore.WaitForSignal(int32)
+  System.Private.CoreLib!System.Threading.LowLevelLifoSemaphore.Wait(int32,bool)
+  System.Private.CoreLib!System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()
+  System.Private.CoreLib!System.Threading.Thread.StartCallback()
+
+Thread (0xBFE176):
+  [Native Frames]
+  System.Private.CoreLib!System.Threading.LowLevelLifoSemaphore.Wait(int32,bool)
+  System.Private.CoreLib!System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()
+  System.Private.CoreLib!System.Threading.Thread.StartCallback()
+
+Thread (0xBFEAFA):
+  [Native Frames]
+  System.Private.CoreLib!System.Threading.LowLevelLifoSemaphore.Wait(int32,bool)
+  System.Private.CoreLib!System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()
+  System.Private.CoreLib!System.Threading.Thread.StartCallback()
+
+Thread (0xBFF3EC):
+  [Native Frames]
+  System.Private.CoreLib!System.Threading.LowLevelLifoSemaphore.WaitForSignal(int32)
+  System.Private.CoreLib!System.Threading.LowLevelLifoSemaphore.Wait(int32,bool)
+  System.Private.CoreLib!System.Threading.PortableThreadPool+WorkerThread.WorkerThreadStart()
+  System.Private.CoreLib!System.Threading.Thread.StartCallback()
+

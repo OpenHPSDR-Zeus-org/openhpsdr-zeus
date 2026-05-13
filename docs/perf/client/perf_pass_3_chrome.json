@@ -1,0 +1,86 @@
+{
+  "duration_s": 30,
+  "fps": {
+    "mean": "60.00",
+    "frameCount": 1800,
+    "p50_ms": "16.70",
+    "p95_ms": "17.60",
+    "p99_ms": "17.70",
+    "max_ms": "17.70"
+  },
+  "eventLoopLag_ms": {
+    "mean": "40.00",
+    "p50": "40.00",
+    "p95": "43.80",
+    "p99": "49.90",
+    "max": "60.30"
+  },
+  "longTasks": {
+    "count": 4,
+    "totalDurationMs": "224.00",
+    "ratioOfWindow": "0.75%",
+    "worst": "60.00",
+    "entries": [
+      {
+        "startTime": 138.10000002384186,
+        "duration": 54,
+        "name": "self",
+        "attrib": [
+          {
+            "name": "unknown",
+            "type": "taskattribution"
+          }
+        ]
+      },
+      {
+        "startTime": 305.30000001192093,
+        "duration": 60,
+        "name": "self",
+        "attrib": [
+          {
+            "name": "unknown",
+            "type": "taskattribution"
+          }
+        ]
+      },
+      {
+        "startTime": 430.60000002384186,
+        "duration": 56,
+        "name": "self",
+        "attrib": [
+          {
+            "name": "unknown",
+            "type": "taskattribution"
+          }
+        ]
+      },
+      {
+        "startTime": 540.3000000119209,
+        "duration": 54,
+        "name": "self",
+        "attrib": [
+          {
+            "name": "unknown",
+            "type": "taskattribution"
+          }
+        ]
+      }
+    ]
+  },
+  "heap": {
+    "samples": 27,
+    "startMB": "53.63",
+    "endMB": "42.83",
+    "deltaMB": "-10.80"
+  },
+  "paint": [
+    {
+      "name": "first-paint",
+      "startTime": 224
+    },
+    {
+      "name": "first-contentful-paint",
+      "startTime": 308
+    }
+  ]
+}

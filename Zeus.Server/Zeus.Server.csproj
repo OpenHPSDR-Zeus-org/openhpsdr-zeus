@@ -6,6 +6,17 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <SpaRoot>$(MSBuildThisFileDirectory)..\zeus-web</SpaRoot>
     <SpaBuildOutput>$(MSBuildThisFileDirectory)..\Zeus.Server.Hosting\wwwroot\index.html</SpaBuildOutput>
+    <!-- ASP.NET Core defaults to Server GC (one GC thread per logical core),
+         tuned for high-throughput servers handling many concurrent requests.
+         Zeus.Server is a single-operator desktop radio client with a single
+         SignalR consumer; the 10 idle GC threads on a 10-core host showed up
+         as ~3% PollGCWorker overhead + a portion of LowLevelLifoSemaphore
+         wait churn in dotnet-trace cpu-sampling. Workstation GC uses one GC
+         thread and stays in step with the foreground work — lower idle
+         wake-up cost, slightly tighter pause budget per collection (Zeus
+         allocates ~1.9 MB/s so pauses are sub-millisecond). -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>

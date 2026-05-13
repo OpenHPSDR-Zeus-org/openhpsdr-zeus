@@ -44,7 +44,7 @@ public sealed class PaSettingsStore : IDisposable
     public PaSettingsStore(ILogger<PaSettingsStore> log, string? dbPathOverride = null)
     {
         _log = log;
-        var dbPath = dbPathOverride ?? GetDatabasePath();
+        var dbPath = dbPathOverride ?? PrefsDbPath.Get();
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
         {
@@ -204,13 +204,6 @@ public sealed class PaSettingsStore : IDisposable
 
     public void Dispose() => _db.Dispose();
 
-    private static string GetDatabasePath()
-    {
-        var appDataDir = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData,
-            Environment.SpecialFolderOption.Create);
-        return Path.Combine(appDataDir, "Zeus", "zeus-prefs.db");
-    }
 }
 
 // Resolved snapshot that RadioService pushes to the P1 client directly and to

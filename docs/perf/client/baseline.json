@@ -1,0 +1,56 @@
+{
+  "_meta": {
+    "captured": "2026-05-11T12:27Z",
+    "branch": "feature/perf_pass_3",
+    "backend": "Brian's running Zeus.Server :6060 (HL2 connected, live RX 192 kHz LSB on 40 m)",
+    "frontend": "Vite dev :5183 from worktree, perf_pass_3 branch HEAD c3091e1",
+    "client": "playwright MCP Chrome 147.0.7727.138, 1600x1000 viewport, second tab on backend (Brian's tab is the first)",
+    "window_secs": 30,
+    "actual_durationMs": 37696.9,
+    "notes": "Probe overhead: setInterval lag-sampler @ 25 Hz, heap sampler @ 4 Hz, rAF tick, copyToChannel wrap — small but not zero. CPU sampler ran in parallel via `top -l 7 -s 5`."
+  },
+  "raf": {
+    "frameCount": 2263,
+    "meanFps": 60.04,
+    "p50_ms": 16.70,
+    "p95_ms": 17.40,
+    "p99_ms": 17.60,
+    "max_ms": 17.80
+  },
+  "audio": {
+    "frames": 1142,
+    "rateHz": 30.30,
+    "interArrival_p50_ms": 33.0,
+    "interArrival_p95_ms": 36.4,
+    "interArrival_p99_ms": 44.0,
+    "interArrival_max_ms": 71.7
+  },
+  "longTasks": {
+    "count": 2,
+    "totalMs": 124,
+    "maxMs": 64
+  },
+  "eventLoopLag": {
+    "samples": 493,
+    "p50_ms": 0.8,
+    "p95_ms": 7.6,
+    "p99_ms": 12.5,
+    "max_ms": 23.4,
+    "mean_ms": 1.57
+  },
+  "heap": {
+    "startBytes": 37228420,
+    "endBytes": 42842889,
+    "maxBytes": 65212283,
+    "samples": 150,
+    "_note": "Grew 5.6 MB over 30 s. Max-vs-end gap of ~22 MB indicates one GC fired mid-window."
+  },
+  "cpu_top_pct_one_core": {
+    "renderer_pid_31612": [30.4, 31.4, 35.7, 31.1, 36.3, 31.8],
+    "renderer_mean": 32.8,
+    "gpu_helper_pid_31579": [15.6, 16.8, 17.9, 16.5, 19.0, 15.7],
+    "gpu_helper_mean": 17.0,
+    "stack_mean": 49.7,
+    "_note": "macOS `top -l 7 -s 5`. Per-core scaled, so 100 % = one core saturated."
+  }
+}

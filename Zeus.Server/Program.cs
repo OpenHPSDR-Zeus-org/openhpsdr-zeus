@@ -49,12 +49,15 @@ using Zeus.Server;
 // conflicting with the user's Log4YM project (which also binds :5050).
 // ZEUS_PORT overrides the default (used by the /run skill's portOffset).
 var httpPort = int.TryParse(Environment.GetEnvironmentVariable("ZEUS_PORT"), out var zp) ? zp : 6060;
+// PERF_PASS_3_DEBUG: allow disabling HTTPS + LAN bind for a second instance
+// on the same box (Brian's main session keeps :6443/40001). Uncommitted.
+var perfTest = Environment.GetEnvironmentVariable("ZEUS_PERF_TEST") == "1";
 
 var options = new ZeusHostOptions
 {
     HttpPort = httpPort,
-    BindAllInterfaces = true,
-    UseHttpsLanCert = true,
+    BindAllInterfaces = !perfTest,
+    UseHttpsLanCert = !perfTest,
     PrintConsoleBanner = true,
 };
 

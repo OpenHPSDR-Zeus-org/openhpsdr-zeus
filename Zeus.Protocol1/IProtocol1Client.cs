@@ -207,4 +207,31 @@ public interface IProtocol1Client : IDisposable
     /// feedback samples reached the engine" symptom.
     /// </summary>
     long PsPairedPacketCount { get; }
+
+    /// <summary>
+    /// Register a synchronous sink to receive decoded RX frames directly on
+    /// the RX OS thread, bypassing the <see cref="IqFrames"/> /
+    /// <see cref="PsFeedbackFrames"/> channels. Call BEFORE
+    /// <see cref="StartAsync"/> for stable lifetime semantics; a runtime swap
+    /// uses <see cref="System.Threading.Interlocked.Exchange{T}(ref T, T)"/>
+    /// internally and is safe but not race-free against an in-flight frame
+    /// (the previous sink may receive one more callback after the call
+    /// returns).
+    ///
+    /// While a non-null sink is attached, the RX loop calls the sink methods
+    /// INSTEAD of writing to the public channels. With no sink attached, the
+    /// channel-write path remains the only producer (preserves existing
+    /// test-side consumers).
+    ///
+    /// See <see cref="IRxPacketSink"/> for the full threading contract.
+    /// </summary>
+    void AttachRxSink(IRxPacketSink sink);
+
+    /// <summary>
+    /// Detach the currently attached RX sink. After this returns, the
+    /// channel-write path is the only producer. Safe to call from any thread;
+    /// at most one further callback may complete on the detached sink before
+    /// the change is observed.
+    /// </summary>
+    void DetachRxSink();
 }

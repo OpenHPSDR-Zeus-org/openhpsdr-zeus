@@ -212,7 +212,11 @@ export default function App() {
 
   useEffect(() => {
     return useTxStore.subscribe((state, prev) => {
-      if (state.moxOn !== prev.moxOn) getAudioClient().reset();
+      if (state.moxOn !== prev.moxOn) {
+        // PERF_PASS_3_DEBUG: arm one-shot capture in audio-client. Uncommitted.
+        (window as unknown as { __zeusFirstAudioAfterMox?: boolean }).__zeusFirstAudioAfterMox = !state.moxOn;
+        getAudioClient().reset();
+      }
     });
   }, []);
 

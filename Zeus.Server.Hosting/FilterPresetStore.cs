@@ -53,7 +53,7 @@ public sealed class FilterPresetStore : IDisposable
         _log = log;
         EnsureMapperRegistered();
 
-        var dbPath = GetDatabasePath();
+        var dbPath = PrefsDbPath.Get();
 
         var dir = Path.GetDirectoryName(dbPath);
         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
@@ -280,13 +280,6 @@ public sealed class FilterPresetStore : IDisposable
         }
     }
 
-    private static string GetDatabasePath()
-    {
-        var appDataDir = Environment.GetFolderPath(
-            Environment.SpecialFolder.LocalApplicationData,
-            Environment.SpecialFolderOption.Create);
-        return Path.Combine(appDataDir, "Zeus", "zeus-prefs.db");
-    }
 }
 
 public sealed class FilterPresetStoreEntry

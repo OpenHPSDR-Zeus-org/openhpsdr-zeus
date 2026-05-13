@@ -1,0 +1,29 @@
+{
+  "comment": "perf-pass-3 latency-validator playwright capture, synthetic mode. BUFFER_TARGET_SECS = 0.10 (PRE-fix baseline for comparison). Captured 2026-05-11.",
+  "branch": "feature/perf_pass_3 (temporarily reverted)",
+  "backend": "same Zeus.Server :6080 ZEUS_PERF_TEST=1",
+  "frontend": "same Vite :5193, page reloaded via Vite HMR after audio-client.ts edit",
+  "driver": "same 10x setMoxOn(true)/setMoxOn(false) cycles",
+  "audioStatsAfter10Cycles": {
+    "underrunCount": 0,
+    "comment": "underrun-free even at 100ms target (over-conservative for LAN)"
+  },
+  "captures": [
+    {"cycle": 0, "t0_mox_off": 50517.20, "t4_audio_scheduled": 50521.20, "nextPlayTime": 15.316, "now": 15.216, "delta_ms": 99.99999999999964},
+    {"cycle": 1, "t0_mox_off": 51521.20, "t4_audio_scheduled": 51541.40, "nextPlayTime": 16.340, "now": 16.240, "delta_ms": 100.00000000000142},
+    {"cycle": 2, "t0_mox_off": 52524.40, "t4_audio_scheduled": 52533.30, "nextPlayTime": 17.332, "now": 17.232, "delta_ms": 100.00000000000142},
+    {"cycle": 3, "t0_mox_off": 53526.80, "t4_audio_scheduled": 53555.30, "nextPlayTime": 18.351, "now": 18.251, "delta_ms": 100.00000000000142},
+    {"cycle": 4, "t0_mox_off": 54529.70, "t4_audio_scheduled": 54548.00, "nextPlayTime": 19.343, "now": 19.243, "delta_ms": 100.00000000000142},
+    {"cycle": 5, "t0_mox_off": 55533.70, "t4_audio_scheduled": 55566.10, "nextPlayTime": 20.361, "now": 20.261, "delta_ms": 100.00000000000142},
+    {"cycle": 6, "t0_mox_off": 56536.70, "t4_audio_scheduled": 56558.30, "nextPlayTime": 21.353, "now": 21.253, "delta_ms": 100.00000000000142},
+    {"cycle": 7, "t0_mox_off": 57539.50, "t4_audio_scheduled": 57571.60, "nextPlayTime": 22.367, "now": 22.267, "delta_ms": 100.00000000000142},
+    {"cycle": 8, "t0_mox_off": 58541.20, "t4_audio_scheduled": 58571.00, "nextPlayTime": 23.369, "now": 23.269, "delta_ms": 100.00000000000142},
+    {"cycle": 9, "t0_mox_off": 59543.90, "t4_audio_scheduled": 59578.20, "nextPlayTime": 24.377, "now": 24.277, "delta_ms": 100.00000000000142}
+  ],
+  "summary": {
+    "median_delta_ms": 100.0,
+    "all_cycles_identical": true,
+    "wall_clock_t4_minus_t0_ms": [4.0, 20.2, 8.9, 28.5, 18.3, 32.4, 21.6, 32.1, 29.8, 34.3],
+    "wall_clock_median_ms": 24.7
+  }
+}

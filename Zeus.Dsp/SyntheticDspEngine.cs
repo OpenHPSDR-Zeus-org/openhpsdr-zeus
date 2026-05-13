@@ -135,6 +135,13 @@ public sealed class SyntheticDspEngine : IDspEngine
     public int ReadAudio(int channelId, Span<float> output)
     {
         output.Clear();
+        // PERF_PASS_3_DEBUG: emit silence frames (matching the WDSP cadence) so
+        // synthetic mode exercises the client audio-scheduling path end-to-end.
+        // Uncommitted local edit; stash before merge.
+        if (Environment.GetEnvironmentVariable("ZEUS_PERF_TEST") == "1")
+        {
+            return output.Length;
+        }
         return 0;
     }
 

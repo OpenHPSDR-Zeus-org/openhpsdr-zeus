@@ -1407,6 +1407,9 @@ public sealed class WdspDspEngine : IDspEngine
                 _txaRunning = false;
             }
             rxaPrior = NativeMethods.SetChannelState(rxaId, 1, 0);
+            // PERF_PASS_3_DEBUG: t2 — WDSP RXA brought back up. Uncommitted.
+            _log.LogInformation("wdsp.rxa.up ts={Ts}",
+                System.Diagnostics.Stopwatch.GetTimestamp());
             // Unkeying: clear the stage-meter snapshot so UI doesn't latch the
             // last-during-TX reading while idle. The next MOX-on will publish
             // fresh data on its first ProcessTxBlock.
