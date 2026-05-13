@@ -324,20 +324,6 @@ public sealed class TciServer : IHostedService, IDisposable
         }
     }
 
-    // TODO(remove): temporary RX audio debug counters
-    private static int _dbgRxAudioFrames;
-    private static DateTime _dbgRxLastFlush = DateTime.UtcNow;
-    private static readonly object _dbgRxLock = new();
-    private static readonly string _dbgRxLogPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "zeus-tci-debug.log");
-
-    private static void DbgLogRx(string msg)
-    {
-        lock (_dbgRxLock)
-        {
-            File.AppendAllText(_dbgRxLogPath, $"{DateTime.UtcNow:HH:mm:ss.fff} {msg}\n");
-        }
-    }
-
     private void OnRxAudioAvailable(int receiver, int sampleRateHz, ReadOnlyMemory<float> samples)
     {
         if (_clients.IsEmpty) return;
@@ -346,18 +332,6 @@ public sealed class TciServer : IHostedService, IDisposable
         foreach (var session in _clients.Values)
         {
             if (session.WantsAudioStream(receiver)) { anyWants = true; break; }
-        }
-
-        // TODO(remove): log RX audio availability for debug
-        lock (_dbgRxLock)
-        {
-            _dbgRxAudioFrames++;
-            if (DateTime.UtcNow - _dbgRxLastFlush >= TimeSpan.FromSeconds(2))
-            {
-                DbgLogRx($"RX-audio: frames={_dbgRxAudioFrames} samples={samples.Length} sr={sampleRateHz} anyWants={anyWants} clients={_clients.Count}");
-                _dbgRxAudioFrames = 0;
-                _dbgRxLastFlush = DateTime.UtcNow;
-            }
         }
 
         if (!anyWants) return;
