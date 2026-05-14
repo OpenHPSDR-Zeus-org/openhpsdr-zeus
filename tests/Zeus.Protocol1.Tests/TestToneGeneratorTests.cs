@@ -80,9 +80,14 @@ public class TestToneGeneratorTests
     }
 
     [Fact]
-    public void Ep2Payload_MoxOn_NonHl2_AllIqBytesZero()
+    public void Ep2Payload_MoxOn_NonHl2_AlsoProducesNonZeroIq()
     {
-        // Don't accidentally key RF on boards whose PA bits we don't model yet.
+        // Issue #294: pre-fix this asserted "AllIqBytesZero" — that gate was
+        // installed when P1 was effectively HL2-only and meant well-flashed
+        // ANAN-class radios keyed silently. The wire format (LRIQ s16 BE) is
+        // identical across every Protocol-1 board; PA-enable on non-HL2 boards
+        // comes from the C0 MOX bit, not a separate DriveFilter flag. Pin the
+        // new, correct behaviour so the gate can't quietly come back.
         var buf = new byte[ControlFrame.PacketLength];
         var tone = new TestToneGenerator();
         var state = Hl2Tx() with { Board = HpsdrBoardKind.Hermes };
@@ -91,7 +96,20 @@ public class TestToneGeneratorTests
             ControlFrame.CcRegister.Config, ControlFrame.CcRegister.RxFreq,
             state, tone);
 
-        AssertPayloadIqZero(buf);
+        int nonZero = 0;
+        for (int f = 0; f < 2; f++)
+        {
+            int payloadStart = 8 + f * ControlFrame.UsbFrameLength + 8;
+            for (int s = 0; s < 63; s++)
+            {
+                int off = payloadStart + s * 8;
+                if (buf[off + 4] != 0 || buf[off + 5] != 0 ||
+                    buf[off + 6] != 0 || buf[off + 7] != 0)
+                    nonZero++;
+            }
+        }
+        Assert.True(nonZero > 100,
+            $"expected >100 non-zero IQ slots on Hermes MOX TX, got {nonZero} — issue #294 regression");
     }
 
     [Fact]

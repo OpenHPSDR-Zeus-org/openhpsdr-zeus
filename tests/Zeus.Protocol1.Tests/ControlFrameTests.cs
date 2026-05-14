@@ -471,4 +471,172 @@ public class ControlFrameTests
         Assert.Equal(0x04, buf[2]);
         Assert.Equal(0x00, buf[3]);
     }
+
+    // ---------------------------------------------------------------------
+    // Issue #294: WriteUsbFrame previously gated IQ-payload writes on
+    // `state.Board == HermesLite2`, so ANAN-class P1 radios (Hermes / ANAN-10E
+    // / Angelia / Orion-MkII / etc.) keyed up but emitted silence — every
+    // EP2 packet went out with the IQ slots cleared. The wire format
+    // (L_audio s16 BE | R_audio s16 BE | I s16 BE | Q s16 BE) is identical
+    // across all Protocol-1 boards; the only HL2-specific behaviour that
+    // must remain conditioned is the DriveFilter C2[3] PA-enable bit (see
+    // DriveFilter_Hl2_MoxOn_SetsC2PaEnableBit above).
+    // ---------------------------------------------------------------------
+
+    private sealed class ConstIqSource : ITxIqSource
+    {
+        private readonly short _i;
+        private readonly short _q;
+        public ConstIqSource(short i, short q) { _i = i; _q = q; }
+        public (short i, short q) Next(double amplitude) => (_i, _q);
+    }
+
+    private static (int peak, int firstI, int firstQ) FirstFrameIqStats(ReadOnlySpan<byte> packet)
+    {
+        // First USB frame payload starts at offset 16 (= 8 Metis header + 3 sync + 5 cc).
+        const int payloadStart = 16;
+        int peak = 0;
+        int firstI = (short)((packet[payloadStart + 4] << 8) | packet[payloadStart + 5]);
+        int firstQ = (short)((packet[payloadStart + 6] << 8) | packet[payloadStart + 7]);
+        for (int s = 0; s < 63; s++)
+        {
+            int off = payloadStart + s * 8;
+            int i = (short)((packet[off + 4] << 8) | packet[off + 5]);
+            int q = (short)((packet[off + 6] << 8) | packet[off + 7]);
+            peak = Math.Max(peak, Math.Max(Math.Abs(i), Math.Abs(q)));
+        }
+        return (peak, firstI, firstQ);
+    }
+
+    [Theory]
+    [InlineData(HpsdrBoardKind.Hermes)]        // ANAN-10E reports here (issue #294)
+    [InlineData(HpsdrBoardKind.HermesII)]      // ANAN-10E w/ HermesII firmware
+    [InlineData(HpsdrBoardKind.Angelia)]       // ANAN-100D
+    [InlineData(HpsdrBoardKind.Orion)]         // ANAN-200D
+    [InlineData(HpsdrBoardKind.OrionMkII)]     // G2 / 7000DLE / 8000DLE / etc.
+    [InlineData(HpsdrBoardKind.HermesLite2)]   // HL2 — daily-driver regression guard
+    public void BuildDataPacket_AllBoards_MoxOn_WritesNonZeroIqWhenDriveSet(HpsdrBoardKind board)
+    {
+        var buf = new byte[1032];
+        var state = BaseState() with
+        {
+            Board = board,
+            Mox = true,
+            DriveLevel = 0x80,
+        };
+        var src = new ConstIqSource(i: 0x2000, q: -0x2000);
+
+        ControlFrame.BuildDataPacket(
+            buf,
+            sendSequence: 1,
+            evenRegister: ControlFrame.CcRegister.Config,
+            oddRegister: ControlFrame.CcRegister.RxFreq,
+            state,
+            src);
+
+        var (peak, firstI, firstQ) = FirstFrameIqStats(buf);
+        Assert.True(peak > 0,
+            $"board={board} mox=on drive=128 produced zero IQ on the wire — issue #294 regression");
+        // 0x2000 with the 0xFE LSB mask = 0x2000 (LSB already 0)
+        Assert.Equal(0x2000, firstI);
+        Assert.Equal(unchecked((short)-0x2000), firstQ);
+    }
+
+    [Fact]
+    public void BuildDataPacket_Hermes_MoxOff_KeepsPayloadZero()
+    {
+        // Never key the radio when MOX is off — applies to every board.
+        var buf = new byte[1032];
+        var state = BaseState() with
+        {
+            Board = HpsdrBoardKind.Hermes,
+            Mox = false,
+            DriveLevel = 0xFF,
+        };
+        var src = new ConstIqSource(0x7FFF, 0x7FFF);
+
+        ControlFrame.BuildDataPacket(
+            buf, 1,
+            ControlFrame.CcRegister.Config,
+            ControlFrame.CcRegister.RxFreq,
+            state, src);
+
+        var (peak, _, _) = FirstFrameIqStats(buf);
+        Assert.Equal(0, peak);
+    }
+
+    [Fact]
+    public void BuildDataPacket_Hermes_DriveZero_KeepsPayloadZero()
+    {
+        // Drive byte 0 means the analog TX chain is off regardless of MOX/IQ.
+        // Zero the payload so the wire is bit-exact silent — guards against an
+        // IQ source dribbling junk through during PTT-without-drive.
+        var buf = new byte[1032];
+        var state = BaseState() with
+        {
+            Board = HpsdrBoardKind.Hermes,
+            Mox = true,
+            DriveLevel = 0,
+        };
+        var src = new ConstIqSource(0x7FFF, 0x7FFF);
+
+        ControlFrame.BuildDataPacket(
+            buf, 1,
+            ControlFrame.CcRegister.Config,
+            ControlFrame.CcRegister.RxFreq,
+            state, src);
+
+        var (peak, _, _) = FirstFrameIqStats(buf);
+        Assert.Equal(0, peak);
+    }
+
+    [Fact]
+    public void BuildDataPacket_NoIqSource_KeepsPayloadZero()
+    {
+        // Legacy / unit-test path: caller omits the IQ source. Must still be
+        // safe — frame stays cleared, no nullref.
+        var buf = new byte[1032];
+        var state = BaseState() with
+        {
+            Board = HpsdrBoardKind.Hermes,
+            Mox = true,
+            DriveLevel = 0xFF,
+        };
+
+        ControlFrame.BuildDataPacket(
+            buf, 1,
+            ControlFrame.CcRegister.Config,
+            ControlFrame.CcRegister.RxFreq,
+            state); // iqSource defaulted to null
+
+        var (peak, _, _) = FirstFrameIqStats(buf);
+        Assert.Equal(0, peak);
+    }
+
+    [Fact]
+    public void BuildDataPacket_IqPayload_MasksLsbAcrossAllBoards()
+    {
+        // Originally an HL2 CWX workaround; left universal because the ≤1 LSB
+        // precision loss is ~96 dB below full-scale and well under any real
+        // radio's noise floor. Pin so a future "remove the mask for non-HL2"
+        // refactor is a deliberate decision, not a silent regression.
+        var buf = new byte[1032];
+        var state = BaseState() with
+        {
+            Board = HpsdrBoardKind.Hermes,
+            Mox = true,
+            DriveLevel = 0x80,
+        };
+        var src = new ConstIqSource(i: 0x2001, q: 0x2001); // LSB=1
+
+        ControlFrame.BuildDataPacket(
+            buf, 1,
+            ControlFrame.CcRegister.Config,
+            ControlFrame.CcRegister.RxFreq,
+            state, src);
+
+        // Wire byte for I-low / Q-low must have LSB cleared.
+        Assert.Equal(0, buf[16 + 5] & 0x01);
+        Assert.Equal(0, buf[16 + 7] & 0x01);
+    }
 }

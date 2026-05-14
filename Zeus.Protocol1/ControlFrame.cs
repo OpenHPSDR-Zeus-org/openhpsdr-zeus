@@ -427,17 +427,27 @@ internal static class ControlFrame
         frame[2] = 0x7F;
         WriteCcBytes(frame.Slice(3, 5), register, in state);
 
+        // Surface the current commanded drive byte for the 1 Hz p1.tx.rate log
+        // regardless of which payload path runs below. The actual register
+        // write happens inside WriteCcBytes when DriveFilter is the active
+        // register; this tap just lets the diagnostic line reflect the live
+        // state across every tick.
+        LastDriveByte = state.DriveLevel;
+
         // EP2 504-byte payload = 63 groups × 8 bytes, each group =
         // [L_audio s16 BE][R_audio s16 BE][I s16 BE][Q s16 BE]
         // (both the audio ring fill and the IQ ring fill write into the same
         // 8-byte slot). HL2 has no audio codec in the MVP target, so audio
-        // bytes stay zero. HL2 also clears the LSB of the I and Q low bytes as
-        // a CWX workaround (`isample & 0xFE`) — we mirror that.
+        // bytes stay zero. The LSB of I and Q low bytes is masked off
+        // (`isample & 0xFE`) — originally an HL2 CWX workaround; harmless
+        // ≤1 LSB precision loss on other Protocol-1 boards.
         //
-        // Pre-conditions for writing a non-zero payload: MOX engaged, board is
-        // HL2 (don't accidentally drive RF on other boards whose PA bits live
-        // elsewhere), and an IQ source is plumbed through.
-        if (source is null || !state.Mox || state.Board != HpsdrBoardKind.HermesLite2)
+        // Pre-conditions for writing a non-zero payload: MOX engaged and an IQ
+        // source is plumbed through. The wire format (L/R audio + I/Q s16 BE)
+        // is identical across all Protocol-1 boards (HL2, Hermes, ANAN-class,
+        // Orion-MkII). PA enable is driven by the C0 MOX bit + board-specific
+        // DriveFilter C2 bits in WriteCcBytes — see issue #294.
+        if (source is null || !state.Mox)
         {
             // frame[8..] was cleared by BuildDataPacket; leave zero.
             return;
@@ -480,7 +490,6 @@ internal static class ControlFrame
         LastMeanAbs = (int)(sumAbs / (2 * IqSamplesPerUsbFrame));
         LastFirstI = firstI;
         LastFirstQ = firstQ;
-        LastDriveByte = state.DriveLevel;
     }
 
     // Diagnostic tap — read by Protocol1Client.TxLoopAsync to log what's
