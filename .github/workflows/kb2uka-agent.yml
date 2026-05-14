@@ -97,44 +97,91 @@ jobs:
             2. If the ask is a question or a triage request — answer it. Read
                relevant code, docs, prior commits. Cite file:line at every
                claim. Post one focused comment.
-            3. If the ask is to write or fix code:
-                 - **Post a "starting work" comment first** with a 2–4 bullet
-                   plan of what you'll touch and what done looks like. This is
-                   the first of three progress comments (see below). Do this
-                   BEFORE you branch or edit any files.
+            3. If the ask is to write or fix code, work against a **single
+               live status comment** that you edit as you progress — see the
+               "Progress visibility" section below. The flow is:
+                 - Post the live status comment first (with all checkboxes
+                   unchecked) BEFORE you branch or edit any files.
                  - Branch off `develop` with a `kb2uka-agent/<short-topic>` name.
                  - Implement the change. Match the existing code style.
                  - Build (`dotnet build Zeus.slnx`) — must be 0 warnings, 0 errors.
                  - Run tests (`dotnet test Zeus.slnx`) — no regressions.
-                 - **Post a "build/test results" comment** with one-line status
-                   per check (build, .NET tests, frontend lint/typecheck/test
-                   if you touched the frontend). If anything fails, say so and
-                   what you're doing about it.
                  - Commit with a conventional message (feat: / fix: / chore: / etc).
                  - Push the branch.
                  - Open a PR against `develop` (NEVER `main`). Title + body should
                    reference the originating issue/PR. Sign off "— KB2UKA-Agent 🛠".
-                 - **Post a final "PR opened" comment** on the originating thread
-                   linking to the new PR.
+                 - After each step, edit the status comment to tick the
+                   matching checkbox and append a one-line result.
 
-            ## Progress visibility (when writing code)
+            ## Progress visibility (when writing code) — ONE comment, edited live
 
-            KB2UKA wants to watch you work. Post **three** brief progress
-            comments on the triggering thread, in order:
+            KB2UKA wants to watch you work via a **single comment** that you
+            EDIT as you go. Never post additional progress comments. The
+            checklist is the heartbeat — every checked box is your "I made
+            progress" signal.
 
-            1. **Starting / plan** — before you edit any files. Bullet list:
-               what files you'll touch, what the user-visible outcome is, any
-               red-light concerns you'll flag for review instead of committing.
-            2. **Build/test status** — after `dotnet build` and any other
-               check commands but before you commit. One line per check.
-            3. **PR opened** — link to the new PR after `gh pr create` succeeds.
+            **Step 1 — post the initial status comment** with all boxes
+            unchecked. Use this exact template (substitute the placeholders):
 
-            Three is the cap. Don't post intermediate "still working" pings —
-            KB2UKA can see the workflow status. If you get blocked or need to
-            change direction, that's fine, post a 4th comment explaining; but
-            don't narrate every file read or grep.
+            ```
+            **Status — working on this**
 
-            Each progress comment ends with the sign-off line below.
+            - [ ] Plan: <one-line summary of the approach + files you'll touch>
+            - [ ] Implement
+            - [ ] Build (`dotnet build Zeus.slnx`)
+            - [ ] Tests (`dotnet test Zeus.slnx`)
+            - [ ] Frontend checks (lint / typecheck / `npm test`) — *omit row if no zeus-web changes*
+            - [ ] PR opened against `develop`
+
+            ---
+
+            — KB2UKA-Agent 🛠
+            ```
+
+            **Capture the comment ID** so you can edit it. Post via the API
+            (NOT `gh issue comment`, which doesn't return the ID):
+
+            ```
+            COMMENT_ID=$(gh api -X POST \
+              /repos/$GITHUB_REPOSITORY/issues/<ISSUE_OR_PR_NUMBER>/comments \
+              -f body="$INITIAL_BODY" --jq .id)
+            ```
+
+            **Step 2 — after each milestone, edit the same comment** to flip
+            `[ ]` → `[x]` and append a one-line result on the same line:
+
+            ```
+            gh api -X PATCH \
+              /repos/$GITHUB_REPOSITORY/issues/comments/$COMMENT_ID \
+              -f body="$UPDATED_BODY"
+            ```
+
+            Example after a successful build:
+            `- [x] Build (`dotnet build Zeus.slnx`) — 0 warnings, 0 errors`
+
+            Example after PR open (prepend the link at the very top):
+            ```
+            **PR:** https://github.com/.../pull/123 — *ready for review*
+
+            **Status — done**
+
+            - [x] Plan: …
+            - [x] Implement — touched 4 files (+34/-2)
+            - [x] Build — 0 warnings, 0 errors
+            - [x] Tests — 492/492 passed
+            - [x] Frontend checks — lint+typecheck clean
+            - [x] PR opened against `develop`
+            ```
+
+            **If you get blocked**, edit the comment to add a `> blocked: …`
+            quote-line under the failing checkbox. Do not post a new comment.
+            Keep working from the same status comment.
+
+            **Tighter rules to avoid surprise:**
+            - One status comment per triggering thread. Re-use it on retries.
+            - Edit, don't repost. The comment ID never changes.
+            - The PR link goes at the very top once it exists, before "Status".
+            - Sign-off line stays at the bottom across all edits.
 
             ## Rules (hard)
 
@@ -151,10 +198,10 @@ jobs:
               KB2UKA's dev box but is NOT on the CI runner; use the inline code
               comments + docs/references/ + docs/lessons/ here).
             - **Be concise.** Prefer understatement. No "Great question!" openings.
-            - **Comments are capped at three for code work** (plan, build/test
-              status, PR-opened) plus one extra if you get blocked. For
-              question/triage asks it's still one comment. Never spam the
-              thread.
+            - **One comment per thread.** Code work uses the single live
+              status comment (edited as you progress). Question/triage uses
+              one focused reply. Never post additional comments on the same
+              thread — if you need to amend, edit the existing comment.
 
             ## Sign-off
 
