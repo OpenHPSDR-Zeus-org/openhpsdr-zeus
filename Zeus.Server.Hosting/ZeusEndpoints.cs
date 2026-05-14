@@ -143,9 +143,14 @@ public static class ZeusEndpoints
             if (req.PreampOn is bool preamp) r.SetPreamp(preamp);
             if (req.Atten is int atten) r.SetAttenuator(new HpsdrAtten(atten));
 
+            // Plumb the discovered board byte through so RadioService can
+            // set the real board kind on the Protocol1Client rather than
+            // defaulting to HermesLite2 for every P1 connection — issue #294.
+            var p1BoardKind = req.BoardId is byte bid ? MapBoardByte(bid) : HpsdrBoardKind.Unknown;
+
             try
             {
-                var state = await r.ConnectAsync(req.Endpoint, req.SampleRate, ctx.RequestAborted);
+                var state = await r.ConnectAsync(req.Endpoint, req.SampleRate, ctx.RequestAborted, p1BoardKind);
                 return Results.Ok(state);
             }
             catch (ArgumentException ex)

@@ -362,7 +362,8 @@ public sealed class RadioService : IDisposable
         }
     }
 
-    public async Task<StateDto> ConnectAsync(string endpoint, int sampleRate, CancellationToken ct = default)
+    public async Task<StateDto> ConnectAsync(string endpoint, int sampleRate, CancellationToken ct = default,
+        HpsdrBoardKind discoveredKind = HpsdrBoardKind.Unknown)
     {
         if (!TryParseEndpoint(endpoint, out var ipEndpoint))
             throw new ArgumentException($"Invalid endpoint '{endpoint}'.", nameof(endpoint));
@@ -399,6 +400,12 @@ public sealed class RadioService : IDisposable
         try
         {
             await client.ConnectAsync(ipEndpoint, ct).ConfigureAwait(false);
+            // Plumb the discovered board byte so ConnectedBoardKind returns
+            // the real board rather than the Protocol1Client default
+            // (HermesLite2). Without this, an ANAN-10E (Hermes, 0x01) is
+            // treated as HL2 for PA calibration / drive profile — issue #294.
+            if (discoveredKind != HpsdrBoardKind.Unknown)
+                client.SetBoardKind(discoveredKind);
             // Board fingerprint is known after ConnectAsync. Restore the last
             // sample rate the operator used on this board, if one is stored.
             // Falls back to the ConnectRequest rate on first connect (or after

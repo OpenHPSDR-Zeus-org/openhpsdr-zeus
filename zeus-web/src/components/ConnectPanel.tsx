@@ -260,9 +260,14 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
           applyState(fresh);
           hydrateTxFromState(fresh);
         } else {
+          // Pass the discovered board byte so the server sets the correct
+          // board kind on the Protocol1Client (default is HermesLite2 —
+          // without this an ANAN-10E appears as HL2 post-connect, issue #294).
+          const rawBoardId = parseRawBoardId(r.details?.rawBoardId);
           const next = await apiConnect({
             endpoint: ep,
             sampleRate: DEFAULT_SAMPLE_RATE,
+            boardId: rawBoardId ?? undefined,
           });
           applyState(next);
           hydrateTxFromState(next);
