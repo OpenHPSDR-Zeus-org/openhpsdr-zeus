@@ -41,10 +41,16 @@ public static class LanCertificate
         {
             try
             {
+                // PersistKeySet would route the private key through the
+                // macOS login keychain (X509MoveToKeychain), which fails with
+                // "User interaction is not allowed" when the backend is
+                // launched from a non-GUI parent (CI, SSH, Claude Code's
+                // PTY). The PFX file on disk already handles persistence
+                // between runs; keychain persistence is redundant.
                 var existing = X509CertificateLoader.LoadPkcs12FromFile(
                     path,
                     string.Empty,
-                    X509KeyStorageFlags.Exportable | X509KeyStorageFlags.PersistKeySet);
+                    X509KeyStorageFlags.Exportable);
                 if (CoversAllIps(existing, ips) && existing.NotAfter > DateTime.UtcNow.AddDays(30))
                 {
                     log?.LogInformation("LAN certificate loaded from {Path} ({Subject}, expires {Expires:yyyy-MM-dd})",
@@ -116,7 +122,7 @@ public static class LanCertificate
         return X509CertificateLoader.LoadPkcs12(
             pfx,
             string.Empty,
-            X509KeyStorageFlags.Exportable | X509KeyStorageFlags.PersistKeySet);
+            X509KeyStorageFlags.Exportable);
     }
 
     private static bool CoversAllIps(X509Certificate2 cert, HashSet<IPAddress> required)
