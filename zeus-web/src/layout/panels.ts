@@ -48,6 +48,7 @@ import { VfoPanel } from './panels/VfoPanel';
 import { SMeterPanel } from './panels/SMeterPanel';
 import { QrzPanel } from './panels/QrzPanel';
 import { AzimuthPanel } from './panels/AzimuthPanel';
+import { RotatorCompassPanel } from './panels/RotatorCompassPanel';
 import { DspFlexPanel } from './panels/DspFlexPanel';
 import { CwPanel } from './panels/CwPanel';
 import { LogbookPanel } from './panels/LogbookPanel';
@@ -181,6 +182,13 @@ export const PANELS: Record<string, PanelDef> = {
     tags: ['azimuth', 'map', 'bearing', 'great-circle'],
     component: AzimuthPanel,
     maxW: 3,
+  },
+  rotatorcompass: {
+    id: 'rotatorcompass',
+    name: 'Rotator Compass',
+    category: 'tools',
+    tags: ['rotator', 'compass', 'bearing', 'heading', 'sp', 'lp', 'map'],
+    component: RotatorCompassPanel,
   },
   dsp: {
     id: 'dsp',

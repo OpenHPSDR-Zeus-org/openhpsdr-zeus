@@ -1331,6 +1331,180 @@
 .az-map { position: absolute; inset: 0; display: flex; flex-direction: column; padding: 6px; background: var(--bg-1); overflow: hidden; box-sizing: border-box; }
 .az-map-area { flex: 1; min-height: 0; min-width: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .az-map-area svg { display: block; }
+
+/* ===== Rotator Compass — leaflet backdrop + SVG compass overlay ===== */
+.rotator-compass { position: absolute; inset: 0; background: var(--bg-1); overflow: hidden; }
+/* z-index: 0 + isolation contains leaflet's internal pane z-indexes (200–700)
+ * so they can't escape the map layer and paint over our overlay. */
+.rotator-compass .rc-map { position: absolute; inset: 0; z-index: 0; isolation: isolate; }
+.rotator-compass .rc-map .leaflet-world-map { position: absolute; inset: 0; width: 100%; height: 100%; }
+.rotator-compass .rc-map .leaflet-world-map .leaflet-host { position: absolute; inset: 0; width: 100%; height: 100%; }
+.rotator-compass .rc-map .leaflet-world-map .leaflet-container { width: 100%; height: 100%; background: #030812; font: inherit; }
+.rotator-compass .rc-empty {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 4px; color: var(--fg-2);
+  background: linear-gradient(180deg, var(--bg-2), var(--bg-1));
+  text-align: center; padding: 0 16px;
+}
+.rotator-compass .rc-empty-hint { font-size: 11px; color: var(--fg-3); }
+
+.rotator-compass .rc-overlay {
+  position: absolute; inset: 0; z-index: 1; pointer-events: none;
+}
+.rotator-compass .rc-now-badge {
+  position: absolute; top: 8px; left: 8px;
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px;
+  background: linear-gradient(180deg, #1c1c21 0%, #0e0e12 100%);
+  border: 1px solid rgba(255, 201, 58, 0.45);
+  border-radius: 3px;
+  font-family: var(--font-mono); font-size: 12px; color: #ffd66b;
+  text-shadow: 0 0 6px rgba(255, 201, 58, 0.22);
+  pointer-events: none;
+  box-shadow: inset 0 1px 0 rgba(255, 201, 58, 0.08), 0 1px 4px rgba(0,0,0,0.55);
+}
+.rotator-compass .rc-now-badge .label-xs { color: rgba(255, 201, 58, 0.65); font-size: 9px; letter-spacing: 0.12em; }
+.rotator-compass .rc-now-badge .mono { font-weight: 700; color: #ffe28a; }
+.rotator-compass .rc-now-badge .rc-arrow { color: var(--power); font-weight: 700; text-shadow: 0 0 8px rgba(255, 201, 58, 0.45); }
+
+.rotator-compass .rc-controls {
+  position: absolute; top: 8px; right: 8px;
+  display: flex; flex-direction: column; align-items: stretch; gap: 6px;
+  pointer-events: auto; min-width: 150px;
+}
+.rotator-compass .rc-sp-lp { display: flex; gap: 4px; }
+.rotator-compass .rc-sp-lp > .rc-btn { flex: 1; min-width: 0; }
+
+.rotator-compass .rc-badge {
+  display: inline-flex; align-items: center; justify-content: space-between; gap: 6px;
+  padding: 3px 8px;
+  background: linear-gradient(180deg, #1c1c21 0%, #0e0e12 100%);
+  border: 1px solid rgba(255, 201, 58, 0.45);
+  border-radius: 3px;
+  font-family: var(--font-mono); font-size: 12px; color: #ffd66b;
+  text-shadow: 0 0 6px rgba(255, 201, 58, 0.25);
+  pointer-events: none;
+  box-shadow: inset 0 1px 0 rgba(255, 201, 58, 0.08), 0 1px 4px rgba(0,0,0,0.5);
+}
+.rotator-compass .rc-badge .label-xs { color: rgba(255, 201, 58, 0.65); font-size: 9px; letter-spacing: 0.12em; }
+.rotator-compass .rc-badge .mono { font-weight: 700; color: #ffe28a; }
+
+.rotator-compass .rc-hint {
+  color: rgba(255, 201, 58, 0.6); font-size: 11px; font-family: var(--font-mono);
+  padding: 4px 8px; background: rgba(14, 14, 18, 0.85);
+  border: 1px solid rgba(255, 201, 58, 0.18);
+  border-radius: 3px; text-align: center; letter-spacing: 0.06em;
+}
+/* Brass-instrument-plate aesthetic — near-black ground, gold engraving.
+ * Matches .workspace-tile-header so the controls read like another row
+ * of the same equipment plate. */
+.rc-btn {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+  letter-spacing: 0.1em; text-transform: uppercase;
+  padding: 6px 10px; border-radius: 3px;
+  background: linear-gradient(180deg, #1c1c21 0%, #0e0e12 100%);
+  border: 1px solid rgba(255, 201, 58, 0.45);
+  color: #ffd66b;
+  text-shadow: 0 0 6px rgba(255, 201, 58, 0.22);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 201, 58, 0.10),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.55),
+    0 1px 4px rgba(0, 0, 0, 0.55);
+  cursor: pointer;
+  transition: filter 90ms ease, border-color 90ms ease, background 90ms ease;
+}
+.rc-btn:hover {
+  border-color: rgba(255, 201, 58, 0.75);
+  filter: brightness(1.18);
+}
+.rc-btn:disabled {
+  opacity: 0.4; cursor: not-allowed;
+  color: rgba(255, 201, 58, 0.5);
+  border-color: rgba(255, 201, 58, 0.2);
+  text-shadow: none;
+}
+
+/* SP / LP — selected state lights the gold rail. */
+.rc-btn--path.selected {
+  background: linear-gradient(180deg, #2a2410 0%, #150f04 100%);
+  border-color: var(--power);
+  color: #fff1b8;
+  text-shadow: 0 0 8px rgba(255, 201, 58, 0.55);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 201, 58, 0.25),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.55),
+    0 0 10px rgba(255, 201, 58, 0.25);
+}
+
+/* GO — primary action gets the lit-rail treatment by default. */
+.rc-btn--go {
+  background: linear-gradient(180deg, #2a2410 0%, #150f04 100%);
+  border-color: var(--power); color: #fff1b8;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 201, 58, 0.25),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.55),
+    0 0 8px rgba(255, 201, 58, 0.25);
+}
+.rc-btn--go:disabled {
+  background: linear-gradient(180deg, #1c1c21 0%, #0e0e12 100%);
+  box-shadow: none;
+}
+
+/* Neutral white-outline variant — same brass plate body, but the rail
+ * and engraving stay white instead of gold. Used for "supporting" actions
+ * (Clear, Log QSO) that sit beside the gold primary actions (SP / LP / GO). */
+.rc-btn--neutral {
+  border-color: rgba(255, 255, 255, 0.45);
+  color: #f0f3f8;
+  text-shadow: 0 0 6px rgba(255, 255, 255, 0.18);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.55),
+    0 1px 4px rgba(0, 0, 0, 0.55);
+}
+.rc-btn--neutral:hover {
+  border-color: rgba(255, 255, 255, 0.75);
+  filter: brightness(1.18);
+}
+.rc-btn--neutral:disabled {
+  color: rgba(255, 255, 255, 0.5);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* STOP — same plate, but warns red on hover/active. */
+.rc-btn--stop { letter-spacing: 0.18em; }
+.rc-btn--stop:not(:disabled) {
+  border-color: rgba(230, 58, 43, 0.6); color: #ffb3a8;
+  text-shadow: 0 0 6px rgba(230, 58, 43, 0.4);
+}
+.rc-btn--stop:not(:disabled):hover {
+  background: linear-gradient(180deg, #2a1410 0%, #15080a 100%);
+  border-color: var(--tx); color: #ffe0d8;
+}
+
+.rotator-compass .rc-manual { display: flex; align-items: stretch; gap: 4px; }
+.rotator-compass .rc-input {
+  flex: 1; min-width: 0; padding: 5px 6px; border-radius: 3px;
+  border: 1px solid rgba(255, 201, 58, 0.45);
+  background: linear-gradient(180deg, #0e0e12 0%, #1c1c21 100%);
+  color: #ffe28a;
+  font-family: var(--font-mono); font-size: 12px; font-weight: 700;
+  text-align: center; letter-spacing: 0.05em;
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.6),
+    inset 0 -1px 0 rgba(255, 201, 58, 0.06);
+}
+.rotator-compass .rc-input::placeholder { color: rgba(255, 201, 58, 0.45); }
+.rotator-compass .rc-input:focus {
+  outline: none; border-color: var(--power);
+  box-shadow:
+    inset 0 1px 2px rgba(0, 0, 0, 0.6),
+    0 0 0 1px var(--power),
+    0 0 8px rgba(255, 201, 58, 0.35);
+}
+/* Hide the spin buttons — they take up too much room next to the GO button. */
+.rotator-compass .rc-input::-webkit-outer-spin-button,
+.rotator-compass .rc-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.rotator-compass .rc-input { -moz-appearance: textfield; }
 .az-stats {
   display: flex;
   justify-content: space-between;
@@ -1370,6 +1544,13 @@
 .qrz-footer {
   display: flex; align-items: center; padding-top: 6px; margin-top: 2px;
   border-top: 1px solid rgba(74,158,255,0.2);
+}
+/* SP / LP rotator buttons inline in the QRZ footer — only rendered when a
+ * rotator is connected and both home + contact have coordinates. Sized to
+ * match the existing Clear / Log QSO 10px footer buttons so the row stays
+ * flush. */
+.qrz-footer-rotate-btn {
+  padding: 3px 6px; font-size: 10px; margin-right: 0.5rem;
 }
 .qrz-portrait {
   flex-shrink: 0;

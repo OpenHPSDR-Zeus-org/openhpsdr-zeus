@@ -55,8 +55,8 @@ describe('AddPanelModal', () => {
     const cards = container.querySelectorAll(
       '[data-testid="add-panel-cards"] .add-panel-card',
     );
-    // 18 panels in registry.
-    expect(cards.length).toBe(18);
+    // 19 panels in registry.
+    expect(cards.length).toBe(19);
     unmount();
   });
 

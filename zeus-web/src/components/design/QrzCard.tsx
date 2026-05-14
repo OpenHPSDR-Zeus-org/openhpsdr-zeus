@@ -43,6 +43,9 @@
 // License for details.
 
 import type { Contact } from './data';
+import { bearingDeg } from './geo';
+import { useQrzStore } from '../../state/qrz-store';
+import { useRotatorStore } from '../../state/rotator-store';
 
 type QrzCardProps = {
   contact: Contact | null;
@@ -54,7 +57,15 @@ type QrzCardProps = {
   canClear?: boolean;
 };
 
+function fmtBearing(deg: number): string {
+  return `${Math.round(((deg % 360) + 360) % 360).toString().padStart(3, '0')}°`;
+}
+
 export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, onClear, canClear }: QrzCardProps) {
+  const qrzHome = useQrzStore((s) => s.home);
+  const rotConnected = useRotatorStore((s) => !!s.status?.connected);
+  const setRotatorAz = useRotatorStore((s) => s.setAzimuth);
+
   // Show "Not found" if there's a lookup error
   if (lookupError) {
     return (
@@ -66,8 +77,8 @@ export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, 
           <button
             type="button"
             onClick={onClear}
-            className="btn sm"
-            style={{ marginTop: '0.5rem', padding: '0.25rem 0.5rem', fontSize: 10 }}
+            className="rc-btn rc-btn--neutral qrz-footer-rotate-btn"
+            style={{ marginTop: '0.5rem' }}
           >
             Clear
           </button>
@@ -148,12 +159,36 @@ export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, 
           {contact.email}
         </span>
         <span style={{ flex: 1 }} />
+        {rotConnected && qrzHome?.lat != null && qrzHome?.lon != null
+          && contact.lat != null && contact.lon != null && (() => {
+          const sp = bearingDeg(qrzHome.lat, qrzHome.lon, contact.lat, contact.lon);
+          const lp = (sp + 180) % 360;
+          return (
+            <>
+              <button
+                type="button"
+                onClick={() => { void setRotatorAz(Math.round(sp)); }}
+                className="rc-btn rc-btn--path qrz-footer-rotate-btn"
+                title="Rotate short-path"
+              >
+                SP {fmtBearing(sp)}
+              </button>
+              <button
+                type="button"
+                onClick={() => { void setRotatorAz(Math.round(lp)); }}
+                className="rc-btn rc-btn--path qrz-footer-rotate-btn"
+                title="Rotate long-path"
+              >
+                LP {fmtBearing(lp)}
+              </button>
+            </>
+          );
+        })()}
         {onClear && canClear && (
           <button
             type="button"
             onClick={onClear}
-            className="btn sm"
-            style={{ marginRight: '0.5rem', padding: '0.25rem 0.5rem', fontSize: 10 }}
+            className="rc-btn rc-btn--neutral qrz-footer-rotate-btn"
           >
             Clear
           </button>
@@ -162,8 +197,7 @@ export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, 
           <button
             type="button"
             onClick={onLogQso}
-            className="btn sm"
-            style={{ marginRight: '0.5rem', padding: '0.25rem 0.5rem', fontSize: 10 }}
+            className="rc-btn rc-btn--neutral qrz-footer-rotate-btn"
           >
             Log QSO
           </button>
