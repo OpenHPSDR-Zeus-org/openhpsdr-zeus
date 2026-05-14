@@ -50,9 +50,11 @@ type QrzCardProps = {
   lookupError?: string | null;
   onLogQso?: () => void;
   canLogQso?: boolean;
+  onClear?: () => void;
+  canClear?: boolean;
 };
 
-export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso }: QrzCardProps) {
+export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, onClear, canClear }: QrzCardProps) {
   // Show "Not found" if there's a lookup error
   if (lookupError) {
     return (
@@ -60,6 +62,16 @@ export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso }
         <div className="label-xs" style={{ color: 'var(--fg-error)', opacity: 0.8 }}>
           Not found: {lookupError}
         </div>
+        {onClear && canClear && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="btn sm"
+            style={{ marginTop: '0.5rem', padding: '0.25rem 0.5rem', fontSize: 10 }}
+          >
+            Clear
+          </button>
+        )}
       </div>
     );
   }
@@ -136,6 +148,16 @@ export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso }
           {contact.email}
         </span>
         <span style={{ flex: 1 }} />
+        {onClear && canClear && (
+          <button
+            type="button"
+            onClick={onClear}
+            className="btn sm"
+            style={{ marginRight: '0.5rem', padding: '0.25rem 0.5rem', fontSize: 10 }}
+          >
+            Clear
+          </button>
+        )}
         {onLogQso && canLogQso && (
           <button
             type="button"
