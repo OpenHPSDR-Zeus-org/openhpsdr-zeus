@@ -10,6 +10,70 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.7.3] — 2026-05-14
+
+A polish + correctness release. Major visible refresh of the **v3 Lifted Dark
+theme** — flat near-black chrome, brass instrument-plate panel headers, blue
+VFO aurora behind 200-weight Inter digits, warm amber meter glow. Under the
+chrome: **meter rendering smoothed** with 90 ms EMA + 1.5 s peak hold; **HL2
+Band Volts PWM** is now an in-app toggle for external amplifier band
+following; **macOS users can launch the backend from any shell again** (the
+LAN cert handshake stopped routing through the keychain); and a small **MOX
+edge click on RX audio is gone**.
+
+### Fixed
+
+- **macOS: backend launches from non-GUI shells again.** *(KB2UKA, PR #323)*
+  - `LanCertificate.cs` was passing `X509KeyStorageFlags.PersistKeySet` on certificate load, which triggers `Interop+AppleCrypto+X509MoveToKeychain`. On macOS that call fails outright with `"User interaction is not allowed."` whenever the backend's parent process isn't tied to the window server — CI runners, SSH, terminal multiplexers, and anything launched from VS Code's integrated terminal all hit this.
+  - Fix: drop the flag from both `X509CertificateLoader` calls. The PFX file on disk at `ResolveCertPath()` is the actual persistence mechanism; the keychain copy was a redundant side-effect for a self-signed dev cert. HTTPS binding behaviour is unchanged on every platform; the in-process private key remains available (`Exportable` is preserved).
+  - Linux + Windows unaffected — they hit different code paths that don't require a window-server prompt in the first place.
+
+- **MOX edge click on RX audio.** *(KB2UKA, PR #326)*
+  - Some audio endpoints (USB DACs, pro audio interfaces) produced an audible click on the MOX rising / falling edges, occasionally accompanied by a small panadapter blip. Bench investigation traced it to the RX broadcast → browser playback boundary: WDSP's `SetChannelState` damps the outgoing side on MOX-on (`dmp=1`) but resumes with `dmp=0`, and the audio-client's buffer-drain endpoint sits on whatever the last broadcast sample happened to be.
+  - Fix: `DspPipelineService` now applies a one-shot 5 ms linear ramp to the first RX audio block after each MOX edge. Rising edge ramps the last block out + zero-fills so the browser's final played sample is 0.0; falling edge ramps the resume block in. Steady-state RX audio is byte-for-byte identical to before.
+  - Engine-agnostic — affects HL2, ANAN-class, and Saturn-family equally.
+
+### Added
+
+- **HL2 Band Volts PWM toggle** (RADIO settings tab). *(Brian Keating / EI6LF, PR #314, closes #279)*
+  - Lets HL2 operators enable the firmware's Band Volts feature so an external amplifier (e.g. Xiegu XPA125B) follows Zeus's band changes automatically. Wire bit is C3 bit 3 of the Config frame (address `0x00` bit 11, "Fan or Band Volts PWM" per `docs/references/protocol-1/hermes-lite2-protocol.md` line 39).
+  - Renames the legacy `EnableHl2Dither` flag to `EnableHl2BandVolts` so the in-code name matches the wire-doc terminology. mi0bot's HL2 fork uses the same one-bit repurpose. Wire encoding in `ControlFrame.WriteConfigPayload` unchanged.
+  - Persists per-radio in `PreferredRadioStore` (LiteDB). Older rows hydrate as `false` — matches HL2 firmware default where the PWM line drives Fan Control unless explicitly switched.
+  - New `HasHl2OptionalToggles` capability flag, true only for `HpsdrBoardKind.HermesLite2`. Frontend gates the new RADIO tab on this — invisible on non-HL2 boards. Square SDR discovers as HL2-compatible and gets the tab on the same path.
+  - New endpoints `GET /api/radio/hl2-options` and `PUT /api/radio/hl2-options` returning `{ "bandVolts": bool }`. Object-shaped so future mi0bot HL2-specific toggles (e.g. "Disable PS Sync") slot in without breaking the contract.
+
+- **Meter smoothing + peak hold across every meter.** *(Brian Keating / EI6LF, PR #328)*
+  - Raw meter frames land at ~10 Hz; the render loop ticks at ~30 Hz, so needles and bars visibly stepped between frames. New shared `useEmaSmoothed(value, tauMs)` hook applies `alpha = 1 - exp(-dt/tau)` (90 ms time constant) to every BigArc / VuColumn / PullDownArc / HBarMeter via `MeterRenderer`, and to the MIC / ALC / PWR / SWR meters inside `TxStageMeters`. Sentinels (≤ -200 dBFS) pass through verbatim so "no signal" still reads correctly.
+  - Peak-hold ballistics across both renderer paths bumped to **1500 ms** before decay so SSB / FT8 transients are visible long enough to read. Absolute-peak refs still consume the raw store value, so true peaks are never shaved off by the smoother.
+
+- **NR1 / NR2 / NR4 accordion disclosure state persists across browser reloads.** *(Brian Keating / EI6LF, PR #328)*
+  - The inline NR settings section was using a non-persisted Zustand store, so its chevron collapsed every page reload even if the operator preferred it open. New `nr_ui_prefs` LiteDB collection in `zeus-prefs.db` holds three booleans (one per NR engine), surfaced via `GET` / `PUT /api/nr-ui-prefs` with a 150 ms debounced write on toggle. Module-level hydration runs once on first mount; failure is best-effort (does not block UI).
+
+- **QRZ Lookup: Clear button.** *(KB2UKA, PR #320, closes #318, requested by EI8KV)*
+  - One-click reset for the callsign input + lookup result. Useful for cycling between contacts during a contest or net. Renders as a `btn sm` in the card footer (left of "Log QSO") and below the "Not found" error block. Enabled whenever there's something to clear — a current contact, an error, or a non-empty input.
+
+### Changed
+
+- **v3 Lifted Dark theme.** *(Brian Keating / EI6LF, PR #327)*
+  - Palette in `tokens.css` remapped to a neutral near-black (`--bg-0..3`, `--bg-inset`, `--bg-meter`); type stack swapped to **Inter** for UI and **JetBrains Mono** for fixed-width. Sidebar, topbar, transport, and panel chrome flatten — no more beveled gradients or inset highlights.
+  - **VFO `freq-display` blue aurora**: three layered radial-gradients + a blurred ellipse behind 200-weight Inter digits, so the tuned frequency reads at a glance with the chrome stepping out of the way.
+  - **TX stage-meter wells**: warm amber halo via `box-shadow`; analog gauges bake in the "streetlamp pool" `hsla(31, 30%, 65%, 0.19)` gradient.
+  - **Brass instrument-plate panel headers**: subtle vertical gradient, 2 px gold (`--power`) leading rail with a soft bloom, specular top highlight, warm-amber-soft bottom hairline, engraved-style uppercase title with a faint amber text-shadow. Applied to every panel head and workspace tile.
+  - `--accent` deepened from `#2e8eff` to `#0c5f9c` so the active-button glow and VFO aurora read closer to the Hermes Lite 2 hardware blue.
+  - **NR2 advanced settings card** lifts to `--bg-2` so it visibly sits above the DSP panel base.
+  - **Sidebar gear button**: dropped the redundant "Settings" caption — the cog glyph is self-evident.
+
+- **QRZ Lookup panel: portrait rework.** *(Brian Keating / EI6LF, PR #328)*
+  - 2× operator portrait moves to the right side, anchored at the top of the card and stretching the full height of the info column. Drops the rig / antenna / power / qsl rows that were rarely consulted in-shack. Remaining four rows (Grid / Lat-Lon / CQ · ITU / Local) stack single-column with values aligned next to their labels.
+
+- **S-Meter config: collapsed to a single "Zeus mode" toggle.** *(Brian Keating / EI6LF, PR #328)*
+  - The header gear previously exposed 8+ controls (scales shown, dBm readout, SWR alarm, attack / decay / averaging / peak hold) the typical operator never touched. Strips the UI to just Zeus mode — image fade past S9, lightning crackle at S9+20. Underlying store + defaults untouched, so persisted state from older sessions still hydrates cleanly.
+
+### Known issues
+- **ANAN-10E / Hermes-class on Protocol-1**: TX fix (#324) is staged but not yet merged — still under bench verification by @RonnieC82 on a real 10E. Operators on non-HL2 P1 boards (Hermes / 10E / 100D / Orion) should continue using Thetis for now or follow #294 for the rollout signal.
+
+---
+
 ## [0.7.2] — 2026-05-13
 
 A correctness-focused release with two big on-air wins: **audio dropouts when

@@ -24,7 +24,7 @@ import { useEffect, useState } from 'react';
 // Release date for the version this build ships against. Bump whenever
 // VersionPrefix in Directory.Build.props bumps. ISO 8601 so toLocaleDateString
 // renders sensibly in any locale.
-const RELEASE_DATE_ISO = '2026-05-13';
+const RELEASE_DATE_ISO = '2026-05-14';
 
 type VersionInfo = {
   version: string;
