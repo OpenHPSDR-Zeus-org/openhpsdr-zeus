@@ -24,6 +24,7 @@ describe('parseBoardCapabilities', () => {
       hasAudioAmplifier: true,
       hasSteppedAttenuationRx2: true,
       supportsPathIllustrator: false,
+      hasHl2OptionalToggles: false,
       maxPowerWatts: 120,
     });
     expect(caps.rxAdcCount).toBe(2);
@@ -62,5 +63,12 @@ describe('parseBoardCapabilities', () => {
   it('accepts kilowatt-class radios (G2-1K)', () => {
     const caps = parseBoardCapabilities({ maxPowerWatts: 1000 });
     expect(caps.maxPowerWatts).toBe(1000);
+  });
+
+  it('hasHl2OptionalToggles defaults to false and round-trips when set', () => {
+    expect(parseBoardCapabilities({}).hasHl2OptionalToggles).toBe(false);
+    expect(
+      parseBoardCapabilities({ hasHl2OptionalToggles: true }).hasHl2OptionalToggles,
+    ).toBe(true);
   });
 });

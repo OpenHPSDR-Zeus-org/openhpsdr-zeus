@@ -1,7 +1,7 @@
 # PRD — Plugins System Architecture
 
 **Status:** Draft (2026-04-28) — Architectural proposal for maintainer review
-**Related:** [Issue #106](https://github.com/brianbruff/openhpsdr-zeus/issues/106) (websocket host isolation)
+**Related:** [Issue #106](https://github.com/Kb2uka/openhpsdr-zeus/issues/106) (websocket host isolation)
 **Authors:** Research and synthesis for Brian Keating (EI6LF) review
 
 ---

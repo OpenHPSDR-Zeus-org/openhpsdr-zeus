@@ -813,7 +813,12 @@ public class DspPipelineService : BackgroundService,
     /// synchronous RX sink on the client (iter5 — no more Task.Run pumps).
     /// Only one client at a time.
     /// </summary>
-    public async Task ConnectP2Async(IPEndPoint radioEndpoint, int sampleRateKhz, byte numAdc, CancellationToken ct)
+    public async Task ConnectP2Async(
+        IPEndPoint radioEndpoint,
+        int sampleRateKhz,
+        byte numAdc,
+        CancellationToken ct,
+        HpsdrBoardKind boardKind = HpsdrBoardKind.Unknown)
     {
         if (_p2Client is not null)
             throw new InvalidOperationException("Already connected (P2).");
@@ -823,6 +828,10 @@ public class DspPipelineService : BackgroundService,
         var client = new Zeus.Protocol2.Protocol2Client(
             _loggerFactory.CreateLogger<Zeus.Protocol2.Protocol2Client>());
         client.SetNumAdc(numAdc);
+        // Tell the P2 client which board it's talking to so RX-decode quirks
+        // (Hermes-on-P2 48 kHz IQ gain correction; future per-board branches)
+        // are gated correctly. boardKind == Unknown leaves all quirks off.
+        client.SetBoardKind(boardKind);
         await client.ConnectAsync(radioEndpoint, ct).ConfigureAwait(false);
         // Seed the operator's RX front-end (preamp + step attenuator) BEFORE
         // StartAsync so the very first CmdHighPriority emitted inside the
@@ -927,11 +936,12 @@ public class DspPipelineService : BackgroundService,
         // Pass the live client so RadioService can fire P2Connected with a
         // reference to the freshly-opened Protocol2Client. TxMetersService
         // subscribes through that event to hook hi-priority status (#174).
-        _radio.MarkProtocol2Connected(radioEndpoint.ToString(), rateHz, client);
+        _radio.MarkProtocol2Connected(radioEndpoint.ToString(), rateHz, client, boardKind);
         // P2 G2/MkII default HW peak = 0.6121; ANAN-7000/8000 = 0.2899. The
         // RadioService switch covers both so we don't bake a value in here.
-        // ConnectedBoardKind returns OrionMkII when _p2Active is true; future
-        // P2 discovery work can refine it.
+        // ConnectedBoardKind now returns the discovered board kind when the
+        // caller plumbed it through (issue #171); falls back to OrionMkII when
+        // the byte wasn't supplied.
         _radio.ApplyPsHwPeakForConnection(isProtocol2: true, _radio.ConnectedBoardKind);
         // Push current PA snapshot into the brand-new client so byte 345 /
         // byte 1401 / CmdGeneral[58] reflect PaSettingsStore from frame 1.

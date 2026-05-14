@@ -70,7 +70,15 @@ public sealed record BoardCapabilities(
     /// = 120 W, ANAN-8000DLE = 250 W, ANAN-G2-1K = 1000 W. The operator can
     /// still override per-rig in the PA settings panel; this is the
     /// out-of-the-box default the meter axis snaps to on connect.</summary>
-    int MaxPowerWatts)
+    int MaxPowerWatts,
+    /// <summary>True when the board exposes the HL2-only optional toggles
+    /// surfaced by <c>/api/radio/hl2-options</c> (Band Volts PWM enable,
+    /// future mi0bot HL2 toggles). The frontend gates the HL2 settings panel
+    /// on this flag so the controls don't appear for boards that ignore
+    /// them. True for <see cref="HpsdrBoardKind.HermesLite2"/> only — Square
+    /// SDR ships HL2-class firmware so it inherits via the same enum value.
+    /// Issue #279.</summary>
+    bool HasHl2OptionalToggles = false)
 {
     /// <summary>Safe defaults for an unrecognised / disconnected board.
     /// Single ADC, no extras — minimum-surprise capability set so a

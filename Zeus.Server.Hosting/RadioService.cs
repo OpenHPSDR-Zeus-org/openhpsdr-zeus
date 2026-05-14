@@ -100,6 +100,12 @@ public sealed class RadioService : IDisposable
     // the user is on a G2 MkII / Saturn (P2 discovery flow skips
     // Protocol1Client entirely).
     private bool _p2Active;
+    // Discovered board kind for the active P2 connection. Set by
+    // MarkProtocol2Connected from the connect-API request byte (issue #171 —
+    // Brick2 is Hermes-on-P2, not OrionMkII). Unknown when the caller didn't
+    // supply a byte, in which case ConnectedBoardKind falls back to OrionMkII
+    // for backward compat.
+    private HpsdrBoardKind _p2BoardKind = HpsdrBoardKind.Unknown;
     private bool _preampOn;
     // Auto-ATT defaults on; the user baseline starts at 0 dB and the control
     // loop ramps _attOffsetDb up to 31 dB on observed ADC overloads (Thetis
@@ -418,6 +424,18 @@ public sealed class RadioService : IDisposable
             // override via PA Settings once that knob is exposed.
             if (client.BoardKind == HpsdrBoardKind.HermesLite2)
                 client.SetHasN2adr(true);
+
+            // HL2 Band Volts PWM enable (issue #279) — rehydrate the
+            // persisted operator preference into the fresh client so the
+            // very first outgoing Config frame carries the correct bit.
+            // Honoured on HL2 only; on every other board the flag is set
+            // but the wire effect (legacy LT2208 DITHER) is not requested
+            // here, since Zeus only flips it from the HL2 settings panel.
+            if (client.BoardKind == HpsdrBoardKind.HermesLite2
+                && _preferredRadioStore is not null)
+            {
+                client.EnableHl2BandVolts = _preferredRadioStore.GetEnableHl2BandVolts();
+            }
 
             Mutate(s => s with { Status = ConnectionStatus.Connected });
             _log.LogInformation("radio.connected endpoint={Ep} rate={Rate}", ipEndpoint, hpsdrRate);
@@ -952,6 +970,39 @@ public sealed class RadioService : IDisposable
     // next state change.
     public void ReplayPaSnapshot() => RecomputePaAndPush();
 
+    /// <summary>
+    /// HL2 Band Volts PWM enable (issue #279). Updates the persisted
+    /// per-radio preference AND any live Protocol-1 client so the next
+    /// outgoing Config frame carries the new bit. Honoured on HL2 only;
+    /// non-HL2 boards never see this bit on the wire because Zeus' UI gate
+    /// (<c>HasHl2OptionalToggles</c>) hides the control there. Returns the
+    /// effective value (echoes the input — present for symmetry with other
+    /// state setters that may sanitize).
+    /// </summary>
+    public bool SetHl2BandVolts(bool enabled)
+    {
+        // Write-through to persistent storage first so a crash between the
+        // store write and the live-client push can't lose the preference.
+        _preferredRadioStore?.SetEnableHl2BandVolts(enabled);
+        // Then push to the live client (if any) so the bit lands on the wire
+        // immediately. Safe on non-HL2 boards: SnapshotState's C3-bit-3
+        // encoding fires regardless of board, but the gate at the UI /
+        // capability level keeps non-HL2 operators from ever flipping it.
+        if (_activeClient is not null)
+        {
+            _activeClient.EnableHl2BandVolts = enabled;
+        }
+        return enabled;
+    }
+
+    /// <summary>
+    /// Reads the persisted HL2 Band Volts preference. Surfaced for the
+    /// <c>/api/radio/hl2-options</c> GET endpoint. Returns <c>false</c> when
+    /// no preferences store is wired (test factories) or no row exists yet.
+    /// </summary>
+    public bool GetHl2BandVolts() =>
+        _preferredRadioStore?.GetEnableHl2BandVolts() ?? false;
+
     // Compute the current drive byte + OC masks + PA enable from _drivePct,
     // PaSettingsStore, and the current VFO band. Push to the active P1 client
     // and fire PaSnapshotChanged for the P2 forwarder. Called on:
@@ -1402,9 +1453,17 @@ public sealed class RadioService : IDisposable
     // Protocol2Client to subscribers of <see cref="P2Connected"/>; passing
     // null keeps the signature backward-compatible for tests that don't
     // need the telemetry surface (issue #174).
-    public void MarkProtocol2Connected(string endpoint, int sampleRateHz, Zeus.Protocol2.Protocol2Client? client = null)
+    public void MarkProtocol2Connected(
+        string endpoint,
+        int sampleRateHz,
+        Zeus.Protocol2.Protocol2Client? client = null,
+        HpsdrBoardKind boardKind = HpsdrBoardKind.Unknown)
     {
-        lock (_sync) _p2Active = true;
+        lock (_sync)
+        {
+            _p2Active = true;
+            _p2BoardKind = boardKind;
+        }
         Mutate(s => s with
         {
             Status = ConnectionStatus.Connected,
@@ -1421,7 +1480,11 @@ public sealed class RadioService : IDisposable
 
     public void MarkProtocol2Disconnected()
     {
-        lock (_sync) _p2Active = false;
+        lock (_sync)
+        {
+            _p2Active = false;
+            _p2BoardKind = HpsdrBoardKind.Unknown;
+        }
         Mutate(s => s with
         {
             Status = ConnectionStatus.Disconnected,
@@ -1457,7 +1520,18 @@ public sealed class RadioService : IDisposable
 
                 // Normal path: use discovery result.
                 if (_activeClient is not null) return _activeClient.BoardKind;
-                if (_p2Active) return HpsdrBoardKind.OrionMkII;
+                if (_p2Active)
+                {
+                    // Brick2 announces as Hermes (0x01) on P2; older Zeus
+                    // assumed every P2 radio was OrionMkII because the connect
+                    // API didn't carry the discovered byte (issue #171). The
+                    // byte is now plumbed through MarkProtocol2Connected — fall
+                    // back to OrionMkII only when the caller didn't supply it
+                    // (legacy tests, older frontends).
+                    return _p2BoardKind != HpsdrBoardKind.Unknown
+                        ? _p2BoardKind
+                        : HpsdrBoardKind.OrionMkII;
+                }
                 return HpsdrBoardKind.Unknown;
             }
         }

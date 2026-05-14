@@ -124,7 +124,17 @@ internal static class ControlFrame
         HpsdrAtten Atten,
         HpsdrAntenna RxAntenna,
         bool Mox,
-        bool EnableHl2Dither,
+        // HL2 reuses C3 bit 3 — originally LT2208 DITHER on legacy HPSDR
+        // hardware — as the **Band Volts PWM** enable. See
+        // docs/references/protocol-1/hermes-lite2-protocol.md line 39:
+        //   `| 0x00 | [11] | Fan or Band Volts PWM (0=Fan, 1=Band Volts) |`
+        // HL2's AD9866 has no ADC dither, so mi0bot's HL2 fork piggybacks on
+        // the same bit and labels its checkbox "Band Volts". When set, HL2's
+        // FPGA emits the per-band-tagged PWM voltage on the FAN connector so
+        // an external amplifier (e.g. Xiegu XPA125B) can auto-band-switch.
+        // Honoured by HL2 only; harmless on legacy boards (it still maps to
+        // the obsolete DITHER bit there, but Zeus never sets it for them).
+        bool EnableHl2BandVolts,
         HpsdrBoardKind Board,
         bool HasN2adr = false,
         // Raw DriveFilter C1 payload byte (0..255). This is the transmitter
@@ -342,7 +352,15 @@ internal static class ControlFrame
         // attenuation on every board we target. Setting both would double
         // up on Atlas-era gateware.
         byte c3 = 0;
-        if (s.EnableHl2Dither) c3 |= 1 << 3;      // Q#1: off by default.
+        // HL2 Band Volts PWM enable. Per
+        // docs/references/protocol-1/hermes-lite2-protocol.md line 39
+        // (`| 0x00 | [11] | Fan or Band Volts PWM (0=Fan, 1=Band Volts) |`),
+        // C3 bit 3 selects band-volts PWM on the FAN connector for external
+        // amplifier band-steering. Off by default; flipped on per-HL2 by the
+        // operator through the RADIO settings panel. The same bit reads as
+        // LT2208 DITHER on legacy HPSDR boards — Zeus never sets it for
+        // them, so the rename is purely client-side.
+        if (s.EnableHl2BandVolts) c3 |= 1 << 3;
         if (s.PreampOn) c3 |= 1 << 4;             // Q#2: single global preamp bit for MVP.
         c3 |= (byte)(((byte)s.RxAntenna & 0x07) << 5);
         c14[2] = c3;

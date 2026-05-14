@@ -57,7 +57,7 @@ public class ControlFrameTests
         Atten: HpsdrAtten.Zero,
         RxAntenna: HpsdrAntenna.Ant1,
         Mox: false,
-        EnableHl2Dither: false,
+        EnableHl2BandVolts: false,
         Board: HpsdrBoardKind.HermesLite2);
 
     [Fact]
@@ -185,12 +185,35 @@ public class ControlFrameTests
     }
 
     [Fact]
-    public void ControlFrame_Hl2Dither_OffByDefault()
+    public void ControlFrame_Hl2BandVolts_OffByDefault()
     {
         Span<byte> cc = stackalloc byte[5];
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, BaseState());
-        // C3[3] = DITHER bit. Doc 07 §2.1 Q#1: off for MVP.
+        // C3[3] = HL2 Band Volts PWM enable (legacy LT2208 DITHER on bare
+        // HPSDR boards). Off by default; honoured on HL2 only. See
+        // docs/references/protocol-1/hermes-lite2-protocol.md line 39.
         Assert.Equal(0, cc[3] & (1 << 3));
+    }
+
+    [Fact]
+    public void ControlFrame_Hl2BandVolts_On_Sets_Config_C3_Bit3()
+    {
+        // Positive-path coverage for issue #279 / Band Volts PWM rename.
+        // When the operator flips Band Volts on for an HL2, the Config
+        // frame's C3 must light bit 3. Per
+        // docs/references/protocol-1/hermes-lite2-protocol.md line 39
+        // (`| 0x00 | [11] | Fan or Band Volts PWM (0=Fan, 1=Band Volts) |`),
+        // this enables per-band-tagged PWM voltage on the FAN connector so
+        // an external amp (Xiegu XPA125B etc.) can auto-band-switch.
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { EnableHl2BandVolts = true };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
+
+        Assert.Equal(0x00, cc[0]);                  // Config register, MOX clear
+        Assert.Equal(1 << 3, cc[3] & (1 << 3));     // C3 bit 3 set
+        // Other C3 bits stay clean — antenna ANT1 = 000, preamp off,
+        // duplex / atten bits not in C3.
+        Assert.Equal(1 << 3, cc[3]);
     }
 
     [Fact]
@@ -416,7 +439,7 @@ public class ControlFrameTests
             Atten: HpsdrAtten.Zero,
             RxAntenna: HpsdrAntenna.Ant1,
             Mox: true,
-            EnableHl2Dither: false,
+            EnableHl2BandVolts: false,
             Board: HpsdrBoardKind.HermesLite2);
 
         Span<byte> cc = stackalloc byte[5];

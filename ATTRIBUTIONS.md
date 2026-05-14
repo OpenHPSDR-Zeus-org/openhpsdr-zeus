@@ -225,6 +225,6 @@ See any source file for the canonical form.
 If you believe Zeus has inadequately attributed your work — or carries
 content that should be attributed to you or to an upstream project —
 please open an issue at
-<https://github.com/brianbruff/openhpsdr-zeus/issues> or contact
+<https://github.com/Kb2uka/openhpsdr-zeus/issues> or contact
 the project lead directly. Zeus will treat attribution corrections as
 a priority class of change.

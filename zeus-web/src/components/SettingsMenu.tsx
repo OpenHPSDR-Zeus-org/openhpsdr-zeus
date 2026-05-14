@@ -19,17 +19,19 @@
 // (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
 // Both are GPL-2.0-or-later.
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { PaSettingsPanel } from './PaSettingsPanel';
 import { BandPlanEditor } from './bandplan/BandPlanEditor';
 import { AboutPanel } from './AboutPanel';
 import { DisplayPanel } from './DisplayPanel';
 import { QrzSettingsPanel } from './QrzSettingsPanel';
+import { RadioOptionsPanel } from './RadioOptionsPanel';
 import { RotatorSettingsPanel } from './RotatorSettingsPanel';
 import { ServerUrlPanel } from './ServerUrlPanel';
 import { TciSettingsPanel } from './TciSettingsPanel';
 import { RadioSelector } from './RadioSelector';
 import { usePaStore } from '../state/pa-store';
+import { useRadioStore } from '../state/radio-store';
 import { PsSettingsPanel } from './PsSettingsPanel';
 import { TxAudioToolsPanel } from './TxAudioToolsPanel';
 
@@ -43,6 +45,7 @@ export type SettingsTabId =
   | 'tci'
   | 'display'
   | 'server'
+  | 'radio'
   | 'about';
 
 const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
@@ -55,6 +58,7 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'tci', label: 'TCI' },
   { id: 'display', label: 'DISPLAY' },
   { id: 'server', label: 'SERVER' },
+  { id: 'radio', label: 'RADIO' },
   { id: 'about', label: 'ABOUT' },
 ];
 
@@ -72,6 +76,26 @@ export function SettingsView({ initialTab, onClose }: Props) {
   const savePa = usePaStore((s) => s.save);
   const loadPa = usePaStore((s) => s.load);
   const paInflight = usePaStore((s) => s.inflight);
+  // RADIO tab is HL2-only. Hidden on every other board (the backend always
+  // answers /api/radio/hl2-options 200, but operators on Hermes / ANAN /
+  // Orion / G2 have no use for a one-checkbox tab that does nothing for
+  // them — so we gate visibility on the per-board capability flag).
+  const hasHl2OptionalToggles = useRadioStore(
+    (s) => s.capabilities.hasHl2OptionalToggles,
+  );
+  const visibleTabs = useMemo(
+    () => TABS.filter((t) => t.id !== 'radio' || hasHl2OptionalToggles),
+    [hasHl2OptionalToggles],
+  );
+
+  // If the operator was sitting on the RADIO tab and the board changed
+  // (re-discovery now reports a non-HL2), bounce them back to PA so they
+  // don't get stuck on an empty tabpanel.
+  useEffect(() => {
+    if (active === 'radio' && !hasHl2OptionalToggles) {
+      setActive('pa');
+    }
+  }, [active, hasHl2OptionalToggles]);
 
   useEffect(() => {
     if (initialTab) setActive(initialTab);
@@ -120,7 +144,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           aria-label="Settings sections"
           className="settings-view-tabs"
         >
-          {TABS.map((t) => {
+          {visibleTabs.map((t) => {
             const isActive = t.id === active;
             return (
               <button
@@ -147,6 +171,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {active === 'tci' && <TciSettingsPanel />}
           {active === 'display' && <DisplayPanel />}
           {active === 'server' && <ServerUrlPanel />}
+          {active === 'radio' && hasHl2OptionalToggles && <RadioOptionsPanel />}
           {active === 'about' && <AboutPanel />}
         </div>
       </div>

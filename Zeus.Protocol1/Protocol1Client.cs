@@ -80,7 +80,11 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _preamp;       // 0 / 1
     private int _attenDb;      // 0..31 dB (HpsdrAtten value)
     private int _antenna = (int)HpsdrAntenna.Ant1;
-    private int _enableHl2Dither;
+    // HL2 Band Volts PWM enable. Wire encoding is C3 bit 3 of the Config
+    // frame — same bit that legacy HPSDR boards used for ADC DITHER, which
+    // HL2's AD9866 doesn't need (see hermes-lite2-protocol.md line 39 and
+    // mi0bot's HL2 fork, which exposes this in the UI as "Band Volts").
+    private int _enableHl2BandVolts;
     private int _boardKind = (int)HpsdrBoardKind.HermesLite2;
     private int _hasN2adr;      // 0 / 1
     private int _mox;           // 0 / 1
@@ -405,10 +409,10 @@ public sealed class Protocol1Client : IProtocol1Client
         }
     }
 
-    public bool EnableHl2Dither
+    public bool EnableHl2BandVolts
     {
-        get => Volatile.Read(ref _enableHl2Dither) != 0;
-        set => Interlocked.Exchange(ref _enableHl2Dither, value ? 1 : 0);
+        get => Volatile.Read(ref _enableHl2BandVolts) != 0;
+        set => Interlocked.Exchange(ref _enableHl2BandVolts, value ? 1 : 0);
     }
 
     public Task ConnectAsync(IPEndPoint radioEndpoint, CancellationToken ct)
@@ -603,7 +607,7 @@ public sealed class Protocol1Client : IProtocol1Client
             Atten: new HpsdrAtten(Volatile.Read(ref _attenDb)),
             RxAntenna: (HpsdrAntenna)Volatile.Read(ref _antenna),
             Mox: Volatile.Read(ref _mox) != 0,
-            EnableHl2Dither: Volatile.Read(ref _enableHl2Dither) != 0,
+            EnableHl2BandVolts: Volatile.Read(ref _enableHl2BandVolts) != 0,
             Board: (HpsdrBoardKind)Volatile.Read(ref _boardKind),
             HasN2adr: Volatile.Read(ref _hasN2adr) != 0,
             DriveLevel: drive,

@@ -60,16 +60,33 @@ export type AudioStats = {
   available: number;
   underrunCount: number;
   droppedSamples: number;
+  // #299 Step 2 frontend probe — attributed underrun causes.
+  // latePush = (now - lastPushWallTime) > 90 ms when underrun fired → the
+  //   WS-message delivery / main-thread starvation path is the culprit.
+  // latenessVsSchedule = push arrived on time but nextPlayTime had already
+  //   drifted within 50 ms of now → audio render thread itself was preempted
+  //   (less common; means OS/browser-side, not main-thread, is the issue).
+  latePushCount: number;
+  latenessVsScheduleCount: number;
 };
 
 type Listener = (state: AudioClientState, stats: AudioStats | null) => void;
 
-// 100 ms re-anchor floor. The 50 ms experiment (commit 503e0d2) was right
-// at the p99 LAN inter-arrival edge — any tail past p99 caused audible
-// underrun on RX, regardless of server-side pipeline. Back to 100 ms; the
-// TX→RX gap is slightly more perceptible than at 50 ms but RX is clean.
-// Future work could adapt the floor from observed jitter stats instead.
-const BUFFER_TARGET_SECS = 0.1;
+// 300 ms re-anchor floor. The 100 ms baseline (and earlier 50 ms experiment,
+// commit 503e0d2) underflowed in two distinct cases the #299 Step 2 probe
+// surfaced:
+//   1. OBS streaming load preempted the audio render thread → registered as
+//      `latenessVsSchedule`. Addressed primarily by `latencyHint: 'playback'`
+//      below (larger internal render buffers) but the headroom helps too.
+//   2. A heavy-WebAudio companion tab (e.g. kiwisdr.com) occasionally
+//      starved the Zeus tab's main thread for ~200-220 ms — registered as
+//      `latePush`. The 200 ms intermediate floor still tripped on a measured
+//      215 ms gap during idle with a kiwisdr tab open; 300 ms is comfortably
+//      above the observed worst case with 85 ms of margin.
+// Operator-perceptible TX→RX gap rises 200 ms vs the 100 ms baseline, still
+// well under monitoring-latency expectations. A follow-up could swap this for
+// an adaptive scheme (200 ms normal, bump on underrun, decay back).
+const BUFFER_TARGET_SECS = 0.3;
 const BUFFER_MAX_SECS = 0.5;
 const STATS_INTERVAL_MS = 500;
 
@@ -82,6 +99,12 @@ class AudioClient {
   private stats: AudioStats | null = null;
   private underruns = 0;
   private dropped = 0;
+  // #299 Step 2 frontend probe — see AudioStats type for semantics.
+  private lastPushPerfTime = 0;
+  private latePushCount = 0;
+  private latenessVsScheduleCount = 0;
+  private lastLoggedLate = 0;
+  private lastLoggedSched = 0;
   private listeners = new Set<Listener>();
   private starting: Promise<void> | null = null;
   private statsTimer: ReturnType<typeof setInterval> | null = null;
@@ -105,7 +128,14 @@ class AudioClient {
   private async doStart() {
     this.setState({ kind: 'loading' });
     try {
-      const ctx = new AudioContext({ sampleRate: 48000 });
+      // #299 fix — latencyHint: 'playback' tells the browser this is a media
+      // playback context (not interactive UI feedback), so it can allocate
+      // larger internal render-thread buffers. The audio render thread becomes
+      // much more tolerant of OS-level preemption (the dominant underrun cause
+      // surfaced by the Step 2 probe: latenessVsSchedule >> latePush under OBS
+      // streaming load). Costs a few extra ms of intrinsic latency, but the
+      // operator-perceptible gap is dominated by BUFFER_TARGET_SECS anyway.
+      const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' });
       const gain = ctx.createGain();
       gain.gain.value = 1.0;
       gain.connect(ctx.destination);
@@ -115,7 +145,12 @@ class AudioClient {
       this.nextPlayTime = 0;
       this.underruns = 0;
       this.dropped = 0;
-      this.stats = { available: 0, underrunCount: 0, droppedSamples: 0 };
+      this.lastPushPerfTime = 0;
+      this.latePushCount = 0;
+      this.latenessVsScheduleCount = 0;
+      this.lastLoggedLate = 0;
+      this.lastLoggedSched = 0;
+      this.stats = { available: 0, underrunCount: 0, droppedSamples: 0, latePushCount: 0, latenessVsScheduleCount: 0 };
       this.statsTimer = setInterval(() => this.emitStats(), STATS_INTERVAL_MS);
       this.setState({ kind: 'playing' });
     } catch (err) {
@@ -169,6 +204,12 @@ class AudioClient {
 
     const now = ctx.currentTime;
 
+    // #299 Step 2 probe — wall-clock gap since previous push, used below
+    // to attribute the cause of any underrun the schedule re-anchor catches.
+    const pushPerfMs = performance.now();
+    const dtSinceLastPushMs = this.lastPushPerfTime === 0 ? 0 : pushPerfMs - this.lastPushPerfTime;
+    this.lastPushPerfTime = pushPerfMs;
+
     // Drop if we've already scheduled more than the max ahead — prevents
     // unbounded drift when the producer is faster than real time.
     if (this.nextPlayTime > now + BUFFER_MAX_SECS) {
@@ -179,7 +220,25 @@ class AudioClient {
     // If we've fallen behind (or this is the first frame after start/reset),
     // re-anchor the schedule one target interval in the future.
     if (this.nextPlayTime < now + BUFFER_TARGET_SECS * 0.5) {
-      if (this.nextPlayTime !== 0) this.underruns++;
+      if (this.nextPlayTime !== 0) {
+        this.underruns++;
+        // #299 Step 2 probe — attribute the underrun. 90 ms threshold matches
+        // BUFFER_TARGET_SECS * 0.9 with a small margin; at 50 Hz audio frame
+        // rate (one ~20 ms frame per push) the expected dt is 20 ms, so >90 ms
+        // strongly indicates main-thread / WS delivery starvation.
+        if (dtSinceLastPushMs > 90) {
+          this.latePushCount++;
+          console.warn(
+            `audio.underrun.latePush dtMs=${dtSinceLastPushMs.toFixed(1)} totalLate=${this.latePushCount}`,
+          );
+        } else {
+          this.latenessVsScheduleCount++;
+          const schedAheadMs = (this.nextPlayTime - now) * 1000;
+          console.warn(
+            `audio.underrun.latenessVsSchedule dtMs=${dtSinceLastPushMs.toFixed(1)} schedAheadMs=${schedAheadMs.toFixed(1)} totalSched=${this.latenessVsScheduleCount}`,
+          );
+        }
+      }
       this.nextPlayTime = now + BUFFER_TARGET_SECS;
     }
 
@@ -250,6 +309,28 @@ class AudioClient {
       available: Math.round(ahead * ctx.sampleRate),
       underrunCount: this.underruns,
       droppedSamples: this.dropped,
+      latePushCount: this.latePushCount,
+      latenessVsScheduleCount: this.latenessVsScheduleCount,
+    };
+    // #299 Step 2 probe — once-per-window roll-up so the user has a readable
+    // summary without parsing every per-event console.warn. Only fires when
+    // something new happened in this 500 ms window.
+    const dLate = this.latePushCount - this.lastLoggedLate;
+    const dSched = this.latenessVsScheduleCount - this.lastLoggedSched;
+    if (dLate > 0 || dSched > 0) {
+      console.log(
+        `audio.probe latePush=${this.latePushCount} (+${dLate}) latenessVsSchedule=${this.latenessVsScheduleCount} (+${dSched}) totalUnderruns=${this.underruns}`,
+      );
+      this.lastLoggedLate = this.latePushCount;
+      this.lastLoggedSched = this.latenessVsScheduleCount;
+    }
+    // Expose latest probe values on window for post-test snapshot inspection.
+    (window as unknown as { __zeusAudioProbe?: object }).__zeusAudioProbe = {
+      latePushCount: this.latePushCount,
+      latenessVsScheduleCount: this.latenessVsScheduleCount,
+      totalUnderruns: this.underruns,
+      droppedSamples: this.dropped,
+      availableSamples: this.stats.available,
     };
     this.emit();
   }

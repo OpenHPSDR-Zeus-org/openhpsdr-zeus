@@ -604,11 +604,11 @@ jobs:
 
           ## Changes
 
-          See the [full changelog](https://github.com/brianbruff/openhpsdr-zeus/compare/...v${{ steps.version.outputs.version }}) for details.
+          See the [full changelog](https://github.com/Kb2uka/openhpsdr-zeus/compare/...v${{ steps.version.outputs.version }}) for details.
 
           ## License
 
-          GNU GPL v2 or later. See [LICENSE](https://github.com/brianbruff/openhpsdr-zeus/blob/main/LICENSE) for details.
+          GNU GPL v2 or later. See [LICENSE](https://github.com/Kb2uka/openhpsdr-zeus/blob/main/LICENSE) for details.
           EOF
 
       - name: Create or Update Release

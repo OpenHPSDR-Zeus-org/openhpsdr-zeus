@@ -95,7 +95,7 @@ public class N2adrBandsTests
             Atten: HpsdrAtten.Zero,
             RxAntenna: HpsdrAntenna.Ant1,
             Mox: false,
-            EnableHl2Dither: false,
+            EnableHl2BandVolts: false,
             Board: HpsdrBoardKind.HermesLite2,
             HasN2adr: true);
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, state);
@@ -115,7 +115,7 @@ public class N2adrBandsTests
             Atten: HpsdrAtten.Zero,
             RxAntenna: HpsdrAntenna.Ant1,
             Mox: false,
-            EnableHl2Dither: false,
+            EnableHl2BandVolts: false,
             Board: HpsdrBoardKind.HermesLite2,
             HasN2adr: false);
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, state);
@@ -158,7 +158,7 @@ public class N2adrBandsTests
             Atten: HpsdrAtten.Zero,
             RxAntenna: HpsdrAntenna.Ant1,
             Mox: false,
-            EnableHl2Dither: false,
+            EnableHl2BandVolts: false,
             Board: HpsdrBoardKind.Hermes,
             HasN2adr: true);
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, state);

@@ -10,6 +10,49 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.7.2] — 2026-05-13
+
+A correctness-focused release with two big on-air wins: **audio dropouts when
+streaming with PureSignal armed are gone**, and **two whole board families
+(ANAN-G2E, ANAN-10E) now have working panadapters on Protocol-2**. Brick2 SDR
+also gets Protocol-2 support for the first time.
+
+### Fixed
+
+- **Audio dropouts during OBS-streaming + PS-armed sessions eliminated.** *(KB2UKA, PR #304, closes #299)*
+  - Diagnosed via a two-stage probe stack — backend WS-queue drop counters confirmed the server side wasn't dropping anything (zero drops across 1,649 TX events and 470 PS-feedback windows), and a frontend `latePush` / `latenessVsSchedule` probe identified the AudioContext render thread getting preempted under sustained OS audio load as the actual cause.
+  - Fix: raised `BUFFER_TARGET_SECS` from 100 ms → 300 ms and opened the `AudioContext` with `latencyHint: 'playback'` so the browser allocates larger internal render-thread buffers. Adds ~200 ms of imperceptible RX latency in exchange for eliminating the audible clicks.
+  - Diagnostic probes left in place as living instrumentation — zero overhead when there are no drops, immediately diagnostic if anything regresses.
+
+- **ANAN-G2E panadapter now works on Protocol-2.** *(Brian Keating / EI6LF, PR #308, closes #289)*
+  - Root cause: Zeus hard-coded the user-RX DDC slot as DDC2 for every Protocol-2 board, but the Hermes-family firmware (which includes HermesC10 / G2E) routes user RX through DDC0. The radio was being told to enable a DDC slot it didn't use, so it never sent any RX IQ.
+  - Fix: per-board `RxBaseDdc` capability — Hermes / HermesII / HermesC10 → DDC0; Saturn-class (G2 / G2-1K / 7000DLE / 8000DLE / OrionMkII) keep DDC2 (unchanged).
+  - Discovered board kind is now plumbed through `/api/connect/p2` → `ConnectP2Async` → `Protocol2Client` so per-board routing applies on the first frame.
+  - PS feedback block is now no-op'd for single-ADC Hermes-class boards (G2E has no PS hardware).
+
+- **ANAN-10E panadapter now works on Protocol-2.** *(Brian Keating / EI6LF, PR #308)*
+  - Same root cause and fix as G2E above — ANAN-10E maps to HermesII (wire byte `0x02`), also a single-ADC Hermes-class board.
+
+- **Brick2 SDR works on Protocol-2.** *(Brian Keating / EI6LF, PR #308, closes #171)*
+  - Same DDC0 routing fix as above, plus a Brick2-specific 48 kHz IQ gain correction (`+29 dB` lift) for the deskhpsdr firmware quirk per `new_protocol.c:2516`, and macOS UDP route priming for the receive bind.
+
+- **Protocol-2 TUNE PTT-bit wire fix.** *(KB2UKA, PR #303)*
+  - `SendCmdHighPriority` now sets the PTT bit during TUNE on Protocol-2, matching MOX behaviour. Previously the TUNE button armed the radio's tune state but the wire didn't fully reflect MOX-on, causing edge-case behaviour with some amps and external T/R sequencers.
+
+### Added
+
+- **`CONTRIBUTING.md` at the repo root.** *(KB2UKA, PR #305, #306)*
+  - First contribution-rules document the project has had. Codifies the red-light/green-light system, branch model, hot paths to leave alone (audio scheduling + PureSignal), commit conventions including the no-AI-tool-mentions hard rule, on-air testing expectations, and reviewer assignments. Linked from the README's new Contributing section.
+
+### Changed
+
+- **Repo URL canonical updated** from `brianbruff/openhpsdr-zeus` to `Kb2uka/openhpsdr-zeus` across all 11 hardcoded references — README, AboutPanel update-check, CHANGELOG, ATTRIBUTIONS, install docs, release workflow, issue template, CLAUDE.md. *(KB2UKA, PR #309)*. GitHub's auto-redirect handles old links, but the canonical home is now correct everywhere.
+
+### Known issues
+- None new at release. CW-only feature requests (Zero Beat, APF — #300) are in flight for a future release.
+
+---
+
 ## [0.7.1] — 2026-05-12
 
 Focused release around **PureSignal correctness** and **server-side performance**.
@@ -125,7 +168,7 @@ clean shutdown captures your last action.
 
 ## [0.7.0] — 2026-05-10
 
-Operator-visible highlights from the [v0.7.0 release page](https://github.com/brianbruff/openhpsdr-zeus/releases/tag/v0.7.0):
+Operator-visible highlights from the [v0.7.0 release page](https://github.com/Kb2uka/openhpsdr-zeus/releases/tag/v0.7.0):
 
 ### Added
 - **RF2K-S amplifier panel** — drive your amp directly from Zeus with
@@ -162,4 +205,4 @@ Operator-visible highlights from the [v0.7.0 release page](https://github.com/br
 
 ## Earlier releases
 
-For releases prior to 0.7.0, see the [GitHub Releases page](https://github.com/brianbruff/openhpsdr-zeus/releases).
+For releases prior to 0.7.0, see the [GitHub Releases page](https://github.com/Kb2uka/openhpsdr-zeus/releases).

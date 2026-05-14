@@ -90,6 +90,12 @@ internal static class BoardCapabilitiesTable
     };
 
     // Hermes / Metis / ANAN-10 — small-signal Hermes-class single-RX. ~10 W.
+    // Brick2 SDR (Sergey EU1SW) announces as wire byte 0x01 → HpsdrBoardKind.Hermes
+    // and inherits this fingerprint. Brick2's hardware reality (1 ADC, no Alex
+    // BPF, no Apollo LPF, no on-board telemetry, internal step attenuator
+    // 0-31 dB on RX1 only) matches the row exactly; see Zeus issue #171.
+    // MaxPowerWatts=10 is conservative for Brick2 (rated 15 W); operator
+    // overrides per-rig in the PA panel.
     private static readonly BoardCapabilities HermesClass = new(
         RxAdcCount: 1,
         MkiiBpf: false,
@@ -202,6 +208,12 @@ internal static class BoardCapabilitiesTable
     // HermesLite2 — rated 5 W stock but operators routinely run to 10 W with
     // adequate cooling, so the meter axis is 10 W to cover the realistic
     // operating range without leaving the bar visually pegged at half scale.
+    //
+    // HasHl2OptionalToggles is true here only — HL2 is the only board that
+    // exposes the mi0bot fork's HL2-specific Protocol-1 toggles (Band Volts
+    // PWM on the FAN connector, future siblings). The frontend uses this to
+    // gate the HL2 settings panel so the controls don't appear for boards
+    // that would silently ignore them. Issue #279.
     private static readonly BoardCapabilities HermesLite2 = new(
         RxAdcCount: 1,
         MkiiBpf: false,
@@ -212,5 +224,6 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: false,
         SupportsPathIllustrator: false,
-        MaxPowerWatts: 10);
+        MaxPowerWatts: 10,
+        HasHl2OptionalToggles: true);
 }

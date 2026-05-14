@@ -10,7 +10,7 @@ Zeus is distributed as native installers for Windows, macOS, and Linux.
 
 ### Installation Steps
 
-1. Download `Zeus-X.Y.Z-win-x64-setup.exe` from the [latest release](https://github.com/brianbruff/openhpsdr-zeus/releases/latest)
+1. Download `Zeus-X.Y.Z-win-x64-setup.exe` from the [latest release](https://github.com/Kb2uka/openhpsdr-zeus/releases/latest)
 2. Run the installer
 3. Follow the installation wizard prompts
 4. Zeus will be installed to `C:\Program Files\Zeus` by default
@@ -80,7 +80,7 @@ If you see **"Zeus.app can't be opened because it is from an unidentified develo
 
 ### Installation Steps
 
-1. Download `zeus-X.Y.Z-linux-x64.tar.gz` from the [latest release](https://github.com/brianbruff/openhpsdr-zeus/releases/latest)
+1. Download `zeus-X.Y.Z-linux-x64.tar.gz` from the [latest release](https://github.com/Kb2uka/openhpsdr-zeus/releases/latest)
 
 2. Extract the archive:
    ```bash
@@ -201,8 +201,8 @@ When a new version is available, Zeus will show a notification in the Settings >
 
 ## Support
 
-- **Issues**: https://github.com/brianbruff/openhpsdr-zeus/issues
-- **Documentation**: https://github.com/brianbruff/openhpsdr-zeus
+- **Issues**: https://github.com/Kb2uka/openhpsdr-zeus/issues
+- **Documentation**: https://github.com/Kb2uka/openhpsdr-zeus
 - **License**: GNU GPL v2 or later
 
 ---

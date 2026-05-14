@@ -56,7 +56,7 @@ public class TestToneGeneratorTests
         Atten: HpsdrAtten.Zero,
         RxAntenna: HpsdrAntenna.Ant1,
         Mox: mox,
-        EnableHl2Dither: false,
+        EnableHl2BandVolts: false,
         Board: HpsdrBoardKind.HermesLite2,
         HasN2adr: false,
         DriveLevel: driveLevel);

@@ -26,7 +26,7 @@ namespace Zeus.Protocol1.Tests;
 /// References:
 ///   - mi0bot networkproto1.c:1102 — HL2 0x0a write loop case 11.
 ///   - HL2 protocol doc, "PureSignal feedback path" section.
-///   - PR #119 review: https://github.com/brianbruff/openhpsdr-zeus/pull/119
+///   - PR #119 review: https://github.com/Kb2uka/openhpsdr-zeus/pull/119
 /// </summary>
 public class ControlFramePsEncoderTests
 {
@@ -37,7 +37,7 @@ public class ControlFramePsEncoderTests
         Atten: HpsdrAtten.Zero,
         RxAntenna: HpsdrAntenna.Ant1,
         Mox: false,
-        EnableHl2Dither: false,
+        EnableHl2BandVolts: false,
         Board: HpsdrBoardKind.HermesLite2,
         PsEnabled: psEnabled);
 

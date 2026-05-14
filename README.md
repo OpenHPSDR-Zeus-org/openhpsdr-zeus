@@ -45,7 +45,7 @@ long-running project a lot of the DSP heritage traces back to.
 
 ![OpenHPSDR Zeus on 20 m — advanced filter ribbon, QRZ-engaged great-circle map, operator pin (KB2UKA, FN30iv) and live panadapter / waterfall](docs/pics/screenshots/zeus-filter-panel-open.png)
 
-> **The full user guide lives in the [OpenHPSDR Zeus Wiki](https://github.com/brianbruff/openhpsdr-zeus/wiki).**
+> **The full user guide lives in the [OpenHPSDR Zeus Wiki](https://github.com/Kb2uka/openhpsdr-zeus/wiki).**
 > Every panel, control, and gesture is documented there with screenshots — this
 > README only covers what you need to install and run OpenHPSDR Zeus. If you have a
 > question that starts with "what does that button do…", the wiki is the
@@ -53,28 +53,28 @@ long-running project a lot of the DSP heritage traces back to.
 
 Wiki jump-off points for the most-asked things:
 
-- [Installation](https://github.com/brianbruff/openhpsdr-zeus/wiki/Installation) — installers, PWA install, macOS xattr step, first-run WDSP wisdom wait
-- [Getting Started](https://github.com/brianbruff/openhpsdr-zeus/wiki/Getting-Started) — first-minute walkthrough
-- [Panadapter and Waterfall](https://github.com/brianbruff/openhpsdr-zeus/wiki/Panadapter-and-Waterfall) — click-to-tune, zoom, palettes
-- [Modes and Bands](https://github.com/brianbruff/openhpsdr-zeus/wiki/Modes-and-Bands) and [Bandwidth and Filters](https://github.com/brianbruff/openhpsdr-zeus/wiki/Bandwidth-and-Filters)
-- [Frequency and VFO](https://github.com/brianbruff/openhpsdr-zeus/wiki/Frequency-and-VFO) and [Front-End and Gain](https://github.com/brianbruff/openhpsdr-zeus/wiki/Front-End-and-Gain)
-- [DSP Noise Controls](https://github.com/brianbruff/openhpsdr-zeus/wiki/DSP), [Meters](https://github.com/brianbruff/openhpsdr-zeus/wiki/Meters), [TX Controls](https://github.com/brianbruff/openhpsdr-zeus/wiki/TX-Controls), [TX Audio Tools](https://github.com/brianbruff/openhpsdr-zeus/wiki/TX-Audio-Tools), [CW Keyer](https://github.com/brianbruff/openhpsdr-zeus/wiki/CW-Keyer)
-- [PureSignal (P2)](https://github.com/brianbruff/openhpsdr-zeus/wiki/PureSignal-on-Protocol-2) and [PA Settings](https://github.com/brianbruff/openhpsdr-zeus/wiki/PA-Settings)
-- [QRZ and World Map](https://github.com/brianbruff/openhpsdr-zeus/wiki/QRZ-and-World-Map), [Logbook](https://github.com/brianbruff/openhpsdr-zeus/wiki/Logbook), [Keyboard & Mouse Shortcuts](https://github.com/brianbruff/openhpsdr-zeus/wiki/Shortcuts)
-- [Troubleshooting](https://github.com/brianbruff/openhpsdr-zeus/wiki/Troubleshooting) — known quirks, missing native libraries
-- [Developer Guide](https://github.com/brianbruff/openhpsdr-zeus/wiki/Developer-Guide) — build from source, dev loop, project layout, tests
+- [Installation](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Installation) — installers, PWA install, macOS xattr step, first-run WDSP wisdom wait
+- [Getting Started](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Getting-Started) — first-minute walkthrough
+- [Panadapter and Waterfall](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Panadapter-and-Waterfall) — click-to-tune, zoom, palettes
+- [Modes and Bands](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Modes-and-Bands) and [Bandwidth and Filters](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Bandwidth-and-Filters)
+- [Frequency and VFO](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Frequency-and-VFO) and [Front-End and Gain](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Front-End-and-Gain)
+- [DSP Noise Controls](https://github.com/Kb2uka/openhpsdr-zeus/wiki/DSP), [Meters](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Meters), [TX Controls](https://github.com/Kb2uka/openhpsdr-zeus/wiki/TX-Controls), [TX Audio Tools](https://github.com/Kb2uka/openhpsdr-zeus/wiki/TX-Audio-Tools), [CW Keyer](https://github.com/Kb2uka/openhpsdr-zeus/wiki/CW-Keyer)
+- [PureSignal (P2)](https://github.com/Kb2uka/openhpsdr-zeus/wiki/PureSignal-on-Protocol-2) and [PA Settings](https://github.com/Kb2uka/openhpsdr-zeus/wiki/PA-Settings)
+- [QRZ and World Map](https://github.com/Kb2uka/openhpsdr-zeus/wiki/QRZ-and-World-Map), [Logbook](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Logbook), [Keyboard & Mouse Shortcuts](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Shortcuts)
+- [Troubleshooting](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Troubleshooting) — known quirks, missing native libraries
+- [Developer Guide](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Developer-Guide) — build from source, dev loop, project layout, tests
 
 ## Download
 
-Grab the latest installer from the **[Releases page](https://github.com/brianbruff/openhpsdr-zeus/releases/latest)**
+Grab the latest installer from the **[Releases page](https://github.com/Kb2uka/openhpsdr-zeus/releases/latest)**
 — Windows x64 `.exe`, Windows on ARM (Snapdragon / Surface Pro X) `.exe`, macOS `.dmg`, Linux `.tar.gz`. Full install detail (PWA path,
 macOS Gatekeeper xattr step, first-run WDSP wisdom wait) is on the wiki's
-[Installation](https://github.com/brianbruff/openhpsdr-zeus/wiki/Installation)
+[Installation](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Installation)
 page.
 
 ## Building from source
 
-See the wiki's [Developer Guide](https://github.com/brianbruff/openhpsdr-zeus/wiki/Developer-Guide)
+See the wiki's [Developer Guide](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Developer-Guide)
 for prerequisites, the two-terminal dev loop, project layout, tests, and
 conventions.
 
@@ -112,6 +112,13 @@ and **Douglas J. Cerrato (KB2UKA)**.
 See [`ATTRIBUTIONS.md`](ATTRIBUTIONS.md) for the full provenance statement,
 per-component licensing, and the per-file header convention OpenHPSDR Zeus
 uses to carry this acknowledgement through every source file.
+
+## Contributing
+
+Bug reports, feature suggestions, and PRs welcome. Please read
+[`CONTRIBUTING.md`](CONTRIBUTING.md) before opening a PR — it covers the
+branch model, what's red-light vs green-light, hot paths to leave alone, and
+the commit / review conventions the project follows.
 
 ## License
 

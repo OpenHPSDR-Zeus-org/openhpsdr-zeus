@@ -184,6 +184,52 @@ public sealed class PreferredRadioStore : IDisposable
         Changed?.Invoke();
     }
 
+    /// <summary>
+    /// HL2 Band Volts PWM enable (issue #279). C3 bit 3 of the Protocol-1
+    /// Config frame — same bit legacy boards used for LT2208 DITHER (which
+    /// HL2's AD9866 doesn't need). When true, HL2 emits per-band-tagged PWM
+    /// voltage on the FAN connector so an external amp (Xiegu XPA125B etc.)
+    /// can auto-band-switch. Defaults to <c>false</c>; consulted only on HL2.
+    /// </summary>
+    public bool GetEnableHl2BandVolts()
+    {
+        lock (_sync)
+        {
+            var e = _entries.FindAll().FirstOrDefault();
+            return e?.EnableHl2BandVolts ?? false;
+        }
+    }
+
+    /// <summary>
+    /// Persists the operator's chosen Band Volts PWM enable. Stored in the
+    /// same single-row preferences entry alongside board / variant; setting
+    /// to <c>false</c> is identical to "unset" (the shipping default).
+    /// </summary>
+    public void SetEnableHl2BandVolts(bool enabled)
+    {
+        lock (_sync)
+        {
+            var existing = _entries.FindAll().FirstOrDefault();
+            if (existing is null)
+            {
+                _entries.Insert(new PreferredRadioEntry
+                {
+                    Board = HpsdrBoardKind.Unknown,
+                    OverrideDetection = false,
+                    EnableHl2BandVolts = enabled,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+            }
+            else
+            {
+                existing.EnableHl2BandVolts = enabled;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _entries.Update(existing);
+            }
+        }
+        Changed?.Invoke();
+    }
+
     public void Dispose() => _db.Dispose();
 
 }
@@ -198,5 +244,9 @@ public sealed class PreferredRadioEntry
     /// (the zero-default) for older rows that pre-date this field, which
     /// preserves Zeus' pre-#218 dispatch behaviour.</summary>
     public OrionMkIIVariant OrionMkIIVariant { get; set; }
+    /// <summary>HL2 Band Volts PWM enable (issue #279). LiteDB hydrates as
+    /// <c>false</c> for older rows that pre-date this field, which matches
+    /// the shipping default.</summary>
+    public bool EnableHl2BandVolts { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

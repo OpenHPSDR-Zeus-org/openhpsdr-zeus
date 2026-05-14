@@ -45,9 +45,12 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
+using System.Net.NetworkInformation;
 using System.Net.Sockets;
+using System.Runtime.InteropServices;
 using System.Threading.Channels;
 using Microsoft.Extensions.Logging;
+using Zeus.Contracts;
 
 namespace Zeus.Protocol2;
 
@@ -82,6 +85,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // 1035 + 2 = 1037.
     private const int G2RxDdc = 2;
 
+    // Hermes-class radios (Brick2 is the live consumer) use a single ADC
+    // and have no PureSignal feedback DDCs reserved at the front of the pool.
+    // The user-visible RX maps to DDC0 directly. Radio sends DDC0 IQ from
+    // port 1035. Reference: deskhpsdr src/new_protocol.c:1692-1698 — Hermes
+    // sets `receiver[i].ddc = i` (not `i + 2` as for Orion/Angelia/MkII).
+    private const int HermesRxDdc = 0;
+
     // 2^32 / 122_880_000 — converts Hz to a 32-bit phase-increment word
     // when the general packet is in "send phase word" mode (bit 3 of
     // CmdGeneral[37], which pihpsdr and Thetis both set).
@@ -99,6 +109,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private int _sampleRateKhz = 48;
     private uint _rxFreqHz = 14_200_000;
     private byte _numAdc = 2;
+    // Connected board kind, plumbed from RadioService's ConnectedBoardKind via
+    // DspPipelineService at connect time. Used by HandleDdcPacket for the
+    // Hermes-on-P2 48 kHz amplitude correction (Brick2 firmware delivers IQ
+    // ~29 dB hotter at 48 kHz than at higher rates — deskhpsdr
+    // src/new_protocol.c:2516-2530). Unknown == no correction applied.
+    private HpsdrBoardKind _boardKind = HpsdrBoardKind.Unknown;
     // Mercury preamp defaults OFF — on a G2 the ADC has enough dynamic range
     // that the preamp is a crutch, not a default. Operator enables it when
     // needed via the UI. Attenuator 0 dB so the front-end isn't knocked down.
@@ -267,6 +283,20 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         _sampleRateKhz = sampleRateKhz;
 
+        // macOS-only: pre-prime the kernel ARP table for the radio's IP
+        // before we fire off any real packets. The Brick2 firmware answers
+        // ARP requests incorrectly (DL1BZ in Zeus issue #171: deskhpsdr hit
+        // the same problem and shipped this workaround at
+        // src/new_protocol.c:453-474). Without an entry the first SendTo
+        // races the ARP resolution and the radio's streams never start.
+        // Linux/Windows hosts haven't shown the same symptom; gate strictly
+        // on macOS so we don't introduce side-effects on platforms where the
+        // OS handles ARP correctly out of the box.
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            PrimeMacOSUdpRoute(_radioEndpoint!.Address, _log);
+        }
+
         // Startup sequence matches Thetis SendStart() and Priapus/NextGenSDR:
         // CmdGeneral → CmdRx → CmdTx → CmdHighPriority(run=1). Skipping CmdTx
         // leaves the G2 MkII in a half-configured state where its BPF board
@@ -334,6 +364,51 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         {
             SendCmdRx();
         }
+    }
+
+    /// <summary>
+    /// Set the connected board kind. Should be called once at connect time,
+    /// before <see cref="StartAsync"/>. Plumbed from
+    /// <c>DspPipelineService.ConnectP2Async</c> so RX-decode quirks scoped to
+    /// specific board families can be applied without polluting the hot path
+    /// with an out-of-band lookup.
+    /// </summary>
+    public void SetBoardKind(HpsdrBoardKind kind)
+    {
+        _boardKind = kind;
+    }
+
+    /// <summary>
+    /// Per-board, per-sample-rate gain correction applied on top of the
+    /// int24→[-1,+1] normalisation in <c>HandleDdcPacket</c>.
+    ///
+    /// Hermes-class radios on Protocol 2 (notably the Brick2 SDR, which is
+    /// Hermes-fork firmware on Hermes-Lite-style hardware) deliver RX IQ at
+    /// 48 kHz with ~+29 dB more amplitude than at higher sample rates,
+    /// because the on-board CIC/decimator gain isn't compensated by the
+    /// firmware at the lowest decimation factor. Without this scaler the
+    /// S-meter and panadapter clip / saturate at 48 kHz on Brick2 — the
+    /// symptom that left linoobs's waterfall blank in issue #171.
+    ///
+    /// Reference: deskhpsdr <c>src/new_protocol.c:2516-2530</c> — the
+    /// scaler is gated on <c>NEW_DEVICE_HERMES</c> (wire byte 0x01) only,
+    /// NOT on <c>NEW_DEVICE_HERMES2</c> (wire byte 0x02). HermesII firmware
+    /// (ANAN-10E / ANAN-100B) does not exhibit the +29 dB 48 kHz lift, so
+    /// the scaler must stay gated on <see cref="HpsdrBoardKind.Hermes"/>
+    /// alone — widening it to HermesII would knock 29 dB off legitimate
+    /// ANAN-10E / ANAN-100B RX. Constant <c>0.0354813389</c> is
+    /// <c>10^(-29/20)</c>.
+    ///
+    /// All other (board, rate) combinations return 1.0 — vanilla HL2, ANAN
+    /// 10E / 100B, ANAN G2 / 7000DLE / 8000DLE / Orion, etc. are unaffected.
+    /// </summary>
+    public static double IqGainCorrection(HpsdrBoardKind board, int sampleRateKhz)
+    {
+        if (board == HpsdrBoardKind.Hermes && sampleRateKhz == 48)
+        {
+            return 0.0354813389; // -29 dB
+        }
+        return 1.0;
     }
 
     public void SetNumAdc(byte numAdc)
@@ -606,32 +681,161 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1024));
     }
 
+    // macOS IP_BOUND_IF socket-option name. Defined in `netinet/in.h` as 25;
+    // not exposed as a named constant in .NET so we declare it here.
+    // Behavior: forces traffic on this socket to egress a specific interface
+    // by ifindex, bypassing the routing table's interface selection.
+    private const int IP_BOUND_IF = 25;
+
+    /// <summary>
+    /// Best-effort macOS ARP-priming workaround. Sends a single zero-byte
+    /// UDP datagram to the radio's port 1024 bound (via IP_BOUND_IF) to the
+    /// interface the kernel chose for the radio's IP. The kernel resolves
+    /// ARP as a side effect so subsequent real packets ship promptly instead
+    /// of racing the first SendTo. Mirrors deskhpsdr's <c>p2_prime_route()</c>
+    /// at <c>src/new_protocol.c:453-474</c>.
+    ///
+    /// Caller is the only authority on platform gating — this helper assumes
+    /// it's being invoked on macOS already. Every failure path is swallowed
+    /// and logged; the priming is opportunistic, never load-bearing for the
+    /// connect succeeding.
+    /// </summary>
+    internal static void PrimeMacOSUdpRoute(IPAddress radioIp, ILogger log)
+    {
+        try
+        {
+            // Step 1: ask the kernel which local IP it would use to reach
+            // the radio. UDP Connect doesn't generate any traffic — it only
+            // installs a "default destination" in the socket and resolves
+            // the route — so LocalEndPoint after Connect is the local IP
+            // the kernel routes through.
+            int ifIndex;
+            using (var probe = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp))
+            {
+                probe.Connect(new IPEndPoint(radioIp, 1024));
+                var localIp = (probe.LocalEndPoint as IPEndPoint)?.Address;
+                if (localIp is null)
+                {
+                    log.LogDebug("p2.prime.macos no localIp for radio={Radio}", radioIp);
+                    return;
+                }
+                ifIndex = FindInterfaceIndexForLocalAddress(localIp);
+                if (ifIndex <= 0)
+                {
+                    log.LogDebug("p2.prime.macos no interface for local={Local} radio={Radio}", localIp, radioIp);
+                    return;
+                }
+            }
+
+            // Step 2: open a fresh UDP socket, bind it to that interface
+            // index, and send a single byte to port 1024 on the radio. The
+            // datagram is intentionally garbage — port 1024 (CmdGeneral
+            // from-host) is one the radio's protocol layer ignores on a
+            // payload it can't parse, but the link-layer ARP exchange that
+            // *gets* it there is the whole point.
+            using var prime = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+            var ifIndexBytes = BitConverter.GetBytes(ifIndex);
+            prime.SetRawSocketOption(
+                optionLevel: (int)SocketOptionLevel.IP,
+                optionName: IP_BOUND_IF,
+                optionValue: ifIndexBytes);
+            prime.SendTo(new byte[] { 0 }, new IPEndPoint(radioIp, 1024));
+            log.LogInformation("p2.prime.macos sent radio={Radio} ifIndex={Ix}", radioIp, ifIndex);
+        }
+        catch (Exception ex)
+        {
+            // ARP priming is opportunistic; the regular SendCmdGeneral that
+            // follows will resolve ARP eventually. Don't fail the connect
+            // over a priming hiccup.
+            log.LogDebug(ex, "p2.prime.macos failed radio={Radio}", radioIp);
+        }
+    }
+
+    /// <summary>
+    /// Look up the OS interface index for the NIC that owns
+    /// <paramref name="localAddr"/>. Returns 0 if no match — the priming
+    /// caller treats that as "skip priming and continue."
+    /// </summary>
+    internal static int FindInterfaceIndexForLocalAddress(IPAddress localAddr)
+    {
+        foreach (var nic in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            var props = nic.GetIPProperties();
+            foreach (var ua in props.UnicastAddresses)
+            {
+                if (ua.Address.Equals(localAddr))
+                {
+                    var ipv4 = props.GetIPv4Properties();
+                    return ipv4?.Index ?? 0;
+                }
+            }
+        }
+        return 0;
+    }
+
+    /// <summary>
+    /// Per-board base DDC index for the user-visible RX. OrionMkII/Saturn/G2
+    /// family reserves DDC0/DDC1 for PureSignal feedback so the operator's RX
+    /// lives at DDC2. Single-ADC Hermes-class radios (Brick2 on wire byte
+    /// 0x01; ANAN-10E / ANAN-100B on wire byte 0x02) have no reserved PS
+    /// feedback slots — the RX is at DDC0. Default OrionMkII preserves Zeus'
+    /// historical P2 wire shape for every existing board.
+    /// Reference: deskhpsdr <c>src/new_protocol.c:1692-1698</c> — only
+    /// <c>NEW_DEVICE_ANGELIA / ORION / ORION2 / SATURN</c> use the
+    /// <c>ddc = 2 + i</c> offset; <c>NEW_DEVICE_HERMES</c> and
+    /// <c>NEW_DEVICE_HERMES2</c> both fall through to <c>ddc = i</c>.
+    /// </summary>
+    public static int RxBaseDdc(HpsdrBoardKind board) => board switch
+    {
+        HpsdrBoardKind.Hermes    => HermesRxDdc,
+        HpsdrBoardKind.HermesII  => HermesRxDdc,
+        _                        => G2RxDdc,
+    };
+
     // Static byte composer — pure function over (seq, numAdc, sampleRateKhz,
-    // psEnabled). Exposed internal so wire-format tests don't need a live
-    // socket. SendCmdRx constructs the same bytes and pushes to UDP.
-    internal static byte[] ComposeCmdRxBuffer(uint seq, byte numAdc, ushort sampleRateKhz, bool psEnabled)
+    // psEnabled, boardKind). Exposed internal so wire-format tests don't
+    // need a live socket. SendCmdRx constructs the same bytes and pushes to
+    // UDP. boardKind defaults to OrionMkII for backward compat — every
+    // pre-Brick2 caller (and every pre-Brick2 test) keeps the DDC2 wire shape.
+    internal static byte[] ComposeCmdRxBuffer(
+        uint seq,
+        byte numAdc,
+        ushort sampleRateKhz,
+        bool psEnabled,
+        HpsdrBoardKind boardKind = HpsdrBoardKind.OrionMkII)
     {
         var p = new byte[BufLen];
         WriteBeU32(p, 0, seq);
         p[4] = numAdc;
         p[5] = 0;
         p[6] = 0;
-        byte ddcEnable = (byte)(1 << G2RxDdc);
+        int rxDdc = RxBaseDdc(boardKind);
+        byte ddcEnable = (byte)(1 << rxDdc);
 
         if (psEnabled)
         {
-            ddcEnable |= 0x01;
-            p[17] = 0x00;
-            WriteBeU16(p, 18, 192);
-            p[22] = 24;
-            p[23] = numAdc;
-            WriteBeU16(p, 24, 192);
-            p[28] = 24;
-            p[1363] = 0x02;
+            // PS feedback layout is OrionMkII/Saturn-specific (DDC0+DDC1
+            // paired with bit 1363 sync). Single-ADC Hermes-class radios
+            // (Hermes/0x01, HermesII/0x02) don't have this hardware — leave
+            // the PS block alone. psEnabled should never be set true for
+            // these boards upstream, but if it ever is we'd rather silently
+            // no-op than scribble bytes the radio will reject.
+            if (boardKind != HpsdrBoardKind.Hermes &&
+                boardKind != HpsdrBoardKind.HermesII)
+            {
+                ddcEnable |= 0x01;
+                p[17] = 0x00;
+                WriteBeU16(p, 18, 192);
+                p[22] = 24;
+                p[23] = numAdc;
+                WriteBeU16(p, 24, 192);
+                p[28] = 24;
+                p[1363] = 0x02;
+            }
         }
 
         p[7] = ddcEnable;
-        int off = 17 + G2RxDdc * 6;
+        int off = 17 + rxDdc * 6;
         p[off + 0] = 0x00;
         WriteBeU16(p, off + 1, sampleRateKhz);
         p[off + 5] = 24;
@@ -648,7 +852,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         //   ComposeCmdRxBuffer also enables DDC0, configures DDC0/1 at
         //   192 kHz / 24-bit, and sets byte 1363 = 0x02 to sync DDC1→DDC0
         //   (pihpsdr new_protocol.c:1611-1630).
-        var p = ComposeCmdRxBuffer(_seqCmdRx++, _numAdc, (ushort)_sampleRateKhz, _psFeedbackEnabled);
+        var p = ComposeCmdRxBuffer(_seqCmdRx++, _numAdc, (ushort)_sampleRateKhz, _psFeedbackEnabled, _boardKind);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1025));
     }
 
@@ -734,16 +938,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // pihpsdr new_protocol.c:746-757 both set bit 1 whenever the radio
         // should key — covers both mic-MOX and TUN. Without this bit the
         // radio stays in RX regardless of drive / tune state.
-        p[4] = (byte)((_moxOn ? 0x02 : 0x00) | (run ? 0x01 : 0x00));
+        p[4] = (byte)((_moxOn || _tuneActive ? 0x02 : 0x00) | (run ? 0x01 : 0x00));
 
         // Frequency field is a PHASE word (general[37] bit 3 set) — radio
         // reads a 32-bit phase increment, not Hz. pihpsdr computes this as
         //   phase = freq_hz * 2^32 / 122_880_000
         // The G2 MkII puts the user-visible RX0 at DDC slot 2, so the phase
-        // goes to bytes 9 + 2*4 = 17..20. Bytes 9..16 (DDC0/1) are normally
-        // left as zero (non-PS path). TX DUC phase is written to 329..332.
+        // goes to bytes 9 + 2*4 = 17..20. Hermes-class (Brick2) puts RX0 at
+        // DDC slot 0, so the phase goes to bytes 9..12 (`9 + 0*4`). Bytes
+        // not used by the active RX slot stay zero on the non-PS path. TX
+        // DUC phase is written to 329..332 regardless of board.
         uint rxPhase = (uint)(_rxFreqHz * HzToPhase);
-        WriteBeU32(p, 9 + G2RxDdc * 4, rxPhase);
+        int rxDdc = RxBaseDdc(_boardKind);
+        WriteBeU32(p, 9 + rxDdc * 4, rxPhase);
         WriteBeU32(p, 329, rxPhase);
 
         // PureSignal — when armed, DDC0 + DDC1 phase words also need to
@@ -771,7 +978,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // a global override layered on top of the per-band OC TX mask could
         // hand an external amp a confused band-select state during a steady
         // tune carrier and damage the finals. Thetis behaves this way too.
-        byte ocBits = _moxOn ? _ocTxMask : _ocRxMask;
+        byte ocBits = (_moxOn || _tuneActive) ? _ocTxMask : _ocRxMask;
         p[1401] = (byte)((ocBits & 0x7F) << 1);
 
         // Mercury attenuator byte: bit 0 = RX0 preamp, bit 1 = RX1 preamp
@@ -790,7 +997,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // through the RX filters and DAC images radiate as out-of-band
         // harmonics. Alex1 additionally gets RX_GNDonTX to short the RX input
         // while keyed, protecting the ADC.
-        bool xmit = _moxOn;
+        bool xmit = _moxOn || _tuneActive;
         uint alexCommon = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: 1);
         uint alex0 = alexCommon | (xmit ? ALEX_TX_RELAY : 0u);
         uint alex1 = alexCommon | (xmit ? ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX : 0u);
@@ -1040,7 +1247,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // plain GC allocation is both simpler and correct.
         const int samplesPerPacket = DiscoverySamplesPerPacket;
         var samples = new double[samplesPerPacket * 2];
-        const double scale = 1.0 / 8388608.0;
+        // 1/2^23 normalises int24 to [-1,+1]; the per-board correction is 1.0
+        // for everything except Hermes@48 kHz (Brick2 quirk — see IqGainCorrection).
+        double scale = (1.0 / 8388608.0) * IqGainCorrection(_boardKind, _sampleRateKhz);
         for (int i = 0; i < samplesPerPacket; i++)
         {
             int off = 16 + i * 6;

@@ -106,6 +106,16 @@ function errorMessage(err: unknown): string {
   return String(err);
 }
 
+// Discovery surfaces rawBoardId as a hex string like "0x01" (Hermes) /
+// "0x0A" (OrionMkII). Parse it back to a byte so we can hand it to the
+// connect endpoint — issue #171.
+function parseRawBoardId(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const n = parseInt(raw, 16);
+  if (!Number.isFinite(n) || n < 0 || n > 0xff) return null;
+  return n;
+}
+
 // Post-connect side-effects shared by discover-click and manual-connect: push
 // persisted TX values so the radio doesn't key at its boot default, and resume
 // the AudioContext on the gesture so the user doesn't need a second Play click.
@@ -237,7 +247,15 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       setError(null);
       try {
         if (isP2) {
-          await apiConnectP2({ endpoint: ep, sampleRate: DEFAULT_SAMPLE_RATE });
+          // Pass the discovered board byte (e.g. 0x01 = Hermes for Brick2).
+          // Without this the server falls back to OrionMkII for every P2
+          // connection — issue #171.
+          const rawBoardId = parseRawBoardId(r.details?.rawBoardId);
+          await apiConnectP2({
+            endpoint: ep,
+            sampleRate: DEFAULT_SAMPLE_RATE,
+            boardId: rawBoardId ?? undefined,
+          });
           const fresh = await fetchState();
           applyState(fresh);
           hydrateTxFromState(fresh);

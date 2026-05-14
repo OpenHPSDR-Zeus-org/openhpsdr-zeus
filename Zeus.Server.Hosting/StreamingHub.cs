@@ -73,7 +73,59 @@ public sealed class StreamingHub
     private volatile byte _wisdomPhase;
     private volatile string _wisdomStatus = string.Empty;
 
-    public StreamingHub(ILogger<StreamingHub> log) { _log = log; }
+    // ---- Step 1 drop-counter probe for issue #299 -----------------------
+    // Each per-client send queue is bounded to MaxBacklogPerClient=4 with
+    // FullMode=DropOldest (lines 318-324). When the producer outruns
+    // SendLoopAsync — e.g. under PS-armed CPU load or OBS-streaming load —
+    // TryWrite silently discards the oldest frame. These counters surface
+    // that loss so we can confirm the diagnosis before changing behaviour.
+    //
+    // Buckets:
+    //   audio   — RX audio frames (the user-audible path)
+    //   display — panadapter + waterfall display frames
+    //   meter   — TX/RX/PS/PA-temp meter frames (5 Hz typical)
+    //   other   — wisdom / alert / VST / band-plan / mic-priming
+    //
+    // A System.Threading.Timer fires every 1 s and logs deltas when any
+    // bucket grew. Zero overhead when no drops are occurring. Single timer
+    // lives the lifetime of the hub (singleton); no Dispose needed.
+    private long _dropsAudio;
+    private long _dropsDisplay;
+    private long _dropsMeter;
+    private long _dropsOther;
+    private long _lastLoggedAudio;
+    private long _lastLoggedDisplay;
+    private long _lastLoggedMeter;
+    private long _lastLoggedOther;
+    private readonly System.Threading.Timer _dropLogTimer;
+
+    public StreamingHub(ILogger<StreamingHub> log)
+    {
+        _log = log;
+        _dropLogTimer = new System.Threading.Timer(_ => LogDropsIfAny(), null, 1000, 1000);
+    }
+
+    private void LogDropsIfAny()
+    {
+        long a = System.Threading.Interlocked.Read(ref _dropsAudio);
+        long d = System.Threading.Interlocked.Read(ref _dropsDisplay);
+        long m = System.Threading.Interlocked.Read(ref _dropsMeter);
+        long o = System.Threading.Interlocked.Read(ref _dropsOther);
+        long da = a - _lastLoggedAudio;
+        long dd = d - _lastLoggedDisplay;
+        long dm = m - _lastLoggedMeter;
+        long doo = o - _lastLoggedOther;
+        if (da > 0 || dd > 0 || dm > 0 || doo > 0)
+        {
+            _log.LogWarning(
+                "hub.drops audio={A} (+{Da}) display={D} (+{Dd}) meter={M} (+{Dm}) other={O} (+{Do})",
+                a, da, d, dd, m, dm, o, doo);
+            _lastLoggedAudio = a;
+            _lastLoggedDisplay = d;
+            _lastLoggedMeter = m;
+            _lastLoggedOther = o;
+        }
+    }
 
     public int ClientCount => _clients.Count;
 
@@ -164,7 +216,10 @@ public sealed class StreamingHub
         var payload = new byte[total];
         var writer = new FixedBufferWriter(payload, total);
         frame.Serialize(writer);
-        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsDisplay);
+        }
     }
 
     public void Broadcast(in AudioFrame frame)
@@ -175,7 +230,10 @@ public sealed class StreamingHub
         var payload = new byte[total];
         var writer = new FixedBufferWriter(payload, total);
         frame.Serialize(writer);
-        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsAudio);
+        }
     }
 
     public void Broadcast(in TxMetersFrame frame)
@@ -186,7 +244,10 @@ public sealed class StreamingHub
         var payload = new byte[total];
         var writer = new FixedBufferWriter(payload, total);
         frame.Serialize(writer);
-        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsMeter);
+        }
     }
 
     public void Broadcast(in TxMetersV2Frame frame)
@@ -197,7 +258,10 @@ public sealed class StreamingHub
         var payload = new byte[total];
         var writer = new FixedBufferWriter(payload, total);
         frame.Serialize(writer);
-        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsMeter);
+        }
     }
 
     public void Broadcast(in PsMetersFrame frame)
@@ -208,7 +272,10 @@ public sealed class StreamingHub
         var payload = new byte[total];
         var writer = new FixedBufferWriter(payload, total);
         frame.Serialize(writer);
-        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsMeter);
+        }
     }
 
     public void Broadcast(in RxMeterFrame frame)
@@ -219,7 +286,10 @@ public sealed class StreamingHub
         var payload = new byte[total];
         var writer = new FixedBufferWriter(payload, total);
         frame.Serialize(writer);
-        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsMeter);
+        }
     }
 
     public void Broadcast(in RxMetersV2Frame frame)
@@ -230,7 +300,10 @@ public sealed class StreamingHub
         var payload = new byte[total];
         var writer = new FixedBufferWriter(payload, total);
         frame.Serialize(writer);
-        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsMeter);
+        }
     }
 
     public void Broadcast(in PaTempFrame frame)
@@ -241,7 +314,10 @@ public sealed class StreamingHub
         var payload = new byte[total];
         var writer = new FixedBufferWriter(payload, total);
         frame.Serialize(writer);
-        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsMeter);
+        }
     }
 
     public void Broadcast(in WisdomStatusFrame frame)
@@ -250,7 +326,10 @@ public sealed class StreamingHub
         SetWisdomStatus(frame.Status);
         if (_clients.IsEmpty) return;
         var payload = BuildWisdomPayload(frame.Phase, frame.Status);
-        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
     }
 
     private static byte[] BuildWisdomPayload(Zeus.Contracts.WisdomPhase phase, string status)
@@ -276,7 +355,10 @@ public sealed class StreamingHub
         var payload = new byte[total];
         var writer = new FixedBufferWriter(payload, total);
         frame.Serialize(writer);
-        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
     }
 
     /// Broadcast a small VST plugin-host event tag (utf-8 text). Used by
@@ -292,7 +374,10 @@ public sealed class StreamingHub
         var buf = new byte[total];
         var writer = new FixedBufferWriter(buf, total);
         frame.Serialize(writer);
-        foreach (var client in _clients.Values) client.TryEnqueue(buf);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(buf)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
     }
 
     /// <summary>
@@ -306,7 +391,10 @@ public sealed class StreamingHub
         var payload = new byte[1 + regionBytes.Length];
         payload[0] = (byte)MsgType.BandPlanChanged;
         regionBytes.CopyTo(payload, 1);
-        foreach (var client in _clients.Values) client.TryEnqueue(payload);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
     }
 
     private sealed class ClientSession
@@ -328,7 +416,11 @@ public sealed class StreamingHub
             Id = id; _ws = ws; _log = log; _hub = hub;
         }
 
-        public void TryEnqueue(byte[] payload) => _queue.Writer.TryWrite(payload);
+        // Returns true if the frame was enqueued. False = the bounded queue's
+        // DropOldest policy silently evicted the oldest frame (or this one)
+        // — Broadcast(...) call sites attribute the drop to their kind via
+        // the hub-level counters for the #299 Step 1 probe.
+        public bool TryEnqueue(byte[] payload) => _queue.Writer.TryWrite(payload);
 
         public async Task RunAsync(CancellationToken ct)
         {

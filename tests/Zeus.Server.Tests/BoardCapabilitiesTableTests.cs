@@ -121,6 +121,33 @@ public class BoardCapabilitiesTableTests
     }
 
     [Fact]
+    public void HermesLite2_Exposes_Hl2OptionalToggles()
+    {
+        // Issue #279: HL2-only optional toggles (Band Volts PWM, future
+        // mi0bot HL2 fields) are gated by this flag so the frontend
+        // doesn't render the panel for boards that ignore them.
+        var caps = BoardCapabilitiesTable.For(HpsdrBoardKind.HermesLite2);
+        Assert.True(caps.HasHl2OptionalToggles);
+    }
+
+    [Theory]
+    [InlineData(HpsdrBoardKind.Metis)]
+    [InlineData(HpsdrBoardKind.Hermes)]
+    [InlineData(HpsdrBoardKind.HermesII)]
+    [InlineData(HpsdrBoardKind.Angelia)]
+    [InlineData(HpsdrBoardKind.Orion)]
+    [InlineData(HpsdrBoardKind.OrionMkII)]
+    [InlineData(HpsdrBoardKind.HermesC10)]
+    [InlineData(HpsdrBoardKind.Unknown)]
+    public void NonHl2_Boards_Do_Not_Expose_Hl2OptionalToggles(HpsdrBoardKind board)
+    {
+        // Pin the inverse: every non-HL2 board hides the HL2 panel.
+        // Issue #279.
+        var caps = BoardCapabilitiesTable.For(board);
+        Assert.False(caps.HasHl2OptionalToggles);
+    }
+
+    [Fact]
     public void Unknown_FallsBackTo_UnknownDefaults()
     {
         var caps = BoardCapabilitiesTable.For(HpsdrBoardKind.Unknown);

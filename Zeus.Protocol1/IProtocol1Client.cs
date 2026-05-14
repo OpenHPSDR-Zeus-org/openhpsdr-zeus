@@ -149,10 +149,19 @@ public interface IProtocol1Client : IDisposable
     void SetHasN2adr(bool hasN2adr);
 
     /// <summary>
-    /// Hermes-Lite 2 LT2208 DITHER bit. Defaults to <c>false</c> per doc 07 §2.1 Q#1;
-    /// flip on if a bench measurement shows it's needed for a particular HL2 gateware.
+    /// Hermes-Lite 2 Band Volts PWM enable. C3 bit 3 of the Config frame is
+    /// the same bit legacy HPSDR boards used for LT2208 ADC dither, which
+    /// HL2's AD9866 doesn't need. Per
+    /// <c>docs/references/protocol-1/hermes-lite2-protocol.md</c> line 39
+    /// (<c>| 0x00 | [11] | Fan or Band Volts PWM (0=Fan, 1=Band Volts) |</c>),
+    /// HL2 reuses this bit as the Band Volts PWM enable on the FAN
+    /// connector — when set, the gateware emits a per-band-tagged PWM
+    /// voltage so an external amplifier (e.g. Xiegu XPA125B) can
+    /// auto-band-switch. mi0bot's HL2-specific Thetis fork exposes this in
+    /// its UI as "Band Volts". Defaults to <c>false</c>; persisted per-
+    /// radio via <c>PreferredRadioStore</c> and honoured on HL2 only.
     /// </summary>
-    bool EnableHl2Dither { get; set; }
+    bool EnableHl2BandVolts { get; set; }
 
     /// <summary>
     /// Arm or disarm PureSignal predistortion on the wire. HL2-only effect:

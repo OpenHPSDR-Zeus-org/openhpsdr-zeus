@@ -19,6 +19,11 @@ export interface BoardCapabilities {
   hasAudioAmplifier: boolean;
   hasSteppedAttenuationRx2: boolean;
   supportsPathIllustrator: boolean;
+  /** True when the connected board exposes HL2-only firmware toggles
+   *  (currently Band Volts PWM output — see issue Kb2uka/openhpsdr-zeus#279
+   *  and hermes-lite2-protocol.md addr 0x00 bit 11). Gates the RADIO tab
+   *  in SettingsMenu. False on every non-HL2 board. */
+  hasHl2OptionalToggles: boolean;
   /** Rated maximum forward output power in watts. Used as the default top
    *  of the TX power meter axis so a fresh connect to any radio gives a
    *  meter that's neither cramped nor blank. HermesLite2 / Hermes = 10 W,
@@ -42,6 +47,7 @@ export const UNKNOWN_BOARD_CAPABILITIES: BoardCapabilities = {
   hasAudioAmplifier: false,
   hasSteppedAttenuationRx2: false,
   supportsPathIllustrator: false,
+  hasHl2OptionalToggles: false,
   maxPowerWatts: 100,
 };
 
@@ -67,6 +73,10 @@ export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
       typeof r.supportsPathIllustrator === 'boolean'
         ? r.supportsPathIllustrator
         : UNKNOWN_BOARD_CAPABILITIES.supportsPathIllustrator,
+    hasHl2OptionalToggles:
+      typeof r.hasHl2OptionalToggles === 'boolean'
+        ? r.hasHl2OptionalToggles
+        : UNKNOWN_BOARD_CAPABILITIES.hasHl2OptionalToggles,
     maxPowerWatts:
       typeof r.maxPowerWatts === 'number' && r.maxPowerWatts > 0
         ? r.maxPowerWatts

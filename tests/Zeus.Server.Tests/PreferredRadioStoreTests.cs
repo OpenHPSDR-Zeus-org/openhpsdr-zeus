@@ -129,4 +129,67 @@ public class PreferredRadioStoreTests : IDisposable
         store.Set(HpsdrBoardKind.OrionMkII, overrideDetection: true);
         Assert.Equal(OrionMkIIVariant.Anan8000DLE, store.GetOrionMkIIVariant());
     }
+
+    // ---- HL2 Band Volts PWM (issue #279) ----
+
+    [Fact]
+    public void Empty_Store_Returns_False_For_Hl2BandVolts()
+    {
+        // Shipping default: off. An untouched store must report false so
+        // the next outgoing HL2 Config frame keeps C3 bit 3 cleared.
+        using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        Assert.False(store.GetEnableHl2BandVolts());
+    }
+
+    [Fact]
+    public void Hl2BandVolts_Round_Trips()
+    {
+        using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        store.SetEnableHl2BandVolts(true);
+        Assert.True(store.GetEnableHl2BandVolts());
+        store.SetEnableHl2BandVolts(false);
+        Assert.False(store.GetEnableHl2BandVolts());
+    }
+
+    [Fact]
+    public void Hl2BandVolts_Persists_Across_Instances()
+    {
+        using (var s1 = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath))
+        {
+            s1.SetEnableHl2BandVolts(true);
+        }
+        using var s2 = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        Assert.True(s2.GetEnableHl2BandVolts());
+    }
+
+    [Fact]
+    public void Hl2BandVolts_Coexists_With_Board_And_Variant()
+    {
+        // Independent fields must persist on the single shared row; setting
+        // one must not stomp the others.
+        using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        store.Set(HpsdrBoardKind.HermesLite2);
+        store.SetOrionMkIIVariant(OrionMkIIVariant.G2_1K);
+        store.SetEnableHl2BandVolts(true);
+
+        Assert.Equal(HpsdrBoardKind.HermesLite2, store.Get());
+        Assert.Equal(OrionMkIIVariant.G2_1K, store.GetOrionMkIIVariant());
+        Assert.True(store.GetEnableHl2BandVolts());
+
+        // Re-setting the board (no variant arg) must not clobber Band Volts.
+        store.Set(HpsdrBoardKind.HermesLite2, overrideDetection: true);
+        Assert.True(store.GetEnableHl2BandVolts());
+        Assert.Equal(OrionMkIIVariant.G2_1K, store.GetOrionMkIIVariant());
+    }
+
+    [Fact]
+    public void Hl2BandVolts_Changed_Fires_On_Set()
+    {
+        using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        int fired = 0;
+        store.Changed += () => fired++;
+        store.SetEnableHl2BandVolts(true);
+        store.SetEnableHl2BandVolts(false);
+        Assert.Equal(2, fired);
+    }
 }

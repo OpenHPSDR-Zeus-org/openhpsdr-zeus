@@ -35,7 +35,7 @@ The GitHub Actions release workflow will automatically trigger when the tag is p
 
 ### 3. Monitor the Release Workflow
 
-1. Go to the [Actions tab](https://github.com/brianbruff/openhpsdr-zeus/actions)
+1. Go to the [Actions tab](https://github.com/Kb2uka/openhpsdr-zeus/actions)
 2. Watch the "Release" workflow
 3. The workflow will:
    - Build the frontend
@@ -51,7 +51,7 @@ The workflow takes approximately 15-30 minutes to complete (building on all plat
 
 Once the workflow completes:
 
-1. Go to the [Releases page](https://github.com/brianbruff/openhpsdr-zeus/releases)
+1. Go to the [Releases page](https://github.com/Kb2uka/openhpsdr-zeus/releases)
 2. Find your new release (e.g., "Zeus v0.1.0")
 3. Verify all artifacts are present:
    - `Zeus-X.Y.Z-win-x64-setup.exe`
@@ -128,7 +128,7 @@ installers/create-linux-package.sh $VERSION
 
 ### Create Release Manually
 
-1. Go to [Releases > Draft a new release](https://github.com/brianbruff/openhpsdr-zeus/releases/new)
+1. Go to [Releases > Draft a new release](https://github.com/Kb2uka/openhpsdr-zeus/releases/new)
 2. Tag: `v0.1.0` (create new tag)
 3. Title: `Zeus v0.1.0`
 4. Drag and drop all installer files
