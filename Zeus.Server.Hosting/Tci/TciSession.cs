@@ -560,6 +560,9 @@ public sealed class TciSession : IDisposable
                 case "tune":
                     HandleTune(args);
                     break;
+                case "tx_enable":
+                    HandleTxEnable(args);
+                    break;
                 case "drive":
                     HandleDrive(args);
                     break;
@@ -953,6 +956,28 @@ public sealed class TciSession : IDisposable
         {
             _tx.TrySetTun(on, out _);
             Send(TciProtocol.Command("tune", rx, on));
+        }
+    }
+
+    private void HandleTxEnable(string[] args)
+    {
+        // tx_enable:<rx>,<bool> or tx_enable:<rx> (query). Per the
+        // ExpertSDR2 convention (MSHV 2.76, JTDX-TCI, …) this is a
+        // courtesy echo, not an authoritative gate: clients send it after
+        // the handshake to announce TX intent and wait for the server to
+        // echo the same value back before they will issue trx:0,true;.
+        // Real MOX/TUN permission stays in _tx.TrySetMox / _tx.TrySetTun.
+        // Keep the query value in sync with TciHandshake.cs:107.
+        if (args.Length < 1) return;
+        if (!TciProtocol.TryParseInt(args[0], out int rx)) return;
+
+        if (args.Length == 1)
+        {
+            Send(TciProtocol.Command("tx_enable", rx, _tx.IsMoxOn || _tx.IsTunOn));
+        }
+        else if (args.Length >= 2 && TciProtocol.TryParseBool(args[1], out bool on))
+        {
+            Send(TciProtocol.Command("tx_enable", rx, on));
         }
     }
 
