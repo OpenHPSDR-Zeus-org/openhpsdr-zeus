@@ -198,6 +198,18 @@ public class DspPipelineService : BackgroundService,
     private int _rxMeterTickMod;
     private const int RxMeterTickModulus = 6;
 
+    // RX audio fade envelope across MOX edges. WDSP's RXA SetChannelState
+    // (dmp=1 on TX-engage) damps the outgoing side internally, but the resume
+    // edge (dmp=0 at MOX-off) and the buffer-drain endpoint in the browser
+    // audio-client both produce audible clicks under some setups (audio
+    // interfaces, USB-DAC headphones). Smoothing here is cheap insurance: the
+    // first ~5 ms after each edge gets a linear ramp applied before the
+    // AudioFrame is broadcast. Both flags are pipeline-thread-only after the
+    // initial volatile read in OnRadioMoxChanged sets them.
+    private const int RxFadeSamples = 240;          // 5 ms @ 48 kHz
+    private volatile bool _rxFadeOutPending;        // first RX block after MOX↑
+    private volatile bool _rxFadeInPending;         // first RX block after MOX↓
+
     // ---- iter5 single-DSP-thread scaffolding -----------------------------
     // The pipeline now owns its hot path via IRxPacketSink: when a radio
     // connects we AttachRxSink to the protocol client and every IQ/PS-feedback
@@ -960,6 +972,12 @@ public class DspPipelineService : BackgroundService,
     private void OnRadioMoxChanged(bool on)
     {
         _keyed = on;
+        // Arm a one-shot fade envelope on the first audio block Tick reads
+        // after this edge. Rising edge → ramp current audio out so the post-
+        // MOX silent stretch isn't a hard cut. Falling edge → ramp the resume
+        // audio in so the dmp=0 RXA up doesn't pop through to the browser.
+        if (on) _rxFadeOutPending = true;
+        else _rxFadeInPending = true;
         _p2Client?.SetMox(on);
         // Falling edge: pick up any PS knob changes that OnRadioStateChanged
         // deferred while we were keyed (HwPeak / Ptol / Advanced / Control).
@@ -1400,6 +1418,35 @@ public class DspPipelineService : BackgroundService,
         int audioSampleCount = engine.ReadAudio(channel, audioBuf);
         if (audioSampleCount > 0)
         {
+            // MOX-edge fade envelope. Ramps the first ~5 ms of this block
+            // either down (rising edge: last block before TX silence) or up
+            // (falling edge: first block of RX resume). Each flag is a
+            // one-shot — cleared after applying so steady-state audio is
+            // untouched. See _rxFadeOutPending / _rxFadeInPending declarations
+            // for the click pathology this addresses.
+            if (_rxFadeOutPending)
+            {
+                int n = Math.Min(RxFadeSamples, audioSampleCount);
+                for (int i = 0; i < n; i++)
+                {
+                    float ramp = 1f - (float)(i + 1) / n;
+                    audioBuf[i] *= ramp;
+                }
+                if (audioSampleCount > n)
+                    Array.Clear(audioBuf, n, audioSampleCount - n);
+                _rxFadeOutPending = false;
+            }
+            else if (_rxFadeInPending)
+            {
+                int n = Math.Min(RxFadeSamples, audioSampleCount);
+                for (int i = 0; i < n; i++)
+                {
+                    float ramp = (float)(i + 1) / n;
+                    audioBuf[i] *= ramp;
+                }
+                _rxFadeInPending = false;
+            }
+
             // VST plugin host is TX-only by design (operator decision
             // 2026-04-30). The chain is configured for the TX bandwidth,
             // tuned for voice processing, and shares one set of plugin
