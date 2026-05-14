@@ -153,7 +153,7 @@ public class TciStreamPayloadTests
 
         Assert.Equal(64, frame.Length); // header only — no payload
         Assert.Equal((uint)TciStreamType.TxChrono, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(24)));
-        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(20))); // length=0
+        Assert.Equal(4096u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(20))); // 2048 samples × 2 channels
     }
 
     [Fact]
@@ -188,12 +188,12 @@ public class TciStreamPayloadTests
     }
 
     [Fact]
-    public void TryParseHeader_AcceptsTxChronoFrameZeroLength()
+    public void TryParseHeader_AcceptsTxChronoFrame()
     {
         var chrono = TciStreamPayload.BuildTxChrono(receiver: 0, sampleRate: 48000);
 
         Assert.True(TciStreamPayload.TryParseHeader(chrono, out var hdr));
         Assert.Equal(TciStreamType.TxChrono, hdr.StreamType);
-        Assert.Equal(0u, hdr.Length);
+        Assert.Equal(4096u, hdr.Length);
     }
 }
