@@ -42,6 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+import { useEffect, useRef, useState } from 'react';
 import type { Contact } from './data';
 
 type AzimuthMapProps = {
@@ -52,8 +53,26 @@ type AzimuthMapProps = {
 const RINGS_KM = [2500, 5000, 10000, 15000, 20000];
 const MAX_KM = 20000;
 const BEARING_LABELS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+const MIN_MAP_PX = 80;
 
 export function AzimuthMap({ myGrid = 'EM48', target }: AzimuthMapProps) {
+  const mapAreaRef = useRef<HTMLDivElement>(null);
+  const [mapSize, setMapSize] = useState(0);
+
+  useEffect(() => {
+    const el = mapAreaRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      setMapSize(Math.floor(Math.min(width, height)));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const showMap = mapSize >= MIN_MAP_PX;
   const size = 280;
   const cx = size / 2;
   const cy = size / 2;
@@ -61,7 +80,14 @@ export function AzimuthMap({ myGrid = 'EM48', target }: AzimuthMapProps) {
 
   return (
     <div className="az-map">
-      <svg viewBox={`0 0 ${size} ${size}`} width="100%" height="100%" preserveAspectRatio="xMidYMid meet">
+      <div className="az-map-area" ref={mapAreaRef}>
+        {showMap && (
+          <svg
+            viewBox={`0 0 ${size} ${size}`}
+            width={mapSize}
+            height={mapSize}
+            preserveAspectRatio="xMidYMid meet"
+          >
         <defs>
           <radialGradient id="az-grad" cx="50%" cy="50%" r="50%">
             <stop offset="0%" stopColor="var(--bg-2)" stopOpacity="1" />
@@ -144,7 +170,9 @@ export function AzimuthMap({ myGrid = 'EM48', target }: AzimuthMapProps) {
             </g>
           );
         })()}
-      </svg>
+          </svg>
+        )}
+      </div>
       <div className="az-stats">
         <div>
           <span className="label-xs">Home</span>
