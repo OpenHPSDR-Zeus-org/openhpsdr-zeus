@@ -101,6 +101,7 @@ export interface WorkspaceCtx {
   onCallsignSubmit: (e: FormEvent<HTMLFormElement>) => void;
   submitBeam: (e: FormEvent<HTMLFormElement>) => void;
   handleLogQso: () => void;
+  handleClearQrz: () => void;
 
   // DSP
   dspActive: boolean;

@@ -384,6 +384,11 @@ export default function App() {
     });
   }, [contact, qrzLookup, mode, vfoHz, addLogEntry]);
 
+  const handleClearQrz = useCallback(() => {
+    useQrzStore.getState().clearLookup();
+    setCallsign('');
+  }, [setCallsign]);
+
   const [wpm, setWpm] = useState(22);
   const nrState = useConnectionStore((s) => s.nr);
   const dspActive =
@@ -610,6 +615,7 @@ export default function App() {
     onCallsignSubmit,
     submitBeam,
     handleLogQso,
+    handleClearQrz,
     dspActive,
     wpm,
     setWpm,
@@ -625,7 +631,7 @@ export default function App() {
     // heroTitle and logbookActions are ReactNodes (new objects each render);
     // their underlying primitive deps are already above, so omit them here.
     dspActive, wpm, logbookTitle,
-    handleLogQso, runQrzLookup,
+    handleLogQso, handleClearQrz, runQrzLookup,
   ]);
 
   // Mobile viewport short-circuit. All initialization hooks above (realtime,

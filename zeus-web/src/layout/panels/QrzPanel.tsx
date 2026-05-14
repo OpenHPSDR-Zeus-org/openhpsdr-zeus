@@ -53,6 +53,7 @@ export function QrzPanel() {
     enriching,
     qrzLookupError,
     handleLogQso,
+    handleClearQrz,
     qrzActive,
     csInputRef,
     onCallsignSubmit,
@@ -80,6 +81,8 @@ export function QrzPanel() {
           lookupError={qrzLookupError}
           onLogQso={handleLogQso}
           canLogQso={qrzActive && !!contact}
+          onClear={handleClearQrz}
+          canClear={!!contact || !!qrzLookupError || callsign.length > 0}
         />
       </div>
     </div>
