@@ -147,7 +147,12 @@ public sealed class TxAudioIngest : IDisposable
 
     private readonly Action<ReadOnlyMemory<float>>? _forwardP2;
 
-    internal void SetWdspConsumedCallback(Action<int>? cb) { _onWdspConsumed = cb; }
+    // Cross-thread handoff: written from the TCI timer thread (Start/Stop of
+    // the TX_CHRONO service), read every audio block from the WDSP worker.
+    // x86/TSO hides the missing fence, but Apple-Silicon / Pi-class ARM does
+    // not. Mirror the Interlocked.Exchange pattern used for _txChronoTimer.
+    internal void SetWdspConsumedCallback(Action<int>? cb)
+        => Interlocked.Exchange(ref _onWdspConsumed, cb);
     public long TotalMicSamples { get { lock (_sync) return _totalMicSamples; } }
     public long TotalTxBlocks { get { lock (_sync) return _totalTxBlocks; } }
     public long DroppedFrames { get { lock (_sync) return _droppedFrames; } }
@@ -267,7 +272,8 @@ public sealed class TxAudioIngest : IDisposable
                         _forwardP2?.Invoke(new ReadOnlyMemory<float>(_scratchIq, 0, 2 * produced));
                     }
                     _totalTxBlocks++;
-                    _onWdspConsumed?.Invoke(blockSize);
+                    var onConsumed = Volatile.Read(ref _onWdspConsumed);
+                    onConsumed?.Invoke(blockSize);
 
                     // Accumulate peaks for the 1 Hz diagnostic log.
                     float micPeak = 0f;
