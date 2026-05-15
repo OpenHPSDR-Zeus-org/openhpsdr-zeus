@@ -21,14 +21,14 @@
 
 .app {
   display: grid;
-  grid-template-columns: 60px 1fr;
-  grid-template-rows: 56px 1fr 44px;
+  grid-template-columns: 56px 1fr;
+  grid-template-rows: 60px 1fr 38px;
   height: 100vh;
   width: 100vw;
   background: var(--bg-0);
   color: var(--fg-0);
-  padding: 6px;
-  gap: 6px;
+  padding: 0;
+  gap: 0;
 }
 
 .app > .left-layout-bar   { grid-column: 1; grid-row: 1 / -1; }
@@ -44,22 +44,30 @@
   display: flex;
   flex-direction: column;
   min-height: 0;
+  /* Outer frame stays black so the strip between the chrome (header /
+     sidebar / footer at --bg-0) and the inner workspace surface reads as
+     continuous chrome. The inner .all-panels-workspace owns the grey
+     canvas the panels sit on. */
+  background: var(--bg-0);
+  padding: 6px;
+  gap: 6px;
 }
 .workspace-area > .alert-banner { flex: 0 0 auto; }
 .workspace-area > .flex-workspace,
 .workspace-area > .settings-view { flex: 1; min-height: 0; }
 
-/* ===== Left layout bar — issue #241 ===== */
+/* ===== Left layout bar — issue #241 (v3 Lifted Dark: flat near-black) ===== */
 .left-layout-bar {
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 6px 4px;
-  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
-  border: 1px solid var(--panel-edge);
-  border-radius: var(--r-lg);
-  box-shadow: var(--panel-shadow);
+  gap: 2px;
+  padding: 8px 4px;
+  background: var(--bg-0);
+  border: 0;
+  border-right: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: none;
   min-height: 0;
   overflow: hidden;
 }
@@ -83,51 +91,9 @@
   --lb-tint-g: 158;
   --lb-tint-b: 255;
 }
-.left-layout-bar::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  background: linear-gradient(
-    to bottom,
-    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.55) 0%,
-    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.55) 50%,
-    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.00) 70%,
-    rgba(var(--lb-wash-r), var(--lb-wash-g), var(--lb-wash-b), 0.00) 100%
-  );
-}
-.left-layout-bar::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  z-index: 0;
-  background:
-    radial-gradient(circle,
-      rgba(var(--lb-tint-r), var(--lb-tint-g), var(--lb-tint-b), 0.22) 1px,
-      transparent 1.5px)
-    0 0 / 8px 8px;
-  /* Dots only paint in the 50–70% band: fully transparent above 50%, fade
-     in to ~60% peak, fully transparent again by 70% so the bar's bottom
-     half stays clean. */
-  -webkit-mask-image: linear-gradient(
-    to bottom,
-    transparent 0%,
-    transparent 50%,
-    black 60%,
-    transparent 70%,
-    transparent 100%
-  );
-          mask-image: linear-gradient(
-    to bottom,
-    transparent 0%,
-    transparent 50%,
-    black 60%,
-    transparent 70%,
-    transparent 100%
-  );
-}
+/* v3 Lifted Dark: no decorative wash on the sidebar — flat near-black. */
+.left-layout-bar::before,
+.left-layout-bar::after { content: none; }
 
 /* Direct children sit above the accent layer so layout buttons / actions
    stay fully readable and clickable. */
@@ -159,23 +125,41 @@
   align-items: center;
   justify-content: center;
   gap: 3px;
-  padding: 6px 4px 5px;
-  color: var(--fg-1);
-  background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
-  border: 1px solid var(--btn-edge);
+  padding: 6px 2px 5px;
+  color: var(--fg-2);
+  background: transparent;
+  border: 1px solid transparent;
   border-radius: var(--r-sm);
-  box-shadow: inset 0 1px 0 var(--btn-hl);
+  box-shadow: none;
   cursor: pointer;
   text-align: center;
   min-height: 50px;
+  position: relative;
   transition: background var(--dur-fast), border-color var(--dur-fast),
-    color var(--dur-fast), box-shadow var(--dur-fast);
+    color var(--dur-fast);
 }
-.left-layout-bar .lb-tab:hover { filter: brightness(1.12); }
+.left-layout-bar .lb-tab:hover {
+  background: var(--bg-2);
+  color: var(--fg-0);
+  filter: none;
+}
 .left-layout-bar .lb-item.active .lb-tab {
-  border-color: var(--accent);
+  background: var(--bg-2);
+  border-color: var(--line-strong);
   color: var(--accent);
-  box-shadow: inset 0 1px 0 var(--btn-hl), 0 0 8px var(--accent-soft);
+  box-shadow: none;
+}
+.left-layout-bar .lb-item.active .lb-tab::before {
+  content: "";
+  position: absolute;
+  left: -5px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 2px;
+  height: 60%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  border-radius: 1px;
 }
 .left-layout-bar .lb-tab-icon {
   font-size: 18px;
@@ -450,13 +434,14 @@
 .topbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 10px;
-  background: linear-gradient(90deg, var(--panel-top), var(--panel-bot));
-  border: 1px solid var(--panel-edge);
-  border-radius: var(--r-lg);
-  box-shadow: var(--panel-shadow);
-  height: 56px;
+  gap: 18px;
+  padding: 0 14px;
+  background: var(--bg-0);
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: none;
+  height: 60px;
   overflow: hidden;
 }
 .topbar .topbar-controls {
@@ -492,10 +477,11 @@
   transform: none;
 }
 .topbar .btn.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-color: rgba(74,158,255,0.35);
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
   text-shadow: none;
+  box-shadow: 0 0 0 1px rgba(46,142,255,0.5), 0 0 14px rgba(46,142,255,0.35);
 }
 .topbar .btn.ghost { background: transparent; }
 .topbar .btn.ghost:hover { background: rgba(255,255,255,0.06); }
@@ -521,10 +507,10 @@
 .brand-text { display: flex; flex-direction: column; }
 .brand-name {
   font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
+  font-weight: 600;
+  letter-spacing: -0.01em;
   color: var(--fg-0);
-  text-shadow: 0 1px 0 rgba(0,0,0,0.5);
+  text-shadow: none;
 }
 .brand-sub {
   font-size: 9px;
@@ -533,31 +519,28 @@
 }
 .topbar-divider {
   width: 1px; height: 32px;
-  background: rgba(0,0,0,0.4);
-  box-shadow: 1px 0 0 rgba(255,255,255,0.06);
+  background: var(--line);
+  box-shadow: none;
 }
 
 /* VFO tab — the big embossed freq readout */
 .vfo-group { display: flex; gap: 4px; align-items: stretch; }
 .vfo-tab {
-  padding: 2px 14px;
-  background: linear-gradient(180deg, #0a1220 0%, #14243e 100%);
-  border: 1px solid #000;
+  padding: 4px 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-md);
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
   min-width: 120px;
-  box-shadow:
-    inset 0 1px 2px rgba(0,0,0,0.6),
-    inset 0 -1px 0 rgba(255,255,255,0.04),
-    0 1px 0 rgba(255,255,255,0.05);
+  box-shadow: none;
   cursor: pointer;
   transition: all var(--dur-fast);
 }
-.vfo-tab:hover { border-color: var(--accent); }
-.vfo-tab.active { border-color: var(--accent); box-shadow: inset 0 1px 2px rgba(0,0,0,0.6), 0 0 8px var(--accent-soft); }
+.vfo-tab:hover { border-color: var(--accent-line); }
+.vfo-tab.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-line), 0 0 14px var(--accent-soft); }
 .vfo-tab.active .vfo-freq { color: var(--accent); }
 .vfo-label { font-size: 9px; color: var(--fg-2); font-weight: 600; letter-spacing: 0.06em; }
 .vfo-freq {
@@ -597,10 +580,10 @@
   display: flex;
   gap: 12px;
   padding: 4px 10px;
-  background: linear-gradient(90deg, var(--panel-top), var(--panel-bot));
-  border: 1px solid var(--panel-edge);
+  background: var(--bg-1);
+  border: 1px solid var(--line);
   border-radius: var(--r-lg);
-  box-shadow: var(--panel-shadow);
+  box-shadow: none;
   height: 68px;
   align-items: center;
   overflow: hidden;
@@ -664,73 +647,80 @@
   min-height: 280px;
 }
 
-/* ===== Buttons — chunky dark gradient chrome (matches reference) ===== */
+/* ===== Buttons — v3 Lifted Dark: flat, blue ON state with glow ===== */
 .btn {
-  --btn-top-c: var(--btn-top);
-  --btn-bot-c: var(--btn-bot);
+  --btn-top-c: var(--bg-2);
+  --btn-bot-c: var(--bg-2);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 4px;
-  /* Fluid sizing: stays ~current on MBA/QHD/ultrawide, bumps on 4K+ below.
-     em-padding so the box tracks font-size automatically. */
   padding: 0.5em 0.85em;
   font-size: clamp(11px, 0.15vw + 10px, 13.5px);
-  font-weight: 700;
-  letter-spacing: 0.03em;
-  color: var(--btn-text);
-  background: linear-gradient(180deg, var(--btn-top-c), var(--btn-bot-c));
-  border: 1px solid var(--btn-edge);
-  border-radius: var(--r-sm);
-  box-shadow:
-    inset 0 1px 0 var(--btn-hl),
-    inset 0 -1px 0 rgba(0,0,0,0.3),
-    0 1px 0 rgba(0,0,0,0.5);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--fg-1);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-md);
+  box-shadow: none;
   cursor: pointer;
-  transition: filter var(--dur-fast), background var(--dur-fast);
-  text-shadow: 0 1px 0 rgba(0,0,0,0.6);
+  transition: background var(--dur-fast), color var(--dur-fast),
+    border-color var(--dur-fast), box-shadow var(--dur-fast);
+  text-shadow: none;
   white-space: nowrap;
   user-select: none;
 }
 .btn:hover {
-  filter: brightness(1.15);
+  background: var(--bg-2);
+  color: var(--fg-0);
+  filter: none;
 }
 .btn:active,
 .btn.pressed {
-  background: linear-gradient(0deg, var(--btn-top-c), var(--btn-bot-c));
-  box-shadow:
-    inset 0 2px 3px rgba(0,0,0,0.5),
-    inset 0 -1px 0 rgba(255,255,255,0.04);
-  transform: translateY(1px);
+  background: var(--bg-3);
+  box-shadow: none;
+  transform: none;
 }
 .btn.active {
-  --btn-top-c: var(--btn-active-top);
-  --btn-bot-c: var(--btn-active-bot);
+  background: var(--accent);
   color: var(--btn-active-text);
-  text-shadow: 0 1px 0 rgba(0,0,0,0.6), 0 0 8px rgba(74,158,255,0.4);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px rgba(46,142,255,0.5), 0 0 14px rgba(46,142,255,0.35);
+  text-shadow: none;
 }
 .btn.sm { padding: 0.3em 0.7em;  font-size: clamp(10px, 0.1vw + 9.5px, 12px); }
 .btn.lg { padding: 0.55em 1em;   font-size: clamp(13px, 0.2vw + 10px, 15px); }
 .btn.ghost {
-  background: linear-gradient(180deg, #2e2f33, #1c1d20);
+  background: var(--bg-2);
+  border-color: var(--line-strong);
   color: var(--fg-1);
 }
+.btn.ghost:hover { background: var(--bg-3); color: var(--fg-0); }
 .btn.tx {
-  --btn-top-c: #7c1510;
-  --btn-bot-c: #3a0a07;
-  color: #ffd4d0;
-  text-shadow: 0 0 6px rgba(230,58,43,0.8);
+  background: transparent;
+  border-color: var(--line-strong);
+  color: var(--tx);
+  text-shadow: none;
+}
+.btn.tx:hover {
+  background: var(--tx-soft);
+  border-color: var(--tx);
 }
 .btn.tx.active {
-  --btn-top-c: #e63a2b;
-  --btn-bot-c: #8a1a10;
+  background: var(--tx);
+  border-color: var(--tx);
   color: #fff;
+  box-shadow: 0 0 0 1px rgba(255,74,89,0.5), 0 0 14px rgba(255,74,89,0.35);
 }
 .btn.orange {
-  --btn-top-c: var(--orange);
-  --btn-bot-c: #b45410;
+  background: var(--orange);
+  border-color: var(--orange);
   color: #fff;
-  text-shadow: 0 1px 0 rgba(0,0,0,0.4);
+  text-shadow: none;
+}
+.btn.orange:hover {
+  filter: brightness(1.1);
 }
 
 /* 4K-and-above bump. 34" ultrawide (3440 CSS px) stays under this threshold
@@ -787,42 +777,64 @@
 }
 .mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 
-/* ===== Panel chrome (Dockable wrapper) ===== */
+/* ===== Panel chrome (Dockable wrapper) — v3 Lifted Dark: flat ===== */
 .panel {
   display: flex;
   flex-direction: column;
   background: var(--bg-1);
-  border: 1px solid var(--panel-border);
-  border-radius: var(--r-md);
-  box-shadow:
-    inset 0 1px 0 var(--panel-hl-top),
-    0 1px 0 rgba(0,0,0,0.6),
-    0 2px 6px rgba(0,0,0,0.4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: none;
   overflow: hidden;
   min-height: 0;
 }
+/* Panel head matches the .workspace-tile-header "brass plate" treatment:
+   subtle vertical gradient, gold leading rail (synthesized via ::before),
+   specular top highlight, warm hairline at the bottom. */
 .panel-head {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  background: linear-gradient(90deg, var(--panel-head-top), var(--panel-head-bot));
-  border-bottom: 1px solid var(--panel-border);
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
-  min-height: 28px;
+  gap: 9px;
+  padding: 9px 12px 9px 16px;
+  background: linear-gradient(180deg, #1c1c21 0%, #141418 100%);
+  border-bottom: 1px solid rgba(255, 177, 60, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.35);
+  min-height: 32px;
   flex-shrink: 0;
+}
+.panel-head::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--power);
+  box-shadow:
+    0 0 6px rgba(255, 177, 60, 0.55),
+    0 0 14px rgba(255, 177, 60, 0.22);
 }
 .panel-head .title {
   font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--fg-0);
-  text-shadow: 0 1px 0 rgba(0,0,0,0.5);
+  text-shadow: 0 0 8px rgba(255, 177, 60, 0.10);
   flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+/* v3 blue "section dot" leading the title — applied wherever a .panel-head
+   has a .dot, but also synthesized via ::before when absent. */
+.panel-head .dot {
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
 }
 .panel-body {
   flex: 1;
@@ -1168,40 +1180,54 @@
   height: 100%;
   min-height: 0;
 }
+/* v3 Lifted Dark — VFO card with pronounced blue aurora behind the digits.
+   Three radial gradients layered over the panel base + a blurred ::before
+   ellipse give the digits a soft bloom of electric blue. */
 .freq-display {
-  padding: 16px 20px;
-  background: linear-gradient(180deg, #0a1220, #14243e);
-  border: 1px solid #000;
-  border-radius: var(--r-md);
-  box-shadow: inset 0 1px 3px rgba(0,0,0,0.7);
+  padding: 28px 20px 20px;
+  background:
+    radial-gradient(ellipse 55% 95% at 50% 55%, rgba(46,142,255,0.22), transparent 70%),
+    radial-gradient(ellipse 80% 60% at 50% 40%, rgba(46,142,255,0.10), transparent 75%),
+    radial-gradient(ellipse 100% 60% at 50% 110%, rgba(46,142,255,0.06), transparent 70%),
+    var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  box-shadow: none;
   flex: 1 1 auto;
-  /* Always tall enough for the 38px-floor digits + the top/bottom hint
-     rows + padding. If a flexlayout split squeezes the panel below this,
-     the parent .freq-panel's overflow: auto produces a scrollbar rather
-     than clipping the digits. */
   min-height: 91px;
   display: flex;
   flex-direction: column;
   justify-content: center;
   container-type: size;
+  position: relative;
+  overflow: hidden;
 }
+.freq-display::before {
+  content: "";
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  width: 60%; height: 80%;
+  background: radial-gradient(ellipse at center, rgba(78,166,255,0.18), transparent 60%);
+  filter: blur(20px);
+  pointer-events: none;
+}
+.freq-display > * { position: relative; z-index: 1; }
 .freq-top, .freq-bot { display: flex; align-items: center; font-size: 10px; }
 .freq-digits {
   display: flex;
   align-items: baseline;
-  font-family: var(--font-num);
-  font-weight: 700;
-  /* Scales with container WIDTH — digits flow horizontally so width is
-     the axis that decides fit. Floor at 38px keeps the docked-tab
-     baseline; ceiling caps the look on very wide layouts. */
+  font-family: var(--font-sans);
+  /* v3: thin 200-weight Inter, white digits, subtle blue text-shadow */
+  font-weight: 200;
   font-size: clamp(38px, 9cqw, 140px);
-  letter-spacing: 0.01em;
+  letter-spacing: -0.025em;
   color: var(--fg-0);
   font-variant-numeric: tabular-nums;
   line-height: 1.05;
   margin: 4px 0;
   justify-content: center;
-  text-shadow: 0 0 10px var(--accent-soft);
+  text-shadow: 0 0 12px rgba(78,166,255,0.25);
 }
 .freq-digits .digit {
   background: none; border: none; color: inherit; font: inherit;
@@ -1213,8 +1239,8 @@
   color: var(--accent);
   text-shadow: 0 0 10px var(--accent);
 }
-.freq-digits .digit.leading { color: var(--fg-3); }
-.freq-digits .sep { color: var(--fg-2); padding: 0 3px; }
+.freq-digits .digit.leading { color: var(--fg-4); }
+.freq-digits .sep { color: var(--fg-1); padding: 0 1px; font-weight: 200; }
 .vfo-swap { display: flex; align-items: center; gap: 6px; }
 
 /* ===== Meter ===== */
@@ -1319,6 +1345,12 @@
 /* ===== QRZ card — gradient panel w/ portrait + rows ===== */
 .qrz-empty { padding: 20px; display: flex; align-items: center; justify-content: center; text-align: center; min-height: 140px; color: var(--fg-2); }
 .qrz-card { padding: 8px; display: flex; flex-direction: column; gap: 6px; background: var(--bg-1); }
+/* qrz-card-main: two-column body — operator info on the left, big portrait
+   on the right. Portrait spans the full height of the info column so it
+   reads as the dominant visual (matches the v2 QRZ panel rework). */
+.qrz-card-main { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: stretch; }
+.qrz-info-col { display: flex; flex-direction: column; min-width: 0; }
+/* Legacy alias — kept for any consumer that still renders the old shape. */
 .qrz-header { display: flex; gap: 10px; align-items: stretch; }
 .qrz-id { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 2px; }
 .qrz-call { font-size: 20px; font-weight: 700; color: var(--accent); text-shadow: 0 0 10px rgba(74,158,255,0.4); letter-spacing: 0.04em; font-family: var(--font-mono, 'Archivo Narrow', sans-serif); line-height: 1; }
@@ -1327,17 +1359,21 @@
 .qrz-tags { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
 .qrz-tag {
   font-size: 8px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
-  padding: 1px 5px;
-  background: linear-gradient(180deg, rgba(255,255,255,0.08), rgba(0,0,0,0.2));
-  border: 1px solid rgba(74,158,255,0.3);
-  color: var(--fg-1);
+  padding: 2px 6px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs);
+  color: var(--accent-bright);
 }
 .qrz-section-label {
   font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
   color: var(--fg-2); padding-bottom: 2px; border-bottom: 1px solid rgba(74,158,255,0.2);
   margin-top: 4px;
 }
-.qrz-grid-rows { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 14px; }
+/* Single-column stack — the right column now hosts the 2× portrait, so
+   the data rows take the full info-column width. Each .qrz-row is its own
+   flex container that handles the k / v justify-between layout. */
+.qrz-grid-rows { display: flex; flex-direction: column; gap: 0; }
 .qrz-grid-rows .qrz-row { border-bottom: 1px dotted rgba(255,255,255,0.06); }
 .qrz-footer {
   display: flex; align-items: center; padding-top: 6px; margin-top: 2px;
@@ -1347,15 +1383,26 @@
   flex-shrink: 0;
   width: 72px; height: 72px;
   position: relative;
-  background: linear-gradient(180deg, #2a3a55, #101a2e);
-  border: 1px solid #000;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-sm);
   overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+  box-shadow: none;
 }
+/* 2× portrait variant — anchored top-right inside .qrz-card-main, fills
+   the full height of the info column so the operator photo reads as the
+   dominant visual instead of a 72 px thumbnail. align-self: stretch makes
+   the grid row supply the height; aspect-ratio keeps it square. */
+.qrz-portrait.qrz-portrait--large {
+  width: 150px;
+  height: auto;
+  aspect-ratio: 1;
+  align-self: stretch;
+}
+.qrz-portrait.qrz-portrait--large .qrz-portrait-initials { font-size: 56px; }
 .qrz-portrait-bg { position: absolute; inset: 0; background: repeating-linear-gradient(45deg, rgba(255,255,255,0.03) 0 4px, transparent 4px 8px); }
 .qrz-grid {
   position: absolute; inset: 0;
@@ -1371,30 +1418,39 @@
 @keyframes qrz-scan { from { transform: translateY(-100%); } to { transform: translateY(100%); } }
 
 .qrz-rows { flex: 1; display: grid; grid-template-columns: 1fr; gap: 2px; min-width: 0; }
+/* Fixed-width label column + value column that hugs the label. Previously
+   used justify-content: space-between which pushed the value all the way
+   to the right edge of the info column, leaving it visually touching the
+   portrait now that the portrait sits in the right column. */
 .qrz-row {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: 88px 1fr;
   align-items: baseline;
-  gap: 8px;
+  gap: 12px;
   padding: 2px 0;
   border-bottom: 1px dotted rgba(255,255,255,0.08);
 }
 .qrz-row .k { color: var(--fg-1); font-size: 11px; font-weight: 600; }
-.qrz-row .v { color: var(--fg-0); font-size: 12px; font-weight: 700; text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.qrz-row .v { color: var(--fg-0); font-size: 12px; font-weight: 700; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qrz-row .v.accent { color: var(--accent); }
 
 .cs-input {
   width: 90px;
-  background: #0a1220;
-  border: 1px solid #000;
-  border-radius: 0;
-  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-md);
+  padding: 6px 10px;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--fg-0);
-  letter-spacing: 0.06em;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.6);
+  box-shadow: none;
+}
+.cs-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(46,142,255,0.15);
 }
 .cs-input:focus { outline: none; border-color: var(--accent); box-shadow: inset 0 1px 2px rgba(0,0,0,0.6), 0 0 0 1px var(--accent-soft); }
 
@@ -1481,27 +1537,27 @@
 .slider-val { font-size: 11px; font-weight: 700; color: var(--fg-0); }
 .slider-track {
   position: relative;
-  height: 8px;
-  background: #000;
-  border: 1px solid rgba(0,0,0,0.6);
-  border-radius: 0;
+  height: 4px;
+  background: var(--line);
+  border: 0;
+  border-radius: 4px;
   cursor: pointer;
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.7);
+  box-shadow: none;
 }
 .slider-fill {
   position: absolute; inset: 0 auto 0 0;
-  background: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 70%, white));
-  border-radius: 0;
+  background: var(--accent);
+  border-radius: 4px;
 }
 .slider-thumb {
   position: absolute;
   top: 50%;
   transform: translate(-50%, -50%);
-  width: 14px; height: 16px;
-  background: linear-gradient(180deg, #c0cbd9, #7a8698);
-  border: 1px solid #000;
-  border-radius: 0;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.6), 0 1px 2px rgba(0,0,0,0.6);
+  width: 14px; height: 14px;
+  background: #ffffff;
+  border: 0;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 1px 4px rgba(0,0,0,0.5);
 }
 
 /* ===== CW ===== */
@@ -1525,17 +1581,18 @@
 .cw-cursor { animation: blink 1s steps(2) infinite; color: var(--accent); }
 @keyframes blink { 50% { opacity: 0.2; } }
 
-/* ===== Transport bar ===== */
+/* ===== Transport bar — v3 Lifted Dark: flat near-black ===== */
 .transport {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 10px;
-  background: linear-gradient(90deg, var(--panel-top), var(--panel-bot));
-  border: 1px solid var(--panel-edge);
-  border-radius: var(--r-lg);
-  box-shadow: var(--panel-shadow);
-  height: 44px;
+  padding: 0 14px;
+  background: var(--bg-0);
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: none;
+  height: 38px;
 }
 /* Transport buttons read as flat clickable regions of the toolbar, not raised
    chiclets. TX (MOX-on) is excluded — it keeps its red bevel/pulse for safety. */
@@ -1557,21 +1614,22 @@
   transform: none;
 }
 .transport .btn.active {
-  background: var(--accent-soft);
-  color: var(--accent);
-  border-color: rgba(74,158,255,0.35);
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
   text-shadow: none;
+  box-shadow: 0 0 0 1px rgba(46,142,255,0.5), 0 0 14px rgba(46,142,255,0.35);
 }
 .transport .btn.ghost {
   background: transparent;
 }
-.transport .btn.ghost:hover { background: rgba(255,255,255,0.06); }
-/* Restore TX styling for MOX-on state — must remain visually loud. */
+.transport .btn.ghost:hover { background: var(--bg-2); color: var(--fg-0); }
+/* MOX-on must remain visually loud — keep the red but in v3 flat style. */
 .transport .btn.tx {
-  background: linear-gradient(180deg, var(--btn-top-c), var(--btn-bot-c));
-  border: 1px solid var(--btn-edge);
-  color: #ffd4d0;
-  text-shadow: 0 0 6px rgba(230,58,43,0.8);
+  background: var(--tx-soft);
+  border: 1px solid var(--tx);
+  color: var(--tx);
+  text-shadow: none;
 }
 .tx-btn { font-size: 14px; font-weight: 700; letter-spacing: 0.12em; min-width: 80px; }
 .tx-btn.tx {
@@ -1584,7 +1642,7 @@
   0%, 100% { box-shadow: inset 0 1px 0 var(--btn-hl), 0 0 0 rgba(255,56,56,0); }
   50% { box-shadow: inset 0 1px 0 var(--btn-hl), 0 0 12px rgba(255,56,56,0.9); }
 }
-.transport-sep { width: 1px; height: 28px; background: rgba(0,0,0,0.4); box-shadow: 1px 0 0 rgba(255,255,255,0.06); margin: 0 4px; }
+.transport-sep { width: 1px; height: 18px; background: var(--line); box-shadow: none; margin: 0 4px; }
 .knob-group { display: flex; align-items: center; gap: 8px; min-width: 130px; }
 .knob-group > .label-xs { min-width: 32px; color: var(--fg-1); white-space: nowrap; }
 .knob-group > .slider { flex: 1; }

@@ -760,6 +760,18 @@ public static class ZeusEndpoints
             return Results.Ok(store.Get());
         });
 
+        // Inline NR settings accordion disclosure state (NR1 / NR2 / NR4).
+        // PUT writes all three flags atomically. Persisted in zeus-prefs.db
+        // so the chevron-open preference follows the operator across
+        // browsers / devices, same pattern as /api/bottom-pin.
+        app.MapGet("/api/nr-ui-prefs", (NrUiPrefsStore store) => Results.Ok(store.Get()));
+
+        app.MapPut("/api/nr-ui-prefs", (NrUiPrefsSetRequest req, NrUiPrefsStore store) =>
+        {
+            store.Set(req.Nr1Expanded, req.Nr2Expanded, req.Nr4Expanded);
+            return Results.Ok(store.Get());
+        });
+
         // Radio selection — operator preference seeding, with discovery as the
         // tiebreaker. Preferred=="Auto" removes the override (stored as absence,
         // not a sentinel enum value). Effective = Connected when connected (which

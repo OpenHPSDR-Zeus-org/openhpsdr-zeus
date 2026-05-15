@@ -5,14 +5,14 @@
 //
 // Wall-clock peak hold for the immersive meter widgets. Mirrors the
 // prototype's peak/peakHold logic: a peak that bumps up immediately, holds
-// for a window (default 1.2 s), then decays at 0.5 fraction-units / sec
+// for a window (default 1.5 s), then decays at 0.5 fraction-units / sec
 // — measured in fractional [0..1] axis units, not dB, so the visual decay
 // rate is the same on every meter regardless of its native dB range.
 
 import { useRef } from 'react';
 import { isSilent } from './dbScale';
 
-const HOLD_MS_DEFAULT = 1200;
+const HOLD_MS_DEFAULT = 1500;
 const DECAY_FRAC_PER_SEC_DEFAULT = 0.5;
 
 interface PeakState {

@@ -479,6 +479,20 @@ public sealed record DisplaySettingsSetRequest(
     string Mode,
     string Fit);
 
+// Per-mode disclosure state for the inline NR settings accordion that hangs
+// below the DSP NR toggle row. Three independent booleans — one per NR
+// algorithm. Persisted server-side (LiteDB) so the operator's "I always
+// have NR2 tunables open" preference follows them across browsers.
+public sealed record NrUiPrefsDto(
+    bool Nr1Expanded,
+    bool Nr2Expanded,
+    bool Nr4Expanded);
+
+public sealed record NrUiPrefsSetRequest(
+    bool Nr1Expanded,
+    bool Nr2Expanded,
+    bool Nr4Expanded);
+
 // Per-slot pin state for the classic-layout bottom row (Logbook + TX
 // Stage Meters). True = panel is pinned (full body visible). False =
 // collapsed to a chip strip below the pinned tier. Persisted server-side

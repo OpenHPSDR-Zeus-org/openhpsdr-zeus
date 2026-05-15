@@ -50,6 +50,11 @@ import {
   type RadioStateDto,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
+import {
+  fetchNrUiPrefs,
+  updateNrUiPrefs,
+  type NrUiPrefsState,
+} from '../../api/nrUiPrefs';
 
 export type NrSettingsMode = 'Anr' | 'Emnr' | 'Sbnr';
 
@@ -61,21 +66,82 @@ export type NrSettingsSectionProps = {
 // state, so the panel survives any FlexLayout re-render that unmounts the
 // DSP tab content (drag, dock, tabset reflow). Keyed by mode so each NR
 // algorithm's accordion remembers its own open/closed state.
+//
+// Persisted server-side via /api/nr-ui-prefs (LiteDB) so the choice
+// follows the operator across browsers + devices, same pattern as
+// bottom-pin / display-settings. Hydration runs once at module load
+// (single global store, single fetch); toggles fire a debounced PUT.
 type NrSettingsUiState = {
   expanded: Record<NrSettingsMode, boolean>;
+  hydrated: boolean;
+  /** Set the persisted state from a server fetch (no PUT). */
+  hydrate: (next: NrUiPrefsState) => void;
+  /** Toggle one mode and schedule a debounced PUT to the backend. */
   toggle: (mode: NrSettingsMode) => void;
 };
 
+// Maps the wire DTO's three booleans to / from the per-mode keyed shape
+// the component already consumes. NR4 lives under the `Sbnr` key — the
+// reading-mode enum the surrounding panel uses.
+function fromWire(p: NrUiPrefsState): Record<NrSettingsMode, boolean> {
+  return { Anr: p.nr1Expanded, Emnr: p.nr2Expanded, Sbnr: p.nr4Expanded };
+}
+function toWire(e: Record<NrSettingsMode, boolean>): NrUiPrefsState {
+  return { nr1Expanded: e.Anr, nr2Expanded: e.Emnr, nr4Expanded: e.Sbnr };
+}
+
+const PERSIST_DEBOUNCE_NR_UI_MS = 150;
+let nrUiPersistTimer: ReturnType<typeof setTimeout> | null = null;
+
+function schedulePersist(state: Record<NrSettingsMode, boolean>): void {
+  if (nrUiPersistTimer) clearTimeout(nrUiPersistTimer);
+  nrUiPersistTimer = setTimeout(() => {
+    nrUiPersistTimer = null;
+    void updateNrUiPrefs(toWire(state)).catch(() => {
+      // Persistence is best-effort — a transient server hiccup leaves the
+      // in-memory state intact; the next toggle retries. We don't surface
+      // an error toast for a chevron-open preference.
+    });
+  }, PERSIST_DEBOUNCE_NR_UI_MS);
+}
+
 const useNrSettingsUi = create<NrSettingsUiState>((set) => ({
   expanded: { Anr: false, Emnr: false, Sbnr: false },
+  hydrated: false,
+  hydrate: (next) =>
+    set({ expanded: fromWire(next), hydrated: true }),
   toggle: (mode) =>
-    set((s) => ({ expanded: { ...s.expanded, [mode]: !s.expanded[mode] } })),
+    set((s) => {
+      const expanded = { ...s.expanded, [mode]: !s.expanded[mode] };
+      schedulePersist(expanded);
+      return { expanded };
+    }),
 }));
+
+// One-shot module-level hydration so every NrSettingsSection instance
+// (the DSP panel renders one per mode) reads from the same already-fetched
+// state. Errors are swallowed — a fresh install or an offline backend
+// just leaves the defaults (everything collapsed) in place.
+let nrUiHydrationStarted = false;
+function ensureNrUiHydration(): void {
+  if (nrUiHydrationStarted) return;
+  nrUiHydrationStarted = true;
+  void fetchNrUiPrefs()
+    .then((prefs) => useNrSettingsUi.getState().hydrate(prefs))
+    .catch(() => {
+      // Mark hydrated anyway so the first toggle's PUT doesn't race a
+      // late-arriving GET response (which would clobber the user's click).
+      useNrSettingsUi.setState({ hydrated: true });
+    });
+}
 
 export function NrSettingsSection({ mode }: NrSettingsSectionProps) {
   // Persisted disclosure: collapsed by default (the dense gauge panel is
   // too much for the casual operator), but stays open across remounts once
-  // the user opens it. The chevron telegraphs the click target.
+  // the user opens it. The chevron telegraphs the click target. State is
+  // sourced from /api/nr-ui-prefs (LiteDB) so the choice follows the
+  // operator across browsers + devices.
+  useEffect(() => { ensureNrUiHydration(); }, []);
   const expanded = useNrSettingsUi((s) => s.expanded[mode]);
   const toggle = useNrSettingsUi((s) => s.toggle);
 

@@ -18,10 +18,12 @@
   color: var(--fg-1);
   font-family: var(--font-sans);
   font-size: 12px;
-  border: 1px solid var(--panel-edge);
+  border: 1px solid var(--line);
   border-radius: var(--r-lg);
-  background: linear-gradient(180deg, var(--panel-top) 0%, var(--panel-bot) 100%);
-  box-shadow: inset 0 1px 0 var(--panel-hl-top);
+  /* Nested under the DSP panel — needs to lift visibly off the panel's own
+     --bg-1 base, so we step up one rung to --bg-2. v3 layered-surface feel. */
+  background: var(--bg-2);
+  box-shadow: none;
 }
 
 .nr-settings__title {

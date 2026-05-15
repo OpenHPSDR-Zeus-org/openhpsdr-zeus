@@ -85,20 +85,43 @@ export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, 
       </div>
     );
   }
+  // Layout note: the rig / antenna / power / qsl rows were dropped in the
+  // 2× portrait rework — those fields are rarely consulted in-shack and the
+  // operator usually wants the portrait + grid + location front-and-centre
+  // for a quick "who am I talking to?" read.
   const rows: [string, string][] = [
     ['Grid', contact.grid],
-    ['Rig', contact.rig],
     ['Lat/Lon', contact.latlon],
-    ['Antenna', contact.ant],
     ['CQ·ITU', `${contact.cq} · ${contact.itu}`],
-    ['Power', contact.power],
     ['Local', contact.local],
-    ['QSL', contact.qsl],
   ];
   return (
     <div className="qrz-card">
-      <div className="qrz-header">
-        <div className="qrz-portrait">
+      <div className="qrz-card-main">
+        <div className="qrz-info-col">
+          <div className="qrz-id">
+            <div className="qrz-call">{contact.callsign}</div>
+            <div className="qrz-name">{contact.name}</div>
+            <div className="qrz-loc">
+              {contact.flag} {contact.location}
+            </div>
+            <div className="qrz-tags">
+              <span className="qrz-tag">{contact.class}</span>
+              <span className="qrz-tag">Lic. {contact.licensed}</span>
+              <span className="qrz-tag">Age {contact.age}</span>
+            </div>
+          </div>
+          <div className="qrz-section-label">Location · Station</div>
+          <div className="qrz-grid-rows">
+            {rows.map(([k, v]) => (
+              <div key={k} className="qrz-row">
+                <span className="k label-xs">{k}</span>
+                <span className="v mono">{v}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="qrz-portrait qrz-portrait--large">
           <div className="qrz-portrait-bg" aria-hidden>
             <div className="qrz-grid" />
           </div>
@@ -119,28 +142,6 @@ export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, 
           )}
           {enriching && <div className="qrz-scan" />}
         </div>
-        <div className="qrz-id">
-          <div className="qrz-call">{contact.callsign}</div>
-          <div className="qrz-name">{contact.name}</div>
-          <div className="qrz-loc">
-            {contact.flag} {contact.location}
-          </div>
-          <div className="qrz-tags">
-            <span className="qrz-tag">{contact.class}</span>
-            <span className="qrz-tag">Lic. {contact.licensed}</span>
-            <span className="qrz-tag">Age {contact.age}</span>
-          </div>
-        </div>
-      </div>
-
-      <div className="qrz-section-label">Location · Station</div>
-      <div className="qrz-grid-rows">
-        {rows.map(([k, v]) => (
-          <div key={k} className="qrz-row">
-            <span className="k label-xs">{k}</span>
-            <span className="v mono">{v}</span>
-          </div>
-        ))}
       </div>
 
       <div className="qrz-footer">

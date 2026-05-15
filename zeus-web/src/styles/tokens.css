@@ -1,54 +1,74 @@
 /* ===========================================================
-   Zeus SDR — Design tokens (pulled from Hermes Lite 2 reference)
-   Near-black chrome, mid-gray workspace, classic SDR colors
+   Zeus SDR — Design tokens (v3 "Lifted Dark")
+   Neutral near-black surfaces, electric blue accent, warm amber
+   halos on meters, blue aurora on the VFO. Source of truth.
    =========================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 @font-face { font-display: swap; }
 
 :root {
   /* ----- Workspace ----- */
-  --bg-app:       #657486;  /* mid blue-gray behind panels */
-  --bg-workspace: #575e6b;  /* slightly darker for contrast */
+  --bg-app:       #0a0a0c;  /* app backdrop — header / sidebar / footer chrome */
+  /* Workspace canvas reverts to near-black so the whole layout reads as one
+     continuous dark surface; only the panels (at --bg-1) lift off it. */
+  --bg-workspace: #0a0a0c;
 
-  /* ----- Panels / chrome (near-black like ref) ----- */
-  --bg-0: #1a1b1e;
-  --bg-1: #2a2b2e;
-  --bg-2: #323236;
-  --bg-3: #3a3b3f;
+  /* ----- Surfaces — neutral near-black, no blue tint ----- */
+  --bg-0: #0a0a0c;          /* app backdrop */
+  --bg-1: #111114;          /* panel base */
+  --bg-2: #1a1a1e;          /* raised control / button rest */
+  --bg-3: #232328;          /* hover */
+  --bg-inset:  #060608;     /* deepest wells (panadapter, gauge bg) */
+  --bg-meter:  #050507;     /* LED-meter well, near-pitch */
 
-  /* Panel head bar — matches the "Hermes Lite 2" top bar in ref */
-  --panel-head-top: #3a3b3f;
-  --panel-head-bot: #232427;
-  --panel-border:   #0d0d10;
-  --panel-hl-top:   rgba(255,255,255,0.10);
+  /* Lines — neutral grays */
+  --line:        #1f1f23;
+  --line-soft:   #16161a;
+  --line-strong: #2c2c32;
+
+  /* Panel head — flat (no beveled gradient anymore) */
+  --panel-head-top: var(--bg-1);
+  --panel-head-bot: var(--bg-1);
+  --panel-border:   var(--line);
+  --panel-hl-top:   transparent;
 
   /* ----- Foreground ----- */
   --fg-0: #ffffff;
-  --fg-1: #d4d5d8;
-  --fg-2: #9a9b9f;
-  --fg-3: #6b6c70;
+  --fg-1: #cccccc;
+  --fg-2: #8a8a90;
+  --fg-3: #5a5a60;
+  --fg-4: #3a3a40;          /* extra-muted for borders/sep */
 
-  /* ----- Accents (reference exact) ----- */
-  --accent:      #4a9eff;   /* LSB/USB blue text (like "FAST" blue & frequency blue) */
-  --accent-soft: rgba(74,158,255,0.15);
-  --tx:          #e63a2b;   /* TX red (like "TX: OFF" red) */
-  --tx-soft:     rgba(230,58,43,0.18);
-  --power:       #ffc93a;   /* yellow digits like "20W" */
-  --power-soft:  rgba(255,201,58,0.16);
-  --ok:          #2e7a2e;   /* healthy / normal-range green for meter zones */
-  --ok-soft:     rgba(46,122,46,0.18);
-  --orange:      #f28524;   /* Lookup button top */
-  --orange-dk:   #6b1100;   /* Lookup button shadow edge */
+  /* ----- Accents — blue as accent ONLY, not a surface tint ----- */
+  --accent:        #0c5f9c;
+  --accent-bright: #4ea6ff;
+  --accent-soft:   rgba(46,142,255,0.14);
+  --accent-line:   rgba(46,142,255,0.55);
+  --tx:            #ff4a59;
+  --tx-soft:       rgba(255,74,89,0.18);
+  --power:         #ffb13c;
+  --power-soft:    rgba(255,177,60,0.16);
+  --ok:            #2dd566;
+  --ok-soft:       rgba(45,213,102,0.18);
+  --green-soft:    #1aa84e;
+  --amber:         #ffb13c;
+  --amber-soft:    rgba(255,177,60,0.18);
+  --orange:        #ff8a3c;
+  --orange-dk:     #6b1100;
+  --cyan:          #4dc9ff;
+  --yellow:        #e4d645;
 
-  /* ----- Button chrome (matches the ref's chunky dark buttons) ----- */
-  --btn-top:     #4a4b4f;
-  --btn-bot:     #26272a;
-  --btn-hl:      rgba(255,255,255,0.14);
-  --btn-edge:    #0a0a0c;
-  --btn-text:    #e8e9ec;
+  /* ----- Button chrome — flat, no chunky gradient ----- */
+  --btn-top:     var(--bg-2);
+  --btn-bot:     var(--bg-2);
+  --btn-hl:      transparent;
+  --btn-edge:    var(--line-strong);
+  --btn-text:    var(--fg-1);
 
-  --btn-active-top: #5a9cd8;
-  --btn-active-bot: #2e5a8a;
+  --btn-active-top: var(--accent);
+  --btn-active-bot: var(--accent);
   --btn-active-text: #ffffff;
 
   /* ----- Spectrum + waterfall ----- */
@@ -67,8 +87,10 @@
   --wf-6: #c23030;
 
   /* ----- Meters ----- */
-  --meter-bg:    #0d0e10;
-  --meter-fill:  linear-gradient(90deg, #2e7a2e 0%, #4aa04a 55%, #d4a42a 80%, #d04040 100%);
+  --meter-bg:    var(--bg-meter);
+  --meter-fill:  linear-gradient(90deg, var(--ok) 0%, var(--ok) 70%, var(--amber) 90%, var(--tx) 100%);
+  /* Warm amber halo around LED meter columns — "lit instruments on black" */
+  --meter-halo:  0 0 18px rgba(255,140,40,0.18), 0 0 6px rgba(255,170,80,0.12);
 
   /* ----- Immersive meter chrome (BigArc / VuColumn / PullDownArc) -----
      Deeper-than-meter-bg fills used inside the immersive Meters panel so
@@ -79,11 +101,11 @@
      (#161a23 / #11151c / #0c1019) — flattened to neutral greys per the
      operator's "less blues, more greys" feedback. The *-glow tokens
      carry the bloom alpha used by SVG drop-shadows + filters. */
-  --immersive-bg:        #07080a;
-  --immersive-panel:     #1a1c20;
-  --immersive-panel-2:   #16181c;
-  --immersive-well:      #101216;
-  --immersive-well-2:    #0a0b0e;
+  --immersive-bg:        var(--bg-0);
+  --immersive-panel:     var(--bg-1);
+  --immersive-panel-2:   var(--bg-1);
+  --immersive-well:      var(--bg-inset);
+  --immersive-well-2:    var(--bg-meter);
   --immersive-rim:       rgba(255,255,255,0.06);
   --immersive-rim-strong:rgba(255,255,255,0.10);
   --immersive-line:      rgba(255,255,255,0.05);
@@ -138,17 +160,16 @@
   --immersive-lamp-chip-text-glow: rgba(255,245,200,0.16);
   --immersive-lamp-active-glow: rgba(245,240,180,0.18);
 
-  /* ----- Type ----- */
-  --font-sans: 'Archivo Narrow', 'Arial Narrow', sans-serif;
-  --font-mono: 'Archivo Narrow', 'Arial Narrow', sans-serif;
-  --font-display: 'Archivo Narrow', sans-serif;
+  /* ----- Type — v3 Lifted Dark: Inter + JetBrains Mono ----- */
+  --font-sans:    'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+  --font-mono:    'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-display: 'Inter', sans-serif;
 
-  /* ----- Spacing / radius ----- */
-  /* Square-edge experiment: all corner radii flattened. */
-  --r-xs: 0;
-  --r-sm: 0;
-  --r-md: 0;
-  --r-lg: 0;
+  /* ----- Spacing / radius — v3 introduces gentle rounding ----- */
+  --r-xs: 2px;
+  --r-sm: 3px;
+  --r-md: 4px;
+  --r-lg: 6px;
 
   /* ----- Easing ----- */
   --ease-out: cubic-bezier(.22,.61,.36,1);
@@ -157,14 +178,14 @@
   --dur-med:  240ms;
 
   /* ----- Aliases for panel chrome (used across layout.css) ----- */
-  --panel-top:    var(--panel-head-top);
-  --panel-bot:    var(--panel-head-bot);
-  --panel-edge:   var(--panel-border);
-  --panel-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 1px 0 rgba(0,0,0,0.6), 0 2px 4px rgba(0,0,0,0.4);
+  --panel-top:    var(--bg-1);
+  --panel-bot:    var(--bg-1);
+  --panel-edge:   var(--line);
+  --panel-shadow: none;
 }
 
-/* Font swapping via [data-fonts] — keep all mapped to Archivo Narrow by default */
-html[data-fonts="geist"] { --font-sans: 'Archivo Narrow', sans-serif; --font-mono: 'Archivo Narrow', sans-serif; --font-display: 'Archivo Narrow', sans-serif; }
+/* Font swapping via [data-fonts] — v3 Lifted Dark defaults to Inter */
+html[data-fonts="geist"] { --font-sans: 'Inter', sans-serif; --font-mono: 'JetBrains Mono', monospace; --font-display: 'Inter', sans-serif; }
 
 /* ===========================================================
    Base resets
@@ -172,14 +193,67 @@ html[data-fonts="geist"] { --font-sans: 'Archivo Narrow', sans-serif; --font-mon
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; }
 body {
-  background: var(--bg-app);
+  background: var(--bg-0);
   color: var(--fg-0);
   font-family: var(--font-sans);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.4;
-  letter-spacing: 0.01em;
+  letter-spacing: 0;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
   overflow: hidden;
 }
 button { font-family: inherit; color: inherit; border: 0; background: transparent; cursor: pointer; }
 input { font-family: inherit; color: inherit; }
+
+/* ===========================================================
+   Native range inputs — v3 Lifted Dark: flat blue fill, white round thumb.
+   Scoped to the app shell so panels that opt into native chrome (rare —
+   AnalogMeterConfig already has its own) can still override locally.
+   =========================================================== */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 4px;
+  background: var(--line);
+  outline: none;
+  cursor: pointer;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 4px;
+  background: var(--line);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 0;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 1px 4px rgba(0,0,0,0.5);
+  margin-top: -5px;
+  cursor: pointer;
+}
+input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 4px;
+  background: var(--line);
+  border: 0;
+}
+input[type="range"]::-moz-range-progress {
+  height: 4px;
+  border-radius: 4px;
+  background: var(--accent);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ffffff;
+  border: 0;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 1px 4px rgba(0,0,0,0.5);
+  cursor: pointer;
+}

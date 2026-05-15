@@ -72,11 +72,17 @@
 .am-tile .am-meter-face-wrap,
 .am-tile .analog-meter-face-wrap {
   position: relative;
+  /* v3 Lifted Dark: warm "streetlamp pool" glow rising from the bottom of the
+     gauge well. Final values from Brian's tweak session: hue 31, sat 30%,
+     opacity 19%, ellipse 150% × 83%, anchored at 50% 100%. */
   background:
-    radial-gradient(120% 70% at 50% 110%, var(--accent-soft), transparent 60%),
-    var(--bg-0);
+    radial-gradient(ellipse 150% 83% at 50% 100%,
+      hsla(31, 30%, 65%, 0.19) 0%,
+      hsla(31, 30%, 65%, 0.067) 40%,
+      transparent 75%),
+    var(--bg-inset);
   padding: 12px 14px 4px;
-  border-bottom: 1px solid var(--panel-edge);
+  border-bottom: 1px solid var(--line);
   flex: 1;
   min-height: 0;
   display: flex;

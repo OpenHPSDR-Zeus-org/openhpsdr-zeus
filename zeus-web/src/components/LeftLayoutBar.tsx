@@ -192,7 +192,6 @@ export function LeftLayoutBar() {
           aria-pressed={settingsViewOpen}
         >
           <span className="lb-tab-icon" aria-hidden>⚙</span>
-          <span className="lb-tab-name">Settings</span>
         </button>
       </div>
 

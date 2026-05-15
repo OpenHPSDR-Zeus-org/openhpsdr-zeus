@@ -23,10 +23,10 @@
   width: 100%;
   height: 100%;
   overflow: auto;
-  /* Use the dark token (--bg-0) for the workspace ground so the gap
-   * between tiles reads like the dark band between the top toolbar
-   * and the second control row — not the blue-gray gutter. */
-  background: var(--bg-0);
+  /* v3 Lifted Dark: workspace ground is the distinct mid-grey "table"
+   * (--bg-workspace), so the chrome (--bg-0) and the panels (--bg-1) each
+   * read as their own surface. */
+  background: var(--bg-workspace);
 }
 
 .all-panels-grid.react-grid-layout {
@@ -128,23 +128,43 @@
     0 2px 6px rgba(0, 0, 0, 0.4);
 }
 
-/* Tile chrome header — title + drag-handle + remove-X. Always-visible X
- * (locked decision); width budget tight at narrow tile widths but the
- * title ellipsises before the X gets in its way. */
+/* Tile chrome header — "brass instrument plate".
+ * Each panel reads as a piece of equipment with an engraved label plate
+ * above it: subtle vertical gradient lifts the header off the panel base,
+ * a 2 px --power amber rail runs the leading edge as a single decisive
+ * accent, a 1 px specular highlight catches across the top, and the
+ * bottom hairline carries a hint of lamp warmth instead of neutral grey.
+ * Title is rendered in engraved-uppercase (open tracking + faint amber
+ * text-shadow) so it pops without resorting to colored type. */
 .workspace-tile-header {
-  height: 24px;
+  position: relative;
+  height: 26px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 0 8px;
-  background: linear-gradient(90deg, var(--panel-head-top, var(--panel-top)), var(--panel-head-bot, var(--panel-bot)));
-  border-bottom: 1px solid var(--panel-border);
-  /* Whole header is the drag handle (RGL dragConfig.handle). Show grab
-   * cursor across the full width so the operator knows it's draggable —
-   * tiny grip-only target meant tiles with their own pointer logic
-   * (panadapter canvas) couldn't be moved. */
+  padding: 0 8px 0 10px;
+  background:
+    linear-gradient(180deg, #1c1c21 0%, #141418 100%);
+  border-bottom: 1px solid rgba(255, 177, 60, 0.14);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.045),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.35);
   cursor: grab;
+}
+/* Leading-edge gold rail — the brass plate's mounting screw line. Sits
+ * inside the rounded tile corner via the parent's overflow: hidden. */
+.workspace-tile-header::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--power);
+  box-shadow:
+    0 0 6px rgba(255, 177, 60, 0.55),
+    0 0 14px rgba(255, 177, 60, 0.22);
 }
 .workspace-tile-header:active {
   cursor: grabbing;
@@ -159,12 +179,14 @@
   color: var(--fg-3);
   cursor: grab;
   flex-shrink: 0;
+  transition: color var(--dur-fast);
 }
 .workspace-tile-drag-handle:active {
   cursor: grabbing;
 }
+.workspace-tile-header:hover .workspace-tile-drag-handle,
 .workspace-tile-drag-handle:hover {
-  color: var(--fg-1);
+  color: var(--power);
 }
 
 .workspace-tile-title {
@@ -175,9 +197,11 @@
   white-space: nowrap;
   font-size: 11px;
   font-family: var(--font-sans);
-  letter-spacing: 0.08em;
+  font-weight: 600;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--fg-1);
+  color: var(--fg-0);
+  text-shadow: 0 0 8px rgba(255, 177, 60, 0.10);
   user-select: none;
 }
 

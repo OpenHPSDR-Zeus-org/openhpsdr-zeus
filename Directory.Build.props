@@ -8,8 +8,8 @@
     <!-- Version Management -->
     <!-- When building from a tag (e.g., v0.1.0), GITHUB_REF_NAME will be set -->
     <!-- Otherwise, fall back to the in-development VersionPrefix below.    -->
-    <!-- Bump this when a release branch opens — current target: v0.7.2.    -->
-    <VersionPrefix Condition="'$(VersionPrefix)' == ''">0.7.2</VersionPrefix>
+    <!-- Bump this when a release branch opens — current target: v0.7.3.    -->
+    <VersionPrefix Condition="'$(VersionPrefix)' == ''">0.7.3</VersionPrefix>
     <VersionSuffix Condition="'$(VersionSuffix)' == '' AND '$(GITHUB_REF_TYPE)' != 'tag'">dev</VersionSuffix>
     <Version Condition="'$(VersionSuffix)' != ''">$(VersionPrefix)-$(VersionSuffix)</Version>
     <Version Condition="'$(VersionSuffix)' == ''">$(VersionPrefix)</Version>
