@@ -230,6 +230,62 @@ public sealed class PreferredRadioStore : IDisposable
         Changed?.Invoke();
     }
 
+    /// <summary>
+    /// Per-radio frequency-correction factor for crystal/clock drift
+    /// (issue #325). Dimensionless multiplier near 1.0 applied host-side
+    /// at the Protocol-1 and Protocol-2 SetVfoAHz seams before the value
+    /// reaches the radio's NCO. 1.0 = uncalibrated (factory default).
+    ///
+    /// Models the Thetis "Correction Factor" approach
+    /// (NetworkIO.VFOfreq, Setup → General → Calibration); mathematically
+    /// identical to piHPSDR's `(10_000_000 + ppm_tenths) / 10_000_000`
+    /// formula. ppm = (factor - 1.0) * 1e6.
+    /// </summary>
+    public double GetFrequencyCorrectionFactor()
+    {
+        lock (_sync)
+        {
+            var e = _entries.FindAll().FirstOrDefault();
+            // LiteDB hydrates double-valued fields to 0.0 for older rows
+            // that pre-date this field; treat that case as "unset" so
+            // operators upgrading from a pre-#325 build don't see their
+            // tuning silently jump to DC.
+            return (e is null || e.FrequencyCorrectionFactor == 0.0)
+                ? 1.0
+                : e.FrequencyCorrectionFactor;
+        }
+    }
+
+    /// <summary>
+    /// Persists the operator's calibrated correction factor. Stored in the
+    /// same single-row preferences entry as the other per-radio prefs.
+    /// Setting to 1.0 is identical to "unset" (factory default).
+    /// </summary>
+    public void SetFrequencyCorrectionFactor(double factor)
+    {
+        lock (_sync)
+        {
+            var existing = _entries.FindAll().FirstOrDefault();
+            if (existing is null)
+            {
+                _entries.Insert(new PreferredRadioEntry
+                {
+                    Board = HpsdrBoardKind.Unknown,
+                    OverrideDetection = false,
+                    FrequencyCorrectionFactor = factor,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+            }
+            else
+            {
+                existing.FrequencyCorrectionFactor = factor;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _entries.Update(existing);
+            }
+        }
+        Changed?.Invoke();
+    }
+
     public void Dispose() => _db.Dispose();
 
 }
@@ -248,5 +304,11 @@ public sealed class PreferredRadioEntry
     /// <c>false</c> for older rows that pre-date this field, which matches
     /// the shipping default.</summary>
     public bool EnableHl2BandVolts { get; set; }
+    /// <summary>Per-radio frequency-correction factor (issue #325).
+    /// Dimensionless multiplier near 1.0; 1.0 = uncalibrated. LiteDB
+    /// hydrates as 0.0 for older rows that pre-date this field; the
+    /// accessor treats 0.0 as "unset" and returns 1.0 to keep tuning
+    /// behaviour bit-identical for upgrading operators.</summary>
+    public double FrequencyCorrectionFactor { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

@@ -76,6 +76,12 @@ public sealed class Protocol1Client : IProtocol1Client
     // Mutation state written from any thread, read from the TX thread.
     // 64-bit fields are written atomically on 64-bit .NET (Interlocked.Exchange used for safety).
     private long _vfoAHz = 7_100_000;
+    // Frequency-correction factor (issue #325) — dimensionless multiplier
+    // near 1.0 applied to the incoming dial Hz before _vfoAHz is updated,
+    // matching piHPSDR / Thetis. Stored as int64 bits for atomic
+    // Interlocked.Exchange access from arbitrary threads. 1.0 = factory
+    // default (no correction).
+    private long _freqCorrectionBits = BitConverter.DoubleToInt64Bits(1.0);
     private int _rate = (int)HpsdrSampleRate.Rate48k;
     private int _preamp;       // 0 / 1
     private int _attenDb;      // 0..31 dB (HpsdrAtten value)
@@ -505,7 +511,29 @@ public sealed class Protocol1Client : IProtocol1Client
         return Task.CompletedTask;
     }
 
-    public void SetVfoAHz(long hz) => Interlocked.Exchange(ref _vfoAHz, hz);
+    public void SetVfoAHz(long hz)
+    {
+        double factor = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _freqCorrectionBits));
+        // host-side multiplicative correction, applied right before the
+        // wire-bound _vfoAHz slot (matches piHPSDR src/old_protocol.c:1040,
+        // Thetis NetworkIO.VFOfreq, deskHPSDR src/old_protocol.c:1629).
+        long corrected = (long)Math.Round(hz * factor, MidpointRounding.AwayFromZero);
+        Interlocked.Exchange(ref _vfoAHz, corrected);
+    }
+
+    /// <summary>
+    /// Sets the per-radio frequency-correction factor (issue #325). The
+    /// caller is responsible for re-pushing the current dial Hz via
+    /// <see cref="SetVfoAHz"/> after this so the new factor reaches the
+    /// wire — this method on its own only mutates the multiplier used by
+    /// the next tune-write.
+    /// </summary>
+    public void SetFrequencyCorrectionFactor(double factor) =>
+        Interlocked.Exchange(ref _freqCorrectionBits, BitConverter.DoubleToInt64Bits(factor));
+
+    public double FrequencyCorrectionFactor =>
+        BitConverter.Int64BitsToDouble(Interlocked.Read(ref _freqCorrectionBits));
+
     public void SetSampleRate(HpsdrSampleRate rate) => Interlocked.Exchange(ref _rate, (int)rate);
     public void SetPreamp(bool on) => Interlocked.Exchange(ref _preamp, on ? 1 : 0);
     public void SetAttenuator(HpsdrAtten atten) => Interlocked.Exchange(ref _attenDb, atten.ClampedDb);

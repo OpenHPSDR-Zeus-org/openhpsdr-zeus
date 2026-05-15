@@ -23,6 +23,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { PaSettingsPanel } from './PaSettingsPanel';
 import { BandPlanEditor } from './bandplan/BandPlanEditor';
 import { AboutPanel } from './AboutPanel';
+import { CalibrationPanel } from './CalibrationPanel';
 import { DisplayPanel } from './DisplayPanel';
 import { QrzSettingsPanel } from './QrzSettingsPanel';
 import { RadioOptionsPanel } from './RadioOptionsPanel';
@@ -46,6 +47,7 @@ export type SettingsTabId =
   | 'display'
   | 'server'
   | 'radio'
+  | 'calibration'
   | 'about';
 
 const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
@@ -59,6 +61,7 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'display', label: 'DISPLAY' },
   { id: 'server', label: 'SERVER' },
   { id: 'radio', label: 'RADIO' },
+  { id: 'calibration', label: 'CALIBRATION' },
   { id: 'about', label: 'ABOUT' },
 ];
 
@@ -172,6 +175,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {active === 'display' && <DisplayPanel />}
           {active === 'server' && <ServerUrlPanel />}
           {active === 'radio' && hasHl2OptionalToggles && <RadioOptionsPanel />}
+          {active === 'calibration' && <CalibrationPanel />}
           {active === 'about' && <AboutPanel />}
         </div>
       </div>

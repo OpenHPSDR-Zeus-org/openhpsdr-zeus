@@ -437,6 +437,15 @@ public sealed class RadioService : IDisposable
                 client.EnableHl2BandVolts = _preferredRadioStore.GetEnableHl2BandVolts();
             }
 
+            // Frequency-correction factor (issue #325) — rehydrate so the
+            // first tune-write on the fresh client carries the operator's
+            // calibrated correction. Cheap default when no calibration has
+            // run (factor = 1.0).
+            if (_preferredRadioStore is not null)
+            {
+                client.SetFrequencyCorrectionFactor(_preferredRadioStore.GetFrequencyCorrectionFactor());
+            }
+
             Mutate(s => s with { Status = ConnectionStatus.Connected });
             _log.LogInformation("radio.connected endpoint={Ep} rate={Rate}", ipEndpoint, hpsdrRate);
             Connected?.Invoke(client);
@@ -1002,6 +1011,52 @@ public sealed class RadioService : IDisposable
     /// </summary>
     public bool GetHl2BandVolts() =>
         _preferredRadioStore?.GetEnableHl2BandVolts() ?? false;
+
+    /// <summary>
+    /// Raised after the operator's frequency-correction factor (issue #325)
+    /// has been persisted and pushed to the active P1 client. P2 subscribers
+    /// (<c>DspPipelineService</c>) use this to forward the new factor to the
+    /// live <see cref="Zeus.Protocol2.Protocol2Client"/>, since
+    /// <see cref="ActiveClient"/> is always null in P2 mode.
+    /// </summary>
+    public event Action<double>? FrequencyCorrectionFactorChanged;
+
+    /// <summary>
+    /// Reads the per-radio frequency-correction factor (issue #325). 1.0
+    /// when no store is wired or no calibration has been run.
+    /// </summary>
+    public double GetFrequencyCorrectionFactor() =>
+        _preferredRadioStore?.GetFrequencyCorrectionFactor() ?? 1.0;
+
+    /// <summary>
+    /// Persists the frequency-correction factor, pushes it to the live P1
+    /// client (if any), raises <see cref="FrequencyCorrectionFactorChanged"/>
+    /// for the P2 listener, and re-pushes the current dial VFO so the new
+    /// factor reaches the wire immediately. Clamps to ±100 ppm
+    /// (factor ∈ [0.9999, 1.0001]) — matches piHPSDR's range and is far
+    /// wider than any crystal-stabilised HPSDR board needs.
+    /// </summary>
+    public double SetFrequencyCorrectionFactor(double factor)
+    {
+        if (double.IsNaN(factor) || double.IsInfinity(factor))
+            throw new ArgumentException("factor must be a finite real number", nameof(factor));
+        double clamped = Math.Clamp(factor, 0.9999, 1.0001);
+
+        // Write-through to persistent storage first so a crash between the
+        // store write and the live-client push can't lose the calibration.
+        _preferredRadioStore?.SetFrequencyCorrectionFactor(clamped);
+        _activeClient?.SetFrequencyCorrectionFactor(clamped);
+        FrequencyCorrectionFactorChanged?.Invoke(clamped);
+
+        // Re-push the current dial Hz so the new factor lands on the wire.
+        // SetVfo's CwOffset application + ActiveClient push handle P1; the
+        // FrequencyCorrectionFactorChanged event handler in DspPipelineService
+        // covers the P2 client.
+        long currentDial = Snapshot().VfoHz;
+        SetVfo(currentDial);
+
+        return clamped;
+    }
 
     // Compute the current drive byte + OC masks + PA enable from _drivePct,
     // PaSettingsStore, and the current VFO band. Push to the active P1 client

@@ -108,6 +108,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private Task? _keepaliveTask;
     private int _sampleRateKhz = 48;
     private uint _rxFreqHz = 14_200_000;
+    // Frequency-correction factor (issue #325) — dimensionless multiplier
+    // near 1.0 applied to the incoming dial Hz before _rxFreqHz is updated,
+    // matching piHPSDR / Thetis. Stored as int64 bits for atomic
+    // Interlocked.Exchange access from arbitrary threads. 1.0 = factory
+    // default (no correction).
+    private long _freqCorrectionBits = BitConverter.DoubleToInt64Bits(1.0);
     private byte _numAdc = 2;
     // Connected board kind, plumbed from RadioService's ConnectedBoardKind via
     // DspPipelineService at connect time. Used by HandleDdcPacket for the
@@ -350,12 +356,40 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     public void SetVfoAHz(long hz)
     {
-        _rxFreqHz = (uint)Math.Clamp(hz, 0L, uint.MaxValue);
+        double factor = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _freqCorrectionBits));
+        // Host-side multiplicative correction, applied right before the
+        // phase-word feed slot (matches piHPSDR src/new_protocol.c:765,824,
+        // Thetis NetworkIO.VFOfreq, deskHPSDR src/new_protocol.c:909,967).
+        // _rxFreqHz then feeds the NCO phase-word at line 951
+        // (`rxPhase = _rxFreqHz * HzToPhase`).
+        long corrected = (long)Math.Round(hz * factor, MidpointRounding.AwayFromZero);
+        _rxFreqHz = (uint)Math.Clamp(corrected, 0L, uint.MaxValue);
         var running = _rxTask is not null;
         _log.LogInformation("p2.tune hz={Hz} running={Running} hpSeq={Seq}",
             _rxFreqHz, running, _seqCmdHp);
         if (running) SendCmdHighPriority(run: true);
     }
+
+    /// <summary>
+    /// Sets the per-radio frequency-correction factor (issue #325). The
+    /// caller is responsible for re-pushing the current dial Hz via
+    /// <see cref="SetVfoAHz"/> after this so the new factor reaches the
+    /// wire — this method on its own only mutates the multiplier used by
+    /// the next tune-write.
+    /// </summary>
+    public void SetFrequencyCorrectionFactor(double factor) =>
+        Interlocked.Exchange(ref _freqCorrectionBits, BitConverter.DoubleToInt64Bits(factor));
+
+    public double FrequencyCorrectionFactor =>
+        BitConverter.Int64BitsToDouble(Interlocked.Read(ref _freqCorrectionBits));
+
+    /// <summary>
+    /// Test seam (issue #325): the corrected NCO frequency that would be
+    /// written to the wire on the next CmdHighPriority. Equals the last
+    /// <see cref="SetVfoAHz"/> argument multiplied by
+    /// <see cref="FrequencyCorrectionFactor"/>.
+    /// </summary>
+    internal uint CorrectedRxFreqHzForTesting => _rxFreqHz;
 
     public void SetSampleRateKhz(int rateKhz)
     {

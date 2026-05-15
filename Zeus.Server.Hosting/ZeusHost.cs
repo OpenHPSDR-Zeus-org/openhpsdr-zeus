@@ -162,6 +162,9 @@ public static class ZeusHost
         builder.Services.AddHostedService<WisdomBootstrapService>();
         builder.Services.AddSingleton<DspPipelineService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<DspPipelineService>());
+        // Per-radio frequency calibration (issue #325). Stateless coordinator —
+        // owns no resources, just a SemaphoreSlim to prevent re-entry.
+        builder.Services.AddSingleton<FrequencyCalibrationService>();
         builder.Services.AddSingleton<TxService>();
         builder.Services.AddSingleton<TxAudioIngest>();
         // Resolve at startup so the MicPcmReceived subscription attaches before the

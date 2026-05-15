@@ -872,6 +872,41 @@ public static class ZeusEndpoints
             return Results.Ok(new Hl2OptionsDto(BandVolts: effective));
         });
 
+        // Per-radio frequency calibration (issue #325). GET returns the
+        // persisted correction factor + its ppm representation. POST
+        // /calibrate runs the one-button auto-cal procedure (snapshot
+        // state, tune WWV 10 MHz, find peak, apply factor, restore).
+        // POST /reset clears the factor back to 1.0.
+        app.MapGet("/api/radio/frequency-calibration", (RadioService radio) =>
+        {
+            double factor = radio.GetFrequencyCorrectionFactor();
+            double ppm = (factor - 1.0) * 1e6;
+            double offsetAt10MHz = ppm * 10.0; // Hz offset at 10 MHz
+            return Results.Ok(new
+            {
+                factor,
+                ppm,
+                offsetHzAt10MHz = offsetAt10MHz,
+            });
+        });
+
+        app.MapPost("/api/radio/frequency-calibration/calibrate", async (
+            FrequencyCalibrationService cal, HttpContext ctx) =>
+        {
+            log.LogInformation("api.freqcal.calibrate begin");
+            var result = await cal.CalibrateAsync(ct: ctx.RequestAborted).ConfigureAwait(false);
+            log.LogInformation("api.freqcal.calibrate result={Outcome} offset={Off} factor={Factor}",
+                result.Outcome, result.OffsetHz, result.AppliedFactor);
+            return Results.Ok(result);
+        });
+
+        app.MapPost("/api/radio/frequency-calibration/reset", (FrequencyCalibrationService cal) =>
+        {
+            log.LogInformation("api.freqcal.reset");
+            cal.Reset();
+            return Results.Ok(new { factor = 1.0, ppm = 0.0, offsetHzAt10MHz = 0.0 });
+        });
+
         // UI layout: flexlayout-react panel arrangement, persisted per operator profile.
         // GET returns 404 when no layout has been saved yet (frontend falls back to
         // DEFAULT_LAYOUT). PUT replaces; DELETE resets to default on next load.

@@ -270,6 +270,10 @@ public class DspPipelineService : BackgroundService,
         _radio.MoxChanged += OnRadioMoxChanged;
         _radio.TunActiveChanged += OnRadioTunActiveChanged;
         _radio.PreampChanged += OnRadioPreampChanged;
+        // Frequency-correction factor (issue #325) — RadioService can't
+        // push to the P2 client directly (ActiveClient is P1-only), so we
+        // listen for changes here and forward them to the live P2 client.
+        _radio.FrequencyCorrectionFactorChanged += OnFrequencyCorrectionFactorChanged;
         // Wire up Auto-AGC: feed RX meter readings to RadioService control loop
         RxMeterUpdated += (channelId, dbm) => _radio.HandleRxMeterForAutoAgc(dbm, Environment.TickCount64);
 
@@ -304,6 +308,7 @@ public class DspPipelineService : BackgroundService,
             _radio.MoxChanged -= OnRadioMoxChanged;
             _radio.TunActiveChanged -= OnRadioTunActiveChanged;
             _radio.PreampChanged -= OnRadioPreampChanged;
+            _radio.FrequencyCorrectionFactorChanged -= OnFrequencyCorrectionFactorChanged;
             // iter5: no more pump tasks to stop — the sink path runs on the
             // protocol client's RX thread, which the protocol client tears
             // down via its own StopAsync. Detach defensively in case a
@@ -857,6 +862,10 @@ public class DspPipelineService : BackgroundService,
         int initialAttDb = _radio.EffectiveAttenDb;
         client.SetPreamp(initialPreamp);
         client.SetAttenuator(initialAttDb);
+        // Frequency-correction factor (issue #325) — rehydrate before the
+        // first CmdHighPriority(run=1) so the operator's calibration applies
+        // to the very first NCO phase-word. 1.0 = factory default, no-op.
+        client.SetFrequencyCorrectionFactor(_radio.GetFrequencyCorrectionFactor());
         await client.StartAsync(sampleRateKhz, ct).ConfigureAwait(false);
 
         int rateHz = sampleRateKhz * 1000;
@@ -1010,6 +1019,13 @@ public class DspPipelineService : BackgroundService,
         _appliedPreampOn = on;
     }
 
+    private void OnFrequencyCorrectionFactorChanged(double factor)
+    {
+        // RadioService handles the P1 client + the re-tune; we only have
+        // to forward to the live P2 client here. No-op when no P2 is up.
+        _p2Client?.SetFrequencyCorrectionFactor(factor);
+    }
+
     /// <summary>
     /// Forward a WDSP TXA block of interleaved float IQ to the live P2 client.
     /// No-op when P2 isn't connected; safe to call from TxTuneDriver / future
@@ -1066,6 +1082,50 @@ public class DspPipelineService : BackgroundService,
     }
 
     public Zeus.Protocol2.Protocol2Client? ActiveP2Client => _p2Client;
+
+    /// <summary>
+    /// Panadapter pixel column width — exposed so the frequency-calibration
+    /// service (issue #325) can size its capture buffer correctly without
+    /// hard-coding the constant.
+    /// </summary>
+    public static int PanadapterWidth => Width;
+
+    /// <summary>
+    /// Captures the latest panadapter pixel column (dB values) for spectrum
+    /// peak detection (issue #325 auto-cal). Pixels are written in display
+    /// order (low frequency left, high frequency right), matching what the
+    /// operator sees in the browser. Returns <c>false</c> when no engine /
+    /// channel is open yet, or when WDSP hasn't produced a fresh frame since
+    /// the last call.
+    /// </summary>
+    /// <param name="dest">Buffer of length <see cref="PanadapterWidth"/>.</param>
+    /// <param name="hzPerPixel">Hz spacing between adjacent pixels (out).</param>
+    /// <param name="centerHz">Frequency of the centre pixel — the radio's LO
+    /// (out). In CW modes this is dial ± cw_pitch; outside CW it equals dial.</param>
+    public bool TryCapturePanadapterSnapshot(Span<float> dest, out float hzPerPixel, out long centerHz)
+    {
+        hzPerPixel = 0;
+        centerHz = 0;
+        if (dest.Length != Width) return false;
+
+        var engine = Volatile.Read(ref _engine);
+        int channel = Volatile.Read(ref _channelId);
+        int sampleRate = Volatile.Read(ref _sampleRateHz);
+        if (engine is null || sampleRate <= 0) return false;
+
+        if (!engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, dest))
+            return false;
+
+        // Display order (low-freq-left). WDSP emits pixel-0 = highest positive
+        // frequency, so flip here for consistency with the operator view.
+        dest.Reverse();
+
+        var state = _radio.Snapshot();
+        int zoom = Math.Max(1, state.ZoomLevel);
+        hzPerPixel = (float)((double)sampleRate / zoom / Width);
+        centerHz = CwOffset.EffectiveLoHz(state);
+        return true;
+    }
 
     // ---- IRxPacketSink (Protocol 1) -----------------------------------------
     // Called synchronously on Protocol1Client.RxLoop's OS thread. The body
