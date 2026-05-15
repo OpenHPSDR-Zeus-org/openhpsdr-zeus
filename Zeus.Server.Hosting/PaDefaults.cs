@@ -164,9 +164,19 @@ internal static class PaDefaults
     public static int GetMaxPowerWatts(HpsdrBoardKind board, OrionMkIIVariant variant) => board switch
     {
         HpsdrBoardKind.HermesLite2 => 5,      // HL2: class-A 5 W stock
-        HpsdrBoardKind.Hermes      => 10,     // Hermes / ANAN-10 / ANAN-10E: 10 W
-        HpsdrBoardKind.Metis       => 10,     // Metis boards paired with 10 W PA
-        HpsdrBoardKind.HermesII     => 10,
+        // Hermes / Metis / HermesII share the 100 W "HermesGains" PA-gain
+        // bracket lifted from Thetis setup.cs:482-544. Those gains assume a
+        // 100 W output target — Thetis's drive slider is 0..100 *watts*, so
+        // slider=100 → 100 W target → byte=255 regardless of whether the
+        // physical radio is a 10 W ANAN-10 / Brick2 or a 100 W build (the
+        // radio just self-clamps to its rated max). Zeus's slider is a
+        // percent of MaxWatts, so MaxWatts must match the gain-bracket
+        // assumption (100) — not the radio's rated output — or 100 % drive
+        // asks the DAC for 10× too little and a 10 W radio puts out ~1 W
+        // at "max TUNE". See docs/lessons/hermes-pa-maxwatts.md.
+        HpsdrBoardKind.Hermes      => 100,    // Hermes / ANAN-10 / Brick2
+        HpsdrBoardKind.Metis       => 100,    // Metis paired with HermesGains bracket
+        HpsdrBoardKind.HermesII     => 100,    // HermesII / ANAN-10E
         HpsdrBoardKind.Angelia     => 100,    // ANAN-100 / ANAN-100B / ANAN-8000D: 100 W
         HpsdrBoardKind.Orion       => 100,    // ANAN-100D / ANAN-200D: 100 W
         HpsdrBoardKind.OrionMkII   => variant switch

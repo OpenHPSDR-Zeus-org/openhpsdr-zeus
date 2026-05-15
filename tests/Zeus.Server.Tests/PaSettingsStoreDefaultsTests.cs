@@ -67,6 +67,27 @@ public class PaSettingsStoreDefaultsTests : IDisposable
         Assert.Equal(38.8, FindGain(s, "10m"));
     }
 
+    [Theory]
+    [InlineData(HpsdrBoardKind.Hermes)]
+    [InlineData(HpsdrBoardKind.HermesII)]
+    [InlineData(HpsdrBoardKind.Metis)]
+    public void HermesClass_MaxPowerWatts_Matches_GainBracket_Assumption(HpsdrBoardKind board)
+    {
+        // The HermesGains bracket (HermesGains["10m"] = 38.8 dB) was lifted
+        // from Thetis setup.cs:482-544, which calibrates for a 100 W output
+        // target. Thetis's drive slider is 0..100 *watts*, so slider=100 →
+        // 100 W target → byte=255, regardless of the radio's rated max (the
+        // radio self-clamps). Zeus's slider is a percent of MaxWatts, so
+        // MaxWatts must match the bracket assumption (100), not the rated
+        // output, or 100 % drive asks the DAC for 10× too little and a
+        // physically-10 W radio (ANAN-10 / ANAN-10E / Brick2) makes ~1 W at
+        // max TUNE. Regression pin for the issue.
+        using var store = NewStore();
+        var d = store.GetDefaults(board);
+        Assert.Equal(100, d.Global.PaMaxPowerWatts);
+        Assert.Equal(38.8, FindGain(d, "10m"));
+    }
+
     [Fact]
     public void OrionMkII_Uses_G2_Class_Defaults()
     {
