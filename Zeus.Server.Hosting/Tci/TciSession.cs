@@ -938,8 +938,13 @@ public sealed class TciSession : IDisposable
         // the receiver-side accumulator in step.)
         if (!on) ResetTxAudio();
 
+        // Echo post-call truth rather than the request: if the radio is
+        // mid-disconnect / mid-reconfigure, or already in the requested
+        // state, TrySetMox is a no-op and lying to MSHV/WSJT-X causes the
+        // client to think MOX is on when it isn't. MSHV tolerates redundant
+        // echoes — it does not tolerate desynchronised state.
         _tx.TrySetMox(on, out _);
-        Send(TciProtocol.Command("trx", rx, on));
+        Send(TciProtocol.Command("trx", rx, _tx.IsMoxOn));
     }
 
     private void HandleTune(string[] args)
@@ -954,8 +959,9 @@ public sealed class TciSession : IDisposable
         }
         else if (args.Length >= 2 && TciProtocol.TryParseBool(args[1], out bool on))
         {
+            // Echo post-call truth — see HandleTrx for rationale.
             _tx.TrySetTun(on, out _);
-            Send(TciProtocol.Command("tune", rx, on));
+            Send(TciProtocol.Command("tune", rx, _tx.IsTunOn));
         }
     }
 
@@ -975,9 +981,14 @@ public sealed class TciSession : IDisposable
         {
             Send(TciProtocol.Command("tx_enable", rx, _tx.IsMoxOn || _tx.IsTunOn));
         }
-        else if (args.Length >= 2 && TciProtocol.TryParseBool(args[1], out bool on))
+        else if (args.Length >= 2 && TciProtocol.TryParseBool(args[1], out _))
         {
-            Send(TciProtocol.Command("tx_enable", rx, on));
+            // Set form is purely the handshake — Zeus doesn't gate anything
+            // on it (real TX permission lives in _tx.TrySetMox/_tx.TrySetTun
+            // when the client follows up with trx/tune). Echo post-call
+            // truth so the client never sees a "yes you can TX" lie when
+            // the radio is mid-disconnect. See HandleTrx for the same nit.
+            Send(TciProtocol.Command("tx_enable", rx, _tx.IsMoxOn || _tx.IsTunOn));
         }
     }
 
