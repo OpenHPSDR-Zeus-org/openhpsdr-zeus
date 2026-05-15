@@ -981,14 +981,18 @@ public sealed class TciSession : IDisposable
         {
             Send(TciProtocol.Command("tx_enable", rx, _tx.IsMoxOn || _tx.IsTunOn));
         }
-        else if (args.Length >= 2 && TciProtocol.TryParseBool(args[1], out _))
+        else if (args.Length >= 2 && TciProtocol.TryParseBool(args[1], out bool on))
         {
-            // Set form is purely the handshake — Zeus doesn't gate anything
-            // on it (real TX permission lives in _tx.TrySetMox/_tx.TrySetTun
-            // when the client follows up with trx/tune). Echo post-call
-            // truth so the client never sees a "yes you can TX" lie when
-            // the radio is mid-disconnect. See HandleTrx for the same nit.
-            Send(TciProtocol.Command("tx_enable", rx, _tx.IsMoxOn || _tx.IsTunOn));
+            // Echo the requested value verbatim. tx_enable is a courtesy
+            // handshake — the client sends `tx_enable:0,true;` to announce
+            // intent and waits for the matching echo before it will send
+            // `trx:0,true;` (PTT-on). At this point MOX/TUN are still off
+            // (PTT hasn't arrived yet), so echoing post-call truth would
+            // bounce back `false`, which MSHV reads as "TX denied" — and
+            // it never issues trx. Don't apply the HandleTrx "post-call
+            // truth" nit here: there's no set call whose result could
+            // diverge from the request; the handler IS the echo.
+            Send(TciProtocol.Command("tx_enable", rx, on));
         }
     }
 
