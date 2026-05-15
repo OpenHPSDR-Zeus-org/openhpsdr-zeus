@@ -12,13 +12,23 @@ namespace Zeus.Server;
 // modelled on Thetis's `Console.WWVCalibration` (console.cs:9779-9854):
 //
 //   1. Snapshot operator state (VFO / mode / filter / zoom).
-//   2. Tune to a known reference (WWV 10 MHz by default).
-//   3. Set USB mode + narrow filter + high zoom so the WWV carrier sits
-//      inside the panadapter's centre bin range.
+//   2. Tune the LO to (reference + 2 kHz), so the reference station's
+//      carrier lands ~2 kHz LOW of LO on the panadapter — clear of the
+//      DC bias spike that HPSDR-class radios always emit at LO. (A naive
+//      "tune directly to 10 MHz" approach can't distinguish a perfectly-
+//      tuned radio from a radio that just doesn't hear WWV, since both
+//      produce a peak at exactly LO.)
+//   3. Set USB mode + narrow filter + zoom 8 so the full ±100 ppm
+//      operating range fits inside the analyzer span.
 //   4. Wait for the WDSP analyzer to settle, capture the panadapter.
-//   5. Find the spectral peak. Reject when below the noise-floor sanity
-//      threshold or further from LO than the ±100 ppm operating range.
-//   6. Compute correction factor = 1 + (peak_offset_Hz / reference_Hz)
+//   5. Search for the spectral peak *only* in the expected band
+//      (-3000..-1000 Hz from LO — where the carrier lives for any
+//      crystal drift inside ±100 ppm). Reject the result unless the
+//      peak rises ≥ 6 dB above the spectrum median AND ≥ -90 dBFS in
+//      absolute terms.
+//   6. Compute correction factor:
+//        deviationHz = peakOffsetFromLo - expectedOffsetHz   (Hz)
+//        factor = 1 + deviationHz / referenceFrequencyHz
 //      and persist it via RadioService.SetFrequencyCorrectionFactor
 //      (write-through to PreferredRadioStore, push to live P1/P2 client,
 //      re-tune so the new factor takes effect immediately).
@@ -34,25 +44,38 @@ public sealed class FrequencyCalibrationService
 {
     public const double DefaultReferenceFrequencyHz = 10_000_000.0;
 
-    // Lower bound on peak strength relative to the analyzer noise floor.
-    // -90 dBFS rejects a typical empty band on the panadapter; WWV at a
-    // city QTH normally lands -60..-30 dBFS in a 3 Hz/pixel bin.
-    private const float NoiseFloorDbThreshold = -90f;
+    // Intentional LO offset above the reference (Hz). Puts the reference
+    // carrier ~2 kHz below LO on the panadapter, well clear of the DC
+    // bias spike. Pairs with zoom 8 — see CalZoomLevel.
+    private const double IntentionalLoOffsetHz = 2000.0;
 
-    // ±100 ppm at 10 MHz = ±1000 Hz; matches piHPSDR's frequency_calibration
-    // bounds. Anything wider almost certainly means the operator is far off
-    // the reference station, not a real calibration condition.
-    private const double MaxAcceptableOffsetHz = 1000.0;
+    // Search band (relative to LO) where the reference carrier is
+    // expected to land. With IntentionalLoOffsetHz = 2000 Hz the
+    // carrier sits at -2000 Hz for a perfectly-tuned radio; at
+    // -3000 Hz for +100 ppm crystal high; at -1000 Hz for -100 ppm
+    // crystal low. Searching outside this band catches noise or
+    // unrelated interferers, not a real WWV peak.
+    private const double SearchMinHz = -3000.0;
+    private const double SearchMaxHz = -1000.0;
 
-    private const int SettleMs = 1500;
+    // Peak must stand out from the spectrum median by at least this much.
+    // Catches the case where the "peak" is just slightly-warm noise — a
+    // real WWV carrier sits well above the surrounding median (typically
+    // 20-40 dB). Relative threshold only: an absolute dB floor would
+    // reject perfectly real but faint signals on quieter SDRs (P2 at
+    // 192 kHz commonly has a -125 dB analyzer median, where even a
+    // -99 dB carrier is unambiguously a signal).
+    private const float MinPeakAboveMedianDb = 6f;
+
+    private const int SettleMs = 2500;
     private const int CaptureRetries = 12;
     private const int CaptureRetryDelayMs = 40;
 
-    // Zoom 16 at 48 kHz P1: ±1500 Hz visible, ~1.5 Hz/pixel resolution.
-    // Zoom 16 at 192 kHz P2: ±6000 Hz visible, ~5.9 Hz/pixel resolution.
-    // Wide enough to catch the entire ±100 ppm range, narrow enough that
-    // a single peak dominates the spectrum at WWV signal strengths.
-    private const int CalZoomLevel = 16;
+    // Zoom 8 at 48 kHz P1: ±3000 Hz visible, ~2.9 Hz/pixel resolution —
+    // exactly covers the ±100 ppm search band when paired with
+    // IntentionalLoOffsetHz = 2 kHz. Zoom 8 at 192 kHz P2: ±12 kHz
+    // visible, ~11.7 Hz/pixel.
+    private const int CalZoomLevel = 8;
 
     private readonly RadioService _radio;
     private readonly DspPipelineService _pipeline;
@@ -105,13 +128,14 @@ public sealed class FrequencyCalibrationService
 
             try
             {
-                // Configure for calibration. USB at 10 MHz puts the WWV
-                // carrier exactly at LO (panadapter centre); a narrow filter
-                // keeps audio CPU low and predictable.
+                // Configure for calibration. LO sits 2 kHz ABOVE the
+                // reference so the carrier lands at -2 kHz on the
+                // panadapter — well clear of the DC spike at LO.
                 _radio.SetMode(RxMode.USB);
                 _radio.SetFilter(100, 2700);
                 _radio.SetZoom(CalZoomLevel);
-                _radio.SetVfo((long)referenceFrequencyHz);
+                long commandedLoHz = (long)(referenceFrequencyHz + IntentionalLoOffsetHz);
+                _radio.SetVfo(commandedLoHz);
 
                 await Task.Delay(SettleMs, ct).ConfigureAwait(false);
 
@@ -119,16 +143,18 @@ public sealed class FrequencyCalibrationService
                 if (!await TryCaptureWithRetryAsync(pixels, ct).ConfigureAwait(false))
                     return CalibrationResult.CaptureFailed;
 
-                long centerHz;
-                float hzPerPixel;
-                _pipeline.TryCapturePanadapterSnapshot(pixels, out hzPerPixel, out centerHz);
+                _ = _pipeline.TryCapturePanadapterSnapshot(pixels, out float hzPerPixel, out _);
 
-                // Peak detection. Pixels are in low-left/high-right display
-                // order; centre pixel maps to LO. The carrier offset is
-                // (peakIndex - width/2) * hzPerPixel.
-                int peakIndex = 0;
+                // Peak detection in the expected band only. Pixels are in
+                // low-left/high-right display order; centre pixel maps to
+                // LO. The carrier offset is (peakIndex - width/2) * hzPerPixel.
+                int centerIdx = pixels.Length / 2;
+                int searchMinIdx = Math.Max(0, centerIdx + (int)Math.Floor(SearchMinHz / hzPerPixel));
+                int searchMaxIdx = Math.Min(pixels.Length - 1, centerIdx + (int)Math.Ceiling(SearchMaxHz / hzPerPixel));
+
+                int peakIndex = -1;
                 float peakDb = float.NegativeInfinity;
-                for (int i = 0; i < pixels.Length; i++)
+                for (int i = searchMinIdx; i <= searchMaxIdx; i++)
                 {
                     if (pixels[i] > peakDb)
                     {
@@ -137,27 +163,38 @@ public sealed class FrequencyCalibrationService
                     }
                 }
 
-                if (peakDb < NoiseFloorDbThreshold)
-                    return CalibrationResult.NoSignal(peakDb);
+                if (peakIndex < 0) return CalibrationResult.CaptureFailed;
 
-                double offsetHz = (peakIndex - pixels.Length / 2.0) * hzPerPixel;
+                float medianDb = Median(pixels);
 
-                if (Math.Abs(offsetHz) > MaxAcceptableOffsetHz)
-                    return CalibrationResult.OffsetOutOfRange(offsetHz, peakDb);
+                _log.LogInformation(
+                    "freqcal.scan searchMin={Min}px searchMax={Max}px peakIdx={Pk} peakDb={Db:F1} medianDb={Med:F1} hzPerPx={Hpp:F2}",
+                    searchMinIdx, searchMaxIdx, peakIndex, peakDb, medianDb, hzPerPixel);
 
-                // factor = 1 + (offsetHz / referenceHz). Derivation:
-                //   actual_LO = commanded * (1 + e)  where e = crystal error
-                //   peak appears at (true_freq - actual_LO) on the panadapter,
-                //   so offsetHz = -commanded * e  ⇒  e = -offsetHz / commanded
-                //   to compensate, factor = 1/(1+e) ≈ 1 - e = 1 + offsetHz/commanded.
-                double factor = 1.0 + (offsetHz / referenceFrequencyHz);
+                if (peakDb - medianDb < MinPeakAboveMedianDb)
+                    return CalibrationResult.NoSignal(peakDb, medianDb);
+
+                double peakOffsetFromLoHz = (peakIndex - centerIdx) * (double)hzPerPixel;
+                double deviationHz = peakOffsetFromLoHz - (-IntentionalLoOffsetHz);
+
+                if (Math.Abs(deviationHz) > 1000.0)
+                    return CalibrationResult.OffsetOutOfRange(deviationHz, peakDb);
+
+                // factor = 1 + (deviationHz / referenceHz). Derivation:
+                //   commandedLO = referenceHz + IntentionalLoOffsetHz
+                //   actualLO    = commandedLO * (1 + e)  (e = crystal error)
+                //   peak appears at refHz - actualLO ≈ -IntentionalLoOffsetHz - referenceHz*e
+                //   so deviationHz = peakPos - (-IntentionalLoOffsetHz) = -referenceHz*e
+                //   ⇒ e = -deviationHz / referenceHz
+                //   to compensate, factor = 1/(1+e) ≈ 1 - e = 1 + deviationHz/referenceHz.
+                double factor = 1.0 + (deviationHz / referenceFrequencyHz);
                 double applied = _radio.SetFrequencyCorrectionFactor(factor);
 
                 _log.LogInformation(
-                    "freqcal.success offset={Off:F2}Hz peakDb={Db:F1} factor={Factor:F9} applied={Applied:F9}",
-                    offsetHz, peakDb, factor, applied);
+                    "freqcal.success peakOffFromLo={Pol:F1}Hz deviationFromExpected={Dev:F1}Hz peakDb={Db:F1} medianDb={Med:F1} factor={Factor:F9} applied={Applied:F9}",
+                    peakOffsetFromLoHz, deviationHz, peakDb, medianDb, factor, applied);
 
-                return CalibrationResult.Success(offsetHz, peakDb, applied);
+                return CalibrationResult.Success(deviationHz, peakDb, applied);
             }
             finally
             {
@@ -196,6 +233,18 @@ public sealed class FrequencyCalibrationService
         }
         return false;
     }
+
+    private static float Median(ReadOnlySpan<float> values)
+    {
+        // Selection-by-sort: spectrum width is 2048, so a one-shot sort
+        // of a copy is cheap (~30 µs) and avoids the boundary trickery
+        // of a partial-quickselect for an even count. Cal runs once per
+        // click, so the temp array cost is irrelevant.
+        var buf = values.ToArray();
+        Array.Sort(buf);
+        int mid = buf.Length / 2;
+        return (buf.Length % 2 == 0) ? (buf[mid - 1] + buf[mid]) / 2f : buf[mid];
+    }
 }
 
 /// <summary>
@@ -222,9 +271,11 @@ public sealed record CalibrationResult(
         CalibrationOutcome.CaptureFailed, null, null, null,
         "Panadapter snapshot was not available — engine offline or pipeline stalled.");
 
-    public static CalibrationResult NoSignal(float peakDb) => new(
+    public static CalibrationResult NoSignal(float peakDb, float medianDb = float.NaN) => new(
         CalibrationOutcome.NoSignal, null, peakDb, null,
-        $"No signal detected at the reference frequency (peak {peakDb:F1} dB below noise floor).");
+        float.IsNaN(medianDb)
+            ? $"No signal detected at the reference frequency (peak {peakDb:F1} dB)."
+            : $"No signal detected at the reference frequency (peak {peakDb:F1} dB, median {medianDb:F1} dB — peak must rise ≥ 6 dB above median).");
 
     public static CalibrationResult OffsetOutOfRange(double offsetHz, float peakDb) => new(
         CalibrationOutcome.OffsetOutOfRange, offsetHz, peakDb, null,

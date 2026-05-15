@@ -252,6 +252,17 @@ public class DspPipelineService : BackgroundService,
     private readonly float[] _wfBuf = new float[Width];
     private readonly float[] _audioBuf = new float[AudioDrainCapacity];
 
+    // Cached panadapter snapshot for the frequency-calibration service
+    // (issue #325). Tick fills this every cycle that produced a valid
+    // pan frame; the cal service reads it without racing for the WDSP
+    // "fresh frame" flag. Single-writer (Tick) + occasional reader
+    // (cal) — protected by _calPanLock.
+    private readonly float[] _calPanSnapshot = new float[Width];
+    private float _calPanHzPerPixel;
+    private long _calPanCenterHz;
+    private long _calPanSnapshotMs;
+    private readonly object _calPanLock = new();
+
     public DspPipelineService(RadioService radio, StreamingHub hub, ILoggerFactory loggerFactory)
     {
         _radio = radio;
@@ -1091,39 +1102,40 @@ public class DspPipelineService : BackgroundService,
     public static int PanadapterWidth => Width;
 
     /// <summary>
-    /// Captures the latest panadapter pixel column (dB values) for spectrum
-    /// peak detection (issue #325 auto-cal). Pixels are written in display
-    /// order (low frequency left, high frequency right), matching what the
-    /// operator sees in the browser. Returns <c>false</c> when no engine /
-    /// channel is open yet, or when WDSP hasn't produced a fresh frame since
-    /// the last call.
+    /// Reads the latest cached panadapter snapshot (dB values, display
+    /// order — low frequency left). Caches are filled by <see cref="Tick"/>
+    /// at 30 Hz; the frequency-calibration service (issue #325) reads from
+    /// here to avoid racing for WDSP's once-per-frame "fresh data" flag,
+    /// which Tick is also consuming and would always win.
     /// </summary>
     /// <param name="dest">Buffer of length <see cref="PanadapterWidth"/>.</param>
     /// <param name="hzPerPixel">Hz spacing between adjacent pixels (out).</param>
     /// <param name="centerHz">Frequency of the centre pixel — the radio's LO
     /// (out). In CW modes this is dial ± cw_pitch; outside CW it equals dial.</param>
-    public bool TryCapturePanadapterSnapshot(Span<float> dest, out float hzPerPixel, out long centerHz)
+    /// <param name="maxAgeMs">Reject the cached snapshot if it is older than
+    /// this many milliseconds. Default 200 ms — six analyzer frames at 30 Hz,
+    /// generous tolerance for a one-off cal measurement without risking
+    /// pre-tune stale data.</param>
+    public bool TryCapturePanadapterSnapshot(
+        Span<float> dest,
+        out float hzPerPixel,
+        out long centerHz,
+        long maxAgeMs = 200)
     {
         hzPerPixel = 0;
         centerHz = 0;
         if (dest.Length != Width) return false;
 
-        var engine = Volatile.Read(ref _engine);
-        int channel = Volatile.Read(ref _channelId);
-        int sampleRate = Volatile.Read(ref _sampleRateHz);
-        if (engine is null || sampleRate <= 0) return false;
+        lock (_calPanLock)
+        {
+            if (_calPanSnapshotMs == 0) return false;
+            long ageMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - _calPanSnapshotMs;
+            if (ageMs > maxAgeMs) return false;
 
-        if (!engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, dest))
-            return false;
-
-        // Display order (low-freq-left). WDSP emits pixel-0 = highest positive
-        // frequency, so flip here for consistency with the operator view.
-        dest.Reverse();
-
-        var state = _radio.Snapshot();
-        int zoom = Math.Max(1, state.ZoomLevel);
-        hzPerPixel = (float)((double)sampleRate / zoom / Width);
-        centerHz = CwOffset.EffectiveLoHz(state);
+            _calPanSnapshot.AsSpan().CopyTo(dest);
+            hzPerPixel = _calPanHzPerPixel;
+            centerHz = _calPanCenterHz;
+        }
         return true;
     }
 
@@ -1441,6 +1453,24 @@ public class DspPipelineService : BackgroundService,
             // extra contract field needed, per task #7 scope note.
             int zoomLevel = Math.Max(1, state.ZoomLevel);
             float hzPerPixel = (float)((double)sampleRate / zoomLevel / Width);
+            long centerHz = CwOffset.EffectiveLoHz(state);
+
+            // Cache for the frequency-calibration service (issue #325). The
+            // cal reads from this cache to avoid racing for WDSP's "fresh
+            // frame" flag — Tick consumes that flag at 30 Hz, leaving no
+            // window for a parallel consumer. Cache only when we actually
+            // got pan data this tick.
+            if (pan)
+            {
+                lock (_calPanLock)
+                {
+                    Array.Copy(panBuf, _calPanSnapshot, Width);
+                    _calPanHzPerPixel = hzPerPixel;
+                    _calPanCenterHz = centerHz;
+                    _calPanSnapshotMs = (long)nowMs;
+                }
+            }
+
             var frame = new DisplayFrame(
                 Seq: ++_seq,
                 TsUnixMs: nowMs,
@@ -1451,7 +1481,7 @@ public class DspPipelineService : BackgroundService,
                 // VfoHz outside CW and VfoHz ∓ cw_pitch in CWU/CWL. The CW filter
                 // (audio passband centred on cw_pitch) then renders on top of
                 // the dial line via PassbandOverlay's `centerHz + filterLow..high`.
-                CenterHz: CwOffset.EffectiveLoHz(state),
+                CenterHz: centerHz,
                 HzPerPixel: hzPerPixel,
                 PanDb: panBuf,
                 WfDb: wfBuf);
