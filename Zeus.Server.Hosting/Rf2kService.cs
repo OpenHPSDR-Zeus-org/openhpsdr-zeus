@@ -34,6 +34,16 @@ public sealed class Rf2kService : BackgroundService
     private static readonly TimeSpan ReconnectBackoff = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(3);
 
+    // Allow this many consecutive poll-cycle failures before we flip Connected
+    // to false. Each cycle hits 8 sequential HTTP endpoints; if any one of them
+    // blips (a 3 s timeout, transient RST, momentary 5xx from the amp's embedded
+    // web server, etc.) the entire cycle fails. Flipping Connected on a single
+    // blip causes a panel-visible flap every 5 s (the ReconnectBackoff window)
+    // even though the next cycle reconnects cleanly. A small tolerance lets us
+    // ride out transient blips while still detecting a real disconnect after
+    // ~3 × PollingIntervalMs of sustained failure.
+    private const int ConsecutiveFailuresBeforeDisconnect = 3;
+
     /// <summary>Match the firmware's snake_case field naming.</summary>
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -53,6 +63,7 @@ public sealed class Rf2kService : BackgroundService
     // Snapshot fields: written under _state, read lock-free volatile when possible.
     private readonly object _state = new();
     private bool _connected;
+    private int _consecutiveFailures;
     private string? _error;
     private DateTimeOffset? _lastSampleUtc;
     private Rf2kInfo? _info;
@@ -280,6 +291,8 @@ public sealed class Rf2kService : BackgroundService
             var antennas = await GetJsonAsync<Rf2kAntennaList>("/antennas", ct);
             var active = await GetJsonAsync<Rf2kActiveAntenna>("/antennas/active", ct);
 
+            int priorFailures;
+            bool wasDisconnected;
             lock (_state)
             {
                 _info = info;
@@ -291,19 +304,52 @@ public sealed class Rf2kService : BackgroundService
                 _operationalInterfaceError = iface?.Error;
                 _antennas = antennas?.Antennas;
                 _activeAntenna = active;
+                priorFailures = _consecutiveFailures;
+                wasDisconnected = !_connected;
                 _connected = true;
+                _consecutiveFailures = 0;
                 _error = null;
                 _lastSampleUtc = DateTimeOffset.UtcNow;
+            }
+            // Log a recovery line if we were silently retrying through transient
+            // blips — useful for distinguishing "amp flaky" from "amp solid".
+            if (priorFailures > 0)
+            {
+                _log.LogInformation(
+                    "rf2k.poll.recovered after={Failures} failed polls host={Host} wasDisconnected={Was}",
+                    priorFailures, cfg.Host, wasDisconnected);
             }
             return true;
         }
         catch (Exception ex)
         {
+            int failures;
+            bool flippedDisconnected;
             lock (_state)
             {
-                _connected = false;
+                _consecutiveFailures++;
+                failures = _consecutiveFailures;
                 _error = ex.Message;
+                // Only flip Connected after the threshold to absorb transient
+                // single-poll blips. Snapshot fields are NOT cleared here so the
+                // UI keeps showing last-known values during the suppress window
+                // rather than blanking on every blip.
+                if (_connected && failures >= ConsecutiveFailuresBeforeDisconnect)
+                {
+                    _connected = false;
+                    flippedDisconnected = true;
+                }
+                else
+                {
+                    flippedDisconnected = false;
+                }
             }
+            // Log every failure so the flapping endpoint surfaces in the log.
+            // Warning level (not Error) — most blips are recoverable; the
+            // flippedDisconnected=true case is the one worth attention.
+            _log.LogWarning(ex,
+                "rf2k.poll.failed consecutive={Count}/{Threshold} host={Host} flippedDisconnected={Flipped}",
+                failures, ConsecutiveFailuresBeforeDisconnect, cfg.Host, flippedDisconnected);
             return false;
         }
     }
@@ -367,6 +413,9 @@ public sealed class Rf2kService : BackgroundService
         _operateMode = null; _operationalInterface = null; _operationalInterfaceError = null;
         _antennas = null; _activeAntenna = null;
         _lastSampleUtc = null;
+        // Reset failure tolerance — count from the previous host should not
+        // carry into a new host/port configuration.
+        _consecutiveFailures = 0;
     }
 
     public override void Dispose()
