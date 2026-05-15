@@ -90,7 +90,6 @@ public sealed class TciServer : IHostedService, IDisposable
     private static readonly long TciTxChronoSpacingSwTicks =
         (long)Math.Round((double)TciTxBlockSamples * Stopwatch.Frequency / TciTxBlockRate);
 
-    private int _tciTxChronoOutstanding;
     private int _tciTxSamplesInPipeline;
     private long _tciTxLastChronoSwTicks;
     private readonly Stopwatch _txChronoClock = new();
@@ -102,8 +101,6 @@ public sealed class TciServer : IHostedService, IDisposable
     {
         lock (_tciTxStateLock)
         {
-            if (_tciTxChronoOutstanding > 0)
-                _tciTxChronoOutstanding--;
             _tciTxSamplesInPipeline += monoSamplesQueued;
         }
     }
@@ -425,7 +422,6 @@ public sealed class TciServer : IHostedService, IDisposable
         _txChronoClock.Restart();
         lock (_tciTxStateLock)
         {
-            _tciTxChronoOutstanding = 0;
             _tciTxSamplesInPipeline = 0;
             // Seed one spacing in the past so the first timer fire sends one
             // chrono. Any larger initial debt would dump the burst-cap on the
@@ -452,7 +448,6 @@ public sealed class TciServer : IHostedService, IDisposable
         _txAudioIngest.SetWdspConsumedCallback(null);
         lock (_tciTxStateLock)
         {
-            _tciTxChronoOutstanding = 0;
             _tciTxSamplesInPipeline = 0;
         }
         _log.LogDebug("tci.tx.chrono stopped");
@@ -482,7 +477,6 @@ public sealed class TciServer : IHostedService, IDisposable
                 if (_tciTxSamplesInPipeline > 4800)
                     break;
 
-                _tciTxChronoOutstanding++;
                 // Advance by one spacing in ticks (NOT to nowTicks): the OS
                 // timer fires unevenly, and resetting to nowTicks bakes the
                 // drift in permanently — causing FT8 audio rate to slip ~2%
