@@ -1,4 +1,15 @@
-name: Zeus-Agent — Issue Triage
+name: KB2UKA-Agent — Issue Triage
+
+# Automated triage on newly-opened issues. Runs as KB2UKA-Agent (App ID
+# 3702876), distinct from kb2uka-agent.yml (which is the mention-based
+# coding bot). Replaces the previous zeus-agent.yml that ran under
+# Brian's Zeus-Agent App — that App is not installed on this repo
+# post-transfer, so it was failing on every issue event.
+#
+# Secrets required (set via `gh secret set`):
+#   - KB2UKA_AGENT_APP_ID      — GitHub App ID (3702876)
+#   - KB2UKA_AGENT_PRIVATE_KEY — Contents of the App's .pem private key
+#   - KB2UKA_OAUTH_TOKEN       — Anthropic Claude Code OAuth token
 
 on:
   issues:
@@ -6,7 +17,7 @@ on:
 
 jobs:
   triage:
-    name: Zeus-Agent
+    name: KB2UKA-Triage
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -14,28 +25,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Mint Zeus-Agent App token
+      - name: Mint KB2UKA-Agent App token
         id: app-token
         uses: actions/create-github-app-token@v1
         with:
-          app-id: ${{ secrets.ZEUS_AGENT_APP_ID }}
-          private-key: ${{ secrets.ZEUS_AGENT_PRIVATE_KEY }}
+          app-id: ${{ secrets.KB2UKA_AGENT_APP_ID }}
+          private-key: ${{ secrets.KB2UKA_AGENT_PRIVATE_KEY }}
 
-      - name: Run Zeus-Agent
+      - name: Run KB2UKA-Agent triage
         uses: anthropics/claude-code-base-action@v0.0.63
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          claude_code_oauth_token: ${{ secrets.KB2UKA_OAUTH_TOKEN }}
           allowed_tools: "Bash(gh label list),Bash(gh label list:*),Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh search:*),Read,Glob,Grep"
           max_turns: "15"
           model: "claude-sonnet-4-6"
           prompt: |
-            You are **Zeus-Agent** 📡, the automated triage assistant for Zeus
+            You are **KB2UKA-Agent** 🛠, the automated triage assistant for Zeus
             (a cross-platform, web-frontend HPSDR client for original-protocol
-            radios — .NET 8 backend, Vite + React frontend, WDSP native DSP
-            engine via P/Invoke). Thetis is the sole authoritative upstream
-            reference.
+            and Protocol-2 radios — .NET 8 backend, Vite + React frontend, WDSP
+            native DSP engine via P/Invoke). Thetis is the sole authoritative
+            upstream reference; see CLAUDE.md for the red-light / green-light
+            rules.
 
             Issue #${{ github.event.issue.number }} was just opened:
             Title: ${{ github.event.issue.title }}
@@ -53,10 +65,11 @@ jobs:
             3. Post exactly ONE comment on the issue with:
                  - a 1–2 sentence summary of what's being reported,
                  - which area of the codebase it likely touches
-                   (Zeus.Server / Zeus.Dsp / Zeus.Protocol1 / Zeus.Contracts /
-                    zeus-web / WDSP-native / TX pipeline / rotctld / QRZ),
+                   (Zeus.Server / Zeus.Dsp / Zeus.Protocol1 / Zeus.Protocol2 /
+                    Zeus.Contracts / zeus-web / WDSP-native / TX pipeline /
+                    rotctld / QRZ),
                  - any clarifying questions the reporter should answer,
-                 - a sign-off line: "— Zeus-Agent 📡".
+                 - a sign-off line: "— KB2UKA-Agent 🛠".
 
             Rules:
             - Be concise. Prefer understatement. No "Great question!" openings.
