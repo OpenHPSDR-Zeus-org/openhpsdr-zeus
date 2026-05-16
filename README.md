@@ -72,6 +72,16 @@ macOS Gatekeeper xattr step, first-run WDSP wisdom wait) is on the wiki's
 [Installation](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Installation)
 page.
 
+### macOS users — read this before launching
+
+> **⚠️ IMPORTANT: After installing on macOS, run this in Terminal before opening Zeus:**
+>
+> ```bash
+> xattr -cr /Applications/Zeus.app
+> ```
+>
+> **Without this step, macOS Gatekeeper will refuse to launch Zeus** ("Zeus.app is damaged and can't be opened" or "cannot be opened because the developer cannot be verified"). Zeus is not yet signed by a registered Apple Developer; the command above strips the quarantine attribute so Gatekeeper allows the app to run. This is a one-time step per install.
+
 ## Building from source
 
 See the wiki's [Developer Guide](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Developer-Guide)
