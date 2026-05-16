@@ -5,6 +5,7 @@
 // See LICENSE for the full GPL text.
 
 import { create } from 'zustand';
+import { fetchThemeSettings, updateThemeSettings } from '../api/themeSettings';
 
 // Theme + per-token colour overrides for the Zeus UI.
 //
@@ -16,24 +17,28 @@ import { create } from 'zustand';
 // injected via a runtime <style> tag that sets `:root { … }` after the
 // theme-block in the stylesheet.
 //
-// Stored in localStorage (not on the server) because:
-//   1. theming is per-browser ergonomics, not per-radio config — Brian on
-//      his laptop should be able to pick a light scheme without it flipping
-//      his shack tablet to silver as well;
-//   2. it parallels the existing `zeus.variant` / `zeus.fonts` keys already
-//      written from App.tsx;
-//   3. the user can wipe localStorage to factory-reset their chrome.
+// Persistence is two-layered:
+//   - localStorage acts as a fast-paint cache so the theme attribute lands
+//     on <html> before the first paint (no HTTP wait, no light/dark flash).
+//   - LiteDB (server) is the source of truth across devices — `hydrate()`
+//     pulls it on mount and reconciles, and every mutation fires a
+//     debounced PUT so a single setting follows the operator from desktop
+//     to tablet without a per-browser reset.
 
 export type ThemeId = 'dark' | 'light';
 
-// Tokens we expose in the operator-facing colour-tweak UI. These are the
-// "feel" tokens an operator notices: accent for active controls, signal
-// chain colours, and the warm halos on meters. Surface colours (--bg-0
-// etc.) are NOT tweakable here — they are governed by the theme overlay,
-// because flipping bg-0 in isolation tends to make text unreadable.
-// Add a token here + a label in TWEAKABLE_TOKEN_META if you want a new
-// slider in the Theme panel.
+// Tokens we expose in the operator-facing colour-tweak UI. Two groups:
+//   - ACCENT tokens — the "feel" tokens an operator notices: accent for
+//     active controls, signal chain colours, warm halos on meters.
+//   - SURFACE tokens — chassis / panel / line / text. These were historically
+//     hidden because flipping one surface in isolation can break contrast
+//     (e.g. a dark --bg-0 with light --fg-0 already painted by the theme).
+//     They're exposed now because Brian asked for per-shack chassis tuning;
+//     the panel renders them in a separate group with a warning that they
+//     can break contrast if pushed too far from the theme defaults.
+// Add a token here + a label in TOKEN_META if you want a new picker row.
 export type TweakableToken =
+  // Accent group
   | '--accent'
   | '--accent-bright'
   | '--tx'
@@ -41,7 +46,20 @@ export type TweakableToken =
   | '--amber'
   | '--cyan'
   | '--ok'
-  | '--orange';
+  | '--orange'
+  // Surface group — chassis
+  | '--bg-0'
+  | '--bg-1'
+  | '--bg-2'
+  | '--bg-3'
+  // Surface group — line / edge
+  | '--line'
+  | '--line-soft'
+  | '--line-strong'
+  // Surface group — text
+  | '--fg-0'
+  | '--fg-1'
+  | '--fg-2';
 
 export const TWEAKABLE_TOKENS: ReadonlyArray<TweakableToken> = [
   '--accent',
@@ -52,6 +70,16 @@ export const TWEAKABLE_TOKENS: ReadonlyArray<TweakableToken> = [
   '--cyan',
   '--ok',
   '--orange',
+  '--bg-0',
+  '--bg-1',
+  '--bg-2',
+  '--bg-3',
+  '--line',
+  '--line-soft',
+  '--line-strong',
+  '--fg-0',
+  '--fg-1',
+  '--fg-2',
 ];
 
 type ThemeState = {
@@ -60,9 +88,16 @@ type ThemeState = {
   // Only entries present here override the stylesheet default; deleting a
   // key restores the original token value from tokens.css.
   overrides: Partial<Record<TweakableToken, string>>;
+  // True once `hydrate()` has reconciled local cache with the server. Stays
+  // false on offline / first-launch failures so we don't keep flapping.
+  hydrated: boolean;
   setTheme: (t: ThemeId) => void;
   setOverride: (token: TweakableToken, hex: string | null) => void;
   resetOverrides: () => void;
+  // Pull the authoritative copy from /api/theme-settings and apply it if it
+  // differs from the localStorage fast-paint cache. Called once by
+  // ThemeApplier on mount; safe to invoke repeatedly.
+  hydrate: () => Promise<void>;
 };
 
 const THEME_KEY = 'zeus.theme';
@@ -120,12 +155,32 @@ function writeOverrides(o: Partial<Record<TweakableToken, string>>): void {
   }
 }
 
+// Debounced PUT to /api/theme-settings — collapses the colour-picker drag
+// stream into ~one write every 300 ms while still flushing the final value.
+// Fire-and-forget; persistence failures are logged but never block the UI.
+let pushTimer: ReturnType<typeof setTimeout> | null = null;
+function schedulePush(state: { theme: ThemeId; overrides: Partial<Record<TweakableToken, string>> }) {
+  if (pushTimer) clearTimeout(pushTimer);
+  pushTimer = setTimeout(() => {
+    pushTimer = null;
+    updateThemeSettings({ theme: state.theme, overrides: state.overrides as Record<string, string> })
+      .catch((err) => {
+        // Server unreachable / 5xx — keep the local change, retry on next mutation.
+        // Cast to keep this file lint-clean without pulling a logger.
+        // eslint-disable-next-line no-console
+        console.warn('theme-store: PUT /api/theme-settings failed', err);
+      });
+  }, 300);
+}
+
 export const useThemeStore = create<ThemeState>((set, get) => ({
   theme: readTheme(),
   overrides: readOverrides(),
+  hydrated: false,
   setTheme: (theme) => {
     writeTheme(theme);
     set({ theme });
+    schedulePush({ theme, overrides: get().overrides });
   },
   setOverride: (token, hex) => {
     const next = { ...get().overrides };
@@ -137,9 +192,38 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     }
     writeOverrides(next);
     set({ overrides: next });
+    schedulePush({ theme: get().theme, overrides: next });
   },
   resetOverrides: () => {
     writeOverrides({});
     set({ overrides: {} });
+    schedulePush({ theme: get().theme, overrides: {} });
+  },
+  hydrate: async () => {
+    if (get().hydrated) return;
+    try {
+      const server = await fetchThemeSettings();
+      // Project the server overrides into the typed TweakableToken keyspace —
+      // anything the client doesn't know about is dropped (forward-compat:
+      // newer server, older client). Same shape readOverrides() returns.
+      const serverOverrides: Partial<Record<TweakableToken, string>> = {};
+      for (const k of TWEAKABLE_TOKENS) {
+        const v = server.overrides[k];
+        if (isHexColor(v)) serverOverrides[k] = v.toUpperCase();
+      }
+      // Apply server values to local state + cache. If they match what we
+      // already had, this is a no-op — but we mark hydrated either way so
+      // subsequent mutations push through schedulePush.
+      writeTheme(server.theme);
+      writeOverrides(serverOverrides);
+      set({ theme: server.theme, overrides: serverOverrides, hydrated: true });
+    } catch (err) {
+      // Backend unreachable — stay on the localStorage cache. Mark hydrated
+      // so we don't loop forever; the next mutation will attempt a PUT and
+      // recover the link. Surface for debugging.
+      // eslint-disable-next-line no-console
+      console.warn('theme-store: hydrate failed, using localStorage cache', err);
+      set({ hydrated: true });
+    }
   },
 }));

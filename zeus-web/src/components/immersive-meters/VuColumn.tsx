@@ -66,7 +66,7 @@ export function VuColumn({ valueDb, name, sub, defsId, zoneTicks }: VuColumnProp
     background:
       'radial-gradient(80% 95% at 50% 100%, var(--immersive-lamp-bloom-1), var(--immersive-lamp-bloom-2) 50%, transparent 75%),' +
       ' radial-gradient(60% 60% at 50% 70%, var(--immersive-lamp-bloom-3), transparent 65%),' +
-      ' linear-gradient(180deg, #18181a 0%, #0c0c0e 100%)',
+      ' linear-gradient(180deg, var(--immersive-lamp-well-top) 0%, var(--immersive-lamp-well-bot) 100%)',
     border: '1px solid var(--immersive-lamp-border)',
     borderRadius: 7,
     padding: '10px 4px 10px',
@@ -170,8 +170,8 @@ export function VuColumn({ valueDb, name, sub, defsId, zoneTicks }: VuColumnProp
           width={COL_W}
           height={COL_HEIGHT}
           rx={2}
-          fill="#080a10"
-          stroke="rgba(255,255,255,0.06)"
+          fill="var(--immersive-vu-track)"
+          stroke="var(--immersive-rim)"
           strokeWidth={0.6}
         />
         {/* inset top shadow */}

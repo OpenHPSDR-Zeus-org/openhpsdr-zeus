@@ -137,6 +137,16 @@
      tokens are kept separate from the existing immersive-* palette so a
      future operator preference toggle can swap lamp colour temperature
      without touching component code. */
+  /* Inner well base gradient — the dark stage behind each lamp's bloom
+     layers. Was previously inlined as `#18181a → #0c0c0e` in BigArc /
+     VuColumn / PullDownArc; promoted to tokens so light theme can flip the
+     stage to silver without touching component code. */
+  --immersive-lamp-well-top: #18181a;
+  --immersive-lamp-well-bot: #0c0c0e;
+  /* VU column track + digital chip background — was hardcoded `#080a10` /
+     `rgba(10,11,14,0.78)`. Tokenised for the same reason. */
+  --immersive-vu-track: #080a10;
+  --immersive-chip-bg: rgba(10, 11, 14, 0.78);
   --immersive-lamp-bloom-1: rgba(255,250,210,0.22);
   --immersive-lamp-bloom-2: rgba(245,235,180,0.10);
   --immersive-lamp-bloom-3: rgba(255,250,220,0.10);
@@ -210,9 +220,13 @@ html[data-fonts="geist"] { --font-sans: 'Inter', sans-serif; --font-mono: 'JetBr
 
   /* Display surfaces stay DARK — panadapter / VFO / S-meter /
      gauges / LED-meter wells all look like screens embedded in
-     silver. */
-  --bg-inset:     #0e1014;
-  --bg-meter:     #050507;
+     silver. Lifted off pitch-black in this theme so they don't
+     read as gouges against the silver chassis (operator feedback
+     2026-05-16: meter wells "still a little too dark"). The
+     panadapter / waterfall WebGL surfaces still draw their own
+     black background and aren't affected by this token. */
+  --bg-inset:     #2a2f37;
+  --bg-meter:     #1f2329;
 
   /* Lines — darker silvers / steel for definition on light chassis */
   --line:         #8a8f96;
@@ -249,11 +263,62 @@ html[data-fonts="geist"] { --font-sans: 'Inter', sans-serif; --font-mono: 'JetBr
 
 /* Brushed silver gradient washes — applied to the four chrome
    strips so the chassis reads as a single machined panel.
-   Display surfaces (spec-bg, immersive-*) deliberately keep
-   their dark defaults from :root, so they appear as inset
+   The spec-bg + panadapter / waterfall WebGL surfaces deliberately
+   keep their dark defaults from :root so they appear as inset
    screens against the silver. */
 :root[data-theme="light"] body {
   background: linear-gradient(180deg, #c4c8ce 0%, #b3b8c0 100%);
+}
+
+/* TX Stage Meters (immersive panel) — flip the section cards + lamp wells
+   to a silver palette. The hot/warn/good fill gradients on the active
+   needles are unchanged (semantic). Warm lamp blooms become near-transparent
+   in light mode because they were tuned for a black stage. */
+:root[data-theme="light"] {
+  --immersive-bg:           var(--bg-0);
+  --immersive-panel:        var(--bg-1);
+  --immersive-panel-2:      var(--bg-1);
+  --immersive-well:         var(--bg-0);
+  --immersive-well-2:       var(--bg-1);
+  --immersive-rim:          rgba(255, 255, 255, 0.55);
+  --immersive-rim-strong:   rgba(255, 255, 255, 0.70);
+  --immersive-line:         var(--line);
+  --immersive-line-2:       var(--line-strong);
+  --immersive-accent:       var(--accent);
+  --immersive-accent-glow:  rgba(12, 95, 156, 0.30);
+
+  /* Lamp wells — was a near-black stage with warm bloom. Light theme
+     uses a brushed-silver stage so the chrome reads as inset on the
+     chassis instead of a black hole. */
+  --immersive-lamp-well-top: #cdd1d7;
+  --immersive-lamp-well-bot: #b3b8bf;
+  --immersive-vu-track:      #e2e5ea;
+  --immersive-chip-bg:       rgba(255, 255, 255, 0.55);
+
+  /* Warm incandescent blooms are tuned for a black stage. On silver they
+     wash to muddy grey; fade them out and let the chrome carry the form. */
+  --immersive-lamp-bloom-1:  transparent;
+  --immersive-lamp-bloom-2:  transparent;
+  --immersive-lamp-bloom-3:  transparent;
+  --immersive-lamp-bloom-blob: transparent;
+  --immersive-lamp-border:   var(--line);
+  --immersive-lamp-rim:      rgba(255, 255, 255, 0.50);
+
+  /* Text on the lit faces flips to near-black. The chip-text stays warm
+     since the chip itself stays dark (back-lit readout). */
+  --immersive-lamp-tick:     rgba(60, 65, 72, 0.65);
+  --immersive-lamp-label:    var(--fg-1);
+  --immersive-lamp-units:    var(--fg-2);
+  --immersive-lamp-readout:  var(--fg-0);
+  --immersive-lamp-readout-glow: transparent;
+  --immersive-lamp-corner:    var(--fg-2);
+  --immersive-lamp-corner-em: var(--fg-1);
+  --immersive-lamp-needle:    var(--fg-0);
+  --immersive-lamp-needle-bri: var(--accent);
+  --immersive-lamp-pin:       var(--accent);
+  --immersive-lamp-pin-glow:  rgba(12, 95, 156, 0.45);
+  --immersive-lamp-hub-glow:  rgba(12, 95, 156, 0.50);
+  --immersive-lamp-active-glow: rgba(12, 95, 156, 0.18);
 }
 
 /* ===========================================================

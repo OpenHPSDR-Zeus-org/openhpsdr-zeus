@@ -523,6 +523,18 @@
   box-shadow: none;
 }
 
+/* Light theme — flip topbar tints from white-alpha (which vanishes on
+   silver) to black-alpha, and bump the group-label opacity so the
+   MODE / FILTER / BAND row stays legible against the silver chassis.
+   Brand text gets a touch more weight + tracking for the same reason. */
+:root[data-theme="light"] .topbar .btn:hover         { background: rgba(0,0,0,0.08); }
+:root[data-theme="light"] .topbar .btn:active,
+:root[data-theme="light"] .topbar .btn.pressed       { background: rgba(0,0,0,0.14); box-shadow: inset 0 1px 2px rgba(0,0,0,0.2); }
+:root[data-theme="light"] .topbar .btn.ghost:hover   { background: rgba(0,0,0,0.08); }
+:root[data-theme="light"] .topbar .ctrl-lbl          { color: var(--fg-1); opacity: 1; }
+:root[data-theme="light"] .brand-name                { font-weight: 700; letter-spacing: 0; color: var(--fg-0); }
+:root[data-theme="light"] .brand-sub                 { color: var(--fg-1); }
+
 /* VFO tab — the big embossed freq readout */
 .vfo-group { display: flex; gap: 4px; align-items: stretch; }
 .vfo-tab {
@@ -841,6 +853,25 @@
   min-height: 0;
   overflow: hidden;
 }
+
+/* Light theme — flip the .panel-head "brass plate" gradient from hardcoded
+   dark (#1c1c21 → #141418) to the brushed-silver --panel-head-top/-bot
+   tokens, so panel headers read as a single machined strip on the silver
+   chassis. The title's amber glow vanishes (low contrast on silver) and
+   the inset-bottom shadow softens; the amber leading rail (::before) is
+   kept — it works on both backgrounds and is part of the brand. */
+:root[data-theme="light"] .panel-head {
+  background: linear-gradient(180deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
+  border-bottom: 1px solid var(--panel-border);
+  box-shadow:
+    inset 0 1px 0 var(--panel-hl-top),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.10);
+}
+:root[data-theme="light"] .panel-head .title {
+  color: var(--fg-0);
+  text-shadow: none;
+}
+
 .panel.t1000-panel { animation: t1000-in 500ms var(--ease-out) both; }
 @keyframes t1000-in {
   from { opacity: 0; transform: scale(0.96) translateY(8px); filter: blur(4px); }

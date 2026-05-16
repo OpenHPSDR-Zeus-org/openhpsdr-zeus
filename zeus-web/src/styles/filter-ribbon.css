@@ -406,3 +406,68 @@
   color: var(--accent);
   letter-spacing: 0.02em;
 }
+
+/* ===========================================================
+   Light theme — re-skin the filter ribbon's hardcoded warm-grey
+   palette to brushed silver. The original gradient (#26292f →
+   #1e2025) and chip family (#3a3e45 / #2a2d33 / #4a4e55) read as
+   a dark slab pasted onto the silver chassis, so we flip them
+   here. Active-state blue accent (#4a9eff) and signal colours
+   pass through unchanged — they read well on both backgrounds.
+   =========================================================== */
+:root[data-theme="light"] .filter-ribbon {
+  color: var(--fg-0);
+  background: linear-gradient(180deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
+  border: 1px solid var(--panel-border);
+  box-shadow:
+    inset 0 1px 0 var(--panel-hl-top),
+    0 1px 2px rgba(0, 0, 0, 0.12);
+}
+:root[data-theme="light"] .filter-ribbon__close { color: var(--fg-2); }
+:root[data-theme="light"] .filter-ribbon__close:hover {
+  color: var(--fg-0);
+  background: rgba(0, 0, 0, 0.06);
+}
+:root[data-theme="light"] .filter-ribbon__label { color: var(--fg-2); }
+:root[data-theme="light"] .filter-ribbon__topCol--bw .filter-ribbon__label,
+:root[data-theme="light"] .filter-ribbon__passband-unit { color: var(--fg-1); }
+:root[data-theme="light"] .filter-ribbon__freq,
+:root[data-theme="light"] .filter-ribbon__passband-value { color: var(--fg-0); }
+
+/* Preset panel + mini-pan surfaces */
+:root[data-theme="light"] .filter-ribbon__presets,
+:root[data-theme="light"] .filter-ribbon__minipan {
+  background: var(--bg-2);
+  border-color: var(--panel-border);
+  color: var(--fg-1);
+}
+:root[data-theme="light"] .filter-ribbon__section-label { color: var(--fg-2); }
+
+/* Preset chips — match light-theme button surfaces. Keep active
+   blue accent intact; just re-skin the rest state. */
+:root[data-theme="light"] .filter-ribbon__chip,
+:root[data-theme="light"] .filter-ribbon__custom {
+  color: var(--fg-1);
+  background: linear-gradient(180deg, var(--bg-2) 0%, var(--bg-3) 100%);
+  border: 1px solid var(--line-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 1px 0 rgba(0, 0, 0, 0.08);
+}
+:root[data-theme="light"] .filter-ribbon__chip:hover,
+:root[data-theme="light"] .filter-ribbon__custom:hover {
+  border-color: var(--fg-3);
+  filter: none;
+}
+:root[data-theme="light"] .filter-ribbon__chip.is-active,
+:root[data-theme="light"] .filter-ribbon__custom.is-active {
+  color: #ffffff;
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent) 100%);
+  border-color: var(--accent);
+}
+:root[data-theme="light"] .filter-ribbon__chip.is-drop-target {
+  border-color: var(--accent);
+  background:
+    linear-gradient(180deg, rgba(74, 158, 255, 0.18) 0%, rgba(74, 158, 255, 0.04) 50%, transparent 100%),
+    linear-gradient(180deg, var(--bg-2) 0%, var(--bg-3) 100%);
+}

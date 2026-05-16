@@ -777,6 +777,19 @@ public static class ZeusEndpoints
             return Results.Ok(store.Get());
         });
 
+        // Operator UI theme ("dark" | "light") + per-CSS-variable colour
+        // overrides. PUT replaces both atomically — overrides is a full snapshot,
+        // not a partial patch, because the picker tracks all rows together.
+        // Persisted in zeus-prefs.db so the look-and-feel follows the operator
+        // across browsers / devices, same pattern as /api/nr-ui-prefs.
+        app.MapGet("/api/theme-settings", (ThemeSettingsStore store) => Results.Ok(store.Get()));
+
+        app.MapPut("/api/theme-settings", (ThemeSettingsSetRequest req, ThemeSettingsStore store) =>
+        {
+            store.Set(req.Theme, req.Overrides);
+            return Results.Ok(store.Get());
+        });
+
         // Radio selection — operator preference seeding, with discovery as the
         // tiebreaker. Preferred=="Auto" removes the override (stored as absence,
         // not a sentinel enum value). Effective = Connected when connected (which

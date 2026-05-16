@@ -128,7 +128,7 @@ export function PullDownArc({
     background:
       'radial-gradient(80% 95% at 50% 100%, var(--immersive-lamp-bloom-1), var(--immersive-lamp-bloom-2) 50%, transparent 75%),' +
       ' radial-gradient(60% 60% at 50% 70%, var(--immersive-lamp-bloom-3), transparent 65%),' +
-      ' linear-gradient(180deg, #18181a 0%, #0c0c0e 100%)',
+      ' linear-gradient(180deg, var(--immersive-lamp-well-top) 0%, var(--immersive-lamp-well-bot) 100%)',
     border: '1px solid var(--immersive-lamp-border)',
     boxShadow:
       'inset 0 1px 0 var(--immersive-lamp-rim), inset 0 -22px 40px rgba(255,240,180,0.05), inset 0 0 40px rgba(0,0,0,0.45)',
@@ -141,8 +141,8 @@ export function PullDownArc({
     // Dark pill mask for legibility — preserved alongside the SVG
     // inset so labels read crisp even on the bloomed bg gradient
     // behind the card.
-    background: 'rgba(10, 11, 14, 0.78)',
-    border: '1px solid rgba(255,255,255,0.05)',
+    background: 'var(--immersive-chip-bg)',
+    border: '1px solid var(--immersive-line)',
     borderRadius: 4,
     padding: '3px 7px',
     fontSize: 9,
@@ -169,8 +169,8 @@ export function PullDownArc({
     // Same masking pill as the LEVELER · GR label — the arc curve also
     // passes through the upper-right corner so this needs the same
     // treatment for consistent legibility.
-    background: 'rgba(10, 11, 14, 0.78)',
-    border: '1px solid rgba(255,255,255,0.05)',
+    background: 'var(--immersive-chip-bg)',
+    border: '1px solid var(--immersive-line)',
     borderRadius: 4,
     padding: '3px 7px',
     fontFamily: 'var(--font-mono)',
@@ -188,8 +188,8 @@ export function PullDownArc({
     // label both land inside this readout's bounding rect, so without
     // a backdrop they'd visibly cut through "0.0 dB". Same recipe as
     // the upper-corner labels.
-    background: 'rgba(10, 11, 14, 0.78)',
-    border: '1px solid rgba(255,255,255,0.05)',
+    background: 'var(--immersive-chip-bg)',
+    border: '1px solid var(--immersive-line)',
     borderRadius: 4,
     padding: '4px 8px',
     fontFamily: 'var(--font-mono)',
@@ -214,8 +214,8 @@ export function PullDownArc({
     bottom: 10,
     // Dark pill mask — the arc's bottom-right endpoint and the "0 dB"
     // anchor pin both land inside this badge's bounding rect.
-    background: 'rgba(10, 11, 14, 0.78)',
-    border: '1px solid rgba(255,255,255,0.05)',
+    background: 'var(--immersive-chip-bg)',
+    border: '1px solid var(--immersive-line)',
     borderRadius: 4,
     padding: '3px 7px',
     fontSize: 8.5,

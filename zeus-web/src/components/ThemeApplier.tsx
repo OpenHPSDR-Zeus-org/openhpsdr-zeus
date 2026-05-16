@@ -19,6 +19,17 @@ import { useThemeStore } from '../state/theme-store';
 export function ThemeApplier(): null {
   const theme = useThemeStore((s) => s.theme);
   const overrides = useThemeStore((s) => s.overrides);
+  const hydrate = useThemeStore((s) => s.hydrate);
+
+  // Pull the authoritative theme + overrides from the backend on mount.
+  // The store's initial values come from localStorage (synchronous, so
+  // [data-theme] lands before first paint — no light/dark flash); hydrate
+  // then reconciles against /api/theme-settings so the operator's choice
+  // follows them across browsers. Fire-and-forget — hydrate() catches its
+  // own errors and falls back to the local cache.
+  useEffect(() => {
+    void hydrate();
+  }, [hydrate]);
 
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', theme);

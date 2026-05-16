@@ -236,7 +236,7 @@ export function BigArc(props: BigArcProps) {
     background:
       'radial-gradient(80% 95% at 50% 95%, var(--immersive-lamp-bloom-1), var(--immersive-lamp-bloom-2) 45%, transparent 72%),' +
       ' radial-gradient(60% 60% at 50% 70%, var(--immersive-lamp-bloom-3), transparent 65%),' +
-      ' linear-gradient(180deg, #18181a 0%, #0c0c0e 100%)',
+      ' linear-gradient(180deg, var(--immersive-lamp-well-top) 0%, var(--immersive-lamp-well-bot) 100%)',
     border: '1px solid var(--immersive-lamp-border)',
     boxShadow:
       'inset 0 1px 0 var(--immersive-lamp-rim), inset 0 -22px 40px rgba(255,240,180,0.05), inset 0 0 50px rgba(0,0,0,0.55)',

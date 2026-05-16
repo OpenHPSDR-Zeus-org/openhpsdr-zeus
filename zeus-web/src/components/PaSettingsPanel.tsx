@@ -228,9 +228,7 @@ export function PaSettingsPanel() {
     <div className="pa-settings density-compact space-y-6">
       <section>
         <div className="mb-2 flex items-center justify-between gap-3">
-          <h3 className="text-xs font-semibold uppercase tracking-widest text-neutral-300">
-            Global
-          </h3>
+          <h3 className="pa-section-h">Global</h3>
           <button
             type="button"
             onClick={handleResetToDefaults}
@@ -246,19 +244,20 @@ export function PaSettingsPanel() {
             Reset to {resetTargetLabel}
           </button>
         </div>
-        <div className="grid grid-cols-1 gap-4 rounded bg-neutral-800/40 p-3 md:grid-cols-2">
-          <label className="flex items-center gap-2 text-xs text-neutral-300">
+        <div className="pa-card grid grid-cols-1 gap-4 p-3 md:grid-cols-2">
+          <label className="pa-field flex items-center gap-2 text-xs">
             <input
               type="checkbox"
               checked={settings.global.paEnabled}
               onChange={(e) => setGlobal({ paEnabled: e.target.checked })}
-              className="h-4 w-4 accent-[#4a9eff]"
+              className="h-4 w-4"
+              style={{ accentColor: 'var(--accent)' }}
             />
             PA Enabled
           </label>
 
           <label
-            className="flex items-center gap-2 text-xs text-neutral-300"
+            className="pa-field flex items-center gap-2 text-xs"
             title="Rated PA output in watts. Slider 100% targets this wattage. Seeded from the connected board kind — HL2 = 5 W, Hermes-class = 10 W, ANAN/Orion/G2 = 100 W. Set to 0 to fall back to the raw drive-byte mode (PA Gain field is ignored)."
           >
             Rated PA Output (W)
@@ -273,10 +272,10 @@ export function PaSettingsPanel() {
                   paMaxPowerWatts: clamp(Number(e.target.value) || 0, PA_MAX_W_MIN, PA_MAX_W_MAX),
                 })
               }
-              className="w-20 rounded border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-right text-xs text-neutral-100"
+              className="pa-num-input w-20 rounded px-2 py-0.5 text-right text-xs"
             />
             {settings.global.paMaxPowerWatts === 0 && (
-              <span className="text-[10px] text-amber-400">
+              <span className="text-[10px]" style={{ color: 'var(--amber)' }}>
                 (0 = raw drive-byte mode — PA Gain ignored)
               </span>
             )}
@@ -285,18 +284,16 @@ export function PaSettingsPanel() {
       </section>
 
       <section>
-        <h3 className="mb-2 text-xs font-semibold uppercase tracking-widest text-neutral-300">
-          Per Band
-        </h3>
+        <h3 className="pa-section-h mb-2">Per Band</h3>
         {showAutoCol && (
-          <p className="mb-2 text-[10px] text-neutral-500">
+          <p className="pa-hint mb-2 text-[10px]">
             Auto column shows the N2ADR LPF mask the HL2 fires automatically on band change.
             These pins assert even when your OC TX / OC RX rows below are empty — pin colour matches state.
           </p>
         )}
-        <div className="overflow-x-auto rounded bg-neutral-800/40">
+        <div className="pa-card overflow-x-auto">
           <table className="w-full border-collapse text-xs">
-            <thead className="text-[10px] uppercase tracking-wider text-neutral-500">
+            <thead className="pa-col-head text-[10px] uppercase tracking-wider">
               <tr>
                 <th className="px-2 py-2 text-left">Band</th>
                 <th className="px-2 py-2 text-right" title={paFieldTitle}>
@@ -320,7 +317,7 @@ export function PaSettingsPanel() {
                 const b = settings.bands.find((x) => x.band === bandName);
                 if (!b) return null;
                 return (
-                  <tr key={bandName} className="pa-row border-t border-neutral-800 text-neutral-300">
+                  <tr key={bandName} className="pa-row pa-band-row">
                     <td className="px-2 font-mono">{b.band}</td>
                     <td className="px-2">
                       <PaSlider
@@ -341,7 +338,8 @@ export function PaSettingsPanel() {
                         type="checkbox"
                         checked={b.disablePa}
                         onChange={(e) => setBand(b.band, { disablePa: e.target.checked })}
-                        className="h-3 w-3 accent-[#4a9eff]"
+                        className="h-3 w-3"
+                        style={{ accentColor: 'var(--accent)' }}
                       />
                     </td>
                     {showAutoCol && (
@@ -375,7 +373,7 @@ export function PaSettingsPanel() {
         </div>
       </section>
 
-      <p className="text-[11px] text-neutral-500">
+      <p className="pa-hint text-[11px]">
         {inflight ? 'Saving…' : loaded ? 'Loaded from server — use APPLY below to persist edits' : 'Loading…'}
         {error ? ` · error: ${error}` : ''}
       </p>

@@ -500,6 +500,21 @@ public sealed record NrUiPrefsSetRequest(
     bool Nr2Expanded,
     bool Nr4Expanded);
 
+// Operator UI theme + per-token colour overrides. `Theme` is one of "dark"
+// | "light" — the theme overlay attribute set on <html data-theme="…">.
+// `Overrides` maps CSS custom-property names (e.g. "--accent") to upper-case
+// 6-digit hex strings; an empty/missing map means "use stylesheet defaults".
+// Server-side LiteDB persistence (previously localStorage) so the operator's
+// look-and-feel follows them across browsers and devices pointed at the
+// same Zeus instance — same pattern as DisplaySettingsStore / NrUiPrefsStore.
+public sealed record ThemeSettingsDto(
+    string Theme,
+    IReadOnlyDictionary<string, string> Overrides);
+
+public sealed record ThemeSettingsSetRequest(
+    string Theme,
+    IReadOnlyDictionary<string, string> Overrides);
+
 // Per-slot pin state for the classic-layout bottom row (Logbook + TX
 // Stage Meters). True = panel is pinned (full body visible). False =
 // collapsed to a chip strip below the pinned tier. Persisted server-side

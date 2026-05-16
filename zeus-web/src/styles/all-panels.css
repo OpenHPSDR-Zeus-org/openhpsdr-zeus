@@ -228,6 +228,25 @@
   outline-offset: 1px;
 }
 
+/* Light theme — flip the brass-plate header gradient from hardcoded dark
+   to the brushed-silver --panel-head-top/-bot tokens so the header reads
+   as part of the silver chassis. Title amber-glow is dropped (vanishes on
+   silver); the leading amber rail (::before) stays — works on both. */
+:root[data-theme="light"] .workspace-tile-header {
+  background: linear-gradient(180deg, var(--panel-head-top) 0%, var(--panel-head-bot) 100%);
+  border-bottom: 1px solid var(--panel-border);
+  box-shadow:
+    inset 0 1px 0 var(--panel-hl-top),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.10);
+}
+:root[data-theme="light"] .workspace-tile-title {
+  color: var(--fg-0);
+  text-shadow: none;
+}
+:root[data-theme="light"] .workspace-tile-drag-handle {
+  color: var(--fg-2);
+}
+
 .workspace-tile-body {
   flex: 1;
   min-height: 0;

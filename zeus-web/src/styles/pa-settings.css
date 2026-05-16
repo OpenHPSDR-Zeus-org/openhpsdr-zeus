@@ -145,3 +145,45 @@
   font-size: 9.5px;
   letter-spacing: 0.16em;
 }
+
+/* ── tokenised chrome ────────────────────────────────────────
+   Replaces the previous bg-neutral-* / text-neutral-* Tailwind
+   palette so the panel flips cleanly with [data-theme="light"].
+   Surfaces lean on --bg-2 (card body), --line (separators), and
+   the standard fg ramp (--fg-0 strong → --fg-3 hint). Tested
+   against both dark and light theme tokens — see tokens.css. */
+.pa-settings .pa-section-h {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--fg-1);
+  margin: 0;
+}
+.pa-settings .pa-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.pa-settings .pa-field {
+  color: var(--fg-1);
+}
+.pa-settings .pa-num-input {
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+  color: var(--fg-0);
+}
+.pa-settings .pa-num-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.pa-settings .pa-hint {
+  color: var(--fg-3);
+}
+.pa-settings .pa-col-head {
+  color: var(--fg-2);
+}
+.pa-settings .pa-band-row {
+  border-top: 1px solid var(--line-soft);
+  color: var(--fg-1);
+}

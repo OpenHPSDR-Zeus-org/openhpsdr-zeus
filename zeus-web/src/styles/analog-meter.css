@@ -97,6 +97,20 @@
   filter: drop-shadow(0 2px 0 rgba(0,0,0,0.3));
 }
 
+/* Light theme — silver chassis. The dark `--bg-inset` "embedded screen"
+   look reads as a black wedge against the brushed silver, and the warm
+   streetlamp glow was tuned for the dark base. Swap to a lifted-silver
+   well and drop the warm overlay; the SVG's own radial dial gradient
+   (--bg-2 → --bg-1 → --bg-0) handles the inside-the-arc shading. */
+:root[data-theme="light"] .am-tile .am-meter-face-wrap,
+:root[data-theme="light"] .am-tile .analog-meter-face-wrap {
+  background: linear-gradient(180deg, var(--bg-1) 0%, var(--bg-0) 100%);
+  border-bottom: 1px solid var(--line-soft);
+}
+:root[data-theme="light"] .am-tile .analog-meter-face {
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.12));
+}
+
 /* ── Zeus mode overlay ────────────────────────────────────── */
 .am-tile .am-zeus-overlay {
   position: absolute;

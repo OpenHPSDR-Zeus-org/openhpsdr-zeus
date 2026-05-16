@@ -4,7 +4,7 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
 // See LICENSE for the full GPL text.
 
-import type { CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import {
   TWEAKABLE_TOKENS,
   useThemeStore,
@@ -12,57 +12,131 @@ import {
   type TweakableToken,
 } from '../state/theme-store';
 
-// Operator-facing label + default colour per tweakable token. The default
-// is the value that ships in tokens.css for the DARK theme; that's what
-// resetting an override falls back to (the light overlay then re-skins
-// surface colours independently). Keep this aligned with tokens.css —
-// the colour rectangle in the picker only matches when the default
-// matches the stylesheet.
+// Operator-facing label + group per tweakable token. "group" controls which
+// section of the panel renders the row — accent tokens get the friendly
+// "tweak the feel" group, surface tokens get a separate section with a
+// warning that pushing them too far can break contrast.
+//
+// The shown swatch value is read live from the document's computed style
+// (so it tracks both the active theme overlay and any operator overrides),
+// not from a hardcoded default. This means surface tokens like --bg-0 show
+// the silver value in light mode and the near-black value in dark mode,
+// even before the user has saved an override.
+type TokenGroup = 'accent' | 'chassis' | 'line' | 'text';
+
 const TOKEN_META: Record<
   TweakableToken,
-  { label: string; help: string; default: string }
+  { label: string; help: string; group: TokenGroup }
 > = {
   '--accent': {
     label: 'Accent',
     help: 'Active controls, selection rings, sidebar highlight.',
-    default: '#0c5f9c',
+    group: 'accent',
   },
   '--accent-bright': {
     label: 'Accent (bright)',
     help: 'Highlighted text — VFO label, value digits.',
-    default: '#4ea6ff',
+    group: 'accent',
   },
   '--tx': {
     label: 'TX',
     help: 'MOX / ON-AIR red, gain-reduction caps.',
-    default: '#ff4a59',
+    group: 'accent',
   },
   '--power': {
     label: 'Power',
     help: 'Forward-power, drive digits, yellow accents.',
-    default: '#ffb13c',
+    group: 'accent',
   },
   '--amber': {
     label: 'Amber',
     help: 'Warning band on meters, warm halo around LEDs.',
-    default: '#ffb13c',
+    group: 'accent',
   },
   '--cyan': {
     label: 'Cyan',
     help: 'Secondary signal indicators, scope grid.',
-    default: '#4dc9ff',
+    group: 'accent',
   },
   '--ok': {
     label: 'OK / Green',
     help: 'Healthy state, lower band of meter ramps.',
-    default: '#2dd566',
+    group: 'accent',
   },
   '--orange': {
     label: 'Orange',
     help: 'Mid band on meter ramps, intermediate signals.',
-    default: '#ff8a3c',
+    group: 'accent',
+  },
+  '--bg-0': {
+    label: 'Chassis backdrop',
+    help: 'App backdrop and topbar — outermost chrome.',
+    group: 'chassis',
+  },
+  '--bg-1': {
+    label: 'Panel base',
+    help: 'Panel body fill — what the gauges sit on.',
+    group: 'chassis',
+  },
+  '--bg-2': {
+    label: 'Control surface',
+    help: 'Button/input rest state, settings card fill.',
+    group: 'chassis',
+  },
+  '--bg-3': {
+    label: 'Control hover',
+    help: 'Hover state for buttons and inputs.',
+    group: 'chassis',
+  },
+  '--line': {
+    label: 'Hairline',
+    help: 'Default border and divider colour.',
+    group: 'line',
+  },
+  '--line-soft': {
+    label: 'Hairline (soft)',
+    help: 'Subtle row separators, inset borders.',
+    group: 'line',
+  },
+  '--line-strong': {
+    label: 'Hairline (strong)',
+    help: 'Stronger borders — input outlines, vfo tab edge.',
+    group: 'line',
+  },
+  '--fg-0': {
+    label: 'Text — primary',
+    help: 'Strongest text colour: brand, readouts, headings.',
+    group: 'text',
+  },
+  '--fg-1': {
+    label: 'Text — secondary',
+    help: 'Most labels and chip values.',
+    group: 'text',
+  },
+  '--fg-2': {
+    label: 'Text — muted',
+    help: 'Help text, less-critical labels.',
+    group: 'text',
   },
 };
+
+// Read the live effective value of a CSS variable from the document root.
+// Falls back to '#000000' if the value isn't a 6-digit hex (e.g. rgba()).
+// Used so the colour swatch reflects the *currently rendered* colour even
+// when no override is set, which matters for surface tokens that flip
+// between themes.
+function readEffective(token: TweakableToken): string {
+  if (typeof window === 'undefined') return '#000000';
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue(token)
+    .trim()
+    .toLowerCase();
+  if (/^#[0-9a-f]{6}$/.test(raw)) return raw.toUpperCase();
+  if (/^#[0-9a-f]{3}$/.test(raw)) {
+    return ('#' + raw[1] + raw[1] + raw[2] + raw[2] + raw[3] + raw[3]).toUpperCase();
+  }
+  return '#000000';
+}
 
 const THEME_OPTIONS: ReadonlyArray<{
   id: ThemeId;
@@ -88,6 +162,36 @@ function isHexColor(v: string): boolean {
   return /^#[0-9A-Fa-f]{6}$/.test(v);
 }
 
+const GROUP_META: Record<
+  TokenGroup,
+  { title: string; blurb: string; warn?: boolean }
+> = {
+  accent: {
+    title: 'Accent palette',
+    blurb:
+      'Active controls, signal indicators, meter halos. Tweak any value; changes apply to both themes.',
+  },
+  chassis: {
+    title: 'Chassis surfaces',
+    blurb:
+      'App backdrop, panel chrome, button surfaces. These flip per theme — the swatch shows the current effective value.',
+    warn: true,
+  },
+  line: {
+    title: 'Lines & borders',
+    blurb: 'Hairlines, dividers, input outlines.',
+    warn: true,
+  },
+  text: {
+    title: 'Text',
+    blurb:
+      'Primary/secondary/muted text ramp. Pushing these too close to a chassis surface will break contrast.',
+    warn: true,
+  },
+};
+
+const GROUP_ORDER: ReadonlyArray<TokenGroup> = ['accent', 'chassis', 'line', 'text'];
+
 export function ThemeSettingsPanel() {
   const theme = useThemeStore((s) => s.theme);
   const overrides = useThemeStore((s) => s.overrides);
@@ -95,7 +199,29 @@ export function ThemeSettingsPanel() {
   const setOverride = useThemeStore((s) => s.setOverride);
   const resetOverrides = useThemeStore((s) => s.resetOverrides);
 
+  // Live effective colours — re-read whenever the theme flips or an override
+  // changes, so the swatches reflect what's actually on the page.
+  const [effective, setEffective] = useState<Partial<Record<TweakableToken, string>>>({});
+  useEffect(() => {
+    // Defer one frame so any pending ThemeApplier <style> tag has been
+    // applied to the document before we read computed styles.
+    const id = requestAnimationFrame(() => {
+      const next: Partial<Record<TweakableToken, string>> = {};
+      for (const tok of TWEAKABLE_TOKENS) next[tok] = readEffective(tok);
+      setEffective(next);
+    });
+    return () => cancelAnimationFrame(id);
+  }, [theme, overrides]);
+
   const hasOverrides = Object.keys(overrides).length > 0;
+
+  // Bucket tokens by group, preserving TWEAKABLE_TOKENS order within each.
+  const tokensByGroup: Record<TokenGroup, TweakableToken[]> = {
+    accent: [], chassis: [], line: [], text: [],
+  };
+  for (const tok of TWEAKABLE_TOKENS) {
+    tokensByGroup[TOKEN_META[tok].group].push(tok);
+  }
 
   return (
     <section style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
@@ -130,74 +256,84 @@ export function ThemeSettingsPanel() {
         </div>
       </div>
 
-      <div>
-        <div style={sectionHead}>
-          <h3 style={sectionH3}>Colour palette</h3>
-          <p style={sectionP}>
-            Tweak any of the accent colours. Changes apply to both themes.
-            Clearing a value (Reset) restores the default for that token.
-          </p>
-        </div>
+      {GROUP_ORDER.map((group) => {
+        const groupMeta = GROUP_META[group];
+        const tokens = tokensByGroup[group];
+        if (tokens.length === 0) return null;
+        return (
+          <div key={group}>
+            <div style={sectionHead}>
+              <h3 style={sectionH3}>{groupMeta.title}</h3>
+              <p style={sectionP}>{groupMeta.blurb}</p>
+              {groupMeta.warn && (
+                <p style={sectionWarn}>
+                  ⚠ Surface tokens flip per theme. Push too far from defaults
+                  and text may become unreadable — Reset to recover.
+                </p>
+              )}
+            </div>
 
-        <div style={paletteList}>
-          {TWEAKABLE_TOKENS.map((tok) => {
-            const meta = TOKEN_META[tok];
-            const overridden = overrides[tok];
-            const current = (overridden ?? meta.default).toUpperCase();
-            return (
-              <div key={tok} style={paletteRow}>
-                <div style={paletteLabels}>
-                  <span style={paletteLabel}>{meta.label}</span>
-                  <span style={paletteHelp}>{meta.help}</span>
-                </div>
-                <div style={paletteControls}>
-                  <input
-                    type="color"
-                    value={current}
-                    onChange={(e) =>
-                      setOverride(tok, e.target.value.toUpperCase())
-                    }
-                    style={pickerStyle}
-                    aria-label={`${meta.label} colour`}
-                  />
-                  <input
-                    type="text"
-                    value={current}
-                    onChange={(e) => {
-                      const raw = e.target.value.trim();
-                      const v = raw.startsWith('#') ? raw : `#${raw}`;
-                      if (isHexColor(v)) setOverride(tok, v.toUpperCase());
-                    }}
-                    maxLength={7}
-                    spellCheck={false}
-                    style={hexInput}
-                    aria-label={`${meta.label} hex value`}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setOverride(tok, null)}
-                    disabled={!overridden}
-                    style={resetBtn(!!overridden)}
-                    title="Restore default"
-                  >
-                    Reset
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+            <div style={paletteList}>
+              {tokens.map((tok) => {
+                const meta = TOKEN_META[tok];
+                const overridden = overrides[tok];
+                const current = (overridden ?? effective[tok] ?? '#000000').toUpperCase();
+                return (
+                  <div key={tok} style={paletteRow}>
+                    <div style={paletteLabels}>
+                      <span style={paletteLabel}>{meta.label}</span>
+                      <span style={paletteHelp}>{meta.help}</span>
+                    </div>
+                    <div style={paletteControls}>
+                      <input
+                        type="color"
+                        value={current}
+                        onChange={(e) =>
+                          setOverride(tok, e.target.value.toUpperCase())
+                        }
+                        style={pickerStyle}
+                        aria-label={`${meta.label} colour`}
+                      />
+                      <input
+                        type="text"
+                        value={current}
+                        onChange={(e) => {
+                          const raw = e.target.value.trim();
+                          const v = raw.startsWith('#') ? raw : `#${raw}`;
+                          if (isHexColor(v)) setOverride(tok, v.toUpperCase());
+                        }}
+                        maxLength={7}
+                        spellCheck={false}
+                        style={hexInput}
+                        aria-label={`${meta.label} hex value`}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setOverride(tok, null)}
+                        disabled={!overridden}
+                        style={resetBtn(!!overridden)}
+                        title="Restore default"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
 
-        <div style={footerRow}>
-          <button
-            type="button"
-            onClick={resetOverrides}
-            disabled={!hasOverrides}
-            style={resetAllBtn(hasOverrides)}
-          >
-            Reset all colours
-          </button>
-        </div>
+      <div style={footerRow}>
+        <button
+          type="button"
+          onClick={resetOverrides}
+          disabled={!hasOverrides}
+          style={resetAllBtn(hasOverrides)}
+        >
+          Reset all colours
+        </button>
       </div>
     </section>
   );
@@ -223,6 +359,13 @@ const sectionP: CSSProperties = {
   fontSize: 12,
   lineHeight: 1.5,
   color: 'var(--fg-2)',
+};
+const sectionWarn: CSSProperties = {
+  margin: 0,
+  flexBasis: '100%',
+  fontSize: 11,
+  lineHeight: 1.5,
+  color: 'var(--amber)',
 };
 
 const themeGrid: CSSProperties = {
@@ -278,11 +421,12 @@ const themeBlurb: CSSProperties = {
 };
 
 const paletteList: CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
+  display: 'grid',
+  gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+  gap: 1,
   border: '1px solid var(--line)',
   borderRadius: 'var(--r-md)',
-  background: 'var(--bg-1)',
+  background: 'var(--line-soft)',
   overflow: 'hidden',
 };
 
@@ -292,7 +436,7 @@ const paletteRow: CSSProperties = {
   alignItems: 'center',
   gap: 14,
   padding: '11px 14px',
-  borderTop: '1px solid var(--line-soft)',
+  background: 'var(--bg-1)',
 };
 
 const paletteLabels: CSSProperties = {
