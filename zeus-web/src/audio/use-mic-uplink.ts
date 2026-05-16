@@ -94,9 +94,13 @@ export function useMicUplink(): void {
         windowPeak = 0;
       }
 
-      // Samples: only forwarded to the server while keyed. Capturing always +
+      // Samples: only forwarded when the local operator has actually keyed
+      // (MoxButton / spacebar PTT / MobilePttButton). Capturing always +
       // gating here avoids a ~300 ms getUserMedia cold-start on every MOX.
-      if (useTxStore.getState().moxOn) sendMicPcm(samples);
+      // Gated on localMicArmed rather than moxOn so a server-side MOX edge
+      // from a TCI client (WSJT-X / MSHV) doesn't make the browser race the
+      // TCI audio path into TxAudioIngest._accumulator. See issue #346.
+      if (useTxStore.getState().localMicArmed) sendMicPcm(samples);
     })
       .then((h) => {
         if (disposed) { void h.stop(); return; }

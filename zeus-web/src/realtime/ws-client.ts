@@ -209,7 +209,9 @@ export function startRealtime(path = '/ws'): () => void {
       // Server-side, StreamingHub drops MOX on its end — this is the paired
       // client-side cleanup so the MOX button reverts to RX even if we can't
       // round-trip a POST (the HTTP path may be down too).
-      if (useTxStore.getState().moxOn) useTxStore.getState().setMoxOn(false);
+      const txOnClose = useTxStore.getState();
+      if (txOnClose.moxOn) txOnClose.setMoxOn(false);
+      if (txOnClose.localMicArmed) txOnClose.setLocalMicArmed(false);
       if (activeWs === ws) activeWs = null;
       ws = null;
       schedule();
@@ -400,6 +402,12 @@ export function startRealtime(path = '/ws'): () => void {
           } else {
             txStore.setMoxOn(false);
             txStore.setTunOn(false);
+            // Server forced MOX off (SWR trip, TX timeout, TCI key-up) — also
+            // disarm the local mic so the browser stops pushing samples even if
+            // the operator never released their MoxButton / spacebar. Inverse
+            // is intentional asymmetric: server-side MOX-on never raises
+            // localMicArmed (only local interaction does — see issue #346).
+            if (txStore.localMicArmed) txStore.setLocalMicArmed(false);
           }
           return;
         }

@@ -56,16 +56,19 @@ export function MoxButton() {
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const moxOn = useTxStore((s) => s.moxOn);
   const setMoxOn = useTxStore((s) => s.setMoxOn);
+  const setLocalMicArmed = useTxStore((s) => s.setLocalMicArmed);
 
   const click = useCallback(() => {
     const next = !moxOn;
     // PERF_PASS_3_DEBUG: t0 — operator-initiated MOX edge wall-clock. Uncommitted.
     console.log('mox.client.release', performance.now(), 'next=', next);
     setMoxOn(next);
+    setLocalMicArmed(next);
     setMox(next).catch(() => {
       setMoxOn(!next);
+      setLocalMicArmed(!next);
     });
-  }, [moxOn, setMoxOn]);
+  }, [moxOn, setMoxOn, setLocalMicArmed]);
 
   return (
     <button
