@@ -64,6 +64,12 @@ public sealed class RadioService : IDisposable
     private readonly PsSettingsStore? _psStore;
     private readonly FilterPresetStore? _filterPresetStore;
     private readonly RadioStateStore? _radioStateStore;
+    // Cached PS board key for the currently-connected radio. Set by
+    // ApplyPsHwPeakForConnection (P1 or P2 connect path) and read by
+    // PersistPsState to route HW Peak writes to the correct per-board slot.
+    // Empty when nothing is connected — PersistPsState skips HW Peak persistence
+    // in that case (no board → no slot to write).
+    private string _currentPsBoardKey = string.Empty;
     // Debounced state flush. Set to true in every Mutate(); a 1 Hz timer
     // calls FlushState() which writes to LiteDB and clears the flag.
     // Avoids hammering LiteDB during rapid VFO scroll or filter drags.
@@ -204,9 +210,12 @@ public sealed class RadioService : IDisposable
         }
 
         // Load persisted PS settings — operator's calibration tuning. Master
-        // arm and cal-mode are deliberately NOT persisted (parity with MOX);
-        // only the timing/preset/auto-att tuning is. PsHwPeak is left at the
-        // P1 default; ConnectAsync / ConnectP2Async overrides per-radio.
+        // arm flag is deliberately NOT persisted (parity with MOX); the
+        // timing/preset/auto-att/HW-peak tuning is. PsHwPeak is resolved
+        // per-radio in ApplyPsHwPeakForConnection (called from
+        // ConnectAsync / ConnectP2Async), which prefers the persisted
+        // per-board value when present and falls back to the factory
+        // default otherwise.
         var ps = _psStore?.Get();
 
         // RadioStateStore snapshot — hydrates active mode/VFO/filter/volume/zoom
@@ -289,14 +298,28 @@ public sealed class RadioService : IDisposable
     /// callers don't drop fields by writing only what they touched. Called
     /// from SetPs, SetPsAdvanced, SetPsFeedbackSource, and SetTwoTone.
     ///
-    /// PsEnabled / TwoToneEnabled (master arm flags) and PsHwPeak (per-radio
-    /// derived) are intentionally NOT in the entry — same operator-action
-    /// discipline as MOX/TUN.
+    /// PsEnabled / TwoToneEnabled (master arm flags) are intentionally NOT
+    /// in the entry — same operator-action discipline as MOX/TUN. PsHwPeak
+    /// IS persisted per-connected-board via the HwPeakByBoard dictionary;
+    /// when no board is currently connected the HwPeak portion of the write
+    /// is skipped (existing per-board entries are preserved untouched).
     /// </summary>
     private void PersistPsState()
     {
         if (_psStore is null) return;
         var snap = Snapshot();
+        // Preserve any existing per-board HW Peak map and only mutate the
+        // slot owned by the currently-connected radio. Reset / disconnect
+        // paths set _currentPsBoardKey back to empty, which skips the HW
+        // Peak write entirely — operators don't lose other-board entries.
+        var existing = _psStore.Get();
+        var hwPeakByBoard = existing?.HwPeakByBoard is { } map
+            ? new Dictionary<string, double>(map)
+            : new Dictionary<string, double>();
+        if (!string.IsNullOrEmpty(_currentPsBoardKey))
+        {
+            hwPeakByBoard[_currentPsBoardKey] = snap.PsHwPeak;
+        }
         _psStore.Upsert(new PsSettingsEntry
         {
             Auto = snap.PsAuto,
@@ -310,7 +333,23 @@ public sealed class RadioService : IDisposable
             TwoToneFreq1 = snap.TwoToneFreq1,
             TwoToneFreq2 = snap.TwoToneFreq2,
             TwoToneMag = snap.TwoToneMag,
+            HwPeakByBoard = hwPeakByBoard,
         });
+    }
+
+    /// <summary>
+    /// Build the per-board PS settings key used by PsSettingsEntry.HwPeakByBoard.
+    /// Format: `{p1|p2}:{board}[:variant]` where the variant suffix is only
+    /// present when board is `OrionMkII` and we're on P2 (the 0x0A wire-byte
+    /// alias family — G2, G2_1K, Anan7000DLE, Anan8000DLE, OrionMkII original,
+    /// AnvelinaPro3, RedPitaya — each has a distinct feedback chain).
+    /// </summary>
+    internal static string GetPsBoardKey(bool isProtocol2, HpsdrBoardKind board, OrionMkIIVariant variant)
+    {
+        string proto = isProtocol2 ? "p2" : "p1";
+        if (isProtocol2 && board == HpsdrBoardKind.OrionMkII)
+            return $"{proto}:{board}:{variant}";
+        return $"{proto}:{board}";
     }
 
     // Ribbon-visibility setter — frontend toggles via REST, server broadcasts
@@ -502,6 +541,11 @@ public sealed class RadioService : IDisposable
             AttOffsetDb = 0,
             AdcOverloadWarning = false,
         });
+        // Drop the PS board key — any SetPsAdvanced call between now and the
+        // next connect (e.g. operator dialling in the panel while
+        // disconnected) should NOT write into the previous radio's slot.
+        // ApplyPsHwPeakForConnection sets it again on next connect.
+        _currentPsBoardKey = string.Empty;
         return Snapshot();
     }
 
@@ -1418,26 +1462,46 @@ public sealed class RadioService : IDisposable
         };
 
     /// <summary>
-    /// Apply a per-radio PS hardware-peak default to the StateDto. Called by
+    /// Apply a per-radio PS hardware-peak to the StateDto. Called by
     /// DspPipelineService after a successful connect (P1 or P2) so the
     /// engine sees the correct curve scale before the operator arms PS.
-    /// Doesn't fire StateChanged unless the value actually moves.
+    ///
+    /// Resolution order:
+    ///   1. Operator-calibrated value from PsSettingsStore.HwPeakByBoard
+    ///      (set by SetPsAdvanced or the auto-cal control loop) — wins when
+    ///      present so chains that don't match the factory default
+    ///      (external amp sample taps, non-stock attenuator pads) keep
+    ///      their hard-won calibration across reconnects.
+    ///   2. Per-board factory default from ResolvePsHwPeak.
+    ///
+    /// PsHwPeakDefault always tracks (2) so the frontend can render a
+    /// "differs from factory default" hint when the operator value is
+    /// active. Doesn't fire StateChanged unless something actually moves.
     /// </summary>
     public void ApplyPsHwPeakForConnection(bool isProtocol2, HpsdrBoardKind board)
     {
-        double peak = ResolvePsHwPeak(isProtocol2, board, EffectiveOrionMkIIVariant);
-        // Snap PsHwPeakDefault to the resolved per-board value alongside
-        // PsHwPeak so the UI can compare them for a "differs from default"
-        // hint. mi0bot ref: PSForm.cs:830 reads HardwareSpecific.PSDefaultPeak
-        // (clsHardwareSpecific.cs:303-328) at the same boundary — radio
-        // change → re-resolve default.
+        var variant = EffectiveOrionMkIIVariant;
+        string boardKey = GetPsBoardKey(isProtocol2, board, variant);
+        double factoryDefault = ResolvePsHwPeak(isProtocol2, board, variant);
+        // Prefer a persisted operator-calibrated value for this exact
+        // board / variant. Missing entry → fall through to the factory
+        // default (first connect on a new board, or operator hasn't tuned).
+        var persisted = _psStore?.Get();
+        bool usingPersisted = persisted?.HwPeakByBoard is { } map
+            && map.TryGetValue(boardKey, out double saved)
+            && saved > 0.0;
+        double peak = usingPersisted ? persisted!.HwPeakByBoard[boardKey] : factoryDefault;
+        // Cache the board key so PersistPsState routes future SetPsAdvanced
+        // writes into the right slot.
+        _currentPsBoardKey = boardKey;
         Mutate(s =>
-            s.PsHwPeak == peak && s.PsHwPeakDefault == peak
+            s.PsHwPeak == peak && s.PsHwPeakDefault == factoryDefault
                 ? s
-                : s with { PsHwPeak = peak, PsHwPeakDefault = peak });
+                : s with { PsHwPeak = peak, PsHwPeakDefault = factoryDefault });
         _log.LogInformation(
-            "radio.applyPsHwPeak proto={Proto} board={Board} peak={Peak:F4}",
-            isProtocol2 ? "P2" : "P1", board, peak);
+            "radio.applyPsHwPeak proto={Proto} board={Board} variant={Variant} key={Key} peak={Peak:F4} default={Default:F4} source={Source}",
+            isProtocol2 ? "P2" : "P1", board, variant, boardKey, peak, factoryDefault,
+            usingPersisted ? "persisted" : "factory");
     }
 
     public StateDto SetZoom(int level)
@@ -1573,6 +1637,10 @@ public sealed class RadioService : IDisposable
             Status = ConnectionStatus.Disconnected,
             Endpoint = null,
         });
+        // Same reasoning as P1 DisconnectAsync — clear the board key so
+        // disconnected SetPsAdvanced writes don't leak into the previous
+        // radio's per-board HW Peak slot.
+        _currentPsBoardKey = string.Empty;
         P2Disconnected?.Invoke();
     }
 

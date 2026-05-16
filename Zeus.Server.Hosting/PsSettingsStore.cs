@@ -25,14 +25,23 @@ using Zeus.Contracts;
 namespace Zeus.Server;
 
 // PureSignal settings persistence. Stores the operator's calibration tuning
-// (timing delays, ints/spi preset, ptol mode, auto-attenuate) so it survives
-// server restarts. Shares zeus-prefs.db with DspSettingsStore.
+// (timing delays, ints/spi preset, ptol mode, auto-attenuate, per-board
+// HW peak) so it survives server restarts. Shares zeus-prefs.db with
+// DspSettingsStore.
 //
 // Deliberately does NOT persist `PsEnabled` (the master arm) or `PsAuto` /
 // `PsSingle` (cal mode) — these reset to safe defaults each session. Same
 // pattern as MOX / TUN: arming PS is an operator action, never an automatic
-// "resume what we did last time" behaviour. PsHwPeak isn't persisted either
-// because RadioService re-derives it per-radio at connect time.
+// "resume what we did last time" behaviour.
+//
+// `HwPeakByBoard` IS persisted as of 2026-05-16. The earlier "re-derive per
+// radio at connect time" assumption clobbered operator-calibrated values
+// every reconnect — on chains that don't match the per-board factory
+// default (external amp sample taps, non-stock attenuator pads) the value
+// can legitimately differ from the resolved default and must survive a
+// restart. The dictionary is keyed by `{p1|p2}:{board}[:variant]` (variant
+// only when board is `OrionMkII` and we're on P2) so each physical chain
+// owns its own calibrated value.
 public sealed class PsSettingsStore : IDisposable
 {
     private readonly LiteDatabase _db;
@@ -105,5 +114,14 @@ public sealed class PsSettingsEntry
     public double TwoToneFreq1 { get; set; } = 700.0;
     public double TwoToneFreq2 { get; set; } = 1900.0;
     public double TwoToneMag { get; set; } = 0.49;
+    // Per-board HW peak overrides. Keyed by `{p1|p2}:{board}[:variant]` —
+    // e.g. "p2:OrionMkII:G2", "p1:HermesLite2", "p1:Hermes". Populated by
+    // RadioService.PersistPsState whenever the operator (or auto-cal)
+    // changes PsHwPeak while a radio is connected; consumed by
+    // ApplyPsHwPeakForConnection, which prefers a persisted entry over the
+    // per-board factory default. Empty on first run — no entry means "use
+    // the factory default from RadioService.ResolvePsHwPeak". See lengthy
+    // header comment above for the why.
+    public Dictionary<string, double> HwPeakByBoard { get; set; } = new();
     public DateTime UpdatedUtc { get; set; }
 }

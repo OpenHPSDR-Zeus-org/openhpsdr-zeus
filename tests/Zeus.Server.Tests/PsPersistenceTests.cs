@@ -171,4 +171,101 @@ public class PsPersistenceTests : IDisposable
         // every fresh session even if Enabled=true had been set previously.
         Assert.False(snap.TwoToneEnabled);
     }
+
+    [Fact]
+    public void PsHwPeak_PersistsPerBoard_AndSurvivesRestart()
+    {
+        // KB2UKA's symptom: he hand-calibrated HW Peak to 0.655 for the G2 +
+        // RF2K-S external sample-tap chain (factory default 0.6121 is too low
+        // for that physical chain — Observed bar pegs red). Backend restart
+        // clobbered it back to 0.6121 because the old code re-derived per
+        // connect without consulting persisted state. This guards that the
+        // operator-calibrated value survives a restart and only applies to
+        // the matching board key.
+        var (radio1, store) = BuildRadioWithStore();
+        // Simulate a P2 G2 connect so RadioService caches the right board key.
+        // Variant default is G2 — that's what EffectiveOrionMkIIVariant returns
+        // without an explicit override, matching KB2UKA's bench.
+        radio1.ApplyPsHwPeakForConnection(isProtocol2: true, board: HpsdrBoardKind.OrionMkII);
+        var pristine = radio1.Snapshot();
+        Assert.Equal(0.6121, pristine.PsHwPeak);          // factory default
+        Assert.Equal(0.6121, pristine.PsHwPeakDefault);
+
+        // Operator dials in 0.655 — write should land in the per-board slot.
+        radio1.SetPsAdvanced(new PsAdvancedSetRequest(HwPeak: 0.655));
+        Assert.Equal(0.655, radio1.Snapshot().PsHwPeak);
+        var entry = store.Get();
+        Assert.NotNull(entry);
+        string g2Key = RadioService.GetPsBoardKey(true, HpsdrBoardKind.OrionMkII, OrionMkIIVariant.G2);
+        Assert.True(entry!.HwPeakByBoard.ContainsKey(g2Key));
+        Assert.Equal(0.655, entry.HwPeakByBoard[g2Key]);
+
+        // Fresh RadioService against the same on-disk DB — re-connect to the
+        // G2 should restore 0.655, NOT the factory 0.6121.
+        var (radio2, _) = BuildRadioWithStore();
+        radio2.ApplyPsHwPeakForConnection(isProtocol2: true, board: HpsdrBoardKind.OrionMkII);
+        var restored = radio2.Snapshot();
+        Assert.Equal(0.655, restored.PsHwPeak);            // operator value wins
+        Assert.Equal(0.6121, restored.PsHwPeakDefault);    // factory default still surfaced for the UI hint
+    }
+
+    [Fact]
+    public void PsHwPeak_PerBoardSlots_DontLeakAcrossBoards()
+    {
+        // Operator who switches between an HL2 and a G2 (KB2UKA does) should
+        // get the right calibrated value per radio. Setting on one board
+        // must not stomp the other's entry.
+        var (radio1, store) = BuildRadioWithStore();
+        // Calibrate the G2 first.
+        radio1.ApplyPsHwPeakForConnection(isProtocol2: true, board: HpsdrBoardKind.OrionMkII);
+        radio1.SetPsAdvanced(new PsAdvancedSetRequest(HwPeak: 0.655));
+
+        // Switch to HL2 (P1) — connect should pull the HL2 factory default
+        // (0.20 after PR #341), NOT the G2's operator-tuned 0.655.
+        radio1.ApplyPsHwPeakForConnection(isProtocol2: false, board: HpsdrBoardKind.HermesLite2);
+        Assert.Equal(0.20, radio1.Snapshot().PsHwPeak);
+
+        // Operator calibrates the HL2 to 0.21 — write should land in the HL2
+        // slot, leaving the G2 slot untouched.
+        radio1.SetPsAdvanced(new PsAdvancedSetRequest(HwPeak: 0.21));
+        Assert.Equal(0.21, radio1.Snapshot().PsHwPeak);
+
+        // Fresh RadioService — verify both per-board values survived and
+        // route to the correct board.
+        var (radio2, _) = BuildRadioWithStore();
+        radio2.ApplyPsHwPeakForConnection(isProtocol2: true, board: HpsdrBoardKind.OrionMkII);
+        Assert.Equal(0.655, radio2.Snapshot().PsHwPeak);
+        radio2.ApplyPsHwPeakForConnection(isProtocol2: false, board: HpsdrBoardKind.HermesLite2);
+        Assert.Equal(0.21, radio2.Snapshot().PsHwPeak);
+
+        // And the on-disk record contains both keys.
+        var entry = store.Get();
+        Assert.NotNull(entry);
+        Assert.Equal(2, entry!.HwPeakByBoard.Count);
+        Assert.Equal(0.655, entry.HwPeakByBoard[RadioService.GetPsBoardKey(true, HpsdrBoardKind.OrionMkII, OrionMkIIVariant.G2)]);
+        Assert.Equal(0.21, entry.HwPeakByBoard[RadioService.GetPsBoardKey(false, HpsdrBoardKind.HermesLite2, OrionMkIIVariant.G2)]);
+    }
+
+    [Fact]
+    public void PsHwPeak_DisconnectedSetAdvanced_DoesNotPollutePreviousBoardSlot()
+    {
+        // After disconnect, _currentPsBoardKey is cleared. A SetPsAdvanced
+        // call in that state should leave the previous radio's slot intact
+        // (operator dialling in the panel while disconnected must NOT
+        // overwrite a different radio's calibrated value).
+        var (radio, store) = BuildRadioWithStore();
+        radio.ApplyPsHwPeakForConnection(isProtocol2: true, board: HpsdrBoardKind.OrionMkII);
+        radio.SetPsAdvanced(new PsAdvancedSetRequest(HwPeak: 0.655));
+        // Pseudo-disconnect — DisconnectAsync would also tear down a P1
+        // client, but we only need the state-clearing portion for this test.
+        radio.MarkProtocol2Disconnected();
+        // Operator drags the slider while disconnected — value lands in the
+        // live state but should NOT touch the per-board store entry.
+        radio.SetPsAdvanced(new PsAdvancedSetRequest(HwPeak: 0.999));
+
+        var entry = store.Get();
+        Assert.NotNull(entry);
+        string g2Key = RadioService.GetPsBoardKey(true, HpsdrBoardKind.OrionMkII, OrionMkIIVariant.G2);
+        Assert.Equal(0.655, entry!.HwPeakByBoard[g2Key]);  // G2 slot untouched
+    }
 }
