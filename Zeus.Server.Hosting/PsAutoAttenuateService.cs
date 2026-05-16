@@ -52,20 +52,15 @@ namespace Zeus.Server;
 /// </summary>
 public sealed class PsAutoAttenuateService : BackgroundService
 {
-    // Thetis ideal feedback target: 152.293 (PSForm.cs:745).
+    // Thetis ideal feedback target: 152.293 (PSForm.cs:745). Window 128..181
+    // matches mi0bot's lblPSInfoFB green-LED thresholds (PSForm.cs:1123-1138).
+    // Bench-confirmed 2026-05-16 on EI6LF's HL2 with hw_peak=0.2400 (deskhpsdr
+    // parity): voice operation lands fb in the 140-149 range, comfortably
+    // inside mi0bot's window. The DanceCooldown below covers any rare
+    // single-step overshoot near the edges without requiring a wider band.
     private const double IdealFeedback = 152.293;
-    // *** DEVIATION FROM mi0bot *** Window widened from mi0bot's 128/181 to
-    // 110/195 after bench-measuring 2026-05-16 on HL2: with mi0bot's narrow
-    // band, a single 2 dB correction overshoots and lands the other side of
-    // the window — dance oscillates 4↔6 dB roughly once per second, briefly
-    // disabling PS each cycle. Symptom for the operator: audible IMD3 bloom
-    // every second. A 110/195 band leaves a single 2 dB correction
-    // comfortably inside the dead zone (e.g. fb=190 → 4→6 → fb~151 in
-    // window; fb=117 → 6→4 → fb~189 also in window). mi0bot may not hit
-    // this because operators hand-tune hw_peak to land feedback closer to
-    // 152, narrowing the natural swing.
-    private const int FeedbackLowThreshold = 110;
-    private const int FeedbackHighThreshold = 195;
+    private const int FeedbackLowThreshold = 128;
+    private const int FeedbackHighThreshold = 181;
 
     // 10 Hz tick. Same cadence Thetis runs timer2code at when PS is armed and
     // the form has focus (PSForm.cs:204-209, m_bQuckAttenuate=false default).
