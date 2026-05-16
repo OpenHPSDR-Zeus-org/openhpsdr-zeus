@@ -56,20 +56,25 @@ export function MobilePttButton() {
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const moxOn = useTxStore((s) => s.moxOn);
   const setMoxOn = useTxStore((s) => s.setMoxOn);
+  const setLocalMicArmed = useTxStore((s) => s.setLocalMicArmed);
   const abortRef = useRef<AbortController | null>(null);
 
   const drive = useCallback(
     (on: boolean) => {
       if (useTxStore.getState().moxOn === on) return;
       setMoxOn(on);
+      setLocalMicArmed(on);
       abortRef.current?.abort();
       const ctrl = new AbortController();
       abortRef.current = ctrl;
       setMox(on, ctrl.signal).catch(() => {
-        if (!ctrl.signal.aborted) setMoxOn(!on);
+        if (!ctrl.signal.aborted) {
+          setMoxOn(!on);
+          setLocalMicArmed(!on);
+        }
       });
     },
-    [setMoxOn],
+    [setMoxOn, setLocalMicArmed],
   );
 
   const onDown = useCallback(

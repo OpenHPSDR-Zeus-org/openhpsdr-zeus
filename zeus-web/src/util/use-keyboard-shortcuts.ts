@@ -146,11 +146,16 @@ export function useKeyboardShortcuts() {
       const tx = useTxStore.getState();
       if (tx.moxOn === on) return;
       tx.setMoxOn(on);
+      tx.setLocalMicArmed(on);
       moxAbort?.abort();
       const ctrl = new AbortController();
       moxAbort = ctrl;
       setMox(on, ctrl.signal).catch(() => {
-        if (!ctrl.signal.aborted) useTxStore.getState().setMoxOn(!on);
+        if (!ctrl.signal.aborted) {
+          const t = useTxStore.getState();
+          t.setMoxOn(!on);
+          t.setLocalMicArmed(!on);
+        }
       });
     };
 

@@ -25,6 +25,7 @@ import { useEffect, useState } from 'react';
 // VersionPrefix in Directory.Build.props bumps. ISO 8601 so toLocaleDateString
 // renders sensibly in any locale.
 const RELEASE_DATE_ISO = '2026-05-16';
+// Note: v0.7.5 is the same-day hotfix for v0.7.4 (PR #351 — TCI dual-feed regression).
 
 type VersionInfo = {
   version: string;

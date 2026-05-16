@@ -104,6 +104,15 @@ export type Alert = {
 export type TxState = {
   moxOn: boolean;
   setMoxOn: (on: boolean) => void;
+  // Gates the mic-uplink WS push (use-mic-uplink.ts). Raised only by local
+  // operator interaction — MoxButton click, spacebar PTT, MobilePttButton —
+  // and lowered on the same interaction's release or when the server forces
+  // MOX off (SWR trip, TX timeout, MoxStateFrame off-edge). NOT raised when
+  // moxOn flips because of a TCI-driven server broadcast (issue #346): if
+  // we raised it there, the browser would push silent mic samples in
+  // parallel with the TCI audio path and corrupt the TX accumulator.
+  localMicArmed: boolean;
+  setLocalMicArmed: (on: boolean) => void;
   // PRD FR-7: TUN keys a single-tone carrier via WDSP SetTXAPostGen*.
   // Mutually exclusive with MOX — one is always canceled by the other so the
   // backend never sees both keyed. Exclusion is enforced inside the setters.
@@ -283,6 +292,8 @@ export const useTxStore = create<TxState>()(
     (set) => ({
       moxOn: false,
       setMoxOn: (on) => set(on ? { moxOn: true, tunOn: false } : { moxOn: false }),
+      localMicArmed: false,
+      setLocalMicArmed: (on) => set({ localMicArmed: on }),
       tunOn: false,
       setTunOn: (on) => set(on ? { tunOn: true, moxOn: false } : { tunOn: false }),
       drivePercent: 10,
