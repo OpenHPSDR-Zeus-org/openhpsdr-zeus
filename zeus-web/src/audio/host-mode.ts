@@ -3,47 +3,45 @@
 // Audio host-mode flag. Single source of truth for "is the server playing
 // RX audio natively?" in non-React code paths (audio-client, ws-client).
 //
-// React components subscribe directly to capabilities-store; this module
-// mirrors the same `host` field so consumers that can't `useSyncExternal-
-// Store` (the audio-client singleton, the WebSocket message dispatcher)
-// can still cheaply check the mode on the hot path.
-//
-// Wired by App.tsx after /api/capabilities resolves; defaults to
-// `'browser'` so the worst-case is "today's behaviour" — never accidentally
-// silent — while the fetch is in flight.
+// React components subscribe directly to capabilities-store; non-React
+// consumers (audio-client singleton, WebSocket message dispatcher) read
+// the same store via getState() through the cheap helpers here. The local
+// `mode` flag is kept only for the once-per-session log side-effect on the
+// browser→native transition (`setAudioHostMode`) — read-side queries hit
+// the canonical store directly so there's no race between the WS
+// dispatcher coming up and App.tsx's subscribe callback firing.
+
+import { useCapabilitiesStore } from '../state/capabilities-store';
 
 export type AudioHostMode = 'browser' | 'native';
 
-let mode: AudioHostMode = 'browser';
-let nativeLogged = false;
+let logLatched = false;
 
 /**
- * Set the active audio host mode. Idempotent; logs once when the mode
- * transitions to `'native'` so the operator sees a single
+ * Set the active audio host mode (logging side-effect only — the read path
+ * goes through the capabilities store directly). Idempotent; logs once when
+ * the mode transitions to `'native'` so the operator sees a single
  * "native audio active (desktop mode)" line in the devtools console
  * confirming the opt-out fired.
  */
 export function setAudioHostMode(next: AudioHostMode): void {
-  if (mode === next) return;
-  mode = next;
-  if (next === 'native' && !nativeLogged) {
-    nativeLogged = true;
+  if (next === 'native' && !logLatched) {
+    logLatched = true;
     console.log('audio.host: native audio active (desktop mode)');
   }
 }
 
 export function getAudioHostMode(): AudioHostMode {
-  return mode;
+  return isNativeAudio() ? 'native' : 'browser';
 }
 
 /** True when the desktop host is rendering RX audio via its native sink. */
 export function isNativeAudio(): boolean {
-  return mode === 'native';
+  return useCapabilitiesStore.getState().capabilities?.host === 'desktop';
 }
 
-// Test-only escape hatch. Resets both the mode and the log latch so a
-// `describe` block can drive transitions without polluting later tests.
+// Test-only escape hatch. Clears the log latch so a `describe` block can
+// drive transitions without polluting later tests.
 export function __resetAudioHostModeForTests(): void {
-  mode = 'browser';
-  nativeLogged = false;
+  logLatched = false;
 }
