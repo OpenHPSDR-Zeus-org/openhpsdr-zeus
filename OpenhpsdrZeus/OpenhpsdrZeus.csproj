@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Single binary serves both modes: `OpenhpsdrZeus` (service) and
+         `OpenhpsdrZeus` with the desktop flag (Photino shell). AssemblyName
+         pins the output filename across all RIDs so the installer scripts
+         and the /run skill don't have to special-case per-project layouts. -->
+    <AssemblyName>OpenhpsdrZeus</AssemblyName>
+    <RootNamespace>Zeus.Server</RootNamespace>
+    <SpaRoot>$(MSBuildThisFileDirectory)..\zeus-web</SpaRoot>
+    <SpaBuildOutput>$(MSBuildThisFileDirectory)..\Zeus.Server.Hosting\wwwroot\index.html</SpaBuildOutput>
+    <!-- ASP.NET Core defaults to Server GC (one GC thread per logical core),
+         tuned for high-throughput servers handling many concurrent requests.
+         Zeus is a single-operator desktop radio client with a single
+         SignalR consumer; the 10 idle GC threads on a 10-core host showed up
+         as ~3% PollGCWorker overhead + a portion of LowLevelLifoSemaphore
+         wait churn in dotnet-trace cpu-sampling. Workstation GC uses one GC
+         thread and stays in step with the foreground work — lower idle
+         wake-up cost, slightly tighter pause budget per collection (Zeus
+         allocates ~1.9 MB/s so pauses are sub-millisecond). -->
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <!-- Embed zeus.ico into the Windows PE resource table so Explorer, the
+         taskbar, and Inno Setup's UninstallDisplayIcon all pick it up. No-op
+         on macOS / Linux where Mach-O / ELF have no equivalent slot. -->
+    <ApplicationIcon>zeus.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Zeus.Server.Hosting\Zeus.Server.Hosting.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Photino is only loaded when the desktop flag is on the command line;
+         in service mode the assembly is on disk but never JIT'd. Keeping the
+         reference here (not in a conditional ItemGroup) keeps the single
+         binary self-contained across both modes. -->
+    <PackageReference Include="Photino.NET" Version="4.0.16" />
+  </ItemGroup>
+
+  <!-- Ship zeus.png + zeus.ico next to the binary so Photino's SetIconFile
+       can find them at runtime — zeus.png for Linux GTK / macOS dev runs,
+       zeus.ico for Windows. CopyToOutputDirectory keeps `dotnet run` and
+       `dotnet publish` consistent. -->
+  <ItemGroup>
+    <Content Include="zeus.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="zeus.ico" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Build the React frontend into Zeus.Server.Hosting/wwwroot so it flows to
+       this executable's publish output. Owning the SPA build at the executable
+       layer (not in the library) keeps 'dotnet build Zeus.Server.Hosting' from
+       shelling out to npm. -->
+  <Target Name="BuildSpa" BeforeTargets="Publish" Condition="!Exists('$(SpaBuildOutput)') Or '$(ForceSpaBuild)' == 'true'">
+    <Message Importance="high" Text="Building React frontend in $(SpaRoot) → $(SpaBuildOutput)" />
+    <Exec Command="npm ci" WorkingDirectory="$(SpaRoot)" />
+    <Exec Command="npm run build" WorkingDirectory="$(SpaRoot)" />
+  </Target>
+
+</Project>

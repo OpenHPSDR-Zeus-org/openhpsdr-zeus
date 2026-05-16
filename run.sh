@@ -6,7 +6,7 @@
 #   ./run.sh                 # Vite 5173, backend 6060
 #   ./run.sh 10              # Vite 5183, backend 6070
 #   ./run.sh 100             # Vite 5273, backend 6160
-#   ./run.sh /desktop        # Zeus.Desktop (Photino) — no Vite, OS-assigned port
+#   ./run.sh /desktop        # OpenhpsdrZeus --desktop (Photino) — no Vite, OS-assigned port
 #
 # Both servers run in the background. Logs and PIDs are written under .run/.
 # To stop: kill $(cat .run/vite.pid) $(cat .run/backend.pid)
@@ -69,8 +69,8 @@ npm --prefix zeus-web run build
 
 # --- 5b. Desktop mode: Photino owns the lifecycle, run in foreground -------
 if [ "$DESKTOP" -eq 1 ]; then
-  echo "→ starting Zeus.Desktop (Photino) — close the window or Ctrl-C to stop"
-  exec dotnet run --project Zeus.Desktop
+  echo "→ starting OpenhpsdrZeus --desktop (Photino) — close the window or Ctrl-C to stop"
+  exec dotnet run --project OpenhpsdrZeus -- --desktop
 fi
 
 # --- 6. Start the servers in the background --------------------------------
@@ -87,9 +87,9 @@ BACKEND_PORT="$BACKEND_PORT" \
 VITE_PID=$!
 echo "$VITE_PID" > .run/vite.pid
 
-echo "→ starting Zeus.Server on :$BACKEND_PORT"
+echo "→ starting OpenhpsdrZeus on :$BACKEND_PORT"
 ZEUS_PORT="$BACKEND_PORT" \
-  nohup dotnet run --project Zeus.Server \
+  nohup dotnet run --project OpenhpsdrZeus \
   >"$BACKEND_LOG" 2>&1 &
 BACKEND_PID=$!
 echo "$BACKEND_PID" > .run/backend.pid
@@ -113,7 +113,7 @@ wait_for_port() {
 
 OK=1
 wait_for_port "$FRONTEND_PORT" "Vite"        || OK=0
-wait_for_port "$BACKEND_PORT"  "Zeus.Server" || OK=0
+wait_for_port "$BACKEND_PORT"  "OpenhpsdrZeus" || OK=0
 
 # --- 8. Report -------------------------------------------------------------
 echo

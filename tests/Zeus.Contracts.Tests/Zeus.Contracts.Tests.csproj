@@ -23,7 +23,7 @@
     <!-- Pulled in so the watts/SWR math on TxMetersService can be unit-tested
          here without introducing a server-side test project for the v0.1 slice
          (team-lead guidance in task #2). -->
-    <ProjectReference Include="..\..\Zeus.Server\Zeus.Server.csproj" />
+    <ProjectReference Include="..\..\OpenhpsdrZeus\OpenhpsdrZeus.csproj" />
   </ItemGroup>
 
 </Project>

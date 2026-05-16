@@ -21,7 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\Zeus.Server\Zeus.Server.csproj" />
+    <ProjectReference Include="..\..\OpenhpsdrZeus\OpenhpsdrZeus.csproj" />
     <ProjectReference Include="..\..\Zeus.Protocol1\Zeus.Protocol1.csproj" />
     <ProjectReference Include="..\..\Zeus.Contracts\Zeus.Contracts.csproj" />
     <ProjectReference Include="..\..\Zeus.Dsp\Zeus.Dsp.csproj" />
