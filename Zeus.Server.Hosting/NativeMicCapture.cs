@@ -17,6 +17,7 @@
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Hosting;
+using Zeus.Contracts;
 
 namespace Zeus.Server;
 
@@ -44,7 +45,17 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
     private const int MicBlockSamples = 960;        // 20 ms @ 48 kHz, matches browser worklet
     private const int MicBlockBytes = MicBlockSamples * 4;
 
+    // Peak-broadcast cadence: 10 Hz → one frame per ~4800 samples at 48 kHz.
+    // The frontend MicMeter visual rate is ~20 Hz (50 ms tick in
+    // use-mic-uplink.ts), so 10 Hz is comfortably under the Nyquist of what
+    // the human eye can see on a meter bar; the operator perceives a
+    // continuously animated level, not a stepped one. Halving this to 5 Hz
+    // would feel sluggish on quick consonant transients; doubling to 20 Hz
+    // adds wire churn for no visible gain. See report for the trade-off.
+    private const int PeakWindowSamples = 4800;     // 100 ms @ 48 kHz
+
     private readonly TxAudioIngest _ingest;
+    private readonly StreamingHub _hub;
     private readonly ILogger<NativeMicCapture> _log;
 
     private MiniAudioInput? _input;
@@ -54,12 +65,19 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
     // takes ReadOnlyMemory<byte> but doesn't retain it, so reuse is safe.
     private readonly byte[] _payload = new byte[MicBlockBytes];
 
+    // Peak accumulator. Updated on the audio worker thread (miniaudio
+    // callback) only — no cross-thread access — so no interlocked needed.
+    private float _peakWindow;
+    private int _peakWindowFill;
+
     private long _totalSamplesIn;
     private long _totalBlocksOut;
+    private long _totalPeakFramesOut;
 
-    public NativeMicCapture(TxAudioIngest ingest, ILogger<NativeMicCapture> log)
+    public NativeMicCapture(TxAudioIngest ingest, StreamingHub hub, ILogger<NativeMicCapture> log)
     {
         _ingest = ingest;
+        _hub = hub;
         _log = log;
     }
 
@@ -110,8 +128,12 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
         if (frames == 0 || ch == 0) return;
 
         // Downmix to mono on the fly. For ch==1 this is a straight copy
-        // through the accumulator.
+        // through the accumulator. Peak (max |sample|) is computed in the
+        // same pass so a separate scan is avoided; we accumulate it across
+        // miniaudio callbacks until PeakWindowSamples is reached, then
+        // publish a MicPeakFrame and reset.
         int srcIdx = 0;
+        float winPeak = _peakWindow;
         while (srcIdx < frames)
         {
             int needBeforeFlush = MicBlockSamples - _accumFill;
@@ -119,7 +141,14 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
             if (ch == 1)
             {
-                input.Slice(srcIdx, take).CopyTo(new Span<float>(_accum, _accumFill, take));
+                var src = input.Slice(srcIdx, take);
+                src.CopyTo(new Span<float>(_accum, _accumFill, take));
+                for (int i = 0; i < take; i++)
+                {
+                    float a = src[i];
+                    if (a < 0) a = -a;
+                    if (a > winPeak) winPeak = a;
+                }
             }
             else
             {
@@ -130,13 +159,27 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
                     float sum = 0f;
                     int baseIdx = (srcIdx + i) * ch;
                     for (int c = 0; c < ch; c++) sum += input[baseIdx + c];
-                    _accum[_accumFill + i] = sum * invCh;
+                    float mono = sum * invCh;
+                    _accum[_accumFill + i] = mono;
+                    float a = mono < 0 ? -mono : mono;
+                    if (a > winPeak) winPeak = a;
                 }
             }
 
             _accumFill += take;
             srcIdx += take;
             _totalSamplesIn += take;
+            _peakWindowFill += take;
+
+            // Publish a MicPeakFrame at the configured cadence (~10 Hz). The
+            // window can span multiple miniaudio callbacks; FlushPeakWindow
+            // resets the accumulator after emitting.
+            if (_peakWindowFill >= PeakWindowSamples)
+            {
+                _peakWindow = winPeak;
+                FlushPeakWindow();
+                winPeak = 0f;
+            }
 
             if (_accumFill >= MicBlockSamples)
             {
@@ -144,6 +187,33 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
                 _accumFill = 0;
             }
         }
+        _peakWindow = winPeak;
+    }
+
+    private void FlushPeakWindow()
+    {
+        // Convert linear peak (0..1) to dBFS via the shared converter on the
+        // contract type. Flooring + clipping happens inside LinearToDbfs.
+        // Timestamp the frame here so a client can detect mic-stream stalls
+        // (e.g. if the OS unplugs the input device, the frame stops
+        // arriving and the operator sees the meter freeze rather than fall
+        // to silence — that's the right behaviour).
+        float peakDbfs = MicPeakFrame.LinearToDbfs(_peakWindow);
+        long tsUnixMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        try
+        {
+            _hub.Broadcast(new MicPeakFrame(peakDbfs, tsUnixMs));
+        }
+        catch (Exception ex)
+        {
+            // Broadcast is best-effort. A throw here must NOT stall the
+            // audio callback (the OS will start dropping input frames if
+            // the callback runs long).
+            _log.LogWarning(ex, "audio.native.tx mic peak broadcast threw");
+        }
+        _peakWindow = 0f;
+        _peakWindowFill = 0;
+        _totalPeakFramesOut++;
     }
 
     private void FlushBlock()

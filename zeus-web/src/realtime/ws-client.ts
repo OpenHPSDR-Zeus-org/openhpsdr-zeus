@@ -46,6 +46,7 @@ import { decodeDisplayFrame, FrameDecodeError, MSG_TYPE_DISPLAY_FRAME } from './
 import { AudioFrameDecodeError, MSG_TYPE_AUDIO_PCM, decodeAudioFrame } from '../audio/frame';
 import { getAudioClient } from '../audio/audio-client';
 import { isNativeAudio } from '../audio/host-mode';
+import { useMicPeakStore } from '../audio/mic-peak-store';
 import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
 import { hasActiveFrameConsumers, useDisplayStore } from '../state/display-store';
 import { useTxStore } from '../state/tx-store';
@@ -133,6 +134,15 @@ export const MSG_TYPE_VST_HOST_EVENT = 0x1a;
 export const MSG_TYPE_MIC_PCM = 0x20;
 const MIC_PCM_SAMPLES = 960;
 const MIC_PCM_BYTES = 1 + MIC_PCM_SAMPLES * 4;
+
+// Mic peak telemetry (server → client). Only emitted by NativeMicCapture in
+// desktop host mode (the SPA's own AudioWorklet path is disabled there by
+// Phase 2c). Payload: [0x1C][peakDbfs:f32 LE][tsUnixMs:i64 LE] = 13 bytes.
+// Browser mode never receives this frame; if it ever does, we drop it
+// defensively (the AnalyserNode path keeps driving the meter).
+// Contract: Zeus.Contracts/MicPeakFrame.cs.
+export const MSG_TYPE_MIC_PEAK = 0x1c;
+const MIC_PEAK_BYTES = 1 + 4 + 8;
 
 // Shared by startRealtime / sendMicPcm. Single WS instance at a time; writes
 // are no-ops when the socket isn't open.
@@ -276,6 +286,28 @@ export function startRealtime(path = '/ws'): () => void {
             outPk: dv.getFloat32(73, true),
             outAv: dv.getFloat32(77, true),
           });
+          return;
+        }
+        if (peekType === MSG_TYPE_MIC_PEAK) {
+          // Phase 4 — desktop-mode mic level. In browser mode the server
+          // does not emit this frame (NativeMicCapture isn't registered);
+          // if a misconfigured server ever pushes it, the existing
+          // AudioWorklet path is authoritative and we drop the wire frame.
+          if (!isNativeAudio()) return;
+          if (ev.data.byteLength < MIC_PEAK_BYTES) {
+            warnOnce(
+              'ws-mic-peak-short',
+              `mic peak frame too short: ${ev.data.byteLength}`,
+            );
+            return;
+          }
+          const dv = new DataView(ev.data);
+          const peakDbfs = dv.getFloat32(1, true);
+          // i64 LE — DataView gives us BigInt; convert to number (safe up
+          // to 2^53 ms ≈ year +287,000 AD, comfortably beyond any wall
+          // clock we'll see).
+          const tsUnixMs = Number(dv.getBigInt64(5, true));
+          useMicPeakStore.getState().setPeak(peakDbfs, tsUnixMs);
           return;
         }
         if (peekType === MSG_TYPE_PA_TEMP) {

@@ -44,6 +44,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useTxStore } from '../state/tx-store';
+import { useMicPeakStore } from '../audio/mic-peak-store';
+import { useCapabilitiesStore } from '../state/capabilities-store';
 
 // Pre-TX mic level indicator. The worklet measures peak dBFS on the raw
 // browser capture *before* any gain; the server then applies
@@ -71,7 +73,17 @@ function dbfsToFraction(dbfs: number): number {
 const RED_ZONE_START = dbfsToFraction(CLIP_WARN_DBFS);
 
 export function MicMeter() {
-  const rawDbfs = useTxStore((s) => s.micDbfs);
+  // Phase 4 — dual-source meter input. In server (browser) mode the SPA's
+  // AudioWorklet pushes rawDbfs into tx-store. In desktop mode the worklet
+  // is disabled (Phase 2c) so we read the server-published MicPeakFrame
+  // (0x1C) from useMicPeakStore instead. The two stores never converge —
+  // each transport writes its own — so the meter shows whichever path is
+  // actually live without bookkeeping in the hot loop.
+  const hostMode = useCapabilitiesStore((s) => s.capabilities?.host ?? null);
+  const isNative = hostMode === 'desktop';
+  const browserDbfs = useTxStore((s) => s.micDbfs);
+  const nativeDbfs = useMicPeakStore((s) => s.peakDbfs);
+  const rawDbfs = isNative ? nativeDbfs : browserDbfs;
   const micGainDb = useTxStore((s) => s.micGainDb);
   const err = useTxStore((s) => s.micError);
 

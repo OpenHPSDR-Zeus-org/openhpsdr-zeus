@@ -123,4 +123,13 @@ public enum MsgType : byte
     // Originally 0x18 on the issue-65 branch; renumbered to 0x1B on merge
     // with develop to resolve the collision with PsMeters above.
     BandPlanChanged = 0x1B,
+
+    // Server → client (mic peak level). Broadcast at ~10 Hz by
+    // NativeMicCapture only in desktop host mode — the SPA's getUserMedia
+    // analyser is intentionally disabled there (Phase 2c) so the MicMeter
+    // would otherwise be flat. Server mode never emits this frame; remote
+    // browser operators continue to drive their MicMeter via getUserMedia.
+    // Payload: [type:1][peakDbfs:f32 LE][tsUnixMs:i64 LE] = 13 bytes total.
+    // See MicPeakFrame.cs. 0x1C is the next free slot above BandPlanChanged.
+    MicPeak = 0x1C,
 }
