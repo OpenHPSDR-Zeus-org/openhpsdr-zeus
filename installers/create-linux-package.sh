@@ -1,19 +1,31 @@
 #!/bin/bash
-# Script to create Zeus tarball for Linux
+# Build Openhpsdr Zeus tarball for Linux x64.
 # Usage: ./create-linux-package.sh <version>
-# Example: ./create-linux-package.sh 0.1.0
+# Example: ./create-linux-package.sh 0.4.1
+#
+# Tarball contents:
+#   OpenhpsdrZeus              — the single binary (serves both modes)
+#   openhpsdr-zeus             — service-mode launcher (LAN HTTP + browser)
+#   openhpsdr-zeus-desktop     — desktop-mode launcher (Photino window)
+#   wwwroot/, runtimes/, …     — bundled .NET runtime, native libs, SPA
+#
+# Operators who want service mode run `./openhpsdr-zeus`. Operators who
+# want a native window without managing a separate AppImage run
+# `./openhpsdr-zeus-desktop`. The AppImage (create-linux-desktop-appimage.sh)
+# ships separately as a single-file desktop launcher for users who don't
+# want to manage a tarball.
 
 set -e
 
 VERSION="${1:-0.0.0}"
 
-echo "Creating Zeus package for Linux x64 v${VERSION}..."
+echo "Creating Openhpsdr Zeus tarball for Linux x64 v${VERSION}..."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-PUBLISH_DIR="${REPO_ROOT}/Zeus.Server/bin/Release/net10.0/linux-x64/publish"
+PUBLISH_DIR="${REPO_ROOT}/OpenhpsdrZeus/bin/Release/net10.0/linux-x64/publish"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
-PACKAGE_NAME="zeus-${VERSION}-linux-x64"
+PACKAGE_NAME="openhpsdr-zeus-${VERSION}-linux-x64"
 PACKAGE_DIR="${OUTPUT_DIR}/${PACKAGE_NAME}"
 
 # Clean and create output directory
@@ -25,13 +37,16 @@ mkdir -p "${PACKAGE_DIR}"
 echo "Copying published files..."
 cp -r "${PUBLISH_DIR}"/* "${PACKAGE_DIR}/"
 
-# Make the executable actually executable
-chmod +x "${PACKAGE_DIR}/Zeus.Server"
+# Make the binary executable
+chmod +x "${PACKAGE_DIR}/OpenhpsdrZeus"
 
-# Create a launch script
-cat > "${PACKAGE_DIR}/zeus" << 'EOF'
+# Service-mode launcher — LAN-bound HTTP service + auto-open browser.
+cat > "${PACKAGE_DIR}/openhpsdr-zeus" << 'EOF'
 #!/bin/bash
-# Zeus launcher script
+# Openhpsdr Zeus launcher — service mode.
+# Starts OpenhpsdrZeus as a LAN-bound HTTP service on :6060 and opens the
+# default browser. For a native window without a browser tab, run
+# ./openhpsdr-zeus-desktop instead.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
@@ -45,12 +60,12 @@ cd "${SCRIPT_DIR}"
 export LD_LIBRARY_PATH="${SCRIPT_DIR}/runtimes/linux-x64/native:${SCRIPT_DIR}/runtimes/linux-arm64/native:${LD_LIBRARY_PATH}"
 
 # Cleanup handler to terminate the server subprocess on script exit.
-# Ensures that Ctrl-C, kill, or terminal close properly stops Zeus.Server
+# Ensures that Ctrl-C, kill, or terminal close properly stops the server
 # and prevents orphaned processes.
 cleanup() {
     if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
         echo ""
-        echo "Stopping Zeus server..."
+        echo "Stopping Openhpsdr Zeus server..."
         kill -TERM "$SERVER_PID" 2>/dev/null || true
         # Wait up to 5 seconds for graceful shutdown
         for i in $(seq 1 10); do
@@ -70,9 +85,9 @@ trap cleanup EXIT INT TERM
 
 # Check if running in a display environment
 if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
-    echo "Starting Zeus server on http://localhost:6060"
+    echo "Starting Openhpsdr Zeus server on http://localhost:6060"
     echo "Opening browser in 2 seconds..."
-    ./Zeus.Server &
+    ./OpenhpsdrZeus &
     SERVER_PID=$!
     sleep 2
 
@@ -88,36 +103,70 @@ if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
         echo "Please open http://localhost:6060 in your web browser."
     fi
 
-    echo "Zeus is running. Press Ctrl-C to stop."
+    echo "Openhpsdr Zeus is running. Press Ctrl-C to stop."
     wait $SERVER_PID
 else
     # No display, just run the server
-    echo "Starting Zeus server on http://localhost:6060"
+    echo "Starting Openhpsdr Zeus server on http://localhost:6060"
     echo "Open this URL in your web browser to access Zeus."
-    ./Zeus.Server &
+    ./OpenhpsdrZeus &
     SERVER_PID=$!
-    echo "Zeus is running. Press Ctrl-C to stop."
+    echo "Openhpsdr Zeus is running. Press Ctrl-C to stop."
     wait $SERVER_PID
 fi
 EOF
-chmod +x "${PACKAGE_DIR}/zeus"
+chmod +x "${PACKAGE_DIR}/openhpsdr-zeus"
+
+# Desktop-mode launcher — Photino native window, in-process backend.
+cat > "${PACKAGE_DIR}/openhpsdr-zeus-desktop" << 'EOF'
+#!/bin/bash
+# Openhpsdr Zeus launcher — desktop mode.
+# Opens a native Photino window. The radio backend runs in-process inside
+# the same window; closing the window stops Zeus completely. Requires
+# libwebkit2gtk-4.1-0 (Photino's WebView backend on Linux).
+#
+# For a LAN-bound HTTP service (browser UI, remote / phone access), run
+# ./openhpsdr-zeus instead.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}"
+
+# Same DYLD/LD pin as the service-mode launcher — see openhpsdr-zeus.
+export LD_LIBRARY_PATH="${SCRIPT_DIR}/runtimes/linux-x64/native:${SCRIPT_DIR}/runtimes/linux-arm64/native:${LD_LIBRARY_PATH}"
+
+exec ./OpenhpsdrZeus --desktop "$@"
+EOF
+chmod +x "${PACKAGE_DIR}/openhpsdr-zeus-desktop"
 
 # Create README
 cat > "${PACKAGE_DIR}/README.txt" << EOF
-Zeus v${VERSION} for Linux
+Openhpsdr Zeus v${VERSION} for Linux
 
 Installation:
 1. Extract this archive to a location of your choice (e.g., ~/zeus or /opt/zeus)
-2. Run ./zeus from the extracted directory
-3. Your browser will open to http://localhost:6060
+2. Run ONE of:
+     ./openhpsdr-zeus           — service mode (LAN HTTP on :6060, opens browser)
+     ./openhpsdr-zeus-desktop   — desktop mode (native Photino window, no browser)
+                                  Requires libwebkit2gtk-4.1-0.
+     ./OpenhpsdrZeus            — raw binary, service mode, no browser auto-open
+     ./OpenhpsdrZeus --desktop  — raw binary, desktop mode
 
-Command line usage:
-  ./zeus           # Start Zeus and open browser (if in GUI environment)
-  ./Zeus.Server    # Start Zeus server only (manual browser access)
+Service mode is good for:
+- Remote / phone / tablet operation (open http://<host>:6060 from another machine)
+- Headless servers (Pi, NUC) with browser access from elsewhere
+- Multi-machine setups
+
+Desktop mode is good for:
+- Single-machine local use, no browser tab clutter
+- "Just one window" workflows
 
 Requirements:
 - Linux x64 system (glibc-based; no system packages required — FFTW3 is
   statically linked into libwdsp.so and the .NET runtime is bundled)
+- Desktop mode additionally requires libwebkit2gtk-4.1-0:
+    Debian/Ubuntu:  sudo apt install libwebkit2gtk-4.1-0
+    Fedora:         sudo dnf install webkit2gtk4.1
+    Arch:           sudo pacman -S webkit2gtk-4.1
 
 For more information:
 https://github.com/brianbruff/openhpsdr-zeus
@@ -142,4 +191,5 @@ echo ""
 echo "To install:"
 echo "  tar -xzf ${TARBALL_NAME}"
 echo "  cd ${PACKAGE_NAME}"
-echo "  ./zeus"
+echo "  ./openhpsdr-zeus           # service mode (browser UI)"
+echo "  ./openhpsdr-zeus-desktop   # desktop mode (Photino window)"

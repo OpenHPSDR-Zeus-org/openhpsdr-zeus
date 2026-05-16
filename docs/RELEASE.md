@@ -54,10 +54,11 @@ Once the workflow completes:
 1. Go to the [Releases page](https://github.com/Kb2uka/openhpsdr-zeus/releases)
 2. Find your new release (e.g., "Zeus v0.1.0")
 3. Verify all artifacts are present:
-   - `Zeus-X.Y.Z-win-x64-setup.exe`
-   - `Zeus-X.Y.Z-macos-arm64.dmg`
-   - `Zeus-X.Y.Z-macos-x64.dmg`
-   - `zeus-X.Y.Z-linux-x64.tar.gz`
+   - `openhpsdr-zeus-X.Y.Z-win-x64-setup.exe`
+   - `openhpsdr-zeus-X.Y.Z-win-arm64-setup.exe`
+   - `OpenhpsdrZeus-X.Y.Z-macos-arm64.dmg`
+   - `openhpsdr-zeus-X.Y.Z-linux-x64.tar.gz`
+   - `OpenhpsdrZeus-X.Y.Z-linux-x86_64.AppImage`
 4. Check the release notes are correctly generated
 
 ### 5. (Optional) Edit Release Notes
@@ -95,16 +96,13 @@ npm run build
 cd ..
 
 # Publish for each platform
-dotnet publish Zeus.Server/Zeus.Server.csproj -c Release -r win-x64 \
+dotnet publish OpenhpsdrZeus/OpenhpsdrZeus.csproj -c Release -r win-x64 \
   --self-contained true -p:VersionPrefix=$VERSION
 
-dotnet publish Zeus.Server/Zeus.Server.csproj -c Release -r linux-x64 \
+dotnet publish OpenhpsdrZeus/OpenhpsdrZeus.csproj -c Release -r linux-x64 \
   --self-contained true -p:VersionPrefix=$VERSION
 
-dotnet publish Zeus.Server/Zeus.Server.csproj -c Release -r osx-x64 \
-  --self-contained true -p:VersionPrefix=$VERSION
-
-dotnet publish Zeus.Server/Zeus.Server.csproj -c Release -r osx-arm64 \
+dotnet publish OpenhpsdrZeus/OpenhpsdrZeus.csproj -c Release -r osx-arm64 \
   --self-contained true -p:VersionPrefix=$VERSION
 ```
 
@@ -118,12 +116,12 @@ iscc /DMyAppVersion="$VERSION" installers\zeus-windows.iss
 **macOS**:
 ```bash
 installers/create-macos-app.sh $VERSION arm64
-installers/create-macos-app.sh $VERSION x64
 ```
 
 **Linux**:
 ```bash
 installers/create-linux-package.sh $VERSION
+installers/create-linux-desktop-appimage.sh $VERSION
 ```
 
 ### Create Release Manually

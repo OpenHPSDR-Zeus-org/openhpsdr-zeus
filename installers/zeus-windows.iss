@@ -1,10 +1,16 @@
-; Zeus Installer Script for Inno Setup
+; Openhpsdr Zeus Installer Script for Inno Setup
 ; Requires Inno Setup 6.2 or later: https://jrsoftware.org/isinfo.php
+;
+; One installer, one set of files, two Start Menu shortcuts. The shipped
+; binary (OpenhpsdrZeus.exe) serves both launch modes — service mode by
+; default (LAN HTTP on :6060, browser-driven UI) and desktop mode when
+; invoked with --desktop (Photino native window, loopback only).
 
-#define MyAppName "Zeus"
+#define MyAppName "Openhpsdr Zeus"
+#define MyAppShortName "Zeus"
 #define MyAppPublisher "Brian Keating (EI6LF) and contributors"
 #define MyAppURL "https://github.com/brianbruff/openhpsdr-zeus"
-#define MyAppExeName "Zeus.Server.exe"
+#define MyAppExeName "OpenhpsdrZeus.exe"
 
 ; Version will be passed via /DMyAppVersion="x.y.z" command line parameter
 #ifndef MyAppVersion
@@ -20,6 +26,11 @@
 #endif
 
 [Setup]
+; AppId pinned to the historical service-mode AppId so this installer
+; upgrades existing service-mode installs in place. Operators who had the
+; separate "Zeus Desktop" edition (AppId B23E7F4A-...) keep that install
+; alongside the new combined product until they uninstall it manually from
+; Settings → Apps; the release notes call this out.
 AppId={{8F2E3B1C-9A4D-4E6F-B7C3-1D5A9E8F2B4C}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
@@ -27,12 +38,12 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}/issues
 AppUpdatesURL={#MyAppURL}/releases
-DefaultDirName={autopf}\{#MyAppName}
+DefaultDirName={autopf}\{#MyAppShortName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 LicenseFile=..\LICENSE
 OutputDir=.\output
-OutputBaseFilename=Zeus-{#MyAppVersion}-win-{#Arch}-setup
+OutputBaseFilename=openhpsdr-zeus-{#MyAppVersion}-win-{#Arch}-setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
@@ -48,19 +59,29 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "..\Zeus.Server\bin\Release\net10.0\win-{#Arch}\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "zeus-windows-launcher.cmd"; DestDir: "{app}"; DestName: "zeus.cmd"; Flags: ignoreversion
+Source: "..\OpenhpsdrZeus\bin\Release\net10.0\win-{#Arch}\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The .cmd launcher hosts server mode in a console window so the LAN bind
+; banner is visible. Desktop mode opens its own Photino window and needs no
+; launcher.
+Source: "zeus-windows-launcher.cmd"; DestDir: "{app}"; DestName: "zeus-server.cmd"; Flags: ignoreversion
 
 [Icons]
-; Shortcuts launch zeus.cmd (which boots Zeus.Server and opens the browser at
-; http://localhost:6060) instead of Zeus.Server.exe directly. IconFilename
-; keeps the Zeus.Server.exe icon on the shortcut so it doesn't show as a cmd.
-Name: "{group}\{#MyAppName}"; Filename: "{app}\zeus.cmd"; IconFilename: "{app}\{#MyAppExeName}"
+; Two Start Menu shortcuts under the "Openhpsdr Zeus" group:
+;   1. "Openhpsdr Zeus" — desktop edition (Photino window, --desktop flag)
+;   2. "Openhpsdr Zeus Server" — service edition (LAN bind, browser UI)
+; The desktop shortcut is the default first-run target (no console window).
+; Server shortcut points at the .cmd launcher so the LAN URL + console
+; banner remain visible to the operator.
+Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--desktop"; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName} Server"; Filename: "{app}\zeus-server.cmd"; IconFilename: "{app}\{#MyAppExeName}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\zeus.cmd"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppShortName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--desktop"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\zeus.cmd"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent shellexec
+; Post-install launch lands the operator in the desktop window — no console,
+; no browser dance. Server mode is one Start Menu click away for the LAN /
+; remote operator.
+Filename: "{app}\{#MyAppExeName}"; Parameters: "--desktop"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
 procedure InitializeWizard;

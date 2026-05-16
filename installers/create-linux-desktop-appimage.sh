@@ -1,12 +1,13 @@
 #!/bin/bash
-# Build Zeus.Desktop as a Linux AppImage.
+# Build Openhpsdr Zeus as a Linux AppImage (desktop launcher).
 # Usage: ./create-linux-desktop-appimage.sh <version>
 # Example: ./create-linux-desktop-appimage.sh 0.4.1
 #
-# Companion to create-linux-package.sh, which packages the headless
-# Zeus.Server (browser-based UI) as a tarball. This script packages
-# Zeus.Desktop — the Photino in-process shell — so the operator gets a
-# native window without opening a browser.
+# Companion to create-linux-package.sh, which packages the OpenhpsdrZeus
+# binary plus both launcher scripts as a tarball. This script wraps the
+# same binary as a single-file AppImage that launches the Photino desktop
+# window — for users who want one file to chmod+x and run without
+# managing a tarball directory.
 #
 # AppImage was chosen over .deb / .rpm for v1 because it runs unchanged
 # on any glibc 2.31+ distro (Debian 11, Ubuntu 22.04+, Fedora 36+, Arch,
@@ -28,25 +29,29 @@ if [[ "$(uname -s)" != "Linux" ]]; then
     echo "         a Linux kernel for the squashfs invocation."
 fi
 
-echo "Creating Zeus.Desktop AppImage v${VERSION}..."
+echo "Creating Openhpsdr Zeus AppImage v${VERSION}..."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-PUBLISH_DIR="${REPO_ROOT}/Zeus.Desktop/bin/Release/net10.0/linux-x64/publish"
+PUBLISH_DIR="${REPO_ROOT}/OpenhpsdrZeus/bin/Release/net10.0/linux-x64/publish"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
-APPDIR="${OUTPUT_DIR}/Zeus.Desktop.AppDir"
+APPDIR="${OUTPUT_DIR}/OpenhpsdrZeus.AppDir"
 ICON_SOURCE="${REPO_ROOT}/docs/pics/zeus.png"
 
-# Self-contained publish so the AppImage runs on any glibc 2.31+ distro
-# without the user installing the .NET 10 runtime.
-echo "Publishing Zeus.Desktop self-contained for linux-x64..."
-dotnet publish "${REPO_ROOT}/Zeus.Desktop/Zeus.Desktop.csproj" \
-    -c Release \
-    -r linux-x64 \
-    --self-contained true \
-    -p:PublishSingleFile=false \
-    -p:UseAppHost=true \
-    -o "${PUBLISH_DIR}"
+# Self-contained publish fallback for local-dev use: only runs if PUBLISH_DIR
+# is missing or empty. CI's release.yml runs a single shared `dotnet publish`
+# step before any installer-script invocation, so this fallback is skipped
+# there.
+if [ ! -d "${PUBLISH_DIR}" ] || [ -z "$(ls -A "${PUBLISH_DIR}" 2>/dev/null)" ]; then
+    echo "PUBLISH_DIR is missing — falling back to local publish for linux-x64..."
+    dotnet publish "${REPO_ROOT}/OpenhpsdrZeus/OpenhpsdrZeus.csproj" \
+        -c Release \
+        -r linux-x64 \
+        --self-contained true \
+        -p:PublishSingleFile=false \
+        -p:UseAppHost=true \
+        -o "${PUBLISH_DIR}"
+fi
 
 # Build AppDir layout per the AppImage convention
 # (https://docs.appimage.org/packaging-guide/manual.html).
@@ -57,7 +62,7 @@ mkdir -p "${APPDIR}/usr/share/icons/hicolor/512x512/apps"
 
 echo "Staging publish output into AppDir..."
 cp -r "${PUBLISH_DIR}"/* "${APPDIR}/usr/bin/"
-chmod +x "${APPDIR}/usr/bin/Zeus.Desktop"
+chmod +x "${APPDIR}/usr/bin/OpenhpsdrZeus"
 
 # Icon — top-level zeus.png is what AppImageLauncher / file managers show.
 if [ -f "${ICON_SOURCE}" ]; then
@@ -72,10 +77,10 @@ fi
 cat > "${APPDIR}/zeus.desktop" << EOF
 [Desktop Entry]
 Type=Application
-Name=Zeus
+Name=Openhpsdr Zeus
 GenericName=OpenHPSDR SDR Client
 Comment=Cross-platform HPSDR client (Protocol-1 / Protocol-2)
-Exec=Zeus.Desktop
+Exec=OpenhpsdrZeus --desktop
 Icon=zeus
 Categories=AudioVideo;HamRadio;
 Terminal=false
@@ -85,24 +90,25 @@ cp "${APPDIR}/zeus.desktop" "${APPDIR}/usr/share/applications/zeus.desktop"
 
 # AppRun — entry point that AppImage invokes. Pins LD_LIBRARY_PATH so the
 # bundled libwdsp.so wins over /usr/lib copies (e.g. from a piHPSDR build),
-# same reason as create-linux-package.sh's launcher. exec replaces the
-# shell with Zeus.Desktop so signals reach the right PID.
+# same reason as create-linux-package.sh's launcher. Always launches in
+# desktop mode (--desktop) — the AppImage is the single-file Photino
+# launcher; service mode lives in the tarball.
 cat > "${APPDIR}/AppRun" << 'EOF'
 #!/bin/bash
 HERE="$(dirname "$(readlink -f "${0}")")"
 export LD_LIBRARY_PATH="${HERE}/usr/bin/runtimes/linux-x64/native:${HERE}/usr/bin/runtimes/linux-arm64/native:${LD_LIBRARY_PATH}"
 cd "${HERE}/usr/bin"
-exec ./Zeus.Desktop "$@"
+exec ./OpenhpsdrZeus --desktop "$@"
 EOF
 chmod +x "${APPDIR}/AppRun"
 
 # README inside the AppDir, surfaced as a sibling file in the squashfs.
 cat > "${APPDIR}/README.txt" << EOF
-Zeus Desktop v${VERSION} for Linux (AppImage)
+Openhpsdr Zeus v${VERSION} for Linux (AppImage)
 
 USAGE
-  chmod +x Zeus-Desktop-${VERSION}-linux-x86_64.AppImage
-  ./Zeus-Desktop-${VERSION}-linux-x86_64.AppImage
+  chmod +x OpenhpsdrZeus-${VERSION}-linux-x86_64.AppImage
+  ./OpenhpsdrZeus-${VERSION}-linux-x86_64.AppImage
 
   Optional: integrate with your desktop:
     sudo apt install appimagelauncher   # Debian/Ubuntu
@@ -123,7 +129,7 @@ REQUIREMENTS
 WHAT YOU GET
   A native window. Closing it stops Zeus completely — there is no separate
   server process. For a browser-based / remote-friendly install, see the
-  service-mode tarball (zeus-${VERSION}-linux-x64.tar.gz).
+  service-mode tarball (openhpsdr-zeus-${VERSION}-linux-x64.tar.gz).
 
 More info: https://github.com/brianbruff/openhpsdr-zeus
 License:   GNU GPL v2 or later
@@ -147,7 +153,7 @@ else
     APPIMAGETOOL="${OUTPUT_DIR}/appimagetool-x86_64.AppImage"
 fi
 
-OUTPUT_APPIMAGE="${OUTPUT_DIR}/Zeus-Desktop-${VERSION}-linux-x86_64.AppImage"
+OUTPUT_APPIMAGE="${OUTPUT_DIR}/OpenhpsdrZeus-${VERSION}-linux-x86_64.AppImage"
 
 # --appimage-extract-and-run avoids the FUSE2 dependency that GitHub-hosted
 # runners (and most container envs) don't satisfy out of the box.

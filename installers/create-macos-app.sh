@@ -1,7 +1,17 @@
 #!/bin/bash
-# Build Zeus.app and a drag-to-install DMG for macOS.
+# Build Zeus.app (single binary, desktop default) and a drag-to-install DMG
+# for macOS.
 # Usage: ./create-macos-app.sh <version> <arch>
-# Example: ./create-macos-app.sh 0.1.0 arm64
+# Example: ./create-macos-app.sh 0.4.1 arm64
+#
+# The shipped binary (OpenhpsdrZeus) serves both launch modes:
+#   - default click on Zeus.app   → Photino native window (--desktop)
+#   - Terminal: openhpsdr-zeus-server → LAN-bound HTTP service on :6060
+#
+# CI calls this after `dotnet publish OpenhpsdrZeus/...` has already
+# populated PUBLISH_DIR. If invoked locally with no prior publish (e.g. a
+# fresh checkout), the script falls back to doing its own publish so a
+# developer can run it standalone.
 
 set -e
 
@@ -17,11 +27,29 @@ echo "Creating Zeus.app for macOS ${ARCH} v${VERSION}..."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-PUBLISH_DIR="${REPO_ROOT}/Zeus.Server/bin/Release/net10.0/osx-${ARCH}/publish"
+PUBLISH_DIR="${REPO_ROOT}/OpenhpsdrZeus/bin/Release/net10.0/osx-${ARCH}/publish"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 APP_NAME="Zeus.app"
 APP_BUNDLE="${OUTPUT_DIR}/${APP_NAME}"
 ICON_SOURCE="${REPO_ROOT}/docs/pics/zeus.png"
+
+# Self-contained publish fallback for local-dev use: only runs if PUBLISH_DIR
+# is missing or empty. CI's release.yml runs a single shared `dotnet publish`
+# step before any installer-script invocation, so this fallback is skipped
+# there. PublishSingleFile=false keeps each managed dll separate; Photino's
+# native libs and libwdsp.dylib need to load from runtimes/osx-* anyway, so
+# single-file packaging would only save a few hundred KB at the cost of
+# harder symbol resolution.
+if [ ! -d "${PUBLISH_DIR}" ] || [ -z "$(ls -A "${PUBLISH_DIR}" 2>/dev/null)" ]; then
+    echo "PUBLISH_DIR is missing — falling back to local publish for osx-${ARCH}..."
+    dotnet publish "${REPO_ROOT}/OpenhpsdrZeus/OpenhpsdrZeus.csproj" \
+        -c Release \
+        -r "osx-${ARCH}" \
+        --self-contained true \
+        -p:PublishSingleFile=false \
+        -p:UseAppHost=true \
+        -o "${PUBLISH_DIR}"
+fi
 
 # Clean and create output directory
 rm -rf "${APP_BUNDLE}"
@@ -29,7 +57,9 @@ mkdir -p "${OUTPUT_DIR}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
 
-# Copy published files
+# Copy published files into Contents/MacOS — the bundle's working dir at
+# launch is Contents/MacOS, so the relative wwwroot/, appsettings.json,
+# zetaHat.bin etc. land where ZeusHost expects.
 echo "Copying published files..."
 cp -r "${PUBLISH_DIR}"/* "${APP_BUNDLE}/Contents/MacOS/"
 
@@ -58,10 +88,12 @@ else
     echo "Warning: ${ICON_SOURCE} not found — building Zeus.app without an icon."
 fi
 
-# Create Info.plist. CFBundleExecutable points at launch.sh (not Zeus.Server
-# directly) so double-clicking the .app starts the backend AND opens the
-# default browser at http://localhost:6060 — matching the in-browser dev
-# experience that Zeus is designed around.
+# Info.plist. CFBundleExecutable points at launch.sh (not OpenhpsdrZeus
+# directly) so we can pin DYLD_LIBRARY_PATH before the .NET runtime loads
+# libwdsp.dylib. CFBundleIdentifier reuses the historical service-mode ID
+# (com.ei6lf.zeus) so existing service-mode .app installs upgrade in
+# place. The older "com.ei6lf.zeus.desktop" bundle ID is dropped — users
+# with that .app must Trash it manually; release notes call this out.
 cat > "${APP_BUNDLE}/Contents/Info.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -93,76 +125,92 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" << EOF
     <false/>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
+
+    <!-- Privacy descriptors — required because the Photino webview hosted
+         inside this .app uses getUserMedia for TX mic uplink. Without
+         these, macOS TCC SIGKILLs the app on first launch via
+         LaunchServices even before anything is recorded: WKWebView probes
+         mic+cam capabilities at page-load. Camera is declared defensively —
+         the SPA does not capture video today, but WKWebView's
+         enumerateDevices() touches both buckets. Service mode launched
+         from Terminal goes through the user's browser (separate TCC
+         profile) so these don't apply there, but they're harmless. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Zeus uses the microphone for SSB / digital-mode TX uplink to your radio when you key MOX.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Zeus does not record video. The OS asks because the embedded webview lists media devices.</string>
 </dict>
 </plist>
 EOF
 
-# Make Zeus.Server executable (cp -r usually preserves mode but be defensive)
-chmod +x "${APP_BUNDLE}/Contents/MacOS/Zeus.Server"
+# Make the binary executable (cp -r usually preserves mode but be defensive)
+chmod +x "${APP_BUNDLE}/Contents/MacOS/OpenhpsdrZeus"
 
-# Launcher: starts the backend, waits for the HTTP port to come up, opens
-# the default browser, and tears the backend down when the .app is quit.
-# Using /dev/tcp for the readiness probe avoids depending on curl / nc.
+# Launcher (Contents/MacOS/launch.sh): pins DYLD_LIBRARY_PATH so the
+# bundled libwdsp.dylib wins over any older copy in /usr/local/lib or
+# /opt/homebrew/lib (e.g. from a piHPSDR / DeskHPSDR install). Then exec's
+# OpenhpsdrZeus with --desktop so a normal click on the .app opens the
+# Photino window. exec replaces the shell so Cmd-Q / Dock-Quit / Force-Quit
+# tear down the right process.
 cat > "${APP_BUNDLE}/Contents/MacOS/launch.sh" << 'EOF'
 #!/bin/bash
 cd "$(dirname "$0")"
 
-# Pin the bundled libwdsp.dylib so an older copy in /usr/local/lib or
-# /opt/homebrew/lib (e.g. from a piHPSDR / DeskHPSDR install) cannot
-# shadow it. macOS dlopen does not search the executable's directory by
-# default, so without this line P/Invoke can bind against a stale dylib
-# that pre-dates symbols Zeus relies on (e.g. SetRXAEMNRpost2*). Both
-# arches are listed so the same launcher works on arm64 and x64 builds;
-# the loader silently skips a path that does not exist.
+# Pin the bundled libwdsp.dylib. macOS dlopen does not search the
+# executable's directory by default, so without this line P/Invoke can
+# bind against a stale dylib that pre-dates symbols Zeus relies on (e.g.
+# SetRXAEMNRpost2*). Both arches are listed so the same launcher works on
+# arm64 and x64 builds; the loader silently skips a path that does not
+# exist.
 export DYLD_LIBRARY_PATH="$(pwd)/runtimes/osx-arm64/native:$(pwd)/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
 
-# Cmd-Q from the Dock sends SIGTERM here — propagate it to the backend
-# so we don't leave Zeus.Server orphaned on port 6060. Set up the trap
-# BEFORE launching the server to ensure we catch early termination.
-cleanup() {
-    if [ -n "$SERVER_PID" ] && kill -0 "$SERVER_PID" 2>/dev/null; then
-        kill -TERM "$SERVER_PID" 2>/dev/null || true
-        # Wait up to 5 seconds for graceful shutdown
-        for i in $(seq 1 10); do
-            if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-                break
-            fi
-            sleep 0.5
-        done
-        # Force kill if still running
-        if kill -0 "$SERVER_PID" 2>/dev/null; then
-            kill -KILL "$SERVER_PID" 2>/dev/null || true
-        fi
-        wait "$SERVER_PID" 2>/dev/null || true
-    fi
-}
-trap cleanup EXIT INT TERM
-
-./Zeus.Server &
-SERVER_PID=$!
-
-# Wait up to ~30s for the HTTP listener. First-run WDSP wisdom takes 1–3
-# minutes, but the HTTP server binds before wisdom planning starts, so the
-# port comes up quickly.
-for _ in $(seq 1 60); do
-    if (exec 3<>/dev/tcp/127.0.0.1/6060) 2>/dev/null; then
-        exec 3>&-
-        exec 3<&-
-        break
-    fi
-    sleep 0.5
-done
-
-open "http://localhost:6060"
-wait "$SERVER_PID"
+exec ./OpenhpsdrZeus --desktop
 EOF
 chmod +x "${APP_BUNDLE}/Contents/MacOS/launch.sh"
 
+# Server-mode wrapper (Contents/Resources/openhpsdr-zeus-server): same
+# DYLD pin, but exec's OpenhpsdrZeus without --desktop. Operators run this
+# from Terminal when they want the LAN-bound HTTP service. Lives under
+# Resources/ (not MacOS/) so it doesn't get launched by accident through
+# LaunchServices — it's a CLI tool, not the app's main executable.
+cat > "${APP_BUNDLE}/Contents/Resources/openhpsdr-zeus-server" << 'EOF'
+#!/bin/bash
+# Run Openhpsdr Zeus in server mode (LAN-bound HTTP on :6060).
+# Usage: /Applications/Zeus.app/Contents/Resources/openhpsdr-zeus-server
+APP_MACOS_DIR="$(cd "$(dirname "$0")/../MacOS" && pwd)"
+cd "${APP_MACOS_DIR}"
+export DYLD_LIBRARY_PATH="${APP_MACOS_DIR}/runtimes/osx-arm64/native:${APP_MACOS_DIR}/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
+exec ./OpenhpsdrZeus "$@"
+EOF
+chmod +x "${APP_BUNDLE}/Contents/Resources/openhpsdr-zeus-server"
+
 echo "App bundle created at ${APP_BUNDLE}"
+
+# --- Codesigning hook (opt-in) ------------------------------------------
+#
+# Ad-hoc signing or Developer ID signing happens here. Default behaviour
+# is to do nothing — the bundle ships unsigned and the user clears the
+# quarantine xattr on first launch (see DMG README).
+#
+# To produce a Developer ID Application signed bundle:
+#   export APPLE_DEVELOPER_ID="Developer ID Application: Brian Keating (TEAMID)"
+#   ./create-macos-app.sh 0.4.1 arm64
+# Notarisation is a separate step (notarytool submit ... --wait) once the
+# Apple ID + app-specific password is configured locally — keep that out
+# of the script for now so the unsigned path stays the default and CI
+# doesn't trip over missing secrets.
+if [ -n "${APPLE_DEVELOPER_ID:-}" ]; then
+    echo "Codesigning with: ${APPLE_DEVELOPER_ID}"
+    codesign --force --deep --options runtime --timestamp \
+        --sign "${APPLE_DEVELOPER_ID}" "${APP_BUNDLE}"
+    codesign --verify --verbose=2 "${APP_BUNDLE}"
+else
+    echo "(unsigned — set APPLE_DEVELOPER_ID to enable codesigning)"
+fi
 
 # --- DMG ----------------------------------------------------------------
 
-DMG_NAME="Zeus-${VERSION}-macos-${ARCH}.dmg"
+DMG_NAME="OpenhpsdrZeus-${VERSION}-macos-${ARCH}.dmg"
 DMG_PATH="${OUTPUT_DIR}/${DMG_NAME}"
 
 echo "Creating DMG..."
@@ -179,8 +227,8 @@ cp -R "${APP_BUNDLE}" "${DMG_TEMP}/"
 ln -s /Applications "${DMG_TEMP}/Applications"
 
 cat > "${DMG_TEMP}/README.txt" << 'EOF'
-Zeus for macOS
-==============
+Openhpsdr Zeus for macOS
+========================
 
 INSTALL
   Drag Zeus.app onto the Applications shortcut in this window.
@@ -199,23 +247,31 @@ FIRST LAUNCH (important — Zeus is not signed)
   and click "Open Anyway".
 
 WHAT HAPPENS WHEN YOU LAUNCH
-  Zeus starts a local server and opens its UI in your default browser
-  at http://localhost:6060.
+  Double-clicking Zeus.app opens a native window. There is no browser
+  tab, no separate server process to manage — the radio backend runs
+  in-process inside the same window. Closing the window stops Zeus
+  completely.
 
-  Tip: in Chrome / Edge / Safari you can install the page as a
-  Progressive Web App (the "Install" icon in the address bar) for a
-  windowed, dock-friendly experience without using Zeus.app at all.
+RUNNING IN SERVER MODE (LAN / remote / phone access)
+  To run Zeus as a LAN-bound HTTP service (so you can connect to it
+  from another machine on the same network, e.g. your phone), open
+  Terminal and run:
+
+      /Applications/Zeus.app/Contents/Resources/openhpsdr-zeus-server
+
+  This binds Zeus to port 6060 on all interfaces. Open
+  http://<your-mac>:6060 in any browser on the LAN. Ctrl-C in the
+  Terminal window stops the server.
 
 FIRST RUN — WDSP WISDOM
   The first launch builds an FFTW "wisdom" cache and can take 1-3
-  minutes. The browser will load, but do NOT click Discover/Connect
-  until the Zeus.Server process settles. Subsequent launches are
-  instant.
+  minutes. The window will load, but do NOT click Discover/Connect
+  until the wisdom build settles. Subsequent launches are instant.
 
 More info: https://github.com/brianbruff/openhpsdr-zeus
 EOF
 
-hdiutil create -volname "Zeus v${VERSION}" \
+hdiutil create -volname "Openhpsdr Zeus v${VERSION}" \
     -srcfolder "${DMG_TEMP}" \
     -ov -format UDZO \
     "${DMG_PATH}"
