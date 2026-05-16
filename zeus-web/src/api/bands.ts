@@ -5,7 +5,7 @@
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 
 export type BandAllocation = 'Amateur' | 'SWL' | 'Broadcast' | 'Reserved' | 'Unknown';
-export type ModeRestriction = 'Any' | 'CwOnly' | 'PhoneOnly' | 'DigitalOnly';
+export type ModeRestriction = 'Any' | 'CwOnly' | 'PhoneOnly' | 'DigitalOnly' | 'CwAndDigital';
 
 export type BandRegion = {
   id: string;
@@ -112,6 +112,7 @@ export function modeMatchesRestriction(mode: RxMode, restriction: ModeRestrictio
     case 'CwOnly': return mode === 'CWU' || mode === 'CWL';
     case 'PhoneOnly': return ['USB', 'LSB', 'AM', 'SAM', 'DSB', 'FM'].includes(mode);
     case 'DigitalOnly': return mode === 'DIGL' || mode === 'DIGU';
+    case 'CwAndDigital': return ['CWU', 'CWL', 'DIGL', 'DIGU'].includes(mode);
     default: return false;
   }
 }

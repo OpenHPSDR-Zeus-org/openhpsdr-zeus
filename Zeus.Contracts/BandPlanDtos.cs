@@ -53,6 +53,10 @@ public enum ModeRestriction : byte
     CwOnly = 1,
     PhoneOnly = 2,
     DigitalOnly = 3,
+    // CW + narrowband digital permitted, phone prohibited.
+    // Required by 30m WARC allocation in IARU R1/R2 where CW and digital
+    // share the band but phone is not authorised.
+    CwAndDigital = 4,
 }
 
 /// <summary>

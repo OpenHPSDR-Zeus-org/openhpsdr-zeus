@@ -8,7 +8,7 @@
     { "lowHz": 3535000,  "highHz": 3900000,  "label": "80M Mixed",       "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
     { "lowHz": 7000000,  "highHz": 7025000,  "label": "40M CW",          "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": null },
     { "lowHz": 7025000,  "highHz": 7200000,  "label": "40M Mixed",       "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
-    { "lowHz": 10100000, "highHz": 10150000, "label": "30M CW/Digital",  "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": "No phone" },
+    { "lowHz": 10100000, "highHz": 10150000, "label": "30M CW/Digital",  "allocation": "Amateur", "modeRestriction": "CwAndDigital", "maxPowerW": null, "notes": "No phone" },
     { "lowHz": 14000000, "highHz": 14025000, "label": "20M CW",          "allocation": "Amateur", "modeRestriction": "CwOnly",    "maxPowerW": null, "notes": null },
     { "lowHz": 14025000, "highHz": 14350000, "label": "20M Mixed",       "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },
     { "lowHz": 18068000, "highHz": 18168000, "label": "17M",             "allocation": "Amateur", "modeRestriction": "Any",       "maxPowerW": null, "notes": null },

@@ -177,12 +177,13 @@ public sealed class BandPlanService : IBandPlanService
         return null;
     }
 
-    private static bool ModeMatchesRestriction(RxMode mode, ModeRestriction restriction) => restriction switch
+    internal static bool ModeMatchesRestriction(RxMode mode, ModeRestriction restriction) => restriction switch
     {
         ModeRestriction.Any => true,
         ModeRestriction.CwOnly => mode is RxMode.CWU or RxMode.CWL,
         ModeRestriction.PhoneOnly => mode is RxMode.USB or RxMode.LSB or RxMode.AM or RxMode.SAM or RxMode.DSB or RxMode.FM,
         ModeRestriction.DigitalOnly => mode is RxMode.DIGL or RxMode.DIGU,
+        ModeRestriction.CwAndDigital => mode is RxMode.CWU or RxMode.CWL or RxMode.DIGL or RxMode.DIGU,
         _ => false,
     };
 

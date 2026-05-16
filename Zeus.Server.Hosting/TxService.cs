@@ -102,6 +102,10 @@ public sealed class TxService
             : "no amateur allocation";
         error = $"TX blocked: {state.VfoHz / 1_000_000.0:F4} MHz is out of band for mode {state.Mode} in region {_bandPlan.CurrentRegion.DisplayName} ({segLabel})";
         _log.LogWarning("tx.guard.blocked vfo={Vfo}Hz mode={Mode} region={Region}", state.VfoHz, state.Mode, _bandPlan.CurrentRegion.Id);
+        // Surface the block in the UI via the same AlertFrame path that SWR
+        // trips and TX timeouts use (AlertKind.OutOfBand reserved for this).
+        // The frontend AlertBanner consumes this automatically.
+        _hub.Broadcast(new AlertFrame(AlertKind.OutOfBand, error));
         return false;
     }
 

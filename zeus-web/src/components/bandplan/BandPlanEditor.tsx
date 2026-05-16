@@ -9,7 +9,7 @@ import { useBandPlanStore } from '../../state/bandPlan';
 import type { BandSegment, BandAllocation, ModeRestriction } from '../../api/bands';
 
 const ALLOCATION_OPTIONS: BandAllocation[] = ['Amateur', 'SWL', 'Broadcast', 'Reserved', 'Unknown'];
-const MODE_OPTIONS: ModeRestriction[] = ['Any', 'CwOnly', 'PhoneOnly', 'DigitalOnly'];
+const MODE_OPTIONS: ModeRestriction[] = ['Any', 'CwOnly', 'PhoneOnly', 'DigitalOnly', 'CwAndDigital'];
 
 type EditRow = BandSegment & { _key: number };
 
