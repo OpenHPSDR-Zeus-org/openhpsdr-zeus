@@ -108,6 +108,13 @@ const PS_METERS_BYTES = 1 + 4 + 4 + 1 + 1 + 4;
 // resolve the collision with PsMeters above.
 export const MSG_TYPE_BAND_PLAN_CHANGED = 0x1B;
 
+// MOX/TUN state edge: 1 type byte + moxOn:u8 + tunOn:u8 = 3 bytes.
+// Server broadcasts on every MOX or TUN transition from any source (UI,
+// TCI, SWR trip, TX timeout) so the frontend stays in sync even when the
+// edge originates outside the web UI.
+export const MSG_TYPE_MOX_STATE = 0x1c;
+const MOX_STATE_BYTES = 3;
+
 // WDSP wisdom status: 1 type byte + 1 phase byte (0=idle, 1=building, 2=ready)
 // + optional UTF-8 status text trailer (e.g. "Planning COMPLEX FORWARD FFT
 // size 1024"). Pushed once on WS attach and again on every transition AND
@@ -375,6 +382,25 @@ export function startRealtime(path = '/ws'): () => void {
         }
         if (peekType === MSG_TYPE_BAND_PLAN_CHANGED) {
           void useBandPlanStore.getState().refresh();
+          return;
+        }
+        if (peekType === MSG_TYPE_MOX_STATE) {
+          if (ev.data.byteLength < MOX_STATE_BYTES) {
+            warnOnce('ws-mox-state-short', `mox state frame too short: ${ev.data.byteLength}`);
+            return;
+          }
+          const dv = new DataView(ev.data);
+          const moxOn = dv.getUint8(1) !== 0;
+          const tunOn = dv.getUint8(2) !== 0;
+          const txStore = useTxStore.getState();
+          if (moxOn) {
+            txStore.setMoxOn(true);
+          } else if (tunOn) {
+            txStore.setTunOn(true);
+          } else {
+            txStore.setMoxOn(false);
+            txStore.setTunOn(false);
+          }
           return;
         }
         warnOnce(

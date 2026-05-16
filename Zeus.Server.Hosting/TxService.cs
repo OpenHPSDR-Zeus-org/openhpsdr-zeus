@@ -153,6 +153,7 @@ public sealed class TxService
         // pointing at _drivePct for the next half-key.
         _radio.NotifyTunActive(false);
         _log.LogInformation("tx.mox on={On}", on);
+        _hub.Broadcast(new MoxStateFrame(MoxOn: on, TunOn: false));
         error = null;
         return true;
     }
@@ -219,6 +220,7 @@ public sealed class TxService
             _log.LogInformation(
                 "tx.twoTone on=true f1={F1} f2={F2} mag={Mag}",
                 req.Freq1, req.Freq2, req.Mag);
+            _hub.Broadcast(new MoxStateFrame(MoxOn: true, TunOn: false));
         }
         else
         {
@@ -230,6 +232,7 @@ public sealed class TxService
             _radio.SetMox(false);
             _radio.SetTwoTone(req);
             _log.LogInformation("tx.twoTone on=false");
+            _hub.Broadcast(new MoxStateFrame(MoxOn: false, TunOn: false));
         }
         error = null;
         return true;
@@ -280,6 +283,7 @@ public sealed class TxService
         // on the first TUN frame carries the tune % (not the stale drive %).
         _radio.NotifyTunActive(on);
         _log.LogInformation("tx.tun on={On}", on);
+        _hub.Broadcast(new MoxStateFrame(MoxOn: false, TunOn: on));
         error = null;
         return true;
     }
@@ -312,6 +316,7 @@ public sealed class TxService
             _radio.NotifyTunActive(false);
             _log.LogWarning("tx.trip kind={Kind} reason={Reason}", kind, reason);
             _hub.Broadcast(new AlertFrame(kind, reason));
+            _hub.Broadcast(new MoxStateFrame(MoxOn: false, TunOn: false));
         }
     }
 }

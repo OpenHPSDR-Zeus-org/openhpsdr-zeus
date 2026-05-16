@@ -123,4 +123,11 @@ public enum MsgType : byte
     // Originally 0x18 on the issue-65 branch; renumbered to 0x1B on merge
     // with develop to resolve the collision with PsMeters above.
     BandPlanChanged = 0x1B,
+
+    // Server → client (MOX/TUN state edge). Broadcast on every MOX or TUN
+    // transition regardless of source (UI click, TCI trx command, SWR trip,
+    // TX timeout). Payload: [type:1][moxOn:u8][tunOn:u8] — 3 bytes total.
+    // Allows the frontend to track transmit state even when the source of
+    // the edge is not the web UI (e.g. TCI client sends trx:0,true;).
+    MoxState = 0x1C,
 }
