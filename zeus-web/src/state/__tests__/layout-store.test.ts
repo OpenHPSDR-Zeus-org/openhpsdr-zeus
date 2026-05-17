@@ -127,17 +127,22 @@ describe('parseWorkspaceLayout', () => {
     expect(parseWorkspaceLayout(future)).toEqual(EMPTY_WORKSPACE_LAYOUT);
   });
 
-  it('drops tiles whose panelId is not in the registry', () => {
+  it('keeps tiles whose panelId is not in the static registry (plugin-panel tiles register asynchronously)', () => {
+    // Plugin panels register after the layout deserialises — if the parser
+    // dropped unknown panelIds, every tab switch / reload would erase any
+    // plugin tile (e.g. RF-2K, PGXL, antenna-genius). The renderer treats
+    // an unresolved panelId as "render nothing until it shows up" so a
+    // tile pointing at a permanently-removed panel id is harmless.
     const dirty = {
       schemaVersion: 7,
       tiles: [
         { uid: 'a', panelId: 'hero', x: 0, y: 0, w: 9, h: 12 },
-        { uid: 'b', panelId: 'no-such-panel', x: 0, y: 0, w: 1, h: 1 },
+        { uid: 'b', panelId: 'com.example.plugin.panel', x: 0, y: 0, w: 1, h: 1 },
       ],
     };
     const parsed = parseWorkspaceLayout(dirty);
-    expect(parsed.tiles).toHaveLength(1);
-    expect(parsed.tiles[0]?.uid).toBe('a');
+    expect(parsed.tiles).toHaveLength(2);
+    expect(parsed.tiles.map((t) => t.uid)).toEqual(['a', 'b']);
   });
 
   it('drops tiles missing required numeric fields', () => {
