@@ -9,7 +9,6 @@
 // blob (schemaVersion + tiles[]) round-trips through /api/ui/layout via the
 // existing layout-store debounced PUT path.
 
-import { PANELS } from './panels';
 
 /** Outer-grid column count. Matches MetersPanel's inner grid so the mental
  *  model is identical at both levels. */
@@ -118,10 +117,13 @@ export function placeTileInGrid(
 /** Best-effort parser + validator for the opaque /api/ui/layout JSON blob.
  *  Anything malformed falls through to the empty layout — never throws. The
  *  caller is expected to substitute DEFAULT_WORKSPACE_LAYOUT when this
- *  returns the empty value. Tiles whose panelId is no longer in PANELS are
- *  silently dropped (e.g. a future PanelDef removal); instanceConfig is
- *  preserved verbatim regardless of shape so per-panel parsers can validate
- *  it on their own terms. */
+ *  returns the empty value. Unknown panelIds are kept rather than dropped —
+ *  plugin panels register asynchronously at startup, and dropping their
+ *  tiles on each layout deserialise would mean operators have to re-add
+ *  plugin panels after every tab switch / page reload. The tile renderer
+ *  treats an unresolved panelId as "render nothing until it shows up"
+ *  (PanelTile / PanelBody both early-return null on missing def), so a
+ *  tile pointing at a permanently-removed panel id is harmless. */
 export function parseWorkspaceLayout(raw: unknown): WorkspaceLayout {
   if (!raw || typeof raw !== 'object') return EMPTY_WORKSPACE_LAYOUT;
   const obj = raw as Partial<WorkspaceLayout>;
@@ -133,7 +135,6 @@ export function parseWorkspaceLayout(raw: unknown): WorkspaceLayout {
     const tile = t as Partial<WorkspaceTile>;
     if (typeof tile.uid !== 'string' || tile.uid.length === 0) continue;
     if (typeof tile.panelId !== 'string') continue;
-    if (!(tile.panelId in PANELS)) continue;
     if (
       !Number.isFinite(tile.x) ||
       !Number.isFinite(tile.y) ||
