@@ -15,6 +15,7 @@
 
 import { useMemo } from 'react';
 import { CfcSettingsPanel } from './CfcSettingsPanel';
+import { DownloadAudioSuiteButton } from './DownloadAudioSuiteButton';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import type { RegisteredPluginPanel } from '../plugins/runtime/pluginRuntime';
 
@@ -113,12 +114,13 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
               fontSize: 10,
               fontWeight: 500,
             }}
-            title={slot.installed ? 'Installed and active' : 'Not installed — Settings → Plugins → Install from URL'}
+            title={slot.installed ? 'Installed and active' : 'Not installed — click Download Audio Suite or Settings → Plugins → Install from URL'}
           >
             {slot.title}
           </span>
         </span>
       ))}
+      <DownloadAudioSuiteButton />
     </div>
   );
 }
