@@ -145,8 +145,14 @@ public sealed class PluginInstaller
         if (Directory.Exists(dir))
         {
             try { Directory.Delete(dir, recursive: true); }
-            catch (IOException ex)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                // Windows holds an open file handle on plugin DLLs after
+                // ALC.Unload until GC reclaims the load context — both
+                // IOException ("file in use") and UnauthorizedAccessException
+                // ("access denied") surface depending on the open mode.
+                // Either way the deactivation succeeded; the dir cleanup
+                // needs an explicit GC + retry, or a Zeus restart.
                 _log?.LogWarning(ex,
                     "Could not delete plugin dir {Dir} immediately; restart Zeus to finish removal.", dir);
                 throw new PluginInstallException(
