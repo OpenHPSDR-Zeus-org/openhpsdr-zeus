@@ -70,6 +70,7 @@ export type PanelCategory =
   | 'log'
   | 'tools'
   | 'amplifiers'
+  | 'tuners'
   | 'controls'
   | 'switches'
   | 'plugins';
@@ -85,6 +86,7 @@ export const PANEL_CATEGORIES: ReadonlyArray<PanelCategory> = [
   'log',
   'tools',
   'amplifiers',
+  'tuners',
   'controls',
   'switches',
   'plugins',
@@ -97,6 +99,7 @@ export const PANEL_CATEGORY_LABELS: Record<PanelCategory, string> = {
   log: 'Log',
   tools: 'Tools',
   amplifiers: 'Amplifiers',
+  tuners: 'Tuners',
   controls: 'Controls',
   switches: 'Switches',
   plugins: 'Plugins',
