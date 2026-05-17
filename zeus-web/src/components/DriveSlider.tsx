@@ -101,18 +101,11 @@ export function DriveSlider() {
     if (debounceTimer.current != null) clearTimeout(debounceTimer.current);
   }, []);
 
-  // Push the zustand-persisted drivePercent to the server once per connect.
-  // Server defaults _drivePct=10 on startup; without this the slider shows
-  // the persisted value (e.g. 100%) while the radio stays at 10%.
-  const syncedRef = useRef(false);
-  useEffect(() => {
-    if (!connected) { syncedRef.current = false; return; }
-    if (syncedRef.current) return;
-    syncedRef.current = true;
-    lastSent.current = drivePercent;
-    setDrive(drivePercent).catch(() => { /* next drag will retry */ });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connected]);
+  // Server is now authoritative for drivePercent (StateDto.DrivePct, persisted
+  // via RadioStateStore, hydrated into tx-store by tx-store.hydrateFromState
+  // on every fresh RadioStateDto). The previous push-on-connect that ran here
+  // would clobber the server's hydrated value with the localStorage mirror
+  // every time the operator (re)connected. Removed deliberately.
 
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = Number(e.currentTarget.value);

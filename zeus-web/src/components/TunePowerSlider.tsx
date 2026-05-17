@@ -74,18 +74,10 @@ export function TunePowerSlider() {
     if (debounceTimer.current != null) clearTimeout(debounceTimer.current);
   }, []);
 
-  // Push the zustand-persisted tunePercent to the server once per connect.
-  // RadioService starts with _tunePct=10; without this resync the slider
-  // shows 100% from localStorage while the radio stays at 10%.
-  const syncedRef = useRef(false);
-  useEffect(() => {
-    if (!connected) { syncedRef.current = false; return; }
-    if (syncedRef.current) return;
-    syncedRef.current = true;
-    lastSent.current = tunePercent;
-    setTuneDrive(tunePercent).catch(() => { /* next drag will retry */ });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connected]);
+  // Server is authoritative for tunePercent (StateDto.TunePct, persisted via
+  // RadioStateStore, hydrated into tx-store on every fresh RadioStateDto).
+  // The previous push-on-connect clobbered the server's hydrated value with
+  // the localStorage mirror. Removed deliberately — see DriveSlider.tsx.
 
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = Number(e.currentTarget.value);

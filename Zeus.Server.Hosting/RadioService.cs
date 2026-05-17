@@ -284,7 +284,14 @@ public sealed class RadioService : IDisposable
             TwoToneFreq1: ps?.TwoToneFreq1 ?? 700.0,
             TwoToneFreq2: ps?.TwoToneFreq2 ?? 1900.0,
             TwoToneMag: ps?.TwoToneMag ?? 0.49,
-            Cfc: persistedCfc);
+            Cfc: persistedCfc,
+            // Hydrate drive sliders from RadioStateStore so a fresh frontend
+            // connect lands on the operator's last-set values. The private
+            // fields above (_drivePct / _tunePct) were already hydrated in the
+            // rsSnap block; mirror them into the StateDto so SetDrive doesn't
+            // become the only path that puts these into the broadcast.
+            DrivePct: Volatile.Read(ref _drivePct),
+            TunePct: Volatile.Read(ref _tunePct));
 
         // Kick off the debounce flush timer. Fires every 1 s; only writes to
         // LiteDB when _stateDirty is set (i.e., at least one Mutate() has fired
@@ -1005,7 +1012,11 @@ public sealed class RadioService : IDisposable
     {
         int clamped = Math.Clamp(percent, 0, 100);
         Interlocked.Exchange(ref _drivePct, clamped);
-        _stateDirty = true;
+        // Mutate() broadcasts the new StateDto to subscribed clients and
+        // flips _stateDirty so the debounce flush persists to LiteDB. Without
+        // the broadcast a fresh client connect would not see the hydrated
+        // value until something else dirtied the state.
+        Mutate(s => s with { DrivePct = clamped });
         RecomputePaAndPush();
     }
 
@@ -1015,7 +1026,7 @@ public sealed class RadioService : IDisposable
     {
         int clamped = Math.Clamp(percent, 0, 100);
         Interlocked.Exchange(ref _tunePct, clamped);
-        _stateDirty = true;
+        Mutate(s => s with { TunePct = clamped });
         RecomputePaAndPush();
     }
 
@@ -1586,8 +1597,8 @@ public sealed class RadioService : IDisposable
                 AmTxFilterLoAbs = amTx.LoAbs,   AmTxFilterHiAbs = amTx.HiAbs,
                 FmTxFilterLoAbs = fmTx.LoAbs,   FmTxFilterHiAbs = fmTx.HiAbs,
                 CwTxFilterLoAbs = cwTx.LoAbs,   CwTxFilterHiAbs = cwTx.HiAbs,
-                DrivePct = Volatile.Read(ref _drivePct),
-                TunePct = Volatile.Read(ref _tunePct),
+                DrivePct = snap.DrivePct,
+                TunePct = snap.TunePct,
                 UpdatedUtc = DateTime.UtcNow,
             });
         }

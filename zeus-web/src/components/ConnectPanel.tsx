@@ -50,8 +50,6 @@ import {
   disconnectP2 as apiDisconnectP2,
   fetchRadios,
   fetchState,
-  setDrive,
-  setTuneDrive,
   setLevelerMaxGain,
   setMicGain,
   type RadioInfoDto,
@@ -116,14 +114,21 @@ function parseRawBoardId(raw: string | undefined): number | null {
   return n;
 }
 
-// Post-connect side-effects shared by discover-click and manual-connect: push
-// persisted TX values so the radio doesn't key at its boot default, and resume
-// the AudioContext on the gesture so the user doesn't need a second Play click.
+// Post-connect side-effects shared by discover-click and manual-connect.
+//
+// Drive / TUN drive are now authoritative on the server (StateDto.DrivePct /
+// TunePct, persisted via RadioStateStore). The connect-time response already
+// carries the hydrated values; tx-store.hydrateFromState picks them up from
+// the RadioStateDto returned by /api/connect. Pushing the localStorage mirror
+// back here would clobber the server's just-hydrated values, which is exactly
+// the bug reported for relaunches that didn't restore drive.
+//
+// micGainDb / levelerMaxGainDb don't have a server-authoritative path yet, so
+// they continue to push from localStorage. Migrating them to the same
+// StateDto pattern is the natural follow-up.
 function applyPostConnectEffects() {
   void getAudioClient().start();
   const tx = useTxStore.getState();
-  void setDrive(tx.drivePercent).catch(() => {});
-  void setTuneDrive(tx.tunePercent).catch(() => {});
   void setMicGain(tx.micGainDb).catch(() => {});
   void setLevelerMaxGain(tx.levelerMaxGainDb).catch(() => {});
 }

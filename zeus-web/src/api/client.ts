@@ -206,6 +206,12 @@ export type RadioStateDto = {
   psCalibrationStalled?: boolean;
   psIntsSpiPreset: string;
   psFeedbackSource: 'internal' | 'external';
+  // Drive slider state — server is authoritative, hydrated into tx-store on
+  // every fresh RadioStateDto so a relaunch picks up the operator's last
+  // value instead of the localStorage default clobbering the server's
+  // persisted value on connect.
+  drivePercent: number;
+  tunePercent: number;
   twoToneFreq1: number;
   twoToneFreq2: number;
   twoToneMag: number;
@@ -457,6 +463,11 @@ export function normalizeState(raw: unknown): RadioStateDto {
     psIntsSpiPreset: typeof r.psIntsSpiPreset === 'string' ? r.psIntsSpiPreset : '16/256',
     psFeedbackSource:
       r.psFeedbackSource === 'External' || r.psFeedbackSource === 'external' ? 'external' : 'internal',
+    // Drive sliders — server is authoritative. Defaults mirror RadioService
+    // private-field seeds (_drivePct=0, _tunePct=10) so a state frame from an
+    // older server (no DrivePct/TunePct fields) deserialises cleanly.
+    drivePercent: typeof r.drivePct === 'number' ? r.drivePct : 0,
+    tunePercent: typeof r.tunePct === 'number' ? r.tunePct : 10,
     twoToneFreq1: typeof r.twoToneFreq1 === 'number' ? r.twoToneFreq1 : 700,
     twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
     twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,

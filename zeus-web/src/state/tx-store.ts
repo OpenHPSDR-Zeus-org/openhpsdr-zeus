@@ -422,6 +422,13 @@ export const useTxStore = create<TxState>()(
 
       hydrateFromState: (s) =>
         set({
+          // Drive sliders — server is the source of truth. Persisted via
+          // RadioStateStore and broadcast on every SetDrive/SetTuneDrive so
+          // the operator's last-set values come back on relaunch. The
+          // localStorage mirror in `partialize` below exists only to avoid
+          // a first-paint flicker before this hydrate runs.
+          drivePercent: s.drivePercent,
+          tunePercent: s.tunePercent,
           psAuto: s.psAuto,
           psPtol: s.psPtol,
           psAutoAttenuate: s.psAutoAttenuate,

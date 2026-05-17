@@ -241,7 +241,20 @@ public sealed record StateDto(
     // Nullable so legacy state frames (no Cfc field) deserialize unchanged;
     // null at the engine seam means "use CfcConfig.Default" — same pattern
     // as the Nr field above. Persisted globally via DspSettingsStore.
-    CfcConfig? Cfc = null);
+    CfcConfig? Cfc = null,
+
+    // ---- Drive slider state ----
+    // Operator drive slider position 0..100 (% of MaxPowerWatts via the
+    // per-board PA-gain table). Server is authoritative: persisted to LiteDB
+    // via RadioStateStore, hydrated on construction, and broadcast on every
+    // SetDrive so a fresh frontend connect lands on the persisted value
+    // instead of pushing its own localStorage default back over the wire.
+    // Default 0 mirrors RadioService._drivePct seed.
+    int DrivePct = 0,
+    // Independent TUN drive slider 0..100. Same persistence pattern as
+    // DrivePct. Default 10 mirrors RadioService._tunePct seed — a 0 default
+    // would make pressing TUN appear to do nothing on first key.
+    int TunePct = 10);
 
 public sealed record RadioInfo(
     string MacAddress,
