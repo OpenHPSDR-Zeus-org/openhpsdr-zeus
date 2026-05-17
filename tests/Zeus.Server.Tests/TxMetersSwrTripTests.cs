@@ -53,10 +53,12 @@ using Xunit;
 namespace Zeus.Server.Tests;
 
 /// <summary>
-/// PRD FR-6 SWR auto-trip: TxMetersService must drop MOX/TUN if SWR &gt; 2.5
-/// sustained for ≥500 ms, but NOT trip on brief spikes. The trip logic is
-/// exercised directly via the internal <c>EvaluateSwrTrip(swr, now)</c>
-/// seam so tests can drive synthetic timestamps without wall-clock delays.
+/// PRD FR-6 SWR auto-trip: TxMetersService must drop MOX/TUN when SWR sustains
+/// above the per-mode threshold for the per-mode sustain duration, honour the
+/// per-mode startup-grace window after the keying edge, and NOT trip on brief
+/// spikes. The trip logic is exercised directly via the internal
+/// <c>EvaluateSwrTrip(swr, now, isTun, keyedAt)</c> seam so tests can drive
+/// synthetic timestamps without wall-clock delays. Issue #362.
 /// </summary>
 public class TxMetersSwrTripTests : IDisposable
 {
@@ -112,61 +114,135 @@ public class TxMetersSwrTripTests : IDisposable
         Assert.True(Math.Abs(swr - 2.5) < 0.1, $"Expected SWR ≈ 2.5, got {swr}");
     }
 
+    // Keyed-at sentinel that is well before any synthetic `now` the tests
+    // construct, so the per-mode startup grace is already past and the
+    // tests exercise the pure sustain-window logic. The grace behaviour
+    // gets its own dedicated tests below.
+    private static readonly DateTime KeyedAtPastGrace =
+        new DateTime(2026, 4, 18, 11, 0, 0, DateTimeKind.Utc);
+
     [Fact]
-    public void EvaluateSwrTrip_FiresAtExactly500msSustained_NotBefore()
+    public void EvaluateSwrTrip_Mox_FiresAtExactly500msSustained_NotBefore()
     {
         var svc = BuildService(out _, out _);
         var t0 = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
 
         // First exceedance: starts the timer, no trip yet.
-        Assert.Null(svc.EvaluateSwrTrip(3.0, t0));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0, isTun: false, KeyedAtPastGrace));
         // 100 ms in: still sustaining, not yet 500 ms.
-        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(100)));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(100), isTun: false, KeyedAtPastGrace));
         // 499 ms in: one tick below the threshold duration — MUST NOT trip.
-        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(499)));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(499), isTun: false, KeyedAtPastGrace));
         // Exactly 500 ms: trip fires.
-        var reason = svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(500));
+        var reason = svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(500), isTun: false, KeyedAtPastGrace);
         Assert.NotNull(reason);
         Assert.Contains("SWR", reason);
     }
 
     [Fact]
-    public void EvaluateSwrTrip_BriefSpikeThenClears_DoesNotTrip()
+    public void EvaluateSwrTrip_Mox_BriefSpikeThenClears_DoesNotTrip()
     {
         var svc = BuildService(out _, out _);
         var t0 = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
 
         // 300 ms burst above threshold, then below.
-        Assert.Null(svc.EvaluateSwrTrip(3.0, t0));
-        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(100)));
-        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(300)));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0, isTun: false, KeyedAtPastGrace));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(100), isTun: false, KeyedAtPastGrace));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(300), isTun: false, KeyedAtPastGrace));
         // SWR drops — timer clears.
-        Assert.Null(svc.EvaluateSwrTrip(1.5, t0.AddMilliseconds(350)));
+        Assert.Null(svc.EvaluateSwrTrip(1.5, t0.AddMilliseconds(350), isTun: false, KeyedAtPastGrace));
         // Now sustained ≥500 ms window past t0 has elapsed in wall-time, but
         // because we dipped below threshold at 350, the sustain timer restarted
         // on the next exceedance and must NOT carry the earlier excursion over.
-        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(600)));
-        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(1000)));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(600), isTun: false, KeyedAtPastGrace));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(1000), isTun: false, KeyedAtPastGrace));
         // Full 500 ms from the second exceedance onset (600) → trip at 1100.
-        var reason = svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(1100));
+        var reason = svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(1100), isTun: false, KeyedAtPastGrace);
         Assert.NotNull(reason);
     }
 
     [Fact]
-    public void EvaluateSwrTrip_FiresOnceThenResets_NoRepeatSpam()
+    public void EvaluateSwrTrip_Mox_FiresOnceThenResets_NoRepeatSpam()
     {
         var svc = BuildService(out _, out _);
         var t0 = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
 
-        svc.EvaluateSwrTrip(3.0, t0);                          // start
-        Assert.NotNull(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(500))); // fire
+        svc.EvaluateSwrTrip(3.0, t0, isTun: false, KeyedAtPastGrace);                          // start
+        Assert.NotNull(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(500), isTun: false, KeyedAtPastGrace)); // fire
         // Immediately after the trip, repeated high-SWR ticks must NOT fire again
         // until a full new 500 ms sustain window completes from a fresh onset.
-        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(550)));
-        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(700)));
-        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(1049)));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(550), isTun: false, KeyedAtPastGrace));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(700), isTun: false, KeyedAtPastGrace));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(1049), isTun: false, KeyedAtPastGrace));
         // 500 ms past the 550 onset = 1050. Fires.
-        Assert.NotNull(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(1050)));
+        Assert.NotNull(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(1050), isTun: false, KeyedAtPastGrace));
+    }
+
+    [Fact]
+    public void EvaluateSwrTrip_Mox_StartupGrace_SuppressesTripDuringFirst300ms()
+    {
+        var svc = BuildService(out _, out _);
+        var keyedAt = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
+
+        // High SWR right after keying — MUST NOT trip within the 300 ms grace
+        // even if sustained the entire window. This is the HL2 bridge-settle
+        // / PA-bias transient case from issue #362.
+        Assert.Null(svc.EvaluateSwrTrip(3.0, keyedAt, isTun: false, keyedAt));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, keyedAt.AddMilliseconds(100), isTun: false, keyedAt));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, keyedAt.AddMilliseconds(299), isTun: false, keyedAt));
+        // From 300 ms onward grace is over; first post-grace tick starts the
+        // sustain timer, and the trip fires 500 ms after that onset.
+        Assert.Null(svc.EvaluateSwrTrip(3.0, keyedAt.AddMilliseconds(300), isTun: false, keyedAt));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, keyedAt.AddMilliseconds(799), isTun: false, keyedAt));
+        var reason = svc.EvaluateSwrTrip(3.0, keyedAt.AddMilliseconds(800), isTun: false, keyedAt);
+        Assert.NotNull(reason);
+    }
+
+    [Fact]
+    public void EvaluateSwrTrip_Tun_HighThreshold_DoesNotTripAt3To1()
+    {
+        var svc = BuildService(out _, out _);
+        var t0 = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
+
+        // 3:1 sustained well past the MOX threshold/sustain window — MUST NOT
+        // trip on TUN, because TUN's job is to drive a not-yet-matched load.
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0, isTun: true, KeyedAtPastGrace));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(500), isTun: true, KeyedAtPastGrace));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(1000), isTun: true, KeyedAtPastGrace));
+        Assert.Null(svc.EvaluateSwrTrip(3.0, t0.AddMilliseconds(5000), isTun: true, KeyedAtPastGrace));
+    }
+
+    [Fact]
+    public void EvaluateSwrTrip_Tun_FiresAt6To1Sustained()
+    {
+        var svc = BuildService(out _, out _);
+        var t0 = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
+
+        // Genuine bad match — 7:1 sustained ≥500 ms on TUN should still trip.
+        Assert.Null(svc.EvaluateSwrTrip(7.0, t0, isTun: true, KeyedAtPastGrace));
+        Assert.Null(svc.EvaluateSwrTrip(7.0, t0.AddMilliseconds(499), isTun: true, KeyedAtPastGrace));
+        var reason = svc.EvaluateSwrTrip(7.0, t0.AddMilliseconds(500), isTun: true, KeyedAtPastGrace);
+        Assert.NotNull(reason);
+        Assert.Contains("SWR", reason);
+    }
+
+    [Fact]
+    public void EvaluateSwrTrip_Tun_StartupGrace_SuppressesTripDuringFirst500ms()
+    {
+        var svc = BuildService(out _, out _);
+        var keyedAt = new DateTime(2026, 4, 18, 12, 0, 0, DateTimeKind.Utc);
+
+        // Even a 9:1 reading during the 500 ms TUN grace must not arm the
+        // trip — the ATU is by design seeing a wildly mismatched load while
+        // hunting for a match.
+        Assert.Null(svc.EvaluateSwrTrip(9.0, keyedAt, isTun: true, keyedAt));
+        Assert.Null(svc.EvaluateSwrTrip(9.0, keyedAt.AddMilliseconds(250), isTun: true, keyedAt));
+        Assert.Null(svc.EvaluateSwrTrip(9.0, keyedAt.AddMilliseconds(499), isTun: true, keyedAt));
+        // From 500 ms onward grace is over; sustain timer starts and trip
+        // fires 500 ms later.
+        Assert.Null(svc.EvaluateSwrTrip(9.0, keyedAt.AddMilliseconds(500), isTun: true, keyedAt));
+        var reason = svc.EvaluateSwrTrip(9.0, keyedAt.AddMilliseconds(1000), isTun: true, keyedAt);
+        Assert.NotNull(reason);
     }
 
     [Fact]

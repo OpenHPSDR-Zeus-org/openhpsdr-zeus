@@ -79,10 +79,24 @@ public sealed class TxMetersService : BackgroundService
     private const double SwrMinFwdWatts = 2.0;
     private const double SwrMax = 9.0;
 
-    // PRD FR-6: SWR > 2.5 sustained 500 ms → trip MOX/TUN. Tighter than the
-    // original 3.0 threshold; chosen to protect HL2 PA aggressively.
-    private const double SwrTripThreshold = 2.5;
-    private static readonly TimeSpan SwrTripDuration = TimeSpan.FromMilliseconds(500);
+    // Per-mode SWR trip thresholds and sustain windows. MOX keeps the
+    // conservative PRD FR-6 default (2.5:1 sustained 500 ms). TUN is
+    // relaxed to 6:1 because TUN's whole purpose is to drive a carrier
+    // into a not-yet-matched load so an ATU / operator can find a
+    // match — tripping at 2.5:1 on TUN makes TUN useless. Values follow
+    // Thetis / piHPSDR convention. See issue #362.
+    private const double SwrTripThresholdMox = 2.5;
+    private const double SwrTripThresholdTun = 6.0;
+    private static readonly TimeSpan SwrTripDurationMox = TimeSpan.FromMilliseconds(500);
+    private static readonly TimeSpan SwrTripDurationTun = TimeSpan.FromMilliseconds(500);
+
+    // Startup grace after the keying edge: suppress SWR trip evaluation
+    // during the PA-bias / LPF-relay settle window where the bridge can
+    // transiently read above threshold before the actual antenna match
+    // is engaged. Per-mode so MOX still trips quickly on a genuine bad
+    // match while TUN gives the ATU time to do its work.
+    private static readonly TimeSpan SwrStartupGraceMox = TimeSpan.FromMilliseconds(300);
+    private static readonly TimeSpan SwrStartupGraceTun = TimeSpan.FromMilliseconds(500);
 
     // PRD FR-6: a single MOX/TUN transmission may not exceed 120 s. Catches
     // stuck spacebars, jammed buttons, or a client that forgot to unkey. The
@@ -379,7 +393,15 @@ public sealed class TxMetersService : BackgroundService
                         _refAdcPeak = 0;
                     }
                     var cal = RadioCalibrations.For(_radio.ConnectedBoardKind, _radio.EffectiveOrionMkIIVariant);
-                    var (fwdW, refW, swrVal) = ComputeMeters(fwdAdc, refAdc, cal);
+                    // Watts use peak-hold (matches LP-100A peak-reading
+                    // wattmeter). SWR uses the smoothed ADC pair instead:
+                    // peak(FWD) vs peak(REF) are two uncorrelated transient
+                    // maxima and their ratio is not a physical standing-wave
+                    // ratio — on HL2 both rails can saturate together during
+                    // PA-on / LPF-relay transients, with REF clamping a few
+                    // counts above FWD, which the trip logic reads as 9:1.
+                    var (fwdW, refW, _) = ComputeMeters(fwdAdc, refAdc, cal);
+                    var (_, _, swrVal) = ComputeMeters(fwdAdcSmoothed, refAdcSmoothed, cal);
                     swr = swrVal;
                     // Stage meters are published by WdspDspEngine.ProcessTxBlock;
                     // may lag the first TX block by a few ticks at MOX-on, which
@@ -395,7 +417,9 @@ public sealed class TxMetersService : BackgroundService
                         fwdW, refW, swr,
                         cal);
 
-                    if (EvaluateSwrTrip(swr, DateTime.UtcNow) is { } tripReason)
+                    bool isTun = _tx.IsTunOn;
+                    DateTime keyedAt = (isTun ? _tx.TunStartedAt : _tx.MoxStartedAt) ?? DateTime.UtcNow;
+                    if (EvaluateSwrTrip(swr, DateTime.UtcNow, isTun, keyedAt) is { } tripReason)
                     {
                         // TryTripForAlert is idempotent — a second caller on the
                         // same tick (e.g. timeout firing concurrently) finds MOX
@@ -523,28 +547,41 @@ public sealed class TxMetersService : BackgroundService
     }
 
     /// <summary>
-    /// Evaluate the SWR sustain window and return the operator-facing trip
-    /// message when the threshold has been exceeded for ≥500 ms, or null if
-    /// not yet. Exposed as <c>internal</c> so unit tests can drive synthetic
-    /// timestamps without a <see cref="DateTime"/> abstraction — the
-    /// production caller passes <see cref="DateTime.UtcNow"/>. Firing resets
-    /// the timer so the caller gets exactly one trip per sustained excursion.
+    /// Evaluate the per-mode SWR sustain window and return the operator-facing
+    /// trip message when the active-mode threshold has been exceeded for the
+    /// active-mode sustain duration, or null if not yet. Honours the per-mode
+    /// startup-grace window after the keying edge so a bridge-settle transient
+    /// at MOX/TUN-on does not arm the trip before the load has stabilised.
+    /// Exposed as <c>internal</c> so unit tests can drive synthetic timestamps
+    /// without a <see cref="DateTime"/> abstraction — the production caller
+    /// passes <see cref="DateTime.UtcNow"/>. Firing resets the timer so the
+    /// caller gets exactly one trip per sustained excursion.
     /// </summary>
-    internal string? EvaluateSwrTrip(double swr, DateTime now)
+    internal string? EvaluateSwrTrip(double swr, DateTime now, bool isTun, DateTime keyedAt)
     {
+        var threshold = isTun ? SwrTripThresholdTun : SwrTripThresholdMox;
+        var sustain   = isTun ? SwrTripDurationTun  : SwrTripDurationMox;
+        var grace     = isTun ? SwrStartupGraceTun  : SwrStartupGraceMox;
+
         lock (_sync)
         {
-            if (swr > SwrTripThreshold)
+            if (now - keyedAt < grace)
+            {
+                _swrAboveThresholdSince = null;
+                return null;
+            }
+
+            if (swr > threshold)
             {
                 if (_swrAboveThresholdSince is null)
                 {
                     _swrAboveThresholdSince = now;
                     return null;
                 }
-                if (now - _swrAboveThresholdSince.Value >= SwrTripDuration)
+                if (now - _swrAboveThresholdSince.Value >= sustain)
                 {
                     _swrAboveThresholdSince = null;
-                    return $"SWR {swr:F1}:1 sustained >500 ms — dropped TX to protect PA";
+                    return $"SWR {swr:F1}:1 sustained >{(int)sustain.TotalMilliseconds} ms — dropped TX to protect PA";
                 }
                 return null;
             }
