@@ -170,7 +170,7 @@ public sealed class TciSession : IDisposable
         _rateLimiter = new TciRateLimiter(options.RateLimitMs, Send);
         _txAudioIngest = txAudioIngest;
         _txAudioReceiver = txAudioIngest is not null
-            ? new TciTxAudioReceiver(txAudioIngest.OnMicPcmBytes, log,
+            ? new TciTxAudioReceiver(txAudioIngest.OnMicPcmBytesFromTci, log,
                 onMonoSamplesQueued: tciServer is not null ? tciServer.NotifyTxAudioQueued : null)
             : null;
     }

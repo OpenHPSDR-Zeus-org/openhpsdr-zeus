@@ -228,7 +228,7 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
         try
         {
-            _ingest.OnMicPcmBytes(new ReadOnlyMemory<byte>(_payload));
+            _ingest.OnMicPcmBytesFromMic(new ReadOnlyMemory<byte>(_payload));
         }
         catch (Exception ex)
         {

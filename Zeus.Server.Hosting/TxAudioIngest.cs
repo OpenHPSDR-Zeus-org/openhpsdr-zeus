@@ -101,6 +101,16 @@ public sealed class TxAudioIngest : IDisposable
     // flipped the server's IsMoxOn, and the pre-flip frames were wiping the
     // ring of IQ Protocol1Client had just produced.
     private bool _lastSeenMox;
+    // TCI-source recency: set on every OnMicPcmBytesFromTci call. If a frame
+    // from the mic source arrives within TciHysteresisMs of the last TCI feed,
+    // it is silently dropped — only the TCI source is authoritative for that
+    // window. This prevents NativeMicCapture's always-on capture stream from
+    // injecting mic-silence blocks into the accumulator while a TCI client
+    // (MSHV, TCI Remote, …) is the actual audio source. 500 ms covers the
+    // 42.67 ms TX_CHRONO cadence with >10× margin while remaining short
+    // enough that a genuine fallback to mic happens instantly after TCI stops.
+    private const int TciHysteresisMs = 500;
+    private long _lastTciTickMs;
     // Diagnostic: log peak of mic-in and IQ-out once per second of TX. If
     // mic-peak is high but iq-peak is ~0, WDSP TXA is producing silence
     // despite good input. If mic-peak itself is ~0, the uplink is broken.
@@ -141,7 +151,7 @@ public sealed class TxAudioIngest : IDisposable
         _onWdspConsumed = onWdspConsumed;
         _hub = hub;
         _log = log;
-        _handler = OnMicPcmBytes;
+        _handler = OnMicPcmBytesFromMic;
         _hub.MicPcmReceived += _handler;
     }
 
@@ -160,6 +170,33 @@ public sealed class TxAudioIngest : IDisposable
     public void Dispose()
     {
         _hub.MicPcmReceived -= _handler;
+    }
+
+    /// <summary>
+    /// Source-tagged entry point for TCI TX audio (from
+    /// <see cref="Zeus.Server.Tci.TciTxAudioReceiver"/>). Updates the TCI
+    /// recency timestamp so a concurrent <see cref="OnMicPcmBytesFromMic"/>
+    /// call within <see cref="TciHysteresisMs"/> is silently suppressed.
+    /// </summary>
+    internal void OnMicPcmBytesFromTci(ReadOnlyMemory<byte> f32lePayload)
+    {
+        Volatile.Write(ref _lastTciTickMs, Environment.TickCount64);
+        OnMicPcmBytes(f32lePayload);
+    }
+
+    /// <summary>
+    /// Source-tagged entry point for the local mic path (browser
+    /// <c>getUserMedia</c> via <see cref="StreamingHub.MicPcmReceived"/>, or
+    /// <see cref="NativeMicCapture"/> in desktop mode). Drops the block
+    /// silently if TCI fed within the last <see cref="TciHysteresisMs"/>
+    /// milliseconds so a TCI source is never mixed with mic silence.
+    /// </summary>
+    internal void OnMicPcmBytesFromMic(ReadOnlyMemory<byte> f32lePayload)
+    {
+        long lastTci = Volatile.Read(ref _lastTciTickMs);
+        if (lastTci != 0 && Environment.TickCount64 - lastTci < TciHysteresisMs)
+            return;
+        OnMicPcmBytes(f32lePayload);
     }
 
     // Internal so tests can drive the ingest directly without standing up a WS.
