@@ -1447,17 +1447,10 @@ public sealed class RadioService : IDisposable
         // on connect — keeps Synthetic + tests deterministic.
         (isProtocol2, board) switch
         {
-            // HL2: tracks deskhpsdr's "measure then slightly increase" rule
-            // (transmitter.c:1347-1371, comment + value 0.2400 vs measured
-            // 0.2386). Zeus uses 0.2500 instead of deskhpsdr's 0.2400 — same
-            // rule, marginally more headroom so the operator's "Observed"
-            // indicator sits inside the dead zone rather than right at the
-            // fault edge with typical voice peaks (~0.240 on EI6LF's HL2 +
-            // resonant antenna, 2026-05-16). mi0bot returns 0.233
-            // (clsHardwareSpecific.cs:312) which sits slightly *under* the
-            // measured peak; voice envelopes clamp into calcc bin 15 rather
-            // than filling it cleanly.
-            (false, HpsdrBoardKind.HermesLite2)              => 0.2500,
+            // HL2: mi0bot clsHardwareSpecific.cs:312 PSDefaultPeak = 0.233.
+            // Same value regardless of protocol — HL2 hardware peak does
+            // not change between P1 and P2.
+            (false, HpsdrBoardKind.HermesLite2)              => 0.233,
             (false, _)                                        => 0.4072,
             // 0x0A wire byte: Saturn FPGA (G2 / G2-1K) reports the high
             // peak per Thetis clsHardwareSpecific.cs:313; everything else
@@ -1470,9 +1463,7 @@ public sealed class RadioService : IDisposable
                 OrionMkIIVariant.G2_1K  => 0.6121,
                 _                        => 0.2899,
             },
-            // HL2 P2: same value as P1 above (HL2 hardware peak is the same
-            // regardless of protocol).
-            (true,  HpsdrBoardKind.HermesLite2)               => 0.2500,
+            (true,  HpsdrBoardKind.HermesLite2)               => 0.233,
             (true,  _)                                        => 0.2899,
         };
 

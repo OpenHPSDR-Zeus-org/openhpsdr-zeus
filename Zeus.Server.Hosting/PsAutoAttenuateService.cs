@@ -54,10 +54,6 @@ public sealed class PsAutoAttenuateService : BackgroundService
 {
     // Thetis ideal feedback target: 152.293 (PSForm.cs:745). Window 128..181
     // matches mi0bot's lblPSInfoFB green-LED thresholds (PSForm.cs:1123-1138).
-    // Bench-confirmed 2026-05-16 on EI6LF's HL2 with hw_peak=0.2400 (deskhpsdr
-    // parity): voice operation lands fb in the 140-149 range, comfortably
-    // inside mi0bot's window. The DanceCooldown below covers any rare
-    // single-step overshoot near the edges without requiring a wider band.
     private const double IdealFeedback = 152.293;
     private const int FeedbackLowThreshold = 128;
     private const int FeedbackHighThreshold = 181;
@@ -86,19 +82,8 @@ public sealed class PsAutoAttenuateService : BackgroundService
 
     // Settle time after a step change: give the radio one wire-cycle to pick
     // up the new attenuator, then issue the reset so calcc starts fresh.
+    // Mirrors mi0bot PSForm.cs:783 Thread.Sleep(100).
     private static readonly TimeSpan PostStepSettle = TimeSpan.FromMilliseconds(100);
-
-    // *** DEVIATION FROM mi0bot *** Per-dance cooldown. After a Monitor →
-    // SetNewValues → RestoreOperation cycle completes, refuse to start
-    // another dance for 3 s. mi0bot has no cooldown; the implicit assumption
-    // is that the operator tuned hw_peak so feedback would settle on its
-    // own. Bench 2026-05-16 showed Zeus chasing feedback into an oscillation
-    // (4↔6 dB once per second). The wider dead-band above eliminates the
-    // single-step overshoot; the cooldown protects against multi-step
-    // chasing if calcc converges quickly on a new attn value with the
-    // feedback still mildly OOB. Combined with the wider band it brings
-    // the steady-state dance rate to "rarely" instead of "every second".
-    private static readonly TimeSpan DanceCooldown = TimeSpan.FromSeconds(3);
 
     private readonly RadioService _radio;
     private readonly TxService _tx;
@@ -155,11 +140,6 @@ public sealed class PsAutoAttenuateService : BackgroundService
     private int _hl2DeltaDb;
     private bool _hl2SavedAuto;
     private bool _hl2SavedSingle;
-
-    // Cooldown timestamps. Updated when RestoreOperation completes; checked
-    // at the top of Monitor before allowing a new dance. 0 = never danced.
-    private long _hl2LastDanceEndTickMs;
-    private long _p2LastDanceEndTickMs;
 
     // Stall detection for "calcc is alive but never produces a fit". Operator
     // signature: PS armed + keyed for >StallThreshold seconds with
@@ -290,8 +270,6 @@ public sealed class PsAutoAttenuateService : BackgroundService
             _lastCalibrationAttempts = -1;
             _hl2State = Hl2AutoAttState.Monitor;
             _p2State = P2AutoAttState.Monitor;
-            _hl2LastDanceEndTickMs = 0;
-            _p2LastDanceEndTickMs = 0;
             _stallStartTickMs = 0;
             _stallWarned = false;
             _lastAutoCalTickMs = 0;
@@ -484,17 +462,6 @@ public sealed class PsAutoAttenuateService : BackgroundService
                     return;
                 }
 
-                // Per-dance cooldown (DEVIATION FROM mi0bot — see DanceCooldown
-                // comment). After a completed dance, give calcc DanceCooldown
-                // to settle on the new attn before evaluating again.
-                long nowMs = Environment.TickCount64;
-                if (_hl2LastDanceEndTickMs > 0
-                    && nowMs - _hl2LastDanceEndTickMs < (long)DanceCooldown.TotalMilliseconds)
-                {
-                    LogGate($"hl2.skip=cooldown elapsed={nowMs - _hl2LastDanceEndTickMs}ms");
-                    return;
-                }
-
                 var psm = engine.GetPsStageMeters();
                 int feedback = (int)Math.Round(psm.FeedbackLevel);
 
@@ -584,7 +551,6 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 // save_auto, 0). Engine.SetPsControl translates the saved
                 // (auto, single) pair into the same wire call.
                 engine.SetPsControl(autoCal: _hl2SavedAuto, singleCal: _hl2SavedSingle);
-                _hl2LastDanceEndTickMs = Environment.TickCount64;
                 _log.LogInformation(
                     "psAutoAttn.hl2.restoreOperation auto={Auto} single={Single}",
                     _hl2SavedAuto, _hl2SavedSingle);
@@ -618,15 +584,6 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 if (!s.PsAutoAttenuate)
                 {
                     LogGate("p2.skip=AutoAttenuate-off");
-                    return;
-                }
-
-                // Per-dance cooldown — see DanceCooldown comment.
-                long nowMs = Environment.TickCount64;
-                if (_p2LastDanceEndTickMs > 0
-                    && nowMs - _p2LastDanceEndTickMs < (long)DanceCooldown.TotalMilliseconds)
-                {
-                    LogGate($"p2.skip=cooldown elapsed={nowMs - _p2LastDanceEndTickMs}ms");
                     return;
                 }
 
@@ -726,7 +683,6 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 // (auto, single) pair into the same wire call. This re-arms
                 // calcc on the new envelope — single LRESET → LCOLLECT pass.
                 engine.SetPsControl(autoCal: _p2SavedAuto, singleCal: _p2SavedSingle);
-                _p2LastDanceEndTickMs = Environment.TickCount64;
                 _log.LogInformation(
                     "psAutoAttn.p2.restoreOperation auto={Auto} single={Single}",
                     _p2SavedAuto, _p2SavedSingle);
