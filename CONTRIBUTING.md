@@ -50,10 +50,12 @@ Three things to know before you write a line of code:
 The repo's README has full details; the short version:
 
 ```bash
-# Backend (listens on :6060)
-dotnet run --project Zeus.Server
+# Backend (listens on :6060). OpenhpsdrZeus is the executable host;
+# Zeus.Server.Hosting next to it is a class library — don't pass it to dotnet run.
+dotnet run --project OpenhpsdrZeus
 
-# Frontend (Vite dev server on :5173, proxies /api and /ws to :6060)
+# Frontend (Vite dev server on :5173, proxies /api and /ws to :6060;
+# `vite build` writes the production bundle into Zeus.Server.Hosting/wwwroot)
 npm --prefix zeus-web run dev
 ```
 

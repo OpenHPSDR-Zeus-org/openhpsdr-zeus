@@ -14,7 +14,7 @@ This implementation adds comprehensive native installer support and automated re
 - Reads version from git tags during CI builds (e.g., tag `v0.1.0` → version `0.1.0`)
 - Properties set: `Version`, `AssemblyVersion`, `FileVersion`, `InformationalVersion`
 
-**File: `Zeus.Server/Program.cs`**
+**File: `OpenhpsdrZeus/Program.cs`**
 - Added `/api/version` endpoint that returns the current version from assembly attributes
 - Example response: `{"version": "0.1.0"}` or `{"version": "0.0.0-dev"}`
 
@@ -28,7 +28,7 @@ This implementation adds comprehensive native installer support and automated re
 
 ### 2. .NET Publish Profiles
 
-**Directory: `Zeus.Server/Properties/PublishProfiles/`**
+**Directory: `OpenhpsdrZeus/Properties/PublishProfiles/`**
 
 Created publish profiles for each platform:
 - `win-x64.pubxml` - Windows 64-bit
@@ -143,12 +143,12 @@ Each profile configures:
 
 **Local development** - version shows as `0.0.0-dev`:
 ```bash
-dotnet run --project Zeus.Server
+dotnet run --project OpenhpsdrZeus
 ```
 
 **Test publish** for a specific platform:
 ```bash
-dotnet publish Zeus.Server/Zeus.Server.csproj -p:PublishProfile=linux-x64 -p:VersionPrefix=0.1.0
+dotnet publish OpenhpsdrZeus/OpenhpsdrZeus.csproj -p:PublishProfile=linux-x64 -p:VersionPrefix=0.1.0
 ```
 
 ### For Maintainers
@@ -266,7 +266,7 @@ These were considered but not implemented to keep changes minimal:
 
 ### Created:
 - `zeus-web/src/components/AboutPanel.tsx` (version display + update checker)
-- `Zeus.Server/Properties/PublishProfiles/*.pubxml` (4 files)
+- `OpenhpsdrZeus/Properties/PublishProfiles/*.pubxml` (4 files)
 - `installers/zeus-windows.iss`
 - `installers/create-macos-app.sh`
 - `installers/create-linux-package.sh`
@@ -277,7 +277,7 @@ These were considered but not implemented to keep changes minimal:
 
 ### Modified:
 - `Directory.Build.props` (version management)
-- `Zeus.Server/Program.cs` (added /api/version endpoint)
+- `OpenhpsdrZeus/Program.cs` (added /api/version endpoint)
 - `zeus-web/src/components/SettingsMenu.tsx` (added About tab)
 - `.gitignore` (added installer output dirs)
 

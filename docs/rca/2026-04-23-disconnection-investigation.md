@@ -67,7 +67,7 @@ const MAX_BACKOFF_MS = 8000;
 
 ### RadioService Connection Lifecycle
 
-**Location:** `Zeus.Server/RadioService.cs:156-240`
+**Location:** `Zeus.Server.Hosting/RadioService.cs:156-240`
 
 **Connection flow:**
 1. `ConnectAsync`: Creates Protocol1Client, sets state to Connecting
@@ -85,7 +85,7 @@ const MAX_BACKOFF_MS = 8000;
 
 ### StreamingHub Session Management
 
-**Location:** `Zeus.Server/StreamingHub.cs:86-107`
+**Location:** `Zeus.Server.Hosting/StreamingHub.cs:86-107`
 
 **Per-client lifecycle:**
 - Each WebSocket client gets a unique session

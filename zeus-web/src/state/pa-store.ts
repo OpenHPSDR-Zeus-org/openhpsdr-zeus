@@ -29,7 +29,7 @@ import {
   type PaSettings,
 } from '../api/pa';
 
-// Canonical HF band order — must match Zeus.Server/BandUtils.HfBands. The
+// Canonical HF band order — must match Zeus.Server.Hosting/BandUtils.HfBands. The
 // settings panel iterates this for a consistent row order even when the
 // backend returns bands in a different order or omits some.
 export const HF_BANDS: readonly string[] = [

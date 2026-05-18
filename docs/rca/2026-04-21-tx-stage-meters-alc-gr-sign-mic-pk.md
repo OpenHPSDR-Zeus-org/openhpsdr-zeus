@@ -54,7 +54,7 @@ browser-worklet mic level.
 |------|--------|
 | `Zeus.Dsp/TxStageMeters.cs` | Added `MicPk` field; documented `AlcGr` sign convention |
 | `Zeus.Dsp/Wdsp/WdspDspEngine.cs` | Store `MicPk` in snapshot; negate `alcGain` → `AlcGr` |
-| `Zeus.Server/TxMetersService.cs` | Use `stage.MicPk` for `TxMetersFrame.MicDbfs`; removed dead `MicDbfsPlaceholder` |
+| `Zeus.Server.Hosting/TxMetersService.cs` | Use `stage.MicPk` for `TxMetersFrame.MicDbfs`; removed dead `MicDbfsPlaceholder` |
 | `zeus-web/src/state/tx-store.ts` | Added `wdspMicPk` field; `setMeters` maps `m.micDbfs → wdspMicPk` |
 | `zeus-web/src/components/TxStageMeters.tsx` | Added MIC row at top of chain |
 

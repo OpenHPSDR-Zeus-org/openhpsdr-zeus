@@ -44,7 +44,7 @@ Legend: ✅ supported · ⚠️ partial / with caveat · ✗ not supported · �
 
 | Setting | HL2 | G2 (P1) | G2 (P2) | Notes / Zeus source |
 |---|:---:|:---:|:---:|---|
-| Max rated TX power (W) | 5 | 100 | 100 | `Zeus.Server/PaDefaults.cs` (per-board max) |
+| Max rated TX power (W) | 5 | 100 | 100 | `Zeus.Server.Hosting/PaDefaults.cs` (per-board max) |
 | PA gain defaults (dB) | 40.5 flat | 44.6–50.9 per band | *TODO — P2 tables not yet seeded* | PaDefaults.cs lines ~30–110 |
 | Drive level | ✅ C0 `0x09[31:28]` (4-bit) | ✅ | ✅ (P2 equivalent register) | |
 | PureSignal | ✅ (`0x0A[22]`) | ✅ | ✅ | |

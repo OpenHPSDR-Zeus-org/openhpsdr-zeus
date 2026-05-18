@@ -50,7 +50,7 @@ The new test cases under `TciTxAudioReceiverTests` cover:
 
 ### Setup
 
-1. **Backend:** `dotnet run --project Zeus.Server` (listens on :6060 by default; TCI on :40001 when enabled).
+1. **Backend:** `dotnet run --project OpenhpsdrZeus` (listens on :6060 by default; TCI on :40001 when enabled).
 2. **Frontend:** `npm --prefix zeus-web run dev` (Vite on :5173).
 3. **Enable TCI** in `appsettings.Development.json`:
    ```json

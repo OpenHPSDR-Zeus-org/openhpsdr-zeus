@@ -58,7 +58,7 @@ Zeus.Midi/
 - Device hot-plug surfaced via the library's watcher.
 - No knowledge of Zeus radio commands — pure I/O.
 
-### 4.2 `Zeus.Server/MidiService.cs` (hosted service)
+### 4.2 `Zeus.Server.Hosting/MidiService.cs` (hosted service)
 
 - Owns the `IMidiEngine` instance.
 - Loads / saves `midi-mappings.json`.

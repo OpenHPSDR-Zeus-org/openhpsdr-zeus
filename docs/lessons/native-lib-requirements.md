@@ -72,7 +72,7 @@ For production use and actual radio operation, WDSP native libraries are require
 
 - `Zeus.Dsp/Wdsp/WdspNativeLoader.cs` — Native library resolution logic
 - `Zeus.Dsp/Wdsp/WdspWisdomInitializer.cs` — Wisdom file initialization
-- `Zeus.Server/WisdomBootstrapService.cs` — Kicks off wisdom generation at startup
+- `Zeus.Server.Hosting/WisdomBootstrapService.cs` — Kicks off wisdom generation at startup
 - `native/wdsp/CMakeLists.txt` — Cross-platform WDSP build configuration
 - `.github/workflows/build-native-libs.yml` — Automated build workflow
 

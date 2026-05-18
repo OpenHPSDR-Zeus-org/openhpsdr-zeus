@@ -1,6 +1,6 @@
 ---
 name: run
-description: Build the Zeus frontend into wwwroot, start the Vite dev server, and start the Zeus.Server backend. Kills any process already bound to the target ports first. Optional portOffset argument (e.g. `/run 10`) shifts both ports by that amount. Optional `fresh` flag (e.g. `/run fresh`) points the backend at a throw-away `zeus-prefs.db` so persisted state from a prior session doesn't leak into the dev run.
+description: Build the Zeus frontend into wwwroot, start the Vite dev server, and start the OpenhpsdrZeus backend. Kills any process already bound to the target ports first. Optional portOffset argument (e.g. `/run 10`) shifts both ports by that amount. Optional `fresh` flag (e.g. `/run fresh`) points the backend at a throw-away `zeus-prefs.db` so persisted state from a prior session doesn't leak into the dev run.
 ---
 
 # /run — start Zeus full stack
@@ -8,10 +8,18 @@ description: Build the Zeus frontend into wwwroot, start the Vite dev server, an
 Bring up Zeus for local development:
 
 1. Free the target ports (kill any existing listeners).
-2. Build the frontend into `Zeus.Server/wwwroot`.
+2. Build the frontend into `Zeus.Server.Hosting/wwwroot`.
 3. Start the Vite dev server (live-reload frontend).
-4. Start the .NET backend.
+4. Start the .NET backend (`OpenhpsdrZeus` — the only executable project).
 5. Report the bound ports back to the user.
+
+## Project layout (don't get this wrong)
+
+The host executable and its support library have similar names — read this before editing the skill or running `dotnet run`:
+
+- **`OpenhpsdrZeus/`** — the only executable project (`OutputType=Exe`, `net10.0`). `OpenhpsdrZeus/Program.cs` reads `ZEUS_PORT`. This is what `dotnet run --project ...` targets.
+- **`Zeus.Server.Hosting/`** — a class library referenced by the host. Owns `PrefsDbPath.cs` (reads `ZEUS_PREFS_PATH`) and the `wwwroot/` directory that Vite builds into. Trying to `dotnet run` this fails with "OutputType is Library".
+- Solution file is `Zeus.slnx` (no `.sln`).
 
 ## Arguments
 
@@ -31,7 +39,7 @@ Args can appear in any order. The skill scans each one and routes by type:
 
 Both services already read their config from env vars — no code patching needed:
 
-- Backend (`Zeus.Server/Program.cs`): reads `ZEUS_PORT` env var, defaults to 6060. Still uses `ListenAnyIP` so LAN access is preserved.
+- Backend (`OpenhpsdrZeus/Program.cs`): reads `ZEUS_PORT` env var, defaults to 6060. Still uses `ListenAnyIP` so LAN access is preserved.
 - Frontend (`zeus-web/vite.config.ts`): `/api` and `/ws` proxy target reads `BACKEND_PORT` env var, defaults to 6060. Vite's own listen port is set via `--port` on the CLI.
 - Backend prefs DB (`Zeus.Server.Hosting/PrefsDbPath.cs`): reads `ZEUS_PREFS_PATH` env var. When set, every store (PaSettings, DspSettings, RadioState, Display, …) writes to that single file instead of the platform default. The `fresh` flag wires this to a `/tmp` path.
 
@@ -75,7 +83,7 @@ Do NOT use `fuser` (not default on macOS).
 npm --prefix zeus-web run build
 ```
 
-This runs `tsc -b && vite build` and writes to `Zeus.Server/wwwroot/` (`emptyOutDir: true`). Must complete before the backend starts so served assets aren't stale. If this fails, stop — do not start the servers.
+This runs `tsc -b && vite build` and writes to `Zeus.Server.Hosting/wwwroot/` (`emptyOutDir: true`, configured in `zeus-web/vite.config.ts`). Must complete before the backend starts so served assets aren't stale. If this fails, stop — do not start the servers.
 
 ### 4. Start the Vite dev server (background)
 
@@ -91,14 +99,15 @@ BACKEND_PORT=$BACKEND_PORT npm --prefix zeus-web run dev -- --port $FRONTEND_POR
 
 ```bash
 if [ "$FRESH" = "1" ]; then
-  ZEUS_PORT=$BACKEND_PORT ZEUS_PREFS_PATH="$FRESH_DB" dotnet run --project Zeus.Server
+  ZEUS_PORT=$BACKEND_PORT ZEUS_PREFS_PATH="$FRESH_DB" dotnet run --project OpenhpsdrZeus
 else
-  ZEUS_PORT=$BACKEND_PORT dotnet run --project Zeus.Server
+  ZEUS_PORT=$BACKEND_PORT dotnet run --project OpenhpsdrZeus
 fi
 ```
 
 - Run with `run_in_background: true`.
-- `ZEUS_PORT` is read in `Zeus.Server/Program.cs` to drive `ListenAnyIP`. No source edits required.
+- The host project is **`OpenhpsdrZeus`** (the only `OutputType=Exe` in the solution). `Zeus.Server.Hosting` is a class library — do not pass it to `dotnet run`.
+- `ZEUS_PORT` is read in `OpenhpsdrZeus/Program.cs` to drive `ListenAnyIP`. No source edits required.
 - `ZEUS_PREFS_PATH` (set only when `fresh` was passed) is read in `Zeus.Server.Hosting/PrefsDbPath.cs` and routes every LiteDB-backed store to the throw-away file.
 
 ### 6. Verify both ports are listening, then report
@@ -117,8 +126,8 @@ Final message must name the ports explicitly. When `fresh` was passed, also surf
 ```
 Zeus is running:
   Vite dev:  http://localhost:<FRONTEND_PORT>   (proxies /api,/ws → :<BACKEND_PORT>)
-  Backend:   http://localhost:<BACKEND_PORT>
-  wwwroot:   built from zeus-web into Zeus.Server/wwwroot
+  Backend:   http://localhost:<BACKEND_PORT>    (OpenhpsdrZeus)
+  wwwroot:   built from zeus-web into Zeus.Server.Hosting/wwwroot
   prefs DB:  <FRESH_DB>   (throw-away — clean slate for this run)   # only when fresh
 ```
 
