@@ -132,4 +132,14 @@ public enum MsgType : byte
     // renumbered to 0x1D on merge with develop to resolve the collision
     // with MoxState above.
     MicPeak = 0x1D,
+
+    // Server → client (audio plugin chain order). Broadcast whenever a
+    // user reorders the chain via the Audio Suite window's tile strip,
+    // OR when a plugin is installed / uninstalled (so other connected
+    // clients refresh their tile order without polling). Payload:
+    // [type:1][csvUtf8…] — comma-separated plugin IDs in chain order
+    // (head = first in chain, drives mic first). UTF-8 for forward
+    // compatibility with non-ASCII plugin IDs even though current IDs
+    // are reverse-DNS ASCII. See AudioChainOrderFrame.cs.
+    AudioChainOrder = 0x1E,
 }

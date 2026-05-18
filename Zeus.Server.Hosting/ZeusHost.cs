@@ -296,6 +296,17 @@ public static class ZeusHost
         // mounted below via PluginEndpoints.MapAll under /api/plugins/...
         builder.Services.AddZeusPlugins(prefsDbPathProvider: PrefsDbPath.Get);
 
+        // ChainOrderService — owns the canonical Audio Suite plugin
+        // chain order (drag-droppable tile sequence in the Audio Suite
+        // window). Persists to zeus-prefs.db via ChainOrderStore so the
+        // operator's order survives backend restarts. Broadcasts
+        // AudioChainOrderFrame (0x1E) on every change so other
+        // connected clients (LAN-share phone, second browser) update
+        // their tile strip without polling. AudioPluginBridge subscribes
+        // to OrderChanged and re-slots the runtime chain.
+        builder.Services.AddSingleton<ChainOrderStore>();
+        builder.Services.AddSingleton<ChainOrderService>();
+
         // AudioPluginBridge wires PluginManager's audio-bearing plugins
         // into WdspDspEngine's realtime TX seam. No-op when no plugins
         // declare an audio component; subscribes to engine swaps so it

@@ -85,6 +85,28 @@ public static class ZeusEndpoints
             return Results.Ok(new { supported = true, enabled = audition.IsEnabled });
         });
 
+        // Audio plugin chain order — operator's preferred sequence for
+        // the plugins in the Audio Suite window. GET returns the
+        // canonical ordered list of plugin IDs; PUT accepts a new
+        // ordering and validates it's a permutation of the current
+        // set (no IDs added, no IDs dropped — install / uninstall
+        // plugins to change membership). On PUT, the bridge re-slots
+        // the runtime chain via ChainOrderService.OrderChanged and
+        // broadcasts AudioChainOrderFrame (0x1E) so other connected
+        // clients update their tile strip without polling.
+        app.MapGet("/api/plugins/chain/order", (ChainOrderService chainOrder) =>
+        {
+            return Results.Ok(new { pluginIds = chainOrder.CurrentOrder });
+        });
+        app.MapPut("/api/plugins/chain/order", (ChainOrderSetRequest body, ChainOrderService chainOrder) =>
+        {
+            if (body?.PluginIds is null)
+                return Results.BadRequest(new { error = "pluginIds is required" });
+            if (chainOrder.TrySetOrder(body.PluginIds, out var err))
+                return Results.Ok(new { pluginIds = chainOrder.CurrentOrder });
+            return Results.BadRequest(new { error = err });
+        });
+
         app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 
         // TX diagnostic — exposes the producer/consumer counts for the mic-to-IQ ring
@@ -1299,3 +1321,4 @@ public static class ZeusEndpoints
 
 internal sealed record NativeMuteRequest(bool Muted);
 internal sealed record AuditionSetRequest(bool Enabled);
+internal sealed record ChainOrderSetRequest(List<string> PluginIds);

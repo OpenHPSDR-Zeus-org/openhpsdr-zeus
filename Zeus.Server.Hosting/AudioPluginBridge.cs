@@ -32,10 +32,13 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private readonly Func<bool> _isMoxOn;
     private readonly Func<bool> _isMonitorOn;
     private readonly IAuditionAudioSink _audition;
+    private readonly ChainOrderService? _chainOrder;
     private readonly ILogger<AudioPluginBridge> _log;
     private readonly AudioChain _chain = new();
     private readonly Dictionary<string, int> _idToSlot = new();
+    private readonly Dictionary<string, IAudioPlugin> _idToPlugin = new();
     private readonly object _lock = new();
+    private Action<IReadOnlyList<string>>? _orderChangedHandler;
     // Pre-MOX preview gate — true ONLY when a) at least one IAudioPlugin
     // is attached AND b) the live DSP engine is WdspDspEngine (the
     // synthetic engine has no realtime TX path so a preview against it
@@ -49,11 +52,13 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         DspPipelineService pipeline,
         TxService tx,
         IAuditionAudioSink audition,
+        ChainOrderService chainOrder,
         ILogger<AudioPluginBridge> log)
         : this(manager, pipeline, new VstBridgeNative(),
                isMoxOn: () => tx.IsMoxOn,
                isMonitorOn: () => pipeline.CurrentEngine?.IsTxMonitorOn ?? false,
                audition: audition,
+               chainOrder: chainOrder,
                log) { }
 
     // Testable ctor — lets unit tests inject a fake IVstBridgeNative and
@@ -66,6 +71,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         Func<bool> isMoxOn,
         Func<bool> isMonitorOn,
         IAuditionAudioSink audition,
+        ChainOrderService? chainOrder,
         ILogger<AudioPluginBridge> log)
     {
         _manager = manager;
@@ -74,6 +80,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         _isMoxOn = isMoxOn;
         _isMonitorOn = isMonitorOn;
         _audition = audition;
+        _chainOrder = chainOrder;
         _log = log;
     }
 
@@ -98,6 +105,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         _isMoxOn = isMoxOn;
         _isMonitorOn = isMonitorOn;
         _audition = audition ?? new NoOpAuditionAudioSink();
+        _chainOrder = null;
         _log = log;
         _engineIsWdsp = engineIsWdsp;
         _previewEnabled = previewEnabled;
@@ -115,6 +123,12 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         _manager.PluginDeactivated += OnPluginDeactivated;
         _pipeline.EngineChanged    += OnEngineChanged;
 
+        if (_chainOrder is not null)
+        {
+            _orderChangedHandler = ApplyChainOrder;
+            _chainOrder.OrderChanged += _orderChangedHandler;
+        }
+
         // Adopt any plugins already active (PluginManager might have
         // finished startup before us depending on hosted-service ordering).
         foreach (var p in _manager.Active) OnPluginActivated(p);
@@ -131,6 +145,12 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         _manager.PluginActivated   -= OnPluginActivated;
         _manager.PluginDeactivated -= OnPluginDeactivated;
         _pipeline.EngineChanged    -= OnEngineChanged;
+
+        if (_chainOrder is not null && _orderChangedHandler is not null)
+        {
+            _chainOrder.OrderChanged -= _orderChangedHandler;
+            _orderChangedHandler = null;
+        }
 
         if (_pipeline.CurrentEngine is WdspDspEngine wdsp)
             wdsp.SetTxAudioPluginHandler(null);
@@ -269,16 +289,45 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         int slot;
         lock (_lock)
         {
-            slot = FindFreeSlot();
-            if (slot < 0)
+            if (_chainOrder is not null)
             {
-                _log.LogWarning(
-                    "Audio chain full (8 slots); ignoring plugin {Id}",
-                    p.Loaded.Manifest.Id);
-                return;
+                // ChainOrderService-driven slot assignment: pull the
+                // operator's canonical order, find the new plugin's
+                // place in it (appending to the end if first install),
+                // and re-slot the entire chain so the new plugin lands
+                // in the right position relative to the existing ones.
+                _idToPlugin[p.Loaded.Manifest.Id] = audioPlugin;
+                var attachedIds = _idToPlugin.Keys.ToList();
+                slot = _chainOrder.OnPluginAttached(p.Loaded.Manifest.Id, attachedIds);
+                ReapplySlotsUnderLock();
+                if (!_idToSlot.TryGetValue(p.Loaded.Manifest.Id, out slot))
+                {
+                    // Defensive fallback — ReapplySlotsUnderLock should have
+                    // populated _idToSlot from the order. If not, the chain
+                    // is in a bad state; log and bail.
+                    _log.LogError(
+                        "Audio plugin {Id} not slotted after ReapplySlotsUnderLock; chain may be inconsistent",
+                        p.Loaded.Manifest.Id);
+                    _idToPlugin.Remove(p.Loaded.Manifest.Id);
+                    return;
+                }
             }
-            _idToSlot[p.Loaded.Manifest.Id] = slot;
-            _chain.SetSlot(slot, audioPlugin);
+            else
+            {
+                // Legacy / test path — no ChainOrderService injected; use
+                // the historical first-free-slot behaviour.
+                slot = FindFreeSlot();
+                if (slot < 0)
+                {
+                    _log.LogWarning(
+                        "Audio chain full (8 slots); ignoring plugin {Id}",
+                        p.Loaded.Manifest.Id);
+                    return;
+                }
+                _idToSlot[p.Loaded.Manifest.Id] = slot;
+                _idToPlugin[p.Loaded.Manifest.Id] = audioPlugin;
+                _chain.SetSlot(slot, audioPlugin);
+            }
         }
 
         // Realtime-safe init off-thread before the chain dispatches. The
@@ -320,10 +369,17 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         {
             if (!_idToSlot.TryGetValue(p.Loaded.Manifest.Id, out slot)) return;
             _idToSlot.Remove(p.Loaded.Manifest.Id);
+            _idToPlugin.Remove(p.Loaded.Manifest.Id);
             attached = _chain.GetSlot(slot);
             _chain.ClearSlot(slot);
+            // Re-slot remaining plugins so the chain compacts when
+            // ChainOrderService is active — gaps from a removed plugin
+            // close instead of leaving a hole in the middle of the
+            // chain.
+            if (_chainOrder is not null) ReapplySlotsUnderLock();
             if (_idToSlot.Count == 0) _chain.MasterEnabled = false;
         }
+        _chainOrder?.OnPluginDetached(p.Loaded.Manifest.Id);
         RefreshPreviewEnabled();
 
         if (attached is null) return;
@@ -368,6 +424,77 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         for (int i = 0; i < _chain.SlotCount; i++)
             if (_chain.GetSlot(i) is null) return i;
         return -1;
+    }
+
+    /// <summary>
+    /// Event handler for <see cref="ChainOrderService.OrderChanged"/>.
+    /// Re-slots the chain so the runtime sequence matches the
+    /// canonical order the operator chose via the Audio Suite tile
+    /// strip. Fired off the chain order's _sync lock; we take
+    /// _lock here for the slot mutation.
+    /// </summary>
+    private void ApplyChainOrder(IReadOnlyList<string> _)
+    {
+        // We don't use the supplied order argument directly because
+        // ReapplySlotsUnderLock reads CurrentOrder fresh from the
+        // service inside the lock — same semantics, but it picks up
+        // the latest snapshot in the rare case the order changes again
+        // between the OrderChanged fire and our lock acquisition.
+        lock (_lock) ReapplySlotsUnderLock();
+        _log.LogInformation("Audio plugin chain re-slotted to operator order");
+    }
+
+    /// <summary>
+    /// Clears every chain slot and re-populates them so plugins in
+    /// <see cref="_idToPlugin"/> land at indices matching their
+    /// position in <see cref="ChainOrderService.CurrentOrder"/>,
+    /// skipping IDs that aren't currently attached. CALLER must
+    /// hold <see cref="_lock"/>.
+    ///
+    /// <para>Plugins not present in the canonical order (e.g. a
+    /// third-party plugin that landed before ChainOrderService had
+    /// a chance to append it) get appended to the end in
+    /// deterministic order (by ID).</para>
+    /// </summary>
+    private void ReapplySlotsUnderLock()
+    {
+        if (_chainOrder is null) return;
+        var canonical = _chainOrder.CurrentOrder;
+        var canonicalSet = new HashSet<string>(canonical, StringComparer.Ordinal);
+
+        // Clear current slot assignments. AudioChain.SetSlot replaces
+        // the slot's plugin reference and clears bypass; ClearSlot
+        // nulls it and clears bypass. Use ClearSlot for the wipe so
+        // bypass state doesn't leak across reorders.
+        for (int i = 0; i < _chain.SlotCount; i++) _chain.ClearSlot(i);
+        _idToSlot.Clear();
+
+        // Re-slot in canonical order, plus any orphans appended.
+        int slotIndex = 0;
+        for (int i = 0; i < canonical.Count && slotIndex < _chain.SlotCount; i++)
+        {
+            var id = canonical[i];
+            if (!_idToPlugin.TryGetValue(id, out var plugin)) continue;
+            _chain.SetSlot(slotIndex, plugin);
+            _idToSlot[id] = slotIndex;
+            slotIndex++;
+        }
+        // Append orphans (attached but not in canonical order) at the
+        // end, sorted for determinism.
+        foreach (var kvp in _idToPlugin
+                     .Where(k => !canonicalSet.Contains(k.Key))
+                     .OrderBy(k => k.Key, StringComparer.Ordinal))
+        {
+            if (slotIndex >= _chain.SlotCount)
+            {
+                _log.LogWarning(
+                    "Audio chain full at re-slot; dropping {Id}", kvp.Key);
+                continue;
+            }
+            _chain.SetSlot(slotIndex, kvp.Value);
+            _idToSlot[kvp.Key] = slotIndex;
+            slotIndex++;
+        }
     }
 
     public async ValueTask DisposeAsync()

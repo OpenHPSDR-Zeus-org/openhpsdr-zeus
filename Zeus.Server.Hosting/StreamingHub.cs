@@ -388,6 +388,40 @@ public sealed class StreamingHub
         }
     }
 
+    public void Broadcast(in AudioChainOrderFrame frame)
+    {
+        if (_clients.IsEmpty) return;
+
+        // Variable-length CSV payload. Compute exact size before
+        // allocating so we don't over-rent on a typical 5-8 plugin
+        // chain (~410 bytes). The frame's Serialize method enforces
+        // the AudioChainOrderFrame.MaxByteLength cap; here we trust
+        // it and just size the buffer to whatever the cap permits.
+        int csvLen = 0;
+        for (int i = 0; i < frame.PluginIds.Count; i++)
+        {
+            if (i > 0) csvLen += 1; // comma
+            csvLen += System.Text.Encoding.UTF8.GetByteCount(frame.PluginIds[i]);
+        }
+        int total = 1 + csvLen;
+        if (total > AudioChainOrderFrame.MaxByteLength)
+        {
+            // Defence in depth — Serialize would throw; drop the
+            // broadcast instead so a bad plugin ID doesn't blow up
+            // the hub. The order is still persisted; clients fall
+            // back to GET /api/plugins/chain/order.
+            System.Threading.Interlocked.Increment(ref _dropsOther);
+            return;
+        }
+        var payload = new byte[total];
+        var writer = new FixedBufferWriter(payload, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
     /// <summary>
     /// Broadcasts a BandPlanChanged (0x1B) notification. Payload: type byte +
     /// UTF-8 region ID. Clients refetch /api/bands/current on receipt.
