@@ -16,9 +16,153 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import type { RegisteredPluginPanel } from '../plugins/runtime/pluginRuntime';
-import { useAudioSuiteStore } from '../state/audio-suite-store';
+import {
+  AUDIO_SUITE_WINDOW_MIN_WIDTH,
+  AUDIO_SUITE_WINDOW_MIN_HEIGHT,
+  useAudioSuiteStore,
+} from '../state/audio-suite-store';
 
 const CHAIN_SLOT = 'tx-audio-tools.chain';
+
+/** Edge codes for the resize handles — 4 edges + 4 corners. */
+type ResizeEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
+
+const RESIZE_HANDLE_PX = 6; // grab thickness for each edge
+
+const CURSOR_FOR_EDGE: Record<ResizeEdge, string> = {
+  n: 'ns-resize',
+  s: 'ns-resize',
+  e: 'ew-resize',
+  w: 'ew-resize',
+  ne: 'nesw-resize',
+  sw: 'nesw-resize',
+  nw: 'nwse-resize',
+  se: 'nwse-resize',
+};
+
+/**
+ * Compute the absolute-position style for a resize handle on the
+ * given edge. Handles cover only their edge / corner — clicks in
+ * the interior pass through to the window content.
+ */
+function handleStyleFor(edge: ResizeEdge): React.CSSProperties {
+  const base: React.CSSProperties = {
+    position: 'absolute',
+    zIndex: 1,
+    cursor: CURSOR_FOR_EDGE[edge],
+    touchAction: 'none',
+  };
+  switch (edge) {
+    case 'n':  return { ...base, top: 0, left: RESIZE_HANDLE_PX, right: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX };
+    case 's':  return { ...base, bottom: 0, left: RESIZE_HANDLE_PX, right: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX };
+    case 'e':  return { ...base, top: RESIZE_HANDLE_PX, bottom: RESIZE_HANDLE_PX, right: 0, width: RESIZE_HANDLE_PX };
+    case 'w':  return { ...base, top: RESIZE_HANDLE_PX, bottom: RESIZE_HANDLE_PX, left: 0, width: RESIZE_HANDLE_PX };
+    case 'ne': return { ...base, top: 0, right: 0, width: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX };
+    case 'nw': return { ...base, top: 0, left: 0, width: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX };
+    case 'se': return { ...base, bottom: 0, right: 0, width: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX };
+    case 'sw': return { ...base, bottom: 0, left: 0, width: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX };
+  }
+}
+
+/**
+ * One resize handle. Invisible 6px region on its assigned edge /
+ * corner; the cursor changes on hover so operators can see where
+ * the grab regions are. Pointer Events with capture so the drag
+ * keeps tracking even if the cursor leaves the handle while
+ * dragging.
+ */
+function ResizeHandle({ edge }: { edge: ResizeEdge }) {
+  const x = useAudioSuiteStore((s) => s.x);
+  const y = useAudioSuiteStore((s) => s.y);
+  const width = useAudioSuiteStore((s) => s.width);
+  const height = useAudioSuiteStore((s) => s.height);
+  const setPosition = useAudioSuiteStore((s) => s.setPosition);
+  const setSize = useAudioSuiteStore((s) => s.setSize);
+
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startY: number;
+    origX: number;
+    origY: number;
+    origW: number;
+    origH: number;
+  } | null>(null);
+
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.stopPropagation();
+      e.preventDefault();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      dragRef.current = {
+        pointerId: e.pointerId,
+        startX: e.clientX,
+        startY: e.clientY,
+        origX: x, origY: y,
+        origW: width, origH: height,
+      };
+    },
+    [x, y, width, height],
+  );
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const d = dragRef.current;
+      if (!d || d.pointerId !== e.pointerId) return;
+      const dx = e.clientX - d.startX;
+      const dy = e.clientY - d.startY;
+      let nX = d.origX;
+      let nY = d.origY;
+      let nW = d.origW;
+      let nH = d.origH;
+      if (edge.includes('e')) nW = d.origW + dx;
+      if (edge.includes('s')) nH = d.origH + dy;
+      if (edge.includes('w')) { nX = d.origX + dx; nW = d.origW - dx; }
+      if (edge.includes('n')) { nY = d.origY + dy; nH = d.origH - dy; }
+
+      // Enforce minimums; when shrinking from the left / top, prevent
+      // the window's x/y from drifting past the would-be max.
+      if (nW < AUDIO_SUITE_WINDOW_MIN_WIDTH) {
+        if (edge.includes('w')) nX = d.origX + d.origW - AUDIO_SUITE_WINDOW_MIN_WIDTH;
+        nW = AUDIO_SUITE_WINDOW_MIN_WIDTH;
+      }
+      if (nH < AUDIO_SUITE_WINDOW_MIN_HEIGHT) {
+        if (edge.includes('n')) nY = d.origY + d.origH - AUDIO_SUITE_WINDOW_MIN_HEIGHT;
+        nH = AUDIO_SUITE_WINDOW_MIN_HEIGHT;
+      }
+
+      // Edges that include a dimension update push both position
+      // and size in one render; setting them in order so the store
+      // sees the combined change as a single React render.
+      setPosition(nX, nY);
+      setSize(nW, nH);
+    },
+    [edge, setPosition, setSize],
+  );
+
+  const onPointerUp = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const d = dragRef.current;
+      if (!d || d.pointerId !== e.pointerId) return;
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+      dragRef.current = null;
+    },
+    [],
+  );
+
+  return (
+    <div
+      data-no-drag
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
+      style={handleStyleFor(edge)}
+    />
+  );
+}
+
+const RESIZE_EDGES: ResizeEdge[] = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'];
 
 /**
  * Short display name for a chain tile, derived from the plugin ID.
@@ -212,6 +356,12 @@ export function AudioSuiteWindow() {
         overflow: 'hidden',
       }}
     >
+      {/* Resize handles — 4 edges + 4 corners. Each is a 6px invisible
+          grab region absolutely positioned on its edge; cursor changes
+          on hover so the grab area is discoverable. zIndex:1 so they
+          sit above the content but below dialogs / dropdowns. */}
+      {RESIZE_EDGES.map((e) => <ResizeHandle key={e} edge={e} />)}
+
       {/* Header — drag handle. Brass-plate styling per the v3 Lifted
           Dark spec ([[project_audio_chain_visual_direction]]). */}
       <div
