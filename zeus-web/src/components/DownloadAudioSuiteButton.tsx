@@ -29,7 +29,7 @@ const AUDIO_SUITE: ReadonlyArray<SuitePlugin> = [
   {
     id: 'com.openhpsdr.zeus.samples.eq',
     label: 'EQ (10-band parametric)',
-    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/eq-v0.1.0/eq-0.1.0.zip',
+    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/eq-v0.2.0/eq-0.2.0.zip',
   },
   {
     id: 'com.openhpsdr.zeus.samples.compressor',
