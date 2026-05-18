@@ -34,6 +34,10 @@ import { ConnectPanel } from '../components/ConnectPanel';
 import { LeafletWorldMap } from '../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../components/design/LeafletMapErrorBoundary';
 import { bandOf } from '../components/design/data';
+import { RotatorDialPanel } from '../layout/panels/RotatorDialPanel';
+import { QrzPanel } from '../layout/panels/QrzPanel';
+import { DspFlexPanel } from '../layout/panels/DspFlexPanel';
+import { useRotatorStore } from '../state/rotator-store';
 import './mobile.css';
 
 const MODES: readonly RxMode[] = ['LSB', 'USB', 'CWL', 'CWU', 'AM', 'FM', 'DIGU'];
@@ -64,7 +68,18 @@ export function useIsMobileViewport(): boolean {
   return mobile;
 }
 
-type MobileTab = 'radio' | 'settings';
+type MobileTab = 'radio' | 'tools';
+type MobileToolId = 'tx' | 'rotator' | 'qrz' | 'dsp';
+
+function normalizeAzimuth(deg: number | null | undefined): number | null {
+  if (deg == null || !Number.isFinite(deg)) return null;
+  return ((deg % 360) + 360) % 360;
+}
+
+function compassPoint(deg: number): string {
+  const points = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
+  return points[Math.round((deg % 360) / 45) % 8] ?? 'N';
+}
 
 export function MobileApp() {
   const status = useConnectionStore((s) => s.status);
@@ -81,6 +96,9 @@ export function MobileApp() {
   const freqMHz = (vfoHz / 1_000_000).toFixed(3);
 
   const [activeTab, setActiveTab] = useState<MobileTab>('radio');
+  // When activeTab === 'tools', toolOpen=null shows the tile grid;
+  // toolOpen='tx' (etc) shows that tool's detail page with a back button.
+  const [toolOpen, setToolOpen] = useState<MobileToolId | null>(null);
 
   // Force the waterfall into AUTO dB-range whenever the mobile shell mounts.
   // FIXED mode (the desktop default) reads grainy on a phone where there's
@@ -162,11 +180,15 @@ export function MobileApp() {
           <button
             type="button"
             role="tab"
-            aria-selected={activeTab === 'settings'}
-            className={`m-tab ${activeTab === 'settings' ? 'on' : ''}`}
-            onClick={() => setActiveTab('settings')}
+            aria-selected={activeTab === 'tools'}
+            className={`m-tab ${activeTab === 'tools' ? 'on' : ''}`}
+            onClick={() => {
+              setActiveTab('tools');
+              // Tapping the tab while inside a tool returns to the grid.
+              setToolOpen(null);
+            }}
           >
-            Settings
+            Tools
           </button>
         </nav>
         <button
@@ -307,22 +329,10 @@ export function MobileApp() {
               </div>
             </Section>
           </>
+        ) : toolOpen == null ? (
+          <ToolsGrid onPick={setToolOpen} />
         ) : (
-          <Section label="Controls">
-            <div className="m-controls">
-              <div className="m-control-row m-control-row--1">
-                <label className="m-control">
-                  <span className="m-control-lbl">Step</span>
-                  <TuningStepWidget />
-                </label>
-              </div>
-              <div className="m-slider-row"><AgcSlider /></div>
-              <div className="m-slider-row m-slider-row--lbl"><DriveSlider /></div>
-              <div className="m-slider-row m-slider-row--lbl"><TunePowerSlider /></div>
-              <div className="m-slider-row m-slider-row--lbl"><MicGainSlider /></div>
-              <div className="m-ps-row"><PsToggleButton /></div>
-            </div>
-          </Section>
+          <ToolDetail tool={toolOpen} onBack={() => setToolOpen(null)} />
         )}
       </main>
     </div>
@@ -496,6 +506,192 @@ function Section({
       </header>
       <div className="m-section-body">{children}</div>
     </section>
+  );
+}
+
+// ============================================================================
+// Tools tab — drawer (2-col tile grid) and per-tool detail pages.
+//
+// Per the maintainer brief: no new widgets. Every tool detail page embeds
+// the existing desktop panel inside a positioned wrapper so it scales
+// down to the 480-wide mobile column. The tile grid + back-button chrome
+// is the only mobile-specific UI here.
+// ============================================================================
+
+const TOOL_META: Record<MobileToolId, { name: string; desc: string; sub: string; icon: ReactNode }> = {
+  tx: {
+    name: 'TX Controls',
+    desc: 'Step, AGC-T, drive, tune, mic gain',
+    sub: 'VFO A',
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <circle cx="12" cy="12" r="3" />
+        <path d="M5.6 5.6a9 9 0 0 0 0 12.8M18.4 5.6a9 9 0 0 1 0 12.8" />
+        <path d="M2.8 2.8a13 13 0 0 0 0 18.4M21.2 2.8a13 13 0 0 1 0 18.4" />
+      </svg>
+    ),
+  },
+  rotator: {
+    name: 'Rotator',
+    desc: 'Compass heading & antenna jog',
+    sub: 'Heading',
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 4v2M12 18v2M4 12h2M18 12h2" />
+        <path d="M14.5 8 12 14l-2.5-6 5 0z" fill="currentColor" stroke="none" opacity="0.85" />
+      </svg>
+    ),
+  },
+  qrz: {
+    name: 'QRZ Lookup',
+    desc: 'Find callsigns, grids & bios',
+    sub: 'Online',
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <circle cx="11" cy="11" r="6" />
+        <path d="m20 20-4.5-4.5" />
+        <path d="M9 11h4M11 9v4" opacity="0.6" />
+      </svg>
+    ),
+  },
+  dsp: {
+    name: 'DSP Control',
+    desc: 'NB, NR2, ANF, notch & filters',
+    sub: 'Filters',
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <path d="M3 12h2M19 12h2" />
+        <path d="M6 12c1 0 1-6 2-6s1 12 2 12 1-9 2-9 1 6 2 6 1-3 2-3" />
+      </svg>
+    ),
+  },
+};
+
+function ToolsGrid({ onPick }: { onPick: (id: MobileToolId) => void }) {
+  // Surface live-state badges on each tile so the operator sees what's
+  // actually doing something at a glance — drives the design's "Active" /
+  // "072° NE" / "NR2 On" chips without inventing new state.
+  const rotConnected = useRotatorStore((s) => !!s.status?.connected);
+  const rotAz = useRotatorStore((s) => normalizeAzimuth(s.status?.currentAz));
+  const txBadge = useTxStore((s) => (s.moxOn ? 'TX' : s.tunOn ? 'TUN' : 'Ready'));
+
+  const tools: ReadonlyArray<{
+    id: MobileToolId;
+    badge: { text: string; tone: 'green' | 'amber' | 'muted' };
+  }> = [
+    { id: 'tx', badge: { text: txBadge, tone: txBadge === 'Ready' ? 'green' : 'amber' } },
+    {
+      id: 'rotator',
+      badge: rotConnected && rotAz != null
+        ? { text: `${Math.round(rotAz).toString().padStart(3, '0')}° ${compassPoint(rotAz)}`, tone: 'muted' }
+        : { text: 'Offline', tone: 'muted' },
+    },
+    { id: 'qrz', badge: { text: 'Online', tone: 'muted' } },
+    { id: 'dsp', badge: { text: 'Ready', tone: 'green' } },
+  ];
+
+  return (
+    <>
+      <div className="m-tools-head">
+        <span className="m-section-led" />
+        <span className="m-tools-title">Tools</span>
+        <span className="m-tools-sub">{tools.length} available</span>
+      </div>
+      <div className="m-tools-grid">
+        {tools.map(({ id, badge }) => {
+          const meta = TOOL_META[id];
+          return (
+            <button
+              key={id}
+              type="button"
+              className="m-tool-tile"
+              onClick={() => onPick(id)}
+              aria-label={`Open ${meta.name}`}
+            >
+              <div className="m-tool-tile-icon">{meta.icon}</div>
+              <div className="m-tool-tile-text">
+                <div className="m-tool-tile-name">{meta.name}</div>
+                <div className="m-tool-tile-desc">{meta.desc}</div>
+              </div>
+              <span className={`m-tool-tile-tag m-tool-tile-tag--${badge.tone}`}>{badge.text}</span>
+            </button>
+          );
+        })}
+      </div>
+      <p className="m-tools-foot">
+        Tools are configured on the desktop application.<br />
+        Available widgets appear here.
+      </p>
+    </>
+  );
+}
+
+function ToolDetail({ tool, onBack }: { tool: MobileToolId; onBack: () => void }) {
+  const meta = TOOL_META[tool];
+  return (
+    <>
+      <header className="m-tool-page-head">
+        <button
+          type="button"
+          className="m-back-btn"
+          onClick={onBack}
+          aria-label="Back to tools"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
+            <path
+              d="M15 18l-6-6 6-6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </button>
+        <span className="m-tool-page-title">{meta.name}</span>
+        <span className="m-tool-page-sub">{meta.sub}</span>
+      </header>
+      {tool === 'tx' && <TxToolView />}
+      {tool === 'rotator' && (
+        <div className="m-tool-embed m-tool-embed--rotator">
+          <RotatorDialPanel />
+        </div>
+      )}
+      {tool === 'qrz' && (
+        <div className="m-tool-embed m-tool-embed--qrz">
+          <QrzPanel />
+        </div>
+      )}
+      {tool === 'dsp' && (
+        <div className="m-tool-embed m-tool-embed--dsp">
+          <DspFlexPanel />
+        </div>
+      )}
+    </>
+  );
+}
+
+// TX tool view — the controls that previously lived under the Settings tab.
+// Lifted verbatim into its own component so the Tools router can route to it
+// without inflating MobileApp.
+function TxToolView() {
+  return (
+    <Section label="Controls">
+      <div className="m-controls">
+        <div className="m-control-row m-control-row--1">
+          <label className="m-control">
+            <span className="m-control-lbl">Step</span>
+            <TuningStepWidget />
+          </label>
+        </div>
+        <div className="m-slider-row"><AgcSlider /></div>
+        <div className="m-slider-row m-slider-row--lbl"><DriveSlider /></div>
+        <div className="m-slider-row m-slider-row--lbl"><TunePowerSlider /></div>
+        <div className="m-slider-row m-slider-row--lbl"><MicGainSlider /></div>
+        <div className="m-ps-row"><PsToggleButton /></div>
+      </div>
+    </Section>
   );
 }
 

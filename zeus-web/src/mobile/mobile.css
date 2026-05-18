@@ -684,3 +684,182 @@
    chrome), so we neutralise both classes within .m-app. */
 .m-app .hide-mobile { display: revert !important; }
 .m-app .show-mobile { display: none !important; }
+
+/* ============================================================
+   Tools tab — 2-col tile grid (drawer view).
+   The grid lives at the same indent as .m-section so it lines up
+   with the radio-page panels above it.
+   ============================================================ */
+.m-tools-head {
+  display: flex; align-items: center; gap: 10px;
+  padding: 2px 4px 0;
+}
+.m-tools-title {
+  font: 700 12px/1 var(--font-sans);
+  letter-spacing: 0.22em;
+  color: var(--fg-0);
+  text-transform: uppercase;
+}
+.m-tools-sub {
+  margin-left: auto;
+  font: 500 11px/1 var(--font-sans);
+  color: var(--fg-3);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.m-tools-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.m-tool-tile {
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  padding: 18px 14px 14px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--fg-0);
+  font: inherit;
+  display: flex; flex-direction: column; gap: 14px;
+  min-height: 160px;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.12s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.m-tool-tile:hover {
+  border-color: var(--accent-line);
+  background: var(--bg-2);
+}
+.m-tool-tile:active { transform: scale(0.98); }
+.m-tool-tile::after {
+  content: ""; position: absolute; top: 0; right: 0;
+  width: 38%; height: 38%;
+  background: radial-gradient(circle at 100% 0%, var(--ok-soft), transparent 60%);
+  pointer-events: none;
+}
+
+.m-tool-tile-icon {
+  width: 44px; height: 44px;
+  border-radius: 10px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  display: grid; place-items: center;
+  color: var(--ok);
+  flex: none;
+}
+.m-tool-tile-icon svg {
+  width: 22px; height: 22px;
+  stroke: currentColor; fill: none;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.m-tool-tile-text { min-width: 0; }
+.m-tool-tile-name {
+  font: 700 15px/1.15 var(--font-sans);
+  color: var(--fg-0);
+  letter-spacing: 0.01em;
+}
+.m-tool-tile-desc {
+  font: 500 11px/1.4 var(--font-sans);
+  color: var(--fg-3);
+  margin-top: 4px;
+  letter-spacing: 0.02em;
+}
+
+.m-tool-tile-tag {
+  margin-top: auto;
+  align-self: flex-start;
+  font: 600 9px/1 var(--font-mono);
+  padding: 4px 7px;
+  border-radius: 3px;
+  letter-spacing: 0.1em;
+  border: 1px solid;
+}
+.m-tool-tile-tag--green {
+  color: var(--ok);
+  background: var(--ok-soft);
+  border-color: rgba(45, 213, 102, 0.35);
+}
+.m-tool-tile-tag--amber {
+  color: var(--amber);
+  background: var(--amber-soft);
+  border-color: rgba(255, 177, 60, 0.32);
+}
+.m-tool-tile-tag--muted {
+  color: var(--fg-3);
+  background: transparent;
+  border-color: var(--line-strong);
+}
+
+.m-tools-foot {
+  margin: 4px 4px 0;
+  padding: 14px 4px;
+  font: 500 11px/1.5 var(--font-sans);
+  color: var(--fg-3);
+  letter-spacing: 0.02em;
+  text-align: center;
+}
+
+/* ============================================================
+   Tool detail page — back header + embedded desktop panel.
+   ============================================================ */
+.m-tool-page-head {
+  display: flex; align-items: center; gap: 12px;
+  padding: 2px 4px 0;
+}
+.m-back-btn {
+  width: 36px; height: 36px;
+  border-radius: 8px;
+  background: var(--bg-1);
+  border: 1px solid var(--line-strong);
+  color: var(--fg-1);
+  display: grid; place-items: center;
+  cursor: pointer;
+  flex: none;
+}
+.m-back-btn:hover {
+  color: var(--fg-0);
+  border-color: var(--accent-line);
+}
+.m-tool-page-title {
+  font: 700 14px/1 var(--font-sans);
+  color: var(--fg-0);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+.m-tool-page-sub {
+  margin-left: auto;
+  font: 500 11px/1 var(--font-sans);
+  color: var(--fg-3);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+/* Embedded desktop panel wrapper. RotatorDialPanel uses
+   position: absolute; inset: 0 — needs a positioned parent with a
+   definite size. QrzPanel and DspFlexPanel use flex columns — they
+   just need a definite height to scroll inside. */
+.m-tool-embed {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.m-tool-embed--rotator { aspect-ratio: 1 / 1.05; min-height: 380px; }
+.m-tool-embed--qrz { min-height: 520px; }
+.m-tool-embed--dsp { min-height: 600px; }
+
+/* Mobile-only tweaks that let the embedded panels read inside the
+   480-wide column without their desktop-tile chrome fighting the
+   single-column layout. */
+.m-tool-embed > * { min-width: 0; max-width: 100%; }
+.m-tool-embed .rotator-dial { padding: 6px; }
+.m-tool-embed .rd-controls { gap: 8px; }

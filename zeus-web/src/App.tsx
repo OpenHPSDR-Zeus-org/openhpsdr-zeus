@@ -651,10 +651,12 @@ export default function App() {
   // still required because Panadapter depends on the gesture context.
   if (isMobile) {
     return (
-      <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
-        <ThemeApplier />
-        <MobileApp />
-      </SpectrumWheelActionsContext.Provider>
+      <WorkspaceContext.Provider value={workspaceCtx}>
+        <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
+          <ThemeApplier />
+          <MobileApp />
+        </SpectrumWheelActionsContext.Provider>
+      </WorkspaceContext.Provider>
     );
   }
 
