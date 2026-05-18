@@ -18,45 +18,21 @@ import { CfcSettingsPanel } from './CfcSettingsPanel';
 import { DownloadAudioSuiteButton } from './DownloadAudioSuiteButton';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import type { RegisteredPluginPanel } from '../plugins/runtime/pluginRuntime';
+import { useAudioSuiteStore } from '../state/audio-suite-store';
 
 // ---------------------------------------------------------------
 // Audio-chain plugin slot — installed plugins whose manifest declares
-// `ui.panels[].slot === "tx-audio-tools.chain"` render here, in chain
-// order, above the always-on CFC section. The fixed v1 chain order is
-// per issue #332 Phase 0 (KB2UKA-locked 2026-05-17):
+// `ui.panels[].slot === "tx-audio-tools.chain"` are owned by the
+// Audio Suite floating window (Phase 2 of issue #332). The chain
+// flow strip here is a read-only one-glance view; the "Audio Suite"
+// button opens the floating window where plugins can be reordered
+// (drag-and-drop tiles), auditioned through the operator's headphones,
+// and tuned via their per-plugin panels stacked vertically.
 //
-//   EQ → Compressor → Exciter → Bass enhancer → Reverb → CFC
-//
-// Plugins not in this list (e.g. third-party chain blocks added later)
-// render after the known v1 blocks, sorted by panel id for determinism.
+// CFC stays below — it's WDSP-driven, ships in Zeus core (not as a
+// plugin), so it's not part of the reorderable chain.
 // ---------------------------------------------------------------
 const CHAIN_SLOT = 'tx-audio-tools.chain';
-
-const V1_CHAIN_ORDER: ReadonlyArray<string> = [
-  'com.openhpsdr.zeus.samples.eq',
-  'com.openhpsdr.zeus.samples.compressor',
-  'com.openhpsdr.zeus.samples.exciter',
-  'com.openhpsdr.zeus.samples.bass',
-  'com.openhpsdr.zeus.samples.reverb',
-];
-
-function chainPosition(pluginId: string): number {
-  const idx = V1_CHAIN_ORDER.indexOf(pluginId);
-  // Unknown plugins (third-party, future blocks) sort after the known v1
-  // set. Using +Infinity puts them at the bottom; the secondary sort by
-  // panel id then keeps them deterministic relative to each other.
-  return idx === -1 ? Number.POSITIVE_INFINITY : idx;
-}
-
-// Sort registered panels into the fixed v1 chain order.
-function sortChainPanels(panels: RegisteredPluginPanel[]): RegisteredPluginPanel[] {
-  return [...panels].sort((a, b) => {
-    const da = chainPosition(a.pluginId);
-    const db = chainPosition(b.pluginId);
-    if (da !== db) return da - db;
-    return a.panelId.localeCompare(b.panelId);
-  });
-}
 
 // ---------------------------------------------------------------
 // Master signal-flow strip — one-glance read of which chain blocks
@@ -120,40 +96,63 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
           </span>
         </span>
       ))}
+      <AudioSuiteOpenButton />
       <DownloadAudioSuiteButton />
     </div>
   );
 }
 
+// Opens the Audio Suite floating window. Disabled (visually dimmed) when
+// no chain plugins are installed — there's nothing to show, and the
+// Download Audio Suite button to its right is the right action.
+function AudioSuiteOpenButton() {
+  const open = useAudioSuiteStore((s) => s.open);
+  return (
+    <button
+      type="button"
+      onClick={open}
+      style={{
+        marginLeft: 'auto',
+        padding: '4px 12px',
+        borderRadius: 4,
+        border: '1px solid var(--accent)',
+        background: 'var(--bg-2)',
+        color: 'var(--fg-0)',
+        cursor: 'pointer',
+        fontSize: 10,
+        fontWeight: 600,
+        letterSpacing: 1,
+        textTransform: 'uppercase',
+        fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
+      }}
+      title="Open the Audio Suite window to reorder, audition, and tune chain plugins"
+    >
+      Audio Suite
+    </button>
+  );
+}
+
 // ---------------------------------------------------------------
-// TxAudioToolsPanel — chain plugins above, CFC below.
+// TxAudioToolsPanel — chain-flow strip + CFC.
 //
-// Audio-chain plugins (issue #332) declare panel slot
-// `tx-audio-tools.chain`; we filter `usePluginPanels()` to that slot,
-// sort by the fixed v1 chain order, and render each plugin's component
-// inline. CFC stays at the bottom — it's WDSP-driven and ships in Zeus
-// core, not as a plugin, so it doesn't move.
+// Audio-chain plugins (issue #332, Phase 2 onward) live in the Audio
+// Suite floating window — click the "Audio Suite" button in the chain
+// strip header to open it. The strip here is purely informational:
+// one tile per known v1/v2 block showing whether it's installed, so
+// the operator can see at a glance what's loaded without opening the
+// window. CFC stays inline — it's WDSP-driven, ships in Zeus core,
+// and isn't part of the reorderable plugin chain.
 // ---------------------------------------------------------------
 export function TxAudioToolsPanel() {
   const allPanels = usePluginPanels();
   const chainPanels = useMemo(
-    () => sortChainPanels(allPanels.filter((p) => p.slot === CHAIN_SLOT)),
+    () => allPanels.filter((p) => p.slot === CHAIN_SLOT),
     [allPanels],
   );
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <ChainFlow chainPanels={chainPanels} />
-
-      {/* Chain plugins in v1 order. Empty until at least one is installed. */}
-      {chainPanels.map((panel) => {
-        const Component = panel.component;
-        return (
-          <div key={`${panel.pluginId}::${panel.panelId}`} data-plugin-id={panel.pluginId}>
-            <Component />
-          </div>
-        );
-      })}
 
       {/* CFC — WDSP-driven, always available, always last in the chain. */}
       <CfcSettingsPanel />

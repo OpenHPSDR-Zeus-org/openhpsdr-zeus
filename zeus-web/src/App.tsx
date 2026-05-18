@@ -48,6 +48,7 @@ import { FlexWorkspace } from './layout/FlexWorkspace';
 import { AfGainSlider } from './components/AfGainSlider';
 import { AgcSlider } from './components/AgcSlider';
 import { AlertBanner } from './components/AlertBanner';
+import { AudioSuiteWindow } from './components/AudioSuiteWindow';
 import { AttenuatorSlider } from './components/AttenuatorSlider';
 import { AudioToggle } from './components/AudioToggle';
 import { BandFavorites } from './components/toolbar/BandFavorites';
@@ -745,6 +746,13 @@ export default function App() {
           <FlexWorkspace key={activeLayoutId} />
         )}
       </div>
+
+      {/* Audio Suite floating window — position:fixed overlay rendered
+          outside the workspace grid so it can drift to wherever the
+          operator drags it without getting clipped by a parent. Mounted
+          unconditionally (returns null when closed) so the open/close
+          state in the store is the single source of truth. */}
+      <AudioSuiteWindow />
 
       {/* Transport — MOX/TUN + audio + mic + macro buttons on the left,
           PA/PRE chips, then the per-radio status (radio IP, rotator, QRZ)

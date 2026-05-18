@@ -146,6 +146,14 @@ const MIC_PCM_BYTES = 1 + MIC_PCM_SAMPLES * 4;
 export const MSG_TYPE_MIC_PEAK = 0x1d;
 const MIC_PEAK_BYTES = 1 + 4 + 8;
 
+// Audio Suite chain-order broadcast. Server pushes this whenever the
+// operator reorders the chain via the tile strip (any client), or
+// when a plugin is installed / uninstalled — so other connected
+// clients update their tile sequence without polling. Payload:
+// [0x1E][csvUtf8…] — comma-separated plugin IDs in chain order.
+// Contract: Zeus.Contracts/AudioChainOrderFrame.cs.
+export const MSG_TYPE_AUDIO_CHAIN_ORDER = 0x1e;
+
 // Shared by startRealtime / sendMicPcm. Single WS instance at a time; writes
 // are no-ops when the socket isn't open.
 let activeWs: WebSocket | null = null;
@@ -312,6 +320,20 @@ export function startRealtime(path = '/ws'): () => void {
           // clock we'll see).
           const tsUnixMs = Number(dv.getBigInt64(5, true));
           useMicPeakStore.getState().setPeak(peakDbfs, tsUnixMs);
+          return;
+        }
+        if (peekType === MSG_TYPE_AUDIO_CHAIN_ORDER) {
+          // Variable-length CSV payload — empty payload encodes the
+          // "no plugins installed" empty-chain case.
+          const bytes = new Uint8Array(ev.data, 1);
+          const csv = new TextDecoder('utf-8').decode(bytes);
+          const ids = csv.length === 0 ? [] : csv.split(',');
+          // Lazy import keeps the audio-suite-store out of the ws-client
+          // module graph for clients that never open the Audio Suite
+          // window (e.g. the no-plugins-installed first-run experience).
+          void import('../state/audio-suite-store').then((m) => {
+            m.useAudioSuiteStore.getState().setChainOrderFromServer(ids);
+          });
           return;
         }
         if (peekType === MSG_TYPE_PA_TEMP) {
