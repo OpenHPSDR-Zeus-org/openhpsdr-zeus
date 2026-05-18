@@ -102,7 +102,7 @@ This avoids architectural changes while solving the operator's immediate problem
 ## References
 - Zeus.Protocol1/Discovery/ReplyParser.cs - board ID mapping
 - Zeus.Protocol1/ControlFrame.cs - ATT and filter control encoding
-- Zeus.Server/RadioService.cs - ConnectedBoardKind vs EffectiveBoardKind
-- Zeus.Server/PreferredRadioStore.cs - board preference storage
-- Zeus.Server/PaDefaults.cs - per-board PA gain tables
+- Zeus.Server.Hosting/RadioService.cs - ConnectedBoardKind vs EffectiveBoardKind
+- Zeus.Server.Hosting/PreferredRadioStore.cs - board preference storage
+- Zeus.Server.Hosting/PaDefaults.cs - per-board PA gain tables
 - docs/references/supported-settings.md - capability matrix

@@ -162,7 +162,7 @@ export function BandPlanEditor() {
 
       <div style={{ fontSize: 10, color: 'var(--fg-3)', background: 'rgba(255,160,40,0.06)', border: '1px solid rgba(255,160,40,0.15)', borderRadius: 0, padding: '6px 10px' }}>
         Defaults are best-effort. You are responsible for operating within your licence.
-        Source files under Zeus.Server/BandPlans/ — corrections welcome as PRs.
+        Source files under Zeus.Server.Hosting/BandPlans/ — corrections welcome as PRs.
       </div>
 
       {error && (

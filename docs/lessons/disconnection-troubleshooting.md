@@ -83,7 +83,7 @@ Check backend terminal for:
 - Out of memory errors
 
 **Resolution:**
-1. Restart `dotnet run --project Zeus.Server`
+1. Restart `dotnet run --project OpenhpsdrZeus`
 2. If it crashes immediately, check WDSP wisdom:
    - Did you wait for wisdom to complete on first run?
    - See [README.md](../../README.md) "First run — wait for WDSP wisdom"
@@ -143,7 +143,7 @@ If you see "RX: N consecutive socket timeouts" but UI still shows "Connected", y
 **Option 1: Build once, run production build**
 ```bash
 cd zeus-web && npm run build
-dotnet run --project Zeus.Server
+dotnet run --project OpenhpsdrZeus
 # Open http://localhost:6060 (no Vite dev server)
 ```
 No hot-reload, but no WebSocket disconnects either.
@@ -160,7 +160,7 @@ cd zeus-web && npm run build
 
 # Terminal 2: Run backend only
 cd ..
-dotnet run --project Zeus.Server
+dotnet run --project OpenhpsdrZeus
 
 # Connect via http://localhost:6060
 # No Vite = no dev disconnects

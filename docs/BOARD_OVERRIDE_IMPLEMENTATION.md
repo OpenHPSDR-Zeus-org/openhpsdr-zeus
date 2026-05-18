@@ -28,7 +28,7 @@ Users with **Anvelina SDR + ANAN 200D PA** boards report that Zeus auto-detects 
    - `RadioSelectionSetRequest` now includes `bool? OverrideDetection`
    - Updated XML docs to explain override behavior and warnings
 
-4. **Zeus.Server/Program.cs** - Updated API endpoints
+4. **OpenhpsdrZeus/Program.cs** - Updated API endpoints
    - GET `/api/radio/selection` returns current `OverrideDetection` status
    - PUT `/api/radio/selection` accepts optional `OverrideDetection` flag
    - Calls `prefs.Set(chosen, req.OverrideDetection)` to persist
@@ -278,10 +278,10 @@ Manual testing with actual hardware:
 ## Files Modified
 
 ### Backend
-- `Zeus.Server/PreferredRadioStore.cs`
-- `Zeus.Server/RadioService.cs`
+- `Zeus.Server.Hosting/PreferredRadioStore.cs`
+- `Zeus.Server.Hosting/RadioService.cs`
 - `Zeus.Contracts/Dtos.cs`
-- `Zeus.Server/Program.cs`
+- `OpenhpsdrZeus/Program.cs`
 - `docs/rca/anvelina-200d-detection.md` (new)
 
 ### Frontend

@@ -7,8 +7,8 @@ quantification from `perf_pass_3_baseline.md` §3, and the expected delta
 on the alloc-rate / work-item / CPU axes captured from Brian's live HL2
 session.
 
-> **Measurement note.** Brian's live Zeus.Server (PID 13972, Debug,
-> `OPENHPSDR-Zeus/Zeus.Server/bin/Debug/net10.0`) is the only process on
+> **Measurement note.** Brian's live OpenhpsdrZeus (PID 13972, Debug,
+> `OPENHPSDR-Zeus/OpenhpsdrZeus/bin/Debug/net10.0`) is the only process on
 > the box currently driving the HL2 hot paths (RxLoop / StartIqPump /
 > TxLoop / StreamingHub broadcasts). The perf3 worktree's Release build
 > with no radio attached reaches a floor of **~31 KB/s alloc, ~62

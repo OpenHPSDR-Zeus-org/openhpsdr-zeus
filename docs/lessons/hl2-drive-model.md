@@ -99,7 +99,7 @@ reference. Those are piHPSDR-isms that don't apply to HL2's gateware.
 
 ## What Zeus now does
 
-`Zeus.Server/RadioDriveProfile.cs — HermesLite2DriveProfile.EncodeDriveByte`:
+`Zeus.Server.Hosting/RadioDriveProfile.cs — HermesLite2DriveProfile.EncodeDriveByte`:
 
     byte_raw = round( (drivePct/100) × (paGainDb/100) × 255 )
     byte     = round( byte_raw / 16 ) × 16            // nibble-quantise
@@ -186,8 +186,8 @@ the profile abstraction landed, and before this percentage-model fix.
 
 - `docs/references/protocol-1/hermes-lite2-protocol.md:51` — the one
   line that would have saved two days.
-- `Zeus.Server/RadioDriveProfile.cs` — `HermesLite2DriveProfile`.
-- `Zeus.Server/PaDefaults.cs` — `Hl2OutputPct` table (HF 100 / 6 m 38.8).
+- `Zeus.Server.Hosting/RadioDriveProfile.cs` — `HermesLite2DriveProfile`.
+- `Zeus.Server.Hosting/PaDefaults.cs` — `Hl2OutputPct` table (HF 100 / 6 m 38.8).
 - `Zeus.Protocol1/ControlFrame.cs` — `LastPeakAbs` / `LastDriveByte`
   instrumentation; `Protocol1Client.TxLoopAsync`'s `p1.tx.rate` log
   surfaces them at 1 Hz.

@@ -429,7 +429,7 @@ each paired with the legitimate alternative.
 | `src/core/ClientReverb.cpp` | Freeverb implementation | Use [verblib](https://github.com/blastbay/verblib) (single-file C89, MIT-or-public-domain) or [sinshu/freeverb](https://github.com/sinshu/freeverb) (Jezar's original, public domain) |
 | `src/core/ClientPudu.cpp` | Aphex Aural Exciter + Big Bottom in one file | High band: hand-author from [Airwindows Exciter](https://github.com/airwindows/airwindows) reference (MIT). Low band: see §3.4 — algorithm choice is open question |
 | `src/core/AudioEngine.cpp` | The TX/RX chain dispatcher loop | Hand-author Zeus's own block-chain dispatcher; the dispatcher is not novel and is straightforward to write |
-| `src/core/ChannelStripPresets.cpp` | JSON preset serialization | Hand-author using Zeus's existing System.Text.Json patterns from `Zeus.Server/RadioStateStore.cs` |
+| `src/core/ChannelStripPresets.cpp` | JSON preset serialization | Hand-author using Zeus's existing System.Text.Json patterns from `Zeus.Server.Hosting/RadioStateStore.cs` |
 
 ### 2.5 Plugin / weight licensing — not applicable to v1
 

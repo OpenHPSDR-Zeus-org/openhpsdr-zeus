@@ -124,11 +124,11 @@ Mode-matching rules:
 
 ## 4. Default regional data (shipped with Zeus.Server)
 
-Ships as JSON under `Zeus.Server/BandPlans/` (one file per region). Loaded into a new
+Ships as JSON under `Zeus.Server.Hosting/BandPlans/` (one file per region). Loaded into a new
 `BandPlanStore` on startup. Layout:
 
 ```
-Zeus.Server/BandPlans/
+Zeus.Server.Hosting/BandPlans/
   regions.json                 # region catalog (id, display, shortCode, parentId)
   IARU_R1.segments.json        # generic Region 1 baseline
   IARU_R2.segments.json        # generic Region 2 baseline
