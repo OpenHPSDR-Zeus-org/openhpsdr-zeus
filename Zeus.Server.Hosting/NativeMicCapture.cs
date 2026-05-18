@@ -56,6 +56,7 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
     private readonly TxAudioIngest _ingest;
     private readonly StreamingHub _hub;
+    private readonly AudioPluginBridge _bridge;
     private readonly ILogger<NativeMicCapture> _log;
 
     private MiniAudioInput? _input;
@@ -74,10 +75,20 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
     private long _totalBlocksOut;
     private long _totalPeakFramesOut;
 
-    public NativeMicCapture(TxAudioIngest ingest, StreamingHub hub, ILogger<NativeMicCapture> log)
+    // Suppression counter for plugin-preview faults so a buggy plugin
+    // can't spam the log from the miniaudio worker thread. Matches the
+    // 4-suppression pattern used at the WDSP TX seam.
+    private int _previewErrLogged;
+
+    public NativeMicCapture(
+        TxAudioIngest ingest,
+        StreamingHub hub,
+        AudioPluginBridge bridge,
+        ILogger<NativeMicCapture> log)
     {
         _ingest = ingest;
         _hub = hub;
+        _bridge = bridge;
         _log = log;
     }
 
@@ -183,6 +194,29 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
             if (_accumFill >= MicBlockSamples)
             {
+                // Pre-MOX plugin meter preview tap — runs the audio plugin
+                // chain on the same 960-sample mono block we're about to
+                // hand to TxAudioIngest so per-plugin IN / OUT / GR meters
+                // animate from live mic regardless of MOX state. The bridge
+                // short-circuits internally when MOX or TX monitor is on
+                // (the WDSP TX path is the canonical chain runner in those
+                // cases), or when no plugins are attached. Output samples
+                // are discarded — TxAudioIngest still gets the unmodified
+                // mic block via FlushBlock, so the on-air audio path is
+                // bit-identical to the no-preview case.
+                try
+                {
+                    _bridge.ProcessLivePreview(
+                        new ReadOnlySpan<float>(_accum, 0, MicBlockSamples),
+                        sampleRate: 48_000);
+                }
+                catch (Exception ex)
+                {
+                    if (++_previewErrLogged <= 4)
+                        _log.LogWarning(ex,
+                            "audio.native.tx plugin preview threw (suppressed after 4)");
+                }
+
                 FlushBlock();
                 _accumFill = 0;
             }

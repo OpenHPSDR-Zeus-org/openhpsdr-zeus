@@ -180,6 +180,13 @@ public static class ZeusHost
             builder.Services.AddSingleton<NativeAudioSink>();
             builder.Services.AddSingleton<IRxAudioSink>(sp =>
                 sp.GetRequiredService<NativeAudioSink>());
+            // Same singleton serves the Audio Suite pre-MOX audition sink
+            // so the audition mix happens in the same playback path the
+            // operator already hears RX audio through. Browser mode (the
+            // else branch below) gets a NoOp impl so DI is satisfied
+            // without forcing audition feature branches in callers.
+            builder.Services.AddSingleton<IAuditionAudioSink>(sp =>
+                sp.GetRequiredService<NativeAudioSink>());
             builder.Services.AddHostedService(sp =>
                 sp.GetRequiredService<NativeAudioSink>());
 
@@ -209,6 +216,12 @@ public static class ZeusHost
         else
         {
             builder.Services.AddSingleton<IRxAudioSink, WebSocketAudioSink>();
+            // Audition is desktop-only in v1; browser mode gets the no-op
+            // implementation so AudioPluginBridge has a non-null sink to
+            // call into. Browser parity is a future phase that will
+            // stream audition over the SignalR hub for the worklet to
+            // mix client-side.
+            builder.Services.AddSingleton<IAuditionAudioSink, NoOpAuditionAudioSink>();
         }
         // WDSPwisdom bootstrap: run FFTW plan caching on a worker at app start so the
         // first /api/connect isn't blocked for ~2 min while WDSP plans FFTs 64..262144.

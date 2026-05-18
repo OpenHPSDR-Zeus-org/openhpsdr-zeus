@@ -59,7 +59,7 @@ namespace Zeus.Server;
 /// count + resets it; persistent underruns mean either ring sizing is too
 /// small or the DSP thread is starved.</para>
 /// </summary>
-internal sealed class NativeAudioSink : IRxAudioSink, IHostedService, IDisposable
+internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHostedService, IDisposable
 {
     private const int FrameRateHz = 48_000;
 
@@ -69,8 +69,18 @@ internal sealed class NativeAudioSink : IRxAudioSink, IHostedService, IDisposabl
     // jitter.
     private const int RingCapacity = 65_536;
 
+    // ~250 ms @ 48 kHz mono = 12000 samples ≈ 48 KB. Power of two for the
+    // mask wrap. The audition path is sourced from mic capture (one block
+    // every 20 ms — 960 samples) so the buffer never needs to hold more
+    // than a few hundred ms of slack. A small ring is preferred: on a MOX
+    // rising edge, AudioPluginBridge stops pushing into this ring and the
+    // tail drains in <300 ms so the operator doesn't keep hearing the
+    // pre-MOX tail of their own voice after keying.
+    private const int AuditionRingCapacity = 16_384;
+
     private readonly ILogger<NativeAudioSink> _log;
     private readonly FloatSpscRing _ring = new(RingCapacity);
+    private readonly FloatSpscRing _auditionRing = new(AuditionRingCapacity);
 
     private MiniAudioOutput? _output;
     private bool _disposed;
@@ -82,12 +92,46 @@ internal sealed class NativeAudioSink : IRxAudioSink, IHostedService, IDisposabl
     // open either way so there's no pop and no fight with the OS mixer.
     private volatile bool _muted;
 
+    // Audition enable flag — set via REST /api/audio-suite/audition by
+    // the operator toggling the Audio Suite window's Audition button.
+    // Read on the miniaudio capture worker thread inside PublishAudition
+    // and on the playback worker thread inside OnPlaybackData. Volatile
+    // is sufficient: a stale read across a toggle just means one extra
+    // (or one missing) audition block, inaudible.
+    private volatile bool _auditionEnabled;
+
     public bool IsMuted => _muted;
+    public bool IsEnabled => _auditionEnabled;
 
     public void SetMuted(bool muted)
     {
         _muted = muted;
         if (muted) _ring.Clear();
+    }
+
+    public void SetEnabled(bool enabled)
+    {
+        _auditionEnabled = enabled;
+        // Drain the audition ring on disable so re-enabling doesn't
+        // replay the tail of the prior audition session.
+        if (!enabled) _auditionRing.Clear();
+        _log.LogInformation("audio.native.rx audition {State}", enabled ? "enabled" : "disabled");
+    }
+
+    public void PublishAudition(ReadOnlySpan<float> monoSamples, int sampleRate)
+    {
+        // No-op when audition is off — keeps the realtime path on the
+        // mic capture thread cheap (one volatile read + return) when the
+        // operator hasn't engaged the feature.
+        if (!_auditionEnabled) return;
+        if (sampleRate != FrameRateHz) return;   // defence in depth — mic is always 48 kHz
+        if (_muted) return;                       // RX mute also silences audition
+
+        _auditionRing.Write(monoSamples);
+        // Audition overruns are not interesting enough to track — the
+        // mic-capture cadence (960 samples / 20 ms) means the worst case
+        // is ~250 ms of stale audition dropped if the playback thread
+        // stalls, which is inaudible.
     }
 
     // Diagnostics — accessed from the audio worker thread; volatile / interlocked
@@ -194,6 +238,25 @@ internal sealed class NativeAudioSink : IRxAudioSink, IHostedService, IDisposabl
             // Underrun — zero the remainder.
             mono[read..].Clear();
             Interlocked.Add(ref _underrunSamples, totalFrames - read);
+        }
+
+        // Audition mixing: when the operator has audition turned on,
+        // sum the audio plugin chain's output into the mono buffer
+        // BEFORE channel expansion. We use a second stack-alloc'd
+        // scratch span so we don't touch the audition ring on the
+        // common audition-off path. Audition underrun is benign — the
+        // operator just hears silence for that gap, which is what they
+        // expect when the mic isn't producing.
+        if (_auditionEnabled)
+        {
+            Span<float> aud = totalFrames <= 4096
+                ? stackalloc float[totalFrames]
+                : new float[totalFrames];
+            int audRead = _auditionRing.Read(aud);
+            // Sum the audition slice into mono. If the audition ring
+            // underran we still sum the bytes we got and leave the
+            // rest of mono unchanged (RX continues underneath).
+            for (int i = 0; i < audRead; i++) mono[i] += aud[i];
         }
 
         // Expand mono → output channels. channels==1 is the trivial path.

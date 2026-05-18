@@ -134,6 +134,114 @@ public class AudioChainTests
         Assert.False(chain.IsSlotBypassed(0));
     }
 
+    // -- Caller-supplied-scratch overload -----------------------------
+
+    [Fact]
+    public void Scratch_Overload_Matches_Field_Backed_Process()
+    {
+        // Bit-identity check: running the same input through both
+        // overloads (field-backed and caller-supplied scratch) must
+        // produce the same output. This is the contract that lets
+        // AudioPluginBridge.ProcessLivePreview tap the chain with its
+        // own scratch span without diverging from the WDSP TX path.
+        var chainA = new AudioChain();
+        var chainB = new AudioChain();
+        chainA.SetSlot(0, new AddPlugin(10f));
+        chainA.SetSlot(1, new MultiplyPlugin(3f));
+        chainA.SetSlot(2, new AddPlugin(-2f));
+        chainB.SetSlot(0, new AddPlugin(10f));
+        chainB.SetSlot(1, new MultiplyPlugin(3f));
+        chainB.SetSlot(2, new AddPlugin(-2f));
+
+        Span<float> input = stackalloc float[] { 1, 2, 3, 4, 5, 6, 7, 8 };
+        Span<float> outA = stackalloc float[8];
+        Span<float> outB = stackalloc float[8];
+        Span<float> scratchB = stackalloc float[8];
+
+        chainA.Process(input, outA, Ctx(frames: 8));
+        chainB.Process(input, outB, scratchB, Ctx(frames: 8));
+
+        Assert.Equal<float>(outA.ToArray(), outB.ToArray());
+    }
+
+    [Fact]
+    public void Scratch_Overload_MasterDisabled_PassesThrough()
+    {
+        var chain = new AudioChain { MasterEnabled = false };
+        chain.SetSlot(0, new AddPlugin(10f));
+
+        Span<float> input   = stackalloc float[] { 1, 2, 3, 4 };
+        Span<float> output  = stackalloc float[4];
+        Span<float> scratch = stackalloc float[4];
+
+        chain.Process(input, output, scratch, Ctx());
+        Assert.Equal<float>(new float[] { 1, 2, 3, 4 }, output.ToArray());
+    }
+
+    [Fact]
+    public void Scratch_Overload_TooSmall_PassesThrough_Without_Throwing()
+    {
+        // Safety contract: if the caller hands in a scratch span smaller
+        // than needed, the chain must NOT throw on the realtime path —
+        // it falls back to a single input.CopyTo(output) so audio
+        // keeps flowing. Throwing would kill the miniaudio worker
+        // thread.
+        var chain = new AudioChain();
+        chain.SetSlot(0, new AddPlugin(99f)); // would be applied if scratch were big enough
+
+        Span<float> input   = stackalloc float[] { 1, 2, 3, 4 };
+        Span<float> output  = stackalloc float[4];
+        Span<float> scratch = stackalloc float[2]; // intentionally too small
+
+        chain.Process(input, output, scratch, Ctx());
+
+        // Plugin was bypassed via the safety fallback; output mirrors input.
+        Assert.Equal<float>(new float[] { 1, 2, 3, 4 }, output.ToArray());
+    }
+
+    [Fact]
+    public void Scratch_Overload_OutputTooSmall_Throws()
+    {
+        // Output-too-small is a *programmer* error, not a runtime
+        // condition the audio thread could survive — throw clearly.
+        // This matches the field-backed overload's behaviour.
+        var chain = new AudioChain();
+
+        var input   = new float[] { 1, 2, 3, 4 };
+        var output  = new float[2];
+        var scratch = new float[4];
+
+        Assert.Throws<ArgumentException>(() =>
+        {
+            chain.Process(input.AsSpan(), output.AsSpan(), scratch.AsSpan(), Ctx());
+        });
+    }
+
+    [Fact]
+    public void Scratch_Overload_TwoIndependent_Scratches_Produce_Same_Output()
+    {
+        // Future-proofing for concurrent callers: even if two threads
+        // call Process on the same chain with separate scratches, the
+        // resulting output must be deterministic given identical input
+        // / plugin state. (Per-plugin internal state can still race,
+        // but the scratch-pong logic itself must not corrupt output.)
+        var chain = new AudioChain();
+        chain.SetSlot(0, new AddPlugin(5f));
+        chain.SetSlot(1, new MultiplyPlugin(2f));
+
+        Span<float> input   = stackalloc float[] { 1, 2, 3, 4 };
+        Span<float> out1    = stackalloc float[4];
+        Span<float> out2    = stackalloc float[4];
+        Span<float> scratch1 = stackalloc float[4];
+        Span<float> scratch2 = stackalloc float[4];
+
+        chain.Process(input, out1, scratch1, Ctx());
+        chain.Process(input, out2, scratch2, Ctx());
+
+        Assert.Equal<float>(out1.ToArray(), out2.ToArray());
+        Assert.Equal<float>(new float[] { 12, 14, 16, 18 }, out1.ToArray()); // (x+5)*2
+    }
+
     private sealed class AddPlugin : IAudioPlugin
     {
         private readonly float _bias;
