@@ -91,9 +91,11 @@ export function PsSettingsPanel() {
   const psCalibrationStalled = useTxStore((s) => s.psCalibrationStalled);
   // Used to gate the "correcting" indicator — WDSP's info[14] stays high
   // across MOX-down once calcc has a curve loaded, so without this gate the
-  // panel claims "correcting" with no RF being emitted. twoToneOn is read
-  // a few lines below for the 2-tone control row.
+  // panel claims "correcting" with no RF being emitted. moxOn+tunOn+twoToneOn
+  // cover every TX-active path. (twoToneOn is also read further down for the
+  // 2-tone control row.)
   const moxOn = useTxStore((s) => s.moxOn);
+  const tunOn = useTxStore((s) => s.tunOn);
   const setPsAuto = useTxStore((s) => s.setPsAuto);
   const setPsSingle = useTxStore((s) => s.setPsSingle);
   const setPsPtol = useTxStore((s) => s.setPsPtol);
@@ -217,7 +219,7 @@ export function PsSettingsPanel() {
   // operator sees the right thing:
   //   - "correcting" only when actively transmitting (curve applied to live RF)
   //   - "ready"      when curve is loaded but radio is idle
-  const keyed = moxOn || twoToneOn;
+  const keyed = moxOn || tunOn || twoToneOn;
   const isCorrecting = psCorrecting && keyed;
   const isReady = psCorrecting && !keyed;
   const isRunning = psEnabled && !psCorrecting && psCalState > 0;

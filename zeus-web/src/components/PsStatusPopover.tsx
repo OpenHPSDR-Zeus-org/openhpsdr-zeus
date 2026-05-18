@@ -49,22 +49,34 @@ export function PsStatusPopover() {
   const psHwPeak = useTxStore((s) => s.psHwPeak);
   const psAuto = useTxStore((s) => s.psAuto);
   const psSingle = useTxStore((s) => s.psSingle);
+  // Gate the "correcting" badge on actual TX being keyed. WDSP info[14]
+  // (psCorrecting) reports "iqc curve loaded" — it stays high across
+  // MOX-down once cal succeeds, because the curve persists between keying
+  // cycles. Same gate as PsSettingsPanel.tsx so the popover and the panel
+  // agree.
+  const moxOn = useTxStore((s) => s.moxOn);
+  const tunOn = useTxStore((s) => s.tunOn);
+  const twoToneOn = useTxStore((s) => s.twoToneOn);
 
   const calStateLabel = CAL_STATE_NAMES[psCalState] ?? `state ${psCalState}`;
   const feedbackPct = Math.max(0, Math.min(1, psFeedbackLevel / 256));
   const dialFillLen = feedbackPct * DIAL_C;
   const feedbackRound = Math.round(psFeedbackLevel);
 
-  const isConverged = psCorrecting;
-  const isRunning = psEnabled && !isConverged && psCalState > 0;
-  const dialClass = isConverged ? 'is-converged' : '';
+  const keyed = moxOn || tunOn || twoToneOn;
+  const isCorrecting = psCorrecting && keyed;
+  const isReady = psCorrecting && !keyed;
+  const isRunning = psEnabled && !psCorrecting && psCalState > 0;
+  const dialClass = isCorrecting || isReady ? 'is-converged' : '';
   const armedLabel = !psEnabled
     ? 'IDLE'
-    : isConverged
+    : isCorrecting
       ? 'CORRECTING'
-      : isRunning
-        ? 'RUNNING'
-        : 'ARMED';
+      : isReady
+        ? 'READY'
+        : isRunning
+          ? 'RUNNING'
+          : 'ARMED';
 
   // Peak meter scale — same logic as the Settings hero so values map 1:1
   // between the two views.
