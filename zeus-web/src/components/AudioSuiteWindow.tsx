@@ -277,8 +277,13 @@ export function AudioSuiteWindow() {
       const dy = e.clientY - ds.startY;
       // Clamp so the header can't drag off-screen (always leave at
       // least 80px visible on every edge so the operator can grab it).
+      // minY = 64 keeps the header from sliding under the 60-px Zeus
+      // topbar — the operator must always have somewhere to grab to
+      // pull the window back down. zIndex on the window root puts us
+      // above the topbar visually anyway, but enforcing the clamp
+      // avoids covering the radio chrome unnecessarily.
       const minX = -width + 80;
-      const minY = 0;
+      const minY = 64;
       const maxX = window.innerWidth - 80;
       const maxY = window.innerHeight - 40;
       const nextX = Math.min(maxX, Math.max(minX, ds.offsetX + dx));
@@ -341,10 +346,19 @@ export function AudioSuiteWindow() {
       style={{
         position: 'fixed',
         left: x,
-        top: y,
+        // Render-time clamp on top so a persisted y < 64 (e.g. from a
+        // session before the topbar-clearance fix) doesn't ship the
+        // window under the topbar. The drag clamp prevents new drags
+        // from going there; this self-heals stuck stored positions on
+        // first render after upgrade.
+        top: Math.max(64, y),
         width,
         height,
-        zIndex: 60,
+        // Above the Zeus topbar (zIndex 300) so the operator's window
+        // is never hidden by app chrome. Below modal dialogs
+        // (AddPanelModal etc at zIndex 10000) so critical overlays
+        // still win.
+        zIndex: 400,
         display: 'flex',
         flexDirection: 'column',
         background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
