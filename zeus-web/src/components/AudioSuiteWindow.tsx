@@ -43,7 +43,10 @@ const CURSOR_FOR_EDGE: Record<ResizeEdge, string> = {
 /**
  * Compute the absolute-position style for a resize handle on the
  * given edge. Handles cover only their edge / corner — clicks in
- * the interior pass through to the window content.
+ * the interior pass through to the window content. Corners get a
+ * faint L-shaped border in --fg-3 as a discoverability hint so
+ * operators see "there's a resize handle here" without the cursor
+ * change being the only cue.
  */
 function handleStyleFor(edge: ResizeEdge): React.CSSProperties {
   const base: React.CSSProperties = {
@@ -52,15 +55,20 @@ function handleStyleFor(edge: ResizeEdge): React.CSSProperties {
     cursor: CURSOR_FOR_EDGE[edge],
     touchAction: 'none',
   };
+  const cornerBorder = '1px solid var(--fg-3)';
   switch (edge) {
     case 'n':  return { ...base, top: 0, left: RESIZE_HANDLE_PX, right: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX };
     case 's':  return { ...base, bottom: 0, left: RESIZE_HANDLE_PX, right: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX };
     case 'e':  return { ...base, top: RESIZE_HANDLE_PX, bottom: RESIZE_HANDLE_PX, right: 0, width: RESIZE_HANDLE_PX };
     case 'w':  return { ...base, top: RESIZE_HANDLE_PX, bottom: RESIZE_HANDLE_PX, left: 0, width: RESIZE_HANDLE_PX };
-    case 'ne': return { ...base, top: 0, right: 0, width: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX };
-    case 'nw': return { ...base, top: 0, left: 0, width: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX };
-    case 'se': return { ...base, bottom: 0, right: 0, width: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX };
-    case 'sw': return { ...base, bottom: 0, left: 0, width: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX };
+    case 'ne': return { ...base, top: 0, right: 0, width: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX,
+                        borderTop: cornerBorder, borderRight: cornerBorder, opacity: 0.6 };
+    case 'nw': return { ...base, top: 0, left: 0, width: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX,
+                        borderTop: cornerBorder, borderLeft: cornerBorder, opacity: 0.6 };
+    case 'se': return { ...base, bottom: 0, right: 0, width: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX,
+                        borderBottom: cornerBorder, borderRight: cornerBorder, opacity: 0.6 };
+    case 'sw': return { ...base, bottom: 0, left: 0, width: RESIZE_HANDLE_PX, height: RESIZE_HANDLE_PX,
+                        borderBottom: cornerBorder, borderLeft: cornerBorder, opacity: 0.6 };
   }
 }
 
@@ -242,6 +250,39 @@ export function AudioSuiteWindow() {
     loadAuditionState();
   }, [isOpen, loadChainOrderFromServer, loadAuditionState]);
 
+  // Escape closes the window — standard modal/popup keyboard
+  // affordance. Listener only attached while the window is open
+  // so it doesn't fight other Escape handlers (e.g. closing the
+  // panadapter cursor crosshair) when the suite is hidden.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') close();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, close]);
+
+  // Viewport-resize clamp — if the operator shrinks their browser
+  // window after the suite is positioned, the suite's stored x/y
+  // could end up off-screen and unreachable (no header to grab,
+  // no resize handle to grab either). Re-apply the same clamp
+  // rules used during drag whenever the viewport size changes.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onResize = () => {
+      const minX = -width + 80;
+      const minY = 64;
+      const maxX = window.innerWidth - 80;
+      const maxY = window.innerHeight - 40;
+      const nextX = Math.min(maxX, Math.max(minX, x));
+      const nextY = Math.min(maxY, Math.max(minY, y));
+      if (nextX !== x || nextY !== y) setPosition(nextX, nextY);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, [isOpen, x, y, width, setPosition]);
+
   // --- Window dragging via Pointer Events --------------------------
   const dragStateRef = useRef<{
     pointerId: number;
@@ -305,11 +346,20 @@ export function AudioSuiteWindow() {
   );
 
   // --- Tile drag-and-drop (HTML5 d&d) -----------------------------
+  // Two pieces of drag state:
+  //   - draggedFromRef: synchronous source-index access in the drop
+  //     handler (set in dragStart, cleared in drop/dragEnd).
+  //   - draggedFromIdx (state): triggers re-render so the SOURCE
+  //     tile dims to opacity 0.4 during drag, giving the operator
+  //     a visible "I'm moving this one" cue alongside the target
+  //     highlight.
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
+  const [draggedFromIdx, setDraggedFromIdx] = useState<number | null>(null);
   const draggedFromRef = useRef<number | null>(null);
 
   const onTileDragStart = (idx: number) => (e: React.DragEvent) => {
     draggedFromRef.current = idx;
+    setDraggedFromIdx(idx);
     e.dataTransfer.effectAllowed = 'move';
     // Some browsers require a payload to start a drag.
     e.dataTransfer.setData('text/plain', String(idx));
@@ -327,6 +377,7 @@ export function AudioSuiteWindow() {
     e.preventDefault();
     const from = draggedFromRef.current;
     setDragOverIndex(null);
+    setDraggedFromIdx(null);
     draggedFromRef.current = null;
     if (from === null || from === idx) return;
     void reorderChain(from, idx);
@@ -334,6 +385,7 @@ export function AudioSuiteWindow() {
 
   const onTileDragEnd = () => {
     setDragOverIndex(null);
+    setDraggedFromIdx(null);
     draggedFromRef.current = null;
   };
 
@@ -489,6 +541,7 @@ export function AudioSuiteWindow() {
         {chainPanels.map((panel, idx) => {
           const label = shortLabelFor(panel.pluginId, panel.title);
           const isDragTarget = dragOverIndex === idx;
+          const isDragSource = draggedFromIdx === idx;
           return (
             <div key={panel.pluginId} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
               {idx > 0 && (
@@ -506,9 +559,11 @@ export function AudioSuiteWindow() {
                   padding: '4px 10px',
                   borderRadius: 3,
                   background: isDragTarget ? 'var(--accent)' : 'var(--bg-2)',
-                  border: '1px solid ' + (isDragTarget ? 'var(--accent)' : 'var(--line-1)'),
+                  border: '1px dashed ' + (isDragTarget ? 'var(--accent)' : 'var(--line-1)'),
+                  borderStyle: isDragSource ? 'dashed' : 'solid',
                   color: isDragTarget ? 'var(--fg-0)' : 'var(--fg-1)',
                   cursor: 'grab',
+                  opacity: isDragSource ? 0.4 : 1,
                   fontSize: 10,
                   fontWeight: 500,
                   userSelect: 'none',
