@@ -49,6 +49,7 @@ import { SMeterPanel } from './panels/SMeterPanel';
 import { QrzPanel } from './panels/QrzPanel';
 import { AzimuthPanel } from './panels/AzimuthPanel';
 import { RotatorCompassPanel } from './panels/RotatorCompassPanel';
+import { RotatorDialPanel } from './panels/RotatorDialPanel';
 import { DspFlexPanel } from './panels/DspFlexPanel';
 import { CwPanel } from './panels/CwPanel';
 import { LogbookPanel } from './panels/LogbookPanel';
@@ -199,6 +200,13 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['rotator', 'compass', 'bearing', 'heading', 'sp', 'lp', 'map'],
     component: RotatorCompassPanel,
+  },
+  rotatordial: {
+    id: 'rotatordial',
+    name: 'Rotator Dial',
+    category: 'tools',
+    tags: ['rotator', 'compass', 'dial', 'bearing', 'heading', 'azimuth'],
+    component: RotatorDialPanel,
   },
   dsp: {
     id: 'dsp',

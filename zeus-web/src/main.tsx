@@ -84,6 +84,7 @@ import './styles/all-panels.css';
 import './styles/ps-settings.css';
 import './styles/pa-settings.css';
 import './styles/analog-meter.css';
+import './styles/rotator-dial.css';
 import App from './App.tsx';
 import { installFetchInterceptor } from './serverUrl';
 import { loadInstalledPluginUis } from './plugins/runtime/pluginRuntime';

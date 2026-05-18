@@ -1,0 +1,300 @@
+/* ===========================================================
+   Rotator Dial panel — pure compass widget (no map, no QRZ).
+   Lifted-Dark instrument language: dark face with warm lamp
+   bloom in dark theme, brushed silver chassis in light theme.
+   Adapts via --immersive-lamp-* tokens defined in tokens.css.
+   =========================================================== */
+
+.rotator-dial {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  padding: 8px;
+  gap: 8px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* Disabled state — face dims, controls greyed out via :disabled below. */
+.rotator-dial.disabled .rd-dial { opacity: 0.42; }
+.rotator-dial.disabled .rd-readout { opacity: 0.55; }
+
+/* Stage: fills available space, centres the square dial inside. */
+.rd-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rd-dial {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: min(100%, 100cqh);
+  max-height: min(100%, 100cqw);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+/* ---------- Dial primitives ---------- */
+
+.rd-tick {
+  stroke-linecap: round;
+}
+.rd-tick--cardinal {
+  stroke: var(--immersive-lamp-readout);
+  stroke-width: 1.6;
+  opacity: 0.95;
+}
+.rd-tick--major {
+  stroke: var(--immersive-lamp-tick);
+  stroke-width: 1.0;
+  opacity: 0.85;
+}
+.rd-tick--minor {
+  stroke: var(--immersive-lamp-tick);
+  stroke-width: 0.55;
+  opacity: 0.5;
+}
+
+.rd-numeral {
+  font-family: var(--font-mono);
+  font-size: 6.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  fill: var(--immersive-lamp-units);
+  opacity: 0.85;
+}
+
+.rd-label {
+  font-family: var(--font-display);
+  fill: var(--immersive-lamp-label);
+  paint-order: stroke fill;
+}
+.rd-label--lg {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.rd-label--sm {
+  font-size: 7.5px;
+  font-weight: 600;
+  letter-spacing: 0.10em;
+  fill: var(--immersive-lamp-units);
+}
+/* North marker — warm-red conventional. In light theme this still
+   reads as a distinct accent because --tx is unchanged across themes. */
+.rd-cardinal-n {
+  fill: var(--tx);
+  text-shadow: 0 0 6px var(--tx-soft);
+}
+
+/* Lubber line — fixed reference triangle at top of face. */
+.rd-lubber polygon {
+  fill: var(--immersive-lamp-readout);
+  filter: drop-shadow(0 0 3px var(--immersive-lamp-readout-glow));
+}
+
+/* Needle — drawn pointing N at C=100, rotated by transform. */
+.rd-needle-head {
+  fill: var(--immersive-lamp-needle-bri);
+}
+.rd-needle-tail {
+  fill: var(--immersive-lamp-needle);
+  opacity: 0.55;
+}
+
+/* Target (pending) marker — TX red so it reads as "destination". */
+.rd-target-line {
+  stroke: var(--tx);
+  stroke-width: 2;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 4px var(--tx-soft));
+}
+.rd-target-tip {
+  fill: var(--tx);
+  filter: drop-shadow(0 0 4px var(--tx-soft));
+}
+
+/* Hub cap — small lit pin at centre. */
+.rd-hub-base {
+  fill: var(--bg-meter);
+  stroke: var(--immersive-lamp-rim);
+  stroke-width: 0.8;
+}
+.rd-hub-ring {
+  fill: none;
+  stroke: var(--immersive-lamp-border);
+  stroke-width: 0.6;
+}
+.rd-hub-pin {
+  fill: var(--immersive-lamp-pin);
+  filter: drop-shadow(0 0 4px var(--immersive-lamp-pin-glow));
+}
+
+/* ---------- Readout overlay ---------- */
+
+.rd-readout {
+  position: absolute;
+  left: 50%;
+  bottom: 16%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--r-sm);
+  background: var(--immersive-chip-bg);
+  border: 1px solid var(--immersive-lamp-border);
+  box-shadow:
+    inset 0 1px 0 var(--immersive-lamp-rim),
+    0 1px 3px rgba(0, 0, 0, 0.55);
+  font-family: var(--font-mono);
+  pointer-events: none;
+  white-space: nowrap;
+}
+.rd-readout-label {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  color: var(--immersive-lamp-units);
+}
+.rd-readout-now {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--immersive-lamp-readout);
+  text-shadow: 0 0 8px var(--immersive-lamp-readout-glow);
+}
+.rd-readout-tgt {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--tx);
+  text-shadow: 0 0 6px var(--tx-soft);
+}
+
+/* Offline banner — sits across the face when the rotator isn't ready. */
+.rd-offline-banner {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  padding: 4px 10px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--immersive-lamp-units);
+  background: var(--immersive-chip-bg);
+  border: 1px solid var(--immersive-lamp-border);
+  border-radius: var(--r-sm);
+  pointer-events: none;
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+}
+
+/* ---------- Controls row ---------- */
+
+.rd-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding-top: 2px;
+  flex-wrap: wrap;
+}
+
+.rd-manual {
+  display: inline-flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.rd-input {
+  width: 72px;
+  padding: 5px 8px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-align: center;
+  color: var(--immersive-lamp-readout);
+  background: var(--bg-meter);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  outline: none;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.rd-input::-webkit-outer-spin-button,
+.rd-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.rd-input:focus {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 1px var(--accent-soft);
+}
+.rd-input::placeholder {
+  color: var(--fg-3);
+  letter-spacing: 0.16em;
+  font-weight: 600;
+}
+.rd-input:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* Buttons — flat, take cues from --btn-* tokens so light theme adapts. */
+.rd-btn {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  padding: 5px 12px;
+  border-radius: var(--r-sm);
+  background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
+  border: 1px solid var(--btn-edge);
+  color: var(--btn-text);
+  cursor: pointer;
+  transition: filter 90ms ease, border-color 90ms ease, background 90ms ease;
+}
+.rd-btn:hover:not(:disabled) {
+  filter: brightness(1.18);
+  border-color: var(--accent-bright);
+}
+.rd-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
+
+.rd-btn--go {
+  background: linear-gradient(180deg, var(--accent), var(--accent));
+  border-color: var(--accent-bright);
+  color: var(--btn-active-text);
+  box-shadow: 0 0 8px var(--accent-soft);
+}
+.rd-btn--go:disabled {
+  background: linear-gradient(180deg, var(--btn-top), var(--btn-bot));
+  border-color: var(--btn-edge);
+  color: var(--btn-text);
+  box-shadow: none;
+}
+
+.rd-btn--stop {
+  background: linear-gradient(180deg, var(--bg-2), var(--bg-2));
+  border-color: var(--tx);
+  color: var(--tx);
+}
+.rd-btn--stop:hover:not(:disabled) {
+  background: var(--tx);
+  color: #ffffff;
+  border-color: var(--tx);
+}
