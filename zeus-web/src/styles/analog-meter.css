@@ -136,14 +136,14 @@
 
 /* ── Readout strip ────────────────────────────────────────── */
 .am-readout-strip {
-  display: flex;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
   gap: 1px;
   background: var(--panel-edge);
   border-top: 1px solid var(--panel-edge);
   flex-shrink: 0;
 }
 .am-ro {
-  flex: 1;
   padding: 8px 12px;
   background: var(--bg-1);
   display: flex;
@@ -152,6 +152,10 @@
   gap: 2px;
   min-width: 0;
 }
+.am-ro[data-scale="s"]   { grid-column: 1; }
+.am-ro[data-scale="po"]  { grid-column: 2; }
+.am-ro[data-scale="swr"] { grid-column: 3; }
+.am-ro.empty { grid-column: 1 / -1; }
 .am-ro.active { background: var(--accent-soft); }
 .am-ro.danger .am-ro-value { color: var(--tx); }
 .am-ro-label {

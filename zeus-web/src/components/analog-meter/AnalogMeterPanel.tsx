@@ -146,7 +146,11 @@ function ReadoutStrip({ enabled, values, showDbm, dbm, swrAlarm, activeScaleId }
   return (
     <div className="am-readout-strip">
       {items.map((it) => (
-        <div key={it.key} className={`am-ro ${it.active ? 'active' : ''} ${it.danger ? 'danger' : ''}`}>
+        <div
+          key={it.key}
+          className={`am-ro ${it.active ? 'active' : ''} ${it.danger ? 'danger' : ''}`}
+          data-scale={it.key}
+        >
           <div className="am-ro-label">{it.label}</div>
           <div className="am-ro-value">{it.value}</div>
         </div>
