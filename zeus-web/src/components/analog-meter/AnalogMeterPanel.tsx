@@ -24,6 +24,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import { GripVertical, Settings, X } from 'lucide-react';
 import { usePaStore } from '../../state/pa-store';
+import { useRadioStore } from '../../state/radio-store';
 import { useTxStore } from '../../state/tx-store';
 import { AnalogMeterFace } from './AnalogMeterFace';
 import { AnalogMeterConfig } from './AnalogMeterConfig';
@@ -190,18 +191,33 @@ export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
     return 'po';
   }, [mode, enabled.s, enabled.po, enabled.swr]);
 
-  // PO arc full-scale is derived from the rated PA power configured in the
-  // main PA Settings panel: max(10 W, 120% of rated). A 5 W HL2 → 10 W scale,
-  // a 100 W rig → 120 W scale. When the operator hasn't configured a rated
-  // power yet, fall back to a 100 W bench rig (matches TxStageMeters).
+  // PO arc full-scale tracks the connected radio. Resolution order matches
+  // TxStageMeters / ImmersiveMeters so the analog dial reads the same axis as
+  // the digital bar: operator PA override → board's published MaxPowerWatts
+  // (e.g. HL2 = 10 W) → 100 W last-ditch fallback.
   const paMaxPowerWatts = usePaStore((s) => s.settings.global.paMaxPowerWatts);
+  const boardMaxWatts = useRadioStore((s) => s.capabilities.maxPowerWatts);
   const poMax = useMemo(() => {
-    const ratedW = paMaxPowerWatts > 0 ? paMaxPowerWatts : 100;
-    return Math.max(10, ratedW * 1.2);
-  }, [paMaxPowerWatts]);
+    const ratedW =
+      paMaxPowerWatts > 0 ? paMaxPowerWatts : boardMaxWatts > 0 ? boardMaxWatts : 100;
+    return Math.max(1, ratedW);
+  }, [paMaxPowerWatts, boardMaxWatts]);
   const dynamicPoScale = useMemo(() => {
+    // Six evenly-spaced major ticks at 0, max/5, …, max — same shape as the
+    // digital PWR axis. HL2 (10 W) → 0/2/4/6/8/10; 100 W rig → 0/20/40/60/80/100.
+    const step = poMax / 5;
+    const decimals = step >= 1 ? 0 : 1;
+    const ticks = Array.from({ length: 6 }, (_, i) => {
+      const v = i * step;
+      return {
+        v,
+        label: v.toFixed(decimals),
+        major: true,
+      };
+    });
     return {
       ...PO_SCALE,
+      ticks,
       n: (w: number) => Math.min(1, Math.max(0, w) / poMax),
       fmt: (w: number) => `${w < 10 ? w.toFixed(1) : Math.round(w)} W`,
       fromN: (n: number) => Math.max(0, Math.min(1, n)) * poMax,

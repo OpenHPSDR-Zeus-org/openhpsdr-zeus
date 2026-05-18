@@ -41,7 +41,7 @@ function ScaleArc({ scale, radius, active, enabled, peakValueN }: ScaleArcProps)
   const trackOpacity = active ? 0.9 : 0.45;
   const trackWidth = active ? 2 : 1;
   const labelColor = active ? 'var(--fg-0)' : 'var(--fg-1)';
-  const labelOpacity = active ? 1 : 0.7;
+  const labelOpacity = active ? 1 : 0.85;
 
   const tickAngle = (v: number) => normToDeg(scale.n(v));
   const peakDeg = active && peakValueN != null ? normToDeg(peakValueN) : null;
@@ -103,7 +103,7 @@ function ScaleArc({ scale, radius, active, enabled, peakValueN }: ScaleArcProps)
       {scale.ticks.map((t, i) => {
         if (!t.label) return null;
         const ang = tickAngle(t.v);
-        const lr = radius + (t.major ? 28 : 22);
+        const lr = radius + (t.major ? 32 : 26);
         const [lx, ly] = pt(FACE.cx, FACE.cy, lr, ang);
         const isPlus = t.plus;
         return (
@@ -112,9 +112,9 @@ function ScaleArc({ scale, radius, active, enabled, peakValueN }: ScaleArcProps)
             x={lx}
             y={ly}
             fill={isPlus ? 'var(--accent)' : labelColor}
-            opacity={isPlus ? (active ? 1 : 0.75) : labelOpacity}
-            fontSize={t.major ? 16 : 13}
-            fontWeight={t.major ? 600 : 500}
+            opacity={isPlus ? (active ? 1 : 0.85) : labelOpacity}
+            fontSize={t.major ? 24 : 19}
+            fontWeight={t.major ? 800 : 700}
             fontFamily="var(--font-sans)"
             textAnchor="middle"
             dominantBaseline="middle"
@@ -132,9 +132,9 @@ function ScaleArc({ scale, radius, active, enabled, peakValueN }: ScaleArcProps)
             x={lx - 18}
             y={ly}
             fill={active ? 'var(--fg-0)' : 'var(--fg-1)'}
-            opacity={active ? 1 : 0.7}
-            fontSize={13}
-            fontWeight={700}
+            opacity={active ? 1 : 0.85}
+            fontSize={20}
+            fontWeight={800}
             fontFamily="var(--font-sans)"
             letterSpacing="0.08em"
             textAnchor="end"
@@ -149,14 +149,14 @@ function ScaleArc({ scale, radius, active, enabled, peakValueN }: ScaleArcProps)
         const tip = scale.ticks[scale.ticks.length - 1];
         if (!tip) return null;
         const ang = tickAngle(tip.v) + 2;
-        const [ux, uy] = pt(FACE.cx, FACE.cy, radius + 28, ang);
+        const [ux, uy] = pt(FACE.cx, FACE.cy, radius + 32, ang);
         return (
           <text
             x={ux + 4}
             y={uy}
             fill="var(--accent)"
-            fontSize={13}
-            fontWeight={600}
+            fontSize={20}
+            fontWeight={800}
             fontFamily="var(--font-sans)"
             textAnchor="start"
             dominantBaseline="middle"
