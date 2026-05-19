@@ -187,9 +187,36 @@ jobs:
           New-Item -ItemType Directory -Force -Path $destDir
           Copy-Item "native/build/Release/wdsp.dll" "$destDir/wdsp.dll"
 
+      # ---------- miniaudio (desktop-mode RX sink + TX mic capture) -------
+      #
+      # Pure C, no third-party deps — WASAPI is loaded dynamically at
+      # runtime, so no link libs and no vcpkg packages are required. Same
+      # VS 2022 generator + arch flag as wdsp above. We do NOT pass
+      # `-T ClangCL` here: that toolset was needed only because libspecbleach
+      # (NR4) uses a C99 VLA that MSVC rejects; miniaudio is plain MSVC-clean.
+      - name: Configure miniaudio (CMake)
+        run: |
+          $archFlag = if ("${{ matrix.arch }}" -eq "arm64") { "ARM64" } else { "x64" }
+          cmake -S native/miniaudio -B native/build-miniaudio `
+            -G "Visual Studio 17 2022" `
+            -A $archFlag
+
+      - name: Build miniaudio
+        run: cmake --build native/build-miniaudio --config Release --parallel
+
+      - name: Stage miniaudio DLL
+        run: |
+          $rid = "win-${{ matrix.arch }}"
+          Copy-Item "native/build-miniaudio/Release/miniaudio.dll" "staged/$rid/miniaudio.dll"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
+          # Artifact name kept as `wdsp-native-*` for compatibility with the
+          # build-release `Map RID to native artifact name` step; the staged
+          # dir now contains both wdsp.dll and miniaudio.dll, and the
+          # downstream `download-artifact` extracts the whole directory into
+          # Zeus.Dsp/runtimes/<rid>/native/.
           name: wdsp-native-win-${{ matrix.arch }}
           path: staged/win-${{ matrix.arch }}/
 
@@ -242,9 +269,28 @@ jobs:
           ls -la "$destDir/"
           ldd "$destDir/libwdsp.so"
 
+      # ---------- miniaudio (desktop-mode RX sink + TX mic capture) -------
+      #
+      # Pure C, no third-party deps — ALSA / PulseAudio / JACK are loaded
+      # dynamically at runtime via dlopen. Only -ldl + -lpthread + -lm are
+      # required at link time and all three live in libc / libpthread, which
+      # are already present in the build-essential toolchain installed
+      # above. No additional apt packages needed.
+      - name: Build & stage miniaudio
+        run: |
+          set -eux
+          cmake -S native/miniaudio -B native/build-miniaudio -DCMAKE_BUILD_TYPE=Release
+          cmake --build native/build-miniaudio --config Release --parallel
+          cp native/build-miniaudio/libminiaudio.so staged/linux-x64/libminiaudio.so
+          ldd staged/linux-x64/libminiaudio.so
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
+          # Staged dir now contains libwdsp.so + libfftw3.so.3 +
+          # libfftw3f.so.3 + libminiaudio.so. The downstream
+          # `download-artifact` extracts the whole directory into
+          # Zeus.Dsp/runtimes/linux-x64/native/.
           name: wdsp-native-linux-x64
           path: staged/linux-x64/
 
@@ -289,9 +335,24 @@ jobs:
           mkdir -p "$destDir"
           cp native/build/libwdsp.dylib "$destDir/libwdsp.dylib"
 
+      # ---------- miniaudio (desktop-mode RX sink + TX mic capture) -------
+      #
+      # Pure C, CoreAudio backend. cmake is already installed by the wdsp
+      # step above. macOS frameworks (CoreAudio / AudioToolbox / AudioUnit /
+      # CoreFoundation) come from the SDK that ships with Xcode CLT on
+      # macos-latest — no extra brew packages needed.
+      - name: Build & stage miniaudio
+        run: |
+          set -eux
+          cmake -S native/miniaudio -B native/build-miniaudio -DCMAKE_BUILD_TYPE=Release
+          cmake --build native/build-miniaudio --config Release --parallel
+          cp native/build-miniaudio/libminiaudio.dylib staged/osx-arm64/libminiaudio.dylib
+          otool -L staged/osx-arm64/libminiaudio.dylib
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
+          # Staged dir now contains libwdsp.dylib + libminiaudio.dylib.
           name: wdsp-native-osx-arm64
           path: staged/osx-arm64/
 

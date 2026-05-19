@@ -1,4 +1,4 @@
-name: Build Native WDSP Libraries
+name: Build Native Libraries
 
 on:
   # Manual trigger only. The previous push-based auto-rebuild opened a PR
@@ -153,11 +153,35 @@ jobs:
           New-Item -ItemType Directory -Force -Path $destDir
           Copy-Item "native/build/Release/wdsp.dll" "$destDir/wdsp.dll"
 
+      # ---------- miniaudio (desktop-mode RX sink + TX mic capture) -------
+      #
+      # Pure C, no third-party deps — WASAPI is loaded dynamically at
+      # runtime, so no link libs and no vcpkg packages are required. Same
+      # VS 2022 generator + arch flag as wdsp above. We do NOT pass
+      # `-T ClangCL` here: that toolset was only needed because libspecbleach
+      # (NR4) uses a C99 VLA that MSVC rejects; miniaudio is plain MSVC-clean.
+      - name: Configure miniaudio (CMake)
+        run: |
+          $archFlag = if ("${{ matrix.arch }}" -eq "arm64") { "ARM64" } else { "x64" }
+          cmake -S native/miniaudio -B native/build-miniaudio `
+            -G "Visual Studio 17 2022" `
+            -A $archFlag
+
+      - name: Build miniaudio
+        run: cmake --build native/build-miniaudio --config Release --parallel
+
+      - name: Stage miniaudio DLL
+        run: |
+          $rid = "win-${{ matrix.arch }}"
+          Copy-Item "native/build-miniaudio/Release/miniaudio.dll" "Zeus.Dsp/runtimes/$rid/native/miniaudio.dll"
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
+          # Directory upload (not a single file) so the artifact carries both
+          # wdsp.dll and miniaudio.dll. Matches the linux job pattern below.
           name: wdsp-windows-${{ matrix.arch }}
-          path: Zeus.Dsp/runtimes/win-${{ matrix.arch }}/native/wdsp.dll
+          path: Zeus.Dsp/runtimes/win-${{ matrix.arch }}/native/
 
   build-linux:
     name: Build Linux Native Libraries
@@ -275,6 +299,37 @@ jobs:
           done
           ls -la "$destDir/"
           ldd "$destDir/libwdsp.so"
+
+      # ---------- miniaudio (desktop-mode RX sink + TX mic capture) -------
+      #
+      # Pure C, no third-party deps — ALSA / PulseAudio / JACK are loaded
+      # dynamically at runtime via dlopen. Link-time only needs -ldl,
+      # -lpthread, -lm, all libc-resident.
+      - name: Build & stage miniaudio (x64)
+        if: matrix.arch == 'x64'
+        run: |
+          set -eux
+          cmake -S native/miniaudio -B native/build-miniaudio -DCMAKE_BUILD_TYPE=Release
+          cmake --build native/build-miniaudio --config Release --parallel
+          cp native/build-miniaudio/libminiaudio.so Zeus.Dsp/runtimes/linux-x64/native/libminiaudio.so
+          ldd Zeus.Dsp/runtimes/linux-x64/native/libminiaudio.so
+
+      - name: Build & stage miniaudio (arm64)
+        if: matrix.arch == 'arm64'
+        run: |
+          # Reuse the aarch64-linux-gnu cross toolchain installed for wdsp
+          # above. No sysroot extras needed: pthread/dl/m come from the
+          # cross libc that ships with gcc-aarch64-linux-gnu.
+          set -eux
+          cmake -S native/miniaudio -B native/build-miniaudio \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++
+          cmake --build native/build-miniaudio --config Release --parallel
+          cp native/build-miniaudio/libminiaudio.so Zeus.Dsp/runtimes/linux-arm64/native/libminiaudio.so
+          file Zeus.Dsp/runtimes/linux-arm64/native/libminiaudio.so
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
