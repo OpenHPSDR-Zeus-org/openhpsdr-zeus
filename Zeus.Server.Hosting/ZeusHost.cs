@@ -267,6 +267,7 @@ public static class ZeusHost
         // rotctld (hamlib rotator daemon) client. BackgroundService with persistent
         // TCP and reconnect-on-failure. Singleton so config/state survive across
         // requests; hosted-service registration runs ExecuteAsync.
+        builder.Services.AddSingleton<RotctldConfigStore>();
         builder.Services.AddSingleton<RotctldService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<RotctldService>());
 

@@ -61,6 +61,7 @@ public sealed class RotctldService : BackgroundService
     private static readonly TimeSpan ReconnectBackoff = TimeSpan.FromSeconds(5);
 
     private readonly ILogger<RotctldService> _log;
+    private readonly RotctldConfigStore _store;
     private readonly SemaphoreSlim _io = new(1, 1);
 
     // Serialised by _io for connection state, lock-free volatile reads for status snapshot.
@@ -81,9 +82,14 @@ public sealed class RotctldService : BackgroundService
     // Signal the loop to reconnect after a config change.
     private readonly SemaphoreSlim _configChanged = new(0, 1);
 
-    public RotctldService(ILogger<RotctldService> log)
+    public RotctldService(ILogger<RotctldService> log, RotctldConfigStore store)
     {
         _log = log;
+        _store = store;
+        // Hydrate config from disk at construction time so GetStatus() returns
+        // the operator's saved host/port even before the loop has run, and
+        // ExecuteAsync's first tick will pick up Enabled=true and reconnect.
+        _config = _store.Get();
     }
 
     public RotctldStatus GetStatus()
@@ -113,6 +119,10 @@ public sealed class RotctldService : BackgroundService
                 Port = next.Port is > 0 and < 65536 ? next.Port : 4533,
                 PollingIntervalMs = Math.Clamp(next.PollingIntervalMs, 100, 10_000),
             };
+            // Persist server-side so other clients (phone, second browser,
+            // post-restart sessions) see the same connected state without
+            // needing their own localStorage copy.
+            _store.Set(_config);
             DisconnectLocked();
             lock (_state) { _currentAz = null; _targetAz = null; }
             _lastError = null;
