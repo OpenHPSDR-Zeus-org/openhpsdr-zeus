@@ -71,7 +71,14 @@ public sealed class PluginSettingsStore : IDisposable
         {
             lock (_store._lock)
             {
-                var doc = _store.CollectionFor(_pluginId).FindOne(x => x.Key == key);
+                // OrderByDescending on Id: defensive against duplicate rows
+                // for the same Key that may exist from before the SetAsync
+                // dedupe fix below. SetAsync clears them out on next write.
+                var doc = _store.CollectionFor(_pluginId)
+                    .Query()
+                    .Where(x => x.Key == key)
+                    .OrderByDescending(x => x.Id)
+                    .FirstOrDefault();
                 if (doc is null) return Task.FromResult<T?>(default);
                 try
                 {
@@ -90,8 +97,16 @@ public sealed class PluginSettingsStore : IDisposable
             var json = JsonSerializer.Serialize(value, JsonOpts);
             lock (_store._lock)
             {
+                // Upsert by Key (not by LiteDB _id). The old code used
+                // `coll.Upsert(new SettingDoc { ... })` which left Id at 0
+                // and so LiteDB treated every Set as a new row, growing
+                // the collection without bound and stranding the latest
+                // value behind a wall of stale duplicates. DeleteMany +
+                // Insert is atomic under _store._lock and idempotent on
+                // the existing duplicate corpus.
                 var coll = _store.CollectionFor(_pluginId);
-                coll.Upsert(new SettingDoc { Key = key, JsonValue = json });
+                coll.DeleteMany(x => x.Key == key);
+                coll.Insert(new SettingDoc { Key = key, JsonValue = json });
             }
             return Task.CompletedTask;
         }
