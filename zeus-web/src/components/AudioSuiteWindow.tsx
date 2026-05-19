@@ -152,7 +152,7 @@ function ResizeHandle({ edge }: { edge: ResizeEdge }) {
     (e: React.PointerEvent<HTMLDivElement>) => {
       const d = dragRef.current;
       if (!d || d.pointerId !== e.pointerId) return;
-      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* release after capture is best-effort */ }
       dragRef.current = null;
     },
     [],
@@ -187,10 +187,11 @@ function shortLabelFor(pluginId: string, panelTitle: string): string {
     case 'com.openhpsdr.zeus.samples.exciter':    return 'EXCITER';
     case 'com.openhpsdr.zeus.samples.bass':       return 'BASS';
     case 'com.openhpsdr.zeus.samples.reverb':     return 'REVERB';
-    default:
+    default: {
       if (panelTitle && panelTitle.length > 0) return panelTitle.toUpperCase();
       const seg = pluginId.split('.').pop() ?? pluginId;
       return seg.toUpperCase().slice(0, 8);
+    }
   }
 }
 
@@ -338,7 +339,7 @@ export function AudioSuiteWindow() {
     (e: React.PointerEvent<HTMLDivElement>) => {
       const ds = dragStateRef.current;
       if (!ds || ds.pointerId !== e.pointerId) return;
-      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* release after capture is best-effort */ }
       dragStateRef.current = null;
       setDragging(false);
     },
