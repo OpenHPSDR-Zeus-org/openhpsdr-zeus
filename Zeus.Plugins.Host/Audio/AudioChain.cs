@@ -81,6 +81,47 @@ public sealed class AudioChain : IAsyncDisposable
     /// </summary>
     public void Process(ReadOnlySpan<float> input, Span<float> output, AudioBlockContext ctx)
     {
+        // Field-backed scratch — appropriate for the single-tap WDSP TX
+        // path that has historically been the only caller. A second tap
+        // (e.g. NativeMicCapture's pre-MOX preview) MUST use the caller-
+        // supplied-scratch overload below with its own private scratch
+        // span so the two paths never collide on _scratch if they ever
+        // race at a MOX edge.
+        var needed = ctx.Frames * ctx.Channels;
+        if (needed > _scratch.Length)
+        {
+            // Block bigger than we sized for — fall back to safe pass-through
+            // before we touch the scratch overload (which would refuse a
+            // smaller scratch the same way).
+            if (output.Length < input.Length)
+                throw new ArgumentException("output too small", nameof(output));
+            input.CopyTo(output);
+            return;
+        }
+        Process(input, output, _scratch.AsSpan(0, needed), ctx);
+    }
+
+    /// <summary>
+    /// Caller-supplied-scratch overload. Behaviour matches
+    /// <see cref="Process(ReadOnlySpan{float}, Span{float}, AudioBlockContext)"/>
+    /// bit-for-bit when invoked with the field-backed scratch — used by
+    /// the field-backed overload as its implementation. Exists so a
+    /// second tap point (the desktop-mode pre-MOX preview path in
+    /// <c>AudioPluginBridge.ProcessLivePreview</c>) can run the chain
+    /// without touching the WDSP TX path's <c>_scratch</c>. The two
+    /// callers are gated mutually-exclusive in time by their MOX /
+    /// monitor checks; the separate scratch protects against the
+    /// microsecond-scale overlap window at a MOX edge.
+    ///
+    /// <paramref name="scratch"/> must be at least <c>ctx.Frames *
+    /// ctx.Channels</c> samples long.
+    /// </summary>
+    public void Process(
+        ReadOnlySpan<float> input,
+        Span<float> output,
+        Span<float> scratch,
+        AudioBlockContext ctx)
+    {
         if (output.Length < input.Length)
             throw new ArgumentException("output too small", nameof(output));
 
@@ -91,15 +132,16 @@ public sealed class AudioChain : IAsyncDisposable
         }
 
         var needed = ctx.Frames * ctx.Channels;
-        if (needed > _scratch.Length)
+        if (scratch.Length < needed)
         {
-            // Block bigger than we sized for — fall back to safe pass-through
+            // Caller-supplied scratch too small — pass through rather
+            // than corrupt unrelated memory.
             input.CopyTo(output);
             return;
         }
 
         // Seed the chain by copying input into output; subsequent stages
-        // ping-pong between `output` and `_scratch`.
+        // ping-pong between `output` and `scratch`.
         input.CopyTo(output);
 
         // Track which buffer (output vs scratch) is the most-recently-written
@@ -114,16 +156,16 @@ public sealed class AudioChain : IAsyncDisposable
             if (plugin is null || slot.Bypassed) continue;
 
             if (currentIsOutput)
-                plugin.Process(output[..needed], _scratch.AsSpan(0, needed), ctx);
+                plugin.Process(output[..needed], scratch[..needed], ctx);
             else
-                plugin.Process(_scratch.AsSpan(0, needed), output[..needed], ctx);
+                plugin.Process(scratch[..needed], output[..needed], ctx);
 
             currentIsOutput = !currentIsOutput;
         }
 
         if (!currentIsOutput)
         {
-            _scratch.AsSpan(0, needed).CopyTo(output);
+            scratch[..needed].CopyTo(output);
         }
     }
 

@@ -64,6 +64,27 @@ public static class ZeusEndpoints
             return Results.Ok(new { supported = true, muted = sink.IsMuted });
         });
 
+        // Audio Suite audition toggle — when on, the audio plugin chain's
+        // output (the operator's mic through EQ / Comp / Exciter / Bass /
+        // Reverb / future plugins) is mixed into the same RX playback path
+        // so the operator can hear the chain's effect on their voice without
+        // keying the radio. Pairs with the live pre-MOX meter tap; both
+        // require the same NativeMicCapture → AudioPluginBridge.ProcessLivePreview
+        // path to be running. Browser mode reports supported=false (audition
+        // is desktop-only in v1).
+        app.MapGet("/api/audio-suite/audition", (IAuditionAudioSink audition) =>
+        {
+            bool supported = audition is not NoOpAuditionAudioSink;
+            return Results.Ok(new { supported, enabled = audition.IsEnabled });
+        });
+        app.MapPut("/api/audio-suite/audition", (AuditionSetRequest body, IAuditionAudioSink audition) =>
+        {
+            if (audition is NoOpAuditionAudioSink)
+                return Results.NotFound(new { error = "audition not available in this host mode" });
+            audition.SetEnabled(body.Enabled);
+            return Results.Ok(new { supported = true, enabled = audition.IsEnabled });
+        });
+
         app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 
         // TX diagnostic — exposes the producer/consumer counts for the mic-to-IQ ring
@@ -1277,3 +1298,4 @@ public static class ZeusEndpoints
 }
 
 internal sealed record NativeMuteRequest(bool Muted);
+internal sealed record AuditionSetRequest(bool Enabled);
