@@ -28,9 +28,10 @@
 [Setup]
 ; AppId pinned to the historical service-mode AppId so this installer
 ; upgrades existing service-mode installs in place. Operators who had the
-; separate "Zeus Desktop" edition (AppId B23E7F4A-...) keep that install
-; alongside the new combined product until they uninstall it manually from
-; Settings → Apps; the release notes call this out.
+; separate "Zeus Desktop" edition (AppId B23E7F4A-...) or one of the
+; legacy stray AppIds (8F2E3B1C-...4D) used by a short-lived prerelease are
+; silently uninstalled by the [Code] section below before install proceeds,
+; so the upgrader is not left with two Zeus entries in Settings → Apps.
 AppId={{8F2E3B1C-9A4D-4E6F-B7C3-1D5A9E8F2B4C}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
@@ -83,6 +84,54 @@ Name: "{autodesktop}\{#MyAppShortName} Server"; Filename: "{app}\{#MyAppExeName}
 Filename: "{app}\{#MyAppExeName}"; Parameters: "--desktop"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
 
 [Code]
+// Legacy AppIds shipped by earlier Zeus installers. We silently uninstall
+// any present before the new files are laid down so the operator does not
+// end up with multiple "Zeus" / "Zeus Desktop" entries in Settings → Apps.
+//   B23E7F4A-1C8D-4DB6-9E5F-3A8C2B7D4E91 — old standalone "Zeus Desktop" build
+//   8F2E3B1C-9A4D-4E6F-B7C3-1D5A9E8F2B4D — typo'd AppId used by one prerelease
+// The current AppId (...B4C) is owned by THIS installer — never uninstall it,
+// or Inno will undo what it just installed.
+const
+  LegacyAppId_Desktop = '{B23E7F4A-1C8D-4DB6-9E5F-3A8C2B7D4E91}_is1';
+  LegacyAppId_Typo    = '{8F2E3B1C-9A4D-4E6F-B7C3-1D5A9E8F2B4D}_is1';
+
+function GetUninstallString(const AppId: String): String;
+var
+  RegPath: String;
+  Value: String;
+begin
+  Result := '';
+  RegPath := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\' + AppId;
+  // Per-user installs land under HKCU; per-machine under HKLM (both 32- and
+  // 64-bit views). PrivilegesRequired=lowest means most installs are HKCU,
+  // but we check both so an operator who once ran the installer elevated
+  // still gets cleaned up.
+  if RegQueryStringValue(HKCU, RegPath, 'QuietUninstallString', Value) then
+    Result := Value
+  else if RegQueryStringValue(HKCU, RegPath, 'UninstallString', Value) then
+    Result := Value
+  else if RegQueryStringValue(HKLM, RegPath, 'QuietUninstallString', Value) then
+    Result := Value
+  else if RegQueryStringValue(HKLM, RegPath, 'UninstallString', Value) then
+    Result := Value;
+end;
+
+procedure UninstallLegacy(const AppId: String);
+var
+  UninstallCmd: String;
+  ResultCode: Integer;
+begin
+  UninstallCmd := GetUninstallString(AppId);
+  if UninstallCmd = '' then
+    Exit;
+  // Inno's UninstallString quotes the exe; pass the flags as the parameter
+  // half. /VERYSILENT suppresses UI, /SUPPRESSMSGBOXES eats the "really?"
+  // prompt, /NORESTART keeps us from rebooting the operator mid-install.
+  UninstallCmd := RemoveQuotes(UninstallCmd);
+  Exec(UninstallCmd, '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART',
+       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
 procedure InitializeWizard;
 begin
   WizardForm.LicenseAcceptedRadio.Checked := True;
@@ -95,5 +144,17 @@ begin
   begin
     MsgBox('This application requires Windows 64-bit.', mbError, MB_OK);
     Result := False;
+  end;
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  // ssInstall fires after the wizard has confirmed install but before files
+  // are copied — the right window to evict prior installs so their files
+  // don't linger on disk next to ours.
+  if CurStep = ssInstall then
+  begin
+    UninstallLegacy(LegacyAppId_Desktop);
+    UninstallLegacy(LegacyAppId_Typo);
   end;
 end;

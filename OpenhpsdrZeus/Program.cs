@@ -77,11 +77,32 @@ using Zeus.Server;
 
 public partial class Program
 {
+    // OpenhpsdrZeus.csproj defaults to OutputType=Exe (console subsystem) so that
+    // headless service mode keeps a usable banner / log on stdout. On Windows that
+    // also means a console window pops up alongside the Photino frame in --desktop
+    // and --server modes, which operators (correctly) read as "why is there a
+    // backend log spamming behind my UI?". FreeConsole detaches the inherited
+    // console from this process, hiding the window without affecting Kestrel,
+    // Photino, or any redirected output. It's a no-op on macOS / Linux (the
+    // P/Invoke target does not exist), so the call is guarded by an OS check.
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool FreeConsole();
+
+    private static void HideConsoleOnWindows()
+    {
+        if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+        {
+            FreeConsole();
+        }
+    }
+
     [STAThread]
     public static int Main(string[] args)
     {
         if (args.Contains("--desktop"))
         {
+            HideConsoleOnWindows();
             return RunDesktop(args);
         }
 
@@ -92,6 +113,7 @@ public partial class Program
             // place to read the LAN URL and a Stop Zeus button. Headless
             // deploys (Docker, Pi) keep using the no-flag path and never
             // load Photino.
+            HideConsoleOnWindows();
             return RunServerWithStatus(args);
         }
 

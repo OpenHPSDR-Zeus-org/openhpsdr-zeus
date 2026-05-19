@@ -97,8 +97,9 @@ fi
 # directly) so we can pin DYLD_LIBRARY_PATH before the .NET runtime loads
 # libwdsp.dylib. CFBundleIdentifier reuses the historical service-mode ID
 # (com.ei6lf.zeus) so existing service-mode .app installs upgrade in
-# place. The older "com.ei6lf.zeus.desktop" bundle ID is dropped — users
-# with that .app must Trash it manually; release notes call this out.
+# place. The older "com.ei6lf.zeus.desktop" bundle ID is detected and
+# moved to the Trash by launch.sh on next start — see the cleanup block
+# in the launcher below.
 cat > "${APP_BUNDLE}/Contents/Info.plist" << EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -168,6 +169,24 @@ cd "$(dirname "$0")"
 # arm64 and x64 builds; the loader silently skips a path that does not
 # exist.
 export DYLD_LIBRARY_PATH="$(pwd)/runtimes/osx-arm64/native:$(pwd)/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
+
+# Evict legacy app bundles left behind by older installers:
+#   /Applications/Zeus Desktop.app   — pre-unified standalone (com.ei6lf.zeus.desktop)
+#   /Applications/Zeus.app           — pre-rename unified app (renamed to "OpenHPSDR Zeus.app")
+#   /Applications/Zeus Server.app    — pre-rename server wrapper
+# We move each to the Trash via Finder so the operator can recover if they
+# really wanted to keep it. Runs at every launch but is effectively a no-op
+# once the files are gone — the `-d` check is the only cost. We deliberately
+# do NOT evict "/Applications/OpenHPSDR Zeus.app" or
+# "/Applications/OpenHPSDR Zeus Server.app" — those are the current bundles.
+for legacy in \
+    "/Applications/Zeus Desktop.app" \
+    "/Applications/Zeus.app" \
+    "/Applications/Zeus Server.app"; do
+    if [ -d "${legacy}" ]; then
+        osascript -e "tell application \"Finder\" to delete POSIX file \"${legacy}\"" >/dev/null 2>&1 || true
+    fi
+done
 
 exec ./OpenhpsdrZeus --desktop
 EOF

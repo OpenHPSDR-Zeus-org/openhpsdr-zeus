@@ -204,6 +204,28 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APPS_DIR="${HOME}/.local/share/applications"
 mkdir -p "${APPS_DIR}"
+
+# Evict any pre-existing .desktop entries whose Exec= still points at a
+# previous Zeus extraction directory. Without this the user ends up with
+# duplicate menu entries — one for the new install path and one for the
+# stale one — and clicks on the stale one launch nothing. We also flag
+# orphaned binaries at the old path so the operator can rm them by hand.
+for f in zeus-desktop.desktop zeus-server.desktop; do
+    existing="${APPS_DIR}/${f}"
+    if [ -f "${existing}" ]; then
+        old_exec=$(grep -E '^Exec=' "${existing}" | head -1 | sed 's/^Exec=//')
+        old_dir=$(dirname "${old_exec}" 2>/dev/null || echo "")
+        if [ -n "${old_dir}" ] && [ "${old_dir}" != "${SCRIPT_DIR}" ]; then
+            echo "removing stale entry ${existing} (was pointing at ${old_dir})"
+            if [ -d "${old_dir}" ] && [ -x "${old_dir}/OpenhpsdrZeus" ]; then
+                echo "  NOTE: an older Zeus install is still on disk at ${old_dir}"
+                echo "        rm -rf '${old_dir}' once you're satisfied the new install works."
+            fi
+            rm -f "${existing}"
+        fi
+    fi
+done
+
 for f in zeus-desktop.desktop zeus-server.desktop; do
     sed "s|__ZEUS_DIR__|${SCRIPT_DIR}|g" "${SCRIPT_DIR}/${f}" > "${APPS_DIR}/${f}"
     chmod +x "${APPS_DIR}/${f}"
