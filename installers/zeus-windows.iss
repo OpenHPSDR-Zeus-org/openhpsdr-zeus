@@ -56,26 +56,25 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "desktopicon";       Description: "{cm:CreateDesktopIcon} (Zeus)";       GroupDescription: "{cm:AdditionalIcons}"
+Name: "desktopiconserver"; Description: "Create a &server-mode desktop icon (Zeus Server)"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
 Source: "..\OpenhpsdrZeus\bin\Release\net10.0\win-{#Arch}\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-; The .cmd launcher hosts server mode in a console window so the LAN bind
-; banner is visible. Desktop mode opens its own Photino window and needs no
-; launcher.
-Source: "zeus-windows-launcher.cmd"; DestDir: "{app}"; DestName: "zeus-server.cmd"; Flags: ignoreversion
 
 [Icons]
 ; Two Start Menu shortcuts under the "Openhpsdr Zeus" group:
-;   1. "Openhpsdr Zeus" — desktop edition (Photino window, --desktop flag)
-;   2. "Openhpsdr Zeus Server" — service edition (LAN bind, browser UI)
-; The desktop shortcut is the default first-run target (no console window).
-; Server shortcut points at the .cmd launcher so the LAN URL + console
-; banner remain visible to the operator.
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--desktop"; IconFilename: "{app}\{#MyAppExeName}"
-Name: "{group}\{#MyAppName} Server"; Filename: "{app}\zeus-server.cmd"; IconFilename: "{app}\{#MyAppExeName}"
+;   1. "Openhpsdr Zeus"       — desktop edition (Photino window, --desktop flag)
+;   2. "Openhpsdr Zeus Server" — server edition (LAN bind, Photino status
+;                                window with URLs + Stop button, --server flag)
+; Both desktop icons are tasks the operator opts into. The desktop-mode
+; checkbox is on by default; server-mode is unchecked so the typical
+; first-time installer doesn't auto-create both icons.
+Name: "{group}\{#MyAppName}";        Filename: "{app}\{#MyAppExeName}"; Parameters: "--desktop"; IconFilename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName} Server"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--server";  IconFilename: "{app}\{#MyAppExeName}"
 Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppShortName}"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--desktop"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppShortName}";        Filename: "{app}\{#MyAppExeName}"; Parameters: "--desktop"; IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#MyAppShortName} Server"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--server";  IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopiconserver
 
 [Run]
 ; Post-install launch lands the operator in the desktop window — no console,

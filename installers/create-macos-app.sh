@@ -1,12 +1,17 @@
 #!/bin/bash
-# Build Zeus.app (single binary, desktop default) and a drag-to-install DMG
-# for macOS.
+# Build Zeus.app + Zeus Server.app (two-icon install) and a drag-to-install
+# DMG for macOS.
 # Usage: ./create-macos-app.sh <version> <arch>
 # Example: ./create-macos-app.sh 0.4.1 arm64
 #
-# The shipped binary (OpenhpsdrZeus) serves both launch modes:
-#   - default click on Zeus.app   → Photino native window (--desktop)
-#   - Terminal: openhpsdr-zeus-server → LAN-bound HTTP service on :6060
+# Two desktop icons ship in the DMG:
+#   - Zeus.app           → Photino native window (--desktop). Full app.
+#   - Zeus Server.app    → service mode + small Photino status window
+#                          (--server). Thin wrapper that exec's Zeus.app's
+#                          OpenhpsdrZeus binary; requires Zeus.app in
+#                          /Applications. Headless Terminal users can still
+#                          invoke Zeus.app's binary with no flags or the
+#                          openhpsdr-zeus-server helper.
 #
 # CI calls this after `dotnet publish OpenhpsdrZeus/...` has already
 # populated PUBLISH_DIR. If invoked locally with no prior publish (e.g. a
@@ -186,6 +191,96 @@ chmod +x "${APP_BUNDLE}/Contents/Resources/openhpsdr-zeus-server"
 
 echo "App bundle created at ${APP_BUNDLE}"
 
+# --- Zeus Server.app (thin wrapper) -------------------------------------
+#
+# Second drag-to-install icon that runs the same Zeus binary in --server
+# mode (Photino status window + LAN HTTP/HTTPS bind + Stop button). The
+# wrapper bundle is tiny — just an Info.plist, the shared icns, and a
+# launch.sh that exec's Zeus.app's OpenhpsdrZeus with --server. This
+# keeps the DMG roughly the same size as the single-app DMG (only ~100KB
+# added) while giving operators a discoverable "Server" icon in
+# /Applications. The wrapper requires Zeus.app to live at /Applications/
+# Zeus.app — the launch.sh shows an osascript dialog if it isn't there,
+# matching the drag-to-install model on the DMG window.
+SERVER_APP_NAME="Zeus Server.app"
+SERVER_APP_BUNDLE="${OUTPUT_DIR}/${SERVER_APP_NAME}"
+rm -rf "${SERVER_APP_BUNDLE}"
+mkdir -p "${SERVER_APP_BUNDLE}/Contents/MacOS"
+mkdir -p "${SERVER_APP_BUNDLE}/Contents/Resources"
+
+# Reuse the same Zeus.icns so Finder draws the Zeus artwork on both icons.
+if [ -f "${APP_BUNDLE}/Contents/Resources/Zeus.icns" ]; then
+    cp "${APP_BUNDLE}/Contents/Resources/Zeus.icns" \
+       "${SERVER_APP_BUNDLE}/Contents/Resources/Zeus.icns"
+fi
+
+# Distinct bundle ID + name so LaunchServices treats this as a separate
+# app (independent dock entry, separate Cmd-Tab listing). LSMinimumSystemVersion
+# matches Zeus.app since the wrapper's only at-launch dependency is the OS
+# osascript + the Zeus.app binary it exec's.
+cat > "${SERVER_APP_BUNDLE}/Contents/Info.plist" << EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleExecutable</key>
+    <string>launch.sh</string>
+    <key>CFBundleIconFile</key>
+    <string>Zeus</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.ei6lf.zeus.server</string>
+    <key>CFBundleName</key>
+    <string>Zeus Server</string>
+    <key>CFBundleDisplayName</key>
+    <string>Zeus Server</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${VERSION}</string>
+    <key>CFBundleVersion</key>
+    <string>${VERSION}</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleSignature</key>
+    <string>ZESV</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    <key>LSUIElement</key>
+    <false/>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
+    <!-- Same TCC descriptors as Zeus.app — the underlying binary is the
+         same, so the embedded webview still touches enumerateDevices()
+         which probes mic + cam. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Zeus uses the microphone for SSB / digital-mode TX uplink to your radio when you key MOX.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>Zeus does not record video. The OS asks because the embedded webview lists media devices.</string>
+</dict>
+</plist>
+EOF
+
+# Wrapper launcher: find Zeus.app in /Applications, exec its bundled
+# OpenhpsdrZeus with --server. If Zeus.app is missing, show an osascript
+# dialog so the operator knows what to do — this avoids a silent failure
+# when the user only dragged Zeus Server.app from the DMG.
+cat > "${SERVER_APP_BUNDLE}/Contents/MacOS/launch.sh" << 'EOF'
+#!/bin/bash
+ZEUS_APP="/Applications/Zeus.app"
+if [ ! -d "${ZEUS_APP}" ]; then
+    osascript -e 'display dialog "Zeus.app must be installed in /Applications first. Drag Zeus.app from the DMG to your Applications folder, then try Zeus Server again." with title "Zeus Server" with icon caution buttons {"OK"} default button "OK"' >/dev/null 2>&1
+    exit 1
+fi
+APP_MACOS_DIR="${ZEUS_APP}/Contents/MacOS"
+cd "${APP_MACOS_DIR}"
+export DYLD_LIBRARY_PATH="${APP_MACOS_DIR}/runtimes/osx-arm64/native:${APP_MACOS_DIR}/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
+exec ./OpenhpsdrZeus --server
+EOF
+chmod +x "${SERVER_APP_BUNDLE}/Contents/MacOS/launch.sh"
+
+echo "Server wrapper bundle created at ${SERVER_APP_BUNDLE}"
+
 # --- Codesigning hook (opt-in) ------------------------------------------
 #
 # Ad-hoc signing or Developer ID signing happens here. Default behaviour
@@ -204,6 +299,11 @@ if [ -n "${APPLE_DEVELOPER_ID:-}" ]; then
     codesign --force --deep --options runtime --timestamp \
         --sign "${APPLE_DEVELOPER_ID}" "${APP_BUNDLE}"
     codesign --verify --verbose=2 "${APP_BUNDLE}"
+    # Sign Zeus Server.app too — Gatekeeper otherwise pops a separate
+    # "unidentified developer" prompt for the wrapper.
+    codesign --force --deep --options runtime --timestamp \
+        --sign "${APPLE_DEVELOPER_ID}" "${SERVER_APP_BUNDLE}"
+    codesign --verify --verbose=2 "${SERVER_APP_BUNDLE}"
 else
     echo "(unsigned — set APPLE_DEVELOPER_ID to enable codesigning)"
 fi
@@ -217,13 +317,15 @@ echo "Creating DMG..."
 rm -f "${DMG_PATH}"
 
 # Stage DMG contents:
-#   Zeus.app                — the app
+#   Zeus.app                — full Photino desktop app
+#   Zeus Server.app         — thin wrapper, opens --server status window
 #   Applications -> /Applications  — drag-to-install target
 #   README.txt              — xattr / first-launch instructions
 DMG_TEMP="${OUTPUT_DIR}/dmg_temp"
 rm -rf "${DMG_TEMP}"
 mkdir -p "${DMG_TEMP}"
 cp -R "${APP_BUNDLE}" "${DMG_TEMP}/"
+cp -R "${SERVER_APP_BUNDLE}" "${DMG_TEMP}/"
 ln -s /Applications "${DMG_TEMP}/Applications"
 
 cat > "${DMG_TEMP}/README.txt" << 'EOF'
@@ -231,7 +333,11 @@ Openhpsdr Zeus for macOS
 ========================
 
 INSTALL
-  Drag Zeus.app onto the Applications shortcut in this window.
+  Drag BOTH Zeus.app and Zeus Server.app onto the Applications shortcut
+  in this window. Zeus Server.app is a small wrapper around Zeus.app
+  and won't work without Zeus.app installed.
+
+  If you only want the desktop app, dragging Zeus.app alone is fine.
 
 FIRST LAUNCH (important — Zeus is not signed)
   Zeus is distributed without an Apple Developer ID, so macOS Gatekeeper
@@ -239,6 +345,7 @@ FIRST LAUNCH (important — Zeus is not signed)
   Terminal and run:
 
       xattr -cr /Applications/Zeus.app
+      xattr -cr "/Applications/Zeus Server.app"
 
   Then launch Zeus from Applications.
 
@@ -246,29 +353,37 @@ FIRST LAUNCH (important — Zeus is not signed)
       System Settings -> Privacy & Security
   and click "Open Anyway".
 
-WHAT HAPPENS WHEN YOU LAUNCH
-  Double-clicking Zeus.app opens a native window. There is no browser
-  tab, no separate server process to manage — the radio backend runs
-  in-process inside the same window. Closing the window stops Zeus
-  completely.
+THE TWO ICONS
 
-RUNNING IN SERVER MODE (LAN / remote / phone access)
-  To run Zeus as a LAN-bound HTTP service (so you can connect to it
-  from another machine on the same network, e.g. your phone), open
-  Terminal and run:
+  Zeus.app           Full native window. The radio backend runs
+                     in-process inside the same window. Closing the
+                     window stops Zeus completely. This is the right
+                     choice for most operators.
 
-      /Applications/Zeus.app/Contents/Resources/openhpsdr-zeus-server
+  Zeus Server.app    Backend-only mode for LAN / remote / phone access.
+                     Opens a small status window showing the URLs to
+                     connect to from a browser, with a Stop Zeus button.
+                     Connect from this Mac at http://localhost:6060 or
+                     from another device at http://<your-mac>:6060.
+                     HTTPS uses a self-signed certificate — accept the
+                     browser warning on first connect.
 
-  This binds Zeus to port 6060 on all interfaces. Open
-  http://<your-mac>:6060 in any browser on the LAN. Ctrl-C in the
-  Terminal window stops the server.
+HEADLESS / CLI USE
+  If you're running Zeus on a headless Mac (no display, e.g. an mac mini
+  in a closet), use Terminal:
+
+      /Applications/Zeus.app/Contents/MacOS/OpenhpsdrZeus
+
+  This is the no-window service mode. Identical to Zeus Server.app's
+  backend but without the status window. Closing the Terminal (or
+  Ctrl-C) stops the server.
 
 FIRST RUN — WDSP WISDOM
   The first launch builds an FFTW "wisdom" cache and can take 1-3
   minutes. The window will load, but do NOT click Discover/Connect
   until the wisdom build settles. Subsequent launches are instant.
 
-More info: https://github.com/brianbruff/openhpsdr-zeus
+More info: https://github.com/Kb2uka/openhpsdr-zeus
 EOF
 
 hdiutil create -volname "Openhpsdr Zeus v${VERSION}" \

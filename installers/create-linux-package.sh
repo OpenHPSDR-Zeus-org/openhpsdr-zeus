@@ -4,16 +4,20 @@
 # Example: ./create-linux-package.sh 0.4.1
 #
 # Tarball contents:
-#   OpenhpsdrZeus              — the single binary (serves both modes)
-#   openhpsdr-zeus             — service-mode launcher (LAN HTTP + browser)
+#   OpenhpsdrZeus              — the single binary (serves three modes)
+#   openhpsdr-zeus             — service-mode launcher (LAN HTTP + browser
+#                                auto-open, no GUI status window)
 #   openhpsdr-zeus-desktop     — desktop-mode launcher (Photino window)
+#   openhpsdr-zeus-server      — server-mode launcher (Photino status
+#                                window with URLs + Stop button, --server)
+#   zeus-desktop.desktop       — XDG entry template for the Photino app
+#   zeus-server.desktop        — XDG entry template for the server icon
 #   wwwroot/, runtimes/, …     — bundled .NET runtime, native libs, SPA
 #
-# Operators who want service mode run `./openhpsdr-zeus`. Operators who
-# want a native window without managing a separate AppImage run
-# `./openhpsdr-zeus-desktop`. The AppImage (create-linux-desktop-appimage.sh)
-# ships separately as a single-file desktop launcher for users who don't
-# want to manage a tarball.
+# Operators install the .desktop entries to ~/.local/share/applications/
+# (or /usr/share/applications/) to get menu entries / desktop icons; see
+# README for the one-liner. The AppImage (create-linux-desktop-appimage.sh)
+# ships separately as a single-file desktop launcher.
 
 set -e
 
@@ -138,27 +142,121 @@ exec ./OpenhpsdrZeus --desktop "$@"
 EOF
 chmod +x "${PACKAGE_DIR}/openhpsdr-zeus-desktop"
 
+# Server-mode launcher — Photino status window with URLs + Stop button.
+# Same as the no-flag service mode (LAN bind + HTTPS) but with a small
+# GUI so a desktop user has a place to read the LAN URL and a stop
+# button. Headless deploys keep using the no-flag service launcher.
+cat > "${PACKAGE_DIR}/openhpsdr-zeus-server" << 'EOF'
+#!/bin/bash
+# Openhpsdr Zeus launcher — server mode (LAN bind + Photino status window).
+# Opens a small native window listing the URLs to connect to and a Stop
+# Zeus button. The full backend (HTTP + HTTPS LAN bind) runs alongside.
+# Requires libwebkit2gtk-4.1-0 (the same Photino dep as desktop mode).
+#
+# For a fully headless service (systemd, Docker, no GUI), invoke
+# ./OpenhpsdrZeus directly with no flag — no Photino, no window.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}"
+
+export LD_LIBRARY_PATH="${SCRIPT_DIR}/runtimes/linux-x64/native:${SCRIPT_DIR}/runtimes/linux-arm64/native:${LD_LIBRARY_PATH}"
+
+exec ./OpenhpsdrZeus --server "$@"
+EOF
+chmod +x "${PACKAGE_DIR}/openhpsdr-zeus-server"
+
+# XDG .desktop entry templates. The Exec= path is rewritten by the
+# install-icons.sh helper below to the operator's actual install dir, so
+# we ship a templated form with a __ZEUS_DIR__ placeholder.
+cat > "${PACKAGE_DIR}/zeus-desktop.desktop" << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=Zeus
+Comment=OpenHPSDR Protocol 1 / Protocol 2 SDR client (native window)
+Exec=__ZEUS_DIR__/openhpsdr-zeus-desktop
+Icon=__ZEUS_DIR__/zeus.png
+Terminal=false
+Categories=HamRadio;AudioVideo;Audio;
+StartupWMClass=Zeus
+EOF
+
+cat > "${PACKAGE_DIR}/zeus-server.desktop" << 'EOF'
+[Desktop Entry]
+Type=Application
+Name=Zeus Server
+Comment=OpenHPSDR Zeus backend with status window and Stop button
+Exec=__ZEUS_DIR__/openhpsdr-zeus-server
+Icon=__ZEUS_DIR__/zeus.png
+Terminal=false
+Categories=HamRadio;AudioVideo;Audio;Network;
+StartupWMClass=Zeus Server
+EOF
+
+# install-icons.sh — one-shot helper that materialises both .desktop
+# entries into ~/.local/share/applications/ with the right Exec= path.
+# Runs once per machine; operators who don't care about menu entries
+# just ignore this and invoke the launchers from the terminal.
+cat > "${PACKAGE_DIR}/install-icons.sh" << 'EOF'
+#!/bin/bash
+# Install Zeus + Zeus Server menu entries for the current user.
+# Idempotent — safe to re-run after every upgrade.
+set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APPS_DIR="${HOME}/.local/share/applications"
+mkdir -p "${APPS_DIR}"
+for f in zeus-desktop.desktop zeus-server.desktop; do
+    sed "s|__ZEUS_DIR__|${SCRIPT_DIR}|g" "${SCRIPT_DIR}/${f}" > "${APPS_DIR}/${f}"
+    chmod +x "${APPS_DIR}/${f}"
+    echo "installed ${APPS_DIR}/${f}"
+done
+# Refresh the desktop database so the new entries show up immediately.
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "${APPS_DIR}" || true
+fi
+echo ""
+echo "Zeus and Zeus Server are now in your application menu."
+echo "To remove them later: rm ${APPS_DIR}/zeus-desktop.desktop ${APPS_DIR}/zeus-server.desktop"
+EOF
+chmod +x "${PACKAGE_DIR}/install-icons.sh"
+
+# Ship the icon next to the launchers so the .desktop entries can resolve
+# Icon= relative to the install dir.
+if [ -f "${REPO_ROOT}/docs/pics/zeus.png" ]; then
+    cp "${REPO_ROOT}/docs/pics/zeus.png" "${PACKAGE_DIR}/zeus.png"
+fi
+
 # Create README
 cat > "${PACKAGE_DIR}/README.txt" << EOF
 Openhpsdr Zeus v${VERSION} for Linux
 
 Installation:
 1. Extract this archive to a location of your choice (e.g., ~/zeus or /opt/zeus)
-2. Run ONE of:
-     ./openhpsdr-zeus           — service mode (LAN HTTP on :6060, opens browser)
+2. (Optional) Add Zeus and Zeus Server to your application menu:
+     ./install-icons.sh
+   This drops two .desktop entries into ~/.local/share/applications/.
+3. Run ONE of:
+     ./openhpsdr-zeus           — service mode (LAN HTTP on :6060, auto-opens
+                                  browser; no GUI window — close terminal to stop)
      ./openhpsdr-zeus-desktop   — desktop mode (native Photino window, no browser)
                                   Requires libwebkit2gtk-4.1-0.
-     ./OpenhpsdrZeus            — raw binary, service mode, no browser auto-open
+     ./openhpsdr-zeus-server    — server mode (LAN bind + small Photino status
+                                  window with the connect URLs and a Stop Zeus
+                                  button). Requires libwebkit2gtk-4.1-0.
+     ./OpenhpsdrZeus            — raw binary, headless service mode (no Photino)
      ./OpenhpsdrZeus --desktop  — raw binary, desktop mode
+     ./OpenhpsdrZeus --server   — raw binary, server mode (with status window)
 
-Service mode is good for:
-- Remote / phone / tablet operation (open http://<host>:6060 from another machine)
-- Headless servers (Pi, NUC) with browser access from elsewhere
-- Multi-machine setups
+Service mode (no flag) is the right choice for:
+- Headless servers (Pi, NUC) — no GUI deps required
+- systemd / Docker units
+- Multi-machine setups where you connect via http://<host>:6060 from elsewhere
 
-Desktop mode is good for:
-- Single-machine local use, no browser tab clutter
-- "Just one window" workflows
+Server mode (--server) is the right choice for:
+- A desktop Linux user who wants the LAN URL on screen + an obvious Stop button
+- Same backend as service mode, plus a small window
+
+Desktop mode (--desktop) is the right choice for:
+- Single-machine local use, "just one Zeus window" workflows
 
 Requirements:
 - Linux x64 system (glibc-based; no system packages required — FFTW3 is

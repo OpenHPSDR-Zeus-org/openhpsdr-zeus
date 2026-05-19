@@ -48,12 +48,20 @@ using Microsoft.Extensions.DependencyInjection;
 using Photino.NET;
 using Zeus.Server;
 
-// Single binary, two modes:
-//   OpenhpsdrZeus              → service mode (LAN HTTP + HTTPS, console banner)
+// Single binary, three modes:
+//   OpenhpsdrZeus              → service mode (LAN HTTP + HTTPS, console banner).
+//                                 Headless-friendly — what a Raspberry-Pi-shack or
+//                                 a Docker container runs.
 //   OpenhpsdrZeus --desktop    → Photino shell (loopback HTTP for the webview,
 //                                 plus LAN HTTPS so a phone can pick up the
 //                                 session while the operator is away from the
-//                                 shack PC — see ShareOverLan)
+//                                 shack PC — see ShareOverLan).
+//   OpenhpsdrZeus --server     → service mode + a small Photino status window
+//                                 showing the bound URLs and a "Stop Zeus" button.
+//                                 What the installer's "Zeus Server" desktop icon
+//                                 launches on macOS / Windows / Linux so the
+//                                 operator can read the LAN URL without hunting
+//                                 for a console window.
 //
 // We use a classic `Main` (not top-level statements) so we can hang [STAThread]
 // off it — Photino on Windows wraps WebView2 (COM), and CoreWebView2 has to be
@@ -75,6 +83,16 @@ public partial class Program
         if (args.Contains("--desktop"))
         {
             return RunDesktop(args);
+        }
+
+        if (args.Contains("--server"))
+        {
+            // Same service-mode backend as the no-flag path, plus a small
+            // Photino status window so the operator on macOS / Linux has a
+            // place to read the LAN URL and a Stop Zeus button. Headless
+            // deploys (Docker, Pi) keep using the no-flag path and never
+            // load Photino.
+            return RunServerWithStatus(args);
         }
 
         return RunService(args).GetAwaiter().GetResult();
@@ -206,6 +224,145 @@ public partial class Program
         window.WaitForClose();
 
         Console.WriteLine("Window closed; stopping backend.");
+        app.StopAsync().GetAwaiter().GetResult();
+        return 0;
+    }
+
+    private static int RunServerWithStatus(string[] args)
+    {
+        // Service-mode backend (LAN bind, HTTPS, banner) PLUS a small Photino
+        // window listing the bound URLs and a Stop button. Same Cocoa/main-thread
+        // discipline as RunDesktop — block synchronously through host startup so
+        // the Photino calls below stay on the main thread.
+        var httpPort = int.TryParse(Environment.GetEnvironmentVariable("ZEUS_PORT"), out var zp) ? zp : 6060;
+        var hostOptions = new ZeusHostOptions
+        {
+            HostMode = ZeusHostMode.Server,
+            HttpPort = httpPort,
+            BindAllInterfaces = true,
+            UseHttpsLanCert = true,
+            PrintConsoleBanner = true,
+        };
+
+        var app = ZeusHost.Build(args, hostOptions);
+        ZeusHost.InitializeAsync(app).GetAwaiter().GetResult();
+        app.StartAsync().GetAwaiter().GetResult();
+
+        // Collect URLs to show the operator. Local always works; LAN entries
+        // depend on whether there's a NIC up.
+        var lanHttpsPort = LanCertificate.GetHttpsPort();
+        var lanIps = LanCertificate.GetLanIps();
+        var lanRows = new System.Text.StringBuilder();
+        if (lanIps.Count > 0)
+        {
+            foreach (var ip in lanIps)
+            {
+                lanRows.Append($"<li><span class='lbl'>LAN HTTP</span><a class='url' href='#' data-url='http://{ip}:{httpPort}'>http://{ip}:{httpPort}</a></li>");
+                lanRows.Append($"<li><span class='lbl'>LAN HTTPS</span><a class='url' href='#' data-url='https://{ip}:{lanHttpsPort}'>https://{ip}:{lanHttpsPort}</a></li>");
+            }
+        }
+        else
+        {
+            lanRows.Append("<li class='muted'>No LAN interfaces detected — local only.</li>");
+        }
+
+        var statusHtml = $@"<!DOCTYPE html>
+<html><head><meta charset='utf-8'><title>Zeus Server</title>
+<style>
+  :root {{
+    --bg-app:#657486; --panel-top:#14161a; --panel-bot:#0e1014;
+    --fg-0:#e8eaed; --fg-1:#d6d8dc; --fg-2:#b8bcc3; --fg-3:#5a5e66;
+    --line-1:#2a2c30; --line-2:#3a3d42; --accent:#4a9eff; --tx:#e63a2b;
+    --power:#ffc93a; --bg-2:#1f2226;
+  }}
+  body {{
+    margin:0; padding:18px 20px; min-height:100vh; box-sizing:border-box;
+    background:var(--bg-app); color:var(--fg-0);
+    font-family:-apple-system, 'Segoe UI', 'Inter', system-ui, sans-serif; font-size:13px;
+  }}
+  .panel {{
+    background:linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+    border:1px solid var(--line-1); border-radius:8px; padding:14px 16px;
+    box-shadow:0 1px 0 rgba(255,255,255,0.04) inset, 0 4px 12px rgba(0,0,0,0.3);
+  }}
+  h1 {{
+    margin:0 0 4px; font-size:14px; font-weight:600; letter-spacing:2px;
+    text-transform:uppercase; color:var(--fg-0);
+    border-bottom:1px solid var(--line-1); padding-bottom:8px;
+    box-shadow:inset 0 2px 0 var(--power), inset 0 3px 8px rgba(255,201,58,0.12);
+  }}
+  .sub {{ font-size:11px; color:var(--fg-2); margin:8px 0 12px; letter-spacing:0.4px; }}
+  ul {{ list-style:none; padding:0; margin:0 0 14px; }}
+  li {{ display:flex; align-items:center; gap:10px; padding:6px 0; border-bottom:1px solid var(--line-1); font-family:'JetBrains Mono', ui-monospace, monospace; font-size:12px; }}
+  li:last-child {{ border-bottom:none; }}
+  .lbl {{ display:inline-block; min-width:96px; font-family:-apple-system, 'Segoe UI', system-ui, sans-serif; font-size:10px; letter-spacing:0.8px; text-transform:uppercase; color:var(--fg-3); }}
+  .url {{ color:var(--accent); text-decoration:none; font-variant-numeric:tabular-nums; }}
+  .url:hover {{ text-decoration:underline; }}
+  .muted {{ color:var(--fg-3); font-style:italic; }}
+  .actions {{ display:flex; justify-content:flex-end; gap:8px; margin-top:6px; }}
+  button {{
+    padding:6px 14px; font-family:-apple-system, system-ui, sans-serif; font-size:11px;
+    font-weight:600; letter-spacing:1.5px; text-transform:uppercase; color:#fff;
+    background:var(--tx); border:1px solid var(--tx); border-radius:3px; cursor:pointer;
+    box-shadow:0 0 8px rgba(230,58,43,0.4), inset 0 1px 0 rgba(255,255,255,0.15);
+  }}
+  button:hover {{ filter:brightness(1.1); }}
+  .hint {{ font-size:10px; color:var(--fg-3); margin-top:10px; line-height:1.5; }}
+</style>
+</head><body>
+<div class='panel'>
+  <h1>Zeus Server</h1>
+  <div class='sub'>Backend is running. Connect from this device or any device on your LAN.</div>
+  <ul>
+    <li><span class='lbl'>This device</span><a class='url' href='#' data-url='http://localhost:{httpPort}'>http://localhost:{httpPort}</a></li>
+    {lanRows}
+  </ul>
+  <div class='actions'><button id='stop'>Stop Zeus</button></div>
+  <div class='hint'>HTTPS uses a self-signed certificate — accept the browser warning on first connect. Closing this window also stops the server.</div>
+</div>
+<script>
+  document.getElementById('stop').addEventListener('click', () => {{
+    if (window.external && window.external.sendMessage) window.external.sendMessage('stop');
+    else window.close();
+  }});
+  // Click-to-copy on any URL row.
+  document.querySelectorAll('a.url').forEach(a => {{
+    a.addEventListener('click', e => {{
+      e.preventDefault();
+      const u = a.getAttribute('data-url');
+      navigator.clipboard.writeText(u);
+      const prev = a.textContent;
+      a.textContent = 'copied ✓';
+      setTimeout(() => a.textContent = prev, 900);
+    }});
+  }});
+</script>
+</body></html>";
+
+        var iconFileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "zeus.ico" : "zeus.png";
+        var iconPath = Path.Combine(AppContext.BaseDirectory, iconFileName);
+
+        var window = new PhotinoWindow()
+            .SetTitle("Zeus Server")
+            .SetUseOsDefaultLocation(false)
+            .SetMinWidth(420)
+            .SetMinHeight(280)
+            .SetSize(520, 360)
+            .SetResizable(true)
+            .Center()
+            .SetIconFile(iconPath)
+            .RegisterWebMessageReceivedHandler((sender, msg) =>
+            {
+                if (msg == "stop" && sender is PhotinoWindow w) w.Close();
+            })
+            .LoadRawString(statusHtml);
+
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; window.Close(); };
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => window.Close();
+
+        window.WaitForClose();
+
+        Console.WriteLine("Status window closed; stopping backend.");
         app.StopAsync().GetAwaiter().GetResult();
         return 0;
     }

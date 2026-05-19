@@ -461,12 +461,15 @@ jobs:
           chmod +x installers/create-linux-desktop-appimage.sh
           installers/create-linux-desktop-appimage.sh ${{ steps.version.outputs.version }}
 
-      - name: Upload Linux Desktop AppImage
+      - name: Upload Linux Desktop + Server AppImages
         if: matrix.config.os == 'linux'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.config.appimage_artifact }}
-          path: installers/output/OpenhpsdrZeus-${{ steps.version.outputs.version }}-linux-x86_64.AppImage
+          # Both AppImages — the desktop one (--desktop default) and the
+          # server one (--server, Photino status window). The glob picks
+          # up both since they share the OpenhpsdrZeus prefix.
+          path: installers/output/OpenhpsdrZeus*-${{ steps.version.outputs.version }}-linux-x86_64.AppImage
           if-no-files-found: error
 
       - name: Build macOS Package
@@ -516,13 +519,18 @@ jobs:
 
           Cross-platform SDR client for OpenHPSDR Protocol-1 and Protocol-2 radios.
 
-          One binary, two launch modes:
+          One binary, three launch modes:
 
-          - **Service mode** (default) — LAN-bound HTTP server on port 6060. Open
-            Zeus in any browser on the same network. Use this for remote / phone /
-            tablet operation, or if you want to run Zeus headless on a Pi or NUC.
-          - **Desktop mode** (`--desktop` flag) — Photino native window, loopback
-            only, no browser tab. Use this for single-machine local operation.
+          - **Headless service** (no flag, default) — LAN-bound HTTP/HTTPS server on
+            port 6060/6443. Console banner only, no GUI. Use this for systemd, Docker,
+            Raspberry Pi, or any headless deploy.
+          - **Server mode** (`--server` flag) — same backend as headless, plus a
+            small Photino status window showing the LAN URLs and a Stop Zeus button.
+            What the new **Zeus Server** desktop icon launches on Windows / macOS /
+            Linux.
+          - **Desktop mode** (`--desktop` flag) — full Photino native window with the
+            web UI inline. Loopback only, no browser tab. Use this for single-machine
+            local operation.
 
           ## Downloads
 
@@ -530,10 +538,14 @@ jobs:
           - **openhpsdr-zeus-${{ steps.version.outputs.version }}-win-x64-setup.exe**
           - **openhpsdr-zeus-${{ steps.version.outputs.version }}-win-arm64-setup.exe**
 
-          The installer drops two Start Menu shortcuts: **Openhpsdr Zeus** (desktop
-          window) and **Openhpsdr Zeus Server** (LAN server with console banner).
-          ARM64 build is native for Surface Pro X / Snapdragon X Elite hosts. .NET
-          10 runtime is bundled — no separate install required.
+          The installer drops two Start Menu shortcuts plus optional desktop
+          icons: **Openhpsdr Zeus** (Photino native window, `--desktop`) and
+          **Openhpsdr Zeus Server** (backend + small status window with the LAN
+          URLs and a Stop Zeus button, `--server`). The desktop-icon checkboxes
+          appear on the installer's "Additional Tasks" page — pick whichever
+          icons you want on the desktop. ARM64 build is native for Surface Pro X
+          / Snapdragon X Elite hosts. .NET 10 runtime is bundled — no separate
+          install required.
 
           Upgrade behaviour: this installer reuses the same AppId as the previous
           service-mode installer, so it upgrades that install in place. If you
@@ -544,12 +556,12 @@ jobs:
           ### macOS (Apple Silicon)
           - **OpenhpsdrZeus-${{ steps.version.outputs.version }}-macos-arm64.dmg**
 
-          Drag `Zeus.app` to Applications. Double-clicking the app launches the
-          desktop window. To run the LAN server from Terminal:
-
-          ```bash
-          /Applications/Zeus.app/Contents/Resources/openhpsdr-zeus-server
-          ```
+          Drag **both** `Zeus.app` and `Zeus Server.app` to Applications.
+          Double-clicking `Zeus.app` opens the Photino desktop window;
+          double-clicking `Zeus Server.app` runs the backend with a small
+          status window showing the LAN URLs and a Stop Zeus button.
+          `Zeus Server.app` is a thin wrapper — drag both, or drag just
+          `Zeus.app` if you only want the desktop window.
 
           Intel Mac builds are no longer published — the `macos-13` runner queue
           on GitHub-hosted Actions is too slow to be practical. Build from source
@@ -560,6 +572,7 @@ jobs:
 
           ```bash
           xattr -cr /Applications/Zeus.app
+          xattr -cr "/Applications/Zeus Server.app"
           ```
 
           This is required because Zeus is not signed by a registered Apple
@@ -567,12 +580,17 @@ jobs:
 
           ### Linux (x64)
           - **openhpsdr-zeus-${{ steps.version.outputs.version }}-linux-x64.tar.gz**
-            — extract and run `./openhpsdr-zeus` (service mode, opens browser) or
-            `./openhpsdr-zeus --desktop` (Photino window). Self-contained .NET
-            runtime + statically-embedded FFTW3.
+            — extract; run `./install-icons.sh` to register Zeus + Zeus Server
+            in the application menu, or invoke any of the three launchers
+            directly: `./openhpsdr-zeus` (headless service), `./openhpsdr-zeus-desktop`
+            (Photino window), `./openhpsdr-zeus-server` (backend + status window).
+            Self-contained .NET runtime + statically-embedded FFTW3.
           - **OpenhpsdrZeus-${{ steps.version.outputs.version }}-linux-x86_64.AppImage**
-            — single-file desktop launcher: `chmod +x` and run. Requires
-            `libwebkit2gtk-4.1-0` (`apt install` / `dnf install`).
+            — single-file Photino desktop launcher: `chmod +x` and run.
+          - **OpenhpsdrZeus-Server-${{ steps.version.outputs.version }}-linux-x86_64.AppImage**
+            — single-file server launcher: backend + status window with the
+            LAN URLs and a Stop Zeus button.
+          - Both AppImages require `libwebkit2gtk-4.1-0` (`apt install` / `dnf install`).
 
           ## Changes
 
