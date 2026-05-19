@@ -205,7 +205,10 @@ export const PANELS: Record<string, PanelDef> = {
     id: 'rotatordial',
     name: 'Rotator Dial',
     category: 'tools',
-    tags: ['rotator', 'compass', 'dial', 'bearing', 'heading', 'azimuth'],
+    // No 'azimuth' tag — that search term scopes to the dedicated Azimuth
+    // Map panel. `bearing` + `heading` already cover the same semantic
+    // for the dial without overlapping that filter.
+    tags: ['rotator', 'compass', 'dial', 'bearing', 'heading'],
     component: RotatorDialPanel,
   },
   dsp: {

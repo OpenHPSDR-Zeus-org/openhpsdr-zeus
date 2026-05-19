@@ -23,8 +23,15 @@ function fmtAz(deg: number | null): string {
 }
 
 export function RotatorDialPanel() {
+  // All read-only state comes from the backend status response, NEVER from
+  // `state.config` — `config` is just the local form-default snapshot from
+  // localStorage. Reading enabled/host from there made any client without a
+  // prior local config (a phone, a fresh browser, a private tab) render
+  // "Rotator disabled" even when the backend was happily talking to rotctld.
+  // Backend persistence (RotctldConfigStore) means the status response is
+  // authoritative for every client; trust it.
   const rotConnected = useRotatorStore((s) => !!s.status?.connected);
-  const rotEnabled = useRotatorStore((s) => s.config.enabled);
+  const rotEnabled = useRotatorStore((s) => !!s.status?.enabled);
   const rotMoving = useRotatorStore((s) => !!s.status?.moving);
   const rotCurrentAz = useRotatorStore((s) => normalizeAz(s.status?.currentAz));
   const rotTargetAz = useRotatorStore((s) => normalizeAz(s.status?.targetAz));

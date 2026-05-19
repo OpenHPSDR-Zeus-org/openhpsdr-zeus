@@ -45,9 +45,14 @@
 import { useRotatorStore } from '../state/rotator-store';
 
 export function RotatorStatusPill() {
-  const config = useRotatorStore((s) => s.config);
   const status = useRotatorStore((s) => s.status);
 
+  // Backend status is authoritative. The `config` field is only the local
+  // form-default mirror from localStorage and is empty on any client that
+  // hasn't gone through the settings flow before — reading `enabled` from
+  // it would render "off" on a fresh phone even when the backend is happily
+  // talking to rotctld.
+  const enabled = !!status?.enabled;
   const connected = !!status?.connected;
   const moving = !!status?.moving;
   const currentAz = status?.currentAz;
@@ -56,7 +61,7 @@ export function RotatorStatusPill() {
   // Pill label mirrors log4ym's feel: off / connecting / NNN° / → NNN°.
   let label: string;
   let pillClass: string;
-  if (!config.enabled) {
+  if (!enabled) {
     label = 'Rotator: off';
     pillClass = 'bg-neutral-800 text-neutral-400 border border-neutral-600/60';
   } else if (!connected) {

@@ -29,8 +29,11 @@ function fmtAz(deg: number | null): string {
 export function RotatorCompassPanel() {
   const home = useQrzStore((s) => s.home);
   const target = useQrzStore((s) => s.lastLookup);
+  // Backend status is authoritative — never read enabled from `state.config`
+  // (that's the local localStorage form-default and is empty on any client
+  // that hasn't run the rotator settings flow before, e.g. a phone).
   const rotConnected = useRotatorStore((s) => !!s.status?.connected);
-  const rotEnabled = useRotatorStore((s) => s.config.enabled);
+  const rotEnabled = useRotatorStore((s) => !!s.status?.enabled);
   const rotMoving = useRotatorStore((s) => !!s.status?.moving);
   const rotCurrentAz = useRotatorStore((s) => normalizeAz(s.status?.currentAz));
   const setAzimuth = useRotatorStore((s) => s.setAzimuth);
