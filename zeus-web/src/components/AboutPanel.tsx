@@ -24,8 +24,11 @@ import { useEffect, useState } from 'react';
 // Release date for the version this build ships against. Bump whenever
 // VersionPrefix in Directory.Build.props bumps. ISO 8601 so toLocaleDateString
 // renders sensibly in any locale.
-const RELEASE_DATE_ISO = '2026-05-16';
-// Note: v0.7.5 is the same-day hotfix for v0.7.4 (PR #351 — TCI dual-feed regression).
+const RELEASE_DATE_ISO = '2026-05-19';
+// Note: v0.8.0 brings the in-process Audio Suite (live meters, audition,
+// reorderable chain), the dual-icon installer (Zeus + Zeus Server with
+// --server status window), Brian's single-binary + native-audio rollup,
+// and Ramon's smoothed-SWR / per-mode trip thresholds.
 
 type VersionInfo = {
   version: string;

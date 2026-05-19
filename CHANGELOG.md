@@ -10,6 +10,74 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.8.0] — 2026-05-19
+
+> **🎉 Headline:** in-process **Audio Suite** with live pre-MOX meters and audition, **dual desktop icons** on every platform (Zeus + Zeus Server with a Photino status window), single-binary Zeus that hosts both modes, and Ramon's smoothed-SWR meter improvements.
+
+### Added — Audio Suite (issue #332)
+
+- **Live pre-MOX meter tap + audition** (#390). Every audio-chain plugin's IN / OUT / GR meters animate continuously with MOX off so you can dial dynamics, gates, and gain staging without going on the air. Toggle **Audition** in the suite-window header to hear the processed chain through your RX playback sink — share-with-receive convention means muting RX mutes audition.
+- **Audio Suite floating window + reorderable chain** (#391). Open it from the new button on TX Audio Tools. Drag tiles at the top to reorder the chain — signal flow really changes when you reorder, not just metadata. `ChainOrderService` with canonical-vs-runtime separation so uninstalled plugins keep their slot for reinstall.
+- **Render tx-audio-tools.chain plugins above CFC** (#373). Audio Suite plugins surface in their own region above the WDSP CFC strip on the TX Audio Tools panel.
+- **One-click Download Audio Suite installer button** (#376). Drops EQ + Compressor + Exciter + Bass + Reverb in a single click via the official Kb2uka plugin registry.
+- **Plugin-settings persistence fix** (#387). LiteDB upsert-by-`_id` bug was silently inserting new rows on every `SetAsync` instead of updating — operator dial-in could revert to defaults across desktop restarts. Now: atomic delete-by-key + insert, with descending-ID read so any pre-fix duplicates resolve to the latest value.
+
+### Added — plugins shipping with this release (Kb2uka/openhpsdr-zeus-plugins)
+
+- **EQ v0.2.0** — Input + Output gain stages plus a live FFT spectrum behind the curve.
+- **NoiseGate v0.1.0** — new plugin. Peak-envelope detector with built-in 3 dB hysteresis, hold timer, asymmetric attack/release gain slew, range knob, output trim. Threshold rail UI with **OPEN / HOLD / CLOSED** state pill.
+- **Bass v0.2.0**, **Exciter v0.2.0**, **Reverb v0.2.0** — IN/OUT gain trims + vertical IN/OUT peak meters retrofitted.
+
+### Added — installers
+
+- **Dual desktop icons on every platform** (#392). Windows / macOS / Linux all ship a **Zeus** icon (full Photino window, `--desktop`) and a **Zeus Server** icon (backend + small Photino status window listing the LAN URLs with a Stop Zeus button, new `--server` flag). Headless service mode (`OpenhpsdrZeus` with no flag) is byte-identical to before — systemd, Docker, and Raspberry Pi deploys unaffected.
+- **Single-binary OpenhpsdrZeus** (#352, **@brianbruff**). Multi-phase rollup that collapsed Zeus.Server + Zeus.Desktop into one executable hosting both modes, vendored miniaudio for native RX sink + TX mic capture without a browser tab, and shipped the desktop-mode audio opt-out path.
+- **Desktop session share over LAN HTTPS** (#363, **@brianbruff**). A phone or laptop on the same network can pick up the desktop session while the operator is away from the shack PC.
+- **Always rebuild SPA before Publish** (#365, fixes #350).
+
+### Added — plugin system foundation (**@brianbruff**)
+
+- **Unified plugin system rebuilt from contracts down** (#368). `Zeus.Plugins.Contracts` with `IBackendPlugin` / `IUiPlugin` / `IAudioPlugin`, in-process VST3 via vendored vst3sdk, `AudioPluginBridge` on the WDSP TX seam, browsable registry pointing at the new plugins repo.
+- **Frontend plugin runtime** (#370) + plugin-panel-tile persistence across layout reparse (#375).
+- **RF2K-S amp extracted to a plugin** (#374) — refactor; behaviour unchanged.
+
+### Added — rotator + mobile + meters (**@brianbruff**)
+
+- **Rotator Dial panel** (#385) — pure compass.
+- **Rotator: persist rotctld config server-side; trust backend status** (#388).
+- **Mobile Tools drawer** (#386) — replaces the old Settings tab with per-tool pages.
+- **Analog meter: radio-aware PO scale + bolder typography** (#381), **2× S-readout grid + locked PO/SWR slots** (#384).
+- **Light-mode improvements + theme saved in DB** (#358), **meter-arc visibility + Add-Meter modal stays open** (#364).
+- **Rotator map: Alt+arrow zoom on hero map; compass map interactive** (#344).
+
+### Fixed — TX meters (**@rampa069**)
+
+- **Smoothed-SWR + per-mode trip thresholds** (#367). Smoothed ADC drives the SWR axis (peak-hold stays for watts); MOX 2.5:1 / 300 ms grace; TUN 6:1 / 500 ms grace.
+
+### Fixed — PureSignal HL2 (**@brianbruff**)
+
+- **Match mi0bot exactly** (#380) — `hw_peak 0.233` and no dance cooldown. Aligns the HL2 PureSignal path with the canonical mi0bot openhpsdr-thetis fork.
+
+### Fixed — TX audio / persistence
+
+- **Gate `NativeMicCapture` behind TCI recency** (#379). Fixes the desktop dual-feed regression from #346 — same family as v0.7.5's hotfix.
+- **Drive + TUN-drive % survive server restart** (#359), **hydrate from server** (#360). Kills the frontend-clobbers-server-on-connect pattern.
+
+### Repo hygiene + docs
+
+- **CODEOWNERS** added (#366) — `* @Kb2uka`.
+- Docs: stale `Zeus.Server` paths updated to `OpenhpsdrZeus` + `Zeus.Server.Hosting` (#383, **@rampa069**).
+
+### Wiki
+
+- New **[Audio Suite](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Audio-Suite)** page — full workflow, audition rules, per-plugin reference (Gate / EQ / Comp / Exciter / Bass / Reverb), gain-staging guide. Linked in the Transmit sidebar.
+
+### Contributors
+
+Huge thanks to **@brianbruff (EI6LF)** for the plugin-system rebuild, the single-binary rollup, LAN-share-over-HTTPS, rotator + mobile + light-theme polish, and the HL2 PureSignal mi0bot alignment. To **@rampa069 (Ramon Martinez)** for the smoothed-SWR fix that ratified the no-G2-bench-access regression-risk case, and for the docs path cleanup as a 3rd-contribution regular. The Audio Suite plugin work, installer dual-icons, and persistence fixes are KB2UKA's.
+
+---
+
 ## [0.7.5] — 2026-05-16
 
 > **🛠 THIS IS A HOTFIX RELEASE FOR v0.7.4.** If you installed v0.7.4 earlier today and heard chopped / intermittent carrier on SSB mic or WSJT-X / JTDX over TCI on the Photino-based **Zeus.Desktop** build, **install v0.7.5 — it's the fix**. Browser-based UI users on v0.7.4 were unaffected. **All v0.7.4 Zeus.Desktop operators should upgrade.**
