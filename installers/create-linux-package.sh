@@ -171,7 +171,7 @@ chmod +x "${PACKAGE_DIR}/openhpsdr-zeus-server"
 cat > "${PACKAGE_DIR}/zeus-desktop.desktop" << 'EOF'
 [Desktop Entry]
 Type=Application
-Name=Zeus
+Name=OpenHPSDR Zeus
 Comment=OpenHPSDR Protocol 1 / Protocol 2 SDR client (native window)
 Exec=__ZEUS_DIR__/openhpsdr-zeus-desktop
 Icon=__ZEUS_DIR__/zeus.png
@@ -183,7 +183,7 @@ EOF
 cat > "${PACKAGE_DIR}/zeus-server.desktop" << 'EOF'
 [Desktop Entry]
 Type=Application
-Name=Zeus Server
+Name=OpenHPSDR Zeus Server
 Comment=OpenHPSDR Zeus backend with status window and Stop button
 Exec=__ZEUS_DIR__/openhpsdr-zeus-server
 Icon=__ZEUS_DIR__/zeus.png

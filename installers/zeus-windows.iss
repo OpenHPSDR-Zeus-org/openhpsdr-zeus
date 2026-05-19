@@ -6,8 +6,8 @@
 ; default (LAN HTTP on :6060, browser-driven UI) and desktop mode when
 ; invoked with --desktop (Photino native window, loopback only).
 
-#define MyAppName "Openhpsdr Zeus"
-#define MyAppShortName "Zeus"
+#define MyAppName "OpenHPSDR-Zeus"
+#define MyAppShortName "OpenHPSDR-Zeus"
 #define MyAppPublisher "Brian Keating (EI6LF) and contributors"
 #define MyAppURL "https://github.com/brianbruff/openhpsdr-zeus"
 #define MyAppExeName "OpenhpsdrZeus.exe"

@@ -34,7 +34,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 PUBLISH_DIR="${REPO_ROOT}/OpenhpsdrZeus/bin/Release/net10.0/osx-${ARCH}/publish"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
-APP_NAME="Zeus.app"
+APP_NAME="OpenHPSDR Zeus.app"
 APP_BUNDLE="${OUTPUT_DIR}/${APP_NAME}"
 ICON_SOURCE="${REPO_ROOT}/docs/pics/zeus.png"
 
@@ -111,9 +111,9 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" << EOF
     <key>CFBundleIdentifier</key>
     <string>com.ei6lf.zeus</string>
     <key>CFBundleName</key>
-    <string>Zeus</string>
+    <string>OpenHPSDR Zeus</string>
     <key>CFBundleDisplayName</key>
-    <string>Zeus</string>
+    <string>OpenHPSDR Zeus</string>
     <key>CFBundleShortVersionString</key>
     <string>${VERSION}</string>
     <key>CFBundleVersion</key>
@@ -180,8 +180,8 @@ chmod +x "${APP_BUNDLE}/Contents/MacOS/launch.sh"
 # LaunchServices — it's a CLI tool, not the app's main executable.
 cat > "${APP_BUNDLE}/Contents/Resources/openhpsdr-zeus-server" << 'EOF'
 #!/bin/bash
-# Run Openhpsdr Zeus in server mode (LAN-bound HTTP on :6060).
-# Usage: /Applications/Zeus.app/Contents/Resources/openhpsdr-zeus-server
+# Run OpenHPSDR Zeus in server mode (LAN-bound HTTP on :6060).
+# Usage: "/Applications/OpenHPSDR Zeus.app/Contents/Resources/openhpsdr-zeus-server"
 APP_MACOS_DIR="$(cd "$(dirname "$0")/../MacOS" && pwd)"
 cd "${APP_MACOS_DIR}"
 export DYLD_LIBRARY_PATH="${APP_MACOS_DIR}/runtimes/osx-arm64/native:${APP_MACOS_DIR}/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
@@ -202,7 +202,7 @@ echo "App bundle created at ${APP_BUNDLE}"
 # /Applications. The wrapper requires Zeus.app to live at /Applications/
 # Zeus.app — the launch.sh shows an osascript dialog if it isn't there,
 # matching the drag-to-install model on the DMG window.
-SERVER_APP_NAME="Zeus Server.app"
+SERVER_APP_NAME="OpenHPSDR Zeus Server.app"
 SERVER_APP_BUNDLE="${OUTPUT_DIR}/${SERVER_APP_NAME}"
 rm -rf "${SERVER_APP_BUNDLE}"
 mkdir -p "${SERVER_APP_BUNDLE}/Contents/MacOS"
@@ -230,9 +230,9 @@ cat > "${SERVER_APP_BUNDLE}/Contents/Info.plist" << EOF
     <key>CFBundleIdentifier</key>
     <string>com.ei6lf.zeus.server</string>
     <key>CFBundleName</key>
-    <string>Zeus Server</string>
+    <string>OpenHPSDR Zeus Server</string>
     <key>CFBundleDisplayName</key>
-    <string>Zeus Server</string>
+    <string>OpenHPSDR Zeus Server</string>
     <key>CFBundleShortVersionString</key>
     <string>${VERSION}</string>
     <key>CFBundleVersion</key>
@@ -267,9 +267,9 @@ EOF
 # when the user only dragged Zeus Server.app from the DMG.
 cat > "${SERVER_APP_BUNDLE}/Contents/MacOS/launch.sh" << 'EOF'
 #!/bin/bash
-ZEUS_APP="/Applications/Zeus.app"
+ZEUS_APP="/Applications/OpenHPSDR Zeus.app"
 if [ ! -d "${ZEUS_APP}" ]; then
-    osascript -e 'display dialog "Zeus.app must be installed in /Applications first. Drag Zeus.app from the DMG to your Applications folder, then try Zeus Server again." with title "Zeus Server" with icon caution buttons {"OK"} default button "OK"' >/dev/null 2>&1
+    osascript -e 'display dialog "OpenHPSDR Zeus.app must be installed in /Applications first. Drag OpenHPSDR Zeus.app from the DMG to your Applications folder, then try OpenHPSDR Zeus Server again." with title "OpenHPSDR Zeus Server" with icon caution buttons {"OK"} default button "OK"' >/dev/null 2>&1
     exit 1
 fi
 APP_MACOS_DIR="${ZEUS_APP}/Contents/MacOS"
@@ -329,25 +329,27 @@ cp -R "${SERVER_APP_BUNDLE}" "${DMG_TEMP}/"
 ln -s /Applications "${DMG_TEMP}/Applications"
 
 cat > "${DMG_TEMP}/README.txt" << 'EOF'
-Openhpsdr Zeus for macOS
+OpenHPSDR Zeus for macOS
 ========================
 
 INSTALL
-  Drag BOTH Zeus.app and Zeus Server.app onto the Applications shortcut
-  in this window. Zeus Server.app is a small wrapper around Zeus.app
-  and won't work without Zeus.app installed.
+  Drag BOTH "OpenHPSDR Zeus.app" and "OpenHPSDR Zeus Server.app" onto
+  the Applications shortcut in this window. "OpenHPSDR Zeus Server.app"
+  is a small wrapper around "OpenHPSDR Zeus.app" and won't work without
+  "OpenHPSDR Zeus.app" installed.
 
-  If you only want the desktop app, dragging Zeus.app alone is fine.
+  If you only want the desktop app, dragging "OpenHPSDR Zeus.app" alone
+  is fine.
 
 FIRST LAUNCH (important — Zeus is not signed)
   Zeus is distributed without an Apple Developer ID, so macOS Gatekeeper
   will block it on first launch. To clear the quarantine flag, open
   Terminal and run:
 
-      xattr -cr /Applications/Zeus.app
-      xattr -cr "/Applications/Zeus Server.app"
+      xattr -cr "/Applications/OpenHPSDR Zeus.app"
+      xattr -cr "/Applications/OpenHPSDR Zeus Server.app"
 
-  Then launch Zeus from Applications.
+  Then launch from Applications.
 
   If you still see a security warning, go to:
       System Settings -> Privacy & Security
@@ -355,28 +357,29 @@ FIRST LAUNCH (important — Zeus is not signed)
 
 THE TWO ICONS
 
-  Zeus.app           Full native window. The radio backend runs
-                     in-process inside the same window. Closing the
-                     window stops Zeus completely. This is the right
-                     choice for most operators.
+  OpenHPSDR Zeus         Full native window. The radio backend runs
+                         in-process inside the same window. Closing the
+                         window stops Zeus completely. This is the right
+                         choice for most operators.
 
-  Zeus Server.app    Backend-only mode for LAN / remote / phone access.
-                     Opens a small status window showing the URLs to
-                     connect to from a browser, with a Stop Zeus button.
-                     Connect from this Mac at http://localhost:6060 or
-                     from another device at http://<your-mac>:6060.
-                     HTTPS uses a self-signed certificate — accept the
-                     browser warning on first connect.
+  OpenHPSDR Zeus Server  Backend-only mode for LAN / remote / phone
+                         access. Opens a small status window showing
+                         the URLs to connect to from a browser, with a
+                         Stop Zeus button. Connect from this Mac at
+                         http://localhost:6060 or from another device
+                         at http://<your-mac>:6060. HTTPS uses a
+                         self-signed certificate — accept the browser
+                         warning on first connect.
 
 HEADLESS / CLI USE
   If you're running Zeus on a headless Mac (no display, e.g. an mac mini
   in a closet), use Terminal:
 
-      /Applications/Zeus.app/Contents/MacOS/OpenhpsdrZeus
+      "/Applications/OpenHPSDR Zeus.app/Contents/MacOS/OpenhpsdrZeus"
 
-  This is the no-window service mode. Identical to Zeus Server.app's
-  backend but without the status window. Closing the Terminal (or
-  Ctrl-C) stops the server.
+  This is the no-window service mode. Identical to OpenHPSDR Zeus
+  Server's backend but without the status window. Closing the Terminal
+  (or Ctrl-C) stops the server.
 
 FIRST RUN — WDSP WISDOM
   The first launch builds an FFTW "wisdom" cache and can take 1-3
@@ -396,4 +399,5 @@ rm -rf "${DMG_TEMP}"
 echo "DMG created at ${DMG_PATH}"
 echo
 echo "NOTE: users must clear the quarantine flag on first launch:"
-echo "  xattr -cr /Applications/Zeus.app"
+echo "  xattr -cr \"/Applications/OpenHPSDR Zeus.app\""
+echo "  xattr -cr \"/Applications/OpenHPSDR Zeus Server.app\""

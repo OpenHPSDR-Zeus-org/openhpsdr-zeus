@@ -75,13 +75,14 @@ page.
 
 ### macOS users — read this before launching
 
-> **⚠️ IMPORTANT: After installing on macOS, run this in Terminal before opening Zeus:**
+> **⚠️ IMPORTANT: After installing on macOS, run these in Terminal before opening Zeus:**
 >
 > ```bash
-> xattr -cr /Applications/Zeus.app
+> xattr -cr "/Applications/OpenHPSDR Zeus.app"
+> xattr -cr "/Applications/OpenHPSDR Zeus Server.app"
 > ```
 >
-> **Without this step, macOS Gatekeeper will refuse to launch Zeus** ("Zeus.app is damaged and can't be opened" or "cannot be opened because the developer cannot be verified"). Zeus is not yet signed by a registered Apple Developer; the command above strips the quarantine attribute so Gatekeeper allows the app to run. This is a one-time step per install.
+> **Without this step, macOS Gatekeeper will refuse to launch Zeus** ("OpenHPSDR Zeus.app is damaged and can't be opened" or "cannot be opened because the developer cannot be verified"). Zeus is not yet signed by a registered Apple Developer; the command above strips the quarantine attribute so Gatekeeper allows the app to run. This is a one-time step per install. Skip the second line if you only installed the desktop app.
 
 ## Building from source
 

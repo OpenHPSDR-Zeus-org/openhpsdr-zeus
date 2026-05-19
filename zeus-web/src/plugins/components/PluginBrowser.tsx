@@ -5,13 +5,14 @@
 // categories and verified-by-Zeus badge. The Install button posts
 // { source: "registry", id, version } to the install endpoint.
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { usePluginsStore } from '../state/plugins-store';
 import type {
   RegistryPluginEntry,
   RegistryPluginVersion,
 } from '../api/plugins';
+import { RestartRequiredModal } from '../../components/RestartRequiredModal';
 
 function latestVersion(
   entry: RegistryPluginEntry,
@@ -89,13 +90,25 @@ function RegistryCard({
   const latest = useMemo(() => latestVersion(entry), [entry]);
   const alreadyInstalled = installedIds.has(entry.id);
 
-  const onInstall = () => {
+  // Restart-required modal — fires after a successful install of THIS
+  // card's plugin. The plugin host registers new endpoints +
+  // AssemblyLoadContexts only at backend startup, so the operator has
+  // to restart Zeus to bring the new install into the live process.
+  // Same modal the Download Audio Suite bundle install uses.
+  const [restartModalOpen, setRestartModalOpen] = useState(false);
+  const [installedDisplayName, setInstalledDisplayName] = useState<string | null>(null);
+
+  const onInstall = async () => {
     if (!latest || installing) return;
-    void install({
+    const dto = await install({
       source: 'registry',
       id: entry.id,
       version: latest.version,
     });
+    if (dto) {
+      setInstalledDisplayName(`${dto.name} v${dto.version}`);
+      setRestartModalOpen(true);
+    }
   };
 
   return (
@@ -183,6 +196,12 @@ function RegistryCard({
           SDK ABI v{latest.sdkAbi} · min v{latest.sdkMinVersion} · platforms{' '}
           {latest.platforms.join(', ')}
         </div>
+      )}
+      {restartModalOpen && (
+        <RestartRequiredModal
+          pluginDisplayName={installedDisplayName ?? entry.name}
+          onClose={() => setRestartModalOpen(false)}
+        />
       )}
     </div>
   );

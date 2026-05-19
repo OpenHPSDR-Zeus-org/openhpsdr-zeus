@@ -83,7 +83,7 @@ fi
 cat > "${APPDIR}/zeus.desktop" << EOF
 [Desktop Entry]
 Type=Application
-Name=Openhpsdr Zeus
+Name=OpenHPSDR Zeus
 GenericName=OpenHPSDR SDR Client
 Comment=Cross-platform HPSDR client (Protocol-1 / Protocol-2)
 Exec=OpenhpsdrZeus --desktop
@@ -191,7 +191,7 @@ chmod +x "${SERVER_APPDIR}/AppRun"
 cat > "${SERVER_APPDIR}/zeus.desktop" << EOF
 [Desktop Entry]
 Type=Application
-Name=Openhpsdr Zeus Server
+Name=OpenHPSDR Zeus Server
 GenericName=OpenHPSDR SDR Backend
 Comment=LAN-bound HPSDR backend with status window and Stop button
 Exec=OpenhpsdrZeus --server

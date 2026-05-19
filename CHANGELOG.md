@@ -21,6 +21,7 @@ see the corresponding GitHub Release page.
 - **Render tx-audio-tools.chain plugins above CFC** (#373). Audio Suite plugins surface in their own region above the WDSP CFC strip on the TX Audio Tools panel.
 - **One-click Download Audio Suite installer button** (#376). Drops EQ + Compressor + Exciter + Bass + Reverb in a single click via the official Kb2uka plugin registry.
 - **Plugin-settings persistence fix** (#387). LiteDB upsert-by-`_id` bug was silently inserting new rows on every `SetAsync` instead of updating — operator dial-in could revert to defaults across desktop restarts. Now: atomic delete-by-key + insert, with descending-ID read so any pre-fix duplicates resolve to the latest value.
+- **Restart-required modal on every plugin install.** The "Please shut down Zeus and restart" dialog that previously fired only after the Download Audio Suite bundle install now also fires after a single-plugin install from the Plugins panel (Settings → Plugins → Browse / Install). New endpoints + AssemblyLoadContexts only register at backend startup, so the operator always gets the same explicit reminder.
 
 ### Added — plugins shipping with this release (Kb2uka/openhpsdr-zeus-plugins)
 

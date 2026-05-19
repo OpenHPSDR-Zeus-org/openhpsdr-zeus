@@ -556,12 +556,12 @@ jobs:
           ### macOS (Apple Silicon)
           - **OpenhpsdrZeus-${{ steps.version.outputs.version }}-macos-arm64.dmg**
 
-          Drag **both** `Zeus.app` and `Zeus Server.app` to Applications.
-          Double-clicking `Zeus.app` opens the Photino desktop window;
-          double-clicking `Zeus Server.app` runs the backend with a small
+          Drag **both** `OpenHPSDR Zeus.app` and `OpenHPSDR Zeus Server.app` to Applications.
+          Double-clicking `OpenHPSDR Zeus.app` opens the Photino desktop window;
+          double-clicking `OpenHPSDR Zeus Server.app` runs the backend with a small
           status window showing the LAN URLs and a Stop Zeus button.
-          `Zeus Server.app` is a thin wrapper — drag both, or drag just
-          `Zeus.app` if you only want the desktop window.
+          `OpenHPSDR Zeus Server.app` is a thin wrapper — drag both, or drag just
+          `OpenHPSDR Zeus.app` if you only want the desktop window.
 
           Intel Mac builds are no longer published — the `macos-13` runner queue
           on GitHub-hosted Actions is too slow to be practical. Build from source
@@ -571,8 +571,8 @@ jobs:
           attribute so Gatekeeper lets Zeus launch:
 
           ```bash
-          xattr -cr /Applications/Zeus.app
-          xattr -cr "/Applications/Zeus Server.app"
+          xattr -cr "/Applications/OpenHPSDR Zeus.app"
+          xattr -cr "/Applications/OpenHPSDR Zeus Server.app"
           ```
 
           This is required because Zeus is not signed by a registered Apple
