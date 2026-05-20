@@ -92,9 +92,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // sets `receiver[i].ddc = i` (not `i + 2` as for Orion/Angelia/MkII).
     private const int HermesRxDdc = 0;
 
-    // 2^32 / 122_880_000 — converts Hz to a 32-bit phase-increment word
-    // when the general packet is in "send phase word" mode (bit 3 of
-    // CmdGeneral[37], which pihpsdr and Thetis both set).
+    // 2^32 / 122_880_000 — converts Hz to a 32-bit phase-increment word.
+    // The HPSDR Protocol-2 receiver mixers always operate on phase-word
+    // input: the upstream HDL wires the host-supplied 32-bit phase
+    // straight into the receiver cores (see `C122_phase_word` in
+    // `Hermes.v:1135` and `Hermes.v:1284`, identical pattern in
+    // `Orion.v`). The "bit 3 of CmdGeneral[37]" mode-select pihpsdr and
+    // Thetis both set has no decoder in `General_CC.v` (and no
+    // secondary decoder elsewhere in `Hermes.v` / `Orion.v` —
+    // verified). Kept for parity with pihpsdr; this constant is the
+    // unconditional Hz→phase scale. Issue #416.
     private const double HzToPhase = 34.952533333333333;
 
     private readonly ILogger<Protocol2Client> _log;
