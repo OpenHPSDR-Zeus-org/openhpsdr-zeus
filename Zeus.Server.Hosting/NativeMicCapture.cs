@@ -120,8 +120,13 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        try { _input?.Stop(); }
+        // Dispose() (ma_device_uninit) rather than Stop() (ma_device_stop): the
+        // latter parks the device but leaves miniaudio's capture worker thread
+        // alive, which holds WASAPI COM references and wedges Windows process
+        // exit. See the matching note on NativeAudioSink.StopAsync.
+        try { _input?.Dispose(); }
         catch (Exception ex) { _log.LogWarning(ex, "audio.native.tx stop threw"); }
+        _input = null;
         return Task.CompletedTask;
     }
 

@@ -180,11 +180,19 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
         return Task.CompletedTask;
     }
 
-    /// <summary>Hosted-service hook: stop the playback device. Idempotent.</summary>
+    /// <summary>Hosted-service hook: tear the playback device down. Idempotent.
+    /// We call Dispose() (ma_device_uninit) rather than Stop() (ma_device_stop)
+    /// because ma_device_stop only parks the device — miniaudio's WASAPI worker
+    /// thread keeps running until ma_device_uninit joins it. Leaving that
+    /// thread alive past StopAsync wedges process shutdown on Windows: the
+    /// worker holds WASAPI COM references that the [STAThread] Main owns, so
+    /// CLR COM-apartment teardown blocks waiting for them and the process
+    /// hangs after the Photino window closes.</summary>
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        try { _output?.Stop(); }
+        try { _output?.Dispose(); }
         catch (Exception ex) { _log.LogWarning(ex, "audio.native.rx stop threw"); }
+        _output = null;
         return Task.CompletedTask;
     }
 
