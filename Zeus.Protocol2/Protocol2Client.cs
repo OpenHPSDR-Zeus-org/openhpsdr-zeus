@@ -1032,7 +1032,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // harmonics. Alex1 additionally gets RX_GNDonTX to short the RX input
         // while keyed, protecting the ADC.
         bool xmit = _moxOn || _tuneActive;
-        uint alexCommon = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: 1);
+        uint alexCommon = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: 1, board: _boardKind);
         uint alex0 = alexCommon | (xmit ? ALEX_TX_RELAY : 0u);
         uint alex1 = alexCommon | (xmit ? ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX : 0u);
         // ALEX_PS_BIT (0x00040000): pihpsdr new_protocol.c:994-998 ORs this
@@ -1102,6 +1102,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // back-feed into the Mercury ADC (pihpsdr alex.h ANAN7000_RX_GNDonTX).
     private const uint ALEX1_ANAN7000_RX_GNDonTX = 0x00000100;
 
+    // Classic Alex RX HPF bits (Hermes / ANAN-10/100/100D/200D / HermesII).
+    // pihpsdr alex.h:78-84. Note these bit positions collide with
+    // ANAN7000 RX BPF bits — they're the same bits in the Alex0 word
+    // but mean DIFFERENT filters depending on which board is connected.
+    // Issue #413.
+    private const uint ALEX_13MHZ_HPF  = 0x00000002;  // bit 1
+    private const uint ALEX_20MHZ_HPF  = 0x00000004;  // bit 2
+    private const uint ALEX_6M_PREAMP  = 0x00000008;  // bit 3 (35 MHz HPF + LNA)
+    private const uint ALEX_9_5MHZ_HPF = 0x00000010;  // bit 4
+    private const uint ALEX_6_5MHZ_HPF = 0x00000020;  // bit 5
+    private const uint ALEX_1_5MHZ_HPF = 0x00000040;  // bit 6
+    private const uint ALEX_BYPASS_HPF = 0x00001000;  // bit 12
+
     /// <summary>
     /// Compose the alex0 word the way <see cref="SendCmdHighPriority"/>
     /// does, exposed internal so wire-format tests can assert the
@@ -1112,20 +1125,27 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         uint rxFreqHz,
         bool moxOn,
         bool psEnabled,
-        bool psExternal)
+        bool psExternal,
+        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)
     {
-        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: 1);
+        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: 1, board: board);
         uint alex0 = alexCommon | (moxOn ? ALEX_TX_RELAY : 0u);
         if (psEnabled && moxOn) alex0 |= AlexPsBit;
         if (psEnabled && psExternal && moxOn) alex0 |= AlexRxAntennaBypass;
         return alex0;
     }
 
-    internal static uint ComputeAlexWord(uint rxFreqHz, uint txFreqHz, int txAnt)
+    internal static uint ComputeAlexWord(uint rxFreqHz, uint txFreqHz, int txAnt, HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)
     {
         uint word = 0;
-        word |= BpfBitsAnan7000(rxFreqHz);
-        word |= LpfBitsAnan7000(txFreqHz);
+        word |= board is HpsdrBoardKind.Hermes or HpsdrBoardKind.HermesII
+            ? BpfBitsClassicAlex(rxFreqHz)
+            : BpfBitsAnan7000(rxFreqHz);
+        // LPF bit positions and band thresholds are identical across both
+        // filter-board generations (classic Alex on Hermes/ANAN-100 vs
+        // ANAN-7000/Saturn BPF board) — confirmed against pihpsdr alex.h
+        // and new_protocol.c. Same call for every board.
+        word |= LpfBits(txFreqHz);
         word |= txAnt switch
         {
             1 => ALEX_TX_ANTENNA_1,
@@ -1138,6 +1158,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     // RX BPF band splits lifted from pihpsdr new_protocol.c
     // (function new_protocol_high_priority, ADC0 BPFfreq selection).
+    // ANAN-7000 / Orion-II / Saturn filter board only — see
+    // BpfBitsClassicAlex for the Hermes / ANAN-100 layout.
     internal static uint BpfBitsAnan7000(uint freqHz)
     {
         if (freqHz <  1_500_000u) return ALEX_ANAN7000_RX_BYPASS_BPF;
@@ -1149,11 +1171,33 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         return ALEX_ANAN7000_RX_6_PRE_BPF;
     }
 
+    // RX HPF band splits for the classic Alex filter board (Hermes,
+    // ANAN-10, ANAN-100, ANAN-100D, ANAN-200D, HermesII / ANAN-10E,
+    // ANAN-100B). Bit positions and thresholds lifted from pihpsdr
+    // alex.h and new_protocol.c:1154-1168. Note these are high-pass
+    // filters (not band-pass like the ANAN-7000 BPF board) — same low
+    // bits in the Alex0 word but different semantic per board.
+    // Issue #413.
+    internal static uint BpfBitsClassicAlex(uint freqHz)
+    {
+        if (freqHz <  1_800_000u) return ALEX_BYPASS_HPF;
+        if (freqHz <  6_500_000u) return ALEX_1_5MHZ_HPF;
+        if (freqHz <  9_500_000u) return ALEX_6_5MHZ_HPF;
+        if (freqHz < 13_000_000u) return ALEX_9_5MHZ_HPF;
+        if (freqHz < 20_000_000u) return ALEX_13MHZ_HPF;
+        if (freqHz < 50_000_000u) return ALEX_20MHZ_HPF;
+        return ALEX_6M_PREAMP;
+    }
+
     // TX LPF band splits. Thresholds match pihpsdr new_protocol.c:1204-1218
     // exactly (strict > rather than >= so the band edges route the way the
     // LPF board expects; off-by-one on a threshold lets the wrong filter
-    // pass harmonics at e.g. 24.9 MHz or 16.4 MHz).
-    internal static uint LpfBitsAnan7000(uint freqHz)
+    // pass harmonics at e.g. 24.9 MHz or 16.4 MHz). Bit positions and
+    // thresholds are identical across classic Alex and ANAN-7000 BPF
+    // boards — only the RX filter selection differs per board. Issue #413
+    // renamed this from LpfBitsAnan7000 to LpfBits to reflect the shared
+    // scope.
+    internal static uint LpfBits(uint freqHz)
     {
         if (freqHz > 35_600_000u) return ALEX_6_BYPASS_LPF;
         if (freqHz > 24_000_000u) return ALEX_12_10_LPF;
