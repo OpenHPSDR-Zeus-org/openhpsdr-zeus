@@ -25,10 +25,11 @@ import { useEffect, useState } from 'react';
 // VersionPrefix in Directory.Build.props bumps. ISO 8601 so toLocaleDateString
 // renders sensibly in any locale.
 const RELEASE_DATE_ISO = '2026-05-19';
-// Note: v0.8.0 brings the in-process Audio Suite (live meters, audition,
-// reorderable chain), the dual-icon installer (Zeus + Zeus Server with
-// --server status window), Brian's single-binary + native-audio rollup,
-// and Ramon's smoothed-SWR / per-mode trip thresholds.
+// Note: v0.8.1 is a same-day hotfix for v0.8.0 — drops the Photino
+// ProcessExit handler that was wedging Windows shutdown and leaving
+// OpenhpsdrZeus.exe lingering in Task Manager. See CHANGELOG for v0.8.0
+// for the bulk of changes (Audio Suite, dual-icon installer, plugin
+// system rebuild, smoothed-SWR, persistence fixes).
 
 type VersionInfo = {
   version: string;

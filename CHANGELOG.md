@@ -10,6 +10,18 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.8.1] — 2026-05-19
+
+> **🛠 THIS IS A SAME-DAY HOTFIX FOR v0.8.0.** If you installed v0.8.0 earlier today and saw `openhpsdrzeus.exe` linger in Task Manager after closing the Zeus window on Windows, **install v0.8.1 — it's the fix**. macOS and Linux operators were not affected; upgrade is still recommended for the cleaner shutdown behaviour. See [0.8.0](#080--2026-05-19) below for the full release feature list — v0.8.1 contains only the fix described here.
+
+### Fixed
+
+- **Windows: OpenhpsdrZeus.exe no longer lingers in Task Manager after closing the desktop window** (#400, **@brianbruff**). v0.8.0 registered an `AppDomain.CurrentDomain.ProcessExit` handler in both `--desktop` and `--server` modes that called `window.Close()`. That event fires *during* exit, after `Main` returned and Photino's native state was being torn down — the handler then re-entered a half-disposed WebView2/COM apartment on the `[STAThread]` main thread, deadlocking for ~30 s. v0.8.1 deletes the handler in two lines: `Console.CancelKeyPress` already handled Ctrl-C translation; `ProcessExit` was never the right hook for shutdown.
+
+  Bench-verified on Windows 11: process exits in ~2.2 s after window close (down from >30 s of hang). Subsequent relaunches no longer pile up orphan processes.
+
+---
+
 ## [0.8.0] — 2026-05-19
 
 > **🎉 Headline:** in-process **Audio Suite** with live pre-MOX meters and audition, **dual desktop icons** on every platform (Zeus + Zeus Server with a Photino status window), single-binary Zeus that hosts both modes, and Ramon's smoothed-SWR meter improvements.
