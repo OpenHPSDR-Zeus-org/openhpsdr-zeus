@@ -700,11 +700,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         p[26] = 16;
         p[27] = 0;
         p[28] = 32;
-        // Matches pihpsdr new_protocol_general for ORION2/SATURN hardware:
-        // [37] bit 3 = phase-word mode (radio reads phase increments at the
-        // DDC-frequency offsets, not raw Hz), [38] = hardware-timer enable,
-        // [58] = PA enable, [59] = Alex0|Alex1 enable (0x03 is required on
-        // MkII for the BPF board to honour the alex bits further down).
+        // Matches pihpsdr new_protocol_general for ORION2/SATURN hardware.
+        //
+        // [37] = 0x08: pihpsdr writes this on ORION2/SATURN. The upstream
+        // HDL `General_CC.v:136-140` (Hermes Protocol-2 v10.7 and
+        // Orion_MkII v2.2.10) only decodes `cmd_data[0]` at byte 37
+        // (Time_stamp/VITA_49/VNA — all driven from the same bit). Bit 3
+        // is NOT read by `General_CC.v`, and the radio is already in
+        // phase-word mode by default — `Hermes.v` / `Orion.v` wire the
+        // host-supplied 32-bit phase word straight into the receiver
+        // mixers (see `C122_phase_word` in Hermes.v line 1135 and 1284).
+        // Kept at 0x08 for parity with pihpsdr; no observable effect on
+        // this gateware revision. Issue #416.
+        //
+        // [38] = 0x01: hardware-timer enable (`HW_timer_enable`, decoded
+        // at `General_CC.v:141`).
         p[37] = 0x08;
         p[38] = 0x01;
         // [58] bit 0 = PA enable (piHPSDR `new_protocol.c:658-677`; Thetis
