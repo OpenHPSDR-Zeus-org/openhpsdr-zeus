@@ -233,12 +233,18 @@ public partial class Program
             .SetIconFile(iconPath)
             .Load(new Uri(startUrl));
 
-        // Translate Ctrl-C / SIGTERM into a window close so `dotnet run` (and the
-        // installer's launcher script) can shut Zeus down without leaving the
-        // Photino native loop blocking the main thread. Without this, signals only
-        // reach Kestrel and the UI loop holds the process open until killed.
+        // Translate Ctrl-C into a window close so `dotnet run` (and the installer's
+        // launcher script) can shut Zeus down without leaving the Photino native
+        // loop blocking the main thread. Without this, signals only reach Kestrel
+        // and the UI loop holds the process open until killed.
+        //
+        // Deliberately NOT hooking AppDomain.CurrentDomain.ProcessExit: that event
+        // fires AFTER Main returns (i.e., after WaitForClose already unblocked and
+        // the PhotinoWindow is gone), so calling window.Close() from it re-enters
+        // a torn-down WebView2/COM apartment on Windows and deadlocks for ~30 s
+        // — which is the "process lingers after window close" symptom users see in
+        // Task Manager.
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; window.Close(); };
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => window.Close();
 
         // WaitForClose blocks the main thread until the user closes the window. On
         // macOS this satisfies Cocoa's "UI on main thread" requirement; Kestrel
@@ -379,8 +385,10 @@ public partial class Program
             })
             .LoadRawString(statusHtml);
 
+        // See RunDesktop for why we don't hook AppDomain.ProcessExit — calling
+        // window.Close() from that event re-enters a torn-down WebView2 apartment
+        // on Windows and stalls process exit for ~30 s after the window closes.
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; window.Close(); };
-        AppDomain.CurrentDomain.ProcessExit += (_, _) => window.Close();
 
         window.WaitForClose();
 
