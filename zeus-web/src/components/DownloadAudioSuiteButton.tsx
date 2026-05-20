@@ -4,9 +4,9 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
-// "Download Audio Suite" — one-click install of the five v1 audio chain
-// plugins (EQ → Compressor → Exciter → Bass → Reverb) from the
-// Kb2uka/openhpsdr-zeus-plugins GitHub releases. The plugin host can't
+// "Download Audio Suite" — one-click install of the six audio chain
+// plugins (Noise Gate → EQ → Compressor → Exciter → Bass → Reverb) from
+// the Kb2uka/openhpsdr-zeus-plugins GitHub releases. The plugin host can't
 // register new endpoints / load new assemblies into the live process, so
 // after install finishes we show a modal telling the operator to restart
 // Zeus. No auto-restart — operator decides.
@@ -28,6 +28,11 @@ interface SuitePlugin {
 
 const AUDIO_SUITE: ReadonlyArray<SuitePlugin> = [
   {
+    id: 'com.openhpsdr.zeus.samples.noisegate',
+    label: 'Noise Gate',
+    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/noisegate-v0.1.0/noisegate-0.1.0.zip',
+  },
+  {
     id: 'com.openhpsdr.zeus.samples.eq',
     label: 'EQ (10-band parametric)',
     url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/eq-v0.2.0/eq-0.2.0.zip',
@@ -40,17 +45,17 @@ const AUDIO_SUITE: ReadonlyArray<SuitePlugin> = [
   {
     id: 'com.openhpsdr.zeus.samples.exciter',
     label: 'Aural-Exciter',
-    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/exciter-v0.1.0/exciter-0.1.0.zip',
+    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/exciter-v0.2.0/exciter-0.2.0.zip',
   },
   {
     id: 'com.openhpsdr.zeus.samples.bass',
     label: 'Bass Enhancer',
-    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/bass-v0.1.0/bass-0.1.0.zip',
+    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/bass-v0.2.0/bass-0.2.0.zip',
   },
   {
     id: 'com.openhpsdr.zeus.samples.reverb',
     label: 'Reverb',
-    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/reverb-v0.1.0/reverb-0.1.0.zip',
+    url: 'https://github.com/Kb2uka/openhpsdr-zeus-plugins/releases/download/reverb-v0.2.0/reverb-0.2.0.zip',
   },
 ];
 
@@ -156,7 +161,7 @@ export function DownloadAudioSuiteButton() {
         className="btn sm active"
         disabled={busy}
         onClick={runInstall}
-        title="Install the five v1 audio chain plugins (EQ, Compressor, Exciter, Bass, Reverb) from the official Zeus plugin repo"
+        title="Install the six audio chain plugins (Noise Gate, EQ, Compressor, Exciter, Bass, Reverb) from the official Zeus plugin repo"
         style={{ marginLeft: 'auto' }}
       >
         {busy ? 'Installing…' : 'Download Audio Suite'}
