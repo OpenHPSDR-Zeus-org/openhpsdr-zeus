@@ -147,6 +147,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // typically drive unconnected hardware. Variant-aware gating is a
     // separable follow-up. Issue #414.
     private byte _dleOutputs;
+    // Second ADC step attenuator (0..31 dB) for ADC1 — bytes the upstream
+    // HDL decodes at `High_Priority_CC.v:186-189` as `Attenuator1`. Used
+    // by operators running dual-RX on dual-ADC boards (Orion_MkII, G2,
+    // Saturn) where RX0/RX1 sit on separate ADCs and need independent
+    // gain. Default 0 dB matches the radio's power-on state; no UI surface
+    // yet, but the wire byte is in place. Issue #415.
+    private byte _rx1StepAttnDb;
     // TX step attenuator (0..31 dB) — Thetis network.c:1238-1242 writes the
     // same value to bytes 57/58/59 of CmdTx (one per ADC tap). The PS
     // auto-attenuate loop adjusts this when info[4] feedback level lands
@@ -520,6 +527,18 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _dleOutputs = enabled
             ? (byte)(_dleOutputs | 0x04)
             : (byte)(_dleOutputs & ~0x04);
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    /// <summary>
+    /// Set the second-ADC RX step attenuator (0..31 dB), written to byte
+    /// 1442 of the High Priority Command (`Attenuator1` per
+    /// `High_Priority_CC.v:186-189`). Used for dual-RX dual-ADC boards
+    /// where RX1 sits on a separate ADC and needs independent gain.
+    /// </summary>
+    public void SetRx1Attenuator(int db)
+    {
+        _rx1StepAttnDb = (byte)Math.Clamp(db, 0, 31);
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
@@ -1097,6 +1116,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         p[1403] = (byte)(_preampOn ? 0x01 : 0x00);
 
         // ADC0 step attenuator (0-31 dB). Thetis network.c:1057.
+        // ADC1 step attenuator (0-31 dB) at byte 1442 — `Attenuator1` per
+        // `High_Priority_CC.v:186-189` (both Hermes and Orion_MkII RTL).
+        // Defaults to 0; set via SetRx1Attenuator for dual-RX dual-ADC
+        // boards. Issue #415.
+        p[1442] = _rx1StepAttnDb;
         p[1443] = _rxStepAttnDb;
 
         // Alex words. Bit positions and BPF selections per pihpsdr's alex.h +
