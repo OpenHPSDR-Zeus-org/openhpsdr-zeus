@@ -126,6 +126,20 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // needed via the UI. Attenuator 0 dB so the front-end isn't knocked down.
     private bool _preampOn;
     private byte _rxStepAttnDb;
+    // DLE_outputs byte (`High_Priority_CC.v:195` on Orion_MkII, byte 1400).
+    // Drives three physical control lines on ANAN-8000DLE / AnvelinaPro3
+    // chassis (`Orion.v:2119,2122,2125`):
+    //   bit 0 = XVTR_enable        (0=disabled, 1=enabled)
+    //   bit 1 = IO1                (0=enabled,  1=muted)  — inverted polarity
+    //   bit 2 = AUTO_TUNE          (0=disabled, 1=enabled)
+    // Defaults 0 (current effective state — Zeus has been leaving the byte
+    // zeroed since the buffer is `new byte[BufLen]`). Use SetXvtrEnabled /
+    // SetIo1Muted / SetAutoTuneEnabled to compose. Hermes RTL doesn't
+    // decode byte 1400, so emission is harmless on non-Orion_MkII boards.
+    // On non-8000DLE Orion_MkII variants (G2, G2 MkII) the pins exist but
+    // typically drive unconnected hardware. Variant-aware gating is a
+    // separable follow-up. Issue #414.
+    private byte _dleOutputs;
     // TX step attenuator (0..31 dB) — Thetis network.c:1238-1242 writes the
     // same value to bytes 57/58/59 of CmdTx (one per ADC tap). The PS
     // auto-attenuate loop adjusts this when info[4] feedback level lands
@@ -459,6 +473,46 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public void SetAttenuator(int db)
     {
         _rxStepAttnDb = (byte)Math.Clamp(db, 0, 31);
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    /// <summary>
+    /// Enable / disable the XVTR control line on ANAN-8000DLE / Anvelina
+    /// chassis (`DLE_outputs[0]` per `Orion.v:2119`). Other boards / variants:
+    /// no observable effect (Hermes doesn't decode byte 1400; non-8000DLE
+    /// Orion_MkII variants leave the pin unconnected).
+    /// </summary>
+    public void SetXvtrEnabled(bool enabled)
+    {
+        _dleOutputs = enabled
+            ? (byte)(_dleOutputs | 0x01)
+            : (byte)(_dleOutputs & ~0x01);
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    /// <summary>
+    /// Mute / unmute the IO1 control line on ANAN-8000DLE / Anvelina
+    /// chassis (`DLE_outputs[1]` per `Orion.v:2122`). Polarity is inverted:
+    /// the RTL comment is "low to enable, high to mute" — `muted=true` sets
+    /// the bit.
+    /// </summary>
+    public void SetIo1Muted(bool muted)
+    {
+        _dleOutputs = muted
+            ? (byte)(_dleOutputs | 0x02)
+            : (byte)(_dleOutputs & ~0x02);
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    /// <summary>
+    /// Enable / disable AUTO_TUNE on ANAN-8000DLE / Anvelina chassis
+    /// (`DLE_outputs[2]` per `Orion.v:2125`).
+    /// </summary>
+    public void SetAutoTuneEnabled(bool enabled)
+    {
+        _dleOutputs = enabled
+            ? (byte)(_dleOutputs | 0x04)
+            : (byte)(_dleOutputs & ~0x04);
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
@@ -1014,6 +1068,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // tune carrier and damage the finals. Thetis behaves this way too.
         byte ocBits = (_moxOn || _tuneActive) ? _ocTxMask : _ocRxMask;
         p[1401] = (byte)((ocBits & 0x7F) << 1);
+
+        // DLE_outputs byte for ANAN-8000DLE / AnvelinaPro3 (`Orion.v` line
+        // 2119/2122/2125). Default 0; flipped by SetXvtrEnabled /
+        // SetIo1Muted / SetAutoTuneEnabled. Hermes RTL doesn't decode byte
+        // 1400, so emission is harmless on non-Orion_MkII boards. Issue #414.
+        p[1400] = _dleOutputs;
 
         // Mercury attenuator byte: bit 0 = RX0 preamp, bit 1 = RX1 preamp
         // (Thetis network.c:1037).
