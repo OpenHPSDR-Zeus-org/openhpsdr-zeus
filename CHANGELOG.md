@@ -10,6 +10,26 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.8.2] — 2026-05-20
+
+> **🛠 THIS IS A HOTFIX FOR v0.8.0/v0.8.1's Audio Suite installer.** If you installed v0.8.0 or v0.8.1 and clicked **Download Audio Suite**, you got 5 of the 6 audio plugins — Noise Gate was silently skipped. v0.8.2 fixes the one-click installer to deliver all six, and also catches Bass / Exciter / Reverb up from v0.1.0 to the v0.2.0 versions that shipped alongside Noise Gate on 2026-05-19. See [0.8.0](#080--2026-05-19) below for the full feature list — v0.8.2 contains only the fix described here.
+
+### Fixed
+
+- **Download Audio Suite now installs all six audio plugins, not five** (#405). The `AUDIO_SUITE` array in `DownloadAudioSuiteButton.tsx` was never updated when Noise Gate shipped with v0.8.0, so one-click installs left operators without the gate plugin. The same fix bumps the URLs for Bass / Exciter / Reverb from v0.1.0 to v0.2.0 (which shipped on 2026-05-19 alongside Noise Gate) so the suite now distributes the current releases. If you have v0.1.0 of any of those three already installed, the suite installer will mark them as "already present" and skip — uninstall the v0.1.0 version via Plugins → Browse and click Download Audio Suite again to pick up v0.2.0.
+
+  Manifest IDs and versions distributed by Download Audio Suite as of v0.8.2 (in install order; conventional voice-chain signal flow):
+  - `com.openhpsdr.zeus.samples.noisegate` **v0.1.0** (new in suite)
+  - `com.openhpsdr.zeus.samples.eq` v0.2.0
+  - `com.openhpsdr.zeus.samples.compressor` v0.1.2
+  - `com.openhpsdr.zeus.samples.exciter` **v0.2.0** (bumped from v0.1.0)
+  - `com.openhpsdr.zeus.samples.bass` **v0.2.0** (bumped from v0.1.0)
+  - `com.openhpsdr.zeus.samples.reverb` **v0.2.0** (bumped from v0.1.0)
+
+  Bench-verified end-to-end: wiped the plugins directory of all six audio plugins, clicked Download Audio Suite, all six installed fresh and loaded on next desktop restart.
+
+---
+
 ## [0.8.1] — 2026-05-19
 
 > **🛠 THIS IS A SAME-DAY HOTFIX FOR v0.8.0.** If you installed v0.8.0 earlier today and saw `openhpsdrzeus.exe` linger in Task Manager after closing the Zeus window on Windows, **install v0.8.1 — it's the fix**. macOS and Linux operators were not affected; upgrade is still recommended for the cleaner shutdown behaviour. See [0.8.0](#080--2026-05-19) below for the full release feature list — v0.8.1 contains only the fix described here.

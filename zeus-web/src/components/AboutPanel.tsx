@@ -24,12 +24,13 @@ import { useEffect, useState } from 'react';
 // Release date for the version this build ships against. Bump whenever
 // VersionPrefix in Directory.Build.props bumps. ISO 8601 so toLocaleDateString
 // renders sensibly in any locale.
-const RELEASE_DATE_ISO = '2026-05-19';
-// Note: v0.8.1 is a same-day hotfix for v0.8.0 — drops the Photino
-// ProcessExit handler that was wedging Windows shutdown and leaving
-// OpenhpsdrZeus.exe lingering in Task Manager. See CHANGELOG for v0.8.0
-// for the bulk of changes (Audio Suite, dual-icon installer, plugin
-// system rebuild, smoothed-SWR, persistence fixes).
+const RELEASE_DATE_ISO = '2026-05-20';
+// Note: v0.8.2 is a hotfix for v0.8.0/v0.8.1 — the Download Audio Suite
+// button's plugin array was missing Noise Gate (silently skipped on
+// one-click installs) and pinning v0.1.0 of Bass/Exciter/Reverb instead
+// of the v0.2.0 versions that shipped on 2026-05-19. See CHANGELOG for
+// v0.8.0 for the bulk of changes (Audio Suite, dual-icon installer,
+// plugin system rebuild, smoothed-SWR, persistence fixes).
 
 type VersionInfo = {
   version: string;
