@@ -37,7 +37,7 @@ export const HF_BANDS: readonly string[] = [
 ] as const;
 
 function defaultBand(band: string): PaBandSettings {
-  return { band, paGainDb: 0, disablePa: false, ocTx: 0, ocRx: 0, autoOcMask: 0 };
+  return { band, paGainDb: 0, disablePa: false, ocTx: 0, ocRx: 0, autoOcMask: 0, ocDxTx: 0, ocDxRx: 0 };
 }
 
 function defaultState(): PaSettings {

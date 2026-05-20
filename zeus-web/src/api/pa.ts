@@ -30,6 +30,14 @@ export type PaBandSettings = {
   // it. Used by PaSettingsPanel to surface which pins the firmware is
   // already driving for each band.
   autoOcMask: number;
+  // Anvelina-PRO3 DX OC masks (issue Kb2uka/openhpsdr-zeus#407) — 4-bit
+  // masks for USEROUT7..10 (bit 0 = DX OUT 7, bit 1 = DX OUT 8,
+  // bit 2 = DX OUT 9, bit 3 = DX OUT 10). Honoured by the wire path only
+  // when the connected radio is Anvelina-PRO3 over Protocol 2 (see
+  // BoardCapabilities.supportsAnvelinaDxOc). Persisted on every band so
+  // DX wiring travels with the band selection.
+  ocDxTx: number;
+  ocDxRx: number;
 };
 
 export type PaGlobalSettings = {
@@ -49,6 +57,8 @@ type PaBandDtoRaw = {
   ocTx?: unknown;
   ocRx?: unknown;
   autoOcMask?: unknown;
+  ocDxTx?: unknown;
+  ocDxRx?: unknown;
 };
 
 type PaGlobalDtoRaw = {
@@ -84,6 +94,11 @@ function normalizeBand(raw: PaBandDtoRaw): PaBandSettings {
     ocTx: Math.max(0, Math.min(0x7f, Math.round(toNumber(raw.ocTx, 0)))),
     ocRx: Math.max(0, Math.min(0x7f, Math.round(toNumber(raw.ocRx, 0)))),
     autoOcMask: Math.max(0, Math.min(0x7f, Math.round(toNumber(raw.autoOcMask, 0)))),
+    // DX masks are 4-bit per the EU2AV Anvelina spec (#407) — bits [4:1]
+    // on the wire. Clamp to 0x0F so a malformed server response can't
+    // smuggle bits the wire path would silently zero anyway.
+    ocDxTx: Math.max(0, Math.min(0x0f, Math.round(toNumber(raw.ocDxTx, 0)))),
+    ocDxRx: Math.max(0, Math.min(0x0f, Math.round(toNumber(raw.ocDxRx, 0)))),
   };
 }
 

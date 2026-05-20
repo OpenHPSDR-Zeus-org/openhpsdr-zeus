@@ -31,6 +31,12 @@ export interface BoardCapabilities {
    *  ANAN-8000DLE = 250 W, ANAN-G2-1K = 1000 W. Operator override lives in
    *  the PA settings panel. */
   maxPowerWatts: number;
+  /** True when the connected board is Anvelina-PRO3 over Protocol 2 — it
+   *  exposes USEROUT7..10 via EU2AV's Open_Collector_Anvelina_DX spec
+   *  (issue Kb2uka/openhpsdr-zeus#407, wire byte 1397 bits [4:1]). The
+   *  PA Settings panel's DX OUT subsection renders unconditionally but
+   *  disables itself when this flag is false. */
+  supportsAnvelinaDxOc: boolean;
 }
 
 // Safe defaults matching Zeus.Contracts.BoardCapabilities.UnknownDefaults —
@@ -49,6 +55,7 @@ export const UNKNOWN_BOARD_CAPABILITIES: BoardCapabilities = {
   supportsPathIllustrator: false,
   hasHl2OptionalToggles: false,
   maxPowerWatts: 100,
+  supportsAnvelinaDxOc: false,
 };
 
 export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
@@ -81,6 +88,10 @@ export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
       typeof r.maxPowerWatts === 'number' && r.maxPowerWatts > 0
         ? r.maxPowerWatts
         : UNKNOWN_BOARD_CAPABILITIES.maxPowerWatts,
+    supportsAnvelinaDxOc:
+      typeof r.supportsAnvelinaDxOc === 'boolean'
+        ? r.supportsAnvelinaDxOc
+        : UNKNOWN_BOARD_CAPABILITIES.supportsAnvelinaDxOc,
   };
 }
 

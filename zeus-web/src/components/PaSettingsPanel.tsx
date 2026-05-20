@@ -23,8 +23,18 @@ import { useEffect, useRef, useState } from 'react';
 import { HF_BANDS, usePaStore } from '../state/pa-store';
 import { useRadioStore } from '../state/radio-store';
 import { BOARD_LABELS } from '../api/radio';
+import anvelinaLogo from '../assets/anvelina-logo.png';
 
 const OC_PINS = [1, 2, 3, 4, 5, 6, 7] as const;
+
+// Anvelina-PRO3 DX OC outputs (issue #407 / EU2AV
+// Open_Collector_Anvelina_DX). UI pin numbers 7..10 map to mask bits 0..3
+// (PillBar's internal "bit - bitOffset" math), which the wire-encode
+// shifts into byte-1397 bits [4:1] on the radio. Keeping the visible
+// labels as 7..10 matches the spec's USEROUT7..USEROUT10 naming so
+// operators wiring DX OUTs see the same numbers their schematic uses.
+const ANVELINA_DX_PINS = [7, 8, 9, 10] as const;
+const ANVELINA_DX_BIT_OFFSET = 7;
 
 // HL2 uses a percentage-based PA model (mi0bot openhpsdr-thetis) — the
 // PaGainDb DTO field is interpreted as output % 0..100 rather than dB
@@ -45,20 +55,34 @@ const PA_MAX_W_MAX    = 1500;  // Covers Shared Apex / 1 kW + amps
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 // One unified pill bar replacing the previous 7-checkbox grid. The
-// container holds 7 tappable pins; clicking flips the bit, and dragging
+// container holds N tappable pins; clicking flips the bit, and dragging
 // across multiple pins paints them to the first-clicked target value
-// (so changing a whole row is one drag, not 7 clicks). Read-only mode is
+// (so changing a whole row is one drag, not N clicks). Read-only mode is
 // used for the Auto N2ADR column and disables the click + drag handlers.
+// `disabled` is the soft-grey state for the Anvelina DX OUT columns when
+// the connected radio doesn't support them — same visual cue as readOnly
+// but with a tooltip explaining why and the click handlers stripped.
+// `pins` lets the caller drive a 4-pin Anvelina DX bar (7..10) instead of
+// the default 7-pin OC bar; `bitOffset` maps the displayed pin number to
+// the underlying mask bit (DX bar maps pin 7 -> bit 0, pin 8 -> bit 1, …).
 function PillBar({
   label,
   mask,
   onChange,
   readOnly = false,
+  disabled = false,
+  disabledTitle,
+  pins = OC_PINS,
+  bitOffset = 1,
 }: {
   label: string;
   mask: number;
   onChange?: (next: number) => void;
   readOnly?: boolean;
+  disabled?: boolean;
+  disabledTitle?: string;
+  pins?: readonly number[];
+  bitOffset?: number;
 }) {
   const [paintTo, setPaintTo] = useState<0 | 1 | null>(null);
   useEffect(() => {
@@ -68,28 +92,36 @@ function PillBar({
     return () => window.removeEventListener('mouseup', up);
   }, [paintTo]);
 
+  const inert = readOnly || disabled;
   const setBit = (bit: number, on: 0 | 1) => {
     if (!onChange) return;
-    const b = 1 << (bit - 1);
+    const b = 1 << (bit - bitOffset);
     onChange(on ? mask | b : mask & ~b);
   };
 
   return (
-    <span className={'pa-pill-bar' + (readOnly ? ' ro' : '')}>
-      {OC_PINS.map((bit) => {
-        const active = (mask & (1 << (bit - 1))) !== 0;
-        const title = readOnly
-          ? `${label} pin ${bit} — ${active ? 'firmware-driven' : 'not driven'}`
-          : `${label} pin ${bit}`;
+    <span
+      className={'pa-pill-bar' + (readOnly ? ' ro' : '') + (disabled ? ' ro' : '')}
+      title={disabled ? disabledTitle : undefined}
+      style={disabled ? { opacity: 0.45 } : undefined}
+    >
+      {pins.map((bit) => {
+        const active = (mask & (1 << (bit - bitOffset))) !== 0;
+        const title = disabled
+          ? disabledTitle ?? `${label} pin ${bit} — unsupported on this radio`
+          : readOnly
+            ? `${label} pin ${bit} — ${active ? 'firmware-driven' : 'not driven'}`
+            : `${label} pin ${bit}`;
         return (
           <span
             key={bit}
-            role={readOnly ? undefined : 'button'}
-            aria-pressed={readOnly ? undefined : active}
+            role={inert ? undefined : 'button'}
+            aria-pressed={inert ? undefined : active}
+            aria-disabled={disabled || undefined}
             title={title}
-            className={'pa-pill' + (active ? ' on' : '') + (readOnly ? ' ro' : '')}
+            className={'pa-pill' + (active ? ' on' : '') + (inert ? ' ro' : '')}
             onMouseDown={
-              readOnly
+              inert
                 ? undefined
                 : (e) => {
                     e.preventDefault();
@@ -99,7 +131,7 @@ function PillBar({
                   }
             }
             onMouseEnter={
-              readOnly
+              inert
                 ? undefined
                 : () => {
                     if (paintTo === null) return;
@@ -186,12 +218,23 @@ export function PaSettingsPanel() {
   const setBand = usePaStore((s) => s.setBand);
   const resetToBoardDefaults = usePaStore((s) => s.resetToBoardDefaults);
   const selection = useRadioStore((s) => s.selection);
+  const capabilities = useRadioStore((s) => s.capabilities);
 
   // Show the "Auto N2ADR" column only when the board has a non-zero
   // firmware auto-mask for at least one band — i.e. an HL2. Bare-Hermes
   // and ANAN/Orion users don't need a column of empty chips, and showing
   // it on first-boot (Unknown board, autoOcMask=0) would be visual noise.
   const showAutoCol = settings.bands.some((b) => b.autoOcMask > 0);
+
+  // Anvelina-PRO3 DX OC columns (issue #407 / EU2AV
+  // Open_Collector_Anvelina_DX) — always rendered so operators can see
+  // the feature exists, but disabled (greyed out + tooltip) when the
+  // connected radio isn't Anvelina-PRO3 over Protocol 2. Mirrors the
+  // approach the HL2 RADIO settings tab uses for HL2-only toggles.
+  const anvelinaDxSupported = capabilities.supportsAnvelinaDxOc;
+  const anvelinaDxTooltip = anvelinaDxSupported
+    ? 'Anvelina-PRO3 Open-Collector DX outputs (USEROUT 7–10). EU2AV spec — Protocol 2 byte 1397.'
+    : 'Anvelina-PRO3 only (Protocol 2). Connect an Anvelina-PRO3 to enable these outputs.';
 
   // HL2 overloads the "PA Gain" field into an output percentage. Switch
   // label + clamp range + step when the effective board (connected wins
@@ -294,6 +337,32 @@ export function PaSettingsPanel() {
         <div className="pa-card overflow-x-auto">
           <table className="w-full border-collapse text-xs">
             <thead className="pa-col-head text-[10px] uppercase tracking-wider">
+              {/* Anvelina logo spans the two DX OUT columns so the
+                  hardware lineage is visible without a separate
+                  section. Dimmed alongside the columns when the
+                  connected board isn't Anvelina-PRO3, so the visual
+                  state matches the wire state. */}
+              <tr>
+                <th colSpan={showAutoCol ? 6 : 5}></th>
+                <th
+                  colSpan={2}
+                  className="px-2 pt-2 text-left"
+                  style={{
+                    borderLeft: '1px solid var(--border)',
+                    opacity: anvelinaDxSupported ? 1 : 0.45,
+                  }}
+                  title={anvelinaDxTooltip}
+                >
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                    <img
+                      src={anvelinaLogo}
+                      alt="Anvelina"
+                      style={{ height: 18, width: 'auto', display: 'block' }}
+                    />
+                    <span style={{ fontSize: 9, letterSpacing: '0.1em' }}>DX OUTPUTS</span>
+                  </span>
+                </th>
+              </tr>
               <tr>
                 <th className="px-2 py-2 text-left">Band</th>
                 <th className="px-2 py-2 text-right" title={paFieldTitle}>
@@ -310,6 +379,23 @@ export function PaSettingsPanel() {
                 )}
                 <th className="px-2 py-2 text-left">OC TX (1..7)</th>
                 <th className="px-2 py-2 text-left">OC RX (1..7)</th>
+                <th
+                  className="px-2 py-2 text-left"
+                  style={{
+                    borderLeft: '1px solid var(--border)',
+                    opacity: anvelinaDxSupported ? 1 : 0.45,
+                  }}
+                  title={anvelinaDxTooltip}
+                >
+                  DX TX (7..10)
+                </th>
+                <th
+                  className="px-2 py-2 text-left"
+                  style={{ opacity: anvelinaDxSupported ? 1 : 0.45 }}
+                  title={anvelinaDxTooltip}
+                >
+                  DX RX (7..10)
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -363,6 +449,28 @@ export function PaSettingsPanel() {
                         label={`${bandName} OC-RX`}
                         mask={b.ocRx}
                         onChange={(next) => setBand(b.band, { ocRx: next })}
+                      />
+                    </td>
+                    <td className="px-2" style={{ borderLeft: '1px solid var(--border)' }}>
+                      <PillBar
+                        label={`${bandName} Anvelina DX-TX`}
+                        mask={b.ocDxTx}
+                        onChange={(next) => setBand(b.band, { ocDxTx: next })}
+                        pins={ANVELINA_DX_PINS}
+                        bitOffset={ANVELINA_DX_BIT_OFFSET}
+                        disabled={!anvelinaDxSupported}
+                        disabledTitle={anvelinaDxTooltip}
+                      />
+                    </td>
+                    <td className="px-2">
+                      <PillBar
+                        label={`${bandName} Anvelina DX-RX`}
+                        mask={b.ocDxRx}
+                        onChange={(next) => setBand(b.band, { ocDxRx: next })}
+                        pins={ANVELINA_DX_PINS}
+                        bitOffset={ANVELINA_DX_BIT_OFFSET}
+                        disabled={!anvelinaDxSupported}
+                        disabledTitle={anvelinaDxTooltip}
                       />
                     </td>
                   </tr>
