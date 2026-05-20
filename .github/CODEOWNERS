@@ -1,16 +1,19 @@
 # OpenHPSDR Zeus — Code Owners
 #
-# Every path in this repo is owned by @Kb2uka. Combined with branch
-# protection on `develop` and `main` (require approving review from a
-# code owner), this enforces the maintainer's "I have to merge" rule —
-# any PR opened by another collaborator (e.g. @brianbruff, @rampa069)
-# requires @Kb2uka's review approval before it can be merged.
+# Every path is co-owned by @Kb2uka, @brianbruff, and @rampa069.
+# Combined with branch protection on `develop` and `main` (require
+# approving review from a code owner), this means any one of the three
+# can approve + merge a PR — but GitHub still blocks self-approval, so
+# the PR author always needs an approval from one of the other two.
 #
-# Brian (@brianbruff) remains the visual-design / UX / architecture
-# authority per CLAUDE.md, so his review still drives those decisions
-# on a per-PR basis; this file isn't about who decides what merges, it's
-# about who clicks merge.
+# Roles are still defined per CLAUDE.md; this file isn't about who
+# decides what merges:
+#   - Brian (@brianbruff, EI6LF) — visual design, UX, architecture
+#     authority. Plugin SDK / VST3 / contracts owner.
+#   - Ramón (@rampa069, EA5IUE) — protocol + radio-state contributor.
+#   - Kb2uka (@Kb2uka, KB2UKA) — maintainer + audio-chain content
+#     owner (block choices, algorithm picks, defaults).
 #
 # Format reference: https://docs.github.com/en/repositories/managing-your-repositories-settings-and-security/customizing-your-repository/about-code-owners
 
-*       @Kb2uka
+*       @Kb2uka @brianbruff @rampa069
