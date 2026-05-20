@@ -247,6 +247,13 @@ public partial class Program
 
         Console.WriteLine("Window closed; stopping backend.");
         app.StopAsync().GetAwaiter().GetResult();
+        // DisposeAsync runs the DI container's disposal pass, which is the
+        // only thing that invokes IDisposable.Dispose() on singleton hosted
+        // services like NativeAudioSink / NativeMicCapture. Without it the
+        // miniaudio devices' ma_device_uninit is never called and the
+        // [STAThread] Main can't release its COM apartment cleanly on
+        // Windows — the process hangs after window close.
+        app.DisposeAsync().AsTask().GetAwaiter().GetResult();
         return 0;
     }
 
@@ -386,6 +393,10 @@ public partial class Program
 
         Console.WriteLine("Status window closed; stopping backend.");
         app.StopAsync().GetAwaiter().GetResult();
+        // See the matching comment in RunDesktop — DisposeAsync is what
+        // actually disposes the singleton hosted services (and Kestrel),
+        // which is required for a clean Windows process exit.
+        app.DisposeAsync().AsTask().GetAwaiter().GetResult();
         return 0;
     }
 }
