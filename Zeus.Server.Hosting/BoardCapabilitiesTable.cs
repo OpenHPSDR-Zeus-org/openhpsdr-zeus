@@ -75,10 +75,15 @@ internal static class BoardCapabilitiesTable
         // 120 W Saturn baseline, so they fan out here too.
         HpsdrBoardKind.OrionMkII  => variant switch
         {
-            OrionMkIIVariant.OrionMkII   => OrionMkIIOriginal,
-            OrionMkIIVariant.Anan8000DLE => Saturn8000DLE,
-            OrionMkIIVariant.G2_1K       => SaturnG2_1K,
-            _                            => Saturn,
+            OrionMkIIVariant.OrionMkII    => OrionMkIIOriginal,
+            OrionMkIIVariant.Anan8000DLE  => Saturn8000DLE,
+            OrionMkIIVariant.G2_1K        => SaturnG2_1K,
+            // Anvelina-PRO3 — Saturn-class facts plus the EU2AV DX OC
+            // extension flag (issue #407). Every other Saturn variant
+            // keeps SupportsAnvelinaDxOc=false so the wire path stays
+            // closed on G2 / 7000DLE / Apache OrionMkII original / etc.
+            OrionMkIIVariant.AnvelinaPro3 => SaturnAnvelinaPro3,
+            _                             => Saturn,
         },
         // --- ANAN-G2E (HermesC10, N1GP) ---
         // clsHardwareSpecific.cs:129-135. Hybrid: single RX + 33 mV supply
@@ -175,6 +180,15 @@ internal static class BoardCapabilitiesTable
     private static readonly BoardCapabilities SaturnG2_1K = Saturn with
     {
         MaxPowerWatts = 1000,
+    };
+
+    // ANVELINA-PRO3 (EU2AV). Saturn-class fingerprint plus the DX OC
+    // extension (USEROUT7..10) wired into P2 byte 1397 bits [4:1] —
+    // issue #407, EU2AV's Open_Collector_Anvelina_DX for Thetis spec.
+    // This is the only variant where SupportsAnvelinaDxOc flips true.
+    private static readonly BoardCapabilities SaturnAnvelinaPro3 = Saturn with
+    {
+        SupportsAnvelinaDxOc = true,
     };
 
     private static readonly BoardCapabilities HermesC10 = new(

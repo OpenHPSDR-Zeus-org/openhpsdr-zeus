@@ -128,6 +128,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // ~29 dB hotter at 48 kHz than at higher rates — deskhpsdr
     // src/new_protocol.c:2516-2530). Unknown == no correction applied.
     private HpsdrBoardKind _boardKind = HpsdrBoardKind.Unknown;
+    // 0x0A wire-byte alias variant. Default G2 matches the pre-#218 Zeus
+    // assumption for every Saturn-class board; flipped to AnvelinaPro3 by
+    // DspPipelineService (issue #407) when the operator (or discovery)
+    // identifies the radio as Anvelina-PRO3, which unlocks the byte-1397
+    // DX OC write in SendCmdHighPriority. Read-only outside the variant
+    // setter.
+    private OrionMkIIVariant _variant = OrionMkIIVariant.G2;
     // Mercury preamp defaults OFF — on a G2 the ADC has enough dynamic range
     // that the preamp is a crutch, not a default. Operator enables it when
     // needed via the UI. Attenuator 0 dB so the front-end isn't knocked down.
@@ -171,6 +178,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private byte _driveByte;
     private byte _ocTxMask;
     private byte _ocRxMask;
+    // Anvelina-PRO3 DX OC extension (issue #407, EU2AV
+    // Open_Collector_Anvelina_DX spec). 4-bit masks (bits 0..3 -> DX OUT
+    // 7..10). Wire-encoded into CmdHighPriority[1397] bits [4:1] only when
+    // _boardKind == OrionMkII && _variant == AnvelinaPro3 — every other
+    // board sees byte 1397 stay at 0, which is what the EU2AV spec calls
+    // out as the reserved-bit safe default for non-Anvelina firmware.
+    private byte _ocDxTxMask;
+    private byte _ocDxRxMask;
     private bool _moxOn;
     private bool _tuneActive;
     private long _totalFrames;
@@ -441,6 +456,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     }
 
     /// <summary>
+    /// 0x0A wire-byte alias variant (issue #218). Pushed from
+    /// <c>DspPipelineService.ConnectP2Async</c> alongside
+    /// <see cref="SetBoardKind"/>. Only consulted when
+    /// <c>_boardKind == OrionMkII</c>; ignored otherwise. Selecting
+    /// <see cref="OrionMkIIVariant.AnvelinaPro3"/> unlocks the byte 1397
+    /// DX OC write in <see cref="SendCmdHighPriority"/> for the EU2AV
+    /// Anvelina-PRO3 extension (issue #407).
+    /// </summary>
+    public void SetOrionMkIIVariant(OrionMkIIVariant variant)
+    {
+        _variant = variant;
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    /// <summary>
     /// Per-board, per-sample-rate gain correction applied on top of the
     /// int24→[-1,+1] normalisation in <c>HandleDdcPacket</c>.
     ///
@@ -552,6 +582,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         _ocTxMask = (byte)(txMask & 0x7F);
         _ocRxMask = (byte)(rxMask & 0x7F);
+        if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    /// <summary>
+    /// Anvelina-PRO3 DX OC masks (issue #407, EU2AV
+    /// Open_Collector_Anvelina_DX spec). 4-bit masks: bit 0 = DX OUT 7,
+    /// bit 1 = DX OUT 8, bit 2 = DX OUT 9, bit 3 = DX OUT 10. Narrowed
+    /// to 0x0F on entry so spurious upper bits can't drift into the
+    /// reserved [7:5] field on the wire. Stored unconditionally; the
+    /// wire-encode in <see cref="SendCmdHighPriority"/> is the gate.
+    /// </summary>
+    public void SetOcDxMasks(byte txMask, byte rxMask)
+    {
+        _ocDxTxMask = (byte)(txMask & 0x0F);
+        _ocDxRxMask = (byte)(rxMask & 0x0F);
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
@@ -1104,6 +1149,23 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // tune carrier and damage the finals. Thetis behaves this way too.
         byte ocBits = (_moxOn || _tuneActive) ? _ocTxMask : _ocRxMask;
         p[1401] = (byte)((ocBits & 0x7F) << 1);
+
+        // Anvelina-PRO3 DX OC extension (USEROUT7..10) at byte 1397, bits
+        // [4:1]. EU2AV's Open_Collector_Anvelina_DX for Thetis spec
+        // (issue #407): bit 1 -> USEROUT7, bit 2 -> USEROUT8,
+        // bit 3 -> USEROUT9, bit 4 -> USEROUT10. Bit 0 is reserved-internal
+        // and bits [7:5] are reserved-future — both MUST be transmitted as
+        // 0. Gated on board+variant so the byte stays at 0 on every other
+        // 0x0A-family radio (G2 / G2_1K / 7000DLE / 8000DLE / OrionMkII
+        // original / Red Pitaya), matching pre-#407 behaviour. Firmware
+        // additionally gates with run=1 at the FPGA so the bytes are
+        // harmless until streaming is up.
+        if (_boardKind == HpsdrBoardKind.OrionMkII
+            && _variant == OrionMkIIVariant.AnvelinaPro3)
+        {
+            byte dxBits = (_moxOn || _tuneActive) ? _ocDxTxMask : _ocDxRxMask;
+            p[1397] = (byte)((dxBits & 0x0F) << 1);
+        }
 
         // DLE_outputs byte for ANAN-8000DLE / AnvelinaPro3 (`Orion.v` line
         // 2119/2122/2125). Default 0; flipped by SetXvtrEnabled /

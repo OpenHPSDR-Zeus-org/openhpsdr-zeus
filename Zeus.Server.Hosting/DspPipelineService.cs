@@ -872,6 +872,12 @@ public class DspPipelineService : BackgroundService,
         // (Hermes-on-P2 48 kHz IQ gain correction; future per-board branches)
         // are gated correctly. boardKind == Unknown leaves all quirks off.
         client.SetBoardKind(boardKind);
+        // 0x0A wire-byte alias variant (issue #218). For non-OrionMkII
+        // boards the value is ignored; for OrionMkII it picks the right
+        // calibration/PA constants AND unlocks the Anvelina-PRO3 DX OC
+        // byte-1397 write (issue #407) when the operator has selected
+        // AnvelinaPro3 in the radio chooser.
+        client.SetOrionMkIIVariant(_radio.EffectiveOrionMkIIVariant);
         await client.ConnectAsync(radioEndpoint, ct).ConfigureAwait(false);
         // Seed the operator's RX front-end (preamp + step attenuator) BEFORE
         // StartAsync so the very first CmdHighPriority emitted inside the
@@ -998,6 +1004,11 @@ public class DspPipelineService : BackgroundService,
         if (p2 is null) return;
         p2.SetDriveByte(snap.DriveByte);
         p2.SetOcMasks(snap.OcTxMask, snap.OcRxMask);
+        // Anvelina-PRO3 DX OC masks (#407). Always forwarded; Protocol2Client
+        // gates whether they hit byte 1397 on the wire by checking the
+        // connected board+variant. Non-Anvelina P2 boards see byte 1397
+        // stay at zero per EU2AV's reserved-bit rule.
+        p2.SetOcDxMasks(snap.OcDxTxMask, snap.OcDxRxMask);
         p2.SetPaEnabled(snap.PaEnabled);
     }
 

@@ -1168,7 +1168,14 @@ public sealed class RadioService : IDisposable
             DriveByte: driveByte,
             OcTxMask: bandCfg.OcTx,
             OcRxMask: bandCfg.OcRx,
-            PaEnabled: paEnabled));
+            PaEnabled: paEnabled,
+            // Anvelina-PRO3 DX OC masks (issue #407) — always emitted in
+            // the snapshot so DspPipelineService can forward them to the
+            // Protocol2Client. The wire-encode in SendCmdHighPriority is
+            // gated by board+variant, so non-Anvelina radios receive a
+            // SetOcDxMasks call but the bytes never reach the wire.
+            OcDxTxMask: bandCfg.OcDxTx,
+            OcDxRxMask: bandCfg.OcDxRx));
     }
 
     // Back-compat shim for callers/tests that predate IRadioDriveProfile.

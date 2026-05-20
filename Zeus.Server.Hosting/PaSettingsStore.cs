@@ -87,7 +87,7 @@ public sealed class PaSettingsStore : IDisposable
                     var auto = AutoOcMaskFor(board, b);
                     if (existing.TryGetValue(b, out var e))
                     {
-                        return new PaBandSettingsDto(e.Band, e.PaGainDb, e.DisablePa, e.OcTx, e.OcRx, auto);
+                        return new PaBandSettingsDto(e.Band, e.PaGainDb, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx);
                     }
                     return new PaBandSettingsDto(b, PaGainDb: PaDefaults.GetPaGainDb(board, b, variant), AutoOcMask: auto);
                 })
@@ -129,7 +129,7 @@ public sealed class PaSettingsStore : IDisposable
             var e = _bands.FindOne(x => x.Band == band);
             return e is null
                 ? new PaBandSettingsDto(band, PaGainDb: PaDefaults.GetPaGainDb(board, band, variant), AutoOcMask: auto)
-                : new PaBandSettingsDto(e.Band, e.PaGainDb, e.DisablePa, e.OcTx, e.OcRx, auto);
+                : new PaBandSettingsDto(e.Band, e.PaGainDb, e.DisablePa, e.OcTx, e.OcRx, auto, e.OcDxTx, e.OcDxRx);
         }
     }
 
@@ -176,6 +176,11 @@ public sealed class PaSettingsStore : IDisposable
             {
                 if (!BandUtils.HfBands.Contains(band.Band)) continue;
                 var existing = _bands.FindOne(x => x.Band == band.Band);
+                // DX masks are 4-bit per the EU2AV spec (bits 0..3 ->
+                // DX OUT 7..10); narrow to 0x0F before persisting so the
+                // bench API can't smuggle bits the wire path will drop.
+                byte dxTx = (byte)(band.OcDxTx & 0x0F);
+                byte dxRx = (byte)(band.OcDxRx & 0x0F);
                 if (existing is null)
                 {
                     _bands.Insert(new PaBandEntry
@@ -185,6 +190,8 @@ public sealed class PaSettingsStore : IDisposable
                         DisablePa = band.DisablePa,
                         OcTx = band.OcTx,
                         OcRx = band.OcRx,
+                        OcDxTx = dxTx,
+                        OcDxRx = dxRx,
                         UpdatedUtc = DateTime.UtcNow,
                     });
                 }
@@ -194,6 +201,8 @@ public sealed class PaSettingsStore : IDisposable
                     existing.DisablePa = band.DisablePa;
                     existing.OcTx = band.OcTx;
                     existing.OcRx = band.OcRx;
+                    existing.OcDxTx = dxTx;
+                    existing.OcDxRx = dxRx;
                     existing.UpdatedUtc = DateTime.UtcNow;
                     _bands.Update(existing);
                 }
@@ -209,11 +218,17 @@ public sealed class PaSettingsStore : IDisposable
 // Resolved snapshot that RadioService pushes to the P1 client directly and to
 // the P2 client via DspPipelineService. Keeps the protocol clients free of
 // any knowledge of per-band gain or Stores.
+//
+// OcDxTxMask / OcDxRxMask carry the Anvelina-PRO3 DX OUT 7..10 wiring (4-bit
+// masks, bit 0..3 = DX OUT 7..10). Pushed unconditionally; Protocol2Client
+// gates whether they reach the wire by board + variant (#407 / EU2AV).
 public sealed record PaRuntimeSnapshot(
     byte DriveByte,
     byte OcTxMask,
     byte OcRxMask,
-    bool PaEnabled);
+    bool PaEnabled,
+    byte OcDxTxMask = 0,
+    byte OcDxRxMask = 0);
 
 public sealed class PaBandEntry
 {
@@ -223,6 +238,12 @@ public sealed class PaBandEntry
     public bool DisablePa { get; set; }
     public byte OcTx { get; set; }
     public byte OcRx { get; set; }
+    // Anvelina DX OUT 7..10 per-band masks (issue #407). LiteDB is schema-
+    // less so rows persisted before #407 hydrate these as 0, which is the
+    // correct legacy default. Wire-encoded into P2 byte 1397 bits [4:1]
+    // only when the active radio is OrionMkII + AnvelinaPro3 on P2.
+    public byte OcDxTx { get; set; }
+    public byte OcDxRx { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }
 

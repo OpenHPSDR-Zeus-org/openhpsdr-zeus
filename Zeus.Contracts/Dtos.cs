@@ -420,13 +420,22 @@ public sealed record SetActiveLayoutRequest(string RadioKey, string LayoutId);
 // AutoOcMask is informational only — the read-only N2ADR board mask the
 // firmware will OR onto OcRx/OcTx when HasN2adr is on (HL2). PUT requests
 // ignore it; the server recomputes from the connected board on the next GET.
+//
+// OcDxTx / OcDxRx are 4-bit masks (bits 0..3 -> DX OUT 7..10) for the
+// Anvelina-PRO3-only "Open Collector DX" extension (USEROUT7..10), wire-
+// encoded into Protocol-2 high-priority byte 1397 bits [4:1]. Per EU2AV's
+// Open_Collector_Anvelina_DX spec (issue #407). Honoured by the wire path
+// only when the connected board is OrionMkII + AnvelinaPro3 variant on
+// Protocol 2; persisted on every band so DX wiring travels with the band.
 public sealed record PaBandSettingsDto(
     string Band,
     double PaGainDb = 0.0,
     bool DisablePa = false,
     byte OcTx = 0,
     byte OcRx = 0,
-    byte AutoOcMask = 0);
+    byte AutoOcMask = 0,
+    byte OcDxTx = 0,
+    byte OcDxRx = 0);
 
 // Globals shared across bands. PaMaxPowerWatts=0 disables the watts
 // conversion path and falls back to the legacy "drive% = raw 0-255 byte"

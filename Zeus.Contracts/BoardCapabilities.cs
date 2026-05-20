@@ -78,7 +78,17 @@ public sealed record BoardCapabilities(
     /// them. True for <see cref="HpsdrBoardKind.HermesLite2"/> only — Square
     /// SDR ships HL2-class firmware so it inherits via the same enum value.
     /// Issue #279.</summary>
-    bool HasHl2OptionalToggles = false)
+    bool HasHl2OptionalToggles = false,
+    /// <summary>True when the board exposes the Anvelina-PRO3 DX Open-
+    /// Collector extension (USEROUT7..10) defined by EU2AV's
+    /// <c>Open_Collector_Anvelina_DX for Thetis</c> spec (issue #407).
+    /// True for <see cref="HpsdrBoardKind.OrionMkII"/> +
+    /// <see cref="OrionMkIIVariant.AnvelinaPro3"/> only — the OC DX
+    /// controls in the PA Settings panel render unconditionally but are
+    /// disabled when this flag is false, so operators can see the
+    /// feature exists without being able to drive a non-supporting
+    /// board.</summary>
+    bool SupportsAnvelinaDxOc = false)
 {
     /// <summary>Safe defaults for an unrecognised / disconnected board.
     /// Single ADC, no extras — minimum-surprise capability set so a
