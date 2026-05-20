@@ -247,13 +247,24 @@ public sealed class Protocol1Client : IProtocol1Client
     /// <summary>
     /// Decode an HL2 4-DDC PS-armed EP6 packet — mi0bot's canonical layout
     /// (Thetis console.cs:8186-8265, networkproto1.c:WriteMainLoop_HL2,
-    /// cmaster.cs:8511-8550 FOUR_DDC routing). Stream assignment:
-    ///   DDC0 = RX1 audio (operator's listening freq) → publish to IqFrame
-    ///          channel so the panadapter and audio chain stay alive even
-    ///          while PS is keying.
-    ///   DDC1 = RX2 / unused on HL2 → discarded.
-    ///   DDC2 = PS RX feedback (post-PA tap, NCO=TX freq) → pscc "rx" arg.
-    ///   DDC3 = PS TX reference (TX-DAC loopback, NCO=TX freq) → pscc "tx".
+    /// cmaster.cs:8511-8550 FOUR_DDC routing). Stream assignment, cross-
+    /// checked against the upstream HL2 gateware (rtl/radio_openhpsdr1/
+    /// radio.sv:484-540, mix2_0 + mix2_2 + pure_signal switch):
+    ///   DDC0 = RX1 audio. mix2_0+adcpipe[0] at VfoAHz → operator's
+    ///          listening freq, panadapter and audio chain stay alive
+    ///          even while PS is keying. Published to IqFrame channel.
+    ///   DDC1 = mix2_2 input (shared with DDC3) at VfoAHz NCO. During
+    ///          MOX+PS that input is `tx_data_dac`, so this DDC carries
+    ///          a wrong-NCO copy of the DAC samples; functionally
+    ///          useless, discarded.
+    ///   DDC2 = mix2_0+adcpipe[0] at TX freq → pscc "rx" arg. The
+    ///          "feedback" mechanism on HL2 is RF leakage of the
+    ///          radiated TX coupling back into the RX frontend — NOT a
+    ///          hardware coupler tap (HL2 has no internal coupler).
+    ///          Hence per-board HW peak calibration is mandatory.
+    ///   DDC3 = mix2_2+tx_data_dac at TX freq → pscc "tx" arg. The only
+    ///          deterministic feedback path on HL2 (pre-PA DAC samples
+    ///          demodulated to baseband).
     /// Pair DDC2 + DDC3 samples 1:1, accumulate 1024 paired complex samples,
     /// then emit a PsFeedbackFrame for the DspPipelineService pump.
     /// </summary>
@@ -620,12 +631,15 @@ public sealed class Protocol1Client : IProtocol1Client
         // Number of receivers requested in the Config payload (`(N-1) << 3`
         // in C4 bits [5:3]). mi0bot's HL2 path (Thetis console.cs:8186-8265)
         // uses **4 DDCs** during PS+MOX:
-        //   DDC0 → RX1 audio (operator's listening freq, stays alive!)
-        //   DDC1 → RX2 (or unused)
-        //   DDC2 → PS RX feedback (post-PA tap, NCO=TX freq) — pscc "rx"
-        //   DDC3 → PS TX reference (TX-DAC loopback, NCO=TX freq) — pscc "tx"
-        // Outside PS+MOX we stay at single-DDC so the existing 1-DDC EP6
-        // packet shape and parser are bit-exact unchanged.
+        //   DDC0 → RX1 audio (mix2_0+adcpipe[0] at VfoAHz) — stays alive!
+        //   DDC1 → mix2_2 input at VfoAHz, demods to junk during MOX+PS
+        //          (mix2_2.adc is forced to tx_data_dac then) — discarded.
+        //   DDC2 → mix2_0+adcpipe[0] at TX freq → pscc "rx". On HL2 this
+        //          is RF leakage of the radiated TX (no coupler hardware).
+        //   DDC3 → mix2_2+tx_data_dac at TX freq → pscc "tx" (pre-PA DAC).
+        // See HandlePs4DdcPacket above for the cross-reference to upstream
+        // gateware. Outside PS+MOX we stay at single-DDC so the existing
+        // 1-DDC EP6 packet shape and parser are bit-exact unchanged.
         byte numRxMinus1 = (byte)(psOn && isHl2 && moxOn ? 3 : 0);
 
         return new(
@@ -870,13 +884,18 @@ public sealed class Protocol1Client : IProtocol1Client
 
     /// <summary>
     /// Round-robin register selector. When <paramref name="psArmed"/> is true
-    /// the rotation is widened to 8 phases and includes the new HL2-PS
-    /// registers — RxFreq2 (DDC1 NCO) and AdcRouting (per-RX→ADC selector,
-    /// HL2-doc 0x0e). Without RxFreq2 the second DDC sits at 0 Hz; without
-    /// AdcRouting it samples ADC0 instead of the dedicated PA-coupler ADC1
-    /// — pscc would then see no useful feedback and binfo[6] would NaN out
-    /// (Issue #172, observed before this fix). Mirrors mi0bot
-    /// networkproto1.c:WriteMainLoop_HL2 case 2/3/4.
+    /// the rotation is widened to 16 phases and includes the HL2-PS
+    /// registers — RxFreq2/3/4 (the four-DDC NCOs) and LnaTxGainStable
+    /// (HL2-doc 0x0e, AD9866 TX-LNA gain control). Without RxFreq3/RxFreq4
+    /// DDC2/DDC3 sit at 0 Hz and pscc gets DC; without LnaTxGainStable the
+    /// AD9866 PGA may switch gain between RX and TX (if a prior client set
+    /// en_tx_gain=1), shifting the leakage-based feedback level on DDC2
+    /// across MOX edges — binfo[6]=0x0001 NaN cascade in pscc (Issue #172,
+    /// observed before this fix). The original "AdcRouting" name for 0x0e
+    /// was derived from mi0bot Thetis comments and does NOT match upstream
+    /// HL2 gateware semantics — see CcRegister.LnaTxGainStable for the
+    /// long-form explanation. Mirrors mi0bot networkproto1.c:WriteMainLoop_HL2
+    /// case 2/3/4 wire-byte-by-wire-byte even though the comments diverge.
     /// </summary>
     internal static (ControlFrame.CcRegister first, ControlFrame.CcRegister second) PhaseRegisters(
         int phase, bool mox, bool psArmed)
@@ -887,8 +906,8 @@ public sealed class Protocol1Client : IProtocol1Client
             if (mox)
             {
                 // PS+MOX (HL2 4-DDC). Every 16-frame window emits each of
-                // the seven PS-critical registers (Config, TxFreq, RxFreq,
-                // RxFreq2, RxFreq3, RxFreq4, AdcRouting, Attenuator,
+                // the nine PS-critical registers (Config, TxFreq, RxFreq,
+                // RxFreq2, RxFreq3, RxFreq4, LnaTxGainStable, Attenuator,
                 // DriveFilter) at least twice. RxFreq3/RxFreq4 carry the
                 // pscc TX/RX NCO frequencies — without them DDC2 and DDC3
                 // sit at 0 Hz and pscc gets DC. Predistortion is omitted;
@@ -901,7 +920,7 @@ public sealed class Protocol1Client : IProtocol1Client
                     3  => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.DriveFilter),
                     4  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq3),
                     5  => (ControlFrame.CcRegister.RxFreq2,    ControlFrame.CcRegister.RxFreq4),
-                    6  => (ControlFrame.CcRegister.AdcRouting, ControlFrame.CcRegister.TxFreq),
+                    6  => (ControlFrame.CcRegister.LnaTxGainStable, ControlFrame.CcRegister.TxFreq),
                     7  => (ControlFrame.CcRegister.Config,     ControlFrame.CcRegister.TxFreq),
                     8  => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.RxFreq3),
                     9  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq4),
@@ -909,12 +928,12 @@ public sealed class Protocol1Client : IProtocol1Client
                     11 => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.DriveFilter),
                     12 => (ControlFrame.CcRegister.RxFreq2,    ControlFrame.CcRegister.RxFreq3),
                     13 => (ControlFrame.CcRegister.RxFreq4,    ControlFrame.CcRegister.TxFreq),
-                    14 => (ControlFrame.CcRegister.AdcRouting, ControlFrame.CcRegister.RxFreq3),
+                    14 => (ControlFrame.CcRegister.LnaTxGainStable, ControlFrame.CcRegister.RxFreq3),
                     _  => (ControlFrame.CcRegister.Config,     ControlFrame.CcRegister.RxFreq4),
                 };
             }
-            // PS armed but RX-only: cache RxFreq3 / RxFreq4 / AdcRouting so
-            // the radio has them ready for the next MOX edge. Number-of-
+            // PS armed but RX-only: cache RxFreq3 / RxFreq4 / LnaTxGainStable
+            // so the radio has them ready for the next MOX edge. Number-of-
             // receivers in Config is 0 here so DDC2/DDC3 aren't streaming;
             // these writes are harmless.
             return q switch
@@ -925,7 +944,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 3  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq2),
                 4  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq3),
                 5  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq4),
-                6  => (ControlFrame.CcRegister.AdcRouting, ControlFrame.CcRegister.RxFreq),
+                6  => (ControlFrame.CcRegister.LnaTxGainStable, ControlFrame.CcRegister.RxFreq),
                 7  => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.RxFreq),
                 8  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.Config),
                 9  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.DriveFilter),
@@ -933,7 +952,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 11 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.Attenuator),
                 12 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq3),
                 13 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq4),
-                14 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.AdcRouting),
+                14 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.LnaTxGainStable),
                 _  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.Config),
             };
         }

@@ -65,22 +65,47 @@ internal static class ControlFrame
         Config = 0x00,
         TxFreq = 0x02,
         RxFreq = 0x04,
-        // RX2 NCO (DDC1). HL2-doc address 0x03 → wire byte 0x06. mi0bot
-        // 4-DDC layout for HL2: DDC1 holds RX2 / second-receiver freq,
-        // unrelated to PS. Zeus has no split-VFO so this just mirrors
-        // VfoAHz; harmless when DDC1 isn't being audio-routed.
+        // RX2 NCO (DDC1). HL2-doc address 0x03 → wire byte 0x06. In the
+        // upstream HL2 gateware, DDC1 shares `mix2_2` with DDC3
+        // (rtl/radio_openhpsdr1/radio.sv:515-540) — they take the same
+        // ADC input. During PS+MOX `mix2_2.adc` is switched to
+        // `tx_data_dac` (line 521: `(tx_on & pure_signal) ? tx_data_dac
+        // : adcpipe[1]`), so DDC1 ends up demodulating the pre-PA DAC
+        // samples at whatever NCO we set here. Zeus has no split-VFO
+        // and consumes DDC1 only as audio (when PS is off), so this
+        // just mirrors VfoAHz; the demodulated stream during PS+MOX is
+        // ignored (DDC3 is the canonical TX reference for pscc).
         RxFreq2 = 0x06,
-        // RX3 NCO (DDC2). HL2-doc address 0x04 → wire byte 0x08.
-        // mi0bot's HL2 4-DDC layout uses DDC2 as the **PureSignal RX
-        // feedback** stream (post-PA tap, fed to pscc as the "rx" arg).
-        // mi0bot networkproto1.c case 5 / WriteMainLoop_HL2: NCO = TX
-        // frequency. cmaster.cs:8537 routes psrx=2 when tot=5 (MOX+PS).
+        // RX3 NCO (DDC2). HL2-doc address 0x04 → wire byte 0x08. DDC2
+        // is fed by `mix2_0` (rtl/radio_openhpsdr1/radio.sv:484-495),
+        // shared with DDC0 — i.e. DDC2 reads `adcpipe[0]`, the real
+        // RF signal from HL2's single ADC. It is NEVER switched to
+        // `tx_data_dac`. During PS+MOX Zeus tunes this NCO to TX freq
+        // so DDC2 demodulates whatever the antenna is receiving at TX
+        // frequency. While keyed that is the **RF-leakage of the
+        // radiated TX signal** coupling back into the RX frontend —
+        // functionally it serves as the pscc "rx" feedback, but the
+        // mechanism is electromagnetic leakage, NOT a hardware coupler
+        // (HL2 has no internal feedback coupler — see
+        // docs/references/protocol-1/hermes-lite2-protocol.md
+        // "External coupler is the only working configuration"). This
+        // is why per-board HW peak calibration is mandatory; the
+        // leakage level is hardware-unit specific. See
+        // docs/lessons/hl2-ps-hwpeak-calibration.md.
+        // mi0bot cmaster.cs:8537 also picks `psrx=2` when tot=5 (MOX+
+        // PS); the wire layout matches even though the mi0bot comments
+        // describe the topology incorrectly.
         RxFreq3 = 0x08,
-        // RX4 NCO (DDC3). HL2-doc address 0x05 → wire byte 0x0a.
-        // mi0bot's HL2 4-DDC layout uses DDC3 as the **PureSignal TX
-        // reference** stream (TX-DAC loopback / clean modulator, fed to
-        // pscc as the "tx" arg). NCO = TX frequency. cmaster.cs:8538
-        // routes pstx=3 when tot=5.
+        // RX4 NCO (DDC3). HL2-doc address 0x05 → wire byte 0x0a. DDC3
+        // is fed by `mix2_2` (shared with DDC1 — see RxFreq2 above).
+        // During PS+MOX `mix2_2.adc` is `tx_data_dac` (pre-PA DAC
+        // output, 12-bit cordic sum from rtl/radio_openhpsdr1/radio.sv
+        // ≈ line 1016). With NCO = TX freq, DDC3 produces a clean
+        // baseband copy of the TX waveform straight out of the DAC —
+        // this IS the pscc "tx" reference, and it's the only feedback
+        // path on HL2 that is genuinely deterministic (independent of
+        // antenna load, leakage, room coupling, etc.). mi0bot
+        // cmaster.cs:8538 picks `pstx=3` when tot=5.
         RxFreq4 = 0x0a,
         DriveFilter = 0x12,
         // Extended RX attenuator + (HL2 only) PureSignal enable bit and LNA
@@ -92,23 +117,57 @@ internal static class ControlFrame
         // the user_dig_out nibble in C3, plus an extended C4 attenuator
         // range (0x40 | (60-Db)) — see WriteAttenuatorPayload.
         Attenuator = 0x14,
-        // ADC assignments + TX step attenuator. HL2-doc address 0x0e →
-        // wire byte 0x1c. C1 carries P1_adc_cntrl bits [7:0] — per-RX
-        // ADC source selector, 2 bits per RX (RX0 → bits[1:0],
-        // RX1 → bits[3:2], …). Mi0bot networkproto1.c case 4 +
-        // netInterface.c:917-930. For HL2 PureSignal during TX,
-        // cntrl1 = 4 (= bits[3:2] = 1) routes DDC1 onto ADC1 (the
-        // dedicated PA-coupler feedback ADC) so pscc sees the post-PA
-        // signal. Without this register, HL2 leaves DDC1 on ADC0 and
-        // pscc never converges (binfo[6]=0x0001 NaN cascade). C2 carries
-        // bits [13:8] (zero for HL2 — only RX0..RX3 used), C3 = ADC TX
-        // step attenuator (we leave 0).
-        AdcRouting = 0x1c,
+        // HL2 AD9866 PGA stable-gain control. HL2-doc address 0x0e →
+        // wire byte 0x1c.
+        //
+        // NOTE: mi0bot Thetis (and prior Zeus comments) call this the
+        // "ADC routing" / `P1_adc_cntrl` register, asserting that C1=0x04
+        // "routes DDC1 onto ADC1 (the dedicated PA-coupler feedback ADC)".
+        // That interpretation is WRONG for the upstream HL2 gateware:
+        //   1. HL2 has no internal feedback coupler and no second ADC
+        //      decoded in the gateware command path (see
+        //      docs/references/protocol-1/hermes-lite2-protocol.md
+        //      "External coupler is the only working configuration",
+        //      and rtl/radio_openhpsdr1/radio.sv — no 6'h0e decoder).
+        //   2. The actual gateware decoder for 6'h0e lives in
+        //      rtl/ad9866.sv:137-140 (FAST_LNA block) and reads
+        //      cmd_data[15] (en_tx_gain), cmd_data[14], cmd_data[13:8]
+        //      = TX LNA gain — not C1 / not ADC routing.
+        //
+        // What Zeus's write (C1=0x04, C2=C3=C4=0) actually does on
+        // upstream HL2: cmd_data[15]=0 → en_tx_gain=0, forcing the
+        // AD9866 PGA to keep `rx_gain` (set via 0x0a) during TX instead
+        // of switching to `tx_gain`. That keeps the PGA stable across
+        // RX↔TX transitions, which the leakage-based PS feedback path
+        // needs to converge — the C1=0x04 byte itself is ignored. The
+        // empirical observation from Issue #172 (PS converges with this
+        // write, NaN-cascades without it) was real, but for a different
+        // reason than the original "ADC routing" comment claimed.
+        //
+        // The HL2 PS feedback in the upstream gateware is not from a
+        // physical coupler. DDC2 reads adcpipe[0] (RF antenna) via
+        // mix2_0 at TX-freq NCO → demodulates radiated-TX leakage during
+        // MOX (= "post-PA" only in the loosest electromagnetic sense),
+        // and DDC3 reads tx_data_dac via mix2_2 at TX-freq NCO →
+        // demodulates the pre-PA DAC samples (the true clean TX
+        // reference for pscc). See docs/lessons/hl2-ps-hwpeak-calibration.md
+        // for why this leakage dependency requires per-board HW peak
+        // calibration.
+        LnaTxGainStable = 0x1c,
         // Predistortion config register 0x2b (HL2 PureSignal). C0 wire byte
-        // = 0x2b << 1 = 0x56. bits [31:24] = predistortion subindex (C1),
-        // bits [19:16] = predistortion value (C2 [3:0]). PR #119 review
-        // documents the common encoding mistake of placing the value in
-        // C2 [7:4] — do NOT shift it left.
+        // = 0x2b << 1 = 0x56. The HL2-protocol doc table reserves bits
+        // [19:16] = predistortion value (C2 [3:0]) for the host to write,
+        // but the upstream gateware actually only reads cmd_data[17:16]
+        // (= C2 [1:0]). See rtl/radio_openhpsdr1/radio.sv:288-293:
+        //   6'h2b: if (cmd_data[31:24]==8'h00) tx_predistort_next = cmd_data[17:16];
+        // Valid values fit in 2 bits: 0=off (identity), 1=on (LUT),
+        // 2=EER envelope. Bits [19:18] are decoded but read as zero on
+        // those values — keep writing the full nibble to stay forward-
+        // compatible with any derivative gateware that widens the field.
+        // bits [31:24] = predistortion subindex (C1) — the subindex value
+        // must equal 0x00 for the gateware to accept the value. PR #119
+        // review documents the common encoding mistake of placing the
+        // value in C2 [7:4] — do NOT shift it left.
         Predistortion = 0x56,
     }
 
@@ -226,8 +285,8 @@ internal static class ControlFrame
                 WriteAttenuatorPayload(cc[1..], in state);
                 break;
 
-            case CcRegister.AdcRouting:
-                WriteAdcRoutingPayload(cc[1..], in state);
+            case CcRegister.LnaTxGainStable:
+                WriteLnaTxGainStablePayload(cc[1..], in state);
                 break;
 
             case CcRegister.Predistortion:
@@ -291,23 +350,43 @@ internal static class ControlFrame
         }
     }
 
-    private static void WriteAdcRoutingPayload(Span<byte> c14, in CcState s)
+    private static void WriteLnaTxGainStablePayload(Span<byte> c14, in CcState s)
     {
-        // HL2 register 0x0e (C0 wire byte 0x1c). C1 carries the
-        // P1_adc_cntrl byte = per-RX ADC source selector packed 2 bits per
-        // RX (RX0 → bits[1:0], RX1 → bits[3:2], RX2 → bits[5:4],
-        // RX3 → bits[7:6]). 0 = ADC0 (main antenna), 1 = ADC1 (HL2's
-        // dedicated PA-coupler feedback ADC). For HL2 PureSignal during
-        // TX, mi0bot sets cntrl1=4 (= bits[3:2]=1) so DDC1 sources ADC1
-        // and pscc sees the post-PA signal. Outside PS+MOX, all RX → ADC0.
-        // C2 carries cntrl2 (RX4..RX6 — HL2 only has 4 DDCs in this
-        // codepath, leave 0). C3 = ADC[0].tx_step_attn (Zeus drives TX
-        // attenuation through the dedicated 0x14 path, leave 0 here).
-        bool psActive = s.PsEnabled && s.Mox && s.Board == HpsdrBoardKind.HermesLite2;
-        c14[0] = psActive ? (byte)0x04 : (byte)0;  // C1: cntrl1
-        c14[1] = 0;                                 // C2: cntrl2 (high bits of P1_adc_cntrl)
-        c14[2] = 0;                                 // C3: tx_step_attn (unused here)
-        c14[3] = 0;                                 // C4: reserved
+        // HL2 register 0x0e (C0 wire byte 0x1c). The upstream HL2 gateware
+        // decoder for this address (rtl/ad9866.sv:137-140, FAST_LNA block)
+        // reads:
+        //   cmd_data[15]    → en_tx_gain   (1 = use hardware-managed TX LNA gain)
+        //   cmd_data[14]    → TX gain sign/mode helper
+        //   cmd_data[13:8]  → TX gain value
+        // These bits live in C3 / C2 of the CC frame, NOT C1.
+        //
+        // We send all zeros, which sets en_tx_gain=0. With en_tx_gain=0
+        // the AD9866 PGA gain stays at `rx_gain` (set via 0x0a) during
+        // TX instead of switching to `tx_gain` — i.e. the PGA is stable
+        // across RX↔TX transitions. PS feedback on HL2 depends on this
+        // stability because DDC2 carries RF-leakage from the radiated TX
+        // (gain-dependent) and any PGA step on the MOX edge would shift
+        // its amplitude.
+        //
+        // The historical c14[0]=0x04 byte (= mi0bot's `cntrl1=4` for
+        // "route DDC1 onto ADC1") falls in cmd_data[31:24], which the
+        // gateware doesn't read at this address. It is ignored. We zero
+        // it out to make the wire honest about what we're actually
+        // controlling. PS still converges because what mattered all
+        // along was the en_tx_gain=0 (cmd_data[15]) bit — not the
+        // imagined ADC routing.
+        //
+        // Outside PS+MOX we still emit zeros: this preserves the same
+        // stable-gain invariant whenever the radio key-ups (MOX may flip
+        // before the next register-rotation tick lands), and matches the
+        // operator's expectation that Zeus does not touch hardware-
+        // managed TX LNA gain. Any operator UI for TX-managed LNA gain
+        // would need its own register slot; today Zeus has none.
+        _ = s; // CcState reserved for future per-board branching.
+        c14[0] = 0;   // C1 — cmd_data[31:24]: not read by gateware at 0x0e
+        c14[1] = 0;   // C2 — cmd_data[23:16]: not read by gateware at 0x0e
+        c14[2] = 0;   // C3 — cmd_data[15:8]: en_tx_gain + TX gain. Zero → disabled.
+        c14[3] = 0;   // C4 — cmd_data[7:0]:  not read by gateware at 0x0e
     }
 
     private static void WritePredistortionPayload(Span<byte> c14, in CcState s)

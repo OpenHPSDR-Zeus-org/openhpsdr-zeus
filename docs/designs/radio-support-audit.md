@@ -161,7 +161,7 @@ HL2-specific control-frame encoding; all other boards use standard Protocol-1 se
 | Attenuator (0x14) | C4 = 0x40 \| (60 - Db); RX attn = inverse gain | 241–243 |
 | Attenuator (0x14) | TX step-atten override during MOX + PS active | 257–262 |
 | Attenuator (0x14) | PureSignal enable → C2 bit 6 | 277–280 |
-| AdcRouting (0x1c) | cntrl1 = 0x04 (DDC1 → ADC1) when PS+MOX active | 295–296 |
+| LnaTxGainStable (0x1c) | All zeros → en_tx_gain=0; AD9866 PGA holds RX gain across MOX (stable PS feedback). Note: mi0bot's historical "cntrl1=0x04 → DDC1→ADC1" reading does NOT match upstream HL2 gateware — see ControlFrame.cs:LnaTxGainStable and hermes-lite2-protocol.md "Feedback IQ". | 295–296 |
 | Predistortion (0x2b) | Subindex in C1, value [3:0] in C2 | 311–312 |
 | Config (0x00) | N2ADR filter-board auto-OC mask | 330–333 |
 | IQ Payload | TX IQ written only for HL2 during MOX | 421–437 |
@@ -319,7 +319,7 @@ Per-board PS hardware-peak defaults. Applies to both RXA/TXA WDSP engine scaling
 - `Zeus.Server.Hosting/RadioService.cs` — ConnectedBoardKind, EffectiveBoardKind, ResolvePsHwPeak, RecomputePaAndPush
 
 ### Wire Format
-- `Zeus.Protocol1/ControlFrame.cs` — HL2-specific register encodings (DriveFilter, Attenuator, AdcRouting, Predistortion, Config, IQ payload)
+- `Zeus.Protocol1/ControlFrame.cs` — HL2-specific register encodings (DriveFilter, Attenuator, LnaTxGainStable, Predistortion, Config, IQ payload)
 
 ### Tests
 - `tests/Zeus.Server.Tests/EffectiveBoardKindTests.cs` — Board kind resolution (P1 only)

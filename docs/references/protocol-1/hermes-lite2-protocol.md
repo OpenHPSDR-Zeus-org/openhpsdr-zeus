@@ -401,10 +401,35 @@ the value is C2 bits [3:0], **NOT [7:4]** — do not shift it left.
 
 ### Feedback IQ — gateware mechanism (the answered question)
 
-When `0x0a[22] = 1` and the radio is keyed, the HL2 gateware re-points its
-**dedicated feedback ADC (ADC1)** through one of the existing DDCs. The
-samples come back **inside the existing EP6 RX IQ stream** — there is **no
-new packet type or endpoint**.
+When `0x0a[22] = 1` and the radio is keyed, the upstream HL2 gateware
+switches one of the existing DDC mixer inputs from the antenna ADC sample
+(`adcpipe[1]`) to the pre-PA TX DAC sample (`tx_data_dac`) — see
+`rtl/radio_openhpsdr1/radio.sv:514-526`. The feedback samples come back
+**inside the existing EP6 RX IQ stream** — there is **no new packet type
+or endpoint**.
+
+**Correction (2026-05):** earlier revisions of this section described the
+mechanism as "the HL2 gateware re-points its dedicated feedback ADC
+(ADC1)" via "the `cntrl1` ADC-mapping byte the host writes in C0=0x1c".
+That phrasing was inherited from mi0bot Thetis comments and does not
+match upstream HL2 gateware:
+
+- Upstream HL2 decodes **one** ADC in the Protocol-1 command path
+  (`rffe_ad9866_rx`). `rtl/radio_openhpsdr1/radio.sv` and
+  `rtl/control.sv` have no `6'h0e` decoder for ADC routing.
+- The gateware decoder for `cmd_addr == 6'h0e` lives in
+  `rtl/ad9866.sv:137-140` (FAST_LNA block) and uses the bits to set
+  the AD9866 PGA TX-LNA gain (`en_tx_gain`, `tx_gain[5:0]`). That
+  matches the register table above (lines 63-65 — `0x0e [15]` Enable
+  hardware-managed LNA gain for TX, `[13:8]` TX gain value).
+- The mi0bot host-side write at `C0=0x1c` with C1=0x04 lands in
+  `cmd_data[31:24]`, which the gateware does not read at this
+  address. What the gateware DOES read is `cmd_data[15]` (= C3 bit
+  7, zero in mi0bot's write), setting `en_tx_gain = 0`. That keeps
+  the AD9866 PGA at `rx_gain` across both RX and TX — i.e. a stable
+  PGA across MOX edges, which is what PS actually needed. The "ADC
+  routing" framing was a misattribution; the underlying behaviour
+  works for the right reason once you unpack the wire byte.
 
 Of the four candidates the parent issue listed:
 
@@ -413,35 +438,48 @@ Of the four candidates the parent issue listed:
 - ❌ NOT a new packet type / endpoint (still EP6, port 1024 reply path,
   still 1032-byte Metis frames).
 - ❌ NOT a frequency-offset injection on RX1.
-- ✅ **It is a "second receiver re-pointed at the feedback ADC"** —
-  specifically, when PS is on, the HL2 firmware's gateware honours the
-  ADC-control bit (`SetADC_cntrl1`, see below) that maps a DDC to ADC1
-  instead of ADC0, and that DDC then carries the post-coupler feedback
-  samples. Which DDC index this lands on is set by the `nddc` count and the
-  `cntrl1` ADC-mapping byte the host writes in C0=0x1c.
+- ✅ **It is "DDCs whose mixer ADC input is switched to the TX DAC tap
+  when keyed"** — specifically, `mix2_2` (the mixer that feeds DDC1
+  and DDC3) has its `adc` port hard-wired to
+  `(tx_on & pure_signal) ? tx_data_dac : adcpipe[1]`
+  (`rtl/radio_openhpsdr1/radio.sv:521`). Whichever NCO the host sets
+  on `rx_phase[1]` or `rx_phase[3]` determines what TX-DAC content
+  ends up on DDC1 / DDC3. DDC0 and DDC2 (fed by `mix2_0`) keep
+  reading `adcpipe[0]`, the antenna ADC sample, unchanged.
 
 Two HL2 PS layouts exist in the wild:
 
 1. **Hermes-class 2-DDC layout** (mi0bot `networkproto1.c:990, 1005`) — when
    `nddc == 2` and `puresignal_run == 1` and `XmitBit == 1`, both DDC0 and
-   DDC1 are programmed to TX frequency, ADC mapping is set so DDC1 reads
-   ADC1 (feedback), and the EP6 packet carries paired DDC0/DDC1 samples
-   (12 bytes per pair: 3I+3Q for DDC0 then 3I+3Q for DDC1, repeating).
-   This is the simplest layout and matches bare Hermes / ANAN-10 / ANAN-100
-   gateware.
+   DDC1 are programmed to TX frequency, and the EP6 packet carries paired
+   DDC0/DDC1 samples (12 bytes per pair: 3I+3Q for DDC0 then 3I+3Q for
+   DDC1, repeating). On bare Hermes / ANAN-10 / ANAN-100 the ADC routing
+   does map DDC1 to the dedicated PA-coupler ADC1. On upstream HL2, DDC0
+   carries antenna RF at TX freq (= RF leakage of the radiated TX) and
+   DDC1 carries the TX-DAC tap (via `mix2_2`) — functionally analogous
+   from pscc's perspective even though the gateware mechanism differs.
 
 2. **HL2 4-DDC layout** (mi0bot `console.cs:8421-8503`, current default for
-   `HPSDRModel.HERMESLITE`) — `nddc = 4`, with DDC0=RX1, DDC1=RX2 (or
-   feedback, depending on `cntrl1`), DDC2 and DDC3 programmed to TX
-   frequency. When PS+TX is active, mi0bot sets `cntrl1 = 4` (=
-   `prn->rx[1].rx_adc = 1`, mapping DDC1 to ADC1 / feedback). The
-   `CMLoadRouterAll` table (mi0bot `cmaster.cs:699-718`) wires DDC2+DDC3
-   paired into the WDSP `psccF` block as the PS feedback stream when
-   control-bit 5 (TX|PS|noDIV) is asserted, and DDC1 alone goes into RX2's
-   audio path.
+   `HPSDRModel.HERMESLITE`) — `nddc = 4`, DDC0 = RX1 audio at VfoAHz,
+   DDC1 = RX2 NCO (junk during PS+MOX because `mix2_2` is forced to
+   `tx_data_dac`), DDC2 and DDC3 programmed to TX frequency. Per
+   upstream HL2 gateware: DDC2 (`mix2_0` + `adcpipe[0]` at TX freq) =
+   antenna RF demodulated to baseband ≈ RF leakage of the radiated TX
+   signal during MOX → pscc "rx" feedback. DDC3 (`mix2_2` +
+   `tx_data_dac` at TX freq) = pre-PA DAC samples demodulated to
+   baseband → pscc "tx" reference (deterministic, independent of
+   antenna).
 
-   pihpsdr `old_protocol.c:895-980` confirms this for HL2 with explicit
-   constants: `rx_feedback_channel(DEVICE_HERMES_LITE2) = 2`,
+   mi0bot's `cntrl1 = 4` write at `C0=0x1c` is folklore that survives
+   from Hermes/ANAN-era ADC routing; on upstream HL2 it has no
+   ADC-routing effect (the bits aren't decoded that way at this
+   address) but its side-effect of `en_tx_gain=0` keeps the AD9866
+   PGA stable across MOX, which the leakage-based DDC2 feedback path
+   needs to converge.
+
+   pihpsdr `old_protocol.c:895-980` confirms the host-side layout for
+   HL2 with explicit constants:
+   `rx_feedback_channel(DEVICE_HERMES_LITE2) = 2`,
    `tx_feedback_channel(DEVICE_HERMES_LITE2) = 3`,
    `how_many_receivers(DEVICE_HERMES_LITE2 with PS) = 4`.
 
