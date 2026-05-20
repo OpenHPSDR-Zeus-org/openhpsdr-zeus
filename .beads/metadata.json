@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "OPENHPSDR_Zeus",
+  "project_id": "2d60372d-32ad-4b0f-8ab6-59471a18ceb0"
+}
