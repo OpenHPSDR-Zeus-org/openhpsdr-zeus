@@ -45,12 +45,19 @@ const ANVELINA_DX_PIN_LABELS: Record<number, string> = {
   11: 'DX OUT 11 — USEROUT10 (byte 1397 bit 4)',
 };
 
-// localStorage flag the maintainer flips on while the on-radio
-// verification with an actual Anvelina-PRO3 is still pending — when
-// set, the ext columns render disabled even on non-Anvelina boards
-// so the wire path can be exercised end-to-end at the snapshot/
-// frontend layer. Delete this constant and its toggle once Anvelina
-// hardware has been bench-tested (see comment thread on issue #407).
+// Developer-only escape hatch. Set this localStorage key to '1' from
+// the browser console to surface the Anvelina ext columns on a non-
+// Anvelina radio for bench-testing the wire path:
+//
+//   localStorage.setItem('zeus.pa.showAnvelinaExtForTesting', '1');
+//   location.reload();
+//
+// There is no operator-facing UI to flip this — Anvelina-PRO3 users
+// always see the ext columns (capability flag drives it), and every
+// other operator never sees them. The flag exists so the maintainer
+// can exercise byte 1397 end-to-end before on-radio verification
+// against an actual Anvelina-PRO3 lands; delete the constant and its
+// hydration once #407 is fully verified.
 const ANVELINA_EXT_TESTING_KEY = 'zeus.pa.showAnvelinaExtForTesting';
 
 // Persisted active tab for the Per Band section (design v2). Falls
@@ -334,25 +341,16 @@ export function PaSettingsPanel() {
   //     bench-testing without an actual Anvelina; remove once on-radio
   //     verification is done)
   const anvelinaDxSupported = capabilities.supportsAnvelinaDxOc;
-  const [showAnvelinaExtForTesting, setShowAnvelinaExtForTesting] = useState<boolean>(
-    () => {
-      try {
-        return localStorage.getItem(ANVELINA_EXT_TESTING_KEY) === '1';
-      } catch {
-        return false;
-      }
-    },
-  );
-  useEffect(() => {
+  // Dev-only escape hatch — see ANVELINA_EXT_TESTING_KEY comment. Read
+  // once at mount; there is no UI to flip it. A dev exercising the
+  // wire path sets the localStorage key from the console and reloads.
+  const [showAnvelinaExtForTesting] = useState<boolean>(() => {
     try {
-      localStorage.setItem(
-        ANVELINA_EXT_TESTING_KEY,
-        showAnvelinaExtForTesting ? '1' : '0',
-      );
+      return localStorage.getItem(ANVELINA_EXT_TESTING_KEY) === '1';
     } catch {
-      /* localStorage unavailable (private mode / SSR) — fine to drop. */
+      return false;
     }
-  }, [showAnvelinaExtForTesting]);
+  });
   const showAnvelinaExt = anvelinaDxSupported || showAnvelinaExtForTesting;
   const anvelinaDxTooltip = anvelinaDxSupported
     ? 'Anvelina-PRO3 Open-Collector DX outputs (USEROUT 7–10). EU2AV spec — Protocol 2 byte 1397.'
@@ -501,17 +499,6 @@ export function PaSettingsPanel() {
               >
                 {COPY_ICON}
                 {activeTab === 'tx' ? 'Copy from OC RX' : 'Copy from OC TX'}
-              </button>
-              <button
-                type="button"
-                className={'pa-ext-toggle' + (showAnvelinaExt ? ' is-on' : '')}
-                onClick={() => setShowAnvelinaExtForTesting((prev) => !prev)}
-                aria-pressed={showAnvelinaExt}
-                title={anvelinaDxTooltip}
-              >
-                <span className="pa-ext-toggle-track" aria-hidden="true" />
-                <img src={anvelinaLogo} alt="Anvelina" />
-                <span>EXT&nbsp;8–11</span>
               </button>
             </div>
           )}
