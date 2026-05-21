@@ -110,16 +110,21 @@
 }
 
 /* Wrapper that holds the standard PillBar, the divider, and
-   the Anvelina ext PillBar in one row. Keeps both bars baseline-
-   aligned so the divider sits between them at a consistent y. */
-.pa-oc-cell {
-  display: inline-flex;
+   the Anvelina ext PillBar in one row. Header and body share
+   the same 7-pin : 4-pin ratio so the EXT label in the header
+   lands directly above the 8..11 pins in the body — the 1fr :
+   0.57fr split is exactly 7:4, the underlying pin counts. */
+.pa-oc-cell,
+.pa-oc-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 0.57fr);
   align-items: center;
-  gap: 10px;
+  column-gap: 10px;
+  width: 100%;
 }
 .pa-oc-divider {
   width: 1px;
-  align-self: stretch;
+  height: 28px;
   background: linear-gradient(
     180deg,
     transparent,
@@ -129,20 +134,26 @@
   );
 }
 
-/* Column-header layout — "OC TX" label on the left, Anvelina
-   logo + EXT tag on the right. Disabled when capability flag
-   is false. */
-.pa-oc-head {
+/* Column-header label inside `.pa-oc-head`. The std label
+   sits in the 1fr grid cell, the EXT label in the 0.57fr
+   cell — both anchor flush-left within their cell so the
+   text aligns with the pins below. */
+.pa-oc-head .pa-oc-std-label {
   display: inline-flex;
   align-items: center;
-  gap: 10px;
-  width: 100%;
+  gap: 6px;
 }
 .pa-oc-head .pa-oc-ext-label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-left: auto;
+}
+.pa-oc-head .pa-oc-ext-spacer {
+  /* Empty placeholder kept in the DOM when the ext side is
+     hidden (capability off + dev toggle off) so the grid keeps
+     the 1fr/auto/0.57fr ratio and the header/body still align
+     even though there are no ext pins to show. */
+  visibility: hidden;
 }
 .pa-oc-head .pa-oc-ext-tag {
   font-size: 9px;
