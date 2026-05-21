@@ -135,13 +135,7 @@ public sealed class Protocol1Client : IProtocol1Client
     public Protocol1Client(ILogger<Protocol1Client>? logger = null, ITxIqSource? iqSource = null)
     {
         _log = logger ?? NullLogger<Protocol1Client>.Instance;
-        // Wrap the operator's IQ source in a tap so we can mirror every
-        // transmitted sample into the PS-feedback TX-side ring without
-        // changing the WriteUsbFrame signature. The tap is cheap (one
-        // s16→float and a ring-index bump per sample) and a no-op when
-        // PS isn't armed (the consumer side checks PsEnabled before
-        // touching the ring contents).
-        _txIqSource = new PsTapIqSource(iqSource ?? new TestToneGenerator(), this);
+        _txIqSource = iqSource ?? new TestToneGenerator();
         _channel = Channel.CreateBounded<IqFrame>(new BoundedChannelOptions(DefaultFrameChannelCapacity)
         {
             FullMode = BoundedChannelFullMode.DropOldest,
@@ -162,10 +156,17 @@ public sealed class Protocol1Client : IProtocol1Client
     // Protocol2Client.PsFeedbackFrames channel so DspPipelineService can
     // pump either protocol with the same code. Issue #172.
     //
-    // TX side = the operator's TX IQ as we wrote it to the wire (snapshotted
-    // from _txIqSource on every TX packet). RX side = DDC1 samples decoded
-    // from the EP6 RX stream when PsEnabled && Mox && nddc==2 (HL2 paired
-    // layout, mi0bot networkproto1.c:990,1005).
+    // 4-DDC mi0bot canonical layout (Thetis console.cs:8186-8265). When
+    // PsEnabled && Mox && Board==HL2, Zeus requests NumReceiversMinusOne=3
+    // in the Config payload so the gateware emits the 4-DDC EP6 packet
+    // shape. Both PS streams come from the wire (no host-side TX ring):
+    //   - TX side = DDC3 (mix2_2 + tx_data_dac at TX freq → pre-PA DAC
+    //     tap per radio.sv:521).
+    //   - RX side = DDC2 (mix2_0 + adcpipe[0] at TX freq → RF leakage of
+    //     the radiated TX coupling back into the RX frontend).
+    // See HandlePs4DdcPacket below for the parser + accumulator that fills
+    // these buffers and emits PsFeedbackFrame for the DspPipelineService
+    // pump. Cleanup issue #434.
     private const int PsFeedbackBlockSize = 1024;
     private readonly Channel<PsFeedbackFrame> _psFeedbackFrames = Channel.CreateUnbounded<PsFeedbackFrame>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = true });
@@ -205,44 +206,6 @@ public sealed class Protocol1Client : IProtocol1Client
 
     /// <inheritdoc />
     public void DetachRxSink() => Interlocked.Exchange(ref _rxSink, null);
-
-    // Small ring of the most-recent TX-IQ samples we wrote to the wire.
-    // When PS+MOX is on, the RX loop pulls a "TX side" out of this ring
-    // for each DDC1 feedback sample so the calcc state machine receives
-    // paired (tx_ref, rx_obs) blocks. The ring holds two PS feedback blocks
-    // worth of samples (2048) so the natural latency between writing an IQ
-    // sample and seeing its post-PA reflection on DDC1 (HL2 + external
-    // coupler total round-trip ≈ 1-2 ms or ~50-200 samples at 48 kHz)
-    // is comfortably absorbed without overwriting before the read.
-    //
-    // Aligning ring read offset with ring write offset is approximate —
-    // mi0bot/pihpsdr both rely on calcc's own coarse alignment search to
-    // recover the exact group-delay, and the operator-tunable "Amp delay"
-    // setting (PsAmpDelayNs) is exactly there to nudge it. So we read
-    // from the most-recent write minus a fixed lookback (currently 0 —
-    // calcc handles the rest).
-    private const int PsTxRingSize = 2048;
-    private readonly float[] _psTxRingI = new float[PsTxRingSize];
-    private readonly float[] _psTxRingQ = new float[PsTxRingSize];
-    private int _psTxRingWrite;
-
-    /// <summary>
-    /// Capture one TX-IQ sample-pair just after it has been written into the
-    /// EP2 payload. Called from <see cref="ControlFrame.WriteUsbFrame"/>
-    /// indirectly via the <see cref="ITxIqSource"/> seam — see
-    /// <see cref="ApplyPsTap"/>.
-    /// </summary>
-    internal void RecordPsTxSample(short i, short q)
-    {
-        // s16 → float in [-1, +1].
-        const float scale = 1f / 32768f;
-        int idx = _psTxRingWrite;
-        _psTxRingI[idx] = i * scale;
-        _psTxRingQ[idx] = q * scale;
-        idx = (idx + 1) & (PsTxRingSize - 1); // PsTxRingSize is power of 2.
-        // Volatile write so the RX-thread reader observes ordered writes.
-        Volatile.Write(ref _psTxRingWrite, idx);
-    }
 
     /// <summary>
     /// Decode an HL2 4-DDC PS-armed EP6 packet — mi0bot's canonical layout
@@ -1070,25 +1033,4 @@ public sealed class Protocol1Client : IProtocol1Client
     private static long NowNs() =>
         (long)(Stopwatch.GetTimestamp() * (1_000_000_000.0 / Stopwatch.Frequency));
 
-    /// <summary>
-    /// Pass-through IQ source that mirrors every sample into the owning
-    /// client's PS-TX ring. Cheap regardless of PS arm state — the ring
-    /// reader checks PsEnabled before consuming. Issue #172.
-    /// </summary>
-    private sealed class PsTapIqSource : ITxIqSource
-    {
-        private readonly ITxIqSource _inner;
-        private readonly Protocol1Client _owner;
-        public PsTapIqSource(ITxIqSource inner, Protocol1Client owner)
-        {
-            _inner = inner;
-            _owner = owner;
-        }
-        public (short i, short q) Next(double amplitude)
-        {
-            var (i, q) = _inner.Next(amplitude);
-            _owner.RecordPsTxSample(i, q);
-            return (i, q);
-        }
-    }
 }
