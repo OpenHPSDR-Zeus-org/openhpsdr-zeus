@@ -62,19 +62,26 @@
 }
 
 /* ── big-pin variant ─────────────────────────────────────────
-   The Anvelina design (issue #407) calls for prominent OC TX
-   and OC RX rows — pins ~34 px so they read as the primary
-   editable surface in the table. Applied via the `lg` modifier
-   so dense pa-pill consumers elsewhere are unaffected.        */
+   The Anvelina design v2 (issue #407, 2026-05-21 handoff) moves
+   the per-band table behind three inner tabs (OC TX / OC RX /
+   AUTO N2ADR) — one set of pins shown at a time, so each pin
+   can breathe at ~46 px. Applied via the `lg` modifier on
+   pa-pill-bar; dense pa-pill consumers elsewhere stay on the
+   default 16-18 px sizing.                                     */
 .pa-pill-bar.lg {
-  gap: 6px;
-  padding: 3px;
+  gap: 8px;
+  padding: 0;
+  background: transparent;
+  border: 0;
 }
 .pa-pill-bar.lg .pa-pill {
-  width: 30px;
-  height: 30px;
-  font-size: 12px;
+  width: auto;
+  min-width: 46px;
+  flex: 1;
+  height: 44px;
+  font-size: 16px;
   border-radius: var(--r-md);
+  border: 1px solid var(--line-strong);
 }
 
 /* ── Anvelina extension pins (DX OUT 8..11) ──────────────────
@@ -166,6 +173,346 @@
 }
 .pa-oc-head.is-ext-off {
   opacity: 0.55;
+}
+
+/* ── PER BAND inner tabs (design v2) ─────────────────────────
+   Three tabs replace the previous single wide table:
+     OC TX, OC RX, AUTO N2ADR
+   Only one pane visible at a time so each row can host 46 px
+   pins with the band name at 18 px. AUTO tab is gated on the
+   `showAutoCol` heuristic (HL2 with non-zero auto mask).
+*/
+.pa-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  align-self: flex-start;
+}
+.pa-tab {
+  height: 36px;
+  padding: 0 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--r-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-2);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.pa-tab:hover:not(.is-active) {
+  color: var(--fg-1);
+  background: var(--bg-2);
+}
+.pa-tab.is-active {
+  background: var(--bg-2);
+  color: var(--fg-0);
+  border-color: var(--accent);
+}
+.pa-tab .pa-tab-badge {
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-1);
+  color: var(--fg-2);
+  text-transform: none;
+}
+.pa-tab.is-active .pa-tab-badge {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent-bright);
+}
+
+/* Top bar of the Per Band section — tabs on the left, per-tab
+   tools (Copy-from button, EXT toggle, HL2 notice) on the
+   right. Wraps on narrow viewports so the controls don't
+   crowd each other.                                            */
+.pa-perband-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 14px;
+}
+.pa-perband-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 4px;
+}
+.pa-copy-btn {
+  height: 32px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: var(--r-sm);
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  color: var(--fg-1);
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.pa-copy-btn:hover {
+  background: var(--bg-3);
+  border-color: var(--accent);
+}
+.pa-copy-btn svg {
+  width: 13px;
+  height: 13px;
+  color: var(--accent-bright);
+}
+.pa-ext-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--fg-1);
+  cursor: pointer;
+  user-select: none;
+}
+.pa-ext-toggle img {
+  height: 14px;
+  width: auto;
+  display: block;
+}
+.pa-ext-toggle .pa-ext-toggle-track {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out);
+}
+.pa-ext-toggle .pa-ext-toggle-track::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--fg-2);
+  transition:
+    left var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out);
+}
+.pa-ext-toggle.is-on .pa-ext-toggle-track {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+.pa-ext-toggle.is-on .pa-ext-toggle-track::after {
+  left: 15px;
+  background: var(--accent-bright);
+}
+.pa-perband-notice {
+  font-size: 11px;
+  color: var(--fg-2);
+  letter-spacing: 0.02em;
+}
+.pa-perband-notice strong {
+  color: var(--fg-0);
+  font-weight: 600;
+}
+
+/* Per-row grid for the OC TX / OC RX panes. 7fr : 4fr matches
+   the std-7 : ext-4 pin count so columns align even when the
+   table is much wider than the natural pin-bar width. When the
+   EXT 8–11 toggle is off, the row collapses to four columns so
+   the std bar can stretch into the freed space.
+*/
+.pa-oc-row {
+  display: grid;
+  align-items: center;
+  column-gap: 18px;
+  padding: 12px 22px;
+  border-top: 1px solid var(--line-soft);
+  grid-template-columns:
+    72px              /* band */
+    minmax(140px, 210px)  /* pa slider */
+    72px              /* disable PA checkbox */
+    minmax(0, 7fr)    /* std pins 1..7 */
+    16px              /* hairline divider */
+    minmax(0, 4fr);   /* ext pins 8..11 */
+}
+.pa-oc-row:first-child {
+  border-top: 0;
+}
+.pa-table-shell.oc.is-ext-hidden .pa-oc-row {
+  grid-template-columns:
+    72px
+    minmax(140px, 210px)
+    72px
+    minmax(0, 1fr);
+}
+.pa-oc-row.is-thead {
+  padding: 14px 22px 12px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line);
+  border-top: 0;
+}
+.pa-oc-row .pa-band {
+  font-size: 16px;
+  font-family: var(--font-mono);
+  color: var(--fg-0);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.pa-oc-vdivider {
+  width: 1px;
+  height: 36px;
+  justify-self: center;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    var(--line-strong) 25%,
+    var(--line-strong) 75%,
+    transparent
+  );
+}
+
+/* Per-row grid for the AUTO N2ADR pane — no ext side; one wide
+   column hosts the 7-tile LPF row.                              */
+.pa-auto-row {
+  display: grid;
+  align-items: center;
+  column-gap: 22px;
+  padding: 14px 22px;
+  border-top: 1px solid var(--line-soft);
+  grid-template-columns:
+    72px
+    minmax(180px, 260px)
+    72px
+    minmax(0, 1fr);
+}
+.pa-auto-row:first-child {
+  border-top: 0;
+}
+.pa-auto-row.is-thead {
+  padding: 14px 22px 12px;
+  background: var(--bg-1);
+  border-bottom: 1px solid var(--line);
+  border-top: 0;
+}
+.pa-th {
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pa-th .pa-pill-mute {
+  font-size: 9.5px;
+  letter-spacing: 0.12em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--bg-1);
+  color: var(--fg-3);
+  text-transform: none;
+}
+.pa-th-ext {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.pa-th-ext img {
+  height: 16px;
+  width: auto;
+  display: block;
+}
+
+/* Cap the table on ultrawide so 46 px pins don't sprawl into
+   wide rectangles. Aligns flush-left in the panel so the
+   right-hand whitespace reads as quiet, not broken.            */
+.pa-table-shell {
+  width: 100%;
+  align-self: flex-start;
+}
+.pa-table-shell.oc {
+  max-width: 1500px;
+}
+.pa-table-shell.oc.is-ext-hidden {
+  max-width: 1100px;
+}
+.pa-table-shell.auto {
+  max-width: 1200px;
+}
+
+/* Auto-N2ADR LPF tile — bigger than .pa-pill so it can stack
+   the pin number on top of the band-range label without
+   feeling cramped.                                             */
+.pa-lpf-bar {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+  width: 100%;
+}
+.pa-lpf-tile {
+  height: 56px;
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  color: var(--fg-3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-family: var(--font-mono);
+  cursor: default;
+}
+.pa-lpf-tile .pa-lpf-n {
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+.pa-lpf-tile .pa-lpf-rng {
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  color: var(--fg-4);
+}
+.pa-lpf-tile.is-active {
+  background: color-mix(in oklab, var(--ok) 22%, var(--bg-2));
+  border-color: var(--ok);
+  color: var(--fg-0);
+}
+.pa-lpf-tile.is-active .pa-lpf-rng {
+  color: var(--fg-1);
+}
+.pa-lpf-tile.is-secondary {
+  background: color-mix(in oklab, var(--ok) 10%, var(--bg-2));
+  border-color: color-mix(in oklab, var(--ok) 35%, var(--line-strong));
+  color: var(--fg-1);
+}
+.pa-lpf-tile.is-secondary .pa-lpf-rng {
+  color: var(--fg-2);
 }
 
 /* Legend strip below the table — restates the std vs ext

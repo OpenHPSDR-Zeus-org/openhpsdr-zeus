@@ -74,6 +74,12 @@ type PaStore = {
   // press APPLY. OC masks / Disable-PA / PaEnabled are preserved because
   // those are wiring preferences, not per-board data.
   resetToBoardDefaults: (boardOverride?: string) => Promise<void>;
+  // Per-tab "Copy from OC RX/TX" action in the PA Settings panel (issue
+  // #407 design v2). Mirrors the source side's OC masks — both the
+  // standard 1..7 and the Anvelina ext 8..11 (USEROUT7..10) — onto the
+  // destination side for every band in one shot. Stops short of APPLY;
+  // the operator still has to persist via the modal footer.
+  copyOcMasks: (direction: 'tx->rx' | 'rx->tx') => void;
 };
 
 export const usePaStore = create<PaStore>((set, get) => ({
@@ -116,6 +122,18 @@ export const usePaStore = create<PaStore>((set, get) => ({
       settings: {
         ...s.settings,
         bands: s.settings.bands.map((b) => (b.band === band ? { ...b, ...patch } : b)),
+      },
+    })),
+
+  copyOcMasks: (direction) =>
+    set((s) => ({
+      settings: {
+        ...s.settings,
+        bands: s.settings.bands.map((b) =>
+          direction === 'tx->rx'
+            ? { ...b, ocRx: b.ocTx, ocDxRx: b.ocDxTx }
+            : { ...b, ocTx: b.ocRx, ocDxTx: b.ocDxRx },
+        ),
       },
     })),
 
