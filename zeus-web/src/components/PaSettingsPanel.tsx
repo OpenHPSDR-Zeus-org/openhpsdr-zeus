@@ -505,11 +505,7 @@ export function PaSettingsPanel() {
               <button
                 type="button"
                 className={'pa-ext-toggle' + (showAnvelinaExt ? ' is-on' : '')}
-                onClick={() =>
-                  setShowAnvelinaExtForTesting((prev) =>
-                    anvelinaDxSupported ? !prev : !showAnvelinaExtForTesting,
-                  )
-                }
+                onClick={() => setShowAnvelinaExtForTesting((prev) => !prev)}
                 aria-pressed={showAnvelinaExt}
                 title={anvelinaDxTooltip}
               >
@@ -540,7 +536,6 @@ export function PaSettingsPanel() {
             isHl2={isHl2}
             setBand={setBand}
             showAnvelinaExt={showAnvelinaExt}
-            anvelinaDxSupported={anvelinaDxSupported}
             anvelinaDxTooltip={anvelinaDxTooltip}
           />
         )}
@@ -555,7 +550,6 @@ export function PaSettingsPanel() {
             isHl2={isHl2}
             setBand={setBand}
             showAnvelinaExt={showAnvelinaExt}
-            anvelinaDxSupported={anvelinaDxSupported}
             anvelinaDxTooltip={anvelinaDxTooltip}
           />
         )}
@@ -616,7 +610,6 @@ function OcPane(props: {
   isHl2: boolean;
   setBand: (band: string, patch: Partial<Omit<PaBandSettings, 'band'>>) => void;
   showAnvelinaExt: boolean;
-  anvelinaDxSupported: boolean;
   anvelinaDxTooltip: string;
 }) {
   const {
@@ -629,7 +622,6 @@ function OcPane(props: {
     isHl2,
     setBand,
     showAnvelinaExt,
-    anvelinaDxSupported,
     anvelinaDxTooltip,
   } = props;
   const stdLabel = side === 'tx' ? 'OC TX' : 'OC RX';
@@ -691,6 +683,12 @@ function OcPane(props: {
             {showAnvelinaExt && (
               <>
                 <span className="pa-oc-vdivider" aria-hidden="true" />
+                {/* Always interactive when visible. On non-Anvelina radios
+                    the server-side gate in Protocol2Client.SendCmdHighPriority
+                    keeps byte 1397 at 0 anyway — clicking here only edits the
+                    persisted mask in zeus-prefs.db, which is exactly what
+                    you want for exercising the wire path during bench tests
+                    (the operator opted in via the EXT 8–11 toggle). */}
                 <PillBar
                   label={`${bandName} Anvelina ${stdLabel}`}
                   mask={extMask}
@@ -698,8 +696,6 @@ function OcPane(props: {
                   pins={ANVELINA_DX_PINS}
                   bitOffset={ANVELINA_DX_BIT_OFFSET}
                   pinTitles={ANVELINA_DX_PIN_LABELS}
-                  disabled={!anvelinaDxSupported}
-                  disabledTitle={anvelinaDxTooltip}
                   size="lg"
                   ext
                 />
