@@ -61,6 +61,127 @@
   color: #0b1220;
 }
 
+/* ── big-pin variant ─────────────────────────────────────────
+   The Anvelina design (issue #407) calls for prominent OC TX
+   and OC RX rows — pins ~34 px so they read as the primary
+   editable surface in the table. Applied via the `lg` modifier
+   so dense pa-pill consumers elsewhere are unaffected.        */
+.pa-pill-bar.lg {
+  gap: 6px;
+  padding: 3px;
+}
+.pa-pill-bar.lg .pa-pill {
+  width: 30px;
+  height: 30px;
+  font-size: 12px;
+  border-radius: var(--r-md);
+}
+
+/* ── Anvelina extension pins (DX OUT 8..11) ──────────────────
+   Issue #407 — visually distinct from standard 1..7 via:
+     1. A vertical hairline divider rendered by the panel.
+     2. A `green` on-state (--ok) that contrasts with the
+        --accent blue used for standard pins, so it's obvious
+        which pins are platform-exclusive at a glance.
+     3. The Anvelina logo + "EXT 8–11" tag in the column header
+        (rendered by PaSettingsPanel).
+   `.ext` is the unconditional Anvelina variant; `.ext-off`
+   adds the muted greyed-out treatment when the connected board
+   doesn't expose the extension (capabilities.supportsAnvelinaDxOc).
+*/
+.pa-pill.ext {
+  color: var(--fg-2);
+}
+.pa-pill.ext.on {
+  background: var(--ok);
+  color: #062013;
+}
+.pa-pill.ext.ro,
+.pa-pill.ext.ro:hover {
+  background: transparent;
+  color: var(--fg-3);
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.pa-pill.ext.ro.on {
+  background: color-mix(in oklab, var(--ok) 22%, var(--bg-2));
+  color: color-mix(in oklab, var(--ok) 80%, var(--fg-0));
+  opacity: 0.55;
+}
+
+/* Wrapper that holds the standard PillBar, the divider, and
+   the Anvelina ext PillBar in one row. Keeps both bars baseline-
+   aligned so the divider sits between them at a consistent y. */
+.pa-oc-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.pa-oc-divider {
+  width: 1px;
+  align-self: stretch;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    var(--line-strong) 30%,
+    var(--line-strong) 70%,
+    transparent
+  );
+}
+
+/* Column-header layout — "OC TX" label on the left, Anvelina
+   logo + EXT tag on the right. Disabled when capability flag
+   is false. */
+.pa-oc-head {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.pa-oc-head .pa-oc-ext-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+.pa-oc-head .pa-oc-ext-tag {
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  color: var(--fg-2);
+  background: var(--bg-2);
+}
+.pa-oc-head.is-ext-off {
+  opacity: 0.55;
+}
+
+/* Legend strip below the table — restates the std vs ext
+   distinction the column headers signal, plus the load/save
+   status line that used to live as a footnote. */
+.pa-oc-legend {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  padding: 6px 2px 0;
+}
+.pa-oc-legend .swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+.pa-oc-legend .swatch.std { background: var(--accent); }
+.pa-oc-legend .swatch.ext { background: var(--ok); }
+.pa-oc-legend .pa-oc-legend-status { margin-left: auto; text-transform: none; letter-spacing: 0; }
+
 /* read-only "Auto N2ADR" pills — visually distinct from the
    accent-blue editable variants. Active pins use the same green
    ps-settings already publishes; inactive pins are dimmed without

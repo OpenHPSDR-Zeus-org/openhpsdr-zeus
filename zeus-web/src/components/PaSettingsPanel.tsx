@@ -28,13 +28,21 @@ import anvelinaLogo from '../assets/anvelina-logo.png';
 const OC_PINS = [1, 2, 3, 4, 5, 6, 7] as const;
 
 // Anvelina-PRO3 DX OC outputs (issue #407 / EU2AV
-// Open_Collector_Anvelina_DX). UI pin numbers 7..10 map to mask bits 0..3
-// (PillBar's internal "bit - bitOffset" math), which the wire-encode
-// shifts into byte-1397 bits [4:1] on the radio. Keeping the visible
-// labels as 7..10 matches the spec's USEROUT7..USEROUT10 naming so
-// operators wiring DX OUTs see the same numbers their schematic uses.
-const ANVELINA_DX_PINS = [7, 8, 9, 10] as const;
-const ANVELINA_DX_BIT_OFFSET = 7;
+// Open_Collector_Anvelina_DX). UI pin numbers 8..11 sit inline after the
+// standard 1..7 — the user explicitly asked for sequential labels and the
+// Claude-Design handoff (PA Settings.html, 2026-05-20) uses the same
+// numbering. The underlying wire bits are still USEROUT7..USEROUT10 per
+// EU2AV's spec; pin tooltips spell out the mapping so operators consulting
+// the datasheet aren't surprised. bitOffset 8 ⇒ UI pin 8 -> mask bit 0
+// -> wire byte-1397 bit 1 (USEROUT7), etc.
+const ANVELINA_DX_PINS = [8, 9, 10, 11] as const;
+const ANVELINA_DX_BIT_OFFSET = 8;
+const ANVELINA_DX_PIN_LABELS: Record<number, string> = {
+  8: 'DX OUT 8 — USEROUT7 (byte 1397 bit 1)',
+  9: 'DX OUT 9 — USEROUT8 (byte 1397 bit 2)',
+  10: 'DX OUT 10 — USEROUT9 (byte 1397 bit 3)',
+  11: 'DX OUT 11 — USEROUT10 (byte 1397 bit 4)',
+};
 
 // HL2 uses a percentage-based PA model (mi0bot openhpsdr-thetis) — the
 // PaGainDb DTO field is interpreted as output % 0..100 rather than dB
@@ -74,6 +82,9 @@ function PillBar({
   disabledTitle,
   pins = OC_PINS,
   bitOffset = 1,
+  size = 'sm',
+  ext = false,
+  pinTitles,
 }: {
   label: string;
   mask: number;
@@ -83,6 +94,18 @@ function PillBar({
   disabledTitle?: string;
   pins?: readonly number[];
   bitOffset?: number;
+  // 'lg' applies the bigger 30px chip variant used by the prominent
+  // OC TX / OC RX rows; default 'sm' keeps the dense AUTO N2ADR sizing.
+  size?: 'sm' | 'lg';
+  // Anvelina extension styling — green on-state (vs. standard --accent
+  // blue) so the platform-exclusive pins read as visually distinct from
+  // the standard 1..7. Layered on top of `disabled` for the soft-grey
+  // state when the connected radio doesn't expose the extension.
+  ext?: boolean;
+  // Per-pin tooltip override — used by the Anvelina ext bar to spell out
+  // the UI-pin → USEROUT mapping for operators cross-referencing the
+  // EU2AV spec. Falls back to the generic `${label} pin ${n}` title.
+  pinTitles?: Record<number, string>;
 }) {
   const [paintTo, setPaintTo] = useState<0 | 1 | null>(null);
   useEffect(() => {
@@ -101,17 +124,22 @@ function PillBar({
 
   return (
     <span
-      className={'pa-pill-bar' + (readOnly ? ' ro' : '') + (disabled ? ' ro' : '')}
+      className={
+        'pa-pill-bar' +
+        (size === 'lg' ? ' lg' : '') +
+        (readOnly ? ' ro' : '') +
+        (disabled ? ' ro' : '')
+      }
       title={disabled ? disabledTitle : undefined}
-      style={disabled ? { opacity: 0.45 } : undefined}
     >
       {pins.map((bit) => {
         const active = (mask & (1 << (bit - bitOffset))) !== 0;
+        const baseTitle = pinTitles?.[bit] ?? `${label} pin ${bit}`;
         const title = disabled
-          ? disabledTitle ?? `${label} pin ${bit} — unsupported on this radio`
+          ? disabledTitle ?? `${baseTitle} — unsupported on this radio`
           : readOnly
-            ? `${label} pin ${bit} — ${active ? 'firmware-driven' : 'not driven'}`
-            : `${label} pin ${bit}`;
+            ? `${baseTitle} — ${active ? 'firmware-driven' : 'not driven'}`
+            : baseTitle;
         return (
           <span
             key={bit}
@@ -119,7 +147,12 @@ function PillBar({
             aria-pressed={inert ? undefined : active}
             aria-disabled={disabled || undefined}
             title={title}
-            className={'pa-pill' + (active ? ' on' : '') + (inert ? ' ro' : '')}
+            className={
+              'pa-pill' +
+              (ext ? ' ext' : '') +
+              (active ? ' on' : '') +
+              (inert ? ' ro' : '')
+            }
             onMouseDown={
               inert
                 ? undefined
@@ -337,32 +370,12 @@ export function PaSettingsPanel() {
         <div className="pa-card overflow-x-auto">
           <table className="w-full border-collapse text-xs">
             <thead className="pa-col-head text-[10px] uppercase tracking-wider">
-              {/* Anvelina logo spans the two DX OUT columns so the
-                  hardware lineage is visible without a separate
-                  section. Dimmed alongside the columns when the
-                  connected board isn't Anvelina-PRO3, so the visual
-                  state matches the wire state. */}
-              <tr>
-                <th colSpan={showAutoCol ? 6 : 5}></th>
-                <th
-                  colSpan={2}
-                  className="px-2 pt-2 text-left"
-                  style={{
-                    borderLeft: '1px solid var(--border)',
-                    opacity: anvelinaDxSupported ? 1 : 0.45,
-                  }}
-                  title={anvelinaDxTooltip}
-                >
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <img
-                      src={anvelinaLogo}
-                      alt="Anvelina"
-                      style={{ height: 18, width: 'auto', display: 'block' }}
-                    />
-                    <span style={{ fontSize: 9, letterSpacing: '0.1em' }}>DX OUTPUTS</span>
-                  </span>
-                </th>
-              </tr>
+              {/* OC TX / OC RX headers carry the Anvelina logo + EXT 8–11
+                  tag inline on the right, per the Claude-Design handoff
+                  (issue #407). When the connected board doesn't expose
+                  the extension the logo+tag fade to 0.55 opacity but the
+                  "OC TX/RX" label stays full strength — the standard
+                  1..7 part of the column is still editable. */}
               <tr>
                 <th className="px-2 py-2 text-left">Band</th>
                 <th className="px-2 py-2 text-right" title={paFieldTitle}>
@@ -377,24 +390,31 @@ export function PaSettingsPanel() {
                     Auto N2ADR (1..7)
                   </th>
                 )}
-                <th className="px-2 py-2 text-left">OC TX (1..7)</th>
-                <th className="px-2 py-2 text-left">OC RX (1..7)</th>
-                <th
-                  className="px-2 py-2 text-left"
-                  style={{
-                    borderLeft: '1px solid var(--border)',
-                    opacity: anvelinaDxSupported ? 1 : 0.45,
-                  }}
-                  title={anvelinaDxTooltip}
-                >
-                  DX TX (7..10)
+                <th className="px-2 py-2 text-left">
+                  <span className={'pa-oc-head' + (anvelinaDxSupported ? '' : ' is-ext-off')}>
+                    <span>OC TX (1..7)</span>
+                    <span className="pa-oc-ext-label" title={anvelinaDxTooltip}>
+                      <img
+                        src={anvelinaLogo}
+                        alt="Anvelina"
+                        style={{ height: 16, width: 'auto', display: 'block' }}
+                      />
+                      <span className="pa-oc-ext-tag">EXT 8–11</span>
+                    </span>
+                  </span>
                 </th>
-                <th
-                  className="px-2 py-2 text-left"
-                  style={{ opacity: anvelinaDxSupported ? 1 : 0.45 }}
-                  title={anvelinaDxTooltip}
-                >
-                  DX RX (7..10)
+                <th className="px-2 py-2 text-left">
+                  <span className={'pa-oc-head' + (anvelinaDxSupported ? '' : ' is-ext-off')}>
+                    <span>OC RX (1..7)</span>
+                    <span className="pa-oc-ext-label" title={anvelinaDxTooltip}>
+                      <img
+                        src={anvelinaLogo}
+                        alt="Anvelina"
+                        style={{ height: 16, width: 'auto', display: 'block' }}
+                      />
+                      <span className="pa-oc-ext-tag">EXT 8–11</span>
+                    </span>
+                  </span>
                 </th>
               </tr>
             </thead>
@@ -438,40 +458,50 @@ export function PaSettingsPanel() {
                       </td>
                     )}
                     <td className="px-2">
-                      <PillBar
-                        label={`${bandName} OC-TX`}
-                        mask={b.ocTx}
-                        onChange={(next) => setBand(b.band, { ocTx: next })}
-                      />
+                      <span className="pa-oc-cell">
+                        <PillBar
+                          label={`${bandName} OC-TX`}
+                          mask={b.ocTx}
+                          onChange={(next) => setBand(b.band, { ocTx: next })}
+                          size="lg"
+                        />
+                        <span className="pa-oc-divider" aria-hidden="true" />
+                        <PillBar
+                          label={`${bandName} Anvelina DX-TX`}
+                          mask={b.ocDxTx}
+                          onChange={(next) => setBand(b.band, { ocDxTx: next })}
+                          pins={ANVELINA_DX_PINS}
+                          bitOffset={ANVELINA_DX_BIT_OFFSET}
+                          pinTitles={ANVELINA_DX_PIN_LABELS}
+                          disabled={!anvelinaDxSupported}
+                          disabledTitle={anvelinaDxTooltip}
+                          size="lg"
+                          ext
+                        />
+                      </span>
                     </td>
                     <td className="px-2">
-                      <PillBar
-                        label={`${bandName} OC-RX`}
-                        mask={b.ocRx}
-                        onChange={(next) => setBand(b.band, { ocRx: next })}
-                      />
-                    </td>
-                    <td className="px-2" style={{ borderLeft: '1px solid var(--border)' }}>
-                      <PillBar
-                        label={`${bandName} Anvelina DX-TX`}
-                        mask={b.ocDxTx}
-                        onChange={(next) => setBand(b.band, { ocDxTx: next })}
-                        pins={ANVELINA_DX_PINS}
-                        bitOffset={ANVELINA_DX_BIT_OFFSET}
-                        disabled={!anvelinaDxSupported}
-                        disabledTitle={anvelinaDxTooltip}
-                      />
-                    </td>
-                    <td className="px-2">
-                      <PillBar
-                        label={`${bandName} Anvelina DX-RX`}
-                        mask={b.ocDxRx}
-                        onChange={(next) => setBand(b.band, { ocDxRx: next })}
-                        pins={ANVELINA_DX_PINS}
-                        bitOffset={ANVELINA_DX_BIT_OFFSET}
-                        disabled={!anvelinaDxSupported}
-                        disabledTitle={anvelinaDxTooltip}
-                      />
+                      <span className="pa-oc-cell">
+                        <PillBar
+                          label={`${bandName} OC-RX`}
+                          mask={b.ocRx}
+                          onChange={(next) => setBand(b.band, { ocRx: next })}
+                          size="lg"
+                        />
+                        <span className="pa-oc-divider" aria-hidden="true" />
+                        <PillBar
+                          label={`${bandName} Anvelina DX-RX`}
+                          mask={b.ocDxRx}
+                          onChange={(next) => setBand(b.band, { ocDxRx: next })}
+                          pins={ANVELINA_DX_PINS}
+                          bitOffset={ANVELINA_DX_BIT_OFFSET}
+                          pinTitles={ANVELINA_DX_PIN_LABELS}
+                          disabled={!anvelinaDxSupported}
+                          disabledTitle={anvelinaDxTooltip}
+                          size="lg"
+                          ext
+                        />
+                      </span>
                     </td>
                   </tr>
                 );
@@ -481,10 +511,29 @@ export function PaSettingsPanel() {
         </div>
       </section>
 
-      <p className="pa-hint text-[11px]">
-        {inflight ? 'Saving…' : loaded ? 'Loaded from server — use APPLY below to persist edits' : 'Loading…'}
-        {error ? ` · error: ${error}` : ''}
-      </p>
+      {/* Legend strip from the Claude-Design handoff (#407) — restates the
+          std vs ext distinction the column headers signal, and folds the
+          load/save status that used to live in a separate hint line in
+          on the right so the per-band table still has its single status
+          channel below it. */}
+      <div className="pa-oc-legend">
+        <span>
+          <span className="swatch std" />
+          Standard pin (OC&nbsp;0..6)
+        </span>
+        <span>
+          <span className="swatch ext" />
+          Anvelina extension (USEROUT&nbsp;7..10)
+        </span>
+        <span className="pa-oc-legend-status">
+          {inflight
+            ? 'Saving…'
+            : loaded
+              ? 'Loaded from server — use APPLY below to persist edits'
+              : 'Loading…'}
+          {error ? ` · error: ${error}` : ''}
+        </span>
+      </div>
     </div>
   );
 }
