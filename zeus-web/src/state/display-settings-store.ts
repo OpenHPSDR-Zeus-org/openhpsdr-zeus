@@ -72,18 +72,18 @@ const STORAGE_KEY = 'zeus.display.dbRange';
 const TX_STORAGE_KEY = 'zeus.display.txDbRange';
 const WF_STORAGE_KEY = 'zeus.display.wfDbRange';
 const WF_TX_STORAGE_KEY = 'zeus.display.wfTxDbRange';
-const RX_TRACE_COLOR_KEY = 'zeus.display.rxTraceColor';
 
 // Legacy localStorage keys — pre-server-side storage. Read once on first
-// load to migrate the operator's existing image up to the backend, then
-// removed. New code should never read or write these.
+// load to migrate the operator's existing image / colour up to the backend,
+// then removed. New code should never read or write these.
 const LEGACY_PAN_BG_KEY = 'zeus.display.panBackground';
 const LEGACY_BG_IMAGE_KEY = 'zeus.display.backgroundImage';
 const LEGACY_BG_FIT_KEY = 'zeus.display.backgroundImageFit';
+const LEGACY_RX_TRACE_COLOR_KEY = 'zeus.display.rxTraceColor';
 
 // Default RX panadapter trace colour — warm amber, matching the original
-// hardcoded constant in gl/panadapter.ts. Operators can pick another colour
-// from the Display tab; the choice is persisted to localStorage.
+// hardcoded constant in gl/panadapter.ts and the backend's
+// DisplaySettingsStore.DefaultRxTraceColor.
 export const DEFAULT_RX_TRACE_COLOR = '#FFA028';
 
 function isHexColor(v: unknown): v is string {
@@ -102,17 +102,16 @@ export type PanBackgroundMode = 'basic' | 'beam-map' | 'image';
 // 'stretch' → 100% 100% (distorts to fit exactly)
 export type BackgroundImageFit = 'fit' | 'fill' | 'stretch';
 
-function readRxTraceColor(): string {
+function readLegacyRxTraceColor(): string | null {
   try {
-    if (typeof localStorage === 'undefined') return DEFAULT_RX_TRACE_COLOR;
-    const raw = localStorage.getItem(RX_TRACE_COLOR_KEY);
-    return isHexColor(raw) ? raw.toUpperCase() : DEFAULT_RX_TRACE_COLOR;
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(LEGACY_RX_TRACE_COLOR_KEY);
+    if (!isHexColor(raw)) return null;
+    const norm = raw.toUpperCase();
+    return norm === DEFAULT_RX_TRACE_COLOR ? null : norm;
   } catch {
-    return DEFAULT_RX_TRACE_COLOR;
+    return null;
   }
-}
-function writeRxTraceColor(v: string): void {
-  try { if (typeof localStorage !== 'undefined') localStorage.setItem(RX_TRACE_COLOR_KEY, v); } catch { /* quota */ }
 }
 
 function readSavedRange(): { dbMin: number; dbMax: number } {
@@ -266,12 +265,15 @@ export type DisplaySettingsState = {
   backgroundImage: string | null;
   backgroundImageFit: BackgroundImageFit;
   // RX panadapter trace colour as #RRGGBB. Drives both the sharp trace line
-  // and the fill underneath in gl/panadapter.ts (kept in lockstep).
+  // and the fill underneath in gl/panadapter.ts (kept in lockstep). Persisted
+  // server-side alongside panBackground / backgroundImage so it survives the
+  // Photino-desktop port shuffle (per-launch random loopback port = fresh
+  // localStorage origin = orphaned setting).
   rxTraceColor: string;
   setPanBackground: (v: PanBackgroundMode) => Promise<void>;
   setBackgroundImage: (dataUrl: string | null) => Promise<boolean>;
   setBackgroundImageFit: (v: BackgroundImageFit) => Promise<void>;
-  setRxTraceColor: (v: string) => void;
+  setRxTraceColor: (v: string) => Promise<void>;
   setAutoRange: (v: boolean) => void;
   setColormap: (id: ColormapId) => void;
   updateAutoRange: (wfDb: Float32Array) => void;
@@ -313,12 +315,19 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   panBackground: 'basic',
   backgroundImage: null,
   backgroundImageFit: 'fill',
-  rxTraceColor: readRxTraceColor(),
+  // Hydrated from the server on module load (see hydrateFromServer). Until
+  // that resolves the operator briefly sees the default amber trace — same
+  // first-paint trade-off as panBackground / backgroundImage.
+  rxTraceColor: DEFAULT_RX_TRACE_COLOR,
   setPanBackground: async (panBackground) => {
     const prev = get().panBackground;
     set({ panBackground });
     try {
-      const result = await updateDisplaySettings(panBackground, get().backgroundImageFit);
+      const result = await updateDisplaySettings(
+        panBackground,
+        get().backgroundImageFit,
+        get().rxTraceColor,
+      );
       // If the server normalised the value (unknown input → 'basic'), reflect that.
       if (result.mode !== panBackground) set({ panBackground: result.mode });
     } catch {
@@ -358,17 +367,31 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     const prev = get().backgroundImageFit;
     set({ backgroundImageFit });
     try {
-      const result = await updateDisplaySettings(get().panBackground, backgroundImageFit);
+      const result = await updateDisplaySettings(
+        get().panBackground,
+        backgroundImageFit,
+        get().rxTraceColor,
+      );
       if (result.fit !== backgroundImageFit) set({ backgroundImageFit: result.fit });
     } catch {
       set({ backgroundImageFit: prev });
     }
   },
-  setRxTraceColor: (v) => {
+  setRxTraceColor: async (v) => {
     if (!isHexColor(v)) return;
     const norm = v.toUpperCase();
-    writeRxTraceColor(norm);
+    const prev = get().rxTraceColor;
     set({ rxTraceColor: norm });
+    try {
+      const result = await updateDisplaySettings(
+        get().panBackground,
+        get().backgroundImageFit,
+        norm,
+      );
+      if (result.rxTraceColor !== norm) set({ rxTraceColor: result.rxTraceColor });
+    } catch {
+      set({ rxTraceColor: prev });
+    }
   },
   setAutoRange: (autoRange) => {
     if (autoRange) {
@@ -470,19 +493,24 @@ async function hydrateFromServer(): Promise<void> {
   }
 
   const legacy = readLegacyLocalStorage();
+  const legacyColor = readLegacyRxTraceColor();
   const serverHasContent =
-    server.hasImage || server.mode !== 'basic' || server.fit !== 'fill';
+    server.hasImage ||
+    server.mode !== 'basic' ||
+    server.fit !== 'fill' ||
+    server.rxTraceColor !== DEFAULT_RX_TRACE_COLOR;
 
-  if (!serverHasContent && legacy && (legacy.image || legacy.mode || legacy.fit)) {
+  if (!serverHasContent && (legacy?.image || legacy?.mode || legacy?.fit || legacyColor)) {
     try {
-      if (legacy.mode || legacy.fit) {
+      if (legacy?.mode || legacy?.fit || legacyColor) {
         const next = await updateDisplaySettings(
-          legacy.mode ?? server.mode,
-          legacy.fit ?? server.fit,
+          legacy?.mode ?? server.mode,
+          legacy?.fit ?? server.fit,
+          legacyColor ?? server.rxTraceColor,
         );
         server = next;
       }
-      if (legacy.image) {
+      if (legacy?.image) {
         const blob = await dataUrlToBlob(legacy.image);
         server = await uploadDisplayImage(blob);
       }
@@ -498,6 +526,7 @@ async function hydrateFromServer(): Promise<void> {
     panBackground: server.mode,
     backgroundImage: server.hasImage ? displayImageUrl(Date.now()) : null,
     backgroundImageFit: server.fit,
+    rxTraceColor: server.rxTraceColor,
   });
 }
 
@@ -524,6 +553,7 @@ function clearLegacyLocalStorage(): void {
     localStorage.removeItem(LEGACY_PAN_BG_KEY);
     localStorage.removeItem(LEGACY_BG_IMAGE_KEY);
     localStorage.removeItem(LEGACY_BG_FIT_KEY);
+    localStorage.removeItem(LEGACY_RX_TRACE_COLOR_KEY);
   } catch {
     /* private mode — nothing to clean up */
   }

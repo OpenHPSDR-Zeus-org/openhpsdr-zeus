@@ -52,23 +52,30 @@ public sealed class DisplaySettingsStore : IDisposable
             var e = _docs.FindAll().FirstOrDefault();
             if (e is null)
             {
-                return new DisplaySettingsDto(Mode: "basic", Fit: "fill", HasImage: false, ImageMime: null);
+                return new DisplaySettingsDto(
+                    Mode: "basic",
+                    Fit: "fill",
+                    HasImage: false,
+                    ImageMime: null,
+                    RxTraceColor: DefaultRxTraceColor);
             }
             return new DisplaySettingsDto(
                 Mode: NormalizeMode(e.Mode),
                 Fit: NormalizeFit(e.Fit),
                 HasImage: e.ImageBytes is { Length: > 0 },
-                ImageMime: string.IsNullOrEmpty(e.ImageMime) ? null : e.ImageMime);
+                ImageMime: string.IsNullOrEmpty(e.ImageMime) ? null : e.ImageMime,
+                RxTraceColor: NormalizeHexColor(e.RxTraceColor));
         }
     }
 
-    public void SaveMode(string mode, string fit)
+    public void SaveMode(string mode, string fit, string rxTraceColor)
     {
         lock (_sync)
         {
             var e = _docs.FindAll().FirstOrDefault() ?? new DisplaySettingsEntry();
             e.Mode = NormalizeMode(mode);
             e.Fit = NormalizeFit(fit);
+            e.RxTraceColor = NormalizeHexColor(rxTraceColor);
             e.UpdatedUtc = DateTime.UtcNow;
             if (e.Id == 0) _docs.Insert(e);
             else _docs.Update(e);
@@ -129,6 +136,23 @@ public sealed class DisplaySettingsStore : IDisposable
             _ => "fill",
         };
 
+    // Matches the frontend's DEFAULT_RX_TRACE_COLOR in display-settings-store.ts
+    // and the original hard-coded #FFA028 in gl/panadapter.ts.
+    public const string DefaultRxTraceColor = "#FFA028";
+
+    private static string NormalizeHexColor(string? raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return DefaultRxTraceColor;
+        if (raw.Length != 7 || raw[0] != '#') return DefaultRxTraceColor;
+        for (var i = 1; i < 7; i++)
+        {
+            var c = raw[i];
+            var ok = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+            if (!ok) return DefaultRxTraceColor;
+        }
+        return raw.ToUpperInvariant();
+    }
+
 }
 
 public sealed class DisplaySettingsEntry
@@ -142,5 +166,8 @@ public sealed class DisplaySettingsEntry
     // id here instead.
     public byte[]? ImageBytes { get; set; }
     public string? ImageMime { get; set; }
+    // Panadapter signal trace colour as #RRGGBB. Null on legacy rows written
+    // before this field existed — Get() normalises null → DefaultRxTraceColor.
+    public string? RxTraceColor { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

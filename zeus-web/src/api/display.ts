@@ -11,14 +11,24 @@ export type DisplaySettings = {
   fit: 'fit' | 'fill' | 'stretch';
   hasImage: boolean;
   imageMime: string | null;
+  rxTraceColor: string;
 };
+
+// Matches backend DisplaySettingsStore.DefaultRxTraceColor.
+const DEFAULT_RX_TRACE_COLOR = '#FFA028';
 
 type DisplaySettingsDtoRaw = {
   mode?: string;
   fit?: string;
   hasImage?: boolean;
   imageMime?: string | null;
+  rxTraceColor?: string | null;
 };
+
+function normalizeRxTraceColor(raw: string | null | undefined): string {
+  if (typeof raw !== 'string') return DEFAULT_RX_TRACE_COLOR;
+  return /^#[0-9A-Fa-f]{6}$/.test(raw) ? raw.toUpperCase() : DEFAULT_RX_TRACE_COLOR;
+}
 
 function normalize(raw: DisplaySettingsDtoRaw): DisplaySettings {
   const mode =
@@ -34,6 +44,7 @@ function normalize(raw: DisplaySettingsDtoRaw): DisplaySettings {
     fit,
     hasImage: !!raw.hasImage,
     imageMime: raw.imageMime ?? null,
+    rxTraceColor: normalizeRxTraceColor(raw.rxTraceColor),
   };
 }
 
@@ -46,12 +57,13 @@ export async function fetchDisplaySettings(signal?: AbortSignal): Promise<Displa
 export async function updateDisplaySettings(
   mode: DisplaySettings['mode'],
   fit: DisplaySettings['fit'],
+  rxTraceColor: string,
   signal?: AbortSignal,
 ): Promise<DisplaySettings> {
   const res = await fetch('/api/display-settings', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ mode, fit }),
+    body: JSON.stringify({ mode, fit, rxTraceColor }),
     signal,
   });
   if (!res.ok) throw new Error(`PUT /api/display-settings → ${res.status}`);

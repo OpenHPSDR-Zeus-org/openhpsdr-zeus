@@ -515,17 +515,22 @@ public sealed record Hl2OptionsSetRequest(bool BandVolts);
 // Panadapter background settings — Mode is one of "basic" | "beam-map" |
 // "image"; Fit is one of "fit" | "fill" | "stretch". Image bytes are NOT
 // shipped in this DTO; HasImage signals whether GET /api/display-settings/image
-// will return content. Persisted server-side so the setting follows the
-// operator across browsers / devices.
+// will return content. RxTraceColor is the panadapter signal trace colour
+// as #RRGGBB (default "#FFA028"). All fields persisted server-side so the
+// settings follow the operator across browsers / devices — Photino desktop
+// mode in particular binds the webview to a fresh random loopback port on
+// every launch, which orphans any per-origin localStorage value.
 public sealed record DisplaySettingsDto(
     string Mode,
     string Fit,
     bool HasImage,
-    string? ImageMime);
+    string? ImageMime,
+    string RxTraceColor);
 
 public sealed record DisplaySettingsSetRequest(
     string Mode,
-    string Fit);
+    string Fit,
+    string RxTraceColor);
 
 // Per-mode disclosure state for the inline NR settings accordion that hangs
 // below the DSP NR toggle row. Three independent booleans — one per NR
