@@ -449,44 +449,42 @@ export function PaSettingsPanel() {
       </section>
 
       <section>
+        <h3 className="pa-section-h" style={{ marginBottom: 10 }}>Per Band</h3>
         <div className="pa-perband-bar mb-3">
-          <div>
-            <h3 className="pa-section-h" style={{ marginBottom: 8 }}>Per Band</h3>
-            <div className="pa-tabs" role="tablist" aria-label="Per-band OC layer">
+          <div className="pa-tabs" role="tablist" aria-label="Per-band OC layer">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'tx'}
+              className={'pa-tab' + (activeTab === 'tx' ? ' is-active' : '')}
+              onClick={() => setActiveTab('tx')}
+            >
+              OC&nbsp;TX
+              <span className="pa-tab-badge">{showAnvelinaExt ? '1–7 · 8–11' : '1–7'}</span>
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeTab === 'rx'}
+              className={'pa-tab' + (activeTab === 'rx' ? ' is-active' : '')}
+              onClick={() => setActiveTab('rx')}
+            >
+              OC&nbsp;RX
+              <span className="pa-tab-badge">{showAnvelinaExt ? '1–7 · 8–11' : '1–7'}</span>
+            </button>
+            {showAutoCol && (
               <button
                 type="button"
                 role="tab"
-                aria-selected={activeTab === 'tx'}
-                className={'pa-tab' + (activeTab === 'tx' ? ' is-active' : '')}
-                onClick={() => setActiveTab('tx')}
+                aria-selected={activeTab === 'auto'}
+                className={'pa-tab' + (activeTab === 'auto' ? ' is-active' : '')}
+                onClick={() => setActiveTab('auto')}
+                title="Hermes Lite 2 only — read-only mirror of the N2ADR LPF mask the firmware asserts on every band change."
               >
-                OC&nbsp;TX
-                <span className="pa-tab-badge">{showAnvelinaExt ? '1–7 · 8–11' : '1–7'}</span>
+                AUTO&nbsp;N2ADR
+                <span className="pa-tab-badge">HL2</span>
               </button>
-              <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === 'rx'}
-                className={'pa-tab' + (activeTab === 'rx' ? ' is-active' : '')}
-                onClick={() => setActiveTab('rx')}
-              >
-                OC&nbsp;RX
-                <span className="pa-tab-badge">{showAnvelinaExt ? '1–7 · 8–11' : '1–7'}</span>
-              </button>
-              {showAutoCol && (
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected={activeTab === 'auto'}
-                  className={'pa-tab' + (activeTab === 'auto' ? ' is-active' : '')}
-                  onClick={() => setActiveTab('auto')}
-                  title="Hermes Lite 2 only — read-only mirror of the N2ADR LPF mask the firmware asserts on every band change."
-                >
-                  AUTO&nbsp;N2ADR
-                  <span className="pa-tab-badge">HL2</span>
-                </button>
-              )}
-            </div>
+            )}
           </div>
 
           {(activeTab === 'tx' || activeTab === 'rx') && (

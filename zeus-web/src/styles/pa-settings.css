@@ -237,21 +237,22 @@
 }
 
 /* Top bar of the Per Band section — tabs on the left, per-tab
-   tools (Copy-from button, EXT toggle, HL2 notice) on the
-   right. Wraps on narrow viewports so the controls don't
-   crowd each other.                                            */
+   tools (Copy-from button, EXT toggle, HL2 notice) flush against
+   the right edge of the tab strip rather than the far right of
+   the panel, so they read as "tools for the active tab" instead
+   of floating UI scattered across the row. Wraps on narrow
+   viewports so the controls don't crowd each other.             */
 .pa-perband-bar {
   display: flex;
   flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
+  align-items: center;
+  justify-content: flex-start;
   gap: 14px;
 }
 .pa-perband-tools {
   display: inline-flex;
   align-items: center;
   gap: 14px;
-  padding-bottom: 4px;
 }
 .pa-copy-btn {
   height: 32px;
