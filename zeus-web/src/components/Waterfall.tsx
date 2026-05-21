@@ -46,6 +46,7 @@ import { useEffect, useRef } from 'react';
 import { COLORMAPS } from '../gl/colormap';
 import { createWfRenderer } from '../gl/waterfall';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
+import { useConnectionStore } from '../state/connection-store';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useTxStore } from '../state/tx-store';
@@ -72,6 +73,23 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   const setAutoRange = useDisplaySettingsStore((s) => s.setAutoRange);
   const colormap = useDisplaySettingsStore((s) => s.colormap);
   const setColormap = useDisplaySettingsStore((s) => s.setColormap);
+  // Tuning-cursor position. The waterfall canvas centres on the radio's
+  // hardware NCO (centerHz) which equals VfoHz outside CTUN — so on the
+  // legacy path the cursor sits at 50%. With CTUN on the hardware stays
+  // frozen at RadioLoHz while VfoHz roams; the cursor must track the dial
+  // (VfoHz) so the operator can see where they're listening, not where the
+  // radio is anchored. Computed off panDb width × hzPerPixel for span,
+  // identical math to FreqAxis's dial marker. Issue #427.
+  const cursorCenterHz = useDisplayStore((s) => s.centerHz);
+  const cursorHzPerPixel = useDisplayStore((s) => s.hzPerPixel);
+  const cursorWidth = useDisplayStore((s) => s.panDb?.length ?? 0);
+  const cursorVfoHz = useConnectionStore((s) => s.vfoHz);
+  const cursorPct = (() => {
+    if (!cursorWidth || cursorHzPerPixel <= 0) return 50;
+    const span = cursorWidth * cursorHzPerPixel;
+    const start = Number(cursorCenterHz) - span / 2;
+    return ((cursorVfoHz - start) / span) * 100;
+  })();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -248,7 +266,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       <WfDbScale />
       <div
         className="tuning-cursor"
-        style={{ left: '50%', pointerEvents: 'none' }}
+        style={{ left: `${cursorPct}%`, pointerEvents: 'none' }}
       />
       <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
         <div role="radiogroup" aria-label="Colormap" className="btn-row">

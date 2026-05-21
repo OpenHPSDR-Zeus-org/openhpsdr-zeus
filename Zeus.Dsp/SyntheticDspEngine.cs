@@ -98,6 +98,8 @@ public sealed class SyntheticDspEngine : IDspEngine
         if (_channels.TryGetValue(channelId, out var s)) s.VfoHz = vfoHz;
     }
 
+    public void SetCtunShift(int channelId, int shiftHz) { /* synthetic has no IF stage */ }
+
     public void SetAgcTop(int channelId, double topDb) { /* synthetic has no AGC */ }
 
     public void SetRxAfGainDb(int channelId, double db) { /* synthetic has no audio path */ }

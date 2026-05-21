@@ -59,6 +59,11 @@ export type PanRenderer = {
     dbMin: number,
     dbMax: number,
     offsetPx: number,
+    // CTUN cursor X offset in clip space (range [-1, +1]). 0 = dead centre
+    // (the default; CTUN off or dial == frozen radio LO). When non-zero the
+    // orange tuning-cursor line shifts horizontally to follow the dial while
+    // the spectrum stays anchored on the hardware NCO. Issue #427.
+    cursorXOffset?: number,
   ) => void;
   // Update the trace + fill colour. Components 0..1, premultiplied alpha is
   // applied inside draw via the FILL_ALPHA_TOP uniform; callers pass plain
@@ -135,6 +140,7 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
 
   const cursorProg = buildProgram(gl, CURSOR_VS, CURSOR_FS);
   const uCursorColor = gl.getUniformLocation(cursorProg, 'uColor');
+  const uCursorXOffset = gl.getUniformLocation(cursorProg, 'uXOffset');
   const cursorVao = gl.createVertexArray()!;
   const cursorVbo = gl.createBuffer()!;
   gl.bindVertexArray(cursorVao);
@@ -152,7 +158,7 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
     resize(w, h) {
       gl.viewport(0, 0, w, h);
     },
-    draw(panDb, dbMin, dbMax, offsetPx) {
+    draw(panDb, dbMin, dbMax, offsetPx, cursorXOffset = 0) {
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
 
@@ -222,6 +228,10 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
       gl.useProgram(cursorProg);
       gl.bindVertexArray(cursorVao);
       gl.uniform3f(uCursorColor, 0.96, 0.74, 0.18);
+      // Clip-space X is [-1, +1] (full panadapter width). Clamp so a wild
+      // off-screen offset doesn't disappear silently — the cursor sticks to
+      // the edge as the operator clicks beyond the displayed bandwidth.
+      gl.uniform1f(uCursorXOffset, Math.max(-1, Math.min(1, cursorXOffset)));
       gl.drawArrays(gl.LINES, 0, 2);
 
       gl.bindVertexArray(null);

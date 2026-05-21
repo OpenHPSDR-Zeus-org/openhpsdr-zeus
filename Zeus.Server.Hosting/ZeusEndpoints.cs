@@ -289,6 +289,16 @@ public static class ZeusEndpoints
             return r.SetVfo(req.Hz);
         });
 
+        // CTUN (Click-Tune) — issue #427. When enabled the hardware NCO is
+        // frozen at the current VfoHz so subsequent SetVfo calls move only the
+        // dial / WDSP filter offset, not the radio. RadioService.SetCtun
+        // handles the radio retune on disable.
+        app.MapPost("/api/ctun", (CtunSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.ctun enabled={Enabled}", req.Enabled);
+            return r.SetCtun(req.Enabled);
+        });
+
         app.MapPost("/api/mode", (ModeSetRequest req, RadioService r) =>
         {
             log.LogInformation("api.mode mode={Mode}", req.Mode);

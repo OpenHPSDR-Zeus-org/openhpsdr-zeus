@@ -525,6 +525,18 @@ public sealed class WdspDspEngine : IDspEngine
         // tuner; frequency translation happens at the protocol seam.
     }
 
+    public void SetCtunShift(int channelId, int shiftHz)
+    {
+        if (!_channels.TryGetValue(channelId, out var _)) return;
+        // Mirrors Thetis radio.cs:1419-1420. Note the negation: Thetis tracks
+        // an `rx_osc = -(dial - centre)` then calls SetRXAShiftFreq(-osc), so
+        // the net argument is (dial - centre) = our shiftHz. Same goes to
+        // the nbp0 stage that enforces SSB sideband.
+        NativeMethods.SetRXAShiftFreq(channelId, shiftHz);
+        NativeMethods.RXANBPSetShiftFrequency(channelId, shiftHz);
+        NativeMethods.SetRXAShiftRun(channelId, shiftHz != 0 ? 1 : 0);
+    }
+
     public void SetAgcTop(int channelId, double topDb)
     {
         if (!_channels.TryGetValue(channelId, out var state)) return;

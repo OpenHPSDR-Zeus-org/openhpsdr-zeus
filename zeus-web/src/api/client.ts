@@ -219,6 +219,13 @@ export type RadioStateDto = {
   // after normalisation; falls back to CFC_CONFIG_DEFAULT when the server
   // omits it (legacy state frames).
   cfc: CfcConfigDto;
+  // CTUN (Click-Tune) — issue #427. When true, panadapter clicks move the
+  // dial (vfoHz) without retuning the radio; the WDSP RX filter is shifted
+  // by (vfoHz - radioLoHz) on the server so the audio still demodulates the
+  // operator's tuned signal. radioLoHz is the actual hardware NCO and is
+  // what the panadapter centres on.
+  ctunEnabled: boolean;
+  radioLoHz: number;
 };
 
 // CFC mirrors Zeus.Contracts.CfcConfig. Bands array is fixed at 10 entries
@@ -472,6 +479,15 @@ export function normalizeState(raw: unknown): RadioStateDto {
     twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
     twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,
     cfc: normalizeCfc(r.cfc),
+    // CTUN — issue #427. Legacy server without the fields → CTUN off and
+    // radioLoHz falls back to vfoHz so the panadapter centre stays sensible.
+    ctunEnabled: typeof r.ctunEnabled === 'boolean' ? r.ctunEnabled : false,
+    radioLoHz:
+      typeof r.radioLoHz === 'number' && r.radioLoHz > 0
+        ? r.radioLoHz
+        : typeof r.vfoHz === 'number'
+        ? r.vfoHz
+        : 0,
   };
 }
 
@@ -636,6 +652,22 @@ export function disconnectP2(signal?: AbortSignal): Promise<unknown> {
     '/api/disconnect/p2',
     { method: 'POST', signal },
     (raw) => raw,
+  );
+}
+
+export function setCtun(
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/ctun',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+      signal,
+    },
+    normalizeState,
   );
 }
 

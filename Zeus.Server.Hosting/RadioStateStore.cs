@@ -154,6 +154,16 @@ public sealed class RadioStateEntry
     // TUN drive slider % (0..100). Default 10 mirrors RadioService._tunePct seed —
     // a 0 default would make pressing TUN appear to do nothing.
     public int TunePct { get; set; } = 10;
+    // CTUN — issue #427. When true, RadioLoHz is frozen and clicking the
+    // panadapter moves VfoHz instead of the radio. Persisted so the operator's
+    // last click-tune mode survives restart; missing on legacy rows defaults
+    // to false (Thetis parity).
+    public bool CtunEnabled { get; set; }
+    // Hardware NCO at last flush. Persisted alongside CtunEnabled so a
+    // restart-while-CTUN-on retunes the radio to the same physical centre.
+    // Zero on legacy rows; RadioService snaps it to VfoHz on hydration in
+    // that case.
+    public long RadioLoHz { get; set; }
     // Per-mode-family RX filter memory (abs values, always positive)
     public int SsbFilterLoAbs { get; set; } = 150;
     public int SsbFilterHiAbs { get; set; } = 2850;

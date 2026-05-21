@@ -47,16 +47,24 @@ import { useConnectionStore } from '../state/connection-store';
 
 // Translucent rectangle drawn inside the panadapter container to show the
 // active receive filter passband, mapped from [filterLowHz, filterHighHz]
-// relative to the VFO centre. Asymmetric by design: USB lives to the right
-// of carrier, LSB to the left, CW narrow around zero, AM symmetric.
+// relative to the tuned dial (VfoHz). Asymmetric by design: USB lives to the
+// right of carrier, LSB to the left, CW narrow around zero, AM symmetric.
 // Positioned by percentage of the total span so it tracks resize and tune
 // without measuring DOM width.
+//
+// CTUN (issue #427): when CTUN is on, the panadapter centres on radioLoHz
+// (the frozen hardware NCO) while vfoHz roams independently. Anchoring the
+// passband to vfoHz — not centerHz — keeps the filter overlay glued to the
+// operator's tuned signal so clicking the spectrum visibly slides the
+// passband around the (stationary) waterfall. When CTUN is off vfoHz equals
+// centerHz so this collapses to legacy behaviour.
 export function PassbandOverlay() {
   const centerHz = useDisplayStore((s) => s.centerHz);
   const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
   const width = useDisplayStore((s) => s.panDb?.length ?? 0);
   const filterLowHz = useConnectionStore((s) => s.filterLowHz);
   const filterHighHz = useConnectionStore((s) => s.filterHighHz);
+  const vfoHz = useConnectionStore((s) => s.vfoHz);
 
   if (!width || hzPerPixel <= 0) return null;
 
@@ -64,8 +72,8 @@ export function PassbandOverlay() {
   const center = Number(centerHz);
   const startHz = center - spanHz / 2;
 
-  const passLowHz = center + filterLowHz;
-  const passHighHz = center + filterHighHz;
+  const passLowHz = vfoHz + filterLowHz;
+  const passHighHz = vfoHz + filterHighHz;
   const leftPct = ((passLowHz - startHz) / spanHz) * 100;
   const rightPct = ((passHighHz - startHz) / spanHz) * 100;
   const widthPct = rightPct - leftPct;

@@ -104,6 +104,29 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXABandpassRun(int channel, int run);
 
+    // CTUN frequency shift — WDSP's `shift` stage (wdsp/shift.c). Mirrors the
+    // Thetis trio at radio.cs:1419: when the operator clicks off-centre while
+    // CTUN is on we shift the IF by (dial - radioLoHz) so the tuned signal
+    // lands at baseband for the (unmodified) bandpass filter. Calling
+    // SetRXABandpassFreqs with a shifted range works for the bp1 stage but
+    // breaks SSB (the nbp0 stage that actually enforces the SSB passband
+    // expects sideband-signed values; a negative-going CTUN offset on USB
+    // crashes WDSP). The shift stage is the correct seam. Issue #427.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAShiftFreq(int channel, double freq);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAShiftRun(int channel, int run);
+
+    // Paired with SetRXAShiftFreq — Thetis radio.cs:1420 calls both together.
+    // nbp0 is the SSB-enforcing notch-bandpass stage and needs the same
+    // shift applied to keep its passband centred on the tuned signal.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void RXANBPSetShiftFrequency(int channel, double freq);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXABandpassWindow(int channel, int wintype);
