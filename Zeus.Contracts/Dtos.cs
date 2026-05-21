@@ -254,7 +254,24 @@ public sealed record StateDto(
     // Independent TUN drive slider 0..100. Same persistence pattern as
     // DrivePct. Default 10 mirrors RadioService._tunePct seed — a 0 default
     // would make pressing TUN appear to do nothing on first key.
-    int TunePct = 10);
+    int TunePct = 10,
+
+    // ---- CTUN (Click-Tune) — issue #427 ----
+    // When CtunEnabled is false (default), VfoHz drives both the radio's
+    // hardware NCO and the panadapter centre — clicking the spectrum retunes
+    // the radio. When true, the hardware NCO is frozen at RadioLoHz and
+    // clicking only moves VfoHz around within the displayed bandwidth; WDSP's
+    // RX bandpass is shifted by (VfoHz - RadioLoHz) so the audio still
+    // resolves the operator's tuned signal. Mirrors Thetis chkFWCATU /
+    // ClickTuneDisplay (console.cs:43143-43170, 10857-10867).
+    bool CtunEnabled = false,
+    // Hardware NCO frequency in Hz. Tracks VfoHz when CTUN is OFF; frozen at
+    // the value VfoHz had when CTUN was toggled ON. RadioService is
+    // authoritative; persisted to LiteDB so the radio re-tunes to the same
+    // hardware centre on reconnect when CTUN was on. Zero on a fresh server
+    // before the first state hydration; RadioService snaps it to VfoHz at
+    // construction so the displayed centre is never zero.
+    long RadioLoHz = 0);
 
 public sealed record RadioInfo(
     string MacAddress,
@@ -277,6 +294,8 @@ public sealed record ConnectRequest(
     byte? BoardId = null);
 
 public sealed record VfoSetRequest(long Hz);
+
+public sealed record CtunSetRequest(bool Enabled);
 
 public sealed record ModeSetRequest(RxMode Mode);
 

@@ -62,6 +62,16 @@ public interface IDspEngine : IDisposable
     void SetMode(int channelId, RxMode mode);
     void SetFilter(int channelId, int lowHz, int highHz);
     void SetVfoHz(int channelId, long vfoHz);
+
+    /// <summary>
+    /// CTUN frequency shift — moves the IF by <paramref name="shiftHz"/>
+    /// before demodulation so the bandpass filter sees the tuned signal at
+    /// baseband while the radio's hardware NCO stays put. Pass 0 to disable
+    /// the shift stage (legacy behaviour). Mirrors Thetis radio.cs:1419-1420
+    /// (the WDSP <c>SetRXAShiftFreq</c> + <c>RXANBPSetShiftFrequency</c>
+    /// pair). Issue #427.
+    /// </summary>
+    void SetCtunShift(int channelId, int shiftHz);
     void SetAgcTop(int channelId, double topDb);
 
     /// <summary>Set the RX master AF gain in dB. Drives WDSP's

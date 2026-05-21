@@ -291,7 +291,15 @@ public sealed class RadioService : IDisposable
             // rsSnap block; mirror them into the StateDto so SetDrive doesn't
             // become the only path that puts these into the broadcast.
             DrivePct: Volatile.Read(ref _drivePct),
-            TunePct: Volatile.Read(ref _tunePct));
+            TunePct: Volatile.Read(ref _tunePct),
+            // CTUN — issue #427. Persisted in RadioStateStore so the operator's
+            // last click-tune mode survives restart. RadioLoHz snaps to VfoHz
+            // on legacy rows (RadioLoHz==0) so the panadapter centre is never
+            // zero on a fresh row written by an older build.
+            CtunEnabled: rsSnap?.CtunEnabled ?? false,
+            RadioLoHz: (rsSnap?.RadioLoHz ?? 0L) != 0L
+                ? rsSnap!.RadioLoHz
+                : (rsSnap?.VfoHz ?? 14_200_000));
 
         // Kick off the debounce flush timer. Fires every 1 s; only writes to
         // LiteDB when _stateDirty is set (i.e., at least one Mutate() has fired
@@ -470,7 +478,14 @@ public sealed class RadioService : IDisposable
                 }
             }
             await client.StartAsync(new StreamConfig(hpsdrRate, _preampOn, _atten), ct).ConfigureAwait(false);
-            client.SetVfoAHz(CwOffset.EffectiveLoHz(Snapshot()));
+            // CTUN-on across restart: retune the radio to the persisted hardware
+            // NCO (RadioLoHz), not to EffectiveLoHz(dial), so the operator's
+            // last frozen centre is restored. Issue #427.
+            var connectSnap = Snapshot();
+            long connectLoHz = connectSnap.CtunEnabled
+                ? connectSnap.RadioLoHz
+                : CwOffset.EffectiveLoHz(connectSnap);
+            client.SetVfoAHz(connectLoHz);
 
             // Default-on the N2ADR 7-relay filter board for HL2 — mirrors
             // Thetis's HERCULES preset (setup.cs:14642). Most HL2 deployments
@@ -563,13 +578,24 @@ public sealed class RadioService : IDisposable
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
         long previous;
         RxMode currentMode;
-        lock (_sync) { previous = _state.VfoHz; currentMode = _state.Mode; }
-        Mutate(s => s with { VfoHz = clamped });
-        // CW retunes the LO cw_pitch below/above the dial so the listening
-        // freq lands on the +cw_pitch / -cw_pitch audio passband. In SSB /
-        // AM / FM / DIG modes EffectiveLoHz returns the dial value
-        // unchanged, preserving prior behaviour.
-        ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(currentMode, clamped));
+        bool ctun;
+        lock (_sync) { previous = _state.VfoHz; currentMode = _state.Mode; ctun = _state.CtunEnabled; }
+        // CTUN ON: don't retune the hardware NCO. The radio stays at RadioLoHz
+        // and WDSP's RX bandpass is shifted by DspPipelineService so the
+        // operator's tuned signal still lands inside the passband. Issue #427.
+        // CTUN OFF: legacy behaviour — RadioLoHz tracks VfoHz so the radio is
+        // re-tuned to the clamped dial.
+        Mutate(s => ctun
+            ? s with { VfoHz = clamped }
+            : s with { VfoHz = clamped, RadioLoHz = clamped });
+        if (!ctun)
+        {
+            // CW retunes the LO cw_pitch below/above the dial so the listening
+            // freq lands on the +cw_pitch / -cw_pitch audio passband. In SSB /
+            // AM / FM / DIG modes EffectiveLoHz returns the dial value
+            // unchanged, preserving prior behaviour.
+            ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(currentMode, clamped));
+        }
         // Band edge crossed? Per-band PA gain / OC bits may have swapped — push
         // the new snapshot before the next TX frame ships. Cheap when no
         // crossing occurred (same bytes re-pushed).
@@ -577,6 +603,49 @@ public sealed class RadioService : IDisposable
         {
             RecomputePaAndPush();
         }
+        return Snapshot();
+    }
+
+    /// <summary>
+    /// Toggle CTUN (Click-Tune) mode. On enable, the hardware NCO is frozen at
+    /// the current VfoHz — subsequent SetVfo calls update the dial without
+    /// retuning the radio, and the DSP pipeline shifts the RX bandpass to keep
+    /// the operator's tuned signal demodulated. On disable, RadioLoHz snaps
+    /// back to VfoHz and the radio is re-tuned to the current dial so the
+    /// hardware centre matches what the operator sees again. Mirrors Thetis
+    /// chkFWCATU_CheckedChanged (console.cs:43143-43170). Issue #427.
+    /// </summary>
+    public StateDto SetCtun(bool enabled)
+    {
+        long retuneTo = 0;
+        RxMode currentMode = RxMode.USB;
+        bool retune = false;
+        Mutate(s =>
+        {
+            if (s.CtunEnabled == enabled) return s;
+            currentMode = s.Mode;
+            if (enabled)
+            {
+                // Freeze the hardware NCO at its CURRENT value — which equals
+                // EffectiveLoHz(dial), accounting for cw_pitch in CWU/CWL. Using
+                // s.VfoHz directly would be wrong on CW: the hardware is at
+                // dial ± cw_pitch, not at the dial itself.
+                return s with
+                {
+                    CtunEnabled = true,
+                    RadioLoHz = CwOffset.EffectiveLoHz(s.Mode, s.VfoHz),
+                };
+            }
+            // Re-snap the hardware NCO to the operator's current dial and
+            // retune the radio to match below, outside the lock. RadioLoHz
+            // tracks the dial when CTUN is off so SetVfo's CTUN-off branch
+            // can keep RadioLoHz == VfoHz invariant.
+            retune = true;
+            retuneTo = s.VfoHz;
+            return s with { CtunEnabled = false, RadioLoHz = s.VfoHz };
+        });
+        if (retune)
+            ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(currentMode, retuneTo));
         return Snapshot();
     }
 
@@ -1597,6 +1666,8 @@ public sealed class RadioService : IDisposable
                 CwTxFilterLoAbs = cwTx.LoAbs,   CwTxFilterHiAbs = cwTx.HiAbs,
                 DrivePct = snap.DrivePct,
                 TunePct = snap.TunePct,
+                CtunEnabled = snap.CtunEnabled,
+                RadioLoHz = snap.RadioLoHz,
                 UpdatedUtc = DateTime.UtcNow,
             });
         }

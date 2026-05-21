@@ -63,6 +63,14 @@ export type ConnectionState = {
   status: ConnectionStatus;
   endpoint: string | null;
   vfoHz: number;
+  // CTUN (Click-Tune) — issue #427. When true, panadapter clicks move vfoHz
+  // without retuning the radio; the hardware stays at radioLoHz and WDSP's RX
+  // filter is shifted to keep the operator's tuned signal in the passband.
+  ctunEnabled: boolean;
+  // Hardware NCO. Tracks vfoHz when ctunEnabled is false; frozen otherwise.
+  // The panadapter centres on radioLoHz so the spectrum doesn't slide on
+  // every click while CTUN is on.
+  radioLoHz: number;
   mode: RxMode;
   filterLowHz: number;
   filterHighHz: number;
@@ -119,6 +127,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   status: 'Disconnected',
   endpoint: null,
   vfoHz: 14_200_000,
+  ctunEnabled: false,
+  radioLoHz: 14_200_000,
   mode: 'USB',
   filterLowHz: 150,
   filterHighHz: 2850,
@@ -151,6 +161,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       status: s.status,
       endpoint: s.endpoint,
       vfoHz: s.vfoHz,
+      ctunEnabled: s.ctunEnabled,
+      radioLoHz: s.radioLoHz,
       mode: s.mode,
       filterLowHz: s.filterLowHz,
       filterHighHz: s.filterHighHz,
