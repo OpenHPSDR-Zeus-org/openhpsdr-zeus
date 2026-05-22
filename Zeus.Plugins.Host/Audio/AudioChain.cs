@@ -5,10 +5,19 @@ namespace Zeus.Plugins.Host.Audio;
 
 /// <summary>
 /// Serial chain of <see cref="IAudioPlugin"/> instances with master
-/// enable + per-slot bypass. The realtime <see cref="Process"/> method
+/// bypass + per-slot bypass. The realtime <see cref="Process"/> method
 /// allocates nothing, takes no locks, and short-circuits to a single
-/// memcpy when master enable is false — matching the bit-identical
+/// memcpy when master bypass is engaged — matching the bit-identical
 /// pass-through requirement from the v1 ADR (§5.7).
+///
+/// <para><b>Master bypass</b> is the operator's "disengage the whole
+/// Audio Suite" lever, surfaced via the Audio Suite UI and persisted
+/// by <c>AudioChainMasterBypassService</c>. Default in this realtime
+/// type is <c>false</c> (chain hot); the service writes the operator's
+/// persisted preference through on startup. Toggling does NOT touch
+/// per-slot bypass — when master goes from engaged back to off, the
+/// individual plugins resume in whatever bypass state the operator
+/// last left them in. CFC lives downstream in WDSP and is unaffected.</para>
 ///
 /// Slot mutation methods (<see cref="SetSlot"/>, <see cref="ClearSlot"/>,
 /// <see cref="SetSlotBypass"/>) are NOT realtime-safe — call from the
@@ -20,7 +29,7 @@ public sealed class AudioChain : IAsyncDisposable
 
     private readonly ChainSlot[] _slots = new ChainSlot[MaxSlots];
     private readonly float[] _scratch;
-    private volatile bool _masterEnabled = true;
+    private volatile bool _masterBypassed;
 
     public AudioChain(int maxFrames = 4096, int maxChannels = 2)
     {
@@ -30,10 +39,17 @@ public sealed class AudioChain : IAsyncDisposable
 
     public int SlotCount => MaxSlots;
 
-    public bool MasterEnabled
+    /// <summary>
+    /// Operator master bypass. <c>true</c> = chain inert, mic passes
+    /// through bit-identical to WDSP; <c>false</c> = chain hot, plugins
+    /// run in slot order. Single <c>volatile bool</c> — realtime read
+    /// in <see cref="Process"/>, control-thread write from
+    /// <c>AudioChainMasterBypassService</c>. No locks, no re-init.
+    /// </summary>
+    public bool MasterBypassed
     {
-        get => _masterEnabled;
-        set => _masterEnabled = value;
+        get => _masterBypassed;
+        set => _masterBypassed = value;
     }
 
     public IAudioPlugin? GetSlot(int index)
@@ -75,7 +91,7 @@ public sealed class AudioChain : IAsyncDisposable
     /// the internal scratch buffer to chain plugins without allocating
     /// per call.
     ///
-    /// When master is disabled, this is a single <c>input.CopyTo(output)</c>
+    /// When master bypass is engaged, this is a single <c>input.CopyTo(output)</c>
     /// and exits. Slots whose Plugin is null or Bypassed = true are
     /// skipped without a copy (handled by the ping-pong logic).
     /// </summary>
@@ -125,7 +141,7 @@ public sealed class AudioChain : IAsyncDisposable
         if (output.Length < input.Length)
             throw new ArgumentException("output too small", nameof(output));
 
-        if (!_masterEnabled)
+        if (_masterBypassed)
         {
             input.CopyTo(output);
             return;

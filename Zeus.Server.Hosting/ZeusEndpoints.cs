@@ -85,6 +85,23 @@ public static class ZeusEndpoints
             return Results.Ok(new { supported = true, enabled = audition.IsEnabled });
         });
 
+        // Audio Suite master bypass — single operator-facing toggle that
+        // disengages the entire plugin chain in one click. Default on first
+        // install is true (chain inert) so a fresh operator isn't surprised
+        // by an unfamiliar processing chain transforming their first TX.
+        // The state persists across server restarts via
+        // AudioChainSettingsStore. CFC is downstream in WDSP and unaffected;
+        // per-plugin bypass states are likewise untouched.
+        app.MapGet("/api/audio-suite/master-bypass", (AudioChainMasterBypassService svc) =>
+        {
+            return Results.Ok(new { bypassed = svc.IsBypassed });
+        });
+        app.MapPut("/api/audio-suite/master-bypass", (MasterBypassSetRequest body, AudioChainMasterBypassService svc) =>
+        {
+            svc.SetMasterBypassed(body.Bypassed);
+            return Results.Ok(new { bypassed = svc.IsBypassed });
+        });
+
         // Audio plugin chain order — operator's preferred sequence for
         // the plugins in the Audio Suite window. GET returns the
         // canonical ordered list of plugin IDs; PUT accepts a new
@@ -1332,3 +1349,4 @@ public static class ZeusEndpoints
 internal sealed record NativeMuteRequest(bool Muted);
 internal sealed record AuditionSetRequest(bool Enabled);
 internal sealed record ChainOrderSetRequest(List<string> PluginIds);
+internal sealed record MasterBypassSetRequest(bool Bypassed);

@@ -317,7 +317,7 @@ public class ChainOrderServiceTests
                     IAudioPlugin? p = id == addId ? addPlugin : id == mulId ? mulPlugin : null;
                     if (p is not null) { chain.SetSlot(idx, p); idx++; }
                 }
-                chain.MasterEnabled = idx > 0;
+                chain.MasterBypassed = idx == 0;
             }
             // Initial order is [add, mul] (attached in that order, both
             // append to v2-default positions in canonical, runtime view

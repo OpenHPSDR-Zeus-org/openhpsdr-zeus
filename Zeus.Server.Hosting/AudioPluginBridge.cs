@@ -117,6 +117,21 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     /// <summary>True if the pre-MOX preview tap is active (Wdsp engine + plugins attached).</summary>
     internal bool PreviewEnabled => _previewEnabled;
 
+    /// <summary>
+    /// Operator master-bypass write-through. Called by
+    /// <c>AudioChainMasterBypassService</c> — on startup (apply persisted
+    /// state) and on every operator toggle (apply new state). Single
+    /// <c>volatile bool</c> write on the chain; no locks, no plugin
+    /// re-init, no clicks/pops.
+    /// </summary>
+    public void SetMasterBypassed(bool bypassed)
+    {
+        _chain.MasterBypassed = bypassed;
+    }
+
+    /// <summary>Current master bypass state (mirrors <c>AudioChain.MasterBypassed</c>).</summary>
+    public bool IsMasterBypassed => _chain.MasterBypassed;
+
     public Task StartAsync(CancellationToken ct)
     {
         _manager.PluginActivated   += OnPluginActivated;
@@ -226,6 +241,13 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     internal void ProcessLivePreview(ReadOnlySpan<float> mic, int sampleRate)
     {
         if (!_previewEnabled) return;
+        // Master bypass — skip the entire preview pipeline (stackalloc +
+        // chain dispatch) when the operator has disengaged the suite.
+        // The chain itself would also short-circuit to a copy, but we
+        // save the stackallocs and the virtual call by bailing here.
+        // Per-plugin meters freeze on their last-active values, which
+        // matches operator intuition ("the engine isn't running").
+        if (_chain.MasterBypassed) return;
         if (_isMoxOn()) return;
         if (_isMonitorOn()) return;
 
@@ -354,7 +376,10 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             return;
         }
 
-        _chain.MasterEnabled = true;
+        // Note: master bypass is owned by AudioChainMasterBypassService now;
+        // the bridge no longer auto-toggles _chain.MasterBypassed on attach.
+        // An attach into an operator-bypassed chain leaves the chain inert
+        // (correct behaviour — operator's choice stays sticky).
         RefreshPreviewEnabled();
         _log.LogInformation(
             "Audio plugin {Id} attached to slot {Slot}",
@@ -377,7 +402,10 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             // close instead of leaving a hole in the middle of the
             // chain.
             if (_chainOrder is not null) ReapplySlotsUnderLock();
-            if (_idToSlot.Count == 0) _chain.MasterEnabled = false;
+            // Note: master bypass is owned by AudioChainMasterBypassService;
+            // bridge no longer flips _chain.MasterBypassed on last detach.
+            // The chain Process loop already no-ops cleanly on an empty
+            // slot table (all slots null → all iterations skipped).
         }
         _chainOrder?.OnPluginDetached(p.Loaded.Manifest.Id);
         RefreshPreviewEnabled();

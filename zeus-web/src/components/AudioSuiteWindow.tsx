@@ -233,6 +233,9 @@ export function AudioSuiteWindow() {
   const auditionEnabled = useAudioSuiteStore((s) => s.auditionEnabled);
   const setAuditionEnabled = useAudioSuiteStore((s) => s.setAuditionEnabled);
   const loadAuditionState = useAudioSuiteStore((s) => s.loadAuditionState);
+  const loadMasterBypassFromServer = useAudioSuiteStore(
+    (s) => s.loadMasterBypassFromServer,
+  );
 
   const allPanels = usePluginPanels();
   const chainPanels = useMemo(
@@ -244,12 +247,19 @@ export function AudioSuiteWindow() {
   );
 
   // Fetch server-side state on first open. Subsequent updates arrive
-  // via the AudioChainOrder WS broadcast handler in ws-client.ts.
+  // via the AudioChainOrder + AudioMasterBypass WS broadcast handlers
+  // in ws-client.ts.
   useEffect(() => {
     if (!isOpen) return;
     loadChainOrderFromServer();
     loadAuditionState();
-  }, [isOpen, loadChainOrderFromServer, loadAuditionState]);
+    loadMasterBypassFromServer();
+  }, [
+    isOpen,
+    loadChainOrderFromServer,
+    loadAuditionState,
+    loadMasterBypassFromServer,
+  ]);
 
   // Escape closes the window — standard modal/popup keyboard
   // affordance. Listener only attached while the window is open

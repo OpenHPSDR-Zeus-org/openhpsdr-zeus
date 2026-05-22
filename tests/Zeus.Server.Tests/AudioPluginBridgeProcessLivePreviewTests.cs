@@ -28,7 +28,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
             previewEnabled: false,
             engineIsWdsp: true);
         bridge.Chain.SetSlot(0, spy);
-        bridge.Chain.MasterEnabled = true;
+        bridge.Chain.MasterBypassed = false;
 
         RunPreview(bridge, 256);
 
@@ -44,7 +44,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
             isMonitorOn: () => false,
             log: NullLogger<AudioPluginBridge>.Instance);
         bridge.Chain.SetSlot(0, spy);
-        bridge.Chain.MasterEnabled = true;
+        bridge.Chain.MasterBypassed = false;
 
         RunPreview(bridge, 256);
 
@@ -60,7 +60,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
             isMonitorOn: () => true,        // <- audition mode
             log: NullLogger<AudioPluginBridge>.Instance);
         bridge.Chain.SetSlot(0, spy);
-        bridge.Chain.MasterEnabled = true;
+        bridge.Chain.MasterBypassed = false;
 
         RunPreview(bridge, 256);
 
@@ -76,7 +76,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
             isMonitorOn: () => false,
             log: NullLogger<AudioPluginBridge>.Instance);
         bridge.Chain.SetSlot(0, spy);
-        bridge.Chain.MasterEnabled = true;
+        bridge.Chain.MasterBypassed = false;
 
         RunPreview(bridge, 256);
 
@@ -97,8 +97,8 @@ public class AudioPluginBridgeProcessLivePreviewTests
             isMoxOn: () => false,
             isMonitorOn: () => false,
             log: NullLogger<AudioPluginBridge>.Instance);
-        // Note: Chain.MasterEnabled defaults to true; with zero slots it
-        // is a no-op pass-through inside AudioChain.Process.
+        // Note: Chain.MasterBypassed defaults to false; with zero slots it
+        // is a no-op pass-through inside AudioChain.Process (all slots null).
 
         var ex = Record.Exception(() => RunPreview(bridge, 256));
         Assert.Null(ex);
@@ -117,7 +117,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
             isMonitorOn: () => false,
             log: NullLogger<AudioPluginBridge>.Instance);
         bridge.Chain.SetSlot(0, spy);
-        bridge.Chain.MasterEnabled = true;
+        bridge.Chain.MasterBypassed = false;
 
         RunPreview(bridge, 960);
 
@@ -140,7 +140,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
             log: NullLogger<AudioPluginBridge>.Instance,
             audition: sink);
         bridge.Chain.SetSlot(0, spy);
-        bridge.Chain.MasterEnabled = true;
+        bridge.Chain.MasterBypassed = false;
 
         RunPreview(bridge, 256);
 
@@ -164,7 +164,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
             log: NullLogger<AudioPluginBridge>.Instance,
             audition: sink);
         bridge.Chain.SetSlot(0, spy);
-        bridge.Chain.MasterEnabled = true;
+        bridge.Chain.MasterBypassed = false;
 
         RunPreview(bridge, 256);
 
@@ -186,7 +186,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
             log: NullLogger<AudioPluginBridge>.Instance,
             audition: sink);
         bridge.Chain.SetSlot(0, spy);
-        bridge.Chain.MasterEnabled = true;
+        bridge.Chain.MasterBypassed = false;
 
         RunPreview(bridge, 256);
 

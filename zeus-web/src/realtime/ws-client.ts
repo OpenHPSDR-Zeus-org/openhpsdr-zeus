@@ -154,6 +154,15 @@ const MIC_PEAK_BYTES = 1 + 4 + 8;
 // Contract: Zeus.Contracts/AudioChainOrderFrame.cs.
 export const MSG_TYPE_AUDIO_CHAIN_ORDER = 0x1e;
 
+// Audio Suite master-bypass broadcast. Server pushes this on every
+// operator toggle of the master bypass — disengages the WHOLE plugin
+// chain (NoiseGate / EQ / Comp / Exciter / Bass / Reverb) in a single
+// click. CFC is downstream in WDSP and unaffected; per-plugin bypass
+// states are untouched. Payload: [0x1F][bypassed:u8] = 2 bytes.
+// Contract: Zeus.Contracts/AudioMasterBypassFrame.cs.
+export const MSG_TYPE_AUDIO_MASTER_BYPASS = 0x1f;
+const AUDIO_MASTER_BYPASS_BYTES = 2;
+
 // Shared by startRealtime / sendMicPcm. Single WS instance at a time; writes
 // are no-ops when the socket isn't open.
 let activeWs: WebSocket | null = null;
@@ -333,6 +342,20 @@ export function startRealtime(path = '/ws'): () => void {
           // window (e.g. the no-plugins-installed first-run experience).
           void import('../state/audio-suite-store').then((m) => {
             m.useAudioSuiteStore.getState().setChainOrderFromServer(ids);
+          });
+          return;
+        }
+        if (peekType === MSG_TYPE_AUDIO_MASTER_BYPASS) {
+          if (ev.data.byteLength < AUDIO_MASTER_BYPASS_BYTES) {
+            warnOnce(
+              'ws-audio-master-bypass-short',
+              `audio master-bypass frame too short: ${ev.data.byteLength}`,
+            );
+            return;
+          }
+          const bypassed = new DataView(ev.data).getUint8(1) !== 0;
+          void import('../state/audio-suite-store').then((m) => {
+            m.useAudioSuiteStore.getState().setMasterBypassedFromServer(bypassed);
           });
           return;
         }

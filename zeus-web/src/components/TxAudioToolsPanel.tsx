@@ -13,7 +13,7 @@
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
 
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { CfcSettingsPanel } from './CfcSettingsPanel';
 import { DownloadAudioSuiteButton } from './DownloadAudioSuiteButton';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
@@ -53,6 +53,18 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
     ];
   }, [chainPanels]);
 
+  const masterBypassed = useAudioSuiteStore((s) => s.masterBypassed);
+  const loadMasterBypassFromServer = useAudioSuiteStore(
+    (s) => s.loadMasterBypassFromServer,
+  );
+
+  // Pull the master-bypass state from the server once on mount so a
+  // fresh browser session reflects the persisted operator preference.
+  // Subsequent broadcasts (0x1F) keep us in sync without polling.
+  useEffect(() => {
+    loadMasterBypassFromServer();
+  }, [loadMasterBypassFromServer]);
+
   return (
     <div
       role="presentation"
@@ -73,32 +85,87 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
         flexWrap: 'wrap',
       }}
     >
+      <MasterBypassButton />
       <span style={{ marginRight: 4, color: 'var(--fg-1)', fontWeight: 500 }}>TX chain</span>
-      {v1Slots.map((slot, i) => (
-        <span key={slot.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          {i > 0 && (
-            <span aria-hidden style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono, JetBrains Mono, ui-monospace, monospace)' }}>›</span>
-          )}
-          <span
-            style={{
-              padding: '2px 8px',
-              borderRadius: 3,
-              background: slot.installed ? 'var(--bg-2)' : 'var(--bg-1)',
-              border: '1px solid ' + (slot.installed ? 'var(--accent)' : 'var(--line-1)'),
-              color: slot.installed ? 'var(--fg-0)' : 'var(--fg-3)',
-              opacity: slot.installed ? 1 : 0.5,
-              fontSize: 10,
-              fontWeight: 500,
-            }}
-            title={slot.installed ? 'Installed and active' : 'Not installed — click Download Audio Suite or Settings → Plugins → Install from URL'}
-          >
-            {slot.title}
+      {v1Slots.map((slot, i) => {
+        // CFC is downstream in WDSP and unaffected by master bypass —
+        // never dim it. Plugin slots dim to 45% when bypassed to mirror
+        // the per-plugin bypass visual convention (operator sees the
+        // chain is inert).
+        const dimForBypass = slot.id !== 'cfc' && masterBypassed;
+        return (
+          <span key={slot.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {i > 0 && (
+              <span aria-hidden style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono, JetBrains Mono, ui-monospace, monospace)' }}>›</span>
+            )}
+            <span
+              style={{
+                padding: '2px 8px',
+                borderRadius: 3,
+                background: slot.installed ? 'var(--bg-2)' : 'var(--bg-1)',
+                border: '1px solid ' + (slot.installed ? 'var(--accent)' : 'var(--line-1)'),
+                color: slot.installed ? 'var(--fg-0)' : 'var(--fg-3)',
+                opacity: dimForBypass ? 0.45 : (slot.installed ? 1 : 0.5),
+                fontSize: 10,
+                fontWeight: 500,
+                transition: 'opacity 120ms ease-out',
+              }}
+              title={
+                dimForBypass
+                  ? 'Master bypass engaged — this stage is inert. Click BYPASS to engage the chain.'
+                  : slot.installed
+                  ? 'Installed and active'
+                  : 'Not installed — click Download Audio Suite or Settings → Plugins → Install from URL'
+              }
+            >
+              {slot.title}
+            </span>
           </span>
-        </span>
-      ))}
+        );
+      })}
       <AudioSuiteOpenButton />
       <DownloadAudioSuiteButton />
     </div>
+  );
+}
+
+// Master-bypass toggle for the whole plugin chain. One click instead of
+// six per-plugin bypass clicks. Sits at the head of the brass rail so
+// it's the first thing the operator's eye lands on. Visual convention
+// matches the per-plugin bypass (feedback_audio_plugin_bypass_convention):
+//   engaged   (bypassed) → --tx background, white text, "BYPASS" label
+//   released (chain hot) → --bg-2 background, --fg-2 text, "BYPASS" label
+function MasterBypassButton() {
+  const masterBypassed = useAudioSuiteStore((s) => s.masterBypassed);
+  const setMasterBypassed = useAudioSuiteStore((s) => s.setMasterBypassed);
+  return (
+    <button
+      type="button"
+      onClick={() => setMasterBypassed(!masterBypassed)}
+      aria-pressed={masterBypassed}
+      title={
+        masterBypassed
+          ? 'Master bypass ENGAGED — entire plugin chain (NoiseGate / EQ / Comp / Exciter / Bass / Reverb) is inert; mic passes through untouched. CFC is unaffected. Click to engage the chain.'
+          : 'Plugin chain ACTIVE — all installed plugins are processing your mic. Click to disengage the whole chain in one shot (per-plugin bypass states are preserved).'
+      }
+      style={{
+        padding: '4px 12px',
+        borderRadius: 4,
+        border: '1px solid ' + (masterBypassed ? 'var(--tx)' : 'var(--accent)'),
+        background: masterBypassed ? 'var(--tx)' : 'var(--bg-2)',
+        color: masterBypassed ? '#fff' : 'var(--fg-2)',
+        cursor: 'pointer',
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: 1.2,
+        textTransform: 'uppercase',
+        fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
+        minWidth: 72,
+        transition: 'background 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out',
+      }}
+    >
+      Bypass
+    </button>
   );
 }
 

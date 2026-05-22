@@ -388,6 +388,19 @@ public sealed class StreamingHub
         }
     }
 
+    public void Broadcast(in AudioMasterBypassFrame frame)
+    {
+        if (_clients.IsEmpty) return;
+
+        var payload = new byte[AudioMasterBypassFrame.ByteLength];
+        var writer = new FixedBufferWriter(payload, AudioMasterBypassFrame.ByteLength);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
     public void Broadcast(in AudioChainOrderFrame frame)
     {
         if (_clients.IsEmpty) return;

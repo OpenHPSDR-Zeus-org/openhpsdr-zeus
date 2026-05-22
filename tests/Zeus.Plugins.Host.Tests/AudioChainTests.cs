@@ -22,9 +22,9 @@ public class AudioChainTests
     }
 
     [Fact]
-    public void MasterDisabled_AlwaysPassesThrough()
+    public void MasterBypassed_AlwaysPassesThrough()
     {
-        var chain = new AudioChain { MasterEnabled = false };
+        var chain = new AudioChain { MasterBypassed = true };
         chain.SetSlot(0, new AddPlugin(10f));
 
         Span<float> input  = stackalloc float[] { 1, 2, 3, 4 };
@@ -165,9 +165,9 @@ public class AudioChainTests
     }
 
     [Fact]
-    public void Scratch_Overload_MasterDisabled_PassesThrough()
+    public void Scratch_Overload_MasterBypassed_PassesThrough()
     {
-        var chain = new AudioChain { MasterEnabled = false };
+        var chain = new AudioChain { MasterBypassed = true };
         chain.SetSlot(0, new AddPlugin(10f));
 
         Span<float> input   = stackalloc float[] { 1, 2, 3, 4 };

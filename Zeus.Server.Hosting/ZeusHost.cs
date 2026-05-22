@@ -314,6 +314,18 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioPluginBridge>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioPluginBridge>());
 
+        // AudioChainMasterBypassService — operator's "disengage the
+        // whole Audio Suite" lever. Default is true (bypassed) on first
+        // install so a brand-new operator's chain is inert until they
+        // engage it. Persists via AudioChainSettingsStore; broadcasts
+        // AudioMasterBypassFrame (0x1F) on every change. Registered
+        // AFTER AudioPluginBridge so its StartAsync runs after the
+        // bridge's, and the initial-state write-through finds a
+        // constructed chain.
+        builder.Services.AddSingleton<AudioChainSettingsStore>();
+        builder.Services.AddSingleton<AudioChainMasterBypassService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioChainMasterBypassService>());
+
         // TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
         // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),
         // and SDR display tools. Disabled by default; enable via appsettings.json Tci:Enabled=true.

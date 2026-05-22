@@ -142,4 +142,15 @@ public enum MsgType : byte
     // compatibility with non-ASCII plugin IDs even though current IDs
     // are reverse-DNS ASCII. See AudioChainOrderFrame.cs.
     AudioChainOrder = 0x1E,
+
+    // Server → client (audio suite master bypass). Broadcast on every
+    // master-bypass toggle (operator click in the Audio Suite chain
+    // rail) so all connected clients update their toggle state in sync.
+    // Master bypass disengages the WHOLE plugin chain (NoiseGate / EQ /
+    // Comp / Exciter / Bass / Reverb) — per-plugin bypass states are
+    // untouched and resume when master bypass is released. CFC is
+    // downstream in WDSP and unaffected.
+    // Payload: [type:1][bypassed:u8] = 2 bytes total. See
+    // AudioMasterBypassFrame.cs.
+    AudioMasterBypass = 0x1F,
 }
