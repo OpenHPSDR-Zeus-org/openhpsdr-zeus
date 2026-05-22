@@ -946,18 +946,23 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// Per-board base DDC index for the user-visible RX. OrionMkII/Saturn/G2
     /// family reserves DDC0/DDC1 for PureSignal feedback so the operator's RX
     /// lives at DDC2. Single-ADC Hermes-class radios (Brick2 on wire byte
-    /// 0x01; ANAN-10E / ANAN-100B on wire byte 0x02) have no reserved PS
-    /// feedback slots — the RX is at DDC0. Default OrionMkII preserves Zeus'
-    /// historical P2 wire shape for every existing board.
+    /// 0x01; ANAN-10E / ANAN-100B on wire byte 0x02; ANAN-G2E / HermesC10 on
+    /// wire byte 0x14) have no reserved PS feedback slots — the RX is at
+    /// DDC0. Default OrionMkII preserves Zeus' historical P2 wire shape for
+    /// every existing board.
     /// Reference: deskhpsdr <c>src/new_protocol.c:1692-1698</c> — only
     /// <c>NEW_DEVICE_ANGELIA / ORION / ORION2 / SATURN</c> use the
     /// <c>ddc = 2 + i</c> offset; <c>NEW_DEVICE_HERMES</c> and
     /// <c>NEW_DEVICE_HERMES2</c> both fall through to <c>ddc = i</c>.
+    /// Thetis groups HermesC10 alongside Hermes/HermesII in its P2 channel
+    /// setup (Console/console.cs:8610-8612) — the N1GP G2E firmware emulates
+    /// a single-ADC Hermes-class device on the wire.
     /// </summary>
     public static int RxBaseDdc(HpsdrBoardKind board) => board switch
     {
         HpsdrBoardKind.Hermes    => HermesRxDdc,
         HpsdrBoardKind.HermesII  => HermesRxDdc,
+        HpsdrBoardKind.HermesC10 => HermesRxDdc,
         _                        => G2RxDdc,
     };
 
@@ -985,12 +990,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         {
             // PS feedback layout is OrionMkII/Saturn-specific (DDC0+DDC1
             // paired with bit 1363 sync). Single-ADC Hermes-class radios
-            // (Hermes/0x01, HermesII/0x02) don't have this hardware — leave
-            // the PS block alone. psEnabled should never be set true for
-            // these boards upstream, but if it ever is we'd rather silently
-            // no-op than scribble bytes the radio will reject.
+            // (Hermes/0x01, HermesII/0x02, HermesC10/0x14) don't have this
+            // hardware — leave the PS block alone. psEnabled should never
+            // be set true for these boards upstream, but if it ever is we'd
+            // rather silently no-op than scribble bytes the radio will
+            // reject.
             if (boardKind != HpsdrBoardKind.Hermes &&
-                boardKind != HpsdrBoardKind.HermesII)
+                boardKind != HpsdrBoardKind.HermesII &&
+                boardKind != HpsdrBoardKind.HermesC10)
             {
                 ddcEnable |= 0x01;
                 p[17] = 0x00;

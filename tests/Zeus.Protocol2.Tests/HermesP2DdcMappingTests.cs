@@ -13,20 +13,23 @@ using Zeus.Contracts;
 namespace Zeus.Protocol2.Tests;
 
 /// <summary>
-/// Hermes-on-Protocol-2 RX DDC mapping (issue #171 Brick2; ANAN-10E follow-up).
+/// Hermes-on-Protocol-2 RX DDC mapping (issue #171 Brick2; ANAN-10E follow-up;
+/// issue #425 ANAN-G2E / HermesC10).
 ///
-/// Single-ADC Hermes-class radios — Hermes/Brick2 on wire byte 0x01 and
-/// HermesII (ANAN-10E / ANAN-100B) on wire byte 0x02 — have one ADC and no
+/// Single-ADC Hermes-class radios — Hermes/Brick2 on wire byte 0x01,
+/// HermesII (ANAN-10E / ANAN-100B) on wire byte 0x02, and HermesC10
+/// (ANAN-G2E, N1GP firmware) on wire byte 0x14 — have one ADC and no
 /// PureSignal feedback DDCs reserved at the front of the pool. receiver[i]
 /// maps to DDC[i] (deskhpsdr <c>src/new_protocol.c:1692-1698</c> — only
 /// <c>NEW_DEVICE_ANGELIA / ORION / ORION2 / SATURN</c> apply the
-/// <c>ddc = 2 + i</c> offset). Every other family Zeus supports on P2 puts
-/// the operator's RX0 at DDC2, so the OrionMkII default must remain the
-/// wire shape we've been shipping.
+/// <c>ddc = 2 + i</c> offset; Thetis Console/console.cs:8610-8612 groups
+/// HermesC10 alongside Hermes/HermesII in its P2 channel setup). Every
+/// other family Zeus supports on P2 puts the operator's RX0 at DDC2, so
+/// the OrionMkII default must remain the wire shape we've been shipping.
 ///
-/// These tests pin the byte-offsets so a Brick2 or ANAN-10E owner running
-/// this branch sees DDC0 enabled, the DDC0 config block populated at
-/// offset 17, and IQ arriving on UDP 1035 (instead of 1037).
+/// These tests pin the byte-offsets so a Brick2, ANAN-10E, or ANAN-G2E
+/// owner running this branch sees DDC0 enabled, the DDC0 config block
+/// populated at offset 17, and IQ arriving on UDP 1035 (instead of 1037).
 /// </summary>
 public class HermesP2DdcMappingTests
 {
@@ -44,9 +47,18 @@ public class HermesP2DdcMappingTests
         Assert.Equal(0, Protocol2Client.RxBaseDdc(HpsdrBoardKind.HermesII));
     }
 
+    [Fact]
+    public void RxBaseDdc_HermesC10_Is_Zero()
+    {
+        // ANAN-G2E / HermesC10 firmware (wire byte 0x14): single ADC, no PS
+        // DDCs reserved. The N1GP G2E firmware emulates a Hermes-class device
+        // on the wire — Thetis Console/console.cs:8610-8612 groups HermesC10
+        // with Hermes / HermesII in its P2 channel setup. Issue #425.
+        Assert.Equal(0, Protocol2Client.RxBaseDdc(HpsdrBoardKind.HermesC10));
+    }
+
     [Theory]
     [InlineData(HpsdrBoardKind.OrionMkII)]
-    [InlineData(HpsdrBoardKind.HermesC10)]
     [InlineData(HpsdrBoardKind.Orion)]
     [InlineData(HpsdrBoardKind.Angelia)]
     [InlineData(HpsdrBoardKind.HermesLite2)]
@@ -55,10 +67,10 @@ public class HermesP2DdcMappingTests
     public void RxBaseDdc_NonHermes_Stays_At_Two(HpsdrBoardKind board)
     {
         // Anti-regression: only single-ADC Hermes-class wire bytes (0x01,
-        // 0x02) flip to DDC0. Anything else MUST continue to report DDC2 —
-        // that's what every shipped P2 wire format in Zeus assumes (every
-        // test in PsWireFormatTests asserts on offset 29 = 17 + 12, i.e.
-        // DDC2's config block).
+        // 0x02, 0x14) flip to DDC0. Anything else MUST continue to report
+        // DDC2 — that's what every shipped P2 wire format in Zeus assumes
+        // (every test in PsWireFormatTests asserts on offset 29 = 17 + 12,
+        // i.e. DDC2's config block).
         Assert.Equal(2, Protocol2Client.RxBaseDdc(board));
     }
 
@@ -147,6 +159,50 @@ public class HermesP2DdcMappingTests
         var p = Protocol2Client.ComposeCmdRxBuffer(
             seq: 1, numAdc: 1, sampleRateKhz: 96, psEnabled: true,
             boardKind: HpsdrBoardKind.HermesII);
+
+        Assert.Equal((byte)0x00, p[1363]);
+        Assert.Equal((byte)0x01, p[7]);
+        Assert.Equal((byte)0x00, p[23]);
+        Assert.Equal((byte)0x00, p[28]);
+    }
+
+    [Fact]
+    public void CmdRx_HermesC10_EnablesDdc0_Not_Ddc2()
+    {
+        // ANAN-G2E (HermesC10, N1GP firmware) is single-ADC Hermes-class —
+        // RX0 at DDC0, not DDC2. Issue #425.
+        var p = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 1, numAdc: 1, sampleRateKhz: 48, psEnabled: false,
+            boardKind: HpsdrBoardKind.HermesC10);
+
+        Assert.Equal((byte)0x01, p[7]);
+    }
+
+    [Fact]
+    public void CmdRx_HermesC10_Writes_DDC0_Config_At_Offset_17()
+    {
+        var p = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 1, numAdc: 1, sampleRateKhz: 48, psEnabled: false,
+            boardKind: HpsdrBoardKind.HermesC10);
+
+        Assert.Equal((byte)0x00, p[17]);          // ADC0
+        Assert.Equal((byte)0x00, p[18]);          // 48 kHz BE high
+        Assert.Equal((byte)48,   p[19]);          // 48 kHz BE low
+        Assert.Equal((byte)24,   p[22]);          // 24-bit
+        Assert.Equal((byte)0x00, p[29]);          // DDC2 block stays zero
+        Assert.Equal((byte)0x00, p[31]);
+        Assert.Equal((byte)0x00, p[34]);
+    }
+
+    [Fact]
+    public void CmdRx_HermesC10_Does_Not_Set_DDC1_Sync_Or_PS_Block()
+    {
+        // Same single-ADC no-PS-hardware story as Hermes/HermesII: psEnabled=true
+        // is a no-op on HermesC10 so we don't scribble OrionMkII shape onto the
+        // wire.
+        var p = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 1, numAdc: 1, sampleRateKhz: 96, psEnabled: true,
+            boardKind: HpsdrBoardKind.HermesC10);
 
         Assert.Equal((byte)0x00, p[1363]);
         Assert.Equal((byte)0x01, p[7]);
