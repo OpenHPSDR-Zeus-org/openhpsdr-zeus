@@ -836,7 +836,12 @@ jobs:
           # Instead we pre-create the tag via the Git refs API and then
           # attach the release to the now-existing tag via `gh release
           # create`, which is robust on both first and subsequent runs.
-          SHA="${{ steps.version.outputs.short-sha }}"
+          SHORT_SHA="${{ steps.version.outputs.short-sha }}"
+          # The Git refs API rejects abbreviated SHAs with HTTP 422
+          # ("At least 40 characters are required; only 7 were supplied").
+          # Same checkout as the version step above, so HEAD is the same
+          # commit — resolve the full 40-char SHA here for the API calls.
+          FULL_SHA=$(git rev-parse HEAD)
           REPO="${{ github.repository }}"
 
           # Drop the previous release if any (keep the tag — we'll move it
@@ -847,16 +852,16 @@ jobs:
           # Git refs API, independent of local checkout state.
           if gh api "repos/$REPO/git/refs/tags/nightly" >/dev/null 2>&1; then
             gh api "repos/$REPO/git/refs/tags/nightly" \
-              -X PATCH -F sha="$SHA" -F force=true >/dev/null
+              -X PATCH -F sha="$FULL_SHA" -F force=true >/dev/null
           else
             gh api "repos/$REPO/git/refs" \
-              -X POST -f ref="refs/tags/nightly" -f sha="$SHA" >/dev/null
+              -X POST -f ref="refs/tags/nightly" -f sha="$FULL_SHA" >/dev/null
           fi
 
           # Create the prerelease against the freshly pointed tag.
           gh release create nightly \
             --prerelease \
-            --title "Openhpsdr Zeus nightly — ${{ steps.version.outputs.date }} ($SHA)" \
+            --title "Openhpsdr Zeus nightly — ${{ steps.version.outputs.date }} ($SHORT_SHA)" \
             --notes-file nightly-notes.md \
             --repo "$REPO" \
             release-artifacts/windows-installer/* \
