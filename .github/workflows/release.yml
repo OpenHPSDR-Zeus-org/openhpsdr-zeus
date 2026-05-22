@@ -823,31 +823,44 @@ jobs:
           echo "" >> nightly-notes.md
           echo "Source: <https://github.com/${{ github.repository }}/commit/${{ steps.version.outputs.short-sha }}>" >> nightly-notes.md
 
-      - name: Delete previous nightly tag + release
+      - name: Publish nightly release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Force-recreate the rolling release so the tag moves to the new
-          # SHA and old assets disappear. `|| true` because the first nightly
-          # run has nothing to delete.
-          gh release delete nightly --yes --cleanup-tag --repo "${{ github.repository }}" || true
+          # Force-recreate the rolling `nightly` release/tag so the rolling
+          # pointer moves to the new build SHA and old assets disappear.
+          #
+          # We deliberately do NOT use softprops/action-gh-release@v1 with
+          # `target_commitish: <sha>` here: that path 422s when the tag
+          # doesn't already exist (GitHub: "tag_name is not a valid tag").
+          # Instead we pre-create the tag via the Git refs API and then
+          # attach the release to the now-existing tag via `gh release
+          # create`, which is robust on both first and subsequent runs.
+          SHA="${{ steps.version.outputs.short-sha }}"
+          REPO="${{ github.repository }}"
 
-      - name: Publish nightly release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: nightly
-          target_commitish: ${{ steps.version.outputs.short-sha }}
-          name: Openhpsdr Zeus nightly — ${{ steps.version.outputs.date }} (${{ steps.version.outputs.short-sha }})
-          body_path: nightly-notes.md
-          prerelease: true
-          # Force-overwrite assets in case --cleanup-tag above raced with a
-          # concurrent dispatch (concurrency: group=nightly on the caller
-          # should prevent this, defensive).
-          files: |
-            release-artifacts/windows-installer/*
-            release-artifacts/windows-arm64-installer/*
-            release-artifacts/linux-tarball/*
-            release-artifacts/linux-appimage/*
+          # Drop the previous release if any (keep the tag — we'll move it
+          # next). `|| true` because the first nightly has nothing to delete.
+          gh release delete nightly --yes --repo "$REPO" || true
+
+          # Force-create or move refs/tags/nightly to the build SHA via the
+          # Git refs API, independent of local checkout state.
+          if gh api "repos/$REPO/git/refs/tags/nightly" >/dev/null 2>&1; then
+            gh api "repos/$REPO/git/refs/tags/nightly" \
+              -X PATCH -F sha="$SHA" -F force=true >/dev/null
+          else
+            gh api "repos/$REPO/git/refs" \
+              -X POST -f ref="refs/tags/nightly" -f sha="$SHA" >/dev/null
+          fi
+
+          # Create the prerelease against the freshly pointed tag.
+          gh release create nightly \
+            --prerelease \
+            --title "Openhpsdr Zeus nightly — ${{ steps.version.outputs.date }} ($SHA)" \
+            --notes-file nightly-notes.md \
+            --repo "$REPO" \
+            release-artifacts/windows-installer/* \
+            release-artifacts/windows-arm64-installer/* \
+            release-artifacts/linux-tarball/* \
+            release-artifacts/linux-appimage/* \
             release-artifacts/macos-arm64-dmg/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
