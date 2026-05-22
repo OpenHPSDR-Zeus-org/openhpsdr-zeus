@@ -151,6 +151,17 @@ ZEUS_MA_EXPORT void* zeus_ma_output_create(
     /* Linear resampler: lowest CPU + lowest added latency. Adequate for
      * voice / SSB / FM audio at 48 kHz. */
     cfg.resampling.algorithm = ma_resample_algorithm_linear;
+    /* Performance + scheduler hints. Documented intent: ask the OS for the
+     * smallest period the driver supports (functionally the default on
+     * miniaudio — ma_performance_profile_low_latency == 0 and the config
+     * struct is zero-init), and tell Windows WASAPI this is a real-time
+     * audio app so AvSetMmThreadCharacteristics raises the audio worker
+     * thread to the "Pro Audio" MMCSS class. The Pro Audio class biases
+     * the scheduler away from preempting our callback under load, which
+     * is the OS-side counterpart to the dropout-resilience the C# ring
+     * already provides. wasapi.usage is a no-op on macOS / Linux backends. */
+    cfg.performanceProfile = ma_performance_profile_low_latency;
+    cfg.wasapi.usage       = ma_wasapi_usage_pro_audio;
 
     if (ma_device_init(NULL, &cfg, &h->device) != MA_SUCCESS) {
         free(h);
@@ -228,6 +239,13 @@ ZEUS_MA_EXPORT void* zeus_ma_input_create(
     cfg.notificationCallback = zeus_ma_input_notify_proc;
     cfg.pUserData          = h;
     cfg.resampling.algorithm = ma_resample_algorithm_linear;
+    /* Same performance + scheduler hints as the playback side — see the
+     * comment in zeus_ma_output_create. The mic-capture worker runs
+     * continuously while desktop mode is up, so MMCSS Pro Audio class
+     * helps it survive OS-level preemption the same way it helps the
+     * playback thread. */
+    cfg.performanceProfile = ma_performance_profile_low_latency;
+    cfg.wasapi.usage       = ma_wasapi_usage_pro_audio;
 
     if (ma_device_init(NULL, &cfg, &h->device) != MA_SUCCESS) {
         free(h);
