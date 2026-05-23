@@ -24,8 +24,16 @@ import { useEffect, useState } from 'react';
 // Release date for the version this build ships against. Bump whenever
 // VersionPrefix in Directory.Build.props bumps. ISO 8601 so toLocaleDateString
 // renders sensibly in any locale.
-const RELEASE_DATE_ISO = '2026-05-20';
-// Note: v0.8.2 is a hotfix for v0.8.0/v0.8.1 — the Download Audio Suite
+const RELEASE_DATE_ISO = '2026-05-22';
+// Note: v0.8.3 is a Windows-focused hotfix for v0.8.0..0.8.2. Fresh Windows
+// installs were silently broken without the Visual C++ Runtime present, and
+// even when running, Windows operators saw a growing 1-3 second MOX-engage
+// delay as the audio ring drifted vs the radio clock. Three coordinated
+// fixes (VC++ Runtime bundled in installer, WASAPI Pro Audio MMCSS hint,
+// MOX-coupled ring drain) bring Windows responsiveness to parity with
+// macOS / Linux. See CHANGELOG for the full picture.
+//
+// Previous note (v0.8.2 hotfix for v0.8.0/v0.8.1) — Download Audio Suite
 // button's plugin array was missing Noise Gate (silently skipped on
 // one-click installs) and pinning v0.1.0 of Bass/Exciter/Reverb instead
 // of the v0.2.0 versions that shipped on 2026-05-19. See CHANGELOG for

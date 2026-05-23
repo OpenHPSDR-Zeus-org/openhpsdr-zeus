@@ -10,6 +10,58 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.8.3] — 2026-05-22
+
+> **🪟 Windows fixes release.** Every Windows operator who installed v0.8.0..v0.8.2 on a fresh Windows machine has been silently broken in one or both of these ways: a missing system runtime stopped Zeus's audio + DSP libraries from loading at all (blank panadapter, no audio), and a growing audio buffer caused the MOX-engage delay to climb to 2-3 seconds after a few minutes of operation. v0.8.3 ships three coordinated fixes that bring Windows responsiveness to parity with macOS and Linux. Mac and Linux operators get a few small bug fixes (PS banner direction, RX trace colour persistence) and the new Audio Suite master bypass; nothing in this release changes Mac or Linux audio behaviour. We're still actively optimising the Windows audio path — see the "What's still next" section below.
+
+### Windows audio responsiveness — the headline
+
+These three fixes work together. Each one is necessary; together they make the Windows operator experience match Mac/Linux for the first time.
+
+- **Installer bundles Microsoft Visual C++ Runtime** ([#452](https://github.com/Kb2uka/openhpsdr-zeus/issues/452), [#453](https://github.com/Kb2uka/openhpsdr-zeus/pull/453)). Zeus's audio (`miniaudio.dll`) and DSP (`wdsp.dll`) libraries are built with Microsoft's C++ compiler and need the Visual C++ Runtime to load. Fresh Windows installs without Microsoft Office, Visual Studio, or another large desktop app silently miss it — and Zeus quietly falls back to a placeholder mode that produces no panadapter, no audio, and no transmit power despite MOX visibly keying the radio. The v0.8.3 installer now bundles Microsoft's `vc_redist.x64.exe` (and `vc_redist.arm64.exe` for ARM Windows) and runs it during install, skipped automatically if a compatible runtime is already present. Installer grows from ~54 MB to ~67 MB; no workaround needed for operators. Diagnosed and fixed by Doug (KB2UKA) after standing up a fresh Windows 11 VM specifically to reproduce operator complaints.
+
+- **WASAPI Pro Audio scheduling hint** ([#450](https://github.com/Kb2uka/openhpsdr-zeus/pull/450)). Tells Windows to treat Zeus's audio thread as a high-priority Pro Audio workload (via MMCSS) and to use the smallest possible WASAPI shared-mode buffer. Drops the WASAPI buffer between Zeus and the speaker from ~100-300 ms down to ~10-30 ms. No-op on macOS (CoreAudio) and Linux (ALSA/PulseAudio). Fixed by Brian (EI6LF).
+
+- **MOX-coupled RX audio ring drain** ([#403](https://github.com/Kb2uka/openhpsdr-zeus/issues/403), [#454](https://github.com/Kb2uka/openhpsdr-zeus/pull/454)). On Windows, the radio's sample clock and the soundcard's clock drift relative to each other (the radio runs slightly faster than most Windows audio devices). Zeus's RX audio buffer accumulates this drift as a growing backlog over a multi-minute session — after 10+ minutes the buffer holds ~1.3 seconds of audio. Pressing MOX or TUNE used to produce 2-3 seconds of stale audio before silence reached the operator's ear. v0.8.3 drains the audio buffer the instant TX engages, so the MOX-engage transition stays snappy regardless of session age. macOS and Linux operators see no change — their audio backends barely drift, so the drain runs on an already-empty buffer. Diagnosed by Doug (KB2UKA) from the reproduction VM; root cause confirmed via the desktop-vs-browser asymmetry that Ronnie (@RonnieC82) spotted in his original report (#403).
+
+### Audio Suite
+
+- **Master Bypass toggle** ([#449](https://github.com/Kb2uka/openhpsdr-zeus/pull/449)). One click disengages the entire Audio Suite plugin chain (Noise Gate / EQ / Compressor / Exciter / Bass / Reverb) instead of clicking six individual bypass buttons. Default on a fresh install is ON (chain inert) so a brand-new operator isn't surprised by an unfamiliar processing chain transforming their first TX before they've configured it. State persists across server restarts. **CFC is downstream in WDSP and unaffected** — master bypass acts on the plugin chain only. Designed by Doug (KB2UKA); see the [Audio Suite wiki page](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Audio-Suite#master-bypass--a-single-toggle-for-the-whole-suite) for operator workflow.
+
+### Protocol & RX fixes
+
+- **HermesC10 / ANAN-G2E receive now works** ([#425](https://github.com/Kb2uka/openhpsdr-zeus/issues/425), [#440](https://github.com/Kb2uka/openhpsdr-zeus/pull/440)). Discovered when Stig (@lb5va) tried Zeus with his G2E for the first time and got connect-but-no-RX. Root cause: an earlier PR mis-mapped the G2E's RX path to DDC2; the N1GP G2E firmware is single-ADC Hermes-class and uses DDC0. Fix routes the RX correctly. Stig bench-confirmed the fix before merge. Thanks Stig.
+
+- **PureSignal stall banner direction corrected and usage documented** ([#438](https://github.com/Kb2uka/openhpsdr-zeus/pull/438)). The "PS stalled" banner pointed the wrong way after a stall. Brian fixed the direction and added an operator-facing usage doc on PS setup. Plus follow-up messaging refinements ([#451](https://github.com/Kb2uka/openhpsdr-zeus/pull/451)).
+
+- **RX trace colour now persists across restarts** ([#437](https://github.com/Kb2uka/openhpsdr-zeus/pull/437)). Operators who changed the panadapter trace colour saw it reset to default on every backend restart. Now persisted server-side alongside the rest of the display settings.
+
+### Cleanup
+
+- **Dead 2-DDC PureSignal scaffolding removed** ([#434](https://github.com/Kb2uka/openhpsdr-zeus/issues/434), [#436](https://github.com/Kb2uka/openhpsdr-zeus/pull/436)). Pre-merge cleanup; no operator-visible behaviour change. Thanks Ramón (EA5IUE).
+
+### Developer / infra
+
+- **Nightly builds** ([#433](https://github.com/Kb2uka/openhpsdr-zeus/pull/433)). A rolling pre-release nightly installer is now published every night from the latest `develop` code at https://github.com/Kb2uka/openhpsdr-zeus/releases/tag/nightly. Useful for testers and operators who want the newest fixes between tagged releases. The "Latest" badge stays on the most recent tagged release (this one). Fixed by Brian (EI6LF).
+
+- **`miniaudio.dll` committed to the repository for fresh Windows clones** ([#448](https://github.com/Kb2uka/openhpsdr-zeus/pull/448)). Mirrors the existing `wdsp.dll` arrangement so a developer who clones the repository and runs `dotnet run --project OpenhpsdrZeus -- --desktop` on Windows gets working audio without a manual build step. Doesn't affect installed-app behaviour (the release pipeline always rebuilds the natives from source). Fixed by Brian (EI6LF).
+
+### What's still next for Windows
+
+These three fixes get Windows to parity, but we're not stopping. The MOX-coupled drain is a workaround for the underlying clock-drift; a proper asynchronous resampler in `NativeAudioSink` that tracks the soundcard clock and keeps the ring at a steady target depth would eliminate the drift entirely instead of papering over it on MOX edges. Tracked as future work; the current fix completely hides the symptom while the resampler is built.
+
+We're also keeping an eye on operator reports for any remaining Windows-only quirks. **If you're on Windows and something feels off after upgrading to v0.8.3, please [open an issue](https://github.com/Kb2uka/openhpsdr-zeus/issues/new/choose)** — the v0.8.0..0.8.2 Windows bugs got missed because every maintainer was on Mac or Linux; the more Windows operator voices we hear, the faster the next refinement lands.
+
+### Thanks
+
+- **Brian (EI6LF)** — WASAPI Pro Audio fix (#450), nightly-builds infrastructure (#433), `miniaudio.dll` clone-and-run fix (#448), PS stall direction + usage doc (#438), PS messaging refinements (#451)
+- **Doug (KB2UKA)** — Windows responsiveness diagnostic from a reproduction VM, VC++ Runtime bundle (#453), MOX-coupled ring drain (#454), Audio Suite master bypass (#449), HermesC10 / ANAN-G2E RX fix (#440), RX trace colour persistence (#437)
+- **Ramón (EA5IUE)** — PS scaffolding cleanup (#436)
+- **Stig (LB5VA)** — bench-testing the G2E receive fix on his own radio before merge (#425)
+- **Ronnie (@RonnieC82)** — the original "desktop slow, browser snappy" observation in #403 that pointed straight at the WASAPI backend asymmetry; thank you for the persistence
+
+---
+
 ## [0.8.2] — 2026-05-20
 
 > **🛠 THIS IS A HOTFIX FOR v0.8.0/v0.8.1's Audio Suite installer.** If you installed v0.8.0 or v0.8.1 and clicked **Download Audio Suite**, you got 5 of the 6 audio plugins — Noise Gate was silently skipped. v0.8.2 fixes the one-click installer to deliver all six, and also catches Bass / Exciter / Reverb up from v0.1.0 to the v0.2.0 versions that shipped alongside Noise Gate on 2026-05-19. See [0.8.0](#080--2026-05-19) below for the full feature list — v0.8.2 contains only the fix described here.
