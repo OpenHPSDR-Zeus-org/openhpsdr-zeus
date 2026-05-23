@@ -1222,6 +1222,8 @@ public static class ZeusEndpoints
 
         app.MapGet("/api/rotator/status", (RotctldService rot) => rot.GetStatus());
 
+        app.MapGet("/api/rotator/config", (RotctldService rot) => rot.GetConfig());
+
         app.MapPost("/api/rotator/config", async (RotctldConfig req, RotctldService rot, HttpContext ctx) =>
         {
             log.LogInformation("api.rotator.config enabled={En} host={Host} port={Port}", req.Enabled, req.Host, req.Port);
