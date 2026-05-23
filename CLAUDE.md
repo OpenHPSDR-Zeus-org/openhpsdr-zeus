@@ -149,13 +149,13 @@ bd close <id>         # Complete work
 
 The auto-generated block above mentions `refs/dolt/data` on the git remote as the default sync path. **Zeus does NOT use that.** Zeus syncs its bd Dolt database to a dedicated public DoltHub repo:
 
-> **DoltHub:** https://www.dolthub.com/repositories/brianbruff/openhpsdr-zeus
+> **DoltHub:** https://www.dolthub.com/repositories/kb2uka/openhpsdr-zeus
 
 ### One-time teammate setup
 
 ```bash
 dolt login                                                                   # browser flow → associate a key
-bd dolt remote add origin https://doltremoteapi.dolthub.com/brianbruff/openhpsdr-zeus
+bd dolt remote add origin https://doltremoteapi.dolthub.com/kb2uka/openhpsdr-zeus
 bd dolt pull origin main                                                     # fetch the team's issues
 ```
 
