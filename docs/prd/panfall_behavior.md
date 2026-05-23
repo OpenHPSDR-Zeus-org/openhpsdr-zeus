@@ -47,10 +47,10 @@ CTUN behavior becomes implicit and unconditional. The toggle, its persisted flag
 **`Zeus.Server.Hosting/RadioStateStore.cs:157`** — drop the persisted `CtunEnabled` field from the LiteDB schema. On hydrating an older prefs DB, ignore any stale `CtunEnabled` value (treat as always-on). `RadioLoHz` continues to be persisted so the operator's frozen NCO survives restart.
 
 **`Zeus.Server.Hosting/RadioService.cs`** —
-- Delete the `ToggleCtun` method (around line 610) and the supporting band-change branches gated on `CtunEnabled`.
-- In `SetVfo` (`:583`), the "CTUN ON" branch becomes the only branch: `vfoHz` updates, `RadioLoHz` does not. The legacy "CTUN OFF: `RadioLoHz` tracks `vfoHz`" branch is deleted.
+- Delete the `ToggleCtun` method and remove all `_state.CtunEnabled` reads.
+- `SetVfo` keeps the auto-recenter heuristic from #461 but drops the `if (ctun)` gate so it applies unconditionally. Small dial movements (resulting shift stays inside both the visible panadapter span minus a 5 % inset, and inside ±0.46×sample_rate IF capacity) leave `RadioLoHz` alone — the frozen-NCO ideal. Large dial movements (band-button jumps, CAT/TCI external sources) trigger an auto-retune: `RadioLoHz := EffectiveLoHz(mode, newDial)` plus a P1 `SetVfoAHz`. External callers (`fromExternal=true`) always retune regardless of geometry, matching Thetis `CATChangesCenterFreq=true`.
+- Operator-driven "pure pan" movements (panadapter drag-release past the IQ window edge) take the explicit `POST /api/radio/lo` path instead, leaving `VfoHz` untouched.
 - On reconnect / hydration, if the persisted `RadioLoHz == 0` (fresh DB or migrated-from-CTUN-off DB), initialize `RadioLoHz := vfoHz`. Otherwise restore the persisted value as today.
-- Band-change retune (#461 / 4491ad9) and external CAT/TCI set-freq retune logic remains — those branches retune `RadioLoHz` to follow large frequency jumps. They were guarded behind `CtunEnabled` checks that get inverted to be unconditional.
 
 **`Zeus.Server.Hosting/DspPipelineService.cs`** —
 - The conditional WDSP `shift` stage setup (around `:540`) becomes unconditional. The shift always equals `vfoHz − RadioLoHz`.

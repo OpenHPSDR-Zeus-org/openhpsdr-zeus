@@ -817,7 +817,11 @@ public sealed class TciSession : IDisposable
             // Spec §8.5: vfo:trx,vfo,0 is invalid — never set a VFO to 0 Hz.
             // Reject silently rather than driving the radio to an out-of-range freq.
             if (hz <= 0) return;
-            _radio.SetVfo(hz);
+            // TCI is a CAT-like external source — bypass the frozen-NCO
+            // auto-recenter heuristic so the hardware tracks the commanded
+            // frequency absolutely. Mirrors Thetis CATChangesCenterFreq
+            // default. Issue #461.
+            _radio.SetVfo(hz, fromExternal: true);
             // Don't echo back immediately — the StateChanged event will broadcast it
         }
     }
@@ -836,8 +840,8 @@ public sealed class TciSession : IDisposable
         }
         else if (args.Length >= 2 && TciProtocol.TryParseLong(args[1], out long hz))
         {
-            // Set DDS (same as VFO for single-RX)
-            _radio.SetVfo(hz);
+            // Set DDS (same as VFO for single-RX). External source — see HandleVfo.
+            _radio.SetVfo(hz, fromExternal: true);
         }
     }
 

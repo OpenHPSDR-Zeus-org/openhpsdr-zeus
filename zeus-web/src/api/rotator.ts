@@ -104,6 +104,23 @@ export function getRotatorStatus(signal?: AbortSignal): Promise<RotctldStatus> {
   return jsonFetch('/api/rotator/status', { signal }, normalizeStatus);
 }
 
+function normalizeConfig(raw: unknown): RotctldConfig {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    enabled: Boolean(r.enabled),
+    host: typeof r.host === 'string' && r.host ? r.host : '127.0.0.1',
+    port: typeof r.port === 'number' && r.port > 0 ? r.port : 4533,
+    pollingIntervalMs:
+      typeof r.pollingIntervalMs === 'number' && r.pollingIntervalMs > 0
+        ? r.pollingIntervalMs
+        : 500,
+  };
+}
+
+export function getRotatorConfig(signal?: AbortSignal): Promise<RotctldConfig> {
+  return jsonFetch('/api/rotator/config', { signal }, normalizeConfig);
+}
+
 export function postRotatorConfig(cfg: RotctldConfig, signal?: AbortSignal): Promise<RotctldStatus> {
   return jsonFetch(
     '/api/rotator/config',

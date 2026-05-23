@@ -135,7 +135,10 @@ public sealed class FrequencyCalibrationService
                 _radio.SetFilter(100, 2700);
                 _radio.SetZoom(CalZoomLevel);
                 long commandedLoHz = (long)(referenceFrequencyHz + IntentionalLoOffsetHz);
-                _radio.SetVfo(commandedLoHz);
+                // Calibration drives the LO absolutely; bypass the frozen-NCO
+                // auto-recenter heuristic so the hardware lands at exactly the
+                // commanded freq.
+                _radio.SetVfo(commandedLoHz, fromExternal: true);
 
                 await Task.Delay(SettleMs, ct).ConfigureAwait(false);
 
@@ -203,7 +206,7 @@ public sealed class FrequencyCalibrationService
                 try { _radio.SetMode(origMode); } catch (Exception ex) { _log.LogWarning(ex, "freqcal.restore mode"); }
                 try { _radio.SetFilter(origFilterLo, origFilterHi); } catch (Exception ex) { _log.LogWarning(ex, "freqcal.restore filter"); }
                 try { _radio.SetZoom(origZoom); } catch (Exception ex) { _log.LogWarning(ex, "freqcal.restore zoom"); }
-                try { _radio.SetVfo(origVfoHz); } catch (Exception ex) { _log.LogWarning(ex, "freqcal.restore vfo"); }
+                try { _radio.SetVfo(origVfoHz, fromExternal: true); } catch (Exception ex) { _log.LogWarning(ex, "freqcal.restore vfo"); }
             }
         }
         finally

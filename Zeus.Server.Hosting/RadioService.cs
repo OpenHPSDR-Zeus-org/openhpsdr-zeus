@@ -573,18 +573,77 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
-    public StateDto SetVfo(long hz)
+    public StateDto SetVfo(long hz) => SetVfo(hz, fromExternal: false);
+
+    /// <summary>
+    /// Set the VFO (dial) frequency. The frozen-NCO model prefers to leave the
+    /// hardware alone — DspPipelineService recomputes the WDSP shift stage so
+    /// the tuned signal still lands at baseband. Two cases force a hardware
+    /// auto-retune anyway so the radio doesn't get "stuck": (a) the resulting
+    /// shift would push the filter edge outside the visible panadapter span
+    /// (Thetis dispMargin = 5% inset), or (b) the shift exceeds the IF
+    /// capacity (sample_rate * 0.46). External sources (CAT/TCI/calibration,
+    /// <paramref name="fromExternal"/>=true) bypass the heuristics and always
+    /// retune — mirrors Thetis <c>CATChangesCenterFreq=true</c> (console.cs:
+    /// 32082, CATCommands.cs:2690). Without this, a 5–10 kHz FT8 → FT4 hop
+    /// via TCI would stay inside the IF and the radio would TX on the wrong
+    /// frequency. Issues #461 and zeus-nnc — see docs/prd/panfall_behavior.md.
+    /// Operator-driven "pure pan" movements (panadapter drag release past
+    /// the IQ window edge) take the explicit POST /api/radio/lo path
+    /// instead, leaving VfoHz untouched.
+    /// </summary>
+    public StateDto SetVfo(long hz, bool fromExternal)
     {
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
         long previous;
-        lock (_sync) { previous = _state.VfoHz; }
-        // Frozen-NCO model: SetVfo never retunes the hardware. Only the dial
-        // (VfoHz) moves; DspPipelineService recomputes the WDSP shift stage
-        // so the tuned signal still lands at baseband. Retunes of the
-        // hardware happen via the explicit POST /api/radio/lo path
-        // (panadapter pure-pan, band buttons, future external-source bridges).
-        // See docs/prd/panfall_behavior.md.
-        Mutate(s => s with { VfoHz = clamped });
+        long radioLo;
+        RxMode currentMode;
+        int sampleRate;
+        int zoomLevel;
+        int filterLow;
+        int filterHigh;
+        lock (_sync)
+        {
+            previous = _state.VfoHz;
+            currentMode = _state.Mode;
+            radioLo = _state.RadioLoHz;
+            sampleRate = _state.SampleRate;
+            zoomLevel = Math.Max(1, _state.ZoomLevel);
+            filterLow = _state.FilterLowHz;
+            filterHigh = _state.FilterHighHz;
+        }
+        bool retune;
+        if (!fromExternal)
+        {
+            long effectiveLoNew = CwOffset.EffectiveLoHz(currentMode, clamped);
+            long proposedShift = effectiveLoNew - radioLo;
+            long lMargin = Math.Max(0, -filterLow);
+            long hMargin = Math.Max(0, filterHigh);
+            double dispWidth = (double)sampleRate / zoomLevel;
+            double dispMarginHz = dispWidth * 0.05;
+            double lDisp = -dispWidth / 2.0 + dispMarginHz;
+            double hDisp = dispWidth / 2.0 - dispMarginHz;
+            bool outsideVisible = (proposedShift - lMargin) < lDisp
+                               || (proposedShift + hMargin) > hDisp;
+            long ifCapacity = (long)(sampleRate * 0.46);
+            bool outsideIf = Math.Abs(proposedShift) > ifCapacity;
+            retune = outsideVisible || outsideIf;
+        }
+        else
+        {
+            retune = true;
+        }
+        long radioLoNew = CwOffset.EffectiveLoHz(currentMode, clamped);
+        Mutate(s => retune
+            ? s with { VfoHz = clamped, RadioLoHz = radioLoNew }
+            : s with { VfoHz = clamped });
+        if (retune)
+        {
+            // CW retunes the LO cw_pitch below/above the dial so the listening
+            // freq lands on the +cw_pitch / -cw_pitch audio passband. In SSB /
+            // AM / FM / DIG modes EffectiveLoHz returns the dial unchanged.
+            ActiveClient?.SetVfoAHz(radioLoNew);
+        }
         // Band edge crossed? Per-band PA gain / OC bits may have swapped — push
         // the new snapshot before the next TX frame ships. Cheap when no
         // crossing occurred (same bytes re-pushed).
@@ -1197,8 +1256,9 @@ public sealed class RadioService : IDisposable
         bool paEnabled = cfg.Global.PaEnabled && !bandCfg.DisablePa;
 
         _log.LogInformation(
-            "pa.recompute tunActive={Tun} pct={Pct} band={Band} gainDb={Gain:F2} maxW={Max} profile={Profile} -> byte={Byte} paEn={PaEn}",
-            tunActive, activePct, bandName ?? "?", bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts, driveProfile.BoardLabel, driveByte, paEnabled);
+            "pa.recompute tunActive={Tun} pct={Pct} band={Band} gainDb={Gain:F2} maxW={Max} profile={Profile} -> byte={Byte} paEn={PaEn} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocDxTx=0x{OcDxTx:X2} ocDxRx=0x{OcDxRx:X2}",
+            tunActive, activePct, bandName ?? "?", bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts, driveProfile.BoardLabel, driveByte, paEnabled,
+            bandCfg.OcTx, bandCfg.OcRx, bandCfg.OcDxTx, bandCfg.OcDxRx);
 
         ActiveClient?.SetDriveByte(driveByte);
         ActiveClient?.SetOcMasks(bandCfg.OcTx, bandCfg.OcRx);
