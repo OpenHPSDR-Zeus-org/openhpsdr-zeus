@@ -689,8 +689,26 @@ public class DspPipelineService : BackgroundService,
             {
                 _p2Client?.SetPsFeedbackEnabled(true);
                 p1Active?.SetPsEnabled(true);
-                try { Task.Delay(100).Wait(); } catch { /* ignore */ }
-                engine.SetPsEnabled(true);
+                // PS engine arm requires a feedback path that delivers paired
+                // samples. On P2 ANAN-class that's SetPsFeedbackEnabled above.
+                // On P1, only HermesLite2 delivers the 2-DDC paired layout
+                // PS needs — Protocol1Client.cs:643 (NumReceiversMinusOne
+                // wire bump) and :1004 (4-DDC parser path) are both HL2-gated.
+                // On a non-HL2 P1 board WDSP arms with no possible feedback
+                // source, sits in COLLECT waiting on paired samples that
+                // never arrive, and the blocking 100 ms settle below stacks
+                // on the state-change thread — together that freezes RX
+                // audio + waterfall (GH #426). Skip the engine arm in that
+                // case; the wire calls above are no-ops on non-HL2 P1
+                // (board-gated in WriteAttenuatorPayload + SnapshotState).
+                bool p1Connected = p1Active is not null;
+                bool psEngineSupported = !p1Connected
+                    || _radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2;
+                if (psEngineSupported)
+                {
+                    try { Task.Delay(100).Wait(); } catch { /* ignore */ }
+                    engine.SetPsEnabled(true);
+                }
             }
             else
             {
