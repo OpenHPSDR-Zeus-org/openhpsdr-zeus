@@ -219,12 +219,11 @@ export type RadioStateDto = {
   // after normalisation; falls back to CFC_CONFIG_DEFAULT when the server
   // omits it (legacy state frames).
   cfc: CfcConfigDto;
-  // CTUN (Click-Tune) — issue #427. When true, panadapter clicks move the
-  // dial (vfoHz) without retuning the radio; the WDSP RX filter is shifted
-  // by (vfoHz - radioLoHz) on the server so the audio still demodulates the
-  // operator's tuned signal. radioLoHz is the actual hardware NCO and is
-  // what the panadapter centres on.
-  ctunEnabled: boolean;
+  // Hardware NCO. Independent of vfoHz — the panadapter centres on radioLoHz
+  // and WDSP's shift stage relocates the operator's tuned signal so it still
+  // demodulates. Moves only on explicit retune (/api/radio/lo, band change,
+  // external CAT). The legacy CTUN toggle was removed in the pure-pan rework
+  // (PRD: docs/prd/panfall_behavior.md); this is now the only tuning model.
   radioLoHz: number;
 };
 
@@ -479,9 +478,9 @@ export function normalizeState(raw: unknown): RadioStateDto {
     twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
     twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,
     cfc: normalizeCfc(r.cfc),
-    // CTUN — issue #427. Legacy server without the fields → CTUN off and
-    // radioLoHz falls back to vfoHz so the panadapter centre stays sensible.
-    ctunEnabled: typeof r.ctunEnabled === 'boolean' ? r.ctunEnabled : false,
+    // Hardware NCO. Legacy server without the field → fall back to vfoHz so
+    // the panadapter centre stays sensible during a rolling deploy. Any
+    // stale ctunEnabled field from an old payload is ignored.
     radioLoHz:
       typeof r.radioLoHz === 'number' && r.radioLoHz > 0
         ? r.radioLoHz
@@ -655,16 +654,20 @@ export function disconnectP2(signal?: AbortSignal): Promise<unknown> {
   );
 }
 
-export function setCtun(
-  enabled: boolean,
+// Move the hardware NCO center frequency without touching vfoHz. Called by
+// the panadapter pan gesture (use-pan-tune-gesture.ts) when a drag releases
+// past the edge of the current IQ capture window. Server returns the full
+// updated StateDto; 400 if hz is out of range for the connected radio.
+export function setRadioLo(
+  hz: number,
   signal?: AbortSignal,
 ): Promise<RadioStateDto> {
   return jsonFetch(
-    '/api/ctun',
+    '/api/radio/lo',
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify({ hz }),
       signal,
     },
     normalizeState,

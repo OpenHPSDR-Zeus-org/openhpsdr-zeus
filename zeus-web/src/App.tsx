@@ -77,7 +77,7 @@ import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
 import { setAudioHostMode } from './audio/host-mode';
 import { useMicUplink } from './audio/use-mic-uplink';
-import { fetchState, setCtun } from './api/client';
+import { fetchState } from './api/client';
 import { useConnectionStore } from './state/connection-store';
 import { useRadioStore } from './state/radio-store';
 import { useQrzStore } from './state/qrz-store';
@@ -114,8 +114,6 @@ export default function App() {
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
   const preampOn = useConnectionStore((s) => s.preampOn);
-  const ctunEnabled = useConnectionStore((s) => s.ctunEnabled);
-  const applyState = useConnectionStore((s) => s.applyState);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
   const endpoint = useConnectionStore((s) => s.endpoint);
@@ -772,25 +770,6 @@ export default function App() {
         <button type="button" className="btn ghost hide-mobile">SPLIT</button>
         <button type="button" className="btn ghost hide-mobile">RIT</button>
         <button type="button" className="btn ghost hide-mobile">SAVE MEM</button>
-        <button
-          type="button"
-          className={`btn ghost hide-mobile ${ctunEnabled ? 'active' : ''}`}
-          aria-pressed={ctunEnabled}
-          title={
-            ctunEnabled
-              ? 'CTUN ON — panadapter clicks move the dial; radio NCO stays put'
-              : 'CTUN OFF — panadapter clicks retune the radio. Click to enable.'
-          }
-          onClick={() => {
-            setCtun(!ctunEnabled)
-              .then(applyState)
-              .catch(() => {
-                /* next poll reconciles */
-              });
-          }}
-        >
-          CTUN
-        </button>
         <div className="spacer" style={{ flex: 1 }} />
         <PaTempChip />
         <div className="chip hide-mobile">

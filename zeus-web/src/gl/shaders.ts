@@ -94,9 +94,9 @@ void main() { fragColor = vec4(uColor * v_alpha, v_alpha); }`;
 export const CURSOR_VS = /* glsl */ `#version 300 es
 layout(location = 0) in vec2 aPos;
 // uXOffset = clip-space X shift, range [-1, +1]. 0 = panadapter centre
-// (CTUN off, or CTUN on with the dial at the frozen radio LO). Non-zero
-// when CTUN is on and the operator's dial has roamed away from the frozen
-// hardware NCO — caller computes (vfoHz - centerHz) / (spanHz/2). Issue #427.
+// (dial aligned with the hardware NCO). Non-zero when the operator's dial
+// has roamed away from the NCO — caller computes
+// (vfoHz - centerHz) / (spanHz/2).
 uniform float uXOffset;
 void main() { gl_Position = vec4(aPos.x + uXOffset, aPos.y, 0.0, 1.0); }`;
 

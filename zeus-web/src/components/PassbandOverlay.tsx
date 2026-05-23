@@ -52,12 +52,10 @@ import { useConnectionStore } from '../state/connection-store';
 // Positioned by percentage of the total span so it tracks resize and tune
 // without measuring DOM width.
 //
-// CTUN (issue #427): when CTUN is on, the panadapter centres on radioLoHz
-// (the frozen hardware NCO) while vfoHz roams independently. Anchoring the
-// passband to vfoHz — not centerHz — keeps the filter overlay glued to the
-// operator's tuned signal so clicking the spectrum visibly slides the
-// passband around the (stationary) waterfall. When CTUN is off vfoHz equals
-// centerHz so this collapses to legacy behaviour.
+// The panadapter centres on the hardware NCO (radioLoHz) while vfoHz roams
+// independently. Anchoring the passband to vfoHz — not centerHz — keeps the
+// filter overlay glued to the operator's tuned signal so clicking the
+// spectrum visibly slides the passband around the (stationary) waterfall.
 export function PassbandOverlay() {
   const centerHz = useDisplayStore((s) => s.centerHz);
   const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);

@@ -74,12 +74,10 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   const colormap = useDisplaySettingsStore((s) => s.colormap);
   const setColormap = useDisplaySettingsStore((s) => s.setColormap);
   // Tuning-cursor position. The waterfall canvas centres on the radio's
-  // hardware NCO (centerHz) which equals VfoHz outside CTUN — so on the
-  // legacy path the cursor sits at 50%. With CTUN on the hardware stays
-  // frozen at RadioLoHz while VfoHz roams; the cursor must track the dial
-  // (VfoHz) so the operator can see where they're listening, not where the
-  // radio is anchored. Computed off panDb width × hzPerPixel for span,
-  // identical math to FreqAxis's dial marker. Issue #427.
+  // hardware NCO (centerHz / radioLoHz) while VfoHz roams independently; the
+  // cursor must track the dial (VfoHz) so the operator can see where they're
+  // listening, not where the radio is anchored. Computed off panDb width ×
+  // hzPerPixel for span, identical math to FreqAxis's dial marker.
   const cursorCenterHz = useDisplayStore((s) => s.centerHz);
   const cursorHzPerPixel = useDisplayStore((s) => s.hzPerPixel);
   const cursorWidth = useDisplayStore((s) => s.panDb?.length ?? 0);
