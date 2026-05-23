@@ -256,21 +256,15 @@ public sealed record StateDto(
     // would make pressing TUN appear to do nothing on first key.
     int TunePct = 10,
 
-    // ---- CTUN (Click-Tune) — issue #427 ----
-    // When CtunEnabled is false (default), VfoHz drives both the radio's
-    // hardware NCO and the panadapter centre — clicking the spectrum retunes
-    // the radio. When true, the hardware NCO is frozen at RadioLoHz and
-    // clicking only moves VfoHz around within the displayed bandwidth; WDSP's
-    // RX bandpass is shifted by (VfoHz - RadioLoHz) so the audio still
-    // resolves the operator's tuned signal. Mirrors Thetis chkFWCATU /
-    // ClickTuneDisplay (console.cs:43143-43170, 10857-10867).
-    bool CtunEnabled = false,
-    // Hardware NCO frequency in Hz. Tracks VfoHz when CTUN is OFF; frozen at
-    // the value VfoHz had when CTUN was toggled ON. RadioService is
+    // Hardware NCO frequency in Hz. Independent of VfoHz: the dial roams over
+    // the sampled spectrum while the radio's hardware centre stays put.
+    // Updated only by explicit calls to <c>POST /api/radio/lo</c> (or by the
+    // band-change / reconnect paths inside RadioService). RadioService is
     // authoritative; persisted to LiteDB so the radio re-tunes to the same
-    // hardware centre on reconnect when CTUN was on. Zero on a fresh server
-    // before the first state hydration; RadioService snaps it to VfoHz at
-    // construction so the displayed centre is never zero.
+    // hardware centre on reconnect. Zero on a fresh server before the first
+    // state hydration; RadioService snaps it to VfoHz at construction so the
+    // displayed centre is never zero. Mirrors Thetis CTUN's frozen-NCO model
+    // (console.cs:43143-43170), now Zeus's only tuning model.
     long RadioLoHz = 0);
 
 public sealed record RadioInfo(
@@ -295,7 +289,11 @@ public sealed record ConnectRequest(
 
 public sealed record VfoSetRequest(long Hz);
 
-public sealed record CtunSetRequest(bool Enabled);
+/// <summary>Set the hardware NCO (radio LO) frequency in Hz. Does not move
+/// the operator's tuned frequency (VfoHz). Used by the panadapter pure-pan
+/// gesture when a drag would otherwise carry the viewport outside the IQ
+/// capture window. Out-of-range values are rejected with 400.</summary>
+public sealed record RadioLoSetRequest(long Hz);
 
 public sealed record ModeSetRequest(RxMode Mode);
 

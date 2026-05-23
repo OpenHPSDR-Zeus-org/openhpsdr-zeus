@@ -306,14 +306,19 @@ public static class ZeusEndpoints
             return r.SetVfo(req.Hz);
         });
 
-        // CTUN (Click-Tune) — issue #427. When enabled the hardware NCO is
-        // frozen at the current VfoHz so subsequent SetVfo calls move only the
-        // dial / WDSP filter offset, not the radio. RadioService.SetCtun
-        // handles the radio retune on disable.
-        app.MapPost("/api/ctun", (CtunSetRequest req, RadioService r) =>
+        // Set the radio's hardware NCO (LO) frequency directly. Does not
+        // move VfoHz — used by the panadapter pure-pan gesture when a drag
+        // would carry the viewport outside the IQ capture window.
+        // See docs/prd/panfall_behavior.md.
+        app.MapPost("/api/radio/lo", (RadioLoSetRequest req, RadioService r) =>
         {
-            log.LogInformation("api.ctun enabled={Enabled}", req.Enabled);
-            return r.SetCtun(req.Enabled);
+            if (req.Hz < 0 || req.Hz > 60_000_000)
+            {
+                log.LogInformation("api.radio.lo rejected hz={Hz}", req.Hz);
+                return Results.BadRequest(new { error = "hz out of range [0, 60000000]" });
+            }
+            log.LogInformation("api.radio.lo hz={Hz}", req.Hz);
+            return Results.Ok(r.SetRadioLo(req.Hz));
         });
 
         app.MapPost("/api/mode", (ModeSetRequest req, RadioService r) =>
