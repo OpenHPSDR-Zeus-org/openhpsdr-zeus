@@ -79,8 +79,22 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
     private const int AuditionRingCapacity = 16_384;
 
     private readonly ILogger<NativeAudioSink> _log;
+    // Service-provider-based lookup for TxService, used to subscribe to
+    // TxActiveChanged in StartAsync. NativeAudioSink can NOT take TxService
+    // as a constructor dep directly: DspPipelineService depends on
+    // IRxAudioSink (us), TxService depends on DspPipelineService, so a
+    // direct ctor-time dependency creates a DI cycle. Resolving TxService
+    // lazily inside StartAsync breaks the cycle — by the time the hosted-
+    // service start phase fires, all singletons in the cycle exist.
+    private readonly IServiceProvider? _services;
     private readonly FloatSpscRing _ring = new(RingCapacity);
     private readonly FloatSpscRing _auditionRing = new(AuditionRingCapacity);
+
+    // Resolved on Start, kept so Stop can detach the handler cleanly.
+    // Null when no TxService was available (legacy test ctor or
+    // pre-construction failure).
+    private TxService? _tx;
+    private Action<bool>? _txActiveHandler;
 
     private MiniAudioOutput? _output;
     private bool _disposed;
@@ -142,9 +156,10 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
     private long _totalSamplesOut;
     private DateTime _lastLogUtc = DateTime.UtcNow;
 
-    public NativeAudioSink(ILogger<NativeAudioSink> log)
+    public NativeAudioSink(ILogger<NativeAudioSink> log, IServiceProvider? services = null)
     {
         _log = log;
+        _services = services;
     }
 
     /// <summary>
@@ -177,16 +192,62 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
             _output?.Dispose();
             _output = null;
         }
+
+        // Subscribe to TX-active edges so we can drain the ring on TX-on.
+        // The radio sample clock and the WASAPI playback clock drift relative
+        // to each other (the radio runs slightly faster than the soundcard on
+        // most Windows systems), so the ring slowly accumulates a backlog
+        // over a multi-minute session. Without this hook the operator hears
+        // up to ~1.3 sec of stale RX audio after pressing MOX or TUNE before
+        // the buffer drains to silence. macOS / Linux see this too in
+        // principle but their audio backends drift much less and the ring
+        // stays at near-zero steady-state depth, so the clear is a no-op
+        // there. See issue #403 for the original symptom report and the
+        // diagnostic write-up.
+        _tx = _services?.GetService(typeof(TxService)) as TxService;
+        if (_tx is not null)
+        {
+            _txActiveHandler = OnTxActiveChanged;
+            _tx.TxActiveChanged += _txActiveHandler;
+        }
         return Task.CompletedTask;
     }
 
     /// <summary>Hosted-service hook: stop the playback device. Idempotent.</summary>
     public Task StopAsync(CancellationToken cancellationToken)
     {
+        if (_tx is not null && _txActiveHandler is not null)
+        {
+            _tx.TxActiveChanged -= _txActiveHandler;
+            _txActiveHandler = null;
+        }
         try { _output?.Stop(); }
         catch (Exception ex) { _log.LogWarning(ex, "audio.native.rx stop threw"); }
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// TxService.TxActiveChanged subscriber. On the rising edge (TX
+    /// engaging via MOX, TUN, or TwoTone) drains the RX audio ring so
+    /// the operator hears instant silence rather than the accumulated
+    /// pre-TX backlog. The audition ring is left alone — audition is
+    /// gated separately and pre-MOX preview is meaningful right up to
+    /// the MOX edge; the existing audition gates handle the rest.
+    /// On falling edge (TX releasing → back to RX) this is a no-op
+    /// because the ring is already empty after the drain; new RX
+    /// samples land in an empty ring and reach the speaker promptly.
+    /// </summary>
+    internal void OnTxActiveChanged(bool txActive)
+    {
+        if (!txActive) return;
+        _ring.Clear();
+    }
+
+    // Test surface — lets unit tests assert the ring's drain behaviour
+    // without reaching into private state via reflection. Read on any
+    // thread; matches FloatSpscRing.Count's relaxed-reader contract
+    // (best-effort snapshot, may be off by one in a race window).
+    internal int CurrentRingDepth => _ring.Count;
 
     public void Publish(in AudioFrame frame)
     {

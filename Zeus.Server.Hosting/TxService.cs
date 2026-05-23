@@ -71,6 +71,52 @@ public sealed class TxService
     public bool IsMoxOn { get { lock (_sync) return _moxOn; } }
     public bool IsTunOn { get { lock (_sync) return _tunOn; } }
 
+    /// <summary>
+    /// Fires on every change to combined TX-active state
+    /// (<c>IsMoxOn || IsTunOn</c>). Argument is the new combined value.
+    /// Fired OFF the <c>_sync</c> lock so subscribers can call back into
+    /// the service without deadlocking.
+    ///
+    /// <para>Primary subscriber: <see cref="NativeAudioSink"/> uses this
+    /// to drain the RX audio ring on the rising edge so the operator
+    /// hears instant silence on TX rather than the accumulated
+    /// radio-clock-vs-soundcard-clock backlog. See issue #403 for the
+    /// symptom this addresses on Windows.</para>
+    /// </summary>
+    public event Action<bool>? TxActiveChanged;
+
+    // Last TX-active value observed by the firing path. Read+written
+    // under _sync inside the helpers below. The "fire off the lock"
+    // contract above means we capture the new value under the lock,
+    // release it, then raise — so two rapid edges from different
+    // threads can never reorder a stale notification past a fresh one.
+    private bool _lastTxActiveFired;
+
+    /// <summary>
+    /// Recompute combined TX-active state under the lock; on change,
+    /// capture the new value for off-lock notification. Returns the
+    /// captured value or null if unchanged. Caller must invoke
+    /// <see cref="RaiseTxActiveChanged"/> with the result outside the
+    /// lock.
+    /// </summary>
+    private bool? CaptureTxActiveChangeUnderLock()
+    {
+        bool now = _moxOn || _tunOn;
+        if (now == _lastTxActiveFired) return null;
+        _lastTxActiveFired = now;
+        return now;
+    }
+
+    private void RaiseTxActiveChanged(bool? captured)
+    {
+        if (captured is null) return;
+        try { TxActiveChanged?.Invoke(captured.Value); }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "tx.txActiveChanged subscriber threw");
+        }
+    }
+
     // TwoTone latch — independent of MOX/TUN. Set by RadioService.SetTwoTone
     // on every state mutation. TxTuneDriver polls it so the WDSP TXA pump
     // runs even when no mic uplink is feeding fexchange2 (PostGen mode=1
@@ -117,6 +163,7 @@ public sealed class TxService
         if (on && !CheckBandGuard(out error)) return false;
 
         bool wasTunOn;
+        bool? txActiveCaptured;
         lock (_sync)
         {
             if (_moxOn == on) { error = null; return true; }
@@ -132,7 +179,9 @@ public sealed class TxService
                 _moxStartedAt = null;
             }
             _moxOn = on;
+            txActiveCaptured = CaptureTxActiveChangeUnderLock();
         }
+        RaiseTxActiveChanged(txActiveCaptured);
 
         if (wasTunOn && on)
         {
@@ -181,6 +230,7 @@ public sealed class TxService
         if (req.Enabled && !CheckBandGuard(out error)) return false;
 
         bool wasMoxOn, wasTunOn;
+        bool? txActiveCaptured;
         lock (_sync)
         {
             wasMoxOn = _moxOn;
@@ -202,7 +252,9 @@ public sealed class TxService
                 _moxOn = false;
                 _moxStartedAt = null;
             }
+            txActiveCaptured = CaptureTxActiveChangeUnderLock();
         }
+        RaiseTxActiveChanged(txActiveCaptured);
 
         if (req.Enabled)
         {
@@ -249,6 +301,7 @@ public sealed class TxService
         if (on && !CheckBandGuard(out error)) return false;
 
         bool wasMoxOn;
+        bool? txActiveCaptured;
         lock (_sync)
         {
             if (_tunOn == on) { error = null; return true; }
@@ -264,7 +317,9 @@ public sealed class TxService
                 _tunStartedAt = null;
             }
             _tunOn = on;
+            txActiveCaptured = CaptureTxActiveChangeUnderLock();
         }
+        RaiseTxActiveChanged(txActiveCaptured);
 
         if (wasMoxOn && on)
         {
@@ -296,6 +351,7 @@ public sealed class TxService
     public void TryTripForAlert(AlertKind kind, string reason)
     {
         bool wasMoxOn, wasTunOn;
+        bool? txActiveCaptured;
         lock (_sync)
         {
             wasMoxOn = _moxOn;
@@ -306,6 +362,7 @@ public sealed class TxService
             // would keep re-firing against the stale start time after the trip.
             _moxStartedAt = null;
             _tunStartedAt = null;
+            txActiveCaptured = CaptureTxActiveChangeUnderLock();
         }
 
         if (wasMoxOn || wasTunOn)
@@ -318,5 +375,6 @@ public sealed class TxService
             _hub.Broadcast(new AlertFrame(kind, reason));
             _hub.Broadcast(new MoxStateFrame(MoxOn: false, TunOn: false));
         }
+        RaiseTxActiveChanged(txActiveCaptured);
     }
 }
