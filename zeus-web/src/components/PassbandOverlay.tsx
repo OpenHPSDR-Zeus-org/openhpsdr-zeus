@@ -60,6 +60,10 @@ export function PassbandOverlay() {
   const centerHz = useDisplayStore((s) => s.centerHz);
   const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
   const width = useDisplayStore((s) => s.panDb?.length ?? 0);
+  // Pure-pan viewport offset shifts the rendered window relative to the
+  // hardware NCO; the passband must shift with it so it stays glued to the
+  // dial frequency on-screen.
+  const viewportOffsetHz = useDisplayStore((s) => s.viewportOffsetHz);
   const filterLowHz = useConnectionStore((s) => s.filterLowHz);
   const filterHighHz = useConnectionStore((s) => s.filterHighHz);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
@@ -67,7 +71,7 @@ export function PassbandOverlay() {
   if (!width || hzPerPixel <= 0) return null;
 
   const spanHz = width * hzPerPixel;
-  const center = Number(centerHz);
+  const center = Number(centerHz) + viewportOffsetHz;
   const startHz = center - spanHz / 2;
 
   const passLowHz = vfoHz + filterLowHz;

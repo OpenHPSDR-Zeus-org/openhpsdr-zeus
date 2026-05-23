@@ -81,11 +81,16 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   const cursorCenterHz = useDisplayStore((s) => s.centerHz);
   const cursorHzPerPixel = useDisplayStore((s) => s.hzPerPixel);
   const cursorWidth = useDisplayStore((s) => s.panDb?.length ?? 0);
+  const cursorViewportOffsetHz = useDisplayStore((s) => s.viewportOffsetHz);
   const cursorVfoHz = useConnectionStore((s) => s.vfoHz);
   const cursorPct = (() => {
     if (!cursorWidth || cursorHzPerPixel <= 0) return 50;
     const span = cursorWidth * cursorHzPerPixel;
-    const start = Number(cursorCenterHz) - span / 2;
+    // Viewport centre = hardware NCO + pure-pan offset; cursor sits at the
+    // dial's position relative to the shifted viewport, so a drag-right
+    // (negative offset) slides the cursor right with the rest of the
+    // spectrum.
+    const start = Number(cursorCenterHz) + cursorViewportOffsetHz - span / 2;
     return ((cursorVfoHz - start) / span) * 100;
   })();
 
@@ -129,7 +134,14 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       // window so the operator's RX noise-floor view stays put.
       const dbMin = keyed ? wfTxDbMin : wfDbMin;
       const dbMax = keyed ? wfTxDbMax : wfDbMax;
-      renderer.draw(dbMin, dbMax);
+      // Translate the viewport-offset Hz into the shader's UV space. Inside
+      // the IQ window (offset bounded by spanHz/2) WF_FS samples normally;
+      // past the edge the seed-dB fallback fills the unsampled columns.
+      const display = useDisplayStore.getState();
+      const width = display.panDb?.length ?? 0;
+      const spanHz = width > 0 ? width * display.hzPerPixel : 0;
+      const viewportOffsetUv = spanHz > 0 ? display.viewportOffsetHz / spanHz : 0;
+      renderer.draw(dbMin, dbMax, viewportOffsetUv);
     };
     const requestRedraw = () => {
       if (!isActive()) return;
@@ -225,10 +237,20 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       }
     });
 
+    // Repaint when the operator drags the panadapter/waterfall viewport. A
+    // pure-pan drag mutates viewportOffsetHz at rAF rate; redraw the shader
+    // each tick so the texture sample window slides under the finger.
+    const unsubViewport = useDisplayStore.subscribe((state, prev) => {
+      if (state.viewportOffsetHz !== prev.viewportOffsetHz) {
+        requestRedraw();
+      }
+    });
+
     return () => {
       unsub();
       unsubSettings();
       unsubTx();
+      unsubViewport();
       ro.disconnect();
       io.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);

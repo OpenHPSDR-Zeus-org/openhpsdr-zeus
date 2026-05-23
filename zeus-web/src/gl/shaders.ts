@@ -126,13 +126,23 @@ uniform float uDbMax;
 uniform float uWriteRow;
 uniform float uH;
 uniform float uBgAlpha;
+// Pure-pan viewport offset in normalized [0,1] UV space (see docs/prd/
+// panfall_behavior.md). Positive = sample to the right of the canvas X (so
+// the displayed history slides left); negative = sample to the left (history
+// slides right with the operator's finger). Caller computes
+// uViewportOffsetUv = viewportOffsetHz / spanHz.
+uniform float uViewportOffsetUv;
+uniform float uSeedDb;
 out vec4 fragColor;
 void main() {
   // vUv.y == 1.0 at top of canvas; newest row sits at the top.
   // row = (writeRow - (1 - vUv.y) * H) mod H, normalised.
   float agePx = (1.0 - vUv.y) * uH;
   float row = mod(uWriteRow - agePx + uH, uH);
-  float v = texture(uHistory, vec2(vUv.x, (row + 0.5) / uH)).r;
+  float srcX = vUv.x + uViewportOffsetUv;
+  float v = (srcX < 0.0 || srcX > 1.0)
+    ? uSeedDb
+    : texture(uHistory, vec2(srcX, (row + 0.5) / uH)).r;
   float n = clamp((v - uDbMin) / (uDbMax - uDbMin), 0.0, 1.0);
   vec4 c = texture(uLut, vec2(n, 0.5));
   // uBgAlpha=1 → fully opaque (normal mode). uBgAlpha=0 → noise floor is
