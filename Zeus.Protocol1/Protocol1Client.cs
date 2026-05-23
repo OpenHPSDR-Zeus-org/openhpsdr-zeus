@@ -974,10 +974,12 @@ public sealed class Protocol1Client : IProtocol1Client
                 if (elapsed >= TimeSpan.FromSeconds(1))
                 {
                     _log.LogInformation(
-                        "p1.tx.rate pkts={Pkts} in {Ms:F0}ms = {Rate:F0} pkt/s (target 381) | wire: peak={Peak}/32767 mean={Mean} firstI={I} firstQ={Q} drv={Drv}",
+                        "p1.tx.rate pkts={Pkts} in {Ms:F0}ms = {Rate:F0} pkt/s (target 381) | wire: peak={Peak}/32767 mean={Mean} firstI={I} firstQ={Q} drv={Drv} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} mox={Mox}",
                         rateWindowPkts, elapsed.TotalMilliseconds, rateWindowPkts / elapsed.TotalSeconds,
                         ControlFrame.LastPeakAbs, ControlFrame.LastMeanAbs,
-                        ControlFrame.LastFirstI, ControlFrame.LastFirstQ, ControlFrame.LastDriveByte);
+                        ControlFrame.LastFirstI, ControlFrame.LastFirstQ, ControlFrame.LastDriveByte,
+                        (byte)Volatile.Read(ref _ocTxMask), (byte)Volatile.Read(ref _ocRxMask),
+                        Volatile.Read(ref _mox) != 0);
                     rateWindowStart = nowUtc;
                     rateWindowPkts = 0;
                 }
