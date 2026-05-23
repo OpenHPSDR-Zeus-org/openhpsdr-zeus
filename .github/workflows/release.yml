@@ -526,6 +526,24 @@ jobs:
 
       # ---------- Installer packaging (one per OS, two launch modes) ------
 
+      # Download the Microsoft Visual C++ 2015-2022 Redistributable matching
+      # this installer's architecture. zeus-windows.iss bundles this file via
+      # the [Files] section and runs it at install time, guarded by a
+      # VCRedistNeeded() registry check so it skips on machines that already
+      # have a compatible runtime. Without this, every fresh-Windows operator
+      # who downloads Zeus gets a silently broken install — see issue #452.
+      # aka.ms URLs are Microsoft's stable redirects; the resolved binary
+      # tracks the latest 14.x service pack on each fetch (binary-compatible).
+      - name: Download Visual C++ Redistributable
+        if: matrix.config.os == 'windows'
+        shell: pwsh
+        run: |
+          $url = "https://aka.ms/vs/17/release/vc_redist.${{ matrix.config.arch }}.exe"
+          $out = "installers\vc_redist.${{ matrix.config.arch }}.exe"
+          Write-Host "Downloading $url -> $out"
+          Invoke-WebRequest -Uri $url -OutFile $out -UseBasicParsing
+          Get-Item $out | Select-Object Name, Length
+
       - name: Build Windows Installer (Inno Setup)
         if: matrix.config.os == 'windows'
         shell: pwsh

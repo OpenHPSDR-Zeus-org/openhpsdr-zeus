@@ -1,0 +1,13 @@
+# Microsoft Visual C++ Redistributable binaries — downloaded on-demand by
+# the release CI (release.yml "Download Visual C++ Redistributable" step)
+# before iscc bundles them into the Windows installer. Local iscc builds
+# need the matching file fetched manually; see the comment block on the
+# Source: line in zeus-windows.iss for the curl commands. Never commit
+# these binaries — they bloat the repo and Microsoft's aka.ms redirect is
+# the authoritative source.
+vc_redist.x64.exe
+vc_redist.arm64.exe
+vc_redist.x86.exe
+
+# Inno Setup build output goes into installers/output/ at install time.
+output/

@@ -62,6 +62,20 @@ Name: "desktopiconserver"; Description: "Create a &server-mode desktop icon (Zeu
 
 [Files]
 Source: "..\OpenhpsdrZeus\bin\Release\net10.0\win-{#Arch}\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Microsoft Visual C++ 2015-2022 Redistributable — required for wdsp.dll and
+; miniaudio.dll to load. Fresh Windows installs do not include this runtime,
+; and without it Zeus silently falls back to its synthetic DSP engine
+; (blank panadapter, no audio, no transmit power). The release CI downloads
+; the matching vc_redist.{#Arch}.exe from Microsoft (https://aka.ms/vs/17/release/)
+; into this directory before iscc runs. The file is then bundled with the
+; installer and run during install via the [Run] section below, skipped via
+; VCRedistInstalled() if a compatible runtime is already present.
+;
+; For LOCAL iscc builds (developers), download the matching redist into the
+; installers/ folder manually:
+;   x64:   curl -L -o installers/vc_redist.x64.exe   https://aka.ms/vs/17/release/vc_redist.x64.exe
+;   arm64: curl -L -o installers/vc_redist.arm64.exe https://aka.ms/vs/17/release/vc_redist.arm64.exe
+Source: "vc_redist.{#Arch}.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: VCRedistNeeded
 
 [Icons]
 ; Two Start Menu shortcuts under the "Openhpsdr Zeus" group:
@@ -78,6 +92,14 @@ Name: "{autodesktop}\{#MyAppShortName}";        Filename: "{app}\{#MyAppExeName}
 Name: "{autodesktop}\{#MyAppShortName} Server"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--server";  IconFilename: "{app}\{#MyAppExeName}"; Tasks: desktopiconserver
 
 [Run]
+; Install the Microsoft Visual C++ 2015-2022 Redistributable BEFORE launching
+; Zeus. wdsp.dll and miniaudio.dll are MSVC-linked and will not load without
+; vcruntime140.dll / msvcp140.dll present in the system. Skipped via
+; VCRedistNeeded() if a compatible runtime is already installed (avoids the
+; ~10-second silent reinstall and the UAC prompt for operators who already
+; have it). See issue #452 for the symptoms this fix prevents.
+Filename: "{tmp}\vc_redist.{#Arch}.exe"; Parameters: "/install /quiet /norestart"; StatusMsg: "Installing Microsoft Visual C++ Runtime..."; Check: VCRedistNeeded; Flags: waituntilterminated
+
 ; Post-install launch lands the operator in the desktop window — no console,
 ; no browser dance. Server mode is one Start Menu click away for the LAN /
 ; remote operator.
@@ -145,6 +167,39 @@ begin
     MsgBox('This application requires Windows 64-bit.', mbError, MB_OK);
     Result := False;
   end;
+end;
+
+// VCRedistNeeded — returns True when the Microsoft Visual C++ 2015-2022
+// Redistributable is NOT already installed on this machine. The [Files]
+// entry for vc_redist.{#Arch}.exe and the [Run] step that invokes it are
+// both gated on this so we don't waste ~10 seconds reinstalling the runtime
+// and triggering a needless UAC prompt for operators who already have it.
+//
+// Detection: registry presence under HKLM\SOFTWARE\Microsoft\VisualStudio\
+// 14.0\VC\Runtimes\<arch> is the Microsoft-blessed signal. The 14.0 line
+// covers the entire 2015..2022 ABI-compatible family — any 14.x install
+// satisfies our DLL dependencies.
+//
+// Per-arch keys: x64 is checked under the 64-bit registry view; arm64 ships
+// to a sibling key with the same shape. The "Installed" DWORD = 1 indicates
+// presence.
+function VCRedistInstalled: Boolean;
+var
+  InstalledFlag: Cardinal;
+begin
+  // The {#Arch} preprocessor token expands to "x64" or "arm64" at iscc time,
+  // so the resulting Pascal string is the literal registry path for whichever
+  // installer flavour we're building.
+  Result := False;
+  if RegQueryDWordValue(HKLM64,
+       'SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\{#Arch}',
+       'Installed', InstalledFlag) and (InstalledFlag = 1) then
+    Result := True;
+end;
+
+function VCRedistNeeded: Boolean;
+begin
+  Result := not VCRedistInstalled;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
