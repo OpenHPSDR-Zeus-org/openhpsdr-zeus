@@ -1,0 +1,153 @@
+name: Sync develop → experimental
+
+# Architectural context: Kb2uka/openhpsdr-zeus uses three long-lived
+# branches with distinct trust levels:
+#
+#   main         — tagged releases only. Code-owner approval required.
+#   develop      — humans (Doug/Brian/Ramón) PR + merge here. Code-owner
+#                  approval required. The "trusted" canonical branch.
+#   experimental — the kb2uka-agent autonomous coding agent commits +
+#                  PRs + auto-merges here. No human approval required
+#                  per-PR. Doug reviews the batch later and promotes
+#                  experimental → develop via a separate PR.
+#
+# experimental must stay a strict superset of develop at all times:
+#   experimental = develop + AI's pending work
+#
+# This workflow keeps them in parity. Every push to develop (a human-
+# reviewed merge, by definition) automatically merges develop INTO
+# experimental so the AI is always working from the latest reviewed
+# baseline.
+#
+# Conflicts are rare — they only happen when the AI and a human both
+# touched the same lines in overlapping work. When that does happen,
+# the workflow doesn't try to be clever — it just opens a PR with the
+# conflict markers visible so Doug can resolve by hand.
+
+on:
+  push:
+    branches: [develop]
+  # Also allow manual trigger from the Actions tab — useful for "I
+  # cherry-picked something onto experimental and now want to re-sync"
+  # or for re-running after a transient failure.
+  workflow_dispatch:
+
+permissions:
+  # The actual write happens via the kb2uka-agent App installation
+  # token (see steps below). These permissions are for any operations
+  # the default GITHUB_TOKEN does — currently just metadata reads.
+  contents: read
+
+concurrency:
+  # Serialise sync attempts so two rapid pushes to develop don't fight
+  # over experimental's tip. Cancel-in-progress=false because the
+  # second push's content needs to land too; we just want to queue.
+  group: sync-develop-experimental
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge develop → experimental
+    runs-on: ubuntu-latest
+    steps:
+      # Generate a kb2uka-agent App installation token. Cleaner than a
+      # human-account PAT: rotates every hour, attributed to the bot,
+      # no expiration management. App ID + private key live in repo
+      # secrets (configured 2026-05-13).
+      - name: Generate kb2uka-agent installation token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.KB2UKA_AGENT_APP_ID }}
+          private-key: ${{ secrets.KB2UKA_AGENT_PRIVATE_KEY }}
+
+      # Check out experimental with the App token. Full history needed
+      # so the merge sees both branches' commit graphs.
+      - name: Checkout experimental
+        uses: actions/checkout@v4
+        with:
+          ref: experimental
+          fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      # Attempt the merge. continue-on-error so we can catch conflicts
+      # in the next step rather than failing the whole job opaquely.
+      - name: Merge develop into experimental
+        id: merge
+        continue-on-error: true
+        run: |
+          git config user.name "kb2uka-agent[bot]"
+          git config user.email "kb2uka-agent[bot]@users.noreply.github.com"
+          git fetch origin develop
+
+          # --no-ff so we keep a merge commit in experimental's history
+          # marking each develop sync. Makes the "what came in from
+          # develop on date X" audit trail easy to grep.
+          if git merge --no-edit --no-ff origin/develop -m "chore(sync): merge develop → experimental"; then
+            git push origin experimental
+            echo "result=clean" >> "$GITHUB_OUTPUT"
+            echo "::notice::develop → experimental sync clean ($(git rev-parse --short HEAD))"
+          else
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+            echo "::warning::develop → experimental sync conflicted; opening PR for manual resolution"
+          fi
+
+      # Conflict path: abort the merge, create a branch with the
+      # conflict markers committed, push it, open a PR. Doug resolves
+      # the PR locally and merges; that merge resolves the conflict
+      # and re-establishes parity.
+      - name: Open conflict PR if merge failed
+        if: steps.merge.outputs.result == 'conflict'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          git merge --abort
+          BRANCH="chore/sync-develop-experimental-conflict-${{ github.run_id }}"
+          git checkout -b "$BRANCH"
+
+          # Re-trigger the conflict so the markers land in working
+          # tree, then stage everything including the conflict-marked
+          # files. This creates a commit that the PR diff makes
+          # visually obvious.
+          git merge origin/develop || true
+          git add -A
+          git commit -m "WIP: develop → experimental sync conflict ($(date -Iseconds))" --no-verify || true
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --base experimental \
+            --head "$BRANCH" \
+            --title "chore: sync develop → experimental — CONFLICT (manual resolve required)" \
+            --body "$(cat <<EOF
+          The automated \`develop → experimental\` sync workflow could not merge cleanly. This PR contains the conflicting state as the workflow last saw it — files with merge markers are visible in the diff.
+
+          ## To resolve
+
+          1. Check out this branch locally: \`gh pr checkout <this-pr-number>\`
+          2. Edit each conflict-marked file: pick the correct content, remove the \`<<<<<<<\`/\`=======\`/\`>>>>>>>\` markers
+          3. Commit the resolution: \`git add -A && git commit --amend --no-edit\`
+          4. Force-push to this branch: \`git push --force-with-lease\`
+          5. Merge this PR into experimental (admin merge OK — experimental's protection allows it)
+          6. Auto-sync will resume normally on the next push to develop
+
+          ## Context
+
+          - Triggered by: ${{ github.event_name }}
+          - Run: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          - Develop tip at conflict time: \`${{ github.sha }}\`
+
+          🤖 Generated by the \`sync-develop-to-experimental\` workflow.
+          EOF
+          )"
+
+      # Final job status — if merge was clean, we already pushed.
+      # If conflict, we opened a PR. Either way the job exits success
+      # (Doug gets a notification via the PR rather than a workflow
+      # failure email).
+      - name: Summary
+        run: |
+          if [[ "${{ steps.merge.outputs.result }}" == "clean" ]]; then
+            echo "✅ develop → experimental sync clean"
+          else
+            echo "⚠️  develop → experimental sync had conflicts; PR opened for manual resolution"
+          fi
