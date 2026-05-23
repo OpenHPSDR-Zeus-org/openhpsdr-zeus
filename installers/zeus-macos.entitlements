@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for OpenHPSDR Zeus.app and OpenHPSDR Zeus Server.app.
+
+  Distribution: Developer ID + notarization (outside the App Store, NOT sandboxed).
+
+  Each flag below exists for a concrete reason in this codebase. Do not trim without
+  reading the matching code path first:
+
+  - allow-jit                          Photino hosts WKWebView, which JITs JavaScript;
+                                       .NET (the OpenhpsdrZeus self-contained publish)
+                                       falls back to tiered JIT for hot methods even
+                                       though we publish with ReadyToRun.
+  - allow-unsigned-executable-memory   Defensive companion to allow-jit: WebKit and
+                                       .NET RyuJIT both rely on RWX pages that the
+                                       hardened-runtime baseline forbids. Without this
+                                       the .NET runtime SIGKILLs at first JIT.
+  - disable-library-validation         libwdsp.dylib and libminiaudio.dylib live under
+                                       Contents/MacOS/runtimes/osx-*/native/ and are
+                                       loaded via P/Invoke at runtime. We DO sign them
+                                       with the same Team ID during the inside-out
+                                       codesign pass, so in theory this could be
+                                       removed — keep it on defensively so a single
+                                       missed dylib doesn't brick the app.
+  - allow-dyld-environment-variables   LOAD-BEARING. Contents/MacOS/launch.sh exports
+                                       DYLD_LIBRARY_PATH to pin the bundled
+                                       libwdsp.dylib ahead of any stale system copy
+                                       from /opt/homebrew/lib or /usr/local/lib
+                                       (piHPSDR / DeskHPSDR installs leave one). The
+                                       hardened runtime strips DYLD_* env vars by
+                                       default — without this flag the pin silently
+                                       fails and P/Invoke can bind against a stale
+                                       wdsp that pre-dates symbols Zeus needs (e.g.
+                                       SetRXAEMNRpost2*). See create-macos-app.sh
+                                       launch.sh block + docs/lessons/dev-conventions.md.
+
+  Microphone / camera access is NOT declared here: those entitlements only apply
+  inside the App Sandbox. Outside the sandbox the TCC prompt is driven by
+  NSMicrophoneUsageDescription / NSCameraUsageDescription in each bundle's Info.plist
+  (set by create-macos-app.sh). Adding sandbox-only entitlements to a non-sandboxed
+  app is silently ignored, but adds noise — keep this file tight.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+</dict>
+</plist>

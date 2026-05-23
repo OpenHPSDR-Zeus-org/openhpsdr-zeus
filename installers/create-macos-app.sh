@@ -300,31 +300,92 @@ chmod +x "${SERVER_APP_BUNDLE}/Contents/MacOS/launch.sh"
 
 echo "Server wrapper bundle created at ${SERVER_APP_BUNDLE}"
 
-# --- Codesigning hook (opt-in) ------------------------------------------
+# --- Codesigning (opt-in via env) ---------------------------------------
 #
-# Ad-hoc signing or Developer ID signing happens here. Default behaviour
-# is to do nothing — the bundle ships unsigned and the user clears the
-# quarantine xattr on first launch (see DMG README).
+# Hardened-runtime, Developer-ID signing for notarization. Triggered when
+# CODESIGN_IDENTITY is set in the environment. CI populates it from the
+# MACOS_SIGNING_IDENTITY secret; a developer can export it locally for
+# off-the-cuff signed builds.
 #
-# To produce a Developer ID Application signed bundle:
-#   export APPLE_DEVELOPER_ID="Developer ID Application: Brian Keating (TEAMID)"
-#   ./create-macos-app.sh 0.4.1 arm64
-# Notarisation is a separate step (notarytool submit ... --wait) once the
-# Apple ID + app-specific password is configured locally — keep that out
-# of the script for now so the unsigned path stays the default and CI
-# doesn't trip over missing secrets.
-if [ -n "${APPLE_DEVELOPER_ID:-}" ]; then
-    echo "Codesigning with: ${APPLE_DEVELOPER_ID}"
-    codesign --force --deep --options runtime --timestamp \
-        --sign "${APPLE_DEVELOPER_ID}" "${APP_BUNDLE}"
-    codesign --verify --verbose=2 "${APP_BUNDLE}"
-    # Sign Zeus Server.app too — Gatekeeper otherwise pops a separate
-    # "unidentified developer" prompt for the wrapper.
-    codesign --force --deep --options runtime --timestamp \
-        --sign "${APPLE_DEVELOPER_ID}" "${SERVER_APP_BUNDLE}"
-    codesign --verify --verbose=2 "${SERVER_APP_BUNDLE}"
+#   CODESIGN_IDENTITY   "Developer ID Application: Name (TEAMID)"
+#                       (empty/unset → unsigned ad-hoc build, original
+#                       behaviour, user clears xattr on first launch.)
+#   KEYCHAIN_PATH       Optional path to a temp keychain (CI uses a
+#                       per-run keychain). Empty → codesign uses the
+#                       default keychain search list (dev-local).
+#   ENTITLEMENTS_PATH   Path to the hardened-runtime entitlements plist.
+#                       Defaults to installers/zeus-macos.entitlements.
+#
+# Why --deep (Apple-deprecated but unavoidable here):
+#
+# Apple's bundle convention says Contents/MacOS/ holds only code (Mach-O)
+# and Contents/Resources/ holds everything else. A .NET self-contained
+# publish dumps the entire payload alongside the main binary in
+# Contents/MacOS/: ~300 managed .dlls, runtime configs, web assets
+# (wwwroot/), BandPlans/*.json, etc. Without --deep, codesign refuses to
+# sign the outer bundle with "code object is not signed at all / In
+# subcomponent: <first-non-MachO-it-finds>" — it treats every file under
+# MacOS/ as a sub-bundle that must be pre-signed.
+#
+# --deep walks the bundle once and signs every nested Mach-O with the
+# outer flags (--options runtime + --entitlements + --timestamp). The
+# result is bit-equivalent to a per-item signing pass:
+#   - every dylib (libwdsp, libminiaudio, Photino.Native, .NET runtime)
+#     gets hardened runtime + timestamp + Team ID signature
+#   - the main exec (OpenhpsdrZeus) gets the same plus entitlements
+#   - non-MachO files (JSON, dll, png) are hashed into CodeResources
+#     as data and stop tripping the "subcomponent unsigned" check
+# Notarization accepts --deep-signed .NET bundles (every Mach-O has the
+# right flags; the deprecation warning is about ergonomics, not validity).
+#
+# --options runtime  enables hardened runtime (required for notarization).
+# --timestamp        embeds a trusted Apple timestamp so the signature
+#                    stays valid after the cert expires AND because
+#                    notarization rejects untimestamped signatures.
+if [ -n "${CODESIGN_IDENTITY:-}" ]; then
+    set -e
+    if [ -z "${ENTITLEMENTS_PATH:-}" ]; then
+        ENTITLEMENTS_PATH="${SCRIPT_DIR}/zeus-macos.entitlements"
+    fi
+    if [ ! -f "${ENTITLEMENTS_PATH}" ]; then
+        echo "ERROR: ENTITLEMENTS_PATH '${ENTITLEMENTS_PATH}' not found" >&2
+        exit 1
+    fi
+    echo "Codesigning with: ${CODESIGN_IDENTITY}"
+    echo "Entitlements:     ${ENTITLEMENTS_PATH}"
+    if [ -n "${KEYCHAIN_PATH:-}" ]; then
+        echo "Keychain:         ${KEYCHAIN_PATH}"
+    fi
+
+    # Pass --keychain only when KEYCHAIN_PATH is set; codesign default
+    # search list otherwise. Done via an array so we can splat or skip.
+    KEYCHAIN_FLAG=()
+    if [ -n "${KEYCHAIN_PATH:-}" ]; then
+        KEYCHAIN_FLAG=(--keychain "${KEYCHAIN_PATH}")
+    fi
+
+    sign_bundle() {
+        local bundle="$1"
+        echo "  → ${bundle}"
+
+        codesign --force --deep --options runtime --timestamp \
+            "${KEYCHAIN_FLAG[@]}" \
+            --entitlements "${ENTITLEMENTS_PATH}" \
+            --sign "${CODESIGN_IDENTITY}" \
+            "${bundle}"
+
+        # Verify the bundle and every nested Mach-O. --strict catches
+        # bad signature flags / missing hardened runtime / unsigned
+        # subcomponents that codesign --sign wouldn't have noticed.
+        codesign --verify --deep --strict "${bundle}"
+    }
+
+    sign_bundle "${APP_BUNDLE}"
+    sign_bundle "${SERVER_APP_BUNDLE}"
+    WILL_SIGN=1
 else
-    echo "(unsigned — set APPLE_DEVELOPER_ID to enable codesigning)"
+    echo "(unsigned — set CODESIGN_IDENTITY to enable codesigning)"
+    WILL_SIGN=0
 fi
 
 # --- DMG ----------------------------------------------------------------
@@ -347,7 +408,15 @@ cp -R "${APP_BUNDLE}" "${DMG_TEMP}/"
 cp -R "${SERVER_APP_BUNDLE}" "${DMG_TEMP}/"
 ln -s /Applications "${DMG_TEMP}/Applications"
 
-cat > "${DMG_TEMP}/README.txt" << 'EOF'
+# README inside the DMG. Two flavours, picked from WILL_SIGN above:
+#   - signed/notarized   → drag-to-Applications + first-run notes only.
+#                          No xattr; Gatekeeper accepts the .app directly.
+#   - unsigned (dryrun)  → original README with the xattr -cr workaround,
+#                          which is the only way to launch an unsigned
+#                          .app on modern macOS without right-click +
+#                          Open Anyway acrobatics.
+if [ "${WILL_SIGN}" -eq 1 ]; then
+    cat > "${DMG_TEMP}/README.txt" << 'EOF'
 OpenHPSDR Zeus for macOS
 ========================
 
@@ -360,19 +429,8 @@ INSTALL
   If you only want the desktop app, dragging "OpenHPSDR Zeus.app" alone
   is fine.
 
-FIRST LAUNCH (important — Zeus is not signed)
-  Zeus is distributed without an Apple Developer ID, so macOS Gatekeeper
-  will block it on first launch. To clear the quarantine flag, open
-  Terminal and run:
-
-      xattr -cr "/Applications/OpenHPSDR Zeus.app"
-      xattr -cr "/Applications/OpenHPSDR Zeus Server.app"
-
-  Then launch from Applications.
-
-  If you still see a security warning, go to:
-      System Settings -> Privacy & Security
-  and click "Open Anyway".
+  Then launch from Applications normally — Zeus is signed and notarized,
+  so Gatekeeper lets it open without any xattr workaround.
 
 THE TWO ICONS
 
@@ -391,7 +449,7 @@ THE TWO ICONS
                          warning on first connect.
 
 HEADLESS / CLI USE
-  If you're running Zeus on a headless Mac (no display, e.g. an mac mini
+  If you're running Zeus on a headless Mac (no display, e.g. a mac mini
   in a closet), use Terminal:
 
       "/Applications/OpenHPSDR Zeus.app/Contents/MacOS/OpenhpsdrZeus"
@@ -407,6 +465,71 @@ FIRST RUN — WDSP WISDOM
 
 More info: https://github.com/Kb2uka/openhpsdr-zeus
 EOF
+else
+    cat > "${DMG_TEMP}/README.txt" << 'EOF'
+OpenHPSDR Zeus for macOS  (UNSIGNED DEV BUILD)
+==============================================
+
+INSTALL
+  Drag BOTH "OpenHPSDR Zeus.app" and "OpenHPSDR Zeus Server.app" onto
+  the Applications shortcut in this window. "OpenHPSDR Zeus Server.app"
+  is a small wrapper around "OpenHPSDR Zeus.app" and won't work without
+  "OpenHPSDR Zeus.app" installed.
+
+  If you only want the desktop app, dragging "OpenHPSDR Zeus.app" alone
+  is fine.
+
+FIRST LAUNCH (important — this is an unsigned dev build)
+  This DMG is a dry-run / preview build and is NOT signed by an Apple
+  Developer ID. macOS Gatekeeper will block it on first launch. To clear
+  the quarantine flag, open Terminal and run:
+
+      xattr -cr "/Applications/OpenHPSDR Zeus.app"
+      xattr -cr "/Applications/OpenHPSDR Zeus Server.app"
+
+  Then launch from Applications.
+
+  If you still see a security warning, go to:
+      System Settings -> Privacy & Security
+  and click "Open Anyway".
+
+  Tagged release and nightly builds are signed + notarized and do NOT
+  need this step.
+
+THE TWO ICONS
+
+  OpenHPSDR Zeus         Full native window. The radio backend runs
+                         in-process inside the same window. Closing the
+                         window stops Zeus completely. This is the right
+                         choice for most operators.
+
+  OpenHPSDR Zeus Server  Backend-only mode for LAN / remote / phone
+                         access. Opens a small status window showing
+                         the URLs to connect to from a browser, with a
+                         Stop Zeus button. Connect from this Mac at
+                         http://localhost:6060 or from another device
+                         at http://<your-mac>:6060. HTTPS uses a
+                         self-signed certificate — accept the browser
+                         warning on first connect.
+
+HEADLESS / CLI USE
+  If you're running Zeus on a headless Mac (no display, e.g. a mac mini
+  in a closet), use Terminal:
+
+      "/Applications/OpenHPSDR Zeus.app/Contents/MacOS/OpenhpsdrZeus"
+
+  This is the no-window service mode. Identical to OpenHPSDR Zeus
+  Server's backend but without the status window. Closing the Terminal
+  (or Ctrl-C) stops the server.
+
+FIRST RUN — WDSP WISDOM
+  The first launch builds an FFTW "wisdom" cache and can take 1-3
+  minutes. The window will load, but do NOT click Discover/Connect
+  until the wisdom build settles. Subsequent launches are instant.
+
+More info: https://github.com/Kb2uka/openhpsdr-zeus
+EOF
+fi
 
 hdiutil create -volname "Openhpsdr Zeus v${VERSION}" \
     -srcfolder "${DMG_TEMP}" \
@@ -415,8 +538,31 @@ hdiutil create -volname "Openhpsdr Zeus v${VERSION}" \
 
 rm -rf "${DMG_TEMP}"
 
+# Sign the DMG itself when WILL_SIGN=1. The DMG is a separate signed
+# container from the .app bundles inside it — Gatekeeper's "open" assess
+# context (mounting a DMG) reads the DMG signature, not the nested app
+# signatures. notarize+staple in the CI workflow operate on this signed
+# DMG. DMGs don't take entitlements or --options runtime (those are
+# Mach-O concepts), just --sign + --timestamp.
+if [ "${WILL_SIGN}" -eq 1 ]; then
+    KEYCHAIN_FLAG=()
+    if [ -n "${KEYCHAIN_PATH:-}" ]; then
+        KEYCHAIN_FLAG=(--keychain "${KEYCHAIN_PATH}")
+    fi
+    echo "Signing DMG..."
+    codesign --force --timestamp \
+        "${KEYCHAIN_FLAG[@]}" \
+        --sign "${CODESIGN_IDENTITY}" \
+        "${DMG_PATH}"
+    codesign --verify --verbose=2 "${DMG_PATH}"
+fi
+
 echo "DMG created at ${DMG_PATH}"
-echo
-echo "NOTE: users must clear the quarantine flag on first launch:"
-echo "  xattr -cr \"/Applications/OpenHPSDR Zeus.app\""
-echo "  xattr -cr \"/Applications/OpenHPSDR Zeus Server.app\""
+if [ "${WILL_SIGN}" -eq 1 ]; then
+    echo "DMG is signed; CI will run notarytool submit + stapler staple as follow-up steps."
+else
+    echo
+    echo "NOTE: this is an unsigned dev build — users must clear the quarantine flag on first launch:"
+    echo "  xattr -cr \"/Applications/OpenHPSDR Zeus.app\""
+    echo "  xattr -cr \"/Applications/OpenHPSDR Zeus Server.app\""
+fi
