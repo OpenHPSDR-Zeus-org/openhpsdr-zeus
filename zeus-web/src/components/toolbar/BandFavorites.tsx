@@ -15,6 +15,7 @@ import {
   type RxMode,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
+import { useDisplayStore } from '../../state/display-store';
 import { BANDS, bandOf } from '../design/data';
 import { ToolbarFavorites, type ToolbarOption } from './ToolbarFavorites';
 
@@ -85,6 +86,9 @@ export function BandFavorites() {
       const targetMode: RxMode | null = stored?.mode ?? null;
 
       useConnectionStore.setState({ vfoHz: targetHz });
+      // Band-favorite tap is an explicit tune-to-frequency action per the
+      // pure-pan PRD; reset any held viewport offset.
+      useDisplayStore.getState().setViewportOffsetHz(0);
       setVfo(targetHz).then(applyState).catch(() => { /* next state poll reconciles */ });
 
       if (targetMode && targetMode !== mode) {
