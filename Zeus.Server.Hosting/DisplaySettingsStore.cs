@@ -57,18 +57,41 @@ public sealed class DisplaySettingsStore : IDisposable
                     Fit: "fill",
                     HasImage: false,
                     ImageMime: null,
-                    RxTraceColor: DefaultRxTraceColor);
+                    RxTraceColor: DefaultRxTraceColor,
+                    DbMin: null,
+                    DbMax: null,
+                    TxDbMin: null,
+                    TxDbMax: null,
+                    WfDbMin: null,
+                    WfDbMax: null,
+                    WfTxDbMin: null,
+                    WfTxDbMax: null);
             }
             return new DisplaySettingsDto(
                 Mode: NormalizeMode(e.Mode),
                 Fit: NormalizeFit(e.Fit),
                 HasImage: e.ImageBytes is { Length: > 0 },
                 ImageMime: string.IsNullOrEmpty(e.ImageMime) ? null : e.ImageMime,
-                RxTraceColor: NormalizeHexColor(e.RxTraceColor));
+                RxTraceColor: NormalizeHexColor(e.RxTraceColor),
+                DbMin: e.DbMin,
+                DbMax: e.DbMax,
+                TxDbMin: e.TxDbMin,
+                TxDbMax: e.TxDbMax,
+                WfDbMin: e.WfDbMin,
+                WfDbMax: e.WfDbMax,
+                WfTxDbMin: e.WfTxDbMin,
+                WfTxDbMax: e.WfTxDbMax);
         }
     }
 
-    public void SaveMode(string mode, string fit, string rxTraceColor)
+    // Null dB range values are treated as "not provided" — the existing
+    // stored value is kept unchanged. This lets callers updating only
+    // mode/fit/color leave the operator's dB scale untouched.
+    public void SaveMode(string mode, string fit, string rxTraceColor,
+        double? dbMin = null, double? dbMax = null,
+        double? txDbMin = null, double? txDbMax = null,
+        double? wfDbMin = null, double? wfDbMax = null,
+        double? wfTxDbMin = null, double? wfTxDbMax = null)
     {
         lock (_sync)
         {
@@ -76,6 +99,14 @@ public sealed class DisplaySettingsStore : IDisposable
             e.Mode = NormalizeMode(mode);
             e.Fit = NormalizeFit(fit);
             e.RxTraceColor = NormalizeHexColor(rxTraceColor);
+            if (dbMin.HasValue) e.DbMin = dbMin;
+            if (dbMax.HasValue) e.DbMax = dbMax;
+            if (txDbMin.HasValue) e.TxDbMin = txDbMin;
+            if (txDbMax.HasValue) e.TxDbMax = txDbMax;
+            if (wfDbMin.HasValue) e.WfDbMin = wfDbMin;
+            if (wfDbMax.HasValue) e.WfDbMax = wfDbMax;
+            if (wfTxDbMin.HasValue) e.WfTxDbMin = wfTxDbMin;
+            if (wfTxDbMax.HasValue) e.WfTxDbMax = wfTxDbMax;
             e.UpdatedUtc = DateTime.UtcNow;
             if (e.Id == 0) _docs.Insert(e);
             else _docs.Update(e);
@@ -169,5 +200,17 @@ public sealed class DisplaySettingsEntry
     // Panadapter signal trace colour as #RRGGBB. Null on legacy rows written
     // before this field existed — Get() normalises null → DefaultRxTraceColor.
     public string? RxTraceColor { get; set; }
+    // Panadapter and waterfall dB window bounds. Null on rows written before
+    // this field existed — Get() returns null to the frontend, which then
+    // falls back to its built-in FIXED_DB_MIN / TX_FIXED_DB_MIN constants and
+    // pushes the localStorage-saved (or default) value up on first interaction.
+    public double? DbMin { get; set; }
+    public double? DbMax { get; set; }
+    public double? TxDbMin { get; set; }
+    public double? TxDbMax { get; set; }
+    public double? WfDbMin { get; set; }
+    public double? WfDbMax { get; set; }
+    public double? WfTxDbMin { get; set; }
+    public double? WfTxDbMax { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }
