@@ -46,7 +46,6 @@ import { useEffect, useRef } from 'react';
 import { createPanRenderer, hexToRgbFloats } from '../gl/panadapter';
 import { planWaterfallUpdate } from '../gl/wf-shift';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
-import { useConnectionStore } from '../state/connection-store';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useTxStore } from '../state/tx-store';
@@ -108,37 +107,7 @@ export function Panadapter() {
       const dbMax = keyed ? s.txDbMax : s.dbMax;
       const { r, g, b } = hexToRgbFloats(s.rxTraceColor);
       renderer.setTraceColor(r, g, b);
-      // Dial cursor X offset. The orange dial cursor in panadapter.ts is
-      // drawn in clip space; default x=0 = panadapter centre = viewport
-      // centre. Shift the cursor by (vfoHz - viewportCenter) / (spanHz/2)
-      // where viewportCenter = centerHz (hardware NCO) + viewportOffsetHz
-      // (pure-pan offset, see docs/prd/panfall_behavior.md). The trace
-      // shifts together with viewportOffsetHz via the PAN_VS uOffsetPx
-      // uniform; cursor stays glued to the real dial frequency.
-      const display = useDisplayStore.getState();
-      const cn = useConnectionStore.getState();
-      let cursorXOffset = 0;
-      let viewportPxOffset = 0;
-      const panLen = display.panDb?.length ?? 0;
-      if (panLen > 0 && display.hzPerPixel > 0) {
-        const spanHz = panLen * display.hzPerPixel;
-        const centerHz = Number(display.centerHz);
-        const viewportCenter = centerHz + display.viewportOffsetHz;
-        cursorXOffset = (cn.vfoHz - viewportCenter) / (spanHz / 2);
-        // PAN_VS treats positive uOffsetPx as a right-shift of the trace
-        // (x = (i + 0.5 + uOffsetPx) / width). Dragging right moves the
-        // viewport centre to a lower frequency (viewportOffsetHz < 0); the
-        // trace data must visually shift right by the same Hz, so px offset
-        // is -viewportOffsetHz / hzPerPixel.
-        viewportPxOffset = -display.viewportOffsetHz / display.hzPerPixel;
-      }
-      renderer.draw(
-        drawPan,
-        dbMin,
-        dbMax,
-        drawOffsetPx + viewportPxOffset,
-        cursorXOffset,
-      );
+      renderer.draw(drawPan, dbMin, dbMax, drawOffsetPx);
     };
     const requestRedraw = () => {
       if (!isActive()) return;
@@ -265,33 +234,10 @@ export function Panadapter() {
       }
     });
 
-    // The spectrum stays anchored on the hardware LO while the operator's
-    // dial (vfoHz) roams independently; the cursor X-offset is recomputed
-    // inside redraw() from vfoHz, so we need a repaint whenever vfoHz moves
-    // even though no fresh pan frame arrives.
-    const unsubConn = useConnectionStore.subscribe((state, prev) => {
-      if (state.vfoHz !== prev.vfoHz) {
-        requestRedraw();
-      }
-    });
-
-    // viewportOffsetHz (pure-pan drag) lives outside the frame-decoded data
-    // path — the operator can drag for several seconds between spectrum
-    // ticks, and we want the trace to follow the finger at rAF rate. A
-    // separate diff'd subscription keeps the noisy unsub above from firing on
-    // every store mutation.
-    const unsubViewport = useDisplayStore.subscribe((state, prev) => {
-      if (state.viewportOffsetHz !== prev.viewportOffsetHz) {
-        requestRedraw();
-      }
-    });
-
     return () => {
       unsub();
       unsubSettings();
       unsubTx();
-      unsubConn();
-      unsubViewport();
       ro.disconnect();
       io.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);

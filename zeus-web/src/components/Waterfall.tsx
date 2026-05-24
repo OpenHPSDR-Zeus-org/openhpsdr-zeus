@@ -46,7 +46,6 @@ import { useEffect, useRef } from 'react';
 import { COLORMAPS } from '../gl/colormap';
 import { createWfRenderer } from '../gl/waterfall';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
-import { useConnectionStore } from '../state/connection-store';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useTxStore } from '../state/tx-store';
@@ -73,26 +72,6 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   const setAutoRange = useDisplaySettingsStore((s) => s.setAutoRange);
   const colormap = useDisplaySettingsStore((s) => s.colormap);
   const setColormap = useDisplaySettingsStore((s) => s.setColormap);
-  // Tuning-cursor position. The waterfall canvas centres on the radio's
-  // hardware NCO (centerHz / radioLoHz) while VfoHz roams independently; the
-  // cursor must track the dial (VfoHz) so the operator can see where they're
-  // listening, not where the radio is anchored. Computed off panDb width ×
-  // hzPerPixel for span, identical math to FreqAxis's dial marker.
-  const cursorCenterHz = useDisplayStore((s) => s.centerHz);
-  const cursorHzPerPixel = useDisplayStore((s) => s.hzPerPixel);
-  const cursorWidth = useDisplayStore((s) => s.panDb?.length ?? 0);
-  const cursorViewportOffsetHz = useDisplayStore((s) => s.viewportOffsetHz);
-  const cursorVfoHz = useConnectionStore((s) => s.vfoHz);
-  const cursorPct = (() => {
-    if (!cursorWidth || cursorHzPerPixel <= 0) return 50;
-    const span = cursorWidth * cursorHzPerPixel;
-    // Viewport centre = hardware NCO + pure-pan offset; cursor sits at the
-    // dial's position relative to the shifted viewport, so a drag-right
-    // (negative offset) slides the cursor right with the rest of the
-    // spectrum.
-    const start = Number(cursorCenterHz) + cursorViewportOffsetHz - span / 2;
-    return ((cursorVfoHz - start) / span) * 100;
-  })();
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -134,14 +113,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       // window so the operator's RX noise-floor view stays put.
       const dbMin = keyed ? wfTxDbMin : wfDbMin;
       const dbMax = keyed ? wfTxDbMax : wfDbMax;
-      // Translate the viewport-offset Hz into the shader's UV space. Inside
-      // the IQ window (offset bounded by spanHz/2) WF_FS samples normally;
-      // past the edge the seed-dB fallback fills the unsampled columns.
-      const display = useDisplayStore.getState();
-      const width = display.panDb?.length ?? 0;
-      const spanHz = width > 0 ? width * display.hzPerPixel : 0;
-      const viewportOffsetUv = spanHz > 0 ? display.viewportOffsetHz / spanHz : 0;
-      renderer.draw(dbMin, dbMax, viewportOffsetUv);
+      renderer.draw(dbMin, dbMax);
     };
     const requestRedraw = () => {
       if (!isActive()) return;
@@ -237,20 +209,10 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       }
     });
 
-    // Repaint when the operator drags the panadapter/waterfall viewport. A
-    // pure-pan drag mutates viewportOffsetHz at rAF rate; redraw the shader
-    // each tick so the texture sample window slides under the finger.
-    const unsubViewport = useDisplayStore.subscribe((state, prev) => {
-      if (state.viewportOffsetHz !== prev.viewportOffsetHz) {
-        requestRedraw();
-      }
-    });
-
     return () => {
       unsub();
       unsubSettings();
       unsubTx();
-      unsubViewport();
       ro.disconnect();
       io.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -286,7 +248,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       <WfDbScale />
       <div
         className="tuning-cursor"
-        style={{ left: `${cursorPct}%`, pointerEvents: 'none' }}
+        style={{ left: '50%', pointerEvents: 'none' }}
       />
       <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
         <div role="radiogroup" aria-label="Colormap" className="btn-row">

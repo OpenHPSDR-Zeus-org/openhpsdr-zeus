@@ -63,13 +63,6 @@ export type ConnectionState = {
   status: ConnectionStatus;
   endpoint: string | null;
   vfoHz: number;
-  // Hardware NCO frequency. Independent of vfoHz — the panadapter centres on
-  // radioLoHz and WDSP's shift stage relocates the operator's tuned signal
-  // (vfoHz) within the IQ window. Updated by /api/radio/lo and by band-change
-  // / external-CAT retunes; never by panadapter drags (those just move the
-  // viewport visually until released past the IQ window edge).
-  radioLoHz: number;
-  cwPitchHz: number;
   mode: RxMode;
   filterLowHz: number;
   filterHighHz: number;
@@ -126,8 +119,6 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   status: 'Disconnected',
   endpoint: null,
   vfoHz: 14_200_000,
-  radioLoHz: 14_200_000,
-  cwPitchHz: 600,
   mode: 'USB',
   filterLowHz: 150,
   filterHighHz: 2850,
@@ -160,8 +151,6 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       status: s.status,
       endpoint: s.endpoint,
       vfoHz: s.vfoHz,
-      radioLoHz: s.radioLoHz,
-      cwPitchHz: s.cwPitchHz,
       mode: s.mode,
       filterLowHz: s.filterLowHz,
       filterHighHz: s.filterHighHz,
