@@ -246,6 +246,7 @@ public static class ZeusHost
         // Host-side CW keyer (zeus-drf). Single instance, drains a job queue
         // and pushes envelope-shaped IQ directly into TxIqRing while holding
         // MOX as MoxSource.Cwx.
+        builder.Services.AddSingleton<CwSettingsStore>();
         builder.Services.AddSingleton<CwEngine>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<CwEngine>());
         // PS auto-attenuate timer2code-equivalent: ramps the radio's TX step

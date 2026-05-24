@@ -469,6 +469,18 @@ public static class ZeusEndpoints
             return Results.Ok();
         });
 
+        // Persisted CW operator settings (WPM, Farnsworth, 6 macros,
+        // sidetone gain/pitch). PATCH-shaped PUT: every field nullable so
+        // the UI can save one slider or one macro without round-tripping
+        // the whole record. Returns the post-merge snapshot so the client
+        // can reconcile its store with what the server actually stored
+        // (e.g. clamped values).
+        app.MapGet("/api/cw/settings", (CwSettingsStore store) =>
+            Results.Ok(store.Get()));
+
+        app.MapPut("/api/cw/settings", (CwSettingsSetRequest req, CwSettingsStore store) =>
+            Results.Ok(store.Save(req)));
+
         // Mic-gain: N dB in [-40, +10], scales WDSP TXA panel-gain-1 the same
         // way Thetis does (console.cs:28805 setAudioMicGain → Audio.MicPreamp =
         // 10^(db/20) → cmaster.CMSetTXAPanelGain1). The negative range is the

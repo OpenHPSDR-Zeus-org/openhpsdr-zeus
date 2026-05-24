@@ -404,10 +404,34 @@ public sealed record TunSetRequest(bool On);
 
 // /api/cw/send body. Text is the ASCII transcript to key out; Wpm is the
 // playback speed (PARIS-method words per minute, clamped to 5..50 at the
-// engine seam). Wpm null means "use the operator's stored default" — at the
-// moment that's a fixed engine default; PR 2 hooks it into a persisted
-// CwSettingsStore.
+// engine seam). Wpm null means "use the operator's stored CwSettings.Wpm
+// default" (CwSettingsStore — written by /api/cw/settings).
 public sealed record CwSendRequest(string Text, int? Wpm = null);
+
+// Persisted CW operator settings. Wpm is the default speed for new sends
+// when /api/cw/send is called without an explicit wpm. FarnsworthWpm is
+// the character-rate floor for Farnsworth spacing (null = pure WPM, no
+// Farnsworth). Macros is exactly six slots — the macro pad is a fixed
+// 2×3 grid; empty strings are valid (renders a "(empty)" button). The
+// sidetone fields are surfaced here so the UI sliders persist alongside
+// the macros, even though sidetone audio routing itself lands later
+// (zeus-5ue) — keeps the wire shape stable across the epic.
+public sealed record CwSettingsDto(
+    int Wpm,
+    int? FarnsworthWpm,
+    string[] Macros,
+    double SidetoneGainDb,
+    int SidetoneHz);
+
+// PATCH-shaped: every field nullable so the frontend can save one slider
+// (or one macro) without re-sending the whole record. Server merges on top
+// of the persisted row before applying.
+public sealed record CwSettingsSetRequest(
+    int? Wpm = null,
+    int? FarnsworthWpm = null,
+    string[]? Macros = null,
+    double? SidetoneGainDb = null,
+    int? SidetoneHz = null);
 
 public sealed record MicGainSetRequest(int Db);
 

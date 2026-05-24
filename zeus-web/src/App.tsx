@@ -400,7 +400,8 @@ export default function App() {
     setCallsign('');
   }, [setCallsign]);
 
-  const [wpm, setWpm] = useState(22);
+  // CW WPM is now persisted server-side via /api/cw/settings and read
+  // through useCwStore — no longer threaded through the workspace context.
   const nrState = useConnectionStore((s) => s.nr);
   const dspActive =
     nrState.nrMode !== 'Off' ||
@@ -628,8 +629,6 @@ export default function App() {
     handleLogQso,
     handleClearQrz,
     dspActive,
-    wpm,
-    setWpm,
     logbookTitle,
     logbookActions,
   }), [
@@ -641,7 +640,7 @@ export default function App() {
     beamOverrideDeg, beamInputStr, rotLiveAz, sp, lp, dist,
     // heroTitle and logbookActions are ReactNodes (new objects each render);
     // their underlying primitive deps are already above, so omit them here.
-    dspActive, wpm, logbookTitle,
+    dspActive, logbookTitle,
     handleLogQso, handleClearQrz, runQrzLookup,
   ]);
 

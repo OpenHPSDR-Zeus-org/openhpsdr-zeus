@@ -1773,26 +1773,392 @@
   box-shadow: 0 0 0 1px rgba(0,0,0,0.5), 0 1px 4px rgba(0,0,0,0.5);
 }
 
-/* ===== CW ===== */
-.cw { padding: 10px; display: flex; flex-direction: column; gap: 10px; background: var(--bg-1); }
-.cw-macros { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-.cw-stream {
+/* ===== CW — Telegraph Console layout =====
+   Three regions stacked top-down:
+     1. Stream HERO   — the always-on telegraph tape with state LED + queue chip
+     2. Control strip — chunky WPM readout, dial, and STOP kill-switch
+     3. Macro list    — numbered tiles + dashed Add tile
+   Designed around the 280–360 px-wide dockable panel; the column-flex
+   structure copes with both ends of that range without media queries.
+
+   Aesthetic: "lit instruments on a black bench" — the existing Zeus
+   immersive direction. Stream and STOP are the only places with semantic
+   colour (accent blue when sending, TX red when armed); everything else
+   stays in the neutral grey palette so a glance at the panel reads the
+   transmit state without parsing text. */
+
+.cw.cw-console {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--bg-1);
+}
+
+/* ---- Stream HERO -------------------------------------------------- */
+/* Inset well across the top — same depth treatment as the panadapter
+   and immersive meter wells (var(--bg-inset)), so the stream reads as
+   a screen embedded in the panel chrome rather than a regular row. */
+.cw-stream-hero {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
   padding: 8px 10px;
-  background: #000;
-  border: 1px solid rgba(0,0,0,0.8);
-  border-radius: 0;
-  font-size: 14px;
-  color: var(--accent);
-  letter-spacing: 0.2em;
-  min-height: 32px;
+  min-height: 44px;
+  background: var(--bg-inset);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow:
+    inset 0 1px 0 rgba(0,0,0,0.6),
+    inset 0 -1px 0 rgba(255,255,255,0.02);
+  /* Subtle horizontal scanlines so the tape reads as a backlit display
+     instead of a flat <div>. Stays under the text. */
+  background-image:
+    var(--bg-inset, #060608),
+    repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.012) 0px,
+      rgba(255,255,255,0.012) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+}
+.cw-stream-tag {
   display: flex;
   align-items: center;
   gap: 6px;
-  box-shadow: inset 0 1px 3px rgba(0,0,0,0.8);
-  text-shadow: 0 0 6px var(--accent);
+  /* Width-stable across state changes so the tape doesn't reflow on
+     idle → sending transitions. "ABORTING" (8 chars) is the widest. */
+  min-width: 78px;
 }
-.cw-cursor { animation: blink 1s steps(2) infinite; color: var(--accent); }
-@keyframes blink { 50% { opacity: 0.2; } }
+.cw-stream-led {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-4);
+  box-shadow: inset 0 0 2px rgba(0,0,0,0.6);
+  transition: background var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
+}
+.cw-stream-label {
+  font: 500 10px/1 var(--font-sans);
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  transition: color var(--dur-fast) var(--ease-out);
+}
+.cw-stream-hero.is-active .cw-stream-led {
+  background: var(--accent-bright);
+  box-shadow:
+    0 0 6px var(--accent-bright),
+    0 0 12px var(--accent-soft);
+  animation: cwLedPulse 1.2s ease-in-out infinite;
+}
+.cw-stream-hero.is-active .cw-stream-label { color: var(--accent-bright); }
+.cw-stream-hero[data-state="aborting"] .cw-stream-led {
+  background: var(--tx);
+  box-shadow: 0 0 6px var(--tx), 0 0 12px var(--tx-soft);
+}
+.cw-stream-hero[data-state="aborting"] .cw-stream-label { color: var(--tx); }
+@keyframes cwLedPulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.15); opacity: 0.75; }
+}
+
+.cw-stream-tape {
+  font: 500 14px/1.25 var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--fg-1);
+  min-width: 0;       /* let the flexbox shrink for ellipsis */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cw-stream-sent { color: var(--fg-3); }      /* already-keyed = dim */
+.cw-stream-pending { color: var(--fg-2); }   /* upcoming = medium */
+.cw-stream-cursor {
+  color: var(--accent-bright);
+  text-shadow: 0 0 6px var(--accent-soft);
+  animation: cwCursorBlink 1s steps(2) infinite;
+}
+@keyframes cwCursorBlink { 50% { opacity: 0.25; } }
+.cw-stream-placeholder {
+  color: var(--fg-3);
+  letter-spacing: 0.3em;
+  font-size: 11px;
+}
+
+.cw-stream-queue {
+  font: 600 11px/1 var(--font-mono);
+  color: var(--fg-2);
+  padding: 3px 6px;
+  min-width: 28px;
+  text-align: center;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  background: rgba(0,0,0,0.3);
+}
+.cw-stream-hero.is-active .cw-stream-queue {
+  color: var(--accent-bright);
+  border-color: var(--accent-line);
+}
+
+/* ---- Control strip — WPM readout + dial + STOP ------------------- */
+.cw-control-strip {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: stretch;
+  gap: 8px;
+}
+/* "Readout well" — a sunken digital chip that pairs with the stream's
+   inset treatment. The big numeric value is the chunky front-panel
+   element the operator's eye finds first; the small WPM label sits
+   above-left like the units printed on a piece of test equipment. */
+.cw-wpm-readout {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 4px 10px 4px 8px;
+  background: var(--bg-meter);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  box-shadow:
+    inset 0 1px 0 rgba(0,0,0,0.7),
+    inset 0 -1px 0 rgba(255,255,255,0.03);
+  min-width: 72px;
+}
+.cw-wpm-label {
+  font: 600 9px/1 var(--font-sans);
+  letter-spacing: 0.22em;
+  color: var(--fg-3);
+  text-transform: uppercase;
+}
+.cw-wpm-value {
+  font: 700 26px/1 var(--font-mono);
+  color: var(--fg-0);
+  letter-spacing: -0.01em;
+  margin-top: 2px;
+  /* Faint accent halo so the readout looks "lit" against the well */
+  text-shadow: 0 0 8px rgba(78, 166, 255, 0.18);
+  font-variant-numeric: tabular-nums;
+}
+.cw-wpm-readout.is-active .cw-wpm-value {
+  color: var(--accent-bright);
+  text-shadow: 0 0 10px var(--accent-soft);
+}
+
+.cw-wpm-track {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  min-width: 0;
+}
+.cw-wpm-track input[type="range"] { width: 100%; }
+.cw-wpm-scale {
+  display: flex;
+  justify-content: space-between;
+  font: 500 9px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+
+/* STOP — kill-switch styling. Dim and locked when nothing to abort;
+   hot red with a soft halo when sending so the operator can find it
+   with peripheral vision without parsing text. Matches the visual
+   weight of the WPM readout so the strip reads as two paired controls
+   with a thin "dial" between. */
+.cw-stop {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 14px;
+  min-width: 60px;
+  font: 700 11px/1 var(--font-sans);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  background: var(--bg-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  cursor: not-allowed;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              box-shadow var(--dur-fast) var(--ease-out);
+}
+.cw-stop.is-armed {
+  color: #fff;
+  background: var(--tx);
+  border-color: var(--tx);
+  cursor: pointer;
+  box-shadow:
+    0 0 0 1px rgba(255,255,255,0.05) inset,
+    0 0 12px var(--tx-soft);
+  animation: cwStopArm 1.6s ease-in-out infinite;
+}
+.cw-stop.is-armed:hover { background: #ff5e6c; }
+.cw-stop.is-armed:active { transform: translateY(1px); }
+@keyframes cwStopArm {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(255,255,255,0.05) inset, 0 0 12px var(--tx-soft); }
+  50%      { box-shadow: 0 0 0 1px rgba(255,255,255,0.10) inset, 0 0 18px rgba(255,74,89,0.30); }
+}
+
+/* ---- Macro list -------------------------------------------------- */
+.cw-macro-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Each row: [00 index][primary send button][edit][delete].
+   The icons sit in dedicated columns at 32 px so they never crowd the
+   text and the click target is always thumb-friendly. */
+.cw-macro-row {
+  display: grid;
+  grid-template-columns: 28px 1fr 32px 32px;
+  align-items: stretch;
+  gap: 2px;
+  /* Mid-grey divider line under each row, dropping the last one. The
+     numbered prefix + dividers give the list the feel of a logbook
+     page rather than a stack of buttons. */
+  border-bottom: 1px solid var(--line-soft);
+}
+.cw-macro-list > .cw-macro-row:last-of-type { border-bottom: 0; }
+
+.cw-macro-num {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font: 600 10px/1 var(--font-mono);
+  color: var(--fg-3);
+  letter-spacing: 0.04em;
+}
+
+/* Send button — full-width text tile. Default state is calm and
+   typographic; on hover the left edge picks up an accent line to
+   advertise "this is the action target." Empty slots are dimmed and
+   italicised, click-disabled. */
+.cw-macro-send {
+  display: flex;
+  align-items: center;
+  padding: 8px 10px;
+  font: 500 13px/1.2 var(--font-sans);
+  color: var(--fg-1);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+  /* Left accent rail when hovered — appears via box-shadow so the
+     layout doesn't shift. */
+  box-shadow: inset 2px 0 0 transparent;
+}
+.cw-macro-send:not(:disabled):hover {
+  background: var(--bg-2);
+  color: var(--fg-0);
+  box-shadow: inset 2px 0 0 var(--accent-bright);
+}
+.cw-macro-send:not(:disabled):active {
+  background: var(--bg-3);
+}
+.cw-macro-send.is-empty {
+  color: var(--fg-3);
+  cursor: not-allowed;
+}
+.cw-macro-send.is-empty em {
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
+/* Inline macro editor — overlays the send cell. Border matches the
+   accent rail so the field looks like the send tile lit up for input. */
+.cw-macro-edit {
+  font: 500 13px/1.2 var(--font-sans);
+  padding: 7px 9px;
+  background: var(--bg-meter);
+  color: var(--fg-0);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--r-sm);
+  outline: none;
+  box-shadow: inset 2px 0 0 var(--accent-bright);
+}
+.cw-macro-edit:focus { border-color: var(--accent-bright); }
+
+/* Icon buttons — sit in their own 32 px columns so they never crowd
+   the macro text. Dim by default, accent / TX on hover, with a subtle
+   tile background that appears on hover only (no fixed chrome at rest
+   keeps the row visually quiet). */
+.cw-macro-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  width: 32px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--fg-3);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
+}
+.cw-macro-icon:hover {
+  background: var(--bg-2);
+  color: var(--accent-bright);
+  border-color: var(--line-strong);
+}
+.cw-macro-icon.is-danger:hover {
+  color: var(--tx);
+}
+.cw-macro-icon:active { transform: translateY(1px); }
+
+/* Add tile — dashed border so it advertises "this is empty space waiting
+   for content" rather than "this is another macro." Matches the height
+   of a macro row so the bottom of the list doesn't ramp down. */
+.cw-macro-add {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 10px 12px;
+  background: transparent;
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-md);
+  color: var(--fg-2);
+  font: 600 10px/1 var(--font-sans);
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+.cw-macro-add:not(:disabled):hover {
+  background: var(--bg-2);
+  border-color: var(--accent-line);
+  border-style: solid;
+  color: var(--accent-bright);
+}
+.cw-macro-add:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+.cw-macro-add-plus {
+  font: 600 14px/1 var(--font-mono);
+  letter-spacing: 0;
+}
+.cw-macro-add-label { letter-spacing: 0.22em; }
+
+/* ===== End CW — Telegraph Console ===== */
 
 /* ===== Transport bar — v3 Lifted Dark: flat near-black ===== */
 .transport {

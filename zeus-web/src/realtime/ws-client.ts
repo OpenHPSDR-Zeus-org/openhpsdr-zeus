@@ -163,6 +163,19 @@ export const MSG_TYPE_AUDIO_CHAIN_ORDER = 0x1e;
 export const MSG_TYPE_AUDIO_MASTER_BYPASS = 0x1f;
 const AUDIO_MASTER_BYPASS_BYTES = 2;
 
+// CW engine status — broadcast on every state edge of the host-side CW
+// keyer so the macro pad can render in-flight text + queue depth without
+// polling. Variable-length frame: 9-byte header + UTF-8 text. Contract:
+// Zeus.Contracts/CwEngineStatusFrame.cs.
+//
+// Wire shape:
+//   [0x30][state:u8][wpm:u16 LE][queueDepth:u16 LE][textLen:u16 LE][text:utf8…]
+//
+// 0x3x is the new "control-plane feedback" nibble (0x1x exhausted as of
+// AudioMasterBypass).
+export const MSG_TYPE_CW_ENGINE_STATUS = 0x30;
+const CW_ENGINE_STATUS_HEADER_BYTES = 9;
+
 // Shared by startRealtime / sendMicPcm. Single WS instance at a time; writes
 // are no-ops when the socket isn't open.
 let activeWs: WebSocket | null = null;
@@ -342,6 +355,49 @@ export function startRealtime(path = '/ws'): () => void {
           // window (e.g. the no-plugins-installed first-run experience).
           void import('../state/audio-suite-store').then((m) => {
             m.useAudioSuiteStore.getState().setChainOrderFromServer(ids);
+          });
+          return;
+        }
+        if (peekType === MSG_TYPE_CW_ENGINE_STATUS) {
+          if (ev.data.byteLength < CW_ENGINE_STATUS_HEADER_BYTES) {
+            warnOnce(
+              'ws-cw-status-short',
+              `cw status frame too short: ${ev.data.byteLength}`,
+            );
+            return;
+          }
+          const dv = new DataView(ev.data);
+          const stateByte = dv.getUint8(1);
+          const wpm = dv.getUint16(2, true);
+          const queueDepth = dv.getUint16(4, true);
+          const textLen = dv.getUint16(6, true);
+          if (ev.data.byteLength < CW_ENGINE_STATUS_HEADER_BYTES + textLen) {
+            warnOnce(
+              'ws-cw-status-truncated',
+              `cw status text claims ${textLen} bytes but only ${
+                ev.data.byteLength - CW_ENGINE_STATUS_HEADER_BYTES
+              } follow`,
+            );
+            return;
+          }
+          const text =
+            textLen === 0
+              ? ''
+              : new TextDecoder('utf-8').decode(
+                  new Uint8Array(ev.data, CW_ENGINE_STATUS_HEADER_BYTES, textLen),
+                );
+          // Lazy import keeps the cw-store off the critical path for
+          // clients that never open the CW panel (the macro pad is
+          // typically closed by default).
+          void import('../state/cw-store').then((m) => {
+            const state = m.CW_STATE_FROM_BYTE[stateByte] ?? 'idle';
+            m.useCwStore.getState().setStatusFromServer({
+              state,
+              text,
+              wpm,
+              queueDepth,
+              receivedAtMs: Date.now(),
+            });
           });
           return;
         }

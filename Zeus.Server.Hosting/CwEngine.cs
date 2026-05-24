@@ -63,6 +63,8 @@ public sealed class CwEngine : BackgroundService
     private readonly TxService _tx;
     private readonly RadioService _radio;
     private readonly TxIqRing _ring;
+    private readonly StreamingHub _hub;
+    private readonly CwSettingsStore _settings;
     private readonly ILogger<CwEngine> _log;
     private readonly Channel<CwJob> _jobs = Channel.CreateUnbounded<CwJob>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
@@ -83,29 +85,44 @@ public sealed class CwEngine : BackgroundService
     /// fired from the playback worker thread.</summary>
     public event Action<CwEngineStatus>? Status;
 
-    public CwEngine(TxService tx, RadioService radio, TxIqRing ring, ILogger<CwEngine> log)
+    public CwEngine(TxService tx, RadioService radio, TxIqRing ring, StreamingHub hub, CwSettingsStore settings, ILogger<CwEngine> log)
     {
         _tx = tx;
         _radio = radio;
         _ring = ring;
+        _hub = hub;
+        _settings = settings;
         _log = log;
         // Drop the current send if the operator overrides MOX from the UI
         // (or a trip happens). Owner==null on the falling edge means MOX
         // was just released; if it wasn't us doing the release, cancel.
         _tx.TxActiveChanged += OnTxActiveChanged;
+        // Bridge the in-process Status event onto the wire so connected
+        // clients (the React macro pad) see state edges without polling.
+        Status += BroadcastStatus;
     }
 
     /// <summary>
-    /// Enqueue <paramref name="text"/> for transmission at <paramref name="wpm"/>
-    /// (null = engine default, currently 20). Returns immediately; actual
-    /// keying happens on the worker thread.
+    /// Enqueue <paramref name="text"/> for transmission at <paramref name="wpm"/>.
+    /// When <paramref name="wpm"/> is null the engine reads the operator's
+    /// persisted default from <see cref="CwSettingsStore"/>; if the store
+    /// hasn't been initialised yet (test seam) it falls back to
+    /// <see cref="WpmDefault"/>. Returns immediately; keying happens on
+    /// the worker thread.
     /// </summary>
     public ValueTask SendAsync(string text, int? wpm, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(text);
-        int effective = Math.Clamp(wpm ?? WpmDefault, WpmMin, WpmMax);
+        int requested = wpm ?? _settings?.Get().Wpm ?? WpmDefault;
+        int effective = Math.Clamp(requested, WpmMin, WpmMax);
         Interlocked.Increment(ref _pendingJobs);
         return _jobs.Writer.WriteAsync(new CwJob(text, effective), ct);
+    }
+
+    private void BroadcastStatus(CwEngineStatus s)
+    {
+        try { _hub.Broadcast(CwEngineStatusFrame.FromStatus(s)); }
+        catch (Exception ex) { _log.LogWarning(ex, "cw.status hub broadcast failed"); }
     }
 
     /// <summary>Hard cancel. Drains the queue and signals the in-flight
