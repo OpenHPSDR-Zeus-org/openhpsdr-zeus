@@ -99,6 +99,17 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
     private MiniAudioOutput? _output;
     private bool _disposed;
 
+    // TX→RX resume consumption probe (issue #468). The backend produces fresh
+    // RX audio ~13 ms after un-key (DspPipelineService rx.resume.probe t3), yet
+    // the operator hears ~2 s of silence — so the gap is on the OUTPUT side
+    // (ring → miniaudio callback → endpoint). This stamps t4 = the first
+    // playback callback after un-key that pulls real (non-empty) data from the
+    // RX ring, logged as a delta from the un-key edge. If t4 ≈ +2000 ms while
+    // t3 ≈ +13 ms, the gap is the device/endpoint waking from a starved stream.
+    // Armed on the TX-active falling edge; one-shot per cycle.
+    private long _resumeUnkeyTicks;            // Stopwatch stamp at un-key; 0 = idle
+    private volatile bool _resumeAwaitingOutput;
+
     // Mute flag for the Photino-side Mute/Unmute button. Read on the DSP
     // tick thread inside Publish, written from the REST request thread —
     // volatile is the right tool. On mute we drain the ring so unmute
@@ -265,6 +276,14 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
         // Drain on either edge — see the XML doc for why the falling edge
         // (TX→RX) needs the clear just as much as the rising edge.
         _ring.Clear();
+
+        // Arm the output-side resume probe on the falling edge (TX→RX). The
+        // next playback callback that pulls real data from the ring stamps t4.
+        if (!txActive)
+        {
+            _resumeUnkeyTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            _resumeAwaitingOutput = true;
+        }
     }
 
     // Test surface — lets unit tests assert the ring's drain behaviour
@@ -318,6 +337,34 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
             : new float[totalFrames];
 
         int read = _ring.Read(mono);
+
+        // Resume probe (issue #468): the first callback after un-key that
+        // outputs a real (non-zero) RX sample — i.e. the operator-audible
+        // resume. Logged as a delta from the un-key edge so we can confirm the
+        // fix closed the OUTPUT-side gap: with the keep-warm silence feed the
+        // device stream never starves, so this should now land within a few
+        // tens of ms of the backend producing audio (rx.resume.probe t3 ≈
+        // +13 ms), not the old ~2 s. A non-zero test (not just read>0) is used
+        // because the ring is now continuously fed silence through TX, so
+        // "first non-empty read" would trivially be the first post-un-key
+        // callback regardless. One-shot per un-key cycle.
+        if (_resumeAwaitingOutput && read > 0)
+        {
+            bool nonZero = false;
+            for (int i = 0; i < read; i++) { if (mono[i] != 0f) { nonZero = true; break; } }
+            if (nonZero)
+            {
+                _resumeAwaitingOutput = false;
+                long t0 = _resumeUnkeyTicks;
+                if (t0 != 0)
+                {
+                    double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - t0)
+                        * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+                    _log.LogInformation("rx.resume.probe t4 firstAudibleOutput +{Ms:F1}ms samples={N}", ms, read);
+                }
+            }
+        }
+
         if (read < totalFrames)
         {
             // Underrun — zero the remainder.
