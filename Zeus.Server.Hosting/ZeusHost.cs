@@ -243,11 +243,22 @@ public static class ZeusHost
         // TxTuneDriver pumps silent mic blocks through WDSP TXA while TUN is on so
         // the post-gen tone actually reaches the ring (no mic uplink during TUN).
         builder.Services.AddHostedService<TxTuneDriver>();
+        // Host-side CW keyer (zeus-drf). Single instance, drains a job queue
+        // and pushes envelope-shaped IQ directly into TxIqRing while holding
+        // MOX as MoxSource.Cwx.
+        builder.Services.AddSingleton<CwSettingsStore>();
+        builder.Services.AddSingleton<CwEngine>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<CwEngine>());
         // PS auto-attenuate timer2code-equivalent: ramps the radio's TX step
         // attenuator (Protocol2 only today) when calcc feedback level lands outside
         // the 128..181 ideal window, so PS has a recovery path on first arm. Idle
         // when PS is off or AutoAttenuate is off — no wire, no engine pokes.
         builder.Services.AddHostedService<PsAutoAttenuateService>();
+        // Promote the radio's hardware-PTT echo (HL2 rear KEY tip, external
+        // PTT line) into a host MOX request — without it the gateware-driven
+        // CW carrier transmits while Zeus stays unkeyed (UI off, meters at
+        // idle cadence, FR-6 timeout disarmed).
+        builder.Services.AddHostedService<ExternalPttService>();
 
         // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
         // hung login surfaces quickly in the UI.

@@ -21,7 +21,7 @@ namespace Zeus.Server;
 // 600 Hz off the signal to hear it.
 internal static class CwOffset
 {
-    public const int CwPitchHz = 600;
+    public const int CwPitchHz = CwDefaults.PitchHz;
 
     // Effective hardware LO for the supplied dial frequency. Non-CW modes
     // pass through unchanged so SSB / AM / FM / DIG behaviour is bit-for-bit

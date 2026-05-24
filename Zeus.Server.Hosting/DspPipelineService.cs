@@ -126,18 +126,25 @@ public class DspPipelineService : BackgroundService,
     private RxMode _appliedMode = RxMode.USB;
     private int _appliedLowHz;
     private int _appliedHighHz;
-    // CTUN bandpass shift currently applied to the WDSP RX filter (Hz). Equals
-    // (EffectiveLoHz(VfoHz) - RadioLoHz) when CtunEnabled, 0 otherwise. The
-    // filter low/high pushed to WDSP is the operator-set passband + this
-    // offset. Tracked separately from FilterLowHz/HighHz so re-pushing the
-    // filter when CTUN moves the dial doesn't require Mutate-ing the StateDto.
-    // Issue #427.
+    // WDSP RX filter shift currently applied (Hz). Equals
+    // (EffectiveLoHz(VfoHz) - RadioLoHz) — the always-frozen-NCO model.
+    // Tracked separately from FilterLowHz/HighHz so re-pushing the filter
+    // when the dial moves doesn't require Mutate-ing the StateDto.
+    // See docs/prd/panfall_behavior.md.
     private int _appliedCtunOffsetHz;
     private int _appliedTxLowHz;
     private int _appliedTxHighHz;
     private double _appliedAgcTopDb;
     private double _appliedAgcOffsetDb;
     private double _appliedRxAfGainDb;
+    // TX mic gain change-detect cache. NaN sentinel forces the first apply
+    // even when the persisted value happens to equal 0 dB (the engine seam
+    // expects an explicit unity SetTxPanelGain call so the TX chain leaves
+    // its uninitialised state in a known place after channel-open).
+    private double _appliedTxMicGainLinear = double.NaN;
+    // Same NaN-first-apply sentinel for the Leveler ceiling so a channel-open
+    // with the persisted value matching the 8 dB default still re-pushes it.
+    private double _appliedTxLevelerMaxGainDb = double.NaN;
     private NrConfig _appliedNr = new();
     private int _appliedZoomLevel = 1;
     // PureSignal latched values — same change-detect pattern as the others
@@ -505,13 +512,12 @@ public class DspPipelineService : BackgroundService,
         // about tune changes without this forward. Sample rate / mode follow
         // here too when P2-side support is added.
         //
-        // CTUN — issue #427. When CTUN is on the hardware NCO is frozen at
-        // RadioLoHz: every state change must push that frozen value (not the
-        // operator's roaming dial) so dial movements stay confined to the
-        // WDSP filter-shift path and don't physically retune the radio.
+        // Frozen-NCO model: the hardware always sits at RadioLoHz; dial
+        // movements stay confined to the WDSP filter-shift path. Push
+        // RadioLoHz to the P2 client (the P1 client gets the same push from
+        // RadioService.SetRadioLo). See docs/prd/panfall_behavior.md.
         var p2 = _p2Client;
-        long p2TargetHz = s.CtunEnabled ? s.RadioLoHz : CwOffset.EffectiveLoHz(s);
-        p2?.SetVfoAHz(p2TargetHz);
+        p2?.SetVfoAHz(s.RadioLoHz);
 
         // iter5 pass-2: lock-free engine pointer read. The lock previously
         // here only provided pointer atomicity (the engine.* calls below
@@ -537,17 +543,14 @@ public class DspPipelineService : BackgroundService,
             _appliedLowHz = s.FilterLowHz;
             _appliedHighHz = s.FilterHighHz;
         }
-        // CTUN frequency shift — issue #427. When CtunEnabled, the operator's
-        // dial sits off-centre on the WDSP IF (the radio's NCO is frozen at
-        // RadioLoHz). WDSP's `shift` stage moves the IF by shiftHz before
-        // demodulation, so the unmodified bandpass filter sees the tuned
-        // signal at baseband. Disabled (shiftHz=0) when CtunEnabled is false,
-        // which collapses to legacy behaviour. This is the seam Thetis uses
-        // (radio.cs:1419-1420); shifting SetRXABandpassFreqs directly broke
-        // SSB demod because the nbp0 stage rejects sign-inverted ranges.
-        int ctunShiftHz = s.CtunEnabled
-            ? (int)(CwOffset.EffectiveLoHz(s.Mode, s.VfoHz) - s.RadioLoHz)
-            : 0;
+        // Frozen-NCO frequency shift. The dial sits off-centre on the WDSP
+        // IF (the radio's NCO is frozen at RadioLoHz); WDSP's `shift` stage
+        // moves the IF by shiftHz before demodulation so the unmodified
+        // bandpass filter sees the tuned signal at baseband. This is the
+        // seam Thetis uses (radio.cs:1419-1420); shifting SetRXABandpassFreqs
+        // directly broke SSB demod because the nbp0 stage rejects
+        // sign-inverted ranges. See docs/prd/panfall_behavior.md.
+        int ctunShiftHz = (int)(CwOffset.EffectiveLoHz(s.Mode, s.VfoHz) - s.RadioLoHz);
         if (ctunShiftHz != _appliedCtunOffsetHz)
         {
             engine.SetCtunShift(channel, ctunShiftHz);
@@ -570,6 +573,20 @@ public class DspPipelineService : BackgroundService,
         {
             engine.SetRxAfGainDb(channel, s.RxAfGainDb);
             _appliedRxAfGainDb = s.RxAfGainDb;
+        }
+        // TX mic gain: dB → linear (10^(db/20)) at the engine seam. Conversion
+        // matches the historical /api/mic-gain inline (Math.Pow(10.0, db/20.0));
+        // moved here so the operator-friendly dB is what gets stored and broadcast.
+        double micLinear = Math.Pow(10.0, s.MicGainDb / 20.0);
+        if (micLinear != _appliedTxMicGainLinear)
+        {
+            engine.SetTxPanelGain(micLinear);
+            _appliedTxMicGainLinear = micLinear;
+        }
+        if (s.LevelerMaxGainDb != _appliedTxLevelerMaxGainDb)
+        {
+            engine.SetTxLevelerMaxGain(s.LevelerMaxGainDb);
+            _appliedTxLevelerMaxGainDb = s.LevelerMaxGainDb;
         }
         var nr = s.Nr ?? new NrConfig();
         if (!nr.Equals(_appliedNr))
@@ -837,17 +854,23 @@ public class DspPipelineService : BackgroundService,
         engine.SetFilter(channelId, s.FilterLowHz, s.FilterHighHz);
         engine.SetTxFilter(s.TxFilterLowHz, s.TxFilterHighHz);
         engine.SetVfoHz(channelId, s.VfoHz);
-        // Replay any CTUN shift on fresh-channel open so a connect landing
-        // with CtunEnabled already true (persisted across restart) is
-        // demodulating the same dial the operator saw last session.
-        // Issue #427.
-        int ctunShiftHz = s.CtunEnabled
-            ? (int)(CwOffset.EffectiveLoHz(s.Mode, s.VfoHz) - s.RadioLoHz)
-            : 0;
+        // Replay the WDSP shift on fresh-channel open so a connect landing
+        // with VfoHz != RadioLoHz (persisted across restart) is demodulating
+        // the same dial the operator saw last session.
+        // See docs/prd/panfall_behavior.md.
+        int ctunShiftHz = (int)(CwOffset.EffectiveLoHz(s.Mode, s.VfoHz) - s.RadioLoHz);
         engine.SetCtunShift(channelId, ctunShiftHz);
         double effectiveAgc = s.AgcTopDb + s.AgcOffsetDb;
         engine.SetAgcTop(channelId, effectiveAgc);
         engine.SetRxAfGainDb(channelId, s.RxAfGainDb);
+        // Re-push TX mic gain + Leveler on every fresh engine so the channel
+        // doesn't sit at the WDSP open-time defaults when the operator's last
+        // values differ. The engine's TXA reopen path resets PanelGain1=1.0 and
+        // LevelerTop=8.0 internally; without this re-push, a relaunch would
+        // ignore the just-hydrated StateDto values.
+        double micLinearInit = Math.Pow(10.0, s.MicGainDb / 20.0);
+        engine.SetTxPanelGain(micLinearInit);
+        engine.SetTxLevelerMaxGain(s.LevelerMaxGainDb);
         engine.SetNoiseReduction(channelId, nr);
         engine.SetZoom(channelId, s.ZoomLevel);
         _appliedMode = s.Mode;
@@ -859,6 +882,8 @@ public class DspPipelineService : BackgroundService,
         _appliedAgcTopDb = s.AgcTopDb;
         _appliedAgcOffsetDb = s.AgcOffsetDb;
         _appliedRxAfGainDb = s.RxAfGainDb;
+        _appliedTxMicGainLinear = micLinearInit;
+        _appliedTxLevelerMaxGainDb = s.LevelerMaxGainDb;
         _appliedNr = nr;
         _appliedZoomLevel = s.ZoomLevel;
     }
@@ -1532,15 +1557,12 @@ public class DspPipelineService : BackgroundService,
             // extra contract field needed, per task #7 scope note.
             int zoomLevel = Math.Max(1, state.ZoomLevel);
             float hzPerPixel = (float)((double)sampleRate / zoomLevel / Width);
-            // Panadapter centre = the radio's actual NCO. When CTUN is off this
-            // equals EffectiveLoHz(dial) (legacy behaviour). When CTUN is on the
-            // hardware is frozen at RadioLoHz while the dial roams, so the
-            // pan/waterfall must not follow the dial — they stay anchored to
-            // RadioLoHz so the spectrum doesn't slide under the operator on
-            // every click. Issue #427.
-            long centerHz = state.CtunEnabled
-                ? state.RadioLoHz
-                : CwOffset.EffectiveLoHz(state);
+            // Panadapter centre = the radio's actual NCO. The hardware is
+            // always frozen at RadioLoHz while the dial roams, so the
+            // pan/waterfall stay anchored to RadioLoHz and don't slide under
+            // the operator when only VfoHz moves.
+            // See docs/prd/panfall_behavior.md.
+            long centerHz = state.RadioLoHz;
 
             // Cache for the frequency-calibration service (issue #325). The
             // cal reads from this cache to avoid racing for WDSP's "fresh

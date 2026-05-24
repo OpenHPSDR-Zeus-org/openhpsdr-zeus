@@ -58,6 +58,11 @@ public sealed class TxService
     private bool _tunOn;
     private DateTime? _moxStartedAt;
     private DateTime? _tunStartedAt;
+    // Who currently owns MOX, set on the rising edge and cleared on the
+    // falling one. See <see cref="MoxSource"/> for the release rule: only
+    // the owning source can drop MOX, except UI (master override) and
+    // <see cref="TryTripForAlert"/> (always wins). Null when MOX is off.
+    private MoxSource? _moxOwner;
 
     public TxService(RadioService radio, DspPipelineService pipeline, StreamingHub hub, IBandPlanService bandPlan, ILogger<TxService> log)
     {
@@ -70,6 +75,11 @@ public sealed class TxService
 
     public bool IsMoxOn { get { lock (_sync) return _moxOn; } }
     public bool IsTunOn { get { lock (_sync) return _tunOn; } }
+    /// <summary>Source that currently holds MOX, or null when MOX is off.
+    /// Subscribers (e.g. <c>CwEngine</c>) read this on the
+    /// <see cref="TxActiveChanged"/> falling edge to tell apart "I dropped
+    /// MOX myself" from "the operator overrode me from the UI".</summary>
+    public MoxSource? MoxOwner { get { lock (_sync) return _moxOwner; } }
 
     /// <summary>
     /// Fires on every change to combined TX-active state
@@ -155,7 +165,19 @@ public sealed class TxService
         return false;
     }
 
+    /// <summary>Back-compat shim: callers that don't tag a source get
+    /// <see cref="MoxSource.UI"/>, the master override. New callers should
+    /// pass an explicit source so the release path can reject foreign drops.</summary>
     public bool TrySetMox(bool on, out string? error)
+        => TrySetMox(on, MoxSource.UI, out error);
+
+    /// <summary>
+    /// Source-aware MOX setter. The <paramref name="source"/> tag determines
+    /// whether the call is allowed when MOX is already held by another
+    /// source — see <see cref="MoxSource"/> for the rule. UI always wins;
+    /// any other source can only drop MOX it itself raised.
+    /// </summary>
+    public bool TrySetMox(bool on, MoxSource source, out string? error)
     {
         // FR-1 interlock: no TX unless connected.
         if (on && !_radio.IsConnected) { error = "not connected"; return false; }
@@ -166,17 +188,35 @@ public sealed class TxService
         bool? txActiveCaptured;
         lock (_sync)
         {
-            if (_moxOn == on) { error = null; return true; }
+            if (_moxOn == on)
+            {
+                // No-op edge. Don't reseat ownership on a redundant key-on
+                // (first-claim semantics — whoever raised the rising edge owns
+                // it for the life of the transmission). Drops are rejected
+                // here too so a foreign source can't even silently match the
+                // current state, since that would let a hardware-PTT release
+                // race a UI-driven send.
+                error = null;
+                return true;
+            }
+            if (!on && source != MoxSource.UI && _moxOwner is not null && _moxOwner != source)
+            {
+                // Foreign source trying to release someone else's MOX. Refuse.
+                error = $"MOX held by {_moxOwner}; only UI can override";
+                return false;
+            }
             wasTunOn = _tunOn;
             if (on)
             {
                 _tunOn = false;  // MOX-on preempts TUN (PRD FR-7 mutual-exclusion)
                 _tunStartedAt = null;
                 _moxStartedAt = DateTime.UtcNow;
+                _moxOwner = source;
             }
             else
             {
                 _moxStartedAt = null;
+                _moxOwner = null;
             }
             _moxOn = on;
             txActiveCaptured = CaptureTxActiveChangeUnderLock();
@@ -246,11 +286,16 @@ public sealed class TxService
                 _tunStartedAt = null;
                 _moxOn = true;
                 _moxStartedAt = DateTime.UtcNow;
+                // TwoTone is a UI-driven feature; tag the owner so the source
+                // gate in TrySetMox correctly rejects a foreign drop while
+                // the two-tone test is armed.
+                _moxOwner = MoxSource.UI;
             }
             else
             {
                 _moxOn = false;
                 _moxStartedAt = null;
+                _moxOwner = null;
             }
             txActiveCaptured = CaptureTxActiveChangeUnderLock();
         }
@@ -310,6 +355,8 @@ public sealed class TxService
             {
                 _moxOn = false;  // TUN-on preempts MOX (PRD FR-7)
                 _moxStartedAt = null;
+                // Whoever owned MOX just lost the channel — TUN took it.
+                _moxOwner = null;
                 _tunStartedAt = DateTime.UtcNow;
             }
             else
@@ -362,6 +409,9 @@ public sealed class TxService
             // would keep re-firing against the stale start time after the trip.
             _moxStartedAt = null;
             _tunStartedAt = null;
+            // Trip always wins regardless of owner. Drop ownership so the
+            // next rising edge starts from a clean source.
+            _moxOwner = null;
             txActiveCaptured = CaptureTxActiveChangeUnderLock();
         }
 

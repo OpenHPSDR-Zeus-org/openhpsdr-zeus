@@ -376,4 +376,51 @@ public class PacketParserTests
             out _, out _, out _, out _, out byte bits));
         Assert.Equal(0x03, bits);
     }
+
+    // ---- ExtractHardwarePtt -------------------------------------------------
+    // C0[0] is the PTT/MOX echo set by the HL2 gateware whenever the radio is
+    // keying — host-driven MOX, rear KEY tip grounded, or external PTT line
+    // asserted (HL2 protocol doc line 200). ExternalPttService consumes this
+    // edge to follow hardware-initiated TX.
+
+    [Fact]
+    public void ExtractHardwarePtt_BothFramesClear_ReturnsFalse()
+    {
+        byte[] packet = FramingTests.BuildValidPacket(1, new (int, int)[PacketParser.ComplexSamplesPerPacket]);
+        Assert.False(PacketParser.ExtractHardwarePtt(packet));
+    }
+
+    [Fact]
+    public void ExtractHardwarePtt_FirstFrameC0Bit0_ReturnsTrue()
+    {
+        byte[] packet = FramingTests.BuildValidPacket(1, new (int, int)[PacketParser.ComplexSamplesPerPacket]);
+        packet[8 + 3] |= 0x01;
+        Assert.True(PacketParser.ExtractHardwarePtt(packet));
+    }
+
+    [Fact]
+    public void ExtractHardwarePtt_SecondFrameC0Bit0_ReturnsTrue()
+    {
+        byte[] packet = FramingTests.BuildValidPacket(1, new (int, int)[PacketParser.ComplexSamplesPerPacket]);
+        packet[8 + 512 + 3] |= 0x01;
+        Assert.True(PacketParser.ExtractHardwarePtt(packet));
+    }
+
+    [Fact]
+    public void ExtractHardwarePtt_IgnoresOtherC0Bits()
+    {
+        // Bits 7:1 of C0 carry the address; only bit 0 is the PTT echo. Set
+        // every other bit on both frames and expect false.
+        byte[] packet = FramingTests.BuildValidPacket(1, new (int, int)[PacketParser.ComplexSamplesPerPacket]);
+        packet[8 + 3] = 0xFE;
+        packet[8 + 512 + 3] = 0xFE;
+        Assert.False(PacketParser.ExtractHardwarePtt(packet));
+    }
+
+    [Fact]
+    public void ExtractHardwarePtt_ShortPacket_ReturnsFalse()
+    {
+        // Defensive guard for callers that don't pre-validate length.
+        Assert.False(PacketParser.ExtractHardwarePtt(new byte[10]));
+    }
 }

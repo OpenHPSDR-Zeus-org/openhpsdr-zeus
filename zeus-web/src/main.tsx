@@ -111,6 +111,20 @@ try {
   /* private mode — falls back to dark, the default. */
 }
 
+// ?desktop=1 — operator wants the desktop layout preserved in a narrow
+// window (e.g. a small touchscreen as a secondary control surface).
+// Set the attribute synchronously so the ≤900px media block in layout.css
+// (which is scoped to html:not([data-force-desktop="1"])) never applies.
+// useIsMobileViewport() in mobile/MobileApp.tsx honours the same param to
+// suppress the shell swap.
+try {
+  if (new URLSearchParams(window.location.search).get('desktop') === '1') {
+    document.documentElement.setAttribute('data-force-desktop', '1');
+  }
+} catch {
+  /* no-op */
+}
+
 // PERF_PASS_3_DEBUG: window debug helpers for playwright-driven validation.
 (window as unknown as Record<string, unknown>).__zeusPerf3 = {
   txStore: useTxStore,

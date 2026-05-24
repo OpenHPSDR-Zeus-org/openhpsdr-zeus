@@ -128,6 +128,24 @@ public interface IProtocol1Client : IDisposable
     event Action<AdcOverloadStatus>? AdcOverloadObserved;
 
     /// <summary>
+    /// Raised on a level change of the hardware-PTT echo bit (C0[0]) coming
+    /// back from the radio. On HL2 the gateware ORs in the rear KEY tip and
+    /// the external PTT line, so this rises whenever the operator keys the
+    /// radio directly without going through the host. It ALSO rises as a
+    /// loopback of any host-issued <see cref="SetMox(bool)"/>, so consumers
+    /// must check the host's current MOX/TUN state to disambiguate.
+    /// Edge-triggered: handler is called once per change. Fires on the RX
+    /// thread; handlers must not block.
+    /// </summary>
+    event Action<bool>? HardwarePttChanged;
+
+    /// <summary>
+    /// Latest hardware-PTT echo level. Volatile; safe to read from any
+    /// thread. Updated from the RX loop on every received EP6 packet.
+    /// </summary>
+    bool HardwarePtt { get; }
+
+    /// <summary>
     /// Select the radio's wire-level board family. Affects the extended
     /// attenuator byte layout (HL2 vs bare HPSDR) and the N2ADR filter-board
     /// OC pin encoding. Defaults to <see cref="HpsdrBoardKind.HermesLite2"/>.

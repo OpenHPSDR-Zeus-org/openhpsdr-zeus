@@ -53,7 +53,11 @@ namespace Zeus.Server;
 /// Persistent TCP client for hamlib's rotctld. Holds a single socket,
 /// sends commands, polls position at <see cref="RotctldConfig.PollingIntervalMs"/>,
 /// and reconnects with 5-second backoff on failure. Shape mirrors Log4YM's
-/// RotatorService but keeps state in-memory (single-operator).
+/// RotatorService. Config (host / port / enabled flag / polling interval) is
+/// persisted by <see cref="RotctldConfigStore"/> in zeus-prefs.db and hydrated
+/// at construction so a clean exit with Enabled=true reconnects automatically
+/// on next startup. Live socket state (current azimuth, target, error) is
+/// in-memory only.
 /// </summary>
 public sealed class RotctldService : BackgroundService
 {
@@ -91,6 +95,10 @@ public sealed class RotctldService : BackgroundService
         // ExecuteAsync's first tick will pick up Enabled=true and reconnect.
         _config = _store.Get();
     }
+
+    /// <summary>Returns the live config snapshot (host / port / enabled / polling interval).
+    /// Hydrated from <see cref="RotctldConfigStore"/> at construction; updated by <see cref="SetConfigAsync"/>.</summary>
+    public RotctldConfig GetConfig() => _config;
 
     public RotctldStatus GetStatus()
     {

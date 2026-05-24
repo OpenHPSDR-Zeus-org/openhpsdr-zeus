@@ -817,7 +817,11 @@ public sealed class TciSession : IDisposable
             // Spec §8.5: vfo:trx,vfo,0 is invalid — never set a VFO to 0 Hz.
             // Reject silently rather than driving the radio to an out-of-range freq.
             if (hz <= 0) return;
-            _radio.SetVfo(hz);
+            // TCI is a CAT-like external source — bypass the frozen-NCO
+            // auto-recenter heuristic so the hardware tracks the commanded
+            // frequency absolutely. Mirrors Thetis CATChangesCenterFreq
+            // default. Issue #461.
+            _radio.SetVfo(hz, fromExternal: true);
             // Don't echo back immediately — the StateChanged event will broadcast it
         }
     }
@@ -836,8 +840,8 @@ public sealed class TciSession : IDisposable
         }
         else if (args.Length >= 2 && TciProtocol.TryParseLong(args[1], out long hz))
         {
-            // Set DDS (same as VFO for single-RX)
-            _radio.SetVfo(hz);
+            // Set DDS (same as VFO for single-RX). External source — see HandleVfo.
+            _radio.SetVfo(hz, fromExternal: true);
         }
     }
 
@@ -943,7 +947,7 @@ public sealed class TciSession : IDisposable
         // state, TrySetMox is a no-op and lying to MSHV/WSJT-X causes the
         // client to think MOX is on when it isn't. MSHV tolerates redundant
         // echoes — it does not tolerate desynchronised state.
-        _tx.TrySetMox(on, out _);
+        _tx.TrySetMox(on, MoxSource.Tci, out _);
         Send(TciProtocol.Command("trx", rx, _tx.IsMoxOn));
     }
 
@@ -1454,7 +1458,11 @@ public sealed class TciSession : IDisposable
                 break;
             case "ZZTX0":
                 _log.LogInformation("tci.run_cat_ex ZZTX0 → force-unkey");
-                _tx.TrySetMox(false, out _);
+                // Source-tagged: a remote CAT command can drop MOX it itself
+                // claimed via trx:true, but cannot truncate a Cwx- or
+                // Hardware-driven transmission. The operator's UI button is
+                // still the master override.
+                _tx.TrySetMox(false, MoxSource.Tci, out _);
                 break;
             default:
                 _log.LogDebug("tci.run_cat_ex unhandled cmd={Cmd}", cmd);

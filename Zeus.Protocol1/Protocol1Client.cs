@@ -150,6 +150,28 @@ public sealed class Protocol1Client : IProtocol1Client
 
     public event Action<TelemetryReading>? TelemetryReceived;
     public event Action<AdcOverloadStatus>? AdcOverloadObserved;
+    public event Action<bool>? HardwarePttChanged;
+
+    // 0/1; Volatile so the property read on any thread sees the latest value
+    // without needing a lock.
+    private int _hardwarePtt;
+    public bool HardwarePtt => Volatile.Read(ref _hardwarePtt) != 0;
+
+    /// <summary>
+    /// Update the cached hardware-PTT level from a freshly-parsed packet and
+    /// fire <see cref="HardwarePttChanged"/> if the level flipped. Called
+    /// exclusively from the RX loop (single writer) so a CAS isn't needed —
+    /// a plain Volatile.Write + compare is correct.
+    /// </summary>
+    private void UpdateHardwarePtt(bool ptt)
+    {
+        int prev = Volatile.Read(ref _hardwarePtt);
+        int next = ptt ? 1 : 0;
+        if (prev == next) return;
+        Volatile.Write(ref _hardwarePtt, next);
+        try { HardwarePttChanged?.Invoke(ptt); }
+        catch (Exception ex) { _log.LogWarning(ex, "HardwarePttChanged handler threw"); }
+    }
 
     // ---- PureSignal feedback (HL2-only, P1) -------------------------
     // 1024-sample paired blocks fed to WDSP `psccF`. Mirrors P2's
@@ -270,6 +292,10 @@ public sealed class Protocol1Client : IProtocol1Client
             }
             try { AdcOverloadObserved?.Invoke(AdcOverloadStatus.FromBits(overloadBits)); }
             catch (Exception ex) { _log.LogWarning(ex, "AdcOverloadObserved handler threw"); }
+
+            // Mirror the standard-path hardware-PTT level update so an
+            // external key released during PS+TX still propagates the edge.
+            UpdateHardwarePtt(PacketParser.ExtractHardwarePtt(packet));
 
             // DDC0 → IqFrame channel — keeps panadapter / audio alive during PS+TX.
             // Use a fresh rented buffer the channel can own; the ddc0 rental is
@@ -763,6 +789,11 @@ public sealed class Protocol1Client : IProtocol1Client
                 try { AdcOverloadObserved?.Invoke(AdcOverloadStatus.FromBits(overloadBits)); }
                 catch (Exception ex) { _log.LogWarning(ex, "AdcOverloadObserved handler threw"); }
 
+                // Hardware-PTT (C0[0]) echo from the radio. Fires on edge so
+                // ExternalPttService can lift the host MOX when the operator
+                // keys the rear KEY jack or an external PTT line.
+                UpdateHardwarePtt(PacketParser.ExtractHardwarePtt(buffer.AsSpan(0, n)));
+
                 var rateHz = (HpsdrSampleRate)Volatile.Read(ref _rate) switch
                 {
                     HpsdrSampleRate.Rate48k => 48_000,
@@ -974,10 +1005,12 @@ public sealed class Protocol1Client : IProtocol1Client
                 if (elapsed >= TimeSpan.FromSeconds(1))
                 {
                     _log.LogInformation(
-                        "p1.tx.rate pkts={Pkts} in {Ms:F0}ms = {Rate:F0} pkt/s (target 381) | wire: peak={Peak}/32767 mean={Mean} firstI={I} firstQ={Q} drv={Drv}",
+                        "p1.tx.rate pkts={Pkts} in {Ms:F0}ms = {Rate:F0} pkt/s (target 381) | wire: peak={Peak}/32767 mean={Mean} firstI={I} firstQ={Q} drv={Drv} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} mox={Mox}",
                         rateWindowPkts, elapsed.TotalMilliseconds, rateWindowPkts / elapsed.TotalSeconds,
                         ControlFrame.LastPeakAbs, ControlFrame.LastMeanAbs,
-                        ControlFrame.LastFirstI, ControlFrame.LastFirstQ, ControlFrame.LastDriveByte);
+                        ControlFrame.LastFirstI, ControlFrame.LastFirstQ, ControlFrame.LastDriveByte,
+                        (byte)Volatile.Read(ref _ocTxMask), (byte)Volatile.Read(ref _ocRxMask),
+                        Volatile.Read(ref _mox) != 0);
                     rateWindowStart = nowUtc;
                     rateWindowPkts = 0;
                 }

@@ -45,12 +45,15 @@ const MODES: readonly RxMode[] = ['LSB', 'USB', 'CWL', 'CWU', 'AM', 'FM', 'DIGU'
 const MOBILE_QUERY = '(max-width: 900px)';
 
 // Reactive viewport check. `?mobile=1` forces the mobile shell on for desktop
-// previews; everything else honours the matchMedia breakpoint and updates
-// when the window is resized or the device rotates.
+// previews; `?desktop=1` forces it off so the desktop layout survives narrow
+// windows (e.g. a small touchscreen used as a secondary control surface).
+// `?desktop=1` wins when both are present. Otherwise honours the matchMedia
+// breakpoint and updates on resize / device rotation.
 export function useIsMobileViewport(): boolean {
   const [mobile, setMobile] = useState<boolean>(() => {
     if (typeof window === 'undefined') return false;
     const params = new URLSearchParams(window.location.search);
+    if (params.get('desktop') === '1') return false;
     if (params.get('mobile') === '1') return true;
     return window.matchMedia(MOBILE_QUERY).matches;
   });
@@ -58,7 +61,8 @@ export function useIsMobileViewport(): boolean {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
-    if (params.get('mobile') === '1') return; // forced — no listener needed
+    if (params.get('desktop') === '1') return; // forced off — no listener needed
+    if (params.get('mobile') === '1') return; // forced on — no listener needed
     const mq = window.matchMedia(MOBILE_QUERY);
     const onChange = (e: MediaQueryListEvent) => setMobile(e.matches);
     mq.addEventListener('change', onChange);

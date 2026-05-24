@@ -306,14 +306,19 @@ public static class ZeusEndpoints
             return r.SetVfo(req.Hz);
         });
 
-        // CTUN (Click-Tune) — issue #427. When enabled the hardware NCO is
-        // frozen at the current VfoHz so subsequent SetVfo calls move only the
-        // dial / WDSP filter offset, not the radio. RadioService.SetCtun
-        // handles the radio retune on disable.
-        app.MapPost("/api/ctun", (CtunSetRequest req, RadioService r) =>
+        // Set the radio's hardware NCO (LO) frequency directly. Does not
+        // move VfoHz — used by the panadapter pure-pan gesture when a drag
+        // would carry the viewport outside the IQ capture window.
+        // See docs/prd/panfall_behavior.md.
+        app.MapPost("/api/radio/lo", (RadioLoSetRequest req, RadioService r) =>
         {
-            log.LogInformation("api.ctun enabled={Enabled}", req.Enabled);
-            return r.SetCtun(req.Enabled);
+            if (req.Hz < 0 || req.Hz > 60_000_000)
+            {
+                log.LogInformation("api.radio.lo rejected hz={Hz}", req.Hz);
+                return Results.BadRequest(new { error = "hz out of range [0, 60000000]" });
+            }
+            log.LogInformation("api.radio.lo hz={Hz}", req.Hz);
+            return Results.Ok(r.SetRadioLo(req.Hz));
         });
 
         app.MapPost("/api/mode", (ModeSetRequest req, RadioService r) =>
@@ -445,6 +450,37 @@ public static class ZeusEndpoints
             return Results.Ok(new { moxOn = tx.IsMoxOn });
         });
 
+        // CW keyer (zeus-drf). Body: { text, wpm? }. Returns 202 immediately;
+        // playback happens on the engine's worker. WPM null = engine default
+        // (currently 20); the engine clamps to 5..50. Empty text is allowed —
+        // produces no symbols and resolves to Idle without keying.
+        app.MapPost("/api/cw/send", async (CwSendRequest req, CwEngine cw) =>
+        {
+            await cw.SendAsync(req.Text ?? string.Empty, req.Wpm, default).ConfigureAwait(false);
+            return Results.Accepted();
+        });
+
+        // Hard abort. Drops the queue and signals the in-flight playback to
+        // cancel. MOX falls on the next playback tick (≤ ChunkSamples / SR ≈
+        // 10 ms). Returns 200 unconditionally — abort is best-effort.
+        app.MapPost("/api/cw/abort", (CwEngine cw) =>
+        {
+            cw.Abort("api.cw.abort");
+            return Results.Ok();
+        });
+
+        // Persisted CW operator settings (WPM, Farnsworth, 6 macros,
+        // sidetone gain/pitch). PATCH-shaped PUT: every field nullable so
+        // the UI can save one slider or one macro without round-tripping
+        // the whole record. Returns the post-merge snapshot so the client
+        // can reconcile its store with what the server actually stored
+        // (e.g. clamped values).
+        app.MapGet("/api/cw/settings", (CwSettingsStore store) =>
+            Results.Ok(store.Get()));
+
+        app.MapPut("/api/cw/settings", (CwSettingsSetRequest req, CwSettingsStore store) =>
+            Results.Ok(store.Save(req)));
+
         // Mic-gain: N dB in [-40, +10], scales WDSP TXA panel-gain-1 the same
         // way Thetis does (console.cs:28805 setAudioMicGain → Audio.MicPreamp =
         // 10^(db/20) → cmaster.CMSetTXAPanelGain1). The negative range is the
@@ -452,28 +488,29 @@ public static class ZeusEndpoints
         // -10..-15 dBFS, which over-drives WDSP TXA + ALC and prints as
         // splatter on the air; without an attenuator the operator has nowhere
         // to back off. Range matches Thetis's MicGainMin/Max defaults
-        // (console.cs:19151 = -40, :19163 = +10).
-        app.MapPost("/api/mic-gain", (MicGainSetRequest req, DspPipelineService pipe) =>
+        // (console.cs:19151 = -40, :19163 = +10). RadioService persists the dB
+        // value via RadioStateStore; the dB → linear (10^(db/20)) conversion
+        // happens at the engine seam in DspPipelineService.
+        app.MapPost("/api/mic-gain", (MicGainSetRequest req, RadioService r) =>
         {
-            int db = Math.Clamp(req.Db, -40, 10);
-            double gain = Math.Pow(10.0, db / 20.0);
-            pipe.CurrentEngine?.SetTxPanelGain(gain);
-            return Results.Ok(new { micGainDb = db });
+            var snap = r.SetTxMicGain(req.Db);
+            return Results.Ok(new { micGainDb = snap.MicGainDb });
         });
 
         // Leveler max-gain ceiling in dB. Operator-safe band is 0..15 dB: 0 disables
         // the headroom entirely (unity-cap Leveler) and 15 matches Thetis's stock
         // ceiling (radio.cs:2979 tx_leveler_max_gain = 15.0). Anything outside is a
         // 400 so a misbehaving client can't hand WDSP a value that'd saturate on
-        // the first voiced sample. The server is stateless for this setting —
-        // frontend re-POSTs on WS reconnect to re-sync after a server restart.
-        app.MapPost("/api/tx/leveler-max-gain", (LevelerMaxGainSetRequest req, DspPipelineService pipe) =>
+        // the first voiced sample. RadioService persists via RadioStateStore so
+        // the operator's ceiling survives backend restart; the frontend no
+        // longer needs to re-POST on WS reconnect.
+        app.MapPost("/api/tx/leveler-max-gain", (LevelerMaxGainSetRequest req, RadioService r) =>
         {
             if (req.Gain < 0.0 || req.Gain > 15.0 || double.IsNaN(req.Gain))
                 return Results.BadRequest(new { error = "gain must be 0..15 dB" });
             log.LogInformation("api.tx.levelerMaxGain dB={Db:F1}", req.Gain);
-            pipe.CurrentEngine?.SetTxLevelerMaxGain(req.Gain);
-            return Results.Ok(new { levelerMaxGainDb = req.Gain });
+            var snap = r.SetTxLevelerMaxGain(req.Gain);
+            return Results.Ok(new { levelerMaxGainDb = snap.LevelerMaxGainDb });
         });
 
         // TUN: internal-tune carrier. Flips SetTXAPostGenRun on WDSP; server-side is
@@ -1221,6 +1258,8 @@ public static class ZeusEndpoints
         });
 
         app.MapGet("/api/rotator/status", (RotctldService rot) => rot.GetStatus());
+
+        app.MapGet("/api/rotator/config", (RotctldService rot) => rot.GetConfig());
 
         app.MapPost("/api/rotator/config", async (RotctldConfig req, RotctldService rot, HttpContext ctx) =>
         {

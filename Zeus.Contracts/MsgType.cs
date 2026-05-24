@@ -153,4 +153,14 @@ public enum MsgType : byte
     // Payload: [type:1][bypassed:u8] = 2 bytes total. See
     // AudioMasterBypassFrame.cs.
     AudioMasterBypass = 0x1F,
+
+    // Server → client (CW engine status). Broadcast on every state edge of
+    // the host-side CW keyer (Idle ↔ Sending, Stopping, Aborting). Carries
+    // enough context for the UI macro pad to show what's in flight and how
+    // much queue is left without polling. Payload: [type:1][state:u8]
+    // [wpm:u16 LE][queueDepth:u16 LE][textLen:u16 LE][text:UTF-8…].
+    // See CwEngineStatusFrame.cs. New nibble 0x3x for control-plane
+    // feedback frames (0x1x is full); UI ignores unknown types so older
+    // builds tolerate this cleanly.
+    CwEngineStatus = 0x30,
 }

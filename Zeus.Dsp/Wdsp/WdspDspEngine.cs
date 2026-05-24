@@ -1176,11 +1176,12 @@ public sealed class WdspDspEngine : IDspEngine
             // enabled here to match that default — a disabled Leveler stage
             // also leaves GetTXAMeter(LVLR_PK) stuck at WDSP's -400 silence
             // sentinel, which made the frontend LVLR bar look broken. Other
-            // stages (Compressor, CFC, PHROT, osctrl, EQ, AMSQ) remain OFF
+            // optional stages (Compressor, CFC, PHROT, EQ, AMSQ) remain OFF
             // until they're wired to operator UI and tuned — enabling them
             // with library-default parameters can mask or create distortion.
             // ALC stays on (see SetTXAALCSt below; never 0). AMSQ is the mic
-            // noise gate and shouldn't shape SSB audio.
+            // noise gate and shouldn't shape SSB audio. CESSB (osctrl) is
+            // unconditionally ON — see SetTXAosctrlRun below.
             NativeMethods.SetTXALevelerSt(id, 1);
             // Leveler max-gain default. WDSP's create_wcpagc ships with
             // max_gain = 1.778 linear (≈ +5 dB) at TXA.c:169; we assert the
@@ -1193,7 +1194,16 @@ public sealed class WdspDspEngine : IDspEngine
             NativeMethods.SetTXACompressorRun(id, 0);
             NativeMethods.SetTXACFCOMPRun(id, 0);
             NativeMethods.SetTXAPHROTRun(id, 0);
-            NativeMethods.SetTXAosctrlRun(id, 0);
+            // CESSB (Controlled Envelope SSB) — unconditionally ON. Mirrors
+            // Thetis's WDSP entry point (dsp.cs:240 SetTXAosctrlRun) but
+            // without a user toggle: KISS, always on. WDSP's create_osctrl
+            // (TXA.c) ships sensible defaults (bandpass overshoot control on
+            // the SSB envelope) and no further setters are required —
+            // Thetis itself only ever calls SetTXAosctrlRun. Leaving CESSB
+            // off costs ~1–1.5 dB of average power on voice SSB; there is
+            // no operator scenario in which off is preferable, so no prefs
+            // key, no REST endpoint, no UI control. See bd zeus-5cg.
+            NativeMethods.SetTXAosctrlRun(id, 1);
             NativeMethods.SetTXAEQRun(id, 0);
             NativeMethods.SetTXAAMSQRun(id, 0);
             NativeMethods.SetTXAALCSt(id, 1);
@@ -1324,7 +1334,7 @@ public sealed class WdspDspEngine : IDspEngine
             }
 
             _log.LogInformation(
-                "wdsp.openTxChannel id={Id} rates={InRate}/{DspRate}/{OutRate} sizes={InSz}/{OutSz} cfir={Cfir} chain=[alc=1 lvlr=1 lvlrMax={LvlrMax:F1}dB cpdr=0 cfc=0 phrot=0 osctrl=0 eq=0 amsq=0] bp=150..2850 panelGain=1.0 txDisp={TxDisp}(pix={Pix} rxRate={RxRate} txRate={TxRate} zoom={Zoom})",
+                "wdsp.openTxChannel id={Id} rates={InRate}/{DspRate}/{OutRate} sizes={InSz}/{OutSz} cfir={Cfir} chain=[alc=1 lvlr=1 lvlrMax={LvlrMax:F1}dB cpdr=0 cfc=0 phrot=0 osctrl=1 eq=0 amsq=0] bp=150..2850 panelGain=1.0 txDisp={TxDisp}(pix={Pix} rxRate={RxRate} txRate={TxRate} zoom={Zoom})",
                 id, _txaInputRateHz, _txaDspRateHz, _txaOutputRateHz,
                 _txaInSize, _txaOutSize, _txaCfirRun ? 1 : 0, DefaultLevelerMaxGainDb,
                 _txDispAlive ? "on" : "off", _txDispPixelWidth, _txDispRxSampleRateHz, _txaOutputRateHz, _txDispZoomLevel);

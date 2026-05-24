@@ -267,6 +267,11 @@ public sealed class RadioService : IDisposable
             TxFilterLowHz: rsSnap?.TxFilterLowHz ?? 150,
             TxFilterHighHz: rsSnap?.TxFilterHighHz ?? 2850,
             RxAfGainDb: rsSnap?.RxAfGainDb ?? 0.0,
+            // 0 dB unity matches the engine's TXA fresh-open default; legacy
+            // rows missing the field hydrate to that same default.
+            MicGainDb: Math.Clamp(rsSnap?.MicGainDb ?? 0, -40, 10),
+            // 8.0 dB matches WdspDspEngine.DefaultLevelerMaxGainDb.
+            LevelerMaxGainDb: Math.Clamp(rsSnap?.LevelerMaxGainDb ?? 8.0, 0.0, 15.0),
             AutoAgcEnabled: rsSnap?.AutoAgcEnabled ?? false,
             AgcOffsetDb: 0.0,       // always reset — control-loop accumulator
             // PS persisted fields (or DTO defaults when not persisted yet).
@@ -292,14 +297,16 @@ public sealed class RadioService : IDisposable
             // become the only path that puts these into the broadcast.
             DrivePct: Volatile.Read(ref _drivePct),
             TunePct: Volatile.Read(ref _tunePct),
-            // CTUN — issue #427. Persisted in RadioStateStore so the operator's
-            // last click-tune mode survives restart. RadioLoHz snaps to VfoHz
-            // on legacy rows (RadioLoHz==0) so the panadapter centre is never
-            // zero on a fresh row written by an older build.
-            CtunEnabled: rsSnap?.CtunEnabled ?? false,
+            // Hardware NCO — persisted in RadioStateStore so a restart resumes
+            // on the same physical centre. RadioLoHz snaps to VfoHz on legacy
+            // rows (RadioLoHz==0 — e.g. rows written by the old CTUN-off
+            // branch) so the panadapter centre is never zero on a fresh
+            // hydration. CTUN behaviour (frozen NCO, dial roams) is now
+            // unconditional — see docs/prd/panfall_behavior.md.
             RadioLoHz: (rsSnap?.RadioLoHz ?? 0L) != 0L
                 ? rsSnap!.RadioLoHz
-                : (rsSnap?.VfoHz ?? 14_200_000));
+                : (rsSnap?.VfoHz ?? 14_200_000),
+            CwPitchHz: CwOffset.CwPitchHz);
 
         // Kick off the debounce flush timer. Fires every 1 s; only writes to
         // LiteDB when _stateDirty is set (i.e., at least one Mutate() has fired
@@ -478,14 +485,13 @@ public sealed class RadioService : IDisposable
                 }
             }
             await client.StartAsync(new StreamConfig(hpsdrRate, _preampOn, _atten), ct).ConfigureAwait(false);
-            // CTUN-on across restart: retune the radio to the persisted hardware
-            // NCO (RadioLoHz), not to EffectiveLoHz(dial), so the operator's
-            // last frozen centre is restored. Issue #427.
+            // Retune the radio to the persisted hardware NCO (RadioLoHz). The
+            // dial (VfoHz) may sit elsewhere; WDSP's shift stage covers the
+            // gap. Hydration above already guarantees RadioLoHz != 0 by
+            // snapping to VfoHz on legacy rows, so a plain SetVfoAHz here is
+            // always valid. See docs/prd/panfall_behavior.md.
             var connectSnap = Snapshot();
-            long connectLoHz = connectSnap.CtunEnabled
-                ? connectSnap.RadioLoHz
-                : CwOffset.EffectiveLoHz(connectSnap);
-            client.SetVfoAHz(connectLoHz);
+            client.SetVfoAHz(connectSnap.RadioLoHz);
 
             // Default-on the N2ADR 7-relay filter board for HL2 — mirrors
             // Thetis's HERCULES preset (setup.cs:14642). Most HL2 deployments
@@ -573,28 +579,76 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
-    public StateDto SetVfo(long hz)
+    public StateDto SetVfo(long hz) => SetVfo(hz, fromExternal: false);
+
+    /// <summary>
+    /// Set the VFO (dial) frequency. The frozen-NCO model prefers to leave the
+    /// hardware alone — DspPipelineService recomputes the WDSP shift stage so
+    /// the tuned signal still lands at baseband. Two cases force a hardware
+    /// auto-retune anyway so the radio doesn't get "stuck": (a) the resulting
+    /// shift would push the filter edge outside the visible panadapter span
+    /// (Thetis dispMargin = 5% inset), or (b) the shift exceeds the IF
+    /// capacity (sample_rate * 0.46). External sources (CAT/TCI/calibration,
+    /// <paramref name="fromExternal"/>=true) bypass the heuristics and always
+    /// retune — mirrors Thetis <c>CATChangesCenterFreq=true</c> (console.cs:
+    /// 32082, CATCommands.cs:2690). Without this, a 5–10 kHz FT8 → FT4 hop
+    /// via TCI would stay inside the IF and the radio would TX on the wrong
+    /// frequency. Issues #461 and zeus-nnc — see docs/prd/panfall_behavior.md.
+    /// Operator-driven "pure pan" movements (panadapter drag release past
+    /// the IQ window edge) take the explicit POST /api/radio/lo path
+    /// instead, leaving VfoHz untouched.
+    /// </summary>
+    public StateDto SetVfo(long hz, bool fromExternal)
     {
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
         long previous;
+        long radioLo;
         RxMode currentMode;
-        bool ctun;
-        lock (_sync) { previous = _state.VfoHz; currentMode = _state.Mode; ctun = _state.CtunEnabled; }
-        // CTUN ON: don't retune the hardware NCO. The radio stays at RadioLoHz
-        // and WDSP's RX bandpass is shifted by DspPipelineService so the
-        // operator's tuned signal still lands inside the passband. Issue #427.
-        // CTUN OFF: legacy behaviour — RadioLoHz tracks VfoHz so the radio is
-        // re-tuned to the clamped dial.
-        Mutate(s => ctun
-            ? s with { VfoHz = clamped }
-            : s with { VfoHz = clamped, RadioLoHz = clamped });
-        if (!ctun)
+        int sampleRate;
+        int zoomLevel;
+        int filterLow;
+        int filterHigh;
+        lock (_sync)
+        {
+            previous = _state.VfoHz;
+            currentMode = _state.Mode;
+            radioLo = _state.RadioLoHz;
+            sampleRate = _state.SampleRate;
+            zoomLevel = Math.Max(1, _state.ZoomLevel);
+            filterLow = _state.FilterLowHz;
+            filterHigh = _state.FilterHighHz;
+        }
+        bool retune;
+        if (!fromExternal)
+        {
+            long effectiveLoNew = CwOffset.EffectiveLoHz(currentMode, clamped);
+            long proposedShift = effectiveLoNew - radioLo;
+            long lMargin = Math.Max(0, -filterLow);
+            long hMargin = Math.Max(0, filterHigh);
+            double dispWidth = (double)sampleRate / zoomLevel;
+            double dispMarginHz = dispWidth * 0.05;
+            double lDisp = -dispWidth / 2.0 + dispMarginHz;
+            double hDisp = dispWidth / 2.0 - dispMarginHz;
+            bool outsideVisible = (proposedShift - lMargin) < lDisp
+                               || (proposedShift + hMargin) > hDisp;
+            long ifCapacity = (long)(sampleRate * 0.46);
+            bool outsideIf = Math.Abs(proposedShift) > ifCapacity;
+            retune = outsideVisible || outsideIf;
+        }
+        else
+        {
+            retune = true;
+        }
+        long radioLoNew = CwOffset.EffectiveLoHz(currentMode, clamped);
+        Mutate(s => retune
+            ? s with { VfoHz = clamped, RadioLoHz = radioLoNew }
+            : s with { VfoHz = clamped });
+        if (retune)
         {
             // CW retunes the LO cw_pitch below/above the dial so the listening
             // freq lands on the +cw_pitch / -cw_pitch audio passband. In SSB /
-            // AM / FM / DIG modes EffectiveLoHz returns the dial value
-            // unchanged, preserving prior behaviour.
-            ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(currentMode, clamped));
+            // AM / FM / DIG modes EffectiveLoHz returns the dial unchanged.
+            ActiveClient?.SetVfoAHz(radioLoNew);
         }
         // Band edge crossed? Per-band PA gain / OC bits may have swapped — push
         // the new snapshot before the next TX frame ships. Cheap when no
@@ -607,46 +661,65 @@ public sealed class RadioService : IDisposable
     }
 
     /// <summary>
-    /// Toggle CTUN (Click-Tune) mode. On enable, the hardware NCO is frozen at
-    /// the current VfoHz — subsequent SetVfo calls update the dial without
-    /// retuning the radio, and the DSP pipeline shifts the RX bandpass to keep
-    /// the operator's tuned signal demodulated. On disable, RadioLoHz snaps
-    /// back to VfoHz and the radio is re-tuned to the current dial so the
-    /// hardware centre matches what the operator sees again. Mirrors Thetis
-    /// chkFWCATU_CheckedChanged (console.cs:43143-43170). Issue #427.
+    /// Set the radio's hardware NCO (LO) centre frequency in Hz, leaving
+    /// VfoHz untouched. Returns the updated <see cref="StateDto"/>.
+    /// Out-of-range values are clamped to [0, 60_000_000]; callers wanting
+    /// strict rejection should validate before calling. Triggers a P1 client
+    /// SetVfoAHz (and the P2 path via DspPipelineService.OnRadioStateChanged
+    /// reading the new RadioLoHz), and a PA recompute if the LO crossed a
+    /// band edge. WDSP's shift stage is updated by DspPipelineService so the
+    /// dial-relative demodulation remains correct.
     /// </summary>
-    public StateDto SetCtun(bool enabled)
+    public StateDto SetRadioLo(long hz)
     {
-        long retuneTo = 0;
-        RxMode currentMode = RxMode.USB;
-        bool retune = false;
-        Mutate(s =>
+        long clamped = Math.Clamp(hz, 0L, 60_000_000L);
+        long previous;
+        lock (_sync) { previous = _state.RadioLoHz; }
+        Mutate(s => s with { RadioLoHz = clamped });
+        ActiveClient?.SetVfoAHz(clamped);
+        if (BandUtils.FreqToBand(previous) != BandUtils.FreqToBand(clamped))
         {
-            if (s.CtunEnabled == enabled) return s;
-            currentMode = s.Mode;
-            if (enabled)
-            {
-                // Freeze the hardware NCO at its CURRENT value — which equals
-                // EffectiveLoHz(dial), accounting for cw_pitch in CWU/CWL. Using
-                // s.VfoHz directly would be wrong on CW: the hardware is at
-                // dial ± cw_pitch, not at the dial itself.
-                return s with
-                {
-                    CtunEnabled = true,
-                    RadioLoHz = CwOffset.EffectiveLoHz(s.Mode, s.VfoHz),
-                };
-            }
-            // Re-snap the hardware NCO to the operator's current dial and
-            // retune the radio to match below, outside the lock. RadioLoHz
-            // tracks the dial when CTUN is off so SetVfo's CTUN-off branch
-            // can keep RadioLoHz == VfoHz invariant.
-            retune = true;
-            retuneTo = s.VfoHz;
-            return s with { CtunEnabled = false, RadioLoHz = s.VfoHz };
-        });
-        if (retune)
-            ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(currentMode, retuneTo));
+            RecomputePaAndPush();
+        }
         return Snapshot();
+    }
+
+    /// <summary>
+    /// Force the hardware LO to the canonical CW-mode offset of the
+    /// displayed VFO (LO = VFO − pitch for CWU, LO = VFO + pitch for CWL)
+    /// so a CW transmission lands the carrier on the dial. No-op for non-CW
+    /// modes and when the LO is already aligned.
+    ///
+    /// Background: CTUN (centred tuning) lets the operator click-tune the
+    /// panadapter without moving the hardware LO; <see cref="SetVfo"/>
+    /// updates only the displayed VFO and lets WDSP's shift stage move the
+    /// signal to baseband. That trick works fine for RX, but TX shares the
+    /// same physical NCO — if we keyed the radio while CTUN was active, the
+    /// carrier would land at <c>LO ± pitch</c> in real RF, not at the dial.
+    /// The host-side CW engine calls this before each transmission to
+    /// guarantee the operator-tuned freq is what reaches the antenna; the
+    /// pattern is the TCI-equivalent of "external retune" — see issue
+    /// <c>zeus-drf</c> bench notes (2026-05-24).
+    ///
+    /// Returns true when the LO was actually moved (caller may want to
+    /// log it for diagnostics), false on no-op.
+    /// </summary>
+    public bool AlignLoForCwTx()
+    {
+        long vfo;
+        RxMode mode;
+        long currentLo;
+        lock (_sync)
+        {
+            vfo = _state.VfoHz;
+            mode = _state.Mode;
+            currentLo = _state.RadioLoHz;
+        }
+        if (mode != RxMode.CWU && mode != RxMode.CWL) return false;
+        long targetLo = CwOffset.EffectiveLoHz(mode, vfo);
+        if (targetLo == currentLo) return false;
+        SetRadioLo(targetLo);
+        return true;
     }
 
     // Per-mode-family remembered filter magnitudes. Mode switching snapshots
@@ -1227,8 +1300,9 @@ public sealed class RadioService : IDisposable
         bool paEnabled = cfg.Global.PaEnabled && !bandCfg.DisablePa;
 
         _log.LogInformation(
-            "pa.recompute tunActive={Tun} pct={Pct} band={Band} gainDb={Gain:F2} maxW={Max} profile={Profile} -> byte={Byte} paEn={PaEn}",
-            tunActive, activePct, bandName ?? "?", bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts, driveProfile.BoardLabel, driveByte, paEnabled);
+            "pa.recompute tunActive={Tun} pct={Pct} band={Band} gainDb={Gain:F2} maxW={Max} profile={Profile} -> byte={Byte} paEn={PaEn} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocDxTx=0x{OcDxTx:X2} ocDxRx=0x{OcDxRx:X2}",
+            tunActive, activePct, bandName ?? "?", bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts, driveProfile.BoardLabel, driveByte, paEnabled,
+            bandCfg.OcTx, bandCfg.OcRx, bandCfg.OcDxTx, bandCfg.OcDxRx);
 
         ActiveClient?.SetDriveByte(driveByte);
         ActiveClient?.SetOcMasks(bandCfg.OcTx, bandCfg.OcRx);
@@ -1277,6 +1351,26 @@ public sealed class RadioService : IDisposable
     {
         double clamped = Math.Clamp(db, -50.0, 20.0);
         Mutate(s => s with { RxAfGainDb = clamped });
+        return Snapshot();
+    }
+
+    // TX mic gain in dB. Server-clamped to [-40, +10] to match the endpoint
+    // contract and Thetis's MicGainMin/Max defaults. The dB → linear (10^(db/20))
+    // conversion happens at the engine seam in DspPipelineService so the wire
+    // and persisted form is the operator-friendly integer.
+    public StateDto SetTxMicGain(int db)
+    {
+        int clamped = Math.Clamp(db, -40, 10);
+        Mutate(s => s with { MicGainDb = clamped });
+        return Snapshot();
+    }
+
+    // TX Leveler max-gain ceiling in dB. Server-clamped to [0, 15]; same
+    // operator-safe band the endpoint already enforced.
+    public StateDto SetTxLevelerMaxGain(double db)
+    {
+        double clamped = Math.Clamp(db, 0.0, 15.0);
+        Mutate(s => s with { LevelerMaxGainDb = clamped });
         return Snapshot();
     }
 
@@ -1655,6 +1749,8 @@ public sealed class RadioService : IDisposable
                 AttenDb = snap.AttenDb,
                 AutoAgcEnabled = snap.AutoAgcEnabled,
                 RxAfGainDb = snap.RxAfGainDb,
+                MicGainDb = snap.MicGainDb,
+                LevelerMaxGainDb = snap.LevelerMaxGainDb,
                 ZoomLevel = snap.ZoomLevel,
                 SsbFilterLoAbs = ssb.LoAbs,   SsbFilterHiAbs = ssb.HiAbs,
                 AmFilterLoAbs = am.LoAbs,     AmFilterHiAbs = am.HiAbs,
@@ -1666,7 +1762,6 @@ public sealed class RadioService : IDisposable
                 CwTxFilterLoAbs = cwTx.LoAbs,   CwTxFilterHiAbs = cwTx.HiAbs,
                 DrivePct = snap.DrivePct,
                 TunePct = snap.TunePct,
-                CtunEnabled = snap.CtunEnabled,
                 RadioLoHz = snap.RadioLoHz,
                 UpdatedUtc = DateTime.UtcNow,
             });

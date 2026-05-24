@@ -43,7 +43,7 @@
 // License for details.
 
 import { createContext, useContext, useEffect, type RefObject } from 'react';
-import { setVfo, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
+import { setRadioLo, setVfo, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
@@ -87,12 +87,16 @@ export type SpectrumWheelActions = {
 
 export const SpectrumWheelActionsContext = createContext<SpectrumWheelActions>({});
 
-function readView(): { centerHz: number; spanHz: number } | null {
+function readView(): { centerHz: number; spanHz: number; viewportOffsetHz: number } | null {
   const s = useDisplayStore.getState();
   if (!s.panDb || s.hzPerPixel <= 0) return null;
   return {
+    // centerHz here is the radio's hardware NCO (== RadioLoHz) — that's what
+    // the incoming frames are anchored to. The visible viewport centre is
+    // centerHz + viewportOffsetHz.
     centerHz: Number(s.centerHz),
     spanHz: s.panDb.length * s.hzPerPixel,
+    viewportOffsetHz: s.viewportOffsetHz,
   };
 }
 
@@ -111,7 +115,22 @@ export function usePanTuneGesture(
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    type Drag = { startX: number; startHz: number; spanHz: number; moved: boolean };
+    // Pure-pan drag (docs/prd/panfall_behavior.md): pointer-down captures
+    // the viewport centre at gesture start, pointer-move slides the
+    // viewportOffsetHz (no setVfo, no POST), pointer-up either leaves the
+    // offset (drag stayed inside the IQ window) or POSTs /api/radio/lo to
+    // adjoin a fresh sample window in the pan direction. vfoHz is NEVER
+    // mutated by a drag.
+    type Drag = {
+      startX: number;
+      // Viewport centre at gesture start (Hz). The new viewportOffsetHz on
+      // every move is derived from this anchor — not from radioLoHz at the
+      // current tick — so an in-flight band-change retune that fires during
+      // a drag can't yank the spectrum out from under the finger.
+      startViewportCenterHz: number;
+      spanHz: number;
+      moved: boolean;
+    };
     type MapDrag = { lastX: number; lastY: number };
     type Pinch = {
       baseDist: number;     // pointer separation when the pinch began (px)
@@ -174,6 +193,10 @@ export function usePanTuneGesture(
     const commitFinal = (hz: number) => {
       const snapped = snapHz(hz);
       useConnectionStore.setState({ vfoHz: snapped });
+      // Click-to-tune is an explicit tune-to-frequency action; per the PRD
+      // it resets any held viewportOffsetHz so the dial visibly snaps back
+      // to the panadapter centre.
+      useDisplayStore.getState().setViewportOffsetHz(0);
       pendingAbort?.abort();
       pendingAbort = null;
       if (pendingRaf !== 0) {
@@ -251,7 +274,11 @@ export function usePanTuneGesture(
       }
       drag = {
         startX: e.clientX,
-        startHz: view.centerHz,
+        // Capture the viewport centre at gesture start (radioLoHz + any
+        // existing offset). Anchoring to this absolute Hz makes the pan feel
+        // stable even if radioLoHz changes mid-drag (band-change retune,
+        // CAT, etc.).
+        startViewportCenterHz: view.centerHz + view.viewportOffsetHz,
         spanHz: view.spanHz,
         moved: false,
       };
@@ -306,9 +333,15 @@ export function usePanTuneGesture(
       drag.moved = true;
       const rect = canvas.getBoundingClientRect();
       if (rect.width <= 0) return;
-      const newHz = snapHz(drag.startHz - (dx / rect.width) * drag.spanHz);
-      pendingHz = newHz;
-      scheduleFlush();
+      // Pure-pan: drag right → viewport centre slides to a lower Hz so the
+      // grabbed content moves right with the finger. No setVfo, no POST —
+      // we just mutate the frontend-only viewportOffsetHz. The panadapter +
+      // waterfall redraw subscribers in Panadapter.tsx / Waterfall.tsx pick
+      // this up and slide the trace + texture under the cursor at rAF rate.
+      const newViewportCenter =
+        drag.startViewportCenterHz - (dx / rect.width) * drag.spanHz;
+      const radioLoHz = useConnectionStore.getState().radioLoHz;
+      useDisplayStore.getState().setViewportOffsetHz(newViewportCenter - radioLoHz);
     };
 
     const onPointerUp = (e: PointerEvent) => {
@@ -342,14 +375,62 @@ export function usePanTuneGesture(
       const rect = canvas.getBoundingClientRect();
       if (rect.width <= 0) return;
       if (d.moved) {
-        const dx = e.clientX - d.startX;
-        commitFinal(d.startHz - (dx / rect.width) * d.spanHz);
+        // Drag release — decide whether the panned viewport still sits inside
+        // the IQ capture window. If yes, leave viewportOffsetHz as-is; the
+        // dial keeps demodulating its tuned signal (potentially off-screen)
+        // and the operator can keep panning visually. If no, retune the
+        // hardware NCO so the new sample window adjoins the released viewport
+        // in the pan direction; we optimistically rebase the offset so
+        // on-screen frequencies don't visually jump across the retune.
+        const display = useDisplayStore.getState();
+        const cn = useConnectionStore.getState();
+        const viewportOffsetHz = display.viewportOffsetHz;
+        const sampleBw = cn.sampleRate;
+        const viewportLowerEdge =
+          cn.radioLoHz + viewportOffsetHz - d.spanHz / 2;
+        const viewportUpperEdge =
+          cn.radioLoHz + viewportOffsetHz + d.spanHz / 2;
+        const sampleLowerEdge = cn.radioLoHz - sampleBw / 2;
+        const sampleUpperEdge = cn.radioLoHz + sampleBw / 2;
+        const inside =
+          viewportLowerEdge >= sampleLowerEdge &&
+          viewportUpperEdge <= sampleUpperEdge;
+        if (inside) return;
+        // Land the fresh IQ window adjacent to the released viewport in the
+        // pan direction. Panning up (offset > 0) puts the sample window's
+        // bottom at the current viewport bottom; panning down does the
+        // mirror.
+        const newRadioLoHz =
+          viewportOffsetHz > 0
+            ? Math.round(viewportLowerEdge + sampleBw / 2)
+            : Math.round(viewportUpperEdge - sampleBw / 2);
+        const clampedNewRadioLoHz = clampHz(newRadioLoHz);
+        const oldRadioLoHz = cn.radioLoHz;
+        // Optimistic update: move radioLoHz now, rebase the offset so the
+        // absolute frequency at every screen pixel is preserved across the
+        // retune. The /api/radio/lo response will reconcile both values.
+        useConnectionStore.setState({ radioLoHz: clampedNewRadioLoHz });
+        display.setViewportOffsetHz(
+          oldRadioLoHz + viewportOffsetHz - clampedNewRadioLoHz,
+        );
+        setRadioLo(clampedNewRadioLoHz)
+          .then((s) => useConnectionStore.getState().applyState(s))
+          .catch(() => {
+            // Server rejected the retune (e.g. out of band for this radio).
+            // Roll back to the pre-release state so the operator sees the
+            // viewport snap back to the last valid offset.
+            useConnectionStore.setState({ radioLoHz: oldRadioLoHz });
+            display.setViewportOffsetHz(viewportOffsetHz);
+          });
       } else {
-        // click-to-tune: resolve the clicked frequency against the live view.
+        // click-to-tune: resolve the clicked frequency against the live
+        // viewport (centre = radioLoHz + viewportOffsetHz).
         const view = readView();
         if (!view) return;
         const frac = (e.clientX - rect.left) / rect.width;
-        commitFinal(view.centerHz + (frac - 0.5) * view.spanHz);
+        commitFinal(
+          view.centerHz + view.viewportOffsetHz + (frac - 0.5) * view.spanHz,
+        );
       }
     };
 
