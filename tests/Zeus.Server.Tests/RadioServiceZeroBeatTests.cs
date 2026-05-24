@@ -30,30 +30,32 @@ namespace Zeus.Server.Tests;
 
 public class RadioServiceZeroBeatTests
 {
+    // Number of frames in phase 1 (mirrors RadioService.ZeroBeatPhase1Frames).
+    private const int Phase1Frames = 15;
+
     /// <summary>
     /// Engine stub that returns a synthetic FFT with a single peak at a
-    /// chosen bin for every snap call.
+    /// chosen offset from DC for every snap call.
     ///
-    /// <para>ZeroBeat collects <c>ZeroBeatPhase1Frames</c> (30) frames and
-    /// max-holds per bin before measuring the peak. To simulate a signal that
-    /// only appears partway through the accumulation window, give the first
-    /// half (calls 1..15) and the second half (calls 16..30) different
-    /// peak bins / levels via the <c>Phase2*</c> properties; max-hold keeps
-    /// whichever is louder per bin.</para>
+    /// <para>For tests that need phase 2 to be a silent no-op (so the
+    /// assertion only measures the phase-1 move), set
+    /// <see cref="Phase2PeakDb"/> to a value less than
+    /// <see cref="FloorDb"/> + 6 so the SNR gate blocks the second
+    /// refinement step.</para>
     /// </summary>
     private sealed class PeakAtBinEngine : IDspEngine
     {
-        // First half of the peak-hold window (calls 1..15)
+        // Phase 1 (first ZeroBeatPhase1Frames calls = 15)
         public int Phase1PeakBin { get; init; } = 8192;
         public double Phase1PeakDb { get; init; } = -30;
 
-        // Second half of the peak-hold window (calls 16..30)
-        public int? Phase2PeakBin { get; init; } = null;   // null = same as first half
-        public double? Phase2PeakDb { get; init; } = null; // null = same as first half
+        // Phase 2 (calls 16..60 = next 45)
+        public int? Phase2PeakBin { get; init; } = null;   // null = same as phase 1
+        public double? Phase2PeakDb { get; init; } = null; // null = same as phase 1
 
         public double FloorDb { get; init; } = -90;
 
-        // Halfway through the 30-frame ZeroBeat peak-hold window.
+        // Phase boundary at 15 frames (matches RadioService.ZeroBeatPhase1Frames).
         private const int Phase1Boundary = 15;
         private int _callCount;
 
@@ -122,56 +124,53 @@ public class RadioServiceZeroBeatTests
     }
 
     // -------------------------------------------------------------------------
-    // Test 1: Carrier already at the CW pitch — no meaningful VFO movement.
+    // Test 1: Peak exactly at DC — no VFO movement expected.
     //
-    // The zero-beat target is NOT DC (bin 8192). In CW the LO is offset by the
-    // CW pitch (600 Hz) from the dial, so a carrier the operator is already
-    // perfectly zero-beat on lands at +cw_pitch in the baseband FFT, which on
-    // the inverted analyzer axis is bin 8192 − round(600 / 2.93) = 7987.
-    // deltaHz = rawOffsetHz − cw_pitch ≈ 600.6 − 600 = 0.6 Hz → rounds to a
-    // sub-bin residual of at most a couple Hz (2.93 Hz/bin grid at 48 kHz).
-    // ZeroBeat must return a non-null StateDto (gate passed) and leave the VFO
-    // effectively where it was.
+    // With PeakBin = ZeroBeatDcBin (8192), deltaHz = (8192 + 0 - 8192) * hzPerBin = 0.
+    // After both phases the VFO must be unchanged and ZeroBeat must return
+    // a non-null StateDto (the "phase 1 SNR gate passed but delta=0" branch
+    // returns Snapshot() at the end rather than null).
     // -------------------------------------------------------------------------
     [Fact]
     public void ZeroBeat_in_CWU_with_on_frequency_peak_does_not_move_VFO()
     {
-        // Bin nearest +600 Hz on the inverted axis (8192 − round(600/2.93) = 7987).
-        var engine = new PeakAtBinEngine { Phase1PeakBin = 7987, Phase2PeakBin = 7987 };
+        var engine = new PeakAtBinEngine { Phase1PeakBin = 8192, Phase2PeakBin = 8192 };
         using var radio = TestRadioServiceFactory.WithEngine(engine, mode: RxMode.CWU, vfoHz: 14_060_000);
 
         long before = radio.Snapshot().VfoHz;
         var result = radio.ZeroBeat();
         long after = radio.Snapshot().VfoHz;
 
-        // Carrier already at the CW pitch → only the ±1-bin grid residual.
-        Assert.InRange(after - before, -2, 2);
+        Assert.Equal(before, after);   // peak already at DC → zero delta
         Assert.NotNull(result);
     }
 
     // -------------------------------------------------------------------------
-    // Test 2: Carrier ~30 Hz above the CW pitch → VFO tunes up ~+30 Hz.
+    // Test 2: Peak 10 bins above DC → coarse tune of ~+29 Hz.
     //
-    // 48 kHz / 16 384 bins → hzPerBin ≈ 2.93 Hz. The zero-beat target is at
-    // +cw_pitch (600 Hz). A peak at bin 7977 sits at rawOffsetHz =
-    // (8192 − 7977) × 2.93 ≈ 629.9 Hz, so deltaHz = 629.9 − 600 ≈ +29.9 Hz →
-    // the dial moves UP onto the carrier. SNR 60 dB ≫ 6 dB gate, so the move
-    // fires. ±2 Hz tolerance for the 2.93 Hz/bin grid quantisation.
+    // 48 kHz / 16 384 bins → hzPerBin ≈ 2.93 Hz.  10 bins × 2.93 ≈ 29.3 Hz.
+    // Phase 1 fires (SNR 60 dB >> 6 dB gate) and moves VFO by round(29.3) = 29 Hz.
+    // Phase 2 is silenced by the PeakAtBinEngine returning floor-level after the
+    // first Phase1Frames calls, so the SNR gate blocks the second refinement step
+    // and the net delta is just the phase-1 move.
+    //
+    // Allow ±2 Hz tolerance for floating-point rounding (2.93 Hz/bin is
+    // irrational at exactly 48000/16384).
     // -------------------------------------------------------------------------
     [Fact]
     public void ZeroBeat_with_peak_above_DC_moves_VFO_up()
     {
-        // Bin 7977 ≈ +630 Hz on the inverted axis = 30 Hz above the 600 Hz pitch.
-        var engine = new PeakAtBinEngine { Phase1PeakBin = 7977, Phase2PeakBin = 7977 };
+        // Phase 2: carrier has shifted to DC after phase-1 tune; SNR gate blocks second move.
+        var engine = new PeakAtBinEngine { Phase1PeakBin = 8202, Phase2PeakBin = 8192, Phase2PeakDb = -30 };
         using var radio = TestRadioServiceFactory.WithEngine(engine, mode: RxMode.CWU, vfoHz: 14_060_000);
 
         radio.ZeroBeat();
         long after = radio.Snapshot().VfoHz;
         long delta = after - 14_060_000;
 
-        // (8192 − 7977) × (48000/16384) − 600 ≈ +29.9 Hz → rounds to +30.
-        // ±2 Hz tolerance accounts for floating-point / grid imprecision.
-        Assert.InRange(delta, 28, 32);
+        // 10 bins × (48000/16384) ≈ 29.3 Hz → rounds to 29.
+        // ±2 Hz tolerance accounts for floating-point imprecision.
+        Assert.InRange(delta, 27, 31);
     }
 
     // -------------------------------------------------------------------------
@@ -195,9 +194,8 @@ public class RadioServiceZeroBeatTests
     // -------------------------------------------------------------------------
     // Test 4: Flat noise floor (peak − floor < 6 dB SNR gate) → no VFO move.
     //
-    // The passband peak − floor = 2 dB, below the 6 dB threshold for the whole
-    // peak-hold window. ZeroBeat never moves the VFO and returns null (no-signal
-    // path). Bin 8500 is inside the (-1000, +1000) test filter at 48 kHz.
+    // Both phases see peak − floor = 2 dB which is below the 6 dB threshold.
+    // Neither phase moves the VFO and ZeroBeat returns null (no-signal path).
     // -------------------------------------------------------------------------
     [Fact]
     public void ZeroBeat_with_flat_noise_floor_does_not_move_VFO()
@@ -206,7 +204,7 @@ public class RadioServiceZeroBeatTests
         {
             Phase1PeakBin = 8500,
             Phase1PeakDb  = -88,   // peak − floor = −88 − (−90) = 2 dB < 6 dB SNR gate
-            Phase2PeakDb  = -88,   // still below threshold in the second half
+            Phase2PeakDb  = -88,   // phase 2 also below threshold
             FloorDb       = -90,
         };
         using var radio = TestRadioServiceFactory.WithEngine(engine, mode: RxMode.CWU, vfoHz: 14_060_000);
@@ -218,25 +216,24 @@ public class RadioServiceZeroBeatTests
     }
 
     // -------------------------------------------------------------------------
-    // Test 5: Quiet start, carrier appears partway through the peak-hold window.
+    // Test 5: Phase 1 quiet, phase 2 has a real carrier.
     //
-    // The first half of the accumulation window is only noise (peak = floor),
-    // then a real carrier shows up ~30 Hz above the CW pitch. Because ZeroBeat
-    // max-holds per bin across the whole window, the late carrier is still
-    // captured and clears the SNR gate. Expected: VFO tunes up ~+30 Hz onto it.
-    // This exercises the "signal that wasn't there at button-press" path.
+    // Phase 1: only noise (peak = floor → SNR 0 dB, gate fails → no Δ₁).
+    // Phase 2: carrier appears 10 bins above DC (Δ₂ ≈ +29 Hz at 48 kHz).
+    // Expected: VFO moves +29 Hz from phase 2 alone, despite phase 1's failure.
+    // This exercises the previously-unreachable fall-through path.
     // -------------------------------------------------------------------------
     [Fact]
     public void ZeroBeat_phase1_quiet_phase2_signal_moves_VFO_from_phase2_only()
     {
-        // First half: only noise (peak = floor, SNR 0 dB, nothing to lock onto).
-        // Second half: a real carrier at bin 7977 ≈ +630 Hz = 30 Hz above the
-        // 600 Hz pitch. Max-hold preserves it → VFO moves up ~+30 Hz.
+        // Phase 1: only noise (peak = floor, SNR = 0 dB, gate fails → no Δ₁).
+        // Phase 2: a real carrier appears 10 bins above DC (Δ₂ ≈ +29 Hz at 48 kHz).
+        // Expected: VFO moves +29 Hz from phase 2 alone, despite phase 1's failure.
         var engine = new PeakAtBinEngine
         {
-            Phase1PeakBin = 7987,  // bin at the pitch but at floor level (no signal yet)
-            Phase1PeakDb  = -90,   // = FloorDb → SNR 0 dB → nothing in the first half
-            Phase2PeakBin = 7977,  // carrier 30 Hz above the pitch
+            Phase1PeakBin = 8192,
+            Phase1PeakDb  = -90,   // = FloorDb → SNR 0 dB → phase 1 gate fails
+            Phase2PeakBin = 8202,  // 10 bins above DC ≈ +29 Hz
             Phase2PeakDb  = -30,   // strong signal
             FloorDb       = -90,
         };
@@ -246,7 +243,7 @@ public class RadioServiceZeroBeatTests
         long after = radio.Snapshot().VfoHz;
 
         Assert.NotNull(result);
-        Assert.InRange(after - 14_060_000, 28, 32);
+        Assert.InRange(after - 14_060_000, 27, 31);
     }
 }
 
@@ -277,9 +274,8 @@ public class ZeroBeatEndpointTests : IClassFixture<ZeroBeatEndpointTests.NoSigna
     }
 
     // -------------------------------------------------------------------------
-    // 422 path: mode CWU, wide filter, near-flat noise floor (SNR 1 dB, below
-    // the 2 dB effective gate at 192 kHz). The peak in the passband never
-    // clears the SNR gate → ZeroBeat returns null → endpoint 422.
+    // 422 path: mode CWU, wide filter, flat noise floor (SNR 2 dB < 6 dB gate).
+    // Both phases fail the SNR gate → ZeroBeat returns null → 422.
     // -------------------------------------------------------------------------
     [Fact]
     public async Task Post_returns_422_when_no_signal()
@@ -291,10 +287,9 @@ public class ZeroBeatEndpointTests : IClassFixture<ZeroBeatEndpointTests.NoSigna
         var modeResp = await client.PostAsJsonAsync("/api/mode", new { mode = "CWU" });
         Assert.Equal(HttpStatusCode.OK, modeResp.StatusCode);
 
-        // Set a wide CWU filter so the peak at bin 8100 is inside the passband.
-        // No radio is connected, so the snapshot sample rate is the 192 kHz
-        // default → hzPerBin ≈ 11.72 Hz. Filter (0, 3000) maps to passband bins
-        // [DC − round(3000/11.72), DC] = [7936, 8192]; bin 8100 sits inside it.
+        // Set a wide CWU filter so the peak at bin 8300 is inside the passband
+        // regardless of the default CW pitch / family-filter stored state.
+        // FilterLowHz=0 → lo = DC; FilterHighHz=3000 → hi ≈ DC+255 bins at 192 kHz.
         var bwResp = await client.PostAsJsonAsync("/api/bandwidth", new { low = 0, high = 3000 });
         Assert.Equal(HttpStatusCode.OK, bwResp.StatusCode);
 
@@ -318,8 +313,7 @@ public class ZeroBeatEndpointTests : IClassFixture<ZeroBeatEndpointTests.NoSigna
         var modeResp = await client.PostAsJsonAsync("/api/mode", new { mode = "CWU" });
         Assert.Equal(HttpStatusCode.OK, modeResp.StatusCode);
 
-        // Set a wide CWU filter so the peak at bin 8100 is inside the passband
-        // ([7936, 8192] at the 192 kHz default sample rate).
+        // Set a wide CWU filter so the peak at bin 8300 is inside the passband.
         var bwResp = await client.PostAsJsonAsync("/api/bandwidth", new { low = 0, high = 3000 });
         Assert.Equal(HttpStatusCode.OK, bwResp.StatusCode);
 
@@ -336,20 +330,16 @@ public class ZeroBeatEndpointTests : IClassFixture<ZeroBeatEndpointTests.NoSigna
     // Test factories
     // -------------------------------------------------------------------------
 
-    // Flat noise. Peak bin 8100 inside the wide CWU filter (0..3000 Hz =
-    // passband bins [7936, 8192] at 192 kHz) set by the test, so the SNR gate
-    // — not a passband miss — is what's exercised. peakDb -89 dB, FloorDb
-    // -90 dB → SNR 1 dB. At 192 kHz the gate floors at 2 dB (6 dB − 10·log10(4)
-    // ≈ −0.02 dB → clamped to 2.0), so 1 dB < 2.0 → ZeroBeat returns null →
-    // endpoint 422.
+    // Flat noise. Peak bin 8300 inside the wide CWU filter (0..3000 Hz) set by
+    // the test. peakDb -88 dB, FloorDb -90 dB → SNR 2 dB < 6 dB gate →
+    // ZeroBeat returns null → endpoint 422.
     public sealed class NoSignalFactory : WebApplicationFactory<Program>
     {
         private static readonly PeakAtBinEngine _engine = new()
         {
-            Phase1PeakBin = 8100,
-            Phase1PeakDb  = -89,
-            Phase2PeakBin = 8100,
-            Phase2PeakDb  = -89,
+            Phase1PeakBin = 8300,
+            Phase1PeakDb  = -88,
+            Phase2PeakDb  = -88,
             FloorDb       = -90,
         };
 
@@ -370,16 +360,15 @@ public class ZeroBeatEndpointTests : IClassFixture<ZeroBeatEndpointTests.NoSigna
         }
     }
 
-    // Strong carrier. Peak bin 8100 inside the wide CWU filter (0..3000 Hz =
-    // passband bins [7936, 8192] at 192 kHz) set by the test. Phase1PeakDb
-    // -30 dB, FloorDb -90 dB → SNR 60 dB >> 6 dB gate → ZeroBeat returns
-    // non-null → endpoint 200.
+    // Strong carrier. Peak bin 8300 inside the wide CWU filter (0..3000 Hz) set
+    // by the test. Phase1PeakDb -30 dB, FloorDb -90 dB → SNR 60 dB >> 6 dB
+    // gate → ZeroBeat returns non-null → endpoint 200.
     public sealed class StrongSignalFactory : WebApplicationFactory<Program>
     {
         private static readonly PeakAtBinEngine _engine = new()
         {
-            Phase1PeakBin = 8100,   // inside the passband [7936, 8192] at 192 kHz
-            Phase2PeakBin = 8100,
+            Phase1PeakBin = 8300,   // inside the wide CWU filter set by the test
+            Phase2PeakBin = 8300,
             Phase1PeakDb  = -30,
             FloorDb       = -90,
         };
