@@ -1416,12 +1416,32 @@ public sealed class WdspDspEngine : IDspEngine
         // stay running so fexchange2 keeps producing IQ for the monitor
         // demod path. We re-derive TXA target = (MOX || monitor) so the
         // monitor path doesn't go silent when the operator releases MOX.
-        int rxaPrior, txaPrior = -1;
+        // RX-resume warmth (issue #468, follow-up to #497): we deliberately
+        // leave the RXA channel at state=1 across the whole MOX cycle and do
+        // NOT damp it to state=0 on key-down. Damping the channel meant that
+        // on un-key the RXA pipeline had to walk its slew + AGC + overlap-add
+        // state back up from a flushed/quiescent state at the *same* moment the
+        // radio's RX front end was recovering from RX_GNDonTX un-grounding —
+        // the two stack into the operator-observed ~2 sec RX-resume ramp on G2
+        // (P2). Thetis avoids this by construction: in the common single-VFO
+        // case it leaves the WDSP RX channel running through TX and mutes the
+        // audio at the mixer (console.cs:29580 `RX1_shutdown` is conditional;
+        // Audio.cs MuteRX1), so its AGC stays converged and RX un-mutes
+        // instantly. We mirror that: keep RXA warm here, and mute the RX audio
+        // output while keyed in DspPipelineService (the `_keyed` gate), so the
+        // operator never hears band RX during TX while the DSP stays converged.
+        //
+        // The RX IQ fed to the warm channel during TX is the radio's grounded
+        // RX input (near-silence), so the channel demodulates near-silence and
+        // its AGC simply tracks the noise floor — no spurious audio leaks
+        // (it's muted downstream anyway) and the channel is hot the instant the
+        // real signal returns.
+        int txaPrior = -1;
         bool wantTxa = moxOn || _monitorRequested;
         if (moxOn)
         {
             _moxOn = true;
-            rxaPrior = NativeMethods.SetChannelState(rxaId, 0, 1);
+            // NOTE: no SetChannelState(rxaId, 0, 1) — RXA stays at state=1.
             if (!_txaRunning)
             {
                 txaPrior = NativeMethods.SetChannelState(txaId, 1, 0);
@@ -1449,19 +1469,20 @@ public sealed class WdspDspEngine : IDspEngine
                 txaPrior = NativeMethods.SetChannelState(txaId, 0, 1);
                 _txaRunning = false;
             }
-            rxaPrior = NativeMethods.SetChannelState(rxaId, 1, 0);
+            // NOTE: no SetChannelState(rxaId, 1, 0) — RXA was never damped, so
+            // there is nothing to bring back up. The pipeline's `_keyed` gate
+            // un-mutes the already-converged RX audio on this same edge.
             // Unkeying: clear the stage-meter snapshot so UI doesn't latch the
             // last-during-TX reading while idle. The next MOX-on will publish
             // fresh data on its first ProcessTxBlock.
             lock (_txMeterPublishLock) { _latestTxStageMeters = null; }
         }
-        // Diagnostic 2026-04-18: capture the prior-state return of every
-        // SetChannelState call so we can detect cases where the requested
-        // transition was a no-op (prior == new) — that's the failure mode that
-        // looks like "RX audio doesn't come back after MOX-off".
+        // Diagnostic 2026-04-18: capture the prior-state return of the TXA
+        // SetChannelState call so we can detect a requested transition that was
+        // a no-op (prior == new). RXA is left warm so it has no prior to log.
         _log.LogInformation(
-            "wdsp.setMox on={Mox} rxa={Rxa} (prior {RxaPrior}) txa={Txa} (prior {TxaPrior})",
-            moxOn, rxaId, rxaPrior, txaId, txaPrior);
+            "wdsp.setMox on={Mox} rxa={Rxa} (warm) txa={Txa} (prior {TxaPrior})",
+            moxOn, rxaId, txaId, txaPrior);
     }
 
     public TxStageMeters GetTxStageMeters()

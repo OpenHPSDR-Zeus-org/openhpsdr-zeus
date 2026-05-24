@@ -1614,8 +1614,32 @@ public class DspPipelineService : BackgroundService,
         // don't broadcast it. The VST RX seam still fires on the drained RX
         // so RX-side plugins keep running even while monitor is on.
         bool txMonitorOn = engine.IsTxMonitorOn;
+        // Always drain the WDSP RX audio ring, even while keyed. Issue #468
+        // follow-up: WdspDspEngine.SetMox now leaves the RXA channel warm
+        // (state=1) through the whole MOX cycle instead of damping it to
+        // state=0, so the DSP/AGC stay converged and RX resumes instantly on
+        // un-key (mirrors Thetis's MuteRX1-at-the-mixer approach). The cost is
+        // that ReadAudio now returns live band RX while keyed; we MUST NOT
+        // publish that (the operator would hear band RX while transmitting),
+        // but we still drain it so the WDSP audio ring doesn't back up and so
+        // the first post-un-key block is fresh rather than a stale TX-period
+        // backlog. The `_keyed` gate on PublishAudio below enforces the mute.
         int audioSampleCount = engine.ReadAudio(channel, audioBuf);
-        if (audioSampleCount > 0)
+        // RX audio is muted while keyed (MOX or TUN). The WDSP RX channel is
+        // kept warm, so this is a pure downstream mute — no DSP state is torn
+        // down and un-key resumes from a converged pipeline.
+        bool rxAudioMuted = _keyed;
+        if (rxAudioMuted)
+        {
+            // Consume the rising-edge fade-out one-shot here: with the mute in
+            // place the RX→TX transition is already silent (the operator hears
+            // TX, not band RX), so there's no click to ramp out — and leaving
+            // the flag armed would make it (as the leading `if` below) wrongly
+            // ramp DOWN the first un-keyed resume block instead of letting the
+            // fade-IN one-shot ramp it up.
+            _rxFadeOutPending = false;
+        }
+        if (audioSampleCount > 0 && !rxAudioMuted)
         {
             // MOX-edge fade envelope. Ramps the first ~5 ms of this block
             // either down (rising edge: last block before TX silence) or up
