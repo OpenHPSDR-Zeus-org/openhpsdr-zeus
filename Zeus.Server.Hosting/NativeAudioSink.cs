@@ -193,17 +193,20 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
             _output = null;
         }
 
-        // Subscribe to TX-active edges so we can drain the ring on TX-on.
-        // The radio sample clock and the WASAPI playback clock drift relative
-        // to each other (the radio runs slightly faster than the soundcard on
-        // most Windows systems), so the ring slowly accumulates a backlog
-        // over a multi-minute session. Without this hook the operator hears
-        // up to ~1.3 sec of stale RX audio after pressing MOX or TUNE before
-        // the buffer drains to silence. macOS / Linux see this too in
-        // principle but their audio backends drift much less and the ring
-        // stays at near-zero steady-state depth, so the clear is a no-op
-        // there. See issue #403 for the original symptom report and the
-        // diagnostic write-up.
+        // Subscribe to TX-active edges so we can drain the ring on BOTH
+        // the TX-on and TX-off transitions. The radio sample clock and the
+        // WASAPI playback clock drift relative to each other (the radio runs
+        // slightly faster than the soundcard on most Windows systems), so the
+        // ring slowly accumulates a backlog. Without the TX-on clear the
+        // operator hears up to ~1.3 sec of stale RX audio after pressing MOX
+        // or TUNE before the buffer drains to silence (issue #403). The same
+        // drift refills the ring over the TX period, so without the TX-off
+        // clear the operator then waits ~1-2 sec for that stale backlog to
+        // play out before fresh post-MOX RX audio reaches the ear (the TX→RX
+        // half of issue #468). macOS / Linux see this too in principle but
+        // their audio backends drift much less and the ring stays at near-
+        // zero steady-state depth, so both clears are no-ops there. See
+        // OnTxActiveChanged for the full per-edge rationale.
         _tx = _services?.GetService(typeof(TxService)) as TxService;
         if (_tx is not null)
         {
@@ -227,19 +230,40 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
     }
 
     /// <summary>
-    /// TxService.TxActiveChanged subscriber. On the rising edge (TX
-    /// engaging via MOX, TUN, or TwoTone) drains the RX audio ring so
-    /// the operator hears instant silence rather than the accumulated
-    /// pre-TX backlog. The audition ring is left alone — audition is
-    /// gated separately and pre-MOX preview is meaningful right up to
-    /// the MOX edge; the existing audition gates handle the rest.
-    /// On falling edge (TX releasing → back to RX) this is a no-op
-    /// because the ring is already empty after the drain; new RX
-    /// samples land in an empty ring and reach the speaker promptly.
+    /// TxService.TxActiveChanged subscriber. Drains the RX audio ring on
+    /// BOTH edges of TX-active (MOX / TUN / TwoTone):
+    ///
+    /// <para><b>Rising edge (RX→TX):</b> clears the pre-TX backlog so the
+    /// operator hears instant silence rather than seconds of stale RX audio
+    /// playing out while keyed. This is the original PR #454 / issue #403
+    /// fix and is unchanged.</para>
+    ///
+    /// <para><b>Falling edge (TX→RX):</b> ALSO clears the ring. While keyed,
+    /// the RX demod chain keeps producing audio (WDSP RXA is damped but
+    /// <c>fexchange0</c> still cycles and the pipeline keeps calling
+    /// <c>ReadAudio</c> → <c>Publish</c>), so the ring re-accumulates a
+    /// backlog over the TX period for exactly the same radio-clock-vs-
+    /// soundcard-clock drift reason described on the rising edge. On Windows
+    /// (WASAPI) that backlog is up to ~1–2 sec by the time the operator
+    /// un-keys, and without this clear the fresh post-MOX RX audio queues
+    /// <em>behind</em> the stale backlog — the operator waits for the stale
+    /// samples to play out before live RX reaches the ear. That is the
+    /// "MOX delay still in 0.8.3 on TX→RX" half of issue #468. Draining
+    /// here lets the next pipeline tick's fresh RX audio land in an empty
+    /// ring and reach the speaker within one playback period. The brief
+    /// gap until the first fresh sample arrives is covered by the existing
+    /// underrun→silence path — it is the same gap as the post-MOX RX
+    /// resume itself, not an extra dropout. macOS / Linux drift far less,
+    /// so as with the rising edge this is effectively a no-op there.</para>
+    ///
+    /// <para>The audition ring is left alone on both edges — audition is
+    /// gated separately and pre-MOX preview is meaningful right up to the
+    /// MOX edge; the existing audition gates handle the rest.</para>
     /// </summary>
     internal void OnTxActiveChanged(bool txActive)
     {
-        if (!txActive) return;
+        // Drain on either edge — see the XML doc for why the falling edge
+        // (TX→RX) needs the clear just as much as the rising edge.
         _ring.Clear();
     }
 

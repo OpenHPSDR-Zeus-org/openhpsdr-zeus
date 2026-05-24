@@ -86,19 +86,28 @@ public class TxActiveChangedTests : IDisposable
     }
 
     [Fact]
-    public void NativeAudioSink_OnTxActiveChanged_False_DoesNotMutateRing()
+    public void NativeAudioSink_OnTxActiveChanged_False_ClearsRing()
     {
-        // Falling-edge TX (TX→RX) must NOT drain the ring — there's nothing
-        // useful to drain (the rising-edge handler already did) and we want
-        // any in-flight RX samples to play through immediately.
+        // Falling-edge TX (TX→RX) ALSO drains the ring. While keyed the RX
+        // demod chain keeps producing audio and the pipeline keeps publishing
+        // it, so the ring re-accumulates a backlog over the TX period (same
+        // radio-clock-vs-soundcard-clock drift as the rising edge). On Windows
+        // that stale backlog is up to ~1-2 sec by un-key time; if it isn't
+        // cleared the fresh post-MOX RX audio queues behind it and the
+        // operator waits for the stale samples to play out before live RX
+        // reaches the ear — the TX→RX half of issue #468. Draining on the
+        // falling edge lets the next tick's fresh RX audio reach the speaker
+        // within one playback period.
         var sink = new NativeAudioSink(NullLogger<NativeAudioSink>.Instance);
         var frame = BuildMonoFrame(600);
         sink.Publish(in frame);
 
-        int depthBefore = sink.CurrentRingDepth;
+        Assert.True(sink.CurrentRingDepth >= 600,
+            $"setup precondition: ring should be filled. got {sink.CurrentRingDepth}");
+
         sink.OnTxActiveChanged(false);
 
-        Assert.Equal(depthBefore, sink.CurrentRingDepth);
+        Assert.Equal(0, sink.CurrentRingDepth);
     }
 
     [Fact]
