@@ -248,6 +248,11 @@ public static class ZeusHost
         // the 128..181 ideal window, so PS has a recovery path on first arm. Idle
         // when PS is off or AutoAttenuate is off — no wire, no engine pokes.
         builder.Services.AddHostedService<PsAutoAttenuateService>();
+        // Promote the radio's hardware-PTT echo (HL2 rear KEY tip, external
+        // PTT line) into a host MOX request — without it the gateware-driven
+        // CW carrier transmits while Zeus stays unkeyed (UI off, meters at
+        // idle cadence, FR-6 timeout disarmed).
+        builder.Services.AddHostedService<ExternalPttService>();
 
         // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
         // hung login surfaces quickly in the UI.
