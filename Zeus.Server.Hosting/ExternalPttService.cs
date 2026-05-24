@@ -51,6 +51,7 @@ public sealed class ExternalPttService : IHostedService, IDisposable
 
     private readonly RadioService _radio;
     private readonly TxService _tx;
+    private readonly CwSidetoneSource? _sidetone;
     private readonly ILogger<ExternalPttService> _log;
 
     private readonly object _sync = new();
@@ -65,10 +66,11 @@ public sealed class ExternalPttService : IHostedService, IDisposable
     // ThreadPool coexist cleanly.
     private Timer? _hangTimer;
 
-    public ExternalPttService(RadioService radio, TxService tx, ILogger<ExternalPttService> log)
+    public ExternalPttService(RadioService radio, TxService tx, ILogger<ExternalPttService> log, CwSidetoneSource? sidetone = null)
     {
         _radio = radio;
         _tx = tx;
+        _sidetone = sidetone;
         _log = log;
     }
 
@@ -113,9 +115,23 @@ public sealed class ExternalPttService : IHostedService, IDisposable
 
     private void OnHardwarePttChanged(bool on)
     {
+        // Sidetone tracks the hardware key directly, NOT the hang-held MOX
+        // state — the operator wants to hear their actual keying rhythm
+        // (including the brief inter-character spaces that the hang timer
+        // smooths over for the radio's TX). Only fire in CW modes; an SSB
+        // operator pressing mic PTT would otherwise hear a 600 Hz monitor
+        // tone competing with their voice.
+        if (_sidetone is not null && IsCwMode(_radio.Snapshot().Mode))
+        {
+            if (on) _sidetone.Down();
+            else _sidetone.Up();
+        }
         if (on) HandleRising();
         else HandleFalling();
     }
+
+    private static bool IsCwMode(Zeus.Contracts.RxMode mode) =>
+        mode is Zeus.Contracts.RxMode.CWU or Zeus.Contracts.RxMode.CWL;
 
     private void HandleRising()
     {

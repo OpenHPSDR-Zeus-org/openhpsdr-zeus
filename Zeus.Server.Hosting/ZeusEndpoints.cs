@@ -478,8 +478,17 @@ public static class ZeusEndpoints
         app.MapGet("/api/cw/settings", (CwSettingsStore store) =>
             Results.Ok(store.Get()));
 
-        app.MapPut("/api/cw/settings", (CwSettingsSetRequest req, CwSettingsStore store) =>
-            Results.Ok(store.Save(req)));
+        app.MapPut("/api/cw/settings", (CwSettingsSetRequest req, CwSettingsStore store, CwSidetoneSource sidetone) =>
+        {
+            // Save first so the persisted view is the source of truth even
+            // if the live generator update races somehow. Then push the
+            // (post-clamp) values to the live generator so a slider drag
+            // updates pitch/gain without a restart.
+            var snapshot = store.Save(req);
+            sidetone.SetPitchHz(snapshot.SidetoneHz);
+            sidetone.SetGainDb(snapshot.SidetoneGainDb);
+            return Results.Ok(snapshot);
+        });
 
         // Mic-gain: N dB in [-40, +10], scales WDSP TXA panel-gain-1 the same
         // way Thetis does (console.cs:28805 setAudioMicGain → Audio.MicPreamp =
