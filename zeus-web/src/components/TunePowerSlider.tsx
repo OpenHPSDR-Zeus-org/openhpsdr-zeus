@@ -19,18 +19,18 @@
 // (https://github.com/dl1bz/deskhpsdr), maintained by Heiko (DL1BZ).
 // Both are GPL-2.0-or-later.
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { setTuneDrive } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 import { usePaStore } from '../state/pa-store';
+import { useLiveSlider } from '../hooks/useLiveSlider';
 
-// Same 0..100 range and debounce shape as DriveSlider; the backend picks
-// between the two sources based on TUN keying state so the UX/wire are
+// Same 0..100 range and stream-during-drag shape as DriveSlider; the backend
+// picks between the two sources based on TUN keying state so the UX/wire are
 // symmetric.
 const MIN = 0;
 const MAX = 100;
-const DEBOUNCE_MS = 100;
 
 export function TunePowerSlider() {
   const connected = useConnectionStore((s) => s.status === 'Connected');
@@ -40,39 +40,27 @@ export function TunePowerSlider() {
   const paMaxWatts = usePaStore((s) => s.settings.global.paMaxPowerWatts);
   const targetWatts = paMaxWatts > 0 ? Math.round((paMaxWatts * tunePercent) / 100) : null;
 
-  const inflightAbort = useRef<AbortController | null>(null);
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSent = useRef<number>(tunePercent);
   const previousOnError = useRef<number>(tunePercent);
 
-  const sendDebounced = useCallback((v: number) => {
-    if (debounceTimer.current != null) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => {
-      if (v === lastSent.current) return;
-      inflightAbort.current?.abort();
-      const ac = new AbortController();
-      inflightAbort.current = ac;
-      const prevValue = lastSent.current;
-      lastSent.current = v;
-      previousOnError.current = prevValue;
-      setTuneDrive(v, ac.signal)
-        .then((r) => {
-          if (ac.signal.aborted) return;
-          if (r.tunePercent !== v) setTunePercent(r.tunePercent);
-        })
-        .catch((err) => {
-          if (ac.signal.aborted) return;
-          if (err instanceof DOMException && err.name === 'AbortError') return;
-          setTunePercent(previousOnError.current);
-          lastSent.current = previousOnError.current;
-        });
-    }, DEBOUNCE_MS);
-  }, [setTunePercent]);
-
-  useEffect(() => () => {
-    inflightAbort.current?.abort();
-    if (debounceTimer.current != null) clearTimeout(debounceTimer.current);
-  }, []);
+  const liveSlider = useLiveSlider<number>({
+    send: useCallback(
+      (v: number, signal: AbortSignal) => {
+        const prevValue = previousOnError.current;
+        return setTuneDrive(v, signal)
+          .then((r) => {
+            if (signal.aborted) return;
+            previousOnError.current = r.tunePercent;
+            if (r.tunePercent !== v) setTunePercent(r.tunePercent);
+          })
+          .catch((err) => {
+            if (signal.aborted) return;
+            if (err instanceof DOMException && err.name === 'AbortError') return;
+            setTunePercent(prevValue);
+          });
+      },
+      [setTunePercent],
+    ),
+  });
 
   // Server is authoritative for tunePercent (StateDto.TunePct, persisted via
   // RadioStateStore, hydrated into tx-store on every fresh RadioStateDto).
@@ -82,7 +70,7 @@ export function TunePowerSlider() {
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = Number(e.currentTarget.value);
     setTunePercent(v);
-    sendDebounced(v);
+    liveSlider.push(v);
   };
 
   return (
@@ -96,6 +84,9 @@ export function TunePowerSlider() {
         value={tunePercent}
         disabled={!connected}
         onChange={onChange}
+        onMouseUp={() => liveSlider.flush()}
+        onTouchEnd={() => liveSlider.flush()}
+        onKeyUp={() => liveSlider.flush()}
         style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}
       />
       <span

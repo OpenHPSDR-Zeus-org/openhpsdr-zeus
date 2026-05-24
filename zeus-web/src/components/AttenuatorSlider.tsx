@@ -45,6 +45,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { setAttenuator, setAutoAtt } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useLiveSlider } from '../hooks/useLiveSlider';
 
 // HpsdrAtten range — the server clamps to [MIN, MAX], but pinning the UI
 // to the same bounds avoids a round-trip that would visually snap the thumb.
@@ -65,27 +66,25 @@ export function AttenuatorSlider() {
   const sliderValue = dragValue ?? userAtten;
   const effective = Math.min(MAX, sliderValue + offsetDb);
 
-  const attenAbort = useRef<AbortController | null>(null);
-  const latestSent = useRef<number>(userAtten);
   const autoAbort = useRef<AbortController | null>(null);
 
-  const sendValue = useCallback(
-    (v: number) => {
-      if (v === latestSent.current) return;
-      latestSent.current = v;
-      attenAbort.current?.abort();
-      const ac = new AbortController();
-      attenAbort.current = ac;
-      setAttenuator(v, ac.signal)
-        .then((next) => {
-          if (!ac.signal.aborted) applyState(next);
-        })
-        .catch(() => {
-          /* next poll will reconcile; don't noisily log on abort */
-        });
-    },
-    [applyState],
-  );
+  // Stream during drag (rAF coalesced), flush on release — see useLiveSlider
+  // notes in hooks/useLiveSlider.ts. Previously the wire POST only fired on
+  // mouseUp / touchEnd / keyUp so the attenuator didn't change audibly until
+  // release; now it tracks the thumb in real time.
+  const liveSlider = useLiveSlider<number>({
+    send: useCallback(
+      (v: number, signal: AbortSignal) =>
+        setAttenuator(v, signal)
+          .then((next) => {
+            if (!signal.aborted) applyState(next);
+          })
+          .catch(() => {
+            /* next poll will reconcile; don't noisily log on abort */
+          }),
+      [applyState],
+    ),
+  });
 
   const toggleAuto = useCallback(() => {
     if (!connected) return;
@@ -103,7 +102,6 @@ export function AttenuatorSlider() {
 
   useEffect(
     () => () => {
-      attenAbort.current?.abort();
       autoAbort.current?.abort();
     },
     [],
@@ -138,17 +136,21 @@ export function AttenuatorSlider() {
         step={1}
         value={sliderValue}
         disabled={!connected || autoEnabled}
-        onChange={(e) => setDragValue(Number(e.currentTarget.value))}
+        onChange={(e) => {
+          const v = Number(e.currentTarget.value);
+          setDragValue(v);
+          liveSlider.push(v);
+        }}
         onMouseUp={() => {
-          if (dragValue !== null) sendValue(dragValue);
+          liveSlider.flush();
           setDragValue(null);
         }}
         onTouchEnd={() => {
-          if (dragValue !== null) sendValue(dragValue);
+          liveSlider.flush();
           setDragValue(null);
         }}
         onKeyUp={() => {
-          if (dragValue !== null) sendValue(dragValue);
+          liveSlider.flush();
           setDragValue(null);
         }}
         style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}

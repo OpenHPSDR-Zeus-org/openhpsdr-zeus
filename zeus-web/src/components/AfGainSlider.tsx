@@ -42,9 +42,10 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useState } from 'react';
 import { setRxAfGain } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useLiveSlider } from '../hooks/useLiveSlider';
 
 // Master RX AF gain in dB. Drives WDSP's SetRXAPanelGain1(linear) server-side
 // after a dB→linear conversion; the browser audio GainNode stays at 1.0 so
@@ -63,49 +64,23 @@ export function AfGainSlider() {
   const [dragValue, setDragValue] = useState<number | null>(null);
   const value = dragValue ?? serverAf;
 
-  const inflightAbort = useRef<AbortController | null>(null);
-  const latestSent = useRef<number>(serverAf);
-
-  const sendValue = useCallback(
-    (v: number) => {
-      if (v === latestSent.current) return;
-      latestSent.current = v;
-      inflightAbort.current?.abort();
-      const ac = new AbortController();
-      inflightAbort.current = ac;
-      setRxAfGain(v, ac.signal)
-        .then((next) => {
-          if (!ac.signal.aborted) applyState(next);
-        })
-        .catch(() => {
-          /* next poll will reconcile; don't noisily log on abort */
-        });
-    },
-    [applyState],
-  );
-
-  // Debounced send while dragging — 100ms is fast enough to feel immediate
-  // but prevents excessive API calls during a quick slider sweep.
-  const debounceTimer = useRef<number | null>(null);
-  const sendDebounced = useCallback(
-    (v: number) => {
-      if (debounceTimer.current !== null) {
-        clearTimeout(debounceTimer.current);
-      }
-      debounceTimer.current = window.setTimeout(() => {
-        sendValue(v);
-        debounceTimer.current = null;
-      }, 100);
-    },
-    [sendValue],
-  );
-
-  useEffect(() => () => {
-    inflightAbort.current?.abort();
-    if (debounceTimer.current !== null) {
-      clearTimeout(debounceTimer.current);
-    }
-  }, []);
+  // Stream during drag (rAF coalesced — ~16 ms at 60 Hz), flush on release.
+  // The previous 100 ms debounce was perceptible as a lag in the audible AF
+  // response on a fast sweep; rAF is fast enough to feel instant while still
+  // capping the wire rate to one POST per paint.
+  const liveSlider = useLiveSlider<number>({
+    send: useCallback(
+      (v: number, signal: AbortSignal) =>
+        setRxAfGain(v, signal)
+          .then((next) => {
+            if (!signal.aborted) applyState(next);
+          })
+          .catch(() => {
+            /* next poll will reconcile; don't noisily log on abort */
+          }),
+      [applyState],
+    ),
+  });
 
   return (
     <label className="knob-group" style={{ minWidth: 170 }}>
@@ -120,36 +95,18 @@ export function AfGainSlider() {
         onChange={(e) => {
           const newValue = Number(e.currentTarget.value);
           setDragValue(newValue);
-          sendDebounced(newValue);
+          liveSlider.push(newValue);
         }}
         onMouseUp={() => {
-          if (dragValue !== null) {
-            if (debounceTimer.current !== null) {
-              clearTimeout(debounceTimer.current);
-              debounceTimer.current = null;
-            }
-            sendValue(dragValue);
-          }
+          liveSlider.flush();
           setDragValue(null);
         }}
         onTouchEnd={() => {
-          if (dragValue !== null) {
-            if (debounceTimer.current !== null) {
-              clearTimeout(debounceTimer.current);
-              debounceTimer.current = null;
-            }
-            sendValue(dragValue);
-          }
+          liveSlider.flush();
           setDragValue(null);
         }}
         onKeyUp={() => {
-          if (dragValue !== null) {
-            if (debounceTimer.current !== null) {
-              clearTimeout(debounceTimer.current);
-              debounceTimer.current = null;
-            }
-            sendValue(dragValue);
-          }
+          liveSlider.flush();
           setDragValue(null);
         }}
         style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}
