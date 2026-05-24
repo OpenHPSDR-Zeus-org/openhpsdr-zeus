@@ -47,49 +47,25 @@ import { useConnectionStore } from '../state/connection-store';
 
 // Translucent rectangle drawn inside the panadapter container to show the
 // active receive filter passband, mapped from [filterLowHz, filterHighHz]
-// relative to the tuned dial (VfoHz). Asymmetric by design: USB lives to the
-// right of carrier, LSB to the left, CW narrow around zero, AM symmetric.
+// relative to the VFO centre. Asymmetric by design: USB lives to the right
+// of carrier, LSB to the left, CW narrow around zero, AM symmetric.
 // Positioned by percentage of the total span so it tracks resize and tune
 // without measuring DOM width.
-//
-// The panadapter centres on the hardware NCO (radioLoHz) while vfoHz roams
-// independently. Anchoring the passband to vfoHz — not centerHz — keeps the
-// filter overlay glued to the operator's tuned signal so clicking the
-// spectrum visibly slides the passband around the (stationary) waterfall.
-//
-// CW fix (issue #429): filter edges are baseband Hz relative to the LO,
-// not the dial. In CW the LO sits ±cw_pitch from the dial, so we anchor
-// at loHz = vfoHz − cwPitch instead of vfoHz. cwPitchHz comes from the
-// server (StateDto.CwPitchHz → CwDefaults.PitchHz). Mirrors Thetis
-// PanDisplay.cs:1213.
 export function PassbandOverlay() {
   const centerHz = useDisplayStore((s) => s.centerHz);
   const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
   const width = useDisplayStore((s) => s.panDb?.length ?? 0);
-  // Pure-pan viewport offset shifts the rendered window relative to the
-  // hardware NCO; the passband must shift with it so it stays glued to the
-  // dial frequency on-screen.
-  const viewportOffsetHz = useDisplayStore((s) => s.viewportOffsetHz);
   const filterLowHz = useConnectionStore((s) => s.filterLowHz);
   const filterHighHz = useConnectionStore((s) => s.filterHighHz);
-  const vfoHz = useConnectionStore((s) => s.vfoHz);
-  const mode = useConnectionStore((s) => s.mode);
-  const cwPitchHz = useConnectionStore((s) => s.cwPitchHz);
 
   if (!width || hzPerPixel <= 0) return null;
 
   const spanHz = width * hzPerPixel;
-  const center = Number(centerHz) + viewportOffsetHz;
+  const center = Number(centerHz);
   const startHz = center - spanHz / 2;
 
-  // Anchor the filter overlay at the LO, not at the dial. In CW the LO
-  // sits cw_pitch below (CWU) or above (CWL) the dial; in all other
-  // modes LO == dial. Mirrors Thetis PanDisplay.cs:1213-1214 which
-  // positions filter edges relative to Low (the LO-based display edge).
-  const cwOffset = mode === 'CWU' ? cwPitchHz : mode === 'CWL' ? -cwPitchHz : 0;
-  const loHz = vfoHz - cwOffset;
-  const passLowHz = loHz + filterLowHz;
-  const passHighHz = loHz + filterHighHz;
+  const passLowHz = center + filterLowHz;
+  const passHighHz = center + filterHighHz;
   const leftPct = ((passLowHz - startHz) / spanHz) * 100;
   const rightPct = ((passHighHz - startHz) / spanHz) * 100;
   const widthPct = rightPct - leftPct;

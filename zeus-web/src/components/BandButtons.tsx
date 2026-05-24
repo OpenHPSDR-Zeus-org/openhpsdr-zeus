@@ -52,7 +52,6 @@ import {
   type RxMode,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
-import { useDisplayStore } from '../state/display-store';
 import { BANDS, bandOf } from './design/data';
 import { toolbarFavDragMime } from './toolbar/ToolbarFavorites';
 
@@ -135,10 +134,6 @@ export function BandButtons() {
       const targetMode: RxMode | null = stored?.mode ?? null;
 
       useConnectionStore.setState({ vfoHz: targetHz });
-      // Band switch is an explicit tune-to-frequency action per the pure-pan
-      // PRD; reset any held viewport offset so the dial snaps back to centre
-      // on the new band.
-      useDisplayStore.getState().setViewportOffsetHz(0);
       setVfo(targetHz)
         .then(applyState)
         .catch(() => {
