@@ -24,6 +24,25 @@ namespace Zeus.Server;
 // pointed at the Zeus instance.
 public sealed class DisplaySettingsStore : IDisposable
 {
+    // Defensive bounds for any persisted dB window. Mirrors DB_ABS_LIMIT /
+    // MIN_SPAN_DB in zeus-web's display-settings-store.ts. A range outside
+    // these bounds (or with span < MIN_SPAN_DB) would render the panadapter
+    // or waterfall as a single flat colour, so we drop the write instead of
+    // poisoning zeus-prefs.db. Either endpoint being null means "field not
+    // provided in this PUT" and is handled by the caller.
+    private const double DbAbsLimit = 200;
+    private const double MinSpanDb = 20;
+
+    private static bool IsValidRange(double? min, double? max)
+    {
+        if (!min.HasValue || !max.HasValue) return false;
+        if (double.IsNaN(min.Value) || double.IsNaN(max.Value)) return false;
+        if (double.IsInfinity(min.Value) || double.IsInfinity(max.Value)) return false;
+        if (min.Value < -DbAbsLimit || max.Value > DbAbsLimit) return false;
+        if (max.Value - min.Value < MinSpanDb) return false;
+        return true;
+    }
+
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<DisplaySettingsEntry> _docs;
     private readonly ILogger<DisplaySettingsStore> _log;
@@ -99,14 +118,15 @@ public sealed class DisplaySettingsStore : IDisposable
             e.Mode = NormalizeMode(mode);
             e.Fit = NormalizeFit(fit);
             e.RxTraceColor = NormalizeHexColor(rxTraceColor);
-            if (dbMin.HasValue) e.DbMin = dbMin;
-            if (dbMax.HasValue) e.DbMax = dbMax;
-            if (txDbMin.HasValue) e.TxDbMin = txDbMin;
-            if (txDbMax.HasValue) e.TxDbMax = txDbMax;
-            if (wfDbMin.HasValue) e.WfDbMin = wfDbMin;
-            if (wfDbMax.HasValue) e.WfDbMax = wfDbMax;
-            if (wfTxDbMin.HasValue) e.WfTxDbMin = wfTxDbMin;
-            if (wfTxDbMax.HasValue) e.WfTxDbMax = wfTxDbMax;
+            // Accept a (min, max) pair only when it's a non-degenerate window.
+            // The old code wrote whatever the client sent, so a dB drag that
+            // hit the abs-limit on both endpoints persisted min == max == -200
+            // and the next page load rendered a solid colour. See zeus-web's
+            // sanitizeRange + clampShift for the matching client-side guard.
+            if (IsValidRange(dbMin, dbMax)) { e.DbMin = dbMin; e.DbMax = dbMax; }
+            if (IsValidRange(txDbMin, txDbMax)) { e.TxDbMin = txDbMin; e.TxDbMax = txDbMax; }
+            if (IsValidRange(wfDbMin, wfDbMax)) { e.WfDbMin = wfDbMin; e.WfDbMax = wfDbMax; }
+            if (IsValidRange(wfTxDbMin, wfTxDbMax)) { e.WfTxDbMin = wfTxDbMin; e.WfTxDbMax = wfTxDbMax; }
             e.UpdatedUtc = DateTime.UtcNow;
             if (e.Id == 0) _docs.Insert(e);
             else _docs.Update(e);

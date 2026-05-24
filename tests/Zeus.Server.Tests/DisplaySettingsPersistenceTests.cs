@@ -121,4 +121,50 @@ public class DisplaySettingsPersistenceTests : IDisposable
         Assert.Equal(-120, dto.DbMin);
         Assert.Equal(-40, dto.DbMax);
     }
+
+    // Regression for the "white waterfall" symptom: dragging the waterfall dB
+    // scale far enough used to push both endpoints to the same ±DB_ABS_LIMIT
+    // wall, persisting min == max. Next page load mapped the entire colormap
+    // input to one colour. The store now drops degenerate writes so a buggy
+    // client (or a stray API call) can't leave the DB in that state.
+    [Theory]
+    [InlineData(-200, -200)] // both at -DbAbsLimit (the original symptom)
+    [InlineData(-50, -50)]   // min == max anywhere
+    [InlineData(-60, -50)]   // span (10) below MinSpanDb (20)
+    [InlineData(-50, -60)]   // inverted
+    [InlineData(-300, -50)]  // min outside abs limit
+    [InlineData(-50, 300)]   // max outside abs limit
+    public void SaveMode_DegenerateWfRange_IsRejectedAndPriorValueKept(double badMin, double badMax)
+    {
+        using var store = BuildStore();
+        store.SaveMode("basic", "fill", "#FFA028",
+            wfDbMin: -125, wfDbMax: -55);
+
+        store.SaveMode("basic", "fill", "#FFA028",
+            wfDbMin: badMin, wfDbMax: badMax);
+
+        var dto = store.Get();
+        Assert.Equal(-125, dto.WfDbMin);
+        Assert.Equal(-55, dto.WfDbMax);
+    }
+
+    [Fact]
+    public void SaveMode_PartialDegenerateRange_OnlyAffectedPairIsRejected()
+    {
+        using var store = BuildStore();
+        store.SaveMode("basic", "fill", "#FFA028",
+            dbMin: -130, dbMax: -60,
+            wfDbMin: -125, wfDbMax: -55);
+
+        // Valid pan update, but degenerate wf update in the same call.
+        store.SaveMode("basic", "fill", "#FFA028",
+            dbMin: -120, dbMax: -50,
+            wfDbMin: -200, wfDbMax: -200);
+
+        var dto = store.Get();
+        Assert.Equal(-120, dto.DbMin);
+        Assert.Equal(-50, dto.DbMax);
+        Assert.Equal(-125, dto.WfDbMin);
+        Assert.Equal(-55, dto.WfDbMax);
+    }
 }
