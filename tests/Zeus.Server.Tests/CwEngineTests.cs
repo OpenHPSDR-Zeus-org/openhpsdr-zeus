@@ -133,6 +133,88 @@ public class CwEngineTests
         return n;
     }
 
+    // --- Raw-key path (TCI keyer:1 / keyer:0, zeus-j3t) -----------------
+
+    [Fact]
+    public void RenderRawKey_FullDuration_ProducesAttackPlateauRelease()
+    {
+        // 100 ms raw-key: 5 ms attack (raised-cosine from 0 to 1), ~90 ms
+        // plateau at amplitude 1, 5 ms release (raised-cosine back to 0).
+        // Output buffer length = duration + ramp (the release tail is appended
+        // *after* the duration window — duration is the "key-held" interval,
+        // ramp is the no-click fall).
+        var iq = CwEngine.RenderRawKeyForTest(durationMs: 100, basebandHz: CwuNoCtun);
+
+        int durationSamples = 100 * Sr / 1000;
+        int rampSamples = 5 * Sr / 1000;
+        Assert.Equal(2 * (durationSamples + rampSamples), iq.Length);
+    }
+
+    [Fact]
+    public void RenderRawKey_AttackEdge_StartsFromZero()
+    {
+        // First sample of the attack ramp = env(0) × cos(0) = 0. Sanity that
+        // the raised-cosine envelope is present — if anyone removes the
+        // shaper, the first sample jumps straight to amplitude 1 and the
+        // on-air signal develops audible CW clicks.
+        var iq = CwEngine.RenderRawKeyForTest(durationMs: 100, basebandHz: CwuNoCtun);
+
+        Assert.Equal(0f, iq[0], precision: 5);
+        Assert.Equal(0f, iq[1], precision: 5);
+    }
+
+    [Fact]
+    public void RenderRawKey_ReleaseTail_EndsAtZero()
+    {
+        // The final IQ pair belongs to the release ramp's last sample —
+        // env approaches zero as `into → rampSamples`, so the magnitude
+        // there must be near zero. Guards against the inverse of the
+        // attack-edge regression: a fade-out that truncates would leave
+        // a residual carrier that thumps when MOX falls.
+        var iq = CwEngine.RenderRawKeyForTest(durationMs: 100, basebandHz: CwuNoCtun);
+
+        int last = iq.Length - 2;
+        float mag = MathF.Sqrt(iq[last] * iq[last] + iq[last + 1] * iq[last + 1]);
+        Assert.InRange(mag, 0f, 0.05f);
+    }
+
+    [Fact]
+    public void RenderRawKey_PlateauMidpoint_HasFullAmplitude()
+    {
+        // Sample comfortably inside the plateau (past the 5 ms attack, well
+        // before the release tail) — sqrt(I² + Q²) should be ~1.0. Confirms
+        // that the steady-state carrier reaches full scale and isn't
+        // accidentally being held at half-amplitude.
+        var iq = CwEngine.RenderRawKeyForTest(durationMs: 100, basebandHz: CwuNoCtun);
+
+        int durationSamples = 100 * Sr / 1000;
+        // Halfway through the plateau region — safely past the 5 ms attack.
+        int probe = durationSamples / 2;
+        float mag = MathF.Sqrt(iq[2 * probe] * iq[2 * probe] + iq[2 * probe + 1] * iq[2 * probe + 1]);
+        Assert.InRange(mag, 0.95f, 1.05f);
+    }
+
+    [Fact]
+    public void RenderRawKey_CarrierFrequencyMatchesBaseband()
+    {
+        // Same zero-crossing check as the CTUN offset test, applied to the
+        // raw-key path — guards against the LO-align logic in PlayJobAsync
+        // and PlayRawKeyAsync drifting apart silently. At 600 Hz baseband
+        // we expect ~12 crossings per 10 ms of plateau.
+        var iq = CwEngine.RenderRawKeyForTest(durationMs: 50, basebandHz: 600);
+
+        // Skip the 5 ms attack and release; measure within the plateau.
+        int rampSamples = 5 * Sr / 1000;
+        int durationSamples = 50 * Sr / 1000;
+        int windowStart = rampSamples;
+        int windowEnd = durationSamples - rampSamples;
+        int crossings = CountZeroCrossingsI(iq, windowStart, windowEnd);
+
+        // 600 Hz × (40 ms window) = 24 cycles → ~48 zero-crossings.
+        // Allow ±10% for boundary effects.
+        Assert.InRange(crossings, 43, 53);
+    }
+
     [Fact]
     public void Render_KeyUpGaps_AreSilent()
     {

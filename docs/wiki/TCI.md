@@ -81,7 +81,8 @@ TCI server status and pending configuration are exposed over the standard Zeus R
 | `VFO_LOCK` (TCI 2.0) | 🟡 Echo-only stub |
 | `DIGL_OFFSET` / `DIGU_OFFSET` | 🟡 Stored per session, not yet applied |
 | Mute / squelch / RIT / XIT / split | 🟡 Echo-only stubs |
-| **CW (macros, keyer, msg)** | ❌ **Roadmap — not yet implemented** |
+| **CW (`cw_msg`, `cw_macros`, `cw_macros_speed`, `keyer`)** | ✅ Wired into CwEngine; `cw_macros_empty` notification on queue drain |
+| `cw_macros_delay`, `cw_macros_speed_up/down`, `cw_macros_stop`, `cw_terminal`, `callsign_send` | ❌ Out of scope for the first CW pass |
 | `AGC_MODE` / `RX_NB_PARAM` | ❌ Backend missing |
 | `LINE_OUT_*` (server-side recording) | ❌ Not planned |
 
@@ -207,18 +208,32 @@ On `TRX:0,false;` (or any change of TRX source away from `tci`), the receiver's 
 
 This is the explicit "what's not done" list, organised by spec section. Issues maintained against this list are welcomed.
 
-### CW — on the roadmap, not yet implemented
+### CW — first pass landed; remaining gaps below
 
-CW is the single biggest remaining gap. The dispatcher accepts the commands so contest-logger probes don't error, but **nothing reaches the air**:
+The four highest-leverage CW commands route through Zeus's host-side CW
+engine (see `Zeus.Server.Hosting/CwEngine.cs`) — both macros (mapped
+against the same `CwSettingsStore` the on-screen macro pad edits) and
+free-form text reach the air, and the engine raises `cw_macros_empty`
+when the queue drains so loggers can detect end-of-message:
 
-- `cw_macros`, `cw_msg` (with prefix / callsign / suffix / repeat)
-- `cw_macros_speed`, `cw_macros_delay`, `cw_keyer_speed`
-- `cw_macros_speed_up`, `cw_macros_speed_down`, `cw_macros_stop`
-- `cw_terminal` mode + `cw_macros_empty` notification
-- `keyer:rx,bool[,duration]` (TCI 1.9.1)
+- ✅ `cw_msg:rx,part[,part…][,repeat]` — concatenates parts, optional
+  small-integer trailing repeat count
+- ✅ `cw_macros:slot` — 1-based slot index into the persisted macro array
+- ✅ `cw_macros_speed:wpm` — sets the operator's persisted WPM (shared
+  with the UI); query form echoes current
+- ✅ `keyer:rx,bool[,durationMs]` — manual key-down / key-up, with the
+  optional TCI 1.9.1 auto-release timer
+- ✅ `cw_macros_empty` (server → client) — broadcast on Sending → Idle
+  transitions
+
+The remaining CW commands stay out of scope for this pass:
+
+- `cw_macros_delay`, `cw_macros_speed_up/down`, `cw_macros_stop`
+- `cw_terminal` mode
 - `callsign_send` notification (mid-message callsign correction)
+- Per-receiver `cw_keyer_speed` (Zeus tracks one WPM, not per-RX)
 
-These will land when Zeus grows a CW keyer engine. **Until then, contest CW operators using TCI for keying will not transmit.**
+These can land alongside future contest-logger work as needed.
 
 ### Control commands missing entirely
 

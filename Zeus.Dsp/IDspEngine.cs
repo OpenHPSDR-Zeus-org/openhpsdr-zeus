@@ -86,17 +86,6 @@ public interface IDspEngine : IDisposable
 
     bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut);
 
-    /// <summary>Pull the next raw FFT magnitudes frame from the WDSP analyzer
-    /// for the given channel. Blocks for up to ~33 ms waiting for the next
-    /// FFT tick at the analyzer's fixed 30 Hz cadence; returns <c>false</c>
-    /// on timeout or when the engine has no FFT (synthetic).
-    /// <para><paramref name="outMagnitudesDb"/> length must be at least
-    /// <c>16384</c> (the WDSP analyzer FFT size). On success the buffer is
-    /// filled with dB magnitudes in FFT-shifted order: index 0 is the most
-    /// negative frequency, index 8192 is DC, index 16383 is the most
-    /// positive frequency.</para></summary>
-    bool TrySnapRawSpectrum(int channelId, Span<double> outMagnitudesDb);
-
     /// <summary>TX panadapter / waterfall pixels in dBm, sourced from a
     /// dedicated WDSP analyzer fed with the post-CFIR TX IQ. Returns false
     /// when TXA is not open or no fresh FFT is ready. The TX analyzer is

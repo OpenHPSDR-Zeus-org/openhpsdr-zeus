@@ -701,12 +701,6 @@
   box-shadow: 0 0 0 1px rgba(46,142,255,0.5), 0 0 14px rgba(46,142,255,0.35);
   text-shadow: none;
 }
-/* .btn.running — in-progress accent glow (e.g. Zero Beat, issue #300).
-   Matches the accent treatment used elsewhere (CTUN, MOX active). */
-.btn.running {
-  border-color: var(--accent);
-  box-shadow: 0 0 6px var(--accent);
-}
 .btn.sm { padding: 0.3em 0.7em;  font-size: clamp(10px, 0.1vw + 9.5px, 12px); }
 .btn.lg { padding: 0.55em 1em;   font-size: clamp(13px, 0.2vw + 10px, 15px); }
 .btn.ghost {

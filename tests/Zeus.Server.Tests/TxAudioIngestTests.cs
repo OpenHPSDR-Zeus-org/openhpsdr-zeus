@@ -95,7 +95,6 @@ public class TxAudioIngestTests
         public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;
         public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
         public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
-        public bool TrySnapRawSpectrum(int channelId, Span<double> outMagnitudesDb) => false;
         public int OpenTxChannel(int outputRateHz = 48_000) => 0;
         public void SetMox(bool moxOn) { }
         public double GetRxaSignalDbm(int channelId) => -140.0;

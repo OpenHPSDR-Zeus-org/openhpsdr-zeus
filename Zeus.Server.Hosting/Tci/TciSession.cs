@@ -77,6 +77,8 @@ public sealed class TciSession : IDisposable
     private readonly TciRateLimiter _rateLimiter;
     private readonly TxAudioIngest? _txAudioIngest;
     private readonly TciTxAudioReceiver? _txAudioReceiver;
+    private readonly CwEngine _cwEngine;
+    private readonly CwSettingsStore _cwSettings;
 
     // TCI 2.0 TRX 3rd arg: when "tci" we route inbound binary TX audio frames
     // into the WDSP TX path; otherwise the radio's local mic source is used
@@ -156,6 +158,8 @@ public sealed class TciSession : IDisposable
         DspPipelineService pipeline,
         SpotManager spots,
         TciOptions options,
+        CwEngine cwEngine,
+        CwSettingsStore cwSettings,
         TxAudioIngest? txAudioIngest = null,
         TciServer? tciServer = null)
     {
@@ -167,6 +171,8 @@ public sealed class TciSession : IDisposable
         _pipeline = pipeline;
         _spots = spots;
         _options = options;
+        _cwEngine = cwEngine;
+        _cwSettings = cwSettings;
         _rateLimiter = new TciRateLimiter(options.RateLimitMs, Send);
         _txAudioIngest = txAudioIngest;
         _txAudioReceiver = txAudioIngest is not null
@@ -592,12 +598,18 @@ public sealed class TciSession : IDisposable
                     HandleAgcGain(args);
                     break;
 
-                // --- CW keyer / macros (ack-only; no CW engine yet) ---
+                // --- CW keyer / macros (zeus-j3t) ---
                 case "cw_macros_speed":
+                    HandleCwMacrosSpeed(args);
+                    break;
                 case "cw_macros":
+                    HandleCwMacros(args);
+                    break;
                 case "cw_msg":
+                    HandleCwMsg(args);
+                    break;
                 case "keyer":
-                    _log.LogDebug("tci cw command accepted but unimplemented (no CW engine): {Cmd}", command);
+                    HandleKeyer(args);
                     break;
 
                 // --- Split / RIT / XIT / Lock (stubs) ---
@@ -1105,6 +1117,91 @@ public sealed class TciSession : IDisposable
             _radio.SetAgcTop(db);
             // StateChanged event will broadcast the update to all clients
         }
+    }
+
+    // --- CW: cw_macros_speed / cw_macros / cw_msg / keyer (zeus-j3t) -----
+    // All four route through CwEngine (host-side host-side keying) backed by
+    // CwSettingsStore for WPM + macro slots. Parsing edge cases (trailing
+    // repeat arg on cw_msg, slot bounds, duration on keyer) live in
+    // TciCwParser so the wire-format rules can be exercised in unit tests
+    // without spinning up the WebSocket plumbing.
+
+    private void HandleCwMacrosSpeed(string[] args)
+    {
+        var parsed = TciCwParser.ParseCwMacrosSpeed(args);
+        if (parsed is null)
+        {
+            _log.LogDebug("tci.cw_macros_speed malformed args={Args}", string.Join(',', args));
+            return;
+        }
+        var p = parsed.Value;
+        if (p.Wpm is int wpm)
+        {
+            // Persist the new speed via the same store the macro pad uses,
+            // so the UI WPM slider and the contest logger see the same value.
+            _cwSettings.Save(new CwSettingsSetRequest(Wpm: wpm));
+        }
+        // Echo post-call truth — query and set both terminate by reporting
+        // the persisted value, matching the convention used by HandleTrx /
+        // HandleDrive (clients trust echoes, not requests).
+        Send(TciProtocol.Command("cw_macros_speed", _cwSettings.Get().Wpm));
+    }
+
+    private void HandleCwMacros(string[] args)
+    {
+        var parsed = TciCwParser.ParseCwMacros(args);
+        if (parsed is null)
+        {
+            _log.LogDebug("tci.cw_macros malformed args={Args}", string.Join(',', args));
+            return;
+        }
+        var macros = _cwSettings.Get().Macros;
+        int idx = parsed.Value.Slot1Based - 1;
+        if (idx >= macros.Length || string.IsNullOrWhiteSpace(macros[idx]))
+        {
+            // Slot is in-bounds-of-spec but empty / unset for this operator.
+            // Spec says emit cw_macros_empty when there's nothing to send so
+            // the client knows the request was acknowledged but produced no
+            // RF (e.g. logger reset its slot bank).
+            _log.LogDebug("tci.cw_macros slot {Slot} empty/unset", parsed.Value.Slot1Based);
+            Send(TciProtocol.Command("cw_macros_empty"));
+            return;
+        }
+        // wpm=null lets CwEngine read the operator's persisted default — the
+        // same value HandleCwMacrosSpeed mutates.
+        _ = _cwEngine.SendAsync(macros[idx], wpm: null, CancellationToken.None).AsTask();
+    }
+
+    private void HandleCwMsg(string[] args)
+    {
+        var parsed = TciCwParser.ParseCwMsg(args);
+        if (parsed is null)
+        {
+            _log.LogDebug("tci.cw_msg malformed args={Args}", string.Join(',', args));
+            return;
+        }
+        // Repeat count is honoured by enqueuing N identical sends. CwEngine
+        // serialises them through its single playback worker, so the on-air
+        // result is "CQ TEST CQ TEST CQ TEST" with the engine's natural
+        // inter-word gap between sends (the MOX falling/rising edge round-
+        // trips at ~40 ms which reads as a normal CW word space at any WPM
+        // we support).
+        for (int i = 0; i < parsed.Value.Repeats; i++)
+            _ = _cwEngine.SendAsync(parsed.Value.Text, wpm: null, CancellationToken.None).AsTask();
+    }
+
+    private void HandleKeyer(string[] args)
+    {
+        var parsed = TciCwParser.ParseKeyer(args);
+        if (parsed is null)
+        {
+            _log.LogDebug("tci.keyer malformed args={Args}", string.Join(',', args));
+            return;
+        }
+        // rx index is required by the spec but we run a single TX path, so
+        // we don't echo it back — clients ignore the receiver on keyer
+        // echoes. Forward the boolean as-is plus the optional duration.
+        _ = _cwEngine.RawKeyAsync(parsed.Value.KeyDown, parsed.Value.DurationMs, CancellationToken.None).AsTask();
     }
 
     private void HandleSplitEnable(string[] args)

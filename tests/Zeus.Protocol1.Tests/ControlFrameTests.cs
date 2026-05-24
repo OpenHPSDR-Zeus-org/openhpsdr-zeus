@@ -391,17 +391,53 @@ public class ControlFrameTests
     }
 
     [Fact]
-    public void PhaseTable_MoxOff_NeverSendsTxFreq()
+    public void PhaseTable_MoxOff_SendsTxFreqAtLeastOncePerCycle()
     {
-        // Don't burn bandwidth on TX-freq updates the radio can't use. Regression
-        // guard: if somebody ever conflates the two tables, RX-idle packets would
-        // start carrying TxFreq unnecessarily.
+        // Square SDR 2 (HL2 gateware FAN=1,UART=1) emits Kenwood CAT on
+        // io_uart_txd whenever its FPGA TX-NCO register changes, which drives
+        // the rear-panel BVO PWM via the STM32G031 daughter-MCU (issue #361).
+        // The TX-NCO register has to be re-written during RX or the BVO never
+        // follows the dial. Mirrors deskhpsdr old_protocol.c:2837-2846 which
+        // sends C0=0x02 every round-robin pass regardless of MOX. Harmless on
+        // non-extamp boards.
+        int txFreqSlots = 0;
         for (int phase = 0; phase < 4; phase++)
         {
             var (first, second) = Protocol1Client.PhaseRegisters(phase, mox: false);
-            Assert.NotEqual(ControlFrame.CcRegister.TxFreq, first);
-            Assert.NotEqual(ControlFrame.CcRegister.TxFreq, second);
+            if (first == ControlFrame.CcRegister.TxFreq) txFreqSlots++;
+            if (second == ControlFrame.CcRegister.TxFreq) txFreqSlots++;
         }
+        Assert.True(txFreqSlots >= 1, $"expected ≥ 1 TxFreq slot per RX cycle, got {txFreqSlots}");
+    }
+
+    [Fact]
+    public void PhaseTable_MoxOff_StillSendsRxFreqEveryTick()
+    {
+        // Adding TxFreq to the RX rotation must not displace RxFreq below
+        // once-per-tick — dial response while receiving has to stay snappy.
+        for (int phase = 0; phase < 4; phase++)
+        {
+            var (first, second) = Protocol1Client.PhaseRegisters(phase, mox: false);
+            Assert.True(
+                first == ControlFrame.CcRegister.RxFreq || second == ControlFrame.CcRegister.RxFreq,
+                $"phase {phase} carries neither RxFreq slot");
+        }
+    }
+
+    [Fact]
+    public void PhaseTable_MoxOff_PsArmed_SendsTxFreqAtLeastOncePerCycle()
+    {
+        // Same extamp/BVO motivation as the non-PS table — PS-armed RX must
+        // also refresh TX-NCO so a Square SDR 2 operator who has PS on still
+        // gets BVO tracking on the dial.
+        int txFreqSlots = 0;
+        for (int phase = 0; phase < 16; phase++)
+        {
+            var (first, second) = Protocol1Client.PhaseRegisters(phase, mox: false, psArmed: true);
+            if (first == ControlFrame.CcRegister.TxFreq) txFreqSlots++;
+            if (second == ControlFrame.CcRegister.TxFreq) txFreqSlots++;
+        }
+        Assert.True(txFreqSlots >= 1, $"expected ≥ 1 TxFreq slot per PS-armed RX cycle, got {txFreqSlots}");
     }
 
     [Fact]

@@ -43,7 +43,6 @@
 // License for details.
 
 using System.Collections.Concurrent;
-using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -210,14 +209,6 @@ public sealed class WdspDspEngine : IDspEngine
     // a coherent set rather than a half-updated tuple.
     private RxStageMeters _latestRxStageMeters = RxStageMeters.Silent;
     private readonly object _rxMeterPublishLock = new();
-
-    // Pre-allocated 2 × AnalyzerFftSize doubles for SnapSpectrumTimeout output
-    // (Re/Im interleaved). Reused across Zero Beat invocations to avoid hot-
-    // path allocation. AnalyzerFftSize is 16384 → 32768 doubles ≈ 256 KB.
-    private readonly double[] _snapBuf = new double[AnalyzerFftSize * 2];
-    // Serialises concurrent Zero Beat calls and ensures _snapBuf is never
-    // passed to two concurrent SnapSpectrumTimeout invocations.
-    private readonly object _snapLock = new();
 
     // TX panadapter analyzer. Separate WDSP `disp` slot from RXA's, fed with
     // the post-CFIR IQ from ProcessTxBlock so the operator can see the on-air
@@ -1012,42 +1003,6 @@ public sealed class WdspDspEngine : IDspEngine
         {
             NativeMethods.GetPixels(channelId, (int)which, ref MemoryMarshal.GetReference(dbOut), out int flag);
             return flag == 1;
-        }
-    }
-
-    public bool TrySnapRawSpectrum(int channelId, Span<double> outMagnitudesDb)
-    {
-        if (_disposed != 0) return false;
-        if (outMagnitudesDb.Length < AnalyzerFftSize) return false;
-
-        // Multi-RX is not in scope yet (see docs/designs/cw-zero-beat.md
-        // §Future). When it lands, channelId will need to map to disp/channel.
-        Debug.Assert(channelId == 0, "TrySnapRawSpectrum is single-RX only for now");
-
-        lock (_snapLock)
-        {
-            int flag = 0;
-            try
-            {
-                NativeMethods.SnapSpectrumTimeout(
-                    disp: 0, ss: 0, LO: 0,
-                    snap_buff: ref _snapBuf[0],
-                    timeoutMs: 100,
-                    flag: ref flag);
-            }
-            catch (EntryPointNotFoundException)
-            {
-                return false;  // older libwdsp without the export
-            }
-            if (flag == 0) return false;
-
-            for (int i = 0; i < AnalyzerFftSize; i++)
-            {
-                double re = _snapBuf[i * 2];
-                double im = _snapBuf[i * 2 + 1];
-                outMagnitudesDb[i] = 10.0 * Math.Log10(re * re + im * im + 1e-60);
-            }
-            return true;
         }
     }
 
