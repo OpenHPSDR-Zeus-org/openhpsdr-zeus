@@ -225,6 +225,24 @@ public class DspPipelineService : BackgroundService,
     private volatile bool _rxFadeOutPending;        // first RX block after MOX↑
     private volatile bool _rxFadeInPending;         // first RX block after MOX↓
 
+    // TX→RX resume diagnostics (issue #468). The operator-confirmed symptom is
+    // ~2 s of RX-audio silence after un-key on BOTH P1 and P2, desktop native
+    // audio — and #494/#497/#501 did not fix it. Static analysis shows WDSP
+    // resumes audio ~50 ms after IQ flows and the publish path has no prefill,
+    // so the ~2 s must be a *runtime* gap somewhere on the un-key → first-
+    // audible-sample chain. These one-shot probes time-stamp that chain so the
+    // operator's next build logs EXACTLY which stage is late:
+    //   t0  = un-key edge observed (OnRadioMoxChanged(false))
+    //   t1  = first OnIqFrame after un-key (RX IQ actually flowing again)
+    //   t2  = first Tick where engine.ReadAudio returned > 0 after un-key
+    //   t3  = first PublishAudio after un-key (audio reaching NativeAudioSink)
+    // Each is a Stopwatch tick stamp; the deltas (ms) are logged at t1/t2/t3.
+    // volatile: written on the MOX-edge / RX-IQ / Tick threads, read on the
+    // same hot threads. -1 = "not yet seen this cycle".
+    private long _resumeUnkeyTicks = -1;
+    private volatile bool _resumeAwaitingIq;
+    private volatile bool _resumeAwaitingAudio;
+
     // ---- iter5 single-DSP-thread scaffolding -----------------------------
     // The pipeline now owns its hot path via IRxPacketSink: when a radio
     // connects we AttachRxSink to the protocol client and every IQ/PS-feedback
@@ -1102,6 +1120,16 @@ public class DspPipelineService : BackgroundService,
         // audio in so the dmp=0 RXA up doesn't pop through to the browser.
         if (on) _rxFadeOutPending = true;
         else _rxFadeInPending = true;
+        if (!on)
+        {
+            // Arm the TX→RX resume timing probe (issue #468). Stamp the un-key
+            // instant and flag the IQ / audio one-shots so the next OnIqFrame
+            // and first ReadAudio>0 / PublishAudio log their delta from here.
+            _resumeUnkeyTicks = Stopwatch.GetTimestamp();
+            _resumeAwaitingIq = true;
+            _resumeAwaitingAudio = true;
+            _log.LogInformation("rx.resume.probe t0 unkey ts={Ts}", _resumeUnkeyTicks);
+        }
         _p2Client?.SetMox(on);
         // Falling edge: pick up any PS knob changes that OnRadioStateChanged
         // deferred while we were keyed (HwPeak / Ptol / Advanced / Control).
@@ -1271,6 +1299,7 @@ public class DspPipelineService : BackgroundService,
             // full fence on AttachRxSink (Interlocked.Exchange) guarantees
             // the sink sees the freshly-installed engine. See _engineLock
             // doc on the field.
+            ResumeProbeOnIqFrame();
             var engine = Volatile.Read(ref _engine);
             int channel = Volatile.Read(ref _channelId);
             if (engine is not null)
@@ -1314,6 +1343,7 @@ public class DspPipelineService : BackgroundService,
     void Zeus.Protocol2.IRxPacketSink.OnIqFrame(in Zeus.Protocol2.IqFrame frame)
     {
         DrainDspCommands();
+        ResumeProbeOnIqFrame();
         var engine = Volatile.Read(ref _engine);
         int channel = Volatile.Read(ref _channelId);
         if (engine is not null)
@@ -1370,6 +1400,41 @@ public class DspPipelineService : BackgroundService,
         {
             _lastTickStopwatchTicks = now;
             Tick(_panBuf, _wfBuf, _audioBuf);
+        }
+    }
+
+    // TX→RX resume probe (issue #468). Called from the RX-IQ path (t1) and the
+    // Tick audio path (t2 first ReadAudio>0, t3 first PublishAudio) so the
+    // operator's log pinpoints which stage is late after un-key. Each stage is
+    // a one-shot per un-key cycle. Cheap: a couple of volatile reads on the hot
+    // path when not armed.
+    private void ResumeProbeOnIqFrame()
+    {
+        if (!_resumeAwaitingIq) return;
+        _resumeAwaitingIq = false;
+        long t0 = _resumeUnkeyTicks;
+        if (t0 <= 0) return;
+        double ms = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
+        _log.LogInformation("rx.resume.probe t1 firstIq +{Ms:F1}ms", ms);
+    }
+
+    private void ResumeProbeFirstAudio(int audioSampleCount, bool published)
+    {
+        long t0 = _resumeUnkeyTicks;
+        if (t0 <= 0) return;
+        if (_resumeAwaitingAudio && audioSampleCount > 0)
+        {
+            // Disarm the t2 one-shot up front so this logs exactly once per
+            // un-key cycle even when the publish was suppressed (TX monitor).
+            _resumeAwaitingAudio = false;
+            double ms = (Stopwatch.GetTimestamp() - t0) * 1000.0 / Stopwatch.Frequency;
+            _log.LogInformation("rx.resume.probe t2 firstReadAudio>0 +{Ms:F1}ms samples={N} published={Pub}",
+                ms, audioSampleCount, published);
+            if (published)
+            {
+                _log.LogInformation("rx.resume.probe t3 firstPublish +{Ms:F1}ms", ms);
+            }
+            _resumeUnkeyTicks = -1;   // disarm cycle (t1 already fired or moot)
         }
     }
 
@@ -1614,32 +1679,8 @@ public class DspPipelineService : BackgroundService,
         // don't broadcast it. The VST RX seam still fires on the drained RX
         // so RX-side plugins keep running even while monitor is on.
         bool txMonitorOn = engine.IsTxMonitorOn;
-        // Always drain the WDSP RX audio ring, even while keyed. Issue #468
-        // follow-up: WdspDspEngine.SetMox now leaves the RXA channel warm
-        // (state=1) through the whole MOX cycle instead of damping it to
-        // state=0, so the DSP/AGC stay converged and RX resumes instantly on
-        // un-key (mirrors Thetis's MuteRX1-at-the-mixer approach). The cost is
-        // that ReadAudio now returns live band RX while keyed; we MUST NOT
-        // publish that (the operator would hear band RX while transmitting),
-        // but we still drain it so the WDSP audio ring doesn't back up and so
-        // the first post-un-key block is fresh rather than a stale TX-period
-        // backlog. The `_keyed` gate on PublishAudio below enforces the mute.
         int audioSampleCount = engine.ReadAudio(channel, audioBuf);
-        // RX audio is muted while keyed (MOX or TUN). The WDSP RX channel is
-        // kept warm, so this is a pure downstream mute — no DSP state is torn
-        // down and un-key resumes from a converged pipeline.
-        bool rxAudioMuted = _keyed;
-        if (rxAudioMuted)
-        {
-            // Consume the rising-edge fade-out one-shot here: with the mute in
-            // place the RX→TX transition is already silent (the operator hears
-            // TX, not band RX), so there's no click to ramp out — and leaving
-            // the flag armed would make it (as the leading `if` below) wrongly
-            // ramp DOWN the first un-keyed resume block instead of letting the
-            // fade-IN one-shot ramp it up.
-            _rxFadeOutPending = false;
-        }
-        if (audioSampleCount > 0 && !rxAudioMuted)
+        if (audioSampleCount > 0)
         {
             // MOX-edge fade envelope. Ramps the first ~5 ms of this block
             // either down (rising edge: last block before TX silence) or up
@@ -1693,6 +1734,14 @@ public class DspPipelineService : BackgroundService,
                     Samples: new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
                 PublishAudio(in audioFrame);
                 RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
+                // Resume probe (issue #468): first published RX block after un-key.
+                ResumeProbeFirstAudio(audioSampleCount, published: true);
+            }
+            else
+            {
+                // ReadAudio produced samples but TX monitor suppressed the RX
+                // publish — still record that the RX pipeline is producing.
+                ResumeProbeFirstAudio(audioSampleCount, published: false);
             }
         }
         if (txMonitorOn)
