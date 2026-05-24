@@ -169,6 +169,18 @@ public sealed class Protocol1Client : IProtocol1Client
         int next = ptt ? 1 : 0;
         if (prev == next) return;
         Volatile.Write(ref _hardwarePtt, next);
+        // GH #426 / bd zeus-7uo + zeus-0aq diagnostic. Emit a single line per
+        // hardware-PTT edge capturing both the reported (radio C0[0] echo)
+        // level and the commanded (host) MOX state. The two diverge across
+        // the takeover/release latency we're chasing — anyone bench-testing
+        // can grep for `p1.mox.transition` and read the gap between
+        // reported-edge and host-applied edge (matching
+        // `externalPtt.takeover.applied dtUs=...` or
+        // `tx.mox.{on,off}.recv ts=...`).
+        _log.LogInformation(
+            "p1.mox.transition reportedPtt={Reported} commandedMox={Commanded} ts={Ts}",
+            ptt, Volatile.Read(ref _mox) != 0,
+            System.Diagnostics.Stopwatch.GetTimestamp());
         try { HardwarePttChanged?.Invoke(ptt); }
         catch (Exception ex) { _log.LogWarning(ex, "HardwarePttChanged handler threw"); }
     }
