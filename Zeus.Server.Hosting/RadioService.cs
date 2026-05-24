@@ -70,10 +70,6 @@ public sealed class RadioService : IDisposable
     // Empty when nothing is connected — PersistPsState skips HW Peak persistence
     // in that case (no board → no slot to write).
     private string _currentPsBoardKey = string.Empty;
-    // Zero Beat engine provider (issue #300). Null until DspPipelineService
-    // registers its CurrentEngine delegate (wired in ZeusEndpoints / ZeusHost).
-    // Tests inject a fake engine directly via the internal constructor overload.
-    private readonly Func<IDspEngine?>? _engineProvider;
     // Debounced state flush. Set to true in every Mutate(); a 1 Hz timer
     // calls FlushState() which writes to LiteDB and clears the flag.
     // Avoids hammering LiteDB during rapid VFO scroll or filter drags.
@@ -183,7 +179,7 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, Func<IDspEngine?>? engineProvider = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -193,7 +189,6 @@ public sealed class RadioService : IDisposable
         _psStore = psStore;
         _filterPresetStore = filterPresetStore;
         _radioStateStore = radioStateStore;
-        _engineProvider = engineProvider;
         _paStore.Changed += RecomputePaAndPush;
         if (_preferredRadioStore is not null)
             _preferredRadioStore.Changed += RecomputePaAndPush;
@@ -697,152 +692,6 @@ public sealed class RadioService : IDisposable
         if (targetLo == currentLo) return false;
         SetRadioLo(targetLo);
         return true;
-    }
-
-    // Zero Beat constants (issue #300). Baked-in; see docs/designs/cw-zero-beat.md
-    // §"Why baked-in 500 ms / 1.5 s / 6 dB" for why these are not user-tunable.
-    private const int ZeroBeatPhase1Frames = 30;       // ~1000 ms at 30 Hz
-    private const double ZeroBeatSnrThresholdDb = 6.0; // peak − median floor
-    private const int ZeroBeatFftSize = 16384;         // matches WdspDspEngine.AnalyzerFftSize
-    private const int ZeroBeatDcBin = ZeroBeatFftSize / 2;
-
-    /// <summary>One-shot Zero Beat (issue #300). Snaps the VFO of the given RX
-    /// onto the strongest CW carrier in the current filter passband, via raw
-    /// FFT peak-hold + parabolic interpolation. Two-phase: coarse tune after
-    /// ~500 ms, fine refinement after ~1.5 s more. Silent no-op if the SNR
-    /// gate trips (peak − median noise floor &lt; 6 dB). Mode-gated to CWL/CWU.</summary>
-    /// <param name="rxId">Receiver identifier. 0 = RX1 (only supported value
-    /// until multi-RX lands). See design doc §Future.</param>
-    /// <returns>Updated StateDto on success (or no-op completion); null when
-    /// mode is not CW or when the SNR gate aborts with no VFO movement.</returns>
-    public StateDto? ZeroBeat(byte rxId = 0)
-    {
-        var engine = _engineProvider?.Invoke();
-        if (engine is null)
-        {
-            _log.LogInformation("zero-beat.exit reason=engine-null");
-            return null;
-        }
-
-        var snap = Snapshot();
-        if (snap.Mode != RxMode.CWL && snap.Mode != RxMode.CWU)
-        {
-            _log.LogInformation("zero-beat.exit reason=mode-not-cw mode={Mode}", snap.Mode);
-            return null;
-        }
-
-        _log.LogInformation(
-            "zero-beat.start mode={Mode} vfoHz={VfoHz} sampleRate={SampleRate} filter=[{FLo},{FHi}]",
-            snap.Mode, snap.VfoHz, snap.SampleRate, snap.FilterLowHz, snap.FilterHighHz);
-
-        // Phase 1: collect 15 frames at 30 Hz (≈500 ms), max-hold per bin.
-        var held = new double[ZeroBeatFftSize];
-        for (int i = 0; i < held.Length; i++) held[i] = double.NegativeInfinity;
-        var frame = new double[ZeroBeatFftSize];
-
-        for (int i = 0; i < ZeroBeatPhase1Frames; i++)
-        {
-            if (!engine.TrySnapRawSpectrum(channelId: 0, frame))
-            {
-                _log.LogWarning("zero-beat.exit reason=raw-fft-fail phase=1 frame={Frame}", i);
-                return null;
-            }
-            for (int b = 0; b < held.Length; b++)
-                if (frame[b] > held[b]) held[b] = frame[b];
-        }
-
-        // Compute the passband bin range from the current state.
-        // WDSP SnapSpectrumTimeout FFT layout: DC at bin 8192, POSITIVE
-        // frequencies (USB/CWU) grow DOWNWARD (bin 8191, 8190, ...),
-        // negative frequencies grow UPWARD (bin 8193, 8194, ...).
-        // This is the opposite of textbook FFT-shift convention.
-        static (int lo, int hi) PassbandBins(StateDto s)
-        {
-            double hzPerBin = (double)s.SampleRate / ZeroBeatFftSize;
-            int lo = ZeroBeatDcBin - (int)(s.FilterHighHz / hzPerBin);
-            int hi = ZeroBeatDcBin - (int)(s.FilterLowHz  / hzPerBin);
-            if (lo < 1) lo = 1;
-            if (hi > ZeroBeatFftSize - 2) hi = ZeroBeatFftSize - 2;
-            return (lo, hi);
-        }
-
-        var (lowBin, highBin) = PassbandBins(snap);
-        double hzPerBinSnap = (double)snap.SampleRate / ZeroBeatFftSize;
-        if (lowBin >= highBin)
-        {
-            _log.LogWarning("zero-beat.exit reason=degenerate-passband-bins lowBin={Lo} highBin={Hi} hzPerBin={HzPerBin:F2}",
-                lowBin, highBin, hzPerBinSnap);
-            return null;
-        }
-
-        // DEBUG: find the top 5 bins across the FULL FFT to verify bin layout
-        var top5 = new (int bin, double db)[5];
-        for (int t = 0; t < 5; t++) top5[t] = (0, double.NegativeInfinity);
-        for (int i = 1; i < ZeroBeatFftSize - 1; i++)
-        {
-            if (held[i] > top5[4].db)
-            {
-                top5[4] = (i, held[i]);
-                Array.Sort(top5, (a, b) => b.db.CompareTo(a.db));
-            }
-        }
-        _log.LogInformation(
-            "zero-beat.fft-top5 bin0={B0}@{D0:F1} bin1={B1}@{D1:F1} bin2={B2}@{D2:F1} bin3={B3}@{D3:F1} bin4={B4}@{D4:F1} dcBin={Dc} hzPerBin={Hz:F2}",
-            top5[0].bin, top5[0].db, top5[1].bin, top5[1].db, top5[2].bin, top5[2].db,
-            top5[3].bin, top5[3].db, top5[4].bin, top5[4].db, ZeroBeatDcBin, hzPerBinSnap);
-
-        var (peakBin, peakDb) = ZeroBeatAlgorithm.FindPeakInPassband(held, lowBin, highBin);
-        double floorDb = ZeroBeatAlgorithm.MedianDb(held, lowBin, highBin);
-        double snrDb = peakDb - floorDb;
-
-        _log.LogInformation(
-            "zero-beat.phase1 lowBin={Lo} highBin={Hi} widthBins={W} hzPerBin={HzPerBin:F2} peakBin={PB} peakDb={Peak:F1} floorDb={Floor:F1} snrDb={Snr:F1}",
-            lowBin, highBin, highBin - lowBin + 1, hzPerBinSnap, peakBin, peakDb, floorDb, snrDb);
-
-        // SNR threshold adjustment for sample rate. The 6 dB constant was
-        // calibrated at 48 kHz (2.93 Hz/bin). At higher rates the bin width
-        // grows and each bin captures more noise power while the CW carrier
-        // (narrower than any bin) stays the same → per-bin SNR drops by
-        // 10·log10(rate/48000). We compensate with a floor of 2 dB.
-        double snrAdjustDb = 10.0 * Math.Log10((double)snap.SampleRate / 48000.0);
-        double effectiveSnrThreshold = Math.Max(2.0, ZeroBeatSnrThresholdDb - snrAdjustDb);
-        _log.LogInformation("zero-beat.snr-adjust rate={Rate} hzPerBin={HzPerBin:F2} adjustDb={Adj:F1} effectiveThreshold={Thr:F1}",
-            snap.SampleRate, hzPerBinSnap, snrAdjustDb, effectiveSnrThreshold);
-
-        // The zero-beat target in the FFT is NOT at DC (bin 8192). In CW modes
-        // the radio LO is offset by ±cw_pitch from the dial, so a carrier that's
-        // exactly zero-beat sits at +cw_pitch (CWU) or -cw_pitch (CWL) in the
-        // baseband FFT. The delta must be measured from THAT position, not from DC.
-        double cwPitchInBaseband = snap.Mode switch
-        {
-            RxMode.CWU =>  CwOffset.CwPitchHz,
-            RxMode.CWL => -CwOffset.CwPitchHz,
-            _ => 0.0,
-        };
-
-        bool gatePassed = snrDb >= effectiveSnrThreshold;
-        if (!gatePassed)
-        {
-            _log.LogInformation("zero-beat.exit reason=snr-gate-failed");
-            return null;
-        }
-
-        double subBin = ZeroBeatAlgorithm.ParabolicInterpolate(
-            held[peakBin - 1], held[peakBin], held[peakBin + 1]);
-        // Inverted axis: lower bin = higher positive frequency
-        double rawOffsetHz = (ZeroBeatDcBin - (peakBin + subBin)) * hzPerBinSnap;
-        double deltaHz = rawOffsetHz - cwPitchInBaseband;
-        long delta = (long)Math.Round(deltaHz);
-        _log.LogInformation("zero-beat.applied subBin={Sub:F3} rawOffsetHz={Raw:F1} cwPitch={Pitch} deltaHz={Delta} newVfoHz={New}",
-            subBin, rawOffsetHz, cwPitchInBaseband, delta, snap.VfoHz + delta);
-        if (delta != 0)
-        {
-            SetVfo(snap.VfoHz + delta);
-        }
-
-        _log.LogInformation("zero-beat.done totalDeltaHz={Total} finalVfoHz={Final}",
-            (Snapshot().VfoHz - snap.VfoHz), Snapshot().VfoHz);
-        return Snapshot();
     }
 
     // Per-mode-family remembered filter magnitudes. Mode switching snapshots

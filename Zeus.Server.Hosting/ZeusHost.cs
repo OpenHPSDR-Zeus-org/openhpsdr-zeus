@@ -159,34 +159,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
         builder.Services.AddSingleton<Zeus.Protocol1.ITxIqSource>(sp =>
             sp.GetRequiredService<Zeus.Protocol1.TxIqRing>());
-        // Wire engineProvider lazily so RadioService.ZeroBeat can read the
-        // currently-active DSP engine. The lambda defers resolution of
-        // DspPipelineService until the first ZeroBeat call (not at
-        // construction), which avoids the circular-dependency that would arise
-        // if we tried to GetRequiredService<DspPipelineService>() eagerly inside
-        // the RadioService factory (DspPipelineService's constructor takes
-        // RadioService, so eager resolution would deadlock the container).
-        builder.Services.AddSingleton<RadioService>(sp =>
-        {
-            var lf   = sp.GetRequiredService<ILoggerFactory>();
-            var dsp  = sp.GetRequiredService<DspSettingsStore>();
-            var pa   = sp.GetRequiredService<PaSettingsStore>();
-            var fp   = sp.GetRequiredService<FilterPresetStore>();
-            var tx   = sp.GetRequiredService<Zeus.Protocol1.ITxIqSource>();
-            var pref = sp.GetRequiredService<PreferredRadioStore>();
-            var ps   = sp.GetRequiredService<PsSettingsStore>();
-            var rs   = sp.GetRequiredService<RadioStateStore>();
-            return new RadioService(
-                loggerFactory: lf,
-                dspSettingsStore: dsp,
-                paStore: pa,
-                filterPresetStore: fp,
-                txIqSource: tx,
-                preferredRadioStore: pref,
-                psStore: ps,
-                radioStateStore: rs,
-                engineProvider: () => sp.GetRequiredService<DspPipelineService>().CurrentEngine);
-        });
+        builder.Services.AddSingleton<RadioService>();
         builder.Services.AddSingleton<StreamingHub>();
         // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
         // fans each AudioFrame across every registered IRxAudioSink.

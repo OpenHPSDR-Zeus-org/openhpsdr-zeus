@@ -1128,31 +1128,6 @@ export function setNr4(
   );
 }
 
-/**
- * One-shot CW Zero Beat (issue #300). Snaps the VFO onto the strongest CW
- * carrier in the current filter passband. Mode-gated to CWL/CWU server-side;
- * outside CW modes the call is a no-op.
- *
- * Returns the updated radio state on success, or `null` when the SNR gate
- * tripped (no carrier detected — silent no-op, the VFO does not move).
- * Any other failure throws.
- */
-export function zeroBeat(
-  rxId: number = 0,
-  signal?: AbortSignal,
-): Promise<RadioStateDto | null> {
-  return fetch('/api/rx/zero-beat', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ rxId }),
-    signal,
-  }).then(async (r) => {
-    if (r.status === 422) return null;  // SNR gate tripped — silent no-op
-    if (!r.ok) throw new Error(`zero-beat failed: ${r.status}`);
-    return normalizeState(await r.json());
-  });
-}
-
 // MOX endpoint returns {moxOn} — not a full StateDto — because MOX is
 // transient and deliberately absent from the persisted state snapshot.
 // 409 while disconnected surfaces as ApiError with the server's message.

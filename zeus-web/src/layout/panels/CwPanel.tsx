@@ -4,10 +4,13 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
 
 import { CwKeyer } from '../../components/design/CwKeyer';
-import { ZeroBeatButton } from '../../components/ZeroBeatButton';
 import { abortCw, sendCw } from '../../api/cw';
 import { useCwStore } from '../../state/cw-store';
 
+// Hard cap mirrors Zeus.Server.Hosting/CwSettingsStore.cs MaxMacros. If
+// the server bumps the cap, also bump this so the UI's "Add" button
+// matches. (We could fetch it dynamically, but a constant is cheaper
+// and only changes during epic-scale revisits.)
 const MAX_MACROS = 32;
 
 export function CwPanel() {
@@ -21,14 +24,18 @@ export function CwPanel() {
 
   return (
     <div style={{ flex: 1, overflow: 'auto' }}>
-      <div className="btn-row" style={{ padding: '4px 6px' }}>
-        <ZeroBeatButton />
-      </div>
       <CwKeyer
         wpm={settings.wpm}
+        // Split-write pattern fixes the "slider snaps back" race. The
+        // local setter updates the store immediately so the slider
+        // tracks the pointer; the debounced commit schedules a single
+        // PUT after the operator stops dragging.
         setWpmLocal={(v) => setSettingsLocal({ wpm: v })}
         setWpmCommit={(v) => commitDebounced({ wpm: v })}
         macros={settings.macros}
+        // Pass the current WPM explicitly so a slider change that hasn't
+        // round-tripped to the server yet still keys at the operator's
+        // intended speed.
         onSend={(macro) => void sendCw(macro, settings.wpm)}
         onAbort={() => void abortCw()}
         onMacroEdit={(i, v) => void setMacro(i, v)}
