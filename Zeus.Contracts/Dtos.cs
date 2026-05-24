@@ -664,6 +664,28 @@ public sealed record PanWfSplitDto(double PanPercent);
 
 public sealed record PanWfSplitSetRequest(double PanPercent);
 
+// Per-operator display-side meter calibration knobs (GitHub #426).
+//
+//   * SMeterOffsetDb — signed dB offset added to the displayed RX dBm
+//     value. Trim for real-world antenna / coax / preamp combinations
+//     that shift the WDSP-internal reading. Clamped ±20 dB on the
+//     server. Display-only — does not touch WDSP or the radio.
+//   * MaxDisplayedWatts — operator override for the TX forward-power
+//     meter full scale, in Watts. Lets an operator set e.g. 25 W on
+//     a 100 W bracket so the indication fills the bar. Clamped
+//     [1, 1000] W when non-zero. 0 = "no override, use the radio's
+//     MaxWatts as the bar's full scale" (the historical behaviour).
+//
+// Persisted server-side in zeus-prefs.db (single-row pattern).
+// Defaults: SMeterOffsetDb=0.0, MaxDisplayedWatts=0.0 (no override).
+public sealed record MeterDisplaySettingsDto(
+    double SMeterOffsetDb,
+    double MaxDisplayedWatts);
+
+public sealed record SMeterOffsetSetRequest(double OffsetDb);
+
+public sealed record MaxDisplayedWattsSetRequest(double MaxWatts);
+
 // ---- PureSignal request records ----
 // PsControlSetRequest = master arm (Enabled) + mode (Auto vs Single).
 // PsAdvancedSetRequest = nullable so partial updates from the settings

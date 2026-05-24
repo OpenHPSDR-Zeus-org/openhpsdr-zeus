@@ -291,6 +291,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<ThemeSettingsStore>();
         builder.Services.AddSingleton<BottomPinStore>();
         builder.Services.AddSingleton<PanWfSplitStore>();
+        builder.Services.AddSingleton<MeterDisplaySettingsStore>();
         builder.Services.AddSingleton<RadioStateStore>();
         builder.Services.AddSingleton<QrzService>();
         builder.Services.AddSingleton<LogService>();
