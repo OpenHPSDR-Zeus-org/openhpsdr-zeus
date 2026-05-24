@@ -845,7 +845,9 @@ public static class ZeusEndpoints
         {
             if (string.IsNullOrWhiteSpace(req.Mode) || string.IsNullOrWhiteSpace(req.Fit))
                 return Results.BadRequest(new { error = "mode and fit required" });
-            store.SaveMode(req.Mode, req.Fit, req.RxTraceColor);
+            store.SaveMode(req.Mode, req.Fit, req.RxTraceColor,
+                req.DbMin, req.DbMax, req.TxDbMin, req.TxDbMax,
+                req.WfDbMin, req.WfDbMax, req.WfTxDbMin, req.WfTxDbMax);
             return Results.Ok(store.Get());
         });
 

@@ -219,6 +219,32 @@ function writeSavedWfTxRange(wfTxDbMin: number, wfTxDbMax: number): void {
   }
 }
 
+// Debounced server save for dB range changes. The drag gesture fires many
+// small shiftDbRange calls per second; we batch them into a single PUT after
+// the operator lifts their finger (1 s quiet period), the same pattern used
+// by layout-store.ts for tile position saves.
+let dbRangeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleDbRangeSave(): void {
+  if (dbRangeTimer) clearTimeout(dbRangeTimer);
+  dbRangeTimer = setTimeout(() => {
+    const s = useDisplaySettingsStore.getState();
+    void updateDisplaySettings(
+      s.panBackground,
+      s.backgroundImageFit,
+      s.rxTraceColor,
+      s.dbMin,
+      s.dbMax,
+      s.txDbMin,
+      s.txDbMax,
+      s.wfDbMin,
+      s.wfDbMax,
+      s.wfTxDbMin,
+      s.wfTxDbMax,
+    );
+  }, 1000);
+}
+
 // Exponential smoothing constant for the auto-range tracker. 0.1 trades
 // flicker resistance for responsiveness — band-change artifacts fade over
 // ~30 frames at 30 Hz (~1 s).
@@ -418,6 +444,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, baseMax + deltaDb));
     set({ autoRange: false, dbMin: nextMin, dbMax: nextMax });
     writeSavedRange(nextMin, nextMax);
+    scheduleDbRangeSave();
   },
   shiftTxDbRange: (deltaDb) => {
     const { txDbMin, txDbMax } = get();
@@ -425,6 +452,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, txDbMax + deltaDb));
     set({ txDbMin: nextMin, txDbMax: nextMax });
     writeSavedTxRange(nextMin, nextMax);
+    scheduleDbRangeSave();
   },
   shiftWfDbRange: (deltaDb) => {
     const { wfDbMin, wfDbMax } = get();
@@ -432,6 +460,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfDbMax + deltaDb));
     set({ wfDbMin: nextMin, wfDbMax: nextMax });
     writeSavedWfRange(nextMin, nextMax);
+    scheduleDbRangeSave();
   },
   shiftWfTxDbRange: (deltaDb) => {
     const { wfTxDbMin, wfTxDbMax } = get();
@@ -439,6 +468,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfTxDbMax + deltaDb));
     set({ wfTxDbMin: nextMin, wfTxDbMax: nextMax });
     writeSavedWfTxRange(nextMin, nextMax);
+    scheduleDbRangeSave();
   },
   updateAutoRange: (wfDb) => {
     if (!get().autoRange || wfDb.length === 0) return;
@@ -522,12 +552,37 @@ async function hydrateFromServer(): Promise<void> {
 
   clearLegacyLocalStorage();
 
+  // Server dB values of null mean the field was never stored (fresh install
+  // or first run after upgrading to a version that added server persistence).
+  // Use server values when present; otherwise keep the localStorage-initialized
+  // state and push it up so the server has it for next restart.
+  const serverHasDbRange = server.dbMin !== null;
+
   useDisplaySettingsStore.setState({
     panBackground: server.mode,
     backgroundImage: server.hasImage ? displayImageUrl(Date.now()) : null,
     backgroundImageFit: server.fit,
     rxTraceColor: server.rxTraceColor,
+    ...(serverHasDbRange
+      ? {
+          dbMin: server.dbMin!,
+          dbMax: server.dbMax!,
+          txDbMin: server.txDbMin!,
+          txDbMax: server.txDbMax!,
+          wfDbMin: server.wfDbMin!,
+          wfDbMax: server.wfDbMax!,
+          wfTxDbMin: server.wfTxDbMin!,
+          wfTxDbMax: server.wfTxDbMax!,
+        }
+      : {}),
   });
+
+  if (!serverHasDbRange) {
+    // Push the current in-memory values (from localStorage or defaults) up
+    // to the server so subsequent restarts find them persisted. This is the
+    // one-time migration for operators upgrading from localStorage-only storage.
+    scheduleDbRangeSave();
+  }
 }
 
 function readLegacyLocalStorage(): { mode: PanBackgroundMode | null; fit: BackgroundImageFit | null; image: string | null } | null {
