@@ -727,6 +727,20 @@ public static class ZeusEndpoints
             return Results.Ok(r.SetZoom(req.Level));
         });
 
+        // CW Zero Beat (issue #300). Acquires ~1 s of spectrum, finds the
+        // loudest carrier in the passband, and retunes the VFO so it lands
+        // at the CW pitch. Returns the updated StateDto (200 OK) or 422
+        // Unprocessable Entity when no signal clears the SNR gate.
+        app.MapPost("/api/rx/zero-beat", (ZeroBeatRequest? req, RadioService r) =>
+        {
+            var rxId = req?.RxId ?? 0;
+            log.LogInformation("api.rx.zero-beat rxId={RxId}", rxId);
+            var state = r.ZeroBeat(rxId);
+            return state is null
+                ? Results.UnprocessableEntity(new { error = "no-signal" })
+                : Results.Ok(state);
+        });
+
         // Band memory: last-used (hz, mode) per HF band. GET returns the full map so
         // the BandButtons UI can restore on load with one round-trip. PUT upserts one
         // entry — the web debounces writes so tuning doesn't hammer LiteDB.
@@ -845,7 +859,9 @@ public static class ZeusEndpoints
         {
             if (string.IsNullOrWhiteSpace(req.Mode) || string.IsNullOrWhiteSpace(req.Fit))
                 return Results.BadRequest(new { error = "mode and fit required" });
-            store.SaveMode(req.Mode, req.Fit, req.RxTraceColor);
+            store.SaveMode(req.Mode, req.Fit, req.RxTraceColor,
+                req.DbMin, req.DbMax, req.TxDbMin, req.TxDbMax,
+                req.WfDbMin, req.WfDbMax, req.WfTxDbMin, req.WfTxDbMax);
             return Results.Ok(store.Get());
         });
 

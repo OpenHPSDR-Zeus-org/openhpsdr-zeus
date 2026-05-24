@@ -13,10 +13,12 @@ using Zeus.Server;
 namespace Zeus.Server.Tests;
 
 /// <summary>
-/// Unit-test the frozen-NCO invariants the panadapter pure-pan PRD
-/// (<c>docs/prd/panfall_behavior.md</c>) bakes into <see cref="RadioService"/>:
+/// Unit-test the tuning invariants in <see cref="RadioService"/> after the
+/// CTUN frozen-NCO model was reverted to classic "radio follows the dial":
 ///
-///   1. <c>SetVfo</c> only moves the dial; <c>RadioLoHz</c> is untouched.
+///   1. <c>SetVfo</c> retunes the radio — <c>RadioLoHz</c> tracks the dial's
+///      effective LO (== dial for SSB/AM/FM/DIG, dial ∓ pitch for CW) so RX
+///      and TX both land on the dial. (Was frozen under the old CTUN model.)
 ///   2. <c>SetRadioLo</c> only moves the hardware NCO; <c>VfoHz</c> is untouched.
 ///   3. Out-of-range inputs to <c>SetRadioLo</c> clamp into the legal HPSDR
 ///      tunable range [0, 60_000_000] Hz (matching <c>SetVfo</c>); the
@@ -82,16 +84,22 @@ public sealed class RadioServiceSetRadioLoTests : IDisposable
     }
 
     [Fact]
-    public void SetVfo_DoesNotMoveRadioLoHz()
+    public void SetVfo_MovesRadioLoToTrackDial()
     {
         using var radio = BuildRadio();
-        var seed = radio.SetRadioLo(28_400_000);
-        long loBefore = seed.RadioLoHz;
+        radio.SetRadioLo(28_400_000);
 
         var after = radio.SetVfo(28_410_500);
 
-        Assert.Equal(loBefore, after.RadioLoHz);
+        // Classic "radio follows the dial" (CTUN frozen-NCO reverted): SetVfo
+        // now retunes the LO to the dial's effective LO so RX and TX track the
+        // dial, instead of leaving it frozen at the old centre (28_400_000).
         Assert.Equal(28_410_500, after.VfoHz);
+        Assert.NotEqual(28_400_000, after.RadioLoHz);
+        // RadioLoHz lands on the dial (± CW pitch, which is well under 2 kHz),
+        // mode-agnostic so the test doesn't depend on the default RxMode.
+        Assert.True(Math.Abs(after.RadioLoHz - 28_410_500) <= 2_000,
+            $"RadioLoHz {after.RadioLoHz} should track dial 28410500 within CW pitch");
     }
 
     [Fact]

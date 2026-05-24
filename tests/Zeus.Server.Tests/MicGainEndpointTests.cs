@@ -185,6 +185,7 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         public int ReadAudio(int channelId, Span<float> output) => 0;
         public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;
         public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
+        public bool TrySnapRawSpectrum(int channelId, Span<double> outMagnitudesDb) => false;
         public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
         public int OpenTxChannel(int outputRateHz = 48_000) => 0;
         public void SetMox(bool moxOn) { }

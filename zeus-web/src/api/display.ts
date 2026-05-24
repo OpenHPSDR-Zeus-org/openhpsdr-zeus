@@ -12,6 +12,19 @@ export type DisplaySettings = {
   hasImage: boolean;
   imageMime: string | null;
   rxTraceColor: string;
+  // Panadapter and waterfall dB window bounds. null means the server has
+  // never stored a value; the frontend falls back to its built-in defaults
+  // (FIXED_DB_MIN / TX_FIXED_DB_MIN) and pushes the current value up on
+  // next interaction. Non-null values are used as-is (server wins over
+  // localStorage, surviving the Photino per-launch port shuffle).
+  dbMin: number | null;
+  dbMax: number | null;
+  txDbMin: number | null;
+  txDbMax: number | null;
+  wfDbMin: number | null;
+  wfDbMax: number | null;
+  wfTxDbMin: number | null;
+  wfTxDbMax: number | null;
 };
 
 // Matches backend DisplaySettingsStore.DefaultRxTraceColor.
@@ -23,11 +36,23 @@ type DisplaySettingsDtoRaw = {
   hasImage?: boolean;
   imageMime?: string | null;
   rxTraceColor?: string | null;
+  dbMin?: number | null;
+  dbMax?: number | null;
+  txDbMin?: number | null;
+  txDbMax?: number | null;
+  wfDbMin?: number | null;
+  wfDbMax?: number | null;
+  wfTxDbMin?: number | null;
+  wfTxDbMax?: number | null;
 };
 
 function normalizeRxTraceColor(raw: string | null | undefined): string {
   if (typeof raw !== 'string') return DEFAULT_RX_TRACE_COLOR;
   return /^#[0-9A-Fa-f]{6}$/.test(raw) ? raw.toUpperCase() : DEFAULT_RX_TRACE_COLOR;
+}
+
+function normalizeDbValue(raw: number | null | undefined): number | null {
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
 }
 
 function normalize(raw: DisplaySettingsDtoRaw): DisplaySettings {
@@ -45,6 +70,14 @@ function normalize(raw: DisplaySettingsDtoRaw): DisplaySettings {
     hasImage: !!raw.hasImage,
     imageMime: raw.imageMime ?? null,
     rxTraceColor: normalizeRxTraceColor(raw.rxTraceColor),
+    dbMin: normalizeDbValue(raw.dbMin),
+    dbMax: normalizeDbValue(raw.dbMax),
+    txDbMin: normalizeDbValue(raw.txDbMin),
+    txDbMax: normalizeDbValue(raw.txDbMax),
+    wfDbMin: normalizeDbValue(raw.wfDbMin),
+    wfDbMax: normalizeDbValue(raw.wfDbMax),
+    wfTxDbMin: normalizeDbValue(raw.wfTxDbMin),
+    wfTxDbMax: normalizeDbValue(raw.wfTxDbMax),
   };
 }
 
@@ -58,12 +91,32 @@ export async function updateDisplaySettings(
   mode: DisplaySettings['mode'],
   fit: DisplaySettings['fit'],
   rxTraceColor: string,
+  dbMin?: number | null,
+  dbMax?: number | null,
+  txDbMin?: number | null,
+  txDbMax?: number | null,
+  wfDbMin?: number | null,
+  wfDbMax?: number | null,
+  wfTxDbMin?: number | null,
+  wfTxDbMax?: number | null,
   signal?: AbortSignal,
 ): Promise<DisplaySettings> {
   const res = await fetch('/api/display-settings', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ mode, fit, rxTraceColor }),
+    body: JSON.stringify({
+      mode,
+      fit,
+      rxTraceColor,
+      dbMin,
+      dbMax,
+      txDbMin,
+      txDbMax,
+      wfDbMin,
+      wfDbMax,
+      wfTxDbMin,
+      wfTxDbMax,
+    }),
     signal,
   });
   if (!res.ok) throw new Error(`PUT /api/display-settings → ${res.status}`);

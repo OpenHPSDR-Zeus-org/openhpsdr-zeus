@@ -42,74 +42,51 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-using Zeus.Dsp;
-using Xunit;
+import { useCallback, useState } from 'react';
+import { zeroBeat } from '../api/client';
+import { useConnectionStore } from '../state/connection-store';
 
-namespace Zeus.Dsp.Tests;
+/**
+ * One-shot CW Zero Beat trigger (issue #300).
+ *
+ * Renders only when the current mode is CWL or CWU. While running, the
+ * button gets an `var(--accent)` border via the `running` class so the
+ * operator sees the action took effect. The ~2 s perceived latency is
+ * dominated by phase 1 (~500 ms); phase 2 settles silently after the dial
+ * has already moved.
+ *
+ * No toast on failure: the VFO not moving is itself the signal that
+ * nothing was found. Matches Thetis / standard CW-rig convention.
+ */
+export function ZeroBeatButton() {
+  const mode = useConnectionStore((s) => s.mode);
+  const applyState = useConnectionStore((s) => s.applyState);
+  const [running, setRunning] = useState(false);
 
-public class SyntheticDspEngineTests
-{
-    [Fact]
-    public void OpenChannel_ReturnsIds_AndPixoutsHaveExpectedShape()
-    {
-        using var eng = new SyntheticDspEngine();
-        int id = eng.OpenChannel(192_000, 256);
-        Assert.True(id > 0);
-
-        var pan = new float[256];
-        Assert.True(eng.TryGetDisplayPixels(id, DisplayPixout.Panadapter, pan));
-        Assert.True(pan.Length == 256);
-        Assert.Contains(pan, v => v > -60f);
+  const onClick = useCallback(async () => {
+    if (running) return;
+    setRunning(true);
+    try {
+      const next = await zeroBeat();
+      if (next) applyState(next);
+    } catch {
+      // swallow — no toast, no flash; VFO stays put
+    } finally {
+      setRunning(false);
     }
+  }, [running, applyState]);
 
-    [Fact]
-    public void Panadapter_PeakColumnAdvancesOverTime()
-    {
-        using var eng = new SyntheticDspEngine();
-        int id = eng.OpenChannel(192_000, 256);
+  if (mode !== 'CWL' && mode !== 'CWU') return null;
 
-        var pan = new float[256];
-        eng.TryGetDisplayPixels(id, DisplayPixout.Panadapter, pan);
-        int first = ArgMax(pan);
-
-        Thread.Sleep(120);
-
-        eng.TryGetDisplayPixels(id, DisplayPixout.Panadapter, pan);
-        int second = ArgMax(pan);
-
-        Assert.NotEqual(first, second);
-    }
-
-    [Fact]
-    public void TryGetDisplayPixels_ReturnsFalseForUnknownChannel()
-    {
-        using var eng = new SyntheticDspEngine();
-        Assert.False(eng.TryGetDisplayPixels(42, DisplayPixout.Panadapter, new float[256]));
-    }
-
-    [Fact]
-    public void OpenTxChannel_ReturnsNegativeOne_AndSetMoxIsNoOp()
-    {
-        using var eng = new SyntheticDspEngine();
-        Assert.Equal(-1, eng.OpenTxChannel());
-        eng.SetMox(true);
-        eng.SetMox(false);
-    }
-
-    [Fact]
-    public void TrySnapRawSpectrum_synthetic_returns_false()
-    {
-        using var engine = new SyntheticDspEngine();
-        Span<double> buf = new double[16384];
-        bool ok = engine.TrySnapRawSpectrum(channelId: 0, buf);
-        Assert.False(ok);
-    }
-
-    private static int ArgMax(ReadOnlySpan<float> s)
-    {
-        int best = 0;
-        float bestVal = float.NegativeInfinity;
-        for (int i = 0; i < s.Length; i++) if (s[i] > bestVal) { bestVal = s[i]; best = i; }
-        return best;
-    }
+  return (
+    <button
+      type="button"
+      className={`btn sm${running ? ' running' : ''}`}
+      onClick={onClick}
+      disabled={running}
+      title="Zero Beat — snap VFO to strongest CW carrier in passband (Z)"
+    >
+      0 BEAT
+    </button>
+  );
 }
