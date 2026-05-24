@@ -137,6 +137,14 @@ public class DspPipelineService : BackgroundService,
     private double _appliedAgcTopDb;
     private double _appliedAgcOffsetDb;
     private double _appliedRxAfGainDb;
+    // TX mic gain change-detect cache. NaN sentinel forces the first apply
+    // even when the persisted value happens to equal 0 dB (the engine seam
+    // expects an explicit unity SetTxPanelGain call so the TX chain leaves
+    // its uninitialised state in a known place after channel-open).
+    private double _appliedTxMicGainLinear = double.NaN;
+    // Same NaN-first-apply sentinel for the Leveler ceiling so a channel-open
+    // with the persisted value matching the 8 dB default still re-pushes it.
+    private double _appliedTxLevelerMaxGainDb = double.NaN;
     private NrConfig _appliedNr = new();
     private int _appliedZoomLevel = 1;
     // PureSignal latched values — same change-detect pattern as the others
@@ -566,6 +574,20 @@ public class DspPipelineService : BackgroundService,
             engine.SetRxAfGainDb(channel, s.RxAfGainDb);
             _appliedRxAfGainDb = s.RxAfGainDb;
         }
+        // TX mic gain: dB → linear (10^(db/20)) at the engine seam. Conversion
+        // matches the historical /api/mic-gain inline (Math.Pow(10.0, db/20.0));
+        // moved here so the operator-friendly dB is what gets stored and broadcast.
+        double micLinear = Math.Pow(10.0, s.MicGainDb / 20.0);
+        if (micLinear != _appliedTxMicGainLinear)
+        {
+            engine.SetTxPanelGain(micLinear);
+            _appliedTxMicGainLinear = micLinear;
+        }
+        if (s.LevelerMaxGainDb != _appliedTxLevelerMaxGainDb)
+        {
+            engine.SetTxLevelerMaxGain(s.LevelerMaxGainDb);
+            _appliedTxLevelerMaxGainDb = s.LevelerMaxGainDb;
+        }
         var nr = s.Nr ?? new NrConfig();
         if (!nr.Equals(_appliedNr))
         {
@@ -841,6 +863,14 @@ public class DspPipelineService : BackgroundService,
         double effectiveAgc = s.AgcTopDb + s.AgcOffsetDb;
         engine.SetAgcTop(channelId, effectiveAgc);
         engine.SetRxAfGainDb(channelId, s.RxAfGainDb);
+        // Re-push TX mic gain + Leveler on every fresh engine so the channel
+        // doesn't sit at the WDSP open-time defaults when the operator's last
+        // values differ. The engine's TXA reopen path resets PanelGain1=1.0 and
+        // LevelerTop=8.0 internally; without this re-push, a relaunch would
+        // ignore the just-hydrated StateDto values.
+        double micLinearInit = Math.Pow(10.0, s.MicGainDb / 20.0);
+        engine.SetTxPanelGain(micLinearInit);
+        engine.SetTxLevelerMaxGain(s.LevelerMaxGainDb);
         engine.SetNoiseReduction(channelId, nr);
         engine.SetZoom(channelId, s.ZoomLevel);
         _appliedMode = s.Mode;
@@ -852,6 +882,8 @@ public class DspPipelineService : BackgroundService,
         _appliedAgcTopDb = s.AgcTopDb;
         _appliedAgcOffsetDb = s.AgcOffsetDb;
         _appliedRxAfGainDb = s.RxAfGainDb;
+        _appliedTxMicGainLinear = micLinearInit;
+        _appliedTxLevelerMaxGainDb = s.LevelerMaxGainDb;
         _appliedNr = nr;
         _appliedZoomLevel = s.ZoomLevel;
     }

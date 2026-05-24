@@ -176,6 +176,12 @@ export type RadioStateDto = {
   autoAgcEnabled: boolean;
   agcOffsetDb: number;
   rxAfGainDb: number;
+  // TX mic gain in dB ([-40, +10]) and TX Leveler max-gain ceiling in dB
+  // ([0, 15]). Server is authoritative; hydrated into tx-store on every fresh
+  // RadioStateDto. Previously localStorage-only and reverted on every restart
+  // when the desktop webview wiped its storage.
+  micGainDb: number;
+  levelerMaxGainDb: number;
   attenDb: number;
   autoAttEnabled: boolean;
   attOffsetDb: number;
@@ -436,6 +442,12 @@ export function normalizeState(raw: unknown): RadioStateDto {
     autoAgcEnabled: typeof r.autoAgcEnabled === 'boolean' ? r.autoAgcEnabled : false,
     agcOffsetDb: typeof r.agcOffsetDb === 'number' ? r.agcOffsetDb : 0,
     rxAfGainDb: typeof r.rxAfGainDb === 'number' ? r.rxAfGainDb : 0,
+    // 0 dB = unity panel-gain (WDSP TXA open-time default).
+    micGainDb: typeof r.micGainDb === 'number' ? r.micGainDb : 0,
+    // 8 dB matches WdspDspEngine.DefaultLevelerMaxGainDb so older servers
+    // without the field hydrate to the same ceiling the engine opens with.
+    levelerMaxGainDb:
+      typeof r.levelerMaxGainDb === 'number' ? r.levelerMaxGainDb : 8,
     // Attenuator value in dB, range 0..31 (HpsdrAtten.MaxDb). 4-button UI
     // sends 0/10/20/30 today; #23 will unlock the full fine-grained range.
     attenDb: typeof r.attenDb === 'number' ? r.attenDb : 0,

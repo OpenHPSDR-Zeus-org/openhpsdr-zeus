@@ -50,8 +50,6 @@ import {
   disconnectP2 as apiDisconnectP2,
   fetchRadios,
   fetchState,
-  setLevelerMaxGain,
-  setMicGain,
   type RadioInfoDto,
 } from '../api/client';
 import {
@@ -116,21 +114,16 @@ function parseRawBoardId(raw: string | undefined): number | null {
 
 // Post-connect side-effects shared by discover-click and manual-connect.
 //
-// Drive / TUN drive are now authoritative on the server (StateDto.DrivePct /
-// TunePct, persisted via RadioStateStore). The connect-time response already
-// carries the hydrated values; tx-store.hydrateFromState picks them up from
-// the RadioStateDto returned by /api/connect. Pushing the localStorage mirror
-// back here would clobber the server's just-hydrated values, which is exactly
-// the bug reported for relaunches that didn't restore drive.
-//
-// micGainDb / levelerMaxGainDb don't have a server-authoritative path yet, so
-// they continue to push from localStorage. Migrating them to the same
-// StateDto pattern is the natural follow-up.
+// Drive / TUN drive, mic gain, and Leveler max-gain are all authoritative on
+// the server (StateDto.DrivePct / TunePct / MicGainDb / LevelerMaxGainDb,
+// persisted via RadioStateStore). The connect-time response carries the
+// hydrated values and tx-store.hydrateFromState picks them up; pushing the
+// localStorage mirror back here would clobber the server's just-hydrated
+// values, which is the bug reported for relaunches that didn't restore drive
+// (and the same bug that left mic gain + Leveler reverting on every desktop
+// launch when Photino wiped its storage).
 function applyPostConnectEffects() {
   void getAudioClient().start();
-  const tx = useTxStore.getState();
-  void setMicGain(tx.micGainDb).catch(() => {});
-  void setLevelerMaxGain(tx.levelerMaxGainDb).catch(() => {});
 }
 
 export interface ConnectPanelProps {

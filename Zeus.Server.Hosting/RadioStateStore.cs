@@ -13,9 +13,10 @@ using Zeus.Contracts;
 namespace Zeus.Server;
 
 // Persists the subset of RadioService state that no dedicated store covers:
-// active mode/VFO, RX/TX filter bounds, master volume, display zoom,
-// auto-ATT/AGC toggles, user-baseline attenuator, and the eight per-mode-
-// family filter memory slots (SSB/AM/FM/CW × RX/TX).
+// active mode/VFO, RX/TX filter bounds, master volume, TX mic gain, TX
+// Leveler max gain, display zoom, auto-ATT/AGC toggles, user-baseline
+// attenuator, and the eight per-mode-family filter memory slots
+// (SSB/AM/FM/CW × RX/TX).
 //
 // Not persisted here — handled elsewhere or intentionally ephemeral:
 //   AgcTopDb, Nr, Cfc       → DspSettingsStore
@@ -148,6 +149,17 @@ public sealed class RadioStateEntry
     public int AttenDb { get; set; }
     public bool AutoAgcEnabled { get; set; }
     public double RxAfGainDb { get; set; }
+    // TX mic gain in dB, range [-40, +10]. Default 0 ≡ unity panel-gain (mirrors
+    // WdspDspEngine TXA fresh-open). The endpoint accepted this value but didn't
+    // save it; lived only in frontend localStorage and reverted on every restart
+    // when the desktop webview's storage was wiped.
+    public int MicGainDb { get; set; }
+    // TX Leveler max-gain ceiling in dB, range [0, 15]. Default 8.0 matches
+    // WdspDspEngine.DefaultLevelerMaxGainDb so legacy rows missing the field
+    // hydrate with the same ceiling the engine has always opened with. Like
+    // MicGainDb, this used to live only in localStorage and reverted on
+    // restart.
+    public double LevelerMaxGainDb { get; set; } = 8.0;
     public int ZoomLevel { get; set; } = 1;
     // Drive slider % (0..100). Default 0 mirrors RadioService._drivePct seed.
     public int DrivePct { get; set; }

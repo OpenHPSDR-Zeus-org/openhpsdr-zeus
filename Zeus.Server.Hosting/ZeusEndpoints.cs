@@ -457,28 +457,29 @@ public static class ZeusEndpoints
         // -10..-15 dBFS, which over-drives WDSP TXA + ALC and prints as
         // splatter on the air; without an attenuator the operator has nowhere
         // to back off. Range matches Thetis's MicGainMin/Max defaults
-        // (console.cs:19151 = -40, :19163 = +10).
-        app.MapPost("/api/mic-gain", (MicGainSetRequest req, DspPipelineService pipe) =>
+        // (console.cs:19151 = -40, :19163 = +10). RadioService persists the dB
+        // value via RadioStateStore; the dB → linear (10^(db/20)) conversion
+        // happens at the engine seam in DspPipelineService.
+        app.MapPost("/api/mic-gain", (MicGainSetRequest req, RadioService r) =>
         {
-            int db = Math.Clamp(req.Db, -40, 10);
-            double gain = Math.Pow(10.0, db / 20.0);
-            pipe.CurrentEngine?.SetTxPanelGain(gain);
-            return Results.Ok(new { micGainDb = db });
+            var snap = r.SetTxMicGain(req.Db);
+            return Results.Ok(new { micGainDb = snap.MicGainDb });
         });
 
         // Leveler max-gain ceiling in dB. Operator-safe band is 0..15 dB: 0 disables
         // the headroom entirely (unity-cap Leveler) and 15 matches Thetis's stock
         // ceiling (radio.cs:2979 tx_leveler_max_gain = 15.0). Anything outside is a
         // 400 so a misbehaving client can't hand WDSP a value that'd saturate on
-        // the first voiced sample. The server is stateless for this setting —
-        // frontend re-POSTs on WS reconnect to re-sync after a server restart.
-        app.MapPost("/api/tx/leveler-max-gain", (LevelerMaxGainSetRequest req, DspPipelineService pipe) =>
+        // the first voiced sample. RadioService persists via RadioStateStore so
+        // the operator's ceiling survives backend restart; the frontend no
+        // longer needs to re-POST on WS reconnect.
+        app.MapPost("/api/tx/leveler-max-gain", (LevelerMaxGainSetRequest req, RadioService r) =>
         {
             if (req.Gain < 0.0 || req.Gain > 15.0 || double.IsNaN(req.Gain))
                 return Results.BadRequest(new { error = "gain must be 0..15 dB" });
             log.LogInformation("api.tx.levelerMaxGain dB={Db:F1}", req.Gain);
-            pipe.CurrentEngine?.SetTxLevelerMaxGain(req.Gain);
-            return Results.Ok(new { levelerMaxGainDb = req.Gain });
+            var snap = r.SetTxLevelerMaxGain(req.Gain);
+            return Results.Ok(new { levelerMaxGainDb = snap.LevelerMaxGainDb });
         });
 
         // TUN: internal-tune carrier. Flips SetTXAPostGenRun on WDSP; server-side is

@@ -267,6 +267,11 @@ public sealed class RadioService : IDisposable
             TxFilterLowHz: rsSnap?.TxFilterLowHz ?? 150,
             TxFilterHighHz: rsSnap?.TxFilterHighHz ?? 2850,
             RxAfGainDb: rsSnap?.RxAfGainDb ?? 0.0,
+            // 0 dB unity matches the engine's TXA fresh-open default; legacy
+            // rows missing the field hydrate to that same default.
+            MicGainDb: Math.Clamp(rsSnap?.MicGainDb ?? 0, -40, 10),
+            // 8.0 dB matches WdspDspEngine.DefaultLevelerMaxGainDb.
+            LevelerMaxGainDb: Math.Clamp(rsSnap?.LevelerMaxGainDb ?? 8.0, 0.0, 15.0),
             AutoAgcEnabled: rsSnap?.AutoAgcEnabled ?? false,
             AgcOffsetDb: 0.0,       // always reset — control-loop accumulator
             // PS persisted fields (or DTO defaults when not persisted yet).
@@ -1310,6 +1315,26 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    // TX mic gain in dB. Server-clamped to [-40, +10] to match the endpoint
+    // contract and Thetis's MicGainMin/Max defaults. The dB → linear (10^(db/20))
+    // conversion happens at the engine seam in DspPipelineService so the wire
+    // and persisted form is the operator-friendly integer.
+    public StateDto SetTxMicGain(int db)
+    {
+        int clamped = Math.Clamp(db, -40, 10);
+        Mutate(s => s with { MicGainDb = clamped });
+        return Snapshot();
+    }
+
+    // TX Leveler max-gain ceiling in dB. Server-clamped to [0, 15]; same
+    // operator-safe band the endpoint already enforced.
+    public StateDto SetTxLevelerMaxGain(double db)
+    {
+        double clamped = Math.Clamp(db, 0.0, 15.0);
+        Mutate(s => s with { LevelerMaxGainDb = clamped });
+        return Snapshot();
+    }
+
     public StateDto SetNr(NrConfig cfg)
     {
         ArgumentNullException.ThrowIfNull(cfg);
@@ -1685,6 +1710,8 @@ public sealed class RadioService : IDisposable
                 AttenDb = snap.AttenDb,
                 AutoAgcEnabled = snap.AutoAgcEnabled,
                 RxAfGainDb = snap.RxAfGainDb,
+                MicGainDb = snap.MicGainDb,
+                LevelerMaxGainDb = snap.LevelerMaxGainDb,
                 ZoomLevel = snap.ZoomLevel,
                 SsbFilterLoAbs = ssb.LoAbs,   SsbFilterHiAbs = ssb.HiAbs,
                 AmFilterLoAbs = am.LoAbs,     AmFilterHiAbs = am.HiAbs,

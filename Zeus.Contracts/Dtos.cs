@@ -162,6 +162,23 @@ public sealed record StateDto(
     // yet; when multi-RX lands this becomes the master and the per-RX
     // values layer on top.
     double RxAfGainDb = 0.0,
+    // TX mic gain in dB. WDSP applies via SetTXAPanelGain1(10^(db/20)); the
+    // server stores the operator-friendly dB and converts at the engine seam.
+    // Range matches the /api/mic-gain endpoint clamp ([-40, +10]) which in
+    // turn matches Thetis's MicGainMin/Max defaults (console.cs:19151/19163).
+    // Persisted server-side via RadioStateStore so a fresh frontend connect
+    // (or a desktop relaunch that wiped localStorage) lands on the last
+    // operator value instead of the engine's 0 dB seed. Wire name omits the
+    // Tx prefix to match the existing /api/mic-gain endpoint POST response.
+    int MicGainDb = 0,
+    // TX Leveler max-gain ceiling in dB. Range [0, 15] — 0 disables the
+    // headroom entirely, 15 matches Thetis's stock ceiling
+    // (radio.cs:2979 tx_leveler_max_gain = 15.0). Default 8.0 matches
+    // WdspDspEngine.DefaultLevelerMaxGainDb (Brian's HL2 starting point;
+    // softer than Thetis stock). Persisted server-side; previously
+    // localStorage-only on the client and reverted on every restart. Wire
+    // name matches the existing /api/tx/leveler-max-gain endpoint response.
+    double LevelerMaxGainDb = 8.0,
     // Auto-AGC control loop. When on, the server automatically adjusts
     // AgcTopDb based on signal conditions. Similar to Auto-ATT but for AGC.
     // Default is OFF — operator must explicitly enable. The control loop
