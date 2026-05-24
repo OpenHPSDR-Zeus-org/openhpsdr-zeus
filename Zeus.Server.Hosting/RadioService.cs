@@ -683,6 +683,44 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
+    /// <summary>
+    /// Force the hardware LO to the canonical CW-mode offset of the
+    /// displayed VFO (LO = VFO − pitch for CWU, LO = VFO + pitch for CWL)
+    /// so a CW transmission lands the carrier on the dial. No-op for non-CW
+    /// modes and when the LO is already aligned.
+    ///
+    /// Background: CTUN (centred tuning) lets the operator click-tune the
+    /// panadapter without moving the hardware LO; <see cref="SetVfo"/>
+    /// updates only the displayed VFO and lets WDSP's shift stage move the
+    /// signal to baseband. That trick works fine for RX, but TX shares the
+    /// same physical NCO — if we keyed the radio while CTUN was active, the
+    /// carrier would land at <c>LO ± pitch</c> in real RF, not at the dial.
+    /// The host-side CW engine calls this before each transmission to
+    /// guarantee the operator-tuned freq is what reaches the antenna; the
+    /// pattern is the TCI-equivalent of "external retune" — see issue
+    /// <c>zeus-drf</c> bench notes (2026-05-24).
+    ///
+    /// Returns true when the LO was actually moved (caller may want to
+    /// log it for diagnostics), false on no-op.
+    /// </summary>
+    public bool AlignLoForCwTx()
+    {
+        long vfo;
+        RxMode mode;
+        long currentLo;
+        lock (_sync)
+        {
+            vfo = _state.VfoHz;
+            mode = _state.Mode;
+            currentLo = _state.RadioLoHz;
+        }
+        if (mode != RxMode.CWU && mode != RxMode.CWL) return false;
+        long targetLo = CwOffset.EffectiveLoHz(mode, vfo);
+        if (targetLo == currentLo) return false;
+        SetRadioLo(targetLo);
+        return true;
+    }
+
     // Per-mode-family remembered filter magnitudes. Mode switching snapshots
     // the current abs-filter into the departing family's slot and restores the
     // target family's slot on entry — so FM→USB brings back the SSB width

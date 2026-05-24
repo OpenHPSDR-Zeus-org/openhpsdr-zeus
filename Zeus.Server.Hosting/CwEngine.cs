@@ -66,6 +66,13 @@ public sealed class CwEngine : BackgroundService
     private readonly ILogger<CwEngine> _log;
     private readonly Channel<CwJob> _jobs = Channel.CreateUnbounded<CwJob>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+    // .NET's default unbounded channel does NOT implement Reader.Count
+    // (CanCount=false), so calling _jobs.Reader.Count throws
+    // NotSupportedException. We need the depth for status reporting and
+    // idle gating, so track it ourselves via Interlocked. Incremented at
+    // the writer (SendAsync, Abort no-op), decremented after a successful
+    // worker read.
+    private int _pendingJobs;
 
     // Aborts the currently-playing job. Recreated on each new job so abort
     // doesn't poison the next send.
@@ -97,6 +104,7 @@ public sealed class CwEngine : BackgroundService
     {
         ArgumentNullException.ThrowIfNull(text);
         int effective = Math.Clamp(wpm ?? WpmDefault, WpmMin, WpmMax);
+        Interlocked.Increment(ref _pendingJobs);
         return _jobs.Writer.WriteAsync(new CwJob(text, effective), ct);
     }
 
@@ -105,8 +113,10 @@ public sealed class CwEngine : BackgroundService
     /// playback tick.</summary>
     public void Abort(string reason = "operator abort")
     {
-        // Drain queue first so cancelled jobs don't get picked up.
-        while (_jobs.Reader.TryRead(out _)) { /* discard */ }
+        // Drain queue first so cancelled jobs don't get picked up. Decrement
+        // the depth counter for every job we discard so the in-flight Status
+        // reports stay accurate.
+        while (_jobs.Reader.TryRead(out _)) Interlocked.Decrement(ref _pendingJobs);
         CancellationTokenSource? cts;
         lock (_abortLock) cts = _currentAbort;
         try { cts?.Cancel(); }
@@ -115,7 +125,7 @@ public sealed class CwEngine : BackgroundService
     }
 
     /// <summary>Tests only: snapshot queue depth without taking work.</summary>
-    internal int PendingJobCount => _jobs.Reader.Count;
+    internal int PendingJobCount => Volatile.Read(ref _pendingJobs);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -124,19 +134,24 @@ public sealed class CwEngine : BackgroundService
             CwJob job;
             try { job = await _jobs.Reader.ReadAsync(stoppingToken).ConfigureAwait(false); }
             catch (OperationCanceledException) { return; }
+            // Decrement BEFORE the job runs so QueueDepth reported in the
+            // Sending status reflects "jobs still waiting after me", not
+            // "jobs including me".
+            int remaining = Interlocked.Decrement(ref _pendingJobs);
 
             var jobCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
             lock (_abortLock) _currentAbort = jobCts;
             try
             {
-                await PlayJobAsync(job, jobCts.Token).ConfigureAwait(false);
+                await PlayJobAsync(job, remaining, jobCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
                 // Either operator abort or host shutdown. Either way, unkey
                 // and re-emit Idle if MOX is still ours.
                 Notify(new CwEngineStatus(
-                    CwEngineState.Aborting, job.Text, job.Wpm, _jobs.Reader.Count,
+                    CwEngineState.Aborting, job.Text, job.Wpm,
+                    Volatile.Read(ref _pendingJobs),
                     Reason: "aborted"));
                 TryReleaseMox("aborted");
             }
@@ -156,33 +171,52 @@ public sealed class CwEngine : BackgroundService
 
             // Emit Idle once the queue actually drains. Mid-queue jobs roll
             // into the next iteration without a flicker.
-            if (_jobs.Reader.Count == 0)
+            if (Volatile.Read(ref _pendingJobs) == 0)
                 Notify(new CwEngineStatus(CwEngineState.Idle, string.Empty, 0, 0));
         }
     }
 
-    private async Task PlayJobAsync(CwJob job, CancellationToken ct)
+    private async Task PlayJobAsync(CwJob job, int queueDepth, CancellationToken ct)
     {
+        // Before keying, force the hardware LO to the canonical CW offset
+        // of the dial — eliminates CTUN drift so the carrier lands on the
+        // operator's displayed VFO. No-op when CTUN wasn't in play; when it
+        // was, the panadapter view recenters, which matches Thetis CW-TX
+        // behaviour (the CTUN convenience is RX-only).
+        bool loRealigned = _radio.AlignLoForCwTx();
+
         var snap = _radio.Snapshot();
-        int pitchHz = PitchForMode(snap.Mode);
+        // Baseband offset = RadioLo − VFO. After AlignLoForCwTx this is
+        // exactly ∓ CwPitchHz (negative for CWU, positive for CWL) and the
+        // carrier lands at the dial. The formula is kept rather than
+        // hard-coding ±pitch so a future caller that skips AlignLoForCwTx
+        // (e.g. an operator who genuinely wants to TX off-centre under
+        // CTUN) still gets correct baseband math.
+        //
+        // Sign note (HL2 IQ convention): the HL2 emits the RF carrier at
+        // (LO − baseband_hz), not (LO + baseband_hz) — i.e. the "I − jQ"
+        // complex-baseband convention. Verified on a live HL2 2026-05-24
+        // (EA5IUE bench test).
+        int basebandHz = (int)(snap.RadioLoHz - snap.VfoHz);
 
         if (!_tx.TrySetMox(true, MoxSource.Cwx, out var err))
         {
             _log.LogWarning("cw.mox.refused text={Text} reason={Err}", Truncate(job.Text), err);
             Notify(new CwEngineStatus(
-                CwEngineState.Idle, job.Text, job.Wpm, _jobs.Reader.Count,
+                CwEngineState.Idle, job.Text, job.Wpm, queueDepth,
                 Reason: err ?? "MOX refused"));
             return;
         }
-        Notify(new CwEngineStatus(CwEngineState.Sending, job.Text, job.Wpm, _jobs.Reader.Count));
-        _log.LogInformation("cw.send text={Text} wpm={Wpm} pitch={Pitch}Hz",
-            Truncate(job.Text), job.Wpm, pitchHz);
+        Notify(new CwEngineStatus(CwEngineState.Sending, job.Text, job.Wpm, queueDepth));
+        _log.LogInformation(
+            "cw.send text={Text} wpm={Wpm} mode={Mode} vfo={Vfo}Hz lo={Lo}Hz baseband={Bb}Hz loRealigned={LoRealigned}",
+            Truncate(job.Text), job.Wpm, snap.Mode, snap.VfoHz, snap.RadioLoHz, basebandHz, loRealigned);
 
         // Phase accumulator runs continuously across symbols so the tone
         // stays coherent through inter-element gaps (no phase pop on
         // each dit-onset). Reset per-job.
         double phase = 0.0;
-        double phaseStep = 2.0 * Math.PI * pitchHz / SampleRateHz;
+        double phaseStep = 2.0 * Math.PI * basebandHz / SampleRateHz;
         // Scratch buffer for chunked IQ writes. 2 floats per sample.
         var iq = new float[ChunkSamples * 2];
 
@@ -262,13 +296,13 @@ public sealed class CwEngine : BackgroundService
     }
 
     /// <summary>Test seam: precompute the IQ stream for <paramref name="text"/>
-    /// at <paramref name="wpm"/> and <paramref name="mode"/>. Used to assert
-    /// the wire shape without standing up a hub/ring/transport.</summary>
-    internal static float[] RenderForTest(string text, int wpm, RxMode mode)
+    /// at <paramref name="wpm"/>. <paramref name="basebandHz"/> is the live
+    /// engine's <c>(VfoHz − RadioLoHz)</c> — pass +600 for CWU without CTUN,
+    /// -600 for CWL without CTUN, or any signed offset to exercise CTUN.</summary>
+    internal static float[] RenderForTest(string text, int wpm, int basebandHz)
     {
-        int pitchHz = PitchForMode(mode);
         double phase = 0.0;
-        double phaseStep = 2.0 * Math.PI * pitchHz / SampleRateHz;
+        double phaseStep = 2.0 * Math.PI * basebandHz / SampleRateHz;
         var buf = new System.Collections.Generic.List<float>();
         foreach (var sym in MorseEncoder.Encode(text, wpm))
         {
@@ -291,18 +325,6 @@ public sealed class CwEngine : BackgroundService
         try { Status?.Invoke(status); }
         catch (Exception ex) { _log.LogWarning(ex, "cw.status subscriber threw"); }
     }
-
-    private static int PitchForMode(RxMode mode) => mode switch
-    {
-        // CWU: LO sits below the displayed VFO by CwPitchHz (see CwOffset),
-        // so +pitch baseband puts the carrier ON the displayed VFO.
-        RxMode.CWU => CwOffset.CwPitchHz,
-        // CWL: mirror image — LO above VFO, baseband tone is -pitch.
-        RxMode.CWL => -CwOffset.CwPitchHz,
-        // Operator not in CW. We still key — they may want a carrier on
-        // the displayed VFO for testing — but with no offset.
-        _ => 0,
-    };
 
     private static double RaisedCosineEnvelope(int sample, int total, int ramp)
     {
