@@ -243,6 +243,11 @@ public static class ZeusHost
         // TxTuneDriver pumps silent mic blocks through WDSP TXA while TUN is on so
         // the post-gen tone actually reaches the ring (no mic uplink during TUN).
         builder.Services.AddHostedService<TxTuneDriver>();
+        // Host-side CW keyer (zeus-drf). Single instance, drains a job queue
+        // and pushes envelope-shaped IQ directly into TxIqRing while holding
+        // MOX as MoxSource.Cwx.
+        builder.Services.AddSingleton<CwEngine>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<CwEngine>());
         // PS auto-attenuate timer2code-equivalent: ramps the radio's TX step
         // attenuator (Protocol2 only today) when calcc feedback level lands outside
         // the 128..181 ideal window, so PS has a recovery path on first arm. Idle

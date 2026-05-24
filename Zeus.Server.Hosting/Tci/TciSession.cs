@@ -947,7 +947,7 @@ public sealed class TciSession : IDisposable
         // state, TrySetMox is a no-op and lying to MSHV/WSJT-X causes the
         // client to think MOX is on when it isn't. MSHV tolerates redundant
         // echoes — it does not tolerate desynchronised state.
-        _tx.TrySetMox(on, out _);
+        _tx.TrySetMox(on, MoxSource.Tci, out _);
         Send(TciProtocol.Command("trx", rx, _tx.IsMoxOn));
     }
 
@@ -1458,7 +1458,11 @@ public sealed class TciSession : IDisposable
                 break;
             case "ZZTX0":
                 _log.LogInformation("tci.run_cat_ex ZZTX0 → force-unkey");
-                _tx.TrySetMox(false, out _);
+                // Source-tagged: a remote CAT command can drop MOX it itself
+                // claimed via trx:true, but cannot truncate a Cwx- or
+                // Hardware-driven transmission. The operator's UI button is
+                // still the master override.
+                _tx.TrySetMox(false, MoxSource.Tci, out _);
                 break;
             default:
                 _log.LogDebug("tci.run_cat_ex unhandled cmd={Cmd}", cmd);

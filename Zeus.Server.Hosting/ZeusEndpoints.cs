@@ -450,6 +450,25 @@ public static class ZeusEndpoints
             return Results.Ok(new { moxOn = tx.IsMoxOn });
         });
 
+        // CW keyer (zeus-drf). Body: { text, wpm? }. Returns 202 immediately;
+        // playback happens on the engine's worker. WPM null = engine default
+        // (currently 20); the engine clamps to 5..50. Empty text is allowed —
+        // produces no symbols and resolves to Idle without keying.
+        app.MapPost("/api/cw/send", async (CwSendRequest req, CwEngine cw) =>
+        {
+            await cw.SendAsync(req.Text ?? string.Empty, req.Wpm, default).ConfigureAwait(false);
+            return Results.Accepted();
+        });
+
+        // Hard abort. Drops the queue and signals the in-flight playback to
+        // cancel. MOX falls on the next playback tick (≤ ChunkSamples / SR ≈
+        // 10 ms). Returns 200 unconditionally — abort is best-effort.
+        app.MapPost("/api/cw/abort", (CwEngine cw) =>
+        {
+            cw.Abort("api.cw.abort");
+            return Results.Ok();
+        });
+
         // Mic-gain: N dB in [-40, +10], scales WDSP TXA panel-gain-1 the same
         // way Thetis does (console.cs:28805 setAudioMicGain → Audio.MicPreamp =
         // 10^(db/20) → cmaster.CMSetTXAPanelGain1). The negative range is the

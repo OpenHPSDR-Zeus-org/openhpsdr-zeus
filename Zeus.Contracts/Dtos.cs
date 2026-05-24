@@ -387,6 +387,13 @@ public sealed record AutoAgcSetRequest(bool Enabled);
 
 public sealed record TunSetRequest(bool On);
 
+// /api/cw/send body. Text is the ASCII transcript to key out; Wpm is the
+// playback speed (PARIS-method words per minute, clamped to 5..50 at the
+// engine seam). Wpm null means "use the operator's stored default" — at the
+// moment that's a fixed engine default; PR 2 hooks it into a persisted
+// CwSettingsStore.
+public sealed record CwSendRequest(string Text, int? Wpm = null);
+
 public sealed record MicGainSetRequest(int Db);
 
 // Leveler max-gain ceiling in dB. Server clamps to [0, 15]; outside that is
