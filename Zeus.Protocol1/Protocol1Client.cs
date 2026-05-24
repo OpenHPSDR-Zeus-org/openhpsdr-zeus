@@ -862,8 +862,17 @@ public sealed class Protocol1Client : IProtocol1Client
 
     // 4-phase rotation across the registers we currently own. Every phase
     // pairs the frequency register (ensuring sub-3ms QSY latency) with one
-    // of Config / DriveFilter / Attenuator in turn. Attenuator needs a slot
-    // or HL2 firmware never sees gain changes.
+    // of Config / DriveFilter / Attenuator / TxFreq in turn. Attenuator
+    // needs a slot or HL2 firmware never sees gain changes. TxFreq is
+    // refreshed once per cycle during RX as well — Square SDR 2 (HL2
+    // gateware built with FAN=1,UART=1) routes the FPGA's extamp module to
+    // a Kenwood-CAT emitter on io_uart_txd that fires on every TX-NCO
+    // register change; that CAT drives the rear-panel BVO PWM via the
+    // STM32G031 daughter-MCU (issue #361). Without TxFreq in the RX
+    // rotation the FPGA register stays static during dial moves and the
+    // BVO never tracks. We follow deskhpsdr here — @dl1bz got it right:
+    // old_protocol.c:2837-2846 emits C0=0x02 every round-robin pass
+    // regardless of MOX. Harmless on non-extamp boards.
     //
     // When MOX is on we swap in a TX-flavored table: with duplex=1 always
     // (ControlFrame.cs Config C4[2]), HL2 needs TxFreq (0x02) continuously
@@ -940,7 +949,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 5  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq4),
                 6  => (ControlFrame.CcRegister.LnaTxGainStable, ControlFrame.CcRegister.RxFreq),
                 7  => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.RxFreq),
-                8  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.Config),
+                8  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.TxFreq),
                 9  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.DriveFilter),
                 10 => (ControlFrame.CcRegister.RxFreq3,    ControlFrame.CcRegister.RxFreq4),
                 11 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.Attenuator),
@@ -967,7 +976,7 @@ public sealed class Protocol1Client : IProtocol1Client
             0 => (ControlFrame.CcRegister.Config,     ControlFrame.CcRegister.RxFreq),
             1 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.DriveFilter),
             2 => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.RxFreq),
-            _ => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.Config),
+            _ => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.TxFreq),
         };
     }
 
