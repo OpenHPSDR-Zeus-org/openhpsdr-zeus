@@ -443,15 +443,26 @@
   box-shadow: none;
   height: 60px;
   overflow: hidden;
+  /* See also: zeus-8tz — the bar must scroll inside .topbar-controls (the
+     only flex child allowed to shrink) so the brand on the left and the
+     Disconnect button on the right stay anchored at 1366×768. */
+  min-width: 0;
 }
+/* Brand + dividers + spacer + ConnectPanel never shrink — they sit at the
+   ends as fixed anchors. Only .topbar-controls (declared below) gets
+   min-width:0 + overflow-x:auto so it absorbs the squeeze on narrow desktop
+   windows. */
+.topbar > * { flex-shrink: 0; }
 .topbar .topbar-controls {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  /* Allow the controls block to scroll horizontally instead of bleeding off
-     the bar on narrow desktop windows; the bar's own overflow:hidden keeps
-     it from spilling into the workspace below. */
+  /* This is the one flex child that IS allowed to shrink — its content
+     scrolls horizontally when the operator's window is too narrow to lay
+     every group out side-by-side. The bar's own overflow:hidden keeps the
+     scroller from spilling into the workspace below. */
+  flex-shrink: 1;
   overflow-x: auto;
   scrollbar-width: thin;
 }
@@ -2172,7 +2183,29 @@
   border-radius: 0;
   box-shadow: none;
   height: 38px;
+  /* At 1366×768 (minimum supported resolution) the transport row holds ~16
+     controls + status pills + Add Panel / Reset buttons. Without a horizontal
+     overflow affordance the rightmost actions (Add Panel, Reset) slide off
+     the right edge with no scrollbar — issue zeus-8tz. overflow-x:auto keeps
+     every control reachable via the bar's own thin scroller; min-width:0
+     lets the flex track shrink below its intrinsic content width so the
+     scroll actually engages instead of pushing the grid wider than the
+     viewport. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  min-width: 0;
+  scrollbar-width: thin;
 }
+/* Direct flex children of .transport must not shrink — controls keep their
+   intrinsic size and the bar scrolls instead. Without this, flex would
+   compress buttons to illegibility before the scrollbar appears. The .spacer
+   between left-side TX controls and right-side pills is the one exception:
+   it must remain flex:1 0 auto so it greedily fills available space when the
+   bar IS wider than its content (the common ≥1600px case) and collapses to
+   0 when it isn't (so the right-side pills sit immediately after the left
+   group instead of being scrolled past empty space). */
+.transport > * { flex-shrink: 0; }
+.transport > .spacer { flex: 1 0 auto; min-width: 0; }
 /* Transport buttons read as flat clickable regions of the toolbar, not raised
    chiclets. TX (MOX-on) is excluded — it keeps its red bevel/pulse for safety. */
 .transport .btn {
