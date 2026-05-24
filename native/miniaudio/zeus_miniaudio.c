@@ -162,6 +162,28 @@ ZEUS_MA_EXPORT void* zeus_ma_output_create(
      * already provides. wasapi.usage is a no-op on macOS / Linux backends. */
     cfg.performanceProfile = ma_performance_profile_low_latency;
     cfg.wasapi.usage       = ma_wasapi_usage_pro_audio;
+    /* CRITICAL for low output latency (issue #468). WASAPI shared-mode
+     * low-latency (IAudioClient3_InitializeSharedAudioStream) is SILENTLY
+     * DISABLED whenever the app-requested sample rate differs from the
+     * device's native rate, because miniaudio then sets
+     * AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM and IAudioClient3 rejects it
+     * (miniaudio.h §15.1). When that happens miniaudio falls back to the
+     * DEFAULT shared-mode buffer, which on some endpoints — notably RDP /
+     * remote-desktop virtual audio, but also any device whose native rate
+     * isn't 48 kHz (e.g. a 44.1 kHz endpoint) — is ~1–2 SECONDS deep. That
+     * deep buffer is exactly the PublishAudio→audible gap the t4 resume probe
+     * measured at +1677 ms while the backend delivered audio in ~22 ms.
+     *
+     * Setting noAutoConvertSRC keeps IAudioClient3 happy (no AUTOCONVERTPCM
+     * flag), so low-latency shared mode engages and the buffer collapses to
+     * the requested ~20 ms (periodFrames*periods below). The device's own
+     * rate conversion is replaced by miniaudio's internal resampler, already
+     * configured to linear above — adequate for 48 kHz voice/SSB and a
+     * negligible CPU cost. WASAPI-only field; a harmless no-op on the
+     * CoreAudio / ALSA / PulseAudio backends, so macOS and Linux are
+     * unaffected. The device stays ONE continuously-running stream — no
+     * stop/start, no ramp. */
+    cfg.wasapi.noAutoConvertSRC = MA_TRUE;
 
     if (ma_device_init(NULL, &cfg, &h->device) != MA_SUCCESS) {
         free(h);

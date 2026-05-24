@@ -278,7 +278,9 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
         _ring.Clear();
 
         // Arm the output-side resume probe on the falling edge (TX→RX). The
-        // next playback callback that pulls real data from the ring stamps t4.
+        // next playback callback that outputs a real (non-zero) sample stamps
+        // t4 — confirms the device-buffer-depth fix actually shrank the
+        // PublishAudio→audible latency (issue #468).
         if (!txActive)
         {
             _resumeUnkeyTicks = System.Diagnostics.Stopwatch.GetTimestamp();
