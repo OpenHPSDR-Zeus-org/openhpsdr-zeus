@@ -602,54 +602,26 @@ public sealed class RadioService : IDisposable
     {
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
         long previous;
-        long radioLo;
         RxMode currentMode;
-        int sampleRate;
-        int zoomLevel;
-        int filterLow;
-        int filterHigh;
         lock (_sync)
         {
             previous = _state.VfoHz;
             currentMode = _state.Mode;
-            radioLo = _state.RadioLoHz;
-            sampleRate = _state.SampleRate;
-            zoomLevel = Math.Max(1, _state.ZoomLevel);
-            filterLow = _state.FilterLowHz;
-            filterHigh = _state.FilterHighHz;
         }
-        bool retune;
-        if (!fromExternal)
-        {
-            long effectiveLoNew = CwOffset.EffectiveLoHz(currentMode, clamped);
-            long proposedShift = effectiveLoNew - radioLo;
-            long lMargin = Math.Max(0, -filterLow);
-            long hMargin = Math.Max(0, filterHigh);
-            double dispWidth = (double)sampleRate / zoomLevel;
-            double dispMarginHz = dispWidth * 0.05;
-            double lDisp = -dispWidth / 2.0 + dispMarginHz;
-            double hDisp = dispWidth / 2.0 - dispMarginHz;
-            bool outsideVisible = (proposedShift - lMargin) < lDisp
-                               || (proposedShift + hMargin) > hDisp;
-            long ifCapacity = (long)(sampleRate * 0.46);
-            bool outsideIf = Math.Abs(proposedShift) > ifCapacity;
-            retune = outsideVisible || outsideIf;
-        }
-        else
-        {
-            retune = true;
-        }
+        // Classic "radio follows the dial" tuning. The CTUN frozen-NCO model
+        // (#470) was reverted: it pinned the hardware NCO at the panadapter
+        // centre and offset RX in WDSP, but neither protocol client has a
+        // separate TX VFO (ControlFrame writes one VfoAHz to every freq
+        // register), so TX transmitted on the frozen centre instead of the
+        // dial. Every tune now retunes the radio so RX *and* TX track the dial;
+        // RadioLoHz follows the dial's effective LO (CW: dial ∓ pitch), which
+        // leaves the WDSP CTUN-shift stage at zero. The fromExternal flag is
+        // kept for API compatibility but no longer changes behaviour — all
+        // tunes retune now.
+        _ = fromExternal;
         long radioLoNew = CwOffset.EffectiveLoHz(currentMode, clamped);
-        Mutate(s => retune
-            ? s with { VfoHz = clamped, RadioLoHz = radioLoNew }
-            : s with { VfoHz = clamped });
-        if (retune)
-        {
-            // CW retunes the LO cw_pitch below/above the dial so the listening
-            // freq lands on the +cw_pitch / -cw_pitch audio passband. In SSB /
-            // AM / FM / DIG modes EffectiveLoHz returns the dial unchanged.
-            ActiveClient?.SetVfoAHz(radioLoNew);
-        }
+        Mutate(s => s with { VfoHz = clamped, RadioLoHz = radioLoNew });
+        ActiveClient?.SetVfoAHz(radioLoNew);
         // Band edge crossed? Per-band PA gain / OC bits may have swapped — push
         // the new snapshot before the next TX frame ships. Cheap when no
         // crossing occurred (same bytes re-pushed).
