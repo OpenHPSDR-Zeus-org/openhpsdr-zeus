@@ -655,6 +655,15 @@ public sealed record BottomPinSetRequest(
     bool Logbook,
     bool TxMeters);
 
+// Vertical split between the panadapter and the waterfall in the Hero
+// panel. PanPercent is the panadapter share, clamped 10..90; the
+// waterfall takes the remainder. Single global value for now. Persisted
+// server-side in zeus-prefs.db (same pattern as BottomPinDto) so the
+// choice follows the operator across browsers / devices.
+public sealed record PanWfSplitDto(double PanPercent);
+
+public sealed record PanWfSplitSetRequest(double PanPercent);
+
 // ---- PureSignal request records ----
 // PsControlSetRequest = master arm (Enabled) + mode (Auto vs Single).
 // PsAdvancedSetRequest = nullable so partial updates from the settings

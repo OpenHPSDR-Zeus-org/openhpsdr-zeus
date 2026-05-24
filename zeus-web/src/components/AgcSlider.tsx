@@ -45,6 +45,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { setAgcTop, setAutoAgc } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useLiveSlider } from '../hooks/useLiveSlider';
 
 // AGC top (max gain) in dB. 80 is the Thetis AGC_MEDIUM default; the WDSP
 // docs call this the upper gain limit before compression kicks in.
@@ -67,27 +68,23 @@ export function AgcSlider() {
   const sliderValue = dragValue ?? userAgc;
   const effective = Math.round(Math.max(MIN, Math.min(MAX, sliderValue + offsetDb)));
 
-  const inflightAbort = useRef<AbortController | null>(null);
-  const latestSent = useRef<number>(userAgc);
   const autoAbort = useRef<AbortController | null>(null);
 
-  const sendValue = useCallback(
-    (v: number) => {
-      if (v === latestSent.current) return;
-      latestSent.current = v;
-      inflightAbort.current?.abort();
-      const ac = new AbortController();
-      inflightAbort.current = ac;
-      setAgcTop(v, ac.signal)
-        .then((next) => {
-          if (!ac.signal.aborted) applyState(next);
-        })
-        .catch(() => {
-          /* next poll will reconcile; don't noisily log on abort */
-        });
-    },
-    [applyState],
-  );
+  // Stream during drag (rAF coalesced), flush on release. The hook owns
+  // abort-on-supersede so a fast drag doesn't queue stale POSTs.
+  const liveSlider = useLiveSlider<number>({
+    send: useCallback(
+      (v: number, signal: AbortSignal) =>
+        setAgcTop(v, signal)
+          .then((next) => {
+            if (!signal.aborted) applyState(next);
+          })
+          .catch(() => {
+            /* next poll will reconcile; don't noisily log on abort */
+          }),
+      [applyState],
+    ),
+  });
 
   const toggleAuto = useCallback(() => {
     if (!connected) return;
@@ -105,7 +102,6 @@ export function AgcSlider() {
 
   useEffect(
     () => () => {
-      inflightAbort.current?.abort();
       autoAbort.current?.abort();
     },
     [],
@@ -136,17 +132,21 @@ export function AgcSlider() {
         step={1}
         value={sliderValue}
         disabled={!connected || autoEnabled}
-        onChange={(e) => setDragValue(Number(e.currentTarget.value))}
+        onChange={(e) => {
+          const v = Number(e.currentTarget.value);
+          setDragValue(v);
+          liveSlider.push(v);
+        }}
         onMouseUp={() => {
-          if (dragValue !== null) sendValue(dragValue);
+          liveSlider.flush();
           setDragValue(null);
         }}
         onTouchEnd={() => {
-          if (dragValue !== null) sendValue(dragValue);
+          liveSlider.flush();
           setDragValue(null);
         }}
         onKeyUp={() => {
-          if (dragValue !== null) sendValue(dragValue);
+          liveSlider.flush();
           setDragValue(null);
         }}
         style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}

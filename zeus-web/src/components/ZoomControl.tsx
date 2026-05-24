@@ -42,9 +42,10 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback } from 'react';
 import { setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useLiveSlider } from '../hooks/useLiveSlider';
 
 // Compact zoom slider styled as a panel-head chip. Lives in the hero
 // tile header (above the panadapter) so the operator always sees the
@@ -63,29 +64,31 @@ export function ZoomControl() {
   const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
 
-  const inflightAbort = useRef<AbortController | null>(null);
-  const latestSent = useRef<ZoomLevel>(serverZoom);
+  // rAF-coalesced live stream — keeps the panadapter zoom tracking the thumb
+  // during a fast drag while capping POSTs to one per paint (zoom triggers a
+  // backend panadapter recompute, so flooding is real if onChange ever fires
+  // faster than rAF).
+  const liveSlider = useLiveSlider<ZoomLevel>({
+    send: useCallback(
+      (v: ZoomLevel, signal: AbortSignal) =>
+        setZoom(v, signal)
+          .then((next) => {
+            if (!signal.aborted) applyState(next);
+          })
+          .catch(() => {
+            /* next state poll will reconcile */
+          }),
+      [applyState],
+    ),
+  });
 
-  const sendValue = useCallback(
+  const onSlide = useCallback(
     (v: ZoomLevel) => {
-      if (v === latestSent.current) return;
-      latestSent.current = v;
       setLocalZoom(v);
-      inflightAbort.current?.abort();
-      const ac = new AbortController();
-      inflightAbort.current = ac;
-      setZoom(v, ac.signal)
-        .then((next) => {
-          if (!ac.signal.aborted) applyState(next);
-        })
-        .catch(() => {
-          /* next state poll will reconcile */
-        });
+      liveSlider.push(v);
     },
-    [applyState, setLocalZoom],
+    [liveSlider, setLocalZoom],
   );
-
-  useEffect(() => () => inflightAbort.current?.abort(), []);
 
   return (
     <label
@@ -109,7 +112,10 @@ export function ZoomControl() {
         step={1}
         value={serverZoom}
         disabled={!connected}
-        onChange={(e) => sendValue(Number(e.currentTarget.value) as ZoomLevel)}
+        onChange={(e) => onSlide(Number(e.currentTarget.value) as ZoomLevel)}
+        onMouseUp={() => liveSlider.flush()}
+        onTouchEnd={() => liveSlider.flush()}
+        onKeyUp={() => liveSlider.flush()}
         aria-label="Zoom level"
         style={{
           width: 90,

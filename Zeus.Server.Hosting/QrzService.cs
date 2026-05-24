@@ -399,14 +399,23 @@ public sealed class QrzService
         return (false, null, reason ?? "Unknown error");
     }
 
-    private static string ConvertLogEntryToAdif(LogEntry entry)
+    /// <summary>Internal so AdifUtcTimezoneTests can verify the QRZ upload
+    /// path emits UTC clock values regardless of the incoming entry's
+    /// <see cref="DateTime.Kind"/>. The method is otherwise a private
+    /// detail of the publish path.</summary>
+    internal static string ConvertLogEntryToAdif(LogEntry entry)
     {
         var sb = new System.Text.StringBuilder();
 
         // Required fields
         AppendAdifField(sb, "CALL", entry.Callsign);
-        AppendAdifField(sb, "QSO_DATE", entry.QsoDateTimeUtc.ToString("yyyyMMdd"));
-        AppendAdifField(sb, "TIME_ON", entry.QsoDateTimeUtc.ToString("HHmmss"));
+        // .ToUniversalTime() guards against the LiteDB round-trip stripping
+        // the UTC kind off QsoDateTimeUtc — see LogService.AppendAdifRecord
+        // for the full story. Without it QRZ.com receives local-clock times
+        // and stamps the QSOs at the operator's wall-clock hour, breaking
+        // award credit and DXCC matching for anyone outside UTC.
+        AppendAdifField(sb, "QSO_DATE", entry.QsoDateTimeUtc.ToUniversalTime().ToString("yyyyMMdd"));
+        AppendAdifField(sb, "TIME_ON", entry.QsoDateTimeUtc.ToUniversalTime().ToString("HHmmss"));
         AppendAdifField(sb, "FREQ", entry.FrequencyMhz.ToString("F6", System.Globalization.CultureInfo.InvariantCulture));
         AppendAdifField(sb, "BAND", entry.Band);
         AppendAdifField(sb, "MODE", entry.Mode);

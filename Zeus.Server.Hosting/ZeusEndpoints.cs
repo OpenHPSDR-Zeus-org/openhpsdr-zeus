@@ -898,6 +898,20 @@ public static class ZeusEndpoints
             return Results.Ok(store.Get());
         });
 
+        // Vertical split between the panadapter and the waterfall in the
+        // Hero panel. PanPercent (10..90) is the panadapter share; the
+        // waterfall fills the remainder. Persisted in zeus-prefs.db so the
+        // choice follows the operator across browsers / devices, same
+        // pattern as /api/bottom-pin. Frontend reads on mount and PUTs
+        // debounced on drag-end.
+        app.MapGet("/api/pan-wf-split", (PanWfSplitStore store) => Results.Ok(store.Get()));
+
+        app.MapPut("/api/pan-wf-split", (PanWfSplitSetRequest req, PanWfSplitStore store) =>
+        {
+            var saved = store.Save(req.PanPercent);
+            return Results.Ok(saved);
+        });
+
         // Inline NR settings accordion disclosure state (NR1 / NR2 / NR4).
         // PUT writes all three flags atomically. Persisted in zeus-prefs.db
         // so the chevron-open preference follows the operator across

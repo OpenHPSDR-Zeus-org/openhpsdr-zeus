@@ -45,6 +45,37 @@
 import { useEffect } from 'react';
 import { useLoggerStore } from '../../state/logger-store';
 
+// QSO timestamps are stored / exported / uploaded to QRZ in UTC throughout
+// the server stack (Zeus.Server.Hosting/LogService.cs writes DateTime.UtcNow
+// when the client omits a value; QrzService.cs and the ADIF export both
+// pull QsoDateTimeUtc directly). The renderer used to drop into
+// browser-local time via Date.toLocale*String() with no timezone option —
+// which silently shifted the displayed clock for any operator outside
+// UTC. Ham-radio convention is to log + display QSO times in UTC always,
+// so both formatters pin timeZone:'UTC' and the column label carries a
+// "UTC" tag so the operator never has to guess.
+//
+// Exported so the test (LogbookLive.formatters.test.ts) can assert the
+// timezone behaviour without rendering the whole component.
+export function formatQsoTimeUtc(isoString: string): string {
+  const date = new Date(isoString);
+  return date.toLocaleTimeString([], {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: 'UTC',
+  });
+}
+
+export function formatQsoDateUtc(isoString: string): string {
+  const date = new Date(isoString);
+  return date.toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
 export function LogbookLive() {
   const entries = useLoggerStore((s) => s.entries);
   const totalCount = useLoggerStore((s) => s.totalCount);
@@ -65,6 +96,7 @@ export function LogbookLive() {
     }
   }, [lastPublishResult, publishError, clearPublishResult]);
 
+<<<<<<< HEAD
   const formatTime = (isoString: string) => {
     const date = new Date(isoString);
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
@@ -75,6 +107,8 @@ export function LogbookLive() {
     return date.toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: 'UTC' });
   };
 
+=======
+>>>>>>> origin/develop
   if (loading && entries.length === 0) {
     return (
       <div className="logbook">
@@ -99,8 +133,13 @@ export function LogbookLive() {
     <div className="logbook">
       <div className="log-head mono">
         <span style={{ width: '2rem' }}>✓</span>
+<<<<<<< HEAD
         <span>Date</span>
         <span>Time (UTC)</span>
+=======
+        <span title="QSO date in UTC">Date·UTC</span>
+        <span title="QSO time in UTC">Time·UTC</span>
+>>>>>>> origin/develop
         <span>Call</span>
         <span>Freq</span>
         <span>Mode</span>
@@ -124,8 +163,12 @@ export function LogbookLive() {
                 style={{ cursor: 'pointer', pointerEvents: 'none' }}
               />
             </span>
-            <span className="t-date">{formatDate(entry.qsoDateTimeUtc)}</span>
-            <span className="t-time">{formatTime(entry.qsoDateTimeUtc)}</span>
+            <span className="t-date" title={entry.qsoDateTimeUtc}>
+              {formatQsoDateUtc(entry.qsoDateTimeUtc)}
+            </span>
+            <span className="t-time" title={entry.qsoDateTimeUtc}>
+              {formatQsoTimeUtc(entry.qsoDateTimeUtc)}
+            </span>
             <span className="t-call">{entry.callsign}</span>
             <span>{entry.frequencyMhz.toFixed(3)}</span>
             <span className="t-mode">{entry.mode}</span>
