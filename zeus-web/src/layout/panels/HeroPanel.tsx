@@ -42,6 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+import { useCallback, useRef } from 'react';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { GripVertical, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
@@ -51,6 +52,8 @@ import { LeafletWorldMap } from '../../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../../components/design/LeafletMapErrorBoundary';
 import { useConnectionStore } from '../../state/connection-store';
 import { useRotatorStore } from '../../state/rotator-store';
+import { usePanWfSplitStore } from '../../state/pan-wf-split-store';
+import { PAN_WF_MAX_PERCENT, PAN_WF_MIN_PERCENT } from '../../api/pan-wf-split';
 import { useWorkspace } from '../WorkspaceContext';
 
 // Hero panel: Panadapter + Waterfall with optional Leaflet world-map overlay.
@@ -85,6 +88,70 @@ export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
     submitBeam,
   } = useWorkspace();
   const connected = useConnectionStore((s) => s.status === 'Connected');
+  const panPercent = usePanWfSplitStore((s) => s.panPercent);
+  const setPanPercentLive = usePanWfSplitStore((s) => s.setPanPercentLive);
+  const persistPanPercent = usePanWfSplitStore((s) => s.persistPanPercent);
+
+  // Drag state for the pan/wf splitter. We measure the spectrum-stack box
+  // on pointerdown and translate pointer Y → panadapter share (%). The
+  // store update is cheap (CSS grid template), so we run it at pointer
+  // rate; persistence happens once on pointerup via the debounced
+  // persistPanPercent action.
+  const spectrumStackRef = useRef<HTMLDivElement | null>(null);
+  const dragRectRef = useRef<DOMRect | null>(null);
+  const draggingPctRef = useRef<number>(panPercent);
+
+  const clampPct = (v: number) =>
+    Math.max(PAN_WF_MIN_PERCENT, Math.min(PAN_WF_MAX_PERCENT, v));
+
+  const onSplitPointerMove = useCallback(
+    (ev: PointerEvent) => {
+      const rect = dragRectRef.current;
+      if (!rect || rect.height <= 0) return;
+      const pct = clampPct(((ev.clientY - rect.top) / rect.height) * 100);
+      draggingPctRef.current = pct;
+      setPanPercentLive(pct);
+    },
+    [setPanPercentLive],
+  );
+
+  const onSplitPointerUp = useCallback(
+    (ev: PointerEvent) => {
+      window.removeEventListener('pointermove', onSplitPointerMove);
+      window.removeEventListener('pointerup', onSplitPointerUp);
+      window.removeEventListener('pointercancel', onSplitPointerUp);
+      try {
+        (ev.target as Element | null)?.releasePointerCapture?.(ev.pointerId);
+      } catch {
+        /* not all targets support release; ignore */
+      }
+      dragRectRef.current = null;
+      document.body.style.cursor = '';
+      void persistPanPercent(draggingPctRef.current);
+    },
+    [onSplitPointerMove, persistPanPercent],
+  );
+
+  const onSplitPointerDown = useCallback(
+    (ev: ReactPointerEvent<HTMLDivElement>) => {
+      ev.preventDefault();
+      ev.stopPropagation();
+      const stack = spectrumStackRef.current;
+      if (!stack) return;
+      dragRectRef.current = stack.getBoundingClientRect();
+      draggingPctRef.current = panPercent;
+      try {
+        (ev.target as Element).setPointerCapture?.(ev.pointerId);
+      } catch {
+        /* fallback to window listeners below */
+      }
+      document.body.style.cursor = 'row-resize';
+      window.addEventListener('pointermove', onSplitPointerMove);
+      window.addEventListener('pointerup', onSplitPointerUp);
+      window.addEventListener('pointercancel', onSplitPointerUp);
+    },
+    [panPercent, onSplitPointerMove, onSplitPointerUp],
+  );
 
   const handleRotateToBearing = (brg: number) => {
     const rot = useRotatorStore.getState();
@@ -240,17 +307,52 @@ export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
           </LeafletMapErrorBoundary>
         </div>
         <div
+          ref={spectrumStackRef}
           data-spectrum-stack
           style={{
             position: 'absolute',
             inset: 0,
             display: 'grid',
-            gridTemplateRows: '1fr 1fr',
+            // panPercent is the panadapter share (10..90); waterfall fills
+            // the remainder. fr units so the canvases naturally absorb the
+            // remaining height when the splitter moves.
+            gridTemplateRows: `${panPercent}fr ${100 - panPercent}fr`,
             zIndex: 1,
           }}
         >
           {connected && <Panadapter />}
           {connected && <Waterfall transparent={bgActive} />}
+          {/* Splitter — sits on the panadapter/waterfall boundary. The
+              parent grid is two rows; we position the handle at the
+              boundary with an absolutely-placed strip whose top tracks
+              panPercent. Hairline default, brighter on hover/active.
+              Pointer events on the strip don't propagate to the tile
+              drag (workspace-tile-header is the RGL drag handle). */}
+          <div
+            className="pan-wf-split-handle"
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize panadapter / waterfall split"
+            aria-valuemin={PAN_WF_MIN_PERCENT}
+            aria-valuemax={PAN_WF_MAX_PERCENT}
+            aria-valuenow={Math.round(panPercent)}
+            title="Drag to resize panadapter / waterfall"
+            style={{
+              position: 'absolute',
+              left: 0,
+              right: 0,
+              top: `${panPercent}%`,
+              transform: 'translateY(-50%)',
+              height: 8,
+              cursor: 'row-resize',
+              zIndex: 5,
+              touchAction: 'none',
+            }}
+            onPointerDown={onSplitPointerDown}
+            onMouseDown={(e) => e.stopPropagation()}
+          >
+            <div className="pan-wf-split-handle__line" />
+          </div>
         </div>
       </div>
     </div>
