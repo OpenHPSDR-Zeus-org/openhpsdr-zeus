@@ -96,6 +96,15 @@ public class SyntheticDspEngineTests
         eng.SetMox(false);
     }
 
+    [Fact]
+    public void TrySnapRawSpectrum_synthetic_returns_false()
+    {
+        using var engine = new SyntheticDspEngine();
+        Span<double> buf = new double[16384];
+        bool ok = engine.TrySnapRawSpectrum(channelId: 0, buf);
+        Assert.False(ok);
+    }
+
     private static int ArgMax(ReadOnlySpan<float> s)
     {
         int best = 0;

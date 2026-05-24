@@ -396,6 +396,12 @@ public sealed record Nr2CoreConfigSetRequest(
 // the discrete factor on the wire.
 public sealed record ZoomSetRequest(int Level);
 
+/// <summary>Body for POST /api/rx/zero-beat. <paramref name="RxId"/> is
+/// optional and defaults to 0 (RX1); kept on the wire from day 1 to leave
+/// room for multi-RX without breaking the contract. See
+/// docs/designs/cw-zero-beat.md §Future for the migration plan.</summary>
+public sealed record ZeroBeatRequest(byte? RxId = 0);
+
 public sealed record AutoAttSetRequest(bool Enabled);
 
 public sealed record AutoAgcSetRequest(bool Enabled);

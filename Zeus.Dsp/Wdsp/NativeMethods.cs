@@ -262,6 +262,20 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void GetPixels(int disp, int pixout, ref float pix, out int flag);
 
+    // SnapSpectrumTimeout — pulls a raw complex FFT snapshot (Re/Im interleaved
+    // doubles) from the analyzer identified by (disp, ss, LO). Blocks up to
+    // timeoutMs milliseconds for a fresh frame. flag is set to 1 on success,
+    // 0 on timeout. analyzer.c:1633.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SnapSpectrumTimeout(
+        int disp,
+        int ss,
+        int LO,
+        ref double snap_buff,
+        uint timeoutMs,
+        ref int flag);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void fexchange0(
