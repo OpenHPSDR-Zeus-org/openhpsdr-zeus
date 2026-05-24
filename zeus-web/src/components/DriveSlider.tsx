@@ -42,18 +42,19 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { setDrive } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 import { usePaStore } from '../state/pa-store';
+import { useLiveSlider } from '../hooks/useLiveSlider';
 
-// PRD FR-4 drive range: 0..100 percent. Per-pixel POSTs would flood the
-// server during a drag — trailing-edge debounce keeps the wire quiet while
-// still giving a responsive thumb because the store updates optimistically.
+// PRD FR-4 drive range: 0..100 percent. Stream during drag via rAF coalesce
+// (one POST per paint at most) so the radio's drive byte tracks the thumb in
+// real time during MOX — previously a 100 ms trailing-edge debounce caused
+// audible lag on a fast sweep.
 const MIN = 0;
 const MAX = 100;
-const DEBOUNCE_MS = 100;
 
 export function DriveSlider() {
   const connected = useConnectionStore((s) => s.status === 'Connected');
@@ -66,40 +67,29 @@ export function DriveSlider() {
   const paMaxWatts = usePaStore((s) => s.settings.global.paMaxPowerWatts);
   const targetWatts = paMaxWatts > 0 ? Math.round((paMaxWatts * drivePercent) / 100) : null;
 
-  const inflightAbort = useRef<AbortController | null>(null);
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSent = useRef<number>(drivePercent);
+  // Tracks the most recently acknowledged value so we can roll back on error.
   const previousOnError = useRef<number>(drivePercent);
 
-  const sendDebounced = useCallback((v: number) => {
-    if (debounceTimer.current != null) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => {
-      if (v === lastSent.current) return;
-      inflightAbort.current?.abort();
-      const ac = new AbortController();
-      inflightAbort.current = ac;
-      const prevValue = lastSent.current;
-      lastSent.current = v;
-      previousOnError.current = prevValue;
-      setDrive(v, ac.signal)
-        .then((r) => {
-          if (ac.signal.aborted) return;
-          if (r.drivePercent !== v) setDrivePercent(r.drivePercent);
-        })
-        .catch((err) => {
-          if (ac.signal.aborted) return;
-          if (err instanceof DOMException && err.name === 'AbortError') return;
-          // Roll back the optimistic update so the user sees the real state.
-          setDrivePercent(previousOnError.current);
-          lastSent.current = previousOnError.current;
-        });
-    }, DEBOUNCE_MS);
-  }, [setDrivePercent]);
-
-  useEffect(() => () => {
-    inflightAbort.current?.abort();
-    if (debounceTimer.current != null) clearTimeout(debounceTimer.current);
-  }, []);
+  const liveSlider = useLiveSlider<number>({
+    send: useCallback(
+      (v: number, signal: AbortSignal) => {
+        const prevValue = previousOnError.current;
+        return setDrive(v, signal)
+          .then((r) => {
+            if (signal.aborted) return;
+            previousOnError.current = r.drivePercent;
+            if (r.drivePercent !== v) setDrivePercent(r.drivePercent);
+          })
+          .catch((err) => {
+            if (signal.aborted) return;
+            if (err instanceof DOMException && err.name === 'AbortError') return;
+            // Roll back the optimistic update so the user sees the real state.
+            setDrivePercent(prevValue);
+          });
+      },
+      [setDrivePercent],
+    ),
+  });
 
   // Server is now authoritative for drivePercent (StateDto.DrivePct, persisted
   // via RadioStateStore, hydrated into tx-store by tx-store.hydrateFromState
@@ -110,7 +100,7 @@ export function DriveSlider() {
   const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = Number(e.currentTarget.value);
     setDrivePercent(v);
-    sendDebounced(v);
+    liveSlider.push(v);
   };
 
   return (
@@ -124,6 +114,9 @@ export function DriveSlider() {
         value={drivePercent}
         disabled={!connected}
         onChange={onChange}
+        onMouseUp={() => liveSlider.flush()}
+        onTouchEnd={() => liveSlider.flush()}
+        onKeyUp={() => liveSlider.flush()}
         style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}
       />
       <span className="mono" style={{ width: 40, textAlign: 'right', color: 'var(--power)', fontSize: 11, fontWeight: 700 }}>

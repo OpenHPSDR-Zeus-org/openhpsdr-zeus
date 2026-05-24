@@ -42,9 +42,10 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { setMicGain } from '../api/client';
 import { useTxStore } from '../state/tx-store';
+import { useLiveSlider } from '../hooks/useLiveSlider';
 
 // Mic-gain range: −40..+10 dB, default 0 dB (= unity, no behaviour change
 // for operators who never moved the slider). Matches Thetis's defaults at
@@ -60,45 +61,32 @@ import { useTxStore } from '../state/tx-store';
 // operator can dial in level against the live mic meter before keying.
 const MIN = -40;
 const MAX = 10;
-const DEBOUNCE_MS = 100;
 
 export function MicGainSlider() {
   const micGainDb = useTxStore((s) => s.micGainDb);
   const setMicGainDb = useTxStore((s) => s.setMicGainDb);
 
-  const inflightAbort = useRef<AbortController | null>(null);
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSent = useRef<number>(micGainDb);
   const previousOnError = useRef<number>(micGainDb);
 
-  const sendDebounced = useCallback((v: number) => {
-    if (debounceTimer.current != null) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => {
-      if (v === lastSent.current) return;
-      inflightAbort.current?.abort();
-      const ac = new AbortController();
-      inflightAbort.current = ac;
-      const prevValue = lastSent.current;
-      lastSent.current = v;
-      previousOnError.current = prevValue;
-      setMicGain(v, ac.signal)
-        .then((r) => {
-          if (ac.signal.aborted) return;
-          if (r.micGainDb !== v) setMicGainDb(r.micGainDb);
-        })
-        .catch((err) => {
-          if (ac.signal.aborted) return;
-          if (err instanceof DOMException && err.name === 'AbortError') return;
-          setMicGainDb(previousOnError.current);
-          lastSent.current = previousOnError.current;
-        });
-    }, DEBOUNCE_MS);
-  }, [setMicGainDb]);
-
-  useEffect(() => () => {
-    inflightAbort.current?.abort();
-    if (debounceTimer.current != null) clearTimeout(debounceTimer.current);
-  }, []);
+  const liveSlider = useLiveSlider<number>({
+    send: useCallback(
+      (v: number, signal: AbortSignal) => {
+        const prevValue = previousOnError.current;
+        return setMicGain(v, signal)
+          .then((r) => {
+            if (signal.aborted) return;
+            previousOnError.current = r.micGainDb;
+            if (r.micGainDb !== v) setMicGainDb(r.micGainDb);
+          })
+          .catch((err) => {
+            if (signal.aborted) return;
+            if (err instanceof DOMException && err.name === 'AbortError') return;
+            setMicGainDb(prevValue);
+          });
+      },
+      [setMicGainDb],
+    ),
+  });
 
   // Rounded on send / display so the wire contract stays integer dB, but the
   // slider itself uses 0.5-step so micro-drags cross a step boundary on the
@@ -109,7 +97,7 @@ export function MicGainSlider() {
   const onInput = (e: React.FormEvent<HTMLInputElement>) => {
     const v = Number(e.currentTarget.value);
     setMicGainDb(v);
-    sendDebounced(Math.round(v));
+    liveSlider.push(Math.round(v));
   };
 
   return (
@@ -123,6 +111,9 @@ export function MicGainSlider() {
         value={micGainDb}
         onInput={onInput}
         onChange={onInput}
+        onMouseUp={() => liveSlider.flush()}
+        onTouchEnd={() => liveSlider.flush()}
+        onKeyUp={() => liveSlider.flush()}
         style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}
       />
       <span className="mono" style={{ width: 52, textAlign: 'right', color: 'var(--fg-1)', fontSize: 11 }}>

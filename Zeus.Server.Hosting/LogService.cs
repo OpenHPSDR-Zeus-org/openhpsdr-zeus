@@ -207,11 +207,24 @@ public sealed class LogService : IDisposable
         QrzLogId: doc.QrzLogId,
         QrzUploadedUtc: doc.QrzUploadedUtc);
 
-    private static void AppendAdifRecord(StringBuilder sb, LogEntryDocument doc)
+    /// <summary>Internal so AdifUtcTimezoneTests can pin the
+    /// <see cref="DateTime.Kind"/> behaviour without standing up a LiteDB
+    /// round-trip. The method itself remains a private detail of the ADIF
+    /// export path.</summary>
+    internal static void AppendAdifRecord(StringBuilder sb, LogEntryDocument doc)
     {
         AppendAdifField(sb, "CALL", doc.Callsign);
-        AppendAdifField(sb, "QSO_DATE", doc.QsoDateTimeUtc.ToString("yyyyMMdd"));
-        AppendAdifField(sb, "TIME_ON", doc.QsoDateTimeUtc.ToString("HHmmss"));
+        // .ToUniversalTime() is defensive: LiteDB's default BsonMapper
+        // serialises DateTime as Local on write and returns Kind=Local on
+        // read, so `doc.QsoDateTimeUtc` round-trips through the store with
+        // the wrong Kind even though we wrote DateTime.UtcNow at creation
+        // time. .ToString() doesn't do timezone conversion — it just
+        // formats whatever value the DateTime holds. Without the explicit
+        // ToUniversalTime() ADIF would emit local-time clocks, which broke
+        // the QRZ.com upload (the field name is qsoDateTimeUtc precisely
+        // because callers downstream rely on it being UTC).
+        AppendAdifField(sb, "QSO_DATE", doc.QsoDateTimeUtc.ToUniversalTime().ToString("yyyyMMdd"));
+        AppendAdifField(sb, "TIME_ON", doc.QsoDateTimeUtc.ToUniversalTime().ToString("HHmmss"));
         AppendAdifField(sb, "FREQ", doc.FrequencyMhz.ToString("F6", CultureInfo.InvariantCulture));
         AppendAdifField(sb, "BAND", doc.Band);
         AppendAdifField(sb, "MODE", doc.Mode);
