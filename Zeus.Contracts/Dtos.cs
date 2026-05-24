@@ -289,7 +289,15 @@ public sealed record StateDto(
     // (Thetis: Setup → DSP → Keyer → CW Pitch). On the wire now so
     // the frontend already consumes the live value — when the setting
     // lands, only the server-side source changes.
-    int CwPitchHz = 600);
+    int CwPitchHz = CwDefaults.PitchHz);
+
+/// <summary>Canonical CW constants shared between backend and wire DTOs.
+/// Single source of truth — CwOffset (server-side) and StateDto both
+/// reference these instead of duplicating magic numbers.</summary>
+public static class CwDefaults
+{
+    public const int PitchHz = 600;
+}
 
 public sealed record RadioInfo(
     string MacAddress,
