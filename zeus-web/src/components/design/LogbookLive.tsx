@@ -67,12 +67,12 @@ export function LogbookLive() {
 
   const formatTime = (isoString: string) => {
     const date = new Date(isoString);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'UTC' });
   };
 
   const formatDate = (isoString: string) => {
     const date = new Date(isoString);
-    return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    return date.toLocaleDateString([], { month: 'short', day: 'numeric', timeZone: 'UTC' });
   };
 
   if (loading && entries.length === 0) {
@@ -100,7 +100,7 @@ export function LogbookLive() {
       <div className="log-head mono">
         <span style={{ width: '2rem' }}>✓</span>
         <span>Date</span>
-        <span>Time</span>
+        <span>Time (UTC)</span>
         <span>Call</span>
         <span>Freq</span>
         <span>Mode</span>
