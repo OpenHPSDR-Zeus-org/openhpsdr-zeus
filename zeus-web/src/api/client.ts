@@ -231,6 +231,9 @@ export type RadioStateDto = {
   // external CAT). The legacy CTUN toggle was removed in the pure-pan rework
   // (PRD: docs/prd/panfall_behavior.md); this is now the only tuning model.
   radioLoHz: number;
+  // CW sidetone pitch in Hz. Today a baked-in constant (600); exposed so
+  // the frontend doesn't duplicate it. Will become configurable later.
+  cwPitchHz: number;
 };
 
 // CFC mirrors Zeus.Contracts.CfcConfig. Bands array is fixed at 10 entries
@@ -499,6 +502,7 @@ export function normalizeState(raw: unknown): RadioStateDto {
         : typeof r.vfoHz === 'number'
         ? r.vfoHz
         : 0,
+    cwPitchHz: typeof r.cwPitchHz === 'number' ? r.cwPitchHz : 600,
   };
 }
 

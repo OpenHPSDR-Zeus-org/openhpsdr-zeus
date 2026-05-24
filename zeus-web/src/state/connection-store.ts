@@ -69,6 +69,7 @@ export type ConnectionState = {
   // / external-CAT retunes; never by panadapter drags (those just move the
   // viewport visually until released past the IQ window edge).
   radioLoHz: number;
+  cwPitchHz: number;
   mode: RxMode;
   filterLowHz: number;
   filterHighHz: number;
@@ -126,6 +127,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   endpoint: null,
   vfoHz: 14_200_000,
   radioLoHz: 14_200_000,
+  cwPitchHz: 600,
   mode: 'USB',
   filterLowHz: 150,
   filterHighHz: 2850,
@@ -159,6 +161,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       endpoint: s.endpoint,
       vfoHz: s.vfoHz,
       radioLoHz: s.radioLoHz,
+      cwPitchHz: s.cwPitchHz,
       mode: s.mode,
       filterLowHz: s.filterLowHz,
       filterHighHz: s.filterHighHz,

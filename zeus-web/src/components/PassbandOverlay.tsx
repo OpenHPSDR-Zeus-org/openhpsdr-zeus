@@ -59,8 +59,9 @@ import { useConnectionStore } from '../state/connection-store';
 //
 // CW fix (issue #429): filter edges are baseband Hz relative to the LO,
 // not the dial. In CW the LO sits ±cw_pitch from the dial, so we anchor
-// at loHz = vfoHz − cwPitch instead of vfoHz. Mirrors Thetis PanDisplay.cs.
-const CW_PITCH_HZ = 600;
+// at loHz = vfoHz − cwPitch instead of vfoHz. cwPitchHz comes from the
+// server (StateDto.CwPitchHz → CwDefaults.PitchHz). Mirrors Thetis
+// PanDisplay.cs:1213.
 export function PassbandOverlay() {
   const centerHz = useDisplayStore((s) => s.centerHz);
   const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
@@ -73,6 +74,7 @@ export function PassbandOverlay() {
   const filterHighHz = useConnectionStore((s) => s.filterHighHz);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
+  const cwPitchHz = useConnectionStore((s) => s.cwPitchHz);
 
   if (!width || hzPerPixel <= 0) return null;
 
@@ -84,7 +86,7 @@ export function PassbandOverlay() {
   // sits cw_pitch below (CWU) or above (CWL) the dial; in all other
   // modes LO == dial. Mirrors Thetis PanDisplay.cs:1213-1214 which
   // positions filter edges relative to Low (the LO-based display edge).
-  const cwOffset = mode === 'CWU' ? CW_PITCH_HZ : mode === 'CWL' ? -CW_PITCH_HZ : 0;
+  const cwOffset = mode === 'CWU' ? cwPitchHz : mode === 'CWL' ? -cwPitchHz : 0;
   const loHz = vfoHz - cwOffset;
   const passLowHz = loHz + filterLowHz;
   const passHighHz = loHz + filterHighHz;

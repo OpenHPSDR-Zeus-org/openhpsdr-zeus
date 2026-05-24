@@ -305,7 +305,8 @@ public sealed class RadioService : IDisposable
             // unconditional — see docs/prd/panfall_behavior.md.
             RadioLoHz: (rsSnap?.RadioLoHz ?? 0L) != 0L
                 ? rsSnap!.RadioLoHz
-                : (rsSnap?.VfoHz ?? 14_200_000));
+                : (rsSnap?.VfoHz ?? 14_200_000),
+            CwPitchHz: CwOffset.CwPitchHz);
 
         // Kick off the debounce flush timer. Fires every 1 s; only writes to
         // LiteDB when _stateDirty is set (i.e., at least one Mutate() has fired
