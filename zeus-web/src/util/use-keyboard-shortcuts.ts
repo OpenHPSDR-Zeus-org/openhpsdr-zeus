@@ -47,6 +47,7 @@ import {
   setMox,
   setVfo,
   setZoom,
+  zeroBeat,
   ZOOM_MAX,
   ZOOM_MIN,
   type ZoomLevel,
@@ -202,6 +203,18 @@ export function useKeyboardShortcuts() {
           e.preventDefault();
           bumpZoom(-1);
           break;
+        case 'z':
+        case 'Z': {
+          const mode = useConnectionStore.getState().mode;
+          if (mode !== 'CWL' && mode !== 'CWU') break;
+          e.preventDefault();
+          zeroBeat()
+            .then((next) => {
+              if (next) useConnectionStore.getState().applyState(next);
+            })
+            .catch(() => {});
+          break;
+        }
         case ' ':
         case 'Spacebar':
           // e.repeat filters native autorepeat so we fire MOX-on exactly

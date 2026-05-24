@@ -211,6 +211,9 @@ public sealed class SyntheticDspEngine : IDspEngine
     public int ReadTxMonitorAudio(Span<float> output) => 0;
     public bool IsTxMonitorOn => false;
 
+    // Synthetic has no FFT spectrum snap capability.
+    public bool TrySnapRawSpectrum(int channelId, Span<double> outMagnitudesDb) => false;
+
     // Synthetic has no TX analyzer; the TX panadapter stays on the RX trace.
     // Returning false tells DspPipelineService.Tick to leave the display alone
     // while MOX is on, matching the existing "no new data" semantics.
