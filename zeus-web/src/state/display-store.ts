@@ -55,7 +55,20 @@ export type DisplayState = {
   panValid: boolean;
   wfValid: boolean;
   lastSeq: number;
+  // Pure-pan viewport offset (docs/prd/panfall_behavior.md). Hz offset of the
+  // panadapter/waterfall viewport centre from the radio's hardware NCO
+  // (radioLoHz, which is what the incoming frames' `centerHz` reflects). 0 =
+  // viewport centred on the radio LO; negative = panned right (showing lower
+  // freqs at centre); positive = panned left. Frontend-only — never sent to
+  // the server during the drag. Reset to 0 on disconnect and on any explicit
+  // tune-to-frequency action (band buttons, presets, typed freq, click-to-
+  // tune). Pointer-down captures the value, pointer-move mutates it, and
+  // pointer-up either leaves it (if the viewport sits inside the IQ window)
+  // or triggers a /api/radio/lo retune and rebases the offset so on-screen
+  // frequencies stay put across the LO move.
+  viewportOffsetHz: number;
   setConnected: (c: boolean) => void;
+  setViewportOffsetHz: (hz: number) => void;
   pushFrame: (f: DecodedFrame) => void;
 };
 
@@ -69,7 +82,10 @@ export const useDisplayStore = create<DisplayState>((set) => ({
   panValid: false,
   wfValid: false,
   lastSeq: 0,
-  setConnected: (connected) => set({ connected }),
+  viewportOffsetHz: 0,
+  setConnected: (connected) =>
+    set(connected ? { connected } : { connected, viewportOffsetHz: 0 }),
+  setViewportOffsetHz: (viewportOffsetHz) => set({ viewportOffsetHz }),
   pushFrame: (f) =>
     set({
       width: f.width,

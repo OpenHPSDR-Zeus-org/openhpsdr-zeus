@@ -34,10 +34,13 @@ public class NativeAudioSinkRegistrationTests
         var app = ZeusHost.Build(Array.Empty<string>(), opts);
 
         var sinks = app.Services.GetServices<IRxAudioSink>().ToArray();
-        Assert.Single(sinks);
-        // Server mode keeps the WS sink — bit-for-bit equivalent of the
-        // pre-seam direct hub broadcast.
-        Assert.Equal("WebSocketAudioSink", sinks[0].GetType().Name);
+        // Server mode keeps the WS sink (host-audio path) and additionally
+        // registers RadioCodecAudioSink so RX audio is also routed to the
+        // radio's on-board codec on Hermes / ANAN-class / OrionMkII boards
+        // (issue #426). HL2 short-circuits inside the codec sink.
+        Assert.Equal(2, sinks.Length);
+        Assert.Contains(sinks, s => s.GetType().Name == "WebSocketAudioSink");
+        Assert.Contains(sinks, s => s.GetType().Name == "RadioCodecAudioSink");
 
         // Native capture must never be registered in server mode.
         var hosted = app.Services.GetServices<IHostedService>().ToArray();
@@ -61,10 +64,12 @@ public class NativeAudioSinkRegistrationTests
         var app = ZeusHost.Build(Array.Empty<string>(), opts);
 
         var sinks = app.Services.GetServices<IRxAudioSink>().ToArray();
-        Assert.Single(sinks);
-        // Desktop mode swaps in the native sink so RX audio goes straight to
-        // the OS default output device (Phase 2b).
-        Assert.Equal("NativeAudioSink", sinks[0].GetType().Name);
+        // Desktop mode swaps the WS path for the native sink, plus the new
+        // radio-codec sink (#426). With ShareOverLan=false (default) the
+        // total is exactly two: native + codec.
+        Assert.Equal(2, sinks.Length);
+        Assert.Contains(sinks, s => s.GetType().Name == "NativeAudioSink");
+        Assert.Contains(sinks, s => s.GetType().Name == "RadioCodecAudioSink");
 
         // Same NativeAudioSink instance must also be wired as a hosted
         // service so its StartAsync opens the playback device.

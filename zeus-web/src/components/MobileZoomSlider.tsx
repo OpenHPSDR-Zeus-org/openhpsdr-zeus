@@ -42,9 +42,10 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback } from 'react';
 import { setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useLiveSlider } from '../hooks/useLiveSlider';
 
 /**
  * Vertical zoom slider pinned to the right edge of the panadapter on mobile.
@@ -62,29 +63,28 @@ export function MobileZoomSlider() {
   const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
 
-  const inflightAbort = useRef<AbortController | null>(null);
-  const latestSent = useRef<ZoomLevel>(serverZoom);
+  // rAF-coalesced live stream — see ZoomControl for rationale.
+  const liveSlider = useLiveSlider<ZoomLevel>({
+    send: useCallback(
+      (v: ZoomLevel, signal: AbortSignal) =>
+        setZoom(v, signal)
+          .then((next) => {
+            if (!signal.aborted) applyState(next);
+          })
+          .catch(() => {
+            /* next state poll will reconcile */
+          }),
+      [applyState],
+    ),
+  });
 
-  const sendValue = useCallback(
+  const onSlide = useCallback(
     (v: ZoomLevel) => {
-      if (v === latestSent.current) return;
-      latestSent.current = v;
       setLocalZoom(v);
-      inflightAbort.current?.abort();
-      const ac = new AbortController();
-      inflightAbort.current = ac;
-      setZoom(v, ac.signal)
-        .then((next) => {
-          if (!ac.signal.aborted) applyState(next);
-        })
-        .catch(() => {
-          /* next state poll will reconcile */
-        });
+      liveSlider.push(v);
     },
-    [applyState, setLocalZoom],
+    [liveSlider, setLocalZoom],
   );
-
-  useEffect(() => () => inflightAbort.current?.abort(), []);
 
   return (
     <div
@@ -111,7 +111,10 @@ export function MobileZoomSlider() {
         step={1}
         value={serverZoom}
         disabled={!connected}
-        onChange={(e) => sendValue(Number(e.currentTarget.value) as ZoomLevel)}
+        onChange={(e) => onSlide(Number(e.currentTarget.value) as ZoomLevel)}
+        onMouseUp={() => liveSlider.flush()}
+        onTouchEnd={() => liveSlider.flush()}
+        onKeyUp={() => liveSlider.flush()}
         style={{
           writingMode: 'vertical-lr',
           direction: 'rtl',

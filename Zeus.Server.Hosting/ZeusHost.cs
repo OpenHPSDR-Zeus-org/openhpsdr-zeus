@@ -159,6 +159,15 @@ public static class ZeusHost
         builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
         builder.Services.AddSingleton<Zeus.Protocol1.ITxIqSource>(sp =>
             sp.GetRequiredService<Zeus.Protocol1.TxIqRing>());
+        // RxCodecAudioRing is shared: RadioCodecAudioSink writes WDSP RX
+        // audio into it; Protocol1Client (constructed inside RadioService)
+        // drains it into the EP2 outbound L/R bytes so operators on
+        // Hermes / ANAN-class / OrionMkII boards hear audio on the radio's
+        // front-panel headphone jack. Empty ring = silent wire bytes,
+        // matching pre-#426 HL2-only behaviour. Issue #426.
+        builder.Services.AddSingleton<Zeus.Protocol1.RxCodecAudioRing>();
+        builder.Services.AddSingleton<Zeus.Protocol1.IRxCodecAudioSource>(sp =>
+            sp.GetRequiredService<Zeus.Protocol1.RxCodecAudioRing>());
         builder.Services.AddSingleton<RadioService>();
         builder.Services.AddSingleton<StreamingHub>();
         // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
@@ -223,6 +232,12 @@ public static class ZeusHost
             // mix client-side.
             builder.Services.AddSingleton<IAuditionAudioSink, NoOpAuditionAudioSink>();
         }
+        // Radio on-board codec sink — joins the IRxAudioSink fan-out so RX
+        // audio is duplicated to the radio's EP2 outbound L/R bytes whenever
+        // the connected board has an on-board codec (Hermes / ANAN-class /
+        // OrionMkII family / G2E). HL2 / synthetic / pre-connect short-
+        // circuit inside the sink. Issue #426.
+        builder.Services.AddSingleton<IRxAudioSink, RadioCodecAudioSink>();
         // WDSPwisdom bootstrap: run FFTW plan caching on a worker at app start so the
         // first /api/connect isn't blocked for ~2 min while WDSP plans FFTs 64..262144.
         // Clients are told to keep Connect disabled until phase=Ready.
@@ -243,11 +258,22 @@ public static class ZeusHost
         // TxTuneDriver pumps silent mic blocks through WDSP TXA while TUN is on so
         // the post-gen tone actually reaches the ring (no mic uplink during TUN).
         builder.Services.AddHostedService<TxTuneDriver>();
+        // Host-side CW keyer (zeus-drf). Single instance, drains a job queue
+        // and pushes envelope-shaped IQ directly into TxIqRing while holding
+        // MOX as MoxSource.Cwx.
+        builder.Services.AddSingleton<CwSettingsStore>();
+        builder.Services.AddSingleton<CwEngine>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<CwEngine>());
         // PS auto-attenuate timer2code-equivalent: ramps the radio's TX step
         // attenuator (Protocol2 only today) when calcc feedback level lands outside
         // the 128..181 ideal window, so PS has a recovery path on first arm. Idle
         // when PS is off or AutoAttenuate is off — no wire, no engine pokes.
         builder.Services.AddHostedService<PsAutoAttenuateService>();
+        // Promote the radio's hardware-PTT echo (HL2 rear KEY tip, external
+        // PTT line) into a host MOX request — without it the gateware-driven
+        // CW carrier transmits while Zeus stays unkeyed (UI off, meters at
+        // idle cadence, FR-6 timeout disarmed).
+        builder.Services.AddHostedService<ExternalPttService>();
 
         // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
         // hung login surfaces quickly in the UI.
@@ -264,6 +290,8 @@ public static class ZeusHost
         builder.Services.AddSingleton<NrUiPrefsStore>();
         builder.Services.AddSingleton<ThemeSettingsStore>();
         builder.Services.AddSingleton<BottomPinStore>();
+        builder.Services.AddSingleton<PanWfSplitStore>();
+        builder.Services.AddSingleton<MeterDisplaySettingsStore>();
         builder.Services.AddSingleton<RadioStateStore>();
         builder.Services.AddSingleton<QrzService>();
         builder.Services.AddSingleton<LogService>();

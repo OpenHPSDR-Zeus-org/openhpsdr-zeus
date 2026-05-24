@@ -28,6 +28,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import {
+  effectiveKind,
   EMPTY_METER_GROUP_CONFIG,
   newWidgetUid,
   type MeterGroupConfig,
@@ -40,6 +41,19 @@ import {
   MeterReadingId,
   type MeterDefaultKind,
 } from '../meters/meterCatalog';
+
+// Per-kind intrinsic main-axis size (px). The panel body sizes each
+// widget to its own natural footprint and `justify-content: flex-start`
+// packs them to the leading edge — no stretch, no centering. That keeps
+// a single vertical VU bar at bar-width even when the tile is wider, and
+// makes additional bars line up to the left rather than spreading to
+// fill the row.
+const KIND_INTRINSIC_PX: Record<MeterDefaultKind, number> = {
+  vucolumn: 70,   // 60-unit viewBox + lamp-card padding
+  bigarc: 200,    // 240×150 viewBox arc, modest display size
+  pulldown: 230,  // 280×150 viewBox arc
+  hbar: 240,      // wide horizontal bar reads better with room
+};
 
 interface MeterGroupPanelProps {
   /** Per-instance config blob from the workspace store. */
@@ -386,7 +400,16 @@ export function MeterGroupPanel({
             Empty group — tap + to add a meter.
           </div>
         ) : (
-          config.widgets.map((w) => (
+          config.widgets.map((w) => {
+            const intrinsic = KIND_INTRINSIC_PX[effectiveKind(w)];
+            // Main axis = direction; cross axis stretches via the parent's
+            // `alignItems: 'stretch'`. `flex: 0 0 <px>` blocks both grow
+            // and shrink so each widget always reads at its natural size.
+            const sizeAxis =
+              config.direction === 'row'
+                ? { width: intrinsic, flex: `0 0 ${intrinsic}px` as const }
+                : { height: intrinsic, flex: `0 0 ${intrinsic}px` as const };
+            return (
             <div
               key={w.uid}
               data-widget-uid={w.uid}
@@ -396,7 +419,7 @@ export function MeterGroupPanel({
               }
               style={{
                 position: 'relative',
-                flex: '1 1 0',
+                ...sizeAxis,
                 minWidth: 0,
                 minHeight: 0,
                 display: 'flex',
@@ -428,7 +451,8 @@ export function MeterGroupPanel({
                 <Trash2 size={11} />
               </button>
             </div>
-          ))
+            );
+          })
         )}
       </div>
 

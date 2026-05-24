@@ -58,14 +58,16 @@ namespace Zeus.Server.Tests;
 
 /// <summary>
 /// End-to-end endpoint test for <c>POST /api/mic-gain</c>: drives the real
-/// endpoint via <see cref="WebApplicationFactory{TEntryPoint}"/>, asserting
-/// that a request body of <c>{db}</c> reaches the DspPipelineService's
-/// current engine as <c>SetTxPanelGain(10^(db/20))</c>.
+/// endpoint via <see cref="WebApplicationFactory{TEntryPoint}"/> and asserts
+/// that <c>{db}</c> ends up in <see cref="StateDto.MicGainDb"/>, clamped to
+/// the endpoint's <c>[-40, +10]</c> range.
 ///
-/// PRD FR-3 (<c>docs/prd/12-tx-feature.md</c>) requires db → linear gain via
-/// <c>10^(db/20)</c>; this test exercises that path through Program.cs so
-/// the Math.Clamp + Math.Pow inlined on the handler can't drift from the
-/// spec without a failing test.
+/// PRD FR-3 (<c>docs/prd/12-tx-feature.md</c>) still requires db → linear
+/// gain via <c>10^(db/20)</c>; that conversion now lives at the engine seam
+/// in <see cref="DspPipelineService"/> so the persisted form stays in
+/// operator-friendly dB. The seam's dB → linear math is exercised inline in
+/// <see cref="DspPipelineService"/>'s broadcast path (no engine open in this
+/// test factory, so the seam stays intentionally dormant here).
 /// </summary>
 public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
 {
@@ -73,62 +75,59 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
     public MicGainEndpointTests(Factory factory) => _factory = factory;
 
     [Fact]
-    public async Task Post0db_SetsLinearGainOf1()
+    public async Task Post0db_PersistsZeroOnState()
     {
-        _factory.TestEngine.GainCalls.Clear();
+        using var scope = _factory.Services.CreateScope();
+        var radio = scope.ServiceProvider.GetRequiredService<RadioService>();
         using var client = _factory.CreateClient();
 
         var resp = await client.PostAsJsonAsync("/api/mic-gain", new { db = 0 });
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-
-        var call = Assert.Single(_factory.TestEngine.GainCalls);
-        Assert.Equal(1.0, call, precision: 6);
+        Assert.Equal(0, radio.Snapshot().MicGainDb);
     }
 
     [Fact]
-    public async Task PostPlus10db_SetsLinearGainOfRoughly3point16()
+    public async Task PostPlus10db_PersistsPlus10()
     {
-        _factory.TestEngine.GainCalls.Clear();
+        using var scope = _factory.Services.CreateScope();
+        var radio = scope.ServiceProvider.GetRequiredService<RadioService>();
         using var client = _factory.CreateClient();
 
         var resp = await client.PostAsJsonAsync("/api/mic-gain", new { db = 10 });
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-
-        var call = Assert.Single(_factory.TestEngine.GainCalls);
-        Assert.Equal(Math.Pow(10.0, 0.5), call, precision: 6);
+        Assert.Equal(10, radio.Snapshot().MicGainDb);
     }
 
     [Fact]
-    public async Task PostMinus20db_AttenuatesByLinearGainOfRoughly0point1()
+    public async Task PostMinus20db_PersistsMinus20()
     {
-        _factory.TestEngine.GainCalls.Clear();
+        // -20 dB lands in the negative half (attenuation) — verifies the range
+        // doesn't get clamped to 0 / unity by an off-by-one in the endpoint.
+        using var scope = _factory.Services.CreateScope();
+        var radio = scope.ServiceProvider.GetRequiredService<RadioService>();
         using var client = _factory.CreateClient();
 
-        // -20 dB → linear gain 0.1 — verifies the negative half of the range
-        // actually attenuates, not just clamps to 0 / unity.
         var resp = await client.PostAsJsonAsync("/api/mic-gain", new { db = -20 });
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-
-        var call = Assert.Single(_factory.TestEngine.GainCalls);
-        Assert.Equal(0.1, call, precision: 6);
+        Assert.Equal(-20, radio.Snapshot().MicGainDb);
     }
 
     [Fact]
     public async Task PostOutOfRange_ClampsToMinus40AndPlus10()
     {
-        _factory.TestEngine.GainCalls.Clear();
+        using var scope = _factory.Services.CreateScope();
+        var radio = scope.ServiceProvider.GetRequiredService<RadioService>();
         using var client = _factory.CreateClient();
 
-        // db=-100 clamps to -40 → gain 10^(-2) = 0.01
+        // db=-100 clamps to -40.
         Assert.Equal(HttpStatusCode.OK,
             (await client.PostAsJsonAsync("/api/mic-gain", new { db = -100 })).StatusCode);
-        // db=50 clamps to +10 → gain 10^(0.5) ≈ 3.1623
+        Assert.Equal(-40, radio.Snapshot().MicGainDb);
+
+        // db=50 clamps to +10.
         Assert.Equal(HttpStatusCode.OK,
             (await client.PostAsJsonAsync("/api/mic-gain", new { db = 50 })).StatusCode);
-
-        Assert.Collection(_factory.TestEngine.GainCalls,
-            v => Assert.Equal(0.01, v, precision: 6),
-            v => Assert.Equal(Math.Pow(10.0, 0.5), v, precision: 6));
+        Assert.Equal(10, radio.Snapshot().MicGainDb);
     }
 
     public sealed class Factory : WebApplicationFactory<Program>

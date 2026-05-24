@@ -42,13 +42,18 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { COLORMAPS } from '../gl/colormap';
 import { createWfRenderer } from '../gl/waterfall';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { useConnectionStore } from '../state/connection-store';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
-import { useDisplaySettingsStore } from '../state/display-settings-store';
+import {
+  useDisplaySettingsStore,
+  WF_BRIGHTNESS_DEFAULT,
+  WF_BRIGHTNESS_MAX,
+  WF_BRIGHTNESS_MIN,
+} from '../state/display-settings-store';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
 import { WfDbScale } from './WfDbScale';
@@ -69,25 +74,46 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<ReturnType<typeof createWfRenderer> | null>(null);
+  // Live brightness ref — read by the WebGL draw closure each frame. We
+  // can't put dragBrightness in the render closure directly because the
+  // useEffect that builds the closure runs once on mount; instead we mutate
+  // a ref so the closure always sees the current value (committed store
+  // value while idle, in-flight drag value while the slider is moving).
+  const liveBrightnessRef = useRef<number>(WF_BRIGHTNESS_DEFAULT);
+  const requestRedrawRef = useRef<() => void>(() => {});
   const autoRange = useDisplaySettingsStore((s) => s.autoRange);
   const setAutoRange = useDisplaySettingsStore((s) => s.setAutoRange);
   const colormap = useDisplaySettingsStore((s) => s.colormap);
   const setColormap = useDisplaySettingsStore((s) => s.setColormap);
+  // Brightness slider state. Live drag value is held locally so the input
+  // remains responsive at native HTMLInputElement update rate; the committed
+  // store value is set on release (mouseup / touchend / keyup) at which
+  // point the store schedules a debounced PUT. Mirrors AfGainSlider's
+  // "stream during drag, flush on release" pattern but for a non-realtime
+  // (purely-cosmetic) setting where streaming to the server would just churn
+  // writes; we only commit once.
+  const committedBrightness = useDisplaySettingsStore((s) => s.wfBrightness);
+  const setWfBrightness = useDisplaySettingsStore((s) => s.setWfBrightness);
+  const [dragBrightness, setDragBrightness] = useState<number | null>(null);
+  const brightnessValue = dragBrightness ?? committedBrightness;
   // Tuning-cursor position. The waterfall canvas centres on the radio's
-  // hardware NCO (centerHz) which equals VfoHz outside CTUN — so on the
-  // legacy path the cursor sits at 50%. With CTUN on the hardware stays
-  // frozen at RadioLoHz while VfoHz roams; the cursor must track the dial
-  // (VfoHz) so the operator can see where they're listening, not where the
-  // radio is anchored. Computed off panDb width × hzPerPixel for span,
-  // identical math to FreqAxis's dial marker. Issue #427.
+  // hardware NCO (centerHz / radioLoHz) while VfoHz roams independently; the
+  // cursor must track the dial (VfoHz) so the operator can see where they're
+  // listening, not where the radio is anchored. Computed off panDb width ×
+  // hzPerPixel for span, identical math to FreqAxis's dial marker.
   const cursorCenterHz = useDisplayStore((s) => s.centerHz);
   const cursorHzPerPixel = useDisplayStore((s) => s.hzPerPixel);
   const cursorWidth = useDisplayStore((s) => s.panDb?.length ?? 0);
+  const cursorViewportOffsetHz = useDisplayStore((s) => s.viewportOffsetHz);
   const cursorVfoHz = useConnectionStore((s) => s.vfoHz);
   const cursorPct = (() => {
     if (!cursorWidth || cursorHzPerPixel <= 0) return 50;
     const span = cursorWidth * cursorHzPerPixel;
-    const start = Number(cursorCenterHz) - span / 2;
+    // Viewport centre = hardware NCO + pure-pan offset; cursor sits at the
+    // dial's position relative to the shifted viewport, so a drag-right
+    // (negative offset) slides the cursor right with the rest of the
+    // spectrum.
+    const start = Number(cursorCenterHz) + cursorViewportOffsetHz - span / 2;
     return ((cursorVfoHz - start) / span) * 100;
   })();
 
@@ -131,7 +157,14 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       // window so the operator's RX noise-floor view stays put.
       const dbMin = keyed ? wfTxDbMin : wfDbMin;
       const dbMax = keyed ? wfTxDbMax : wfDbMax;
-      renderer.draw(dbMin, dbMax);
+      // Translate the viewport-offset Hz into the shader's UV space. Inside
+      // the IQ window (offset bounded by spanHz/2) WF_FS samples normally;
+      // past the edge the seed-dB fallback fills the unsampled columns.
+      const display = useDisplayStore.getState();
+      const width = display.panDb?.length ?? 0;
+      const spanHz = width > 0 ? width * display.hzPerPixel : 0;
+      const viewportOffsetUv = spanHz > 0 ? display.viewportOffsetHz / spanHz : 0;
+      renderer.draw(dbMin, dbMax, viewportOffsetUv, liveBrightnessRef.current);
     };
     const requestRedraw = () => {
       if (!isActive()) return;
@@ -140,6 +173,9 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       // matching the prior `if (rafHandle === 0)` gate.
       requestDrawBusFrame(redraw);
     };
+    // Expose requestRedraw so the brightness-drag effect outside this
+    // useEffect can ask for a repaint without rebuilding the GL closure.
+    requestRedrawRef.current = requestRedraw;
 
     const resize = () => {
       const { width, height } = container.getBoundingClientRect();
@@ -213,6 +249,14 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       ) {
         requestRedraw();
       }
+      if (state.wfBrightness !== prev.wfBrightness) {
+        // Drag-time updates flow via liveBrightnessRef + the dragBrightness
+        // effect below. This branch catches store-level commits — late
+        // hydration from the server, restoring a non-default value on
+        // first paint, etc.
+        liveBrightnessRef.current = state.wfBrightness;
+        requestRedraw();
+      }
     });
 
     // Repaint when MOX/TUN flips so the RX↔TX waterfall window swap lands
@@ -227,10 +271,20 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       }
     });
 
+    // Repaint when the operator drags the panadapter/waterfall viewport. A
+    // pure-pan drag mutates viewportOffsetHz at rAF rate; redraw the shader
+    // each tick so the texture sample window slides under the finger.
+    const unsubViewport = useDisplayStore.subscribe((state, prev) => {
+      if (state.viewportOffsetHz !== prev.viewportOffsetHz) {
+        requestRedraw();
+      }
+    });
+
     return () => {
       unsub();
       unsubSettings();
       unsubTx();
+      unsubViewport();
       ro.disconnect();
       io.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -247,6 +301,16 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   useEffect(() => {
     rendererRef.current?.setTransparent(transparent);
   }, [transparent]);
+
+  // Live-preview drag: whenever the local drag value moves, push it into the
+  // ref the WebGL closure reads and ask for a redraw. On release the slider
+  // commits to the store and the existing subscription above takes over —
+  // this effect quiets once dragBrightness goes back to null because
+  // brightnessValue then equals the committed store value (no change).
+  useEffect(() => {
+    liveBrightnessRef.current = brightnessValue;
+    requestRedrawRef.current();
+  }, [brightnessValue]);
 
   usePanTuneGesture(canvasRef);
 
@@ -300,6 +364,73 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
         >
           {autoRange ? 'dB: AUTO' : 'dB: FIXED'}
         </button>
+        {/* Brightness slider — issue #426. Live drag previews (the
+            dragBrightness effect repaints each input change) but only the
+            release commits to the store + persists. Double-click resets to
+            1.0 (no change). */}
+        <label
+          className="knob-group"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 4,
+            background: 'rgba(0,0,0,0.45)',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--r-sm)',
+            padding: '2px 6px',
+            height: 22,
+          }}
+          title="Waterfall brightness (double-click to reset)"
+        >
+          <span
+            className="label-xs"
+            style={{
+              fontSize: 9,
+              letterSpacing: '0.12em',
+              color: 'var(--fg-2)',
+              textTransform: 'uppercase',
+            }}
+          >
+            BRT
+          </span>
+          <input
+            type="range"
+            min={WF_BRIGHTNESS_MIN}
+            max={WF_BRIGHTNESS_MAX}
+            step={0.05}
+            value={brightnessValue}
+            aria-label="Waterfall brightness"
+            onChange={(e) => setDragBrightness(Number(e.currentTarget.value))}
+            onMouseUp={() => {
+              if (dragBrightness !== null) setWfBrightness(dragBrightness);
+              setDragBrightness(null);
+            }}
+            onTouchEnd={() => {
+              if (dragBrightness !== null) setWfBrightness(dragBrightness);
+              setDragBrightness(null);
+            }}
+            onKeyUp={() => {
+              if (dragBrightness !== null) setWfBrightness(dragBrightness);
+              setDragBrightness(null);
+            }}
+            onDoubleClick={() => {
+              setDragBrightness(null);
+              setWfBrightness(WF_BRIGHTNESS_DEFAULT);
+            }}
+            style={{ width: 70, cursor: 'pointer', accentColor: 'var(--accent)' }}
+          />
+          <span
+            className="mono"
+            style={{
+              width: 30,
+              textAlign: 'right',
+              color: 'var(--fg-1)',
+              fontSize: 10,
+            }}
+          >
+            {brightnessValue.toFixed(2)}
+          </span>
+        </label>
       </div>
     </div>
   );

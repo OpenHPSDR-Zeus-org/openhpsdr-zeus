@@ -596,12 +596,218 @@ jobs:
           path: installers/output/OpenhpsdrZeus*-${{ steps.version.outputs.version }}-linux-x86_64.AppImage
           if-no-files-found: error
 
+      # ---------- macOS code-signing + notarization ------------------------
+      #
+      # Five steps gated on (is-release || is-nightly): import the Developer
+      # ID cert into an ephemeral keychain, run the existing builder with
+      # CODESIGN_IDENTITY exported (the script signs apps + DMG inside-out
+      # hardened-runtime, see installers/create-macos-app.sh), submit to
+      # Apple notary, staple the ticket into the DMG, and verify Gatekeeper
+      # acceptance. The dry-run path falls through to the original
+      # unsigned-build step further down.
+      #
+      # Why gated:
+      #   - Notarization burns 2-15 min of macos-latest runner time (10x
+      #     Linux cost) and counts against Apple's API submission quota.
+      #     dry-run builds don't need either.
+      #   - Apple's API key (.p8) only exists as a secret in the repo; PRs
+      #     from forks running release.yml as a dry-run would otherwise hit
+      #     a "secret missing" error mid-job.
+      #
+      # The ephemeral keychain name embeds run_id + run_attempt so two
+      # concurrent dispatches (e.g. nightly cron racing with a maintainer's
+      # manual run) never collide on /Users/runner/Library/Keychains.
+      - name: macOS — dry-run notice (signing/notarization skipped)
+        if: ${{ startsWith(matrix.config.os, 'macos') && needs.determine-version.outputs.is-release != 'true' && needs.determine-version.outputs.is-nightly != 'true' }}
+        run: |
+          echo "::notice::macOS DMG will NOT be signed or notarized in dry-run mode. The artifact will require xattr -cr on first launch."
+
+      - name: macOS — import Developer ID certificate
+        if: ${{ startsWith(matrix.config.os, 'macos') && (needs.determine-version.outputs.is-release == 'true' || needs.determine-version.outputs.is-nightly == 'true') }}
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KEYCHAIN_PATH="$RUNNER_TEMP/build-${{ github.run_id }}-${{ github.run_attempt }}.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/macos-cert.p12"
+          INTERMEDIATE_PATH="$RUNNER_TEMP/DeveloperIDG2CA.cer"
+
+          # Decode the base64-encoded .p12 to a temp file. `security import`
+          # cannot read from stdin so we have to materialize it; we shred it
+          # below once it's in the keychain.
+          echo "$MACOS_CERTIFICATE" | base64 --decode > "$CERT_PATH"
+
+          # Download Apple's Developer ID Certification Authority (G2)
+          # intermediate cert. A .p12 exported from Keychain Access ships
+          # only the leaf + private key, NOT the intermediate. On a dev
+          # Mac the intermediate is already in login.keychain from prior
+          # Xcode use, so the chain validates fine — but a fresh GitHub
+          # Actions runner only has Apple Root CA in its trust store, so
+          # codesign warns "unable to build chain to self-signed root"
+          # and notarytool rejects the resulting bundle. URL is Apple's
+          # stable publication endpoint; cert is valid through 2031.
+          curl -fsSL --retry 3 \
+              https://www.apple.com/certificateauthority/DeveloperIDG2CA.cer \
+              -o "$INTERMEDIATE_PATH"
+
+          # Per-run ephemeral keychain so concurrent dispatches don't trample
+          # each other and so cleanup is just `security delete-keychain`.
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          # 6h timeout — comfortably longer than any release build wall clock.
+          # Default is 5 minutes auto-lock which would break a slow notarization.
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+
+          # Import the intermediate FIRST so chain validation works the
+          # moment the leaf .p12 lands in the keychain.
+          security import "$INTERMEDIATE_PATH" \
+              -k "$KEYCHAIN_PATH" \
+              -T /usr/bin/codesign
+
+          # -A allows all apps to use the key without prompting (no GUI on CI).
+          # -T whitelists specific tools so set-key-partition-list below can
+          # set a durable ACL — without it codesign would still prompt for
+          # the keychain password on first private-key access.
+          security import "$CERT_PATH" \
+              -P "$MACOS_CERTIFICATE_PWD" \
+              -A -t cert -f pkcs12 \
+              -k "$KEYCHAIN_PATH" \
+              -T /usr/bin/codesign \
+              -T /usr/bin/security
+
+          # Make the codesign ACL durable. Without this codesign hangs on
+          # CI waiting for a human to acknowledge the keychain prompt.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+              -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+
+          # Prepend the temp keychain to the user search list. codesign
+          # defaults to login.keychain otherwise and never finds our cert.
+          # Capture the existing list into a bash array — string-mangling
+          # via tr corrupts paths in edge cases (we saw a local-test run
+          # end up with the search list set to a single mangled entry
+          # containing literal "-d -db" fragments).
+          ORIGINAL_KEYCHAINS=()
+          while IFS= read -r line; do
+              clean=$(echo "$line" | sed -E 's/^[[:space:]]*"?([^"]*)"?[[:space:]]*$/\1/')
+              [ -n "$clean" ] && ORIGINAL_KEYCHAINS+=("$clean")
+          done < <(security list-keychains -d user)
+          security list-keychains -d user -s "$KEYCHAIN_PATH" "${ORIGINAL_KEYCHAINS[@]}"
+
+          # Shred the on-disk cert files — both are safely in the keychain
+          # now. macOS `rm -P` overwrites with 0xff/0x00/0xff before unlink.
+          # The intermediate is public so shredding it is paranoia, but
+          # cheap and keeps the cleanup symmetric.
+          rm -P "$CERT_PATH" 2>/dev/null || rm -f "$CERT_PATH"
+          rm -P "$INTERMEDIATE_PATH" 2>/dev/null || rm -f "$INTERMEDIATE_PATH"
+
+          # Propagate KEYCHAIN_PATH to subsequent steps. create-macos-app.sh
+          # picks this up as the --keychain arg for every codesign call.
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+
+          # Sanity check: the identity must be findable, otherwise the build
+          # step will fail mid-way through codesign with a less helpful error.
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
       - name: Build macOS Package
         if: startsWith(matrix.config.os, 'macos')
+        env:
+          # Ternary: signed only when is-release || is-nightly. In dry-run
+          # the value is the empty string regardless of whether
+          # MACOS_SIGNING_IDENTITY is configured — keeps an accidentally-set
+          # secret from sneaking signing into a dry-run build.
+          CODESIGN_IDENTITY: ${{ (needs.determine-version.outputs.is-release == 'true' || needs.determine-version.outputs.is-nightly == 'true') && secrets.MACOS_SIGNING_IDENTITY || '' }}
+          ENTITLEMENTS_PATH: ${{ github.workspace }}/installers/zeus-macos.entitlements
+          # KEYCHAIN_PATH flows in via $GITHUB_ENV from the import step above.
         run: |
+          set -e
           chmod +x installers/create-macos-app.sh
           ARCH="${{ matrix.config.rid == 'osx-arm64' && 'arm64' || 'x64' }}"
           installers/create-macos-app.sh ${{ steps.version.outputs.version }} $ARCH
+
+      - name: macOS — notarize DMG
+        if: ${{ startsWith(matrix.config.os, 'macos') && (needs.determine-version.outputs.is-release == 'true' || needs.determine-version.outputs.is-nightly == 'true') }}
+        env:
+          APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
+          APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
+          APPSTORE_API_KEY_P8: ${{ secrets.APPSTORE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          ARCH="${{ matrix.config.rid == 'osx-arm64' && 'arm64' || 'x64' }}"
+          DMG_PATH="installers/output/OpenhpsdrZeus-${{ steps.version.outputs.version }}-macos-${ARCH}.dmg"
+          KEY_PATH="$RUNNER_TEMP/AuthKey.p8"
+
+          # The .p8 secret is stored base64-encoded to avoid newline mangling
+          # in GitHub's secret editor. If you ever rotate the key, paste the
+          # `base64 < AuthKey_XXXXXX.p8` output as the secret value.
+          echo "$APPSTORE_API_KEY_P8" | base64 --decode > "$KEY_PATH"
+
+          # notarytool submit blocks until accepted/invalid (~2-15 min). We
+          # capture stdout to parse the submission ID, then drive the
+          # accept/reject branch from --output-format json status field.
+          # Don't use `set -e` around the submit itself — we want to fetch
+          # the log on rejection before exiting.
+          set +e
+          SUBMIT_OUT=$(xcrun notarytool submit "$DMG_PATH" \
+              --key "$KEY_PATH" \
+              --key-id "$APPSTORE_KEY_ID" \
+              --issuer "$APPSTORE_ISSUER_ID" \
+              --wait \
+              --output-format json)
+          SUBMIT_RC=$?
+          set -e
+          echo "$SUBMIT_OUT"
+
+          # Parse with python3 (preinstalled on macos-latest) rather than jq
+          # to avoid an extra brew install.
+          SUBMISSION_ID=$(echo "$SUBMIT_OUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('id',''))" 2>/dev/null || true)
+          STATUS=$(echo "$SUBMIT_OUT" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('status',''))" 2>/dev/null || true)
+
+          if [ "$STATUS" != "Accepted" ] || [ "$SUBMIT_RC" -ne 0 ]; then
+              echo "::error::Notarization failed (status=$STATUS, rc=$SUBMIT_RC, id=$SUBMISSION_ID)"
+              if [ -n "$SUBMISSION_ID" ]; then
+                  echo "::group::notarytool log $SUBMISSION_ID"
+                  xcrun notarytool log "$SUBMISSION_ID" \
+                      --key "$KEY_PATH" \
+                      --key-id "$APPSTORE_KEY_ID" \
+                      --issuer "$APPSTORE_ISSUER_ID" || true
+                  echo "::endgroup::"
+              else
+                  echo "::error::No submission ID returned — submit failed before Apple accepted it. Check network / quota / cert validity."
+              fi
+              rm -P "$KEY_PATH" 2>/dev/null || rm -f "$KEY_PATH"
+              exit 1
+          fi
+
+          rm -P "$KEY_PATH" 2>/dev/null || rm -f "$KEY_PATH"
+          echo "Notarization accepted (id=$SUBMISSION_ID)"
+
+      - name: macOS — staple notarization ticket
+        if: ${{ startsWith(matrix.config.os, 'macos') && (needs.determine-version.outputs.is-release == 'true' || needs.determine-version.outputs.is-nightly == 'true') }}
+        run: |
+          set -euo pipefail
+          ARCH="${{ matrix.config.rid == 'osx-arm64' && 'arm64' || 'x64' }}"
+          DMG_PATH="installers/output/OpenhpsdrZeus-${{ steps.version.outputs.version }}-macos-${ARCH}.dmg"
+          # Stapling embeds the ticket into the DMG so first launch works
+          # offline. Without staple, Gatekeeper has to call out to Apple to
+          # verify notarization on every first launch — which fails for
+          # users behind firewalls / on planes.
+          xcrun stapler staple "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
+
+      - name: macOS — Gatekeeper assess
+        if: ${{ startsWith(matrix.config.os, 'macos') && (needs.determine-version.outputs.is-release == 'true' || needs.determine-version.outputs.is-nightly == 'true') }}
+        run: |
+          set -euo pipefail
+          ARCH="${{ matrix.config.rid == 'osx-arm64' && 'arm64' || 'x64' }}"
+          DMG_PATH="installers/output/OpenhpsdrZeus-${{ steps.version.outputs.version }}-macos-${ARCH}.dmg"
+          # `--type open` is the context Gatekeeper uses when the user
+          # double-clicks the DMG to mount it. Primary-signature context
+          # forces it to read the DMG's own signature, not anything cached.
+          # Any rejection here (e.g. stale notarization, wrong identity)
+          # would fail before users see a broken download.
+          spctl --assess --type open --context context:primary-signature --verbose=2 "$DMG_PATH"
 
       - name: Upload macOS Package
         if: startsWith(matrix.config.os, 'macos')
@@ -610,6 +816,24 @@ jobs:
           name: ${{ matrix.config.artifact }}
           path: installers/output/OpenhpsdrZeus-${{ steps.version.outputs.version }}-macos-*.dmg
           if-no-files-found: error
+
+      # Defensive cleanup — the macos-latest runner is ephemeral and gets
+      # torn down after the job, but explicit removal of the temp keychain
+      # + any leftover .p8/.p12 means a `if: always()` run on a future
+      # runner image that caches $RUNNER_TEMP between jobs won't leak.
+      - name: macOS — clean up signing material
+        if: ${{ always() && startsWith(matrix.config.os, 'macos') && (needs.determine-version.outputs.is-release == 'true' || needs.determine-version.outputs.is-nightly == 'true') }}
+        run: |
+          set +e
+          if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "$KEYCHAIN_PATH" ]; then
+              security delete-keychain "$KEYCHAIN_PATH"
+          fi
+          rm -P "$RUNNER_TEMP/macos-cert.p12"        2>/dev/null || rm -f "$RUNNER_TEMP/macos-cert.p12"
+          rm -P "$RUNNER_TEMP/AuthKey.p8"            2>/dev/null || rm -f "$RUNNER_TEMP/AuthKey.p8"
+          rm -P "$RUNNER_TEMP/DeveloperIDG2CA.cer"   2>/dev/null || rm -f "$RUNNER_TEMP/DeveloperIDG2CA.cer"
+          # Restore the default user keychain search list to login only.
+          security list-keychains -d user -s login.keychain-db || true
+          true
 
   create-release:
     name: Create GitHub Release
@@ -693,16 +917,9 @@ jobs:
           on GitHub-hosted Actions is too slow to be practical. Build from source
           if you need one.
 
-          **IMPORTANT for macOS users**: After installation, clear the quarantine
-          attribute so Gatekeeper lets Zeus launch:
-
-          ```bash
-          xattr -cr "/Applications/OpenHPSDR Zeus.app"
-          xattr -cr "/Applications/OpenHPSDR Zeus Server.app"
-          ```
-
-          This is required because Zeus is not signed by a registered Apple
-          Developer.
+          The DMG and both `.app` bundles are signed with a Developer ID
+          Application certificate and notarized by Apple, so Gatekeeper
+          accepts them directly — no `xattr -cr` workaround needed.
 
           ### Linux (x64)
           - **openhpsdr-zeus-${{ steps.version.outputs.version }}-linux-x64.tar.gz**
@@ -826,9 +1043,9 @@ jobs:
           - **OpenhpsdrZeus-Server-${{ steps.version.outputs.version }}-linux-x86_64.AppImage** — Linux server AppImage
           - **OpenhpsdrZeus-${{ steps.version.outputs.version }}-macos-arm64.dmg** — macOS Apple Silicon DMG
 
-          macOS users still need to clear the quarantine attribute after
-          install — see the latest tagged release notes for the \`xattr -cr\`
-          command and Linux AppImage dependencies.
+          The macOS DMG is signed and notarized — no \`xattr -cr\` workaround
+          needed even on nightlies. Linux AppImage dependencies are listed
+          in the latest tagged release notes.
 
           ## Changes since ${{ steps.commits.outputs.last-tag }}
           EOF

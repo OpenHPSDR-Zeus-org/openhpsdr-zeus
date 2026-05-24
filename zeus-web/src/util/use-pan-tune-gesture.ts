@@ -87,12 +87,16 @@ export type SpectrumWheelActions = {
 
 export const SpectrumWheelActionsContext = createContext<SpectrumWheelActions>({});
 
-function readView(): { centerHz: number; spanHz: number } | null {
+function readView(): { centerHz: number; spanHz: number; viewportOffsetHz: number } | null {
   const s = useDisplayStore.getState();
   if (!s.panDb || s.hzPerPixel <= 0) return null;
   return {
+    // centerHz here is the radio's hardware NCO (== RadioLoHz) — that's what
+    // the incoming frames are anchored to. The visible viewport centre is
+    // centerHz + viewportOffsetHz.
     centerHz: Number(s.centerHz),
     spanHz: s.panDb.length * s.hzPerPixel,
+    viewportOffsetHz: s.viewportOffsetHz,
   };
 }
 
@@ -111,7 +115,22 @@ export function usePanTuneGesture(
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    type Drag = { startX: number; startHz: number; spanHz: number; moved: boolean };
+    // Pure-pan drag (docs/prd/panfall_behavior.md): pointer-down captures
+    // the viewport centre at gesture start, pointer-move slides the
+    // viewportOffsetHz (no setVfo, no POST), pointer-up either leaves the
+    // offset (drag stayed inside the IQ window) or POSTs /api/radio/lo to
+    // adjoin a fresh sample window in the pan direction. vfoHz is NEVER
+    // mutated by a drag.
+    type Drag = {
+      startX: number;
+      // Viewport centre at gesture start (Hz). The new viewportOffsetHz on
+      // every move is derived from this anchor — not from radioLoHz at the
+      // current tick — so an in-flight band-change retune that fires during
+      // a drag can't yank the spectrum out from under the finger.
+      startViewportCenterHz: number;
+      spanHz: number;
+      moved: boolean;
+    };
     type MapDrag = { lastX: number; lastY: number };
     type Pinch = {
       baseDist: number;     // pointer separation when the pinch began (px)
@@ -174,6 +193,10 @@ export function usePanTuneGesture(
     const commitFinal = (hz: number) => {
       const snapped = snapHz(hz);
       useConnectionStore.setState({ vfoHz: snapped });
+      // Click-to-tune is an explicit tune-to-frequency action; per the PRD
+      // it resets any held viewportOffsetHz so the dial visibly snaps back
+      // to the panadapter centre.
+      useDisplayStore.getState().setViewportOffsetHz(0);
       pendingAbort?.abort();
       pendingAbort = null;
       if (pendingRaf !== 0) {
@@ -251,7 +274,11 @@ export function usePanTuneGesture(
       }
       drag = {
         startX: e.clientX,
-        startHz: view.centerHz,
+        // Capture the viewport centre at gesture start (radioLoHz + any
+        // existing offset). Anchoring to this absolute Hz makes the pan feel
+        // stable even if radioLoHz changes mid-drag (band-change retune,
+        // CAT, etc.).
+        startViewportCenterHz: view.centerHz + view.viewportOffsetHz,
         spanHz: view.spanHz,
         moved: false,
       };
@@ -306,8 +333,16 @@ export function usePanTuneGesture(
       drag.moved = true;
       const rect = canvas.getBoundingClientRect();
       if (rect.width <= 0) return;
-      const newHz = snapHz(drag.startHz - (dx / rect.width) * drag.spanHz);
-      pendingHz = newHz;
+      // Drag-to-tune (classic, CTUN pure-pan reverted): the frequency under the
+      // cursor becomes the dial, streamed through the coalesced setVfo pipeline
+      // so the radio retunes live as you drag. No viewport offset — RadioLoHz
+      // follows the dial server-side, RX and TX both track it.
+      const view = readView();
+      if (!view) return;
+      const frac = (e.clientX - rect.left) / rect.width;
+      pendingHz = clampHz(
+        Math.round(view.centerHz + view.viewportOffsetHz + (frac - 0.5) * view.spanHz),
+      );
       scheduleFlush();
     };
 
@@ -341,16 +376,13 @@ export function usePanTuneGesture(
       }
       const rect = canvas.getBoundingClientRect();
       if (rect.width <= 0) return;
-      if (d.moved) {
-        const dx = e.clientX - d.startX;
-        commitFinal(d.startHz - (dx / rect.width) * d.spanHz);
-      } else {
-        // click-to-tune: resolve the clicked frequency against the live view.
-        const view = readView();
-        if (!view) return;
-        const frac = (e.clientX - rect.left) / rect.width;
-        commitFinal(view.centerHz + (frac - 0.5) * view.spanHz);
-      }
+      // Drag or click — both tune to the frequency at the release point. CTUN
+      // pure-pan (leave-offset / retune-NCO-on-release) is gone: a release
+      // always commits a dial tune so RX and TX track where you let go.
+      const view = readView();
+      if (!view) return;
+      const frac = (e.clientX - rect.left) / rect.width;
+      commitFinal(view.centerHz + view.viewportOffsetHz + (frac - 0.5) * view.spanHz);
     };
 
     const onWheel = (e: WheelEvent) => {

@@ -88,7 +88,15 @@ public sealed record BoardCapabilities(
     /// disabled when this flag is false, so operators can see the
     /// feature exists without being able to drive a non-supporting
     /// board.</summary>
-    bool SupportsAnvelinaDxOc = false)
+    bool SupportsAnvelinaDxOc = false,
+    /// <summary>True when the radio has an on-board audio codec with
+    /// front-panel headphone + microphone jacks (Hermes / Mercury+Penelope
+    /// / ANAN-10/10E/100/100B/100D/200D / OrionMkII family / Anan-G2E).
+    /// When true, demodulated RX audio is routed back to the radio's EP2
+    /// L/R bytes so the operator hears it on the front-panel headphones;
+    /// inbound EP6 mic bytes feed WDSP TXA. False on HermesLite2 (no
+    /// codec — host audio path only). Issue #426.</summary>
+    bool HasOnboardCodec = false)
 {
     /// <summary>Safe defaults for an unrecognised / disconnected board.
     /// Single ADC, no extras — minimum-surprise capability set so a

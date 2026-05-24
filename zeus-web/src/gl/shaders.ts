@@ -94,9 +94,9 @@ void main() { fragColor = vec4(uColor * v_alpha, v_alpha); }`;
 export const CURSOR_VS = /* glsl */ `#version 300 es
 layout(location = 0) in vec2 aPos;
 // uXOffset = clip-space X shift, range [-1, +1]. 0 = panadapter centre
-// (CTUN off, or CTUN on with the dial at the frozen radio LO). Non-zero
-// when CTUN is on and the operator's dial has roamed away from the frozen
-// hardware NCO — caller computes (vfoHz - centerHz) / (spanHz/2). Issue #427.
+// (dial aligned with the hardware NCO). Non-zero when the operator's dial
+// has roamed away from the NCO — caller computes
+// (vfoHz - centerHz) / (spanHz/2).
 uniform float uXOffset;
 void main() { gl_Position = vec4(aPos.x + uXOffset, aPos.y, 0.0, 1.0); }`;
 
@@ -126,14 +126,32 @@ uniform float uDbMax;
 uniform float uWriteRow;
 uniform float uH;
 uniform float uBgAlpha;
+// Pure-pan viewport offset in normalized [0,1] UV space (see docs/prd/
+// panfall_behavior.md). Positive = sample to the right of the canvas X (so
+// the displayed history slides left); negative = sample to the left (history
+// slides right with the operator's finger). Caller computes
+// uViewportOffsetUv = viewportOffsetHz / spanHz.
+uniform float uViewportOffsetUv;
+uniform float uSeedDb;
+// Operator-tunable colormap brightness (issue #426). Multiplies the
+// normalised dB position before the LUT lookup so the lookup index — and
+// therefore the colour — shifts brighter (>1) or darker (<1). 1.0 = no
+// change. The pre-clamp multiply preserves dynamic range: values that would
+// have indexed off the top of the LUT still saturate at the brightest
+// colour, but mid-noise rows that previously sat near the dark end of the
+// gradient slide up into more visible territory.
+uniform float uBrightness;
 out vec4 fragColor;
 void main() {
   // vUv.y == 1.0 at top of canvas; newest row sits at the top.
   // row = (writeRow - (1 - vUv.y) * H) mod H, normalised.
   float agePx = (1.0 - vUv.y) * uH;
   float row = mod(uWriteRow - agePx + uH, uH);
-  float v = texture(uHistory, vec2(vUv.x, (row + 0.5) / uH)).r;
-  float n = clamp((v - uDbMin) / (uDbMax - uDbMin), 0.0, 1.0);
+  float srcX = vUv.x + uViewportOffsetUv;
+  float v = (srcX < 0.0 || srcX > 1.0)
+    ? uSeedDb
+    : texture(uHistory, vec2(srcX, (row + 0.5) / uH)).r;
+  float n = clamp(((v - uDbMin) / (uDbMax - uDbMin)) * uBrightness, 0.0, 1.0);
   vec4 c = texture(uLut, vec2(n, 0.5));
   // uBgAlpha=1 → fully opaque (normal mode). uBgAlpha=0 → noise floor is
   // fully transparent and signal peaks fade in proportionally; map/background

@@ -1225,6 +1225,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         WriteBeU32(p, 1428, alex1);
         WriteBeU32(p, 1432, alex0);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1027));
+
+        _log.LogInformation(
+            "p2.cmd_hp.tx run={Run} mox={Mox} tun={Tun} board={Board} variant={Variant} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocDxTx=0x{OcDxTx:X2} ocDxRx=0x{OcDxRx:X2} -> p[1401]=0x{B1401:X2} p[1397]=0x{B1397:X2}",
+            run, _moxOn, _tuneActive, _boardKind, _variant,
+            _ocTxMask, _ocRxMask, _ocDxTxMask, _ocDxRxMask,
+            p[1401], p[1397]);
     }
 
     // ANAN-7000 / Orion-II / Saturn (G2 MkII) BPF board constants. Copied

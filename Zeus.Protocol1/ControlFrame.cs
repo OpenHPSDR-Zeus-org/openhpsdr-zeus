@@ -465,7 +465,8 @@ internal static class ControlFrame
         CcRegister evenRegister,
         CcRegister oddRegister,
         in CcState state,
-        ITxIqSource? iqSource = null)
+        ITxIqSource? iqSource = null,
+        IRxCodecAudioSource? audioSource = null)
     {
         if (packet.Length != PacketLength)
             throw new ArgumentException("packet span must be 1032 bytes", nameof(packet));
@@ -479,8 +480,8 @@ internal static class ControlFrame
         packet[3] = 0x02;
         BinaryPrimitives.WriteUInt32BigEndian(packet[4..8], sendSequence);
 
-        WriteUsbFrame(packet.Slice(8, UsbFrameLength), evenRegister, in state, iqSource);
-        WriteUsbFrame(packet.Slice(8 + UsbFrameLength, UsbFrameLength), oddRegister, in state, iqSource);
+        WriteUsbFrame(packet.Slice(8, UsbFrameLength), evenRegister, in state, iqSource, audioSource);
+        WriteUsbFrame(packet.Slice(8 + UsbFrameLength, UsbFrameLength), oddRegister, in state, iqSource, audioSource);
     }
 
     /// <summary>
@@ -499,7 +500,12 @@ internal static class ControlFrame
     /// <summary>Number of IQ samples per 504-byte EP2 USB-frame payload (63 × 8 bytes).</summary>
     internal const int IqSamplesPerUsbFrame = 63;
 
-    private static void WriteUsbFrame(Span<byte> frame, CcRegister register, in CcState state, ITxIqSource? source)
+    private static void WriteUsbFrame(
+        Span<byte> frame,
+        CcRegister register,
+        in CcState state,
+        ITxIqSource? iqSource,
+        IRxCodecAudioSource? audioSource)
     {
         frame[0] = 0x7F;
         frame[1] = 0x7F;
@@ -514,19 +520,26 @@ internal static class ControlFrame
         LastDriveByte = state.DriveLevel;
 
         // EP2 504-byte payload = 63 groups × 8 bytes, each group =
-        // [L_audio s16 BE][R_audio s16 BE][I s16 BE][Q s16 BE]
-        // (both the audio ring fill and the IQ ring fill write into the same
-        // 8-byte slot). HL2 has no audio codec in the MVP target, so audio
-        // bytes stay zero. The LSB of I and Q low bytes is masked off
-        // (`isample & 0xFE`) — originally an HL2 CWX workaround; harmless
-        // ≤1 LSB precision loss on other Protocol-1 boards.
+        // [L_audio s16 BE][R_audio s16 BE][I s16 BE][Q s16 BE].
+        // The wire format is identical across every Protocol-1 board (HL2,
+        // Hermes, ANAN-class, Orion-MkII). HL2 has no on-board audio codec
+        // so its L/R bytes are ignored by the firmware; every other P1 board
+        // routes them to the front-panel headphone jack via the on-board
+        // codec. The IQ LSB mask (`isample & 0xFE`) is an HL2 CWX workaround
+        // — harmless ≤1 LSB precision loss on other P1 boards. PA enable is
+        // driven by the C0 MOX bit + board-specific DriveFilter C2 bits in
+        // WriteCcBytes — see issue #294.
         //
-        // Pre-conditions for writing a non-zero payload: MOX engaged and an IQ
-        // source is plumbed through. The wire format (L/R audio + I/Q s16 BE)
-        // is identical across all Protocol-1 boards (HL2, Hermes, ANAN-class,
-        // Orion-MkII). PA enable is driven by the C0 MOX bit + board-specific
-        // DriveFilter C2 bits in WriteCcBytes — see issue #294.
-        if (source is null || !state.Mox)
+        // Pre-conditions:
+        //   IQ payload writes  → MOX engaged AND iqSource non-null AND DriveLevel > 0
+        //   Audio L/R writes   → audioSource non-null (any MOX state; the source
+        //                        returns (0,0) when its ring is empty — same as
+        //                        leaving the bytes zero, but lets RX audio reach
+        //                        the radio's headphone jack on Hermes / ANAN
+        //                        / OrionMkII boards). Issue #426.
+        bool writeIq    = iqSource is not null && state.Mox && state.DriveLevel > 0;
+        bool writeAudio = audioSource is not null;
+        if (!writeIq && !writeAudio)
         {
             // frame[8..] was cleared by BuildDataPacket; leave zero.
             return;
@@ -537,12 +550,7 @@ internal static class ControlFrame
         // (drive⁴ power response). Send at unity — WDSP's ALC already clamps
         // the TXA output to ≤ 0 dBFS and the TUN post-gen tone is a
         // fixed-amplitude single-tone carrier, so neither source can overshoot
-        // +1.0 here. The prior 0.85 factor cost ~1.4 dB of achievable output
-        // and was observed to leave HL2 at 1.2 W when deskHPSDR hit 6.6 W on
-        // the same antenna/band; it was belt-and-suspenders on top of ALC.
-        // At DriveLevel=0 the HL2 TXG is already 0 (silent), but zero the IQ
-        // too so the wire bytes are silent regardless of board.
-        if (state.DriveLevel == 0) return;
+        // +1.0 here.
         const double amplitude = 1.0;
 
         var payload = frame[8..];
@@ -551,24 +559,37 @@ internal static class ControlFrame
         int firstI = 0, firstQ = 0;
         for (int s = 0; s < IqSamplesPerUsbFrame; s++)
         {
-            var (iSample, qSample) = source.Next(amplitude);
-            if (s == 0) { firstI = iSample; firstQ = qSample; }
-            int ai = Math.Abs((int)iSample);
-            int aq = Math.Abs((int)qSample);
-            if (ai > peak) peak = ai;
-            if (aq > peak) peak = aq;
-            sumAbs += ai + aq;
             int off = s * 8;
-            // Audio L/R stay zero (payload was cleared).
-            payload[off + 4] = (byte)((iSample >> 8) & 0xFF);
-            payload[off + 5] = (byte)(iSample & 0xFE);
-            payload[off + 6] = (byte)((qSample >> 8) & 0xFF);
-            payload[off + 7] = (byte)(qSample & 0xFE);
+            if (writeAudio)
+            {
+                var (l, r) = audioSource!.Next();
+                payload[off + 0] = (byte)((l >> 8) & 0xFF);
+                payload[off + 1] = (byte)(l & 0xFF);
+                payload[off + 2] = (byte)((r >> 8) & 0xFF);
+                payload[off + 3] = (byte)(r & 0xFF);
+            }
+            if (writeIq)
+            {
+                var (iSample, qSample) = iqSource!.Next(amplitude);
+                if (s == 0) { firstI = iSample; firstQ = qSample; }
+                int ai = Math.Abs((int)iSample);
+                int aq = Math.Abs((int)qSample);
+                if (ai > peak) peak = ai;
+                if (aq > peak) peak = aq;
+                sumAbs += ai + aq;
+                payload[off + 4] = (byte)((iSample >> 8) & 0xFF);
+                payload[off + 5] = (byte)(iSample & 0xFE);
+                payload[off + 6] = (byte)((qSample >> 8) & 0xFF);
+                payload[off + 7] = (byte)(qSample & 0xFE);
+            }
         }
-        LastPeakAbs = peak;
-        LastMeanAbs = (int)(sumAbs / (2 * IqSamplesPerUsbFrame));
-        LastFirstI = firstI;
-        LastFirstQ = firstQ;
+        if (writeIq)
+        {
+            LastPeakAbs = peak;
+            LastMeanAbs = (int)(sumAbs / (2 * IqSamplesPerUsbFrame));
+            LastFirstI = firstI;
+            LastFirstQ = firstQ;
+        }
     }
 
     // Diagnostic tap — read by Protocol1Client.TxLoopAsync to log what's

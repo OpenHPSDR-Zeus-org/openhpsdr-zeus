@@ -613,6 +613,117 @@ public class ControlFrameTests
         Assert.Equal(0, peak);
     }
 
+    private sealed class ConstAudioSource : IRxCodecAudioSource
+    {
+        private readonly short _l;
+        private readonly short _r;
+        public ConstAudioSource(short l, short r) { _l = l; _r = r; }
+        public (short L, short R) Next() => (_l, _r);
+    }
+
+    [Fact]
+    public void BuildDataPacket_AudioSource_WritesLrBytes_MoxOff()
+    {
+        // Issue #426 — RX audio path. Operator on Hermes is receiving (MOX
+        // off); WDSP demodulated audio flows through the audio source into
+        // EP2 L/R bytes so the radio's front-panel headphone codec sees
+        // real data. IQ bytes stay zero (no TX during RX).
+        var buf = new byte[1032];
+        var state = BaseState() with
+        {
+            Board = HpsdrBoardKind.Hermes,
+            Mox = false,
+            DriveLevel = 0,
+        };
+        var audio = new ConstAudioSource(l: 0x4321, r: unchecked((short)0xABCD));
+
+        ControlFrame.BuildDataPacket(
+            buf, 1,
+            ControlFrame.CcRegister.Config,
+            ControlFrame.CcRegister.RxFreq,
+            state,
+            iqSource: null,
+            audioSource: audio);
+
+        // First USB-frame payload begins at byte 16 (8-byte Metis + 8-byte USB header).
+        const int payload = 16;
+        // L s16 BE in bytes 0..1
+        Assert.Equal(0x43, buf[payload + 0]);
+        Assert.Equal(0x21, buf[payload + 1]);
+        // R s16 BE in bytes 2..3
+        Assert.Equal(0xAB, buf[payload + 2]);
+        Assert.Equal(0xCD, buf[payload + 3]);
+        // IQ stays zero — MOX off / no IQ source.
+        Assert.Equal(0, buf[payload + 4]);
+        Assert.Equal(0, buf[payload + 5]);
+        Assert.Equal(0, buf[payload + 6]);
+        Assert.Equal(0, buf[payload + 7]);
+    }
+
+    [Fact]
+    public void BuildDataPacket_AudioAndIqSources_BothWriteIntoSameGroup()
+    {
+        // Hermes during TX: WDSP RX-OUT still feeds the codec L/R bytes (the
+        // radio mutes its headphone hardware on MOX anyway) and TXA IQ feeds
+        // the I/Q bytes. They share the 8-byte group but write to disjoint
+        // offsets — no clobbering.
+        var buf = new byte[1032];
+        var state = BaseState() with
+        {
+            Board = HpsdrBoardKind.Hermes,
+            Mox = true,
+            DriveLevel = 0x80,
+        };
+        var iq = new ConstIqSource(i: 0x2000, q: -0x2000);
+        var audio = new ConstAudioSource(l: 0x1234, r: 0x5678);
+
+        ControlFrame.BuildDataPacket(
+            buf, 1,
+            ControlFrame.CcRegister.Config,
+            ControlFrame.CcRegister.RxFreq,
+            state,
+            iqSource: iq,
+            audioSource: audio);
+
+        const int payload = 16;
+        Assert.Equal(0x12, buf[payload + 0]);
+        Assert.Equal(0x34, buf[payload + 1]);
+        Assert.Equal(0x56, buf[payload + 2]);
+        Assert.Equal(0x78, buf[payload + 3]);
+        // IQ unchanged from the existing all-boards test.
+        var (peak, firstI, firstQ) = FirstFrameIqStats(buf);
+        Assert.True(peak > 0);
+        Assert.Equal(0x2000, firstI);
+        Assert.Equal(unchecked((short)-0x2000), firstQ);
+    }
+
+    [Fact]
+    public void BuildDataPacket_NoAudioSource_KeepsLrBytesZero()
+    {
+        // HL2 / pre-#426 behaviour: no audio source supplied → L/R bytes
+        // stay zero (the radio firmware ignores them anyway, and any other
+        // P1 board with a codec will be plumbed via the optional argument).
+        var buf = new byte[1032];
+        var state = BaseState() with
+        {
+            Board = HpsdrBoardKind.HermesLite2,
+            Mox = false,
+            DriveLevel = 0,
+        };
+
+        ControlFrame.BuildDataPacket(
+            buf, 1,
+            ControlFrame.CcRegister.Config,
+            ControlFrame.CcRegister.RxFreq,
+            state);
+
+        const int payload = 16;
+        Assert.Equal(0, buf[payload + 0]);
+        Assert.Equal(0, buf[payload + 1]);
+        Assert.Equal(0, buf[payload + 2]);
+        Assert.Equal(0, buf[payload + 3]);
+    }
+
     [Fact]
     public void BuildDataPacket_IqPayload_MasksLsbAcrossAllBoards()
     {

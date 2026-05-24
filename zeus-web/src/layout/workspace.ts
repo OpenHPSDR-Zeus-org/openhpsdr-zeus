@@ -85,6 +85,11 @@ export const DEFAULT_TILE_SPAN: Record<string, { w: number; h: number }> = {
   band: { w: 6, h: 2 },
   mode: { w: 4, h: 2 },
   meters: { w: 6, h: 8 },
+  // Meter Group auto-fits to its widget set (see MeterGroupTileBody in
+  // FlexWorkspace.tsx) — start at the smallest grid footprint so the
+  // freshly-added tile shows just the empty-state hint, not 4 columns of
+  // blank space waiting for widgets.
+  metergroup: { w: 1, h: 6 },
 };
 
 const FALLBACK_SPAN = { w: 4, h: 4 };

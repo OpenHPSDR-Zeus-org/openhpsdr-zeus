@@ -285,3 +285,52 @@ loaded settings.
 | `HasVolts` / `HasAmps` / `HasAudioAmplifier` / `HasSteppedAttenuationRx2` / `SupportsPathIllustrator` | `Zeus.Contracts.BoardCapabilities` + `BoardCapabilitiesTable.For` | ✅ Phase 2 (`b0afe62`); fetched by frontend via `/api/radio/capabilities` (Phase 5) — UI panel gating is for future panels to consume |
 | `HPSDRModel.ANAN_G2E` (HermesC10) | `HpsdrBoardKind.HermesC10` | ✅ recognised on discovery (`83364ec`) and dispatched (`1bcbd7d`) |
 | 0x0A wire-byte alias family disambiguation | `Zeus.Contracts.OrionMkIIVariant` | ✅ Phase 3 (`d807611`); operator-selectable per-radio, persisted in `PreferredRadioStore`, surfaced via `/api/radio/variant` and the `RadioSelector` dropdown |
+
+## 7000DLE MKIII vs MKII (bd zeus-pqp, #218 follow-up)
+
+kw4ex on #218 asked whether the ANAN-7000DLE MKIII needs its own
+`OrionMkIIVariant` bucket distinct from MKII. Audit result: **no — all
+three reference codebases treat 7000DLE / 7000DLE MKII / (hypothetical)
+MKIII as the same hardware**, dispatched through the OrionMKII bucket.
+
+Refs (read 2026-05-24):
+
+- **ramdor / MW0LGE Thetis** (`/Users/bek/Data/Repo/github/Thetis`, tip
+  `3759d096` v2.10.3.15) —
+  - `Project Files/Source/Console/enums.cs:396` — single comment lumps
+    `AMAM-7000DLE 7000DLEMkII ANAN-8000DLE OrionMkII Anvelina-Pro3 RedPitaya`
+    into `OrionMKII = 5`.
+  - `clsHardwareSpecific.cs:343` — `"ANAN-7000DLE"` is the only model
+    string; there is no `"ANAN-7000DLE MKIII"` / `"MK3"` arm in
+    `StringToEnumModel` (the `case "ANAN-…"` block runs 330-360).
+  - `console.cs:8568`, `console.cs:8653` — both PA / TX paths switch on
+    `HPSDRHW.OrionMKII` with the same membership comment; no MKIII branch.
+  - Repo-wide `grep -rni "mkiii\|mk3\|7000DLEMkIII"` returns zero hits
+    against radio code (the only `MK3` hits in `display.cs` / `console.cs`
+    are `MMK3`, the memory-spot count).
+- **mi0bot / OpenHPSDR-Thetis** (HL2 fork,
+  `/Users/bek/Data/Repo/github/OpenHPSDR-Thetis`) —
+  - `enums.cs:393` carries the identical OrionMKII comment.
+  - `clsHardwareSpecific.cs:351` matches MW0LGE's `"ANAN-7000DLE"` arm;
+    no MKIII case.
+- **dl1bz / deskhpsdr** (`/Users/bek/Data/Repo/github/deskhpsdr`) —
+  - `src/discovered.h:33` — "ANAN 7000DLE and 8000DLE uses 10 as the
+    device type in old protocol" (single device-type value, no MKIII
+    sub-disambiguation).
+  - `src/saturnregisters.c:728` — single "7000DLE RF board" IC map; no
+    MKIII variant.
+  - Repo-wide `grep -rni "mkiii\|mk3\|7000DLEMkIII"` returns zero hits.
+- **piHPSDR** — not cloned locally on this machine (checked
+  `/Users/bek/Data/Repo` exhaustively); deskhpsdr is a piHPSDR descendant
+  and inherits the same device-type 10 model, so the piHPSDR codebase
+  behaviour is covered transitively.
+
+Conclusion: **MKIII == MKII at the protocol / DSP / calibration layer for
+all three reference implementations.** Apache Labs hardware revisions of
+the 7000DLE chassis do not change the protocol-1 wire fingerprint or PA
+gain bracket that Thetis / deskhpsdr / piHPSDR care about. **Zeus needs
+no `Anan7000DLE_MkIII` bucket.** Operators with a physical MKIII should
+select `Anan7000DLE` and report any forward-power discrepancy on a known
+dummy load — if a real difference shows up at the bench, the variant
+seam in `Zeus.Contracts.OrionMkIIVariant` is the place to add it then,
+not now on speculation.

@@ -59,10 +59,10 @@ export type PanRenderer = {
     dbMin: number,
     dbMax: number,
     offsetPx: number,
-    // CTUN cursor X offset in clip space (range [-1, +1]). 0 = dead centre
-    // (the default; CTUN off or dial == frozen radio LO). When non-zero the
-    // orange tuning-cursor line shifts horizontally to follow the dial while
-    // the spectrum stays anchored on the hardware NCO. Issue #427.
+    // Dial cursor X offset in clip space (range [-1, +1]). 0 = dead centre
+    // (dial aligned with the hardware NCO). When non-zero the orange
+    // tuning-cursor line shifts horizontally to follow the dial while the
+    // spectrum stays anchored on the hardware NCO.
     cursorXOffset?: number,
   ) => void;
   // Update the trace + fill colour. Components 0..1, premultiplied alpha is

@@ -82,7 +82,12 @@ export type WfRenderer = {
     hzPerPixel: number,
     options?: PushOptions,
   ) => void;
-  draw: (dbMin: number, dbMax: number) => void;
+  draw: (
+    dbMin: number,
+    dbMax: number,
+    viewportOffsetUv?: number,
+    brightness?: number,
+  ) => void;
   setColormap: (id: ColormapId) => void;
   /** 1.0 = opaque (default). 0.0 = noise floor fades to transparent so a
    *  background layer (e.g. the QRZ-mode Leaflet map) shows through. */
@@ -107,6 +112,9 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   const uWriteRow = gl.getUniformLocation(drawProg, 'uWriteRow');
   const uH = gl.getUniformLocation(drawProg, 'uH');
   const uBgAlpha = gl.getUniformLocation(drawProg, 'uBgAlpha');
+  const uViewportOffsetUv = gl.getUniformLocation(drawProg, 'uViewportOffsetUv');
+  const uDrawSeed = gl.getUniformLocation(drawProg, 'uSeedDb');
+  const uBrightness = gl.getUniformLocation(drawProg, 'uBrightness');
   let bgAlpha = 1;
 
   const shiftProg = buildProgram(gl, WF_VS, WF_SHIFT_FS);
@@ -283,7 +291,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
     setTransparent(transparent) {
       bgAlpha = transparent ? 0 : 1;
     },
-    draw(dbMin, dbMax) {
+    draw(dbMin, dbMax, viewportOffsetUv = 0, brightness = 1) {
       gl.viewport(0, 0, canvasW, canvasH);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
@@ -304,6 +312,9 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
       gl.uniform1f(uWriteRow, writeRow);
       gl.uniform1f(uH, HISTORY_ROWS);
       gl.uniform1f(uBgAlpha, bgAlpha);
+      gl.uniform1f(uViewportOffsetUv, viewportOffsetUv);
+      gl.uniform1f(uDrawSeed, SEED_DB);
+      gl.uniform1f(uBrightness, brightness);
       gl.bindVertexArray(vao);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.bindVertexArray(null);

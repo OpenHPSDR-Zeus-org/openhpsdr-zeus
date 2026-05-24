@@ -98,6 +98,28 @@ internal static class PacketParser
     private const double Int24Scale = 1.0 / 8_388_608.0; // 1 / 2^23
 
     /// <summary>
+    /// Extract the hardware-PTT echo bit from a parsed EP6 packet — C0[0] of
+    /// each USB frame OR'd together. The HL2 gateware sets this whenever the
+    /// rear KEY tip is grounded or an external PTT line is asserted (HL2
+    /// protocol doc §"Hermes Lite 2-specific behaviour", line 200): "When the
+    /// tip is grounded, both C0[0] and C0[2] are sent as one." Same wire bit
+    /// also echoes a host-driven MOX request, so consumers MUST gate on the
+    /// host's current MOX state to disambiguate "external key" from "echo of
+    /// our own outbound MOX".
+    /// </summary>
+    /// <returns>true if either USB frame's C0[0] is set, false otherwise.
+    /// Returns false for packets shorter than expected (the only caller has
+    /// already validated length via <see cref="TryParsePacket(System.ReadOnlySpan{byte},System.Span{double},out uint,out int)"/>).</returns>
+    public static bool ExtractHardwarePtt(ReadOnlySpan<byte> packet)
+    {
+        if (packet.Length < PacketLength) return false;
+        // usb[3] is c0; bit 0 is the PTT/MOX echo.
+        byte c0Frame0 = packet[MetisHeaderLength + 3];
+        byte c0Frame1 = packet[MetisHeaderLength + UsbFrameLength + 3];
+        return ((c0Frame0 | c0Frame1) & 0x01) != 0;
+    }
+
+    /// <summary>
     /// Read a 24-bit big-endian signed integer with sign-extension to int32.
     /// </summary>
     public static int ReadInt24BigEndian(ReadOnlySpan<byte> b)

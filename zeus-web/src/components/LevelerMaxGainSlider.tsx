@@ -10,9 +10,10 @@
 // option) any later version. See the LICENSE file at the root of this
 // repository for the full text, or https://www.gnu.org/licenses/.
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 import { setLevelerMaxGain } from '../api/client';
 import { useTxStore } from '../state/tx-store';
+import { useLiveSlider } from '../hooks/useLiveSlider';
 
 // Leveler max-gain (TX): how much the WDSP TXA Leveler can boost quiet
 // speech before the ALC catches it. Default +5 dB matches the W1AEX /
@@ -25,7 +26,6 @@ import { useTxStore } from '../state/tx-store';
 const MIN = 0;
 const MAX = 15;
 const STEP = 0.5;
-const DEBOUNCE_MS = 100;
 
 function quantize(v: number): number {
   const snapped = Math.round(v / STEP) * STEP;
@@ -37,44 +37,32 @@ export function LevelerMaxGainSlider() {
   const value = useTxStore((s) => s.levelerMaxGainDb);
   const setValue = useTxStore((s) => s.setLevelerMaxGainDb);
 
-  const inflightAbort = useRef<AbortController | null>(null);
-  const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSent = useRef<number>(value);
   const previousOnError = useRef<number>(value);
 
-  const sendDebounced = useCallback((v: number) => {
-    if (debounceTimer.current != null) clearTimeout(debounceTimer.current);
-    debounceTimer.current = setTimeout(() => {
-      if (v === lastSent.current) return;
-      inflightAbort.current?.abort();
-      const ac = new AbortController();
-      inflightAbort.current = ac;
-      const prevValue = lastSent.current;
-      lastSent.current = v;
-      previousOnError.current = prevValue;
-      setLevelerMaxGain(v, ac.signal)
-        .then((r) => {
-          if (ac.signal.aborted) return;
-          if (r.levelerMaxGainDb !== v) setValue(r.levelerMaxGainDb);
-        })
-        .catch((err) => {
-          if (ac.signal.aborted) return;
-          if (err instanceof DOMException && err.name === 'AbortError') return;
-          setValue(previousOnError.current);
-          lastSent.current = previousOnError.current;
-        });
-    }, DEBOUNCE_MS);
-  }, [setValue]);
-
-  useEffect(() => () => {
-    inflightAbort.current?.abort();
-    if (debounceTimer.current != null) clearTimeout(debounceTimer.current);
-  }, []);
+  const liveSlider = useLiveSlider<number>({
+    send: useCallback(
+      (v: number, signal: AbortSignal) => {
+        const prevValue = previousOnError.current;
+        return setLevelerMaxGain(v, signal)
+          .then((r) => {
+            if (signal.aborted) return;
+            previousOnError.current = r.levelerMaxGainDb;
+            if (r.levelerMaxGainDb !== v) setValue(r.levelerMaxGainDb);
+          })
+          .catch((err) => {
+            if (signal.aborted) return;
+            if (err instanceof DOMException && err.name === 'AbortError') return;
+            setValue(prevValue);
+          });
+      },
+      [setValue],
+    ),
+  });
 
   const onInput = (e: React.FormEvent<HTMLInputElement>) => {
     const q = quantize(Number(e.currentTarget.value));
     setValue(q);
-    sendDebounced(q);
+    liveSlider.push(q);
   };
 
   return (
@@ -91,6 +79,9 @@ export function LevelerMaxGainSlider() {
         value={value}
         onInput={onInput}
         onChange={onInput}
+        onMouseUp={() => liveSlider.flush()}
+        onTouchEnd={() => liveSlider.flush()}
+        onKeyUp={() => liveSlider.flush()}
         style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}
       />
       <span

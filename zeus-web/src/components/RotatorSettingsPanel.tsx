@@ -241,8 +241,9 @@ export function RotatorSettingsPanel() {
           <span style={{ fontFamily: 'monospace' }}>
             rotctld -m 2 -r /dev/ttyUSB0 -s 9600 -t 4533
           </span>{' '}
-          (model 2 = dummy rotor for testing). Settings are remembered locally; the backend holds no
-          persistent state across restarts.
+          (model 2 = dummy rotor for testing). Settings are saved server-side in zeus-prefs.db and
+          shared across browsers and sessions; Zeus only auto-connects on startup if Enabled was
+          checked at last clean exit.
         </div>
       </form>
     </div>

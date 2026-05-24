@@ -17,7 +17,7 @@
 //   - "+ Add Panel" is a single workspace-level button at the top-right,
 //     opening the categorized AddPanelModal.
 
-import { memo, useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ResponsiveGridLayout,
   useContainerWidth,
@@ -320,6 +320,7 @@ function MeterGroupTileBody({
   const updateTileInstanceConfig = useLayoutStore(
     (s) => s.updateTileInstanceConfig,
   );
+  const updateTilePlacement = useLayoutStore((s) => s.updateTilePlacement);
   const config: MeterGroupConfig = useMemo(
     () => parseMeterGroupConfig(tile.instanceConfig),
     [tile.instanceConfig],
@@ -330,6 +331,33 @@ function MeterGroupTileBody({
     },
     [tile.uid, updateTileInstanceConfig],
   );
+
+  // Auto-fit the tile to its widget set. Operators add a Meter Group, drop
+  // in two vertical bars, and expect the tile to snap to bar-width — not
+  // to leave four grid columns of empty space waiting to be filled. The
+  // effect deps are widget count + direction only (live tile geometry is
+  // read through a ref) so an operator can still drag-resize the cross
+  // axis without the effect snapping it back on every render.
+  const tileRef = useRef(tile);
+  tileRef.current = tile;
+  useEffect(() => {
+    const t = tileRef.current;
+    const widgetCount = Math.max(1, config.widgets.length);
+    // Row: one grid col per widget on the main axis. Column: ~3 grid rows
+    // per widget so vertical bars get enough vertical span to read.
+    const targetW = config.direction === 'row' ? widgetCount : t.w;
+    const targetH =
+      config.direction === 'column' ? Math.max(3, widgetCount * 3) : t.h;
+    if (targetW !== t.w || targetH !== t.h) {
+      updateTilePlacement(t.uid, {
+        x: t.x,
+        y: t.y,
+        w: targetW,
+        h: targetH,
+      });
+    }
+  }, [config.widgets.length, config.direction, updateTilePlacement]);
+
   return (
     <MeterGroupPanel config={config} setConfig={setConfig} onRemove={onRemove} />
   );

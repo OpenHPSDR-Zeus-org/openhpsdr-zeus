@@ -60,13 +60,16 @@ namespace Zeus.Server.Tests;
 /// <summary>
 /// End-to-end endpoint test for <c>POST /api/tx/leveler-max-gain</c>: drives
 /// the real handler via <see cref="WebApplicationFactory{TEntryPoint}"/>,
-/// asserting a JSON <c>{gain}</c> body reaches
-/// <see cref="IDspEngine.SetTxLevelerMaxGain"/> on the current engine, and
-/// that out-of-range values are rejected with a 400.
+/// asserting that a JSON <c>{gain}</c> body updates the persisted
+/// <see cref="StateDto.LevelerMaxGainDb"/>, and that out-of-range values
+/// are rejected with a 400.
 ///
-/// Frontend re-POSTs this on every slider move and on WS reconnect (task
-/// #19), so the handler's range check is the only thing between a rogue
-/// client and WDSP's Leveler ceiling.
+/// Post-persistence migration the endpoint routes through
+/// <c>RadioService.SetTxLevelerMaxGain</c> → <c>Mutate</c> → the StateChanged
+/// listener that pushes WDSP's <c>SetTXALevelerTop</c>. The HTTP test pins
+/// the request/response contract and the state-mutation hop; the engine-seam
+/// behaviour is covered by <see cref="DspPipelineService"/>'s broadcast path
+/// (no engine open in this test factory so the seam is intentionally inert).
 /// </summary>
 public class LevelerMaxGainEndpointTests : IClassFixture<LevelerMaxGainEndpointTests.Factory>
 {
@@ -77,33 +80,34 @@ public class LevelerMaxGainEndpointTests : IClassFixture<LevelerMaxGainEndpointT
     [InlineData(0.0)]   // band floor
     [InlineData(5.0)]   // W1AEX / softerhardware default
     [InlineData(15.0)]  // band ceiling (Thetis stock)
-    public async Task PostInRange_CallsEngineWithSameValue(double gain)
+    public async Task PostInRange_UpdatesRadioServiceState(double gain)
     {
-        _factory.TestEngine.LevelerMaxGainCalls.Clear();
+        using var scope = _factory.Services.CreateScope();
+        var radio = scope.ServiceProvider.GetRequiredService<RadioService>();
         using var client = _factory.CreateClient();
 
         var resp = await client.PostAsJsonAsync("/api/tx/leveler-max-gain", new { gain });
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-
-        var call = Assert.Single(_factory.TestEngine.LevelerMaxGainCalls);
-        Assert.Equal(gain, call, precision: 6);
+        Assert.Equal(gain, radio.Snapshot().LevelerMaxGainDb, precision: 6);
     }
 
     [Theory]
     [InlineData(-0.1)]
     [InlineData(15.1)]
-    public async Task PostOutOfRange_Returns400_AndDoesNotCallEngine(double gain)
+    public async Task PostOutOfRange_Returns400_AndDoesNotMutateState(double gain)
     {
-        _factory.TestEngine.LevelerMaxGainCalls.Clear();
+        using var scope = _factory.Services.CreateScope();
+        var radio = scope.ServiceProvider.GetRequiredService<RadioService>();
+        double before = radio.Snapshot().LevelerMaxGainDb;
         using var client = _factory.CreateClient();
 
         var resp = await client.PostAsJsonAsync("/api/tx/leveler-max-gain", new { gain });
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
-        Assert.Empty(_factory.TestEngine.LevelerMaxGainCalls);
+        Assert.Equal(before, radio.Snapshot().LevelerMaxGainDb, precision: 6);
     }
 
     [Fact]
-    public async Task PostNaN_Returns400_AndDoesNotCallEngine()
+    public async Task PostNaN_Returns400_AndDoesNotMutateState()
     {
         // System.Text.Json refuses to serialize NaN via PostAsJsonAsync, so
         // simulate a rogue client sending the JavaScript literal `NaN` by
@@ -111,15 +115,18 @@ public class LevelerMaxGainEndpointTests : IClassFixture<LevelerMaxGainEndpointT
         // (double.IsNaN(req.Gain)) is defensive belt-and-braces against a
         // deserializer that later enables AllowNamedFloatingPointLiterals —
         // the test pins the rejection shape in place now.
-        _factory.TestEngine.LevelerMaxGainCalls.Clear();
+        using var scope = _factory.Services.CreateScope();
+        var radio = scope.ServiceProvider.GetRequiredService<RadioService>();
+        double before = radio.Snapshot().LevelerMaxGainDb;
         using var client = _factory.CreateClient();
         using var content = new StringContent(
             "{\"gain\":NaN}", Encoding.UTF8, "application/json");
 
         var resp = await client.PostAsync("/api/tx/leveler-max-gain", content);
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
-        Assert.Empty(_factory.TestEngine.LevelerMaxGainCalls);
+        Assert.Equal(before, radio.Snapshot().LevelerMaxGainDb, precision: 6);
     }
+
 
     public sealed class Factory : WebApplicationFactory<Program>
     {

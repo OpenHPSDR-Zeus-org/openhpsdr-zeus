@@ -162,6 +162,23 @@ public sealed record StateDto(
     // yet; when multi-RX lands this becomes the master and the per-RX
     // values layer on top.
     double RxAfGainDb = 0.0,
+    // TX mic gain in dB. WDSP applies via SetTXAPanelGain1(10^(db/20)); the
+    // server stores the operator-friendly dB and converts at the engine seam.
+    // Range matches the /api/mic-gain endpoint clamp ([-40, +10]) which in
+    // turn matches Thetis's MicGainMin/Max defaults (console.cs:19151/19163).
+    // Persisted server-side via RadioStateStore so a fresh frontend connect
+    // (or a desktop relaunch that wiped localStorage) lands on the last
+    // operator value instead of the engine's 0 dB seed. Wire name omits the
+    // Tx prefix to match the existing /api/mic-gain endpoint POST response.
+    int MicGainDb = 0,
+    // TX Leveler max-gain ceiling in dB. Range [0, 15] — 0 disables the
+    // headroom entirely, 15 matches Thetis's stock ceiling
+    // (radio.cs:2979 tx_leveler_max_gain = 15.0). Default 8.0 matches
+    // WdspDspEngine.DefaultLevelerMaxGainDb (Brian's HL2 starting point;
+    // softer than Thetis stock). Persisted server-side; previously
+    // localStorage-only on the client and reverted on every restart. Wire
+    // name matches the existing /api/tx/leveler-max-gain endpoint response.
+    double LevelerMaxGainDb = 8.0,
     // Auto-AGC control loop. When on, the server automatically adjusts
     // AgcTopDb based on signal conditions. Similar to Auto-ATT but for AGC.
     // Default is OFF — operator must explicitly enable. The control loop
@@ -256,22 +273,31 @@ public sealed record StateDto(
     // would make pressing TUN appear to do nothing on first key.
     int TunePct = 10,
 
-    // ---- CTUN (Click-Tune) — issue #427 ----
-    // When CtunEnabled is false (default), VfoHz drives both the radio's
-    // hardware NCO and the panadapter centre — clicking the spectrum retunes
-    // the radio. When true, the hardware NCO is frozen at RadioLoHz and
-    // clicking only moves VfoHz around within the displayed bandwidth; WDSP's
-    // RX bandpass is shifted by (VfoHz - RadioLoHz) so the audio still
-    // resolves the operator's tuned signal. Mirrors Thetis chkFWCATU /
-    // ClickTuneDisplay (console.cs:43143-43170, 10857-10867).
-    bool CtunEnabled = false,
-    // Hardware NCO frequency in Hz. Tracks VfoHz when CTUN is OFF; frozen at
-    // the value VfoHz had when CTUN was toggled ON. RadioService is
+    // Hardware NCO frequency in Hz. Independent of VfoHz: the dial roams over
+    // the sampled spectrum while the radio's hardware centre stays put.
+    // Updated only by explicit calls to <c>POST /api/radio/lo</c> (or by the
+    // band-change / reconnect paths inside RadioService). RadioService is
     // authoritative; persisted to LiteDB so the radio re-tunes to the same
-    // hardware centre on reconnect when CTUN was on. Zero on a fresh server
-    // before the first state hydration; RadioService snaps it to VfoHz at
-    // construction so the displayed centre is never zero.
-    long RadioLoHz = 0);
+    // hardware centre on reconnect. Zero on a fresh server before the first
+    // state hydration; RadioService snaps it to VfoHz at construction so the
+    // displayed centre is never zero. Mirrors Thetis CTUN's frozen-NCO model
+    // (console.cs:43143-43170), now Zeus's only tuning model.
+    long RadioLoHz = 0,
+
+    // CW sidetone pitch in Hz. Currently a baked-in constant
+    // (CwDefaults.PitchHz); will become a user-settable preference
+    // (Thetis: Setup → DSP → Keyer → CW Pitch). On the wire now so
+    // the frontend already consumes the live value — when the setting
+    // lands, only the server-side source changes.
+    int CwPitchHz = CwDefaults.PitchHz);
+
+/// <summary>Canonical CW constants shared between backend and wire DTOs.
+/// Single source of truth — CwOffset (server-side) and StateDto both
+/// reference these instead of duplicating magic numbers.</summary>
+public static class CwDefaults
+{
+    public const int PitchHz = 600;
+}
 
 public sealed record RadioInfo(
     string MacAddress,
@@ -295,7 +321,11 @@ public sealed record ConnectRequest(
 
 public sealed record VfoSetRequest(long Hz);
 
-public sealed record CtunSetRequest(bool Enabled);
+/// <summary>Set the hardware NCO (radio LO) frequency in Hz. Does not move
+/// the operator's tuned frequency (VfoHz). Used by the panadapter pure-pan
+/// gesture when a drag would otherwise carry the viewport outside the IQ
+/// capture window. Out-of-range values are rejected with 400.</summary>
+public sealed record RadioLoSetRequest(long Hz);
 
 public sealed record ModeSetRequest(RxMode Mode);
 
@@ -371,6 +401,37 @@ public sealed record AutoAttSetRequest(bool Enabled);
 public sealed record AutoAgcSetRequest(bool Enabled);
 
 public sealed record TunSetRequest(bool On);
+
+// /api/cw/send body. Text is the ASCII transcript to key out; Wpm is the
+// playback speed (PARIS-method words per minute, clamped to 5..50 at the
+// engine seam). Wpm null means "use the operator's stored CwSettings.Wpm
+// default" (CwSettingsStore — written by /api/cw/settings).
+public sealed record CwSendRequest(string Text, int? Wpm = null);
+
+// Persisted CW operator settings. Wpm is the default speed for new sends
+// when /api/cw/send is called without an explicit wpm. FarnsworthWpm is
+// the character-rate floor for Farnsworth spacing (null = pure WPM, no
+// Farnsworth). Macros is exactly six slots — the macro pad is a fixed
+// 2×3 grid; empty strings are valid (renders a "(empty)" button). The
+// sidetone fields are surfaced here so the UI sliders persist alongside
+// the macros, even though sidetone audio routing itself lands later
+// (zeus-5ue) — keeps the wire shape stable across the epic.
+public sealed record CwSettingsDto(
+    int Wpm,
+    int? FarnsworthWpm,
+    string[] Macros,
+    double SidetoneGainDb,
+    int SidetoneHz);
+
+// PATCH-shaped: every field nullable so the frontend can save one slider
+// (or one macro) without re-sending the whole record. Server merges on top
+// of the persisted row before applying.
+public sealed record CwSettingsSetRequest(
+    int? Wpm = null,
+    int? FarnsworthWpm = null,
+    string[]? Macros = null,
+    double? SidetoneGainDb = null,
+    int? SidetoneHz = null);
 
 public sealed record MicGainSetRequest(int Db);
 
@@ -516,21 +577,49 @@ public sealed record Hl2OptionsSetRequest(bool BandVolts);
 // "image"; Fit is one of "fit" | "fill" | "stretch". Image bytes are NOT
 // shipped in this DTO; HasImage signals whether GET /api/display-settings/image
 // will return content. RxTraceColor is the panadapter signal trace colour
-// as #RRGGBB (default "#FFA028"). All fields persisted server-side so the
-// settings follow the operator across browsers / devices — Photino desktop
-// mode in particular binds the webview to a fresh random loopback port on
-// every launch, which orphans any per-origin localStorage value.
+// as #RRGGBB (default "#FFA028"). Db* fields are the panadapter/waterfall dB
+// window bounds persisted so the operator's scale survives a backend restart.
+// Null means the server has never stored that field; the frontend falls back
+// to its built-in defaults (FIXED_DB_MIN / TX_FIXED_DB_MIN etc.) and pushes
+// the current value up on next interaction. All fields persisted server-side
+// so the settings follow the operator across browsers / devices — Photino
+// desktop mode in particular binds the webview to a fresh random loopback
+// port on every launch, which orphans any per-origin localStorage value.
+// WfBrightness is an operator-tunable multiplier applied to the colormap
+// input in the waterfall fragment shader (gl/shaders.ts WF_FS). 1.0 = no
+// change, < 1.0 darkens, > 1.0 brightens. Null means the server has never
+// stored a value; the frontend uses its built-in default (WF_BRIGHTNESS_DEFAULT
+// in display-settings-store.ts) and pushes the current value up on next
+// interaction. See issue #426 / bd zeus-lez.
 public sealed record DisplaySettingsDto(
     string Mode,
     string Fit,
     bool HasImage,
     string? ImageMime,
-    string RxTraceColor);
+    string RxTraceColor,
+    double? DbMin,
+    double? DbMax,
+    double? TxDbMin,
+    double? TxDbMax,
+    double? WfDbMin,
+    double? WfDbMax,
+    double? WfTxDbMin,
+    double? WfTxDbMax,
+    double? WfBrightness);
 
 public sealed record DisplaySettingsSetRequest(
     string Mode,
     string Fit,
-    string RxTraceColor);
+    string RxTraceColor,
+    double? DbMin = null,
+    double? DbMax = null,
+    double? TxDbMin = null,
+    double? TxDbMax = null,
+    double? WfDbMin = null,
+    double? WfDbMax = null,
+    double? WfTxDbMin = null,
+    double? WfTxDbMax = null,
+    double? WfBrightness = null);
 
 // Per-mode disclosure state for the inline NR settings accordion that hangs
 // below the DSP NR toggle row. Three independent booleans — one per NR
@@ -573,6 +662,37 @@ public sealed record BottomPinDto(
 public sealed record BottomPinSetRequest(
     bool Logbook,
     bool TxMeters);
+
+// Vertical split between the panadapter and the waterfall in the Hero
+// panel. PanPercent is the panadapter share, clamped 10..90; the
+// waterfall takes the remainder. Single global value for now. Persisted
+// server-side in zeus-prefs.db (same pattern as BottomPinDto) so the
+// choice follows the operator across browsers / devices.
+public sealed record PanWfSplitDto(double PanPercent);
+
+public sealed record PanWfSplitSetRequest(double PanPercent);
+
+// Per-operator display-side meter calibration knobs (GitHub #426).
+//
+//   * SMeterOffsetDb — signed dB offset added to the displayed RX dBm
+//     value. Trim for real-world antenna / coax / preamp combinations
+//     that shift the WDSP-internal reading. Clamped ±20 dB on the
+//     server. Display-only — does not touch WDSP or the radio.
+//   * MaxDisplayedWatts — operator override for the TX forward-power
+//     meter full scale, in Watts. Lets an operator set e.g. 25 W on
+//     a 100 W bracket so the indication fills the bar. Clamped
+//     [1, 1000] W when non-zero. 0 = "no override, use the radio's
+//     MaxWatts as the bar's full scale" (the historical behaviour).
+//
+// Persisted server-side in zeus-prefs.db (single-row pattern).
+// Defaults: SMeterOffsetDb=0.0, MaxDisplayedWatts=0.0 (no override).
+public sealed record MeterDisplaySettingsDto(
+    double SMeterOffsetDb,
+    double MaxDisplayedWatts);
+
+public sealed record SMeterOffsetSetRequest(double OffsetDb);
+
+public sealed record MaxDisplayedWattsSetRequest(double MaxWatts);
 
 // ---- PureSignal request records ----
 // PsControlSetRequest = master arm (Enabled) + mode (Auto vs Single).

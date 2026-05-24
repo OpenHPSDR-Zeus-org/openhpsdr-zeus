@@ -429,6 +429,10 @@ export const useTxStore = create<TxState>()(
           // a first-paint flicker before this hydrate runs.
           drivePercent: s.drivePercent,
           tunePercent: s.tunePercent,
+          // Mic gain + Leveler max-gain — server-authoritative (RadioStateStore).
+          // Previously localStorage-only and reverted on every desktop relaunch.
+          micGainDb: s.micGainDb,
+          levelerMaxGainDb: s.levelerMaxGainDb,
           psAuto: s.psAuto,
           psPtol: s.psPtol,
           psAutoAttenuate: s.psAutoAttenuate,

@@ -60,6 +60,8 @@ public class RadioStateStoreTests : IDisposable
                 AttenDb = 12,
                 AutoAgcEnabled = true,
                 RxAfGainDb = -6.5,
+                MicGainDb = -7,
+                LevelerMaxGainDb = 12.5,
                 ZoomLevel = 4,
                 SsbFilterLoAbs = 300, SsbFilterHiAbs = 2400,
                 CwFilterLoAbs = 400, CwFilterHiAbs = 800,
@@ -85,6 +87,8 @@ public class RadioStateStoreTests : IDisposable
         Assert.Equal(12, got.AttenDb);
         Assert.True(got.AutoAgcEnabled);
         Assert.Equal(-6.5, got.RxAfGainDb);
+        Assert.Equal(-7, got.MicGainDb);
+        Assert.Equal(12.5, got.LevelerMaxGainDb);
         Assert.Equal(4, got.ZoomLevel);
         Assert.Equal(300, got.SsbFilterLoAbs);
         Assert.Equal(2400, got.SsbFilterHiAbs);
@@ -105,6 +109,18 @@ public class RadioStateStoreTests : IDisposable
         var entry = new RadioStateEntry();
         Assert.Equal(0, entry.DrivePct);
         Assert.Equal(10, entry.TunePct);
+    }
+
+    // Older rows written before the TX mic-gain / Leveler-max-gain fields
+    // existed must hydrate with the engine's open-time defaults so a build
+    // upgrade doesn't surprise the operator with a 0 dB Leveler ceiling (no
+    // headroom at all) on the first key after restart.
+    [Fact]
+    public void MicAndLevelerMaxGain_HaveCorrectDefaults_OnNewEntry()
+    {
+        var entry = new RadioStateEntry();
+        Assert.Equal(0, entry.MicGainDb);
+        Assert.Equal(8.0, entry.LevelerMaxGainDb);
     }
 
     // Snapshot is a single global row — saving twice should update, not insert.

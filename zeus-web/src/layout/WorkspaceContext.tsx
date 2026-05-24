@@ -106,9 +106,8 @@ export interface WorkspaceCtx {
   // DSP
   dspActive: boolean;
 
-  // CW
-  wpm: number;
-  setWpm: (v: number) => void;
+  // CW state lives in src/state/cw-store.ts (persisted server-side via
+  // /api/cw/settings) — no longer threaded through the workspace context.
 
   // Logbook
   logbookTitle: string;

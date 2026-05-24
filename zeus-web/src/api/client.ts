@@ -176,6 +176,12 @@ export type RadioStateDto = {
   autoAgcEnabled: boolean;
   agcOffsetDb: number;
   rxAfGainDb: number;
+  // TX mic gain in dB ([-40, +10]) and TX Leveler max-gain ceiling in dB
+  // ([0, 15]). Server is authoritative; hydrated into tx-store on every fresh
+  // RadioStateDto. Previously localStorage-only and reverted on every restart
+  // when the desktop webview wiped its storage.
+  micGainDb: number;
+  levelerMaxGainDb: number;
   attenDb: number;
   autoAttEnabled: boolean;
   attOffsetDb: number;
@@ -219,13 +225,15 @@ export type RadioStateDto = {
   // after normalisation; falls back to CFC_CONFIG_DEFAULT when the server
   // omits it (legacy state frames).
   cfc: CfcConfigDto;
-  // CTUN (Click-Tune) — issue #427. When true, panadapter clicks move the
-  // dial (vfoHz) without retuning the radio; the WDSP RX filter is shifted
-  // by (vfoHz - radioLoHz) on the server so the audio still demodulates the
-  // operator's tuned signal. radioLoHz is the actual hardware NCO and is
-  // what the panadapter centres on.
-  ctunEnabled: boolean;
+  // Hardware NCO. Independent of vfoHz — the panadapter centres on radioLoHz
+  // and WDSP's shift stage relocates the operator's tuned signal so it still
+  // demodulates. Moves only on explicit retune (/api/radio/lo, band change,
+  // external CAT). The legacy CTUN toggle was removed in the pure-pan rework
+  // (PRD: docs/prd/panfall_behavior.md); this is now the only tuning model.
   radioLoHz: number;
+  // CW sidetone pitch in Hz. Today a baked-in constant (600); exposed so
+  // the frontend doesn't duplicate it. Will become configurable later.
+  cwPitchHz: number;
 };
 
 // CFC mirrors Zeus.Contracts.CfcConfig. Bands array is fixed at 10 entries
@@ -437,6 +445,12 @@ export function normalizeState(raw: unknown): RadioStateDto {
     autoAgcEnabled: typeof r.autoAgcEnabled === 'boolean' ? r.autoAgcEnabled : false,
     agcOffsetDb: typeof r.agcOffsetDb === 'number' ? r.agcOffsetDb : 0,
     rxAfGainDb: typeof r.rxAfGainDb === 'number' ? r.rxAfGainDb : 0,
+    // 0 dB = unity panel-gain (WDSP TXA open-time default).
+    micGainDb: typeof r.micGainDb === 'number' ? r.micGainDb : 0,
+    // 8 dB matches WdspDspEngine.DefaultLevelerMaxGainDb so older servers
+    // without the field hydrate to the same ceiling the engine opens with.
+    levelerMaxGainDb:
+      typeof r.levelerMaxGainDb === 'number' ? r.levelerMaxGainDb : 8,
     // Attenuator value in dB, range 0..31 (HpsdrAtten.MaxDb). 4-button UI
     // sends 0/10/20/30 today; #23 will unlock the full fine-grained range.
     attenDb: typeof r.attenDb === 'number' ? r.attenDb : 0,
@@ -479,15 +493,16 @@ export function normalizeState(raw: unknown): RadioStateDto {
     twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
     twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,
     cfc: normalizeCfc(r.cfc),
-    // CTUN — issue #427. Legacy server without the fields → CTUN off and
-    // radioLoHz falls back to vfoHz so the panadapter centre stays sensible.
-    ctunEnabled: typeof r.ctunEnabled === 'boolean' ? r.ctunEnabled : false,
+    // Hardware NCO. Legacy server without the field → fall back to vfoHz so
+    // the panadapter centre stays sensible during a rolling deploy. Any
+    // stale ctunEnabled field from an old payload is ignored.
     radioLoHz:
       typeof r.radioLoHz === 'number' && r.radioLoHz > 0
         ? r.radioLoHz
         : typeof r.vfoHz === 'number'
         ? r.vfoHz
         : 0,
+    cwPitchHz: typeof r.cwPitchHz === 'number' ? r.cwPitchHz : 600,
   };
 }
 
@@ -655,16 +670,20 @@ export function disconnectP2(signal?: AbortSignal): Promise<unknown> {
   );
 }
 
-export function setCtun(
-  enabled: boolean,
+// Move the hardware NCO center frequency without touching vfoHz. Called by
+// the panadapter pan gesture (use-pan-tune-gesture.ts) when a drag releases
+// past the edge of the current IQ capture window. Server returns the full
+// updated StateDto; 400 if hz is out of range for the connected radio.
+export function setRadioLo(
+  hz: number,
   signal?: AbortSignal,
 ): Promise<RadioStateDto> {
   return jsonFetch(
-    '/api/ctun',
+    '/api/radio/lo',
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ enabled }),
+      body: JSON.stringify({ hz }),
       signal,
     },
     normalizeState,

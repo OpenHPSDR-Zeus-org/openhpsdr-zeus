@@ -44,6 +44,7 @@
 
 import { create } from 'zustand';
 import {
+  getRotatorConfig,
   getRotatorStatus,
   postRotatorConfig,
   setRotatorAz,
@@ -54,10 +55,9 @@ import {
   type RotctldTestResult,
 } from '../api/rotator';
 
-// Persist the host/port/enabled/interval the user has chosen so the pill
-// stays usable across reloads. The backend is the source of truth while
-// connected; this is just the form-default memory.
-const CONFIG_STORAGE_KEY = 'zeus.rotator.config';
+// Defaults match the backend record so the form has sensible values until the
+// first /api/rotator/config response lands. The backend is the sole source of
+// truth — config is persisted server-side in zeus-prefs.db, not in localStorage.
 const DEFAULT_CONFIG: RotctldConfig = {
   enabled: false,
   host: '127.0.0.1',
@@ -65,41 +65,13 @@ const DEFAULT_CONFIG: RotctldConfig = {
   pollingIntervalMs: 500,
 };
 
-function readSavedConfig(): RotctldConfig {
-  try {
-    if (typeof localStorage === 'undefined') return DEFAULT_CONFIG;
-    const raw = localStorage.getItem(CONFIG_STORAGE_KEY);
-    if (!raw) return DEFAULT_CONFIG;
-    const parsed = JSON.parse(raw) as Partial<RotctldConfig>;
-    return {
-      enabled: Boolean(parsed.enabled),
-      host: typeof parsed.host === 'string' && parsed.host ? parsed.host : DEFAULT_CONFIG.host,
-      port: typeof parsed.port === 'number' && parsed.port > 0 ? parsed.port : DEFAULT_CONFIG.port,
-      pollingIntervalMs:
-        typeof parsed.pollingIntervalMs === 'number' && parsed.pollingIntervalMs > 0
-          ? parsed.pollingIntervalMs
-          : DEFAULT_CONFIG.pollingIntervalMs,
-    };
-  } catch {
-    return DEFAULT_CONFIG;
-  }
-}
-
-function writeSavedConfig(cfg: RotctldConfig): void {
-  try {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(cfg));
-  } catch {
-    /* quota — silent */
-  }
-}
-
 export type RotatorStoreState = {
   config: RotctldConfig;
   status: RotctldStatus | null;
   testInFlight: boolean;
   lastTestResult: RotctldTestResult | null;
 
+  refreshConfig: () => Promise<void>;
   refreshStatus: () => Promise<void>;
   saveConfig: (cfg: RotctldConfig) => Promise<RotctldStatus>;
   setAzimuth: (az: number) => Promise<RotctldStatus | null>;
@@ -108,10 +80,19 @@ export type RotatorStoreState = {
 };
 
 export const useRotatorStore = create<RotatorStoreState>((set) => ({
-  config: readSavedConfig(),
+  config: DEFAULT_CONFIG,
   status: null,
   testInFlight: false,
   lastTestResult: null,
+
+  refreshConfig: async () => {
+    try {
+      const config = await getRotatorConfig();
+      set({ config });
+    } catch {
+      /* transient — leave defaults in place */
+    }
+  },
 
   refreshStatus: async () => {
     try {
@@ -123,7 +104,6 @@ export const useRotatorStore = create<RotatorStoreState>((set) => ({
   },
 
   saveConfig: async (cfg) => {
-    writeSavedConfig(cfg);
     const status = await postRotatorConfig(cfg);
     set({ config: cfg, status });
     return status;
@@ -156,22 +136,18 @@ export const useRotatorStore = create<RotatorStoreState>((set) => ({
   },
 }));
 
-// Kick off an initial status probe at module load, then poll at 1 s while the
-// page is alive AND rotctld is enabled. When disabled there's nothing to
-// reconcile — skip the fetch to avoid an idle-RX HTTP wakeup the user can't
-// see anyway.
+// Hydrate config + status from the backend at module load, then poll status at
+// 1 s while the page is alive AND rotctld is enabled. When disabled there's
+// nothing to reconcile — skip the fetch to avoid an idle-RX HTTP wakeup.
+//
+// Note: we deliberately do NOT POST anything on load. The backend hydrates its
+// own config from LiteDB at startup; pushing a cached client copy here would
+// race that hydration and re-enable a rotator the operator already turned off.
 if (typeof window !== 'undefined') {
+  void useRotatorStore.getState().refreshConfig();
   void useRotatorStore.getState().refreshStatus();
   window.setInterval(() => {
     if (!useRotatorStore.getState().config.enabled) return;
     void useRotatorStore.getState().refreshStatus();
   }, 1000);
-
-  // Push the saved config to the backend on first load so the service is in the
-  // same state the UI will render (Enabled flag, host/port). Backend state is
-  // in-memory only — a restart resets to defaults.
-  const initial = useRotatorStore.getState().config;
-  if (initial.enabled) {
-    void useRotatorStore.getState().saveConfig(initial);
-  }
 }

@@ -77,13 +77,17 @@ export function FreqAxis() {
   const centerHz = useDisplayStore((s) => s.centerHz);
   const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
   const width = useDisplayStore((s) => s.panDb?.length ?? 0);
+  // Pure-pan viewport offset shifts the rendered window relative to the
+  // hardware NCO; tick labels and the dial-position marker recompute from
+  // the offset viewport centre.
+  const viewportOffsetHz = useDisplayStore((s) => s.viewportOffsetHz);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
 
   if (!width || hzPerPixel <= 0) return null;
 
   const spanHz = width * hzPerPixel;
   const stride = pickStrideHz(spanHz, 6);
-  const center = Number(centerHz);
+  const center = Number(centerHz) + viewportOffsetHz;
   const startHz = center - spanHz / 2;
   const endHz = center + spanHz / 2;
   const dialPct = ((vfoHz - startHz) / spanHz) * 100;
