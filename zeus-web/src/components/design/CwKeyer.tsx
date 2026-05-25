@@ -12,6 +12,14 @@ export type CwKeyerProps = {
   setWpmLocal: (v: number) => void;
   /** Schedules the server save after the operator stops moving. */
   setWpmCommit: (v: number) => void;
+  /** CW monitor tone pitch (Hz). Backend clamps to 200..1200. */
+  sidetoneHz: number;
+  setSidetoneHzLocal: (v: number) => void;
+  setSidetoneHzCommit: (v: number) => void;
+  /** CW monitor tone gain (dB). Backend clamps to -60..0. */
+  sidetoneGainDb: number;
+  setSidetoneGainDbLocal: (v: number) => void;
+  setSidetoneGainDbCommit: (v: number) => void;
   macros: string[];
   onSend: (macro: string) => void;
   onAbort: () => void;
@@ -26,11 +34,21 @@ export type CwKeyerProps = {
 
 const WPM_MIN = 5;
 const WPM_MAX = 40;
+const PITCH_MIN = 200;
+const PITCH_MAX = 1200;
+const GAIN_MIN = -60;
+const GAIN_MAX = 0;
 
 export function CwKeyer({
   wpm,
   setWpmLocal,
   setWpmCommit,
+  sidetoneHz,
+  setSidetoneHzLocal,
+  setSidetoneHzCommit,
+  sidetoneGainDb,
+  setSidetoneGainDbLocal,
+  setSidetoneGainDbCommit,
   macros,
   onSend,
   onAbort,
@@ -97,6 +115,60 @@ export function CwKeyer({
         >
           STOP
         </button>
+      </div>
+
+      {/* Sidetone monitor: pitch + gain of the in-browser CW monitor tone.
+        * Audible during any local key — macro send, raw key from a logger,
+        * or hardware key plugged into the radio. Reuses the WPM control-
+        * strip CSS classes so the visual treatment matches without
+        * introducing new design tokens. */}
+      <div className="cw-control-strip">
+        <div className="cw-wpm-readout">
+          <span className="cw-wpm-label">PITCH</span>
+          <span className="cw-wpm-value mono">{sidetoneHz}Hz</span>
+        </div>
+        <div className="cw-wpm-track">
+          <input
+            type="range"
+            min={PITCH_MIN}
+            max={PITCH_MAX}
+            step={10}
+            value={sidetoneHz}
+            onChange={(e) => {
+              const v = Number(e.currentTarget.value);
+              setSidetoneHzLocal(v);
+              setSidetoneHzCommit(v);
+            }}
+            aria-label="Sidetone pitch in Hz"
+          />
+          <div className="cw-wpm-scale">
+            <span>{PITCH_MIN}</span>
+            <span>{PITCH_MAX}</span>
+          </div>
+        </div>
+        <div className="cw-wpm-readout">
+          <span className="cw-wpm-label">SIDE</span>
+          <span className="cw-wpm-value mono">{sidetoneGainDb}dB</span>
+        </div>
+        <div className="cw-wpm-track">
+          <input
+            type="range"
+            min={GAIN_MIN}
+            max={GAIN_MAX}
+            step={1}
+            value={sidetoneGainDb}
+            onChange={(e) => {
+              const v = Number(e.currentTarget.value);
+              setSidetoneGainDbLocal(v);
+              setSidetoneGainDbCommit(v);
+            }}
+            aria-label="Sidetone monitor gain in dB"
+          />
+          <div className="cw-wpm-scale">
+            <span>{GAIN_MIN}</span>
+            <span>{GAIN_MAX}</span>
+          </div>
+        </div>
       </div>
 
       <div className="cw-macro-list" role="list">

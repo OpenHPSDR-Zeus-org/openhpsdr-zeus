@@ -65,6 +65,7 @@ public sealed class CwEngine : BackgroundService
     private readonly TxIqRing _ring;
     private readonly StreamingHub _hub;
     private readonly CwSettingsStore _settings;
+    private readonly CwSidetoneSource? _sidetone;
     private readonly ILogger<CwEngine> _log;
     private readonly Channel<CwJob> _jobs = Channel.CreateUnbounded<CwJob>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
@@ -89,13 +90,14 @@ public sealed class CwEngine : BackgroundService
     /// fired from the playback worker thread.</summary>
     public event Action<CwEngineStatus>? Status;
 
-    public CwEngine(TxService tx, RadioService radio, TxIqRing ring, StreamingHub hub, CwSettingsStore settings, ILogger<CwEngine> log)
+    public CwEngine(TxService tx, RadioService radio, TxIqRing ring, StreamingHub hub, CwSettingsStore settings, ILogger<CwEngine> log, CwSidetoneSource? sidetone = null)
     {
         _tx = tx;
         _radio = radio;
         _ring = ring;
         _hub = hub;
         _settings = settings;
+        _sidetone = sidetone;
         _log = log;
         // Drop the current send if the operator overrides MOX from the UI
         // (or a trip happens). Owner==null on the falling edge means MOX
@@ -279,41 +281,61 @@ public sealed class CwEngine : BackgroundService
         // Scratch buffer for chunked IQ writes. 2 floats per sample.
         var iq = new float[ChunkSamples * 2];
 
-        foreach (var symbol in MorseEncoder.Encode(job.Text, job.Wpm))
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            int totalSamples = (int)((long)symbol.DurationMs * SampleRateHz / 1000);
-            int rampSamples = Math.Min(
-                (int)((long)RampMs * SampleRateHz / 1000),
-                totalSamples / 2);
-
-            int written = 0;
-            while (written < totalSamples)
+            foreach (var symbol in MorseEncoder.Encode(job.Text, job.Wpm))
             {
                 ct.ThrowIfCancellationRequested();
-                int n = Math.Min(ChunkSamples, totalSamples - written);
-                for (int i = 0; i < n; i++)
+                // Sidetone tracks the symbol's KeyDown — operator hears what's
+                // going on the air, with the DSP-thread mixer doing its own
+                // 5 ms raised-cosine envelope so the monitor edges don't
+                // click even though we toggle this flag instantaneously.
+                if (_sidetone is not null)
                 {
-                    double env = symbol.KeyDown
-                        ? RaisedCosineEnvelope(written + i, totalSamples, rampSamples)
-                        : 0.0;
-                    iq[2 * i] = (float)(env * Math.Cos(phase));
-                    iq[2 * i + 1] = (float)(env * Math.Sin(phase));
-                    phase += phaseStep;
-                    // Keep phase bounded so cos/sin stays numerically clean
-                    // over multi-minute transmissions.
-                    if (phase > 2.0 * Math.PI) phase -= 2.0 * Math.PI;
+                    if (symbol.KeyDown) _sidetone.Down();
+                    else _sidetone.Up();
                 }
-                _ring.Write(new ReadOnlySpan<float>(iq, 0, 2 * n));
-                written += n;
-                // Pace ourselves to the ring drain rate so the ring stays
-                // well below its 16384-pair drop-oldest threshold. EP2 drains
-                // ~42k pairs/s; we write at the same average rate, so a
-                // (chunk/rate) sleep keeps the ring at ~one-chunk depth.
-                int sleepMs = Math.Max(1, (n * 1000) / SampleRateHz - 1);
-                try { await Task.Delay(sleepMs, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) { throw; }
+
+                int totalSamples = (int)((long)symbol.DurationMs * SampleRateHz / 1000);
+                int rampSamples = Math.Min(
+                    (int)((long)RampMs * SampleRateHz / 1000),
+                    totalSamples / 2);
+
+                int written = 0;
+                while (written < totalSamples)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    int n = Math.Min(ChunkSamples, totalSamples - written);
+                    for (int i = 0; i < n; i++)
+                    {
+                        double env = symbol.KeyDown
+                            ? RaisedCosineEnvelope(written + i, totalSamples, rampSamples)
+                            : 0.0;
+                        iq[2 * i] = (float)(env * Math.Cos(phase));
+                        iq[2 * i + 1] = (float)(env * Math.Sin(phase));
+                        phase += phaseStep;
+                        // Keep phase bounded so cos/sin stays numerically clean
+                        // over multi-minute transmissions.
+                        if (phase > 2.0 * Math.PI) phase -= 2.0 * Math.PI;
+                    }
+                    _ring.Write(new ReadOnlySpan<float>(iq, 0, 2 * n));
+                    written += n;
+                    // Pace ourselves to the ring drain rate so the ring stays
+                    // well below its 16384-pair drop-oldest threshold. EP2 drains
+                    // ~42k pairs/s; we write at the same average rate, so a
+                    // (chunk/rate) sleep keeps the ring at ~one-chunk depth.
+                    int sleepMs = Math.Max(1, (n * 1000) / SampleRateHz - 1);
+                    try { await Task.Delay(sleepMs, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { throw; }
+                }
             }
+        }
+        finally
+        {
+            // End-of-message and cancellation share this path so a mid-message
+            // abort still releases the sidetone — otherwise the mixer would
+            // sit "keyed" until the next CW send arrived.
+            _sidetone?.Up();
         }
 
         // Drop MOX after the final symbol. The ring still has up to ~10 ms

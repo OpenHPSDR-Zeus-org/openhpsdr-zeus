@@ -32,6 +32,12 @@ export function CwPanel() {
         // PUT after the operator stops dragging.
         setWpmLocal={(v) => setSettingsLocal({ wpm: v })}
         setWpmCommit={(v) => commitDebounced({ wpm: v })}
+        sidetoneHz={settings.sidetoneHz}
+        setSidetoneHzLocal={(v) => setSettingsLocal({ sidetoneHz: v })}
+        setSidetoneHzCommit={(v) => commitDebounced({ sidetoneHz: v })}
+        sidetoneGainDb={settings.sidetoneGainDb}
+        setSidetoneGainDbLocal={(v) => setSettingsLocal({ sidetoneGainDb: v })}
+        setSidetoneGainDbCommit={(v) => commitDebounced({ sidetoneGainDb: v })}
         macros={settings.macros}
         // Pass the current WPM explicitly so a slider change that hasn't
         // round-tripped to the server yet still keys at the operator's

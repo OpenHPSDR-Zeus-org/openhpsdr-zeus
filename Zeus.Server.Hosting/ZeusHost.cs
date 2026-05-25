@@ -247,6 +247,18 @@ public static class ZeusHost
         // and pushes envelope-shaped IQ directly into TxIqRing while holding
         // MOX as MoxSource.Cwx.
         builder.Services.AddSingleton<CwSettingsStore>();
+        builder.Services.AddSingleton<CwSidetoneSource>(sp =>
+        {
+            // Seed the live generator from persisted operator preferences
+            // so the first key-down after a cold start uses the saved pitch
+            // and gain (not the source's defaults). REST PUT /api/cw/settings
+            // pushes subsequent changes — see ZeusEndpoints.MapPut.
+            var s = new CwSidetoneSource();
+            var cfg = sp.GetRequiredService<CwSettingsStore>().Get();
+            s.SetPitchHz(cfg.SidetoneHz);
+            s.SetGainDb(cfg.SidetoneGainDb);
+            return s;
+        });
         builder.Services.AddSingleton<CwEngine>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<CwEngine>());
         // PS auto-attenuate timer2code-equivalent: ramps the radio's TX step

@@ -278,17 +278,26 @@ public class DspPipelineService : BackgroundService,
     private long _calPanSnapshotMs;
     private readonly object _calPanLock = new();
 
+    // CW sidetone source mixed into the RX audio bus while a CW keying
+    // path (CwEngine macros / cw_msg / raw-key, or ExternalPttService
+    // hardware key in CW mode) holds the keyed state. Optional in DI so
+    // tests that build the pipeline without the CW services don't have
+    // to register a stub. See CwSidetoneSource for the keying contract.
+    private readonly CwSidetoneSource? _sidetone;
+
     public DspPipelineService(
         RadioService radio,
         StreamingHub hub,
         IEnumerable<IRxAudioSink> audioSinks,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        CwSidetoneSource? sidetone = null)
     {
         _radio = radio;
         _hub = hub;
         // Materialise once at construction so the per-tick fan-out is an
         // array-index loop (no enumerator allocation, no LINQ on the hot path).
         _audioSinks = audioSinks.ToArray();
+        _sidetone = sidetone;
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<DspPipelineService>();
     }
@@ -1659,6 +1668,14 @@ public class DspPipelineService : BackgroundService,
 
             if (!txMonitorOn)
             {
+                // CW sidetone is mixed (+=) into the RX block so every
+                // downstream sink — browser WS, native audio, TCI audio
+                // stream — hears it on the same bus as band RX. The MOX
+                // fade above silences the RXA contribution while keying;
+                // when the sidetone source is idle, RenderInto returns
+                // false immediately without touching the buffer.
+                _sidetone?.RenderInto(audioBuf.AsSpan(0, audioSampleCount));
+
                 var audioFrame = new AudioFrame(
                     Seq: ++_audioSeq,
                     TsUnixMs: nowMs,
