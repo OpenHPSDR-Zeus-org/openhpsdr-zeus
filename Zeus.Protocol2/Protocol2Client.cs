@@ -633,15 +633,33 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         _moxOn = on;
         if (on) BeginTxIqMeasure(); else ResetTxIq();
-        if (_rxTask is not null) SendCmdHighPriority(run: true);
+        if (_rxTask is not null)
+        {
+            SendCmdHighPriority(run: true);
+            if (!on) SendCmdRx(); // UnkeyToRx — see note below
+        }
     }
 
     public void SetTune(bool on)
     {
         _tuneActive = on;
         if (on) BeginTxIqMeasure(); else ResetTxIq();
-        if (_rxTask is not null) SendCmdHighPriority(run: true);
+        if (_rxTask is not null)
+        {
+            SendCmdHighPriority(run: true);
+            if (!on) SendCmdRx(); // UnkeyToRx — see note below
+        }
     }
+
+    // UnkeyToRx: on the TX→RX edge, re-send the RX-spec (port 1025) right after
+    // clearing PTT/relay, mirroring Thetis's turnaround (console.cs UpdateDDCs
+    // → CmdRx() at the un-key edge). Thetis explicitly tells the G2/Saturn to
+    // reconfigure its DDCs back to receive at the moment of un-key; Zeus
+    // previously only cleared the high-priority PTT bit and let the radio coast
+    // on the ~200 ms keepalive CmdRx. The Saturn firmware appears to gate its
+    // T/R relay turnaround on this RX-spec rather than solely on byte-4 bit-1,
+    // which matches the observed ~2 s relay hang that is independent of the
+    // TX-IQ stream.
 
     // Mark the start of a TX session for the un-key backlog diagnostic. Only
     // arms on the first rising edge so a TUN→MOX hand-off doesn't reset the
