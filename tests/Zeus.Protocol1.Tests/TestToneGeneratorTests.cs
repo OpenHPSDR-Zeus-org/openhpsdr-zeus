@@ -50,7 +50,7 @@ namespace Zeus.Protocol1.Tests;
 public class TestToneGeneratorTests
 {
     private static ControlFrame.CcState Hl2Tx(byte driveLevel = 255, bool mox = true) => new(
-        VfoAHz: 14_200_000,
+        RxFreqAHz: 14_200_000, TxFreqAHz: 14_200_000,
         Rate: HpsdrSampleRate.Rate48k,
         PreampOn: false,
         Atten: HpsdrAtten.Zero,

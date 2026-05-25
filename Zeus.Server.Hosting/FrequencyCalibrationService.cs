@@ -39,7 +39,7 @@ namespace Zeus.Server;
 // mi0bot HL2 fork) use the same multiplicative-correction-at-tune-write
 // model; the per-board variation is in *where* the factor is applied
 // (host-side, never on a clock register), which is what Zeus already
-// does at `Protocol1Client.SetVfoAHz` + `Protocol2Client.SetVfoAHz`.
+// does at `Protocol1Client.SetFreqs` + `Protocol2Client.SetFreqs`.
 public sealed class FrequencyCalibrationService
 {
     public const double DefaultReferenceFrequencyHz = 10_000_000.0;

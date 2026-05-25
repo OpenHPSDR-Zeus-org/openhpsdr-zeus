@@ -76,7 +76,7 @@ public interface IProtocol1Client : IDisposable
     /// <summary>Monotonic count of valid RX packets parsed since Start.</summary>
     long TotalFrames { get; }
 
-    void SetVfoAHz(long hz);
+    void SetFreqs(long rxHz, long txHz);
     void SetSampleRate(HpsdrSampleRate rate);
     void SetPreamp(bool on);
     void SetAttenuator(HpsdrAtten atten);

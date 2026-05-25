@@ -58,6 +58,8 @@ public enum PsFeedbackSource : byte { Internal = 0, External = 1 }
 
 public enum ConnectionStatus { Disconnected, Connecting, Connected, Error }
 
+public enum IncrementalTuningMode : byte { Off = 0, Rit = 1, Xit = 2 }
+
 // Thetis NR-button state: Off = no spectral NR, Anr = NR1 (time-domain LMS),
 // Emnr = NR2 (Ephraim–Malah spectral), Sbnr = NR4 (libspecbleach spectral
 // bleaching — issue #79). NR3 (RNNR) is intentionally absent: training data
@@ -289,7 +291,16 @@ public sealed record StateDto(
     // (Thetis: Setup → DSP → Keyer → CW Pitch). On the wire now so
     // the frontend already consumes the live value — when the setting
     // lands, only the server-side source changes.
-    int CwPitchHz = CwDefaults.PitchHz);
+    int CwPitchHz = CwDefaults.PitchHz,
+
+    // ---- Incremental tuning (RIT / XIT) ----
+    // Runtime-only state, not persisted to LiteDB. Auto-cleared on band
+    // change, mode change, and disconnect. Offset values are preserved
+    // across cycle transitions (Off→Rit→Xit→Off) so the operator can
+    // park RIT, try XIT, and come back to find their RIT value intact.
+    IncrementalTuningMode ItMode = IncrementalTuningMode.Off,
+    int RitOffsetHz = 0,
+    int XitOffsetHz = 0);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both
@@ -397,6 +408,8 @@ public sealed record Nr2CoreConfigSetRequest(
 public sealed record ZoomSetRequest(int Level);
 
 public sealed record AutoAttSetRequest(bool Enabled);
+
+public sealed record IncrementalTuningSetRequest(IncrementalTuningMode Mode, int OffsetHz, bool Clear = false);
 
 public sealed record AutoAgcSetRequest(bool Enabled);
 

@@ -11,7 +11,7 @@ namespace Zeus.Protocol1.Tests;
 /// <summary>
 /// Per-radio frequency-correction factor (issue #325). The correction is
 /// a single multiplicative scalar applied inside
-/// <see cref="Protocol1Client.SetVfoAHz"/> right before the wire-bound
+/// <see cref="Protocol1Client.SetFreqs"/> right before the wire-bound
 /// <c>_vfoAHz</c> slot. These tests pin down the math against the
 /// piHPSDR / Thetis / deskHPSDR reference convention:
 ///
@@ -29,9 +29,9 @@ public class FrequencyCorrectionTests
     {
         using var client = new Protocol1Client();
         client.SetFrequencyCorrectionFactor(1.0);
-        client.SetVfoAHz(14_250_000);
+        client.SetFreqs(14_250_000, 14_250_000);
 
-        Assert.Equal(14_250_000L, client.SnapshotState().VfoAHz);
+        Assert.Equal(14_250_000L, client.SnapshotState().RxFreqAHz);
     }
 
     [Fact]
@@ -40,8 +40,8 @@ public class FrequencyCorrectionTests
         using var client = new Protocol1Client();
         Assert.Equal(1.0, client.FrequencyCorrectionFactor);
 
-        client.SetVfoAHz(7_100_000);
-        Assert.Equal(7_100_000L, client.SnapshotState().VfoAHz);
+        client.SetFreqs(7_100_000, 7_100_000);
+        Assert.Equal(7_100_000L, client.SnapshotState().RxFreqAHz);
     }
 
     [Fact]
@@ -49,9 +49,9 @@ public class FrequencyCorrectionTests
     {
         using var client = new Protocol1Client();
         client.SetFrequencyCorrectionFactor(1.000001);
-        client.SetVfoAHz(10_000_000);
+        client.SetFreqs(10_000_000, 10_000_000);
 
-        Assert.Equal(10_000_010L, client.SnapshotState().VfoAHz);
+        Assert.Equal(10_000_010L, client.SnapshotState().RxFreqAHz);
     }
 
     [Fact]
@@ -59,9 +59,9 @@ public class FrequencyCorrectionTests
     {
         using var client = new Protocol1Client();
         client.SetFrequencyCorrectionFactor(0.999999);
-        client.SetVfoAHz(10_000_000);
+        client.SetFreqs(10_000_000, 10_000_000);
 
-        Assert.Equal(9_999_990L, client.SnapshotState().VfoAHz);
+        Assert.Equal(9_999_990L, client.SnapshotState().RxFreqAHz);
     }
 
     [Fact]
@@ -75,14 +75,14 @@ public class FrequencyCorrectionTests
         // multiplication of these gives a result comfortably on one side
         // of the midpoint, so the AwayFromZero rounding direction is not
         // implementation-defined here.
-        client.SetVfoAHz(1_000_000);
-        Assert.Equal(1_000_001L, client.SnapshotState().VfoAHz);
+        client.SetFreqs(1_000_000, 1_000_000);
+        Assert.Equal(1_000_001L, client.SnapshotState().RxFreqAHz);
 
-        client.SetVfoAHz(14_250_000);
-        Assert.Equal(14_250_014L, client.SnapshotState().VfoAHz);
+        client.SetFreqs(14_250_000, 14_250_000);
+        Assert.Equal(14_250_014L, client.SnapshotState().RxFreqAHz);
 
-        client.SetVfoAHz(50_000_000);
-        Assert.Equal(50_000_050L, client.SnapshotState().VfoAHz);
+        client.SetFreqs(50_000_000, 50_000_000);
+        Assert.Equal(50_000_050L, client.SnapshotState().RxFreqAHz);
     }
 
     [Fact]
@@ -95,15 +95,15 @@ public class FrequencyCorrectionTests
         // alone is non-destructive.
         using var client = new Protocol1Client();
         client.SetFrequencyCorrectionFactor(1.0);
-        client.SetVfoAHz(14_250_000);
-        Assert.Equal(14_250_000L, client.SnapshotState().VfoAHz);
+        client.SetFreqs(14_250_000, 14_250_000);
+        Assert.Equal(14_250_000L, client.SnapshotState().RxFreqAHz);
 
         client.SetFrequencyCorrectionFactor(1.000001);
-        // _vfoAHz wasn't touched — still the value written under factor=1.
-        Assert.Equal(14_250_000L, client.SnapshotState().VfoAHz);
+        // freq slots weren't touched — still the value written under factor=1.
+        Assert.Equal(14_250_000L, client.SnapshotState().RxFreqAHz);
 
         // Re-tune with same dial: now the new factor is applied.
-        client.SetVfoAHz(14_250_000);
-        Assert.Equal(14_250_014L, client.SnapshotState().VfoAHz);
+        client.SetFreqs(14_250_000, 14_250_000);
+        Assert.Equal(14_250_014L, client.SnapshotState().RxFreqAHz);
     }
 }

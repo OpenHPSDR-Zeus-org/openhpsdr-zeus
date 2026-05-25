@@ -397,16 +397,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _log.LogInformation("p2.stop totalFrames={Total} dropped={Drop}", _totalFrames, _droppedFrames);
     }
 
-    public void SetVfoAHz(long hz)
+    public void SetFreqs(long rxHz, long txHz)
     {
         double factor = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _freqCorrectionBits));
-        // Host-side multiplicative correction, applied right before the
-        // phase-word feed slot (matches piHPSDR src/new_protocol.c:765,824,
-        // Thetis NetworkIO.VFOfreq, deskHPSDR src/new_protocol.c:909,967).
-        // _rxFreqHz then feeds the NCO phase-word at line 951
-        // (`rxPhase = _rxFreqHz * HzToPhase`).
-        long corrected = (long)Math.Round(hz * factor, MidpointRounding.AwayFromZero);
+        long corrected = (long)Math.Round(rxHz * factor, MidpointRounding.AwayFromZero);
         _rxFreqHz = (uint)Math.Clamp(corrected, 0L, uint.MaxValue);
+        // P2 TX freq routing is DDC-based; txHz is accepted for API
+        // symmetry with P1 but not yet wired to a separate NCO.
+        _ = txHz;
         var running = _rxTask is not null;
         _log.LogInformation("p2.tune hz={Hz} running={Running} hpSeq={Seq}",
             _rxFreqHz, running, _seqCmdHp);
@@ -416,7 +414,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// <summary>
     /// Sets the per-radio frequency-correction factor (issue #325). The
     /// caller is responsible for re-pushing the current dial Hz via
-    /// <see cref="SetVfoAHz"/> after this so the new factor reaches the
+    /// <see cref="SetFreqs"/> after this so the new factor reaches the
     /// wire — this method on its own only mutates the multiplier used by
     /// the next tune-write.
     /// </summary>
@@ -429,7 +427,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// <summary>
     /// Test seam (issue #325): the corrected NCO frequency that would be
     /// written to the wire on the next CmdHighPriority. Equals the last
-    /// <see cref="SetVfoAHz"/> argument multiplied by
+    /// <see cref="SetFreqs"/> argument multiplied by
     /// <see cref="FrequencyCorrectionFactor"/>.
     /// </summary>
     internal uint CorrectedRxFreqHzForTesting => _rxFreqHz;
@@ -751,12 +749,6 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         double fifoSamples = 0.0;
         long lastTicks = Stopwatch.GetTimestamp();
         double ticksPerSecond = Stopwatch.Frequency;
-        // 1 Hz TX-IQ rate log (mirrors P1's p1.tx.rate). The radio's DUC needs
-        // 192 kHz = 800 packets/s of 240 samples. On Windows a coarse timer
-        // floors Task.Delay-paced sends near ~380/s (the relay-hang symptom);
-        // this line is how we confirm the timeBeginPeriod(1) fix restores 800/s.
-        int rateCount = 0;
-        long lastRateTicks = lastTicks;
         try
         {
             while (!ct.IsCancellationRequested)
@@ -788,28 +780,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 }
 
                 fifoSamples += TxIqSamplesPerPacket;
-                try { _sock!.SendTo(packet, ep); rateCount++; }
+                try { _sock!.SendTo(packet, ep); }
                 catch (ObjectDisposedException) { break; }
                 catch (SocketException ex)
                 {
                     _log.LogWarning(ex, "p2.txiq send failed");
-                }
-
-                if (now - lastRateTicks >= ticksPerSecond)
-                {
-                    // Diagnostics must NEVER take down the TX-IQ sender — the
-                    // outer catch exits the loop on any exception, so a bad log
-                    // call here silently stops all TX. (It did: ChannelReader.Count
-                    // throws NotSupportedException on an unbounded channel, which
-                    // killed the sender 24ms into key-down — no TX output at all.)
-                    try
-                    {
-                        _log.LogInformation("p2.tx.rate pkts/s={Pps} fifoModel={Fifo:F0}",
-                            rateCount, fifoSamples);
-                    }
-                    catch { /* never let a diagnostic kill TX */ }
-                    rateCount = 0;
-                    lastRateTicks = now;
                 }
             }
         }

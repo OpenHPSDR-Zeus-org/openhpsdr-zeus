@@ -51,7 +51,7 @@ namespace Zeus.Protocol1.Tests;
 public class ControlFrameTests
 {
     private static ControlFrame.CcState BaseState() => new(
-        VfoAHz: 14_200_000,
+        RxFreqAHz: 14_200_000, TxFreqAHz: 14_200_000,
         Rate: HpsdrSampleRate.Rate48k,
         PreampOn: false,
         Atten: HpsdrAtten.Zero,
@@ -461,15 +461,13 @@ public class ControlFrameTests
     }
 
     [Fact]
-    public void PhaseTable_MoxOn_TxFreqPayloadIsVfoA()
+    public void PhaseTable_MoxOn_TxFreqPayloadMatchesTxFreqAHz()
     {
-        // Protocol-1 uses channel_freq(-1) (which resolves to the TX VFO) for
-        // the 0x02 payload. We don't have a split TX VFO yet, so TxFreq should
-        // encode VfoAHz — same VFO used for RxFreq. Pinning this so a future
-        // split-VFO implementation changes the phase-table registers together
-        // with the CcState field.
+        // TxFreq register (0x02) now encodes TxFreqAHz independently from
+        // the RX registers. When both are equal, wire output is unchanged
+        // from the pre-split single-VFO model.
         var state = new ControlFrame.CcState(
-            VfoAHz: 7_074_000,
+            RxFreqAHz: 7_074_000, TxFreqAHz: 7_074_000,
             Rate: HpsdrSampleRate.Rate48k,
             PreampOn: false,
             Atten: HpsdrAtten.Zero,

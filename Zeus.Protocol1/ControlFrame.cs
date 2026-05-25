@@ -73,7 +73,7 @@ internal static class ControlFrame
         // : adcpipe[1]`), so DDC1 ends up demodulating the pre-PA DAC
         // samples at whatever NCO we set here. Zeus has no split-VFO
         // and consumes DDC1 only as audio (when PS is off), so this
-        // just mirrors VfoAHz; the demodulated stream during PS+MOX is
+        // just mirrors RxFreqAHz; the demodulated stream during PS+MOX is
         // ignored (DDC3 is the canonical TX reference for pscc).
         RxFreq2 = 0x06,
         // RX3 NCO (DDC2). HL2-doc address 0x04 → wire byte 0x08. DDC2
@@ -187,7 +187,8 @@ internal static class ControlFrame
     /// thread copies a snapshot each tick.
     /// </summary>
     public readonly record struct CcState(
-        long VfoAHz,
+        long RxFreqAHz,
+        long TxFreqAHz,
         HpsdrSampleRate Rate,
         bool PreampOn,
         HpsdrAtten Atten,
@@ -268,18 +269,15 @@ internal static class ControlFrame
                 WriteConfigPayload(cc[1..], in state);
                 break;
 
-            case CcRegister.RxFreq:
             case CcRegister.TxFreq:
+                BinaryPrimitives.WriteUInt32BigEndian(cc[1..5], (uint)state.TxFreqAHz);
+                break;
+
+            case CcRegister.RxFreq:
             case CcRegister.RxFreq2:
             case CcRegister.RxFreq3:
             case CcRegister.RxFreq4:
-                // Frequency payload is a BE uint32 in C1..C4 (doc 02 §4 "Frequency payload").
-                // All five frequency registers (TxFreq + four RX NCOs) carry the
-                // same VfoAHz here — Zeus has no separate TX VFO. During HL2
-                // PS+MOX, mi0bot tunes DDC2 and DDC3 to TX freq, which is the
-                // operator-tuned freq for SSB; for CW, EffectiveLoHz is already
-                // baked into VfoAHz upstream in RadioService.SetVfo.
-                BinaryPrimitives.WriteUInt32BigEndian(cc[1..5], (uint)state.VfoAHz);
+                BinaryPrimitives.WriteUInt32BigEndian(cc[1..5], (uint)state.RxFreqAHz);
                 break;
 
             case CcRegister.DriveFilter:
@@ -469,7 +467,7 @@ internal static class ControlFrame
         byte ocPins = 0;
         if (s.Board == HpsdrBoardKind.HermesLite2 && s.HasN2adr)
         {
-            ocPins |= N2adrBands.RxOcMask(s.VfoAHz);
+            ocPins |= N2adrBands.RxOcMask(s.RxFreqAHz);
         }
         ocPins |= (byte)((s.Mox ? s.UserOcTxMask : s.UserOcRxMask) & 0x7F);
         byte c2 = (byte)(ocPins << 1);

@@ -32,7 +32,7 @@ public class ControlFrameOcMaskTests
 {
     private static ControlFrame.CcState BaseState(byte userTx = 0, byte userRx = 0, bool mox = false) =>
         new(
-            VfoAHz: 7_100_000, // 40m — N2adrBands.RxOcMask returns 0x44 (pins 3+7)
+            RxFreqAHz: 7_100_000, TxFreqAHz: 7_100_000, // 40m — N2adrBands.RxOcMask returns 0x44 (pins 3+7)
             Rate: HpsdrSampleRate.Rate48k,
             PreampOn: false,
             Atten: HpsdrAtten.Zero,
@@ -93,7 +93,7 @@ public class ControlFrameOcMaskTests
     {
         // Hermes without N2ADR → no auto mask. User bits stand alone.
         var state = new ControlFrame.CcState(
-            VfoAHz: 7_100_000,
+            RxFreqAHz: 7_100_000, TxFreqAHz: 7_100_000,
             Rate: HpsdrSampleRate.Rate48k,
             PreampOn: false,
             Atten: HpsdrAtten.Zero,

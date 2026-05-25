@@ -31,7 +31,7 @@ namespace Zeus.Protocol1.Tests;
 public class ControlFramePsEncoderTests
 {
     private static ControlFrame.CcState BaseHl2(bool psEnabled = false) => new(
-        VfoAHz: 14_200_000,
+        RxFreqAHz: 14_200_000, TxFreqAHz: 14_200_000,
         Rate: HpsdrSampleRate.Rate48k,
         PreampOn: false,
         Atten: HpsdrAtten.Zero,

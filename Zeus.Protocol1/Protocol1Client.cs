@@ -75,9 +75,10 @@ public sealed class Protocol1Client : IProtocol1Client
 
     // Mutation state written from any thread, read from the TX thread.
     // 64-bit fields are written atomically on 64-bit .NET (Interlocked.Exchange used for safety).
-    private long _vfoAHz = 7_100_000;
+    private long _rxFreqAHz = 7_100_000;
+    private long _txFreqAHz = 7_100_000;
     // Frequency-correction factor (issue #325) — dimensionless multiplier
-    // near 1.0 applied to the incoming dial Hz before _vfoAHz is updated,
+    // near 1.0 applied to the incoming dial Hz before the freq slots are updated,
     // matching piHPSDR / Thetis. Stored as int64 bits for atomic
     // Interlocked.Exchange access from arbitrary threads. 1.0 = factory
     // default (no correction).
@@ -263,10 +264,10 @@ public sealed class Protocol1Client : IProtocol1Client
     /// cmaster.cs:8511-8550 FOUR_DDC routing). Stream assignment, cross-
     /// checked against the upstream HL2 gateware (rtl/radio_openhpsdr1/
     /// radio.sv:484-540, mix2_0 + mix2_2 + pure_signal switch):
-    ///   DDC0 = RX1 audio. mix2_0+adcpipe[0] at VfoAHz → operator's
+    ///   DDC0 = RX1 audio. mix2_0+adcpipe[0] at RxFreqAHz → operator's
     ///          listening freq, panadapter and audio chain stay alive
     ///          even while PS is keying. Published to IqFrame channel.
-    ///   DDC1 = mix2_2 input (shared with DDC3) at VfoAHz NCO. During
+    ///   DDC1 = mix2_2 input (shared with DDC3) at RxFreqAHz NCO. During
     ///          MOX+PS that input is `tx_data_dac`, so this DDC carries
     ///          a wrong-NCO copy of the DAC samples; functionally
     ///          useless, discarded.
@@ -540,20 +541,19 @@ public sealed class Protocol1Client : IProtocol1Client
         return Task.CompletedTask;
     }
 
-    public void SetVfoAHz(long hz)
+    public void SetFreqs(long rxHz, long txHz)
     {
         double factor = BitConverter.Int64BitsToDouble(Interlocked.Read(ref _freqCorrectionBits));
-        // host-side multiplicative correction, applied right before the
-        // wire-bound _vfoAHz slot (matches piHPSDR src/old_protocol.c:1040,
-        // Thetis NetworkIO.VFOfreq, deskHPSDR src/old_protocol.c:1629).
-        long corrected = (long)Math.Round(hz * factor, MidpointRounding.AwayFromZero);
-        Interlocked.Exchange(ref _vfoAHz, corrected);
+        long correctedRx = (long)Math.Round(rxHz * factor, MidpointRounding.AwayFromZero);
+        long correctedTx = (long)Math.Round(txHz * factor, MidpointRounding.AwayFromZero);
+        Interlocked.Exchange(ref _rxFreqAHz, correctedRx);
+        Interlocked.Exchange(ref _txFreqAHz, correctedTx);
     }
 
     /// <summary>
     /// Sets the per-radio frequency-correction factor (issue #325). The
     /// caller is responsible for re-pushing the current dial Hz via
-    /// <see cref="SetVfoAHz"/> after this so the new factor reaches the
+    /// <see cref="SetFreqs"/> after this so the new factor reaches the
     /// wire — this method on its own only mutates the multiplier used by
     /// the next tune-write.
     /// </summary>
@@ -662,8 +662,8 @@ public sealed class Protocol1Client : IProtocol1Client
         // Number of receivers requested in the Config payload (`(N-1) << 3`
         // in C4 bits [5:3]). mi0bot's HL2 path (Thetis console.cs:8186-8265)
         // uses **4 DDCs** during PS+MOX:
-        //   DDC0 → RX1 audio (mix2_0+adcpipe[0] at VfoAHz) — stays alive!
-        //   DDC1 → mix2_2 input at VfoAHz, demods to junk during MOX+PS
+        //   DDC0 → RX1 audio (mix2_0+adcpipe[0] at RxFreqAHz) — stays alive!
+        //   DDC1 → mix2_2 input at RxFreqAHz, demods to junk during MOX+PS
         //          (mix2_2.adc is forced to tx_data_dac then) — discarded.
         //   DDC2 → mix2_0+adcpipe[0] at TX freq → pscc "rx". On HL2 this
         //          is RF leakage of the radiated TX (no coupler hardware).
@@ -674,7 +674,8 @@ public sealed class Protocol1Client : IProtocol1Client
         byte numRxMinus1 = (byte)(psOn && isHl2 && moxOn ? 3 : 0);
 
         return new(
-            VfoAHz: Interlocked.Read(ref _vfoAHz),
+            RxFreqAHz: Interlocked.Read(ref _rxFreqAHz),
+            TxFreqAHz: Interlocked.Read(ref _txFreqAHz),
             Rate: (HpsdrSampleRate)Volatile.Read(ref _rate),
             PreampOn: Volatile.Read(ref _preamp) != 0,
             Atten: new HpsdrAtten(Volatile.Read(ref _attenDb)),

@@ -89,7 +89,7 @@ public class N2adrBandsTests
         // Verify the final wire byte for a 20m park.
         Span<byte> cc = stackalloc byte[5];
         var state = new ControlFrame.CcState(
-            VfoAHz: 14_200_000,
+            RxFreqAHz: 14_200_000, TxFreqAHz: 14_200_000,
             Rate: HpsdrSampleRate.Rate192k,
             PreampOn: false,
             Atten: HpsdrAtten.Zero,
@@ -109,7 +109,7 @@ public class N2adrBandsTests
     {
         Span<byte> cc = stackalloc byte[5];
         var state = new ControlFrame.CcState(
-            VfoAHz: 14_200_000,
+            RxFreqAHz: 14_200_000, TxFreqAHz: 14_200_000,
             Rate: HpsdrSampleRate.Rate192k,
             PreampOn: false,
             Atten: HpsdrAtten.Zero,
@@ -152,7 +152,7 @@ public class N2adrBandsTests
         // Hermes must not emit any OC pin bits.
         Span<byte> cc = stackalloc byte[5];
         var state = new ControlFrame.CcState(
-            VfoAHz: 14_200_000,
+            RxFreqAHz: 14_200_000, TxFreqAHz: 14_200_000,
             Rate: HpsdrSampleRate.Rate192k,
             PreampOn: false,
             Atten: HpsdrAtten.Zero,

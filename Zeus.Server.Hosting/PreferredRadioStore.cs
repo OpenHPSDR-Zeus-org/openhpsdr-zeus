@@ -233,7 +233,7 @@ public sealed class PreferredRadioStore : IDisposable
     /// <summary>
     /// Per-radio frequency-correction factor for crystal/clock drift
     /// (issue #325). Dimensionless multiplier near 1.0 applied host-side
-    /// at the Protocol-1 and Protocol-2 SetVfoAHz seams before the value
+    /// at the Protocol-1 and Protocol-2 SetFreqs seams before the value
     /// reaches the radio's NCO. 1.0 = uncalibrated (factory default).
     ///
     /// Models the Thetis "Correction Factor" approach
