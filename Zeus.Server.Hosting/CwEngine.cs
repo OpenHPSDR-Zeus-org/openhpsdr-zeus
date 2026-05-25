@@ -391,31 +391,43 @@ public sealed class CwEngine : BackgroundService
 
         int written = 0;
         bool releasedByCancel = false;
-        while (!totalSamples.HasValue || written < totalSamples.Value)
+        // Sidetone follows the raw key for its whole held duration. Down here,
+        // Up in the finally so a cancel / duration-expiry / error all release
+        // the monitor tone; the DSP-thread mixer runs its own 5 ms fade so the
+        // Up lands in lockstep with the carrier release tail below.
+        _sidetone?.Down();
+        try
         {
-            if (ct.IsCancellationRequested) { releasedByCancel = true; break; }
-            int n = totalSamples.HasValue
-                ? Math.Min(ChunkSamples, totalSamples.Value - written)
-                : ChunkSamples;
-            for (int i = 0; i < n; i++)
+            while (!totalSamples.HasValue || written < totalSamples.Value)
             {
-                int pos = written + i;
-                // Attack region only — once past rampSamples we plateau at 1.0
-                // until release. The release tail is rendered after this loop
-                // exits so it always sees the steady-state amplitude.
-                double env = pos < rampSamples
-                    ? 0.5 * (1.0 - Math.Cos(Math.PI * pos / rampSamples))
-                    : 1.0;
-                iq[2 * i] = (float)(env * Math.Cos(phase));
-                iq[2 * i + 1] = (float)(env * Math.Sin(phase));
-                phase += phaseStep;
-                if (phase > 2.0 * Math.PI) phase -= 2.0 * Math.PI;
+                if (ct.IsCancellationRequested) { releasedByCancel = true; break; }
+                int n = totalSamples.HasValue
+                    ? Math.Min(ChunkSamples, totalSamples.Value - written)
+                    : ChunkSamples;
+                for (int i = 0; i < n; i++)
+                {
+                    int pos = written + i;
+                    // Attack region only — once past rampSamples we plateau at 1.0
+                    // until release. The release tail is rendered after this loop
+                    // exits so it always sees the steady-state amplitude.
+                    double env = pos < rampSamples
+                        ? 0.5 * (1.0 - Math.Cos(Math.PI * pos / rampSamples))
+                        : 1.0;
+                    iq[2 * i] = (float)(env * Math.Cos(phase));
+                    iq[2 * i + 1] = (float)(env * Math.Sin(phase));
+                    phase += phaseStep;
+                    if (phase > 2.0 * Math.PI) phase -= 2.0 * Math.PI;
+                }
+                _ring.Write(new ReadOnlySpan<float>(iq, 0, 2 * n));
+                written += n;
+                int sleepMs = Math.Max(1, (n * 1000) / SampleRateHz - 1);
+                try { await Task.Delay(sleepMs, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { releasedByCancel = true; break; }
             }
-            _ring.Write(new ReadOnlySpan<float>(iq, 0, 2 * n));
-            written += n;
-            int sleepMs = Math.Max(1, (n * 1000) / SampleRateHz - 1);
-            try { await Task.Delay(sleepMs, ct).ConfigureAwait(false); }
-            catch (OperationCanceledException) { releasedByCancel = true; break; }
+        }
+        finally
+        {
+            _sidetone?.Up();
         }
 
         // Release tail — raised-cosine fall from 1.0 to 0. Use a non-cancellable
