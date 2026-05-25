@@ -62,6 +62,17 @@ internal sealed class MiniAudioOutput : IDisposable
     /// construction.</summary>
     public uint Periods { get; private set; }
 
+    /// <summary>True when the device opened in exclusive share mode (WASAPI
+    /// exclusive / CoreAudio hog / ALSA hw — the direct path that bypasses the
+    /// shared OS mixer), false when it fell back to shared. The native open
+    /// tries exclusive first and retries shared on failure, so this reports
+    /// the path that actually opened. Valid after construction.</summary>
+    public bool ShareModeExclusive { get; private set; }
+
+    /// <summary>"exclusive" or "shared" — log-friendly form of
+    /// <see cref="ShareModeExclusive"/>.</summary>
+    public string ShareMode => ShareModeExclusive ? "exclusive" : "shared";
+
     /// <summary>True once <see cref="Start"/> has succeeded.</summary>
     public bool IsRunning => _started;
 
@@ -119,6 +130,7 @@ internal sealed class MiniAudioOutput : IDisposable
         BackendName = MiniAudioInterop.OutputBackendName(_handle);
         BufferFrames = MiniAudioInterop.OutputBufferFrames(_handle);
         Periods = MiniAudioInterop.OutputPeriods(_handle);
+        ShareModeExclusive = MiniAudioInterop.OutputShareModeExclusive(_handle) != 0;
     }
 
     /// <summary>Start the device. Idempotent.</summary>

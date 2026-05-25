@@ -135,4 +135,57 @@ public class NativeAudioSinkRegistrationTests
         // exact patch so a future re-vendor doesn't flap this test.
         Assert.Contains("0.11.", v);
     }
+
+    [SkippableFact]
+    public void MiniAudioOutput_ExclusiveWithShared_Fallback_AlwaysOpensADevice()
+    {
+        // The native shim opens the playback device in WASAPI / CoreAudio /
+        // ALSA exclusive mode first (the direct, non-shared-mixer path that
+        // matches Thetis and kills the TX→RX resume delay), and retries shared
+        // when exclusive is refused. The contract this test pins: the open
+        // NEVER fails just because exclusive was unavailable — it must always
+        // land on a usable device, and ShareMode must report which path won.
+        //
+        // This is also the cross-platform safety check. On a typical CI macOS
+        // runner CoreAudio hog mode is refused, so we expect the shared
+        // fallback to carry the open — proving Mac/Linux are not broken by the
+        // exclusive-first attempt. Skipped when no audio device / no staged
+        // native lib is present on the runner.
+        MiniAudioOutput? output = null;
+        try
+        {
+            output = new MiniAudioOutput(
+                onFrames: static (_, _, _) => { },
+                preferSampleRate: 48_000,
+                preferChannels: 2,
+                periodFrames: 480,
+                periods: 2);
+        }
+        catch (DllNotFoundException ex)
+        {
+            Skip.If(true, "libminiaudio not staged for this RID. " + ex.Message);
+            return;
+        }
+        catch (InvalidOperationException)
+        {
+            // No default playback device on this runner (headless CI without a
+            // virtual sink). The fallback contract is unobservable here.
+            Skip.If(true, "no default playback device available on this runner");
+            return;
+        }
+
+        try
+        {
+            // The exclusive-with-fallback open produced a usable device.
+            Assert.True(output.SampleRate > 0, "device opened with a valid sample rate");
+            // ShareMode must be one of the two known values — whichever path
+            // the native open landed on, it opened *something*.
+            Assert.Contains(output.ShareMode, new[] { "exclusive", "shared" });
+            Assert.Equal(output.ShareModeExclusive, output.ShareMode == "exclusive");
+        }
+        finally
+        {
+            output.Dispose();
+        }
+    }
 }

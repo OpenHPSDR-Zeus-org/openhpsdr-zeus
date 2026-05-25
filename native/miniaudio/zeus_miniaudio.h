@@ -76,6 +76,13 @@ ZEUS_MA_EXPORT const char* zeus_ma_output_backend_name(void* handle);
 ZEUS_MA_EXPORT uint32_t    zeus_ma_output_buffer_frames(void* handle);
 ZEUS_MA_EXPORT uint32_t    zeus_ma_output_periods(void* handle);
 
+/* 1 = the device opened in exclusive share mode (WASAPI exclusive / CoreAudio
+ * hog / ALSA hw — the direct path that bypasses the shared mixer), 0 = it fell
+ * back to shared. The open attempts exclusive first and retries shared on
+ * failure, so this reports the path that actually opened. Valid after a
+ * successful *_create(). */
+ZEUS_MA_EXPORT int32_t   zeus_ma_output_share_mode_exclusive(void* handle);
+
 ZEUS_MA_EXPORT void     zeus_ma_output_destroy(void* handle);
 
 /* ---------------- Capture (input device) ------------------------------- */
@@ -98,6 +105,9 @@ ZEUS_MA_EXPORT uint32_t zeus_ma_input_channels(void* handle);
 ZEUS_MA_EXPORT const char* zeus_ma_input_backend_name(void* handle);
 ZEUS_MA_EXPORT uint32_t    zeus_ma_input_buffer_frames(void* handle);
 ZEUS_MA_EXPORT uint32_t    zeus_ma_input_periods(void* handle);
+
+/* See the playback-side getter for semantics. */
+ZEUS_MA_EXPORT int32_t   zeus_ma_input_share_mode_exclusive(void* handle);
 
 ZEUS_MA_EXPORT void     zeus_ma_input_destroy(void* handle);
 

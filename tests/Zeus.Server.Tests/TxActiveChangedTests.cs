@@ -69,10 +69,14 @@ public class TxActiveChangedTests : IDisposable
     }
 
     [Fact]
-    public void NativeAudioSink_OnTxActiveChanged_True_ClearsRing()
+    public void NativeAudioSink_OnTxActiveChanged_True_DoesNotForceDrainRing()
     {
-        // Push samples into the sink so the ring is non-empty (~600 samples).
-        // Then fire the TX-on event and assert the ring is drained.
+        // #468 mute-don't-drain: TX-on must NOT synchronously clear the ring.
+        // Thetis keeps its RX output stream warm and mutes at the mixer during
+        // TX; force-draining the ring made the OS audio path re-prime from zero
+        // on un-key (the ~1.7 s resume delay). The rising-edge handler now only
+        // raises the mute flag — the ring is untouched until the warm playback
+        // callback consumes it.
         var sink = new NativeAudioSink(NullLogger<NativeAudioSink>.Instance);
         var frame = BuildMonoFrame(600);
         sink.Publish(in frame);
@@ -82,15 +86,62 @@ public class TxActiveChangedTests : IDisposable
 
         sink.OnTxActiveChanged(true);
 
+        // The ring is NOT force-drained on the TX edge.
+        Assert.True(sink.CurrentRingDepth >= 600,
+            $"TX-on must not force-drain the ring; got {sink.CurrentRingDepth}");
+    }
+
+    [Fact]
+    public void NativeAudioSink_WhileTxActive_PublishDropsRxAndOutputIsSilent()
+    {
+        // While keyed, no band RX may be enqueued and the playback callback
+        // must output silence — even though the device stream stays warm.
+        var sink = new NativeAudioSink(NullLogger<NativeAudioSink>.Instance);
+
+        sink.OnTxActiveChanged(true);
+
+        // Publish during TX is dropped at the door — nothing accumulates to
+        // replay on un-key.
+        var frame = BuildMonoFrame(600);
+        sink.Publish(in frame);
         Assert.Equal(0, sink.CurrentRingDepth);
+
+        // The playback callback yields pure silence while keyed.
+        var output = new float[480];
+        Array.Fill(output, 0.5f);   // poison so we can prove it was overwritten
+        sink.RenderForTest(output, channels: 1);
+        Assert.All(output, s => Assert.Equal(0f, s));
+    }
+
+    [Fact]
+    public void NativeAudioSink_OnUnkey_RxFlowsImmediately_FromWarmStream()
+    {
+        // The whole point of mute-don't-drain: after un-key, RX that was
+        // published lands in a ring that was never force-emptied and reaches
+        // the still-warm playback callback immediately — no re-prime gap.
+        var sink = new NativeAudioSink(NullLogger<NativeAudioSink>.Instance);
+
+        // Key up, then release.
+        sink.OnTxActiveChanged(true);
+        sink.OnTxActiveChanged(false);
+
+        // Fresh RX after un-key.
+        var frame = BuildMonoFrame(480);
+        sink.Publish(in frame);
+        Assert.True(sink.CurrentRingDepth >= 480);
+
+        var output = new float[480];
+        sink.RenderForTest(output, channels: 1);
+
+        // RX is audible right away (0.1f samples from BuildMonoFrame).
+        Assert.Contains(output, s => s != 0f);
     }
 
     [Fact]
     public void NativeAudioSink_OnTxActiveChanged_False_DoesNotMutateRing()
     {
-        // Falling-edge TX (TX→RX) must NOT drain the ring — there's nothing
-        // useful to drain (the rising-edge handler already did) and we want
-        // any in-flight RX samples to play through immediately.
+        // Falling-edge TX (TX→RX) must NOT drain the ring — we want any
+        // in-flight RX samples to play through immediately on a warm stream.
         var sink = new NativeAudioSink(NullLogger<NativeAudioSink>.Instance);
         var frame = BuildMonoFrame(600);
         sink.Publish(in frame);
@@ -104,18 +155,16 @@ public class TxActiveChangedTests : IDisposable
     [Fact]
     public void NativeAudioSink_OnTxActiveChanged_RepeatedTrue_IsIdempotent()
     {
-        // Belt-and-suspenders: hitting OnTxActiveChanged(true) twice in a
-        // row (e.g. MOX-on quickly followed by TUN-on, both producing
-        // rising edges in the combined state) must not throw or corrupt
-        // ring state. Second call is just a redundant clear of an
-        // already-empty ring.
+        // Hitting OnTxActiveChanged(true) twice in a row (e.g. MOX-on quickly
+        // followed by TUN-on) must not throw or corrupt state — it just sets
+        // an already-set flag. RX published during TX stays dropped either way.
         var sink = new NativeAudioSink(NullLogger<NativeAudioSink>.Instance);
+
+        sink.OnTxActiveChanged(true);
+        sink.OnTxActiveChanged(true);
+
         var frame = BuildMonoFrame(100);
         sink.Publish(in frame);
-
-        sink.OnTxActiveChanged(true);
-        sink.OnTxActiveChanged(true);
-
         Assert.Equal(0, sink.CurrentRingDepth);
     }
 }

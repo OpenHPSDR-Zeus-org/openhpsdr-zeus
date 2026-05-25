@@ -111,9 +111,9 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
                 ? _input.BufferFrames * _input.Periods * 1000.0 / _input.SampleRate
                 : 0.0;
             _log.LogInformation(
-                "audio.native.tx mic open backend={Backend} rate={Rate}Hz channels={Channels} " +
+                "audio.native.tx mic open backend={Backend} shareMode={ShareMode} rate={Rate}Hz channels={Channels} " +
                 "bufFrames={BufFrames} periods={Periods} bufferMs={BufferMs:F1}",
-                _input.BackendName, _input.SampleRate, _input.Channels,
+                _input.BackendName, _input.ShareMode, _input.SampleRate, _input.Channels,
                 _input.BufferFrames, _input.Periods, bufMs);
         }
         catch (Exception ex)

@@ -48,6 +48,12 @@ typedef struct {
     void*                    user;
     uint32_t                 negotiated_rate;
     uint32_t                 negotiated_channels;
+    /* The share mode actually achieved by ma_device_init: 1 = exclusive,
+     * 0 = shared. We try exclusive first (closest match to Thetis's direct
+     * native output path — bypasses the Windows audio engine / mixer and
+     * the RDP shared-audio layer that adds the ~1.7 s TX→RX resume delay)
+     * and fall back to shared when the device refuses exclusive. */
+    int32_t                  share_mode_exclusive;
 } zeus_ma_output;
 
 typedef struct {
@@ -57,6 +63,7 @@ typedef struct {
     void*                    user;
     uint32_t                 negotiated_rate;
     uint32_t                 negotiated_channels;
+    int32_t                  share_mode_exclusive;
 } zeus_ma_input;
 
 /* ------------------------------------------------------------------------ */
@@ -174,9 +181,34 @@ ZEUS_MA_EXPORT void* zeus_ma_output_create(
      * CoreAudio / ALSA / PulseAudio / DirectSound / WinMM backends. */
     cfg.wasapi.noAutoConvertSRC = MA_TRUE;
 
-    if (ma_device_init(NULL, &cfg, &h->device) != MA_SUCCESS) {
-        free(h);
-        return NULL;
+    /* Exclusive-mode first, shared as graceful fallback.
+     *
+     * Thetis keeps a single continuous RX output stream warm and mutes at
+     * the mixer during TX; its native ChannelMaster output opens the device
+     * on a low-latency / direct path. WASAPI SHARED mode routes our audio
+     * through the Windows audio engine + mixer (and, under RDP, the
+     * "Remote Audio" shared-audio layer) which buffers deeply and is what
+     * drains + re-primes for ~1.7 s on un-key (#468). EXCLUSIVE mode bypasses
+     * the engine/mixer entirely — the closest match to Thetis's direct path.
+     *
+     * Many endpoints refuse exclusive (RDP "Remote Audio" virtual devices in
+     * particular, plus devices already opened exclusively by another app, and
+     * some shared-only virtual cables). When ma_device_init fails in exclusive
+     * we MUST retry shared so the app never fails to open audio — that retry
+     * is also the cross-platform safety net: on macOS / Linux, exclusive maps
+     * to CoreAudio hog mode / ALSA hw access which frequently fail, and the
+     * fallback lands us on today's shared behaviour. share_mode_exclusive
+     * records which path actually opened so the C# log can surface it. */
+    cfg.playback.shareMode = ma_share_mode_exclusive;
+    if (ma_device_init(NULL, &cfg, &h->device) == MA_SUCCESS) {
+        h->share_mode_exclusive = 1;
+    } else {
+        cfg.playback.shareMode = ma_share_mode_shared;
+        if (ma_device_init(NULL, &cfg, &h->device) != MA_SUCCESS) {
+            free(h);
+            return NULL;
+        }
+        h->share_mode_exclusive = 0;
     }
 
     h->negotiated_rate     = h->device.sampleRate;
@@ -239,6 +271,14 @@ ZEUS_MA_EXPORT uint32_t zeus_ma_output_periods(void* handle)
     return ((zeus_ma_output*)handle)->device.playback.internalPeriods;
 }
 
+ZEUS_MA_EXPORT int32_t zeus_ma_output_share_mode_exclusive(void* handle)
+{
+    if (handle == NULL) return 0;
+    /* 1 = the device opened in WASAPI / CoreAudio / ALSA exclusive mode
+     * (direct path, no shared mixer); 0 = it fell back to shared. */
+    return ((zeus_ma_output*)handle)->share_mode_exclusive;
+}
+
 ZEUS_MA_EXPORT void zeus_ma_output_destroy(void* handle)
 {
     if (handle == NULL) return;
@@ -291,9 +331,20 @@ ZEUS_MA_EXPORT void* zeus_ma_input_create(
      * the deep shared-mode buffer. WASAPI-only; no-op elsewhere. */
     cfg.wasapi.noAutoConvertSRC = MA_TRUE;
 
-    if (ma_device_init(NULL, &cfg, &h->device) != MA_SUCCESS) {
-        free(h);
-        return NULL;
+    /* Exclusive-first with shared fallback — same rationale and safety net as
+     * the playback side (see zeus_ma_output_create). The mic device on an RDP
+     * "Remote Audio" endpoint will typically refuse exclusive and fall back to
+     * shared; on a real local card exclusive keeps it off the shared mixer. */
+    cfg.capture.shareMode = ma_share_mode_exclusive;
+    if (ma_device_init(NULL, &cfg, &h->device) == MA_SUCCESS) {
+        h->share_mode_exclusive = 1;
+    } else {
+        cfg.capture.shareMode = ma_share_mode_shared;
+        if (ma_device_init(NULL, &cfg, &h->device) != MA_SUCCESS) {
+            free(h);
+            return NULL;
+        }
+        h->share_mode_exclusive = 0;
     }
 
     h->negotiated_rate     = h->device.sampleRate;
@@ -345,6 +396,12 @@ ZEUS_MA_EXPORT uint32_t zeus_ma_input_periods(void* handle)
 {
     if (handle == NULL) return 0;
     return ((zeus_ma_input*)handle)->device.capture.internalPeriods;
+}
+
+ZEUS_MA_EXPORT int32_t zeus_ma_input_share_mode_exclusive(void* handle)
+{
+    if (handle == NULL) return 0;
+    return ((zeus_ma_input*)handle)->share_mode_exclusive;
 }
 
 ZEUS_MA_EXPORT void zeus_ma_input_destroy(void* handle)

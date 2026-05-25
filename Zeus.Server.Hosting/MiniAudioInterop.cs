@@ -155,6 +155,10 @@ internal static partial class MiniAudioInterop
     [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
     internal static partial uint OutputPeriods(IntPtr handle);
 
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_output_share_mode_exclusive")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial int OutputShareModeExclusive(IntPtr handle);
+
     /// <summary>Marshal the playback device's active backend name
     /// ("WASAPI" / "DirectSound" / "Core Audio" / ...) for logging.</summary>
     internal static string OutputBackendName(IntPtr handle)
@@ -207,6 +211,10 @@ internal static partial class MiniAudioInterop
     [LibraryImport(LibraryName, EntryPoint = "zeus_ma_input_periods")]
     [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
     internal static partial uint InputPeriods(IntPtr handle);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_input_share_mode_exclusive")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial int InputShareModeExclusive(IntPtr handle);
 
     /// <summary>Marshal the capture device's active backend name for logging.</summary>
     internal static string InputBackendName(IntPtr handle)

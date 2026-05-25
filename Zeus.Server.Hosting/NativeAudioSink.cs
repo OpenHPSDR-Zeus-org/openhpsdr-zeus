@@ -106,6 +106,19 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
     // open either way so there's no pop and no fight with the OS mixer.
     private volatile bool _muted;
 
+    // TX-active flag — set true on the MOX/TUN/TwoTone rising edge and false
+    // on release, driven by TxService.TxActiveChanged. While TX is active we
+    // mute at the door (Publish stops enqueueing RX; OnPlaybackData outputs
+    // silence) WITHOUT draining the ring or stopping the device, exactly the
+    // way Thetis mutes its continuously-running native output stream at the
+    // mixer during TX. Keeping the device stream warm + non-drained is what
+    // makes the un-key RX resume instant: on the falling edge new RX lands in
+    // a ring that's already at its steady-state depth and reaches a still-warm
+    // playback callback, instead of re-priming an emptied buffer through the
+    // OS mixer (the ~1.7 s #468 delay). Read on the DSP tick thread (Publish)
+    // and the playback worker thread (OnPlaybackData); volatile is sufficient.
+    private volatile bool _txActive;
+
     // Audition enable flag — set via REST /api/audio-suite/audition by
     // the operator toggling the Audio Suite window's Audition button.
     // Read on the miniaudio capture worker thread inside PublishAudition
@@ -191,10 +204,16 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
             double bufMs = _output.SampleRate > 0
                 ? _output.BufferFrames * _output.Periods * 1000.0 / _output.SampleRate
                 : 0.0;
+            // shareMode (#468 follow-up): exclusive bypasses the Windows audio
+            // engine / mixer (and the RDP shared-audio layer) — the direct path
+            // that matches Thetis's continuous native output and eliminates the
+            // shared-mixer drain+re-prime that causes the TX→RX resume delay.
+            // "shared" here means the device refused exclusive and we fell back
+            // (expected on RDP "Remote Audio" virtual endpoints).
             _log.LogInformation(
-                "audio.native.rx open backend={Backend} rate={Rate}Hz channels={Channels} " +
+                "audio.native.rx open backend={Backend} shareMode={ShareMode} rate={Rate}Hz channels={Channels} " +
                 "bufFrames={BufFrames} periods={Periods} bufferMs={BufferMs:F1} version={Version}",
-                _output.BackendName, _output.SampleRate, _output.Channels,
+                _output.BackendName, _output.ShareMode, _output.SampleRate, _output.Channels,
                 _output.BufferFrames, _output.Periods, bufMs, MiniAudioInterop.Version());
         }
         catch (Exception ex)
@@ -238,20 +257,28 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
     }
 
     /// <summary>
-    /// TxService.TxActiveChanged subscriber. On the rising edge (TX
-    /// engaging via MOX, TUN, or TwoTone) drains the RX audio ring so
-    /// the operator hears instant silence rather than the accumulated
-    /// pre-TX backlog. The audition ring is left alone — audition is
-    /// gated separately and pre-MOX preview is meaningful right up to
-    /// the MOX edge; the existing audition gates handle the rest.
-    /// On falling edge (TX releasing → back to RX) this is a no-op
-    /// because the ring is already empty after the drain; new RX
-    /// samples land in an empty ring and reach the speaker promptly.
+    /// TxService.TxActiveChanged subscriber. On the rising edge (TX engaging
+    /// via MOX, TUN, or TwoTone) we mute the RX output by raising
+    /// <see cref="_txActive"/> rather than draining the ring: <see cref="Publish"/>
+    /// stops enqueueing band RX (so nothing is audible while keyed) and
+    /// <see cref="OnPlaybackData"/> outputs silence, while the miniaudio device
+    /// keeps running uninterrupted — the same "mute the continuous stream at
+    /// the mixer during TX" model Thetis uses. We deliberately do NOT call
+    /// <c>_ring.Clear()</c> here: emptying the ring forced the OS audio path to
+    /// re-prime from zero through the (shared-mode) mixer on un-key, which is
+    /// the ~1.7 s TX→RX resume delay in #468. Leaving the stream warm makes the
+    /// falling edge instant.
+    ///
+    /// <para>No stale audio replays on un-key: while keyed, the playback
+    /// callback drains the ring to empty (outputting silence) and Publish adds
+    /// nothing, so by release the ring holds at most the in-flight tail the
+    /// callback hasn't consumed — sub-period, inaudible — and fresh RX lands
+    /// behind it immediately. The audition ring is untouched; audition gating
+    /// is handled separately.</para>
     /// </summary>
     internal void OnTxActiveChanged(bool txActive)
     {
-        if (!txActive) return;
-        _ring.Clear();
+        _txActive = txActive;
     }
 
     // Test surface — lets unit tests assert the ring's drain behaviour
@@ -260,13 +287,26 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
     // (best-effort snapshot, may be off by one in a race window).
     internal int CurrentRingDepth => _ring.Count;
 
+    // Test surface — drives the playback data path the way the miniaudio
+    // worker thread would (no real device needed), so tests can assert that
+    // TX outputs silence while keeping the stream warm, and that RX flows
+    // again immediately on un-key. Returns the buffer the callback produced.
+    internal void RenderForTest(Span<float> output, uint channels) =>
+        OnPlaybackData(output, (uint)(output.Length / (int)channels), channels);
+
     public void Publish(in AudioFrame frame)
     {
         // Muted at the door: don't enqueue and let the ring drain to silence
         // on the playback callback's underrun path. Cheaper than gating in
         // the audio worker thread and avoids any sample-rate / channel-count
         // negotiation with the producer.
-        if (_muted) return;
+        //
+        // The same door also handles TX: while keyed we drop incoming band RX
+        // so no RX audio is audible during transmit and nothing accumulates to
+        // replay on un-key. The device stream stays warm (the playback callback
+        // keeps running and outputs silence) so the falling-edge resume is
+        // instant — see OnTxActiveChanged. The ring is never force-drained.
+        if (_muted || _txActive) return;
 
         // The DSP tick produces mono float32 @ 48 kHz. We assert the format
         // softly: anything else is logged and dropped rather than corrupting
@@ -304,19 +344,36 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
             ? stackalloc float[totalFrames]
             : new float[totalFrames];
 
-        int read = _ring.Read(mono);
-        if (read > 0)
+        if (_txActive)
         {
-            // t4 — first non-silent RX samples reach the OS playback device
-            // after un-key. The probe captures only the first occurrence per
-            // armed resume, so this is cheap on every subsequent callback.
-            AudioResumeProbe.MarkFirstAudibleOutput();
+            // While keyed: output RX silence but keep the device stream warm
+            // (this callback keeps firing). Publish has already stopped
+            // enqueueing band RX, so we just drain whatever sub-period tail is
+            // still in the ring and discard it — that empties the ring to its
+            // floor without a force-Clear and without re-priming the OS path on
+            // un-key, which is what makes the falling-edge RX resume instant
+            // (#468). MarkFirstAudibleOutput is intentionally NOT called here —
+            // that probe marks the first *audible* RX sample after un-key, and
+            // silence is not audio. Audition still mixes in below if enabled.
+            _ = _ring.Read(mono);
+            mono.Clear();
         }
-        if (read < totalFrames)
+        else
         {
-            // Underrun — zero the remainder.
-            mono[read..].Clear();
-            Interlocked.Add(ref _underrunSamples, totalFrames - read);
+            int read = _ring.Read(mono);
+            if (read > 0)
+            {
+                // t4 — first non-silent RX samples reach the OS playback device
+                // after un-key. The probe captures only the first occurrence per
+                // armed resume, so this is cheap on every subsequent callback.
+                AudioResumeProbe.MarkFirstAudibleOutput();
+            }
+            if (read < totalFrames)
+            {
+                // Underrun — zero the remainder.
+                mono[read..].Clear();
+                Interlocked.Add(ref _underrunSamples, totalFrames - read);
+            }
         }
 
         // Audition mixing: when the operator has audition turned on,

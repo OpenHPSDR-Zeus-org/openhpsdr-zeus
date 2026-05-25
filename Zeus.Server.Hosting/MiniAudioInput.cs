@@ -43,6 +43,13 @@ internal sealed class MiniAudioInput : IDisposable
     /// <summary>Negotiated internal period count.</summary>
     public uint Periods { get; private set; }
 
+    /// <summary>True when the device opened in exclusive share mode, false on
+    /// shared fallback. See <see cref="MiniAudioOutput.ShareModeExclusive"/>.</summary>
+    public bool ShareModeExclusive { get; private set; }
+
+    /// <summary>"exclusive" or "shared" — log-friendly form.</summary>
+    public string ShareMode => ShareModeExclusive ? "exclusive" : "shared";
+
     public bool IsRunning => _started;
 
     public MiniAudioInput(
@@ -81,6 +88,7 @@ internal sealed class MiniAudioInput : IDisposable
         BackendName = MiniAudioInterop.InputBackendName(_handle);
         BufferFrames = MiniAudioInterop.InputBufferFrames(_handle);
         Periods = MiniAudioInterop.InputPeriods(_handle);
+        ShareModeExclusive = MiniAudioInterop.InputShareModeExclusive(_handle) != 0;
     }
 
     public void Start()
