@@ -797,8 +797,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
                 if (now - lastRateTicks >= ticksPerSecond)
                 {
-                    _log.LogInformation("p2.tx.rate pkts/s={Pps} queue={Queue} fifoModel={Fifo:F0}",
-                        rateCount, _txIqQueue.Reader.Count, fifoSamples);
+                    // Diagnostics must NEVER take down the TX-IQ sender — the
+                    // outer catch exits the loop on any exception, so a bad log
+                    // call here silently stops all TX. (It did: ChannelReader.Count
+                    // throws NotSupportedException on an unbounded channel, which
+                    // killed the sender 24ms into key-down — no TX output at all.)
+                    try
+                    {
+                        _log.LogInformation("p2.tx.rate pkts/s={Pps} fifoModel={Fifo:F0}",
+                            rateCount, fifoSamples);
+                    }
+                    catch { /* never let a diagnostic kill TX */ }
                     rateCount = 0;
                     lastRateTicks = now;
                 }
