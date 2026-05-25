@@ -912,6 +912,20 @@ public static class ZeusEndpoints
             return Results.Ok(saved);
         });
 
+        // Toolbar Mode/Band/Step favorite-slot pins + the live tuning step
+        // (StepHz). POST patches only the fields supplied — null fields leave
+        // the stored value untouched — so a step-change doesn't reset the
+        // favorite pins. Persisted in zeus-prefs.db so the tuning step and
+        // favorites survive a backend restart, fixing the Photino desktop
+        // per-launch-random-port localStorage reset.
+        app.MapGet("/api/toolbar-settings", (ToolbarSettingsStore store) => Results.Ok(store.Get()));
+
+        app.MapPost("/api/toolbar-settings", (ToolbarSettingsSetRequest req, ToolbarSettingsStore store) =>
+        {
+            store.Save(req.Mode, req.Band, req.Step, req.StepHz);
+            return Results.Ok(store.Get());
+        });
+
         // Inline NR settings accordion disclosure state (NR1 / NR2 / NR4).
         // PUT writes all three flags atomically. Persisted in zeus-prefs.db
         // so the chevron-open preference follows the operator across

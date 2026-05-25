@@ -664,6 +664,27 @@ public sealed record PanWfSplitDto(double PanPercent);
 
 public sealed record PanWfSplitSetRequest(double PanPercent);
 
+// Toolbar Mode/Band/Step favorite-slot pins plus the currently-selected
+// tuning step. Each favorite array holds exactly three slot keys; StepHz is
+// the live tuning step in Hz. Persisted server-side in zeus-prefs.db so the
+// settings follow the operator across browsers / devices — Photino desktop
+// mode binds the webview to a fresh random loopback port on every launch,
+// which orphans any per-origin localStorage value (the bug this fixes). Null
+// arrays / StepHz mean the server has never stored a value; the frontend
+// falls back to its built-in defaults and pushes the current value up on the
+// next interaction.
+public sealed record ToolbarSettingsDto(
+    IReadOnlyList<string>? Mode,
+    IReadOnlyList<string>? Band,
+    IReadOnlyList<string>? Step,
+    int? StepHz);
+
+public sealed record ToolbarSettingsSetRequest(
+    IReadOnlyList<string>? Mode = null,
+    IReadOnlyList<string>? Band = null,
+    IReadOnlyList<string>? Step = null,
+    int? StepHz = null);
+
 // ---- PureSignal request records ----
 // PsControlSetRequest = master arm (Enabled) + mode (Auto vs Single).
 // PsAdvancedSetRequest = nullable so partial updates from the settings

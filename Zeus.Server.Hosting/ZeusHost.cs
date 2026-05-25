@@ -272,6 +272,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<PsSettingsStore>();
         builder.Services.AddSingleton<FilterPresetStore>();
         builder.Services.AddSingleton<DisplaySettingsStore>();
+        builder.Services.AddSingleton<ToolbarSettingsStore>();
         builder.Services.AddSingleton<NrUiPrefsStore>();
         builder.Services.AddSingleton<ThemeSettingsStore>();
         builder.Services.AddSingleton<BottomPinStore>();
