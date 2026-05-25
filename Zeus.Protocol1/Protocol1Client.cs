@@ -117,6 +117,12 @@ public sealed class Protocol1Client : IProtocol1Client
     // mi0bot console.cs:2084 (UI range -28..+31), networkproto1.c:1086-1088
     // (wire encoding).
     private int _hl2TxAttnDb = int.MinValue;
+    // On-board CW keyer config (C&C 0x0B). Speed is the operator's WPM,
+    // mode is CwKeyerMode (0=straight/1=A/2=B). Sent via the round-robin so
+    // a dropped packet self-heals. Default mode 0 (straight) makes the write
+    // a no-op until the operator opts into iambic. See zeus-bks.
+    private int _cwKeyerSpeedWpm;
+    private int _cwKeyerMode; // CwKeyerMode as int for Interlocked
     private long _droppedFrames;
     private long _totalFrames;
 
@@ -588,6 +594,19 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _psPredistortionSubindex, subindex);
     }
 
+    /// <summary>
+    /// Set the on-board CW keyer config (C&amp;C 0x0B): speed in WPM and the
+    /// keyer mode (straight / iambic A / iambic B). Pushed continuously via
+    /// the register round-robin so it survives packet loss; the gateware
+    /// ignores speed in straight mode. Driven by RadioService from the
+    /// operator's persisted CW settings. See zeus-bks.
+    /// </summary>
+    public void SetCwKeyerConfig(int wpm, CwKeyerMode mode)
+    {
+        Interlocked.Exchange(ref _cwKeyerSpeedWpm, wpm);
+        Interlocked.Exchange(ref _cwKeyerMode, (int)mode);
+    }
+
     public void SetHl2TxStepAttenuationDb(int db)
     {
         // Range matches mi0bot console.cs:2084 (udTXStepAttData.Minimum=-28,
@@ -652,7 +671,9 @@ public sealed class Protocol1Client : IProtocol1Client
             // operator/auto-att has set ATTOnTX, swap C4 source from
             // rx_step_attn to tx_step_attn. Sentinel int.MinValue means
             // untouched, fall through to the RX-side encoding above.
-            Hl2TxAttnDb: Volatile.Read(ref _hl2TxAttnDb));
+            Hl2TxAttnDb: Volatile.Read(ref _hl2TxAttnDb),
+            CwKeyerSpeedWpm: Volatile.Read(ref _cwKeyerSpeedWpm),
+            CwKeyerMode: (CwKeyerMode)Volatile.Read(ref _cwKeyerMode));
     }
 
     private void RxLoop()
@@ -960,7 +981,12 @@ public sealed class Protocol1Client : IProtocol1Client
             };
         }
 
-        int p = phase & 0x3;
+        // Non-PS rotation is 5 phases. Phase 4 carries the CW keyer config
+        // (0x0B) in the RX-only branch so the on-board iambic keyer speed/
+        // mode tracks the operator's CW panel — it's set before keying, so
+        // the MOX branch doesn't waste a slot on it. Adding one phase drops
+        // the RxFreq NCO refresh from 3-of-4 to 4-of-5 frames — negligible.
+        int p = phase % 5;
         if (mox)
         {
             return p switch
@@ -968,15 +994,17 @@ public sealed class Protocol1Client : IProtocol1Client
                 0 => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.RxFreq),
                 1 => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.DriveFilter),
                 2 => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.TxFreq),
-                _ => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.Config),
+                3 => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.Config),
+                _ => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.RxFreq),
             };
         }
         return p switch
         {
-            0 => (ControlFrame.CcRegister.Config,     ControlFrame.CcRegister.RxFreq),
-            1 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.DriveFilter),
-            2 => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.RxFreq),
-            _ => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.TxFreq),
+            0 => (ControlFrame.CcRegister.Config,        ControlFrame.CcRegister.RxFreq),
+            1 => (ControlFrame.CcRegister.RxFreq,        ControlFrame.CcRegister.DriveFilter),
+            2 => (ControlFrame.CcRegister.Attenuator,    ControlFrame.CcRegister.RxFreq),
+            3 => (ControlFrame.CcRegister.RxFreq,        ControlFrame.CcRegister.TxFreq),
+            _ => (ControlFrame.CcRegister.CwKeyerConfig, ControlFrame.CcRegister.RxFreq),
         };
     }
 
@@ -1006,7 +1034,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 // doesn't lose its slot.
                 bool psArmed = state.PsEnabled && state.Board == HpsdrBoardKind.HermesLite2;
                 var (first, second) = PhaseRegisters(phase, state.Mox, psArmed);
-                phase = (phase + 1) & (psArmed ? 0xF : 0x3);
+                phase = psArmed ? ((phase + 1) & 0xF) : ((phase + 1) % 5);
                 ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource);
                 rateWindowPkts++;
                 var nowUtc = DateTime.UtcNow;

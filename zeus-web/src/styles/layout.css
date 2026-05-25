@@ -1794,6 +1794,49 @@
 .cw-cursor { animation: blink 1s steps(2) infinite; color: var(--accent); }
 @keyframes blink { 50% { opacity: 0.2; } }
 
+/* CW keyer-mode selector (zeus-bks). Straight / Iambic-A / Iambic-B segmented
+   control. Token-only; mirrors the readout-well treatment of the WPM strip.
+   Visual placement/appearance is a maintainer call — see PR notes. */
+.cw-keyer-mode-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cw-keyer-mode-label {
+  font: 600 9px/1 var(--font-sans);
+  letter-spacing: 0.22em;
+  color: var(--fg-3);
+  text-transform: uppercase;
+}
+.cw-keyer-mode-seg {
+  display: flex;
+  flex: 1;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg-meter);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+}
+.cw-keyer-mode-btn {
+  flex: 1;
+  padding: 4px 6px;
+  font: 600 10px/1 var(--font-mono);
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+  background: transparent;
+  border: 0;
+  border-radius: calc(var(--r-md) - 2px);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+.cw-keyer-mode-btn:hover { color: var(--fg-1); }
+.cw-keyer-mode-btn.is-active {
+  color: var(--fg-0);
+  background: var(--bg-2);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
 /* ===== Transport bar — v3 Lifted Dark: flat near-black ===== */
 .transport {
   display: flex;

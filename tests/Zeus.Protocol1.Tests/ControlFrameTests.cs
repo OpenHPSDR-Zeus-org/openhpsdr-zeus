@@ -675,4 +675,70 @@ public class ControlFrameTests
         Assert.Equal(0, buf[16 + 5] & 0x01);
         Assert.Equal(0, buf[16 + 7] & 0x01);
     }
+
+    // --- CW keyer config (C&C 0x0B / wire 0x16), zeus-bks ----------------
+    // Gateware rtl/cw_openhpsdr.sv:29-34 — speed=C3[5:0], mode=C3[7:6],
+    // weight=C4[6:0], spacing=C4[7], reverse=C2[6].
+
+    [Theory]
+    [InlineData(false, 0x16)]
+    [InlineData(true, 0x17)]
+    public void CwKeyerConfig_Cc0_Is_0x16_PlusMox(bool mox, byte expectedCc0)
+    {
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { Mox = mox };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.CwKeyerConfig, s);
+        Assert.Equal(expectedCc0, cc[0]);
+    }
+
+    [Fact]
+    public void CwKeyerConfig_PacksSpeed_IntoC3LowSixBits()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { CwKeyerSpeedWpm = 25, CwKeyerMode = CwKeyerMode.IambicB };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.CwKeyerConfig, s);
+
+        // C3 = cc[3]: [5:0] = speed (25), [7:6] = mode (IambicB = 0b10).
+        Assert.Equal(25, cc[3] & 0x3F);
+        Assert.Equal(0b10, (cc[3] >> 6) & 0x03);
+    }
+
+    [Fact]
+    public void CwKeyerConfig_StraightMode_PacksModeZero()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { CwKeyerSpeedWpm = 22, CwKeyerMode = CwKeyerMode.Straight };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.CwKeyerConfig, s);
+        Assert.Equal(0, (cc[3] >> 6) & 0x03);
+        // Speed is still encoded — the gateware just ignores it in straight
+        // mode. Pinning it documents that we don't zero speed by mode.
+        Assert.Equal(22, cc[3] & 0x3F);
+    }
+
+    [Theory]
+    [InlineData(80, 60)]   // above the 0-60 gateware range → clamped to 60
+    [InlineData(-5, 0)]    // negative → clamped to 0
+    [InlineData(60, 60)]   // boundary
+    public void CwKeyerConfig_ClampsSpeed_To_0_60(int wpm, int expected)
+    {
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { CwKeyerSpeedWpm = wpm, CwKeyerMode = CwKeyerMode.IambicA };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.CwKeyerConfig, s);
+        Assert.Equal(expected, cc[3] & 0x3F);
+    }
+
+    [Fact]
+    public void CwKeyerConfig_DefaultWeightSpacingReverse()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { CwKeyerSpeedWpm = 20, CwKeyerMode = CwKeyerMode.IambicA };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.CwKeyerConfig, s);
+
+        // C4[6:0] = weight 50, C4[7] = spacing off (0).
+        Assert.Equal(50, cc[4] & 0x7F);
+        Assert.Equal(0, (cc[4] >> 7) & 0x01);
+        // C2[6] = reverse off (0). C1 unused.
+        Assert.Equal(0, (cc[2] >> 6) & 0x01);
+        Assert.Equal(0, cc[1]);
+    }
 }

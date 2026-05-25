@@ -18,6 +18,7 @@ export function CwPanel() {
   const status = useCwStore((s) => s.status);
   const setSettingsLocal = useCwStore((s) => s.setSettingsLocal);
   const commitDebounced = useCwStore((s) => s.commitDebounced);
+  const patchSettings = useCwStore((s) => s.patchSettings);
   const setMacro = useCwStore((s) => s.setMacro);
   const addMacro = useCwStore((s) => s.addMacro);
   const removeMacro = useCwStore((s) => s.removeMacro);
@@ -32,6 +33,10 @@ export function CwPanel() {
         // PUT after the operator stops dragging.
         setWpmLocal={(v) => setSettingsLocal({ wpm: v })}
         setWpmCommit={(v) => commitDebounced({ wpm: v })}
+        keyerMode={settings.keyerMode}
+        // One-shot discrete choice (not a drag) — optimistic save with
+        // rollback, same as a macro edit.
+        setKeyerMode={(m) => void patchSettings({ keyerMode: m })}
         sidetoneHz={settings.sidetoneHz}
         setSidetoneHzLocal={(v) => setSettingsLocal({ sidetoneHz: v })}
         setSidetoneHzCommit={(v) => commitDebounced({ sidetoneHz: v })}
