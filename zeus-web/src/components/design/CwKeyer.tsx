@@ -119,10 +119,10 @@ export function CwKeyer({
 
       {/* Sidetone monitor: pitch + gain of the in-browser CW monitor tone.
         * Audible during any local key — macro send, raw key from a logger,
-        * or hardware key plugged into the radio. Reuses the WPM control-
-        * strip CSS classes so the visual treatment matches without
-        * introducing new design tokens. */}
-      <div className="cw-control-strip">
+        * or hardware key plugged into the radio. Reuses the WPM readout/dial
+        * styling (.cw-wpm-*) in a 4-column strip so two sliders sit side by
+        * side without introducing new design tokens. */}
+      <div className="cw-sidetone-strip">
         <div className="cw-wpm-readout">
           <span className="cw-wpm-label">PITCH</span>
           <span className="cw-wpm-value mono">{sidetoneHz}Hz</span>
