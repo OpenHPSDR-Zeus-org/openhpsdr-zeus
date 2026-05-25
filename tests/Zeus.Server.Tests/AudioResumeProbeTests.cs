@@ -119,19 +119,53 @@ public class AudioResumeProbeTests
 
         // Operator double-taps the key: arm, partial progress, then arm again
         // before audible output. The second arm clears t1–t4 so the measured
-        // window reflects the second resume only.
+        // window reflects the second resume only. After the re-arm only t3 is
+        // re-marked (the provenance gate requires a fresh publish before t4),
+        // so t1/t2 read n/a but t3/t4 reflect the second resume.
         AudioResumeProbe.ArmUnkey(log);
         AudioResumeProbe.MarkFirstIq();
         AudioResumeProbe.MarkFirstReadAudio();
 
         AudioResumeProbe.ArmUnkey(log);   // re-arm
+        AudioResumeProbe.MarkFirstPublish();          // fresh t3 for the 2nd resume
         AudioResumeProbe.MarkFirstAudibleOutput();
 
         var lines = log.Messages.ToArray();
         Assert.Single(lines);
-        // After re-arm, t1/t2/t3 were never re-marked, so they read n/a.
+        // After re-arm, t1/t2 were never re-marked, so they read n/a.
         Assert.Contains("t1=n/a", lines[0]);
         Assert.Contains("t2=n/a", lines[0]);
-        Assert.Contains("t3=n/a", lines[0]);
+        // t3 fired after the re-arm, so it is NOT n/a.
+        Assert.DoesNotContain("t3=n/a", lines[0]);
+    }
+
+    [Fact]
+    public void AudibleOutput_BeforePublish_DoesNotLog()
+    {
+        var log = new CapturingLogger();
+
+        // The provenance gate (issue #468): the keep-warm silence feed keeps
+        // the output ring fed during TX, and the falling-edge drain can leave a
+        // stale residual tail. If audible output is reported before t3 (fresh
+        // publish) has fired, that output is NOT the post-un-key resume — t4
+        // must not stamp and the line must not log yet.
+        AudioResumeProbe.ArmUnkey(log);
+        AudioResumeProbe.MarkFirstIq();
+        AudioResumeProbe.MarkFirstReadAudio();
+        // (no MarkFirstPublish — t3 has not fired)
+        AudioResumeProbe.MarkFirstAudibleOutput();   // stale/residual output
+
+        Assert.Empty(log.Messages);
+
+        // Once fresh audio is actually published, the NEXT audible output is
+        // the real resume and the line logs with a meaningful t4.
+        AudioResumeProbe.MarkFirstPublish();
+        AudioResumeProbe.MarkFirstAudibleOutput();
+
+        var lines = log.Messages.ToArray();
+        Assert.Single(lines);
+        Assert.DoesNotContain("t3=n/a", lines[0]);
+        Assert.Contains("t4=", lines[0]);
+        Assert.DoesNotContain("t4=n/a", lines[0]);
     }
 }

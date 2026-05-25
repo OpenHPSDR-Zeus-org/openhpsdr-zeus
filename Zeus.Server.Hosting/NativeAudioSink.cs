@@ -307,10 +307,24 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
         int read = _ring.Read(mono);
         if (read > 0)
         {
-            // t4 — first non-silent RX samples reach the OS playback device
-            // after un-key. The probe captures only the first occurrence per
-            // armed resume, so this is cheap on every subsequent callback.
-            AudioResumeProbe.MarkFirstAudibleOutput();
+            // t4 — first NON-SILENT RX samples reach the OS playback device
+            // after un-key. The keep-warm feed (issue #468) now keeps the ring
+            // continuously fed with SILENCE through TX, so "read > 0" alone is
+            // true on every post-un-key callback and would stamp t4 on stale
+            // or silence content before the fresh-audio stages (t1/t2/t3) ran —
+            // exactly the misleading "t4=0.9ms while t1..t3=n/a" reading. So we
+            // only mark t4 once the buffer actually carries audible (non-zero)
+            // samples. AudioResumeProbe additionally gates t4 on t3 having been
+            // published, so this measures the first FRESH post-un-key audio.
+            // The probe captures only the first occurrence per armed resume, so
+            // this scan is cheap once the line has logged.
+            bool nonZero = false;
+            for (int i = 0; i < read; i++)
+            {
+                if (mono[i] != 0f) { nonZero = true; break; }
+            }
+            if (nonZero)
+                AudioResumeProbe.MarkFirstAudibleOutput();
         }
         if (read < totalFrames)
         {

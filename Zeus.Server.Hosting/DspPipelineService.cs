@@ -266,6 +266,10 @@ public class DspPipelineService : BackgroundService,
     private readonly float[] _panBuf = new float[Width];
     private readonly float[] _wfBuf = new float[Width];
     private readonly float[] _audioBuf = new float[AudioDrainCapacity];
+    // Dedicated scratch for the timer-thread keep-warm fallback (issue #468)
+    // so it never races the RX-thread Tick over _audioBuf. Only ever touched
+    // on the ExecuteAsync PeriodicTimer thread.
+    private readonly float[] _keepWarmBuf = new float[AudioDrainCapacity];
 
     // Cached panadapter snapshot for the frequency-calibration service
     // (issue #325). Tick fills this every cycle that produced a valid
@@ -308,6 +312,36 @@ public class DspPipelineService : BackgroundService,
             _audioSinks[i].Publish(in frame);
     }
 
+    // Publish one tick's worth of silence to the RX audio sinks to keep the
+    // output device endpoint warm during TX / RX-idle periods (issue #468).
+    // Sized to 48 kHz / 30 Hz = 1600 samples (capped to the scratch buffer) so
+    // the silence-feed rate matches the device's consumption rate and the ring
+    // neither starves nor backs up over a long key-down. This is the half of
+    // the fix that #521 unblocked: with the WASAPI output buffer now ~20 ms
+    // (was the ~1.7 s shared-mode default) the feed tracks consumption and no
+    // longer accumulates a backlog the way it did on the old deep buffer.
+    // No-op when there are no sinks. internal for unit-test coverage of the
+    // keep-warm behaviour; `scratch` is the caller's reusable audio buffer
+    // (zeroed here). These frames deliberately do NOT mark the resume probe's
+    // t3 (firstPublish) — t3 is reserved for fresh post-un-key RX audio, so
+    // the keep-warm silence can't make t4 fire early (see AudioResumeProbe).
+    internal void PublishKeepWarmSilence(float[] scratch, double nowMs)
+    {
+        if (_audioSinks.Length == 0) return;
+        int keepWarm = Math.Min(AudioOutputRateHz / 30, scratch.Length);
+        if (keepWarm <= 0) return;
+        Array.Clear(scratch, 0, keepWarm);
+        var silenceFrame = new AudioFrame(
+            Seq: ++_audioSeq,
+            TsUnixMs: nowMs,
+            RxId: 0,
+            Channels: 1,
+            SampleRateHz: (uint)AudioOutputRateHz,
+            SampleCount: (ushort)keepWarm,
+            Samples: new ReadOnlyMemory<float>(scratch, 0, keepWarm));
+        PublishAudio(in silenceFrame);
+    }
+
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
         OpenSynthetic();
@@ -337,7 +371,32 @@ public class DspPipelineService : BackgroundService,
                 // a double-tick and keep WDSP truly single-thread-owned on
                 // the hot path. The "no sink attached" branch keeps the
                 // synthetic-mode display alive when there's no radio.
-                if (_rxSinkAttached) continue;
+                if (_rxSinkAttached)
+                {
+                    // Keep-warm fallback (issue #468). When a sink is attached
+                    // the inline RX-thread Tick normally drives audio, so we
+                    // skip the timer-driven Tick to avoid double-ticking WDSP.
+                    // BUT on radios that STOP RX during TX (HL2 / P1 non-PS),
+                    // RX IQ — and therefore the inline Tick and its keep-warm
+                    // silence feed — stop for the whole key-down. Without a
+                    // fallback the output ring drains and the endpoint idles,
+                    // re-introducing the un-key gap on those radios (and, over
+                    // RDP Remote Audio, the ~2 s wake-from-silence that #521's
+                    // tiny output buffer alone does NOT fix). So if no inline
+                    // Tick has run for ~2 tick periods, feed keep-warm silence
+                    // from here. This touches only the sink + a dedicated
+                    // buffer (never WDSP), so it's safe off the RX thread. On
+                    // radios that keep RX flowing during TX (G2 / P2) the
+                    // inline Tick keeps _lastTickStopwatchTicks fresh and this
+                    // branch never fires — no double-feed.
+                    long now = Stopwatch.GetTimestamp();
+                    long last = _lastTickStopwatchTicks;
+                    if (last != 0 && (now - last) >= 2 * TickPeriodStopwatchTicks)
+                    {
+                        PublishKeepWarmSilence(_keepWarmBuf, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                    }
+                    continue;
+                }
                 // Drain any cross-thread commands posted while no sink was
                 // attached (rare — most commands arrive while a radio is
                 // connected and the sink is the consumer).
@@ -1699,6 +1758,29 @@ public class DspPipelineService : BackgroundService,
                 PublishAudio(in audioFrame);
                 RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
             }
+        }
+        else if (!txMonitorOn)
+        {
+            // KEEP THE OUTPUT DEVICE WARM (issue #468). When the RXA produced
+            // no audio this tick — which is exactly the case throughout TX
+            // (RXA is damped while keyed) — publish a block of SILENCE instead
+            // of publishing nothing. Without this the producer side stops
+            // feeding NativeAudioSink's ring entirely during TX; the ring runs
+            // dry and the OS output endpoint idles. Over RDP "Remote Audio"
+            // the channel then takes ~2 s to wake from silence on un-key, even
+            // though #521 already shrank the WASAPI output buffer to ~20 ms and
+            // the backend has fresh RX audio ready in ~13 ms (proven by the
+            // t1/t2/t3 resume probe) — that is the remaining TX→RX gap. Thetis
+            // avoids it by keeping its RX audio mixer fed continuously through
+            // TX; this is the Zeus equivalent. Gated to the no-TX-monitor path
+            // (the monitor path feeds the same ring from ReadTxMonitorAudio
+            // below). macOS / Linux share this path and benefit identically;
+            // CoreAudio / ALSA also prefer an unbroken stream, and a steady
+            // 48 kHz silence feed is platform-agnostic — no OS conditionals.
+            // The silence is inaudible, so RX→TX stays instant: the rising
+            // edge still drains the ring (#497) and keep-warm then holds it at
+            // silence, which is exactly what the operator should hear keyed.
+            PublishKeepWarmSilence(audioBuf, nowMs);
         }
         if (txMonitorOn)
         {

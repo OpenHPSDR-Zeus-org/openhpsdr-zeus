@@ -84,12 +84,25 @@ internal static class AudioResumeProbe
     }
 
     /// <summary>t4 — first non-silent samples written to the OS playback
-    /// device after un-key. Logs the probe line and disarms. Called on the
-    /// miniaudio playback worker thread; keeps work to the single log call
-    /// only when this thread wins the t4 CAS.</summary>
+    /// device after un-key that belong to FRESH post-un-key RX audio. Logs the
+    /// probe line and disarms. Called on the miniaudio playback worker thread;
+    /// keeps work to the single log call only when this thread wins the t4 CAS.
+    ///
+    /// PROVENANCE GATE (issue #468): t4 is stamped only after t3 (firstPublish)
+    /// has fired. The keep-warm feed continuously pushes silence to the ring
+    /// during TX, and the falling-edge drain can leave a residual tail of stale
+    /// pre-un-key audio. Without this gate the playback worker could stamp t4
+    /// on that stale/silence content before the fresh-audio pipeline (t1/t2/t3)
+    /// ran — the misleading "t4=0.9ms, t1..t3=n/a" reading. Requiring t3 first
+    /// guarantees t4 measures the first FRESH audible output, so t1→t4 and the
+    /// t3→t4 buffer-drain are meaningful.</summary>
     public static void MarkFirstAudibleOutput()
     {
         if (!_armed) return;
+        // Fresh RX audio must have been published before we attribute audible
+        // output to this resume. If t3 hasn't fired yet, the samples the sink
+        // sees are stale residual ring content, not the post-un-key resume.
+        if (Volatile.Read(ref _t3FirstPublish) == 0) return;
         if (Interlocked.CompareExchange(ref _t4FirstAudible, Stopwatch.GetTimestamp(), 0) != 0)
             return; // already captured this resume
 
