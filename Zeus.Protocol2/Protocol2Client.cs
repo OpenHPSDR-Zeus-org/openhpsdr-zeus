@@ -240,6 +240,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private int _postUnkeySends;    // TX-IQ packets sent to the radio since un-key
     private double _postUnkeySendLogMs;     // last rate-limited sender log (ms since un-key)
     private double _postUnkeyProducerLogMs; // last rate-limited producer log (ms since un-key)
+    // Closed on a true un-key, reopened on the next key-down. While closed,
+    // SendTxIq drops blocks so no TX-IQ trickles to the radio after release —
+    // the radio can keep T/R engaged while it's still receiving TX-IQ, and the
+    // mic-buffer drain / TUN-driver tick can otherwise dribble IQ for ~1s
+    // past un-key. pihpsdr likewise sends no TX-IQ when not transmitting.
+    private volatile bool _txIqGateClosed;
 
     // ---- PureSignal feedback (DDC0 + DDC1 paired on UDP 1035) ----
     // PS feedback decoder: when armed, packets on port 1035 carry interleaved
@@ -642,7 +648,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // clock mid-transmit.
     private void BeginTxIqMeasure()
     {
-        // New key-down: stop watching the previous un-key tail.
+        // New key-down: open the TX-IQ gate and stop watching the previous tail.
+        _txIqGateClosed = false;
         Interlocked.Exchange(ref _unkeyTicks, 0);
         if (Interlocked.Read(ref _txIqStartTicks) != 0) return;
         Interlocked.Exchange(ref _txIqSentSamples, 0);
@@ -715,9 +722,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             if (ms <= 3000.0 && ms >= _postUnkeyProducerLogMs + 100.0)
             {
                 _postUnkeyProducerLogMs = ms;
-                _log.LogInformation("p2.unkey.producer +{Ms:F0}ms still PRODUCING TX-IQ after un-key ({N} samples this block)", ms, iqInterleaved.Length / 2);
+                _log.LogInformation("p2.unkey.producer +{Ms:F0}ms upstream still calling SendTxIq after un-key — DROPPED by gate ({N} samples)", ms, iqInterleaved.Length / 2);
             }
         }
+
+        // Gate closed by a true un-key: drop any straggler IQ (mic-buffer
+        // drain, late TUN-driver tick) so the radio stops receiving TX-IQ the
+        // instant the operator releases, instead of up to ~1s later.
+        if (_txIqGateClosed) return;
 
         lock (_txIqGate)
         {
@@ -745,6 +757,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // the previous transmission's IQ when PTT re-engages.
         int flushed = 0;
         while (_txIqQueue.Reader.TryRead(out _)) { flushed++; }
+
+        // ResetTxIq also fires on redundant SetTune(false)/SetMox(false) calls
+        // that happen WHILE the other path is keying (e.g. a tune-off emitted
+        // as part of engaging MOX). Only treat it as a true un-key — closing
+        // the IQ gate and arming the tail watcher — when we're genuinely no
+        // longer transmitting. Otherwise we'd gate IQ mid-transmit and the
+        // watcher would count legitimate TX as a post-un-key tail.
+        if (_moxOn || _tuneActive) return;
+
+        // True un-key: close the gate so no further TX-IQ reaches the radio.
+        _txIqGateClosed = true;
 
         // Stamp the un-key instant and start watching the tail. The producer
         // (SendTxIq) and sender (TxIqSenderLoop) log, rate-limited, how long
