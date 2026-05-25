@@ -751,6 +751,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         double fifoSamples = 0.0;
         long lastTicks = Stopwatch.GetTimestamp();
         double ticksPerSecond = Stopwatch.Frequency;
+        // 1 Hz TX-IQ rate log (mirrors P1's p1.tx.rate). The radio's DUC needs
+        // 192 kHz = 800 packets/s of 240 samples. On Windows a coarse timer
+        // floors Task.Delay-paced sends near ~380/s (the relay-hang symptom);
+        // this line is how we confirm the timeBeginPeriod(1) fix restores 800/s.
+        int rateCount = 0;
+        long lastRateTicks = lastTicks;
         try
         {
             while (!ct.IsCancellationRequested)
@@ -782,11 +788,28 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 }
 
                 fifoSamples += TxIqSamplesPerPacket;
-                try { _sock!.SendTo(packet, ep); }
+                try { _sock!.SendTo(packet, ep); rateCount++; }
                 catch (ObjectDisposedException) { break; }
                 catch (SocketException ex)
                 {
                     _log.LogWarning(ex, "p2.txiq send failed");
+                }
+
+                if (now - lastRateTicks >= ticksPerSecond)
+                {
+                    // Diagnostics must NEVER take down the TX-IQ sender — the
+                    // outer catch exits the loop on any exception, so a bad log
+                    // call here silently stops all TX. (It did: ChannelReader.Count
+                    // throws NotSupportedException on an unbounded channel, which
+                    // killed the sender 24ms into key-down — no TX output at all.)
+                    try
+                    {
+                        _log.LogInformation("p2.tx.rate pkts/s={Pps} fifoModel={Fifo:F0}",
+                            rateCount, fifoSamples);
+                    }
+                    catch { /* never let a diagnostic kill TX */ }
+                    rateCount = 0;
+                    lastRateTicks = now;
                 }
             }
         }
