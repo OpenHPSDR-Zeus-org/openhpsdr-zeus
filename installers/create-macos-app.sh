@@ -62,11 +62,34 @@ mkdir -p "${OUTPUT_DIR}"
 mkdir -p "${APP_BUNDLE}/Contents/MacOS"
 mkdir -p "${APP_BUNDLE}/Contents/Resources"
 
-# Copy published files into Contents/MacOS — the bundle's working dir at
-# launch is Contents/MacOS, so the relative wwwroot/, appsettings.json,
-# zetaHat.bin etc. land where ZeusHost expects.
-echo "Copying published files..."
-cp -r "${PUBLISH_DIR}"/* "${APP_BUNDLE}/Contents/MacOS/"
+# --- Codesign-friendly payload layout (issue gh-389 / zeus-z98) ----------
+#
+# codesign without the deprecated --deep treats EVERY file under
+# Contents/MacOS/ as a code subcomponent that must be individually signed,
+# and aborts on the first non-Mach-O it walks ("code object is not signed at
+# all / In subcomponent: <dll|json|…>"). A .NET self-contained publish drops
+# ~360 such files there (managed .dll, .pdb, .deps.json, runtimeconfig.json,
+# wwwroot/, BandPlans/, …), so the old script was forced into --deep.
+#
+# Files under Contents/Resources/, by contrast, are sealed as ordinary
+# resources (hashed into CodeResources) and do NOT each need a signature.
+# So we put the entire publish payload in Contents/Resources/app/ and leave
+# Contents/MacOS/ holding only the launch.sh stub (the CFBundleExecutable).
+# The bundle then signs inside-out with no --deep: we sign just the nested
+# Mach-O (the apphost + the ~17 dylibs) for the hardened-runtime requirement,
+# and codesign seals everything else as resources.
+#
+# Because the apphost still runs with its payload directory as the working
+# dir (launch.sh cd's into Resources/app before exec), AppContext.BaseDirectory
+# resolves to Resources/app/ and wwwroot/, BandPlans/, zetaHat.bin, calculus
+# and runtimes/ all sit next to the binary exactly as the backend expects —
+# no relocation, no flattening. The launcher additionally exports
+# ZEUS_WEBROOT / ZEUS_BANDPLANS_DIR (honoured by ZeusHost / BandPlanStore) as
+# an explicit belt-and-suspenders pin.
+APP_PAYLOAD="${APP_BUNDLE}/Contents/Resources/app"
+mkdir -p "${APP_PAYLOAD}"
+echo "Copying published files into Contents/Resources/app ..."
+cp -r "${PUBLISH_DIR}"/* "${APP_PAYLOAD}/"
 
 # Generate Zeus.icns from docs/pics/zeus.png so Finder, Dock, and Cmd-Tab
 # show the Zeus artwork. iconutil + sips ship with Xcode CLT (present on
@@ -150,7 +173,7 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" << EOF
 EOF
 
 # Make the binary executable (cp -r usually preserves mode but be defensive)
-chmod +x "${APP_BUNDLE}/Contents/MacOS/OpenhpsdrZeus"
+chmod +x "${APP_PAYLOAD}/OpenhpsdrZeus"
 
 # Launcher (Contents/MacOS/launch.sh): pins DYLD_LIBRARY_PATH so the
 # bundled libwdsp.dylib wins over any older copy in /usr/local/lib or
@@ -160,15 +183,25 @@ chmod +x "${APP_BUNDLE}/Contents/MacOS/OpenhpsdrZeus"
 # tear down the right process.
 cat > "${APP_BUNDLE}/Contents/MacOS/launch.sh" << 'EOF'
 #!/bin/bash
-cd "$(dirname "$0")"
+# The whole .NET payload lives in Contents/Resources/app/ (so the bundle can
+# be codesigned without --deep). cd there before exec so the apphost runs
+# with its DLLs/data as the working dir — AppContext.BaseDirectory and the
+# WDSP bare-relative fopen() of zetaHat.bin/calculus then resolve correctly.
+cd "$(dirname "$0")/../Resources/app"
 
 # Pin the bundled libwdsp.dylib. macOS dlopen does not search the
 # executable's directory by default, so without this line P/Invoke can
 # bind against a stale dylib that pre-dates symbols Zeus relies on (e.g.
 # SetRXAEMNRpost2*). Both arches are listed so the same launcher works on
-# arm64 and x64 builds; the loader silently skips a path that does not
-# exist.
+# arm64 and x64 builds; the loader silently skips a path that does not exist.
 export DYLD_LIBRARY_PATH="$(pwd)/runtimes/osx-arm64/native:$(pwd)/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
+
+# Belt-and-suspenders: pin the data dirs explicitly. They sit next to the
+# binary here (so the backend would find them anyway), but ZeusHost /
+# BandPlanStore honour these env vars and fall back to the binary dir when
+# unset, so this also covers any future relayout.
+export ZEUS_WEBROOT="$(pwd)/wwwroot"
+export ZEUS_BANDPLANS_DIR="$(pwd)/BandPlans"
 
 # Evict legacy app bundles left behind by older installers:
 #   /Applications/Zeus Desktop.app   — pre-unified standalone (com.ei6lf.zeus.desktop)
@@ -201,9 +234,12 @@ cat > "${APP_BUNDLE}/Contents/Resources/openhpsdr-zeus-server" << 'EOF'
 #!/bin/bash
 # Run OpenHPSDR Zeus in server mode (LAN-bound HTTP on :6060).
 # Usage: "/Applications/OpenHPSDR Zeus.app/Contents/Resources/openhpsdr-zeus-server"
-APP_MACOS_DIR="$(cd "$(dirname "$0")/../MacOS" && pwd)"
-cd "${APP_MACOS_DIR}"
-export DYLD_LIBRARY_PATH="${APP_MACOS_DIR}/runtimes/osx-arm64/native:${APP_MACOS_DIR}/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
+# The .NET payload lives in the sibling app/ directory (Contents/Resources/app).
+APP_DIR="$(cd "$(dirname "$0")/app" && pwd)"
+cd "${APP_DIR}"
+export DYLD_LIBRARY_PATH="${APP_DIR}/runtimes/osx-arm64/native:${APP_DIR}/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
+export ZEUS_WEBROOT="${APP_DIR}/wwwroot"
+export ZEUS_BANDPLANS_DIR="${APP_DIR}/BandPlans"
 exec ./OpenhpsdrZeus "$@"
 EOF
 chmod +x "${APP_BUNDLE}/Contents/Resources/openhpsdr-zeus-server"
@@ -291,9 +327,11 @@ if [ ! -d "${ZEUS_APP}" ]; then
     osascript -e 'display dialog "OpenHPSDR Zeus.app must be installed in /Applications first. Drag OpenHPSDR Zeus.app from the DMG to your Applications folder, then try OpenHPSDR Zeus Server again." with title "OpenHPSDR Zeus Server" with icon caution buttons {"OK"} default button "OK"' >/dev/null 2>&1
     exit 1
 fi
-APP_MACOS_DIR="${ZEUS_APP}/Contents/MacOS"
-cd "${APP_MACOS_DIR}"
-export DYLD_LIBRARY_PATH="${APP_MACOS_DIR}/runtimes/osx-arm64/native:${APP_MACOS_DIR}/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
+APP_DIR="${ZEUS_APP}/Contents/Resources/app"
+cd "${APP_DIR}"
+export DYLD_LIBRARY_PATH="${APP_DIR}/runtimes/osx-arm64/native:${APP_DIR}/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
+export ZEUS_WEBROOT="${APP_DIR}/wwwroot"
+export ZEUS_BANDPLANS_DIR="${APP_DIR}/BandPlans"
 exec ./OpenhpsdrZeus --server
 EOF
 chmod +x "${SERVER_APP_BUNDLE}/Contents/MacOS/launch.sh"
@@ -316,27 +354,22 @@ echo "Server wrapper bundle created at ${SERVER_APP_BUNDLE}"
 #   ENTITLEMENTS_PATH   Path to the hardened-runtime entitlements plist.
 #                       Defaults to installers/zeus-macos.entitlements.
 #
-# Why --deep (Apple-deprecated but unavoidable here):
+# Inside-out signing (no --deep):
 #
-# Apple's bundle convention says Contents/MacOS/ holds only code (Mach-O)
-# and Contents/Resources/ holds everything else. A .NET self-contained
-# publish dumps the entire payload alongside the main binary in
-# Contents/MacOS/: ~300 managed .dlls, runtime configs, web assets
-# (wwwroot/), BandPlans/*.json, etc. Without --deep, codesign refuses to
-# sign the outer bundle with "code object is not signed at all / In
-# subcomponent: <first-non-MachO-it-finds>" — it treats every file under
-# MacOS/ as a sub-bundle that must be pre-signed.
-#
-# --deep walks the bundle once and signs every nested Mach-O with the
-# outer flags (--options runtime + --entitlements + --timestamp). The
-# result is bit-equivalent to a per-item signing pass:
-#   - every dylib (libwdsp, libminiaudio, Photino.Native, .NET runtime)
-#     gets hardened runtime + timestamp + Team ID signature
-#   - the main exec (OpenhpsdrZeus) gets the same plus entitlements
-#   - non-MachO files (JSON, dll, png) are hashed into CodeResources
-#     as data and stop tripping the "subcomponent unsigned" check
-# Notarization accepts --deep-signed .NET bundles (every Mach-O has the
-# right flags; the deprecation warning is about ergonomics, not validity).
+# Apple deprecated --deep and Apple's own guidance is to sign nested code
+# from the inside out. The codesign-friendly relayout above already removed
+# the subdirectories that used to force --deep (wwwroot/, BandPlans/,
+# runtimes/), so Contents/MacOS/ now holds only flat Mach-O (the apphost,
+# createdump, and the flattened .dylibs) plus flat resource files (~300
+# managed .dll, .pdb, .json, .png, zetaHat.bin, calculus). codesign seals
+# the flat resources automatically; we only have to sign the Mach-O, then
+# the bundle, in dependency order:
+#   1. every nested .dylib + createdump  → hardened runtime + timestamp
+#   2. the apphost (OpenhpsdrZeus)        → + entitlements (the process that
+#                                            hosts the mic-using webview)
+#   3. the bundle itself                  → + entitlements, seals resources
+# Signing inner-first matters: re-signing the outer bundle after a nested
+# Mach-O changes would invalidate the outer seal, so the leaves go first.
 #
 # --options runtime  enables hardened runtime (required for notarization).
 # --timestamp        embeds a trusted Apple timestamp so the signature
@@ -364,20 +397,47 @@ if [ -n "${CODESIGN_IDENTITY:-}" ]; then
         KEYCHAIN_FLAG=(--keychain "${KEYCHAIN_PATH}")
     fi
 
+    sign_one() {
+        # Sign a single Mach-O (or the bundle). Extra flags (e.g.
+        # --entitlements) are passed after the target via "$@".
+        local target="$1"; shift
+        codesign --force --options runtime --timestamp \
+            "${KEYCHAIN_FLAG[@]}" \
+            --sign "${CODESIGN_IDENTITY}" \
+            "$@" \
+            "${target}"
+    }
+
     sign_bundle() {
         local bundle="$1"
         echo "  → ${bundle}"
 
-        codesign --force --deep --options runtime --timestamp \
-            "${KEYCHAIN_FLAG[@]}" \
-            --entitlements "${ENTITLEMENTS_PATH}" \
-            --sign "${CODESIGN_IDENTITY}" \
-            "${bundle}"
+        # 1. Nested Mach-O leaves first — the payload lives under
+        #    Contents/Resources/app/ (dylibs in runtimes/<rid>/native/ plus
+        #    createdump). -print0/read -d handles paths with spaces. The
+        #    wrapper Server.app has no payload, so the find may match nothing.
+        while IFS= read -r -d '' macho; do
+            echo "      sign $(basename "${macho}")"
+            sign_one "${macho}"
+        done < <(find "${bundle}/Contents/Resources/app" \
+                    \( -name "*.dylib" -o -name "createdump" \) \
+                    -type f -print0 2>/dev/null)
 
-        # Verify the bundle and every nested Mach-O. --strict catches
-        # bad signature flags / missing hardened runtime / unsigned
-        # subcomponents that codesign --sign wouldn't have noticed.
-        codesign --verify --deep --strict "${bundle}"
+        # 2. The apphost carries the entitlements (hardened runtime + mic).
+        #    The wrapper Server.app has no apphost of its own — it exec's the
+        #    main app's binary — so only sign it when present.
+        if [ -f "${bundle}/Contents/Resources/app/OpenhpsdrZeus" ]; then
+            echo "      sign OpenhpsdrZeus (entitlements)"
+            sign_one "${bundle}/Contents/Resources/app/OpenhpsdrZeus" \
+                --entitlements "${ENTITLEMENTS_PATH}"
+        fi
+
+        # 3. The bundle last, sealing the resources. --deep --strict on
+        #    *verify* (not sign) walks every nested Mach-O to confirm each got
+        #    hardened runtime + a valid signature.
+        echo "      sign bundle"
+        sign_one "${bundle}" --entitlements "${ENTITLEMENTS_PATH}"
+        codesign --verify --deep --strict --verbose=2 "${bundle}"
     }
 
     sign_bundle "${APP_BUNDLE}"
@@ -452,7 +512,7 @@ HEADLESS / CLI USE
   If you're running Zeus on a headless Mac (no display, e.g. a mac mini
   in a closet), use Terminal:
 
-      "/Applications/OpenHPSDR Zeus.app/Contents/MacOS/OpenhpsdrZeus"
+      "/Applications/OpenHPSDR Zeus.app/Contents/Resources/app/OpenhpsdrZeus"
 
   This is the no-window service mode. Identical to OpenHPSDR Zeus
   Server's backend but without the status window. Closing the Terminal
@@ -516,7 +576,7 @@ HEADLESS / CLI USE
   If you're running Zeus on a headless Mac (no display, e.g. a mac mini
   in a closet), use Terminal:
 
-      "/Applications/OpenHPSDR Zeus.app/Contents/MacOS/OpenhpsdrZeus"
+      "/Applications/OpenHPSDR Zeus.app/Contents/Resources/app/OpenhpsdrZeus"
 
   This is the no-window service mode. Identical to OpenHPSDR Zeus
   Server's backend but without the status window. Closing the Terminal

@@ -41,17 +41,25 @@ public static class ZeusHost
     /// </summary>
     public static WebApplication Build(string[] args, ZeusHostOptions options)
     {
-        // Pin ContentRoot to the binary directory so UseStaticFiles() finds
-        // wwwroot/ next to the executable regardless of how we were launched
+        // Pin ContentRoot to the binary directory so config + UseStaticFiles()
+        // resolve relative to the executable regardless of how we were launched
         // ('dotnet run --project X' sets cwd=X/source-dir, an installed .app
-        // launches with cwd=/, etc.). The wwwroot is copied next to the
-        // binary via Zeus.Server.Hosting.csproj's <Content Include="wwwroot/**">
-        // — same place appsettings.json and the WDSP zetaHat.bin/calculus
-        // model files land.
+        // launches with cwd=/, etc.). appsettings.json and the WDSP
+        // zetaHat.bin/calculus model files sit here next to the binary.
+        //
+        // WebRoot (wwwroot/) is normally ContentRoot/wwwroot, but the macOS
+        // installer moves wwwroot/ out to Contents/Resources/ so the .app
+        // bundle can be codesigned without --deep (data subdirectories under
+        // Contents/MacOS/ break inside-out signing — see installers/
+        // create-macos-app.sh and issue gh-389). When the launcher exports
+        // ZEUS_WEBROOT we honour it; otherwise we fall back to the default so
+        // dev runs and Linux/Windows packages are unaffected.
+        var webRoot = Environment.GetEnvironmentVariable("ZEUS_WEBROOT");
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             Args = args,
             ContentRootPath = AppContext.BaseDirectory,
+            WebRootPath = string.IsNullOrWhiteSpace(webRoot) ? null : webRoot,
         });
 
         // Emit enums as strings on the wire ("USB", not 1) per doc 04 §3. The
