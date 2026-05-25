@@ -1111,6 +1111,11 @@ public class DspPipelineService : BackgroundService,
         // audio in so the dmp=0 RXA up doesn't pop through to the browser.
         if (on) _rxFadeOutPending = true;
         else _rxFadeInPending = true;
+        // Arm the one-shot TX→RX resume-latency probe on the un-key (falling)
+        // edge. t0 = now; the IQ / ReadAudio / Publish / audible-output stages
+        // fill t1–t4 and the probe logs a single rx.resume.probe line once
+        // audible output is reached. See AudioResumeProbe + issue #468.
+        if (!on) AudioResumeProbe.ArmUnkey(_log);
         _p2Client?.SetMox(on);
         // Falling edge: pick up any PS knob changes that OnRadioStateChanged
         // deferred while we were keyed (HwPeak / Ptol / Advanced / Control).
@@ -1127,6 +1132,9 @@ public class DspPipelineService : BackgroundService,
 
     private void OnRadioTunActiveChanged(bool on)
     {
+        // TUN un-key is also a TX→RX resume — arm the probe on its falling
+        // edge too so a tune-cycle measures the same way a MOX cycle does.
+        if (!on) AudioResumeProbe.ArmUnkey(_log);
         _p2Client?.SetTune(on);
     }
 
@@ -1284,6 +1292,7 @@ public class DspPipelineService : BackgroundService,
             int channel = Volatile.Read(ref _channelId);
             if (engine is not null)
             {
+                AudioResumeProbe.MarkFirstIq();   // t1 — first RX IQ after un-key
                 engine.FeedIq(channel, frame.InterleavedSamples.Span);
                 RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
             }
@@ -1327,6 +1336,7 @@ public class DspPipelineService : BackgroundService,
         int channel = Volatile.Read(ref _channelId);
         if (engine is not null)
         {
+            AudioResumeProbe.MarkFirstIq();   // t1 — first RX IQ after un-key
             engine.FeedIq(channel, frame.InterleavedSamples.Span);
             RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
         }
@@ -1626,6 +1636,7 @@ public class DspPipelineService : BackgroundService,
         int audioSampleCount = engine.ReadAudio(channel, audioBuf);
         if (audioSampleCount > 0)
         {
+            AudioResumeProbe.MarkFirstReadAudio();   // t2 — first WDSP audio block after un-key
             // MOX-edge fade envelope. Ramps the first ~5 ms of this block
             // either down (rising edge: last block before TX silence) or up
             // (falling edge: first block of RX resume). Each flag is a
@@ -1684,6 +1695,7 @@ public class DspPipelineService : BackgroundService,
                     SampleRateHz: (uint)AudioOutputRateHz,
                     SampleCount: (ushort)audioSampleCount,
                     Samples: new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
+                AudioResumeProbe.MarkFirstPublish();   // t3 — first RX AudioFrame published after un-key
                 PublishAudio(in audioFrame);
                 RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
             }

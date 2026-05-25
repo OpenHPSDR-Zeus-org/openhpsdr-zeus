@@ -46,6 +46,22 @@ internal sealed class MiniAudioOutput : IDisposable
     /// Typically 2 (stereo) on consumer hardware. Valid after construction.</summary>
     public uint Channels { get; private set; }
 
+    /// <summary>The miniaudio backend that actually opened the device
+    /// ("WASAPI" / "DirectSound" / "WinMM" / "Core Audio" / ...). On Windows
+    /// the auto-selection (ma_device_init(NULL,...)) can fall back
+    /// WASAPI→DirectSound→WinMM, and the WASAPI low-latency fix only applies
+    /// when this reads "WASAPI". Valid after construction.</summary>
+    public string BackendName { get; private set; } = "unknown";
+
+    /// <summary>Negotiated internal period size in frames. Valid after
+    /// construction.</summary>
+    public uint BufferFrames { get; private set; }
+
+    /// <summary>Negotiated internal period count. <c>BufferFrames * Periods /
+    /// SampleRate</c> = device buffer latency in seconds. Valid after
+    /// construction.</summary>
+    public uint Periods { get; private set; }
+
     /// <summary>True once <see cref="Start"/> has succeeded.</summary>
     public bool IsRunning => _started;
 
@@ -100,6 +116,9 @@ internal sealed class MiniAudioOutput : IDisposable
 
         SampleRate = MiniAudioInterop.OutputSampleRate(_handle);
         Channels = MiniAudioInterop.OutputChannels(_handle);
+        BackendName = MiniAudioInterop.OutputBackendName(_handle);
+        BufferFrames = MiniAudioInterop.OutputBufferFrames(_handle);
+        Periods = MiniAudioInterop.OutputPeriods(_handle);
     }
 
     /// <summary>Start the device. Idempotent.</summary>

@@ -143,6 +143,26 @@ internal static partial class MiniAudioInterop
     [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
     internal static partial uint OutputChannels(IntPtr handle);
 
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_output_backend_name")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial IntPtr OutputBackendNamePtr(IntPtr handle);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_output_buffer_frames")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial uint OutputBufferFrames(IntPtr handle);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_output_periods")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial uint OutputPeriods(IntPtr handle);
+
+    /// <summary>Marshal the playback device's active backend name
+    /// ("WASAPI" / "DirectSound" / "Core Audio" / ...) for logging.</summary>
+    internal static string OutputBackendName(IntPtr handle)
+    {
+        IntPtr p = OutputBackendNamePtr(handle);
+        return p == IntPtr.Zero ? "unknown" : (Marshal.PtrToStringAnsi(p) ?? "unknown");
+    }
+
     [LibraryImport(LibraryName, EntryPoint = "zeus_ma_output_destroy")]
     [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
     internal static partial void OutputDestroy(IntPtr handle);
@@ -175,6 +195,25 @@ internal static partial class MiniAudioInterop
     [LibraryImport(LibraryName, EntryPoint = "zeus_ma_input_channels")]
     [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
     internal static partial uint InputChannels(IntPtr handle);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_input_backend_name")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial IntPtr InputBackendNamePtr(IntPtr handle);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_input_buffer_frames")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial uint InputBufferFrames(IntPtr handle);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_input_periods")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial uint InputPeriods(IntPtr handle);
+
+    /// <summary>Marshal the capture device's active backend name for logging.</summary>
+    internal static string InputBackendName(IntPtr handle)
+    {
+        IntPtr p = InputBackendNamePtr(handle);
+        return p == IntPtr.Zero ? "unknown" : (Marshal.PtrToStringAnsi(p) ?? "unknown");
+    }
 
     [LibraryImport(LibraryName, EntryPoint = "zeus_ma_input_destroy")]
     [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]

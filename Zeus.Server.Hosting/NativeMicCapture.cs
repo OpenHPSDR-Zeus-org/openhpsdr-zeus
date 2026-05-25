@@ -104,9 +104,17 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
                 periodFrames: 480,
                 periods: 2);
             _input.Start();
+            // Backend + buffer diagnostics (#468) — see NativeAudioSink for the
+            // rationale. The capture device is opened with the same WASAPI
+            // low-latency fix, so the same backend/buffer questions apply.
+            double bufMs = _input.SampleRate > 0
+                ? _input.BufferFrames * _input.Periods * 1000.0 / _input.SampleRate
+                : 0.0;
             _log.LogInformation(
-                "audio.native.tx mic open rate={Rate}Hz channels={Channels}",
-                _input.SampleRate, _input.Channels);
+                "audio.native.tx mic open backend={Backend} rate={Rate}Hz channels={Channels} " +
+                "bufFrames={BufFrames} periods={Periods} bufferMs={BufferMs:F1}",
+                _input.BackendName, _input.SampleRate, _input.Channels,
+                _input.BufferFrames, _input.Periods, bufMs);
         }
         catch (Exception ex)
         {

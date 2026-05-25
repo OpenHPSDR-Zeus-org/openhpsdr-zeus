@@ -65,6 +65,17 @@ ZEUS_MA_EXPORT int32_t  zeus_ma_output_start(void* handle);
 ZEUS_MA_EXPORT int32_t  zeus_ma_output_stop(void* handle);
 ZEUS_MA_EXPORT uint32_t zeus_ma_output_sample_rate(void* handle);
 ZEUS_MA_EXPORT uint32_t zeus_ma_output_channels(void* handle);
+
+/* Diagnostics — valid after a successful *_create(). The backend name is a
+ * static string ("WASAPI" / "DirectSound" / "WinMM" / "Core Audio" / ...) so
+ * the C# log can confirm which backend won the ma_device_init(NULL,...) auto
+ * selection. buffer_frames * periods / sample_rate = device buffer latency in
+ * seconds — a deep ~1.7 s WASAPI shared-mode buffer vs a ~20 ms low-latency
+ * one is the whole #468 question. */
+ZEUS_MA_EXPORT const char* zeus_ma_output_backend_name(void* handle);
+ZEUS_MA_EXPORT uint32_t    zeus_ma_output_buffer_frames(void* handle);
+ZEUS_MA_EXPORT uint32_t    zeus_ma_output_periods(void* handle);
+
 ZEUS_MA_EXPORT void     zeus_ma_output_destroy(void* handle);
 
 /* ---------------- Capture (input device) ------------------------------- */
@@ -82,6 +93,12 @@ ZEUS_MA_EXPORT int32_t  zeus_ma_input_start(void* handle);
 ZEUS_MA_EXPORT int32_t  zeus_ma_input_stop(void* handle);
 ZEUS_MA_EXPORT uint32_t zeus_ma_input_sample_rate(void* handle);
 ZEUS_MA_EXPORT uint32_t zeus_ma_input_channels(void* handle);
+
+/* Diagnostics — see the playback-side getters above for semantics. */
+ZEUS_MA_EXPORT const char* zeus_ma_input_backend_name(void* handle);
+ZEUS_MA_EXPORT uint32_t    zeus_ma_input_buffer_frames(void* handle);
+ZEUS_MA_EXPORT uint32_t    zeus_ma_input_periods(void* handle);
+
 ZEUS_MA_EXPORT void     zeus_ma_input_destroy(void* handle);
 
 /* ---------------- Library probe --------------------------------------- */

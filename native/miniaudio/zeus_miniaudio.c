@@ -162,6 +162,17 @@ ZEUS_MA_EXPORT void* zeus_ma_output_create(
      * already provides. wasapi.usage is a no-op on macOS / Linux backends. */
     cfg.performanceProfile = ma_performance_profile_low_latency;
     cfg.wasapi.usage       = ma_wasapi_usage_pro_audio;
+    /* WASAPI low-latency fix: disable AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM.
+     * On an RDP "Remote Audio" endpoint (and many real cards) the device's
+     * native shared-mode rate is not 48 kHz. With AUTOCONVERTPCM on, WASAPI
+     * silently rejects the IAudioClient3 low-latency path on a sample-rate
+     * mismatch and falls back to the ~1–2 s shared-mode default buffer —
+     * which is exactly the ~1.7 s TX→RX audio-resume delay reported in #468.
+     * Turning AUTOCONVERTPCM off lets miniaudio's own linear resampler do the
+     * 48k↔device-rate conversion (already configured above) while IAudioClient3
+     * keeps the buffer at ~20 ms. WASAPI-only field; a no-op on the
+     * CoreAudio / ALSA / PulseAudio / DirectSound / WinMM backends. */
+    cfg.wasapi.noAutoConvertSRC = MA_TRUE;
 
     if (ma_device_init(NULL, &cfg, &h->device) != MA_SUCCESS) {
         free(h);
@@ -197,6 +208,35 @@ ZEUS_MA_EXPORT uint32_t zeus_ma_output_channels(void* handle)
 {
     if (handle == NULL) return 0;
     return ((zeus_ma_output*)handle)->negotiated_channels;
+}
+
+ZEUS_MA_EXPORT const char* zeus_ma_output_backend_name(void* handle)
+{
+    if (handle == NULL) return "none";
+    zeus_ma_output* h = (zeus_ma_output*)handle;
+    if (h->device.pContext == NULL) return "none";
+    /* Returns a static, NUL-terminated string ("WASAPI", "DirectSound",
+     * "WinMM", "Core Audio", "ALSA", "PulseAudio", "Null", ...). Confirms
+     * which backend miniaudio actually selected — the WASAPI low-latency fix
+     * only applies when this reads "WASAPI". */
+    return ma_get_backend_name(h->device.pContext->backend);
+}
+
+ZEUS_MA_EXPORT uint32_t zeus_ma_output_buffer_frames(void* handle)
+{
+    if (handle == NULL) return 0;
+    /* The negotiated internal period size in frames. Multiplied by the rate
+     * this is the per-period latency; a ~20 ms low-latency period at 48 kHz
+     * is ~960 frames, a deep ~1.7 s shared-mode buffer is tens of thousands. */
+    return ((zeus_ma_output*)handle)->device.playback.internalPeriodSizeInFrames;
+}
+
+ZEUS_MA_EXPORT uint32_t zeus_ma_output_periods(void* handle)
+{
+    if (handle == NULL) return 0;
+    /* Number of internal periods. buffer_frames * periods / rate = total
+     * device buffer latency in seconds. */
+    return ((zeus_ma_output*)handle)->device.playback.internalPeriods;
 }
 
 ZEUS_MA_EXPORT void zeus_ma_output_destroy(void* handle)
@@ -246,6 +286,10 @@ ZEUS_MA_EXPORT void* zeus_ma_input_create(
      * playback thread. */
     cfg.performanceProfile = ma_performance_profile_low_latency;
     cfg.wasapi.usage       = ma_wasapi_usage_pro_audio;
+    /* WASAPI low-latency fix — same rationale as the playback side. The
+     * capture device on a non-48k endpoint would otherwise also fall back to
+     * the deep shared-mode buffer. WASAPI-only; no-op elsewhere. */
+    cfg.wasapi.noAutoConvertSRC = MA_TRUE;
 
     if (ma_device_init(NULL, &cfg, &h->device) != MA_SUCCESS) {
         free(h);
@@ -281,6 +325,26 @@ ZEUS_MA_EXPORT uint32_t zeus_ma_input_channels(void* handle)
 {
     if (handle == NULL) return 0;
     return ((zeus_ma_input*)handle)->negotiated_channels;
+}
+
+ZEUS_MA_EXPORT const char* zeus_ma_input_backend_name(void* handle)
+{
+    if (handle == NULL) return "none";
+    zeus_ma_input* h = (zeus_ma_input*)handle;
+    if (h->device.pContext == NULL) return "none";
+    return ma_get_backend_name(h->device.pContext->backend);
+}
+
+ZEUS_MA_EXPORT uint32_t zeus_ma_input_buffer_frames(void* handle)
+{
+    if (handle == NULL) return 0;
+    return ((zeus_ma_input*)handle)->device.capture.internalPeriodSizeInFrames;
+}
+
+ZEUS_MA_EXPORT uint32_t zeus_ma_input_periods(void* handle)
+{
+    if (handle == NULL) return 0;
+    return ((zeus_ma_input*)handle)->device.capture.internalPeriods;
 }
 
 ZEUS_MA_EXPORT void zeus_ma_input_destroy(void* handle)
