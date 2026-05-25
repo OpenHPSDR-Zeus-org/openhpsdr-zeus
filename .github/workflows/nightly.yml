@@ -37,5 +37,12 @@ jobs:
     with:
       mode: nightly
       ref: develop
+    # Reusable-workflow calls do NOT pass repo secrets unless the caller
+    # inherits them. release.yml's macOS signing step (gated on
+    # is-nightly=='true') reads secrets.MACOS_CERTIFICATE / _PWD /
+    # KEYCHAIN_PASSWORD and the notarization keys; without this they arrive
+    # empty and `security import` dies on the empty .p12 ("Unable to decode
+    # the provided data"). See zeus-22l.
+    secrets: inherit
     permissions:
       contents: write
