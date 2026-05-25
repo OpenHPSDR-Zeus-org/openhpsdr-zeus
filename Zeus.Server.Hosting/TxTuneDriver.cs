@@ -42,6 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using System.Diagnostics;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Zeus.Dsp;
@@ -69,10 +70,17 @@ namespace Zeus.Server;
 internal sealed class TxTuneDriver : BackgroundService
 {
     private static readonly TimeSpan PollIdle = TimeSpan.FromMilliseconds(100);
-    // Tick is derived from the engine's mic block size per loop iteration
-    // (block_samples / 48 kHz, shaved slightly so we run a little faster
-    // than WDSP's block clock). Fixed 20 ms fell behind on P2's 512-sample
-    // block (10.67 ms) and starved the G2 DUC, producing close-in spurs.
+    // Wake slice while transmitting. Windows rounds Task.Delay up to the
+    // ~15.6 ms system-timer quantum, but that's fine — the catch-up loop in
+    // ExecuteAsync emits however many blocks are due per wake, so the AVERAGE
+    // call rate is exact regardless of how coarse the wake is.
+    private static readonly TimeSpan TuneTickSlice = TimeSpan.FromMilliseconds(4);
+    // Cap blocks emitted in one wake so a stall (GC, scheduler) can't dump a
+    // multi-second IQ burst at the radio in a single pass.
+    private const int MaxBlocksPerWake = 8;
+    // Resync the cadence clock if we fall this far behind real-time, rather
+    // than trying to claw back a huge backlog.
+    private const double MaxBehindSec = 0.25;
     private const int MicRateHz = 48_000;
 
     private readonly TxService _tx;
@@ -92,12 +100,16 @@ internal sealed class TxTuneDriver : BackgroundService
     {
         float[]? micScratch = null;
         float[]? iqScratch = null;
+        long blockTicks = 0;     // Stopwatch ticks per mic block (one ProcessTxBlock call)
+        long nextBlockAt = 0;    // Stopwatch timestamp the next block is due
+        bool clockArmed = false; // re-armed on each key-down so the cadence resets
         while (!ct.IsCancellationRequested)
         {
             try
             {
                 if (!_tx.IsTunOn && !_tx.IsTwoToneOn)
                 {
+                    clockArmed = false;
                     await Task.Delay(PollIdle, ct).ConfigureAwait(false);
                     continue;
                 }
@@ -108,6 +120,7 @@ internal sealed class TxTuneDriver : BackgroundService
                 if (engine is null || micBlock <= 0 || iqOut <= 0)
                 {
                     // No TXA yet — retry on the slow cadence.
+                    clockArmed = false;
                     await Task.Delay(PollIdle, ct).ConfigureAwait(false);
                     continue;
                 }
@@ -117,36 +130,66 @@ internal sealed class TxTuneDriver : BackgroundService
                 if (iqScratch is null || iqScratch.Length < 2 * iqOut)
                     iqScratch = new float[2 * iqOut];
 
-                // Silent mic — the post-gen tone gets inserted after the mic
-                // processing stage by WDSP, so fexchange2 still produces the
-                // carrier even with zero mic input.
-                Array.Clear(micScratch, 0, micBlock);
-                int produced = engine.ProcessTxBlock(
-                    new ReadOnlySpan<float>(micScratch, 0, micBlock),
-                    new Span<float>(iqScratch, 0, 2 * iqOut));
-                if (produced > 0)
+                long now = Stopwatch.GetTimestamp();
+                if (!clockArmed)
                 {
-                    var iqSpan = new ReadOnlySpan<float>(iqScratch, 0, 2 * produced);
-                    // P1 path: ring feeds the EP2 packer in Protocol1Client.
-                    _ring.Write(iqSpan);
-                    // P2 path: forward the same block directly to the active
-                    // Protocol2Client's 1029-port DUC sender. No-op when P2
-                    // isn't the active backend, so both protocols coexist
-                    // without a conditional at this seam.
-                    _pipeline.ForwardTxIqToP2(iqSpan);
+                    // One mic block = micBlock samples @ 48 kHz; calling
+                    // ProcessTxBlock at exactly that real-time cadence
+                    // (512 @ 48k = 93.75 Hz) feeds the radio's DUC at 192 kHz
+                    // (800 pkts/s). The old code slept (micBlock*950)/48000 ≈
+                    // 10 ms per single block, but Windows' Task.Delay can't
+                    // fire below the ~15.6 ms timer quantum, so the real cadence
+                    // fell to ~33-44 Hz → ~half-rate feed → starved DUC FIFO →
+                    // the radio held T/R ~2 s after un-key. Drive off Stopwatch
+                    // with fixed-increment advance + per-wake catch-up so the
+                    // AVERAGE rate is exact no matter how coarse the wake is.
+                    blockTicks = (long)(Stopwatch.Frequency * (double)micBlock / MicRateHz);
+                    nextBlockAt = now;
+                    clockArmed = true;
                 }
 
-                // Tick at ~95 % of the mic-block duration so WDSP is nearly
-                // always ready for the next fexchange2 call (the 5 % margin
-                // keeps us ahead of the block clock without blowing a CPU
-                // spin on early wakeups).
-                int tickMs = Math.Max(1, (micBlock * 950) / (MicRateHz));
-                await Task.Delay(TimeSpan.FromMilliseconds(tickMs), ct).ConfigureAwait(false);
+                // Fell badly behind (GC / scheduler stall): resync instead of
+                // clawing back a huge backlog in one burst.
+                long maxBehindTicks = (long)(Stopwatch.Frequency * MaxBehindSec);
+                if (now - nextBlockAt > maxBehindTicks)
+                    nextBlockAt = now;
+
+                // Emit every block due by now, capped per wake. Each call to
+                // a bfo:1 TXA returns a full output block, so the feed rate is
+                // purely call rate — emitting the backlog here holds 192 kHz
+                // even though we only wake every ~15.6 ms.
+                int emitted = 0;
+                while (now >= nextBlockAt && emitted < MaxBlocksPerWake)
+                {
+                    // Silent mic — the post-gen tone gets inserted after the mic
+                    // processing stage by WDSP, so fexchange2 still produces the
+                    // carrier even with zero mic input.
+                    Array.Clear(micScratch, 0, micBlock);
+                    int produced = engine.ProcessTxBlock(
+                        new ReadOnlySpan<float>(micScratch, 0, micBlock),
+                        new Span<float>(iqScratch, 0, 2 * iqOut));
+                    if (produced > 0)
+                    {
+                        var iqSpan = new ReadOnlySpan<float>(iqScratch, 0, 2 * produced);
+                        // P1 path: ring feeds the EP2 packer in Protocol1Client.
+                        _ring.Write(iqSpan);
+                        // P2 path: forward the same block directly to the active
+                        // Protocol2Client's 1029-port DUC sender. No-op when P2
+                        // isn't the active backend, so both protocols coexist
+                        // without a conditional at this seam.
+                        _pipeline.ForwardTxIqToP2(iqSpan);
+                    }
+                    nextBlockAt += blockTicks; // fixed-increment advance (no drift)
+                    emitted++;
+                }
+
+                await Task.Delay(TuneTickSlice, ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) { return; }
             catch (Exception ex)
             {
                 _log.LogWarning(ex, "tx.tune driver tick failed");
+                clockArmed = false;
                 try { await Task.Delay(PollIdle, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
             }
