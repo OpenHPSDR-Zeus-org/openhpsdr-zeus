@@ -10,6 +10,14 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.8.4] — 2026-05-25
+
+> **🪟 Windows hotfix.** A single targeted fix for the long-standing ~2-second transmit→receive delay that Windows operators have reported across recent versions — the radio's T/R relay hanging for ~2 seconds after un-keying (MOX or TUNE), and voice transmit sounding slow/robotic. This release is **v0.8.3 plus only this one fix** — no other changes. macOS and Linux were never affected and are unchanged.
+
+### Fixed
+
+- **Windows TX→RX / MOX / relay delay** ([#468](https://github.com/Kb2uka/openhpsdr-zeus/issues/468), [#336](https://github.com/Kb2uka/openhpsdr-zeus/issues/336), [#444](https://github.com/Kb2uka/openhpsdr-zeus/issues/444), [#518](https://github.com/Kb2uka/openhpsdr-zeus/issues/518), [#539](https://github.com/Kb2uka/openhpsdr-zeus/pull/539)). On Windows, the system timer runs at a coarse ~15.6 ms resolution, which throttled Zeus's transmit-data feed to the radio to roughly half the required rate and in uneven bursts. That starved the radio's transmit buffer, so on un-key the radio held its T/R relay for ~2 seconds before returning to receive, and during transmit the half-rate feed made voice play back slow and robotic. macOS and Linux already run a ~1 ms timer, so the identical code paced correctly there — which is why this was Windows-only. Zeus now raises the Windows timer resolution to 1 ms at startup (`timeBeginPeriod(1)`), restoring the full-rate, smooth transmit feed. Verified on an ANAN-G2: the relay now releases instantly on both TUNE and MOX with correct power. Timing-only change — no drive, PA, calibration, or default is affected; it also benefits the Windows Protocol-1 / Hermes-Lite-2 transmit path. Diagnosed and fixed by Doug (KB2UKA).
+
 ## [0.8.3] — 2026-05-22
 
 > **🪟 Windows fixes release.** Every Windows operator who installed v0.8.0..v0.8.2 on a fresh Windows machine has been silently broken in one or both of these ways: a missing system runtime stopped Zeus's audio + DSP libraries from loading at all (blank panadapter, no audio), and a growing audio buffer caused the MOX-engage delay to climb to 2-3 seconds after a few minutes of operation. v0.8.3 ships three coordinated fixes that bring Windows responsiveness to parity with macOS and Linux. Mac and Linux operators get a few small bug fixes (PS banner direction, RX trace colour persistence) and the new Audio Suite master bypass; nothing in this release changes Mac or Linux audio behaviour. We're still actively optimising the Windows audio path — see the "What's still next" section below.
