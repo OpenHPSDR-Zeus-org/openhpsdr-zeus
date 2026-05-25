@@ -95,23 +95,25 @@ public class DiscoveryTests
     }
 
     [Theory]
-    [InlineData((byte)0x00, HpsdrBoardKind.Metis)]      // original HPSDR Mercury+Penelope+Metis
-    [InlineData((byte)0x01, HpsdrBoardKind.Hermes)]
-    [InlineData((byte)0x02, HpsdrBoardKind.HermesII)]    // ANAN-10E / 100B / Hermes-II firmware
-    [InlineData((byte)0x04, HpsdrBoardKind.Angelia)]    // ANAN-100D
-    [InlineData((byte)0x05, HpsdrBoardKind.Orion)]      // ANAN-200D
-    [InlineData((byte)0x06, HpsdrBoardKind.HermesLite2)]
-    [InlineData((byte)0x0A, HpsdrBoardKind.OrionMkII)]  // 0x0A alias family — see issue #218
-    [InlineData((byte)0x14, HpsdrBoardKind.HermesC10)]  // ANAN-G2E (N1GP firmware)
-    public void Maps_Every_Recognised_WireByte_To_BoardKind(byte boardId, HpsdrBoardKind expected)
+    [InlineData((byte)0x00, HpsdrBoardKind.Metis, (byte)31)]      // original HPSDR Mercury+Penelope+Metis
+    [InlineData((byte)0x01, HpsdrBoardKind.Hermes, (byte)31)]
+    [InlineData((byte)0x02, HpsdrBoardKind.HermesII, (byte)31)]    // ANAN-10E / 100B / Hermes-II firmware
+    [InlineData((byte)0x04, HpsdrBoardKind.Angelia, (byte)31)]    // ANAN-100D
+    [InlineData((byte)0x05, HpsdrBoardKind.Orion, (byte)31)]      // ANAN-200D
+    [InlineData((byte)0x06, HpsdrBoardKind.HermesLite2, (byte)73)] // version >= 40 -> genuine HL2
+    [InlineData((byte)0x0A, HpsdrBoardKind.OrionMkII, (byte)31)]  // 0x0A alias family — see issue #218
+    [InlineData((byte)0x14, HpsdrBoardKind.HermesC10, (byte)31)]  // ANAN-G2E (N1GP firmware)
+    public void Maps_Every_Recognised_WireByte_To_BoardKind(byte boardId, HpsdrBoardKind expected, byte codeVersion)
     {
         // Pin every wire byte that ramdor/Thetis (MW0LGE) recognises in
         // HPSDRHW (enums.cs:389-402) so a regression in MapBoard cannot
         // silently land. Cross-references docs/references/protocol-1/thetis-board-matrix.md.
+        // codeVersion is parameterised: 0x06 needs version >= 40 to stay classified as
+        // HermesLite2 after the issue #493 reclassification guard.
         var reply = BuildReply(new ReplyFields(
             Status: 0x02,
             Mac: new byte[] { 0x00, 0x11, 0x22, 0x33, 0x44, 0x55 },
-            CodeVersion: 31,
+            CodeVersion: codeVersion,
             BoardId: boardId,
             GatewareBuild: 0));
 
@@ -205,6 +207,29 @@ public class DiscoveryTests
             BoardId: 0x01));
 
         Assert.False(ReplyParser.TryParse(reply, FromIp, out _));
+    }
+
+
+    [Fact]
+    public void WireByte_0x06_BelowHl2CodeThreshold_ReclassifiesAsHermesII()
+    {
+        // Regression for issue #493: ANAN-10E with Hermes10E_v1.5.rbf firmware
+        // reports board byte 0x06 (same as Hermes Lite 2) but code version 15,
+        // which is well below the HL2 threshold (40). The parser must reclassify
+        // to HermesII so downstream drive-model / calibration dispatch selects the
+        // correct 8-bit full-byte profile instead of HL2's nibble/percentage model.
+        var reply = BuildReply(new ReplyFields(
+            Status: 0x02,
+            Mac: new byte[] { 0xAA, 0xBB, 0xCC, 0x00, 0x01, 0x02 },
+            CodeVersion: 15,       // Hermes10E_v1.5.rbf -> version 15
+            BoardId: 0x06,
+            GatewareBuild: 0));
+
+        Assert.True(ReplyParser.TryParse(reply, FromIp, out var radio));
+        Assert.Equal(HpsdrBoardKind.HermesII, radio.Board);
+        Assert.Equal((byte)0x06, radio.Details.RawBoardId);         // raw wire byte preserved
+        Assert.Equal("1.5", radio.FirmwareString);                  // version formatted as X.Y
+        Assert.Null(radio.Details.HermesLite2MinorVersion);          // no HL2-specific extras
     }
 
     [Fact]
