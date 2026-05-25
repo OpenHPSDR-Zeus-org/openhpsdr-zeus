@@ -151,11 +151,18 @@ public sealed class Protocol1Client : IProtocol1Client
     public event Action<TelemetryReading>? TelemetryReceived;
     public event Action<AdcOverloadStatus>? AdcOverloadObserved;
     public event Action<bool>? HardwarePttChanged;
+    /// <summary>Fires on the edge of the gateware's shaped CW keyer output
+    /// (C0[2] / cw_key_status), i.e. per dit/dah — distinct from
+    /// <see cref="HardwarePttChanged"/> (C0[0] / ptt_resp), which is held for
+    /// the whole keyed period. Drives the local sidetone. (zeus-cl2)</summary>
+    public event Action<bool>? CwKeyDownChanged;
 
     // 0/1; Volatile so the property read on any thread sees the latest value
     // without needing a lock.
     private int _hardwarePtt;
     public bool HardwarePtt => Volatile.Read(ref _hardwarePtt) != 0;
+    private int _cwKeyDown;
+    public bool CwKeyDown => Volatile.Read(ref _cwKeyDown) != 0;
 
     /// <summary>
     /// Update the cached hardware-PTT level from a freshly-parsed packet and
@@ -171,6 +178,21 @@ public sealed class Protocol1Client : IProtocol1Client
         Volatile.Write(ref _hardwarePtt, next);
         try { HardwarePttChanged?.Invoke(ptt); }
         catch (Exception ex) { _log.LogWarning(ex, "HardwarePttChanged handler threw"); }
+    }
+
+    /// <summary>
+    /// Update the cached CW key-down level (C0[2] / cw_key_status) and fire
+    /// <see cref="CwKeyDownChanged"/> on the edge. Single-writer (RX loop),
+    /// same contract as <see cref="UpdateHardwarePtt"/>. (zeus-cl2)
+    /// </summary>
+    private void UpdateCwKeyDown(bool down)
+    {
+        int prev = Volatile.Read(ref _cwKeyDown);
+        int next = down ? 1 : 0;
+        if (prev == next) return;
+        Volatile.Write(ref _cwKeyDown, next);
+        try { CwKeyDownChanged?.Invoke(down); }
+        catch (Exception ex) { _log.LogWarning(ex, "CwKeyDownChanged handler threw"); }
     }
 
     // ---- PureSignal feedback (HL2-only, P1) -------------------------
@@ -296,6 +318,7 @@ public sealed class Protocol1Client : IProtocol1Client
             // Mirror the standard-path hardware-PTT level update so an
             // external key released during PS+TX still propagates the edge.
             UpdateHardwarePtt(PacketParser.ExtractHardwarePtt(packet));
+            UpdateCwKeyDown(PacketParser.ExtractCwKeyDown(packet));
 
             // DDC0 → IqFrame channel — keeps panadapter / audio alive during PS+TX.
             // Use a fresh rented buffer the channel can own; the ddc0 rental is
@@ -793,6 +816,9 @@ public sealed class Protocol1Client : IProtocol1Client
                 // ExternalPttService can lift the host MOX when the operator
                 // keys the rear KEY jack or an external PTT line.
                 UpdateHardwarePtt(PacketParser.ExtractHardwarePtt(buffer.AsSpan(0, n)));
+                // CW key-down (C0[2], shaped keyer output) — drives the local
+                // sidetone per dit/dah, separate from the held PTT. (zeus-cl2)
+                UpdateCwKeyDown(PacketParser.ExtractCwKeyDown(buffer.AsSpan(0, n)));
 
                 var rateHz = (HpsdrSampleRate)Volatile.Read(ref _rate) switch
                 {

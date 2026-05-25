@@ -89,7 +89,11 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         _tx.TxActiveChanged -= OnTxActiveChanged;
         IProtocol1Client? client;
         lock (_sync) { client = _client; _client = null; _owned = false; }
-        if (client is not null) client.HardwarePttChanged -= OnHardwarePttChanged;
+        if (client is not null)
+        {
+            client.HardwarePttChanged -= OnHardwarePttChanged;
+            client.CwKeyDownChanged -= OnCwKeyDownChanged;
+        }
         _hangTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         return Task.CompletedTask;
     }
@@ -103,29 +107,37 @@ public sealed class ExternalPttService : IHostedService, IDisposable
     {
         lock (_sync) { _client = client; _owned = false; }
         client.HardwarePttChanged += OnHardwarePttChanged;
+        client.CwKeyDownChanged += OnCwKeyDownChanged;
     }
 
     private void OnDisconnected()
     {
         IProtocol1Client? client;
         lock (_sync) { client = _client; _client = null; _owned = false; }
-        if (client is not null) client.HardwarePttChanged -= OnHardwarePttChanged;
+        if (client is not null)
+        {
+            client.HardwarePttChanged -= OnHardwarePttChanged;
+            client.CwKeyDownChanged -= OnCwKeyDownChanged;
+        }
         _hangTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+    }
+
+    // Sidetone follows the gateware's shaped keyer output (C0[2] /
+    // cw_key_status), which toggles per dit/dah — NOT the held PTT (C0[0] /
+    // ptt_resp) that drives MOX below. Reading PTT here would leave the tone
+    // on for the whole keyed period including inter-element gaps + hang time.
+    // Gated to CW modes so an SSB mic-PTT press doesn't inject a 600 Hz tone.
+    // (zeus-cl2)
+    private void OnCwKeyDownChanged(bool down)
+    {
+        if (_sidetone is null) return;
+        if (!IsCwMode(_radio.Snapshot().Mode)) return;
+        if (down) _sidetone.Down();
+        else _sidetone.Up();
     }
 
     private void OnHardwarePttChanged(bool on)
     {
-        // Sidetone tracks the hardware key directly, NOT the hang-held MOX
-        // state — the operator wants to hear their actual keying rhythm
-        // (including the brief inter-character spaces that the hang timer
-        // smooths over for the radio's TX). Only fire in CW modes; an SSB
-        // operator pressing mic PTT would otherwise hear a 600 Hz monitor
-        // tone competing with their voice.
-        if (_sidetone is not null && IsCwMode(_radio.Snapshot().Mode))
-        {
-            if (on) _sidetone.Down();
-            else _sidetone.Up();
-        }
         if (on) HandleRising();
         else HandleFalling();
     }

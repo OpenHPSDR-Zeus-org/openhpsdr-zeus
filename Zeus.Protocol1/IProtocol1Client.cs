@@ -146,6 +146,18 @@ public interface IProtocol1Client : IDisposable
     bool HardwarePtt { get; }
 
     /// <summary>
+    /// Edge-triggered CW key-down from the gateware's shaped keyer output
+    /// (C0[2] / cw_key_status) — toggles per dit/dah, distinct from the
+    /// held <see cref="HardwarePttChanged"/> (C0[0] / ptt_resp). Drives the
+    /// local CW sidetone. Fires on the RX thread; handlers must not block.
+    /// (zeus-cl2)
+    /// </summary>
+    event Action<bool>? CwKeyDownChanged;
+
+    /// <summary>Latest CW key-down level (C0[2]). Volatile; any thread.</summary>
+    bool CwKeyDown { get; }
+
+    /// <summary>
     /// Select the radio's wire-level board family. Affects the extended
     /// attenuator byte layout (HL2 vs bare HPSDR) and the N2ADR filter-board
     /// OC pin encoding. Defaults to <see cref="HpsdrBoardKind.HermesLite2"/>.
