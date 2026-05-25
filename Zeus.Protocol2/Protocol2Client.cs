@@ -224,16 +224,22 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         new UnboundedChannelOptions { SingleReader = true });
     private Task? _txIqSenderTask;
 
-    // --- un-key TX-FIFO backlog diagnostic (p2.tx.unkey) ---
-    // The radio drains TX IQ at 192 kHz. If we send it faster than that during
-    // a transmit, the surplus piles up in the radio's hardware DAC FIFO and
-    // keeps the radio keyed (T/R relay engaged) until it empties after un-key.
-    // We can't read the radio's FIFO, but we can estimate it: sent-samples
-    // minus (elapsed × 192 kHz) = what the radio is still holding. Logged once
-    // per un-key so a long-tune → relay-hold shows up as a large backlog.
+    // --- un-key TX timeline diagnostic (p2.unkey.*) ---
+    // The radio's T/R relay hangs ~2s after un-key. The over-fill theory was
+    // disproven (we under-feed, not over-feed), so the question is whether Zeus
+    // keeps PRODUCING and SENDING TX-IQ to the radio after un-key (which would
+    // keep it keyed) or goes quiet immediately (pointing at the PTT/relay path
+    // or radio firmware). _unkeyTicks is stamped at un-key; the producer
+    // (SendTxIq) and sender (TxIqSenderLoop) each log, rate-limited, how long
+    // after un-key they're still active. A clean fix shows both going quiet
+    // within tens of ms; a 2s tail of "+1900ms still sending" is the smoking gun.
     private long _txIqStartTicks;   // Stopwatch ticks at key-down (0 = not in a TX session)
     private long _txIqSentSamples;  // samples handed to the radio since key-down
     private double _fifoModelSamples; // sender loop's modeled radio-FIFO fill
+    private long _unkeyTicks;       // Stopwatch ticks at un-key (0 = not watching)
+    private int _postUnkeySends;    // TX-IQ packets sent to the radio since un-key
+    private double _postUnkeySendLogMs;     // last rate-limited sender log (ms since un-key)
+    private double _postUnkeyProducerLogMs; // last rate-limited producer log (ms since un-key)
 
     // ---- PureSignal feedback (DDC0 + DDC1 paired on UDP 1035) ----
     // PS feedback decoder: when armed, packets on port 1035 carry interleaved
@@ -636,6 +642,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // clock mid-transmit.
     private void BeginTxIqMeasure()
     {
+        // New key-down: stop watching the previous un-key tail.
+        Interlocked.Exchange(ref _unkeyTicks, 0);
         if (Interlocked.Read(ref _txIqStartTicks) != 0) return;
         Interlocked.Exchange(ref _txIqSentSamples, 0);
         Interlocked.Exchange(ref _txIqStartTicks, Stopwatch.GetTimestamp());
@@ -700,6 +708,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if ((iqInterleaved.Length & 1) != 0)
             throw new ArgumentException("interleaved length must be even (I,Q pairs)", nameof(iqInterleaved));
 
+        long uk = Interlocked.Read(ref _unkeyTicks);
+        if (uk != 0)
+        {
+            double ms = (Stopwatch.GetTimestamp() - uk) / (double)Stopwatch.Frequency * 1000.0;
+            if (ms <= 3000.0 && ms >= _postUnkeyProducerLogMs + 100.0)
+            {
+                _postUnkeyProducerLogMs = ms;
+                _log.LogInformation("p2.unkey.producer +{Ms:F0}ms still PRODUCING TX-IQ after un-key ({N} samples this block)", ms, iqInterleaved.Length / 2);
+            }
+        }
+
         lock (_txIqGate)
         {
             int idx = 0;
@@ -727,23 +746,24 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         int flushed = 0;
         while (_txIqQueue.Reader.TryRead(out _)) { flushed++; }
 
-        // One-shot un-key diagnostic. Estimate the radio's hardware DAC-FIFO
-        // backlog = samples we sent − samples the radio drained (elapsed ×
-        // 192 kHz). A large value means the radio will keep transmitting
-        // (T/R relay engaged) until it empties — that backlog IS the reported
-        // "~2 s TX→RX / relay" delay. The software queue we just flushed
-        // (`flushed` packets) is separate and clears instantly.
+        // Stamp the un-key instant and start watching the tail. The producer
+        // (SendTxIq) and sender (TxIqSenderLoop) log, rate-limited, how long
+        // after this point they keep pushing IQ at the radio — that tells us
+        // whether Zeus is what's holding the radio keyed.
+        long now = Stopwatch.GetTimestamp();
         long startTicks = Interlocked.Exchange(ref _txIqStartTicks, 0);
+        Interlocked.Exchange(ref _postUnkeySends, 0);
+        _postUnkeySendLogMs = -1000.0;
+        _postUnkeyProducerLogMs = -1000.0;
+        Interlocked.Exchange(ref _unkeyTicks, now);
         if (startTicks != 0)
         {
-            double elapsedSec = (Stopwatch.GetTimestamp() - startTicks) / (double)Stopwatch.Frequency;
+            double elapsedSec = (now - startTicks) / (double)Stopwatch.Frequency;
             long sent = Interlocked.Read(ref _txIqSentSamples);
-            double consumed = elapsedSec * TxDacSampleRate;
-            double radioBacklog = sent - consumed;
+            double sentPps = elapsedSec > 0 ? (sent / TxIqSamplesPerPacket) / elapsedSec : 0;
             _log.LogInformation(
-                "p2.tx.unkey radioFifo~{Backlog:F0} samples (~{BacklogMs:F0} ms) | senderModel={Model:F0} | sw-queue flushed={Flushed} pkts | sent={Sent} consumed~{Consumed:F0} over {ElapsedMs:F0} ms",
-                radioBacklog, radioBacklog / TxDacSampleRate * 1000.0, _fifoModelSamples, flushed,
-                sent, consumed, elapsedSec * 1000.0);
+                "p2.unkey keyDown={ElapsedMs:F0}ms | sent {SentPkts} pkts ({Pps:F0}/s) to radio | sw-queue flushed={Flushed} pkts — watching whether IQ keeps flowing post-un-key...",
+                elapsedSec * 1000.0, sent / TxIqSamplesPerPacket, sentPps, flushed);
         }
     }
 
@@ -847,6 +867,27 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 catch (SocketException ex)
                 {
                     _log.LogWarning(ex, "p2.txiq send failed");
+                }
+
+                // Un-key tail: log how long after un-key we're STILL sending
+                // IQ to the radio. A 2s tail means Zeus is what's keeping the
+                // radio keyed; a couple of lines near +0ms means Zeus went
+                // quiet and the relay hold is downstream (PTT/firmware).
+                long uk = Interlocked.Read(ref _unkeyTicks);
+                if (uk != 0)
+                {
+                    double ms = (Stopwatch.GetTimestamp() - uk) / ticksPerSecond * 1000.0;
+                    int n = Interlocked.Increment(ref _postUnkeySends);
+                    if (ms > 3000.0)
+                    {
+                        Interlocked.Exchange(ref _unkeyTicks, 0);
+                        _log.LogWarning("p2.unkey.txiq STILL sending 3s+ after un-key — Zeus is keeping the radio keyed ({N} pkts since un-key)", n);
+                    }
+                    else if (ms >= _postUnkeySendLogMs + 100.0)
+                    {
+                        _postUnkeySendLogMs = ms;
+                        _log.LogInformation("p2.unkey.txiq +{Ms:F0}ms still SENDING to radio ({N} pkts since un-key)", ms, n);
+                    }
                 }
             }
         }
