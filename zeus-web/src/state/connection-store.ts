@@ -79,6 +79,9 @@ export type ConnectionState = {
   autoAttEnabled: boolean;
   attOffsetDb: number;
   adcOverloadWarning: boolean;
+  itMode: 'Off' | 'Rit' | 'Xit';
+  ritOffsetHz: number;
+  xitOffsetHz: number;
   // Board kind only known from the discovery list at connect time — StateDto
   // doesn't echo it. Null after a page reload while already connected; the
   // preamp guard treats null as "show", which is the safe default (an HL2
@@ -135,6 +138,9 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   autoAttEnabled: true,
   attOffsetDb: 0,
   adcOverloadWarning: false,
+  itMode: 'Off',
+  ritOffsetHz: 0,
+  xitOffsetHz: 0,
   boardId: null,
   connectedProtocol: null,
   preampOn: false,
@@ -167,6 +173,9 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       autoAttEnabled: s.autoAttEnabled,
       attOffsetDb: s.attOffsetDb,
       adcOverloadWarning: s.adcOverloadWarning,
+      itMode: s.itMode,
+      ritOffsetHz: s.ritOffsetHz,
+      xitOffsetHz: s.xitOffsetHz,
       nr: s.nr,
       zoomLevel: s.zoomLevel,
     }),

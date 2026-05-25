@@ -53,6 +53,7 @@ import {
 } from 'react';
 import { fetchState, setVfo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { RitXitOffsetRow } from './RitXitOffsetRow';
 
 const MAX_HZ = 60_000_000;
 const STATE_POLL_MS = 2000;
@@ -312,6 +313,7 @@ export function VfoDisplay() {
       <div className="freq-bot" style={{ justifyContent: 'flex-end', gap: 6, marginTop: 4 }}>
         <span className="label-xs">MHz · click to type · wheel on a digit to step</span>
       </div>
+      <RitXitOffsetRow />
     </div>
   );
 }

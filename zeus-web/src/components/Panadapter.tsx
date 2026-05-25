@@ -52,6 +52,7 @@ import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
 import { FreqAxis } from './FreqAxis';
 import { PassbandOverlay } from './PassbandOverlay';
+import { RitXitMarker } from './RitXitMarker';
 import { DbScale } from './DbScale';
 
 export function Panadapter() {
@@ -263,6 +264,7 @@ export function Panadapter() {
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
       <PassbandOverlay />
+      <RitXitMarker />
       <FreqAxis />
       <DbScale />
     </div>

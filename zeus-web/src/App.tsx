@@ -54,6 +54,7 @@ import { AudioToggle } from './components/AudioToggle';
 import { BandFavorites } from './components/toolbar/BandFavorites';
 import { ConnectPanel } from './components/ConnectPanel';
 import { FilterPanel } from './components/filter/FilterPanel';
+import { IncrementalTuningButton } from './components/IncrementalTuningButton';
 import { LeftLayoutBar } from './components/LeftLayoutBar';
 import { MicMeter } from './components/MicMeter';
 import { ModeFavorites } from './components/toolbar/ModeFavorites';
@@ -767,7 +768,7 @@ export default function App() {
         <MicMeter />
         <div className="transport-sep hide-mobile" />
         <button type="button" className="btn ghost hide-mobile">SPLIT</button>
-        <button type="button" className="btn ghost hide-mobile">RIT</button>
+        <IncrementalTuningButton />
         <button type="button" className="btn ghost hide-mobile">SAVE MEM</button>
         <div className="spacer" style={{ flex: 1 }} />
         <PaTempChip />

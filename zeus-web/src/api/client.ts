@@ -234,6 +234,11 @@ export type RadioStateDto = {
   // CW sidetone pitch in Hz. Today a baked-in constant (600); exposed so
   // the frontend doesn't duplicate it. Will become configurable later.
   cwPitchHz: number;
+  // Incremental tuning (RIT/XIT). Runtime-only, auto-cleared on band/mode
+  // change and disconnect. itMode is 'Off'|'Rit'|'Xit'.
+  itMode: 'Off' | 'Rit' | 'Xit';
+  ritOffsetHz: number;
+  xitOffsetHz: number;
 };
 
 // CFC mirrors Zeus.Contracts.CfcConfig. Bands array is fixed at 10 entries
@@ -352,6 +357,21 @@ export function normalizeMode(v: unknown): RxMode {
     return MODE_ORDER[v] ?? 'USB';
   }
   return 'USB';
+}
+
+export type IncrementalTuningMode = 'Off' | 'Rit' | 'Xit';
+const IT_MODES: readonly IncrementalTuningMode[] = ['Off', 'Rit', 'Xit'];
+
+export function normalizeItMode(v: unknown): IncrementalTuningMode {
+  if (typeof v === 'string') {
+    return (IT_MODES as readonly string[]).includes(v)
+      ? (v as IncrementalTuningMode)
+      : 'Off';
+  }
+  if (typeof v === 'number' && Number.isInteger(v)) {
+    return IT_MODES[v] ?? 'Off';
+  }
+  return 'Off';
 }
 
 export function normalizeNrMode(v: unknown): NrMode {
@@ -503,6 +523,9 @@ export function normalizeState(raw: unknown): RadioStateDto {
         ? r.vfoHz
         : 0,
     cwPitchHz: typeof r.cwPitchHz === 'number' ? r.cwPitchHz : 600,
+    itMode: normalizeItMode(r.itMode),
+    ritOffsetHz: typeof r.ritOffsetHz === 'number' ? r.ritOffsetHz : 0,
+    xitOffsetHz: typeof r.xitOffsetHz === 'number' ? r.xitOffsetHz : 0,
   };
 }
 
@@ -684,6 +707,24 @@ export function setRadioLo(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ hz }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function setIncrementalTuning(
+  mode: IncrementalTuningMode,
+  offsetHz: number,
+  clear?: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/rx/incremental-tuning',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ mode: IT_MODES.indexOf(mode), offsetHz, clear: clear ?? false }),
       signal,
     },
     normalizeState,
