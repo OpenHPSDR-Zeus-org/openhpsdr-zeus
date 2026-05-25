@@ -97,9 +97,36 @@ public partial class Program
         }
     }
 
+    // Windows' default system timer resolution is ~15.6 ms, which floors every
+    // Task.Delay / Thread.Sleep the .NET runtime issues. The Protocol-2 TX-IQ
+    // sender paces packets to the radio with sub-millisecond Task.Delay waits;
+    // at 15.6 ms granularity it can only feed the DUC at ~380 packets/s instead
+    // of the required 800 (192 kHz), starving the radio's TX FIFO so it holds
+    // its T/R relay ~2 s after un-key. macOS / Linux already run a ~1 ms timer
+    // so the identical code paces correctly there — which is why the symptom is
+    // Windows-only. timeBeginPeriod(1) raises the process-wide timer resolution
+    // to 1 ms for the lifetime of the process (the same thing Thetis gets via
+    // its multimedia-timer / "Pro Audio" thread), so Task.Delay-based TX pacing
+    // hits the full rate on Windows too. The matching timeEndPeriod is omitted
+    // deliberately — we want 1 ms resolution for the whole process lifetime and
+    // Windows restores the default on exit.
+    [System.Runtime.InteropServices.DllImport("winmm.dll", EntryPoint = "timeBeginPeriod")]
+    private static extern uint TimeBeginPeriod(uint uMilliseconds);
+
+    private static void RaiseTimerResolutionOnWindows()
+    {
+        if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+        {
+            TimeBeginPeriod(1);
+        }
+    }
+
     [STAThread]
     public static int Main(string[] args)
     {
+        // Must run before any TX pacing starts — see RaiseTimerResolutionOnWindows.
+        RaiseTimerResolutionOnWindows();
+
         if (args.Contains("--desktop"))
         {
             HideConsoleOnWindows();
