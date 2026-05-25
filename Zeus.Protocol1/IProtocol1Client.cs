@@ -219,6 +219,15 @@ public interface IProtocol1Client : IDisposable
     void SetHl2TxStepAttenuationDb(int db);
 
     /// <summary>
+    /// Push the on-board CW keyer config to C&amp;C register 0x0B: speed in
+    /// WPM (clamped to the 6-bit 0..60 gateware field) and the keyer mode
+    /// (straight / iambic A / iambic B). Sent via the register round-robin
+    /// so it self-heals on packet loss. The gateware ignores speed in
+    /// straight mode. See zeus-bks.
+    /// </summary>
+    void SetCwKeyerConfig(int wpm, CwKeyerMode mode);
+
+    /// <summary>
     /// 1024-sample paired feedback blocks decoded from the EP6 stream when
     /// PS is armed. TX side comes from the in-flight TX-IQ ring (the
     /// samples we just wrote to the wire); RX side is DDC1, the dedicated

@@ -421,7 +421,8 @@ public sealed record CwSettingsDto(
     int? FarnsworthWpm,
     string[] Macros,
     double SidetoneGainDb,
-    int SidetoneHz);
+    int SidetoneHz,
+    CwKeyerMode KeyerMode);
 
 // PATCH-shaped: every field nullable so the frontend can save one slider
 // (or one macro) without re-sending the whole record. Server merges on top
@@ -431,7 +432,21 @@ public sealed record CwSettingsSetRequest(
     int? FarnsworthWpm = null,
     string[]? Macros = null,
     double? SidetoneGainDb = null,
-    int? SidetoneHz = null);
+    int? SidetoneHz = null,
+    CwKeyerMode? KeyerMode = null);
+
+// Hermes-Lite 2 (and the wider openHPSDR family) on-board CW keyer mode,
+// written to C&C register 0x0B C3[7:6] (gateware rtl/cw_openhpsdr.sv:32).
+// Straight is the default-safe choice: in this mode the gateware passes the
+// key line through directly and ignores keyer speed, so a straight/bug key
+// is never mis-interpreted as a paddle. Iambic A/B generate dits & dahs
+// from the two paddle inputs at the configured WPM.
+public enum CwKeyerMode : byte
+{
+    Straight = 0,  // 00 — straight key / external keyer / bug; speed ignored
+    IambicA = 1,   // 01 — iambic Mode A
+    IambicB = 2,   // 10 — iambic Mode B
+}
 
 public sealed record MicGainSetRequest(int Db);
 

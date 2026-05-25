@@ -478,7 +478,7 @@ public static class ZeusEndpoints
         app.MapGet("/api/cw/settings", (CwSettingsStore store) =>
             Results.Ok(store.Get()));
 
-        app.MapPut("/api/cw/settings", (CwSettingsSetRequest req, CwSettingsStore store, CwSidetoneSource sidetone) =>
+        app.MapPut("/api/cw/settings", (CwSettingsSetRequest req, CwSettingsStore store, CwSidetoneSource sidetone, RadioService radio) =>
         {
             // Save first so the persisted view is the source of truth even
             // if the live generator update races somehow. Then push the
@@ -487,6 +487,11 @@ public static class ZeusEndpoints
             var snapshot = store.Save(req);
             sidetone.SetPitchHz(snapshot.SidetoneHz);
             sidetone.SetGainDb(snapshot.SidetoneGainDb);
+            // Forward keyer speed (WPM) + mode to the radio's on-board iambic
+            // keyer (C&C 0x0B) so a paddle keys at the panel speed. No-op when
+            // no radio is connected (the value is cached + re-pushed on the
+            // next connect). See zeus-bks.
+            radio.SetCwKeyerConfig(snapshot.Wpm, snapshot.KeyerMode);
             return Results.Ok(snapshot);
         });
 

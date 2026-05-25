@@ -5,6 +5,7 @@
 
 import { useState } from 'react';
 import type { CwEngineStatus } from '../../state/cw-store';
+import type { CwKeyerMode } from '../../api/cw';
 
 export type CwKeyerProps = {
   wpm: number;
@@ -12,6 +13,10 @@ export type CwKeyerProps = {
   setWpmLocal: (v: number) => void;
   /** Schedules the server save after the operator stops moving. */
   setWpmCommit: (v: number) => void;
+  /** On-board iambic keyer mode for a paddle on the radio's KEY jack.
+   * Straight ignores WPM (operator controls timing manually). */
+  keyerMode: CwKeyerMode;
+  setKeyerMode: (m: CwKeyerMode) => void;
   /** CW monitor tone pitch (Hz). Backend clamps to 200..1200. */
   sidetoneHz: number;
   setSidetoneHzLocal: (v: number) => void;
@@ -39,10 +44,18 @@ const PITCH_MAX = 1200;
 const GAIN_MIN = -60;
 const GAIN_MAX = 0;
 
+const KEYER_MODE_LABELS: ReadonlyArray<{ mode: CwKeyerMode; label: string; title: string }> = [
+  { mode: 'Straight', label: 'STR', title: 'Straight key / bug — you control the timing; WPM is ignored' },
+  { mode: 'IambicA', label: 'IAM-A', title: 'Iambic paddle, Mode A' },
+  { mode: 'IambicB', label: 'IAM-B', title: 'Iambic paddle, Mode B' },
+];
+
 export function CwKeyer({
   wpm,
   setWpmLocal,
   setWpmCommit,
+  keyerMode,
+  setKeyerMode,
   sidetoneHz,
   setSidetoneHzLocal,
   setSidetoneHzCommit,
@@ -115,6 +128,32 @@ export function CwKeyer({
         >
           STOP
         </button>
+      </div>
+
+      {/* On-board keyer mode for a paddle on the radio's KEY jack. Straight
+        * MUST be selectable: a straight/bug key driven in iambic mode keys
+        * wrong (the gateware treats the single line as a paddle). NOTE: WPM
+        * above is NOT mode-dependent — it always drives host-generated macro
+        * / cw_msg keying (MorseEncoder), and additionally sets the hardware
+        * iambic keyer speed when mode != straight. So never dim/disable WPM
+        * based on keyer mode. See zeus-bks. */}
+      <div className="cw-keyer-mode-row" role="radiogroup" aria-label="CW keyer mode">
+        <span className="cw-keyer-mode-label">KEY</span>
+        <div className="cw-keyer-mode-seg">
+          {KEYER_MODE_LABELS.map(({ mode, label, title }) => (
+            <button
+              key={mode}
+              type="button"
+              role="radio"
+              aria-checked={keyerMode === mode}
+              className={`cw-keyer-mode-btn ${keyerMode === mode ? 'is-active' : ''}`}
+              onClick={() => setKeyerMode(mode)}
+              title={title}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Sidetone monitor: pitch + gain of the in-browser CW monitor tone.

@@ -169,6 +169,16 @@ internal static class ControlFrame
         // review documents the common encoding mistake of placing the
         // value in C2 [7:4] — do NOT shift it left.
         Predistortion = 0x56,
+        // On-board iambic CW keyer config. Gateware command address 0x0B →
+        // wire byte 0x0b << 1 = 0x16. The HL2 (and the wider openHPSDR
+        // family) decode this in rtl/cw_openhpsdr.sv:29-34:
+        //   keyer_speed   = cmd_data[13:8]  → C3[5:0]  (0-60 WPM)
+        //   keyer_mode    = cmd_data[15:14] → C3[7:6]  (00 straight, 01 A, 10 B)
+        //   keyer_weight  = cmd_data[6:0]   → C4[6:0]  (33-66)
+        //   keyer_spacing = cmd_data[7]     → C4[7]
+        //   keyer_reverse = cmd_data[22]    → C2[6]
+        // Wire encoding lives in WriteCwKeyerConfigPayload. See zeus-bks.
+        CwKeyerConfig = 0x16,
     }
 
     /// <summary>
@@ -230,7 +240,15 @@ internal static class ControlFrame
         // RX-side encoding for C4". Range when set: -28..+31 dB
         // (mi0bot console.cs:2084 udTXStepAttData min=-28; +31 is the AD9866
         // TX PGA upper). Wire encoding lives in WriteAttenuatorPayload.
-        int Hl2TxAttnDb = int.MinValue);
+        int Hl2TxAttnDb = int.MinValue,
+        // On-board CW keyer config (C&C 0x0B / wire 0x16). Speed is the
+        // operator's WPM (clamped 0-60 to fit the 6-bit gateware field);
+        // mode selects straight vs iambic A/B. Weight/spacing/reverse are
+        // held at sensible fixed defaults for now (no UI yet) — see
+        // WriteCwKeyerConfigPayload. Default mode Straight makes the write a
+        // no-op until the operator opts into iambic. See zeus-bks.
+        int CwKeyerSpeedWpm = 0,
+        CwKeyerMode CwKeyerMode = CwKeyerMode.Straight);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -291,6 +309,10 @@ internal static class ControlFrame
 
             case CcRegister.Predistortion:
                 WritePredistortionPayload(cc[1..], in state);
+                break;
+
+            case CcRegister.CwKeyerConfig:
+                WriteCwKeyerConfigPayload(cc[1..], in state);
                 break;
 
             default:
@@ -402,6 +424,34 @@ internal static class ControlFrame
         c14[1] = (byte)(s.PsPredistortionValue & 0x0F); // C2 [3:0]; high nibble = reserved (0)
         c14[2] = 0;                                     // C3
         c14[3] = 0;                                     // C4
+    }
+
+    // CW keyer weight / spacing / reverse have no UI yet (see zeus-bks), so
+    // we hold them at the gateware-friendly neutral defaults: 50% weight
+    // (1:1 dit:dah ratio), letter-spacing off, paddles un-swapped.
+    private const byte CwKeyerDefaultWeight = 50;  // C4[6:0], range 33-66
+    private const bool CwKeyerDefaultSpacing = false;
+    private const bool CwKeyerDefaultReverse = false;
+    // Gateware speed field is 6 bits; iambic.v documents 1-60 WPM.
+    private const int CwKeyerMaxWpm = 60;
+
+    private static void WriteCwKeyerConfigPayload(Span<byte> c14, in CcState s)
+    {
+        // C&C 0x0B layout (gateware rtl/cw_openhpsdr.sv:29-34, where
+        // cmd_data[31:24]=C1, [23:16]=C2, [15:8]=C3, [7:0]=C4):
+        //   keyer_reverse = cmd_data[22]    → C2[6]
+        //   keyer_mode    = cmd_data[15:14] → C3[7:6]
+        //   keyer_speed   = cmd_data[13:8]  → C3[5:0]
+        //   keyer_spacing = cmd_data[7]     → C4[7]
+        //   keyer_weight  = cmd_data[6:0]   → C4[6:0]
+        int speed = Math.Clamp(s.CwKeyerSpeedWpm, 0, CwKeyerMaxWpm);
+        byte mode = (byte)((byte)s.CwKeyerMode & 0x03);
+
+        c14[0] = 0;                                              // C1 — unused
+        c14[1] = (byte)(CwKeyerDefaultReverse ? 1 << 6 : 0);     // C2[6] reverse
+        c14[2] = (byte)((mode << 6) | (speed & 0x3F));           // C3[7:6] mode | [5:0] speed
+        c14[3] = (byte)((CwKeyerDefaultSpacing ? 1 << 7 : 0)
+                        | (CwKeyerDefaultWeight & 0x7F));        // C4[7] spacing | [6:0] weight
     }
 
     private static void WriteConfigPayload(Span<byte> c14, in CcState s)

@@ -84,6 +84,12 @@ public sealed class RadioService : IDisposable
     // edge is crossed or a PA setting is edited, we recompute without needing
     // to wait for the next SetDrive call.
     private int _drivePct;
+    // On-board CW keyer config (C&C 0x0B), forwarded to the connected P1
+    // client and re-pushed on reconnect. Seeded from CwSettingsStore in the
+    // ctor; updated at runtime via SetCwKeyerConfig from the CW settings
+    // endpoint. Default mode 0 (straight) is safe — see zeus-bks.
+    private int _cwKeyerWpm;
+    private int _cwKeyerMode;
     // Independent TUN drive %. When TUN is keyed, the recompute uses this in
     // place of _drivePct so the operator can pre-set a lower tune level (and
     // the same per-band PA gain gives equal watts at equal percentages). piHPSDR
@@ -179,7 +185,7 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -193,6 +199,17 @@ public sealed class RadioService : IDisposable
         if (_preferredRadioStore is not null)
             _preferredRadioStore.Changed += RecomputePaAndPush;
         _txIqSource = txIqSource;
+        // Seed the on-board CW keyer config from persisted settings so a
+        // reconnect after restart re-applies the operator's mode/speed
+        // before they touch the panel — otherwise a paddle op who saved
+        // iambic would key as straight (default) on first connect. See
+        // zeus-bks.
+        if (cwSettingsStore is not null)
+        {
+            var cw = cwSettingsStore.Get();
+            Volatile.Write(ref _cwKeyerWpm, cw.Wpm);
+            Volatile.Write(ref _cwKeyerMode, (int)cw.KeyerMode);
+        }
 
         // Load persisted DSP settings from the store, or use defaults if not found
         var persistedNr = _dspSettingsStore.Get() ?? new NrConfig();
@@ -531,6 +548,11 @@ public sealed class RadioService : IDisposable
             // compelling reason to ship bare HL2 without N2ADR emerges.
             if (ConnectedBoardKind == HpsdrBoardKind.HermesLite2)
                 client.SetHasN2adr(true);
+            // Push the persisted CW keyer config into the fresh client so the
+            // on-board iambic keyer matches the operator's panel before the
+            // first key-down. Default mode straight makes this a no-op until
+            // iambic is opted into. See zeus-bks.
+            client.SetCwKeyerConfig(Volatile.Read(ref _cwKeyerWpm), (CwKeyerMode)Volatile.Read(ref _cwKeyerMode));
             // Replay PA settings into the fresh client — drive byte, OC masks,
             // and (for P2 downstream) PA-enable. Without this the client sits
             // at the protocol defaults (drive=0, OC=0) until something else
@@ -1132,6 +1154,20 @@ public sealed class RadioService : IDisposable
         // value until something else dirtied the state.
         Mutate(s => s with { DrivePct = clamped });
         RecomputePaAndPush();
+    }
+
+    /// <summary>
+    /// Forward the on-board CW keyer config (speed + mode) to the connected
+    /// radio's C&amp;C register 0x0B, and remember it so a reconnect re-applies
+    /// it. Called by the CW settings endpoint whenever the operator changes
+    /// WPM or keyer mode. No-op (cached only) when no radio is connected.
+    /// See zeus-bks.
+    /// </summary>
+    public void SetCwKeyerConfig(int wpm, CwKeyerMode mode)
+    {
+        Volatile.Write(ref _cwKeyerWpm, wpm);
+        Volatile.Write(ref _cwKeyerMode, (int)mode);
+        ActiveClient?.SetCwKeyerConfig(wpm, mode);
     }
 
     // Independent TUN drive %. Applies on the very next frame if TUN is already

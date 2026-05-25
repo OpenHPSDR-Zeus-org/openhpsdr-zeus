@@ -33,10 +33,35 @@ public class CwSettingsStoreTests : IDisposable
         Assert.Null(s.FarnsworthWpm);
         Assert.Equal(CwSettingsStore.DefaultSidetoneGainDb, s.SidetoneGainDb);
         Assert.Equal(CwSettingsStore.DefaultSidetoneHz, s.SidetoneHz);
+        // Default-safe keyer mode — straight never mis-keys a straight key.
+        Assert.Equal(CwKeyerMode.Straight, s.KeyerMode);
         // Fresh install gets the six seeded defaults — operator can grow
         // the list to MaxMacros via PATCH.
         Assert.Equal(CwSettingsStore.DefaultMacros.Length, s.Macros.Length);
         Assert.Equal(CwSettingsStore.DefaultMacros, s.Macros);
+    }
+
+    [Fact]
+    public void Save_RoundtripsKeyerMode()
+    {
+        using var store = Build();
+
+        var after = store.Save(new CwSettingsSetRequest(KeyerMode: CwKeyerMode.IambicB));
+        Assert.Equal(CwKeyerMode.IambicB, after.KeyerMode);
+
+        // PATCH semantics — a later unrelated save must not reset the mode.
+        var next = store.Save(new CwSettingsSetRequest(Wpm: 28));
+        Assert.Equal(CwKeyerMode.IambicB, next.KeyerMode);
+    }
+
+    [Fact]
+    public void Save_RejectsOutOfRangeKeyerMode_FallsBackToDefault()
+    {
+        using var store = Build();
+        // An undefined enum byte (e.g. a hand-rolled curl) must not persist
+        // a value the gateware can't interpret.
+        var after = store.Save(new CwSettingsSetRequest(KeyerMode: (CwKeyerMode)99));
+        Assert.Equal(CwSettingsStore.DefaultKeyerMode, after.KeyerMode);
     }
 
     [Fact]
