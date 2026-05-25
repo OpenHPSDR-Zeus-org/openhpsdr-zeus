@@ -182,9 +182,20 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
                 periodFrames: 480,   // ≈10 ms @ 48 kHz
                 periods: 2);
             _output.Start();
+            // Backend + buffer diagnostics (#468): the active backend tells us
+            // whether the WASAPI low-latency fix even applies (ma_device_init
+            // auto-selection can fall back WASAPI→DirectSound→WinMM, e.g. on an
+            // RDP "Remote Audio" endpoint), and buffer/periods reveal whether
+            // we landed on a ~20 ms low-latency buffer or the deep ~1–2 s
+            // WASAPI shared-mode default that produces the resume delay.
+            double bufMs = _output.SampleRate > 0
+                ? _output.BufferFrames * _output.Periods * 1000.0 / _output.SampleRate
+                : 0.0;
             _log.LogInformation(
-                "audio.native.rx open rate={Rate}Hz channels={Channels} version={Version}",
-                _output.SampleRate, _output.Channels, MiniAudioInterop.Version());
+                "audio.native.rx open backend={Backend} rate={Rate}Hz channels={Channels} " +
+                "bufFrames={BufFrames} periods={Periods} bufferMs={BufferMs:F1} version={Version}",
+                _output.BackendName, _output.SampleRate, _output.Channels,
+                _output.BufferFrames, _output.Periods, bufMs, MiniAudioInterop.Version());
         }
         catch (Exception ex)
         {
@@ -294,6 +305,13 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
             : new float[totalFrames];
 
         int read = _ring.Read(mono);
+        if (read > 0)
+        {
+            // t4 — first non-silent RX samples reach the OS playback device
+            // after un-key. The probe captures only the first occurrence per
+            // armed resume, so this is cheap on every subsequent callback.
+            AudioResumeProbe.MarkFirstAudibleOutput();
+        }
         if (read < totalFrames)
         {
             // Underrun — zero the remainder.

@@ -31,6 +31,18 @@ internal sealed class MiniAudioInput : IDisposable
 
     public uint SampleRate { get; private set; }
     public uint Channels { get; private set; }
+
+    /// <summary>The miniaudio backend that actually opened the device
+    /// ("WASAPI" / "DirectSound" / "Core Audio" / ...). See
+    /// <see cref="MiniAudioOutput.BackendName"/> for why this matters.</summary>
+    public string BackendName { get; private set; } = "unknown";
+
+    /// <summary>Negotiated internal period size in frames.</summary>
+    public uint BufferFrames { get; private set; }
+
+    /// <summary>Negotiated internal period count.</summary>
+    public uint Periods { get; private set; }
+
     public bool IsRunning => _started;
 
     public MiniAudioInput(
@@ -66,6 +78,9 @@ internal sealed class MiniAudioInput : IDisposable
 
         SampleRate = MiniAudioInterop.InputSampleRate(_handle);
         Channels = MiniAudioInterop.InputChannels(_handle);
+        BackendName = MiniAudioInterop.InputBackendName(_handle);
+        BufferFrames = MiniAudioInterop.InputBufferFrames(_handle);
+        Periods = MiniAudioInterop.InputPeriods(_handle);
     }
 
     public void Start()
