@@ -224,6 +224,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         new UnboundedChannelOptions { SingleReader = true });
     private Task? _txIqSenderTask;
 
+    // --- un-key TX-FIFO backlog diagnostic (p2.tx.unkey) ---
+    // The radio drains TX IQ at 192 kHz. If we send it faster than that during
+    // a transmit, the surplus piles up in the radio's hardware DAC FIFO and
+    // keeps the radio keyed (T/R relay engaged) until it empties after un-key.
+    // We can't read the radio's FIFO, but we can estimate it: sent-samples
+    // minus (elapsed × 192 kHz) = what the radio is still holding. Logged once
+    // per un-key so a long-tune → relay-hold shows up as a large backlog.
+    private long _txIqStartTicks;   // Stopwatch ticks at key-down (0 = not in a TX session)
+    private long _txIqSentSamples;  // samples handed to the radio since key-down
+    private double _fifoModelSamples; // sender loop's modeled radio-FIFO fill
+
     // ---- PureSignal feedback (DDC0 + DDC1 paired on UDP 1035) ----
     // PS feedback decoder: when armed, packets on port 1035 carry interleaved
     // (DDC0=PS_RX_FEEDBACK=post-PA coupler IQ, DDC1=PS_TX_FEEDBACK=TX-DAC
@@ -609,15 +620,25 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public void SetMox(bool on)
     {
         _moxOn = on;
-        if (!on) ResetTxIq();
+        if (on) BeginTxIqMeasure(); else ResetTxIq();
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
     public void SetTune(bool on)
     {
         _tuneActive = on;
-        if (!on) ResetTxIq();
+        if (on) BeginTxIqMeasure(); else ResetTxIq();
         if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    // Mark the start of a TX session for the un-key backlog diagnostic. Only
+    // arms on the first rising edge so a TUN→MOX hand-off doesn't reset the
+    // clock mid-transmit.
+    private void BeginTxIqMeasure()
+    {
+        if (Interlocked.Read(ref _txIqStartTicks) != 0) return;
+        Interlocked.Exchange(ref _txIqSentSamples, 0);
+        Interlocked.Exchange(ref _txIqStartTicks, Stopwatch.GetTimestamp());
     }
 
     /// <summary>
@@ -703,7 +724,27 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // Drain any queued-but-unsent packets so a fresh key-down starts
         // from an empty FIFO model and the radio isn't playing 10 ms of
         // the previous transmission's IQ when PTT re-engages.
-        while (_txIqQueue.Reader.TryRead(out _)) { }
+        int flushed = 0;
+        while (_txIqQueue.Reader.TryRead(out _)) { flushed++; }
+
+        // One-shot un-key diagnostic. Estimate the radio's hardware DAC-FIFO
+        // backlog = samples we sent − samples the radio drained (elapsed ×
+        // 192 kHz). A large value means the radio will keep transmitting
+        // (T/R relay engaged) until it empties — that backlog IS the reported
+        // "~2 s TX→RX / relay" delay. The software queue we just flushed
+        // (`flushed` packets) is separate and clears instantly.
+        long startTicks = Interlocked.Exchange(ref _txIqStartTicks, 0);
+        if (startTicks != 0)
+        {
+            double elapsedSec = (Stopwatch.GetTimestamp() - startTicks) / (double)Stopwatch.Frequency;
+            long sent = Interlocked.Read(ref _txIqSentSamples);
+            double consumed = elapsedSec * TxDacSampleRate;
+            double radioBacklog = sent - consumed;
+            _log.LogInformation(
+                "p2.tx.unkey radioFifo~{Backlog:F0} samples (~{BacklogMs:F0} ms) | senderModel={Model:F0} | sw-queue flushed={Flushed} pkts | sent={Sent} consumed~{Consumed:F0} over {ElapsedMs:F0} ms",
+                radioBacklog, radioBacklog / TxDacSampleRate * 1000.0, _fifoModelSamples, flushed,
+                sent, consumed, elapsedSec * 1000.0);
+        }
     }
 
     private void FlushTxIqLocked()
@@ -767,12 +808,26 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 if (fifoSamples < 0.0) fifoSamples = 0.0;
                 lastTicks = now;
 
-                // If the radio's FIFO would overflow, wait a tick before the
-                // next send. The 1 ms delay is coarse but well within the
-                // FIFO's 6.5 ms target headroom, so no underrun risk.
+                // If the radio's FIFO is over target, wait long enough to
+                // drain the overflow back to target before the next send, so
+                // the long-run send rate equals the DAC rate (192 kHz). The
+                // old fixed 1 ms wait capped sends at ~240k samples/s — above
+                // the producer's rate — so the surplus (e.g. TUN's ~5%
+                // over-production) flowed straight into the radio's hardware
+                // DAC FIFO and accumulated seconds of backlog over a long
+                // transmit. That backlog played out after un-key and held the
+                // T/R relay (the "~2 s TX→RX delay"). Pacing to the true DAC
+                // rate keeps the radio FIFO at target; any surplus backs up in
+                // _txIqQueue instead, where ResetTxIq() flushes it on un-key.
+                // Below-target sends stay immediate, so the startup ramp-fill
+                // and underrun headroom are unchanged.
                 if (fifoSamples > TxFifoTargetSamples)
                 {
-                    try { await Task.Delay(1, ct).ConfigureAwait(false); }
+                    double overflow = fifoSamples - TxFifoTargetSamples;
+                    int waitMs = (int)Math.Ceiling(overflow / TxDacSampleRate * 1000.0);
+                    if (waitMs < 1) waitMs = 1;
+                    if (waitMs > 50) waitMs = 50; // cap a pathological stall
+                    try { await Task.Delay(waitMs, ct).ConfigureAwait(false); }
                     catch (OperationCanceledException) { break; }
                     now = Stopwatch.GetTimestamp();
                     elapsedSec = (now - lastTicks) / ticksPerSecond;
@@ -782,7 +837,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 }
 
                 fifoSamples += TxIqSamplesPerPacket;
-                try { _sock!.SendTo(packet, ep); }
+                _fifoModelSamples = fifoSamples; // publish for the un-key diagnostic
+                try
+                {
+                    _sock!.SendTo(packet, ep);
+                    Interlocked.Add(ref _txIqSentSamples, TxIqSamplesPerPacket);
+                }
                 catch (ObjectDisposedException) { break; }
                 catch (SocketException ex)
                 {
