@@ -2581,11 +2581,6 @@
    CW Decoder Panel (zeus-cdn)
    =========================================================== */
 
-.cw-stream-decoded {
-  display: inline-block;
-  min-height: 24px;
-}
-
 .cw-stream-placeholder {
   color: var(--fg-3);
   font-style: italic;
@@ -2670,51 +2665,6 @@
   border-radius: 50%;
   box-shadow: inset 0 0 2px rgba(0,0,0,0.4);
   transition: background var(--dur-fast) var(--ease-out);
-}
-
-.cw-history {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 8px;
-  background: var(--bg-0);
-  border: 1px solid var(--line-strong);
-  border-radius: var(--r-md);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.cw-history-entry {
-  display: flex;
-  gap: 12px;
-  padding: 4px 0;
-  border-bottom: 1px solid var(--line-subtle);
-}
-
-.cw-history-entry:last-child {
-  border-bottom: none;
-}
-
-.cw-history-time {
-  font: 500 10px/1 var(--font-mono);
-  color: var(--fg-3);
-  min-width: 48px;
-}
-
-.cw-history-text {
-  flex: 1;
-  font: 500 13px/1 var(--font-mono);
-  color: var(--fg-1);
-  word-break: break-all;
-}
-
-.cw-history-empty {
-  text-align: center;
-  padding: 20px;
-  color: var(--fg-3);
-  font: 500 11px/1 var(--font-sans);
-  letter-spacing: 0.1em;
 }
 
 /* ---- Receive decoder: continuous stream window --------------------- */
