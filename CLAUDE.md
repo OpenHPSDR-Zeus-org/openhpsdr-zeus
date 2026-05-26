@@ -22,6 +22,7 @@ AI agents opening PRs against this repo may autonomously fix:
 - **Architecture** — new threads, new dependencies, new NuGet/npm packages, changes to the Zeus.Contracts wire format, signal-routing restructures.
 - **Default values** — anything an operator will notice on first connect: TX power, filter widths, AGC, meter calibration, default band/mode, color palette. One bug report is not evidence that the default is wrong for everyone.
 - **Feature scope creep** — if the issue says "fix meter," fix the meter. Don't add a new meter, refactor the meter pipeline, or rename the meter types.
+- **`.claude/settings.json`** — contributor-local plugin/hook configuration. Committed to the fork for dev-environment consistency but must NOT be included in upstream PRs.
 
 When uncertain, implement the minimal fix and note in the PR description that design decisions need maintainer review. The maintainer (Brian, EI6LF) is the sole authority on visual design, UX, and defaults.
 

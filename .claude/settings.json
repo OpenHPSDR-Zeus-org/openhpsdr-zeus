@@ -22,5 +22,16 @@
         "matcher": ""
       }
     ]
+  },
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true,
+    "frontend-design@claude-plugins-official": true,
+    "context7@claude-plugins-official": true,
+    "chrome-devtools-mcp@claude-plugins-official": true,
+    "csharp-lsp@claude-plugins-official": true,
+    "claude-md-management@claude-plugins-official": true,
+    "claude-code-setup@claude-plugins-official": true,
+    "code-simplifier@claude-plugins-official": true,
+    "claude-hud@claude-hud": true
   }
 }
