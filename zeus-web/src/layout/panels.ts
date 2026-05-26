@@ -52,6 +52,7 @@ import { RotatorCompassPanel } from './panels/RotatorCompassPanel';
 import { RotatorDialPanel } from './panels/RotatorDialPanel';
 import { DspFlexPanel } from './panels/DspFlexPanel';
 import { CwPanel } from './panels/CwPanel';
+import { CwDecoderPanel } from './panels/CwDecoderPanel';
 import { LogbookPanel } from './panels/LogbookPanel';
 import { TxMetersPanel } from './panels/TxMetersPanel';
 import { TxPanel } from './panels/TxPanel';
@@ -225,6 +226,13 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['cw', 'morse', 'keyer', 'wpm'],
     component: CwPanel,
+  },
+  cwdecoder: {
+    id: 'cwdecoder',
+    name: 'CW Decoder',
+    category: 'tools',
+    tags: ['cw', 'morse', 'decoder', 'receive'],
+    component: CwDecoderPanel,
   },
   logbook: {
     id: 'logbook',
