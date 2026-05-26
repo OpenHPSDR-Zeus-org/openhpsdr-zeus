@@ -352,6 +352,23 @@ public sealed class StreamingHub
         }
     }
 
+    public void Broadcast(in CwDecodedTextFrame frame)
+    {
+        if (_clients.IsEmpty) return;
+        // Variable-length: 13-byte header + UTF-8 text bytes (capped at
+        // MaxTextBytes). Same shape as CwEngineStatus above.
+        int textBytes = System.Text.Encoding.UTF8.GetByteCount(frame.Text ?? string.Empty);
+        if (textBytes > CwDecodedTextFrame.MaxTextBytes) textBytes = CwDecodedTextFrame.MaxTextBytes;
+        int total = CwDecodedTextFrame.HeaderByteLength + textBytes;
+        var payload = new byte[total];
+        var writer = new FixedBufferWriter(payload, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
     public void Broadcast(in WisdomStatusFrame frame)
     {
         SetWisdomPhase(frame.Phase);

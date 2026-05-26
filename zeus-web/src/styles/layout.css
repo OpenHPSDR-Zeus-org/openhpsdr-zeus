@@ -2716,3 +2716,35 @@
   font: 500 11px/1 var(--font-sans);
   letter-spacing: 0.1em;
 }
+
+/* ---- Receive decoder: continuous stream window --------------------- */
+/* The CW receive decoder is a teleprinter, not a per-word line log: one
+   flowing buffer the panel scrolls (Morse has no carriage returns). The
+   header row carries the state tag on the left and the inline stats/controls
+   on the right; the window below fills the panel and auto-scrolls. Reuses the
+   inset-well tokens of the keyer stream (--bg-0 flips light in the light
+   theme — zeus-22t). */
+.cw-stream-hero--header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.cw-control-strip--inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cw-decoded-window {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px;
+  background: var(--bg-0);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  font: 500 15px/1.6 var(--font-mono);
+  letter-spacing: 0.06em;
+  color: var(--fg-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
