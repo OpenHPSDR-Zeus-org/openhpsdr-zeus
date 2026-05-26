@@ -1,4 +1,14 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(lsof *)",
+      "Bash(bd ready *)",
+      "Bash(brew list *)",
+      "Bash(bd stats *)",
+      "Bash(bd list *)",
+      "Bash(bd prime)"
+    ]
+  },
   "hooks": {
     "PreCompact": [
       {
