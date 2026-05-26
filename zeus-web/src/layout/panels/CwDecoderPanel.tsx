@@ -15,8 +15,11 @@ export function CwDecoderPanel({ onRemove }: PanelComponentProps) {
 
   const handleRemove = onRemove ?? (() => {});
 
+  // Headerless panel: the host wraps us in `.workspace-tile--headerless`,
+  // so we render TileChrome + body directly (no extra `.workspace-tile`
+  // wrapper, which would nest a second tile surface).
   return (
-    <div className="workspace-tile">
+    <>
       <TileChrome
         title="CW Decoder"
         onRemove={handleRemove}
@@ -34,6 +37,6 @@ export function CwDecoderPanel({ onRemove }: PanelComponentProps) {
       <div className="workspace-tile-body">
         <CwDecoder />
       </div>
-    </div>
+    </>
   );
 }
