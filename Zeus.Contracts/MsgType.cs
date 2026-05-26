@@ -163,4 +163,13 @@ public enum MsgType : byte
     // feedback frames (0x1x is full); UI ignores unknown types so older
     // builds tolerate this cleanly.
     CwEngineStatus = 0x30,
+
+    // Server → client (CW receive decoder). Broadcast by CwDecoderService
+    // whenever the server-side CW decoder emits one or more characters from
+    // the demodulated RX audio while the radio is in a CW mode. Decoding runs
+    // server-side (on DspPipelineService.RxAudioAvailable) so it works in the
+    // desktop/native-audio host and headless — the browser never needs the
+    // audio. Payload: [type:1][wpm:u16 LE][snrDb:f32 LE][confidence:f32 LE]
+    // [textLen:u16 LE][text:UTF-8…]. See CwDecodedTextFrame.cs.
+    CwDecodedText = 0x31,
 }
