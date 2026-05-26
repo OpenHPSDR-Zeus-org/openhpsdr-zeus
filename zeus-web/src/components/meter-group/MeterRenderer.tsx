@@ -15,8 +15,7 @@ import {
   MeterReadingId,
   zoneTransitionTicks,
 } from '../meters/meterCatalog';
-import { useMeterReading } from '../meters/useMeterReading';
-import { useEmaSmoothed } from '../../util/useEmaSmoothed';
+import { useBallisticReadingById } from '../meters/useBallisticReading';
 import { BigArc } from '../immersive-meters/BigArc';
 import { VuColumn } from '../immersive-meters/VuColumn';
 import { PullDownArc } from '../immersive-meters/PullDownArc';
@@ -34,12 +33,6 @@ interface MeterRendererProps {
 
 export function MeterRenderer({ widget }: MeterRendererProps) {
   const def = METER_CATALOG[widget.reading];
-  // 90 ms EMA smoothing on the raw 10 Hz feed kills inter-frame steppiness
-  // without lagging visibly behind voice dynamics on SSB. See
-  // useEmaSmoothed.ts for the alpha = 1 - exp(-dt/tau) ballistics.
-  const rawValue = useMeterReading(widget.reading);
-  const value = useEmaSmoothed(rawValue, 90);
-
   const settings = widget.settings ?? {};
   const min = settings.min ?? def.defaultMin;
   const baseMax = settings.max ?? def.defaultMax;
@@ -61,6 +54,12 @@ export function MeterRenderer({ widget }: MeterRendererProps) {
           ? boardMaxWatts
           : baseMax
       : baseMax;
+
+  // One ballistic pipeline drives every widget kind: moving-average →
+  // attack/decay RC → peak-hold ghost, ticked at 30 Hz inside the hook so
+  // the gauge interpolates between the 10 Hz wire frames instead of
+  // visibly stepping. Defaults match the analog S-meter dial verbatim.
+  const { value, peak } = useBallisticReadingById(widget.reading, { min, max });
 
   const zoneTicks = zoneTransitionTicks(def, min, max);
 
@@ -143,7 +142,7 @@ export function MeterRenderer({ widget }: MeterRendererProps) {
       body = (
         <HBarMeter
           value={value}
-          peak={value}
+          peak={peak}
           def={def}
           label={label}
           settings={{

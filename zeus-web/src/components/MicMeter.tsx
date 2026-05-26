@@ -42,10 +42,10 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef, useState } from 'react';
 import { useTxStore } from '../state/tx-store';
 import { useMicPeakStore } from '../audio/mic-peak-store';
 import { useCapabilitiesStore } from '../state/capabilities-store';
+import { useBallisticReading } from './meters/useBallisticReading';
 
 // Pre-TX mic level indicator. The worklet measures peak dBFS on the raw
 // browser capture *before* any gain; the server then applies
@@ -63,7 +63,6 @@ import { useCapabilitiesStore } from '../state/capabilities-store';
 const MIN_DBFS = -60;
 const MAX_DBFS = 0;
 const CLIP_WARN_DBFS = -3;
-const PEAK_DECAY_MS = 1500;
 
 function dbfsToFraction(dbfs: number): number {
   const clamped = Math.max(MIN_DBFS, Math.min(MAX_DBFS, dbfs));
@@ -87,36 +86,28 @@ export function MicMeter() {
   const micGainDb = useTxStore((s) => s.micGainDb);
   const err = useTxStore((s) => s.micError);
 
-  const effectiveDbfs = Math.min(MAX_DBFS, rawDbfs + micGainDb);
+  // Shared ballistic — averages + RC-smooths the (raw + gain) signal and
+  // holds the peak with the same physics as the analog dial and every
+  // other meter in the app. Closes over `isNative` and `micGainDb` so a
+  // gain-knob twist or a host-mode flip is picked up on the next tick.
+  const reading = useBallisticReading(
+    () => {
+      const tx = useTxStore.getState();
+      const raw = isNative
+        ? useMicPeakStore.getState().peakDbfs
+        : tx.micDbfs;
+      return Math.min(MAX_DBFS, raw + tx.micGainDb);
+    },
+    { min: MIN_DBFS, max: MAX_DBFS },
+  );
+  const effectiveDbfs = isFinite(reading.value)
+    ? reading.value
+    : Math.min(MAX_DBFS, rawDbfs + micGainDb);
   const fraction = dbfsToFraction(effectiveDbfs);
+  const peak = isFinite(reading.peak)
+    ? dbfsToFraction(reading.peak)
+    : fraction;
   const clipping = effectiveDbfs >= CLIP_WARN_DBFS;
-
-  const [peak, setPeak] = useState(fraction);
-  const peakAtRef = useRef<number>(performance.now());
-  const rafRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (fraction >= peak) {
-      setPeak(fraction);
-      peakAtRef.current = performance.now();
-      return;
-    }
-    const tick = () => {
-      const elapsed = performance.now() - peakAtRef.current;
-      const decayed = Math.max(
-        fraction,
-        peak - (peak - fraction) * (elapsed / PEAK_DECAY_MS),
-      );
-      setPeak(decayed);
-      if (decayed > fraction) {
-        rafRef.current = requestAnimationFrame(tick);
-      }
-    };
-    rafRef.current = requestAnimationFrame(tick);
-    return () => {
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-    };
-  }, [fraction, peak]);
 
   if (err) {
     return (

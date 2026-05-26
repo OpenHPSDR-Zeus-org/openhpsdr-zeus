@@ -19,12 +19,12 @@
 // running. We treat ≤ −200 as bypassed and render an em-dash readout
 // rather than painting a misleading floor bar.
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef } from 'react';
 import { useTxStore } from '../state/tx-store';
 import { useConnectionStore } from '../state/connection-store';
 import { usePaStore } from '../state/pa-store';
 import { useRadioStore } from '../state/radio-store';
-import { useEmaSmoothed } from '../util/useEmaSmoothed';
+import { useBallisticReading } from './meters/useBallisticReading';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Overdrive indicator (re-exported so App.tsx can keep wiring it as the
@@ -124,41 +124,11 @@ export function OverdriveIndicator() {
   );
 }
 
-// ────────────────────────────────────────────────────────────────────────────
-// Peak-hold helper. Tracks the running max in a ref, holds the peak for
-// 1.5 s before decaying at a fixed rate so the held tick stays visible
-// long enough for the operator to read it on SSB peaks. A new sample at or
-// above the held peak refreshes the hold window. Returns 0 while the
-// input is non-finite or below the floor — callers decide whether to
-// render the tick at all (the design hides it when ≤ live value).
-// ────────────────────────────────────────────────────────────────────────────
-const PEAK_HOLD_MS = 1500;
-
-function usePeakHoldPct(currentPct: number, decayPctPerSec = 50): number {
-  const state = useRef<{ pct: number; ts: number; holdUntil: number }>({
-    pct: 0,
-    ts: 0,
-    holdUntil: 0,
-  });
-  const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
-  const prev = state.current;
-  // New peak (or first sample) — bump up and start the hold window.
-  if (currentPct > prev.pct) {
-    state.current = { pct: currentPct, ts: now, holdUntil: now + PEAK_HOLD_MS };
-    return currentPct;
-  }
-  // Inside the hold window — keep the peak pinned where it is.
-  if (now < prev.holdUntil) {
-    state.current = { ...prev, ts: now };
-    return prev.pct;
-  }
-  // Past the hold window — decay toward the current sample at the fixed
-  // pct-per-second rate so the held tick visibly bleeds back down.
-  const dt = prev.ts === 0 ? 0 : Math.max(0, (now - prev.ts) / 1000);
-  const decayed = Math.max(currentPct, prev.pct - decayPctPerSec * dt);
-  state.current = { pct: decayed, ts: now, holdUntil: prev.holdUntil };
-  return decayed;
-}
+// Peak-hold and ballistic smoothing now come from the shared
+// useBallisticReading hook (components/meters/useBallisticReading.ts) so
+// these rows feel the same as every other meter in the app — same
+// attack/decay, same peak ghost decay rate, all driven by the same per-
+// widget rAF loop.
 
 // ────────────────────────────────────────────────────────────────────────────
 // Per-meter axis helpers. Each meter has its own scale + tick set, picked
@@ -276,6 +246,8 @@ type MeterRowProps = {
   ticks: ReadonlyArray<string>;
   /** Live value as 0..100 of the meter's axis. */
   pct: number;
+  /** Peak-hold value as 0..100 of the meter's axis. Hidden when ≤ pct. */
+  peakPct: number;
   /** Color for the live fill. PWR/SWR override this with a gradient — see
    *  `gradient` instead. */
   color: string;
@@ -302,6 +274,7 @@ function MeterRow({
   label,
   ticks,
   pct,
+  peakPct,
   color,
   gradient,
   zones,
@@ -312,8 +285,7 @@ function MeterRow({
   hot,
   hint,
 }: MeterRowProps) {
-  const heldPct = usePeakHoldPct(pct);
-  const heldVisible = heldPct > pct + 0.5;
+  const heldVisible = peakPct > pct + 0.5;
   return (
     <div
       data-id={id}
@@ -410,7 +382,7 @@ function MeterRow({
                 top: -1,
                 bottom: -1,
                 width: 2,
-                left: `calc(${heldPct}% - 1px)`,
+                left: `calc(${peakPct}% - 1px)`,
                 background: gradient ? 'var(--fg-1)' : color,
                 transition: 'left 250ms cubic-bezier(.2,.7,.3,1)',
                 pointerEvents: 'none',
@@ -532,29 +504,7 @@ function StatusFooter() {
 // noise floor and current SWR before keying.
 // ────────────────────────────────────────────────────────────────────────────
 
-// Re-render the meters at ~30 Hz even when the underlying store fields
-// don't tick — peak-hold decay is wall-clock-driven, so without a steady
-// render cadence the held tick freezes between TxMetersFrame pushes.
-function useMeterRefresh() {
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    let raf = 0;
-    let last = 0;
-    const loop = (ts: number) => {
-      if (ts - last >= 33) {
-        last = ts;
-        setTick((n) => (n + 1) & 0xff);
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, []);
-}
-
 export function TxStageMeters() {
-  useMeterRefresh();
-
   const wdspMicPkRaw = useTxStore((s) => s.wdspMicPk);
   const alcGrRaw = useTxStore((s) => s.alcGr);
   const fwdWattsRaw = useTxStore((s) => s.fwdWatts);
@@ -562,17 +512,6 @@ export function TxStageMeters() {
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
   const transmitting = moxOn || tunOn;
-
-  // 90 ms EMA on each meter input. The wire frames land at ~10 Hz and the
-  // raf tick repaints at ~30 Hz, so a raw value snaps between frames.
-  // Smoothing the display value (bar + numeric readout) gives a fluid
-  // needle without lagging perceptibly behind voice dynamics on SSB.
-  // The absolute-peak refs below still consume the RAW value so true peaks
-  // aren't clipped by the smoother.
-  const wdspMicPk = useEmaSmoothed(wdspMicPkRaw, 90);
-  const alcGr = useEmaSmoothed(alcGrRaw, 90);
-  const fwdWatts = useEmaSmoothed(fwdWattsRaw, 90);
-  const swr = useEmaSmoothed(swrRaw, 90);
 
   // Rated PA power for the PWR axis. Resolution order:
   //   1. Operator override from the PA settings panel (paMaxPowerWatts > 0)
@@ -585,12 +524,36 @@ export function TxStageMeters() {
   const boardMaxWatts = useRadioStore((s) => s.capabilities.maxPowerWatts);
   const ratedW = paMaxWatts > 0 ? paMaxWatts : boardMaxWatts > 0 ? boardMaxWatts : 100;
 
+  // Shared ballistic + peak-hold for every row. Each hook owns its own
+  // rAF loop sampling the latest value via getState() — the four loops
+  // also drive the 30 Hz repaint cadence the peak ticks need (previously
+  // a separate useMeterRefresh raf). Returned `value` is the smoothed
+  // bar/numeric readout; `peak` feeds the held peak tick.
+  const mic = useBallisticReading(() => useTxStore.getState().wdspMicPk, {
+    min: MIC_FLOOR_DBFS,
+    max: MIC_CEIL_DBFS,
+  });
+  const alc = useBallisticReading(() => useTxStore.getState().alcGr, {
+    min: 0,
+    max: ALC_MAX_GR_DB,
+  });
+  const pwr = useBallisticReading(() => useTxStore.getState().fwdWatts, {
+    min: 0,
+    max: Math.max(1, ratedW),
+  });
+  const swrRead = useBallisticReading(() => useTxStore.getState().swr, {
+    min: SWR_FLOOR,
+    max: SWR_CEIL,
+  });
+
   // ── MIC ────────────────────────────────────────────────────────────
-  const micBypassed = !isFinite(wdspMicPk) || isBypassed(wdspMicPk);
-  const micPct = micPctOf(wdspMicPk);
-  const micNow = micBypassed ? '—' : wdspMicPk.toFixed(1).replace('-', '−');
-  // Absolute peak consumes the RAW value so a true SSB transient isn't
-  // shaved off by the 90 ms smoother feeding the bar.
+  const micBypassed = !isFinite(mic.value) || isBypassed(mic.value);
+  const micPct = micPctOf(mic.value);
+  const micPeakPct = micPctOf(mic.peak);
+  const micNow = micBypassed ? '—' : mic.value.toFixed(1).replace('-', '−');
+  // Absolute peak (the "PK" readout on the right) tracks the RAW wire value
+  // so an SSB transient between TxMetersFrames isn't shaved by the smoother
+  // feeding the bar. Resets between transmissions.
   const micPk = useRef<number>(MIC_FLOOR_DBFS);
   if (isFinite(wdspMicPkRaw) && !isBypassed(wdspMicPkRaw) && wdspMicPkRaw > micPk.current) {
     micPk.current = wdspMicPkRaw;
@@ -602,13 +565,14 @@ export function TxStageMeters() {
       : micPk.current.toFixed(1).replace('-', '−');
 
   // ── ALC (gain reduction) ───────────────────────────────────────────
-  const alcBypassed = !isFinite(alcGr) || isBypassed(alcGr);
-  const alcGrClamped = alcBypassed ? 0 : Math.max(0, alcGr);
+  const alcBypassed = !isFinite(alc.value) || isBypassed(alc.value);
+  const alcGrClamped = alcBypassed ? 0 : Math.max(0, alc.value);
   const alcPct = alcPctOf(alcGrClamped);
+  const alcPeakPct = alcPctOf(
+    !isFinite(alc.peak) || isBypassed(alc.peak) ? 0 : Math.max(0, alc.peak),
+  );
   const alcNow = alcBypassed ? '—' : alcGrClamped.toFixed(1);
   const alcPkRef = useRef<number>(0);
-  // Peak tracks the RAW value (not the smoothed one) so true GR transients
-  // aren't shaved off.
   const alcGrRawClamped =
     !isFinite(alcGrRaw) || isBypassed(alcGrRaw) ? 0 : Math.max(0, alcGrRaw);
   if (alcGrRawClamped > alcPkRef.current) alcPkRef.current = alcGrRawClamped;
@@ -616,24 +580,24 @@ export function TxStageMeters() {
   const alcPkValue = alcPkRef.current.toFixed(1);
 
   // ── PWR (forward watts) ────────────────────────────────────────────
-  const pwrPct = pwrPctOf(fwdWatts, ratedW);
-  const pwrNow = isFinite(fwdWatts) ? fwdWatts.toFixed(1) : '—';
+  const pwrPct = pwrPctOf(pwr.value, ratedW);
+  const pwrPeakPct = pwrPctOf(pwr.peak, ratedW);
+  const pwrNow = isFinite(pwr.value) ? pwr.value.toFixed(1) : '—';
   const pwrPkRef = useRef<number>(0);
-  // Peak tracks the RAW watts so true PEP isn't shaved by the 90 ms EMA.
   if (isFinite(fwdWattsRaw) && fwdWattsRaw > pwrPkRef.current) pwrPkRef.current = fwdWattsRaw;
   if (!transmitting) pwrPkRef.current = 0;
   const pwrPkValue = pwrPkRef.current.toFixed(1);
   const pwrHot = transmitting && pwrPct > 95;
 
   // ── SWR ────────────────────────────────────────────────────────────
-  const swrPct = swrPctOf(swr);
-  const swrNow = isFinite(swr) ? swr.toFixed(2) : '—';
+  const swrPct = swrPctOf(swrRead.value);
+  const swrPeakPct = swrPctOf(swrRead.peak);
+  const swrNow = isFinite(swrRead.value) ? swrRead.value.toFixed(2) : '—';
   const swrPkRef = useRef<number>(SWR_FLOOR);
-  // Peak tracks the RAW ratio so true SWR excursions aren't shaved.
   if (isFinite(swrRaw) && swrRaw > swrPkRef.current) swrPkRef.current = swrRaw;
   if (!transmitting) swrPkRef.current = SWR_FLOOR;
   const swrPkValue = swrPkRef.current.toFixed(1);
-  const swrHot = transmitting && swr > 2.5;
+  const swrHot = transmitting && swrRead.value > 2.5;
 
   // PWR / SWR get the healthy → hot gradient so the bar's colour itself
   // communicates "you're pushing it." MIC stays cyan-ish (--accent),
@@ -689,6 +653,7 @@ export function TxStageMeters() {
           label="MIC"
           ticks={MIC_TICKS}
           pct={micPct}
+          peakPct={micPeakPct}
           color="var(--accent)"
           readNow={micNow}
           readUnit="dBFS"
@@ -701,6 +666,7 @@ export function TxStageMeters() {
           label="ALC"
           ticks={ALC_TICKS}
           pct={alcPct}
+          peakPct={alcPeakPct}
           color="var(--power)"
           zones={alcZones}
           readNow={alcNow}
@@ -714,6 +680,7 @@ export function TxStageMeters() {
           label="PWR"
           ticks={pwrTicks(ratedW)}
           pct={pwrPct}
+          peakPct={pwrPeakPct}
           color="var(--power)"
           gradient={pwrSwrGradient}
           readNow={pwrNow}
@@ -728,6 +695,7 @@ export function TxStageMeters() {
           label="SWR"
           ticks={SWR_TICKS}
           pct={swrPct}
+          peakPct={swrPeakPct}
           color="var(--tx)"
           gradient={pwrSwrGradient}
           zones={swrZones}
