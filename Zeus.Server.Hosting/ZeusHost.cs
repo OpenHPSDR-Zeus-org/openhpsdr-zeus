@@ -269,6 +269,12 @@ public static class ZeusHost
         });
         builder.Services.AddSingleton<CwEngine>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<CwEngine>());
+        // Server-side CW receive decoder: taps demodulated RX audio
+        // (DspPipelineService.RxAudioAvailable) and streams decoded text over
+        // the hub. Lives server-side so it works in the desktop/native-audio
+        // host and headless — see CwDecoderService.
+        builder.Services.AddSingleton<CwDecoderService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<CwDecoderService>());
         // PS auto-attenuate timer2code-equivalent: ramps the radio's TX step
         // attenuator (Protocol2 only today) when calcc feedback level lands outside
         // the 128..181 ideal window, so PS has a recovery path on first arm. Idle
