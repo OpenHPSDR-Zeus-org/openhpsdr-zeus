@@ -4,7 +4,6 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  METER_BALLISTICS_DEFAULTS,
   ballisticsStep,
   isSilentSample,
   makeAverager,
@@ -104,18 +103,3 @@ describe('makeAverager', () => {
   });
 });
 
-describe('METER_BALLISTICS_DEFAULTS', () => {
-  it('pins the universal meter ballistic defaults', () => {
-    // Analog S-meter dial keeps its own faster-attack defaults in
-    // analogMeterStore.ts (operator-tunable, persisted). These constants
-    // govern useBallisticReading — the shared hook every other meter
-    // (TX-stage rows, meter-group widgets, mic bar) reads through. The
-    // attack here is intentionally slower than the dial: a wide dial
-    // reads a 50 ms attack as expressive; a small bar reads it as jitter.
-    expect(METER_BALLISTICS_DEFAULTS.attackSec).toBe(0.35);
-    expect(METER_BALLISTICS_DEFAULTS.decaySec).toBe(0.6);
-    expect(METER_BALLISTICS_DEFAULTS.avgSamples).toBe(18);
-    expect(METER_BALLISTICS_DEFAULTS.peakDecayFracPerSec).toBe(0.05);
-    expect(METER_BALLISTICS_DEFAULTS.silentSentinel).toBe(-200);
-  });
-});

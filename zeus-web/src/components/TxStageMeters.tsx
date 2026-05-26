@@ -505,6 +505,10 @@ function StatusFooter() {
 // ────────────────────────────────────────────────────────────────────────────
 
 export function TxStageMeters() {
+  // Shared by all four ballistic hooks so an IntersectionObserver on the
+  // panel root pauses every rAF loop when the dock is scrolled away.
+  const panelRef = useRef<HTMLDivElement | null>(null);
+
   const wdspMicPkRaw = useTxStore((s) => s.wdspMicPk);
   const alcGrRaw = useTxStore((s) => s.alcGr);
   const fwdWattsRaw = useTxStore((s) => s.fwdWatts);
@@ -529,22 +533,26 @@ export function TxStageMeters() {
   // also drive the 30 Hz repaint cadence the peak ticks need (previously
   // a separate useMeterRefresh raf). Returned `value` is the smoothed
   // bar/numeric readout; `peak` feeds the held peak tick.
-  const mic = useBallisticReading(() => useTxStore.getState().wdspMicPk, {
-    min: MIC_FLOOR_DBFS,
-    max: MIC_CEIL_DBFS,
-  });
-  const alc = useBallisticReading(() => useTxStore.getState().alcGr, {
-    min: 0,
-    max: ALC_MAX_GR_DB,
-  });
-  const pwr = useBallisticReading(() => useTxStore.getState().fwdWatts, {
-    min: 0,
-    max: Math.max(1, ratedW),
-  });
-  const swrRead = useBallisticReading(() => useTxStore.getState().swr, {
-    min: SWR_FLOOR,
-    max: SWR_CEIL,
-  });
+  const mic = useBallisticReading(
+    () => useTxStore.getState().wdspMicPk,
+    { min: MIC_FLOOR_DBFS, max: MIC_CEIL_DBFS },
+    panelRef,
+  );
+  const alc = useBallisticReading(
+    () => useTxStore.getState().alcGr,
+    { min: 0, max: ALC_MAX_GR_DB },
+    panelRef,
+  );
+  const pwr = useBallisticReading(
+    () => useTxStore.getState().fwdWatts,
+    { min: 0, max: Math.max(1, ratedW) },
+    panelRef,
+  );
+  const swrRead = useBallisticReading(
+    () => useTxStore.getState().swr,
+    { min: SWR_FLOOR, max: SWR_CEIL },
+    panelRef,
+  );
 
   // ── MIC ────────────────────────────────────────────────────────────
   const micBypassed = !isFinite(mic.value) || isBypassed(mic.value);
@@ -629,6 +637,7 @@ export function TxStageMeters() {
 
   return (
     <div
+      ref={panelRef}
       aria-label="TX stage meters — MIC, ALC, PWR, SWR"
       style={{
         display: 'flex',
