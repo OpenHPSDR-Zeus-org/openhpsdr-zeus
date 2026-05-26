@@ -407,6 +407,17 @@ export class CwDecoder {
     return null;
   }
 
+  /** Process an array of audio samples (e.g., from AudioFrame). */
+  processSamples(samples: Float32Array): CwDecoderOutput[] {
+    const results: CwDecoderOutput[] = [];
+    for (let i = 0; i < samples.length; i++) {
+      const sample = samples[i]!;
+      const result = this.process(sample);
+      if (result) results.push(result);
+    }
+    return results;
+  }
+
   private makeOutput(char: string): CwDecoderOutput {
     return {
       char,

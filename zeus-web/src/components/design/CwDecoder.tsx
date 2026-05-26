@@ -4,6 +4,7 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF) and contributors.
 
 import { useCwDecoderStore, type CwDecoderState } from '../../state/cw-decoder-store';
+import { useCwDecoderAudio } from '../../cw/useCwDecoderAudio';
 
 export function CwDecoder() {
   const {
@@ -16,6 +17,9 @@ export function CwDecoder() {
     toggleHold,
     clear,
   } = useCwDecoderStore();
+
+  // Connect decoder to live audio stream
+  useCwDecoderAudio();
 
   const isListening = state === 'listening';
   const isHeld = state === 'held';
