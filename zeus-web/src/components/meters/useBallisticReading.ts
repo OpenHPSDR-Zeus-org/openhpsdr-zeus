@@ -21,7 +21,7 @@
 // We accept the getter via a ref so the caller can pass an inline closure
 // without restarting the loop every render.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type RefObject } from 'react';
 import { useTxStore } from '../../state/tx-store';
 import { useRxMetersStore } from '../../state/rx-meters-store';
 import { MeterReadingId } from './meterCatalog';
@@ -82,6 +82,12 @@ function freshState(): InternalState {
 export function useBallisticReading(
   getValue: () => number,
   span: AxisSpan,
+  /** Optional ref to the widget's root element. When provided, an
+   *  IntersectionObserver pauses the rAF loop while the element is
+   *  off-screen — same pattern AnalogMeterPanel / Panadapter / Waterfall
+   *  use. If omitted, only the document.hidden tab-visibility gate
+   *  applies. */
+  targetRef?: RefObject<Element | null>,
 ): BallisticReading {
   // Stash the getter in a ref so the rAF loop always reads the latest
   // closure (including any captured props/state) without restarting on
@@ -103,6 +109,11 @@ export function useBallisticReading(
     let raf = 0;
     let pageVisible =
       typeof document !== 'undefined' ? !document.hidden : true;
+    // When no targetRef is supplied we have no way to ask "are you on
+    // screen?" — default to true so the loop runs (callers can pass a
+    // ref to opt into IntersectionObserver gating).
+    let inViewport = true;
+    const isActive = () => inViewport && pageVisible;
 
     const loop = (now: number) => {
       raf = 0;
@@ -130,7 +141,7 @@ export function useBallisticReading(
           avgRef.current.reset();
           publish({ value: raw, peak: NaN }, now, true);
         }
-        if (pageVisible) raf = requestAnimationFrame(loop);
+        if (isActive()) raf = requestAnimationFrame(loop);
         return;
       }
 
@@ -141,7 +152,7 @@ export function useBallisticReading(
         avgRef.current.reset();
         avgRef.current.push(raw);
         publish({ value: raw, peak: raw }, now, true);
-        if (pageVisible) raf = requestAnimationFrame(loop);
+        if (isActive()) raf = requestAnimationFrame(loop);
         return;
       }
 
@@ -164,7 +175,7 @@ export function useBallisticReading(
 
       publish({ value: st.smoothed, peak: st.peak }, now, false);
 
-      if (pageVisible) raf = requestAnimationFrame(loop);
+      if (isActive()) raf = requestAnimationFrame(loop);
     };
 
     const publish = (
@@ -196,7 +207,7 @@ export function useBallisticReading(
     };
 
     const start = () => {
-      if (raf === 0 && pageVisible) {
+      if (raf === 0 && isActive()) {
         // Reset dt anchor so a wake doesn't account for the dark period
         // as elapsed time and yank the ballistic.
         stateRef.current.lastTickMs = 0;
@@ -206,8 +217,25 @@ export function useBallisticReading(
 
     const onVisibilityChange = () => {
       pageVisible = !document.hidden;
-      if (pageVisible) start();
+      if (isActive()) start();
     };
+
+    // IntersectionObserver visibility gate — pause the rAF loop entirely
+    // while the widget is scrolled off-screen, in a collapsed dockable,
+    // or in a hidden tab panel. Same pattern AnalogMeterPanel and the
+    // panadapter / waterfall use.
+    let io: IntersectionObserver | null = null;
+    const target = targetRef?.current ?? null;
+    if (target && typeof IntersectionObserver !== 'undefined') {
+      io = new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) inViewport = e.isIntersecting;
+          if (isActive()) start();
+        },
+        { threshold: 0 },
+      );
+      io.observe(target);
+    }
 
     if (typeof document !== 'undefined') {
       document.addEventListener('visibilitychange', onVisibilityChange);
@@ -216,6 +244,7 @@ export function useBallisticReading(
 
     return () => {
       if (raf !== 0) cancelAnimationFrame(raf);
+      if (io) io.disconnect();
       if (typeof document !== 'undefined') {
         document.removeEventListener('visibilitychange', onVisibilityChange);
       }
@@ -223,7 +252,7 @@ export function useBallisticReading(
     // Span min/max change should rebuild peak math but not reset the
     // smoother — peak is in raw units, so a new axis affects the decay
     // rate going forward.
-  }, [span.min, span.max]);
+  }, [span.min, span.max, targetRef]);
 
   return published;
 }
@@ -297,10 +326,11 @@ function sampleByMeterId(id: MeterReadingId): number {
 }
 
 /** Convenience: smooth a catalog reading by id. Equivalent to
- *  `useBallisticReading(() => sample(id), span)`. */
+ *  `useBallisticReading(() => sample(id), span, targetRef)`. */
 export function useBallisticReadingById(
   id: MeterReadingId,
   span: AxisSpan,
+  targetRef?: RefObject<Element | null>,
 ): BallisticReading {
-  return useBallisticReading(() => sampleByMeterId(id), span);
+  return useBallisticReading(() => sampleByMeterId(id), span, targetRef);
 }

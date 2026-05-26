@@ -9,7 +9,7 @@
 // header bar — because the surrounding MeterGroup tile owns the chrome
 // and the immersive primitives carry their own internal labels / readouts.
 
-import { type ReactNode } from 'react';
+import { useRef, type ReactNode } from 'react';
 import {
   METER_CATALOG,
   MeterReadingId,
@@ -59,7 +59,14 @@ export function MeterRenderer({ widget }: MeterRendererProps) {
   // attack/decay RC → peak-hold ghost, ticked at 30 Hz inside the hook so
   // the gauge interpolates between the 10 Hz wire frames instead of
   // visibly stepping. Defaults match the analog S-meter dial verbatim.
-  const { value, peak } = useBallisticReadingById(widget.reading, { min, max });
+  // The rootRef opts the hook into IntersectionObserver gating so the
+  // rAF loop pauses when this tile scrolls out of view.
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const { value, peak } = useBallisticReadingById(
+    widget.reading,
+    { min, max },
+    rootRef,
+  );
 
   const zoneTicks = zoneTransitionTicks(def, min, max);
 
@@ -157,5 +164,9 @@ export function MeterRenderer({ widget }: MeterRendererProps) {
       break;
   }
 
-  return <div style={{ flex: 1, minWidth: 0, display: 'flex' }}>{body}</div>;
+  return (
+    <div ref={rootRef} style={{ flex: 1, minWidth: 0, display: 'flex' }}>
+      {body}
+    </div>
+  );
 }
