@@ -186,8 +186,17 @@ jobs:
             ## Rules (hard)
 
             - **Never push directly to `develop` or `main`.** Always go through a PR.
-            - **Never edit `.github/workflows/*.yml`.** The App doesn't have
-              workflow write permission anyway — but don't try.
+            - **Never edit `.github/workflows/*.yml`, and never ask for the
+              `workflows` permission to be granted.** The App deliberately
+              lacks workflow-write scope — this is a fixed security boundary,
+              not a blocker to escalate. The repo's CI secrets include the
+              macOS / App Store signing keys, so the App must never be able to
+              rewrite the workflows that can read them. When a fix genuinely
+              requires a workflow change, do the full diagnosis and **post the
+              exact diff in your comment for a human to apply by hand**, then
+              carry on with any non-workflow parts you *can* do. Treat the
+              missing scope as permanent — never frame it as something KB2UKA
+              needs to fix or "unblock" for next time.
             - **Never mention Anthropic or Claude in commit messages** (CLAUDE.md hard rule).
             - **Never skip git hooks** (`--no-verify`) or bypass signing.
             - **Respect CLAUDE.md red-light items** — visual design, UX behavior,
