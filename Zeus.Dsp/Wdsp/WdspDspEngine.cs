@@ -1931,10 +1931,20 @@ public sealed class WdspDspEngine : IDspEngine
                 // disabling PS while NOT keyed, push 7 zero-IQ blocks through
                 // psccF so the calcc state machine advances to LRESET cleanly
                 // and doesn't latch a stale curve in iqc on re-arm.
-                var zeros = new float[PsFeedbackBlockSize];
-                for (int i = 0; i < 7; i++)
+                //
+                // ONLY when not transmitting. Mid-MOX (operator aborting PS
+                // during a TX), the live feedback FB pump is still writing real
+                // samples into psccF; interleaving 7 manual zero blocks races
+                // that stream and can wedge calcc in LCALC. While keyed the
+                // live feedback advances calcc on its own, so the manual drain
+                // is both unnecessary and harmful — skip it.
+                if (!_moxOn)
                 {
-                    NativeMethods.psccF(id, PsFeedbackBlockSize, zeros, zeros, zeros, zeros, 0, 0);
+                    var zeros = new float[PsFeedbackBlockSize];
+                    for (int i = 0; i < 7; i++)
+                    {
+                        NativeMethods.psccF(id, PsFeedbackBlockSize, zeros, zeros, zeros, zeros, 0, 0);
+                    }
                 }
                 NativeMethods.SetPSRunCal(id, 0);
                 NativeMethods.SetPSControl(id, 1, 0, 0, 0);
