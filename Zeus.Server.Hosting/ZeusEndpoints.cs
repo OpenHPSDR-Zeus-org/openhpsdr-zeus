@@ -619,6 +619,18 @@ public static class ZeusEndpoints
             return Results.Ok(r.SetPsFeedbackSource(req));
         });
 
+        // Manual PS TX feedback attenuation — routes through DspPipelineService
+        // (it owns both the P1 and P2 clients) to push the wire byte, then
+        // persists + surfaces it via RadioService. Operator alternative to
+        // AutoAttenuate for a fixed external-tap chain.
+        app.MapPost("/api/tx/ps/feedback-attenuation",
+            (PsFeedbackAttenuationSetRequest req, DspPipelineService pipe, RadioService r) =>
+        {
+            log.LogInformation("api.tx.ps.feedbackAttenuation db={Db}", req.Db);
+            pipe.SetPsFeedbackAttenuationDb(req.Db);
+            return Results.Ok(r.Snapshot());
+        });
+
         // PS-Monitor — operator-facing toggle that swaps the TX panadapter source
         // from the predistorted-IQ analyzer to the PS-feedback (post-PA) analyzer.
         // Pure UI/source-routing flag; no WDSP setter, no wire-format change.

@@ -570,6 +570,10 @@ public sealed class PsAutoAttenuateService : BackgroundService
                         _currentAttnDb, newAttn);
                     _currentAttnDb = newAttn;
                     p1.SetHl2TxStepAttenuationDb(newAttn);
+                    // Persist per board so this converged value is restored on
+                    // the next connect (DspPipelineService) instead of booting
+                    // at 0 dB and re-saturating the feedback ADC.
+                    _radio.SetPsTxAttenuationDb(newAttn);
                     // mi0bot PSForm.cs:783 Thread.Sleep(100) — give the
                     // C4 frame time to land on the wire before the next
                     // tick re-enables PS in calcc.
@@ -701,6 +705,10 @@ public sealed class PsAutoAttenuateService : BackgroundService
                         _currentAttnDb, newAttn);
                     _currentAttnDb = newAttn;
                     p2.SetTxAttenuationDb((byte)newAttn);
+                    // Persist per board so this converged value is restored on
+                    // the next connect (DspPipelineService) instead of booting
+                    // at 0 dB and re-saturating the feedback ADC.
+                    _radio.SetPsTxAttenuationDb(newAttn);
                     // mi0bot PSForm.cs:783 Thread.Sleep(100) — give the
                     // wire byte time to land before the next tick re-enables
                     // PS in calcc.

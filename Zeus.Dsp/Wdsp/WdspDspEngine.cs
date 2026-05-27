@@ -2183,6 +2183,23 @@ public sealed class WdspDspEngine : IDspEngine
                 _psInfoBuf[14], _psInfoBuf[15]);
         }
 
+        // Hot-audio robustness diagnostic. At ~1 Hz while PS is armed, surface
+        // the forward TX envelope PEAK (GetPSMaxTX, ~1.0 = at the ALC cap)
+        // next to the feedback level (info4), the scheck reject bitmask
+        // (info6), calcc fit count (info5), state and correcting flag. On a
+        // deliberately-hot over this separates the three candidate root
+        // causes: env climbing >1.0 = forward limiter escaping; fb railing
+        // (toward ADC saturation, ideal ~152) = feedback path saturating
+        // calcc's top bins; both bounded but info6=0x0040 spiking = fit
+        // destabilising on the top-skewed envelope PDF. Debug-level: kept as a
+        // diagnostic but no longer spams ~1 Hz on every TX in a normal run.
+        if (_psInfoLogCounter % 10 == 0)
+        {
+            _log.LogDebug(
+                "wdsp.psHot env={Env:F3} fb={Fb} info6=0x{Sc:X4} cal={Cal} state={St} cor={Cor}",
+                maxTx, _psInfoBuf[4], _psInfoBuf[6], _psInfoBuf[5], _psInfoBuf[15], _psInfoBuf[14]);
+        }
+
         return new PsStageMeters(
             FeedbackLevel: feedback,
             CalState: calState,

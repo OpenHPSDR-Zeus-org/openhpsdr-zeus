@@ -205,6 +205,11 @@ export type RadioStateDto = {
   // HardwareSpecific.PSDefaultPeak;`.
   psHwPeak: number;
   psHwPeakDefault: number;
+  // Live PS TX feedback attenuation (dB) and the per-board floor (HL2 -28,
+  // others 0; max 31). Operator can set it directly as a manual alternative
+  // to AutoAttenuate; restored on connect.
+  psTxFeedbackAttenuationDb: number;
+  psTxFeedbackAttenuationDbMin: number;
   // Server raises this when calcc is alive (PS armed + keyed) for >5 s with
   // CalibrationAttempts pinned at 0 — almost always means hw_peak is set
   // higher than the actual TX envelope peak. Drives the HW-peak warning
@@ -479,6 +484,10 @@ export function normalizeState(raw: unknown): RadioStateDto {
     psHwPeak: typeof r.psHwPeak === 'number' ? r.psHwPeak : 0.4072,
     psHwPeakDefault:
       typeof r.psHwPeakDefault === 'number' ? r.psHwPeakDefault : 0.4072,
+    psTxFeedbackAttenuationDb:
+      typeof r.psTxFeedbackAttenuationDb === 'number' ? r.psTxFeedbackAttenuationDb : 0,
+    psTxFeedbackAttenuationDbMin:
+      typeof r.psTxFeedbackAttenuationDbMin === 'number' ? r.psTxFeedbackAttenuationDbMin : 0,
     psCalibrationStalled:
       typeof r.psCalibrationStalled === 'boolean' ? r.psCalibrationStalled : false,
     psIntsSpiPreset: typeof r.psIntsSpiPreset === 'string' ? r.psIntsSpiPreset : '16/256',
@@ -1371,6 +1380,26 @@ export async function setPsFeedbackSource(
       body: JSON.stringify({
         source: source === 'external' ? 'External' : 'Internal',
       }),
+      signal,
+    },
+    (raw) => raw as RadioStateDto,
+  );
+}
+
+// Manual PS TX feedback attenuation (dB). Operator alternative to
+// AutoAttenuate for a fixed external-tap chain — sets the value that lands
+// the feedback in calcc's range; server clamps to the board range and
+// persists per board.
+export async function setPsFeedbackAttenuation(
+  db: number,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/ps/feedback-attenuation',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ db: Math.round(db) }),
       signal,
     },
     (raw) => raw as RadioStateDto,

@@ -217,6 +217,13 @@ export type TxState = {
   // mi0bot ref: PSForm.cs:830 pbWarningSetPk.Visible = _PShwpeak !=
   // HardwareSpecific.PSDefaultPeak.
   psHwPeakDefault: number;
+  // Live PS TX feedback attenuation (dB) and the per-board floor (HL2 -28,
+  // others 0; max 31). Server-authoritative — NOT persisted to localStorage
+  // (restored from the prefs DB on connect; persisting it client-side would
+  // re-introduce the localStorage-clobbers-server bug).
+  psTxFeedbackAttenuationDb: number;
+  setPsTxFeedbackAttenuationDb: (db: number) => void;
+  psTxFeedbackAttenuationDbMin: number;
   psIntsSpiPreset: string;
   setPsIntsSpiPreset: (p: string) => void;
   // Feedback antenna source — Internal coupler (default) or External
@@ -388,6 +395,9 @@ export const useTxStore = create<TxState>()(
       // the server will push the per-board value into the StateDto, and
       // hydrateFromState below picks it up. mi0bot PSForm.cs:830 ref.
       psHwPeakDefault: 0.4072,
+      psTxFeedbackAttenuationDb: 0,
+      setPsTxFeedbackAttenuationDb: (db) => set({ psTxFeedbackAttenuationDb: db }),
+      psTxFeedbackAttenuationDbMin: 0,
       psIntsSpiPreset: '16/256',
       setPsIntsSpiPreset: (p) => set({ psIntsSpiPreset: p }),
       psFeedbackSource: 'internal',
@@ -451,6 +461,8 @@ export const useTxStore = create<TxState>()(
           // operator-tuned psHwPeak so the UI sees a coherent pair.
           psHwPeak: s.psHwPeak,
           psHwPeakDefault: s.psHwPeakDefault,
+          psTxFeedbackAttenuationDb: s.psTxFeedbackAttenuationDb,
+          psTxFeedbackAttenuationDbMin: s.psTxFeedbackAttenuationDbMin,
           psCalibrationStalled: s.psCalibrationStalled ?? false,
           twoToneFreq1: s.twoToneFreq1,
           twoToneFreq2: s.twoToneFreq2,

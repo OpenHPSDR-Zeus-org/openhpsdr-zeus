@@ -416,6 +416,31 @@ public class DspPipelineService : BackgroundService,
     /// and tests don't exercise it.</summary>
     public Zeus.Protocol2.Protocol2Client? CurrentP2Client => _p2Client;
 
+    /// <summary>
+    /// Manually set the PS TX feedback attenuation (operator alternative to
+    /// AutoAttenuate). Pushes the value to the connected radio — HL2 via the
+    /// AD9866 TX-PGA step, every other board via the P2 step attenuator — then
+    /// persists it per board and surfaces it in state via RadioService. This
+    /// is what lets an operator on a fixed external-tap chain dial the
+    /// feedback into calcc's range once and run with AutoAttenuate off.
+    /// Clamped to the connected board's range.
+    /// </summary>
+    public void SetPsFeedbackAttenuationDb(int db)
+    {
+        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2)
+        {
+            int clamped = Math.Clamp(db, -28, 31);
+            _radio.ActiveClient?.SetHl2TxStepAttenuationDb(clamped);
+            _radio.SetPsTxAttenuationDb(clamped);
+        }
+        else
+        {
+            int clamped = Math.Clamp(db, 0, 31);
+            _p2Client?.SetTxAttenuationDb((byte)clamped);
+            _radio.SetPsTxAttenuationDb(clamped);
+        }
+    }
+
     private void OpenSynthetic()
     {
         var engine = new SyntheticDspEngine();
@@ -483,6 +508,16 @@ public class DspPipelineService : BackgroundService,
         // is per-board (HL2 → 0.233, others → 0.4072) and only fires a
         // StateChanged when the value actually changes.
         _radio.ApplyPsHwPeakForConnection(isProtocol2: false, _radio.ConnectedBoardKind);
+        // Restore the persisted PS feedback attenuation so a hot external-tap
+        // chain isn't sitting at 0 dB on a fresh connect — at 0 dB the
+        // feedback ADC rails and calcc can never fit. HL2 only on the P1 side
+        // (it owns the AD9866 TX-PGA step attenuator). No-op when nothing was
+        // saved for this board yet.
+        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2
+            && _radio.GetPersistedPsTxAttnDb() is int hl2Attn)
+        {
+            _radio.ActiveClient?.SetHl2TxStepAttenuationDb(hl2Attn);
+        }
     }
 
     private void OnRadioDisconnected()
@@ -1083,6 +1118,15 @@ public class DspPipelineService : BackgroundService,
         // caller plumbed it through (issue #171); falls back to OrionMkII when
         // the byte wasn't supplied.
         _radio.ApplyPsHwPeakForConnection(isProtocol2: true, _radio.ConnectedBoardKind);
+        // Restore the persisted PS feedback attenuation (0..31 dB) before the
+        // operator arms PS, so a hot external-tap chain (e.g. RF2K-S −55 dB
+        // coupler) doesn't boot at 0 dB and rail the feedback ADC — the
+        // saturation that left calcc unable to fit on a fresh connect. No-op
+        // when nothing was saved for this board yet.
+        if (_radio.GetPersistedPsTxAttnDb() is int txAttn)
+        {
+            CurrentP2Client?.SetTxAttenuationDb((byte)Math.Clamp(txAttn, 0, 31));
+        }
         // Push current PA snapshot into the brand-new client so byte 345 /
         // byte 1401 / CmdGeneral[58] reflect PaSettingsStore from frame 1.
         _radio.ReplayPaSnapshot();
