@@ -2191,11 +2191,11 @@ public sealed class WdspDspEngine : IDspEngine
         // causes: env climbing >1.0 = forward limiter escaping; fb railing
         // (toward ADC saturation, ideal ~152) = feedback path saturating
         // calcc's top bins; both bounded but info6=0x0040 spiking = fit
-        // destabilising on the top-skewed envelope PDF. Info-level so it
-        // shows in a normal run; remove once characterised (bd: ps-hot-audio).
+        // destabilising on the top-skewed envelope PDF. Debug-level: kept as a
+        // diagnostic but no longer spams ~1 Hz on every TX in a normal run.
         if (_psInfoLogCounter % 10 == 0)
         {
-            _log.LogInformation(
+            _log.LogDebug(
                 "wdsp.psHot env={Env:F3} fb={Fb} info6=0x{Sc:X4} cal={Cal} state={St} cor={Cor}",
                 maxTx, _psInfoBuf[4], _psInfoBuf[6], _psInfoBuf[5], _psInfoBuf[15], _psInfoBuf[14]);
         }
