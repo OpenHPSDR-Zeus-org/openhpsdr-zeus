@@ -111,8 +111,13 @@ public class RuleEvaluatorTests
     }
 
     [Fact]
-    public void Below_RisesAboveExitThreshold_ClearsAndResets()
+    public void Below_RisesAboveExitThreshold_VerdictStaysSticky()
     {
+        // Sticky-fired semantics: once the warning has fired, the
+        // operator gets to read it at human speed instead of the
+        // verdict vanishing the moment the reading recovers. The
+        // cached message keeps replaying until the rule's scope
+        // changes (see RuleOutOfScope_ScrubsLatchedState).
         var ev = new RuleEvaluator();
         var rule = MicLowRule();
         var rules = new[] { rule };
@@ -121,16 +126,19 @@ public class RuleEvaluatorTests
         ev.Evaluate(rules, ReadingsWithMicAv(-40), SsbCtx, T0);
         ev.Evaluate(rules, ReadingsWithMicAv(-40), SsbCtx, T0.AddSeconds(3));
 
-        // Climb above exit threshold (-28). Rule clears.
+        // Climb above exit threshold (-28). Verdict stays sticky.
         var fired = ev.Evaluate(rules, ReadingsWithMicAv(-20), SsbCtx, T0.AddSeconds(3.5));
-        Assert.Empty(fired);
+        Assert.Single(fired);
 
-        // Drop back below enter — sustained window starts fresh.
-        fired = ev.Evaluate(rules, ReadingsWithMicAv(-40), SsbCtx, T0.AddSeconds(4));
-        Assert.Empty(fired); // 0 s into a new window
+        // Several more ticks with healthy mic — verdict still sticky.
+        fired = ev.Evaluate(rules, ReadingsWithMicAv(-20), SsbCtx, T0.AddSeconds(10));
+        Assert.Single(fired);
 
-        fired = ev.Evaluate(rules, ReadingsWithMicAv(-40), SsbCtx, T0.AddSeconds(7.1));
-        Assert.Single(fired); // 3 s sustained again
+        // Re-trip with a different reading — cache should update on
+        // the next raw-tripping tick (cache replays only while
+        // recovered).
+        fired = ev.Evaluate(rules, ReadingsWithMicAv(-50), SsbCtx, T0.AddSeconds(11));
+        Assert.Single(fired);
     }
 
     [Fact]
@@ -268,5 +276,94 @@ public class RuleEvaluatorTests
         Assert.NotNull(fired[0].Apply);
         Assert.Equal("tx.mic-gain-db", fired[0].Apply!.Value.Kind);
         Assert.Equal(28, fired[0].Apply!.Value.Value);
+    }
+
+    [Fact]
+    public void Sticky_RecoveredVerdict_ReplaysCachedMessage()
+    {
+        // While raw-tripping: message uses live readings. After
+        // recovery (still sticky-fired): message stays frozen at the
+        // last raw-tripping snapshot so it doesn't read "Mic at -22"
+        // while showing the "Mic too low" verdict.
+        var ev = new RuleEvaluator();
+        var rule = new AudioChainRule
+        {
+            Name = "mic.low.live",
+            Stage = AudioChainStageId.Mic,
+            Severity = AudioChainSeverity.Warn,
+            AppliesIn = _ => true,
+            Read = r => r.MicAv,
+            EnterThreshold = -30,
+            ExitThreshold = -28,
+            Direction = TripDirection.Below,
+            Message = (r, _) => $"Mic at {r.MicAv:F0} dBFS",
+        };
+        var rules = new[] { rule };
+
+        // Trip-and-fire at MicAv = -40.
+        ev.Evaluate(rules, ReadingsWithMicAv(-40), SsbCtx, T0);
+        var fired = ev.Evaluate(rules, ReadingsWithMicAv(-40), SsbCtx, T0.AddSeconds(3.1));
+        Assert.Equal("Mic at -40 dBFS", fired[0].Message);
+
+        // Reading climbs into the hysteresis band (-29). Still raw-tripping,
+        // so message recomputes to the new live reading.
+        fired = ev.Evaluate(rules, ReadingsWithMicAv(-29), SsbCtx, T0.AddSeconds(3.2));
+        Assert.Equal("Mic at -29 dBFS", fired[0].Message);
+
+        // Reading recovers above the exit threshold (-20). Sticky-fired,
+        // raw-tripping false — message MUST replay the most recent
+        // raw-tripping snapshot, not the now-healthy reading.
+        fired = ev.Evaluate(rules, ReadingsWithMicAv(-20), SsbCtx, T0.AddSeconds(3.3));
+        Assert.Single(fired);
+        Assert.Equal("Mic at -29 dBFS", fired[0].Message);
+
+        // Several more ticks at the healthy level — cached message
+        // continues to replay.
+        fired = ev.Evaluate(rules, ReadingsWithMicAv(-15), SsbCtx, T0.AddSeconds(10));
+        Assert.Single(fired);
+        Assert.Equal("Mic at -29 dBFS", fired[0].Message);
+
+        // Re-trip with a worse reading (-50). Back in raw-tripping,
+        // message + cache refresh.
+        fired = ev.Evaluate(rules, ReadingsWithMicAv(-50), SsbCtx, T0.AddSeconds(11));
+        Assert.Equal("Mic at -50 dBFS", fired[0].Message);
+
+        // Recover again — replays the new (-50) cache, not the old (-29).
+        fired = ev.Evaluate(rules, ReadingsWithMicAv(-20), SsbCtx, T0.AddSeconds(12));
+        Assert.Equal("Mic at -50 dBFS", fired[0].Message);
+    }
+
+    [Fact]
+    public void Sticky_ClearsOnScopeChange()
+    {
+        // The applicability scope changing is the only way a sticky-
+        // fired verdict goes away on the server side (operator-side
+        // dismiss is frontend-only and never visible to the evaluator).
+        var ev = new RuleEvaluator();
+        var rule = MicLowRule() with
+        {
+            Name = "mic.low.ssb-only",
+            AppliesIn = c => c.Mode == RxMode.USB,
+        };
+        var rules = new[] { rule };
+
+        // Trip-and-fire.
+        ev.Evaluate(rules, ReadingsWithMicAv(-40), SsbCtx, T0);
+        var fired = ev.Evaluate(rules, ReadingsWithMicAv(-40), SsbCtx, T0.AddSeconds(3.1));
+        Assert.Single(fired);
+
+        // Recovery — still sticky.
+        fired = ev.Evaluate(rules, ReadingsWithMicAv(-15), SsbCtx, T0.AddSeconds(4));
+        Assert.Single(fired);
+
+        // Operator switches to CW — scope flips, sticky verdict clears.
+        var cwCtx = SsbCtx with { Mode = RxMode.CWU };
+        fired = ev.Evaluate(rules, ReadingsWithMicAv(-40), cwCtx, T0.AddSeconds(5));
+        Assert.Empty(fired);
+
+        // Back to USB with healthy mic — no stale verdict resurrected,
+        // even though the cache existed in the same evaluator instance.
+        fired = ev.Evaluate(rules, ReadingsWithMicAv(-20), SsbCtx, T0.AddSeconds(6));
+        Assert.Empty(fired);
     }
 }

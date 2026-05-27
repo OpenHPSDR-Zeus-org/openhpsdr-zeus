@@ -54,6 +54,7 @@ import { useBandPlanStore } from '../state/bandPlan';
 import { useRxMetersStore } from '../state/rx-meters-store';
 import { warnOnce } from '../util/logger';
 import { wsUrl as buildWsUrl } from '../serverUrl';
+import type { AudioChainStageId, AudioChainVerdict } from '../state/audio-chain-health-store';
 
 const INITIAL_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 8000;
@@ -470,7 +471,7 @@ export function startRealtime(path = '/ws'): () => void {
           void import('../state/audio-chain-health-store').then((m) => {
             try {
               const { mode, verdicts } = m.decodeAudioChainHealthFrame(ev.data);
-              const byStage = new Map<m.AudioChainStageId, m.AudioChainVerdict>();
+              const byStage = new Map<AudioChainStageId, AudioChainVerdict>();
               for (const v of verdicts) byStage.set(v.stageId, v);
               m.useAudioChainHealthStore.getState().setSnapshot({
                 mode,

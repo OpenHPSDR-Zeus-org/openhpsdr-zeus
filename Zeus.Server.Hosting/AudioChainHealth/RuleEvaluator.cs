@@ -36,15 +36,26 @@ public readonly record struct FiredRule(
 /// <para><b>Sustained-violation:</b> A raw-tripping rule does NOT fire
 /// until it has been tripping continuously for the rule's window
 /// (default 3 s warn / 5 s error). Speech gaps and plosive transients
-/// don't fire warnings. When the rule clears (raw-tripping goes
-/// false), the fired latch resets — the next sustained run starts
-/// counting from zero.</para>
+/// don't fire warnings.</para>
+///
+/// <para><b>Sticky once fired:</b> When raw-tripping clears (the
+/// reading recovers past the exit threshold), the fired latch is NOT
+/// reset — the warning stays on the wire so the operator has time to
+/// read it and decide whether to act. The verdict's <c>Message</c> and
+/// apply payload are cached from the most recent raw-tripping tick and
+/// replayed verbatim while the warning is sticky-but-recovered. The
+/// fired bit clears only when the rule's applicability scope changes
+/// (mode switch / MOX off / similar) or when the operator dismisses
+/// the verdict frontend-side (which is session-only and never visible
+/// to the server). Re-tripping while sticky updates the cached
+/// payload from the current readings.</para>
 ///
 /// <para><b>Applicability:</b> When the rule's
 /// <see cref="AudioChainRule.AppliesIn"/> returns false (e.g. an SSB
 /// rule under CW), the evaluator clears all latched state for that
 /// rule and emits no fired result. Mode switches do NOT preserve a
-/// half-elapsed sustained-violation window across modes.</para>
+/// half-elapsed sustained-violation window across modes — nor a
+/// sticky fired bit. Coming back into scope means a fresh start.</para>
 /// </summary>
 public sealed class RuleEvaluator
 {
@@ -61,7 +72,16 @@ public sealed class RuleEvaluator
         public DateTime? RawTrippingSince;
         // Sustained-violation gate has passed; this is the bit the
         // service reads to decide "is the verdict on the wire?"
+        // Sticky: once true it stays true through raw-tripping
+        // transitions until the rule goes out of scope.
         public bool Fired;
+        // Snapshot of the most-recently-tripping message + apply
+        // payload, replayed when the rule is sticky-fired but no
+        // longer raw-tripping. Captured on every raw-tripping tick
+        // so a worsening reading updates what the operator sees.
+        public string? CachedMessage;
+        public string? CachedApplyLabel;
+        public AudioChainApplyAction? CachedApply;
     }
 
     private readonly Dictionary<string, State> _states = new(StringComparer.Ordinal);
@@ -90,10 +110,14 @@ public sealed class RuleEvaluator
             {
                 // Out-of-scope: scrub the latch so a mode switch never
                 // resurrects a stale fired bit when the rule comes back
-                // into scope.
+                // into scope. This is the ONLY path that clears a
+                // sticky-fired verdict.
                 state.RawTripping = false;
                 state.RawTrippingSince = null;
                 state.Fired = false;
+                state.CachedMessage = null;
+                state.CachedApplyLabel = null;
+                state.CachedApply = null;
                 continue;
             }
 
@@ -111,7 +135,11 @@ public sealed class RuleEvaluator
             {
                 state.RawTripping = false;
                 state.RawTrippingSince = null;
-                state.Fired = false;
+                // Sticky: leave state.Fired alone here. The verdict
+                // stays on the wire (using the cached message+apply)
+                // until the rule's scope changes — operators get to
+                // read the warning at human speed instead of having
+                // it disappear with the recovering reading.
             }
 
             if (state.RawTripping && !state.Fired)
@@ -125,11 +153,40 @@ public sealed class RuleEvaluator
 
             if (state.Fired)
             {
+                // While raw-tripping is true, recompute message + apply
+                // from live readings so a worsening value updates the
+                // verdict text. When sticky-but-recovered (raw-tripping
+                // false), replay the cached payload so the message
+                // doesn't drift to "Mic at -22 dBFS" while showing the
+                // "Mic too low" warning.
+                string message;
+                string applyLabel;
+                AudioChainApplyAction? apply;
+                if (state.RawTripping)
+                {
+                    message = rule.Message(readings, ctx);
+                    applyLabel = rule.ApplyLabel?.Invoke(readings, ctx) ?? string.Empty;
+                    apply = rule.Apply?.Invoke(readings, ctx);
+                    state.CachedMessage = message;
+                    state.CachedApplyLabel = applyLabel;
+                    state.CachedApply = apply;
+                }
+                else
+                {
+                    // Cache MUST be populated — Fired only transitions
+                    // to true under RawTripping=true, and that branch
+                    // above always writes the cache.
+                    message = state.CachedMessage ?? rule.Message(readings, ctx);
+                    applyLabel = state.CachedApplyLabel
+                        ?? rule.ApplyLabel?.Invoke(readings, ctx)
+                        ?? string.Empty;
+                    apply = state.CachedApply ?? rule.Apply?.Invoke(readings, ctx);
+                }
                 fired.Add(new FiredRule(
                     Rule: rule,
-                    Message: rule.Message(readings, ctx),
-                    ApplyLabel: rule.ApplyLabel?.Invoke(readings, ctx) ?? string.Empty,
-                    Apply: rule.Apply?.Invoke(readings, ctx)));
+                    Message: message,
+                    ApplyLabel: applyLabel,
+                    Apply: apply));
             }
         }
         return fired;

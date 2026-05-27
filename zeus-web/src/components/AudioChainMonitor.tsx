@@ -20,11 +20,11 @@ import './AudioChainMonitor.css';
 import {
   AudioChainSeverity,
   AudioChainStageId,
-  AudioChainVerdict,
   VERDICT_FLAG_HAS_APPLY,
   VERDICT_FLAG_IMMEDIATE_ACTION,
   useAudioChainHealthStore,
 } from '../state/audio-chain-health-store';
+import type { AudioChainVerdict } from '../state/audio-chain-health-store';
 import { useTxStore } from '../state/tx-store';
 
 type TileSpec = {
@@ -77,7 +77,11 @@ const severityClass = (s: AudioChainSeverity, immediate: boolean): string => {
   if (s === AudioChainSeverity.Error) return 'acm__tile--s-err';
   if (s === AudioChainSeverity.Warn) return 'acm__tile--s-warn';
   if (s === AudioChainSeverity.Info) return 'acm__tile--s-info';
-  return '';
+  // Explicit "ok" class so healthy tiles read green at a glance —
+  // the original design left ok visually neutral, which made it
+  // impossible to tell at a distance whether the chain was green or
+  // simply unverdicted.
+  return 'acm__tile--s-ok';
 };
 
 const pillClass = (s: AudioChainSeverity): string => {
@@ -358,12 +362,18 @@ export function AudioChainMonitor() {
       <div className="acm__pipeline">
         {TILES.map((tile) => {
           const v = snapshot.byStage.get(tile.id);
+          // Differentiate "no frame yet" (server hasn't ticked / WS
+          // not connected) from "actually OK." Before any snapshot
+          // arrives, render tiles in the neutral awaiting-feed state
+          // so the operator doesn't read green-without-data as "all
+          // good" before the radio has even reported in.
+          const hasFeed = snapshot.receivedAt !== 0 && v !== undefined;
           const sev = v?.severity ?? AudioChainSeverity.Ok;
           const immediate =
             v !== undefined &&
             (v.flags & VERDICT_FLAG_IMMEDIATE_ACTION) !== 0;
           const reading = composeReading(tile.id, tx);
-          const sevCls = severityClass(sev, immediate);
+          const sevCls = hasFeed ? severityClass(sev, immediate) : '';
           return (
             <div
               key={tile.id}
@@ -381,7 +391,11 @@ export function AudioChainMonitor() {
                 {reading.unit && <span className="acm__unit">{reading.unit}</span>}
               </div>
               <div className="acm__tile-sub">{reading.sub}</div>
-              <div className={pillClass(sev)}>{pillLabel(v ?? { stageId: tile.id, severity: AudioChainSeverity.Ok, flags: 0, message: '', applyLabel: '' })}</div>
+              {hasFeed && (
+                <div className={pillClass(sev)}>
+                  {pillLabel(v ?? { stageId: tile.id, severity: AudioChainSeverity.Ok, flags: 0, message: '', applyLabel: '' })}
+                </div>
+              )}
             </div>
           );
         })}
