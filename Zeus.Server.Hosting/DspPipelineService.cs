@@ -711,7 +711,18 @@ public class DspPipelineService : BackgroundService,
             // flag locally and the C0=0x14 wire byte is unaffected
             // (board-gated in WriteAttenuatorPayload).
             var p1Active = _radio.ActiveClient;
-            if (s.PsEnabled)
+            if (s.PsEnabled && _keyed)
+            {
+                // Defer the ARM while transmitting. Arming mid-MOX fires
+                // calcc's SetPSControl(reset) into a live fit, which races the
+                // feedback stream and wedges calcc in LCALC on a stale curve
+                // (the mid-TX arm/disarm wedge — frozen info5, cor=1 but never
+                // updating → splatter). Re-arming mid-over isn't a real need;
+                // leaving _appliedPsEnabled stale here makes the
+                // OnRadioMoxChanged falling-edge re-apply arm it cleanly on
+                // key-up. Disarm (abort) below stays immediate.
+            }
+            else if (s.PsEnabled)
             {
                 _p2Client?.SetPsFeedbackEnabled(true);
                 p1Active?.SetPsEnabled(true);
@@ -743,7 +754,11 @@ public class DspPipelineService : BackgroundService,
                 p1Active?.SetPsEnabled(false);
                 DrainPsFeedback();
             }
-            _appliedPsEnabled = s.PsEnabled;
+            // Mark applied only when we actually armed or disarmed. A deferred
+            // (keyed) arm leaves _appliedPsEnabled stale on purpose so the
+            // MOX-off re-apply re-enters this block and arms.
+            if (!(s.PsEnabled && _keyed))
+                _appliedPsEnabled = s.PsEnabled;
         }
         if (resync || s.PsFeedbackSource != _appliedPsFeedbackSource)
         {

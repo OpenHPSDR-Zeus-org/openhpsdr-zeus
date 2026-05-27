@@ -152,6 +152,17 @@ public sealed class PsAutoAttenuateService : BackgroundService
     private bool _stallWarned;
     private static readonly TimeSpan StallThreshold = TimeSpan.FromSeconds(5);
 
+    // Wedge watchdog — distinct from the cal==0 stall above. Here calcc fit
+    // fine, then FROZE at a non-zero info5 while keyed in auto mode (the
+    // mid-TX arm/disarm wedge: stuck in LCALC, cor=1 on a stale curve →
+    // splatter). Auto mode re-fits continuously, so info5 frozen for
+    // >StallThreshold = wedged; recover with a clean calcc reset, rate-limited
+    // so a persistent wedge can't reset-storm. (Single-cal / manual hold
+    // legitimately freezes info5, so this is gated on auto mode only.)
+    private int _lastWedgeCal = -1;
+    private long _lastWedgeCalChangeMs;
+    private long _lastWedgeResetMs;
+
     // *** DEVIATION FROM mi0bot ***
     // Silent server-side auto-cal of WDSP hw_peak from observed TX envelope.
     // mi0bot exposes PSForm.cs txtPSpeak as a hand-dialed operator value
@@ -360,6 +371,34 @@ public sealed class PsAutoAttenuateService : BackgroundService
                 _radio.SetPsCalibrationStalled(false);
                 _log.LogInformation("psAutoAttn.stall.cleared info5={Cal}", stallPsm.CalibrationAttempts);
             }
+        }
+
+        // Wedge watchdog — info5 frozen at a NON-zero value while keyed in
+        // auto mode = calcc stalled in LCALC on a stale curve (see field
+        // comment). Reset calcc to recover; rate-limited to one reset per
+        // window so a hard wedge can't reset-storm. Gated on auto mode because
+        // single-cal / manual hold freezes info5 by design.
+        if (s.PsAuto && !s.PsSingle && stallPsm.CalibrationAttempts > 0)
+        {
+            long now = Environment.TickCount64;
+            if (stallPsm.CalibrationAttempts != _lastWedgeCal)
+            {
+                _lastWedgeCal = stallPsm.CalibrationAttempts;
+                _lastWedgeCalChangeMs = now;
+            }
+            else if (now - _lastWedgeCalChangeMs >= (long)StallThreshold.TotalMilliseconds
+                     && now - _lastWedgeResetMs >= (long)StallThreshold.TotalMilliseconds)
+            {
+                _lastWedgeResetMs = now;
+                _log.LogWarning(
+                    "psAutoAttn.wedge info5 frozen at {Cal} state={State} for {ElapsedMs}ms — calcc stalled (e.g. PS toggled mid-TX); resetting calcc.",
+                    stallPsm.CalibrationAttempts, stallPsm.CalState, now - _lastWedgeCalChangeMs);
+                engine.ResetPs();
+            }
+        }
+        else
+        {
+            _lastWedgeCal = -1;
         }
 
         // Auto-cal hw_peak from observed envelope. Independent of HL2/P2 path
