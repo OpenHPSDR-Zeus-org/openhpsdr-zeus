@@ -55,9 +55,10 @@ describe('AddPanelModal', () => {
     const cards = container.querySelectorAll(
       '[data-testid="add-panel-cards"] .add-panel-card',
     );
-    // 20 panels in registry (CW Decoder added in zeus-cdn; RF-2K panel was
-    // extracted to a plugin; Rotator Dial was added in #385).
-    expect(cards.length).toBe(20);
+    // 21 panels in registry (Audio Chain Monitor added in zeus-dih;
+    // CW Decoder added in zeus-cdn; RF-2K panel was extracted to a
+    // plugin; Rotator Dial was added in #385).
+    expect(cards.length).toBe(21);
     unmount();
   });
 
@@ -72,13 +73,14 @@ describe('AddPanelModal', () => {
     const cards = container.querySelectorAll(
       '[data-testid="add-panel-cards"] .add-panel-card',
     );
-    // smeter, txmeters, meters, analogmeter — four panels in the meters category.
-    expect(cards.length).toBe(4);
+    // smeter, txmeters, meters, analogmeter, audiochain — five panels in the
+    // meters category after the Audio Chain Monitor landed.
+    expect(cards.length).toBe(5);
     const ids = Array.from(cards).map((c) =>
       c.getAttribute('data-panel-id'),
     );
     expect(ids).toEqual(
-      expect.arrayContaining(['smeter', 'txmeters', 'metergroup', 'analogmeter']),
+      expect.arrayContaining(['smeter', 'txmeters', 'metergroup', 'analogmeter', 'audiochain']),
     );
     unmount();
   });

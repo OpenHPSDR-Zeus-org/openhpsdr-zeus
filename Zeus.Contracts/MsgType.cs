@@ -172,4 +172,15 @@ public enum MsgType : byte
     // audio. Payload: [type:1][wpm:u16 LE][snrDb:f32 LE][confidence:f32 LE]
     // [textLen:u16 LE][text:UTF-8…]. See CwDecodedTextFrame.cs.
     CwDecodedText = 0x31,
+
+    // Server → client (Audio Chain Monitor verdicts). Broadcast at ~2 Hz by
+    // AudioChainHealthService whenever a verdict changes (always-on, even
+    // outside MOX — Mic and pre-MOX preview stages still produce verdicts).
+    // Carries verdict overlay only — raw stage numbers stay on their native
+    // TxMetersV2 / PaTemp / RxMetersV2 frames; the factory widget joins on
+    // AudioChainStageId in the frontend. See ADR-0002 and
+    // AudioChainHealthFrame.cs. Lives in the 0x3x control-plane-feedback
+    // nibble alongside CW status; UI ignores unknown types so older builds
+    // tolerate this cleanly.
+    AudioChainHealth = 0x32,
 }

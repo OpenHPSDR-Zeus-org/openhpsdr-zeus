@@ -248,6 +248,10 @@ public static class ZeusHost
         builder.Services.AddHostedService<TxAudioIngestStartup>();
         builder.Services.AddSingleton<TxMetersService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TxMetersService>());
+        // Audio Chain Monitor (core diagnostic per ADR-0001). Always-on 2 Hz
+        // verdict overlay published on the AudioChainHealth (0x32) WS frame.
+        builder.Services.AddSingleton<AudioChainHealthService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioChainHealthService>());
         // TxTuneDriver pumps silent mic blocks through WDSP TXA while TUN is on so
         // the post-gen tone actually reaches the ring (no mic uplink during TUN).
         builder.Services.AddHostedService<TxTuneDriver>();

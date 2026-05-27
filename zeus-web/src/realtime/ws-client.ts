@@ -187,6 +187,15 @@ const CW_ENGINE_STATUS_HEADER_BYTES = 9;
 export const MSG_TYPE_CW_DECODED_TEXT = 0x31;
 const CW_DECODED_TEXT_HEADER_BYTES = 13;
 
+// Audio Chain Monitor verdicts — broadcast at ~2 Hz by
+// AudioChainHealthService. Variable-length: 3-byte header + per-verdict
+// (5-byte header + UTF-8 message + UTF-8 applyLabel). Carries verdicts
+// only, no raw stage numbers; the factory widget joins this against the
+// existing TxMetersV2 / PaTemp / RxMetersV2 frames in the frontend by
+// stage id. See ADR-0002 and audio-chain-health-store.ts.
+export const MSG_TYPE_AUDIO_CHAIN_HEALTH = 0x32;
+const AUDIO_CHAIN_HEALTH_MIN_BYTES = 3;
+
 // Shared by startRealtime / sendMicPcm. Single WS instance at a time; writes
 // are no-ops when the socket isn't open.
 let activeWs: WebSocket | null = null;
@@ -447,6 +456,30 @@ export function startRealtime(path = '/ws'): () => void {
             // while the operator has the panel actively listening.
             if (store.state !== 'listening') return;
             store.appendText(text, wpm, snrDb, confidence);
+          });
+          return;
+        }
+        if (peekType === MSG_TYPE_AUDIO_CHAIN_HEALTH) {
+          if (ev.data.byteLength < AUDIO_CHAIN_HEALTH_MIN_BYTES) {
+            warnOnce(
+              'ws-audio-chain-health-short',
+              `audio-chain-health frame too short: ${ev.data.byteLength}`,
+            );
+            return;
+          }
+          void import('../state/audio-chain-health-store').then((m) => {
+            try {
+              const { mode, verdicts } = m.decodeAudioChainHealthFrame(ev.data);
+              const byStage = new Map<m.AudioChainStageId, m.AudioChainVerdict>();
+              for (const v of verdicts) byStage.set(v.stageId, v);
+              m.useAudioChainHealthStore.getState().setSnapshot({
+                mode,
+                byStage,
+                receivedAt: Date.now(),
+              });
+            } catch (err) {
+              warnOnce('ws-audio-chain-health-decode', 'audio-chain-health decode failed', err);
+            }
           });
           return;
         }

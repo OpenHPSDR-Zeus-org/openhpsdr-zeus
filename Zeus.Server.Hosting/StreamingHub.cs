@@ -470,6 +470,34 @@ public sealed class StreamingHub
         }
     }
 
+    public void Broadcast(in AudioChainHealthFrame frame)
+    {
+        if (_clients.IsEmpty) return;
+
+        // Variable-length: 3-byte header + (5-byte verdict header + UTF-8
+        // message + UTF-8 applyLabel) × N verdicts. Compute exactly so we
+        // allocate once. Mirrors the CwEngineStatus shape.
+        int total = AudioChainHealthFrame.HeaderByteLength;
+        var verdicts = frame.Verdicts ?? (IReadOnlyList<AudioChainVerdict>)Array.Empty<AudioChainVerdict>();
+        for (int i = 0; i < verdicts.Count; i++)
+        {
+            int msgBytes = Math.Min(
+                System.Text.Encoding.UTF8.GetByteCount(verdicts[i].Message ?? string.Empty),
+                AudioChainHealthFrame.MaxMessageBytes);
+            int aplBytes = Math.Min(
+                System.Text.Encoding.UTF8.GetByteCount(verdicts[i].ApplyLabel ?? string.Empty),
+                AudioChainHealthFrame.MaxApplyLabelBytes);
+            total += AudioChainHealthFrame.PerVerdictHeaderBytes + msgBytes + aplBytes;
+        }
+        var payload = new byte[total];
+        var writer = new FixedBufferWriter(payload, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
     /// <summary>
     /// Broadcasts a BandPlanChanged (0x1B) notification. Payload: type byte +
     /// UTF-8 region ID. Clients refetch /api/bands/current on receipt.

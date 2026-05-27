@@ -63,6 +63,7 @@ import { ModePanel } from './panels/ModePanel';
 import { StepPanel } from './panels/StepPanel';
 import { MeterGroupPanel } from '../components/meter-group/MeterGroupPanel';
 import { AnalogMeterPanel } from './panels/AnalogMeterPanel';
+import { AudioChainMonitor } from '../components/AudioChainMonitor';
 
 export type PanelCategory =
   | 'spectrum'
@@ -254,6 +255,13 @@ export const PANELS: Record<string, PanelDef> = {
     tags: ['tx', 'power', 'swr', 'alc', 'meters'],
     component: TxMetersPanel,
     maxW: 3,
+  },
+  audiochain: {
+    id: 'audiochain',
+    name: 'Audio Chain Monitor',
+    category: 'meters',
+    tags: ['tx', 'audio', 'chain', 'monitor', 'diagnostic', 'factory'],
+    component: AudioChainMonitor,
   },
   tx: {
     id: 'tx',
