@@ -1931,10 +1931,20 @@ public sealed class WdspDspEngine : IDspEngine
                 // disabling PS while NOT keyed, push 7 zero-IQ blocks through
                 // psccF so the calcc state machine advances to LRESET cleanly
                 // and doesn't latch a stale curve in iqc on re-arm.
-                var zeros = new float[PsFeedbackBlockSize];
-                for (int i = 0; i < 7; i++)
+                //
+                // ONLY when not transmitting. Mid-MOX (operator aborting PS
+                // during a TX), the live feedback FB pump is still writing real
+                // samples into psccF; interleaving 7 manual zero blocks races
+                // that stream and can wedge calcc in LCALC. While keyed the
+                // live feedback advances calcc on its own, so the manual drain
+                // is both unnecessary and harmful — skip it.
+                if (!_moxOn)
                 {
-                    NativeMethods.psccF(id, PsFeedbackBlockSize, zeros, zeros, zeros, zeros, 0, 0);
+                    var zeros = new float[PsFeedbackBlockSize];
+                    for (int i = 0; i < 7; i++)
+                    {
+                        NativeMethods.psccF(id, PsFeedbackBlockSize, zeros, zeros, zeros, zeros, 0, 0);
+                    }
                 }
                 NativeMethods.SetPSRunCal(id, 0);
                 NativeMethods.SetPSControl(id, 1, 0, 0, 0);
@@ -2181,6 +2191,23 @@ public sealed class WdspDspEngine : IDspEngine
                 _psInfoBuf[0], _psInfoBuf[1], _psInfoBuf[2], _psInfoBuf[3],
                 _psInfoBuf[4], _psInfoBuf[5], _psInfoBuf[6], _psInfoBuf[7],
                 _psInfoBuf[14], _psInfoBuf[15]);
+        }
+
+        // Hot-audio robustness diagnostic. At ~1 Hz while PS is armed, surface
+        // the forward TX envelope PEAK (GetPSMaxTX, ~1.0 = at the ALC cap)
+        // next to the feedback level (info4), the scheck reject bitmask
+        // (info6), calcc fit count (info5), state and correcting flag. On a
+        // deliberately-hot over this separates the three candidate root
+        // causes: env climbing >1.0 = forward limiter escaping; fb railing
+        // (toward ADC saturation, ideal ~152) = feedback path saturating
+        // calcc's top bins; both bounded but info6=0x0040 spiking = fit
+        // destabilising on the top-skewed envelope PDF. Debug-level: kept as a
+        // diagnostic but no longer spams ~1 Hz on every TX in a normal run.
+        if (_psInfoLogCounter % 10 == 0)
+        {
+            _log.LogDebug(
+                "wdsp.psHot env={Env:F3} fb={Fb} info6=0x{Sc:X4} cal={Cal} state={St} cor={Cor}",
+                maxTx, _psInfoBuf[4], _psInfoBuf[6], _psInfoBuf[5], _psInfoBuf[15], _psInfoBuf[14]);
         }
 
         return new PsStageMeters(

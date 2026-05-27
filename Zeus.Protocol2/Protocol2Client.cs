@@ -1120,6 +1120,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// loop to ramp feedback level into the 128..181 window when calcc
     /// rejects fits because the loopback is too hot or too quiet.
     /// </summary>
+    /// <summary>Current TX feedback step attenuation in dB (the ATTOnTX value
+    /// last written via <see cref="SetTxAttenuationDb"/>). Sticky across
+    /// MOX/unkey — the radio holds it until changed — so the PureSignal
+    /// auto-attenuate dance can read ground truth on re-arm instead of
+    /// assuming 0 and desyncing its model from the radio.</summary>
+    public byte TxStepAttnDb => _txStepAttnDb;
+
     public void SetTxAttenuationDb(byte db)
     {
         if (db > 31) db = 31;

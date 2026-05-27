@@ -231,6 +231,16 @@ public interface IProtocol1Client : IDisposable
     void SetHl2TxStepAttenuationDb(int db);
 
     /// <summary>
+    /// Current HL2 TX-side step attenuation in dB — the value last written
+    /// via <see cref="SetHl2TxStepAttenuationDb"/>. Returns 0 when untouched
+    /// (the radio's power-on default), never the internal int.MinValue
+    /// sentinel. Read by <c>PsAutoAttenuateService</c> on a PS-arm edge so
+    /// the dance baselines its model to ground truth instead of assuming 0,
+    /// which would desync from the radio's sticky ATTOnTX value.
+    /// </summary>
+    int Hl2TxStepAttenuationDb { get; }
+
+    /// <summary>
     /// Push the on-board CW keyer config to C&amp;C register 0x0B: speed in
     /// WPM (clamped to the 6-bit 0..60 gateware field) and the keyer mode
     /// (straight / iambic A / iambic B). Sent via the register round-robin

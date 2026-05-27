@@ -639,6 +639,18 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _hl2TxAttnDb, clamped);
     }
 
+    public int Hl2TxStepAttenuationDb
+    {
+        // int.MinValue is the "never written / radio default" sentinel (see
+        // _hl2TxAttnDb decl + SnapshotState). Surface it as 0 so the PS-arm
+        // baseline sync reads the radio's actual untouched 0 dB.
+        get
+        {
+            int v = Volatile.Read(ref _hl2TxAttnDb);
+            return v == int.MinValue ? 0 : v;
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
