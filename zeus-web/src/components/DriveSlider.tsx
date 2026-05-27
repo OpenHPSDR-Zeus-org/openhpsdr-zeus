@@ -48,6 +48,8 @@ import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 import { usePaStore } from '../state/pa-store';
 import { useLiveSlider } from '../hooks/useLiveSlider';
+import { useChainFocus } from '../hooks/use-chain-focus';
+import { AudioChainStageId } from '../state/audio-chain-health-store';
 
 // PRD FR-4 drive range: 0..100 percent. Stream during drag via rAF coalesce
 // (one POST per paint at most) so the radio's drive byte tracks the thumb in
@@ -60,6 +62,13 @@ export function DriveSlider() {
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const drivePercent = useTxStore((s) => s.drivePercent);
   const setDrivePercent = useTxStore((s) => s.setDrivePercent);
+
+  // Show me targets: drive matters for two factory-widget stages —
+  // Wire (drive ceiling) and ALC (clip → lower drive). Hook listens
+  // for either and pulses the same slider.
+  const focusRef = useRef<HTMLLabelElement>(null);
+  useChainFocus(AudioChainStageId.Wire, focusRef);
+  useChainFocus(AudioChainStageId.Alc, focusRef);
   // Live "target watts" preview so the operator can read "35% of 100 W = 35 W"
   // at a glance — the slider itself is target-watts-%, not drive-byte-%, and
   // this field makes the muscle-memory bridge from Thetis explicit. Hidden
@@ -104,7 +113,7 @@ export function DriveSlider() {
   };
 
   return (
-    <label className="knob-group">
+    <label className="knob-group" ref={focusRef}>
       <span className="label-xs">DRV</span>
       <input
         type="range"

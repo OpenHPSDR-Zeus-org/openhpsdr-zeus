@@ -14,6 +14,8 @@ import { useCallback, useRef } from 'react';
 import { setLevelerMaxGain } from '../api/client';
 import { useTxStore } from '../state/tx-store';
 import { useLiveSlider } from '../hooks/useLiveSlider';
+import { useChainFocus } from '../hooks/use-chain-focus';
+import { AudioChainStageId } from '../state/audio-chain-health-store';
 
 // Leveler max-gain (TX): how much the WDSP TXA Leveler can boost quiet
 // speech before the ALC catches it. Default +5 dB matches the W1AEX /
@@ -36,6 +38,9 @@ function quantize(v: number): number {
 export function LevelerMaxGainSlider() {
   const value = useTxStore((s) => s.levelerMaxGainDb);
   const setValue = useTxStore((s) => s.setLevelerMaxGainDb);
+
+  const focusRef = useRef<HTMLLabelElement>(null);
+  useChainFocus(AudioChainStageId.Leveler, focusRef);
 
   const previousOnError = useRef<number>(value);
 
@@ -67,6 +72,7 @@ export function LevelerMaxGainSlider() {
 
   return (
     <label
+      ref={focusRef}
       className="knob-group"
       title="Leveler Max Gain — how much the TXA Leveler can boost quiet speech before ALC catches it. +5 dB is the community-recommended SSB starting point; higher pushes ALC into harder limiting. TX-only."
     >

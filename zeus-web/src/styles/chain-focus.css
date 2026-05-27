@@ -1,0 +1,33 @@
+/* Audio Chain Monitor — "Show me" deeplink pulse.
+ *
+ * Lives as its own global stylesheet (loaded from main.tsx) so the
+ * animation works on settings-panel controls regardless of whether
+ * the AudioChainMonitor widget itself is mounted in the workspace.
+ * The hook (use-chain-focus.ts) toggles the .acm-focus-pulse class
+ * on a control's root element for ~1.5 s.
+ */
+
+.acm-focus-pulse {
+  animation: acm-focus-pulse 1.5s ease-out 1;
+  border-radius: 4px;
+  position: relative;
+  z-index: 1;
+}
+
+@keyframes acm-focus-pulse {
+  0% {
+    box-shadow:
+      0 0 0 0 var(--accent-bright, var(--accent)),
+      0 0 0 0 rgba(74, 158, 255, 0.6);
+  }
+  20% {
+    box-shadow:
+      0 0 0 2px var(--accent-bright, var(--accent)),
+      0 0 12px 4px rgba(74, 158, 255, 0.45);
+  }
+  100% {
+    box-shadow:
+      0 0 0 0 transparent,
+      0 0 0 0 transparent;
+  }
+}

@@ -46,6 +46,8 @@ import { useCallback, useRef } from 'react';
 import { setMicGain } from '../api/client';
 import { useTxStore } from '../state/tx-store';
 import { useLiveSlider } from '../hooks/useLiveSlider';
+import { useChainFocus } from '../hooks/use-chain-focus';
+import { AudioChainStageId } from '../state/audio-chain-health-store';
 
 // Mic-gain range: −40..+10 dB, default 0 dB (= unity, no behaviour change
 // for operators who never moved the slider). Matches Thetis's defaults at
@@ -65,6 +67,9 @@ const MAX = 10;
 export function MicGainSlider() {
   const micGainDb = useTxStore((s) => s.micGainDb);
   const setMicGainDb = useTxStore((s) => s.setMicGainDb);
+
+  const focusRef = useRef<HTMLLabelElement>(null);
+  useChainFocus(AudioChainStageId.Mic, focusRef);
 
   const previousOnError = useRef<number>(micGainDb);
 
@@ -101,7 +106,7 @@ export function MicGainSlider() {
   };
 
   return (
-    <label className="knob-group">
+    <label className="knob-group" ref={focusRef}>
       <span className="label-xs">MIC</span>
       <input
         type="range"

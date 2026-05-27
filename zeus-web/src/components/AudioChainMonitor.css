@@ -301,3 +301,7 @@
   font-size: 12px;
   font-style: italic;
 }
+
+/* (Deeplink pulse animation lives in styles/chain-focus.css so the
+ *  animation is available to settings-panel controls even when the
+ *  AudioChainMonitor widget itself isn't mounted in the workspace.) */
