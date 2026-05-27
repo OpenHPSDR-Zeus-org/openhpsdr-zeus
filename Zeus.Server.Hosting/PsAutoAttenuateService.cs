@@ -257,23 +257,39 @@ public sealed class PsAutoAttenuateService : BackgroundService
     {
         var s = _radio.Snapshot();
 
-        // PS-arm edge: re-baseline _currentAttnDb on every false→true so a
-        // fresh arm starts at the radio's untouched 0 dB. The actual radio
-        // state may differ if the operator manually changed step-att between
-        // sessions; assume the radio holds 0 between arms (matches pihpsdr).
-        // Also reset the HL2 state machine so a fresh arm always starts in
+        // PS-arm edge: baseline _currentAttnDb to the radio's ACTUAL current
+        // TX step attenuation on every false→true.
+        //
+        // This used to force 0 on the premise that "the radio holds 0 between
+        // arms (matches pihpsdr)". That premise is false in Zeus: the ATTOnTX
+        // wire byte is sticky — nothing in the disarm/unkey path resets it —
+        // so the radio holds the *last dance value* (e.g. ~21 dB for a hot
+        // external-tap feedback chain). Forcing the model to 0 desynced it
+        // from the radio, with two on-air failures:
+        //   • first arm after a fresh connect (radio genuinely 0): the hot
+        //     feedback saturates the ADC, so the dance needs several slow
+        //     cycles to climb out — calcc can't fit and the signal splatters
+        //     during the climb;
+        //   • re-arm (radio still ~21, model says 0): the moment a voice peak
+        //     pushes feedback out of [128,181], the dance computes its step
+        //     from the phantom 0 baseline and slams a too-low attenuation onto
+        //     the radio → feedback blows out → "corrects but won't hold".
+        // Reading ground truth keeps every step anchored. (root-caused on a
+        // G2 + RF2K-S external tap 2026-05-27; AutoAttenuate-off was clean.)
+        //
+        // Also reset the state machines so a fresh arm always starts in
         // Monitor — if the prior session was disarmed mid-dance, we don't
         // want to fire RestoreOperation against a stale saved cal-mode.
         if (s.PsEnabled && !_psWasEnabled)
         {
-            _currentAttnDb = 0;
+            _currentAttnDb = ReadRadioTxAttnDb();
             _lastCalibrationAttempts = -1;
             _hl2State = Hl2AutoAttState.Monitor;
             _p2State = P2AutoAttState.Monitor;
             _stallStartTickMs = 0;
             _stallWarned = false;
             _lastAutoCalTickMs = 0;
-            _log.LogInformation("psAutoAttn.armed reset attn={Db}", _currentAttnDb);
+            _log.LogInformation("psAutoAttn.armed baseline attn={Db} (synced to radio)", _currentAttnDb);
         }
         _psWasEnabled = s.PsEnabled;
 
@@ -383,6 +399,23 @@ public sealed class PsAutoAttenuateService : BackgroundService
         var p2 = _pipe.CurrentP2Client;
         if (p2 is null) { LogGate("skip=p2-null"); return; }
         Tick1P2(s, engine, p2);
+    }
+
+    // Ground-truth TX feedback attenuation the radio is actually holding, for
+    // baselining the dance model on a PS-arm edge. HL2 reads its sticky AD9866
+    // PGA value (range -28..31); every other (P2) board reads the sticky
+    // ATTOnTX byte (0..31). Clamped to the per-board range; 0 when no client
+    // is connected. See the arm-edge comment in Tick1 for why this replaced
+    // the old assume-0.
+    private int ReadRadioTxAttnDb()
+    {
+        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2)
+        {
+            int hl2 = _radio.ActiveClient?.Hl2TxStepAttenuationDb ?? 0;
+            return Math.Clamp(hl2, Hl2TxAttnMinDb, Hl2TxAttnMaxDb);
+        }
+        int p2 = _pipe.CurrentP2Client?.TxStepAttnDb ?? 0;
+        return Math.Clamp(p2, TxAttnMinDb, TxAttnMaxDb);
     }
 
     // *** DEVIATION FROM mi0bot ***
