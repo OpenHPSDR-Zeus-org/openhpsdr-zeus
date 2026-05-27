@@ -416,6 +416,31 @@ public class DspPipelineService : BackgroundService,
     /// and tests don't exercise it.</summary>
     public Zeus.Protocol2.Protocol2Client? CurrentP2Client => _p2Client;
 
+    /// <summary>
+    /// Manually set the PS TX feedback attenuation (operator alternative to
+    /// AutoAttenuate). Pushes the value to the connected radio — HL2 via the
+    /// AD9866 TX-PGA step, every other board via the P2 step attenuator — then
+    /// persists it per board and surfaces it in state via RadioService. This
+    /// is what lets an operator on a fixed external-tap chain dial the
+    /// feedback into calcc's range once and run with AutoAttenuate off.
+    /// Clamped to the connected board's range.
+    /// </summary>
+    public void SetPsFeedbackAttenuationDb(int db)
+    {
+        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2)
+        {
+            int clamped = Math.Clamp(db, -28, 31);
+            _radio.ActiveClient?.SetHl2TxStepAttenuationDb(clamped);
+            _radio.SetPsTxAttenuationDb(clamped);
+        }
+        else
+        {
+            int clamped = Math.Clamp(db, 0, 31);
+            _p2Client?.SetTxAttenuationDb((byte)clamped);
+            _radio.SetPsTxAttenuationDb(clamped);
+        }
+    }
+
     private void OpenSynthetic()
     {
         var engine = new SyntheticDspEngine();

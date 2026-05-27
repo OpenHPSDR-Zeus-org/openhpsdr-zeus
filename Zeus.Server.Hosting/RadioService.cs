@@ -410,6 +410,9 @@ public sealed class RadioService : IDisposable
     {
         _currentPsTxAttnDb = db;
         PersistPsState();
+        // Surface the live value so the PURESIGNAL panel's manual control and
+        // the "differs" hint track what's actually applied.
+        Mutate(s => s.PsTxFeedbackAttenuationDb == db ? s : s with { PsTxFeedbackAttenuationDb = db });
     }
 
     /// <summary>
@@ -1735,10 +1738,23 @@ public sealed class RadioService : IDisposable
         // Cache the board key so PersistPsState routes future SetPsAdvanced
         // writes into the right slot.
         _currentPsBoardKey = boardKey;
+        // Surface the TX feedback attenuation for the PURESIGNAL panel's manual
+        // control: the per-board floor (HL2 reaches -28, others 0) and the
+        // persisted value for this board (0 when none saved). GetPersistedPsTxAttnDb
+        // also seeds _currentPsTxAttnDb so PersistPsState keeps the slot.
+        int attnMin = board == HpsdrBoardKind.HermesLite2 ? -28 : 0;
+        int attn = GetPersistedPsTxAttnDb() ?? 0;
         Mutate(s =>
             s.PsHwPeak == peak && s.PsHwPeakDefault == factoryDefault
+            && s.PsTxFeedbackAttenuationDb == attn && s.PsTxFeedbackAttenuationDbMin == attnMin
                 ? s
-                : s with { PsHwPeak = peak, PsHwPeakDefault = factoryDefault });
+                : s with
+                {
+                    PsHwPeak = peak,
+                    PsHwPeakDefault = factoryDefault,
+                    PsTxFeedbackAttenuationDb = attn,
+                    PsTxFeedbackAttenuationDbMin = attnMin,
+                });
         _log.LogInformation(
             "radio.applyPsHwPeak proto={Proto} board={Board} variant={Variant} key={Key} peak={Peak:F4} default={Default:F4} source={Source}",
             isProtocol2 ? "P2" : "P1", board, variant, boardKey, peak, factoryDefault,

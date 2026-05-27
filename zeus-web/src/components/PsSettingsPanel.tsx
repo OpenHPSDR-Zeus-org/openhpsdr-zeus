@@ -24,6 +24,7 @@ import {
   setPs,
   setPsAdvanced,
   setPsFeedbackSource,
+  setPsFeedbackAttenuation,
   setPsMonitor,
   resetPs,
   setTwoTone,
@@ -104,6 +105,9 @@ export function PsSettingsPanel() {
   const setPsLoopDelaySec = useTxStore((s) => s.setPsLoopDelaySec);
   const setPsAmpDelayNs = useTxStore((s) => s.setPsAmpDelayNs);
   const setPsHwPeak = useTxStore((s) => s.setPsHwPeak);
+  const psTxFeedbackAttenuationDb = useTxStore((s) => s.psTxFeedbackAttenuationDb);
+  const psTxFeedbackAttenuationDbMin = useTxStore((s) => s.psTxFeedbackAttenuationDbMin);
+  const setPsTxFeedbackAttenuationDb = useTxStore((s) => s.setPsTxFeedbackAttenuationDb);
   const setPsIntsSpiPreset = useTxStore((s) => s.setPsIntsSpiPreset);
   const setPsFeedbackSourceLocal = useTxStore((s) => s.setPsFeedbackSource);
 
@@ -645,6 +649,26 @@ export function PsSettingsPanel() {
                 Default
               </button>
             </span>
+          </FieldRow>
+
+          <FieldRow
+            label="Feedback atten"
+            help="Feedback attenuation (dB). Manual alternative to Auto-attenuate — dial it so Observed sits mid-scale, then it persists per band."
+          >
+            <NumberInput
+              value={psTxFeedbackAttenuationDb}
+              min={psTxFeedbackAttenuationDbMin}
+              max={31}
+              step={1}
+              onChange={(v) => {
+                setPsTxFeedbackAttenuationDb(v);
+                setPsFeedbackAttenuation(v).catch(() => {});
+              }}
+              onCommit={(v) => {
+                setPsTxFeedbackAttenuationDb(v);
+                setPsFeedbackAttenuation(v).catch(() => {});
+              }}
+            />
           </FieldRow>
 
           <FieldRow
