@@ -868,6 +868,21 @@ internal static partial class NativeMethods
                                        float[] Irxbuff, float[] Qrxbuff,
                                        int mox, int solidmox);
 
+    // Zero-allocation overload — used by FeedPsFeedbackBlock on the hot path
+    // so the engine doesn't have to .ToArray() its caller's spans on every
+    // 1024-sample block (~190 Hz @ 192 kHz, ~940 KB/sec of float allocations
+    // → GC pressure that freezes the same threads pumping feedback into
+    // calcc — see docs/rca/2026-05-28-ps-load-sensitivity.md). The native
+    // entry-point is identical; `ref float` lets P/Invoke pin the upstream
+    // buffer (typically rented from ArrayPool<float>.Shared) for the call
+    // duration without copying.
+    [LibraryImport(LibraryName, EntryPoint = "psccF")]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void psccFSpan(int channel, int size,
+                                           ref float Itxbuff, ref float Qtxbuff,
+                                           ref float Irxbuff, ref float Qrxbuff,
+                                           int mox, int solidmox);
+
     [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void PSSaveCorr(int channel, string filename);

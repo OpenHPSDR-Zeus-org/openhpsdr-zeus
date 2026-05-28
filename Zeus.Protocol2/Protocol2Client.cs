@@ -42,6 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Net;
@@ -1695,26 +1696,36 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
             if (_psBlockFill >= PsFeedbackBlockSize)
             {
-                // Copy out — caller may reuse the buffers immediately.
-                var txI = new float[PsFeedbackBlockSize];
-                var txQ = new float[PsFeedbackBlockSize];
-                var rxI = new float[PsFeedbackBlockSize];
-                var rxQ = new float[PsFeedbackBlockSize];
+                // Rent from ArrayPool — see Protocol1Client.HandlePs4DdcPacket
+                // for the rationale (and docs/rca/2026-05-28-ps-load-
+                // sensitivity.md). Sink returns the rentals to the pool after
+                // the engine has consumed them.
+                var txI = ArrayPool<float>.Shared.Rent(PsFeedbackBlockSize);
+                var txQ = ArrayPool<float>.Shared.Rent(PsFeedbackBlockSize);
+                var rxI = ArrayPool<float>.Shared.Rent(PsFeedbackBlockSize);
+                var rxQ = ArrayPool<float>.Shared.Rent(PsFeedbackBlockSize);
                 Array.Copy(_psTxI, txI, PsFeedbackBlockSize);
                 Array.Copy(_psTxQ, txQ, PsFeedbackBlockSize);
                 Array.Copy(_psRxI, rxI, PsFeedbackBlockSize);
                 Array.Copy(_psRxQ, rxQ, PsFeedbackBlockSize);
                 var psFrame = new PsFeedbackFrame(txI, txQ, rxI, rxQ, _psBlockStartSeq);
-                // iter5: prefer the synchronous sink when attached.
+                bool published = false;
                 var psSinkSnap = Volatile.Read(ref _rxSink);
                 if (psSinkSnap != null)
                 {
-                    try { psSinkSnap.OnPsFeedbackFrame(in psFrame); }
+                    try { psSinkSnap.OnPsFeedbackFrame(in psFrame); published = true; }
                     catch (Exception ex) { _log.LogError(ex, "p2.rx.sink_threw kind=psfb"); }
                 }
-                else
+                else if (_psFeedbackFrames.Writer.TryWrite(psFrame))
                 {
-                    _psFeedbackFrames.Writer.TryWrite(psFrame);
+                    published = true;
+                }
+                if (!published)
+                {
+                    ArrayPool<float>.Shared.Return(txI);
+                    ArrayPool<float>.Shared.Return(txQ);
+                    ArrayPool<float>.Shared.Return(rxI);
+                    ArrayPool<float>.Shared.Return(rxQ);
                 }
                 _psBlockFill = 0;
             }

@@ -1788,42 +1788,46 @@ public sealed class WdspDspEngine : IDspEngine
     {
         if (_disposed != 0) return;
         if (hwPeak <= 0.0 || hwPeak > 2.0) return;   // bogus value, ignore
+        int id;
         lock (_psLock)
         {
             _psHwPeak = hwPeak;
             int? txa;
             lock (_txaLock) txa = _txaChannelId;
-            if (txa is int id)
-            {
-                NativeMethods.SetPSHWPeak(id, hwPeak);
-            }
+            if (txa is not int channelId) return;
+            id = channelId;
         }
+        // P/Invoke outside _psLock — see docs/rca/2026-05-28-ps-load-sensitivity.md
+        // for why holding _psLock across native calls is the bidirectional-block
+        // pattern that lets state-change clicks stall FeedPsFeedbackBlock.
+        NativeMethods.SetPSHWPeak(id, hwPeak);
         _log.LogInformation("wdsp.setPsHwPeak peak={Peak:F4}", hwPeak);
     }
 
     public void SetPsControl(bool autoCal, bool singleCal)
     {
         if (_disposed != 0) return;
+        int id;
+        int reset, mancal, automode, turnon;
         lock (_psLock)
         {
             _psAuto = autoCal;
             _psSingle = singleCal;
             int? txa;
             lock (_txaLock) txa = _txaChannelId;
-            if (txa is not int id) return;
+            if (txa is not int channelId) return;
+            id = channelId;
             // (reset, mancal, automode, turnon) — see Thetis PSForm.cs.
             // Single takes precedence over auto when both true.
-            int reset = 0;
-            int mancal = singleCal ? 1 : 0;
-            int automode = (autoCal && !singleCal) ? 1 : 0;
-            int turnon = 0;
-            if (!autoCal && !singleCal)
-            {
-                // Both off → reset / idle.
-                reset = 1;
-            }
-            NativeMethods.SetPSControl(id, reset, mancal, automode, turnon);
+            mancal = singleCal ? 1 : 0;
+            automode = (autoCal && !singleCal) ? 1 : 0;
+            turnon = 0;
+            // Both off → reset / idle.
+            reset = (!autoCal && !singleCal) ? 1 : 0;
         }
+        // P/Invoke outside _psLock. SetPSControl in calcc.c is an atomic
+        // flag-store; safe to call concurrently with FeedPsFeedbackBlock.
+        NativeMethods.SetPSControl(id, reset, mancal, automode, turnon);
         _log.LogInformation("wdsp.setPsControl auto={Auto} single={Single}", autoCal, singleCal);
     }
 
@@ -1831,34 +1835,20 @@ public sealed class WdspDspEngine : IDspEngine
                               double ampDelayNs, double hwPeak, int ints, int spi)
     {
         if (_disposed != 0) return;
+        int id;
+        bool doPtol, doMoxDelay, doLoopDelay, doAmpDelay, doHwPeak, doIntsSpi;
         lock (_psLock)
         {
             int? txa;
             lock (_txaLock) txa = _txaChannelId;
-            int id = txa ?? -1;
+            id = txa ?? -1;
 
-            if (ptol != _psPtol)
-            {
-                _psPtol = ptol;
-                // ptol=true → relax 0.4; ptol=false → strict 0.8
-                // (pihpsdr transmitter.c:2517 / Thetis PSForm.cs).
-                if (id >= 0) NativeMethods.SetPSPtol(id, ptol ? 0.4 : 0.8);
-            }
-            if (moxDelaySec != _psMoxDelaySec)
-            {
-                _psMoxDelaySec = moxDelaySec;
-                if (id >= 0) NativeMethods.SetPSMoxDelay(id, moxDelaySec);
-            }
-            if (loopDelaySec != _psLoopDelaySec)
-            {
-                _psLoopDelaySec = loopDelaySec;
-                if (id >= 0) NativeMethods.SetPSLoopDelay(id, loopDelaySec);
-            }
-            if (ampDelayNs != _psAmpDelayNs)
-            {
-                _psAmpDelayNs = ampDelayNs;
-                if (id >= 0) _ = NativeMethods.SetPSTXDelay(id, ampDelayNs * 1e-9);
-            }
+            // ptol=true → relax 0.4; ptol=false → strict 0.8
+            // (pihpsdr transmitter.c:2517 / Thetis PSForm.cs).
+            doPtol = ptol != _psPtol;
+            doMoxDelay = moxDelaySec != _psMoxDelaySec;
+            doLoopDelay = loopDelaySec != _psLoopDelaySec;
+            doAmpDelay = ampDelayNs != _psAmpDelayNs;
             // mi0bot: PSForm.cs PSpeak_TextChanged calls
             // puresignal.SetPSHWPeak(_txachannel, _PShwpeak) unconditionally on
             // every TextChanged, with no equality guard against the prior
@@ -1866,19 +1856,29 @@ public sealed class WdspDspEngine : IDspEngine
             // value to clear an info[6]=0x0044 fault state without typing a
             // different value first. Range check stays (mi0bot stops the
             // operator at the WinForms NUD min/max).
-            if (hwPeak > 0.0 && hwPeak <= 2.0)
-            {
-                _psHwPeak = hwPeak;
-                if (id >= 0) NativeMethods.SetPSHWPeak(id, hwPeak);
-            }
+            doHwPeak = hwPeak > 0.0 && hwPeak <= 2.0;
             // Only call SetPSIntsAndSpi when the values actually changed —
             // it's a heavy restart inside calcc.c (allocates new buffers).
-            if (ints > 0 && spi > 0 && (ints != _psInts || spi != _psSpi))
-            {
-                _psInts = ints;
-                _psSpi = spi;
-                if (id >= 0) NativeMethods.SetPSIntsAndSpi(id, ints, spi);
-            }
+            doIntsSpi = ints > 0 && spi > 0 && (ints != _psInts || spi != _psSpi);
+
+            if (doPtol) _psPtol = ptol;
+            if (doMoxDelay) _psMoxDelaySec = moxDelaySec;
+            if (doLoopDelay) _psLoopDelaySec = loopDelaySec;
+            if (doAmpDelay) _psAmpDelayNs = ampDelayNs;
+            if (doHwPeak) _psHwPeak = hwPeak;
+            if (doIntsSpi) { _psInts = ints; _psSpi = spi; }
+        }
+        // P/Invokes outside _psLock — six independent native calls; holding
+        // _psLock across the chain blocks FeedPsFeedbackBlock for the full
+        // duration. None of these calls read or write _ps* fields.
+        if (id >= 0)
+        {
+            if (doPtol) NativeMethods.SetPSPtol(id, ptol ? 0.4 : 0.8);
+            if (doMoxDelay) NativeMethods.SetPSMoxDelay(id, moxDelaySec);
+            if (doLoopDelay) NativeMethods.SetPSLoopDelay(id, loopDelaySec);
+            if (doAmpDelay) _ = NativeMethods.SetPSTXDelay(id, ampDelayNs * 1e-9);
+            if (doHwPeak) NativeMethods.SetPSHWPeak(id, hwPeak);
+            if (doIntsSpi) NativeMethods.SetPSIntsAndSpi(id, ints, spi);
         }
         _log.LogInformation(
             "wdsp.setPsAdvanced ptol={Ptol} mox={Mox:F3}s loop={Loop:F3}s amp={Amp:F1}ns peak={Peak:F4} ints={Ints} spi={Spi}",
@@ -1888,15 +1888,19 @@ public sealed class WdspDspEngine : IDspEngine
     public void SetPsEnabled(bool enabled)
     {
         if (_disposed != 0) return;
+        int id;
+        int armMancal = 0, armAutomode = 0;
+        bool doDrain = false;
         lock (_psLock)
         {
             int? txa;
             lock (_txaLock) txa = _txaChannelId;
-            if (txa is not int id)
+            if (txa is not int channelId)
             {
                 _psEnabled = false;
                 return;
             }
+            id = channelId;
 
             if (enabled)
             {
@@ -1905,58 +1909,74 @@ public sealed class WdspDspEngine : IDspEngine
                 // and the first 100 pscc blocks log on every fresh arm.
                 _lastLoggedPsState = 255;
                 Interlocked.Exchange(ref _psFeedCount, 0);
-                NativeMethods.SetPSRunCal(id, 1);
-                int mancal = _psSingle ? 1 : 0;
-                int automode = (_psAuto && !_psSingle) ? 1 : 0;
-                // reset=1 forces a clean LRESET transit so a re-arm after a
-                // single-cal cycle (which can leave the SM in LSTAYON) starts
-                // a fresh fit (Thetis PSForm.cs:645,661).
-                NativeMethods.SetPSControl(id, 1, mancal, automode, 0);
-                // Open the PS-feedback display analyzer (issue #121). Inherits
-                // pixel width / zoom / matched RX rate from the TX analyzer so
-                // the PS-Monitor pan/wf frames slot into the same widget the
-                // TX analyzer is rendering into. Skipped when TX analyzer is
-                // off (no RXA, or P1 P2 rate-ratio mismatch) — the toggle
-                // becomes a no-op in that case and Tick keeps falling through
-                // to the existing TX/RX trace.
-                OpenPsFeedbackAnalyzer(id);
+                armMancal = _psSingle ? 1 : 0;
+                armAutomode = (_psAuto && !_psSingle) ? 1 : 0;
             }
             else
             {
                 _psEnabled = false;
-                // Tear down the PS-FB analyzer first so a stale GetPixels
-                // call from Tick doesn't race with WDSP cleaning up the slot.
-                ClosePsFeedbackAnalyzer();
-                // pihpsdr shutdown gotcha (transmitter.c:2422-2444): when
-                // disabling PS while NOT keyed, push 7 zero-IQ blocks through
-                // psccF so the calcc state machine advances to LRESET cleanly
-                // and doesn't latch a stale curve in iqc on re-arm.
-                //
-                // ONLY when not transmitting. Mid-MOX (operator aborting PS
-                // during a TX), the live feedback FB pump is still writing real
-                // samples into psccF; interleaving 7 manual zero blocks races
-                // that stream and can wedge calcc in LCALC. While keyed the
-                // live feedback advances calcc on its own, so the manual drain
-                // is both unnecessary and harmful — skip it.
-                if (!_moxOn)
-                {
-                    var zeros = new float[PsFeedbackBlockSize];
-                    for (int i = 0; i < 7; i++)
-                    {
-                        NativeMethods.psccF(id, PsFeedbackBlockSize, zeros, zeros, zeros, zeros, 0, 0);
-                    }
-                }
-                NativeMethods.SetPSRunCal(id, 0);
-                NativeMethods.SetPSControl(id, 1, 0, 0, 0);
+                // ONLY drain when not transmitting. Mid-MOX (operator aborting
+                // PS during a TX), the live feedback FB pump is still writing
+                // real samples into psccF; interleaving 7 manual zero blocks
+                // races that stream and can wedge calcc in LCALC. While keyed
+                // the live feedback advances calcc on its own, so the manual
+                // drain is both unnecessary and harmful — skip it.
+                doDrain = !_moxOn;
             }
+        }
+
+        // P/Invokes outside _psLock — the arm sequence (SetPSRunCal +
+        // SetPSControl + analyzer open) and the disarm sequence (analyzer
+        // close + zero-block drain + SetPSRunCal + SetPSControl) used to
+        // span the lock for hundreds of microseconds, blocking the
+        // FeedPsFeedbackBlock hot path. See docs/rca/2026-05-28-ps-load-
+        // sensitivity.md. The analyzer methods carry their own _psFbDispLock
+        // for the spectrum-slot races, so they're safe to call here.
+        if (enabled)
+        {
+            NativeMethods.SetPSRunCal(id, 1);
+            // reset=1 forces a clean LRESET transit so a re-arm after a
+            // single-cal cycle (which can leave the SM in LSTAYON) starts
+            // a fresh fit (Thetis PSForm.cs:645,661).
+            NativeMethods.SetPSControl(id, 1, armMancal, armAutomode, 0);
+            // Open the PS-feedback display analyzer (issue #121). Inherits
+            // pixel width / zoom / matched RX rate from the TX analyzer so
+            // the PS-Monitor pan/wf frames slot into the same widget the
+            // TX analyzer is rendering into. Skipped when TX analyzer is
+            // off (no RXA, or P1 P2 rate-ratio mismatch) — the toggle
+            // becomes a no-op in that case and Tick keeps falling through
+            // to the existing TX/RX trace.
+            OpenPsFeedbackAnalyzer(id);
+        }
+        else
+        {
+            // Tear down the PS-FB analyzer first so a stale GetPixels
+            // call from Tick doesn't race with WDSP cleaning up the slot.
+            ClosePsFeedbackAnalyzer();
+            // pihpsdr shutdown gotcha (transmitter.c:2422-2444): when
+            // disabling PS while NOT keyed, push 7 zero-IQ blocks through
+            // psccF so the calcc state machine advances to LRESET cleanly
+            // and doesn't latch a stale curve in iqc on re-arm.
+            if (doDrain)
+            {
+                var zeros = new float[PsFeedbackBlockSize];
+                for (int i = 0; i < 7; i++)
+                {
+                    NativeMethods.psccF(id, PsFeedbackBlockSize, zeros, zeros, zeros, zeros, 0, 0);
+                }
+            }
+            NativeMethods.SetPSRunCal(id, 0);
+            NativeMethods.SetPSControl(id, 1, 0, 0, 0);
         }
         _log.LogInformation("wdsp.setPsEnabled enabled={Enabled}", enabled);
     }
 
-    // Open / configure the PS-feedback display analyzer. Caller holds
-    // _psLock. Mirrors the TX analyzer's pixel width / zoom / matched RX
-    // sample rate so DspPipelineService.Tick can pick between TX-pixels and
-    // PS-FB-pixels per tick without a buffer resize.
+    // Open / configure the PS-feedback display analyzer. Protected internally
+    // by _psFbDispLock (the spectrum-slot lock). Mirrors the TX analyzer's
+    // pixel width / zoom / matched RX sample rate so DspPipelineService.Tick
+    // can pick between TX-pixels and PS-FB-pixels per tick without a buffer
+    // resize. Called from SetPsEnabled outside _psLock so the analyzer
+    // CreateAnalyzer/SetAnalyzer P/Invokes don't stall FeedPsFeedbackBlock.
     private void OpenPsFeedbackAnalyzer(int txaId)
     {
         // Snapshot TX-display geometry under its own lock — we need it whether
@@ -2018,10 +2038,11 @@ public sealed class WdspDspEngine : IDspEngine
         }
     }
 
-    // Tear down the PS-feedback display analyzer. Caller holds _psLock so
-    // FeedPsFeedbackBlock can't race in mid-Spectrum0; combined with
-    // _psFbDispLock around GetPixels / Spectrum0 this keeps the analyzer slot
-    // safe to destroy.
+    // Tear down the PS-feedback display analyzer. _psFbDispLock protects the
+    // analyzer slot itself (around GetPixels / Spectrum0 / DestroyAnalyzer);
+    // FeedPsFeedbackBlock's Spectrum0 hand-off is gated by an _psFbDispAlive
+    // check under the same lock, so a concurrent feed can't race through with
+    // a stale slot id. Called from SetPsEnabled outside _psLock.
     private void ClosePsFeedbackAnalyzer()
     {
         lock (_psFbDispLock)
@@ -2058,18 +2079,23 @@ public sealed class WdspDspEngine : IDspEngine
         lock (_txaLock) txa = _txaChannelId;
         if (txa is not int id) return;
 
-        // psccF takes float[] (not Span). Allocate fresh — caller may reuse
-        // its buffers immediately after this returns.
-        var bufTxI = txI.ToArray();
-        var bufTxQ = txQ.ToArray();
-        var bufRxI = rxI.ToArray();
-        var bufRxQ = rxQ.ToArray();
-
         lock (_psLock)
         {
             // mox/solidmox args are ignored by psccF (calcc.c:846); SetPSMox
             // is the source of truth and is driven from SetMox above.
-            NativeMethods.psccF(id, PsFeedbackBlockSize, bufTxI, bufTxQ, bufRxI, bufRxQ, 0, 0);
+            //
+            // Pin the upstream spans via `ref float` so P/Invoke pins for the
+            // call duration — no managed copy. The buffers belong to the
+            // upstream sink (Protocol{1,2}Client → DspPipelineService rents
+            // from ArrayPool<float>.Shared and returns post-call). See
+            // docs/rca/2026-05-28-ps-load-sensitivity.md for why the prior
+            // .ToArray() pattern was load-sensitive.
+            NativeMethods.psccFSpan(id, PsFeedbackBlockSize,
+                ref MemoryMarshal.GetReference(txI),
+                ref MemoryMarshal.GetReference(txQ),
+                ref MemoryMarshal.GetReference(rxI),
+                ref MemoryMarshal.GetReference(rxQ),
+                0, 0);
             long n = Interlocked.Increment(ref _psFeedCount);
             if (n % 100 == 1)
             {
@@ -2100,8 +2126,8 @@ public sealed class WdspDspEngine : IDspEngine
                 Span<double> psSpectrumIq = stackalloc double[2 * PsFeedbackBlockSize];
                 for (int i = 0; i < PsFeedbackBlockSize; i++)
                 {
-                    psSpectrumIq[2 * i] = bufRxI[i];
-                    psSpectrumIq[2 * i + 1] = -bufRxQ[i];
+                    psSpectrumIq[2 * i] = rxI[i];
+                    psSpectrumIq[2 * i + 1] = -rxQ[i];
                 }
                 lock (_psFbDispLock)
                 {
@@ -2130,28 +2156,38 @@ public sealed class WdspDspEngine : IDspEngine
         // the PsMeters frame.
         if (!_psEnabled) return PsStageMeters.Silent;
 
-        // Pin the int[16] buffer for the duration of the GetPSInfo call so
-        // WDSP can write into it. Re-using the same buffer between calls is
-        // fine because GetPSInfo writes synchronously.
+        // Pin a stack-local int[16] for the GetPSInfo write so we don't have to
+        // hold _psLock across the P/Invoke. The shared _psInfoBuf field is only
+        // updated under the lock from the freshly-read scratch values, so the
+        // per-call edge-triggered logs below still see a coherent snapshot.
+        // See docs/rca/2026-05-28-ps-load-sensitivity.md — the prior pattern
+        // held _psLock across both GetPSInfo and GetPSMaxTX, which on a hot
+        // meter cadence (~10 Hz) blocked FeedPsFeedbackBlock on every poll.
         int feedbackRaw;
         byte calState;
         bool correcting;
         double maxTx;
         int calibrationAttempts;
+        Span<int> infoScratch = stackalloc int[16];
+        unsafe
+        {
+            fixed (int* p = infoScratch)
+            {
+                NativeMethods.GetPSInfo(id, (IntPtr)p);
+            }
+        }
+        NativeMethods.GetPSMaxTX(id, out maxTx);
+        feedbackRaw = infoScratch[4];
+        correcting = infoScratch[14] != 0;
+        calState = (byte)Math.Clamp(infoScratch[15], 0, 255);
+        calibrationAttempts = infoScratch[5];
         lock (_psLock)
         {
-            unsafe
-            {
-                fixed (int* p = _psInfoBuf)
-                {
-                    NativeMethods.GetPSInfo(id, (IntPtr)p);
-                }
-            }
-            feedbackRaw = _psInfoBuf[4];
-            correcting = _psInfoBuf[14] != 0;
-            calState = (byte)Math.Clamp(_psInfoBuf[15], 0, 255);
-            calibrationAttempts = _psInfoBuf[5];
-            NativeMethods.GetPSMaxTX(id, out maxTx);
+            // Mirror the scratch read into _psInfoBuf so subsequent log
+            // statements that index by field name (info4..info15 below) see
+            // a consistent snapshot, and so _psMaxTxEnvelope publishes
+            // atomically. Pure memcpy + scalar store — no P/Invoke.
+            for (int i = 0; i < 16; i++) _psInfoBuf[i] = infoScratch[i];
             _psMaxTxEnvelope = maxTx;
         }
 
@@ -2225,23 +2261,33 @@ public sealed class WdspDspEngine : IDspEngine
         int? txa;
         lock (_txaLock) txa = _txaChannelId;
         if (txa is not int id) return;
+        int mancal, automode;
+        bool autoSnapshot, singleSnapshot;
         lock (_psLock)
         {
-            // Two-phase reset+restore — matches Thetis PSForm.cs:760-783
-            // (timer2code Monitor → SetNewValues → RestoreOperation) and
-            // pihpsdr's tx_ps_reset → tx_ps_resume pattern (transmitter.c
-            // :2478-2502). Phase 1 clears calcc to LRESET with mancal/
-            // automode zeroed (drops any in-flight fit). Phase 2 restores
-            // the saved Auto/Single mode so calcc autorestarts. Without
-            // phase 2, automode stays 0 and calcc parks at LRESET forever
-            // — which on a Patch-A-gated AutoAttenuate loop means info[5]
-            // never increments past 1 and the loop stalls after one step.
-            NativeMethods.SetPSControl(id, 1, 0, 0, 0);
-            int mancal = _psSingle ? 1 : 0;
-            int automode = (_psAuto && !_psSingle) ? 1 : 0;
-            NativeMethods.SetPSControl(id, 0, mancal, automode, 0);
+            // Snapshot the auto/single state under lock for both the P/Invoke
+            // args and the log line — keeps the two calls' view consistent
+            // even if SetPsControl races concurrently.
+            autoSnapshot = _psAuto;
+            singleSnapshot = _psSingle;
+            mancal = singleSnapshot ? 1 : 0;
+            automode = (autoSnapshot && !singleSnapshot) ? 1 : 0;
         }
-        _log.LogInformation("wdsp.resetPs auto={Auto} single={Single}", _psAuto, _psSingle);
+        // Two-phase reset+restore — matches Thetis PSForm.cs:760-783
+        // (timer2code Monitor → SetNewValues → RestoreOperation) and
+        // pihpsdr's tx_ps_reset → tx_ps_resume pattern (transmitter.c
+        // :2478-2502). Phase 1 clears calcc to LRESET with mancal/
+        // automode zeroed (drops any in-flight fit). Phase 2 restores
+        // the saved Auto/Single mode so calcc autorestarts. Without
+        // phase 2, automode stays 0 and calcc parks at LRESET forever
+        // — which on a Patch-A-gated AutoAttenuate loop means info[5]
+        // never increments past 1 and the loop stalls after one step.
+        //
+        // P/Invokes outside _psLock — calcc's SetPSControl is an atomic
+        // flag-store; safe with concurrent FeedPsFeedbackBlock.
+        NativeMethods.SetPSControl(id, 1, 0, 0, 0);
+        NativeMethods.SetPSControl(id, 0, mancal, automode, 0);
+        _log.LogInformation("wdsp.resetPs auto={Auto} single={Single}", autoSnapshot, singleSnapshot);
     }
 
     public void SavePsCorrection(string path)
@@ -2251,10 +2297,11 @@ public sealed class WdspDspEngine : IDspEngine
         int? txa;
         lock (_txaLock) txa = _txaChannelId;
         if (txa is not int id) return;
-        lock (_psLock)
-        {
-            NativeMethods.PSSaveCorr(id, path);
-        }
+        // PSSaveCorr does file I/O inside WDSP; holding _psLock across it
+        // blocks FeedPsFeedbackBlock for the full disk write. The save is
+        // a leaf operation — no shared state mutation — so the lock buys
+        // nothing here. See docs/rca/2026-05-28-ps-load-sensitivity.md.
+        NativeMethods.PSSaveCorr(id, path);
         _log.LogInformation("wdsp.savePsCorrection path={Path}", path);
     }
 
@@ -2265,12 +2312,12 @@ public sealed class WdspDspEngine : IDspEngine
         int? txa;
         lock (_txaLock) txa = _txaChannelId;
         if (txa is not int id) return;
-        lock (_psLock)
-        {
-            NativeMethods.PSRestoreCorr(id, path);
-            // Restore-and-go pattern from Thetis PSForm.cs:982-1162: turnon=1
-            NativeMethods.SetPSControl(id, 0, 0, 0, 1);
-        }
+        // P/Invokes outside _psLock — PSRestoreCorr reads from disk; the
+        // follow-up SetPSControl(turnon=1) is an atomic flag store. Neither
+        // touches _ps* fields, so the lock buys nothing here.
+        NativeMethods.PSRestoreCorr(id, path);
+        // Restore-and-go pattern from Thetis PSForm.cs:982-1162: turnon=1
+        NativeMethods.SetPSControl(id, 0, 0, 0, 1);
         _log.LogInformation("wdsp.restorePsCorrection path={Path}", path);
     }
 

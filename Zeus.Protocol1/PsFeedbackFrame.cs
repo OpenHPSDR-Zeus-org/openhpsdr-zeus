@@ -38,10 +38,25 @@ namespace Zeus.Protocol1;
 /// SeqHint is the radio's EP6 sequence at the start of the block,
 /// useful for diagnostic logging when the cal converges slowly. Not
 /// used by WDSP.
+///
+/// <para><b>Buffer ownership:</b> <c>TxI/TxQ/RxI/RxQ</c> are rented from
+/// <see cref="System.Buffers.ArrayPool{T}"/>.Shared by Protocol1Client. The
+/// receiving sink (DspPipelineService.OnPsFeedbackFrame) owns the rentals
+/// once the frame is handed off and MUST return them to the pool after the
+/// engine has consumed them. The actual array length may exceed
+/// <c>PsFeedbackBlockSize</c> (1024) — ArrayPool's size guarantee is
+/// "at-least," so consumers must use a fixed 1024-sample view.</para>
 /// </summary>
 public readonly record struct PsFeedbackFrame(
     float[] TxI,
     float[] TxQ,
     float[] RxI,
     float[] RxQ,
-    ulong SeqHint);
+    ulong SeqHint)
+{
+    /// <summary>Wire-fixed block length WDSP <c>psccF</c> expects, per
+    /// pihpsdr <c>receiver.c:636</c>. The producer always fills exactly this
+    /// many samples; the rented arrays may be larger (ArrayPool size
+    /// guarantee is "at-least").</summary>
+    public const int BlockSize = 1024;
+}

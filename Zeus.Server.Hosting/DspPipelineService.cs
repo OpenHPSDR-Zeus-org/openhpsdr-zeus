@@ -151,6 +151,11 @@ public class DspPipelineService : BackgroundService,
     // so OnRadioStateChanged only fires the (possibly heavy)
     // SetPsIntsAndSpi / SetPsRunCal calls when the value actually moves.
     private bool _appliedPsEnabled;
+    // Generation counter for the non-blocking deferred PS arm — bumped on
+    // every PS-state transition so a scheduled arm that fires after the
+    // operator has flipped PS off (or off→on→off within 100 ms) compares
+    // generations and skips. See OnRadioStateChanged below.
+    private int _psArmGeneration;
     private bool _appliedPsAuto = true;
     private bool _appliedPsSingle;
     private bool _appliedPsPtol;
@@ -730,12 +735,20 @@ public class DspPipelineService : BackgroundService,
             // binfo[6], bs_count climbs to 2, calcc resets to LRESET — and
             // the loop sometimes thrashes instead of converging.
             //
-            // Disarm path stays engine-first: drop the engine run flag, then
-            // close the wire, then drain any in-flight paired frames so they
-            // don't arrive after PS has shut down.
+            // The settle is now non-blocking: we schedule the engine arm 100 ms
+            // out via Task.Delay continuation, so the state-change handler
+            // returns immediately and doesn't stall other state work (the
+            // previous blocking .Wait() was the symptom that froze RX audio +
+            // waterfall on the non-HL2 P1 stack — GH #426 — and contributed
+            // to the load-sensitive PS path documented in
+            // docs/rca/2026-05-28-ps-load-sensitivity.md). A generation
+            // counter (_psArmGeneration) lets any later PS-state transition
+            // cancel an in-flight deferred arm so a fast off→on→off (or PS-on
+            // followed by key-down) can't re-arm against operator intent.
             //
-            // Task.Delay(100).Wait() is acceptable here — OnRadioStateChanged
-            // runs on a state-change handler thread, not the request path.
+            // Disarm path stays engine-first AND synchronous: drop the engine
+            // run flag, then close the wire, then drain any in-flight paired
+            // frames so they don't arrive after PS has shut down.
             //
             // P1 sibling (issue #172): the active P1 client gets the same
             // arm/disarm sequencing — flip the wire bit (which also
@@ -768,22 +781,35 @@ public class DspPipelineService : BackgroundService,
                 // wire bump) and :1004 (4-DDC parser path) are both HL2-gated.
                 // On a non-HL2 P1 board WDSP arms with no possible feedback
                 // source, sits in COLLECT waiting on paired samples that
-                // never arrive, and the blocking 100 ms settle below stacks
-                // on the state-change thread — together that freezes RX
-                // audio + waterfall (GH #426). Skip the engine arm in that
-                // case; the wire calls above are no-ops on non-HL2 P1
-                // (board-gated in WriteAttenuatorPayload + SnapshotState).
+                // never arrive (GH #426). Skip the engine arm in that case;
+                // the wire calls above are no-ops on non-HL2 P1 (board-gated
+                // in WriteAttenuatorPayload + SnapshotState).
                 bool p1Connected = p1Active is not null;
                 bool psEngineSupported = !p1Connected
                     || _radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2;
                 if (psEngineSupported)
                 {
-                    try { Task.Delay(100).Wait(); } catch { /* ignore */ }
-                    engine.SetPsEnabled(true);
+                    int gen = Interlocked.Increment(ref _psArmGeneration);
+                    var engineCapture = engine;
+                    _ = Task.Delay(100).ContinueWith(_ =>
+                    {
+                        // Skip if a newer PS-state transition has been scheduled
+                        // (off, or off→on with a different gen). Also skip if
+                        // the operator keyed up during the settle — arm runs on
+                        // the falling-MOX edge re-apply instead.
+                        if (Volatile.Read(ref _psArmGeneration) != gen) return;
+                        if (_keyed) return;
+                        try { engineCapture.SetPsEnabled(true); }
+                        catch (Exception ex) { _log.LogWarning(ex, "deferred ps-arm threw"); }
+                    }, TaskScheduler.Default);
                 }
             }
             else
             {
+                // Bump the generation so any in-flight deferred arm from a
+                // prior off→on cycle within the last 100 ms self-cancels at
+                // fire time.
+                Interlocked.Increment(ref _psArmGeneration);
                 engine.SetPsEnabled(false);
                 _p2Client?.SetPsFeedbackEnabled(false);
                 p1Active?.SetPsEnabled(false);
@@ -1371,7 +1397,25 @@ public class DspPipelineService : BackgroundService,
     {
         DrainDspCommands();
         var engine = Volatile.Read(ref _engine);
-        engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+        try
+        {
+            // Slice to the wire-fixed block size — ArrayPool may return larger
+            // arrays than requested. Engine validates Length == BlockSize.
+            engine?.FeedPsFeedbackBlock(
+                frame.TxI.AsSpan(0, Zeus.Protocol1.PsFeedbackFrame.BlockSize),
+                frame.TxQ.AsSpan(0, Zeus.Protocol1.PsFeedbackFrame.BlockSize),
+                frame.RxI.AsSpan(0, Zeus.Protocol1.PsFeedbackFrame.BlockSize),
+                frame.RxQ.AsSpan(0, Zeus.Protocol1.PsFeedbackFrame.BlockSize));
+        }
+        finally
+        {
+            // Return the rentals — the protocol client handed ownership to us
+            // (see Zeus.Protocol1.PsFeedbackFrame XML doc for the contract).
+            System.Buffers.ArrayPool<float>.Shared.Return(frame.TxI);
+            System.Buffers.ArrayPool<float>.Shared.Return(frame.TxQ);
+            System.Buffers.ArrayPool<float>.Shared.Return(frame.RxI);
+            System.Buffers.ArrayPool<float>.Shared.Return(frame.RxQ);
+        }
         // No Tick on PS-feedback — display cadence is paced by IQ frames.
     }
 
@@ -1396,7 +1440,23 @@ public class DspPipelineService : BackgroundService,
     {
         DrainDspCommands();
         var engine = Volatile.Read(ref _engine);
-        engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+        try
+        {
+            engine?.FeedPsFeedbackBlock(
+                frame.TxI.AsSpan(0, Zeus.Protocol2.PsFeedbackFrame.BlockSize),
+                frame.TxQ.AsSpan(0, Zeus.Protocol2.PsFeedbackFrame.BlockSize),
+                frame.RxI.AsSpan(0, Zeus.Protocol2.PsFeedbackFrame.BlockSize),
+                frame.RxQ.AsSpan(0, Zeus.Protocol2.PsFeedbackFrame.BlockSize));
+        }
+        finally
+        {
+            // Return the rentals — the protocol client handed ownership to us
+            // (see Zeus.Protocol2.PsFeedbackFrame XML doc for the contract).
+            System.Buffers.ArrayPool<float>.Shared.Return(frame.TxI);
+            System.Buffers.ArrayPool<float>.Shared.Return(frame.TxQ);
+            System.Buffers.ArrayPool<float>.Shared.Return(frame.RxI);
+            System.Buffers.ArrayPool<float>.Shared.Return(frame.RxQ);
+        }
     }
 
     /// <summary>
