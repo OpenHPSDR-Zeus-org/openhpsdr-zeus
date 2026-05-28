@@ -713,6 +713,17 @@ public sealed class Protocol1Client : IProtocol1Client
 
     private void RxLoop()
     {
+        // Pump RX (including PureSignal feedback paired-DDC packets, which
+        // arrive via the same socket and dispatch into FeedPsFeedbackBlock
+        // synchronously on this thread) at the platform's pro-audio class.
+        // Thetis runs the equivalent path off the ASIO driver's real-time
+        // thread; without an explicit promotion we'd be at default OS
+        // priority — the same priority as Photino render, SignalR fan-out,
+        // and general .NET ThreadPool work. See
+        // docs/rca/2026-05-28-ps-load-sensitivity.md for the load
+        // sensitivity this addresses.
+        RealtimeThreadPriority.PromoteCallingThreadToProAudio(_log);
+
         var sock = _socket!;
         var ct = _loopCts!.Token;
         var buffer = new byte[PacketParser.PacketLength];

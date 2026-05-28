@@ -360,7 +360,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         SendCmdHighPriority(run: true);
 
         _rxCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _rxTask = Task.Run(() => RxLoop(_rxCts.Token));
+        // LongRunning hint → dedicated thread instead of a ThreadPool worker.
+        // The RX loop runs for the entire protocol session and we promote its
+        // thread to MMCSS Pro Audio / macOS USER_INTERACTIVE QoS inside
+        // RxLoop — both promotions are per-thread, so we need ownership of a
+        // dedicated thread that isn't going to be recycled back into the pool
+        // with the elevated priority still attached.
+        _rxTask = Task.Factory.StartNew(
+            () => RxLoop(_rxCts.Token),
+            _rxCts.Token,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
         _keepaliveTask = Task.Run(() => KeepaliveLoop(_rxCts.Token));
         // Paced TX IQ sender — drains the queue FlushTxIqLocked fills and
         // holds the radio's DUC FIFO at a steady level.
@@ -1453,6 +1463,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     private void RxLoop(CancellationToken ct)
     {
+        // Pump RX (including PureSignal paired-DDC packets on port 1035) at
+        // the platform's pro-audio class. Thetis runs the equivalent path
+        // off the ASIO driver's real-time thread; without an explicit
+        // promotion we'd be at default OS priority and contend with Photino
+        // render, SignalR fan-out, and general .NET ThreadPool work. See
+        // docs/rca/2026-05-28-ps-load-sensitivity.md.
+        RealtimeThreadPriority.PromoteCallingThreadToProAudio(_log);
+
         var buf = new byte[2048];
         var sock = _sock!;
         sock.ReceiveTimeout = 500;

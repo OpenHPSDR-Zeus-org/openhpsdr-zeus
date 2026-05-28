@@ -12,6 +12,11 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- LibraryImport source generator emits unsafe code (used by
+         RealtimeThreadPriority for pthread / MMCSS P/Invoke). Matches the
+         setting on Zeus.Dsp and Zeus.Server.Hosting which also use
+         LibraryImport. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
 </Project>
