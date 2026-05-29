@@ -93,8 +93,25 @@ internal sealed class TxTuneDriver : BackgroundService
         _log = log;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken ct)
+    protected override Task ExecuteAsync(CancellationToken ct)
     {
+        // Run the pump on a DEDICATED thread promoted to the platform pro-audio /
+        // real-time class. The deadline pacing below keeps TX-IQ production locked
+        // to the DAC block clock — but only if this thread isn't preempted. In
+        // desktop mode the native-audio (CoreAudio) device threads run at RT and
+        // starve a normal-priority ThreadPool pump, so production comes in bursts:
+        // the two-tone amplitude swings (observed-peak wander) and the signal goes
+        // dirty. Web has no competing audio threads, so the identical pacing stays
+        // clean — the desktop gap (#559). LongRunning → a real dedicated thread we
+        // can keep promoted; the loop is synchronous (no await) so it never bounces
+        // back to the pool and loses the promotion mid-transmit.
+        return Task.Factory.StartNew(
+            () => PumpLoop(ct), ct, TaskCreationOptions.LongRunning, TaskScheduler.Default);
+    }
+
+    private void PumpLoop(CancellationToken ct)
+    {
+        Zeus.Protocol2.RealtimeThreadPriority.PromoteCallingThreadToProAudio(_log);
         float[]? micScratch = null;
         float[]? iqScratch = null;
         // Drift-free pacing state. `clock` is the monotonic reference; pacing is
@@ -111,7 +128,7 @@ internal sealed class TxTuneDriver : BackgroundService
                 if (!_tx.IsTunOn && !_tx.IsTwoToneOn)
                 {
                     pacing = false;
-                    await Task.Delay(PollIdle, ct).ConfigureAwait(false);
+                    if (ct.WaitHandle.WaitOne(PollIdle)) return;
                     continue;
                 }
 
@@ -122,7 +139,7 @@ internal sealed class TxTuneDriver : BackgroundService
                 {
                     // No TXA yet — retry on the slow cadence.
                     pacing = false;
-                    await Task.Delay(PollIdle, ct).ConfigureAwait(false);
+                    if (ct.WaitHandle.WaitOne(PollIdle)) return;
                     continue;
                 }
 
@@ -192,8 +209,7 @@ internal sealed class TxTuneDriver : BackgroundService
                     continue;
                 }
                 int delayMs = (int)(remainingTicks * 1000 / System.Diagnostics.Stopwatch.Frequency);
-                if (delayMs > 0)
-                    await Task.Delay(delayMs, ct).ConfigureAwait(false);
+                if (delayMs > 0 && ct.WaitHandle.WaitOne(delayMs)) return;
                 // Sub-millisecond remainder is left unspun; the deadline accounting
                 // folds it into the next iteration.
             }
@@ -202,8 +218,7 @@ internal sealed class TxTuneDriver : BackgroundService
             {
                 _log.LogWarning(ex, "tx.tune driver tick failed");
                 pacing = false;
-                try { await Task.Delay(PollIdle, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) { return; }
+                if (ct.WaitHandle.WaitOne(PollIdle)) return;
             }
         }
     }

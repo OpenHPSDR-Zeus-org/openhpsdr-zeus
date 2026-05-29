@@ -48,7 +48,9 @@ namespace Zeus.Protocol2;
 /// protocol projects don't share a utility assembly. Keep the two copies in
 /// sync — if you fix one, fix the other.
 /// </remarks>
-internal static partial class RealtimeThreadPriority
+// Public so Zeus.Server.Hosting (TxTuneDriver pump) can promote its dedicated
+// thread too — same RT need as the protocol RX/TX threads (#559).
+public static partial class RealtimeThreadPriority
 {
     /// <summary>
     /// Promote the calling thread to the platform's pro-audio class. Safe
