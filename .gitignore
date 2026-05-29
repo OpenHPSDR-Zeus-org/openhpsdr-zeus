@@ -61,3 +61,6 @@ native/build-miniaudio/
 # Installer output directories
 installers/output/
 installers/dmg_temp/
+
+# Claude Code agent worktrees (transient; never commit)
+.claude/worktrees/
