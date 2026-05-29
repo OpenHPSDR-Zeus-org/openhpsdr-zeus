@@ -394,7 +394,18 @@ public sealed class PsAutoAttenuateService : BackgroundService
         // comment). Reset calcc to recover; rate-limited to one reset per
         // window so a hard wedge can't reset-storm. Gated on auto mode because
         // single-cal / manual hold freezes info5 by design.
-        if (s.PsAuto && !s.PsSingle && stallPsm.CalibrationAttempts > 0)
+        //
+        // ONLY fire in the active compute states (LCOLLECT=4 .. LDELAY=7): a
+        // genuine stale-curve wedge is stuck in LCALC(6). When calcc is parked
+        // in a WAIT state — LRESET(0)/LWAIT(1)/LMOXDELAY(2)/LSETUP(3) — info5 is
+        // frozen by design (waiting for MOX/feedback), and a reset is both
+        // FUTILE (it just re-enters LWAIT) and DESTRUCTIVE (it tears down the
+        // live correction). On the G2 desktop two-tone this exact loop —
+        // reset → LWAIT → frozen → reset every 5 s — periodically blew the
+        // correction away, holding IMD ~10 dB worse than a stable curve (#559).
+        var calState = stallPsm.CalState;
+        if (s.PsAuto && !s.PsSingle && stallPsm.CalibrationAttempts > 0
+            && calState >= 4 && calState <= 7)
         {
             long now = Environment.TickCount64;
             if (stallPsm.CalibrationAttempts != _lastWedgeCal)
