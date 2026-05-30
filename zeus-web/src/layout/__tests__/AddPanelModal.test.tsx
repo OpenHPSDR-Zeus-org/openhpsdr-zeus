@@ -55,9 +55,10 @@ describe('AddPanelModal', () => {
     const cards = container.querySelectorAll(
       '[data-testid="add-panel-cards"] .add-panel-card',
     );
-    // 20 panels in registry (CW Decoder added in zeus-cdn; RF-2K panel was
-    // extracted to a plugin; Rotator Dial was added in #385).
-    expect(cards.length).toBe(20);
+    // 21 panels in registry (CW Decoder added in zeus-cdn; RF-2K panel was
+    // extracted to a plugin; Rotator Dial was added in #385; CW station panel
+    // 'cw-station' added alongside the legacy 'cw'/'cwdecoder' tiles).
+    expect(cards.length).toBe(21);
     unmount();
   });
 
