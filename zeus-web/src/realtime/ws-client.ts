@@ -49,7 +49,7 @@ import { isNativeAudio } from '../audio/host-mode';
 import { useMicPeakStore } from '../audio/mic-peak-store';
 import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
 import { hasActiveFrameConsumers, useDisplayStore } from '../state/display-store';
-import { useTxStore } from '../state/tx-store';
+import { AlertKind, useTxStore } from '../state/tx-store';
 import { useBandPlanStore } from '../state/bandPlan';
 import { useRxMetersStore } from '../state/rx-meters-store';
 import { warnOnce } from '../util/logger';
@@ -558,6 +558,13 @@ export function startRealtime(path = '/ws'): () => void {
           const msgBytes = new Uint8Array(ev.data, 2);
           const message = new TextDecoder('utf-8').decode(msgBytes);
           useTxStore.getState().setAlert({ kind, message });
+          // A SWR / TX-timeout trip force-drops MOX on the server, which also
+          // disarms any running two-tone test. Clear the local latch so the
+          // TwoTone button doesn't stay lit (and desynced) after the trip —
+          // moxOn/tunOn are cleared separately by the MoxStateFrame off-edge.
+          if (kind === AlertKind.SwrTrip || kind === AlertKind.TxTimeout) {
+            useTxStore.getState().setTwoToneOn(false);
+          }
           return;
         }
         if (peekType === MSG_TYPE_BAND_PLAN_CHANGED) {

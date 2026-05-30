@@ -214,6 +214,16 @@ public interface IDspEngine : IDisposable
     /// </summary>
     void SetPsControl(bool autoCal, bool singleCal);
 
+    /// <summary>Freeze (true) or resume (false) PureSignal calibration without
+    /// disturbing the applied correction. true → <c>SetPSRunCal(0)</c>: calcc's
+    /// pscc state machine stops cycling/re-fitting, but the iqc predistorter
+    /// keeps applying its current coefficients (SetPSRunCal does NOT trigger the
+    /// iqc turn-off ramp). false → <c>SetPSRunCal(1)</c> resumes. Used to "catch
+    /// and hold" a converged automode correction so it stops flickering and the
+    /// signal holds (matches single-cal/LSTAYON behaviour without re-collecting).
+    /// </summary>
+    void SetPsHold(bool hold);
+
     /// <summary>Apply timing + hardware-peak + ints/spi settings as a batch
     /// (each call internally guards against the heavy
     /// <c>SetPSIntsAndSpi</c> path firing when the values haven't changed).

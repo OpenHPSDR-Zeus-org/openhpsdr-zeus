@@ -108,6 +108,7 @@ public class TxAudioIngestTests
         public void SetTwoTone(bool on, double freq1, double freq2, double mag) { }
         public void SetPsEnabled(bool enabled) { }
         public void SetPsControl(bool autoCal, bool singleCal) { }
+        public void SetPsHold(bool hold) { }
         public void SetPsAdvanced(bool ptol, double moxDelaySec, double loopDelaySec,
                                   double ampDelayNs, double hwPeak, int ints, int spi) { }
         public void SetPsHwPeak(double hwPeak) { }

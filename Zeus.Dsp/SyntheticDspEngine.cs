@@ -184,6 +184,7 @@ public sealed class SyntheticDspEngine : IDspEngine
     // feedback pump are no-ops; GetPsStageMeters returns the silent record.
     public void SetPsEnabled(bool enabled) { }
     public void SetPsControl(bool autoCal, bool singleCal) { }
+    public void SetPsHold(bool hold) { }
     public void SetPsAdvanced(bool ptol, double moxDelaySec, double loopDelaySec,
                               double ampDelayNs, double hwPeak, int ints, int spi) { }
     public void SetPsHwPeak(double hwPeak) { }

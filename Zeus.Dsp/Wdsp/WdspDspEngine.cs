@@ -285,6 +285,7 @@ public sealed class WdspDspEngine : IDspEngine
     // calcc state machine is visible in the server log without flooding.
     // Drop alongside the wdsp.psSeed log once PS is confirmed stable.
     private int _psInfoLogCounter;
+    private int _txOverdriveLogCounter;
 
     // TX Monitor — private RXA channel that demodulates the post-CFIR / post-
     // RSMPOUT TX IQ (the wire signal about to hit the radio) back to mono
@@ -1194,15 +1195,14 @@ public sealed class WdspDspEngine : IDspEngine
             NativeMethods.SetTXACompressorRun(id, 0);
             NativeMethods.SetTXACFCOMPRun(id, 0);
             NativeMethods.SetTXAPHROTRun(id, 0);
-            // CESSB (Controlled Envelope SSB) — unconditionally ON. Mirrors
-            // Thetis's WDSP entry point (dsp.cs:240 SetTXAosctrlRun) but
-            // without a user toggle: KISS, always on. WDSP's create_osctrl
-            // (TXA.c) ships sensible defaults (bandpass overshoot control on
-            // the SSB envelope) and no further setters are required —
-            // Thetis itself only ever calls SetTXAosctrlRun. Leaving CESSB
-            // off costs ~1–1.5 dB of average power on voice SSB; there is
-            // no operator scenario in which off is preferable, so no prefs
-            // key, no REST endpoint, no UI control. See bd zeus-5cg.
+            // CESSB / osctrl — ON at TXA open (Brian's default, ~1-1.5 dB
+            // average voice-SSB power; bd zeus-5cg). PS isn't armed at open, so
+            // this is the correct non-PS state. It is then toggled OFF while PS
+            // is armed and back ON on disarm in SetPsEnabled — because osctrl
+            // (a non-linear lookahead peak divisor) standalone in front of the
+            // ALC makes the peak envelope non-stationary on voice and breaks PS
+            // voice-peak correction (Thetis/pi/desk keep it out of the PS path).
+            // #559.
             NativeMethods.SetTXAosctrlRun(id, 1);
             NativeMethods.SetTXAEQRun(id, 0);
             NativeMethods.SetTXAAMSQRun(id, 0);
@@ -1254,7 +1254,15 @@ public sealed class WdspDspEngine : IDspEngine
             // chkPSMap = Checked = true).
             NativeMethods.SetPSPinMode(id, 1);
             NativeMethods.SetPSMapMode(id, 1);
-            NativeMethods.SetPSStabilize(id, 0);
+            // calcc rx_scale + coefficient IIR smoothing (alpha 0.9). ON for the
+            // P2 profile so continuous automode converges to a STEADY correction
+            // instead of applying each raw pass-to-pass fit — the latter makes
+            // the predistorted two-tone visibly jump on the TX panadapter and
+            // holds IMD short of its settled depth (#559, G2). DeskHPSDR ships
+            // this on for SATURN/new-protocol. OFF on P1/HL2 to keep the
+            // mi0bot-matched behaviour. _txaCfirRun is the existing P2-profile
+            // discriminator (CFIR runs only on P2; see above).
+            NativeMethods.SetPSStabilize(id, _txaCfirRun ? 1 : 0);
             NativeMethods.SetPSIntsAndSpi(id, _psInts, _psSpi);
             NativeMethods.SetPSMoxDelay(id, _psMoxDelaySec);
             NativeMethods.SetPSLoopDelay(id, _psLoopDelaySec);
@@ -1803,6 +1811,22 @@ public sealed class WdspDspEngine : IDspEngine
         _log.LogInformation("wdsp.setPsHwPeak peak={Peak:F4}", hwPeak);
     }
 
+    public void SetPsHold(bool hold)
+    {
+        if (_disposed != 0) return;
+        lock (_psLock)
+        {
+            int? txa;
+            lock (_txaLock) txa = _txaChannelId;
+            if (txa is not int id) return;
+            // hold → SetPSRunCal(0): stop calcc re-fitting (state machine parks),
+            // iqc keeps applying the current correction (no turn-off ramp).
+            // resume → SetPSRunCal(1).
+            NativeMethods.SetPSRunCal(id, hold ? 0 : 1);
+        }
+        _log.LogInformation("wdsp.setPsHold hold={Hold} (runcal={Run})", hold, hold ? 0 : 1);
+    }
+
     public void SetPsControl(bool autoCal, bool singleCal)
     {
         if (_disposed != 0) return;
@@ -1922,6 +1946,14 @@ public sealed class WdspDspEngine : IDspEngine
                 // becomes a no-op in that case and Tick keeps falling through
                 // to the existing TX/RX trace.
                 OpenPsFeedbackAnalyzer(id);
+                // CESSB/osctrl OFF while PS is armed (#559). osctrl is a
+                // non-linear lookahead peak divisor; standalone in front of the
+                // ALC it makes the peak envelope non-stationary on voice, so PS
+                // sees a moving target at the peaks → voice-peak splatter. Off
+                // here = the reference topology (Thetis/pi/desk keep it out of
+                // the PS path). Restored to Brian's default (ON) on disarm — so
+                // non-PS operators keep the ~1-1.5 dB average-power win.
+                NativeMethods.SetTXAosctrlRun(id, 0);
             }
             else
             {
@@ -1950,6 +1982,10 @@ public sealed class WdspDspEngine : IDspEngine
                 }
                 NativeMethods.SetPSRunCal(id, 0);
                 NativeMethods.SetPSControl(id, 1, 0, 0, 0);
+                // Restore CESSB/osctrl ON — Brian's default for non-PS voice
+                // SSB (~1-1.5 dB average power; bd zeus-5cg). Only held off
+                // while PS is armed (see the enable branch above).
+                NativeMethods.SetTXAosctrlRun(id, 1);
             }
         }
         _log.LogInformation("wdsp.setPsEnabled enabled={Enabled}", enabled);
@@ -2420,10 +2456,28 @@ public sealed class WdspDspEngine : IDspEngine
             _log.LogWarning("wdsp.fexchange2 tx err={Err} (suppressed after 8 occurrences)", err);
         }
 
+        float txOutPeak = 0f;
         for (int i = 0; i < outSize; i++)
         {
             iqInterleaved[2 * i] = iout[i];
             iqInterleaved[2 * i + 1] = qout[i];
+            float e = iout[i] * iout[i] + qout[i] * qout[i];
+            if (e > txOutPeak) txOutPeak = e;
+        }
+        // Overdrive probe (#559): is the ALC limiting and is the wire IQ railing?
+        // outPeak≈1.0 = post-iqc IQ clipping the Int24 wire (splatter). alcGain
+        // (meter 14, dB) should go NEGATIVE under overdrive = ALC reducing gain
+        // (limiting); ~0 dB while the mic clips = ALC NOT limiting (the bug).
+        // ~1 Hz while keyed.
+        if (++_txOverdriveLogCounter % 50 == 0)
+        {
+            double alcGainDb = NativeMethods.GetTXAMeter(txa, 14);
+            double alcPkDb = NativeMethods.GetTXAMeter(txa, 12);
+            double micPkDb = NativeMethods.GetTXAMeter(txa, 0);
+            _log.LogInformation(
+                "wdsp.txOverdrive micPk={Mic:F1}dB alcGain={Alc:F1}dB alcPk={AlcPk:F1}dB outPeak={Out:F3}{Clip}",
+                micPkDb, alcGainDb, alcPkDb, Math.Sqrt(txOutPeak),
+                txOutPeak >= 0.998 * 0.998 ? " RAIL!" : "");
         }
 
         // TX Monitor — feed the post-CFIR / post-RSMPOUT IQ (the wire signal

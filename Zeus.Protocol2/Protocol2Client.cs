@@ -360,11 +360,26 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         SendCmdHighPriority(run: true);
 
         _rxCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _rxTask = Task.Run(() => RxLoop(_rxCts.Token));
+        // LongRunning → dedicated thread (not a pooled worker). The RX loop and
+        // the TX-IQ sender both run for the whole session and promote their own
+        // thread to the platform pro-audio class (RealtimeThreadPriority). The
+        // promotion is per-thread, so they must own a thread that won't be
+        // recycled into the pool with elevated priority still attached. This is
+        // the desktop-mode fix (#559): under Photino the WebView render shares
+        // the process and at default priority preempts the TX feed in bursts —
+        // average pkts/s looks fine but the sub-block jitter starves the radio
+        // TX FIFO → dirty two-tone. Clean in web (separate processes) without it.
+        _rxTask = Task.Factory.StartNew(
+            () => RxLoop(_rxCts.Token),
+            _rxCts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         _keepaliveTask = Task.Run(() => KeepaliveLoop(_rxCts.Token));
         // Paced TX IQ sender — drains the queue FlushTxIqLocked fills and
-        // holds the radio's DUC FIFO at a steady level.
-        _txIqSenderTask = Task.Run(() => TxIqSenderLoop(_rxCts.Token));
+        // holds the radio's DUC FIFO at a steady level. Dedicated promoted
+        // thread + synchronous pacing (no await → can't bounce to the pool and
+        // lose the promotion mid-transmit).
+        _txIqSenderTask = Task.Factory.StartNew(
+            () => TxIqSenderLoop(_rxCts.Token),
+            _rxCts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         _log.LogInformation("p2.start rate={Rate}kHz freq={Freq}Hz", _sampleRateKhz, _rxFreqHz);
         return Task.CompletedTask;
     }
@@ -737,8 +752,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _txIqScratchCount = 0;
     }
 
-    private async Task TxIqSenderLoop(CancellationToken ct)
+    private void TxIqSenderLoop(CancellationToken ct)
     {
+        // Promote this dedicated sender to the platform pro-audio class so the
+        // Photino WebView render (desktop mode) can't preempt the radio TX-FIFO
+        // feed. Synchronous loop (no await) so it never bounces to a ThreadPool
+        // worker and loses the promotion mid-transmit. #559 desktop fix.
+        RealtimeThreadPriority.PromoteCallingThreadToProAudio(_log);
         // Port of pihpsdr's new_protocol_txiq_thread (new_protocol.c:1909-1997).
         // Maintains a software model of the radio's TX FIFO fill level: each
         // packet adds 240 samples, wall-clock elapses drain at 192 kHz. When
@@ -761,10 +781,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         {
             while (!ct.IsCancellationRequested)
             {
-                byte[] packet;
-                try { packet = await reader.ReadAsync(ct).ConfigureAwait(false); }
+                try
+                {
+                    // Block this dedicated thread until a packet is queued (or
+                    // the channel completes / we're cancelled). No await → the
+                    // thread keeps its pro-audio promotion across the wait.
+                    if (!reader.WaitToReadAsync(ct).AsTask().GetAwaiter().GetResult()) break;
+                }
                 catch (OperationCanceledException) { break; }
                 catch (ChannelClosedException) { break; }
+                if (!reader.TryRead(out var packet)) continue;
 
                 // Drain by wall-clock since the previous send.
                 long now = Stopwatch.GetTimestamp();
@@ -778,8 +804,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 // FIFO's 6.5 ms target headroom, so no underrun risk.
                 if (fifoSamples > TxFifoTargetSamples)
                 {
-                    try { await Task.Delay(1, ct).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { break; }
+                    Thread.Sleep(1);
+                    if (ct.IsCancellationRequested) break;
                     now = Stopwatch.GetTimestamp();
                     elapsedSec = (now - lastTicks) / ticksPerSecond;
                     fifoSamples -= elapsedSec * TxDacSampleRate;
@@ -1453,6 +1479,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     private void RxLoop(CancellationToken ct)
     {
+        // Pro-audio promotion (#559): RX carries the PureSignal paired-DDC
+        // feedback synchronously into FeedPsFeedbackBlock; at default priority
+        // it contends with the Photino WebView render. Promote so feedback
+        // timing stays tight under desktop load. Per-thread, dedicated thread
+        // (StartAsync uses LongRunning).
+        RealtimeThreadPriority.PromoteCallingThreadToProAudio(_log);
         var buf = new byte[2048];
         var sock = _sock!;
         sock.ReceiveTimeout = 500;

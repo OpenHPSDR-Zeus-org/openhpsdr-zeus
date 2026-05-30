@@ -126,7 +126,8 @@ public sealed class TxAudioIngest : IDisposable
         StreamingHub hub,
         ILogger<TxAudioIngest> log)
         : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log,
-               forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span))
+               forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span),
+               txOwnedByTuneDriver: () => tx.IsTunOn || tx.IsTwoToneOn)
     {
     }
 
@@ -142,13 +143,15 @@ public sealed class TxAudioIngest : IDisposable
         StreamingHub hub,
         ILogger<TxAudioIngest> log,
         Action<ReadOnlyMemory<float>>? forwardP2 = null,
-        Action<int>? onWdspConsumed = null)
+        Action<int>? onWdspConsumed = null,
+        Func<bool>? txOwnedByTuneDriver = null)
     {
         _ring = ring;
         _engineProvider = engineProvider;
         _isMoxOn = isMoxOn;
         _forwardP2 = forwardP2;
         _onWdspConsumed = onWdspConsumed;
+        _txOwnedByTuneDriver = txOwnedByTuneDriver ?? (static () => false);
         _hub = hub;
         _log = log;
         _handler = OnMicPcmBytesFromMic;
@@ -156,6 +159,13 @@ public sealed class TxAudioIngest : IDisposable
     }
 
     private readonly Action<ReadOnlyMemory<float>>? _forwardP2;
+    // True while TUN or the two-tone test is active. TxTuneDriver is the sole TX
+    // driver in those states; this mic-ingest path must NOT also run ProcessTxBlock
+    // or push IQ, or two threads drive the same TXA (fexchange2) and BOTH feed the
+    // radio → double-fed / corrupted signal. Desktop-only symptom (#559): native
+    // mic capture keeps feeding here during a two-tone; web has no native mic so
+    // only TxTuneDriver drove it and it stayed clean.
+    private readonly Func<bool> _txOwnedByTuneDriver;
 
     // Cross-thread handoff: written from the TCI timer thread (Start/Stop of
     // the TX_CHRONO service), read every audio block from the WDSP worker.
@@ -259,6 +269,20 @@ public sealed class TxAudioIngest : IDisposable
         {
             // Synthetic engine, no TXA open, or a protocol whose block size
             // exceeds our scratch buffers. Swallow samples quietly.
+            return;
+        }
+
+        // TUN / two-tone active → TxTuneDriver is the sole TX driver. Running
+        // ProcessTxBlock here too would put two threads on one TXA's fexchange2
+        // AND push a second IQ stream to the radio (double-feed → corrupted /
+        // dirty signal; PS then calibrates on garbage). The mic isn't
+        // transmitted during a tune/two-tone anyway, so drop the batch and reset
+        // the accumulator so it can't back up. Fixes the desktop-only dirty
+        // two-tone in #559 (native mic capture kept feeding here; web had no
+        // native mic so only TxTuneDriver drove it → clean).
+        if (_txOwnedByTuneDriver())
+        {
+            lock (_sync) _accumulatorFill = 0;
             return;
         }
 

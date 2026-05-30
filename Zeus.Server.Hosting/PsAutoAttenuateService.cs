@@ -163,6 +163,22 @@ public sealed class PsAutoAttenuateService : BackgroundService
     private long _lastWedgeCalChangeMs;
     private long _lastWedgeResetMs;
 
+    // Converge-then-hold (#559). Continuous automode never settles — it cycles
+    // COLLECT/MOXCHECK/CALC/DELAY forever, so the correction "flickers" and
+    // never "catches/holds" (the operator's Thetis single-cal expectation). Once
+    // the correction has converged (correcting + clean + feedback centred for a
+    // sustained window with enough fresh fits behind it), lock it with
+    // SetPsHold(true) → SetPSRunCal(0): calcc parks (state stops cycling), the
+    // iqc predistorter keeps the converged curve. P2 automode only. Re-armed on
+    // the next PS-arm edge.
+    private bool _psHeld;
+    private int _convergeBaselineCal = -1;
+    private long _convergeHealthyStartMs;
+    private static readonly TimeSpan ConvergeHoldTime = TimeSpan.FromMilliseconds(2500);
+    private const int ConvergeMinFits = 12;     // ~enough stbl(0.9) passes to converge
+    private const int ConvergeFbLow = 138;      // feedback well-centred (ideal 152)
+    private const int ConvergeFbHigh = 176;
+
     // *** DEVIATION FROM mi0bot ***
     // Silent server-side auto-cal of WDSP hw_peak from observed TX envelope.
     // mi0bot exposes PSForm.cs txtPSpeak as a hand-dialed operator value
@@ -300,6 +316,10 @@ public sealed class PsAutoAttenuateService : BackgroundService
             _stallStartTickMs = 0;
             _stallWarned = false;
             _lastAutoCalTickMs = 0;
+            // Fresh arm → re-converge then lock. SetPsEnabled(true) set runcal=1.
+            _psHeld = false;
+            _convergeBaselineCal = -1;
+            _convergeHealthyStartMs = 0;
             _log.LogInformation("psAutoAttn.armed baseline attn={Db} (synced to radio)", _currentAttnDb);
         }
         _psWasEnabled = s.PsEnabled;
@@ -394,7 +414,20 @@ public sealed class PsAutoAttenuateService : BackgroundService
         // comment). Reset calcc to recover; rate-limited to one reset per
         // window so a hard wedge can't reset-storm. Gated on auto mode because
         // single-cal / manual hold freezes info5 by design.
-        if (s.PsAuto && !s.PsSingle && stallPsm.CalibrationAttempts > 0)
+        //
+        // ONLY fire in the active compute states (LCOLLECT=4 .. LDELAY=7): a
+        // genuine stale-curve wedge is stuck in LCALC(6). When calcc is parked
+        // in a WAIT state — LRESET(0)/LWAIT(1)/LMOXDELAY(2)/LSETUP(3) — info5 is
+        // frozen by design (waiting for MOX/feedback), and a reset is both
+        // FUTILE (it just re-enters LWAIT) and DESTRUCTIVE (it tears down the
+        // live correction). On the G2 desktop two-tone this exact loop —
+        // reset → LWAIT → frozen → reset every 5 s — periodically blew the
+        // correction away, holding IMD ~10 dB worse than a stable curve (#559).
+        // Also skip when we've deliberately locked the correction (_psHeld →
+        // SetPSRunCal(0)): calcc is parked on purpose, info5 frozen by design.
+        var calState = stallPsm.CalState;
+        if (s.PsAuto && !s.PsSingle && !_psHeld && stallPsm.CalibrationAttempts > 0
+            && calState >= 4 && calState <= 7)
         {
             long now = Environment.TickCount64;
             if (stallPsm.CalibrationAttempts != _lastWedgeCal)
@@ -417,6 +450,17 @@ public sealed class PsAutoAttenuateService : BackgroundService
             _lastWedgeCal = -1;
         }
 
+        // NOTE (#559): converge-then-hold (TickPsHold) is intentionally NOT
+        // called. Locking the correction froze it at the convergence drive
+        // level, so driving harder (overdrive) left the frozen curve mismatched
+        // → uncorrected IMD. Thetis stays clean under overdrive by running
+        // CONTINUOUS automode and re-adapting; the flicker that originally
+        // motivated the lock was the jittery TX feed, now fixed by the RT
+        // pump/sender/rx-loop. So we run continuous automode (Thetis parity) and
+        // let it track drive changes. TickPsHold kept for reference/possible
+        // operator-selectable "single-cal hold" later.
+        // TickPsHold(s, engine, stallPsm);
+
         // Auto-cal hw_peak from observed envelope. Independent of HL2/P2 path
         // and runs every keyed tick — same gates as the rest of the loop
         // (PsEnabled + TX active + engine present, all checked above).
@@ -438,6 +482,39 @@ public sealed class PsAutoAttenuateService : BackgroundService
         var p2 = _pipe.CurrentP2Client;
         if (p2 is null) { LogGate("skip=p2-null"); return; }
         Tick1P2(s, engine, p2);
+    }
+
+    // Converge-then-hold supervisor (P2 automode only). Lock the correction once
+    // it's converged so calcc stops cycling and the predistorter holds the curve
+    // — the "catch and hold" the operator expects (Thetis single-cal behaviour)
+    // instead of continuous automode flicker. See the _psHeld field comment.
+    private void TickPsHold(StateDto s, IDspEngine engine, PsStageMeters psm)
+    {
+        if (_psHeld) return;                                  // already locked
+        if (s.PsSingle || !s.PsAuto) return;                  // single-cal already holds
+        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2) return;  // P2 only
+
+        int fb = (int)Math.Round(psm.FeedbackLevel);
+        if (_convergeBaselineCal < 0) _convergeBaselineCal = psm.CalibrationAttempts;
+
+        bool healthy = psm.Correcting && fb >= ConvergeFbLow && fb <= ConvergeFbHigh;
+        bool enoughFits = psm.CalibrationAttempts - _convergeBaselineCal >= ConvergeMinFits;
+        if (!healthy || !enoughFits)
+        {
+            if (!healthy) _convergeHealthyStartMs = 0;        // restart the settle window
+            return;
+        }
+
+        long now = Environment.TickCount64;
+        if (_convergeHealthyStartMs == 0) _convergeHealthyStartMs = now;
+        else if (now - _convergeHealthyStartMs >= (long)ConvergeHoldTime.TotalMilliseconds)
+        {
+            engine.SetPsHold(true);   // SetPSRunCal(0): calcc parks, iqc holds curve
+            _psHeld = true;
+            _log.LogInformation(
+                "psHold.lock cal={Cal} fb={Fb} — correction converged; calcc parked, correction held",
+                psm.CalibrationAttempts, fb);
+        }
     }
 
     // Ground-truth TX feedback attenuation the radio is actually holding, for

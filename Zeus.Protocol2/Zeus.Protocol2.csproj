@@ -12,6 +12,9 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- LibraryImport source generator (RealtimeThreadPriority P/Invokes)
+         emits unsafe code internally. Matches Zeus.Dsp / Zeus.Server.Hosting. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
 </Project>
