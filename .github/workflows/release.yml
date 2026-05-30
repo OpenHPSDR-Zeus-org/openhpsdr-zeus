@@ -429,6 +429,145 @@ jobs:
           name: wdsp-native-osx-arm64
           path: staged/osx-arm64/
 
+  build-native-macos-x64:
+    name: Build native WDSP (osx-x64)
+    needs: determine-version
+    # Cross-compiled on Apple Silicon (macos-latest) — deliberately NOT on an
+    # Intel macos-13 runner. Intel runners were dropped once because their queue
+    # is slow, and GitHub is sunsetting them; cross-building here adds only a
+    # couple of minutes to the existing ARM macOS lane. The x86_64 FFTW comes
+    # from the sonoma (x86_64) Homebrew bottle — we must NOT `brew install fftw`
+    # (that installs the arm64 bottle and WDSP's CMake Homebrew fallback would
+    # then silently link arm64 FFTW into the x86_64 link, producing
+    # "ld: ignoring file ... arm64, required x86_64"). WDSP + miniaudio build
+    # with -DCMAKE_OSX_ARCHITECTURES=x86_64.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Install cmake + pkg-config
+        # macos-latest ships no pkg-config; WDSP's CMake reaches our staged
+        # x86_64 FFTW only via pkg_check_modules, so without this configure
+        # dies with "FFTW3 not found".
+        run: brew install cmake pkg-config
+
+      - name: Fetch + extract x86_64 FFTW (sonoma bottle)
+        id: fftw
+        run: |
+          set -euo pipefail
+          brew fetch --force --bottle-tag=sonoma fftw
+          BOTTLE=$(ls -t "$(brew --cache)"/downloads/*fftw*.sonoma.bottle.tar.gz | grep -v arm64 | head -1)
+          [ -n "$BOTTLE" ] || { echo "::error::no x86_64 (sonoma) FFTW bottle found in brew cache"; exit 1; }
+          FFTW_ROOT="$RUNNER_TEMP/fftw-x64"
+          mkdir -p "$FFTW_ROOT"
+          tar -xf "$BOTTLE" -C "$FFTW_ROOT"
+          LIBDIR=$(dirname "$(find "$FFTW_ROOT" -name libfftw3.3.dylib | head -1)")
+          INCDIR=$(dirname "$(find "$FFTW_ROOT" -name fftw3.h | head -1)")
+          # The bottle must actually be x86_64 — a tag change upstream would
+          # otherwise hand us arm64 and the link would fail confusingly later.
+          for f in libfftw3.3.dylib libfftw3f.3.dylib; do
+            a=$(lipo -archs "$LIBDIR/$f")
+            [ "$a" = "x86_64" ] || { echo "::error::$f is '$a', expected x86_64"; exit 1; }
+          done
+          # pkg-config files so WDSP's pkg_check_modules(fftw3/fftw3f) resolves
+          # to THIS x86_64 FFTW. The `prefix=` line is required: pkg-config 2.x
+          # (on the runner) refuses to register a .pc that has no prefix, so
+          # PKG_CONFIG_PATH is silently ignored and configure reports
+          # "FFTW3 not found". ${prefix}/${libdir}/${includedir} stay literal
+          # pkg-config variables — printf's single-quoted format keeps them so.
+          PREFIX=$(cd "$LIBDIR/.." && pwd)
+          PC="$RUNNER_TEMP/pc"; mkdir -p "$PC"
+          for p in fftw3 fftw3f; do
+            printf 'prefix=%s\nlibdir=${prefix}/lib\nincludedir=${prefix}/include\nName: %s\nVersion: 3.3.11\nLibs: -L${libdir} -l%s\nCflags: -I${includedir}\n' \
+              "$PREFIX" "$p" "$p" > "$PC/$p.pc"
+          done
+          echo "libdir=$LIBDIR" >> "$GITHUB_OUTPUT"
+          echo "pcdir=$PC"      >> "$GITHUB_OUTPUT"
+
+      - name: Configure CMake (x86_64)
+        env:
+          PKG_CONFIG_PATH: ${{ steps.fftw.outputs.pcdir }}
+        run: |
+          cmake -S native/wdsp -B native/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=x86_64 \
+            -DWDSP_WITH_NR3=OFF \
+            -DWDSP_WITH_NR4=ON
+
+      - name: Build
+        run: cmake --build native/build --config Release --parallel
+
+      - name: Verify arch + SBNR exports
+        run: |
+          set -euo pipefail
+          arch=$(lipo -archs native/build/libwdsp.dylib)
+          echo "libwdsp arch: $arch"
+          [ "$arch" = "x86_64" ] || { echo "::error::libwdsp is '$arch', expected x86_64"; exit 1; }
+          # macOS nm prefixes C symbols with an underscore — match _SetRXASBNR.
+          count=$(nm -gU native/build/libwdsp.dylib | grep -c "_SetRXASBNR" || true)
+          echo "Found $count _SetRXASBNR* exports"
+          if [ "$count" -ne 8 ]; then
+            echo "ERROR: Expected 8 _SetRXASBNR* exports, got $count. NR4 did not link correctly."
+            exit 1
+          fi
+
+      - name: Stage dylib + bundled FFTW (x86_64)
+        env:
+          FFTW_LIBDIR: ${{ steps.fftw.outputs.libdir }}
+        run: |
+          set -euo pipefail
+          destDir="staged/osx-x64"
+          mkdir -p "$destDir"
+          cp native/build/libwdsp.dylib "$destDir/libwdsp.dylib"
+
+          # Bundle both FFTW precisions alongside libwdsp so the .app is
+          # self-contained — mirrors the osx-arm64 job. These come from the
+          # extracted x86_64 bottle, not the (arm64) Homebrew prefix.
+          cp "$FFTW_LIBDIR/libfftw3.3.dylib"  "$destDir/libfftw3.3.dylib"
+          cp "$FFTW_LIBDIR/libfftw3f.3.dylib" "$destDir/libfftw3f.3.dylib"
+          chmod u+w "$destDir"/*.dylib
+
+          # Rewrite the FFTW install names to @loader_path so libwdsp resolves
+          # its FFTW deps next to itself, independent of DYLD_LIBRARY_PATH —
+          # same model as the osx-arm64 job (which uses install_name_tool too).
+          install_name_tool -id @loader_path/libfftw3.3.dylib  "$destDir/libfftw3.3.dylib"
+          install_name_tool -id @loader_path/libfftw3f.3.dylib "$destDir/libfftw3f.3.dylib"
+          while IFS= read -r dep; do
+            install_name_tool -change "$dep" "@loader_path/$(basename "$dep")" "$destDir/libwdsp.dylib"
+          done < <(otool -L "$destDir/libwdsp.dylib" | awk '/fftw/ {print $1}')
+
+          # Fail the build if any non-relocatable FFTW path survives — it would
+          # ship a bundle that breaks on Macs without that exact path.
+          if otool -L "$destDir/libwdsp.dylib" | grep -E 'fftw' | grep -vq '@loader_path'; then
+            echo "::error::libwdsp still references a non-@loader_path FFTW path"
+            otool -L "$destDir/libwdsp.dylib"
+            exit 1
+          fi
+          otool -L "$destDir/libwdsp.dylib"
+          ls -la "$destDir/"
+
+      - name: Build & stage miniaudio (x86_64)
+        run: |
+          set -euo pipefail
+          cmake -S native/miniaudio -B native/build-miniaudio \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64
+          cmake --build native/build-miniaudio --config Release --parallel
+          a=$(lipo -archs native/build-miniaudio/libminiaudio.dylib)
+          [ "$a" = "x86_64" ] || { echo "::error::libminiaudio is '$a', expected x86_64"; exit 1; }
+          cp native/build-miniaudio/libminiaudio.dylib staged/osx-x64/libminiaudio.dylib
+          otool -L staged/osx-x64/libminiaudio.dylib
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          # Staged dir contains libwdsp.dylib + libfftw3.3.dylib +
+          # libfftw3f.3.dylib + libminiaudio.dylib. download-artifact extracts
+          # the whole directory into Zeus.Dsp/runtimes/osx-x64/native/.
+          name: wdsp-native-osx-x64
+          path: staged/osx-x64/
+
   build-release:
     name: Build (${{ matrix.config.os }})
     needs:
@@ -436,6 +575,7 @@ jobs:
       - build-native-windows
       - build-native-linux
       - build-native-macos
+      - build-native-macos-x64
     runs-on: ${{ matrix.config.runner }}
     strategy:
       fail-fast: false
@@ -470,6 +610,16 @@ jobs:
             runner: macos-latest  # Apple Silicon
             rid: osx-arm64
             artifact: macos-arm64-dmg
+          # Intel macOS. Cross-published from the Apple-Silicon macos-latest
+          # host — .NET 10 emits osx-x64 from any host arch, the native WDSP /
+          # miniaudio / FFTW come from build-native-macos-x64 (also cross-built
+          # on ARM), and create-macos-app.sh is arch-parameterised. No Intel
+          # macos-13 runner is used. See build-native-macos-x64 for the FFTW
+          # cross-build rationale.
+          - os: macos-x64
+            runner: macos-latest
+            rid: osx-x64
+            artifact: macos-x64-dmg
 
     steps:
       - uses: actions/checkout@v4
@@ -495,6 +645,7 @@ jobs:
             win-arm64)  echo "name=wdsp-native-win-arm64"  >> "$GITHUB_OUTPUT" ;;
             linux-x64)  echo "name=wdsp-native-linux-x64"  >> "$GITHUB_OUTPUT" ;;
             osx-arm64)  echo "name=wdsp-native-osx-arm64"  >> "$GITHUB_OUTPUT" ;;
+            osx-x64)    echo "name=wdsp-native-osx-x64"    >> "$GITHUB_OUTPUT" ;;
             *) echo "::error::No native artifact mapped for RID ${{ matrix.config.rid }}"; exit 1 ;;
           esac
 
@@ -933,19 +1084,17 @@ jobs:
           alongside this install as cruft until you uninstall it manually from
           Settings → Apps.
 
-          ### macOS (Apple Silicon)
-          - **OpenhpsdrZeus-${{ steps.version.outputs.version }}-macos-arm64.dmg**
+          ### macOS (Apple Silicon + Intel)
+          - **OpenhpsdrZeus-${{ steps.version.outputs.version }}-macos-arm64.dmg** — Apple Silicon (M-series)
+          - **OpenhpsdrZeus-${{ steps.version.outputs.version }}-macos-x64.dmg** — Intel
 
-          Drag **both** `OpenHPSDR Zeus.app` and `OpenHPSDR Zeus Server.app` to Applications.
+          Pick the DMG that matches your Mac. Drag **both** `OpenHPSDR Zeus.app`
+          and `OpenHPSDR Zeus Server.app` to Applications.
           Double-clicking `OpenHPSDR Zeus.app` opens the Photino desktop window;
           double-clicking `OpenHPSDR Zeus Server.app` runs the backend with a small
           status window showing the LAN URLs and a Stop Zeus button.
           `OpenHPSDR Zeus Server.app` is a thin wrapper — drag both, or drag just
           `OpenHPSDR Zeus.app` if you only want the desktop window.
-
-          Intel Mac builds are no longer published — the `macos-13` runner queue
-          on GitHub-hosted Actions is too slow to be practical. Build from source
-          if you need one.
 
           The DMG and both `.app` bundles are signed with a Developer ID
           Application certificate and notarized by Apple, so Gatekeeper
@@ -991,6 +1140,7 @@ jobs:
             release-artifacts/linux-tarball/*
             release-artifacts/linux-appimage/*
             release-artifacts/macos-arm64-dmg/*
+            release-artifacts/macos-x64-dmg/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -1072,6 +1222,7 @@ jobs:
           - **OpenhpsdrZeus-${{ steps.version.outputs.version }}-linux-x86_64.AppImage** — Linux desktop AppImage
           - **OpenhpsdrZeus-Server-${{ steps.version.outputs.version }}-linux-x86_64.AppImage** — Linux server AppImage
           - **OpenhpsdrZeus-${{ steps.version.outputs.version }}-macos-arm64.dmg** — macOS Apple Silicon DMG
+          - **OpenhpsdrZeus-${{ steps.version.outputs.version }}-macos-x64.dmg** — macOS Intel DMG
 
           The macOS DMG is signed and notarized — no \`xattr -cr\` workaround
           needed even on nightlies. Linux AppImage dependencies are listed
@@ -1133,4 +1284,5 @@ jobs:
             release-artifacts/windows-arm64-installer/* \
             release-artifacts/linux-tarball/* \
             release-artifacts/linux-appimage/* \
-            release-artifacts/macos-arm64-dmg/*
+            release-artifacts/macos-arm64-dmg/* \
+            release-artifacts/macos-x64-dmg/*
