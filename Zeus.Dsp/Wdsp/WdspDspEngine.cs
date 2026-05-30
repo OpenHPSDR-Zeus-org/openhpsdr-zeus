@@ -2468,13 +2468,15 @@ public sealed class WdspDspEngine : IDspEngine
         // outPeak≈1.0 = post-iqc IQ clipping the Int24 wire (splatter). alcGain
         // (meter 14, dB) should go NEGATIVE under overdrive = ALC reducing gain
         // (limiting); ~0 dB while the mic clips = ALC NOT limiting (the bug).
-        // ~1 Hz while keyed.
-        if (++_txOverdriveLogCounter % 50 == 0)
+        // Debug-level: kept as a diagnostic but no longer spams ~1 Hz on every
+        // TX in a normal run — the meter reads are skipped entirely when the
+        // log level isn't enabled.
+        if (++_txOverdriveLogCounter % 50 == 0 && _log.IsEnabled(LogLevel.Debug))
         {
             double alcGainDb = NativeMethods.GetTXAMeter(txa, 14);
             double alcPkDb = NativeMethods.GetTXAMeter(txa, 12);
             double micPkDb = NativeMethods.GetTXAMeter(txa, 0);
-            _log.LogInformation(
+            _log.LogDebug(
                 "wdsp.txOverdrive micPk={Mic:F1}dB alcGain={Alc:F1}dB alcPk={AlcPk:F1}dB outPeak={Out:F3}{Clip}",
                 micPkDb, alcGainDb, alcPkDb, Math.Sqrt(txOutPeak),
                 txOutPeak >= 0.998 * 0.998 ? " RAIL!" : "");
