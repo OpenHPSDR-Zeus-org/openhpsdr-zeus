@@ -1545,18 +1545,18 @@ public sealed class WdspDspEngine : IDspEngine
             // asserts SetTxFilter after SetTxMode using the per-mode-family
             // memory in RadioService. No auto-apply here.
             //
-            // TwoTone is sideband-sensitive (gen.c xgen mode-1 emits e^(-jωt)
-            // which always lands LSB-side of carrier). If a TwoTone test is
-            // mid-flight when the operator changes mode, re-assert PostGen
-            // freqs with the new sign so the tones stay inside the displayed
-            // bandpass. Mag and run flag stay as last set.
+            // TwoTone is sideband-sensitive. If a TwoTone test is mid-flight
+            // when the operator changes mode, re-assert PostGen freqs with the
+            // new sign so the tones stay inside the displayed bandpass. Sign
+            // convention matches Thetis (Setup.cs:11096): negate for LSB-family,
+            // positive for USB-family. Mag and run flag stay as last set.
             if (_twoToneArmed)
             {
-                bool usbFamily = mapped == RxaMode.USB
-                              || mapped == RxaMode.CWU
-                              || mapped == RxaMode.DIGU;
-                double signedF1 = usbFamily ? -_twoToneF1Hz : _twoToneF1Hz;
-                double signedF2 = usbFamily ? -_twoToneF2Hz : _twoToneF2Hz;
+                bool lsbFamily = mapped == RxaMode.LSB
+                              || mapped == RxaMode.CWL
+                              || mapped == RxaMode.DIGL;
+                double signedF1 = lsbFamily ? -_twoToneF1Hz : _twoToneF1Hz;
+                double signedF2 = lsbFamily ? -_twoToneF2Hz : _twoToneF2Hz;
                 NativeMethods.SetTXAPostGenTTFreq(txa, signedF1, signedF2);
                 _log.LogInformation(
                     "wdsp.setTxMode twoTone re-signed f1={F1} f2={F2} signedF1={SF1} signedF2={SF2} mode={Mode}",
@@ -1745,17 +1745,19 @@ public sealed class WdspDspEngine : IDspEngine
             if (_txaChannelId is not int txa) return;
             if (on)
             {
-                // gen.c xgen mode-1 emits e^(-jωt): positive freq lands on
-                // the LSB-side of carrier in any TX mode. USB-family modes
-                // need a sign flip so the tones appear above carrier inside
-                // the displayed bandpass. Cache the operator-supplied
-                // (unsigned) freqs so SetTxMode can re-assert with the
-                // correct sign on a mid-test mode change.
-                bool usbFamily = _txCurrentMode == RxaMode.USB
-                              || _txCurrentMode == RxaMode.CWU
-                              || _txCurrentMode == RxaMode.DIGU;
-                double signedF1 = usbFamily ? -freq1 : freq1;
-                double signedF2 = usbFamily ? -freq2 : freq2;
+                // Sideband sign — matches Thetis (Setup.cs:11096, chkInvertTones
+                // default ON): USB-family takes positive freqs (tones above
+                // carrier), LSB-family takes negated freqs so the tones land in
+                // the displayed bandpass on the correct side. Zeus previously had
+                // this inverted (flipped USB instead of LSB), which put the tones
+                // on the wrong sideband — outside the visible passband on USB.
+                // Cache the operator-supplied (unsigned) freqs so SetTxMode can
+                // re-assert with the correct sign on a mid-test mode change.
+                bool lsbFamily = _txCurrentMode == RxaMode.LSB
+                              || _txCurrentMode == RxaMode.CWL
+                              || _txCurrentMode == RxaMode.DIGL;
+                double signedF1 = lsbFamily ? -freq1 : freq1;
+                double signedF2 = lsbFamily ? -freq2 : freq2;
                 _twoToneF1Hz = freq1;
                 _twoToneF2Hz = freq2;
                 _twoToneArmed = true;

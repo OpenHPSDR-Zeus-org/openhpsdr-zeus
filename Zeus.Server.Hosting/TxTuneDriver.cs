@@ -74,6 +74,11 @@ internal sealed class TxTuneDriver : BackgroundService
     // than WDSP's block clock). Fixed 20 ms fell behind on P2's 512-sample
     // block (10.67 ms) and starved the G2 DUC, producing close-in spurs.
     private const int MicRateHz = 48_000;
+    // Blocks delivered back-to-back at key-down to fill the radio's TX FIFO to
+    // its ~1250-sample target before steady pacing begins. One P2 block already
+    // carries ~2048 output samples, so a handful primes the FIFO well clear of
+    // the underrun floor without overshooting the sender's throttle headroom.
+    private const int PrimeBlocks = 4;
 
     private readonly TxService _tx;
     private readonly DspPipelineService _pipeline;
@@ -92,12 +97,20 @@ internal sealed class TxTuneDriver : BackgroundService
     {
         float[]? micScratch = null;
         float[]? iqScratch = null;
+        // Drift-free pacing state. `clock` is the monotonic reference; pacing is
+        // false whenever TUN/TwoTone is idle so the next key-down re-primes and
+        // re-anchors the schedule from scratch.
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        long nextDeadlineTicks = 0;
+        int primeRemaining = 0;
+        bool pacing = false;
         while (!ct.IsCancellationRequested)
         {
             try
             {
                 if (!_tx.IsTunOn && !_tx.IsTwoToneOn)
                 {
+                    pacing = false;
                     await Task.Delay(PollIdle, ct).ConfigureAwait(false);
                     continue;
                 }
@@ -108,6 +121,7 @@ internal sealed class TxTuneDriver : BackgroundService
                 if (engine is null || micBlock <= 0 || iqOut <= 0)
                 {
                     // No TXA yet — retry on the slow cadence.
+                    pacing = false;
                     await Task.Delay(PollIdle, ct).ConfigureAwait(false);
                     continue;
                 }
@@ -136,17 +150,58 @@ internal sealed class TxTuneDriver : BackgroundService
                     _pipeline.ForwardTxIqToP2(iqSpan);
                 }
 
-                // Tick at ~95 % of the mic-block duration so WDSP is nearly
-                // always ready for the next fexchange2 call (the 5 % margin
-                // keeps us ahead of the block clock without blowing a CPU
-                // spin on early wakeups).
-                int tickMs = Math.Max(1, (micBlock * 950) / (MicRateHz));
-                await Task.Delay(TimeSpan.FromMilliseconds(tickMs), ct).ConfigureAwait(false);
+                // Wall-clock deadline pacing. A fixed Task.Delay(tickMs) was
+                // overshot by the OS scheduler + ProcessTxBlock time, so the loop
+                // ran ~13 ms instead of the 10.67 ms real-time period of a P2
+                // 512-sample block — production fell ~6 % below the 192 kHz DAC
+                // rate (≈750 vs 800 pkts/s), draining the radio's TX FIFO and
+                // producing a gappy/dirty two-tone until a MOX cycle re-primed it.
+                // Pacing against a monotonic deadline borrows per-block jitter back
+                // on the next iteration, so the average production rate stays locked
+                // to the block clock. We aim a hair (~3 %) above real-time so the
+                // FIFO stays topped; the P2 sender's FIFO model throttles the small
+                // surplus. TxTuneDriver only drives TUN / TwoTone (short bursts),
+                // never voice — voice is pumped by the hardware-clocked mic path.
+                long periodTicks = (long)(System.Diagnostics.Stopwatch.Frequency
+                    * micBlock * 0.97 / MicRateHz);
+
+                if (!pacing)
+                {
+                    // First block of this key-down: prime the radio FIFO by
+                    // delivering a short burst back-to-back before steady pacing.
+                    pacing = true;
+                    primeRemaining = PrimeBlocks;
+                }
+
+                if (primeRemaining > 0)
+                {
+                    primeRemaining--;
+                    // Anchor the steady-state schedule to the moment priming ends.
+                    if (primeRemaining == 0) nextDeadlineTicks = clock.ElapsedTicks;
+                    continue;
+                }
+
+                nextDeadlineTicks += periodTicks;
+                long remainingTicks = nextDeadlineTicks - clock.ElapsedTicks;
+                if (remainingTicks <= 0)
+                {
+                    // Behind schedule (slow block / scheduler hiccup): skip the
+                    // delay and catch up. Re-anchor only if we've fallen badly
+                    // behind so a long stall can't trigger a runaway burst.
+                    if (-remainingTicks > periodTicks * 8) nextDeadlineTicks = clock.ElapsedTicks;
+                    continue;
+                }
+                int delayMs = (int)(remainingTicks * 1000 / System.Diagnostics.Stopwatch.Frequency);
+                if (delayMs > 0)
+                    await Task.Delay(delayMs, ct).ConfigureAwait(false);
+                // Sub-millisecond remainder is left unspun; the deadline accounting
+                // folds it into the next iteration.
             }
             catch (OperationCanceledException) { return; }
             catch (Exception ex)
             {
                 _log.LogWarning(ex, "tx.tune driver tick failed");
+                pacing = false;
                 try { await Task.Delay(PollIdle, ct).ConfigureAwait(false); }
                 catch (OperationCanceledException) { return; }
             }
