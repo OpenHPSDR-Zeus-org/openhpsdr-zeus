@@ -75,7 +75,7 @@ TCI server status and pending configuration are exposed over the standard Zeus R
 | **TX_CHRONO pacing emitter** | ✅ **New in this branch** |
 | NR / NB / ANF / ANC | ✅ Wired |
 | Preamp / attenuator | ✅ Complete |
-| DX cluster spots (in/out) | ✅ Stored, not rendered on panadapter yet |
+| DX cluster spots (in/out) | ✅ Stored and rendered on panadapter as click-to-QSY overlays |
 | `RX_SENSORS_ENABLE` / `TX_SENSORS_ENABLE` | ✅ Spec-correct shape `bool[,interval]` |
 | `RX_CHANNEL_SENSORS` (TCI 2.0) | ✅ Sent to opted-in clients |
 | `VFO_LOCK` (TCI 2.0) | 🟡 Echo-only stub |
@@ -177,6 +177,32 @@ Legend: ✅ working · 🟡 partial / stub-only · ❌ missing
 | LINE_OUT | S→C | 4 | ❌ Not implemented |
 
 Header layout matches TCI v1.x §7.1 (64-byte little-endian); dispatch keys off `type` at offset 24 per markdown spec quirk #7.
+
+#### IQ stream: `channels` and `length` fields for external implementors
+
+The 64-byte header has **no `channels` word**. The full field map is:
+
+| Offset | Size | Field |
+|--------|------|-------|
+| 0 | 4 | receiver index |
+| 4 | 4 | sample_rate (Hz) |
+| 8 | 4 | sample type (0 = float32) |
+| 12 | 4 | codec id (0 = uncompressed PCM) |
+| 16 | 4 | crc32 of payload (0 = skipped) |
+| 20 | 4 | **length** — total float32 scalar count |
+| 24 | 4 | stream type (0 = IQ, 1 = audio, 2 = TX audio, 3 = TX_CHRONO) |
+| 28–63 | 36 | reserved zeros (9 × uint32) |
+| 64… | — | sample payload |
+
+Clients that parse the header as 16 × uint32 and treat index 7 (offset 28) as `channels` will always read **0** — that is a reserved word, not a channel count.
+
+For **IQ frames** (stream type 0): `length` is the count of individual float32 scalars in the payload, interleaved as I₀ Q₀ I₁ Q₁ …. Complex sample count = `length / 2`. There is no separate `channels` negotiation; the interleave is fixed.
+
+For **RX audio frames** (stream type 1): `length` is likewise total float32 scalars in the stereo (L=R) payload. Frame count = `length / 2`.
+
+#### `iq_samplerate` negotiation
+
+Zeus does not yet decimate the IQ stream to a client-requested rate (Path B). `iq_samplerate:<hz>;` stores the requested value for future use but always echoes back the **hardware delivery rate** (e.g. `iq_samplerate:192000;`), so clients that inspect the echoed value will correctly size their pipeline. Sending `iq_samplerate:96000;` and receiving `iq_samplerate:192000;` in reply means the request was not granted — the stream will arrive at 192000.
 
 ---
 

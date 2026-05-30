@@ -386,6 +386,8 @@ public static class ZeusHost
         builder.Services.AddSingleton<SpotManager>();
         builder.Services.AddSingleton<TciServer>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TciServer>());
+        builder.Services.AddSingleton<SpotBroadcastService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<SpotBroadcastService>());
         builder.Services.AddSingleton<TciManagementService>();
 
         var app = builder.Build();

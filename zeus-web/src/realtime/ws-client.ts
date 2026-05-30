@@ -187,6 +187,19 @@ const CW_ENGINE_STATUS_HEADER_BYTES = 9;
 export const MSG_TYPE_CW_DECODED_TEXT = 0x31;
 const CW_DECODED_TEXT_HEADER_BYTES = 13;
 
+// TCI spot list snapshot — broadcast by SpotBroadcastService whenever the
+// spot list changes (add / remove / clear), and pushed once on WS connect.
+// Variable-length binary frame; see Zeus.Contracts/SpotListFrame.cs.
+//
+// Wire shape:
+//   [0x32][count:u16 LE]
+//   [for each spot: freqHz:i64 LE, argb:u32 LE,
+//     callsignLen:u8, callsign:utf8,
+//     modeLen:u8, mode:utf8,
+//     commentLen:u16 LE, comment:utf8]
+export const MSG_TYPE_SPOT_LIST = 0x32;
+const SPOT_LIST_MIN_BYTES = 3; // type + count
+
 // Shared by startRealtime / sendMicPcm. Single WS instance at a time; writes
 // are no-ops when the socket isn't open.
 let activeWs: WebSocket | null = null;
@@ -594,6 +607,38 @@ export function startRealtime(path = '/ws'): () => void {
             // localMicArmed (only local interaction does — see issue #346).
             if (txStore.localMicArmed) txStore.setLocalMicArmed(false);
           }
+          return;
+        }
+        if (peekType === MSG_TYPE_SPOT_LIST) {
+          if (ev.data.byteLength < SPOT_LIST_MIN_BYTES) {
+            warnOnce('ws-spot-list-short', `spot list frame too short: ${ev.data.byteLength}`);
+            return;
+          }
+          const dv = new DataView(ev.data);
+          const count = dv.getUint16(1, true);
+          const spots: { callsign: string; mode: string; freqHz: number; argb: number; comment?: string }[] = [];
+          let offset = 3;
+          const td = new TextDecoder('utf-8');
+          for (let i = 0; i < count; i++) {
+            if (offset + 16 > ev.data.byteLength) break; // minimum per-spot fixed bytes
+            const freqHz = Number(dv.getBigInt64(offset, true)); offset += 8;
+            const argb = dv.getUint32(offset, true); offset += 4;
+            const callsignLen = dv.getUint8(offset); offset += 1;
+            if (offset + callsignLen > ev.data.byteLength) break;
+            const callsign = td.decode(new Uint8Array(ev.data, offset, callsignLen)); offset += callsignLen;
+            const modeLen = dv.getUint8(offset); offset += 1;
+            if (offset + modeLen > ev.data.byteLength) break;
+            const mode = td.decode(new Uint8Array(ev.data, offset, modeLen)); offset += modeLen;
+            if (offset + 2 > ev.data.byteLength) break;
+            const commentLen = dv.getUint16(offset, true); offset += 2;
+            if (offset + commentLen > ev.data.byteLength) break;
+            const comment = commentLen > 0 ? td.decode(new Uint8Array(ev.data, offset, commentLen)) : undefined;
+            offset += commentLen;
+            spots.push({ callsign, mode, freqHz, argb, comment });
+          }
+          void import('../state/spot-store').then((m) => {
+            m.useSpotStore.getState().setSpots(spots);
+          });
           return;
         }
         warnOnce(
