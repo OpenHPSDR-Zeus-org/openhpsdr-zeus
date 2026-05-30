@@ -73,6 +73,11 @@ public sealed class StreamingHub
     private volatile byte _wisdomPhase;
     private volatile string _wisdomStatus = string.Empty;
 
+    // Latest serialised SpotList payload. Set by BroadcastSpots whenever the
+    // spot list changes; pushed to each new WS client in AttachClientAsync so
+    // they see the current spots without waiting for the next TCI spot event.
+    private volatile byte[]? _spotPayload;
+
     // ---- Step 1 drop-counter probe for issue #299 -----------------------
     // Each per-client send queue is bounded to MaxBacklogPerClient=4 with
     // FullMode=DropOldest (lines 318-324). When the producer outruns
@@ -164,6 +169,11 @@ public sealed class StreamingHub
         // joining mid-build needs both the phase byte and any status string
         // already accumulated so the body shows the current step.
         session.TryEnqueue(BuildWisdomPayload((Zeus.Contracts.WisdomPhase)_wisdomPhase, _wisdomStatus));
+
+        // Push the current spot list so the client renders any spots that
+        // arrived before it connected (e.g. a skimmer that was already running).
+        var spotSnap = _spotPayload;
+        if (spotSnap is not null) session.TryEnqueue(spotSnap);
 
         try
         {
@@ -481,6 +491,20 @@ public sealed class StreamingHub
         var payload = new byte[1 + regionBytes.Length];
         payload[0] = (byte)MsgType.BandPlanChanged;
         regionBytes.CopyTo(payload, 1);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
+    /// <summary>
+    /// Serialises <paramref name="payload"/> as the current spot snapshot and
+    /// broadcasts it to all connected clients. Also caches the payload so new
+    /// clients receive it in <see cref="AttachClientAsync"/>.
+    /// </summary>
+    public void BroadcastSpots(byte[] payload)
+    {
+        _spotPayload = payload;
         foreach (var client in _clients.Values)
         {
             if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);

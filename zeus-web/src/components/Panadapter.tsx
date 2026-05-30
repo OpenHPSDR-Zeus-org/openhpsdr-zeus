@@ -54,6 +54,7 @@ import { FreqAxis } from './FreqAxis';
 import { PassbandOverlay } from './PassbandOverlay';
 import { ImdReadings } from './ImdReadings';
 import { DbScale } from './DbScale';
+import { SpotOverlay } from './SpotOverlay';
 
 export function Panadapter() {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -264,6 +265,7 @@ export function Panadapter() {
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
       <PassbandOverlay />
+      <SpotOverlay />
       <ImdReadings />
       <FreqAxis />
       <DbScale />

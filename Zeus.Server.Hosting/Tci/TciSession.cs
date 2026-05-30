@@ -125,7 +125,12 @@ public sealed class TciSession : IDisposable
         lock (_streamLock) return _iqStreamEnabled.Count > 0;
     }
 
-    /// <summary>Last client-requested IQ sample rate, clamped to [48000, 384000].</summary>
+    /// <summary>
+    /// Last client-requested IQ sample rate, clamped to [48000, 384000].
+    /// Reserved for Path B per-session decimation. The actual delivery rate is
+    /// always the hardware rate (<c>_radio.Snapshot().SampleRate</c>); this
+    /// stored value is NOT echoed back to the client.
+    /// </summary>
     public int IqSampleRate
     {
         get { lock (_streamLock) return _iqSampleRate; }
@@ -1345,19 +1350,25 @@ public sealed class TciSession : IDisposable
     private void HandleIqSampleRate(string[] args)
     {
         // iq_samplerate:<rate>  or  iq_samplerate (query)
-        // Range matches Thetis: [48000, 384000]. Stored on the session; the
-        // actual rate of published frames is the radio's native rate, echoed
-        // back to the client when streaming starts.
+        // Range matches Thetis: [48000, 384000].
+        //
+        // Always echo the hardware delivery rate, NOT the requested rate.
+        // IQ frames are published at the radio's native sample rate regardless
+        // of what the client requests (per-session decimation is Path B, not
+        // yet implemented). Echoing the requested value would silently mislead
+        // clients that size their DSP pipeline on the negotiated rate.
+        int hwRate = _radio.Snapshot().SampleRate;
         if (args.Length == 0)
         {
-            Send(TciProtocol.Command("iq_samplerate", IqSampleRate));
+            Send(TciProtocol.Command("iq_samplerate", hwRate));
             return;
         }
         if (TciProtocol.TryParseInt(args[0], out int rate))
         {
+            // Store for future Path B decimation; echo what will actually arrive.
             rate = Math.Clamp(rate, 48000, 384000);
             lock (_streamLock) _iqSampleRate = rate;
-            Send(TciProtocol.Command("iq_samplerate", rate));
+            Send(TciProtocol.Command("iq_samplerate", hwRate));
         }
     }
 
@@ -1393,18 +1404,20 @@ public sealed class TciSession : IDisposable
     private void HandleAudioSampleRate(string[] args)
     {
         // audio_samplerate:<rate>  or  audio_samplerate (query)
-        // Range: [8000, 48000]. Zeus emits audio at 48 kHz; the requested rate
-        // is stored and echoed. Down-sampling is not yet implemented.
+        // Range: [8000, 48000]. Zeus always delivers audio at 48 kHz (the DSP
+        // pipeline output rate). Down-sampling to the requested rate is not yet
+        // implemented, so always echo 48000 — same honesty rule as IQ above.
+        const int deliveryRate = 48000;
         if (args.Length == 0)
         {
-            Send(TciProtocol.Command("audio_samplerate", AudioSampleRate));
+            Send(TciProtocol.Command("audio_samplerate", deliveryRate));
             return;
         }
         if (TciProtocol.TryParseInt(args[0], out int rate))
         {
             rate = Math.Clamp(rate, 8000, 48000);
             lock (_streamLock) _audioSampleRate = rate;
-            Send(TciProtocol.Command("audio_samplerate", rate));
+            Send(TciProtocol.Command("audio_samplerate", deliveryRate));
         }
     }
 
