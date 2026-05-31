@@ -466,6 +466,21 @@ jobs:
             rid: linux-x64
             artifact: linux-tarball
             appimage_artifact: linux-appimage
+            build_appimage: 'true'
+            uses_committed_native: 'false'
+          - os: linux
+            # arm64 (Raspberry Pi 4+, Pi 5, arm64 servers). Cross-published
+            # from the ubuntu-22.04 x64 runner — dotnet publish -r linux-arm64
+            # works on any host arch. The committed libwdsp.so arm64 is used
+            # directly (no fresh native build job for arm64 yet; a dedicated
+            # ubuntu-24.04-arm runner can replace this when glibc requirements
+            # for arm64 targets are confirmed). AppImage requires a native arm64
+            # runner for squashfs / appimagetool — tarball only for now.
+            runner: ubuntu-22.04
+            rid: linux-arm64
+            artifact: linux-arm64-tarball
+            build_appimage: 'false'
+            uses_committed_native: 'true'
           - os: macos-arm64
             runner: macos-latest  # Apple Silicon
             rid: osx-arm64
@@ -495,6 +510,7 @@ jobs:
             win-arm64)  echo "name=wdsp-native-win-arm64"  >> "$GITHUB_OUTPUT" ;;
             linux-x64)  echo "name=wdsp-native-linux-x64"  >> "$GITHUB_OUTPUT" ;;
             osx-arm64)  echo "name=wdsp-native-osx-arm64"  >> "$GITHUB_OUTPUT" ;;
+            linux-arm64) echo "name=committed" >> "$GITHUB_OUTPUT" ;;
             *) echo "::error::No native artifact mapped for RID ${{ matrix.config.rid }}"; exit 1 ;;
           esac
 
@@ -503,7 +519,10 @@ jobs:
       # committed at the tag SHA. This is what makes releases immune to
       # stale-committed-natives drift — the binaries that ship are always
       # built from the exact source the tag points at.
+      # Skipped for linux-arm64: no dedicated arm64 native build job exists
+      # yet — the committed libwdsp.so arm64 ships as-is.
       - name: Download fresh native WDSP for ${{ matrix.config.rid }}
+        if: matrix.config.uses_committed_native != 'true'
         uses: actions/download-artifact@v4
         with:
           name: ${{ steps.native-artifact.outputs.name }}
@@ -594,29 +613,30 @@ jobs:
         if: matrix.config.os == 'linux'
         run: |
           chmod +x installers/create-linux-package.sh
-          installers/create-linux-package.sh ${{ steps.version.outputs.version }}
+          installers/create-linux-package.sh ${{ steps.version.outputs.version }} ${{ matrix.config.rid }}
 
       - name: Upload Linux Package
         if: matrix.config.os == 'linux'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.config.artifact }}
-          path: installers/output/openhpsdr-zeus-${{ steps.version.outputs.version }}-linux-x64.tar.gz
+          path: installers/output/openhpsdr-zeus-${{ steps.version.outputs.version }}-${{ matrix.config.rid }}.tar.gz
           if-no-files-found: error
 
       - name: Build Linux Desktop AppImage
-        if: matrix.config.os == 'linux'
+        if: matrix.config.build_appimage == 'true'
         run: |
           # appimagetool fetched on-demand by the script. We pass
           # --appimage-extract-and-run inside the script so FUSE2 isn't
           # required on the runner. The AppImage is the desktop-mode
           # single-file launcher; the tarball ships separately for the
           # service-mode / LAN-browser use case.
+          # arm64 AppImages require a native arm64 runner — skipped here.
           chmod +x installers/create-linux-desktop-appimage.sh
           installers/create-linux-desktop-appimage.sh ${{ steps.version.outputs.version }}
 
       - name: Upload Linux Desktop + Server AppImages
-        if: matrix.config.os == 'linux'
+        if: matrix.config.build_appimage == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.config.appimage_artifact }}
@@ -965,6 +985,17 @@ jobs:
             LAN URLs and a Stop Zeus button.
           - Both AppImages require `libwebkit2gtk-4.1-0` (`apt install` / `dnf install`).
 
+          ### Linux (arm64 — Raspberry Pi 4 / Pi 5)
+          - **openhpsdr-zeus-${{ steps.version.outputs.version }}-linux-arm64.tar.gz**
+            — headless server for Raspberry Pi 4/5 and other arm64 boards.
+            Extract and run `./OpenhpsdrZeus`; open `http://<pi-ip>:6060` in
+            any browser. Self-contained — no .NET install needed on the Pi.
+            Requires: 64-bit OS (Raspberry Pi OS 64-bit or Debian arm64).
+            No extra packages needed (`libfftw3-double3` is pre-installed on
+            Debian 13; statically linked on older distros).
+            Desktop/Photino mode requires `libwebkit2gtk-4.1-0`.
+            See `docs/lessons/raspberry-pi-deployment.md` for the full setup guide.
+
           ## Changes
 
           See the [full changelog](https://github.com/Kb2uka/openhpsdr-zeus/compare/...v${{ steps.version.outputs.version }}) for details.
@@ -990,6 +1021,7 @@ jobs:
             release-artifacts/windows-arm64-installer/*
             release-artifacts/linux-tarball/*
             release-artifacts/linux-appimage/*
+            release-artifacts/linux-arm64-tarball/*
             release-artifacts/macos-arm64-dmg/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1071,6 +1103,7 @@ jobs:
           - **openhpsdr-zeus-${{ steps.version.outputs.version }}-linux-x64.tar.gz** — Linux x64 tarball
           - **OpenhpsdrZeus-${{ steps.version.outputs.version }}-linux-x86_64.AppImage** — Linux desktop AppImage
           - **OpenhpsdrZeus-Server-${{ steps.version.outputs.version }}-linux-x86_64.AppImage** — Linux server AppImage
+          - **openhpsdr-zeus-${{ steps.version.outputs.version }}-linux-arm64.tar.gz** — Linux arm64 tarball (Raspberry Pi 4/5)
           - **OpenhpsdrZeus-${{ steps.version.outputs.version }}-macos-arm64.dmg** — macOS Apple Silicon DMG
 
           The macOS DMG is signed and notarized — no \`xattr -cr\` workaround
@@ -1133,4 +1166,5 @@ jobs:
             release-artifacts/windows-arm64-installer/* \
             release-artifacts/linux-tarball/* \
             release-artifacts/linux-appimage/* \
+            release-artifacts/linux-arm64-tarball/* \
             release-artifacts/macos-arm64-dmg/*
