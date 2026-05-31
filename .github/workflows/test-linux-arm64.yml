@@ -1,0 +1,68 @@
+name: Test linux-arm64 tarball build
+
+# Temporary workflow to validate the linux-arm64 cross-publish + packaging
+# added in feat/raspberry-pi-arm64. Delete this file before merging.
+#
+# Triggers: push to feat/raspberry-pi-arm64, or manual dispatch.
+
+on:
+  push:
+    branches:
+      - feat/raspberry-pi-arm64
+  workflow_dispatch:
+
+jobs:
+  build-linux-arm64:
+    name: Cross-publish linux-arm64 tarball
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify committed libwdsp.so arm64
+        run: |
+          ls -lh Zeus.Dsp/runtimes/linux-arm64/native/
+          file Zeus.Dsp/runtimes/linux-arm64/native/libwdsp.so
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: zeus-web/package-lock.json
+
+      - name: Build frontend
+        run: npm ci && npm run build
+        working-directory: zeus-web
+
+      - name: Publish OpenhpsdrZeus for linux-arm64
+        run: |
+          dotnet publish OpenhpsdrZeus/OpenhpsdrZeus.csproj \
+            -c Release \
+            -r linux-arm64 \
+            --self-contained true \
+            -p:PublishReadyToRun=true \
+            -p:DebugType=embedded \
+            -p:DebugSymbols=false
+
+      - name: Build tarball
+        run: |
+          chmod +x installers/create-linux-package.sh
+          installers/create-linux-package.sh 0.0.0-test linux-arm64
+
+      - name: Verify tarball
+        run: |
+          ls -lh installers/output/
+          tar -tzf installers/output/openhpsdr-zeus-0.0.0-test-linux-arm64.tar.gz | head -20
+
+      - name: Upload tarball artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeus-linux-arm64-test
+          path: installers/output/openhpsdr-zeus-0.0.0-test-linux-arm64.tar.gz
+          if-no-files-found: error
