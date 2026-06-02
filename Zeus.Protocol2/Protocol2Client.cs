@@ -314,6 +314,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         _radioEndpoint = new IPEndPoint(radioEndpoint.Address, 1024);
         var sock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        sock.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         // Matched port convention — PC binds 1025, radio sends back with source
         // ports 1025/1026/1027/1035.. which we demux by fromaddr.
         sock.Bind(new IPEndPoint(IPAddress.Any, 1025));
