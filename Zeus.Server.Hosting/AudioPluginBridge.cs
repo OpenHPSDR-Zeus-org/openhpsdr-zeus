@@ -37,6 +37,16 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private readonly AudioChain _chain = new();
     private readonly Dictionary<string, int> _idToSlot = new();
     private readonly Dictionary<string, IAudioPlugin> _idToPlugin = new();
+    // RX audio insert chain — plugins whose manifest slot is rx.* (e.g.
+    // rx.post-demod, a CW SCAF audio filter). Kept ENTIRELY separate from the
+    // TX _chain: separate plugin instances, separate IIR state, and a separate
+    // realtime runner (ProcessRxBlock, installed on DspPipelineService rather
+    // than the WDSP TX seam). ChainOrderService governs only the TX chain; the
+    // RX chain uses simple first-free-slot ordering. The pipeline handler is
+    // installed only while at least one RX plugin is attached, so the RX audio
+    // path stays bit-identical to before this seam when none is loaded.
+    private readonly AudioChain _rxChain = new();
+    private readonly Dictionary<string, int> _rxIdToSlot = new();
     private readonly object _lock = new();
     private Action<IReadOnlyList<string>>? _orderChangedHandler;
     // Pre-MOX preview gate — true ONLY when a) at least one IAudioPlugin
@@ -169,6 +179,10 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
 
         if (_pipeline.CurrentEngine is WdspDspEngine wdsp)
             wdsp.SetTxAudioPluginHandler(null);
+
+        // Tear down the RX insert seam regardless of engine type — it lives on
+        // DspPipelineService, not the engine.
+        _pipeline.SetRxAudioPluginHandler(null);
 
         // Disable the preview gate before host disposal so any in-flight
         // NativeMicCapture callback that arrives between StopAsync and
@@ -308,6 +322,15 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         var audioPlugin = ResolveAudioPlugin(p);
         if (audioPlugin is null) return;
 
+        // Route rx.* slots into the separate RX insert chain. These never join
+        // the TX chain or ChainOrderService.
+        var manifestSlot = p.Loaded.Manifest.Audio?.Slot;
+        if (manifestSlot is not null && manifestSlot.StartsWith("rx.", StringComparison.Ordinal))
+        {
+            AttachRxPlugin(p, audioPlugin, manifestSlot);
+            return;
+        }
+
         int slot;
         lock (_lock)
         {
@@ -388,6 +411,10 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
 
     private void OnPluginDeactivated(ActivatedPlugin p)
     {
+        // RX insert chain detach takes priority — an rx.* plugin never lives in
+        // the TX _idToSlot map.
+        if (DetachRxPlugin(p)) return;
+
         IAudioPlugin? attached = null;
         int slot;
         lock (_lock)
@@ -425,6 +452,120 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             try { ad.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
             catch { /* best effort */ }
         }
+    }
+
+    // -- RX insert chain (rx.* slots) -----------------------------------
+
+    /// <summary>
+    /// Adopt an rx.* audio plugin into the dedicated <see cref="_rxChain"/>.
+    /// Installs the pipeline RX handler on the first attach so the RX audio
+    /// path stays untouched (null handler) until an RX plugin is present.
+    /// </summary>
+    private void AttachRxPlugin(ActivatedPlugin p, IAudioPlugin audioPlugin, string slotName)
+    {
+        int slot;
+        bool firstRx;
+        lock (_lock)
+        {
+            slot = FindFreeRxSlot();
+            if (slot < 0)
+            {
+                _log.LogWarning(
+                    "RX audio chain full ({Max} slots); ignoring plugin {Id}",
+                    _rxChain.SlotCount, p.Loaded.Manifest.Id);
+                return;
+            }
+            firstRx = _rxIdToSlot.Count == 0;
+            _rxIdToSlot[p.Loaded.Manifest.Id] = slot;
+            _rxChain.SetSlot(slot, audioPlugin);
+        }
+
+        try
+        {
+            audioPlugin.InitializeAudioAsync(new AudioHost(slotName), CancellationToken.None)
+                .GetAwaiter().GetResult();
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex,
+                "RX audio plugin {Id} InitializeAudioAsync threw; clearing rx slot {Slot}",
+                p.Loaded.Manifest.Id, slot);
+            lock (_lock)
+            {
+                _rxChain.ClearSlot(slot);
+                _rxIdToSlot.Remove(p.Loaded.Manifest.Id);
+            }
+            return;
+        }
+
+        // Install the realtime runner on the pipeline only once an RX plugin is
+        // actually present. _pipeline is null only on the realtime-only test
+        // ctor, whose lifecycle methods are never invoked.
+        if (firstRx) _pipeline.SetRxAudioPluginHandler(ProcessRxBlock);
+
+        _log.LogInformation(
+            "RX audio plugin {Id} attached to rx slot {Slot} (slot={SlotName})",
+            p.Loaded.Manifest.Id, slot, slotName);
+    }
+
+    /// <summary>
+    /// Detach an rx.* plugin if present. Returns true when the plugin was an RX
+    /// plugin (handled here); false when it was not, so the caller falls
+    /// through to the TX detach path. Uninstalls the pipeline RX handler on the
+    /// last detach.
+    /// </summary>
+    private bool DetachRxPlugin(ActivatedPlugin p)
+    {
+        IAudioPlugin? attached;
+        bool lastRx;
+        lock (_lock)
+        {
+            if (!_rxIdToSlot.TryGetValue(p.Loaded.Manifest.Id, out var slot)) return false;
+            _rxIdToSlot.Remove(p.Loaded.Manifest.Id);
+            attached = _rxChain.GetSlot(slot);
+            _rxChain.ClearSlot(slot);
+            lastRx = _rxIdToSlot.Count == 0;
+        }
+
+        if (lastRx) _pipeline.SetRxAudioPluginHandler(null);
+
+        if (attached is not null)
+        {
+            try { attached.ShutdownAudioAsync(CancellationToken.None).GetAwaiter().GetResult(); }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex,
+                    "RX audio plugin {Id} ShutdownAudioAsync threw", p.Loaded.Manifest.Id);
+            }
+            if (attached is IAsyncDisposable ad)
+            {
+                try { ad.DisposeAsync().AsTask().GetAwaiter().GetResult(); }
+                catch { /* best effort */ }
+            }
+        }
+        _log.LogInformation("RX audio plugin {Id} detached", p.Loaded.Manifest.Id);
+        return true;
+    }
+
+    private int FindFreeRxSlot()
+    {
+        for (int i = 0; i < _rxChain.SlotCount; i++)
+            if (_rxChain.GetSlot(i) is null) return i;
+        return -1;
+    }
+
+    /// <summary>
+    /// RX-path entry point installed on <c>DspPipelineService</c>. Runs the RX
+    /// chain in place over the demodulated band audio block. Never allocates,
+    /// never logs. The chain seeds its output from input (a self-copy no-op
+    /// when the two spans alias) then ping-pongs output ⇄ its internal scratch,
+    /// never re-reading input — so passing one span as both input and output is
+    /// safe for true in-place processing.
+    /// </summary>
+    private void ProcessRxBlock(Span<float> audio, int frames, int sampleRate)
+    {
+        var ctx = new AudioBlockContext(sampleRate, channels: 1, frames: frames, sampleTime: 0, mox: false);
+        _rxChain.Process(audio, audio, ctx);
     }
 
     /// <summary>Returns the plugin's IAudioPlugin, or synthesises a
@@ -529,6 +670,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     {
         await StopAsync(CancellationToken.None).ConfigureAwait(false);
         await _chain.DisposeAsync().ConfigureAwait(false);
+        await _rxChain.DisposeAsync().ConfigureAwait(false);
     }
 
     private sealed class AudioHost : IAudioHost

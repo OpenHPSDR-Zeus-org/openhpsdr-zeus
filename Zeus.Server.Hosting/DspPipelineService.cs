@@ -92,6 +92,28 @@ public class DspPipelineService : BackgroundService,
     /// </summary>
     public event Action<int, int, ReadOnlyMemory<float>>? RxAudioAvailable;
 
+    /// <summary>
+    /// Delegate for the RX audio plugin insert seam (<c>rx.post-demod</c> slot).
+    /// Invoked once per <see cref="Tick"/> over the demodulated 48 kHz mono RX
+    /// audio block, IN PLACE, after the MOX fade ramp and BEFORE the CW
+    /// sidetone is mixed in and the block is published to sinks — so a filter
+    /// shapes the received band audio without touching the locally-generated
+    /// sidetone. The <c>audio</c> span is both input and output.
+    /// </summary>
+    public delegate void RxAudioBlockHandler(Span<float> audio, int frames, int sampleRate);
+
+    // RX audio plugin insert handler. Wired by AudioPluginBridge when an
+    // rx.post-demod audio plugin is attached; null (the default) makes the RX
+    // path bit-identical to before this seam existed — single volatile read in
+    // the Tick hot path, no cost when no RX plugin is loaded. The handler runs
+    // on the DSP pipeline thread and MUST be realtime-disciplined (no alloc /
+    // lock / IO) — AudioChain.Process honours that contract.
+    private volatile RxAudioBlockHandler? _rxAudioPluginHandler;
+
+    /// <summary>Install (or clear, with <c>null</c>) the RX audio plugin
+    /// insert handler. Single volatile write; safe from the control thread.</summary>
+    public void SetRxAudioPluginHandler(RxAudioBlockHandler? handler) => _rxAudioPluginHandler = handler;
+
     // _engineLock serialises CONCURRENT WRITERS to _engine / _channelId /
     // _sampleRateHz on the rare connect/disconnect path. After iter5 the
     // hot path (OnIqFrame / OnPsFeedbackFrame / Tick) reads these fields
@@ -1714,19 +1736,25 @@ public class DspPipelineService : BackgroundService,
                 _rxFadeInPending = false;
             }
 
-            // VST plugin host is TX-only by design (operator decision
-            // 2026-04-30). The chain is configured for the TX bandwidth,
-            // tuned for voice processing, and shares one set of plugin
-            // instances with the TX seam — routing RX through it would
-            // (a) apply TX-tuned effects to band audio (sounds wrong),
-            // (b) inherit IIR state from the most recent TX block, and
-            // (c) waste CPU on RX when the operator only wants chain
-            // processing on transmit. The RX-side seam method on
-            // IDspEngine remains in place for any future "RX insert"
-            // feature, but the audio pipeline does not call it.
+            // The TX voice-processing audio chain (Compressor/EQ/VST etc.)
+            // stays TX-only by design (operator decision 2026-04-30) — those
+            // plugins are tuned for the mic path and share TXA-side instances.
+            // RX audio plugins are a SEPARATE chain, declared by the
+            // rx.post-demod manifest slot, wired through _rxAudioPluginHandler
+            // below. The two never share plugin instances or IIR state.
 
             if (!txMonitorOn)
             {
+                // RX audio plugin insert (rx.post-demod slot, e.g. a CW SCAF
+                // audio filter). Runs in place over the demodulated band audio
+                // AFTER the MOX fade and BEFORE the sidetone mix, so the filter
+                // shapes received audio without distorting the clean local
+                // sidetone. Null handler (no RX plugin attached) is the common
+                // case and a no-op — the RX path stays bit-identical.
+                var rxAudioHandler = _rxAudioPluginHandler;
+                if (rxAudioHandler is not null && audioSampleCount > 0)
+                    rxAudioHandler(audioBuf.AsSpan(0, audioSampleCount), audioSampleCount, AudioOutputRateHz);
+
                 // CW sidetone is mixed (+=) into the RX block so every
                 // downstream sink — browser WS, native audio, TCI audio
                 // stream — hears it on the same bus as band RX. The MOX
