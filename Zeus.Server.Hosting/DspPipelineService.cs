@@ -136,23 +136,30 @@ public class DspPipelineService : BackgroundService,
 
     /// <summary>
     /// Enqueue mono float32 samples to be mixed into the local RX audio output
-    /// (the operator's monitor) on the next ticks. Realtime-safe, lock-free;
-    /// drops the block if the ring is full (producer outran the mixer). Used by
+    /// (the operator's monitor) on the next ticks. Realtime-safe, lock-free.
+    /// Returns <c>false</c> (writing nothing) when the ring can't fit the block
+    /// — the caller should retry rather than drop, so the consumer (RX tick
+    /// clock) paces the producer and the playback stays glitch-free. Used by
     /// <see cref="Zeus.Plugins.Contracts.Audio.IAudioPlaybackSink.PlayLocal"/>.
     /// </summary>
-    public void EnqueueMonitorAudio(ReadOnlySpan<float> samples)
+    public bool EnqueueMonitorAudio(ReadOnlySpan<float> samples)
     {
-        if (samples.Length == 0) return;
+        if (samples.Length == 0) return true;
         long w = _monInjW;
         long r = Volatile.Read(ref _monInjR);
-        if (MonitorInjectCapacity - (w - r) < samples.Length) return; // overrun → drop
+        if (MonitorInjectCapacity - (w - r) < samples.Length) return false; // full — caller retries
         int start = (int)(w & MonitorInjectMask);
         int first = Math.Min(samples.Length, MonitorInjectCapacity - start);
         samples[..first].CopyTo(_monitorInject.AsSpan(start, first));
         if (first < samples.Length)
             samples[first..].CopyTo(_monitorInject.AsSpan(0, samples.Length - first));
         Volatile.Write(ref _monInjW, w + samples.Length);
+        return true;
     }
+
+    /// <summary>Samples still queued in the monitor-inject ring (for a player
+    /// to wait out the tail before declaring playback finished).</summary>
+    public long MonitorBacklog => Volatile.Read(ref _monInjW) - Volatile.Read(ref _monInjR);
 
     // Mix any queued monitor-inject audio into the RX block (consumer side).
     private void MixMonitorInject(Span<float> dest)

@@ -51,8 +51,10 @@ internal sealed class PluginPlaybackSink : IAudioPlaybackSink
     // token is a harmless no-op kept for contract symmetry.
     public IDisposable BeginLocalMonitor() => NoopSession.Instance;
 
-    public void PlayLocal(ReadOnlySpan<float> samples, int sampleRate)
+    public bool PlayLocal(ReadOnlySpan<float> samples, int sampleRate)
         => _pipeline.EnqueueMonitorAudio(samples);
+
+    public long LocalMonitorBacklog => _pipeline.MonitorBacklog;
 
     public void PlayOnAir(ReadOnlySpan<float> samples, int sampleRate)
     {

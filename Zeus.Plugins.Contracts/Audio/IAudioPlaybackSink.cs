@@ -29,10 +29,17 @@ public interface IAudioPlaybackSink
 
     /// <summary>
     /// Mix a block of mono float32 samples into the operator's local monitor
-    /// (RX audio bus). Only audible inside a <see cref="BeginLocalMonitor"/>
-    /// session. Pacing is the caller's responsibility — feed at the sample rate.
+    /// (RX audio bus). Returns <c>false</c> when the host's monitor buffer is
+    /// momentarily full — the caller should retry the SAME block rather than
+    /// drop it, so the host's RX clock paces playback and it stays glitch-free.
+    /// Always <c>true</c> when local monitoring is unavailable (samples sink
+    /// harmlessly). Only audible inside a <see cref="BeginLocalMonitor"/> session.
     /// </summary>
-    void PlayLocal(ReadOnlySpan<float> samples, int sampleRate);
+    bool PlayLocal(ReadOnlySpan<float> samples, int sampleRate);
+
+    /// <summary>Approximate samples still buffered for local monitor playback —
+    /// lets a player wait out the tail before reporting playback finished.</summary>
+    long LocalMonitorBacklog { get; }
 
     /// <summary>
     /// Inject a block of mono float32 samples into the TX audio chain so it is
