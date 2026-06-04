@@ -160,7 +160,13 @@ public sealed class AudioTapBridge : IHostedService
     private void ShutdownRx(IRxAudioTapPlugin tap)
     {
         try { tap.ShutdownTapAsync(CancellationToken.None).GetAwaiter().GetResult(); }
-        catch (Exception ex) { _log.LogWarning(ex, "RX tap ShutdownTapAsync threw"); }
+        catch (Exception ex)
+        {
+            // Best-effort shutdown: never let a tap (or the logger itself, which
+            // may already be torn down during host StopAsync) abort the stop
+            // sequence for the other taps.
+            try { _log.LogWarning(ex, "RX tap ShutdownTapAsync threw"); } catch { /* logger disposed */ }
+        }
     }
 
     private sealed class TapHost : IAudioHost

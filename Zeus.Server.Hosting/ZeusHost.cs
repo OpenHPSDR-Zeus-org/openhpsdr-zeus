@@ -372,6 +372,12 @@ public static class ZeusHost
         // plugins via IPluginContext.Playback.
         builder.Services.AddSingleton<Zeus.Plugins.Contracts.Audio.IAudioPlaybackSink, PluginPlaybackSink>();
 
+        // RadioController lets a plugin holding the ControlRadio capability key
+        // TX (MoxSource.Plugin) and set VFO/mode — the same surfaces the UI and
+        // CW engine use. Surfaced via IPluginContext.RadioController (gated on
+        // the capability in PluginManager). Enables plugin keyers (RTTY/voice).
+        builder.Services.AddSingleton<Zeus.Plugins.Contracts.IRadioController, RadioController>();
+
         // AudioChainMasterBypassService — operator's "disengage the
         // whole Audio Suite" lever. Default is true (bypassed) on first
         // install so a brand-new operator's chain is inert until they
