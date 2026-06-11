@@ -115,6 +115,22 @@ public sealed class TxAudioIngest : IDisposable
     // concurrent native-mic frame within TciHysteresisMs is suppressed — the
     // recording replaces the live mic on the air, they never mix.
     private long _lastWavTickMs;
+
+    /// <summary>
+    /// True when a TCI client is the authoritative source of TX audio right now
+    /// (within the hysteresis window). Used by the TX audio plugin bridge to
+    /// bypass the operator's insert plugins (EQ, comp, VSTs, etc.) for remote
+    /// sources — their audio has already been processed on the client side.
+    /// Local mic and WAV playback are never considered "remote" for this check.
+    /// </summary>
+    internal bool IsTciTxAudioActive
+    {
+        get
+        {
+            long last = Volatile.Read(ref _lastTciTickMs);
+            return last != 0 && (Environment.TickCount64 - last) < TciHysteresisMs;
+        }
+    }
     // Diagnostic: log peak of mic-in and IQ-out once per second of TX. If
     // mic-peak is high but iq-peak is ~0, WDSP TXA is producing silence
     // despite good input. If mic-peak itself is ~0, the uplink is broken.

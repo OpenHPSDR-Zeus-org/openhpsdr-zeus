@@ -92,6 +92,88 @@ public class DspPipelineService : BackgroundService,
     /// </summary>
     public event Action<int, int, ReadOnlyMemory<float>>? RxAudioAvailable;
 
+    /// <summary>
+    /// Raised when TX-monitor audio is available — the processed transmit audio
+    /// demodulated back from the TX IQ (post EQ / compressor / leveler / CFC),
+    /// i.e. what actually goes on the air. Only fires while the TX monitor /
+    /// audition path is running. 48 kHz mono float32; args (receiver,
+    /// sampleRateHz, samples). Memory valid only for the synchronous handler.
+    /// </summary>
+    public event Action<int, int, ReadOnlyMemory<float>>? TxMonitorAudioAvailable;
+
+    /// <summary>
+    /// Delegate for the RX audio plugin insert seam (<c>rx.post-demod</c> slot).
+    /// Invoked once per <see cref="Tick"/> over the demodulated 48 kHz mono RX
+    /// audio block, IN PLACE, after the MOX fade ramp and BEFORE the CW
+    /// sidetone is mixed in and the block is published to sinks — so a filter
+    /// shapes the received band audio without touching the locally-generated
+    /// sidetone. The <c>audio</c> span is both input and output.
+    /// </summary>
+    public delegate void RxAudioBlockHandler(Span<float> audio, int frames, int sampleRate);
+
+    // RX audio plugin insert handler. Wired by AudioPluginBridge when an
+    // rx.post-demod audio plugin is attached; null (the default) makes the RX
+    // path bit-identical to before this seam existed — single volatile read in
+    // the Tick hot path, no cost when no RX plugin is loaded. The handler runs
+    // on the DSP pipeline thread and MUST be realtime-disciplined (no alloc /
+    // lock / IO) — AudioChain.Process honours that contract.
+    private volatile RxAudioBlockHandler? _rxAudioPluginHandler;
+
+    /// <summary>Install (or clear, with <c>null</c>) the RX audio plugin
+    /// insert handler. Single volatile write; safe from the control thread.</summary>
+    public void SetRxAudioPluginHandler(RxAudioBlockHandler? handler) => _rxAudioPluginHandler = handler;
+
+    // Local-playback monitor inject (e.g. the Recorder plugin playing a clip
+    // back locally). SPSC ring: producer = plugin playback thread via
+    // EnqueueMonitorAudio, consumer = Tick. Mixed into the RX audio block so a
+    // clip is audible on EVERY sink (browser WS + native) in any host mode —
+    // unlike the desktop-only audition path. Power-of-two capacity for masking.
+    private const int MonitorInjectCapacity = 1 << 14; // 16384 floats (~340 ms @ 48 kHz)
+    private const int MonitorInjectMask = MonitorInjectCapacity - 1;
+    private readonly float[] _monitorInject = new float[MonitorInjectCapacity];
+    private long _monInjW;
+    private long _monInjR;
+
+    /// <summary>
+    /// Enqueue mono float32 samples to be mixed into the local RX audio output
+    /// (the operator's monitor) on the next ticks. Realtime-safe, lock-free.
+    /// Returns <c>false</c> (writing nothing) when the ring can't fit the block
+    /// — the caller should retry rather than drop, so the consumer (RX tick
+    /// clock) paces the producer and the playback stays glitch-free. Used by
+    /// <see cref="Zeus.Plugins.Contracts.Audio.IAudioPlaybackSink.PlayLocal"/>.
+    /// </summary>
+    public bool EnqueueMonitorAudio(ReadOnlySpan<float> samples)
+    {
+        if (samples.Length == 0) return true;
+        long w = _monInjW;
+        long r = Volatile.Read(ref _monInjR);
+        if (MonitorInjectCapacity - (w - r) < samples.Length) return false; // full — caller retries
+        int start = (int)(w & MonitorInjectMask);
+        int first = Math.Min(samples.Length, MonitorInjectCapacity - start);
+        samples[..first].CopyTo(_monitorInject.AsSpan(start, first));
+        if (first < samples.Length)
+            samples[first..].CopyTo(_monitorInject.AsSpan(0, samples.Length - first));
+        Volatile.Write(ref _monInjW, w + samples.Length);
+        return true;
+    }
+
+    /// <summary>Samples still queued in the monitor-inject ring (for a player
+    /// to wait out the tail before declaring playback finished).</summary>
+    public long MonitorBacklog => Volatile.Read(ref _monInjW) - Volatile.Read(ref _monInjR);
+
+    // Mix any queued monitor-inject audio into the RX block (consumer side).
+    private void MixMonitorInject(Span<float> dest)
+    {
+        long w = Volatile.Read(ref _monInjW);
+        long r = _monInjR;
+        long avail = w - r;
+        if (avail <= 0) return;
+        int n = (int)Math.Min(avail, dest.Length);
+        for (int i = 0; i < n; i++)
+            dest[i] += _monitorInject[(int)((r + i) & MonitorInjectMask)];
+        Volatile.Write(ref _monInjR, r + n);
+    }
+
     // _engineLock serialises CONCURRENT WRITERS to _engine / _channelId /
     // _sampleRateHz on the rare connect/disconnect path. After iter5 the
     // hot path (OnIqFrame / OnPsFeedbackFrame / Tick) reads these fields
@@ -1714,19 +1796,25 @@ public class DspPipelineService : BackgroundService,
                 _rxFadeInPending = false;
             }
 
-            // VST plugin host is TX-only by design (operator decision
-            // 2026-04-30). The chain is configured for the TX bandwidth,
-            // tuned for voice processing, and shares one set of plugin
-            // instances with the TX seam — routing RX through it would
-            // (a) apply TX-tuned effects to band audio (sounds wrong),
-            // (b) inherit IIR state from the most recent TX block, and
-            // (c) waste CPU on RX when the operator only wants chain
-            // processing on transmit. The RX-side seam method on
-            // IDspEngine remains in place for any future "RX insert"
-            // feature, but the audio pipeline does not call it.
+            // The TX voice-processing audio chain (Compressor/EQ/VST etc.)
+            // stays TX-only by design (operator decision 2026-04-30) — those
+            // plugins are tuned for the mic path and share TXA-side instances.
+            // RX audio plugins are a SEPARATE chain, declared by the
+            // rx.post-demod manifest slot, wired through _rxAudioPluginHandler
+            // below. The two never share plugin instances or IIR state.
 
             if (!txMonitorOn)
             {
+                // RX audio plugin insert (rx.post-demod slot, e.g. a CW SCAF
+                // audio filter). Runs in place over the demodulated band audio
+                // AFTER the MOX fade and BEFORE the sidetone mix, so the filter
+                // shapes received audio without distorting the clean local
+                // sidetone. Null handler (no RX plugin attached) is the common
+                // case and a no-op — the RX path stays bit-identical.
+                var rxAudioHandler = _rxAudioPluginHandler;
+                if (rxAudioHandler is not null && audioSampleCount > 0)
+                    rxAudioHandler(audioBuf.AsSpan(0, audioSampleCount), audioSampleCount, AudioOutputRateHz);
+
                 // CW sidetone is mixed (+=) into the RX block so every
                 // downstream sink — browser WS, native audio, TCI audio
                 // stream — hears it on the same bus as band RX. The MOX
@@ -1734,6 +1822,12 @@ public class DspPipelineService : BackgroundService,
                 // when the sidetone source is idle, RenderInto returns
                 // false immediately without touching the buffer.
                 _sidetone?.RenderInto(audioBuf.AsSpan(0, audioSampleCount));
+
+                // Mix any queued local-playback monitor audio (e.g. the Recorder
+                // plugin playing a clip back while not transmitting) into the RX
+                // block, so it reaches every sink in browser and desktop modes
+                // alike. No-op (one volatile read) when nothing is queued.
+                MixMonitorInject(audioBuf.AsSpan(0, audioSampleCount));
 
                 var audioFrame = new AudioFrame(
                     Seq: ++_audioSeq,
@@ -1767,6 +1861,10 @@ public class DspPipelineService : BackgroundService,
                     SampleCount: (ushort)monCount,
                     Samples: new ReadOnlyMemory<float>(audioBuf, 0, monCount));
                 PublishAudio(in monFrame);
+                // TX-air tap source: the processed transmit audio (what goes on
+                // the air). Read-only fan-out to IRxAudioTapPlugin/ITxAudioTapPlugin
+                // taps; null subscriber list = no cost.
+                TxMonitorAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, monCount));
             }
         }
 

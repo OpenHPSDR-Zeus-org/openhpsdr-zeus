@@ -194,11 +194,55 @@ public class AudioPluginBridgeProcessLivePreviewTests
         Assert.Equal(0, sink.PublishCallCount);
     }
 
+    [Fact]
+    public void TciRemoteTxActive_Bypasses_InsertChain_In_TxPath()
+    {
+        var spy = new SpyPlugin();
+        var bridge = new AudioPluginBridge(
+            isMoxOn: () => true,
+            isMonitorOn: () => false,
+            log: NullLogger<AudioPluginBridge>.Instance,
+            isTciTxAudioActive: () => true);
+        bridge.Chain.SetSlot(0, spy);
+        bridge.Chain.MasterBypassed = false;
+
+        RunTxProcess(bridge, 256);
+
+        Assert.Equal(0, spy.ProcessCallCount); // fully bypassed for remote source
+    }
+
+    [Fact]
+    public void TciRemoteTxInactive_Runs_InsertChain_In_TxPath()
+    {
+        var spy = new SpyPlugin();
+        var bridge = new AudioPluginBridge(
+            isMoxOn: () => true,
+            isMonitorOn: () => false,
+            log: NullLogger<AudioPluginBridge>.Instance,
+            isTciTxAudioActive: () => false);
+        bridge.Chain.SetSlot(0, spy);
+        bridge.Chain.MasterBypassed = false;
+
+        RunTxProcess(bridge, 256);
+
+        Assert.Equal(1, spy.ProcessCallCount);
+        Assert.True(spy.LastCtxMox);
+        Assert.Equal(48000, spy.LastSampleRate);
+    }
+
     private static void RunPreview(AudioPluginBridge bridge, int frames)
     {
         Span<float> mic = stackalloc float[frames];
         for (int i = 0; i < frames; i++) mic[i] = 0.5f * MathF.Sin(i * 0.01f);
         bridge.ProcessLivePreview(mic, sampleRate: 48_000);
+    }
+
+    private static void RunTxProcess(AudioPluginBridge bridge, int frames)
+    {
+        Span<float> input = stackalloc float[frames];
+        Span<float> output = stackalloc float[frames];
+        for (int i = 0; i < frames; i++) input[i] = 0.5f;
+        bridge.ProcessTxForTest(input, output, frames);
     }
 
     private sealed class SpyAuditionSink : IAuditionAudioSink

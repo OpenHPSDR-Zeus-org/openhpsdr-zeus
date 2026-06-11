@@ -359,6 +359,25 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioPluginBridge>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioPluginBridge>());
 
+        // AudioTapBridge fans the RX, raw-TX-mic and processed-TX-air audio
+        // streams out to read-only plugin taps (IRxAudioTapPlugin /
+        // ITxAudioTapPlugin — recorders, decoders). Independent of the insert
+        // chain; adds no code to the audio hot paths (subscribes to events
+        // those paths already raise).
+        builder.Services.AddSingleton<AudioTapBridge>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioTapBridge>());
+
+        // PluginPlaybackSink lets a plugin play a clip locally (audition) or
+        // inject it on the air (TX chain, under operator MOX). Surfaced to
+        // plugins via IPluginContext.Playback.
+        builder.Services.AddSingleton<Zeus.Plugins.Contracts.Audio.IAudioPlaybackSink, PluginPlaybackSink>();
+
+        // RadioController lets a plugin holding the ControlRadio capability key
+        // TX (MoxSource.Plugin) and set VFO/mode — the same surfaces the UI and
+        // CW engine use. Surfaced via IPluginContext.RadioController (gated on
+        // the capability in PluginManager). Enables plugin keyers (RTTY/voice).
+        builder.Services.AddSingleton<Zeus.Plugins.Contracts.IRadioController, RadioController>();
+
         // AudioChainMasterBypassService — operator's "disengage the
         // whole Audio Suite" lever. Default is true (bypassed) on first
         // install so a brand-new operator's chain is inert until they
