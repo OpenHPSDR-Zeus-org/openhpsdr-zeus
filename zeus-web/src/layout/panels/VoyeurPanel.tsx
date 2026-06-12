@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { TileChrome } from '../TileChrome';
 import type { PanelComponentProps } from '../panels';
+import './voyeur.css';
 import {
   deleteVoyeurSession,
   getVoyeurSession,
@@ -257,371 +258,268 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
           </button>
         }
       />
-      <div style={{ padding: '8px 10px', overflow: 'auto', fontSize: 12 }}>
-        {/* Live status */}
-        <div
-          style={{
-            display: 'flex',
-            gap: 12,
-            flexWrap: 'wrap',
-            padding: '6px 8px',
-            borderRadius: 4,
-            background: 'var(--panel-bot)',
-            marginBottom: 8,
-          }}
-        >
-          {active && status ? (
-            <>
-              <span>
-                <strong style={{ color: 'var(--accent)' }}>● listening</strong>{' '}
-                {fmtFreq(status.freqHz)} {status.mode} {status.band}
-              </span>
-              <span>overs: {status.segmentCount}</span>
-              <span>captured: {fmtDur(status.capturedSeconds)}</span>
-              {status.droppedSamples > 0 && (
-                <span title="Samples dropped because the CPU briefly fell behind. RX is unaffected — this is just a capture gap.">
-                  dropped: {status.droppedSamples}
-                </span>
-              )}
-              {status.degraded && (
-                <span style={{ color: 'var(--tx)' }} title="The monitor faulted and detached. RX is unaffected.">
-                  degraded
-                </span>
-              )}
-            </>
-          ) : (
-            <span style={{ opacity: 0.7 }}>
-              Idle — press LISTEN to log the current frequency. Phase 1 captures each
-              transmission; transcription + callsigns arrive in Phase 2.
-            </span>
-          )}
-        </div>
-
-        {/* Transcription readiness + setup */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 8,
-            marginBottom: 6,
-            fontSize: 11,
-          }}
-        >
-          <span
-            style={{ color: asrReady ? 'var(--accent)' : 'var(--power)' }}
-            title="Transcription needs whisper.cpp + a model. Without it, Voyeur Mode still captures overs; it just won't transcribe or identify callsigns."
-          >
-            {asrReady === null
-              ? 'transcription: checking…'
-              : asrReady
-                ? '● transcription ready'
-                : '○ transcription off (capture-only)'}
-          </span>
-          <button
-            type="button"
-            className="btn sm"
-            onClick={() => setShowHelp((v) => !v)}
-            aria-expanded={showHelp}
-          >
-            {showHelp ? 'Hide setup' : 'How to set up & use'}
-          </button>
-        </div>
-
-        {/* Prominent model-download control whenever transcription is off — so
-            the primary setup action isn't buried in the help disclosure. */}
-        {asrReady === false && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-              padding: '6px 8px',
-              marginBottom: 8,
-              borderRadius: 4,
-              background: 'var(--panel-bot)',
-              border: '1px solid var(--panel-top)',
-              fontSize: 11,
-            }}
-          >
-            {install?.phase === 'Downloading' ? (
+      <div className="voyeur">
+        <div className="voyeur__controls">
+          {/* Live receiver bar */}
+          <div className={`voyeur-live ${active ? 'voyeur-live--on' : ''}`}>
+            {active && status ? (
               <>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div
-                    style={{
-                      height: 6,
-                      borderRadius: 3,
-                      background: 'var(--panel-top)',
-                      overflow: 'hidden',
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: `${install.percent}%`,
-                        height: '100%',
-                        background: 'var(--accent)',
-                        transition: 'width 0.4s',
-                      }}
-                    />
-                  </div>
-                  <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>
-                    {install.message}
-                  </div>
-                </div>
-                <button type="button" className="btn sm tx" onClick={onCancelInstall}>
-                  Cancel
-                </button>
+                <span className="voyeur-rec">
+                  <span className="voyeur-rec__dot" />
+                  Listening
+                </span>
+                <span className="voyeur-freq">{fmtFreq(status.freqHz)}</span>
+                <span className="voyeur-mode">
+                  {status.mode} · {status.band}
+                </span>
+                <span className="status-chips" style={{ marginLeft: 'auto' }}>
+                  <span className="chip mono">
+                    <span className="k">overs</span>
+                    <span className="v">{status.segmentCount}</span>
+                  </span>
+                  <span className="chip mono">
+                    <span className="k">cap</span>
+                    <span className="v">{fmtDur(status.capturedSeconds)}</span>
+                  </span>
+                  {status.droppedSamples > 0 && (
+                    <span
+                      className="chip mono"
+                      title="Samples dropped because the CPU briefly fell behind. RX is unaffected — just a capture gap."
+                    >
+                      <span className="k">drop</span>
+                      <span className="v">{status.droppedSamples}</span>
+                    </span>
+                  )}
+                  {status.degraded && (
+                    <span className="chip tx" title="The monitor faulted and detached. RX is unaffected.">
+                      <span className="v">degraded</span>
+                    </span>
+                  )}
+                </span>
               </>
             ) : (
-              <>
-                <span style={{ opacity: 0.8 }}>Download a speech model to enable transcription:</span>
-                <select
-                  value={chosenModel}
-                  onChange={(e) => setChosenModel(e.target.value)}
-                  aria-label="Speech model"
-                  style={{ flex: 1, minWidth: 0 }}
-                >
-                  {(models.length
-                    ? models
-                    : [
-                        { id: 'medium.en', label: 'Medium — recommended' },
-                        { id: 'small.en', label: 'Small — faster download' },
-                      ]
-                  ).map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.label}
-                    </option>
-                  ))}
-                </select>
-                <button type="button" className="btn sm accent" onClick={onInstall}>
-                  Download
-                </button>
-              </>
+              <span className="voyeur-idle">
+                Idle — tune to a busy frequency and press <strong>LISTEN</strong> to
+                log who’s on and what’s said.
+              </span>
             )}
           </div>
-        )}
 
-        {showHelp && (
-          <div
-            style={{
-              fontSize: 11,
-              lineHeight: 1.5,
-              padding: '8px 10px',
-              marginBottom: 8,
-              borderRadius: 4,
-              background: 'var(--panel-bot)',
-              border: '1px solid var(--panel-top)',
-            }}
-          >
-            <div style={{ fontWeight: 600, marginBottom: 4 }}>What it does</div>
-            Park the radio on a busy frequency (a net, a rag-chew) and press
-            LISTEN. Voyeur Mode records each transmission, then — if transcription
-            is set up — writes out what was said and who said it. Walk away; come
-            back to a log of the activity.
-            <div style={{ fontWeight: 600, margin: '8px 0 4px' }}>Using it</div>
-            <ol style={{ margin: 0, paddingLeft: 18 }}>
-              <li>Tune to the frequency you want to monitor (USB/LSB as normal).</li>
-              <li>Press <strong>LISTEN</strong>. The status line shows overs being captured.</li>
-              <li>Leave it running. Open a log anytime to read the transcript and roster.</li>
-              <li>★ <strong>saves</strong> a log (protects it from auto-cleanup); ✕ <strong>deletes</strong> it and its audio. Click a name to rename.</li>
-            </ol>
-            <div style={{ fontWeight: 600, margin: '8px 0 4px' }}>
-              Enable transcription (one-time, optional)
-            </div>
-            Transcription runs locally — audio never leaves your computer. Pick a
-            speech model and click Download; no terminal needed. The bigger model
-            is more accurate on noisy SSB; the smaller one downloads faster.
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '6px 0' }}>
-              <select
-                value={chosenModel}
-                onChange={(e) => setChosenModel(e.target.value)}
-                disabled={install?.phase === 'Downloading'}
-                aria-label="Speech model"
-                style={{ flex: 1, minWidth: 0 }}
-              >
-                {(models.length
-                  ? models
-                  : [
-                      { id: 'small.en', label: 'Small (English) — fast' },
-                      { id: 'medium.en', label: 'Medium (English) — most accurate' },
-                    ]
-                ).map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
+          {/* Transcription status + setup toggle */}
+          <div className="voyeur-row">
+            <span
+              className={`voyeur-asr ${asrReady ? 'voyeur-asr--on' : 'voyeur-asr--off'}`}
+              title="Transcription runs locally via whisper. Without it, Voyeur Mode still captures overs; it just won't transcribe or identify callsigns."
+            >
+              <span className="voyeur-asr__dot" />
+              {asrReady === null ? 'checking…' : asrReady ? 'transcription on' : 'transcription off'}
+            </span>
+            <span style={{ flex: 1 }} />
+            <button
+              type="button"
+              className="btn sm"
+              onClick={() => setShowHelp((v) => !v)}
+              aria-expanded={showHelp}
+            >
+              {showHelp ? 'Hide setup' : 'How to set up & use'}
+            </button>
+          </div>
+
+          {/* Prominent model-download control whenever transcription is off */}
+          {asrReady === false && (
+            <div className="voyeur-dl">
               {install?.phase === 'Downloading' ? (
-                <button type="button" className="btn sm tx" onClick={onCancelInstall}>
-                  Cancel
-                </button>
+                <>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div className="voyeur-bar">
+                      <div className="voyeur-bar__fill" style={{ width: `${install.percent}%` }} />
+                    </div>
+                    <div className="voyeur-dl__msg">{install.message}</div>
+                  </div>
+                  <button type="button" className="btn sm tx" onClick={onCancelInstall}>
+                    Cancel
+                  </button>
+                </>
               ) : (
-                <button type="button" className="btn sm accent" onClick={onInstall}>
-                  Download
-                </button>
+                <>
+                  <span className="voyeur-dl__label">Speech model:</span>
+                  <select
+                    value={chosenModel}
+                    onChange={(e) => setChosenModel(e.target.value)}
+                    aria-label="Speech model"
+                    style={{ flex: 1, minWidth: 0 }}
+                  >
+                    {(models.length
+                      ? models
+                      : [
+                          { id: 'medium.en', label: 'Medium — recommended' },
+                          { id: 'small.en', label: 'Small — faster download' },
+                        ]
+                    ).map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.label}
+                      </option>
+                    ))}
+                  </select>
+                  <button type="button" className="btn sm accent" onClick={onInstall}>
+                    Download
+                  </button>
+                </>
               )}
             </div>
-            {install?.phase === 'Downloading' && (
-              <div style={{ margin: '4px 0' }}>
-                <div
-                  style={{
-                    height: 6,
-                    borderRadius: 3,
-                    background: 'var(--panel-top)',
-                    overflow: 'hidden',
-                  }}
-                >
-                  <div
-                    style={{
-                      width: `${install.percent}%`,
-                      height: '100%',
-                      background: 'var(--accent)',
-                      transition: 'width 0.4s',
-                    }}
-                  />
+          )}
+
+          {showHelp && (
+            <div className="voyeur-help">
+              <h4>What it does</h4>
+              Park the radio on a busy frequency (a net, a rag-chew) and press
+              LISTEN. Voyeur Mode records each transmission, then — if transcription
+              is set up — writes out what was said and who said it. Walk away; come
+              back to a log of the activity.
+              <h4>Using it</h4>
+              <ol>
+                <li>Tune to the frequency you want to monitor (USB/LSB as normal).</li>
+                <li>
+                  Press <strong>LISTEN</strong>. The live bar shows overs being captured.
+                </li>
+                <li>Leave it running. Open a log anytime to read the transcript and roster.</li>
+                <li>
+                  ★ <strong>saves</strong> a log (protects it from auto-cleanup); ✕{' '}
+                  <strong>deletes</strong> it and its audio. Click a name to rename.
+                </li>
+              </ol>
+              <h4>Transcription (one-time, optional)</h4>
+              Runs locally — audio never leaves your computer. Pick a model above and
+              click Download (no terminal). The bigger model is more accurate on noisy
+              SSB; the smaller one downloads faster. You only download once.
+              {install?.phase === 'Done' && (
+                <div style={{ color: 'var(--green-soft)', marginTop: 4 }}>✓ {install.message}</div>
+              )}
+              {install?.phase === 'Error' && (
+                <div className="voyeur-error" style={{ marginTop: 4 }}>
+                  Download failed: {install.message}
                 </div>
-                <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>{install.message}</div>
-              </div>
-            )}
-            {install?.phase === 'Done' && (
-              <div style={{ color: 'var(--accent)', fontSize: 11 }}>✓ {install.message}</div>
-            )}
-            {install?.phase === 'Error' && (
-              <div style={{ color: 'var(--tx)', fontSize: 11 }}>Download failed: {install.message}</div>
-            )}
-            {install && !install.binaryPresent && (
-              <div style={{ fontSize: 10, opacity: 0.7, marginTop: 4 }}>
-                Note: the whisper engine for your platform ({install.rid}) ships
-                with Zeus. If transcription stays off after the model downloads,
-                the engine isn’t bundled in this build yet — advanced users can
-                place a <code>whisper-cli</code> binary in{' '}
-                <code style={{ wordBreak: 'break-all' }}>
-                  {modelDir ? `${modelDir}/bin` : '…/Zeus/whisper/bin'}
-                </code>
-                .
-              </div>
-            )}
-            <div style={{ fontWeight: 600, margin: '8px 0 4px' }}>
-              Reading the roster
+              )}
+              {install && !install.binaryPresent && (
+                <div style={{ fontSize: 10, color: 'var(--fg-3)', marginTop: 6 }}>
+                  Note: the whisper engine for your platform ({install.rid}) ships with
+                  Zeus. If transcription stays off after the model downloads, the engine
+                  isn’t bundled in this build yet — advanced users can place a{' '}
+                  <code>whisper-cli</code> binary in{' '}
+                  <code>{modelDir ? `${modelDir}/bin` : '…/Zeus/whisper/bin'}</code>.
+                </div>
+              )}
+              <h4>Reading the roster</h4>
+              <span style={{ color: 'var(--accent)' }}>Blue</span> = QRZ-confirmed (real
+              licensee, name shown). <span style={{ color: 'var(--power)' }}>Amber</span> =
+              heard but unverified. Grey = no decodable callsign. HF voice is noisy, so
+              expect a useful gist — not a perfect transcript.
             </div>
-            <span style={{ color: 'var(--accent)' }}>Blue</span> callsign = QRZ-confirmed
-            (real licensee, name shown). <span style={{ color: 'var(--power)' }}>Amber</span>{' '}
-            = heard but unverified. Grey “callsign unknown” = an over with no
-            decodable ID. HF voice is noisy, so expect a useful gist — not a
-            perfect transcript.
-          </div>
-        )}
+          )}
 
-        {error && (
-          <div style={{ color: 'var(--tx)', marginBottom: 6 }}>{error}</div>
-        )}
-
-        {/* Saved logs */}
-        <div style={{ fontWeight: 600, margin: '4px 0', opacity: 0.8 }}>
-          Logs ({sessions.length})
+          {error && <div className="voyeur-error">{error}</div>}
         </div>
-        {sessions.length === 0 && (
-          <div style={{ opacity: 0.6 }}>No logs yet.</div>
-        )}
-        {sessions.map((s) => (
-          <div
-            key={s.id}
-            style={{
-              borderTop: '1px solid var(--panel-top)',
-              padding: '4px 0',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <button
-                type="button"
-                className="btn sm"
-                title={s.pinned ? 'Saved (won’t be auto-pruned). Click to unsave.' : 'Save this log'}
-                onClick={() => onTogglePin(s)}
-                style={{ color: s.pinned ? 'var(--power)' : undefined }}
-              >
-                {s.pinned ? '★' : '☆'}
-              </button>
-              <input
-                ref={editingRef}
-                defaultValue={s.label}
-                onBlur={(e) => onRename(s, e.currentTarget.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') e.currentTarget.blur();
-                }}
-                style={{
-                  flex: 1,
-                  minWidth: 0,
-                  background: 'transparent',
-                  border: 'none',
-                  color: 'inherit',
-                  font: 'inherit',
-                }}
-                aria-label="Log name"
-              />
-              <button type="button" className="btn sm" onClick={() => openSession(s.id)}>
-                {openId === s.id ? 'Hide' : 'Open'}
-              </button>
-              <button
-                type="button"
-                className="btn sm tx"
-                title="Delete this log and its audio"
-                onClick={() => onDelete(s)}
-              >
-                ✕
-              </button>
-            </div>
-            <div style={{ opacity: 0.65, fontSize: 11, paddingLeft: 30 }}>
-              {fmtWhen(s.startedUtc)} · {fmtFreq(s.freqHz)} {s.mode} · {s.segmentCount} overs ·{' '}
-              {fmtDur(s.capturedSeconds)}
-              {s.hasAudio ? ' · audio' : ''}
-            </div>
 
-            {openId === s.id && (
-              <div style={{ paddingLeft: 30, marginTop: 4 }}>
-                {!detail && <div style={{ opacity: 0.6 }}>Loading…</div>}
-                {detail && detail.segments.length === 0 && (
-                  <div style={{ opacity: 0.6 }}>No overs captured.</div>
-                )}
-                {detail &&
-                  detail.segments.map((seg, i) => (
-                    <div
-                      key={seg.id}
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'auto 1fr',
-                        gap: 8,
-                        padding: '2px 0',
-                        borderTop: i === 0 ? 'none' : '1px dotted var(--panel-top)',
-                      }}
-                    >
-                      <span style={{ opacity: 0.7, fontVariantNumeric: 'tabular-nums' }}>
-                        {new Date(seg.startedUtc).toLocaleTimeString()} ·{' '}
-                        {(seg.durationMs / 1000).toFixed(1)}s
-                      </span>
-                      <span>
-                        {/* Phase 2: callsign + transcript. Phase 1: the over
-                            with no attribution yet. */}
-                        <strong
-                          style={{
-                            color:
-                              seg.callsignState === 'confirmed'
-                                ? 'var(--accent)'
-                                : seg.callsignState === 'tentative'
-                                  ? 'var(--power)'
-                                  : 'inherit',
-                            opacity: seg.callsign ? 1 : 0.5,
-                          }}
-                        >
-                          {seg.callsign ?? 'callsign unknown'}
-                          {seg.callsignName ? ` (${seg.callsignName})` : ''}
-                        </strong>
-                        {seg.transcript ? ` — ${seg.transcript}` : ''}
-                      </span>
-                    </div>
-                  ))}
+        {/* The intercepted-comms log */}
+        <div className="voyeur__log">
+          <div className="voyeur-loghdr">Logs · {sessions.length}</div>
+          {sessions.length === 0 && <div className="voyeur-empty">No logs yet — press LISTEN.</div>}
+          {sessions.map((s) => (
+            <div className="voyeur-card" key={s.id}>
+              <div className="voyeur-card__head">
+                <button
+                  type="button"
+                  className={`voyeur-pin ${s.pinned ? 'voyeur-pin--on' : ''}`}
+                  title={s.pinned ? 'Saved (won’t be auto-pruned). Click to unsave.' : 'Save this log'}
+                  onClick={() => onTogglePin(s)}
+                >
+                  {s.pinned ? '★' : '☆'}
+                </button>
+                <input
+                  ref={editingRef}
+                  className="voyeur-card__name"
+                  defaultValue={s.label}
+                  onBlur={(e) => onRename(s, e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur();
+                  }}
+                  aria-label="Log name"
+                />
+                <button type="button" className="btn sm" onClick={() => openSession(s.id)}>
+                  {openId === s.id ? 'Hide' : 'Open'}
+                </button>
+                <button
+                  type="button"
+                  className="btn sm tx"
+                  title="Delete this log and its audio"
+                  onClick={() => onDelete(s)}
+                >
+                  ✕
+                </button>
               </div>
-            )}
-          </div>
-        ))}
+              <div className="voyeur-card__meta">
+                <span className="chip mono">
+                  <span className="v">{fmtFreq(s.freqHz)}</span>
+                </span>
+                <span className="chip">
+                  <span className="v">{s.mode}</span>
+                </span>
+                <span className="chip mono">
+                  <span className="k">overs</span>
+                  <span className="v">{s.segmentCount}</span>
+                </span>
+                <span className="chip mono">
+                  <span className="k">when</span>
+                  <span className="v">{fmtWhen(s.startedUtc)}</span>
+                </span>
+                {s.hasAudio && (
+                  <span className="chip">
+                    <span className="v">audio</span>
+                  </span>
+                )}
+              </div>
+
+              {openId === s.id && (
+                <div className="voyeur-overs">
+                  {!detail && <div className="voyeur-empty" style={{ padding: '6px 10px' }}>Loading…</div>}
+                  {detail && detail.segments.length === 0 && (
+                    <div className="voyeur-empty" style={{ padding: '6px 10px' }}>No overs captured.</div>
+                  )}
+                  {detail &&
+                    detail.segments.map((seg) => {
+                      const state = seg.callsignState ?? 'unknown';
+                      return (
+                        <div key={seg.id} className={`voyeur-over voyeur-over--${state}`}>
+                          <span className="voyeur-over__time">
+                            {new Date(seg.startedUtc).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              second: '2-digit',
+                            })}
+                            <br />
+                            {(seg.durationMs / 1000).toFixed(0)}s
+                          </span>
+                          <span className="voyeur-over__body">
+                            <span className={`voyeur-call voyeur-call--${state}`}>
+                              {seg.callsign ?? 'unknown'}
+                            </span>
+                            {seg.callsignName && <span className="voyeur-name">{seg.callsignName}</span>}
+                            {seg.transcript ? (
+                              <span className="voyeur-text">{seg.transcript}</span>
+                            ) : (
+                              <span className="voyeur-text voyeur-text--pending">
+                                {asrReady ? 'transcribing…' : 'audio captured'}
+                              </span>
+                            )}
+                          </span>
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     </>
   );
