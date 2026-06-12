@@ -275,6 +275,13 @@ public static class ZeusHost
         // host and headless — see CwDecoderService.
         builder.Services.AddSingleton<CwDecoderService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<CwDecoderService>());
+        // Voyeur Mode (zeus-la5) — unattended net monitor. Default OFF; only
+        // taps RX audio while a session is active (see VoyeurMonitorService
+        // "cannot break anything" notes). VoyeurStore owns the LiteDB log +
+        // segment-audio files (the save/delete surface).
+        builder.Services.AddSingleton<Zeus.Server.Voyeur.VoyeurStore>();
+        builder.Services.AddSingleton<VoyeurMonitorService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<VoyeurMonitorService>());
         // WAV recorder/player: taps DspPipelineService RX + TX-monitor audio to
         // record float32 WAVs (default save folder = Downloads) and plays them
         // back locally via the audition sink. Over-the-air playback is layered
