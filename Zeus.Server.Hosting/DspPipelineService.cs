@@ -289,6 +289,22 @@ public class DspPipelineService : BackgroundService,
     // see issue #81. volatile because MoxChanged fires on the caller's thread
     // and Tick reads from the pipeline thread.
     private volatile bool _keyed;
+    // Issue #597 Phase 0: display-EMA fast-attack latch. OnRadioStateChanged
+    // arms it when RadioLoHz moves (the operator is tuning) and Tick restores
+    // the default tau once the LO has been quiet for FastAttackRestoreMs.
+    // Debounced by design: one arm P/Invoke at gesture start, one restore
+    // P/Invoke at gesture end — NOT per wheel notch. Skipped entirely while
+    // _keyed so the TX display path is never touched (PS safety; the engine
+    // method is additionally scoped to the RX analyzer). long.MinValue
+    // sentinel suppresses the arm on the first state callback after connect.
+    // _fastAttackLastLoHz is only touched on the state-handler thread;
+    // _fastAttackLoChangedAt crosses to the RX thread via Interlocked.
+    private long _fastAttackLastLoHz = long.MinValue;
+    private long _fastAttackLoChangedAt;
+    private volatile bool _fastAttackActive;
+    private const int FastAttackRestoreMs = 250;
+    private static readonly long FastAttackRestoreTicks =
+        (long)(FastAttackRestoreMs / 1000.0 * Stopwatch.Frequency);
     // RX S-meter broadcast throttle. Pipeline ticks at 30 Hz; broadcasting
     // every 6 ticks = 5 Hz gives a smoother meter than Thetis's 4 Hz baseline
     // without spamming the WS (30 Hz dBm readouts add nothing a UI can use).
@@ -644,6 +660,24 @@ public class DspPipelineService : BackgroundService,
         // RadioService.SetRadioLo). See docs/prd/panfall_behavior.md.
         var p2 = _p2Client;
         p2?.SetVfoAHz(s.RadioLoHz);
+
+        // Issue #597 Phase 0: arm the RX display fast-attack when the LO
+        // moves. First callback after construction only records the LO
+        // (sentinel) so connect itself doesn't trigger a pointless arm.
+        if (_fastAttackLastLoHz == long.MinValue)
+        {
+            _fastAttackLastLoHz = s.RadioLoHz;
+        }
+        else if (s.RadioLoHz != _fastAttackLastLoHz)
+        {
+            _fastAttackLastLoHz = s.RadioLoHz;
+            Interlocked.Exchange(ref _fastAttackLoChangedAt, Stopwatch.GetTimestamp());
+            if (!_keyed && !_fastAttackActive)
+            {
+                Volatile.Read(ref _engine)?.SetRxDisplayFastAttack(Volatile.Read(ref _channelId), fast: true);
+                _fastAttackActive = true;
+            }
+        }
 
         // iter5 pass-2: lock-free engine pointer read. The lock previously
         // here only provided pointer atomicity (the engine.* calls below
@@ -1613,6 +1647,18 @@ public class DspPipelineService : BackgroundService,
         // when the user clicked Connect. The synthetic engine never produces
         // real-radio data, so suppressing it unconditionally is correct.
         if (engine is SyntheticDspEngine) return;
+
+        // Issue #597 Phase 0: restore the default display tau once the LO has
+        // been quiet for FastAttackRestoreMs. Runs on the RX/pipeline thread;
+        // the engine call is idempotent and channel-guarded, so a race with a
+        // simultaneous re-arm on the state thread is harmless (the re-arm
+        // refreshes _fastAttackLoChangedAt and the restore simply fires later).
+        if (_fastAttackActive &&
+            Stopwatch.GetTimestamp() - Interlocked.Read(ref _fastAttackLoChangedAt) >= FastAttackRestoreTicks)
+        {
+            engine.SetRxDisplayFastAttack(channel, fast: false);
+            _fastAttackActive = false;
+        }
 
         engine.SetVfoHz(channel, state.VfoHz);
 

@@ -179,6 +179,7 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         public void SetVfoHz(int channelId, long vfoHz) { }
         public void SetCtunShift(int channelId, int shiftHz) { }
         public void SetAgcTop(int channelId, double topDb) { }
+    public void SetRxDisplayFastAttack(int channelId, bool fast) { }
         public void SetRxAfGainDb(int channelId, double db) { }
         public void SetNoiseReduction(int channelId, NrConfig cfg) { }
         public void SetZoom(int channelId, int level) { }

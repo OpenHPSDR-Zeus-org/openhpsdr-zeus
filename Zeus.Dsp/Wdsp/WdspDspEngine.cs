@@ -538,6 +538,21 @@ public sealed class WdspDspEngine : IDspEngine
         NativeMethods.SetRXAShiftRun(channelId, shiftHz != 0 ? 1 : 0);
     }
 
+    public void SetRxDisplayFastAttack(int channelId, bool fast)
+    {
+        if (!_channels.TryGetValue(channelId, out var state)) return;
+        // RX display ONLY — channelId is the RXA channel whose analyzer was
+        // created in OpenChannel (XCreateAnalyzer(id, ...)). The TX analyzer
+        // (_txaChannelId) and PS-feedback analyzer keep TxAvgTauSec untouched,
+        // so a retune while keyed never disturbs the TX trace or PS monitor.
+        // AnalyzerLock mirrors SetZoom: SetDisplayAvBackmult races Spectrum0
+        // (worker) and GetPixels (pipeline tick) otherwise.
+        lock (state.AnalyzerLock)
+        {
+            ConfigureDisplayAveragingTau(channelId, fast ? FastAttackTauSec : DefaultAvgTauSec);
+        }
+    }
+
     public void SetAgcTop(int channelId, double topDb)
     {
         if (!_channels.TryGetValue(channelId, out var state)) return;
@@ -2657,6 +2672,12 @@ public sealed class WdspDspEngine : IDspEngine
     // Thetis-style smoothed envelope so the operator sees signal shape, not
     // every voiced/unvoiced transition.
     private const double TxAvgTauSec = 0.175;
+    // Issue #597 Phase 0: retune fast-attack tau. ~20 ms at 30 fps gives
+    // backmult ≈ exp(-1/(30·0.02)) ≈ 0.19 — the newest frame dominates, so
+    // post-retune content settles in ~3 ticks (~100 ms) instead of the
+    // 300-400 ms melt the 100 ms default produces. Mirrors Thetis's
+    // fast-attack after a display center change (display.cs:6360-6383).
+    private const double FastAttackTauSec = 0.020;
     private const int LogRecursiveMode = 3;
 
     private static void ConfigureDisplayAveraging(int disp)

@@ -74,6 +74,19 @@ public interface IDspEngine : IDisposable
     void SetCtunShift(int channelId, int shiftHz);
     void SetAgcTop(int channelId, double topDb);
 
+    /// <summary>
+    /// Briefly tighten the RX display's averaging time-constant after a
+    /// retune so the spectrum settles at the new frequency in ~100 ms
+    /// instead of melting over ~300-400 ms (issue #597; Thetis parity —
+    /// display.cs fast-attacks its averaging after a center change). RX
+    /// display channel ONLY: the TX and PS-feedback analyzers keep their
+    /// own configured tau (TxAvgTauSec) untouched, so tuning while keyed
+    /// never disturbs the TX trace or the PureSignal monitor. Restoring
+    /// (<paramref name="fast"/> = false) re-applies the RX channel's
+    /// configured default tau. No-op on Synthetic.
+    /// </summary>
+    void SetRxDisplayFastAttack(int channelId, bool fast);
+
     /// <summary>Set the RX master AF gain in dB. Drives WDSP's
     /// <c>SetRXAPanelGain1</c> (linear) after a dB→linear conversion. 0 dB
     /// equals the engine's open-time default (linear 1.0). No-op on
