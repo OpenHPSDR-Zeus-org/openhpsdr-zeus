@@ -407,11 +407,19 @@
   color: var(--fg-3);
 }
 
+/* AI Summary bar — shown above both Log and Roster views when a log is open. */
+.voyeur-summary {
+  padding: 8px 10px;
+  background: var(--bg-inset);
+  border-top: 1px solid var(--fg-4);
+}
+.voyeur-summary .voyeur-digest {
+  margin: 8px 0 0;
+}
 .voyeur-digestbar {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 8px;
 }
 .voyeur-digestbar__text {
   display: flex;

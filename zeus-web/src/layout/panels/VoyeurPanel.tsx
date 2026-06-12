@@ -214,6 +214,9 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
     }
     setOpenId(id);
     setDetail(null);
+    // Load the report too so the AI Summary bar (with any existing digest) is
+    // available in the Log view, not just behind the Roster toggle.
+    if (!reports[id]) void loadReport(id);
     try {
       setDetail(await getVoyeurSession(id));
     } catch (e) {
@@ -356,17 +359,14 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
     );
   };
 
-  const renderRoster = (id: string) => {
-    const r = reports[id];
-    if (!r) return <div className="voyeur-empty" style={{ padding: '6px 10px' }}>Loading…</div>;
+  // AI Summary bar — surfaced whenever a log is open (both Log and Roster
+  // views), so it's never hidden behind the Roster toggle. The digest text (if
+  // any) comes from the loaded report; the button works even before the report
+  // loads.
+  const renderSummary = (id: string) => {
+    const digest = reports[id]?.digest;
     return (
-      <div className="voyeur-roster">
-        <div className="voyeur-roster__stats">
-          <span className="chip mono"><span className="k">stations</span><span className="v">{r.uniqueStations}</span></span>
-          <span className="chip mono"><span className="k">confirmed</span><span className="v">{r.confirmedStations}</span></span>
-          <span className="chip mono"><span className="k">overs</span><span className="v">{r.session.segmentCount}</span></span>
-          <span className="chip mono"><span className="k">cap</span><span className="v">{fmtDur(r.session.capturedSeconds)}</span></span>
-        </div>
+      <div className="voyeur-summary">
         <div className="voyeur-digestbar">
           <div className="voyeur-digestbar__text">
             <span className="voyeur-digestbar__label">AI Summary</span>
@@ -385,7 +385,7 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
             >
               {digestBusy === id
                 ? 'Summarizing…'
-                : r.digest
+                : digest
                   ? 'Regenerate summary'
                   : 'Summarize this net'}
             </button>
@@ -395,7 +395,22 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
             </span>
           )}
         </div>
-        {r.digest && <div className="voyeur-digest">{r.digest}</div>}
+        {digest && <div className="voyeur-digest">{digest}</div>}
+      </div>
+    );
+  };
+
+  const renderRoster = (id: string) => {
+    const r = reports[id];
+    if (!r) return <div className="voyeur-empty" style={{ padding: '6px 10px' }}>Loading…</div>;
+    return (
+      <div className="voyeur-roster">
+        <div className="voyeur-roster__stats">
+          <span className="chip mono"><span className="k">stations</span><span className="v">{r.uniqueStations}</span></span>
+          <span className="chip mono"><span className="k">confirmed</span><span className="v">{r.confirmedStations}</span></span>
+          <span className="chip mono"><span className="k">overs</span><span className="v">{r.session.segmentCount}</span></span>
+          <span className="chip mono"><span className="k">cap</span><span className="v">{fmtDur(r.session.capturedSeconds)}</span></span>
+        </div>
         {r.roster.length === 0 && (
           <div className="voyeur-empty" style={{ padding: '4px 10px' }}>No callsigns identified.</div>
         )}
@@ -713,17 +728,22 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
                 )}
               </div>
 
-              {openId === s.id && (view[s.id] === 'roster' ? (
-                renderRoster(s.id)
-              ) : (
-                <div className="voyeur-overs">
-                  {!detail && <div className="voyeur-empty" style={{ padding: '6px 10px' }}>Loading…</div>}
-                  {detail && detail.segments.length === 0 && (
-                    <div className="voyeur-empty" style={{ padding: '6px 10px' }}>No overs captured.</div>
+              {openId === s.id && (
+                <>
+                  {renderSummary(s.id)}
+                  {view[s.id] === 'roster' ? (
+                    renderRoster(s.id)
+                  ) : (
+                    <div className="voyeur-overs">
+                      {!detail && <div className="voyeur-empty" style={{ padding: '6px 10px' }}>Loading…</div>}
+                      {detail && detail.segments.length === 0 && (
+                        <div className="voyeur-empty" style={{ padding: '6px 10px' }}>No overs captured.</div>
+                      )}
+                      {detail && detail.segments.map(renderOver)}
+                    </div>
                   )}
-                  {detail && detail.segments.map(renderOver)}
-                </div>
-              ))}
+                </>
+              )}
             </div>
           ))}
         </div>
