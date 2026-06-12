@@ -19,6 +19,7 @@ import {
   deleteVoyeurSession,
   getVoyeurSession,
   getVoyeurStatus,
+  getVoyeurTranscription,
   listVoyeurSessions,
   startVoyeur,
   stopVoyeur,
@@ -62,6 +63,9 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
   const [detail, setDetail] = useState<VoyeurSessionDetail | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [asrReady, setAsrReady] = useState<boolean | null>(null);
+  const [modelDir, setModelDir] = useState<string>('');
+  const [showHelp, setShowHelp] = useState(false);
   const editingRef = useRef<HTMLInputElement | null>(null);
 
   const refreshSessions = useCallback(async () => {
@@ -95,6 +99,21 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
   useEffect(() => {
     void refreshSessions();
   }, [refreshSessions]);
+
+  useEffect(() => {
+    let alive = true;
+    void getVoyeurTranscription()
+      .then((t) => {
+        if (alive) {
+          setAsrReady(t.available);
+          setModelDir(t.modelDir);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // When a session is active, refresh the list as its segment count grows.
   useEffect(() => {
@@ -237,6 +256,101 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
           )}
         </div>
 
+        {/* Transcription readiness + setup */}
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            marginBottom: 6,
+            fontSize: 11,
+          }}
+        >
+          <span
+            style={{ color: asrReady ? 'var(--accent)' : 'var(--power)' }}
+            title="Transcription needs whisper.cpp + a model. Without it, Voyeur Mode still captures overs; it just won't transcribe or identify callsigns."
+          >
+            {asrReady === null
+              ? 'transcription: checking…'
+              : asrReady
+                ? '● transcription ready'
+                : '○ transcription off (capture-only)'}
+          </span>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => setShowHelp((v) => !v)}
+            aria-expanded={showHelp}
+          >
+            {showHelp ? 'Hide setup' : 'How to set up & use'}
+          </button>
+        </div>
+
+        {showHelp && (
+          <div
+            style={{
+              fontSize: 11,
+              lineHeight: 1.5,
+              padding: '8px 10px',
+              marginBottom: 8,
+              borderRadius: 4,
+              background: 'var(--panel-bot)',
+              border: '1px solid var(--panel-top)',
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: 4 }}>What it does</div>
+            Park the radio on a busy frequency (a net, a rag-chew) and press
+            LISTEN. Voyeur Mode records each transmission, then — if transcription
+            is set up — writes out what was said and who said it. Walk away; come
+            back to a log of the activity.
+            <div style={{ fontWeight: 600, margin: '8px 0 4px' }}>Using it</div>
+            <ol style={{ margin: 0, paddingLeft: 18 }}>
+              <li>Tune to the frequency you want to monitor (USB/LSB as normal).</li>
+              <li>Press <strong>LISTEN</strong>. The status line shows overs being captured.</li>
+              <li>Leave it running. Open a log anytime to read the transcript and roster.</li>
+              <li>★ <strong>saves</strong> a log (protects it from auto-cleanup); ✕ <strong>deletes</strong> it and its audio. Click a name to rename.</li>
+            </ol>
+            <div style={{ fontWeight: 600, margin: '8px 0 4px' }}>
+              Enable transcription (one-time, optional)
+            </div>
+            Transcription runs locally — audio never leaves your computer.
+            <ol style={{ margin: '4px 0 0', paddingLeft: 18 }}>
+              <li>
+                Install whisper:{' '}
+                <code style={{ background: 'var(--panel-top)', padding: '0 4px' }}>
+                  brew install whisper-cpp
+                </code>{' '}
+                (macOS) — or put the <code>whisper-cli</code> binary on your PATH.
+              </li>
+              <li>
+                Download a model and drop it here:
+                <div
+                  style={{
+                    margin: '2px 0',
+                    padding: '2px 4px',
+                    background: 'var(--panel-top)',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {modelDir || '…/Zeus/whisper/'}
+                </div>
+                Recommended: <code>ggml-medium.en.bin</code> (best accuracy on
+                noisy SSB) or <code>ggml-small.en.bin</code> (lighter). Get them
+                from the whisper.cpp model page on Hugging Face.
+              </li>
+              <li>Restart Zeus. The indicator above turns green when it’s found.</li>
+            </ol>
+            <div style={{ fontWeight: 600, margin: '8px 0 4px' }}>
+              Reading the roster
+            </div>
+            <span style={{ color: 'var(--accent)' }}>Blue</span> callsign = QRZ-confirmed
+            (real licensee, name shown). <span style={{ color: 'var(--power)' }}>Amber</span>{' '}
+            = heard but unverified. Grey “callsign unknown” = an over with no
+            decodable ID. HF voice is noisy, so expect a useful gist — not a
+            perfect transcript.
+          </div>
+        )}
+
         {error && (
           <div style={{ color: 'var(--tx)', marginBottom: 6 }}>{error}</div>
         )}
@@ -338,6 +452,7 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
                           }}
                         >
                           {seg.callsign ?? 'callsign unknown'}
+                          {seg.callsignName ? ` (${seg.callsignName})` : ''}
                         </strong>
                         {seg.transcript ? ` — ${seg.transcript}` : ''}
                       </span>

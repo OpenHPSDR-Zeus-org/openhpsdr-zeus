@@ -169,6 +169,9 @@ public static class ZeusEndpoints
 
         // ---- Voyeur Mode (zeus-la5) — unattended net monitor + log mgmt ----
         app.MapGet("/api/voyeur/status", (VoyeurMonitorService v) => Results.Ok(v.Status()));
+        // Transcription readiness + setup hint for the panel (Phase 2).
+        app.MapGet("/api/voyeur/transcription", (Zeus.Server.Voyeur.WhisperTranscriber w) =>
+            Results.Ok(new { available = w.Available, modelDir = Zeus.Server.Voyeur.WhisperTranscriber.ModelDir }));
         app.MapPost("/api/voyeur/start", (VoyeurStartRequest? body, VoyeurMonitorService v) =>
             Results.Ok(v.Start(keepAudio: body?.KeepAudio ?? true)));
         app.MapPost("/api/voyeur/stop", (VoyeurMonitorService v) => Results.Ok(v.Stop()));

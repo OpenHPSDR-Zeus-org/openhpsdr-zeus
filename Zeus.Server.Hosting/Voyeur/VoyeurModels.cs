@@ -61,6 +61,8 @@ public sealed class VoyeurSegmentDocument
     public string? Callsign { get; set; }
     /// <summary>"confirmed" | "tentative" | "unknown" — QRZ-validation state.</summary>
     public string? CallsignState { get; set; }
+    /// <summary>QRZ operator name when the callsign was confirmed (roster enrichment).</summary>
+    public string? CallsignName { get; set; }
 }
 
 // ---- DTOs (wire shape for the REST API) ----
@@ -75,7 +77,8 @@ public sealed record VoyeurStatusDto(
     double CapturedSeconds,
     long DroppedSamples,
     int RingFillPct,
-    bool Degraded);
+    bool Degraded,
+    bool TranscriptionAvailable);
 
 public sealed record VoyeurSessionDto(
     string Id,
@@ -99,7 +102,8 @@ public sealed record VoyeurSegmentDto(
     bool HasAudio,
     string? Transcript,
     string? Callsign,
-    string? CallsignState);
+    string? CallsignState,
+    string? CallsignName);
 
 public sealed record VoyeurSessionDetailDto(
     VoyeurSessionDto Session,

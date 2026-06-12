@@ -280,6 +280,13 @@ public static class ZeusHost
         // "cannot break anything" notes). VoyeurStore owns the LiteDB log +
         // segment-audio files (the save/delete surface).
         builder.Services.AddSingleton<Zeus.Server.Voyeur.VoyeurStore>();
+        // Phase 2: whisper.cpp transcription (supervised child process) +
+        // callsign extraction + QRZ enrichment. Runs entirely off the audio
+        // path; degrades to capture-only when whisper isn't installed.
+        builder.Services.AddSingleton<Zeus.Server.Voyeur.WhisperTranscriber>();
+        builder.Services.AddSingleton<Zeus.Server.Voyeur.VoyeurTranscriptionService>();
+        builder.Services.AddHostedService(sp =>
+            sp.GetRequiredService<Zeus.Server.Voyeur.VoyeurTranscriptionService>());
         builder.Services.AddSingleton<VoyeurMonitorService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<VoyeurMonitorService>());
         // WAV recorder/player: taps DspPipelineService RX + TX-monitor audio to

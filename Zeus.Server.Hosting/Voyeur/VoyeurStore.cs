@@ -256,7 +256,26 @@ public sealed class VoyeurStore : IDisposable
     private static VoyeurSegmentDto ToSegDto(VoyeurSegmentDocument x) => new(
         x.Id, x.StartedUtc, x.DurationMs, x.PeakDbfs,
         HasAudio: x.AudioFile is not null,
-        x.Transcript, x.Callsign, x.CallsignState);
+        x.Transcript, x.Callsign, x.CallsignState, x.CallsignName);
+
+    /// <summary>Phase 2: write back the ASR transcript + the QRZ-validated
+    /// callsign attribution for a captured over. No-op if the segment is gone
+    /// (its session was deleted while transcription was in flight).</summary>
+    public void UpdateSegmentTranscript(
+        string segmentId, string? transcript, string? callsign,
+        string? callsignState, string? callsignName)
+    {
+        lock (_gate)
+        {
+            var seg = _segments.FindById(segmentId);
+            if (seg is null) return;
+            seg.Transcript = transcript;
+            seg.Callsign = callsign;
+            seg.CallsignState = callsignState;
+            seg.CallsignName = callsignName;
+            _segments.Update(seg);
+        }
+    }
 
     public void Dispose() => _db.Dispose();
 }

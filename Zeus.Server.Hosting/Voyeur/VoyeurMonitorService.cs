@@ -51,6 +51,7 @@ public sealed class VoyeurMonitorService : BackgroundService, IDisposable
     private readonly DspPipelineService _pipeline;
     private readonly RadioService _radio;
     private readonly VoyeurStore _store;
+    private readonly Zeus.Server.Voyeur.VoyeurTranscriptionService _transcription;
     private readonly ILogger<VoyeurMonitorService> _log;
 
     // Ring sized for ~6 s at 48 kHz — far more than the drain thread ever needs,
@@ -76,11 +77,13 @@ public sealed class VoyeurMonitorService : BackgroundService, IDisposable
         DspPipelineService pipeline,
         RadioService radio,
         VoyeurStore store,
+        Zeus.Server.Voyeur.VoyeurTranscriptionService transcription,
         ILogger<VoyeurMonitorService> log)
     {
         _pipeline = pipeline;
         _radio = radio;
         _store = store;
+        _transcription = transcription;
         _log = log;
     }
 
@@ -178,7 +181,8 @@ public sealed class VoyeurMonitorService : BackgroundService, IDisposable
             CapturedSeconds: Interlocked.Read(ref _capturedMs) / 1000.0,
             DroppedSamples: ring?.DroppedSamples ?? 0,
             RingFillPct: fill,
-            Degraded: _degraded);
+            Degraded: _degraded,
+            TranscriptionAvailable: _transcription.Available);
     }
 
     // ---- PRODUCER (DSP/RX thread) — keep this trivially cheap and crash-proof ----
@@ -241,6 +245,14 @@ public sealed class VoyeurMonitorService : BackgroundService, IDisposable
             Interlocked.Increment(ref _segmentCount);
             Interlocked.Add(ref _capturedMs, r.DurationMs);
             _store.AddSegment(doc, r.DurationMs / 1000.0, ring.DroppedSamples);
+            // Phase 2: hand the saved over to the transcription pipeline (off
+            // this thread, off the audio path). No-op when whisper isn't
+            // installed (capture-only) or the over had no audio file.
+            if (file is not null && audioDir is not null)
+            {
+                _transcription.Enqueue(new Zeus.Server.Voyeur.VoyeurTranscriptionService.Job(
+                    session.Id, doc.Id, Path.Combine(audioDir, file), r.DurationMs));
+            }
             _log.LogDebug("voyeur: captured over {Dur}ms peak={Peak:F1}dBFS", r.DurationMs, r.PeakDbfs);
         }
 
