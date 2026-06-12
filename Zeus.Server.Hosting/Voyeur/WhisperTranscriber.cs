@@ -38,8 +38,6 @@ namespace Zeus.Server.Voyeur;
 public sealed class WhisperTranscriber
 {
     private readonly ILogger<WhisperTranscriber> _log;
-    private readonly string? _cliPath;
-    private readonly string? _modelPath;
 
     // Ham-context prompt — biases decoding toward phonetics / Q-codes /
     // callsign shapes. Proven on the Phase-0 spike against real eCARS audio.
@@ -55,18 +53,23 @@ public sealed class WhisperTranscriber
     public WhisperTranscriber(ILogger<WhisperTranscriber> log)
     {
         _log = log;
-        _cliPath = LocateCli();
-        _modelPath = LocateModel();
-        if (Available)
-            _log.LogInformation("voyeur.whisper ready cli={Cli} model={Model}", _cliPath, _modelPath);
-        else
-            _log.LogInformation(
-                "voyeur.whisper not configured (cli={Cli} model={Model}) — capture-only until installed",
-                _cliPath ?? "missing", _modelPath ?? "missing");
+        _log.LogInformation(
+            "voyeur.whisper init cli={Cli} model={Model}",
+            LocateCli() ?? "missing", LocateModel() ?? "missing");
     }
 
-    /// <summary>True when both the binary and a model are present.</summary>
-    public bool Available => _cliPath is not null && _modelPath is not null;
+    // Discovery is DYNAMIC (re-resolved on each check), not cached at startup —
+    // so a binary/model installed via the in-app button is picked up
+    // immediately, with no Zeus restart. File-existence probes are cheap.
+
+    /// <summary>True when both the binary and a model are present right now.</summary>
+    public bool Available => LocateCli() is not null && LocateModel() is not null;
+
+    /// <summary>The whisper-cli binary path, or null if not found.</summary>
+    public string? CliPath => LocateCli();
+
+    /// <summary>The model path, or null if none present.</summary>
+    public string? ModelPath => LocateModel();
 
     /// <summary>Where the model is expected to live, for the panel's setup
     /// instructions even when one isn't present yet.</summary>
@@ -80,7 +83,9 @@ public sealed class WhisperTranscriber
     /// </summary>
     public async Task<string?> TranscribeAsync(string wavPath, TimeSpan timeout, CancellationToken ct)
     {
-        if (!Available || !File.Exists(wavPath)) return null;
+        var cliPath = LocateCli();
+        var modelPath = LocateModel();
+        if (cliPath is null || modelPath is null || !File.Exists(wavPath)) return null;
 
         var outBase = Path.Combine(Path.GetTempPath(), "zeus-voyeur-" + Guid.NewGuid().ToString("N"));
         var txtPath = outBase + ".txt";
@@ -88,13 +93,13 @@ public sealed class WhisperTranscriber
         {
             var psi = new ProcessStartInfo
             {
-                FileName = _cliPath!,
+                FileName = cliPath,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
             };
-            psi.ArgumentList.Add("-m"); psi.ArgumentList.Add(_modelPath!);
+            psi.ArgumentList.Add("-m"); psi.ArgumentList.Add(modelPath);
             psi.ArgumentList.Add("-f"); psi.ArgumentList.Add(wavPath);
             psi.ArgumentList.Add("--prompt"); psi.ArgumentList.Add(HamPrompt);
             psi.ArgumentList.Add("-otxt");
@@ -158,20 +163,37 @@ public sealed class WhisperTranscriber
     {
         var env = Environment.GetEnvironmentVariable("ZEUS_WHISPER_CLI");
         if (!string.IsNullOrWhiteSpace(env) && File.Exists(env)) return env;
-        // GUI/desktop processes often lack /opt/homebrew/bin on PATH, so probe
-        // the usual install locations explicitly.
-        string[] names = { "whisper-cli", "whisper", "main" };
-        string[] dirs =
+
+        bool win = OperatingSystem.IsWindows();
+        string[] names = win
+            ? new[] { "whisper-cli.exe", "whisper.exe", "main.exe" }
+            : new[] { "whisper-cli", "whisper", "main" };
+
+        // 1) The in-app install dir (where the button drops a downloaded binary)
+        //    and the app's bundled-native dir (where CI would ship whisper-cli
+        //    alongside Zeus, exactly like libwdsp). Checked first so a managed
+        //    install always wins over a stray system copy.
+        var dirs = new List<string>
         {
-            "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin",
+            BinDir,
+            AppContext.BaseDirectory,
+            Path.Combine(AppContext.BaseDirectory, "whisper"),
         };
+        // 2) Platform package-manager locations (GUI processes often lack these
+        //    on PATH, so probe explicitly).
+        if (!win)
+        {
+            dirs.Add("/opt/homebrew/bin");
+            dirs.Add("/usr/local/bin");
+            dirs.Add("/usr/bin");
+        }
         foreach (var d in dirs)
             foreach (var n in names)
             {
-                var p = Path.Combine(d, n);
-                if (File.Exists(p)) return p;
+                try { var p = Path.Combine(d, n); if (File.Exists(p)) return p; }
+                catch { /* ignore */ }
             }
-        // Fall back to PATH search.
+        // 3) PATH fallback.
         var pathVar = Environment.GetEnvironmentVariable("PATH") ?? "";
         foreach (var d in pathVar.Split(Path.PathSeparator))
             foreach (var n in names)
@@ -181,6 +203,9 @@ public sealed class WhisperTranscriber
             }
         return null;
     }
+
+    /// <summary>Where the in-app installer drops the whisper-cli binary.</summary>
+    public static string BinDir => Path.Combine(ZeusAppData(), "whisper", "bin");
 
     private static string? LocateModel()
     {

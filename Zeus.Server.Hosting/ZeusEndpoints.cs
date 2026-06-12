@@ -172,6 +172,18 @@ public static class ZeusEndpoints
         // Transcription readiness + setup hint for the panel (Phase 2).
         app.MapGet("/api/voyeur/transcription", (Zeus.Server.Voyeur.WhisperTranscriber w) =>
             Results.Ok(new { available = w.Available, modelDir = Zeus.Server.Voyeur.WhisperTranscriber.ModelDir }));
+        // In-app, terminal-free transcription setup (cross-platform model download).
+        app.MapGet("/api/voyeur/install/models", () =>
+            Results.Ok(Zeus.Server.Voyeur.VoyeurInstallService.AvailableModels));
+        app.MapGet("/api/voyeur/install/status", (Zeus.Server.Voyeur.VoyeurInstallService i) =>
+            Results.Ok(i.Status()));
+        app.MapPost("/api/voyeur/install/model", (VoyeurInstallRequest body, Zeus.Server.Voyeur.VoyeurInstallService i) =>
+            Results.Ok(i.InstallModel(body?.Model ?? "small.en")));
+        app.MapPost("/api/voyeur/install/cancel", (Zeus.Server.Voyeur.VoyeurInstallService i) =>
+        {
+            i.Cancel();
+            return Results.Ok(i.Status());
+        });
         app.MapPost("/api/voyeur/start", (VoyeurStartRequest? body, VoyeurMonitorService v) =>
             Results.Ok(v.Start(keepAudio: body?.KeepAudio ?? true)));
         app.MapPost("/api/voyeur/stop", (VoyeurMonitorService v) => Results.Ok(v.Stop()));
@@ -1524,3 +1536,4 @@ internal sealed record MasterBypassSetRequest(bool Bypassed);
 internal sealed record WavRecordStartRequest(string? Source);
 internal sealed record WavPlayRequest(string? File);
 internal sealed record VoyeurStartRequest(bool? KeepAudio);
+internal sealed record VoyeurInstallRequest(string? Model);

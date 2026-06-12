@@ -18,12 +18,18 @@ import type { PanelComponentProps } from '../panels';
 import {
   deleteVoyeurSession,
   getVoyeurSession,
+  cancelVoyeurInstall,
+  getVoyeurInstallStatus,
+  getVoyeurModels,
   getVoyeurStatus,
   getVoyeurTranscription,
+  installVoyeurModel,
   listVoyeurSessions,
   startVoyeur,
   stopVoyeur,
   updateVoyeurSession,
+  type VoyeurInstall,
+  type VoyeurModel,
   type VoyeurSession,
   type VoyeurSessionDetail,
   type VoyeurStatus,
@@ -66,6 +72,9 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
   const [asrReady, setAsrReady] = useState<boolean | null>(null);
   const [modelDir, setModelDir] = useState<string>('');
   const [showHelp, setShowHelp] = useState(false);
+  const [models, setModels] = useState<VoyeurModel[]>([]);
+  const [chosenModel, setChosenModel] = useState('small.en');
+  const [install, setInstall] = useState<VoyeurInstall | null>(null);
   const editingRef = useRef<HTMLInputElement | null>(null);
 
   const refreshSessions = useCallback(async () => {
@@ -100,20 +109,52 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
     void refreshSessions();
   }, [refreshSessions]);
 
-  useEffect(() => {
-    let alive = true;
-    void getVoyeurTranscription()
-      .then((t) => {
-        if (alive) {
-          setAsrReady(t.available);
-          setModelDir(t.modelDir);
-        }
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
+  const refreshAsr = useCallback(async () => {
+    try {
+      const t = await getVoyeurTranscription();
+      setAsrReady(t.available);
+      setModelDir(t.modelDir);
+    } catch {
+      /* ignore */
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshAsr();
+    void getVoyeurModels().then(setModels).catch(() => {});
+    void getVoyeurInstallStatus().then(setInstall).catch(() => {});
+  }, [refreshAsr]);
+
+  // Poll install progress while a download is running; refresh ASR readiness
+  // when it finishes (discovery is dynamic, so no restart needed).
+  useEffect(() => {
+    if (install?.phase !== 'Downloading') return;
+    const h = setInterval(async () => {
+      try {
+        const s = await getVoyeurInstallStatus();
+        setInstall(s);
+        if (s.phase === 'Done') void refreshAsr();
+      } catch {
+        /* ignore */
+      }
+    }, 1000);
+    return () => clearInterval(h);
+  }, [install?.phase, refreshAsr]);
+
+  const onInstall = async () => {
+    try {
+      setInstall(await installVoyeurModel(chosenModel));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const onCancelInstall = async () => {
+    try {
+      setInstall(await cancelVoyeurInstall());
+    } catch {
+      /* ignore */
+    }
+  };
 
   // When a session is active, refresh the list as its segment count grows.
   useEffect(() => {
@@ -313,33 +354,79 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
             <div style={{ fontWeight: 600, margin: '8px 0 4px' }}>
               Enable transcription (one-time, optional)
             </div>
-            Transcription runs locally — audio never leaves your computer.
-            <ol style={{ margin: '4px 0 0', paddingLeft: 18 }}>
-              <li>
-                Install whisper:{' '}
-                <code style={{ background: 'var(--panel-top)', padding: '0 4px' }}>
-                  brew install whisper-cpp
-                </code>{' '}
-                (macOS) — or put the <code>whisper-cli</code> binary on your PATH.
-              </li>
-              <li>
-                Download a model and drop it here:
+            Transcription runs locally — audio never leaves your computer. Pick a
+            speech model and click Download; no terminal needed. The bigger model
+            is more accurate on noisy SSB; the smaller one downloads faster.
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, margin: '6px 0' }}>
+              <select
+                value={chosenModel}
+                onChange={(e) => setChosenModel(e.target.value)}
+                disabled={install?.phase === 'Downloading'}
+                aria-label="Speech model"
+                style={{ flex: 1, minWidth: 0 }}
+              >
+                {(models.length
+                  ? models
+                  : [
+                      { id: 'small.en', label: 'Small (English) — fast' },
+                      { id: 'medium.en', label: 'Medium (English) — most accurate' },
+                    ]
+                ).map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+              {install?.phase === 'Downloading' ? (
+                <button type="button" className="btn sm tx" onClick={onCancelInstall}>
+                  Cancel
+                </button>
+              ) : (
+                <button type="button" className="btn sm accent" onClick={onInstall}>
+                  Download
+                </button>
+              )}
+            </div>
+            {install?.phase === 'Downloading' && (
+              <div style={{ margin: '4px 0' }}>
                 <div
                   style={{
-                    margin: '2px 0',
-                    padding: '2px 4px',
+                    height: 6,
+                    borderRadius: 3,
                     background: 'var(--panel-top)',
-                    wordBreak: 'break-all',
+                    overflow: 'hidden',
                   }}
                 >
-                  {modelDir || '…/Zeus/whisper/'}
+                  <div
+                    style={{
+                      width: `${install.percent}%`,
+                      height: '100%',
+                      background: 'var(--accent)',
+                      transition: 'width 0.4s',
+                    }}
+                  />
                 </div>
-                Recommended: <code>ggml-medium.en.bin</code> (best accuracy on
-                noisy SSB) or <code>ggml-small.en.bin</code> (lighter). Get them
-                from the whisper.cpp model page on Hugging Face.
-              </li>
-              <li>Restart Zeus. The indicator above turns green when it’s found.</li>
-            </ol>
+                <div style={{ fontSize: 10, opacity: 0.7, marginTop: 2 }}>{install.message}</div>
+              </div>
+            )}
+            {install?.phase === 'Done' && (
+              <div style={{ color: 'var(--accent)', fontSize: 11 }}>✓ {install.message}</div>
+            )}
+            {install?.phase === 'Error' && (
+              <div style={{ color: 'var(--tx)', fontSize: 11 }}>Download failed: {install.message}</div>
+            )}
+            {install && !install.binaryPresent && (
+              <div style={{ fontSize: 10, opacity: 0.7, marginTop: 4 }}>
+                Note: the whisper engine for your platform ({install.rid}) ships
+                with Zeus. If transcription stays off after the model downloads,
+                the engine isn’t bundled in this build yet — advanced users can
+                place a <code>whisper-cli</code> binary in{' '}
+                <code style={{ wordBreak: 'break-all' }}>
+                  {modelDir ? `${modelDir}/bin` : '…/Zeus/whisper/bin'}
+                </code>
+                .
+              </div>
+            )}
             <div style={{ fontWeight: 600, margin: '8px 0 4px' }}>
               Reading the roster
             </div>
