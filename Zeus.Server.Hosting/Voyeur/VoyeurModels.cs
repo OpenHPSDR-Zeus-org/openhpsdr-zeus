@@ -43,6 +43,9 @@ public sealed class VoyeurSessionDocument
     /// <summary>Relative directory (under the Voyeur root) holding this
     /// session's segment WAVs. Null when audio retention is off.</summary>
     public string? AudioDir { get; set; }
+    /// <summary>Phase 3: LLM-generated topic digest ("what was discussed").
+    /// Null until the operator generates it.</summary>
+    public string? Digest { get; set; }
 }
 
 /// <summary>One captured transmission ("over"). Phase 2 fills Transcript /
@@ -110,3 +113,29 @@ public sealed record VoyeurSessionDetailDto(
     IReadOnlyList<VoyeurSegmentDto> Segments);
 
 public sealed record VoyeurUpdateRequest(string? Label, bool? Pinned);
+
+// ---- Phase 3: report / roster / search ----
+
+public sealed record VoyeurRosterEntry(
+    string Callsign,
+    string? Name,
+    string State,          // confirmed | tentative
+    int OverCount,
+    DateTime FirstHeardUtc,
+    DateTime LastHeardUtc);
+
+public sealed record VoyeurReportDto(
+    VoyeurSessionDto Session,
+    IReadOnlyList<VoyeurRosterEntry> Roster,
+    int UniqueStations,
+    int ConfirmedStations,
+    int TranscribedOvers,
+    // LLM topic digest (Stage B); null until generated.
+    string? Digest);
+
+public sealed record VoyeurSearchHit(
+    string SessionId,
+    string SessionLabel,
+    long FreqHz,
+    DateTime StartedUtc,
+    IReadOnlyList<VoyeurSegmentDto> Matches);

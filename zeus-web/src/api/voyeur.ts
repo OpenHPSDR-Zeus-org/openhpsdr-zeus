@@ -145,3 +145,40 @@ export const deleteVoyeurSession = (id: string) =>
   json<{ deleted: string }>(`/api/voyeur/sessions/${encodeURIComponent(id)}`, {
     method: 'DELETE',
   });
+
+// ---- Phase 3: report / search / audio replay ----
+
+export type VoyeurRosterEntry = {
+  callsign: string;
+  name: string | null;
+  state: 'confirmed' | 'tentative';
+  overCount: number;
+  firstHeardUtc: string;
+  lastHeardUtc: string;
+};
+
+export type VoyeurReport = {
+  session: VoyeurSession;
+  roster: VoyeurRosterEntry[];
+  uniqueStations: number;
+  confirmedStations: number;
+  transcribedOvers: number;
+  digest: string | null;
+};
+
+export type VoyeurSearchHit = {
+  sessionId: string;
+  sessionLabel: string;
+  freqHz: number;
+  startedUtc: string;
+  matches: VoyeurSegment[];
+};
+
+export const getVoyeurReport = (id: string, signal?: AbortSignal) =>
+  json<VoyeurReport>(`/api/voyeur/sessions/${encodeURIComponent(id)}/report`, { signal });
+
+export const searchVoyeur = (q: string, signal?: AbortSignal) =>
+  json<VoyeurSearchHit[]>(`/api/voyeur/search?q=${encodeURIComponent(q)}`, { signal });
+
+export const voyeurSegmentAudioUrl = (segmentId: string) =>
+  `/api/voyeur/segments/${encodeURIComponent(segmentId)}/audio`;

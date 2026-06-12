@@ -324,3 +324,85 @@
   color: var(--tx);
   font-size: 11px;
 }
+
+/* ---- Phase 3: search, roster, digest, replay ---- */
+.voyeur-loghdr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.voyeur-search {
+  margin-left: auto;
+  min-width: 0;
+  flex: 0 1 180px;
+  background: var(--bg-1);
+  border: 1px solid var(--fg-4);
+  border-radius: var(--r-xs);
+  color: var(--fg-0);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 7px;
+}
+.voyeur-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.voyeur-viewtoggle {
+  display: inline-flex;
+  gap: 2px;
+  margin-right: 4px;
+}
+.voyeur-play {
+  background: none;
+  border: 1px solid var(--fg-4);
+  border-radius: var(--r-xs);
+  color: var(--accent-bright);
+  cursor: pointer;
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 5px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.voyeur-play--on {
+  color: var(--fg-0);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.voyeur-roster {
+  padding: 8px 10px;
+  background: var(--bg-inset);
+  border-top: 1px solid var(--fg-4);
+}
+.voyeur-roster__stats {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.voyeur-digest {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: var(--r-xs);
+  background: var(--bg-1);
+  border: 1px solid var(--accent-line);
+  border-left: 3px solid var(--accent);
+  color: var(--fg-1);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.voyeur-rosteritem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+}
+.voyeur-rosteritem + .voyeur-rosteritem {
+  border-top: 1px solid color-mix(in srgb, var(--fg-4) 50%, transparent);
+}
+.voyeur-rosteritem__count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-3);
+}

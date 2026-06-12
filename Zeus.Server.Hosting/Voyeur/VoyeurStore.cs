@@ -258,6 +258,133 @@ public sealed class VoyeurStore : IDisposable
         HasAudio: x.AudioFile is not null,
         x.Transcript, x.Callsign, x.CallsignState, x.CallsignName);
 
+    /// <summary>Phase 3: aggregate a session into a roster (who was on) + stats.
+    /// The roster dedups by callsign, counts overs, and keeps confirmed ahead of
+    /// tentative. Pure aggregation — no LLM. <paramref name="digest"/> carries an
+    /// optional pre-computed topic summary (Stage B).</summary>
+    public VoyeurReportDto? GetReport(string id, string? digest = null)
+    {
+        lock (_gate)
+        {
+            var s = _sessions.FindById(id);
+            if (s is null) return null;
+            var segs = _segments.Query().Where(x => x.SessionId == id).ToList();
+
+            var byCall = new Dictionary<string, (string? Name, string State, int Count, DateTime First, DateTime Last)>(StringComparer.Ordinal);
+            int transcribed = 0;
+            foreach (var seg in segs)
+            {
+                if (!string.IsNullOrWhiteSpace(seg.Transcript)) transcribed++;
+                if (string.IsNullOrWhiteSpace(seg.Callsign)) continue;
+                if (seg.CallsignState is not ("confirmed" or "tentative")) continue;
+                var key = seg.Callsign!;
+                if (byCall.TryGetValue(key, out var e))
+                {
+                    // Prefer the strongest state + a real name we've seen.
+                    var state = e.State == "confirmed" || seg.CallsignState == "confirmed" ? "confirmed" : "tentative";
+                    byCall[key] = (e.Name ?? seg.CallsignName, state, e.Count + 1,
+                        seg.StartedUtc < e.First ? seg.StartedUtc : e.First,
+                        seg.StartedUtc > e.Last ? seg.StartedUtc : e.Last);
+                }
+                else
+                {
+                    byCall[key] = (seg.CallsignName, seg.CallsignState!, 1, seg.StartedUtc, seg.StartedUtc);
+                }
+            }
+
+            var roster = byCall
+                .Select(kv => new VoyeurRosterEntry(kv.Key, kv.Value.Name, kv.Value.State,
+                    kv.Value.Count, kv.Value.First, kv.Value.Last))
+                .OrderByDescending(r => r.State == "confirmed")
+                .ThenByDescending(r => r.OverCount)
+                .ThenBy(r => r.Callsign, StringComparer.Ordinal)
+                .ToList();
+
+            return new VoyeurReportDto(
+                ToDto(s), roster,
+                UniqueStations: roster.Count,
+                ConfirmedStations: roster.Count(r => r.State == "confirmed"),
+                TranscribedOvers: transcribed,
+                Digest: digest ?? s.Digest);
+        }
+    }
+
+    /// <summary>Persist a generated topic digest on the session (Stage B).</summary>
+    public void SetDigest(string sessionId, string digest)
+    {
+        lock (_gate)
+        {
+            var s = _sessions.FindById(sessionId);
+            if (s is null) return;
+            s.Digest = digest;
+            _sessions.Update(s);
+        }
+    }
+
+    /// <summary>The whole concatenated transcript of a session, oldest over
+    /// first — input for the digest summarizer.</summary>
+    public string SessionTranscript(string id)
+    {
+        lock (_gate)
+        {
+            return string.Join("\n", _segments.Query()
+                .Where(x => x.SessionId == id)
+                .ToList()
+                .OrderBy(x => x.StartedUtc)
+                .Select(x => x.Transcript)
+                .Where(t => !string.IsNullOrWhiteSpace(t)));
+        }
+    }
+
+    /// <summary>Search every session's overs by callsign or transcript text.
+    /// Returns sessions with their matching overs, newest session first.</summary>
+    public IReadOnlyList<VoyeurSearchHit> Search(string query)
+    {
+        var q = query.Trim();
+        if (q.Length == 0) return Array.Empty<VoyeurSearchHit>();
+        lock (_gate)
+        {
+            var hits = new List<VoyeurSearchHit>();
+            foreach (var s in _sessions.Query().OrderByDescending(x => x.StartedUtc).ToList())
+            {
+                var matches = _segments.Query()
+                    .Where(x => x.SessionId == s.Id)
+                    .ToList()
+                    .Where(x =>
+                        (x.Callsign?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                        (x.Transcript?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                        (x.CallsignName?.Contains(q, StringComparison.OrdinalIgnoreCase) ?? false))
+                    .OrderBy(x => x.StartedUtc)
+                    .Select(ToSegDto)
+                    .ToList();
+                if (matches.Count > 0)
+                    hits.Add(new VoyeurSearchHit(s.Id, s.Label, s.FreqHz, s.StartedUtc, matches));
+            }
+            return hits;
+        }
+    }
+
+    /// <summary>Resolve a segment's on-disk WAV path for audio replay,
+    /// traversal-guarded. Null if the segment, its audio, or the file is gone.</summary>
+    public string? GetSegmentAudioPath(string segmentId)
+    {
+        lock (_gate)
+        {
+            var seg = _segments.FindById(segmentId);
+            if (seg?.AudioFile is null) return null;
+            var session = _sessions.FindById(seg.SessionId);
+            if (session?.AudioDir is null) return null;
+            var dir = Path.GetFullPath(Path.Combine(_audioRoot, session.AudioDir));
+            var rootFull = Path.GetFullPath(_audioRoot);
+            if (!dir.StartsWith(rootFull, StringComparison.Ordinal)) return null;
+            // Audio file name is server-generated (over-<ts>.wav); guard anyway.
+            var name = Path.GetFileName(seg.AudioFile);
+            var path = Path.GetFullPath(Path.Combine(dir, name));
+            if (!path.StartsWith(rootFull, StringComparison.Ordinal)) return null;
+            return File.Exists(path) ? path : null;
+        }
+    }
+
     /// <summary>Phase 2: write back the ASR transcript + the QRZ-validated
     /// callsign attribution for a captured over. No-op if the segment is gone
     /// (its session was deleted while transcription was in flight).</summary>
