@@ -21,16 +21,21 @@ import {
   getVoyeurSession,
   cancelVoyeurInstall,
   getVoyeurInstallStatus,
-  getVoyeurModels,
+  generateVoyeurDigest,
+  getVoyeurReport,
   getVoyeurStatus,
   getVoyeurTranscription,
   installVoyeurModel,
   listVoyeurSessions,
+  searchVoyeur,
+  voyeurSegmentAudioUrl,
   startVoyeur,
   stopVoyeur,
   updateVoyeurSession,
   type VoyeurInstall,
-  type VoyeurModel,
+  type VoyeurReport,
+  type VoyeurSearchHit,
+  type VoyeurSegment,
   type VoyeurSession,
   type VoyeurSessionDetail,
   type VoyeurStatus,
@@ -71,12 +76,18 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [asrReady, setAsrReady] = useState<boolean | null>(null);
-  const [modelDir, setModelDir] = useState<string>('');
+  const [digestReady, setDigestReady] = useState(false);
+  const [digestBusy, setDigestBusy] = useState<string | null>(null);
   const [showHelp, setShowHelp] = useState(false);
-  const [models, setModels] = useState<VoyeurModel[]>([]);
   const [chosenModel, setChosenModel] = useState('medium.en');
   const [install, setInstall] = useState<VoyeurInstall | null>(null);
+  const [query, setQuery] = useState('');
+  const [hits, setHits] = useState<VoyeurSearchHit[] | null>(null);
+  const [reports, setReports] = useState<Record<string, VoyeurReport>>({});
+  const [view, setView] = useState<Record<string, 'log' | 'roster'>>({});
+  const [playing, setPlaying] = useState<string | null>(null);
   const editingRef = useRef<HTMLInputElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -114,7 +125,7 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
     try {
       const t = await getVoyeurTranscription();
       setAsrReady(t.available);
-      setModelDir(t.modelDir);
+      setDigestReady(t.digestAvailable);
     } catch {
       /* ignore */
     }
@@ -122,7 +133,6 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
 
   useEffect(() => {
     void refreshAsr();
-    void getVoyeurModels().then(setModels).catch(() => {});
     void getVoyeurInstallStatus().then(setInstall).catch(() => {});
   }, [refreshAsr]);
 
@@ -142,9 +152,9 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
     return () => clearInterval(h);
   }, [install?.phase, refreshAsr]);
 
-  const onInstall = async () => {
+  const onInstall = async (id?: string) => {
     try {
-      setInstall(await installVoyeurModel(chosenModel));
+      setInstall(await installVoyeurModel(id ?? chosenModel));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -198,6 +208,9 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
     }
     setOpenId(id);
     setDetail(null);
+    // Load the report too so the AI Summary bar (with any existing digest) is
+    // available in the Log view, not just behind the Roster toggle.
+    if (!reports[id]) void loadReport(id);
     try {
       setDetail(await getVoyeurSession(id));
     } catch (e) {
@@ -237,6 +250,175 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  // Search across all logs (debounced). Empty query → normal session list.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setHits(null);
+      return;
+    }
+    const ctrl = new AbortController();
+    const h = setTimeout(() => {
+      void searchVoyeur(q, ctrl.signal)
+        .then(setHits)
+        .catch(() => {});
+    }, 250);
+    return () => {
+      clearTimeout(h);
+      ctrl.abort();
+    };
+  }, [query]);
+
+  const loadReport = useCallback(async (id: string) => {
+    try {
+      const r = await getVoyeurReport(id);
+      setReports((m) => ({ ...m, [id]: r }));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const setSessionView = (id: string, mode: 'log' | 'roster') => {
+    setView((v) => ({ ...v, [id]: mode }));
+    if (mode === 'roster' && !reports[id]) void loadReport(id);
+  };
+
+  const onGenerateDigest = async (id: string) => {
+    setDigestBusy(id);
+    setError(null);
+    try {
+      const r = await generateVoyeurDigest(id);
+      setReports((m) => ({ ...m, [id]: r }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDigestBusy(null);
+    }
+  };
+
+  const playSegment = (segId: string) => {
+    let el = audioRef.current;
+    if (!el) {
+      el = new Audio();
+      el.onended = () => setPlaying(null);
+      audioRef.current = el;
+    }
+    if (playing === segId) {
+      el.pause();
+      setPlaying(null);
+      return;
+    }
+    el.src = voyeurSegmentAudioUrl(segId);
+    void el.play().then(() => setPlaying(segId)).catch(() => setPlaying(null));
+  };
+
+  const renderOver = (seg: VoyeurSegment) => {
+    const state = seg.callsignState ?? 'unknown';
+    return (
+      <div key={seg.id} className={`voyeur-over voyeur-over--${state}`}>
+        <span className="voyeur-over__time">
+          {new Date(seg.startedUtc).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          })}
+          <br />
+          {(seg.durationMs / 1000).toFixed(0)}s
+        </span>
+        <span className="voyeur-over__body">
+          {seg.hasAudio && (
+            <button
+              type="button"
+              className={`voyeur-play ${playing === seg.id ? 'voyeur-play--on' : ''}`}
+              onClick={() => playSegment(seg.id)}
+              title="Play this over"
+              aria-label="Play this over"
+            >
+              {playing === seg.id ? '⏸' : '▶'}
+            </button>
+          )}
+          <span className={`voyeur-call voyeur-call--${state}`}>{seg.callsign ?? 'unknown'}</span>
+          {seg.callsignName && <span className="voyeur-name">{seg.callsignName}</span>}
+          {seg.transcript ? (
+            <span className="voyeur-text">{seg.transcript}</span>
+          ) : (
+            <span className="voyeur-text voyeur-text--pending">
+              {asrReady ? 'transcribing…' : 'audio captured'}
+            </span>
+          )}
+        </span>
+      </div>
+    );
+  };
+
+  // AI Summary bar — surfaced whenever a log is open (both Log and Roster
+  // views), so it's never hidden behind the Roster toggle. The digest text (if
+  // any) comes from the loaded report; the button works even before the report
+  // loads.
+  const renderSummary = (id: string) => {
+    const digest = reports[id]?.digest;
+    return (
+      <div className="voyeur-summary">
+        <div className="voyeur-digestbar">
+          <div className="voyeur-digestbar__text">
+            <span className="voyeur-digestbar__label">AI Summary</span>
+            <span className="voyeur-digestbar__sub">
+              Plain-English recap of who ran the net and what was discussed —
+              written locally on your machine from this log’s transcript.
+            </span>
+          </div>
+          {digestReady ? (
+            <button
+              type="button"
+              className="btn sm accent"
+              disabled={digestBusy === id}
+              onClick={() => onGenerateDigest(id)}
+              title="Summarize this net’s transcript into a short recap (runs locally, nothing leaves your machine)"
+            >
+              {digestBusy === id
+                ? 'Summarizing…'
+                : digest
+                  ? 'Regenerate summary'
+                  : 'Summarize this net'}
+            </button>
+          ) : (
+            <span className="voyeur-digestbar__hint">
+              install the digest model in “How to set up & use” to enable
+            </span>
+          )}
+        </div>
+        {digest && <div className="voyeur-digest">{digest}</div>}
+      </div>
+    );
+  };
+
+  const renderRoster = (id: string) => {
+    const r = reports[id];
+    if (!r) return <div className="voyeur-empty" style={{ padding: '6px 10px' }}>Loading…</div>;
+    return (
+      <div className="voyeur-roster">
+        <div className="voyeur-roster__stats">
+          <span className="chip mono"><span className="k">stations</span><span className="v">{r.uniqueStations}</span></span>
+          <span className="chip mono"><span className="k">confirmed</span><span className="v">{r.confirmedStations}</span></span>
+          <span className="chip mono"><span className="k">overs</span><span className="v">{r.session.segmentCount}</span></span>
+          <span className="chip mono"><span className="k">cap</span><span className="v">{fmtDur(r.session.capturedSeconds)}</span></span>
+        </div>
+        {r.roster.length === 0 && (
+          <div className="voyeur-empty" style={{ padding: '4px 10px' }}>No callsigns identified.</div>
+        )}
+        {r.roster.map((e) => (
+          <div key={e.callsign} className="voyeur-rosteritem">
+            <span className={`voyeur-call voyeur-call--${e.state}`}>{e.callsign}</span>
+            {e.name && <span className="voyeur-name">{e.name}</span>}
+            <span className="voyeur-rosteritem__count">
+              {e.overCount} {e.overCount === 1 ? 'over' : 'overs'}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
   };
 
   const active = status?.active ?? false;
@@ -325,7 +507,8 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
             </button>
           </div>
 
-          {/* Prominent model-download control whenever transcription is off */}
+          {/* Prominent setup control whenever transcription is off. Two
+              one-time downloads: the speech engine, then a speech model. */}
           {asrReady === false && (
             <div className="voyeur-dl">
               {install?.phase === 'Downloading' ? (
@@ -341,30 +524,58 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
                   </button>
                 </>
               ) : (
-                <>
-                  <span className="voyeur-dl__label">Speech model:</span>
-                  <select
-                    value={chosenModel}
-                    onChange={(e) => setChosenModel(e.target.value)}
-                    aria-label="Speech model"
-                    style={{ flex: 1, minWidth: 0 }}
-                  >
-                    {(models.length
-                      ? models
-                      : [
-                          { id: 'medium.en', label: 'Medium — recommended' },
-                          { id: 'small.en', label: 'Small — faster download' },
-                        ]
-                    ).map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="button" className="btn sm accent" onClick={onInstall}>
-                    Download
-                  </button>
-                </>
+                <div className="voyeur-setup">
+                  <div className="voyeur-setup__hdr">
+                    Set up transcription — two one-time downloads, no terminal:
+                  </div>
+                  {/* Step 1 — speech engine */}
+                  <div className="voyeur-setup__row">
+                    <span className="voyeur-setup__step">
+                      {install?.binaryPresent ? '✓' : '1'}
+                    </span>
+                    <span className="voyeur-setup__name">Speech engine</span>
+                    {install?.binaryPresent ? (
+                      <span className="voyeur-setup__done">installed</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn sm accent"
+                        onClick={() => onInstall('engine-whisper')}
+                        title="Download the whisper.cpp speech engine for your platform (one-time)"
+                      >
+                        Download engine
+                      </button>
+                    )}
+                  </div>
+                  {/* Step 2 — speech model */}
+                  <div className="voyeur-setup__row">
+                    <span className="voyeur-setup__step">
+                      {install?.modelPresent ? '✓' : '2'}
+                    </span>
+                    <span className="voyeur-setup__name">Speech model</span>
+                    {install?.modelPresent ? (
+                      <span className="voyeur-setup__done">installed</span>
+                    ) : (
+                      <>
+                        <select
+                          value={chosenModel}
+                          onChange={(e) => setChosenModel(e.target.value)}
+                          aria-label="Speech model"
+                        >
+                          <option value="medium.en">Medium — recommended</option>
+                          <option value="small.en">Small — faster download</option>
+                        </select>
+                        <button
+                          type="button"
+                          className="btn sm accent"
+                          onClick={() => onInstall(chosenModel)}
+                        >
+                          Download
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -389,9 +600,12 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
                 </li>
               </ol>
               <h4>Transcription (one-time, optional)</h4>
-              Runs locally — audio never leaves your computer. Pick a model above and
-              click Download (no terminal). The bigger model is more accurate on noisy
-              SSB; the smaller one downloads faster. You only download once.
+              Runs locally — audio never leaves your computer. It needs two
+              one-time downloads (no terminal): the <strong>speech engine</strong>{' '}
+              for your platform ({install?.rid ?? 'your OS'}) and a{' '}
+              <strong>speech model</strong>. Use the two-step panel above; the
+              bigger model is more accurate on noisy SSB, the smaller one downloads
+              faster. You only download once.
               {install?.phase === 'Done' && (
                 <div style={{ color: 'var(--green-soft)', marginTop: 4 }}>✓ {install.message}</div>
               )}
@@ -400,15 +614,47 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
                   Download failed: {install.message}
                 </div>
               )}
-              {install && !install.binaryPresent && (
-                <div style={{ fontSize: 10, color: 'var(--fg-3)', marginTop: 6 }}>
-                  Note: the whisper engine for your platform ({install.rid}) ships with
-                  Zeus. If transcription stays off after the model downloads, the engine
-                  isn’t bundled in this build yet — advanced users can place a{' '}
-                  <code>whisper-cli</code> binary in{' '}
-                  <code>{modelDir ? `${modelDir}/bin` : '…/Zeus/whisper/bin'}</code>.
+              <h4>AI summaries (optional)</h4>
+              A plain-English recap of each net, written locally by a small
+              language model — also two one-time downloads, both optional.
+              <div className="voyeur-setup" style={{ marginTop: 6 }}>
+                <div className="voyeur-setup__row">
+                  <span className="voyeur-setup__step">
+                    {install?.digestBinaryPresent ? '✓' : '·'}
+                  </span>
+                  <span className="voyeur-setup__name">Summary engine</span>
+                  {install?.digestBinaryPresent ? (
+                    <span className="voyeur-setup__done">installed</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn sm"
+                      disabled={install?.phase === 'Downloading'}
+                      onClick={() => onInstall('engine-llama')}
+                    >
+                      Download engine
+                    </button>
+                  )}
                 </div>
-              )}
+                <div className="voyeur-setup__row">
+                  <span className="voyeur-setup__step">
+                    {install?.digestModelPresent ? '✓' : '·'}
+                  </span>
+                  <span className="voyeur-setup__name">Summary model</span>
+                  {install?.digestModelPresent ? (
+                    <span className="voyeur-setup__done">installed</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn sm"
+                      disabled={install?.phase === 'Downloading'}
+                      onClick={() => onInstall('digest-small')}
+                    >
+                      Download
+                    </button>
+                  )}
+                </div>
+              </div>
               <h4>Reading the roster</h4>
               <span style={{ color: 'var(--accent)' }}>Blue</span> = QRZ-confirmed (real
               licensee, name shown). <span style={{ color: 'var(--power)' }}>Amber</span> =
@@ -422,9 +668,52 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
 
         {/* The intercepted-comms log */}
         <div className="voyeur__log">
-          <div className="voyeur-loghdr">Logs · {sessions.length}</div>
-          {sessions.length === 0 && <div className="voyeur-empty">No logs yet — press LISTEN.</div>}
-          {sessions.map((s) => (
+          <div className="voyeur-loghdr">
+            <span>Logs · {sessions.length}</span>
+            <input
+              className="voyeur-search"
+              type="search"
+              placeholder="search callsign or text…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Search logs"
+            />
+          </div>
+
+          {hits !== null && (
+            <>
+              {hits.length === 0 && (
+                <div className="voyeur-empty">No matches for “{query}”.</div>
+              )}
+              {hits.map((hit) => (
+                <div className="voyeur-card" key={hit.sessionId}>
+                  <div className="voyeur-card__meta" style={{ paddingTop: 6 }}>
+                    <span className="chip mono"><span className="v">{fmtFreq(hit.freqHz)}</span></span>
+                    <span className="chip mono"><span className="k">when</span><span className="v">{fmtWhen(hit.startedUtc)}</span></span>
+                    <span className="chip mono"><span className="k">hits</span><span className="v">{hit.matches.length}</span></span>
+                    <span style={{ flex: 1 }} />
+                    <button
+                      type="button"
+                      className="btn sm"
+                      onClick={() => {
+                        setQuery('');
+                        void openSession(hit.sessionId);
+                      }}
+                    >
+                      Open log
+                    </button>
+                  </div>
+                  <div className="voyeur-overs">{hit.matches.map(renderOver)}</div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {hits === null && sessions.length === 0 && (
+            <div className="voyeur-empty">No logs yet — press LISTEN.</div>
+          )}
+          {hits === null &&
+            sessions.map((s) => (
             <div className="voyeur-card" key={s.id}>
               <div className="voyeur-card__head">
                 <button
@@ -445,6 +734,24 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
                   }}
                   aria-label="Log name"
                 />
+                {openId === s.id && (
+                  <div className="voyeur-viewtoggle">
+                    <button
+                      type="button"
+                      className={`btn sm ${(view[s.id] ?? 'log') === 'log' ? 'active' : ''}`}
+                      onClick={() => setSessionView(s.id, 'log')}
+                    >
+                      Log
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn sm ${view[s.id] === 'roster' ? 'active' : ''}`}
+                      onClick={() => setSessionView(s.id, 'roster')}
+                    >
+                      Roster
+                    </button>
+                  </div>
+                )}
                 <button type="button" className="btn sm" onClick={() => openSession(s.id)}>
                   {openId === s.id ? 'Hide' : 'Open'}
                 </button>
@@ -480,42 +787,20 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
               </div>
 
               {openId === s.id && (
-                <div className="voyeur-overs">
-                  {!detail && <div className="voyeur-empty" style={{ padding: '6px 10px' }}>Loading…</div>}
-                  {detail && detail.segments.length === 0 && (
-                    <div className="voyeur-empty" style={{ padding: '6px 10px' }}>No overs captured.</div>
+                <>
+                  {renderSummary(s.id)}
+                  {view[s.id] === 'roster' ? (
+                    renderRoster(s.id)
+                  ) : (
+                    <div className="voyeur-overs">
+                      {!detail && <div className="voyeur-empty" style={{ padding: '6px 10px' }}>Loading…</div>}
+                      {detail && detail.segments.length === 0 && (
+                        <div className="voyeur-empty" style={{ padding: '6px 10px' }}>No overs captured.</div>
+                      )}
+                      {detail && detail.segments.map(renderOver)}
+                    </div>
                   )}
-                  {detail &&
-                    detail.segments.map((seg) => {
-                      const state = seg.callsignState ?? 'unknown';
-                      return (
-                        <div key={seg.id} className={`voyeur-over voyeur-over--${state}`}>
-                          <span className="voyeur-over__time">
-                            {new Date(seg.startedUtc).toLocaleTimeString([], {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                              second: '2-digit',
-                            })}
-                            <br />
-                            {(seg.durationMs / 1000).toFixed(0)}s
-                          </span>
-                          <span className="voyeur-over__body">
-                            <span className={`voyeur-call voyeur-call--${state}`}>
-                              {seg.callsign ?? 'unknown'}
-                            </span>
-                            {seg.callsignName && <span className="voyeur-name">{seg.callsignName}</span>}
-                            {seg.transcript ? (
-                              <span className="voyeur-text">{seg.transcript}</span>
-                            ) : (
-                              <span className="voyeur-text voyeur-text--pending">
-                                {asrReady ? 'transcribing…' : 'audio captured'}
-                              </span>
-                            )}
-                          </span>
-                        </div>
-                      );
-                    })}
-                </div>
+                </>
               )}
             </div>
           ))}

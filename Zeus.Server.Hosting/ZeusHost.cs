@@ -284,6 +284,7 @@ public static class ZeusHost
         // callsign extraction + QRZ enrichment. Runs entirely off the audio
         // path; degrades to capture-only when whisper isn't installed.
         builder.Services.AddSingleton<Zeus.Server.Voyeur.WhisperTranscriber>();
+        builder.Services.AddSingleton<Zeus.Server.Voyeur.LlamaSummarizer>();
         // In-app, terminal-free model download (cross-platform). Needs an
         // HttpClientFactory — already registered below via AddHttpClient, but
         // ensure the default factory exists for this service.
