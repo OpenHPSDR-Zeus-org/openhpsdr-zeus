@@ -140,6 +140,57 @@
   font-variant-numeric: tabular-nums;
 }
 
+/* ---- setup checklist (engine + model, one-time) ---- */
+.voyeur-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.voyeur-setup__hdr {
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.voyeur-setup__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.voyeur-setup__step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--fg-0);
+  background: var(--accent);
+  flex: 0 0 auto;
+}
+.voyeur-setup__name {
+  font-size: 11px;
+  color: var(--fg-1);
+  flex: 1;
+  min-width: 0;
+}
+.voyeur-setup__done {
+  font-size: 10px;
+  color: var(--green-soft);
+  font-weight: 600;
+}
+.voyeur-setup select {
+  background: var(--bg-1);
+  border: 1px solid var(--fg-4);
+  border-radius: var(--r-xs);
+  color: var(--fg-0);
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 4px;
+}
+
 /* ---- help disclosure ---- */
 .voyeur-help {
   font-size: 11px;

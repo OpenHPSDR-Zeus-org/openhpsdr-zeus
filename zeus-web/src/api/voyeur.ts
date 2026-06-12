@@ -96,6 +96,8 @@ export type VoyeurInstall = {
   item: string | null;
   modelPresent: boolean;
   binaryPresent: boolean;
+  digestModelPresent: boolean;
+  digestBinaryPresent: boolean;
   rid: string;
 };
 

@@ -1,0 +1,280 @@
+name: Build Voyeur Engines
+
+# Builds the Voyeur Mode (zeus-la5) speech + AI-summary engines as static,
+# self-contained, single-binary executables per platform, zips them per-RID,
+# and (optionally) publishes them as release assets under a stable tag that the
+# in-app installer fetches.
+#
+# WHY STATIC / SINGLE-BINARY: whisper.cpp and llama.cpp normally link a
+# constellation of dylibs (libwhisper, libggml, libggml-base, libllama, …).
+# Building with BUILD_SHARED_LIBS=OFF + CPU-only + OpenMP off folds everything
+# into ONE binary that depends only on the platform's system libraries. That
+# makes the download bundle a single file, removes all @rpath surgery, and
+# keeps the macOS story trivial (see below).
+#
+# WHY NO NOTARIZATION: the Zeus app downloads these via HttpClient and extracts
+# them with .NET's ZipFile — neither applies the com.apple.quarantine xattr, so
+# Gatekeeper never gates them. Apple Silicon still requires a *valid* signature
+# to exec, but the macOS linker applies an ad-hoc signature automatically and
+# zip/unzip preserves it. So no Developer ID, no notarytool, no stapling here —
+# that burden only existed in the rejected bake-into-the-app path.
+#
+# This is manual-trigger only. After a successful run, download the per-RID
+# artifacts (or let the publish job attach them) and they become available to
+# the installer under the tag below. Bump ENGINE_TAG when the engines change
+# and keep it in sync with VoyeurInstallService.EngineTag.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Attach the built bundles to the engine release tag"
+        type: boolean
+        default: false
+
+env:
+  ENGINE_TAG: voyeur-engines-v1
+  # Pinned upstream versions — bump deliberately, both are permissively licensed
+  # (whisper.cpp + llama.cpp are MIT, GPL-compatible).
+  WHISPER_REF: v1.7.4
+  LLAMA_REF: b4585
+
+jobs:
+  # ----------------------------- macOS -------------------------------------
+  macos:
+    name: macOS ${{ matrix.rid }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: osx-arm64
+            runner: macos-14   # Apple Silicon
+          - rid: osx-x64
+            runner: macos-13   # Intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Install build tools
+        run: brew install cmake git
+
+      # whisper.cpp — Metal stays ON but is EMBEDDED, and Metal/Accelerate are
+      # system frameworks, so the binary is still self-contained (no external
+      # dylibs). CPU fallback is built in.
+      - name: Build whisper-cli
+        run: |
+          set -eux
+          git clone --depth 1 -b "${WHISPER_REF}" https://github.com/ggml-org/whisper.cpp
+          cmake -S whisper.cpp -B whisper.cpp/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_OPENMP=OFF \
+            -DGGML_METAL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON
+          cmake --build whisper.cpp/build --config Release --target whisper-cli --parallel
+          find whisper.cpp/build -name whisper-cli -type f
+
+      - name: Build llama completion tool
+        run: |
+          set -eux
+          git clone --depth 1 -b "${LLAMA_REF}" https://github.com/ggml-org/llama.cpp
+          cmake -S llama.cpp -B llama.cpp/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_OPENMP=OFF \
+            -DGGML_METAL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DLLAMA_BUILD_TESTS=OFF \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_SERVER=OFF
+          # Build the one-shot completion tool if this version has it, else the
+          # classic llama-cli. The Zeus discovery accepts either name.
+          cmake --build llama.cpp/build --config Release --target llama-completion --parallel || \
+          cmake --build llama.cpp/build --config Release --target llama-cli --parallel
+          find llama.cpp/build -name 'llama-completion' -o -name 'llama-cli' | grep -E 'llama-(completion|cli)$'
+
+      - name: Stage + verify self-contained + zip
+        run: |
+          set -eux
+          mkdir -p out/whisper out/llama
+          cp "$(find whisper.cpp/build -name whisper-cli -type f | head -1)" out/whisper/whisper-cli
+          llama_bin="$(find llama.cpp/build -type f \( -name llama-completion -o -name llama-cli \) | head -1)"
+          cp "$llama_bin" "out/llama/$(basename "$llama_bin")"
+
+          # Fail loudly if anything links a non-system dylib (i.e. not under
+          # /usr/lib or /System) — that would mean the bundle isn't actually
+          # self-contained.
+          for b in out/whisper/whisper-cli out/llama/*; do
+            echo "== otool -L $b =="
+            otool -L "$b"
+            bad=$(otool -L "$b" | tail -n +2 | awk '{print $1}' \
+                  | grep -vE '^/usr/lib/|^/System/' || true)
+            if [ -n "$bad" ]; then echo "ERROR: non-system deps in $b:"; echo "$bad"; exit 1; fi
+            codesign -dv "$b" 2>&1 | grep -i 'Signature' || true
+          done
+
+          ( cd out/whisper && zip -X "../../whisper-${{ matrix.rid }}.zip" whisper-cli )
+          ( cd out/llama && zip -X "../../llama-${{ matrix.rid }}.zip" * )
+          ls -lh whisper-${{ matrix.rid }}.zip llama-${{ matrix.rid }}.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voyeur-engines-${{ matrix.rid }}
+          path: |
+            whisper-${{ matrix.rid }}.zip
+            llama-${{ matrix.rid }}.zip
+
+  # ----------------------------- Linux -------------------------------------
+  # Pinned to ubuntu-22.04 (glibc 2.35) for the same broad-distro-compat reason
+  # as build-native-libs.yml. arm64 is a cross-compile.
+  linux:
+    name: Linux ${{ matrix.rid }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [linux-x64, linux-arm64]
+    steps:
+      - name: Install build tools (x64)
+        if: matrix.rid == 'linux-x64'
+        run: sudo apt-get update && sudo apt-get install -y cmake git build-essential
+
+      - name: Install cross toolchain (arm64)
+        if: matrix.rid == 'linux-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake git gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      - name: Set cross flags (arm64)
+        if: matrix.rid == 'linux-arm64'
+        run: |
+          {
+            echo "CROSS=-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ -DGGML_NATIVE=OFF"
+          } >> "$GITHUB_ENV"
+
+      - name: Build whisper-cli
+        run: |
+          set -eux
+          git clone --depth 1 -b "${WHISPER_REF}" https://github.com/ggml-org/whisper.cpp
+          cmake -S whisper.cpp -B whisper.cpp/build \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_OPENMP=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON \
+            ${CROSS:-}
+          cmake --build whisper.cpp/build --config Release --target whisper-cli --parallel
+
+      - name: Build llama completion tool
+        run: |
+          set -eux
+          git clone --depth 1 -b "${LLAMA_REF}" https://github.com/ggml-org/llama.cpp
+          cmake -S llama.cpp -B llama.cpp/build \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_OPENMP=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_BUILD_SERVER=OFF ${CROSS:-}
+          cmake --build llama.cpp/build --config Release --target llama-completion --parallel || \
+          cmake --build llama.cpp/build --config Release --target llama-cli --parallel
+
+      - name: Stage + zip
+        run: |
+          set -eux
+          mkdir -p out/whisper out/llama
+          cp "$(find whisper.cpp/build -name whisper-cli -type f | head -1)" out/whisper/whisper-cli
+          llama_bin="$(find llama.cpp/build -type f \( -name llama-completion -o -name llama-cli \) | head -1)"
+          cp "$llama_bin" "out/llama/$(basename "$llama_bin")"
+          # On native x64 we can sanity-check deps; the cross arm64 binary can't
+          # be ldd'd on the x64 host, so only print file type there.
+          if [ "${{ matrix.rid }}" = "linux-x64" ]; then ldd out/whisper/whisper-cli || true; fi
+          file out/whisper/whisper-cli out/llama/*
+          ( cd out/whisper && zip -X "../../whisper-${{ matrix.rid }}.zip" whisper-cli )
+          ( cd out/llama && zip -X "../../llama-${{ matrix.rid }}.zip" * )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voyeur-engines-${{ matrix.rid }}
+          path: |
+            whisper-${{ matrix.rid }}.zip
+            llama-${{ matrix.rid }}.zip
+
+  # ---------------------------- Windows ------------------------------------
+  windows:
+    name: Windows ${{ matrix.rid }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: win-x64
+            arch: x64
+          - rid: win-arm64
+            arch: ARM64
+    steps:
+      - name: Build whisper-cli
+        shell: pwsh
+        run: |
+          git clone --depth 1 -b "$env:WHISPER_REF" https://github.com/ggml-org/whisper.cpp
+          # Static CRT (/MT) so the .exe needs no VC++ redistributable — same
+          # rationale as the arm64 wdsp.dll in build-native-libs.yml.
+          cmake -S whisper.cpp -B whisper.cpp/build -A ${{ matrix.arch }} `
+            -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON
+          cmake --build whisper.cpp/build --config Release --target whisper-cli --parallel
+
+      - name: Build llama completion tool
+        shell: pwsh
+        run: |
+          git clone --depth 1 -b "$env:LLAMA_REF" https://github.com/ggml-org/llama.cpp
+          cmake -S llama.cpp -B llama.cpp/build -A ${{ matrix.arch }} `
+            -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=ON -DLLAMA_BUILD_SERVER=OFF
+          $built = cmake --build llama.cpp/build --config Release --target llama-completion --parallel 2>&1
+          if ($LASTEXITCODE -ne 0) {
+            cmake --build llama.cpp/build --config Release --target llama-cli --parallel
+          }
+
+      - name: Stage + zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force out\whisper, out\llama | Out-Null
+          $w = Get-ChildItem -Recurse whisper.cpp\build -Filter whisper-cli.exe | Select-Object -First 1
+          Copy-Item $w.FullName out\whisper\whisper-cli.exe
+          $l = Get-ChildItem -Recurse llama.cpp\build -Include llama-completion.exe,llama-cli.exe |
+               Select-Object -First 1
+          Copy-Item $l.FullName "out\llama\$($l.Name)"
+          Compress-Archive -Path out\whisper\* -DestinationPath "whisper-${{ matrix.rid }}.zip" -Force
+          Compress-Archive -Path out\llama\*   -DestinationPath "llama-${{ matrix.rid }}.zip" -Force
+          Get-ChildItem *.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voyeur-engines-${{ matrix.rid }}
+          path: |
+            whisper-${{ matrix.rid }}.zip
+            llama-${{ matrix.rid }}.zip
+
+  # ---------------------- Publish to the engine tag ------------------------
+  publish:
+    name: Publish engine bundles
+    if: ${{ inputs.publish }}
+    needs: [macos, linux, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create/refresh the engine release and upload assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          ls -lh dist
+          # Idempotent: create the tag/release if missing, then overwrite assets.
+          gh release view "$ENGINE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create "$ENGINE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Voyeur Mode engines ($ENGINE_TAG)" \
+              --notes "Static, self-contained whisper.cpp + llama.cpp engine binaries fetched by Zeus' Voyeur Mode in-app setup. Built by build-voyeur-engines.yml." \
+              --prerelease
+          gh release upload "$ENGINE_TAG" dist/*.zip --repo "$GITHUB_REPOSITORY" --clobber
