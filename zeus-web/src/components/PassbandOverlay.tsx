@@ -80,11 +80,13 @@ export function PassbandOverlay() {
       const view = viewCenter.isInitialized()
         ? viewCenter.getViewCenterHz()
         : Number(s.centerHz);
-      // The passband hangs off the COMMANDED center (where the radio is
-      // heading), drawn in view-space: it glides exactly with the trace.
-      const passCenter = viewCenter.isInitialized()
-        ? viewCenter.getTargetCenterHz()
-        : Number(s.centerHz);
+      // The passband hangs off the VIEW center — which is, by definition,
+      // always rendered at the screen center (the orange zero line). So
+      // during a tuning glide the filter stays PINNED to the line while the
+      // spectrum slides underneath it; anchoring to the commanded target
+      // instead made it lead off the line and ease back (operator feedback,
+      // 2026-06-12).
+      const passCenter = view;
       const conn = useConnectionStore.getState();
       const startHz = view - spanHz / 2;
       const leftPct = ((passCenter + conn.filterLowHz - startHz) / spanHz) * 100;
