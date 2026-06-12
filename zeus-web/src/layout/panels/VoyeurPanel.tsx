@@ -21,7 +21,6 @@ import {
   getVoyeurSession,
   cancelVoyeurInstall,
   getVoyeurInstallStatus,
-  getVoyeurModels,
   generateVoyeurDigest,
   getVoyeurReport,
   getVoyeurStatus,
@@ -34,7 +33,6 @@ import {
   stopVoyeur,
   updateVoyeurSession,
   type VoyeurInstall,
-  type VoyeurModel,
   type VoyeurReport,
   type VoyeurSearchHit,
   type VoyeurSegment,
@@ -80,9 +78,7 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
   const [asrReady, setAsrReady] = useState<boolean | null>(null);
   const [digestReady, setDigestReady] = useState(false);
   const [digestBusy, setDigestBusy] = useState<string | null>(null);
-  const [modelDir, setModelDir] = useState<string>('');
   const [showHelp, setShowHelp] = useState(false);
-  const [models, setModels] = useState<VoyeurModel[]>([]);
   const [chosenModel, setChosenModel] = useState('medium.en');
   const [install, setInstall] = useState<VoyeurInstall | null>(null);
   const [query, setQuery] = useState('');
@@ -130,7 +126,6 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
       const t = await getVoyeurTranscription();
       setAsrReady(t.available);
       setDigestReady(t.digestAvailable);
-      setModelDir(t.modelDir);
     } catch {
       /* ignore */
     }
@@ -138,7 +133,6 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
 
   useEffect(() => {
     void refreshAsr();
-    void getVoyeurModels().then(setModels).catch(() => {});
     void getVoyeurInstallStatus().then(setInstall).catch(() => {});
   }, [refreshAsr]);
 
@@ -158,9 +152,9 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
     return () => clearInterval(h);
   }, [install?.phase, refreshAsr]);
 
-  const onInstall = async () => {
+  const onInstall = async (id?: string) => {
     try {
-      setInstall(await installVoyeurModel(chosenModel));
+      setInstall(await installVoyeurModel(id ?? chosenModel));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
@@ -513,7 +507,8 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
             </button>
           </div>
 
-          {/* Prominent model-download control whenever transcription is off */}
+          {/* Prominent setup control whenever transcription is off. Two
+              one-time downloads: the speech engine, then a speech model. */}
           {asrReady === false && (
             <div className="voyeur-dl">
               {install?.phase === 'Downloading' ? (
@@ -529,30 +524,58 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
                   </button>
                 </>
               ) : (
-                <>
-                  <span className="voyeur-dl__label">Speech model:</span>
-                  <select
-                    value={chosenModel}
-                    onChange={(e) => setChosenModel(e.target.value)}
-                    aria-label="Speech model"
-                    style={{ flex: 1, minWidth: 0 }}
-                  >
-                    {(models.length
-                      ? models
-                      : [
-                          { id: 'medium.en', label: 'Medium — recommended' },
-                          { id: 'small.en', label: 'Small — faster download' },
-                        ]
-                    ).map((m) => (
-                      <option key={m.id} value={m.id}>
-                        {m.label}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="button" className="btn sm accent" onClick={onInstall}>
-                    Download
-                  </button>
-                </>
+                <div className="voyeur-setup">
+                  <div className="voyeur-setup__hdr">
+                    Set up transcription — two one-time downloads, no terminal:
+                  </div>
+                  {/* Step 1 — speech engine */}
+                  <div className="voyeur-setup__row">
+                    <span className="voyeur-setup__step">
+                      {install?.binaryPresent ? '✓' : '1'}
+                    </span>
+                    <span className="voyeur-setup__name">Speech engine</span>
+                    {install?.binaryPresent ? (
+                      <span className="voyeur-setup__done">installed</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn sm accent"
+                        onClick={() => onInstall('engine-whisper')}
+                        title="Download the whisper.cpp speech engine for your platform (one-time)"
+                      >
+                        Download engine
+                      </button>
+                    )}
+                  </div>
+                  {/* Step 2 — speech model */}
+                  <div className="voyeur-setup__row">
+                    <span className="voyeur-setup__step">
+                      {install?.modelPresent ? '✓' : '2'}
+                    </span>
+                    <span className="voyeur-setup__name">Speech model</span>
+                    {install?.modelPresent ? (
+                      <span className="voyeur-setup__done">installed</span>
+                    ) : (
+                      <>
+                        <select
+                          value={chosenModel}
+                          onChange={(e) => setChosenModel(e.target.value)}
+                          aria-label="Speech model"
+                        >
+                          <option value="medium.en">Medium — recommended</option>
+                          <option value="small.en">Small — faster download</option>
+                        </select>
+                        <button
+                          type="button"
+                          className="btn sm accent"
+                          onClick={() => onInstall(chosenModel)}
+                        >
+                          Download
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -577,9 +600,12 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
                 </li>
               </ol>
               <h4>Transcription (one-time, optional)</h4>
-              Runs locally — audio never leaves your computer. Pick a model above and
-              click Download (no terminal). The bigger model is more accurate on noisy
-              SSB; the smaller one downloads faster. You only download once.
+              Runs locally — audio never leaves your computer. It needs two
+              one-time downloads (no terminal): the <strong>speech engine</strong>{' '}
+              for your platform ({install?.rid ?? 'your OS'}) and a{' '}
+              <strong>speech model</strong>. Use the two-step panel above; the
+              bigger model is more accurate on noisy SSB, the smaller one downloads
+              faster. You only download once.
               {install?.phase === 'Done' && (
                 <div style={{ color: 'var(--green-soft)', marginTop: 4 }}>✓ {install.message}</div>
               )}
@@ -588,15 +614,47 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
                   Download failed: {install.message}
                 </div>
               )}
-              {install && !install.binaryPresent && (
-                <div style={{ fontSize: 10, color: 'var(--fg-3)', marginTop: 6 }}>
-                  Note: the whisper engine for your platform ({install.rid}) ships with
-                  Zeus. If transcription stays off after the model downloads, the engine
-                  isn’t bundled in this build yet — advanced users can place a{' '}
-                  <code>whisper-cli</code> binary in{' '}
-                  <code>{modelDir ? `${modelDir}/bin` : '…/Zeus/whisper/bin'}</code>.
+              <h4>AI summaries (optional)</h4>
+              A plain-English recap of each net, written locally by a small
+              language model — also two one-time downloads, both optional.
+              <div className="voyeur-setup" style={{ marginTop: 6 }}>
+                <div className="voyeur-setup__row">
+                  <span className="voyeur-setup__step">
+                    {install?.digestBinaryPresent ? '✓' : '·'}
+                  </span>
+                  <span className="voyeur-setup__name">Summary engine</span>
+                  {install?.digestBinaryPresent ? (
+                    <span className="voyeur-setup__done">installed</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn sm"
+                      disabled={install?.phase === 'Downloading'}
+                      onClick={() => onInstall('engine-llama')}
+                    >
+                      Download engine
+                    </button>
+                  )}
                 </div>
-              )}
+                <div className="voyeur-setup__row">
+                  <span className="voyeur-setup__step">
+                    {install?.digestModelPresent ? '✓' : '·'}
+                  </span>
+                  <span className="voyeur-setup__name">Summary model</span>
+                  {install?.digestModelPresent ? (
+                    <span className="voyeur-setup__done">installed</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn sm"
+                      disabled={install?.phase === 'Downloading'}
+                      onClick={() => onInstall('digest-small')}
+                    >
+                      Download
+                    </button>
+                  )}
+                </div>
+              </div>
               <h4>Reading the roster</h4>
               <span style={{ color: 'var(--accent)' }}>Blue</span> = QRZ-confirmed (real
               licensee, name shown). <span style={{ color: 'var(--power)' }}>Amber</span> =
