@@ -14,7 +14,10 @@ on:
 jobs:
   build-windows:
     name: Build Windows Native Libraries
-    runs-on: windows-latest
+    # Pinned: windows-latest rolled past the VS 2022 image ~2026-06-10 and the
+    # 'Visual Studio 17 2022' generator below stopped resolving. Keep runner +
+    # generator in lockstep; bump both together.
+    runs-on: windows-2022
     strategy:
       matrix:
         # arm64 enabled: the _MM_SET_FLUSH_ZERO_MODE SSE-intrinsic block in
