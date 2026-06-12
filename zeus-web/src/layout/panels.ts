@@ -64,6 +64,7 @@ import { StepPanel } from './panels/StepPanel';
 import { MeterGroupPanel } from '../components/meter-group/MeterGroupPanel';
 import { AnalogMeterPanel } from './panels/AnalogMeterPanel';
 import { WavRecorderPanel } from './panels/WavRecorderPanel';
+import { VoyeurPanel } from './panels/VoyeurPanel';
 
 export type PanelCategory =
   | 'spectrum'
@@ -314,6 +315,15 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['recorder', 'wav', 'tape', 'record', 'playback', 'audio', 'reel'],
     component: WavRecorderPanel,
+    maxW: 4,
+  },
+  voyeur: {
+    id: 'voyeur',
+    name: 'Voyeur Mode · Net Monitor',
+    category: 'tools',
+    tags: ['voyeur', 'monitor', 'net', 'log', 'transcribe', 'listen', 'unattended', 'who', 'roster'],
+    component: VoyeurPanel,
+    headerless: true,
     maxW: 4,
   },
   analogmeter: {
