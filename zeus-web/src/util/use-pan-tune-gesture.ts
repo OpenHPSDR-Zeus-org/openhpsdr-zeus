@@ -206,8 +206,12 @@ export function usePanTuneGesture(
       const cur = commandedHz();
       const next = clampHz(cur + deltaHz);
       // Effective delta (post-clamp) so the display target can never run
-      // past a band edge the command was clamped at.
+      // past a band edge the command was clamped at. The optimistic store
+      // write happens in the SAME synchronous block as the target nudge so
+      // the dial marker's (vfo − target) offset is never transiently stale
+      // (it is pinned to the center line during glides).
       viewCenter.nudgeTargetHz(next - cur);
+      useConnectionStore.setState({ vfoHz: next });
       pendingHz = next;
       scheduleFlush();
     };
@@ -333,6 +337,9 @@ export function usePanTuneGesture(
       // glides between the unchanged 500 Hz snap points.
       if (newHz !== pendingHz) {
         viewCenter.nudgeTargetHz(newHz - commandedHz());
+        // Atomic with the nudge — keeps the marker's (vfo − target) offset
+        // consistent within the frame (see nudgeVfo).
+        useConnectionStore.setState({ vfoHz: newHz });
         pendingHz = newHz;
         scheduleFlush();
       }

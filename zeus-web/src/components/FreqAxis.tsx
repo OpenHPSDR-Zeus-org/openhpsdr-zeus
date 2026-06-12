@@ -112,9 +112,17 @@ export function FreqAxis() {
       }
       const marker = markerRef.current;
       if (marker) {
+        // The marker's distance from the zero line is the dial's settled
+        // offset from the display center: 0 outside CW, ±cw_pitch in
+        // CWU/CWL. Computing it as (vfo − commanded target) keeps the
+        // marker PINNED to the zero line during a glide (vfo and target
+        // move in lockstep at input time) instead of leading off it and
+        // easing back (operator feedback, 2026-06-12).
         const vfoHz = useConnectionStore.getState().vfoHz;
-        const startHz = view - spanHz / 2;
-        marker.style.left = `${((vfoHz - startHz) / spanHz) * 100}%`;
+        const dialOffsetHz = viewCenter.isInitialized()
+          ? vfoHz - viewCenter.getTargetCenterHz()
+          : vfoHz - layoutCenter;
+        marker.style.left = `${((spanHz / 2 + dialOffsetHz) / spanHz) * 100}%`;
       }
     };
     const schedule = () => requestDrawBusFrame(update);
