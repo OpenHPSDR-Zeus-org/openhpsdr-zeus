@@ -42,8 +42,11 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+import { useEffect, useRef } from 'react';
 import { useDisplayStore } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
+import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
+import * as viewCenter from '../state/view-center';
 
 // Translucent rectangle drawn inside the panadapter container to show the
 // active receive filter passband, mapped from [filterLowHz, filterHighHz]
@@ -54,9 +57,70 @@ import { useConnectionStore } from '../state/connection-store';
 export function PassbandOverlay() {
   const centerHz = useDisplayStore((s) => s.centerHz);
   const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
-  const width = useDisplayStore((s) => s.panDb?.length ?? 0);
+  // Header width — survives frames whose pan payload is invalid.
+  const width = useDisplayStore((s) => s.width);
   const filterLowHz = useConnectionStore((s) => s.filterLowHz);
   const filterHighHz = useConnectionStore((s) => s.filterHighHz);
+
+  const rectRef = useRef<HTMLDivElement | null>(null);
+
+  // Smooth motion (issue #597): the rect is positioned against the animated
+  // view-center by a draw-bus callback — same clock as the trace, waterfall,
+  // dial marker, and tick strip, zero React commits at display rate. The
+  // passband rides the radio's center (filter edges are center-relative),
+  // so during a glide it eases with the spectrum instead of teleporting at
+  // 30 Hz frame arrival.
+  useEffect(() => {
+    const update = () => {
+      const rect = rectRef.current;
+      if (!rect) return;
+      const s = useDisplayStore.getState();
+      if (!s.width || s.hzPerPixel <= 0) return;
+      const spanHz = s.width * s.hzPerPixel;
+      const view = viewCenter.isInitialized()
+        ? viewCenter.getViewCenterHz()
+        : Number(s.centerHz);
+      // The passband hangs off the VIEW center — which is, by definition,
+      // always rendered at the screen center (the orange zero line). So
+      // during a tuning glide the filter stays PINNED to the line while the
+      // spectrum slides underneath it; anchoring to the commanded target
+      // instead made it lead off the line and ease back (operator feedback,
+      // 2026-06-12).
+      const passCenter = view;
+      const conn = useConnectionStore.getState();
+      const startHz = view - spanHz / 2;
+      const leftPct = ((passCenter + conn.filterLowHz - startHz) / spanHz) * 100;
+      const rightPct = ((passCenter + conn.filterHighHz - startHz) / spanHz) * 100;
+      const widthPct = rightPct - leftPct;
+      const visible = widthPct > 0 && leftPct <= 100 && rightPct >= 0;
+      rect.style.display = visible ? '' : 'none';
+      if (visible) {
+        rect.style.left = `${leftPct}%`;
+        rect.style.width = `${widthPct}%`;
+      }
+    };
+    const schedule = () => requestDrawBusFrame(update);
+    const unsubVc = viewCenter.subscribe(schedule);
+    const unsubConn = useConnectionStore.subscribe((s, prev) => {
+      if (
+        s.filterLowHz !== prev.filterLowHz ||
+        s.filterHighHz !== prev.filterHighHz ||
+        s.vfoHz !== prev.vfoHz
+      ) {
+        schedule();
+      }
+    });
+    const unsubFrame = useDisplayStore.subscribe((s, prev) => {
+      if (s.lastSeq !== prev.lastSeq) schedule();
+    });
+    schedule();
+    return () => {
+      unsubVc();
+      unsubConn();
+      unsubFrame();
+      cancelDrawBusFrame(update);
+    };
+  }, []);
 
   if (!width || hzPerPixel <= 0) return null;
 
@@ -64,16 +128,18 @@ export function PassbandOverlay() {
   const center = Number(centerHz);
   const startHz = center - spanHz / 2;
 
+  // Initial (pre-draw-bus) geometry; the callback refines it next frame.
   const passLowHz = center + filterLowHz;
   const passHighHz = center + filterHighHz;
   const leftPct = ((passLowHz - startHz) / spanHz) * 100;
   const rightPct = ((passHighHz - startHz) / spanHz) * 100;
   const widthPct = rightPct - leftPct;
 
-  if (widthPct <= 0 || leftPct > 100 || rightPct < 0) return null;
+  if (widthPct <= 0) return null;
 
   return (
     <div
+      ref={rectRef}
       aria-hidden
       className="pointer-events-none absolute inset-y-0 z-[5]"
       style={{

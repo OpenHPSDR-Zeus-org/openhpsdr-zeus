@@ -52,6 +52,7 @@ import {
   type ZoomLevel,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import * as viewCenter from '../state/view-center';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import { useTxStore } from '../state/tx-store';
 import { ACTIVE_MAP_REF } from '../state/active-map-ref';
@@ -102,6 +103,7 @@ export function useKeyboardShortcuts() {
       const hz = pendingHz;
       pendingHz = null;
       if (hz == null) return;
+      viewCenter.markOptimisticTune();
       tuneAbort?.abort();
       const ctrl = new AbortController();
       tuneAbort = ctrl;
@@ -118,6 +120,12 @@ export function useKeyboardShortcuts() {
       const base = pendingHz ?? useConnectionStore.getState().vfoHz;
       const step = useToolbarFavoritesStore.getState().stepHz;
       const next = snapHz(base + direction * step, step);
+      // Glide the spectrum with arrow-key tuning too (issue #597 adversary
+      // #1: without this the fix is "smooth for mouse, juddery for
+      // keyboard", and arrows are a primary CW workflow). Delta-form —
+      // dial-space deltas equal frame-center deltas while mode/pitch are
+      // unchanged.
+      viewCenter.nudgeTargetHz(next - base);
       useConnectionStore.setState({ vfoHz: next });
       pendingHz = next;
       if (pendingRaf === 0) pendingRaf = requestAnimationFrame(flushTune);

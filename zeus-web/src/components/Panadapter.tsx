@@ -44,10 +44,12 @@
 
 import { useEffect, useRef } from 'react';
 import { createPanRenderer, hexToRgbFloats } from '../gl/panadapter';
-import { planWaterfallUpdate } from '../gl/wf-shift';
+import { planForFrame } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
+import { useConnectionStore } from '../state/connection-store';
+import * as viewCenter from '../state/view-center';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
 import { FreqAxis } from './FreqAxis';
@@ -77,17 +79,16 @@ export function Panadapter() {
     const releaseFrameConsumer = registerFrameConsumer();
 
     const renderer = createPanRenderer(gl);
-    // Mirror the waterfall's shift state so pan and wf agree on what a VFO
-    // retune does to the spectrum. On a 'shift' tick the waterfall suppresses
-    // its new row and shifts the old history (doc 08 §5); the panadapter
-    // shows the prior trace with the same x-offset so the two views line up.
-    // On 'push'/'reset' the offset is 0 and the freshest trace is drawn.
-    let lastPan: Float32Array | null = null;
-    let lastCenterHz: bigint | null = null;
-    let lastHzPerPixel = 0;
-    let lastWidth = 0;
-    let drawPan: Float32Array | null = null;
-    let drawOffsetPx = 0;
+    // Anchor model (issue #597): the adopted trace is pinned to the center
+    // frequency it was captured at; every draw renders it offset by
+    // (anchorCenterHz − viewCenterHz) in FRACTIONAL pixels. Server frames
+    // refresh the anchor content (outside the refill hold); the animated
+    // view-center — not frame arrival — drives all horizontal motion. The
+    // shift decision itself comes from the shared planner (gl/frame-plan.ts)
+    // so the waterfall can never disagree with the trace by a frame.
+    let anchorPan: Float32Array | null = null;
+    let anchorCenterHz = 0;
+    let anchorHzPerPixel = 0;
     // Visibility gating: don't burn rAF cycles when the tile is scrolled
     // off-screen, the tab is hidden, or the operator switched to a layout
     // where the panadapter isn't mounted-but-visible. Both signals are
@@ -97,7 +98,7 @@ export function Panadapter() {
     const isActive = () => inViewport && pageVisible;
 
     const redraw = () => {
-      if (!drawPan) return;
+      if (!anchorPan) return;
       const s = useDisplaySettingsStore.getState();
       // While keyed (MOX or TUN — server already feeds TX pixels via
       // DspPipelineService.Tick) use the TX-specific dB range so the
@@ -109,7 +110,13 @@ export function Panadapter() {
       const dbMax = keyed ? s.txDbMax : s.dbMax;
       const { r, g, b } = hexToRgbFloats(s.rxTraceColor);
       renderer.setTraceColor(r, g, b);
-      renderer.draw(drawPan, dbMin, dbMax, drawOffsetPx);
+      // Fractional offset — the shaders take a float uOffsetPx, so the
+      // glide is sub-pixel-smooth for free (issue #597).
+      const offsetPx =
+        anchorHzPerPixel > 0 && viewCenter.isInitialized()
+          ? (anchorCenterHz - viewCenter.getViewCenterHz()) / anchorHzPerPixel
+          : 0;
+      renderer.draw(anchorPan, dbMin, dbMax, offsetPx);
     };
     const requestRedraw = () => {
       if (!isActive()) return;
@@ -166,46 +173,57 @@ export function Panadapter() {
     const unsub = useDisplayStore.subscribe((state) => {
       if (state.lastSeq === lastSeqDrawn) return;
       lastSeqDrawn = state.lastSeq;
-      if (!state.panValid || !state.panDb) return;
-
-      const decision = planWaterfallUpdate({
-        lastCenterHz,
-        lastHzPerPixel,
-        lastWidth,
-        nextCenterHz: state.centerHz,
-        nextHzPerPixel: state.hzPerPixel,
-        nextWidth: state.panDb.length,
+      // The planner must see EVERY frame — including ones whose pan payload
+      // is invalid — so its tracker can never drift against the waterfall's
+      // view of the same stream (issue #597 dual-tracker divergence fix).
+      const decision = planForFrame({
+        seq: state.lastSeq,
+        centerHz: state.centerHz,
+        hzPerPixel: state.hzPerPixel,
+        width: state.width,
       });
+      const frameCenter = Number(state.centerHz);
 
-      switch (decision.kind) {
-        case 'reset':
-          drawPan = state.panDb;
-          drawOffsetPx = 0;
-          lastPan = state.panDb;
-          lastCenterHz = state.centerHz;
-          lastHzPerPixel = state.hzPerPixel;
-          lastWidth = state.panDb.length;
-          break;
-        case 'push':
-          drawPan = state.panDb;
-          drawOffsetPx = 0;
-          lastPan = state.panDb;
-          // lastCenterHz unchanged so sub-pixel retunes accumulate.
-          break;
-        case 'shift':
-          // Show the last pushed frame with the accumulated integer-pixel
-          // offset the waterfall has applied to its history — the post-shift
-          // top row and this trace land the same carriers in the same
-          // columns. Offset accumulates across consecutive shift ticks and
-          // resets on the next push (which updates lastPan to fresh data).
-          drawPan = lastPan ?? state.panDb;
-          drawOffsetPx += decision.shiftPx;
-          lastCenterHz = decision.residualCenterHz;
-          break;
+      if (decision.kind === 'reset') {
+        // Geometry changed (first frame / zoom / sample rate / width): the
+        // old anchor is meaningless. Snap the view — no glide — and adopt
+        // immediately; the refill hold doesn't apply across a reset.
+        viewCenter.snapTo(frameCenter, state.hzPerPixel);
+        if (state.panValid && state.panDb) {
+          anchorPan = state.panDb;
+          anchorCenterHz = frameCenter;
+          anchorHzPerPixel = state.hzPerPixel;
+        }
+      } else {
+        // push/shift: feed the frame center back to the view-center. With no
+        // recent operator gesture this recognises external tunes (CAT/TCI,
+        // band buttons, typed entry, mode changes) and glides there — which
+        // also arms the refill hold via the target-change stamp.
+        viewCenter.reconcileFrame(frameCenter, state.hzPerPixel);
+        // Adopt fresh trace content only once the analyzer has refilled with
+        // post-retune IQ. Inside the hold the previous anchor keeps gliding
+        // at its own (correct) frequency — old signals never get redrawn at
+        // the new axis, which was the snap-back half of the judder.
+        const holdMs = viewCenter.refillHoldMsForSampleRate(
+          useConnectionStore.getState().sampleRate,
+        );
+        if (
+          state.panValid &&
+          state.panDb &&
+          !viewCenter.isWithinRefillHold(holdMs)
+        ) {
+          anchorPan = state.panDb;
+          anchorCenterHz = frameCenter;
+          anchorHzPerPixel = state.hzPerPixel;
+        }
       }
 
       requestRedraw();
     });
+
+    // View-center motion → redraw at display rate while gliding. The
+    // subscription is silent when the tween loop is parked (zero idle cost).
+    const unsubViewCenter = viewCenter.subscribe(requestRedraw);
 
     // Repaint on dB-range / trace-color updates so auto-range and the Display
     // settings panel apply without waiting for the next server frame. The
@@ -238,6 +256,7 @@ export function Panadapter() {
 
     return () => {
       unsub();
+      unsubViewCenter();
       unsubSettings();
       unsubTx();
       ro.disconnect();

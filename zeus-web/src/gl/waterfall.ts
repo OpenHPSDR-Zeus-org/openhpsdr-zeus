@@ -62,7 +62,7 @@
 import { buildProgram } from './util';
 import { WF_VS, WF_FS, WF_SHIFT_FS } from './shaders';
 import { lutFor, type ColormapId } from './colormap';
-import { planWaterfallUpdate } from './wf-shift';
+import type { WfShiftDecision } from './wf-shift';
 
 const HISTORY_ROWS = 512;
 const SEED_DB = -200;
@@ -76,13 +76,23 @@ export type PushOptions = {
 
 export type WfRenderer = {
   resize: (w: number, h: number) => void;
+  /** Apply the shared per-frame plan (issue #597: the decision is computed
+   *  once in gl/frame-plan.ts and handed to both spectrum surfaces so they
+   *  can never disagree). `wfDb` may be null on frames whose waterfall
+   *  payload is invalid — geometry (shift/reset) still applies so the
+   *  history stays aligned with the panadapter. */
   pushFrame: (
-    wfDb: Float32Array,
+    decision: WfShiftDecision,
+    wfDb: Float32Array | null,
     centerHz: bigint,
     hzPerPixel: number,
     options?: PushOptions,
   ) => void;
-  draw: (dbMin: number, dbMax: number) => void;
+  /** Draw the history. `viewCenterHz` is the animated view-center; when
+   *  non-null the sampling window slides by the fractional offset between
+   *  the history's anchor center and the view (issue #597). Null renders
+   *  with zero offset (pre-first-frame / tests). */
+  draw: (dbMin: number, dbMax: number, viewCenterHz?: number | null) => void;
   setColormap: (id: ColormapId) => void;
   /** 1.0 = opaque (default). 0.0 = noise floor fades to transparent so a
    *  background layer (e.g. the QRZ-mode Leaflet map) shows through. */
@@ -107,6 +117,8 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   const uWriteRow = gl.getUniformLocation(drawProg, 'uWriteRow');
   const uH = gl.getUniformLocation(drawProg, 'uH');
   const uBgAlpha = gl.getUniformLocation(drawProg, 'uBgAlpha');
+  const uViewOffsetUv = gl.getUniformLocation(drawProg, 'uViewOffsetUv');
+  const uSeedDbDraw = gl.getUniformLocation(drawProg, 'uSeedDb');
   let bgAlpha = 1;
 
   const shiftProg = buildProgram(gl, WF_VS, WF_SHIFT_FS);
@@ -244,32 +256,29 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
       canvasH = h;
       gl.viewport(0, 0, w, h);
     },
-    pushFrame(wfDb, centerHz, hzPerPixel, options) {
-      const width = wfDb.length;
-      const decision = planWaterfallUpdate({
-        lastCenterHz,
-        lastHzPerPixel,
-        lastWidth: texWidth,
-        nextCenterHz: centerHz,
-        nextHzPerPixel: hzPerPixel,
-        nextWidth: width,
-      });
+    pushFrame(decision, wfDb, centerHz, hzPerPixel, options) {
       switch (decision.kind) {
-        case 'reset':
-          // Reset must always upload so the freshly-seeded history has a
-          // real top row; skipping it would leave the whole texture at -200.
-          resetTextures(width);
-          uploadRow(wfDb);
+        case 'reset': {
+          // Reset re-seeds both textures; when this frame carries valid wf
+          // data also upload it so the history has a real top row. A reset
+          // on an invalid-wf frame leaves the seed only — the next valid
+          // frame pushes the first real row.
+          const width = wfDb?.length ?? texWidth;
+          if (width > 0) resetTextures(width);
+          if (wfDb) uploadRow(wfDb);
           lastCenterHz = centerHz;
           lastHzPerPixel = hzPerPixel;
           break;
+        }
         case 'push':
-          if (!options?.skipRowUpload) uploadRow(wfDb);
+          if (wfDb && !options?.skipRowUpload) uploadRow(wfDb);
           // lastCenterHz unchanged so sub-pixel retunes accumulate.
           break;
         case 'shift':
           // Shift always runs — throttling it would let the history drift
-          // out of sync with the panadapter's VFO-accumulated offset.
+          // out of sync with the panadapter's anchor offset. This is a
+          // REBASE of the texture in integer pixels; the fractional
+          // remainder is rendered at draw time from the view-center.
           performShift(decision.shiftPx);
           // Suppress the new-row blit this tick per doc 08 §5 so we don't
           // overlay a post-retune row on top of a just-shifted frame.
@@ -283,11 +292,23 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
     setTransparent(transparent) {
       bgAlpha = transparent ? 0 : 1;
     },
-    draw(dbMin, dbMax) {
+    draw(dbMin, dbMax, viewCenterHz = null) {
       gl.viewport(0, 0, canvasW, canvasH);
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
       if (texWidth === 0) return;
+      // Fractional glide between integer rebases (issue #597). Number()
+      // on the bigint anchor is exact to 2^53 — fine for 0..60 MHz.
+      let viewOffsetUv = 0;
+      if (viewCenterHz !== null && lastCenterHz !== null && lastHzPerPixel > 0) {
+        const offsetHz = Number(lastCenterHz) - viewCenterHz;
+        viewOffsetUv = offsetHz / (lastHzPerPixel * texWidth);
+        // A whole-span offset means the view ran away from the history
+        // (mid-glide band jump); clamp so sampling math stays sane — the
+        // shader's seed fallback paints the exposed region anyway.
+        if (!Number.isFinite(viewOffsetUv)) viewOffsetUv = 0;
+        viewOffsetUv = Math.max(-1, Math.min(1, viewOffsetUv));
+      }
       // Premultiplied-alpha blending — matches the fragment output so the
       // noise floor fades cleanly into whatever is behind the canvas.
       gl.enable(gl.BLEND);
@@ -304,6 +325,8 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
       gl.uniform1f(uWriteRow, writeRow);
       gl.uniform1f(uH, HISTORY_ROWS);
       gl.uniform1f(uBgAlpha, bgAlpha);
+      gl.uniform1f(uViewOffsetUv, viewOffsetUv);
+      gl.uniform1f(uSeedDbDraw, SEED_DB);
       gl.bindVertexArray(vao);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.bindVertexArray(null);

@@ -46,6 +46,7 @@ import { createContext, useContext, useEffect, type RefObject } from 'react';
 import { setVfo, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
+import * as viewCenter from '../state/view-center';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 
 const MAX_HZ = 60_000_000;
@@ -155,11 +156,20 @@ export function usePanTuneGesture(
     let wheelAccum = 0;
     let zoomInflight: AbortController | null = null;
 
+    // The commanded-frequency chain: pendingHz when a POST is queued, else
+    // the optimistic store value. All view-center nudges are DELTAS against
+    // this chain (never against the lagging frame center), so the display
+    // target always mirrors exactly what was commanded — including clamp
+    // effects at the band edges — and CW pitch offsets cancel (issue #597
+    // adversary #2/#12).
+    const commandedHz = () => pendingHz ?? useConnectionStore.getState().vfoHz;
+
     const flushPending = () => {
       pendingRaf = 0;
       const hz = pendingHz;
       pendingHz = null;
       if (hz == null) return;
+      viewCenter.markOptimisticTune();
       useConnectionStore.setState({ vfoHz: hz });
       pendingAbort?.abort();
       const ctrl = new AbortController();
@@ -173,6 +183,10 @@ export function usePanTuneGesture(
 
     const commitFinal = (hz: number) => {
       const snapped = snapHz(hz);
+      // Delta against the commanded chain — NOT an absolute write into the
+      // view-center (frame centers are dial ∓ cw-pitch in CW; absolutes
+      // would oscillate the display by ±pitch on every CW commit).
+      viewCenter.nudgeTargetHz(snapped - commandedHz());
       useConnectionStore.setState({ vfoHz: snapped });
       pendingAbort?.abort();
       pendingAbort = null;
@@ -189,8 +203,16 @@ export function usePanTuneGesture(
     // Wheel-driven VFO nudge: fine-tune step, no snap to PAN_STEP_HZ. Coalesces
     // to one POST per rAF via the same pending pipeline as drag-to-pan.
     const nudgeVfo = (deltaHz: number) => {
-      const cur = pendingHz ?? useConnectionStore.getState().vfoHz;
-      pendingHz = clampHz(cur + deltaHz);
+      const cur = commandedHz();
+      const next = clampHz(cur + deltaHz);
+      // Effective delta (post-clamp) so the display target can never run
+      // past a band edge the command was clamped at. The optimistic store
+      // write happens in the SAME synchronous block as the target nudge so
+      // the dial marker's (vfo − target) offset is never transiently stale
+      // (it is pinned to the center line during glides).
+      viewCenter.nudgeTargetHz(next - cur);
+      useConnectionStore.setState({ vfoHz: next });
+      pendingHz = next;
       scheduleFlush();
     };
 
@@ -307,8 +329,20 @@ export function usePanTuneGesture(
       const rect = canvas.getBoundingClientRect();
       if (rect.width <= 0) return;
       const newHz = snapHz(drag.startHz - (dx / rect.width) * drag.spanHz);
-      pendingHz = newHz;
-      scheduleFlush();
+      // Pixel→Hz mapping stays display-relative (drag.startHz is the frame
+      // center at grab — unchanged semantics); the view-center moves by the
+      // COMMANDED delta, initialised from the live commanded value, never
+      // from the lagging frame center (adversary #12: prevents a one-time
+      // backward jump when a drag starts mid-wheel-glide). The display then
+      // glides between the unchanged 500 Hz snap points.
+      if (newHz !== pendingHz) {
+        viewCenter.nudgeTargetHz(newHz - commandedHz());
+        // Atomic with the nudge — keeps the marker's (vfo − target) offset
+        // consistent within the frame (see nudgeVfo).
+        useConnectionStore.setState({ vfoHz: newHz });
+        pendingHz = newHz;
+        scheduleFlush();
+      }
     };
 
     const onPointerUp = (e: PointerEvent) => {

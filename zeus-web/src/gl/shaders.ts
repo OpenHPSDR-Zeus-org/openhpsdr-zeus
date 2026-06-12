@@ -121,13 +121,26 @@ uniform float uDbMax;
 uniform float uWriteRow;
 uniform float uH;
 uniform float uBgAlpha;
+// Issue #597: fractional view offset in UV units —
+// (historyCenterHz − viewCenterHz) / spanHz. The history texture itself is
+// only rebased in integer pixels (ping-pong shift); this term slides the
+// SAMPLING window fractionally so the waterfall glides with the animated
+// view-center between rebases. Same sign convention as WF_SHIFT_FS's
+// uShiftUv: positive slides displayed content right. Columns the slide
+// exposes fall back to uSeedDb (noise-floor colour), matching the shift
+// pass convention.
+uniform float uViewOffsetUv;
+uniform float uSeedDb;
 out vec4 fragColor;
 void main() {
   // vUv.y == 1.0 at top of canvas; newest row sits at the top.
   // row = (writeRow - (1 - vUv.y) * H) mod H, normalised.
   float agePx = (1.0 - vUv.y) * uH;
   float row = mod(uWriteRow - agePx + uH, uH);
-  float v = texture(uHistory, vec2(vUv.x, (row + 0.5) / uH)).r;
+  float srcX = vUv.x - uViewOffsetUv;
+  float v = (srcX < 0.0 || srcX > 1.0)
+    ? uSeedDb
+    : texture(uHistory, vec2(srcX, (row + 0.5) / uH)).r;
   float n = clamp((v - uDbMin) / (uDbMax - uDbMin), 0.0, 1.0);
   vec4 c = texture(uLut, vec2(n, 0.5));
   // uBgAlpha=1 → fully opaque (normal mode). uBgAlpha=0 → noise floor is
