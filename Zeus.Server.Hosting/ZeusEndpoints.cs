@@ -206,6 +206,23 @@ public static class ZeusEndpoints
             store.Delete(id)
                 ? Results.Ok(new { deleted = id })
                 : Results.NotFound(new { error = "session not found" }));
+        // Phase 3: report (roster who-was-on + stats + any saved digest).
+        app.MapGet("/api/voyeur/sessions/{id}/report", (string id, Zeus.Server.Voyeur.VoyeurStore store) =>
+        {
+            var r = store.GetReport(id);
+            return r is null ? Results.NotFound(new { error = "session not found" }) : Results.Ok(r);
+        });
+        // Phase 3: search every log's overs by callsign / name / transcript text.
+        app.MapGet("/api/voyeur/search", (string? q, Zeus.Server.Voyeur.VoyeurStore store) =>
+            Results.Ok(store.Search(q ?? "")));
+        // Phase 3: stream a captured over's audio for in-panel replay.
+        app.MapGet("/api/voyeur/segments/{segId}/audio", (string segId, Zeus.Server.Voyeur.VoyeurStore store) =>
+        {
+            var path = store.GetSegmentAudioPath(segId);
+            return path is null
+                ? Results.NotFound(new { error = "audio not found" })
+                : Results.File(path, "audio/wav", enableRangeProcessing: true);
+        });
 
         app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 

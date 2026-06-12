@@ -22,15 +22,21 @@ import {
   cancelVoyeurInstall,
   getVoyeurInstallStatus,
   getVoyeurModels,
+  getVoyeurReport,
   getVoyeurStatus,
   getVoyeurTranscription,
   installVoyeurModel,
   listVoyeurSessions,
+  searchVoyeur,
+  voyeurSegmentAudioUrl,
   startVoyeur,
   stopVoyeur,
   updateVoyeurSession,
   type VoyeurInstall,
   type VoyeurModel,
+  type VoyeurReport,
+  type VoyeurSearchHit,
+  type VoyeurSegment,
   type VoyeurSession,
   type VoyeurSessionDetail,
   type VoyeurStatus,
@@ -76,7 +82,13 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
   const [models, setModels] = useState<VoyeurModel[]>([]);
   const [chosenModel, setChosenModel] = useState('medium.en');
   const [install, setInstall] = useState<VoyeurInstall | null>(null);
+  const [query, setQuery] = useState('');
+  const [hits, setHits] = useState<VoyeurSearchHit[] | null>(null);
+  const [reports, setReports] = useState<Record<string, VoyeurReport>>({});
+  const [view, setView] = useState<Record<string, 'log' | 'roster'>>({});
+  const [playing, setPlaying] = useState<string | null>(null);
   const editingRef = useRef<HTMLInputElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -237,6 +249,122 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
+  };
+
+  // Search across all logs (debounced). Empty query → normal session list.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setHits(null);
+      return;
+    }
+    const ctrl = new AbortController();
+    const h = setTimeout(() => {
+      void searchVoyeur(q, ctrl.signal)
+        .then(setHits)
+        .catch(() => {});
+    }, 250);
+    return () => {
+      clearTimeout(h);
+      ctrl.abort();
+    };
+  }, [query]);
+
+  const loadReport = useCallback(async (id: string) => {
+    try {
+      const r = await getVoyeurReport(id);
+      setReports((m) => ({ ...m, [id]: r }));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const setSessionView = (id: string, mode: 'log' | 'roster') => {
+    setView((v) => ({ ...v, [id]: mode }));
+    if (mode === 'roster' && !reports[id]) void loadReport(id);
+  };
+
+  const playSegment = (segId: string) => {
+    let el = audioRef.current;
+    if (!el) {
+      el = new Audio();
+      el.onended = () => setPlaying(null);
+      audioRef.current = el;
+    }
+    if (playing === segId) {
+      el.pause();
+      setPlaying(null);
+      return;
+    }
+    el.src = voyeurSegmentAudioUrl(segId);
+    void el.play().then(() => setPlaying(segId)).catch(() => setPlaying(null));
+  };
+
+  const renderOver = (seg: VoyeurSegment) => {
+    const state = seg.callsignState ?? 'unknown';
+    return (
+      <div key={seg.id} className={`voyeur-over voyeur-over--${state}`}>
+        <span className="voyeur-over__time">
+          {new Date(seg.startedUtc).toLocaleTimeString([], {
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+          })}
+          <br />
+          {(seg.durationMs / 1000).toFixed(0)}s
+        </span>
+        <span className="voyeur-over__body">
+          {seg.hasAudio && (
+            <button
+              type="button"
+              className={`voyeur-play ${playing === seg.id ? 'voyeur-play--on' : ''}`}
+              onClick={() => playSegment(seg.id)}
+              title="Play this over"
+              aria-label="Play this over"
+            >
+              {playing === seg.id ? '⏸' : '▶'}
+            </button>
+          )}
+          <span className={`voyeur-call voyeur-call--${state}`}>{seg.callsign ?? 'unknown'}</span>
+          {seg.callsignName && <span className="voyeur-name">{seg.callsignName}</span>}
+          {seg.transcript ? (
+            <span className="voyeur-text">{seg.transcript}</span>
+          ) : (
+            <span className="voyeur-text voyeur-text--pending">
+              {asrReady ? 'transcribing…' : 'audio captured'}
+            </span>
+          )}
+        </span>
+      </div>
+    );
+  };
+
+  const renderRoster = (id: string) => {
+    const r = reports[id];
+    if (!r) return <div className="voyeur-empty" style={{ padding: '6px 10px' }}>Loading…</div>;
+    return (
+      <div className="voyeur-roster">
+        <div className="voyeur-roster__stats">
+          <span className="chip mono"><span className="k">stations</span><span className="v">{r.uniqueStations}</span></span>
+          <span className="chip mono"><span className="k">confirmed</span><span className="v">{r.confirmedStations}</span></span>
+          <span className="chip mono"><span className="k">overs</span><span className="v">{r.session.segmentCount}</span></span>
+          <span className="chip mono"><span className="k">cap</span><span className="v">{fmtDur(r.session.capturedSeconds)}</span></span>
+        </div>
+        {r.digest && <div className="voyeur-digest">{r.digest}</div>}
+        {r.roster.length === 0 && (
+          <div className="voyeur-empty" style={{ padding: '4px 10px' }}>No callsigns identified.</div>
+        )}
+        {r.roster.map((e) => (
+          <div key={e.callsign} className="voyeur-rosteritem">
+            <span className={`voyeur-call voyeur-call--${e.state}`}>{e.callsign}</span>
+            {e.name && <span className="voyeur-name">{e.name}</span>}
+            <span className="voyeur-rosteritem__count">
+              {e.overCount} {e.overCount === 1 ? 'over' : 'overs'}
+            </span>
+          </div>
+        ))}
+      </div>
+    );
   };
 
   const active = status?.active ?? false;
@@ -422,9 +550,52 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
 
         {/* The intercepted-comms log */}
         <div className="voyeur__log">
-          <div className="voyeur-loghdr">Logs · {sessions.length}</div>
-          {sessions.length === 0 && <div className="voyeur-empty">No logs yet — press LISTEN.</div>}
-          {sessions.map((s) => (
+          <div className="voyeur-loghdr">
+            <span>Logs · {sessions.length}</span>
+            <input
+              className="voyeur-search"
+              type="search"
+              placeholder="search callsign or text…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Search logs"
+            />
+          </div>
+
+          {hits !== null && (
+            <>
+              {hits.length === 0 && (
+                <div className="voyeur-empty">No matches for “{query}”.</div>
+              )}
+              {hits.map((hit) => (
+                <div className="voyeur-card" key={hit.sessionId}>
+                  <div className="voyeur-card__meta" style={{ paddingTop: 6 }}>
+                    <span className="chip mono"><span className="v">{fmtFreq(hit.freqHz)}</span></span>
+                    <span className="chip mono"><span className="k">when</span><span className="v">{fmtWhen(hit.startedUtc)}</span></span>
+                    <span className="chip mono"><span className="k">hits</span><span className="v">{hit.matches.length}</span></span>
+                    <span style={{ flex: 1 }} />
+                    <button
+                      type="button"
+                      className="btn sm"
+                      onClick={() => {
+                        setQuery('');
+                        void openSession(hit.sessionId);
+                      }}
+                    >
+                      Open log
+                    </button>
+                  </div>
+                  <div className="voyeur-overs">{hit.matches.map(renderOver)}</div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {hits === null && sessions.length === 0 && (
+            <div className="voyeur-empty">No logs yet — press LISTEN.</div>
+          )}
+          {hits === null &&
+            sessions.map((s) => (
             <div className="voyeur-card" key={s.id}>
               <div className="voyeur-card__head">
                 <button
@@ -445,6 +616,24 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
                   }}
                   aria-label="Log name"
                 />
+                {openId === s.id && (
+                  <div className="voyeur-viewtoggle">
+                    <button
+                      type="button"
+                      className={`btn sm ${(view[s.id] ?? 'log') === 'log' ? 'active' : ''}`}
+                      onClick={() => setSessionView(s.id, 'log')}
+                    >
+                      Log
+                    </button>
+                    <button
+                      type="button"
+                      className={`btn sm ${view[s.id] === 'roster' ? 'active' : ''}`}
+                      onClick={() => setSessionView(s.id, 'roster')}
+                    >
+                      Roster
+                    </button>
+                  </div>
+                )}
                 <button type="button" className="btn sm" onClick={() => openSession(s.id)}>
                   {openId === s.id ? 'Hide' : 'Open'}
                 </button>
@@ -479,44 +668,17 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
                 )}
               </div>
 
-              {openId === s.id && (
+              {openId === s.id && (view[s.id] === 'roster' ? (
+                renderRoster(s.id)
+              ) : (
                 <div className="voyeur-overs">
                   {!detail && <div className="voyeur-empty" style={{ padding: '6px 10px' }}>Loading…</div>}
                   {detail && detail.segments.length === 0 && (
                     <div className="voyeur-empty" style={{ padding: '6px 10px' }}>No overs captured.</div>
                   )}
-                  {detail &&
-                    detail.segments.map((seg) => {
-                      const state = seg.callsignState ?? 'unknown';
-                      return (
-                        <div key={seg.id} className={`voyeur-over voyeur-over--${state}`}>
-                          <span className="voyeur-over__time">
-                            {new Date(seg.startedUtc).toLocaleTimeString([], {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                              second: '2-digit',
-                            })}
-                            <br />
-                            {(seg.durationMs / 1000).toFixed(0)}s
-                          </span>
-                          <span className="voyeur-over__body">
-                            <span className={`voyeur-call voyeur-call--${state}`}>
-                              {seg.callsign ?? 'unknown'}
-                            </span>
-                            {seg.callsignName && <span className="voyeur-name">{seg.callsignName}</span>}
-                            {seg.transcript ? (
-                              <span className="voyeur-text">{seg.transcript}</span>
-                            ) : (
-                              <span className="voyeur-text voyeur-text--pending">
-                                {asrReady ? 'transcribing…' : 'audio captured'}
-                              </span>
-                            )}
-                          </span>
-                        </div>
-                      );
-                    })}
+                  {detail && detail.segments.map(renderOver)}
                 </div>
-              )}
+              ))}
             </div>
           ))}
         </div>
