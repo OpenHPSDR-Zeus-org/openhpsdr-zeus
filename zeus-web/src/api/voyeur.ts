@@ -79,7 +79,7 @@ async function json<T>(input: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export type VoyeurTranscription = { available: boolean; modelDir: string };
+export type VoyeurTranscription = { available: boolean; modelDir: string; digestAvailable: boolean };
 
 export const getVoyeurStatus = (signal?: AbortSignal) =>
   json<VoyeurStatus>('/api/voyeur/status', { signal });
@@ -176,6 +176,9 @@ export type VoyeurSearchHit = {
 
 export const getVoyeurReport = (id: string, signal?: AbortSignal) =>
   json<VoyeurReport>(`/api/voyeur/sessions/${encodeURIComponent(id)}/report`, { signal });
+
+export const generateVoyeurDigest = (id: string) =>
+  json<VoyeurReport>(`/api/voyeur/sessions/${encodeURIComponent(id)}/digest`, { method: 'POST' });
 
 export const searchVoyeur = (q: string, signal?: AbortSignal) =>
   json<VoyeurSearchHit[]>(`/api/voyeur/search?q=${encodeURIComponent(q)}`, { signal });

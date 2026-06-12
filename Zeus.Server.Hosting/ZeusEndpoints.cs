@@ -170,8 +170,14 @@ public static class ZeusEndpoints
         // ---- Voyeur Mode (zeus-la5) — unattended net monitor + log mgmt ----
         app.MapGet("/api/voyeur/status", (VoyeurMonitorService v) => Results.Ok(v.Status()));
         // Transcription readiness + setup hint for the panel (Phase 2).
-        app.MapGet("/api/voyeur/transcription", (Zeus.Server.Voyeur.WhisperTranscriber w) =>
-            Results.Ok(new { available = w.Available, modelDir = Zeus.Server.Voyeur.WhisperTranscriber.ModelDir }));
+        app.MapGet("/api/voyeur/transcription",
+            (Zeus.Server.Voyeur.WhisperTranscriber w, Zeus.Server.Voyeur.LlamaSummarizer l) =>
+            Results.Ok(new
+            {
+                available = w.Available,
+                modelDir = Zeus.Server.Voyeur.WhisperTranscriber.ModelDir,
+                digestAvailable = l.Available,
+            }));
         // In-app, terminal-free transcription setup (cross-platform model download).
         app.MapGet("/api/voyeur/install/models", () =>
             Results.Ok(Zeus.Server.Voyeur.VoyeurInstallService.AvailableModels));
@@ -215,6 +221,21 @@ public static class ZeusEndpoints
         // Phase 3: search every log's overs by callsign / name / transcript text.
         app.MapGet("/api/voyeur/search", (string? q, Zeus.Server.Voyeur.VoyeurStore store) =>
             Results.Ok(store.Search(q ?? "")));
+        // Phase 3B: generate the local-LLM topic digest for a session, on demand.
+        app.MapPost("/api/voyeur/sessions/{id}/digest",
+            async (string id, Zeus.Server.Voyeur.VoyeurStore store, Zeus.Server.Voyeur.LlamaSummarizer llama, CancellationToken ct) =>
+        {
+            if (!llama.Available)
+                return Results.BadRequest(new { error = "digest model not installed" });
+            var transcript = store.SessionTranscript(id);
+            if (string.IsNullOrWhiteSpace(transcript))
+                return Results.BadRequest(new { error = "no transcript to summarize yet" });
+            var digest = await llama.SummarizeAsync(transcript, TimeSpan.FromSeconds(120), ct);
+            if (digest is null)
+                return Results.StatusCode(503);
+            store.SetDigest(id, digest);
+            return Results.Ok(store.GetReport(id));
+        });
         // Phase 3: stream a captured over's audio for in-panel replay.
         app.MapGet("/api/voyeur/segments/{segId}/audio", (string segId, Zeus.Server.Voyeur.VoyeurStore store) =>
         {

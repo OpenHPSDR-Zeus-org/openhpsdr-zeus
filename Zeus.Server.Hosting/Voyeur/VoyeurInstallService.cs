@@ -36,11 +36,13 @@ public sealed class VoyeurInstallService
 
     public sealed record Progress(
         Phase Phase, int Percent, string Message, string? Item,
-        bool ModelPresent, bool BinaryPresent, string Rid);
+        bool ModelPresent, bool BinaryPresent,
+        bool DigestModelPresent, bool DigestBinaryPresent, string Rid);
 
     private readonly ILogger<VoyeurInstallService> _log;
     private readonly IHttpClientFactory _httpFactory;
     private readonly WhisperTranscriber _whisper;
+    private readonly LlamaSummarizer _llama;
 
     private readonly object _gate = new();
     private Phase _phase = Phase.Idle;
@@ -51,28 +53,40 @@ public sealed class VoyeurInstallService
 
     // Models offered in-app. Stable Hugging Face URLs (whisper.cpp, MIT).
     // small.en is the lighter default; medium.en is the Phase-0 accuracy pick.
-    private static readonly Dictionary<string, (string Url, long MinBytes, string Label)> Models = new()
+    private enum Kind { Whisper, Llama }
+    private sealed record ModelDef(string Url, long MinBytes, string Label, Kind Kind, string FileName);
+
+    private static readonly Dictionary<string, ModelDef> Models = new()
     {
-        // Medium first = the recommended default (Phase-0 spike: small misses
-        // a lot on noisy SSB; medium is the accuracy pick).
-        ["medium.en"] = ("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
-                         1_300_000_000, "Medium (English) — ~1.5 GB, recommended (best accuracy)"),
-        ["small.en"] = ("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
-                        400_000_000, "Small (English) — ~0.5 GB, faster download, less accurate"),
+        // --- transcription (whisper) ---
+        ["medium.en"] = new("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
+            1_300_000_000, "Transcription: Medium (English) — ~1.5 GB, recommended", Kind.Whisper, "ggml-medium.en.bin"),
+        ["small.en"] = new("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en.bin",
+            400_000_000, "Transcription: Small (English) — ~0.5 GB, faster", Kind.Whisper, "ggml-small.en.bin"),
+        // --- digest (local LLM) ---
+        ["digest-small"] = new("https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
+            300_000_000, "Digest LLM: Small — ~0.5 GB, fast", Kind.Llama, "qwen2.5-0.5b-instruct-q4_k_m.gguf"),
+        ["digest-medium"] = new("https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct-GGUF/resolve/main/qwen2.5-1.5b-instruct-q4_k_m.gguf",
+            900_000_000, "Digest LLM: Medium — ~1 GB, better summaries", Kind.Llama, "qwen2.5-1.5b-instruct-q4_k_m.gguf"),
     };
+
+    private static string DestDir(Kind k) => k == Kind.Llama ? LlamaSummarizer.ModelDir : WhisperTranscriber.ModelDir;
 
     public VoyeurInstallService(
         ILogger<VoyeurInstallService> log,
         IHttpClientFactory httpFactory,
-        WhisperTranscriber whisper)
+        WhisperTranscriber whisper,
+        LlamaSummarizer llama)
     {
         _log = log;
         _httpFactory = httpFactory;
         _whisper = whisper;
+        _llama = llama;
     }
 
     public static IEnumerable<object> AvailableModels =>
-        Models.Select(m => new { id = m.Key, label = m.Value.Label });
+        Models.Select(m => new { id = m.Key, label = m.Value.Label,
+            kind = m.Value.Kind == Kind.Llama ? "digest" : "transcription" });
 
     public Progress Status()
     {
@@ -82,6 +96,8 @@ public sealed class VoyeurInstallService
                 _phase, _percent, _message, _item,
                 ModelPresent: _whisper.ModelPath is not null,
                 BinaryPresent: _whisper.CliPath is not null,
+                DigestModelPresent: _llama.ModelPath is not null,
+                DigestBinaryPresent: _llama.CliPath is not null,
                 Rid: Rid());
         }
     }
@@ -116,10 +132,13 @@ public sealed class VoyeurInstallService
 
     private async Task DownloadModelAsync(string modelId, CancellationToken ct)
     {
-        var (url, minBytes, _) = Models[modelId];
-        Directory.CreateDirectory(WhisperTranscriber.ModelDir);
-        var finalPath = Path.Combine(WhisperTranscriber.ModelDir, $"ggml-{modelId}.bin");
+        var def = Models[modelId];
+        var destDir = DestDir(def.Kind);
+        Directory.CreateDirectory(destDir);
+        var finalPath = Path.Combine(destDir, def.FileName);
         var tmpPath = finalPath + ".part";
+        long minBytes = def.MinBytes;
+        var url = def.Url;
 
         try
         {

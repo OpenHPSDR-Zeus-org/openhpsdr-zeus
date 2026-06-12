@@ -22,6 +22,7 @@ import {
   cancelVoyeurInstall,
   getVoyeurInstallStatus,
   getVoyeurModels,
+  generateVoyeurDigest,
   getVoyeurReport,
   getVoyeurStatus,
   getVoyeurTranscription,
@@ -77,6 +78,8 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [asrReady, setAsrReady] = useState<boolean | null>(null);
+  const [digestReady, setDigestReady] = useState(false);
+  const [digestBusy, setDigestBusy] = useState<string | null>(null);
   const [modelDir, setModelDir] = useState<string>('');
   const [showHelp, setShowHelp] = useState(false);
   const [models, setModels] = useState<VoyeurModel[]>([]);
@@ -126,6 +129,7 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
     try {
       const t = await getVoyeurTranscription();
       setAsrReady(t.available);
+      setDigestReady(t.digestAvailable);
       setModelDir(t.modelDir);
     } catch {
       /* ignore */
@@ -284,6 +288,19 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
     if (mode === 'roster' && !reports[id]) void loadReport(id);
   };
 
+  const onGenerateDigest = async (id: string) => {
+    setDigestBusy(id);
+    setError(null);
+    try {
+      const r = await generateVoyeurDigest(id);
+      setReports((m) => ({ ...m, [id]: r }));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDigestBusy(null);
+    }
+  };
+
   const playSegment = (segId: string) => {
     let el = audioRef.current;
     if (!el) {
@@ -349,6 +366,23 @@ export function VoyeurPanel({ onRemove }: PanelComponentProps) {
           <span className="chip mono"><span className="k">confirmed</span><span className="v">{r.confirmedStations}</span></span>
           <span className="chip mono"><span className="k">overs</span><span className="v">{r.session.segmentCount}</span></span>
           <span className="chip mono"><span className="k">cap</span><span className="v">{fmtDur(r.session.capturedSeconds)}</span></span>
+        </div>
+        <div className="voyeur-digestbar">
+          <span className="voyeur-digestbar__label">Digest</span>
+          {digestReady ? (
+            <button
+              type="button"
+              className="btn sm accent"
+              disabled={digestBusy === id}
+              onClick={() => onGenerateDigest(id)}
+            >
+              {digestBusy === id ? 'Summarizing…' : r.digest ? 'Regenerate' : 'Generate'}
+            </button>
+          ) : (
+            <span className="voyeur-digestbar__hint">
+              install the digest model in “How to set up & use” to enable
+            </span>
+          )}
         </div>
         {r.digest && <div className="voyeur-digest">{r.digest}</div>}
         {r.roster.length === 0 && (
