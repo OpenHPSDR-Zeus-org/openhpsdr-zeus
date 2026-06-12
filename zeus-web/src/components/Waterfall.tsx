@@ -49,7 +49,6 @@ import { planForFrame } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
-import { useConnectionStore } from '../state/connection-store';
 import * as viewCenter from '../state/view-center';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
@@ -61,13 +60,6 @@ import { WfDbScale } from './WfDbScale';
 // retunes stay synchronised with the panadapter's offset.
 // TODO(phase-3.1): expose as a UI setting.
 const WF_PUSH_EVERY_N = 2;
-// During the post-retune refill hold, fresh rows are partly computed from
-// pre-retune IQ and would smear old-frequency energy across the new axis —
-// suppress them. BUT a sustained drag restarts the hold forever, and a
-// frozen waterfall reads as broken; cap the withhold so at most this much
-// time passes between rows (rows-only cap — the pan trace stays clean and
-// frozen until the gesture pauses; adversary #3, issue #597).
-const WF_ROW_MAX_WITHHOLD_MS = 200;
 
 type WaterfallProps = {
   /** When true, noise floor fades to transparent so the QRZ-mode map shows through. */
@@ -173,7 +165,6 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
 
-    let lastRowUploadAtMs = 0;
     const unsub = useDisplayStore.subscribe((state) => {
       if (state.lastSeq === lastSeqDrawn) return;
       lastSeqDrawn = state.lastSeq;
@@ -192,22 +183,9 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       if (wfDb) {
         tickCounter++;
         skipRowUpload = tickCounter % WF_PUSH_EVERY_N !== 0;
-        if (!skipRowUpload) {
-          // Refill hold: rows computed mid-retune carry old-frequency
-          // energy. Withhold them — but never longer than the cap, so a
-          // continuous drag keeps a (mildly smeared) waterfall flowing.
-          const holdMs = viewCenter.refillHoldMsForSampleRate(
-            useConnectionStore.getState().sampleRate,
-          );
-          const nowMs = performance.now();
-          if (
-            viewCenter.isWithinRefillHold(holdMs) &&
-            nowMs - lastRowUploadAtMs < WF_ROW_MAX_WITHHOLD_MS
-          ) {
-            skipRowUpload = true;
-          }
-          if (!skipRowUpload) lastRowUploadAtMs = nowMs;
-        }
+        // No refill hold here any more (issue #597 Phase 2): rows are
+        // stamped with the LO their data was captured at, so the shared
+        // shift planner places them correctly even mid-retune.
         // Feed the auto-range tracker — it's a no-op when AUTO is off.
         useDisplaySettingsStore.getState().updateAutoRange(wfDb);
       }

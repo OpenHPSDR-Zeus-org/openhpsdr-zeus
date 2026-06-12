@@ -48,7 +48,6 @@ import { planForFrame } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
-import { useConnectionStore } from '../state/connection-store';
 import * as viewCenter from '../state/view-center';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
@@ -200,18 +199,12 @@ export function Panadapter() {
         // band buttons, typed entry, mode changes) and glides there — which
         // also arms the refill hold via the target-change stamp.
         viewCenter.reconcileFrame(frameCenter, state.hzPerPixel);
-        // Adopt fresh trace content only once the analyzer has refilled with
-        // post-retune IQ. Inside the hold the previous anchor keeps gliding
-        // at its own (correct) frequency — old signals never get redrawn at
-        // the new axis, which was the snap-back half of the judder.
-        const holdMs = viewCenter.refillHoldMsForSampleRate(
-          useConnectionStore.getState().sampleRate,
-        );
-        if (
-          state.panValid &&
-          state.panDb &&
-          !viewCenter.isWithinRefillHold(holdMs)
-        ) {
+        // Adoption is unconditional (issue #597 Phase 2): the backend now
+        // stamps CenterHz with the LO the pixels were actually computed at
+        // (delay-compensated LO-history lookup), so mid-retune frames are
+        // self-describing — the anchor model draws them where their data
+        // belongs and the old refill-hold heuristic is unnecessary.
+        if (state.panValid && state.panDb) {
           anchorPan = state.panDb;
           anchorCenterHz = frameCenter;
           anchorHzPerPixel = state.hzPerPixel;
