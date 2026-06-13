@@ -966,11 +966,20 @@ jobs:
 
       - name: Create Release Notes
         run: |
-          cat > release-notes.md << 'EOF'
-          # Openhpsdr Zeus v${{ steps.version.outputs.version }}
-
-          Cross-platform SDR client for OpenHPSDR Protocol-1 and Protocol-2 radios.
-
+          # Lead the release body with THIS version's What's New — the top
+          # section of CHANGELOG.md (from the first '## [' to the next) — so the
+          # changelog sits above the installer tables and the GitHub-appended
+          # asset list (project release-notes convention).
+          awk '/^## \[/{c++} c==2{exit} c{print}' CHANGELOG.md > whats-new.md
+          {
+            echo "# Openhpsdr Zeus v${{ steps.version.outputs.version }}"
+            echo ""
+            echo "Cross-platform SDR client for OpenHPSDR Protocol-1 and Protocol-2 radios."
+            echo ""
+            cat whats-new.md
+            echo ""
+          } > release-notes.md
+          cat >> release-notes.md << 'EOF'
           One binary, three launch modes:
 
           - **Headless service** (no flag, default) — LAN-bound HTTP/HTTPS server on
@@ -1048,10 +1057,6 @@ jobs:
             Desktop/Photino mode requires `libwebkit2gtk-4.1-0`.
             See `docs/lessons/raspberry-pi-deployment.md` for the full setup guide.
 
-          ## Changes
-
-          See the [full changelog](https://github.com/Kb2uka/openhpsdr-zeus/compare/...v${{ steps.version.outputs.version }}) for details.
-
           ## License
 
           GNU GPL v2 or later. See [LICENSE](https://github.com/Kb2uka/openhpsdr-zeus/blob/main/LICENSE) for details.
@@ -1074,7 +1079,6 @@ jobs:
             release-artifacts/linux-tarball/*
             release-artifacts/linux-appimage/*
             release-artifacts/linux-arm64-tarball/*
-            release-artifacts/linux-arm64-appimage/*
             release-artifacts/macos-arm64-dmg/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -1220,5 +1224,4 @@ jobs:
             release-artifacts/linux-tarball/* \
             release-artifacts/linux-appimage/* \
             release-artifacts/linux-arm64-tarball/* \
-            release-artifacts/linux-arm64-appimage/* \
             release-artifacts/macos-arm64-dmg/*
