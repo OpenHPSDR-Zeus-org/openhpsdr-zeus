@@ -18,5 +18,5 @@ public static class AbiVersion
     /// change (default-interface methods, new optional manifest fields).
     /// Bump major in lockstep with <see cref="Current"/>.
     /// </summary>
-    public const string SdkVersion = "1.0.0";
+    public const string SdkVersion = "1.1.0";
 }

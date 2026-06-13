@@ -6,13 +6,14 @@ namespace Zeus.Plugins.Contracts.Audio;
 /// </summary>
 public readonly ref struct AudioBlockContext
 {
-    public AudioBlockContext(int sampleRate, int channels, int frames, long sampleTime, bool mox)
+    public AudioBlockContext(int sampleRate, int channels, int frames, long sampleTime, bool mox, int receiver = 0)
     {
         SampleRate = sampleRate;
         Channels = channels;
         Frames = frames;
         SampleTime = sampleTime;
         Mox = mox;
+        Receiver = receiver;
     }
 
     public int SampleRate { get; }
@@ -33,6 +34,16 @@ public readonly ref struct AudioBlockContext
     /// of assuming every Process call is on-air.
     /// </summary>
     public bool Mox { get; }
+
+    /// <summary>
+    /// Zero-based hardware receiver index this block came from: 0 = main RX,
+    /// 1+ = SubRX / diversity / additional DDCs. Lets an <see
+    /// cref="Extensions.IRxAudioTapPlugin"/> filter to a single receiver — a
+    /// net monitor that only wants the main RX drops blocks where
+    /// <c>Receiver != 0</c>, exactly as in-core RX consumers do. Meaningful
+    /// only on the RX path; always 0 on TX mic/air blocks (no receiver).
+    /// </summary>
+    public int Receiver { get; }
 }
 
 /// <summary>
