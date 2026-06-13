@@ -341,3 +341,68 @@ jobs:
           # Directory upload (not a single file) so the bundled FFTW .so.3
           # files in the x64 build land in the artifact alongside libwdsp.so.
           path: Zeus.Dsp/runtimes/linux-${{ matrix.arch }}/native/
+
+  # ---------- zeus-vst-bridge (in-process VST3 host) ------------------
+  #
+  # The bridge hosts VST3 plugins via Steinberg's MIT-licensed vst3sdk,
+  # vendored as a submodule under native/zeus-vst-bridge/third_party/.
+  # Unlike wdsp/miniaudio it has no FFTW / vcpkg dependency, so a plain
+  # checkout + submodule init + cmake is enough on every platform. The
+  # staged binary lands in Zeus.Plugins.Host/runtimes/<rid>/native/ to
+  # match the runtimes packaging in Zeus.Plugins.Host.csproj. Download
+  # the per-platform artifact from the run summary and commit it, same
+  # as the wdsp/miniaudio flow above.
+  build-vst-bridge:
+    name: Build VST3 Bridge (${{ matrix.rid }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            rid: win-x64
+          - os: ubuntu-22.04
+            rid: linux-x64
+          - os: macos-14
+            rid: osx-arm64
+    steps:
+      - uses: actions/checkout@v4
+
+      # vst3sdk has nested submodules; only the hosting subset is needed
+      # (base / pluginterfaces / public.sdk / cmake) — skip the heavy
+      # vstgui4 / doc / tutorials modules to keep the checkout small.
+      - name: Init vst3sdk submodule (hosting subset)
+        shell: bash
+        run: |
+          git submodule update --init native/zeus-vst-bridge/third_party/vst3sdk
+          git -C native/zeus-vst-bridge/third_party/vst3sdk \
+            submodule update --init base pluginterfaces public.sdk cmake
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -S native/zeus-vst-bridge -B native/zeus-vst-bridge/build -G "Visual Studio 17 2022" -A x64
+
+      - name: Configure CMake (Unix)
+        if: runner.os != 'Windows'
+        run: cmake -S native/zeus-vst-bridge -B native/zeus-vst-bridge/build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build native/zeus-vst-bridge/build --config Release --parallel
+
+      - name: Stage bridge binary
+        shell: bash
+        run: |
+          dest="Zeus.Plugins.Host/runtimes/${{ matrix.rid }}/native"
+          mkdir -p "$dest"
+          case "${{ matrix.rid }}" in
+            win-x64)   cp native/zeus-vst-bridge/build/Release/zeus-vst-bridge.dll "$dest/zeus-vst-bridge.dll" ;;
+            linux-x64) cp native/zeus-vst-bridge/build/libzeus-vst-bridge.so       "$dest/libzeus-vst-bridge.so" ;;
+            osx-arm64) cp native/zeus-vst-bridge/build/libzeus-vst-bridge.dylib    "$dest/libzeus-vst-bridge.dylib" ;;
+          esac
+          ls -la "$dest"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeus-vst-bridge-${{ matrix.rid }}
+          path: Zeus.Plugins.Host/runtimes/${{ matrix.rid }}/native/

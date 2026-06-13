@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Reflection.PortableExecutable;
 using System.Text.Json;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
@@ -57,6 +58,24 @@ internal sealed class RoslynFixture : IDisposable
         static bool IsSharedFramework(string p)
             => p.Contains($"{Path.DirectorySeparatorChar}shared{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase);
 
+        // True only for managed assemblies. Native DLLs that share the
+        // output dir — the zeus-vst-bridge.dll that CopyVstBridgeDylib
+        // stages once the native bridge is built — have no CLI metadata.
+        // MetadataReference.CreateFromFile succeeds lazily on them, so the
+        // failure would otherwise surface much later as CS0009
+        // ("PE image doesn't contain managed metadata") at Emit time and
+        // break every fixture-compiling test. Filter them out up front.
+        static bool HasManagedMetadata(string p)
+        {
+            try
+            {
+                using var fs = File.OpenRead(p);
+                using var pe = new PEReader(fs);
+                return pe.HasMetadata;
+            }
+            catch { return false; }
+        }
+
         void Consider(string dllPath)
         {
             if (string.IsNullOrEmpty(dllPath) || !File.Exists(dllPath)) return;
@@ -72,6 +91,7 @@ internal sealed class RoslynFixture : IDisposable
                 if (existingIsShared || !thisIsShared) return;
                 // current is shared, existing isn't — overwrite.
             }
+            if (!HasManagedMetadata(dllPath)) return;
             try { byName[key] = MetadataReference.CreateFromFile(dllPath); }
             catch { /* non-managed dll, skip */ }
         }

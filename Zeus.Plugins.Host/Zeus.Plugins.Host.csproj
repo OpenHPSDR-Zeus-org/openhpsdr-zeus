@@ -23,4 +23,28 @@
     <InternalsVisibleTo Include="Zeus.Plugins.Host.Tests" />
   </ItemGroup>
 
+  <!-- Ship the native VST3 host bridge (zeus-vst-bridge) next to the host
+       executable so VstBridgeNative's P/Invoke resolves it at runtime.
+       Mirrors the runtimes/<rid>/native packaging Zeus.Dsp uses for
+       wdsp / miniaudio. The per-platform binaries are produced by the
+       CMake build under native/zeus-vst-bridge/ and staged here by the
+       build-native-libs workflow (committed to the tree like the other
+       native libs). When a binary for the current RID is absent the audio
+       chain simply never loads a VST — VstHostAudioPlugin throws at init
+       and the bridge stays idle. -->
+  <ItemGroup>
+    <None Include="runtimes/**/*.dll" Pack="true" PackagePath="runtimes/">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>runtimes/%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </None>
+    <None Include="runtimes/**/*.so*" Pack="true" PackagePath="runtimes/">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>runtimes/%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </None>
+    <None Include="runtimes/**/*.dylib" Pack="true" PackagePath="runtimes/">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>runtimes/%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </None>
+  </ItemGroup>
+
 </Project>
