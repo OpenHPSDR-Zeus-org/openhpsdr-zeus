@@ -29,6 +29,11 @@ public sealed class CwSettingsStore : IDisposable
     public const int DefaultWpm = 22;
     public const double DefaultSidetoneGainDb = -10.0;
     public const int DefaultSidetoneHz = 600;
+    /// <summary>Default-safe keyer mode. Straight means the HL2 gateware
+    /// passes the key line through directly and ignores keyer speed — a
+    /// straight/bug key is never mis-keyed as a paddle. Iambic is opt-in
+    /// (see [[zeus-bks]]).</summary>
+    public const CwKeyerMode DefaultKeyerMode = CwKeyerMode.Straight;
     /// <summary>Hard cap on the total number of macros — keeps the UI
     /// list manageable and bounds the broadcast frame size. Operators can
     /// add up to this many slots; <see cref="DefaultMacros"/> seeds the
@@ -68,14 +73,16 @@ public sealed class CwSettingsStore : IDisposable
                     FarnsworthWpm: null,
                     Macros: (string[])DefaultMacros.Clone(),
                     SidetoneGainDb: DefaultSidetoneGainDb,
-                    SidetoneHz: DefaultSidetoneHz);
+                    SidetoneHz: DefaultSidetoneHz,
+                    KeyerMode: DefaultKeyerMode);
 
             return new CwSettingsDto(
                 Wpm: e.Wpm,
                 FarnsworthWpm: e.FarnsworthWpm,
                 Macros: SanitizeStored(e.Macros),
                 SidetoneGainDb: e.SidetoneGainDb,
-                SidetoneHz: e.SidetoneHz);
+                SidetoneHz: e.SidetoneHz,
+                KeyerMode: e.KeyerMode);
         }
     }
 
@@ -113,6 +120,10 @@ public sealed class CwSettingsStore : IDisposable
                 // CW pitch operator preference range. Below 200 is sub-bass
                 // and below the WDSP RX bandpass; above 1200 is uncomfortable.
                 entry.SidetoneHz = Math.Clamp(hz, 200, 1200);
+            if (req.KeyerMode is CwKeyerMode km)
+                // Reject out-of-range enum bytes (defensive — only 0/1/2 are
+                // valid gateware modes); fall back to the safe default.
+                entry.KeyerMode = Enum.IsDefined(km) ? km : DefaultKeyerMode;
 
             entry.UpdatedUtc = DateTime.UtcNow;
             if (existing is null) _docs.Insert(entry);
@@ -123,7 +134,8 @@ public sealed class CwSettingsStore : IDisposable
                 FarnsworthWpm: entry.FarnsworthWpm,
                 Macros: SanitizeStored(entry.Macros),
                 SidetoneGainDb: entry.SidetoneGainDb,
-                SidetoneHz: entry.SidetoneHz);
+                SidetoneHz: entry.SidetoneHz,
+                KeyerMode: entry.KeyerMode);
         }
     }
 
@@ -136,6 +148,7 @@ public sealed class CwSettingsStore : IDisposable
         Macros = (string[])DefaultMacros.Clone(),
         SidetoneGainDb = DefaultSidetoneGainDb,
         SidetoneHz = DefaultSidetoneHz,
+        KeyerMode = DefaultKeyerMode,
     };
 
     /// <summary>Normalise a persisted Macros array on read. LiteDB
@@ -177,5 +190,6 @@ public sealed class CwSettingsEntry
     public string[] Macros { get; set; } = (string[])CwSettingsStore.DefaultMacros.Clone();
     public double SidetoneGainDb { get; set; } = CwSettingsStore.DefaultSidetoneGainDb;
     public int SidetoneHz { get; set; } = CwSettingsStore.DefaultSidetoneHz;
+    public CwKeyerMode KeyerMode { get; set; } = CwSettingsStore.DefaultKeyerMode;
     public DateTime UpdatedUtc { get; set; }
 }

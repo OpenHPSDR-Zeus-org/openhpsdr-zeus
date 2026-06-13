@@ -60,7 +60,7 @@ public class DspPipelineService : BackgroundService,
 {
     private const int Width = 2048;
     private const int SyntheticSampleRateHz = 192_000;
-    private const int AudioOutputRateHz = 48_000;
+    public const int AudioOutputRateHz = 48_000;
     private const int AudioDrainCapacity = 2048;
     private static readonly TimeSpan TickPeriod = TimeSpan.FromMilliseconds(1000.0 / 30.0);
 
@@ -91,6 +91,88 @@ public class DspPipelineService : BackgroundService,
     /// duration of the synchronous handler — copy if retention is needed.
     /// </summary>
     public event Action<int, int, ReadOnlyMemory<float>>? RxAudioAvailable;
+
+    /// <summary>
+    /// Raised when TX-monitor audio is available — the processed transmit audio
+    /// demodulated back from the TX IQ (post EQ / compressor / leveler / CFC),
+    /// i.e. what actually goes on the air. Only fires while the TX monitor /
+    /// audition path is running. 48 kHz mono float32; args (receiver,
+    /// sampleRateHz, samples). Memory valid only for the synchronous handler.
+    /// </summary>
+    public event Action<int, int, ReadOnlyMemory<float>>? TxMonitorAudioAvailable;
+
+    /// <summary>
+    /// Delegate for the RX audio plugin insert seam (<c>rx.post-demod</c> slot).
+    /// Invoked once per <see cref="Tick"/> over the demodulated 48 kHz mono RX
+    /// audio block, IN PLACE, after the MOX fade ramp and BEFORE the CW
+    /// sidetone is mixed in and the block is published to sinks — so a filter
+    /// shapes the received band audio without touching the locally-generated
+    /// sidetone. The <c>audio</c> span is both input and output.
+    /// </summary>
+    public delegate void RxAudioBlockHandler(Span<float> audio, int frames, int sampleRate);
+
+    // RX audio plugin insert handler. Wired by AudioPluginBridge when an
+    // rx.post-demod audio plugin is attached; null (the default) makes the RX
+    // path bit-identical to before this seam existed — single volatile read in
+    // the Tick hot path, no cost when no RX plugin is loaded. The handler runs
+    // on the DSP pipeline thread and MUST be realtime-disciplined (no alloc /
+    // lock / IO) — AudioChain.Process honours that contract.
+    private volatile RxAudioBlockHandler? _rxAudioPluginHandler;
+
+    /// <summary>Install (or clear, with <c>null</c>) the RX audio plugin
+    /// insert handler. Single volatile write; safe from the control thread.</summary>
+    public void SetRxAudioPluginHandler(RxAudioBlockHandler? handler) => _rxAudioPluginHandler = handler;
+
+    // Local-playback monitor inject (e.g. the Recorder plugin playing a clip
+    // back locally). SPSC ring: producer = plugin playback thread via
+    // EnqueueMonitorAudio, consumer = Tick. Mixed into the RX audio block so a
+    // clip is audible on EVERY sink (browser WS + native) in any host mode —
+    // unlike the desktop-only audition path. Power-of-two capacity for masking.
+    private const int MonitorInjectCapacity = 1 << 14; // 16384 floats (~340 ms @ 48 kHz)
+    private const int MonitorInjectMask = MonitorInjectCapacity - 1;
+    private readonly float[] _monitorInject = new float[MonitorInjectCapacity];
+    private long _monInjW;
+    private long _monInjR;
+
+    /// <summary>
+    /// Enqueue mono float32 samples to be mixed into the local RX audio output
+    /// (the operator's monitor) on the next ticks. Realtime-safe, lock-free.
+    /// Returns <c>false</c> (writing nothing) when the ring can't fit the block
+    /// — the caller should retry rather than drop, so the consumer (RX tick
+    /// clock) paces the producer and the playback stays glitch-free. Used by
+    /// <see cref="Zeus.Plugins.Contracts.Audio.IAudioPlaybackSink.PlayLocal"/>.
+    /// </summary>
+    public bool EnqueueMonitorAudio(ReadOnlySpan<float> samples)
+    {
+        if (samples.Length == 0) return true;
+        long w = _monInjW;
+        long r = Volatile.Read(ref _monInjR);
+        if (MonitorInjectCapacity - (w - r) < samples.Length) return false; // full — caller retries
+        int start = (int)(w & MonitorInjectMask);
+        int first = Math.Min(samples.Length, MonitorInjectCapacity - start);
+        samples[..first].CopyTo(_monitorInject.AsSpan(start, first));
+        if (first < samples.Length)
+            samples[first..].CopyTo(_monitorInject.AsSpan(0, samples.Length - first));
+        Volatile.Write(ref _monInjW, w + samples.Length);
+        return true;
+    }
+
+    /// <summary>Samples still queued in the monitor-inject ring (for a player
+    /// to wait out the tail before declaring playback finished).</summary>
+    public long MonitorBacklog => Volatile.Read(ref _monInjW) - Volatile.Read(ref _monInjR);
+
+    // Mix any queued monitor-inject audio into the RX block (consumer side).
+    private void MixMonitorInject(Span<float> dest)
+    {
+        long w = Volatile.Read(ref _monInjW);
+        long r = _monInjR;
+        long avail = w - r;
+        if (avail <= 0) return;
+        int n = (int)Math.Min(avail, dest.Length);
+        for (int i = 0; i < n; i++)
+            dest[i] += _monitorInject[(int)((r + i) & MonitorInjectMask)];
+        Volatile.Write(ref _monInjR, r + n);
+    }
 
     // _engineLock serialises CONCURRENT WRITERS to _engine / _channelId /
     // _sampleRateHz on the rare connect/disconnect path. After iter5 the
@@ -207,6 +289,49 @@ public class DspPipelineService : BackgroundService,
     // see issue #81. volatile because MoxChanged fires on the caller's thread
     // and Tick reads from the pipeline thread.
     private volatile bool _keyed;
+    // Issue #597 Phase 0: display-EMA fast-attack latch. OnRadioStateChanged
+    // arms it when RadioLoHz moves (the operator is tuning) and Tick restores
+    // the default tau once the LO has been quiet for FastAttackRestoreMs.
+    // Debounced by design: one arm P/Invoke at gesture start, one restore
+    // P/Invoke at gesture end — NOT per wheel notch. Skipped entirely while
+    // _keyed so the TX display path is never touched (PS safety; the engine
+    // method is additionally scoped to the RX analyzer). long.MinValue
+    // sentinel suppresses the arm on the first state callback after connect.
+    // _fastAttackLastLoHz is only touched on the state-handler thread;
+    // _fastAttackLoChangedAt crosses to the RX thread via Interlocked.
+    private long _fastAttackLastLoHz = long.MinValue;
+    private long _fastAttackLoChangedAt;
+    private volatile bool _fastAttackActive;
+    private const int FastAttackRestoreMs = 250;
+    private static readonly long FastAttackRestoreTicks =
+        (long)(FastAttackRestoreMs / 1000.0 * Stopwatch.Frequency);
+    // Issue #597 Phase 2: delay-compensated CenterHz stamp (Thetis pixel_ref
+    // emulation). The display pixels broadcast at tick time were computed
+    // from IQ captured ~D earlier; stamping them with the LO from
+    // LookupAt(now − D) makes frames self-describing — the client renders
+    // data where it actually belongs, killing the mislabeled-frame
+    // snap-back at the root (no wire change: same CenterHz field).
+    // D = ½·FFT-fill + display-EMA lag + per-protocol transport. Override
+    // the transport+EMA constant with ZEUS_CENTER_STAMP_LAG_MS for bench
+    // tuning at 48/96/192/384 kHz on P1 (HL2) and P2 (G2). When the LO is
+    // stable longer than D the stamp equals live RadioLoHz — WWV cal
+    // (#325) and every stable-LO consumer is byte-identical (see
+    // LoHistoryRingTests regression).
+    private readonly LoHistoryRing _loHistory = new();
+    private const int AnalyzerFftSizeForStamp = 16_384; // WdspDspEngine.AnalyzerFftSize
+    private const double CenterStampEmaLagMs = 20.0;    // fast-attack tau during gestures (Phase 0)
+    private const double CenterStampTransportP1Ms = 40.0;
+    private const double CenterStampTransportP2Ms = 15.0;
+    private static readonly double? CenterStampLagOverrideMs = ReadCenterStampLagOverrideMs();
+
+    private static double? ReadCenterStampLagOverrideMs()
+    {
+        var raw = Environment.GetEnvironmentVariable("ZEUS_CENTER_STAMP_LAG_MS");
+        return double.TryParse(raw, System.Globalization.NumberStyles.Float,
+            System.Globalization.CultureInfo.InvariantCulture, out var ms) && ms >= 0
+            ? ms
+            : null;
+    }
     // RX S-meter broadcast throttle. Pipeline ticks at 30 Hz; broadcasting
     // every 6 ticks = 5 Hz gives a smoother meter than Thetis's 4 Hz baseline
     // without spamming the WS (30 Hz dBm readouts add nothing a UI can use).
@@ -278,17 +403,26 @@ public class DspPipelineService : BackgroundService,
     private long _calPanSnapshotMs;
     private readonly object _calPanLock = new();
 
+    // CW sidetone source mixed into the RX audio bus while a CW keying
+    // path (CwEngine macros / cw_msg / raw-key, or ExternalPttService
+    // hardware key in CW mode) holds the keyed state. Optional in DI so
+    // tests that build the pipeline without the CW services don't have
+    // to register a stub. See CwSidetoneSource for the keying contract.
+    private readonly CwSidetoneSource? _sidetone;
+
     public DspPipelineService(
         RadioService radio,
         StreamingHub hub,
         IEnumerable<IRxAudioSink> audioSinks,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        CwSidetoneSource? sidetone = null)
     {
         _radio = radio;
         _hub = hub;
         // Materialise once at construction so the per-tick fan-out is an
         // array-index loop (no enumerator allocation, no LINQ on the hot path).
         _audioSinks = audioSinks.ToArray();
+        _sidetone = sidetone;
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<DspPipelineService>();
     }
@@ -407,6 +541,31 @@ public class DspPipelineService : BackgroundService,
     /// and tests don't exercise it.</summary>
     public Zeus.Protocol2.Protocol2Client? CurrentP2Client => _p2Client;
 
+    /// <summary>
+    /// Manually set the PS TX feedback attenuation (operator alternative to
+    /// AutoAttenuate). Pushes the value to the connected radio — HL2 via the
+    /// AD9866 TX-PGA step, every other board via the P2 step attenuator — then
+    /// persists it per board and surfaces it in state via RadioService. This
+    /// is what lets an operator on a fixed external-tap chain dial the
+    /// feedback into calcc's range once and run with AutoAttenuate off.
+    /// Clamped to the connected board's range.
+    /// </summary>
+    public void SetPsFeedbackAttenuationDb(int db)
+    {
+        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2)
+        {
+            int clamped = Math.Clamp(db, -28, 31);
+            _radio.ActiveClient?.SetHl2TxStepAttenuationDb(clamped);
+            _radio.SetPsTxAttenuationDb(clamped);
+        }
+        else
+        {
+            int clamped = Math.Clamp(db, 0, 31);
+            _p2Client?.SetTxAttenuationDb((byte)clamped);
+            _radio.SetPsTxAttenuationDb(clamped);
+        }
+    }
+
     private void OpenSynthetic()
     {
         var engine = new SyntheticDspEngine();
@@ -474,6 +633,16 @@ public class DspPipelineService : BackgroundService,
         // is per-board (HL2 → 0.233, others → 0.4072) and only fires a
         // StateChanged when the value actually changes.
         _radio.ApplyPsHwPeakForConnection(isProtocol2: false, _radio.ConnectedBoardKind);
+        // Restore the persisted PS feedback attenuation so a hot external-tap
+        // chain isn't sitting at 0 dB on a fresh connect — at 0 dB the
+        // feedback ADC rails and calcc can never fit. HL2 only on the P1 side
+        // (it owns the AD9866 TX-PGA step attenuator). No-op when nothing was
+        // saved for this board yet.
+        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2
+            && _radio.GetPersistedPsTxAttnDb() is int hl2Attn)
+        {
+            _radio.ActiveClient?.SetHl2TxStepAttenuationDb(hl2Attn);
+        }
     }
 
     private void OnRadioDisconnected()
@@ -518,6 +687,28 @@ public class DspPipelineService : BackgroundService,
         // RadioService.SetRadioLo). See docs/prd/panfall_behavior.md.
         var p2 = _p2Client;
         p2?.SetVfoAHz(s.RadioLoHz);
+
+        // Issue #597 Phase 0: arm the RX display fast-attack when the LO
+        // moves. First callback after construction only records the LO
+        // (sentinel) so connect itself doesn't trigger a pointless arm.
+        if (_fastAttackLastLoHz == long.MinValue)
+        {
+            _fastAttackLastLoHz = s.RadioLoHz;
+        }
+        else if (s.RadioLoHz != _fastAttackLastLoHz)
+        {
+            _fastAttackLastLoHz = s.RadioLoHz;
+            long nowTicks = Stopwatch.GetTimestamp();
+            // Issue #597 Phase 2: the LO history feeding the delay-compensated
+            // CenterHz stamp. O(1) append, LO changes only.
+            _loHistory.Append(nowTicks, s.RadioLoHz);
+            Interlocked.Exchange(ref _fastAttackLoChangedAt, nowTicks);
+            if (!_keyed && !_fastAttackActive)
+            {
+                Volatile.Read(ref _engine)?.SetRxDisplayFastAttack(Volatile.Read(ref _channelId), fast: true);
+                _fastAttackActive = true;
+            }
+        }
 
         // iter5 pass-2: lock-free engine pointer read. The lock previously
         // here only provided pointer atomicity (the engine.* calls below
@@ -702,7 +893,18 @@ public class DspPipelineService : BackgroundService,
             // flag locally and the C0=0x14 wire byte is unaffected
             // (board-gated in WriteAttenuatorPayload).
             var p1Active = _radio.ActiveClient;
-            if (s.PsEnabled)
+            if (s.PsEnabled && _keyed)
+            {
+                // Defer the ARM while transmitting. Arming mid-MOX fires
+                // calcc's SetPSControl(reset) into a live fit, which races the
+                // feedback stream and wedges calcc in LCALC on a stale curve
+                // (the mid-TX arm/disarm wedge — frozen info5, cor=1 but never
+                // updating → splatter). Re-arming mid-over isn't a real need;
+                // leaving _appliedPsEnabled stale here makes the
+                // OnRadioMoxChanged falling-edge re-apply arm it cleanly on
+                // key-up. Disarm (abort) below stays immediate.
+            }
+            else if (s.PsEnabled)
             {
                 _p2Client?.SetPsFeedbackEnabled(true);
                 p1Active?.SetPsEnabled(true);
@@ -734,7 +936,11 @@ public class DspPipelineService : BackgroundService,
                 p1Active?.SetPsEnabled(false);
                 DrainPsFeedback();
             }
-            _appliedPsEnabled = s.PsEnabled;
+            // Mark applied only when we actually armed or disarmed. A deferred
+            // (keyed) arm leaves _appliedPsEnabled stale on purpose so the
+            // MOX-off re-apply re-enters this block and arms.
+            if (!(s.PsEnabled && _keyed))
+                _appliedPsEnabled = s.PsEnabled;
         }
         if (resync || s.PsFeedbackSource != _appliedPsFeedbackSource)
         {
@@ -1074,6 +1280,15 @@ public class DspPipelineService : BackgroundService,
         // caller plumbed it through (issue #171); falls back to OrionMkII when
         // the byte wasn't supplied.
         _radio.ApplyPsHwPeakForConnection(isProtocol2: true, _radio.ConnectedBoardKind);
+        // Restore the persisted PS feedback attenuation (0..31 dB) before the
+        // operator arms PS, so a hot external-tap chain (e.g. RF2K-S −55 dB
+        // coupler) doesn't boot at 0 dB and rail the feedback ADC — the
+        // saturation that left calcc unable to fit on a fresh connect. No-op
+        // when nothing was saved for this board yet.
+        if (_radio.GetPersistedPsTxAttnDb() is int txAttn)
+        {
+            CurrentP2Client?.SetTxAttenuationDb((byte)Math.Clamp(txAttn, 0, 31));
+        }
         // Push current PA snapshot into the brand-new client so byte 345 /
         // byte 1401 / CmdGeneral[58] reflect PaSettingsStore from frame 1.
         _radio.ReplayPaSnapshot();
@@ -1464,6 +1679,18 @@ public class DspPipelineService : BackgroundService,
         // real-radio data, so suppressing it unconditionally is correct.
         if (engine is SyntheticDspEngine) return;
 
+        // Issue #597 Phase 0: restore the default display tau once the LO has
+        // been quiet for FastAttackRestoreMs. Runs on the RX/pipeline thread;
+        // the engine call is idempotent and channel-guarded, so a race with a
+        // simultaneous re-arm on the state thread is harmless (the re-arm
+        // refreshes _fastAttackLoChangedAt and the restore simply fires later).
+        if (_fastAttackActive &&
+            Stopwatch.GetTimestamp() - Interlocked.Read(ref _fastAttackLoChangedAt) >= FastAttackRestoreTicks)
+        {
+            engine.SetRxDisplayFastAttack(channel, fast: false);
+            _fastAttackActive = false;
+        }
+
         engine.SetVfoHz(channel, state.VfoHz);
 
         // perf3 iter4: skip the entire display pipeline when no client is
@@ -1557,12 +1784,24 @@ public class DspPipelineService : BackgroundService,
             // extra contract field needed, per task #7 scope note.
             int zoomLevel = Math.Max(1, state.ZoomLevel);
             float hzPerPixel = (float)((double)sampleRate / zoomLevel / Width);
-            // Panadapter centre = the radio's actual NCO. The hardware is
-            // always frozen at RadioLoHz while the dial roams, so the
-            // pan/waterfall stay anchored to RadioLoHz and don't slide under
-            // the operator when only VfoHz moves.
-            // See docs/prd/panfall_behavior.md.
-            long centerHz = state.RadioLoHz;
+            // Panadapter centre: the LO the pixels were actually computed
+            // at (issue #597 Phase 2). The analyzer output broadcast this
+            // tick reflects IQ captured ~stampLag earlier; LookupAt rewinds
+            // the LO history by that much so mid-retune frames carry the
+            // frequency their data belongs to instead of the live NCO.
+            // Stable LO (≥ stampLag with no tune) ⇒ identical to the old
+            // `state.RadioLoHz` stamp, byte for byte.
+            double fftFillMs = sampleRate > 0
+                ? AnalyzerFftSizeForStamp / (double)sampleRate * 1000.0
+                : 0.0;
+            double stampLagMs = 0.5 * fftFillMs
+                + (CenterStampLagOverrideMs
+                   ?? (CenterStampEmaLagMs
+                       + (_p2Client is not null ? CenterStampTransportP2Ms : CenterStampTransportP1Ms)));
+            long stampLagTicks = (long)(stampLagMs / 1000.0 * Stopwatch.Frequency);
+            long centerHz = _loHistory.LookupAt(
+                Stopwatch.GetTimestamp() - stampLagTicks,
+                fallbackLoHz: state.RadioLoHz);
 
             // Cache for the frequency-calibration service (issue #325). The
             // cal reads from this cache to avoid racing for WDSP's "fresh
@@ -1646,19 +1885,39 @@ public class DspPipelineService : BackgroundService,
                 _rxFadeInPending = false;
             }
 
-            // VST plugin host is TX-only by design (operator decision
-            // 2026-04-30). The chain is configured for the TX bandwidth,
-            // tuned for voice processing, and shares one set of plugin
-            // instances with the TX seam — routing RX through it would
-            // (a) apply TX-tuned effects to band audio (sounds wrong),
-            // (b) inherit IIR state from the most recent TX block, and
-            // (c) waste CPU on RX when the operator only wants chain
-            // processing on transmit. The RX-side seam method on
-            // IDspEngine remains in place for any future "RX insert"
-            // feature, but the audio pipeline does not call it.
+            // The TX voice-processing audio chain (Compressor/EQ/VST etc.)
+            // stays TX-only by design (operator decision 2026-04-30) — those
+            // plugins are tuned for the mic path and share TXA-side instances.
+            // RX audio plugins are a SEPARATE chain, declared by the
+            // rx.post-demod manifest slot, wired through _rxAudioPluginHandler
+            // below. The two never share plugin instances or IIR state.
 
             if (!txMonitorOn)
             {
+                // RX audio plugin insert (rx.post-demod slot, e.g. a CW SCAF
+                // audio filter). Runs in place over the demodulated band audio
+                // AFTER the MOX fade and BEFORE the sidetone mix, so the filter
+                // shapes received audio without distorting the clean local
+                // sidetone. Null handler (no RX plugin attached) is the common
+                // case and a no-op — the RX path stays bit-identical.
+                var rxAudioHandler = _rxAudioPluginHandler;
+                if (rxAudioHandler is not null && audioSampleCount > 0)
+                    rxAudioHandler(audioBuf.AsSpan(0, audioSampleCount), audioSampleCount, AudioOutputRateHz);
+
+                // CW sidetone is mixed (+=) into the RX block so every
+                // downstream sink — browser WS, native audio, TCI audio
+                // stream — hears it on the same bus as band RX. The MOX
+                // fade above silences the RXA contribution while keying;
+                // when the sidetone source is idle, RenderInto returns
+                // false immediately without touching the buffer.
+                _sidetone?.RenderInto(audioBuf.AsSpan(0, audioSampleCount));
+
+                // Mix any queued local-playback monitor audio (e.g. the Recorder
+                // plugin playing a clip back while not transmitting) into the RX
+                // block, so it reaches every sink in browser and desktop modes
+                // alike. No-op (one volatile read) when nothing is queued.
+                MixMonitorInject(audioBuf.AsSpan(0, audioSampleCount));
+
                 var audioFrame = new AudioFrame(
                     Seq: ++_audioSeq,
                     TsUnixMs: nowMs,
@@ -1691,6 +1950,10 @@ public class DspPipelineService : BackgroundService,
                     SampleCount: (ushort)monCount,
                     Samples: new ReadOnlyMemory<float>(audioBuf, 0, monCount));
                 PublishAudio(in monFrame);
+                // TX-air tap source: the processed transmit audio (what goes on
+                // the air). Read-only fan-out to IRxAudioTapPlugin/ITxAudioTapPlugin
+                // taps; null subscriber list = no cost.
+                TxMonitorAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, monCount));
             }
         }
 

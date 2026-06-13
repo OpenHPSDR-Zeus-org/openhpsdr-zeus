@@ -47,6 +47,7 @@ using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using Microsoft.Extensions.Logging;
+using Zeus.Protocol2;
 
 namespace Zeus.Protocol2.Discovery;
 
@@ -79,6 +80,7 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
         {
             EnableBroadcast = true,
         };
+        Protocol2Client.DisableUdpConnReset(socket);
         socket.Bind(new IPEndPoint(IPAddress.Any, 0));
 
         var packet = BuildDiscoveryPacket();
@@ -107,6 +109,12 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
                 catch (OperationCanceledException)
                 {
                     break;
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    // Windows WSAECONNRESET (10054): stray ICMP port-unreachable.
+                    // Keep collecting replies until the timeout fires.
+                    continue;
                 }
                 catch (SocketException ex)
                 {

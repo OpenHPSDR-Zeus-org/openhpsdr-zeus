@@ -124,6 +124,127 @@ public static class ZeusEndpoints
             return Results.BadRequest(new { error = err });
         });
 
+        // WAV recorder / player. Records RX or processed-TX audio to float32
+        // WAVs in the Downloads folder, and plays recordings back to the local
+        // monitor (no keying). Over-the-air playback is a later layer.
+        app.MapGet("/api/wav/status", (Zeus.Server.Wav.WavRecorderService wav) =>
+            Results.Ok(wav.GetStatus()));
+        app.MapGet("/api/wav/list", (Zeus.Server.Wav.WavRecorderService wav) =>
+            Results.Ok(new { dir = wav.RecordingsDir, recordings = wav.ListRecordings() }));
+        app.MapPost("/api/wav/record/start",
+            (WavRecordStartRequest body, Zeus.Server.Wav.WavRecorderService wav) =>
+        {
+            var source = string.Equals(body?.Source, "tx", StringComparison.OrdinalIgnoreCase)
+                ? Zeus.Server.Wav.WavRecordSource.Tx
+                : Zeus.Server.Wav.WavRecordSource.Rx;
+            try { return Results.Ok(new { file = wav.StartRecording(source) }); }
+            catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+        });
+        app.MapPost("/api/wav/record/stop", (Zeus.Server.Wav.WavRecorderService wav) =>
+        {
+            var r = wav.StopRecording();
+            return r is { } x
+                ? Results.Ok(new { file = Path.GetFileName(x.Path), samples = x.Samples })
+                : Results.Ok(new { file = (string?)null, samples = 0L });
+        });
+        app.MapPost("/api/wav/play",
+            (WavPlayRequest body, Zeus.Server.Wav.WavRecorderService wav) =>
+        {
+            if (string.IsNullOrWhiteSpace(body?.File))
+                return Results.BadRequest(new { error = "file is required" });
+            try { wav.Play(body.File); return Results.Ok(wav.GetStatus()); }
+            catch (FileNotFoundException) { return Results.NotFound(new { error = "recording not found" }); }
+            catch (InvalidOperationException ex) { return Results.Conflict(new { error = ex.Message }); }
+        });
+        app.MapPost("/api/wav/stop", (Zeus.Server.Wav.WavRecorderService wav) =>
+        {
+            wav.StopPlayback();
+            return Results.Ok(wav.GetStatus());
+        });
+        app.MapDelete("/api/wav/{file}", (string file, Zeus.Server.Wav.WavRecorderService wav) =>
+        {
+            try { wav.DeleteRecording(file); return Results.Ok(new { deleted = file }); }
+            catch (FileNotFoundException) { return Results.NotFound(new { error = "recording not found" }); }
+        });
+
+        // ---- Voyeur Mode (zeus-la5) — unattended net monitor + log mgmt ----
+        app.MapGet("/api/voyeur/status", (VoyeurMonitorService v) => Results.Ok(v.Status()));
+        // Transcription readiness + setup hint for the panel (Phase 2).
+        app.MapGet("/api/voyeur/transcription",
+            (Zeus.Server.Voyeur.WhisperTranscriber w, Zeus.Server.Voyeur.LlamaSummarizer l) =>
+            Results.Ok(new
+            {
+                available = w.Available,
+                modelDir = Zeus.Server.Voyeur.WhisperTranscriber.ModelDir,
+                digestAvailable = l.Available,
+            }));
+        // In-app, terminal-free transcription setup (cross-platform model download).
+        app.MapGet("/api/voyeur/install/models", () =>
+            Results.Ok(Zeus.Server.Voyeur.VoyeurInstallService.AvailableModels));
+        app.MapGet("/api/voyeur/install/status", (Zeus.Server.Voyeur.VoyeurInstallService i) =>
+            Results.Ok(i.Status()));
+        app.MapPost("/api/voyeur/install/model", (VoyeurInstallRequest body, Zeus.Server.Voyeur.VoyeurInstallService i) =>
+            Results.Ok(i.InstallModel(body?.Model ?? "small.en")));
+        app.MapPost("/api/voyeur/install/cancel", (Zeus.Server.Voyeur.VoyeurInstallService i) =>
+        {
+            i.Cancel();
+            return Results.Ok(i.Status());
+        });
+        app.MapPost("/api/voyeur/start", (VoyeurStartRequest? body, VoyeurMonitorService v) =>
+            Results.Ok(v.Start(keepAudio: body?.KeepAudio ?? true)));
+        app.MapPost("/api/voyeur/stop", (VoyeurMonitorService v) => Results.Ok(v.Stop()));
+        app.MapGet("/api/voyeur/sessions", (Zeus.Server.Voyeur.VoyeurStore store) =>
+            Results.Ok(store.ListSessions()));
+        app.MapGet("/api/voyeur/sessions/{id}", (string id, Zeus.Server.Voyeur.VoyeurStore store) =>
+        {
+            var d = store.GetSession(id);
+            return d is null ? Results.NotFound(new { error = "session not found" }) : Results.Ok(d);
+        });
+        // Rename and/or pin ("save") a log so retention never prunes it.
+        app.MapPatch("/api/voyeur/sessions/{id}",
+            (string id, Zeus.Server.Voyeur.VoyeurUpdateRequest body, Zeus.Server.Voyeur.VoyeurStore store) =>
+        {
+            var d = store.Update(id, body?.Label, body?.Pinned);
+            return d is null ? Results.NotFound(new { error = "session not found" }) : Results.Ok(d);
+        });
+        // Delete a log: records + on-disk segment audio.
+        app.MapDelete("/api/voyeur/sessions/{id}", (string id, Zeus.Server.Voyeur.VoyeurStore store) =>
+            store.Delete(id)
+                ? Results.Ok(new { deleted = id })
+                : Results.NotFound(new { error = "session not found" }));
+        // Phase 3: report (roster who-was-on + stats + any saved digest).
+        app.MapGet("/api/voyeur/sessions/{id}/report", (string id, Zeus.Server.Voyeur.VoyeurStore store) =>
+        {
+            var r = store.GetReport(id);
+            return r is null ? Results.NotFound(new { error = "session not found" }) : Results.Ok(r);
+        });
+        // Phase 3: search every log's overs by callsign / name / transcript text.
+        app.MapGet("/api/voyeur/search", (string? q, Zeus.Server.Voyeur.VoyeurStore store) =>
+            Results.Ok(store.Search(q ?? "")));
+        // Phase 3B: generate the local-LLM topic digest for a session, on demand.
+        app.MapPost("/api/voyeur/sessions/{id}/digest",
+            async (string id, Zeus.Server.Voyeur.VoyeurStore store, Zeus.Server.Voyeur.LlamaSummarizer llama, CancellationToken ct) =>
+        {
+            if (!llama.Available)
+                return Results.BadRequest(new { error = "digest model not installed" });
+            var transcript = store.SessionTranscript(id);
+            if (string.IsNullOrWhiteSpace(transcript))
+                return Results.BadRequest(new { error = "no transcript to summarize yet" });
+            var digest = await llama.SummarizeAsync(transcript, TimeSpan.FromSeconds(120), ct);
+            if (digest is null)
+                return Results.StatusCode(503);
+            store.SetDigest(id, digest);
+            return Results.Ok(store.GetReport(id));
+        });
+        // Phase 3: stream a captured over's audio for in-panel replay.
+        app.MapGet("/api/voyeur/segments/{segId}/audio", (string segId, Zeus.Server.Voyeur.VoyeurStore store) =>
+        {
+            var path = store.GetSegmentAudioPath(segId);
+            return path is null
+                ? Results.NotFound(new { error = "audio not found" })
+                : Results.File(path, "audio/wav", enableRangeProcessing: true);
+        });
+
         app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 
         // TX diagnostic — exposes the producer/consumer counts for the mic-to-IQ ring
@@ -133,7 +254,7 @@ public static class ZeusEndpoints
         // (Protocol1Client via ITxIqSource) stats. Useful for "is the mic reaching
         // TXA, and is the EP2 packer actually reading the ring" questions without
         // hunting through logs. Free to call, exposes no secrets.
-        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest) =>
+        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, AudioPluginBridge? pluginBridge) =>
         {
             return Results.Ok(new
             {
@@ -141,6 +262,11 @@ public static class ZeusEndpoints
                 iqSourceIsRing = ReferenceEquals(src, ring),
                 ring = new { ring.TotalWritten, ring.TotalRead, ring.Count, ring.Dropped, ring.Capacity, ring.RecentMag },
                 ingest = new { ingest.TotalMicSamples, ingest.TotalTxBlocks, ingest.DroppedFrames },
+                txPlugins = pluginBridge is null ? null : new
+                {
+                    masterBypassed = pluginBridge.IsMasterBypassed,
+                    bypassedForRemoteTx = pluginBridge.IsBypassedForRemoteTxSource,
+                },
             });
         });
 
@@ -478,8 +604,22 @@ public static class ZeusEndpoints
         app.MapGet("/api/cw/settings", (CwSettingsStore store) =>
             Results.Ok(store.Get()));
 
-        app.MapPut("/api/cw/settings", (CwSettingsSetRequest req, CwSettingsStore store) =>
-            Results.Ok(store.Save(req)));
+        app.MapPut("/api/cw/settings", (CwSettingsSetRequest req, CwSettingsStore store, CwSidetoneSource sidetone, RadioService radio) =>
+        {
+            // Save first so the persisted view is the source of truth even
+            // if the live generator update races somehow. Then push the
+            // (post-clamp) values to the live generator so a slider drag
+            // updates pitch/gain without a restart.
+            var snapshot = store.Save(req);
+            sidetone.SetPitchHz(snapshot.SidetoneHz);
+            sidetone.SetGainDb(snapshot.SidetoneGainDb);
+            // Forward keyer speed (WPM) + mode to the radio's on-board iambic
+            // keyer (C&C 0x0B) so a paddle keys at the panel speed. No-op when
+            // no radio is connected (the value is cached + re-pushed on the
+            // next connect). See zeus-bks.
+            radio.SetCwKeyerConfig(snapshot.Wpm, snapshot.KeyerMode);
+            return Results.Ok(snapshot);
+        });
 
         // Mic-gain: N dB in [-40, +10], scales WDSP TXA panel-gain-1 the same
         // way Thetis does (console.cs:28805 setAudioMicGain → Audio.MicPreamp =
@@ -603,6 +743,18 @@ public static class ZeusEndpoints
         {
             log.LogInformation("api.tx.ps.feedbackSource source={Source}", req.Source);
             return Results.Ok(r.SetPsFeedbackSource(req));
+        });
+
+        // Manual PS TX feedback attenuation — routes through DspPipelineService
+        // (it owns both the P1 and P2 clients) to push the wire byte, then
+        // persists + surfaces it via RadioService. Operator alternative to
+        // AutoAttenuate for a fixed external-tap chain.
+        app.MapPost("/api/tx/ps/feedback-attenuation",
+            (PsFeedbackAttenuationSetRequest req, DspPipelineService pipe, RadioService r) =>
+        {
+            log.LogInformation("api.tx.ps.feedbackAttenuation db={Db}", req.Db);
+            pipe.SetPsFeedbackAttenuationDb(req.Db);
+            return Results.Ok(r.Snapshot());
         });
 
         // PS-Monitor — operator-facing toggle that swaps the TX panadapter source
@@ -847,8 +999,7 @@ public static class ZeusEndpoints
                 return Results.BadRequest(new { error = "mode and fit required" });
             store.SaveMode(req.Mode, req.Fit, req.RxTraceColor,
                 req.DbMin, req.DbMax, req.TxDbMin, req.TxDbMax,
-                req.WfDbMin, req.WfDbMax, req.WfTxDbMin, req.WfTxDbMax,
-                req.WfBrightness);
+                req.WfDbMin, req.WfDbMax, req.WfTxDbMin, req.WfTxDbMax);
             return Results.Ok(store.Get());
         });
 
@@ -913,29 +1064,19 @@ public static class ZeusEndpoints
             return Results.Ok(saved);
         });
 
-        // Display-side meter calibration knobs (GitHub #426). Currently
-        // surfaces the S-meter dB offset trim; signed value clamped ±20 dB
-        // on the server. Display-only — the underlying WDSP / radio
-        // physics are untouched. Persisted in zeus-prefs.db.
-        app.MapGet("/api/meters/display-settings",
-            (MeterDisplaySettingsStore store) => Results.Ok(store.Get()));
+        // Toolbar Mode/Band/Step favorite-slot pins + the live tuning step
+        // (StepHz). POST patches only the fields supplied — null fields leave
+        // the stored value untouched — so a step-change doesn't reset the
+        // favorite pins. Persisted in zeus-prefs.db so the tuning step and
+        // favorites survive a backend restart, fixing the Photino desktop
+        // per-launch-random-port localStorage reset.
+        app.MapGet("/api/toolbar-settings", (ToolbarSettingsStore store) => Results.Ok(store.Get()));
 
-        app.MapPut("/api/meters/smeter-offset-db",
-            (SMeterOffsetSetRequest req, MeterDisplaySettingsStore store) =>
-            {
-                var saved = store.SetSMeterOffsetDb(req.OffsetDb);
-                return Results.Ok(saved);
-            });
-
-        // Operator override for the TX forward-power meter's full scale.
-        // Clamped server-side; 0 means "no override, use the radio's
-        // rated MaxWatts" (historical behaviour).
-        app.MapPut("/api/meters/max-displayed-watts",
-            (MaxDisplayedWattsSetRequest req, MeterDisplaySettingsStore store) =>
-            {
-                var saved = store.SetMaxDisplayedWatts(req.MaxWatts);
-                return Results.Ok(saved);
-            });
+        app.MapPost("/api/toolbar-settings", (ToolbarSettingsSetRequest req, ToolbarSettingsStore store) =>
+        {
+            store.Save(req.Mode, req.Band, req.Step, req.StepHz);
+            return Results.Ok(store.Get());
+        });
 
         // Inline NR settings accordion disclosure state (NR1 / NR2 / NR4).
         // PUT writes all three flags atomically. Persisted in zeus-prefs.db
@@ -1430,3 +1571,7 @@ internal sealed record NativeMuteRequest(bool Muted);
 internal sealed record AuditionSetRequest(bool Enabled);
 internal sealed record ChainOrderSetRequest(List<string> PluginIds);
 internal sealed record MasterBypassSetRequest(bool Bypassed);
+internal sealed record WavRecordStartRequest(string? Source);
+internal sealed record WavPlayRequest(string? File);
+internal sealed record VoyeurStartRequest(bool? KeepAudio);
+internal sealed record VoyeurInstallRequest(string? Model);

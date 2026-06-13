@@ -10,6 +10,56 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.9.0] — 2026-06-13
+
+> **🎙️ The Voyeur Mode release — Zeus can now listen to a net and write the whole thing down.** Point Zeus at a net frequency, walk away, and come back to a complete, searchable log: every transmission recorded, transcribed to text, callsigns picked out and looked up on QRZ, a roster of who checked in, and a plain-language summary of what was discussed — all generated **on your own computer, with no cloud service and no account**. This release also makes panadapter tuning glide instead of jump, adds a live CW decoder and a redesigned Telegraph Console, brings PureSignal and transmit audio to desktop-grade quality, runs on the **Raspberry Pi 4/5** for the first time, and ships a reel-to-reel tape-deck recorder. Roughly 155 changes since v0.8.4.
+
+### What's new (in plain English)
+
+**Voyeur Mode — your automatic net secretary.** This is the big one. Open the Voyeur panel, tell Zeus the net you want to follow, and leave it running. Zeus listens for each over (transmission), records it, and — if you've enabled it — turns the speech into text right on your machine. It scans that text for callsigns, validates them against QRZ, and builds a live roster of everyone who checked in, with names. When the net wraps up, a small AI model running locally can write a short "what was discussed" summary so you don't have to re-listen to an hour of audio. Everything is saved in a searchable archive, and you can replay any recorded over with one click. The speech engine and the AI model are **not** bundled into the main download — the first time you turn the feature on, Zeus offers a one-time, no-terminal download of just the pieces you need, and that download now works on **every platform** (Windows, macOS Intel + Apple Silicon, Linux x64 + arm64). Privacy note: transcription and summarization happen entirely offline; the only thing that ever leaves your computer is the QRZ callsign lookups you already use elsewhere in Zeus.
+
+**Tuning that glides.** Spinning the dial used to make the spectrum jump in steps. Now the panadapter animates smoothly to the new center, the receiver "catches up" faster after a big jump so the display isn't smeared, and the filter passband and dial marker stay locked to the center line the whole time. It just feels right now. *(#597)*
+
+**CW decoder + redesigned Telegraph Console.** Zeus now decodes received Morse to on-screen text in real time, streamed live from the radio's audio. The CW console was rebuilt and its settings persist across restarts, you get a proper host-side sidetone monitor, and the Hermes-Lite 2's on-board iambic keyer can be configured from Zeus.
+
+**Cleaner, more reliable transmit (PureSignal).** A large body of work brought PureSignal and the transmit path on the desktop build up to the quality of the web build and Thetis: two-tone and voice are noticeably cleaner, PureSignal holds its correction instead of "jumping," your per-radio feedback-attenuation calibration is now saved and restored, and there's a two-tone IMD measurement overlay so you can see your transmit purity. Arming/disarming PureSignal mid-transmit no longer wedges it. *(#556, #557, #558, #559)*
+
+**Runs on Raspberry Pi.** Zeus now has official arm64 Linux builds — an AppImage and a tarball — plus a headless deployment guide, so you can run the backend on a Raspberry Pi 4 or 5.
+
+**Tape-deck recorder.** A new reel-to-reel style panel records your receive or transmit audio to a WAV file and plays it back, either locally or back out over the air.
+
+**Polish all over.** Lots of settings now survive a restart that didn't before — panadapter dB scale, tuning step, band favorites, mic gain and Leveler. Every meter now shares the same smooth needle behavior. macOS signed builds can use the microphone and no longer depend on a Homebrew library being installed. Windows machines with multiple network adapters now discover the radio and draw the panadapter correctly. And the plugin system gained receive/transmit audio taps so audio plugins can see and shape the signal.
+
+### Added
+
+- **Voyeur Mode (zeus-la5)** — unattended net-monitor capture and log management; whisper speech-to-text with callsign extraction and QRZ enrichment; roster report, searchable archive, and per-over audio replay; a local-LLM "what was discussed" digest surfaced in both Log and Roster views; in-app, terminal-free, cross-platform download of the speech + AI engines and models; custom/non-NATO phonetic decoding.
+- **Raspberry Pi 4/5 support** — linux-arm64 AppImage and tarball in the release matrix, with a headless deployment script and guide.
+- **WAV tape-deck recorder** — record RX/TX to WAV and play back locally or over the air, from a reel-to-reel panel ([#579](https://github.com/Kb2uka/openhpsdr-zeus/pull/579)).
+- **CW decoder + Telegraph Console** — server-side CW decode streamed to the panel, redesigned console with persisted settings, host-side sidetone monitor, TCI raw-key sidetone, and HL2 on-board iambic-keyer configuration.
+- **Two-tone IMD measurement overlay** for transmit-purity checks (Thetis parity).
+- **Smooth panadapter tuning** — animated view-center with fast-attack averaging on retune ([#597](https://github.com/Kb2uka/openhpsdr-zeus/issues/597)).
+- **Plugin audio pipeline** — read-only RX audio tap, TX audio taps + playback sink, a post-demod insert seam, and an `IRadioController` so plugins can key TX.
+- **TCI spots** rendered on the panadapter.
+
+### Changed
+
+- Tuning the dial now glides the spectrum smoothly and keeps the passband + dial marker pinned to center during the move ([#597](https://github.com/Kb2uka/openhpsdr-zeus/issues/597)).
+- PureSignal runs continuous auto-mode (Thetis parity) and persists/restores per-board feedback attenuation with manual override ([#557](https://github.com/Kb2uka/openhpsdr-zeus/issues/557)).
+- CESSB now matches Thetis/piHPSDR/desktop defaults — off while PureSignal is armed, on otherwise — fixing voice-peak splatter ([#559](https://github.com/Kb2uka/openhpsdr-zeus/issues/559)).
+- Many settings now persist server-side across restarts: panadapter dB scale ([#478](https://github.com/Kb2uka/openhpsdr-zeus/issues/478), [#496](https://github.com/Kb2uka/openhpsdr-zeus/issues/496)), tuning step + favorites ([#515](https://github.com/Kb2uka/openhpsdr-zeus/issues/515)), mic gain + Leveler.
+- All meters share a unified ballistics hook for consistent needle response.
+
+### Fixed
+
+- **Voyeur transcription produced nothing.** Captured overs are 48 kHz but the bundled whisper engine requires 16 kHz and was silently rejecting every over; Zeus now down-converts in-process so transcription works ([#614](https://github.com/Kb2uka/openhpsdr-zeus/pull/614)).
+- **macOS:** signed builds can now use the microphone (`device.audio-input` entitlement); FFTW libraries are bundled in the `.app` so it no longer needs Homebrew ([#421](https://github.com/Kb2uka/openhpsdr-zeus/issues/421), [#543](https://github.com/Kb2uka/openhpsdr-zeus/pull/543)); the bundle is code-signed correctly without `--deep` ([#530](https://github.com/Kb2uka/openhpsdr-zeus/pull/530)).
+- **Windows:** radios are discovered and the panadapter draws correctly on hosts with multiple network adapters ([#574](https://github.com/Kb2uka/openhpsdr-zeus/issues/574)).
+- **PureSignal/TX:** the wedge watchdog recovers in ~5 s instead of ~37 s; two-tone no longer jumps; the TUN/two-tone pump runs on a real-time thread at the exact DAC rate so the transmit FIFO can't underrun; arming/disarming PureSignal mid-transmit no longer wedges correction ([#558](https://github.com/Kb2uka/openhpsdr-zeus/issues/558), [#559](https://github.com/Kb2uka/openhpsdr-zeus/issues/559)).
+- **ANAN-10E** wire byte `0x06` with a low code version is now correctly classified as HermesII ([#545](https://github.com/Kb2uka/openhpsdr-zeus/pull/545)).
+- **Protocol 1:** TxFreq refreshes during receive so HL2 external-amp boards drive the band-voltage output ([#361](https://github.com/Kb2uka/openhpsdr-zeus/issues/361), [#503](https://github.com/Kb2uka/openhpsdr-zeus/pull/503)).
+- **Linux AppImage:** WebKitGTK GPU acceleration disabled in `AppRun` to fix blank/garbled rendering on some systems.
+- Sliders stream their value live during a drag and commit on release ([#485](https://github.com/Kb2uka/openhpsdr-zeus/issues/485)).
+
 ## [0.8.4] — 2026-05-25
 
 > **🪟 Windows hotfix.** A single targeted fix for the long-standing ~2-second transmit→receive delay that Windows operators have reported across recent versions — the radio's T/R relay hanging for ~2 seconds after un-keying (MOX or TUNE), and voice transmit sounding slow/robotic. This release is **v0.8.3 plus only this one fix** — no other changes. macOS and Linux were never affected and are unchanged.

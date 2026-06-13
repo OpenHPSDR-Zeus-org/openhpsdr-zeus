@@ -314,12 +314,17 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         _radioEndpoint = new IPEndPoint(radioEndpoint.Address, 1024);
         var sock = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+        DisableUdpConnReset(sock);
+        var localBind = FindLocalAddressForSubnet(radioEndpoint.Address) ?? IPAddress.Any;
         // Matched port convention — PC binds 1025, radio sends back with source
         // ports 1025/1026/1027/1035.. which we demux by fromaddr.
-        sock.Bind(new IPEndPoint(IPAddress.Any, 1025));
+        sock.Bind(new IPEndPoint(localBind, 1025));
         sock.ReceiveBufferSize = 1 << 20;
         _sock = sock;
-        _log.LogInformation("p2.connect radio={Radio} localPort=1025", radioEndpoint.Address);
+        _log.LogInformation(
+            "p2.connect radio={Radio} localBind={Local} localPort=1025",
+            radioEndpoint.Address,
+            localBind.Equals(IPAddress.Any) ? "ANY (no subnet match)" : localBind.ToString());
         return Task.CompletedTask;
     }
 
@@ -360,11 +365,26 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         SendCmdHighPriority(run: true);
 
         _rxCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        _rxTask = Task.Run(() => RxLoop(_rxCts.Token));
+        // LongRunning → dedicated thread (not a pooled worker). The RX loop and
+        // the TX-IQ sender both run for the whole session and promote their own
+        // thread to the platform pro-audio class (RealtimeThreadPriority). The
+        // promotion is per-thread, so they must own a thread that won't be
+        // recycled into the pool with elevated priority still attached. This is
+        // the desktop-mode fix (#559): under Photino the WebView render shares
+        // the process and at default priority preempts the TX feed in bursts —
+        // average pkts/s looks fine but the sub-block jitter starves the radio
+        // TX FIFO → dirty two-tone. Clean in web (separate processes) without it.
+        _rxTask = Task.Factory.StartNew(
+            () => RxLoop(_rxCts.Token),
+            _rxCts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         _keepaliveTask = Task.Run(() => KeepaliveLoop(_rxCts.Token));
         // Paced TX IQ sender — drains the queue FlushTxIqLocked fills and
-        // holds the radio's DUC FIFO at a steady level.
-        _txIqSenderTask = Task.Run(() => TxIqSenderLoop(_rxCts.Token));
+        // holds the radio's DUC FIFO at a steady level. Dedicated promoted
+        // thread + synchronous pacing (no await → can't bounce to the pool and
+        // lose the promotion mid-transmit).
+        _txIqSenderTask = Task.Factory.StartNew(
+            () => TxIqSenderLoop(_rxCts.Token),
+            _rxCts.Token, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         _log.LogInformation("p2.start rate={Rate}kHz freq={Freq}Hz", _sampleRateKhz, _rxFreqHz);
         return Task.CompletedTask;
     }
@@ -737,8 +757,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _txIqScratchCount = 0;
     }
 
-    private async Task TxIqSenderLoop(CancellationToken ct)
+    private void TxIqSenderLoop(CancellationToken ct)
     {
+        // Promote this dedicated sender to the platform pro-audio class so the
+        // Photino WebView render (desktop mode) can't preempt the radio TX-FIFO
+        // feed. Synchronous loop (no await) so it never bounces to a ThreadPool
+        // worker and loses the promotion mid-transmit. #559 desktop fix.
+        RealtimeThreadPriority.PromoteCallingThreadToProAudio(_log);
         // Port of pihpsdr's new_protocol_txiq_thread (new_protocol.c:1909-1997).
         // Maintains a software model of the radio's TX FIFO fill level: each
         // packet adds 240 samples, wall-clock elapses drain at 192 kHz. When
@@ -761,10 +786,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         {
             while (!ct.IsCancellationRequested)
             {
-                byte[] packet;
-                try { packet = await reader.ReadAsync(ct).ConfigureAwait(false); }
+                try
+                {
+                    // Block this dedicated thread until a packet is queued (or
+                    // the channel completes / we're cancelled). No await → the
+                    // thread keeps its pro-audio promotion across the wait.
+                    if (!reader.WaitToReadAsync(ct).AsTask().GetAwaiter().GetResult()) break;
+                }
                 catch (OperationCanceledException) { break; }
                 catch (ChannelClosedException) { break; }
+                if (!reader.TryRead(out var packet)) continue;
 
                 // Drain by wall-clock since the previous send.
                 long now = Stopwatch.GetTimestamp();
@@ -778,8 +809,8 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 // FIFO's 6.5 ms target headroom, so no underrun risk.
                 if (fifoSamples > TxFifoTargetSamples)
                 {
-                    try { await Task.Delay(1, ct).ConfigureAwait(false); }
-                    catch (OperationCanceledException) { break; }
+                    Thread.Sleep(1);
+                    if (ct.IsCancellationRequested) break;
                     now = Stopwatch.GetTimestamp();
                     elapsedSec = (now - lastTicks) / ticksPerSecond;
                     fifoSamples -= elapsedSec * TxDacSampleRate;
@@ -965,6 +996,45 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         return 0;
     }
 
+    // Windows surfaces ICMP port-unreachable as SocketError 10054 on the next recv.
+    // Disabling it at the ioctl level keeps the socket clean; the ConnectionReset
+    // catch in RxLoop is a belt-and-suspenders fallback if the ioctl is unavailable.
+    private const int SIO_UDP_CONNRESET = -1744830452; // 0x9800000C
+
+    internal static void DisableUdpConnReset(Socket s)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try { s.IOControl(SIO_UDP_CONNRESET, new byte[4], null); }
+        catch (SocketException) { /* best effort — some Windows editions block the ioctl */ }
+    }
+
+    // Returns the local IPv4 address of the first NIC whose subnet contains radioIp.
+    // Returns null when no subnet match is found (single-NIC host, radio behind a
+    // router, etc.) — the caller falls back to IPAddress.Any in that case.
+    internal static IPAddress? FindLocalAddressForSubnet(IPAddress radioIp)
+    {
+        if (radioIp.AddressFamily != AddressFamily.InterNetwork) return null;
+        var radioBytes = radioIp.GetAddressBytes();
+        foreach (var iface in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (iface.OperationalStatus != OperationalStatus.Up) continue;
+            if (iface.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+            foreach (var ua in iface.GetIPProperties().UnicastAddresses)
+            {
+                if (ua.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                var mask = ua.IPv4Mask;
+                if (mask is null || mask.Equals(IPAddress.Any)) continue;
+                var local = ua.Address.GetAddressBytes();
+                var m = mask.GetAddressBytes();
+                bool same = true;
+                for (int i = 0; i < 4; i++)
+                    if ((local[i] & m[i]) != (radioBytes[i] & m[i])) { same = false; break; }
+                if (same) return ua.Address;
+            }
+        }
+        return null;
+    }
+
     /// <summary>
     /// Per-board base DDC index for the user-visible RX. OrionMkII/Saturn/G2
     /// family reserves DDC0/DDC1 for PureSignal feedback so the operator's RX
@@ -1120,6 +1190,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// loop to ramp feedback level into the 128..181 window when calcc
     /// rejects fits because the loopback is too hot or too quiet.
     /// </summary>
+    /// <summary>Current TX feedback step attenuation in dB (the ATTOnTX value
+    /// last written via <see cref="SetTxAttenuationDb"/>). Sticky across
+    /// MOX/unkey — the radio holds it until changed — so the PureSignal
+    /// auto-attenuate dance can read ground truth on re-arm instead of
+    /// assuming 0 and desyncing its model from the radio.</summary>
+    public byte TxStepAttnDb => _txStepAttnDb;
+
     public void SetTxAttenuationDb(byte db)
     {
         if (db > 31) db = 31;
@@ -1446,6 +1523,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     private void RxLoop(CancellationToken ct)
     {
+        // Pro-audio promotion (#559): RX carries the PureSignal paired-DDC
+        // feedback synchronously into FeedPsFeedbackBlock; at default priority
+        // it contends with the Photino WebView render. Promote so feedback
+        // timing stays tight under desktop load. Per-thread, dedicated thread
+        // (StartAsync uses LongRunning).
+        RealtimeThreadPriority.PromoteCallingThreadToProAudio(_log);
         var buf = new byte[2048];
         var sock = _sock!;
         sock.ReceiveTimeout = 500;
@@ -1462,6 +1545,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 }
                 catch (SocketException ex) when (ex.SocketErrorCode == SocketError.TimedOut)
                 {
+                    continue;
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    // Windows WSAECONNRESET (10054): a prior SendTo provoked an ICMP
+                    // port-unreachable and Windows surfaces it on the next recv.
+                    // Linux silently discards this; without the catch here the IQ
+                    // loop dies on the first stray ICMP → frozen panadapter.
                     continue;
                 }
                 catch (SocketException ex) when (ex.SocketErrorCode == SocketError.Interrupted

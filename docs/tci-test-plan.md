@@ -225,7 +225,7 @@ These passed on `release/0.5.0` and must still pass on this branch:
 
 By design, the following are **out of scope** and remain on the roadmap:
 
-- **Any CW path.** `cw_macros`, `cw_msg`, `cw_keyer_speed`, `keyer`, `cw_terminal` — all still ack-only stubs.
+- **CW commands beyond the first pass.** `cw_macros`, `cw_msg`, `cw_macros_speed` and `keyer` are now wired into CwEngine (zeus-j3t) and emit `cw_macros_empty` on queue drain; out-of-scope siblings (`cw_macros_delay`, `cw_macros_speed_up/down`, `cw_macros_stop`, `cw_terminal`, `callsign_send`, `cw_keyer_speed`) remain ack-only.
 - `agc_mode` / `rx_nb_param` / `rx_nf_enable` / `rx_apf_enable` / `rx_dse_enable` / `rx_balance` — not implemented.
 - `mute`, `sql_*`, `lock`, `vfo_lock`, `split_enable`, `rit_*`, `xit_*`, `mon_*` — still echo-only stubs.
 - `line_out_*` recording family — niche, deferred.

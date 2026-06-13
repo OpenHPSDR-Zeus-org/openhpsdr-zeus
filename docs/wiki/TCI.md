@@ -75,13 +75,14 @@ TCI server status and pending configuration are exposed over the standard Zeus R
 | **TX_CHRONO pacing emitter** | ✅ **New in this branch** |
 | NR / NB / ANF / ANC | ✅ Wired |
 | Preamp / attenuator | ✅ Complete |
-| DX cluster spots (in/out) | ✅ Stored, not rendered on panadapter yet |
+| DX cluster spots (in/out) | ✅ Stored and rendered on panadapter as click-to-QSY overlays |
 | `RX_SENSORS_ENABLE` / `TX_SENSORS_ENABLE` | ✅ Spec-correct shape `bool[,interval]` |
 | `RX_CHANNEL_SENSORS` (TCI 2.0) | ✅ Sent to opted-in clients |
 | `VFO_LOCK` (TCI 2.0) | 🟡 Echo-only stub |
 | `DIGL_OFFSET` / `DIGU_OFFSET` | 🟡 Stored per session, not yet applied |
 | Mute / squelch / RIT / XIT / split | 🟡 Echo-only stubs |
-| **CW (macros, keyer, msg)** | ❌ **Roadmap — not yet implemented** |
+| **CW (`cw_msg`, `cw_macros`, `cw_macros_speed`, `keyer`)** | ✅ Wired into CwEngine; `cw_macros_empty` notification on queue drain |
+| `cw_macros_delay`, `cw_macros_speed_up/down`, `cw_macros_stop`, `cw_terminal`, `callsign_send` | ❌ Out of scope for the first CW pass |
 | `AGC_MODE` / `RX_NB_PARAM` | ❌ Backend missing |
 | `LINE_OUT_*` (server-side recording) | ❌ Not planned |
 
@@ -177,6 +178,32 @@ Legend: ✅ working · 🟡 partial / stub-only · ❌ missing
 
 Header layout matches TCI v1.x §7.1 (64-byte little-endian); dispatch keys off `type` at offset 24 per markdown spec quirk #7.
 
+#### IQ stream: `channels` and `length` fields for external implementors
+
+The 64-byte header has **no `channels` word**. The full field map is:
+
+| Offset | Size | Field |
+|--------|------|-------|
+| 0 | 4 | receiver index |
+| 4 | 4 | sample_rate (Hz) |
+| 8 | 4 | sample type (0 = float32) |
+| 12 | 4 | codec id (0 = uncompressed PCM) |
+| 16 | 4 | crc32 of payload (0 = skipped) |
+| 20 | 4 | **length** — total float32 scalar count |
+| 24 | 4 | stream type (0 = IQ, 1 = audio, 2 = TX audio, 3 = TX_CHRONO) |
+| 28–63 | 36 | reserved zeros (9 × uint32) |
+| 64… | — | sample payload |
+
+Clients that parse the header as 16 × uint32 and treat index 7 (offset 28) as `channels` will always read **0** — that is a reserved word, not a channel count.
+
+For **IQ frames** (stream type 0): `length` is the count of individual float32 scalars in the payload, interleaved as I₀ Q₀ I₁ Q₁ …. Complex sample count = `length / 2`. There is no separate `channels` negotiation; the interleave is fixed.
+
+For **RX audio frames** (stream type 1): `length` is likewise total float32 scalars in the stereo (L=R) payload. Frame count = `length / 2`.
+
+#### `iq_samplerate` negotiation
+
+Zeus does not yet decimate the IQ stream to a client-requested rate (Path B). `iq_samplerate:<hz>;` stores the requested value for future use but always echoes back the **hardware delivery rate** (e.g. `iq_samplerate:192000;`), so clients that inspect the echoed value will correctly size their pipeline. Sending `iq_samplerate:96000;` and receiving `iq_samplerate:192000;` in reply means the request was not granted — the stream will arrive at 192000.
+
 ---
 
 ## TX audio path (new in this branch)
@@ -207,18 +234,32 @@ On `TRX:0,false;` (or any change of TRX source away from `tci`), the receiver's 
 
 This is the explicit "what's not done" list, organised by spec section. Issues maintained against this list are welcomed.
 
-### CW — on the roadmap, not yet implemented
+### CW — first pass landed; remaining gaps below
 
-CW is the single biggest remaining gap. The dispatcher accepts the commands so contest-logger probes don't error, but **nothing reaches the air**:
+The four highest-leverage CW commands route through Zeus's host-side CW
+engine (see `Zeus.Server.Hosting/CwEngine.cs`) — both macros (mapped
+against the same `CwSettingsStore` the on-screen macro pad edits) and
+free-form text reach the air, and the engine raises `cw_macros_empty`
+when the queue drains so loggers can detect end-of-message:
 
-- `cw_macros`, `cw_msg` (with prefix / callsign / suffix / repeat)
-- `cw_macros_speed`, `cw_macros_delay`, `cw_keyer_speed`
-- `cw_macros_speed_up`, `cw_macros_speed_down`, `cw_macros_stop`
-- `cw_terminal` mode + `cw_macros_empty` notification
-- `keyer:rx,bool[,duration]` (TCI 1.9.1)
+- ✅ `cw_msg:rx,part[,part…][,repeat]` — concatenates parts, optional
+  small-integer trailing repeat count
+- ✅ `cw_macros:slot` — 1-based slot index into the persisted macro array
+- ✅ `cw_macros_speed:wpm` — sets the operator's persisted WPM (shared
+  with the UI); query form echoes current
+- ✅ `keyer:rx,bool[,durationMs]` — manual key-down / key-up, with the
+  optional TCI 1.9.1 auto-release timer
+- ✅ `cw_macros_empty` (server → client) — broadcast on Sending → Idle
+  transitions
+
+The remaining CW commands stay out of scope for this pass:
+
+- `cw_macros_delay`, `cw_macros_speed_up/down`, `cw_macros_stop`
+- `cw_terminal` mode
 - `callsign_send` notification (mid-message callsign correction)
+- Per-receiver `cw_keyer_speed` (Zeus tracks one WPM, not per-RX)
 
-These will land when Zeus grows a CW keyer engine. **Until then, contest CW operators using TCI for keying will not transmit.**
+These can land alongside future contest-logger work as needed.
 
 ### Control commands missing entirely
 

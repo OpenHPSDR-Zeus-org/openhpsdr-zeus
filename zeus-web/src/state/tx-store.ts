@@ -217,6 +217,13 @@ export type TxState = {
   // mi0bot ref: PSForm.cs:830 pbWarningSetPk.Visible = _PShwpeak !=
   // HardwareSpecific.PSDefaultPeak.
   psHwPeakDefault: number;
+  // Live PS TX feedback attenuation (dB) and the per-board floor (HL2 -28,
+  // others 0; max 31). Server-authoritative — NOT persisted to localStorage
+  // (restored from the prefs DB on connect; persisting it client-side would
+  // re-introduce the localStorage-clobbers-server bug).
+  psTxFeedbackAttenuationDb: number;
+  setPsTxFeedbackAttenuationDb: (db: number) => void;
+  psTxFeedbackAttenuationDbMin: number;
   psIntsSpiPreset: string;
   setPsIntsSpiPreset: (p: string) => void;
   // Feedback antenna source — Internal coupler (default) or External
@@ -302,7 +309,13 @@ export const useTxStore = create<TxState>()(
       setTunePercent: (p) => set({ tunePercent: p }),
       micGainDb: 0,
       setMicGainDb: (db) => set({ micGainDb: db }),
-      levelerMaxGainDb: 5,
+      // 8 dB matches the server-authoritative default everywhere else —
+      // StateDto.LevelerMaxGainDb, RadioStateStore, RadioService restore, and
+      // the client.ts parseState fallback all open at 8.0 (WdspDspEngine
+      // .DefaultLevelerMaxGainDb). The store previously defaulted to 5, so the
+      // pre-hydration paint disagreed with the value the server reports a beat
+      // later — a needless flash. Keep this in lock-step with the server seed.
+      levelerMaxGainDb: 8,
       setLevelerMaxGainDb: (db) =>
         set({ levelerMaxGainDb: Math.max(0, Math.min(15, db)) }),
       fwdWatts: 0,
@@ -382,6 +395,9 @@ export const useTxStore = create<TxState>()(
       // the server will push the per-board value into the StateDto, and
       // hydrateFromState below picks it up. mi0bot PSForm.cs:830 ref.
       psHwPeakDefault: 0.4072,
+      psTxFeedbackAttenuationDb: 0,
+      setPsTxFeedbackAttenuationDb: (db) => set({ psTxFeedbackAttenuationDb: db }),
+      psTxFeedbackAttenuationDbMin: 0,
       psIntsSpiPreset: '16/256',
       setPsIntsSpiPreset: (p) => set({ psIntsSpiPreset: p }),
       psFeedbackSource: 'internal',
@@ -422,15 +438,14 @@ export const useTxStore = create<TxState>()(
 
       hydrateFromState: (s) =>
         set({
-          // Drive sliders — server is the source of truth. Persisted via
-          // RadioStateStore and broadcast on every SetDrive/SetTuneDrive so
-          // the operator's last-set values come back on relaunch. The
-          // localStorage mirror in `partialize` below exists only to avoid
-          // a first-paint flicker before this hydrate runs.
+          // Drive / TUN drive / mic gain / Leveler max-gain — server is the
+          // sole source of truth. Persisted via RadioStateStore and broadcast
+          // on every Set* so the operator's last-set values come back on
+          // relaunch via this hydrate (connect + every state poll). These are
+          // deliberately NOT mirrored to localStorage — see the partialize note
+          // below for why a mirror is harmful on the Photino desktop.
           drivePercent: s.drivePercent,
           tunePercent: s.tunePercent,
-          // Mic gain + Leveler max-gain — server-authoritative (RadioStateStore).
-          // Previously localStorage-only and reverted on every desktop relaunch.
           micGainDb: s.micGainDb,
           levelerMaxGainDb: s.levelerMaxGainDb,
           psAuto: s.psAuto,
@@ -446,6 +461,8 @@ export const useTxStore = create<TxState>()(
           // operator-tuned psHwPeak so the UI sees a coherent pair.
           psHwPeak: s.psHwPeak,
           psHwPeakDefault: s.psHwPeakDefault,
+          psTxFeedbackAttenuationDb: s.psTxFeedbackAttenuationDb,
+          psTxFeedbackAttenuationDbMin: s.psTxFeedbackAttenuationDbMin,
           psCalibrationStalled: s.psCalibrationStalled ?? false,
           twoToneFreq1: s.twoToneFreq1,
           twoToneFreq2: s.twoToneFreq2,
@@ -457,11 +474,24 @@ export const useTxStore = create<TxState>()(
       name: 'zeus-tx',
       // Persist only operator-tuning fields. Master arm bits (psEnabled,
       // twoToneOn, mox/tun) are transient per-session.
+      //
+      // Drive / TUN drive / mic gain / Leveler max-gain are deliberately NOT
+      // mirrored here. They are server-authoritative (StateDto.{DrivePct,
+      // TunePct,MicGainDb,LevelerMaxGainDb}, persisted in zeus-prefs.db) and
+      // are rehydrated by hydrateFromState on connect + every state poll. A
+      // localStorage mirror is actively harmful for them on the desktop: the
+      // Photino webview binds a fresh OS-assigned loopback port on every
+      // launch, so localStorage is a new (empty) origin each time. zustand's
+      // persist rehydrates that empty origin over the store defaults
+      // (micGainDb=0, etc.) synchronously at store-creation — before the
+      // server hydrate lands — and any read in that window (or a later store
+      // re-creation) flashes the default back. Worse, the partialize write
+      // then re-seeds the empty origin with that 0, which a connect-time
+      // re-POST used to push to the server, clobbering the persisted value.
+      // The connect-time re-POST was removed (ConnectPanel) and now the mirror
+      // is too, so the server is the single source of truth — same pattern the
+      // toolbar-favorites + display-settings stores already follow.
       partialize: (s) => ({
-        drivePercent: s.drivePercent,
-        tunePercent: s.tunePercent,
-        micGainDb: s.micGainDb,
-        levelerMaxGainDb: s.levelerMaxGainDb,
         // PS tuning is persisted server-side too, but we mirror it here so
         // the slider seeks don't flicker on first paint after a reload.
         psAuto: s.psAuto,

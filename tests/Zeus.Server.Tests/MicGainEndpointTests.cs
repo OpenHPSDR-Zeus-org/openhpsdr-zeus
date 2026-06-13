@@ -179,6 +179,7 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         public void SetVfoHz(int channelId, long vfoHz) { }
         public void SetCtunShift(int channelId, int shiftHz) { }
         public void SetAgcTop(int channelId, double topDb) { }
+    public void SetRxDisplayFastAttack(int channelId, bool fast) { }
         public void SetRxAfGainDb(int channelId, double db) { }
         public void SetNoiseReduction(int channelId, NrConfig cfg) { }
         public void SetZoom(int channelId, int level) { }
@@ -198,6 +199,7 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         public void SetTwoTone(bool on, double freq1, double freq2, double mag) { }
         public void SetPsEnabled(bool enabled) { }
         public void SetPsControl(bool autoCal, bool singleCal) { }
+        public void SetPsHold(bool hold) { }
         public void SetPsAdvanced(bool ptol, double moxDelaySec, double loopDelaySec,
                                   double ampDelayNs, double hwPeak, int ints, int spi) { }
         public void SetPsHwPeak(double hwPeak) { }

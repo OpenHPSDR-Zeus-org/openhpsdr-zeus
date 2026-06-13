@@ -24,7 +24,7 @@ import { useEffect, useState } from 'react';
 // Release date for the version this build ships against. Bump whenever
 // VersionPrefix in Directory.Build.props bumps. ISO 8601 so toLocaleDateString
 // renders sensibly in any locale.
-const RELEASE_DATE_ISO = '2026-05-25';
+const RELEASE_DATE_ISO = '2026-06-13';
 // Note: v0.8.3 is a Windows-focused hotfix for v0.8.0..0.8.2. Fresh Windows
 // installs were silently broken without the Visual C++ Runtime present, and
 // even when running, Windows operators saw a growing 1-3 second MOX-engage

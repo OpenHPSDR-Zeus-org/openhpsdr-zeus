@@ -46,13 +46,20 @@ namespace Zeus.Server.Tci;
 
 /// <summary>
 /// In-memory storage for DX cluster spots received via TCI.
-/// Phase 1: stub implementation stores spots but doesn't render them on the
-/// panadapter. Rendering is a follow-up issue (requires panadapter overlay).
+/// Fires <see cref="SpotsChanged"/> after every mutation so
+/// SpotBroadcastService can push a fresh snapshot to all WS clients.
 /// </summary>
 public sealed class SpotManager
 {
     private readonly object _sync = new();
     private readonly Dictionary<string, Spot> _spots = new();
+
+    /// <summary>
+    /// Raised after any mutation (add, remove, or clear). Fired while the
+    /// lock is NOT held so subscribers can call <see cref="GetAll"/> safely.
+    /// The event fires on whatever thread called the mutating method.
+    /// </summary>
+    public event Action? SpotsChanged;
 
     /// <summary>
     /// Add or update a spot.
@@ -63,6 +70,7 @@ public sealed class SpotManager
         {
             _spots[callsign] = new Spot(callsign, mode, freqHz, argb, comment);
         }
+        SpotsChanged?.Invoke();
     }
 
     /// <summary>
@@ -74,6 +82,7 @@ public sealed class SpotManager
         {
             _spots.Remove(callsign);
         }
+        SpotsChanged?.Invoke();
     }
 
     /// <summary>
@@ -85,6 +94,7 @@ public sealed class SpotManager
         {
             _spots.Clear();
         }
+        SpotsChanged?.Invoke();
     }
 
     /// <summary>

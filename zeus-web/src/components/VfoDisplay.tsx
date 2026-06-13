@@ -53,7 +53,6 @@ import {
 } from 'react';
 import { fetchState, setVfo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
-import { useDisplayStore } from '../state/display-store';
 
 const MAX_HZ = 60_000_000;
 const STATE_POLL_MS = 2000;
@@ -158,9 +157,6 @@ export function VfoDisplay() {
     setDraft('');
     if (next == null || next === vfoHz) return;
     useConnectionStore.setState({ vfoHz: next });
-    // Typed-frequency commit is an explicit tune-to-frequency action per
-    // the pure-pan PRD; reset any held viewport offset.
-    useDisplayStore.getState().setViewportOffsetHz(0);
     setVfo(next)
       .then(applyState)
       .catch(() => {

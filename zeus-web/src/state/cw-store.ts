@@ -142,7 +142,8 @@ function shallowEqualCwSettings(a: CwSettings, b: CwSettings): boolean {
     a.wpm !== b.wpm ||
     a.farnsworthWpm !== b.farnsworthWpm ||
     a.sidetoneGainDb !== b.sidetoneGainDb ||
-    a.sidetoneHz !== b.sidetoneHz
+    a.sidetoneHz !== b.sidetoneHz ||
+    a.keyerMode !== b.keyerMode
   )
     return false;
   if (a.macros.length !== b.macros.length) return false;

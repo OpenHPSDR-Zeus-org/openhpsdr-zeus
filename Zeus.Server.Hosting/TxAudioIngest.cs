@@ -111,6 +111,26 @@ public sealed class TxAudioIngest : IDisposable
     // enough that a genuine fallback to mic happens instantly after TCI stops.
     private const int TciHysteresisMs = 500;
     private long _lastTciTickMs;
+    // WAV-playback-source recency: set on every OnMicPcmBytesFromWav call so a
+    // concurrent native-mic frame within TciHysteresisMs is suppressed — the
+    // recording replaces the live mic on the air, they never mix.
+    private long _lastWavTickMs;
+
+    /// <summary>
+    /// True when a TCI client is the authoritative source of TX audio right now
+    /// (within the hysteresis window). Used by the TX audio plugin bridge to
+    /// bypass the operator's insert plugins (EQ, comp, VSTs, etc.) for remote
+    /// sources — their audio has already been processed on the client side.
+    /// Local mic and WAV playback are never considered "remote" for this check.
+    /// </summary>
+    internal bool IsTciTxAudioActive
+    {
+        get
+        {
+            long last = Volatile.Read(ref _lastTciTickMs);
+            return last != 0 && (Environment.TickCount64 - last) < TciHysteresisMs;
+        }
+    }
     // Diagnostic: log peak of mic-in and IQ-out once per second of TX. If
     // mic-peak is high but iq-peak is ~0, WDSP TXA is producing silence
     // despite good input. If mic-peak itself is ~0, the uplink is broken.
@@ -126,7 +146,8 @@ public sealed class TxAudioIngest : IDisposable
         StreamingHub hub,
         ILogger<TxAudioIngest> log)
         : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log,
-               forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span))
+               forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span),
+               txOwnedByTuneDriver: () => tx.IsTunOn || tx.IsTwoToneOn)
     {
     }
 
@@ -142,13 +163,15 @@ public sealed class TxAudioIngest : IDisposable
         StreamingHub hub,
         ILogger<TxAudioIngest> log,
         Action<ReadOnlyMemory<float>>? forwardP2 = null,
-        Action<int>? onWdspConsumed = null)
+        Action<int>? onWdspConsumed = null,
+        Func<bool>? txOwnedByTuneDriver = null)
     {
         _ring = ring;
         _engineProvider = engineProvider;
         _isMoxOn = isMoxOn;
         _forwardP2 = forwardP2;
         _onWdspConsumed = onWdspConsumed;
+        _txOwnedByTuneDriver = txOwnedByTuneDriver ?? (static () => false);
         _hub = hub;
         _log = log;
         _handler = OnMicPcmBytesFromMic;
@@ -156,6 +179,13 @@ public sealed class TxAudioIngest : IDisposable
     }
 
     private readonly Action<ReadOnlyMemory<float>>? _forwardP2;
+    // True while TUN or the two-tone test is active. TxTuneDriver is the sole TX
+    // driver in those states; this mic-ingest path must NOT also run ProcessTxBlock
+    // or push IQ, or two threads drive the same TXA (fexchange2) and BOTH feed the
+    // radio → double-fed / corrupted signal. Desktop-only symptom (#559): native
+    // mic capture keeps feeding here during a two-tone; web has no native mic so
+    // only TxTuneDriver drove it and it stayed clean.
+    private readonly Func<bool> _txOwnedByTuneDriver;
 
     // Cross-thread handoff: written from the TCI timer thread (Start/Stop of
     // the TX_CHRONO service), read every audio block from the WDSP worker.
@@ -163,6 +193,12 @@ public sealed class TxAudioIngest : IDisposable
     // not. Mirror the Interlocked.Exchange pattern used for _txChronoTimer.
     internal void SetWdspConsumedCallback(Action<int>? cb)
         => Interlocked.Exchange(ref _onWdspConsumed, cb);
+
+    /// <summary>Raised for every valid mic block (960 samples f32le @ 48 kHz)
+    /// as it enters the ingest, before any MOX/monitor gating. The WAV recorder
+    /// taps this to capture the raw transmit-side mic audio silently. Payload
+    /// is valid only for the synchronous handler — copy if retained.</summary>
+    internal event Action<ReadOnlyMemory<byte>>? MicPcmTapped;
     public long TotalMicSamples { get { lock (_sync) return _totalMicSamples; } }
     public long TotalTxBlocks { get { lock (_sync) return _totalTxBlocks; } }
     public long DroppedFrames { get { lock (_sync) return _droppedFrames; } }
@@ -193,9 +229,23 @@ public sealed class TxAudioIngest : IDisposable
     /// </summary>
     internal void OnMicPcmBytesFromMic(ReadOnlyMemory<byte> f32lePayload)
     {
+        long now = Environment.TickCount64;
         long lastTci = Volatile.Read(ref _lastTciTickMs);
-        if (lastTci != 0 && Environment.TickCount64 - lastTci < TciHysteresisMs)
-            return;
+        if (lastTci != 0 && now - lastTci < TciHysteresisMs) return;
+        long lastWav = Volatile.Read(ref _lastWavTickMs);
+        if (lastWav != 0 && now - lastWav < TciHysteresisMs) return;
+        OnMicPcmBytes(f32lePayload);
+    }
+
+    /// <summary>Source-tagged entry point for WAV-recording playback to the
+    /// air (from <see cref="Zeus.Server.Wav.WavRecorderService"/>). Stamps the
+    /// WAV recency timestamp so the live native mic is suppressed for the clip,
+    /// then feeds the block through the same path as mic audio — so a recording
+    /// is processed by the normal TX chain exactly like live speech. The caller
+    /// keys MOX; this method does not touch MOX.</summary>
+    internal void OnMicPcmBytesFromWav(ReadOnlyMemory<byte> f32lePayload)
+    {
+        Volatile.Write(ref _lastWavTickMs, Environment.TickCount64);
         OnMicPcmBytes(f32lePayload);
     }
 
@@ -207,6 +257,13 @@ public sealed class TxAudioIngest : IDisposable
             lock (_sync) _droppedFrames++;
             return;
         }
+
+        // Non-destructive mic tap, fired BEFORE the MOX/monitor gate so a
+        // recorder can capture the raw mic whether or not the operator is
+        // keyed or monitoring (silent capture). Covers desktop native mic,
+        // browser mic, and TCI — every source funnels through here. The event
+        // is null (no allocation/cost) unless something is actually recording.
+        MicPcmTapped?.Invoke(f32lePayload);
 
         // Gate: process mic samples when MOX is on (normal TX) OR when the TX
         // monitor is on (audition without keying so the operator can hear
@@ -259,6 +316,20 @@ public sealed class TxAudioIngest : IDisposable
         {
             // Synthetic engine, no TXA open, or a protocol whose block size
             // exceeds our scratch buffers. Swallow samples quietly.
+            return;
+        }
+
+        // TUN / two-tone active → TxTuneDriver is the sole TX driver. Running
+        // ProcessTxBlock here too would put two threads on one TXA's fexchange2
+        // AND push a second IQ stream to the radio (double-feed → corrupted /
+        // dirty signal; PS then calibrates on garbage). The mic isn't
+        // transmitted during a tune/two-tone anyway, so drop the batch and reset
+        // the accumulator so it can't back up. Fixes the desktop-only dirty
+        // two-tone in #559 (native mic capture kept feeding here; web had no
+        // native mic so only TxTuneDriver drove it → clean).
+        if (_txOwnedByTuneDriver())
+        {
+            lock (_sync) _accumulatorFill = 0;
             return;
         }
 
