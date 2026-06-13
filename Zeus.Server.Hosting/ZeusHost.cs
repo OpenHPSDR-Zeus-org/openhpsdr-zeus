@@ -398,6 +398,12 @@ public static class ZeusHost
         // the capability in PluginManager). Enables plugin keyers (RTTY/voice).
         builder.Services.AddSingleton<Zeus.Plugins.Contracts.IRadioController, RadioController>();
 
+        // PluginQrzLookup surfaces the core QrzService to plugins (gated on the
+        // NetworkAccess capability in PluginManager) so a plugin reuses the
+        // operator's stored QRZ credentials + rate-limit gate instead of asking
+        // for them again. Surfaced via IPluginContext.Qrz.
+        builder.Services.AddSingleton<Zeus.Plugins.Contracts.IQrzLookup, PluginQrzLookup>();
+
         // AudioChainMasterBypassService — operator's "disengage the
         // whole Audio Suite" lever. Default is true (bypassed) on first
         // install so a brand-new operator's chain is inert until they
