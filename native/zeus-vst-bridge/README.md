@@ -3,31 +3,46 @@
 Native, in-process VST3 host for Openhpsdr-Zeus. Linked as a shared
 library and called via P/Invoke from `Zeus.Plugins.Host.Audio.VstBridgeNative`.
 
-## Status (2026-05-17)
+## Status
 
-**Iter 6** lands the C ABI (`include/zvst.h`) plus a stub
-implementation that pretends every load succeeds and pass-through
-processes every block. The point is to lock the wire shape so the
-.NET wrapper, `VstHostAudioPlugin`, and `AudioChain` can be tested
-without a real Steinberg toolchain on the build machine.
+Real VST3 hosting via [Steinberg `vst3sdk`](https://github.com/steinbergmedia/vst3sdk)
+(MIT since October 2025), vendored under `third_party/vst3sdk` as a git
+submodule: `Module::create(path)` → factory walk → instantiate
+`kVstAudioEffectClass` → `initialise` / `setActive` / `setProcessing` /
+`ProcessData` (see `src/bridge.cpp`).
 
-**Iter 7** replaces the stub with:
+The C ABI in `include/zvst.h` is stable; the .NET P/Invoke side is
+`Zeus.Plugins.Host.Audio.VstBridgeNative` and is exercised end-to-end
+by `VstBridgeNativeRealTests` against the built library.
 
-- [Steinberg `vst3sdk`](https://github.com/steinbergmedia/vst3sdk) (MIT
-  since October 2025) — `Module::create(path)` → factory walk →
-  instantiate `kVstAudioEffectClass` → `initialise` / `setActive` /
-  `setProcessing` / `ProcessData`.
-- Optionally [CLAP SDK](https://github.com/free-audio/clap) — MIT.
+If the `vst3sdk` submodule is not initialised, CMake falls back to a
+**stub** (every load succeeds, every block passes through) so the rest
+of the tree still builds without a Steinberg toolchain — see
+`CMakeLists.txt`.
 
-VST2 is **not** in scope (Steinberg withdrew distribution rights for
-new hosts in 2024 — see `docs/proposals/plugin-system-v2.md`).
+CLAP support ([CLAP SDK](https://github.com/free-audio/clap), MIT) is a
+possible future addition in the same library. VST2 is **not** in scope
+(Steinberg withdrew distribution rights for new hosts in 2024 — see
+`docs/proposals/plugin-system-v2.md`).
 
 ## Build
 
+Initialise the vendored SDK first (the submodule itself has nested
+submodules — `base`, `pluginterfaces`, `public.sdk` — that the hosting
+sources need):
+
+```bash
+git submodule update --init native/zeus-vst-bridge/third_party/vst3sdk
+git -C native/zeus-vst-bridge/third_party/vst3sdk \
+    submodule update --init base pluginterfaces public.sdk cmake
+```
+
+Then build:
+
 ```bash
 cd native/zeus-vst-bridge
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
+cmake -B build -DCMAKE_BUILD_TYPE=Release      # Windows: add -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
 ```
 
 Output:
@@ -36,8 +51,12 @@ Output:
 - macOS:   `build/libzeus-vst-bridge.dylib`
 - Windows: `build/Release/zeus-vst-bridge.dll`
 
-Place it next to the Zeus executable (or anywhere on the runtime load
-path — `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`, `PATH`).
+For shipping, stage the per-platform binary into
+`Zeus.Plugins.Host/runtimes/<rid>/native/` — `Zeus.Plugins.Host.csproj`
+copies `runtimes/**` to the host output, so .NET's native-library
+resolver finds it next to `OpenhpsdrZeus.exe`. (For ad-hoc runs you can
+instead drop it anywhere on the load path — `PATH`, `LD_LIBRARY_PATH`,
+`DYLD_LIBRARY_PATH`.)
 
 ## ABI
 
