@@ -70,6 +70,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_OPENMP=OFF \
+            -DGGML_NATIVE=OFF \
             -DGGML_METAL=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DWHISPER_BUILD_TESTS=OFF \
@@ -89,6 +90,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_OPENMP=OFF \
+            -DGGML_NATIVE=OFF \
             -DGGML_METAL=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
             -DLLAMA_CURL=OFF \
@@ -157,18 +159,34 @@ jobs:
         if: matrix.rid == 'linux-arm64'
         run: |
           {
-            echo "CROSS=-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ -DGGML_NATIVE=OFF"
+            echo "CROSS=-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++"
           } >> "$GITHUB_ENV"
+
+      # The hosted Linux runner has ~7 GB RAM; a full-parallel llama.cpp compile
+      # OOM-kills the runner (exit 143, "runner received a shutdown signal").
+      # Add a big swapfile AND cap llama's build parallelism (below).
+      - name: Add swap (avoid OOM)
+        run: |
+          set -eux
+          sudo fallocate -l 10G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
 
       - name: Build whisper-cli
         run: |
           set -eux
           git clone --depth 1 -b "${WHISPER_REF}" https://github.com/ggml-org/whisper.cpp
+          # GGML_NATIVE=OFF: never tune the SHIPPED binary to the CI runner's CPU
+          # (an -march=native build SIGILLs on users' older machines). Baseline
+          # only; this is a logger, not a benchmark.
           cmake -S whisper.cpp -B whisper.cpp/build \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_OPENMP=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON \
+            -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF \
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON \
             ${CROSS:-}
-          cmake --build whisper.cpp/build --config Release --target whisper-cli --parallel
+          cmake --build whisper.cpp/build --config Release --target whisper-cli --parallel 2
 
       - name: Build llama completion tool
         run: |
@@ -176,10 +194,12 @@ jobs:
           git clone --depth 1 -b "${LLAMA_REF}" https://github.com/ggml-org/llama.cpp
           cmake -S llama.cpp -B llama.cpp/build \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_OPENMP=OFF -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF \
+            -DGGML_OPENMP=OFF -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF \
             -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=OFF ${CROSS:-}
-          cmake --build llama.cpp/build --config Release --target llama-completion --parallel || \
-          cmake --build llama.cpp/build --config Release --target llama-cli --parallel
+          # --parallel 2 (not unbounded): caps peak memory so the big llama TUs
+          # don't OOM the runner even with swap.
+          cmake --build llama.cpp/build --config Release --target llama-completion --parallel 2 || \
+          cmake --build llama.cpp/build --config Release --target llama-cli --parallel 2
 
       - name: Stage + zip
         run: |
@@ -221,22 +241,38 @@ jobs:
           git clone --depth 1 -b "$env:WHISPER_REF" https://github.com/ggml-org/whisper.cpp
           # Static CRT (/MT) so the .exe needs no VC++ redistributable — same
           # rationale as the arm64 wdsp.dll in build-native-libs.yml.
-          cmake -S whisper.cpp -B whisper.cpp/build -A ${{ matrix.arch }} `
-            -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF `
-            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
-            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON
+          # ggml's CPU backend refuses MSVC on ARM ("use clang"), so ARM64 must
+          # use the ClangCL toolset (ships with VS2022; MSVC ABI, stays
+          # compatible) — same choice the WDSP workflow makes. x64 keeps plain
+          # MSVC. GGML_NATIVE=OFF so the shipped .exe doesn't bake in the
+          # runner's CPU features. Build the arg array end-to-end and splat it —
+          # a conditional toolset + backtick continuation mangles on the runner.
+          $cmakeArgs = @(
+            '-S','whisper.cpp','-B','whisper.cpp/build',
+            '-A','${{ matrix.arch }}',
+            '-DBUILD_SHARED_LIBS=OFF','-DGGML_OPENMP=OFF','-DGGML_NATIVE=OFF',
+            '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded',
+            '-DWHISPER_BUILD_TESTS=OFF','-DWHISPER_BUILD_EXAMPLES=ON'
+          )
+          if ("${{ matrix.arch }}" -eq "ARM64") { $cmakeArgs += @('-T','ClangCL') }
+          & cmake @cmakeArgs
           cmake --build whisper.cpp/build --config Release --target whisper-cli --parallel
 
       - name: Build llama completion tool
         shell: pwsh
         run: |
           git clone --depth 1 -b "$env:LLAMA_REF" https://github.com/ggml-org/llama.cpp
-          cmake -S llama.cpp -B llama.cpp/build -A ${{ matrix.arch }} `
-            -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF `
-            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
-            -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF `
-            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=OFF
-          $built = cmake --build llama.cpp/build --config Release --target llama-completion --parallel 2>&1
+          $cmakeArgs = @(
+            '-S','llama.cpp','-B','llama.cpp/build',
+            '-A','${{ matrix.arch }}',
+            '-DBUILD_SHARED_LIBS=OFF','-DGGML_OPENMP=OFF','-DGGML_NATIVE=OFF',
+            '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded',
+            '-DLLAMA_CURL=OFF','-DLLAMA_OPENSSL=OFF',
+            '-DLLAMA_BUILD_TESTS=OFF','-DLLAMA_BUILD_SERVER=OFF'
+          )
+          if ("${{ matrix.arch }}" -eq "ARM64") { $cmakeArgs += @('-T','ClangCL') }
+          & cmake @cmakeArgs
+          cmake --build llama.cpp/build --config Release --target llama-completion --parallel
           if ($LASTEXITCODE -ne 0) {
             cmake --build llama.cpp/build --config Release --target llama-cli --parallel
           }
