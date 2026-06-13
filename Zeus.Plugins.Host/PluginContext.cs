@@ -20,7 +20,8 @@ internal sealed class PluginContext : IPluginContext
         IPluginSettings settings,
         IRadioStateReader? radio,
         IRadioController? radioController,
-        IAudioPlaybackSink? playback = null)
+        IAudioPlaybackSink? playback = null,
+        IQrzLookup? qrz = null)
     {
         PluginId = pluginId;
         Manifest = manifest;
@@ -31,6 +32,7 @@ internal sealed class PluginContext : IPluginContext
         Radio = radio;
         RadioController = radioController;
         Playback = playback;
+        Qrz = qrz;
     }
 
     public string PluginId { get; }
@@ -42,4 +44,5 @@ internal sealed class PluginContext : IPluginContext
     public IRadioStateReader? Radio { get; }
     public IRadioController? RadioController { get; }
     public IAudioPlaybackSink? Playback { get; }
+    public IQrzLookup? Qrz { get; }
 }
