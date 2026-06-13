@@ -76,16 +76,28 @@ public sealed class WhisperTranscriber
     public static string ModelDir => Path.Combine(ZeusAppData(), "whisper");
 
     /// <summary>
-    /// Transcribe a WAV (any sample rate — whisper-cli resamples to 16 kHz
-    /// internally). Returns the transcript text, or null if transcription is
-    /// unavailable, timed out, or failed. NEVER throws into the caller, and
-    /// NEVER blocks past <paramref name="timeout"/> — a wedged child is killed.
+    /// Transcribe a WAV. whisper-cli HARD-REQUIRES 16 kHz input (it rejects any
+    /// other rate but still exits 0 with no output — a silent failure), so the
+    /// over is first down-converted to 16 kHz mono in-process via
+    /// <see cref="WhisperWav.Prepare"/>; the original file is left untouched.
+    /// Returns the transcript text, or null if transcription is unavailable,
+    /// timed out, or failed. NEVER throws into the caller, and NEVER blocks past
+    /// <paramref name="timeout"/> — a wedged child is killed.
     /// </summary>
     public async Task<string?> TranscribeAsync(string wavPath, TimeSpan timeout, CancellationToken ct)
     {
         var cliPath = LocateCli();
         var modelPath = LocateModel();
         if (cliPath is null || modelPath is null || !File.Exists(wavPath)) return null;
+
+        // whisper-cli only reads 16 kHz WAVs; resample to a throw-away copy if
+        // the over isn't already at that rate (Voyeur overs are 48 kHz).
+        var feedPath = WhisperWav.Prepare(wavPath, out bool createdTempWav);
+        if (feedPath is null)
+        {
+            _log.LogWarning("voyeur.whisper unreadable WAV {Path} — segment left untranscribed", wavPath);
+            return null;
+        }
 
         var outBase = Path.Combine(Path.GetTempPath(), "zeus-voyeur-" + Guid.NewGuid().ToString("N"));
         var txtPath = outBase + ".txt";
@@ -100,7 +112,7 @@ public sealed class WhisperTranscriber
                 CreateNoWindow = true,
             };
             psi.ArgumentList.Add("-m"); psi.ArgumentList.Add(modelPath);
-            psi.ArgumentList.Add("-f"); psi.ArgumentList.Add(wavPath);
+            psi.ArgumentList.Add("-f"); psi.ArgumentList.Add(feedPath);
             psi.ArgumentList.Add("--prompt"); psi.ArgumentList.Add(HamPrompt);
             psi.ArgumentList.Add("-otxt");
             psi.ArgumentList.Add("-of"); psi.ArgumentList.Add(outBase);
@@ -133,7 +145,15 @@ public sealed class WhisperTranscriber
                 return null;
             }
 
-            if (!File.Exists(txtPath)) return null;
+            if (!File.Exists(txtPath))
+            {
+                // Exit 0 but no transcript file = whisper read the input but wrote
+                // nothing. Historically this was the 16 kHz-rejection silent
+                // failure; with the resample in place it should not recur, so
+                // surface it rather than dropping the over invisibly.
+                _log.LogWarning("voyeur.whisper produced no output for {Path} — segment left untranscribed", wavPath);
+                return null;
+            }
             var text = (await File.ReadAllTextAsync(txtPath, ct)).Trim();
             return string.IsNullOrWhiteSpace(text) ? null : Clean(text);
         }
@@ -145,6 +165,9 @@ public sealed class WhisperTranscriber
         finally
         {
             try { if (File.Exists(txtPath)) File.Delete(txtPath); } catch { /* ignore */ }
+            // Delete the throw-away 16 kHz copy (never the operator's original).
+            if (createdTempWav)
+                try { if (File.Exists(feedPath)) File.Delete(feedPath); } catch { /* ignore */ }
         }
     }
 
