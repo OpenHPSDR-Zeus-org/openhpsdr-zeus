@@ -168,11 +168,16 @@ jobs:
       - name: Add swap (avoid OOM)
         run: |
           set -eux
-          sudo fallocate -l 10G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
-          free -h
+          # The runner already has /swapfile in use ("Text file busy"), so grow
+          # swap on the larger /mnt ephemeral disk instead. Best-effort: the
+          # --parallel 2 cap below is the real guard, so don't fail the build if
+          # swap can't be added.
+          sudo fallocate -l 10G /mnt/swapfile \
+            || sudo dd if=/dev/zero of=/mnt/swapfile bs=1M count=10240 || true
+          sudo chmod 600 /mnt/swapfile || true
+          sudo mkswap /mnt/swapfile || true
+          sudo swapon /mnt/swapfile || true
+          free -h || true
 
       - name: Build whisper-cli
         run: |
