@@ -135,7 +135,12 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
             // Audio playback sink (local monitor + on-air TX inject). Provided
             // by the host when available; on-air only reaches the air under
             // operator MOX, so this is not capability-gated here.
-            playback: _services.GetService<IAudioPlaybackSink>());
+            playback: _services.GetService<IAudioPlaybackSink>(),
+            // QRZ callsign lookup, gated on NetworkAccess — the host reuses the
+            // operator's stored credentials + rate-limit gate (no second login).
+            qrz: granted.HasFlag(PluginCapabilities.NetworkAccess)
+                ? _services.GetService<IQrzLookup>()
+                : null);
 
         using (var initCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {
