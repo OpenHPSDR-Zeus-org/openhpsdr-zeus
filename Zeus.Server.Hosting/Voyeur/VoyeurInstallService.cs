@@ -83,10 +83,12 @@ public sealed class VoyeurInstallService
     private static readonly Dictionary<string, ModelDef> Models = new()
     {
         // --- engines (native binaries — required before models do anything) ---
+        // Min-size is a low floor to reject error pages, NOT a tight bound: a
+        // static whisper-cli zips to well under 1 MB, so keep this small.
         ["engine-whisper"] = new(EngineBase + "/whisper-{rid}.zip",
-            2_000_000, "Speech engine (whisper.cpp) — required for transcription", Kind.EngineWhisper, "whisper-engine.zip", Archive: true),
+            200_000, "Speech engine (whisper.cpp) — required for transcription", Kind.EngineWhisper, "whisper-engine.zip", Archive: true),
         ["engine-llama"] = new(EngineBase + "/llama-{rid}.zip",
-            2_000_000, "AI-summary engine (llama.cpp) — required for digests", Kind.EngineLlama, "llama-engine.zip", Archive: true),
+            200_000, "AI-summary engine (llama.cpp) — required for digests", Kind.EngineLlama, "llama-engine.zip", Archive: true),
         // --- transcription (whisper) ---
         ["medium.en"] = new("https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en.bin",
             1_300_000_000, "Transcription: Medium (English) — ~1.5 GB, recommended", Kind.Whisper, "ggml-medium.en.bin"),
