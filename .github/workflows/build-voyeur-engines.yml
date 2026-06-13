@@ -51,10 +51,15 @@ jobs:
       matrix:
         include:
           - rid: osx-arm64
-            runner: macos-14   # Apple Silicon
+            arch: arm64    # Apple Silicon — native on the macos-14 runner
           - rid: osx-x64
-            runner: macos-13   # Intel
-    runs-on: ${{ matrix.runner }}
+            arch: x86_64   # Intel — cross-compiled on the SAME macos-14 runner.
+                           # GitHub's macos-13 (Intel) hosted pool is being wound
+                           # down (jobs queued 14h+). GGML_NATIVE=OFF means no
+                           # -march=native, so the x86_64 slice builds portably
+                           # here; CMAKE_OSX_ARCHITECTURES picks the slice and the
+                           # otool self-containment check below is arch-agnostic.
+    runs-on: macos-14
     steps:
       - name: Install build tools
         run: brew install cmake git
@@ -68,6 +73,7 @@ jobs:
           git clone --depth 1 -b "${WHISPER_REF}" https://github.com/ggml-org/whisper.cpp
           cmake -S whisper.cpp -B whisper.cpp/build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_OPENMP=OFF \
             -DGGML_NATIVE=OFF \
@@ -88,6 +94,7 @@ jobs:
           # We pass a local model path, so HTTPS isn't needed.
           cmake -S llama.cpp -B llama.cpp/build \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_OPENMP=OFF \
             -DGGML_NATIVE=OFF \
@@ -120,6 +127,14 @@ jobs:
             bad=$(otool -L "$b" | tail -n +2 | awk '{print $1}' \
                   | grep -vE '^/usr/lib/|^/System/' || true)
             if [ -n "$bad" ]; then echo "ERROR: non-system deps in $b:"; echo "$bad"; exit 1; fi
+            # Assert the cross-compile actually produced the requested slice — a
+            # silent fall-back to the host arch (arm64) would ship a binary that
+            # won't run on Intel Macs while still passing every other check.
+            echo "== lipo -archs $b =="
+            got=$(lipo -archs "$b")
+            if [ "$got" != "${{ matrix.arch }}" ]; then
+              echo "ERROR: $b is '$got', expected '${{ matrix.arch }}'"; exit 1
+            fi
             codesign -dv "$b" 2>&1 | grep -i 'Signature' || true
           done
 
