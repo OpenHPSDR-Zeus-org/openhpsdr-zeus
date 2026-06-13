@@ -167,84 +167,6 @@ public static class ZeusEndpoints
             catch (FileNotFoundException) { return Results.NotFound(new { error = "recording not found" }); }
         });
 
-        // ---- Voyeur Mode (zeus-la5) — unattended net monitor + log mgmt ----
-        app.MapGet("/api/voyeur/status", (VoyeurMonitorService v) => Results.Ok(v.Status()));
-        // Transcription readiness + setup hint for the panel (Phase 2).
-        app.MapGet("/api/voyeur/transcription",
-            (Zeus.Server.Voyeur.WhisperTranscriber w, Zeus.Server.Voyeur.LlamaSummarizer l) =>
-            Results.Ok(new
-            {
-                available = w.Available,
-                modelDir = Zeus.Server.Voyeur.WhisperTranscriber.ModelDir,
-                digestAvailable = l.Available,
-            }));
-        // In-app, terminal-free transcription setup (cross-platform model download).
-        app.MapGet("/api/voyeur/install/models", () =>
-            Results.Ok(Zeus.Server.Voyeur.VoyeurInstallService.AvailableModels));
-        app.MapGet("/api/voyeur/install/status", (Zeus.Server.Voyeur.VoyeurInstallService i) =>
-            Results.Ok(i.Status()));
-        app.MapPost("/api/voyeur/install/model", (VoyeurInstallRequest body, Zeus.Server.Voyeur.VoyeurInstallService i) =>
-            Results.Ok(i.InstallModel(body?.Model ?? "small.en")));
-        app.MapPost("/api/voyeur/install/cancel", (Zeus.Server.Voyeur.VoyeurInstallService i) =>
-        {
-            i.Cancel();
-            return Results.Ok(i.Status());
-        });
-        app.MapPost("/api/voyeur/start", (VoyeurStartRequest? body, VoyeurMonitorService v) =>
-            Results.Ok(v.Start(keepAudio: body?.KeepAudio ?? true)));
-        app.MapPost("/api/voyeur/stop", (VoyeurMonitorService v) => Results.Ok(v.Stop()));
-        app.MapGet("/api/voyeur/sessions", (Zeus.Server.Voyeur.VoyeurStore store) =>
-            Results.Ok(store.ListSessions()));
-        app.MapGet("/api/voyeur/sessions/{id}", (string id, Zeus.Server.Voyeur.VoyeurStore store) =>
-        {
-            var d = store.GetSession(id);
-            return d is null ? Results.NotFound(new { error = "session not found" }) : Results.Ok(d);
-        });
-        // Rename and/or pin ("save") a log so retention never prunes it.
-        app.MapPatch("/api/voyeur/sessions/{id}",
-            (string id, Zeus.Server.Voyeur.VoyeurUpdateRequest body, Zeus.Server.Voyeur.VoyeurStore store) =>
-        {
-            var d = store.Update(id, body?.Label, body?.Pinned);
-            return d is null ? Results.NotFound(new { error = "session not found" }) : Results.Ok(d);
-        });
-        // Delete a log: records + on-disk segment audio.
-        app.MapDelete("/api/voyeur/sessions/{id}", (string id, Zeus.Server.Voyeur.VoyeurStore store) =>
-            store.Delete(id)
-                ? Results.Ok(new { deleted = id })
-                : Results.NotFound(new { error = "session not found" }));
-        // Phase 3: report (roster who-was-on + stats + any saved digest).
-        app.MapGet("/api/voyeur/sessions/{id}/report", (string id, Zeus.Server.Voyeur.VoyeurStore store) =>
-        {
-            var r = store.GetReport(id);
-            return r is null ? Results.NotFound(new { error = "session not found" }) : Results.Ok(r);
-        });
-        // Phase 3: search every log's overs by callsign / name / transcript text.
-        app.MapGet("/api/voyeur/search", (string? q, Zeus.Server.Voyeur.VoyeurStore store) =>
-            Results.Ok(store.Search(q ?? "")));
-        // Phase 3B: generate the local-LLM topic digest for a session, on demand.
-        app.MapPost("/api/voyeur/sessions/{id}/digest",
-            async (string id, Zeus.Server.Voyeur.VoyeurStore store, Zeus.Server.Voyeur.LlamaSummarizer llama, CancellationToken ct) =>
-        {
-            if (!llama.Available)
-                return Results.BadRequest(new { error = "digest model not installed" });
-            var transcript = store.SessionTranscript(id);
-            if (string.IsNullOrWhiteSpace(transcript))
-                return Results.BadRequest(new { error = "no transcript to summarize yet" });
-            var digest = await llama.SummarizeAsync(transcript, TimeSpan.FromSeconds(120), ct);
-            if (digest is null)
-                return Results.StatusCode(503);
-            store.SetDigest(id, digest);
-            return Results.Ok(store.GetReport(id));
-        });
-        // Phase 3: stream a captured over's audio for in-panel replay.
-        app.MapGet("/api/voyeur/segments/{segId}/audio", (string segId, Zeus.Server.Voyeur.VoyeurStore store) =>
-        {
-            var path = store.GetSegmentAudioPath(segId);
-            return path is null
-                ? Results.NotFound(new { error = "audio not found" })
-                : Results.File(path, "audio/wav", enableRangeProcessing: true);
-        });
-
         app.MapGet("/api/state", (RadioService r) => r.Snapshot());
 
         // TX diagnostic — exposes the producer/consumer counts for the mic-to-IQ ring
@@ -1573,5 +1495,3 @@ internal sealed record ChainOrderSetRequest(List<string> PluginIds);
 internal sealed record MasterBypassSetRequest(bool Bypassed);
 internal sealed record WavRecordStartRequest(string? Source);
 internal sealed record WavPlayRequest(string? File);
-internal sealed record VoyeurStartRequest(bool? KeepAudio);
-internal sealed record VoyeurInstallRequest(string? Model);

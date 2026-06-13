@@ -55,10 +55,10 @@ describe('AddPanelModal', () => {
     const cards = container.querySelectorAll(
       '[data-testid="add-panel-cards"] .add-panel-card',
     );
-    // 22 panels in registry (CW Decoder added in zeus-cdn; RF-2K panel was
-    // extracted to a plugin; Rotator Dial was added in #385; WAV recorder
-    // added in #579; Voyeur Mode net monitor added in zeus-la5).
-    expect(cards.length).toBe(22);
+    // 21 panels in registry (CW Decoder added in zeus-cdn; RF-2K panel and
+    // Voyeur Mode net monitor were both extracted to plugins; Rotator Dial was
+    // added in #385; WAV recorder added in #579).
+    expect(cards.length).toBe(21);
     unmount();
   });
 
