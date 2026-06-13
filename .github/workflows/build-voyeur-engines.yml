@@ -52,8 +52,9 @@ jobs:
         include:
           - rid: osx-arm64
             runner: macos-14   # Apple Silicon
-          - rid: osx-x64
-            runner: macos-13   # Intel
+          # osx-x64 (Intel / macos-13) dropped: GitHub's Intel-Mac runner pool
+          # is being wound down and jobs sit queued for 14h+. Apple-Silicon
+          # covers current Macs; re-add this row if an Intel-Mac user needs it.
     runs-on: ${{ matrix.runner }}
     steps:
       - name: Install build tools
