@@ -55,6 +55,15 @@ public interface IPluginContext
     /// need no change.
     /// </summary>
     IAudioPlaybackSink? Playback => null;
+
+    /// <summary>
+    /// Host-mediated QRZ callsign lookup, reusing the operator's stored QRZ
+    /// credentials + session + rate-limit gate. Null unless
+    /// <see cref="PluginCapabilities.NetworkAccess"/> was granted and the host
+    /// has QRZ configured. Default implementation returns null so existing
+    /// hosts / test doubles need no change.
+    /// </summary>
+    IQrzLookup? Qrz => null;
 }
 
 /// <summary>Key/value persistence scoped to one plugin id.</summary>

@@ -85,7 +85,7 @@ public sealed class AudioTapBridge : IHostedService
         var taps = _rxTaps;
         if (taps.Length == 0) return;
         var span = block.Span;
-        var ctx = new AudioBlockContext(sampleRate, 1, span.Length, 0, mox: false);
+        var ctx = new AudioBlockContext(sampleRate, 1, span.Length, 0, mox: false, receiver: receiver);
         for (int i = 0; i < taps.Length; i++)
         {
             try { taps[i].OnRxAudio(span, ctx); } catch { /* a tap must never break audio */ }
