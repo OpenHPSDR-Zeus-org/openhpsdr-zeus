@@ -80,7 +80,10 @@ public class ManifestValidatorTests
     [Fact]
     public void IsAbiCompatible_ExactMatch_True()
     {
-        Assert.True(ManifestValidator.IsAbiCompatible(Make(), 1, "1.0.0"));
+        // Host at the current SDK version vs a plugin built for it (Make() defaults
+        // sdkMin to AbiVersion.SdkVersion) — reference the constant, not a frozen
+        // literal, so this stays correct across additive SDK minor bumps.
+        Assert.True(ManifestValidator.IsAbiCompatible(Make(), 1, AbiVersion.SdkVersion));
     }
 
     [Fact]
