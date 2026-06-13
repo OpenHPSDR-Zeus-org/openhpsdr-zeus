@@ -42,8 +42,11 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+import { useEffect, useRef } from 'react';
 import { useDisplayStore } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
+import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
+import * as viewCenter from '../state/view-center';
 
 function pickStrideHz(spanHz: number, targetTicks: number): number {
   if (spanHz <= 0) return 1;
@@ -67,33 +70,94 @@ function formatMHz(hz: number, strideHz: number): string {
   return mhz.toFixed(6);
 }
 
-// Overlay rendered inside Panadapter's container. Positions ticks by
-// percentage of the total span so it stays aligned without measuring DOM
-// width: spanHz = panDb.length * hzPerPixel; centerHz is the radio's
-// physical LO and lands at 50%. The amber dial-marker line tracks
-// VfoHz, which equals centerHz outside CW and sits ±cw_pitch from
-// centre in CWU/CWL — in non-CW the marker stays at 50% (zero offset).
+// Overlay rendered inside Panadapter's container. Tick LABELS are laid out
+// by React at the 30 Hz frame rate (percentage of span around the frame's
+// centerHz, exactly as before); smooth horizontal MOTION between frames is
+// applied imperatively — a draw-bus callback translates the tick strip and
+// repositions the dial marker against the animated view-center
+// (state/view-center.ts), so motion runs at display rate with ZERO React
+// commits per display frame (issue #597; ticks are rigid under a pure pan).
+// The amber dial-marker line tracks VfoHz, which equals centerHz outside CW
+// and sits ±cw_pitch from centre in CWU/CWL.
 export function FreqAxis() {
   const centerHz = useDisplayStore((s) => s.centerHz);
   const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
-  const width = useDisplayStore((s) => s.panDb?.length ?? 0);
-  // Pure-pan viewport offset shifts the rendered window relative to the
-  // hardware NCO; tick labels and the dial-position marker recompute from
-  // the offset viewport centre.
-  const viewportOffsetHz = useDisplayStore((s) => s.viewportOffsetHz);
-  const vfoHz = useConnectionStore((s) => s.vfoHz);
+  // Header width — present even on frames whose pan payload is invalid, so
+  // the axis doesn't unmount during a brief invalid-frame run.
+  const width = useDisplayStore((s) => s.width);
+  // NOTE deliberately NO vfoHz selector: during a tuning gesture vfoHz
+  // updates at input rate and a selector here would re-render this
+  // component at display rate. The draw-bus callback reads it directly.
+
+  const tickStripRef = useRef<HTMLDivElement | null>(null);
+  const markerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    const update = () => {
+      const s = useDisplayStore.getState();
+      if (!s.width || s.hzPerPixel <= 0) return;
+      const spanHz = s.width * s.hzPerPixel;
+      const layoutCenter = Number(s.centerHz);
+      const view = viewCenter.isInitialized()
+        ? viewCenter.getViewCenterHz()
+        : layoutCenter;
+      // Ticks were laid out around layoutCenter; sliding the strip by the
+      // layout→view fraction of its own width keeps every label at its true
+      // frequency. translateX(%) is relative to the element's own width,
+      // which equals the container width (inset-x-0).
+      const strip = tickStripRef.current;
+      if (strip) {
+        const fracPct = ((layoutCenter - view) / spanHz) * 100;
+        strip.style.transform = `translateX(${fracPct}%)`;
+      }
+      const marker = markerRef.current;
+      if (marker) {
+        // The marker's distance from the zero line is the dial's settled
+        // offset from the display center: 0 outside CW, ±cw_pitch in
+        // CWU/CWL. Computing it as (vfo − commanded target) keeps the
+        // marker PINNED to the zero line during a glide (vfo and target
+        // move in lockstep at input time) instead of leading off it and
+        // easing back (operator feedback, 2026-06-12).
+        const vfoHz = useConnectionStore.getState().vfoHz;
+        const dialOffsetHz = viewCenter.isInitialized()
+          ? vfoHz - viewCenter.getTargetCenterHz()
+          : vfoHz - layoutCenter;
+        marker.style.left = `${((spanHz / 2 + dialOffsetHz) / spanHz) * 100}%`;
+      }
+    };
+    const schedule = () => requestDrawBusFrame(update);
+    const unsubVc = viewCenter.subscribe(schedule);
+    const unsubVfo = useConnectionStore.subscribe((s, prev) => {
+      if (s.vfoHz !== prev.vfoHz) schedule();
+    });
+    const unsubFrame = useDisplayStore.subscribe((s, prev) => {
+      if (s.lastSeq !== prev.lastSeq) schedule();
+    });
+    schedule();
+    return () => {
+      unsubVc();
+      unsubVfo();
+      unsubFrame();
+      cancelDrawBusFrame(update);
+    };
+  }, []);
 
   if (!width || hzPerPixel <= 0) return null;
 
   const spanHz = width * hzPerPixel;
   const stride = pickStrideHz(spanHz, 6);
-  const center = Number(centerHz) + viewportOffsetHz;
+  const center = Number(centerHz);
   const startHz = center - spanHz / 2;
   const endHz = center + spanHz / 2;
-  const dialPct = ((vfoHz - startHz) / spanHz) * 100;
+  // Initial (pre-draw-bus) marker position; the callback refines it against
+  // the animated view-center on the next frame.
+  const dialPct =
+    ((useConnectionStore.getState().vfoHz - startHz) / spanHz) * 100;
 
-  const firstIdx = Math.ceil(startHz / stride);
-  const lastIdx = Math.floor(endHz / stride);
+  // Lay ticks out one full stride beyond each edge so a glide can't expose
+  // a label-less gap before the next 30 Hz relayout catches up.
+  const firstIdx = Math.ceil((startHz - stride) / stride);
+  const lastIdx = Math.floor((endHz + stride) / stride);
   const ticks: { hz: number; pct: number }[] = [];
   for (let i = firstIdx; i <= lastIdx; i++) {
     const hz = i * stride;
@@ -102,19 +166,24 @@ export function FreqAxis() {
 
   return (
     <>
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-5 bg-neutral-950/70">
-        {ticks.map((t) => (
-          <div
-            key={t.hz}
-            className="absolute top-0 -translate-x-1/2 font-mono text-[10px] leading-none text-neutral-300"
-            style={{ left: `${t.pct}%` }}
-          >
-            <div className="mx-auto h-1.5 w-px bg-neutral-400" />
-            <div className="mt-0.5 px-1 whitespace-nowrap">
-              {formatMHz(t.hz, stride)}
+      {/* Outer strip: fixed background + overflow clip. Inner strip: the
+          tick content, slid by the draw-bus callback — so the background
+          never moves and overscanned ticks scroll in from the edges. */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-5 overflow-hidden bg-neutral-950/70">
+        <div ref={tickStripRef} className="absolute inset-0">
+          {ticks.map((t) => (
+            <div
+              key={t.hz}
+              className="absolute top-0 -translate-x-1/2 font-mono text-[10px] leading-none text-neutral-300"
+              style={{ left: `${t.pct}%` }}
+            >
+              <div className="mx-auto h-1.5 w-px bg-neutral-400" />
+              <div className="mt-0.5 px-1 whitespace-nowrap">
+                {formatMHz(t.hz, stride)}
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
       {/*
         Dial-position marker — sits at VfoHz, which equals centerHz outside
@@ -123,6 +192,7 @@ export function FreqAxis() {
         accent blue + a 2px width to read clearly against the amber fill.
        */}
       <div
+        ref={markerRef}
         className="pointer-events-none absolute inset-y-0 z-[15] -translate-x-1/2"
         style={{ left: `${dialPct}%`, width: 2, background: 'var(--accent)' }}
       />

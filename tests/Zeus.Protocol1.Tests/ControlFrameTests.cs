@@ -391,17 +391,53 @@ public class ControlFrameTests
     }
 
     [Fact]
-    public void PhaseTable_MoxOff_NeverSendsTxFreq()
+    public void PhaseTable_MoxOff_SendsTxFreqAtLeastOncePerCycle()
     {
-        // Don't burn bandwidth on TX-freq updates the radio can't use. Regression
-        // guard: if somebody ever conflates the two tables, RX-idle packets would
-        // start carrying TxFreq unnecessarily.
+        // Square SDR 2 (HL2 gateware FAN=1,UART=1) emits Kenwood CAT on
+        // io_uart_txd whenever its FPGA TX-NCO register changes, which drives
+        // the rear-panel BVO PWM via the STM32G031 daughter-MCU (issue #361).
+        // The TX-NCO register has to be re-written during RX or the BVO never
+        // follows the dial. Mirrors deskhpsdr old_protocol.c:2837-2846 which
+        // sends C0=0x02 every round-robin pass regardless of MOX. Harmless on
+        // non-extamp boards.
+        int txFreqSlots = 0;
         for (int phase = 0; phase < 4; phase++)
         {
             var (first, second) = Protocol1Client.PhaseRegisters(phase, mox: false);
-            Assert.NotEqual(ControlFrame.CcRegister.TxFreq, first);
-            Assert.NotEqual(ControlFrame.CcRegister.TxFreq, second);
+            if (first == ControlFrame.CcRegister.TxFreq) txFreqSlots++;
+            if (second == ControlFrame.CcRegister.TxFreq) txFreqSlots++;
         }
+        Assert.True(txFreqSlots >= 1, $"expected ≥ 1 TxFreq slot per RX cycle, got {txFreqSlots}");
+    }
+
+    [Fact]
+    public void PhaseTable_MoxOff_StillSendsRxFreqEveryTick()
+    {
+        // Adding TxFreq to the RX rotation must not displace RxFreq below
+        // once-per-tick — dial response while receiving has to stay snappy.
+        for (int phase = 0; phase < 4; phase++)
+        {
+            var (first, second) = Protocol1Client.PhaseRegisters(phase, mox: false);
+            Assert.True(
+                first == ControlFrame.CcRegister.RxFreq || second == ControlFrame.CcRegister.RxFreq,
+                $"phase {phase} carries neither RxFreq slot");
+        }
+    }
+
+    [Fact]
+    public void PhaseTable_MoxOff_PsArmed_SendsTxFreqAtLeastOncePerCycle()
+    {
+        // Same extamp/BVO motivation as the non-PS table — PS-armed RX must
+        // also refresh TX-NCO so a Square SDR 2 operator who has PS on still
+        // gets BVO tracking on the dial.
+        int txFreqSlots = 0;
+        for (int phase = 0; phase < 16; phase++)
+        {
+            var (first, second) = Protocol1Client.PhaseRegisters(phase, mox: false, psArmed: true);
+            if (first == ControlFrame.CcRegister.TxFreq) txFreqSlots++;
+            if (second == ControlFrame.CcRegister.TxFreq) txFreqSlots++;
+        }
+        Assert.True(txFreqSlots >= 1, $"expected ≥ 1 TxFreq slot per PS-armed RX cycle, got {txFreqSlots}");
     }
 
     [Fact]
@@ -613,117 +649,6 @@ public class ControlFrameTests
         Assert.Equal(0, peak);
     }
 
-    private sealed class ConstAudioSource : IRxCodecAudioSource
-    {
-        private readonly short _l;
-        private readonly short _r;
-        public ConstAudioSource(short l, short r) { _l = l; _r = r; }
-        public (short L, short R) Next() => (_l, _r);
-    }
-
-    [Fact]
-    public void BuildDataPacket_AudioSource_WritesLrBytes_MoxOff()
-    {
-        // Issue #426 — RX audio path. Operator on Hermes is receiving (MOX
-        // off); WDSP demodulated audio flows through the audio source into
-        // EP2 L/R bytes so the radio's front-panel headphone codec sees
-        // real data. IQ bytes stay zero (no TX during RX).
-        var buf = new byte[1032];
-        var state = BaseState() with
-        {
-            Board = HpsdrBoardKind.Hermes,
-            Mox = false,
-            DriveLevel = 0,
-        };
-        var audio = new ConstAudioSource(l: 0x4321, r: unchecked((short)0xABCD));
-
-        ControlFrame.BuildDataPacket(
-            buf, 1,
-            ControlFrame.CcRegister.Config,
-            ControlFrame.CcRegister.RxFreq,
-            state,
-            iqSource: null,
-            audioSource: audio);
-
-        // First USB-frame payload begins at byte 16 (8-byte Metis + 8-byte USB header).
-        const int payload = 16;
-        // L s16 BE in bytes 0..1
-        Assert.Equal(0x43, buf[payload + 0]);
-        Assert.Equal(0x21, buf[payload + 1]);
-        // R s16 BE in bytes 2..3
-        Assert.Equal(0xAB, buf[payload + 2]);
-        Assert.Equal(0xCD, buf[payload + 3]);
-        // IQ stays zero — MOX off / no IQ source.
-        Assert.Equal(0, buf[payload + 4]);
-        Assert.Equal(0, buf[payload + 5]);
-        Assert.Equal(0, buf[payload + 6]);
-        Assert.Equal(0, buf[payload + 7]);
-    }
-
-    [Fact]
-    public void BuildDataPacket_AudioAndIqSources_BothWriteIntoSameGroup()
-    {
-        // Hermes during TX: WDSP RX-OUT still feeds the codec L/R bytes (the
-        // radio mutes its headphone hardware on MOX anyway) and TXA IQ feeds
-        // the I/Q bytes. They share the 8-byte group but write to disjoint
-        // offsets — no clobbering.
-        var buf = new byte[1032];
-        var state = BaseState() with
-        {
-            Board = HpsdrBoardKind.Hermes,
-            Mox = true,
-            DriveLevel = 0x80,
-        };
-        var iq = new ConstIqSource(i: 0x2000, q: -0x2000);
-        var audio = new ConstAudioSource(l: 0x1234, r: 0x5678);
-
-        ControlFrame.BuildDataPacket(
-            buf, 1,
-            ControlFrame.CcRegister.Config,
-            ControlFrame.CcRegister.RxFreq,
-            state,
-            iqSource: iq,
-            audioSource: audio);
-
-        const int payload = 16;
-        Assert.Equal(0x12, buf[payload + 0]);
-        Assert.Equal(0x34, buf[payload + 1]);
-        Assert.Equal(0x56, buf[payload + 2]);
-        Assert.Equal(0x78, buf[payload + 3]);
-        // IQ unchanged from the existing all-boards test.
-        var (peak, firstI, firstQ) = FirstFrameIqStats(buf);
-        Assert.True(peak > 0);
-        Assert.Equal(0x2000, firstI);
-        Assert.Equal(unchecked((short)-0x2000), firstQ);
-    }
-
-    [Fact]
-    public void BuildDataPacket_NoAudioSource_KeepsLrBytesZero()
-    {
-        // HL2 / pre-#426 behaviour: no audio source supplied → L/R bytes
-        // stay zero (the radio firmware ignores them anyway, and any other
-        // P1 board with a codec will be plumbed via the optional argument).
-        var buf = new byte[1032];
-        var state = BaseState() with
-        {
-            Board = HpsdrBoardKind.HermesLite2,
-            Mox = false,
-            DriveLevel = 0,
-        };
-
-        ControlFrame.BuildDataPacket(
-            buf, 1,
-            ControlFrame.CcRegister.Config,
-            ControlFrame.CcRegister.RxFreq,
-            state);
-
-        const int payload = 16;
-        Assert.Equal(0, buf[payload + 0]);
-        Assert.Equal(0, buf[payload + 1]);
-        Assert.Equal(0, buf[payload + 2]);
-        Assert.Equal(0, buf[payload + 3]);
-    }
-
     [Fact]
     public void BuildDataPacket_IqPayload_MasksLsbAcrossAllBoards()
     {
@@ -749,5 +674,71 @@ public class ControlFrameTests
         // Wire byte for I-low / Q-low must have LSB cleared.
         Assert.Equal(0, buf[16 + 5] & 0x01);
         Assert.Equal(0, buf[16 + 7] & 0x01);
+    }
+
+    // --- CW keyer config (C&C 0x0B / wire 0x16), zeus-bks ----------------
+    // Gateware rtl/cw_openhpsdr.sv:29-34 — speed=C3[5:0], mode=C3[7:6],
+    // weight=C4[6:0], spacing=C4[7], reverse=C2[6].
+
+    [Theory]
+    [InlineData(false, 0x16)]
+    [InlineData(true, 0x17)]
+    public void CwKeyerConfig_Cc0_Is_0x16_PlusMox(bool mox, byte expectedCc0)
+    {
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { Mox = mox };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.CwKeyerConfig, s);
+        Assert.Equal(expectedCc0, cc[0]);
+    }
+
+    [Fact]
+    public void CwKeyerConfig_PacksSpeed_IntoC3LowSixBits()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { CwKeyerSpeedWpm = 25, CwKeyerMode = CwKeyerMode.IambicB };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.CwKeyerConfig, s);
+
+        // C3 = cc[3]: [5:0] = speed (25), [7:6] = mode (IambicB = 0b10).
+        Assert.Equal(25, cc[3] & 0x3F);
+        Assert.Equal(0b10, (cc[3] >> 6) & 0x03);
+    }
+
+    [Fact]
+    public void CwKeyerConfig_StraightMode_PacksModeZero()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { CwKeyerSpeedWpm = 22, CwKeyerMode = CwKeyerMode.Straight };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.CwKeyerConfig, s);
+        Assert.Equal(0, (cc[3] >> 6) & 0x03);
+        // Speed is still encoded — the gateware just ignores it in straight
+        // mode. Pinning it documents that we don't zero speed by mode.
+        Assert.Equal(22, cc[3] & 0x3F);
+    }
+
+    [Theory]
+    [InlineData(80, 60)]   // above the 0-60 gateware range → clamped to 60
+    [InlineData(-5, 0)]    // negative → clamped to 0
+    [InlineData(60, 60)]   // boundary
+    public void CwKeyerConfig_ClampsSpeed_To_0_60(int wpm, int expected)
+    {
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { CwKeyerSpeedWpm = wpm, CwKeyerMode = CwKeyerMode.IambicA };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.CwKeyerConfig, s);
+        Assert.Equal(expected, cc[3] & 0x3F);
+    }
+
+    [Fact]
+    public void CwKeyerConfig_DefaultWeightSpacingReverse()
+    {
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { CwKeyerSpeedWpm = 20, CwKeyerMode = CwKeyerMode.IambicA };
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.CwKeyerConfig, s);
+
+        // C4[6:0] = weight 50, C4[7] = spacing off (0).
+        Assert.Equal(50, cc[4] & 0x7F);
+        Assert.Equal(0, (cc[4] >> 7) & 0x01);
+        // C2[6] = reverse off (0). C1 unused.
+        Assert.Equal(0, (cc[2] >> 6) & 0x01);
+        Assert.Equal(0, cc[1]);
     }
 }

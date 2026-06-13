@@ -123,5 +123,14 @@ public sealed class PsSettingsEntry
     // the factory default from RadioService.ResolvePsHwPeak". See lengthy
     // header comment above for the why.
     public Dictionary<string, double> HwPeakByBoard { get; set; } = new();
+    // PS TX feedback attenuation (dB) per board, same key scheme as
+    // HwPeakByBoard. Keeps a hot external-tap feedback chain (e.g. an RF2K-S
+    // −55 dB coupler into G2 PS-IN) out of ADC saturation by restoring the
+    // converged attenuation on every connect, instead of booting at 0 dB
+    // where the feedback rails and calcc can never fit. Written by
+    // RadioService.PersistPsTxAttn when the auto-attenuate dance (or a manual
+    // control) changes it; consumed on connect by the DspPipelineService
+    // restore. Empty on first run — no entry means "leave the radio at 0".
+    public Dictionary<string, int> TxAttnByBoard { get; set; } = new();
     public DateTime UpdatedUtc { get; set; }
 }

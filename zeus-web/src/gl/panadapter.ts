@@ -59,11 +59,6 @@ export type PanRenderer = {
     dbMin: number,
     dbMax: number,
     offsetPx: number,
-    // Dial cursor X offset in clip space (range [-1, +1]). 0 = dead centre
-    // (dial aligned with the hardware NCO). When non-zero the orange
-    // tuning-cursor line shifts horizontally to follow the dial while the
-    // spectrum stays anchored on the hardware NCO.
-    cursorXOffset?: number,
   ) => void;
   // Update the trace + fill colour. Components 0..1, premultiplied alpha is
   // applied inside draw via the FILL_ALPHA_TOP uniform; callers pass plain
@@ -137,10 +132,15 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   let panTexWidth = 0;
+  // Issue #597: dataDirty elision. During a view-center glide the SAME
+  // adopted Float32Array is drawn many times with only the offset uniform
+  // changing — re-uploading the texture + VBO each tick is pure waste.
+  // Reference identity is the dirty signal: the component swaps the array
+  // reference only when it adopts fresh data.
+  let lastUploadedPan: Float32Array | null = null;
 
   const cursorProg = buildProgram(gl, CURSOR_VS, CURSOR_FS);
   const uCursorColor = gl.getUniformLocation(cursorProg, 'uColor');
-  const uCursorXOffset = gl.getUniformLocation(cursorProg, 'uXOffset');
   const cursorVao = gl.createVertexArray()!;
   const cursorVbo = gl.createBuffer()!;
   gl.bindVertexArray(cursorVao);
@@ -158,39 +158,44 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
     resize(w, h) {
       gl.viewport(0, 0, w, h);
     },
-    draw(panDb, dbMin, dbMax, offsetPx, cursorXOffset = 0) {
+    draw(panDb, dbMin, dbMax, offsetPx) {
       gl.clearColor(0, 0, 0, 0);
       gl.clear(gl.COLOR_BUFFER_BIT);
 
       // Upload pan dB into the 1-row R32F texture. texImage2D re-allocates on
-      // width change; texSubImage2D otherwise just streams the row.
+      // width change; texSubImage2D otherwise just streams the row. Skipped
+      // entirely when this exact array was already uploaded (motion-only
+      // redraw during a view-center glide — issue #597).
+      const dataDirty = panDb !== lastUploadedPan || panDb.length !== panTexWidth;
       gl.activeTexture(gl.TEXTURE0);
       gl.bindTexture(gl.TEXTURE_2D, panTex);
-      if (panDb.length !== panTexWidth) {
-        gl.texImage2D(
-          gl.TEXTURE_2D,
-          0,
-          gl.R32F,
-          panDb.length,
-          1,
-          0,
-          gl.RED,
-          gl.FLOAT,
-          panDb,
-        );
-        panTexWidth = panDb.length;
-      } else {
-        gl.texSubImage2D(
-          gl.TEXTURE_2D,
-          0,
-          0,
-          0,
-          panDb.length,
-          1,
-          gl.RED,
-          gl.FLOAT,
-          panDb,
-        );
+      if (dataDirty) {
+        if (panDb.length !== panTexWidth) {
+          gl.texImage2D(
+            gl.TEXTURE_2D,
+            0,
+            gl.R32F,
+            panDb.length,
+            1,
+            0,
+            gl.RED,
+            gl.FLOAT,
+            panDb,
+          );
+          panTexWidth = panDb.length;
+        } else {
+          gl.texSubImage2D(
+            gl.TEXTURE_2D,
+            0,
+            0,
+            0,
+            panDb.length,
+            1,
+            gl.RED,
+            gl.FLOAT,
+            panDb,
+          );
+        }
       }
 
       // Fill (premultiplied alpha to avoid halo on the glowing top edge).
@@ -216,8 +221,11 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
       if (traceBytes > traceCapacity) {
         gl.bufferData(gl.ARRAY_BUFFER, traceBytes, gl.STREAM_DRAW);
         traceCapacity = traceBytes;
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, panDb);
+      } else if (dataDirty) {
+        gl.bufferSubData(gl.ARRAY_BUFFER, 0, panDb);
       }
-      gl.bufferSubData(gl.ARRAY_BUFFER, 0, panDb);
+      lastUploadedPan = panDb;
       gl.uniform1f(uTraceWidth, panDb.length);
       gl.uniform1f(uTraceDbMin, dbMin);
       gl.uniform1f(uTraceDbMax, dbMax);
@@ -228,10 +236,6 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
       gl.useProgram(cursorProg);
       gl.bindVertexArray(cursorVao);
       gl.uniform3f(uCursorColor, 0.96, 0.74, 0.18);
-      // Clip-space X is [-1, +1] (full panadapter width). Clamp so a wild
-      // off-screen offset doesn't disappear silently — the cursor sticks to
-      // the edge as the operator clicks beyond the displayed bandwidth.
-      gl.uniform1f(uCursorXOffset, Math.max(-1, Math.min(1, cursorXOffset)));
       gl.drawArrays(gl.LINES, 0, 2);
 
       gl.bindVertexArray(null);

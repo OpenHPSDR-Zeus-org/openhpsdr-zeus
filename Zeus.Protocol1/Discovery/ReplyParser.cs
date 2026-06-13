@@ -84,6 +84,16 @@ public static class ReplyParser
         var board = MapBoard(rawBoardId);
         var isHl2 = board == HpsdrBoardKind.HermesLite2 && codeVersion >= HermesLite2CodeVersionThreshold;
 
+        // Wire byte 0x06 is shared by genuine Hermes Lite 2 units AND by the
+        // Hermes-II / ANAN-10E firmware family (e.g. Hermes10E_v1.5.rbf).
+        // Genuine HL2 units always report code versions >= HermesLite2CodeVersionThreshold (40).
+        // A board that sent 0x06 with a version below that threshold is a Hermes-II / ANAN-10E;
+        // reclassify so downstream drive-model and calibration dispatch select the correct
+        // 8-bit full-byte profile instead of HL2's 4-bit nibble/percentage model.
+        // Issue #493: ANAN-10E with Hermes10E_v1.5.rbf sends byte 0x06, version 15.
+        if (!isHl2 && board == HpsdrBoardKind.HermesLite2)
+            board = HpsdrBoardKind.HermesII;
+
         var fixedIp = isHl2 && (hl2Flags & Hl2FixedIpBit) != 0;
         var fixedIpOverridesDhcp = isHl2 && (hl2Flags & (Hl2FixedIpBit | Hl2DhcpOverrideBit)) == (Hl2FixedIpBit | Hl2DhcpOverrideBit);
         var macModified = isHl2 && (hl2Flags & Hl2MacModifiedBit) != 0;

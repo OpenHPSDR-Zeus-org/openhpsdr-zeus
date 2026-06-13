@@ -1,11 +1,16 @@
 #!/bin/bash
 # Build Openhpsdr Zeus as TWO Linux AppImages — one per launch mode.
-# Usage: ./create-linux-desktop-appimage.sh <version>
+# Usage: ./create-linux-desktop-appimage.sh <version> [rid]
 # Example: ./create-linux-desktop-appimage.sh 0.4.1
+#          ./create-linux-desktop-appimage.sh 0.4.1 linux-arm64
 #
-# Output:
-#   OpenhpsdrZeus-<version>-linux-x86_64.AppImage         — desktop window
-#   OpenhpsdrZeus-Server-<version>-linux-x86_64.AppImage  — backend + status window
+# Output (x64):   OpenhpsdrZeus-<version>-linux-x86_64.AppImage
+#                 OpenhpsdrZeus-Server-<version>-linux-x86_64.AppImage
+# Output (arm64): OpenhpsdrZeus-<version>-linux-aarch64.AppImage
+#                 OpenhpsdrZeus-Server-<version>-linux-aarch64.AppImage
+#
+# arm64 AppImages are cross-built from an x64 runner via ARCH=aarch64 —
+# appimagetool downloads the aarch64 runtime automatically.
 #
 # Both wrap the same OpenhpsdrZeus binary; they differ only in the AppRun
 # / .desktop Exec line (--desktop vs --server). Users grab whichever icon
@@ -28,6 +33,15 @@
 set -e
 
 VERSION="${1:-0.0.0}"
+RID="${2:-linux-x64}"
+
+# Derive the AppImage architecture label from the RID.
+# appimagetool uses these exact strings for ARCH= and output filename suffix.
+case "${RID}" in
+    linux-x64)   APPIMAGE_ARCH="x86_64"  ;;
+    linux-arm64) APPIMAGE_ARCH="aarch64" ;;
+    *) echo "Unsupported RID '${RID}' for AppImage build"; exit 1 ;;
+esac
 
 if [[ "$(uname -s)" != "Linux" ]]; then
     echo "Warning: AppImage build is intended to run on Linux. Continuing anyway"
@@ -35,11 +49,11 @@ if [[ "$(uname -s)" != "Linux" ]]; then
     echo "         a Linux kernel for the squashfs invocation."
 fi
 
-echo "Creating Openhpsdr Zeus AppImage v${VERSION}..."
+echo "Creating Openhpsdr Zeus AppImage v${VERSION} for ${RID} (ARCH=${APPIMAGE_ARCH})..."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-PUBLISH_DIR="${REPO_ROOT}/OpenhpsdrZeus/bin/Release/net10.0/linux-x64/publish"
+PUBLISH_DIR="${REPO_ROOT}/OpenhpsdrZeus/bin/Release/net10.0/${RID}/publish"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
 APPDIR="${OUTPUT_DIR}/OpenhpsdrZeus.AppDir"
 ICON_SOURCE="${REPO_ROOT}/docs/pics/zeus.png"
@@ -49,10 +63,10 @@ ICON_SOURCE="${REPO_ROOT}/docs/pics/zeus.png"
 # step before any installer-script invocation, so this fallback is skipped
 # there.
 if [ ! -d "${PUBLISH_DIR}" ] || [ -z "$(ls -A "${PUBLISH_DIR}" 2>/dev/null)" ]; then
-    echo "PUBLISH_DIR is missing — falling back to local publish for linux-x64..."
+    echo "PUBLISH_DIR is missing — falling back to local publish for ${RID}..."
     dotnet publish "${REPO_ROOT}/OpenhpsdrZeus/OpenhpsdrZeus.csproj" \
         -c Release \
-        -r linux-x64 \
+        -r "${RID}" \
         --self-contained true \
         -p:PublishSingleFile=false \
         -p:UseAppHost=true \
@@ -110,18 +124,18 @@ chmod +x "${APPDIR}/AppRun"
 
 # README inside the AppDir, surfaced as a sibling file in the squashfs.
 cat > "${APPDIR}/README.txt" << EOF
-Openhpsdr Zeus v${VERSION} for Linux (AppImage)
+Openhpsdr Zeus v${VERSION} for Linux (AppImage, ${APPIMAGE_ARCH})
 
 USAGE
-  chmod +x OpenhpsdrZeus-${VERSION}-linux-x86_64.AppImage
-  ./OpenhpsdrZeus-${VERSION}-linux-x86_64.AppImage
+  chmod +x OpenhpsdrZeus-${VERSION}-linux-${APPIMAGE_ARCH}.AppImage
+  ./OpenhpsdrZeus-${VERSION}-linux-${APPIMAGE_ARCH}.AppImage
 
   Optional: integrate with your desktop:
     sudo apt install appimagelauncher   # Debian/Ubuntu
     # then double-click the .AppImage
 
 REQUIREMENTS
-  - Linux x86_64, glibc 2.31+ (Debian 11+, Ubuntu 22.04+, Fedora 36+, Arch, …)
+  - Linux ${APPIMAGE_ARCH}, glibc 2.31+ (Debian 11+, Ubuntu 22.04+, Fedora 36+, Arch, …)
   - libwebkit2gtk-4.1-0 (Photino's webview backend)
 
       Debian/Ubuntu:  sudo apt install libwebkit2gtk-4.1-0
@@ -159,12 +173,14 @@ else
     APPIMAGETOOL="${OUTPUT_DIR}/appimagetool-x86_64.AppImage"
 fi
 
-OUTPUT_APPIMAGE="${OUTPUT_DIR}/OpenhpsdrZeus-${VERSION}-linux-x86_64.AppImage"
+OUTPUT_APPIMAGE="${OUTPUT_DIR}/OpenhpsdrZeus-${VERSION}-linux-${APPIMAGE_ARCH}.AppImage"
 
 # --appimage-extract-and-run avoids the FUSE2 dependency that GitHub-hosted
 # runners (and most container envs) don't satisfy out of the box.
-echo "Building desktop-mode AppImage..."
-ARCH=x86_64 "${APPIMAGETOOL}" --appimage-extract-and-run "${APPDIR}" "${OUTPUT_APPIMAGE}"
+# ARCH tells appimagetool which architecture runtime to embed — allows
+# cross-building arm64 AppImages from an x64 runner.
+echo "Building desktop-mode AppImage (ARCH=${APPIMAGE_ARCH})..."
+ARCH="${APPIMAGE_ARCH}" "${APPIMAGETOOL}" --appimage-extract-and-run "${APPDIR}" "${OUTPUT_APPIMAGE}"
 
 echo "Desktop AppImage created at ${OUTPUT_APPIMAGE}"
 
@@ -202,9 +218,9 @@ StartupWMClass=Zeus Server
 EOF
 cp "${SERVER_APPDIR}/zeus.desktop" "${SERVER_APPDIR}/usr/share/applications/zeus.desktop"
 
-OUTPUT_SERVER_APPIMAGE="${OUTPUT_DIR}/OpenhpsdrZeus-Server-${VERSION}-linux-x86_64.AppImage"
-echo "Building server-mode AppImage..."
-ARCH=x86_64 "${APPIMAGETOOL}" --appimage-extract-and-run "${SERVER_APPDIR}" "${OUTPUT_SERVER_APPIMAGE}"
+OUTPUT_SERVER_APPIMAGE="${OUTPUT_DIR}/OpenhpsdrZeus-Server-${VERSION}-linux-${APPIMAGE_ARCH}.AppImage"
+echo "Building server-mode AppImage (ARCH=${APPIMAGE_ARCH})..."
+ARCH="${APPIMAGE_ARCH}" "${APPIMAGETOOL}" --appimage-extract-and-run "${SERVER_APPDIR}" "${OUTPUT_SERVER_APPIMAGE}"
 
 echo "Server AppImage created at ${OUTPUT_SERVER_APPIMAGE}"
 echo

@@ -42,10 +42,11 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef } from 'react';
 import { useTxStore } from '../state/tx-store';
 import { useMicPeakStore } from '../audio/mic-peak-store';
 import { useCapabilitiesStore } from '../state/capabilities-store';
+import { useBallisticReading } from './meters/useBallisticReading';
 
 // Pre-TX mic level indicator. The worklet measures peak dBFS on the raw
 // browser capture *before* any gain; the server then applies
@@ -63,7 +64,6 @@ import { useCapabilitiesStore } from '../state/capabilities-store';
 const MIN_DBFS = -60;
 const MAX_DBFS = 0;
 const CLIP_WARN_DBFS = -3;
-const PEAK_DECAY_MS = 1500;
 
 function dbfsToFraction(dbfs: number): number {
   const clamped = Math.max(MIN_DBFS, Math.min(MAX_DBFS, dbfs));
@@ -79,44 +79,40 @@ export function MicMeter() {
   // (0x1C) from useMicPeakStore instead. The two stores never converge —
   // each transport writes its own — so the meter shows whichever path is
   // actually live without bookkeeping in the hot loop.
+  //
+  // Subscriptions kept to fields that change from operator action (rare,
+  // not 10 Hz): hostMode flips on host startup, micGainDb on the gain knob,
+  // micError on a permission denial. The dBFS sample fields (micDbfs,
+  // peakDbfs) are read inside the rAF closure below via getState() so the
+  // 10 Hz wire stream doesn't drag this widget into re-rendering at the
+  // wire rate — the ballistic hook owns the visible cadence.
   const hostMode = useCapabilitiesStore((s) => s.capabilities?.host ?? null);
   const isNative = hostMode === 'desktop';
-  const browserDbfs = useTxStore((s) => s.micDbfs);
-  const nativeDbfs = useMicPeakStore((s) => s.peakDbfs);
-  const rawDbfs = isNative ? nativeDbfs : browserDbfs;
   const micGainDb = useTxStore((s) => s.micGainDb);
   const err = useTxStore((s) => s.micError);
+  const rootRef = useRef<HTMLDivElement | null>(null);
 
-  const effectiveDbfs = Math.min(MAX_DBFS, rawDbfs + micGainDb);
+  // Shared ballistic — averages + RC-smooths the (raw + gain) signal and
+  // holds the peak with the same physics as the analog dial and every
+  // other meter in the app. Closes over `isNative` and `micGainDb` so a
+  // gain-knob twist or a host-mode flip is picked up on the next tick.
+  const reading = useBallisticReading(
+    () => {
+      const tx = useTxStore.getState();
+      const raw = isNative
+        ? useMicPeakStore.getState().peakDbfs
+        : tx.micDbfs;
+      return Math.min(MAX_DBFS, raw + tx.micGainDb);
+    },
+    { min: MIN_DBFS, max: MAX_DBFS },
+    rootRef,
+  );
+  const effectiveDbfs = isFinite(reading.value) ? reading.value : MIN_DBFS;
   const fraction = dbfsToFraction(effectiveDbfs);
+  const peak = isFinite(reading.peak)
+    ? dbfsToFraction(reading.peak)
+    : fraction;
   const clipping = effectiveDbfs >= CLIP_WARN_DBFS;
-
-  const [peak, setPeak] = useState(fraction);
-  const peakAtRef = useRef<number>(performance.now());
-  const rafRef = useRef<number | null>(null);
-
-  useEffect(() => {
-    if (fraction >= peak) {
-      setPeak(fraction);
-      peakAtRef.current = performance.now();
-      return;
-    }
-    const tick = () => {
-      const elapsed = performance.now() - peakAtRef.current;
-      const decayed = Math.max(
-        fraction,
-        peak - (peak - fraction) * (elapsed / PEAK_DECAY_MS),
-      );
-      setPeak(decayed);
-      if (decayed > fraction) {
-        rafRef.current = requestAnimationFrame(tick);
-      }
-    };
-    rafRef.current = requestAnimationFrame(tick);
-    return () => {
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-    };
-  }, [fraction, peak]);
 
   if (err) {
     return (
@@ -131,13 +127,21 @@ export function MicMeter() {
 
   const readoutLabel =
     effectiveDbfs <= MIN_DBFS ? '−∞' : `${effectiveDbfs.toFixed(0)} dBFS`;
+  // Hint is a hover tooltip — sample raw dBFS one-shot from whichever
+  // store the active transport writes to (no subscription, no extra
+  // re-renders). Snapshot captured at React render time, which the
+  // ballistic hook drives at ~30 Hz max.
+  const rawSnapshot = isNative
+    ? useMicPeakStore.getState().peakDbfs
+    : useTxStore.getState().micDbfs;
   const hint =
     micGainDb !== 0
-      ? `raw ${rawDbfs.toFixed(0)} dBFS ${micGainDb > 0 ? '+' : '−'} ${Math.abs(micGainDb)} dB gain = ${effectiveDbfs.toFixed(0)} dBFS at ALC`
+      ? `raw ${rawSnapshot.toFixed(0)} dBFS ${micGainDb > 0 ? '+' : '−'} ${Math.abs(micGainDb)} dB gain = ${effectiveDbfs.toFixed(0)} dBFS at ALC`
       : undefined;
 
   return (
     <div
+      ref={rootRef}
       className="knob-group"
       style={{ minWidth: 180 }}
       role="meter"

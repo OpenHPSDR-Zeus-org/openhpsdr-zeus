@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Zeus.Plugins.Contracts;
+using Zeus.Plugins.Contracts.Audio;
 
 namespace Zeus.Plugins.Host;
 
@@ -130,7 +131,11 @@ public sealed class PluginManager : IHostedService, IAsyncDisposable
                 : null,
             radioController: granted.HasFlag(PluginCapabilities.ControlRadio)
                 ? _services.GetService<IRadioController>()
-                : null);
+                : null,
+            // Audio playback sink (local monitor + on-air TX inject). Provided
+            // by the host when available; on-air only reaches the air under
+            // operator MOX, so this is not capability-gated here.
+            playback: _services.GetService<IAudioPlaybackSink>());
 
         using (var initCts = CancellationTokenSource.CreateLinkedTokenSource(ct))
         {

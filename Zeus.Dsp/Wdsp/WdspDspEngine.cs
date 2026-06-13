@@ -285,6 +285,7 @@ public sealed class WdspDspEngine : IDspEngine
     // calcc state machine is visible in the server log without flooding.
     // Drop alongside the wdsp.psSeed log once PS is confirmed stable.
     private int _psInfoLogCounter;
+    private int _txOverdriveLogCounter;
 
     // TX Monitor — private RXA channel that demodulates the post-CFIR / post-
     // RSMPOUT TX IQ (the wire signal about to hit the radio) back to mono
@@ -535,6 +536,21 @@ public sealed class WdspDspEngine : IDspEngine
         NativeMethods.SetRXAShiftFreq(channelId, shiftHz);
         NativeMethods.RXANBPSetShiftFrequency(channelId, shiftHz);
         NativeMethods.SetRXAShiftRun(channelId, shiftHz != 0 ? 1 : 0);
+    }
+
+    public void SetRxDisplayFastAttack(int channelId, bool fast)
+    {
+        if (!_channels.TryGetValue(channelId, out var state)) return;
+        // RX display ONLY — channelId is the RXA channel whose analyzer was
+        // created in OpenChannel (XCreateAnalyzer(id, ...)). The TX analyzer
+        // (_txaChannelId) and PS-feedback analyzer keep TxAvgTauSec untouched,
+        // so a retune while keyed never disturbs the TX trace or PS monitor.
+        // AnalyzerLock mirrors SetZoom: SetDisplayAvBackmult races Spectrum0
+        // (worker) and GetPixels (pipeline tick) otherwise.
+        lock (state.AnalyzerLock)
+        {
+            ConfigureDisplayAveragingTau(channelId, fast ? FastAttackTauSec : DefaultAvgTauSec);
+        }
     }
 
     public void SetAgcTop(int channelId, double topDb)
@@ -1194,15 +1210,14 @@ public sealed class WdspDspEngine : IDspEngine
             NativeMethods.SetTXACompressorRun(id, 0);
             NativeMethods.SetTXACFCOMPRun(id, 0);
             NativeMethods.SetTXAPHROTRun(id, 0);
-            // CESSB (Controlled Envelope SSB) — unconditionally ON. Mirrors
-            // Thetis's WDSP entry point (dsp.cs:240 SetTXAosctrlRun) but
-            // without a user toggle: KISS, always on. WDSP's create_osctrl
-            // (TXA.c) ships sensible defaults (bandpass overshoot control on
-            // the SSB envelope) and no further setters are required —
-            // Thetis itself only ever calls SetTXAosctrlRun. Leaving CESSB
-            // off costs ~1–1.5 dB of average power on voice SSB; there is
-            // no operator scenario in which off is preferable, so no prefs
-            // key, no REST endpoint, no UI control. See bd zeus-5cg.
+            // CESSB / osctrl — ON at TXA open (Brian's default, ~1-1.5 dB
+            // average voice-SSB power; bd zeus-5cg). PS isn't armed at open, so
+            // this is the correct non-PS state. It is then toggled OFF while PS
+            // is armed and back ON on disarm in SetPsEnabled — because osctrl
+            // (a non-linear lookahead peak divisor) standalone in front of the
+            // ALC makes the peak envelope non-stationary on voice and breaks PS
+            // voice-peak correction (Thetis/pi/desk keep it out of the PS path).
+            // #559.
             NativeMethods.SetTXAosctrlRun(id, 1);
             NativeMethods.SetTXAEQRun(id, 0);
             NativeMethods.SetTXAAMSQRun(id, 0);
@@ -1254,7 +1269,15 @@ public sealed class WdspDspEngine : IDspEngine
             // chkPSMap = Checked = true).
             NativeMethods.SetPSPinMode(id, 1);
             NativeMethods.SetPSMapMode(id, 1);
-            NativeMethods.SetPSStabilize(id, 0);
+            // calcc rx_scale + coefficient IIR smoothing (alpha 0.9). ON for the
+            // P2 profile so continuous automode converges to a STEADY correction
+            // instead of applying each raw pass-to-pass fit — the latter makes
+            // the predistorted two-tone visibly jump on the TX panadapter and
+            // holds IMD short of its settled depth (#559, G2). DeskHPSDR ships
+            // this on for SATURN/new-protocol. OFF on P1/HL2 to keep the
+            // mi0bot-matched behaviour. _txaCfirRun is the existing P2-profile
+            // discriminator (CFIR runs only on P2; see above).
+            NativeMethods.SetPSStabilize(id, _txaCfirRun ? 1 : 0);
             NativeMethods.SetPSIntsAndSpi(id, _psInts, _psSpi);
             NativeMethods.SetPSMoxDelay(id, _psMoxDelaySec);
             NativeMethods.SetPSLoopDelay(id, _psLoopDelaySec);
@@ -1545,18 +1568,18 @@ public sealed class WdspDspEngine : IDspEngine
             // asserts SetTxFilter after SetTxMode using the per-mode-family
             // memory in RadioService. No auto-apply here.
             //
-            // TwoTone is sideband-sensitive (gen.c xgen mode-1 emits e^(-jωt)
-            // which always lands LSB-side of carrier). If a TwoTone test is
-            // mid-flight when the operator changes mode, re-assert PostGen
-            // freqs with the new sign so the tones stay inside the displayed
-            // bandpass. Mag and run flag stay as last set.
+            // TwoTone is sideband-sensitive. If a TwoTone test is mid-flight
+            // when the operator changes mode, re-assert PostGen freqs with the
+            // new sign so the tones stay inside the displayed bandpass. Sign
+            // convention matches Thetis (Setup.cs:11096): negate for LSB-family,
+            // positive for USB-family. Mag and run flag stay as last set.
             if (_twoToneArmed)
             {
-                bool usbFamily = mapped == RxaMode.USB
-                              || mapped == RxaMode.CWU
-                              || mapped == RxaMode.DIGU;
-                double signedF1 = usbFamily ? -_twoToneF1Hz : _twoToneF1Hz;
-                double signedF2 = usbFamily ? -_twoToneF2Hz : _twoToneF2Hz;
+                bool lsbFamily = mapped == RxaMode.LSB
+                              || mapped == RxaMode.CWL
+                              || mapped == RxaMode.DIGL;
+                double signedF1 = lsbFamily ? -_twoToneF1Hz : _twoToneF1Hz;
+                double signedF2 = lsbFamily ? -_twoToneF2Hz : _twoToneF2Hz;
                 NativeMethods.SetTXAPostGenTTFreq(txa, signedF1, signedF2);
                 _log.LogInformation(
                     "wdsp.setTxMode twoTone re-signed f1={F1} f2={F2} signedF1={SF1} signedF2={SF2} mode={Mode}",
@@ -1745,17 +1768,19 @@ public sealed class WdspDspEngine : IDspEngine
             if (_txaChannelId is not int txa) return;
             if (on)
             {
-                // gen.c xgen mode-1 emits e^(-jωt): positive freq lands on
-                // the LSB-side of carrier in any TX mode. USB-family modes
-                // need a sign flip so the tones appear above carrier inside
-                // the displayed bandpass. Cache the operator-supplied
-                // (unsigned) freqs so SetTxMode can re-assert with the
-                // correct sign on a mid-test mode change.
-                bool usbFamily = _txCurrentMode == RxaMode.USB
-                              || _txCurrentMode == RxaMode.CWU
-                              || _txCurrentMode == RxaMode.DIGU;
-                double signedF1 = usbFamily ? -freq1 : freq1;
-                double signedF2 = usbFamily ? -freq2 : freq2;
+                // Sideband sign — matches Thetis (Setup.cs:11096, chkInvertTones
+                // default ON): USB-family takes positive freqs (tones above
+                // carrier), LSB-family takes negated freqs so the tones land in
+                // the displayed bandpass on the correct side. Zeus previously had
+                // this inverted (flipped USB instead of LSB), which put the tones
+                // on the wrong sideband — outside the visible passband on USB.
+                // Cache the operator-supplied (unsigned) freqs so SetTxMode can
+                // re-assert with the correct sign on a mid-test mode change.
+                bool lsbFamily = _txCurrentMode == RxaMode.LSB
+                              || _txCurrentMode == RxaMode.CWL
+                              || _txCurrentMode == RxaMode.DIGL;
+                double signedF1 = lsbFamily ? -freq1 : freq1;
+                double signedF2 = lsbFamily ? -freq2 : freq2;
                 _twoToneF1Hz = freq1;
                 _twoToneF2Hz = freq2;
                 _twoToneArmed = true;
@@ -1799,6 +1824,22 @@ public sealed class WdspDspEngine : IDspEngine
             }
         }
         _log.LogInformation("wdsp.setPsHwPeak peak={Peak:F4}", hwPeak);
+    }
+
+    public void SetPsHold(bool hold)
+    {
+        if (_disposed != 0) return;
+        lock (_psLock)
+        {
+            int? txa;
+            lock (_txaLock) txa = _txaChannelId;
+            if (txa is not int id) return;
+            // hold → SetPSRunCal(0): stop calcc re-fitting (state machine parks),
+            // iqc keeps applying the current correction (no turn-off ramp).
+            // resume → SetPSRunCal(1).
+            NativeMethods.SetPSRunCal(id, hold ? 0 : 1);
+        }
+        _log.LogInformation("wdsp.setPsHold hold={Hold} (runcal={Run})", hold, hold ? 0 : 1);
     }
 
     public void SetPsControl(bool autoCal, bool singleCal)
@@ -1920,6 +1961,14 @@ public sealed class WdspDspEngine : IDspEngine
                 // becomes a no-op in that case and Tick keeps falling through
                 // to the existing TX/RX trace.
                 OpenPsFeedbackAnalyzer(id);
+                // CESSB/osctrl OFF while PS is armed (#559). osctrl is a
+                // non-linear lookahead peak divisor; standalone in front of the
+                // ALC it makes the peak envelope non-stationary on voice, so PS
+                // sees a moving target at the peaks → voice-peak splatter. Off
+                // here = the reference topology (Thetis/pi/desk keep it out of
+                // the PS path). Restored to Brian's default (ON) on disarm — so
+                // non-PS operators keep the ~1-1.5 dB average-power win.
+                NativeMethods.SetTXAosctrlRun(id, 0);
             }
             else
             {
@@ -1931,13 +1980,27 @@ public sealed class WdspDspEngine : IDspEngine
                 // disabling PS while NOT keyed, push 7 zero-IQ blocks through
                 // psccF so the calcc state machine advances to LRESET cleanly
                 // and doesn't latch a stale curve in iqc on re-arm.
-                var zeros = new float[PsFeedbackBlockSize];
-                for (int i = 0; i < 7; i++)
+                //
+                // ONLY when not transmitting. Mid-MOX (operator aborting PS
+                // during a TX), the live feedback FB pump is still writing real
+                // samples into psccF; interleaving 7 manual zero blocks races
+                // that stream and can wedge calcc in LCALC. While keyed the
+                // live feedback advances calcc on its own, so the manual drain
+                // is both unnecessary and harmful — skip it.
+                if (!_moxOn)
                 {
-                    NativeMethods.psccF(id, PsFeedbackBlockSize, zeros, zeros, zeros, zeros, 0, 0);
+                    var zeros = new float[PsFeedbackBlockSize];
+                    for (int i = 0; i < 7; i++)
+                    {
+                        NativeMethods.psccF(id, PsFeedbackBlockSize, zeros, zeros, zeros, zeros, 0, 0);
+                    }
                 }
                 NativeMethods.SetPSRunCal(id, 0);
                 NativeMethods.SetPSControl(id, 1, 0, 0, 0);
+                // Restore CESSB/osctrl ON — Brian's default for non-PS voice
+                // SSB (~1-1.5 dB average power; bd zeus-5cg). Only held off
+                // while PS is armed (see the enable branch above).
+                NativeMethods.SetTXAosctrlRun(id, 1);
             }
         }
         _log.LogInformation("wdsp.setPsEnabled enabled={Enabled}", enabled);
@@ -2183,6 +2246,23 @@ public sealed class WdspDspEngine : IDspEngine
                 _psInfoBuf[14], _psInfoBuf[15]);
         }
 
+        // Hot-audio robustness diagnostic. At ~1 Hz while PS is armed, surface
+        // the forward TX envelope PEAK (GetPSMaxTX, ~1.0 = at the ALC cap)
+        // next to the feedback level (info4), the scheck reject bitmask
+        // (info6), calcc fit count (info5), state and correcting flag. On a
+        // deliberately-hot over this separates the three candidate root
+        // causes: env climbing >1.0 = forward limiter escaping; fb railing
+        // (toward ADC saturation, ideal ~152) = feedback path saturating
+        // calcc's top bins; both bounded but info6=0x0040 spiking = fit
+        // destabilising on the top-skewed envelope PDF. Debug-level: kept as a
+        // diagnostic but no longer spams ~1 Hz on every TX in a normal run.
+        if (_psInfoLogCounter % 10 == 0)
+        {
+            _log.LogDebug(
+                "wdsp.psHot env={Env:F3} fb={Fb} info6=0x{Sc:X4} cal={Cal} state={St} cor={Cor}",
+                maxTx, _psInfoBuf[4], _psInfoBuf[6], _psInfoBuf[5], _psInfoBuf[15], _psInfoBuf[14]);
+        }
+
         return new PsStageMeters(
             FeedbackLevel: feedback,
             CalState: calState,
@@ -2391,10 +2471,30 @@ public sealed class WdspDspEngine : IDspEngine
             _log.LogWarning("wdsp.fexchange2 tx err={Err} (suppressed after 8 occurrences)", err);
         }
 
+        float txOutPeak = 0f;
         for (int i = 0; i < outSize; i++)
         {
             iqInterleaved[2 * i] = iout[i];
             iqInterleaved[2 * i + 1] = qout[i];
+            float e = iout[i] * iout[i] + qout[i] * qout[i];
+            if (e > txOutPeak) txOutPeak = e;
+        }
+        // Overdrive probe (#559): is the ALC limiting and is the wire IQ railing?
+        // outPeak≈1.0 = post-iqc IQ clipping the Int24 wire (splatter). alcGain
+        // (meter 14, dB) should go NEGATIVE under overdrive = ALC reducing gain
+        // (limiting); ~0 dB while the mic clips = ALC NOT limiting (the bug).
+        // Debug-level: kept as a diagnostic but no longer spams ~1 Hz on every
+        // TX in a normal run — the meter reads are skipped entirely when the
+        // log level isn't enabled.
+        if (++_txOverdriveLogCounter % 50 == 0 && _log.IsEnabled(LogLevel.Debug))
+        {
+            double alcGainDb = NativeMethods.GetTXAMeter(txa, 14);
+            double alcPkDb = NativeMethods.GetTXAMeter(txa, 12);
+            double micPkDb = NativeMethods.GetTXAMeter(txa, 0);
+            _log.LogDebug(
+                "wdsp.txOverdrive micPk={Mic:F1}dB alcGain={Alc:F1}dB alcPk={AlcPk:F1}dB outPeak={Out:F3}{Clip}",
+                micPkDb, alcGainDb, alcPkDb, Math.Sqrt(txOutPeak),
+                txOutPeak >= 0.998 * 0.998 ? " RAIL!" : "");
         }
 
         // TX Monitor — feed the post-CFIR / post-RSMPOUT IQ (the wire signal
@@ -2572,6 +2672,12 @@ public sealed class WdspDspEngine : IDspEngine
     // Thetis-style smoothed envelope so the operator sees signal shape, not
     // every voiced/unvoiced transition.
     private const double TxAvgTauSec = 0.175;
+    // Issue #597 Phase 0: retune fast-attack tau. ~20 ms at 30 fps gives
+    // backmult ≈ exp(-1/(30·0.02)) ≈ 0.19 — the newest frame dominates, so
+    // post-retune content settles in ~3 ticks (~100 ms) instead of the
+    // 300-400 ms melt the 100 ms default produces. Mirrors Thetis's
+    // fast-attack after a display center change (display.cs:6360-6383).
+    private const double FastAttackTauSec = 0.020;
     private const int LogRecursiveMode = 3;
 
     private static void ConfigureDisplayAveraging(int disp)

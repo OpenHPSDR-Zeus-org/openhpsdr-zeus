@@ -71,7 +71,13 @@ public sealed class TciServer : IHostedService, IDisposable
     private readonly TxMetersService _txMeters;
     private readonly SpotManager _spots;
     private readonly TxAudioIngest _txAudioIngest;
+    private readonly CwEngine _cwEngine;
+    private readonly CwSettingsStore _cwSettings;
     private readonly ILoggerFactory _loggerFactory;
+    // Tracks the previous CW engine state so we only emit cw_macros_empty
+    // on the Sending → Idle transition (i.e. when the queue actually
+    // drained), not on every Idle-stays-Idle status broadcast.
+    private CwEngineState _lastCwState = CwEngineState.Idle;
 
     private readonly ConcurrentDictionary<Guid, TciSession> _clients = new();
     private bool _subscribed;
@@ -121,6 +127,8 @@ public sealed class TciServer : IHostedService, IDisposable
         TxMetersService txMeters,
         SpotManager spots,
         TxAudioIngest txAudioIngest,
+        CwEngine cwEngine,
+        CwSettingsStore cwSettings,
         ILoggerFactory loggerFactory)
     {
         _log = loggerFactory.CreateLogger<TciServer>();
@@ -131,6 +139,8 @@ public sealed class TciServer : IHostedService, IDisposable
         _txMeters = txMeters;
         _spots = spots;
         _txAudioIngest = txAudioIngest;
+        _cwEngine = cwEngine;
+        _cwSettings = cwSettings;
         _loggerFactory = loggerFactory;
     }
 
@@ -153,6 +163,7 @@ public sealed class TciServer : IHostedService, IDisposable
         _pipeline.RxIqAvailable += OnRxIqAvailable;
         _pipeline.RxAudioAvailable += OnRxAudioAvailable;
         _txMeters.TxMetersUpdated += OnTxMetersUpdated;
+        _cwEngine.Status += OnCwEngineStatus;
         _subscribed = true;
 
         _log.LogInformation("tci.listening bind={Bind} port={Port}", _options.BindAddress, _options.Port);
@@ -172,6 +183,7 @@ public sealed class TciServer : IHostedService, IDisposable
             _pipeline.RxIqAvailable -= OnRxIqAvailable;
             _pipeline.RxAudioAvailable -= OnRxAudioAvailable;
             _txMeters.TxMetersUpdated -= OnTxMetersUpdated;
+            _cwEngine.Status -= OnCwEngineStatus;
             _subscribed = false;
         }
 
@@ -215,7 +227,7 @@ public sealed class TciServer : IHostedService, IDisposable
 
         var id = Guid.NewGuid();
         var sessionLog = _loggerFactory.CreateLogger<TciSession>();
-        var session = new TciSession(id, ws, sessionLog, _radio, _tx, _pipeline, _spots, _options, _txAudioIngest, this);
+        var session = new TciSession(id, ws, sessionLog, _radio, _tx, _pipeline, _spots, _options, _cwEngine, _cwSettings, _txAudioIngest, this);
 
         _clients[id] = session;
         _log.LogInformation("tci.client.connected id={Id} total={Count}", id, _clients.Count);
@@ -371,6 +383,21 @@ public sealed class TciServer : IHostedService, IDisposable
         foreach (var session in _clients.Values)
         {
             if (session.WantsTxSensors) session.Send(frame);
+        }
+    }
+
+    private void OnCwEngineStatus(CwEngineStatus status)
+    {
+        // Per the ExpertSDR3 TCI 2.0 spec, cw_macros_empty notifies clients
+        // that the keyer / macro queue has drained — used by contest loggers
+        // to know when a CQ macro finished so they can start a listening
+        // window. The engine raises Idle whenever the queue hits zero (in
+        // PR zeus-drf), so we just edge-detect Sending → Idle and forward.
+        var prev = _lastCwState;
+        _lastCwState = status.State;
+        if (prev != CwEngineState.Idle && status.State == CwEngineState.Idle && status.QueueDepth == 0)
+        {
+            Broadcast(TciProtocol.Command("cw_macros_empty"));
         }
     }
 

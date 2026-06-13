@@ -117,6 +117,12 @@ public sealed class Protocol1Client : IProtocol1Client
     // mi0bot console.cs:2084 (UI range -28..+31), networkproto1.c:1086-1088
     // (wire encoding).
     private int _hl2TxAttnDb = int.MinValue;
+    // On-board CW keyer config (C&C 0x0B). Speed is the operator's WPM,
+    // mode is CwKeyerMode (0=straight/1=A/2=B). Sent via the round-robin so
+    // a dropped packet self-heals. Default mode 0 (straight) makes the write
+    // a no-op until the operator opts into iambic. See zeus-bks.
+    private int _cwKeyerSpeedWpm;
+    private int _cwKeyerMode; // CwKeyerMode as int for Interlocked
     private long _droppedFrames;
     private long _totalFrames;
 
@@ -132,21 +138,10 @@ public sealed class Protocol1Client : IProtocol1Client
     // the tone so legacy callers (tests, tools/zeus-dump) keep working.
     private readonly ITxIqSource _txIqSource;
 
-    // RX-codec audio source: WDSP demodulated audio routed back to the
-    // radio's on-board codec so operators can plug headphones into the
-    // radio's front-panel jack and hear receive audio (issue #426).
-    // Null on HL2 / discovery-only callers; the EP2 L/R audio bytes stay
-    // zero and the radio ignores them, matching pre-#426 behaviour.
-    private readonly IRxCodecAudioSource? _rxCodecAudioSource;
-
-    public Protocol1Client(
-        ILogger<Protocol1Client>? logger = null,
-        ITxIqSource? iqSource = null,
-        IRxCodecAudioSource? rxCodecAudioSource = null)
+    public Protocol1Client(ILogger<Protocol1Client>? logger = null, ITxIqSource? iqSource = null)
     {
         _log = logger ?? NullLogger<Protocol1Client>.Instance;
         _txIqSource = iqSource ?? new TestToneGenerator();
-        _rxCodecAudioSource = rxCodecAudioSource;
         _channel = Channel.CreateBounded<IqFrame>(new BoundedChannelOptions(DefaultFrameChannelCapacity)
         {
             FullMode = BoundedChannelFullMode.DropOldest,
@@ -162,11 +157,18 @@ public sealed class Protocol1Client : IProtocol1Client
     public event Action<TelemetryReading>? TelemetryReceived;
     public event Action<AdcOverloadStatus>? AdcOverloadObserved;
     public event Action<bool>? HardwarePttChanged;
+    /// <summary>Fires on the edge of the gateware's shaped CW keyer output
+    /// (C0[2] / cw_key_status), i.e. per dit/dah — distinct from
+    /// <see cref="HardwarePttChanged"/> (C0[0] / ptt_resp), which is held for
+    /// the whole keyed period. Drives the local sidetone. (zeus-cl2)</summary>
+    public event Action<bool>? CwKeyDownChanged;
 
     // 0/1; Volatile so the property read on any thread sees the latest value
     // without needing a lock.
     private int _hardwarePtt;
     public bool HardwarePtt => Volatile.Read(ref _hardwarePtt) != 0;
+    private int _cwKeyDown;
+    public bool CwKeyDown => Volatile.Read(ref _cwKeyDown) != 0;
 
     /// <summary>
     /// Update the cached hardware-PTT level from a freshly-parsed packet and
@@ -180,20 +182,23 @@ public sealed class Protocol1Client : IProtocol1Client
         int next = ptt ? 1 : 0;
         if (prev == next) return;
         Volatile.Write(ref _hardwarePtt, next);
-        // GH #426 / bd zeus-7uo + zeus-0aq diagnostic. Emit a single line per
-        // hardware-PTT edge capturing both the reported (radio C0[0] echo)
-        // level and the commanded (host) MOX state. The two diverge across
-        // the takeover/release latency we're chasing — anyone bench-testing
-        // can grep for `p1.mox.transition` and read the gap between
-        // reported-edge and host-applied edge (matching
-        // `externalPtt.takeover.applied dtUs=...` or
-        // `tx.mox.{on,off}.recv ts=...`).
-        _log.LogInformation(
-            "p1.mox.transition reportedPtt={Reported} commandedMox={Commanded} ts={Ts}",
-            ptt, Volatile.Read(ref _mox) != 0,
-            System.Diagnostics.Stopwatch.GetTimestamp());
         try { HardwarePttChanged?.Invoke(ptt); }
         catch (Exception ex) { _log.LogWarning(ex, "HardwarePttChanged handler threw"); }
+    }
+
+    /// <summary>
+    /// Update the cached CW key-down level (C0[2] / cw_key_status) and fire
+    /// <see cref="CwKeyDownChanged"/> on the edge. Single-writer (RX loop),
+    /// same contract as <see cref="UpdateHardwarePtt"/>. (zeus-cl2)
+    /// </summary>
+    private void UpdateCwKeyDown(bool down)
+    {
+        int prev = Volatile.Read(ref _cwKeyDown);
+        int next = down ? 1 : 0;
+        if (prev == next) return;
+        Volatile.Write(ref _cwKeyDown, next);
+        try { CwKeyDownChanged?.Invoke(down); }
+        catch (Exception ex) { _log.LogWarning(ex, "CwKeyDownChanged handler threw"); }
     }
 
     // ---- PureSignal feedback (HL2-only, P1) -------------------------
@@ -319,6 +324,7 @@ public sealed class Protocol1Client : IProtocol1Client
             // Mirror the standard-path hardware-PTT level update so an
             // external key released during PS+TX still propagates the edge.
             UpdateHardwarePtt(PacketParser.ExtractHardwarePtt(packet));
+            UpdateCwKeyDown(PacketParser.ExtractCwKeyDown(packet));
 
             // DDC0 → IqFrame channel — keeps panadapter / audio alive during PS+TX.
             // Use a fresh rented buffer the channel can own; the ddc0 rental is
@@ -611,6 +617,19 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _psPredistortionSubindex, subindex);
     }
 
+    /// <summary>
+    /// Set the on-board CW keyer config (C&amp;C 0x0B): speed in WPM and the
+    /// keyer mode (straight / iambic A / iambic B). Pushed continuously via
+    /// the register round-robin so it survives packet loss; the gateware
+    /// ignores speed in straight mode. Driven by RadioService from the
+    /// operator's persisted CW settings. See zeus-bks.
+    /// </summary>
+    public void SetCwKeyerConfig(int wpm, CwKeyerMode mode)
+    {
+        Interlocked.Exchange(ref _cwKeyerSpeedWpm, wpm);
+        Interlocked.Exchange(ref _cwKeyerMode, (int)mode);
+    }
+
     public void SetHl2TxStepAttenuationDb(int db)
     {
         // Range matches mi0bot console.cs:2084 (udTXStepAttData.Minimum=-28,
@@ -618,6 +637,18 @@ public sealed class Protocol1Client : IProtocol1Client
         // 6-bit wire byte via (31 - db) | 0x40 per networkproto1.c:1086-1088.
         int clamped = Math.Clamp(db, -28, 31);
         Interlocked.Exchange(ref _hl2TxAttnDb, clamped);
+    }
+
+    public int Hl2TxStepAttenuationDb
+    {
+        // int.MinValue is the "never written / radio default" sentinel (see
+        // _hl2TxAttnDb decl + SnapshotState). Surface it as 0 so the PS-arm
+        // baseline sync reads the radio's actual untouched 0 dB.
+        get
+        {
+            int v = Volatile.Read(ref _hl2TxAttnDb);
+            return v == int.MinValue ? 0 : v;
+        }
     }
 
     public void Dispose()
@@ -675,7 +706,9 @@ public sealed class Protocol1Client : IProtocol1Client
             // operator/auto-att has set ATTOnTX, swap C4 source from
             // rx_step_attn to tx_step_attn. Sentinel int.MinValue means
             // untouched, fall through to the RX-side encoding above.
-            Hl2TxAttnDb: Volatile.Read(ref _hl2TxAttnDb));
+            Hl2TxAttnDb: Volatile.Read(ref _hl2TxAttnDb),
+            CwKeyerSpeedWpm: Volatile.Read(ref _cwKeyerSpeedWpm),
+            CwKeyerMode: (CwKeyerMode)Volatile.Read(ref _cwKeyerMode));
     }
 
     private void RxLoop()
@@ -816,6 +849,9 @@ public sealed class Protocol1Client : IProtocol1Client
                 // ExternalPttService can lift the host MOX when the operator
                 // keys the rear KEY jack or an external PTT line.
                 UpdateHardwarePtt(PacketParser.ExtractHardwarePtt(buffer.AsSpan(0, n)));
+                // CW key-down (C0[2], shaped keyer output) — drives the local
+                // sidetone per dit/dah, separate from the held PTT. (zeus-cl2)
+                UpdateCwKeyDown(PacketParser.ExtractCwKeyDown(buffer.AsSpan(0, n)));
 
                 var rateHz = (HpsdrSampleRate)Volatile.Read(ref _rate) switch
                 {
@@ -885,8 +921,17 @@ public sealed class Protocol1Client : IProtocol1Client
 
     // 4-phase rotation across the registers we currently own. Every phase
     // pairs the frequency register (ensuring sub-3ms QSY latency) with one
-    // of Config / DriveFilter / Attenuator in turn. Attenuator needs a slot
-    // or HL2 firmware never sees gain changes.
+    // of Config / DriveFilter / Attenuator / TxFreq in turn. Attenuator
+    // needs a slot or HL2 firmware never sees gain changes. TxFreq is
+    // refreshed once per cycle during RX as well — Square SDR 2 (HL2
+    // gateware built with FAN=1,UART=1) routes the FPGA's extamp module to
+    // a Kenwood-CAT emitter on io_uart_txd that fires on every TX-NCO
+    // register change; that CAT drives the rear-panel BVO PWM via the
+    // STM32G031 daughter-MCU (issue #361). Without TxFreq in the RX
+    // rotation the FPGA register stays static during dial moves and the
+    // BVO never tracks. We follow deskhpsdr here — @dl1bz got it right:
+    // old_protocol.c:2837-2846 emits C0=0x02 every round-robin pass
+    // regardless of MOX. Harmless on non-extamp boards.
     //
     // When MOX is on we swap in a TX-flavored table: with duplex=1 always
     // (ControlFrame.cs Config C4[2]), HL2 needs TxFreq (0x02) continuously
@@ -963,7 +1008,7 @@ public sealed class Protocol1Client : IProtocol1Client
                 5  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.RxFreq4),
                 6  => (ControlFrame.CcRegister.LnaTxGainStable, ControlFrame.CcRegister.RxFreq),
                 7  => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.RxFreq),
-                8  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.Config),
+                8  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.TxFreq),
                 9  => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.DriveFilter),
                 10 => (ControlFrame.CcRegister.RxFreq3,    ControlFrame.CcRegister.RxFreq4),
                 11 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.Attenuator),
@@ -974,7 +1019,12 @@ public sealed class Protocol1Client : IProtocol1Client
             };
         }
 
-        int p = phase & 0x3;
+        // Non-PS rotation is 5 phases. Phase 4 carries the CW keyer config
+        // (0x0B) in the RX-only branch so the on-board iambic keyer speed/
+        // mode tracks the operator's CW panel — it's set before keying, so
+        // the MOX branch doesn't waste a slot on it. Adding one phase drops
+        // the RxFreq NCO refresh from 3-of-4 to 4-of-5 frames — negligible.
+        int p = phase % 5;
         if (mox)
         {
             return p switch
@@ -982,15 +1032,17 @@ public sealed class Protocol1Client : IProtocol1Client
                 0 => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.RxFreq),
                 1 => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.DriveFilter),
                 2 => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.TxFreq),
-                _ => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.Config),
+                3 => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.Config),
+                _ => (ControlFrame.CcRegister.TxFreq,     ControlFrame.CcRegister.RxFreq),
             };
         }
         return p switch
         {
-            0 => (ControlFrame.CcRegister.Config,     ControlFrame.CcRegister.RxFreq),
-            1 => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.DriveFilter),
-            2 => (ControlFrame.CcRegister.Attenuator, ControlFrame.CcRegister.RxFreq),
-            _ => (ControlFrame.CcRegister.RxFreq,     ControlFrame.CcRegister.Config),
+            0 => (ControlFrame.CcRegister.Config,        ControlFrame.CcRegister.RxFreq),
+            1 => (ControlFrame.CcRegister.RxFreq,        ControlFrame.CcRegister.DriveFilter),
+            2 => (ControlFrame.CcRegister.Attenuator,    ControlFrame.CcRegister.RxFreq),
+            3 => (ControlFrame.CcRegister.RxFreq,        ControlFrame.CcRegister.TxFreq),
+            _ => (ControlFrame.CcRegister.CwKeyerConfig, ControlFrame.CcRegister.RxFreq),
         };
     }
 
@@ -1020,8 +1072,8 @@ public sealed class Protocol1Client : IProtocol1Client
                 // doesn't lose its slot.
                 bool psArmed = state.PsEnabled && state.Board == HpsdrBoardKind.HermesLite2;
                 var (first, second) = PhaseRegisters(phase, state.Mox, psArmed);
-                phase = (phase + 1) & (psArmed ? 0xF : 0x3);
-                ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource, _rxCodecAudioSource);
+                phase = psArmed ? ((phase + 1) & 0xF) : ((phase + 1) % 5);
+                ControlFrame.BuildDataPacket(buf, sendSeq++, first, second, in state, _txIqSource);
                 rateWindowPkts++;
                 var nowUtc = DateTime.UtcNow;
                 var elapsed = nowUtc - rateWindowStart;

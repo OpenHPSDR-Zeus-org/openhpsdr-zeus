@@ -195,7 +195,9 @@ export default function App() {
       try {
         const next = await fetchState(ctrl.signal);
         if (!cancelled) {
-          useConnectionStore.getState().applyState(next);
+          // trustVfo:false — a poll response generated before the operator's
+          // latest tune must not rewind the dial mid-gesture (issue #597).
+          useConnectionStore.getState().applyState(next, { trustVfo: false });
           // Hydrate persistable PS / TwoTone fields from the server's StateDto
           // so server-persisted edits (e.g. operator changed MOX delay on
           // another tab) reach this tab even after the initial connect-time

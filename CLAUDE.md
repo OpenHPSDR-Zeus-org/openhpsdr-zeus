@@ -97,7 +97,7 @@ Full details, dependency list, and native WDSP build in `README.md` and `native/
 When in doubt about where code belongs, match the existing project's single responsibility rather than introducing a new one.
 
 
-<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:7510c1e2 -->
+<!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ccf33ec3 -->
 ## Beads Issue Tracker
 
 This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
@@ -131,6 +131,7 @@ bd close <id>         # Complete work
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
+   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```

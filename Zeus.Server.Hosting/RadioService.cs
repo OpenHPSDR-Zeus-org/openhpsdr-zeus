@@ -70,6 +70,14 @@ public sealed class RadioService : IDisposable
     // Empty when nothing is connected — PersistPsState skips HW Peak persistence
     // in that case (no board → no slot to write).
     private string _currentPsBoardKey = string.Empty;
+    // Mirror of the persisted PS TX feedback attenuation (dB) for the
+    // currently-connected board. Loaded from TxAttnByBoard on connect
+    // (GetPersistedPsTxAttnDb), updated by SetPsTxAttenuationDb when the
+    // auto-attenuate dance (or a manual control) settles on a value, and
+    // written back by PersistPsState. -1 = "no value for this board yet" →
+    // PersistPsState leaves the slot untouched so we never clobber a good
+    // saved value with a default.
+    private int _currentPsTxAttnDb = -1;
     // Debounced state flush. Set to true in every Mutate(); a 1 Hz timer
     // calls FlushState() which writes to LiteDB and clears the flag.
     // Avoids hammering LiteDB during rapid VFO scroll or filter drags.
@@ -84,6 +92,12 @@ public sealed class RadioService : IDisposable
     // edge is crossed or a PA setting is edited, we recompute without needing
     // to wait for the next SetDrive call.
     private int _drivePct;
+    // On-board CW keyer config (C&C 0x0B), forwarded to the connected P1
+    // client and re-pushed on reconnect. Seeded from CwSettingsStore in the
+    // ctor; updated at runtime via SetCwKeyerConfig from the CW settings
+    // endpoint. Default mode 0 (straight) is safe — see zeus-bks.
+    private int _cwKeyerWpm;
+    private int _cwKeyerMode;
     // Independent TUN drive %. When TUN is keyed, the recompute uses this in
     // place of _drivePct so the operator can pre-set a lower tune level (and
     // the same per-band PA gain gives equal watts at equal percentages). piHPSDR
@@ -179,16 +193,7 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    // Shared RX-codec audio source — WDSP RX output routed back to the
-    // radio's on-board codec so operators on Hermes / ANAN-class / OrionMkII
-    // boards can plug headphones into the radio's front-panel jack and hear
-    // demodulated audio. Issue #426. RadioCodecAudioSink writes float samples
-    // into this ring; Protocol1Client drains it into EP2 L/R bytes.
-    // Null on the synthetic / discovery-only path; the radio sees zero
-    // audio bytes (matching pre-#426 HL2-only behaviour).
-    private readonly Zeus.Protocol1.IRxCodecAudioSource? _rxCodecAudioSource;
-
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, Zeus.Protocol1.IRxCodecAudioSource? rxCodecAudioSource = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -202,7 +207,17 @@ public sealed class RadioService : IDisposable
         if (_preferredRadioStore is not null)
             _preferredRadioStore.Changed += RecomputePaAndPush;
         _txIqSource = txIqSource;
-        _rxCodecAudioSource = rxCodecAudioSource;
+        // Seed the on-board CW keyer config from persisted settings so a
+        // reconnect after restart re-applies the operator's mode/speed
+        // before they touch the panel — otherwise a paddle op who saved
+        // iambic would key as straight (default) on first connect. See
+        // zeus-bks.
+        if (cwSettingsStore is not null)
+        {
+            var cw = cwSettingsStore.Get();
+            Volatile.Write(ref _cwKeyerWpm, cw.Wpm);
+            Volatile.Write(ref _cwKeyerMode, (int)cw.KeyerMode);
+        }
 
         // Load persisted DSP settings from the store, or use defaults if not found
         var persistedNr = _dspSettingsStore.Get() ?? new NrConfig();
@@ -354,6 +369,17 @@ public sealed class RadioService : IDisposable
         {
             hwPeakByBoard[_currentPsBoardKey] = snap.PsHwPeak;
         }
+        // Same per-board preserve-then-mutate as HW Peak. Only write the TX
+        // attenuation slot when we actually have a value for the connected
+        // board (>= 0); otherwise carry the existing map through untouched so
+        // a HW-Peak-triggered persist never wipes a saved attenuation.
+        var txAttnByBoard = existing?.TxAttnByBoard is { } amap
+            ? new Dictionary<string, int>(amap)
+            : new Dictionary<string, int>();
+        if (!string.IsNullOrEmpty(_currentPsBoardKey) && _currentPsTxAttnDb >= 0)
+        {
+            txAttnByBoard[_currentPsBoardKey] = _currentPsTxAttnDb;
+        }
         _psStore.Upsert(new PsSettingsEntry
         {
             Auto = snap.PsAuto,
@@ -368,7 +394,45 @@ public sealed class RadioService : IDisposable
             TwoToneFreq2 = snap.TwoToneFreq2,
             TwoToneMag = snap.TwoToneMag,
             HwPeakByBoard = hwPeakByBoard,
+            TxAttnByBoard = txAttnByBoard,
         });
+    }
+
+    /// <summary>
+    /// Record + persist the PS TX feedback attenuation the auto-attenuate
+    /// dance (or a manual operator control) settled on, for the currently-
+    /// connected board. Restored to the radio on the next connect by
+    /// DspPipelineService so a hot external-tap feedback chain doesn't boot
+    /// at 0 dB and re-saturate the feedback ADC. No-op persistence when no
+    /// board is connected (no slot to write).
+    /// </summary>
+    public void SetPsTxAttenuationDb(int db)
+    {
+        _currentPsTxAttnDb = db;
+        PersistPsState();
+        // Surface the live value so the PURESIGNAL panel's manual control and
+        // the "differs" hint track what's actually applied.
+        Mutate(s => s.PsTxFeedbackAttenuationDb == db ? s : s with { PsTxFeedbackAttenuationDb = db });
+    }
+
+    /// <summary>
+    /// Persisted PS TX feedback attenuation (dB) for the currently-connected
+    /// board, or null if none has been saved yet. Called on connect to
+    /// restore the radio's feedback attenuation before the operator arms PS.
+    /// Side effect: seeds <see cref="_currentPsTxAttnDb"/> so a later
+    /// PersistPsState preserves the slot rather than treating it as unset.
+    /// </summary>
+    public int? GetPersistedPsTxAttnDb()
+    {
+        if (string.IsNullOrEmpty(_currentPsBoardKey)) return null;
+        var persisted = _psStore?.Get();
+        if (persisted?.TxAttnByBoard is { } map
+            && map.TryGetValue(_currentPsBoardKey, out int db))
+        {
+            _currentPsTxAttnDb = db;
+            return db;
+        }
+        return null;
     }
 
     /// <summary>
@@ -451,8 +515,7 @@ public sealed class RadioService : IDisposable
 
             client = new Protocol1Client(
                 _loggerFactory.CreateLogger<Protocol1Client>(),
-                _txIqSource,
-                _rxCodecAudioSource);
+                _txIqSource);
             client.AdcOverloadObserved += OnAdcOverload;
             _activeClient = client;
             _state = _state with
@@ -542,6 +605,11 @@ public sealed class RadioService : IDisposable
             // compelling reason to ship bare HL2 without N2ADR emerges.
             if (ConnectedBoardKind == HpsdrBoardKind.HermesLite2)
                 client.SetHasN2adr(true);
+            // Push the persisted CW keyer config into the fresh client so the
+            // on-board iambic keyer matches the operator's panel before the
+            // first key-down. Default mode straight makes this a no-op until
+            // iambic is opted into. See zeus-bks.
+            client.SetCwKeyerConfig(Volatile.Read(ref _cwKeyerWpm), (CwKeyerMode)Volatile.Read(ref _cwKeyerMode));
             // Replay PA settings into the fresh client — drive byte, OC masks,
             // and (for P2 downstream) PA-enable. Without this the client sits
             // at the protocol defaults (drive=0, OC=0) until something else
@@ -572,11 +640,6 @@ public sealed class RadioService : IDisposable
             client.AdcOverloadObserved -= OnAdcOverload;
             Disconnected?.Invoke();
             await TearDownClientAsync(client, ct).ConfigureAwait(false);
-            // Drop any queued RX-codec audio so the next connect starts
-            // clean — otherwise on a quick disconnect/reconnect the operator
-            // hears a fraction of a second of stale audio in the radio's
-            // headphone jack. Issue #426.
-            (_rxCodecAudioSource as Zeus.Protocol1.RxCodecAudioRing)?.Clear();
             _log.LogInformation("radio.disconnected");
         }
 
@@ -592,6 +655,9 @@ public sealed class RadioService : IDisposable
         // disconnected) should NOT write into the previous radio's slot.
         // ApplyPsHwPeakForConnection sets it again on next connect.
         _currentPsBoardKey = string.Empty;
+        // Same for the TX-attn mirror — next connect re-seeds it from the
+        // persisted slot via GetPersistedPsTxAttnDb.
+        _currentPsTxAttnDb = -1;
         return Snapshot();
     }
 
@@ -1150,6 +1216,20 @@ public sealed class RadioService : IDisposable
         RecomputePaAndPush();
     }
 
+    /// <summary>
+    /// Forward the on-board CW keyer config (speed + mode) to the connected
+    /// radio's C&amp;C register 0x0B, and remember it so a reconnect re-applies
+    /// it. Called by the CW settings endpoint whenever the operator changes
+    /// WPM or keyer mode. No-op (cached only) when no radio is connected.
+    /// See zeus-bks.
+    /// </summary>
+    public void SetCwKeyerConfig(int wpm, CwKeyerMode mode)
+    {
+        Volatile.Write(ref _cwKeyerWpm, wpm);
+        Volatile.Write(ref _cwKeyerMode, (int)mode);
+        ActiveClient?.SetCwKeyerConfig(wpm, mode);
+    }
+
     // Independent TUN drive %. Applies on the very next frame if TUN is already
     // keyed; otherwise it sits until TxService flips _tunActive.
     public void SetTuneDrive(int percent)
@@ -1658,10 +1738,23 @@ public sealed class RadioService : IDisposable
         // Cache the board key so PersistPsState routes future SetPsAdvanced
         // writes into the right slot.
         _currentPsBoardKey = boardKey;
+        // Surface the TX feedback attenuation for the PURESIGNAL panel's manual
+        // control: the per-board floor (HL2 reaches -28, others 0) and the
+        // persisted value for this board (0 when none saved). GetPersistedPsTxAttnDb
+        // also seeds _currentPsTxAttnDb so PersistPsState keeps the slot.
+        int attnMin = board == HpsdrBoardKind.HermesLite2 ? -28 : 0;
+        int attn = GetPersistedPsTxAttnDb() ?? 0;
         Mutate(s =>
             s.PsHwPeak == peak && s.PsHwPeakDefault == factoryDefault
+            && s.PsTxFeedbackAttenuationDb == attn && s.PsTxFeedbackAttenuationDbMin == attnMin
                 ? s
-                : s with { PsHwPeak = peak, PsHwPeakDefault = factoryDefault });
+                : s with
+                {
+                    PsHwPeak = peak,
+                    PsHwPeakDefault = factoryDefault,
+                    PsTxFeedbackAttenuationDb = attn,
+                    PsTxFeedbackAttenuationDbMin = attnMin,
+                });
         _log.LogInformation(
             "radio.applyPsHwPeak proto={Proto} board={Board} variant={Variant} key={Key} peak={Peak:F4} default={Default:F4} source={Source}",
             isProtocol2 ? "P2" : "P1", board, variant, boardKey, peak, factoryDefault,
@@ -1810,6 +1903,7 @@ public sealed class RadioService : IDisposable
         // disconnected SetPsAdvanced writes don't leak into the previous
         // radio's per-board HW Peak slot.
         _currentPsBoardKey = string.Empty;
+        _currentPsTxAttnDb = -1;
         P2Disconnected?.Invoke();
     }
 

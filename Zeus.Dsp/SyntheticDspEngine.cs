@@ -102,6 +102,8 @@ public sealed class SyntheticDspEngine : IDspEngine
 
     public void SetAgcTop(int channelId, double topDb) { /* synthetic has no AGC */ }
 
+    public void SetRxDisplayFastAttack(int channelId, bool fast) { /* synthetic has no display averaging */ }
+
     public void SetRxAfGainDb(int channelId, double db) { /* synthetic has no audio path */ }
 
     public void SetNoiseReduction(int channelId, NrConfig cfg)
@@ -184,6 +186,7 @@ public sealed class SyntheticDspEngine : IDspEngine
     // feedback pump are no-ops; GetPsStageMeters returns the silent record.
     public void SetPsEnabled(bool enabled) { }
     public void SetPsControl(bool autoCal, bool singleCal) { }
+    public void SetPsHold(bool hold) { }
     public void SetPsAdvanced(bool ptol, double moxDelaySec, double loopDelaySec,
                               double ampDelayNs, double hwPeak, int ints, int spi) { }
     public void SetPsHwPeak(double hwPeak) { }

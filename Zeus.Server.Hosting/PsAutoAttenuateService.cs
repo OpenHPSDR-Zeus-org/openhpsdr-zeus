@@ -152,6 +152,33 @@ public sealed class PsAutoAttenuateService : BackgroundService
     private bool _stallWarned;
     private static readonly TimeSpan StallThreshold = TimeSpan.FromSeconds(5);
 
+    // Wedge watchdog — distinct from the cal==0 stall above. Here calcc fit
+    // fine, then FROZE at a non-zero info5 while keyed in auto mode (the
+    // mid-TX arm/disarm wedge: stuck in LCALC, cor=1 on a stale curve →
+    // splatter). Auto mode re-fits continuously, so info5 frozen for
+    // >StallThreshold = wedged; recover with a clean calcc reset, rate-limited
+    // so a persistent wedge can't reset-storm. (Single-cal / manual hold
+    // legitimately freezes info5, so this is gated on auto mode only.)
+    private int _lastWedgeCal = -1;
+    private long _lastWedgeCalChangeMs;
+    private long _lastWedgeResetMs;
+
+    // Converge-then-hold (#559). Continuous automode never settles — it cycles
+    // COLLECT/MOXCHECK/CALC/DELAY forever, so the correction "flickers" and
+    // never "catches/holds" (the operator's Thetis single-cal expectation). Once
+    // the correction has converged (correcting + clean + feedback centred for a
+    // sustained window with enough fresh fits behind it), lock it with
+    // SetPsHold(true) → SetPSRunCal(0): calcc parks (state stops cycling), the
+    // iqc predistorter keeps the converged curve. P2 automode only. Re-armed on
+    // the next PS-arm edge.
+    private bool _psHeld;
+    private int _convergeBaselineCal = -1;
+    private long _convergeHealthyStartMs;
+    private static readonly TimeSpan ConvergeHoldTime = TimeSpan.FromMilliseconds(2500);
+    private const int ConvergeMinFits = 12;     // ~enough stbl(0.9) passes to converge
+    private const int ConvergeFbLow = 138;      // feedback well-centred (ideal 152)
+    private const int ConvergeFbHigh = 176;
+
     // *** DEVIATION FROM mi0bot ***
     // Silent server-side auto-cal of WDSP hw_peak from observed TX envelope.
     // mi0bot exposes PSForm.cs txtPSpeak as a hand-dialed operator value
@@ -233,6 +260,10 @@ public sealed class PsAutoAttenuateService : BackgroundService
     private void ClearStallFlag()
     {
         _stallStartTickMs = 0;
+        // Clear wedge-watchdog tracking on every idle/disarm/unkey exit so the
+        // freeze clock starts fresh on the next key-up — a frozen info5 from a
+        // prior over must not count toward a wedge against the new transmission.
+        _lastWedgeCal = -1;
         if (_stallWarned)
         {
             _stallWarned = false;
@@ -257,23 +288,43 @@ public sealed class PsAutoAttenuateService : BackgroundService
     {
         var s = _radio.Snapshot();
 
-        // PS-arm edge: re-baseline _currentAttnDb on every false→true so a
-        // fresh arm starts at the radio's untouched 0 dB. The actual radio
-        // state may differ if the operator manually changed step-att between
-        // sessions; assume the radio holds 0 between arms (matches pihpsdr).
-        // Also reset the HL2 state machine so a fresh arm always starts in
+        // PS-arm edge: baseline _currentAttnDb to the radio's ACTUAL current
+        // TX step attenuation on every false→true.
+        //
+        // This used to force 0 on the premise that "the radio holds 0 between
+        // arms (matches pihpsdr)". That premise is false in Zeus: the ATTOnTX
+        // wire byte is sticky — nothing in the disarm/unkey path resets it —
+        // so the radio holds the *last dance value* (e.g. ~21 dB for a hot
+        // external-tap feedback chain). Forcing the model to 0 desynced it
+        // from the radio, with two on-air failures:
+        //   • first arm after a fresh connect (radio genuinely 0): the hot
+        //     feedback saturates the ADC, so the dance needs several slow
+        //     cycles to climb out — calcc can't fit and the signal splatters
+        //     during the climb;
+        //   • re-arm (radio still ~21, model says 0): the moment a voice peak
+        //     pushes feedback out of [128,181], the dance computes its step
+        //     from the phantom 0 baseline and slams a too-low attenuation onto
+        //     the radio → feedback blows out → "corrects but won't hold".
+        // Reading ground truth keeps every step anchored. (root-caused on a
+        // G2 + RF2K-S external tap 2026-05-27; AutoAttenuate-off was clean.)
+        //
+        // Also reset the state machines so a fresh arm always starts in
         // Monitor — if the prior session was disarmed mid-dance, we don't
         // want to fire RestoreOperation against a stale saved cal-mode.
         if (s.PsEnabled && !_psWasEnabled)
         {
-            _currentAttnDb = 0;
+            _currentAttnDb = ReadRadioTxAttnDb();
             _lastCalibrationAttempts = -1;
             _hl2State = Hl2AutoAttState.Monitor;
             _p2State = P2AutoAttState.Monitor;
             _stallStartTickMs = 0;
             _stallWarned = false;
             _lastAutoCalTickMs = 0;
-            _log.LogInformation("psAutoAttn.armed reset attn={Db}", _currentAttnDb);
+            // Fresh arm → re-converge then lock. SetPsEnabled(true) set runcal=1.
+            _psHeld = false;
+            _convergeBaselineCal = -1;
+            _convergeHealthyStartMs = 0;
+            _log.LogInformation("psAutoAttn.armed baseline attn={Db} (synced to radio)", _currentAttnDb);
         }
         _psWasEnabled = s.PsEnabled;
 
@@ -362,6 +413,64 @@ public sealed class PsAutoAttenuateService : BackgroundService
             }
         }
 
+        // Wedge watchdog — info5 frozen at a NON-zero value while keyed in
+        // auto mode = calcc stalled in LCALC on a stale curve (see field
+        // comment). Reset calcc to recover; rate-limited to one reset per
+        // window so a hard wedge can't reset-storm. Gated on auto mode because
+        // single-cal / manual hold freezes info5 by design.
+        //
+        // ONLY fire in the active compute states (LCOLLECT=4 .. LDELAY=7): a
+        // genuine stale-curve wedge is stuck in LCALC(6). When calcc is parked
+        // in a WAIT state — LRESET(0)/LWAIT(1)/LMOXDELAY(2)/LSETUP(3) — info5 is
+        // frozen by design (waiting for MOX/feedback), and a reset is both
+        // FUTILE (it just re-enters LWAIT) and DESTRUCTIVE (it tears down the
+        // live correction). On the G2 desktop two-tone this exact loop —
+        // reset → LWAIT → frozen → reset every 5 s — periodically blew the
+        // correction away, holding IMD ~10 dB worse than a stable curve (#559).
+        // Also skip when we've deliberately locked the correction (_psHeld →
+        // SetPSRunCal(0)): calcc is parked on purpose, info5 frozen by design.
+        // Run the info5 freeze CLOCK on every armed+keyed tick, INDEPENDENT of
+        // CalState. Previously the clock lived inside the `calState in 4..7`
+        // gate with an `else { _lastWedgeCal = -1; }`, so a wedged calcc that
+        // flickered between LCALC(6) and a transient WAIT state reset the clock
+        // on every re-entry to the compute states — the freeze never accumulated
+        // StallThreshold and recovery dragged out (~37 s observed instead of ~5).
+        var calState = stallPsm.CalState;
+        long nowW = Environment.TickCount64;
+        if (stallPsm.CalibrationAttempts != _lastWedgeCal)
+        {
+            _lastWedgeCal = stallPsm.CalibrationAttempts;
+            _lastWedgeCalChangeMs = nowW;
+        }
+        // FIRE only in the active compute states (LCOLLECT=4..LDELAY=7). Per
+        // #559, resetting while calcc is parked in a WAIT state (0..3) is futile
+        // (it just re-enters LWAIT) and destructive (tears down the live
+        // correction) — so the clock runs always, but the reset stays gated to
+        // compute states, in auto mode, on a non-zero frozen info5, rate-limited.
+        else if (s.PsAuto && !s.PsSingle && !_psHeld
+                 && stallPsm.CalibrationAttempts > 0
+                 && calState >= 4 && calState <= 7
+                 && nowW - _lastWedgeCalChangeMs >= (long)StallThreshold.TotalMilliseconds
+                 && nowW - _lastWedgeResetMs >= (long)StallThreshold.TotalMilliseconds)
+        {
+            _lastWedgeResetMs = nowW;
+            _log.LogWarning(
+                "psAutoAttn.wedge info5 frozen at {Cal} state={State} for {ElapsedMs}ms — calcc stalled (e.g. PS toggled mid-TX); resetting calcc.",
+                stallPsm.CalibrationAttempts, stallPsm.CalState, nowW - _lastWedgeCalChangeMs);
+            engine.ResetPs();
+        }
+
+        // NOTE (#559): converge-then-hold (TickPsHold) is intentionally NOT
+        // called. Locking the correction froze it at the convergence drive
+        // level, so driving harder (overdrive) left the frozen curve mismatched
+        // → uncorrected IMD. Thetis stays clean under overdrive by running
+        // CONTINUOUS automode and re-adapting; the flicker that originally
+        // motivated the lock was the jittery TX feed, now fixed by the RT
+        // pump/sender/rx-loop. So we run continuous automode (Thetis parity) and
+        // let it track drive changes. TickPsHold kept for reference/possible
+        // operator-selectable "single-cal hold" later.
+        // TickPsHold(s, engine, stallPsm);
+
         // Auto-cal hw_peak from observed envelope. Independent of HL2/P2 path
         // and runs every keyed tick — same gates as the rest of the loop
         // (PsEnabled + TX active + engine present, all checked above).
@@ -383,6 +492,56 @@ public sealed class PsAutoAttenuateService : BackgroundService
         var p2 = _pipe.CurrentP2Client;
         if (p2 is null) { LogGate("skip=p2-null"); return; }
         Tick1P2(s, engine, p2);
+    }
+
+    // Converge-then-hold supervisor (P2 automode only). Lock the correction once
+    // it's converged so calcc stops cycling and the predistorter holds the curve
+    // — the "catch and hold" the operator expects (Thetis single-cal behaviour)
+    // instead of continuous automode flicker. See the _psHeld field comment.
+    private void TickPsHold(StateDto s, IDspEngine engine, PsStageMeters psm)
+    {
+        if (_psHeld) return;                                  // already locked
+        if (s.PsSingle || !s.PsAuto) return;                  // single-cal already holds
+        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2) return;  // P2 only
+
+        int fb = (int)Math.Round(psm.FeedbackLevel);
+        if (_convergeBaselineCal < 0) _convergeBaselineCal = psm.CalibrationAttempts;
+
+        bool healthy = psm.Correcting && fb >= ConvergeFbLow && fb <= ConvergeFbHigh;
+        bool enoughFits = psm.CalibrationAttempts - _convergeBaselineCal >= ConvergeMinFits;
+        if (!healthy || !enoughFits)
+        {
+            if (!healthy) _convergeHealthyStartMs = 0;        // restart the settle window
+            return;
+        }
+
+        long now = Environment.TickCount64;
+        if (_convergeHealthyStartMs == 0) _convergeHealthyStartMs = now;
+        else if (now - _convergeHealthyStartMs >= (long)ConvergeHoldTime.TotalMilliseconds)
+        {
+            engine.SetPsHold(true);   // SetPSRunCal(0): calcc parks, iqc holds curve
+            _psHeld = true;
+            _log.LogInformation(
+                "psHold.lock cal={Cal} fb={Fb} — correction converged; calcc parked, correction held",
+                psm.CalibrationAttempts, fb);
+        }
+    }
+
+    // Ground-truth TX feedback attenuation the radio is actually holding, for
+    // baselining the dance model on a PS-arm edge. HL2 reads its sticky AD9866
+    // PGA value (range -28..31); every other (P2) board reads the sticky
+    // ATTOnTX byte (0..31). Clamped to the per-board range; 0 when no client
+    // is connected. See the arm-edge comment in Tick1 for why this replaced
+    // the old assume-0.
+    private int ReadRadioTxAttnDb()
+    {
+        if (_radio.ConnectedBoardKind == HpsdrBoardKind.HermesLite2)
+        {
+            int hl2 = _radio.ActiveClient?.Hl2TxStepAttenuationDb ?? 0;
+            return Math.Clamp(hl2, Hl2TxAttnMinDb, Hl2TxAttnMaxDb);
+        }
+        int p2 = _pipe.CurrentP2Client?.TxStepAttnDb ?? 0;
+        return Math.Clamp(p2, TxAttnMinDb, TxAttnMaxDb);
     }
 
     // *** DEVIATION FROM mi0bot ***
@@ -537,6 +696,10 @@ public sealed class PsAutoAttenuateService : BackgroundService
                         _currentAttnDb, newAttn);
                     _currentAttnDb = newAttn;
                     p1.SetHl2TxStepAttenuationDb(newAttn);
+                    // Persist per board so this converged value is restored on
+                    // the next connect (DspPipelineService) instead of booting
+                    // at 0 dB and re-saturating the feedback ADC.
+                    _radio.SetPsTxAttenuationDb(newAttn);
                     // mi0bot PSForm.cs:783 Thread.Sleep(100) — give the
                     // C4 frame time to land on the wire before the next
                     // tick re-enables PS in calcc.
@@ -668,6 +831,10 @@ public sealed class PsAutoAttenuateService : BackgroundService
                         _currentAttnDb, newAttn);
                     _currentAttnDb = newAttn;
                     p2.SetTxAttenuationDb((byte)newAttn);
+                    // Persist per board so this converged value is restored on
+                    // the next connect (DspPipelineService) instead of booting
+                    // at 0 dB and re-saturating the feedback ADC.
+                    _radio.SetPsTxAttenuationDb(newAttn);
                     // mi0bot PSForm.cs:783 Thread.Sleep(100) — give the
                     // wire byte time to land before the next tick re-enables
                     // PS in calcc.

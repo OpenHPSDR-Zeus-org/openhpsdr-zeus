@@ -152,47 +152,12 @@ export const SCALES: Record<ScaleId, ScaleDef> = {
   swr: SWR_SCALE,
 };
 
-// Classic moving-coil meter ballistics — different time constants for rising
-// and falling signals. Returns the new needle position.
-export function ballistics(
-  prev: number,
-  target: number,
-  dt: number,
-  attack: number,
-  decay: number,
-): number {
-  const tau = target > prev ? attack : decay;
-  if (tau <= 0.001) return target;
-  const alpha = 1 - Math.exp(-dt / tau);
-  return prev + (target - prev) * alpha;
-}
-
-export interface Averager {
-  push(x: number): number;
-  resize(m: number): void;
-}
-
-// Ring-buffer moving average; resize() rebuilds and seeds with the current mean.
-export function makeAverager(n: number): Averager {
-  let buf = new Array<number>(Math.max(1, n)).fill(0);
-  let i = 0;
-  let sum = 0;
-  let filled = 0;
-  return {
-    push(x) {
-      sum -= buf[i] ?? 0;
-      buf[i] = x;
-      sum += x;
-      i = (i + 1) % buf.length;
-      if (filled < buf.length) filled++;
-      return sum / filled;
-    },
-    resize(m) {
-      const seed = filled > 0 ? sum / filled : 0;
-      buf = new Array<number>(Math.max(1, m)).fill(seed);
-      i = 0;
-      filled = buf.length;
-      sum = seed * filled;
-    },
-  };
-}
+// Ballistics + averager primitives live in components/meters/ballistics.ts
+// so the analog dial and the new shared meter hook (useBallisticReading) run
+// the same math. Re-exported here so AnalogMeter's existing imports keep
+// working unchanged.
+export {
+  ballisticsStep as ballistics,
+  makeAverager,
+  type Averager,
+} from '../meters/ballistics';

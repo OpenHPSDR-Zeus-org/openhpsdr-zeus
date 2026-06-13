@@ -25,10 +25,6 @@ export type DisplaySettings = {
   wfDbMax: number | null;
   wfTxDbMin: number | null;
   wfTxDbMax: number | null;
-  // Operator-tunable waterfall colormap brightness multiplier (issue #426).
-  // null means the server has never stored a value; the frontend defaults to
-  // 1.0 (no change) and pushes the current value up on next interaction.
-  wfBrightness: number | null;
 };
 
 // Matches backend DisplaySettingsStore.DefaultRxTraceColor.
@@ -48,7 +44,6 @@ type DisplaySettingsDtoRaw = {
   wfDbMax?: number | null;
   wfTxDbMin?: number | null;
   wfTxDbMax?: number | null;
-  wfBrightness?: number | null;
 };
 
 function normalizeRxTraceColor(raw: string | null | undefined): string {
@@ -83,7 +78,6 @@ function normalize(raw: DisplaySettingsDtoRaw): DisplaySettings {
     wfDbMax: normalizeDbValue(raw.wfDbMax),
     wfTxDbMin: normalizeDbValue(raw.wfTxDbMin),
     wfTxDbMax: normalizeDbValue(raw.wfTxDbMax),
-    wfBrightness: normalizeDbValue(raw.wfBrightness),
   };
 }
 
@@ -105,7 +99,6 @@ export async function updateDisplaySettings(
   wfDbMax?: number | null,
   wfTxDbMin?: number | null,
   wfTxDbMax?: number | null,
-  wfBrightness?: number | null,
   signal?: AbortSignal,
 ): Promise<DisplaySettings> {
   const res = await fetch('/api/display-settings', {
@@ -123,7 +116,6 @@ export async function updateDisplaySettings(
       wfDbMax,
       wfTxDbMin,
       wfTxDbMax,
-      wfBrightness,
     }),
     signal,
   });

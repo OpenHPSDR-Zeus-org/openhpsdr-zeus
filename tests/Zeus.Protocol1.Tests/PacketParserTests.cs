@@ -423,4 +423,56 @@ public class PacketParserTests
         // Defensive guard for callers that don't pre-validate length.
         Assert.False(PacketParser.ExtractHardwarePtt(new byte[10]));
     }
+
+    // ---- ExtractCwKeyDown (zeus-cl2) ----------------------------------------
+    // C0[2] = cw_key_status, the gateware's shaped keyer OUTPUT (per dit/dah),
+    // distinct from C0[0] = ptt_resp (held for the whole keyed period). The
+    // sidetone follows C0[2]; MOX follows C0[0].
+
+    [Fact]
+    public void ExtractCwKeyDown_BothFramesClear_ReturnsFalse()
+    {
+        byte[] packet = FramingTests.BuildValidPacket(1, new (int, int)[PacketParser.ComplexSamplesPerPacket]);
+        Assert.False(PacketParser.ExtractCwKeyDown(packet));
+    }
+
+    [Fact]
+    public void ExtractCwKeyDown_FirstFrameC0Bit2_ReturnsTrue()
+    {
+        byte[] packet = FramingTests.BuildValidPacket(1, new (int, int)[PacketParser.ComplexSamplesPerPacket]);
+        packet[8 + 3] |= 0x04;
+        Assert.True(PacketParser.ExtractCwKeyDown(packet));
+    }
+
+    [Fact]
+    public void ExtractCwKeyDown_SecondFrameC0Bit2_ReturnsTrue()
+    {
+        byte[] packet = FramingTests.BuildValidPacket(1, new (int, int)[PacketParser.ComplexSamplesPerPacket]);
+        packet[8 + 512 + 3] |= 0x04;
+        Assert.True(PacketParser.ExtractCwKeyDown(packet));
+    }
+
+    [Fact]
+    public void ExtractCwKeyDown_IsIndependentOfPttBit()
+    {
+        // The whole point of the fix: PTT (C0[0]) and cw_key_status (C0[2])
+        // are separate. A held PTT with the keyer momentarily up (between
+        // dits) must read key-DOWN false even though PTT is true.
+        byte[] packet = FramingTests.BuildValidPacket(1, new (int, int)[PacketParser.ComplexSamplesPerPacket]);
+        packet[8 + 3] |= 0x01;          // ptt_resp set
+        Assert.False(PacketParser.ExtractCwKeyDown(packet));   // but key is up
+        Assert.True(PacketParser.ExtractHardwarePtt(packet));  // ptt still seen
+
+        // And the reverse: keyer down but PTT bit clear reads key-down true.
+        byte[] keyOnly = FramingTests.BuildValidPacket(1, new (int, int)[PacketParser.ComplexSamplesPerPacket]);
+        keyOnly[8 + 3] |= 0x04;         // cw_key_status set, ptt clear
+        Assert.True(PacketParser.ExtractCwKeyDown(keyOnly));
+        Assert.False(PacketParser.ExtractHardwarePtt(keyOnly));
+    }
+
+    [Fact]
+    public void ExtractCwKeyDown_ShortPacket_ReturnsFalse()
+    {
+        Assert.False(PacketParser.ExtractCwKeyDown(new byte[10]));
+    }
 }

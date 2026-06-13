@@ -37,4 +37,11 @@ public enum MoxSource : byte
     /// <summary>The host-side CW engine driving keying from
     /// <c>/api/cw/send</c>.</summary>
     Cwx = 3,
+    /// <summary>A plugin keying TX through
+    /// <c>IRadioController.SetMoxAsync</c> (e.g. an RTTY / voice / CW keyer
+    /// plugin). Same release rule as <see cref="Cwx"/>: only the plugin source
+    /// releases what it claimed, and <see cref="UI"/> remains the master
+    /// override. The plugin keys; on-air audio still flows through the normal
+    /// TX chain and all interlocks.</summary>
+    Plugin = 4,
 }

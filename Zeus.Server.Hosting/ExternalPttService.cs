@@ -14,7 +14,6 @@
 // statement and per-component attribution.
 
 using Microsoft.Extensions.Hosting;
-using Zeus.Contracts;
 using Zeus.Protocol1;
 
 namespace Zeus.Server;
@@ -52,6 +51,7 @@ public sealed class ExternalPttService : IHostedService, IDisposable
 
     private readonly RadioService _radio;
     private readonly TxService _tx;
+    private readonly CwSidetoneSource? _sidetone;
     private readonly ILogger<ExternalPttService> _log;
 
     private readonly object _sync = new();
@@ -66,10 +66,11 @@ public sealed class ExternalPttService : IHostedService, IDisposable
     // ThreadPool coexist cleanly.
     private Timer? _hangTimer;
 
-    public ExternalPttService(RadioService radio, TxService tx, ILogger<ExternalPttService> log)
+    public ExternalPttService(RadioService radio, TxService tx, ILogger<ExternalPttService> log, CwSidetoneSource? sidetone = null)
     {
         _radio = radio;
         _tx = tx;
+        _sidetone = sidetone;
         _log = log;
     }
 
@@ -88,7 +89,11 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         _tx.TxActiveChanged -= OnTxActiveChanged;
         IProtocol1Client? client;
         lock (_sync) { client = _client; _client = null; _owned = false; }
-        if (client is not null) client.HardwarePttChanged -= OnHardwarePttChanged;
+        if (client is not null)
+        {
+            client.HardwarePttChanged -= OnHardwarePttChanged;
+            client.CwKeyDownChanged -= OnCwKeyDownChanged;
+        }
         _hangTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         return Task.CompletedTask;
     }
@@ -102,14 +107,33 @@ public sealed class ExternalPttService : IHostedService, IDisposable
     {
         lock (_sync) { _client = client; _owned = false; }
         client.HardwarePttChanged += OnHardwarePttChanged;
+        client.CwKeyDownChanged += OnCwKeyDownChanged;
     }
 
     private void OnDisconnected()
     {
         IProtocol1Client? client;
         lock (_sync) { client = _client; _client = null; _owned = false; }
-        if (client is not null) client.HardwarePttChanged -= OnHardwarePttChanged;
+        if (client is not null)
+        {
+            client.HardwarePttChanged -= OnHardwarePttChanged;
+            client.CwKeyDownChanged -= OnCwKeyDownChanged;
+        }
         _hangTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+    }
+
+    // Sidetone follows the gateware's shaped keyer output (C0[2] /
+    // cw_key_status), which toggles per dit/dah — NOT the held PTT (C0[0] /
+    // ptt_resp) that drives MOX below. Reading PTT here would leave the tone
+    // on for the whole keyed period including inter-element gaps + hang time.
+    // Gated to CW modes so an SSB mic-PTT press doesn't inject a 600 Hz tone.
+    // (zeus-cl2)
+    private void OnCwKeyDownChanged(bool down)
+    {
+        if (_sidetone is null) return;
+        if (!IsCwMode(_radio.Snapshot().Mode)) return;
+        if (down) _sidetone.Down();
+        else _sidetone.Up();
     }
 
     private void OnHardwarePttChanged(bool on)
@@ -117,6 +141,9 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         if (on) HandleRising();
         else HandleFalling();
     }
+
+    private static bool IsCwMode(Zeus.Contracts.RxMode mode) =>
+        mode is Zeus.Contracts.RxMode.CWU or Zeus.Contracts.RxMode.CWL;
 
     private void HandleRising()
     {
@@ -133,37 +160,23 @@ public sealed class ExternalPttService : IHostedService, IDisposable
             _owned = true;
         }
 
-        // GH #426 / bd zeus-7uo — promote MOX synchronously on the RX thread.
-        // The prior fire-and-forget Task.Run let several EP6 IQ frames flow
-        // into WDSP RXA between the radio's first PTT echo and the ThreadPool
-        // scheduling the takeover. With RXA still running while the radio is
-        // already radiating, the panadapter / waterfall briefly paint the
-        // operator's own signal on top of received band noise — the
-        // "simultaneous RX+TX" artefact linoobs reported.
-        //
-        // TrySetMox is safe to invoke from the RX thread: it locks TxService
-        // briefly, flips WDSP RXA→TXA under _engineLock (uncontended — engine
-        // swaps happen on connect/disconnect, not the hot path), and fans out
-        // a hub broadcast (SignalR is internally async). No long-running I/O.
-        //
-        // Tag the rise with MoxSource.Hardware so the release rule in
-        // TxService correctly refuses to drop a CWX-driven transmission via
-        // a stray hardware-PTT release — MoxSourceOwnershipTests already
-        // pins this contract.
-        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-        bool ok = _tx.TrySetMox(true, MoxSource.Hardware, out var err);
-        long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
-        if (ok)
+        // TxService.TrySetMox locks, broadcasts via the hub, and pokes WDSP
+        // through DspPipelineService — work we don't want on the RX thread.
+        // The fire-and-forget Task.Run is OK because OnHardwarePttChanged is
+        // already edge-triggered (single rise per external press) and a
+        // subsequent fall is handled by HandleFalling regardless of ordering.
+        _ = Task.Run(() =>
         {
-            _log.LogInformation(
-                "externalPtt.takeover.applied dtUs={DtUs}",
-                (t1 - t0) * 1_000_000L / System.Diagnostics.Stopwatch.Frequency);
-        }
-        else
-        {
-            _log.LogWarning("externalPtt.takeover.rejected reason={Reason}", err);
-            lock (_sync) _owned = false;
-        }
+            if (_tx.TrySetMox(true, out var err))
+            {
+                _log.LogInformation("externalPtt.takeover.applied");
+            }
+            else
+            {
+                _log.LogWarning("externalPtt.takeover.rejected reason={Reason}", err);
+                lock (_sync) _owned = false;
+            }
+        });
     }
 
     private void HandleFalling()
@@ -193,17 +206,9 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         lock (_sync) { releaseNow = _owned; _owned = false; }
         if (!releaseNow) return;
 
-        // Tag the release with the same source that raised it. UI master
-        // override is reserved for an explicit operator click — see
-        // MoxSource.Hardware contract + MoxSourceOwnershipTests.
-        long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
-        bool ok = _tx.TrySetMox(false, MoxSource.Hardware, out var err);
-        long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
-        if (ok)
+        if (_tx.TrySetMox(false, out var err))
         {
-            _log.LogInformation(
-                "externalPtt.release.applied dtUs={DtUs}",
-                (t1 - t0) * 1_000_000L / System.Diagnostics.Stopwatch.Frequency);
+            _log.LogInformation("externalPtt.release.applied");
         }
         else
         {

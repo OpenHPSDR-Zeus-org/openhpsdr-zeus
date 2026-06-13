@@ -41,17 +41,25 @@ public static class ZeusHost
     /// </summary>
     public static WebApplication Build(string[] args, ZeusHostOptions options)
     {
-        // Pin ContentRoot to the binary directory so UseStaticFiles() finds
-        // wwwroot/ next to the executable regardless of how we were launched
+        // Pin ContentRoot to the binary directory so config + UseStaticFiles()
+        // resolve relative to the executable regardless of how we were launched
         // ('dotnet run --project X' sets cwd=X/source-dir, an installed .app
-        // launches with cwd=/, etc.). The wwwroot is copied next to the
-        // binary via Zeus.Server.Hosting.csproj's <Content Include="wwwroot/**">
-        // — same place appsettings.json and the WDSP zetaHat.bin/calculus
-        // model files land.
+        // launches with cwd=/, etc.). appsettings.json and the WDSP
+        // zetaHat.bin/calculus model files sit here next to the binary.
+        //
+        // WebRoot (wwwroot/) is normally ContentRoot/wwwroot, but the macOS
+        // installer moves wwwroot/ out to Contents/Resources/ so the .app
+        // bundle can be codesigned without --deep (data subdirectories under
+        // Contents/MacOS/ break inside-out signing — see installers/
+        // create-macos-app.sh and issue gh-389). When the launcher exports
+        // ZEUS_WEBROOT we honour it; otherwise we fall back to the default so
+        // dev runs and Linux/Windows packages are unaffected.
+        var webRoot = Environment.GetEnvironmentVariable("ZEUS_WEBROOT");
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {
             Args = args,
             ContentRootPath = AppContext.BaseDirectory,
+            WebRootPath = string.IsNullOrWhiteSpace(webRoot) ? null : webRoot,
         });
 
         // Emit enums as strings on the wire ("USB", not 1) per doc 04 §3. The
@@ -159,15 +167,6 @@ public static class ZeusHost
         builder.Services.AddSingleton<Zeus.Protocol1.TxIqRing>();
         builder.Services.AddSingleton<Zeus.Protocol1.ITxIqSource>(sp =>
             sp.GetRequiredService<Zeus.Protocol1.TxIqRing>());
-        // RxCodecAudioRing is shared: RadioCodecAudioSink writes WDSP RX
-        // audio into it; Protocol1Client (constructed inside RadioService)
-        // drains it into the EP2 outbound L/R bytes so operators on
-        // Hermes / ANAN-class / OrionMkII boards hear audio on the radio's
-        // front-panel headphone jack. Empty ring = silent wire bytes,
-        // matching pre-#426 HL2-only behaviour. Issue #426.
-        builder.Services.AddSingleton<Zeus.Protocol1.RxCodecAudioRing>();
-        builder.Services.AddSingleton<Zeus.Protocol1.IRxCodecAudioSource>(sp =>
-            sp.GetRequiredService<Zeus.Protocol1.RxCodecAudioRing>());
         builder.Services.AddSingleton<RadioService>();
         builder.Services.AddSingleton<StreamingHub>();
         // RX audio publish seam (Phase 1). DspPipelineService.PublishAudio
@@ -232,12 +231,6 @@ public static class ZeusHost
             // mix client-side.
             builder.Services.AddSingleton<IAuditionAudioSink, NoOpAuditionAudioSink>();
         }
-        // Radio on-board codec sink — joins the IRxAudioSink fan-out so RX
-        // audio is duplicated to the radio's EP2 outbound L/R bytes whenever
-        // the connected board has an on-board codec (Hermes / ANAN-class /
-        // OrionMkII family / G2E). HL2 / synthetic / pre-connect short-
-        // circuit inside the sink. Issue #426.
-        builder.Services.AddSingleton<IRxAudioSink, RadioCodecAudioSink>();
         // WDSPwisdom bootstrap: run FFTW plan caching on a worker at app start so the
         // first /api/connect isn't blocked for ~2 min while WDSP plans FFTs 64..262144.
         // Clients are told to keep Connect disabled until phase=Ready.
@@ -262,8 +255,52 @@ public static class ZeusHost
         // and pushes envelope-shaped IQ directly into TxIqRing while holding
         // MOX as MoxSource.Cwx.
         builder.Services.AddSingleton<CwSettingsStore>();
+        builder.Services.AddSingleton<CwSidetoneSource>(sp =>
+        {
+            // Seed the live generator from persisted operator preferences
+            // so the first key-down after a cold start uses the saved pitch
+            // and gain (not the source's defaults). REST PUT /api/cw/settings
+            // pushes subsequent changes — see ZeusEndpoints.MapPut.
+            var s = new CwSidetoneSource();
+            var cfg = sp.GetRequiredService<CwSettingsStore>().Get();
+            s.SetPitchHz(cfg.SidetoneHz);
+            s.SetGainDb(cfg.SidetoneGainDb);
+            return s;
+        });
         builder.Services.AddSingleton<CwEngine>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<CwEngine>());
+        // Server-side CW receive decoder: taps demodulated RX audio
+        // (DspPipelineService.RxAudioAvailable) and streams decoded text over
+        // the hub. Lives server-side so it works in the desktop/native-audio
+        // host and headless — see CwDecoderService.
+        builder.Services.AddSingleton<CwDecoderService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<CwDecoderService>());
+        // Voyeur Mode (zeus-la5) — unattended net monitor. Default OFF; only
+        // taps RX audio while a session is active (see VoyeurMonitorService
+        // "cannot break anything" notes). VoyeurStore owns the LiteDB log +
+        // segment-audio files (the save/delete surface).
+        builder.Services.AddSingleton<Zeus.Server.Voyeur.VoyeurStore>();
+        // Phase 2: whisper.cpp transcription (supervised child process) +
+        // callsign extraction + QRZ enrichment. Runs entirely off the audio
+        // path; degrades to capture-only when whisper isn't installed.
+        builder.Services.AddSingleton<Zeus.Server.Voyeur.WhisperTranscriber>();
+        builder.Services.AddSingleton<Zeus.Server.Voyeur.LlamaSummarizer>();
+        // In-app, terminal-free model download (cross-platform). Needs an
+        // HttpClientFactory — already registered below via AddHttpClient, but
+        // ensure the default factory exists for this service.
+        builder.Services.AddHttpClient();
+        builder.Services.AddSingleton<Zeus.Server.Voyeur.VoyeurInstallService>();
+        builder.Services.AddSingleton<Zeus.Server.Voyeur.VoyeurTranscriptionService>();
+        builder.Services.AddHostedService(sp =>
+            sp.GetRequiredService<Zeus.Server.Voyeur.VoyeurTranscriptionService>());
+        builder.Services.AddSingleton<VoyeurMonitorService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<VoyeurMonitorService>());
+        // WAV recorder/player: taps DspPipelineService RX + TX-monitor audio to
+        // record float32 WAVs (default save folder = Downloads) and plays them
+        // back locally via the audition sink. Over-the-air playback is layered
+        // on later. Singleton resolved on first /api/wav call; its ctor wires
+        // the pipeline event subscriptions.
+        builder.Services.AddSingleton<Zeus.Server.Wav.WavRecorderService>();
         // PS auto-attenuate timer2code-equivalent: ramps the radio's TX step
         // attenuator (Protocol2 only today) when calcc feedback level lands outside
         // the 128..181 ideal window, so PS has a recovery path on first arm. Idle
@@ -287,11 +324,11 @@ public static class ZeusHost
         builder.Services.AddSingleton<PsSettingsStore>();
         builder.Services.AddSingleton<FilterPresetStore>();
         builder.Services.AddSingleton<DisplaySettingsStore>();
+        builder.Services.AddSingleton<ToolbarSettingsStore>();
         builder.Services.AddSingleton<NrUiPrefsStore>();
         builder.Services.AddSingleton<ThemeSettingsStore>();
         builder.Services.AddSingleton<BottomPinStore>();
         builder.Services.AddSingleton<PanWfSplitStore>();
-        builder.Services.AddSingleton<MeterDisplaySettingsStore>();
         builder.Services.AddSingleton<RadioStateStore>();
         builder.Services.AddSingleton<QrzService>();
         builder.Services.AddSingleton<LogService>();
@@ -342,6 +379,25 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioPluginBridge>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioPluginBridge>());
 
+        // AudioTapBridge fans the RX, raw-TX-mic and processed-TX-air audio
+        // streams out to read-only plugin taps (IRxAudioTapPlugin /
+        // ITxAudioTapPlugin — recorders, decoders). Independent of the insert
+        // chain; adds no code to the audio hot paths (subscribes to events
+        // those paths already raise).
+        builder.Services.AddSingleton<AudioTapBridge>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioTapBridge>());
+
+        // PluginPlaybackSink lets a plugin play a clip locally (audition) or
+        // inject it on the air (TX chain, under operator MOX). Surfaced to
+        // plugins via IPluginContext.Playback.
+        builder.Services.AddSingleton<Zeus.Plugins.Contracts.Audio.IAudioPlaybackSink, PluginPlaybackSink>();
+
+        // RadioController lets a plugin holding the ControlRadio capability key
+        // TX (MoxSource.Plugin) and set VFO/mode — the same surfaces the UI and
+        // CW engine use. Surfaced via IPluginContext.RadioController (gated on
+        // the capability in PluginManager). Enables plugin keyers (RTTY/voice).
+        builder.Services.AddSingleton<Zeus.Plugins.Contracts.IRadioController, RadioController>();
+
         // AudioChainMasterBypassService — operator's "disengage the
         // whole Audio Suite" lever. Default is true (bypassed) on first
         // install so a brand-new operator's chain is inert until they
@@ -375,6 +431,8 @@ public static class ZeusHost
         builder.Services.AddSingleton<SpotManager>();
         builder.Services.AddSingleton<TciServer>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<TciServer>());
+        builder.Services.AddSingleton<SpotBroadcastService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<SpotBroadcastService>());
         builder.Services.AddSingleton<TciManagementService>();
 
         var app = builder.Build();
