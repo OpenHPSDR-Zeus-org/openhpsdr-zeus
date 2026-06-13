@@ -398,6 +398,12 @@ public static class ZeusHost
         // the capability in PluginManager). Enables plugin keyers (RTTY/voice).
         builder.Services.AddSingleton<Zeus.Plugins.Contracts.IRadioController, RadioController>();
 
+        // RadioStateReader gives a plugin holding ReadRadioState the operator's
+        // current VFO / mode / band / MOX (read-only), wrapping RadioService.
+        // Surfaced via IPluginContext.Radio (gated on the capability in
+        // PluginManager). Voyeur uses it for per-session frequency/band metadata.
+        builder.Services.AddSingleton<Zeus.Plugins.Contracts.IRadioStateReader, RadioStateReader>();
+
         // PluginQrzLookup surfaces the core QrzService to plugins (gated on the
         // NetworkAccess capability in PluginManager) so a plugin reuses the
         // operator's stored QRZ credentials + rate-limit gate instead of asking
