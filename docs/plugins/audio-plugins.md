@@ -148,36 +148,57 @@ and a pre-allocated scratch buffer so N stages cost exactly N
 `Process()` calls plus at most one final copy back to `output`. No
 per-block allocation.
 
-## TX-path wiring (post-rebuild status)
+## TX-path wiring
 
-In iter 7 of the plugin-system rebuild, `AudioChain` is fully
-self-contained — it processes blocks correctly and is unit-tested,
-but the WDSP TX path doesn't yet dispatch into it. The seam was
-removed during iter 1 and the new one will land after maintainer
-review of the chain shape (the prior seam coupled `Zeus.Dsp` to
-`Zeus.PluginHost` directly; the new one uses a delegate to keep that
-boundary clean).
+`AudioChain` is dispatched into the live WDSP TX path by
+`AudioPluginBridge` (`Zeus.Server.Hosting`), a hosted service that
+installs a delegate on `WdspDspEngine` via
+`SetTxAudioPluginHandler(...)`. The delegate runs on the realtime TX
+thread, post-Leveler and **pre-CFC** — CFC stays last, downstream in
+WDSP and unaffected by the chain. The same bridge also drives a
+pre-MOX live mic preview (`ProcessLivePreview`) so the per-plugin
+IN/OUT/GR meters and the Audio Suite "Audition" feed animate from
+live mic input even when nothing is being transmitted.
 
-For now: `IAudioPlugin`-implementing plugins load and appear in
-**Settings → Plugins**, but audio doesn't flow through them on a
-real radio yet. The Plugin Browser correctly identifies them via the
-`audio` badge on the card.
+Both routes feed this chain: `IAudioPlugin` plugins (custom C# DSP)
+and VST3-hosting plugins (via `audio.vst3Path`, see Route 1 above).
+They surface as drag-to-reorder slots in the **Audio Suite** window.
+The operator's master bypass short-circuits the whole chain to a
+single `Span.CopyTo` — bit-identical to "no chain at all".
 
 ## Native bridge build
 
-The native VST3 bridge is not built by `dotnet build`. Build once:
+The native VST3 bridge is not built by `dotnet build`. It hosts VST3s
+via Steinberg's MIT-licensed `vst3sdk`, vendored as a git submodule —
+initialise it first, then run CMake once:
 
 ```bash
+git submodule update --init native/zeus-vst-bridge/third_party/vst3sdk
+git -C native/zeus-vst-bridge/third_party/vst3sdk \
+    submodule update --init base pluginterfaces public.sdk cmake
+
 cd native/zeus-vst-bridge
-cmake -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j 4
+cmake -B build -DCMAKE_BUILD_TYPE=Release        # Windows: add -G "Visual Studio 17 2022" -A x64
+cmake --build build --config Release
 ```
 
-Output: `libzeus-vst-bridge.{so,dylib,dll}` (~280KB on macOS
-arm64). The test project's `CopyVstBridgeDylib` MSBuild target
-copies it next to the test binary so P/Invoke resolution finds it.
-Operators running Zeus pre-built install the library alongside the
-Zeus executable; the release pipeline does this automatically.
+If the `vst3sdk` submodule is absent, CMake falls back to a
+pass-through **stub** (no VST3 loading) so the rest of the tree still
+builds. With the submodule present it builds the real host.
+
+Output: `zeus-vst-bridge.dll` (Windows, `build/Release/`),
+`libzeus-vst-bridge.so` (Linux), `libzeus-vst-bridge.dylib` (macOS).
+Two consumers pick it up:
+
+- The test project's `CopyVstBridgeDylib` target copies it next to the
+  test binary so `VstBridgeNativeRealTests` P/Invoke resolution finds
+  it.
+- For shipping, the per-platform binary is staged into
+  `Zeus.Plugins.Host/runtimes/<rid>/native/` (committed to the tree
+  like `wdsp.dll` / `miniaudio.dll`, rebuilt on demand by the
+  **Build Native Libraries** workflow). `Zeus.Plugins.Host.csproj`
+  copies `runtimes/**` to the host output, so `.NET`'s native-library
+  resolver finds it next to `OpenhpsdrZeus.exe` at runtime.
 
 ## Tests
 
