@@ -37,7 +37,10 @@ env:
   # Pinned upstream versions — bump deliberately, both are permissively licensed
   # (whisper.cpp + llama.cpp are MIT, GPL-compatible).
   WHISPER_REF: v1.7.4
-  LLAMA_REF: b4585
+  # b9610 is the build that ships the one-shot `llama-completion` tool the app
+  # invokes (matches the Homebrew build Voyeur was validated against). Older
+  # tags only have llama-cli (different one-shot flags).
+  LLAMA_REF: b9610
 
 jobs:
   # ----------------------------- macOS -------------------------------------
@@ -78,14 +81,19 @@ jobs:
         run: |
           set -eux
           git clone --depth 1 -b "${LLAMA_REF}" https://github.com/ggml-org/llama.cpp
+          # LLAMA_CURL/LLAMA_OPENSSL OFF: the completion tool otherwise links
+          # libcurl + OpenSSL (for -hf model downloads we never use), which on
+          # macOS pulls non-system Homebrew dylibs and breaks self-containment.
+          # We pass a local model path, so HTTPS isn't needed.
           cmake -S llama.cpp -B llama.cpp/build \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
             -DGGML_OPENMP=OFF \
             -DGGML_METAL=ON \
             -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DLLAMA_CURL=OFF \
+            -DLLAMA_OPENSSL=OFF \
             -DLLAMA_BUILD_TESTS=OFF \
-            -DLLAMA_BUILD_EXAMPLES=ON \
             -DLLAMA_BUILD_SERVER=OFF
           # Build the one-shot completion tool if this version has it, else the
           # classic llama-cli. The Zeus discovery accepts either name.
@@ -168,8 +176,8 @@ jobs:
           git clone --depth 1 -b "${LLAMA_REF}" https://github.com/ggml-org/llama.cpp
           cmake -S llama.cpp -B llama.cpp/build \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DGGML_OPENMP=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=ON \
-            -DLLAMA_BUILD_SERVER=OFF ${CROSS:-}
+            -DGGML_OPENMP=OFF -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF \
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=OFF ${CROSS:-}
           cmake --build llama.cpp/build --config Release --target llama-completion --parallel || \
           cmake --build llama.cpp/build --config Release --target llama-cli --parallel
 
@@ -226,7 +234,8 @@ jobs:
           cmake -S llama.cpp -B llama.cpp/build -A ${{ matrix.arch }} `
             -DBUILD_SHARED_LIBS=OFF -DGGML_OPENMP=OFF `
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
-            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=ON -DLLAMA_BUILD_SERVER=OFF
+            -DLLAMA_CURL=OFF -DLLAMA_OPENSSL=OFF `
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_SERVER=OFF
           $built = cmake --build llama.cpp/build --config Release --target llama-completion --parallel 2>&1
           if ($LASTEXITCODE -ne 0) {
             cmake --build llama.cpp/build --config Release --target llama-cli --parallel
