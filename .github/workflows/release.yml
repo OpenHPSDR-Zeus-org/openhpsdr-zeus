@@ -160,7 +160,10 @@ jobs:
   build-native-windows:
     name: Build native WDSP (windows-${{ matrix.arch }})
     needs: determine-version
-    runs-on: windows-latest
+    # Pinned: windows-latest rolled past the VS 2022 image ~2026-06-10 and the
+    # 'Visual Studio 17 2022' generator below stopped resolving, killing every
+    # nightly. Keep runner + generator in lockstep; bump both together.
+    runs-on: windows-2022
     strategy:
       matrix:
         arch: [x64, arm64]
