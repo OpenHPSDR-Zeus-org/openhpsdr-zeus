@@ -275,26 +275,10 @@ public static class ZeusHost
         // host and headless — see CwDecoderService.
         builder.Services.AddSingleton<CwDecoderService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<CwDecoderService>());
-        // Voyeur Mode (zeus-la5) — unattended net monitor. Default OFF; only
-        // taps RX audio while a session is active (see VoyeurMonitorService
-        // "cannot break anything" notes). VoyeurStore owns the LiteDB log +
-        // segment-audio files (the save/delete surface).
-        builder.Services.AddSingleton<Zeus.Server.Voyeur.VoyeurStore>();
-        // Phase 2: whisper.cpp transcription (supervised child process) +
-        // callsign extraction + QRZ enrichment. Runs entirely off the audio
-        // path; degrades to capture-only when whisper isn't installed.
-        builder.Services.AddSingleton<Zeus.Server.Voyeur.WhisperTranscriber>();
-        builder.Services.AddSingleton<Zeus.Server.Voyeur.LlamaSummarizer>();
-        // In-app, terminal-free model download (cross-platform). Needs an
-        // HttpClientFactory — already registered below via AddHttpClient, but
-        // ensure the default factory exists for this service.
-        builder.Services.AddHttpClient();
-        builder.Services.AddSingleton<Zeus.Server.Voyeur.VoyeurInstallService>();
-        builder.Services.AddSingleton<Zeus.Server.Voyeur.VoyeurTranscriptionService>();
-        builder.Services.AddHostedService(sp =>
-            sp.GetRequiredService<Zeus.Server.Voyeur.VoyeurTranscriptionService>());
-        builder.Services.AddSingleton<VoyeurMonitorService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<VoyeurMonitorService>());
+        // Voyeur Mode (zeus-la5) was extracted into the installable plugin
+        // com.kb2uka.voyeur (openhpsdr-zeus-plugins/monitors/Voyeur). Its host
+        // seams remain in core: AudioTapBridge (RX tap), RadioStateReader,
+        // PluginQrzLookup, and the voyeur-engines-v1 build workflow.
         // WAV recorder/player: taps DspPipelineService RX + TX-monitor audio to
         // record float32 WAVs (default save folder = Downloads) and plays them
         // back locally via the audition sink. Over-the-air playback is layered
