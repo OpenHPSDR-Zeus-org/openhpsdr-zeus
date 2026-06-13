@@ -116,9 +116,14 @@ else
     echo "Warning: ${ICON_SOURCE} not found — building Zeus.app without an icon."
 fi
 
-# Info.plist. CFBundleExecutable points at launch.sh (not OpenhpsdrZeus
-# directly) so we can pin DYLD_LIBRARY_PATH before the .NET runtime loads
-# libwdsp.dylib. CFBundleIdentifier reuses the historical service-mode ID
+# Info.plist. CFBundleExecutable points at a COMPILED launcher (zeus-launch),
+# not a shell script: a /bin/sh CFBundleExecutable makes macOS TCC attribute the
+# microphone request to the shell interpreter, so the permission prompt never
+# appears and native TX-mic capture is silently denied on signed builds. A
+# compiled Mach-O launcher carries the bundle's code identity, so TCC prompts and
+# grants correctly. The launcher still pins DYLD_LIBRARY_PATH before the .NET
+# runtime loads libwdsp.dylib. CFBundleIdentifier reuses the historical
+# service-mode ID
 # (com.ei6lf.zeus) so existing service-mode .app installs upgrade in
 # place. The older "com.ei6lf.zeus.desktop" bundle ID is detected and
 # moved to the Trash by launch.sh on next start — see the cleanup block
@@ -129,7 +134,7 @@ cat > "${APP_BUNDLE}/Contents/Info.plist" << EOF
 <plist version="1.0">
 <dict>
     <key>CFBundleExecutable</key>
-    <string>launch.sh</string>
+    <string>zeus-launch</string>
     <key>CFBundleIconFile</key>
     <string>Zeus</string>
     <key>CFBundleIdentifier</key>
@@ -175,55 +180,61 @@ EOF
 # Make the binary executable (cp -r usually preserves mode but be defensive)
 chmod +x "${APP_PAYLOAD}/OpenhpsdrZeus"
 
-# Launcher (Contents/MacOS/launch.sh): pins DYLD_LIBRARY_PATH so the
-# bundled libwdsp.dylib wins over any older copy in /usr/local/lib or
-# /opt/homebrew/lib (e.g. from a piHPSDR / DeskHPSDR install). Then exec's
-# OpenhpsdrZeus with --desktop so a normal click on the .app opens the
-# Photino window. exec replaces the shell so Cmd-Q / Dock-Quit / Force-Quit
-# tear down the right process.
-cat > "${APP_BUNDLE}/Contents/MacOS/launch.sh" << 'EOF'
-#!/bin/bash
-# The whole .NET payload lives in Contents/Resources/app/ (so the bundle can
-# be codesigned without --deep). cd there before exec so the apphost runs
-# with its DLLs/data as the working dir — AppContext.BaseDirectory and the
-# WDSP bare-relative fopen() of zetaHat.bin/calculus then resolve correctly.
-cd "$(dirname "$0")/../Resources/app"
+# Launcher (Contents/MacOS/zeus-launch): a COMPILED Mach-O, NOT a shell script.
+# A /bin/sh CFBundleExecutable makes macOS TCC attribute the microphone request
+# to the shell interpreter, so the permission prompt never appears and native
+# TX-mic capture is silently denied on signed builds — the long-standing Mac
+# "can't use the mic" bug. A compiled launcher carries the app bundle's code
+# identity, so TCC prompts and grants correctly, then exec's the apphost (which
+# is itself signed with the audio-input entitlement). The launcher still pins
+# DYLD_LIBRARY_PATH (bundled libwdsp.dylib must win over any /usr/local or
+# Homebrew copy) and cd's into Contents/Resources/app (the payload lives there so
+# the bundle codesigns without --deep; cwd = app dir so AppContext.BaseDirectory
+# and WDSP's bare-relative fopen of zetaHat.bin/calculus resolve).
+LAUNCH_SRC="$(mktemp -t zeus-launch).c"
+cat > "${LAUNCH_SRC}" << 'EOF'
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <limits.h>
+#include <libgen.h>
+#include <mach-o/dyld.h>
 
-# Pin the bundled libwdsp.dylib. macOS dlopen does not search the
-# executable's directory by default, so without this line P/Invoke can
-# bind against a stale dylib that pre-dates symbols Zeus relies on (e.g.
-# SetRXAEMNRpost2*). Both arches are listed so the same launcher works on
-# arm64 and x64 builds; the loader silently skips a path that does not exist.
-export DYLD_LIBRARY_PATH="$(pwd)/runtimes/osx-arm64/native:$(pwd)/runtimes/osx-x64/native:${DYLD_LIBRARY_PATH}"
+int main(int argc, char *argv[]) {
+    char exe[PATH_MAX]; uint32_t sz = sizeof(exe);
+    if (_NSGetExecutablePath(exe, &sz) != 0) return 71;
+    char resolved[PATH_MAX];
+    if (!realpath(exe, resolved)) return 71;            /* <App>/Contents/MacOS/zeus-launch */
+    char macos[PATH_MAX]; snprintf(macos, sizeof(macos), "%s", dirname(resolved));
+    char appraw[PATH_MAX]; snprintf(appraw, sizeof(appraw), "%s/../Resources/app", macos);
+    char app[PATH_MAX];
+    if (!realpath(appraw, app)) return 71;              /* <App>/Contents/Resources/app */
+    if (chdir(app) != 0) return 72;
 
-# Belt-and-suspenders: pin the data dirs explicitly. They sit next to the
-# binary here (so the backend would find them anyway), but ZeusHost /
-# BandPlanStore honour these env vars and fall back to the binary dir when
-# unset, so this also covers any future relayout.
-export ZEUS_WEBROOT="$(pwd)/wwwroot"
-export ZEUS_BANDPLANS_DIR="$(pwd)/BandPlans"
+    char dyld[3 * PATH_MAX];
+    const char *prev = getenv("DYLD_LIBRARY_PATH");
+    snprintf(dyld, sizeof(dyld), "%s/runtimes/osx-arm64/native:%s/runtimes/osx-x64/native%s%s",
+             app, app, prev ? ":" : "", prev ? prev : "");
+    setenv("DYLD_LIBRARY_PATH", dyld, 1);
 
-# Evict legacy app bundles left behind by older installers:
-#   /Applications/Zeus Desktop.app   — pre-unified standalone (com.ei6lf.zeus.desktop)
-#   /Applications/Zeus.app           — pre-rename unified app (renamed to "OpenHPSDR Zeus.app")
-#   /Applications/Zeus Server.app    — pre-rename server wrapper
-# We move each to the Trash via Finder so the operator can recover if they
-# really wanted to keep it. Runs at every launch but is effectively a no-op
-# once the files are gone — the `-d` check is the only cost. We deliberately
-# do NOT evict "/Applications/OpenHPSDR Zeus.app" or
-# "/Applications/OpenHPSDR Zeus Server.app" — those are the current bundles.
-for legacy in \
-    "/Applications/Zeus Desktop.app" \
-    "/Applications/Zeus.app" \
-    "/Applications/Zeus Server.app"; do
-    if [ -d "${legacy}" ]; then
-        osascript -e "tell application \"Finder\" to delete POSIX file \"${legacy}\"" >/dev/null 2>&1 || true
-    fi
-done
+    char p[PATH_MAX];
+    snprintf(p, sizeof(p), "%s/wwwroot", app);   setenv("ZEUS_WEBROOT", p, 1);
+    snprintf(p, sizeof(p), "%s/BandPlans", app); setenv("ZEUS_BANDPLANS_DIR", p, 1);
 
-exec ./OpenhpsdrZeus --desktop
+    char bin[PATH_MAX]; snprintf(bin, sizeof(bin), "%s/OpenhpsdrZeus", app);
+    char **av = (char **)calloc((size_t)argc + 2, sizeof(char *));
+    av[0] = bin; av[1] = "--desktop";
+    for (int i = 1; i < argc; i++) av[i + 1] = argv[i];
+    av[argc + 1] = NULL;
+    execv(bin, av);
+    perror("zeus-launch: execv OpenhpsdrZeus failed");
+    return 127;
+}
 EOF
-chmod +x "${APP_BUNDLE}/Contents/MacOS/launch.sh"
+LAUNCH_ARCH="arm64"; [ "${ARCH}" = "x64" ] && LAUNCH_ARCH="x86_64"
+cc -arch "${LAUNCH_ARCH}" -O2 -Wall -o "${APP_BUNDLE}/Contents/MacOS/zeus-launch" "${LAUNCH_SRC}"
+rm -f "${LAUNCH_SRC}"
+chmod +x "${APP_BUNDLE}/Contents/MacOS/zeus-launch"
 
 # Server-mode wrapper (Contents/Resources/openhpsdr-zeus-server): same
 # DYLD pin, but exec's OpenhpsdrZeus without --desktop. Operators run this
