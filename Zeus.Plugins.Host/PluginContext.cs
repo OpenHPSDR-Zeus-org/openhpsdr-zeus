@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Zeus.Plugins.Contracts;
+using Zeus.Plugins.Contracts.Audio;
 
 namespace Zeus.Plugins.Host;
 
@@ -18,7 +19,8 @@ internal sealed class PluginContext : IPluginContext
         ILogger logger,
         IPluginSettings settings,
         IRadioStateReader? radio,
-        IRadioController? radioController)
+        IRadioController? radioController,
+        IAudioPlaybackSink? playback = null)
     {
         PluginId = pluginId;
         Manifest = manifest;
@@ -28,6 +30,7 @@ internal sealed class PluginContext : IPluginContext
         Settings = settings;
         Radio = radio;
         RadioController = radioController;
+        Playback = playback;
     }
 
     public string PluginId { get; }
@@ -38,4 +41,5 @@ internal sealed class PluginContext : IPluginContext
     public IPluginSettings Settings { get; }
     public IRadioStateReader? Radio { get; }
     public IRadioController? RadioController { get; }
+    public IAudioPlaybackSink? Playback { get; }
 }

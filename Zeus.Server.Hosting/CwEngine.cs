@@ -65,6 +65,7 @@ public sealed class CwEngine : BackgroundService
     private readonly TxIqRing _ring;
     private readonly StreamingHub _hub;
     private readonly CwSettingsStore _settings;
+    private readonly CwSidetoneSource? _sidetone;
     private readonly ILogger<CwEngine> _log;
     private readonly Channel<CwJob> _jobs = Channel.CreateUnbounded<CwJob>(
         new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
@@ -79,19 +80,24 @@ public sealed class CwEngine : BackgroundService
     // Aborts the currently-playing job. Recreated on each new job so abort
     // doesn't poison the next send.
     private CancellationTokenSource? _currentAbort;
+    // True only while a raw-key job (TCI keyer:1) is playing. Read under
+    // _abortLock so RawKeyAsync(false) can decide whether the in-flight
+    // cancel applies — keyer:0 must not truncate an unrelated text send.
+    private bool _currentIsRawKey;
     private readonly object _abortLock = new();
 
     /// <summary>Raised on every state transition. Subscribers must not block;
     /// fired from the playback worker thread.</summary>
     public event Action<CwEngineStatus>? Status;
 
-    public CwEngine(TxService tx, RadioService radio, TxIqRing ring, StreamingHub hub, CwSettingsStore settings, ILogger<CwEngine> log)
+    public CwEngine(TxService tx, RadioService radio, TxIqRing ring, StreamingHub hub, CwSettingsStore settings, ILogger<CwEngine> log, CwSidetoneSource? sidetone = null)
     {
         _tx = tx;
         _radio = radio;
         _ring = ring;
         _hub = hub;
         _settings = settings;
+        _sidetone = sidetone;
         _log = log;
         // Drop the current send if the operator overrides MOX from the UI
         // (or a trip happens). Owner==null on the falling edge means MOX
@@ -116,7 +122,37 @@ public sealed class CwEngine : BackgroundService
         int requested = wpm ?? _settings?.Get().Wpm ?? WpmDefault;
         int effective = Math.Clamp(requested, WpmMin, WpmMax);
         Interlocked.Increment(ref _pendingJobs);
-        return _jobs.Writer.WriteAsync(new CwJob(text, effective), ct);
+        return _jobs.Writer.WriteAsync(new CwJob(text, effective, RawKeyDown: false, DurationMs: null), ct);
+    }
+
+    /// <summary>
+    /// Manual key-down / key-up entry point used by the TCI <c>keyer:rx,bool</c>
+    /// command. Key-down enqueues a raw-key job that emits steady carrier
+    /// (with raised-cosine attack/release) until <paramref name="durationMs"/>
+    /// expires or a matching key-up arrives. Key-up cancels the in-flight
+    /// raw-key job only — a parallel <see cref="SendAsync"/> in progress is
+    /// preserved so a stray <c>keyer:0</c> from a contest logger doesn't
+    /// truncate a macro mid-message.
+    /// </summary>
+    public ValueTask RawKeyAsync(bool keyDown, int? durationMs, CancellationToken ct)
+    {
+        if (keyDown)
+        {
+            Interlocked.Increment(ref _pendingJobs);
+            return _jobs.Writer.WriteAsync(
+                new CwJob(string.Empty, 0, RawKeyDown: true, DurationMs: durationMs),
+                ct);
+        }
+
+        // Selective cancel — see _currentIsRawKey field doc.
+        lock (_abortLock)
+        {
+            if (_currentIsRawKey && _currentAbort is { } cts)
+            {
+                try { cts.Cancel(); } catch (ObjectDisposedException) { /* race with worker */ }
+            }
+        }
+        return ValueTask.CompletedTask;
     }
 
     private void BroadcastStatus(CwEngineStatus s)
@@ -157,10 +193,17 @@ public sealed class CwEngine : BackgroundService
             int remaining = Interlocked.Decrement(ref _pendingJobs);
 
             var jobCts = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
-            lock (_abortLock) _currentAbort = jobCts;
+            lock (_abortLock)
+            {
+                _currentAbort = jobCts;
+                _currentIsRawKey = job.RawKeyDown;
+            }
             try
             {
-                await PlayJobAsync(job, remaining, jobCts.Token).ConfigureAwait(false);
+                if (job.RawKeyDown)
+                    await PlayRawKeyAsync(job, remaining, jobCts.Token).ConfigureAwait(false);
+                else
+                    await PlayJobAsync(job, remaining, jobCts.Token).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
@@ -182,6 +225,7 @@ public sealed class CwEngine : BackgroundService
                 lock (_abortLock)
                 {
                     if (ReferenceEquals(_currentAbort, jobCts)) _currentAbort = null;
+                    _currentIsRawKey = false;
                 }
                 jobCts.Dispose();
             }
@@ -237,41 +281,61 @@ public sealed class CwEngine : BackgroundService
         // Scratch buffer for chunked IQ writes. 2 floats per sample.
         var iq = new float[ChunkSamples * 2];
 
-        foreach (var symbol in MorseEncoder.Encode(job.Text, job.Wpm))
+        try
         {
-            ct.ThrowIfCancellationRequested();
-            int totalSamples = (int)((long)symbol.DurationMs * SampleRateHz / 1000);
-            int rampSamples = Math.Min(
-                (int)((long)RampMs * SampleRateHz / 1000),
-                totalSamples / 2);
-
-            int written = 0;
-            while (written < totalSamples)
+            foreach (var symbol in MorseEncoder.Encode(job.Text, job.Wpm))
             {
                 ct.ThrowIfCancellationRequested();
-                int n = Math.Min(ChunkSamples, totalSamples - written);
-                for (int i = 0; i < n; i++)
+                // Sidetone tracks the symbol's KeyDown — operator hears what's
+                // going on the air, with the DSP-thread mixer doing its own
+                // 5 ms raised-cosine envelope so the monitor edges don't
+                // click even though we toggle this flag instantaneously.
+                if (_sidetone is not null)
                 {
-                    double env = symbol.KeyDown
-                        ? RaisedCosineEnvelope(written + i, totalSamples, rampSamples)
-                        : 0.0;
-                    iq[2 * i] = (float)(env * Math.Cos(phase));
-                    iq[2 * i + 1] = (float)(env * Math.Sin(phase));
-                    phase += phaseStep;
-                    // Keep phase bounded so cos/sin stays numerically clean
-                    // over multi-minute transmissions.
-                    if (phase > 2.0 * Math.PI) phase -= 2.0 * Math.PI;
+                    if (symbol.KeyDown) _sidetone.Down();
+                    else _sidetone.Up();
                 }
-                _ring.Write(new ReadOnlySpan<float>(iq, 0, 2 * n));
-                written += n;
-                // Pace ourselves to the ring drain rate so the ring stays
-                // well below its 16384-pair drop-oldest threshold. EP2 drains
-                // ~42k pairs/s; we write at the same average rate, so a
-                // (chunk/rate) sleep keeps the ring at ~one-chunk depth.
-                int sleepMs = Math.Max(1, (n * 1000) / SampleRateHz - 1);
-                try { await Task.Delay(sleepMs, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) { throw; }
+
+                int totalSamples = (int)((long)symbol.DurationMs * SampleRateHz / 1000);
+                int rampSamples = Math.Min(
+                    (int)((long)RampMs * SampleRateHz / 1000),
+                    totalSamples / 2);
+
+                int written = 0;
+                while (written < totalSamples)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    int n = Math.Min(ChunkSamples, totalSamples - written);
+                    for (int i = 0; i < n; i++)
+                    {
+                        double env = symbol.KeyDown
+                            ? RaisedCosineEnvelope(written + i, totalSamples, rampSamples)
+                            : 0.0;
+                        iq[2 * i] = (float)(env * Math.Cos(phase));
+                        iq[2 * i + 1] = (float)(env * Math.Sin(phase));
+                        phase += phaseStep;
+                        // Keep phase bounded so cos/sin stays numerically clean
+                        // over multi-minute transmissions.
+                        if (phase > 2.0 * Math.PI) phase -= 2.0 * Math.PI;
+                    }
+                    _ring.Write(new ReadOnlySpan<float>(iq, 0, 2 * n));
+                    written += n;
+                    // Pace ourselves to the ring drain rate so the ring stays
+                    // well below its 16384-pair drop-oldest threshold. EP2 drains
+                    // ~42k pairs/s; we write at the same average rate, so a
+                    // (chunk/rate) sleep keeps the ring at ~one-chunk depth.
+                    int sleepMs = Math.Max(1, (n * 1000) / SampleRateHz - 1);
+                    try { await Task.Delay(sleepMs, ct).ConfigureAwait(false); }
+                    catch (OperationCanceledException) { throw; }
+                }
             }
+        }
+        finally
+        {
+            // End-of-message and cancellation share this path so a mid-message
+            // abort still releases the sidetone — otherwise the mixer would
+            // sit "keyed" until the next CW send arrived.
+            _sidetone?.Up();
         }
 
         // Drop MOX after the final symbol. The ring still has up to ~10 ms
@@ -281,6 +345,114 @@ public sealed class CwEngine : BackgroundService
         try { await Task.Delay(20, ct).ConfigureAwait(false); }
         catch (OperationCanceledException) { throw; }
         TryReleaseMox("done");
+    }
+
+    /// <summary>
+    /// Steady-carrier playback for the TCI <c>keyer:1</c> path. Same envelope
+    /// shaper as <see cref="PlayJobAsync"/> (raised-cosine attack, plateau,
+    /// raised-cosine release on cancel or duration-end), but no Morse
+    /// encoding — just one long key-down symbol that ends on
+    /// <paramref name="ct"/> cancellation or after <c>job.DurationMs</c>
+    /// elapses, whichever comes first.
+    /// </summary>
+    private async Task PlayRawKeyAsync(CwJob job, int queueDepth, CancellationToken ct)
+    {
+        // Same LO-align and baseband math as PlayJobAsync — keep them in
+        // step so the carrier lands at the operator's dial regardless of
+        // the keying source (text macro vs. raw key from logger).
+        bool loRealigned = _radio.AlignLoForCwTx();
+        var snap = _radio.Snapshot();
+        int basebandHz = (int)(snap.RadioLoHz - snap.VfoHz);
+
+        if (!_tx.TrySetMox(true, MoxSource.Cwx, out var err))
+        {
+            _log.LogWarning("cw.mox.refused keyer reason={Err}", err);
+            Notify(new CwEngineStatus(
+                CwEngineState.Idle, string.Empty, 0, queueDepth,
+                Reason: err ?? "MOX refused"));
+            return;
+        }
+        Notify(new CwEngineStatus(CwEngineState.Sending, "<keyer>", 0, queueDepth));
+        _log.LogInformation(
+            "cw.keyer.down baseband={Bb}Hz durationMs={Dur} loRealigned={LoR}",
+            basebandHz, job.DurationMs?.ToString() ?? "until-release", loRealigned);
+
+        double phase = 0.0;
+        double phaseStep = 2.0 * Math.PI * basebandHz / SampleRateHz;
+        int rampSamples = RampMs * SampleRateHz / 1000;
+        var iq = new float[ChunkSamples * 2];
+
+        // No upper bound when the operator wants to hold the key indefinitely —
+        // ct + keyer:0 are the release path. With a duration, we play exactly
+        // that many samples then release with the same fade-out shape.
+        int? totalSamples = job.DurationMs.HasValue
+            ? (int)((long)job.DurationMs.Value * SampleRateHz / 1000)
+            : null;
+
+        int written = 0;
+        bool releasedByCancel = false;
+        // Sidetone follows the raw key for its whole held duration. Down here,
+        // Up in the finally so a cancel / duration-expiry / error all release
+        // the monitor tone; the DSP-thread mixer runs its own 5 ms fade so the
+        // Up lands in lockstep with the carrier release tail below.
+        _sidetone?.Down();
+        try
+        {
+            while (!totalSamples.HasValue || written < totalSamples.Value)
+            {
+                if (ct.IsCancellationRequested) { releasedByCancel = true; break; }
+                int n = totalSamples.HasValue
+                    ? Math.Min(ChunkSamples, totalSamples.Value - written)
+                    : ChunkSamples;
+                for (int i = 0; i < n; i++)
+                {
+                    int pos = written + i;
+                    // Attack region only — once past rampSamples we plateau at 1.0
+                    // until release. The release tail is rendered after this loop
+                    // exits so it always sees the steady-state amplitude.
+                    double env = pos < rampSamples
+                        ? 0.5 * (1.0 - Math.Cos(Math.PI * pos / rampSamples))
+                        : 1.0;
+                    iq[2 * i] = (float)(env * Math.Cos(phase));
+                    iq[2 * i + 1] = (float)(env * Math.Sin(phase));
+                    phase += phaseStep;
+                    if (phase > 2.0 * Math.PI) phase -= 2.0 * Math.PI;
+                }
+                _ring.Write(new ReadOnlySpan<float>(iq, 0, 2 * n));
+                written += n;
+                int sleepMs = Math.Max(1, (n * 1000) / SampleRateHz - 1);
+                try { await Task.Delay(sleepMs, ct).ConfigureAwait(false); }
+                catch (OperationCanceledException) { releasedByCancel = true; break; }
+            }
+        }
+        finally
+        {
+            _sidetone?.Up();
+        }
+
+        // Release tail — raised-cosine fall from 1.0 to 0. Use a non-cancellable
+        // path so a cancellation that triggered the release doesn't itself
+        // truncate the fade and put a click on the air.
+        for (int chunkStart = 0; chunkStart < rampSamples; chunkStart += ChunkSamples)
+        {
+            int n = Math.Min(ChunkSamples, rampSamples - chunkStart);
+            for (int i = 0; i < n; i++)
+            {
+                int into = chunkStart + i;
+                double env = 0.5 * (1.0 - Math.Cos(Math.PI * (rampSamples - into) / rampSamples));
+                iq[2 * i] = (float)(env * Math.Cos(phase));
+                iq[2 * i + 1] = (float)(env * Math.Sin(phase));
+                phase += phaseStep;
+                if (phase > 2.0 * Math.PI) phase -= 2.0 * Math.PI;
+            }
+            _ring.Write(new ReadOnlySpan<float>(iq, 0, 2 * n));
+            int sleepMs = Math.Max(1, (n * 1000) / SampleRateHz - 1);
+            await Task.Delay(sleepMs).ConfigureAwait(false);
+        }
+
+        try { await Task.Delay(20, CancellationToken.None).ConfigureAwait(false); }
+        catch (OperationCanceledException) { /* shouldn't fire — token is None */ }
+        TryReleaseMox(releasedByCancel ? "keyer.up" : "keyer.duration");
     }
 
     private void TryReleaseMox(string reason)
@@ -310,6 +482,46 @@ public sealed class CwEngine : BackgroundService
         // tolerates a redundant cancel (the linked-token CTS is one-shot
         // and the worker's loop tail finishes the next iteration silently).
         try { cts.Cancel(); } catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>Test seam: precompute the IQ stream a raw-key job
+    /// (<c>keyer:0,true,durationMs</c>) would emit, including the attack
+    /// and release ramps. Same envelope shape as <see cref="PlayRawKeyAsync"/>
+    /// — the divergence is only in how the engine drives MOX and the
+    /// ring, not in the carrier shape.</summary>
+    internal static float[] RenderRawKeyForTest(int durationMs, int basebandHz)
+    {
+        int totalSamples = durationMs * SampleRateHz / 1000;
+        int rampSamples = RampMs * SampleRateHz / 1000;
+        // Plateau cannot be negative — if duration < 2× ramp the attack and
+        // release overlap. Match PlayRawKeyAsync: attack fills the front,
+        // release the tail, plateau (if any) in between.
+        int plateauSamples = Math.Max(0, totalSamples - rampSamples);
+
+        double phase = 0.0;
+        double phaseStep = 2.0 * Math.PI * basebandHz / SampleRateHz;
+        var buf = new float[2 * (totalSamples + rampSamples)];
+        int idx = 0;
+
+        for (int pos = 0; pos < plateauSamples; pos++)
+        {
+            double env = pos < rampSamples
+                ? 0.5 * (1.0 - Math.Cos(Math.PI * pos / rampSamples))
+                : 1.0;
+            buf[idx++] = (float)(env * Math.Cos(phase));
+            buf[idx++] = (float)(env * Math.Sin(phase));
+            phase += phaseStep;
+            if (phase > 2.0 * Math.PI) phase -= 2.0 * Math.PI;
+        }
+        for (int into = 0; into < rampSamples; into++)
+        {
+            double env = 0.5 * (1.0 - Math.Cos(Math.PI * (rampSamples - into) / rampSamples));
+            buf[idx++] = (float)(env * Math.Cos(phase));
+            buf[idx++] = (float)(env * Math.Sin(phase));
+            phase += phaseStep;
+            if (phase > 2.0 * Math.PI) phase -= 2.0 * Math.PI;
+        }
+        return buf;
     }
 
     /// <summary>Test seam: precompute the IQ stream for <paramref name="text"/>
@@ -357,5 +569,5 @@ public sealed class CwEngine : BackgroundService
 
     private static string Truncate(string s) => s.Length <= 40 ? s : s[..40] + "…";
 
-    private readonly record struct CwJob(string Text, int Wpm);
+    private readonly record struct CwJob(string Text, int Wpm, bool RawKeyDown, int? DurationMs);
 }

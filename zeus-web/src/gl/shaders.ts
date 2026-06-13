@@ -93,12 +93,7 @@ void main() { fragColor = vec4(uColor * v_alpha, v_alpha); }`;
 
 export const CURSOR_VS = /* glsl */ `#version 300 es
 layout(location = 0) in vec2 aPos;
-// uXOffset = clip-space X shift, range [-1, +1]. 0 = panadapter centre
-// (dial aligned with the hardware NCO). Non-zero when the operator's dial
-// has roamed away from the NCO — caller computes
-// (vfoHz - centerHz) / (spanHz/2).
-uniform float uXOffset;
-void main() { gl_Position = vec4(aPos.x + uXOffset, aPos.y, 0.0, 1.0); }`;
+void main() { gl_Position = vec4(aPos, 0.0, 1.0); }`;
 
 export const CURSOR_FS = /* glsl */ `#version 300 es
 precision highp float;
@@ -126,32 +121,27 @@ uniform float uDbMax;
 uniform float uWriteRow;
 uniform float uH;
 uniform float uBgAlpha;
-// Pure-pan viewport offset in normalized [0,1] UV space (see docs/prd/
-// panfall_behavior.md). Positive = sample to the right of the canvas X (so
-// the displayed history slides left); negative = sample to the left (history
-// slides right with the operator's finger). Caller computes
-// uViewportOffsetUv = viewportOffsetHz / spanHz.
-uniform float uViewportOffsetUv;
+// Issue #597: fractional view offset in UV units —
+// (historyCenterHz − viewCenterHz) / spanHz. The history texture itself is
+// only rebased in integer pixels (ping-pong shift); this term slides the
+// SAMPLING window fractionally so the waterfall glides with the animated
+// view-center between rebases. Same sign convention as WF_SHIFT_FS's
+// uShiftUv: positive slides displayed content right. Columns the slide
+// exposes fall back to uSeedDb (noise-floor colour), matching the shift
+// pass convention.
+uniform float uViewOffsetUv;
 uniform float uSeedDb;
-// Operator-tunable colormap brightness (issue #426). Multiplies the
-// normalised dB position before the LUT lookup so the lookup index — and
-// therefore the colour — shifts brighter (>1) or darker (<1). 1.0 = no
-// change. The pre-clamp multiply preserves dynamic range: values that would
-// have indexed off the top of the LUT still saturate at the brightest
-// colour, but mid-noise rows that previously sat near the dark end of the
-// gradient slide up into more visible territory.
-uniform float uBrightness;
 out vec4 fragColor;
 void main() {
   // vUv.y == 1.0 at top of canvas; newest row sits at the top.
   // row = (writeRow - (1 - vUv.y) * H) mod H, normalised.
   float agePx = (1.0 - vUv.y) * uH;
   float row = mod(uWriteRow - agePx + uH, uH);
-  float srcX = vUv.x + uViewportOffsetUv;
+  float srcX = vUv.x - uViewOffsetUv;
   float v = (srcX < 0.0 || srcX > 1.0)
     ? uSeedDb
     : texture(uHistory, vec2(srcX, (row + 0.5) / uH)).r;
-  float n = clamp(((v - uDbMin) / (uDbMax - uDbMin)) * uBrightness, 0.0, 1.0);
+  float n = clamp((v - uDbMin) / (uDbMax - uDbMin), 0.0, 1.0);
   vec4 c = texture(uLut, vec2(n, 0.5));
   // uBgAlpha=1 → fully opaque (normal mode). uBgAlpha=0 → noise floor is
   // fully transparent and signal peaks fade in proportionally; map/background

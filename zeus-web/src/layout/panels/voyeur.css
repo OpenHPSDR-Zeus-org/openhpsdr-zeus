@@ -1,0 +1,502 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ * Voyeur Mode panel (zeus-la5) — "intercepted comms log" styling, built on the
+ * Zeus design tokens. Dark console well for the roster/transcript; the live
+ * bar reads like a receiver readout. Token-only colors. */
+
+.voyeur {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+}
+
+.voyeur__controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+}
+
+/* ---- live receiver bar ---- */
+.voyeur-live {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 7px 10px;
+  border-radius: var(--r-xs);
+  background: var(--bg-2);
+  border: 1px solid var(--fg-4);
+}
+.voyeur-live--on {
+  background: linear-gradient(180deg, var(--accent-soft), transparent);
+  border-color: var(--accent-line);
+}
+.voyeur-rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 11px;
+  color: var(--fg-0);
+}
+.voyeur-rec__dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--tx);
+  box-shadow: 0 0 7px var(--tx);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+.voyeur-freq {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-0);
+}
+.voyeur-mode {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-2);
+}
+.voyeur-idle {
+  color: var(--fg-3);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+/* ---- transcription status pill ---- */
+.voyeur-asr {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--fg-4);
+}
+.voyeur-asr__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.voyeur-asr--on {
+  color: var(--green-soft);
+  border-color: color-mix(in srgb, var(--green-soft) 45%, transparent);
+}
+.voyeur-asr--off {
+  color: var(--power);
+  border-color: color-mix(in srgb, var(--power) 40%, transparent);
+}
+.voyeur-asr--off .voyeur-asr__dot {
+  background: transparent;
+  border: 1px solid currentColor;
+}
+
+.voyeur-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* ---- download / setup ---- */
+.voyeur-dl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border-radius: var(--r-xs);
+  background: var(--bg-2);
+  border: 1px solid var(--accent-line);
+  font-size: 11px;
+}
+.voyeur-dl__label {
+  color: var(--fg-2);
+}
+.voyeur-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--bg-inset);
+  border: 1px solid var(--fg-4);
+  overflow: hidden;
+}
+.voyeur-bar__fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-bright));
+  box-shadow: 0 0 8px var(--accent);
+  transition: width 0.4s var(--ease-out);
+}
+.voyeur-dl__msg {
+  font-size: 10px;
+  color: var(--fg-3);
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- setup checklist (engine + model, one-time) ---- */
+.voyeur-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.voyeur-setup__hdr {
+  font-size: 11px;
+  color: var(--fg-2);
+}
+.voyeur-setup__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.voyeur-setup__step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  color: var(--fg-0);
+  background: var(--accent);
+  flex: 0 0 auto;
+}
+.voyeur-setup__name {
+  font-size: 11px;
+  color: var(--fg-1);
+  flex: 1;
+  min-width: 0;
+}
+.voyeur-setup__done {
+  font-size: 10px;
+  color: var(--green-soft);
+  font-weight: 600;
+}
+.voyeur-setup select {
+  background: var(--bg-1);
+  border: 1px solid var(--fg-4);
+  border-radius: var(--r-xs);
+  color: var(--fg-0);
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 4px;
+}
+
+/* ---- help disclosure ---- */
+.voyeur-help {
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 9px 11px;
+  border-radius: var(--r-xs);
+  background: var(--bg-1);
+  border: 1px solid var(--fg-4);
+  color: var(--fg-1);
+}
+.voyeur-help h4 {
+  margin: 8px 0 4px;
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+.voyeur-help h4:first-child {
+  margin-top: 0;
+}
+.voyeur-help ol {
+  margin: 0;
+  padding-left: 18px;
+}
+.voyeur-help code {
+  background: var(--bg-inset);
+  border: 1px solid var(--fg-4);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  word-break: break-all;
+}
+
+/* ---- log list (the dark console well) ---- */
+.voyeur__log {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 10px 12px;
+  background: var(--bg-inset);
+  border-top: 1px solid var(--fg-4);
+}
+.voyeur-loghdr {
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  margin-bottom: 6px;
+}
+.voyeur-empty {
+  color: var(--fg-4);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.voyeur-card {
+  border: 1px solid var(--fg-4);
+  border-radius: var(--r-xs);
+  margin-bottom: 7px;
+  overflow: hidden;
+  background: var(--bg-1);
+}
+.voyeur-card__head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 6px 5px 8px;
+}
+.voyeur-card__name {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: none;
+  color: var(--fg-0);
+  font: inherit;
+  font-weight: 600;
+  padding: 2px 0;
+}
+.voyeur-card__name:focus {
+  outline: none;
+  border-bottom: 1px solid var(--accent);
+}
+.voyeur-pin {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--fg-3);
+  padding: 2px 3px;
+}
+.voyeur-pin--on {
+  color: var(--power);
+  text-shadow: 0 0 6px color-mix(in srgb, var(--power) 60%, transparent);
+}
+.voyeur-card__meta {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  padding: 0 8px 7px 8px;
+}
+
+/* ---- per-over rows: the intercepted-comms log ---- */
+.voyeur-overs {
+  padding: 2px 0 2px 0;
+  background: var(--bg-inset);
+  border-top: 1px solid var(--fg-4);
+}
+.voyeur-over {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 9px;
+  padding: 6px 10px 6px 8px;
+  border-left: 2px solid transparent;
+}
+.voyeur-over + .voyeur-over {
+  border-top: 1px solid color-mix(in srgb, var(--fg-4) 50%, transparent);
+}
+.voyeur-over--confirmed {
+  border-left-color: var(--accent);
+}
+.voyeur-over--tentative {
+  border-left-color: var(--power);
+}
+.voyeur-over__time {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-3);
+  white-space: nowrap;
+  padding-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.voyeur-over__body {
+  min-width: 0;
+}
+.voyeur-call {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  padding: 1px 7px;
+  border-radius: var(--r-xs);
+  vertical-align: middle;
+}
+.voyeur-call--confirmed {
+  color: var(--fg-0);
+  background: var(--accent);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.voyeur-call--tentative {
+  color: var(--power);
+  border: 1px solid color-mix(in srgb, var(--power) 70%, transparent);
+}
+.voyeur-call--unknown {
+  color: var(--fg-4);
+  border: 1px dashed var(--fg-4);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.voyeur-name {
+  color: var(--fg-2);
+  font-size: 10px;
+  margin-left: 6px;
+}
+.voyeur-text {
+  display: block;
+  margin-top: 3px;
+  color: var(--fg-1);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.voyeur-text--pending {
+  color: var(--fg-3);
+  font-style: italic;
+}
+
+.voyeur-error {
+  color: var(--tx);
+  font-size: 11px;
+}
+
+/* ---- Phase 3: search, roster, digest, replay ---- */
+.voyeur-loghdr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.voyeur-search {
+  margin-left: auto;
+  min-width: 0;
+  flex: 0 1 180px;
+  background: var(--bg-1);
+  border: 1px solid var(--fg-4);
+  border-radius: var(--r-xs);
+  color: var(--fg-0);
+  font: inherit;
+  font-size: 11px;
+  padding: 2px 7px;
+}
+.voyeur-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.voyeur-viewtoggle {
+  display: inline-flex;
+  gap: 2px;
+  margin-right: 4px;
+}
+.voyeur-play {
+  background: none;
+  border: 1px solid var(--fg-4);
+  border-radius: var(--r-xs);
+  color: var(--accent-bright);
+  cursor: pointer;
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 5px;
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.voyeur-play--on {
+  color: var(--fg-0);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.voyeur-roster {
+  padding: 8px 10px;
+  background: var(--bg-inset);
+  border-top: 1px solid var(--fg-4);
+}
+.voyeur-roster__stats {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.voyeur-digest {
+  padding: 8px 10px;
+  margin-bottom: 8px;
+  border-radius: var(--r-xs);
+  background: var(--bg-1);
+  border: 1px solid var(--accent-line);
+  border-left: 3px solid var(--accent);
+  color: var(--fg-1);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.voyeur-rosteritem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+}
+.voyeur-rosteritem + .voyeur-rosteritem {
+  border-top: 1px solid color-mix(in srgb, var(--fg-4) 50%, transparent);
+}
+.voyeur-rosteritem__count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--fg-3);
+}
+
+/* AI Summary bar — shown above both Log and Roster views when a log is open. */
+.voyeur-summary {
+  padding: 8px 10px;
+  background: var(--bg-inset);
+  border-top: 1px solid var(--fg-4);
+}
+.voyeur-summary .voyeur-digest {
+  margin: 8px 0 0;
+}
+.voyeur-digestbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.voyeur-digestbar__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.voyeur-digestbar__label {
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+.voyeur-digestbar__sub {
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--fg-3);
+}
+.voyeur-digestbar .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.voyeur-digestbar__hint {
+  font-size: 10px;
+  color: var(--fg-3);
+  font-style: italic;
+}

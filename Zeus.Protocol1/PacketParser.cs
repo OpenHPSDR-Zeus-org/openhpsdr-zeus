@@ -120,6 +120,25 @@ internal static class PacketParser
     }
 
     /// <summary>
+    /// Extract the CW key-down state from a parsed EP6 packet — C0[2] of each
+    /// USB frame OR'd together. This is the gateware's *shaped keyer output*
+    /// (HL2 response slot: <c>{3'b000, resp_addr[1:0], cw_key_status, 1'b0,
+    /// ptt_resp}</c>, so <c>cw_key_status = C0[2]</c>), which toggles per
+    /// dit/dah — NOT the level-held <c>ptt_resp</c> at C0[0] that
+    /// <see cref="ExtractHardwarePtt"/> reads. Used to drive the local CW
+    /// sidetone so it follows individual elements instead of staying on for
+    /// the whole keyed period + hang time. HL2 protocol doc: "C0[2] follows
+    /// the signal at the tip, and a shaped CW signal is generated." (zeus-cl2)
+    /// </summary>
+    public static bool ExtractCwKeyDown(ReadOnlySpan<byte> packet)
+    {
+        if (packet.Length < PacketLength) return false;
+        byte c0Frame0 = packet[MetisHeaderLength + 3];
+        byte c0Frame1 = packet[MetisHeaderLength + UsbFrameLength + 3];
+        return ((c0Frame0 | c0Frame1) & 0x04) != 0;
+    }
+
+    /// <summary>
     /// Read a 24-bit big-endian signed integer with sign-extension to int32.
     /// </summary>
     public static int ReadInt24BigEndian(ReadOnlySpan<byte> b)

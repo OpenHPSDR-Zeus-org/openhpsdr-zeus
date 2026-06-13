@@ -86,14 +86,6 @@ const LEGACY_RX_TRACE_COLOR_KEY = 'zeus.display.rxTraceColor';
 // DisplaySettingsStore.DefaultRxTraceColor.
 export const DEFAULT_RX_TRACE_COLOR = '#FFA028';
 
-// Waterfall colormap brightness multiplier (issue #426). 1.0 = neutral
-// (shader applies no change), < 1.0 darkens, > 1.0 brightens. Bounds and
-// default must stay in lockstep with WfBrightnessMin / WfBrightnessMax /
-// the server-side NormalizeBrightness clamp in DisplaySettingsStore.cs.
-export const WF_BRIGHTNESS_DEFAULT = 1.0;
-export const WF_BRIGHTNESS_MIN = 0.25;
-export const WF_BRIGHTNESS_MAX = 4.0;
-
 function isHexColor(v: unknown): v is string {
   return typeof v === 'string' && /^#[0-9A-Fa-f]{6}$/.test(v);
 }
@@ -249,7 +241,6 @@ function scheduleDbRangeSave(): void {
       s.wfDbMax,
       s.wfTxDbMin,
       s.wfTxDbMax,
-      s.wfBrightness,
     );
   }, 1000);
 }
@@ -288,13 +279,6 @@ export type DisplaySettingsState = {
   // parity — see TX_FIXED_DB_MIN/MAX constants.
   txDbMin: number;
   txDbMax: number;
-  // Waterfall colormap brightness multiplier (issue #426). Applied in
-  // gl/shaders.ts WF_FS before the LUT lookup. 1.0 = no change. Persisted
-  // server-side via the same debounced /api/display-settings PUT used by
-  // the dB-range fields. Hydrated from server on load — null means the
-  // server has never stored a value, in which case the default 1.0 is used
-  // and pushed up on next interaction.
-  wfBrightness: number;
   colormap: ColormapId;
   // Panadapter background overlay mode + (optional) user image. See the
   // PanBackgroundMode and BackgroundImageFit types above. Persisted on the
@@ -330,16 +314,40 @@ export type DisplaySettingsState = {
   shiftWfDbRange: (deltaDb: number) => void;
   // Same as shiftWfDbRange but for the TX-specific waterfall range.
   shiftWfTxDbRange: (deltaDb: number) => void;
-  // Set the waterfall brightness multiplier. Clamps to
-  // WF_BRIGHTNESS_MIN..WF_BRIGHTNESS_MAX and schedules a debounced server
-  // save (callers stream updates live during the drag and the debounce
-  // collapses them into a single PUT after the operator releases the
-  // slider, matching the panadapter-dB-scale pattern). Non-finite input is
-  // ignored.
-  setWfBrightness: (v: number) => void;
 };
 
 const DB_ABS_LIMIT = 200;
+
+// Clamp a shift delta so neither endpoint crosses ±DB_ABS_LIMIT while
+// preserving the span. The pre-fix code clamped each endpoint independently,
+// so a far-enough drag let both endpoints pile up against the same wall and
+// the span collapsed to zero — at which point the colormap maps everything
+// to one colour and the panadapter/waterfall renders a solid block.
+function clampShift(min: number, max: number, delta: number): { min: number; max: number } {
+  const lo = -DB_ABS_LIMIT;
+  const hi = DB_ABS_LIMIT;
+  const maxDown = lo - min; // ≤ 0
+  const maxUp = hi - max; // ≥ 0
+  const d = Math.max(maxDown, Math.min(maxUp, delta));
+  return { min: min + d, max: max + d };
+}
+
+// Validate a (min, max) pair coming from persisted state (server or
+// localStorage). Falls back to defaults if either value is non-finite,
+// outside [-DB_ABS_LIMIT, DB_ABS_LIMIT], or the span is below MIN_SPAN_DB
+// (which would render the trace/waterfall as a single flat colour).
+function sanitizeRange(
+  min: number | null | undefined,
+  max: number | null | undefined,
+  defaultMin: number,
+  defaultMax: number,
+): { min: number; max: number } {
+  if (typeof min !== 'number' || typeof max !== 'number') return { min: defaultMin, max: defaultMax };
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return { min: defaultMin, max: defaultMax };
+  if (min < -DB_ABS_LIMIT || max > DB_ABS_LIMIT) return { min: defaultMin, max: defaultMax };
+  if (max - min < MIN_SPAN_DB) return { min: defaultMin, max: defaultMax };
+  return { min, max };
+}
 
 const initialRange = readSavedRange();
 const initialTxRange = readSavedTxRange();
@@ -356,7 +364,6 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   wfTxDbMax: initialWfTxRange.wfTxDbMax,
   txDbMin: initialTxRange.txDbMin,
   txDbMax: initialTxRange.txDbMax,
-  wfBrightness: WF_BRIGHTNESS_DEFAULT,
   colormap: 'blue',
   // Defaults until the server-side fetch lands (see hydrateFromServer at the
   // bottom of this file). The operator briefly sees a plain panadapter on
@@ -464,41 +471,30 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     const { autoRange, dbMin, dbMax } = get();
     const baseMin = autoRange ? readSavedRange().dbMin : dbMin;
     const baseMax = autoRange ? readSavedRange().dbMax : dbMax;
-    const nextMin = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, baseMin + deltaDb));
-    const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, baseMax + deltaDb));
+    const { min: nextMin, max: nextMax } = clampShift(baseMin, baseMax, deltaDb);
     set({ autoRange: false, dbMin: nextMin, dbMax: nextMax });
     writeSavedRange(nextMin, nextMax);
     scheduleDbRangeSave();
   },
   shiftTxDbRange: (deltaDb) => {
     const { txDbMin, txDbMax } = get();
-    const nextMin = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, txDbMin + deltaDb));
-    const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, txDbMax + deltaDb));
+    const { min: nextMin, max: nextMax } = clampShift(txDbMin, txDbMax, deltaDb);
     set({ txDbMin: nextMin, txDbMax: nextMax });
     writeSavedTxRange(nextMin, nextMax);
     scheduleDbRangeSave();
   },
   shiftWfDbRange: (deltaDb) => {
     const { wfDbMin, wfDbMax } = get();
-    const nextMin = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfDbMin + deltaDb));
-    const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfDbMax + deltaDb));
+    const { min: nextMin, max: nextMax } = clampShift(wfDbMin, wfDbMax, deltaDb);
     set({ wfDbMin: nextMin, wfDbMax: nextMax });
     writeSavedWfRange(nextMin, nextMax);
     scheduleDbRangeSave();
   },
   shiftWfTxDbRange: (deltaDb) => {
     const { wfTxDbMin, wfTxDbMax } = get();
-    const nextMin = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfTxDbMin + deltaDb));
-    const nextMax = Math.max(-DB_ABS_LIMIT, Math.min(DB_ABS_LIMIT, wfTxDbMax + deltaDb));
+    const { min: nextMin, max: nextMax } = clampShift(wfTxDbMin, wfTxDbMax, deltaDb);
     set({ wfTxDbMin: nextMin, wfTxDbMax: nextMax });
     writeSavedWfTxRange(nextMin, nextMax);
-    scheduleDbRangeSave();
-  },
-  setWfBrightness: (v) => {
-    if (!Number.isFinite(v)) return;
-    const clamped = Math.max(WF_BRIGHTNESS_MIN, Math.min(WF_BRIGHTNESS_MAX, v));
-    if (clamped === get().wfBrightness) return;
-    set({ wfBrightness: clamped });
     scheduleDbRangeSave();
   },
   updateAutoRange: (wfDb) => {
@@ -589,6 +585,34 @@ async function hydrateFromServer(): Promise<void> {
   // state and push it up so the server has it for next restart.
   const serverHasDbRange = server.dbMin !== null;
 
+  // Sanitize server-provided ranges so a corrupt or pre-validation row in
+  // zeus-prefs.db (e.g. wfDbMin == wfDbMax from earlier builds) can't render
+  // the panadapter/waterfall as a single flat colour on next load. If the
+  // server value is invalid we fall back to defaults and let scheduleDbRangeSave
+  // push the corrected value back up.
+  const panRange = serverHasDbRange
+    ? sanitizeRange(server.dbMin, server.dbMax, FIXED_DB_MIN, FIXED_DB_MAX)
+    : null;
+  const panTxRange = serverHasDbRange
+    ? sanitizeRange(server.txDbMin, server.txDbMax, TX_FIXED_DB_MIN, TX_FIXED_DB_MAX)
+    : null;
+  const wfRange = serverHasDbRange
+    ? sanitizeRange(server.wfDbMin, server.wfDbMax, FIXED_DB_MIN, FIXED_DB_MAX)
+    : null;
+  const wfTxRange = serverHasDbRange
+    ? sanitizeRange(server.wfTxDbMin, server.wfTxDbMax, TX_FIXED_DB_MIN, TX_FIXED_DB_MAX)
+    : null;
+  const serverRangeWasCorrupt =
+    serverHasDbRange &&
+    (panRange!.min !== server.dbMin ||
+      panRange!.max !== server.dbMax ||
+      panTxRange!.min !== server.txDbMin ||
+      panTxRange!.max !== server.txDbMax ||
+      wfRange!.min !== server.wfDbMin ||
+      wfRange!.max !== server.wfDbMax ||
+      wfTxRange!.min !== server.wfTxDbMin ||
+      wfTxRange!.max !== server.wfTxDbMax);
+
   useDisplaySettingsStore.setState({
     panBackground: server.mode,
     backgroundImage: server.hasImage ? displayImageUrl(Date.now()) : null,
@@ -596,27 +620,22 @@ async function hydrateFromServer(): Promise<void> {
     rxTraceColor: server.rxTraceColor,
     ...(serverHasDbRange
       ? {
-          dbMin: server.dbMin!,
-          dbMax: server.dbMax!,
-          txDbMin: server.txDbMin!,
-          txDbMax: server.txDbMax!,
-          wfDbMin: server.wfDbMin!,
-          wfDbMax: server.wfDbMax!,
-          wfTxDbMin: server.wfTxDbMin!,
-          wfTxDbMax: server.wfTxDbMax!,
+          dbMin: panRange!.min,
+          dbMax: panRange!.max,
+          txDbMin: panTxRange!.min,
+          txDbMax: panTxRange!.max,
+          wfDbMin: wfRange!.min,
+          wfDbMax: wfRange!.max,
+          wfTxDbMin: wfTxRange!.min,
+          wfTxDbMax: wfTxRange!.max,
         }
       : {}),
-    // Brightness is independent of the dB-range fields — a fresh install
-    // without dB persistence can still have a stored brightness if the
-    // operator only touched that slider. Apply whenever the server has it.
-    ...(server.wfBrightness !== null ? { wfBrightness: server.wfBrightness } : {}),
   });
 
-  if (!serverHasDbRange || server.wfBrightness === null) {
-    // Push the current in-memory values (from localStorage / defaults) up
-    // to the server so subsequent restarts find them persisted. One-time
-    // migration for operators upgrading from a build that didn't persist
-    // the dB scale or brightness.
+  if (!serverHasDbRange || serverRangeWasCorrupt) {
+    // Push the current in-memory values (from localStorage or defaults) up
+    // to the server so subsequent restarts find them persisted. This is the
+    // one-time migration for operators upgrading from localStorage-only storage.
     scheduleDbRangeSave();
   }
 }

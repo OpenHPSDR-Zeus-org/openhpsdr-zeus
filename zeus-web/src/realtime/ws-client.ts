@@ -49,7 +49,7 @@ import { isNativeAudio } from '../audio/host-mode';
 import { useMicPeakStore } from '../audio/mic-peak-store';
 import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
 import { hasActiveFrameConsumers, useDisplayStore } from '../state/display-store';
-import { useTxStore } from '../state/tx-store';
+import { AlertKind, useTxStore } from '../state/tx-store';
 import { useBandPlanStore } from '../state/bandPlan';
 import { useRxMetersStore } from '../state/rx-meters-store';
 import { warnOnce } from '../util/logger';
@@ -175,6 +175,30 @@ const AUDIO_MASTER_BYPASS_BYTES = 2;
 // AudioMasterBypass).
 export const MSG_TYPE_CW_ENGINE_STATUS = 0x30;
 const CW_ENGINE_STATUS_HEADER_BYTES = 9;
+
+// CW receive decoder — broadcast by the server-side CwDecoderService whenever
+// it decodes one or more characters from the demodulated RX audio in a CW
+// mode. Decoding lives server-side so it works in the desktop/native-audio
+// host and headless. Variable-length frame: 13-byte header + UTF-8 text.
+// Contract: Zeus.Contracts/CwDecodedTextFrame.cs.
+//
+// Wire shape:
+//   [0x31][wpm:u16 LE][snrDb:f32 LE][confidence:f32 LE][textLen:u16 LE][text:utf8…]
+export const MSG_TYPE_CW_DECODED_TEXT = 0x31;
+const CW_DECODED_TEXT_HEADER_BYTES = 13;
+
+// TCI spot list snapshot — broadcast by SpotBroadcastService whenever the
+// spot list changes (add / remove / clear), and pushed once on WS connect.
+// Variable-length binary frame; see Zeus.Contracts/SpotListFrame.cs.
+//
+// Wire shape:
+//   [0x32][count:u16 LE]
+//   [for each spot: freqHz:i64 LE, argb:u32 LE,
+//     callsignLen:u8, callsign:utf8,
+//     modeLen:u8, mode:utf8,
+//     commentLen:u16 LE, comment:utf8]
+export const MSG_TYPE_SPOT_LIST = 0x32;
+const SPOT_LIST_MIN_BYTES = 3; // type + count
 
 // Shared by startRealtime / sendMicPcm. Single WS instance at a time; writes
 // are no-ops when the socket isn't open.
@@ -401,6 +425,44 @@ export function startRealtime(path = '/ws'): () => void {
           });
           return;
         }
+        if (peekType === MSG_TYPE_CW_DECODED_TEXT) {
+          if (ev.data.byteLength < CW_DECODED_TEXT_HEADER_BYTES) {
+            warnOnce(
+              'ws-cw-decoded-short',
+              `cw decoded frame too short: ${ev.data.byteLength}`,
+            );
+            return;
+          }
+          const dv = new DataView(ev.data);
+          const wpm = dv.getUint16(1, true);
+          const snrDb = dv.getFloat32(3, true);
+          const confidence = dv.getFloat32(7, true);
+          const textLen = dv.getUint16(11, true);
+          if (ev.data.byteLength < CW_DECODED_TEXT_HEADER_BYTES + textLen) {
+            warnOnce(
+              'ws-cw-decoded-truncated',
+              `cw decoded text claims ${textLen} bytes but only ${
+                ev.data.byteLength - CW_DECODED_TEXT_HEADER_BYTES
+              } follow`,
+            );
+            return;
+          }
+          if (textLen === 0) return;
+          const text = new TextDecoder('utf-8').decode(
+            new Uint8Array(ev.data, CW_DECODED_TEXT_HEADER_BYTES, textLen),
+          );
+          // Lazy import keeps the cw-decoder-store off the critical path for
+          // clients that never open the decoder panel.
+          void import('../state/cw-decoder-store').then((m) => {
+            const store = m.useCwDecoderStore.getState();
+            // The panel ON/OFF + HOLD are client-side display gates: the
+            // server always decodes in CW mode, but we only surface text
+            // while the operator has the panel actively listening.
+            if (store.state !== 'listening') return;
+            store.appendText(text, wpm, snrDb, confidence);
+          });
+          return;
+        }
         if (peekType === MSG_TYPE_AUDIO_MASTER_BYPASS) {
           if (ev.data.byteLength < AUDIO_MASTER_BYPASS_BYTES) {
             warnOnce(
@@ -509,6 +571,13 @@ export function startRealtime(path = '/ws'): () => void {
           const msgBytes = new Uint8Array(ev.data, 2);
           const message = new TextDecoder('utf-8').decode(msgBytes);
           useTxStore.getState().setAlert({ kind, message });
+          // A SWR / TX-timeout trip force-drops MOX on the server, which also
+          // disarms any running two-tone test. Clear the local latch so the
+          // TwoTone button doesn't stay lit (and desynced) after the trip —
+          // moxOn/tunOn are cleared separately by the MoxStateFrame off-edge.
+          if (kind === AlertKind.SwrTrip || kind === AlertKind.TxTimeout) {
+            useTxStore.getState().setTwoToneOn(false);
+          }
           return;
         }
         if (peekType === MSG_TYPE_BAND_PLAN_CHANGED) {
@@ -538,6 +607,38 @@ export function startRealtime(path = '/ws'): () => void {
             // localMicArmed (only local interaction does — see issue #346).
             if (txStore.localMicArmed) txStore.setLocalMicArmed(false);
           }
+          return;
+        }
+        if (peekType === MSG_TYPE_SPOT_LIST) {
+          if (ev.data.byteLength < SPOT_LIST_MIN_BYTES) {
+            warnOnce('ws-spot-list-short', `spot list frame too short: ${ev.data.byteLength}`);
+            return;
+          }
+          const dv = new DataView(ev.data);
+          const count = dv.getUint16(1, true);
+          const spots: { callsign: string; mode: string; freqHz: number; argb: number; comment?: string }[] = [];
+          let offset = 3;
+          const td = new TextDecoder('utf-8');
+          for (let i = 0; i < count; i++) {
+            if (offset + 16 > ev.data.byteLength) break; // minimum per-spot fixed bytes
+            const freqHz = Number(dv.getBigInt64(offset, true)); offset += 8;
+            const argb = dv.getUint32(offset, true); offset += 4;
+            const callsignLen = dv.getUint8(offset); offset += 1;
+            if (offset + callsignLen > ev.data.byteLength) break;
+            const callsign = td.decode(new Uint8Array(ev.data, offset, callsignLen)); offset += callsignLen;
+            const modeLen = dv.getUint8(offset); offset += 1;
+            if (offset + modeLen > ev.data.byteLength) break;
+            const mode = td.decode(new Uint8Array(ev.data, offset, modeLen)); offset += modeLen;
+            if (offset + 2 > ev.data.byteLength) break;
+            const commentLen = dv.getUint16(offset, true); offset += 2;
+            if (offset + commentLen > ev.data.byteLength) break;
+            const comment = commentLen > 0 ? td.decode(new Uint8Array(ev.data, offset, commentLen)) : undefined;
+            offset += commentLen;
+            spots.push({ callsign, mode, freqHz, argb, comment });
+          }
+          void import('../state/spot-store').then((m) => {
+            m.useSpotStore.getState().setSpots(spots);
+          });
           return;
         }
         warnOnce(

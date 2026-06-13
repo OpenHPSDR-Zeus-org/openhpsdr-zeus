@@ -1,7 +1,8 @@
 #!/bin/bash
-# Build Openhpsdr Zeus tarball for Linux x64.
-# Usage: ./create-linux-package.sh <version>
+# Build Openhpsdr Zeus tarball for Linux (x64 or arm64).
+# Usage: ./create-linux-package.sh <version> [rid]
 # Example: ./create-linux-package.sh 0.4.1
+#          ./create-linux-package.sh 0.4.1 linux-arm64
 #
 # Tarball contents:
 #   OpenhpsdrZeus              — the single binary (serves three modes)
@@ -22,14 +23,15 @@
 set -e
 
 VERSION="${1:-0.0.0}"
+RID="${2:-linux-x64}"
 
-echo "Creating Openhpsdr Zeus tarball for Linux x64 v${VERSION}..."
+echo "Creating Openhpsdr Zeus tarball for ${RID} v${VERSION}..."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-PUBLISH_DIR="${REPO_ROOT}/OpenhpsdrZeus/bin/Release/net10.0/linux-x64/publish"
+PUBLISH_DIR="${REPO_ROOT}/OpenhpsdrZeus/bin/Release/net10.0/${RID}/publish"
 OUTPUT_DIR="${SCRIPT_DIR}/output"
-PACKAGE_NAME="openhpsdr-zeus-${VERSION}-linux-x64"
+PACKAGE_NAME="openhpsdr-zeus-${VERSION}-${RID}"
 PACKAGE_DIR="${OUTPUT_DIR}/${PACKAGE_NAME}"
 
 # Clean and create output directory
@@ -249,7 +251,7 @@ fi
 
 # Create README
 cat > "${PACKAGE_DIR}/README.txt" << EOF
-Openhpsdr Zeus v${VERSION} for Linux
+Openhpsdr Zeus v${VERSION} for Linux (${RID})
 
 Installation:
 1. Extract this archive to a location of your choice (e.g., ~/zeus or /opt/zeus)
@@ -281,7 +283,7 @@ Desktop mode (--desktop) is the right choice for:
 - Single-machine local use, "just one Zeus window" workflows
 
 Requirements:
-- Linux x64 system (glibc-based; no system packages required — FFTW3 is
+- Linux ${RID} system (glibc-based; no system packages required — FFTW3 is
   statically linked into libwdsp.so and the .NET runtime is bundled)
 - Desktop mode additionally requires libwebkit2gtk-4.1-0:
     Debian/Ubuntu:  sudo apt install libwebkit2gtk-4.1-0
@@ -300,6 +302,7 @@ cp "${REPO_ROOT}/LICENSE" "${PACKAGE_DIR}/" 2>/dev/null || echo "LICENSE file no
 
 # Create tarball
 TARBALL_NAME="${PACKAGE_NAME}.tar.gz"
+echo "Packaging ${RID} tarball..."
 TARBALL_PATH="${OUTPUT_DIR}/${TARBALL_NAME}"
 echo "Creating tarball..."
 cd "${OUTPUT_DIR}"

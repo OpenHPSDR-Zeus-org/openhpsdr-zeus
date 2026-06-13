@@ -79,6 +79,7 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
         {
             EnableBroadcast = true,
         };
+        DisableUdpConnReset(socket);
         socket.Bind(new IPEndPoint(IPAddress.Any, 0));
 
         var packet = BuildDiscoveryPacket();
@@ -107,6 +108,12 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
                 catch (OperationCanceledException)
                 {
                     break;
+                }
+                catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset)
+                {
+                    // Windows WSAECONNRESET (10054): stray ICMP port-unreachable.
+                    // Keep collecting replies until the timeout fires.
+                    continue;
                 }
                 catch (SocketException ex)
                 {
@@ -256,5 +263,17 @@ public sealed class RadioDiscoveryService : IRadioDiscovery
         var bytes = r.Ip.GetAddressBytes();
         if (bytes.Length != 4) return uint.MaxValue;
         return BinaryPrimitives.ReadUInt32BigEndian(bytes);
+    }
+
+    // Private copy — Protocol1 is a separate assembly from Protocol2.
+    // Windows surfaces ICMP port-unreachable as SocketError 10054 on the next recv;
+    // this ioctl disables that behaviour at the OS level.
+    private const int SIO_UDP_CONNRESET = -1744830452; // 0x9800000C
+
+    private static void DisableUdpConnReset(Socket s)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        try { s.IOControl(SIO_UDP_CONNRESET, new byte[4], null); }
+        catch (SocketException) { /* best effort */ }
     }
 }

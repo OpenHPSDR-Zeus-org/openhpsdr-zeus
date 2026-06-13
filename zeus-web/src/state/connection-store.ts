@@ -43,6 +43,7 @@
 // License for details.
 
 import { create } from 'zustand';
+import { msSinceOptimisticTune } from './view-center';
 import {
   NR_CONFIG_DEFAULT,
   type ConnectionStatus,
@@ -63,13 +64,6 @@ export type ConnectionState = {
   status: ConnectionStatus;
   endpoint: string | null;
   vfoHz: number;
-  // Hardware NCO frequency. Independent of vfoHz — the panadapter centres on
-  // radioLoHz and WDSP's shift stage relocates the operator's tuned signal
-  // (vfoHz) within the IQ window. Updated by /api/radio/lo and by band-change
-  // / external-CAT retunes; never by panadapter drags (those just move the
-  // viewport visually until released past the IQ window edge).
-  radioLoHz: number;
-  cwPitchHz: number;
   mode: RxMode;
   filterLowHz: number;
   filterHighHz: number;
@@ -110,7 +104,15 @@ export type ConnectionState = {
   // Live WDSP wisdom_get_status() text streamed by the server while
   // wisdomPhase === 'building'. Empty otherwise.
   wisdomStatus: string;
-  applyState: (s: RadioStateDto) => void;
+  /** Apply a server StateDto. `opts.trustVfo` (default true) marks the
+   *  caller as an explicit command echo whose vfoHz must always apply
+   *  (drag release, keyboard flush, zoom/mode/band responses — clamps and
+   *  server-side corrections included). The 1 Hz App.tsx poll passes
+   *  trustVfo:false: a poll response generated just before the operator's
+   *  latest tune would otherwise rewind the dial mid-gesture (issue #597
+   *  rubber-band). Suppression is time-boxed to the optimistic-tune window
+   *  so a quiet dial always reconverges to server truth. */
+  applyState: (s: RadioStateDto, opts?: { trustVfo?: boolean }) => void;
   setInflight: (v: boolean) => void;
   setBoardId: (id: string | null) => void;
   setConnectedProtocol: (p: 'P1' | 'P2' | null) => void;
@@ -126,8 +128,6 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   status: 'Disconnected',
   endpoint: null,
   vfoHz: 14_200_000,
-  radioLoHz: 14_200_000,
-  cwPitchHz: 600,
   mode: 'USB',
   filterLowHz: 150,
   filterHighHz: 2850,
@@ -155,13 +155,14 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   // pulse spuriously. The server overrides on attach with the real phase.
   wisdomPhase: 'ready',
   wisdomStatus: '',
-  applyState: (s) =>
-    set({
+  applyState: (s, opts) =>
+    set((prev) => ({
       status: s.status,
       endpoint: s.endpoint,
-      vfoHz: s.vfoHz,
-      radioLoHz: s.radioLoHz,
-      cwPitchHz: s.cwPitchHz,
+      vfoHz:
+        (opts?.trustVfo ?? true) || msSinceOptimisticTune() >= 1500
+          ? s.vfoHz
+          : prev.vfoHz,
       mode: s.mode,
       filterLowHz: s.filterLowHz,
       filterHighHz: s.filterHighHz,
@@ -180,7 +181,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       adcOverloadWarning: s.adcOverloadWarning,
       nr: s.nr,
       zoomLevel: s.zoomLevel,
-    }),
+    })),
   setInflight: (inflight) => set({ inflight }),
   setBoardId: (boardId) => set({ boardId }),
   setConnectedProtocol: (connectedProtocol) => set({ connectedProtocol }),

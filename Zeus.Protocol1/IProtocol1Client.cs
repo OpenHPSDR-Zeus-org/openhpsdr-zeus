@@ -146,6 +146,18 @@ public interface IProtocol1Client : IDisposable
     bool HardwarePtt { get; }
 
     /// <summary>
+    /// Edge-triggered CW key-down from the gateware's shaped keyer output
+    /// (C0[2] / cw_key_status) — toggles per dit/dah, distinct from the
+    /// held <see cref="HardwarePttChanged"/> (C0[0] / ptt_resp). Drives the
+    /// local CW sidetone. Fires on the RX thread; handlers must not block.
+    /// (zeus-cl2)
+    /// </summary>
+    event Action<bool>? CwKeyDownChanged;
+
+    /// <summary>Latest CW key-down level (C0[2]). Volatile; any thread.</summary>
+    bool CwKeyDown { get; }
+
+    /// <summary>
     /// Select the radio's wire-level board family. Affects the extended
     /// attenuator byte layout (HL2 vs bare HPSDR) and the N2ADR filter-board
     /// OC pin encoding. Defaults to <see cref="HpsdrBoardKind.HermesLite2"/>.
@@ -217,6 +229,25 @@ public interface IProtocol1Client : IDisposable
     /// store the flag for state-tracking only — the wire stays untouched.
     /// </summary>
     void SetHl2TxStepAttenuationDb(int db);
+
+    /// <summary>
+    /// Current HL2 TX-side step attenuation in dB — the value last written
+    /// via <see cref="SetHl2TxStepAttenuationDb"/>. Returns 0 when untouched
+    /// (the radio's power-on default), never the internal int.MinValue
+    /// sentinel. Read by <c>PsAutoAttenuateService</c> on a PS-arm edge so
+    /// the dance baselines its model to ground truth instead of assuming 0,
+    /// which would desync from the radio's sticky ATTOnTX value.
+    /// </summary>
+    int Hl2TxStepAttenuationDb { get; }
+
+    /// <summary>
+    /// Push the on-board CW keyer config to C&amp;C register 0x0B: speed in
+    /// WPM (clamped to the 6-bit 0..60 gateware field) and the keyer mode
+    /// (straight / iambic A / iambic B). Sent via the register round-robin
+    /// so it self-heals on packet loss. The gateware ignores speed in
+    /// straight mode. See zeus-bks.
+    /// </summary>
+    void SetCwKeyerConfig(int wpm, CwKeyerMode mode);
 
     /// <summary>
     /// 1024-sample paired feedback blocks decoded from the EP6 stream when

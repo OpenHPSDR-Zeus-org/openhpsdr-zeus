@@ -101,11 +101,6 @@ internal static class BoardCapabilitiesTable
     // 0-31 dB on RX1 only) matches the row exactly; see Zeus issue #171.
     // MaxPowerWatts=10 is conservative for Brick2 (rated 15 W); operator
     // overrides per-rig in the PA panel.
-    // HasOnboardCodec: every original-protocol board EXCEPT HermesLite2
-    // routes EP2 L/R bytes to a front-panel headphone jack and EP6 mic
-    // bytes from a front-panel mic jack via its on-board AK4951 / TLV320
-    // codec. HL2 has no such codec — host audio path only. Issue #426.
-
     private static readonly BoardCapabilities HermesClass = new(
         RxAdcCount: 1,
         MkiiBpf: false,
@@ -116,8 +111,7 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: false, // single-RX: RX2 doesn't exist
         SupportsPathIllustrator: true,
-        MaxPowerWatts: 10,
-        HasOnboardCodec: true);
+        MaxPowerWatts: 10);
 
     // ANAN-10E (HermesII firmware) — same Hermes-class fingerprint but the
     // 10E hardware is rated to ~30 W, so its meter axis gets the bigger top.
@@ -131,8 +125,7 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: false,
         SupportsPathIllustrator: true,
-        MaxPowerWatts: 30,
-        HasOnboardCodec: true);
+        MaxPowerWatts: 30);
 
     // ANAN-100D — 100 W class. Meter axis 120 W gives some headroom past
     // the rated rail without truncating PEP overshoots.
@@ -146,8 +139,7 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: true,
-        MaxPowerWatts: 120,
-        HasOnboardCodec: true);
+        MaxPowerWatts: 120);
 
     // ANAN-200D — 200 W class but axis matches the 100/200/G2 family at
     // 120 W: half-axis at 100 W is the natural reading point.
@@ -161,8 +153,7 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: true,
-        MaxPowerWatts: 120,
-        HasOnboardCodec: true);
+        MaxPowerWatts: 120);
 
     // 0x0A family default (G2 / 7000DLE / OrionMkII / ANVELINA-PRO3 /
     // Red Pitaya). Saturn-class facts. 100–200 W typical → 120 W axis.
@@ -176,8 +167,7 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: true,
         HasSteppedAttenuationRx2: true,
         SupportsPathIllustrator: false,
-        MaxPowerWatts: 120,
-        HasOnboardCodec: true);
+        MaxPowerWatts: 120);
 
     // ANAN-8000DLE — 250 W per Apache spec; axis snaps to that.
     private static readonly BoardCapabilities Saturn8000DLE = Saturn with
@@ -211,8 +201,7 @@ internal static class BoardCapabilitiesTable
         HasAudioAmplifier: true,
         HasSteppedAttenuationRx2: false, // single-RX: RX2 doesn't exist
         SupportsPathIllustrator: false,
-        MaxPowerWatts: 120,
-        HasOnboardCodec: true);
+        MaxPowerWatts: 120);
 
     // Apache OrionMkII original (Orion-MkII firmware, 100 W) — Saturn-class
     // hardware fingerprint but without on-board telemetry / audio amp per

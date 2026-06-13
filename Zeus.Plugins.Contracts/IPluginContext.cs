@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Zeus.Plugins.Contracts.Audio;
 
 namespace Zeus.Plugins.Contracts;
 
@@ -44,6 +45,16 @@ public interface IPluginContext
     /// <see cref="PluginCapabilities.ControlRadio"/> was not granted.
     /// </summary>
     IRadioController? RadioController { get; }
+
+    /// <summary>
+    /// Audio playback into the host — local monitor and on-air TX inject.
+    /// Null if the host exposes no playback path (e.g. browser mode has no
+    /// local-monitor sink). On-air playback only reaches the air while the
+    /// operator has MOX engaged; this sink never keys the radio itself.
+    /// Default implementation returns null so existing hosts / test doubles
+    /// need no change.
+    /// </summary>
+    IAudioPlaybackSink? Playback => null;
 }
 
 /// <summary>Key/value persistence scoped to one plugin id.</summary>

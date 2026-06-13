@@ -112,8 +112,17 @@ public sealed class BandPlanStore : IDisposable
 
     private void LoadShippedData()
     {
-        var baseDir = AppContext.BaseDirectory;
-        var plansDir = Path.Combine(baseDir, "BandPlans");
+        // Normally BandPlans/ sits next to the binary. The macOS installer
+        // relocates it to Contents/Resources/ so the .app bundle can be
+        // codesigned without --deep (data subdirectories under Contents/MacOS/
+        // break inside-out signing — see installers/create-macos-app.sh and
+        // issue gh-389) and exports ZEUS_BANDPLANS_DIR from the launcher. Fall
+        // back to the binary dir when it's unset so dev runs and Linux/Windows
+        // packages are unaffected.
+        var envDir = Environment.GetEnvironmentVariable("ZEUS_BANDPLANS_DIR");
+        var plansDir = string.IsNullOrWhiteSpace(envDir)
+            ? Path.Combine(AppContext.BaseDirectory, "BandPlans")
+            : envDir;
 
         if (!Directory.Exists(plansDir))
         {

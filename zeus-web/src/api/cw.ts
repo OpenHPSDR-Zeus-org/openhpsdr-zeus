@@ -9,6 +9,11 @@
 // playback arrives over WebSocket as MsgType.CwEngineStatus (0x30) —
 // consumed in realtime/ws-client.ts and pushed into useCwStore.
 
+// HL2 on-board keyer mode. Serialised by the backend as a string (the host
+// configures JsonStringEnumConverter). Straight is default-safe — see the
+// CwKeyerMode enum doc in Zeus.Contracts/Dtos.cs and zeus-bks.
+export type CwKeyerMode = 'Straight' | 'IambicA' | 'IambicB';
+
 export type CwSettings = {
   wpm: number;
   // Farnsworth char-rate floor (slower than wpm). null = pure WPM, no
@@ -19,6 +24,8 @@ export type CwSettings = {
   macros: string[];
   sidetoneGainDb: number;
   sidetoneHz: number;
+  // On-board iambic keyer mode for a paddle on the radio's KEY jack.
+  keyerMode: CwKeyerMode;
 };
 
 type CwSettingsDtoRaw = {
@@ -27,6 +34,7 @@ type CwSettingsDtoRaw = {
   macros?: string[];
   sidetoneGainDb?: number;
   sidetoneHz?: number;
+  keyerMode?: CwKeyerMode;
 };
 
 const DEFAULT_MACROS = ['CQ CQ CQ', 'TU 73', 'QRZ?', 'AGN?', '5NN TU', 'UR RST'];
@@ -41,7 +49,10 @@ export const DEFAULT_CW_SETTINGS: CwSettings = {
   macros: [...DEFAULT_MACROS],
   sidetoneGainDb: -10,
   sidetoneHz: 600,
+  keyerMode: 'Straight',
 };
+
+const KEYER_MODES: readonly CwKeyerMode[] = ['Straight', 'IambicA', 'IambicB'];
 
 function normalize(raw: CwSettingsDtoRaw): CwSettings {
   // Variable-length: pass through whatever the server sent (operator
@@ -61,6 +72,10 @@ function normalize(raw: CwSettingsDtoRaw): CwSettings {
       typeof raw.sidetoneHz === 'number'
         ? raw.sidetoneHz
         : DEFAULT_CW_SETTINGS.sidetoneHz,
+    keyerMode:
+      raw.keyerMode !== undefined && KEYER_MODES.includes(raw.keyerMode)
+        ? raw.keyerMode
+        : DEFAULT_CW_SETTINGS.keyerMode,
   };
 }
 
@@ -81,6 +96,7 @@ export async function saveCwSettings(
   if (patch.macros !== undefined) body.macros = patch.macros;
   if (patch.sidetoneGainDb !== undefined) body.sidetoneGainDb = patch.sidetoneGainDb;
   if (patch.sidetoneHz !== undefined) body.sidetoneHz = patch.sidetoneHz;
+  if (patch.keyerMode !== undefined) body.keyerMode = patch.keyerMode;
 
   const res = await fetch('/api/cw/settings', {
     method: 'PUT',

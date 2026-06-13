@@ -52,6 +52,7 @@ import { RotatorCompassPanel } from './panels/RotatorCompassPanel';
 import { RotatorDialPanel } from './panels/RotatorDialPanel';
 import { DspFlexPanel } from './panels/DspFlexPanel';
 import { CwPanel } from './panels/CwPanel';
+import { CwDecoderPanel } from './panels/CwDecoderPanel';
 import { LogbookPanel } from './panels/LogbookPanel';
 import { TxMetersPanel } from './panels/TxMetersPanel';
 import { TxPanel } from './panels/TxPanel';
@@ -62,6 +63,8 @@ import { ModePanel } from './panels/ModePanel';
 import { StepPanel } from './panels/StepPanel';
 import { MeterGroupPanel } from '../components/meter-group/MeterGroupPanel';
 import { AnalogMeterPanel } from './panels/AnalogMeterPanel';
+import { WavRecorderPanel } from './panels/WavRecorderPanel';
+import { VoyeurPanel } from './panels/VoyeurPanel';
 
 export type PanelCategory =
   | 'spectrum'
@@ -226,6 +229,19 @@ export const PANELS: Record<string, PanelDef> = {
     tags: ['cw', 'morse', 'keyer', 'wpm'],
     component: CwPanel,
   },
+  cwdecoder: {
+    id: 'cwdecoder',
+    name: 'CW Decoder',
+    category: 'tools',
+    tags: ['cw', 'morse', 'decoder', 'receive'],
+    component: CwDecoderPanel,
+    // Headerless: CwDecoderPanel draws its own TileChrome (carrying the
+    // ON/OFF toggle in the right slot). Without this flag the host renders
+    // a second default TileChrome on top, producing a duplicated window
+    // header — and the panel's own close button goes dead because PanelTile
+    // only injects onRemove to headerless panels.
+    headerless: true,
+  },
   logbook: {
     id: 'logbook',
     name: 'Logbook',
@@ -292,6 +308,23 @@ export const PANELS: Record<string, PanelDef> = {
     component: MeterGroupPanel,
     multiInstance: true,
     headerless: true,
+  },
+  wavrecorder: {
+    id: 'wavrecorder',
+    name: 'Tape Deck · WAV Recorder',
+    category: 'tools',
+    tags: ['recorder', 'wav', 'tape', 'record', 'playback', 'audio', 'reel'],
+    component: WavRecorderPanel,
+    maxW: 4,
+  },
+  voyeur: {
+    id: 'voyeur',
+    name: 'Voyeur Mode · Net Monitor',
+    category: 'tools',
+    tags: ['voyeur', 'monitor', 'net', 'log', 'transcribe', 'listen', 'unattended', 'who', 'roster'],
+    component: VoyeurPanel,
+    headerless: true,
+    maxW: 4,
   },
   analogmeter: {
     id: 'analogmeter',

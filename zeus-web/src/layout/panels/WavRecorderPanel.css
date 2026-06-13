@@ -1,0 +1,134 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ *
+ * Zeus — reel-to-reel tape-deck skin for the WAV recorder panel.
+ * Skeuomorphic deck styling. Material colours (tape/flange/hub) are local to
+ * this deck, not global palette tokens; chrome borrows --panel-top/--panel-bot
+ * and accents (--accent/--tx/--amber) so it sits in the Zeus look.
+ */
+
+.reel-deck {
+  --deck-face: linear-gradient(180deg, var(--panel-top, #2a2d31), var(--panel-bot, #161719));
+  --tape: #4a3b2f;          /* spooled tape */
+  --tape-edge: #6b5946;
+  --flange: #d9dde2;        /* bright metal reel flange */
+  --flange-shade: #9aa1a8;
+  --hub: #3a3f45;
+  padding: 10px;
+  width: 100%;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.reel-deck__deck {
+  background: var(--deck-face);
+  border: 1px solid var(--line, #000);
+  border-radius: 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 6px rgba(0, 0, 0, 0.4);
+  padding: 14px 16px 12px;
+}
+
+/* Two reels with the tape spanning between them. */
+.reel-deck__reels {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  position: relative;
+  gap: 8px;
+}
+
+.reel-deck__tape-path {
+  position: absolute;
+  left: 18%;
+  right: 18%;
+  top: 12px;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, var(--tape-edge) 12%, var(--tape-edge) 88%, transparent);
+  opacity: 0.7;
+}
+
+.reel {
+  width: 84px;
+  height: 84px;
+  flex: 0 0 auto;
+}
+
+.reel__spin {
+  transform-origin: 50% 50%;
+}
+
+/* Recording spins forward; playback spins forward a touch faster; idle holds.
+   prefers-reduced-motion users get a still deck. */
+.reel__spin.is-rec {
+  animation: reel-turn 2.4s linear infinite;
+}
+.reel__spin.is-play {
+  animation: reel-turn 1.7s linear infinite;
+}
+
+@keyframes reel-turn {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reel__spin.is-rec,
+  .reel__spin.is-play { animation: none; }
+}
+
+/* Mechanical seconds counter. */
+.reel-deck__counter {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 2px;
+  background: #0c0d0e;
+  color: var(--amber, #ffa028);
+  border: 1px solid #000;
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 14px;
+  box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.8);
+}
+.reel-deck__counter.is-rec { color: var(--tx, #e63a2b); }
+
+.reel-deck__transport {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 12px;
+}
+
+.reel-btn {
+  background: var(--bg-2, #2c2f33);
+  color: var(--text);
+  border: 1px solid var(--line, #000);
+  border-radius: 4px;
+  padding: 5px 11px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.reel-btn:disabled { opacity: 0.45; cursor: default; }
+.reel-btn.is-rec-active { background: var(--tx, #e63a2b); color: #fff; }
+.reel-btn.is-on { background: var(--accent, #4a9eff); color: #fff; }
+
+.reel-deck__list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 10px;
+}
+.reel-deck__row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 3px 4px;
+  border-radius: 4px;
+}
+.reel-deck__row.is-playing { background: var(--bg-2, #2c2f33); }
+.reel-deck__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reel-deck__hint { margin-top: 8px; font-size: 11px; opacity: 0.5; }

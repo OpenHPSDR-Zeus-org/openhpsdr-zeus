@@ -398,6 +398,7 @@ public sealed class TxService
     public void TryTripForAlert(AlertKind kind, string reason)
     {
         bool wasMoxOn, wasTunOn;
+        bool wasTwoToneOn = IsTwoToneOn;
         bool? txActiveCaptured;
         lock (_sync)
         {
@@ -420,6 +421,17 @@ public sealed class TxService
             _pipeline.SetMox(false);
             _radio.SetMox(false);
             if (wasTunOn) _pipeline.SetTxTune(false);
+            // A trip force-drops MOX, so any running two-tone test is over too.
+            // Disarm it the same way we disarm TUN above — clear the latch AND
+            // drop the engine's PostGen (SetTwoTone false). Without this the
+            // server's TwoToneEnabled stays stuck true; the two-tone apply is
+            // change-gated, so the next engage wouldn't re-assert PostGen mode=1
+            // and the leftover generator (a single carrier) would play through.
+            if (wasTwoToneOn)
+            {
+                IsTwoToneOn = false;
+                _radio.SetTwoTone(new TwoToneSetRequest(false));
+            }
             _radio.NotifyTunActive(false);
             _log.LogWarning("tx.trip kind={Kind} reason={Reason}", kind, reason);
             _hub.Broadcast(new AlertFrame(kind, reason));

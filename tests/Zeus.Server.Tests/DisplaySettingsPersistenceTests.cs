@@ -122,47 +122,49 @@ public class DisplaySettingsPersistenceTests : IDisposable
         Assert.Equal(-40, dto.DbMax);
     }
 
-    // Issue #426 — waterfall brightness is the same persisted-double pattern
-    // as the dB ranges. Cover the three round-trip behaviours so a future
-    // refactor that breaks any one of them is caught here.
-
-    [Fact]
-    public void FreshDb_ReturnsNullForWfBrightness()
+    // Regression for the "white waterfall" symptom: dragging the waterfall dB
+    // scale far enough used to push both endpoints to the same ±DB_ABS_LIMIT
+    // wall, persisting min == max. Next page load mapped the entire colormap
+    // input to one colour. The store now drops degenerate writes so a buggy
+    // client (or a stray API call) can't leave the DB in that state.
+    [Theory]
+    [InlineData(-200, -200)] // both at -DbAbsLimit (the original symptom)
+    [InlineData(-50, -50)]   // min == max anywhere
+    [InlineData(-60, -50)]   // span (10) below MinSpanDb (20)
+    [InlineData(-50, -60)]   // inverted
+    [InlineData(-300, -50)]  // min outside abs limit
+    [InlineData(-50, 300)]   // max outside abs limit
+    public void SaveMode_DegenerateWfRange_IsRejectedAndPriorValueKept(double badMin, double badMax)
     {
         using var store = BuildStore();
-        Assert.Null(store.Get().WfBrightness);
+        store.SaveMode("basic", "fill", "#FFA028",
+            wfDbMin: -125, wfDbMax: -55);
+
+        store.SaveMode("basic", "fill", "#FFA028",
+            wfDbMin: badMin, wfDbMax: badMax);
+
+        var dto = store.Get();
+        Assert.Equal(-125, dto.WfDbMin);
+        Assert.Equal(-55, dto.WfDbMax);
     }
 
     [Fact]
-    public void SaveMode_WithWfBrightness_PersistsAcrossReopen()
-    {
-        using (var store = BuildStore())
-        {
-            store.SaveMode("basic", "fill", "#FFA028", wfBrightness: 1.75);
-        }
-        using var fresh = BuildStore();
-        Assert.Equal(1.75, fresh.Get().WfBrightness);
-    }
-
-    [Fact]
-    public void SaveMode_NullWfBrightness_PreservesExistingValue()
+    public void SaveMode_PartialDegenerateRange_OnlyAffectedPairIsRejected()
     {
         using var store = BuildStore();
-        store.SaveMode("basic", "fill", "#FFA028", wfBrightness: 2.0);
-        // Subsequent save that doesn't touch brightness must not zero it.
-        store.SaveMode("beam-map", "fit", "#FFA028");
-        Assert.Equal(2.0, store.Get().WfBrightness);
-    }
+        store.SaveMode("basic", "fill", "#FFA028",
+            dbMin: -130, dbMax: -60,
+            wfDbMin: -125, wfDbMax: -55);
 
-    [Fact]
-    public void SaveMode_ClampsWfBrightnessToSliderBounds()
-    {
-        using var store = BuildStore();
-        // Below WF_BRIGHTNESS_MIN (0.25) clamps up.
-        store.SaveMode("basic", "fill", "#FFA028", wfBrightness: 0.01);
-        Assert.Equal(0.25, store.Get().WfBrightness);
-        // Above WF_BRIGHTNESS_MAX (4.0) clamps down.
-        store.SaveMode("basic", "fill", "#FFA028", wfBrightness: 99.0);
-        Assert.Equal(4.0, store.Get().WfBrightness);
+        // Valid pan update, but degenerate wf update in the same call.
+        store.SaveMode("basic", "fill", "#FFA028",
+            dbMin: -120, dbMax: -50,
+            wfDbMin: -200, wfDbMax: -200);
+
+        var dto = store.Get();
+        Assert.Equal(-120, dto.DbMin);
+        Assert.Equal(-50, dto.DbMax);
+        Assert.Equal(-125, dto.WfDbMin);
+        Assert.Equal(-55, dto.WfDbMax);
     }
 }

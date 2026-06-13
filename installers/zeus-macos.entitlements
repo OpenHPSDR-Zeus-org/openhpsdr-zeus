@@ -35,11 +35,23 @@
                                        SetRXAEMNRpost2*). See create-macos-app.sh
                                        launch.sh block + docs/lessons/dev-conventions.md.
 
-  Microphone / camera access is NOT declared here: those entitlements only apply
-  inside the App Sandbox. Outside the sandbox the TCC prompt is driven by
-  NSMicrophoneUsageDescription / NSCameraUsageDescription in each bundle's Info.plist
-  (set by create-macos-app.sh). Adding sandbox-only entitlements to a non-sandboxed
-  app is silently ignored, but adds noise — keep this file tight.
+  - device.audio-input                 REQUIRED for desktop-mode mic TX uplink
+                                       (NativeMicCapture → miniaudio). Under the
+                                       Hardened Runtime a non-sandboxed app needs
+                                       `com.apple.security.device.audio-input` to
+                                       open the microphone — the TCC Privacy →
+                                       Microphone grant alone is NOT enough; the
+                                       system blocks capture without this entitlement
+                                       even with the toggle on. This is the Hardened-
+                                       Runtime capability and IS honoured outside the
+                                       sandbox — distinct from the App-Sandbox
+                                       `com.apple.security.device.microphone` key,
+                                       which would be ignored here. Missing this is
+                                       why signed/notarized builds couldn't hear the
+                                       mic while `dotnet run` (un-hardened, inherits
+                                       Terminal's grant) could. The TCC prompt itself
+                                       is still driven by NSMicrophoneUsageDescription
+                                       in each bundle's Info.plist (create-macos-app.sh).
 -->
 <plist version="1.0">
 <dict>
@@ -50,6 +62,8 @@
     <key>com.apple.security.cs.disable-library-validation</key>
     <true/>
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.device.audio-input</key>
     <true/>
 </dict>
 </plist>

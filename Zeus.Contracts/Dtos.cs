@@ -234,6 +234,15 @@ public sealed record StateDto(
     // HardwareSpecific.PSDefaultPeak;` + clsHardwareSpecific.cs:303-328
     // PSDefaultPeak per-board switch.
     double PsHwPeakDefault = 0.4072,
+    // PS TX feedback attenuation (dB) currently applied to the radio's
+    // feedback path. Surfaced so the operator can set it directly — a manual
+    // alternative to AutoAttenuate for a fixed external-tap chain — and see
+    // the persisted value restored on connect. Written by the AutoAttenuate
+    // dance, the manual control, and the connect-time restore.
+    int PsTxFeedbackAttenuationDb = 0,
+    // Per-board minimum for the above. HL2's AD9866 TX PGA reaches -28 dB;
+    // the bare-HPSDR / P2 step attenuator floors at 0. Max is 31 everywhere.
+    int PsTxFeedbackAttenuationDbMin = 0,
     PsFeedbackSource PsFeedbackSource = PsFeedbackSource.Internal,
     string PsIntsSpiPreset = "16/256",
     double PsFeedbackLevel = 0.0,   // info[4] read-back, 0..256
@@ -421,7 +430,8 @@ public sealed record CwSettingsDto(
     int? FarnsworthWpm,
     string[] Macros,
     double SidetoneGainDb,
-    int SidetoneHz);
+    int SidetoneHz,
+    CwKeyerMode KeyerMode);
 
 // PATCH-shaped: every field nullable so the frontend can save one slider
 // (or one macro) without re-sending the whole record. Server merges on top
@@ -431,7 +441,21 @@ public sealed record CwSettingsSetRequest(
     int? FarnsworthWpm = null,
     string[]? Macros = null,
     double? SidetoneGainDb = null,
-    int? SidetoneHz = null);
+    int? SidetoneHz = null,
+    CwKeyerMode? KeyerMode = null);
+
+// Hermes-Lite 2 (and the wider openHPSDR family) on-board CW keyer mode,
+// written to C&C register 0x0B C3[7:6] (gateware rtl/cw_openhpsdr.sv:32).
+// Straight is the default-safe choice: in this mode the gateware passes the
+// key line through directly and ignores keyer speed, so a straight/bug key
+// is never mis-interpreted as a paddle. Iambic A/B generate dits & dahs
+// from the two paddle inputs at the configured WPM.
+public enum CwKeyerMode : byte
+{
+    Straight = 0,  // 00 — straight key / external keyer / bug; speed ignored
+    IambicA = 1,   // 01 — iambic Mode A
+    IambicB = 2,   // 10 — iambic Mode B
+}
 
 public sealed record MicGainSetRequest(int Db);
 
@@ -585,12 +609,6 @@ public sealed record Hl2OptionsSetRequest(bool BandVolts);
 // so the settings follow the operator across browsers / devices — Photino
 // desktop mode in particular binds the webview to a fresh random loopback
 // port on every launch, which orphans any per-origin localStorage value.
-// WfBrightness is an operator-tunable multiplier applied to the colormap
-// input in the waterfall fragment shader (gl/shaders.ts WF_FS). 1.0 = no
-// change, < 1.0 darkens, > 1.0 brightens. Null means the server has never
-// stored a value; the frontend uses its built-in default (WF_BRIGHTNESS_DEFAULT
-// in display-settings-store.ts) and pushes the current value up on next
-// interaction. See issue #426 / bd zeus-lez.
 public sealed record DisplaySettingsDto(
     string Mode,
     string Fit,
@@ -604,8 +622,7 @@ public sealed record DisplaySettingsDto(
     double? WfDbMin,
     double? WfDbMax,
     double? WfTxDbMin,
-    double? WfTxDbMax,
-    double? WfBrightness);
+    double? WfTxDbMax);
 
 public sealed record DisplaySettingsSetRequest(
     string Mode,
@@ -618,8 +635,7 @@ public sealed record DisplaySettingsSetRequest(
     double? WfDbMin = null,
     double? WfDbMax = null,
     double? WfTxDbMin = null,
-    double? WfTxDbMax = null,
-    double? WfBrightness = null);
+    double? WfTxDbMax = null);
 
 // Per-mode disclosure state for the inline NR settings accordion that hangs
 // below the DSP NR toggle row. Three independent booleans — one per NR
@@ -672,27 +688,26 @@ public sealed record PanWfSplitDto(double PanPercent);
 
 public sealed record PanWfSplitSetRequest(double PanPercent);
 
-// Per-operator display-side meter calibration knobs (GitHub #426).
-//
-//   * SMeterOffsetDb — signed dB offset added to the displayed RX dBm
-//     value. Trim for real-world antenna / coax / preamp combinations
-//     that shift the WDSP-internal reading. Clamped ±20 dB on the
-//     server. Display-only — does not touch WDSP or the radio.
-//   * MaxDisplayedWatts — operator override for the TX forward-power
-//     meter full scale, in Watts. Lets an operator set e.g. 25 W on
-//     a 100 W bracket so the indication fills the bar. Clamped
-//     [1, 1000] W when non-zero. 0 = "no override, use the radio's
-//     MaxWatts as the bar's full scale" (the historical behaviour).
-//
-// Persisted server-side in zeus-prefs.db (single-row pattern).
-// Defaults: SMeterOffsetDb=0.0, MaxDisplayedWatts=0.0 (no override).
-public sealed record MeterDisplaySettingsDto(
-    double SMeterOffsetDb,
-    double MaxDisplayedWatts);
+// Toolbar Mode/Band/Step favorite-slot pins plus the currently-selected
+// tuning step. Each favorite array holds exactly three slot keys; StepHz is
+// the live tuning step in Hz. Persisted server-side in zeus-prefs.db so the
+// settings follow the operator across browsers / devices — Photino desktop
+// mode binds the webview to a fresh random loopback port on every launch,
+// which orphans any per-origin localStorage value (the bug this fixes). Null
+// arrays / StepHz mean the server has never stored a value; the frontend
+// falls back to its built-in defaults and pushes the current value up on the
+// next interaction.
+public sealed record ToolbarSettingsDto(
+    IReadOnlyList<string>? Mode,
+    IReadOnlyList<string>? Band,
+    IReadOnlyList<string>? Step,
+    int? StepHz);
 
-public sealed record SMeterOffsetSetRequest(double OffsetDb);
-
-public sealed record MaxDisplayedWattsSetRequest(double MaxWatts);
+public sealed record ToolbarSettingsSetRequest(
+    IReadOnlyList<string>? Mode = null,
+    IReadOnlyList<string>? Band = null,
+    IReadOnlyList<string>? Step = null,
+    int? StepHz = null);
 
 // ---- PureSignal request records ----
 // PsControlSetRequest = master arm (Enabled) + mode (Auto vs Single).
@@ -719,6 +734,12 @@ public sealed record PsRestoreRequest(string Filename);
 // Sent from the PS settings panel. Affects only the radio-side ALEX bit;
 // the WDSP cal/iqc stages operate on whatever IQ arrives at DDC0/DDC1.
 public sealed record PsFeedbackSourceSetRequest(PsFeedbackSource Source);
+
+// Manual PS TX feedback attenuation (dB). Operator alternative to
+// AutoAttenuate for a fixed external-tap chain: set the value that lands the
+// feedback in calcc's range once, and it persists per board. Clamped
+// server-side to the connected board's range (P2 0..31, HL2 -28..31).
+public sealed record PsFeedbackAttenuationSetRequest(int Db);
 
 // "Monitor PA output" toggle (issue #121). Pure UI/source-routing flag —
 // no WDSP setter, no wire-format change. RadioService just stamps the

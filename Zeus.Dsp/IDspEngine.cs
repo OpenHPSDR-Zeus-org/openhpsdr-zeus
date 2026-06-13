@@ -74,6 +74,19 @@ public interface IDspEngine : IDisposable
     void SetCtunShift(int channelId, int shiftHz);
     void SetAgcTop(int channelId, double topDb);
 
+    /// <summary>
+    /// Briefly tighten the RX display's averaging time-constant after a
+    /// retune so the spectrum settles at the new frequency in ~100 ms
+    /// instead of melting over ~300-400 ms (issue #597; Thetis parity —
+    /// display.cs fast-attacks its averaging after a center change). RX
+    /// display channel ONLY: the TX and PS-feedback analyzers keep their
+    /// own configured tau (TxAvgTauSec) untouched, so tuning while keyed
+    /// never disturbs the TX trace or the PureSignal monitor. Restoring
+    /// (<paramref name="fast"/> = false) re-applies the RX channel's
+    /// configured default tau. No-op on Synthetic.
+    /// </summary>
+    void SetRxDisplayFastAttack(int channelId, bool fast);
+
     /// <summary>Set the RX master AF gain in dB. Drives WDSP's
     /// <c>SetRXAPanelGain1</c> (linear) after a dB→linear conversion. 0 dB
     /// equals the engine's open-time default (linear 1.0). No-op on
@@ -213,6 +226,16 @@ public interface IDspEngine : IDisposable
     /// precedence (one-shot then auto). Calls <c>SetPSControl</c> directly.
     /// </summary>
     void SetPsControl(bool autoCal, bool singleCal);
+
+    /// <summary>Freeze (true) or resume (false) PureSignal calibration without
+    /// disturbing the applied correction. true → <c>SetPSRunCal(0)</c>: calcc's
+    /// pscc state machine stops cycling/re-fitting, but the iqc predistorter
+    /// keeps applying its current coefficients (SetPSRunCal does NOT trigger the
+    /// iqc turn-off ramp). false → <c>SetPSRunCal(1)</c> resumes. Used to "catch
+    /// and hold" a converged automode correction so it stops flickering and the
+    /// signal holds (matches single-cal/LSTAYON behaviour without re-collecting).
+    /// </summary>
+    void SetPsHold(bool hold);
 
     /// <summary>Apply timing + hardware-peak + ints/spi settings as a batch
     /// (each call internally guards against the heavy

@@ -46,6 +46,7 @@ import { createContext, useContext, useEffect, type RefObject } from 'react';
 import { setVfo, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
+import * as viewCenter from '../state/view-center';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 
 const MAX_HZ = 60_000_000;
@@ -87,16 +88,12 @@ export type SpectrumWheelActions = {
 
 export const SpectrumWheelActionsContext = createContext<SpectrumWheelActions>({});
 
-function readView(): { centerHz: number; spanHz: number; viewportOffsetHz: number } | null {
+function readView(): { centerHz: number; spanHz: number } | null {
   const s = useDisplayStore.getState();
   if (!s.panDb || s.hzPerPixel <= 0) return null;
   return {
-    // centerHz here is the radio's hardware NCO (== RadioLoHz) — that's what
-    // the incoming frames are anchored to. The visible viewport centre is
-    // centerHz + viewportOffsetHz.
     centerHz: Number(s.centerHz),
     spanHz: s.panDb.length * s.hzPerPixel,
-    viewportOffsetHz: s.viewportOffsetHz,
   };
 }
 
@@ -115,22 +112,7 @@ export function usePanTuneGesture(
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    // Pure-pan drag (docs/prd/panfall_behavior.md): pointer-down captures
-    // the viewport centre at gesture start, pointer-move slides the
-    // viewportOffsetHz (no setVfo, no POST), pointer-up either leaves the
-    // offset (drag stayed inside the IQ window) or POSTs /api/radio/lo to
-    // adjoin a fresh sample window in the pan direction. vfoHz is NEVER
-    // mutated by a drag.
-    type Drag = {
-      startX: number;
-      // Viewport centre at gesture start (Hz). The new viewportOffsetHz on
-      // every move is derived from this anchor — not from radioLoHz at the
-      // current tick — so an in-flight band-change retune that fires during
-      // a drag can't yank the spectrum out from under the finger.
-      startViewportCenterHz: number;
-      spanHz: number;
-      moved: boolean;
-    };
+    type Drag = { startX: number; startHz: number; spanHz: number; moved: boolean };
     type MapDrag = { lastX: number; lastY: number };
     type Pinch = {
       baseDist: number;     // pointer separation when the pinch began (px)
@@ -174,11 +156,20 @@ export function usePanTuneGesture(
     let wheelAccum = 0;
     let zoomInflight: AbortController | null = null;
 
+    // The commanded-frequency chain: pendingHz when a POST is queued, else
+    // the optimistic store value. All view-center nudges are DELTAS against
+    // this chain (never against the lagging frame center), so the display
+    // target always mirrors exactly what was commanded — including clamp
+    // effects at the band edges — and CW pitch offsets cancel (issue #597
+    // adversary #2/#12).
+    const commandedHz = () => pendingHz ?? useConnectionStore.getState().vfoHz;
+
     const flushPending = () => {
       pendingRaf = 0;
       const hz = pendingHz;
       pendingHz = null;
       if (hz == null) return;
+      viewCenter.markOptimisticTune();
       useConnectionStore.setState({ vfoHz: hz });
       pendingAbort?.abort();
       const ctrl = new AbortController();
@@ -192,11 +183,11 @@ export function usePanTuneGesture(
 
     const commitFinal = (hz: number) => {
       const snapped = snapHz(hz);
+      // Delta against the commanded chain — NOT an absolute write into the
+      // view-center (frame centers are dial ∓ cw-pitch in CW; absolutes
+      // would oscillate the display by ±pitch on every CW commit).
+      viewCenter.nudgeTargetHz(snapped - commandedHz());
       useConnectionStore.setState({ vfoHz: snapped });
-      // Click-to-tune is an explicit tune-to-frequency action; per the PRD
-      // it resets any held viewportOffsetHz so the dial visibly snaps back
-      // to the panadapter centre.
-      useDisplayStore.getState().setViewportOffsetHz(0);
       pendingAbort?.abort();
       pendingAbort = null;
       if (pendingRaf !== 0) {
@@ -212,8 +203,16 @@ export function usePanTuneGesture(
     // Wheel-driven VFO nudge: fine-tune step, no snap to PAN_STEP_HZ. Coalesces
     // to one POST per rAF via the same pending pipeline as drag-to-pan.
     const nudgeVfo = (deltaHz: number) => {
-      const cur = pendingHz ?? useConnectionStore.getState().vfoHz;
-      pendingHz = clampHz(cur + deltaHz);
+      const cur = commandedHz();
+      const next = clampHz(cur + deltaHz);
+      // Effective delta (post-clamp) so the display target can never run
+      // past a band edge the command was clamped at. The optimistic store
+      // write happens in the SAME synchronous block as the target nudge so
+      // the dial marker's (vfo − target) offset is never transiently stale
+      // (it is pinned to the center line during glides).
+      viewCenter.nudgeTargetHz(next - cur);
+      useConnectionStore.setState({ vfoHz: next });
+      pendingHz = next;
       scheduleFlush();
     };
 
@@ -274,11 +273,7 @@ export function usePanTuneGesture(
       }
       drag = {
         startX: e.clientX,
-        // Capture the viewport centre at gesture start (radioLoHz + any
-        // existing offset). Anchoring to this absolute Hz makes the pan feel
-        // stable even if radioLoHz changes mid-drag (band-change retune,
-        // CAT, etc.).
-        startViewportCenterHz: view.centerHz + view.viewportOffsetHz,
+        startHz: view.centerHz,
         spanHz: view.spanHz,
         moved: false,
       };
@@ -333,17 +328,21 @@ export function usePanTuneGesture(
       drag.moved = true;
       const rect = canvas.getBoundingClientRect();
       if (rect.width <= 0) return;
-      // Drag-to-tune (classic, CTUN pure-pan reverted): the frequency under the
-      // cursor becomes the dial, streamed through the coalesced setVfo pipeline
-      // so the radio retunes live as you drag. No viewport offset — RadioLoHz
-      // follows the dial server-side, RX and TX both track it.
-      const view = readView();
-      if (!view) return;
-      const frac = (e.clientX - rect.left) / rect.width;
-      pendingHz = clampHz(
-        Math.round(view.centerHz + view.viewportOffsetHz + (frac - 0.5) * view.spanHz),
-      );
-      scheduleFlush();
+      const newHz = snapHz(drag.startHz - (dx / rect.width) * drag.spanHz);
+      // Pixel→Hz mapping stays display-relative (drag.startHz is the frame
+      // center at grab — unchanged semantics); the view-center moves by the
+      // COMMANDED delta, initialised from the live commanded value, never
+      // from the lagging frame center (adversary #12: prevents a one-time
+      // backward jump when a drag starts mid-wheel-glide). The display then
+      // glides between the unchanged 500 Hz snap points.
+      if (newHz !== pendingHz) {
+        viewCenter.nudgeTargetHz(newHz - commandedHz());
+        // Atomic with the nudge — keeps the marker's (vfo − target) offset
+        // consistent within the frame (see nudgeVfo).
+        useConnectionStore.setState({ vfoHz: newHz });
+        pendingHz = newHz;
+        scheduleFlush();
+      }
     };
 
     const onPointerUp = (e: PointerEvent) => {
@@ -376,13 +375,16 @@ export function usePanTuneGesture(
       }
       const rect = canvas.getBoundingClientRect();
       if (rect.width <= 0) return;
-      // Drag or click — both tune to the frequency at the release point. CTUN
-      // pure-pan (leave-offset / retune-NCO-on-release) is gone: a release
-      // always commits a dial tune so RX and TX track where you let go.
-      const view = readView();
-      if (!view) return;
-      const frac = (e.clientX - rect.left) / rect.width;
-      commitFinal(view.centerHz + view.viewportOffsetHz + (frac - 0.5) * view.spanHz);
+      if (d.moved) {
+        const dx = e.clientX - d.startX;
+        commitFinal(d.startHz - (dx / rect.width) * d.spanHz);
+      } else {
+        // click-to-tune: resolve the clicked frequency against the live view.
+        const view = readView();
+        if (!view) return;
+        const frac = (e.clientX - rect.left) / rect.width;
+        commitFinal(view.centerHz + (frac - 0.5) * view.spanHz);
+      }
     };
 
     const onWheel = (e: WheelEvent) => {
