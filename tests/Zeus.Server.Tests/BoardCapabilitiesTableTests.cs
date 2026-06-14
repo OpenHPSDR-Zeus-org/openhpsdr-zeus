@@ -203,4 +203,65 @@ public class BoardCapabilitiesTableTests
 
     public static IEnumerable<object[]> EveryBoardKind() =>
         Enum.GetValues<HpsdrBoardKind>().Select(b => new object[] { b });
+
+    // ---- External-port capability flags (external-ports plan, Phase 1) ----
+
+    [Fact]
+    public void TxAntennaRelays_Only_OrionMkII_0x0A_Family()
+    {
+        // Only the 0x0A / Saturn family has switchable TX antenna relays.
+        // Every variant in that family (incl. Apache OrionMkII original) does.
+        foreach (var variant in Enum.GetValues<OrionMkIIVariant>())
+            Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, variant).HasTxAntennaRelays);
+
+        // No P1 board and not HL2.
+        foreach (var board in new[] {
+            HpsdrBoardKind.Metis, HpsdrBoardKind.Hermes, HpsdrBoardKind.HermesII,
+            HpsdrBoardKind.Angelia, HpsdrBoardKind.Orion, HpsdrBoardKind.HermesC10,
+            HpsdrBoardKind.HermesLite2 })
+            Assert.False(BoardCapabilitiesTable.For(board).HasTxAntennaRelays);
+    }
+
+    [Fact]
+    public void RxAntennaRelays_And_Codec_Every_ANAN_Not_HL2()
+    {
+        // Every ANAN board has Alex RX-antenna relays and the stream codec;
+        // HL2 has neither (single jack, no stream codec).
+        foreach (var board in new[] {
+            HpsdrBoardKind.Metis, HpsdrBoardKind.Hermes, HpsdrBoardKind.HermesII,
+            HpsdrBoardKind.Angelia, HpsdrBoardKind.Orion, HpsdrBoardKind.OrionMkII,
+            HpsdrBoardKind.HermesC10 })
+        {
+            var caps = BoardCapabilitiesTable.For(board);
+            Assert.True(caps.HasRxAntennaRelays);
+            Assert.True(caps.HasOnboardCodec);
+        }
+
+        var hl2 = BoardCapabilitiesTable.For(HpsdrBoardKind.HermesLite2);
+        Assert.False(hl2.HasRxAntennaRelays);
+        Assert.False(hl2.HasOnboardCodec);
+    }
+
+    [Fact]
+    public void HermesLite2MicFrontEnd_Only_HL2()
+    {
+        // HL2 has the only register-0x14 mic/PTT/line-in front-end; no other
+        // board advertises it (they use the stream-codec path instead).
+        Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.HermesLite2).HermesLite2MicFrontEnd);
+
+        foreach (var board in Enum.GetValues<HpsdrBoardKind>())
+            if (board != HpsdrBoardKind.HermesLite2)
+                Assert.False(BoardCapabilitiesTable.For(board).HermesLite2MicFrontEnd);
+    }
+
+    [Fact]
+    public void UnknownDefaults_Advertise_No_Ports()
+    {
+        // Conservative: an unrecognised board must not claim any external port.
+        var u = BoardCapabilities.UnknownDefaults;
+        Assert.False(u.HasTxAntennaRelays);
+        Assert.False(u.HasRxAntennaRelays);
+        Assert.False(u.HasOnboardCodec);
+        Assert.False(u.HermesLite2MicFrontEnd);
+    }
 }

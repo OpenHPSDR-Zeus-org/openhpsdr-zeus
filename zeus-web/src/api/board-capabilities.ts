@@ -37,6 +37,22 @@ export interface BoardCapabilities {
    *  PA Settings panel's DX OUT subsection renders unconditionally but
    *  disables itself when this flag is false. */
   supportsAnvelinaDxOc: boolean;
+  // ---- External-port control (external-ports plan) ----
+  /** Board has switchable TX antenna relays (ANT1/2/3) — 0x0A / Saturn family
+   *  only. Gates the TX-antenna selector in the Radio Settings menu. */
+  hasTxAntennaRelays: boolean;
+  /** Board has switchable RX antenna relays (ANT1/2/3) via its Alex board.
+   *  True for every ANAN board; false for Hermes-Lite 2 (single jack — its
+   *  selection is clamped to ANT1 at the wire layer). Gates the RX-antenna
+   *  selector. */
+  hasRxAntennaRelays: boolean;
+  /** Board decodes the host audio stream (TLV320 codec) carrying the
+   *  Hermes-class mic/line-in front-end. True for ANAN; false for HL2 (no
+   *  stream codec). Gates the Hermes-class audio front-end controls. */
+  hasOnboardCodec: boolean;
+  /** Board has the Hermes-Lite 2 mic/PTT/line-in front-end (register 0x14).
+   *  HL2 only. Gates the HL2 audio front-end controls. */
+  hermesLite2MicFrontEnd: boolean;
 }
 
 // Safe defaults matching Zeus.Contracts.BoardCapabilities.UnknownDefaults —
@@ -56,6 +72,10 @@ export const UNKNOWN_BOARD_CAPABILITIES: BoardCapabilities = {
   hasHl2OptionalToggles: false,
   maxPowerWatts: 100,
   supportsAnvelinaDxOc: false,
+  hasTxAntennaRelays: false,
+  hasRxAntennaRelays: false,
+  hasOnboardCodec: false,
+  hermesLite2MicFrontEnd: false,
 };
 
 export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
@@ -92,6 +112,22 @@ export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
       typeof r.supportsAnvelinaDxOc === 'boolean'
         ? r.supportsAnvelinaDxOc
         : UNKNOWN_BOARD_CAPABILITIES.supportsAnvelinaDxOc,
+    hasTxAntennaRelays:
+      typeof r.hasTxAntennaRelays === 'boolean'
+        ? r.hasTxAntennaRelays
+        : UNKNOWN_BOARD_CAPABILITIES.hasTxAntennaRelays,
+    hasRxAntennaRelays:
+      typeof r.hasRxAntennaRelays === 'boolean'
+        ? r.hasRxAntennaRelays
+        : UNKNOWN_BOARD_CAPABILITIES.hasRxAntennaRelays,
+    hasOnboardCodec:
+      typeof r.hasOnboardCodec === 'boolean'
+        ? r.hasOnboardCodec
+        : UNKNOWN_BOARD_CAPABILITIES.hasOnboardCodec,
+    hermesLite2MicFrontEnd:
+      typeof r.hermesLite2MicFrontEnd === 'boolean'
+        ? r.hermesLite2MicFrontEnd
+        : UNKNOWN_BOARD_CAPABILITIES.hermesLite2MicFrontEnd,
   };
 }
 

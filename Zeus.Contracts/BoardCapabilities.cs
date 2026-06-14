@@ -88,7 +88,40 @@ public sealed record BoardCapabilities(
     /// disabled when this flag is false, so operators can see the
     /// feature exists without being able to drive a non-supporting
     /// board.</summary>
-    bool SupportsAnvelinaDxOc = false)
+    bool SupportsAnvelinaDxOc = false,
+    // ---- External-port control capabilities (external-ports plan) ---------
+    // Static per-board facts that gate the "Radio Settings" external-port
+    // controls (antenna select, audio front-end). Additive optional fields —
+    // the capabilities response is JSON, so older frontends ignore them and
+    // newer ones default the absent fields. Conservative defaults (false) so
+    // an unknown board never advertises a port it may not physically have.
+    /// <summary>Board has switchable TX antenna relays (ANT1/2/3). True only
+    /// for the 0x0A OrionMkII / Saturn family (G2 / 7000DLE / 8000DLE / G2-1K /
+    /// ANVELINA-PRO3 / Red Pitaya / Apache OrionMkII original). Every P1 board
+    /// (Hermes-class, ANAN-100D/200D, ANAN-G2E) and Hermes-Lite 2 are
+    /// ANT1-hardwired on transmit. Gates the TX-antenna selector and, at the
+    /// wire layer, whether the encoder emits TX-antenna relay bits.</summary>
+    bool HasTxAntennaRelays = false,
+    /// <summary>Board has switchable RX antenna relays (ANT1/2/3) via its
+    /// Alex/filter board. True for every ANAN board (Hermes-class through the
+    /// Saturn family and ANAN-G2E). False for Hermes-Lite 2 — HL2 has a single
+    /// antenna jack and its C3[5] bit drives the N2ADR antenna pad, not an
+    /// ANT1/2/3 relay, so RX-antenna selection MUST be clamped to ANT1 on HL2
+    /// at the wire layer.</summary>
+    bool HasRxAntennaRelays = false,
+    /// <summary>Board decodes the host→radio audio STREAM (TLV320 codec) — the
+    /// path that carries the Hermes-class mic / line-in front-end. True for
+    /// every ANAN board. False for Hermes-Lite 2, which has no stream codec.
+    /// STREAM codec only; does NOT gate the HL2 mic front-end (see
+    /// <see cref="HermesLite2MicFrontEnd"/>).</summary>
+    bool HasOnboardCodec = false,
+    /// <summary>Board has the Hermes-Lite 2 mic / PTT / line-in front-end on
+    /// register 0x0a (wire byte 0x14): mic_trs, mic_bias, mic_ptt and a 5-bit
+    /// line-in gain. True for <see cref="HpsdrBoardKind.HermesLite2"/> only.
+    /// Distinct from <see cref="HasOnboardCodec"/> — HL2 has the mic front-end
+    /// but not the stream codec. mic_bias defaults OFF (enabling it on a
+    /// floating connector can hang PTT) and is guarded.</summary>
+    bool HermesLite2MicFrontEnd = false)
 {
     /// <summary>Safe defaults for an unrecognised / disconnected board.
     /// Single ADC, no extras — minimum-surprise capability set so a
