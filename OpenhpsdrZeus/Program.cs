@@ -251,8 +251,17 @@ public partial class Program
         // frame to open wide enough to clear the SPA's mobile breakpoint (900px) and
         // give the panadapter usable headroom.
         const int MinWidth = 1280;
-        const int InitialWidth = 1680;
-        const int InitialHeight = 1050;
+        const int MinHeight = 800;
+
+        // Restore the size the operator left the window at last run. The store
+        // returns the InitialWidth/InitialHeight defaults on a fresh install, so
+        // first launch is unchanged; thereafter the frame reopens at its saved
+        // size (and maximized state). Position is not restored — see
+        // WindowGeometryStore for why (off-screen / monitor-layout safety).
+        var geometryStore = app.Services.GetRequiredService<WindowGeometryStore>();
+        var savedGeometry = geometryStore.Get();
+        var initialWidth = savedGeometry.Width;
+        var initialHeight = savedGeometry.Height;
 
         // Photino's window/dock icon is set per-OS. Windows expects .ico (Photino's
         // SetIconFile binds it to the NSWindow / HWND), Linux GTK expects PNG, and
@@ -268,11 +277,109 @@ public partial class Program
             .SetTitle("Zeus")
             .SetUseOsDefaultLocation(false)
             .SetMinWidth(MinWidth)
-            .SetMinHeight(800)
-            .SetSize(InitialWidth, InitialHeight)
+            .SetMinHeight(MinHeight)
+            .SetSize(initialWidth, initialHeight)
             .Center()
             .SetIconFile(iconPath)
             .Load(new Uri(startUrl));
+
+        // Remember the last NORMAL (non-maximized) frame size as resize events
+        // arrive. This is only needed for the maximized-at-close case: when the
+        // window is maximized we must persist the size it had *before* maximizing
+        // so a later un-maximize lands somewhere sensible. The authoritative
+        // persist below reads the live window directly and does not depend on
+        // these events firing.
+        var lastNormalWidth = initialWidth;
+        var lastNormalHeight = initialHeight;
+        var isMaximized = savedGeometry.Maximized;
+        var isMinimized = false;
+
+        // Reopen maximized if that's how it was left. Setting the property before
+        // WaitForClose stores it as a startup parameter (the native window doesn't
+        // exist yet), so the frame opens maximized; we still seeded SetSize above
+        // so a later un-maximize restores to the saved normal size.
+        if (savedGeometry.Maximized)
+            window.Maximized = true;
+
+        // Reliably apply the restored size AFTER the native window exists. The
+        // .SetSize() in the builder chain above is a startup parameter, and on
+        // first show Photino/WebView2 frequently ignores it and opens the frame at
+        // its *minimum* size instead (the long-standing gotcha noted in the size
+        // comment above — observed on Windows here, not just macOS). OnWindowCreated
+        // fires once _nativeInstance is live (before the message loop), so setting
+        // window.Size / .Center() here routes through Photino_SetSize/Photino_Center
+        // on the real window — which IS honoured. Runs on the UI thread, so the
+        // native calls execute inline.
+        window.RegisterWindowCreatedHandler((_, _) =>
+        {
+            try
+            {
+                if (savedGeometry.Maximized)
+                {
+                    window.Maximized = true;
+                }
+                else
+                {
+                    window.Size = new System.Drawing.Size(initialWidth, initialHeight);
+                    window.Center();
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"window.geometry.restore failed: {ex.Message}");
+            }
+        });
+
+        // Maximized and minimized are tracked separately: both must suppress
+        // normal-size recording (their size events report screen-filling / zeroed
+        // dimensions). Restored fires when returning to normal from either state.
+        window.RegisterMaximizedHandler((_, _) => { isMaximized = true; isMinimized = false; });
+        window.RegisterMinimizedHandler((_, _) => isMinimized = true);
+        window.RegisterRestoredHandler((_, _) => { isMaximized = false; isMinimized = false; });
+        window.RegisterSizeChangedHandler((_, size) =>
+        {
+            if (!isMaximized && !isMinimized && size.Width >= MinWidth && size.Height >= MinHeight)
+            {
+                lastNormalWidth = size.Width;
+                lastNormalHeight = size.Height;
+            }
+        });
+
+        // Persist the geometry from the closing handler, which fires while the
+        // native window is still alive — so window.Width/Height/Maximized return
+        // the real current size via Photino_GetSize. Crucially this does NOT
+        // depend on WindowSizeChanged having fired: even if that event is silent
+        // on a given platform/WebView2 build, the size is read straight off the
+        // live window here. The callback runs on the UI thread, so PhotinoWindow's
+        // Invoke() executes the native getters inline (no marshaling, no deadlock).
+        // Returning false lets the close proceed (true would cancel it). Fires for
+        // both the title-bar X and the Ctrl-C → window.Close() path below.
+        window.RegisterWindowClosingHandler((_, _) =>
+        {
+            try
+            {
+                if (window.Maximized)
+                {
+                    // Maximized frame: window.Width/Height would be the screen
+                    // size — persist the remembered normal size plus the flag.
+                    geometryStore.Save(lastNormalWidth, lastNormalHeight, maximized: true);
+                }
+                else
+                {
+                    var w = window.Width;
+                    var h = window.Height;
+                    if (w < MinWidth || h < MinHeight) { w = lastNormalWidth; h = lastNormalHeight; }
+                    geometryStore.Save(w, h, maximized: false);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Never block shutdown on a prefs write. Console is detached in
+                // desktop mode (FreeConsole), so this is best-effort.
+                Console.Error.WriteLine($"window.geometry.save failed: {ex.Message}");
+            }
+            return false; // allow the window to close
+        });
 
         // Translate Ctrl-C into a window close so `dotnet run` (and the installer's
         // launcher script) can shut Zeus down without leaving the Photino native
@@ -292,6 +399,9 @@ public partial class Program
         // runs on its own thread-pool, untouched by the windowing loop.
         window.WaitForClose();
 
+        // Geometry was already persisted by the closing handler above, while the
+        // native window was still alive. We deliberately do NOT save here — the
+        // window is torn down and its size getters are unsafe to read.
         Console.WriteLine("Window closed; stopping backend.");
         app.StopAsync().GetAwaiter().GetResult();
         return 0;

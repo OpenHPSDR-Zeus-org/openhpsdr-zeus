@@ -63,6 +63,11 @@ export interface VstScanResult {
   errors: Array<{ source: string; message: string }>;
 }
 
+export interface AudioProfileMutationResult {
+  ok: boolean;
+  error?: string;
+}
+
 interface AudioSuiteState {
   // Window placement
   isOpen: boolean;
@@ -114,6 +119,12 @@ interface AudioSuiteState {
   // loaded on window open, refreshed after save / delete. Not persisted
   // to localStorage.
   profiles: AudioProfileSummary[];
+  profilesLoaded: boolean;
+
+  // The operator's selected profile in the Audio Suite toolbar. This is
+  // presentation state, but persisted so the dropdown stays on the profile
+  // the operator chose until they pick another one.
+  selectedProfile: string;
 
   // Actions
   open(): void;
@@ -131,6 +142,9 @@ interface AudioSuiteState {
   // Chips+detail selection.
   setSelectedChainId(id: string | null): void;
 
+  // Profile selection.
+  setSelectedProfile(name: string): void;
+
   // Chain membership — park (active=false) / un-park (active=true) an
   // installed plugin. Parking pulls it out of the active chain (stops
   // processing, drops from the rack) without uninstalling; un-parking
@@ -140,13 +154,23 @@ interface AudioSuiteState {
 
   // Profile plumbing.
   loadProfiles(): Promise<void>;
-  saveProfile(name: string): Promise<void>;
+  saveProfile(name: string): Promise<AudioProfileMutationResult>;
   applyProfile(name: string): Promise<void>;
-  deleteProfile(name: string): Promise<void>;
+  deleteProfile(name: string): Promise<AudioProfileMutationResult>;
 
   // Scan a directory for VST3 plugins, register each, and refresh the
   // rack. Returns a summary (or an error string on failure).
   scanVstDirectory(directory: string): Promise<VstScanResult>;
+
+  // Permanently uninstall a plugin (DELETE /api/plugins/{id}) and refresh
+  // the Audio Suite so its rack / sidebar panel disappears. Unlike parking
+  // (setChainMembership(id, false)), this deletes the plugin from Zeus —
+  // used to remove unwanted scanned VSTs. `deferred` is true when the host
+  // could only detach it (assembly still loaded) and a restart is needed to
+  // delete the files.
+  uninstallPlugin(
+    pluginId: string,
+  ): Promise<{ ok: boolean; deferred: boolean; message?: string; error?: string }>;
 
   // Chain order plumbing.
   setChainOrderFromServer(ids: string[]): void;
@@ -179,6 +203,16 @@ const DEFAULT_Y = 80;
 const DEFAULT_WIDTH = 860;
 const DEFAULT_HEIGHT = 760;
 
+async function profileErrorMessage(res: Response): Promise<string> {
+  try {
+    const text = await res.text();
+    if (text.trim()) return text.trim();
+  } catch {
+    // Fall through to status text.
+  }
+  return `${res.status} ${res.statusText}`.trim();
+}
+
 export const useAudioSuiteStore = create<AudioSuiteState>()(
   persist(
     (set, get) => ({
@@ -203,6 +237,8 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       selectedChainId: null,
       sidebarCollapsed: false,
       profiles: [],
+      profilesLoaded: false,
+      selectedProfile: '',
 
       open: () => set({ isOpen: true }),
       close: () => set({ isOpen: false }),
@@ -238,6 +274,8 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
 
       setSelectedChainId: (id) => set({ selectedChainId: id }),
+
+      setSelectedProfile: (name) => set({ selectedProfile: name.trim() }),
 
       setChainMembership: async (pluginId, active) => {
         const prev = get().chainOrder;
@@ -280,7 +318,18 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           const res = await fetch('/api/audio-suite/profiles');
           if (!res.ok) return;
           const body = (await res.json()) as { profiles?: AudioProfileSummary[] };
-          if (Array.isArray(body.profiles)) set({ profiles: body.profiles });
+          const nextProfiles = body.profiles;
+          if (Array.isArray(nextProfiles)) {
+            set((s) => ({
+              profiles: nextProfiles,
+              profilesLoaded: true,
+              selectedProfile:
+                s.selectedProfile &&
+                !nextProfiles.some((p) => p.name === s.selectedProfile)
+                  ? ''
+                  : s.selectedProfile,
+            }));
+          }
         } catch (err) {
           // eslint-disable-next-line no-console
           console.warn('audio-suite profiles GET threw', err);
@@ -289,22 +338,25 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
 
       saveProfile: async (name) => {
         const trimmed = name.trim();
-        if (!trimmed) return;
+        if (!trimmed) return { ok: false, error: 'Profile name is required.' };
         try {
           const res = await fetch(
             `/api/audio-suite/profiles/${encodeURIComponent(trimmed)}`,
             { method: 'PUT' },
           );
           if (!res.ok) {
+            const error = await profileErrorMessage(res);
             // eslint-disable-next-line no-console
-            console.warn(`audio-suite profile save rejected: ${res.status}`);
-            return;
+            console.warn(`audio-suite profile save rejected: ${error}`);
+            return { ok: false, error };
           }
         } catch (err) {
           // eslint-disable-next-line no-console
           console.warn('audio-suite profile save threw', err);
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
         await get().loadProfiles();
+        return { ok: true };
       },
 
       applyProfile: async (name) => {
@@ -333,14 +385,25 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
 
       deleteProfile: async (name) => {
         try {
-          await fetch(`/api/audio-suite/profiles/${encodeURIComponent(name)}`, {
+          const res = await fetch(`/api/audio-suite/profiles/${encodeURIComponent(name)}`, {
             method: 'DELETE',
           });
+          if (!res.ok) {
+            const error = await profileErrorMessage(res);
+            // eslint-disable-next-line no-console
+            console.warn(`audio-suite profile delete rejected: ${error}`);
+            return { ok: false, error };
+          }
         } catch (err) {
           // eslint-disable-next-line no-console
           console.warn('audio-suite profile delete threw', err);
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
+        }
+        if (get().selectedProfile === name) {
+          set({ selectedProfile: '' });
         }
         await get().loadProfiles();
+        return { ok: true };
       },
 
       scanVstDirectory: async (directory) => {
@@ -378,6 +441,38 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           // eslint-disable-next-line no-console
           console.warn('audio-suite scan-vst-directory threw', err);
           return { ...empty, error: String(err) };
+        }
+      },
+
+      uninstallPlugin: async (pluginId) => {
+        try {
+          const { uninstallPlugin: apiUninstall } = await import(
+            '../plugins/api/plugins'
+          );
+          const result = await apiUninstall(pluginId);
+          // The server has already detached the plugin from the chain
+          // (ChainOrderService.OnPluginDetached). Re-register the UI panels
+          // (which now prunes the gone plugin's panel) and re-pull the chain
+          // order so the rack + sidebar update without a page reload.
+          const { reloadInstalledPluginUis } = await import(
+            '../plugins/runtime/pluginRuntime'
+          );
+          await reloadInstalledPluginUis();
+          await get().loadChainOrderFromServer();
+          // If the detail pane was showing this plugin, drop the selection so
+          // it falls back to the first remaining chain plugin.
+          if (get().selectedChainId === pluginId) {
+            set({ selectedChainId: null });
+          }
+          return {
+            ok: true,
+            deferred: result.status === 202,
+            message: result.message,
+          };
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('audio-suite uninstall threw', err);
+          return { ok: false, deferred: false, error: String(err) };
         }
       },
 
@@ -596,6 +691,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         collapsed: s.collapsed,
         selectedChainId: s.selectedChainId,
         sidebarCollapsed: s.sidebarCollapsed,
+        selectedProfile: s.selectedProfile,
       }),
     },
   ),

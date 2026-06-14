@@ -874,6 +874,9 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   const toggleSidebar = useAudioSuiteStore((s) => s.toggleSidebar);
   const setChainMembership = useAudioSuiteStore((s) => s.setChainMembership);
   const profiles = useAudioSuiteStore((s) => s.profiles);
+  const profilesLoaded = useAudioSuiteStore((s) => s.profilesLoaded);
+  const selectedProfile = useAudioSuiteStore((s) => s.selectedProfile);
+  const setSelectedProfile = useAudioSuiteStore((s) => s.setSelectedProfile);
   const loadProfiles = useAudioSuiteStore((s) => s.loadProfiles);
   const saveProfile = useAudioSuiteStore((s) => s.saveProfile);
   const applyProfile = useAudioSuiteStore((s) => s.applyProfile);
@@ -1109,7 +1112,6 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   };
 
   // --- Profiles ----------------------------------------------------
-  const [selectedProfile, setSelectedProfile] = useState('');
   const [profileDeletePending, setProfileDeletePending] = useState<string | null>(null);
   const [profileSaveOpen, setProfileSaveOpen] = useState(false);
   const [profileDialogError, setProfileDialogError] = useState<string | null>(null);
@@ -1132,10 +1134,14 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
 
   // Drop a stale selection if the profile was deleted elsewhere.
   useEffect(() => {
-    if (selectedProfile && !profiles.some((p) => p.name === selectedProfile)) {
+    if (
+      profilesLoaded &&
+      selectedProfile &&
+      !profiles.some((p) => p.name === selectedProfile)
+    ) {
       setSelectedProfile('');
     }
-  }, [profiles, selectedProfile]);
+  }, [profiles, profilesLoaded, selectedProfile, setSelectedProfile]);
 
   const onSelectProfile = (name: string) => {
     setSelectedProfile(name);

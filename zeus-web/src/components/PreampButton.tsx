@@ -55,15 +55,18 @@ export function PreampButton() {
   const boardId = useConnectionStore((s) => s.boardId);
   const preampOn = useConnectionStore((s) => s.preampOn);
   const setPreampOn = useConnectionStore((s) => s.setPreampOn);
+  const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
 
   const click = useCallback(() => {
     const next = !preampOn;
     setPreampOn(next);
-    setPreamp(next).catch(() => {
-      setPreampOn(!next);
-    });
-  }, [preampOn, setPreampOn]);
+    setPreamp(next)
+      .then(applyState)
+      .catch(() => {
+        setPreampOn(!next);
+      });
+  }, [applyState, preampOn, setPreampOn]);
 
   if (boardId === HL2_BOARD_ID) return null;
 

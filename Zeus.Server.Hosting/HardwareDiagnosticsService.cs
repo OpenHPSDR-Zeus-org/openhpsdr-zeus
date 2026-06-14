@@ -1178,7 +1178,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             id = "rx.auto-attenuation.adc-overload",
             title = "ADC overload auto-attenuation",
             category = "rx-protection",
-            implementationStatus = "telemetry-ready",
+            implementationStatus = "control-ready",
             userConfigurable = true,
             source = "Thetis P2 hi-priority status byte 1 + max-magnitude words",
             telemetryPaths = new[]
@@ -1193,10 +1193,10 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             {
                 "/api/auto-att",
                 "/api/attenuator",
-                "planned:/api/rx/adc-protection",
+                "/api/rx/adc-protection",
             },
             safetyClass = "rx-safe",
-            notes = "Use Orion/G2 overload and magnitude telemetry to drive a configurable fast attack / slow release ATT strategy.",
+            notes = "Orion/G2 overload and magnitude telemetry now drive the configurable ADC protection endpoint with fast attack, slow release, offset caps, and P2 magnitude soft limits.",
         },
         new
         {

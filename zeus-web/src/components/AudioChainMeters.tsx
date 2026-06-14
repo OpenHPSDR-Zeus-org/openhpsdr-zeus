@@ -61,7 +61,7 @@ function LevelBar({ label, db }: { label: string; db: number }) {
   );
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8, height: 12 }}>
       <span
         style={{
           width: 34,
@@ -71,6 +71,8 @@ function LevelBar({ label, db }: { label: string; db: number }) {
           color: 'var(--fg-3)',
           textTransform: 'uppercase',
           flex: '0 0 auto',
+          whiteSpace: 'nowrap',
+          lineHeight: 1,
         }}
       >
         {label}
@@ -115,12 +117,22 @@ function LevelBar({ label, db }: { label: string; db: number }) {
       </div>
       <span
         style={{
+          // Reserve a fixed slot and keep digit advance constant so the
+          // readout can't change width as the level changes (incl. the
+          // −∞ ↔ -NN toggle at the floor). A changing-width number here
+          // would reflow the chip strip mounted directly below — same
+          // tabular-nums + reserved-width fix used on the filter ribbon
+          // and mic meter.
           width: 38,
+          flex: '0 0 38px',
           textAlign: 'right',
           fontSize: 9,
           fontFamily: 'var(--font-mono, JetBrains Mono, monospace)',
+          fontVariantNumeric: 'tabular-nums',
           color: 'var(--fg-3)',
-          flex: '0 0 auto',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          lineHeight: 1,
         }}
       >
         {db <= FLOOR_DB ? '−∞' : `${db.toFixed(0)}`}

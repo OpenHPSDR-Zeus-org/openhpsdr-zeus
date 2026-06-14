@@ -53,10 +53,10 @@ Output:
 
 For shipping, stage the per-platform binary into
 `Zeus.Plugins.Host/runtimes/<rid>/native/` — `Zeus.Plugins.Host.csproj`
-copies `runtimes/**` to the host output, so .NET's native-library
-resolver finds it next to `OpenhpsdrZeus.exe`. (For ad-hoc runs you can
-instead drop it anywhere on the load path — `PATH`, `LD_LIBRARY_PATH`,
-`DYLD_LIBRARY_PATH`.)
+copies `runtimes/**` to the host output, and `VstBridgeNativeLoader`
+probes that RID-specific directory before falling back to the OS load
+path. (For ad-hoc runs you can instead drop it anywhere on the load path —
+`PATH`, `LD_LIBRARY_PATH`, `DYLD_LIBRARY_PATH`.)
 
 ## ABI
 

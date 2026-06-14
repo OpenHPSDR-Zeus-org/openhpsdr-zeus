@@ -143,6 +143,119 @@
   overflow: hidden;
 }
 
+/* Mini-pan canvas + overlay wrapper. The canvas fills the wrapper; the width
+   pill floats bottom-centre over it. touch-action:none keeps pointer drags
+   from being stolen by the browser's scroll/zoom gestures. */
+.filter-minipan-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+.filter-minipan-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  background: transparent;
+}
+
+/* Live passband-width readout, click-to-edit. Floats at the vertical middle of
+   the mini-pan, horizontally centred over the passband (left set inline) — the
+   focal BW number. Compact mono pill, neutral chip family (no new palette). */
+.filter-minipan-width-pill,
+.filter-minipan-width-input {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  padding: 2px 7px;
+  border-radius: 0;
+  color: var(--fg-0, #edeef1);
+  background: rgba(16, 18, 22, 0.66);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+}
+.filter-minipan-width-pill {
+  cursor: text;
+  appearance: none;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.filter-minipan-width-pill:hover {
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(30, 33, 38, 0.75);
+}
+.filter-minipan-width-input {
+  width: 64px;
+  text-align: center;
+  outline: none;
+  border-color: var(--accent, #4a9eff);
+}
+/* Strip number-spinner chrome so the pill stays compact. */
+.filter-minipan-width-input::-webkit-outer-spin-button,
+.filter-minipan-width-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.filter-minipan-width-input { -moz-appearance: textfield; appearance: textfield; }
+
+/* ===========================================================
+   Docked "Bandwidth Filter" workspace tile (FilterRibbonPanel).
+   The tile owns the height, so the drop-down ribbon's fixed
+   122px mini-pan, chunky padding, and dramatic drop-shadow make
+   the content overflow the tile (inner scrollbar) and read too
+   tall next to the VFO. Here we let the mini-pan flex to fill
+   whatever height the tile gives it — no fixed height, no
+   scrollbar — and strip the drop-down-only chrome.
+   =========================================================== */
+.filter-ribbon-panel--minipan .filter-ribbon {
+  flex: 1;
+  height: 100%;
+  min-height: 0;
+  padding: 6px 8px;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+.filter-ribbon-panel--minipan .filter-ribbon__body {
+  height: 100%;
+  min-height: 0;
+  grid-template-columns: 1fr;
+}
+.filter-ribbon-panel--minipan .filter-ribbon__main {
+  height: 100%;
+  min-height: 0;
+}
+.filter-ribbon-panel--minipan .filter-ribbon__minipan {
+  height: 100%;
+  min-height: 56px;
+}
+
+/* ===========================================================
+   Docked "Filter Presets" workspace tile (FilterPresetsPanel).
+   Renders FilterRibbon section="presets" — only the right-hand
+   preset card. The drop-down body grid is `1fr 280px`, so with
+   the mini-pan column absent the preset card lands in the 1fr
+   slot and leaves a dead 280px gap on the right. Collapse the
+   body to a single column so the card fills the tile with even
+   left/right padding, and strip the drop-down-only chrome.
+   =========================================================== */
+.filter-ribbon-panel--presets .filter-ribbon {
+  padding: 0;
+  border: none;
+  box-shadow: none;
+  background: transparent;
+}
+.filter-ribbon-panel--presets .filter-ribbon__body {
+  grid-template-columns: 1fr;
+  column-gap: 0;
+}
+
 /* ===== Preset panel (right column) — its own framed card ===== */
 .filter-ribbon__presets {
   background: #2a2d33;

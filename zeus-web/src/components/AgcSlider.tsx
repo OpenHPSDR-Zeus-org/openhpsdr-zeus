@@ -43,6 +43,7 @@
 // License for details.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   setAgc,
   setAgcTop,
@@ -142,7 +143,11 @@ export function AgcSlider() {
   // Popover holding Custom (slope/decay/hang/thresh) or Fixed (fixed gain)
   // tunables, anchored under the mode dropdown so the toolbar stays compact.
   const [paramsOpen, setParamsOpen] = useState(false);
+  const [modeMenuOpen, setModeMenuOpen] = useState(false);
+  const [modeMenuPos, setModeMenuPos] = useState<{ top: number; left: number; width: number } | null>(null);
   const popRef = useRef<HTMLDivElement | null>(null);
+  const modeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const modeMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Stream during drag (rAF coalesced), flush on release. The hook owns
   // abort-on-supersede so a fast drag doesn't queue stale POSTs.
@@ -199,16 +204,23 @@ export function AgcSlider() {
     [],
   );
 
-  // Close the params popover on outside click / Escape.
+  // Close popovers on outside click / Escape.
   useEffect(() => {
-    if (!paramsOpen) return;
+    if (!paramsOpen && !modeMenuOpen) return;
     const onDown = (e: MouseEvent) => {
-      if (popRef.current && !popRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const insideTrigger = popRef.current?.contains(target);
+      const insideModeMenu = modeMenuRef.current?.contains(target);
+      if (!insideTrigger && !insideModeMenu) {
         setParamsOpen(false);
+        setModeMenuOpen(false);
       }
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setParamsOpen(false);
+      if (e.key === 'Escape') {
+        setParamsOpen(false);
+        setModeMenuOpen(false);
+      }
     };
     document.addEventListener('mousedown', onDown);
     document.addEventListener('keydown', onKey);
@@ -216,7 +228,20 @@ export function AgcSlider() {
       document.removeEventListener('mousedown', onDown);
       document.removeEventListener('keydown', onKey);
     };
-  }, [paramsOpen]);
+  }, [paramsOpen, modeMenuOpen]);
+
+  const toggleModeMenu = useCallback(() => {
+    if (!connected) return;
+    const r = modeButtonRef.current?.getBoundingClientRect();
+    if (r) {
+      setModeMenuPos({
+        top: Math.round(r.bottom + 4),
+        left: Math.round(r.left),
+        width: Math.round(Math.max(92, r.width)),
+      });
+    }
+    setModeMenuOpen((open) => !open);
+  }, [connected]);
 
   const isCustom = agc.mode === 'Custom';
   const isFixed = agc.mode === 'Fixed';
@@ -283,23 +308,50 @@ export function AgcSlider() {
       </label>
 
       <div className="agc-mode-row" ref={popRef}>
-        <select
-          className="agc-mode-select"
-          value={agc.mode}
+        <button
+          ref={modeButtonRef}
+          type="button"
+          className={`btn sm agc-mode-button ${modeMenuOpen ? 'active' : ''}`}
           disabled={!connected}
+          aria-haspopup="listbox"
+          aria-expanded={modeMenuOpen}
           aria-label="AGC mode"
           title="AGC mode"
-          onChange={(e) => {
-            const mode = e.currentTarget.value as AgcMode;
-            if (mode !== agc.mode) sendAgc({ ...agc, mode });
-          }}
+          onClick={toggleModeMenu}
         >
-          {AGC_MODES.map((mode) => (
-            <option key={mode} value={mode}>
-              {mode}
-            </option>
-          ))}
-        </select>
+          <span>{agc.mode}</span>
+          <span className="agc-mode-caret" aria-hidden>v</span>
+        </button>
+        {modeMenuOpen && modeMenuPos && createPortal(
+          <div
+            ref={modeMenuRef}
+            className="agc-mode-menu"
+            role="listbox"
+            aria-label="AGC mode"
+            style={{
+              top: modeMenuPos.top,
+              left: modeMenuPos.left,
+              minWidth: modeMenuPos.width,
+            }}
+          >
+            {AGC_MODES.map((mode) => (
+              <button
+                key={mode}
+                type="button"
+                role="option"
+                aria-selected={agc.mode === mode}
+                className={`agc-mode-option ${agc.mode === mode ? 'active' : ''}`}
+                onClick={() => {
+                  if (mode !== agc.mode) sendAgc({ ...agc, mode });
+                  setModeMenuOpen(false);
+                }}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>,
+          document.body,
+        )}
         {hasParams && (
           <button
             type="button"

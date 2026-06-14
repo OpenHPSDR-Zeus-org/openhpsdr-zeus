@@ -12,7 +12,10 @@ import { FilterRibbon } from '../../components/filter/FilterRibbon';
 // connection-store filter state.
 export function FilterRibbonPanel() {
   return (
-    <div className="filter-ribbon-panel" style={{ flex: 1, overflow: 'auto', padding: 8 }}>
+    <div
+      className="filter-ribbon-panel filter-ribbon-panel--minipan"
+      style={{ flex: 1, minHeight: 0, height: '100%', overflow: 'hidden', display: 'flex' }}
+    >
       <FilterRibbon embedded section="minipan" />
     </div>
   );

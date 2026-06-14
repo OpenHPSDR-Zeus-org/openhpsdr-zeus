@@ -404,7 +404,12 @@ public sealed record StateDto(
     // centre on un-key. When false, every tune recentres the NCO on the dial
     // (classic "radio follows the dial"). Persisted in zeus-prefs.db. Mirrors
     // Thetis ClickTuneDisplay (console.cs:43143).
-    bool CtunEnabled = false);
+    bool CtunEnabled = false,
+
+    // RX preamp toggle. Persisted with the rest of the radio-state controls so
+    // PRE comes back exactly as the operator left it after a backend restart.
+    // Hidden on HL2 in the frontend because that board has no hardware preamp.
+    bool PreampOn = false);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both
@@ -435,6 +440,58 @@ public sealed record ConnectRequest(
     byte? BoardId = null);
 
 public sealed record VfoSetRequest(long Hz);
+
+/// <summary>Operator settings for the POTA/SOTA Spots feature. Persisted in
+/// zeus-prefs.db (<c>SpotsSettingsStore</c>) and shared with the frontend.
+/// <para>The server-side poller honours <see cref="Enabled"/> /
+/// <see cref="PotaEnabled"/> / <see cref="SotaEnabled"/> /
+/// <see cref="PollIntervalSeconds"/>; the panel's click-to-tune honours
+/// <see cref="SetModeOnTune"/>, <see cref="TuneOnlyWhenConnected"/>, and
+/// <see cref="CwSideband"/>.</para></summary>
+public sealed record SpotsSettings(
+    bool Enabled = true,
+    bool PotaEnabled = true,
+    bool SotaEnabled = true,
+    int PollIntervalSeconds = 60,
+    bool SetModeOnTune = true,
+    bool TuneOnlyWhenConnected = true,
+    string CwSideband = "CWU")
+{
+    public const int MinPollSeconds = 30;
+    public const int MaxPollSeconds = 600;
+
+    /// <summary>Clamp the poll interval and coerce CwSideband to a valid value,
+    /// so a hand-crafted POST or a stale persisted row can't wedge the poller.</summary>
+    public SpotsSettings Normalized() => this with
+    {
+        PollIntervalSeconds = Math.Clamp(PollIntervalSeconds, MinPollSeconds, MaxPollSeconds),
+        CwSideband = string.Equals(CwSideband, "CWL", StringComparison.OrdinalIgnoreCase) ? "CWL" : "CWU",
+    };
+}
+
+/// <summary>A POTA or SOTA activation spot, normalized for the Spots panel.
+/// <para><see cref="FreqHz"/> is absolute Hz — the upstream feeds disagree on
+/// units (POTA reports kHz, SOTA reports MHz) and both are converted to Hz by
+/// <c>ActivationSpotsService</c> so the frontend's click-to-tune can pass it
+/// straight to /api/vfo.</para>
+/// <para><see cref="Source"/> is "POTA" or "SOTA". <see cref="Reference"/> is
+/// the park (e.g. US-2518) or summit (e.g. W4A/HR-001) code; <see cref="Name"/>
+/// is its human name. <see cref="Mode"/> is the raw upstream mode string
+/// (SSB / CW / FT8 / …) — the UI maps it to an <c>RxMode</c> with a
+/// band-aware sideband at tune time. This is the POTA/SOTA activation feed and
+/// is unrelated to the TCI DX-cluster <c>SpotManager</c>.</para></summary>
+public sealed record ActivationSpotDto(
+    string Source,
+    string Activator,
+    long FreqHz,
+    string Mode,
+    string Reference,
+    string? Name,
+    string? Location,
+    string? Grid,
+    string? Comments,
+    string? Spotter,
+    string SpotTime);
 
 /// <summary>Set the hardware NCO (radio LO) frequency in Hz. Does not move
 /// the operator's tuned frequency (VfoHz). Used by the panadapter pure-pan
@@ -537,6 +594,47 @@ public sealed record Nr2CoreConfigSetRequest(
 public sealed record ZoomSetRequest(int Level);
 
 public sealed record AutoAttSetRequest(bool Enabled);
+
+// RX ADC protection policy. This is the operator-facing superset of the
+// legacy Auto-ATT toggle: existing /api/auto-att still maps to Enabled, while
+// /api/rx/adc-protection exposes the ramp timing, step size, maximum automatic
+// offset, warning threshold, and optional Protocol-2 max-magnitude soft limit.
+// Defaults preserve the original Thetis-style loop: 100 ms windows, 1 dB
+// attack/release steps, 31 dB maximum offset, warning when overload level > 3,
+// and no magnitude-only attack unless the operator explicitly sets a limit.
+public sealed record AdcProtectionConfig(
+    bool Enabled = true,
+    int AttackMs = 100,
+    int ReleaseMs = 100,
+    int AttackStepDb = 1,
+    int ReleaseStepDb = 1,
+    int MaxOffsetDb = 31,
+    int WarningThreshold = 3,
+    int MagnitudeSoftLimit = 0);
+
+public sealed record AdcProtectionSetRequest(
+    bool? Enabled = null,
+    int? AttackMs = null,
+    int? ReleaseMs = null,
+    int? AttackStepDb = null,
+    int? ReleaseStepDb = null,
+    int? MaxOffsetDb = null,
+    int? WarningThreshold = null,
+    int? MagnitudeSoftLimit = null);
+
+public sealed record AdcProtectionStatusDto(
+    AdcProtectionConfig Config,
+    int AttenDb,
+    int OffsetDb,
+    int EffectiveDb,
+    bool Warning,
+    int OverloadLevel,
+    byte LastOverloadBits,
+    ushort? Adc0MaxMagnitude,
+    ushort? Adc1MaxMagnitude,
+    ushort Adc0MaxMagnitudeAtOverload,
+    ushort Adc1MaxMagnitudeAtOverload,
+    DateTimeOffset? LastTelemetryUtc);
 
 public sealed record AutoAgcSetRequest(bool Enabled);
 

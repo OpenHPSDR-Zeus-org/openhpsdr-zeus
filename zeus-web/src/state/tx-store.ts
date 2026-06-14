@@ -134,7 +134,7 @@ export type TxState = {
   // Leveler max-gain slider 0..+15 dB (default +5 — matches backend default
   // and HL2 community starting point). Higher = more aggressive voice
   // leveling; can push ALC into hard limiting. Persisted — a user preference
-  // that should survive reload. Server clamps [0, 15]; we clamp here too so
+  // that should survive reload. Server clamps [0, 20]; we clamp here too so
   // persisted / race-condition writes can't poison the store.
   levelerMaxGainDb: number;
   setLevelerMaxGainDb: (db: number) => void;
@@ -323,7 +323,7 @@ export const useTxStore = create<TxState>()(
       // later — a needless flash. Keep this in lock-step with the server seed.
       levelerMaxGainDb: 8,
       setLevelerMaxGainDb: (db) =>
-        set({ levelerMaxGainDb: Math.max(0, Math.min(15, db)) }),
+        set({ levelerMaxGainDb: Math.max(0, Math.min(20, db)) }),
       fwdWatts: 0,
       refWatts: 0,
       swr: 1.0,

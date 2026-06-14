@@ -59,6 +59,7 @@ public class RadioStateStoreTests : IDisposable
                 AutoAttEnabled = false,
                 AttenDb = 12,
                 AutoAgcEnabled = true,
+                PreampOn = true,
                 RxAfGainDb = -6.5,
                 MicGainDb = -7,
                 LevelerMaxGainDb = 12.5,
@@ -66,6 +67,11 @@ public class RadioStateStoreTests : IDisposable
                 SsbFilterLoAbs = 300, SsbFilterHiAbs = 2400,
                 CwFilterLoAbs = 400, CwFilterHiAbs = 800,
                 SsbTxFilterLoAbs = 300, SsbTxFilterHiAbs = 2400,
+                Notches = new List<RadioStateNotchEntry>
+                {
+                    new() { CenterHz = 7_255_300, WidthHz = 125, Active = true },
+                    new() { CenterHz = 7_256_000, WidthHz = 80, Active = false },
+                },
                 DrivePct = 47,
                 TunePct = 23,
                 UpdatedUtc = DateTime.UtcNow,
@@ -86,6 +92,7 @@ public class RadioStateStoreTests : IDisposable
         Assert.False(got.AutoAttEnabled);
         Assert.Equal(12, got.AttenDb);
         Assert.True(got.AutoAgcEnabled);
+        Assert.True(got.PreampOn);
         Assert.Equal(-6.5, got.RxAfGainDb);
         Assert.Equal(-7, got.MicGainDb);
         Assert.Equal(12.5, got.LevelerMaxGainDb);
@@ -96,6 +103,13 @@ public class RadioStateStoreTests : IDisposable
         Assert.Equal(800, got.CwFilterHiAbs);
         Assert.Equal(300, got.SsbTxFilterLoAbs);
         Assert.Equal(2400, got.SsbTxFilterHiAbs);
+        Assert.Equal(2, got.Notches.Count);
+        Assert.Equal(7_255_300, got.Notches[0].CenterHz);
+        Assert.Equal(125, got.Notches[0].WidthHz);
+        Assert.True(got.Notches[0].Active);
+        Assert.Equal(7_256_000, got.Notches[1].CenterHz);
+        Assert.Equal(80, got.Notches[1].WidthHz);
+        Assert.False(got.Notches[1].Active);
         Assert.Equal(47, got.DrivePct);
         Assert.Equal(23, got.TunePct);
     }

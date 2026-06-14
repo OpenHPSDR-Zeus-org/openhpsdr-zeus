@@ -69,3 +69,13 @@ installers/dmg_temp/
 .dolt/
 *.db
 .beads-credential-key
+
+# Local agent/tooling scratch — never commit
+.agents/
+.codex/
+.codex-run-logs/
+.claude/launch.json
+.zeus-apply.txt
+.zeus-apply.txt.err
+.zeus-ep.diff
+.zeus-ep-mine.diff

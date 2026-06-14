@@ -16,7 +16,6 @@
 import { useEffect, useMemo } from 'react';
 import { CfcSettingsPanel } from './CfcSettingsPanel';
 import { DownloadAudioSuiteButton } from './DownloadAudioSuiteButton';
-import { AudioSuiteWindow } from './AudioSuiteWindow';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import type { RegisteredPluginPanel } from '../plugins/runtime/pluginRuntime';
 import { useAudioSuiteStore } from '../state/audio-suite-store';
@@ -98,7 +97,7 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
       style={{
         display: 'flex',
         alignItems: 'center',
-        gap: 6,
+        gap: '8px 12px',
         padding: '8px 12px',
         background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
         border: '1px solid var(--line)',
@@ -112,54 +111,62 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
         flexWrap: 'wrap',
       }}
     >
-      <ProcessingModeButton />
-      <MasterBypassButton />
-      <span style={{ marginRight: 4, color: 'var(--fg-1)', fontWeight: 500 }}>
-        {vstMode ? 'VST chain' : 'TX chain'}
-      </span>
-      {vstMode && slots.length === 0 && (
-        <span style={{ color: 'var(--fg-3)', fontSize: 10, fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>
-          No VST3 plugins in the chain — open the Audio Suite to scan and add some.
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <ProcessingModeButton />
+        <MasterBypassButton />
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: '0 1 auto', flexWrap: 'wrap', minWidth: 0 }}>
+        <span style={{ marginRight: 4, color: 'var(--fg-1)', fontWeight: 600, flex: '0 0 auto' }}>
+          {vstMode ? 'VST chain' : 'TX chain'}
         </span>
-      )}
-      {slots.map((slot, i) => {
-        // CFC is downstream in WDSP and unaffected by master bypass —
-        // never dim it. Plugin slots dim to 45% when bypassed to mirror
-        // the per-plugin bypass visual convention (operator sees the
-        // chain is inert).
-        const dimForBypass = slot.id !== 'cfc' && masterBypassed;
-        return (
-          <span key={slot.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {i > 0 && (
-              <span aria-hidden style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono, JetBrains Mono, ui-monospace, monospace)' }}>›</span>
-            )}
-            <span
-              style={{
-                padding: '2px 8px',
-                borderRadius: 3,
-                background: slot.installed ? 'var(--bg-2)' : 'var(--bg-1)',
-                border: '1px solid ' + (slot.installed ? 'var(--accent)' : 'var(--line)'),
-                color: slot.installed ? 'var(--fg-0)' : 'var(--fg-3)',
-                opacity: dimForBypass ? 0.45 : (slot.installed ? 1 : 0.5),
-                fontSize: 10,
-                fontWeight: 500,
-                transition: 'opacity 120ms ease-out',
-              }}
-              title={
-                dimForBypass
-                  ? 'Master bypass engaged — this stage is inert. Click BYPASS to engage the chain.'
-                  : slot.installed
-                  ? 'Installed and active'
-                  : 'Not installed — click Download Audio Suite or Settings → Plugins → Install from URL'
-              }
-            >
-              {slot.title}
-            </span>
+        {vstMode && slots.length === 0 && (
+          <span style={{ color: 'var(--fg-3)', fontSize: 10, fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>
+            No VST3 plugins in the chain — open the Audio Suite to scan and add some.
           </span>
-        );
-      })}
-      <AudioSuiteOpenButton />
-      <DownloadAudioSuiteButton />
+        )}
+        {slots.map((slot, i) => {
+          // CFC is downstream in WDSP and unaffected by master bypass —
+          // never dim it. Plugin slots dim to 45% when bypassed to mirror
+          // the per-plugin bypass visual convention (operator sees the
+          // chain is inert).
+          const dimForBypass = slot.id !== 'cfc' && masterBypassed;
+          return (
+            <span key={slot.id} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              {i > 0 && (
+                <span aria-hidden style={{ color: 'var(--fg-3)', fontFamily: 'var(--font-mono, JetBrains Mono, ui-monospace, monospace)' }}>›</span>
+              )}
+              <span
+                style={{
+                  padding: '2px 8px',
+                  borderRadius: 3,
+                  background: slot.installed ? 'var(--bg-2)' : 'var(--bg-1)',
+                  border: '1px solid ' + (slot.installed ? 'var(--accent)' : 'var(--line)'),
+                  color: slot.installed ? 'var(--fg-0)' : 'var(--fg-3)',
+                  opacity: dimForBypass ? 0.45 : (slot.installed ? 1 : 0.5),
+                  fontSize: 10,
+                  fontWeight: 500,
+                  transition: 'opacity 120ms ease-out',
+                }}
+                title={
+                  dimForBypass
+                    ? 'Master bypass engaged — this stage is inert. Click BYPASS to engage the chain.'
+                    : slot.installed
+                    ? 'Installed and active'
+                    : 'Not installed — click Download Audio Suite or Settings → Plugins → Install from URL'
+                }
+              >
+                {slot.title}
+              </span>
+            </span>
+          );
+        })}
+      </div>
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: '0 0 auto', flexWrap: 'nowrap' }}>
+        <AudioSuiteOpenButton />
+        {!vstMode && <DownloadAudioSuiteButton />}
+      </div>
     </div>
   );
 }
@@ -268,7 +275,6 @@ function AudioSuiteOpenButton() {
       type="button"
       onClick={open}
       style={{
-        marginLeft: 'auto',
         padding: '4px 12px',
         borderRadius: 4,
         border: '1px solid var(--accent)',
@@ -309,12 +315,6 @@ export function TxAudioToolsPanel() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
       <ChainFlow chainPanels={chainPanels} />
-
-      {/* Full plugin host, inline. The TX Audio Tools settings pane is
-          much wider than the floating window, so VST/plugin GUIs get
-          real room here. The floating "Audio Suite" window renders the
-          same rack for operators who want a detachable copy. */}
-      <AudioSuiteWindow embedded />
 
       {/* CFC — WDSP-driven, always available, always last in the chain. */}
       <CfcSettingsPanel />

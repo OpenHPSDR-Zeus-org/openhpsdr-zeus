@@ -223,6 +223,170 @@ function MappingRows({ items }: { items: HardwareDiagnosticItemDto[] }) {
   );
 }
 
+type HardwareOpportunity = {
+  item: HardwareFeatureSurfaceDto;
+  plannedControls: string[];
+  liveControls: string[];
+  readiness: string;
+  priority: number;
+  nextStep: string;
+};
+
+function plannedControls(item: HardwareFeatureSurfaceDto): string[] {
+  return item.candidateControls
+    .filter((control) => control.startsWith('planned:'))
+    .map((control) => control.slice('planned:'.length));
+}
+
+function liveControls(item: HardwareFeatureSurfaceDto): string[] {
+  return item.candidateControls.filter((control) => !control.startsWith('planned:'));
+}
+
+function featureNextStep(id: string): string {
+  switch (id) {
+    case 'hardware.inventory.discovery':
+      return 'Add a per-radio Hardware/Network profile for NIC selection, fixed IP, discovery speed, subnet behavior, protocol match, and P2 port notification.';
+    case 'rx.auto-attenuation.adc-overload':
+      return 'Use the live ADC protection endpoint for per-radio presets, overload history, and profile suggestions based on band noise and ADC headroom.';
+    case 'pa.telemetry.power-supply':
+      return 'Add calibrated PA/supply meters, per-radio conversion constants, warning thresholds, and supply sag alarms.';
+    case 'hardware.user-io':
+      return 'Expose user ADC/DIN labels, thresholds, debounce, and safe action bindings after each physical line is correlated.';
+    case 'hardware.front-panel.leds':
+      return 'Mirror the front-panel LED word as a read-only remote diagnostics strip and use it for UI state reconciliation.';
+    case 'cw.hardware-keying':
+      return 'Add guarded hardware key/PTT configuration with explicit arming, sidetone policy, and external PTT ownership display.';
+    case 'hardware.mapping.correlation':
+      return 'Turn the marker API into guided capture recipes so a single radio action can be mapped and promoted to a typed setting.';
+    default:
+      return 'Promote the advertised telemetry into a typed setting only after the hardware path is correlated and gated by board capability.';
+  }
+}
+
+function rankFeature(item: HardwareFeatureSurfaceDto, plannedCount: number): number {
+  const status = item.implementationStatus.toLowerCase();
+  let score = 0;
+  if (status.includes('telemetry-ready')) score += 4;
+  if (status.includes('api-ready')) score += 3;
+  if (item.userConfigurable) score += 2;
+  if (plannedCount > 0) score += 2;
+  if (item.safetyClass === 'rx-safe' || item.safetyClass === 'tx-monitoring-only') score += 1;
+  if (item.safetyClass.includes('tx-capable')) score -= 1;
+  if (item.id === 'rx.auto-attenuation.adc-overload') score += 2;
+  if (item.id === 'pa.telemetry.power-supply') score += 1;
+  return score;
+}
+
+function readinessLabel(item: HardwareFeatureSurfaceDto, plannedCount: number): string {
+  const status = item.implementationStatus.toLowerCase();
+  if (plannedCount > 0 && (status.includes('telemetry-ready') || status.includes('api-ready'))) {
+    return 'ready to wire';
+  }
+  if (status.includes('telemetry-ready')) return 'telemetry-ready';
+  if (status.includes('api-ready')) return 'api-ready';
+  return item.implementationStatus || 'candidate';
+}
+
+function buildHardwareOpportunities(items: HardwareFeatureSurfaceDto[]): HardwareOpportunity[] {
+  return items
+    .map((item) => {
+      const planned = plannedControls(item);
+      return {
+        item,
+        plannedControls: planned,
+        liveControls: liveControls(item),
+        readiness: readinessLabel(item, planned.length),
+        priority: rankFeature(item, planned.length),
+        nextStep: featureNextStep(item.id),
+      };
+    })
+    .filter((row) => row.item.userConfigurable || row.plannedControls.length > 0 || row.item.id === 'hardware.mapping.correlation')
+    .sort((a, b) => b.priority - a.priority || a.item.id.localeCompare(b.item.id));
+}
+
+function HardwareOpportunityMatrix({ items }: { items: HardwareFeatureSurfaceDto[] }) {
+  if (items.length === 0) {
+    return (
+      <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>
+        No hardware feature surfaces have been advertised yet.
+      </div>
+    );
+  }
+
+  const rows = buildHardwareOpportunities(items);
+  const plannedApiCount = new Set(rows.flatMap((row) => row.plannedControls)).size;
+  const txGuarded = items.filter((item) => item.safetyClass.includes('tx-capable')).length;
+  const rxSafe = items.filter((item) => item.safetyClass === 'rx-safe').length;
+  const top = rows[0];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Advertised', value: items.length },
+          { label: 'Configurable', value: items.filter((item) => item.userConfigurable).length },
+          { label: 'Planned APIs', value: plannedApiCount },
+          { label: 'RX-safe', value: rxSafe },
+          { label: 'TX Guarded', value: txGuarded },
+          { label: 'Top Target', value: top?.item.title },
+        ]}
+      />
+      {rows.map((row, index) => (
+        <div
+          key={row.item.id}
+          style={{
+            padding: '9px 10px',
+            background: 'var(--bg-0)',
+            border: '1px solid var(--panel-border)',
+            borderRadius: 'var(--r-sm)',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'baseline',
+              justifyContent: 'space-between',
+              gap: 8,
+              flexWrap: 'wrap',
+            }}
+          >
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--fg-0)' }}>
+              {index + 1}. {row.item.title}
+            </span>
+            <span
+              className="mono"
+              style={{
+                fontSize: 10,
+                color: row.item.safetyClass.includes('tx-capable') ? 'var(--tx)' : 'var(--accent)',
+              }}
+            >
+              {row.readiness} / score {row.priority}
+            </span>
+          </div>
+          <FieldGrid
+            fields={[
+              { label: 'Category', value: row.item.category },
+              { label: 'Safety', value: row.item.safetyClass },
+              { label: 'Configurable', value: boolLabel(row.item.userConfigurable) },
+              { label: 'Planned', value: row.plannedControls.join(', ') || '-' },
+            ]}
+          />
+          <div style={{ marginTop: 7, fontSize: 11, lineHeight: 1.35, color: 'var(--fg-2)' }}>
+            {row.nextStep}
+          </div>
+          <div className="mono" style={{ marginTop: 6, fontSize: 10, color: 'var(--fg-3)' }}>
+            live controls: {row.liveControls.join(', ') || '-'}
+          </div>
+          <div className="mono" style={{ marginTop: 3, fontSize: 10, color: 'var(--fg-3)' }}>
+            telemetry: {row.item.telemetryPaths.slice(0, 5).join(', ')}
+            {row.item.telemetryPaths.length > 5 ? ` +${row.item.telemetryPaths.length - 5} more` : ''}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function FeatureSurfaceRows({ items }: { items: HardwareFeatureSurfaceDto[] }) {
   if (items.length === 0) {
     return (
@@ -832,6 +996,14 @@ export function HardwareDiagnosticsPanel() {
           <span className="ps-card-hint">Thetis-derived static map</span>
         </h4>
         <FieldGrid fields={capabilityFields} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          Next-Level Opportunities
+          <span className="ps-card-hint">ranked from live diagnostics</span>
+        </h4>
+        <HardwareOpportunityMatrix items={diag?.featureSurfaces ?? []} />
       </div>
 
       <div className="ps-card">

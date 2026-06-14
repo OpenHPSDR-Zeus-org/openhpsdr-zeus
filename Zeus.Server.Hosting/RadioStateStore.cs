@@ -14,9 +14,9 @@ namespace Zeus.Server;
 
 // Persists the subset of RadioService state that no dedicated store covers:
 // active mode/VFO, RX/TX filter bounds, master volume, TX mic gain, TX
-// Leveler max gain, display zoom, auto-ATT/AGC toggles, user-baseline
-// attenuator, and the eight per-mode-family filter memory slots
-// (SSB/AM/FM/CW × RX/TX).
+// Leveler max gain, display zoom, auto-ATT/AGC toggles, PRE, user-baseline
+// attenuator, manual notches, and the eight per-mode-family filter memory
+// slots (SSB/AM/FM/CW × RX/TX).
 //
 // Not persisted here — handled elsewhere or intentionally ephemeral:
 //   AgcTopDb, Nr, Cfc       → DspSettingsStore
@@ -146,8 +146,18 @@ public sealed class RadioStateEntry
     public int TxFilterHighHz { get; set; } = 2850;
     public string? FilterPresetName { get; set; } = "VAR1";
     public bool AutoAttEnabled { get; set; } = true;
+    public int AdcProtectionAttackMs { get; set; } = 100;
+    public int AdcProtectionReleaseMs { get; set; } = 100;
+    public int AdcProtectionAttackStepDb { get; set; } = 1;
+    public int AdcProtectionReleaseStepDb { get; set; } = 1;
+    public int AdcProtectionMaxOffsetDb { get; set; } = 31;
+    public int AdcProtectionWarningThreshold { get; set; } = 3;
+    public int AdcProtectionMagnitudeSoftLimit { get; set; }
     public int AttenDb { get; set; }
     public bool AutoAgcEnabled { get; set; }
+    // RX preamp toggle (PRE). Not part of older rows; default false matches
+    // RadioService's historical startup state.
+    public bool PreampOn { get; set; }
     public double RxAfGainDb { get; set; }
     // TX mic gain in dB, range [-40, +10]. Default 0 ≡ unity panel-gain (mirrors
     // WdspDspEngine TXA fresh-open). The endpoint accepted this value but didn't
@@ -197,7 +207,17 @@ public sealed class RadioStateEntry
     public int FmTxFilterHiAbs { get; set; } = 3000;
     public int CwTxFilterLoAbs { get; set; } = 475;
     public int CwTxFilterHiAbs { get; set; } = 725;
+    // Manual notch filters. Stored as absolute-RF center/width pairs so they
+    // stay glued to birdies across retunes and survive backend restarts.
+    public List<RadioStateNotchEntry> Notches { get; set; } = new();
     public DateTime UpdatedUtc { get; set; }
+}
+
+public sealed class RadioStateNotchEntry
+{
+    public double CenterHz { get; set; }
+    public double WidthHz { get; set; }
+    public bool Active { get; set; } = true;
 }
 
 // Per-board sample-rate memory. Keyed by board byte (plus variant byte for

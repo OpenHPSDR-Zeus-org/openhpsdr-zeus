@@ -222,6 +222,45 @@ export type ZoomLevel = number;
 export const ZOOM_MIN: ZoomLevel = 1;
 export const ZOOM_MAX: ZoomLevel = 32;
 
+export type AdcProtectionConfigDto = {
+  enabled: boolean;
+  attackMs: number;
+  releaseMs: number;
+  attackStepDb: number;
+  releaseStepDb: number;
+  maxOffsetDb: number;
+  warningThreshold: number;
+  magnitudeSoftLimit: number;
+};
+
+export const ADC_PROTECTION_CONFIG_DEFAULT: AdcProtectionConfigDto = {
+  enabled: true,
+  attackMs: 100,
+  releaseMs: 100,
+  attackStepDb: 1,
+  releaseStepDb: 1,
+  maxOffsetDb: 31,
+  warningThreshold: 3,
+  magnitudeSoftLimit: 0,
+};
+
+export type AdcProtectionStatusDto = {
+  config: AdcProtectionConfigDto;
+  attenDb: number;
+  offsetDb: number;
+  effectiveDb: number;
+  warning: boolean;
+  overloadLevel: number;
+  lastOverloadBits: number;
+  adc0MaxMagnitude: number | null;
+  adc1MaxMagnitude: number | null;
+  adc0MaxMagnitudeAtOverload: number;
+  adc1MaxMagnitudeAtOverload: number;
+  lastTelemetryUtc: string | null;
+};
+
+export type AdcProtectionSetRequest = Partial<AdcProtectionConfigDto>;
+
 export type RadioStateDto = {
   status: ConnectionStatus;
   endpoint: string | null;
@@ -257,6 +296,7 @@ export type RadioStateDto = {
   autoAttEnabled: boolean;
   attOffsetDb: number;
   adcOverloadWarning: boolean;
+  preampOn: boolean;
   nr: NrConfigDto;
   zoomLevel: ZoomLevel;
   // PureSignal persisted tunings — server is the source of truth, hydrated
@@ -824,6 +864,73 @@ export function normalizeNr(raw: unknown): NrConfigDto {
   };
 }
 
+function normalizeAdcProtectionConfig(raw: unknown): AdcProtectionConfigDto {
+  if (!raw || typeof raw !== 'object') return { ...ADC_PROTECTION_CONFIG_DEFAULT };
+  const r = raw as Record<string, unknown>;
+  return {
+    enabled:
+      typeof r.enabled === 'boolean'
+        ? r.enabled
+        : ADC_PROTECTION_CONFIG_DEFAULT.enabled,
+    attackMs:
+      typeof r.attackMs === 'number'
+        ? r.attackMs
+        : ADC_PROTECTION_CONFIG_DEFAULT.attackMs,
+    releaseMs:
+      typeof r.releaseMs === 'number'
+        ? r.releaseMs
+        : ADC_PROTECTION_CONFIG_DEFAULT.releaseMs,
+    attackStepDb:
+      typeof r.attackStepDb === 'number'
+        ? r.attackStepDb
+        : ADC_PROTECTION_CONFIG_DEFAULT.attackStepDb,
+    releaseStepDb:
+      typeof r.releaseStepDb === 'number'
+        ? r.releaseStepDb
+        : ADC_PROTECTION_CONFIG_DEFAULT.releaseStepDb,
+    maxOffsetDb:
+      typeof r.maxOffsetDb === 'number'
+        ? r.maxOffsetDb
+        : ADC_PROTECTION_CONFIG_DEFAULT.maxOffsetDb,
+    warningThreshold:
+      typeof r.warningThreshold === 'number'
+        ? r.warningThreshold
+        : ADC_PROTECTION_CONFIG_DEFAULT.warningThreshold,
+    magnitudeSoftLimit:
+      typeof r.magnitudeSoftLimit === 'number'
+        ? r.magnitudeSoftLimit
+        : ADC_PROTECTION_CONFIG_DEFAULT.magnitudeSoftLimit,
+  };
+}
+
+export function normalizeAdcProtectionStatus(raw: unknown): AdcProtectionStatusDto {
+  const r = (raw ?? {}) as Record<string, unknown>;
+  return {
+    config: normalizeAdcProtectionConfig(r.config),
+    attenDb: typeof r.attenDb === 'number' ? r.attenDb : 0,
+    offsetDb: typeof r.offsetDb === 'number' ? r.offsetDb : 0,
+    effectiveDb: typeof r.effectiveDb === 'number' ? r.effectiveDb : 0,
+    warning: typeof r.warning === 'boolean' ? r.warning : false,
+    overloadLevel: typeof r.overloadLevel === 'number' ? r.overloadLevel : 0,
+    lastOverloadBits:
+      typeof r.lastOverloadBits === 'number' ? r.lastOverloadBits : 0,
+    adc0MaxMagnitude:
+      typeof r.adc0MaxMagnitude === 'number' ? r.adc0MaxMagnitude : null,
+    adc1MaxMagnitude:
+      typeof r.adc1MaxMagnitude === 'number' ? r.adc1MaxMagnitude : null,
+    adc0MaxMagnitudeAtOverload:
+      typeof r.adc0MaxMagnitudeAtOverload === 'number'
+        ? r.adc0MaxMagnitudeAtOverload
+        : 0,
+    adc1MaxMagnitudeAtOverload:
+      typeof r.adc1MaxMagnitudeAtOverload === 'number'
+        ? r.adc1MaxMagnitudeAtOverload
+        : 0,
+    lastTelemetryUtc:
+      typeof r.lastTelemetryUtc === 'string' ? r.lastTelemetryUtc : null,
+  };
+}
+
 export function normalizeState(raw: unknown): RadioStateDto {
   const r = (raw ?? {}) as Record<string, unknown>;
   return {
@@ -865,6 +972,7 @@ export function normalizeState(raw: unknown): RadioStateDto {
     attOffsetDb: typeof r.attOffsetDb === 'number' ? r.attOffsetDb : 0,
     adcOverloadWarning:
       typeof r.adcOverloadWarning === 'boolean' ? r.adcOverloadWarning : false,
+    preampOn: typeof r.preampOn === 'boolean' ? r.preampOn : false,
     // StateDto.Nr is nullable on the server (older clients) — fall back to
     // the engine's declared defaults so the UI has something to render.
     nr: normalizeNr(r.nr),
@@ -1373,6 +1481,84 @@ export function fetchRadios(signal?: AbortSignal): Promise<RadioInfoDto[]> {
   return jsonFetch('/api/radios', { signal }, normalizeRadios);
 }
 
+/** A POTA/SOTA activation spot from GET /api/spots/activations. `freqHz` is
+ *  absolute Hz (server normalizes POTA kHz / SOTA MHz). `mode` is the raw
+ *  upstream string (SSB/CW/FT8/…) — map it to an RxMode at tune time. */
+export interface ActivationSpotDto {
+  source: 'POTA' | 'SOTA';
+  activator: string;
+  freqHz: number;
+  mode: string;
+  reference: string;
+  name: string | null;
+  location: string | null;
+  grid: string | null;
+  comments: string | null;
+  spotter: string | null;
+  spotTime: string;
+}
+
+export function fetchActivationSpots(
+  signal?: AbortSignal,
+): Promise<ActivationSpotDto[]> {
+  return jsonFetch(
+    '/api/spots/activations',
+    { signal },
+    (raw) => (Array.isArray(raw) ? (raw as ActivationSpotDto[]) : []),
+  );
+}
+
+/** Operator settings for the Spots feature (GET/POST /api/spots/settings).
+ *  Mirrors the server-side Zeus.Contracts.SpotsSettings record. */
+export interface SpotsSettings {
+  enabled: boolean;
+  potaEnabled: boolean;
+  sotaEnabled: boolean;
+  pollIntervalSeconds: number;
+  setModeOnTune: boolean;
+  tuneOnlyWhenConnected: boolean;
+  cwSideband: 'CWU' | 'CWL';
+}
+
+export const SPOTS_SETTINGS_DEFAULTS: SpotsSettings = {
+  enabled: true,
+  potaEnabled: true,
+  sotaEnabled: true,
+  pollIntervalSeconds: 60,
+  setModeOnTune: true,
+  tuneOnlyWhenConnected: true,
+  cwSideband: 'CWU',
+};
+
+function normalizeSpotsSettings(raw: unknown): SpotsSettings {
+  const r = (raw ?? {}) as Partial<SpotsSettings>;
+  return {
+    ...SPOTS_SETTINGS_DEFAULTS,
+    ...r,
+    cwSideband: r.cwSideband === 'CWL' ? 'CWL' : 'CWU',
+  };
+}
+
+export function fetchSpotsSettings(signal?: AbortSignal): Promise<SpotsSettings> {
+  return jsonFetch('/api/spots/settings', { signal }, normalizeSpotsSettings);
+}
+
+export function updateSpotsSettings(
+  settings: SpotsSettings,
+  signal?: AbortSignal,
+): Promise<SpotsSettings> {
+  return jsonFetch(
+    '/api/spots/settings',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(settings),
+      signal,
+    },
+    normalizeSpotsSettings,
+  );
+}
+
 export function fetchHardwareDiagnostics(
   signal?: AbortSignal,
 ): Promise<HardwareDiagnosticsDto> {
@@ -1804,6 +1990,32 @@ export function setAutoAtt(
       signal,
     },
     normalizeState,
+  );
+}
+
+export function fetchAdcProtection(
+  signal?: AbortSignal,
+): Promise<AdcProtectionStatusDto> {
+  return jsonFetch(
+    '/api/rx/adc-protection',
+    { signal },
+    normalizeAdcProtectionStatus,
+  );
+}
+
+export function setAdcProtection(
+  patch: AdcProtectionSetRequest,
+  signal?: AbortSignal,
+): Promise<AdcProtectionStatusDto> {
+  return jsonFetch(
+    '/api/rx/adc-protection',
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(patch),
+      signal,
+    },
+    normalizeAdcProtectionStatus,
   );
 }
 

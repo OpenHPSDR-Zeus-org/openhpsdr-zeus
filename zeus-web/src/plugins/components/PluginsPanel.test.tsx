@@ -83,15 +83,17 @@ function typeInto(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
-// Flush queued microtask work after an async user action (click /
-// form submit). Each await advances one microtask tier; two tiers cover
-// fetch() → .json() → setState.
+// Flush queued work after an async user action (click / form submit).
+// Several plugin flows do fetch() -> .json() -> setState and then dynamic
+// import() the runtime registry refresh, so include one macrotask turn.
 async function flush() {
+  for (let i = 0; i < 4; i += 1) {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
   await act(async () => {
-    await Promise.resolve();
-  });
-  await act(async () => {
-    await Promise.resolve();
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
   });
 }
 
@@ -263,28 +265,53 @@ describe('InstalledPlugins', () => {
       );
     });
     vi.stubGlobal('fetch', fetchMock);
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
-
     act(() => {
       root.render(<InstalledPlugins />);
     });
-    const uninstallBtn = Array.from(
-      container.querySelectorAll<HTMLButtonElement>('button'),
-    ).find((b) => b.textContent?.trim() === 'UNINSTALL');
+    const findButton = (label: string) =>
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+        (b) => b.textContent?.trim() === label,
+      );
+
+    const uninstallBtn = findButton('UNINSTALL');
     expect(uninstallBtn).toBeDefined();
     await act(async () => {
       uninstallBtn!.click();
     });
     await flush();
 
-    expect(confirmSpy).toHaveBeenCalled();
+    const cancelDialog = container.querySelector<HTMLElement>(
+      '[role="alertdialog"]',
+    );
+    expect(cancelDialog?.textContent).toContain('Uninstall Demo Plugin');
+    const cancelBtn = findButton('Cancel');
+    expect(cancelBtn).toBeDefined();
+    await act(async () => {
+      cancelBtn!.click();
+    });
+    await flush();
+    expect(
+      fetchMock.mock.calls.some(
+        (c) => (c[1] as RequestInit | undefined)?.method === 'DELETE',
+      ),
+    ).toBe(false);
+
+    await act(async () => {
+      uninstallBtn!.click();
+    });
+    await flush();
+    const confirmBtn = findButton('Uninstall');
+    expect(confirmBtn).toBeDefined();
+    await act(async () => {
+      confirmBtn!.click();
+    });
+    await flush();
+
     const deleteCall = fetchMock.mock.calls.find(
       (c) => (c[1] as RequestInit | undefined)?.method === 'DELETE',
     );
     expect(deleteCall).toBeDefined();
     expect(deleteCall![0]).toBe('/api/plugins/demo');
-
-    confirmSpy.mockRestore();
   });
 });
 

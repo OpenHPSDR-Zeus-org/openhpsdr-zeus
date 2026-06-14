@@ -41,13 +41,12 @@
     <InternalsVisibleTo Include="Zeus.Plugins.Host.Tests" />
   </ItemGroup>
 
-  <!-- Ship the native VST3 host bridge (zeus-vst-bridge) next to the host
-       executable so VstBridgeNative's P/Invoke resolves it at runtime.
-       Mirrors the runtimes/<rid>/native packaging Zeus.Dsp uses for
-       wdsp / miniaudio. The per-platform binaries are produced by the
-       CMake build under native/zeus-vst-bridge/ and staged here by the
-       build-native-libs workflow (committed to the tree like the other
-       native libs). When a binary for the current RID is absent the audio
+  <!-- Ship the native VST3 host bridge (zeus-vst-bridge) in
+       runtimes/<rid>/native, matching the wdsp / miniaudio layout.
+       VstBridgeNativeLoader probes that RID-specific directory before
+       falling back to the OS load path. Release CI stages a freshly-built
+       Windows bridge before publish so installers cannot drift behind the
+       native source. When a binary for the current RID is absent the audio
        chain simply never loads a VST — VstHostAudioPlugin throws at init
        and the bridge stays idle. -->
   <ItemGroup>

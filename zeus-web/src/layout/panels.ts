@@ -55,6 +55,7 @@ import { CwPanel } from './panels/CwPanel';
 import { CwDecoderPanel } from './panels/CwDecoderPanel';
 import { LogbookPanel } from './panels/LogbookPanel';
 import { TxMetersPanel } from './panels/TxMetersPanel';
+import { TxFidelityPanel } from './panels/TxFidelityPanel';
 import { TxPanel } from './panels/TxPanel';
 import { FilterRibbonPanel } from './panels/FilterRibbonPanel';
 import { FilterPresetsPanel } from './panels/FilterPresetsPanel';
@@ -66,6 +67,7 @@ import { MeterGroupPanel } from '../components/meter-group/MeterGroupPanel';
 import { AnalogMeterPanel } from './panels/AnalogMeterPanel';
 import { WavRecorderPanel } from './panels/WavRecorderPanel';
 import { HamClockPanel } from './panels/HamClockPanel';
+import { SpotsPanel } from './panels/SpotsPanel';
 
 export type PanelCategory =
   | 'spectrum'
@@ -295,9 +297,19 @@ export const PANELS: Record<string, PanelDef> = {
     minW: 4,
     minH: 12,
   },
+  txfidelity: {
+    id: 'txfidelity',
+    name: 'TX Fidelity',
+    category: 'meters',
+    tags: ['tx', 'audio', 'fidelity', 'broadcast', 'mic', 'alc', 'leveler', 'cfc'],
+    component: TxFidelityPanel,
+    maxW: 6,
+    minW: 4,
+    minH: 4,
+  },
   tx: {
     id: 'tx',
-    name: 'TX (Drive · Tune · Mic · Filter)',
+    name: 'TX Chain',
     category: 'controls',
     tags: ['tx', 'drive', 'tune', 'mic', 'mic-gain', 'power', 'filter', 'bandpass'],
     component: TxPanel,
@@ -320,7 +332,11 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'dsp',
     tags: ['filter', 'presets', 'bandwidth', 'passband', 'var', 'custom'],
     component: FilterPresetsPanel,
-    minW: 6,
+    // Caps to the right-column stack width (like smeter/tx/txmeters) so the
+    // preset card tucks under the TX meters instead of sprawling into the
+    // panadapter column. minW stays below maxW or RGL pins the width.
+    maxW: 6,
+    minW: 4,
     minH: 6,
   },
   ps: {
@@ -383,6 +399,15 @@ export const PANELS: Record<string, PanelDef> = {
     tags: ['analog', 'meter', 'smeter', 's-meter', 'signal', 'rx', 'tx', 'power', 'swr', 'needle'],
     component: AnalogMeterPanel,
     headerless: true,
+  },
+  spots: {
+    id: 'spots',
+    name: 'POTA / SOTA Spots',
+    category: 'tools',
+    tags: ['spots', 'pota', 'sota', 'activation', 'dx', 'cluster', 'tune', 'park', 'summit'],
+    component: SpotsPanel,
+    minW: 6,
+    minH: 8,
   },
   hamclock: {
     id: 'hamclock',

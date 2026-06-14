@@ -55,7 +55,10 @@ import {
   NR_CONFIG_DEFAULT,
   SQUELCH_CONFIG_DEFAULT,
   TX_LEVELING_CONFIG_DEFAULT,
+  createHardwareDiagnosticsMarker,
+  fetchAdcProtection,
   normalizeAgc,
+  normalizeAdcProtectionStatus,
   normalizeAgcMode,
   normalizeMode,
   normalizeNbMode,
@@ -71,6 +74,7 @@ import {
   setTxLeveling,
   setAttenuator,
   setAutoAtt,
+  setAdcProtection,
   setLevelerMaxGain,
   setMicGain,
   setMode,
@@ -134,6 +138,7 @@ describe('normalizeState', () => {
     expect(s.endpoint).toBe('192.168.100.21:1024');
     expect(s.vfoHz).toBe(14_200_000);
     expect(s.sampleRate).toBe(192_000);
+    expect(s.preampOn).toBe(false);
   });
   it('reads a StateDto with string enums', () => {
     const s = normalizeState({
@@ -176,6 +181,10 @@ describe('normalizeState', () => {
     expect(s.autoAttEnabled).toBe(true);
     expect(s.attOffsetDb).toBe(0);
     expect(s.adcOverloadWarning).toBe(false);
+    expect(s.preampOn).toBe(false);
+  });
+  it('reads preamp state from the server', () => {
+    expect(normalizeState({ preampOn: true }).preampOn).toBe(true);
   });
   it('reads auto-ATT fields from the server', () => {
     const s = normalizeState({
@@ -395,6 +404,120 @@ describe('POST helpers', () => {
     expect(url).toBe('/api/auto-att');
     expect(init?.method).toBe('POST');
     expect(JSON.parse((init?.body ?? '') as string)).toEqual({ enabled: false });
+  });
+
+  it('normalizes ADC protection status with safe defaults', () => {
+    const status = normalizeAdcProtectionStatus({
+      config: {
+        enabled: false,
+        attackMs: 75,
+        releaseMs: 600,
+        attackStepDb: 2,
+        releaseStepDb: 1,
+        maxOffsetDb: 18,
+        warningThreshold: 2,
+        magnitudeSoftLimit: 52000,
+      },
+      attenDb: 3,
+      offsetDb: 4,
+      effectiveDb: 7,
+      warning: true,
+      overloadLevel: 5,
+      lastOverloadBits: 3,
+      adc0MaxMagnitude: 44000,
+      adc1MaxMagnitude: null,
+      adc0MaxMagnitudeAtOverload: 50000,
+      adc1MaxMagnitudeAtOverload: 0,
+      lastTelemetryUtc: '2026-06-14T22:00:00Z',
+    });
+
+    expect(status.config.enabled).toBe(false);
+    expect(status.config.attackMs).toBe(75);
+    expect(status.effectiveDb).toBe(7);
+    expect(status.warning).toBe(true);
+    expect(status.adc0MaxMagnitude).toBe(44000);
+    expect(status.adc1MaxMagnitude).toBeNull();
+  });
+
+  it('fetchAdcProtection reads /api/rx/adc-protection', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({}));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchAdcProtection();
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/rx/adc-protection');
+    expect(init?.method ?? 'GET').toBe('GET');
+  });
+
+  it('setAdcProtection puts the partial config to /api/rx/adc-protection', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({}));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await setAdcProtection({ enabled: true, attackMs: 50, maxOffsetDb: 20 });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/rx/adc-protection');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({
+      enabled: true,
+      attackMs: 50,
+      maxOffsetDb: 20,
+    });
+  });
+
+  it('createHardwareDiagnosticsMarker posts label/notes and normalizes the API catalog', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({
+        hardwareDiagnosticsApiVersion: 1,
+        connectionStatus: 'Connected',
+        mode: 'USB',
+        mapping: {
+          schemaVersion: 2,
+          markers: [
+            {
+              id: 1,
+              label: 'RX2 on',
+              createdUtc: '2026-06-14T20:00:00Z',
+              activeProtocol: 'P2',
+              sincePrevious: {
+                baseline: true,
+                p2ChangedBytes: [],
+                p2ChangedWords: [],
+                p1ChangedAddresses: [],
+              },
+            },
+          ],
+        },
+        featureSurfaces: [
+          {
+            id: 'hardware.mapping.correlation',
+            title: 'Wire-field correlation markers',
+            category: 'diagnostics',
+            implementationStatus: 'api-ready',
+            userConfigurable: false,
+            source: 'diagnostics accumulator',
+            telemetryPaths: ['mapping.markers'],
+            candidateControls: ['/api/radio/diagnostics/map/marker'],
+            safetyClass: 'rx-safe',
+            notes: 'before/after deltas',
+          },
+        ],
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const diag = await createHardwareDiagnosticsMarker('RX2 on', 'toggle RX2');
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/diagnostics/map/marker');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({
+      label: 'RX2 on',
+      notes: 'toggle RX2',
+    });
+    expect(diag.hardwareDiagnosticsApiVersion).toBe(1);
+    expect(diag.mapping.schemaVersion).toBe(2);
+    expect(diag.mapping.markers[0]?.label).toBe('RX2 on');
+    expect(diag.featureSurfaces[0]?.id).toBe('hardware.mapping.correlation');
   });
 
   it('raises ApiError with server-provided error text on 400', async () => {

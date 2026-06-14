@@ -259,6 +259,79 @@
   overflow: auto;
 }
 
+.workspace-tile--unavailable {
+  border-style: dashed;
+}
+
+.workspace-unavailable-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: center;
+  padding: 14px;
+  color: var(--fg-2);
+  background:
+    linear-gradient(180deg, rgba(255, 177, 60, 0.04), transparent 42%),
+    var(--bg-1);
+}
+
+.workspace-unavailable-panel-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  color: var(--power);
+  background: rgba(255, 177, 60, 0.08);
+  border: 1px solid rgba(255, 177, 60, 0.24);
+  border-radius: var(--r-sm);
+}
+
+.workspace-unavailable-panel-title {
+  font: 700 12px/1.2 var(--font-sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-0);
+}
+
+.workspace-unavailable-panel-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.workspace-unavailable-panel-copy p {
+  margin: 0;
+  font: 500 11px/1.45 var(--font-sans);
+}
+
+.workspace-unavailable-panel-copy code {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 5px 7px;
+  color: var(--fg-1);
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-xs);
+  font: 600 10px/1.2 var(--font-mono);
+  white-space: nowrap;
+}
+
+.workspace-unavailable-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.workspace-unavailable-panel-actions .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
 /* Workspace-level "+ Add Panel" button — fixed top-right of the workspace
  * (matches DisplayPanel's "Reset Layout" placement convention). Sits above
  * tiles via z-index so it stays clickable even when a tile snaps under it
@@ -630,6 +703,133 @@
   opacity: 0.4;
   cursor: not-allowed;
   filter: none;
+}
+
+/* Shared Zeus confirmation/input dialogs for destructive and operator-input actions. */
+.confirm-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.confirm-dialog {
+  width: min(440px, 100%);
+  max-height: min(520px, calc(100vh - 36px));
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  color: var(--fg-1);
+  background: var(--bg-1);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md);
+  box-shadow:
+    0 22px 60px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 var(--panel-hl-top);
+}
+
+.confirm-dialog--danger {
+  border-color: color-mix(in srgb, var(--tx) 42%, var(--panel-border));
+}
+
+.confirm-dialog--primary {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--panel-border));
+}
+
+.confirm-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background:
+    linear-gradient(90deg, var(--panel-head-top), var(--panel-head-bot));
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.confirm-dialog-header h2 {
+  margin: 0;
+  font: 700 13px/1.2 var(--font-sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--fg-0);
+}
+
+.confirm-dialog-body {
+  padding: 15px 16px;
+  overflow-y: auto;
+  font: 500 12px/1.5 var(--font-sans);
+  color: var(--fg-1);
+}
+
+.confirm-dialog-body p {
+  margin: 0;
+}
+
+.confirm-dialog-body p + p {
+  margin-top: 8px;
+  color: var(--fg-2);
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--bg-0);
+  border-top: 1px solid var(--panel-border);
+}
+
+.confirm-dialog-actions .btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+  filter: none;
+}
+
+.text-input-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 12px;
+}
+
+.text-input-dialog-field span {
+  font: 700 10px/1 var(--font-sans);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+}
+
+.text-input-dialog-field input {
+  width: 100%;
+  padding: 7px 10px;
+  color: var(--fg-0);
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  font: 500 12px/1.2 var(--font-sans);
+}
+
+.text-input-dialog-field input:focus {
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+.btn.danger {
+  color: #fff;
+  background: var(--tx);
+  border-color: var(--tx);
+  box-shadow: 0 0 0 1px rgba(255, 56, 56, 0.18);
+}
+
+.btn.danger:hover {
+  filter: brightness(1.08);
 }
 
 /* Layout settings modal — edit a NamedLayout's label, icon, and tooltip

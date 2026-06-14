@@ -251,6 +251,10 @@ jobs:
           $rid = "win-${{ matrix.arch }}"
           Copy-Item "native/build-miniaudio/Release/miniaudio.dll" "staged/$rid/miniaudio.dll"
 
+      - name: Build and stage VST bridge
+        shell: pwsh
+        run: ./tools/stage-windows-vst-bridge.ps1 -Arch "${{ matrix.arch }}" -InitSubmodules
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
@@ -261,6 +265,12 @@ jobs:
           # Zeus.Dsp/runtimes/<rid>/native/.
           name: wdsp-native-win-${{ matrix.arch }}
           path: staged/win-${{ matrix.arch }}/
+
+      - name: Upload VST bridge artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zeus-vst-bridge-win-${{ matrix.arch }}
+          path: Zeus.Plugins.Host/runtimes/win-${{ matrix.arch }}/native/
 
   build-native-linux:
     name: Build native WDSP (linux-x64)
@@ -579,11 +589,22 @@ jobs:
           name: ${{ steps.native-artifact.outputs.name }}
           path: Zeus.Dsp/runtimes/${{ matrix.config.rid }}/native/
 
+      - name: Download fresh VST bridge for Windows
+        if: matrix.config.os == 'windows'
+        uses: actions/download-artifact@v4
+        with:
+          name: zeus-vst-bridge-${{ matrix.config.rid }}
+          path: Zeus.Plugins.Host/runtimes/${{ matrix.config.rid }}/native/
+
       - name: Verify staged natives
         shell: bash
         run: |
           echo "Native files now staged for ${{ matrix.config.rid }}:"
           ls -la "Zeus.Dsp/runtimes/${{ matrix.config.rid }}/native/"
+          if [ "${{ matrix.config.os }}" = "windows" ]; then
+            echo "VST bridge files now staged for ${{ matrix.config.rid }}:"
+            ls -la "Zeus.Plugins.Host/runtimes/${{ matrix.config.rid }}/native/"
+          fi
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -623,6 +644,11 @@ jobs:
             -p:VersionSuffix=${{ needs.determine-version.outputs.version-suffix }} \
             -p:DebugType=embedded \
             -p:DebugSymbols=false
+
+      - name: Verify Windows installer payload
+        if: matrix.config.os == 'windows'
+        shell: pwsh
+        run: ./tools/verify-windows-installer-payload.ps1 -PublishDir "OpenhpsdrZeus/bin/Release/net10.0/${{ matrix.config.rid }}/publish" -Arch "${{ matrix.config.arch }}"
 
       # ---------- Installer packaging (one per OS, two launch modes) ------
 

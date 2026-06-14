@@ -1210,7 +1210,7 @@ public class DspPipelineService : BackgroundService,
     /// synchronous RX sink on the client (iter5 — no more Task.Run pumps).
     /// Only one client at a time.
     /// </summary>
-    public async Task ConnectP2Async(
+    public async Task<int> ConnectP2Async(
         IPEndPoint radioEndpoint,
         int sampleRateKhz,
         byte numAdc,
@@ -1252,9 +1252,14 @@ public class DspPipelineService : BackgroundService,
         // first CmdHighPriority(run=1) so the operator's calibration applies
         // to the very first NCO phase-word. 1.0 = factory default, no-op.
         client.SetFrequencyCorrectionFactor(_radio.GetFrequencyCorrectionFactor());
+
+        int rateHz = _radio.ResolveConnectSampleRateHz(
+            boardKind,
+            sampleRateKhz * 1000,
+            protocol2: true);
+        sampleRateKhz = rateHz / 1000;
         await client.StartAsync(sampleRateKhz, ct).ConfigureAwait(false);
 
-        int rateHz = sampleRateKhz * 1000;
         IDspEngine newEngine;
         int newChannelId;
         try
@@ -1362,6 +1367,7 @@ public class DspPipelineService : BackgroundService,
         // Push current PA snapshot into the brand-new client so byte 345 /
         // byte 1401 / CmdGeneral[58] reflect PaSettingsStore from frame 1.
         _radio.ReplayPaSnapshot();
+        return sampleRateKhz;
     }
 
     private void OnPaSnapshotChanged(PaRuntimeSnapshot snap)

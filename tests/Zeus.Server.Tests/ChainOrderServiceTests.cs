@@ -82,9 +82,12 @@ public class ChainOrderServiceTests
 
             // Custom ID goes to the end of canonical (not in DefaultOrder).
             Assert.Equal(customId, svc.CanonicalOrderForTest[^1]);
-            // Only this one is attached, so it's the sole runtime entry.
-            Assert.Equal(new[] { customId }, svc.CurrentOrder);
-            // First mutation persists.
+            // A never-seen, non-default ID (a scanned third-party VST) lands
+            // PARKED, so it is NOT in the runtime order — it sits in the
+            // Audio Suite's Available list until the operator adds it.
+            Assert.Empty(svc.CurrentOrder);
+            Assert.Contains(customId, svc.ParkedForTest);
+            // First mutation persists (canonical + parked set).
             var persisted = store.GetOrder();
             Assert.NotNull(persisted);
             Assert.Equal(customId, persisted![^1]);
@@ -296,8 +299,11 @@ public class ChainOrderServiceTests
             // we can audibly distinguish ordering by inspecting the
             // chain's output. AddOne adds 1.0 to every sample;
             // MultiplyByTwo multiplies. (a+1)*2 != (a*2)+1 for any a.
-            var addId = "test.add-one";
-            var mulId = "test.multiply-two";
+            // Key them under v2-default IDs (eq, compressor) so both
+            // auto-activate on attach — a non-default ID would land PARKED
+            // (Available) and never enter the runtime chain.
+            var addId = ChainOrderService.DefaultOrder[3];
+            var mulId = ChainOrderService.DefaultOrder[4];
             var addPlugin = new AddOnePlugin();
             var mulPlugin = new MultiplyTwoPlugin();
             svc.OnPluginAttached(addId, new[] { addId });

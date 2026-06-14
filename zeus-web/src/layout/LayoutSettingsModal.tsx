@@ -12,7 +12,9 @@
 // The same modal is reused for "create new layout" — when no layout id is
 // supplied the parent treats Save as addLayout(name, {icon, description}).
 
-import { useEffect, useRef, useState } from 'react';
+import { useId, useRef, useState } from 'react';
+import { X } from 'lucide-react';
+import { useDialogFocusTrap } from './useDialogFocusTrap';
 
 const ICON_PALETTE = [
   '📡', '🎙', '📻', '🎧', '🛰', '📶',
@@ -42,15 +44,18 @@ export function LayoutSettingsModal({
   onSave,
   onClose,
 }: LayoutSettingsModalProps) {
+  const titleId = useId();
   const [name, setName] = useState(initial.name);
   const [icon, setIcon] = useState(initial.icon);
   const [description, setDescription] = useState(initial.description);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
 
-  useEffect(() => {
-    nameRef.current?.focus();
-    nameRef.current?.select();
-  }, []);
+  useDialogFocusTrap({
+    dialogRef,
+    initialFocusRef: nameRef,
+    onClose,
+  });
 
   const handleSave = () => {
     const trimmedName = name.trim();
@@ -63,8 +68,7 @@ export function LayoutSettingsModal({
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Escape') onClose();
-    else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleSave();
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) handleSave();
   };
 
   return (
@@ -82,22 +86,26 @@ export function LayoutSettingsModal({
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         className="layout-settings-modal"
         role="dialog"
-        aria-label={title}
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
         <div className="layout-settings-header">
-          <h2>{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           <button
             type="button"
             className="workspace-tile-close"
             aria-label="Close layout settings"
+            title="Close (Esc)"
             onClick={onClose}
             style={{ width: 22, height: 22 }}
           >
-            ×
+            <X size={12} aria-hidden />
           </button>
         </div>
 

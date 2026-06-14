@@ -21,6 +21,9 @@ describe('layout-store / workspace tile mutators', () => {
     // Reset the store to a clean default before each test so addTile /
     // removeTile counts don't leak across cases.
     useLayoutStore.setState({
+      radioKey: '',
+      layouts: [],
+      activeLayoutId: 'default',
       workspace: DEFAULT_WORKSPACE_LAYOUT,
       isLoaded: true,
     });
@@ -32,6 +35,7 @@ describe('layout-store / workspace tile mutators', () => {
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
     vi.useRealTimers();
   });
 
@@ -110,6 +114,55 @@ describe('layout-store / workspace tile mutators', () => {
       .getState()
       .workspace.tiles.find((t) => t.uid === uid);
     expect(tile?.instanceConfig).toEqual(cfg);
+  });
+
+  it('debounced save persists the mutated layout after a quick layout switch', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+    (globalThis as unknown as { fetch: typeof fetch }).fetch =
+      fetchMock as unknown as typeof fetch;
+    const layoutA = {
+      id: 'layout-a',
+      name: 'A',
+      layoutJson: JSON.stringify(DEFAULT_WORKSPACE_LAYOUT),
+    };
+    const layoutB = {
+      id: 'layout-b',
+      name: 'B',
+      layoutJson: JSON.stringify(DEFAULT_WORKSPACE_LAYOUT),
+    };
+    useLayoutStore.setState({
+      radioKey: 'radio-1',
+      layouts: [layoutA, layoutB],
+      activeLayoutId: layoutA.id,
+      workspace: DEFAULT_WORKSPACE_LAYOUT,
+      isLoaded: true,
+    });
+
+    useLayoutStore.getState().updateTilePlacement('tile-vfo', {
+      x: 18,
+      y: 2,
+      w: 6,
+      h: 11,
+    });
+    useLayoutStore.getState().setActiveLayout(layoutB.id);
+    vi.advanceTimersByTime(1000);
+    await Promise.resolve();
+
+    const layoutPuts = fetchMock.mock.calls.filter(
+      (call) =>
+        call[0] === '/api/ui/layouts' &&
+        (call[1] as RequestInit | undefined)?.method === 'PUT',
+    );
+    expect(layoutPuts).toHaveLength(1);
+    const body = JSON.parse((layoutPuts[0]![1] as RequestInit).body as string);
+    const saved = JSON.parse(body.layoutJson) as typeof DEFAULT_WORKSPACE_LAYOUT;
+    expect(body.layoutId).toBe(layoutA.id);
+    expect(saved.tiles.find((t) => t.uid === 'tile-vfo')).toMatchObject({
+      y: 2,
+    });
   });
 });
 

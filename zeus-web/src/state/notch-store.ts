@@ -13,15 +13,14 @@
 // Manual notch filters ("dynamically notch out EMF").
 //
 // A notch is an absolute-frequency band the operator paints onto the spectrum.
-// Phase 1 (here) is display-only: NotchOverlay masks the band out of the
-// panadapter/waterfall so a strong birdie/EMF carrier stops dominating the
-// view. Phase 2 wires the same list to real WDSP manual-notch filters so the
-// interference is removed from the audio too — the store stays the single
-// source of truth either way.
+// NotchOverlay masks the band out of the panadapter/waterfall and the backend
+// applies the same list to WDSP manual-notch filters so the interference is
+// removed from the audio too.
 //
 // Notches are absolute Hz (not display-relative), so they stay glued to the
-// interference across tuning. Persisted to localStorage; `armed` and `pending`
-// are transient UI state, never persisted.
+// interference across tuning. Persisted server-side; localStorage is only a
+// browser cache / legacy migration fallback. `armed` and `pending` are
+// transient UI state, never persisted.
 
 import { create } from 'zustand';
 import { useDisplayStore } from './display-store';
@@ -32,22 +31,29 @@ export type Notch = {
   widthHz: number;
 };
 
-// Push the full notch list to the backend, which applies it to WDSP's manual-
-// notch database (real audio notch). Fire-and-forget: localStorage is the
-// client-side source of truth, so a failed POST just means the notch isn't
-// applied to the audio yet — it re-pushes on the next change or reconnect.
+function toWireNotches(notches: Notch[]) {
+  return notches.map((n) => ({
+    centerHz: n.centerHz,
+    widthHz: n.widthHz,
+    active: true,
+  }));
+}
+
+async function postNotches(notches: Notch[]): Promise<void> {
+  if (typeof fetch !== 'function') return;
+  await fetch('/api/rx/notches', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ notches: toWireNotches(notches) }),
+  });
+}
+
+// Push the full notch list to the backend, which persists it and applies it to
+// WDSP's manual-notch database. Fire-and-forget so a transport hiccup cannot
+// break the drawing interaction.
 function doPush(): void {
   try {
-    const notches = useNotchStore.getState().notches.map((n) => ({
-      centerHz: n.centerHz,
-      widthHz: n.widthHz,
-      active: true,
-    }));
-    void fetch('/api/rx/notches', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ notches }),
-    }).catch(() => {});
+    void postNotches(useNotchStore.getState().notches).catch(() => {});
   } catch {
     // never let a notch UI action throw on a transport hiccup.
   }
@@ -81,20 +87,25 @@ function readPersisted(): Notch[] {
     if (typeof localStorage === 'undefined') return [];
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    const out: Notch[] = [];
-    for (const item of parsed) {
-      const c = (item as Notch)?.centerHz;
-      const w = (item as Notch)?.widthHz;
-      if (typeof c === 'number' && typeof w === 'number' && Number.isFinite(c) && Number.isFinite(w)) {
-        out.push({ id: nextId(), centerHz: c, widthHz: Math.max(MIN_NOTCH_WIDTH_HZ, w) });
-      }
-    }
-    return out;
+    return normalizeNotches(JSON.parse(raw), false);
   } catch {
     return [];
   }
+}
+
+function normalizeNotches(raw: unknown, serverPayload: boolean): Notch[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Notch[] = [];
+  for (const item of raw) {
+    const row = item as { centerHz?: unknown; widthHz?: unknown; active?: unknown };
+    if (serverPayload && row.active === false) continue;
+    const c = row.centerHz;
+    const w = row.widthHz;
+    if (typeof c === 'number' && typeof w === 'number' && Number.isFinite(c) && Number.isFinite(w)) {
+      out.push({ id: nextId(), centerHz: c, widthHz: Math.max(MIN_NOTCH_WIDTH_HZ, w) });
+    }
+  }
+  return out;
 }
 
 function persist(notches: Notch[]): void {
@@ -161,12 +172,42 @@ export const useNotchStore = create<NotchState>((set, get) => ({
   setPending: (pending) => set({ pending }),
 }));
 
-// Re-apply notches whenever the radio (re)connects: a backend restart starts
-// with an empty WDSP notch database, and the client (localStorage) is the
-// source of truth. The websocket toggles displayStore.connected on open/close.
+let hydratePromise: Promise<void> | null = null;
+
+export function hydrateNotchesFromBackend(): Promise<void> {
+  if (hydratePromise) return hydratePromise;
+  hydratePromise = (async () => {
+    const localBefore = useNotchStore.getState().notches;
+    try {
+      if (typeof fetch !== 'function') return;
+      const res = await fetch('/api/rx/notches');
+      if (!res.ok) throw new Error(`GET /api/rx/notches ${res.status}`);
+      const serverNotches = normalizeNotches(await res.json(), true);
+
+      if (serverNotches.length > 0 || localBefore.length === 0) {
+        useNotchStore.setState({ notches: serverNotches });
+        persist(serverNotches);
+        return;
+      }
+
+      // One-time migration path for operators upgrading from localStorage-only
+      // notches before backend persistence existed.
+      await postNotches(localBefore).catch(() => {});
+    } catch {
+      // Preserve pre-server behavior if the backend is temporarily unavailable.
+      await postNotches(localBefore).catch(() => {});
+    } finally {
+      hydratePromise = null;
+    }
+  })();
+  return hydratePromise;
+}
+
+// Hydrate notches whenever the radio (re)connects. The websocket toggles
+// displayStore.connected on open/close.
 let lastConnected = useDisplayStore.getState().connected;
-if (lastConnected) pushToBackend();
+if (lastConnected) void hydrateNotchesFromBackend();
 useDisplayStore.subscribe((s) => {
-  if (s.connected && !lastConnected) pushToBackend();
+  if (s.connected && !lastConnected) void hydrateNotchesFromBackend();
   lastConnected = s.connected;
 });
