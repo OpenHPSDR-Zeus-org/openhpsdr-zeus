@@ -1202,6 +1202,61 @@ public static class ZeusEndpoints
             return Results.Ok(new AntennaSettingsDto(caps.HasTxAntennaRelays, caps.HasRxAntennaRelays, bands));
         });
 
+        // Global (per-radio) audio front-end (external-ports plan, Phase 4).
+        // GET returns the capability gates + the persisted selection. The
+        // frontend renders the Hermes-class controls (mic boost / line-in) when
+        // hasOnboardCodec, and the HL2 controls (mic_trs / mic_bias /
+        // line-in-gain) when hermesLite2MicFrontEnd. Always 200 — a board with
+        // neither reports both gates false and the panel shows nothing.
+        app.MapGet("/api/radio/audio", (RadioService radio, AudioSettingsStore store) =>
+        {
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            var sel = store.Get();
+            return Results.Ok(new AudioFrontEndDto(
+                HasOnboardCodec: caps.HasOnboardCodec,
+                HermesLite2MicFrontEnd: caps.HermesLite2MicFrontEnd,
+                LineIn: sel.LineIn,
+                MicBoost: sel.MicBoost,
+                MicBias: sel.MicBias,
+                BalancedInput: sel.BalancedInput,
+                LineInGain: sel.LineInGain));
+        });
+
+        // PUT the whole global audio front-end. Capability-gated: 409 when the
+        // connected board has no audio front-end at all (neither codec nor HL2
+        // mic), so a non-audio board can never be handed audio bytes. LineInGain
+        // is clamped 0..31. The save fires AudioSettingsStore.Changed ->
+        // RadioService.PushAudioFrontEnd, which gates per-board and pushes
+        // server-authoritatively to the live client (P1 SetAudioFrontEnd / P2
+        // TxSpecific 50/51) — never via the frontend, so no clobber-on-connect.
+        app.MapPut("/api/radio/audio", (AudioFrontEndSetRequest req, RadioService radio, AudioSettingsStore store) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            bool audioCapable = caps.HasOnboardCodec || caps.HermesLite2MicFrontEnd;
+            if (!audioCapable)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no audio front-end" });
+
+            store.Set(new AudioFrontEndSelection(
+                LineIn: req.LineIn,
+                MicBoost: req.MicBoost,
+                MicBias: req.MicBias,
+                BalancedInput: req.BalancedInput,
+                LineInGain: (byte)Math.Clamp(req.LineInGain, 0, 31)));
+
+            var sel = store.Get();
+            return Results.Ok(new AudioFrontEndDto(
+                caps.HasOnboardCodec,
+                caps.HermesLite2MicFrontEnd,
+                sel.LineIn,
+                sel.MicBoost,
+                sel.MicBias,
+                sel.BalancedInput,
+                sel.LineInGain));
+        });
+
         // Per-radio frequency calibration (issue #325). GET returns the
         // persisted correction factor + its ppm representation. POST
         // /calibrate runs the one-button auto-cal procedure (snapshot

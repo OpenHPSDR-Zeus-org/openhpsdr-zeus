@@ -61,6 +61,7 @@ public sealed class RadioService : IDisposable
     private readonly DspSettingsStore _dspSettingsStore;
     private readonly PaSettingsStore _paStore;
     private readonly AntennaSettingsStore? _antennaStore;
+    private readonly AudioSettingsStore? _audioStore;
     private readonly PreferredRadioStore? _preferredRadioStore;
     private readonly PsSettingsStore? _psStore;
     private readonly FilterPresetStore? _filterPresetStore;
@@ -180,6 +181,13 @@ public sealed class RadioService : IDisposable
     // CmdGeneral[58]). RadioService pushes to the P1 client directly because
     // it owns _activeClient.
     public event Action<PaRuntimeSnapshot>? PaSnapshotChanged;
+    // Fires whenever the global audio front-end state changes (store edit or
+    // connect rehydrate). The P1 side is pushed directly via ActiveClient in
+    // PushAudioFrontEnd; this event lets DspPipelineService forward the same
+    // state into a live Protocol2Client (TxSpecific bytes 50/51). Audio is
+    // global per-radio, so it is a distinct event from PaSnapshotChanged
+    // (which is per-band).
+    public event Action<AudioFrontEndPush>? AudioFrontEndChanged;
     // Fires on every MOX / TUN edge. P1 side is pushed directly via
     // ActiveClient?.SetMox; these events give DspPipelineService the hook it
     // needs to forward the same bit into a live Protocol2Client, which owns
@@ -200,13 +208,14 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, AntennaSettingsStore? antennaStore = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, AntennaSettingsStore? antennaStore = null, AudioSettingsStore? audioStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
         _dspSettingsStore = dspSettingsStore;
         _paStore = paStore;
         _antennaStore = antennaStore;
+        _audioStore = audioStore;
         _preferredRadioStore = preferredRadioStore;
         _psStore = psStore;
         _filterPresetStore = filterPresetStore;
@@ -214,6 +223,11 @@ public sealed class RadioService : IDisposable
         _paStore.Changed += RecomputePaAndPush;
         if (_antennaStore is not null)
             _antennaStore.Changed += RecomputePaAndPush;
+        // Audio front-end is global per-radio (not per-band), so it has its own
+        // push path rather than riding RecomputePaAndPush. Re-push on any store
+        // edit so the operator's change reaches the live client immediately.
+        if (_audioStore is not null)
+            _audioStore.Changed += PushAudioFrontEnd;
         if (_preferredRadioStore is not null)
             _preferredRadioStore.Changed += RecomputePaAndPush;
         _txIqSource = txIqSource;
@@ -631,6 +645,12 @@ public sealed class RadioService : IDisposable
             // at the protocol defaults (drive=0, OC=0) until something else
             // moves.
             RecomputePaAndPush();
+            // Replay the global audio front-end (external-ports plan, Phase 4)
+            // so the operator's mic/line-in/boost/bias/gain selection is on the
+            // first outgoing frame, not deferred until they touch the panel.
+            // Per-board gating + the OFF defaults make this a no-op on boards
+            // without an audio front-end.
+            PushAudioFrontEnd();
             return Snapshot();
         }
         catch
@@ -1327,6 +1347,54 @@ public sealed class RadioService : IDisposable
     // next state change.
     public void ReplayPaSnapshot() => RecomputePaAndPush();
 
+    // Global audio front-end push (external-ports plan, Phase 4). Server-
+    // authoritative: read AudioSettingsStore, gate per-board, push to the P1
+    // client directly and fire AudioFrontEndChanged for the P2 forwarder.
+    // Called on store edit and on connect (P1 + P2). Mirrors the OC/antenna
+    // RecomputePaAndPush discipline but for the GLOBAL (not per-band) audio
+    // state. Defaults (mic input, no boost/bias, gain 0) reproduce today's
+    // wire output bit-for-bit.
+    private void PushAudioFrontEnd()
+    {
+        var sel = _audioStore?.Get() ?? AudioFrontEndSelection.Default;
+        var caps = BoardCapabilitiesTable.For(EffectiveBoardKind, EffectiveOrionMkIIVariant);
+
+        // Per-board gating. A board with neither codec nor HL2 mic front-end
+        // gets the all-default (no-op) state, so nothing new ever reaches the
+        // wire. mic_bias is additionally guarded: only HL2 (HermesLite2MicFrontEnd)
+        // and codec boards (HasOnboardCodec) expose it, and it stays whatever
+        // the operator stored — defaulting OFF — but a non-audio board can never
+        // emit it.
+        bool audioCapable = caps.HasOnboardCodec || caps.HermesLite2MicFrontEnd;
+        var eff = audioCapable ? sel : AudioFrontEndSelection.Default;
+
+        // P1: codec boards carry mic_boost/mic_linein on the 0x12 frame; HL2
+        // carries mic_trs(=balanced) / mic_bias / line_in_gain on the 0x14
+        // frame. The ControlFrame writer gates which fields actually land per
+        // board, so passing the full set is safe — the wrong-board fields are
+        // ignored. On HL2 the "balanced input" select maps to mic_trs (the
+        // TRS/balanced front-end pin), so BalancedInput drives MicTrs there.
+        ActiveClient?.SetAudioFrontEnd(
+            micBoost: eff.MicBoost,
+            micLineIn: eff.LineIn,
+            micTrs: eff.BalancedInput,
+            micBias: eff.MicBias,
+            lineInGain: eff.LineInGain);
+
+        // P2: forward to the live Protocol2Client via DspPipelineService.
+        AudioFrontEndChanged?.Invoke(new AudioFrontEndPush(
+            LineIn: eff.LineIn,
+            MicBoost: eff.MicBoost,
+            MicBias: eff.MicBias,
+            BalancedInput: eff.BalancedInput,
+            LineInGain: eff.LineInGain));
+    }
+
+    // DspPipelineService calls this right after a P2 client is created so the
+    // fresh connection picks up the persisted audio front-end without waiting
+    // for a store edit. Public so the P2-connect hook can drive it.
+    public void ReplayAudioFrontEnd() => PushAudioFrontEnd();
+
     /// <summary>
     /// HL2 Band Volts PWM enable (issue #279). Updates the persisted
     /// per-radio preference AND any live Protocol-1 client so the next
@@ -1874,6 +1942,8 @@ public sealed class RadioService : IDisposable
         _paStore.Changed -= RecomputePaAndPush;
         if (_antennaStore is not null)
             _antennaStore.Changed -= RecomputePaAndPush;
+        if (_audioStore is not null)
+            _audioStore.Changed -= PushAudioFrontEnd;
         if (_preferredRadioStore is not null)
             _preferredRadioStore.Changed -= RecomputePaAndPush;
         try { DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult(); }

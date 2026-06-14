@@ -440,6 +440,10 @@ public class DspPipelineService : BackgroundService,
         _radio.Disconnected += OnRadioDisconnected;
         _radio.StateChanged += OnRadioStateChanged;
         _radio.PaSnapshotChanged += OnPaSnapshotChanged;
+        // Audio front-end (external-ports plan, Phase 4) — global per-radio.
+        // RadioService can't reach the P2 client directly (ActiveClient is
+        // P1-only), so forward TxSpecific bytes 50/51 here.
+        _radio.AudioFrontEndChanged += OnAudioFrontEndChanged;
         _radio.MoxChanged += OnRadioMoxChanged;
         _radio.TunActiveChanged += OnRadioTunActiveChanged;
         _radio.PreampChanged += OnRadioPreampChanged;
@@ -478,6 +482,7 @@ public class DspPipelineService : BackgroundService,
             _radio.Disconnected -= OnRadioDisconnected;
             _radio.StateChanged -= OnRadioStateChanged;
             _radio.PaSnapshotChanged -= OnPaSnapshotChanged;
+            _radio.AudioFrontEndChanged -= OnAudioFrontEndChanged;
             _radio.MoxChanged -= OnRadioMoxChanged;
             _radio.TunActiveChanged -= OnRadioTunActiveChanged;
             _radio.PreampChanged -= OnRadioPreampChanged;
@@ -1292,6 +1297,27 @@ public class DspPipelineService : BackgroundService,
         // Push current PA snapshot into the brand-new client so byte 345 /
         // byte 1401 / CmdGeneral[58] reflect PaSettingsStore from frame 1.
         _radio.ReplayPaSnapshot();
+        // Push the persisted audio front-end (TxSpecific bytes 50/51) into the
+        // fresh P2 client so mic/line-in/boost/bias/gain are correct from the
+        // first CmdTx, not deferred until a store edit. No-op on boards without
+        // an audio front-end (gated + OFF defaults).
+        _radio.ReplayAudioFrontEnd();
+    }
+
+    private void OnAudioFrontEndChanged(AudioFrontEndPush a)
+    {
+        var p2 = _p2Client;
+        if (p2 is null) return;
+        // TxSpecific byte 50 mic_control flags + byte 51 line_in_gain. The
+        // payload is already per-board-gated by RadioService.PushAudioFrontEnd,
+        // so a non-audio board forwards the all-default (no-op) state. On P2 the
+        // balanced-input select is the Saturn XLR bit (byte 50 bit 5).
+        p2.SetAudioFrontEnd(
+            lineIn: a.LineIn,
+            micBoost: a.MicBoost,
+            micBias: a.MicBias,
+            xlr: a.BalancedInput,
+            lineInGain: a.LineInGain);
     }
 
     private void OnPaSnapshotChanged(PaRuntimeSnapshot snap)

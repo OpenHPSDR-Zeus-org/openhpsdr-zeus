@@ -617,6 +617,31 @@ public sealed record AntennaSettingsDto(
 // request that targets a relay the connected board lacks with 409.
 public sealed record AntennaSetRequest(string Band, string TxAnt, string RxAnt);
 
+// Global (per-radio, NOT per-band) audio front-end selection (external-ports
+// plan, Phase 4). GET carries the capability gates so the panel renders the
+// right controls: HasOnboardCodec gates the Hermes-class mic-boost / line-in
+// controls; HermesLite2MicFrontEnd gates the HL2 mic_trs(balanced) / mic_bias /
+// line-in-gain controls. BalancedInput is the Saturn XLR / HL2 TRS select.
+// mic_bias defaults OFF (enabling it on a floating connector can hang PTT).
+public sealed record AudioFrontEndDto(
+    bool HasOnboardCodec,
+    bool HermesLite2MicFrontEnd,
+    bool LineIn,
+    bool MicBoost,
+    bool MicBias,
+    bool BalancedInput,
+    int LineInGain);
+
+// Mutating version — sets the whole global audio front-end. LineInGain is
+// clamped to 0..31 server-side. The server returns the persisted state plus
+// the live capability gates.
+public sealed record AudioFrontEndSetRequest(
+    bool LineIn,
+    bool MicBoost,
+    bool MicBias,
+    bool BalancedInput,
+    int LineInGain);
+
 // HL2-specific optional toggles surfaced via /api/radio/hl2-options.
 // Shape is an object (not a bare bool) so future mi0bot HL2 toggles can
 // slot in without breaking the contract. Currently carries Band Volts

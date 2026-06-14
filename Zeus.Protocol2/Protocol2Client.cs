@@ -202,6 +202,15 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private int _pendingTxAntenna = -1;
     private int _pendingRxAntenna = -1;
     private bool _hasTxAntennaRelays;
+    // Audio front-end (external-ports plan, Phase 4). Wire-encoded into the
+    // TxSpecific (CmdTx, port 1026) packet byte 50 (mic_control flags) + byte
+    // 51 (line_in_gain) — Thetis network.c:1234,1236. Both default 0, which is
+    // byte-identical to today's all-zero CmdTx tail. mic_control bit layout
+    // (Thetis network.c:1226-1233): bit0=line_in, bit1=mic_boost,
+    // bit4=mic_bias_enable, bit5=balanced(XLR) input. Composed in
+    // ComposeCmdTxBuffer; SetAudioFrontEnd re-pushes CmdTx so the change lands.
+    private byte _micControl;
+    private byte _lineInGain;
     private bool _moxOn;
     private bool _tuneActive;
     private long _totalFrames;
@@ -1204,8 +1213,35 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     private void SendCmdTx()
     {
-        var p = ComposeCmdTxBuffer(_seqCmdTx++, (ushort)_sampleRateKhz, _txStepAttnDb, _paEnabled, _psFeedbackEnabled);
+        var p = ComposeCmdTxBuffer(_seqCmdTx++, (ushort)_sampleRateKhz, _txStepAttnDb, _paEnabled, _psFeedbackEnabled, _micControl, _lineInGain);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1026));
+    }
+
+    // TxSpecific byte-50 mic_control bit flags (Thetis network.c:1226-1233).
+    internal const byte MicControlLineIn   = 0x01; // bit0 — line-in select
+    internal const byte MicControlMicBoost = 0x02; // bit1 — mic boost
+    internal const byte MicControlMicBias  = 0x10; // bit4 — enable Orion mic bias
+    internal const byte MicControlXlr      = 0x20; // bit5 — balanced (XLR) input (Saturn)
+
+    /// <summary>
+    /// Set the audio front-end (external-ports plan, Phase 4). Global per-radio.
+    /// Composes the TxSpecific byte-50 mic_control flags and byte-51
+    /// line_in_gain (Thetis network.c:1234,1236) and re-pushes CmdTx so the
+    /// radio honours them on the next TX cycle. Defaults (all false / 0) leave
+    /// the CmdTx tail byte-identical to today. Bits 2/3 (mic PTT enable / tip-
+    /// ring routing) are PTT-IN routing (plan §2.7), not this phase, so they
+    /// stay 0. mic_bias defaults OFF — the caller guards the gate.
+    /// </summary>
+    public void SetAudioFrontEnd(bool lineIn, bool micBoost, bool micBias, bool xlr, byte lineInGain)
+    {
+        byte ctl = 0;
+        if (lineIn)   ctl |= MicControlLineIn;
+        if (micBoost) ctl |= MicControlMicBoost;
+        if (micBias)  ctl |= MicControlMicBias;
+        if (xlr)      ctl |= MicControlXlr;
+        _micControl = ctl;
+        _lineInGain = lineInGain;
+        if (_rxTask is not null) SendCmdTx();
     }
 
     // Test-seamed Compose for the CmdTx (TxSpecific) packet. Layout per
@@ -1232,12 +1268,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // 57/58/59) — operator's normal voice TX has been validated working
     // with that wire form on G2 MkII, so we don't ship a wire change
     // beyond the PS-armed window in this patch.
-    internal static byte[] ComposeCmdTxBuffer(uint seq, ushort sampleRateKhz, byte txStepAttnDb, bool paEnabled, bool psEnabled)
+    internal static byte[] ComposeCmdTxBuffer(uint seq, ushort sampleRateKhz, byte txStepAttnDb, bool paEnabled, bool psEnabled, byte micControl = 0, byte lineInGain = 0)
     {
         var p = new byte[60];
         WriteBeU32(p, 0, seq);
         p[4] = 1;                 // num_dac
         WriteBeU16(p, 14, sampleRateKhz);
+
+        // Audio front-end (external-ports plan, Phase 4). Byte 50 = mic_control
+        // flags, byte 51 = line_in_gain — Thetis network.c:1234,1236. Both
+        // default 0, so an untouched audio front-end is byte-identical to the
+        // historical all-zero tail.
+        p[50] = micControl;
+        p[51] = lineInGain;
 
         if (psEnabled)
         {

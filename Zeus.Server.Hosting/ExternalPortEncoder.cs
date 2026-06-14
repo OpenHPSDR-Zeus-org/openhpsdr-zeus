@@ -58,10 +58,29 @@ public readonly record struct ExternalPortState(
     byte OcTxMask = 0,
     /// <summary>Open-collector RX mask (7-bit). Carried for completeness;
     /// emission stays on the existing OC path in Phase 1.</summary>
-    byte OcRxMask = 0)
+    byte OcRxMask = 0,
+    // ---- Audio front-end (external-ports plan, Phase 4) --------------------
+    // Global per-radio (NOT per-band). Verified byte layouts:
+    //   P1 Hermes-class codec (0x12 frame): C2[0]=MicBoost, C2[1]=LineIn.
+    //   P1 HL2 (0x14 frame, read-modify-write): C1[4]=BalancedInput (mic_trs),
+    //     C1[5]=MicBias, C2[4:0]=LineInGain (PS C2[6] + C4 PGA preserved).
+    //   P2 TxSpecific byte 50: bit0=LineIn, bit1=MicBoost, bit4=MicBias,
+    //     bit5=BalancedInput(XLR); byte 51=LineInGain.
+    // All default off / 0 → byte-identical to today on every board.
+    /// <summary>Line-in vs mic select (true = line-in).</summary>
+    bool LineIn = false,
+    /// <summary>Mic boost (Hermes-class codec / P2).</summary>
+    bool MicBoost = false,
+    /// <summary>Mic bias enable. DEFAULTS OFF — enabling on a floating
+    /// connector can hang PTT; the gate guards it.</summary>
+    bool MicBias = false,
+    /// <summary>Balanced / TRS input select (HL2 mic_trs / Saturn XLR).</summary>
+    bool BalancedInput = false,
+    /// <summary>Line-in gain, 0..31 (HL2 0x14 C2[4:0] / P2 byte 51).</summary>
+    byte LineInGain = 0)
 {
-    /// <summary>Default state: ANT1 / ANT1 / no OC — reproduces today's wire
-    /// emission bit-for-bit on every board.</summary>
+    /// <summary>Default state: ANT1 / ANT1 / no OC / mic input, no boost/bias,
+    /// gain 0 — reproduces today's wire emission bit-for-bit on every board.</summary>
     public static readonly ExternalPortState Default = new();
 }
 
@@ -90,6 +109,17 @@ public interface IExternalPortEncoder
     /// Alex word. Delegates to the wire path's own pure helper.
     /// </summary>
     uint EncodeP2TxAntennaBits(in ExternalPortState state);
+
+    /// <summary>
+    /// Encode the Protocol-2 TxSpecific (port 1026) byte-50 mic_control flags
+    /// for the desired audio front-end state (external-ports plan, Phase 4).
+    /// Only emitted on codec boards; a board without
+    /// <see cref="BoardCapabilities.HasOnboardCodec"/> returns 0 so its
+    /// TxSpecific tail stays byte-identical to today. Bit layout (Thetis
+    /// network.c:1226-1233): bit0=line_in, bit1=mic_boost, bit4=mic_bias,
+    /// bit5=balanced/XLR. Pairs with byte 51 = <c>LineInGain</c>.
+    /// </summary>
+    byte EncodeP2MicControlByte(in ExternalPortState state);
 }
 
 /// <summary>
@@ -130,6 +160,11 @@ public sealed class Protocol1PortEncoder : IExternalPortEncoder
     public uint EncodeP2TxAntennaBits(in ExternalPortState state)
         // P1 boards do not emit a P2 Alex word; ANT1-hardwired on transmit.
         => Protocol2Client.EncodeTxAntennaBits(txAnt: 1);
+
+    public byte EncodeP2MicControlByte(in ExternalPortState state)
+        // P1 codec boards carry mic_boost/mic_linein on the 0x12 frame
+        // (ControlFrame), not the P2 TxSpecific byte 50. No P2 byte here.
+        => 0;
 }
 
 /// <summary>
@@ -142,12 +177,14 @@ public sealed class Protocol2PortEncoder : IExternalPortEncoder
     private readonly HpsdrBoardKind _board;
     private readonly OrionMkIIVariant _variant;
     private readonly bool _hasTxAntennaRelays;
+    private readonly bool _hasOnboardCodec;
 
-    public Protocol2PortEncoder(HpsdrBoardKind board, OrionMkIIVariant variant, bool hasTxAntennaRelays)
+    public Protocol2PortEncoder(HpsdrBoardKind board, OrionMkIIVariant variant, bool hasTxAntennaRelays, bool hasOnboardCodec)
     {
         _board = board;
         _variant = variant;
         _hasTxAntennaRelays = hasTxAntennaRelays;
+        _hasOnboardCodec = hasOnboardCodec;
     }
 
     public string Label => $"P2({_board}/{_variant}, txRelays={_hasTxAntennaRelays})";
@@ -166,6 +203,47 @@ public sealed class Protocol2PortEncoder : IExternalPortEncoder
         // the shared pure helper (1-based wire selector).
         int wire = _hasTxAntennaRelays ? (int)state.TxAnt + 1 : 1;
         return Protocol2Client.EncodeTxAntennaBits(wire);
+    }
+
+    public byte EncodeP2MicControlByte(in ExternalPortState state)
+    {
+        // Gate on codec presence: a board without the stream codec gets the
+        // zero byte, so its TxSpecific tail is byte-identical to today. The
+        // shared helper is the single source of the byte-50 bit math (the same
+        // constants Protocol2Client.SetAudioFrontEnd composes).
+        if (!_hasOnboardCodec) return 0;
+        return ExternalPortAudio.P2MicControlByte(
+            lineIn: state.LineIn,
+            micBoost: state.MicBoost,
+            micBias: state.MicBias,
+            balanced: state.BalancedInput);
+    }
+}
+
+/// <summary>
+/// Shared pure helpers for the audio front-end bit math (external-ports plan,
+/// Phase 4). The single source of truth for the P2 TxSpecific byte-50
+/// mic_control flag layout (Thetis network.c:1226-1233), so the encoder seam
+/// and any test compute the same byte. The P1 audio bits (0x12 mic_boost/linein
+/// and 0x14 mic_trs/mic_bias/line_in_gain) live in ControlFrame, which owns the
+/// per-board gating for the Protocol-1 frames.
+/// </summary>
+internal static class ExternalPortAudio
+{
+    // TxSpecific byte-50 mic_control flags (Thetis network.c:1226-1233).
+    private const byte LineInBit   = 0x01; // bit0
+    private const byte MicBoostBit = 0x02; // bit1
+    private const byte MicBiasBit  = 0x10; // bit4 (enable Orion mic bias)
+    private const byte XlrBit       = 0x20; // bit5 (balanced/XLR input — Saturn)
+
+    public static byte P2MicControlByte(bool lineIn, bool micBoost, bool micBias, bool balanced)
+    {
+        byte b = 0;
+        if (lineIn)   b |= LineInBit;
+        if (micBoost) b |= MicBoostBit;
+        if (micBias)  b |= MicBiasBit;
+        if (balanced) b |= XlrBit;
+        return b;
     }
 }
 
@@ -195,6 +273,11 @@ public sealed class HermesLite2PortEncoder : IExternalPortEncoder
 
     public uint EncodeP2TxAntennaBits(in ExternalPortState state)
         => Protocol2Client.EncodeTxAntennaBits(txAnt: 1);
+
+    public byte EncodeP2MicControlByte(in ExternalPortState state)
+        // HL2 is Protocol 1 with no stream codec — its mic front-end rides the
+        // 0x14 frame (ControlFrame read-modify-write), not the P2 TxSpecific.
+        => 0;
 }
 
 /// <summary>
@@ -233,7 +316,7 @@ public static class ExternalPortEncoders
             return new HermesLite2PortEncoder();
 
         return p == RadioProtocol.Protocol2
-            ? new Protocol2PortEncoder(board, variant, caps.HasTxAntennaRelays)
+            ? new Protocol2PortEncoder(board, variant, caps.HasTxAntennaRelays, caps.HasOnboardCodec)
             : new Protocol1PortEncoder(board, caps.HasRxAntennaRelays);
     }
 
