@@ -105,6 +105,8 @@ export const DEFAULT_TILE_SPAN: Record<string, { w: number; h: number }> = {
   // freshly-added tile shows just the empty-state hint, not 4 columns of
   // blank space waiting for widgets.
   metergroup: { w: 2, h: 12 },
+  // HamClock fills the whole workspace (24×48) — it's an embedded dashboard.
+  hamclock: { w: 24, h: 48 },
 };
 
 const FALLBACK_SPAN = { w: 8, h: 8 };

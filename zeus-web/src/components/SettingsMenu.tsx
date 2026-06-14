@@ -36,6 +36,7 @@ import { useRadioStore } from '../state/radio-store';
 import { PsSettingsPanel } from './PsSettingsPanel';
 import { TxAudioToolsPanel } from './TxAudioToolsPanel';
 import { PluginsPanel } from '../plugins/components/PluginsPanel';
+import { HamClockSettingsPanel } from './HamClockSettingsPanel';
 
 export type SettingsTabId =
   | 'pa'
@@ -47,6 +48,7 @@ export type SettingsTabId =
   | 'tci'
   | 'display'
   | 'plugins'
+  | 'hamclock'
   | 'server'
   | 'radio'
   | 'calibration'
@@ -62,6 +64,7 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'tci', label: 'TCI' },
   { id: 'display', label: 'DISPLAY' },
   { id: 'plugins', label: 'PLUGINS' },
+  { id: 'hamclock', label: 'HAMCLOCK' },
   { id: 'server', label: 'SERVER' },
   { id: 'radio', label: 'RADIO' },
   { id: 'calibration', label: 'CALIBRATION' },
@@ -177,6 +180,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {active === 'tci' && <TciSettingsPanel />}
           {active === 'display' && <DisplayPanel />}
           {active === 'plugins' && <PluginsPanel />}
+          {active === 'hamclock' && <HamClockSettingsPanel />}
           {active === 'server' && <ServerUrlPanel />}
           {active === 'radio' && hasHl2OptionalToggles && <RadioOptionsPanel />}
           {active === 'calibration' && <CalibrationPanel />}

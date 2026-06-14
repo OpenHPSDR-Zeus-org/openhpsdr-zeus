@@ -465,6 +465,14 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioProcessingModeService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioProcessingModeService>());
 
+        // HamClockService — optional, on-demand embed of OpenHamClock (MIT,
+        // github.com/accius/openhamclock) as a Zeus panel. Entirely inert until
+        // the operator clicks Install in Settings → HamClock; nothing here
+        // touches the radio / DSP / TX path. Registered as a hosted service
+        // only so its sidecar Node process is killed on Zeus shutdown.
+        builder.Services.AddSingleton<HamClockService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<HamClockService>());
+
         // TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
         // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),
         // and SDR display tools. Disabled by default; enable via appsettings.json Tci:Enabled=true.

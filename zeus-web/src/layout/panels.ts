@@ -65,6 +65,7 @@ import { StepPanel } from './panels/StepPanel';
 import { MeterGroupPanel } from '../components/meter-group/MeterGroupPanel';
 import { AnalogMeterPanel } from './panels/AnalogMeterPanel';
 import { WavRecorderPanel } from './panels/WavRecorderPanel';
+import { HamClockPanel } from './panels/HamClockPanel';
 
 export type PanelCategory =
   | 'spectrum'
@@ -382,6 +383,16 @@ export const PANELS: Record<string, PanelDef> = {
     tags: ['analog', 'meter', 'smeter', 's-meter', 'signal', 'rx', 'tx', 'power', 'swr', 'needle'],
     component: AnalogMeterPanel,
     headerless: true,
+  },
+  hamclock: {
+    id: 'hamclock',
+    name: 'HamClock',
+    category: 'tools',
+    tags: ['hamclock', 'dashboard', 'propagation', 'dx', 'cluster', 'satellite', 'pota', 'sota', 'space weather', 'map'],
+    component: HamClockPanel,
+    // Wants the whole workspace — it's a full dashboard embedded as an iframe.
+    minW: 8,
+    minH: 16,
   },
 };
 
