@@ -605,6 +605,20 @@ public static class ZeusEndpoints
             return Results.Ok();
         });
 
+        // TX pre-key (MOX) delay (issue #630). Withholds modulated RF for N ms
+        // after a UI MOX/TUNE key-down so an external amp's T/R relay settles
+        // before RF appears. A standalone TX-sequencing setting — deliberately
+        // NOT routed through /api/tx/ps/advanced. The server clamps below the PS
+        // MOX hold-off, so the echoed value may be lower than requested.
+        app.MapPost("/api/tx/prekey-delay", (TxPreKeyDelaySetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.tx.prekeyDelay ms={Ms}", req.DelayMs);
+            if (req.DelayMs < 0 || req.DelayMs > 500)
+                return Results.BadRequest(new { error = "delayMs must be 0..500" });
+            var state = r.SetTxMoxPreKeyDelayMs(req.DelayMs);
+            return Results.Ok(new { txMoxPreKeyDelayMs = state.TxMoxPreKeyDelayMs });
+        });
+
         // TUN drive %. Symmetric with /api/tx/drive; the same PA-gain math applies,
         // so equal slider positions emit equal watts. Backend selects between the
         // two sources based on whether TUN is keyed (TxService.TrySetTun →

@@ -223,6 +223,10 @@ export type RadioStateDto = {
   // persisted value on connect.
   drivePercent: number;
   tunePercent: number;
+  // TX pre-key (MOX) delay in ms (issue #630). Withholds RF after a UI MOX/TUNE
+  // key-down so an external amp's T/R relay settles before RF. Server-clamped
+  // below the PS MOX hold-off; hydrated on connect like the drive sliders.
+  txMoxPreKeyDelayMs: number;
   twoToneFreq1: number;
   twoToneFreq2: number;
   twoToneMag: number;
@@ -498,6 +502,8 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // older server (no DrivePct/TunePct fields) deserialises cleanly.
     drivePercent: typeof r.drivePct === 'number' ? r.drivePct : 0,
     tunePercent: typeof r.tunePct === 'number' ? r.tunePct : 10,
+    txMoxPreKeyDelayMs:
+      typeof r.txMoxPreKeyDelayMs === 'number' ? r.txMoxPreKeyDelayMs : 0,
     twoToneFreq1: typeof r.twoToneFreq1 === 'number' ? r.twoToneFreq1 : 700,
     twoToneFreq2: typeof r.twoToneFreq2 === 'number' ? r.twoToneFreq2 : 1900,
     twoToneMag: typeof r.twoToneMag === 'number' ? r.twoToneMag : 0.49,
@@ -1173,6 +1179,28 @@ export function setDrive(
     (raw) => {
       const v = (raw as { drivePercent?: unknown }).drivePercent;
       return { drivePercent: typeof v === 'number' ? v : 0 };
+    },
+  );
+}
+
+// TX pre-key (MOX) delay: POST /api/tx/prekey-delay { delayMs }. Returns the
+// server-applied value, which may be lower than requested (clamped below the
+// PS MOX hold-off). Issue #630.
+export function setTxPreKeyDelay(
+  delayMs: number,
+  signal?: AbortSignal,
+): Promise<{ txMoxPreKeyDelayMs: number }> {
+  return jsonFetch(
+    '/api/tx/prekey-delay',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ delayMs: Math.round(delayMs) }),
+      signal,
+    },
+    (raw) => {
+      const v = (raw as { txMoxPreKeyDelayMs?: unknown }).txMoxPreKeyDelayMs;
+      return { txMoxPreKeyDelayMs: typeof v === 'number' ? v : 0 };
     },
   );
 }
