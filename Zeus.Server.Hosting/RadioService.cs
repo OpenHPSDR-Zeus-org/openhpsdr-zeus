@@ -198,6 +198,15 @@ public sealed class RadioService : IDisposable
     // on Angelia / ANAN-100D.
     public event Action<bool>? PreampChanged;
 
+    /// <summary>Fires when the DDC sample rate (display bandwidth) changes. P1
+    /// is pushed directly via ActiveClient?.SetSampleRate inside SetSampleRate;
+    /// this event is the only path that reaches a live Protocol2Client (whose
+    /// RX-spec carries the rate) AND lets DspPipelineService re-open the WDSP RX
+    /// channel at the new input rate so demod + panadapter axis follow. Without
+    /// it, a P2 bandwidth change updated state but never reached the radio
+    /// (ActiveClient is P1-only / null on P2). Carries the new rate in Hz.</summary>
+    public event Action<int>? SampleRateChanged;
+
     /// <summary>Raised when the manual-notch list changes. DspPipelineService
     /// forwards the new set to the live DSP engine (WDSP notch database).</summary>
     public event Action<IReadOnlyList<NotchDto>>? NotchesChanged;
@@ -1207,7 +1216,12 @@ public sealed class RadioService : IDisposable
         }
         int hz = rate.SampleRateHz();
         Mutate(s => s with { SampleRate = hz });
+        // P1 client owns the rate bits directly. On P2 ActiveClient is null, so
+        // the SampleRateChanged event is the only way the new rate reaches the
+        // live Protocol2Client and re-rates the WDSP RX channel (issue: live
+        // bandwidth change was a no-op on P2 / G2 before this).
         ActiveClient?.SetSampleRate(rate);
+        SampleRateChanged?.Invoke(hz);
         var board = ConnectedBoardKind;
         if (board != HpsdrBoardKind.Unknown)
             _radioStateStore?.SetBoardSampleRate(board, hz, EffectiveOrionMkIIVariant);

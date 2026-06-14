@@ -459,6 +459,7 @@ public class DspPipelineService : BackgroundService,
         _radio.MoxChanged += OnRadioMoxChanged;
         _radio.TunActiveChanged += OnRadioTunActiveChanged;
         _radio.PreampChanged += OnRadioPreampChanged;
+        _radio.SampleRateChanged += OnRadioSampleRateChanged;
         _radio.NotchesChanged += OnRadioNotchesChanged;
         // Frequency-correction factor (issue #325) — RadioService can't
         // push to the P2 client directly (ActiveClient is P1-only), so we
@@ -498,6 +499,7 @@ public class DspPipelineService : BackgroundService,
             _radio.MoxChanged -= OnRadioMoxChanged;
             _radio.TunActiveChanged -= OnRadioTunActiveChanged;
             _radio.PreampChanged -= OnRadioPreampChanged;
+            _radio.SampleRateChanged -= OnRadioSampleRateChanged;
             _radio.NotchesChanged -= OnRadioNotchesChanged;
             _radio.FrequencyCorrectionFactorChanged -= OnFrequencyCorrectionFactorChanged;
             // iter5: no more pump tasks to stop — the sink path runs on the
@@ -1415,6 +1417,68 @@ public class DspPipelineService : BackgroundService,
         if (on == _appliedPreampOn) return;
         p2.SetPreamp(on);
         _appliedPreampOn = on;
+    }
+
+    // Operator changed the DDC sample rate (display bandwidth) while connected.
+    // P1's rate is already on the wire via RadioService → ActiveClient; here we
+    // handle the P2 side, which RadioService can't reach (ActiveClient is null
+    // on P2). The whole re-rate is posted to the DSP thread (PostDspCommand →
+    // DrainDspCommands, run between RX frames on the same thread that calls
+    // FeedIq) so it never races the hot path. See RerateRxChannelForP2 for why
+    // it must be in-place on the existing engine.
+    private void OnRadioSampleRateChanged(int rateHz)
+    {
+        if (_p2Client is null) return;
+        PostDspCommand(() => RerateRxChannelForP2(rateHz));
+    }
+
+    // Re-rate the RX channel to a new DDC input rate, IN PLACE on the existing
+    // engine instance. Two hazards this avoids, both of which produced the
+    // 0xc0000005 native crash on the first naive attempt:
+    //
+    //   1. Channel aliasing. WdspDspEngine.OpenChannel allocates the first free
+    //      id from its *per-instance* _channels dict, but WDSP's channel table
+    //      is global/native. A second engine instance would therefore re-open
+    //      global channel 0 — the slot the old engine still owns — and tearing
+    //      the old engine down would free the channel the new one is using.
+    //      Closing then re-opening on the SAME instance reuses id 0 cleanly
+    //      (the rebuild WdspDspEngine.OpenChannel was written to support — it
+    //      re-applies the notch DB after a "sample-rate or mode change").
+    //   2. Hot-path teardown. CloseChannel stops the channel worker; doing it
+    //      on the DSP thread (this runs inside DrainDspCommands) means no FeedIq
+    //      is in flight on the channel being torn down.
+    //
+    // FeedIq no-ops on a missing channel id, so the brief CloseChannel→OpenChannel
+    // window is safe even though it isn't atomic with _channelId.
+    private void RerateRxChannelForP2(int rateHz)
+    {
+        var p2 = _p2Client;
+        if (p2 is null) return; // disconnected between post and drain
+        var engine = Volatile.Read(ref _engine);
+        if (engine is null) return;
+
+        int oldChannel = Volatile.Read(ref _channelId);
+        try
+        {
+            engine.CloseChannel(oldChannel);
+            int newChannel = engine.OpenChannel(rateHz, Width);
+            try { ApplyStateToNewChannel(engine, newChannel); }
+            catch (EntryPointNotFoundException ex)
+            {
+                _log.LogWarning(ex, "dsp.pipeline p2 re-rate missing entry point — partial config applied");
+            }
+            Volatile.Write(ref _channelId, newChannel);
+            Volatile.Write(ref _sampleRateHz, rateHz);
+            // RX channel is ready at the new rate — now tell the radio to re-rate
+            // its DDC (re-emits the RX-spec). Ordering this last means new-rate
+            // IQ only starts arriving once the channel can decode it.
+            p2.SetSampleRateKhz(rateHz / 1000);
+            _log.LogInformation("dsp.pipeline p2 re-rate channel={Ch} rate={Rate}", newChannel, rateHz);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "dsp.pipeline p2 re-rate failed rate={Rate}", rateHz);
+        }
     }
 
     // Operator added/removed/changed a manual notch. Forward the full list to
