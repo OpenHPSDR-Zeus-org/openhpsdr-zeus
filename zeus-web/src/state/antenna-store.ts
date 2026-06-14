@@ -17,33 +17,53 @@
 import { create } from 'zustand';
 
 export type AntennaName = 'Ant1' | 'Ant2' | 'Ant3';
+// RX auxiliary input (external-ports plan, Phase 5). 'None' = use the base
+// RX-antenna relay; the rest are the Alex/filter-board aux feeds.
+export type RxAuxName = 'None' | 'Ext1' | 'Ext2' | 'Xvtr' | 'Bypass';
 
 export interface AntennaBand {
   band: string;
   txAnt: AntennaName;
   rxAnt: AntennaName;
+  rxAux: RxAuxName;
 }
 
 export interface AntennaSettings {
   hasTxAntennaRelays: boolean;
   hasRxAntennaRelays: boolean;
   bands: AntennaBand[];
+  /** Aux inputs the connected board's Alex/filter board exposes (Phase 5).
+   *  Empty on boards with no aux inputs (HL2). */
+  availableRxAux: RxAuxName[];
+  /** K36-BYPASS direction family (operator-set, NOT wire-discoverable):
+   *  'Modern' (Rev 24+, PS routes to BYPASS — safe default) or 'Legacy15Or16'. */
+  alexRevision: string;
 }
 
 const DEFAULT_SETTINGS: AntennaSettings = {
   hasTxAntennaRelays: false,
   hasRxAntennaRelays: false,
   bands: [],
+  availableRxAux: [],
+  alexRevision: 'Modern',
 };
 
 function parseAnt(v: unknown): AntennaName {
   return v === 'Ant2' || v === 'Ant3' ? v : 'Ant1';
 }
 
+const RX_AUX_NAMES: RxAuxName[] = ['None', 'Ext1', 'Ext2', 'Xvtr', 'Bypass'];
+function parseRxAux(v: unknown): RxAuxName {
+  return typeof v === 'string' && (RX_AUX_NAMES as string[]).includes(v)
+    ? (v as RxAuxName)
+    : 'None';
+}
+
 function parse(raw: unknown): AntennaSettings {
   if (!raw || typeof raw !== 'object') return DEFAULT_SETTINGS;
   const r = raw as Record<string, unknown>;
   const bandsRaw = Array.isArray(r.bands) ? r.bands : [];
+  const auxRaw = Array.isArray(r.availableRxAux) ? r.availableRxAux : [];
   return {
     hasTxAntennaRelays:
       typeof r.hasTxAntennaRelays === 'boolean' ? r.hasTxAntennaRelays : false,
@@ -55,8 +75,13 @@ function parse(raw: unknown): AntennaSettings {
         band: typeof e.band === 'string' ? e.band : '',
         txAnt: parseAnt(e.txAnt),
         rxAnt: parseAnt(e.rxAnt),
+        rxAux: parseRxAux(e.rxAux),
       };
     }),
+    availableRxAux: auxRaw
+      .map((a) => parseRxAux(a))
+      .filter((a) => a !== 'None'),
+    alexRevision: typeof r.alexRevision === 'string' ? r.alexRevision : 'Modern',
   };
 }
 
@@ -72,12 +97,13 @@ export async function updateAntennaBand(
   band: string,
   txAnt: AntennaName,
   rxAnt: AntennaName,
+  rxAux: RxAuxName,
   signal?: AbortSignal,
 ): Promise<AntennaSettings> {
   const res = await fetch('/api/radio/antenna', {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ band, txAnt, rxAnt }),
+    body: JSON.stringify({ band, txAnt, rxAnt, rxAux }),
     signal,
   });
   if (!res.ok) throw new Error(`PUT /api/radio/antenna → ${res.status}`);
@@ -90,7 +116,12 @@ type AntennaStore = {
   inflight: boolean;
   error: string | null;
   load: () => Promise<void>;
-  setBand: (band: string, txAnt: AntennaName, rxAnt: AntennaName) => Promise<void>;
+  setBand: (
+    band: string,
+    txAnt: AntennaName,
+    rxAnt: AntennaName,
+    rxAux: RxAuxName,
+  ) => Promise<void>;
 };
 
 export const useAntennaStore = create<AntennaStore>((set, get) => ({
@@ -112,7 +143,7 @@ export const useAntennaStore = create<AntennaStore>((set, get) => ({
     }
   },
 
-  setBand: async (band, txAnt, rxAnt) => {
+  setBand: async (band, txAnt, rxAnt, rxAux) => {
     // Optimistic local update, rollback on error — same idiom as pa-store /
     // radio-options-store. The PUT returns the canonical settings which we
     // adopt so the local view stays in lockstep with the server.
@@ -121,14 +152,14 @@ export const useAntennaStore = create<AntennaStore>((set, get) => ({
       const found = prev.bands.some((b) => b.band === band);
       if (found) {
         return prev.bands.map((b) =>
-          b.band === band ? { ...b, txAnt, rxAnt } : b,
+          b.band === band ? { ...b, txAnt, rxAnt, rxAux } : b,
         );
       }
-      return [...prev.bands, { band, txAnt, rxAnt }];
+      return [...prev.bands, { band, txAnt, rxAnt, rxAux }];
     })();
     set({ settings: { ...prev, bands: nextBands }, inflight: true, error: null });
     try {
-      const s = await updateAntennaBand(band, txAnt, rxAnt);
+      const s = await updateAntennaBand(band, txAnt, rxAnt, rxAux);
       set({ settings: s, inflight: false });
     } catch (err) {
       set({

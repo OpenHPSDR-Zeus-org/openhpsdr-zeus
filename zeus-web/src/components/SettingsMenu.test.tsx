@@ -114,7 +114,7 @@ describe('SettingsView — RADIO tab gating', () => {
     expect(tabs).not.toContain('RADIO');
   });
 
-  it('hides RADIO SETTINGS when the board has no antenna relays', () => {
+  it('hides RADIO SETTINGS when the board has no external ports at all', () => {
     seedRadioCaps({ hasTxAntennaRelays: false, hasRxAntennaRelays: false });
     act(() => {
       root.render(<SettingsView onClose={() => {}} />);
@@ -123,6 +123,25 @@ describe('SettingsView — RADIO tab gating', () => {
       container.querySelectorAll('[role="tablist"] button'),
     ).map((b) => b.textContent?.trim() ?? '');
     expect(tabs).not.toContain('RADIO SETTINGS');
+  });
+
+  it('shows RADIO SETTINGS on HL2 (no relays, but mic front-end + user GPIO)', () => {
+    // Phase 5 gate broadening: HL2 has no antenna relays but DOES have the
+    // register-0x14 mic front-end and the 4-bit user GPIO, so the tab — and
+    // therefore those HL2-only controls — must be reachable.
+    seedRadioCaps({
+      hasTxAntennaRelays: false,
+      hasRxAntennaRelays: false,
+      hermesLite2MicFrontEnd: true,
+      hasHl2UserGpio: true,
+    });
+    act(() => {
+      root.render(<SettingsView onClose={() => {}} />);
+    });
+    const tabs = Array.from(
+      container.querySelectorAll('[role="tablist"] button'),
+    ).map((b) => b.textContent?.trim() ?? '');
+    expect(tabs).toContain('RADIO SETTINGS');
   });
 
   it('shows RADIO SETTINGS and renders the antenna panel when the board has relays', () => {

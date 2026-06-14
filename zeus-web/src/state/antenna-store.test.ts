@@ -13,7 +13,13 @@ import {
 afterEach(() => {
   vi.unstubAllGlobals();
   useAntennaStore.setState({
-    settings: { hasTxAntennaRelays: false, hasRxAntennaRelays: false, bands: [] },
+    settings: {
+      hasTxAntennaRelays: false,
+      hasRxAntennaRelays: false,
+      bands: [],
+      availableRxAux: [],
+      alexRevision: 'Modern',
+    },
     loaded: false,
     inflight: false,
     error: null,
@@ -53,7 +59,7 @@ describe('antenna-store parsing', () => {
 
   it('throws on a 409 from the PUT', async () => {
     stubFetch({ error: 'no relays' }, 409);
-    await expect(updateAntennaBand('20m', 'Ant2', 'Ant1')).rejects.toThrow();
+    await expect(updateAntennaBand('20m', 'Ant2', 'Ant1', 'None')).rejects.toThrow();
   });
 });
 
@@ -64,9 +70,23 @@ describe('antenna-store setBand', () => {
       hasRxAntennaRelays: true,
       bands: [{ band: '20m', txAnt: 'Ant3', rxAnt: 'Ant1' }],
     });
-    await useAntennaStore.getState().setBand('20m', 'Ant3', 'Ant1');
+    await useAntennaStore.getState().setBand('20m', 'Ant3', 'Ant1', 'None');
     const b = useAntennaStore.getState().settings.bands.find((x) => x.band === '20m');
     expect(b?.txAnt).toBe('Ant3');
+  });
+
+  it('round-trips a per-band RX-aux selection', async () => {
+    stubFetch({
+      hasTxAntennaRelays: true,
+      hasRxAntennaRelays: true,
+      bands: [{ band: '20m', txAnt: 'Ant1', rxAnt: 'Ant1', rxAux: 'Bypass' }],
+      availableRxAux: ['Ext1', 'Ext2', 'Xvtr', 'Bypass'],
+      alexRevision: 'Modern',
+    });
+    await useAntennaStore.getState().setBand('20m', 'Ant1', 'Ant1', 'Bypass');
+    const b = useAntennaStore.getState().settings.bands.find((x) => x.band === '20m');
+    expect(b?.rxAux).toBe('Bypass');
+    expect(useAntennaStore.getState().settings.availableRxAux).toContain('Bypass');
   });
 
   it('rolls back on PUT failure', async () => {
@@ -75,11 +95,13 @@ describe('antenna-store setBand', () => {
       settings: {
         hasTxAntennaRelays: true,
         hasRxAntennaRelays: true,
-        bands: [{ band: '20m', txAnt: 'Ant1', rxAnt: 'Ant1' }],
+        bands: [{ band: '20m', txAnt: 'Ant1', rxAnt: 'Ant1', rxAux: 'None' }],
+        availableRxAux: [],
+        alexRevision: 'Modern',
       },
     });
     stubFetch({ error: 'boom' }, 409);
-    await useAntennaStore.getState().setBand('20m', 'Ant2', 'Ant1');
+    await useAntennaStore.getState().setBand('20m', 'Ant2', 'Ant1', 'None');
     const b = useAntennaStore.getState().settings.bands.find((x) => x.band === '20m');
     expect(b?.txAnt).toBe('Ant1'); // rolled back
     expect(useAntennaStore.getState().error).toBeTruthy();

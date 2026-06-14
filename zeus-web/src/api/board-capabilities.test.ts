@@ -46,6 +46,18 @@ describe('parseBoardCapabilities', () => {
     expect(caps.adcSupplyMv).toBe(UNKNOWN_BOARD_CAPABILITIES.adcSupplyMv);
     expect(caps.hasVolts).toBe(false);
     expect(caps.maxPowerWatts).toBe(UNKNOWN_BOARD_CAPABILITIES.maxPowerWatts);
+    // Phase 5 flags default false when absent (old server).
+    expect(caps.hasRx2AntennaPath).toBe(false);
+    expect(caps.hasHl2UserGpio).toBe(false);
+  });
+
+  it('parses the Phase 5 capability flags', () => {
+    const caps = parseBoardCapabilities({
+      hasRx2AntennaPath: true,
+      hasHl2UserGpio: true,
+    });
+    expect(caps.hasRx2AntennaPath).toBe(true);
+    expect(caps.hasHl2UserGpio).toBe(true);
   });
 
   it('rejects non-positive maxPowerWatts and falls back to default', () => {

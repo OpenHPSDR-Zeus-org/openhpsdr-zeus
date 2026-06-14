@@ -53,6 +53,13 @@ export interface BoardCapabilities {
   /** Board has the Hermes-Lite 2 mic/PTT/line-in front-end (register 0x14).
    *  HL2 only. Gates the HL2 audio front-end controls. */
   hermesLite2MicFrontEnd: boolean;
+  // ---- External-port control (Phase 5) ----
+  /** Board has a second RX antenna path (dual-Alex / dual-RX). True for the
+   *  dual-ADC boards (100D/200D/0x0A family). Gates the RX2-antenna selector. */
+  hasRx2AntennaPath: boolean;
+  /** Board has the 4-bit HL2 user GPIO (user_dig_out on register 0x14 C3[3:0]).
+   *  HL2 only. Gates the user GPIO toggle group. */
+  hasHl2UserGpio: boolean;
 }
 
 // Safe defaults matching Zeus.Contracts.BoardCapabilities.UnknownDefaults —
@@ -76,6 +83,8 @@ export const UNKNOWN_BOARD_CAPABILITIES: BoardCapabilities = {
   hasRxAntennaRelays: false,
   hasOnboardCodec: false,
   hermesLite2MicFrontEnd: false,
+  hasRx2AntennaPath: false,
+  hasHl2UserGpio: false,
 };
 
 export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
@@ -128,6 +137,14 @@ export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
       typeof r.hermesLite2MicFrontEnd === 'boolean'
         ? r.hermesLite2MicFrontEnd
         : UNKNOWN_BOARD_CAPABILITIES.hermesLite2MicFrontEnd,
+    hasRx2AntennaPath:
+      typeof r.hasRx2AntennaPath === 'boolean'
+        ? r.hasRx2AntennaPath
+        : UNKNOWN_BOARD_CAPABILITIES.hasRx2AntennaPath,
+    hasHl2UserGpio:
+      typeof r.hasHl2UserGpio === 'boolean'
+        ? r.hasHl2UserGpio
+        : UNKNOWN_BOARD_CAPABILITIES.hasHl2UserGpio,
   };
 }
 

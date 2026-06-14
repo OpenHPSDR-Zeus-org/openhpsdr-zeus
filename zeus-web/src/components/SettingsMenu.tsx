@@ -92,13 +92,19 @@ export function SettingsView({ initialTab, onClose }: Props) {
   const hasHl2OptionalToggles = useRadioStore(
     (s) => s.capabilities.hasHl2OptionalToggles,
   );
-  // RADIO SETTINGS tab (external-ports plan, Phase 2) appears when the board
-  // exposes at least one external port — currently antenna. Start with the
-  // antenna relay capabilities; future external ports (audio front-end, etc.)
-  // OR into this gate.
+  // RADIO SETTINGS tab appears when the board exposes ANY external port the
+  // panel can drive: antenna relays (Phase 2), the audio front-end (Phase 4),
+  // or the Phase-5 ports (RX-aux inputs, HL2 user GPIO). HL2 has no antenna
+  // relays but DOES have the mic front-end + user GPIO, so it must light the
+  // tab too — broadened here so those HL2 controls are reachable.
   const hasExternalPorts = useRadioStore(
     (s) =>
-      s.capabilities.hasTxAntennaRelays || s.capabilities.hasRxAntennaRelays,
+      s.capabilities.hasTxAntennaRelays ||
+      s.capabilities.hasRxAntennaRelays ||
+      s.capabilities.hasOnboardCodec ||
+      s.capabilities.hermesLite2MicFrontEnd ||
+      s.capabilities.hasHl2UserGpio ||
+      s.capabilities.hasRx2AntennaPath,
   );
   const visibleTabs = useMemo(
     () =>
