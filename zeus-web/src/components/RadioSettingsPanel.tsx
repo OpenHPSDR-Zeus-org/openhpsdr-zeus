@@ -25,6 +25,7 @@ import {
   useAntennaStore,
   type AntennaName,
 } from '../state/antenna-store';
+import { useAudioStore } from '../state/audio-store';
 import { bandOf } from './design/data';
 
 const ANTENNAS: AntennaName[] = ['Ant1', 'Ant2', 'Ant3'];
@@ -44,9 +45,17 @@ export function RadioSettingsPanel() {
   const load = useAntennaStore((s) => s.load);
   const setBand = useAntennaStore((s) => s.setBand);
 
+  const audio = useAudioStore((s) => s.settings);
+  const audioInflight = useAudioStore((s) => s.inflight);
+  const loadAudio = useAudioStore((s) => s.load);
+  const updateAudio = useAudioStore((s) => s.update);
+  const hasCodecAudio = caps.hasOnboardCodec;
+  const hasHl2Audio = caps.hermesLite2MicFrontEnd;
+
   useEffect(() => {
     load();
-  }, [load]);
+    loadAudio();
+  }, [load, loadAudio]);
 
   const band = bandOf(vfoHz);
   const onBand = band !== '—';
@@ -136,6 +145,127 @@ export function RadioSettingsPanel() {
           </div>
         ) : null}
       </div>
+
+      {hasCodecAudio || hasHl2Audio ? (
+        <div className="ps-card">
+          <h4>
+            <svg className="ps-ic-sm" viewBox="0 0 12 12">
+              <path d="M6 1a2 2 0 0 1 2 2v3a2 2 0 0 1-4 0V3a2 2 0 0 1 2-2zM3 6a3 3 0 0 0 6 0M6 9v2" />
+            </svg>
+            Audio Input
+            <span className="ps-card-hint">
+              {hasHl2Audio ? 'mic / line front-end' : 'mic / line-in'}
+            </span>
+          </h4>
+
+          {/* Line-in vs mic select — present on both codec and HL2 paths. */}
+          <div className="ps-field">
+            <div className="ps-name">
+              Input Source
+              <em>
+                Select the line-in jack instead of the microphone input.
+              </em>
+            </div>
+            <label className="ps-check">
+              <input
+                type="checkbox"
+                checked={audio.lineIn}
+                disabled={audioInflight}
+                onChange={(e) => void updateAudio({ lineIn: e.target.checked })}
+              />
+              <span className="ps-check-box" />
+              <span>{audio.lineIn ? 'Line In' : 'Microphone'}</span>
+            </label>
+          </div>
+
+          {/* Mic boost — Hermes-class codec boards only. */}
+          {hasCodecAudio ? (
+            <div className="ps-field">
+              <div className="ps-name">
+                Mic Boost
+                <em>+20 dB microphone preamp boost.</em>
+              </div>
+              <label className="ps-check">
+                <input
+                  type="checkbox"
+                  checked={audio.micBoost}
+                  disabled={audioInflight}
+                  onChange={(e) => void updateAudio({ micBoost: e.target.checked })}
+                />
+                <span className="ps-check-box" />
+                <span>{audio.micBoost ? 'On' : 'Off'}</span>
+              </label>
+            </div>
+          ) : null}
+
+          {/* Balanced / TRS input — HL2 mic_trs (balanced) or Saturn XLR. */}
+          <div className="ps-field">
+            <div className="ps-name">
+              Balanced Input
+              <em>
+                {hasHl2Audio
+                  ? 'Use the TRS (balanced) mic pin on the HL2 front-end.'
+                  : 'Select the balanced (XLR) microphone input.'}
+              </em>
+            </div>
+            <label className="ps-check">
+              <input
+                type="checkbox"
+                checked={audio.balancedInput}
+                disabled={audioInflight}
+                onChange={(e) => void updateAudio({ balancedInput: e.target.checked })}
+              />
+              <span className="ps-check-box" />
+              <span>{audio.balancedInput ? 'Balanced' : 'Standard'}</span>
+            </label>
+          </div>
+
+          {/* Mic bias — DEFAULTS OFF, floating-connector PTT-hang guard. */}
+          <div className="ps-field">
+            <div className="ps-name">
+              Mic Bias
+              <em>
+                Supply bias voltage for electret microphones. Leave OFF unless
+                your mic needs it — enabling it on a floating / unconnected
+                connector can hang PTT.
+              </em>
+            </div>
+            <label className="ps-check">
+              <input
+                type="checkbox"
+                checked={audio.micBias}
+                disabled={audioInflight}
+                onChange={(e) => void updateAudio({ micBias: e.target.checked })}
+              />
+              <span className="ps-check-box" />
+              <span>{audio.micBias ? 'On' : 'Off (default)'}</span>
+            </label>
+          </div>
+
+          {/* Line-in gain 0..31 — present on both paths. */}
+          <div className="ps-field">
+            <div className="ps-name">
+              Line-In Gain
+              <em>Line-in input gain (0–31).</em>
+            </div>
+            <input
+              className="ps-select-mini"
+              type="number"
+              min={0}
+              max={31}
+              step={1}
+              value={audio.lineInGain}
+              disabled={audioInflight}
+              onChange={(e) => {
+                const n = Number.parseInt(e.target.value, 10);
+                if (!Number.isNaN(n)) {
+                  void updateAudio({ lineInGain: Math.min(31, Math.max(0, n)) });
+                }
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
 
       <div className="ps-status-row">
         <div className="ps-status-left">
