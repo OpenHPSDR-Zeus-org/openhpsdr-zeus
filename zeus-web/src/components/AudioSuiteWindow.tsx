@@ -22,6 +22,8 @@ import {
   AUDIO_SUITE_WINDOW_MIN_HEIGHT,
   useAudioSuiteStore,
 } from '../state/audio-suite-store';
+import { ConfirmDialog } from '../layout/ConfirmDialog';
+import { TextInputDialog } from '../layout/TextInputDialog';
 
 const CHAIN_SLOT = 'tx-audio-tools.chain';
 
@@ -226,6 +228,45 @@ function sortChainPanels(
   });
 }
 
+/** Trash-can glyph — distinguishes the destructive "uninstall (delete
+ *  from Zeus)" action from the neutral "×" park-from-chain control. */
+function TrashIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 14 14" aria-hidden focusable="false">
+      <g fill="none" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M2.5 3.5h9" />
+        <path d="M5.5 3.5V2.3h3v1.2" />
+        <path d="M3.7 3.5l.5 8.2h5.6l.5-8.2" />
+        <path d="M6 5.7v4M8 5.7v4" />
+      </g>
+    </svg>
+  );
+}
+
+function vstUninstallButtonStyle(
+  armed: boolean,
+  size: number,
+  pending = false,
+  disabled = false,
+): React.CSSProperties {
+  return {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: size,
+    height: size,
+    borderRadius: 3,
+    border: '1px solid ' + (armed || pending ? 'var(--tx)' : 'var(--line)'),
+    background: armed || pending ? 'var(--tx)' : 'var(--bg-1)',
+    color: armed || pending ? '#fff' : 'var(--fg-3)',
+    boxShadow: armed || pending ? '0 0 10px rgba(255, 56, 56, 0.35)' : 'none',
+    cursor: pending ? 'progress' : disabled ? 'not-allowed' : 'pointer',
+    opacity: pending ? 0.7 : disabled ? 0.45 : 1,
+    padding: 0,
+    flex: '0 0 auto',
+  };
+}
+
 /** Six-dot drag-handle glyph — the universal "grab to reorder" cue. */
 function DragHandleIcon() {
   return (
@@ -388,6 +429,10 @@ function ChainChip({
       >
         ×
       </button>
+      {/* No uninstall (trash) here by design: a chain chip only offers "remove
+          from chain" (× = park). Permanently deleting a VST from Zeus lives in
+          the Available sidebar, so destructive delete isn't mixed in with the
+          live signal chain. */}
     </div>
   );
 }
@@ -400,8 +445,11 @@ interface PluginSidebarProps {
   collapsed: boolean;
   onToggle(): void;
   parked: RegisteredPluginPanel[];
+  armedUninstallId: string | null;
+  uninstallingPluginId: string | null;
   onAdd(pluginId: string): void;
   onRemove(pluginId: string): void;
+  onUninstall(pluginId: string): void;
   onParkedDragStart(pluginId: string): (e: React.DragEvent) => void;
   onParkedDragEnd(): void;
   onScanDirectory(): void;
@@ -427,8 +475,11 @@ function PluginSidebar({
   collapsed,
   onToggle,
   parked,
+  armedUninstallId,
+  uninstallingPluginId,
   onAdd,
   onRemove,
+  onUninstall,
   onParkedDragStart,
   onParkedDragEnd,
   onScanDirectory,
@@ -537,6 +588,38 @@ function PluginSidebar({
       >
         {panel.title || shortLabelFor(panel.pluginId, panel.title)}
       </span>
+      {/* Uninstall — VST-only, deletes the plugin from Zeus entirely (the
+          built-in native plugins ship with the Audio Suite and aren't
+          removed here). Distinct from the +/− add/park control beside it. */}
+      {panel.editorBacked === true && (
+        <button
+          type="button"
+          disabled={uninstallingPluginId !== null}
+          onClick={() => onUninstall(panel.pluginId)}
+          aria-label={
+            uninstallingPluginId === panel.pluginId
+              ? `Removing ${panel.title} from Zeus`
+              : armedUninstallId === panel.pluginId
+              ? `Confirm uninstall ${panel.title} from Zeus`
+              : `Uninstall ${panel.title} from Zeus`
+          }
+          title={
+            uninstallingPluginId === panel.pluginId
+              ? 'Removing this VST from Zeus...'
+              : armedUninstallId === panel.pluginId
+              ? 'Click again to delete this VST from Zeus'
+              : 'Uninstall — click once to confirm, again to delete'
+          }
+          style={vstUninstallButtonStyle(
+            armedUninstallId === panel.pluginId,
+            18,
+            uninstallingPluginId === panel.pluginId,
+            uninstallingPluginId !== null,
+          )}
+        >
+          <TrashIcon />
+        </button>
+      )}
       <button
         type="button"
         onClick={() => (inChain ? onRemove(panel.pluginId) : onAdd(panel.pluginId))}
@@ -754,6 +837,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   const applyProfile = useAudioSuiteStore((s) => s.applyProfile);
   const deleteProfile = useAudioSuiteStore((s) => s.deleteProfile);
   const scanVstDirectory = useAudioSuiteStore((s) => s.scanVstDirectory);
+  const uninstallPlugin = useAudioSuiteStore((s) => s.uninstallPlugin);
   const processingMode = useAudioSuiteStore((s) => s.processingMode);
   const loadChainOrderFromServer = useAudioSuiteStore(
     (s) => s.loadChainOrderFromServer,
@@ -984,6 +1068,26 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
 
   // --- Profiles ----------------------------------------------------
   const [selectedProfile, setSelectedProfile] = useState('');
+  const [profileDeletePending, setProfileDeletePending] = useState<string | null>(null);
+  const [profileSaveOpen, setProfileSaveOpen] = useState(false);
+  const [profileDialogError, setProfileDialogError] = useState<string | null>(null);
+  const [scanFolderOpen, setScanFolderOpen] = useState(false);
+  const [armedUninstallId, setArmedUninstallId] = useState<string | null>(null);
+  const [uninstallingPluginId, setUninstallingPluginId] = useState<string | null>(null);
+  const [vstNotice, setVstNotice] = useState<{
+    tone: 'ok' | 'warn' | 'error';
+    text: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!armedUninstallId) return;
+    const id = armedUninstallId;
+    const timer = window.setTimeout(() => {
+      setArmedUninstallId((current) => (current === id ? null : current));
+    }, 4000);
+    return () => window.clearTimeout(timer);
+  }, [armedUninstallId]);
+
   // Drop a stale selection if the profile was deleted elsewhere.
   useEffect(() => {
     if (selectedProfile && !profiles.some((p) => p.name === selectedProfile)) {
@@ -996,23 +1100,13 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     if (name) void applyProfile(name);
   };
   const onSaveProfile = () => {
-    const suggested = selectedProfile || '';
-    const name = window.prompt(
-      'Save current chain as profile (name):',
-      suggested,
-    );
-    if (name && name.trim()) {
-      const trimmed = name.trim();
-      setSelectedProfile(trimmed);
-      void saveProfile(trimmed);
-    }
+    setProfileDialogError(null);
+    setProfileSaveOpen(true);
   };
   const onDeleteProfile = () => {
     if (!selectedProfile) return;
-    if (window.confirm(`Delete profile "${selectedProfile}"?`)) {
-      void deleteProfile(selectedProfile);
-      setSelectedProfile('');
-    }
+    setProfileDialogError(null);
+    setProfileDeletePending(selectedProfile);
   };
 
   // --- VST directory scan ------------------------------------------
@@ -1054,7 +1148,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     setScanning(false);
 
     if (scanned.length === 0 && hardError) {
-      window.alert(`VST scan failed:\n${hardError}`);
+      setVstNotice({ tone: 'error', text: `VST scan failed:\n${hardError}` });
       return;
     }
     const lines: string[] = [];
@@ -1071,20 +1165,68 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     if (errors.length > 0) {
       lines.push('', ...errors.slice(0, 6).map((m) => `• ${m}`));
     }
-    window.alert(lines.join('\n'));
+    setVstNotice({
+      tone: errors.length > 0 ? 'warn' : 'ok',
+      text: lines.join('\n'),
+    });
   };
 
   // One-click sweep of the common VST3 locations.
   const onScanDefaultVstDirectory = () => void runScan(COMMON_VST3_DIRS);
   // Prompt for a specific folder, then scan just that one.
   const onScanVstDirectory = async () => {
-    const dir = window.prompt(
-      'Scan a folder for VST3 plugins — each .vst3 is registered into the rack:',
-      'C:\\VST PLUGINS',
-    );
-    if (!dir || !dir.trim()) return;
-    await runScan([dir.trim()]);
+    setScanFolderOpen(true);
   };
+
+  // Permanently remove a VST from Zeus (not just park it). The UI arms the
+  // trash button on first click and only calls this on the second click.
+  const handleUninstall = useCallback(
+    async (pluginId: string, title: string) => {
+      if (uninstallingPluginId) return;
+      setArmedUninstallId(null);
+      setUninstallingPluginId(pluginId);
+      setVstNotice({ tone: 'warn', text: `Removing ${title} from Zeus...` });
+      try {
+        const res = await uninstallPlugin(pluginId);
+        if (!res.ok) {
+          setVstNotice({
+            tone: 'error',
+            text: `Couldn't remove ${title}: ${res.error ?? 'unknown error'}`,
+          });
+          return;
+        }
+        if (res.deferred) {
+          setVstNotice({
+            tone: 'warn',
+            text:
+              res.message ??
+              `${title} left the chain. Restart Zeus to finish deleting its files.`,
+          });
+        } else {
+          setVstNotice({ tone: 'ok', text: `${title} was removed from Zeus.` });
+        }
+      } finally {
+        setUninstallingPluginId(null);
+      }
+    },
+    [uninstallingPluginId, uninstallPlugin],
+  );
+
+  const requestUninstall = useCallback(
+    (pluginId: string, title: string) => {
+      if (uninstallingPluginId) return;
+      if (armedUninstallId === pluginId) {
+        void handleUninstall(pluginId, title);
+        return;
+      }
+      setArmedUninstallId(pluginId);
+      setVstNotice({
+        tone: 'warn',
+        text: `Click the red trash again to remove ${title} from Zeus.`,
+      });
+    },
+    [armedUninstallId, handleUninstall, uninstallingPluginId],
+  );
 
   // --- Sidebar → rack drag (add a parked plugin) -------------------
   const [rackDropActive, setRackDropActive] = useState(false);
@@ -1345,6 +1487,33 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
         </button>
       </div>
 
+      {vstNotice && (
+        <div
+          role={vstNotice.tone === 'error' ? 'alert' : 'status'}
+          style={{
+            padding: '6px 12px',
+            background:
+              vstNotice.tone === 'error'
+                ? 'rgba(255, 56, 56, 0.14)'
+                : vstNotice.tone === 'warn'
+                  ? 'rgba(255, 177, 60, 0.12)'
+                  : 'rgba(78, 166, 255, 0.10)',
+            borderBottom: '1px solid var(--line)',
+            color:
+              vstNotice.tone === 'error'
+                ? 'var(--tx)'
+                : vstNotice.tone === 'warn'
+                  ? 'var(--power)'
+                  : 'var(--fg-1)',
+            fontSize: 11,
+            fontWeight: 600,
+            whiteSpace: 'pre-line',
+          }}
+        >
+          {vstNotice.text}
+        </div>
+      )}
+
       {/* Body — plugin browser sidebar + main rack column. */}
       <div
         style={{
@@ -1358,8 +1527,14 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           collapsed={sidebarCollapsed}
           onToggle={toggleSidebar}
           parked={parkedPanels}
+          armedUninstallId={armedUninstallId}
+          uninstallingPluginId={uninstallingPluginId}
           onAdd={(id) => void setChainMembership(id, true)}
           onRemove={(id) => void setChainMembership(id, false)}
+          onUninstall={(id) => {
+            const p = parkedPanels.find((pp) => pp.pluginId === id);
+            requestUninstall(id, p?.title ?? id);
+          }}
           onParkedDragStart={onParkedDragStart}
           onParkedDragEnd={onParkedDragEnd}
           onScanDirectory={() => void onScanVstDirectory()}
@@ -1484,6 +1659,76 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
         </div>
         </div>
       </div>
+      {profileDeletePending && (
+        <ConfirmDialog
+          title="Delete profile"
+          confirmLabel="Delete Profile"
+          onCancel={() => {
+            setProfileDialogError(null);
+            setProfileDeletePending(null);
+          }}
+          onConfirm={async () => {
+            const result = await deleteProfile(profileDeletePending);
+            if (!result.ok) {
+              setProfileDialogError(result.error ?? 'Profile delete failed.');
+              return;
+            }
+            setSelectedProfile('');
+            setProfileDialogError(null);
+            setProfileDeletePending(null);
+          }}
+        >
+          <p>Delete profile {profileDeletePending}?</p>
+          <p>This removes the saved Audio Suite chain snapshot.</p>
+          {profileDialogError && (
+            <p style={{ color: 'var(--tx)' }}>{profileDialogError}</p>
+          )}
+        </ConfirmDialog>
+      )}
+      {profileSaveOpen && (
+        <TextInputDialog
+          title="Save profile"
+          label="Profile name"
+          initialValue={selectedProfile}
+          placeholder="Ragchew"
+          confirmLabel="Save Profile"
+          onCancel={() => {
+            setProfileDialogError(null);
+            setProfileSaveOpen(false);
+          }}
+          onSubmit={async (name) => {
+            const result = await saveProfile(name);
+            if (!result.ok) {
+              setProfileDialogError(result.error ?? 'Profile save failed.');
+              return;
+            }
+            setSelectedProfile(name);
+            setProfileDialogError(null);
+            setProfileSaveOpen(false);
+          }}
+        >
+          <p>Save the current Audio Suite chain as a named profile.</p>
+          {profileDialogError && (
+            <p style={{ color: 'var(--tx)' }}>{profileDialogError}</p>
+          )}
+        </TextInputDialog>
+      )}
+      {scanFolderOpen && (
+        <TextInputDialog
+          title="Scan VST folder"
+          label="Folder path"
+          initialValue="C:\\VST PLUGINS"
+          placeholder="C:\\VST PLUGINS"
+          confirmLabel="Scan Folder"
+          onCancel={() => setScanFolderOpen(false)}
+          onSubmit={(dir) => {
+            setScanFolderOpen(false);
+            void runScan([dir]);
+          }}
+        >
+          <p>Register every VST3 plugin Zeus finds in this folder.</p>
+        </TextInputDialog>
+      )}
     </div>
   );
 }

@@ -98,10 +98,15 @@ public sealed class VstEngineController : IAsyncDisposable
     public string? ResolvedEnginePath { get; private set; }
 
     /// <summary>
-    /// Bounded per-block wait ceiling handed to the bridge (ms). Kept well under
-    /// the TX block period so a wedged plugin costs at most one passthrough block.
+    /// Bounded per-block wait ceiling handed to the bridge (ms). Kept under the
+    /// TX block period (960 frames @ 48 kHz ≈ 20 ms) so a wedged plugin costs at
+    /// most one passthrough block. 4 ms was too tight: the cross-process event
+    /// round-trip plus Windows timer granularity exceeded it on EVERY block, so
+    /// 100 % of blocks degraded to passthrough and the engine never processed.
+    /// 12 ms leaves ~8 ms of headroom under the 20 ms period while reliably
+    /// completing the round-trip.
     /// </summary>
-    public int WaitBudgetMs { get; set; } = 4;
+    public int WaitBudgetMs { get; set; } = 12;
 
     /// <summary>
     /// Launch the engine and bring the realtime tap online. Idempotent-ish:

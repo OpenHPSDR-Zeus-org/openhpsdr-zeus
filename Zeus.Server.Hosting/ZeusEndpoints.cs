@@ -371,7 +371,7 @@ public static class ZeusEndpoints
         // (Protocol1Client via ITxIqSource) stats. Useful for "is the mic reaching
         // TXA, and is the EP2 packer actually reading the ring" questions without
         // hunting through logs. Free to call, exposes no secrets.
-        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, AudioPluginBridge? pluginBridge) =>
+        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, AudioPluginBridge? pluginBridge, Zeus.Plugins.Host.Audio.VstEngineController? vstEngine) =>
         {
             return Results.Ok(new
             {
@@ -383,6 +383,11 @@ public static class ZeusEndpoints
                 {
                     masterBypassed = pluginBridge.IsMasterBypassed,
                     bypassedForRemoteTx = pluginBridge.IsBypassedForRemoteTxSource,
+                },
+                vstEngine = vstEngine is null ? null : new
+                {
+                    active = vstEngine.IsActive,
+                    degradedBlocks = vstEngine.DegradedBlocks,
                 },
             });
         });
