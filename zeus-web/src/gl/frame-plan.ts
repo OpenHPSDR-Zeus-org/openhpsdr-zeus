@@ -114,12 +114,20 @@ export function plannedDataCenterHz(): bigint | null {
   return lastCenterHz;
 }
 
-/** Test/reconnect hook — forget all tracker state so the next frame is a
- *  clean 'reset'. */
-export function _resetFramePlanForTest(): void {
+/** Forget all tracker state so the next observed frame is planned as a clean
+ *  'reset'. Used on reconnect AND on WebGL context restore (#629): after the
+ *  waterfall's GPU history textures are lost and the renderer is rebuilt, the
+ *  next frame must re-seed them — but under unchanged geometry the planner
+ *  would otherwise emit 'push'/'shift', never 'reset'. Resetting the shared
+ *  tracker forces the seeding 'reset'. The panadapter simply re-snaps its
+ *  surviving CPU-side anchor on the same frame (a single snap, no glide). */
+export function resetFramePlan(): void {
   plannedSeq = -1;
   plannedDecision = { kind: 'reset', reason: 'first' };
   lastCenterHz = null;
   lastHzPerPixel = 0;
   lastWidth = 0;
 }
+
+/** Test alias — kept so existing specs import the same behaviour. */
+export const _resetFramePlanForTest = resetFramePlan;
