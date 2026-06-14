@@ -40,8 +40,8 @@ describe('antenna-store parsing', () => {
       bands: [{ band: '20m', txAnt: 'Ant9', rxAnt: 'Ant2' }],
     });
     const s = await fetchAntennaSettings();
-    expect(s.bands[0].txAnt).toBe('Ant1');
-    expect(s.bands[0].rxAnt).toBe('Ant2');
+    expect(s.bands[0]?.txAnt).toBe('Ant1');
+    expect(s.bands[0]?.rxAnt).toBe('Ant2');
   });
 
   it('defaults gates false and bands [] on garbage', async () => {
