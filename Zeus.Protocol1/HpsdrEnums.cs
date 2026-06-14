@@ -57,6 +57,14 @@ public enum HpsdrSampleRate : byte
     Rate96k = 1,
     Rate192k = 2,
     Rate384k = 3,
+    // Protocol-2 only. The P1 config register encodes the rate in 2 bits
+    // (C1 bits [1:0]) and ControlFrame masks `(byte)Rate & 0x03`, so values
+    // above Rate384k are NOT representable on Protocol 1 — RadioService guards
+    // the P1 path so a P1 board never receives these. Protocol 2 carries the
+    // rate as a u16 kHz value (Protocol2Client.ComposeCmdRxBuffer), which holds
+    // 768/1536 fine. ANAN G2 (P2) supports the full 48..1536 kHz ladder.
+    Rate768k = 4,
+    Rate1536k = 5,
 }
 
 /// <summary>

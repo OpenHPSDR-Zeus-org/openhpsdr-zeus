@@ -545,6 +545,13 @@ public sealed class RadioService : IDisposable
         if (!TryParseEndpoint(endpoint, out var ipEndpoint))
             throw new ArgumentException($"Invalid endpoint '{endpoint}'.", nameof(endpoint));
 
+        // This is the Protocol 1 connect path (it constructs a Protocol1Client).
+        // P1's 2-bit rate field caps at 384 kHz; 768/1536 kHz are Protocol 2 only,
+        // so reject rather than silently wrap on the wire.
+        if (sampleRate > 384_000)
+            throw new ArgumentException(
+                $"Protocol 1 supports up to 384 kHz; {sampleRate} Hz requires Protocol 2.", nameof(sampleRate));
+
         var hpsdrRate = MapSampleRate(sampleRate);
 
         Protocol1Client? client;
@@ -1188,6 +1195,16 @@ public sealed class RadioService : IDisposable
 
     public StateDto SetSampleRate(HpsdrSampleRate rate)
     {
+        // Protocol 1 encodes the rate in 2 bits (ControlFrame masks &0x03), so it
+        // cannot represent 768/1536 kHz — clamp on the P1 path so a stray request
+        // can't silently wrap to 48/96 kHz. Protocol 2 (ActiveClient is null;
+        // rate carried as u16 kHz) takes the full 48..1536 kHz ladder.
+        if (_activeClient is not null && rate > HpsdrSampleRate.Rate384k)
+        {
+            _log.LogWarning(
+                "radio.setSampleRate rate={Rate} unsupported on Protocol 1; clamping to 384k", rate);
+            rate = HpsdrSampleRate.Rate384k;
+        }
         int hz = rate.SampleRateHz();
         Mutate(s => s with { SampleRate = hz });
         ActiveClient?.SetSampleRate(rate);
@@ -2410,6 +2427,8 @@ public sealed class RadioService : IDisposable
         96_000 => HpsdrSampleRate.Rate96k,
         192_000 => HpsdrSampleRate.Rate192k,
         384_000 => HpsdrSampleRate.Rate384k,
+        768_000 => HpsdrSampleRate.Rate768k,     // P2 only (ANAN G2)
+        1_536_000 => HpsdrSampleRate.Rate1536k,  // P2 only (ANAN G2)
         _ => throw new ArgumentException($"Unsupported sample rate {hz}.", nameof(hz)),
     };
 }
@@ -2422,6 +2441,8 @@ internal static class HpsdrSampleRateExtensions
         HpsdrSampleRate.Rate96k => 96_000,
         HpsdrSampleRate.Rate192k => 192_000,
         HpsdrSampleRate.Rate384k => 384_000,
+        HpsdrSampleRate.Rate768k => 768_000,
+        HpsdrSampleRate.Rate1536k => 1_536_000,
         _ => throw new ArgumentOutOfRangeException(nameof(rate), rate, null),
     };
 }

@@ -510,6 +510,8 @@ public static class ZeusEndpoints
                 96_000 => 96,
                 192_000 => 192,
                 384_000 => 384,
+                768_000 => 768,      // P2 only (ANAN G2)
+                1_536_000 => 1536,   // P2 only (ANAN G2)
                 _ => 192,
             };
 
@@ -1810,8 +1812,11 @@ public static class ZeusEndpoints
 
     static bool TryValidateSampleRate(int rate, out string error)
     {
-        if (rate is 48_000 or 96_000 or 192_000 or 384_000) { error = ""; return true; }
-        error = $"sampleRate must be one of {{48000, 96000, 192000, 384000}}, got {rate}.";
+        // 768/1536 kHz are Protocol-2 only; the P1 connect path
+        // (RadioService.ConnectAsync) rejects them, and SetSampleRate clamps the
+        // live P1 path, so it's safe to accept them here for the P2 flow.
+        if (rate is 48_000 or 96_000 or 192_000 or 384_000 or 768_000 or 1_536_000) { error = ""; return true; }
+        error = $"sampleRate must be one of {{48000, 96000, 192000, 384000, 768000, 1536000}}, got {rate}.";
         return false;
     }
 
@@ -1828,6 +1833,8 @@ public static class ZeusEndpoints
         96_000 => HpsdrSampleRate.Rate96k,
         192_000 => HpsdrSampleRate.Rate192k,
         384_000 => HpsdrSampleRate.Rate384k,
+        768_000 => HpsdrSampleRate.Rate768k,     // P2 only (RadioService clamps P1)
+        1_536_000 => HpsdrSampleRate.Rate1536k,  // P2 only
         _ => throw new ArgumentOutOfRangeException(nameof(hz), hz, "validate before calling"),
     };
 }

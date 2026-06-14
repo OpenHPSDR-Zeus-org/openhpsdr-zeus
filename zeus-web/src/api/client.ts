@@ -1706,7 +1706,10 @@ export function setFavoriteFilterSlots(
   );
 }
 
-export type SampleRate = 48_000 | 96_000 | 192_000 | 384_000;
+// 768/1536 kHz are Protocol-2 only (ANAN G2); Protocol 1 caps at 384 kHz.
+// ConnectPanel gates the higher rungs to P2, and the backend rejects them on
+// a P1 connect.
+export type SampleRate = 48_000 | 96_000 | 192_000 | 384_000 | 768_000 | 1_536_000;
 
 export function setSampleRate(
   rate: SampleRate,
