@@ -77,6 +77,40 @@ public static class ZeusHost
         var tciBindAddress = tciSection.GetValue<string?>("BindAddress") ?? "0.0.0.0";
         var tciPort = tciSection.GetValue<int?>("Port") ?? 40001;
 
+        // Prefs-DB integrity guard (#637). Probe the shared zeus-prefs.db ONCE
+        // before any store opens it (the bootstrap TciConfigStore below is the
+        // first). A corrupt file — typically an interrupted write after a power
+        // loss or network change — would otherwise throw out of a store
+        // constructor during DI build and the app would fail to launch (the
+        // window just flashes and closes, #635). EnsureUsable moves a genuinely
+        // corrupt file aside so the stores recreate a fresh one; a merely
+        // busy/locked file is left untouched.
+        var prefsPath = PrefsDbPath.Get();
+        if (!PrefsDbPath.EnsureUsable(prefsPath))
+        {
+            // Corrupt AND un-moveable (still locked — e.g. another instance has
+            // it). Don't let the natural store open throw silently out of Main
+            // under the desktop's detached console: record it to a persistent
+            // file and fall back to a throwaway prefs DB so the app still
+            // launches (degraded — settings won't persist this session).
+            var fatalLog = Path.Combine(
+                Path.GetDirectoryName(prefsPath) ?? ".", "zeus-prefs-fatal.log");
+            try
+            {
+                File.AppendAllText(fatalLog,
+                    $"{DateTime.UtcNow:o} prefs DB corrupt and locked at {prefsPath}; " +
+                    "close any other Zeus instance or delete the file. " +
+                    "Running on temporary settings for this session.\n");
+            }
+            catch { /* best effort — never block launch on the log write */ }
+
+            var tmpPrefs = Path.Combine(
+                Path.GetTempPath(), $"zeus-prefs-fallback-{Guid.NewGuid():N}.db");
+            Environment.SetEnvironmentVariable("ZEUS_PREFS_PATH", tmpPrefs);
+            Console.Error.WriteLine(
+                $"prefs.guard falling back to temporary prefs DB at {tmpPrefs}; settings will not persist this session.");
+        }
+
         // Persisted runtime override (LiteDB). The TCI management API queues changes
         // here because Kestrel's listener can only be wired before host build; we
         // pick those changes up on the next start. Falls back to appsettings when
