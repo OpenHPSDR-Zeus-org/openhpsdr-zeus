@@ -46,7 +46,9 @@ import { createContext, useContext, useEffect, type RefObject } from 'react';
 import { setVfo, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
-import { findPeakHz, useSignalEnhanceStore } from '../dsp/signal-estimator';
+import { computeSnapToLineHz, getSnapHistorySpectrum, useSignalEnhanceStore } from '../dsp/signal-estimator';
+import { armSnapLock } from './snap-lock';
+import { useNotchStore } from '../state/notch-store';
 import * as viewCenter from '../state/view-center';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 
@@ -56,6 +58,15 @@ const CLICK_SLOP_PX = 3;
 // and band presets bypass it. Ham-friendly default; becomes user-settable
 // once the UX exists.
 const PAN_STEP_HZ = 500;
+// Snap-to-signal reach: a click in snap mode grabs the nearest signal whose
+// mode-aware tuning edge sits within this many screen pixels of the cursor
+// (converted to Hz at the live scale). Past it, the click tunes normally — so
+// clicking empty spectrum still lands where you clicked.
+const SNAP_RADIUS_PX = 80;
+// Notch painting (NOTCH armed): a drag narrower than this is treated as a
+// click and drops a default-width notch on the carrier under the cursor.
+const NOTCH_MIN_DRAG_HZ = 50;
+const NOTCH_CLICK_WIDTH_HZ = 150;
 // Wheel tune step now follows the operator's TuningStepWidget choice
 // (toolbar-favorites-store.stepHz). Read at event time inside the wheel
 // handler so the latest value applies on every notch. Arrow-key tuning
@@ -125,6 +136,11 @@ export function usePanTuneGesture(
       raf: number;
     };
     let drag: Drag | null = null;
+    // Notch painting: while NOTCH is armed, a pointer drag defines a notch
+    // band (start..current frequency) instead of tuning. startHz is captured
+    // at pointerdown; the live preview is published to the notch store for
+    // NotchOverlay to render.
+    let notchDrag: { startHz: number } | null = null;
     // alt-held pointer drag — delegates to the background map via the
     // SpectrumWheelActionsContext so it feels like M-hold drag without
     // swapping pointer-events on the spectrum stack.
@@ -285,6 +301,17 @@ export function usePanTuneGesture(
       }
       const view = readView();
       if (!view) return;
+      // NOTCH armed: paint a notch band instead of tuning. Capture the start
+      // frequency; move/up build the band.
+      if (useNotchStore.getState().armed) {
+        e.preventDefault();
+        try { canvas.setPointerCapture(e.pointerId); } catch { /* ok */ }
+        const rect = canvas.getBoundingClientRect();
+        const frac = rect.width > 0 ? (e.clientX - rect.left) / rect.width : 0.5;
+        notchDrag = { startHz: view.centerHz + (frac - 0.5) * view.spanHz };
+        canvas.style.cursor = 'crosshair';
+        return;
+      }
       e.preventDefault();
       try {
         canvas.setPointerCapture(e.pointerId);
@@ -297,7 +324,7 @@ export function usePanTuneGesture(
         spanHz: view.spanHz,
         moved: false,
       };
-      canvas.style.cursor = 'grabbing';
+      canvas.style.cursor = 'crosshair';
     };
 
     const onPointerMove = (e: PointerEvent) => {
@@ -305,6 +332,18 @@ export function usePanTuneGesture(
       if (p) {
         p.x = e.clientX;
         p.y = e.clientY;
+      }
+      if (notchDrag) {
+        const rect = canvas.getBoundingClientRect();
+        const view = readView();
+        if (!view || rect.width <= 0) return;
+        const frac = (e.clientX - rect.left) / rect.width;
+        const curHz = view.centerHz + (frac - 0.5) * view.spanHz;
+        useNotchStore.getState().setPending({
+          centerHz: (notchDrag.startHz + curHz) / 2,
+          widthHz: Math.abs(curHz - notchDrag.startHz),
+        });
+        return;
       }
       if (pinch) {
         const d = pinchDistance();
@@ -382,6 +421,31 @@ export function usePanTuneGesture(
 
     const onPointerUp = (e: PointerEvent) => {
       pointers.delete(e.pointerId);
+      if (notchDrag) {
+        const start = notchDrag;
+        notchDrag = null;
+        canvas.style.cursor = 'crosshair';
+        if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+        const ns = useNotchStore.getState();
+        ns.setPending(null);
+        // pointercancel discards the in-progress notch; a real release commits.
+        if (e.type !== 'pointercancel') {
+          const rect = canvas.getBoundingClientRect();
+          const view = readView();
+          if (view && rect.width > 0) {
+            const frac = (e.clientX - rect.left) / rect.width;
+            const curHz = view.centerHz + (frac - 0.5) * view.spanHz;
+            const widthHz = Math.abs(curHz - start.startHz);
+            if (widthHz >= NOTCH_MIN_DRAG_HZ) {
+              ns.addNotch((start.startHz + curHz) / 2, widthHz);
+            } else {
+              // Tiny drag / click → drop a default-width notch on the carrier.
+              ns.addNotch(start.startHz, NOTCH_CLICK_WIDTH_HZ);
+            }
+          }
+        }
+        return;
+      }
       if (pinch) {
         if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
         if (pointers.size < 2) {
@@ -391,20 +455,20 @@ export function usePanTuneGesture(
           // than an enforced clean break.
           cancelPinchRaf();
           pinch = null;
-          canvas.style.cursor = 'grab';
+          canvas.style.cursor = 'crosshair';
         }
         return;
       }
       if (mapDrag) {
         mapDrag = null;
-        canvas.style.cursor = 'grab';
+        canvas.style.cursor = 'crosshair';
         if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
         return;
       }
       const d = drag;
       if (!d) return;
       drag = null;
-      canvas.style.cursor = 'grab';
+      canvas.style.cursor = 'crosshair';
       if (canvas.hasPointerCapture(e.pointerId)) {
         canvas.releasePointerCapture(e.pointerId);
       }
@@ -427,15 +491,55 @@ export function usePanTuneGesture(
         if (!view) return;
         const frac = (e.clientX - rect.left) / rect.width;
         const clickHz = view.centerHz + (frac - 0.5) * view.spanHz;
-        // Snap-to-signal: if enabled and a carrier sits near the click, tune
-        // exactly onto its peak (bypassing the 500 Hz grid). Falls through to
-        // the normal snapped tune when the click is over bare noise.
-        if (useSignalEnhanceStore.getState().snapEnabled) {
+        // Snap-to-signal: when enabled, a click FAVOURS THE LINE UNDER THE
+        // CURSOR — it scans the visible spectrum near the click and tunes to
+        // whichever signal has its mode-aware edge closest to where you clicked
+        // (USB low edge, LSB high edge, CW zero-beat, AM centroid). So the click
+        // locks onto the nearest signal, edge-aligned for the mode, while still
+        // honouring where you clicked. If the live frame has nothing near the
+        // click, fall back to the waterfall memory (recently-seen, now-faded
+        // signals); only if THAT is empty too does the click tune normally.
+        const enhance = useSignalEnhanceStore.getState();
+        if (enhance.snapEnabled) {
           const ds = useDisplayStore.getState();
-          if (ds.panDb && ds.hzPerPixel > 0) {
-            const peakHz = findPeakHz(ds.panDb, Number(ds.centerHz), ds.hzPerPixel, clickHz);
-            if (peakHz != null) {
-              commitFinal(peakHz, true);
+          if (ds.panDb && ds.hzPerPixel > 0 && rect.width > 0) {
+            // Zoom-consistent grab distance with an operator/profile cap: the
+            // pixel reach keeps snap feel stable while Snap Radius stops a
+            // zoomed-out click from grabbing across too much spectrum.
+            const maxRadiusHz = Math.min(ds.hzPerPixel * SNAP_RADIUS_PX, enhance.snapRadiusHz);
+            const mode = useConnectionStore.getState().mode;
+            const centerHz = Number(ds.centerHz);
+            let tuneHz = computeSnapToLineHz(
+              ds.panDb,
+              centerHz,
+              ds.hzPerPixel,
+              mode,
+              clickHz,
+              maxRadiusHz,
+            );
+            // Only a LIVE signal can be tracked frame-to-frame; a waterfall-memory
+            // hit is by definition not on screen right now, so it tunes once but
+            // does not arm the self-correcting lock.
+            const fromLive = tuneHz != null;
+            if (tuneHz == null) {
+              // Nothing live near the click — consult the waterfall memory.
+              const history = getSnapHistorySpectrum();
+              if (history) {
+                tuneHz = computeSnapToLineHz(history, centerHz, ds.hzPerPixel, mode, clickHz, maxRadiusHz);
+              }
+            }
+            if (tuneHz != null) {
+              // Quantise to the operator's configured tuning step. The raw
+              // signal edge/peak shifts by tens of Hz frame-to-frame as the
+              // noise floor breathes; landing on the nearest step gives a
+              // stable, clean dial instead of a jittery sub-Hz frequency.
+              const step = useToolbarFavoritesStore.getState().stepHz;
+              const stepped = step > 0 ? Math.round(tuneHz / step) * step : tuneHz;
+              commitFinal(stepped, true);
+              // Engage the self-correcting lock so the dial follows this signal as
+              // it drifts. clickHz sits inside the signal body — the tracker's
+              // anchor. Disengages itself on manual tune / mode change / signal loss.
+              if (fromLive) armSnapLock({ dialHz: stepped, anchorBodyHz: clickHz, mode });
               return;
             }
           }
@@ -482,7 +586,7 @@ export function usePanTuneGesture(
       nudgeVfo(dir * useToolbarFavoritesStore.getState().stepHz);
     };
 
-    canvas.style.cursor = 'grab';
+    canvas.style.cursor = 'crosshair';
     canvas.addEventListener('pointerdown', onPointerDown);
     canvas.addEventListener('pointermove', onPointerMove);
     canvas.addEventListener('pointerup', onPointerUp);
