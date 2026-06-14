@@ -58,6 +58,9 @@ const SNAP_LOCK_RELEASE_MISS_FRAMES = 25;
 // A vfo change larger than this that the tracker didn't command = the operator
 // (or another control) tuned → release. Above a fine-tune step, below a band hop.
 const SNAP_LOCK_MANUAL_EPS_HZ = 60;
+// Smoothing for the tracked signal level fed to measureSnapLock's identity gate.
+// Slow enough to ride out QSB without chasing a single-frame neighbour spike.
+const SNAP_LOCK_LEVEL_EMA = 0.25;
 
 export type SnapLockState = {
   dialHz: number;
@@ -136,6 +139,7 @@ let dialHz = 0;
 let bodyHz = 0;
 let originDialHz = 0;
 let originBodyHz = 0;
+let anchorLevelDb: number | undefined;
 let missFrames = 0;
 let commandedHz = 0;
 let lastCommitMs = 0;
@@ -175,6 +179,7 @@ export function armSnapLock(p: { dialHz: number; anchorBodyHz: number; mode: Ret
   originDialHz = p.dialHz;
   bodyHz = p.anchorBodyHz;
   originBodyHz = p.anchorBodyHz;
+  anchorLevelDb = undefined; // seeded from the first good measurement
   lockMode = p.mode;
   missFrames = 0;
   commandedHz = p.dialHz;
@@ -229,7 +234,17 @@ function onFrame(s: DisplayState): void {
     lockMode,
     bodyHz,
     SNAP_LOCK_CAPTURE_HZ,
+    anchorLevelDb,
   );
+  if (measure) {
+    // Track the locked signal's level so the identity gate can tell it apart
+    // from a louder neighbour drifting into the window. Seed on first sight,
+    // then ride QSB slowly.
+    anchorLevelDb =
+      anchorLevelDb === undefined
+        ? measure.levelDb
+        : anchorLevelDb + SNAP_LOCK_LEVEL_EMA * (measure.levelDb - anchorLevelDb);
+  }
   const res = snapLockStep({ dialHz, bodyHz, originDialHz, originBodyHz, missFrames }, measure);
   missFrames = res.missFrames;
   bodyHz = res.bodyHz;
@@ -255,4 +270,5 @@ function onVfoMaybeManual(s: { vfoHz: number }, prev: { vfoHz: number }): void {
 export function _resetSnapLockForTest(): void {
   releaseSnapLock();
   dialHz = bodyHz = originDialHz = originBodyHz = missFrames = commandedHz = lastCommitMs = 0;
+  anchorLevelDb = undefined;
 }

@@ -130,6 +130,17 @@ const SNAP_MAX_SIGNAL_HZ = 8000;
 // visible on the waterfall before dropping back below the snap threshold.
 const SNAP_HISTORY_GATE_DB = 8;
 const SNAP_HISTORY_DROP_DB = 0.4;
+// Self-correcting-lock identity gate (close-neighbour safety). When the tracker
+// supplies the level it has been following, a candidate peak inside the capture
+// window is rejected as a FOREIGN signal — not our locked one — when it is both
+// much louder than what we've been tracking AND displaced from the anchor. This
+// closes the one hole the capture window can't: a loud neighbour spaced closer
+// than the window, which would otherwise be grabbed the instant our weak signal
+// dips into the noise. The displacement clause keeps a signal that merely
+// BRIGHTENS in place (QSB lift, operator pulling it in) from being rejected —
+// only a louder peak that has ALSO moved looks like a different carrier.
+const SNAP_LOCK_IDENTITY_REJECT_DB = 12;
+const SNAP_LOCK_IDENTITY_MIN_DISP_HZ = 80;
 
 // ── Peak detection (CFAR-style markers) ─────────────────────────────────────
 // A bin is a marked peak when it is a local maximum at least this many dB above
@@ -1335,6 +1346,9 @@ export type SnapLockMeasure = {
   dialHz: number;
   /** Energy-centroid of the locked signal — the anchor to track frame to frame. */
   bodyHz: number;
+  /** Crest level (dB) of the chosen signal — fed back as the next frame's
+   *  `anchorLevelDb` so the identity gate can reject a louder foreign neighbour. */
+  levelDb: number;
 };
 
 /** Re-measure a LOCKED signal for the self-correcting snap tracker. Searches a
@@ -1357,6 +1371,7 @@ export function measureSnapLock(
   mode: RxMode,
   anchorBodyHz: number,
   captureHz: number,
+  anchorLevelDb?: number,
 ): SnapLockMeasure | null {
   const n = spec.length;
   if (n < 3 || hzPerPixel <= 0) return null;
@@ -1369,14 +1384,26 @@ export function measureSnapLock(
   const capBins = Math.max(1, Math.round(captureHz / hzPerPixel));
   const lo = Math.max(1, anchorBin - capBins);
   const hi = Math.min(n - 2, anchorBin + capBins);
+  const dispBins = Math.max(1, Math.round(SNAP_LOCK_IDENTITY_MIN_DISP_HZ / hzPerPixel));
 
   // The peak NEAREST the anchor that clears the floor — continuity keeps us on
   // OUR signal frame to frame instead of hopping to a louder bin in the window.
+  // The identity gate rejects a candidate that is both much louder than the
+  // level we've been tracking AND displaced from the anchor: that is a foreign
+  // neighbour, not our (possibly faded) signal. Without a tracked level the gate
+  // is inert, so first-frame and unlocked callers behave exactly as before.
   let bestBin = -1;
   let bestDist = Infinity;
   for (let i = lo; i <= hi; i++) {
     if (spec[i]! < flAt(i) + coherentThreshold(st.snapMinSnrDb, i, n)) continue;
     if (spec[i]! >= spec[i - 1]! && spec[i]! >= spec[i + 1]!) {
+      if (
+        anchorLevelDb !== undefined &&
+        spec[i]! - anchorLevelDb > SNAP_LOCK_IDENTITY_REJECT_DB &&
+        Math.abs(i - anchorBin) >= dispBins
+      ) {
+        continue; // displaced + much louder ⇒ a different carrier, not our lock.
+      }
       const d = Math.abs(i - anchorBin);
       if (d < bestDist) {
         bestDist = d;
@@ -1392,5 +1419,6 @@ export function measureSnapLock(
   return {
     dialHz: modeTuneHz(spec, loEdge, hiEdge, mode, binToHz),
     bodyHz: binToHz(centroidBin(spec, loEdge, hiEdge)),
+    levelDb: spec[bestBin]!,
   };
 }

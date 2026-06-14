@@ -664,6 +664,48 @@ describe('signal estimator — measureSnapLock (self-correcting lock, neighbour-
     expect(m).not.toBeNull();
     expect(m.dialHz).toBe(binHz(123)); // followed the drift to the new low edge
   });
+
+  // The close-neighbour hole the capture window alone can't close: a loud signal
+  // spaced INSIDE the window once our weak lock dips into the noise. The identity
+  // gate (tracked level) is what rejects it.
+  function loudNeighbourInWindow(): Float32Array {
+    const spec = new Float32Array(WIDTH).fill(NOISE_DB);
+    // Our weak signal is gone; a strong carrier crests at bin 127 — 2 bins from
+    // the anchor at 125, well inside the ±3-bin window.
+    for (let i = 124; i <= 130; i++) spec[i] = -55 - Math.abs(i - 127) * 2;
+    return spec;
+  }
+
+  it('without a tracked level, grabs the close loud neighbour (the hole)', () => {
+    useSignalEnhanceStore.setState({ snapEnabled: true });
+    const spec = loudNeighbourInWindow();
+    for (let k = 0; k < 5; k++) pushFrame(spec);
+    // No anchorLevelDb supplied ⇒ gate inert ⇒ nearest-peak grabs the neighbour.
+    const m = measureSnapLock(spec, CENTER, HZ_PER_PX, 'USB', binHz(125), CAPTURE_HZ);
+    expect(m).not.toBeNull();
+    expect(Math.abs(m!.bodyHz - binHz(127))).toBeLessThan(2 * HZ_PER_PX);
+  });
+
+  it('identity gate HOLDS when a displaced louder neighbour invades the window', () => {
+    useSignalEnhanceStore.setState({ snapEnabled: true });
+    const spec = loudNeighbourInWindow();
+    for (let k = 0; k < 5; k++) pushFrame(spec);
+    // We have been tracking a weak (~-92 dB) signal; the in-window candidate is
+    // ~+37 dB louder AND displaced ⇒ a foreign carrier ⇒ hold, don't jump.
+    expect(measureSnapLock(spec, CENTER, HZ_PER_PX, 'USB', binHz(125), CAPTURE_HZ, -92)).toBeNull();
+  });
+
+  it('identity gate KEEPS a signal that merely brightens in place (QSB lift)', () => {
+    useSignalEnhanceStore.setState({ snapEnabled: true });
+    // Our signal at the anchor (crest 125) jumps from ~-92 to -70 dB but does NOT
+    // move — that is our lock getting louder, not a neighbour, so it is kept.
+    const spec = new Float32Array(WIDTH).fill(NOISE_DB);
+    for (let i = 121; i <= 129; i++) spec[i] = -70 - Math.abs(i - 125) * 2;
+    for (let k = 0; k < 5; k++) pushFrame(spec);
+    const m = measureSnapLock(spec, CENTER, HZ_PER_PX, 'USB', binHz(125), CAPTURE_HZ, -92);
+    expect(m).not.toBeNull();
+    expect(Math.abs(m!.bodyHz - binHz(125))).toBeLessThan(2 * HZ_PER_PX);
+  });
 });
 
 describe('measureOccupiedBandwidth', () => {
