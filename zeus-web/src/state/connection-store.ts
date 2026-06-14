@@ -93,6 +93,11 @@ export type ConnectionState = {
   // PS-toggle disabled branch.
   connectedProtocol: 'P1' | 'P2' | null;
   preampOn: boolean;
+  // CTUN (click-tune / centred tuning). When true, a panadapter click tunes
+  // the dial off-centre with the hardware NCO frozen; the pan-tune gesture
+  // reads this to skip the view-centre nudge so the dial marker roams instead
+  // of recentring. Server-authoritative; toggled via the CTUN transport button.
+  ctunEnabled: boolean;
   nr: NrConfigDto;
   zoomLevel: ZoomLevel;
   inflight: boolean;
@@ -147,6 +152,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   boardId: null,
   connectedProtocol: null,
   preampOn: false,
+  ctunEnabled: false,
   nr: { ...NR_CONFIG_DEFAULT },
   zoomLevel: 1,
   inflight: false,
@@ -179,6 +185,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       autoAttEnabled: s.autoAttEnabled,
       attOffsetDb: s.attOffsetDb,
       adcOverloadWarning: s.adcOverloadWarning,
+      ctunEnabled: s.ctunEnabled,
       nr: s.nr,
       zoomLevel: s.zoomLevel,
     })),

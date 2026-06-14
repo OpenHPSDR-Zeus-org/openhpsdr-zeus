@@ -57,6 +57,7 @@ import { FilterPanel } from './components/filter/FilterPanel';
 import { LeftLayoutBar } from './components/LeftLayoutBar';
 import { MicMeter } from './components/MicMeter';
 import { ModeFavorites } from './components/toolbar/ModeFavorites';
+import { CtunButton } from './components/CtunButton';
 import { MoxButton } from './components/MoxButton';
 import { PreampButton } from './components/PreampButton';
 import { PsToggleButton } from './components/PsToggleButton';
@@ -768,6 +769,7 @@ export default function App() {
         <AudioToggle />
         <MicMeter />
         <div className="transport-sep hide-mobile" />
+        <CtunButton />
         <button type="button" className="btn ghost hide-mobile">SPLIT</button>
         <button type="button" className="btn ghost hide-mobile">RIT</button>
         <button type="button" className="btn ghost hide-mobile">SAVE MEM</button>

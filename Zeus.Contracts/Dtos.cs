@@ -311,7 +311,18 @@ public sealed record StateDto(
     // (Thetis: Setup → DSP → Keyer → CW Pitch). On the wire now so
     // the frontend already consumes the live value — when the setting
     // lands, only the server-side source changes.
-    int CwPitchHz = CwDefaults.PitchHz);
+    int CwPitchHz = CwDefaults.PitchHz,
+
+    // CTUN (click-tune / centred-tuning) toggle. When true, SetVfo moves only
+    // the dial (VfoHz) and leaves the hardware NCO (RadioLoHz) frozen, so the
+    // operator can click-tune anywhere on the panadapter without recentring
+    // the display; WDSP's shift stage relocates the tuned signal for RX, and
+    // the radio retunes the shared P1/P2 VFO register to the dial on key-down
+    // for TX (RadioService.SetMox → AlignLoForTx) then restores the frozen
+    // centre on un-key. When false, every tune recentres the NCO on the dial
+    // (classic "radio follows the dial"). Persisted in zeus-prefs.db. Mirrors
+    // Thetis ClickTuneDisplay (console.cs:43143).
+    bool CtunEnabled = false);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both
@@ -348,6 +359,11 @@ public sealed record VfoSetRequest(long Hz);
 /// gesture when a drag would otherwise carry the viewport outside the IQ
 /// capture window. Out-of-range values are rejected with 400.</summary>
 public sealed record RadioLoSetRequest(long Hz);
+
+/// <summary>Enable or disable CTUN (click-tune / centred tuning). When
+/// enabled, panadapter clicks move only the dial and leave the hardware NCO
+/// frozen so the operator can tune off-centre; see <see cref="StateDto.CtunEnabled"/>.</summary>
+public sealed record CtunSetRequest(bool Enabled);
 
 public sealed record ModeSetRequest(RxMode Mode);
 

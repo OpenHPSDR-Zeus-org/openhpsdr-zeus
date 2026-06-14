@@ -492,6 +492,16 @@ public static class ZeusEndpoints
             return Results.Ok(r.SetRadioLo(req.Hz));
         });
 
+        // Toggle CTUN (click-tune / centred tuning). When enabled, panadapter
+        // clicks move only the dial and leave the hardware NCO frozen so the
+        // operator can tune off-centre; TX retunes to the dial on key-down.
+        // See docs/prd/panfall_behavior.md and StateDto.CtunEnabled.
+        app.MapPost("/api/radio/ctun", (CtunSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.radio.ctun enabled={Enabled}", req.Enabled);
+            return r.SetCtunEnabled(req.Enabled);
+        });
+
         app.MapPost("/api/mode", (ModeSetRequest req, RadioService r) =>
         {
             log.LogInformation("api.mode mode={Mode}", req.Mode);

@@ -243,6 +243,12 @@ export type RadioStateDto = {
   // CW sidetone pitch in Hz. Today a baked-in constant (600); exposed so
   // the frontend doesn't duplicate it. Will become configurable later.
   cwPitchHz: number;
+  // CTUN (click-tune / centred tuning). When true, a panadapter click tunes
+  // the dial off-centre and leaves radioLoHz frozen (the gesture skips the
+  // view-centre nudge so the dial marker roams); when false, a click recentres
+  // the display on the tuned frequency. Toggled via setCtun → POST
+  // /api/radio/ctun. See docs/prd/panfall_behavior.md.
+  ctunEnabled: boolean;
 };
 
 // CFC mirrors Zeus.Contracts.CfcConfig. Bands array is fixed at 10 entries
@@ -518,6 +524,8 @@ export function normalizeState(raw: unknown): RadioStateDto {
         ? r.vfoHz
         : 0,
     cwPitchHz: typeof r.cwPitchHz === 'number' ? r.cwPitchHz : 600,
+    // Legacy server without the field → CTUN off (classic recenter-on-click).
+    ctunEnabled: typeof r.ctunEnabled === 'boolean' ? r.ctunEnabled : false,
   };
 }
 
@@ -699,6 +707,26 @@ export function setRadioLo(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ hz }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// Toggle CTUN (click-tune / centred tuning). Server returns the full updated
+// StateDto; on enable the hardware NCO is frozen at its current centre, on
+// disable it snaps back to the dial. See use-pan-tune-gesture.ts for how the
+// gesture changes when ctunEnabled flips.
+export function setCtun(
+  enabled: boolean,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/radio/ctun',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled }),
       signal,
     },
     normalizeState,
