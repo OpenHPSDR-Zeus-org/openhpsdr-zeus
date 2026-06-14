@@ -40,6 +40,22 @@ public sealed class AudioProcessingModeService : IHostedService
     private readonly SemaphoreSlim _gate = new(1, 1);
     private AudioProcessingMode _mode = AudioProcessingMode.Native;
 
+    // Out-of-process editor routing (host-consolidation step 1/2). When the
+    // engine is active, the Audio Suite editor endpoints route here instead of
+    // the in-process zeus-vst-bridge, so the editor is hosted crash-isolated in
+    // the engine process — the SAME instance that is processing audio. The map
+    // is rebuilt every time the chain is pushed to the engine (load_chain order
+    // == engine slot index). Open state is tracked optimistically on this side
+    // (Zeus-driven open/close); the engine owns the actual windows.
+    private readonly object _editorLock = new();
+    private Dictionary<string, int> _idToEngineSlot = new(StringComparer.Ordinal);
+    // Normalised VST3 file path -> Zeus plugin id, from the last chain push.
+    // The engine compacts slots when a plugin fails to load, so the authoritative
+    // id->slot map is rebuilt from each `chain` event by matching on file path
+    // (load-order is only a provisional default until that event arrives).
+    private Dictionary<string, string> _fileToId = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _openEditors = new(StringComparer.Ordinal);
+
     public AudioProcessingModeService(
         AudioProcessingModeStore store,
         VstEngineController engine,
@@ -53,6 +69,52 @@ public sealed class AudioProcessingModeService : IHostedService
         _chainOrder = chainOrder;
         _log = log;
         _engine.StdErr += line => _log.LogDebug("vst-engine: {Line}", line);
+        _engine.EngineEvent += OnEngineEvent;
+    }
+
+    /// <summary>
+    /// Engine control-plane events (control thread). We watch <c>chain</c> to keep
+    /// the id-&gt;slot map aligned with the engine's ACTUAL slot indices — the
+    /// engine compacts slots past any plugin that failed to load, so load-order
+    /// position alone is unreliable. Matches each engine slot's <c>file</c> back
+    /// to a Zeus plugin id via <see cref="_fileToId"/>.
+    /// </summary>
+    private void OnEngineEvent(System.Text.Json.JsonElement e)
+    {
+        try
+        {
+            if (!e.TryGetProperty("event", out var evt)
+                || evt.ValueKind != System.Text.Json.JsonValueKind.String) return;
+            if (evt.GetString() != "chain") return;
+            if (!e.TryGetProperty("plugins", out var plugins)
+                || plugins.ValueKind != System.Text.Json.JsonValueKind.Array) return;
+
+            Dictionary<string, string> fileToId;
+            lock (_editorLock) fileToId = _fileToId;
+
+            var map = new Dictionary<string, int>(StringComparer.Ordinal);
+            int i = 0;
+            foreach (var pl in plugins.EnumerateArray())
+            {
+                if (pl.TryGetProperty("file", out var f)
+                    && f.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var key = NormalizePath(f.GetString());
+                    if (key is not null && fileToId.TryGetValue(key, out var id))
+                        map[id] = i;
+                }
+                i++;
+            }
+            lock (_editorLock) _idToEngineSlot = map;
+        }
+        catch { /* event parsing is best-effort; stale map self-heals next event */ }
+    }
+
+    private static string? NormalizePath(string? p)
+    {
+        if (string.IsNullOrEmpty(p)) return null;
+        try { return Path.GetFullPath(p).TrimEnd('\\', '/'); }
+        catch { return p; }
     }
 
     /// <summary>Current processing mode.</summary>
@@ -63,6 +125,50 @@ public sealed class AudioProcessingModeService : IHostedService
 
     /// <summary>Resolve the engine exe without launching it; null = not installed.</summary>
     public static string? FindEngineExe() => VstEngineController.FindEngineExe();
+
+    /// <summary>
+    /// Open the out-of-process engine's native editor window for the chain
+    /// plugin with the given id. Only meaningful while <see cref="EngineActive"/>
+    /// — the endpoint routes here in that case and to the in-process bridge
+    /// otherwise. The window is owned by the engine process (crash-isolated).
+    /// </summary>
+    public EditorActionResult OpenEditor(string pluginId)
+    {
+        int slot;
+        lock (_editorLock)
+        {
+            if (!_idToEngineSlot.TryGetValue(pluginId, out slot))
+                return EditorActionResult.NotFound;
+        }
+        if (!_engine.IsActive) return EditorActionResult.NotLoaded;
+        _engine.SendCommand(new { cmd = "open_editor", index = slot });
+        lock (_editorLock) _openEditors.Add(pluginId);
+        return EditorActionResult.Ok;
+    }
+
+    /// <summary>Close the engine's editor window for the given chain plugin id.</summary>
+    public EditorActionResult CloseEditor(string pluginId)
+    {
+        int slot;
+        lock (_editorLock)
+        {
+            if (!_idToEngineSlot.TryGetValue(pluginId, out slot))
+                return EditorActionResult.NotFound;
+        }
+        _engine.SendCommand(new { cmd = "close_editor", index = slot });
+        lock (_editorLock) _openEditors.Remove(pluginId);
+        return EditorActionResult.Ok;
+    }
+
+    /// <summary>
+    /// Whether the engine editor for the given id is believed open. Tracked
+    /// optimistically from Zeus-driven open/close; if the operator closes the
+    /// native window directly, this can read stale-open until the next toggle.
+    /// </summary>
+    public bool IsEditorOpen(string pluginId)
+    {
+        lock (_editorLock) return _openEditors.Contains(pluginId);
+    }
 
     public Task StartAsync(CancellationToken ct)
     {
@@ -154,13 +260,16 @@ public sealed class AudioProcessingModeService : IHostedService
     /// <summary>
     /// Mirror the operator's active Audio Suite VST3 plugins into the external
     /// engine, in chain order, so VST mode actually processes their audio rather
-    /// than just passing it through an empty host. Best-effort: a load failure is
-    /// logged and the rest still load; the realtime path stays robust regardless.
+    /// than passing it through an empty host. Uses a single <c>load_chain</c> so
+    /// the engine adds the plugins in <em>slot order</em> (each slot's index is
+    /// its position in this list) — that determinism is what lets us map a
+    /// plugin id to its engine slot for editor open/close. Best-effort: a load
+    /// failure is logged engine-side and the realtime path stays robust.
     ///
     /// <para>v1 limitation: plugins load at their DEFAULT settings — per-knob
-    /// state from the native chain is not transferred, and there is not yet a
-    /// Zeus UI to open the external plugin's editor. Param/editor parity in VST
-    /// mode is the next step (operator-facing → maintainer review).</para>
+    /// state from the native chain is not transferred yet (the engine's
+    /// <c>load_chain</c> accepts a per-slot <c>state</c>/<c>parameters</c> blob;
+    /// wiring Zeus's saved state into it is the next step).</para>
     /// </summary>
     private void LoadChainIntoEngine()
     {
@@ -169,7 +278,9 @@ public sealed class AudioProcessingModeService : IHostedService
             var byId = new Dictionary<string, ActivatedPlugin>(StringComparer.Ordinal);
             foreach (var p in _manager.Active) byId[p.Loaded.Manifest.Id] = p;
 
-            int requested = 0;
+            var slots = new List<object>();
+            var map = new Dictionary<string, int>(StringComparer.Ordinal);
+            var fileToId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             foreach (var id in _chainOrder.CurrentOrder) // ordered, parked excluded
             {
                 if (!byId.TryGetValue(id, out var p)) continue;
@@ -179,12 +290,23 @@ public sealed class AudioProcessingModeService : IHostedService
                 var abs = Path.IsPathRooted(vst3)
                     ? vst3
                     : Path.Combine(p.Loaded.PluginDir, vst3);
-                _engine.SendCommand(new { cmd = "add_plugin", file = abs, uid = "" });
-                requested++;
+                map[id] = slots.Count; // provisional: engine slot == load_chain position
+                var key = NormalizePath(abs);
+                if (key is not null) fileToId[key] = id;
+                slots.Add(new { file = abs });
             }
+
+            lock (_editorLock)
+            {
+                _idToEngineSlot = map;
+                _fileToId = fileToId;
+                _openEditors.Clear(); // the engine closes all editors on load_chain
+            }
+
+            _engine.SendCommand(new { cmd = "load_chain", chain = slots });
             _log.LogInformation(
-                "VST mode: requested load of {Count} VST3 plugin(s) into the engine (default settings).",
-                requested);
+                "VST mode: loaded {Count} VST3 plugin(s) into the engine via load_chain.",
+                slots.Count);
         }
         catch (Exception ex)
         {

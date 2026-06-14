@@ -296,14 +296,22 @@ public static class ZeusEndpoints
             _                            => Results.StatusCode(500),
         };
 
-        app.MapGet("/api/audio-suite/plugins/{id}/editor", (string id, AudioPluginBridge bridge) =>
-            Results.Ok(new { open = bridge.IsEditorOpen(id) }));
+        // Editor routing is mode-aware (host consolidation): when the
+        // out-of-process engine is active (VST processing mode) the editor is
+        // hosted crash-isolated in the engine process — the same instance that
+        // is processing audio — so we drive it via open_editor/close_editor.
+        // Otherwise we fall back to the in-process zeus-vst-bridge editor.
+        app.MapGet("/api/audio-suite/plugins/{id}/editor",
+            (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
+            Results.Ok(new { open = mode.EngineActive ? mode.IsEditorOpen(id) : bridge.IsEditorOpen(id) }));
 
-        app.MapPost("/api/audio-suite/plugins/{id}/editor", (string id, AudioPluginBridge bridge) =>
-            MapEditorResult(bridge.OpenEditor(id), open: true));
+        app.MapPost("/api/audio-suite/plugins/{id}/editor",
+            (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
+            MapEditorResult(mode.EngineActive ? mode.OpenEditor(id) : bridge.OpenEditor(id), open: true));
 
-        app.MapDelete("/api/audio-suite/plugins/{id}/editor", (string id, AudioPluginBridge bridge) =>
-            MapEditorResult(bridge.CloseEditor(id), open: false));
+        app.MapDelete("/api/audio-suite/plugins/{id}/editor",
+            (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
+            MapEditorResult(mode.EngineActive ? mode.CloseEditor(id) : bridge.CloseEditor(id), open: false));
 
         // WAV recorder / player. Records RX or processed-TX audio to float32
         // WAVs in the Downloads folder, and plays recordings back to the local
@@ -1636,6 +1644,40 @@ public static class ZeusEndpoints
             }
             using var ws = await ctx.WebSockets.AcceptWebSocketAsync();
             await hub.AttachClientAsync(ws, ctx.RequestAborted);
+        });
+
+        // -- HamClock embed (optional Node sidecar; see HamClockService) -----
+        // Inert until the operator installs it from Settings → HamClock. The
+        // <iframe> in HamClockWindow points at the sidecar's own port (status
+        // reports it), so HamClock serves its own /api proxy + /assets at the
+        // root of that port with no path rewriting.
+        app.MapGet("/api/hamclock/status", (HamClockService hc) => Results.Ok(hc.Snapshot()));
+
+        app.MapPost("/api/hamclock/install", (HamClockService hc) =>
+        {
+            bool started = hc.BeginInstall();
+            return started
+                ? Results.Accepted("/api/hamclock/status", hc.Snapshot())
+                : Results.Conflict(new { error = "HamClock is already installing or starting." });
+        });
+
+        app.MapPost("/api/hamclock/start", async (HamClockService hc) =>
+        {
+            try
+            {
+                var port = await hc.StartAsync();
+                return Results.Ok(new { port, status = hc.Snapshot() });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message, status = hc.Snapshot() });
+            }
+        });
+
+        app.MapPost("/api/hamclock/stop", (HamClockService hc) =>
+        {
+            hc.Stop();
+            return Results.Ok(hc.Snapshot());
         });
 
         return app;
