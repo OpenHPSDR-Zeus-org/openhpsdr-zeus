@@ -1,0 +1,106 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF),
+//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//
+// This program is free software: you can redistribute it and/or modify it
+// under the terms of the GNU General Public License as published by the
+// Free Software Foundation, either version 2 of the License, or (at your
+// option) any later version. See the LICENSE file at the root of this
+// repository for the full text, or https://www.gnu.org/licenses/.
+//
+// Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
+// License for details.
+
+// Verbose RX squelch editor for the DSP settings tab — the full counterpart to
+// the inline SQL control (SquelchSlider). Same store + endpoint (setSquelch), so
+// edits stay in sync. The squelch is mode-aware: the server routes run +
+// threshold to the WDSP stage for the current RX mode (SSB/CW → voice SSQL,
+// AM/SAM → AMSQ, FM → FMSQ). This panel surfaces which stage is active and what
+// the 0..100 level maps to, so the single control reads as Thetis-verbose.
+
+import { useCallback, useEffect, useRef } from 'react';
+import { setSquelch, type RxMode, type SquelchConfigDto } from '../api/client';
+import { useConnectionStore } from '../state/connection-store';
+
+type Stage = { name: string; detail: string };
+
+function stageForMode(mode: RxMode): Stage {
+  if (mode === 'AM' || mode === 'SAM')
+    return { name: 'AM (AMSQ)', detail: 'level → −150…0 dB carrier threshold' };
+  if (mode === 'FM')
+    return { name: 'FM (FMSQ)', detail: 'level → noise-gate threshold' };
+  return { name: 'Voice (SSQL)', detail: 'level → 0…1 syllabic threshold' };
+}
+
+export function SquelchSettingsSection() {
+  const squelch = useConnectionStore((s) => s.squelch);
+  const mode = useConnectionStore((s) => s.mode);
+  const setLocalSquelch = useConnectionStore((s) => s.setSquelch);
+  const applyState = useConnectionStore((s) => s.applyState);
+  const connected = useConnectionStore((s) => s.status === 'Connected');
+
+  const abort = useRef<AbortController | null>(null);
+  useEffect(() => () => abort.current?.abort(), []);
+
+  const send = useCallback(
+    (next: SquelchConfigDto) => {
+      setLocalSquelch(next);
+      abort.current?.abort();
+      const ac = new AbortController();
+      abort.current = ac;
+      setSquelch(next, ac.signal)
+        .then((s) => !ac.signal.aborted && applyState(s))
+        .catch(() => {});
+    },
+    [setLocalSquelch, applyState],
+  );
+
+  const stage = stageForMode(mode);
+
+  return (
+    <div className="dsp-cfg">
+      <div className="dsp-cfg-row">
+        <span className="dsp-cfg-label">Squelch</span>
+        <button
+          type="button"
+          disabled={!connected}
+          aria-pressed={squelch.enabled}
+          onClick={() => connected && send({ ...squelch, enabled: !squelch.enabled })}
+          className={`btn sm ${squelch.enabled ? 'active' : ''}`}
+          title="Toggle RX squelch (mode-aware)"
+        >
+          {squelch.enabled ? 'ON' : 'OFF'}
+        </button>
+      </div>
+
+      <label className="dsp-cfg-row">
+        <span className="dsp-cfg-label">
+          Level
+          <span className="dsp-cfg-hint"> higher = tighter</span>
+        </span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={squelch.level}
+          disabled={!connected}
+          onChange={(e) => send({ ...squelch, level: Number(e.currentTarget.value) })}
+          style={{ flex: 1, accentColor: 'var(--accent)' }}
+        />
+        <span className="dsp-cfg-unit mono">{squelch.level}</span>
+      </label>
+
+      {/* Which WDSP stage the current mode routes to — makes the single
+          mode-aware control self-explanatory. */}
+      <div className="dsp-cfg-row">
+        <span className="dsp-cfg-label">Active</span>
+        <span className="dsp-cfg-hint" style={{ flex: 1 }}>
+          {stage.name} — {stage.detail}
+        </span>
+      </div>
+    </div>
+  );
+}
