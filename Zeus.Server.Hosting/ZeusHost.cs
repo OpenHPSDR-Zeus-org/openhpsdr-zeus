@@ -363,6 +363,13 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioProfileStore>();
         builder.Services.AddSingleton<AudioProfileService>();
 
+        // VstEngineController owns the out-of-process VST engine (the opt-in
+        // "VST" processing mode). Singleton so AudioPluginBridge (realtime tap)
+        // and AudioProcessingModeService (lifecycle) share one instance. Holds
+        // the shared-memory bridge for its lifetime; the engine process is only
+        // launched while VST mode is active. Inert until opted into.
+        builder.Services.AddSingleton<Zeus.Plugins.Host.Audio.VstEngineController>();
+
         // AudioPluginBridge wires PluginManager's audio-bearing plugins
         // into WdspDspEngine's realtime TX seam. No-op when no plugins
         // declare an audio component; subscribes to engine swaps so it
@@ -412,6 +419,17 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioChainSettingsStore>();
         builder.Services.AddSingleton<AudioChainMasterBypassService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioChainMasterBypassService>());
+
+        // AudioProcessingModeService — operator's Native-vs-VST route selector.
+        // Default is Native (Brian's in-process chain) so a fresh operator's TX
+        // is byte-identical to a build with no VST mode. Selecting VST launches
+        // the external engine and arms the realtime tap; if the engine isn't
+        // installed the path falls through clean. Persists via
+        // AudioProcessingModeStore. No hub frame (would add a Contracts wire
+        // type); clients read GET /api/audio-suite/processing-mode.
+        builder.Services.AddSingleton<AudioProcessingModeStore>();
+        builder.Services.AddSingleton<AudioProcessingModeService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioProcessingModeService>());
 
         // TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
         // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),

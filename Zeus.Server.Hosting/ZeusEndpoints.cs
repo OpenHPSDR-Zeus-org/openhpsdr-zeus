@@ -103,6 +103,36 @@ public static class ZeusEndpoints
             return Results.Ok(new { bypassed = svc.IsBypassed });
         });
 
+        // Audio Suite processing mode — "native" (Brian's in-process plugin
+        // chain, the default) vs "vst" (the out-of-process VST engine). The two
+        // routes are mutually exclusive. Default on first run is native, so the
+        // TX path is byte-identical to a build with no VST mode until the
+        // operator opts in. GET reports the current mode plus whether a VST
+        // engine is installed (for the "Get VSTHost" affordance) and whether the
+        // engine is currently live. PUT switches mode (launching / stopping the
+        // engine) and persists the choice via AudioProcessingModeStore.
+        app.MapGet("/api/audio-suite/processing-mode", (AudioProcessingModeService svc) =>
+        {
+            return Results.Ok(new
+            {
+                mode = svc.Mode.ToString().ToLowerInvariant(),
+                engineActive = svc.EngineActive,
+                engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
+            });
+        });
+        app.MapPut("/api/audio-suite/processing-mode", async (ProcessingModeSetRequest body, AudioProcessingModeService svc) =>
+        {
+            if (body?.Mode is null || !Enum.TryParse<AudioProcessingMode>(body.Mode, ignoreCase: true, out var mode))
+                return Results.BadRequest(new { error = "mode must be 'native' or 'vst'" });
+            var applied = await svc.SetModeAsync(mode);
+            return Results.Ok(new
+            {
+                mode = applied.ToString().ToLowerInvariant(),
+                engineActive = svc.EngineActive,
+                engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
+            });
+        });
+
         // Audio plugin chain order — operator's preferred sequence for
         // the plugins in the Audio Suite window. GET returns the
         // canonical ordered list of plugin IDs; PUT accepts a new
@@ -246,6 +276,34 @@ public static class ZeusEndpoints
                 outputDb = ToDb(outPk),
             });
         });
+
+        // Audio Suite VST editor (plug-in GUI). Opens the plugin's REAL
+        // native editor window on the host desktop via the in-process VST
+        // bridge — the same way a standalone VST host shows a plugin
+        // window (Windows-only at present). POST opens, DELETE closes,
+        // GET reports whether the window is currently up.
+        static IResult MapEditorResult(EditorActionResult r, bool open) => r switch
+        {
+            EditorActionResult.Ok        => Results.Ok(new { open }),
+            EditorActionResult.NotFound  => Results.NotFound(new { error = "No such plugin in the TX chain." }),
+            EditorActionResult.NotAVst   => Results.BadRequest(new { error = "This plugin has no native VST editor." }),
+            EditorActionResult.NotLoaded => Results.Json(
+                new { error = "VST is not natively loaded — set ZEUS_ENABLE_VST_LOAD=1 and reconnect to host it." },
+                statusCode: 409),
+            EditorActionResult.Failed    => Results.Json(
+                new { error = "Failed to open the plugin editor (unsupported on this platform?)." },
+                statusCode: 500),
+            _                            => Results.StatusCode(500),
+        };
+
+        app.MapGet("/api/audio-suite/plugins/{id}/editor", (string id, AudioPluginBridge bridge) =>
+            Results.Ok(new { open = bridge.IsEditorOpen(id) }));
+
+        app.MapPost("/api/audio-suite/plugins/{id}/editor", (string id, AudioPluginBridge bridge) =>
+            MapEditorResult(bridge.OpenEditor(id), open: true));
+
+        app.MapDelete("/api/audio-suite/plugins/{id}/editor", (string id, AudioPluginBridge bridge) =>
+            MapEditorResult(bridge.CloseEditor(id), open: false));
 
         // WAV recorder / player. Records RX or processed-TX audio to float32
         // WAVs in the Downloads folder, and plays recordings back to the local
@@ -1653,5 +1711,6 @@ internal sealed record ChainOrderSetRequest(List<string> PluginIds);
 internal sealed record ChainMembershipSetRequest(bool Active);
 internal sealed record ScanVstDirectoryRequest(string Directory);
 internal sealed record MasterBypassSetRequest(bool Bypassed);
+internal sealed record ProcessingModeSetRequest(string Mode);
 internal sealed record WavRecordStartRequest(string? Source);
 internal sealed record WavPlayRequest(string? File);

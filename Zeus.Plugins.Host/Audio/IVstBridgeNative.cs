@@ -34,6 +34,22 @@ public interface IVstBridgeNative
 
     /// <summary>Shutdown the bridge — releases process-wide resources.</summary>
     int Shutdown();
+
+    /// <summary>
+    /// Open the plugin's native editor (its real GUI) in a bridge-owned
+    /// OS window. <paramref name="title"/> is the window caption (plugin
+    /// display name). Idempotent — a second open while one is up returns
+    /// OK. Windows-only at present; returns <see cref="VstBridgeStatus.NotImplemented"/>
+    /// on other platforms.
+    /// </summary>
+    int EditorOpen(nint handle, string title);
+
+    /// <summary>Close the plugin's editor window if open. Idempotent;
+    /// blocks until the editor UI thread has torn down.</summary>
+    int EditorClose(nint handle);
+
+    /// <summary>True if the plugin's editor window is currently open.</summary>
+    bool EditorIsOpen(nint handle);
 }
 
 /// <summary>
@@ -61,5 +77,6 @@ public static class VstBridgeStatus
 /// </summary>
 public static class VstBridgeAbi
 {
-    public const int Current = 1;
+    // v2: added the editor entry points (zvst_editor_open/close/is_open).
+    public const int Current = 2;
 }

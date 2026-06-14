@@ -117,6 +117,45 @@ public sealed class VstHostAudioPlugin : IAudioPlugin, IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// True once the VST is natively loaded (the editor can only open
+    /// when there's a real plugin instance behind the handle). False when
+    /// native load is gated off (<see cref="NativeLoadEnabled"/>) or the
+    /// load failed — in those states the slot passes audio through and
+    /// has no GUI to show.
+    /// </summary>
+    public bool IsNativelyLoaded => _handle != 0;
+
+    /// <summary>Whether the plugin's native editor window is currently open.</summary>
+    public bool IsEditorOpen => _handle != 0 && _bridge.EditorIsOpen(_handle);
+
+    /// <summary>
+    /// Open the plugin's native editor (its real GUI) in a bridge-owned
+    /// OS window. Returns false if the VST isn't natively loaded or the
+    /// bridge reports failure (e.g. editor unsupported on this platform).
+    /// </summary>
+    public bool OpenEditor()
+    {
+        if (_handle == 0)
+        {
+            _log?.LogInformation(
+                "VST '{Name}' editor open requested but no native handle "
+                + "(native load disabled or load failed).", DisplayName);
+            return false;
+        }
+        var status = _bridge.EditorOpen(_handle, DisplayName);
+        if (status != VstBridgeStatus.Ok)
+            _log?.LogWarning("VST '{Name}' editor open failed (status={Status}).", DisplayName, status);
+        return status == VstBridgeStatus.Ok;
+    }
+
+    /// <summary>Close the plugin's native editor window if open.</summary>
+    public void CloseEditor()
+    {
+        if (_handle == 0) return;
+        _bridge.EditorClose(_handle);
+    }
+
     public Task ShutdownAudioAsync(CancellationToken ct)
     {
         if (_handle != 0)

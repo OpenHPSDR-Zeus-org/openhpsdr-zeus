@@ -40,6 +40,12 @@ public sealed partial class VstBridgeNative : IVstBridgeNative
 
     public int Shutdown() => zvst_shutdown();
 
+    public int EditorOpen(nint handle, string title) => zvst_editor_open(handle, title);
+
+    public int EditorClose(nint handle) => zvst_editor_close(handle);
+
+    public bool EditorIsOpen(nint handle) => zvst_editor_is_open(handle) != 0;
+
     // --- P/Invoke imports ---------------------------------------------------
 
     [LibraryImport(LibraryName, EntryPoint = "zvst_init")]
@@ -59,4 +65,13 @@ public sealed partial class VstBridgeNative : IVstBridgeNative
 
     [LibraryImport(LibraryName, EntryPoint = "zvst_shutdown")]
     private static partial int zvst_shutdown();
+
+    [LibraryImport(LibraryName, EntryPoint = "zvst_editor_open", StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int zvst_editor_open(nint handle, string title);
+
+    [LibraryImport(LibraryName, EntryPoint = "zvst_editor_close")]
+    private static partial int zvst_editor_close(nint handle);
+
+    [LibraryImport(LibraryName, EntryPoint = "zvst_editor_is_open")]
+    private static partial int zvst_editor_is_open(nint handle);
 }

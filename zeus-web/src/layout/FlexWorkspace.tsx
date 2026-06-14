@@ -9,7 +9,7 @@
 // paths don't churn; a follow-up rename can land separately.
 //
 // Layout semantics:
-//   - 12-column grid, WORKSPACE_ROW_HEIGHT_PX rows (see workspace.ts).
+//   - 24-column grid, WORKSPACE_ROW_HEIGHT_PX rows (see workspace.ts).
 //   - Tiles persist via the layout-store (debounced PUT to /api/ui/layout).
 //   - Drag handle is the small grip in each tile's chrome header — clicks
 //     inside the panel body do not initiate a drag (RGL's dragConfig.handle
@@ -182,7 +182,10 @@ function WorkspaceCanvas({
   // passed to ResponsiveGridLayout below — keep them in sync if those change.
   const rowHeight = useMemo(() => {
     if (containerHeight <= 0) return WORKSPACE_ROW_HEIGHT_PX;
-    const margin = 6;
+    // Must mirror the `margin` prop passed to ResponsiveGridLayout below.
+    // Halved (6→3) alongside the 24→48 row doubling so the extra inter-row
+    // gaps don't eat ~140 px of vertical space — net density stays identical.
+    const margin = 3;
     const containerPadding = 0;
     const inner =
       containerHeight - 2 * containerPadding - margin * (targetRows - 1);
@@ -231,7 +234,7 @@ function WorkspaceCanvas({
           breakpoints={{ lg: 0 }}
           cols={{ lg: WORKSPACE_GRID_COLS }}
           rowHeight={rowHeight}
-          margin={[6, 6]}
+          margin={[3, 3]}
           containerPadding={[0, 0]}
           // Position tiles via top/left rather than transform: translate3d.
           // RGL's default `transformStrategy` uses CSS transforms, which

@@ -63,7 +63,7 @@ export function RestartRequiredModal({
                     width: '90vw',
                     padding: 20,
                     background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
-                    border: '1px solid var(--line-1)',
+                    border: '1px solid var(--line)',
                     borderRadius: 8,
                     color: 'var(--fg-0)',
                     fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
@@ -96,7 +96,7 @@ export function RestartRequiredModal({
                     <div style={{
                         padding: '8px 12px',
                         background: 'var(--bg-1)',
-                        border: '1px solid var(--line-1)',
+                        border: '1px solid var(--line)',
                         borderRadius: 4,
                         fontSize: 11,
                         fontFamily: 'var(--font-mono, JetBrains Mono, ui-monospace, monospace)',
@@ -117,7 +117,7 @@ export function RestartRequiredModal({
                     <div style={{
                         padding: '8px 12px',
                         background: 'var(--bg-1)',
-                        border: '1px solid var(--line-1)',
+                        border: '1px solid var(--line)',
                         borderRadius: 4,
                         fontSize: 11,
                         fontFamily: 'var(--font-mono, JetBrains Mono, ui-monospace, monospace)',

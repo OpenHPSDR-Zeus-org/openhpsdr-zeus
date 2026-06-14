@@ -31,8 +31,10 @@
 extern "C" {
 #endif
 
-/* Bridge ABI version. Bump when any function below changes shape. */
-#define ZVST_ABI 1
+/* Bridge ABI version. Bump when any function below changes shape.
+ * v2 added the editor (IPlugView) entry points at the end of this
+ * header: zvst_editor_open / zvst_editor_close / zvst_editor_is_open. */
+#define ZVST_ABI 2
 
 /* Status codes — must match VstBridgeStatus in C#. */
 typedef enum zvst_status_t {
@@ -114,6 +116,37 @@ ZVST_EXPORT int32_t zvst_unload(zvst_handle_t handle);
  * times; matched call counting against zvst_init.
  */
 ZVST_EXPORT int32_t zvst_shutdown(void);
+
+/* --- Editor (plug-in GUI) — ABI v2 -----------------------------------
+ *
+ * Open the plug-in's native editor (IPlugView) in a dedicated UI thread
+ * owned by the bridge. The editor appears as a top-level OS window on
+ * the host machine's desktop — exactly like a standalone VST host opens
+ * a plug-in window. `title` is a UTF-8 window caption (typically the
+ * plug-in display name); may be NULL.
+ *
+ * The window and all IPlugView calls live on the bridge's editor thread
+ * (with its own message pump), so this is safe to call from the .NET
+ * control thread while audio runs on the realtime thread.
+ *
+ * Idempotent: a second open while the editor is already up returns
+ * ZVST_OK. Windows-only for now; other platforms return
+ * ZVST_NOT_IMPLEMENTED. zvst_unload auto-closes an open editor.
+ */
+ZVST_EXPORT int32_t zvst_editor_open(zvst_handle_t handle, const char* title);
+
+/*
+ * Close the editor window if open. Blocks until the editor UI thread
+ * has detached the view and torn the window down. Idempotent.
+ */
+ZVST_EXPORT int32_t zvst_editor_close(zvst_handle_t handle);
+
+/*
+ * Returns 1 if the editor window is currently open, 0 otherwise
+ * (including on a NULL handle or a platform without editor support).
+ * NOTE: this is a boolean, NOT a zvst_status_t.
+ */
+ZVST_EXPORT int32_t zvst_editor_is_open(zvst_handle_t handle);
 
 #ifdef __cplusplus
 }

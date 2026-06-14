@@ -24,6 +24,21 @@ using Zeus.Plugins.Host.Audio;
 
 namespace Zeus.Server;
 
+/// <summary>Outcome of an Audio Suite VST editor open/close request.</summary>
+public enum EditorActionResult
+{
+    /// <summary>The editor was opened/closed (or is the requested state).</summary>
+    Ok,
+    /// <summary>No plugin with that id is attached to the TX chain.</summary>
+    NotFound,
+    /// <summary>The plugin exists but is not a hosted VST (no native editor).</summary>
+    NotAVst,
+    /// <summary>The VST isn't natively loaded (native load gated off or load failed) — nothing to show.</summary>
+    NotLoaded,
+    /// <summary>The bridge reported a failure opening the editor (e.g. unsupported on this platform).</summary>
+    Failed,
+}
+
 public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
 {
     private readonly PluginManager _manager;
@@ -35,6 +50,11 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private readonly IAuditionAudioSink _audition;
     private int _remoteBypassLogCount; // for one-time diagnostic log during verification/on-air testing
     private readonly ChainOrderService? _chainOrder;
+    // Out-of-process VST engine route (opt-in "VST" processing mode). Null in
+    // tests / when no controller is injected. When its IsActive gate is true the
+    // realtime TX path routes through the external engine instead of _chain;
+    // when false the engine is never touched and TX is byte-identical to native.
+    private readonly VstEngineController? _vstEngine;
     private readonly ILogger<AudioPluginBridge> _log;
     private readonly AudioChain _chain = new();
     private readonly Dictionary<string, int> _idToSlot = new();
@@ -66,14 +86,16 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         IAuditionAudioSink audition,
         ChainOrderService chainOrder,
         ILogger<AudioPluginBridge> log,
-        TxAudioIngest txAudioIngest)
+        TxAudioIngest txAudioIngest,
+        VstEngineController vstEngine)
         : this(manager, pipeline, new VstBridgeNative(),
                isMoxOn: () => tx.IsMoxOn,
                isMonitorOn: () => pipeline.CurrentEngine?.IsTxMonitorOn ?? false,
                audition: audition,
                chainOrder: chainOrder,
                log,
-               isTciTxAudioActive: () => txAudioIngest.IsTciTxAudioActive) { }
+               isTciTxAudioActive: () => txAudioIngest.IsTciTxAudioActive,
+               vstEngine: vstEngine) { }
 
     // Testable ctor — lets unit tests inject a fake IVstBridgeNative and
     // plain delegates for the MOX / monitor lookups so tests don't need
@@ -87,7 +109,8 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         IAuditionAudioSink audition,
         ChainOrderService? chainOrder,
         ILogger<AudioPluginBridge> log,
-        Func<bool>? isTciTxAudioActive = null)
+        Func<bool>? isTciTxAudioActive = null,
+        VstEngineController? vstEngine = null)
     {
         _manager = manager;
         _pipeline = pipeline;
@@ -97,6 +120,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         _isTciTxAudioActive = isTciTxAudioActive ?? (() => false);
         _audition = audition;
         _chainOrder = chainOrder;
+        _vstEngine = vstEngine;
         _log = log;
     }
 
@@ -166,6 +190,52 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     /// Intended for diagnostics and potential future UI ("plugins bypassed for remote TX").
     /// </summary>
     public bool IsBypassedForRemoteTxSource => _isTciTxAudioActive();
+
+    // -- VST editor (plug-in GUI) ---------------------------------------
+    //
+    // Route an "open / close the native editor" request from the REST
+    // endpoint to the right hosted VST. Only TX-chain plugins (the
+    // _idToPlugin map) can host an editor; the editor itself is a native
+    // OS window owned by the bridge dylib (Windows-only at present).
+
+    /// <summary>
+    /// Open the native editor GUI for the hosted VST with the given
+    /// plugin id. Returns a result describing the outcome so the endpoint
+    /// can map it to an HTTP status.
+    /// </summary>
+    public EditorActionResult OpenEditor(string pluginId)
+    {
+        var vst = ResolveVst(pluginId, out var result);
+        if (vst is null) return result;
+        if (!vst.IsNativelyLoaded) return EditorActionResult.NotLoaded;
+        return vst.OpenEditor() ? EditorActionResult.Ok : EditorActionResult.Failed;
+    }
+
+    /// <summary>Close the native editor for the hosted VST with the given id.</summary>
+    public EditorActionResult CloseEditor(string pluginId)
+    {
+        var vst = ResolveVst(pluginId, out var result);
+        if (vst is null) return result;
+        vst.CloseEditor();
+        return EditorActionResult.Ok;
+    }
+
+    /// <summary>True if the hosted VST's native editor window is currently open.</summary>
+    public bool IsEditorOpen(string pluginId)
+    {
+        var vst = ResolveVst(pluginId, out _);
+        return vst?.IsEditorOpen ?? false;
+    }
+
+    private VstHostAudioPlugin? ResolveVst(string pluginId, out EditorActionResult result)
+    {
+        IAudioPlugin? plugin;
+        lock (_lock) _idToPlugin.TryGetValue(pluginId, out plugin);
+        if (plugin is null) { result = EditorActionResult.NotFound; return null; }
+        if (plugin is not VstHostAudioPlugin vst) { result = EditorActionResult.NotAVst; return null; }
+        result = EditorActionResult.Ok;
+        return vst;
+    }
 
     public Task StartAsync(CancellationToken ct)
     {
@@ -246,6 +316,28 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         int channels,
         int sampleRate)
     {
+        // VST processing mode (opt-in): when the operator has selected the
+        // out-of-process VST engine AND it's live, route the TX block through it
+        // instead of the native chain. Mutually exclusive with the native path
+        // below. Master bypass and the remote-TCI bypass still force clean
+        // passthrough — "disengage the Audio Suite" means clean audio in either
+        // mode. The engine tap is itself robust (bounded-wait, passthrough on
+        // engine-down / timeout), so a wedged plugin never stalls the radio.
+        // When the gate is false this whole block is one volatile read and the
+        // native path below runs byte-identically.
+        var vst = _vstEngine;
+        if (vst is { IsActive: true })
+        {
+            if (_chain.MasterBypassed || _isTciTxAudioActive())
+            {
+                input.CopyTo(output);
+                return;
+            }
+            var vstCtx = new AudioBlockContext(sampleRate, channels, frames, sampleTime: 0, mox: true);
+            vst.Process(input, output, vstCtx);
+            return;
+        }
+
         // Remote TCI (or future remote) TX audio source: bypass the entire
         // operator Audio Suite insert chain. The remote client has already
         // processed (or deliberately left clean) the audio it wants on the air.
@@ -379,7 +471,8 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             return;
         }
 
-        int slot;
+        int slot = -1;
+        bool parked = false;
         lock (_lock)
         {
             if (_chainOrder is not null)
@@ -391,18 +484,30 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
                 // in the right position relative to the existing ones.
                 _idToPlugin[p.Loaded.Manifest.Id] = audioPlugin;
                 var attachedIds = _idToPlugin.Keys.ToList();
-                slot = _chainOrder.OnPluginAttached(p.Loaded.Manifest.Id, attachedIds);
+                _chainOrder.OnPluginAttached(p.Loaded.Manifest.Id, attachedIds);
                 ReapplySlotsUnderLock();
                 if (!_idToSlot.TryGetValue(p.Loaded.Manifest.Id, out slot))
                 {
-                    // Defensive fallback — ReapplySlotsUnderLock should have
-                    // populated _idToSlot from the order. If not, the chain
-                    // is in a bad state; log and bail.
-                    _log.LogError(
-                        "Audio plugin {Id} not slotted after ReapplySlotsUnderLock; chain may be inconsistent",
-                        p.Loaded.Manifest.Id);
-                    _idToPlugin.Remove(p.Loaded.Manifest.Id);
-                    return;
+                    // Not in the runtime slot table after re-slotting. The
+                    // legitimate reason is that the plugin is PARKED — the
+                    // operator excluded it from the live chain. A parked
+                    // plugin stays attached (kept in _idToPlugin and
+                    // initialized below, so its VST loads and its editor
+                    // can open) but out of the DSP graph; un-parking
+                    // re-slots it instantly. Only a NON-parked miss is a
+                    // real inconsistency worth evicting + logging — parking
+                    // must not lose the plugin instance (regression: it
+                    // used to, so parked VSTs vanished until a restart).
+                    parked = _chainOrder.IsParked(p.Loaded.Manifest.Id);
+                    if (!parked)
+                    {
+                        _log.LogError(
+                            "Audio plugin {Id} not slotted after ReapplySlotsUnderLock; chain may be inconsistent",
+                            p.Loaded.Manifest.Id);
+                        _idToPlugin.Remove(p.Loaded.Manifest.Id);
+                        return;
+                    }
+                    slot = -1; // parked — initialized but not in the chain
                 }
             }
             else
@@ -441,8 +546,9 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
                 p.Loaded.Manifest.Id, slot);
             lock (_lock)
             {
-                _chain.ClearSlot(slot);
+                if (slot >= 0) _chain.ClearSlot(slot);
                 _idToSlot.Remove(p.Loaded.Manifest.Id);
+                _idToPlugin.Remove(p.Loaded.Manifest.Id);
             }
             return;
         }
@@ -452,9 +558,14 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         // An attach into an operator-bypassed chain leaves the chain inert
         // (correct behaviour — operator's choice stays sticky).
         RefreshPreviewEnabled();
-        _log.LogInformation(
-            "Audio plugin {Id} attached to slot {Slot}",
-            p.Loaded.Manifest.Id, slot);
+        if (parked)
+            _log.LogInformation(
+                "Audio plugin {Id} attached (parked — initialized, not in the live chain)",
+                p.Loaded.Manifest.Id);
+        else
+            _log.LogInformation(
+                "Audio plugin {Id} attached to slot {Slot}",
+                p.Loaded.Manifest.Id, slot);
     }
 
     private void OnPluginDeactivated(ActivatedPlugin p)

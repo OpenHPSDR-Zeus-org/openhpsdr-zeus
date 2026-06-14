@@ -143,16 +143,6 @@
   overflow: hidden;
 }
 
-/* Footer hint — centered, tiny, muted, letter-spaced, uppercase */
-.filter-ribbon__hint {
-  text-align: center;
-  font-size: 10px;
-  letter-spacing: 0.22em;
-  color: #7c8088;
-  text-transform: uppercase;
-  padding-top: 2px;
-}
-
 /* ===== Preset panel (right column) — its own framed card ===== */
 .filter-ribbon__presets {
   background: #2a2d33;

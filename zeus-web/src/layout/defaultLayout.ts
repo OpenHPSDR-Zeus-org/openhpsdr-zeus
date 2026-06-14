@@ -12,42 +12,47 @@
 // FlexWorkspace.tsx, the whole layout scales to fill the viewport without
 // the operator having to re-tune sizes.
 //
-// Total height = WORKSPACE_TARGET_ROWS (24) so the default fills the
-// available viewport exactly with the responsive rowHeight calculation.
+// Coordinates are in the 24-column × 48-row (schema-v8) grid. Total height =
+// WORKSPACE_TARGET_ROWS (48) so the default fills the viewport exactly with
+// the responsive rowHeight calculation. The top-left row pairs the Bandwidth
+// Filter (mini-pan only) with the split-out Filter Presets panel; the
+// panadapter hero fills the rest of the left column, and the right column
+// stacks vfo / smeter / tx / txmeters / dsp.
 //
-// ASCII sanity check (columns 0..11):
+// ASCII sanity check (columns 0..23):
 //
-//   ┌───────────────────────────────────────────────┬─────────────┐  y=0
-//   │              filter (0..8, h=6)                │    vfo      │
-//   │                                                │   (h=4)     │
-//   │                                                ├─────────────┤  y=4
-//   │                                                │   smeter    │
-//   ├───────────────────────────────────────────────┤   (h=2)     │  y=6
-//   │                                                ├─────────────┤
-//   │                                                │     tx      │
-//   │                                                │   (h=5)     │
-//   │                                                ├─────────────┤  y=11
-//   │              hero (0..8, h=18)                 │  txmeters   │
-//   │                                                │   (h=6)     │
-//   │                                                ├─────────────┤  y=17
-//   │                                                │     dsp     │
-//   │                                                │   (h=7)     │
-//   └───────────────────────────────────────────────┴─────────────┘  y=24
+//   ┌──────────────────────────────┬───────────────┬─────────────┐  y=0
+//   │   filter · mini-pan (0..11)   │ presets(12..17)│    vfo      │
+//   │            h=10               │     h=10       │   (h=11)    │
+//   ├──────────────────────────────┴───────────────┤             │  y=10
+//   │                                               ├─────────────┤  y=11
+//   │                                               │   smeter    │
+//   │                                               │   (h=5)     │  y=16
+//   │                                               ├─────────────┤
+//   │            hero (0..17, h=38)                 │     tx      │
+//   │                                               │   (h=10)    │
+//   │                                               ├─────────────┤  y=26
+//   │                                               │  txmeters   │
+//   │                                               │   (h=12)    │
+//   │                                               ├─────────────┤  y=38
+//   │                                               │     dsp     │
+//   └───────────────────────────────────────────────┴─────────────┘  y=48
 
 import type { WorkspaceLayout } from './workspace';
 
 export const DEFAULT_WORKSPACE_LAYOUT: WorkspaceLayout = {
-  schemaVersion: 7,
+  schemaVersion: 8,
   tiles: [
     // Stable uids (not random) for the default layout — lets a future
     // migration map "the old default 'vfo' tile" to a new layout without
     // losing operator overrides.
-    { uid: 'tile-filter',   panelId: 'filter',   x: 0, y: 0,  w: 9, h: 6 },
-    { uid: 'tile-hero',     panelId: 'hero',     x: 0, y: 6,  w: 9, h: 18 },
-    { uid: 'tile-vfo',      panelId: 'vfo',      x: 9, y: 0,  w: 3, h: 4 },
-    { uid: 'tile-smeter',   panelId: 'smeter',   x: 9, y: 4,  w: 3, h: 2 },
-    { uid: 'tile-tx',       panelId: 'tx',       x: 9, y: 6,  w: 3, h: 5 },
-    { uid: 'tile-txmeters', panelId: 'txmeters', x: 9, y: 11, w: 3, h: 6 },
-    { uid: 'tile-dsp',      panelId: 'dsp',      x: 9, y: 17, w: 3, h: 7 },
+    { uid: 'tile-filter',        panelId: 'filter',        x: 0,  y: 0,  w: 12, h: 10 },
+    { uid: 'tile-filterpresets', panelId: 'filterpresets', x: 12, y: 0,  w: 6,  h: 10 },
+    { uid: 'tile-hero',          panelId: 'hero',          x: 0,  y: 10, w: 18, h: 38 },
+    { uid: 'tile-vfo',           panelId: 'vfo',           x: 18, y: 0,  w: 6,  h: 11 },
+    { uid: 'tile-smeter',        panelId: 'smeter',        x: 18, y: 11, w: 6,  h: 5 },
+    { uid: 'tile-tx',            panelId: 'tx',            x: 18, y: 16, w: 6,  h: 10 },
+    { uid: 'tile-txmeters',      panelId: 'txmeters',      x: 18, y: 26, w: 6,  h: 12 },
+    { uid: 'tile-dsp',           panelId: 'dsp',           x: 18, y: 38, w: 6,  h: 10 },
   ],
 };

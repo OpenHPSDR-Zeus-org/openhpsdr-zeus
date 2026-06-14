@@ -175,7 +175,7 @@ export function DownloadAudioSuiteButton() {
             marginTop: 8,
             padding: '10px 12px',
             background: 'var(--bg-1)',
-            border: '1px solid var(--line-1)',
+            border: '1px solid var(--line)',
             borderRadius: 6,
             fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
             fontSize: 11,
@@ -217,7 +217,7 @@ export function DownloadAudioSuiteButton() {
                     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
                     background: 'var(--bg-2)',
                     color: dot.color,
-                    border: '1px solid var(--line-1)',
+                    border: '1px solid var(--line)',
                     boxShadow: dot.glow !== 'transparent' ? `0 0 6px ${dot.glow}` : 'none',
                     fontSize: 11, lineHeight: 1, fontWeight: 600,
                   }}

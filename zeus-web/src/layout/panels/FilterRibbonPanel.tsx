@@ -6,10 +6,14 @@
 
 import { FilterRibbon } from '../../components/filter/FilterRibbon';
 
+// Bandwidth Filter panel — mini-pan + drag hint only. The preset table and
+// custom Hz row now live in their own "Filter Presets" panel (see
+// FilterPresetsPanel) so each can be sized independently; both drive the same
+// connection-store filter state.
 export function FilterRibbonPanel() {
   return (
     <div className="filter-ribbon-panel" style={{ flex: 1, overflow: 'auto', padding: 8 }}>
-      <FilterRibbon embedded />
+      <FilterRibbon embedded section="minipan" />
     </div>
   );
 }

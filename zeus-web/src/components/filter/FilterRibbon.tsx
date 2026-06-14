@@ -100,7 +100,18 @@ function mergePresets(mode: RxMode, server: FilterPresetDto[] | null): FilterPre
   });
 }
 
-export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) {
+/** Which part of the ribbon to render. 'all' (default) is the original
+ *  combined card. 'minipan' renders only the left mini-pan + hint; 'presets'
+ *  renders only the right preset grid + custom row. The split lets the
+ *  workspace host the mini-pan and the preset table as two separate,
+ *  independently-sizable panels. Both sub-sections drive the same
+ *  connection-store state, so they stay in sync automatically. */
+type FilterRibbonSection = 'all' | 'minipan' | 'presets';
+
+export function FilterRibbon({
+  embedded = false,
+  section = 'all',
+}: { embedded?: boolean; section?: FilterRibbonSection } = {}) {
   const mode = useConnectionStore((s) => s.mode);
   const filterLow = useConnectionStore((s) => s.filterLowHz);
   const filterHigh = useConnectionStore((s) => s.filterHighHz);
@@ -199,8 +210,11 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
   };
 
   // Keyboard arrow nudging — only when ribbon is open and we're not focused
-  // on the CUSTOM inputs.
+  // on the CUSTOM inputs. The mini-pan owns this gesture; a presets-only
+  // instance must NOT also register the listener or every arrow press would
+  // nudge twice when both split panels are docked.
   useEffect(() => {
+    if (section === 'presets') return;
     if (!embedded && !open) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement) return;
@@ -217,10 +231,12 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [embedded, open, mode, applyState, closeRibbon]);
+  }, [embedded, open, mode, applyState, closeRibbon, section]);
 
   if (!embedded && !open) return null;
-  if (presets.length === 0) return null;
+  // The mini-pan section can render before the preset table resolves; only
+  // the presets/all sections need a populated table to show anything.
+  if (section !== 'minipan' && presets.length === 0) return null;
 
   const currentWidth = Math.abs(filterHigh - filterLow);
   const isLowDisabled = isSymmetricMode(mode);
@@ -252,20 +268,21 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
       <div className="filter-ribbon__body">
         {/* Left column: full-width mini-pan, footer hint. The top BW/LO/PB/HI
             readout row was removed — its data is already shown in the topbar
-            chips and the mini-pan visualises the same passband. */}
-        <div className="filter-ribbon__main">
-          <div className="filter-ribbon__minipan">
-            <FilterMiniPan />
+            chips and the mini-pan visualises the same passband. Hidden when
+            this instance is rendering the presets-only panel. */}
+        {section !== 'presets' && (
+          <div className="filter-ribbon__main">
+            <div className="filter-ribbon__minipan">
+              <FilterMiniPan />
+            </div>
           </div>
-
-          <div className="filter-ribbon__hint">
-            DRAG EDGES TO ADJUST&nbsp;&nbsp;·&nbsp;&nbsp;DRAG INSIDE TO MOVE
-          </div>
-        </div>
+        )}
 
         {/* Right column: presets + custom. The in-ribbon FAVORITES row was
             removed — drag any preset chip below onto one of the three filter
-            buttons in the control strip to pin it (same UX as Mode/Band/Step). */}
+            buttons in the control strip to pin it (same UX as Mode/Band/Step).
+            Hidden when this instance is rendering the mini-pan-only panel. */}
+        {section !== 'minipan' && (
         <div className="filter-ribbon__presets">
           <div className="filter-ribbon__section-label">PRESETS</div>
           <div className="filter-ribbon__preset-grid">
@@ -323,6 +340,7 @@ export function FilterRibbon({ embedded = false }: { embedded?: boolean } = {}) 
             <span className="filter-ribbon__custom-unit">Hz</span>
           </div>
         </div>
+        )}
       </div>
     </div>
   );

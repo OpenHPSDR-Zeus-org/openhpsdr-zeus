@@ -96,6 +96,13 @@ if(ZEUS_USE_VST3SDK)
     elseif(UNIX AND NOT APPLE)
         target_link_libraries(zeus-vst-bridge PRIVATE dl pthread)
     endif()
+
+    if(WIN32)
+        # Editor hosting (bridge.cpp) creates a native window + COM
+        # apartment for the plug-in GUI. These are in the MSVC default
+        # lib set, but link them explicitly so the dependency is visible.
+        target_link_libraries(zeus-vst-bridge PRIVATE user32 ole32)
+    endif()
 else()
     # Stub fallback. Build src/bridge_stub.cpp if present, else the real
     # bridge.cpp under a guard macro that no-ops the SDK includes.
