@@ -1,0 +1,188 @@
+using System.IO.MemoryMappedFiles;
+using Zeus.Plugins.Contracts.Audio;
+
+namespace Zeus.Plugins.Host.Audio;
+
+/// <summary>
+/// Zeus side of the VST-engine audio plane: owns the shared-memory
+/// double-buffer + the two auto-reset events, and exposes the realtime
+/// <see cref="Process"/> tap. Zeus CREATES the shared memory + events; the
+/// engine OPENS them. See <c>docs/designs/vst-engine-bridge-protocol.md</c>.
+///
+/// <para><b>Robust-path contract (load-bearing):</b> the realtime TX thread
+/// NEVER blocks unbounded and NEVER allocates here. Each block is a memcpy-in →
+/// signal → <em>bounded</em> wait → memcpy-out; on timeout / engine-down /
+/// stale-seq it falls through to clean passthrough and keeps feeding the radio.
+/// The view pointer + event handles are acquired once and held for the bridge's
+/// lifetime. Windows-only (named shared memory + events).</para>
+/// </summary>
+internal sealed unsafe class VstEngineBridge : IDisposable
+{
+    private readonly MemoryMappedFile _mmf;
+    private readonly MemoryMappedViewAccessor _view;
+    private readonly EventWaitHandle _inEvent;
+    private readonly EventWaitHandle _outEvent;
+
+    private byte* _base;
+    private readonly int _maxFrames;
+    private readonly int _channels;
+    private readonly int _regionBytes;
+
+    private ulong _inSeq;
+    private long _degraded;
+    private bool _disposed;
+
+    /// <summary>
+    /// Bounded wait ceiling per block (ms). A wedged plugin costs at most one
+    /// block of passthrough, never a dropped radio. Kept well under the block
+    /// period (512f @ 48 kHz ≈ 10.6 ms).
+    /// </summary>
+    public int WaitBudgetMs { get; set; } = 4;
+
+    /// <summary>
+    /// Set true by the controller once the engine's <c>ready</c> handshake is
+    /// seen (the engine's audio thread is then blocked on <c>.in</c>). While
+    /// false, <see cref="Process"/> is pure passthrough — the realtime path
+    /// never touches the engine.
+    /// </summary>
+    public bool EngineReady { get; set; }
+
+    /// <summary>Count of blocks that fell through to passthrough (timeout / stale).</summary>
+    public long DegradedBlocks => Interlocked.Read(ref _degraded);
+
+    public string ShmName { get; }
+
+    private VstEngineBridge(string shm, MemoryMappedFile mmf, MemoryMappedViewAccessor view,
+                            EventWaitHandle inEv, EventWaitHandle outEv,
+                            int maxFrames, int channels)
+    {
+        ShmName = shm;
+        _mmf = mmf;
+        _view = view;
+        _inEvent = inEv;
+        _outEvent = outEv;
+        _maxFrames = maxFrames;
+        _channels = channels;
+        _regionBytes = VstEngineProtocol.RegionBytes(maxFrames, channels);
+
+        byte* p = null;
+        _view.SafeMemoryMappedViewHandle.AcquirePointer(ref p);
+        _base = p + _view.PointerOffset;
+    }
+
+    /// <summary>Create the shared memory + events and initialise the header.</summary>
+    public static VstEngineBridge Create(string shm, int maxFrames, int rate, int channels)
+    {
+        if (!OperatingSystem.IsWindows())
+            throw new PlatformNotSupportedException("VST engine bridge is Windows-only.");
+        if (maxFrames <= 0 || channels <= 0)
+            throw new ArgumentOutOfRangeException(nameof(maxFrames));
+
+        long total = VstEngineProtocol.TotalBytes(maxFrames, channels);
+        var mmf = MemoryMappedFile.CreateNew(shm, total);
+        MemoryMappedViewAccessor? view = null;
+        EventWaitHandle? inEv = null, outEv = null;
+        try
+        {
+            view = mmf.CreateViewAccessor(0, total, MemoryMappedFileAccess.ReadWrite);
+            inEv = new EventWaitHandle(false, EventResetMode.AutoReset, VstEngineProtocol.InEventName(shm));
+            outEv = new EventWaitHandle(false, EventResetMode.AutoReset, VstEngineProtocol.OutEventName(shm));
+
+            var bridge = new VstEngineBridge(shm, mmf, view, inEv, outEv, maxFrames, channels);
+            bridge.InitHeader(rate);
+            return bridge;
+        }
+        catch
+        {
+            outEv?.Dispose();
+            inEv?.Dispose();
+            view?.Dispose();
+            mmf.Dispose();
+            throw;
+        }
+    }
+
+    private void InitHeader(int rate)
+    {
+        WriteU32(VstEngineProtocol.OffMagic, VstEngineProtocol.Magic);
+        WriteU32(VstEngineProtocol.OffProtocol, VstEngineProtocol.Version);
+        WriteU32(VstEngineProtocol.OffMaxFrames, (uint)_maxFrames);
+        WriteU32(VstEngineProtocol.OffChannels, (uint)_channels);
+        WriteU32(VstEngineProtocol.OffRate, (uint)rate);
+        WriteU32(VstEngineProtocol.OffFramesThisBlock, 0);
+        WriteU64(VstEngineProtocol.OffInSeq, 0);
+        WriteU64(VstEngineProtocol.OffOutSeq, 0);
+        WriteU32(VstEngineProtocol.OffEngineState, 0);
+        WriteU32(VstEngineProtocol.OffFlags, 0);
+    }
+
+    /// <summary>
+    /// Realtime tap. Sends one block to the engine and reads the processed
+    /// result back, or passes through unchanged on any failure. No allocation,
+    /// no managed lock. See the robust-path contract on the class.
+    /// </summary>
+    public void Process(ReadOnlySpan<float> input, Span<float> output, AudioBlockContext ctx)
+    {
+        int n = ctx.Frames, ch = ctx.Channels;
+        int count = n * ch;
+
+        if (_disposed || !EngineReady
+            || n <= 0 || n > _maxFrames || ch != _channels
+            || input.Length < count || output.Length < count)
+        {
+            input.CopyTo(output);
+            return;
+        }
+
+        // input → shared input region
+        WriteU32(VstEngineProtocol.OffFramesThisBlock, (uint)n);
+        var inRegion = new Span<float>(_base + VstEngineProtocol.HeaderBytes, count);
+        input.Slice(0, count).CopyTo(inRegion);
+
+        // publish: stamp seq, then wake the engine
+        _inSeq++;
+        WriteU64(VstEngineProtocol.OffInSeq, _inSeq);
+        _inEvent.Set();
+
+        // bounded wait — never block the radio
+        if (!_outEvent.WaitOne(WaitBudgetMs))
+        {
+            input.CopyTo(output);
+            Interlocked.Increment(ref _degraded);
+            return;
+        }
+
+        // only trust output whose seq matches the block we just sent
+        if (ReadU64(VstEngineProtocol.OffOutSeq) != _inSeq)
+        {
+            input.CopyTo(output);
+            Interlocked.Increment(ref _degraded);
+            return;
+        }
+
+        var outRegion = new Span<float>(_base + VstEngineProtocol.HeaderBytes + _regionBytes, count);
+        outRegion.CopyTo(output.Slice(0, count));
+    }
+
+    private void WriteU32(int off, uint v) => *(uint*)(_base + off) = v;
+    private uint ReadU32(int off) => *(uint*)(_base + off);
+    private void WriteU64(int off, ulong v) => *(ulong*)(_base + off) = v;
+    private ulong ReadU64(int off) => *(ulong*)(_base + off);
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        EngineReady = false;
+
+        if (_base != null)
+        {
+            _view.SafeMemoryMappedViewHandle.ReleasePointer();
+            _base = null;
+        }
+        _outEvent.Dispose();
+        _inEvent.Dispose();
+        _view.Dispose();
+        _mmf.Dispose();
+    }
+}
