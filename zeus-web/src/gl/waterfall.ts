@@ -107,6 +107,15 @@ export type WfRenderer = {
   /** 1.0 = opaque (default). 0.0 = noise floor fades to transparent so a
    *  background layer (e.g. the QRZ-mode Leaflet map) shows through. */
   setTransparent: (transparent: boolean) => void;
+  /** Runtime render state, posted to the BACKEND log (#629) because the
+   *  desktop app has no reachable DevTools — lets us confirm the waterfall
+   *  seeded (texWidth > 0) headlessly. */
+  debugState: () => {
+    texWidth: number;
+    writeRow: number;
+    lastViewOffsetUv: number;
+    contextLost: boolean;
+  };
   dispose: () => void;
 };
 
@@ -219,6 +228,8 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   // Last width the history textures were seeded at — lets a 'reset' decision on
   // a null-wf frame re-seed at the known column count (#629 hardening).
   let lastValidWidth = 0;
+  // Last view offset applied at draw — surfaced via debugState for #629 triage.
+  let lastViewOffsetUv = 0;
 
   const seedTexture = (tex: WebGLTexture, w: number) => {
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -247,7 +258,15 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   };
 
   const uploadRow = (wfDb: Float32Array) => {
-    if (texWidth === 0) return; // not seeded yet — a stray push before reset
+    // Lazy seed (#629): the first valid waterfall row seeds the history,
+    // regardless of whether a 'reset' decision happened to carry wf data.
+    // Before this, seeding only ran inside the 'reset' branch when that exact
+    // frame had a non-null wfDb; if the first post-connect frame's wf payload
+    // was null (timing-dependent — reliably so on Windows), the textures never
+    // got R32F storage, texWidth stayed 0, draw() bailed to a transparent
+    // clear, and the waterfall was permanently black. Seeding here (and on any
+    // width change) makes it order- and platform-independent.
+    if (texWidth !== wfDb.length) resetTextures(wfDb.length);
     writeRow = (writeRow + 1) % HISTORY_ROWS;
     gl.bindTexture(gl.TEXTURE_2D, textures[active]);
     gl.texSubImage2D(
@@ -349,6 +368,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
         if (!Number.isFinite(viewOffsetUv)) viewOffsetUv = 0;
         viewOffsetUv = Math.max(-1, Math.min(1, viewOffsetUv));
       }
+      lastViewOffsetUv = viewOffsetUv;
       // Premultiplied-alpha blending — matches the fragment output so the
       // noise floor fades cleanly into whatever is behind the canvas.
       gl.enable(gl.BLEND);
@@ -371,6 +391,14 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.bindVertexArray(null);
       gl.disable(gl.BLEND);
+    },
+    debugState() {
+      return {
+        texWidth,
+        writeRow,
+        lastViewOffsetUv,
+        contextLost: gl.isContextLost(),
+      };
     },
     dispose() {
       gl.deleteTexture(textures[0]);
