@@ -4,10 +4,11 @@
 // uninstall control on each card. The "deferred uninstall" 202 case is
 // surfaced inline so the operator knows a restart is still required.
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 
 import { usePluginsStore } from '../state/plugins-store';
 import type { PluginDto } from '../api/plugins';
+import { ConfirmDialog } from '../../layout/ConfirmDialog';
 
 function CapabilityChips({ caps }: { caps: string[] }) {
   if (caps.length === 0) {
@@ -42,30 +43,26 @@ function CapabilityChips({ caps }: { caps: string[] }) {
 function PluginCard({ p }: { p: PluginDto }) {
   const uninstall = usePluginsStore((s) => s.uninstall);
   const inflight = usePluginsStore((s) => s.uninstallInflight);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const onUninstall = () => {
     if (inflight) return;
-    const ok = window.confirm(
-      `Uninstall plugin "${p.name}" (${p.id})?\n` +
-        'The plugin will be removed from the host. A restart may be ' +
-        'required to fully unload the assembly.',
-    );
-    if (!ok) return;
-    void uninstall(p.id);
+    setConfirmOpen(true);
   };
 
   return (
-    <div
-      style={{
-        background: 'var(--bg-2)',
-        border: '1px solid var(--panel-border)',
-        borderRadius: 'var(--r-md)',
-        padding: 12,
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 8,
-      }}
-    >
+    <>
+      <div
+        style={{
+          background: 'var(--bg-2)',
+          border: '1px solid var(--panel-border)',
+          borderRadius: 'var(--r-md)',
+          padding: 12,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+        }}
+      >
       <div
         style={{
           display: 'flex',
@@ -161,7 +158,25 @@ function PluginCard({ p }: { p: PluginDto }) {
       </div>
 
       <CapabilityChips caps={p.capabilities} />
-    </div>
+      </div>
+      {confirmOpen && (
+        <ConfirmDialog
+          title="Uninstall plugin"
+          confirmLabel="Uninstall"
+          onCancel={() => setConfirmOpen(false)}
+          onConfirm={() => {
+            void uninstall(p.id);
+            setConfirmOpen(false);
+          }}
+        >
+          <p>Uninstall {p.name}?</p>
+          <p>
+            {p.id} will be removed from the host. A restart may be required to
+            fully unload the assembly.
+          </p>
+        </ConfirmDialog>
+      )}
+    </>
   );
 }
 

@@ -42,11 +42,26 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import { useDisplayStore } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
+import { setFilter } from '../api/client';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import * as viewCenter from '../state/view-center';
+
+// Edge-resize tuning constants — shared with the advanced filter mini-pan.
+const DRAG_MIN_INTERVAL_MS = 50; // throttle for live setFilter writes during a drag
+const MIN_PASSBAND_HZ = 50; // keep low/high from crossing
+
+// Fixed presets (F1..F10) are read-only widths; resizing one diverts to the
+// VAR1 variable slot, exactly like FilterMiniPan, so the operator's drag isn't
+// silently discarded.
+function presetIsFixed(name: string | null): boolean {
+  return !!name && /^F([1-9]|10)$/.test(name);
+}
+function variableSlot(name: string | null): string {
+  return presetIsFixed(name) || !name ? 'VAR1' : name;
+}
 
 // Translucent rectangle drawn inside the panadapter container to show the
 // active receive filter passband, mapped from [filterLowHz, filterHighHz]
@@ -54,7 +69,24 @@ import * as viewCenter from '../state/view-center';
 // of carrier, LSB to the left, CW narrow around zero, AM symmetric.
 // Positioned by percentage of the total span so it tracks resize and tune
 // without measuring DOM width.
-export function PassbandOverlay() {
+type PassbandOverlayProps = {
+  /** Enable grab-to-resize edge handles that sync the RX filter low/high cut. */
+  resizable?: boolean;
+  /** The spectrum surface container, for mapping a pointer X to a frequency. */
+  containerRef?: RefObject<HTMLElement | null>;
+};
+
+type EdgeDrag = {
+  side: 'lo' | 'hi';
+  slot: string;
+  pendingLo: number;
+  pendingHi: number;
+  lastWriteAt: number;
+  flushTimer: number | null;
+  pointerId: number;
+};
+
+export function PassbandOverlay({ resizable = false, containerRef }: PassbandOverlayProps = {}) {
   const centerHz = useDisplayStore((s) => s.centerHz);
   const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
   // Header width — survives frames whose pan payload is invalid.
@@ -63,6 +95,89 @@ export function PassbandOverlay() {
   const filterHighHz = useConnectionStore((s) => s.filterHighHz);
 
   const rectRef = useRef<HTMLDivElement | null>(null);
+  const drag = useRef<EdgeDrag | null>(null);
+
+  // Map a client X to a filter offset (Hz relative to the dial/VFO) against the
+  // container's live width — the same settled geometry FilterCursorOverlay and
+  // NotchOverlay use for their pointer math. Filter edges are stored as offsets
+  // from the dial, so we subtract vfoHz from the absolute frequency under the
+  // pointer.
+  const clientXToOffsetHz = (clientX: number): number | null => {
+    const el = containerRef?.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0) return null;
+    const s = useDisplayStore.getState();
+    const len = s.panDb?.length ?? s.width;
+    if (!len || s.hzPerPixel <= 0) return null;
+    const span = len * s.hzPerPixel;
+    const frac = (clientX - rect.left) / rect.width;
+    const absHz = Number(s.centerHz) - span / 2 + frac * span;
+    return absHz - Number(useConnectionStore.getState().vfoHz);
+  };
+
+  // Throttled live write while dragging (50 ms), so a drag resizes the real
+  // WDSP filter in near-real-time without flooding the backend.
+  const flushPending = () => {
+    const d = drag.current;
+    if (!d) return;
+    d.flushTimer = null;
+    d.lastWriteAt = performance.now();
+    setFilter(d.pendingLo, d.pendingHi, d.slot).catch(() => {});
+  };
+  const scheduleWrite = () => {
+    const d = drag.current;
+    if (!d) return;
+    const elapsed = performance.now() - d.lastWriteAt;
+    if (elapsed >= DRAG_MIN_INTERVAL_MS) flushPending();
+    else if (d.flushTimer == null)
+      d.flushTimer = window.setTimeout(flushPending, DRAG_MIN_INTERVAL_MS - elapsed);
+  };
+
+  const onEdgeDown = (side: 'lo' | 'hi') => (e: ReactPointerEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    e.preventDefault();
+    const c = useConnectionStore.getState();
+    const slot = variableSlot(c.filterPresetName);
+    drag.current = {
+      side,
+      slot,
+      pendingLo: c.filterLowHz,
+      pendingHi: c.filterHighHz,
+      lastWriteAt: 0,
+      flushTimer: null,
+      pointerId: e.pointerId,
+    };
+    if (slot !== c.filterPresetName) useConnectionStore.setState({ filterPresetName: slot });
+    try { (e.target as Element).setPointerCapture(e.pointerId); } catch { /* ok */ }
+  };
+  const onEdgeMove = (e: ReactPointerEvent) => {
+    const d = drag.current;
+    if (!d || e.pointerId !== d.pointerId) return;
+    const offset = clientXToOffsetHz(e.clientX);
+    if (offset === null) return;
+    let lo = d.pendingLo;
+    let hi = d.pendingHi;
+    if (d.side === 'lo') lo = Math.min(d.pendingHi - MIN_PASSBAND_HZ, Math.round(offset));
+    else hi = Math.max(d.pendingLo + MIN_PASSBAND_HZ, Math.round(offset));
+    d.pendingLo = lo;
+    d.pendingHi = hi;
+    useConnectionStore.setState({ filterLowHz: lo, filterHighHz: hi });
+    scheduleWrite();
+  };
+  const onEdgeUp = (e: ReactPointerEvent) => {
+    const d = drag.current;
+    if (!d || e.pointerId !== d.pointerId) return;
+    if (d.flushTimer != null) { clearTimeout(d.flushTimer); d.flushTimer = null; }
+    const { pendingLo, pendingHi, slot } = d;
+    drag.current = null;
+    try { (e.target as Element).releasePointerCapture(e.pointerId); } catch { /* ok */ }
+    const applyState = useConnectionStore.getState().applyState;
+    setFilter(pendingLo, pendingHi, slot).then(applyState).catch(() => {});
+  };
+
+  const showHandles = resizable && !!containerRef;
 
   // Smooth motion (issue #597): the rect is positioned against the animated
   // view-center by a draw-bus callback — same clock as the trace, waterfall,
@@ -157,6 +272,29 @@ export function PassbandOverlay() {
         borderLeft: '1px solid rgba(255, 160, 40, 0.6)',
         borderRight: '1px solid rgba(255, 160, 40, 0.6)',
       }}
-    />
+    >
+      {showHandles && (
+        <>
+          <div
+            onPointerDown={onEdgeDown('lo')}
+            onPointerMove={onEdgeMove}
+            onPointerUp={onEdgeUp}
+            onPointerCancel={onEdgeUp}
+            title="Drag to set low-cut / passband width"
+            className="pointer-events-auto absolute inset-y-0 left-0 -translate-x-1/2 cursor-ew-resize"
+            style={{ width: 9 }}
+          />
+          <div
+            onPointerDown={onEdgeDown('hi')}
+            onPointerMove={onEdgeMove}
+            onPointerUp={onEdgeUp}
+            onPointerCancel={onEdgeUp}
+            title="Drag to set high-cut / passband width"
+            className="pointer-events-auto absolute inset-y-0 right-0 translate-x-1/2 cursor-ew-resize"
+            style={{ width: 9 }}
+          />
+        </>
+      )}
+    </div>
   );
 }

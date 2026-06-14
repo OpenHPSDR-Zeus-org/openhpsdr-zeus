@@ -79,13 +79,19 @@ export function FilterCursorOverlay({ containerRef }: FilterCursorOverlayProps) 
       const hzPerPixel = s.hzPerPixel;
 
       // Filter passband preview, anchored to the cursor (not the VFO). Filter
-      // edges are stored relative to the dial centre, so Hz/pixel converts
-      // them to a screen-space offset from the crosshair.
+      // edges are stored relative to the dial centre. NOTE: hzPerPixel is
+      // Hz-per-FFT-bin, not Hz-per-CSS-pixel — the spectrum is stretched from
+      // `len` bins across the container's CSS width (rectW). Converting through
+      // the real span keeps this preview 1:1 with the PassbandOverlay (which is
+      // percentage-of-span based); dividing by hzPerPixel directly rendered the
+      // band off by the bins-to-CSS-pixel ratio.
       const band = bandRef.current;
+      const len = s.panDb?.length ?? s.width;
       if (band) {
-        if (hzPerPixel > 0) {
-          const lowPx = conn.filterLowHz / hzPerPixel;
-          const highPx = conn.filterHighHz / hzPerPixel;
+        if (hzPerPixel > 0 && len > 0 && rectW > 0) {
+          const hzPerCssPx = (len * hzPerPixel) / rectW;
+          const lowPx = conn.filterLowHz / hzPerCssPx;
+          const highPx = conn.filterHighHz / hzPerCssPx;
           const widthPx = Math.max(1, highPx - lowPx);
           const isCw = conn.mode === 'CWL' || conn.mode === 'CWU';
           // CW centres the passband on the spot you click (the tone lands at

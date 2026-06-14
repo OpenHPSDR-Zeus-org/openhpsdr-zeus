@@ -7,10 +7,11 @@ namespace Zeus.Plugins.Host.Audio;
 /// P/Invoke façade over the C ABI in
 /// <c>native/zeus-vst-bridge/include/zvst.h</c>.
 ///
-/// The native library MUST be on the runtime load path (LD_LIBRARY_PATH
-/// / DYLD_LIBRARY_PATH / PATH) — Zeus installs it next to the host
-/// executable. Tests that don't care about the native side substitute
-/// a fake <see cref="IVstBridgeNative"/>.
+/// The native library is shipped under <c>runtimes/&lt;rid&gt;/native</c>
+/// in publish and installer layouts. <see cref="VstBridgeNativeLoader"/>
+/// registers the resolver that probes that RID-specific path before the
+/// OS fallback path. Tests that don't care about the native side
+/// substitute a fake <see cref="IVstBridgeNative"/>.
 /// </summary>
 public sealed partial class VstBridgeNative : IVstBridgeNative
 {
@@ -18,6 +19,16 @@ public sealed partial class VstBridgeNative : IVstBridgeNative
     /// (macOS), libzeus-vst-bridge.so (Linux), zeus-vst-bridge.dll
     /// (Windows) via .NET's standard library-resolution rules.</summary>
     public const string LibraryName = "zeus-vst-bridge";
+
+    static VstBridgeNative()
+    {
+        VstBridgeNativeLoader.EnsureResolverRegistered();
+    }
+
+    public VstBridgeNative()
+    {
+        VstBridgeNativeLoader.EnsureResolverRegistered();
+    }
 
     public int Init(int abi) => zvst_init(abi);
 

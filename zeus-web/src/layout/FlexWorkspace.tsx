@@ -24,6 +24,7 @@ import {
   type Layout,
 } from 'react-grid-layout';
 import { absoluteStrategy } from 'react-grid-layout/core';
+import { Puzzle, Settings } from 'lucide-react';
 import { useWorkspace } from './WorkspaceContext';
 import { useLayoutStore } from '../state/layout-store';
 import { getPanelDef } from './panels';
@@ -39,12 +40,14 @@ import {
 } from './workspace';
 import { AddPanelModal } from './AddPanelModal';
 import { TileChrome } from './TileChrome';
+import { ConfirmDialog } from './ConfirmDialog';
 import { TerminatorLines } from '../components/design/TerminatorLines';
 import { MeterGroupPanel } from '../components/meter-group/MeterGroupPanel';
 import {
   parseMeterGroupConfig,
   type MeterGroupConfig,
 } from '../components/meter-group/meterGroupConfig';
+import { HeroPanel } from './panels/HeroPanel';
 
 export function FlexWorkspace() {
   const { terminatorActive } = useWorkspace();
@@ -62,6 +65,10 @@ export function FlexWorkspace() {
   // store says open.
   const addPanelOpen = useLayoutStore((s) => s.addPanelOpen);
   const setAddPanelOpen = useLayoutStore((s) => s.setAddPanelOpen);
+  const [pendingRemoveTile, setPendingRemoveTile] = useState<{
+    uid: string;
+    title: string;
+  } | null>(null);
 
   // Best-effort persist on page-unload (sendBeacon → fetch keepalive fallback).
   useEffect(() => {
@@ -107,7 +114,7 @@ export function FlexWorkspace() {
         tiles={workspace.tiles}
         isLoaded={isLoaded}
         onLayoutChange={onLayoutChange}
-        onRemoveTile={removeTile}
+        onRequestRemoveTile={(uid, title) => setPendingRemoveTile({ uid, title })}
       />
       <TerminatorLines active={terminatorActive} />
       {addPanelOpen && (
@@ -117,6 +124,24 @@ export function FlexWorkspace() {
           onClose={() => setAddPanelOpen(false)}
         />
       )}
+      {pendingRemoveTile && (
+        <ConfirmDialog
+          title="Remove panel"
+          confirmLabel="Remove Panel"
+          onCancel={() => setPendingRemoveTile(null)}
+          onConfirm={() => {
+            removeTile(pendingRemoveTile.uid);
+            setPendingRemoveTile(null);
+          }}
+        >
+          <p>
+            Remove {pendingRemoveTile.title} from the active layout?
+          </p>
+          <p>
+            The panel can be added back later from Add Panel.
+          </p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }
@@ -125,14 +150,14 @@ interface WorkspaceCanvasProps {
   tiles: WorkspaceTile[];
   isLoaded: boolean;
   onLayoutChange: (next: Layout) => void;
-  onRemoveTile: (uid: string) => void;
+  onRequestRemoveTile: (uid: string, title: string) => void;
 }
 
 function WorkspaceCanvas({
   tiles,
   isLoaded,
   onLayoutChange,
-  onRemoveTile,
+  onRequestRemoveTile,
 }: WorkspaceCanvasProps) {
   // useContainerWidth from RGL's modern API: ResizeObserver-backed parent
   // measurement. mounted=false on first paint to avoid the 1280-px width
@@ -202,12 +227,19 @@ function WorkspaceCanvas({
     () => ({
       lg: tiles.map((t) => {
         const def = getPanelDef(t.panelId);
+        // Clamp persisted size to the panel's maxW/maxH. RGL only enforces
+        // these caps during resize drags, so a tile saved wider than its cap
+        // (e.g. a Filter Presets tile placed before it gained maxW) would
+        // otherwise keep sprawling on load. Clamping here snaps it back into
+        // the right-column stack; the next onLayoutChange persists the fix.
+        const w = def?.maxW !== undefined ? Math.min(t.w, def.maxW) : t.w;
+        const h = def?.maxH !== undefined ? Math.min(t.h, def.maxH) : t.h;
         return {
           i: t.uid,
           x: t.x,
           y: t.y,
-          w: t.w,
-          h: t.h,
+          w,
+          h,
           // Per-panel legibility floor when the panel declares one, else the
           // workspace-global minimum. RGL clamps drag-resize to these and
           // refuses to compact a tile below them, so the viewport auto-fit
@@ -264,7 +296,7 @@ function WorkspaceCanvas({
         >
           {tiles.map((tile) => (
             <div key={tile.uid} data-tile-uid={tile.uid}>
-              <PanelTile tile={tile} onRemoveTile={onRemoveTile} />
+              <PanelTile tile={tile} onRequestRemoveTile={onRequestRemoveTile} />
             </div>
           ))}
         </ResponsiveGridLayout>
@@ -275,7 +307,7 @@ function WorkspaceCanvas({
 
 interface PanelTileProps {
   tile: WorkspaceTile;
-  onRemoveTile: (uid: string) => void;
+  onRequestRemoveTile: (uid: string, title: string) => void;
 }
 
 // Memoised so a parent re-render (e.g. another tile's drag updating the
@@ -284,14 +316,18 @@ interface PanelTileProps {
 // and `onRemoveTile` is the stable zustand action reference.
 const PanelTile = memo(function PanelTile({
   tile,
-  onRemoveTile,
+  onRequestRemoveTile,
 }: PanelTileProps) {
-  const handleRemove = useCallback(
-    () => onRemoveTile(tile.uid),
-    [onRemoveTile, tile.uid],
-  );
   const def = getPanelDef(tile.panelId);
-  if (!def) return null;
+  if (!def) {
+    return (
+      <UnavailablePanelTile
+        tile={tile}
+        onRequestRemoveTile={onRequestRemoveTile}
+      />
+    );
+  }
+  const handleRemove = () => onRequestRemoveTile(tile.uid, def.name);
   // Headerless panels own their entire tile surface and draw their own
   // header (if any). They MUST include an element with class
   // `.workspace-tile-header` so RGL drag picks up, and a
@@ -322,6 +358,9 @@ function PanelBody({
 }) {
   // Per-tile config-bound rendering for multi-instance / configurable
   // panels. Single-instance panels just render their component as-is.
+  if (tile.panelId === 'hero') {
+    return <HeroPanel tile={tile} onRemove={onRemove} />;
+  }
   if (tile.panelId === 'metergroup') {
     return <MeterGroupTileBody tile={tile} onRemove={onRemove} />;
   }
@@ -335,6 +374,49 @@ function PanelBody({
     return <Component onRemove={onRemove} />;
   }
   return <Component />;
+}
+
+function UnavailablePanelTile({
+  tile,
+  onRequestRemoveTile,
+}: PanelTileProps) {
+  const handleRemove = useCallback(
+    () => onRequestRemoveTile(tile.uid, 'Unavailable panel'),
+    [onRequestRemoveTile, tile.uid],
+  );
+  const openPlugins = useCallback(() => {
+    useLayoutStore.getState().setSettingsView(true, 'plugins');
+  }, []);
+
+  return (
+    <div className="workspace-tile workspace-tile--unavailable">
+      <TileChrome title="Unavailable panel" onRemove={handleRemove} />
+      <div className="workspace-tile-body workspace-unavailable-panel">
+        <div className="workspace-unavailable-panel-icon" aria-hidden>
+          <Puzzle size={18} />
+        </div>
+        <div className="workspace-unavailable-panel-copy">
+          <div className="workspace-unavailable-panel-title">
+            Panel unavailable
+          </div>
+          <p>
+            Zeus preserved this saved tile, but its panel is not registered.
+            Install or enable the plugin, or remove the tile.
+          </p>
+          <code>{tile.panelId}</code>
+        </div>
+        <div className="workspace-unavailable-panel-actions">
+          <button type="button" className="btn sm" onClick={openPlugins}>
+            <Settings size={12} aria-hidden />
+            Plugins
+          </button>
+          <button type="button" className="btn ghost sm" onClick={handleRemove}>
+            Remove
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function MeterGroupTileBody({

@@ -38,6 +38,7 @@ import { TxAudioToolsPanel } from './TxAudioToolsPanel';
 import { DspSettingsPanel } from './DspSettingsPanel';
 import { PluginsPanel } from '../plugins/components/PluginsPanel';
 import { HamClockSettingsPanel } from './HamClockSettingsPanel';
+import { SpotsSettingsPanel } from './SpotsSettingsPanel';
 import { HardwareDiagnosticsPanel } from './HardwareDiagnosticsPanel';
 
 export type SettingsTabId =
@@ -53,6 +54,7 @@ export type SettingsTabId =
   | 'display'
   | 'plugins'
   | 'hamclock'
+  | 'spots'
   | 'server'
   | 'radio'
   | 'calibration'
@@ -71,6 +73,7 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'display', label: 'DISPLAY' },
   { id: 'plugins', label: 'PLUGINS' },
   { id: 'hamclock', label: 'HAMCLOCK' },
+  { id: 'spots', label: 'SPOTS' },
   { id: 'server', label: 'SERVER' },
   { id: 'radio', label: 'RADIO' },
   { id: 'calibration', label: 'CALIBRATION' },
@@ -189,6 +192,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {active === 'display' && <DisplayPanel />}
           {active === 'plugins' && <PluginsPanel />}
           {active === 'hamclock' && <HamClockSettingsPanel />}
+          {active === 'spots' && <SpotsSettingsPanel />}
           {active === 'server' && <ServerUrlPanel />}
           {active === 'radio' && hasHl2OptionalToggles && <RadioOptionsPanel />}
           {active === 'calibration' && <CalibrationPanel />}

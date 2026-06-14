@@ -10,6 +10,9 @@
 // option) any later version. See the LICENSE file at the root of this
 // repository for the full text, or https://www.gnu.org/licenses/.
 
+import { useCallback, useEffect, useRef } from 'react';
+import { setNr } from '../api/client';
+import { useConnectionStore } from '../state/connection-store';
 import { useSmartNrStore, type SmartNrAutomationMode } from '../state/smart-nr-store';
 import { Slider } from './design/Slider';
 
@@ -21,6 +24,9 @@ const MODES: Array<{ id: SmartNrAutomationMode; label: string }> = [
 
 export function SmartNrSettingsSection() {
   const state = useSmartNrStore();
+  const connected = useConnectionStore((s) => s.status === 'Connected');
+  const setLocalNr = useConnectionStore((s) => s.setNr);
+  const applyState = useConnectionStore((s) => s.applyState);
   const {
     automationMode,
     aggressiveness,
@@ -31,8 +37,39 @@ export function SmartNrSettingsSection() {
     status,
     setAutomationMode,
     setSettings,
+    setStatus,
     resetSettings,
   } = state;
+  const inflightAbort = useRef<AbortController | null>(null);
+
+  useEffect(
+    () => () => {
+      inflightAbort.current?.abort();
+    },
+    [],
+  );
+
+  const applySuggestedSmartNr = useCallback(() => {
+    if (!connected || !status?.nr) return;
+    const nr = status.nr;
+    setLocalNr(nr);
+    inflightAbort.current?.abort();
+    const ac = new AbortController();
+    inflightAbort.current = ac;
+    setNr(nr, ac.signal)
+      .then((s) => {
+        if (!ac.signal.aborted) applyState(s);
+      })
+      .catch(() => {
+        /* next state poll will reconcile */
+      });
+    setStatus({
+      ...status,
+      atUtc: new Date().toISOString(),
+      pending: false,
+      applied: true,
+    });
+  }, [connected, status, setLocalNr, applyState, setStatus]);
 
   return (
     <div className="smart-nr-settings">
@@ -113,6 +150,17 @@ export function SmartNrSettingsSection() {
           <span className="mono">
             SNR {status.maxSnrDb.toFixed(1)} dB · OCC {status.occupancyPct.toFixed(1)}% · PK {status.peakCount}
           </span>
+          {automationMode === 'suggest' && status.nr && !status.pending && !status.applied && (
+            <button
+              type="button"
+              className="btn sm smart-nr-apply"
+              onClick={applySuggestedSmartNr}
+              disabled={!connected}
+              title="Apply the suggested Smart NR profile"
+            >
+              Apply
+            </button>
+          )}
         </div>
       )}
     </div>

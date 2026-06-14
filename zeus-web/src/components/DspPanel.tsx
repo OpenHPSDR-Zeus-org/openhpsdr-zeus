@@ -50,7 +50,7 @@ import {
   type NrMode,
 } from '../api/client';
 import { getNoiseFloor, getSignalConfidence } from '../dsp/signal-estimator';
-import { recommendSmartNr } from '../dsp/smart-nr';
+import { labelSmartNrProfile, recommendSmartNr, shapeSmartNrRecommendation } from '../dsp/smart-nr';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
 import { useSmartNrStore } from '../state/smart-nr-store';
@@ -100,6 +100,10 @@ const NB_LABEL: Record<NbMode, string> = {
   Nb2: 'NB2',
 };
 
+function round1(v: number): number {
+  return Math.round(v * 10) / 10;
+}
+
 export function DspPanel() {
   const nr = useConnectionStore((s) => s.nr);
   const setLocalNr = useConnectionStore((s) => s.setNr);
@@ -108,6 +112,8 @@ export function DspPanel() {
   const mode = useConnectionStore((s) => s.mode);
   const smartNrMode = useSmartNrStore((s) => s.automationMode);
   const smartNrStatus = useSmartNrStore((s) => s.status);
+  const setSmartNrMode = useSmartNrStore((s) => s.setAutomationMode);
+  const setSmartNrStatus = useSmartNrStore((s) => s.setStatus);
 
   const inflightAbort = useRef<AbortController | null>(null);
 
@@ -168,16 +174,49 @@ export function DspPanel() {
 
   const applySmartNr = useCallback(() => {
     if (!connected) return;
-    const { panDb } = useDisplayStore.getState();
+    if (smartNrMode !== 'manual') {
+      setSmartNrMode('manual');
+      return;
+    }
+
+    setSmartNrMode('auto');
+    const display = useDisplayStore.getState();
     const rec = recommendSmartNr({
-      spectrum: panDb,
+      spectrum: display.panValid ? display.panDb : null,
       floor: getNoiseFloor(),
       confidence: getSignalConfidence(),
       current: nr,
       mode,
     });
-    if (rec) send(rec.nr);
-  }, [connected, nr, mode, send]);
+    if (!rec) {
+      setSmartNrStatus(null);
+      return;
+    }
+    const shaped = shapeSmartNrRecommendation(rec, useSmartNrStore.getState());
+    send(shaped);
+    setSmartNrStatus({
+      atUtc: new Date().toISOString(),
+      profile: labelSmartNrProfile(shaped),
+      reason: rec.reason,
+      maxSnrDb: round1(rec.condition.maxSnrDb),
+      occupancyPct: round1(rec.condition.occupancy6 * 100),
+      peakCount: rec.condition.peakCount,
+      pending: false,
+      applied: true,
+      nr: shaped,
+    });
+  }, [connected, smartNrMode, setSmartNrMode, setSmartNrStatus, nr, mode, send]);
+
+  const applySuggestedSmartNr = useCallback(() => {
+    if (!connected || !smartNrStatus?.nr) return;
+    send(smartNrStatus.nr);
+    setSmartNrStatus({
+      ...smartNrStatus,
+      atUtc: new Date().toISOString(),
+      pending: false,
+      applied: true,
+    });
+  }, [connected, smartNrStatus, send, setSmartNrStatus]);
 
   const nrActive = nr.nrMode !== 'Off';
   const nbActive = nr.nbMode !== 'Off';
@@ -212,8 +251,13 @@ export function DspPanel() {
           type="button"
           disabled={!connected}
           onClick={applySmartNr}
-          className="btn sm"
-          title="SMART - analyze the current panadapter and apply mode-aware NR settings"
+          aria-pressed={smartNrMode !== 'manual'}
+          className={`btn sm ${smartNrMode !== 'manual' ? 'active' : ''}`}
+          title={
+            smartNrMode === 'manual'
+              ? 'SMART - arm automatic panadapter-driven NR and apply the current recommendation'
+              : 'SMART active - click to return NR automation to manual'
+          }
         >
           SMART
         </button>
@@ -258,7 +302,17 @@ export function DspPanel() {
         <div className="dsp-smart-status" title={smartNrStatus?.reason ?? 'Smart NR automation is waiting for spectrum data'}>
           <span className="mono">{smartNrMode.toUpperCase()}</span>
           <span>{smartNrStatus?.profile ?? 'WAIT'}</span>
-          {smartNrStatus && (
+          {smartNrMode === 'suggest' && smartNrStatus?.nr && !smartNrStatus.pending && !smartNrStatus.applied ? (
+            <button
+              type="button"
+              className="btn sm dsp-smart-apply"
+              onClick={applySuggestedSmartNr}
+              disabled={!connected}
+              title="Apply the suggested Smart NR profile"
+            >
+              APPLY
+            </button>
+          ) : smartNrStatus && (
             <span className="mono">
               {smartNrStatus.pending ? 'DWELL' : smartNrStatus.applied ? 'APPLIED' : 'READY'}
             </span>

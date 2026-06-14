@@ -313,9 +313,14 @@ public static class ZeusHost
         builder.Services.AddSingleton<ThemeSettingsStore>();
         builder.Services.AddSingleton<BottomPinStore>();
         builder.Services.AddSingleton<PanWfSplitStore>();
+        // Desktop main-window geometry (Photino). Only RunDesktop reads it; the
+        // store is harmless to register in service/headless modes (no consumer).
+        builder.Services.AddSingleton<WindowGeometryStore>();
         builder.Services.AddSingleton<RadioStateStore>();
         builder.Services.AddSingleton<QrzService>();
         builder.Services.AddSingleton<LogService>();
+        builder.Services.AddSingleton<HardwareDiagnosticsService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<HardwareDiagnosticsService>());
 
         // Regional band planning (issue #65 PRD). BandPlanStore loads shipped
         // JSON under BandPlans/ at startup and resolves parent→override chains;
@@ -438,6 +443,16 @@ public static class ZeusHost
         // only so its sidecar Node process is killed on Zeus shutdown.
         builder.Services.AddSingleton<HamClockService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<HamClockService>());
+
+        // ActivationSpotsService — polls the public POTA + SOTA activation feeds
+        // on a timer and caches the merged snapshot for the Spots panel
+        // (GET /api/spots/activations). Self-contained background poller; touches
+        // nothing on the radio / DSP / TX path. Unrelated to the TCI DX-cluster
+        // SpotManager below. SpotsSettingsStore persists the operator's feed /
+        // poll-interval / click-to-tune preferences.
+        builder.Services.AddSingleton<SpotsSettingsStore>();
+        builder.Services.AddSingleton<ActivationSpotsService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<ActivationSpotsService>());
 
         // TCI (Transceiver Control Interface) — ExpertSDR3-compatible WebSocket server
         // for remote control by loggers (Log4OM, N1MM+), digital-mode apps (JTDX, WSJT-X),

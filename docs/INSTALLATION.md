@@ -10,18 +10,20 @@ Zeus is distributed as native installers for Windows, macOS, and Linux.
 
 ### Installation Steps
 
-1. Download `Zeus-X.Y.Z-win-x64-setup.exe` from the [latest release](https://github.com/Kb2uka/openhpsdr-zeus/releases/latest)
+1. Download `openhpsdr-zeus-X.Y.Z-win-x64-setup.exe` from the [latest release](https://github.com/Kb2uka/openhpsdr-zeus/releases/latest)
 2. Run the installer
 3. Follow the installation wizard prompts
-4. Zeus will be installed to `C:\Program Files\Zeus` by default
-5. A desktop shortcut and Start Menu entry will be created
-6. Launch Zeus from the Start Menu or desktop shortcut
-7. Your default browser will open to `http://localhost:6060`
+4. Zeus will be installed to `C:\Program Files\OpenHPSDR-Zeus` by default
+5. The Start Menu gets two entries:
+   - `OpenHPSDR-Zeus` opens the native desktop window
+   - `OpenHPSDR-Zeus Server` starts the LAN server with a small status window
+6. The installer creates the desktop-mode desktop shortcut by default. The server-mode desktop shortcut is optional on the installer task page.
+7. Launch `OpenHPSDR-Zeus` for normal single-machine use.
 
 ### Notes
-- The installer includes the .NET runtime and all dependencies
+- The installer includes the .NET runtime, the Visual C++ runtime needed by the native DSP/audio libraries, and the bundled native libraries
 - Windows Defender SmartScreen may show a warning for unsigned applications - click "More info" then "Run anyway"
-- To uninstall, use Windows Settings > Apps > Zeus
+- To uninstall, use Windows Settings > Apps > OpenHPSDR-Zeus
 
 ---
 

@@ -182,7 +182,7 @@ export function FilterPanel() {
     <div
       ref={containerRef}
       className="ctrl-group filter-bar toolbar-fav"
-      style={{ minWidth: 220, position: 'relative' }}
+      style={{ minWidth: 176, position: 'relative' }}
     >
       <div className="label-xs ctrl-lbl">FILTER</div>
       <div className="btn-row" style={{ gap: 3 }}>

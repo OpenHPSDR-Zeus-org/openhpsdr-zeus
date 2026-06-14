@@ -26,7 +26,11 @@ namespace Zeus.Protocol2;
 ///   <item><c>bytes 2..3</c> — exciter power (12-bit, sign-extended to 16, BE)</item>
 ///   <item><c>bytes 10..11</c> — PA forward power ADC (BE u16)</item>
 ///   <item><c>bytes 18..19</c> — PA reverse power ADC (BE u16)</item>
+///   <item><c>bytes 26..27</c> — hardware LEDs (BE u16)</item>
+///   <item><c>bytes 35..38</c> — ADC0/ADC1 max magnitude (BE u16)</item>
 ///   <item><c>bytes 45..46</c> — supply volts (BE u16)</item>
+///   <item><c>bytes 47..54</c> — user ADC3..0 (BE u16)</item>
+///   <item><c>byte 55</c> — user digital input bitfield</item>
 /// </list>
 ///
 /// The forward/reverse ADC numbers feed the same watts math as the P1 alex
@@ -38,4 +42,17 @@ public readonly record struct P2TelemetryReading(
     ushort RevAdc,
     ushort ExciterAdc,
     bool PttIn,
-    bool PllLocked);
+    bool PllLocked,
+    bool DotIn = false,
+    bool DashIn = false,
+    bool SidetoneActive = false,
+    byte AdcOverloadBits = 0,
+    ushort Adc0MaxMagnitude = 0,
+    ushort Adc1MaxMagnitude = 0,
+    ushort SupplyVoltsAdc = 0,
+    ushort UserAdc0 = 0,
+    ushort UserAdc1 = 0,
+    ushort UserAdc2 = 0,
+    ushort UserAdc3 = 0,
+    byte UserDigitalIn = 0,
+    ushort HardwareLeds = 0);

@@ -162,7 +162,7 @@ export function DownloadAudioSuiteButton() {
         disabled={busy}
         onClick={runInstall}
         title="Install the six audio chain plugins (Noise Gate, EQ, Compressor, Exciter, Bass, Reverb) from the official Zeus plugin repo"
-        style={{ marginLeft: 'auto' }}
+        style={{ whiteSpace: 'nowrap' }}
       >
         {busy ? 'Installing…' : 'Download Audio Suite'}
       </button>

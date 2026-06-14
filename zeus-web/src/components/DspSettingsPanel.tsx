@@ -15,6 +15,7 @@
 // same surface family as the other settings tabs — no new chrome, tokens only.
 
 import { AgcSettingsSection } from './AgcSettingsSection';
+import { AdcProtectionSettingsSection } from './AdcProtectionSettingsSection';
 import { BandwidthSettingsSection } from './BandwidthSettingsSection';
 import { SquelchSettingsSection } from './SquelchSettingsSection';
 import { SignalIntelligenceSettingsSection } from './SignalIntelligenceSettingsSection';
@@ -41,6 +42,13 @@ export function DspSettingsPanel() {
           <span className="ps-card-hint">mode / max-gain / custom</span>
         </h4>
         <AgcSettingsSection />
+      </div>
+      <div className="ps-card">
+        <h4>
+          ADC Protection
+          <span className="ps-card-hint">P2 overload / max-magnitude auto-ATT</span>
+        </h4>
+        <AdcProtectionSettingsSection />
       </div>
       <div className="ps-card">
         <h4>

@@ -203,6 +203,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       autoAttEnabled: s.autoAttEnabled,
       attOffsetDb: s.attOffsetDb,
       adcOverloadWarning: s.adcOverloadWarning,
+      preampOn: s.preampOn,
       ctunEnabled: s.ctunEnabled,
       nr: s.nr,
       zoomLevel: s.zoomLevel,

@@ -13,7 +13,8 @@
 // panels (Meters today), duplicates are allowed and a "+ Add another" badge
 // labels the card when an instance already exists.
 
-import { useState } from 'react';
+import { useId, useRef, useState } from 'react';
+import { X } from 'lucide-react';
 import {
   getAllPanels,
   PANEL_CATEGORIES,
@@ -21,6 +22,7 @@ import {
   type PanelCategory,
 } from './panels';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
+import { useDialogFocusTrap } from './useDialogFocusTrap';
 
 interface AddPanelModalProps {
   /** Set of panelIds currently in the workspace (one entry per id, regardless
@@ -34,6 +36,9 @@ interface AddPanelModalProps {
 type CategoryFilter = PanelCategory | 'all';
 
 export function AddPanelModal({ existingPanels, onAdd, onClose }: AddPanelModalProps) {
+  const titleId = useId();
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedCategory, setSelectedCategory] =
     useState<CategoryFilter>('all');
@@ -41,6 +46,11 @@ export function AddPanelModal({ existingPanels, onAdd, onClose }: AddPanelModalP
   // panels load (or change after install/uninstall). Return value is
   // unused — getAllPanels() reads the same registry directly.
   usePluginPanels();
+  useDialogFocusTrap({
+    dialogRef,
+    initialFocusRef: searchRef,
+    onClose,
+  });
 
   const availablePanels = getAllPanels().filter((panel) => {
     // Single-instance panels disappear from the list once added; multi-
@@ -75,21 +85,25 @@ export function AddPanelModal({ existingPanels, onAdd, onClose }: AddPanelModalP
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         className="add-panel-modal"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
-        aria-label="Add panel"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        tabIndex={-1}
       >
         <div className="add-panel-modal-header">
-          <h2>Add Panel</h2>
+          <h2 id={titleId}>Add Panel</h2>
           <button
             type="button"
             className="workspace-tile-close"
             aria-label="Close add-panel modal"
+            title="Close (Esc)"
             onClick={onClose}
             style={{ width: 22, height: 22 }}
           >
-            ×
+            <X size={12} aria-hidden />
           </button>
         </div>
 
@@ -119,6 +133,7 @@ export function AddPanelModal({ existingPanels, onAdd, onClose }: AddPanelModalP
 
         <div className="add-panel-modal-body">
           <input
+            ref={searchRef}
             type="text"
             className="add-panel-search"
             placeholder="Search panels…"

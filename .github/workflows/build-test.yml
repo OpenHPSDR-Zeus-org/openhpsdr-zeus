@@ -72,3 +72,19 @@ jobs:
             exit 1
           fi
           echo "Frontend build successful"
+
+      - name: Verify Windows installer publish payload
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          dotnet publish OpenhpsdrZeus/OpenhpsdrZeus.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:VersionPrefix=0.0.0 `
+            -p:VersionSuffix=ci `
+            -p:DebugType=embedded `
+            -p:DebugSymbols=false
+          ./tools/verify-windows-installer-payload.ps1 `
+            -PublishDir "OpenhpsdrZeus/bin/Release/net10.0/win-x64/publish" `
+            -Arch x64

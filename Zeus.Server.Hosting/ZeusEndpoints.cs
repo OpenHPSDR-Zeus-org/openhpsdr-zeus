@@ -44,6 +44,30 @@ public static class ZeusEndpoints
         app.MapGet("/api/capabilities",
             (HttpContext ctx, CapabilitiesService caps) => Results.Ok(caps.Snapshot(ctx)));
 
+        // Activation spots — merged POTA + SOTA feed, polled server-side by
+        // ActivationSpotsService. The Spots panel polls this and offers
+        // click-to-tune. Returns whatever's currently cached (empty list until
+        // the first upstream poll completes).
+        app.MapGet("/api/spots/activations",
+            (ActivationSpotsService spots) => Results.Ok(spots.GetCurrentSpots()));
+
+        // Spots feature settings — feed toggles, poll interval, and click-to-tune
+        // behaviour. Persisted in zeus-prefs.db; the poller is nudged to refresh
+        // immediately on change via ActivationSpotsService.Wake().
+        app.MapGet("/api/spots/settings",
+            (SpotsSettingsStore store) => Results.Ok(store.Get()));
+
+        app.MapPost("/api/spots/settings",
+            (Zeus.Contracts.SpotsSettings req, SpotsSettingsStore store, ActivationSpotsService spots) =>
+            {
+                var saved = store.Set(req);
+                spots.Wake();
+                log.LogInformation(
+                    "api.spots.settings enabled={Enabled} pota={Pota} sota={Sota} poll={Poll}s",
+                    saved.Enabled, saved.PotaEnabled, saved.SotaEnabled, saved.PollIntervalSeconds);
+                return Results.Ok(saved);
+            });
+
         // Native RX audio (miniaudio) — desktop-mode mute control. The
         // Mute/Unmute button in the Photino window POSTs here to silence
         // the OS playback device. NativeAudioSink is only registered in
@@ -534,7 +558,7 @@ public static class ZeusEndpoints
 
             try
             {
-                await dsp.ConnectP2Async(ipEndpoint, rateKhz, numAdc: 2, ctx.RequestAborted, boardKind);
+                rateKhz = await dsp.ConnectP2Async(ipEndpoint, rateKhz, numAdc: 2, ctx.RequestAborted, boardKind);
                 return Results.Ok(new { protocol = "P2", endpoint = req.Endpoint, sampleRateKhz = rateKhz });
             }
             catch (InvalidOperationException ex)
@@ -747,6 +771,19 @@ public static class ZeusEndpoints
         {
             log.LogInformation("api.auto-att enabled={Enabled}", req.Enabled);
             return r.SetAutoAtt(req.Enabled);
+        });
+
+        app.MapGet("/api/rx/adc-protection", (RadioService r) =>
+        {
+            return Results.Ok(r.GetAdcProtectionStatus());
+        });
+
+        app.MapPut("/api/rx/adc-protection", (AdcProtectionSetRequest req, RadioService r) =>
+        {
+            log.LogInformation(
+                "api.rx.adcProtection enabled={Enabled} attackMs={AttackMs} releaseMs={ReleaseMs} maxOffset={MaxOffset} magLimit={MagLimit}",
+                req.Enabled, req.AttackMs, req.ReleaseMs, req.MaxOffsetDb, req.MagnitudeSoftLimit);
+            return Results.Ok(r.SetAdcProtection(req));
         });
 
         app.MapPost("/api/auto-agc", (AutoAgcSetRequest req, RadioService r) =>

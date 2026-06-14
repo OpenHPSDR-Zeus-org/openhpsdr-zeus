@@ -157,9 +157,17 @@ export async function loadInstalledPluginUis(): Promise<void> {
  * without a full page reload. loadOne is idempotent (registered.set
  * overwrites), and dynamic imports are browser-cached, so re-running is
  * cheap and safe.
+ *
+ * Also prunes panels whose plugin is no longer installed — so an
+ * uninstalled VST drops out of the Audio Suite rack / sidebar
+ * immediately instead of lingering as a ghost entry.
  */
 export async function reloadInstalledPluginUis(): Promise<void> {
   const list = await fetchInstalledPlugins();
+  const liveIds = new Set(list.plugins.map((p) => p.id));
+  for (const [key, panel] of registered) {
+    if (!liveIds.has(panel.pluginId)) registered.delete(key);
+  }
   await Promise.all(list.plugins.map(loadOne));
   loaded = true;
   emit();

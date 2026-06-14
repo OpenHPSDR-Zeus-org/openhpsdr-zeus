@@ -7,6 +7,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { useBandPlanStore } from '../../state/bandPlan';
 import type { BandSegment, BandAllocation, ModeRestriction } from '../../api/bands';
+import { ConfirmDialog } from '../../layout/ConfirmDialog';
 
 const ALLOCATION_OPTIONS: BandAllocation[] = ['Amateur', 'SWL', 'Broadcast', 'Reserved', 'Unknown'];
 const MODE_OPTIONS: ModeRestriction[] = ['Any', 'CwOnly', 'PhoneOnly', 'DigitalOnly', 'CwAndDigital'];
@@ -47,6 +48,7 @@ export function BandPlanEditor() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedRegion, setSelectedRegion] = useState(store.currentRegionId);
+  const [resetPending, setResetPending] = useState(false);
 
   // Load plan for selected region whenever it changes
   useEffect(() => {
@@ -104,7 +106,6 @@ export function BandPlanEditor() {
   };
 
   const handleReset = async () => {
-    if (!confirm(`Reset the plan for ${selectedRegion} to shipped defaults?`)) return;
     setSaving(true);
     setError(null);
     try {
@@ -266,7 +267,7 @@ export function BandPlanEditor() {
         <button
           type="button"
           className="btn ghost sm"
-          onClick={() => void handleReset()}
+          onClick={() => setResetPending(true)}
           disabled={saving}
           style={{ fontSize: 11 }}
         >
@@ -287,6 +288,20 @@ export function BandPlanEditor() {
           {saving ? 'Saving…' : 'Save Changes'}
         </button>
       </div>
+      {resetPending && (
+        <ConfirmDialog
+          title="Reset band plan"
+          confirmLabel="Reset Defaults"
+          onCancel={() => setResetPending(false)}
+          onConfirm={() => {
+            setResetPending(false);
+            void handleReset();
+          }}
+        >
+          <p>Reset the plan for {selectedRegion} to shipped defaults?</p>
+          <p>Any local override rows for this region will be discarded.</p>
+        </ConfirmDialog>
+      )}
     </div>
   );
 }

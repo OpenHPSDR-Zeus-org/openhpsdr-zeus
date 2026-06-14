@@ -44,7 +44,7 @@ export function StepFavorites() {
       options={STEP_OPTIONS}
       currentKey={String(stepHz)}
       onSelect={onSelect}
-      minWidth={180}
+      minWidth={154}
     />
   );
 }

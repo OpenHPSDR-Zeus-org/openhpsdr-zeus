@@ -31,11 +31,13 @@ import {
   LayoutSettingsModal,
   type LayoutSettingsValue,
 } from '../layout/LayoutSettingsModal';
+import { ConfirmDialog } from '../layout/ConfirmDialog';
 
 type ModalState =
   | { kind: 'closed' }
   | { kind: 'create' }
-  | { kind: 'edit'; id: string };
+  | { kind: 'edit'; id: string }
+  | { kind: 'delete'; id: string; name: string };
 
 export function LeftLayoutBar() {
   const layouts = useLayoutStore((s) => s.layouts);
@@ -79,8 +81,7 @@ export function LeftLayoutBar() {
 
   const handleDelete = (id: string, name: string) => {
     if (layouts.length <= 1) return;
-    if (!window.confirm(`Delete layout “${name}”? Its panel arrangement will be lost.`)) return;
-    removeLayout(id);
+    setModal({ kind: 'delete', id, name });
   };
 
   const openEdit = (id: string) => setModal({ kind: 'edit', id });
@@ -218,6 +219,20 @@ export function LeftLayoutBar() {
           onSave={handleModalSave}
           onClose={() => setModal({ kind: 'closed' })}
         />
+      )}
+      {modal.kind === 'delete' && (
+        <ConfirmDialog
+          title="Delete layout"
+          confirmLabel="Delete Layout"
+          onCancel={() => setModal({ kind: 'closed' })}
+          onConfirm={() => {
+            removeLayout(modal.id);
+            setModal({ kind: 'closed' });
+          }}
+        >
+          <p>Delete {modal.name}?</p>
+          <p>This removes the saved panel arrangement for this radio.</p>
+        </ConfirmDialog>
       )}
     </aside>
   );

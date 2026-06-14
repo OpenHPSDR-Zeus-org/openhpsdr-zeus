@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { NR_CONFIG_DEFAULT } from '../api/client';
-import { analyzeSmartNrCondition, recommendSmartNr } from './smart-nr';
+import { analyzeSmartNrCondition, recommendSmartNr, shapeSmartNrRecommendation } from './smart-nr';
 
 const WIDTH = 256;
 const NOISE_DB = -110;
@@ -112,5 +112,60 @@ describe('smart NR supervisor', () => {
     })!;
     expect(rec.condition.hasSignal).toBe(true);
     expect(rec.nr.nrMode).toBe('Sbnr');
+  });
+
+  it('shapes recommendations with operator Smart NR tuning', () => {
+    const spec = noise();
+    spec[120] = NOISE_DB + 14;
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'CWU',
+    })!;
+
+    const conservative = shapeSmartNrRecommendation(rec, {
+      aggressiveness: 15,
+      autoBlankerEnabled: true,
+      autoNotchEnabled: true,
+      maxBlankerThreshold: 12,
+    });
+    const aggressive = shapeSmartNrRecommendation(rec, {
+      aggressiveness: 100,
+      autoBlankerEnabled: true,
+      autoNotchEnabled: true,
+      maxBlankerThreshold: 12,
+    });
+
+    expect(conservative.nrMode).toBe('Off');
+    expect(aggressive.nrMode).toBe('Sbnr');
+    expect(aggressive.nr4ReductionAmount).toBe(13);
+    expect(aggressive.nr4WhiteningFactor).toBe(10);
+    expect(aggressive.nr4PostFilterThreshold).toBe(-5);
+  });
+
+  it('honors disabled blanker and notch helpers while shaping', () => {
+    const spec = noise();
+    const confidence = new Float32Array(WIDTH);
+    for (let i = 40; i < 160; i += 12) spec[i] = NOISE_DB + 25;
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      confidence,
+      current: { ...NR_CONFIG_DEFAULT, nbThreshold: 20 },
+      mode: 'USB',
+    })!;
+
+    const shaped = shapeSmartNrRecommendation(rec, {
+      aggressiveness: 70,
+      autoBlankerEnabled: false,
+      autoNotchEnabled: false,
+      maxBlankerThreshold: 12,
+    });
+
+    expect(shaped.nbMode).toBe('Off');
+    expect(shaped.snbEnabled).toBe(false);
+    expect(shaped.anfEnabled).toBe(false);
+    expect(shaped.nbpNotchesEnabled).toBe(false);
   });
 });

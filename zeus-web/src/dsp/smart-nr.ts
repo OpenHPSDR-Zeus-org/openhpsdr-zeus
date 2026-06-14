@@ -29,6 +29,13 @@ export type SmartNrRecommendation = {
   reason: string;
 };
 
+export type SmartNrTuning = {
+  aggressiveness: number;
+  autoBlankerEnabled: boolean;
+  autoNotchEnabled: boolean;
+  maxBlankerThreshold: number;
+};
+
 export type SmartNrInput = {
   spectrum: Float32Array | null;
   floor: Float32Array | null;
@@ -36,6 +43,48 @@ export type SmartNrInput = {
   current: NrConfigDto;
   mode: RxMode;
 };
+
+export function labelSmartNrProfile(nr: NrConfigDto): string {
+  if (nr.nbMode !== 'Off' && nr.snbEnabled) return `${nr.nbMode}+SNB`;
+  if (nr.nrMode === 'Sbnr') return 'NR4';
+  if (nr.nrMode === 'Emnr') return 'NR2';
+  if (nr.nrMode === 'Anr') return 'NR1';
+  if (nr.anfEnabled || nr.nbpNotchesEnabled) return 'Notch';
+  return 'Light';
+}
+
+export function shapeSmartNrRecommendation(rec: SmartNrRecommendation, tuning: SmartNrTuning): NrConfigDto {
+  const next: NrConfigDto = { ...rec.nr };
+  const gain = Math.max(0, Math.min(1, tuning.aggressiveness / 100));
+
+  if (!tuning.autoBlankerEnabled) {
+    next.nbMode = 'Off';
+    next.snbEnabled = false;
+  } else if (next.nbMode !== 'Off') {
+    next.nbThreshold = Math.min(next.nbThreshold, tuning.maxBlankerThreshold);
+  }
+
+  if (!tuning.autoNotchEnabled) {
+    next.anfEnabled = false;
+    next.nbpNotchesEnabled = false;
+  }
+
+  if (next.nrMode === 'Sbnr') {
+    next.nr4ReductionAmount = Math.round(5 + gain * 8);
+    next.nr4WhiteningFactor = rec.condition.weakSparse ? Math.round(4 + gain * 6) : Math.round(gain * 5);
+    next.nr4PostFilterThreshold = Math.round(-10 + gain * 5);
+  } else if (next.nrMode === 'Emnr') {
+    next.emnrPost2Factor = Math.round(8 + gain * 10);
+    next.emnrPost2Nlevel = Math.round(8 + gain * 10);
+    next.emnrAeRun = gain >= 0.25;
+  }
+
+  if (tuning.aggressiveness < 25 && !rec.condition.impulsiveNoise && !rec.condition.tonalInterference) {
+    next.nrMode = 'Off';
+  }
+
+  return next;
+}
 
 function percentile(sorted: number[], q: number): number {
   if (sorted.length === 0) return 0;

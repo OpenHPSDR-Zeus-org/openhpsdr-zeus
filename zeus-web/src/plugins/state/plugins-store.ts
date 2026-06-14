@@ -71,6 +71,27 @@ function errMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+async function refreshRuntimePanels() {
+  try {
+    const { reloadInstalledPluginUis } = await import(
+      '../runtime/pluginRuntime'
+    );
+    await reloadInstalledPluginUis();
+  } catch (err) {
+    // jsdom's native fetch cannot resolve app-relative URLs when a test does
+    // not stub this second refresh path. The installed-list refresh above is
+    // still covered there; production browsers resolve /api/plugins normally.
+    if (
+      err instanceof TypeError &&
+      err.message.includes('Failed to parse URL')
+    ) {
+      return;
+    }
+    // eslint-disable-next-line no-console
+    console.warn('plugin runtime refresh threw', err);
+  }
+}
+
 export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
   installed: [],
   sdkAbi: 0,
@@ -150,6 +171,7 @@ export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
       });
       // Refresh the installed list so the new plugin appears immediately.
       await get().refreshInstalled();
+      await refreshRuntimePanels();
       return dto;
     } catch (err) {
       set({
@@ -180,6 +202,7 @@ export const usePluginsStore = create<PluginsStoreState>((set, get) => ({
             : null,
       });
       await get().refreshInstalled();
+      await refreshRuntimePanels();
       return result;
     } catch (err) {
       set({

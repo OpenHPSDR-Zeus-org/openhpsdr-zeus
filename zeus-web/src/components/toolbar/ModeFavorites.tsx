@@ -45,7 +45,7 @@ export function ModeFavorites() {
       options={MODE_OPTIONS}
       currentKey={mode}
       onSelect={onSelect}
-      minWidth={170}
+      minWidth={142}
     />
   );
 }

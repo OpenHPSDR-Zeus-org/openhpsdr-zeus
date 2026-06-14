@@ -117,19 +117,13 @@ export function TxFilterPanel() {
   const lowDisabled = isSymmetricMode(mode);
 
   return (
-    <div className="ctrl-group" style={{ padding: '6px 8px', gap: 6 }}>
+    <div className="ctrl-group tx-filter-panel">
       <DriveSlider />
       <TunePowerSlider />
-      {/* MIC + LVLR share a row — both are mic-chain TX-only sliders and
-          read together (mic gain into TXA, leveler max-gain after EQ). */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
-          gap: 8,
-          alignItems: 'center',
-        }}
-      >
+      {/* MIC + LVLR read as one mic-chain block. CSS gives each compact row
+          a smaller slider floor and stacks them only when the tile gets too
+          narrow, so dB readouts do not collide with the thumbs. */}
+      <div className="tx-slider-stack">
         <MicGainSlider />
         <LevelerMaxGainSlider />
       </div>
@@ -137,13 +131,12 @@ export function TxFilterPanel() {
           "TX". Top border separates the bandpass row from the sliders above so
           the operator reads them as distinct controls. */}
       <div
-        className="label-xs ctrl-lbl"
-        style={{ marginTop: 4, paddingTop: 6, borderTop: '1px solid var(--line)' }}
+        className="label-xs ctrl-lbl tx-filter-label"
       >
         FILTER
       </div>
-      <div className="btn-row" style={{ alignItems: 'center', gap: 4 }}>
-        <span className="label-xs" style={{ color: 'var(--fg-3)' }}>CUSTOM</span>
+      <div className="tx-filter-custom-row">
+        <span className="label-xs tx-filter-custom-label">CUSTOM</span>
         <input
           type="number"
           min={CUSTOM_MIN}
@@ -155,18 +148,9 @@ export function TxFilterPanel() {
           onKeyDown={onCustomKeyDown}
           disabled={lowDisabled}
           aria-label="Custom TX filter low edge in Hz"
-          className="mono"
-          style={{
-            width: 60,
-            fontSize: 11,
-            padding: '2px 4px',
-            background: 'var(--btn-top)',
-            color: lowDisabled ? 'var(--fg-3)' : 'var(--fg-0)',
-            border: '1px solid var(--line)',
-            borderRadius: 'var(--r-sm)',
-          }}
+          className="mono tx-filter-input"
         />
-        <span className="label-xs" style={{ color: 'var(--fg-3)' }}>–</span>
+        <span className="label-xs tx-filter-dash">–</span>
         <input
           type="number"
           min={CUSTOM_MIN}
@@ -177,19 +161,10 @@ export function TxFilterPanel() {
           onBlur={commitCustom}
           onKeyDown={onCustomKeyDown}
           aria-label="Custom TX filter high edge in Hz"
-          className="mono"
-          style={{
-            width: 60,
-            fontSize: 11,
-            padding: '2px 4px',
-            background: 'var(--btn-top)',
-            color: 'var(--fg-0)',
-            border: '1px solid var(--line)',
-            borderRadius: 'var(--r-sm)',
-          }}
+          className="mono tx-filter-input"
         />
-        <span className="label-xs mono" style={{ color: 'var(--fg-3)' }}>Hz</span>
-        <span className="label-xs mono" style={{ marginLeft: 6, color: 'var(--fg-3)', whiteSpace: 'nowrap' }}>
+        <span className="label-xs mono tx-filter-unit">Hz</span>
+        <span className="label-xs mono tx-filter-range-readout">
           [{Math.min(Math.abs(low), Math.abs(high))}…{Math.max(Math.abs(low), Math.abs(high))}]
         </span>
       </div>

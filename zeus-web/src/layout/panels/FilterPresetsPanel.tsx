@@ -14,7 +14,7 @@ import { FilterRibbon } from '../../components/filter/FilterRibbon';
 
 export function FilterPresetsPanel() {
   return (
-    <div className="filter-ribbon-panel" style={{ flex: 1, overflow: 'auto', padding: 8 }}>
+    <div className="filter-ribbon-panel filter-ribbon-panel--presets" style={{ flex: 1, overflow: 'auto', padding: 8 }}>
       <FilterRibbon embedded section="presets" />
     </div>
   );

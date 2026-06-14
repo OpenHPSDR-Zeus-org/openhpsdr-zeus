@@ -18,9 +18,12 @@ namespace Zeus.Protocol2.Tests;
 ///
 /// <list type="bullet">
 ///   <item>byte 0 — bit 0 PTT, bit 1 Dot, bit 2 Dash, bit 4 PLL locked</item>
+///   <item>byte 1 — ADC0..7 overload bits</item>
 ///   <item>bytes 2..3 — exciter power ADC (BE u16)</item>
 ///   <item>bytes 10..11 — PA forward power ADC (BE u16)</item>
 ///   <item>bytes 18..19 — PA reverse power ADC (BE u16)</item>
+///   <item>bytes 35..38 — ADC0/ADC1 max magnitude (G2 v27+)</item>
+///   <item>bytes 45..55 — supply volts, user ADCs, user digital input</item>
 /// </list>
 ///
 /// Issue #174 — without these offsets being honoured, the operator-facing
@@ -48,6 +51,10 @@ public class HiPriStatusDecodeTests
         Assert.Equal(0, r.ExciterAdc);
         Assert.False(r.PttIn);
         Assert.False(r.PllLocked);
+        Assert.False(r.DotIn);
+        Assert.False(r.DashIn);
+        Assert.Equal(0, r.AdcOverloadBits);
+        Assert.Equal(0, r.SupplyVoltsAdc);
     }
 
     [Fact]
@@ -131,6 +138,45 @@ public class HiPriStatusDecodeTests
         var r = Protocol2Client.DecodeHiPriStatus(buf);
         Assert.False(r.PttIn);
         Assert.False(r.PllLocked);
+        Assert.True(r.DotIn);
+        Assert.True(r.DashIn);
+    }
+
+    [Fact]
+    public void Decode_AdcOverloadBits_FromByte1()
+    {
+        var buf = EmptyPacket();
+        buf[1] = 0b1010_0011;
+        var r = Protocol2Client.DecodeHiPriStatus(buf);
+        Assert.Equal(0b1010_0011, r.AdcOverloadBits);
+    }
+
+    [Fact]
+    public void Decode_G2DiagnosticFields_FromThetisOffsets()
+    {
+        var buf = EmptyPacket();
+        buf[0] = 0x80; // sidetone
+        WriteBeU16(buf, 26, 0x0102); // hardware LEDs
+        WriteBeU16(buf, 35, 0x2222); // ADC0 max magnitude
+        WriteBeU16(buf, 37, 0x3333); // ADC1 max magnitude
+        WriteBeU16(buf, 45, 0x4444); // supply volts ADC
+        WriteBeU16(buf, 47, 0xAAAA); // user ADC3
+        WriteBeU16(buf, 49, 0xBBBB); // user ADC2
+        WriteBeU16(buf, 51, 0xCCCC); // user ADC1
+        WriteBeU16(buf, 53, 0xDDDD); // user ADC0
+        buf[55] = 0x1B;
+
+        var r = Protocol2Client.DecodeHiPriStatus(buf);
+        Assert.True(r.SidetoneActive);
+        Assert.Equal(0x0102, r.HardwareLeds);
+        Assert.Equal(0x2222, r.Adc0MaxMagnitude);
+        Assert.Equal(0x3333, r.Adc1MaxMagnitude);
+        Assert.Equal(0x4444, r.SupplyVoltsAdc);
+        Assert.Equal(0xDDDD, r.UserAdc0);
+        Assert.Equal(0xCCCC, r.UserAdc1);
+        Assert.Equal(0xBBBB, r.UserAdc2);
+        Assert.Equal(0xAAAA, r.UserAdc3);
+        Assert.Equal(0x1B, r.UserDigitalIn);
     }
 
     [Fact]

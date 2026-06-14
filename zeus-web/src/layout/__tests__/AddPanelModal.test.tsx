@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import { render, act } from '../../components/meters/__tests__/harness';
 import { AddPanelModal } from '../AddPanelModal';
+import { PANELS } from '../panels';
 
 function setup(existingPanels: Set<string> = new Set()) {
   const onAdd = vi.fn();
@@ -24,6 +25,27 @@ function setup(existingPanels: Set<string> = new Set()) {
 }
 
 describe('AddPanelModal', () => {
+  it('marks the dialog modal, focuses search, and closes on Escape', () => {
+    const { container, unmount, onClose } = setup();
+    const dialog = container.querySelector('[role="dialog"]') as HTMLElement;
+    const input = container.querySelector(
+      '.add-panel-search',
+    ) as HTMLInputElement;
+    expect(dialog).not.toBeNull();
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(input).not.toBeNull();
+    expect(document.activeElement).toBe(input);
+
+    act(() => {
+      document.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }),
+      );
+    });
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
   it('renders the category rail with All + every PanelCategory', () => {
     const { container, unmount } = setup();
     const rail = container.querySelector(
@@ -55,11 +77,7 @@ describe('AddPanelModal', () => {
     const cards = container.querySelectorAll(
       '[data-testid="add-panel-cards"] .add-panel-card',
     );
-    // 22 panels in registry (CW Decoder added in zeus-cdn; RF-2K panel and
-    // Voyeur Mode net monitor were both extracted to plugins; Rotator Dial was
-    // added in #385; WAV recorder added in #579; Filter Presets split out of
-    // the Bandwidth Filter panel).
-    expect(cards.length).toBe(22);
+    expect(cards.length).toBe(Object.values(PANELS).length);
     unmount();
   });
 
@@ -74,14 +92,15 @@ describe('AddPanelModal', () => {
     const cards = container.querySelectorAll(
       '[data-testid="add-panel-cards"] .add-panel-card',
     );
-    // smeter, txmeters, meters, analogmeter — four panels in the meters category.
-    expect(cards.length).toBe(4);
+    const expectedIds = Object.values(PANELS)
+      .filter((panel) => panel.category === 'meters')
+      .map((panel) => panel.id)
+      .sort();
     const ids = Array.from(cards).map((c) =>
       c.getAttribute('data-panel-id'),
-    );
-    expect(ids).toEqual(
-      expect.arrayContaining(['smeter', 'txmeters', 'metergroup', 'analogmeter']),
-    );
+    ).filter((id): id is string => id !== null).sort();
+    expect(ids).toEqual(expectedIds);
+    expect(ids).toContain('txfidelity');
     unmount();
   });
 

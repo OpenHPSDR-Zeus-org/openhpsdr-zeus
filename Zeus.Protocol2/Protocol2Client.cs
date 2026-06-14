@@ -298,6 +298,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public event Action<P2TelemetryReading>? TelemetryReceived;
 
     /// <summary>
+    /// Raised with the raw Protocol-2 hi-priority status payload, excluding
+    /// the 4-byte sequence prefix. The byte array is copied from the RX loop's
+    /// reusable socket buffer so diagnostic consumers can build maps safely.
+    /// </summary>
+    public event Action<byte[]>? HiPriorityStatusPayloadReceived;
+
+    /// <summary>
     /// Monotonic count of hi-priority status (UDP 1025) packets parsed since
     /// Start. Diagnostic — lets the operator confirm the radio is actually
     /// publishing PA telemetry, separately from whether the watts math
@@ -1584,7 +1591,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                     // surface drive the operator's TX power meter — without
                     // this, the bar reads zero on every P2-connected radio
                     // because TxMetersService had no telemetry feed.
-                    HandleHiPriStatusPacket(buf);
+                    HandleHiPriStatusPacket(buf, n);
                 }
                 // mic samples (1026), wideband ADC0..7 (1027..1034)
                 // intentionally ignored for now — separate features.
@@ -1661,13 +1668,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     /// Decode the Protocol-2 hi-priority status packet (UDP 1025). Field
     /// offsets mirror Thetis <c>network.c:689-716</c>:
     /// <list type="bullet">
-    ///   <item>byte 0 — bit 0 PTT, bit 4 PLL locked</item>
+    ///   <item>byte 0 — bit 0 PTT, bit 1 Dot, bit 2 Dash, bit 4 PLL locked, bit 7 sidetone</item>
+    ///   <item>byte 1 — ADC0..7 overload bits</item>
     ///   <item>bytes 2..3 — exciter power ADC (BE u16)</item>
     ///   <item>bytes 10..11 — PA forward power ADC (BE u16)</item>
     ///   <item>bytes 18..19 — PA reverse power ADC (BE u16)</item>
+    ///   <item>bytes 26..27 — hardware LEDs</item>
+    ///   <item>bytes 35..38 — ADC0/ADC1 max magnitude</item>
+    ///   <item>bytes 45..55 — supply volts, user ADCs, user digital input</item>
     /// </list>
     /// Pure function — exposed for unit tests against captured radio
-    /// payloads. Caller must guarantee the buffer covers the 0..19 range.
+    /// payloads. The power fields require the 0..19 range; newer diagnostic
+    /// fields are decoded opportunistically when the payload reaches their
+    /// offsets.
     /// </summary>
     public static P2TelemetryReading DecodeHiPriStatus(ReadOnlySpan<byte> buf)
     {
@@ -1675,30 +1688,62 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         ushort fwd = BinaryPrimitives.ReadUInt16BigEndian(buf.Slice(10, 2));
         ushort rev = BinaryPrimitives.ReadUInt16BigEndian(buf.Slice(18, 2));
         bool ptt = (buf[0] & 0x01) != 0;
+        bool dot = (buf[0] & 0x02) != 0;
+        bool dash = (buf[0] & 0x04) != 0;
         bool pll = (buf[0] & 0x10) != 0;
+        bool sidetone = (buf[0] & 0x80) != 0;
         return new P2TelemetryReading(
             FwdAdc: fwd,
             RevAdc: rev,
             ExciterAdc: exciter,
             PttIn: ptt,
-            PllLocked: pll);
+            PllLocked: pll,
+            DotIn: dot,
+            DashIn: dash,
+            SidetoneActive: sidetone,
+            AdcOverloadBits: buf.Length > 1 ? buf[1] : (byte)0,
+            Adc0MaxMagnitude: ReadBeU16OrZero(buf, 35),
+            Adc1MaxMagnitude: ReadBeU16OrZero(buf, 37),
+            SupplyVoltsAdc: ReadBeU16OrZero(buf, 45),
+            UserAdc0: ReadBeU16OrZero(buf, 53),
+            UserAdc1: ReadBeU16OrZero(buf, 51),
+            UserAdc2: ReadBeU16OrZero(buf, 49),
+            UserAdc3: ReadBeU16OrZero(buf, 47),
+            UserDigitalIn: buf.Length > 55 ? buf[55] : (byte)0,
+            HardwareLeds: ReadBeU16OrZero(buf, 26));
     }
+
+    private static ushort ReadBeU16OrZero(ReadOnlySpan<byte> buf, int offset) =>
+        buf.Length >= offset + 2
+            ? BinaryPrimitives.ReadUInt16BigEndian(buf.Slice(offset, 2))
+            : (ushort)0;
 
     /// <summary>
     /// RX-thread handler for the hi-priority status packet. Decodes via
     /// <see cref="DecodeHiPriStatus"/>, throttle-logs at 1 Hz, and dispatches
     /// to <see cref="TelemetryReceived"/> subscribers.
     /// </summary>
-    private void HandleHiPriStatusPacket(byte[] buf)
+    private void HandleHiPriStatusPacket(byte[] buf, int length)
     {
         // Skip the 4-byte BE u32 sequence number that prefixes every P2 UDP
         // packet (Thetis network.c:531 — `memcpy(bufp, readbuf + 4, 56)`).
         // Without this slice the decoder reads the sequence bytes for
         // exciter/fwd/rev — that's the bug behind issue #174's "exciter
         // climbs by 1, FWD/REV stuck at zero" log signature.
-        var reading = DecodeHiPriStatus(buf.AsSpan(HiPriSeqHeaderBytes));
+        var payload = buf.AsSpan(HiPriSeqHeaderBytes, length - HiPriSeqHeaderBytes);
+        var reading = DecodeHiPriStatus(payload);
 
         Interlocked.Increment(ref _hiPriPackets);
+
+        var rawHandler = HiPriorityStatusPayloadReceived;
+        if (rawHandler is not null)
+        {
+            try { rawHandler(payload.ToArray()); }
+            catch (Exception ex)
+            {
+                _log.LogWarning(ex, "p2.hi_pri.raw_handler threw");
+            }
+        }
 
         // Throttled log so an operator (or a rack-test session for #174) can
         // confirm the path is alive without spamming. Cadence matches P1's
@@ -1712,10 +1757,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         {
             _lastHiPriLogTicks = nowTicks;
             _log.LogInformation(
-                "p2.hi_pri.rx pkts={Pkts} fwd={Fwd} rev={Rev} exc={Exc} ptt={Ptt} pll={Pll}",
+                "p2.hi_pri.rx pkts={Pkts} fwd={Fwd} rev={Rev} exc={Exc} ptt={Ptt} pll={Pll} ov=0x{Ov:X2} supply={Supply}",
                 Interlocked.Read(ref _hiPriPackets),
                 reading.FwdAdc, reading.RevAdc, reading.ExciterAdc,
-                reading.PttIn, reading.PllLocked);
+                reading.PttIn, reading.PllLocked,
+                reading.AdcOverloadBits, reading.SupplyVoltsAdc);
         }
 
         // Subscriber list is captured once so a handler that unsubscribes

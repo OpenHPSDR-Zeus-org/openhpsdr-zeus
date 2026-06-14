@@ -45,6 +45,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
 using Zeus.Protocol1;
+using Zeus.Protocol2;
 using Zeus.Server;
 
 namespace Zeus.Contracts.Tests;
@@ -272,5 +273,88 @@ public class AutoAttControlLoopTests : IDisposable
         Assert.Equal(7, back.AttOffsetDb);
         Assert.True(back.AdcOverloadWarning);
         Assert.Equal(3, back.AttenDb);
+    }
+
+    [Fact]
+    public void AdcProtectionConfig_ClampsAndReportsLiveStatus()
+    {
+        var r = MakeService();
+
+        var status = r.SetAdcProtection(new AdcProtectionSetRequest(
+            AttackMs: 1,
+            ReleaseMs: 20_000,
+            AttackStepDb: 99,
+            ReleaseStepDb: 99,
+            MaxOffsetDb: 99,
+            WarningThreshold: 99,
+            MagnitudeSoftLimit: 99_999));
+
+        Assert.Equal(25, status.Config.AttackMs);
+        Assert.Equal(5_000, status.Config.ReleaseMs);
+        Assert.Equal(6, status.Config.AttackStepDb);
+        Assert.Equal(6, status.Config.ReleaseStepDb);
+        Assert.Equal(31, status.Config.MaxOffsetDb);
+        Assert.Equal(5, status.Config.WarningThreshold);
+        Assert.Equal((int)ushort.MaxValue, status.Config.MagnitudeSoftLimit);
+    }
+
+    [Fact]
+    public void P2MagnitudeSoftLimit_RampsBeforeHardOverload()
+    {
+        var r = MakeService();
+        r.SetAdcProtection(new AdcProtectionSetRequest(
+            AttackMs: 25,
+            ReleaseMs: 50,
+            AttackStepDb: 2,
+            ReleaseStepDb: 1,
+            MaxOffsetDb: 4,
+            MagnitudeSoftLimit: 1_000));
+
+        var hot = new P2TelemetryReading(
+            FwdAdc: 0,
+            RevAdc: 0,
+            ExciterAdc: 0,
+            PttIn: false,
+            PllLocked: true,
+            AdcOverloadBits: 0,
+            Adc0MaxMagnitude: 1_200,
+            Adc1MaxMagnitude: 0);
+
+        r.HandleP2AdcTelemetry(hot, nowMs: 0);
+        Assert.Equal(0, r.Snapshot().AttOffsetDb);
+
+        r.HandleP2AdcTelemetry(hot, nowMs: 25);
+        Assert.Equal(2, r.Snapshot().AttOffsetDb);
+
+        r.HandleP2AdcTelemetry(hot, nowMs: 50);
+        Assert.Equal(4, r.Snapshot().AttOffsetDb);
+
+        r.HandleP2AdcTelemetry(hot, nowMs: 75);
+        Assert.Equal(4, r.Snapshot().AttOffsetDb);
+    }
+
+    [Fact]
+    public void P2HardOverload_TracksBitsAndMaxMagnitudeAtTrip()
+    {
+        var r = MakeService();
+        var trip = new P2TelemetryReading(
+            FwdAdc: 0,
+            RevAdc: 0,
+            ExciterAdc: 0,
+            PttIn: false,
+            PllLocked: true,
+            AdcOverloadBits: 0x03,
+            Adc0MaxMagnitude: 50_000,
+            Adc1MaxMagnitude: 49_000);
+
+        r.HandleP2AdcTelemetry(trip, nowMs: 0);
+        var status = r.GetAdcProtectionStatus();
+
+        Assert.Equal(0x03, status.LastOverloadBits);
+        Assert.Equal((ushort?)50_000, status.Adc0MaxMagnitude);
+        Assert.Equal((ushort?)49_000, status.Adc1MaxMagnitude);
+        Assert.Equal((ushort)50_000, status.Adc0MaxMagnitudeAtOverload);
+        Assert.Equal((ushort)49_000, status.Adc1MaxMagnitudeAtOverload);
+        Assert.NotNull(status.LastTelemetryUtc);
     }
 }
