@@ -9,7 +9,7 @@
 // action plus the plugin's identity. Reorder / park / remove still work
 // from the rack slot chrome, and the VST processes audio regardless.
 
-import { useCallback, useEffect, useState } from 'react';
+import { useVstEditor } from './useVstEditor';
 
 interface GenericVstPanelProps {
   pluginId: string;
@@ -17,45 +17,7 @@ interface GenericVstPanelProps {
 }
 
 export function GenericVstPanel({ pluginId, name }: GenericVstPanelProps) {
-  const base = `/api/audio-suite/plugins/${encodeURIComponent(pluginId)}/editor`;
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Reflect the actual editor state on mount (the native window may
-  // already be open from a previous interaction).
-  useEffect(() => {
-    let alive = true;
-    fetch(base)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (alive && j && typeof j.open === 'boolean') setOpen(j.open);
-      })
-      .catch(() => {
-        /* transient — leave state as-is */
-      });
-    return () => {
-      alive = false;
-    };
-  }, [base]);
-
-  const toggle = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await fetch(base, { method: open ? 'DELETE' : 'POST' });
-      const body = await res.json().catch(() => null);
-      if (res.ok) {
-        setOpen(body && typeof body.open === 'boolean' ? body.open : !open);
-      } else {
-        setError(body?.error ?? `Request failed (${res.status})`);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Request failed');
-    } finally {
-      setBusy(false);
-    }
-  }, [base, open]);
+  const { open, busy, error, toggle } = useVstEditor(pluginId);
 
   return (
     <div

@@ -32,6 +32,10 @@ export interface RegisteredPluginPanel {
   // surface (the chain panel below CFC, for instance).
   slot: string;
   component: ComponentType;
+  // True for a scanned VST3 with no inline UI module: its only "panel"
+  // is its native editor window. The rack slot opens that window on a
+  // header click instead of expanding an (empty) collapsible body.
+  editorBacked?: boolean;
 }
 
 type PluginModule = {
@@ -82,6 +86,7 @@ function maybeRegisterGenericAudioPanel(plugin: PluginDto): void {
     category: 'audio',
     slot: CHAIN_UI_SLOT,
     component: () => createElement(GenericVstPanel, { pluginId: id, name }),
+    editorBacked: true,
   });
 }
 

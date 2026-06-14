@@ -100,6 +100,12 @@ interface AudioSuiteState {
   // to the server.
   collapsed: Record<string, boolean>;
 
+  // Chips+detail layout: which chain plugin is loaded in the detail
+  // pane. Presentation-only, persisted to localStorage. A null or stale
+  // id (plugin parked/removed) falls back to the first chain plugin in
+  // the component, so this never needs server validation.
+  selectedChainId: string | null;
+
   // Whether the plugin-browser sidebar is folded to a thin strip.
   // Presentation-only, persisted to localStorage.
   sidebarCollapsed: boolean;
@@ -121,6 +127,9 @@ interface AudioSuiteState {
   toggleCollapsed(pluginId: string): void;
   setAllCollapsed(collapsed: boolean, pluginIds: string[]): void;
   toggleSidebar(): void;
+
+  // Chips+detail selection.
+  setSelectedChainId(id: string | null): void;
 
   // Chain membership — park (active=false) / un-park (active=true) an
   // installed plugin. Parking pulls it out of the active chain (stops
@@ -191,6 +200,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       vstEngineActive: false,
       isDragging: false,
       collapsed: {},
+      selectedChainId: null,
       sidebarCollapsed: false,
       profiles: [],
 
@@ -226,6 +236,8 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
 
       toggleSidebar: () =>
         set((s) => ({ sidebarCollapsed: !s.sidebarCollapsed })),
+
+      setSelectedChainId: (id) => set({ selectedChainId: id }),
 
       setChainMembership: async (pluginId, active) => {
         const prev = get().chainOrder;
@@ -582,6 +594,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         width: s.width,
         height: s.height,
         collapsed: s.collapsed,
+        selectedChainId: s.selectedChainId,
         sidebarCollapsed: s.sidebarCollapsed,
       }),
     },

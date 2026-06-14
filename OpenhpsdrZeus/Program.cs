@@ -172,6 +172,17 @@ public partial class Program
 
     private static int RunDesktop(string[] args)
     {
+        // Desktop mode is an interactive session with a human hands-on at the
+        // Audio Suite — the only context where a hosted VST3's native editor
+        // window (a top-level HWND owned by this process) can actually appear,
+        // and where the operator deliberately scanned + added the plugins. So
+        // default the in-process native VST load ON here, unless the operator
+        // pinned it explicitly. The headless radio service (RunService) stays
+        // gated OFF: a plugin that segfaults on load must never take the radio
+        // down. Set ZEUS_ENABLE_VST_LOAD=0 to force it off even in desktop mode.
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD")))
+            Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", "1");
+
         // macOS Cocoa requires UI work (window/menu construction) to happen on the
         // initial process thread. .NET console apps don't install a SynchronizationContext,
         // so any `await` would resume the rest of this method on a thread-pool thread —

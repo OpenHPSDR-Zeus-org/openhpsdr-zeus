@@ -13,7 +13,6 @@
 // All chrome is in Zeus tokens — no raw hex per the design rules in
 // docs/lessons/dev-conventions.md.
 
-import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import type { RegisteredPluginPanel } from '../plugins/runtime/pluginRuntime';
@@ -243,32 +242,13 @@ function DragHandleIcon() {
   );
 }
 
-/** Chevron that rotates to point down (expanded) or right (collapsed). */
-function Chevron({ open }: { open: boolean }) {
-  return (
-    <svg
-      width="10"
-      height="10"
-      viewBox="0 0 10 10"
-      aria-hidden
-      focusable="false"
-      style={{
-        transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
-        transition: 'transform var(--dur-fast, 120ms) var(--ease-out, ease)',
-      }}
-    >
-      <path d="M3 1.5 L7 5 L3 8.5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-
-interface ChainSlotCardProps {
+interface ChainChipProps {
   panel: RegisteredPluginPanel;
   index: number;
-  collapsed: boolean;
+  selected: boolean;
   isDragTarget: boolean;
   isDragSource: boolean;
-  onToggle(): void;
+  onSelect(): void;
   onRemove(): void;
   onHandleDown(): void;
   onDragStart(e: React.DragEvent): void;
@@ -276,25 +256,23 @@ interface ChainSlotCardProps {
   onDragLeave(): void;
   onDrop(e: React.DragEvent): void;
   onDragEnd(): void;
-  children: ReactNode;
 }
 
 /**
- * One rack slot — a collapsible card wrapping a plugin's own panel.
- * Header shows a drag handle (reorder), the slot index, the plugin
- * name, and a chevron toggle. Collapsing keeps the slot in the chain
- * (audio still flows); it only folds the UI away, like racking a unit
- * with its front panel hidden. Drag is gated to start from the handle
- * so the operator can still interact with sliders inside the body
- * without accidentally tearing the slot out of the rack.
+ * One chain chip — a compact, reorderable tab for a plugin in the
+ * signal chain. Clicking the chip loads that plugin into the shared
+ * detail pane below; exactly one chip is "selected" at a time, so the
+ * rack never grows into a tall stack of inline panels. Drag the chip's
+ * handle to reorder. A VST chip carries a small VST tag — its real UI
+ * is a native window opened from the detail pane, not inline HTML.
  */
-function ChainSlotCard({
+function ChainChip({
   panel,
   index,
-  collapsed,
+  selected,
   isDragTarget,
   isDragSource,
-  onToggle,
+  onSelect,
   onRemove,
   onHandleDown,
   onDragStart,
@@ -302,8 +280,9 @@ function ChainSlotCard({
   onDragLeave,
   onDrop,
   onDragEnd,
-  children,
-}: ChainSlotCardProps) {
+}: ChainChipProps) {
+  const isVst = panel.editorBacked === true;
+  const accented = selected || isDragTarget;
   return (
     <div
       draggable
@@ -312,124 +291,103 @@ function ChainSlotCard({
       onDragLeave={onDragLeave}
       onDrop={onDrop}
       onDragEnd={onDragEnd}
+      onClick={onSelect}
       data-plugin-id={panel.pluginId}
+      title={panel.pluginId}
       style={{
-        borderRadius: 6,
-        border: '1px solid ' + (isDragTarget ? 'var(--accent)' : 'var(--line)'),
-        borderLeft: '3px solid ' + (isDragTarget ? 'var(--accent)' : 'var(--accent)'),
-        background: 'var(--bg-1)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 7,
+        padding: '5px 7px',
+        borderRadius: 5,
+        border: '1px solid ' + (accented ? 'var(--accent)' : 'var(--line)'),
+        background: selected ? 'var(--accent-soft)' : 'var(--bg-2)',
+        boxShadow: isDragTarget ? '0 0 0 1px var(--accent)' : 'none',
         opacity: isDragSource ? 0.4 : 1,
-        overflow: 'hidden',
-        boxShadow: isDragTarget
-          ? '0 0 0 1px var(--accent)'
-          : 'inset 0 1px 0 rgba(255, 255, 255, 0.03)',
+        cursor: 'pointer',
+        userSelect: 'none',
+        whiteSpace: 'nowrap',
       }}
     >
-      {/* Header row — click anywhere (except the handle) to toggle. */}
-      <div
-        onClick={onToggle}
+      {/* Drag handle — the only place a reorder drag may start. */}
+      <span
+        onMouseDown={onHandleDown}
+        onClick={(e) => e.stopPropagation()}
+        title="Drag to reorder"
         style={{
-          display: 'flex',
+          display: 'inline-flex',
           alignItems: 'center',
-          gap: 9,
-          padding: '8px 11px',
-          background: 'var(--bg-2)',
-          borderBottom: collapsed ? 'none' : '1px solid var(--line)',
-          cursor: 'pointer',
-          userSelect: 'none',
+          color: 'var(--fg-3)',
+          cursor: 'grab',
         }}
       >
-        {/* Drag handle — the only place a reorder drag may start. */}
+        <DragHandleIcon />
+      </span>
+
+      <span
+        style={{
+          fontSize: 9.5,
+          fontWeight: 600,
+          fontFamily: 'var(--font-mono, JetBrains Mono, monospace)',
+          color: 'var(--fg-3)',
+        }}
+      >
+        {String(index + 1).padStart(2, '0')}
+      </span>
+
+      <span
+        style={{
+          fontSize: 11.5,
+          fontWeight: 600,
+          color: selected ? 'var(--fg-0)' : 'var(--fg-1)',
+        }}
+      >
+        {panel.title || shortLabelFor(panel.pluginId, panel.title)}
+      </span>
+
+      {isVst && (
         <span
-          onMouseDown={onHandleDown}
-          onClick={(e) => e.stopPropagation()}
-          title="Drag to reorder"
           style={{
-            display: 'inline-flex',
-            alignItems: 'center',
+            fontSize: 8,
+            fontWeight: 700,
+            letterSpacing: 0.8,
             color: 'var(--fg-3)',
-            cursor: 'grab',
-            padding: '2px 1px',
-          }}
-        >
-          <DragHandleIcon />
-        </span>
-
-        <span
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            minWidth: 20,
-            height: 18,
-            padding: '0 5px',
-            borderRadius: 3,
             border: '1px solid var(--line)',
-            background: 'var(--bg-1)',
-            fontSize: 10,
-            fontWeight: 600,
-            fontFamily: 'var(--font-mono, JetBrains Mono, monospace)',
-            color: 'var(--fg-2)',
-          }}
-        >
-          {String(index + 1).padStart(2, '0')}
-        </span>
-
-        <span
-          style={{
-            flex: 1,
-            minWidth: 0,
-            fontSize: 12,
-            fontWeight: 600,
-            color: 'var(--fg-1)',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}
-        >
-          {panel.title || shortLabelFor(panel.pluginId, panel.title)}
-        </span>
-
-        <span style={{ display: 'inline-flex', color: 'var(--fg-2)' }}>
-          <Chevron open={!collapsed} />
-        </span>
-
-        {/* Remove from rack = park (non-destructive). Stops it
-            processing and moves it to the sidebar's Available list;
-            the plugin stays installed. */}
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); onRemove(); }}
-          aria-label={`Remove ${panel.title} from chain`}
-          title="Remove from chain (keeps it installed)"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 18,
-            height: 18,
             borderRadius: 3,
-            border: '1px solid var(--line)',
-            background: 'var(--bg-2)',
-            color: 'var(--fg-2)',
-            cursor: 'pointer',
-            fontSize: 12,
-            lineHeight: 1,
-            fontFamily: 'inherit',
-            padding: 0,
+            padding: '0 3px',
           }}
         >
-          ×
-        </button>
-      </div>
+          VST
+        </span>
+      )}
 
-      {/* Body — the plugin's own panel. Unmounting on collapse would
-          tear down each plugin's meter polling and local UI state, so
-          we keep it mounted and just hide it; audio is unaffected
-          either way (collapse is presentation-only). */}
-      <div style={{ display: collapsed ? 'none' : 'block', padding: '12px 14px' }}>
-        {children}
-      </div>
+      {/* Remove from chain = park (non-destructive). Stops it
+          processing and moves it to the sidebar's Available list;
+          the plugin stays installed. */}
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onRemove(); }}
+        aria-label={`Remove ${panel.title} from chain`}
+        title="Remove from chain (keeps it installed)"
+        style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 16,
+          height: 16,
+          borderRadius: 3,
+          border: '1px solid var(--line)',
+          background: 'var(--bg-1)',
+          color: 'var(--fg-3)',
+          cursor: 'pointer',
+          fontSize: 11,
+          lineHeight: 1,
+          fontFamily: 'inherit',
+          padding: 0,
+        }}
+      >
+        ×
+      </button>
     </div>
   );
 }
@@ -441,7 +399,6 @@ const PARK_DRAG_MIME = 'application/x-zeus-park-id';
 interface PluginSidebarProps {
   collapsed: boolean;
   onToggle(): void;
-  active: RegisteredPluginPanel[];
   parked: RegisteredPluginPanel[];
   onAdd(pluginId: string): void;
   onRemove(pluginId: string): void;
@@ -456,16 +413,15 @@ interface PluginSidebarProps {
 }
 
 /**
- * Plugin browser sidebar — lists every TX-chain plugin split into
- * "In chain" (active) and "Available" (parked) groups. Add (+) on an
- * available plugin slots it into the rack; remove (−) on an active one
- * parks it. Available plugins are also draggable onto the rack to add
- * them. Collapses to a thin labelled strip to reclaim width.
+ * Plugin browser sidebar — lists the "Available" (parked) plugins not
+ * currently in the chain. Add (+) on an available plugin slots it into
+ * the rack; available plugins are also draggable onto the rack to add
+ * them. The active chain itself is shown in the rack, so it isn't
+ * duplicated here. Collapses to a thin labelled strip to reclaim width.
  */
 function PluginSidebar({
   collapsed,
   onToggle,
-  active,
   parked,
   onAdd,
   onRemove,
@@ -668,11 +624,6 @@ function PluginSidebar({
         }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={groupLabelStyle}>In chain · {active.length}</span>
-          {active.length === 0 && <span style={emptyHintStyle}>None</span>}
-          {active.map((p) => row(p, true))}
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={groupLabelStyle}>Available · {parked.length}</span>
           {parked.length === 0 && (
             <span style={emptyHintStyle}>All installed plugins are in the chain.</span>
@@ -756,9 +707,8 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   const setDragging = useAudioSuiteStore((s) => s.setDragging);
   const chainOrder = useAudioSuiteStore((s) => s.chainOrder);
   const reorderChain = useAudioSuiteStore((s) => s.reorderChain);
-  const collapsed = useAudioSuiteStore((s) => s.collapsed);
-  const toggleCollapsed = useAudioSuiteStore((s) => s.toggleCollapsed);
-  const setAllCollapsed = useAudioSuiteStore((s) => s.setAllCollapsed);
+  const selectedChainId = useAudioSuiteStore((s) => s.selectedChainId);
+  const setSelectedChainId = useAudioSuiteStore((s) => s.setSelectedChainId);
   const sidebarCollapsed = useAudioSuiteStore((s) => s.sidebarCollapsed);
   const toggleSidebar = useAudioSuiteStore((s) => s.toggleSidebar);
   const setChainMembership = useAudioSuiteStore((s) => s.setChainMembership);
@@ -1061,23 +1011,25 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     void setChainMembership(id, true); // un-park → add to chain
   };
 
-  // Collapse-all / expand-all act on the plugins currently in the
-  // chain. "All collapsed" only when every slot is folded, so the
-  // single toggle flips to "expand all" once the rack is fully closed.
   const chainPluginIds = useMemo(
     () => chainPanels.map((p) => p.pluginId),
     [chainPanels],
   );
-  // Slots default to collapsed (folded, rack-overview style) until the
-  // operator opens them — an unseen plugin has no entry in the map, so
-  // absence reads as collapsed.
-  const isCollapsed = useCallback(
-    (id: string) => collapsed[id] ?? true,
-    [collapsed],
+  // Chips+detail: which chip's plugin is shown in the detail pane. The
+  // stored selection wins while it's still in the chain; otherwise fall
+  // back to the first chip (so parking the selected plugin, or a fresh
+  // load, always lands on something valid without a sync effect).
+  const effectiveSelectedId = useMemo(() => {
+    if (selectedChainId && chainPluginIds.includes(selectedChainId)) {
+      return selectedChainId;
+    }
+    return chainPluginIds[0] ?? null;
+  }, [selectedChainId, chainPluginIds]);
+  const selectedPanel = useMemo(
+    () => chainPanels.find((p) => p.pluginId === effectiveSelectedId) ?? null,
+    [chainPanels, effectiveSelectedId],
   );
-  const allCollapsed =
-    chainPluginIds.length > 0 &&
-    chainPluginIds.every((id) => isCollapsed(id));
+  const SelectedComponent = selectedPanel?.component ?? null;
 
   // Embedded mode (rendered inline inside TX Audio Tools) is always
   // visible; the floating window only renders when opened.
@@ -1305,7 +1257,6 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
         <PluginSidebar
           collapsed={sidebarCollapsed}
           onToggle={toggleSidebar}
-          active={chainPanels}
           parked={parkedPanels}
           onAdd={(id) => void setChainMembership(id, true)}
           onRemove={(id) => void setChainMembership(id, false)}
@@ -1342,115 +1293,91 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
       {/* Chain IN / OUT signal meters (poll while window open). */}
       <AudioChainMeters />
 
-      {/* Rack toolbar — label + collapse-all. The slot order in the
-          rack below IS the signal chain; reorder by dragging a slot's
-          handle. (The old duplicate tile strip was removed — the rack
-          is now the single source of chain order.) */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          padding: '7px 12px',
-          background: 'var(--bg-1)',
-          borderBottom: '1px solid var(--line)',
-          fontSize: 10,
-          letterSpacing: 1.2,
-          textTransform: 'uppercase',
-        }}
-      >
-        <span style={{ color: 'var(--fg-3)', fontWeight: 500 }}>Chain</span>
-        {chainPanels.length > 0 && (
-          <span style={{ color: 'var(--fg-3)', fontWeight: 500 }}>
-            · {chainPanels.length} slot{chainPanels.length === 1 ? '' : 's'}
-          </span>
-        )}
-        {chainPanels.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setAllCollapsed(!allCollapsed, chainPluginIds)}
-            title={allCollapsed ? 'Expand all slots' : 'Collapse all slots'}
-            style={{
-              marginLeft: 'auto',
-              padding: '3px 9px',
-              borderRadius: 3,
-              border: '1px solid var(--line)',
-              background: 'var(--bg-2)',
-              color: 'var(--fg-2)',
-              cursor: 'pointer',
-              fontSize: 9.5,
-              fontWeight: 600,
-              letterSpacing: 1,
-              textTransform: 'uppercase',
-              fontFamily: 'inherit',
-            }}
-          >
-            {allCollapsed ? 'Expand all' : 'Collapse all'}
-          </button>
-        )}
-      </div>
-
-      {/* Rack — collapsible slot cards stacked in chain order. Also a
-          drop zone: dragging a plugin from the sidebar's Available
+      {/* Chain chips — the signal chain as a compact, reorderable strip.
+          Click a chip to load its plugin into the detail pane below; drag
+          a chip's handle to reorder (the chip order IS the signal chain).
+          Also a drop zone: dragging a plugin from the sidebar's Available
           list here un-parks (adds) it. */}
       <div
         onDragOver={onRackDragOver}
         onDragLeave={onRackDragLeave}
         onDrop={onRackDrop}
         style={{
-          // Floating window: bounded, scrolls internally. Embedded: flows
-          // at natural height and lets the settings pane scroll the whole
-          // rack as one surface (so the lower slots never clip).
-          flex: embedded ? 'none' : 1,
-          overflowY: embedded ? 'visible' : 'auto',
-          padding: '12px 14px',
-          paddingBottom: 20,
           display: 'flex',
-          flexDirection: 'column',
-          gap: 10,
+          alignItems: 'center',
+          flexWrap: 'wrap',
+          gap: 7,
+          padding: '8px 12px',
+          background: 'var(--bg-1)',
+          borderBottom: '1px solid var(--line)',
           outline: rackDropActive ? '2px dashed var(--accent)' : 'none',
-          outlineOffset: -4,
-          borderRadius: 6,
-          background: rackDropActive ? 'var(--accent-soft)' : 'transparent',
+          outlineOffset: -3,
         }}
       >
+        <span
+          style={{
+            color: 'var(--fg-3)',
+            fontSize: 10,
+            fontWeight: 600,
+            letterSpacing: 1.2,
+            textTransform: 'uppercase',
+            marginRight: 2,
+          }}
+        >
+          Chain
+        </span>
         {chainPanels.length === 0 && (
-          <span
-            style={{
-              color: 'var(--fg-3)',
-              fontSize: 12,
-              fontStyle: 'italic',
-              padding: 8,
-            }}
-          >
+          <span style={{ color: 'var(--fg-3)', fontSize: 11, fontStyle: 'italic' }}>
             {parkedPanels.length > 0
-              ? 'No plugins in the chain — add one from the Available list, or drag it here.'
+              ? 'Empty — add a plugin from the Available list, or drag it here.'
               : 'No audio plugins installed — use Download Audio Suite on the TX Audio Tools panel.'}
           </span>
         )}
-        {chainPanels.map((panel, idx) => {
-          const Component = panel.component;
-          return (
-            <ChainSlotCard
-              key={`${panel.pluginId}::${panel.panelId}`}
-              panel={panel}
-              index={idx}
-              collapsed={isCollapsed(panel.pluginId)}
-              isDragTarget={cardDragOver === idx}
-              isDragSource={cardDragFrom === idx}
-              onToggle={() => toggleCollapsed(panel.pluginId)}
-              onRemove={() => void setChainMembership(panel.pluginId, false)}
-              onHandleDown={onCardHandleDown}
-              onDragStart={onCardDragStart(idx)}
-              onDragOver={onCardDragOver(idx)}
-              onDragLeave={onCardDragLeave}
-              onDrop={onCardDrop(idx)}
-              onDragEnd={onCardDragEnd}
-            >
-              <Component />
-            </ChainSlotCard>
-          );
-        })}
+        {chainPanels.map((panel, idx) => (
+          <ChainChip
+            key={`${panel.pluginId}::${panel.panelId}`}
+            panel={panel}
+            index={idx}
+            selected={panel.pluginId === effectiveSelectedId}
+            isDragTarget={cardDragOver === idx}
+            isDragSource={cardDragFrom === idx}
+            onSelect={() => setSelectedChainId(panel.pluginId)}
+            onRemove={() => void setChainMembership(panel.pluginId, false)}
+            onHandleDown={onCardHandleDown}
+            onDragStart={onCardDragStart(idx)}
+            onDragOver={onCardDragOver(idx)}
+            onDragLeave={onCardDragLeave}
+            onDrop={onCardDrop(idx)}
+            onDragEnd={onCardDragEnd}
+          />
+        ))}
+      </div>
+
+      {/* Detail pane — the selected chip's plugin UI. Exactly one plugin
+          is mounted at a time (no tall stack of inline panels). A VST
+          shows its identity + Open Editor here; its real GUI is a
+          separate native window opened by the bridge. */}
+      <div
+        style={{
+          // Floating window: bounded, scrolls internally. Embedded: flows
+          // at natural height and lets the settings pane scroll it.
+          flex: embedded ? 'none' : 1,
+          overflowY: embedded ? 'visible' : 'auto',
+          padding: '14px 16px',
+          minHeight: embedded ? 160 : 0,
+        }}
+      >
+        {SelectedComponent ? (
+          <SelectedComponent />
+        ) : (
+          <span
+            style={{ color: 'var(--fg-3)', fontSize: 12, fontStyle: 'italic' }}
+          >
+            {chainPanels.length > 0
+              ? 'Select a plugin above to configure it.'
+              : 'Nothing to configure yet.'}
+          </span>
+        )}
       </div>
         </div>
         </div>

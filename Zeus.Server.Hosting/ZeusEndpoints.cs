@@ -288,7 +288,7 @@ public static class ZeusEndpoints
             EditorActionResult.NotFound  => Results.NotFound(new { error = "No such plugin in the TX chain." }),
             EditorActionResult.NotAVst   => Results.BadRequest(new { error = "This plugin has no native VST editor." }),
             EditorActionResult.NotLoaded => Results.Json(
-                new { error = "VST is not natively loaded — set ZEUS_ENABLE_VST_LOAD=1 and reconnect to host it." },
+                new { error = "This VST didn't load, so it has no editor to show. It may not be a valid VST3 audio-effect (check the server log), or native VST hosting is off (headless/server mode keeps it gated — run the desktop app, or set ZEUS_ENABLE_VST_LOAD=1)." },
                 statusCode: 409),
             EditorActionResult.Failed    => Results.Json(
                 new { error = "Failed to open the plugin editor (unsupported on this platform?)." },
