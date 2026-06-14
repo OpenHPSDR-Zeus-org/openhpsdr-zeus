@@ -211,6 +211,16 @@ public sealed class ChainOrderService
             if (!_canonical.Contains(pluginId))
             {
                 InsertByDefaultOrderUnderLock(pluginId);
+                // A never-seen plugin that isn't part of the default chain
+                // (i.e. a scanned third-party VST) lands PARKED: it appears in
+                // the Audio Suite's Available list for the operator to add
+                // deliberately, instead of auto-joining the live signal chain.
+                // The default native plugins (DefaultOrder) still auto-activate
+                // so a fresh Audio Suite install comes up with its intended
+                // chain. Parked state is persisted, so it stays in Available
+                // across restarts until the operator adds it.
+                if (IndexInDefaultOrder(pluginId) < 0)
+                    _parked.Add(pluginId);
                 PersistUnderLock();
                 changed = true; // canonical mutated even if _attached.Add returned false (shouldn't happen but defensive)
             }

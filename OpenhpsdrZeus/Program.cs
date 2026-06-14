@@ -172,16 +172,19 @@ public partial class Program
 
     private static int RunDesktop(string[] args)
     {
-        // Desktop mode is an interactive session with a human hands-on at the
-        // Audio Suite — the only context where a hosted VST3's native editor
-        // window (a top-level HWND owned by this process) can actually appear,
-        // and where the operator deliberately scanned + added the plugins. So
-        // default the in-process native VST load ON here, unless the operator
-        // pinned it explicitly. The headless radio service (RunService) stays
-        // gated OFF: a plugin that segfaults on load must never take the radio
-        // down. Set ZEUS_ENABLE_VST_LOAD=0 to force it off even in desktop mode.
-        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD")))
-            Environment.SetEnvironmentVariable("ZEUS_ENABLE_VST_LOAD", "1");
+        // VST hosting — audio AND the plugin editor window — now lives in the
+        // out-of-process engine (VST processing mode), crash-isolated from the
+        // radio: a plugin that segfaults on load or in its GUI can't take the
+        // backend down. The legacy in-process native VST load, where a single
+        // bad .vst3 loaded on boot CAN hard-crash this process (an unrecoverable
+        // native segfault no C# try/catch can stop), therefore stays OFF by
+        // default in EVERY mode, including desktop. It was briefly default-ON in
+        // desktop so the old in-process editor worked; the engine's crash-
+        // isolated editor superseded that (steps 1–2 of
+        // docs/designs/vst-host-consolidation.md), and a large scanned library
+        // turned the boot-time in-process load into a guaranteed crash. It
+        // remains an explicit opt-in (ZEUS_ENABLE_VST_LOAD=1) for developing
+        // the native bridge itself.
 
         // macOS Cocoa requires UI work (window/menu construction) to happen on the
         // initial process thread. .NET console apps don't install a SynchronizationContext,

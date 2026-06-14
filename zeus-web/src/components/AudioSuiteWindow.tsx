@@ -405,7 +405,11 @@ interface PluginSidebarProps {
   onParkedDragStart(pluginId: string): (e: React.DragEvent) => void;
   onParkedDragEnd(): void;
   onScanDirectory(): void;
+  onScanDefault(): void;
   scanning: boolean;
+  /** VST processing route active — gates the VST3 scan controls (they make
+   *  no sense in Native mode, where VSTs aren't part of the chain). */
+  vstMode: boolean;
   /** Embedded (in-page) mode flows at natural height, so the browser
    *  sticks to the top of the scrolling settings pane instead of
    *  filling a fixed-height window. */
@@ -428,7 +432,9 @@ function PluginSidebar({
   onParkedDragStart,
   onParkedDragEnd,
   onScanDirectory,
+  onScanDefault,
   scanning,
+  vstMode,
   embedded,
 }: PluginSidebarProps) {
   // In flow (embedded) mode the host has no bounded height, so the
@@ -626,40 +632,70 @@ function PluginSidebar({
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <span style={groupLabelStyle}>Available · {parked.length}</span>
           {parked.length === 0 && (
-            <span style={emptyHintStyle}>All installed plugins are in the chain.</span>
+            <span style={emptyHintStyle}>
+              {vstMode
+                ? 'No VST3 plugins available — use Scan for VSTs below.'
+                : 'All installed plugins are in the chain.'}
+            </span>
           )}
           {parked.map((p) => row(p, false))}
         </div>
       </div>
 
-      {/* Footer — register VST3 plugins from a folder. */}
-      <div style={{ padding: 8, borderTop: '1px solid var(--line)' }}>
-        <button
-          type="button"
-          onClick={onScanDirectory}
-          disabled={scanning}
-          title="Scan a folder for VST3 plugins and add them to the rack"
+      {/* Footer — VST3 scan controls. Only shown on the VST route: in Native
+          mode VSTs aren't part of the chain, so there's nothing to scan for. */}
+      {vstMode && (
+        <div
           style={{
-            width: '100%',
-            padding: '5px 8px',
-            borderRadius: 3,
-            border: '1px solid var(--accent)',
-            background: 'var(--bg-2)',
-            color: 'var(--fg-0)',
-            cursor: scanning ? 'progress' : 'pointer',
-            opacity: scanning ? 0.6 : 1,
-            fontSize: 10,
-            fontWeight: 600,
-            letterSpacing: 0.6,
-            textTransform: 'uppercase',
-            fontFamily: 'inherit',
+            padding: 8,
+            borderTop: '1px solid var(--line)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
           }}
         >
-          {scanning ? 'Scanning…' : '+ Add VST folder'}
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={onScanDefault}
+            disabled={scanning}
+            title="Scan the standard Windows VST3 folder and bring in every plugin found"
+            style={scanBtnStyle(scanning, true)}
+          >
+            {scanning ? 'Scanning…' : 'Scan for VSTs'}
+          </button>
+          <button
+            type="button"
+            onClick={onScanDirectory}
+            disabled={scanning}
+            title="Scan a specific folder for VST3 plugins and add them to the rack"
+            style={scanBtnStyle(scanning, false)}
+          >
+            + Add VST folder
+          </button>
+        </div>
+      )}
     </div>
   );
+}
+
+/** Footer scan-button styling. The primary (Scan) button gets the accent
+ *  fill; the secondary (Add folder) is the quieter outlined variant. */
+function scanBtnStyle(scanning: boolean, primary: boolean): React.CSSProperties {
+  return {
+    width: '100%',
+    padding: '5px 8px',
+    borderRadius: 3,
+    border: '1px solid var(--accent)',
+    background: primary ? 'var(--accent)' : 'var(--bg-2)',
+    color: primary ? 'var(--fg-0)' : 'var(--fg-1)',
+    cursor: scanning ? 'progress' : 'pointer',
+    opacity: scanning ? 0.6 : 1,
+    fontSize: 10,
+    fontWeight: 600,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    fontFamily: 'inherit',
+  };
 }
 
 const groupLabelStyle: React.CSSProperties = {
@@ -718,6 +754,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   const applyProfile = useAudioSuiteStore((s) => s.applyProfile);
   const deleteProfile = useAudioSuiteStore((s) => s.deleteProfile);
   const scanVstDirectory = useAudioSuiteStore((s) => s.scanVstDirectory);
+  const processingMode = useAudioSuiteStore((s) => s.processingMode);
   const loadChainOrderFromServer = useAudioSuiteStore(
     (s) => s.loadChainOrderFromServer,
   );
@@ -736,6 +773,16 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     () => allPanels.filter((p) => p.slot === CHAIN_SLOT),
     [allPanels],
   );
+  // Native and VST are mutually-exclusive processing routes, so the Audio
+  // Suite only ever surfaces the plugins the active route actually runs:
+  // VST3 plugins (editorBacked) in VST mode, the in-process native plugins
+  // in Native mode. The hidden route's plugins stay in the server's chain
+  // order untouched and reappear when the operator switches back.
+  const vstMode = processingMode === 'vst';
+  const modePanels = useMemo(
+    () => chainSlotPanels.filter((p) => (p.editorBacked === true) === vstMode),
+    [chainSlotPanels, vstMode],
+  );
   // Active rack = the panels whose plugin ID is in the server's active
   // order, sorted by it. Parking removes an ID from chainOrder, so a
   // parked plugin simply falls out of here and into the sidebar.
@@ -743,19 +790,19 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   const chainPanels = useMemo(
     () =>
       sortChainPanels(
-        chainSlotPanels.filter((p) => chainOrderSet.has(p.pluginId)),
+        modePanels.filter((p) => chainOrderSet.has(p.pluginId)),
         chainOrder,
       ),
-    [chainSlotPanels, chainOrderSet, chainOrder],
+    [modePanels, chainOrderSet, chainOrder],
   );
-  // Available (parked) = chain-slot plugins NOT in the active order.
-  // These show in the sidebar's "Available" group, ready to add back.
+  // Available (parked) = mode-visible chain-slot plugins NOT in the active
+  // order. These show in the sidebar's "Available" group, ready to add back.
   const parkedPanels = useMemo(
     () =>
-      chainSlotPanels
+      modePanels
         .filter((p) => !chainOrderSet.has(p.pluginId))
         .sort((a, b) => a.title.localeCompare(b.title)),
-    [chainSlotPanels, chainOrderSet],
+    [modePanels, chainOrderSet],
   );
 
   // Fetch server-side state on first open. Subsequent updates arrive
@@ -916,7 +963,16 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     cardDragFromRef.current = null;
     cardHandleRef.current = false;
     if (from === null || from === idx) return;
-    void reorderChain(from, idx);
+    // chainPanels can be a mode-filtered view of the server's full chain
+    // order, so translate the on-screen positions to actual order indices
+    // before reordering (a no-op when the view isn't filtered).
+    const fromId = chainPanels[from]?.pluginId;
+    const toId = chainPanels[idx]?.pluginId;
+    if (!fromId || !toId) return;
+    const serverFrom = chainOrder.indexOf(fromId);
+    const serverTo = chainOrder.indexOf(toId);
+    if (serverFrom < 0 || serverTo < 0) return;
+    void reorderChain(serverFrom, serverTo);
   };
 
   const onCardDragEnd = () => {
@@ -959,31 +1015,75 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     }
   };
 
-  // --- Add VST directory (scan) ------------------------------------
+  // --- VST directory scan ------------------------------------------
+  // Common Windows VST3 locations. "Scan for VSTs" sweeps all of these in
+  // one click; whichever exist are scanned, the rest are skipped silently.
+  // The standard Common Files\VST3 holds installer-placed bundles, while
+  // C:\VST PLUGINS is a widespread manual-install convention (and Zeus's
+  // historical scan default), so plugins parked there are picked up too.
+  const COMMON_VST3_DIRS = [
+    'C:\\Program Files\\Common Files\\VST3',
+    'C:\\VST PLUGINS',
+  ];
   const [scanning, setScanning] = useState(false);
+
+  // Scan one or more folders, aggregate the results, and report. Folders
+  // that don't exist are treated as simply absent (not surfaced as errors)
+  // so a one-click sweep of common locations never nags about paths the
+  // operator doesn't use.
+  const runScan = async (dirs: string[]) => {
+    setScanning(true);
+    const scanned: string[] = [];
+    const missing: string[] = [];
+    let registered = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+    let hardError: string | null = null;
+    for (const dir of dirs) {
+      const result = await scanVstDirectory(dir);
+      if (!result.ok) {
+        if (/not found|does not exist/i.test(result.error ?? '')) missing.push(dir);
+        else hardError = result.error ?? 'unknown error';
+        continue;
+      }
+      scanned.push(result.directory ?? dir);
+      registered += result.registered.length;
+      skipped += result.skipped.length;
+      errors.push(...result.errors.map((e) => e.message));
+    }
+    setScanning(false);
+
+    if (scanned.length === 0 && hardError) {
+      window.alert(`VST scan failed:\n${hardError}`);
+      return;
+    }
+    const lines: string[] = [];
+    if (scanned.length) lines.push('Scanned:', ...scanned.map((d) => `  ${d}`));
+    if (missing.length) {
+      lines.push('Skipped (not present):', ...missing.map((d) => `  ${d}`));
+    }
+    lines.push(
+      '',
+      `Registered: ${registered}`,
+      `Already present: ${skipped}`,
+      `Failed: ${errors.length}`,
+    );
+    if (errors.length > 0) {
+      lines.push('', ...errors.slice(0, 6).map((m) => `• ${m}`));
+    }
+    window.alert(lines.join('\n'));
+  };
+
+  // One-click sweep of the common VST3 locations.
+  const onScanDefaultVstDirectory = () => void runScan(COMMON_VST3_DIRS);
+  // Prompt for a specific folder, then scan just that one.
   const onScanVstDirectory = async () => {
     const dir = window.prompt(
       'Scan a folder for VST3 plugins — each .vst3 is registered into the rack:',
       'C:\\VST PLUGINS',
     );
     if (!dir || !dir.trim()) return;
-    setScanning(true);
-    const result = await scanVstDirectory(dir.trim());
-    setScanning(false);
-    if (!result.ok) {
-      window.alert(`VST scan failed:\n${result.error ?? 'unknown error'}`);
-      return;
-    }
-    const lines = [
-      `Scanned: ${result.directory}`,
-      `Registered: ${result.registered.length}`,
-      `Already present: ${result.skipped.length}`,
-      `Failed: ${result.errors.length}`,
-    ];
-    if (result.errors.length > 0) {
-      lines.push('', ...result.errors.slice(0, 6).map((e) => `• ${e.message}`));
-    }
-    window.alert(lines.join('\n'));
+    await runScan([dir.trim()]);
   };
 
   // --- Sidebar → rack drag (add a parked plugin) -------------------
@@ -1263,7 +1363,9 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           onParkedDragStart={onParkedDragStart}
           onParkedDragEnd={onParkedDragEnd}
           onScanDirectory={() => void onScanVstDirectory()}
+          onScanDefault={onScanDefaultVstDirectory}
           scanning={scanning}
+          vstMode={vstMode}
           embedded={embedded}
         />
 

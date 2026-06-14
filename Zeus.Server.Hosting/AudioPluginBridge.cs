@@ -78,6 +78,20 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     // capture thread; written from the control-thread lifecycle paths.
     private volatile bool _previewEnabled;
     private bool _engineIsWdsp;
+    // Lock-free gate guarding the out-of-process engine's single SHM block. The
+    // on-air TX thread (Process, MOX on) and the pre-MOX preview thread
+    // (ProcessLivePreview, MOX off) are mutually exclusive in time except for the
+    // microsecond window at a MOX edge; this CAS guarantees they never drive the
+    // shared block concurrently there. 0 = free, 1 = in use.
+    private int _engineGate;
+    // Master IN/OUT chain meters for VST mode. The native chain populates its own
+    // _chain.Meters during _chain.Process; when audio routes through the engine
+    // instead, _chain.Process never runs, so we sample the block peaks here (same
+    // instantaneous abs-peak ballistics as AudioChain.BlockPeak) to keep the
+    // Audio Suite's IN/OUT meters live. Volatile single-writer (realtime thread),
+    // single-reader (the /chain/meters poll).
+    private volatile float _engineInPeak;
+    private volatile float _engineOutPeak;
 
     public AudioPluginBridge(
         PluginManager manager,
@@ -181,7 +195,8 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     /// only happens during MOX/TX or desktop-mode audition (mic
     /// preview). Surfaced via GET /api/audio-suite/chain/meters.
     /// </summary>
-    public (float In, float Out) ChainMeters => _chain.Meters;
+    public (float In, float Out) ChainMeters =>
+        _vstEngine is { IsActive: true } ? (_engineInPeak, _engineOutPeak) : _chain.Meters;
 
     /// <summary>
     /// True if the TX insert plugin chain (Audio Suite) is currently being
@@ -325,8 +340,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         // engine-down / timeout), so a wedged plugin never stalls the radio.
         // When the gate is false this whole block is one volatile read and the
         // native path below runs byte-identically.
-        var vst = _vstEngine;
-        if (vst is { IsActive: true })
+        if (_vstEngine is { IsActive: true })
         {
             if (_chain.MasterBypassed || _isTciTxAudioActive())
             {
@@ -334,7 +348,9 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
                 return;
             }
             var vstCtx = new AudioBlockContext(sampleRate, channels, frames, sampleTime: 0, mox: true);
-            vst.Process(input, output, vstCtx);
+            // Gated so the on-air block never collides with a pre-MOX preview
+            // block on the engine's single SHM slot at a MOX edge.
+            TryProcessThroughEngine(input, output, vstCtx);
             return;
         }
 
@@ -354,6 +370,49 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
 
         var ctx = new AudioBlockContext(sampleRate, channels, frames, sampleTime: 0, mox: true);
         _chain.Process(input, output, ctx);
+    }
+
+    /// <summary>
+    /// Route one block through the out-of-process VST engine when it is the
+    /// active processing path. Returns <c>false</c> when the engine is not active
+    /// (the caller should run the native chain). A lost gate race — the other
+    /// realtime thread owns the engine's single SHM slot this instant — degrades
+    /// to clean passthrough and still returns <c>true</c>: the engine route was
+    /// chosen, the block simply isn't double-driven. Realtime-safe: one CAS, no
+    /// allocation, no managed lock.
+    /// </summary>
+    private bool TryProcessThroughEngine(ReadOnlySpan<float> input, Span<float> output, AudioBlockContext ctx)
+    {
+        var vst = _vstEngine;
+        if (vst is not { IsActive: true }) return false;
+        if (Interlocked.CompareExchange(ref _engineGate, 1, 0) != 0)
+        {
+            input.CopyTo(output);            // other thread owns the engine this instant
+            _engineInPeak = BlockPeak(input);
+            _engineOutPeak = _engineInPeak;  // passthrough → out == in
+            return true;
+        }
+        try { vst.Process(input, output, ctx); }
+        finally { Volatile.Write(ref _engineGate, 0); }
+        // Sample master IN/OUT peaks so the Audio Suite meters stay live in VST
+        // mode (the native chain's own metering path didn't run).
+        _engineInPeak = BlockPeak(input);
+        _engineOutPeak = BlockPeak(output[..ctx.Frames]);
+        return true;
+    }
+
+    /// <summary>Instantaneous block abs-peak — mirrors AudioChain.BlockPeak so the
+    /// engine-path IN/OUT meters read identically to the native chain's.</summary>
+    private static float BlockPeak(ReadOnlySpan<float> block)
+    {
+        float peak = 0f;
+        for (int i = 0; i < block.Length; i++)
+        {
+            float a = block[i];
+            if (a < 0f) a = -a;
+            if (a > peak) peak = a;
+        }
+        return peak;
     }
 
     /// <summary>
@@ -413,14 +472,24 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         // both cases the side-effect on each plugin's last-meter fields
         // is what drives the IN / OUT / GR animation in the panels.
         Span<float> previewOut = stackalloc float[mic.Length];
-        Span<float> previewScratch = stackalloc float[mic.Length];
         var ctx = new AudioBlockContext(
             sampleRate: sampleRate,
             channels: 1,
             frames: mic.Length,
             sampleTime: 0,
             mox: false);
-        _chain.Process(mic, previewOut, previewScratch, ctx);
+
+        // VST mode: route the live mic block through the out-of-process engine so
+        // the operator can monitor and meter the VST chain OFF-AIR, exactly as the
+        // native chain animates its meters here on-bench. The engine processes the
+        // block, so the VST's own GUI meters move and the audition feed below plays
+        // the VST's output (not the native chain's). When the engine isn't the
+        // active route, fall through to the native in-process chain unchanged.
+        if (!TryProcessThroughEngine(mic, previewOut, ctx))
+        {
+            Span<float> previewScratch = stackalloc float[mic.Length];
+            _chain.Process(mic, previewOut, previewScratch, ctx);
+        }
 
         // Audition path: when the operator has audition turned on, push
         // the chain's output into the audition sink so they hear what
