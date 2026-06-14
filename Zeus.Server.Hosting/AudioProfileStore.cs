@@ -16,12 +16,12 @@ namespace Zeus.Server;
 /// upsert, no schema migrations (LiteDB tolerates rows written by older
 /// builds with missing fields).</para>
 ///
-/// <para><b>Scope (v1):</b> a profile captures CHAIN-LEVEL config only
-/// — which plugins are in the chain, their order, what's parked, and
-/// master bypass. It does NOT capture per-plugin knob positions (EQ
-/// curve, comp ratio): those live in <c>PluginSettingsStore</c> and a
-/// running plugin only reads them at init, so there's no live-reload
-/// path to apply them yet. Documented as a follow-up.</para>
+/// <para><b>Scope:</b> a profile captures the chain shape (active order,
+/// parked set, master bypass) AND each VST plugin's full parameter state
+/// (<see cref="AudioProfileEntry.PluginStates"/>) — the opaque base64 blob
+/// from the engine's <c>getStateInformation</c>, restored via
+/// <c>setStateInformation</c> on apply. Native (in-process) plugins still
+/// carry their settings in <c>PluginSettingsStore</c>, not here.</para>
 /// </summary>
 public sealed class AudioProfileStore : IDisposable
 {
@@ -68,11 +68,15 @@ public sealed class AudioProfileStore : IDisposable
         string name,
         IReadOnlyList<string> order,
         IReadOnlyList<string> parked,
-        bool masterBypass)
+        bool masterBypass,
+        IReadOnlyDictionary<string, string>? pluginStates = null)
     {
         lock (_sync)
         {
             var nowUtc = DateTime.UtcNow;
+            var states = pluginStates is null
+                ? new Dictionary<string, string>()
+                : new Dictionary<string, string>(pluginStates);
             var existing = _profiles.FindOne(p => p.Name == name);
             if (existing is null)
             {
@@ -82,6 +86,7 @@ public sealed class AudioProfileStore : IDisposable
                     Order = order.ToList(),
                     Parked = parked.ToList(),
                     MasterBypass = masterBypass,
+                    PluginStates = states,
                     CreatedUtc = nowUtc,
                     UpdatedUtc = nowUtc,
                 };
@@ -91,6 +96,7 @@ public sealed class AudioProfileStore : IDisposable
             existing.Order = order.ToList();
             existing.Parked = parked.ToList();
             existing.MasterBypass = masterBypass;
+            existing.PluginStates = states;
             existing.UpdatedUtc = nowUtc;
             _profiles.Update(existing);
             return existing;
@@ -114,6 +120,16 @@ public sealed class AudioProfileEntry
     public List<string> Order { get; set; } = new();
     public List<string> Parked { get; set; } = new();
     public bool MasterBypass { get; set; }
+
+    /// <summary>
+    /// Per-plugin opaque state, keyed by Zeus plugin id → base64 blob from the
+    /// VST engine's <c>getStateInformation</c>. Captures the FULL plugin config
+    /// (every knob, curve, mode) so applying a profile restores the exact voicing,
+    /// not just which plugins are in the chain. Empty for native plugins / older
+    /// profiles (LiteDB tolerates the missing field).
+    /// </summary>
+    public Dictionary<string, string> PluginStates { get; set; } = new();
+
     public DateTime CreatedUtc { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

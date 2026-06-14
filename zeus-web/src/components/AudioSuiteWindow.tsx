@@ -500,6 +500,10 @@ function PluginSidebar({
       }
     : {};
 
+  // Filter the Available list — essential once a scan brings in hundreds of
+  // plugins. Matches the display name and the plugin id, case-insensitive.
+  const [query, setQuery] = useState('');
+
   if (collapsed) {
     return (
       <div
@@ -646,6 +650,15 @@ function PluginSidebar({
     </div>
   );
 
+  const q = query.trim().toLowerCase();
+  const filteredParked = q
+    ? parked.filter(
+        (p) =>
+          (p.title || '').toLowerCase().includes(q) ||
+          p.pluginId.toLowerCase().includes(q),
+      )
+    : parked;
+
   return (
     <div
       style={{
@@ -702,6 +715,29 @@ function PluginSidebar({
         </button>
       </div>
 
+      {/* Search — filters the Available list (vital with a big scanned library). */}
+      <div style={{ padding: '8px 8px 0' }}>
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search plugins…"
+          aria-label="Search plugins"
+          style={{
+            width: '100%',
+            boxSizing: 'border-box',
+            padding: '5px 8px',
+            borderRadius: 3,
+            border: '1px solid var(--line)',
+            background: 'var(--bg-2)',
+            color: 'var(--fg-1)',
+            fontSize: 11,
+            fontFamily: 'inherit',
+            outline: 'none',
+          }}
+        />
+      </div>
+
       <div
         style={{
           flex: 1,
@@ -713,7 +749,10 @@ function PluginSidebar({
         }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={groupLabelStyle}>Available · {parked.length}</span>
+          <span style={groupLabelStyle}>
+            Available · {filteredParked.length}
+            {q && filteredParked.length !== parked.length ? ` / ${parked.length}` : ''}
+          </span>
           {parked.length === 0 && (
             <span style={emptyHintStyle}>
               {vstMode
@@ -721,7 +760,10 @@ function PluginSidebar({
                 : 'All installed plugins are in the chain.'}
             </span>
           )}
-          {parked.map((p) => row(p, false))}
+          {parked.length > 0 && filteredParked.length === 0 && (
+            <span style={emptyHintStyle}>No plugins match “{query.trim()}”.</span>
+          )}
+          {filteredParked.map((p) => row(p, false))}
         </div>
       </div>
 

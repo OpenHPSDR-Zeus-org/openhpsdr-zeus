@@ -59,6 +59,10 @@ public sealed class AudioProcessingModeService : IHostedService
     // alone can't disambiguate which slot is which — the uid does.
     private Dictionary<string, string> _uidToId = new(StringComparer.Ordinal);
     private readonly HashSet<string> _openEditors = new(StringComparer.Ordinal);
+    // Zeus plugin id -> latest opaque VST state (base64 getStateInformation).
+    // Refreshed from every chain event, and re-applied on each load_chain so a
+    // plugin's voicing survives chain edits; profiles snapshot/restore this map.
+    private Dictionary<string, string> _pluginStates = new(StringComparer.Ordinal);
 
     public AudioProcessingModeService(
         AudioProcessingModeStore store,
@@ -117,26 +121,48 @@ public sealed class AudioProcessingModeService : IHostedService
             lock (_editorLock) { fileToId = _fileToId; uidToId = _uidToId; }
 
             var map = new Dictionary<string, int>(StringComparer.Ordinal);
+            var states = new Dictionary<string, string>(StringComparer.Ordinal);
             int i = 0;
             foreach (var pl in plugins.EnumerateArray())
             {
-                // Prefer uid (unambiguous for shell sub-plugins); fall back to file.
-                if (pl.TryGetProperty("uid", out var u)
-                    && u.ValueKind == System.Text.Json.JsonValueKind.String
-                    && uidToId.TryGetValue(u.GetString() ?? string.Empty, out var byUid))
+                static string StrProp(System.Text.Json.JsonElement o, string k) =>
+                    o.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String
+                        ? v.GetString() ?? "" : "";
+
+                // The descriptor identity lives in "identifier" (== the uid from the
+                // scan); the chain event's "uid" is a per-instance GUID that does
+                // NOT match the scan, so it can't key the map. Match identifier (the
+                // only field that disambiguates shell sub-plugins sharing a file),
+                // then fall back to file for single-plugin files.
+                var identifier = StrProp(pl, "identifier");
+                string? zeusId = null;
+                if (identifier.Length > 0 && uidToId.TryGetValue(identifier, out var byUid))
                 {
-                    map[byUid] = i;
+                    zeusId = byUid;
                 }
-                else if (pl.TryGetProperty("file", out var f)
-                    && f.ValueKind == System.Text.Json.JsonValueKind.String)
+                else
                 {
-                    var key = NormalizePath(f.GetString());
+                    var key = NormalizePath(StrProp(pl, "file"));
                     if (key is not null && fileToId.TryGetValue(key, out var byFile))
-                        map[byFile] = i;
+                        zeusId = byFile;
+                }
+                if (zeusId is not null)
+                {
+                    map[zeusId] = i;
+                    // Capture the plugin's live state so chain edits / profiles can
+                    // restore the exact voicing. Empty means "no state reported".
+                    var st = StrProp(pl, "state");
+                    if (st.Length > 0) states[zeusId] = st;
                 }
                 i++;
             }
-            lock (_editorLock) _idToEngineSlot = map;
+            lock (_editorLock)
+            {
+                _idToEngineSlot = map;
+                // Merge: keep states for plugins not in this event (parked), update
+                // those that are. A re-push then restores everyone's latest voicing.
+                foreach (var kv in states) _pluginStates[kv.Key] = kv.Value;
+            }
         }
         catch { /* event parsing is best-effort; stale map self-heals next event */ }
     }
@@ -289,6 +315,77 @@ public sealed class AudioProcessingModeService : IHostedService
     }
 
     /// <summary>
+    /// Snapshot each chain plugin's CURRENT VST state by requesting a fresh
+    /// <c>get_chain</c> (the engine captures <c>getStateInformation</c> live in
+    /// its reply) and reading the state out. Returns Zeus-plugin-id → base64
+    /// state. Empty when the engine isn't active. Used by profile SAVE so the
+    /// snapshot reflects the operator's latest knob tweaks, not a stale capture.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<string, string>> CaptureChainStatesAsync(
+        TimeSpan timeout, CancellationToken ct = default)
+    {
+        if (!_engine.IsActive) return new Dictionary<string, string>();
+
+        var tcs = new TaskCompletionSource<IReadOnlyDictionary<string, string>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void Handler(System.Text.Json.JsonElement e)
+        {
+            try
+            {
+                if (!e.TryGetProperty("event", out var ev)
+                    || ev.ValueKind != System.Text.Json.JsonValueKind.String
+                    || ev.GetString() != "chain") return;
+                if (!e.TryGetProperty("plugins", out var arr)
+                    || arr.ValueKind != System.Text.Json.JsonValueKind.Array) return;
+
+                Dictionary<string, string> uidToId, fileToId;
+                lock (_editorLock) { uidToId = _uidToId; fileToId = _fileToId; }
+
+                static string S(System.Text.Json.JsonElement o, string k) =>
+                    o.TryGetProperty(k, out var v) && v.ValueKind == System.Text.Json.JsonValueKind.String
+                        ? v.GetString() ?? "" : "";
+
+                var result = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var pl in arr.EnumerateArray())
+                {
+                    var ident = S(pl, "identifier");
+                    string? zid = ident.Length > 0 && uidToId.TryGetValue(ident, out var bi) ? bi : null;
+                    if (zid is null)
+                    {
+                        var key = NormalizePath(S(pl, "file"));
+                        if (key is not null && fileToId.TryGetValue(key, out var bf)) zid = bf;
+                    }
+                    var st = S(pl, "state");
+                    if (zid is not null && st.Length > 0) result[zid] = st;
+                }
+                tcs.TrySetResult(result);
+            }
+            catch { tcs.TrySetResult(new Dictionary<string, string>()); }
+        }
+
+        _engine.EngineEvent += Handler;
+        try
+        {
+            _engine.SendCommand(new { cmd = "get_chain" });
+            return await tcs.Task.WaitAsync(timeout, ct).ConfigureAwait(false);
+        }
+        catch (TimeoutException) { return new Dictionary<string, string>(); }
+        finally { _engine.EngineEvent -= Handler; }
+    }
+
+    /// <summary>
+    /// Replace the known per-plugin states (used when applying a profile). The
+    /// next <c>load_chain</c> restores them; a later chain event refreshes from
+    /// the engine. No-op-safe when the engine isn't active.
+    /// </summary>
+    public void SetPluginStates(IReadOnlyDictionary<string, string> states)
+    {
+        lock (_editorLock)
+            _pluginStates = new Dictionary<string, string>(states, StringComparer.Ordinal);
+    }
+
+    /// <summary>
     /// Mirror the operator's active Audio Suite VST3 plugins into the external
     /// engine, in chain order, so VST mode actually processes their audio rather
     /// than passing it through an empty host. Uses a single <c>load_chain</c> so
@@ -297,10 +394,10 @@ public sealed class AudioProcessingModeService : IHostedService
     /// plugin id to its engine slot for editor open/close. Best-effort: a load
     /// failure is logged engine-side and the realtime path stays robust.
     ///
-    /// <para>v1 limitation: plugins load at their DEFAULT settings — per-knob
-    /// state from the native chain is not transferred yet (the engine's
-    /// <c>load_chain</c> accepts a per-slot <c>state</c>/<c>parameters</c> blob;
-    /// wiring Zeus's saved state into it is the next step).</para>
+    /// <para>Each slot carries the plugin's last-known opaque state (from
+    /// <see cref="_pluginStates"/>, refreshed off every chain event and snapshot
+    /// by profiles), so a chain edit or profile apply restores the exact voicing
+    /// rather than reloading defaults. An empty state means "load defaults".</para>
     /// </summary>
     private void LoadChainIntoEngine()
     {
@@ -308,6 +405,9 @@ public sealed class AudioProcessingModeService : IHostedService
         {
             var byId = new Dictionary<string, ActivatedPlugin>(StringComparer.Ordinal);
             foreach (var p in _manager.Active) byId[p.Loaded.Manifest.Id] = p;
+
+            Dictionary<string, string> savedStates;
+            lock (_editorLock) savedStates = new(_pluginStates, StringComparer.Ordinal);
 
             var slots = new List<object>();
             var map = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -329,7 +429,9 @@ public sealed class AudioProcessingModeService : IHostedService
                 var key = NormalizePath(abs);
                 if (key is not null) fileToId[key] = id;
                 if (uid.Length > 0) uidToId[uid] = id;
-                slots.Add(new { file = abs, identifier = uid });
+                // Restore the plugin's saved voicing. "" => engine loads defaults.
+                var state = savedStates.GetValueOrDefault(id, string.Empty);
+                slots.Add(new { file = abs, identifier = uid, state });
             }
 
             lock (_editorLock)
