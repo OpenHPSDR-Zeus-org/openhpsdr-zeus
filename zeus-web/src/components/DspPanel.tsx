@@ -49,10 +49,11 @@ import {
   type NrConfigDto,
   type NrMode,
 } from '../api/client';
-import { getNoiseFloor } from '../dsp/signal-estimator';
+import { getNoiseFloor, getSignalConfidence } from '../dsp/signal-estimator';
 import { recommendSmartNr } from '../dsp/smart-nr';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
+import { useSmartNrStore } from '../state/smart-nr-store';
 import { Slider } from './design/Slider';
 import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
 
@@ -105,6 +106,8 @@ export function DspPanel() {
   const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const mode = useConnectionStore((s) => s.mode);
+  const smartNrMode = useSmartNrStore((s) => s.automationMode);
+  const smartNrStatus = useSmartNrStore((s) => s.status);
 
   const inflightAbort = useRef<AbortController | null>(null);
 
@@ -169,6 +172,7 @@ export function DspPanel() {
     const rec = recommendSmartNr({
       spectrum: panDb,
       floor: getNoiseFloor(),
+      confidence: getSignalConfidence(),
       current: nr,
       mode,
     });
@@ -250,6 +254,17 @@ export function DspPanel() {
           NBP
         </button>
       </div>
+      {smartNrMode !== 'manual' && (
+        <div className="dsp-smart-status" title={smartNrStatus?.reason ?? 'Smart NR automation is waiting for spectrum data'}>
+          <span className="mono">{smartNrMode.toUpperCase()}</span>
+          <span>{smartNrStatus?.profile ?? 'WAIT'}</span>
+          {smartNrStatus && (
+            <span className="mono">
+              {smartNrStatus.pending ? 'DWELL' : smartNrStatus.applied ? 'APPLIED' : 'READY'}
+            </span>
+          )}
+        </div>
+      )}
       {hasNrSettings(nr.nrMode) && (
         <NrSettingsSection mode={settingsModeFor(nr.nrMode)} />
       )}

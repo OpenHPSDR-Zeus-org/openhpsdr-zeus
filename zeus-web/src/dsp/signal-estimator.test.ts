@@ -59,7 +59,12 @@ function pushFrame(spec: Float32Array): void {
 
 afterEach(() => {
   resetEstimator();
-  useSignalEnhanceStore.setState({ popEnabled: false, snapEnabled: false });
+  useSignalEnhanceStore.setState({
+    popEnabled: false,
+    snapEnabled: false,
+    visualAgcEnabled: true,
+    impulseRejectEnabled: true,
+  });
   useSignalEnhanceStore.getState().resetSignalEnhanceTuning();
 });
 
@@ -157,6 +162,12 @@ describe('signal estimator — spatial floor', () => {
     expect(getNoiseFloor()).toBeNull();
   });
 
+  it('keeps the floor estimator live while auto-profile analysis is enabled', () => {
+    useSignalEnhanceStore.setState({ autoProfileEnabled: true, popEnabled: false, snapEnabled: false });
+    pushFrame(spectrumWithCarrier());
+    expect(getNoiseFloor()).not.toBeNull();
+  });
+
   it('estimates the floor from neighbours — a steady carrier does NOT raise its own floor', () => {
     useSignalEnhanceStore.setState({ popEnabled: true });
     // Many identical frames: a temporal tracker would creep the carrier bin's
@@ -196,6 +207,30 @@ describe('signal estimator — spatial floor', () => {
     expect(out[0]!).toBe(0);
   });
 
+  it('visual AGC gives sparse weak signals more of the colour ramp', () => {
+    useSignalEnhanceStore.setState({
+      popEnabled: true,
+      visualAgcEnabled: false,
+      visualAgcStrength: 0,
+    });
+    const spec = new Float32Array(WIDTH).fill(NOISE_DB);
+    spec[150] = NOISE_DB + 10;
+    for (let k = 0; k < 5; k++) pushFrame(spec);
+
+    const fixed = new Float32Array(WIDTH);
+    enhanceInto(spec, fixed);
+
+    useSignalEnhanceStore.setState({
+      visualAgcEnabled: true,
+      visualAgcStrength: 100,
+    });
+    const agc = new Float32Array(WIDTH);
+    enhanceInto(spec, agc);
+
+    expect(agc[150]!).toBeGreaterThan(fixed[150]! + 0.15);
+    expect(agc[0]!).toBe(0);
+  });
+
   it('builds temporal confidence for a persistent weak signal', () => {
     useSignalEnhanceStore.setState({ popEnabled: true });
     const spec = new Float32Array(WIDTH).fill(NOISE_DB);
@@ -220,6 +255,34 @@ describe('signal estimator — spatial floor', () => {
     const out = new Float32Array(WIDTH);
     enhanceInto(noise, out);
     expect(out[150]!).toBe(0);
+  });
+
+  it('display-clamps isolated one-frame spikes but preserves coherent signals', () => {
+    useSignalEnhanceStore.setState({
+      popEnabled: true,
+      visualAgcEnabled: false,
+      impulseRejectEnabled: true,
+      impulseRejectDb: 18,
+    });
+    const noise = new Float32Array(WIDTH).fill(NOISE_DB);
+    for (let k = 0; k < 5; k++) pushFrame(noise);
+
+    const impulse = new Float32Array(WIDTH).fill(NOISE_DB);
+    impulse[150] = NOISE_DB + 45;
+    pushFrame(impulse);
+    const impulseOut = new Float32Array(WIDTH);
+    enhanceInto(impulse, impulseOut);
+
+    expect(impulseOut[150]!).toBeLessThan(0.55);
+
+    resetEstimator();
+    const coherent = new Float32Array(WIDTH).fill(NOISE_DB);
+    coherent[150] = NOISE_DB + 45;
+    for (let k = 0; k < 5; k++) pushFrame(coherent);
+    const coherentOut = new Float32Array(WIDTH);
+    enhanceInto(coherent, coherentOut);
+
+    expect(coherentOut[150]!).toBeGreaterThan(0.9);
   });
 
   it('boosts a narrow weak ridge above a broad raised neighbourhood at the same SNR', () => {

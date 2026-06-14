@@ -437,100 +437,299 @@
 .topbar {
   display: flex;
   align-items: center;
-  gap: 18px;
-  padding: 0 14px;
-  background: var(--bg-0);
+  gap: 10px;
+  padding: 0 12px 0 10px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.035), transparent 42%),
+    linear-gradient(180deg, #0d0d10 0%, var(--bg-0) 100%);
   border: 0;
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid rgba(255,255,255,0.075);
   border-radius: 0;
-  box-shadow: none;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.04),
+    inset 0 -1px 0 rgba(0,0,0,0.5);
   height: 60px;
   overflow: hidden;
 }
 .topbar .topbar-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
+  flex: 1 1 auto;
+  gap: 6px;
+  height: 100%;
   min-width: 0;
-  /* Allow the controls block to scroll horizontally instead of bleeding off
-     the bar on narrow desktop windows; the bar's own overflow:hidden keeps
-     it from spilling into the workspace below. */
   overflow-x: auto;
-  scrollbar-width: thin;
+  overflow-y: hidden;
+  scrollbar-width: none;
 }
-/* Topbar buttons read as flat regions of the bar, not raised chiclets.
-   The .ctrl-lbl above each .btn-row remains the visual anchor for the
-   group, so we lean on the label + .strip-divider for grouping rather
-   than per-button bevels. */
+.topbar .topbar-controls::-webkit-scrollbar { height: 0; }
 .topbar .btn {
-  background: transparent;
-  border: 1px solid transparent;
-  box-shadow: none;
+  min-height: 27px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.015)),
+    rgba(255,255,255,0.025);
+  border: 1px solid rgba(255,255,255,0.075);
+  border-radius: 6px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.045);
   text-shadow: none;
   color: var(--fg-1);
 }
 .topbar .btn:hover {
-  background: rgba(255,255,255,0.06);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.035)),
+    rgba(255,255,255,0.045);
+  border-color: rgba(255,255,255,0.13);
+  color: var(--fg-0);
   filter: none;
 }
 .topbar .btn:active,
 .topbar .btn.pressed {
   background: rgba(0,0,0,0.28);
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.4);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.42);
   transform: none;
 }
 .topbar .btn.active {
-  background: var(--accent);
+  background:
+    linear-gradient(180deg, var(--accent-bright), var(--accent));
   color: #fff;
-  border-color: var(--accent);
+  border-color: rgba(78,166,255,0.65);
   text-shadow: none;
-  box-shadow: 0 0 0 1px rgba(46,142,255,0.5), 0 0 14px rgba(46,142,255,0.35);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,0.22),
+    0 0 0 1px rgba(46,142,255,0.25),
+    0 0 14px rgba(46,142,255,0.26);
 }
-.topbar .btn.ghost { background: transparent; }
+.topbar .btn.ghost { background: rgba(255,255,255,0.02); }
 .topbar .btn.ghost:hover { background: rgba(255,255,255,0.06); }
-/* Lift the group label slightly so it carries the grouping role that
-   button bevels used to. */
-.topbar .ctrl-group { gap: 2px; }
+.topbar .btn.sm {
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.topbar .ctrl-group {
+  flex: 0 0 auto;
+  gap: 3px;
+  min-width: 0;
+  padding: 5px 0;
+}
 .topbar .ctrl-lbl {
-  color: var(--fg-1);
+  color: var(--fg-2);
   font-size: 9px;
-  letter-spacing: 0.14em;
-  opacity: 0.75;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.12em;
+  opacity: 0.9;
+}
+.topbar .btn-row { gap: 3px; }
+.topbar .btn-row .btn[aria-expanded] {
+  width: 27px;
+  padding: 0;
+}
+.topbar .strip-divider {
+  flex: 0 0 1px;
+  align-self: center;
+  height: 38px;
+  margin: 0 3px;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    rgba(255,255,255,0.09) 18%,
+    rgba(255,255,255,0.09) 82%,
+    transparent 100%
+  );
 }
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 0 8px;
+  flex: 0 0 230px;
+  min-width: 0;
+  gap: 9px;
+  padding: 0 6px;
 }
 .brand-mark {
-  width: 28px; height: 28px;
+  width: 26px; height: 26px;
   display: flex; align-items: center; justify-content: center;
+  border: 1px solid rgba(78,166,255,0.16);
+  border-radius: 999px;
+  background: radial-gradient(circle at 50% 50%, rgba(78,166,255,0.18), rgba(78,166,255,0.04) 58%, transparent 70%);
+  box-shadow: 0 0 18px rgba(46,142,255,0.12);
 }
-.brand-text { display: flex; flex-direction: column; }
+.brand-text { display: flex; flex-direction: column; min-width: 0; }
 .brand-name {
   font-size: 15px;
-  font-weight: 600;
-  letter-spacing: -0.01em;
+  font-weight: 750;
+  letter-spacing: 0;
   color: var(--fg-0);
   text-shadow: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .brand-sub {
   font-size: 9px;
   color: var(--fg-2);
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .topbar-divider {
-  width: 1px; height: 32px;
-  background: var(--line);
-  box-shadow: none;
+  flex: 0 0 1px;
+  width: 1px; height: 38px;
+  background: linear-gradient(180deg, transparent, rgba(255,255,255,0.1), transparent);
+  box-shadow: 1px 0 0 rgba(0,0,0,0.35);
+}
+.topbar-control {
+  min-width: 0 !important;
+}
+.topbar-control--front-end { flex-basis: 210px; }
+.topbar-control--agc { flex-basis: 260px; }
+.topbar-control--sql,
+.topbar-control--af { flex-basis: 150px; }
+.topbar-control--agc .agc-control {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.topbar-control--agc .agc-mode-row {
+  flex: 0 0 64px;
+  min-width: 0;
+}
+.topbar .topbar-control .btn-row {
+  width: 100%;
+  min-width: 0;
+}
+.topbar .topbar-control .knob-group {
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0 !important;
+  gap: 6px;
+}
+.topbar .topbar-control input[type="range"] {
+  flex: 1 1 42px !important;
+  min-width: 42px !important;
+}
+.topbar .topbar-control--front-end .knob-group > .mono,
+.topbar .topbar-control--af .knob-group > .mono {
+  width: 38px !important;
+}
+.topbar .topbar-control--agc .knob-group > .mono {
+  width: 36px !important;
+}
+.topbar .topbar-control--agc .knob-group {
+  flex: 1 1 0;
+}
+.topbar .topbar-control--sql .knob-group > .mono {
+  width: 24px !important;
+}
+.topbar input[type="range"] {
+  appearance: none;
+  -webkit-appearance: none;
+  height: 14px;
+  background: transparent;
+}
+.topbar input[type="range"]::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(78,166,255,0.55), rgba(255,255,255,0.12));
+  box-shadow: inset 0 1px 1px rgba(0,0,0,0.55);
+}
+.topbar input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  margin-top: -4.5px;
+  border: 1px solid rgba(255,255,255,0.75);
+  border-radius: 999px;
+  background: #f4f7fb;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.55), 0 0 10px rgba(78,166,255,0.24);
+}
+.topbar input[type="range"]::-moz-range-track {
+  height: 3px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(78,166,255,0.55), rgba(255,255,255,0.12));
+  box-shadow: inset 0 1px 1px rgba(0,0,0,0.55);
+}
+.topbar input[type="range"]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgba(255,255,255,0.75);
+  border-radius: 999px;
+  background: #f4f7fb;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.55), 0 0 10px rgba(78,166,255,0.24);
+}
+.topbar input[type="range"]:disabled {
+  opacity: 0.82;
+}
+.topbar .agc-mode-button {
+  width: 100%;
+  height: 27px;
+  justify-content: space-between;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.055), rgba(255,255,255,0.015)),
+    rgba(255,255,255,0.025);
+  border-color: rgba(255,255,255,0.075);
+  border-radius: 6px;
+  color: var(--fg-1);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 0 18px 0 8px;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.045);
+}
+.agc-mode-caret {
+  color: var(--fg-2);
+  font-size: 9px;
+  line-height: 1;
+  margin-left: 6px;
+}
+.agc-mode-menu {
+  position: fixed;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 4px;
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.015)),
+    var(--bg-1);
+  border: 1px solid rgba(255,255,255,0.11);
+  border-radius: 6px;
+  box-shadow:
+    0 12px 28px rgba(0,0,0,0.48),
+    inset 0 1px 0 rgba(255,255,255,0.05);
+}
+.agc-mode-option {
+  display: flex;
+  align-items: center;
+  min-height: 25px;
+  padding: 0 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--fg-1);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+.agc-mode-option:hover {
+  background: rgba(255,255,255,0.07);
+  color: var(--fg-0);
+}
+.agc-mode-option.active {
+  background: var(--accent-soft);
+  color: var(--fg-0);
 }
 
 /* Light theme — flip topbar tints from white-alpha (which vanishes on
    silver) to black-alpha, and bump the group-label opacity so the
    MODE / FILTER / BAND row stays legible against the silver chassis.
    Brand text gets a touch more weight + tracking for the same reason. */
-:root[data-theme="light"] .topbar .btn:hover         { background: rgba(0,0,0,0.08); }
+:root[data-theme="light"] .topbar                    { background: linear-gradient(180deg, rgba(255,255,255,0.72), rgba(220,224,230,0.86)); border-bottom-color: rgba(0,0,0,0.14); }
+:root[data-theme="light"] .topbar .btn               { background: rgba(255,255,255,0.42); border-color: rgba(0,0,0,0.12); color: var(--fg-1); box-shadow: inset 0 1px 0 rgba(255,255,255,0.7); }
+:root[data-theme="light"] .topbar .btn:hover         { background: rgba(255,255,255,0.68); border-color: rgba(0,0,0,0.18); }
 :root[data-theme="light"] .topbar .btn:active,
 :root[data-theme="light"] .topbar .btn.pressed       { background: rgba(0,0,0,0.14); box-shadow: inset 0 1px 2px rgba(0,0,0,0.2); }
 :root[data-theme="light"] .topbar .btn.ghost:hover   { background: rgba(0,0,0,0.08); }
@@ -1836,6 +2035,27 @@
 .dsp-row { display: flex; align-items: center; gap: 10px; }
 .dsp-row > .btn { flex-shrink: 0; min-width: 56px; }
 .dsp-row > .slider { flex: 1; }
+.dsp-smart-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 22px;
+  padding: 3px 7px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-xs);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--fg-2);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+}
+.dsp-smart-status > span:nth-child(2) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-1);
+}
 
 /* ===== Slider ===== */
 .slider { min-width: 100px; }
@@ -2383,6 +2603,78 @@
 .knob-group > .slider { flex: 1; }
 .knob-group > input[type="range"] { min-width: 80px; }
 
+/* Compact TX tile. The generic .knob-group defaults are tuned for the
+   top transport rail; inside the right-column TX panel they need to yield
+   width to the range input and reserve stable space for dB/% readouts. */
+.tx-filter-panel {
+  padding: 6px 8px;
+  gap: 6px;
+  min-width: 0;
+}
+.tx-filter-panel .knob-group {
+  width: 100%;
+  min-width: 0;
+  gap: 7px;
+}
+.tx-filter-panel .knob-group > input[type="range"] {
+  min-width: 54px;
+  flex: 1 1 auto;
+}
+.tx-filter-panel .knob-group > .mono {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.tx-slider-stack {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(138px, 1fr));
+  gap: 5px;
+  min-width: 0;
+}
+.tx-slider-stack .knob-group {
+  gap: 5px;
+}
+.tx-slider-stack .knob-group > input[type="range"] {
+  min-width: 36px;
+}
+.tx-filter-label {
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+.tx-filter-custom-row {
+  display: grid;
+  grid-template-columns: max-content minmax(56px, 1fr) max-content minmax(66px, 1fr) max-content;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+.tx-filter-custom-label,
+.tx-filter-dash,
+.tx-filter-unit,
+.tx-filter-range-readout {
+  color: var(--fg-3);
+}
+.tx-filter-input {
+  width: 100%;
+  min-width: 0;
+  font-size: 11px;
+  padding: 2px 4px;
+  background: var(--btn-top);
+  color: var(--fg-0);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+}
+.tx-filter-input:disabled {
+  color: var(--fg-3);
+  opacity: 0.72;
+}
+.tx-filter-range-readout {
+  grid-column: 2 / -1;
+  justify-self: start;
+  margin-top: -1px;
+  white-space: nowrap;
+}
+
 /* AGC control: the AGC-T slider plus an inline mode dropdown. The mode row
    anchors a popover holding Custom/Fixed tunables so the toolbar stays compact. */
 .agc-control { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
@@ -2420,6 +2712,30 @@
   box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
 }
 .agc-param-row { display: flex; align-items: center; gap: 8px; }
+
+/* Verbose DSP settings-tab sections (AGC / Squelch). One labelled row per
+   parameter; reuses settings-card chrome + tokens only. */
+.dsp-cfg { display: flex; flex-direction: column; gap: 7px; }
+.dsp-cfg-row { display: flex; align-items: center; gap: 10px; min-height: 24px; }
+.dsp-cfg-label {
+  flex: 0 0 96px;
+  font-size: 11px;
+  color: var(--fg-1);
+  letter-spacing: 0.02em;
+}
+.dsp-cfg-hint { color: var(--fg-2); font-size: 10px; }
+.dsp-cfg-btns { display: flex; flex-wrap: wrap; gap: 3px; }
+.dsp-cfg-num {
+  width: 72px;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 12px;
+}
+.dsp-cfg-num:disabled { opacity: 0.45; }
+.dsp-cfg-unit { color: var(--fg-2); font-size: 11px; min-width: 36px; }
 
 /* ===== Terminator ===== */
 .t1000-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 3; overflow: hidden; }

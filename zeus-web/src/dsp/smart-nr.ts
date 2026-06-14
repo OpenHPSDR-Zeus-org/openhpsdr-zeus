@@ -13,10 +13,13 @@ export type SmartNrCondition = {
   p98SnrDb: number;
   occupancy6: number;
   occupancy12: number;
+  coherentOccupancy6: number;
+  impulsiveOccupancy12: number;
   peakCount: number;
   hasSignal: boolean;
   weakSparse: boolean;
   denseNoise: boolean;
+  impulsiveNoise: boolean;
   tonalInterference: boolean;
 };
 
@@ -29,6 +32,7 @@ export type SmartNrRecommendation = {
 export type SmartNrInput = {
   spectrum: Float32Array | null;
   floor: Float32Array | null;
+  confidence?: Float32Array | null;
   current: NrConfigDto;
   mode: RxMode;
 };
@@ -47,22 +51,29 @@ function fallbackFloorDb(spec: Float32Array): number {
 export function analyzeSmartNrCondition(
   spectrum: Float32Array | null,
   floor: Float32Array | null,
+  confidence: Float32Array | null = null,
 ): SmartNrCondition | null {
   if (!spectrum || spectrum.length < 8) return null;
   const n = spectrum.length;
   const useFloor = floor !== null && floor.length === n;
+  const useConfidence = confidence !== null && confidence.length === n;
   const globalFloor = useFloor ? 0 : fallbackFloorDb(spectrum);
   const snr = new Array<number>(n);
   let maxSnrDb = -Infinity;
   let above6 = 0;
   let above12 = 0;
+  let coherentAbove6 = 0;
+  let impulsiveAbove12 = 0;
   for (let i = 0; i < n; i++) {
     const f = useFloor ? floor![i]! : globalFloor;
     const v = spectrum[i]! - f;
+    const c = useConfidence ? confidence![i]! : 1;
     snr[i] = v;
     if (v > maxSnrDb) maxSnrDb = v;
     if (v >= 6) above6++;
     if (v >= 12) above12++;
+    if (v >= 6 && c >= 0.45) coherentAbove6++;
+    if (v >= 12 && c < 0.25) impulsiveAbove12++;
   }
 
   let peakCount = 0;
@@ -77,9 +88,19 @@ export function analyzeSmartNrCondition(
   const p98SnrDb = percentile(sortedSnr, 0.98);
   const occupancy6 = above6 / n;
   const occupancy12 = above12 / n;
+  const coherentOccupancy6 = coherentAbove6 / n;
+  const impulsiveOccupancy12 = impulsiveAbove12 / n;
   const hasSignal = maxSnrDb >= 8;
-  const weakSparse = hasSignal && maxSnrDb < 24 && occupancy12 < 0.08;
-  const denseNoise = occupancy6 > 0.18 || p90SnrDb > 8 || occupancy12 > 0.12;
+  const impulsiveNoise = impulsiveOccupancy12 > 0.018 && coherentOccupancy6 < occupancy6 * 0.5;
+  const weakSparse =
+    !impulsiveNoise &&
+    hasSignal &&
+    maxSnrDb < 24 &&
+    occupancy12 < 0.08 &&
+    coherentOccupancy6 < 0.12;
+  const denseNoise =
+    !impulsiveNoise &&
+    (occupancy6 > 0.18 || p90SnrDb > 8 || occupancy12 > 0.12 || coherentOccupancy6 > 0.14);
   const tonalInterference =
     peakCount > 0 &&
     peakCount <= 24 &&
@@ -93,10 +114,13 @@ export function analyzeSmartNrCondition(
     p98SnrDb,
     occupancy6,
     occupancy12,
+    coherentOccupancy6,
+    impulsiveOccupancy12,
     peakCount,
     hasSignal,
     weakSparse,
     denseNoise,
+    impulsiveNoise,
     tonalInterference,
   };
 }
@@ -119,9 +143,10 @@ function withNr4(current: NrConfigDto, c: SmartNrCondition, mode: RxMode): NrCon
     ...current,
     nrMode: 'Sbnr',
     anfEnabled: c.tonalInterference,
-    snbEnabled: c.denseNoise,
+    snbEnabled: c.denseNoise || c.impulsiveNoise,
     nbpNotchesEnabled: c.tonalInterference,
-    nbMode: 'Off',
+    nbMode: c.impulsiveNoise ? 'Nb2' : 'Off',
+    nbThreshold: c.impulsiveNoise ? Math.max(8, Math.min(current.nbThreshold, 16)) : current.nbThreshold,
     nr4ReductionAmount: weak ? 8 : 10,
     nr4SmoothingFactor: isCwOrDigital(mode) ? 8 : 14,
     nr4WhiteningFactor: weak ? 8 : 4,
@@ -136,9 +161,10 @@ function withNr2(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
     ...current,
     nrMode: 'Emnr',
     anfEnabled: c.tonalInterference,
-    snbEnabled: c.denseNoise,
+    snbEnabled: c.denseNoise || c.impulsiveNoise,
     nbpNotchesEnabled: c.tonalInterference,
-    nbMode: 'Off',
+    nbMode: c.impulsiveNoise ? 'Nb2' : 'Off',
+    nbThreshold: c.impulsiveNoise ? Math.max(8, Math.min(current.nbThreshold, 16)) : current.nbThreshold,
     emnrGainMethod: 2,
     emnrNpeMethod: c.denseNoise ? 1 : 0,
     emnrAeRun: true,
@@ -155,14 +181,15 @@ function quietProfile(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
     ...current,
     nrMode: 'Off',
     anfEnabled: c.tonalInterference,
-    snbEnabled: false,
+    snbEnabled: c.impulsiveNoise,
     nbpNotchesEnabled: c.tonalInterference,
-    nbMode: 'Off',
+    nbMode: c.impulsiveNoise ? 'Nb2' : 'Off',
+    nbThreshold: c.impulsiveNoise ? Math.max(8, Math.min(current.nbThreshold, 16)) : current.nbThreshold,
   };
 }
 
 export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | null {
-  const condition = analyzeSmartNrCondition(input.spectrum, input.floor);
+  const condition = analyzeSmartNrCondition(input.spectrum, input.floor, input.confidence ?? null);
   if (!condition) return null;
 
   let nr: NrConfigDto;
@@ -173,12 +200,16 @@ export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | n
       : quietProfile(input.current, condition);
     reason = condition.weakSparse
       ? 'Weak narrow-signal profile: NR4/SBNR with mild whitening.'
+      : condition.impulsiveNoise
+        ? 'Impulsive-noise profile: engage NB2/SNB while keeping spectral NR conservative.'
       : 'CW/digital profile: spectral NR with conservative blanking.';
   } else if (isVoiceSsb(input.mode)) {
     nr = condition.weakSparse || condition.denseNoise
       ? withNr2(input.current, condition)
       : quietProfile(input.current, condition);
-    reason = condition.denseNoise
+    reason = condition.impulsiveNoise
+      ? 'SSB impulse profile: use NB2/SNB for non-coherent spikes before heavier NR.'
+      : condition.denseNoise
       ? 'SSB noise profile: NR2/EMNR with artifact eliminator and comfort noise.'
       : 'SSB clean/tonal profile: leave NR light and engage notch helpers only if needed.';
   } else if (isCarrierMode(input.mode)) {

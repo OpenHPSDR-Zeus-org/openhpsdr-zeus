@@ -59,6 +59,7 @@ import { ImdReadings } from './ImdReadings';
 import { DbScale } from './DbScale';
 import { SpotOverlay } from './SpotOverlay';
 import { PeakMarkerOverlay } from './PeakMarkerOverlay';
+import { NotchOverlay } from './NotchOverlay';
 
 export function Panadapter() {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -135,12 +136,12 @@ export function Panadapter() {
       const { moxOn, tunOn } = useTxStore.getState();
       const keyed = moxOn || tunOn;
       const pop = useSignalEnhanceStore.getState();
-      // Signal Pop (RX only): the anchor now holds dB-above-floor values, so
-      // map the colormap window relative to the floor — noise sits near the
-      // dark end and carriers a few dB up bloom. Keyed/TX keeps absolute dB.
+      // Signal Pop (RX only): the anchor now holds gated/compressed 0..1 display
+      // values (enhanceInto), so the colormap maps [0,1] directly. Keyed/TX
+      // keeps the absolute dB window.
       const popOn = pop.popEnabled && !keyed;
-      const dbMin = popOn ? pop.popFloorDb : keyed ? s.txDbMin : s.dbMin;
-      const dbMax = popOn ? pop.popFloorDb + pop.popSpanDb : keyed ? s.txDbMax : s.dbMax;
+      const dbMin = popOn ? 0 : keyed ? s.txDbMin : s.dbMin;
+      const dbMax = popOn ? 1 : keyed ? s.txDbMax : s.dbMax;
       const { r, g, b } = hexToRgbFloats(s.rxTraceColor);
       renderer.setTraceColor(r, g, b);
       // Fractional offset — the shaders take a float uOffsetPx, so the
@@ -256,7 +257,16 @@ export function Panadapter() {
       if (
         state.popEnabled !== prev.popEnabled ||
         state.popFloorDb !== prev.popFloorDb ||
-        state.popSpanDb !== prev.popSpanDb
+        state.popSpanDb !== prev.popSpanDb ||
+        state.popGamma !== prev.popGamma ||
+        state.coherenceHoldGate !== prev.coherenceHoldGate ||
+        state.coherenceBoostDb !== prev.coherenceBoostDb ||
+        state.ridgeBoost !== prev.ridgeBoost ||
+        state.ridgeMaxBoostDb !== prev.ridgeMaxBoostDb ||
+        state.visualAgcEnabled !== prev.visualAgcEnabled ||
+        state.visualAgcStrength !== prev.visualAgcStrength ||
+        state.impulseRejectEnabled !== prev.impulseRejectEnabled ||
+        state.impulseRejectDb !== prev.impulseRejectDb
       ) {
         if (lastRawPan) anchorPan = buildAnchor(lastRawPan);
         requestRedraw();
@@ -330,10 +340,11 @@ export function Panadapter() {
       }}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
-      <PassbandOverlay />
+      <PassbandOverlay resizable containerRef={containerRef} />
       <FilterCursorOverlay containerRef={containerRef} />
       <SpotOverlay />
       <PeakMarkerOverlay />
+      <NotchOverlay interactive resizable containerRef={containerRef} />
       <ImdReadings />
       <FreqAxis />
       <DbScale />

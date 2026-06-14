@@ -56,6 +56,25 @@ describe('smart NR supervisor', () => {
     expect(rec.nr.snbEnabled).toBe(true);
   });
 
+  it('treats non-coherent bright bins as impulsive noise, not weak-signal NR', () => {
+    const spec = noise();
+    const confidence = new Float32Array(WIDTH);
+    for (let i = 40; i < 160; i += 12) spec[i] = NOISE_DB + 25;
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      confidence,
+      current: { ...NR_CONFIG_DEFAULT, nbThreshold: 20 },
+      mode: 'USB',
+    })!;
+    expect(rec.condition.impulsiveNoise).toBe(true);
+    expect(rec.condition.weakSparse).toBe(false);
+    expect(rec.nr.nrMode).toBe('Off');
+    expect(rec.nr.nbMode).toBe('Nb2');
+    expect(rec.nr.snbEnabled).toBe(true);
+    expect(rec.nr.nbThreshold).toBe(16);
+  });
+
   it('uses notch helpers for strong sparse tonal interference', () => {
     const spec = noise();
     spec[90] = NOISE_DB + 35;

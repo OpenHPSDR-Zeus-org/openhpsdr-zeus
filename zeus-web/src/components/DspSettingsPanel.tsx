@@ -14,20 +14,61 @@
 // Visual idiom borrowed from PsSettingsPanel's `.ps-card` so this reads as the
 // same surface family as the other settings tabs — no new chrome, tokens only.
 
+import { AgcSettingsSection } from './AgcSettingsSection';
+import { BandwidthSettingsSection } from './BandwidthSettingsSection';
+import { SquelchSettingsSection } from './SquelchSettingsSection';
+import { SignalIntelligenceSettingsSection } from './SignalIntelligenceSettingsSection';
+import { SmartNrSettingsSection } from './SmartNrSettingsSection';
 import { TxLevelingSettingsSection } from './TxLevelingSettingsSection';
 
-// AGC and Squelch moved inline onto the control strip (AgcSlider / SquelchSlider)
-// — they're frequently-changed operating controls. This tab now hosts the
-// less-frequently-touched TX leveling config (ALC / Leveler / Compressor).
+// Verbose DSP editor. The control strip carries quick controls (AGC dropdown,
+// SQL toggle); this tab is the full editor exposing every wired parameter, and
+// both drive the same store + endpoints so they stay in sync. One ps-card per
+// control family, mirroring Thetis's Setup ▸ DSP layout.
 export function DspSettingsPanel() {
   return (
     <div className="ps-shell">
+      <div className="ps-card">
+        <h4>
+          Bandwidth
+          <span className="ps-card-hint">DDC sample rate (48…1536 kHz)</span>
+        </h4>
+        <BandwidthSettingsSection />
+      </div>
+      <div className="ps-card">
+        <h4>
+          AGC
+          <span className="ps-card-hint">mode / max-gain / custom</span>
+        </h4>
+        <AgcSettingsSection />
+      </div>
+      <div className="ps-card">
+        <h4>
+          RX Squelch
+          <span className="ps-card-hint">mode-aware (SSB/AM/FM)</span>
+        </h4>
+        <SquelchSettingsSection />
+      </div>
       <div className="ps-card">
         <h4>
           TX Leveling
           <span className="ps-card-hint">ALC / Leveler / Compressor</span>
         </h4>
         <TxLevelingSettingsSection />
+      </div>
+      <div className="ps-card">
+        <h4>
+          Signal Intelligence
+          <span className="ps-card-hint">Pop / Snap / Markers</span>
+        </h4>
+        <SignalIntelligenceSettingsSection />
+      </div>
+      <div className="ps-card">
+        <h4>
+          Smart NR Automation
+          <span className="ps-card-hint">panadapter-driven NR policy</span>
+        </h4>
+        <SmartNrSettingsSection />
       </div>
     </div>
   );

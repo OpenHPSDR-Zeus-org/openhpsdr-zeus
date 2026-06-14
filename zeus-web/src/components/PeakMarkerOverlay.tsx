@@ -33,6 +33,7 @@ const EMPTY: Snapshot = { peaks: [], centerHz: 0, spanHz: 0 };
 
 export function PeakMarkerOverlay() {
   const snapEnabled = useSignalEnhanceStore((s) => s.snapEnabled);
+  const peakMinSnrDb = useSignalEnhanceStore((s) => s.peakMinSnrDb);
   const traceColor = useDisplaySettingsStore((s) => s.rxTraceColor);
   const [snap, setSnap] = useState<Snapshot>(EMPTY);
 
@@ -61,7 +62,7 @@ export function PeakMarkerOverlay() {
     });
     recompute();
     return unsub;
-  }, [snapEnabled]);
+  }, [snapEnabled, peakMinSnrDb]);
 
   if (!snapEnabled || snap.peaks.length === 0 || snap.spanHz <= 0) return null;
 
@@ -75,8 +76,13 @@ export function PeakMarkerOverlay() {
         return (
           <div
             key={p.hz}
-            className="pointer-events-none absolute bottom-0 z-[7] h-2.5 w-0.5 -translate-x-1/2"
-            style={{ left: `${pct}%`, background: traceColor, opacity: peakAlpha(p.snrDb) }}
+            className="pointer-events-none absolute bottom-0 z-[7] h-4 w-0.5 -translate-x-1/2"
+            style={{
+              left: `${pct}%`,
+              background: traceColor,
+              opacity: peakAlpha(p.snrDb),
+              boxShadow: '0 0 3px rgba(0,0,0,0.9)',
+            }}
           />
         );
       })}
