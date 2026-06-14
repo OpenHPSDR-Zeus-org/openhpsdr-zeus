@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.MemoryMappedFiles;
 using Zeus.Plugins.Contracts.Audio;
 
@@ -134,6 +135,14 @@ internal sealed unsafe class VstEngineBridge : IDisposable
             return;
         }
 
+        // Drain any stale .out left signaled by a LATE response to an earlier
+        // block. Without this, a single timeout permanently desyncs the bridge:
+        // the engine ends up one block behind, every .out we then wait on carries
+        // the previous block's seq, so every block fails the seq check and we wedge
+        // into 100% passthrough that never recovers even after the load drops.
+        // Draining first means the next signal we wait on is for THIS block.
+        while (_outEvent.WaitOne(0)) { /* discard stale signal */ }
+
         // input → shared input region
         WriteU32(VstEngineProtocol.OffFramesThisBlock, (uint)n);
         var inRegion = new Span<float>(_base + VstEngineProtocol.HeaderBytes, count);
@@ -144,20 +153,30 @@ internal sealed unsafe class VstEngineBridge : IDisposable
         WriteU64(VstEngineProtocol.OffInSeq, _inSeq);
         _inEvent.Set();
 
-        // bounded wait — never block the radio
-        if (!_outEvent.WaitOne(WaitBudgetMs))
+        // Bounded wait for OUR response (matching seq). A late response for an
+        // earlier block is skipped, but we keep waiting WITHIN the same budget so
+        // one slow block costs at most one passthrough — not a permanent cascade.
+        // Never block the radio longer than WaitBudgetMs total.
+        long deadline = Stopwatch.GetTimestamp() + (long)(WaitBudgetMs * 1e-3 * Stopwatch.Frequency);
+        while (true)
         {
-            input.CopyTo(output);
-            Interlocked.Increment(ref _degraded);
-            return;
-        }
-
-        // only trust output whose seq matches the block we just sent
-        if (ReadU64(VstEngineProtocol.OffOutSeq) != _inSeq)
-        {
-            input.CopyTo(output);
-            Interlocked.Increment(ref _degraded);
-            return;
+            long remainingTicks = deadline - Stopwatch.GetTimestamp();
+            if (remainingTicks <= 0)
+            {
+                input.CopyTo(output);
+                Interlocked.Increment(ref _degraded);
+                return;
+            }
+            int remainingMs = (int)(remainingTicks * 1000 / Stopwatch.Frequency);
+            if (!_outEvent.WaitOne(remainingMs <= 0 ? 1 : remainingMs))
+            {
+                input.CopyTo(output);
+                Interlocked.Increment(ref _degraded);
+                return;
+            }
+            // only trust output whose seq matches the block we just sent
+            if (ReadU64(VstEngineProtocol.OffOutSeq) == _inSeq) break;
+            // stale late response — loop and keep waiting within the budget
         }
 
         var outRegion = new Span<float>(_base + VstEngineProtocol.HeaderBytes + _regionBytes, count);

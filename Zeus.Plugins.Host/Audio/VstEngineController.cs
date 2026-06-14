@@ -14,7 +14,9 @@ public sealed record EngineScannedPlugin(
     string File,
     string Format,
     string Category,
-    bool IsInstrument);
+    bool IsInstrument,
+    int NumInputs,
+    int NumOutputs);
 
 /// <summary>Outcome of a <see cref="VstEngineController.ActivateAsync"/> call.</summary>
 public enum VstEngineStartResult
@@ -239,9 +241,20 @@ public sealed class VstEngineController : IAsyncDisposable
                         static string Str(JsonElement o, string k) =>
                             o.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String
                                 ? v.GetString() ?? "" : "";
+                        // JUCE serialises a bool var as the NUMBER 0/1, not a JSON
+                        // true/false — accept both so the instrument flag isn't
+                        // silently dropped (which let Waves instruments through).
                         static bool Bool(JsonElement o, string k) =>
-                            o.TryGetProperty(k, out var v)
-                            && v.ValueKind is JsonValueKind.True or JsonValueKind.False && v.GetBoolean();
+                            o.TryGetProperty(k, out var v) && v.ValueKind switch
+                            {
+                                JsonValueKind.True => true,
+                                JsonValueKind.False => false,
+                                JsonValueKind.Number => v.TryGetInt32(out var n) && n != 0,
+                                _ => false,
+                            };
+                        static int Int(JsonElement o, string k) =>
+                            o.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.Number
+                            && v.TryGetInt32(out var n) ? n : -1;
 
                         list.Add(new EngineScannedPlugin(
                             Uid: Str(p, "uid"),
@@ -250,7 +263,9 @@ public sealed class VstEngineController : IAsyncDisposable
                             File: Str(p, "file"),
                             Format: Str(p, "format"),
                             Category: Str(p, "category"),
-                            IsInstrument: Bool(p, "isInstrument")));
+                            IsInstrument: Bool(p, "isInstrument"),
+                            NumInputs: Int(p, "numInputs"),
+                            NumOutputs: Int(p, "numOutputs")));
                     }
                 }
                 tcs.TrySetResult(list);

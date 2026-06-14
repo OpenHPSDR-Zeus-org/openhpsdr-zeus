@@ -197,17 +197,18 @@ public static class ZeusEndpoints
         });
         // PUT saves (or overwrites) the named profile from the CURRENT
         // live chain config.
-        app.MapPut("/api/audio-suite/profiles/{name}", (string name, AudioProfileService profiles) =>
+        app.MapPut("/api/audio-suite/profiles/{name}", async (string name, AudioProfileService profiles) =>
         {
             if (string.IsNullOrWhiteSpace(name))
                 return Results.BadRequest(new { error = "profile name is required" });
-            var entry = profiles.SaveCurrent(name.Trim());
+            var entry = await profiles.SaveCurrentAsync(name.Trim());
             return Results.Ok(new
             {
                 name = entry.Name,
                 order = entry.Order,
                 parked = entry.Parked,
                 masterBypass = entry.MasterBypass,
+                vstStates = entry.PluginStates.Count,
                 createdUtc = entry.CreatedUtc,
                 updatedUtc = entry.UpdatedUtc,
             });
