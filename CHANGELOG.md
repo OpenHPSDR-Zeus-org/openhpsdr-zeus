@@ -10,6 +10,18 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.9.1] — 2026-06-14
+
+> **🩹 Hotfix: the waterfall is back on Windows, plus a new amplifier-friendly TX delay.** A regression in 0.9.0 left the waterfall blank on many Windows machines while the panadapter kept working. This release fixes that, and adds an optional pre-key TX delay that protects external amplifiers.
+
+### What's new (in plain English)
+
+**The waterfall works again on Windows.** After upgrading to 0.9.0, a number of Windows operators found the waterfall went blank — sometimes right away, sometimes after a few minutes — while the panadapter kept running normally. The 0.9.0 smooth-tuning rework changed *when* the waterfall's scrolling history first gets allocated on the graphics card, and on Windows that step could be skipped at connect, leaving the waterfall black. It now seeds itself from the first real sweep of data, so it comes up reliably no matter the timing or the graphics driver. It's also been hardened to recover automatically if the graphics context is dropped during a long session (instead of freezing), and to fall back gracefully on virtual/limited GPUs. *(#629)*
+
+**New "TX delay" for external amplifiers.** There's a new **TX delay** control in the **PURESIGNAL → Timing** panel. Set it to a few milliseconds (the operators who reported this found ~30 ms ideal) and Zeus will key your radio first, wait, and *then* let RF out — giving a linear amplifier's transmit/receive relay time to finish switching before any RF reaches it, which prevents "hot-switching" the relay. The default is 0 ms, so nothing changes unless you opt in. It applies to the on-screen MOX and TUNE buttons and is deliberately left out of CW and digital modes. *(#630)*
+
+---
+
 ## [0.9.0] — 2026-06-13
 
 > **🛰️ Smooth tuning, cleaner transmit, Raspberry Pi — and Voyeur Mode arrives as an optional plugin.** Panadapter tuning now glides instead of jumping, PureSignal and the transmit path reach desktop-grade quality, Zeus runs on the **Raspberry Pi 4/5** for the first time, and there's a live CW decoder and a reel-to-reel tape-deck recorder. Under the hood, the plugin system gained the hooks — an RX audio tap, host-mediated QRZ, and radio-state read — that let large features ship as optional add-ons instead of bloating every download. The first of those: **Voyeur Mode, the unattended AI net monitor, is now an installable plugin** — opt in only if you want it. Roughly 155 changes since v0.8.4.
