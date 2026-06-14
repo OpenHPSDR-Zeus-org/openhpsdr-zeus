@@ -1463,8 +1463,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // is the 1-based wire selector and is only ever updated at idle (mid-key
         // changes defer — §3.4(1)), so the relay matrix is never hot-switched.
         int txAntWire = _hasTxAntennaRelays ? _txAntenna : 1;
+        // alex0 ANT1/2/3 bits [26:24] are STATE-MULTIPLEXED (pihpsdr
+        // new_protocol.c:1331-1357): during RX they reflect the RX antenna;
+        // during TX — or when RX is on an aux input (EXT/XVTR/BYPASS), where the
+        // ANT relay isn't used for RX — they reflect the TX antenna. alex1 ALWAYS
+        // reflects TX. Bench finding (G2): without this, changing the TX antenna
+        // also moved the RX path and the RX-antenna selector did nothing, because
+        // alex0 always carried the TX antenna.
+        int alex0AntWire = (xmit || _rxAuxInput != 0)
+            ? txAntWire
+            : ((_rxAntenna is 1 or 2 or 3) ? _rxAntenna : 1);
         uint alexCommon = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: txAntWire, board: _boardKind);
-        uint alex0 = alexCommon | (xmit ? ALEX_TX_RELAY : 0u);
+        // alex1 keeps the TX antenna from alexCommon; alex0 swaps in the
+        // state-correct antenna (clear [26:24], re-OR via the shared encoder).
+        uint alex0 = (alexCommon & ~ALEX_TX_ANTENNA_MASK) | EncodeTxAntennaBits(alex0AntWire)
+                     | (xmit ? ALEX_TX_RELAY : 0u);
         uint alex1 = alexCommon | (xmit ? ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX : 0u);
 
         // RX auxiliary input select (external-ports plan, Phase 5). Emitted on
@@ -1539,6 +1552,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private const uint ALEX_TX_ANTENNA_1   = 0x01000000;
     private const uint ALEX_TX_ANTENNA_2   = 0x02000000;
     private const uint ALEX_TX_ANTENNA_3   = 0x04000000;
+    private const uint ALEX_TX_ANTENNA_MASK = ALEX_TX_ANTENNA_1 | ALEX_TX_ANTENNA_2 | ALEX_TX_ANTENNA_3; // [26:24]
 
     // Flips the T/R relay on the LPF board so the TX path reaches the antenna
     // through the selected TX LPF instead of through the RX BPF path. OR'd
@@ -1602,19 +1616,25 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         int txAntWire = 1,
         bool hasTxAntennaRelays = false,
         int rxAuxInput = 0,
-        bool mkiiBpfRxSelect = false)
+        bool mkiiBpfRxSelect = false,
+        int rxAntWire = 1)
     {
         // Mirrors the SendCmdHighPriority alex0 path EXACTLY, in the same order,
         // so the golden test asserts real behaviour:
-        //   1. base BPF/LPF/TX-ant bits (Phase-2 TX-antenna gate)
+        //   1. base BPF/LPF bits + STATE-MULTIPLEXED ANT1/2/3 (RX ant on RX,
+        //      TX ant on xmit / RX-on-aux) — pihpsdr new_protocol.c:1331-1357
         //   2. TX_RELAY during xmit
         //   3. operator RX-aux bits (Phase 5) — composed FIRST
         //   4. PureSignal feedback routing — applied AFTER, owns K36 (§3.4(2))
-        // Default args reproduce the pre-Phase-5 word, so the older golden
-        // tests stay byte-identical.
+        // Default args (rx ant = tx ant = ANT1) reproduce the prior word, so the
+        // older golden tests stay byte-identical.
         int wire = hasTxAntennaRelays ? txAntWire : 1;
+        int alex0AntWire = (moxOn || rxAuxInput != 0)
+            ? wire
+            : ((rxAntWire is 1 or 2 or 3) ? rxAntWire : 1);
         uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: wire, board: board);
-        uint alex0 = alexCommon | (moxOn ? ALEX_TX_RELAY : 0u);
+        uint alex0 = (alexCommon & ~ALEX_TX_ANTENNA_MASK) | EncodeTxAntennaBits(alex0AntWire)
+                     | (moxOn ? ALEX_TX_RELAY : 0u);
         alex0 |= ComposeRxAuxBits(rxAuxInput, mkiiBpfRxSelect);
         if (psEnabled && moxOn) alex0 |= AlexPsBit;
         if (psEnabled && psExternal && moxOn) alex0 |= AlexRxAntennaBypass;

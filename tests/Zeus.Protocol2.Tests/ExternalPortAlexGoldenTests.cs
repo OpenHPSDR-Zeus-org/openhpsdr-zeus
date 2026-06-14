@@ -103,20 +103,46 @@ public class ExternalPortAlexGoldenTests
     private const uint TxAnt2 = 0x02000000u;
     private const uint TxAnt3 = 0x04000000u;
 
-    // DIFFERENTIAL: on a relay-capable board (G2 / OrionMkII) the selected TX
-    // antenna flips alex0[26:24], and nothing else moves. PS / TX-relay / BPF /
-    // LPF bits are untouched.
+    // DIFFERENTIAL: alex0 ANT1/2/3 [26:24] is STATE-MULTIPLEXED (pihpsdr
+    // new_protocol.c:1331-1357, bench-confirmed on G2). DURING XMIT alex0 carries
+    // the TX antenna (+ TX_RELAY); nothing else moves.
     [Theory]
     [InlineData(1, TxAnt1)]
     [InlineData(2, TxAnt2)]
     [InlineData(3, TxAnt3)]
-    public void Alex0_Idle_TxAntenna_FlipsBits_OnRelayBoard(int txAntWire, uint expectedAntBits)
+    public void Alex0_Xmit_CarriesTxAntenna_OnRelayBoard(int txAntWire, uint expectedAntBits)
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: Rx, moxOn: true, psEnabled: false, psExternal: false,
+            board: HpsdrBoardKind.OrionMkII,
+            txAntWire: txAntWire, hasTxAntennaRelays: true);
+        Assert.Equal(AlexNoAnt | expectedAntBits | TxRelay, alex0);
+    }
+
+    // AT IDLE (RX) alex0 carries the RX antenna, NOT the TX antenna.
+    [Theory]
+    [InlineData(1, TxAnt1)]
+    [InlineData(2, TxAnt2)]
+    [InlineData(3, TxAnt3)]
+    public void Alex0_Idle_CarriesRxAntenna_OnRelayBoard(int rxAntWire, uint expectedAntBits)
     {
         uint alex0 = Protocol2Client.ComposeAlex0ForTest(
             rxFreqHz: Rx, moxOn: false, psEnabled: false, psExternal: false,
             board: HpsdrBoardKind.OrionMkII,
-            txAntWire: txAntWire, hasTxAntennaRelays: true);
+            txAntWire: 1, hasTxAntennaRelays: true, rxAntWire: rxAntWire);
         Assert.Equal(AlexNoAnt | expectedAntBits, alex0);
+    }
+
+    // THE BENCH BUG: at idle, changing the TX antenna must NOT move the RX path.
+    // TX=ANT2 with RX=ANT1 → alex0 stays on ANT1 (RX), so RX doesn't go away.
+    [Fact]
+    public void Alex0_Idle_TxAntennaChange_DoesNotMoveRx()
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: Rx, moxOn: false, psEnabled: false, psExternal: false,
+            board: HpsdrBoardKind.OrionMkII,
+            txAntWire: 2, hasTxAntennaRelays: true, rxAntWire: 1);
+        Assert.Equal(AlexNoAnt | TxAnt1, alex0);
     }
 
     // During xmit the TX-relay rides alongside the selected antenna — confirm
