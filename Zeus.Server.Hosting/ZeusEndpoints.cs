@@ -232,13 +232,19 @@ public static class ZeusEndpoints
         // synthesized manifest); already-registered VSTs are skipped.
         // Returns what was registered / skipped / failed.
         app.MapPost("/api/audio-suite/scan-vst-directory",
-            async (ScanVstDirectoryRequest body, VstDirectoryScanService scanner, CancellationToken ct) =>
+            async (ScanVstDirectoryRequest body, VstDirectoryScanService scanner,
+                   ChainOrderService chainOrder, CancellationToken ct) =>
         {
             if (body is null || string.IsNullOrWhiteSpace(body.Directory))
                 return Results.BadRequest(new { error = "directory is required" });
             try
             {
                 var result = await scanner.ScanAsync(body.Directory, ct);
+                // Scanned VSTs always land in Available, never the active chain: a
+                // scan must not change what's processing audio. Without this, a
+                // freshly-registered id that was previously active would rejoin the
+                // live chain on its own.
+                chainOrder.ParkAll(result.Registered.Select(r => r.Id).ToList());
                 return Results.Ok(new
                 {
                     directory = result.Directory,

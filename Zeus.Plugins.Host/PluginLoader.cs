@@ -30,7 +30,12 @@ public sealed class PluginLoader
     {
         var manifest = ReadManifest(pluginDir);
 
-        var errors = ManifestValidator.Validate(manifest);
+        // Local load: allow an absolute audio.vst3Path. Operator directory
+        // scans reference VSTs in place at their install location so stub +
+        // sidecar plugins keep their dependency DLLs. Downloaded plugins are
+        // validated strictly at install time (PluginInstaller), so this does
+        // not widen the registry attack surface.
+        var errors = ManifestValidator.Validate(manifest, allowAbsoluteAudioPath: true);
         if (errors.Count > 0)
             throw new PluginLoadException(
                 $"manifest invalid: {string.Join("; ", errors)}");

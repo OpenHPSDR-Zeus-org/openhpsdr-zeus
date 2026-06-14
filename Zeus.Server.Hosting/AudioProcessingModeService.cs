@@ -54,6 +54,10 @@ public sealed class AudioProcessingModeService : IHostedService
     // id->slot map is rebuilt from each `chain` event by matching on file path
     // (load-order is only a provisional default until that event arrives).
     private Dictionary<string, string> _fileToId = new(StringComparer.OrdinalIgnoreCase);
+    // Engine plugin uid -> Zeus plugin id. Preferred over _fileToId: a "shell"
+    // file (e.g. Waves WaveShell) hosts many plugins sharing ONE file, so file
+    // alone can't disambiguate which slot is which — the uid does.
+    private Dictionary<string, string> _uidToId = new(StringComparer.Ordinal);
     private readonly HashSet<string> _openEditors = new(StringComparer.Ordinal);
 
     public AudioProcessingModeService(
@@ -70,14 +74,33 @@ public sealed class AudioProcessingModeService : IHostedService
         _log = log;
         _engine.StdErr += line => _log.LogDebug("vst-engine: {Line}", line);
         _engine.EngineEvent += OnEngineEvent;
+        // Keep the live engine's loaded chain in sync with operator edits made
+        // AFTER activation. LoadChainIntoEngine() runs once on activation; without
+        // this subscription a VST added/removed/reordered later never reaches the
+        // engine (its editor 404s with "No such plugin in the TX chain" and no
+        // audio flows). OrderChanged fires only on deliberate chain edits
+        // (add/remove/reorder/park) — NOT on the bulk OnPluginAttached storm from a
+        // directory scan (those land parked), so a scan does not thrash the engine.
+        _chainOrder.OrderChanged += OnChainOrderChanged;
+    }
+
+    /// <summary>
+    /// Re-push the Audio Suite chain to the external engine when the operator
+    /// edits it while the engine is live. No-op unless the engine is active
+    /// (Native mode, or VST mode with no engine, leaves the realtime tap clean).
+    /// </summary>
+    private void OnChainOrderChanged(IReadOnlyList<string> _)
+    {
+        if (_engine.IsActive) LoadChainIntoEngine();
     }
 
     /// <summary>
     /// Engine control-plane events (control thread). We watch <c>chain</c> to keep
     /// the id-&gt;slot map aligned with the engine's ACTUAL slot indices — the
     /// engine compacts slots past any plugin that failed to load, so load-order
-    /// position alone is unreliable. Matches each engine slot's <c>file</c> back
-    /// to a Zeus plugin id via <see cref="_fileToId"/>.
+    /// position alone is unreliable. Matches each engine slot to a Zeus plugin id
+    /// by <c>uid</c> first (the only way to disambiguate shell sub-plugins that
+    /// share a file), falling back to <c>file</c> via <see cref="_fileToId"/>.
     /// </summary>
     private void OnEngineEvent(System.Text.Json.JsonElement e)
     {
@@ -90,18 +113,26 @@ public sealed class AudioProcessingModeService : IHostedService
                 || plugins.ValueKind != System.Text.Json.JsonValueKind.Array) return;
 
             Dictionary<string, string> fileToId;
-            lock (_editorLock) fileToId = _fileToId;
+            Dictionary<string, string> uidToId;
+            lock (_editorLock) { fileToId = _fileToId; uidToId = _uidToId; }
 
             var map = new Dictionary<string, int>(StringComparer.Ordinal);
             int i = 0;
             foreach (var pl in plugins.EnumerateArray())
             {
-                if (pl.TryGetProperty("file", out var f)
+                // Prefer uid (unambiguous for shell sub-plugins); fall back to file.
+                if (pl.TryGetProperty("uid", out var u)
+                    && u.ValueKind == System.Text.Json.JsonValueKind.String
+                    && uidToId.TryGetValue(u.GetString() ?? string.Empty, out var byUid))
+                {
+                    map[byUid] = i;
+                }
+                else if (pl.TryGetProperty("file", out var f)
                     && f.ValueKind == System.Text.Json.JsonValueKind.String)
                 {
                     var key = NormalizePath(f.GetString());
-                    if (key is not null && fileToId.TryGetValue(key, out var id))
-                        map[id] = i;
+                    if (key is not null && fileToId.TryGetValue(key, out var byFile))
+                        map[byFile] = i;
                 }
                 i++;
             }
@@ -281,6 +312,7 @@ public sealed class AudioProcessingModeService : IHostedService
             var slots = new List<object>();
             var map = new Dictionary<string, int>(StringComparer.Ordinal);
             var fileToId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var uidToId = new Dictionary<string, string>(StringComparer.Ordinal);
             foreach (var id in _chainOrder.CurrentOrder) // ordered, parked excluded
             {
                 if (!byId.TryGetValue(id, out var p)) continue;
@@ -290,16 +322,21 @@ public sealed class AudioProcessingModeService : IHostedService
                 var abs = Path.IsPathRooted(vst3)
                     ? vst3
                     : Path.Combine(p.Loaded.PluginDir, vst3);
+                // uid selects ONE plugin from a shell file; "" => engine loads the
+                // single/first plugin in the file (describeFile fallback).
+                var uid = p.Loaded.Manifest.Audio?.Vst3Uid ?? string.Empty;
                 map[id] = slots.Count; // provisional: engine slot == load_chain position
                 var key = NormalizePath(abs);
                 if (key is not null) fileToId[key] = id;
-                slots.Add(new { file = abs });
+                if (uid.Length > 0) uidToId[uid] = id;
+                slots.Add(new { file = abs, identifier = uid });
             }
 
             lock (_editorLock)
             {
                 _idToEngineSlot = map;
                 _fileToId = fileToId;
+                _uidToId = uidToId;
                 _openEditors.Clear(); // the engine closes all editors on load_chain
             }
 

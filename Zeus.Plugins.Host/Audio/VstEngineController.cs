@@ -3,6 +3,19 @@ using Zeus.Plugins.Contracts.Audio;
 
 namespace Zeus.Plugins.Host.Audio;
 
+/// <summary>
+/// One plugin enumerated by the engine's scanner. A "shell" VST3 yields many of
+/// these from a single <see cref="File"/>, disambiguated by <see cref="Uid"/>.
+/// </summary>
+public sealed record EngineScannedPlugin(
+    string Uid,
+    string Name,
+    string Manufacturer,
+    string File,
+    string Format,
+    string Category,
+    bool IsInstrument);
+
 /// <summary>Outcome of a <see cref="VstEngineController.ActivateAsync"/> call.</summary>
 public enum VstEngineStartResult
 {
@@ -185,6 +198,75 @@ public sealed class VstEngineController : IAsyncDisposable
         VstEngineProcess? proc;
         lock (_lifecycleLock) proc = _proc;
         proc?.Send(command);
+    }
+
+    /// <summary>
+    /// Drive the engine's <c>scan_plugins</c> and await its <c>plugins_scanned</c>
+    /// reply, returning every plugin the engine's scanner enumerated. For a
+    /// "shell" VST3 (e.g. Waves WaveShell) this yields one entry PER hosted
+    /// sub-plugin, each with its own <see cref="EngineScannedPlugin.Uid"/> — the
+    /// identifier Zeus must pass back in <c>load_chain</c> to load that exact one.
+    /// The engine also scans its formats' default locations (where WaveShell
+    /// lives), so the chosen path is additive, not exclusive. Returns empty when
+    /// the engine isn't active. Control thread only (never the realtime path).
+    /// </summary>
+    public async Task<IReadOnlyList<EngineScannedPlugin>> ScanPluginsAsync(
+        IReadOnlyList<string> paths, TimeSpan timeout, CancellationToken ct = default)
+    {
+        if (!_active) return Array.Empty<EngineScannedPlugin>();
+
+        var tcs = new TaskCompletionSource<IReadOnlyList<EngineScannedPlugin>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void Handler(JsonElement e)
+        {
+            try
+            {
+                if (!e.TryGetProperty("event", out var ev)
+                    || ev.ValueKind != JsonValueKind.String
+                    || ev.GetString() != "plugins_scanned") return;
+
+                var list = new List<EngineScannedPlugin>();
+                if (e.TryGetProperty("plugins", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var p in arr.EnumerateArray())
+                    {
+                        static string Str(JsonElement o, string k) =>
+                            o.TryGetProperty(k, out var v) && v.ValueKind == JsonValueKind.String
+                                ? v.GetString() ?? "" : "";
+                        static bool Bool(JsonElement o, string k) =>
+                            o.TryGetProperty(k, out var v)
+                            && v.ValueKind is JsonValueKind.True or JsonValueKind.False && v.GetBoolean();
+
+                        list.Add(new EngineScannedPlugin(
+                            Uid: Str(p, "uid"),
+                            Name: Str(p, "name"),
+                            Manufacturer: Str(p, "manufacturer"),
+                            File: Str(p, "file"),
+                            Format: Str(p, "format"),
+                            Category: Str(p, "category"),
+                            IsInstrument: Bool(p, "isInstrument")));
+                    }
+                }
+                tcs.TrySetResult(list);
+            }
+            catch { tcs.TrySetResult(Array.Empty<EngineScannedPlugin>()); }
+        }
+
+        EngineEvent += Handler;
+        try
+        {
+            SendCommand(new { cmd = "scan_plugins", paths });
+            return await tcs.Task.WaitAsync(timeout, ct).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return Array.Empty<EngineScannedPlugin>();
+        }
+        finally
+        {
+            EngineEvent -= Handler;
+        }
     }
 
     /// <summary>

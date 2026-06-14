@@ -141,9 +141,21 @@ public sealed record PanelContribution
 
 public sealed record AudioBlock
 {
-    /// <summary>Relative path inside the plugin dir to a VST3 file.</summary>
+    /// <summary>
+    /// Path to a VST3 file — relative to the plugin dir for a copied plugin,
+    /// or absolute when the plugin is referenced in place (operator scan).
+    /// </summary>
     [JsonPropertyName("vst3Path")]
     public string? Vst3Path { get; init; }
+
+    /// <summary>
+    /// Engine plugin identifier (JUCE <c>createIdentifierString()</c>) selecting
+    /// ONE sub-plugin from a file. Required for "shell" VST3s that expose many
+    /// plugins from a single file (e.g. Waves WaveShell); null/empty means the
+    /// file contains a single plugin and the first one is loaded.
+    /// </summary>
+    [JsonPropertyName("vst3Uid")]
+    public string? Vst3Uid { get; init; }
 
     /// <summary>
     /// Where in the TX/RX path this audio plugin sits. Known values:

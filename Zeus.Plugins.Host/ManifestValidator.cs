@@ -19,7 +19,16 @@ public static partial class ManifestValidator
     [GeneratedRegex(@"^[0-9]+\.[0-9]+\.[0-9]+$")]
     private static partial Regex StrictSemVerPattern();
 
-    public static IReadOnlyList<string> Validate(PluginManifest m)
+    /// <param name="allowAbsoluteAudioPath">
+    /// When true, an absolute (rooted) <c>audio.vst3Path</c> is permitted.
+    /// This is enabled ONLY for locally-loaded plugins (the operator's own
+    /// directory scan references VSTs in place at their install path so
+    /// stub+sidecar plugins keep their dependencies). Downloaded/installed
+    /// plugins are validated with this false (the default), so a malicious
+    /// registry manifest still cannot point at an arbitrary host file.
+    /// Path-traversal (<c>..</c>) is rejected regardless.
+    /// </param>
+    public static IReadOnlyList<string> Validate(PluginManifest m, bool allowAbsoluteAudioPath = false)
     {
         var errors = new List<string>();
 
@@ -68,7 +77,10 @@ public static partial class ManifestValidator
 
         if (m.Audio is { Vst3Path: { Length: > 0 } vst3 })
         {
-            if (Path.IsPathRooted(vst3) || vst3.Contains("..", StringComparison.Ordinal))
+            // Path-traversal is never allowed. A rooted path is allowed only for
+            // locally-loaded plugins (operator scan references VSTs in place).
+            if (vst3.Contains("..", StringComparison.Ordinal)
+                || (Path.IsPathRooted(vst3) && !allowAbsoluteAudioPath))
                 errors.Add("audio.vst3Path must be relative to the plugin root");
         }
 

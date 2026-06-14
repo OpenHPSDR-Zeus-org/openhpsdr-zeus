@@ -61,7 +61,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(sp => new VstDirectoryScanService(
             manager: sp.GetRequiredService<PluginManager>(),
             pluginRoot: options?.PluginRoot ?? PluginRoot.Get(),
-            log: sp.GetRequiredService<ILogger<VstDirectoryScanService>>()));
+            log: sp.GetRequiredService<ILogger<VstDirectoryScanService>>(),
+            // Optional: when the out-of-process engine is registered (it is in the
+            // Zeus host), the scanner enumerates through it so shell VST3s like
+            // Waves WaveShell expand into their hosted sub-plugins.
+            engine: sp.GetService<Audio.VstEngineController>()));
 
         return services;
     }

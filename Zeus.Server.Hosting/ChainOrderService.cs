@@ -357,6 +357,32 @@ public sealed class ChainOrderService
     }
 
     /// <summary>
+    /// Park many attached plugins at once (Available, out of the live chain) with
+    /// a SINGLE persist + <see cref="OrderChanged"/> + broadcast. Used after a
+    /// directory scan so newly-registered VSTs always land in Available and a scan
+    /// never changes what's processing audio — even for a plugin id that was
+    /// previously active and is being re-registered. Ids that are already parked
+    /// or not attached are skipped. No-op (no events) when nothing changes.
+    /// </summary>
+    public void ParkAll(IReadOnlyCollection<string> pluginIds)
+    {
+        if (pluginIds.Count == 0) return;
+        List<string>? snapshot = null;
+        lock (_sync)
+        {
+            bool changed = false;
+            foreach (var id in pluginIds)
+                if (_attached.Contains(id) && _parked.Add(id))
+                    changed = true;
+            if (!changed) return;
+            PersistUnderLock();
+            snapshot = RuntimeOrderUnderLock();
+        }
+        OrderChanged?.Invoke(snapshot!);
+        BroadcastOrder(snapshot!);
+    }
+
+    /// <summary>
     /// True if the plugin is currently parked (installed but pulled
     /// out of the active chain). Used by
     /// <see cref="AudioPluginBridge"/> to keep parked plugins out of
