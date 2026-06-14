@@ -42,10 +42,10 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { COLORMAPS } from '../gl/colormap';
-import { createWfRenderer } from '../gl/waterfall';
-import { planForFrame } from '../gl/frame-plan';
+import { createWfRenderer, type WfGlCaps } from '../gl/waterfall';
+import { planForFrame, resetFramePlan } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
@@ -70,6 +70,13 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<ReturnType<typeof createWfRenderer> | null>(null);
+  // Live transparency, read by buildRenderer() on context-restore so a rebuild
+  // mid-QRZ-mode comes back transparent rather than occluding the map (#629).
+  const transparentRef = useRef(transparent);
+  // GL float-texture capabilities, surfaced on-screen because the desktop
+  // (WebView2) app has no reachable DevTools. Only shown when something the
+  // waterfall needs is missing (#629).
+  const [glCaps, setGlCaps] = useState<WfGlCaps | null>(null);
   const autoRange = useDisplaySettingsStore((s) => s.autoRange);
   const setAutoRange = useDisplaySettingsStore((s) => s.setAutoRange);
   const colormap = useDisplaySettingsStore((s) => s.colormap);
@@ -80,25 +87,49 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     const container = containerRef.current;
     if (!canvas || !container) return;
 
-    const gl = canvas.getContext('webgl2', { antialias: false, alpha: true, premultipliedAlpha: true });
-    if (!gl) {
-      console.error('WebGL2 not available');
-      return;
-    }
-
     // Tell the realtime client that decoded spectrum frames are needed —
     // ws-client.ts skips decodeDisplayFrame entirely when no consumer is
-    // registered (all spectrum surfaces closed).
+    // registered (all spectrum surfaces closed). Context-independent: stays a
+    // single mount/unmount pair, NEVER re-invoked on context-restore (#629).
     const releaseFrameConsumer = registerFrameConsumer();
 
-    const renderer = createWfRenderer(gl);
-    rendererRef.current = renderer;
-    // Seed with the current store value so the palette survives remount
-    // (e.g. after a resize that cycles the canvas).
-    renderer.setColormap(useDisplaySettingsStore.getState().colormap);
-    renderer.setTransparent(transparent);
+    // Mutable GL bindings so the renderer can be rebuilt after a WebGL context
+    // loss (#629). On Windows/ANGLE the waterfall's float-texture context can
+    // be evicted after minutes; without a rebuild path it freezes forever.
+    let gl: WebGL2RenderingContext | null = null;
+    let renderer: ReturnType<typeof createWfRenderer> | null = null;
+    let contextLost = false;
+
+    // (Re)acquire the context and build a fresh renderer with every GL
+    // resource. Returns false if WebGL2 is unavailable. Does NOT touch the
+    // frame-consumer registration. Reads colormap/transparency LIVE so a
+    // rebuild lands on the operator's current state, not a stale closure.
+    const buildRenderer = (): boolean => {
+      const ctx = canvas.getContext('webgl2', {
+        antialias: false,
+        alpha: true,
+        premultipliedAlpha: true,
+      });
+      if (!ctx) {
+        console.error('WebGL2 not available');
+        return false;
+      }
+      gl = ctx;
+      renderer = createWfRenderer(ctx);
+      rendererRef.current = renderer;
+      renderer.setColormap(useDisplaySettingsStore.getState().colormap);
+      renderer.setTransparent(transparentRef.current);
+      setGlCaps(renderer.caps);
+      return true;
+    };
+
+    if (!buildRenderer()) return;
+
     let lastSeqDrawn = -1;
     let tickCounter = 0;
+    // Count context-restore cycles — a one-off eviction logs once; a steady
+    // leak would climb, which is the signal to dig further (#629).
+    let restoreCount = 0;
     // Visibility gating: skip the rAF redraw when the waterfall tile is
     // scrolled offscreen or the tab is hidden. We still push frames into
     // the history texture so when visibility resumes the operator sees a
@@ -108,6 +139,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     const isActive = () => inViewport && pageVisible;
 
     const redraw = () => {
+      if (contextLost || !renderer) return;
       const { wfDbMin, wfDbMax, wfTxDbMin, wfTxDbMax } = useDisplaySettingsStore.getState();
       const { moxOn, tunOn } = useTxStore.getState();
       const keyed = moxOn || tunOn;
@@ -141,6 +173,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       const h = Math.max(1, Math.round(height * dpr));
       canvas.width = w;
       canvas.height = h;
+      if (contextLost || !renderer) return;
       renderer.resize(w, h);
       requestRedraw();
     };
@@ -165,7 +198,38 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
 
+    // WebGL context-loss recovery (#629). On Windows/ANGLE the waterfall's
+    // float-texture context can be evicted after minutes of streaming; without
+    // this the surface freezes forever. preventDefault() on 'lost' is MANDATORY
+    // — without it the browser never fires 'restored'.
+    const onContextLost = (e: Event) => {
+      e.preventDefault();
+      contextLost = true;
+      cancelDrawBusFrame(redraw);
+      console.warn('[waterfall] WebGL context lost — awaiting restore');
+    };
+    const onContextRestored = () => {
+      restoreCount++;
+      console.warn(`[waterfall] WebGL context restored (#${restoreCount}) — rebuilding`);
+      if (!buildRenderer()) return;
+      // Rebuilding the renderer is NOT enough: the waterfall's entire history
+      // lives in now-lost GPU textures with no CPU mirror. Force the shared
+      // planner to emit a 'reset' on the next frame so the textures re-seed,
+      // and seed immediately from the last-held frame so a paused-RX restore
+      // is not left blank.
+      resetFramePlan();
+      contextLost = false;
+      resize();
+      const st = useDisplayStore.getState();
+      const wfDb = st.wfValid && st.wfDb ? st.wfDb : null;
+      renderer!.pushFrame({ kind: 'reset', reason: 'first' }, wfDb, st.centerHz, st.hzPerPixel);
+      requestRedraw();
+    };
+    canvas.addEventListener('webglcontextlost', onContextLost);
+    canvas.addEventListener('webglcontextrestored', onContextRestored);
+
     const unsub = useDisplayStore.subscribe((state) => {
+      if (contextLost || !renderer) return;
       if (state.lastSeq === lastSeqDrawn) return;
       lastSeqDrawn = state.lastSeq;
       // Shared per-frame plan (issue #597): identical decision to the
@@ -207,6 +271,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     // ordinary RX traffic pulled the waterfall rAF floor above the
     // spectrum-tick rate.
     const unsubSettings = useDisplaySettingsStore.subscribe((state, prev) => {
+      if (contextLost || !renderer) return;
       if (state.colormap !== prev.colormap) {
         renderer.setColormap(state.colormap);
         requestRedraw();
@@ -242,10 +307,19 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       ro.disconnect();
       io.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      // Remove loss/restore listeners BEFORE loseContext() — loseContext fires
+      // 'webglcontextlost' synchronously, and we don't want onContextLost to
+      // run during teardown.
+      canvas.removeEventListener('webglcontextlost', onContextLost);
+      canvas.removeEventListener('webglcontextrestored', onContextRestored);
       cancelDrawBusFrame(redraw);
-      renderer.dispose();
-      rendererRef.current = null;
       releaseFrameConsumer();
+      renderer?.dispose();
+      // Free the ANGLE context slot now rather than waiting for GC — on a
+      // disconnect/reconnect cycle the Waterfall remounts, and ANGLE caps the
+      // number of live WebGL contexts (#629).
+      gl?.getExtension('WEBGL_lose_context')?.loseContext();
+      rendererRef.current = null;
     };
   }, []);
 
@@ -253,6 +327,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   // history texture survives a QRZ engage/disengage. draw() runs on the next
   // frame via the realtime store subscription.
   useEffect(() => {
+    transparentRef.current = transparent;
     rendererRef.current?.setTransparent(transparent);
   }, [transparent]);
 
@@ -271,6 +346,31 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       }}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
+      {glCaps && !glCaps.floatLinear && (
+        // On-screen diagnostic (#629). The desktop (WebView2) app has no
+        // reachable DevTools, so when the GPU lacks OES_texture_float_linear —
+        // the prime suspect for the Windows-in-a-VM "no waterfall" — surface it
+        // here. The NEAREST fallback keeps the waterfall working; this just
+        // confirms the cause from a screenshot.
+        <div
+          style={{
+            position: 'absolute',
+            bottom: 4,
+            left: 6,
+            padding: '2px 6px',
+            fontSize: 10,
+            fontFamily: 'monospace',
+            color: 'var(--fg-0)',
+            background: 'rgba(0,0,0,0.55)',
+            borderRadius: 3,
+            pointerEvents: 'none',
+            zIndex: 2,
+          }}
+          title={`GPU: ${glCaps.gpu}`}
+        >
+          wf: float_linear unsupported → NEAREST fallback
+        </div>
+      )}
       <WfDbScale />
       <div
         className="tuning-cursor"

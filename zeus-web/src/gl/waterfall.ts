@@ -74,7 +74,17 @@ export type PushOptions = {
   skipRowUpload?: boolean;
 };
 
+/** WebGL float-texture capabilities, surfaced so the component can show an
+ *  on-screen badge when a feature needed by the waterfall is missing (#629). */
+export type WfGlCaps = {
+  floatLinear: boolean;
+  colorBufferFloat: boolean;
+  gpu: string;
+};
+
 export type WfRenderer = {
+  /** GL float-texture capabilities of the context this renderer was built on. */
+  caps: WfGlCaps;
   resize: (w: number, h: number) => void;
   /** Apply the shared per-frame plan (issue #597: the decision is computed
    *  once in gl/frame-plan.ts and handed to both spectrum surfaces so they
@@ -106,8 +116,31 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   // for effect — we don't consume the extension objects directly.
   const colorExt = gl.getExtension('EXT_color_buffer_float');
   const floatExt = gl.getExtension('OES_texture_float_linear');
-  void colorExt;
-  void floatExt;
+  // LINEAR filtering on a FLOAT (R32F) texture is ONLY legal when
+  // OES_texture_float_linear is present. Without it, sampling the history with
+  // gl.LINEAR makes the texture "incomplete" and the fragment shader's
+  // texture() reads return garbage — the waterfall renders wrong or blanks
+  // entirely while the (non-float) panadapter is unaffected. This is the prime
+  // suspect for the Windows/WebView2-in-a-VM case in #629: ANGLE on a software
+  // or weak GPU frequently omits this extension. Fall back to NEAREST so the
+  // waterfall still renders — we lose only sub-pixel-smooth horizontal glide,
+  // not the data.
+  const histMagFilter = floatExt ? gl.LINEAR : gl.NEAREST;
+  const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+  const caps: WfGlCaps = {
+    floatLinear: !!floatExt,
+    colorBufferFloat: !!colorExt,
+    gpu: dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : 'unknown',
+  };
+  // One-time capability log — surfaces in any console; the Waterfall component
+  // also renders an on-screen badge when floatLinear is false, because the
+  // desktop (WebView2) app has no reachable DevTools (#629).
+  // eslint-disable-next-line no-console
+  console.info(
+    `[waterfall] gl caps: float_linear=${caps.floatLinear} ` +
+      `color_buffer_float=${caps.colorBufferFloat} ` +
+      `magFilter=${floatExt ? 'LINEAR' : 'NEAREST(fallback)'} gpu=${caps.gpu}`,
+  );
 
   const drawProg = buildProgram(gl, WF_VS, WF_FS);
   const uHistory = gl.getUniformLocation(drawProg, 'uHistory');
@@ -146,7 +179,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   const initTextureParams = (tex: WebGLTexture) => {
     gl.bindTexture(gl.TEXTURE_2D, tex);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, histMagFilter);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
   };
@@ -183,6 +216,9 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   let lastHzPerPixel = 0;
   let canvasW = 0;
   let canvasH = 0;
+  // Last width the history textures were seeded at — lets a 'reset' decision on
+  // a null-wf frame re-seed at the known column count (#629 hardening).
+  let lastValidWidth = 0;
 
   const seedTexture = (tex: WebGLTexture, w: number) => {
     gl.bindTexture(gl.TEXTURE_2D, tex);
@@ -205,11 +241,13 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
     seedTexture(textures[0], w);
     seedTexture(textures[1], w);
     texWidth = w;
+    lastValidWidth = w;
     writeRow = 0;
     active = 0;
   };
 
   const uploadRow = (wfDb: Float32Array) => {
+    if (texWidth === 0) return; // not seeded yet — a stray push before reset
     writeRow = (writeRow + 1) % HISTORY_ROWS;
     gl.bindTexture(gl.TEXTURE_2D, textures[active]);
     gl.texSubImage2D(
@@ -226,6 +264,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   };
 
   const performShift = (shiftPx: number) => {
+    if (texWidth === 0) return; // not seeded yet — nothing to shift
     const src = active === 0 ? textures[0] : textures[1];
     const dst = active === 0 ? textures[1] : textures[0];
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
@@ -251,6 +290,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   };
 
   return {
+    caps,
     resize(w, h) {
       canvasW = w;
       canvasH = h;
@@ -263,7 +303,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
           // data also upload it so the history has a real top row. A reset
           // on an invalid-wf frame leaves the seed only — the next valid
           // frame pushes the first real row.
-          const width = wfDb?.length ?? texWidth;
+          const width = wfDb?.length ?? (texWidth || lastValidWidth);
           if (width > 0) resetTextures(width);
           if (wfDb) uploadRow(wfDb);
           lastCenterHz = centerHz;
