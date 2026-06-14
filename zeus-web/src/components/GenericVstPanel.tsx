@@ -9,6 +9,7 @@
 // action plus the plugin's identity. Reorder / park / remove still work
 // from the rack slot chrome, and the VST processes audio regardless.
 
+import { useEffect, useRef } from 'react';
 import { useVstEditor } from './useVstEditor';
 
 interface GenericVstPanelProps {
@@ -17,7 +18,19 @@ interface GenericVstPanelProps {
 }
 
 export function GenericVstPanel({ pluginId, name }: GenericVstPanelProps) {
-  const { open, busy, error, toggle } = useVstEditor(pluginId);
+  const { open, busy, error, toggle, openEditor } = useVstEditor(pluginId);
+
+  // Selecting this VST's chip mounts the panel — auto-open its real
+  // editor window so the chip click alone pops the GUI (no extra button
+  // press). Fires once per mount; the server-side open is idempotent and
+  // the operator can still Close it below. Re-selecting the chip remounts
+  // and re-opens. A non-loadable .vst3 surfaces its error in the pane.
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (autoOpenedRef.current) return;
+    autoOpenedRef.current = true;
+    openEditor();
+  }, [openEditor]);
 
   return (
     <div
@@ -75,9 +88,10 @@ export function GenericVstPanel({ pluginId, name }: GenericVstPanelProps) {
           {busy ? '…' : open ? 'Close Editor' : 'Open Editor'}
         </button>
         <span style={{ color: 'var(--fg-3)', fontSize: 10, lineHeight: 1.3, flex: 1, minWidth: 160 }}>
-          Opens the plugin&rsquo;s real editor as a separate window on the
-          desktop (not inside the browser). The VST processes audio in the
-          chain whether or not the editor is open.
+          Selecting this VST opens its real editor in a separate desktop
+          window — a VST3 GUI is a native window, not browser HTML, so it
+          can&rsquo;t render here. Use Close to dismiss it; the VST
+          processes audio either way.
         </span>
       </div>
 
