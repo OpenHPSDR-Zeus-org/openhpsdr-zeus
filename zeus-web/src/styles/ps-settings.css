@@ -538,6 +538,219 @@
   font-weight: 400;
 }
 
+/* ── Signal Intelligence settings ─────────────────────────── */
+.sig-intel {
+  display: grid;
+  gap: 12px;
+}
+
+.smart-nr-settings {
+  display: grid;
+  gap: 12px;
+}
+
+.sig-intel-top,
+.sig-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sig-intel-top {
+  justify-content: space-between;
+}
+
+.sig-profile-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.sig-profile-btn,
+.sig-reset-btn {
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-xs);
+  background: var(--bg-2);
+  color: var(--fg-1);
+  font: 700 10.5px var(--font-sans);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 5px 8px;
+  cursor: pointer;
+}
+
+.sig-profile-btn:hover,
+.sig-reset-btn:hover {
+  color: var(--fg-0);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--panel-border));
+}
+
+.sig-profile-btn[aria-pressed='true'] {
+  color: var(--btn-active-text, var(--fg-0));
+  border-color: var(--accent);
+  background: linear-gradient(180deg, var(--btn-active-top), var(--btn-active-bot));
+}
+
+.sig-status {
+  flex: 0 0 auto;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-xs);
+  padding: 4px 7px;
+  color: var(--fg-2);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+}
+
+.sig-toggle-row {
+  flex-wrap: wrap;
+  padding: 8px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.sig-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--fg-1);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  cursor: pointer;
+  user-select: none;
+}
+
+.sig-switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.sig-switch-track {
+  position: relative;
+  width: 32px;
+  height: 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: 999px;
+  background: var(--bg-2);
+  transition: border-color var(--dur-fast), background var(--dur-fast);
+}
+
+.sig-switch-track::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--fg-3);
+  transition: transform var(--dur-fast), background var(--dur-fast);
+}
+
+.sig-switch input:checked + .sig-switch-track {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 28%, var(--bg-2));
+}
+
+.sig-switch input:checked + .sig-switch-track::after {
+  transform: translateX(16px);
+  background: var(--fg-0);
+}
+
+.sig-switch input:focus-visible + .sig-switch-track {
+  outline: 1px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.sig-reset-btn {
+  margin-left: auto;
+}
+
+.sig-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px 16px;
+}
+
+.sig-tune {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px;
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+}
+
+.sig-tune .slider {
+  min-width: 0;
+}
+
+.sig-tune-input {
+  width: 72px;
+  height: 24px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-xs);
+  background: var(--bg-2);
+  color: var(--fg-0);
+  font: 700 11px var(--font-mono);
+  text-align: right;
+  padding: 0 6px;
+}
+
+.sig-tune-input:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+.smart-nr-status {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-xs);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--fg-2);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.smart-nr-status > span {
+  min-width: 0;
+}
+
+.smart-nr-status > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 720px) {
+  .sig-intel-top,
+  .sig-toggle-row {
+    align-items: flex-start;
+  }
+
+  .sig-intel-top {
+    flex-direction: column;
+  }
+
+  .sig-reset-btn {
+    margin-left: 0;
+  }
+
+  .smart-nr-status {
+    grid-template-columns: 1fr;
+  }
+}
+
 .ps-stall-banner {
   margin: 0 0 10px;
   padding: 8px 10px;

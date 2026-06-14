@@ -43,7 +43,6 @@
 // License for details.
 
 import { useEffect, useRef, useState } from 'react';
-import { COLORMAPS } from '../gl/colormap';
 import { createWfRenderer, type WfGlCaps } from '../gl/waterfall';
 import { planForFrame, resetFramePlan } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
@@ -55,6 +54,8 @@ import * as viewCenter from '../state/view-center';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
+import { NotchOverlay } from './NotchOverlay';
+import { PassbandOverlay } from './PassbandOverlay';
 import { WfDbScale } from './WfDbScale';
 
 // Throttle row uploads so the waterfall scrolls at ~(server tick / N).
@@ -81,14 +82,6 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   // (WebView2) app has no reachable DevTools. Only shown when something the
   // waterfall needs is missing (#629).
   const [glCaps, setGlCaps] = useState<WfGlCaps | null>(null);
-  const autoRange = useDisplaySettingsStore((s) => s.autoRange);
-  const setAutoRange = useDisplaySettingsStore((s) => s.setAutoRange);
-  const colormap = useDisplaySettingsStore((s) => s.colormap);
-  const setColormap = useDisplaySettingsStore((s) => s.setColormap);
-  const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
-  const togglePop = useSignalEnhanceStore((s) => s.togglePop);
-  const snapEnabled = useSignalEnhanceStore((s) => s.snapEnabled);
-  const toggleSnap = useSignalEnhanceStore((s) => s.toggleSnap);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -159,13 +152,14 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       const { moxOn, tunOn } = useTxStore.getState();
       const keyed = moxOn || tunOn;
       const pop = useSignalEnhanceStore.getState();
-      // Signal Pop (RX only): history rows hold dB-above-floor values, so map
-      // the colormap window relative to the floor. Keyed/TX keeps absolute dB.
+      // Signal Pop (RX only): history rows hold gated/compressed 0..1 display
+      // values (enhanceInto), so the colormap maps [0,1] directly. Keyed/TX
+      // keeps the absolute dB window.
       const popOn = pop.popEnabled && !keyed;
       // Mirror DbScale.tsx — keyed (MOX/TUN) renders the TX waterfall
       // window so the operator's RX noise-floor view stays put.
-      const dbMin = popOn ? pop.popFloorDb : keyed ? wfTxDbMin : wfDbMin;
-      const dbMax = popOn ? pop.popFloorDb + pop.popSpanDb : keyed ? wfTxDbMax : wfDbMax;
+      const dbMin = popOn ? 0 : keyed ? wfTxDbMin : wfDbMin;
+      const dbMax = popOn ? 1 : keyed ? wfTxDbMax : wfDbMax;
       renderer.draw(
         dbMin,
         dbMax,
@@ -356,9 +350,21 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     // clipped band against the new range. New rows fill in from the top.
     const unsubEnhance = useSignalEnhanceStore.subscribe((state, prev) => {
       if (state.popEnabled !== prev.popEnabled) {
-        renderer.clearHistory();
+        renderer?.clearHistory();
         requestRedraw();
-      } else if (state.popFloorDb !== prev.popFloorDb || state.popSpanDb !== prev.popSpanDb) {
+      } else if (
+        state.popFloorDb !== prev.popFloorDb ||
+        state.popSpanDb !== prev.popSpanDb ||
+        state.popGamma !== prev.popGamma ||
+        state.coherenceHoldGate !== prev.coherenceHoldGate ||
+        state.coherenceBoostDb !== prev.coherenceBoostDb ||
+        state.ridgeBoost !== prev.ridgeBoost ||
+        state.ridgeMaxBoostDb !== prev.ridgeMaxBoostDb ||
+        state.visualAgcEnabled !== prev.visualAgcEnabled ||
+        state.visualAgcStrength !== prev.visualAgcStrength ||
+        state.impulseRejectEnabled !== prev.impulseRejectEnabled ||
+        state.impulseRejectDb !== prev.impulseRejectDb
+      ) {
         requestRedraw();
       }
     });
@@ -481,66 +487,10 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
         className="tuning-cursor"
         style={{ left: '50%', pointerEvents: 'none' }}
       />
+      <PassbandOverlay resizable containerRef={containerRef} />
       <FilterCursorOverlay containerRef={containerRef} />
-      <div style={{ position: 'absolute', top: 6, right: 6, display: 'flex', alignItems: 'center', gap: 4 }}>
-        <div role="radiogroup" aria-label="Colormap" className="btn-row">
-          {COLORMAPS.map((cm) => {
-            const active = colormap === cm.id;
-            return (
-              <button
-                key={cm.id}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                onClick={() => setColormap(cm.id)}
-                title={`Waterfall colormap: ${cm.label}`}
-                className={`btn sm ${active ? 'active' : ''}`}
-              >
-                {cm.label}
-              </button>
-            );
-          })}
-        </div>
-        <button
-          type="button"
-          onClick={() => setAutoRange(!autoRange)}
-          aria-pressed={autoRange}
-          title={
-            autoRange
-              ? 'Auto dB range: tracking p5/p95 of waterfall samples'
-              : 'Fixed dB range: −120 to −30 dBFS'
-          }
-          className={`btn sm ${autoRange ? 'active' : ''}`}
-        >
-          {autoRange ? 'dB: AUTO' : 'dB: FIXED'}
-        </button>
-        <button
-          type="button"
-          onClick={togglePop}
-          aria-pressed={popEnabled}
-          title={
-            popEnabled
-              ? 'Signal Pop ON: per-bin noise-floor subtraction (weak signals brightened)'
-              : 'Signal Pop: subtract the adaptive noise floor so weak signals pop'
-          }
-          className={`btn sm ${popEnabled ? 'active' : ''}`}
-        >
-          POP
-        </button>
-        <button
-          type="button"
-          onClick={toggleSnap}
-          aria-pressed={snapEnabled}
-          title={
-            snapEnabled
-              ? 'Snap-to-signal ON: clicks tune to the nearest carrier peak'
-              : 'Snap-to-signal: click near a signal to tune exactly onto it'
-          }
-          className={`btn sm ${snapEnabled ? 'active' : ''}`}
-        >
-          SNAP
-        </button>
-      </div>
+      {/* No delete ✕ here — the single control lives on the panadapter (top). */}
+      <NotchOverlay resizable containerRef={containerRef} />
     </div>
   );
 }

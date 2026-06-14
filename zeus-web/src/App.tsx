@@ -45,6 +45,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
+import { ConfirmDialog } from './layout/ConfirmDialog';
 import { AfGainSlider } from './components/AfGainSlider';
 import { AgcSlider } from './components/AgcSlider';
 import { SquelchSlider } from './components/SquelchSlider';
@@ -66,6 +67,8 @@ import { PaTempChip } from './components/PaTempChip';
 import { QrzStatusPill } from './components/QrzStatusPill';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
 import { SettingsView, type SettingsTabId } from './components/SettingsMenu';
+import { SignalIntelligenceController } from './components/SignalIntelligenceController';
+import { SmartNrController } from './components/SmartNrController';
 import { ThemeApplier } from './components/ThemeApplier';
 import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
@@ -112,6 +115,10 @@ export default function App() {
   const setSettingsView = useLayoutStore((s) => s.setSettingsView);
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [installUpdate, setInstallUpdate] = useState<(() => Promise<void>) | null>(null);
+  const [confirmResetLayout, setConfirmResetLayout] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const status = useConnectionStore((s) => s.status);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
@@ -563,7 +570,7 @@ export default function App() {
   // Tweaks, etc.); the ConnectPanel itself re-enables pointer events so
   // Discover / Connect buttons still click through.
   const disconnectedOverlay = useMemo(() => {
-    if (connected) return null;
+    if (connected || settingsViewOpen) return null;
     return (
       <div
         style={{
@@ -583,7 +590,7 @@ export default function App() {
         </div>
       </div>
     );
-  }, [connected]);
+  }, [connected, settingsViewOpen]);
 
   // Mobile viewport (≤900px) reactively tracked. Also honours `?mobile=1` so
   // the mobile shell can be previewed on a desktop browser without resizing.
@@ -658,6 +665,8 @@ export default function App() {
       <WorkspaceContext.Provider value={workspaceCtx}>
         <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
           <ThemeApplier />
+          <SignalIntelligenceController />
+          <SmartNrController />
           <MobileApp />
         </SpectrumWheelActionsContext.Provider>
       </WorkspaceContext.Provider>
@@ -669,6 +678,8 @@ export default function App() {
     <WorkspaceContext.Provider value={workspaceCtx}>
     <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
     <ThemeApplier />
+    <SignalIntelligenceController />
+    <SmartNrController />
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
       {/* Left layout bar — issue #241. Spans the full app height; lists named
           layouts for the active radio with switch/add/delete/reset actions. */}
@@ -698,7 +709,7 @@ export default function App() {
 
         <span className="topbar-divider hide-mobile" aria-hidden />
 
-        <div className="topbar-controls hide-mobile">
+        <div className="topbar-controls hide-mobile" aria-label="Primary radio controls">
           <ModeFavorites />
           <span className="strip-divider" aria-hidden />
           <FilterPanel />
@@ -707,22 +718,22 @@ export default function App() {
           <span className="strip-divider" aria-hidden />
           <StepFavorites />
           <span className="strip-divider" aria-hidden />
-          <div className="ctrl-group" style={{ minWidth: 200 }}>
+          <div className="ctrl-group topbar-control topbar-control--front-end">
             <div className="label-xs ctrl-lbl">FRONT-END</div>
             <div className="btn-row" style={{ gap: 6, alignItems: 'center' }}>
               <PreampButton />
               <AttenuatorSlider />
             </div>
           </div>
-          <div className="ctrl-group" style={{ minWidth: 160 }}>
+          <div className="ctrl-group topbar-control topbar-control--agc">
             <div className="label-xs ctrl-lbl">AGC</div>
             <AgcSlider />
           </div>
-          <div className="ctrl-group" style={{ minWidth: 160 }}>
+          <div className="ctrl-group topbar-control topbar-control--sql">
             <div className="label-xs ctrl-lbl">SQL</div>
             <SquelchSlider />
           </div>
-          <div className="ctrl-group" style={{ minWidth: 160 }}>
+          <div className="ctrl-group topbar-control topbar-control--af">
             <div className="label-xs ctrl-lbl">AF</div>
             <AfGainSlider />
           </div>
@@ -810,8 +821,7 @@ export default function App() {
             const s = useLayoutStore.getState();
             const active = s.layouts.find((l) => l.id === s.activeLayoutId);
             if (!active) return;
-            if (!window.confirm(`Reset “${active.name}” to the default panel arrangement?`)) return;
-            s.resetActiveLayout();
+            setConfirmResetLayout({ id: active.id, name: active.name });
           }}
           disabled={settingsViewOpen}
           title="Reset active layout to default"
@@ -822,6 +832,23 @@ export default function App() {
       </div>
 
       {disconnectedOverlay}
+      {confirmResetLayout && (
+        <ConfirmDialog
+          title="Reset layout"
+          confirmLabel="Reset Layout"
+          onCancel={() => setConfirmResetLayout(null)}
+          onConfirm={() => {
+            const s = useLayoutStore.getState();
+            if (s.activeLayoutId === confirmResetLayout.id) {
+              s.resetActiveLayout();
+            }
+            setConfirmResetLayout(null);
+          }}
+        >
+          <p>Reset {confirmResetLayout.name} to the default panel arrangement?</p>
+          <p>This keeps the layout tab but replaces its current panel positions.</p>
+        </ConfirmDialog>
+      )}
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
     </div>
     </SpectrumWheelActionsContext.Provider>

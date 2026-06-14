@@ -138,7 +138,13 @@ interface LayoutState {
 const DEFAULT_LAYOUT_ID = 'default';
 const DEFAULT_LAYOUT_NAME = 'Default';
 
-let saveTimer: ReturnType<typeof setTimeout> | null = null;
+interface PendingLayoutSave {
+  radioKey: string;
+  layout: NamedLayout;
+}
+
+const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const pendingLayoutSaves = new Map<string, PendingLayoutSave>();
 
 function serializeWorkspace(ws: WorkspaceLayout): string {
   return JSON.stringify(ws);
@@ -235,25 +241,19 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
 
   syncToServerBeforeUnload: () => {
     const { radioKey, activeLayoutId, layouts, workspace } = get();
-    if (!radioKey || !activeLayoutId) return;
-    const active = findActive(layouts, activeLayoutId);
-    if (!active) return;
-    const body = JSON.stringify({
-      radioKey,
-      layoutId: active.id,
-      name: active.name,
-      layoutJson: serializeWorkspace(workspace),
-      icon: active.icon ?? '',
-      description: active.description ?? '',
-    });
-    const blob = new Blob([body], { type: 'application/json' });
-    if (!navigator.sendBeacon('/api/ui/layout-beacon', blob)) {
-      void fetch('/api/ui/layouts', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-        keepalive: true,
-      });
+    const saves = new Map(pendingLayoutSaves);
+    if (radioKey && activeLayoutId) {
+      const active = findActive(layouts, activeLayoutId);
+      if (active) {
+        saves.set(saveKey(radioKey, active.id), {
+          radioKey,
+          layout: { ...active, layoutJson: serializeWorkspace(workspace) },
+        });
+      }
+    }
+    clearScheduledSaves();
+    for (const pending of saves.values()) {
+      sendLayoutBeforeUnload(pending.radioKey, pending.layout);
     }
   },
 
@@ -282,6 +282,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     const { radioKey, layouts, activeLayoutId } = get();
     if (!radioKey) return;
     if (layouts.length <= 1) return; // never delete the last one
+    cancelScheduledSave(radioKey, id);
     const remaining = layouts.filter((l) => l.id !== id);
     let nextActive = activeLayoutId;
     let nextWorkspace = get().workspace;
@@ -321,7 +322,11 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     });
     set({ layouts });
     const updated = findActive(layouts, id);
-    if (updated) void putNamedLayout(get().radioKey, updated);
+    if (updated) {
+      const radioKey = get().radioKey;
+      cancelScheduledSave(radioKey, updated.id);
+      void putNamedLayout(radioKey, updated);
+    }
   },
 
   setActiveLayout: (id) => {
@@ -351,6 +356,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     const updated: NamedLayout = { ...active, layoutJson: json };
     const next = layouts.map((l) => (l.id === activeLayoutId ? updated : l));
     set({ layouts: next, workspace: DEFAULT_WORKSPACE_LAYOUT });
+    cancelScheduledSave(radioKey, updated.id);
     void putNamedLayout(radioKey, updated);
   },
 
@@ -423,29 +429,65 @@ function applyWorkspaceMutation(
 ) {
   // Mirror the new tiles into the active NamedLayout's serialized JSON so
   // a subsequent setActive(id) round-trip doesn't regress the change.
-  const { layouts, activeLayoutId } = get();
+  const { layouts, activeLayoutId, radioKey } = get();
   const json = serializeWorkspace(next);
   const active = findActive(layouts, activeLayoutId);
   if (active) {
     const updated: NamedLayout = { ...active, layoutJson: json };
     const newLayouts = layouts.map((l) => (l.id === activeLayoutId ? updated : l));
     set({ workspace: next, layouts: newLayouts });
-    scheduleSave(get);
+    scheduleSave(radioKey, updated);
   } else {
     // Test / unhydrated state — just update workspace.
     set({ workspace: next });
   }
 }
 
-function scheduleSave(get: () => LayoutState) {
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    const { radioKey, layouts, activeLayoutId } = get();
-    if (!radioKey) return;
-    const active = findActive(layouts, activeLayoutId);
-    if (!active) return;
-    void putNamedLayout(radioKey, active);
-  }, 1000);
+function saveKey(radioKey: string, layoutId: string): string {
+  return `${radioKey}\u0000${layoutId}`;
+}
+
+function scheduleSave(radioKey: string, layout: NamedLayout) {
+  if (!radioKey) return;
+  const key = saveKey(radioKey, layout.id);
+  const existing = saveTimers.get(key);
+  if (existing) clearTimeout(existing);
+  const snapshot: PendingLayoutSave = {
+    radioKey,
+    layout: { ...layout },
+  };
+  pendingLayoutSaves.set(key, snapshot);
+  saveTimers.set(key, setTimeout(() => {
+    saveTimers.delete(key);
+    pendingLayoutSaves.delete(key);
+    void putNamedLayout(snapshot.radioKey, snapshot.layout);
+  }, 1000));
+}
+
+function cancelScheduledSave(radioKey: string, layoutId: string) {
+  if (!radioKey || !layoutId) return;
+  const key = saveKey(radioKey, layoutId);
+  const existing = saveTimers.get(key);
+  if (existing) clearTimeout(existing);
+  saveTimers.delete(key);
+  pendingLayoutSaves.delete(key);
+}
+
+function clearScheduledSaves() {
+  for (const timer of saveTimers.values()) clearTimeout(timer);
+  saveTimers.clear();
+  pendingLayoutSaves.clear();
+}
+
+function layoutPayload(radioKey: string, layout: NamedLayout): string {
+  return JSON.stringify({
+    radioKey,
+    layoutId: layout.id,
+    name: layout.name,
+    layoutJson: layout.layoutJson,
+    icon: layout.icon ?? '',
+    description: layout.description ?? '',
+  });
 }
 
 function putNamedLayout(radioKey: string, layout: NamedLayout): Promise<unknown> {
@@ -453,15 +495,22 @@ function putNamedLayout(radioKey: string, layout: NamedLayout): Promise<unknown>
   return fetch('/api/ui/layouts', {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      radioKey,
-      layoutId: layout.id,
-      name: layout.name,
-      layoutJson: layout.layoutJson,
-      icon: layout.icon ?? '',
-      description: layout.description ?? '',
-    }),
+    body: layoutPayload(radioKey, layout),
   });
+}
+
+function sendLayoutBeforeUnload(radioKey: string, layout: NamedLayout): void {
+  if (!radioKey) return;
+  const body = layoutPayload(radioKey, layout);
+  const blob = new Blob([body], { type: 'application/json' });
+  if (!navigator.sendBeacon('/api/ui/layout-beacon', blob)) {
+    void fetch('/api/ui/layouts', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+      keepalive: true,
+    });
+  }
 }
 
 function postActiveLayout(radioKey: string, layoutId: string): Promise<unknown> {

@@ -107,6 +107,27 @@ const COHERENCE_SNR_FULL_DB = 22;
 const COHERENCE_DECAY = 0.88;
 const COHERENCE_HOLD_GATE = 0.45;
 const COHERENCE_VISUAL_BOOST_DB = 4;
+// Display-domain visual AGC. After local-floor subtraction/ridge/coherence,
+// sparse weak scenes can still under-use the 0..1 colormap because a fixed
+// Pop span must also tolerate strong stations. Visual AGC estimates the active
+// SNR percentile per frame and blends the effective span toward it, so weak DX
+// traces fill more of the colour ramp while strong signals still clip cleanly.
+const DEFAULT_VISUAL_AGC_STRENGTH = 45;
+const VISUAL_AGC_PERCENTILE = 0.92;
+const VISUAL_AGC_HEADROOM_DB = 3;
+const VISUAL_AGC_MIN_SPAN_DB = 8;
+const VISUAL_AGC_MAX_SPAN_DB = 72;
+const VISUAL_AGC_HIST_STEP_DB = 1;
+const VISUAL_AGC_HIST_MAX_DB = 96;
+const VISUAL_AGC_HIST_BINS = Math.round(VISUAL_AGC_HIST_MAX_DB / VISUAL_AGC_HIST_STEP_DB) + 1;
+const VISUAL_AGC_MIN_ACTIVE_BINS = 1;
+// Single-frame isolated QRN/ADC sparks can look like "signals" in a waterfall
+// even though they have no neighbour or temporal support. This display-only
+// clamp reduces those bins before colour mapping; detection/snap still read the
+// raw spectrum, so it cannot hide real RF from DSP decisions.
+const DEFAULT_IMPULSE_REJECT_DB = 18;
+const IMPULSE_REJECT_CONFIDENCE_MAX = 0.42;
+const IMPULSE_REJECT_KEEP_FRACTION = 0.35;
 
 // ── Snap search ─────────────────────────────────────────────────────────────
 // Look this far either side of the click for a carrier, and only snap to bins
@@ -175,6 +196,10 @@ export type SignalEnhanceTuning = {
   ridgeBoost: number;
   /** Cap for ridge contrast gain, in dB. */
   ridgeMaxBoostDb: number;
+  /** Blend strength for per-frame visual AGC over the Pop colormap. */
+  visualAgcStrength: number;
+  /** dB isolation required before a one-frame spike is display-clamped. */
+  impulseRejectDb: number;
   /** Default carrier search radius used by direct snap helpers. */
   snapRadiusHz: number;
   /** Minimum dB over local floor required for snap-to-signal grabs. */
@@ -192,8 +217,14 @@ export type SignalEnhanceState = SignalEnhanceTuning & {
   snapEnabled: boolean;
   /** Follow the receiver mode with the matching profile (CW, digital, voice). */
   autoProfileEnabled: boolean;
+  /** Per-frame Pop span adaptation for sparse/weak scenes. */
+  visualAgcEnabled: boolean;
+  /** Display-only clamp for isolated one-frame spectral spikes. */
+  impulseRejectEnabled: boolean;
   setPopEnabled: (v: boolean) => void;
   setSnapEnabled: (v: boolean) => void;
+  setVisualAgcEnabled: (v: boolean) => void;
+  setImpulseRejectEnabled: (v: boolean) => void;
   togglePop: () => void;
   toggleSnap: () => void;
   setSignalEnhanceTuning: (patch: SignalEnhanceTuningPatch) => void;
@@ -204,7 +235,10 @@ export type SignalEnhanceState = SignalEnhanceTuning & {
   resetSignalEnhanceTuning: () => void;
 };
 
-type SignalEnhancePersisted = Pick<SignalEnhanceState, 'popEnabled' | 'snapEnabled' | 'autoProfileEnabled'> & SignalEnhanceTuning;
+type SignalEnhancePersisted = Pick<
+  SignalEnhanceState,
+  'popEnabled' | 'snapEnabled' | 'autoProfileEnabled' | 'visualAgcEnabled' | 'impulseRejectEnabled'
+> & SignalEnhanceTuning;
 type SignalEnhanceTuningValues = Omit<SignalEnhanceTuning, 'profileId'>;
 
 export const SIGNAL_ENHANCE_PROFILE_ORDER: readonly SignalEnhancePresetId[] = [
@@ -225,6 +259,8 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     coherenceBoostDb: COHERENCE_VISUAL_BOOST_DB,
     ridgeBoost: POP_RIDGE_BOOST,
     ridgeMaxBoostDb: POP_RIDGE_MAX_BOOST_DB,
+    visualAgcStrength: DEFAULT_VISUAL_AGC_STRENGTH,
+    impulseRejectDb: DEFAULT_IMPULSE_REJECT_DB,
     snapRadiusHz: SNAP_RADIUS_HZ,
     snapMinSnrDb: SNAP_MIN_SNR_DB,
     peakMinSnrDb: PEAK_MIN_SNR_DB,
@@ -237,6 +273,8 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     coherenceBoostDb: 5.5,
     ridgeBoost: 0.5,
     ridgeMaxBoostDb: 10,
+    visualAgcStrength: 70,
+    impulseRejectDb: 16,
     snapRadiusHz: 5000,
     snapMinSnrDb: 5,
     peakMinSnrDb: 7,
@@ -249,6 +287,8 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     coherenceBoostDb: 5,
     ridgeBoost: 0.65,
     ridgeMaxBoostDb: 11,
+    visualAgcStrength: 62,
+    impulseRejectDb: 14,
     snapRadiusHz: 2500,
     snapMinSnrDb: 5,
     peakMinSnrDb: 6.5,
@@ -261,6 +301,8 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     coherenceBoostDb: 4.5,
     ridgeBoost: 0.55,
     ridgeMaxBoostDb: 10,
+    visualAgcStrength: 58,
+    impulseRejectDb: 15,
     snapRadiusHz: 3500,
     snapMinSnrDb: 5.5,
     peakMinSnrDb: 7,
@@ -273,6 +315,8 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     coherenceBoostDb: 3.5,
     ridgeBoost: 0.32,
     ridgeMaxBoostDb: 7,
+    visualAgcStrength: 42,
+    impulseRejectDb: 20,
     snapRadiusHz: 5000,
     snapMinSnrDb: 6.5,
     peakMinSnrDb: 8.5,
@@ -285,6 +329,8 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     coherenceBoostDb: 3,
     ridgeBoost: 0.45,
     ridgeMaxBoostDb: 8,
+    visualAgcStrength: 35,
+    impulseRejectDb: 22,
     snapRadiusHz: 2200,
     snapMinSnrDb: 7,
     peakMinSnrDb: 9,
@@ -412,6 +458,8 @@ function normalizeTuning(raw: SignalEnhanceTuningPatch = {}, fallback: SignalEnh
     coherenceBoostDb: clampFinite(raw.coherenceBoostDb, 0, 8, base.coherenceBoostDb),
     ridgeBoost: clampFinite(raw.ridgeBoost, 0, 0.8, base.ridgeBoost),
     ridgeMaxBoostDb: clampFinite(raw.ridgeMaxBoostDb, 0, 12, base.ridgeMaxBoostDb),
+    visualAgcStrength: clampFinite(raw.visualAgcStrength, 0, 100, base.visualAgcStrength),
+    impulseRejectDb: clampFinite(raw.impulseRejectDb, 8, 32, base.impulseRejectDb),
     snapRadiusHz: clampFinite(raw.snapRadiusHz, 500, 12_000, base.snapRadiusHz),
     snapMinSnrDb: clampFinite(raw.snapMinSnrDb, 3, 16, base.snapMinSnrDb),
     peakMinSnrDb: clampFinite(raw.peakMinSnrDb, 4, 20, base.peakMinSnrDb),
@@ -421,19 +469,44 @@ function normalizeTuning(raw: SignalEnhanceTuningPatch = {}, fallback: SignalEnh
 function readPersisted(): SignalEnhancePersisted {
   try {
     if (typeof localStorage === 'undefined') {
-      return { popEnabled: false, snapEnabled: false, autoProfileEnabled: false, ...DEFAULT_TUNING };
+      return {
+        popEnabled: false,
+        snapEnabled: false,
+        autoProfileEnabled: false,
+        visualAgcEnabled: true,
+        impulseRejectEnabled: true,
+        ...DEFAULT_TUNING,
+      };
     }
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { popEnabled: false, snapEnabled: false, autoProfileEnabled: false, ...DEFAULT_TUNING };
+    if (!raw) {
+      return {
+        popEnabled: false,
+        snapEnabled: false,
+        autoProfileEnabled: false,
+        visualAgcEnabled: true,
+        impulseRejectEnabled: true,
+        ...DEFAULT_TUNING,
+      };
+    }
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return {
       popEnabled: parsed.popEnabled === true,
       snapEnabled: parsed.snapEnabled === true,
       autoProfileEnabled: parsed.autoProfileEnabled === true,
+      visualAgcEnabled: parsed.visualAgcEnabled !== false,
+      impulseRejectEnabled: parsed.impulseRejectEnabled !== false,
       ...normalizeTuning(parsed as SignalEnhanceTuningPatch),
     };
   } catch {
-    return { popEnabled: false, snapEnabled: false, autoProfileEnabled: false, ...DEFAULT_TUNING };
+    return {
+      popEnabled: false,
+      snapEnabled: false,
+      autoProfileEnabled: false,
+      visualAgcEnabled: true,
+      impulseRejectEnabled: true,
+      ...DEFAULT_TUNING,
+    };
   }
 }
 
@@ -444,6 +517,8 @@ function persist(s: SignalEnhancePersisted): void {
       popEnabled: s.popEnabled,
       snapEnabled: s.snapEnabled,
       autoProfileEnabled: s.autoProfileEnabled,
+      visualAgcEnabled: s.visualAgcEnabled,
+      impulseRejectEnabled: s.impulseRejectEnabled,
       profileId: s.profileId,
       popFloorDb: s.popFloorDb,
       popSpanDb: s.popSpanDb,
@@ -452,6 +527,8 @@ function persist(s: SignalEnhancePersisted): void {
       coherenceBoostDb: s.coherenceBoostDb,
       ridgeBoost: s.ridgeBoost,
       ridgeMaxBoostDb: s.ridgeMaxBoostDb,
+      visualAgcStrength: s.visualAgcStrength,
+      impulseRejectDb: s.impulseRejectDb,
       snapRadiusHz: s.snapRadiusHz,
       snapMinSnrDb: s.snapMinSnrDb,
       peakMinSnrDb: s.peakMinSnrDb,
@@ -467,6 +544,8 @@ export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
   popEnabled: persisted.popEnabled,
   snapEnabled: persisted.snapEnabled,
   autoProfileEnabled: persisted.autoProfileEnabled,
+  visualAgcEnabled: persisted.visualAgcEnabled,
+  impulseRejectEnabled: persisted.impulseRejectEnabled,
   profileId: persisted.profileId,
   popFloorDb: persisted.popFloorDb,
   popSpanDb: persisted.popSpanDb,
@@ -475,6 +554,8 @@ export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
   coherenceBoostDb: persisted.coherenceBoostDb,
   ridgeBoost: persisted.ridgeBoost,
   ridgeMaxBoostDb: persisted.ridgeMaxBoostDb,
+  visualAgcStrength: persisted.visualAgcStrength,
+  impulseRejectDb: persisted.impulseRejectDb,
   snapRadiusHz: persisted.snapRadiusHz,
   snapMinSnrDb: persisted.snapMinSnrDb,
   peakMinSnrDb: persisted.peakMinSnrDb,
@@ -485,6 +566,14 @@ export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
   },
   setSnapEnabled: (snapEnabled) => {
     set({ snapEnabled });
+    persist(get());
+  },
+  setVisualAgcEnabled: (visualAgcEnabled) => {
+    set({ visualAgcEnabled });
+    persist(get());
+  },
+  setImpulseRejectEnabled: (impulseRejectEnabled) => {
+    set({ impulseRejectEnabled });
     persist(get());
   },
   togglePop: () => {
@@ -550,6 +639,7 @@ let signalHold: Float32Array | null = null; // display-only SNR peak hold
 let signalConfidence: Float32Array | null = null; // 0..1 temporal/neighbour confidence
 let previousSnr: Float32Array | null = null; // previous-frame SNR for coherence
 let ridgeMean: Float32Array | null = null; // display-only local positive-SNR mean
+let visualAgcHist: Int32Array | null = null; // SNR histogram for display-domain visual AGC
 let snapHistorySnr: Float32Array | null = null; // slow-decay SNR max-hold for snap history
 let snapHistorySpec: Float32Array | null = null; // reusable floor+history reconstruction
 let hist: Int32Array | null = null; // quantized dB histogram for ordered-statistic CFAR
@@ -597,7 +687,7 @@ export function registerEstimatorConsumer(): () => void {
  *  floor. */
 export function maybeUpdateEstimator(f: EstimatorFrame): void {
   const st = useSignalEnhanceStore.getState();
-  if (!st.popEnabled && !st.snapEnabled && estimatorConsumers === 0) return;
+  if (!st.popEnabled && !st.snapEnabled && !st.autoProfileEnabled && estimatorConsumers === 0) return;
   if (!f.panValid || !f.panDb || f.panDb.length === 0) return;
   updateFloor(f.panDb, f.hzPerPixel, makeGeomKey(f.width, f.hzPerPixel));
 }
@@ -807,6 +897,7 @@ export function resetEstimator(): void {
   signalConfidence = null;
   previousSnr = null;
   ridgeMean = null;
+  visualAgcHist = null;
   snapHistorySnr = null;
   snapHistorySpec = null;
   geomKey = '';
@@ -837,6 +928,103 @@ function computeLocalMeanPositiveSnr(raw: Float32Array, f: Float32Array, hold: F
   }
 }
 
+function visualAgcHistIndex(snrDb: number): number {
+  if (!Number.isFinite(snrDb) || snrDb <= 0) return 0;
+  const idx = Math.round(snrDb / VISUAL_AGC_HIST_STEP_DB);
+  return idx >= VISUAL_AGC_HIST_BINS ? VISUAL_AGC_HIST_BINS - 1 : idx;
+}
+
+function maybeClampImpulseSnr(
+  raw: Float32Array,
+  f: Float32Array,
+  st: SignalEnhanceState,
+  i: number,
+  liveSnr: number,
+  confidence: number,
+  snr: number,
+): number {
+  if (!st.impulseRejectEnabled) return snr;
+  if (confidence >= IMPULSE_REJECT_CONFIDENCE_MAX) return snr;
+  if (liveSnr < st.popFloorDb + st.impulseRejectDb) return snr;
+
+  const n = raw.length;
+  const leftSnr = i > 0 ? raw[i - 1]! - f[i - 1]! : -Infinity;
+  const rightSnr = i + 1 < n ? raw[i + 1]! - f[i + 1]! : -Infinity;
+  const neighbourSnr = Math.max(leftSnr, rightSnr, 0);
+  if (liveSnr - neighbourSnr < st.impulseRejectDb) return snr;
+
+  const cap = Math.max(st.popFloorDb, neighbourSnr + st.impulseRejectDb * IMPULSE_REJECT_KEEP_FRACTION);
+  return snr > cap ? cap : snr;
+}
+
+function displaySnrForBin(
+  raw: Float32Array,
+  f: Float32Array,
+  hold: Float32Array | null,
+  conf: Float32Array | null,
+  mean: Float32Array,
+  st: SignalEnhanceState,
+  i: number,
+  clampImpulse: boolean,
+): number {
+  const liveSnr = raw[i]! - f[i]!;
+  const confidence = conf ? conf[i]! : 0;
+  const heldSnr = hold && confidence >= st.coherenceHoldGate
+    ? hold[i]! * (0.45 + 0.55 * confidence)
+    : 0;
+  let snr = heldSnr > liveSnr ? heldSnr : liveSnr;
+  const contrast = snr - mean[i]!;
+  if (contrast > 0) snr += Math.min(st.ridgeMaxBoostDb, contrast * st.ridgeBoost);
+  if (snr >= st.popFloorDb) {
+    const ridgeWeight = contrast <= 0 ? 0.15 : Math.min(1, contrast / 12);
+    snr += confidence * st.coherenceBoostDb * ridgeWeight;
+  }
+  return clampImpulse ? maybeClampImpulseSnr(raw, f, st, i, liveSnr, confidence, snr) : snr;
+}
+
+function estimateVisualAgcSpan(
+  raw: Float32Array,
+  f: Float32Array,
+  hold: Float32Array | null,
+  conf: Float32Array | null,
+  mean: Float32Array,
+  st: SignalEnhanceState,
+  baseSpan: number,
+): number {
+  if (!st.visualAgcEnabled || st.visualAgcStrength <= 0) return baseSpan;
+  if (visualAgcHist === null) visualAgcHist = new Int32Array(VISUAL_AGC_HIST_BINS);
+  const histAgc = visualAgcHist;
+  histAgc.fill(0);
+
+  let active = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const snr = displaySnrForBin(raw, f, hold, conf, mean, st, i, false);
+    if (snr < st.popFloorDb) continue;
+    const idx = visualAgcHistIndex(snr);
+    histAgc[idx] = histAgc[idx]! + 1;
+    active++;
+  }
+  if (active < VISUAL_AGC_MIN_ACTIVE_BINS) return baseSpan;
+
+  const rank = Math.max(1, Math.ceil(active * VISUAL_AGC_PERCENTILE));
+  let seen = 0;
+  let pSnr = st.popFloorDb + baseSpan;
+  for (let b = 0; b < VISUAL_AGC_HIST_BINS; b++) {
+    seen += histAgc[b]!;
+    if (seen >= rank) {
+      pSnr = b * VISUAL_AGC_HIST_STEP_DB;
+      break;
+    }
+  }
+
+  const targetSpan = Math.max(
+    VISUAL_AGC_MIN_SPAN_DB,
+    Math.min(VISUAL_AGC_MAX_SPAN_DB, pSnr - st.popFloorDb + VISUAL_AGC_HEADROOM_DB),
+  );
+  const strength = Math.max(0, Math.min(1, st.visualAgcStrength / 100));
+  return baseSpan * (1 - strength) + targetSpan * strength;
+}
+
 /** Map the spectrum to a 0..1 Pop display value per bin: subtract the floor,
  *  gate the noise, then compress so weak and strong signals are both visible
  *  (see the "Pop display mapping" notes above). The renderers pass dbMin=0,
@@ -852,30 +1040,16 @@ export function enhanceInto(raw: Float32Array, out: Float32Array): void {
   }
   const st = useSignalEnhanceStore.getState();
   const gate = st.popFloorDb;
-  const span = st.popSpanDb > 1 ? st.popSpanDb : 1;
+  const baseSpan = st.popSpanDb > 1 ? st.popSpanDb : 1;
   const gamma = st.popGamma;
-  const coherenceHoldGate = st.coherenceHoldGate;
-  const coherenceBoostDb = st.coherenceBoostDb;
-  const ridgeBoost = st.ridgeBoost;
-  const ridgeMaxBoostDb = st.ridgeMaxBoostDb;
   const hold = signalHold && signalHold.length === n ? signalHold : null;
   const conf = signalConfidence && signalConfidence.length === n ? signalConfidence : null;
   if (ridgeMean === null || ridgeMean.length !== n) ridgeMean = new Float32Array(n);
   computeLocalMeanPositiveSnr(raw, f, hold, ridgeMean);
   const mean = ridgeMean;
+  const span = estimateVisualAgcSpan(raw, f, hold, conf, mean, st, baseSpan);
   for (let i = 0; i < n; i++) {
-    const liveSnr = raw[i]! - f[i]!;
-    const confidence = conf ? conf[i]! : 0;
-    const heldSnr = hold && confidence >= coherenceHoldGate
-      ? hold[i]! * (0.45 + 0.55 * confidence)
-      : 0;
-    let snr = heldSnr > liveSnr ? heldSnr : liveSnr;
-    const contrast = snr - mean[i]!;
-    if (contrast > 0) snr += Math.min(ridgeMaxBoostDb, contrast * ridgeBoost);
-    if (snr >= gate) {
-      const ridgeWeight = contrast <= 0 ? 0.15 : Math.min(1, contrast / 12);
-      snr += confidence * coherenceBoostDb * ridgeWeight;
-    }
+    const snr = displaySnrForBin(raw, f, hold, conf, mean, st, i, true);
     let v = (snr - gate) / span;
     v = v < 0 ? 0 : v > 1 ? 1 : v;
     out[i] = gamma === 1 ? v : Math.pow(v, gamma);

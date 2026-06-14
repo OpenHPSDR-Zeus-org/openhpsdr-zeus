@@ -5,27 +5,73 @@
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
 // Filter visualization PRD §3.2.1 — mini-panadapter inside the advanced
-// filter ribbon. Matches the mockup at docs/pics/filterpanel_mockup.png:
-// light-gray spectrum trace, hollow blue passband rectangle with corner
-// triangle handles, x-axis tick labels at 2 kHz intervals around the VFO.
+// filter ribbon. Originally a fixed 12 kHz peak-hold trace with draggable
+// passband walls (mockup docs/pics/filterpanel_mockup.png). This revamp keeps
+// that core but layers the shared snap/pop signal estimator on top so the
+// filter panel sees the same flattened baseline and detected carriers the main
+// panadapter does, and adds finer, more granular edge control:
 //
-// Uses Canvas 2D (not a second WebGL context) — at ~640×110 CSS pixels the
-// 2D path hits the <2 ms/frame budget comfortably and avoids the complexity
-// of scissor-clipping or sharing the main panadapter's GL context.
+//   • POP'd trace + floor line — when global Pop is engaged, the trace plots
+//     SNR above the per-bin noise floor (weak in-band signals lift off a flat
+//     baseline). The estimated floor contour is drawn faintly so the operator
+//     sees what the gate is reading.
+//   • In-band peak markers — when global Snap is engaged, detected carriers in
+//     the visible window get amber ticks (sanctioned signal-strength colour,
+//     SNR-scaled alpha); carriers inside the passband read brighter/taller than
+//     those outside it, so you see exactly what the filter is letting through.
+//   • Magnetic edge snap — dragging a LOW/HIGH wall gently snaps onto a nearby
+//     detected carrier (within SNAP_PULL_HZ); hold Alt to place freely. Only
+//     active while Snap is engaged.
+//   • Granular fine-tune — scroll-wheel nudges the hovered edge by the per-mode
+//     step (Shift ×10); Ctrl/⌘+wheel zooms the visible span. A live width pill
+//     is click-to-edit (center-preserving Hz entry).
+//
+// All estimator features reuse the SAME singleton floor the panadapter/
+// waterfall already maintain (signal-estimator.ts). That estimator only runs
+// while global Pop or Snap is on, so when both are off this component is
+// byte-for-byte its previous self and carries no extra cost. Pop/Snap defaults,
+// colours and snap feel are display/UX surface — the maintainer's call
+// (CLAUDE.md); flagged for sign-off.
+//
+// Uses Canvas 2D (not a second WebGL context) — at this size the 2D path hits
+// the <2 ms/frame budget comfortably and avoids scissor-clipping or sharing the
+// main panadapter's GL context.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { registerFrameConsumer, useDisplayStore } from '../../state/display-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { useThemeStore } from '../../state/theme-store';
+import { useDisplaySettingsStore } from '../../state/display-settings-store';
+import {
+  detectPeaks,
+  getNoiseFloor,
+  registerEstimatorConsumer,
+  signalExtentHz,
+  useSignalEnhanceStore,
+  type DetectedPeak,
+} from '../../dsp/signal-estimator';
 import { setFilter } from '../../api/client';
-import { formatCutOffset } from './filterPresets';
+import { formatCutOffset, formatFilterWidth, nudgeStepHz } from './filterPresets';
+import type { RxMode } from '../../api/client';
 
-const RIBBON_SPAN_HZ = 12_000;        // 12 kHz span centered on VFO (matches mockup: 14.249..14.261)
-const TICK_STEP_HZ = 2_000;           // label a tick every 2 kHz
+const DEFAULT_SPAN_HZ = 12_000;       // initial visible window around VFO
+const MIN_SPAN_HZ = 3_000;            // Ctrl+wheel zoom-in floor
+const MAX_SPAN_HZ = 48_000;           // Ctrl+wheel zoom-out ceiling
+const TICK_STEP_HZ = 2_000;           // base axis-label spacing (scaled by span)
 const DB_FLOOR = -130;
 const DB_CEIL = -30;
+const POP_RANGE_DB = 55;              // SNR (dB above floor) that reaches full height in Pop mode
 const DRAG_MIN_INTERVAL_MS = 50;
 const EDGE_HIT_PX = 6;
+const SNAP_PULL_HZ = 150;             // magnetic pull radius for edge→carrier snap
+const EDGE_ANCHOR_HZ = 400;           // radius to lock signal-extent onto a carrier crest
+const BRACKET_MAX = 8;                // most signal-edge markers drawn at once
+const BRACKET_MIN_SNR_DB = 6;         // only mark carriers this far above the floor
+const PEAKHOLD_DECAY_PX = 0.45;       // peak-hold envelope fall rate (px/frame ≈ 13 px/s)
+const FIT_HIT_PX = 26;                // click-to-fit grab radius around a carrier
+const FIT_MARGIN_HZ = 120;            // breathing room added each side when fitting
+const AVG_ALPHA = 0.08;               // PSD time-average EMA (~0.5 s) for a stable width
+const OBW_FRACTION = 0.99;            // ITU occupied-bandwidth power fraction (99%)
 
 // Palette — passband walls / dots / halo are neutral silvery (read on both
 // themes), but the four *text* surfaces (LOW/HIGH CUT label + value, axis
@@ -33,9 +79,6 @@ const EDGE_HIT_PX = 6;
 // --fg-0 / --fg-1 / --fg-2 at draw time so the Theme Settings token pickers
 // drive them.
 const COL_VFO_CENTER = 'rgba(200, 205, 215, 0.08)'; // very subtle neutral VFO line
-const COL_PB_WASH = 'rgba(220, 232, 245, 0.035)';   // almost-invisible interior wash
-const COL_WALL_HALO = 'rgba(220, 225, 232, 0.45)';  // soft neutral halo behind walls
-const COL_DOT = 'rgba(245, 247, 250, 0.95)';        // bright white corner dots
 const COL_CUT_TICK = 'rgba(220, 225, 232, 0.35)';   // hairline callout connecting label to wall
 
 type DragMode = 'lo' | 'hi' | 'inside';
@@ -44,17 +87,155 @@ function presetIsFixed(name: string | null): boolean {
   return !!name && /^F([1-9]|10)$/.test(name);
 }
 
+function isSymmetricMode(mode: RxMode): boolean {
+  return mode === 'AM' || mode === 'SAM' || mode === 'DSB' || mode === 'FM';
+}
+
+// Single-sideband modes demodulate one side of the carrier only: LSB/CWL below
+// it (negative offsets), USB/CWU above it (positive offsets). DIGL/DIGU and the
+// symmetric modes straddle 0 (see filterPresets.ts), so they carry no sideband
+// constraint here.
+function lowerSidebandMode(mode: RxMode): boolean {
+  return mode === 'LSB' || mode === 'CWL';
+}
+function upperSidebandMode(mode: RxMode): boolean {
+  return mode === 'USB' || mode === 'CWU';
+}
+
+const FIT_MIN_EDGE_HZ = 50; // keep at least this sliver of passband off the carrier
+
+// Map a clicked signal's VFO-relative energy extent (loOff..hiOff, plus a little
+// breathing room) to a passband that respects the active mode's sideband. For
+// SSB/CW the passband must stay on the demodulated side of the carrier — a
+// signal sitting entirely on the WRONG side is unreachable without retuning, so
+// we return null and leave the filter untouched rather than flipping it to the
+// opposite sideband (operator report 2026-06-14: a click in LSB threw the
+// passband onto the USB side). Symmetric / DIG modes pass through unchanged.
+export function fitPassbandForMode(
+  mode: RxMode,
+  loOff: number,
+  hiOff: number,
+  margin: number,
+): { low: number; high: number } | null {
+  let low = Math.round(loOff - margin);
+  let high = Math.round(hiOff + margin);
+  if (lowerSidebandMode(mode)) {
+    if (loOff >= 0) return null;            // signal entirely above the carrier — wrong side
+    high = Math.min(high, -FIT_MIN_EDGE_HZ); // clamp the passband below the carrier
+  } else if (upperSidebandMode(mode)) {
+    if (hiOff <= 0) return null;            // signal entirely below the carrier — wrong side
+    low = Math.max(low, FIT_MIN_EDGE_HZ);   // clamp the passband above the carrier
+  }
+  if (high <= low + FIT_MIN_EDGE_HZ) return null;
+  return { low, high };
+}
+
 // Format VFO-relative Hz offset as absolute-MHz with 3 decimals (e.g. 14.249).
 // Used for x-axis tick labels.
 function formatTickMhz(absHz: number): string {
   return (absHz / 1_000_000).toFixed(3);
 }
 
+// Axis label spacing scales with the visible span so a zoomed-out window does
+// not crowd the baseline with ticks.
+function tickStepForSpan(spanHz: number): number {
+  if (spanHz <= 14_000) return TICK_STEP_HZ;
+  if (spanHz <= 28_000) return 5_000;
+  return 10_000;
+}
+
+// Resolve a CSS colour token (hex or rgb()/rgba()) to [r,g,b] so we can build
+// alpha variants at draw time. Lets the accent passband follow the live
+// --accent token (and any Theme Settings override) without hard-coding hex.
+function parseRgb(s: string): [number, number, number] {
+  const t = s.trim();
+  if (t.startsWith('#')) {
+    let h = t.slice(1);
+    if (h.length === 3) h = h.split('').map((ch) => ch + ch).join('');
+    const n = Number.parseInt(h, 16);
+    if (Number.isFinite(n)) return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+  const m = t.match(/\d+(?:\.\d+)?/g);
+  if (m && m.length >= 3) return [Number(m[0]), Number(m[1]), Number(m[2])];
+  return [74, 158, 255]; // --accent fallback
+}
+
+// Snap a dragged edge onto the nearest detected carrier when it falls inside
+// SNAP_PULL_HZ — the "magnetic assist". Returns the (possibly) pulled absolute
+// frequency. peaks are captured once at drag start (carriers move slowly).
+function magnetEdge(absHz: number, peaks: DetectedPeak[]): number {
+  let best = absHz;
+  let bestDist = SNAP_PULL_HZ;
+  for (const p of peaks) {
+    const d = Math.abs(p.hz - absHz);
+    if (d < bestDist) {
+      bestDist = d;
+      best = p.hz;
+    }
+  }
+  return best;
+}
+
+// ITU-style occupied bandwidth: within [loBin, hiBin] of an averaged POWER
+// spectrum, integrate signal power above the noise floor and trim (1−frac)/2 of
+// the total from each tail — the band carrying `frac` (e.g. 99%) of the power.
+// This is the standard occupied-bandwidth measure, so the reported width is the
+// bandwidth the signal is actually transmitting at, not its noisy instantaneous
+// skirts. Returns inclusive [loBin, hiBin].
+function occupiedBandBins(
+  avgLin: Float32Array,
+  floorDb: Float32Array | null,
+  loBin: number,
+  hiBin: number,
+  frac: number,
+): [number, number] {
+  const haveFloor = floorDb !== null && floorDb.length === avgLin.length;
+  const sig = (i: number): number => {
+    const fl = haveFloor ? Math.pow(10, floorDb![i]! / 10) : 0;
+    const s = avgLin[i]! - fl;
+    return s > 0 ? s : 0;
+  };
+  let total = 0;
+  for (let i = loBin; i <= hiBin; i++) total += sig(i);
+  if (total <= 0) return [loBin, hiBin];
+  const tail = ((1 - frac) / 2) * total;
+  let cum = 0;
+  let lo = loBin;
+  for (let i = loBin; i <= hiBin; i++) {
+    cum += sig(i);
+    if (cum >= tail) { lo = i; break; }
+  }
+  cum = 0;
+  let hi = hiBin;
+  for (let i = hiBin; i >= loBin; i--) {
+    cum += sig(i);
+    if (cum >= tail) { hi = i; break; }
+  }
+  return [lo, hi <= lo ? lo : hi];
+}
+
 export function FilterMiniPan() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // Visible span lives in a ref (read by the imperative draw loop) plus a state
+  // mirror so the width pill / React tree re-render on zoom.
+  const spanHzRef = useRef<number>(DEFAULT_SPAN_HZ);
+  const [, setSpanTick] = useState(0);
+  const redrawRef = useRef<(() => void) | null>(null);
+  const hoverEdgeRef = useRef<DragMode | null>(null);
+
+  // Live filter edges + mode for the editable width pill. These re-render the
+  // component (cheap) but the per-frame canvas path stays imperative.
+  const filterLowHz = useConnectionStore((s) => s.filterLowHz);
+  const filterHighHz = useConnectionStore((s) => s.filterHighHz);
+  const mode = useConnectionStore((s) => s.mode);
+
+  const [editingWidth, setEditingWidth] = useState(false);
+  const [widthDraft, setWidthDraft] = useState('');
+
   const dragRef = useRef<{
     mode: DragMode;
     rect: DOMRect;
+    spanHz: number;
     activeSlot: string;
     startLoHz: number;
     startHiHz: number;
@@ -64,6 +245,7 @@ export function FilterMiniPan() {
     lastWriteAt: number;
     flushTimer: number | null;
     pointerId: number;
+    peaks: DetectedPeak[];
   } | null>(null);
 
   useEffect(() => {
@@ -76,9 +258,22 @@ export function FilterMiniPan() {
     // ws-client.ts skips decodeDisplayFrame entirely when no consumer is
     // registered (all spectrum surfaces closed).
     const releaseFrameConsumer = registerFrameConsumer();
+    // Keep the floor estimator live while this panel is open so the signal-aware
+    // features (heat trace, bandwidth brackets, fit-to-signal) work without the
+    // operator first toggling global Pop/Snap.
+    const releaseEstimator = registerEstimatorConsumer();
 
     let rafHandle = 0;
     let lastSeq = -1;
+    let traceY: Float32Array | null = null; // reused per-column trace Y buffer
+    let traceSm: Float32Array | null = null; // reused smoothed-trace buffer
+    let peakHoldY: Float32Array | null = null; // per-column peak-hold envelope (Y)
+    let peakHoldKey = ''; // geometry key; reset the envelope when it changes
+    let autoLoDb = NaN; // EMA of the visible-window floor (dynamic vertical scale)
+    let autoHiDb = NaN; // EMA of the visible-window peak
+    let avgLin: Float32Array | null = null; // time-averaged linear power per bin
+    let avgDb: Float32Array | null = null; // averaged spectrum in dB (for the edge walk)
+    let avgKey = ''; // geometry key; reset the average when it changes
 
     const draw = () => {
       rafHandle = 0;
@@ -87,6 +282,7 @@ export function FilterMiniPan() {
       if (d.lastSeq === lastSeq) return;
       lastSeq = d.lastSeq;
 
+      const spanHz = spanHzRef.current;
       const dpr = window.devicePixelRatio || 1;
       const cssW = canvas.clientWidth;
       const cssH = canvas.clientHeight;
@@ -102,13 +298,23 @@ export function FilterMiniPan() {
       // from the Theme Settings panel flow through these tokens.
       const cs = getComputedStyle(document.documentElement);
       const fg0 = cs.getPropertyValue('--fg-0').trim() || '#edeef1';
-      const fg1 = cs.getPropertyValue('--fg-1').trim() || '#cccccc';
       const fg2 = cs.getPropertyValue('--fg-2').trim() || '#7c8088';
-      const colTrace = fg1;          // spectrum line — sits between primary and muted text
       const colTickLabel = fg2;
       const colTickLabelCenter = fg0;
       const colCutKey = fg2;
       const colCutVal = fg0;
+      // Accent drives the active-filter passband (focus/state token, CLAUDE.md).
+      const [ar, ag, ab] = parseRgb(cs.getPropertyValue('--accent') || '#4a9eff');
+      const accent = (a: number) => `rgba(${ar}, ${ag}, ${ab}, ${a})`;
+
+      // Snap/pop state. This panel registers an estimator consumer, so the floor
+      // is maintained whenever the panel is open (not only when global Pop/Snap
+      // are on) — the heat trace, brackets and fit-to-signal all read it.
+      const enh = useSignalEnhanceStore.getState();
+      const floor = getNoiseFloor();
+      const signalColor = useDisplaySettingsStore.getState().rxTraceColor;
+      const [sr, sg, sb] = parseRgb(signalColor || '#FFA028');
+      const signal = (a: number) => `rgba(${sr}, ${sg}, ${sb}, ${a})`;
 
       // Reserve the top ~22 px for LOW CUT / HIGH CUT wall callouts and the
       // bottom ~14 px for the x-axis labels so neither overlap the trace.
@@ -120,35 +326,217 @@ export function FilterMiniPan() {
       const vfo = Number(c.vfoHz);
       const panDb = d.panDb;
       const binsPerHz = d.hzPerPixel > 0 ? 1 / d.hzPerPixel : 0;
+      const popOn = enh.popEnabled && floor !== null && panDb !== null && floor.length === panDb.length;
 
+      // Time-averaged power spectrum (EMA in the LINEAR-power domain — the
+      // correct domain to average). Edge + occupied-bandwidth measurement runs
+      // on this, not the jittery instantaneous frame, so the reported width is
+      // the signal's true transmitted bandwidth. The live trace stays
+      // instantaneous; only the bandwidth read is averaged.
+      if (panDb) {
+        const akey = `${d.centerHz}:${d.hzPerPixel}:${panDb.length}`;
+        if (avgLin === null || avgLin.length !== panDb.length) {
+          avgLin = new Float32Array(panDb.length);
+          avgDb = new Float32Array(panDb.length);
+          avgKey = '';
+        }
+        const reset = akey !== avgKey;
+        const a = reset ? 1 : AVG_ALPHA;
+        const al = avgLin;
+        const ad = avgDb!;
+        for (let i = 0; i < panDb.length; i++) {
+          const lin = Math.pow(10, panDb[i]! / 10);
+          al[i] = reset ? lin : al[i]! + a * (lin - al[i]!);
+          ad[i] = 10 * Math.log10(al[i]! > 1e-20 ? al[i]! : 1e-20);
+        }
+        avgKey = akey;
+      }
+
+      // Window geometry shared by the trace, floor contour and markers.
+      const loHz = vfo - spanHz / 2;
+      let binStart = 0;
+      let binEnd = 0;
+      let fullStartHz = 0;
       if (panDb && binsPerHz > 0) {
         const displayCenter = Number(d.centerHz);
         const fullSpanHz = panDb.length * d.hzPerPixel;
-        const fullStartHz = displayCenter - fullSpanHz / 2;
-        const loHz = vfo - RIBBON_SPAN_HZ / 2;
-        const binStart = Math.max(0, Math.floor((loHz - fullStartHz) * binsPerHz));
-        const binEnd = Math.min(panDb.length, Math.ceil((loHz + RIBBON_SPAN_HZ - fullStartHz) * binsPerHz));
+        fullStartHz = displayCenter - fullSpanHz / 2;
+        binStart = Math.max(0, Math.floor((loHz - fullStartHz) * binsPerHz));
+        binEnd = Math.min(panDb.length, Math.ceil((loHz + spanHz - fullStartHz) * binsPerHz));
+      }
+      const bins = binEnd - binStart;
 
-        // Decimated spectrum trace.
-        const bins = binEnd - binStart;
-        if (bins > 0) {
+      // Dynamic vertical auto-range (non-Pop): scan the visible window, track an
+      // EMA-smoothed floor→peak, and map THAT to the plot height. The noise
+      // floor hugs the bottom and any signal fills the panel regardless of
+      // absolute level — so weak signals and their width are always easy to see.
+      // EMA keeps it from jumping frame-to-frame. A minimum span stops a quiet
+      // window from amplifying noise into a full-height mess.
+      if (panDb && bins > 0 && !popOn) {
+        let mn = Infinity;
+        let mx = -Infinity;
+        for (let i = binStart; i < binEnd; i++) {
+          const v = panDb[i]!;
+          if (v < mn) mn = v;
+          if (v > mx) mx = v;
+        }
+        if (mn === Infinity) { mn = DB_FLOOR; mx = DB_CEIL; }
+        const targetLo = mn - 3;
+        const targetHi = Math.max(mx + 5, mn + 18); // ≥18 dB span
+        autoLoDb = Number.isNaN(autoLoDb) ? targetLo : autoLoDb + 0.15 * (targetLo - autoLoDb);
+        autoHiDb = Number.isNaN(autoHiDb) ? targetHi : autoHiDb + 0.15 * (targetHi - autoHiDb);
+      }
+      const loDb = Number.isNaN(autoLoDb) ? DB_FLOOR : autoLoDb;
+      const hiDb = Number.isNaN(autoHiDb) ? DB_CEIL : autoHiDb;
+      const dbSpan = hiDb - loDb > 1 ? hiDb - loDb : 1;
+
+      // Map a dB (auto-ranged) or, in Pop mode, an SNR value to a plot Y.
+      const dbToY = (v: number) => {
+        const norm = (v - loDb) / dbSpan;
+        return plotTop + plotH - Math.max(0, Math.min(1, norm)) * plotH;
+      };
+      const snrToY = (snr: number) => {
+        const norm = snr / POP_RANGE_DB;
+        return plotTop + plotH - Math.max(0, Math.min(1, norm)) * plotH;
+      };
+
+      if (panDb && bins > 0) {
+        // Faint floor contour (non-Pop) so the operator can see the estimated
+        // noise floor riding under the trace. In Pop mode the floor IS the
+        // baseline, so it collapses to the bottom rail instead — drawn below.
+        if (floor !== null && floor.length === panDb.length && !popOn) {
+          ctx.strokeStyle = fg2;
+          ctx.globalAlpha = 0.35;
           ctx.lineWidth = 1 * dpr;
-          ctx.strokeStyle = colTrace;
           ctx.beginPath();
           for (let x = 0; x < w; x++) {
             const b0 = binStart + Math.floor((x * bins) / w);
-            const b1 = binStart + Math.floor(((x + 1) * bins) / w);
+            const y = dbToY(floor[Math.min(floor.length - 1, b0)] ?? DB_FLOOR);
+            if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          }
+          ctx.stroke();
+          ctx.globalAlpha = 1;
+        }
+
+        // Spectrum trace — peak-hold per pixel column. In Pop mode each column
+        // plots the strongest SNR above the floor so weak carriers lift; the
+        // baseline (SNR≈0) sits on the bottom rail. Ys are recorded into a
+        // reused buffer so we can both stroke the line and fill the area below
+        // it (modern filled-spectrum look) without re-scanning the bins.
+        if (traceY === null || traceY.length !== w) traceY = new Float32Array(w);
+        if (traceSm === null || traceSm.length !== w) traceSm = new Float32Array(w);
+        const ty = traceY;
+        const lastBin = binEnd - 1;
+        for (let x = 0; x < w; x++) {
+          const b0 = binStart + Math.floor((x * bins) / w);
+          const b1 = binStart + Math.floor(((x + 1) * bins) / w);
+          // Column max preserves narrow carriers; a centre-sample interpolation
+          // keeps the curve smooth (granular) when zoomed in past one bin/pixel.
+          const fb = binStart + ((x + 0.5) / w) * bins;
+          const i0 = Math.max(binStart, Math.min(lastBin, Math.floor(fb)));
+          const i1 = Math.min(lastBin, i0 + 1);
+          const frac = fb - i0;
+          let y: number;
+          if (popOn) {
+            let mxSnr = -Infinity;
+            for (let i = b0; i < b1; i++) {
+              const snr = (panDb[i] ?? DB_FLOOR) - (floor![i] ?? DB_FLOOR);
+              if (snr > mxSnr) mxSnr = snr;
+            }
+            const s0 = (panDb[i0] ?? DB_FLOOR) - (floor![i0] ?? DB_FLOOR);
+            const s1 = (panDb[i1] ?? DB_FLOOR) - (floor![i1] ?? DB_FLOOR);
+            const interp = s0 * (1 - frac) + s1 * frac;
+            const snr = mxSnr === -Infinity ? interp : (bins >= w ? 0.6 * mxSnr + 0.4 * interp : interp);
+            y = snrToY(Math.max(0, snr));
+          } else {
             let peak = -Infinity;
             for (let i = b0; i < b1; i++) {
               const v = panDb[i] ?? DB_FLOOR;
               if (v > peak) peak = v;
             }
-            if (peak === -Infinity) peak = DB_FLOOR;
-            const norm = (peak - DB_FLOOR) / (DB_CEIL - DB_FLOOR);
-            const y = plotTop + plotH - Math.max(0, Math.min(1, norm)) * plotH;
-            if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            const interp = (panDb[i0] ?? DB_FLOOR) * (1 - frac) + (panDb[i1] ?? DB_FLOOR) * frac;
+            // Zoomed out (many bins/pixel) keep peaks; zoomed in, follow the
+            // smooth interpolation so the trace reads as a continuous curve.
+            const v = peak === -Infinity ? interp : (bins >= w ? 0.6 * peak + 0.4 * interp : interp);
+            y = dbToY(v);
           }
+          ty[x] = y;
+        }
+
+        // De-comb: 3-tap moving average so noise reads as a soft band, not a
+        // picket fence, while real signal humps survive.
+        const sm = traceSm;
+        for (let x = 0; x < w; x++) {
+          const a = ty[x === 0 ? 0 : x - 1]!;
+          const b = ty[x]!;
+          const c = ty[x === w - 1 ? w - 1 : x + 1]!;
+          sm[x] = (a + b + c) / 3;
+        }
+
+        const baseY = plotTop + plotH;
+
+        // Heat trace — each column is filled from the baseline up to the trace
+        // with the signal colour, its alpha scaled by how high the trace sits in
+        // the (auto-ranged) panel. Strong signals glow bright; noise stays a dim
+        // wash. This is the modern panadapter look applied to the filter window.
+        for (let x = 0; x < w; x++) {
+          const top = sm[x]!;
+          const normH = (baseY - top) / plotH; // 0 at floor, 1 at panel top
+          const a = 0.10 + 0.78 * Math.max(0, Math.min(1, normH)) ** 1.35;
+          ctx.fillStyle = signal(a);
+          ctx.fillRect(x, top, 1, baseY - top);
+        }
+
+        // Peak-hold decay envelope — a slow-falling ghost that remembers recent
+        // maxima so transient / weak signals leave a visible trail. Reset when
+        // the frequency window changes (held peaks would otherwise smear).
+        if (peakHoldY === null || peakHoldY.length !== w) peakHoldY = new Float32Array(w);
+        const ph = peakHoldY;
+        const phKey = `${c.vfoHz}:${spanHz}:${w}`;
+        const decay = PEAKHOLD_DECAY_PX * dpr;
+        if (phKey !== peakHoldKey) {
+          peakHoldKey = phKey;
+          for (let x = 0; x < w; x++) ph[x] = sm[x]!;
+        } else {
+          for (let x = 0; x < w; x++) {
+            const decayed = ph[x]! + decay; // larger Y = lower level
+            ph[x] = decayed < sm[x]! ? decayed : sm[x]!; // hold the higher (smaller Y)
+          }
+        }
+        ctx.strokeStyle = signal(0.5);
+        ctx.lineWidth = 1 * dpr;
+        ctx.beginPath();
+        for (let x = 0; x < w; x++) {
+          if (x === 0) ctx.moveTo(x, ph[x]!); else ctx.lineTo(x, ph[x]!);
+        }
+        ctx.stroke();
+
+        // Live trace line on top — bright, crisp.
+        ctx.lineWidth = 1.25 * dpr;
+        ctx.strokeStyle = signal(0.95);
+        ctx.beginPath();
+        for (let x = 0; x < w; x++) {
+          if (x === 0) ctx.moveTo(x, sm[x]!); else ctx.lineTo(x, sm[x]!);
+        }
+        ctx.stroke();
+
+        // Pop-mode floor baseline: a faint flat rail at SNR=0 with an "NF" tag.
+        if (popOn) {
+          const yBase = snrToY(0);
+          ctx.strokeStyle = fg2;
+          ctx.globalAlpha = 0.3;
+          ctx.lineWidth = 1 * dpr;
+          ctx.beginPath();
+          ctx.moveTo(0, yBase + 0.5);
+          ctx.lineTo(w, yBase + 0.5);
           ctx.stroke();
+          ctx.globalAlpha = 0.55;
+          ctx.fillStyle = fg2;
+          ctx.font = `${Math.round(8 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;
+          ctx.textBaseline = 'bottom';
+          ctx.textAlign = 'start';
+          ctx.fillText('NF', Math.round(3 * dpr), yBase - Math.round(1 * dpr));
+          ctx.globalAlpha = 1;
         }
       }
 
@@ -160,59 +548,194 @@ export function FilterMiniPan() {
       ctx.lineTo(w / 2, plotTop + plotH);
       ctx.stroke();
 
-      // Passband — bright silver walls + soft neutral halo + corner dots.
-      // NOT a cyan box: the interior is an almost-invisible light wash, the
-      // two vertical walls are 2px with a white→light-gray vertical gradient,
-      // and four 6×6 square dots punctuate the corners.
-      const passLeftPx = ((c.filterLowHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * w;
-      const passRightPx = ((c.filterHighHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * w;
+      // Passband — accent-tinted filled rectangle between two glowing cut
+      // walls, with a bright flat top and grab handles. (Departs from the older
+      // neutral-silver "not a cyan box" treatment — red-light, see CLAUDE.md.)
+      const passLeftPx = ((c.filterLowHz + spanHz / 2) / spanHz) * w;
+      const passRightPx = ((c.filterHighHz + spanHz / 2) / spanHz) * w;
       const onScreen = passRightPx > 0 && passLeftPx < w;
+
+      // Signal-edge markers — for each detected carrier in the window, measure
+      // where it sinks into the noise (its visible extent) and make those edges
+      // UNMISTAKABLE: an occupied-band wash, bright full-height edge guides with
+      // glow, inward carets at the baseline, and a width label. The carrier the
+      // filter is sitting on is drawn in accent; the rest in the signal colour.
+      // This is the panel's headline feature: see each signal AND its bandwidth.
+      if (floor !== null && panDb && binsPerHz > 0) {
+        const dCenter = Number(d.centerHz);
+        const baseY = plotTop + plotH;
+        const half = panDb.length / 2;
+        // Measure on the time-averaged spectrum once it exists (stable width);
+        // fall back to the live frame for the very first frames.
+        const measSpec = avgDb && avgDb.length === panDb.length ? avgDb : panDb;
+        const peaks = detectPeaks(panDb, dCenter, d.hzPerPixel)
+          .filter((p) => p.snrDb >= BRACKET_MIN_SNR_DB)
+          .slice(0, BRACKET_MAX); // detectPeaks returns strongest-first
+        for (const p of peaks) {
+          const xC = ((p.hz - loHz) / spanHz) * w;
+          if (xC < 0 || xC > w) continue;
+          // Energy extent on the AVERAGED spectrum (the confidence-aware, gap-
+          // tolerant walk snap uses), then refine to the ITU 99%-power occupied
+          // bandwidth — the signal's true transmitted width, not noisy skirts.
+          const ext = signalExtentHz(measSpec, dCenter, d.hzPerPixel, p.hz, EDGE_ANCHOR_HZ);
+          if (!ext) continue;
+          let loEdgeHz = ext.loHz;
+          let hiEdgeHz = ext.hiHz;
+          if (avgLin && avgLin.length === panDb.length) {
+            const eLo = Math.max(0, Math.round((ext.loHz - dCenter) / d.hzPerPixel + half));
+            const eHi = Math.min(panDb.length - 1, Math.round((ext.hiHz - dCenter) / d.hzPerPixel + half));
+            const [obLo, obHi] = occupiedBandBins(avgLin, floor, eLo, eHi, OBW_FRACTION);
+            loEdgeHz = dCenter + (obLo - half) * d.hzPerPixel;
+            hiEdgeHz = dCenter + (obHi - half) * d.hzPerPixel;
+          }
+          const xL = ((loEdgeHz - loHz) / spanHz) * w;
+          const xR = ((hiEdgeHz - loHz) / spanHz) * w;
+          const bwHz = Math.max(0, hiEdgeHz - loEdgeHz);
+          const inBand = ext.crestHz - vfo >= c.filterLowHz && ext.crestHz - vfo <= c.filterHighHz;
+          const col = inBand ? accent : signal;
+
+          // 1) Occupied-band wash — brighten the detected extent above the heat
+          //    so the band itself reads as a distinct block.
+          if (traceSm) {
+            ctx.fillStyle = col(0.16);
+            const xa = Math.max(0, Math.round(xL));
+            const xb = Math.min(w, Math.round(xR));
+            for (let x = xa; x < xb; x++) ctx.fillRect(x, traceSm[x]!, 1, baseY - traceSm[x]!);
+          }
+
+          // 2) Bright full-height edge guides with glow — the crisp left/right
+          //    boundaries the eye locks onto.
+          ctx.save();
+          ctx.shadowColor = col(0.8);
+          ctx.shadowBlur = Math.round(6 * dpr);
+          ctx.strokeStyle = col(0.95);
+          ctx.lineWidth = Math.max(1.5, 1.5 * dpr);
+          for (const ex of [xL, xR]) {
+            if (ex < 0 || ex > w) continue;
+            ctx.beginPath();
+            ctx.moveTo(Math.round(ex) + 0.5, plotTop);
+            ctx.lineTo(Math.round(ex) + 0.5, baseY);
+            ctx.stroke();
+          }
+          ctx.restore();
+
+          // 3) Inward carets at the baseline so the edges point at the band.
+          const cz = Math.round(4 * dpr);
+          ctx.fillStyle = col(1);
+          if (xL >= 0 && xL <= w) {
+            ctx.beginPath();
+            ctx.moveTo(xL, baseY);
+            ctx.lineTo(xL + cz, baseY - cz);
+            ctx.lineTo(xL + cz, baseY + cz);
+            ctx.closePath();
+            ctx.fill();
+          }
+          if (xR >= 0 && xR <= w) {
+            ctx.beginPath();
+            ctx.moveTo(xR, baseY);
+            ctx.lineTo(xR - cz, baseY - cz);
+            ctx.lineTo(xR - cz, baseY + cz);
+            ctx.closePath();
+            ctx.fill();
+          }
+
+          // 4) Width label above the signal crest, on a readability chip.
+          const crestY = traceSm ? traceSm[Math.max(0, Math.min(w - 1, Math.round(xC)))]! : plotTop;
+          const by = Math.max(plotTop + Math.round(10 * dpr), crestY - Math.round(6 * dpr));
+          const label = formatFilterWidth(0, Math.round(bwHz));
+          ctx.font = `700 ${Math.round(9 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;
+          ctx.textBaseline = 'bottom';
+          ctx.textAlign = 'center';
+          const lw = ctx.measureText(label).width;
+          const lx = Math.max(lw / 2 + 2, Math.min(w - lw / 2 - 2, (xL + xR) / 2));
+          ctx.fillStyle = 'rgba(12, 14, 18, 0.6)';
+          ctx.fillRect(lx - lw / 2 - 3, by - Math.round(11 * dpr), lw + 6, Math.round(11 * dpr));
+          ctx.fillStyle = col(1);
+          ctx.fillText(label, lx, by - Math.round(1 * dpr));
+          ctx.textAlign = 'start';
+          ctx.textBaseline = 'alphabetic';
+        }
+      }
+
       if (onScreen) {
-        const clampedL = Math.max(0, passLeftPx);
-        const clampedR = Math.min(w, passRightPx);
         const pbTop = plotTop + Math.round(4 * dpr);
-        const pbBottom = plotTop + plotH - Math.round(4 * dpr);
-        const wallW = Math.max(2, Math.round(2 * dpr));
-        const dotSize = Math.round(6 * dpr);
-        const halo = Math.round(6 * dpr);
+        const pbBottom = plotTop + plotH;
+        const Lx = passLeftPx;
+        const Rx = passRightPx;
+        // Clamp the fill rectangle to the canvas (edges can sit off-screen).
+        const fillL = Math.max(0, Lx);
+        const fillR = Math.min(w, Rx);
 
-        // Interior wash.
-        ctx.fillStyle = COL_PB_WASH;
-        ctx.fillRect(
-          Math.round(clampedL),
-          pbTop,
-          Math.max(0, Math.round(clampedR - clampedL)),
-          pbBottom - pbTop,
-        );
+        // 1) Filled passband — a clean rectangle between the two cut walls (no
+        //    outward skirts). Accent vertical gradient: bright at the top, fades
+        //    to nothing at the floor, so it reads as the active filter window.
+        const pbGrad = ctx.createLinearGradient(0, pbTop, 0, pbBottom);
+        pbGrad.addColorStop(0.0, accent(0.28));
+        pbGrad.addColorStop(0.55, accent(0.11));
+        pbGrad.addColorStop(1.0, accent(0.02));
+        ctx.fillStyle = pbGrad;
+        ctx.fillRect(fillL, pbTop, Math.max(0, fillR - fillL), pbBottom - pbTop);
 
-        // Walls — vertical gradient top→bottom, painted with a soft halo.
-        const wallGrad = ctx.createLinearGradient(0, pbTop, 0, pbBottom);
-        wallGrad.addColorStop(0.00, 'rgba(245, 247, 250, 0.95)');
-        wallGrad.addColorStop(0.40, 'rgba(225, 228, 232, 0.85)');
-        wallGrad.addColorStop(1.00, 'rgba(195, 200, 208, 0.55)');
-
+        // 2) Bright glowing flat top — a single horizontal line spanning the
+        //    passband (the filter's flat top), with no angled tails at the ends.
         ctx.save();
-        ctx.shadowColor = COL_WALL_HALO;
-        ctx.shadowBlur = halo;
-        ctx.fillStyle = wallGrad;
-        // Left wall straddles the left edge (1px outside / 1px inside).
-        ctx.fillRect(Math.round(clampedL) - Math.floor(wallW / 2), pbTop, wallW, pbBottom - pbTop);
-        // Right wall straddles the right edge.
-        ctx.fillRect(Math.round(clampedR) - Math.ceil(wallW / 2), pbTop, wallW, pbBottom - pbTop);
+        ctx.shadowColor = accent(0.7);
+        ctx.shadowBlur = Math.round(8 * dpr);
+        ctx.strokeStyle = accent(0.95);
+        ctx.lineWidth = Math.max(1.5, 1.5 * dpr);
+        ctx.beginPath();
+        ctx.moveTo(Math.max(0, Lx), pbTop + 0.5);
+        ctx.lineTo(Math.min(w, Rx), pbTop + 0.5);
+        ctx.stroke();
         ctx.restore();
 
-        // Four corner dots — bright white squares flush to each wall corner.
+        // 3) Exact cut walls — full-height accent lines mark the precise LOW/
+        //    HIGH cut and close the passband rectangle's sides.
         ctx.save();
-        ctx.shadowColor = COL_WALL_HALO;
-        ctx.shadowBlur = Math.round(4 * dpr);
-        ctx.fillStyle = COL_DOT;
-        const dotL = Math.round(clampedL) - Math.floor(dotSize / 2);
-        const dotR = Math.round(clampedR) - Math.floor(dotSize / 2);
-        ctx.fillRect(dotL, pbTop - Math.floor(dotSize / 2), dotSize, dotSize);
-        ctx.fillRect(dotR, pbTop - Math.floor(dotSize / 2), dotSize, dotSize);
-        ctx.fillRect(dotL, pbBottom - Math.ceil(dotSize / 2), dotSize, dotSize);
-        ctx.fillRect(dotR, pbBottom - Math.ceil(dotSize / 2), dotSize, dotSize);
+        ctx.shadowColor = accent(0.6);
+        ctx.shadowBlur = Math.round(6 * dpr);
+        ctx.strokeStyle = accent(0.85);
+        ctx.lineWidth = Math.max(1, 1 * dpr);
+        for (const wx of [Lx, Rx]) {
+          ctx.beginPath();
+          ctx.moveTo(Math.round(wx) + 0.5, pbTop);
+          ctx.lineTo(Math.round(wx) + 0.5, pbBottom);
+          ctx.stroke();
+        }
         ctx.restore();
+
+        // 4) Grab handles — rounded pills centred on each wall with two grip
+        //    lines, so the drag affordance is obvious. The hovered edge brightens.
+        const hoverEdge = hoverEdgeRef.current;
+        const handleW = Math.round(7 * dpr);
+        const handleH = Math.round(20 * dpr);
+        const handleY = pbTop + (pbBottom - pbTop) / 2 - handleH / 2;
+        const drawHandle = (wx: number, hot: boolean) => {
+          const x = Math.round(wx) - handleW / 2;
+          ctx.save();
+          ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
+          ctx.shadowBlur = Math.round(3 * dpr);
+          ctx.fillStyle = hot ? accent(1) : accent(0.85);
+          const r = Math.round(2 * dpr);
+          ctx.beginPath();
+          ctx.roundRect(x, handleY, handleW, handleH, r);
+          ctx.fill();
+          ctx.restore();
+          // Grip lines.
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+          ctx.lineWidth = 1 * dpr;
+          const gx = Math.round(wx);
+          const g1 = handleY + handleH * 0.34;
+          const g2 = handleY + handleH * 0.66;
+          ctx.beginPath();
+          ctx.moveTo(gx - Math.round(1.5 * dpr) + 0.5, g1);
+          ctx.lineTo(gx - Math.round(1.5 * dpr) + 0.5, g2);
+          ctx.moveTo(gx + Math.round(1.5 * dpr) + 0.5, g1);
+          ctx.lineTo(gx + Math.round(1.5 * dpr) + 0.5, g2);
+          ctx.stroke();
+        };
+        drawHandle(Lx, hoverEdge === 'lo');
+        drawHandle(Rx, hoverEdge === 'hi');
 
         // LOW CUT / HIGH CUT callouts. Key (letter-spaced, muted) stacked
         // above value (bold, brighter) in the reserved top band. A hairline
@@ -230,12 +753,12 @@ export function FilterMiniPan() {
           if (wallX < 0 || wallX > w) return;
           const key = side === 'lo' ? 'LOW CUT' : 'HIGH CUT';
 
-          // Hairline from label bottom down to wall top (lands on the dot).
+          // Hairline from label bottom down to the wall top.
           ctx.strokeStyle = COL_CUT_TICK;
           ctx.lineWidth = 1 * dpr;
           ctx.beginPath();
           ctx.moveTo(Math.round(wallX) + 0.5, valY + valFontPx + Math.round(1 * dpr));
-          ctx.lineTo(Math.round(wallX) + 0.5, pbTop - Math.floor(dotSize / 2));
+          ctx.lineTo(Math.round(wallX) + 0.5, pbTop);
           ctx.stroke();
 
           // Measure both lines to find clamp bounds.
@@ -268,20 +791,21 @@ export function FilterMiniPan() {
         ctx.letterSpacing = '0px';
       }
 
-      // X-axis tick labels. One label every TICK_STEP_HZ (2 kHz), centered
+      // X-axis tick labels. One label every tickStep (scaled by span), centered
       // on the VFO. VFO sits at the middle tick.
+      const tickStep = tickStepForSpan(spanHz);
       ctx.fillStyle = colTickLabel;
       ctx.font = `${Math.round(9.5 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;
       ctx.textBaseline = 'middle';
       const labelY = plotTop + plotH + Math.round(axisH / 2);
-      const nTicks = Math.floor(RIBBON_SPAN_HZ / TICK_STEP_HZ) + 1; // inclusive both ends
+      const nTicks = Math.floor(spanHz / tickStep) + 1; // inclusive both ends
       const tickOffsets: number[] = [];
       // Center-out so VFO tick is guaranteed; symmetric ticks either side.
       const halfTicks = Math.floor(nTicks / 2);
-      for (let i = -halfTicks; i <= halfTicks; i++) tickOffsets.push(i * TICK_STEP_HZ);
+      for (let i = -halfTicks; i <= halfTicks; i++) tickOffsets.push(i * tickStep);
       tickOffsets.forEach((offHz) => {
         const absHz = vfo + offHz;
-        const xPx = ((offHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * w;
+        const xPx = ((offHz + spanHz / 2) / spanHz) * w;
         if (xPx < 0 || xPx > w) return;
         const text = formatTickMhz(absHz);
         const m = ctx.measureText(text);
@@ -290,6 +814,14 @@ export function FilterMiniPan() {
         ctx.fillText(text, Math.max(2, Math.min(w - m.width - 2, xPx - m.width / 2)), labelY);
       });
     };
+
+    // Allow the imperative handlers (wheel zoom) to force a redraw even though
+    // nothing in the stores changed.
+    const requestRedraw = () => {
+      lastSeq = -1;
+      if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
+    };
+    redrawRef.current = requestRedraw;
 
     const unsubDisplay = useDisplayStore.subscribe(() => {
       if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
@@ -300,31 +832,92 @@ export function FilterMiniPan() {
         s.filterHighHz !== p.filterHighHz ||
         s.vfoHz !== p.vfoHz
       ) {
-        lastSeq = -1;
-        if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
+        requestRedraw();
       }
     });
     const unsubTheme = useThemeStore.subscribe((s, p) => {
-      if (s.theme !== p.theme || s.overrides !== p.overrides) {
-        lastSeq = -1;
-        if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
-      }
+      if (s.theme !== p.theme || s.overrides !== p.overrides) requestRedraw();
+    });
+    // Toggling Pop/Snap (or the marker colour) changes what we draw even when
+    // the spectrum frame is unchanged.
+    const unsubEnhance = useSignalEnhanceStore.subscribe((s, p) => {
+      if (
+        s.popEnabled !== p.popEnabled ||
+        s.snapEnabled !== p.snapEnabled ||
+        s.popFloorDb !== p.popFloorDb ||
+        s.popSpanDb !== p.popSpanDb ||
+        s.popGamma !== p.popGamma ||
+        s.coherenceHoldGate !== p.coherenceHoldGate ||
+        s.coherenceBoostDb !== p.coherenceBoostDb ||
+        s.ridgeBoost !== p.ridgeBoost ||
+        s.ridgeMaxBoostDb !== p.ridgeMaxBoostDb ||
+        s.snapMinSnrDb !== p.snapMinSnrDb ||
+        s.peakMinSnrDb !== p.peakMinSnrDb
+      ) requestRedraw();
+    });
+    const unsubSettings = useDisplaySettingsStore.subscribe((s, p) => {
+      if (s.rxTraceColor !== p.rxTraceColor) requestRedraw();
     });
 
-    const ro = new ResizeObserver(() => {
-      lastSeq = -1;
-      if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
-    });
+    // Scroll wheel — granular fine-tune. Registered natively (not via React's
+    // onWheel, which is passive on the root and silently drops preventDefault),
+    // so the gesture adjusts the filter without scrolling the page. Ctrl/⌘+wheel
+    // zooms the visible span; otherwise nudge the hovered edge (or the whole
+    // passband when not over an edge) by the per-mode step, ×10 with Shift.
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const dir = e.deltaY > 0 ? 1 : -1;
+
+      if (e.ctrlKey || e.metaKey) {
+        const factor = dir > 0 ? 1.18 : 1 / 1.18;
+        const next = Math.round(Math.max(MIN_SPAN_HZ, Math.min(MAX_SPAN_HZ, spanHzRef.current * factor)));
+        if (next !== spanHzRef.current) {
+          spanHzRef.current = next;
+          setSpanTick((t) => t + 1);
+          requestRedraw();
+        }
+        return;
+      }
+
+      const c = useConnectionStore.getState();
+      const step = nudgeStepHz(c.mode) * (e.shiftKey ? 10 : 1) * dir;
+      const edge = hoverEdgeRef.current;
+      let lo = c.filterLowHz;
+      let hi = c.filterHighHz;
+      if (edge === 'lo') {
+        lo = Math.min(c.filterHighHz - 50, c.filterLowHz + step);
+      } else if (edge === 'hi') {
+        hi = Math.max(c.filterLowHz + 50, c.filterHighHz + step);
+      } else {
+        // Inside / no edge → symmetric width change about the passband centre.
+        const center = (c.filterLowHz + c.filterHighHz) / 2;
+        const halfW = Math.max(25, Math.abs(c.filterHighHz - c.filterLowHz) / 2 + step);
+        lo = Math.round(center - halfW);
+        hi = Math.round(center + halfW);
+      }
+      if (hi <= lo + 50) return;
+      const slot = presetIsFixed(c.filterPresetName) || !c.filterPresetName ? 'VAR1' : c.filterPresetName;
+      useConnectionStore.setState({ filterLowHz: lo, filterHighHz: hi, filterPresetName: slot });
+      setFilter(lo, hi, slot).then(c.applyState).catch(() => {});
+    };
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+
+    const ro = new ResizeObserver(() => requestRedraw());
     ro.observe(canvas);
 
     rafHandle = requestAnimationFrame(draw);
     return () => {
       if (rafHandle !== 0) cancelAnimationFrame(rafHandle);
+      redrawRef.current = null;
       unsubDisplay();
       unsubConn();
       unsubTheme();
+      unsubEnhance();
+      unsubSettings();
+      canvas.removeEventListener('wheel', onWheel);
       ro.disconnect();
       releaseFrameConsumer();
+      releaseEstimator();
     };
   }, []);
 
@@ -348,6 +941,40 @@ export function FilterMiniPan() {
     }
   };
 
+  // Fit-to-signal: a click on bare spectrum that lands on a detected carrier
+  // snaps the passband to that carrier's measured energy extent (signalExtentHz,
+  // the same edge walk snap uses) plus a little margin. Returns true if it
+  // fitted, so the caller skips starting a drag.
+  const tryFitToSignal = (relX: number, rectW: number, spanHz: number): boolean => {
+    const d = useDisplayStore.getState();
+    if (!d.panDb || d.hzPerPixel <= 0 || getNoiseFloor() === null) return false;
+    const c = useConnectionStore.getState();
+    const vfo = Number(c.vfoHz);
+    const winLoHz = vfo - spanHz / 2;
+    const dCenter = Number(d.centerHz);
+    const peaks = detectPeaks(d.panDb, dCenter, d.hzPerPixel).filter((p) => p.snrDb >= BRACKET_MIN_SNR_DB);
+    let best: DetectedPeak | null = null;
+    let bestDist = FIT_HIT_PX;
+    for (const p of peaks) {
+      const x = ((p.hz - winLoHz) / spanHz) * rectW;
+      const dist = Math.abs(x - relX);
+      if (dist < bestDist) { bestDist = dist; best = p; }
+    }
+    if (!best) return false;
+    const ext = signalExtentHz(d.panDb, dCenter, d.hzPerPixel, best.hz, EDGE_ANCHOR_HZ);
+    if (!ext) return false;
+    // Keep the fit on the active mode's sideband — a signal on the wrong side of
+    // the carrier is unreachable here without retuning, so bail rather than flip
+    // the passband to the opposite sideband.
+    const fitted = fitPassbandForMode(c.mode, ext.loHz - vfo, ext.hiHz - vfo, FIT_MARGIN_HZ);
+    if (!fitted) return false;
+    const { low, high } = fitted;
+    const slot = presetIsFixed(c.filterPresetName) || !c.filterPresetName ? 'VAR1' : c.filterPresetName;
+    useConnectionStore.setState({ filterLowHz: low, filterHighHz: high, filterPresetName: slot });
+    setFilter(low, high, slot).then(c.applyState).catch(() => {});
+    return true;
+  };
+
   const onPointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (e.button !== 0) return;
     const canvas = canvasRef.current;
@@ -355,25 +982,43 @@ export function FilterMiniPan() {
     const rect = canvas.getBoundingClientRect();
     if (rect.width <= 0) return;
 
+    const spanHz = spanHzRef.current;
     const c = useConnectionStore.getState();
-    const passLeftPx = ((c.filterLowHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * rect.width;
-    const passRightPx = ((c.filterHighHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * rect.width;
+    const passLeftPx = ((c.filterLowHz + spanHz / 2) / spanHz) * rect.width;
+    const passRightPx = ((c.filterHighHz + spanHz / 2) / spanHz) * rect.width;
     const relX = e.clientX - rect.left;
 
     let mode: DragMode;
     if (Math.abs(relX - passLeftPx) <= EDGE_HIT_PX) mode = 'lo';
     else if (Math.abs(relX - passRightPx) <= EDGE_HIT_PX) mode = 'hi';
     else if (relX > passLeftPx && relX < passRightPx) mode = 'inside';
-    else return;
+    else {
+      // Outside the passband: a click on a detected carrier fits the filter to
+      // it; otherwise do nothing (no drag started).
+      if (tryFitToSignal(relX, rect.width, spanHz)) e.preventDefault();
+      return;
+    }
 
     e.preventDefault();
     try { canvas.setPointerCapture(e.pointerId); } catch { /* ok */ }
 
     const activeSlot = presetIsFixed(c.filterPresetName) || !c.filterPresetName ? 'VAR1' : c.filterPresetName;
 
+    // Snapshot detected carriers once so the magnetic edge-snap has stable
+    // targets through the drag. The panel keeps the floor live, so detection is
+    // available here without the operator toggling global Snap.
+    let peaks: DetectedPeak[] = [];
+    {
+      const d = useDisplayStore.getState();
+      if (d.panDb && d.hzPerPixel > 0 && getNoiseFloor() !== null) {
+        peaks = detectPeaks(d.panDb, Number(d.centerHz), d.hzPerPixel);
+      }
+    }
+
     dragRef.current = {
       mode,
       rect,
+      spanHz,
       activeSlot,
       startLoHz: c.filterLowHz,
       startHiHz: c.filterHighHz,
@@ -383,6 +1028,7 @@ export function FilterMiniPan() {
       lastWriteAt: 0,
       flushTimer: null,
       pointerId: e.pointerId,
+      peaks,
     };
 
     if (activeSlot !== c.filterPresetName) {
@@ -395,16 +1041,22 @@ export function FilterMiniPan() {
     if (!d || e.pointerId !== d.pointerId) return;
     e.stopPropagation();
 
-    const hzPerPx = RIBBON_SPAN_HZ / d.rect.width;
+    const vfo = Number(useConnectionStore.getState().vfoHz);
+    const hzPerPx = d.spanHz / d.rect.width;
+    // Magnetic snap is active for edge drags unless Alt is held (free placement)
+    // and unless there are no detected carriers.
+    const snap = d.peaks.length > 0 && !e.altKey;
     let loHz = d.startLoHz;
     let hiHz = d.startHiHz;
     if (d.mode === 'lo') {
       const relX = e.clientX - d.rect.left;
-      loHz = Math.round(relX * hzPerPx - RIBBON_SPAN_HZ / 2);
+      loHz = Math.round(relX * hzPerPx - d.spanHz / 2);
+      if (snap) loHz = Math.round(magnetEdge(vfo + loHz, d.peaks) - vfo);
       if (loHz > d.startHiHz - 50) loHz = d.startHiHz - 50;
     } else if (d.mode === 'hi') {
       const relX = e.clientX - d.rect.left;
-      hiHz = Math.round(relX * hzPerPx - RIBBON_SPAN_HZ / 2);
+      hiHz = Math.round(relX * hzPerPx - d.spanHz / 2);
+      if (snap) hiHz = Math.round(magnetEdge(vfo + hiHz, d.peaks) - vfo);
       if (hiHz < d.startLoHz + 50) hiHz = d.startLoHz + 50;
     } else {
       const dxHz = Math.round((e.clientX - d.startX) * hzPerPx);
@@ -443,36 +1095,102 @@ export function FilterMiniPan() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
+    const spanHz = spanHzRef.current;
     const c = useConnectionStore.getState();
-    const passLeftPx = ((c.filterLowHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * rect.width;
-    const passRightPx = ((c.filterHighHz + RIBBON_SPAN_HZ / 2) / RIBBON_SPAN_HZ) * rect.width;
+    const passLeftPx = ((c.filterLowHz + spanHz / 2) / spanHz) * rect.width;
+    const passRightPx = ((c.filterHighHz + spanHz / 2) / spanHz) * rect.width;
     const relX = e.clientX - rect.left;
-    if (Math.abs(relX - passLeftPx) <= EDGE_HIT_PX || Math.abs(relX - passRightPx) <= EDGE_HIT_PX) {
+    if (Math.abs(relX - passLeftPx) <= EDGE_HIT_PX) {
+      hoverEdgeRef.current = 'lo';
+      canvas.style.cursor = 'ew-resize';
+    } else if (Math.abs(relX - passRightPx) <= EDGE_HIT_PX) {
+      hoverEdgeRef.current = 'hi';
       canvas.style.cursor = 'ew-resize';
     } else if (relX > passLeftPx && relX < passRightPx) {
+      hoverEdgeRef.current = 'inside';
       canvas.style.cursor = 'move';
     } else {
+      hoverEdgeRef.current = null;
       canvas.style.cursor = 'default';
     }
   };
 
+  // ── Editable width pill ─────────────────────────────────────────────────
+  const widthHz = Math.abs(filterHighHz - filterLowHz);
+  // Centre the pill horizontally over the passband (clamped to stay on-panel).
+  const pbCenterHz = (filterLowHz + filterHighHz) / 2;
+  const span = spanHzRef.current;
+  const pillLeftPct = Math.max(10, Math.min(90, ((pbCenterHz + span / 2) / span) * 100));
+
+  const beginEditWidth = () => {
+    setWidthDraft(String(Math.round(widthHz)));
+    setEditingWidth(true);
+  };
+
+  const commitWidth = () => {
+    setEditingWidth(false);
+    const next = Number.parseInt(widthDraft, 10);
+    if (!Number.isFinite(next) || next < 50) return;
+    const c = useConnectionStore.getState();
+    let lo: number;
+    let hi: number;
+    if (isSymmetricMode(c.mode)) {
+      lo = -Math.round(next / 2);
+      hi = Math.round(next / 2);
+    } else {
+      // Preserve the passband centre (audio centre) and set the new width.
+      const center = (c.filterLowHz + c.filterHighHz) / 2;
+      lo = Math.round(center - next / 2);
+      hi = Math.round(center + next / 2);
+    }
+    const slot = presetIsFixed(c.filterPresetName) || !c.filterPresetName ? 'VAR1' : c.filterPresetName;
+    useConnectionStore.setState({ filterLowHz: lo, filterHighHz: hi, filterPresetName: slot });
+    setFilter(lo, hi, slot).then(c.applyState).catch(() => {});
+  };
+
+  const onWidthKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') e.currentTarget.blur();
+    else if (e.key === 'Escape') { setEditingWidth(false); }
+  };
+
   return (
-    <canvas
-      ref={canvasRef}
-      style={{
-        display: 'block',
-        width: '100%',
-        height: '100%',
-        touchAction: 'none',
-        background: 'transparent',
-      }}
-      onPointerDown={onPointerDown}
-      onPointerMove={(e) => {
-        if (dragRef.current) onPointerMove(e);
-        else onPointerMoveHover(e);
-      }}
-      onPointerUp={onPointerUp}
-      onPointerCancel={onPointerUp}
-    />
+    <div className="filter-minipan-wrap">
+      <canvas
+        ref={canvasRef}
+        className="filter-minipan-canvas"
+        onPointerDown={onPointerDown}
+        onPointerMove={(e) => {
+          if (dragRef.current) onPointerMove(e);
+          else onPointerMoveHover(e);
+        }}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerUp}
+      />
+      {editingWidth ? (
+        <input
+          autoFocus
+          type="number"
+          min={50}
+          step={nudgeStepHz(mode)}
+          value={widthDraft}
+          onChange={(e) => setWidthDraft(e.currentTarget.value)}
+          onBlur={commitWidth}
+          onKeyDown={onWidthKeyDown}
+          aria-label="Filter passband width in Hz"
+          className="filter-minipan-width-input mono"
+          style={{ left: `${pillLeftPct}%` }}
+        />
+      ) : (
+        <button
+          type="button"
+          className="filter-minipan-width-pill mono"
+          title="Passband width — click to set exactly (Hz)"
+          onClick={beginEditWidth}
+          style={{ left: `${pillLeftPct}%` }}
+        >
+          {formatFilterWidth(filterLowHz, filterHighHz)}
+        </button>
+      )}
+    </div>
   );
 }
