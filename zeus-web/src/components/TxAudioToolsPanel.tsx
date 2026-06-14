@@ -55,12 +55,33 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
   }, [chainPanels]);
 
   const masterBypassed = useAudioSuiteStore((s) => s.masterBypassed);
+  const processingMode = useAudioSuiteStore((s) => s.processingMode);
+  const chainOrder = useAudioSuiteStore((s) => s.chainOrder);
   const loadMasterBypassFromServer = useAudioSuiteStore(
     (s) => s.loadMasterBypassFromServer,
   );
   const loadProcessingModeFromServer = useAudioSuiteStore(
     (s) => s.loadProcessingModeFromServer,
   );
+
+  // On the VST route the native v1 blocks don't run — the out-of-process
+  // engine hosts the operator's VST3 plugins instead. Show that chain (in
+  // signal order) so the strip reflects what's actually processing.
+  const vstMode = processingMode === 'vst';
+  const vstSlots = useMemo(() => {
+    if (!vstMode) return [];
+    const orderIndex = new Map(chainOrder.map((id, i) => [id, i] as const));
+    return chainPanels
+      .filter((p) => p.editorBacked === true && orderIndex.has(p.pluginId))
+      .sort((a, b) => orderIndex.get(a.pluginId)! - orderIndex.get(b.pluginId)!)
+      .map((p) => ({
+        id: p.pluginId,
+        title: (p.title || p.pluginId.split('.').pop() || 'VST').toUpperCase(),
+        installed: true,
+      }));
+  }, [vstMode, chainPanels, chainOrder]);
+
+  const slots = vstMode ? vstSlots : v1Slots;
 
   // Pull the master-bypass state from the server once on mount so a
   // fresh browser session reflects the persisted operator preference.
@@ -93,8 +114,15 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
     >
       <ProcessingModeButton />
       <MasterBypassButton />
-      <span style={{ marginRight: 4, color: 'var(--fg-1)', fontWeight: 500 }}>TX chain</span>
-      {v1Slots.map((slot, i) => {
+      <span style={{ marginRight: 4, color: 'var(--fg-1)', fontWeight: 500 }}>
+        {vstMode ? 'VST chain' : 'TX chain'}
+      </span>
+      {vstMode && slots.length === 0 && (
+        <span style={{ color: 'var(--fg-3)', fontSize: 10, fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>
+          No VST3 plugins in the chain — open the Audio Suite to scan and add some.
+        </span>
+      )}
+      {slots.map((slot, i) => {
         // CFC is downstream in WDSP and unaffected by master bypass —
         // never dim it. Plugin slots dim to 45% when bypassed to mirror
         // the per-plugin bypass visual convention (operator sees the
