@@ -228,11 +228,26 @@ public class ControlFrameTests
     [Fact]
     public void ControlFrame_AntennaSelection_Ant2_SetsC3UpperBits()
     {
+        // RX-antenna C3[7:5] is emitted only on relay-capable boards. BaseState
+        // is HL2 (single jack → clamped to ANT1, see the clamp test below), so
+        // use a relay board (Hermes) to exercise the antenna-select math itself.
         Span<byte> cc = stackalloc byte[5];
-        var s = BaseState() with { RxAntenna = HpsdrAntenna.Ant2 };
+        var s = BaseState() with { RxAntenna = HpsdrAntenna.Ant2, Board = HpsdrBoardKind.Hermes };
         ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
         // C3 [7:5] = antenna select; ANT2 = 0b001 → value 0x20.
         Assert.Equal(0b001 << 5, cc[3] & 0b11100000);
+    }
+
+    [Fact]
+    public void ControlFrame_AntennaSelection_Hl2_ClampedToAnt1()
+    {
+        // External-ports plan, Phase 2: HL2 has a single antenna jack — C3[5]
+        // forwards to the N2ADR antenna pad, not an ANT1/2/3 relay — so a
+        // non-ANT1 RX-antenna selection MUST be clamped to ANT1 at the wire.
+        Span<byte> cc = stackalloc byte[5];
+        var s = BaseState() with { RxAntenna = HpsdrAntenna.Ant3 }; // HL2
+        ControlFrame.WriteCcBytes(cc, ControlFrame.CcRegister.Config, s);
+        Assert.Equal(0x00, cc[3] & 0b11100000);
     }
 
     [Fact]

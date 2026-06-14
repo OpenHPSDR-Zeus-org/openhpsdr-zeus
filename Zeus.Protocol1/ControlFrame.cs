@@ -509,23 +509,35 @@ internal static class ControlFrame
     /// <c>Zeus.Server.Hosting.Protocol1PortEncoder</c> call this, so the bytes
     /// on the wire are identical regardless of who composed them.
     ///
-    /// Phase-1 (external-ports plan) is BYTE-IDENTICAL — the wire-layer clamp
-    /// that forces ANT1 on relay-less boards (HL2's single jack drives the
-    /// N2ADR antenna pad off C3[5], not an ANT1/2/3 relay) is scaffolded here
-    /// but intentionally inert: it activates in Phase 2 together with its own
-    /// differential golden test. Until then this reproduces today's emission
-    /// exactly — including HL2's raw C3[7:5] value.
+    /// Phase 2 (external-ports plan) ACTIVATES the wire-layer clamp: on a board
+    /// with no RX-antenna relay (HL2's single jack — C3[5] forwards to the
+    /// N2ADR antenna pad, it does NOT drive an ANT1/2/3 relay), the selection
+    /// is forced to ANT1 here so a stale per-band ANT2/3 value can never flip
+    /// the N2ADR pad. This is the wire layer of the three-layer defence (UI /
+    /// REST / wire); it holds even if an upstream layer is bypassed. For every
+    /// relay-capable board the bytes are unchanged — byte-identical to Phase 1
+    /// and to today, so the default-ANT1 golden tests stay green.
     /// </summary>
     internal static byte EncodeRxAntennaC3Bits(HpsdrAntenna rxAntenna, HpsdrBoardKind board)
     {
-        // Phase 2 will clamp here: `if (!HasRxAntennaRelays(board)) rxAntenna =
-        // HpsdrAntenna.Ant1;`. Kept inert in Phase 1 so the refactor is
-        // byte-identical (the capability lives in Zeus.Server.Hosting, which
-        // this assembly cannot reference; the clamp moves to the encoder seam
-        // where the capability table is available).
-        _ = board;
+        // Wire-layer clamp: relay-less boards (HL2) ignore an ANT2/3 request.
+        // The capability record proper lives in Zeus.Server.Hosting (which this
+        // assembly cannot reference), so the single relay-less P1 board is named
+        // directly here — see BoardCapabilities.HasRxAntennaRelays, false for HL2
+        // only across the P1 lineup.
+        if (!P1BoardHasRxAntennaRelays(board)) rxAntenna = HpsdrAntenna.Ant1;
         return (byte)(((byte)rxAntenna & 0x07) << 5);
     }
+
+    /// <summary>
+    /// Whether a Protocol-1 board has switchable RX-antenna relays (ANT1/2/3).
+    /// Mirrors <c>BoardCapabilities.HasRxAntennaRelays</c> for the P1 lineup:
+    /// every ANAN / Hermes-class board does; Hermes-Lite 2 does not (single
+    /// jack). Kept local to the protocol assembly so the wire-layer clamp does
+    /// not need a reference to Zeus.Server.Hosting.
+    /// </summary>
+    internal static bool P1BoardHasRxAntennaRelays(HpsdrBoardKind board) =>
+        board != HpsdrBoardKind.HermesLite2;
 
     private static void WriteC4DuplexAndRxCount(Span<byte> c14, in CcState s)
     {

@@ -117,12 +117,13 @@ public sealed class Protocol1PortEncoder : IExternalPortEncoder
 
     public byte EncodeP1RxAntennaC3Bits(in ExternalPortState state)
     {
-        // Phase 1: byte-identical. The pure helper ControlFrame.
-        // EncodeRxAntennaC3Bits is the single source of the C3[7:5] math and
-        // is also called inline on the wire path. The relay-presence clamp is
-        // scaffolded (constructor captures _hasRxAntennaRelays) but applied in
-        // Phase 2, where it gets a differential golden test — applying it now
-        // would change HL2's bytes.
+        // The pure helper ControlFrame.EncodeRxAntennaC3Bits is the single
+        // source of the C3[7:5] math and is also called inline on the wire
+        // path. It applies the wire-layer relay-presence clamp itself (forcing
+        // ANT1 on relay-less boards), so a relay-capable P1 board emits the raw
+        // selection and HL2 is clamped — same bytes the inline path produces.
+        // _hasRxAntennaRelays stays available for the encoder's own gating.
+        _ = _hasRxAntennaRelays;
         return ControlFrame.EncodeRxAntennaC3Bits(state.RxAnt, _board);
     }
 
@@ -158,12 +159,13 @@ public sealed class Protocol2PortEncoder : IExternalPortEncoder
 
     public uint EncodeP2TxAntennaBits(in ExternalPortState state)
     {
-        // Phase 1: byte-identical. The wire path still passes a hardcoded
-        // txAnt:1 into ComputeAlexWord, so we mirror that here exactly. Phase 2
-        // threads state.TxAnt through (1-based wire selector) and gates the
-        // [26:24] emission on _hasTxAntennaRelays / variant relay population.
-        _ = _hasTxAntennaRelays;
-        return Protocol2Client.EncodeTxAntennaBits(txAnt: 1);
+        // Gate the alex0[26:24] TX-antenna emission on the variant's relay
+        // population: a board/variant without TX-antenna relays stays on ANT1
+        // regardless of the requested selection, so it can never advertise
+        // ANT2/3. Relay-capable variants thread the real per-band TxAnt through
+        // the shared pure helper (1-based wire selector).
+        int wire = _hasTxAntennaRelays ? (int)state.TxAnt + 1 : 1;
+        return Protocol2Client.EncodeTxAntennaBits(wire);
     }
 }
 
@@ -184,9 +186,10 @@ public sealed class HermesLite2PortEncoder : IExternalPortEncoder
 
     public byte EncodeP1RxAntennaC3Bits(in ExternalPortState state)
     {
-        // Phase 2 will clamp: `EncodeRxAntennaC3Bits(HpsdrAntenna.Ant1, ...)`.
-        // Phase 1 reproduces today's HL2 emission exactly via the shared pure
-        // helper so the golden bytes do not move.
+        // HL2 has no RX-antenna relay (C3[5] drives the N2ADR antenna pad). The
+        // shared pure helper applies the wire-layer clamp for HL2, so whatever
+        // RxAnt the operator persisted, the emitted bits are ANT1 — the N2ADR
+        // pad never flips off a stale per-band ANT2/3.
         return ControlFrame.EncodeRxAntennaC3Bits(state.RxAnt, HpsdrBoardKind.HermesLite2);
     }
 

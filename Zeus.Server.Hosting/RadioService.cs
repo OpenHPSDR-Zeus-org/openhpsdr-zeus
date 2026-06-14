@@ -60,6 +60,7 @@ public sealed class RadioService : IDisposable
     private readonly ILogger<RadioService> _log;
     private readonly DspSettingsStore _dspSettingsStore;
     private readonly PaSettingsStore _paStore;
+    private readonly AntennaSettingsStore? _antennaStore;
     private readonly PreferredRadioStore? _preferredRadioStore;
     private readonly PsSettingsStore? _psStore;
     private readonly FilterPresetStore? _filterPresetStore;
@@ -199,17 +200,20 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, AntennaSettingsStore? antennaStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
         _dspSettingsStore = dspSettingsStore;
         _paStore = paStore;
+        _antennaStore = antennaStore;
         _preferredRadioStore = preferredRadioStore;
         _psStore = psStore;
         _filterPresetStore = filterPresetStore;
         _radioStateStore = radioStateStore;
         _paStore.Changed += RecomputePaAndPush;
+        if (_antennaStore is not null)
+            _antennaStore.Changed += RecomputePaAndPush;
         if (_preferredRadioStore is not null)
             _preferredRadioStore.Changed += RecomputePaAndPush;
         _txIqSource = txIqSource;
@@ -1440,8 +1444,24 @@ public sealed class RadioService : IDisposable
             tunActive, activePct, bandName ?? "?", bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts, driveProfile.BoardLabel, driveByte, paEnabled,
             bandCfg.OcTx, bandCfg.OcRx, bandCfg.OcDxTx, bandCfg.OcDxRx);
 
+        // Per-band TX/RX antenna relay selection (external-ports plan, Phase 2).
+        // Server-authoritative: read from AntennaSettingsStore for the current
+        // band (NOT StateDto — avoids the frontend-clobbers-server-on-connect
+        // bug), and pushed through the SAME RecomputePaAndPush path OC uses.
+        // The relay-capability gate travels in the snapshot so the P2 client
+        // can gate alex0[26:24]; the P1 RX-antenna wire clamp lives in
+        // ControlFrame.EncodeRxAntennaC3Bits and protects HL2 regardless.
+        var caps = BoardCapabilitiesTable.For(EffectiveBoardKind, EffectiveOrionMkIIVariant);
+        var ant = (_antennaStore is not null && bandName is not null)
+            ? _antennaStore.GetBand(bandName)
+            : new AntennaBandSelection(bandName ?? "unknown", HpsdrAntenna.Ant1, HpsdrAntenna.Ant1);
+
         ActiveClient?.SetDriveByte(driveByte);
         ActiveClient?.SetOcMasks(bandCfg.OcTx, bandCfg.OcRx);
+        // P1 RX-antenna (TX is ANT1-hardwired on every P1 board). The wire-layer
+        // clamp in EncodeRxAntennaC3Bits forces ANT1 on HL2, so pushing the
+        // stored value here is safe even for the single-jack board.
+        ActiveClient?.SetAntennaRx(ant.RxAnt);
 
         PaSnapshotChanged?.Invoke(new PaRuntimeSnapshot(
             DriveByte: driveByte,
@@ -1454,7 +1474,10 @@ public sealed class RadioService : IDisposable
             // gated by board+variant, so non-Anvelina radios receive a
             // SetOcDxMasks call but the bytes never reach the wire.
             OcDxTxMask: bandCfg.OcDxTx,
-            OcDxRxMask: bandCfg.OcDxRx));
+            OcDxRxMask: bandCfg.OcDxRx,
+            TxAntenna: ant.TxAnt,
+            RxAntenna: ant.RxAnt,
+            HasTxAntennaRelays: caps.HasTxAntennaRelays));
     }
 
     // Back-compat shim for callers/tests that predate IRadioDriveProfile.
@@ -1849,6 +1872,10 @@ public sealed class RadioService : IDisposable
     public void Dispose()
     {
         _paStore.Changed -= RecomputePaAndPush;
+        if (_antennaStore is not null)
+            _antennaStore.Changed -= RecomputePaAndPush;
+        if (_preferredRadioStore is not null)
+            _preferredRadioStore.Changed -= RecomputePaAndPush;
         try { DisconnectAsync(CancellationToken.None).GetAwaiter().GetResult(); }
         catch { /* best-effort */ }
         _stateFlushTimer?.Dispose();

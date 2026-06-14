@@ -228,7 +228,15 @@ public sealed record PaRuntimeSnapshot(
     byte OcRxMask,
     bool PaEnabled,
     byte OcDxTxMask = 0,
-    byte OcDxRxMask = 0);
+    byte OcDxRxMask = 0,
+    // Per-band antenna relay selection (external-ports plan, Phase 2). Pushed
+    // to the Protocol2Client alongside OC. HasTxAntennaRelays is the board/
+    // variant gate so the P2 client only advertises ANT2/3 on a relay-capable
+    // board; the RX-antenna wire clamp for relay-less boards lives in
+    // ControlFrame.EncodeRxAntennaC3Bits (P1) and is independent of this.
+    HpsdrAntenna TxAntenna = HpsdrAntenna.Ant1,
+    HpsdrAntenna RxAntenna = HpsdrAntenna.Ant1,
+    bool HasTxAntennaRelays = false);
 
 public sealed class PaBandEntry
 {

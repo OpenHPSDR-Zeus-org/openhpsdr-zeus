@@ -1150,6 +1150,58 @@ public static class ZeusEndpoints
             return Results.Ok(new Hl2OptionsDto(BandVolts: effective));
         });
 
+        // Per-band TX/RX antenna relay selection (external-ports plan, Phase 2).
+        // GET returns the relay-capability gates + all HF bands' stored
+        // selections (defaulting to ANT1/ANT1). The frontend gates the TX/RX
+        // selectors on hasTxAntennaRelays / hasRxAntennaRelays. Always 200 —
+        // a non-relay board simply reports the gates false and ANT1 rows.
+        app.MapGet("/api/radio/antenna", (RadioService radio, AntennaSettingsStore store) =>
+        {
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            var bands = store.GetAll()
+                .Select(b => new AntennaBandDto(b.Band, b.TxAnt.ToString(), b.RxAnt.ToString()))
+                .ToArray();
+            return Results.Ok(new AntennaSettingsDto(
+                HasTxAntennaRelays: caps.HasTxAntennaRelays,
+                HasRxAntennaRelays: caps.HasRxAntennaRelays,
+                Bands: bands));
+        });
+
+        // PUT one band's antenna selection. Capability-gated: 400 on a malformed
+        // body / unknown band / unparseable antenna; 409 when the request asks
+        // for a relay the connected board does not have (a non-ANT1 TX on a
+        // board without TX relays, or non-ANT1 RX on a board without RX relays).
+        // ANT1 is always accepted (it is the hardwired default on every board).
+        app.MapPut("/api/radio/antenna", (AntennaSetRequest req, RadioService radio, AntennaSettingsStore store) =>
+        {
+            if (req is null || string.IsNullOrWhiteSpace(req.Band))
+                return Results.BadRequest(new { error = "band required" });
+            if (!BandUtils.HfBands.Contains(req.Band))
+                return Results.BadRequest(new { error = $"unknown band '{req.Band}'" });
+            if (!Enum.TryParse<HpsdrAntenna>(req.TxAnt, ignoreCase: true, out var txAnt))
+                return Results.BadRequest(new { error = $"unknown txAnt '{req.TxAnt}'" });
+            if (!Enum.TryParse<HpsdrAntenna>(req.RxAnt, ignoreCase: true, out var rxAnt))
+                return Results.BadRequest(new { error = $"unknown rxAnt '{req.RxAnt}'" });
+
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            if (txAnt != HpsdrAntenna.Ant1 && !caps.HasTxAntennaRelays)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no TX antenna relays; only Ant1 is valid" });
+            if (rxAnt != HpsdrAntenna.Ant1 && !caps.HasRxAntennaRelays)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no RX antenna relays; only Ant1 is valid" });
+
+            // Save fires Changed → RadioService.RecomputePaAndPush, which reads
+            // the new per-band selection and pushes it server-authoritatively to
+            // the live client (P1 SetAntennaRx / P2 SetAntennas) — never via the
+            // frontend, so no clobber-on-connect. The wire layer defers a mid-key
+            // relay change to the unkey edge.
+            store.SetBand(req.Band, txAnt, rxAnt);
+
+            var bands = store.GetAll()
+                .Select(b => new AntennaBandDto(b.Band, b.TxAnt.ToString(), b.RxAnt.ToString()))
+                .ToArray();
+            return Results.Ok(new AntennaSettingsDto(caps.HasTxAntennaRelays, caps.HasRxAntennaRelays, bands));
+        });
+
         // Per-radio frequency calibration (issue #325). GET returns the
         // persisted correction factor + its ppm representation. POST
         // /calibrate runs the one-button auto-cal procedure (snapshot

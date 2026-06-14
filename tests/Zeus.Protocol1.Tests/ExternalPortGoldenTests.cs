@@ -97,22 +97,43 @@ public class ExternalPortGoldenTests
         Assert.Equal(0x04, cc[4]);
     }
 
-    [Fact]
-    public void Config_Hl2_C3_RxAntenna_CoTenants_BandVolts_AreLocked()
+    // DIFFERENTIAL (external-ports plan, Phase 2): the HL2 RX-antenna wire
+    // clamp. HL2 has a single jack — C3[5] drives the N2ADR antenna pad, not an
+    // ANT1/2/3 relay — so an operator (or a stale per-band) ANT2/3 MUST be
+    // forced to ANT1 at the wire layer. The co-tenant band-volts[3] / preamp[4]
+    // bits are preserved; only the [7:5] antenna field is zeroed.
+    [Theory]
+    [InlineData(HpsdrAntenna.Ant1)]
+    [InlineData(HpsdrAntenna.Ant2)]
+    [InlineData(HpsdrAntenna.Ant3)]
+    public void Config_Hl2_C3_RxAntenna_IsClampedToAnt1(HpsdrAntenna requested)
     {
-        // HL2 today emits C3[7:5] unconditionally (the value flows to the
-        // N2ADR antenna pad). Lock TODAY's bytes; the Phase-2 clamp will
-        // change this on purpose, with its own test.
         var cc = Config(Hl2State() with
         {
-            RxAntenna = HpsdrAntenna.Ant2,
+            RxAntenna = requested,
             EnableHl2BandVolts = true,
             PreampOn = true,
         });
 
-        // band-volts[3]=0x08 | preamp[4]=0x10 | Ant2 [7:5]=0x20 → 0x38.
-        Assert.Equal(0x38, cc[3]);
+        // band-volts[3]=0x08 | preamp[4]=0x10 | antenna [7:5]=0 (clamped) → 0x18,
+        // regardless of which antenna was requested.
+        Assert.Equal(0x18, cc[3]);
         Assert.Equal(0x04, cc[4]);
+        // Antenna field is hard-zero on HL2.
+        Assert.Equal(0x00, cc[3] & 0xE0);
+    }
+
+    // A relay-capable P1 board (Hermes) reflects the selection in C3[7:5] — the
+    // other side of the differential. This is the same lock as
+    // Config_C3_RxAntenna_Bits_AreLocked but stated as the HL2-clamp contrast.
+    [Theory]
+    [InlineData(HpsdrAntenna.Ant1, 0x00)]
+    [InlineData(HpsdrAntenna.Ant2, 0x20)]
+    [InlineData(HpsdrAntenna.Ant3, 0x40)]
+    public void Config_RelayBoard_C3_RxAntenna_ReflectsSelection(HpsdrAntenna ant, byte expectedC3)
+    {
+        var cc = Config(HermesState() with { RxAntenna = ant });
+        Assert.Equal(expectedC3, cc[3]);
     }
 
     // ---- OC mask C2[7:1] — MOX selects TX vs RX mask ----

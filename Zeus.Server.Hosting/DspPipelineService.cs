@@ -1305,6 +1305,13 @@ public class DspPipelineService : BackgroundService,
         // connected board+variant. Non-Anvelina P2 boards see byte 1397
         // stay at zero per EU2AV's reserved-bit rule.
         p2.SetOcDxMasks(snap.OcDxTxMask, snap.OcDxRxMask);
+        // Per-band antenna relay selection (external-ports plan, Phase 2). The
+        // P2 client gates alex0[26:24] on snap.HasTxAntennaRelays and defers the
+        // relay re-push if keyed (§3.4(1)); RX antenna rides for the Phase-5
+        // Alex path. Convert the 0-based HpsdrAntenna to the 1-based wire
+        // selector the P2 client uses. Default ANT1 / no-relay reproduces
+        // today's wire bit-for-bit.
+        p2.SetAntennas((int)snap.TxAntenna + 1, (int)snap.RxAntenna + 1, snap.HasTxAntennaRelays);
         p2.SetPaEnabled(snap.PaEnabled);
     }
 

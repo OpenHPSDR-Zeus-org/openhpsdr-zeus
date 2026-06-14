@@ -186,6 +186,22 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // out as the reserved-bit safe default for non-Anvelina firmware.
     private byte _ocDxTxMask;
     private byte _ocDxRxMask;
+    // TX/RX antenna relay selection (external-ports plan, Phase 2). 1-based wire
+    // selector (1=ANT1, 2=ANT2, 3=ANT3) — same convention as
+    // EncodeTxAntennaBits, so this assembly needs no reference to the
+    // HpsdrAntenna enum (which lives in Zeus.Protocol1; P2 references only
+    // Zeus.Contracts). _txAntenna feeds alex0[26:24] via ComputeAlexWord;
+    // _rxAntenna is carried for the RX-antenna Alex path (Phase 5). These are
+    // the *applied* values — the wire reads them. While keyed, an operator
+    // setter stashes into _pending* and is flushed on the next unkey edge so
+    // the Alex relay matrix is never hot-switched under power (§3.4(1)). The
+    // [26:24] emission is additionally gated on _hasTxAntennaRelays so single-
+    // relay / non-relay boards never advertise ANT2/3. -1 = nothing pending.
+    private int _txAntenna = 1;
+    private int _rxAntenna = 1;
+    private int _pendingTxAntenna = -1;
+    private int _pendingRxAntenna = -1;
+    private bool _hasTxAntennaRelays;
     private bool _moxOn;
     private bool _tuneActive;
     private long _totalFrames;
@@ -620,6 +636,61 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
+    /// <summary>
+    /// Set the TX/RX antenna relay selection (external-ports plan, Phase 2).
+    /// <paramref name="txAntWire"/>/<paramref name="rxAntWire"/> are the 1-based
+    /// wire selectors (1=ANT1, 2=ANT2, 3=ANT3); out-of-range coerces to ANT1.
+    /// <paramref name="hasTxAntennaRelays"/> is the board/variant relay gate
+    /// (from <c>BoardCapabilities.HasTxAntennaRelays</c>) — when false the
+    /// alex0[26:24] TX-antenna bits stay on ANT1 regardless of selection, so a
+    /// single-relay / non-relay variant never advertises ANT2/3.
+    ///
+    /// SAFETY (§3.4(1)): the Alex relay matrix must never be hot-switched while
+    /// keyed. When MOX or TUNE is active this defers the new selection into
+    /// <see cref="_pendingTxAntenna"/>/<see cref="_pendingRxAntenna"/> and does
+    /// NOT re-push HighPriority; the deferred value is flushed and emitted on
+    /// the next unkey edge (<see cref="SetMox"/>/<see cref="SetTune"/> off). PS
+    /// / MOX / OC / duplex bytes are untouched here.
+    /// </summary>
+    public void SetAntennas(int txAntWire, int rxAntWire, bool hasTxAntennaRelays)
+    {
+        int tx = (txAntWire is 1 or 2 or 3) ? txAntWire : 1;
+        int rx = (rxAntWire is 1 or 2 or 3) ? rxAntWire : 1;
+        _hasTxAntennaRelays = hasTxAntennaRelays;
+
+        if (_moxOn || _tuneActive)
+        {
+            // Keyed: stash the desired state, leave the live relay bits alone.
+            _pendingTxAntenna = tx;
+            _pendingRxAntenna = rx;
+            return;
+        }
+
+        bool changed = _txAntenna != tx || _rxAntenna != rx;
+        _txAntenna = tx;
+        _rxAntenna = rx;
+        _pendingTxAntenna = -1;
+        _pendingRxAntenna = -1;
+        if (changed && _rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    // Apply any antenna selection deferred while keyed. Called on the unkey
+    // edge from SetMox/SetTune AFTER the MOX/TUNE flag clears, so the relay
+    // re-push happens at idle, never under power. Returns true if a re-push is
+    // warranted (the caller's SendCmdHighPriority covers it).
+    private bool FlushPendingAntennas()
+    {
+        if (_pendingTxAntenna < 0 && _pendingRxAntenna < 0) return false;
+        int tx = _pendingTxAntenna >= 0 ? _pendingTxAntenna : _txAntenna;
+        int rx = _pendingRxAntenna >= 0 ? _pendingRxAntenna : _rxAntenna;
+        bool changed = _txAntenna != tx || _rxAntenna != rx;
+        _txAntenna = tx;
+        _rxAntenna = rx;
+        _pendingTxAntenna = -1;
+        _pendingRxAntenna = -1;
+        return changed;
+    }
+
     public void SetPaEnabled(bool enabled)
     {
         _paEnabled = enabled;
@@ -630,6 +701,11 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         _moxOn = on;
         if (!on) ResetTxIq();
+        // Unkey edge: apply any antenna selection deferred while keyed (§3.4(1))
+        // before the HighPriority re-push, so the relay matrix switches at idle
+        // and the very next HP frame carries the operator's new antenna. Only
+        // flush when fully unkeyed (a TUNE could still be active).
+        if (!on && !_tuneActive) FlushPendingAntennas();
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
@@ -637,6 +713,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         _tuneActive = on;
         if (!on) ResetTxIq();
+        if (!on && !_moxOn) FlushPendingAntennas();
         if (_rxTask is not null) SendCmdHighPriority(run: true);
     }
 
@@ -1302,7 +1379,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // harmonics. Alex1 additionally gets RX_GNDonTX to short the RX input
         // while keyed, protecting the ADC.
         bool xmit = _moxOn || _tuneActive;
-        uint alexCommon = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: 1, board: _boardKind);
+        // TX-antenna relay select (external-ports plan, Phase 2). Gate the
+        // alex0[26:24] emission on the board/variant relay population: a non-
+        // relay variant stays on ANT1 and never advertises ANT2/3. _txAntenna
+        // is the 1-based wire selector and is only ever updated at idle (mid-key
+        // changes defer — §3.4(1)), so the relay matrix is never hot-switched.
+        int txAntWire = _hasTxAntennaRelays ? _txAntenna : 1;
+        uint alexCommon = ComputeAlexWord(_rxFreqHz, _rxFreqHz, txAnt: txAntWire, board: _boardKind);
         uint alex0 = alexCommon | (xmit ? ALEX_TX_RELAY : 0u);
         uint alex1 = alexCommon | (xmit ? ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX : 0u);
         // ALEX_PS_BIT (0x00040000): pihpsdr new_protocol.c:994-998 ORs this
@@ -1402,9 +1485,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         bool moxOn,
         bool psEnabled,
         bool psExternal,
-        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)
+        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII,
+        int txAntWire = 1,
+        bool hasTxAntennaRelays = false)
     {
-        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: 1, board: board);
+        // Mirrors the SendCmdHighPriority alex0 path including the Phase-2 TX-
+        // antenna gate: hasTxAntennaRelays false stays on ANT1, true threads
+        // the 1-based wire selector. Default args reproduce the pre-Phase-2
+        // hardcoded ANT1 word, so the original golden tests stay byte-identical.
+        int wire = hasTxAntennaRelays ? txAntWire : 1;
+        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: wire, board: board);
         uint alex0 = alexCommon | (moxOn ? ALEX_TX_RELAY : 0u);
         if (psEnabled && moxOn) alex0 |= AlexPsBit;
         if (psEnabled && psExternal && moxOn) alex0 |= AlexRxAntennaBypass;

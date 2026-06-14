@@ -94,6 +94,71 @@ public class ExternalPortAlexGoldenTests
         Assert.Equal(AlexCommon, alex0);
     }
 
+    // ---- TX-antenna select alex0[26:24] (external-ports plan, Phase 2) ----
+
+    // The fixture's BPF+LPF bits without ANY TX-antenna bit (AlexCommon minus
+    // ALEX_TX_ANTENNA_1). Antenna bits are added on top per selection.
+    private const uint AlexNoAnt = 0x00100002u;
+    private const uint TxAnt1 = 0x01000000u;
+    private const uint TxAnt2 = 0x02000000u;
+    private const uint TxAnt3 = 0x04000000u;
+
+    // DIFFERENTIAL: on a relay-capable board (G2 / OrionMkII) the selected TX
+    // antenna flips alex0[26:24], and nothing else moves. PS / TX-relay / BPF /
+    // LPF bits are untouched.
+    [Theory]
+    [InlineData(1, TxAnt1)]
+    [InlineData(2, TxAnt2)]
+    [InlineData(3, TxAnt3)]
+    public void Alex0_Idle_TxAntenna_FlipsBits_OnRelayBoard(int txAntWire, uint expectedAntBits)
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: Rx, moxOn: false, psEnabled: false, psExternal: false,
+            board: HpsdrBoardKind.OrionMkII,
+            txAntWire: txAntWire, hasTxAntennaRelays: true);
+        Assert.Equal(AlexNoAnt | expectedAntBits, alex0);
+    }
+
+    // During xmit the TX-relay rides alongside the selected antenna — confirm
+    // the two are disjoint and both present.
+    [Fact]
+    public void Alex0_Xmit_TxAntenna2_AddsAntAndTxRelay()
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: Rx, moxOn: true, psEnabled: false, psExternal: false,
+            board: HpsdrBoardKind.OrionMkII,
+            txAntWire: 2, hasTxAntennaRelays: true);
+        Assert.Equal(AlexNoAnt | TxAnt2 | TxRelay, alex0);
+    }
+
+    // PS armed + ANT3 mid-xmit: the PS bit and the antenna bits coexist; PS is
+    // never disturbed by the antenna selection.
+    [Fact]
+    public void Alex0_Xmit_TxAntenna3_PsInternal_KeepsPsBit()
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: Rx, moxOn: true, psEnabled: true, psExternal: false,
+            board: HpsdrBoardKind.OrionMkII,
+            txAntWire: 3, hasTxAntennaRelays: true);
+        Assert.Equal(AlexNoAnt | TxAnt3 | TxRelay | PsBit, alex0);
+    }
+
+    // GATE: a board/variant WITHOUT TX-antenna relays must NOT advertise ANT2/3
+    // even when ANT2/3 is requested — it stays on ANT1. This is the single-relay
+    // / non-relay safety, and it keeps the ANT1 default byte-identical.
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public void Alex0_Idle_NonRelayBoard_StaysOnAnt1(int txAntWire)
+    {
+        uint alex0 = Protocol2Client.ComposeAlex0ForTest(
+            rxFreqHz: Rx, moxOn: false, psEnabled: false, psExternal: false,
+            board: HpsdrBoardKind.OrionMkII,
+            txAntWire: txAntWire, hasTxAntennaRelays: false);
+        Assert.Equal(AlexCommon, alex0); // AlexCommon already carries ANT1
+    }
+
     // ---- alex1 (offset 1428) ----
 
     [Fact]

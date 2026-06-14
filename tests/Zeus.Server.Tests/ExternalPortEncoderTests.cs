@@ -93,24 +93,30 @@ public class ExternalPortEncoderTests
         Assert.Equal(expected, bits);
     }
 
-    [Fact]
-    public void Hl2Encoder_RxAntennaC3Bits_StillRawInPhase1()
+    [Theory]
+    [InlineData(HpsdrAntenna.Ant1)]
+    [InlineData(HpsdrAntenna.Ant2)]
+    [InlineData(HpsdrAntenna.Ant3)]
+    public void Hl2Encoder_RxAntennaC3Bits_ClampedToAnt1(HpsdrAntenna requested)
     {
-        // Phase 1 is byte-identical: HL2 still emits the raw C3[7:5] value
-        // (the Phase-2 clamp to ANT1 is inert). This pins that the clamp has
-        // NOT activated early — if it had, Ant2 would encode as 0x00.
+        // Phase 2: HL2 has no RX-antenna relay — C3[7:5] is hard-clamped to
+        // ANT1 (0x00) at the wire layer regardless of the requested antenna,
+        // so a stale per-band ANT2/3 can never flip the N2ADR antenna pad.
         var encoder = ExternalPortEncoders.For(HpsdrBoardKind.HermesLite2);
-        byte bits = encoder.EncodeP1RxAntennaC3Bits(new ExternalPortState(RxAnt: HpsdrAntenna.Ant2));
-        Assert.Equal(0x20, bits);
+        byte bits = encoder.EncodeP1RxAntennaC3Bits(new ExternalPortState(RxAnt: requested));
+        Assert.Equal(0x00, bits);
     }
 
-    [Fact]
-    public void P2Encoder_TxAntennaBits_AreAnt1InPhase1()
+    [Theory]
+    [InlineData(HpsdrAntenna.Ant1, 0x01000000u)]
+    [InlineData(HpsdrAntenna.Ant2, 0x02000000u)]
+    [InlineData(HpsdrAntenna.Ant3, 0x04000000u)]
+    public void P2Encoder_TxAntennaBits_ThreadSelection_OnRelayBoard(HpsdrAntenna ant, uint expected)
     {
-        // Phase 1 keeps the hardcoded ANT1 (0x01000000) regardless of the
-        // desired TxAnt — the real per-band thread-through is Phase 2.
+        // Phase 2: a relay-capable variant (G2 / OrionMkII) threads the real
+        // per-band TX antenna into alex0[26:24].
         var encoder = ExternalPortEncoders.For(HpsdrBoardKind.OrionMkII);
-        uint bits = encoder.EncodeP2TxAntennaBits(new ExternalPortState(TxAnt: HpsdrAntenna.Ant3));
-        Assert.Equal(0x01000000u, bits);
+        uint bits = encoder.EncodeP2TxAntennaBits(new ExternalPortState(TxAnt: ant));
+        Assert.Equal(expected, bits);
     }
 }

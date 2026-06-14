@@ -600,6 +600,23 @@ public sealed record RadioSelectionSetRequest(
 // against the OrionMkIIVariant enum. Empty / unknown rejected with 400.
 public sealed record RadioVariantSetRequest(string Variant);
 
+// Per-band TX/RX antenna relay selection surfaced via /api/radio/antenna
+// (external-ports plan, Phase 2). Antenna strings are "Ant1" | "Ant2" |
+// "Ant3" (forward-compatible, parsed against HpsdrAntenna server-side). The
+// GET response carries the relay-capability gates so the frontend can render
+// the right selectors; the per-band rows let the panel show all HF bands.
+public sealed record AntennaBandDto(string Band, string TxAnt, string RxAnt);
+
+public sealed record AntennaSettingsDto(
+    bool HasTxAntennaRelays,
+    bool HasRxAntennaRelays,
+    IReadOnlyList<AntennaBandDto> Bands);
+
+// Mutating version — sets ONE band's antenna selection. Band must be a known
+// HF band; TxAnt/RxAnt must parse to HpsdrAntenna. The server rejects a
+// request that targets a relay the connected board lacks with 409.
+public sealed record AntennaSetRequest(string Band, string TxAnt, string RxAnt);
+
 // HL2-specific optional toggles surfaced via /api/radio/hl2-options.
 // Shape is an object (not a bare bool) so future mi0bot HL2 toggles can
 // slot in without breaking the contract. Currently carries Band Volts

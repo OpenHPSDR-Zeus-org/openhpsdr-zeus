@@ -338,6 +338,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<LayoutStore>();
         builder.Services.AddSingleton<DspSettingsStore>();
         builder.Services.AddSingleton<PaSettingsStore>();
+        builder.Services.AddSingleton<AntennaSettingsStore>();
         builder.Services.AddSingleton<PreferredRadioStore>();
         builder.Services.AddSingleton<PsSettingsStore>();
         builder.Services.AddSingleton<FilterPresetStore>();

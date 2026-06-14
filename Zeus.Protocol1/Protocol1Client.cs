@@ -86,6 +86,12 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _preamp;       // 0 / 1
     private int _attenDb;      // 0..31 dB (HpsdrAtten value)
     private int _antenna = (int)HpsdrAntenna.Ant1;
+    // Antenna selection deferred while keyed (external-ports plan, Phase 2,
+    // §3.4(1)). The C&C TX loop reads _antenna every frame, so applying a new
+    // RX-antenna mid-key would hot-switch the relay under power. SetAntennaRx
+    // stashes here while MOX is active; SetMox(false) flushes it to _antenna on
+    // the unkey edge. -1 = nothing pending.
+    private int _pendingAntenna = -1;
     // HL2 Band Volts PWM enable. Wire encoding is C3 bit 3 of the Config
     // frame — same bit that legacy HPSDR boards used for ADC DITHER, which
     // HL2's AD9866 doesn't need (see hermes-lite2-protocol.md line 39 and
@@ -566,12 +572,36 @@ public sealed class Protocol1Client : IProtocol1Client
     public void SetSampleRate(HpsdrSampleRate rate) => Interlocked.Exchange(ref _rate, (int)rate);
     public void SetPreamp(bool on) => Interlocked.Exchange(ref _preamp, on ? 1 : 0);
     public void SetAttenuator(HpsdrAtten atten) => Interlocked.Exchange(ref _attenDb, atten.ClampedDb);
-    public void SetAntennaRx(HpsdrAntenna ant) => Interlocked.Exchange(ref _antenna, (int)ant);
+    public void SetAntennaRx(HpsdrAntenna ant)
+    {
+        // §3.4(1): never hot-switch the RX-antenna relay while keyed. Defer to
+        // the unkey edge (SetMox(false) flushes _pendingAntenna). Reads of _mox
+        // and the two writes don't need to be atomic w.r.t. each other — a
+        // change racing the MOX edge is resolved by SetMox's flush either way.
+        if (Volatile.Read(ref _mox) != 0)
+        {
+            Interlocked.Exchange(ref _pendingAntenna, (int)ant);
+            return;
+        }
+        Interlocked.Exchange(ref _pendingAntenna, -1);
+        Interlocked.Exchange(ref _antenna, (int)ant);
+    }
     public void SetBoardKind(HpsdrBoardKind board) => Interlocked.Exchange(ref _boardKind, (int)board);
 
     public HpsdrBoardKind BoardKind => (HpsdrBoardKind)Volatile.Read(ref _boardKind);
     public void SetHasN2adr(bool hasN2adr) => Interlocked.Exchange(ref _hasN2adr, hasN2adr ? 1 : 0);
-    public void SetMox(bool on) => Interlocked.Exchange(ref _mox, on ? 1 : 0);
+    public void SetMox(bool on)
+    {
+        Interlocked.Exchange(ref _mox, on ? 1 : 0);
+        // Unkey edge: apply any RX-antenna change deferred while keyed so the
+        // relay switches at idle, never under power (§3.4(1)). The next C&C
+        // frame then carries the operator's selection.
+        if (!on)
+        {
+            int pending = Interlocked.Exchange(ref _pendingAntenna, -1);
+            if (pending >= 0) Interlocked.Exchange(ref _antenna, pending);
+        }
+    }
     public void SetDrive(int percent) =>
         Interlocked.Exchange(ref _drivePct, Math.Clamp(percent, 0, 100));
 
