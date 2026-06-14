@@ -63,6 +63,25 @@ public sealed class TxService
     // the owning source can drop MOX, except UI (master override) and
     // <see cref="TryTripForAlert"/> (always wins). Null when MOX is off.
     private MoxSource? _moxOwner;
+    // TX pre-key (MOX) delay window deadline, in Stopwatch ticks (issue #630).
+    // 0 = no active window. Armed on a UI MOX/TUNE rising edge in a voice mode
+    // when RadioService.TxMoxPreKeyDelayMs > 0; TxAudioIngest reads it on the
+    // audio thread and substitutes silence for modulated IQ until the deadline,
+    // so an external amp's T/R relay settles before RF appears. Cleared on every
+    // MOX-off, TUN-on, two-tone, and trip so a stale deadline can never bleed
+    // into a later transmission. Written under _sync, read lock-free via
+    // Interlocked elsewhere.
+    private long _preKeyOpenAtTicks;
+
+    /// <summary>Stopwatch-tick deadline until which modulated TX IQ should be
+    /// muted (silence substituted) after a UI MOX/TUNE key-down. 0 = no mute.
+    /// Read by <see cref="TxAudioIngest"/> on the audio thread.</summary>
+    public long PreKeyOpenAtTicks => Interlocked.Read(ref _preKeyOpenAtTicks);
+
+    // CW is excluded from the pre-key window: a blanket delay would clip the
+    // first dit, and Thetis's RF Delay is likewise non-CW. Mirrors
+    // ExternalPttService.IsCwMode.
+    private static bool IsCwMode(RxMode mode) => mode is RxMode.CWU or RxMode.CWL;
 
     public TxService(RadioService radio, DspPipelineService pipeline, StreamingHub hub, IBandPlanService bandPlan, ILogger<TxService> log)
     {
@@ -184,6 +203,17 @@ public sealed class TxService
 
         if (on && !CheckBandGuard(out error)) return false;
 
+        // Pre-key (MOX) delay arming inputs (issue #630). Read RadioService
+        // OUTSIDE _sync — Snapshot()/TxMoxPreKeyDelayMs take the RadioService
+        // lock and must never nest under _sync. Only a UI-sourced key-down in a
+        // voice (non-CW) mode arms the IQ-mute window; TCI / hardware-PTT / CWX /
+        // plugin keying never arm it.
+        int preKeyMs = on && source == MoxSource.UI ? _radio.TxMoxPreKeyDelayMs : 0;
+        bool armPreKey = preKeyMs > 0 && !IsCwMode(_radio.Snapshot().Mode);
+        long preKeyDelayTicks = armPreKey
+            ? (long)(preKeyMs / 1000.0 * System.Diagnostics.Stopwatch.Frequency)
+            : 0;
+
         bool wasTunOn;
         bool? txActiveCaptured;
         lock (_sync)
@@ -212,11 +242,15 @@ public sealed class TxService
                 _tunStartedAt = null;
                 _moxStartedAt = DateTime.UtcNow;
                 _moxOwner = source;
+                // Anchor the mute deadline at the same instant we stamp MOX-on.
+                Interlocked.Exchange(ref _preKeyOpenAtTicks,
+                    armPreKey ? System.Diagnostics.Stopwatch.GetTimestamp() + preKeyDelayTicks : 0);
             }
             else
             {
                 _moxStartedAt = null;
                 _moxOwner = null;
+                Interlocked.Exchange(ref _preKeyOpenAtTicks, 0);
             }
             _moxOn = on;
             txActiveCaptured = CaptureTxActiveChangeUnderLock();
@@ -290,6 +324,9 @@ public sealed class TxService
                 // gate in TrySetMox correctly rejects a foreign drop while
                 // the two-tone test is armed.
                 _moxOwner = MoxSource.UI;
+                // Two-tone excitation comes from TxTuneDriver/PostGen, not the
+                // mic seam, so it is never pre-key-muted; clear any window.
+                Interlocked.Exchange(ref _preKeyOpenAtTicks, 0);
             }
             else
             {
@@ -357,6 +394,9 @@ public sealed class TxService
                 _moxStartedAt = null;
                 // Whoever owned MOX just lost the channel — TUN took it.
                 _moxOwner = null;
+                // TUN IQ comes from TxTuneDriver, not the muted mic seam; clear
+                // any pending pre-key window so a stale deadline can't mute it.
+                Interlocked.Exchange(ref _preKeyOpenAtTicks, 0);
                 _tunStartedAt = DateTime.UtcNow;
             }
             else
@@ -413,6 +453,7 @@ public sealed class TxService
             // Trip always wins regardless of owner. Drop ownership so the
             // next rising edge starts from a clean source.
             _moxOwner = null;
+            Interlocked.Exchange(ref _preKeyOpenAtTicks, 0);
             txActiveCaptured = CaptureTxActiveChangeUnderLock();
         }
 

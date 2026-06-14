@@ -28,6 +28,7 @@ import {
   setPsMonitor,
   resetPs,
   setTwoTone,
+  setTxPreKeyDelay,
 } from '../api/client';
 import { useRadioStore } from '../state/radio-store';
 import { useTxStore } from '../state/tx-store';
@@ -77,6 +78,8 @@ export function PsSettingsPanel() {
   const psSingle = useTxStore((s) => s.psSingle);
   const psPtol = useTxStore((s) => s.psPtol);
   const psAutoAttenuate = useTxStore((s) => s.psAutoAttenuate);
+  const txMoxPreKeyDelayMs = useTxStore((s) => s.txMoxPreKeyDelayMs);
+  const setTxMoxPreKeyDelayMsLocal = useTxStore((s) => s.setTxMoxPreKeyDelayMs);
   const psMoxDelaySec = useTxStore((s) => s.psMoxDelaySec);
   const psLoopDelaySec = useTxStore((s) => s.psLoopDelaySec);
   const psAmpDelayNs = useTxStore((s) => s.psAmpDelayNs);
@@ -534,6 +537,27 @@ export function PsSettingsPanel() {
             Timing
             <span className="ps-card-hint">defaults assume your radio</span>
           </h4>
+
+          <FieldRow
+            label="TX delay"
+            help="Wait after key-down before RF (external amp T/R relay). 0 for CW/digital. Issue #630."
+          >
+            <NumberInput
+              value={txMoxPreKeyDelayMs}
+              min={0}
+              max={500}
+              step={5}
+              unit="ms"
+              onChange={(v) => {
+                // Optimistic local update; reconcile with the server-applied
+                // value, which may be clamped below the PS MOX hold-off below.
+                setTxMoxPreKeyDelayMsLocal(v);
+                setTxPreKeyDelay(v)
+                  .then((r) => setTxMoxPreKeyDelayMsLocal(r.txMoxPreKeyDelayMs))
+                  .catch(() => {});
+              }}
+            />
+          </FieldRow>
 
           <FieldRow
             label="MOX delay"

@@ -282,6 +282,19 @@ public sealed record StateDto(
     // would make pressing TUN appear to do nothing on first key.
     int TunePct = 10,
 
+    // ---- TX pre-key (MOX) delay ----
+    // Milliseconds to withhold modulated RF after a UI MOX/TUNE key-down so an
+    // external amplifier's T/R relay has time to settle before RF appears
+    // (Thetis "RF Delay" parity; issue #630). Zeus keys only via the software
+    // MOX bit — there is no hardware PTT-OUT line — so this is framed as a MOX
+    // delay. 0..500, default 0 = no behaviour change. The keying bit is still
+    // asserted immediately on key-down; only the IQ is muted (replaced with
+    // silence, never dropped — dropping starves the P2 DUC FIFO). Persisted to
+    // LiteDB via RadioStateStore, same pattern as DrivePct. The setter clamps
+    // this strictly below the PureSignal MOX hold-off so PS can never try to
+    // calibrate on muted RF — see RadioService.SetTxMoxPreKeyDelayMs.
+    int TxMoxPreKeyDelayMs = 0,
+
     // Hardware NCO frequency in Hz. Independent of VfoHz: the dial roams over
     // the sampled spectrum while the radio's hardware centre stays put.
     // Updated only by explicit calls to <c>POST /api/radio/lo</c> (or by the
@@ -358,6 +371,10 @@ public sealed record AttenuatorSetRequest(int Db);
 public sealed record MoxSetRequest(bool On);
 
 public sealed record DriveSetRequest(int Percent);
+
+/// <summary>TX pre-key (MOX) delay in milliseconds, 0..500. See
+/// <see cref="StateDto.TxMoxPreKeyDelayMs"/>.</summary>
+public sealed record TxPreKeyDelaySetRequest(int DelayMs);
 
 // TUN has its own drive % so the operator can pre-set a lower tune level
 // without touching the MOX drive. Same per-band PA gain compensates both,

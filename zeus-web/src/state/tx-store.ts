@@ -204,6 +204,12 @@ export type TxState = {
   setPsPtol: (on: boolean) => void;
   psAutoAttenuate: boolean;
   setPsAutoAttenuate: (on: boolean) => void;
+  // TX pre-key (MOX) delay in ms (issue #630) — withholds RF after a UI
+  // MOX/TUNE key-down so an external amp's T/R relay settles before RF. Server
+  // is authoritative (clamped below the PS MOX hold-off); mirrored here so the
+  // input doesn't flicker on reload.
+  txMoxPreKeyDelayMs: number;
+  setTxMoxPreKeyDelayMs: (ms: number) => void;
   psMoxDelaySec: number;
   setPsMoxDelaySec: (s: number) => void;
   psLoopDelaySec: number;
@@ -383,6 +389,8 @@ export const useTxStore = create<TxState>()(
       setPsPtol: (on) => set({ psPtol: on }),
       psAutoAttenuate: true,
       setPsAutoAttenuate: (on) => set({ psAutoAttenuate: on }),
+      txMoxPreKeyDelayMs: 0,
+      setTxMoxPreKeyDelayMs: (ms) => set({ txMoxPreKeyDelayMs: ms }),
       psMoxDelaySec: 0.2,
       setPsMoxDelaySec: (s) => set({ psMoxDelaySec: s }),
       psLoopDelaySec: 0,
@@ -448,6 +456,7 @@ export const useTxStore = create<TxState>()(
           tunePercent: s.tunePercent,
           micGainDb: s.micGainDb,
           levelerMaxGainDb: s.levelerMaxGainDb,
+          txMoxPreKeyDelayMs: s.txMoxPreKeyDelayMs,
           psAuto: s.psAuto,
           psPtol: s.psPtol,
           psAutoAttenuate: s.psAutoAttenuate,
@@ -494,6 +503,7 @@ export const useTxStore = create<TxState>()(
       partialize: (s) => ({
         // PS tuning is persisted server-side too, but we mirror it here so
         // the slider seeks don't flicker on first paint after a reload.
+        txMoxPreKeyDelayMs: s.txMoxPreKeyDelayMs,
         psAuto: s.psAuto,
         psPtol: s.psPtol,
         psAutoAttenuate: s.psAutoAttenuate,
