@@ -104,7 +104,25 @@ describe('usePluginsStore', () => {
   });
 
   it('install posts the request, then refreshes the installed list', async () => {
-    // Two server hits: POST /install → DTO, then GET /plugins → list.
+    // Three server hits: POST /install → DTO, then GET /plugins twice — once for
+    // the store list (refreshInstalled), once for the runtime panel rack
+    // (refreshRuntimePanels → reloadInstalledPluginUis).
+    const installedList = () =>
+      jsonResponse({
+        sdkAbi: 1,
+        sdkVersion: '0.6.0',
+        plugins: [
+          {
+            id: 'demo',
+            name: 'Demo',
+            version: '0.1.0',
+            author: '',
+            description: '',
+            license: '',
+            capabilities: [],
+          },
+        ],
+      });
     const fetchMock = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(
@@ -118,23 +136,8 @@ describe('usePluginsStore', () => {
           capabilities: [],
         }),
       )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          sdkAbi: 1,
-          sdkVersion: '0.6.0',
-          plugins: [
-            {
-              id: 'demo',
-              name: 'Demo',
-              version: '0.1.0',
-              author: '',
-              description: '',
-              license: '',
-              capabilities: [],
-            },
-          ],
-        }),
-      );
+      .mockResolvedValueOnce(installedList())
+      .mockResolvedValueOnce(installedList());
     vi.stubGlobal('fetch', fetchMock);
 
     const dto = await usePluginsStore.getState().install({
@@ -147,7 +150,7 @@ describe('usePluginsStore', () => {
     const s = usePluginsStore.getState();
     expect(s.lastInstallOk).toMatch(/Installed Demo 0\.1\.0/);
     expect(s.installed).toHaveLength(1);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
 
     const installCall = fetchMock.mock.calls[0];
     expect(installCall).toBeDefined();
