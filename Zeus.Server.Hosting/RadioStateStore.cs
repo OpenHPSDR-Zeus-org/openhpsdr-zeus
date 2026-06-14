@@ -166,6 +166,8 @@ public sealed class RadioStateEntry
     // TUN drive slider % (0..100). Default 10 mirrors RadioService._tunePct seed —
     // a 0 default would make pressing TUN appear to do nothing.
     public int TunePct { get; set; } = 10;
+    // TX pre-key (MOX) delay ms (0..500). Default 0 = no delay. Issue #630.
+    public int TxMoxPreKeyDelayMs { get; set; }
     // Hardware NCO at last flush. Persisted so a restart retunes the radio
     // to the same physical centre the operator was last looking at. Zero on
     // legacy rows (pre-CTUN, or rows written by the old CTUN-off branch);

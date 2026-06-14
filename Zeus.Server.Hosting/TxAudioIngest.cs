@@ -90,6 +90,11 @@ public sealed class TxAudioIngest : IDisposable
     // (512 in / 4096 iq) profiles so we don't reallocate at protocol switch.
     private readonly float[] _scratchMic = new float[1024];
     private readonly float[] _scratchIq = new float[4096];
+    // All-zero IQ used to substitute silence during the pre-key (MOX) delay
+    // window (issue #630). Same size as _scratchIq, never written, so the
+    // modulated samples in _scratchIq stay intact for the peak diagnostic — we
+    // mute by writing FROM this buffer, not by zeroing _scratchIq in place.
+    private readonly float[] _muteIq = new float[4096];
 
     private long _totalMicSamples;
     private long _totalTxBlocks;
@@ -147,7 +152,8 @@ public sealed class TxAudioIngest : IDisposable
         ILogger<TxAudioIngest> log)
         : this(ring, () => pipeline.CurrentEngine, () => tx.IsMoxOn, hub, log,
                forwardP2: iq => pipeline.ForwardTxIqToP2(iq.Span),
-               txOwnedByTuneDriver: () => tx.IsTunOn || tx.IsTwoToneOn)
+               txOwnedByTuneDriver: () => tx.IsTunOn || tx.IsTwoToneOn,
+               preKeyOpenAtTicks: () => tx.PreKeyOpenAtTicks)
     {
     }
 
@@ -164,7 +170,8 @@ public sealed class TxAudioIngest : IDisposable
         ILogger<TxAudioIngest> log,
         Action<ReadOnlyMemory<float>>? forwardP2 = null,
         Action<int>? onWdspConsumed = null,
-        Func<bool>? txOwnedByTuneDriver = null)
+        Func<bool>? txOwnedByTuneDriver = null,
+        Func<long>? preKeyOpenAtTicks = null)
     {
         _ring = ring;
         _engineProvider = engineProvider;
@@ -172,6 +179,7 @@ public sealed class TxAudioIngest : IDisposable
         _forwardP2 = forwardP2;
         _onWdspConsumed = onWdspConsumed;
         _txOwnedByTuneDriver = txOwnedByTuneDriver ?? (static () => false);
+        _preKeyOpenAtTicks = preKeyOpenAtTicks ?? (static () => 0L);
         _hub = hub;
         _log = log;
         _handler = OnMicPcmBytesFromMic;
@@ -186,6 +194,13 @@ public sealed class TxAudioIngest : IDisposable
     // mic capture keeps feeding here during a two-tone; web has no native mic so
     // only TxTuneDriver drove it and it stayed clean.
     private readonly Func<bool> _txOwnedByTuneDriver;
+    // Pre-key (MOX) delay window deadline in Stopwatch ticks, supplied by
+    // TxService (issue #630). While Stopwatch.GetTimestamp() is below this
+    // value AND the block is genuine live-mic IQ (not WAV-over-air playback),
+    // we substitute silence for the modulated IQ so an external amp's T/R relay
+    // settles before RF appears. 0 = no window (the default-0 setting, CW, TUN,
+    // two-tone, TCI, hardware-PTT — all unset or cleared by TxService).
+    private readonly Func<long> _preKeyOpenAtTicks;
 
     // Cross-thread handoff: written from the TCI timer thread (Start/Stop of
     // the TX_CHRONO service), read every audio block from the WDSP worker.
@@ -372,12 +387,37 @@ public sealed class TxAudioIngest : IDisposable
                     // a monitor toggle would put the radio on the air.
                     if (moxNow)
                     {
+                        // Pre-key (MOX) delay window (issue #630): if still inside
+                        // the window, substitute silence for the modulated IQ so
+                        // the amp T/R relay settles before RF appears. We still
+                        // WRITE (a zero block of the same length) rather than drop
+                        // — dropping would starve the P2 DUC FIFO and produce the
+                        // exact bare/gappy carrier the feature exists to prevent.
+                        // WAV-over-air playback is exempt: the operator already
+                        // keyed and the clip head is position-locked, so muting it
+                        // would clip the intro.
+                        long openAt = _preKeyOpenAtTicks();
+                        bool wavRecent = false;
+                        if (openAt != 0L)
+                        {
+                            long lastWav = Volatile.Read(ref _lastWavTickMs);
+                            wavRecent = lastWav != 0
+                                && Environment.TickCount64 - lastWav < TciHysteresisMs;
+                        }
+                        bool mute = openAt != 0L
+                            && System.Diagnostics.Stopwatch.GetTimestamp() < openAt
+                            && !wavRecent;
+
                         // P1 path — EP2 packer in Protocol1Client drains the ring.
-                        _ring.Write(iqSpan);
+                        _ring.Write(mute
+                            ? new ReadOnlySpan<float>(_muteIq, 0, 2 * produced)
+                            : iqSpan);
                         // P2 path — Protocol2Client's 1029-port DUC sender. No-op
                         // when P2 isn't the active backend so both protocols share
                         // this seam cleanly. Mirrors TxTuneDriver's dual-write.
-                        _forwardP2?.Invoke(new ReadOnlyMemory<float>(_scratchIq, 0, 2 * produced));
+                        _forwardP2?.Invoke(mute
+                            ? new ReadOnlyMemory<float>(_muteIq, 0, 2 * produced)
+                            : new ReadOnlyMemory<float>(_scratchIq, 0, 2 * produced));
                     }
                     _totalTxBlocks++;
                     var onConsumed = Volatile.Read(ref _onWdspConsumed);

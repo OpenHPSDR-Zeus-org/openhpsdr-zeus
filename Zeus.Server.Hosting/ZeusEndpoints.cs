@@ -594,6 +594,31 @@ public static class ZeusEndpoints
             return Results.Ok(new { drivePercent = req.Percent });
         });
 
+        // Waterfall render-state diagnostic (#629). The desktop (WebView2) app
+        // has no reachable DevTools, so the frontend POSTs the waterfall's
+        // runtime state here a few seconds after connect — letting us confirm
+        // headlessly, from the SERVER log, that the history textures seeded
+        // (texWidth > 0). Read-only: logs at Info, no side effects.
+        app.MapPost("/api/diag/wf", (System.Text.Json.JsonElement body) =>
+        {
+            log.LogInformation("diag.wf {Report}", body.ToString());
+            return Results.Ok();
+        });
+
+        // TX pre-key (MOX) delay (issue #630). Withholds modulated RF for N ms
+        // after a UI MOX/TUNE key-down so an external amp's T/R relay settles
+        // before RF appears. A standalone TX-sequencing setting — deliberately
+        // NOT routed through /api/tx/ps/advanced. The server clamps below the PS
+        // MOX hold-off, so the echoed value may be lower than requested.
+        app.MapPost("/api/tx/prekey-delay", (TxPreKeyDelaySetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.tx.prekeyDelay ms={Ms}", req.DelayMs);
+            if (req.DelayMs < 0 || req.DelayMs > 500)
+                return Results.BadRequest(new { error = "delayMs must be 0..500" });
+            var state = r.SetTxMoxPreKeyDelayMs(req.DelayMs);
+            return Results.Ok(new { txMoxPreKeyDelayMs = state.TxMoxPreKeyDelayMs });
+        });
+
         // TUN drive %. Symmetric with /api/tx/drive; the same PA-gain math applies,
         // so equal slider positions emit equal watts. Backend selects between the
         // two sources based on whether TUN is keyed (TxService.TrySetTun →

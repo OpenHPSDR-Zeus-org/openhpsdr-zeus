@@ -43,6 +43,7 @@
 // License for details.
 
 using System.Buffers.Binary;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Zeus.Contracts;
 using Zeus.Dsp;
@@ -285,5 +286,86 @@ public class TxAudioIngestTests
         ingest.OnMicPcmBytesFromMic(payload);   // gated — TCI just fed
         ingest.OnMicPcmBytesFromMic(payload);   // still gated
         Assert.Equal(afterTci, ingest.TotalMicSamples);
+    }
+
+    // ---- Pre-key (MOX) delay window — issue #630 ----------------------------
+
+    // A pre-key window that is still open substitutes silence for the modulated
+    // IQ, but MUST still process the block and write a same-length zero block to
+    // BOTH transports — dropping the write would starve the P2 DUC FIFO and emit
+    // the bare/gappy carrier the feature exists to prevent.
+    [Fact]
+    public void PreKeyWindowOpen_MutesWireIq_ButStillProcessesAndFeeds()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        float[]? lastP2 = null;
+        // Deadline ~1 s in the future → window is open for the whole test.
+        long openAt = Stopwatch.GetTimestamp() + Stopwatch.Frequency;
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>(),
+            forwardP2: iq => lastP2 = iq.ToArray(),
+            preKeyOpenAtTicks: () => openAt);
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytes(payload);     // 960 — accumulates, no block yet
+        ingest.OnMicPcmBytes(payload);     // ≥1024 — one block flushed
+
+        Assert.Equal(1, ingest.TotalTxBlocks);          // block still processed
+        Assert.Equal(1, engine.ProcessedBlocks);        // WDSP still ran
+        Assert.Equal(1024, ring.Count);                 // FIFO fed (zeros), not starved
+        Assert.NotNull(lastP2);
+        Assert.All(lastP2!, v => Assert.Equal(0f, v));  // wire IQ is silence
+    }
+
+    // With no window (deadline 0 — the default-0 setting, or after the window
+    // expired) the modulated IQ reaches the wire byte-for-byte as before.
+    [Fact]
+    public void NoPreKeyWindow_PassesModulatedIq()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        float[]? lastP2 = null;
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>(),
+            forwardP2: iq => lastP2 = iq.ToArray(),
+            preKeyOpenAtTicks: () => 0L);   // no window
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytes(payload);
+        ingest.OnMicPcmBytes(payload);
+
+        Assert.Equal(1, ingest.TotalTxBlocks);
+        Assert.NotNull(lastP2);
+        // StubEngine writes I = mic (0.5), Q = 0 — modulated samples present.
+        Assert.Contains(lastP2!, v => v == 0.5f);
+    }
+
+    // WAV-over-air playback is exempt from the mute even while the window is
+    // open: the operator already keyed and the clip head is position-locked, so
+    // muting it would clip the intro. The WAV source path sets the recency
+    // marker the mute branch checks.
+    [Fact]
+    public void PreKeyWindowOpen_DoesNotMuteWavOverAir()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        float[]? lastP2 = null;
+        long openAt = Stopwatch.GetTimestamp() + Stopwatch.Frequency;
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>(),
+            forwardP2: iq => lastP2 = iq.ToArray(),
+            preKeyOpenAtTicks: () => openAt);
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytesFromWav(payload);   // stamps WAV recency
+        ingest.OnMicPcmBytesFromWav(payload);   // flush — exempt from mute
+
+        Assert.Equal(1, ingest.TotalTxBlocks);
+        Assert.NotNull(lastP2);
+        Assert.Contains(lastP2!, v => v == 0.5f);   // not muted
     }
 }

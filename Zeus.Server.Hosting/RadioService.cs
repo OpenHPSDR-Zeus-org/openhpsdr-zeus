@@ -103,6 +103,12 @@ public sealed class RadioService : IDisposable
     // the same per-band PA gain gives equal watts at equal percentages). piHPSDR
     // default is 10 — a 0 default would be "press TUN, nothing happens".
     private int _tunePct = 10;
+    // TX pre-key (MOX) delay ms (0..500). Authoritative copy read by TxService
+    // on the MOX rising edge to arm the IQ-mute window; the StateDto mirror is
+    // for the frontend. Always kept strictly below the PS MOX hold-off so PS
+    // never calibrates on muted RF — see SetTxMoxPreKeyDelayMs / ClampPreKeyToPs.
+    // Issue #630.
+    private int _txMoxPreKeyDelayMs;
     // Which drive % the next frame uses. Latched via NotifyTunActive from
     // TxService whenever the MOX/TUN keying state changes so a drag on either
     // slider during a live TX picks the right source without polling.
@@ -265,6 +271,11 @@ public sealed class RadioService : IDisposable
             _cwTxFilter = new(rsSnap.CwTxFilterLoAbs, rsSnap.CwTxFilterHiAbs);
             _drivePct = Math.Clamp(rsSnap.DrivePct, 0, 100);
             _tunePct = Math.Clamp(rsSnap.TunePct, 0, 100);
+            // Hydrate the TX pre-key delay, then clamp it below the persisted PS
+            // MOX hold-off so a hand-edited DB row can't break the invariant.
+            _txMoxPreKeyDelayMs = ClampPreKeyToPs(
+                Math.Clamp(rsSnap.TxMoxPreKeyDelayMs, 0, MaxPreKeyDelayMs),
+                ps?.MoxDelaySec ?? 0.2);
         }
 
         _state = new(
@@ -322,6 +333,7 @@ public sealed class RadioService : IDisposable
             // become the only path that puts these into the broadcast.
             DrivePct: Volatile.Read(ref _drivePct),
             TunePct: Volatile.Read(ref _tunePct),
+            TxMoxPreKeyDelayMs: Volatile.Read(ref _txMoxPreKeyDelayMs),
             // Hardware NCO — persisted in RadioStateStore so a restart resumes
             // on the same physical centre. RadioLoHz snaps to VfoHz on legacy
             // rows (RadioLoHz==0 — e.g. rows written by the old CTUN-off
@@ -1216,6 +1228,62 @@ public sealed class RadioService : IDisposable
         RecomputePaAndPush();
     }
 
+    // ---- TX pre-key (MOX) delay (issue #630) -----------------------------
+    // Max operator-settable pre-key delay. Thetis RF-Delay parity range.
+    internal const int MaxPreKeyDelayMs = 500;
+    // Safety margin the pre-key window must stay below the PS MOX hold-off by,
+    // so the IQ mute is fully open before WDSP calcc can leave LMOXDELAY and
+    // start binning feedback samples. A pre-key window that outlasts the PS
+    // hold-off would let PS collect zero-envelope samples → COLLECT never
+    // completes → the documented PS calibration stall. 50 ms is comfortably
+    // longer than one WDSP TX block at any supported rate.
+    private const int PsPreKeyMarginMs = 50;
+
+    // Clamp a requested pre-key delay to [0, MaxPreKeyDelayMs] AND strictly
+    // below (psMoxDelaySec*1000 - margin). With the default PS hold-off of
+    // 200 ms this caps the pre-key at 150 ms — ample for amp T/R sequencing
+    // (the #630 reporter needs ~30 ms) while keeping PS safe by construction.
+    private static int ClampPreKeyToPs(int requestedMs, double psMoxDelaySec)
+    {
+        int ceiling = (int)(psMoxDelaySec * 1000.0) - PsPreKeyMarginMs;
+        if (ceiling < 0) ceiling = 0;
+        if (ceiling > MaxPreKeyDelayMs) ceiling = MaxPreKeyDelayMs;
+        return Math.Clamp(requestedMs, 0, ceiling);
+    }
+
+    /// <summary>
+    /// Set the TX pre-key (MOX) delay in milliseconds. Clamped to
+    /// [0, <see cref="MaxPreKeyDelayMs"/>] and hard-clamped strictly below the
+    /// current PureSignal MOX hold-off (bidirectional invariant — the PS setter
+    /// re-clamps this downward too). Returns the updated snapshot so the caller
+    /// can surface the actually-applied value (which may be lower than asked).
+    /// </summary>
+    public StateDto SetTxMoxPreKeyDelayMs(int ms)
+    {
+        int clamped = ClampPreKeyToPs(ms, Snapshot().PsMoxDelaySec);
+        Interlocked.Exchange(ref _txMoxPreKeyDelayMs, clamped);
+        Mutate(s => s with { TxMoxPreKeyDelayMs = clamped });
+        return Snapshot();
+    }
+
+    /// <summary>Authoritative pre-key delay (ms) read by TxService on the MOX
+    /// rising edge. Already PS-clamped.</summary>
+    public int TxMoxPreKeyDelayMs => Volatile.Read(ref _txMoxPreKeyDelayMs);
+
+    // Re-clamp the stored pre-key delay after the PS MOX hold-off changed, so
+    // lowering PsMoxDelaySec can never leave a now-too-large pre-key window in
+    // place. Called from SetPsAdvanced after the PS mutate commits.
+    private void ReclampPreKeyToPs()
+    {
+        int current = Volatile.Read(ref _txMoxPreKeyDelayMs);
+        int reclamped = ClampPreKeyToPs(current, Snapshot().PsMoxDelaySec);
+        if (reclamped != current)
+        {
+            Interlocked.Exchange(ref _txMoxPreKeyDelayMs, reclamped);
+            Mutate(s => s with { TxMoxPreKeyDelayMs = reclamped });
+        }
+    }
+
     /// <summary>
     /// Forward the on-board CW keyer config (speed + mode) to the connected
     /// radio's C&amp;C register 0x0B, and remember it so a reconnect re-applies
@@ -1569,6 +1637,9 @@ public sealed class RadioService : IDisposable
             PsHwPeak = req.HwPeak ?? s.PsHwPeak,
             PsIntsSpiPreset = req.IntsSpiPreset ?? s.PsIntsSpiPreset,
         });
+        // If the PS MOX hold-off just dropped, shrink the pre-key window so the
+        // pre-key < PS-hold-off invariant holds regardless of setter ordering.
+        ReclampPreKeyToPs();
         PersistPsState();
         return Snapshot();
     }
@@ -1843,6 +1914,7 @@ public sealed class RadioService : IDisposable
                 CwTxFilterLoAbs = cwTx.LoAbs,   CwTxFilterHiAbs = cwTx.HiAbs,
                 DrivePct = snap.DrivePct,
                 TunePct = snap.TunePct,
+                TxMoxPreKeyDelayMs = snap.TxMoxPreKeyDelayMs,
                 RadioLoHz = snap.RadioLoHz,
                 UpdatedUtc = DateTime.UtcNow,
             });
