@@ -491,9 +491,44 @@ internal static class ControlFrame
         // them, so the rename is purely client-side.
         if (s.EnableHl2BandVolts) c3 |= 1 << 3;
         if (s.PreampOn) c3 |= 1 << 4;             // Q#2: single global preamp bit for MVP.
-        c3 |= (byte)(((byte)s.RxAntenna & 0x07) << 5);
+        // RX-antenna relay bits C3[7:5]. Emitted through the external-port
+        // encoder seam (see Zeus.Server.Hosting.IExternalPortEncoder) so every
+        // antenna-relay bit on the wire flows through one board-branched
+        // firewall. This pure helper is the single source of the C3[7:5] math;
+        // the encoder calls it too, guaranteeing the bytes are identical.
+        c3 |= EncodeRxAntennaC3Bits(s.RxAntenna, s.Board);
         c14[2] = c3;
 
+        WriteC4DuplexAndRxCount(c14, in s);
+    }
+
+    /// <summary>
+    /// Pure encoder for the Protocol-1 Config-frame RX-antenna relay bits
+    /// (C3[7:5]). Single source of truth for the antenna-relay math: both the
+    /// inline Config-frame write and
+    /// <c>Zeus.Server.Hosting.Protocol1PortEncoder</c> call this, so the bytes
+    /// on the wire are identical regardless of who composed them.
+    ///
+    /// Phase-1 (external-ports plan) is BYTE-IDENTICAL — the wire-layer clamp
+    /// that forces ANT1 on relay-less boards (HL2's single jack drives the
+    /// N2ADR antenna pad off C3[5], not an ANT1/2/3 relay) is scaffolded here
+    /// but intentionally inert: it activates in Phase 2 together with its own
+    /// differential golden test. Until then this reproduces today's emission
+    /// exactly — including HL2's raw C3[7:5] value.
+    /// </summary>
+    internal static byte EncodeRxAntennaC3Bits(HpsdrAntenna rxAntenna, HpsdrBoardKind board)
+    {
+        // Phase 2 will clamp here: `if (!HasRxAntennaRelays(board)) rxAntenna =
+        // HpsdrAntenna.Ant1;`. Kept inert in Phase 1 so the refactor is
+        // byte-identical (the capability lives in Zeus.Server.Hosting, which
+        // this assembly cannot reference; the clamp moves to the encoder seam
+        // where the capability table is available).
+        _ = board;
+        return (byte)(((byte)rxAntenna & 0x07) << 5);
+    }
+
+    private static void WriteC4DuplexAndRxCount(Span<byte> c14, in CcState s)
+    {
         // C4: Alex TX antenna [1:0] = 0 (RX-only MVP), duplex [2] = 1 (always, per
         // old_protocol.c:2661), N-1 receivers at [5:3]. mi0bot
         // networkproto1.c:973 — `C4 |= (nddc - 1) << 3`. Single-RX default

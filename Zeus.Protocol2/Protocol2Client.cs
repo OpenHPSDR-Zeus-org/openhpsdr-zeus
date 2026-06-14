@@ -1411,6 +1411,25 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         return alex0;
     }
 
+    /// <summary>
+    /// Compose the alex1 word the way <see cref="SendCmdHighPriority"/> does,
+    /// exposed internal so wire-format tests can assert the alex1 (offset 1428)
+    /// PureSignal / TX-relay / RX-ground bits without standing up a socket.
+    /// Mirrors the in-line logic at SendCmdHighPriority &gt; alex1 calculation:
+    /// TX_RELAY + RX_GNDonTX during xmit; AlexPsBit always-on while PS armed.
+    /// </summary>
+    internal static uint ComposeAlex1ForTest(
+        uint rxFreqHz,
+        bool moxOn,
+        bool psEnabled,
+        HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)
+    {
+        uint alexCommon = ComputeAlexWord(rxFreqHz, rxFreqHz, txAnt: 1, board: board);
+        uint alex1 = alexCommon | (moxOn ? ALEX_TX_RELAY | ALEX1_ANAN7000_RX_GNDonTX : 0u);
+        if (psEnabled) alex1 |= AlexPsBit;
+        return alex1;
+    }
+
     internal static uint ComputeAlexWord(uint rxFreqHz, uint txFreqHz, int txAnt, HpsdrBoardKind board = HpsdrBoardKind.OrionMkII)
     {
         uint word = 0;
@@ -1422,15 +1441,30 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // ANAN-7000/Saturn BPF board) — confirmed against pihpsdr alex.h
         // and new_protocol.c. Same call for every board.
         word |= LpfBits(txFreqHz);
-        word |= txAnt switch
-        {
-            1 => ALEX_TX_ANTENNA_1,
-            2 => ALEX_TX_ANTENNA_2,
-            3 => ALEX_TX_ANTENNA_3,
-            _ => ALEX_TX_ANTENNA_1,
-        };
+        word |= EncodeTxAntennaBits(txAnt);
         return word;
     }
+
+    /// <summary>
+    /// Pure encoder for the Protocol-2 Alex-word TX-antenna relay bits
+    /// (alex0[26:24]). Single source of truth for the TX-antenna math: both
+    /// <see cref="ComputeAlexWord"/> and
+    /// <c>Zeus.Server.Hosting.Protocol2PortEncoder</c> call this, so the bits
+    /// on the wire are identical regardless of who composed them.
+    ///
+    /// <paramref name="txAnt"/> is the 1-based wire selector (1=ANT1, 2=ANT2,
+    /// 3=ANT3); out-of-range coerces to ANT1, matching the prior inline switch.
+    /// Phase-1 (external-ports plan) callers still pass a hardcoded 1, so this
+    /// emits ALEX_TX_ANTENNA_1 exactly as before — byte-identical. Phase 2
+    /// threads the real per-band TxAnt through.
+    /// </summary>
+    internal static uint EncodeTxAntennaBits(int txAnt) => txAnt switch
+    {
+        1 => ALEX_TX_ANTENNA_1,
+        2 => ALEX_TX_ANTENNA_2,
+        3 => ALEX_TX_ANTENNA_3,
+        _ => ALEX_TX_ANTENNA_1,
+    };
 
     // RX BPF band splits lifted from pihpsdr new_protocol.c
     // (function new_protocol_high_priority, ADC0 BPFfreq selection).
