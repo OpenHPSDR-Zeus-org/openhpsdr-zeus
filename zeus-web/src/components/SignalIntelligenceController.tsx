@@ -15,6 +15,7 @@ import {
   getNoiseFloor,
   recommendSignalEnhanceScene,
   useSignalEnhanceStore,
+  type SignalEnhanceScene,
   type SignalEnhancePresetId,
 } from '../dsp/signal-estimator';
 import { useConnectionStore } from '../state/connection-store';
@@ -22,6 +23,28 @@ import { useDisplayStore } from '../state/display-store';
 
 const SCENE_SAMPLE_INTERVAL_MS = 1000;
 const SCENE_DWELL_SAMPLES = 3;
+
+function sceneReason(scene: SignalEnhanceScene): string {
+  if (scene.profileId === 'contest') return 'crowded span';
+  if (scene.profileId === 'dx') return 'sparse weak signal';
+  if (scene.baseProfileId === 'cw') return 'CW mode';
+  if (scene.baseProfileId === 'digital') return 'digital mode';
+  if (scene.peakCount === 0) return 'mode profile';
+  return 'voice profile';
+}
+
+function publishSceneStatus(scene: SignalEnhanceScene): void {
+  useSignalEnhanceStore.getState().setSignalEnhanceSceneStatus({
+    atUtc: new Date().toISOString(),
+    profileId: scene.profileId,
+    baseProfileId: scene.baseProfileId,
+    reason: sceneReason(scene),
+    peakCount: scene.peakCount,
+    peaksPer10Khz: Math.round(scene.peaksPer10Khz * 10) / 10,
+    occupiedPct: Math.round(scene.occupiedRatio * 1000) / 10,
+    maxSnrDb: Math.round(scene.maxSnrDb * 10) / 10,
+  });
+}
 
 // Always-mounted controller for Settings > DSP > Signal Intelligence.
 // The settings panel only edits state; this component performs the live
@@ -51,6 +74,7 @@ export function SignalIntelligenceController() {
 
       const enhance = useSignalEnhanceStore.getState();
       if (!enhance.autoProfileEnabled) {
+        if (enhance.sceneStatus !== null) enhance.setSignalEnhanceSceneStatus(null);
         resetPending();
         return;
       }
@@ -63,6 +87,7 @@ export function SignalIntelligenceController() {
         floor: getNoiseFloor(),
         hzPerPixel: display.hzPerPixel,
       });
+      publishSceneStatus(scene);
       if (scene.profileId === enhance.profileId) {
         resetPending();
         return;
@@ -86,7 +111,10 @@ export function SignalIntelligenceController() {
     });
     const unsubEnhance = useSignalEnhanceStore.subscribe((state, prev) => {
       if (state.autoProfileEnabled && !prev.autoProfileEnabled) applyModeProfile();
-      if (!state.autoProfileEnabled) resetPending();
+      if (!state.autoProfileEnabled && (prev.autoProfileEnabled || state.sceneStatus !== null)) {
+        state.setSignalEnhanceSceneStatus(null);
+        resetPending();
+      }
     });
     const unsubDisplay = useDisplayStore.subscribe((state, prev) => {
       if (state.lastSeq !== prev.lastSeq) maybeApplyScene();

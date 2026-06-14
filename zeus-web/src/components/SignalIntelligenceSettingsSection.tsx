@@ -85,6 +85,7 @@ export function SignalIntelligenceSettingsSection() {
     autoProfileEnabled,
     visualAgcEnabled,
     impulseRejectEnabled,
+    sceneStatus,
     setPopEnabled,
     setSnapEnabled,
     setVisualAgcEnabled,
@@ -158,6 +159,16 @@ export function SignalIntelligenceSettingsSection() {
           Reset
         </button>
       </div>
+
+      {sceneStatus && (
+        <div className="smart-nr-status">
+          <span className="mono">{PROFILE_LABEL[sceneStatus.profileId]}</span>
+          <span>{sceneStatus.reason}</span>
+          <span className="mono">
+            SNR {sceneStatus.maxSnrDb.toFixed(1)} dB · OCC {sceneStatus.occupiedPct.toFixed(1)}% · PK {sceneStatus.peakCount}
+          </span>
+        </div>
+      )}
 
       <div className="sig-grid">
         <TuneSlider

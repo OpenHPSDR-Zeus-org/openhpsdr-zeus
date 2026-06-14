@@ -221,10 +221,13 @@ export type SignalEnhanceState = SignalEnhanceTuning & {
   visualAgcEnabled: boolean;
   /** Display-only clamp for isolated one-frame spectral spikes. */
   impulseRejectEnabled: boolean;
+  /** Latest scene analysis used by auto-profile and diagnostics UI. */
+  sceneStatus: SignalEnhanceSceneStatus | null;
   setPopEnabled: (v: boolean) => void;
   setSnapEnabled: (v: boolean) => void;
   setVisualAgcEnabled: (v: boolean) => void;
   setImpulseRejectEnabled: (v: boolean) => void;
+  setSignalEnhanceSceneStatus: (status: SignalEnhanceSceneStatus | null) => void;
   togglePop: () => void;
   toggleSnap: () => void;
   setSignalEnhanceTuning: (patch: SignalEnhanceTuningPatch) => void;
@@ -375,6 +378,17 @@ export type SignalEnhanceScene = {
   peakCount: number;
   peaksPer10Khz: number;
   occupiedRatio: number;
+  maxSnrDb: number;
+};
+
+export type SignalEnhanceSceneStatus = {
+  atUtc: string;
+  profileId: SignalEnhancePresetId;
+  baseProfileId: SignalEnhancePresetId;
+  reason: string;
+  peakCount: number;
+  peaksPer10Khz: number;
+  occupiedPct: number;
   maxSnrDb: number;
 };
 
@@ -546,6 +560,7 @@ export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
   autoProfileEnabled: persisted.autoProfileEnabled,
   visualAgcEnabled: persisted.visualAgcEnabled,
   impulseRejectEnabled: persisted.impulseRejectEnabled,
+  sceneStatus: null,
   profileId: persisted.profileId,
   popFloorDb: persisted.popFloorDb,
   popSpanDb: persisted.popSpanDb,
@@ -576,6 +591,7 @@ export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
     set({ impulseRejectEnabled });
     persist(get());
   },
+  setSignalEnhanceSceneStatus: (sceneStatus) => set({ sceneStatus }),
   togglePop: () => {
     const popEnabled = !get().popEnabled;
     set({ popEnabled });
