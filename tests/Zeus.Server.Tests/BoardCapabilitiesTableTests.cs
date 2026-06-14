@@ -263,5 +263,61 @@ public class BoardCapabilitiesTableTests
         Assert.False(u.HasRxAntennaRelays);
         Assert.False(u.HasOnboardCodec);
         Assert.False(u.HermesLite2MicFrontEnd);
+        // Phase 5 ports also off by default.
+        Assert.Equal(RxAuxInputs.None, u.RxAuxInputs);
+        Assert.False(u.HasRx2AntennaPath);
+        Assert.False(u.HasHl2UserGpio);
+        Assert.Equal(AlexRevision.Modern, u.AlexRevision);
+    }
+
+    // ---- External-port capability flags (external-ports plan, Phase 5) ----
+
+    [Fact]
+    public void RxAuxInputs_All_On_Alex_Boards_None_On_HL2()
+    {
+        // Every Alex-class P1 board and the 0x0A family exposes the full RX-aux
+        // input set (EXT1/EXT2/XVTR/BYPASS). HL2 exposes NONE — the jacks don't
+        // physically exist.
+        foreach (var board in new[] {
+            HpsdrBoardKind.Metis, HpsdrBoardKind.Hermes, HpsdrBoardKind.HermesII,
+            HpsdrBoardKind.Angelia, HpsdrBoardKind.Orion, HpsdrBoardKind.OrionMkII,
+            HpsdrBoardKind.HermesC10 })
+            Assert.Equal(RxAuxInputs.All, BoardCapabilitiesTable.For(board).RxAuxInputs);
+
+        Assert.Equal(RxAuxInputs.None, BoardCapabilitiesTable.For(HpsdrBoardKind.HermesLite2).RxAuxInputs);
+    }
+
+    [Fact]
+    public void Rx2AntennaPath_Only_DualAdc_Boards()
+    {
+        // The dual-ADC boards (100D / 200D / 0x0A family) have a second RX
+        // antenna path; single-RX boards (Hermes-class, G2E, HL2) do not.
+        foreach (var board in new[] {
+            HpsdrBoardKind.Angelia, HpsdrBoardKind.Orion, HpsdrBoardKind.OrionMkII })
+            Assert.True(BoardCapabilitiesTable.For(board).HasRx2AntennaPath);
+
+        foreach (var board in new[] {
+            HpsdrBoardKind.Metis, HpsdrBoardKind.Hermes, HpsdrBoardKind.HermesII,
+            HpsdrBoardKind.HermesC10, HpsdrBoardKind.HermesLite2 })
+            Assert.False(BoardCapabilitiesTable.For(board).HasRx2AntennaPath);
+    }
+
+    [Fact]
+    public void Hl2UserGpio_Only_HL2()
+    {
+        Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.HermesLite2).HasHl2UserGpio);
+        foreach (var board in Enum.GetValues<HpsdrBoardKind>())
+            if (board != HpsdrBoardKind.HermesLite2)
+                Assert.False(BoardCapabilitiesTable.For(board).HasHl2UserGpio);
+    }
+
+    [Fact]
+    public void AlexRevision_Defaults_Modern_Everywhere()
+    {
+        // The K36-BYPASS direction is NOT wire-discoverable; Zeus defaults
+        // conservatively to Modern (Rev 24+, PS routes to BYPASS — the current
+        // shipped behaviour) on every board. Legacy is operator opt-in only.
+        foreach (var board in Enum.GetValues<HpsdrBoardKind>())
+            Assert.Equal(AlexRevision.Modern, BoardCapabilitiesTable.For(board).AlexRevision);
     }
 }

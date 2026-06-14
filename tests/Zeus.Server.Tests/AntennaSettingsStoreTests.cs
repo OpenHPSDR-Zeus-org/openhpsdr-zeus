@@ -39,6 +39,22 @@ public class AntennaSettingsStoreTests : IDisposable
     }
 
     [Fact]
+    public void SetBand_RxAux_RoundTrips_PerBand()
+    {
+        // Phase 5: the RX-aux selection persists per band alongside the antennas.
+        using (var store = NewStore())
+        {
+            store.SetBand("20m", HpsdrAntenna.Ant1, HpsdrAntenna.Ant1, RxAuxInputSel.Bypass);
+            store.SetBand("40m", HpsdrAntenna.Ant2, HpsdrAntenna.Ant1, RxAuxInputSel.Ext1);
+        }
+        using var reopened = NewStore();
+        Assert.Equal(RxAuxInputSel.Bypass, reopened.GetBand("20m").RxAux);
+        var b40 = reopened.GetBand("40m");
+        Assert.Equal(HpsdrAntenna.Ant2, b40.TxAnt);
+        Assert.Equal(RxAuxInputSel.Ext1, b40.RxAux);
+    }
+
+    [Fact]
     public void SetBand_RoundTrips_PerBand()
     {
         using (var store = NewStore())
@@ -62,6 +78,9 @@ public class AntennaSettingsStoreTests : IDisposable
         var b15 = reopened.GetBand("15m");
         Assert.Equal(HpsdrAntenna.Ant1, b15.TxAnt);
         Assert.Equal(HpsdrAntenna.Ant1, b15.RxAnt);
+        // RX-aux defaults to None for pre-Phase-5 / untouched rows.
+        Assert.Equal(RxAuxInputSel.None, b15.RxAux);
+        Assert.Equal(RxAuxInputSel.None, b20.RxAux); // 3-arg SetBand → None
     }
 
     [Fact]

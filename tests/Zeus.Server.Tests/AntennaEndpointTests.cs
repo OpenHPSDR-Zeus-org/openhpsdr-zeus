@@ -114,6 +114,60 @@ public class AntennaEndpointTests : IClassFixture<AntennaEndpointTests.Factory>
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
+    // ---- RX-aux + HL2 GPIO (external-ports plan, Phase 5) ----
+
+    [Fact]
+    public async Task AuxBoard_Exposes_AvailableRxAux_And_Accepts_Bypass()
+    {
+        SetBoard(HpsdrBoardKind.OrionMkII); // RxAuxInputs.All
+        using var client = _factory.CreateClient();
+
+        var resp = await client.PutAsJsonAsync("/api/radio/antenna",
+            new { band = "20m", txAnt = "Ant1", rxAnt = "Ant1", rxAux = "Bypass" });
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+
+        var dto = await resp.Content.ReadFromJsonAsync<AntennaSettingsDto>();
+        Assert.NotNull(dto);
+        Assert.Contains("Bypass", dto!.AvailableRxAux!);
+        Assert.Equal("Modern", dto.AlexRevision);
+        Assert.Equal("Bypass", dto.Bands.First(b => b.Band == "20m").RxAux);
+    }
+
+    [Fact]
+    public async Task Hl2_Rejects_RxAux_With_409()
+    {
+        SetBoard(HpsdrBoardKind.HermesLite2); // RxAuxInputs.None
+        using var client = _factory.CreateClient();
+
+        var resp = await client.PutAsJsonAsync("/api/radio/antenna",
+            new { band = "20m", txAnt = "Ant1", rxAnt = "Ant1", rxAux = "Ext1" });
+        Assert.Equal(HttpStatusCode.Conflict, resp.StatusCode);
+
+        // The GET advertises NO aux inputs on HL2.
+        var got = await client.GetFromJsonAsync<AntennaSettingsDto>("/api/radio/antenna");
+        Assert.Empty(got!.AvailableRxAux!);
+    }
+
+    [Fact]
+    public async Task Hl2_Gpio_Roundtrips_And_NonHl2_Is_409()
+    {
+        SetBoard(HpsdrBoardKind.HermesLite2);
+        using var client = _factory.CreateClient();
+
+        var put = await client.PutAsJsonAsync("/api/radio/hl2-gpio", new { bits = 0x0A });
+        Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+        var dto = await put.Content.ReadFromJsonAsync<Hl2GpioDto>();
+        Assert.True(dto!.Supported);
+        Assert.Equal(0x0A, dto.Bits);
+
+        // Non-HL2 board: GPIO is gated off (409 on PUT, unsupported on GET).
+        SetBoard(HpsdrBoardKind.OrionMkII);
+        var put2 = await client.PutAsJsonAsync("/api/radio/hl2-gpio", new { bits = 0x01 });
+        Assert.Equal(HttpStatusCode.Conflict, put2.StatusCode);
+        var got = await client.GetFromJsonAsync<Hl2GpioDto>("/api/radio/hl2-gpio");
+        Assert.False(got!.Supported);
+    }
+
     public sealed class Factory : WebApplicationFactory<Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)

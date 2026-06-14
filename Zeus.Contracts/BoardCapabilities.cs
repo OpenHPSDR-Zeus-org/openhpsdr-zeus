@@ -10,6 +10,70 @@
 namespace Zeus.Contracts;
 
 /// <summary>
+/// RX auxiliary inputs a board's Alex / filter board exposes (external-ports
+/// plan, Phase 5). These are the receive-only feed paths in addition to the
+/// base ANT1/2/3 relays: an external transverter IF (<see cref="Xvtr"/>), two
+/// external receive-loop inputs (<see cref="Ext1"/> / <see cref="Ext2"/>), and
+/// the RX-bypass / K36 path (<see cref="Bypass"/>) that is BIT-IDENTICAL to the
+/// PureSignal external-feedback select on the wire (alex0 bit 11). A board can
+/// expose any subset; HL2 exposes <see cref="None"/> (the inputs do not
+/// physically exist). The flags gate the UI/REST/wire so an operator can only
+/// pick an input the connected board actually has.
+/// </summary>
+[Flags]
+public enum RxAuxInputs
+{
+    None  = 0,
+    Ext1  = 1 << 0,
+    Ext2  = 1 << 1,
+    Xvtr  = 1 << 2,
+    Bypass = 1 << 3,
+    /// <summary>Every aux input — the full Alex / Saturn-BPF set.</summary>
+    All = Ext1 | Ext2 | Xvtr | Bypass,
+}
+
+/// <summary>
+/// The selected RX antenna / aux input for one band (external-ports plan,
+/// Phase 5). Base relays (<see cref="Ant1"/>..<see cref="Ant3"/>) coexist with
+/// the aux feeds; this is a single enum because the radio routes ONE RX source
+/// at a time. Persisted as a byte in <c>antenna_bands</c>; default
+/// <see cref="Ant1"/> reproduces today's wire bit-for-bit.
+/// </summary>
+public enum RxSource : byte
+{
+    Ant1  = 0,
+    Ant2  = 1,
+    Ant3  = 2,
+    Ext1  = 10,
+    Ext2  = 11,
+    Xvtr  = 12,
+    Bypass = 13,
+}
+
+/// <summary>
+/// Alex / filter-board revision family, for the K36-BYPASS-direction branch
+/// (external-ports plan, §3.4(4)). On older Rev 15/16 Alex boards K36 switches
+/// an OUTPUT and PureSignal external feedback must route to EXT1/XVTR (selecting
+/// BYPASS breaks PS); on Rev 24+ boards K36 switches an INPUT and PS routes to
+/// BYPASS. THIS IS NOT WIRE-DISCOVERABLE — verified against pihpsdr (operator
+/// boolean <c>new_pa_board</c>, radio.c:221) and Thetis (model-derived
+/// <c>mkiibpf</c>); neither reads it from a discovery/status packet. Zeus
+/// therefore DEFAULTS CONSERVATIVELY to <see cref="Modern"/> (Rev 24+, BYPASS
+/// for PS) — the behaviour Zeus already ships (PS external feedback sets bit 11)
+/// — and treats the revision as an operator preference, never a guessed wire
+/// value that could mis-route PS. See the open-question note in the Phase 5 PR.
+/// </summary>
+public enum AlexRevision
+{
+    /// <summary>Rev 24+ — K36 is an input; PureSignal external feedback routes
+    /// to BYPASS (alex0 bit 11). The safe default.</summary>
+    Modern = 0,
+    /// <summary>Rev 15/16 — K36 is an output; PureSignal external feedback must
+    /// route to EXT1/XVTR, NOT BYPASS. Operator opt-in only.</summary>
+    Legacy15Or16 = 1,
+}
+
+/// <summary>
 /// Per-board capability fingerprint. Mirrors the facts Thetis MW0LGE
 /// special-cases in <c>clsHardwareSpecific.cs</c> — RX ADC count, MKII
 /// BPF support, ADC supply mV, LR audio swap, telemetry presence,
@@ -121,7 +185,32 @@ public sealed record BoardCapabilities(
     /// Distinct from <see cref="HasOnboardCodec"/> — HL2 has the mic front-end
     /// but not the stream codec. mic_bias defaults OFF (enabling it on a
     /// floating connector can hang PTT) and is guarded.</summary>
-    bool HermesLite2MicFrontEnd = false)
+    bool HermesLite2MicFrontEnd = false,
+    // ---- External-port control, Phase 5 -----------------------------------
+    /// <summary>The RX auxiliary inputs (EXT1/EXT2/XVTR/BYPASS) this board's
+    /// Alex / filter board exposes. <see cref="Contracts.RxAuxInputs.All"/> for
+    /// the Alex-class P1 boards and the 0x0A Saturn family;
+    /// <see cref="Contracts.RxAuxInputs.None"/> for Hermes-Lite 2 (the inputs do
+    /// not physically exist). Gates the RX-aux selector in the UI/REST and, at
+    /// the wire layer, whether the encoder emits any aux-relay bits. The
+    /// <see cref="Contracts.RxAuxInputs.Bypass"/> (K36) bit is bit-identical to
+    /// the PureSignal external-feedback select — PS owns it while armed
+    /// (§3.4(2)).</summary>
+    RxAuxInputs RxAuxInputs = RxAuxInputs.None,
+    /// <summary>Board has a second RX antenna path (dual-Alex / dual-RX). True
+    /// for the dual-ADC boards: ANAN-100D / 200D and the dual-RX 0x0A family.
+    /// Gates the RX2-antenna selector.</summary>
+    bool HasRx2AntennaPath = false,
+    /// <summary>Board has the 4-bit user GPIO (<c>user_dig_out</c>) on its
+    /// Protocol-1 register 0x0a (wire 0x14) C3[3:0] → MCP23008. Hermes-Lite 2
+    /// only (verified Thetis-mi0bot networkproto1.c:774). Gates the HL2 user
+    /// GPIO toggle group.</summary>
+    bool HasHl2UserGpio = false,
+    /// <summary>Alex / filter-board revision for the K36-BYPASS-direction
+    /// branch (§3.4(4)). NOT wire-discoverable — defaults
+    /// <see cref="Contracts.AlexRevision.Modern"/> (Rev 24+, PS routes to BYPASS,
+    /// matching Zeus's current behaviour). Operator preference only.</summary>
+    AlexRevision AlexRevision = AlexRevision.Modern)
 {
     /// <summary>Safe defaults for an unrecognised / disconnected board.
     /// Single ADC, no extras — minimum-surprise capability set so a

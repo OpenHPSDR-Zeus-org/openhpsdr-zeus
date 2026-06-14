@@ -262,6 +262,15 @@ public interface IProtocol1Client : IDisposable
     void SetAudioFrontEnd(bool micBoost, bool micLineIn, bool micTrs, bool micBias, int lineInGain);
 
     /// <summary>
+    /// HL2 user GPIO (external-ports plan, Phase 5). Sets the 4-bit
+    /// <c>user_dig_out</c> mask emitted on the 0x14 frame C3[3:0] → MCP23008
+    /// (bits above the low nibble are masked off). HL2 only — on other boards
+    /// the value is stored but never reaches the wire (ControlFrame keeps C3 at
+    /// 0). Default 0 is byte-identical to today.
+    /// </summary>
+    void SetUserDigOut(int mask);
+
+    /// <summary>
     /// 1024-sample paired feedback blocks decoded from the EP6 stream when
     /// PS is armed. TX side comes from the in-flight TX-IQ ring (the
     /// samples we just wrote to the wire); RX side is DDC1, the dedicated

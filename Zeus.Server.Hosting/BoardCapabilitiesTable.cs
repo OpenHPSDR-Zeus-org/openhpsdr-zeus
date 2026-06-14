@@ -113,9 +113,11 @@ internal static class BoardCapabilitiesTable
         SupportsPathIllustrator: true,
         MaxPowerWatts: 10,
         // Alex RX-antenna relays + stream codec (Hermes-class). ANT1-hardwired
-        // on TX (no TX relays).
+        // on TX (no TX relays). Alex board exposes the full RX-aux input set
+        // (EXT1/EXT2/XVTR/BYPASS) — Phase 5.
         HasRxAntennaRelays: true,
-        HasOnboardCodec: true);
+        HasOnboardCodec: true,
+        RxAuxInputs: RxAuxInputs.All);
 
     // ANAN-10E (HermesII firmware) — same Hermes-class fingerprint but the
     // 10E hardware is rated to ~30 W, so its meter axis gets the bigger top.
@@ -131,7 +133,8 @@ internal static class BoardCapabilitiesTable
         SupportsPathIllustrator: true,
         MaxPowerWatts: 30,
         HasRxAntennaRelays: true,
-        HasOnboardCodec: true);
+        HasOnboardCodec: true,
+        RxAuxInputs: RxAuxInputs.All);
 
     // ANAN-100D — 100 W class. Meter axis 120 W gives some headroom past
     // the rated rail without truncating PEP overshoots.
@@ -147,7 +150,12 @@ internal static class BoardCapabilitiesTable
         SupportsPathIllustrator: true,
         MaxPowerWatts: 120,
         HasRxAntennaRelays: true,
-        HasOnboardCodec: true);
+        HasOnboardCodec: true,
+        // Dual-RX dual-Alex 100D: full RX-aux set + a second RX antenna path.
+        // The dual-Alex (alex1) RX2 emission is scaffolded but flagged for
+        // bench — Zeus has no 100D/200D to verify against (Phase 5).
+        RxAuxInputs: RxAuxInputs.All,
+        HasRx2AntennaPath: true);
 
     // ANAN-200D — 200 W class but axis matches the 100/200/G2 family at
     // 120 W: half-axis at 100 W is the natural reading point.
@@ -163,7 +171,9 @@ internal static class BoardCapabilitiesTable
         SupportsPathIllustrator: true,
         MaxPowerWatts: 120,
         HasRxAntennaRelays: true,
-        HasOnboardCodec: true);
+        HasOnboardCodec: true,
+        RxAuxInputs: RxAuxInputs.All,
+        HasRx2AntennaPath: true);
 
     // 0x0A family default (G2 / 7000DLE / OrionMkII / ANVELINA-PRO3 /
     // Red Pitaya). Saturn-class facts. 100–200 W typical → 120 W axis.
@@ -183,7 +193,13 @@ internal static class BoardCapabilitiesTable
         // AnvelinaPro3 inherit these via `Saturn with {...}`.
         HasTxAntennaRelays: true,
         HasRxAntennaRelays: true,
-        HasOnboardCodec: true);
+        HasOnboardCodec: true,
+        // 0x0A Saturn-BPF family: full RX-aux input set (alex0 bits 8..11 +
+        // RX_SELECT bit 14) and a second RX antenna path (dual-RX). The K36
+        // BYPASS (bit 11) is bit-identical to PS external feedback — PS owns it
+        // while armed (§3.4(2)).
+        RxAuxInputs: RxAuxInputs.All,
+        HasRx2AntennaPath: true);
 
     // ANAN-8000DLE — 250 W per Apache spec; axis snaps to that.
     private static readonly BoardCapabilities Saturn8000DLE = Saturn with
@@ -219,8 +235,10 @@ internal static class BoardCapabilitiesTable
         SupportsPathIllustrator: false,
         MaxPowerWatts: 120,
         // ANAN-G2E: Alex BPF RX relays + codec; ANT1-hardwired on TX (P1).
+        // Single-RX, so no RX2 path. Full RX-aux input set on its BPF board.
         HasRxAntennaRelays: true,
-        HasOnboardCodec: true);
+        HasOnboardCodec: true,
+        RxAuxInputs: RxAuxInputs.All);
 
     // Apache OrionMkII original (Orion-MkII firmware, 100 W) — Saturn-class
     // hardware fingerprint but without on-board telemetry / audio amp per
@@ -241,7 +259,9 @@ internal static class BoardCapabilitiesTable
         // differ, handled above; port relays are present on all 0x0A boards).
         HasTxAntennaRelays: true,
         HasRxAntennaRelays: true,
-        HasOnboardCodec: true);
+        HasOnboardCodec: true,
+        RxAuxInputs: RxAuxInputs.All,
+        HasRx2AntennaPath: true);
 
     // HermesLite2 — rated 5 W stock but operators routinely run to 10 W with
     // adequate cooling, so the meter axis is 10 W to cover the realistic
@@ -267,6 +287,10 @@ internal static class BoardCapabilitiesTable
         // HL2: single antenna jack (no ANT1/2/3 relays), no stream codec — but
         // it DOES have a real mic/PTT/line-in front-end on register 0x14.
         // HasTxAntennaRelays / HasRxAntennaRelays / HasOnboardCodec all stay
-        // false (defaults); only the mic front-end flag flips true.
-        HermesLite2MicFrontEnd: true);
+        // false (defaults); only the mic front-end flag flips true. HL2 has NO
+        // RX-aux inputs (the EXT/XVTR/BYPASS jacks do not physically exist) so
+        // RxAuxInputs stays None — but it DOES have the 4-bit user GPIO on its
+        // register 0x0a / wire 0x14 C3[3:0] (Phase 5).
+        HermesLite2MicFrontEnd: true,
+        HasHl2UserGpio: true);
 }

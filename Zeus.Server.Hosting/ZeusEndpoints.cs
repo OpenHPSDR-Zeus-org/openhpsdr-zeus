@@ -1159,12 +1159,14 @@ public static class ZeusEndpoints
         {
             var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
             var bands = store.GetAll()
-                .Select(b => new AntennaBandDto(b.Band, b.TxAnt.ToString(), b.RxAnt.ToString()))
+                .Select(b => new AntennaBandDto(b.Band, b.TxAnt.ToString(), b.RxAnt.ToString(), b.RxAux.ToString()))
                 .ToArray();
             return Results.Ok(new AntennaSettingsDto(
                 HasTxAntennaRelays: caps.HasTxAntennaRelays,
                 HasRxAntennaRelays: caps.HasRxAntennaRelays,
-                Bands: bands));
+                Bands: bands,
+                AvailableRxAux: AvailableRxAux(caps.RxAuxInputs),
+                AlexRevision: caps.AlexRevision.ToString()));
         });
 
         // PUT one band's antenna selection. Capability-gated: 400 on a malformed
@@ -1182,24 +1184,34 @@ public static class ZeusEndpoints
                 return Results.BadRequest(new { error = $"unknown txAnt '{req.TxAnt}'" });
             if (!Enum.TryParse<HpsdrAntenna>(req.RxAnt, ignoreCase: true, out var rxAnt))
                 return Results.BadRequest(new { error = $"unknown rxAnt '{req.RxAnt}'" });
+            var rxAuxStr = string.IsNullOrWhiteSpace(req.RxAux) ? "None" : req.RxAux;
+            if (!Enum.TryParse<RxAuxInputSel>(rxAuxStr, ignoreCase: true, out var rxAux))
+                return Results.BadRequest(new { error = $"unknown rxAux '{req.RxAux}'" });
 
             var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
             if (txAnt != HpsdrAntenna.Ant1 && !caps.HasTxAntennaRelays)
                 return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no TX antenna relays; only Ant1 is valid" });
             if (rxAnt != HpsdrAntenna.Ant1 && !caps.HasRxAntennaRelays)
                 return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no RX antenna relays; only Ant1 is valid" });
+            // RX-aux 409: reject an aux input the connected board's Alex/filter
+            // board does not expose (HL2 has none). None is always accepted.
+            if (rxAux != RxAuxInputSel.None && !RxAuxSupported(rxAux, caps.RxAuxInputs))
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} does not expose RX-aux input {rxAux}" });
 
             // Save fires Changed → RadioService.RecomputePaAndPush, which reads
             // the new per-band selection and pushes it server-authoritatively to
             // the live client (P1 SetAntennaRx / P2 SetAntennas) — never via the
             // frontend, so no clobber-on-connect. The wire layer defers a mid-key
-            // relay change to the unkey edge.
-            store.SetBand(req.Band, txAnt, rxAnt);
+            // relay change to the unkey edge; PS owns the K36/BYPASS relay while
+            // armed regardless of an aux=BYPASS pick (§3.4(2)).
+            store.SetBand(req.Band, txAnt, rxAnt, rxAux);
 
             var bands = store.GetAll()
-                .Select(b => new AntennaBandDto(b.Band, b.TxAnt.ToString(), b.RxAnt.ToString()))
+                .Select(b => new AntennaBandDto(b.Band, b.TxAnt.ToString(), b.RxAnt.ToString(), b.RxAux.ToString()))
                 .ToArray();
-            return Results.Ok(new AntennaSettingsDto(caps.HasTxAntennaRelays, caps.HasRxAntennaRelays, bands));
+            return Results.Ok(new AntennaSettingsDto(
+                caps.HasTxAntennaRelays, caps.HasRxAntennaRelays, bands,
+                AvailableRxAux(caps.RxAuxInputs), caps.AlexRevision.ToString()));
         });
 
         // Global (per-radio) audio front-end (external-ports plan, Phase 4).
@@ -1255,6 +1267,26 @@ public static class ZeusEndpoints
                 sel.MicBias,
                 sel.BalancedInput,
                 sel.LineInGain));
+        });
+
+        // HL2 user GPIO (external-ports plan, Phase 5). 4-bit user_dig_out →
+        // register 0x0a (wire 0x14) C3[3:0] MCP23008. GET returns the gate +
+        // persisted mask; always 200. The frontend renders the toggle group
+        // only when supported (HL2). PUT 409s on a non-HL2 board so the GPIO
+        // bits can never reach the wire on a board without them.
+        app.MapGet("/api/radio/hl2-gpio", (RadioService radio) =>
+        {
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            return Results.Ok(new Hl2GpioDto(caps.HasHl2UserGpio, radio.GetHl2GpioMask() & 0x0F));
+        });
+        app.MapPut("/api/radio/hl2-gpio", (Hl2GpioSetRequest req, RadioService radio) =>
+        {
+            if (req is null) return Results.BadRequest(new { error = "body required" });
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            if (!caps.HasHl2UserGpio)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no user GPIO" });
+            radio.SetHl2GpioMask((byte)(req.Bits & 0x0F));
+            return Results.Ok(new Hl2GpioDto(true, radio.GetHl2GpioMask() & 0x0F));
         });
 
         // Per-radio frequency calibration (issue #325). GET returns the
@@ -1586,6 +1618,28 @@ public static class ZeusEndpoints
         0x0A => HpsdrBoardKind.OrionMkII,
         0x14 => HpsdrBoardKind.HermesC10,
         _    => HpsdrBoardKind.Unknown,
+    };
+
+    // Map the board's RxAuxInputs capability flags to the aux-input strings the
+    // frontend renders (external-ports plan, Phase 5). Order is fixed for a
+    // stable UI: EXT1, EXT2, XVTR, BYPASS. Empty on a board with no aux inputs.
+    static string[] AvailableRxAux(RxAuxInputs caps)
+    {
+        var list = new List<string>(4);
+        if (caps.HasFlag(RxAuxInputs.Ext1))  list.Add(nameof(RxAuxInputSel.Ext1));
+        if (caps.HasFlag(RxAuxInputs.Ext2))  list.Add(nameof(RxAuxInputSel.Ext2));
+        if (caps.HasFlag(RxAuxInputs.Xvtr))  list.Add(nameof(RxAuxInputSel.Xvtr));
+        if (caps.HasFlag(RxAuxInputs.Bypass)) list.Add(nameof(RxAuxInputSel.Bypass));
+        return list.ToArray();
+    }
+
+    static bool RxAuxSupported(RxAuxInputSel sel, RxAuxInputs caps) => sel switch
+    {
+        RxAuxInputSel.Ext1   => caps.HasFlag(RxAuxInputs.Ext1),
+        RxAuxInputSel.Ext2   => caps.HasFlag(RxAuxInputs.Ext2),
+        RxAuxInputSel.Xvtr   => caps.HasFlag(RxAuxInputs.Xvtr),
+        RxAuxInputSel.Bypass => caps.HasFlag(RxAuxInputs.Bypass),
+        _                    => true, // None always allowed
     };
 
     static HpsdrBoardKind? ParseBoardKind(string? raw)

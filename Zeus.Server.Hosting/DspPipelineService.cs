@@ -1337,7 +1337,16 @@ public class DspPipelineService : BackgroundService,
         // Alex path. Convert the 0-based HpsdrAntenna to the 1-based wire
         // selector the P2 client uses. Default ANT1 / no-relay reproduces
         // today's wire bit-for-bit.
-        p2.SetAntennas((int)snap.TxAntenna + 1, (int)snap.RxAntenna + 1, snap.HasTxAntennaRelays);
+        // Phase 5: also forward the RX-aux input + MkII-BPF RX-select gate. The
+        // P2 client emits the aux bits on alex0 (EXT1/EXT2/XVTR/BYPASS) and PS
+        // owns the K36/BYPASS relay while armed (§3.4(2), in SendCmdHighPriority).
+        // Default RxAuxInput=0 reproduces today's wire bit-for-bit.
+        p2.SetAntennas(
+            (int)snap.TxAntenna + 1,
+            (int)snap.RxAntenna + 1,
+            snap.HasTxAntennaRelays,
+            snap.RxAuxInput,
+            snap.MkiiBpfRxSelect);
         p2.SetPaEnabled(snap.PaEnabled);
     }
 

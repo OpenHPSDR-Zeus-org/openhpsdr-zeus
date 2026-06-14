@@ -63,8 +63,8 @@ public sealed class AntennaSettingsStore : IDisposable
         {
             var e = _bands.FindOne(x => x.Band == band);
             return e is null
-                ? new AntennaBandSelection(band, HpsdrAntenna.Ant1, HpsdrAntenna.Ant1)
-                : new AntennaBandSelection(band, ClampAnt(e.TxAnt), ClampAnt(e.RxAnt));
+                ? new AntennaBandSelection(band, HpsdrAntenna.Ant1, HpsdrAntenna.Ant1, RxAuxInputSel.None)
+                : new AntennaBandSelection(band, ClampAnt(e.TxAnt), ClampAnt(e.RxAnt), ClampAux(e.RxAux));
         }
     }
 
@@ -76,8 +76,8 @@ public sealed class AntennaSettingsStore : IDisposable
             var existing = _bands.FindAll().ToDictionary(e => e.Band, e => e);
             return BandUtils.HfBands
                 .Select(b => existing.TryGetValue(b, out var e)
-                    ? new AntennaBandSelection(b, ClampAnt(e.TxAnt), ClampAnt(e.RxAnt))
-                    : new AntennaBandSelection(b, HpsdrAntenna.Ant1, HpsdrAntenna.Ant1))
+                    ? new AntennaBandSelection(b, ClampAnt(e.TxAnt), ClampAnt(e.RxAnt), ClampAux(e.RxAux))
+                    : new AntennaBandSelection(b, HpsdrAntenna.Ant1, HpsdrAntenna.Ant1, RxAuxInputSel.None))
                 .ToArray();
         }
     }
@@ -85,6 +85,14 @@ public sealed class AntennaSettingsStore : IDisposable
     /// <summary>Upsert one band's antenna selection. Invalid band names are
     /// rejected by the caller; here we narrow to the HF set defensively.</summary>
     public void SetBand(string band, HpsdrAntenna txAnt, HpsdrAntenna rxAnt)
+        => SetBand(band, txAnt, rxAnt, RxAuxInputSel.None);
+
+    /// <summary>Upsert one band's antenna + RX-aux selection (external-ports
+    /// plan, Phase 5). <paramref name="rxAux"/> selects an auxiliary RX feed
+    /// (EXT1/EXT2/XVTR/BYPASS); <see cref="RxAuxInputSel.None"/> uses the base
+    /// RX-antenna relay. LiteDB is schema-less so rows written before Phase 5
+    /// hydrate RxAux as 0 = None.</summary>
+    public void SetBand(string band, HpsdrAntenna txAnt, HpsdrAntenna rxAnt, RxAuxInputSel rxAux)
     {
         if (!BandUtils.HfBands.Contains(band)) return;
         lock (_sync)
@@ -97,6 +105,7 @@ public sealed class AntennaSettingsStore : IDisposable
                     Band = band,
                     TxAnt = (byte)txAnt,
                     RxAnt = (byte)rxAnt,
+                    RxAux = (byte)rxAux,
                     UpdatedUtc = DateTime.UtcNow,
                 });
             }
@@ -104,6 +113,7 @@ public sealed class AntennaSettingsStore : IDisposable
             {
                 existing.TxAnt = (byte)txAnt;
                 existing.RxAnt = (byte)rxAnt;
+                existing.RxAux = (byte)rxAux;
                 existing.UpdatedUtc = DateTime.UtcNow;
                 _bands.Update(existing);
             }
@@ -116,11 +126,30 @@ public sealed class AntennaSettingsStore : IDisposable
     private static HpsdrAntenna ClampAnt(byte v) =>
         v <= (byte)HpsdrAntenna.Ant3 ? (HpsdrAntenna)v : HpsdrAntenna.Ant1;
 
+    private static RxAuxInputSel ClampAux(byte v) =>
+        v <= (byte)RxAuxInputSel.Bypass ? (RxAuxInputSel)v : RxAuxInputSel.None;
+
     public void Dispose() => _db.Dispose();
 }
 
-/// <summary>Resolved per-band antenna selection.</summary>
-public sealed record AntennaBandSelection(string Band, HpsdrAntenna TxAnt, HpsdrAntenna RxAnt);
+/// <summary>
+/// Per-band RX auxiliary input selection (external-ports plan, Phase 5).
+/// Persisted as a byte; <see cref="None"/> means "use the base RX-antenna
+/// relay" (today's behaviour). Maps 1:1 to the Protocol2Client aux selector
+/// (1=EXT1, 2=EXT2, 3=XVTR, 4=BYPASS), with 0 = no aux.
+/// </summary>
+public enum RxAuxInputSel : byte
+{
+    None  = 0,
+    Ext1  = 1,
+    Ext2  = 2,
+    Xvtr  = 3,
+    Bypass = 4,
+}
+
+/// <summary>Resolved per-band antenna + RX-aux selection.</summary>
+public sealed record AntennaBandSelection(
+    string Band, HpsdrAntenna TxAnt, HpsdrAntenna RxAnt, RxAuxInputSel RxAux);
 
 public sealed class AntennaBandEntry
 {
@@ -130,5 +159,8 @@ public sealed class AntennaBandEntry
     // before this feature hydrate these as 0 = ANT1, the correct legacy default.
     public byte TxAnt { get; set; }
     public byte RxAnt { get; set; }
+    // RX auxiliary input (RxAuxInputSel byte). Pre-Phase-5 rows hydrate as
+    // 0 = None, the byte-identical legacy default.
+    public byte RxAux { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

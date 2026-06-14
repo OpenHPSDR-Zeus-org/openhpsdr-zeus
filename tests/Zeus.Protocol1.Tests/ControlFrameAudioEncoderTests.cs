@@ -223,4 +223,61 @@ public class ControlFrameAudioEncoderTests
         Assert.Equal(0x00, cc[1]); // C1 — no mic bits
         Assert.Equal(0x00, cc[2] & 0x1F); // C2 — no line_in_gain
     }
+
+    // ---- HL2 user GPIO (external-ports plan, Phase 5) — 0x14 frame C3[3:0] ----
+    // Verified Thetis-mi0bot networkproto1.c:774 `C3 = user_dig_out & 0x0F`.
+    // C3 is cc[3] of the WriteCcBytes output (C0=cc[0], C1=cc[1], ... C4=cc[4]).
+
+    [Fact]
+    public void Attenuator_Hl2_DefaultGpio_C3IsZero_ByteIdentical()
+    {
+        // Default UserDigOut=0 → C3 stays 0, byte-identical to today.
+        var cc = Frame(ControlFrame.CcRegister.Attenuator, Hl2());
+        Assert.Equal(0x00, cc[3]);
+    }
+
+    [Theory]
+    [InlineData(0x0, 0x0)]
+    [InlineData(0x1, 0x1)]
+    [InlineData(0x5, 0x5)]
+    [InlineData(0xF, 0xF)]
+    [InlineData(0xFF, 0x0F)] // high bits masked off — only the low nibble lands
+    public void Attenuator_Hl2_UserGpio_LandsInC3LowNibble(byte mask, byte expectedC3)
+    {
+        var cc = Frame(ControlFrame.CcRegister.Attenuator, Hl2() with { UserDigOut = mask });
+        Assert.Equal(expectedC3, cc[3]);
+        // GPIO never touches the high C3 bits.
+        Assert.Equal(0x00, cc[3] & 0xF0);
+    }
+
+    [Fact]
+    public void Attenuator_Hl2_UserGpio_PreservesPsAndAudioAndStepAtten()
+    {
+        // CRUX: GPIO write must NOT disturb puresignal_run (C2[6]), the audio
+        // bits, or the C4 step-attenuator. GPIO is on C3 (cc[3]); none of those
+        // co-tenants live in C3, so the read-modify-write keeps them intact.
+        var s = Hl2(ps: true) with
+        {
+            Atten = new HpsdrAtten(20),
+            MicTrs = true,
+            MicBias = true,
+            LineInGain = 0x15,
+            UserDigOut = 0x0A,
+        };
+        var cc = Frame(ControlFrame.CcRegister.Attenuator, s);
+        Assert.Equal(0x0A, cc[3]);            // GPIO in C3
+        Assert.Equal(1 << 6, cc[2] & (1 << 6)); // puresignal_run survives
+        Assert.Equal(0x15, cc[2] & 0x1F);     // line_in_gain survives
+        Assert.Equal(0x30, cc[1]);            // mic_trs + mic_bias survive
+        Assert.Equal(0x68, cc[4]);            // C4 step-att = 0x40|(60-20)
+    }
+
+    [Fact]
+    public void Attenuator_NonHl2_UserGpio_DoesNotTouchC3()
+    {
+        // A non-HL2 board with UserDigOut set must NOT emit it — the GPIO surface
+        // is HL2-only. C3 on the 0x14 frame stays 0 for Hermes.
+        var cc = Frame(ControlFrame.CcRegister.Attenuator, Hermes() with { UserDigOut = 0x0F });
+        Assert.Equal(0x00, cc[3]);
+    }
 }

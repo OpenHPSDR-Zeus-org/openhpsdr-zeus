@@ -605,17 +605,33 @@ public sealed record RadioVariantSetRequest(string Variant);
 // "Ant3" (forward-compatible, parsed against HpsdrAntenna server-side). The
 // GET response carries the relay-capability gates so the frontend can render
 // the right selectors; the per-band rows let the panel show all HF bands.
-public sealed record AntennaBandDto(string Band, string TxAnt, string RxAnt);
+// RxAux is the auxiliary RX input string: "None" | "Ext1" | "Ext2" | "Xvtr" |
+// "Bypass" (external-ports plan, Phase 5). "None" uses the base RX-antenna
+// relay. Forward-compatible: parsed against RxAuxInputSel server-side.
+public sealed record AntennaBandDto(string Band, string TxAnt, string RxAnt, string RxAux = "None");
 
+// AvailableRxAux is the set of aux-input strings the connected board's Alex /
+// filter board exposes (so the frontend renders only valid options). Empty on
+// boards with no aux inputs (HL2). AlexRevision is the (operator-set, NOT
+// wire-discoverable) K36-BYPASS-direction family: "Modern" (Rev 24+, PS routes
+// to BYPASS — the safe default) or "Legacy15Or16".
 public sealed record AntennaSettingsDto(
     bool HasTxAntennaRelays,
     bool HasRxAntennaRelays,
-    IReadOnlyList<AntennaBandDto> Bands);
+    IReadOnlyList<AntennaBandDto> Bands,
+    IReadOnlyList<string>? AvailableRxAux = null,
+    string AlexRevision = "Modern");
 
-// Mutating version — sets ONE band's antenna selection. Band must be a known
-// HF band; TxAnt/RxAnt must parse to HpsdrAntenna. The server rejects a
-// request that targets a relay the connected board lacks with 409.
-public sealed record AntennaSetRequest(string Band, string TxAnt, string RxAnt);
+// Mutating version — sets ONE band's antenna + RX-aux selection. Band must be a
+// known HF band; TxAnt/RxAnt must parse to HpsdrAntenna; RxAux to RxAuxInputSel.
+// The server rejects a request targeting a relay/aux the board lacks with 409.
+public sealed record AntennaSetRequest(string Band, string TxAnt, string RxAnt, string RxAux = "None");
+
+// HL2 user GPIO (external-ports plan, Phase 5). 4-bit user_dig_out → the
+// register 0x0a (wire 0x14) C3[3:0] MCP23008 lines. Bits is the low-nibble mask;
+// Supported gates the panel (HL2 only).
+public sealed record Hl2GpioDto(bool Supported, int Bits);
+public sealed record Hl2GpioSetRequest(int Bits);
 
 // Global (per-radio, NOT per-band) audio front-end selection (external-ports
 // plan, Phase 4). GET carries the capability gates so the panel renders the

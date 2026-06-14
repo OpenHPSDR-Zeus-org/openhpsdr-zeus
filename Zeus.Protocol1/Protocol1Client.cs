@@ -139,6 +139,9 @@ public sealed class Protocol1Client : IProtocol1Client
     private int _micTrs;       // 0 / 1
     private int _micBias;      // 0 / 1
     private int _lineInGain;   // 0..31 (5-bit HL2 line_in_gain)
+    // HL2 user GPIO (external-ports plan, Phase 5). 4-bit user_dig_out emitted
+    // on the 0x14 frame C3[3:0]. Default 0 → byte-identical to today.
+    private int _userDigOut;   // 0..15
     private long _droppedFrames;
     private long _totalFrames;
 
@@ -690,6 +693,18 @@ public sealed class Protocol1Client : IProtocol1Client
         Interlocked.Exchange(ref _lineInGain, Math.Clamp(lineInGain, 0, 31));
     }
 
+    /// <summary>
+    /// HL2 user GPIO (external-ports plan, Phase 5). 4-bit user_dig_out emitted
+    /// on the 0x14 frame C3[3:0] → MCP23008. Bits above the low nibble are
+    /// masked off. HL2 only — on other boards C3 stays 0 in ControlFrame, so
+    /// the value is stored but never reaches the wire. Default 0 (no bits set)
+    /// is byte-identical to today.
+    /// </summary>
+    public void SetUserDigOut(int mask)
+    {
+        Interlocked.Exchange(ref _userDigOut, mask & 0x0F);
+    }
+
     public void SetHl2TxStepAttenuationDb(int db)
     {
         // Range matches mi0bot console.cs:2084 (udTXStepAttData.Minimum=-28,
@@ -773,7 +788,8 @@ public sealed class Protocol1Client : IProtocol1Client
             MicLineIn: Volatile.Read(ref _micLineIn) != 0,
             MicTrs: Volatile.Read(ref _micTrs) != 0,
             MicBias: Volatile.Read(ref _micBias) != 0,
-            LineInGain: (byte)Volatile.Read(ref _lineInGain));
+            LineInGain: (byte)Volatile.Read(ref _lineInGain),
+            UserDigOut: (byte)Volatile.Read(ref _userDigOut));
     }
 
     private void RxLoop()

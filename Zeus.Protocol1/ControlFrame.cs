@@ -274,7 +274,16 @@ internal static class ControlFrame
         bool MicLineIn = false,
         bool MicTrs = false,
         bool MicBias = false,
-        byte LineInGain = 0);
+        byte LineInGain = 0,
+        // ---- HL2 user GPIO (external-ports plan, Phase 5) -------------------
+        // 4-bit user_dig_out, emitted on this same 0x0a / wire-0x14 frame at
+        // C3[3:0] → MCP23008 (verified Thetis-mi0bot networkproto1.c:774:
+        // `C3 = prn->user_dig_out & 0b00001111;`). HL2 only. Default 0 →
+        // byte-identical to today (the frame's C3 was previously written 0).
+        // Written via read-modify-write in WriteAttenuatorPayload alongside the
+        // audio bits, PS bit, and C4 step-attenuator — none of which touch
+        // C3, so the four GPIO bits are independent.
+        byte UserDigOut = 0);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -393,8 +402,19 @@ internal static class ControlFrame
 
         c14[0] = 0;   // C1 — reserved on this register
         c14[1] = 0;   // C2
-        c14[2] = 0;   // C3
+        c14[2] = 0;   // C3 — HL2 user_dig_out [3:0] set below
         c14[3] = c4;
+
+        // HL2 user GPIO (external-ports plan, Phase 5). The 4-bit user_dig_out
+        // lands in C3[3:0] of this same 0x0a / wire-0x14 frame (Thetis-mi0bot
+        // networkproto1.c:774). Read-modify-write: OR ONLY the low nibble so the
+        // (currently unused) high C3 bits stay clear and the audio / PS / C4
+        // bytes — written below and above — are untouched. Default 0 → byte-
+        // identical to today. HL2 only; on other boards C3 stays 0.
+        if (s.Board == HpsdrBoardKind.HermesLite2)
+        {
+            c14[2] |= (byte)(s.UserDigOut & 0x0F);
+        }
 
         // HL2 mic front-end (external-ports plan, Phase 4). This C0=0x14 frame
         // is register 0x0a, which on HL2 carries the real mic/line-in front-
