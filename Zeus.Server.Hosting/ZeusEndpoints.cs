@@ -594,6 +594,17 @@ public static class ZeusEndpoints
             return Results.Ok(new { drivePercent = req.Percent });
         });
 
+        // Waterfall render-state diagnostic (#629). The desktop (WebView2) app
+        // has no reachable DevTools, so the frontend POSTs the waterfall's
+        // runtime state here a few seconds after connect — letting us confirm
+        // headlessly, from the SERVER log, that the history textures seeded
+        // (texWidth > 0). Read-only: logs at Info, no side effects.
+        app.MapPost("/api/diag/wf", (System.Text.Json.JsonElement body) =>
+        {
+            log.LogInformation("diag.wf {Report}", body.ToString());
+            return Results.Ok();
+        });
+
         // TUN drive %. Symmetric with /api/tx/drive; the same PA-gain math applies,
         // so equal slider positions emit equal watts. Backend selects between the
         // two sources based on whether TUN is keyed (TxService.TrySetTun →

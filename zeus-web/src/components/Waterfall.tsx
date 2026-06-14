@@ -130,6 +130,9 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     // Count context-restore cycles — a one-off eviction logs once; a steady
     // leak would climb, which is the signal to dig further (#629).
     let restoreCount = 0;
+    // Waterfall frame tallies for the one-shot backend diagnostic below (#629).
+    let wfFrames = 0;
+    let wfValidFrames = 0;
     // Visibility gating: skip the rAF redraw when the waterfall tile is
     // scrolled offscreen or the tab is hidden. We still push frames into
     // the history texture so when visibility resumes the operator sees a
@@ -228,6 +231,25 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     canvas.addEventListener('webglcontextlost', onContextLost);
     canvas.addEventListener('webglcontextrestored', onContextRestored);
 
+    // One-shot backend diagnostic (#629). The desktop app has no DevTools, so
+    // ~6 s after mount we POST the waterfall's render state to the server log
+    // (texWidth>0 means the history seeded; wfValidFrames>0 means real wf data
+    // is arriving). One line per session — enough to confirm the fix headless.
+    const diagTimer = window.setTimeout(() => {
+      const ds = renderer?.debugState();
+      void fetch('/api/diag/wf', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          caps: renderer?.caps,
+          ...ds,
+          wfFrames,
+          wfValidFrames,
+          restoreCount,
+        }),
+      }).catch(() => {});
+    }, 6000);
+
     const unsub = useDisplayStore.subscribe((state) => {
       if (contextLost || !renderer) return;
       if (state.lastSeq === lastSeqDrawn) return;
@@ -243,6 +265,8 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
         width: state.width,
       });
       const wfDb = state.wfValid && state.wfDb ? state.wfDb : null;
+      wfFrames++;
+      if (wfDb) wfValidFrames++;
       let skipRowUpload = false;
       if (wfDb) {
         tickCounter++;
@@ -307,6 +331,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       ro.disconnect();
       io.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);
+      window.clearTimeout(diagTimer);
       // Remove loss/restore listeners BEFORE loseContext() — loseContext fires
       // 'webglcontextlost' synchronously, and we don't want onContextLost to
       // run during teardown.
