@@ -35,13 +35,17 @@ import { usePaStore } from '../state/pa-store';
 import { useRadioStore } from '../state/radio-store';
 import { PsSettingsPanel } from './PsSettingsPanel';
 import { TxAudioToolsPanel } from './TxAudioToolsPanel';
+import { DspSettingsPanel } from './DspSettingsPanel';
 import { PluginsPanel } from '../plugins/components/PluginsPanel';
 import { HamClockSettingsPanel } from './HamClockSettingsPanel';
+import { HardwareDiagnosticsPanel } from './HardwareDiagnosticsPanel';
 
 export type SettingsTabId =
   | 'pa'
+  | 'hardware'
   | 'ps'
   | 'tx-audio'
+  | 'dsp'
   | 'bandplan'
   | 'qrz'
   | 'rotator'
@@ -56,8 +60,10 @@ export type SettingsTabId =
 
 const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'pa', label: 'PA SETTINGS' },
+  { id: 'hardware', label: 'HARDWARE' },
   { id: 'ps', label: 'PURESIGNAL' },
   { id: 'tx-audio', label: 'TX AUDIO TOOLS' },
+  { id: 'dsp', label: 'DSP' },
   { id: 'bandplan', label: 'BAND PLAN' },
   { id: 'qrz', label: 'QRZ' },
   { id: 'rotator', label: 'ROTATOR' },
@@ -172,8 +178,10 @@ export function SettingsView({ initialTab, onClose }: Props) {
 
         <div role="tabpanel" className="settings-view-panel">
           {active === 'pa' && <PaSettingsPanel />}
+          {active === 'hardware' && <HardwareDiagnosticsPanel />}
           {active === 'ps' && <PsSettingsPanel />}
           {active === 'tx-audio' && <TxAudioToolsPanel />}
+          {active === 'dsp' && <DspSettingsPanel />}
           {active === 'bandplan' && <BandPlanEditor />}
           {active === 'qrz' && <QrzSettingsPanel />}
           {active === 'rotator' && <RotatorSettingsPanel />}

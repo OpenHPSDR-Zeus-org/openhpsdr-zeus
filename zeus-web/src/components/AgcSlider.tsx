@@ -43,7 +43,13 @@
 // License for details.
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { setAgcTop, setAutoAgc } from '../api/client';
+import {
+  setAgc,
+  setAgcTop,
+  setAutoAgc,
+  type AgcConfigDto,
+  type AgcMode,
+} from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useLiveSlider } from '../hooks/useLiveSlider';
 
@@ -53,12 +59,74 @@ import { useLiveSlider } from '../hooks/useLiveSlider';
 const MIN = 0;
 const MAX = 120;
 
+// AGC mode dropdown order matches Thetis (enums.cs:152-162).
+const AGC_MODES: readonly AgcMode[] = ['Fixed', 'Long', 'Slow', 'Med', 'Fast', 'Custom'];
+
+// Custom/Fixed param fallbacks shown when a field is null (Thetis radio.cs §4.3),
+// mirroring the engine's Custom defaults (hang/decay 250, slope 0, thresh 0).
+const CUSTOM_DEFAULTS = {
+  slope: 0,
+  decayMs: 250,
+  hangMs: 250,
+  hangThreshold: 0,
+  fixedGainDb: 20,
+} as const;
+
+// One labelled number input for the Custom/Fixed popover. Token classes only.
+function ParamRow(props: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  unit?: string;
+  disabled: boolean;
+  onCommit: (v: number) => void;
+}) {
+  const { label, value, min, max, unit, disabled, onCommit } = props;
+  return (
+    <label className="agc-param-row">
+      <span className="label-xs" style={{ minWidth: 78 }}>
+        {label}
+      </span>
+      <input
+        type="number"
+        className="mono"
+        min={min}
+        max={max}
+        step={1}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => {
+          const v = Number(e.currentTarget.value);
+          if (Number.isFinite(v)) onCommit(Math.max(min, Math.min(max, v)));
+        }}
+        style={{
+          width: 66,
+          background: 'var(--bg-0)',
+          color: 'var(--fg-0)',
+          border: '1px solid var(--line)',
+          borderRadius: 3,
+          padding: '2px 6px',
+          fontSize: 12,
+        }}
+      />
+      {unit != null && (
+        <span className="label-xs" style={{ color: 'var(--fg-2)' }}>
+          {unit}
+        </span>
+      )}
+    </label>
+  );
+}
+
 export function AgcSlider() {
   const userAgc = useConnectionStore((s) => s.agcTopDb);
   const offsetDb = useConnectionStore((s) => s.agcOffsetDb);
   const autoEnabled = useConnectionStore((s) => s.autoAgcEnabled);
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const applyState = useConnectionStore((s) => s.applyState);
+  const agc = useConnectionStore((s) => s.agc);
+  const setLocalAgc = useConnectionStore((s) => s.setAgc);
 
   // Local drag state overrides the store while the user is actively moving
   // the slider so echoed state updates don't yank the thumb back.
@@ -69,6 +137,12 @@ export function AgcSlider() {
   const effective = Math.round(Math.max(MIN, Math.min(MAX, sliderValue + offsetDb)));
 
   const autoAbort = useRef<AbortController | null>(null);
+  const agcAbort = useRef<AbortController | null>(null);
+
+  // Popover holding Custom (slope/decay/hang/thresh) or Fixed (fixed gain)
+  // tunables, anchored under the mode dropdown so the toolbar stays compact.
+  const [paramsOpen, setParamsOpen] = useState(false);
+  const popRef = useRef<HTMLDivElement | null>(null);
 
   // Stream during drag (rAF coalesced), flush on release. The hook owns
   // abort-on-supersede so a fast drag doesn't queue stale POSTs.
@@ -100,60 +174,201 @@ export function AgcSlider() {
       });
   }, [autoEnabled, connected, applyState]);
 
+  const sendAgc = useCallback(
+    (next: AgcConfigDto) => {
+      setLocalAgc(next);
+      agcAbort.current?.abort();
+      const ac = new AbortController();
+      agcAbort.current = ac;
+      setAgc(next, ac.signal)
+        .then((s) => {
+          if (!ac.signal.aborted) applyState(s);
+        })
+        .catch(() => {
+          /* next state poll will reconcile */
+        });
+    },
+    [setLocalAgc, applyState],
+  );
+
   useEffect(
     () => () => {
       autoAbort.current?.abort();
+      agcAbort.current?.abort();
     },
     [],
   );
 
+  // Close the params popover on outside click / Escape.
+  useEffect(() => {
+    if (!paramsOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (popRef.current && !popRef.current.contains(e.target as Node)) {
+        setParamsOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setParamsOpen(false);
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [paramsOpen]);
+
+  const isCustom = agc.mode === 'Custom';
+  const isFixed = agc.mode === 'Fixed';
+  const hasParams = isCustom || isFixed;
+
   return (
-    <label className="knob-group" style={{ minWidth: 170 }}>
-      <button
-        type="button"
-        onClick={toggleAuto}
-        disabled={!connected}
-        aria-pressed={autoEnabled}
-        aria-label={autoEnabled ? 'Auto AGC on' : 'Auto AGC off'}
-        title={
-          autoEnabled
-            ? 'Auto-AGC ON (click to disable)'
-            : 'Auto-AGC OFF (click to enable)'
-        }
-        className={`btn sm ${autoEnabled ? 'active' : ''}`}
-        style={{ whiteSpace: 'nowrap' }}
-      >
-        AGC-T
-      </button>
-      <input
-        type="range"
-        min={MIN}
-        max={MAX}
-        step={1}
-        value={sliderValue}
-        disabled={!connected || autoEnabled}
-        onChange={(e) => {
-          const v = Number(e.currentTarget.value);
-          setDragValue(v);
-          liveSlider.push(v);
-        }}
-        onMouseUp={() => {
-          liveSlider.flush();
-          setDragValue(null);
-        }}
-        onTouchEnd={() => {
-          liveSlider.flush();
-          setDragValue(null);
-        }}
-        onKeyUp={() => {
-          liveSlider.flush();
-          setDragValue(null);
-        }}
-        style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}
-      />
-      <span className="mono" style={{ width: 48, textAlign: 'right', color: 'var(--fg-1)', fontSize: 11 }}>
-        {effective} dB
-      </span>
-    </label>
+    <div className="agc-control">
+      <label className="knob-group" style={{ minWidth: 0 }}>
+        <button
+          type="button"
+          onClick={toggleAuto}
+          disabled={!connected}
+          aria-pressed={autoEnabled}
+          aria-label={autoEnabled ? 'Auto AGC on' : 'Auto AGC off'}
+          title={
+            autoEnabled
+              ? 'Auto-AGC ON (click to disable)'
+              : 'Auto-AGC OFF (click to enable)'
+          }
+          className={`btn sm ${autoEnabled ? 'active' : ''}`}
+          style={{ whiteSpace: 'nowrap' }}
+        >
+          AGC-T
+        </button>
+        <input
+          type="range"
+          min={MIN}
+          max={MAX}
+          step={1}
+          value={sliderValue}
+          disabled={!connected || autoEnabled}
+          onChange={(e) => {
+            const v = Number(e.currentTarget.value);
+            setDragValue(v);
+            liveSlider.push(v);
+          }}
+          onMouseUp={() => {
+            liveSlider.flush();
+            setDragValue(null);
+          }}
+          onTouchEnd={() => {
+            liveSlider.flush();
+            setDragValue(null);
+          }}
+          onKeyUp={() => {
+            liveSlider.flush();
+            setDragValue(null);
+          }}
+          style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}
+        />
+        <span
+          className="mono"
+          style={{
+            flex: '0 0 auto',
+            width: 44,
+            textAlign: 'right',
+            color: 'var(--fg-1)',
+            fontSize: 11,
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {effective} dB
+        </span>
+      </label>
+
+      <div className="agc-mode-row" ref={popRef}>
+        <select
+          className="agc-mode-select"
+          value={agc.mode}
+          disabled={!connected}
+          aria-label="AGC mode"
+          title="AGC mode"
+          onChange={(e) => {
+            const mode = e.currentTarget.value as AgcMode;
+            if (mode !== agc.mode) sendAgc({ ...agc, mode });
+          }}
+        >
+          {AGC_MODES.map((mode) => (
+            <option key={mode} value={mode}>
+              {mode}
+            </option>
+          ))}
+        </select>
+        {hasParams && (
+          <button
+            type="button"
+            className={`btn sm ${paramsOpen ? 'active' : ''}`}
+            disabled={!connected}
+            aria-expanded={paramsOpen}
+            aria-label="AGC parameters"
+            title={isCustom ? 'Custom AGC parameters' : 'Fixed gain'}
+            onClick={() => setParamsOpen((o) => !o)}
+          >
+            ⋯
+          </button>
+        )}
+
+        {paramsOpen && hasParams && (
+          <div className="agc-params-pop" role="group" aria-label="AGC parameters">
+            {isCustom && (
+              <>
+                <ParamRow
+                  label="Slope"
+                  value={agc.slope ?? CUSTOM_DEFAULTS.slope}
+                  min={0}
+                  max={20}
+                  disabled={!connected}
+                  onCommit={(v) => sendAgc({ ...agc, slope: v })}
+                />
+                <ParamRow
+                  label="Decay"
+                  value={agc.decayMs ?? CUSTOM_DEFAULTS.decayMs}
+                  min={1}
+                  max={5000}
+                  unit="ms"
+                  disabled={!connected}
+                  onCommit={(v) => sendAgc({ ...agc, decayMs: v })}
+                />
+                <ParamRow
+                  label="Hang"
+                  value={agc.hangMs ?? CUSTOM_DEFAULTS.hangMs}
+                  min={10}
+                  max={5000}
+                  unit="ms"
+                  disabled={!connected}
+                  onCommit={(v) => sendAgc({ ...agc, hangMs: v })}
+                />
+                <ParamRow
+                  label="Hang Thresh"
+                  value={agc.hangThreshold ?? CUSTOM_DEFAULTS.hangThreshold}
+                  min={0}
+                  max={100}
+                  unit="%"
+                  disabled={!connected}
+                  onCommit={(v) => sendAgc({ ...agc, hangThreshold: v })}
+                />
+              </>
+            )}
+            {isFixed && (
+              <ParamRow
+                label="Fixed Gain"
+                value={agc.fixedGainDb ?? CUSTOM_DEFAULTS.fixedGainDb}
+                min={-20}
+                max={120}
+                unit="dB"
+                disabled={!connected}
+                onCommit={(v) => sendAgc({ ...agc, fixedGainDb: v })}
+              />
+            )}
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

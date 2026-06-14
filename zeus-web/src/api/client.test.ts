@@ -43,17 +43,32 @@
 // License for details.
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type {
+  AgcConfigDto,
+  SquelchConfigDto,
+  TxLevelingConfigDto,
+} from './client';
 import {
+  AGC_CONFIG_DEFAULT,
   ApiError,
   connect,
   NR_CONFIG_DEFAULT,
+  SQUELCH_CONFIG_DEFAULT,
+  TX_LEVELING_CONFIG_DEFAULT,
+  normalizeAgc,
+  normalizeAgcMode,
   normalizeMode,
   normalizeNbMode,
   normalizeNr,
   normalizeNrMode,
+  normalizeSquelch,
   normalizeState,
   normalizeStatus,
+  normalizeTxLeveling,
+  setAgc,
   setAgcTop,
+  setSquelch,
+  setTxLeveling,
   setAttenuator,
   setAutoAtt,
   setLevelerMaxGain,
@@ -521,5 +536,260 @@ describe('POST helpers', () => {
       name: 'ApiError',
       status: 409,
     });
+  });
+
+  it('setAgc posts { agc } with string mode to /api/rx/agc', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const cfg: AgcConfigDto = { mode: 'Fast' };
+    await setAgc(cfg);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/rx/agc');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({ agc: { mode: 'Fast' } });
+  });
+
+  it('setAgc posts custom params when provided', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const cfg: AgcConfigDto = {
+      mode: 'Custom',
+      slope: 5,
+      decayMs: 500,
+      hangMs: 300,
+      hangThreshold: 25,
+    };
+    await setAgc(cfg);
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({ agc: cfg });
+  });
+
+  it('setSquelch posts { squelch } to /api/rx/squelch', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const cfg: SquelchConfigDto = { enabled: true, level: 42 };
+    await setSquelch(cfg);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/rx/squelch');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({ squelch: cfg });
+  });
+
+  it('setTxLeveling posts { txLeveling } to /api/tx/leveling', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse(okState));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const cfg: TxLevelingConfigDto = {
+      alcMaxGainDb: 6,
+      alcDecayMs: 20,
+      levelerEnabled: false,
+      levelerDecayMs: 250,
+      compressorEnabled: true,
+      compressorGainDb: 9,
+    };
+    await setTxLeveling(cfg);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/tx/leveling');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({ txLeveling: cfg });
+  });
+});
+
+describe('normalizeAgcMode', () => {
+  it('accepts valid PascalCase string values', () => {
+    expect(normalizeAgcMode('Fixed')).toBe('Fixed');
+    expect(normalizeAgcMode('Long')).toBe('Long');
+    expect(normalizeAgcMode('Slow')).toBe('Slow');
+    expect(normalizeAgcMode('Med')).toBe('Med');
+    expect(normalizeAgcMode('Fast')).toBe('Fast');
+    expect(normalizeAgcMode('Custom')).toBe('Custom');
+  });
+
+  it('maps numeric ordinals (0=Fixed 1=Long 2=Slow 3=Med 4=Fast 5=Custom)', () => {
+    expect(normalizeAgcMode(0)).toBe('Fixed');
+    expect(normalizeAgcMode(1)).toBe('Long');
+    expect(normalizeAgcMode(2)).toBe('Slow');
+    expect(normalizeAgcMode(3)).toBe('Med');
+    expect(normalizeAgcMode(4)).toBe('Fast');
+    expect(normalizeAgcMode(5)).toBe('Custom');
+  });
+
+  it('falls back to Med for unknown strings', () => {
+    expect(normalizeAgcMode('Bogus')).toBe('Med');
+    expect(normalizeAgcMode('auto')).toBe('Med');
+    expect(normalizeAgcMode('')).toBe('Med');
+  });
+
+  it('falls back to Med for out-of-range numeric index', () => {
+    expect(normalizeAgcMode(6)).toBe('Med');
+    expect(normalizeAgcMode(99)).toBe('Med');
+    expect(normalizeAgcMode(-1)).toBe('Med');
+  });
+
+  it('falls back to Med for null/undefined/object', () => {
+    expect(normalizeAgcMode(null)).toBe('Med');
+    expect(normalizeAgcMode(undefined)).toBe('Med');
+    expect(normalizeAgcMode({})).toBe('Med');
+  });
+});
+
+describe('normalizeAgc', () => {
+  it('returns AGC_CONFIG_DEFAULT for null', () => {
+    expect(normalizeAgc(null)).toEqual(AGC_CONFIG_DEFAULT);
+  });
+
+  it('returns AGC_CONFIG_DEFAULT for undefined', () => {
+    expect(normalizeAgc(undefined)).toEqual(AGC_CONFIG_DEFAULT);
+  });
+
+  it('returns AGC_CONFIG_DEFAULT for a missing agc object (normalizeState path)', () => {
+    const s = normalizeState({});
+    expect(s.agc).toEqual(AGC_CONFIG_DEFAULT);
+  });
+
+  it('round-trips a valid AgcConfigDto through normalizeState', () => {
+    const s = normalizeState({
+      status: 'Connected',
+      mode: 'USB',
+      agc: { mode: 'Custom', slope: 5, decayMs: 500, hangMs: 300, hangThreshold: 25 },
+    });
+    expect(s.agc.mode).toBe('Custom');
+    expect(s.agc.slope).toBe(5);
+    expect(s.agc.decayMs).toBe(500);
+    expect(s.agc.hangMs).toBe(300);
+    expect(s.agc.hangThreshold).toBe(25);
+  });
+
+  it('normalizes a garbage mode string inside an agc object to Med', () => {
+    const s = normalizeState({ agc: { mode: 'garbage' } });
+    expect(s.agc.mode).toBe('Med');
+  });
+
+  it('normalizes an out-of-range numeric mode inside an agc object to Med', () => {
+    const s = normalizeState({ agc: { mode: 999 } });
+    expect(s.agc.mode).toBe('Med');
+  });
+});
+
+describe('normalizeSquelch', () => {
+  it('returns SQUELCH_CONFIG_DEFAULT for null', () => {
+    expect(normalizeSquelch(null)).toEqual(SQUELCH_CONFIG_DEFAULT);
+  });
+
+  it('returns SQUELCH_CONFIG_DEFAULT for undefined', () => {
+    expect(normalizeSquelch(undefined)).toEqual(SQUELCH_CONFIG_DEFAULT);
+  });
+
+  it('returns SQUELCH_CONFIG_DEFAULT for a non-object', () => {
+    expect(normalizeSquelch('garbage')).toEqual(SQUELCH_CONFIG_DEFAULT);
+    expect(normalizeSquelch(42)).toEqual(SQUELCH_CONFIG_DEFAULT);
+  });
+
+  it('returns SQUELCH_CONFIG_DEFAULT for a missing squelch object (normalizeState path)', () => {
+    const s = normalizeState({});
+    expect(s.squelch).toEqual(SQUELCH_CONFIG_DEFAULT);
+  });
+
+  it('round-trips a valid SquelchConfigDto through normalizeState', () => {
+    const s = normalizeState({
+      status: 'Connected',
+      mode: 'USB',
+      squelch: { enabled: true, level: 73 },
+    });
+    expect(s.squelch.enabled).toBe(true);
+    expect(s.squelch.level).toBe(73);
+  });
+
+  it('defaults enabled to false when the field is missing or garbage', () => {
+    expect(normalizeSquelch({ level: 20 }).enabled).toBe(false);
+    expect(normalizeSquelch({ enabled: 'yes', level: 20 }).enabled).toBe(false);
+  });
+
+  it('defaults level to 0 for a missing or non-numeric level', () => {
+    expect(normalizeSquelch({ enabled: true }).level).toBe(0);
+    expect(normalizeSquelch({ enabled: true, level: 'loud' }).level).toBe(0);
+  });
+
+  it('clamps an out-of-range level into 0..100', () => {
+    expect(normalizeSquelch({ enabled: true, level: -5 }).level).toBe(0);
+    expect(normalizeSquelch({ enabled: true, level: 250 }).level).toBe(100);
+  });
+
+  it('rounds a fractional level to the nearest integer', () => {
+    expect(normalizeSquelch({ enabled: true, level: 42.6 }).level).toBe(43);
+  });
+});
+
+describe('normalizeTxLeveling', () => {
+  it('returns TX_LEVELING_CONFIG_DEFAULT for null/undefined', () => {
+    expect(normalizeTxLeveling(null)).toEqual(TX_LEVELING_CONFIG_DEFAULT);
+    expect(normalizeTxLeveling(undefined)).toEqual(TX_LEVELING_CONFIG_DEFAULT);
+  });
+
+  it('returns TX_LEVELING_CONFIG_DEFAULT for a non-object', () => {
+    expect(normalizeTxLeveling('garbage')).toEqual(TX_LEVELING_CONFIG_DEFAULT);
+    expect(normalizeTxLeveling(42)).toEqual(TX_LEVELING_CONFIG_DEFAULT);
+  });
+
+  it('returns the default for a missing txLeveling object (normalizeState path)', () => {
+    const s = normalizeState({});
+    expect(s.txLeveling).toEqual(TX_LEVELING_CONFIG_DEFAULT);
+  });
+
+  it('round-trips a valid TxLevelingConfigDto through normalizeState', () => {
+    const s = normalizeState({
+      status: 'Connected',
+      mode: 'USB',
+      txLeveling: {
+        alcMaxGainDb: 6,
+        alcDecayMs: 20,
+        levelerEnabled: false,
+        levelerDecayMs: 250,
+        compressorEnabled: true,
+        compressorGainDb: 9,
+      },
+    });
+    expect(s.txLeveling).toEqual({
+      alcMaxGainDb: 6,
+      alcDecayMs: 20,
+      levelerEnabled: false,
+      levelerDecayMs: 250,
+      compressorEnabled: true,
+      compressorGainDb: 9,
+    });
+  });
+
+  it('falls back per-field for missing or non-numeric values', () => {
+    const out = normalizeTxLeveling({ alcMaxGainDb: 'loud', levelerEnabled: 'yes' });
+    expect(out.alcMaxGainDb).toBe(TX_LEVELING_CONFIG_DEFAULT.alcMaxGainDb);
+    // strict boolean coercion: a string is not a boolean → default true
+    expect(out.levelerEnabled).toBe(TX_LEVELING_CONFIG_DEFAULT.levelerEnabled);
+  });
+
+  it('clamps out-of-range numerics into their Thetis ranges', () => {
+    expect(normalizeTxLeveling({ alcMaxGainDb: -5 }).alcMaxGainDb).toBe(0);
+    expect(normalizeTxLeveling({ alcMaxGainDb: 500 }).alcMaxGainDb).toBe(120);
+    expect(normalizeTxLeveling({ alcDecayMs: 0 }).alcDecayMs).toBe(1);
+    expect(normalizeTxLeveling({ alcDecayMs: 999 }).alcDecayMs).toBe(50);
+    expect(normalizeTxLeveling({ levelerDecayMs: 0 }).levelerDecayMs).toBe(1);
+    expect(normalizeTxLeveling({ levelerDecayMs: 99999 }).levelerDecayMs).toBe(5000);
+    expect(normalizeTxLeveling({ compressorGainDb: -5 }).compressorGainDb).toBe(0);
+    expect(normalizeTxLeveling({ compressorGainDb: 99 }).compressorGainDb).toBe(20);
+  });
+
+  it('rounds fractional integer fields', () => {
+    expect(normalizeTxLeveling({ alcDecayMs: 12.6 }).alcDecayMs).toBe(13);
+    expect(normalizeTxLeveling({ levelerDecayMs: 100.4 }).levelerDecayMs).toBe(100);
   });
 });

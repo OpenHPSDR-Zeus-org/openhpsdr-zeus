@@ -2383,6 +2383,44 @@
 .knob-group > .slider { flex: 1; }
 .knob-group > input[type="range"] { min-width: 80px; }
 
+/* AGC control: the AGC-T slider plus an inline mode dropdown. The mode row
+   anchors a popover holding Custom/Fixed tunables so the toolbar stays compact. */
+.agc-control { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+/* The AGC-T button + dB readout are fixed-width; let the slider absorb the
+   slack so the readout never overflows the 160 px control-strip group. The
+   default .knob-group 80 px slider floor would push it past the panel edge. */
+.agc-control .knob-group { min-width: 0; gap: 6px; }
+.agc-control .knob-group > input[type="range"] { min-width: 36px; }
+.agc-mode-row { position: relative; display: flex; align-items: center; gap: 4px; }
+.agc-mode-select {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg-0);
+  color: var(--fg-0);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.agc-mode-select:disabled { opacity: 0.5; cursor: default; }
+.agc-params-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 190px;
+  padding: 8px;
+  background: var(--panel-top, var(--bg-1));
+  border: 1px solid var(--line-strong, var(--line));
+  border-radius: var(--r-md, 4px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+}
+.agc-param-row { display: flex; align-items: center; gap: 8px; }
+
 /* ===== Terminator ===== */
 .t1000-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 3; overflow: hidden; }
 .t1000-line {

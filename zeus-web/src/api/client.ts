@@ -44,6 +44,10 @@
 
 import { warnOnce } from '../util/logger';
 import { useVfoLockStore as vfoLockStore } from '../state/vfo-lock-store';
+import {
+  parseBoardCapabilities,
+  type BoardCapabilities,
+} from './board-capabilities';
 
 export type ConnectionStatus =
   | 'Disconnected'
@@ -65,6 +69,67 @@ export type RxMode =
 
 export type NrMode = 'Off' | 'Anr' | 'Emnr' | 'Sbnr';
 export type NbMode = 'Off' | 'Nb1' | 'Nb2';
+
+// RXA AGC mode. PascalCase strings match the server's JsonStringEnumConverter
+// (AgcMode enum). Custom unlocks the per-param controls; Fixed unlocks the
+// fixed-gain field. Med is the Thetis (and Zeus) default.
+export type AgcMode = 'Fixed' | 'Long' | 'Slow' | 'Med' | 'Fast' | 'Custom';
+
+// AGC mode + custom/fixed params. Null params = "use the canned preset" — only
+// consulted in Custom mode (and fixedGainDb only in Fixed mode). The AGC
+// max-gain ("top") is NOT here — it lives on RadioStateDto.agcTopDb with its
+// own /api/agcGain path. Mirrors Zeus.Contracts AgcConfig.
+export type AgcConfigDto = {
+  mode: AgcMode;
+  slope?: number | null;
+  decayMs?: number | null;
+  hangMs?: number | null;
+  hangThreshold?: number | null;
+  fixedGainDb?: number | null;
+};
+
+export const AGC_CONFIG_DEFAULT: AgcConfigDto = {
+  mode: 'Med',
+};
+
+// RX squelch — a single mode-aware control (Thetis parity §5). The server
+// routes run + threshold to the WDSP squelch stage matching the current RX
+// mode (SSB/CW → SSQL, AM/SAM → AMSQ, FM → FMSQ). `level` is a unitless
+// 0..100 where higher = tighter squelch. Mirrors Zeus.Contracts SquelchConfig.
+export type SquelchConfigDto = {
+  enabled: boolean;
+  level: number;
+};
+
+export const SQUELCH_CONFIG_DEFAULT: SquelchConfigDto = {
+  enabled: false,
+  level: 0,
+};
+
+// TX leveling — ALC (max-gain + decay), Leveler (on/off + decay), Compressor
+// (on/off + gain). Mirrors Zeus.Contracts TxLevelingConfig. The ALC run state
+// is NOT exposed (always on); the Leveler MAX-GAIN ("top") lives separately on
+// RadioStateDto.levelerMaxGainDb with its own /api/tx/leveler-max-gain path.
+// Ranges/defaults mirror Thetis: alcMaxGainDb 0..120 (3), alcDecayMs 1..50
+// (10), levelerEnabled default true, levelerDecayMs 1..5000 (100),
+// compressorEnabled default false, compressorGainDb 0..20 (0).
+export type TxLevelingConfigDto = {
+  alcMaxGainDb: number;
+  alcDecayMs: number;
+  levelerEnabled: boolean;
+  levelerDecayMs: number;
+  compressorEnabled: boolean;
+  compressorGainDb: number;
+};
+
+export const TX_LEVELING_CONFIG_DEFAULT: TxLevelingConfigDto = {
+  alcMaxGainDb: 3,
+  alcDecayMs: 10,
+  levelerEnabled: true,
+  levelerDecayMs: 100,
+  compressorEnabled: false,
+  compressorGainDb: 0,
+};
 
 export type NrConfigDto = {
   nrMode: NrMode;
@@ -173,6 +238,12 @@ export type RadioStateDto = {
   txFilterHighHz: number;
   sampleRate: number;
   agcTopDb: number;
+  // AGC mode + custom/fixed params (separate from agcTopDb max-gain).
+  agc: AgcConfigDto;
+  // RX squelch (mode-aware single control).
+  squelch: SquelchConfigDto;
+  // TX leveling (ALC + Leveler + Compressor). Leveler max-gain stays separate.
+  txLeveling: TxLevelingConfigDto;
   autoAgcEnabled: boolean;
   agcOffsetDb: number;
   rxAfGainDb: number;
@@ -305,6 +376,235 @@ export type RadioInfoDto = {
   details: Record<string, string> | null;
 };
 
+export type HardwareDiagnosticItemDto = {
+  field: string;
+  source?: string;
+  status: string;
+  notes: string;
+};
+
+export type HardwareFeatureSurfaceDto = {
+  id: string;
+  title: string;
+  category: string;
+  implementationStatus: string;
+  userConfigurable: boolean;
+  source: string;
+  telemetryPaths: string[];
+  candidateControls: string[];
+  safetyClass: string;
+  notes: string;
+};
+
+export type HardwareP1DiagnosticsDto = {
+  packets: number;
+  lastUpdatedUtc: string | null;
+  lastC0Address: number | null;
+  lastAin0: number | null;
+  lastAin1: number | null;
+  exciterAdc: number | null;
+  fwdAdc: number | null;
+  revAdc: number | null;
+  userAdc0: number | null;
+  userAdc1: number | null;
+  supplyVoltsAdc: number | null;
+  adcOverloadBits: number;
+  hardwarePtt: boolean | null;
+  cwKeyDown: boolean | null;
+};
+
+export type HardwareP2DiagnosticsDto = {
+  packets: number;
+  lastUpdatedUtc: string | null;
+  pttIn: boolean | null;
+  dotIn: boolean | null;
+  dashIn: boolean | null;
+  pllLocked: boolean | null;
+  sidetoneActive: boolean | null;
+  adcOverloadBits: number | null;
+  exciterAdc: number | null;
+  fwdAdc: number | null;
+  revAdc: number | null;
+  adc0MaxMagnitude: number | null;
+  adc1MaxMagnitude: number | null;
+  adc0MaxMagnitudeAtOverload: number;
+  adc1MaxMagnitudeAtOverload: number;
+  supplyVoltsAdc: number | null;
+  userAdc0: number | null;
+  userAdc1: number | null;
+  userAdc2: number | null;
+  userAdc3: number | null;
+  userDigitalIn: number | null;
+  hardwareLeds: number | null;
+};
+
+export type HardwareMapByteDto = {
+  offset: number;
+  hexOffset: string;
+  known: string | null;
+  first: number;
+  last: number;
+  min: number;
+  max: number;
+  changedMask: number;
+  changedMaskHex: string;
+  changeCount: number;
+  bitSetCounts: number[];
+  bitChangeCounts: number[];
+};
+
+export type HardwareMapWordDto = {
+  offset: number;
+  hexOffset: string;
+  known: string | null;
+  first: number;
+  last: number;
+  min: number;
+  max: number;
+  changeCount: number;
+};
+
+export type HardwareByteStreamMapDto = {
+  stream: string;
+  source: string;
+  samples: number;
+  startedUtc: string | null;
+  lastUpdatedUtc: string | null;
+  length: number;
+  lastHex: string;
+  changedByteCount: number;
+  changedWordCount: number;
+  bytes: HardwareMapByteDto[];
+  words: HardwareMapWordDto[];
+};
+
+export type HardwareP1AddressMapDto = {
+  c0Address: number;
+  hexAddress: string;
+  samples: number;
+  lastRawC0: number;
+  lastRawC0Hex: string;
+  firstAin0: number;
+  firstAin1: number;
+  lastAin0: number;
+  lastAin1: number;
+  minAin0: number;
+  maxAin0: number;
+  minAin1: number;
+  maxAin1: number;
+  ain0ChangeCount: number;
+  ain1ChangeCount: number;
+  knownAin0: string | null;
+  knownAin1: string | null;
+  notes: string;
+};
+
+export type HardwareP1MapDto = {
+  stream: string;
+  source: string;
+  samples: number;
+  startedUtc: string | null;
+  lastUpdatedUtc: string | null;
+  addresses: HardwareP1AddressMapDto[];
+  rawGap: string;
+};
+
+export type HardwareP1MarkerDeltaDto = {
+  c0Address: number;
+  hexAddress: string;
+  knownAin0: string | null;
+  knownAin1: string | null;
+  previousAin0: number | null;
+  currentAin0: number | null;
+  previousAin1: number | null;
+  currentAin1: number | null;
+  ain0Delta: number | null;
+  ain1Delta: number | null;
+  ain0ChangeCountDelta: number;
+  ain1ChangeCountDelta: number;
+};
+
+export type HardwareByteMarkerDeltaDto = {
+  offset: number;
+  hexOffset: string;
+  known: string | null;
+  previous: number | null;
+  current: number | null;
+  previousHex: string;
+  currentHex: string;
+  xorMask: number;
+  xorMaskHex: string;
+  intervalChangeCount: number;
+  intervalChangedBits: number[];
+};
+
+export type HardwareWordMarkerDeltaDto = {
+  offset: number;
+  hexOffset: string;
+  known: string | null;
+  previous: number | null;
+  current: number | null;
+  previousHex: string;
+  currentHex: string;
+  valueDelta: number | null;
+  intervalChangeCount: number;
+};
+
+export type HardwareMappingMarkerDeltaDto = {
+  previousId: number | null;
+  previousLabel: string | null;
+  baseline: boolean;
+  p1SampleDelta: number;
+  p2SampleDelta: number;
+  p1ChangedAddresses: HardwareP1MarkerDeltaDto[];
+  p2ChangedBytes: HardwareByteMarkerDeltaDto[];
+  p2ChangedWords: HardwareWordMarkerDeltaDto[];
+};
+
+export type HardwareMappingMarkerDto = {
+  id: number;
+  label: string;
+  notes: string | null;
+  createdUtc: string;
+  activeProtocol: 'P1' | 'P2' | null;
+  endpoint: string | null;
+  p1Packets: number;
+  p2Packets: number;
+  p1Samples: number;
+  p2Samples: number;
+  p1LastUpdatedUtc: string | null;
+  p2LastUpdatedUtc: string | null;
+  sincePrevious: HardwareMappingMarkerDeltaDto;
+};
+
+export type HardwareMappingDto = {
+  schemaVersion: number;
+  p1: HardwareP1MapDto;
+  p2HiPriority: HardwareByteStreamMapDto;
+  markers: HardwareMappingMarkerDto[];
+};
+
+export type HardwareDiagnosticsDto = {
+  hardwareDiagnosticsApiVersion: number;
+  generatedUtc: string;
+  connectionStatus: ConnectionStatus;
+  endpoint: string | null;
+  vfoHz: number;
+  sampleRate: number;
+  mode: RxMode;
+  connectedBoard: string;
+  effectiveBoard: string;
+  orionMkIIVariant: string;
+  capabilities: BoardCapabilities;
+  activeProtocol: 'P1' | 'P2' | null;
+  p1: HardwareP1DiagnosticsDto;
+  p2: HardwareP2DiagnosticsDto;
+  mapping: HardwareMappingDto;
+  referenceMap: HardwareDiagnosticItemDto[];
+  candidateSettings: HardwareDiagnosticItemDto[];
+  featureSurfaces: HardwareFeatureSurfaceDto[];
+};
+
 export type ConnectRequest = {
   endpoint: string;
   sampleRate: number;
@@ -393,6 +693,90 @@ export function normalizeNbMode(v: unknown): NbMode {
   return 'Off';
 }
 
+// AGC mode wire order matches the AgcMode enum values (Fixed=0..Custom=5), so a
+// numeric payload maps by index. Strings are validated against the union.
+const AGC_MODE_ORDER: readonly AgcMode[] = [
+  'Fixed',
+  'Long',
+  'Slow',
+  'Med',
+  'Fast',
+  'Custom',
+];
+
+export function normalizeAgcMode(v: unknown): AgcMode {
+  if (typeof v === 'string') {
+    return (AGC_MODE_ORDER as readonly string[]).includes(v)
+      ? (v as AgcMode)
+      : 'Med';
+  }
+  if (typeof v === 'number' && Number.isInteger(v)) {
+    return AGC_MODE_ORDER[v] ?? 'Med';
+  }
+  return 'Med';
+}
+
+export function normalizeAgc(raw: unknown): AgcConfigDto {
+  if (!raw || typeof raw !== 'object') return { ...AGC_CONFIG_DEFAULT };
+  const r = raw as Record<string, unknown>;
+  return {
+    mode: normalizeAgcMode(r.mode),
+    slope: nullableInt(r.slope),
+    decayMs: nullableInt(r.decayMs),
+    hangMs: nullableInt(r.hangMs),
+    hangThreshold: nullableInt(r.hangThreshold),
+    fixedGainDb: nullableNumber(r.fixedGainDb),
+  };
+}
+
+// RX squelch normaliser. A null/garbage payload (older server, missing field)
+// collapses to the off default. `level` is clamped to 0..100 so a malformed
+// server value can never push the slider out of range.
+export function normalizeSquelch(raw: unknown): SquelchConfigDto {
+  if (!raw || typeof raw !== 'object') return { ...SQUELCH_CONFIG_DEFAULT };
+  const r = raw as Record<string, unknown>;
+  const level =
+    typeof r.level === 'number' && Number.isFinite(r.level)
+      ? Math.max(0, Math.min(100, Math.round(r.level)))
+      : 0;
+  return {
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : false,
+    level,
+  };
+}
+
+// TX leveling normaliser. A null/garbage payload (older server, missing field)
+// collapses to the defaults. Each numeric field is clamped to its Thetis range
+// and the booleans coerce strictly so a malformed server value can never push a
+// control out of range. Mirrors normalizeSquelch's defensive shape.
+export function normalizeTxLeveling(raw: unknown): TxLevelingConfigDto {
+  if (!raw || typeof raw !== 'object')
+    return { ...TX_LEVELING_CONFIG_DEFAULT };
+  const r = raw as Record<string, unknown>;
+  const num = (v: unknown, fallback: number, min: number, max: number) =>
+    typeof v === 'number' && Number.isFinite(v)
+      ? Math.max(min, Math.min(max, v))
+      : fallback;
+  const int = (v: unknown, fallback: number, min: number, max: number) =>
+    typeof v === 'number' && Number.isFinite(v)
+      ? Math.max(min, Math.min(max, Math.round(v)))
+      : fallback;
+  return {
+    alcMaxGainDb: num(r.alcMaxGainDb, TX_LEVELING_CONFIG_DEFAULT.alcMaxGainDb, 0, 120),
+    alcDecayMs: int(r.alcDecayMs, TX_LEVELING_CONFIG_DEFAULT.alcDecayMs, 1, 50),
+    levelerEnabled:
+      typeof r.levelerEnabled === 'boolean'
+        ? r.levelerEnabled
+        : TX_LEVELING_CONFIG_DEFAULT.levelerEnabled,
+    levelerDecayMs: int(r.levelerDecayMs, TX_LEVELING_CONFIG_DEFAULT.levelerDecayMs, 1, 5000),
+    compressorEnabled:
+      typeof r.compressorEnabled === 'boolean'
+        ? r.compressorEnabled
+        : TX_LEVELING_CONFIG_DEFAULT.compressorEnabled,
+    compressorGainDb: num(r.compressorGainDb, TX_LEVELING_CONFIG_DEFAULT.compressorGainDb, 0, 20),
+  };
+}
+
 // `null` means "no operator override yet — use engine default" and round-
 // trips that signal back to the server. Anything else (number/bool) is
 // preserved; missing keys collapse to null so an older server payload
@@ -457,6 +841,11 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // Default 80 matches WdspDspEngine.ApplyAgcDefaults and the Thetis
     // AGC_MEDIUM preset. Missing from older servers — tolerate absence.
     agcTopDb: typeof r.agcTopDb === 'number' ? r.agcTopDb : 80,
+    // StateDto.Agc is nullable on the server (older clients) — fall back to the
+    // Med default so the UI always has a mode to render.
+    agc: normalizeAgc(r.agc),
+    squelch: normalizeSquelch(r.squelch),
+    txLeveling: normalizeTxLeveling(r.txLeveling),
     autoAgcEnabled: typeof r.autoAgcEnabled === 'boolean' ? r.autoAgcEnabled : false,
     agcOffsetDb: typeof r.agcOffsetDb === 'number' ? r.agcOffsetDb : 0,
     rxAfGainDb: typeof r.rxAfGainDb === 'number' ? r.rxAfGainDb : 0,
@@ -599,6 +988,345 @@ function normalizeRadios(raw: unknown): RadioInfoDto[] {
   });
 }
 
+function asDiagRecord(raw: unknown): Record<string, unknown> {
+  return raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+}
+
+function diagNumber(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+function diagBool(v: unknown): boolean | null {
+  return typeof v === 'boolean' ? v : null;
+}
+
+function diagString(v: unknown): string | null {
+  return typeof v === 'string' ? v : null;
+}
+
+function normalizeDiagnosticItems(raw: unknown): HardwareDiagnosticItemDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    return {
+      field: typeof r.field === 'string' ? r.field : '',
+      source: typeof r.source === 'string' ? r.source : undefined,
+      status: typeof r.status === 'string' ? r.status : '',
+      notes: typeof r.notes === 'string' ? r.notes : '',
+    };
+  });
+}
+
+function diagStringArray(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter((v): v is string => typeof v === 'string');
+}
+
+function normalizeFeatureSurfaces(raw: unknown): HardwareFeatureSurfaceDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    return {
+      id: diagString(r.id) ?? '',
+      title: diagString(r.title) ?? '',
+      category: diagString(r.category) ?? '',
+      implementationStatus: diagString(r.implementationStatus) ?? '',
+      userConfigurable: Boolean(r.userConfigurable),
+      source: diagString(r.source) ?? '',
+      telemetryPaths: diagStringArray(r.telemetryPaths),
+      candidateControls: diagStringArray(r.candidateControls),
+      safetyClass: diagString(r.safetyClass) ?? '',
+      notes: diagString(r.notes) ?? '',
+    };
+  });
+}
+
+function diagNumberArray(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((v) => diagNumber(v) ?? 0);
+}
+
+function normalizeMapBytes(raw: unknown): HardwareMapByteDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    return {
+      offset: diagNumber(r.offset) ?? 0,
+      hexOffset: diagString(r.hexOffset) ?? '0x00',
+      known: diagString(r.known),
+      first: diagNumber(r.first) ?? 0,
+      last: diagNumber(r.last) ?? 0,
+      min: diagNumber(r.min) ?? 0,
+      max: diagNumber(r.max) ?? 0,
+      changedMask: diagNumber(r.changedMask) ?? 0,
+      changedMaskHex: diagString(r.changedMaskHex) ?? '0x00',
+      changeCount: diagNumber(r.changeCount) ?? 0,
+      bitSetCounts: diagNumberArray(r.bitSetCounts),
+      bitChangeCounts: diagNumberArray(r.bitChangeCounts),
+    };
+  });
+}
+
+function normalizeMapWords(raw: unknown): HardwareMapWordDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    return {
+      offset: diagNumber(r.offset) ?? 0,
+      hexOffset: diagString(r.hexOffset) ?? '0x00',
+      known: diagString(r.known),
+      first: diagNumber(r.first) ?? 0,
+      last: diagNumber(r.last) ?? 0,
+      min: diagNumber(r.min) ?? 0,
+      max: diagNumber(r.max) ?? 0,
+      changeCount: diagNumber(r.changeCount) ?? 0,
+    };
+  });
+}
+
+function normalizeByteStreamMap(raw: unknown): HardwareByteStreamMapDto {
+  const r = asDiagRecord(raw);
+  return {
+    stream: diagString(r.stream) ?? '',
+    source: diagString(r.source) ?? '',
+    samples: diagNumber(r.samples) ?? 0,
+    startedUtc: diagString(r.startedUtc),
+    lastUpdatedUtc: diagString(r.lastUpdatedUtc),
+    length: diagNumber(r.length) ?? 0,
+    lastHex: diagString(r.lastHex) ?? '',
+    changedByteCount: diagNumber(r.changedByteCount) ?? 0,
+    changedWordCount: diagNumber(r.changedWordCount) ?? 0,
+    bytes: normalizeMapBytes(r.bytes),
+    words: normalizeMapWords(r.words),
+  };
+}
+
+function normalizeP1AddressMap(raw: unknown): HardwareP1AddressMapDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    return {
+      c0Address: diagNumber(r.c0Address) ?? 0,
+      hexAddress: diagString(r.hexAddress) ?? '0x00',
+      samples: diagNumber(r.samples) ?? 0,
+      lastRawC0: diagNumber(r.lastRawC0) ?? 0,
+      lastRawC0Hex: diagString(r.lastRawC0Hex) ?? '0x00',
+      firstAin0: diagNumber(r.firstAin0) ?? 0,
+      firstAin1: diagNumber(r.firstAin1) ?? 0,
+      lastAin0: diagNumber(r.lastAin0) ?? 0,
+      lastAin1: diagNumber(r.lastAin1) ?? 0,
+      minAin0: diagNumber(r.minAin0) ?? 0,
+      maxAin0: diagNumber(r.maxAin0) ?? 0,
+      minAin1: diagNumber(r.minAin1) ?? 0,
+      maxAin1: diagNumber(r.maxAin1) ?? 0,
+      ain0ChangeCount: diagNumber(r.ain0ChangeCount) ?? 0,
+      ain1ChangeCount: diagNumber(r.ain1ChangeCount) ?? 0,
+      knownAin0: diagString(r.knownAin0),
+      knownAin1: diagString(r.knownAin1),
+      notes: diagString(r.notes) ?? '',
+    };
+  });
+}
+
+function normalizeP1Map(raw: unknown): HardwareP1MapDto {
+  const r = asDiagRecord(raw);
+  return {
+    stream: diagString(r.stream) ?? '',
+    source: diagString(r.source) ?? '',
+    samples: diagNumber(r.samples) ?? 0,
+    startedUtc: diagString(r.startedUtc),
+    lastUpdatedUtc: diagString(r.lastUpdatedUtc),
+    addresses: normalizeP1AddressMap(r.addresses),
+    rawGap: diagString(r.rawGap) ?? '',
+  };
+}
+
+function normalizeP1MarkerDeltas(raw: unknown): HardwareP1MarkerDeltaDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    return {
+      c0Address: diagNumber(r.c0Address) ?? 0,
+      hexAddress: diagString(r.hexAddress) ?? '0x00',
+      knownAin0: diagString(r.knownAin0),
+      knownAin1: diagString(r.knownAin1),
+      previousAin0: diagNumber(r.previousAin0),
+      currentAin0: diagNumber(r.currentAin0),
+      previousAin1: diagNumber(r.previousAin1),
+      currentAin1: diagNumber(r.currentAin1),
+      ain0Delta: diagNumber(r.ain0Delta),
+      ain1Delta: diagNumber(r.ain1Delta),
+      ain0ChangeCountDelta: diagNumber(r.ain0ChangeCountDelta) ?? 0,
+      ain1ChangeCountDelta: diagNumber(r.ain1ChangeCountDelta) ?? 0,
+    };
+  });
+}
+
+function normalizeByteMarkerDeltas(raw: unknown): HardwareByteMarkerDeltaDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    return {
+      offset: diagNumber(r.offset) ?? 0,
+      hexOffset: diagString(r.hexOffset) ?? '0x00',
+      known: diagString(r.known),
+      previous: diagNumber(r.previous),
+      current: diagNumber(r.current),
+      previousHex: diagString(r.previousHex) ?? '-',
+      currentHex: diagString(r.currentHex) ?? '-',
+      xorMask: diagNumber(r.xorMask) ?? 0,
+      xorMaskHex: diagString(r.xorMaskHex) ?? '0x00',
+      intervalChangeCount: diagNumber(r.intervalChangeCount) ?? 0,
+      intervalChangedBits: diagNumberArray(r.intervalChangedBits),
+    };
+  });
+}
+
+function normalizeWordMarkerDeltas(raw: unknown): HardwareWordMarkerDeltaDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    return {
+      offset: diagNumber(r.offset) ?? 0,
+      hexOffset: diagString(r.hexOffset) ?? '0x00',
+      known: diagString(r.known),
+      previous: diagNumber(r.previous),
+      current: diagNumber(r.current),
+      previousHex: diagString(r.previousHex) ?? '-',
+      currentHex: diagString(r.currentHex) ?? '-',
+      valueDelta: diagNumber(r.valueDelta),
+      intervalChangeCount: diagNumber(r.intervalChangeCount) ?? 0,
+    };
+  });
+}
+
+function normalizeMappingMarkerDelta(raw: unknown): HardwareMappingMarkerDeltaDto {
+  const r = asDiagRecord(raw);
+  return {
+    previousId: diagNumber(r.previousId),
+    previousLabel: diagString(r.previousLabel),
+    baseline: Boolean(r.baseline),
+    p1SampleDelta: diagNumber(r.p1SampleDelta) ?? 0,
+    p2SampleDelta: diagNumber(r.p2SampleDelta) ?? 0,
+    p1ChangedAddresses: normalizeP1MarkerDeltas(r.p1ChangedAddresses),
+    p2ChangedBytes: normalizeByteMarkerDeltas(r.p2ChangedBytes),
+    p2ChangedWords: normalizeWordMarkerDeltas(r.p2ChangedWords),
+  };
+}
+
+function normalizeMappingMarkers(raw: unknown): HardwareMappingMarkerDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    const activeProtocol =
+      r.activeProtocol === 'P1' || r.activeProtocol === 'P2'
+        ? r.activeProtocol
+        : null;
+    return {
+      id: diagNumber(r.id) ?? 0,
+      label: diagString(r.label) ?? '',
+      notes: diagString(r.notes),
+      createdUtc: diagString(r.createdUtc) ?? new Date().toISOString(),
+      activeProtocol,
+      endpoint: diagString(r.endpoint),
+      p1Packets: diagNumber(r.p1Packets) ?? 0,
+      p2Packets: diagNumber(r.p2Packets) ?? 0,
+      p1Samples: diagNumber(r.p1Samples) ?? 0,
+      p2Samples: diagNumber(r.p2Samples) ?? 0,
+      p1LastUpdatedUtc: diagString(r.p1LastUpdatedUtc),
+      p2LastUpdatedUtc: diagString(r.p2LastUpdatedUtc),
+      sincePrevious: normalizeMappingMarkerDelta(r.sincePrevious),
+    };
+  });
+}
+
+function normalizeHardwareMapping(raw: unknown): HardwareMappingDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 1,
+    p1: normalizeP1Map(r.p1),
+    p2HiPriority: normalizeByteStreamMap(r.p2HiPriority),
+    markers: normalizeMappingMarkers(r.markers),
+  };
+}
+
+function normalizeHardwareDiagnostics(raw: unknown): HardwareDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  const p1 = asDiagRecord(r.p1);
+  const p2 = asDiagRecord(r.p2);
+  const activeProtocol =
+    r.activeProtocol === 'P1' || r.activeProtocol === 'P2'
+      ? r.activeProtocol
+      : null;
+  return {
+    hardwareDiagnosticsApiVersion:
+      diagNumber(r.hardwareDiagnosticsApiVersion) ?? 0,
+    generatedUtc:
+      typeof r.generatedUtc === 'string'
+        ? r.generatedUtc
+        : new Date().toISOString(),
+    connectionStatus: normalizeStatus(r.connectionStatus),
+    endpoint: diagString(r.endpoint),
+    vfoHz: diagNumber(r.vfoHz) ?? 0,
+    sampleRate: diagNumber(r.sampleRate) ?? 0,
+    mode: normalizeMode(r.mode),
+    connectedBoard:
+      typeof r.connectedBoard === 'string' ? r.connectedBoard : 'Unknown',
+    effectiveBoard:
+      typeof r.effectiveBoard === 'string' ? r.effectiveBoard : 'Unknown',
+    orionMkIIVariant:
+      typeof r.orionMkIIVariant === 'string' ? r.orionMkIIVariant : 'G2',
+    capabilities: parseBoardCapabilities(r.capabilities),
+    activeProtocol,
+    p1: {
+      packets: diagNumber(p1.packets) ?? 0,
+      lastUpdatedUtc: diagString(p1.lastUpdatedUtc),
+      lastC0Address: diagNumber(p1.lastC0Address),
+      lastAin0: diagNumber(p1.lastAin0),
+      lastAin1: diagNumber(p1.lastAin1),
+      exciterAdc: diagNumber(p1.exciterAdc),
+      fwdAdc: diagNumber(p1.fwdAdc),
+      revAdc: diagNumber(p1.revAdc),
+      userAdc0: diagNumber(p1.userAdc0),
+      userAdc1: diagNumber(p1.userAdc1),
+      supplyVoltsAdc: diagNumber(p1.supplyVoltsAdc),
+      adcOverloadBits: diagNumber(p1.adcOverloadBits) ?? 0,
+      hardwarePtt: diagBool(p1.hardwarePtt),
+      cwKeyDown: diagBool(p1.cwKeyDown),
+    },
+    p2: {
+      packets: diagNumber(p2.packets) ?? 0,
+      lastUpdatedUtc: diagString(p2.lastUpdatedUtc),
+      pttIn: diagBool(p2.pttIn),
+      dotIn: diagBool(p2.dotIn),
+      dashIn: diagBool(p2.dashIn),
+      pllLocked: diagBool(p2.pllLocked),
+      sidetoneActive: diagBool(p2.sidetoneActive),
+      adcOverloadBits: diagNumber(p2.adcOverloadBits),
+      exciterAdc: diagNumber(p2.exciterAdc),
+      fwdAdc: diagNumber(p2.fwdAdc),
+      revAdc: diagNumber(p2.revAdc),
+      adc0MaxMagnitude: diagNumber(p2.adc0MaxMagnitude),
+      adc1MaxMagnitude: diagNumber(p2.adc1MaxMagnitude),
+      adc0MaxMagnitudeAtOverload:
+        diagNumber(p2.adc0MaxMagnitudeAtOverload) ?? 0,
+      adc1MaxMagnitudeAtOverload:
+        diagNumber(p2.adc1MaxMagnitudeAtOverload) ?? 0,
+      supplyVoltsAdc: diagNumber(p2.supplyVoltsAdc),
+      userAdc0: diagNumber(p2.userAdc0),
+      userAdc1: diagNumber(p2.userAdc1),
+      userAdc2: diagNumber(p2.userAdc2),
+      userAdc3: diagNumber(p2.userAdc3),
+      userDigitalIn: diagNumber(p2.userDigitalIn),
+      hardwareLeds: diagNumber(p2.hardwareLeds),
+    },
+    mapping: normalizeHardwareMapping(r.mapping),
+    referenceMap: normalizeDiagnosticItems(r.referenceMap),
+    candidateSettings: normalizeDiagnosticItems(r.candidateSettings),
+    featureSurfaces: normalizeFeatureSurfaces(r.featureSurfaces),
+  };
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -643,6 +1371,43 @@ export function fetchState(signal?: AbortSignal): Promise<RadioStateDto> {
 
 export function fetchRadios(signal?: AbortSignal): Promise<RadioInfoDto[]> {
   return jsonFetch('/api/radios', { signal }, normalizeRadios);
+}
+
+export function fetchHardwareDiagnostics(
+  signal?: AbortSignal,
+): Promise<HardwareDiagnosticsDto> {
+  return jsonFetch(
+    '/api/radio/diagnostics',
+    { signal },
+    normalizeHardwareDiagnostics,
+  );
+}
+
+export function resetHardwareDiagnosticsMap(
+  signal?: AbortSignal,
+): Promise<HardwareDiagnosticsDto> {
+  return jsonFetch(
+    '/api/radio/diagnostics/map/reset',
+    { method: 'POST', signal },
+    normalizeHardwareDiagnostics,
+  );
+}
+
+export function createHardwareDiagnosticsMarker(
+  label: string,
+  notes?: string,
+  signal?: AbortSignal,
+): Promise<HardwareDiagnosticsDto> {
+  return jsonFetch(
+    '/api/radio/diagnostics/map/marker',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ label, notes }),
+      signal,
+    },
+    normalizeHardwareDiagnostics,
+  );
 }
 
 export function connect(
@@ -1090,6 +1855,61 @@ export function setNr(
   );
 }
 
+export function setAgc(
+  agc: AgcConfigDto,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/rx/agc',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      // Server registers JsonStringEnumConverter, so AgcMode travels as a
+      // PascalCase string ("Fixed"/"Long"/.../"Custom"). Unknown values get
+      // a 400, which ApiError surfaces to the caller.
+      body: JSON.stringify({ agc }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function setSquelch(
+  squelch: SquelchConfigDto,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/rx/squelch',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      // The server clamps level to 0..100 and 400s anything out of range.
+      body: JSON.stringify({ squelch }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// TX leveling — replace-style like setSquelch. The server validates/clamps
+// every range and 400s anything out of bounds. Returns the full state for
+// optimistic-send + applyState reconcile.
+export function setTxLeveling(
+  txLeveling: TxLevelingConfigDto,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/leveling',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ txLeveling }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
 // PATCH-style request for the NR2 right-click popover. All fields nullable;
 // server merges onto the persisted NrConfig and returns the full state so
 // the frontend can reconcile.
@@ -1341,7 +2161,7 @@ export function saveBandMemory(
 }
 
 // Leveler max-gain endpoint: POST /api/tx/leveler-max-gain { gain }. Returns
-// { levelerMaxGainDb }. Backend clamps to [0, 15] and echoes the applied
+// { levelerMaxGainDb }. Backend clamps to [0, 20] and echoes the applied
 // value; stateless across backend restart, so ConnectPanel re-POSTs the
 // persisted value when the connection comes up. Same 404-tolerant pattern as
 // setMicGain for the frontend-ahead-of-backend window.

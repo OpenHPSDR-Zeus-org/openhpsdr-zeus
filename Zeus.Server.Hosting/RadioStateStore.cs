@@ -154,7 +154,7 @@ public sealed class RadioStateEntry
     // save it; lived only in frontend localStorage and reverted on every restart
     // when the desktop webview's storage was wiped.
     public int MicGainDb { get; set; }
-    // TX Leveler max-gain ceiling in dB, range [0, 15]. Default 8.0 matches
+    // TX Leveler max-gain ceiling in dB, range [0, 20]. Default 8.0 matches
     // WdspDspEngine.DefaultLevelerMaxGainDb so legacy rows missing the field
     // hydrate with the same ceiling the engine has always opened with. Like
     // MicGainDb, this used to live only in localStorage and reverted on

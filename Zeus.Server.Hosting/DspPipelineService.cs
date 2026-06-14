@@ -228,6 +228,22 @@ public class DspPipelineService : BackgroundService,
     // with the persisted value matching the 8 dB default still re-pushes it.
     private double _appliedTxLevelerMaxGainDb = double.NaN;
     private NrConfig _appliedNr = new();
+    // AGC mode + custom params latch (issue: DSP controls Thetis parity §4).
+    // Same change-detect pattern as _appliedNr — SetAgc only fires when the
+    // config actually moves. Seeded to Med so a connect landing on the Med
+    // default still matches what ApplyStateToNewChannel force-pushed.
+    private AgcConfig _appliedAgc = new(AgcMode.Med);
+    // RX squelch latch (issue: DSP controls Thetis parity §5). Same
+    // change-detect pattern as _appliedAgc — SetSquelch only fires when the
+    // config actually moves. Seeded to the off default so a connect landing on
+    // squelch-off still matches what ApplyStateToNewChannel force-pushed.
+    private SquelchConfig _appliedSquelch = new();
+    // TX leveling latch (issue: DSP controls Thetis parity §6.1-6.3). Same
+    // change-detect pattern as _appliedAgc/_appliedSquelch — SetTxLeveling only
+    // fires when the config actually moves. Seeded to the TxLevelingConfig
+    // defaults so a connect landing on defaults still matches what
+    // ApplyStateToNewChannel force-pushed.
+    private TxLevelingConfig _appliedTxLeveling = new();
     private int _appliedZoomLevel = 1;
     // PureSignal latched values — same change-detect pattern as the others
     // so OnRadioStateChanged only fires the (possibly heavy)
@@ -443,6 +459,7 @@ public class DspPipelineService : BackgroundService,
         _radio.MoxChanged += OnRadioMoxChanged;
         _radio.TunActiveChanged += OnRadioTunActiveChanged;
         _radio.PreampChanged += OnRadioPreampChanged;
+        _radio.NotchesChanged += OnRadioNotchesChanged;
         // Frequency-correction factor (issue #325) — RadioService can't
         // push to the P2 client directly (ActiveClient is P1-only), so we
         // listen for changes here and forward them to the live P2 client.
@@ -481,6 +498,7 @@ public class DspPipelineService : BackgroundService,
             _radio.MoxChanged -= OnRadioMoxChanged;
             _radio.TunActiveChanged -= OnRadioTunActiveChanged;
             _radio.PreampChanged -= OnRadioPreampChanged;
+            _radio.NotchesChanged -= OnRadioNotchesChanged;
             _radio.FrequencyCorrectionFactorChanged -= OnFrequencyCorrectionFactorChanged;
             // iter5: no more pump tasks to stop — the sink path runs on the
             // protocol client's RX thread, which the protocol client tears
@@ -747,6 +765,10 @@ public class DspPipelineService : BackgroundService,
             engine.SetCtunShift(channel, ctunShiftHz);
             _appliedCtunOffsetHz = ctunShiftHz;
         }
+        // Keep WDSP's manual-notch database positioned against the live LO so
+        // notches hold their absolute RF frequency across a retune. The engine
+        // no-ops when the value is unchanged, so this is cheap to call here.
+        engine.SetNotchTuneFrequencyHz(s.RadioLoHz);
         if (s.TxFilterLowHz != _appliedTxLowHz || s.TxFilterHighHz != _appliedTxHighHz)
         {
             engine.SetTxFilter(s.TxFilterLowHz, s.TxFilterHighHz);
@@ -784,6 +806,24 @@ public class DspPipelineService : BackgroundService,
         {
             engine.SetNoiseReduction(channel, nr);
             _appliedNr = nr;
+        }
+        var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
+        if (!agc.Equals(_appliedAgc))
+        {
+            engine.SetAgc(channel, agc);
+            _appliedAgc = agc;
+        }
+        var squelch = s.Squelch ?? new SquelchConfig();
+        if (!squelch.Equals(_appliedSquelch))
+        {
+            engine.SetSquelch(channel, squelch);
+            _appliedSquelch = squelch;
+        }
+        var txLeveling = s.TxLeveling ?? new TxLevelingConfig();
+        if (!txLeveling.Equals(_appliedTxLeveling))
+        {
+            engine.SetTxLeveling(channel, txLeveling);
+            _appliedTxLeveling = txLeveling;
         }
         if (s.ZoomLevel != _appliedZoomLevel)
         {
@@ -1052,6 +1092,9 @@ public class DspPipelineService : BackgroundService,
     {
         var s = _radio.Snapshot();
         var nr = s.Nr ?? new NrConfig();
+        var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
+        var squelch = s.Squelch ?? new SquelchConfig();
+        var txLeveling = s.TxLeveling ?? new TxLevelingConfig();
         engine.SetMode(channelId, s.Mode);
         // Sync TXA modulator with RX mode at engine-open time so the first
         // key-down lands with the correct sideband (no-op on Synthetic / pre-
@@ -1078,6 +1121,28 @@ public class DspPipelineService : BackgroundService,
         engine.SetTxPanelGain(micLinearInit);
         engine.SetTxLevelerMaxGain(s.LevelerMaxGainDb);
         engine.SetNoiseReduction(channelId, nr);
+        // Force-apply AGC mode/custom params on a fresh engine so the operator's
+        // persisted choice survives a reconnect. The engine's channel-open path
+        // installs the Med default (ApplyAgcDefaults); this overrides it with the
+        // hydrated config. The max-gain (top) is pushed separately above.
+        engine.SetAgc(channelId, agc);
+        // Force-apply squelch on a fresh engine so the operator's persisted
+        // choice survives a reconnect. Mode is already set above so the engine
+        // routes run/threshold to the correct stage (SSQL/AMSQ/FMSQ).
+        engine.SetSquelch(channelId, squelch);
+        // Force-apply TX leveling on a fresh engine so the operator's persisted
+        // ALC/Leveler/Compressor config survives a reconnect. The TXA-open path
+        // installs the TxLevelingConfig defaults; this overrides with the
+        // hydrated config (and re-arms the engine's _txLevelerEnabled so the
+        // TUN/two-tone Leveler restore honours the operator's on/off). The
+        // Leveler max-gain is pushed separately above (SetTxLevelerMaxGain).
+        engine.SetTxLeveling(channelId, txLeveling);
+        // Manual notches: feed the LO first (notch positioning reference), then
+        // re-apply the operator's notch set onto the fresh engine. A reconnect
+        // builds a brand-new engine whose notch DB is empty; RadioService holds
+        // the authoritative list so EMF notches survive the reconnect.
+        engine.SetNotchTuneFrequencyHz(s.RadioLoHz);
+        engine.SetNotches(_radio.Notches);
         engine.SetZoom(channelId, s.ZoomLevel);
         _appliedMode = s.Mode;
         _appliedLowHz = s.FilterLowHz;
@@ -1091,6 +1156,9 @@ public class DspPipelineService : BackgroundService,
         _appliedTxMicGainLinear = micLinearInit;
         _appliedTxLevelerMaxGainDb = s.LevelerMaxGainDb;
         _appliedNr = nr;
+        _appliedAgc = agc;
+        _appliedSquelch = squelch;
+        _appliedTxLeveling = txLeveling;
         _appliedZoomLevel = s.ZoomLevel;
     }
 
@@ -1347,6 +1415,14 @@ public class DspPipelineService : BackgroundService,
         if (on == _appliedPreampOn) return;
         p2.SetPreamp(on);
         _appliedPreampOn = on;
+    }
+
+    // Operator added/removed/changed a manual notch. Forward the full list to
+    // the live engine; the engine rewrites WDSP's notch database. A no-op when
+    // no engine is up — ApplyStateToNewChannel re-applies on the next connect.
+    private void OnRadioNotchesChanged(IReadOnlyList<NotchDto> notches)
+    {
+        Volatile.Read(ref _engine)?.SetNotches(notches);
     }
 
     private void OnFrequencyCorrectionFactorChanged(double factor)

@@ -89,9 +89,14 @@ public class TxAudioIngestTests
         public void SetVfoHz(int channelId, long vfoHz) { }
         public void SetCtunShift(int channelId, int shiftHz) { }
         public void SetAgcTop(int channelId, double topDb) { }
+        public void SetAgc(int channelId, AgcConfig cfg) { }
+        public void SetSquelch(int channelId, SquelchConfig cfg) { }
+        public void SetTxLeveling(int channelId, TxLevelingConfig cfg) { }
     public void SetRxDisplayFastAttack(int channelId, bool fast) { }
         public void SetRxAfGainDb(int channelId, double db) { }
         public void SetNoiseReduction(int channelId, NrConfig cfg) { }
+        public void SetNotches(IReadOnlyList<NotchDto> notches) { }
+        public void SetNotchTuneFrequencyHz(double loHz) { }
         public void SetZoom(int channelId, int level) { }
         public int ReadAudio(int channelId, Span<float> output) => 0;
         public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;

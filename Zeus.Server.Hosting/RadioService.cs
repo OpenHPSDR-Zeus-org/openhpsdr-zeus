@@ -133,6 +133,11 @@ public sealed class RadioService : IDisposable
     // for backward compat.
     private HpsdrBoardKind _p2BoardKind = HpsdrBoardKind.Unknown;
     private bool _preampOn;
+    // Manual notch filters (MNF). Authoritative on the server so notches
+    // survive reconnects (a fresh engine starts with an empty WDSP notch DB);
+    // not on the StateDto wire format — DspPipelineService reads Notches and
+    // listens to NotchesChanged to push them to the engine. Guarded by _sync.
+    private List<NotchDto> _notches = new();
     // Auto-ATT defaults on; the user baseline starts at 0 dB and the control
     // loop ramps _attOffsetDb up to 31 dB on observed ADC overloads (Thetis
     // console.cs:22167-22181). The old hard-coded 15 dB masked clipping but
@@ -193,6 +198,14 @@ public sealed class RadioService : IDisposable
     // on Angelia / ANAN-100D.
     public event Action<bool>? PreampChanged;
 
+    /// <summary>Raised when the manual-notch list changes. DspPipelineService
+    /// forwards the new set to the live DSP engine (WDSP notch database).</summary>
+    public event Action<IReadOnlyList<NotchDto>>? NotchesChanged;
+
+    /// <summary>Current manual-notch set. DspPipelineService reads this on a
+    /// fresh-engine connect to re-apply notches the new WDSP channel lost.</summary>
+    public IReadOnlyList<NotchDto> Notches { get { lock (_sync) return _notches.ToArray(); } }
+
     // Shared TX IQ source threaded through Protocol1Client. TxAudioIngest
     // writes into the same instance; this is the seam between "mic arrived
     // over WS" and "EP2 packet got real IQ". When null the client falls back
@@ -231,6 +244,16 @@ public sealed class RadioService : IDisposable
         // legacy DB row falls back to the default-OFF baseline so the operator
         // sees no behaviour change unless they enable.
         var persistedCfc = _dspSettingsStore.GetCfc() ?? CfcConfig.Default;
+        // AGC mode + custom params. Null on a fresh install / legacy DB row
+        // falls back to the Med default so first-connect behaviour is unchanged.
+        var persistedAgc = _dspSettingsStore.GetAgc() ?? new AgcConfig(AgcMode.Med);
+        // RX squelch. Null on a fresh install / legacy DB row falls back to the
+        // off default so first-connect behaviour is unchanged (Thetis §5).
+        var persistedSquelch = _dspSettingsStore.GetSquelch() ?? new SquelchConfig();
+        // TX leveling. Null on a fresh install / legacy DB row falls back to the
+        // TxLevelingConfig defaults so first-connect behaviour is unchanged
+        // (Thetis §6.1-6.3). The Leveler max-gain stays on LevelerMaxGainDb.
+        var persistedTxLeveling = _dspSettingsStore.GetTxLeveling() ?? new TxLevelingConfig();
 
         // Seed the last-preset cache from persisted store for all modes so
         // the first mode-switch in a session recalls the correct slot.
@@ -292,6 +315,9 @@ public sealed class RadioService : IDisposable
             // persist via DspSettingsStore.SetAgcTopDb so the value sticks
             // across restarts; null on first run gets the 45 dB seed.
             AgcTopDb: _dspSettingsStore.GetAgcTopDb() ?? 45.0,
+            Agc: persistedAgc,
+            Squelch: persistedSquelch,
+            TxLeveling: persistedTxLeveling,
             AttenDb: rsSnap?.AttenDb ?? 0,
             Nr: persistedNr,
             ZoomLevel: rsSnap?.ZoomLevel ?? 1,
@@ -306,8 +332,9 @@ public sealed class RadioService : IDisposable
             // 0 dB unity matches the engine's TXA fresh-open default; legacy
             // rows missing the field hydrate to that same default.
             MicGainDb: Math.Clamp(rsSnap?.MicGainDb ?? 0, -40, 10),
-            // 8.0 dB matches WdspDspEngine.DefaultLevelerMaxGainDb.
-            LevelerMaxGainDb: Math.Clamp(rsSnap?.LevelerMaxGainDb ?? 8.0, 0.0, 15.0),
+            // 8.0 dB matches WdspDspEngine.DefaultLevelerMaxGainDb. Clamp range
+            // widened to 0..20 for Thetis parity (radio.cs leveler top 0..20).
+            LevelerMaxGainDb: Math.Clamp(rsSnap?.LevelerMaxGainDb ?? 8.0, 0.0, 20.0),
             AutoAgcEnabled: rsSnap?.AutoAgcEnabled ?? false,
             AgcOffsetDb: 0.0,       // always reset — control-loop accumulator
             // PS persisted fields (or DTO defaults when not persisted yet).
@@ -1646,11 +1673,11 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
-    // TX Leveler max-gain ceiling in dB. Server-clamped to [0, 15]; same
-    // operator-safe band the endpoint already enforced.
+    // TX Leveler max-gain ceiling in dB. Server-clamped to [0, 20] for Thetis
+    // parity (radio.cs leveler top range 0..20); previously 0..15.
     public StateDto SetTxLevelerMaxGain(double db)
     {
-        double clamped = Math.Clamp(db, 0.0, 15.0);
+        double clamped = Math.Clamp(db, 0.0, 20.0);
         Mutate(s => s with { LevelerMaxGainDb = clamped });
         return Snapshot();
     }
@@ -1665,6 +1692,84 @@ public sealed class RadioService : IDisposable
 
         return Snapshot();
     }
+
+    // AGC mode + custom/fixed params. Replace-style like SetNr; the engine apply
+    // happens in DspPipelineService via the _appliedAgc latch. The separate AGC
+    // max-gain path (SetAgcTop) is untouched.
+    public StateDto SetAgc(AgcConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        Mutate(s => s with { Agc = cfg });
+        _dspSettingsStore.SetAgc(cfg);
+        return Snapshot();
+    }
+
+    // RX squelch (mode-aware single control). Replace-style like SetAgc; the
+    // engine apply happens in DspPipelineService via the _appliedSquelch latch.
+    // Level is clamped to 0..100 here so a persisted/echoed value is always sane.
+    public StateDto SetSquelch(SquelchConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        var clamped = cfg with { Level = Math.Clamp(cfg.Level, 0, 100) };
+        Mutate(s => s with { Squelch = clamped });
+        _dspSettingsStore.SetSquelch(clamped);
+        return Snapshot();
+    }
+
+    // TX leveling — ALC (max-gain/decay), Leveler (on/off/decay), Compressor
+    // (on/off/gain). Replace-style like SetSquelch; the engine apply happens in
+    // DspPipelineService via the _appliedTxLeveling latch. All ranges are
+    // clamped here so a persisted/echoed value is always sane (Thetis parity:
+    // AlcMaxGainDb 0..120, AlcDecayMs 1..50, LevelerDecayMs 1..5000,
+    // CompressorGainDb 0..20). The Leveler max-gain stays on the separate
+    // SetTxLevelerMaxGain path and is never duplicated here.
+    public StateDto SetTxLeveling(TxLevelingConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        var clamped = cfg with
+        {
+            AlcMaxGainDb = Math.Clamp(cfg.AlcMaxGainDb, 0.0, 120.0),
+            AlcDecayMs = Math.Clamp(cfg.AlcDecayMs, 1, 50),
+            LevelerDecayMs = Math.Clamp(cfg.LevelerDecayMs, 1, 5000),
+            CompressorGainDb = Math.Clamp(cfg.CompressorGainDb, 0.0, 20.0),
+        };
+        Mutate(s => s with { TxLeveling = clamped });
+        _dspSettingsStore.SetTxLeveling(clamped);
+        return Snapshot();
+    }
+
+    // Replace the full manual-notch set. The client posts the whole list on
+    // every change (and on connect), so there's nothing to merge — store it and
+    // raise NotchesChanged for DspPipelineService to push to the engine. Notch
+    // centre/width are validated as finite, positive-width, and clamped to a
+    // sane count so a malformed client can't flood the WDSP notch database.
+    public void SetNotches(IReadOnlyList<NotchDto> notches)
+    {
+        ArgumentNullException.ThrowIfNull(notches);
+        var cleaned = new List<NotchDto>(Math.Min(notches.Count, MaxNotches));
+        foreach (var n in notches)
+        {
+            if (!double.IsFinite(n.CenterHz) || !double.IsFinite(n.WidthHz)) continue;
+            if (n.WidthHz < MinNotchWidthHz || n.WidthHz > MaxNotchWidthHz) continue;
+            if (n.CenterHz <= 0) continue;
+            cleaned.Add(n);
+            if (cleaned.Count >= MaxNotches) break;
+        }
+
+        IReadOnlyList<NotchDto> snapshot;
+        lock (_sync)
+        {
+            _notches = cleaned;
+            snapshot = cleaned.ToArray();
+        }
+        NotchesChanged?.Invoke(snapshot);
+    }
+
+    // WDSP's notch database is bounded; keep well under it and reject absurd
+    // widths so the panadapter paint gesture can't push garbage into the DSP.
+    private const int MaxNotches = 64;
+    private const double MinNotchWidthHz = 1.0;
+    private const double MaxNotchWidthHz = 50_000.0;
 
     // Right-click popover save for NR2 (EMNR) post2 tunables. Merges only
     // the non-null fields onto the current NrConfig so the operator can edit

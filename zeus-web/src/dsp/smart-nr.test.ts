@@ -1,0 +1,97 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+import { describe, expect, it } from 'vitest';
+import { NR_CONFIG_DEFAULT } from '../api/client';
+import { analyzeSmartNrCondition, recommendSmartNr } from './smart-nr';
+
+const WIDTH = 256;
+const NOISE_DB = -110;
+
+function floor(db = NOISE_DB): Float32Array {
+  return new Float32Array(WIDTH).fill(db + 3);
+}
+
+function noise(): Float32Array {
+  return new Float32Array(WIDTH).fill(NOISE_DB);
+}
+
+describe('smart NR supervisor', () => {
+  it('classifies weak sparse narrow signals', () => {
+    const spec = noise();
+    spec[120] = NOISE_DB + 14;
+    const c = analyzeSmartNrCondition(spec, floor())!;
+    expect(c.hasSignal).toBe(true);
+    expect(c.weakSparse).toBe(true);
+    expect(c.denseNoise).toBe(false);
+  });
+
+  it('recommends NR4/SBNR for weak CW and digital ridges', () => {
+    const spec = noise();
+    spec[120] = NOISE_DB + 14;
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'CWU',
+    })!;
+    expect(rec.nr.nrMode).toBe('Sbnr');
+    expect(rec.nr.nr4ReductionAmount).toBe(8);
+    expect(rec.nr.nr4WhiteningFactor).toBe(8);
+    expect(rec.nr.nbMode).toBe('Off');
+  });
+
+  it('recommends NR2/EMNR for dense noisy SSB conditions', () => {
+    const spec = noise();
+    for (let i = 64; i < 192; i++) spec[i] = NOISE_DB + 12;
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'USB',
+    })!;
+    expect(rec.condition.denseNoise).toBe(true);
+    expect(rec.nr.nrMode).toBe('Emnr');
+    expect(rec.nr.emnrAeRun).toBe(true);
+    expect(rec.nr.emnrPost2Run).toBe(true);
+    expect(rec.nr.snbEnabled).toBe(true);
+  });
+
+  it('uses notch helpers for strong sparse tonal interference', () => {
+    const spec = noise();
+    spec[90] = NOISE_DB + 35;
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'USB',
+    })!;
+    expect(rec.condition.tonalInterference).toBe(true);
+    expect(rec.nr.anfEnabled).toBe(true);
+    expect(rec.nr.nbpNotchesEnabled).toBe(true);
+  });
+
+  it('keeps clean carrier modes out of NR when the spectrum is quiet', () => {
+    const rec = recommendSmartNr({
+      spectrum: noise(),
+      floor: floor(),
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'AM',
+    })!;
+    expect(rec.nr.nrMode).toBe('Off');
+    expect(rec.nr.snbEnabled).toBe(false);
+    expect(rec.nr.nbMode).toBe('Off');
+  });
+
+  it('falls back to a global floor when the display estimator is cold', () => {
+    const spec = noise();
+    spec[128] = NOISE_DB + 20;
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: null,
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'DIGU',
+    })!;
+    expect(rec.condition.hasSignal).toBe(true);
+    expect(rec.nr.nrMode).toBe('Sbnr');
+  });
+});

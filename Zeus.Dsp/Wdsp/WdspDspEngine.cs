@@ -151,6 +151,13 @@ public sealed class WdspDspEngine : IDspEngine
         // Thetis "AGC Top" max-gain setting in dB. 80 matches the Thetis
         // AGC_MEDIUM default; the /api/agcGain endpoint can override at runtime.
         public double AgcTopDb = 80.0;
+        // AGC mode last applied via SetAgc / ApplyAgcDefaults. MED matches the
+        // open-time default; surfaced so callers / tests can read back the mode.
+        public AgcMode CurrentAgcMode = AgcMode.Med;
+        // RX squelch config last applied via SetSquelch. Default off so a fresh
+        // channel matches Thetis (all squelch off). Re-asserted on every
+        // SetMode so a mode change moves the run/threshold to the new stage.
+        public SquelchConfig CurrentSquelch = new();
         // Read by RunWorker to gate xanbEXT/xnobEXT; writes only from SetNoiseReduction.
         // Single-writer on the pipeline thread + word-sized read on the worker = safe
         // without a lock (worst case: one extra frame at the old setting on toggle).
@@ -181,6 +188,18 @@ public sealed class WdspDspEngine : IDspEngine
     // Tracked so SetTxMode can re-sign bandpass bounds (LSB family wants negative,
     // USB family positive) the same way RXA does through ApplyBandpassForMode.
     private RxaMode _txCurrentMode = RxaMode.USB;
+    // Operator's Leveler on/off, last applied via SetTxLeveling. The TUN and
+    // two-tone paths force the Leveler St=0 while keyed and restore it on
+    // un-key; they read this so the restore lands on the operator's setting
+    // (1 when enabled, 0 when disabled) rather than hardcoding "on". Seeded to
+    // true to match the TXA-open default (Leveler St=1). Written/read under
+    // _txaLock alongside the other PostGen state.
+    private bool _txLevelerEnabled = true;
+    // True while TUN or two-tone is keyed and forcing the Leveler off. Read by
+    // ApplyTxLevelingLocked so an operator changing leveling settings mid-key
+    // can't re-enable the Leveler on the tune/test tone — it stays off until
+    // un-key, when the restore re-arms it from _txLevelerEnabled. Under _txaLock.
+    private bool _txLevelerForcedOff;
     // TwoTone arm-state cache. SetTwoTone records the operator-supplied freqs
     // (positive Hz) here when arming; SetTxMode reads them back so a mid-test
     // mode change re-asserts the sideband-correct signed freqs onto PostGen.
@@ -324,6 +343,18 @@ public sealed class WdspDspEngine : IDspEngine
     // it through 1 / 0 transitions explicitly.
     private bool _txaRunning;
 
+    // Manual notch filter (MNF) state — global to the RX path. _manualNotches
+    // is the authoritative list (absolute RF Hz); the engine rewrites the WDSP
+    // notch database from it and re-applies on every channel (re)open, so it
+    // survives a sample-rate / mode-driven channel rebuild. _notchTuneFreqHz is
+    // the last LO fed by the pipeline; notches are positioned relative to it.
+    // _notchDbUnavailable latches if the bundled libwdsp predates the notch-DB
+    // exports (mirrors the SBNR guard) so we don't spam the worker with throws.
+    private readonly object _notchLock = new();
+    private readonly List<NotchDto> _manualNotches = new();
+    private double _notchTuneFreqHz;
+    private bool _notchDbUnavailable;
+
     public WdspDspEngine(ILogger<WdspDspEngine>? logger = null)
     {
         _log = logger ?? NullLogger<WdspDspEngine>.Instance;
@@ -392,6 +423,7 @@ public sealed class WdspDspEngine : IDspEngine
         NativeMethods.SetRXASNBAOutputBandwidth(id, 150.0, 2850.0);
 
         ApplyAgcDefaults(id);
+        ApplySquelchDefaults(id);
 
         // Pre-RXA blankers: create run=0 so the setters / xanbEXT slots are
         // allocated before any SetNoiseReduction call touches them (EXT
@@ -447,6 +479,11 @@ public sealed class WdspDspEngine : IDspEngine
         // guard (iobuffs.c:484) will be satisfied and xrxa → xmeter will run.
         NativeMethods.SetChannelState(id, 1, 0);
 
+        // Re-apply any manual notches to the freshly-opened channel. A sample-
+        // rate or mode change rebuilds the WDSP channel with an empty notch DB;
+        // the engine holds the authoritative list so notches persist across it.
+        ApplyNotchesToChannel(id);
+
         return id;
     }
 
@@ -501,6 +538,9 @@ public sealed class WdspDspEngine : IDspEngine
         state.CurrentMode = mapped;
         _log.LogInformation("wdsp.setMode channel={Id} mode={Mode}", channelId, mapped);
         ApplyBandpassForMode(state);
+        // Re-assert squelch on the stage matching the new mode and clear the
+        // old one — squelch is mode-aware (SSQL/AMSQ/FMSQ) per Thetis §5.
+        ApplySquelchLocked(state);
         // Drop up to ~1 s of already-demodulated audio queued with the old mode so
         // the user hears the new sideband immediately after clicking instead of
         // finishing the tail of the wrong one. AudioHead stays put; the read
@@ -559,6 +599,28 @@ public sealed class WdspDspEngine : IDspEngine
         state.AgcTopDb = topDb;
         NativeMethods.SetRXAAGCTop(channelId, topDb);
         _log.LogInformation("wdsp.setAgcTop channel={Id} topDb={TopDb:F1}", channelId, topDb);
+    }
+
+    public void SetAgc(int channelId, AgcConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (!_channels.TryGetValue(channelId, out var state)) return;
+        ApplyAgcCore(channelId, cfg);
+        state.CurrentAgcMode = cfg.Mode;
+        _log.LogInformation(
+            "wdsp.setAgc channel={Id} mode={Mode} slope={Slope} decayMs={Decay} hangMs={Hang} hangThr={Thr} fixedDb={Fixed}",
+            channelId, cfg.Mode, cfg.Slope, cfg.DecayMs, cfg.HangMs, cfg.HangThreshold, cfg.FixedGainDb);
+    }
+
+    public void SetSquelch(int channelId, SquelchConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (!_channels.TryGetValue(channelId, out var state)) return;
+        state.CurrentSquelch = cfg;
+        ApplySquelchLocked(state);
+        _log.LogInformation(
+            "wdsp.setSquelch channel={Id} enabled={Enabled} level={Level} mode={Mode}",
+            channelId, cfg.Enabled, cfg.Level, state.CurrentMode);
     }
 
     public void SetRxAfGainDb(int channelId, double db)
@@ -686,7 +748,13 @@ public sealed class WdspDspEngine : IDspEngine
         }
 
         NativeMethods.SetRXASNBARun(channelId, cfg.SnbEnabled ? 1 : 0);
-        NativeMethods.RXANBPSetNotchesRun(channelId, cfg.NbpNotchesEnabled ? 1 : 0);
+        // The notch-bandpass run flag gates BOTH the NBP toggle and the manual
+        // notch database — so keep it on whenever active manual notches exist,
+        // otherwise a routine NR change would silently disable the operator's
+        // EMF notches. (RXANBPSetNotchesRun is the single WDSP gate for both.)
+        bool anyActiveNotch;
+        lock (_notchLock) anyActiveNotch = _manualNotches.Exists(static n => n.Active);
+        NativeMethods.RXANBPSetNotchesRun(channelId, (cfg.NbpNotchesEnabled || anyActiveNotch) ? 1 : 0);
 
         // Mutually-exclusive pre-RXA blanker. Update threshold on whichever
         // path we're about to run (or both paths when switching off → on → the
@@ -721,6 +789,90 @@ public sealed class WdspDspEngine : IDspEngine
             "wdsp.setNoiseReduction channel={Id} nr={Nr} anf={Anf} snb={Snb} notches={Notches} nb={Nb} thr={Thr:F2}",
             channelId, cfg.NrMode, cfg.AnfEnabled, cfg.SnbEnabled, cfg.NbpNotchesEnabled,
             cfg.NbMode, scaledThreshold);
+    }
+
+    public void SetNotches(IReadOnlyList<NotchDto> notches)
+    {
+        ArgumentNullException.ThrowIfNull(notches);
+        lock (_notchLock)
+        {
+            _manualNotches.Clear();
+            _manualNotches.AddRange(notches);
+            // Re-apply to every open RX channel (there is normally one). The
+            // copy under the lock means the per-channel WDSP rewrite reads a
+            // stable snapshot even if another SetNotches races in.
+            foreach (var id in _channels.Keys)
+                ApplyNotchesToChannelLocked(id);
+        }
+        _log.LogInformation("wdsp.setNotches count={Count}", notches.Count);
+    }
+
+    public void SetNotchTuneFrequencyHz(double loHz)
+    {
+        lock (_notchLock)
+        {
+            if (loHz == _notchTuneFreqHz) return;
+            _notchTuneFreqHz = loHz;
+            if (_notchDbUnavailable) return;
+            try
+            {
+                foreach (var id in _channels.Keys)
+                    NativeMethods.RXANBPSetTuneFrequency(id, loHz);
+            }
+            catch (EntryPointNotFoundException)
+            {
+                MarkNotchDbUnavailable();
+            }
+        }
+    }
+
+    // Re-apply the current notch list to one channel. Public-facing callers
+    // take _notchLock first; OpenChannel calls the lock-acquiring wrapper.
+    private void ApplyNotchesToChannel(int channelId)
+    {
+        lock (_notchLock) ApplyNotchesToChannelLocked(channelId);
+    }
+
+    // Rewrite WDSP's notch database for `channelId` from _manualNotches: clear
+    // whatever is there, add the current set, then gate the run flag on whether
+    // any notch is active. Must be called under _notchLock. Wrapped so a libwdsp
+    // build without the notch-DB exports degrades to a no-op instead of killing
+    // the worker (same posture as the SBNR guard).
+    private void ApplyNotchesToChannelLocked(int channelId)
+    {
+        if (_notchDbUnavailable) return;
+        try
+        {
+            // Position notches against the last LO we were told about.
+            NativeMethods.RXANBPSetTuneFrequency(channelId, _notchTuneFreqHz);
+
+            int count = 0;
+            NativeMethods.RXANBPGetNumNotches(channelId, ref count);
+            for (int i = count - 1; i >= 0; i--)
+                NativeMethods.RXANBPDeleteNotch(channelId, i);
+
+            bool anyActive = false;
+            for (int i = 0; i < _manualNotches.Count; i++)
+            {
+                var n = _manualNotches[i];
+                anyActive |= n.Active;
+                NativeMethods.RXANBPAddNotch(channelId, i, n.CenterHz, n.WidthHz, n.Active ? 1 : 0);
+            }
+
+            NativeMethods.RXANBPSetNotchesRun(channelId, anyActive ? 1 : 0);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            MarkNotchDbUnavailable();
+        }
+    }
+
+    private void MarkNotchDbUnavailable()
+    {
+        if (_notchDbUnavailable) return;
+        _notchDbUnavailable = true;
+        _log.LogWarning(
+            "wdsp.notchDb unavailable — bundled libwdsp does not export the manual-notch functions; manual notches disabled");
     }
 
     // NR2 (EMNR) core algorithm selectors. Pushed on every NR config update
@@ -1198,16 +1350,34 @@ public sealed class WdspDspEngine : IDspEngine
             // ALC stays on (see SetTXAALCSt below; never 0). AMSQ is the mic
             // noise gate and shouldn't shape SSB audio. CESSB (osctrl) is
             // unconditionally ON — see SetTXAosctrlRun below.
-            NativeMethods.SetTXALevelerSt(id, 1);
+            // ALC run state — MUST stay ON (never 0). Disabling it silences the
+            // SSB modulator (NativeMethods.SetTXAALCSt warning). ApplyTxLeveling
+            // below sets the ALC max-gain/decay but deliberately never touches
+            // this St; assert it here so the baseline is unambiguous.
+            NativeMethods.SetTXAALCSt(id, 1);
+            // ALC attack — not part of the operator TxLevelingConfig (Thetis
+            // doesn't surface it). 1 ms matches both pihpsdr
+            // (transmitter.c:1290) and the WDSP factory Thetis inherits
+            // (TXA.c:319). A slower 2 ms attack missed plosive onset and the
+            // follow-up ALC chop sounded "brittle." Set once at open.
+            NativeMethods.SetTXAALCAttack(id, 1);
             // Leveler max-gain default. WDSP's create_wcpagc ships with
             // max_gain = 1.778 linear (≈ +5 dB) at TXA.c:169; we assert the
             // value explicitly so the baseline stays deterministic and the
             // init log confirms what the Leveler's headroom is set to.
             // +5 dB matches the W1AEX / softerhardware community default
             // (milder than Thetis's +15 dB stock — see task #13 notes).
-            // Operator-settable at runtime via POST /api/tx/leveler-max-gain.
+            // Operator-settable at runtime via POST /api/tx/leveler-max-gain;
+            // intentionally NOT part of TxLevelingConfig.
             NativeMethods.SetTXALevelerTop(id, DefaultLevelerMaxGainDb);
-            NativeMethods.SetTXACompressorRun(id, 0);
+            // ALC max-gain/decay, Leveler St/decay, Compressor run/gain all come
+            // from the TxLevelingConfig defaults so a fresh channel and a runtime
+            // SetTxLeveling use identical WDSP calls. Defaults: ALC 3 dB/10 ms
+            // (Thetis database.cs:4596 + TXA.c attack/decay), Leveler ON/100 ms
+            // (radio.cs:3018 tx_leveler_on + radio.cs leveler decay 100),
+            // Compressor OFF/0 dB. DspPipelineService force-applies the operator's
+            // persisted config on top via SetTxLeveling at channel open.
+            ApplyTxLevelingLocked(id, new TxLevelingConfig());
             NativeMethods.SetTXACFCOMPRun(id, 0);
             NativeMethods.SetTXAPHROTRun(id, 0);
             // CESSB / osctrl — ON at TXA open (Brian's default, ~1-1.5 dB
@@ -1221,17 +1391,6 @@ public sealed class WdspDspEngine : IDspEngine
             NativeMethods.SetTXAosctrlRun(id, 1);
             NativeMethods.SetTXAEQRun(id, 0);
             NativeMethods.SetTXAAMSQRun(id, 0);
-            NativeMethods.SetTXAALCSt(id, 1);
-            // ALC tuning — Zeus previously left these at WDSP library defaults
-            // (MaxGain=0 dB linear/1.0). Thetis ships +3 dB max gain
-            // (database.cs:4596). Attack 1 ms / Decay 10 ms matches both
-            // pihpsdr (transmitter.c:1290-1291) and the WDSP factory that
-            // Thetis inherits (TXA.c:319, tau_attack = 0.001). A slower 2 ms
-            // attack missed plosive onset and the follow-up ALC chop sounded
-            // crunchy — operator described it as "brittle."
-            NativeMethods.SetTXAALCMaxGain(id, 3.0);
-            NativeMethods.SetTXAALCAttack(id, 1);
-            NativeMethods.SetTXAALCDecay(id, 10);
 
             // CFIR compensates the sinc droop introduced by the TXA upsample
             // to the output rate. Thetis (audio.cs:1808) turns it ON for P2,
@@ -1508,6 +1667,47 @@ public sealed class WdspDspEngine : IDspEngine
         _log.LogInformation("wdsp.setTxLevelerMaxGain dB={Db:F1}", maxGainDb);
     }
 
+    // TX leveling (Thetis parity §6.1-6.3): ALC max-gain + decay, Leveler
+    // on/off + decay, Compressor on/off + gain. The TXA channel is a singleton
+    // (_txaChannelId), so the IDspEngine channelId arg is accepted for interface
+    // parity but the TXA channel is what we drive — same convention as
+    // SetTxLevelerMaxGain. The Leveler MAX-GAIN ("top") is intentionally NOT
+    // touched here — it stays on SetTxLevelerMaxGain. ALC St is NEVER touched
+    // (it stays at the init St=1; disabling it silences the SSB modulator).
+    public void SetTxLeveling(int channelId, TxLevelingConfig cfg)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (_disposed != 0) return;
+        lock (_txaLock)
+        {
+            if (_txaChannelId is not int txa) return;
+            ApplyTxLevelingLocked(txa, cfg);
+        }
+        _log.LogInformation(
+            "wdsp.setTxLeveling alcMaxGainDb={Alc:F1} alcDecayMs={AlcDecay} levelerEnabled={Lvlr} levelerDecayMs={LvlrDecay} compEnabled={Comp} compGainDb={CompGain:F1}",
+            cfg.AlcMaxGainDb, cfg.AlcDecayMs, cfg.LevelerEnabled, cfg.LevelerDecayMs,
+            cfg.CompressorEnabled, cfg.CompressorGainDb);
+    }
+
+    // Shared apply for SetTxLeveling and the TXA-open init block so a fresh
+    // channel and a runtime change use identical WDSP calls for the same config.
+    // Caller holds _txaLock. NEVER touches SetTXAALCSt — ALC run stays ON
+    // (init St=1) or the SSB modulator emits zero IQ. Records the operator's
+    // Leveler on/off so the TUN / two-tone restore re-arms it correctly.
+    private void ApplyTxLevelingLocked(int txa, TxLevelingConfig cfg)
+    {
+        NativeMethods.SetTXAALCMaxGain(txa, cfg.AlcMaxGainDb);
+        NativeMethods.SetTXAALCDecay(txa, cfg.AlcDecayMs);
+        // While keyed for TUN/two-tone the Leveler is forced off; don't let a
+        // mid-key settings change re-enable it on the tune tone. Still record the
+        // operator's intent below so the un-key restore lands correctly.
+        NativeMethods.SetTXALevelerSt(txa, (!_txLevelerForcedOff && cfg.LevelerEnabled) ? 1 : 0);
+        NativeMethods.SetTXALevelerDecay(txa, cfg.LevelerDecayMs);
+        NativeMethods.SetTXACompressorRun(txa, cfg.CompressorEnabled ? 1 : 0);
+        NativeMethods.SetTXACompressorGain(txa, cfg.CompressorGainDb);
+        _txLevelerEnabled = cfg.LevelerEnabled;
+    }
+
     public void SetTxTune(bool on)
     {
         if (_disposed != 0) return;
@@ -1543,14 +1743,20 @@ public sealed class WdspDspEngine : IDspEngine
                 // (transmitter.c:2612 — state = compressor||cfc, both off
                 // on tune). We restore Leveler on TUN-off so mic MOX keeps
                 // its current Thetis-matching behavior.
+                _txLevelerForcedOff = true;
                 NativeMethods.SetTXALevelerSt(txa, 0);
                 _log.LogInformation("wdsp.setTxTune on=true mode=singletone freq={Freq:F0} mag={Mag:F5} leveler=off", toneFreq, toneMag);
             }
             else
             {
                 NativeMethods.SetTXAPostGenRun(txa, 0);
-                NativeMethods.SetTXALevelerSt(txa, 1);
-                _log.LogInformation("wdsp.setTxTune on=false leveler=on");
+                // Restore the Leveler to the operator's setting, not a hardcoded
+                // "on" — if the operator disabled the Leveler via SetTxLeveling,
+                // un-keying TUN must leave it disabled.
+                _txLevelerForcedOff = false;
+                NativeMethods.SetTXALevelerSt(txa, _txLevelerEnabled ? 1 : 0);
+                _log.LogInformation("wdsp.setTxTune on=false leveler={Leveler}",
+                    _txLevelerEnabled ? "on" : "off");
             }
         }
     }
@@ -1792,6 +1998,7 @@ public sealed class WdspDspEngine : IDspEngine
                 // Same Leveler-off pattern SetTxTune uses; the test signal
                 // doesn't need voice-energy AGC and Leveler can pump on the
                 // discrete tones.
+                _txLevelerForcedOff = true;
                 NativeMethods.SetTXALevelerSt(txa, 0);
                 _log.LogInformation(
                     "wdsp.setTwoTone on=true f1={F1} f2={F2} signedF1={SF1} signedF2={SF2} mag={Mag:F3} mode={Mode}",
@@ -1801,10 +2008,13 @@ public sealed class WdspDspEngine : IDspEngine
             {
                 _twoToneArmed = false;
                 NativeMethods.SetTXAPostGenRun(txa, 0);
-                NativeMethods.SetTXALevelerSt(txa, 1);
+                // Restore the Leveler to the operator's setting (see SetTxTune)
+                // rather than hardcoding "on".
+                _txLevelerForcedOff = false;
+                NativeMethods.SetTXALevelerSt(txa, _txLevelerEnabled ? 1 : 0);
                 _log.LogInformation(
-                    "wdsp.setTwoTone on=false f1={F1} f2={F2} mag={Mag:F3}",
-                    freq1, freq2, mag);
+                    "wdsp.setTwoTone on=false f1={F1} f2={F2} mag={Mag:F3} leveler={Leveler}",
+                    freq1, freq2, mag, _txLevelerEnabled ? "on" : "off");
             }
         }
     }
@@ -2861,15 +3071,120 @@ public sealed class WdspDspEngine : IDspEngine
     // Applies Thetis AGC_MEDIUM defaults — the mode all HL2 users start on.
     // Without this, WDSP's AGC is off and the audio path has effectively
     // unity gain on signals with peak ~2e-5, which is inaudible.
+    //
+    // Routes through the shared ApplyAgcCore path so SetAgc and channel-open
+    // produce identical WDSP state for the same AgcConfig. The max-gain (top)
+    // stays separate — it has its own SetAgcTop / auto-AGC path — so we set the
+    // 80 dB open-time baseline here, NOT inside ApplyAgcCore.
     private static void ApplyAgcDefaults(int id)
     {
-        NativeMethods.SetRXAAGCMode(id, 3);              // MED
-        NativeMethods.SetRXAAGCSlope(id, 35);
+        ApplyAgcCore(id, new AgcConfig(AgcMode.Med));
         NativeMethods.SetRXAAGCTop(id, 80.0);            // max gain, dB
+    }
+
+    // Canned-mode presets (Thetis console.cs:27960+; design §4.4). Hang/Decay in
+    // ms, HangThreshold 0..100. Custom returns the Med baseline so a null custom
+    // field falls back somewhere sane.
+    private static (int HangMs, int DecayMs, int HangThreshold) AgcPreset(AgcMode mode) => mode switch
+    {
+        AgcMode.Long => (2000, 2000, 100),
+        AgcMode.Slow => (1000, 500, 100),
+        AgcMode.Med => (0, 250, 100),
+        AgcMode.Fast => (0, 50, 100),
+        AgcMode.Fixed => (0, 250, 100),
+        _ => (0, 250, 100),
+    };
+
+    // Pushes the AGC mode + custom/fixed params to WDSP. Shared by ApplyAgcDefaults
+    // (channel open, before the ChannelState is registered) and SetAgc (runtime),
+    // so both paths produce identical WDSP state. Does NOT touch SetRXAAGCTop —
+    // the max-gain has its own path. Attack is bound to the Thetis-default 2
+    // (decay serves as rise-time; Thetis doesn't wire attack to the UI — §4.5).
+    private static void ApplyAgcCore(int id, AgcConfig cfg)
+    {
+        NativeMethods.SetRXAAGCMode(id, (int)cfg.Mode);
         NativeMethods.SetRXAAGCAttack(id, 2);
-        NativeMethods.SetRXAAGCHang(id, 0);
-        NativeMethods.SetRXAAGCDecay(id, 250);
-        NativeMethods.SetRXAAGCHangThreshold(id, 100);
+
+        int hangMs, decayMs, hangThreshold;
+        if (cfg.Mode == AgcMode.Custom)
+        {
+            hangMs = cfg.HangMs ?? 250;
+            decayMs = cfg.DecayMs ?? 250;
+            hangThreshold = cfg.HangThreshold ?? 0;
+        }
+        else
+        {
+            (hangMs, decayMs, hangThreshold) = AgcPreset(cfg.Mode);
+        }
+        NativeMethods.SetRXAAGCHang(id, hangMs);
+        NativeMethods.SetRXAAGCDecay(id, decayMs);
+        NativeMethods.SetRXAAGCHangThreshold(id, hangThreshold);
+
+        // WDSP wants slope ×10 (Thetis setup.cs:9088). Custom uses the operator
+        // slope; every canned mode uses the Thetis MED slope (35) verbatim.
+        int slope = cfg.Mode == AgcMode.Custom ? (cfg.Slope ?? 0) * 10 : 35;
+        NativeMethods.SetRXAAGCSlope(id, slope);
+
+        if (cfg.Mode == AgcMode.Fixed)
+            NativeMethods.SetRXAAGCFixed(id, cfg.FixedGainDb ?? 20.0);
+    }
+
+    // RX squelch tau / max-tail baselines (Thetis defaults, §5.2). Set once at
+    // channel open and not operator-exposed in v1; the run + threshold are
+    // driven mode-aware by ApplySquelchLocked. Runs all stages off so a fresh
+    // channel is silent-squelch-free until the operator enables it.
+    private static void ApplySquelchDefaults(int id)
+    {
+        NativeMethods.SetRXASSQLTauMute(id, 0.1);
+        NativeMethods.SetRXASSQLTauUnMute(id, 0.1);
+        NativeMethods.SetRXAAMSQMaxTail(id, 1.5);
+        NativeMethods.SetRXASSQLRun(id, 0);
+        NativeMethods.SetRXAAMSQRun(id, 0);
+        NativeMethods.SetRXAFMSQRun(id, 0);
+    }
+
+    // Squelch is mode-aware (Thetis §5.3): exactly one WDSP stage runs based on
+    // the channel's current RX mode, the other two are forced off. Threshold
+    // mapping from Level 0..100: SSQL/FMSQ Level/100 (0..1), AMSQ
+    // -150 + Level*1.5 (-150..0 dB). Called from SetSquelch AND SetMode so a
+    // mode change re-asserts squelch on the new stage and clears the old.
+    private static void ApplySquelchLocked(ChannelState state)
+    {
+        int id = state.Id;
+        var cfg = state.CurrentSquelch;
+        int run = cfg.Enabled ? 1 : 0;
+        int level = Math.Clamp(cfg.Level, 0, 100);
+
+        // Which stage owns this mode? Everything off first, then turn one on.
+        bool isAm = state.CurrentMode is RxaMode.AM or RxaMode.SAM;
+        bool isFm = state.CurrentMode == RxaMode.FM;
+        // SSB/CW family (USB, LSB, CWU, CWL, DIGU, DIGL) + anything else → SSQL.
+
+        if (isAm)
+        {
+            NativeMethods.SetRXASSQLRun(id, 0);
+            NativeMethods.SetRXAFMSQRun(id, 0);
+            NativeMethods.SetRXAAMSQThreshold(id, -150.0 + level * 1.5);
+            NativeMethods.SetRXAAMSQRun(id, run);
+        }
+        else if (isFm)
+        {
+            NativeMethods.SetRXASSQLRun(id, 0);
+            NativeMethods.SetRXAAMSQRun(id, 0);
+            // FMSQ is a NOISE gate: it opens when avnoise < 0.9*threshold
+            // (fmsq.c:154,251), so a HIGHER WDSP threshold opens more easily —
+            // the inverse of SSQL/AMSQ. Invert here so the operator slider keeps
+            // "higher Level = tighter squelch" parity across all three stages.
+            NativeMethods.SetRXAFMSQThreshold(id, (100 - level) / 100.0);
+            NativeMethods.SetRXAFMSQRun(id, run);
+        }
+        else
+        {
+            NativeMethods.SetRXAAMSQRun(id, 0);
+            NativeMethods.SetRXAFMSQRun(id, 0);
+            NativeMethods.SetRXASSQLThreshold(id, level / 100.0);
+            NativeMethods.SetRXASSQLRun(id, run);
+        }
     }
 
     // WDSP bandpass takes signed frequencies: LSB-family modes live in negative

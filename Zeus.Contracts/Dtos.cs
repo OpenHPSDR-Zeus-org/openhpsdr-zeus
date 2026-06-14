@@ -72,6 +72,12 @@ public enum NrMode : byte { Off, Anr, Emnr, Sbnr = 3 }
 // kept in the contract so the UI shape doesn't churn when it does.
 public enum NbMode : byte { Off, Nb1, Nb2 }
 
+// RXA AGC mode. Values MUST match WDSP / Thetis enums.cs:152-162
+// (FIXD=0, LONG=1, SLOW=2, MED=3, FAST=4, CUSTOM=5) — they are passed
+// straight to SetRXAAGCMode and persisted as bytes in zeus-prefs.db, so the
+// byte order is fixed (appending only). Med is the Thetis (and Zeus) default.
+public enum AgcMode : byte { Fixed = 0, Long = 1, Slow = 2, Med = 3, Fast = 4, Custom = 5 }
+
 // Thetis default NbThreshold = 3.3 (WDSP units), which is `0.165 × 20` — the
 // Thetis UI slider sitting at 20. Kept here so REST round-trips preserve the
 // UI-space value rather than the scaled one.
@@ -118,6 +124,63 @@ public sealed record NrConfig(
     double? EmnrTrainT1 = null,
     double? EmnrTrainT2 = null);
 
+// Operator-facing AGC configuration (issue: DSP controls Thetis parity §4).
+// Mode selects a canned profile (Long/Slow/Med/Fast/Fixed) or Custom; the
+// nullable params are only consulted in Custom mode (and FixedGainDb only in
+// Fixed mode) — null at the engine seam means "use the canned-preset value".
+// AGC max-gain ("top") is NOT carried here: it stays on StateDto.AgcTopDb with
+// its own /api/agcGain path and auto-AGC loop. UI ranges (Thetis radio.cs):
+// Slope 0..20 (engine multiplies ×10), Decay/Hang 1..5000 ms, HangThreshold
+// 0..100 %, FixedGainDb -20..120 dB. Default mode Med matches Thetis.
+public sealed record AgcConfig(
+    AgcMode Mode = AgcMode.Med,
+    int? Slope = null,
+    int? DecayMs = null,
+    int? HangMs = null,
+    int? HangThreshold = null,
+    double? FixedGainDb = null);
+
+// Operator-facing RX squelch configuration (issue: DSP controls Thetis parity
+// §5). A single mode-aware control: the engine routes run + threshold to the
+// WDSP squelch stage matching the current RX mode (SSB/CW → SSQL, AM/SAM →
+// AMSQ, FM → FMSQ) and clears the other two. Level is a unitless 0..100 where
+// higher = tighter squelch; the engine maps it per-stage (SSQL/FMSQ 0..1,
+// AMSQ -150..0 dB). Defaults Enabled=false, Level=0 match Thetis (all squelch
+// off). Persisted globally via DspSettingsStore — same pattern as Agc/Nr.
+public sealed record SquelchConfig(
+    bool Enabled = false,
+    int Level = 0);
+
+// Operator-facing TX leveling configuration (issue: DSP controls Thetis parity
+// §6.1-6.3). Bundles the three TXA dynamics stages the operator reaches for:
+// ALC (max-gain + decay — the ALC run state is ALWAYS on, never exposed; the
+// SSB modulator emits zero IQ if ALC is off, see NativeMethods.SetTXAALCSt),
+// the Leveler (operator on/off + decay), and the Compressor/CPDR (on/off +
+// gain). The Leveler MAX-GAIN ("top") is intentionally NOT carried here — it
+// stays on StateDto.LevelerMaxGainDb with its own /api/tx/leveler-max-gain
+// path. Ranges/defaults mirror Thetis verbatim (radio.cs / setup.designer.cs):
+// AlcMaxGainDb 0..120 (default 3), AlcDecayMs 1..50 (default 10), LevelerEnabled
+// default on, LevelerDecayMs 1..5000 (default 100), CompressorEnabled default
+// off, CompressorGainDb 0..20 (default 0). Persisted globally via
+// DspSettingsStore — same pattern as Agc/Squelch.
+public sealed record TxLevelingConfig(
+    double AlcMaxGainDb = 3.0,
+    int AlcDecayMs = 10,
+    bool LevelerEnabled = true,
+    int LevelerDecayMs = 100,
+    bool CompressorEnabled = false,
+    double CompressorGainDb = 0.0);
+
+// A manual notch filter (MNF) — a band the operator paints onto the spectrum
+// to remove EMF/birdies from the RX audio via WDSP's notch database (nbp.c).
+// CenterHz/WidthHz are ABSOLUTE RF in Hz (WDSP repositions them as the radio
+// tunes, via RXANBPSetTuneFrequency). Active mirrors the per-notch enable flag.
+public sealed record NotchDto(double CenterHz, double WidthHz, bool Active = true);
+
+// Full manual-notch list — the client posts the complete set on every change
+// (and on connect), so the server/engine never has to reconcile deltas.
+public sealed record NotchListRequest(IReadOnlyList<NotchDto> Notches);
+
 public sealed record StateDto(
     ConnectionStatus Status,
     string? Endpoint,
@@ -127,6 +190,25 @@ public sealed record StateDto(
     int FilterHighHz,
     int SampleRate,
     double AgcTopDb = 80.0,
+    // AGC mode + custom params (issue: DSP controls Thetis parity §4). Nullable
+    // so legacy state frames (no Agc field) deserialize unchanged; null at the
+    // engine seam means "use the Med canned profile". Persisted globally via
+    // DspSettingsStore — same pattern as Nr. The AGC max-gain ("top") stays on
+    // AgcTopDb above; Agc only carries mode + the custom/fixed tunables.
+    AgcConfig? Agc = null,
+    // RX squelch (issue: DSP controls Thetis parity §5). Nullable so legacy
+    // state frames (no Squelch field) deserialize unchanged; null at the engine
+    // seam means "squelch off" (SquelchConfig default). Persisted globally via
+    // DspSettingsStore — same pattern as Agc. The engine picks the WDSP squelch
+    // stage from the live RX mode and clears the others.
+    SquelchConfig? Squelch = null,
+    // TX leveling (issue: DSP controls Thetis parity §6.1-6.3). Nullable so
+    // legacy state frames (no TxLeveling field) deserialize unchanged; null at
+    // the engine seam means "use the TxLevelingConfig defaults" (ALC 3 dB/10 ms,
+    // Leveler on/100 ms, Compressor off). Persisted globally via DspSettingsStore
+    // — same pattern as Agc/Squelch. The Leveler max-gain stays on
+    // LevelerMaxGainDb below; TxLeveling never duplicates it.
+    TxLevelingConfig? TxLeveling = null,
     // User-baseline attenuator in dB, 0..31. Hardware receives
     // <c>AttenDb + AttOffsetDb</c> (clamped to 31) while auto-ATT is engaged.
     // Default is 0 — auto-ATT ramps the offset up on observed ADC overloads.
@@ -171,8 +253,8 @@ public sealed record StateDto(
     // operator value instead of the engine's 0 dB seed. Wire name omits the
     // Tx prefix to match the existing /api/mic-gain endpoint POST response.
     int MicGainDb = 0,
-    // TX Leveler max-gain ceiling in dB. Range [0, 15] — 0 disables the
-    // headroom entirely, 15 matches Thetis's stock ceiling
+    // TX Leveler max-gain ceiling in dB. Range [0, 20] (Thetis parity) — 0
+    // disables the headroom entirely; Thetis's stock default is 15
     // (radio.cs:2979 tx_leveler_max_gain = 15.0). Default 8.0 matches
     // WdspDspEngine.DefaultLevelerMaxGainDb (Brian's HL2 starting point;
     // softer than Thetis stock). Persisted server-side; previously
@@ -400,6 +482,22 @@ public sealed record TuneDriveSetRequest(int Percent);
 
 public sealed record NrSetRequest(NrConfig Nr);
 
+// AGC mode + custom-params set request. Replace-style (the whole AgcConfig is
+// posted on every change), matching NrSetRequest. The separate AGC max-gain
+// path (/api/agcGain) is untouched.
+public sealed record AgcSetRequest(AgcConfig Agc);
+
+// RX squelch set request. Replace-style (the whole SquelchConfig is posted on
+// every change), matching AgcSetRequest. The server clamps Level to 0..100.
+public sealed record SquelchSetRequest(SquelchConfig Squelch);
+
+// TX leveling set request. Replace-style (the whole TxLevelingConfig is posted
+// on every change), matching SquelchSetRequest. The server clamps every range
+// (AlcMaxGainDb 0..120, AlcDecayMs 1..50, LevelerDecayMs 1..5000,
+// CompressorGainDb 0..20). The separate Leveler max-gain path
+// (/api/tx/leveler-max-gain) is untouched.
+public sealed record TxLevelingSetRequest(TxLevelingConfig TxLeveling);
+
 // Per-popover save requests for the NR right-click panels. Nullable shape so
 // the popover can PATCH a single field without disturbing siblings (the server
 // merges on top of the persisted NrConfig and re-applies the engine state).
@@ -492,7 +590,7 @@ public enum CwKeyerMode : byte
 
 public sealed record MicGainSetRequest(int Db);
 
-// Leveler max-gain ceiling in dB. Server clamps to [0, 15]; outside that is
+// Leveler max-gain ceiling in dB. Server clamps to [0, 20]; outside that is
 // 400. Frontend POSTs this whenever the slider moves and on WS reconnect so
 // the operator's preferred ceiling is re-applied after a server restart
 // (backend holds no persistent state for this setting).

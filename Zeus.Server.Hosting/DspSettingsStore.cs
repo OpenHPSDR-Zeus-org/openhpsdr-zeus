@@ -140,6 +140,175 @@ public sealed class DspSettingsStore : IDisposable
         }
     }
 
+    // AGC mode + custom params (issue: DSP controls Thetis parity §4). Persisted
+    // as nullable scalars on the existing DspSettingsEntry — null AgcMode means
+    // "never written" so RadioService falls back to the Med default on first run.
+    // The custom/fixed params are nullable too (null = "use the canned preset").
+    public AgcConfig? GetAgc(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        if (e is null || e.AgcMode is null) return null;
+        return new AgcConfig(
+            Mode: e.AgcMode.Value,
+            Slope: e.AgcSlope,
+            DecayMs: e.AgcDecayMs,
+            HangMs: e.AgcHangMs,
+            HangThreshold: e.AgcHangThreshold,
+            FixedGainDb: e.AgcFixedGainDb);
+    }
+
+    public void SetAgc(AgcConfig config, string profileId = "default")
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        var existing = _entries.FindOne(x => x.ProfileId == profileId);
+        if (existing is null)
+        {
+            // Seed a fresh entry with NR defaults so the row is valid for
+            // future NR/CFC writes — same pattern SetAgcTopDb / CFC Upsert use.
+            var nrSeed = new NrConfig();
+            existing = new DspSettingsEntry
+            {
+                ProfileId = profileId,
+                NrMode = nrSeed.NrMode,
+                AnfEnabled = nrSeed.AnfEnabled,
+                SnbEnabled = nrSeed.SnbEnabled,
+                NbpNotchesEnabled = nrSeed.NbpNotchesEnabled,
+                NbMode = nrSeed.NbMode,
+                NbThreshold = nrSeed.NbThreshold,
+            };
+            ApplyAgcToEntry(existing, config);
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Insert(existing);
+        }
+        else
+        {
+            ApplyAgcToEntry(existing, config);
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(existing);
+        }
+    }
+
+    private static void ApplyAgcToEntry(DspSettingsEntry e, AgcConfig c)
+    {
+        e.AgcMode = c.Mode;
+        e.AgcSlope = c.Slope;
+        e.AgcDecayMs = c.DecayMs;
+        e.AgcHangMs = c.HangMs;
+        e.AgcHangThreshold = c.HangThreshold;
+        e.AgcFixedGainDb = c.FixedGainDb;
+    }
+
+    // RX squelch (issue: DSP controls Thetis parity §5). Persisted as nullable
+    // scalars on the existing DspSettingsEntry — SquelchEnabled null means
+    // "never written" so RadioService falls back to the off default on first
+    // run / legacy rows. Same lazy-default contract as GetAgc.
+    public SquelchConfig? GetSquelch(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        if (e is null || e.SquelchEnabled is null) return null;
+        return new SquelchConfig(
+            Enabled: e.SquelchEnabled.Value,
+            Level: e.SquelchLevel ?? 0);
+    }
+
+    public void SetSquelch(SquelchConfig config, string profileId = "default")
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        var existing = _entries.FindOne(x => x.ProfileId == profileId);
+        if (existing is null)
+        {
+            // Seed a fresh entry with NR defaults so the row is valid for
+            // future NR/CFC writes — same pattern SetAgc / CFC Upsert use.
+            var nrSeed = new NrConfig();
+            existing = new DspSettingsEntry
+            {
+                ProfileId = profileId,
+                NrMode = nrSeed.NrMode,
+                AnfEnabled = nrSeed.AnfEnabled,
+                SnbEnabled = nrSeed.SnbEnabled,
+                NbpNotchesEnabled = nrSeed.NbpNotchesEnabled,
+                NbMode = nrSeed.NbMode,
+                NbThreshold = nrSeed.NbThreshold,
+            };
+            ApplySquelchToEntry(existing, config);
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Insert(existing);
+        }
+        else
+        {
+            ApplySquelchToEntry(existing, config);
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(existing);
+        }
+    }
+
+    private static void ApplySquelchToEntry(DspSettingsEntry e, SquelchConfig c)
+    {
+        e.SquelchEnabled = c.Enabled;
+        e.SquelchLevel = c.Level;
+    }
+
+    // TX leveling (issue: DSP controls Thetis parity §6.1-6.3). Persisted as
+    // nullable scalars on the existing DspSettingsEntry — TxLevelingSet null
+    // means "never written" so RadioService falls back to the TxLevelingConfig
+    // defaults on first run / legacy rows. Same lazy-default contract as
+    // GetAgc / GetSquelch.
+    public TxLevelingConfig? GetTxLeveling(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        if (e is null || e.TxLevelingSet is not true) return null;
+        var def = new TxLevelingConfig();
+        return new TxLevelingConfig(
+            AlcMaxGainDb: e.TxAlcMaxGainDb ?? def.AlcMaxGainDb,
+            AlcDecayMs: e.TxAlcDecayMs ?? def.AlcDecayMs,
+            LevelerEnabled: e.TxLevelerEnabled ?? def.LevelerEnabled,
+            LevelerDecayMs: e.TxLevelerDecayMs ?? def.LevelerDecayMs,
+            CompressorEnabled: e.TxCompressorEnabled ?? def.CompressorEnabled,
+            CompressorGainDb: e.TxCompressorGainDb ?? def.CompressorGainDb);
+    }
+
+    public void SetTxLeveling(TxLevelingConfig config, string profileId = "default")
+    {
+        ArgumentNullException.ThrowIfNull(config);
+        var existing = _entries.FindOne(x => x.ProfileId == profileId);
+        if (existing is null)
+        {
+            // Seed a fresh entry with NR defaults so the row is valid for
+            // future NR/CFC writes — same pattern SetAgc / SetSquelch use.
+            var nrSeed = new NrConfig();
+            existing = new DspSettingsEntry
+            {
+                ProfileId = profileId,
+                NrMode = nrSeed.NrMode,
+                AnfEnabled = nrSeed.AnfEnabled,
+                SnbEnabled = nrSeed.SnbEnabled,
+                NbpNotchesEnabled = nrSeed.NbpNotchesEnabled,
+                NbMode = nrSeed.NbMode,
+                NbThreshold = nrSeed.NbThreshold,
+            };
+            ApplyTxLevelingToEntry(existing, config);
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Insert(existing);
+        }
+        else
+        {
+            ApplyTxLevelingToEntry(existing, config);
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(existing);
+        }
+    }
+
+    private static void ApplyTxLevelingToEntry(DspSettingsEntry e, TxLevelingConfig c)
+    {
+        e.TxLevelingSet = true;
+        e.TxAlcMaxGainDb = c.AlcMaxGainDb;
+        e.TxAlcDecayMs = c.AlcDecayMs;
+        e.TxLevelerEnabled = c.LevelerEnabled;
+        e.TxLevelerDecayMs = c.LevelerDecayMs;
+        e.TxCompressorEnabled = c.CompressorEnabled;
+        e.TxCompressorGainDb = c.CompressorGainDb;
+    }
+
     public CfcConfig? GetCfc(string profileId = "default")
     {
         var e = _entries.FindOne(x => x.ProfileId == profileId);
@@ -348,5 +517,32 @@ public sealed class DspSettingsEntry
     // AGC top (max gain) in dB. Null on legacy rows (pre-AGC-persist) so
     // RadioService can fall back to the baseline default for first-run.
     public double? AgcTopDb { get; set; }
+    // AGC mode + custom params (issue: DSP controls Thetis parity §4). AgcMode
+    // null on legacy rows → GetAgc() returns null → RadioService uses the Med
+    // default. Custom/fixed params null = "use the canned preset".
+    public AgcMode? AgcMode { get; set; }
+    public int? AgcSlope { get; set; }
+    public int? AgcDecayMs { get; set; }
+    public int? AgcHangMs { get; set; }
+    public int? AgcHangThreshold { get; set; }
+    public double? AgcFixedGainDb { get; set; }
+    // RX squelch (issue: DSP controls Thetis parity §5). SquelchEnabled null on
+    // legacy rows → GetSquelch() returns null → RadioService uses the off
+    // default. Level defaults to 0 when only Enabled was written.
+    public bool? SquelchEnabled { get; set; }
+    public int? SquelchLevel { get; set; }
+    // TX leveling (issue: DSP controls Thetis parity §6.1-6.3). TxLevelingSet
+    // null on legacy rows → GetTxLeveling() returns null → RadioService uses the
+    // TxLevelingConfig defaults. A single "was-written" marker (TxLevelingSet)
+    // gates the whole config so the nullable doubles/ints/bools below can't be
+    // misread as a valid config on a legacy row. The Leveler MAX-GAIN is NOT
+    // here — it persists separately via RadioStateStore.LevelerMaxGainDb.
+    public bool? TxLevelingSet { get; set; }
+    public double? TxAlcMaxGainDb { get; set; }
+    public int? TxAlcDecayMs { get; set; }
+    public bool? TxLevelerEnabled { get; set; }
+    public int? TxLevelerDecayMs { get; set; }
+    public bool? TxCompressorEnabled { get; set; }
+    public double? TxCompressorGainDb { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

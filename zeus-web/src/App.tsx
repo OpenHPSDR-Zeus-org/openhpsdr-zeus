@@ -47,6 +47,7 @@ import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
 import { AfGainSlider } from './components/AfGainSlider';
 import { AgcSlider } from './components/AgcSlider';
+import { SquelchSlider } from './components/SquelchSlider';
 import { AlertBanner } from './components/AlertBanner';
 import { AudioSuiteWindow } from './components/AudioSuiteWindow';
 import { AttenuatorSlider } from './components/AttenuatorSlider';
@@ -716,6 +717,10 @@ export default function App() {
           <div className="ctrl-group" style={{ minWidth: 160 }}>
             <div className="label-xs ctrl-lbl">AGC</div>
             <AgcSlider />
+          </div>
+          <div className="ctrl-group" style={{ minWidth: 160 }}>
+            <div className="label-xs ctrl-lbl">SQL</div>
+            <SquelchSlider />
           </div>
           <div className="ctrl-group" style={{ minWidth: 160 }}>
             <div className="label-xs ctrl-lbl">AF</div>

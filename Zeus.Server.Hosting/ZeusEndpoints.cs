@@ -417,7 +417,9 @@ public static class ZeusEndpoints
                 {
                     ["protocol"] = "P1",
                     ["rawBoardId"] = $"0x{r.Details.RawBoardId:X2}",
+                    ["firmwareCode"] = r.FirmwareVersion.ToString(),
                     ["gatewareBuild"] = r.Details.GatewareBuild.ToString(),
+                    ["rawReplyHex"] = Convert.ToHexString(r.Details.RawReply),
                 };
                 if (r.Details.FixedIpEnabled) d["fixedIpEnabled"] = "true";
                 if (r.Details.FixedIpOverridesDhcp) d["fixedIpOverridesDhcp"] = "true";
@@ -433,8 +435,16 @@ public static class ZeusEndpoints
                 {
                     ["protocol"] = "P2",
                     ["rawBoardId"] = $"0x{r.Details.RawBoardId:X2}",
+                    ["firmwareCode"] = r.FirmwareVersion.ToString(),
                     ["protocolSupported"] = r.Details.ProtocolSupported.ToString(),
                     ["numReceivers"] = r.Details.NumReceivers.ToString(),
+                    ["mercuryVersion0"] = r.Details.MercuryVersion0.ToString(),
+                    ["mercuryVersion1"] = r.Details.MercuryVersion1.ToString(),
+                    ["mercuryVersion2"] = r.Details.MercuryVersion2.ToString(),
+                    ["mercuryVersion3"] = r.Details.MercuryVersion3.ToString(),
+                    ["pennyVersion"] = r.Details.PennyVersion.ToString(),
+                    ["metisVersion"] = r.Details.MetisVersion.ToString(),
+                    ["rawReplyHex"] = Convert.ToHexString(r.Details.RawReply),
                 };
                 if (r.Details.BetaVersion != 0) d["betaVersion"] = r.Details.BetaVersion.ToString();
                 return d;
@@ -664,6 +674,47 @@ public static class ZeusEndpoints
             return r.SetAgcTop(req.TopDb);
         });
 
+        app.MapPost("/api/rx/agc", (AgcSetRequest req, RadioService r) =>
+        {
+            log.LogInformation(
+                "api.rx.agc mode={Mode} slope={Slope} decayMs={Decay} hangMs={Hang} hangThr={Thr} fixedDb={Fixed}",
+                req.Agc.Mode, req.Agc.Slope, req.Agc.DecayMs, req.Agc.HangMs,
+                req.Agc.HangThreshold, req.Agc.FixedGainDb);
+            if (!Enum.IsDefined(req.Agc.Mode))
+                return Results.BadRequest(new { error = $"unknown AgcMode {req.Agc.Mode}" });
+            return Results.Ok(r.SetAgc(req.Agc));
+        });
+
+        app.MapPost("/api/rx/squelch", (SquelchSetRequest req, RadioService r) =>
+        {
+            log.LogInformation(
+                "api.rx.squelch enabled={Enabled} level={Level}",
+                req.Squelch.Enabled, req.Squelch.Level);
+            if (req.Squelch.Level < 0 || req.Squelch.Level > 100)
+                return Results.BadRequest(new { error = $"Squelch Level {req.Squelch.Level} out of range 0..100" });
+            return Results.Ok(r.SetSquelch(req.Squelch));
+        });
+
+        app.MapPost("/api/tx/leveling", (TxLevelingSetRequest req, RadioService r) =>
+        {
+            var cfg = req.TxLeveling;
+            log.LogInformation(
+                "api.tx.leveling alcMaxGainDb={Alc:F1} alcDecayMs={AlcDecay} levelerEnabled={Lvlr} levelerDecayMs={LvlrDecay} compEnabled={Comp} compGainDb={CompGain:F1}",
+                cfg.AlcMaxGainDb, cfg.AlcDecayMs, cfg.LevelerEnabled, cfg.LevelerDecayMs,
+                cfg.CompressorEnabled, cfg.CompressorGainDb);
+            // Range validation (Thetis parity §6.1-6.3). RadioService also clamps,
+            // but a 400 lets a misbehaving client know its value was rejected.
+            if (double.IsNaN(cfg.AlcMaxGainDb) || cfg.AlcMaxGainDb < 0.0 || cfg.AlcMaxGainDb > 120.0)
+                return Results.BadRequest(new { error = "alcMaxGainDb must be 0..120 dB" });
+            if (cfg.AlcDecayMs < 1 || cfg.AlcDecayMs > 50)
+                return Results.BadRequest(new { error = "alcDecayMs must be 1..50" });
+            if (cfg.LevelerDecayMs < 1 || cfg.LevelerDecayMs > 5000)
+                return Results.BadRequest(new { error = "levelerDecayMs must be 1..5000" });
+            if (double.IsNaN(cfg.CompressorGainDb) || cfg.CompressorGainDb < 0.0 || cfg.CompressorGainDb > 20.0)
+                return Results.BadRequest(new { error = "compressorGainDb must be 0..20 dB" });
+            return Results.Ok(r.SetTxLeveling(cfg));
+        });
+
         app.MapPost("/api/rx/afGain", (RxAfGainSetRequest req, RadioService r) =>
         {
             log.LogInformation("api.rx.afGain db={Db:F1}", req.Db);
@@ -758,17 +809,17 @@ public static class ZeusEndpoints
             return Results.Ok(new { micGainDb = snap.MicGainDb });
         });
 
-        // Leveler max-gain ceiling in dB. Operator-safe band is 0..15 dB: 0 disables
-        // the headroom entirely (unity-cap Leveler) and 15 matches Thetis's stock
-        // ceiling (radio.cs:2979 tx_leveler_max_gain = 15.0). Anything outside is a
+        // Leveler max-gain ceiling in dB. Operator band is 0..20 dB (Thetis parity,
+        // setup.designer.cs): 0 disables the headroom entirely (unity-cap Leveler);
+        // Thetis's stock default is 15 (radio.cs:2979). Anything outside is a
         // 400 so a misbehaving client can't hand WDSP a value that'd saturate on
         // the first voiced sample. RadioService persists via RadioStateStore so
         // the operator's ceiling survives backend restart; the frontend no
         // longer needs to re-POST on WS reconnect.
         app.MapPost("/api/tx/leveler-max-gain", (LevelerMaxGainSetRequest req, RadioService r) =>
         {
-            if (req.Gain < 0.0 || req.Gain > 15.0 || double.IsNaN(req.Gain))
-                return Results.BadRequest(new { error = "gain must be 0..15 dB" });
+            if (req.Gain < 0.0 || req.Gain > 20.0 || double.IsNaN(req.Gain))
+                return Results.BadRequest(new { error = "gain must be 0..20 dB" });
             log.LogInformation("api.tx.levelerMaxGain dB={Db:F1}", req.Gain);
             var snap = r.SetTxLevelerMaxGain(req.Gain);
             return Results.Ok(new { levelerMaxGainDb = snap.LevelerMaxGainDb });
@@ -999,6 +1050,19 @@ public static class ZeusEndpoints
                 req.ReductionAmount, req.SmoothingFactor, req.WhiteningFactor,
                 req.NoiseRescale, req.PostFilterThreshold, req.NoiseScalingType, req.Position);
             return Results.Ok(r.SetNr4(req));
+        });
+
+        // Manual notch filters (MNF) — the client posts the full notch list on
+        // every change (and on connect). GET returns the current set so a fresh
+        // client (or a reconnect) can hydrate. Notches kill EMF/birdies in the
+        // RX audio via WDSP's notch database.
+        app.MapGet("/api/rx/notches", (RadioService r) => Results.Ok(r.Notches));
+        app.MapPost("/api/rx/notches", (NotchListRequest req, RadioService r) =>
+        {
+            var notches = req?.Notches ?? Array.Empty<NotchDto>();
+            log.LogInformation("api.rx.notches count={Count}", notches.Count);
+            r.SetNotches(notches);
+            return Results.Ok(r.Notches);
         });
 
         // CFC (Continuous Frequency Compressor) — issue #123. POSTs the full 10-band
@@ -1302,6 +1366,27 @@ public static class ZeusEndpoints
         app.MapGet("/api/radio/capabilities", (RadioService radio) =>
         {
             return Results.Ok(BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant));
+        });
+
+        // Live hardware diagnostic snapshot. Read-only by design: it exposes
+        // discovery/state, Thetis-derived static capabilities, and decoded
+        // P1/P2 wire telemetry so new hardware fields can be mapped before
+        // they become operator-configurable controls.
+        app.MapGet("/api/radio/diagnostics", (HardwareDiagnosticsService diag) =>
+        {
+            return Results.Ok(diag.Snapshot());
+        });
+
+        app.MapPost("/api/radio/diagnostics/map/reset", (HardwareDiagnosticsService diag) =>
+        {
+            diag.ResetMapping();
+            return Results.Ok(diag.Snapshot());
+        });
+
+        app.MapPost("/api/radio/diagnostics/map/marker", (HardwareDiagnosticsMarkerRequest req, HardwareDiagnosticsService diag) =>
+        {
+            diag.AddMappingMarker(req.Label, req.Notes);
+            return Results.Ok(diag.Snapshot());
         });
 
         // Operator-selected variant for the 0x0A wire-byte alias family
@@ -1754,5 +1839,6 @@ internal sealed record ChainMembershipSetRequest(bool Active);
 internal sealed record ScanVstDirectoryRequest(string Directory);
 internal sealed record MasterBypassSetRequest(bool Bypassed);
 internal sealed record ProcessingModeSetRequest(string Mode);
+internal sealed record HardwareDiagnosticsMarkerRequest(string? Label, string? Notes);
 internal sealed record WavRecordStartRequest(string? Source);
 internal sealed record WavPlayRequest(string? File);

@@ -79,7 +79,8 @@ public class LevelerMaxGainEndpointTests : IClassFixture<LevelerMaxGainEndpointT
     [Theory]
     [InlineData(0.0)]   // band floor
     [InlineData(5.0)]   // W1AEX / softerhardware default
-    [InlineData(15.0)]  // band ceiling (Thetis stock)
+    [InlineData(15.0)]  // legacy ceiling — still in range
+    [InlineData(20.0)]  // band ceiling (Thetis leveler-top max)
     public async Task PostInRange_UpdatesRadioServiceState(double gain)
     {
         using var scope = _factory.Services.CreateScope();
@@ -93,7 +94,7 @@ public class LevelerMaxGainEndpointTests : IClassFixture<LevelerMaxGainEndpointT
 
     [Theory]
     [InlineData(-0.1)]
-    [InlineData(15.1)]
+    [InlineData(20.1)]
     public async Task PostOutOfRange_Returns400_AndDoesNotMutateState(double gain)
     {
         using var scope = _factory.Services.CreateScope();

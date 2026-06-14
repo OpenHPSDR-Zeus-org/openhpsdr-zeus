@@ -45,11 +45,17 @@
 import { create } from 'zustand';
 import { msSinceOptimisticTune } from './view-center';
 import {
+  AGC_CONFIG_DEFAULT,
   NR_CONFIG_DEFAULT,
+  SQUELCH_CONFIG_DEFAULT,
+  TX_LEVELING_CONFIG_DEFAULT,
+  type AgcConfigDto,
   type ConnectionStatus,
   type NrConfigDto,
   type RadioStateDto,
   type RxMode,
+  type SquelchConfigDto,
+  type TxLevelingConfigDto,
   type ZoomLevel,
 } from '../api/client';
 
@@ -73,6 +79,9 @@ export type ConnectionState = {
   txFilterHighHz: number;
   sampleRate: number;
   agcTopDb: number;
+  agc: AgcConfigDto;
+  squelch: SquelchConfigDto;
+  txLeveling: TxLevelingConfigDto;
   autoAgcEnabled: boolean;
   agcOffsetDb: number;
   rxAfGainDb: number;
@@ -123,6 +132,9 @@ export type ConnectionState = {
   setConnectedProtocol: (p: 'P1' | 'P2' | null) => void;
   setPreampOn: (on: boolean) => void;
   setNr: (nr: NrConfigDto) => void;
+  setAgc: (agc: AgcConfigDto) => void;
+  setSquelch: (squelch: SquelchConfigDto) => void;
+  setTxLeveling: (txLeveling: TxLevelingConfigDto) => void;
   setZoomLevel: (level: ZoomLevel) => void;
   setLastConnectedEndpoint: (ep: string | null) => void;
   setWisdomPhase: (phase: WisdomPhase) => void;
@@ -142,6 +154,9 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   txFilterHighHz: 2850,
   sampleRate: 192_000,
   agcTopDb: 45,
+  agc: { ...AGC_CONFIG_DEFAULT },
+  squelch: { ...SQUELCH_CONFIG_DEFAULT },
+  txLeveling: { ...TX_LEVELING_CONFIG_DEFAULT },
   autoAgcEnabled: false,
   agcOffsetDb: 0,
   rxAfGainDb: 0,
@@ -178,6 +193,9 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       txFilterHighHz: s.txFilterHighHz,
       sampleRate: s.sampleRate,
       agcTopDb: s.agcTopDb,
+      agc: s.agc,
+      squelch: s.squelch,
+      txLeveling: s.txLeveling,
       autoAgcEnabled: s.autoAgcEnabled,
       agcOffsetDb: s.agcOffsetDb,
       rxAfGainDb: s.rxAfGainDb,
@@ -194,6 +212,9 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   setConnectedProtocol: (connectedProtocol) => set({ connectedProtocol }),
   setPreampOn: (preampOn) => set({ preampOn }),
   setNr: (nr) => set({ nr }),
+  setAgc: (agc) => set({ agc }),
+  setSquelch: (squelch) => set({ squelch }),
+  setTxLeveling: (txLeveling) => set({ txLeveling }),
   setZoomLevel: (zoomLevel) => set({ zoomLevel }),
   setLastConnectedEndpoint: (lastConnectedEndpoint) =>
     set({ lastConnectedEndpoint }),

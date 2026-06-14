@@ -74,6 +74,36 @@ public interface IDspEngine : IDisposable
     void SetCtunShift(int channelId, int shiftHz);
     void SetAgcTop(int channelId, double topDb);
 
+    /// <summary>Apply the AGC mode + custom/fixed params (Thetis parity §4).
+    /// Drives SetRXAAGCMode/Slope/Hang/Decay/HangThreshold (and SetRXAAGCFixed
+    /// in Fixed mode). The AGC max-gain ("top") is NOT touched here — it keeps
+    /// its own <see cref="SetAgcTop"/> path. Canned modes push their preset
+    /// hang/decay/threshold; Custom uses the cfg values (falling back to the
+    /// Med baseline for any null). No-op on Synthetic.</summary>
+    void SetAgc(int channelId, AgcConfig cfg);
+
+    /// <summary>Apply the RX squelch config (Thetis parity §5). A single
+    /// mode-aware control: the engine routes run + mapped threshold to the WDSP
+    /// squelch stage matching the channel's current RX mode (SSB/CW → SSQL,
+    /// AM/SAM → AMSQ, FM → FMSQ) and forces the other two stages off. Level
+    /// 0..100 maps per-stage (SSQL/FMSQ <c>Level/100</c>; AMSQ
+    /// <c>-150 + Level*1.5</c> dB). Tau/max-tail use Thetis defaults set at
+    /// channel open. Re-asserted on every mode change so a fresh stage picks up
+    /// the operator's squelch. No-op on Synthetic.</summary>
+    void SetSquelch(int channelId, SquelchConfig cfg);
+
+    /// <summary>Apply the TX leveling config (Thetis parity §6.1-6.3). Drives
+    /// the ALC (SetTXAALCMaxGain/Decay — the ALC run state is left ON and is
+    /// never touched here; disabling it silences the SSB modulator), the Leveler
+    /// (SetTXALevelerSt run flag + SetTXALevelerDecay), and the Compressor/CPDR
+    /// (SetTXACompressorRun + SetTXACompressorGain). The Leveler max-gain
+    /// ("top") is NOT touched here — it keeps its own
+    /// <see cref="SetTxLevelerMaxGain"/> path. The engine remembers
+    /// cfg.LevelerEnabled so the TUN / two-tone restore re-arms the Leveler to
+    /// the operator's setting rather than hardcoding it on. No-op on
+    /// Synthetic.</summary>
+    void SetTxLeveling(int channelId, TxLevelingConfig cfg);
+
     /// <summary>
     /// Briefly tighten the RX display's averaging time-constant after a
     /// retune so the spectrum settles at the new frequency in ~100 ms
@@ -94,6 +124,22 @@ public interface IDspEngine : IDisposable
     void SetRxAfGainDb(int channelId, double db);
 
     void SetNoiseReduction(int channelId, NrConfig cfg);
+
+    /// <summary>
+    /// Replace the full manual-notch (MNF) set applied to the RX audio. Notch
+    /// centre/width are absolute RF Hz; the engine rewrites the WDSP notch
+    /// database and re-applies it across channel reopens. The list is global to
+    /// the RX path (not per-channel) — matching the operator's mental model of
+    /// "these frequencies are notched".
+    /// </summary>
+    void SetNotches(IReadOnlyList<NotchDto> notches);
+
+    /// <summary>
+    /// Update the absolute tuned (LO) frequency the WDSP notch database uses to
+    /// position notches, so they hold their RF position across a retune.
+    /// </summary>
+    void SetNotchTuneFrequencyHz(double loHz);
+
     void SetZoom(int channelId, int level);
     int ReadAudio(int channelId, Span<float> output);
 

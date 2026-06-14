@@ -49,7 +49,10 @@ import {
   type NrConfigDto,
   type NrMode,
 } from '../api/client';
+import { getNoiseFloor } from '../dsp/signal-estimator';
+import { recommendSmartNr } from '../dsp/smart-nr';
 import { useConnectionStore } from '../state/connection-store';
+import { useDisplayStore } from '../state/display-store';
 import { Slider } from './design/Slider';
 import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
 
@@ -101,6 +104,7 @@ export function DspPanel() {
   const setLocalNr = useConnectionStore((s) => s.setNr);
   const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
+  const mode = useConnectionStore((s) => s.mode);
 
   const inflightAbort = useRef<AbortController | null>(null);
 
@@ -159,11 +163,22 @@ export function DspPanel() {
     [nr, send],
   );
 
+  const applySmartNr = useCallback(() => {
+    if (!connected) return;
+    const { panDb } = useDisplayStore.getState();
+    const rec = recommendSmartNr({
+      spectrum: panDb,
+      floor: getNoiseFloor(),
+      current: nr,
+      mode,
+    });
+    if (rec) send(rec.nr);
+  }, [connected, nr, mode, send]);
+
   const nrActive = nr.nrMode !== 'Off';
   const nbActive = nr.nbMode !== 'Off';
 
   return (
-    <>
     <div className="dsp-grid">
       <div className="dsp-row">
         <button
@@ -189,6 +204,15 @@ export function DspPanel() {
         />
       </div>
       <div className="dsp-row">
+        <button
+          type="button"
+          disabled={!connected}
+          onClick={applySmartNr}
+          className="btn sm"
+          title="SMART - analyze the current panadapter and apply mode-aware NR settings"
+        >
+          SMART
+        </button>
         <button
           type="button"
           onClick={cycleNr}
@@ -230,6 +254,5 @@ export function DspPanel() {
         <NrSettingsSection mode={settingsModeFor(nr.nrMode)} />
       )}
     </div>
-    </>
   );
 }

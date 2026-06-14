@@ -102,6 +102,24 @@ public sealed class SyntheticDspEngine : IDspEngine
 
     public void SetAgcTop(int channelId, double topDb) { /* synthetic has no AGC */ }
 
+    public void SetAgc(int channelId, AgcConfig cfg)
+    {
+        // synthetic has no AGC — validate the shape so callers fail fast.
+        ArgumentNullException.ThrowIfNull(cfg);
+    }
+
+    public void SetSquelch(int channelId, SquelchConfig cfg)
+    {
+        // synthetic has no squelch — validate the shape so callers fail fast.
+        ArgumentNullException.ThrowIfNull(cfg);
+    }
+
+    public void SetTxLeveling(int channelId, TxLevelingConfig cfg)
+    {
+        // synthetic has no TX path — validate the shape so callers fail fast.
+        ArgumentNullException.ThrowIfNull(cfg);
+    }
+
     public void SetRxDisplayFastAttack(int channelId, bool fast) { /* synthetic has no display averaging */ }
 
     public void SetRxAfGainDb(int channelId, double db) { /* synthetic has no audio path */ }
@@ -115,6 +133,12 @@ public sealed class SyntheticDspEngine : IDspEngine
         if (!Enum.IsDefined(cfg.NrMode)) throw new ArgumentException($"unknown NrMode {cfg.NrMode}", nameof(cfg));
         if (!Enum.IsDefined(cfg.NbMode)) throw new ArgumentException($"unknown NbMode {cfg.NbMode}", nameof(cfg));
     }
+
+    // Manual notch filters have no audio effect in the synthetic engine; accept
+    // and ignore so dev/CI exercises the full plumbing without a WDSP backend.
+    public void SetNotches(IReadOnlyList<NotchDto> notches) => ArgumentNullException.ThrowIfNull(notches);
+
+    public void SetNotchTuneFrequencyHz(double loHz) { }
 
     // Synthetic doesn't render from a real analyzer so zoom is a no-op for the
     // pixel output, but we still validate so bogus levels surface during dev.

@@ -188,6 +188,48 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXAAGCFixed(int channel, double fixed_agc);
 
+    // RX squelch — three independent WDSP stages auto-selected by RX mode
+    // (Thetis parity §5): SSQL for SSB/CW, AMSQ for AM/SAM, FMSQ for FM. Only
+    // one runs at a time; the engine clears the other two on every apply.
+    // Voice (SSB/CW) — ssql.h. Threshold 0.0..1.0; tau_mute/tau_unmute in s.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASSQLRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASSQLThreshold(int channel, double threshold);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASSQLTauMute(int channel, double tau_mute);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASSQLTauUnMute(int channel, double tau_unmute);
+
+    // AM — amsq.h. Threshold in dB (-150..0); max_tail in s.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAAMSQRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAAMSQThreshold(int channel, double threshold);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAAMSQMaxTail(int channel, double tail);
+
+    // FM — fmsq.h. Threshold ~0..1.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAFMSQRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAFMSQThreshold(int channel, double threshold);
+
     [LibraryImport(LibraryName, StringMarshalling = StringMarshalling.Utf8)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void XCreateAnalyzer(
@@ -408,6 +450,28 @@ internal static partial class NativeMethods
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void RXANBPSetNotchesRun(int channel, int run);
+
+    // Manual notch filter (MNF) database — nbp.c:343-468. Notch fcenter/fwidth
+    // are ABSOLUTE RF Hz; WDSP positions them relative to the tuned frequency
+    // (RXANBPSetTuneFrequency) so they stay put as the radio tunes. Thetis
+    // dsp.cs:703-738 drives the same set. The notchdb is per-RXA-channel.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int RXANBPAddNotch(int channel, int notch, double fcenter, double fwidth, int active);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int RXANBPDeleteNotch(int channel, int notch);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void RXANBPGetNumNotches(int channel, ref int nnotches);
+
+    // Absolute tuned (LO) frequency in Hz — recomputes notch coefficients so
+    // notches hold their RF position across a retune. Called on every LO move.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void RXANBPSetTuneFrequency(int channel, double tunefreq);
 
     // NB1 (EXTANB) — pre-RXA time-domain noise blanker. Setters dereference
     // panb[id] so create_anbEXT MUST be called before any SetEXTANB*/xanbEXT.
@@ -634,9 +698,23 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXALevelerTop(int channel, double maxgain);
 
+    // Leveler decay (release) time in ms. WDSP's SetTXALevelerDecay (wcpAGC.c)
+    // sets the leveling release tau; operator range 1..5000 ms, Thetis default
+    // 100 (radio.cs). Bound here for the Phase-3 TX-leveling control surface.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXALevelerDecay(int channel, int decay);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetTXACompressorRun(int channel, int run);
+
+    // Compressor (CPDR) make-up gain in dB. WDSP's SetTXACompressorGain
+    // (compress.c) sets the CPDR drive; operator range 0..20 dB, default 0.
+    // Bound here for the Phase-3 TX-leveling control surface.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetTXACompressorGain(int channel, double gain);
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

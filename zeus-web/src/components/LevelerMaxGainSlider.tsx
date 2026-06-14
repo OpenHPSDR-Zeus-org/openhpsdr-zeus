@@ -17,14 +17,14 @@ import { useLiveSlider } from '../hooks/useLiveSlider';
 
 // Leveler max-gain (TX): how much the WDSP TXA Leveler can boost quiet
 // speech before the ALC catches it. Default +5 dB matches the W1AEX /
-// softerhardware community starting point. Server clamp is [0, 15] dB
+// softerhardware community starting point. Server clamp is [0, 20] dB
 // (POST /api/tx/leveler-max-gain). Same debounce shape as DriveSlider /
 // MicGainSlider so a drag doesn't flood the endpoint.
 //
 // Lives in the TX panel (TxFilterPanel) alongside DRV / TUN / MIC — moved
 // out of the DSP panel because it only acts during MOX (TX-only stage).
 const MIN = 0;
-const MAX = 15;
+const MAX = 20;
 const STEP = 0.5;
 
 function quantize(v: number): number {
