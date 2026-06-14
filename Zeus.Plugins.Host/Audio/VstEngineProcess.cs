@@ -46,6 +46,12 @@ internal sealed class VstEngineProcess : IDisposable
         if (!string.IsNullOrWhiteSpace(overridePath) && File.Exists(overridePath))
             return overridePath;
 
+        // Zeus-managed engine location — where the "Get VSTHost" provisioning
+        // flow stages the bridge-capable engine. Preferred over a system-wide
+        // VSTHost install, which may be an older, non-bridge release.
+        var managed = ManagedEnginePath();
+        if (managed is not null && File.Exists(managed)) return managed;
+
         if (OperatingSystem.IsWindows())
         {
             foreach (var root in new[]
@@ -67,6 +73,20 @@ internal sealed class VstEngineProcess : IDisposable
             if (File.Exists(p)) return p;
         }
         return null;
+    }
+
+    /// <summary>
+    /// The Zeus-managed engine location
+    /// (<c>%LOCALAPPDATA%\Zeus\vst-engine\VSTHostEngine.exe</c> on Windows), or
+    /// null on non-Windows. Where Zeus stages a downloaded/provisioned engine so
+    /// VST mode doesn't depend on a system-wide VSTHost install.
+    /// </summary>
+    public static string? ManagedEnginePath()
+    {
+        if (!OperatingSystem.IsWindows()) return null;
+        var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrEmpty(local)) return null;
+        return Path.Combine(local, "Zeus", "vst-engine", "VSTHostEngine.exe");
     }
 
     /// <summary>Launch the engine in --zeus-bridge mode against an existing SHM.</summary>

@@ -153,6 +153,13 @@ public class VstHostAudioPluginTests : IDisposable
         }
 
         public int Shutdown() => VstBridgeStatus.Ok;
+
+        public int EditorOpen(nint handle, string title) { EditorOpenCount++; return VstBridgeStatus.Ok; }
+        public int EditorClose(nint handle) { EditorCloseCount++; return VstBridgeStatus.Ok; }
+        public bool EditorIsOpen(nint handle) => false;
+
+        public int EditorOpenCount;
+        public int EditorCloseCount;
     }
 
     private sealed class StubHost : IAudioHost

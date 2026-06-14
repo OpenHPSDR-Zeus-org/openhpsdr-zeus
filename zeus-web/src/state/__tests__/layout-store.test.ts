@@ -43,19 +43,20 @@ describe('layout-store / workspace tile mutators', () => {
     const tile = after[after.length - 1];
     expect(tile?.panelId).toBe('cw');
     expect(tile?.uid).toBe(uid);
-    // Default span for cw is 4×4 per workspace.ts DEFAULT_TILE_SPAN.
-    expect(tile?.w).toBe(4);
-    expect(tile?.h).toBe(4);
+    // Default span for cw is 8×8 per workspace.ts DEFAULT_TILE_SPAN
+    // (24×48 grid — 2× the legacy 4×4).
+    expect(tile?.w).toBe(8);
+    expect(tile?.h).toBe(8);
   });
 
   it('addTile places the new tile at y = max(existing y+h)', () => {
     // DEFAULT_WORKSPACE_LAYOUT's tallest existing y+h is hero/dsp at
-    // y=6+18 / y=17+7 = 24. So the new tile should land at y=24.
+    // y=16+32 / y=38+10 = 48 on the 24×48 grid. So the new tile lands at y=48.
     const uid = useLayoutStore.getState().addTile('cw');
     const tile = useLayoutStore
       .getState()
       .workspace.tiles.find((t) => t.uid === uid);
-    expect(tile?.y).toBe(24);
+    expect(tile?.y).toBe(48);
     expect(tile?.x).toBe(0);
   });
 
@@ -120,11 +121,31 @@ describe('parseWorkspaceLayout', () => {
     expect(parseWorkspaceLayout(42)).toEqual(EMPTY_WORKSPACE_LAYOUT);
   });
 
-  it('drops blobs whose schemaVersion is not 7', () => {
+  it('drops blobs whose schemaVersion is unknown (not 7 or 8)', () => {
     const v6 = { schemaVersion: 6, tiles: [] };
     expect(parseWorkspaceLayout(v6)).toEqual(EMPTY_WORKSPACE_LAYOUT);
     const future = { schemaVersion: 99, tiles: [] };
     expect(parseWorkspaceLayout(future)).toEqual(EMPTY_WORKSPACE_LAYOUT);
+  });
+
+  it('migrates legacy v7 layouts onto the v8 grid by scaling coords ×2', () => {
+    const v7 = {
+      schemaVersion: 7,
+      tiles: [{ uid: 'a', panelId: 'hero', x: 3, y: 6, w: 9, h: 12 }],
+    };
+    const parsed = parseWorkspaceLayout(v7);
+    expect(parsed.schemaVersion).toBe(8);
+    expect(parsed.tiles[0]).toMatchObject({ x: 6, y: 12, w: 18, h: 24 });
+  });
+
+  it('accepts v8 layouts without rescaling', () => {
+    const v8 = {
+      schemaVersion: 8,
+      tiles: [{ uid: 'a', panelId: 'hero', x: 6, y: 12, w: 18, h: 24 }],
+    };
+    const parsed = parseWorkspaceLayout(v8);
+    expect(parsed.schemaVersion).toBe(8);
+    expect(parsed.tiles[0]).toMatchObject({ x: 6, y: 12, w: 18, h: 24 });
   });
 
   it('keeps tiles whose panelId is not in the static registry (plugin-panel tiles register asynchronously)', () => {

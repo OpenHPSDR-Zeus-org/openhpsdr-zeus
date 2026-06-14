@@ -26,6 +26,16 @@ import {
 
 const CHAIN_SLOT = 'tx-audio-tools.chain';
 
+// Plugin editors (the built-in EQ graph, gate, etc.) are responsive and
+// stretch to fill whatever width they're given. The embedded host lives
+// in the TX Audio Tools settings pane, which is ~2000 px wide on a normal
+// monitor — letting a 10-band EQ sprawl across all of it looks cheap and
+// makes the controls hard to read. Cap the rack column at a sane width
+// and centre it so each unit reads like a real rack module (the VSTHost
+// look the operator asked for). Tuned so the EQ graph + meters sit at a
+// comfortable density without horizontal sprawl.
+const RACK_MAX_WIDTH = 1120;
+
 /** Edge codes for the resize handles — 4 edges + 4 corners. */
 type ResizeEdge = 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
@@ -305,7 +315,7 @@ function ChainSlotCard({
       data-plugin-id={panel.pluginId}
       style={{
         borderRadius: 6,
-        border: '1px solid ' + (isDragTarget ? 'var(--accent)' : 'var(--line-1)'),
+        border: '1px solid ' + (isDragTarget ? 'var(--accent)' : 'var(--line)'),
         borderLeft: '3px solid ' + (isDragTarget ? 'var(--accent)' : 'var(--accent)'),
         background: 'var(--bg-1)',
         opacity: isDragSource ? 0.4 : 1,
@@ -321,10 +331,10 @@ function ChainSlotCard({
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 8,
-          padding: '6px 10px',
-          background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
-          borderBottom: collapsed ? 'none' : '1px solid var(--line-1)',
+          gap: 9,
+          padding: '8px 11px',
+          background: 'var(--bg-2)',
+          borderBottom: collapsed ? 'none' : '1px solid var(--line)',
           cursor: 'pointer',
           userSelect: 'none',
         }}
@@ -347,10 +357,19 @@ function ChainSlotCard({
 
         <span
           style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            minWidth: 20,
+            height: 18,
+            padding: '0 5px',
+            borderRadius: 3,
+            border: '1px solid var(--line)',
+            background: 'var(--bg-1)',
             fontSize: 10,
+            fontWeight: 600,
             fontFamily: 'var(--font-mono, JetBrains Mono, monospace)',
-            color: 'var(--fg-3)',
-            width: 16,
+            color: 'var(--fg-2)',
           }}
         >
           {String(index + 1).padStart(2, '0')}
@@ -390,7 +409,7 @@ function ChainSlotCard({
             width: 18,
             height: 18,
             borderRadius: 3,
-            border: '1px solid var(--line-1)',
+            border: '1px solid var(--line)',
             background: 'var(--bg-2)',
             color: 'var(--fg-2)',
             cursor: 'pointer',
@@ -408,7 +427,7 @@ function ChainSlotCard({
           tear down each plugin's meter polling and local UI state, so
           we keep it mounted and just hide it; audio is unaffected
           either way (collapse is presentation-only). */}
-      <div style={{ display: collapsed ? 'none' : 'block', padding: 10 }}>
+      <div style={{ display: collapsed ? 'none' : 'block', padding: '12px 14px' }}>
         {children}
       </div>
     </div>
@@ -430,6 +449,10 @@ interface PluginSidebarProps {
   onParkedDragEnd(): void;
   onScanDirectory(): void;
   scanning: boolean;
+  /** Embedded (in-page) mode flows at natural height, so the browser
+   *  sticks to the top of the scrolling settings pane instead of
+   *  filling a fixed-height window. */
+  embedded: boolean;
 }
 
 /**
@@ -450,20 +473,34 @@ function PluginSidebar({
   onParkedDragEnd,
   onScanDirectory,
   scanning,
+  embedded,
 }: PluginSidebarProps) {
+  // In flow (embedded) mode the host has no bounded height, so the
+  // browser sticks to the top of the scroll viewport and caps its own
+  // height; in the floating window it simply fills the panel.
+  const stickyStyle: React.CSSProperties = embedded
+    ? {
+        position: 'sticky',
+        top: 0,
+        alignSelf: 'flex-start',
+        maxHeight: 'calc(100vh - 160px)',
+      }
+    : {};
+
   if (collapsed) {
     return (
       <div
         style={{
-          width: 26,
-          flex: '0 0 26px',
+          width: 28,
+          flex: '0 0 28px',
           background: 'var(--bg-1)',
-          borderRight: '1px solid var(--line-1)',
+          borderRight: '1px solid var(--line)',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          paddingTop: 6,
+          paddingTop: 8,
           gap: 8,
+          ...stickyStyle,
         }}
       >
         <button
@@ -475,7 +512,7 @@ function PluginSidebar({
             width: 18,
             height: 18,
             borderRadius: 3,
-            border: '1px solid var(--line-1)',
+            border: '1px solid var(--line)',
             background: 'var(--bg-2)',
             color: 'var(--fg-2)',
             cursor: 'pointer',
@@ -521,7 +558,7 @@ function PluginSidebar({
         padding: '4px 6px',
         borderRadius: 3,
         background: 'var(--bg-2)',
-        border: '1px solid var(--line-1)',
+        border: '1px solid var(--line)',
         cursor: inChain ? 'default' : 'grab',
       }}
     >
@@ -549,7 +586,7 @@ function PluginSidebar({
           width: 18,
           height: 18,
           borderRadius: 3,
-          border: '1px solid ' + (inChain ? 'var(--line-1)' : 'var(--accent)'),
+          border: '1px solid ' + (inChain ? 'var(--line)' : 'var(--accent)'),
           background: inChain ? 'var(--bg-1)' : 'var(--accent)',
           color: inChain ? 'var(--fg-2)' : 'var(--fg-0)',
           cursor: 'pointer',
@@ -567,13 +604,14 @@ function PluginSidebar({
   return (
     <div
       style={{
-        width: 184,
-        flex: '0 0 184px',
+        width: 200,
+        flex: '0 0 200px',
         background: 'var(--bg-1)',
-        borderRight: '1px solid var(--line-1)',
+        borderRight: '1px solid var(--line)',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
+        ...stickyStyle,
       }}
     >
       <div
@@ -581,8 +619,8 @@ function PluginSidebar({
           display: 'flex',
           alignItems: 'center',
           gap: 6,
-          padding: '7px 8px',
-          borderBottom: '1px solid var(--line-1)',
+          padding: '9px 10px',
+          borderBottom: '1px solid var(--line)',
         }}
       >
         <span
@@ -606,7 +644,7 @@ function PluginSidebar({
             width: 18,
             height: 18,
             borderRadius: 3,
-            border: '1px solid var(--line-1)',
+            border: '1px solid var(--line)',
             background: 'var(--bg-2)',
             color: 'var(--fg-2)',
             cursor: 'pointer',
@@ -644,7 +682,7 @@ function PluginSidebar({
       </div>
 
       {/* Footer — register VST3 plugins from a folder. */}
-      <div style={{ padding: 8, borderTop: '1px solid var(--line-1)' }}>
+      <div style={{ padding: 8, borderTop: '1px solid var(--line)' }}>
         <button
           type="button"
           onClick={onScanDirectory}
@@ -693,7 +731,7 @@ function profileBtnStyle(disabled: boolean): React.CSSProperties {
   return {
     padding: '3px 10px',
     borderRadius: 3,
-    border: '1px solid var(--line-1)',
+    border: '1px solid var(--line)',
     background: 'var(--bg-2)',
     color: 'var(--fg-2)',
     cursor: disabled ? 'not-allowed' : 'pointer',
@@ -1050,19 +1088,21 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   // width (so plugin GUIs get real room instead of being clipped).
   const containerStyle: React.CSSProperties = embedded
     ? {
+        // Flow at natural height inside the settings pane (which is the
+        // scroll container). The old fixed 76vh + inner scroll nested two
+        // scroll regions and clipped the lower rack slots ("chopped off");
+        // flowing lets the pane scroll the whole rack as one surface.
         position: 'relative',
         width: '100%',
-        height: '76vh',
-        minHeight: 480,
         display: 'flex',
         flexDirection: 'column',
         background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
-        border: '1px solid var(--line-1)',
+        border: '1px solid var(--line)',
         borderRadius: 8,
         boxShadow: 'inset 0 1px 0 rgba(255, 255, 255, 0.04)',
         color: 'var(--fg-0)',
         fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
-        overflow: 'hidden',
+        overflow: 'visible',
       }
     : {
         position: 'fixed',
@@ -1083,7 +1123,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
         display: 'flex',
         flexDirection: 'column',
         background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
-        border: '1px solid var(--line-1)',
+        border: '1px solid var(--line)',
         borderRadius: 8,
         boxShadow: '0 12px 32px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.04)',
         color: 'var(--fg-0)',
@@ -1110,7 +1150,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           gap: 12,
           padding: '8px 12px',
           background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
-          borderBottom: '1px solid var(--line-1)',
+          borderBottom: '1px solid var(--line)',
           boxShadow: 'inset 0 2px 0 var(--power), inset 0 3px 8px rgba(255, 201, 58, 0.08)',
           cursor: embedded ? 'default' : 'grab',
           userSelect: 'none',
@@ -1146,7 +1186,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
             marginLeft: 'auto',
             padding: '4px 12px',
             borderRadius: 4,
-            border: '1px solid ' + (auditionEnabled ? 'var(--tx)' : 'var(--line-1)'),
+            border: '1px solid ' + (auditionEnabled ? 'var(--tx)' : 'var(--line)'),
             background: auditionEnabled ? 'var(--tx)' : 'var(--bg-2)',
             color: auditionEnabled ? 'var(--fg-0)' : 'var(--fg-2)',
             cursor: auditionSupported ? 'pointer' : 'not-allowed',
@@ -1171,7 +1211,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
             style={{
               padding: '2px 10px',
               borderRadius: 4,
-              border: '1px solid var(--line-1)',
+              border: '1px solid var(--line)',
               background: 'var(--bg-2)',
               color: 'var(--fg-2)',
               cursor: 'pointer',
@@ -1195,7 +1235,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           gap: 6,
           padding: '6px 12px',
           background: 'var(--bg-1)',
-          borderBottom: '1px solid var(--line-1)',
+          borderBottom: '1px solid var(--line)',
         }}
       >
         <span
@@ -1218,7 +1258,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
             minWidth: 0,
             padding: '3px 6px',
             borderRadius: 3,
-            border: '1px solid var(--line-1)',
+            border: '1px solid var(--line)',
             background: 'var(--bg-2)',
             color: 'var(--fg-1)',
             fontSize: 11,
@@ -1254,7 +1294,14 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
       </div>
 
       {/* Body — plugin browser sidebar + main rack column. */}
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+      <div
+        style={{
+          display: 'flex',
+          flex: embedded ? 'none' : 1,
+          minHeight: 0,
+          alignItems: 'stretch',
+        }}
+      >
         <PluginSidebar
           collapsed={sidebarCollapsed}
           onToggle={toggleSidebar}
@@ -1266,6 +1313,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           onParkedDragEnd={onParkedDragEnd}
           onScanDirectory={() => void onScanVstDirectory()}
           scanning={scanning}
+          embedded={embedded}
         />
 
         <div
@@ -1274,6 +1322,21 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
             flexDirection: 'column',
             flex: 1,
             minWidth: 0,
+          }}
+        >
+        {/* Centred rack column. Caps the working width so plugin editors
+            read as rack modules instead of sprawling across the full
+            settings pane; chrome strips (meters / toolbar) align to the
+            same column so the whole stack shares one tidy gutter. */}
+        <div
+          style={{
+            width: '100%',
+            maxWidth: RACK_MAX_WIDTH,
+            margin: '0 auto',
+            display: 'flex',
+            flexDirection: 'column',
+            flex: embedded ? 'none' : 1,
+            minHeight: 0,
           }}
         >
       {/* Chain IN / OUT signal meters (poll while window open). */}
@@ -1290,7 +1353,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           gap: 6,
           padding: '7px 12px',
           background: 'var(--bg-1)',
-          borderBottom: '1px solid var(--line-1)',
+          borderBottom: '1px solid var(--line)',
           fontSize: 10,
           letterSpacing: 1.2,
           textTransform: 'uppercase',
@@ -1311,7 +1374,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
               marginLeft: 'auto',
               padding: '3px 9px',
               borderRadius: 3,
-              border: '1px solid var(--line-1)',
+              border: '1px solid var(--line)',
               background: 'var(--bg-2)',
               color: 'var(--fg-2)',
               cursor: 'pointer',
@@ -1335,15 +1398,20 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
         onDragLeave={onRackDragLeave}
         onDrop={onRackDrop}
         style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: 12,
+          // Floating window: bounded, scrolls internally. Embedded: flows
+          // at natural height and lets the settings pane scroll the whole
+          // rack as one surface (so the lower slots never clip).
+          flex: embedded ? 'none' : 1,
+          overflowY: embedded ? 'visible' : 'auto',
+          padding: '12px 14px',
+          paddingBottom: 20,
           display: 'flex',
           flexDirection: 'column',
-          gap: 8,
+          gap: 10,
           outline: rackDropActive ? '2px dashed var(--accent)' : 'none',
           outlineOffset: -4,
-          background: rackDropActive ? 'rgba(74, 158, 255, 0.06)' : 'transparent',
+          borderRadius: 6,
+          background: rackDropActive ? 'var(--accent-soft)' : 'transparent',
         }}
       >
         {chainPanels.length === 0 && (
@@ -1384,6 +1452,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           );
         })}
       </div>
+        </div>
         </div>
       </div>
     </div>

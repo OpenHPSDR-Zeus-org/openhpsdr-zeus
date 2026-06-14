@@ -58,13 +58,18 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
   const loadMasterBypassFromServer = useAudioSuiteStore(
     (s) => s.loadMasterBypassFromServer,
   );
+  const loadProcessingModeFromServer = useAudioSuiteStore(
+    (s) => s.loadProcessingModeFromServer,
+  );
 
   // Pull the master-bypass state from the server once on mount so a
   // fresh browser session reflects the persisted operator preference.
   // Subsequent broadcasts (0x1F) keep us in sync without polling.
+  // Processing mode (Native/VST) is likewise server-authoritative.
   useEffect(() => {
     loadMasterBypassFromServer();
-  }, [loadMasterBypassFromServer]);
+    loadProcessingModeFromServer();
+  }, [loadMasterBypassFromServer, loadProcessingModeFromServer]);
 
   return (
     <div
@@ -75,7 +80,7 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
         gap: 6,
         padding: '8px 12px',
         background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
-        border: '1px solid var(--line-1)',
+        border: '1px solid var(--line)',
         borderRadius: 6,
         boxShadow: 'inset 0 2px 0 var(--power), inset 0 3px 8px rgba(255, 201, 58, 0.08)',
         fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
@@ -86,6 +91,7 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
         flexWrap: 'wrap',
       }}
     >
+      <ProcessingModeButton />
       <MasterBypassButton />
       <span style={{ marginRight: 4, color: 'var(--fg-1)', fontWeight: 500 }}>TX chain</span>
       {v1Slots.map((slot, i) => {
@@ -104,7 +110,7 @@ function ChainFlow({ chainPanels }: { chainPanels: RegisteredPluginPanel[] }) {
                 padding: '2px 8px',
                 borderRadius: 3,
                 background: slot.installed ? 'var(--bg-2)' : 'var(--bg-1)',
-                border: '1px solid ' + (slot.installed ? 'var(--accent)' : 'var(--line-1)'),
+                border: '1px solid ' + (slot.installed ? 'var(--accent)' : 'var(--line)'),
                 color: slot.installed ? 'var(--fg-0)' : 'var(--fg-3)',
                 opacity: dimForBypass ? 0.45 : (slot.installed ? 1 : 0.5),
                 fontSize: 10,
@@ -166,6 +172,60 @@ function MasterBypassButton() {
       }}
     >
       Bypass
+    </button>
+  );
+}
+
+// Native ↔ VST processing-route selector. Native (default) = Brian's
+// in-process Audio Suite chain. VST = the operator's VST3 plugins hosted in
+// the out-of-process VSTHost engine (crash-isolated from the radio). The two
+// are mutually exclusive. PROVISIONAL placement/labels — the maintainer owns
+// the final Audio Suite UX; this is a functional control so the route can be
+// driven and tested. Palette uses tokens only (--accent for the active VST
+// route, --tx for a "VST selected but engine not live" warning).
+function ProcessingModeButton() {
+  const mode = useAudioSuiteStore((s) => s.processingMode);
+  const engineAvailable = useAudioSuiteStore((s) => s.vstEngineAvailable);
+  const engineActive = useAudioSuiteStore((s) => s.vstEngineActive);
+  const setProcessingMode = useAudioSuiteStore((s) => s.setProcessingMode);
+
+  const isVst = mode === 'vst';
+  const vstWarn = isVst && !engineActive; // selected but engine not routing
+
+  const border = isVst ? (vstWarn ? 'var(--tx)' : 'var(--accent)') : 'var(--line)';
+  const background = isVst && !vstWarn ? 'var(--accent)' : 'var(--bg-2)';
+  const color = isVst ? (vstWarn ? 'var(--tx)' : '#fff') : 'var(--fg-2)';
+
+  const title = !isVst
+    ? 'Processing route: NATIVE — the in-process Audio Suite chain (default). Click to route TX mic audio through the out-of-process VST engine instead.'
+    : engineActive
+    ? 'Processing route: VST — TX mic audio runs through the out-of-process VST engine (your Audio Suite VST3 plugins, loaded at default settings). Click to return to the native chain.'
+    : engineAvailable
+    ? 'VST route selected, but the engine is not routing yet (starting up, or it failed to come up). TX audio passes through clean meanwhile. Click to return to the native chain.'
+    : 'VST route selected, but no VST engine is installed — install VSTHost (github.com/KlayaR/VSTHost). TX audio passes through clean. Click to return to the native chain.';
+
+  return (
+    <button
+      type="button"
+      onClick={() => setProcessingMode(isVst ? 'native' : 'vst')}
+      aria-pressed={isVst}
+      title={title}
+      style={{
+        padding: '4px 12px',
+        borderRadius: 4,
+        border: '1px solid ' + border,
+        background,
+        color,
+        cursor: 'pointer',
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: 1.2,
+        whiteSpace: 'nowrap',
+        minWidth: 72,
+        transition: 'background 120ms ease-out, color 120ms ease-out, border-color 120ms ease-out',
+      }}
+    >
+      {isVst ? 'VST' : 'Native'}
     </button>
   );
 }

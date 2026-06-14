@@ -152,6 +152,16 @@ interface AudioSuiteState {
   setMasterBypassedFromServer(bypassed: boolean): void;
   loadMasterBypassFromServer(): Promise<void>;
   setMasterBypassed(bypassed: boolean): Promise<void>;
+
+  // Audio Suite processing route: 'native' (in-process plugin chain, the
+  // default) vs 'vst' (out-of-process VST engine). Mutually exclusive; server
+  // is authoritative. vstEngineAvailable = an engine is installed;
+  // vstEngineActive = the engine is currently live and routing TX audio.
+  processingMode: 'native' | 'vst';
+  vstEngineAvailable: boolean;
+  vstEngineActive: boolean;
+  loadProcessingModeFromServer(): Promise<void>;
+  setProcessingMode(mode: 'native' | 'vst'): Promise<void>;
 }
 
 // Default window placement — top-left quadrant, room for plugin panels.
@@ -176,6 +186,9 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       // on Audio Suite window mount overrides this with the persisted
       // value (if any) and any WS broadcast keeps it in sync after.
       masterBypassed: true,
+      processingMode: 'native',
+      vstEngineAvailable: false,
+      vstEngineActive: false,
       isDragging: false,
       collapsed: {},
       sidebarCollapsed: false,
@@ -497,6 +510,64 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           set({ masterBypassed: prev });
           // eslint-disable-next-line no-console
           console.warn('audio-suite master-bypass PUT threw', err);
+        }
+      },
+
+      // Processing-mode plumbing (Native in-process chain vs out-of-process
+      // VST engine). Server is authoritative; fetched on Audio Suite mount.
+      loadProcessingModeFromServer: async () => {
+        try {
+          const res = await fetch('/api/audio-suite/processing-mode');
+          if (!res.ok) return;
+          const body = (await res.json()) as {
+            mode?: string;
+            engineAvailable?: boolean;
+            engineActive?: boolean;
+          };
+          set({
+            processingMode: body.mode === 'vst' ? 'vst' : 'native',
+            vstEngineAvailable: body.engineAvailable === true,
+            vstEngineActive: body.engineActive === true,
+          });
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('audio-suite processing-mode GET threw', err);
+        }
+      },
+
+      setProcessingMode: async (mode) => {
+        const prev = get().processingMode;
+        if (prev === mode) return;
+        // Optimistic so the toggle feels instant; reconcile from the response.
+        set({ processingMode: mode });
+        try {
+          const res = await fetch('/api/audio-suite/processing-mode', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ mode }),
+          });
+          if (!res.ok) {
+            set({ processingMode: prev });
+            // eslint-disable-next-line no-console
+            console.warn(
+              `audio-suite processing-mode PUT rejected: ${res.status} ${res.statusText}`,
+            );
+            return;
+          }
+          const body = (await res.json()) as {
+            mode?: string;
+            engineAvailable?: boolean;
+            engineActive?: boolean;
+          };
+          set({
+            processingMode: body.mode === 'vst' ? 'vst' : 'native',
+            vstEngineAvailable: body.engineAvailable === true,
+            vstEngineActive: body.engineActive === true,
+          });
+        } catch (err) {
+          set({ processingMode: prev });
+          // eslint-disable-next-line no-console
+          console.warn('audio-suite processing-mode PUT threw', err);
         }
       },
     }),

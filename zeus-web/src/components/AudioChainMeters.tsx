@@ -36,7 +36,7 @@ function fractionFromDb(db: number): number {
 function zoneColor(frac: number): string {
   if (frac > 0.9) return 'var(--tx)'; // red — clipping risk
   if (frac > 0.7) return 'var(--power)'; // yellow — hot
-  return '#3ecf8e'; // green — nominal
+  return 'var(--ok)'; // green — nominal
 }
 
 function LevelBar({ label, db }: { label: string; db: number }) {
@@ -79,11 +79,12 @@ function LevelBar({ label, db }: { label: string; db: number }) {
         style={{
           position: 'relative',
           flex: 1,
-          height: 8,
-          background: 'var(--bg-2)',
-          border: '1px solid var(--line-1)',
+          height: 10,
+          background: 'var(--bg-meter)',
+          border: '1px solid var(--line)',
           borderRadius: 3,
           overflow: 'hidden',
+          boxShadow: 'inset 0 1px 2px rgba(0, 0, 0, 0.5)',
         }}
       >
         <div
@@ -94,7 +95,7 @@ function LevelBar({ label, db }: { label: string; db: number }) {
             bottom: 0,
             width: `${frac * 100}%`,
             background:
-              'linear-gradient(to right, #3ecf8e 0%, #3ecf8e 65%, var(--power) 85%, var(--tx) 100%)',
+              'linear-gradient(to right, var(--ok) 0%, var(--ok) 65%, var(--power) 85%, var(--tx) 100%)',
             transition: 'width 0.05s linear',
           }}
         />
@@ -163,10 +164,10 @@ export function AudioChainMeters() {
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 4,
-        padding: '8px 12px',
+        gap: 6,
+        padding: '10px 14px',
         background: 'var(--bg-1)',
-        borderBottom: '1px solid var(--line-1)',
+        borderBottom: '1px solid var(--line)',
       }}
     >
       <LevelBar label="In" db={meters.inputDb} />

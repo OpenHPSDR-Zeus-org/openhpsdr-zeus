@@ -10,30 +10,41 @@
 // existing layout-store debounced PUT path.
 
 
-/** Outer-grid column count. Matches MetersPanel's inner grid so the mental
- *  model is identical at both levels. */
-export const WORKSPACE_GRID_COLS = 12;
+/** Outer-grid column count. The grid runs at 2× the legacy resolution
+ *  (was 12 cols × 24 rows) so panels can be sized precisely to their content
+ *  instead of snapping to coarse ~30 px steps — the difference between
+ *  "content fits, no scrollbar" and "off by half a row". The schema-v7→v8
+ *  migration in parseWorkspaceLayout scales legacy layouts up by GRID_SCALE,
+ *  so the doubling is invisible to existing saved layouts. */
+export const WORKSPACE_GRID_COLS = 24;
 /** Fallback row height in CSS pixels, used before the workspace container's
  *  ResizeObserver fires. The live rowHeight is computed responsively in
  *  FlexWorkspace (= viewport / WORKSPACE_TARGET_ROWS) so the default layout
- *  fills the available height. */
-export const WORKSPACE_ROW_HEIGHT_PX = 30;
+ *  fills the available height. Halved alongside the row doubling so the
+ *  fallback paints at the same density. */
+export const WORKSPACE_ROW_HEIGHT_PX = 15;
 /** Target row count the responsive rowHeight calc divides into the
  *  measured container height. Matches the total y+h of the default layout
  *  so a fresh radio fills the viewport exactly. Custom layouts taller than
  *  this row out below the fold (workspace scrolls); shorter layouts leave
  *  empty space at the bottom. */
-export const WORKSPACE_TARGET_ROWS = 24;
+export const WORKSPACE_TARGET_ROWS = 48;
 /** Floor on the responsive rowHeight so tiles stay readable on small
- *  windows. Below this, the workspace scrolls instead of cramming. */
-export const WORKSPACE_ROW_HEIGHT_MIN_PX = 18;
-/** Default minW/minH for every tile. minW=1 (≈ 1/12 of the workspace
- *  width) lets short-control tiles like Mode / Tuning Step / Band shrink
- *  down to a narrow column when the operator wants to dock them tight,
+ *  windows. Below this, the workspace scrolls instead of cramming. Halved
+ *  with the row doubling (each row is now half as tall). */
+export const WORKSPACE_ROW_HEIGHT_MIN_PX = 9;
+/** Default minW/minH for every tile. minW=2 (≈ 1/12 of the workspace
+ *  width at 24 cols) lets short-control tiles like Mode / Tuning Step / Band
+ *  shrink down to a narrow column when the operator wants to dock them tight,
  *  while RGL's `.btn-row.wrap` flex-wrap keeps the buttons spilling onto
  *  additional rows as the column narrows. */
-export const WORKSPACE_TILE_MIN_W = 1;
-export const WORKSPACE_TILE_MIN_H = 1;
+export const WORKSPACE_TILE_MIN_W = 2;
+export const WORKSPACE_TILE_MIN_H = 2;
+
+/** Resolution multiplier between the legacy (schema-v7) 12×24 grid and the
+ *  current (schema-v8) 24×48 grid. Legacy persisted layouts have every
+ *  x/y/w/h scaled by this on load so they render identically. */
+export const GRID_SCALE = 2;
 
 /** A single workspace tile. The same panelId may appear on multiple tiles
  *  for multi-instance panels (just `meters` today); the per-tile uid is the
@@ -54,45 +65,49 @@ export interface WorkspaceTile {
   instanceConfig?: unknown;
 }
 
-/** Top-level workspace blob persisted to /api/ui/layout. */
+/** Top-level workspace blob persisted to /api/ui/layout.
+ *  v8 = current 24×48 grid. v7 = legacy 12×24 grid, migrated on load by
+ *  scaling every coordinate by GRID_SCALE (see parseWorkspaceLayout). */
 export interface WorkspaceLayout {
-  schemaVersion: 7;
+  schemaVersion: 8;
   tiles: WorkspaceTile[];
 }
 
 export const EMPTY_WORKSPACE_LAYOUT: WorkspaceLayout = {
-  schemaVersion: 7,
+  schemaVersion: 8,
   tiles: [],
 };
 
 /** Per-panel default span used when the AddPanel modal mints a fresh tile.
  *  Sourced from the plan §1 inventory table; missing entries fall back to a
  *  generic 4×4 box. */
+// All spans are in the 24×48 (schema-v8) grid — i.e. 2× the legacy values.
 export const DEFAULT_TILE_SPAN: Record<string, { w: number; h: number }> = {
-  filter: { w: 9, h: 2 },
-  hero: { w: 9, h: 12 },
-  qrz: { w: 3, h: 6 },
-  logbook: { w: 3, h: 6 },
-  txmeters: { w: 3, h: 6 },
-  vfo: { w: 3, h: 4 },
-  smeter: { w: 3, h: 2 },
-  dsp: { w: 3, h: 3 },
-  azimuth: { w: 3, h: 8 },
-  step: { w: 3, h: 3 },
-  cw: { w: 4, h: 4 },
-  tx: { w: 3, h: 5 },
-  ps: { w: 4, h: 5 },
-  band: { w: 6, h: 2 },
-  mode: { w: 4, h: 2 },
-  meters: { w: 6, h: 8 },
+  filter: { w: 18, h: 4 },
+  filterpresets: { w: 6, h: 10 },
+  hero: { w: 18, h: 24 },
+  qrz: { w: 6, h: 12 },
+  logbook: { w: 6, h: 12 },
+  txmeters: { w: 6, h: 12 },
+  vfo: { w: 6, h: 8 },
+  smeter: { w: 6, h: 4 },
+  dsp: { w: 6, h: 6 },
+  azimuth: { w: 6, h: 16 },
+  step: { w: 6, h: 6 },
+  cw: { w: 8, h: 8 },
+  tx: { w: 6, h: 10 },
+  ps: { w: 8, h: 10 },
+  band: { w: 12, h: 4 },
+  mode: { w: 8, h: 4 },
+  meters: { w: 12, h: 16 },
   // Meter Group auto-fits to its widget set (see MeterGroupTileBody in
   // FlexWorkspace.tsx) — start at the smallest grid footprint so the
   // freshly-added tile shows just the empty-state hint, not 4 columns of
   // blank space waiting for widgets.
-  metergroup: { w: 1, h: 6 },
+  metergroup: { w: 2, h: 12 },
 };
 
-const FALLBACK_SPAN = { w: 4, h: 4 };
+const FALLBACK_SPAN = { w: 8, h: 8 };
 export function defaultSpanFor(panelId: string): { w: number; h: number } {
   return DEFAULT_TILE_SPAN[panelId] ?? FALLBACK_SPAN;
 }
@@ -131,8 +146,18 @@ export function placeTileInGrid(
  *  tile pointing at a permanently-removed panel id is harmless. */
 export function parseWorkspaceLayout(raw: unknown): WorkspaceLayout {
   if (!raw || typeof raw !== 'object') return EMPTY_WORKSPACE_LAYOUT;
-  const obj = raw as Partial<WorkspaceLayout>;
-  if (obj.schemaVersion !== 7) return EMPTY_WORKSPACE_LAYOUT;
+  // Read schemaVersion as a plain number (not the literal-8 type that
+  // Partial<WorkspaceLayout> would impose) so the v7/v8 comparison typechecks.
+  const obj = raw as { schemaVersion?: unknown; tiles?: unknown };
+  const version =
+    typeof obj.schemaVersion === 'number' ? obj.schemaVersion : undefined;
+  // v8 is the current 24×48 grid; v7 is the legacy 12×24 grid, migrated
+  // forward by scaling every coordinate by GRID_SCALE so old saved layouts
+  // render identically on the finer grid. Anything else (older formats,
+  // future versions) falls through to the empty layout, which the caller
+  // substitutes with DEFAULT_WORKSPACE_LAYOUT.
+  if (version !== 7 && version !== 8) return EMPTY_WORKSPACE_LAYOUT;
+  const scale = version === 7 ? GRID_SCALE : 1;
   const rawTiles = Array.isArray(obj.tiles) ? obj.tiles : [];
   const tiles: WorkspaceTile[] = [];
   for (const t of rawTiles) {
@@ -150,14 +175,14 @@ export function parseWorkspaceLayout(raw: unknown): WorkspaceLayout {
     tiles.push({
       uid: tile.uid,
       panelId: tile.panelId,
-      x: tile.x as number,
-      y: tile.y as number,
-      w: tile.w as number,
-      h: tile.h as number,
+      x: (tile.x as number) * scale,
+      y: (tile.y as number) * scale,
+      w: (tile.w as number) * scale,
+      h: (tile.h as number) * scale,
       ...(tile.instanceConfig !== undefined
         ? { instanceConfig: tile.instanceConfig }
         : {}),
     });
   }
-  return { schemaVersion: 7, tiles };
+  return { schemaVersion: 8, tiles };
 }
