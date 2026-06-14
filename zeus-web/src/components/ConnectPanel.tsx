@@ -73,7 +73,10 @@ const DEFAULT_DATA_PORT = 1024;
 const DEFAULT_SAMPLE_RATE = 192_000;
 const RETRY_THRESHOLD = 2;
 const IPV4_RE = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)$/;
-const SAMPLE_RATES: SampleRate[] = [48_000, 96_000, 192_000, 384_000];
+// 768/1536 kHz are Protocol-2 only (ANAN G2 supports the full ladder); the
+// select below filters them out when Protocol 1 is selected.
+const SAMPLE_RATES: SampleRate[] = [48_000, 96_000, 192_000, 384_000, 768_000, 1_536_000];
+const P1_MAX_SAMPLE_RATE = 384_000;
 
 // Same set as the Settings RadioSelector, in the same order. Auto first so
 // the default Manual-mode connect behaviour is "let discovery decide".
@@ -896,7 +899,7 @@ function ManualMode(p: ManualModeProps) {
             onChange={(e) => p.setSampleRate(Number(e.target.value) as SampleRate)}
             style={inputStyle}
           >
-            {SAMPLE_RATES.map((r) => (
+            {SAMPLE_RATES.filter((r) => p.protocol === 'P2' || r <= P1_MAX_SAMPLE_RATE).map((r) => (
               <option key={r} value={r}>{r / 1000} kHz</option>
             ))}
           </select>

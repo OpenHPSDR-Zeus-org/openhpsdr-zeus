@@ -313,8 +313,13 @@ existing Settings-tab idiom + `tokens.css` only.
 3. **Phase 2 — RX Squelch:** ✅ **DONE** — mode-aware single control + DSP settings tab section.
    Reviewed; fixed one HIGH defect (FMSQ direction, see §5 note); tested (12 C# + TS).
 4. **Phase 3 — TX Leveling:** ALC + Compressor + Leveler-decay. ← NEXT
-5. **Phase 4 — Bandwidth audit:** per-mode filter caps to spec; sample-rate ladder 48..1536
-   (768/1536 opt-in pending high-rate DDC bench check).
+5. **Phase 4 — Bandwidth:** sample-rate ladder ✅ **DONE (ladder)** — `HpsdrSampleRate` extended
+   with Rate768k/Rate1536k; RadioService maps + P1 guards (P1 connect rejects >384, live P1
+   clamps); endpoint validation + P2 `rateKhz` switch + `MapHpsdrSampleRate` accept the rungs;
+   `SampleRate` type + ConnectPanel options gated to P2. 768/1536 are **P2-only** (P1 wire is
+   2-bit, `ControlFrame &0x03`) and **experimental — pending on-radio DDC/FFT bench verification
+   on the G2** (the streaming path couldn't be exercised here). Per-mode **filter-cap audit
+   deferred** (overlaps the active FilterMiniPan WIP).
 6. **Follow-ons (separate proposals):** FM controls, RX/TX EQ, VOX.
 
 > **FMSQ gotcha (Phase 2):** Unlike SSQL/AMSQ, WDSP's FM squelch is a *noise* gate — it opens when
