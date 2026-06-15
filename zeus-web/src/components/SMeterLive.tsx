@@ -43,12 +43,15 @@
 // License for details.
 
 import { SMeter } from './SMeter';
+import { analyzeRxChain } from '../dsp/rx-chain-health';
+import { useRxMetersStore } from '../state/rx-meters-store';
 import { useTxStore } from '../state/tx-store';
 
-// Replaces SMeterDemo's animated harness with real tx-store telemetry. The
+// Replaces SMeterDemo's animated harness with real meter telemetry. The
 // SMeter component itself is unchanged (discriminated-union presentation
-// component from PR #1). TX mode renders forward watts; RX mode renders the
-// live rxDbm value pushed from DspPipelineService's 5 Hz RxMeterFrame.
+// component from PR #1). TX mode renders forward watts; RX mode prefers the
+// calibrated RxMetersV2 signal peak and falls back to the legacy 0x14 dBm
+// reading only until the richer frame lands.
 //
 // SWR and mic dBfs are surfaced alongside the meter only while MOX is on —
 // they're TX-only telemetry and would be misleading under RX.
@@ -64,10 +67,39 @@ export function SMeterLive({ hideChips = false }: { hideChips?: boolean } = {}) 
   const fwdWatts = useTxStore((s) => s.fwdWatts);
   const swr = useTxStore((s) => s.swr);
   const micDbfs = useTxStore((s) => s.micDbfs);
-  const rxDbm = useTxStore((s) => s.rxDbm);
+  const fallbackRxDbm = useTxStore((s) => s.rxDbm);
+  const signalPk = useRxMetersStore((s) => s.signalPk);
+  const signalAv = useRxMetersStore((s) => s.signalAv);
+  const adcPk = useRxMetersStore((s) => s.adcPk);
+  const adcAv = useRxMetersStore((s) => s.adcAv);
+  const agcGain = useRxMetersStore((s) => s.agcGain);
+  const agcEnvPk = useRxMetersStore((s) => s.agcEnvPk);
+  const agcEnvAv = useRxMetersStore((s) => s.agcEnvAv);
   const transmitting = moxOn || tunOn;
 
   const swrColor = swr >= 3 ? 'var(--tx)' : swr >= 2 ? 'var(--power)' : 'var(--fg-0)';
+  const rx = analyzeRxChain({
+    signalPk,
+    signalAv,
+    adcPk,
+    adcAv,
+    agcGain,
+    agcEnvPk,
+    agcEnvAv,
+    fallbackDbm: fallbackRxDbm,
+  });
+  const rxDbm = rx.signalDbm ?? fallbackRxDbm;
+  const rxColor =
+    rx.state === 'overload'
+      ? 'var(--tx)'
+      : rx.state === 'underfilled' || rx.state === 'agc-stressed'
+        ? 'var(--power)'
+        : rx.state === 'waiting'
+          ? 'var(--fg-3)'
+          : 'var(--fg-0)';
+  const adcText =
+    rx.adcHeadroomDb === null ? '--' : `${rx.adcHeadroomDb.toFixed(0)} dB`;
+  const agcText = `${rx.agcGain >= 0 ? '+' : ''}${rx.agcGain.toFixed(0)} dB`;
 
   return (
     <div style={{ padding: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
@@ -89,6 +121,24 @@ export function SMeterLive({ hideChips = false }: { hideChips?: boolean } = {}) 
           <span className="chip mono">
             <span className="k">MIC</span>
             <span className="v">{micDbfs.toFixed(0)} dBfs</span>
+          </span>
+        </div>
+      )}
+      {!transmitting && !hideChips && (
+        <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+          <span className="chip mono" title={rx.detail}>
+            <span className="k">RX</span>
+            <span className="v" style={{ color: rxColor }}>
+              {rx.label}
+            </span>
+          </span>
+          <span className="chip mono" title="ADC peak headroom from RxMetersV2">
+            <span className="k">ADC HD</span>
+            <span className="v">{adcText}</span>
+          </span>
+          <span className="chip mono" title="WDSP AGC gain, positive means boost">
+            <span className="k">AGC</span>
+            <span className="v">{agcText}</span>
           </span>
         </div>
       )}

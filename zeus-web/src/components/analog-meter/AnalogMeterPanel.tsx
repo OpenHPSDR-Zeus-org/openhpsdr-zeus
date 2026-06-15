@@ -5,12 +5,13 @@
 //
 // Analog S-Meter tile — standard tile header (drag handle, title, gear, X),
 // animated dial face, gear-flyout config, and footer readout strip. Live
-// data comes from useTxStore: rxDbm drives the S scale, fwdWatts drives PO,
-// swr drives SWR. The panel auto-flips RX↔TX from moxOn/tunOn — the operator
-// never tells the meter which side to read.
+// data comes from live meter stores: RxMetersV2 signal drives the S scale
+// when present (legacy 0x14 rxDbm is only a fallback), while fwdWatts drives
+// PO and swr drives SWR. The panel auto-flips RX↔TX from moxOn/tunOn — the
+// operator never tells the meter which side to read.
 //
 // The needle is driven by a requestAnimationFrame loop that:
-//   1. samples raw rxDbm/fwdWatts/swr each frame,
+//   1. samples raw RxMetersV2/fwdWatts/swr each frame,
 //   2. normalises against the active scale,
 //   3. pushes through a moving-average prefilter (cfg.avg samples), then
 //   4. through an attack/decay RC ballistic, then
@@ -26,6 +27,8 @@ import { GripVertical, Settings, X } from 'lucide-react';
 import { usePaStore } from '../../state/pa-store';
 import { useRadioStore } from '../../state/radio-store';
 import { useTxStore } from '../../state/tx-store';
+import { preferredRxSignalDbm } from '../../dsp/rx-chain-health';
+import { useRxMetersStore } from '../../state/rx-meters-store';
 import { AnalogMeterFace } from './AnalogMeterFace';
 import { AnalogMeterConfig } from './AnalogMeterConfig';
 import { AnalogMeterZeusOverlay } from './AnalogMeterZeusOverlay';
@@ -159,6 +162,12 @@ function ReadoutStrip({ enabled, values, showDbm, dbm, swrAlarm, activeScaleId }
   );
 }
 
+function sampleRxDbm(): number {
+  const rx = useRxMetersStore.getState();
+  const tx = useTxStore.getState();
+  return preferredRxSignalDbm({ ...rx, fallbackDbm: tx.rxDbm }).dbm ?? tx.rxDbm;
+}
+
 export interface AnalogMeterPanelProps {
   /** When provided, a close button is rendered in the tile header. The
    *  layout system injects this for headerless panels. */
@@ -285,7 +294,7 @@ export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
       // Pull the latest live readings without subscribing — getState() avoids
       // re-rendering the panel on every store change.
       const tx = useTxStore.getState();
-      s.rxDbm = tx.rxDbm;
+      s.rxDbm = sampleRxDbm();
       s.fwdW = tx.fwdWatts;
       s.swr = tx.swr;
 
@@ -371,9 +380,23 @@ export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
   // Single subscription with a shallow comparator keeps this to one re-render
   // per data tick instead of three (the prior pattern fired three separate
   // subscribers per store update).
-  const { rxDbm: rawRxDbm, fwdWatts: rawFwdW, swr: rawSwr } = useTxStore(
+  const { rxDbm: fallbackRxDbm, fwdWatts: rawFwdW, swr: rawSwr } = useTxStore(
     useShallow((s) => ({ rxDbm: s.rxDbm, fwdWatts: s.fwdWatts, swr: s.swr })),
   );
+  const rxMeters = useRxMetersStore(
+    useShallow((s) => ({
+      signalPk: s.signalPk,
+      signalAv: s.signalAv,
+      adcPk: s.adcPk,
+      adcAv: s.adcAv,
+      agcGain: s.agcGain,
+      agcEnvPk: s.agcEnvPk,
+      agcEnvAv: s.agcEnvAv,
+    })),
+  );
+  const rawRxDbm =
+    preferredRxSignalDbm({ ...rxMeters, fallbackDbm: fallbackRxDbm }).dbm ??
+    fallbackRxDbm;
   const readoutValues = {
     s: activeScaleId === 's' ? needleVal : dbmToS(rawRxDbm),
     po: activeScaleId === 'po' ? needleVal : rawFwdW,
