@@ -93,6 +93,22 @@ interface CandidateReadout {
 const MIN_TONE_SEP_PX = 11;
 const MAX_EXPECTED_PAIR_CANDIDATES = 24;
 
+function validInputWidth(input: ImdInput): number {
+  const { db, width, centerHz, hzPerPixel } = input;
+  if (
+    !Number.isFinite(width) ||
+    !Number.isInteger(width) ||
+    width < 16 ||
+    width > db.length ||
+    !Number.isFinite(centerHz) ||
+    !Number.isFinite(hzPerPixel) ||
+    hzPerPixel <= 0
+  ) {
+    return 0;
+  }
+  return width;
+}
+
 /** All local maxima, strongest first. Noise bumps are fine — findImd only
  *  considers candidates near each predicted product position. */
 function findPeaks(db: ArrayLike<number>, width: number): Peak[] {
@@ -260,8 +276,9 @@ function measurePair(
  * resolved (no signal, tones merged, or zoomed too far out).
  */
 export function computeImd(input: ImdInput): ImdResult {
-  const { db, width, centerHz, hzPerPixel } = input;
-  if (!width || width < 16 || hzPerPixel <= 0) return { ok: false, reason: 'no spectrum' };
+  const { db, centerHz, hzPerPixel } = input;
+  const width = validInputWidth(input);
+  if (width === 0) return { ok: false, reason: 'no spectrum' };
 
   const peaks = findPeaks(db, width);
   if (peaks.length < 2) return { ok: false, reason: 'no signal' };

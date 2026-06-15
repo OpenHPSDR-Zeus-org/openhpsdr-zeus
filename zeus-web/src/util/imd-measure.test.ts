@@ -118,6 +118,29 @@ describe('computeImd', () => {
     expect(r.ok).toBe(false);
   });
 
+  it('fails closed on malformed spectrum geometry', () => {
+    const db = spectrum(width, -120, [
+      [582, 0],
+      [702, 0],
+      [462, -30],
+      [822, -30],
+      [342, -50],
+      [942, -50],
+    ]);
+
+    for (const bad of [
+      { width: Infinity, centerHz, hzPerPixel },
+      { width: width + 1, centerHz, hzPerPixel },
+      { width: width + 0.5, centerHz, hzPerPixel },
+      { width, centerHz: NaN, hzPerPixel },
+      { width, centerHz, hzPerPixel: Infinity },
+      { width, centerHz, hzPerPixel: 0 },
+    ]) {
+      const r = computeImd({ db, ...bad });
+      expect(r).toEqual({ ok: false, reason: 'no spectrum' });
+    }
+  });
+
   it('reports a miss when the IMD products are off-screen', () => {
     // Fundamentals present and well-separated, but no products in the spectrum.
     const db = spectrum(width, -120, [
