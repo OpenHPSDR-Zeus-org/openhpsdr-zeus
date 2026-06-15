@@ -171,6 +171,10 @@ public sealed class RadioService : IDisposable
     private const double AgcNoiseFloorPercentile = 0.20;
     private const double AgcDeadbandDb = 1.5;
     private const double AgcSlewPerTickDb = 0.5;
+    private const double AgcMinEffectiveAgcT = 20.0;
+    private const double AgcMaxEffectiveAgcT = 100.0;
+    private const double AgcCutStressThresholdDb = -10.0;
+    private const double AgcCutTargetDb = -8.0;
     private double _agcOffsetDb;
     private long _lastAgcTickMs = long.MinValue;
     private readonly double[] _noiseFloorWindow = new double[AgcNoiseFloorWindowSamples];
@@ -1558,7 +1562,10 @@ public sealed class RadioService : IDisposable
     /// the same effective value regardless of where the user parked the
     /// slider baseline. Slew-limited so adjustments are inaudibly gradual.
     /// </summary>
-    internal void HandleRxMeterForAutoAgc(double signalDbm, long nowMs)
+    internal void HandleRxMeterForAutoAgc(double signalDbm, long nowMs) =>
+        HandleRxMetersForAutoAgc(signalDbm, double.NaN, double.NaN, nowMs);
+
+    internal void HandleRxMetersForAutoAgc(double signalDbm, double adcPkDbfs, double agcGainDb, long nowMs)
     {
         bool changedOffset = false;
         double newOffset = 0.0;
@@ -1568,7 +1575,10 @@ public sealed class RadioService : IDisposable
         {
             if (!_state.AutoAgcEnabled) return;
             if (_mox) return;   // Pause during TX
-            if (!double.IsFinite(signalDbm) || signalDbm <= -250.0) return;
+            bool hasSignalMeter = double.IsFinite(signalDbm) && signalDbm > -250.0;
+            bool hasAgcGain = double.IsFinite(agcGainDb) && agcGainDb > -199.5;
+            bool hasAdcPeak = double.IsFinite(adcPkDbfs) && adcPkDbfs > -199.5;
+            if (!hasSignalMeter && !hasAgcGain) return;
 
             // If we paused for longer than the analysis window (TX,
             // just-toggled-on, RX dropout) the
@@ -1583,40 +1593,57 @@ public sealed class RadioService : IDisposable
                 return;
             _lastAgcTickMs = nowMs;
 
-            _noiseFloorWindow[_noiseFloorWindowIdx] = signalDbm;
-            _noiseFloorWindowIdx = (_noiseFloorWindowIdx + 1) % _noiseFloorWindow.Length;
-            if (_noiseFloorWindowFill < _noiseFloorWindow.Length) _noiseFloorWindowFill++;
+            if (hasSignalMeter)
+            {
+                _noiseFloorWindow[_noiseFloorWindowIdx] = signalDbm;
+                _noiseFloorWindowIdx = (_noiseFloorWindowIdx + 1) % _noiseFloorWindow.Length;
+                if (_noiseFloorWindowFill < _noiseFloorWindow.Length) _noiseFloorWindowFill++;
+            }
 
-            // Wait for a full window before adjusting so short fades do not
-            // immediately move AGC-T.
-            if (_noiseFloorWindowFill < _noiseFloorWindow.Length) return;
+            bool windowReady = _noiseFloorWindowFill >= _noiseFloorWindow.Length;
+            double desiredOffset = _agcOffsetDb;
+            if (windowReady)
+            {
+                var sorted = new double[_noiseFloorWindowFill];
+                for (int i = 0; i < _noiseFloorWindowFill; i++)
+                    sorted[i] = _noiseFloorWindow[i];
+                Array.Sort(sorted);
+                int floorIndex = Math.Clamp(
+                    (int)Math.Round((sorted.Length - 1) * AgcNoiseFloorPercentile),
+                    0,
+                    sorted.Length - 1);
+                noiseFloor = sorted[floorIndex];
 
-            var sorted = new double[_noiseFloorWindowFill];
-            for (int i = 0; i < _noiseFloorWindowFill; i++)
-                sorted[i] = _noiseFloorWindow[i];
-            Array.Sort(sorted);
-            int floorIndex = Math.Clamp(
-                (int)Math.Round((sorted.Length - 1) * AgcNoiseFloorPercentile),
-                0,
-                sorted.Length - 1);
-            noiseFloor = sorted[floorIndex];
+                // Auto-AGC chooses an *absolute* effective AGC-T from the noise
+                // floor: place the band noise at TargetAudioDb after WDSP's
+                // max-gain stage, so a quiet band lands at ~80 dB and a noisy
+                // band lands at ~50 dB regardless of where the user parked the
+                // slider baseline. The offset is whatever it takes to reach that
+                // absolute target on top of the current AgcTopDb baseline.
+                const double TargetAudioDb = -40.0;     // desired audio-output noise level
+                double targetEffective = Math.Clamp(
+                    TargetAudioDb - noiseFloor, AgcMinEffectiveAgcT, AgcMaxEffectiveAgcT);
+                // Preserve the existing weak/quiet-band behavior: noise-floor
+                // tracking can add live gain, but it does not lower the user's
+                // baseline unless the signed AGC meter below proves overload
+                // recovery is needed.
+                desiredOffset = Math.Max(0.0, targetEffective - _state.AgcTopDb);
+            }
+            else if (_agcOffsetDb < 0.0 && (!hasAgcGain || agcGainDb >= AgcCutStressThresholdDb))
+            {
+                desiredOffset = 0.0;
+            }
 
-            // Auto-AGC chooses an *absolute* effective AGC-T from the noise
-            // floor: place the band noise at TargetAudioDb after WDSP's
-            // max-gain stage, so a quiet band lands at ~80 dB and a noisy
-            // band lands at ~50 dB regardless of where the user parked the
-            // slider baseline. The offset is whatever it takes to reach that
-            // absolute target on top of the current AgcTopDb baseline.
-            const double TargetAudioDb = -40.0;     // desired audio-output noise level
-            const double MinEffectiveAgcT = 20.0;
-            const double MaxEffectiveAgcT = 100.0;
-            double targetEffective = Math.Clamp(
-                TargetAudioDb - noiseFloor, MinEffectiveAgcT, MaxEffectiveAgcT);
-            // Auto-AGC should normalize weak/quiet conditions without turning
-            // down a baseline the operator already chose. If the sampled band
-            // calls for less gain than the baseline, decay any prior boost back
-            // to zero and leave the effective AGC-T at the user's setting.
-            double desiredOffset = Math.Max(0.0, targetEffective - _state.AgcTopDb);
+            if (hasAgcGain && agcGainDb < AgcCutStressThresholdDb)
+            {
+                double effectiveNow = _state.AgcTopDb + _agcOffsetDb;
+                double adcUrgencyDb = hasAdcPeak && adcPkDbfs > -6.0 ? Math.Min(6.0, adcPkDbfs + 6.0) : 0.0;
+                double targetEffective = Math.Clamp(
+                    effectiveNow + (agcGainDb - AgcCutTargetDb) - adcUrgencyDb,
+                    AgcMinEffectiveAgcT,
+                    AgcMaxEffectiveAgcT);
+                desiredOffset = Math.Min(desiredOffset, targetEffective - _state.AgcTopDb);
+            }
 
             double delta = desiredOffset - _agcOffsetDb;
             if (Math.Abs(delta) < AgcDeadbandDb) return;
