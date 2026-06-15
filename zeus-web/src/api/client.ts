@@ -495,6 +495,37 @@ export type HardwareDspDiagnosticsDto = {
   readiness: string;
 };
 
+export type HardwarePureSignalDiagnosticsDto = {
+  schemaVersion: number;
+  enabled: boolean;
+  monitorEnabled: boolean;
+  auto: boolean;
+  single: boolean;
+  autoAttenuate: boolean;
+  feedbackSource: 'internal' | 'external';
+  externalFeedback: boolean;
+  externalFeedbackPathSupported: boolean;
+  rfBypassRequired: boolean;
+  rfBypassSelected: boolean;
+  feedbackLevelRaw: number;
+  feedbackLevelPct: number;
+  feedbackTargetRaw: number;
+  feedbackUsableMinRaw: number;
+  feedbackUsableMaxRaw: number;
+  feedbackCenteredMinRaw: number;
+  feedbackCenteredMaxRaw: number;
+  txFeedbackAttenuationDb: number;
+  txFeedbackAttenuationDbMin: number;
+  hwPeak: number;
+  hwPeakDefault: number;
+  calState: number;
+  correcting: boolean;
+  calibrationStalled: boolean;
+  healthStatus: string;
+  manualReference: string;
+  diagnosticRecommendation: string | null;
+};
+
 export type FrontendDspSceneDiagnosticsDto = {
   schemaVersion: number;
   available: boolean;
@@ -984,6 +1015,7 @@ export type HardwareDiagnosticsDto = {
   capabilities: BoardCapabilities;
   dsp: HardwareDspDiagnosticsDto;
   frontendDspScene: FrontendDspSceneDiagnosticsDto;
+  pureSignal: HardwarePureSignalDiagnosticsDto;
   activeProtocol: 'P1' | 'P2' | null;
   p1: HardwareP1DiagnosticsDto;
   p2: HardwareP2DiagnosticsDto;
@@ -1584,6 +1616,43 @@ function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
   };
 }
 
+function normalizePureSignalDiagnostics(raw: unknown): HardwarePureSignalDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  const source = r.feedbackSource === 'External' || r.feedbackSource === 'external'
+    ? 'external'
+    : 'internal';
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    enabled: Boolean(r.enabled),
+    monitorEnabled: Boolean(r.monitorEnabled),
+    auto: r.auto === undefined ? true : Boolean(r.auto),
+    single: Boolean(r.single),
+    autoAttenuate: r.autoAttenuate === undefined ? true : Boolean(r.autoAttenuate),
+    feedbackSource: source,
+    externalFeedback: Boolean(r.externalFeedback),
+    externalFeedbackPathSupported: Boolean(r.externalFeedbackPathSupported),
+    rfBypassRequired: Boolean(r.rfBypassRequired),
+    rfBypassSelected: Boolean(r.rfBypassSelected),
+    feedbackLevelRaw: diagNumber(r.feedbackLevelRaw) ?? 0,
+    feedbackLevelPct: diagNumber(r.feedbackLevelPct) ?? 0,
+    feedbackTargetRaw: diagNumber(r.feedbackTargetRaw) ?? 152.293,
+    feedbackUsableMinRaw: diagNumber(r.feedbackUsableMinRaw) ?? 128,
+    feedbackUsableMaxRaw: diagNumber(r.feedbackUsableMaxRaw) ?? 181,
+    feedbackCenteredMinRaw: diagNumber(r.feedbackCenteredMinRaw) ?? 138,
+    feedbackCenteredMaxRaw: diagNumber(r.feedbackCenteredMaxRaw) ?? 176,
+    txFeedbackAttenuationDb: diagNumber(r.txFeedbackAttenuationDb) ?? 0,
+    txFeedbackAttenuationDbMin: diagNumber(r.txFeedbackAttenuationDbMin) ?? 0,
+    hwPeak: diagNumber(r.hwPeak) ?? 0,
+    hwPeakDefault: diagNumber(r.hwPeakDefault) ?? 0,
+    calState: diagNumber(r.calState) ?? 0,
+    correcting: Boolean(r.correcting),
+    calibrationStalled: Boolean(r.calibrationStalled),
+    healthStatus: diagString(r.healthStatus) ?? 'unknown',
+    manualReference: diagString(r.manualReference) ?? '',
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+  };
+}
+
 function normalizeFrontendDspScene(raw: unknown): FrontendDspSceneDiagnosticsDto {
   const r = asDiagRecord(raw);
   return {
@@ -2179,6 +2248,7 @@ function normalizeHardwareDiagnostics(raw: unknown): HardwareDiagnosticsDto {
     capabilities: parseBoardCapabilities(r.capabilities),
     dsp: normalizeDspDiagnostics(r.dsp),
     frontendDspScene: normalizeFrontendDspScene(r.frontendDspScene),
+    pureSignal: normalizePureSignalDiagnostics(r.pureSignal),
     activeProtocol,
     p1: {
       packets: diagNumber(p1.packets) ?? 0,

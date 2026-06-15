@@ -22,6 +22,12 @@ namespace Zeus.Server;
 /// </summary>
 public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
 {
+    private const double PsFeedbackTargetRaw = 152.293;
+    private const int PsFeedbackUsableMinRaw = 128;
+    private const int PsFeedbackUsableMaxRaw = 181;
+    private const int PsFeedbackCenteredMinRaw = 138;
+    private const int PsFeedbackCenteredMaxRaw = 176;
+
     private readonly RadioService _radio;
     private readonly DspPipelineService _dsp;
     private readonly WdspWisdomInitializer _wisdom;
@@ -120,6 +126,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 capabilities = caps,
                 dsp = _dsp.SnapshotDiagnostics(_wisdom),
                 frontendDspScene = _frontendDspScene.Snapshot(),
+                pureSignal = BuildPureSignalDiagnostics(state, connected, effective),
                 activeProtocol = _activeProtocol,
                 p1 = new
                 {
@@ -179,6 +186,108 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             };
         }
     }
+
+    private static object BuildPureSignalDiagnostics(
+        StateDto state,
+        HpsdrBoardKind connected,
+        HpsdrBoardKind effective)
+    {
+        bool external = state.PsFeedbackSource == PsFeedbackSource.External;
+        bool externalPathSupported = SupportsExternalPureSignalFeedback(connected, effective);
+        double feedback = Math.Clamp(state.PsFeedbackLevel, 0.0, 256.0);
+        string health = EvaluatePureSignalFeedbackHealth(state, feedback, external, externalPathSupported);
+
+        return new
+        {
+            schemaVersion = 1,
+            enabled = state.PsEnabled,
+            monitorEnabled = state.PsMonitorEnabled,
+            auto = state.PsAuto,
+            single = state.PsSingle,
+            autoAttenuate = state.PsAutoAttenuate,
+            feedbackSource = state.PsFeedbackSource.ToString(),
+            externalFeedback = external,
+            externalFeedbackPathSupported = externalPathSupported,
+            rfBypassRequired = external,
+            rfBypassSelected = external,
+            feedbackLevelRaw = Round(feedback, 3),
+            feedbackLevelPct = Round(feedback / 256.0 * 100.0, 1),
+            feedbackTargetRaw = Round(PsFeedbackTargetRaw, 3),
+            feedbackUsableMinRaw = PsFeedbackUsableMinRaw,
+            feedbackUsableMaxRaw = PsFeedbackUsableMaxRaw,
+            feedbackCenteredMinRaw = PsFeedbackCenteredMinRaw,
+            feedbackCenteredMaxRaw = PsFeedbackCenteredMaxRaw,
+            txFeedbackAttenuationDb = state.PsTxFeedbackAttenuationDb,
+            txFeedbackAttenuationDbMin = state.PsTxFeedbackAttenuationDbMin,
+            hwPeak = state.PsHwPeak,
+            hwPeakDefault = state.PsHwPeakDefault,
+            calState = state.PsCalState,
+            correcting = state.PsCorrecting,
+            calibrationStalled = state.PsCalibrationStalled,
+            healthStatus = health,
+            manualReference = external
+                ? "ANAN G2 manual: external PureSignal feedback should enter RF Bypass from a coupler just above 0 dBm; the G2 has no external amp ALC, so software drive/PA gain must prevent saturation."
+                : "Internal PureSignal feedback uses the radio's internal coupler path; external amplifier linearization requires the RF Bypass feedback source.",
+            diagnosticRecommendation = PureSignalFeedbackRecommendation(health, external),
+        };
+    }
+
+    private static bool SupportsExternalPureSignalFeedback(
+        HpsdrBoardKind connected,
+        HpsdrBoardKind effective)
+    {
+        // The G2 manual describes the external feedback path as RF Bypass into
+        // the Saturn/OrionMkII family. Keep this diagnostic conservative until
+        // another board family is explicitly verified.
+        return connected == HpsdrBoardKind.OrionMkII
+               || effective == HpsdrBoardKind.OrionMkII;
+    }
+
+    private static string EvaluatePureSignalFeedbackHealth(
+        StateDto state,
+        double feedback,
+        bool external,
+        bool externalPathSupported)
+    {
+        if (!state.PsEnabled) return "off";
+        if (state.PsCalibrationStalled) return "calibration-stalled";
+        if (external && !externalPathSupported) return "external-source-unverified";
+        if (feedback <= 0) return state.PsCorrecting ? "feedback-missing" : "waiting-for-feedback";
+        if (feedback < PsFeedbackUsableMinRaw) return "feedback-low";
+        if (feedback > PsFeedbackUsableMaxRaw) return "feedback-high";
+        if (state.PsCorrecting && feedback >= PsFeedbackCenteredMinRaw && feedback <= PsFeedbackCenteredMaxRaw)
+            return "centered-correcting";
+        if (state.PsCorrecting) return "correcting-usable";
+        return "collecting-usable-feedback";
+    }
+
+    private static string PureSignalFeedbackRecommendation(string health, bool external) => health switch
+    {
+        "off" => "PureSignal is not armed; enable PS and key a safe two-tone or normal TX before judging correction or feedback health.",
+        "calibration-stalled" => "PureSignal calibration is stalled; verify HW peak and feedback level before increasing drive or judging IMD.",
+        "external-source-unverified" => "External feedback is selected on a board family without a verified RF Bypass path; use internal feedback or validate the board-specific routing first.",
+        "feedback-missing" => external
+            ? "PS says it is correcting but external feedback is now missing; stop relying on the correction and verify the RF Bypass coupler path."
+            : "PS says it is correcting but feedback is now missing; verify the internal coupler path before judging TX quality.",
+        "waiting-for-feedback" => external
+            ? "External feedback has not reached calcc yet; verify RF Bypass is the selected feedback source, the coupler is connected, and the transmitter is keyed into a safe load."
+            : "PureSignal is waiting for feedback; key a safe two-tone or normal TX long enough for calcc to collect samples.",
+        "feedback-low" => external
+            ? "External RF Bypass feedback is below the useful calcc window. The G2 manual expects a coupler sample just above 0 dBm at normal operation; reduce attenuation or check coupler direction before raising drive."
+            : "PureSignal feedback is below the useful calcc window; reduce feedback attenuation or verify the internal coupler path.",
+        "feedback-high" => external
+            ? "External RF Bypass feedback is hot. Add feedback attenuation or reduce the coupler sample before increasing drive; the G2 has no external amp ALC to save a saturated amplifier."
+            : "PureSignal feedback is hot; add feedback attenuation before increasing drive.",
+        "centered-correcting" => external
+            ? "External RF Bypass feedback is centered and correcting. Keep using software drive/PA gain as the saturation guard because the G2 provides no external amp ALC."
+            : "PureSignal feedback is centered and correcting.",
+        "correcting-usable" => external
+            ? "External RF Bypass feedback is usable and correcting, but not centered. Fine-tune feedback attenuation toward the 138-176 raw window before peak-fidelity IMD work."
+            : "PureSignal feedback is usable and correcting; fine-tune feedback attenuation toward the centered window.",
+        _ => external
+            ? "External RF Bypass feedback is in range but correction is not active yet; keep the safe two-tone/TX condition steady until calcc converges."
+            : "PureSignal feedback is in range but correction is not active yet; keep TX conditions steady until calcc converges.",
+    };
 
     public HardwareKeyingStatusDto KeyingSnapshot(ExternalPttStatusDto externalPtt)
     {
@@ -1741,6 +1850,11 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "dsp.txBlockSamples",
                 "dsp.txOutputSamples",
                 "dsp.txMonitorRequested",
+                "pureSignal.feedbackSource",
+                "pureSignal.healthStatus",
+                "pureSignal.feedbackLevelRaw",
+                "pureSignal.txFeedbackAttenuationDb",
+                "pureSignal.rfBypassSelected",
                 "/api/tx/diag",
                 "/api/audio-suite/chain/meters",
             },
@@ -1750,9 +1864,12 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "/api/audio-suite/chain/meters",
                 "/api/tx/fidelity-policy",
                 "/api/tx/station-profiles",
+                "/api/tx/ps/feedback-source",
+                "/api/tx/ps/feedback-attenuation",
+                "/api/tx/ps/monitor",
             },
             safetyClass = "tx-monitoring-only",
-            notes = "The existing TX advisor can score mic/leveler/ALC/CFC/output/PureSignal health; the TX fidelity policy now persists the active station target while diagnostics prove the high-rate TX path before judging station-quality audio.",
+            notes = "The existing TX advisor can score mic/leveler/ALC/CFC/output/PureSignal health; the TX fidelity policy now persists the active station target while diagnostics prove the high-rate TX path and PS feedback path before judging station-quality audio.",
         },
         new
         {
