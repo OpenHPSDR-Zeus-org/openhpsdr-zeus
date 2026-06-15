@@ -366,7 +366,7 @@ public sealed class TxAudioIngest : IDisposable
             for (int i = 0; i < MicBlockSamples; i++)
             {
                 float sample = BinaryPrimitives.ReadSingleLittleEndian(src.Slice(i * 4, 4));
-                _accumulator[_accumulatorFill + i] = SanitizeMicSample(sample);
+                _accumulator[_accumulatorFill + i] = DspPipelineService.SanitizeAudioSample(sample);
             }
             _accumulatorFill += MicBlockSamples;
             _totalMicSamples += MicBlockSamples;
@@ -462,11 +462,5 @@ public sealed class TxAudioIngest : IDisposable
                 _accumulatorFill = remainder;
             }
         }
-    }
-
-    private static float SanitizeMicSample(float sample)
-    {
-        if (!float.IsFinite(sample)) return 0f;
-        return Math.Clamp(sample, -1f, 1f);
     }
 }

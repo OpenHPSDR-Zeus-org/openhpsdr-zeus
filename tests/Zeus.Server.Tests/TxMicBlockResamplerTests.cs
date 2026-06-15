@@ -28,6 +28,32 @@ public class TxMicBlockResamplerTests
     }
 
     [Fact]
+    public void Accept48k_SanitizesNonFiniteAndOverrangeFastPathSamples()
+    {
+        var blocks = new List<float[]>();
+        var resampler = new TxMicBlockResampler(block => blocks.Add(block.ToArray()));
+        var samples = new float[TxMicBlockResampler.OutputBlockSamples];
+        samples[0] = float.NaN;
+        samples[1] = float.PositiveInfinity;
+        samples[2] = float.NegativeInfinity;
+        samples[3] = 1.5f;
+        samples[4] = -2f;
+        samples[5] = 0.25f;
+
+        var result = resampler.Accept(samples, 48_000);
+
+        Assert.Equal(TxMicBlockResampler.OutputBlockSamples, result.OutputSamplesGenerated);
+        Assert.Equal(TxMicBlockResampler.OutputBlockSamples, result.OutputSamplesEmitted);
+        Assert.Single(blocks);
+        Assert.Equal(0f, blocks[0][0]);
+        Assert.Equal(0f, blocks[0][1]);
+        Assert.Equal(0f, blocks[0][2]);
+        Assert.Equal(1f, blocks[0][3]);
+        Assert.Equal(-1f, blocks[0][4]);
+        Assert.Equal(0.25f, blocks[0][5]);
+    }
+
+    [Fact]
     public void FlushZeroPadded_EmitsFinalPartialBlock()
     {
         var blocks = new List<float[]>();
