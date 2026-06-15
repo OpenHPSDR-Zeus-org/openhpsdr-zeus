@@ -12,6 +12,7 @@ import {
   fetchRadioNetworkProfile,
   fetchRadioSupplyAlarms,
   fetchRadios,
+  fetchTxDiagnostics,
   fetchUserIoActions,
   fetchUserIoLabels,
   resetHardwareDiagnosticsMap,
@@ -27,6 +28,7 @@ import {
   type RadioInfoDto,
   type RadioSupplyAlarmsDto,
   type RadioSupplyReadingDto,
+  type TxDiagnosticsDto,
   type UserIoActionsDto,
   type UserIoLabelsDto,
   type UserIoLineDto,
@@ -79,6 +81,11 @@ function db(v: number | null | undefined): string {
 function pct(v: number | null | undefined): string {
   if (v === null || v === undefined) return '-';
   return `${v.toFixed(1)}%`;
+}
+
+function count(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '-';
+  return Number.isFinite(v) ? Math.round(v).toLocaleString() : '-';
 }
 
 function volts(v: number | null | undefined): string {
@@ -273,6 +280,65 @@ function NetworkProfileDiagnostics({ profile }: { profile: RadioNetworkProfileDt
       <NetworkCounters label="Protocol 1 Counters" counters={profile.p1} />
       <NetworkCounters label="Protocol 2 Counters" counters={profile.p2} />
       <DiagnosticRecommendation text={profile.diagnosticRecommendation} />
+    </div>
+  );
+}
+
+function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
+  if (!diag) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for TX diagnostics.</div>;
+  const p2 = diag.protocol2;
+  const p2Failures = (p2?.queueWriteFailures ?? 0) + (p2?.sendFailures ?? 0);
+  const recommendation = p2
+    ? p2Failures > 0
+      ? 'P2 DUC egress has write/send failures; stop judging audio quality until the transport is clean.'
+      : p2.queuedPackets > 12
+        ? 'P2 DUC queue is backing up; check host scheduling before increasing TX density.'
+        : 'For G2/P2 TX, use Protocol 2 DUC queued/sent packets as the egress truth; P1 ring counters are only legacy context.'
+    : 'No active Protocol 2 TX diagnostics are attached; P1 ring counters are the only visible egress path.';
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <FieldGrid
+        fields={[
+          { label: 'IQ Source', value: diag.iqSourceType?.split('.').at(-1) ?? diag.iqSourceType },
+          { label: 'Source Is Ring', value: boolLabel(diag.iqSourceIsRing) },
+          { label: 'Mic Samples', value: count(diag.ingest.totalMicSamples) },
+          { label: 'TX Blocks', value: count(diag.ingest.totalTxBlocks) },
+          { label: 'Mic Drops', value: count(diag.ingest.droppedFrames) },
+          { label: 'P1 Written', value: count(diag.ring.totalWritten) },
+          { label: 'P1 Read', value: count(diag.ring.totalRead) },
+          { label: 'P1 Count', value: count(diag.ring.count) },
+          { label: 'P1 Dropped', value: count(diag.ring.dropped) },
+          { label: 'P1 Capacity', value: count(diag.ring.capacity) },
+          { label: 'P1 Recent Mag', value: diag.ring.recentMag.toFixed(3) },
+        ]}
+      />
+      <FieldGrid
+        fields={[
+          { label: 'P2 Attached', value: boolLabel(Boolean(p2)) },
+          { label: 'Sender Running', value: boolLabel(p2?.senderRunning) },
+          { label: 'IQ Samples In', value: count(p2?.inputComplexSamples) },
+          { label: 'Packets Queued', value: count(p2?.packetsQueued) },
+          { label: 'Packets Sent', value: count(p2?.packetsSent) },
+          { label: 'Queue Depth', value: count(p2?.queuedPackets) },
+          { label: 'Write Failures', value: count(p2?.queueWriteFailures) },
+          { label: 'Send Failures', value: count(p2?.sendFailures) },
+          { label: 'Reset Drains', value: count(p2?.resetDrainedPackets) },
+          { label: 'Scratch Samples', value: count(p2?.scratchComplexSamples) },
+          { label: 'Next Sequence', value: count(p2?.nextSequence) },
+          { label: 'Last Packets/s', value: count(p2?.lastPacketsPerSecond) },
+          { label: 'FIFO Model', value: count(p2?.lastFifoModelSamples) },
+          { label: 'Rate Updated', value: time(p2?.lastRateTimestampUtc) },
+        ]}
+      />
+      <FieldGrid
+        fields={[
+          { label: 'Plugin Master Bypass', value: boolLabel(diag.txPlugins?.masterBypassed) },
+          { label: 'Remote TX Bypass', value: boolLabel(diag.txPlugins?.bypassedForRemoteTx) },
+          { label: 'VST Active', value: boolLabel(diag.vstEngine?.active) },
+          { label: 'VST Degraded', value: count(diag.vstEngine?.degradedBlocks) },
+        ]}
+      />
+      <DiagnosticRecommendation text={recommendation} />
     </div>
   );
 }
@@ -1034,6 +1100,7 @@ export function HardwareDiagnosticsPanel() {
   const [keying, setKeying] = useState<HardwareKeyingStatusDto | null>(null);
   const [supplyAlarms, setSupplyAlarms] = useState<RadioSupplyAlarmsDto | null>(null);
   const [networkProfile, setNetworkProfile] = useState<RadioNetworkProfileDto | null>(null);
+  const [txDiagnostics, setTxDiagnostics] = useState<TxDiagnosticsDto | null>(null);
   const [userIoLabels, setUserIoLabels] = useState<UserIoLabelsDto | null>(null);
   const [userIoActions, setUserIoActions] = useState<UserIoActionsDto | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1080,11 +1147,12 @@ export function HardwareDiagnosticsPanel() {
   const loadEndpointDiagnostics = useCallback(async (signal?: AbortSignal) => {
     setEndpointBusy(true);
     try {
-      const [nextKeying, nextSupply, nextNetwork, nextLabels, nextActions] =
+      const [nextKeying, nextSupply, nextNetwork, nextTx, nextLabels, nextActions] =
         await Promise.allSettled([
           fetchHardwareKeyingStatus(signal),
           fetchRadioSupplyAlarms(signal),
           fetchRadioNetworkProfile(signal),
+          fetchTxDiagnostics(signal),
           fetchUserIoLabels(signal),
           fetchUserIoActions(signal),
         ]);
@@ -1092,10 +1160,11 @@ export function HardwareDiagnosticsPanel() {
       if (nextKeying.status === 'fulfilled') setKeying(nextKeying.value);
       if (nextSupply.status === 'fulfilled') setSupplyAlarms(nextSupply.value);
       if (nextNetwork.status === 'fulfilled') setNetworkProfile(nextNetwork.value);
+      if (nextTx.status === 'fulfilled') setTxDiagnostics(nextTx.value);
       if (nextLabels.status === 'fulfilled') setUserIoLabels(nextLabels.value);
       if (nextActions.status === 'fulfilled') setUserIoActions(nextActions.value);
 
-      const failures = [nextKeying, nextSupply, nextNetwork, nextLabels, nextActions]
+      const failures = [nextKeying, nextSupply, nextNetwork, nextTx, nextLabels, nextActions]
         .filter(
           (result): result is PromiseRejectedResult =>
             result.status === 'rejected' &&
@@ -1402,6 +1471,14 @@ export function HardwareDiagnosticsPanel() {
           <span className="ps-card-hint">transport health / frame loss / hi-priority flow</span>
         </h4>
         <NetworkProfileDiagnostics profile={networkProfile} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          TX Egress Diagnostics
+          <span className="ps-card-hint">mic ingest / P1 ring / P2 DUC packets</span>
+        </h4>
+        <TxEgressDiagnostics diag={txDiagnostics} />
       </div>
 
       <div className="ps-card">

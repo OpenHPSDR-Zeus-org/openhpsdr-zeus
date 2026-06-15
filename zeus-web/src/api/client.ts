@@ -731,6 +731,57 @@ export type UserIoActionsDto = {
   generatedUtc: string;
 };
 
+export type TxRingDiagnosticsDto = {
+  totalWritten: number;
+  totalRead: number;
+  count: number;
+  dropped: number;
+  capacity: number;
+  recentMag: number;
+};
+
+export type TxIngestDiagnosticsDto = {
+  totalMicSamples: number;
+  totalTxBlocks: number;
+  droppedFrames: number;
+};
+
+export type Protocol2TxIqDiagnosticsDto = {
+  inputComplexSamples: number;
+  packetsQueued: number;
+  packetsSent: number;
+  queuedPackets: number;
+  queueWriteFailures: number;
+  sendFailures: number;
+  resetDrainedPackets: number;
+  scratchComplexSamples: number;
+  nextSequence: number;
+  lastPacketsPerSecond: number;
+  lastFifoModelSamples: number;
+  lastRateTimestampUtc: string | null;
+  senderRunning: boolean;
+};
+
+export type TxPluginDiagnosticsDto = {
+  masterBypassed: boolean;
+  bypassedForRemoteTx: boolean;
+};
+
+export type VstEngineDiagnosticsDto = {
+  active: boolean;
+  degradedBlocks: number;
+};
+
+export type TxDiagnosticsDto = {
+  iqSourceType: string | null;
+  iqSourceIsRing: boolean;
+  ring: TxRingDiagnosticsDto;
+  ingest: TxIngestDiagnosticsDto;
+  protocol2: Protocol2TxIqDiagnosticsDto | null;
+  txPlugins: TxPluginDiagnosticsDto | null;
+  vstEngine: VstEngineDiagnosticsDto | null;
+};
+
 export type HardwareP1DiagnosticsDto = {
   packets: number;
   lastUpdatedUtc: string | null;
@@ -1610,6 +1661,76 @@ function normalizeSmartNrCondition(raw: unknown): SmartNrConditionDto {
   };
 }
 
+function normalizeTxRingDiagnostics(raw: unknown): TxRingDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  return {
+    totalWritten: diagNumber(r.totalWritten) ?? 0,
+    totalRead: diagNumber(r.totalRead) ?? 0,
+    count: diagNumber(r.count) ?? 0,
+    dropped: diagNumber(r.dropped) ?? 0,
+    capacity: diagNumber(r.capacity) ?? 0,
+    recentMag: diagNumber(r.recentMag) ?? 0,
+  };
+}
+
+function normalizeTxIngestDiagnostics(raw: unknown): TxIngestDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  return {
+    totalMicSamples: diagNumber(r.totalMicSamples) ?? 0,
+    totalTxBlocks: diagNumber(r.totalTxBlocks) ?? 0,
+    droppedFrames: diagNumber(r.droppedFrames) ?? 0,
+  };
+}
+
+function normalizeProtocol2TxIqDiagnostics(raw: unknown): Protocol2TxIqDiagnosticsDto | null {
+  if (raw === null || raw === undefined) return null;
+  const r = asDiagRecord(raw);
+  return {
+    inputComplexSamples: diagNumber(r.inputComplexSamples) ?? 0,
+    packetsQueued: diagNumber(r.packetsQueued) ?? 0,
+    packetsSent: diagNumber(r.packetsSent) ?? 0,
+    queuedPackets: diagNumber(r.queuedPackets) ?? 0,
+    queueWriteFailures: diagNumber(r.queueWriteFailures) ?? 0,
+    sendFailures: diagNumber(r.sendFailures) ?? 0,
+    resetDrainedPackets: diagNumber(r.resetDrainedPackets) ?? 0,
+    scratchComplexSamples: diagNumber(r.scratchComplexSamples) ?? 0,
+    nextSequence: diagNumber(r.nextSequence) ?? 0,
+    lastPacketsPerSecond: diagNumber(r.lastPacketsPerSecond) ?? 0,
+    lastFifoModelSamples: diagNumber(r.lastFifoModelSamples) ?? 0,
+    lastRateTimestampUtc: diagString(r.lastRateTimestampUtc),
+    senderRunning: Boolean(r.senderRunning),
+  };
+}
+
+function normalizeTxDiagnostics(raw: unknown): TxDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  const pluginRaw = r.txPlugins === null || r.txPlugins === undefined
+    ? null
+    : asDiagRecord(r.txPlugins);
+  const vstRaw = r.vstEngine === null || r.vstEngine === undefined
+    ? null
+    : asDiagRecord(r.vstEngine);
+  return {
+    iqSourceType: diagString(r.iqSourceType),
+    iqSourceIsRing: Boolean(r.iqSourceIsRing),
+    ring: normalizeTxRingDiagnostics(r.ring),
+    ingest: normalizeTxIngestDiagnostics(r.ingest),
+    protocol2: normalizeProtocol2TxIqDiagnostics(r.protocol2),
+    txPlugins: pluginRaw === null
+      ? null
+      : {
+          masterBypassed: Boolean(pluginRaw.masterBypassed),
+          bypassedForRemoteTx: Boolean(pluginRaw.bypassedForRemoteTx),
+        },
+    vstEngine: vstRaw === null
+      ? null
+      : {
+          active: Boolean(vstRaw.active),
+          degradedBlocks: diagNumber(vstRaw.degradedBlocks) ?? 0,
+        },
+  };
+}
+
 function normalizeExternalPttStatus(raw: unknown): ExternalPttStatusDto {
   const r = asDiagRecord(raw);
   return {
@@ -2390,6 +2511,16 @@ export function fetchSmartNrCondition(
     '/api/dsp/nr-condition',
     { signal },
     normalizeSmartNrCondition,
+  );
+}
+
+export function fetchTxDiagnostics(
+  signal?: AbortSignal,
+): Promise<TxDiagnosticsDto> {
+  return jsonFetch(
+    '/api/tx/diag',
+    { signal },
+    normalizeTxDiagnostics,
   );
 }
 
