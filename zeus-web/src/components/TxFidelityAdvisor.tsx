@@ -15,6 +15,10 @@ function fmtValue(v: number | null, suffix = ''): string {
   return v === null ? '--' : `${v.toFixed(0)}${suffix}`;
 }
 
+function fmtDensity(live: number | null, target: number): string {
+  return live === null ? `--/${target}` : `${live.toFixed(0)}/${target}`;
+}
+
 function stateColor(state: string): string {
   if (state === 'sweet' || state === 'monitor') return 'var(--signal)';
   if (state === 'clip' || state === 'hot') return 'var(--tx)';
@@ -22,7 +26,12 @@ function stateColor(state: string): string {
   return 'var(--fg-2)';
 }
 
-export function TxFidelityAdvisor() {
+type TxFidelityAdvisorProps = {
+  targetSpectralDensity?: number;
+};
+
+export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
+  const { targetSpectralDensity } = props;
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
   const txMonitorEnabled = useTxStore((s) => s.txMonitorEnabled);
@@ -54,6 +63,7 @@ export function TxFidelityAdvisor() {
     psFeedbackLevel,
     psCalState,
     psCalibrationStalled,
+    targetSpectralDensity,
   };
   const analysis = analyzeTxFidelity(snapshot);
   const color = stateColor(analysis.state);
@@ -146,6 +156,9 @@ export function TxFidelityAdvisor() {
       >
         <span style={{ whiteSpace: 'nowrap' }}>MIC {fmtDb(analysis.micDbfs)}</span>
         <span style={{ whiteSpace: 'nowrap' }}>OUT {fmtDb(analysis.outDbfs)}</span>
+        <span style={{ whiteSpace: 'nowrap' }}>
+          DENS {fmtDensity(analysis.liveSpectralDensity, analysis.targetSpectralDensity)}
+        </span>
         <span style={{ whiteSpace: 'nowrap' }}>ALC {fmtGr(analysis.alcGr)}</span>
         <span style={{ whiteSpace: 'nowrap' }}>LVL {fmtGr(analysis.lvlrGr)}</span>
         <span style={{ whiteSpace: 'nowrap' }}>CFC {fmtGr(analysis.cfcGr)}</span>

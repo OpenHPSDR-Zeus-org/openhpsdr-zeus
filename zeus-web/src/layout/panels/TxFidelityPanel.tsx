@@ -107,7 +107,11 @@ function profileDefaults(): TxStationProfile[] {
   return mergeTxStationProfileOverrides([]);
 }
 
-function TxStationProfiles() {
+type TxStationProfilesProps = {
+  onTargetSpectralDensityChange?: (density: number) => void;
+};
+
+function TxStationProfiles({ onTargetSpectralDensityChange }: TxStationProfilesProps = {}) {
   const status = useConnectionStore((s) => s.status);
   const mode = useConnectionStore((s) => s.mode);
   const applyState = useConnectionStore((s) => s.applyState);
@@ -136,6 +140,10 @@ function TxStationProfiles() {
   const applyDisabled = status !== 'Connected' || busy;
   const profileSummary = formatTxStationProfileSummary(selectedProfile);
   const displayedMessage = phase === 'idle' ? profileSummary : message;
+
+  useEffect(() => {
+    onTargetSpectralDensityChange?.(selectedProfile.spectralDensity);
+  }, [onTargetSpectralDensityChange, selectedProfile.spectralDensity]);
 
   useEffect(() => {
     let active = true;
@@ -812,6 +820,10 @@ function TxStationProfiles() {
 }
 
 export function TxFidelityPanel() {
+  const [targetSpectralDensity, setTargetSpectralDensity] = useState(
+    STUDIO_SSB_PROFILE.spectralDensity,
+  );
+
   return (
     <div
       style={{
@@ -827,8 +839,8 @@ export function TxFidelityPanel() {
         background: 'var(--bg-1)',
       }}
     >
-      <TxFidelityAdvisor />
-      <TxStationProfiles />
+      <TxFidelityAdvisor targetSpectralDensity={targetSpectralDensity} />
+      <TxStationProfiles onTargetSpectralDensityChange={setTargetSpectralDensity} />
     </div>
   );
 }
