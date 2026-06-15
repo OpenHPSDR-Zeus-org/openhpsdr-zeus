@@ -642,6 +642,16 @@ public sealed record AntennaSetRequest(string Band, string TxAnt, string RxAnt, 
 public sealed record Hl2GpioDto(bool Supported, int Bits);
 public sealed record Hl2GpioSetRequest(int Bits);
 
+// Hardware-PTT-IN status + enable gate (external-ports plan, §4). Read-only
+// `Keyed` is the live footswitch / mic-PTT / rear-KEY level (per-protocol
+// source: P1 HardwarePttChanged, P2 UDP-1025 PttIn). `Enabled` gates MOX
+// promotion (defaults ON); when off the lamp still tracks the input but the
+// hardware edge is not lifted to MOX. `HangMs` is the fixed 250 ms release
+// hang, surfaced read-only for the UI label. Every board has a PTT-IN, so this
+// is ungated.
+public sealed record PttStatusDto(bool Keyed, bool Enabled, int HangMs);
+public sealed record PttEnableSetRequest(bool Enabled);
+
 // Global (per-radio, NOT per-band) TX-audio SOURCE selection (external-ports
 // plan, §2/§11). GET carries the per-board source-availability gates so the
 // single-select picker renders only the sources the connected board offers

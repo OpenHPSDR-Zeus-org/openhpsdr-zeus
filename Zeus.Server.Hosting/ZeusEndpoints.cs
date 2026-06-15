@@ -1301,6 +1301,28 @@ public static class ZeusEndpoints
             return Results.Ok(new Hl2GpioDto(true, radio.GetHl2GpioMask() & 0x0F));
         });
 
+        // Hardware-PTT-IN status + enable gate (external-ports plan §4). GET
+        // returns the live footswitch/mic-PTT level (per-protocol source: P1
+        // HardwarePttChanged, P2 UDP-1025 PttIn), the MOX-promotion enable gate,
+        // and the fixed 250 ms hang. Ungated — every board has a PTT-IN. The
+        // lamp is also pushed live via the PttStatus (0x33) hub frame; this
+        // endpoint is for first-paint hydration. PUT toggles the enable gate.
+        app.MapGet("/api/radio/ptt-status", (ExternalPttService ptt, PttSettingsStore store) =>
+            Results.Ok(new PttStatusDto(
+                Keyed: ptt.IsKeyed,
+                Enabled: store.Get(),
+                HangMs: ExternalPttService.HangMs)));
+
+        app.MapPut("/api/radio/ptt-status", (PttEnableSetRequest req, ExternalPttService ptt, PttSettingsStore store) =>
+        {
+            if (req is null) return Results.BadRequest(new { error = "body required" });
+            store.Set(req.Enabled);
+            return Results.Ok(new PttStatusDto(
+                Keyed: ptt.IsKeyed,
+                Enabled: store.Get(),
+                HangMs: ExternalPttService.HangMs));
+        });
+
         // Per-radio frequency calibration (issue #325). GET returns the
         // persisted correction factor + its ppm representation. POST
         // /calibrate runs the one-button auto-cal procedure (snapshot

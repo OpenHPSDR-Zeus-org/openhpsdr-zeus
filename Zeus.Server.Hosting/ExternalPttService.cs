@@ -14,31 +14,45 @@
 // statement and per-component attribution.
 
 using Microsoft.Extensions.Hosting;
+using Zeus.Contracts;
 using Zeus.Protocol1;
 
 namespace Zeus.Server;
 
 /// <summary>
-/// Promotes the radio's hardware-PTT echo (C0[0] of every inbound EP6 frame)
-/// into a host-side MOX request. The HL2 gateware generates a shaped CW
-/// envelope on its own whenever the rear KEY tip is grounded — protocol doc
-/// line 200 — so the radio transmits without any host involvement. Without
-/// this service the host stays unkeyed: the MOX UI indicator never lights,
-/// TX meters stay at idle cadence, PsAutoAttenuate doesn't engage, and the
-/// FR-6 120 s TX-timeout never arms.
+/// Promotes the radio's hardware-PTT echo into a host-side MOX request, on
+/// BOTH protocols (external-ports plan §4):
+///   • Protocol 1 — C0[0] of every inbound EP6 frame, surfaced as the
+///     <see cref="IProtocol1Client.HardwarePttChanged"/> edge event. The HL2
+///     gateware generates a shaped CW envelope on its own whenever the rear KEY
+///     tip is grounded (protocol doc line 200) so the radio transmits without
+///     any host involvement; this service lifts the host MOX to match.
+///   • Protocol 2 — the UDP-1025 hi-priority status PttIn bit (byte 0 bit 0),
+///     surfaced as the <see cref="Zeus.Protocol2.P2TelemetryReading.PttIn"/>
+///     level on every <see cref="Zeus.Protocol2.Protocol2Client.TelemetryReceived"/>.
+///     P2 telemetry is LEVEL-sampled (not edge-evented), so this service derives
+///     rising/falling edges by comparing against the previous level.
 ///
-/// State machine (per-connection):
-///   • inbound rising AND host MOX/TUN/TwoTone off → claim MOX via
-///     <c>TxService.TrySetMox(true)</c>, mark <c>_owned</c>.
-///   • inbound falling → arm a hang timer (<see cref="HangTime"/>). A rising
+/// Without this service the host stays unkeyed on a hardware press: the MOX UI
+/// indicator never lights, TX meters stay at idle cadence, PsAutoAttenuate
+/// doesn't engage, and the FR-6 120 s TX-timeout never arms. Before this pass
+/// the service was P1-only — a G2/P2 connect fired the separate P2Connected
+/// event and never reached here, so footswitch PTT was dead on the G2.
+///
+/// State machine (shared across both protocols, per-connection):
+///   • raw rising AND host MOX/TUN/TwoTone off → claim MOX via
+///     <c>TxService.TrySetMox(true, MoxSource.Hardware)</c>, mark <c>_owned</c>.
+///   • raw falling → arm a hang timer (<see cref="HangTime"/>). A rising
 ///     edge inside the window cancels it (inter-character CW spaces).
-///   • hang elapsed AND inbound still low AND <c>_owned</c> → release MOX.
+///   • hang elapsed AND raw still low AND <c>_owned</c> → release MOX.
 ///   • UI/TCI/trip drops MOX externally → <c>_owned</c> clears so the next
 ///     hang timer doesn't re-release what someone else changed.
 ///
-/// Inbound echo of host-initiated MOX (operator clicks the UI button) lands
-/// here too, but the <c>IsMoxOn || IsTunOn || IsTwoToneOn</c> gate ignores
-/// it because the host is already the source of truth.
+/// MOX/TUN/TwoTone arbitration and the <c>MoxSource.Hardware</c> ownership rule
+/// are EXACTLY the P1 behaviour — the P2 path reuses the same hang/owned engine,
+/// it does not fork it. The per-protocol PTT-IN status lamp is broadcast on
+/// every raw edge regardless of the Enable gate so the operator can see the
+/// physical input even when MOX promotion is disabled.
 /// </summary>
 public sealed class ExternalPttService : IHostedService, IDisposable
 {
@@ -49,27 +63,54 @@ public sealed class ExternalPttService : IHostedService, IDisposable
     // on the per-mode DSP settings panel alongside the CW pitch.
     private static readonly TimeSpan HangTime = TimeSpan.FromMilliseconds(250);
 
+    /// <summary>Read-only hang time surfaced to the UI ("Hang: 250 ms") and the
+    /// REST status endpoint. The knob itself is out of scope for this pass.</summary>
+    public static int HangMs => (int)HangTime.TotalMilliseconds;
+
+    /// <summary>Live PTT-IN level (lamp state) for the REST status snapshot.
+    /// Fed by both protocol edge sources; false when disconnected.</summary>
+    public bool IsKeyed => _rawHigh;
+
     private readonly RadioService _radio;
     private readonly TxService _tx;
+    private readonly StreamingHub _hub;
+    private readonly PttSettingsStore _settings;
     private readonly CwSidetoneSource? _sidetone;
     private readonly ILogger<ExternalPttService> _log;
 
     private readonly object _sync = new();
     private IProtocol1Client? _client;
+    private Zeus.Protocol2.Protocol2Client? _p2Client;
     // True iff the most recent MOX-on we caused has not been released yet.
     // Cleared by the hang-release path, by TxActiveChanged(false) from any
     // other source, and by disconnect.
     private bool _owned;
+    // Latest raw hardware-PTT level, fed by BOTH protocol edge sources. Used by
+    // the hang-release race-guard (protocol-agnostic replacement for the P1-only
+    // IProtocol1Client.HardwarePtt latched property) and surfaced as the lamp
+    // state. Volatile: written on the RX thread, read on the timer ThreadPool.
+    private volatile bool _rawHigh;
+    // Previous P2 PttIn level, for edge detection on the level-sampled P2
+    // telemetry stream. Owned by the P2 RX thread only.
+    private bool _p2PrevPtt;
     // Single-shot timer used to debounce falling edges. Created lazily and
     // re-armed via Change(); the underlying System.Threading.Timer is thread
     // safe so cancellation from the RX thread and fire-and-handle on the
     // ThreadPool coexist cleanly.
     private Timer? _hangTimer;
 
-    public ExternalPttService(RadioService radio, TxService tx, ILogger<ExternalPttService> log, CwSidetoneSource? sidetone = null)
+    public ExternalPttService(
+        RadioService radio,
+        TxService tx,
+        StreamingHub hub,
+        PttSettingsStore settings,
+        ILogger<ExternalPttService> log,
+        CwSidetoneSource? sidetone = null)
     {
         _radio = radio;
         _tx = tx;
+        _hub = hub;
+        _settings = settings;
         _sidetone = sidetone;
         _log = log;
     }
@@ -78,6 +119,8 @@ public sealed class ExternalPttService : IHostedService, IDisposable
     {
         _radio.Connected += OnConnected;
         _radio.Disconnected += OnDisconnected;
+        _radio.P2Connected += OnP2Connected;
+        _radio.P2Disconnected += OnP2Disconnected;
         _tx.TxActiveChanged += OnTxActiveChanged;
         return Task.CompletedTask;
     }
@@ -86,14 +129,18 @@ public sealed class ExternalPttService : IHostedService, IDisposable
     {
         _radio.Connected -= OnConnected;
         _radio.Disconnected -= OnDisconnected;
+        _radio.P2Connected -= OnP2Connected;
+        _radio.P2Disconnected -= OnP2Disconnected;
         _tx.TxActiveChanged -= OnTxActiveChanged;
         IProtocol1Client? client;
-        lock (_sync) { client = _client; _client = null; _owned = false; }
+        Zeus.Protocol2.Protocol2Client? p2;
+        lock (_sync) { client = _client; _client = null; p2 = _p2Client; _p2Client = null; _owned = false; }
         if (client is not null)
         {
             client.HardwarePttChanged -= OnHardwarePttChanged;
             client.CwKeyDownChanged -= OnCwKeyDownChanged;
         }
+        if (p2 is not null) p2.TelemetryReceived -= OnP2Telemetry;
         _hangTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
         return Task.CompletedTask;
     }
@@ -103,9 +150,11 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         _hangTimer?.Dispose();
     }
 
+    // ---- Protocol 1 wiring (unchanged behaviour) -------------------------
+
     private void OnConnected(IProtocol1Client client)
     {
-        lock (_sync) { _client = client; _owned = false; }
+        lock (_sync) { _client = client; _owned = false; _rawHigh = false; }
         client.HardwarePttChanged += OnHardwarePttChanged;
         client.CwKeyDownChanged += OnCwKeyDownChanged;
     }
@@ -113,13 +162,14 @@ public sealed class ExternalPttService : IHostedService, IDisposable
     private void OnDisconnected()
     {
         IProtocol1Client? client;
-        lock (_sync) { client = _client; _client = null; _owned = false; }
+        lock (_sync) { client = _client; _client = null; _owned = false; _rawHigh = false; }
         if (client is not null)
         {
             client.HardwarePttChanged -= OnHardwarePttChanged;
             client.CwKeyDownChanged -= OnCwKeyDownChanged;
         }
         _hangTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        BroadcastLamp(false);
     }
 
     // Sidetone follows the gateware's shaped keyer output (C0[2] /
@@ -136,14 +186,57 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         else _sidetone.Up();
     }
 
-    private void OnHardwarePttChanged(bool on)
+    private void OnHardwarePttChanged(bool on) => HandleRawPtt(on);
+
+    // ---- Protocol 2 wiring (new — §4 P2 PTT-in → MOX) --------------------
+
+    private void OnP2Connected(Zeus.Protocol2.Protocol2Client client)
     {
+        lock (_sync) { _p2Client = client; _owned = false; _rawHigh = false; _p2PrevPtt = false; }
+        client.TelemetryReceived += OnP2Telemetry;
+    }
+
+    private void OnP2Disconnected()
+    {
+        Zeus.Protocol2.Protocol2Client? client;
+        lock (_sync) { client = _p2Client; _p2Client = null; _owned = false; _rawHigh = false; _p2PrevPtt = false; }
+        if (client is not null) client.TelemetryReceived -= OnP2Telemetry;
+        _hangTimer?.Change(Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        BroadcastLamp(false);
+    }
+
+    // UDP-1025 hi-priority status is LEVEL-sampled at the P2 status cadence, not
+    // an edge event — derive rising/falling by comparing against the previous
+    // PttIn level. Runs on the Protocol2Client RX thread.
+    private void OnP2Telemetry(Zeus.Protocol2.P2TelemetryReading reading)
+    {
+        bool ptt = reading.PttIn;
+        if (ptt == _p2PrevPtt) return; // no edge
+        _p2PrevPtt = ptt;
+        HandleRawPtt(ptt);
+    }
+
+    // ---- Shared debounce / hang / ownership engine -----------------------
+
+    private static bool IsCwMode(Zeus.Contracts.RxMode mode) =>
+        mode is Zeus.Contracts.RxMode.CWU or Zeus.Contracts.RxMode.CWL;
+
+    // Single entry point for a raw hardware-PTT edge from EITHER protocol. The
+    // lamp always tracks the physical input; MOX promotion is gated by the
+    // operator Enable toggle.
+    private void HandleRawPtt(bool on)
+    {
+        _rawHigh = on;
+        BroadcastLamp(on);
+        // Enable gate: when off, the lamp still tracks the footswitch but we
+        // never promote it to MOX (UI-only keying). Checked on each edge so a
+        // toggle takes effect immediately without restart.
+        if (!_settings.Get()) return;
         if (on) HandleRising();
         else HandleFalling();
     }
 
-    private static bool IsCwMode(Zeus.Contracts.RxMode mode) =>
-        mode is Zeus.Contracts.RxMode.CWU or Zeus.Contracts.RxMode.CWL;
+    private void BroadcastLamp(bool keyed) => _hub.Broadcast(new PttStatusFrame(keyed));
 
     private void HandleRising()
     {
@@ -162,12 +255,13 @@ public sealed class ExternalPttService : IHostedService, IDisposable
 
         // TxService.TrySetMox locks, broadcasts via the hub, and pokes WDSP
         // through DspPipelineService — work we don't want on the RX thread.
-        // The fire-and-forget Task.Run is OK because OnHardwarePttChanged is
-        // already edge-triggered (single rise per external press) and a
-        // subsequent fall is handled by HandleFalling regardless of ordering.
+        // The fire-and-forget Task.Run is OK because the edge is single-shot
+        // (one rise per external press) and a subsequent fall is handled by
+        // HandleFalling regardless of ordering. MoxSource.Hardware routes
+        // through the EXISTING arbitration: it cannot drop a UI/TCI/CWX MOX.
         _ = Task.Run(() =>
         {
-            if (_tx.TrySetMox(true, out var err))
+            if (_tx.TrySetMox(true, MoxSource.Hardware, out var err))
             {
                 _log.LogInformation("externalPtt.takeover.applied");
             }
@@ -198,15 +292,16 @@ public sealed class ExternalPttService : IHostedService, IDisposable
     {
         // Race guard: a rising edge inside the hang window cancels the timer,
         // but the timer can already be in-flight on the ThreadPool when the
-        // cancel arrives. Re-check the latest level before acting.
-        var client = _client;
-        if (client is not null && client.HardwarePtt) return;
+        // cancel arrives. Re-check the latest raw level before acting. _rawHigh
+        // is fed by both protocols, so this is protocol-agnostic; on P1 it
+        // tracks the same C0[0] level the old IProtocol1Client.HardwarePtt did.
+        if (_rawHigh) return;
 
         bool releaseNow;
         lock (_sync) { releaseNow = _owned; _owned = false; }
         if (!releaseNow) return;
 
-        if (_tx.TrySetMox(false, out var err))
+        if (_tx.TrySetMox(false, MoxSource.Hardware, out var err))
         {
             _log.LogInformation("externalPtt.release.applied");
         }
@@ -224,4 +319,19 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         if (active) return;
         lock (_sync) _owned = false;
     }
+
+    // ---- Test seams ------------------------------------------------------
+
+    /// <summary>Test seam: drive a raw P1-style hardware-PTT edge through the
+    /// full shared engine (lamp + MOX promotion). Mirrors what
+    /// <see cref="OnHardwarePttChanged"/> does for a live P1 client.</summary>
+    internal void TestRawPttP1(bool on) => OnHardwarePttChanged(on);
+
+    /// <summary>Test seam: feed a P2 hi-priority telemetry sample through the
+    /// level→edge derivation and the shared engine, exactly as a live
+    /// Protocol2Client TelemetryReceived would.</summary>
+    internal void TestP2Telemetry(Zeus.Protocol2.P2TelemetryReading reading) => OnP2Telemetry(reading);
+
+    /// <summary>Test seam: current latched raw PTT-IN (lamp) level.</summary>
+    internal bool TestRawHigh => _rawHigh;
 }

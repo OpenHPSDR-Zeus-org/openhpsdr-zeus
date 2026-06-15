@@ -28,6 +28,7 @@ import {
 } from '../state/antenna-store';
 import { useAudioStore } from '../state/audio-store';
 import { useHl2GpioStore } from '../state/hl2-gpio-store';
+import { usePttStore } from '../state/ptt-store';
 import { bandOf } from './design/data';
 
 const ANTENNAS: AntennaName[] = ['Ant1', 'Ant2', 'Ant3'];
@@ -70,11 +71,22 @@ export function RadioSettingsPanel() {
   const loadGpio = useHl2GpioStore((s) => s.load);
   const setGpioBit = useHl2GpioStore((s) => s.setBit);
 
+  // Hardware PTT-IN (footswitch / mic-PTT / rear-KEY). Every board has one, so
+  // this card is ungated. `keyed` is driven live by the PttStatusFrame WS edge
+  // (per-protocol source server-side); `enabled` / `hangMs` hydrate from REST.
+  const pttKeyed = usePttStore((s) => s.keyed);
+  const pttEnabled = usePttStore((s) => s.enabled);
+  const pttHangMs = usePttStore((s) => s.hangMs);
+  const pttInflight = usePttStore((s) => s.inflight);
+  const loadPtt = usePttStore((s) => s.load);
+  const setPttEnabled = usePttStore((s) => s.setEnabled);
+
   useEffect(() => {
     load();
     loadAudio();
     loadGpio();
-  }, [load, loadAudio, loadGpio]);
+    loadPtt();
+  }, [load, loadAudio, loadGpio, loadPtt]);
 
   const band = bandOf(vfoHz);
   const onBand = band !== '—';
@@ -360,6 +372,70 @@ export function RadioSettingsPanel() {
           )}
         </div>
       ) : null}
+
+      <div className="ps-card">
+        <h4>
+          <svg className="ps-ic-sm" viewBox="0 0 12 12">
+            <path d="M6 1v4M3.5 5h5v3a2.5 2.5 0 0 1-5 0z" />
+          </svg>
+          PTT-IN
+          <span className="ps-card-hint">footswitch / mic-PTT / rear KEY</span>
+        </h4>
+
+        <div className="ps-field">
+          <div className="ps-name">
+            Status
+            <em>
+              Live hardware PTT-IN level. Read-only — the radio drives this when
+              you press the footswitch / mic PTT (or ground the rear KEY).
+            </em>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span
+              aria-hidden
+              style={{
+                width: '0.6rem',
+                height: '0.6rem',
+                borderRadius: '50%',
+                background: pttKeyed ? 'var(--tx)' : 'var(--fg-3)',
+                boxShadow: pttKeyed ? '0 0 6px var(--tx-soft)' : 'none',
+                transition: 'background 60ms linear',
+              }}
+            />
+            <span style={{ color: pttKeyed ? 'var(--tx)' : 'var(--fg-2)' }}>
+              {pttKeyed ? 'KEYED' : 'idle'}
+            </span>
+          </div>
+        </div>
+
+        <div className="ps-field">
+          <div className="ps-name">
+            Enable
+            <em>
+              When off, the footswitch is ignored for keying (UI-only TX). The
+              lamp above still shows the physical input.
+            </em>
+          </div>
+          <label className="ps-check">
+            <input
+              type="checkbox"
+              checked={pttEnabled}
+              disabled={pttInflight}
+              onChange={(e) => void setPttEnabled(e.target.checked)}
+            />
+            <span className="ps-check-box" />
+            <span>Hardware PTT → MOX</span>
+          </label>
+        </div>
+
+        <div className="ps-field">
+          <div className="ps-name">
+            Hang
+            <em>Release hang time — bridges CW inter-character gaps. Fixed for now.</em>
+          </div>
+          <span style={{ color: 'var(--fg-2)' }}>{pttHangMs} ms</span>
+        </div>
+      </div>
 
       {caps.hasHl2UserGpio && gpio.supported ? (
         <div className="ps-card">

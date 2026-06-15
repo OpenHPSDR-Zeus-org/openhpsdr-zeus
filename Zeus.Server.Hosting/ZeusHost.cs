@@ -335,10 +335,13 @@ public static class ZeusHost
         // when PS is off or AutoAttenuate is off — no wire, no engine pokes.
         builder.Services.AddHostedService<PsAutoAttenuateService>();
         // Promote the radio's hardware-PTT echo (HL2 rear KEY tip, external
-        // PTT line) into a host MOX request — without it the gateware-driven
-        // CW carrier transmits while Zeus stays unkeyed (UI off, meters at
-        // idle cadence, FR-6 timeout disarmed).
-        builder.Services.AddHostedService<ExternalPttService>();
+        // PTT line, P2 footswitch) into a host MOX request — without it the
+        // gateware-driven CW carrier transmits while Zeus stays unkeyed (UI off,
+        // meters at idle cadence, FR-6 timeout disarmed). Registered as a
+        // singleton AND as the hosted service so the /api/radio/ptt-status
+        // endpoint can read the live lamp level off the same instance.
+        builder.Services.AddSingleton<ExternalPttService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<ExternalPttService>());
 
         // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
         // hung login surfaces quickly in the UI.
@@ -351,6 +354,9 @@ public static class ZeusHost
         builder.Services.AddSingleton<AntennaSettingsStore>();
         builder.Services.AddSingleton<AudioSettingsStore>();
         builder.Services.AddSingleton<Hl2GpioSettingsStore>();
+        // Hardware-PTT-IN enable gate (external-ports plan §4). Read by
+        // ExternalPttService on every footswitch edge; defaults ON.
+        builder.Services.AddSingleton<PttSettingsStore>();
         builder.Services.AddSingleton<PreferredRadioStore>();
         builder.Services.AddSingleton<PsSettingsStore>();
         builder.Services.AddSingleton<FilterPresetStore>();

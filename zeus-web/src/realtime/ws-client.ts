@@ -51,6 +51,7 @@ import { useConnectionStore, type WisdomPhase } from '../state/connection-store'
 import { hasActiveFrameConsumers, useDisplayStore } from '../state/display-store';
 import { AlertKind, useTxStore } from '../state/tx-store';
 import { useBandPlanStore } from '../state/bandPlan';
+import { usePttStore } from '../state/ptt-store';
 import { useRxMetersStore } from '../state/rx-meters-store';
 import { warnOnce } from '../util/logger';
 import { wsUrl as buildWsUrl } from '../serverUrl';
@@ -199,6 +200,15 @@ const CW_DECODED_TEXT_HEADER_BYTES = 13;
 //     commentLen:u16 LE, comment:utf8]
 export const MSG_TYPE_SPOT_LIST = 0x32;
 const SPOT_LIST_MIN_BYTES = 3; // type + count
+
+// Hardware-PTT-IN status edge: 1 type byte + keyed:u8 = 2 bytes. Broadcast on
+// every footswitch / mic-PTT / rear-KEY edge so the Radio Settings PTT-IN lamp
+// tracks the physical input regardless of protocol (server source is
+// per-protocol: P1 HardwarePttChanged, P2 UDP-1025 PttIn). Read-only indicator
+// — does NOT drive MOX (the server promotes the same edges to MOX separately).
+// Contract: Zeus.Contracts/PttStatusFrame.cs.
+export const MSG_TYPE_PTT_STATUS = 0x33;
+const PTT_STATUS_BYTES = 2;
 
 // Shared by startRealtime / sendMicPcm. Single WS instance at a time; writes
 // are no-ops when the socket isn't open.
@@ -607,6 +617,15 @@ export function startRealtime(path = '/ws'): () => void {
             // localMicArmed (only local interaction does — see issue #346).
             if (txStore.localMicArmed) txStore.setLocalMicArmed(false);
           }
+          return;
+        }
+        if (peekType === MSG_TYPE_PTT_STATUS) {
+          if (ev.data.byteLength < PTT_STATUS_BYTES) {
+            warnOnce('ws-ptt-status-short', `ptt status frame too short: ${ev.data.byteLength}`);
+            return;
+          }
+          const dv = new DataView(ev.data);
+          usePttStore.getState().setKeyed(dv.getUint8(1) !== 0);
           return;
         }
         if (peekType === MSG_TYPE_SPOT_LIST) {
