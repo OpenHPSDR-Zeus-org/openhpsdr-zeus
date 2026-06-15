@@ -632,8 +632,36 @@ export type SmartNrConditionDto = {
   nr4Readiness: string;
   requestedNrMode: string;
   effectiveNrMode: string;
+  rxChain: SmartNrRxChainRuntimeDto;
   diagnosticRecommendation: string | null;
   generatedUtc: string;
+};
+
+export type SmartNrRxChainRuntimeDto = {
+  schemaVersion: number;
+  source: string;
+  autoAgcEnabled: boolean;
+  agcMode: string;
+  agcTopDb: number;
+  agcOffsetDb: number;
+  effectiveAgcTopDb: number;
+  autoAttEnabled: boolean;
+  adcProtectionEnabled: boolean;
+  attenDb: number;
+  attOffsetDb: number;
+  effectiveAttenDb: number;
+  adcOverloadWarning: boolean;
+  adcOverloadLevel: number;
+  lastOverloadBits: number;
+  adc0MaxMagnitude: number | null;
+  adc1MaxMagnitude: number | null;
+  adc0MaxMagnitudeAtOverload: number;
+  adc1MaxMagnitudeAtOverload: number;
+  lastAdcTelemetryUtc: string | null;
+  squelchEnabled: boolean;
+  squelchAdaptive: boolean;
+  squelchLevel: number;
+  preampOn: boolean;
 };
 
 export type ExternalPttStatusDto = {
@@ -1863,11 +1891,42 @@ function normalizeSmartNrCondition(raw: unknown): SmartNrConditionDto {
     nr4Readiness: diagString(r.nr4Readiness) ?? 'unknown',
     requestedNrMode: diagString(r.requestedNrMode) ?? 'Off',
     effectiveNrMode: diagString(r.effectiveNrMode) ?? 'Off',
+    rxChain: normalizeSmartNrRxChainRuntime(r.rxChain),
     diagnosticRecommendation: diagString(r.diagnosticRecommendation),
     generatedUtc:
       typeof r.generatedUtc === 'string'
         ? r.generatedUtc
         : new Date().toISOString(),
+  };
+}
+
+function normalizeSmartNrRxChainRuntime(raw: unknown): SmartNrRxChainRuntimeDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    source: diagString(r.source) ?? 'unknown',
+    autoAgcEnabled: Boolean(r.autoAgcEnabled),
+    agcMode: diagString(r.agcMode) ?? 'unknown',
+    agcTopDb: diagNumber(r.agcTopDb) ?? 0,
+    agcOffsetDb: diagNumber(r.agcOffsetDb) ?? 0,
+    effectiveAgcTopDb: diagNumber(r.effectiveAgcTopDb) ?? 0,
+    autoAttEnabled: Boolean(r.autoAttEnabled),
+    adcProtectionEnabled: Boolean(r.adcProtectionEnabled),
+    attenDb: diagNumber(r.attenDb) ?? 0,
+    attOffsetDb: diagNumber(r.attOffsetDb) ?? 0,
+    effectiveAttenDb: diagNumber(r.effectiveAttenDb) ?? 0,
+    adcOverloadWarning: Boolean(r.adcOverloadWarning),
+    adcOverloadLevel: diagNumber(r.adcOverloadLevel) ?? 0,
+    lastOverloadBits: diagNumber(r.lastOverloadBits) ?? 0,
+    adc0MaxMagnitude: diagNumber(r.adc0MaxMagnitude),
+    adc1MaxMagnitude: diagNumber(r.adc1MaxMagnitude),
+    adc0MaxMagnitudeAtOverload: diagNumber(r.adc0MaxMagnitudeAtOverload) ?? 0,
+    adc1MaxMagnitudeAtOverload: diagNumber(r.adc1MaxMagnitudeAtOverload) ?? 0,
+    lastAdcTelemetryUtc: diagString(r.lastAdcTelemetryUtc),
+    squelchEnabled: Boolean(r.squelchEnabled),
+    squelchAdaptive: r.squelchAdaptive === undefined ? true : Boolean(r.squelchAdaptive),
+    squelchLevel: diagNumber(r.squelchLevel) ?? 0,
+    preampOn: Boolean(r.preampOn),
   };
 }
 

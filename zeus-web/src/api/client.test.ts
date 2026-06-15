@@ -877,6 +877,32 @@ describe('POST helpers', () => {
       nr4Readiness: 'missing-sbnr-exports',
       requestedNrMode: 'Sbnr',
       effectiveNrMode: 'Off',
+      rxChain: {
+        schemaVersion: 1,
+        source: 'backend-radio-state',
+        autoAgcEnabled: true,
+        agcMode: 'Fast',
+        agcTopDb: 83,
+        agcOffsetDb: -31,
+        effectiveAgcTopDb: 52,
+        autoAttEnabled: true,
+        adcProtectionEnabled: true,
+        attenDb: 0,
+        attOffsetDb: 2,
+        effectiveAttenDb: 2,
+        adcOverloadWarning: true,
+        adcOverloadLevel: 4,
+        lastOverloadBits: 1,
+        adc0MaxMagnitude: 44000,
+        adc1MaxMagnitude: null,
+        adc0MaxMagnitudeAtOverload: 50000,
+        adc1MaxMagnitudeAtOverload: 0,
+        lastAdcTelemetryUtc: '2026-06-15T01:00:00Z',
+        squelchEnabled: true,
+        squelchAdaptive: true,
+        squelchLevel: 18,
+        preampOn: false,
+      },
       diagnosticRecommendation: 'Smart NR is currently constrained by RX-chain health.',
       generatedUtc: '2026-06-15T01:00:01Z',
     }));
@@ -902,6 +928,15 @@ describe('POST helpers', () => {
     expect(condition.nr4Readiness).toBe('missing-sbnr-exports');
     expect(condition.requestedNrMode).toBe('Sbnr');
     expect(condition.effectiveNrMode).toBe('Off');
+    expect(condition.rxChain.source).toBe('backend-radio-state');
+    expect(condition.rxChain.autoAgcEnabled).toBe(true);
+    expect(condition.rxChain.agcMode).toBe('Fast');
+    expect(condition.rxChain.effectiveAgcTopDb).toBe(52);
+    expect(condition.rxChain.effectiveAttenDb).toBe(2);
+    expect(condition.rxChain.adcOverloadWarning).toBe(true);
+    expect(condition.rxChain.adc0MaxMagnitude).toBe(44000);
+    expect(condition.rxChain.adc1MaxMagnitude).toBeNull();
+    expect(condition.rxChain.squelchEnabled).toBe(true);
   });
 
   it('fetchTxDiagnostics reads P2 DUC egress counters', async () => {

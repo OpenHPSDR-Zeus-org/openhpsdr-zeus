@@ -115,9 +115,12 @@ public sealed class FrontendDspSceneDiagnosticsService
         }
     }
 
-    public SmartNrConditionDto SmartNrCondition(DspNrRuntimeSnapshot nrRuntime)
+    public SmartNrConditionDto SmartNrCondition(
+        DspNrRuntimeSnapshot nrRuntime,
+        SmartNrRxChainRuntimeDto? rxChain = null)
     {
         var now = DateTimeOffset.UtcNow;
+        rxChain ??= SmartNrRxChainRuntimeDto.Unknown;
 
         lock (_sync)
         {
@@ -160,6 +163,7 @@ public sealed class FrontendDspSceneDiagnosticsService
                     Nr4Readiness: nrRuntime.Nr4Readiness,
                     RequestedNrMode: nrRuntime.RequestedNrMode,
                     EffectiveNrMode: nrRuntime.EffectiveNrMode,
+                    RxChain: rxChain,
                     DiagnosticRecommendation: health.Recommendation,
                     GeneratedUtc: now);
             }
@@ -201,6 +205,7 @@ public sealed class FrontendDspSceneDiagnosticsService
                 Nr4Readiness: nrRuntime.Nr4Readiness,
                 RequestedNrMode: nrRuntime.RequestedNrMode,
                 EffectiveNrMode: nrRuntime.EffectiveNrMode,
+                RxChain: rxChain,
                 DiagnosticRecommendation: timing.Health.Recommendation,
                 GeneratedUtc: now);
         }
