@@ -1592,6 +1592,18 @@ public class DspPipelineService : BackgroundService,
         var nrRuntime = BuildNrRuntime(engine, state, channelId, alignedNr5Diagnostics);
         bool wdspActive = nrRuntime.WdspActive;
         bool synthetic = engine is SyntheticDspEngine;
+        var squelchConfig = state.Squelch ?? new SquelchConfig();
+        var rxDsp = BuildRxDspChainDiagnostics(
+            state,
+            _radio.Notches,
+            nrRuntime,
+            _appliedNr,
+            _appliedAgc,
+            _appliedSquelch);
+        var rxMeters = SnapshotRxMetersDiagnostics();
+        var squelch = SnapshotAdaptiveSquelchDiagnostics(squelchConfig);
+        var audio = SnapshotAudioDiagnostics();
+        var display = SnapshotDisplayDiagnostics(engine);
         return new
         {
             schemaVersion = 1,
@@ -1608,15 +1620,9 @@ public class DspPipelineService : BackgroundService,
             requestedNrMode = nrRuntime.RequestedNrMode,
             effectiveNrMode = nrRuntime.EffectiveNrMode,
             nr5SpnrDiagnostics = nrRuntime.Nr5SpnrDiagnostics,
-            rxDsp = BuildRxDspChainDiagnostics(
-                state,
-                _radio.Notches,
-                nrRuntime,
-                _appliedNr,
-                _appliedAgc,
-                _appliedSquelch),
-            rxMeters = SnapshotRxMetersDiagnostics(),
-            squelch = SnapshotAdaptiveSquelchDiagnostics(state.Squelch ?? new SquelchConfig()),
+            rxDsp,
+            rxMeters,
+            squelch,
             channelId = Volatile.Read(ref _channelId),
             sampleRateHz = Volatile.Read(ref _sampleRateHz),
             displayWidth = Width,
@@ -1628,8 +1634,9 @@ public class DspPipelineService : BackgroundService,
             rxSinkAttached = _rxSinkAttached,
             audioSinkCount = _audioSinks.Length,
             monitorBacklogSamples = MonitorBacklog,
-            audio = SnapshotAudioDiagnostics(),
-            display = SnapshotDisplayDiagnostics(engine),
+            audio,
+            listenability = BuildRxListenabilityDiagnostics(rxMeters, audio, squelchConfig),
+            display,
             wdspWisdomPhase = wisdom.Phase.ToString(),
             wdspWisdomStatus = wisdom.Status,
             readiness = wdspActive
@@ -2263,6 +2270,117 @@ public class DspPipelineService : BackgroundService,
             AgcEnvelopeUsable: agcEnvUsable,
             DiagnosticRecommendation: recommendation);
     }
+
+    internal static RxListenabilityDiagnosticsDto BuildRxListenabilityDiagnostics(
+        RxMetersDiagnosticsDto rxMeters,
+        AudioPathDiagnosticsDto audio,
+        SquelchConfig squelch)
+    {
+        bool rxFresh = rxMeters.Fresh && !rxMeters.Stale;
+        bool audioFresh = audio.Fresh && !audio.Stale;
+        bool signalPresent = rxFresh
+            && (Above(rxMeters.SignalPkDbm, -120.0)
+                || Above(rxMeters.SignalAvDbm, -125.0)
+                || Above(rxMeters.RxDbm, -125.0));
+        bool audioRecovered = audioFresh
+            && string.Equals(audio.Source, "rx", StringComparison.OrdinalIgnoreCase)
+            && (Above(audio.RmsDbfs, -60.0) || Above(audio.PeakDbfs, -45.0));
+
+        string status;
+        string tone;
+        string blocker;
+        string recommendation;
+
+        if (!rxFresh)
+        {
+            status = "waiting-for-rx-meters";
+            tone = "verify";
+            blocker = "rx-meters";
+            recommendation = "RX listenability cannot be scored until WDSP RXA meters are fresh; verify radio connection, DSP tick, and RX meter feed.";
+        }
+        else if (!audioFresh)
+        {
+            status = "waiting-for-audio";
+            tone = "verify";
+            blocker = "audio";
+            recommendation = "RX signal evidence is available, but final audio frames are missing or stale; verify audio sinks and websocket/native audio delivery before tuning NR or AGC.";
+        }
+        else if (string.Equals(audio.Source, "tx-monitor", StringComparison.OrdinalIgnoreCase))
+        {
+            status = "tx-monitor-active";
+            tone = "standby";
+            blocker = "tx-monitor";
+            recommendation = "TX monitor audio is replacing listen audio; disable TX monitor before using RX listenability to tune weak-signal copy.";
+        }
+        else if (string.Equals(audio.Status, "clipping-risk", StringComparison.OrdinalIgnoreCase))
+        {
+            status = "audio-clipping-risk";
+            tone = "protect";
+            blocker = "audio-headroom";
+            recommendation = "Recovered RX audio is near full scale; reduce RX leveler/plugin output before optimizing NR, AGC, or squelch.";
+        }
+        else if (string.Equals(rxMeters.Status, "adc-hot", StringComparison.OrdinalIgnoreCase))
+        {
+            status = "adc-headroom-limited";
+            tone = "protect";
+            blocker = "adc-headroom";
+            recommendation = "RX ADC headroom is limiting listenability; add attenuation or reduce preamp/front-end gain before increasing weak-signal processing.";
+        }
+        else if (string.Equals(audio.Status, "muted-by-squelch", StringComparison.OrdinalIgnoreCase))
+        {
+            status = "adaptive-squelch-muted";
+            tone = "optimize";
+            blocker = "adaptive-squelch";
+            recommendation = "Backend adaptive squelch is muting fresh RX audio; lower the DYN SQL threshold or disable squelch while evaluating weak-signal copy.";
+        }
+        else if (signalPresent && !audioRecovered && squelch.Enabled && !squelch.Adaptive)
+        {
+            status = "fixed-squelch-suspect";
+            tone = "optimize";
+            blocker = "fixed-squelch";
+            recommendation = "Signal evidence is present but recovered RX audio is silent while fixed SQL is active; lower fixed SQL level/sensitivity or disable SQL before judging NR and weak-signal fidelity.";
+        }
+        else if (signalPresent && !audioRecovered)
+        {
+            status = "signal-audio-silent";
+            tone = "verify";
+            blocker = "audio-path";
+            recommendation = "RXA meters show signal evidence but final audio is still near silence; verify mode/filter placement, audio gain, plugins, and sink volume before changing RF/DSP settings.";
+        }
+        else if (signalPresent && audioRecovered)
+        {
+            status = "audio-recovered";
+            tone = "ready";
+            blocker = "none";
+            recommendation = "RX signal evidence and recovered audio agree; use coherent SNR, AGC gain, and audio RMS/peak trends to fine-tune NR and filters.";
+        }
+        else if (audioRecovered)
+        {
+            status = "audio-without-meter-evidence";
+            tone = "verify";
+            blocker = "rx-meter-correlation";
+            recommendation = "Recovered audio is present but RXA signal meters do not show clear signal evidence; cross-check S-meter calibration, filter passband, and meter freshness.";
+        }
+        else
+        {
+            status = "no-signal-evidence";
+            tone = "standby";
+            blocker = "none";
+            recommendation = "No clear RX signal or recovered audio is present; keep weak-signal automation conservative until panadapter or RXA evidence rises above the floor.";
+        }
+
+        return new RxListenabilityDiagnosticsDto(
+            SchemaVersion: 1,
+            Status: status,
+            Tone: tone,
+            SignalPresent: signalPresent,
+            AudioRecovered: audioRecovered,
+            Blocker: blocker,
+            Recommendation: recommendation);
+    }
+
+    private static bool Above(double? value, double threshold) =>
+        value is { } v && double.IsFinite(v) && v > threshold;
 
     private static double? RxStageLevelDb(float value) =>
         float.IsFinite(value) && value > -199.5f
@@ -4709,6 +4827,15 @@ internal sealed record RxMetersDiagnosticsDto(
     bool AdcUsable,
     bool AgcEnvelopeUsable,
     string DiagnosticRecommendation);
+
+internal sealed record RxListenabilityDiagnosticsDto(
+    int SchemaVersion,
+    string Status,
+    string Tone,
+    bool SignalPresent,
+    bool AudioRecovered,
+    string Blocker,
+    string Recommendation);
 
 internal sealed record AudioPathDiagnosticsDto(
     int SchemaVersion,

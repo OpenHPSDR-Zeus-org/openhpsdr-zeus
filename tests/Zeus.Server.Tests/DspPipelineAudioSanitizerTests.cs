@@ -394,6 +394,102 @@ public sealed class DspPipelineAudioSanitizerTests
     }
 
     [Fact]
+    public void BuildRxListenabilityDiagnostics_FlagsFixedSquelchBlockingSignal()
+    {
+        var rxMeters = DspPipelineService.BuildRxMetersDiagnostics(
+            valid: true,
+            ageMs: 25,
+            channelId: 0,
+            rxDbm: -85.6,
+            meters: new RxMetersV2Frame(
+                SignalPk: -73.4f,
+                SignalAv: -85.6f,
+                AdcPk: -61.3f,
+                AdcAv: -70.1f,
+                AgcGain: -55.5f,
+                AgcEnvPk: -41.3f,
+                AgcEnvAv: -50.7f));
+        var audio = DspPipelineService.BuildAudioPathDiagnostics(
+            valid: true,
+            ageMs: 18,
+            lastSeq: 130,
+            framesBroadcast: 20,
+            source: "rx",
+            sampleRateHz: 48_000,
+            sampleCount: 1600,
+            rms: 0.0,
+            peak: 0.0,
+            txMonitorRequested: false,
+            squelchEnabled: true,
+            squelchOpen: true,
+            squelchTailActive: false,
+            squelchGain: 1.0,
+            monitorBacklogSamples: 0,
+            audioSinkCount: 2,
+            squelchMode: "fixed",
+            squelchGateSource: "wdsp-fixed",
+            squelchOpenKnown: false);
+
+        var listenability = DspPipelineService.BuildRxListenabilityDiagnostics(
+            rxMeters,
+            audio,
+            new SquelchConfig(Enabled: true, Level: 42, Adaptive: false));
+
+        Assert.Equal("fixed-squelch-suspect", listenability.Status);
+        Assert.Equal("optimize", listenability.Tone);
+        Assert.True(listenability.SignalPresent);
+        Assert.False(listenability.AudioRecovered);
+        Assert.Equal("fixed-squelch", listenability.Blocker);
+        Assert.Contains("lower fixed SQL", listenability.Recommendation);
+    }
+
+    [Fact]
+    public void BuildRxListenabilityDiagnostics_ReportsRecoveredAudio()
+    {
+        var rxMeters = DspPipelineService.BuildRxMetersDiagnostics(
+            valid: true,
+            ageMs: 20,
+            channelId: 0,
+            rxDbm: -82.0,
+            meters: new RxMetersV2Frame(
+                SignalPk: -76.0f,
+                SignalAv: -88.0f,
+                AdcPk: -55.0f,
+                AdcAv: -68.0f,
+                AgcGain: -12.0f,
+                AgcEnvPk: -48.0f,
+                AgcEnvAv: -55.0f));
+        var audio = DspPipelineService.BuildAudioPathDiagnostics(
+            valid: true,
+            ageMs: 15,
+            lastSeq: 131,
+            framesBroadcast: 21,
+            source: "rx",
+            sampleRateHz: 48_000,
+            sampleCount: 1600,
+            rms: 0.04,
+            peak: 0.16,
+            txMonitorRequested: false,
+            squelchEnabled: false,
+            squelchOpen: true,
+            squelchTailActive: false,
+            squelchGain: 1.0,
+            monitorBacklogSamples: 0,
+            audioSinkCount: 2);
+
+        var listenability = DspPipelineService.BuildRxListenabilityDiagnostics(
+            rxMeters,
+            audio,
+            new SquelchConfig(Enabled: false, Level: 0, Adaptive: true));
+
+        Assert.Equal("audio-recovered", listenability.Status);
+        Assert.Equal("ready", listenability.Tone);
+        Assert.True(listenability.SignalPresent);
+        Assert.True(listenability.AudioRecovered);
+        Assert.Equal("none", listenability.Blocker);
+    }
+
+    [Fact]
     public void ApplyRxAudioLeveler_LiftsWeakAudioTowardSpeechLevel()
     {
         var state = new DspPipelineService.RxAudioLevelerState();

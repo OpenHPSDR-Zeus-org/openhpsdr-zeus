@@ -671,6 +671,16 @@ export type HardwareAudioDiagnosticsDto = {
   diagnosticRecommendation: string | null;
 };
 
+export type HardwareRxListenabilityDiagnosticsDto = {
+  schemaVersion: number;
+  status: string;
+  tone: string;
+  signalPresent: boolean;
+  audioRecovered: boolean;
+  blocker: string;
+  recommendation: string | null;
+};
+
 export type HardwareDspDiagnosticsDto = {
   schemaVersion: number;
   engine: string;
@@ -700,6 +710,7 @@ export type HardwareDspDiagnosticsDto = {
   rxDsp: HardwareRxDspDiagnosticsDto;
   rxMeters: HardwareRxMetersDiagnosticsDto;
   audio: HardwareAudioDiagnosticsDto;
+  listenability: HardwareRxListenabilityDiagnosticsDto;
   display: HardwareDisplayDiagnosticsDto;
   wdspWisdomPhase: string;
   wdspWisdomStatus: string;
@@ -2296,10 +2307,35 @@ function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
     rxDsp: normalizeHardwareRxDspDiagnostics(r.rxDsp),
     rxMeters: normalizeHardwareRxMetersDiagnostics(r.rxMeters),
     audio: normalizeHardwareAudioDiagnostics(r.audio),
+    listenability: normalizeHardwareRxListenabilityDiagnostics(r.listenability),
     display: normalizeHardwareDisplayDiagnostics(r.display),
     wdspWisdomPhase: diagString(r.wdspWisdomPhase) ?? 'Unknown',
     wdspWisdomStatus: diagString(r.wdspWisdomStatus) ?? '',
     readiness: diagString(r.readiness) ?? 'unknown',
+  };
+}
+
+function normalizeHardwareRxListenabilityDiagnostics(raw: unknown): HardwareRxListenabilityDiagnosticsDto {
+  if (raw === null || raw === undefined) {
+    return {
+      schemaVersion: 0,
+      status: 'unavailable',
+      tone: 'verify',
+      signalPresent: false,
+      audioRecovered: false,
+      blocker: 'diagnostics',
+      recommendation: 'RX listenability diagnostics are not available from this backend yet; restart OpenhpsdrZeus after updating to correlate RX meters, audio, and squelch evidence.',
+    };
+  }
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    status: diagString(r.status) ?? 'unknown',
+    tone: diagString(r.tone) ?? 'verify',
+    signalPresent: Boolean(r.signalPresent),
+    audioRecovered: Boolean(r.audioRecovered),
+    blocker: diagString(r.blocker) ?? 'unknown',
+    recommendation: diagString(r.recommendation),
   };
 }
 
