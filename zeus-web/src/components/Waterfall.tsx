@@ -59,13 +59,6 @@ import { NotchOverlay } from './NotchOverlay';
 import { PassbandOverlay } from './PassbandOverlay';
 import { WfDbScale } from './WfDbScale';
 
-// Throttle row uploads so the waterfall scrolls at ~(server tick / N).
-// With a 30 Hz server tick N=2 gives ~15 Hz, which is a comfortable scroll
-// speed without costing much CPU. Shift/reset still run every frame so VFO
-// retunes stay synchronised with the panadapter's offset.
-// TODO(phase-3.1): expose as a UI setting.
-const WF_PUSH_EVERY_N = 2;
-
 type WaterfallProps = {
   /** When true, noise floor fades to transparent so the QRZ-mode map shows through. */
   transparent?: boolean;
@@ -303,7 +296,8 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       let skipRowUpload = false;
       if (wfDb) {
         tickCounter++;
-        skipRowUpload = tickCounter % WF_PUSH_EVERY_N !== 0;
+        const cadence = useDisplaySettingsStore.getState().waterfallRowCadence;
+        skipRowUpload = tickCounter % cadence !== 0;
         // No refill hold here any more (issue #597 Phase 2): rows are
         // stamped with the LO their data was captured at, so the shared
         // shift planner places them correctly even mid-retune.

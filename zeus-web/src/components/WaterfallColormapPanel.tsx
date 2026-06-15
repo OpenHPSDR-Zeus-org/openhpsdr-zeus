@@ -15,7 +15,16 @@
 
 import { useMemo } from 'react';
 import { COLORMAPS, lutFor, type ColormapId } from '../gl/colormap';
-import { useDisplaySettingsStore } from '../state/display-settings-store';
+import {
+  useDisplaySettingsStore,
+  type WaterfallRowCadence,
+} from '../state/display-settings-store';
+
+const CADENCE_OPTIONS: Array<{ value: WaterfallRowCadence; label: string; detail: string }> = [
+  { value: 1, label: 'Smooth', detail: '30 Hz' },
+  { value: 2, label: 'Balanced', detail: '15 Hz' },
+  { value: 3, label: 'Economy', detail: '10 Hz' },
+];
 
 // Build a horizontal CSS gradient that mirrors the actual 256-entry LUT the
 // WebGL waterfall samples, so the swatch the operator picks is exactly the
@@ -39,6 +48,8 @@ function gradientCss(id: ColormapId): string {
 export function WaterfallColormapPanel() {
   const colormap = useDisplaySettingsStore((s) => s.colormap);
   const setColormap = useDisplaySettingsStore((s) => s.setColormap);
+  const waterfallRowCadence = useDisplaySettingsStore((s) => s.waterfallRowCadence);
+  const setWaterfallRowCadence = useDisplaySettingsStore((s) => s.setWaterfallRowCadence);
   const gradients = useMemo(
     () => Object.fromEntries(COLORMAPS.map((cm) => [cm.id, gradientCss(cm.id)])) as Record<ColormapId, string>,
     [],
@@ -71,6 +82,28 @@ export function WaterfallColormapPanel() {
           );
         })}
       </div>
+
+      <div style={cadenceBlock}>
+        <span style={cadenceLabel}>Row Cadence</span>
+        <div role="radiogroup" aria-label="Waterfall row cadence" style={cadenceRow}>
+          {CADENCE_OPTIONS.map((opt) => {
+            const active = waterfallRowCadence === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => setWaterfallRowCadence(opt.value)}
+                style={cadenceButton(active)}
+              >
+                <span style={cadenceButtonLabel(active)}>{opt.label}</span>
+                <span style={cadenceButtonDetail}>{opt.detail}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </section>
   );
 }
@@ -101,6 +134,65 @@ const cardGrid: React.CSSProperties = {
   display: 'grid',
   gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
   gap: 10,
+};
+
+const cadenceBlock: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  gap: 12,
+  marginTop: 14,
+  flexWrap: 'wrap',
+};
+
+const cadenceLabel: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: '0.14em',
+  textTransform: 'uppercase',
+  color: 'var(--fg-1)',
+};
+
+const cadenceRow: React.CSSProperties = {
+  display: 'inline-grid',
+  gridTemplateColumns: 'repeat(3, minmax(84px, 1fr))',
+  border: '1px solid var(--line)',
+  borderRadius: 'var(--r-sm)',
+  overflow: 'hidden',
+  minWidth: 276,
+};
+
+function cadenceButton(active: boolean): React.CSSProperties {
+  return {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 2,
+    minHeight: 42,
+    padding: '6px 10px',
+    border: 0,
+    borderRight: '1px solid var(--line)',
+    background: active ? 'var(--accent)' : 'var(--bg-1)',
+    color: active ? 'var(--bg-0)' : 'var(--fg-1)',
+    cursor: 'pointer',
+  };
+}
+
+function cadenceButtonLabel(active: boolean): React.CSSProperties {
+  return {
+    fontSize: 11,
+    fontWeight: 800,
+    letterSpacing: 0,
+    color: active ? 'var(--bg-0)' : 'var(--fg-0)',
+  };
+}
+
+const cadenceButtonDetail: React.CSSProperties = {
+  fontSize: 10,
+  letterSpacing: 0,
+  color: 'inherit',
+  opacity: 0.72,
 };
 
 function swatchCard(active: boolean): React.CSSProperties {

@@ -44,6 +44,7 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  DEFAULT_WF_ROW_CADENCE,
   FIXED_DB_MAX,
   FIXED_DB_MIN,
   useDisplaySettingsStore,
@@ -54,6 +55,7 @@ function resetStore() {
     autoRange: false,
     dbMin: FIXED_DB_MIN,
     dbMax: FIXED_DB_MAX,
+    waterfallRowCadence: DEFAULT_WF_ROW_CADENCE,
   });
 }
 
@@ -123,5 +125,23 @@ describe('display-settings-store', () => {
     const { dbMin, dbMax } = useDisplaySettingsStore.getState();
     expect(Number.isFinite(dbMin)).toBe(true);
     expect(Number.isFinite(dbMax)).toBe(true);
+  });
+
+  it('keeps balanced waterfall row cadence by default', () => {
+    const { waterfallRowCadence } = useDisplaySettingsStore.getState();
+    expect(waterfallRowCadence).toBe(DEFAULT_WF_ROW_CADENCE);
+  });
+
+  it('updates waterfall row cadence to valid operator choices only', () => {
+    const s = useDisplaySettingsStore.getState();
+
+    s.setWaterfallRowCadence(1);
+    expect(useDisplaySettingsStore.getState().waterfallRowCadence).toBe(1);
+
+    s.setWaterfallRowCadence(3);
+    expect(useDisplaySettingsStore.getState().waterfallRowCadence).toBe(3);
+
+    s.setWaterfallRowCadence(99 as never);
+    expect(useDisplaySettingsStore.getState().waterfallRowCadence).toBe(DEFAULT_WF_ROW_CADENCE);
   });
 });

@@ -34,8 +34,8 @@ const PS_MONITOR_UNSUPPORTED = new Set(['HermesLite2']);
 /**
  * PureSignal master arm. Optimistic update with rollback on server refusal —
  * same pattern as MoxButton. Available on both Protocol 1 (HL2) and
- * Protocol 2 (G2 / Orion / Saturn) once issue #172 lands the P1 wire-side
- * encoders + feedback extractor.
+ * Protocol 2 (G2 / Orion / Saturn); unsupported boards are rejected or
+ * no-op gated by the backend wire path.
  */
 export function PsToggleButton() {
   const connected = useConnectionStore((s) => s.status === 'Connected');
