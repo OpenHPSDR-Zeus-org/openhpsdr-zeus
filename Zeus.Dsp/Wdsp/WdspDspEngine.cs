@@ -3185,7 +3185,8 @@ public sealed class WdspDspEngine : IDspEngine
     // S-meter/noise floor, so WDSP fixed stages stay off when Adaptive=true.
     // Fixed mapping keeps the useful part of the slider in range while keeping
     // the low end sensitive. Level 0 is treated as fully open/pass-through;
-    // above that, the curve rises slowly so 1-30 stays near-open.
+    // above that, fixedSensitivity reshapes the curve so the operator can tune
+    // how easily weak/moderate signals open the fixed WDSP squelch.
     // - SSQL: 0..0.32, shaped so low levels stay permissive
     // - AMSQ: -150..-50 dB, shaped so low levels remain very permissive
     // - FMSQ: 1.0..0.2 noise threshold, inverted so higher = tighter
@@ -3207,50 +3208,65 @@ public sealed class WdspDspEngine : IDspEngine
         {
             NativeMethods.SetRXASSQLRun(id, 0);
             NativeMethods.SetRXAFMSQRun(id, 0);
-            NativeMethods.SetRXAAMSQThreshold(id, MapFixedAmsqThresholdDb(level));
+            NativeMethods.SetRXAAMSQThreshold(id, MapFixedAmsqThresholdDb(level, cfg.FixedSensitivity));
             NativeMethods.SetRXAAMSQRun(id, run);
         }
         else if (isFm)
         {
             NativeMethods.SetRXASSQLRun(id, 0);
             NativeMethods.SetRXAAMSQRun(id, 0);
-            NativeMethods.SetRXAFMSQThreshold(id, MapFixedFmsqThreshold(level));
+            NativeMethods.SetRXAFMSQThreshold(id, MapFixedFmsqThreshold(level, cfg.FixedSensitivity));
             NativeMethods.SetRXAFMSQRun(id, run);
         }
         else
         {
             NativeMethods.SetRXAAMSQRun(id, 0);
             NativeMethods.SetRXAFMSQRun(id, 0);
-            NativeMethods.SetRXASSQLThreshold(id, MapFixedSsqlThreshold(level));
+            NativeMethods.SetRXASSQLThreshold(id, MapFixedSsqlThreshold(level, cfg.FixedSensitivity));
             NativeMethods.SetRXASSQLRun(id, run);
         }
     }
 
-    private const double FixedSquelchCurve = 1.35;
+    private const double FixedSquelchMinCurve = 0.65;
 
     internal static bool ShouldRunFixedSquelch(SquelchConfig cfg) =>
         cfg.Enabled && !cfg.Adaptive && Math.Clamp(cfg.Level, 0, 100) > 0;
 
-    internal static double MapFixedSsqlThreshold(int level)
+    internal static double MapFixedSsqlThreshold(
+        int level,
+        int fixedSensitivity = SquelchConfig.DefaultFixedSensitivity)
     {
         double t = FixedSquelchLevel(level);
-        return Math.Pow(t, FixedSquelchCurve) * 0.32;
+        return Math.Pow(t, FixedSquelchCurve(fixedSensitivity)) * 0.32;
     }
 
-    internal static double MapFixedAmsqThresholdDb(int level)
+    internal static double MapFixedAmsqThresholdDb(
+        int level,
+        int fixedSensitivity = SquelchConfig.DefaultFixedSensitivity)
     {
         double t = FixedSquelchLevel(level);
-        return -150.0 + Math.Pow(t, FixedSquelchCurve) * 100.0;
+        return -150.0 + Math.Pow(t, FixedSquelchCurve(fixedSensitivity)) * 100.0;
     }
 
-    internal static double MapFixedFmsqThreshold(int level)
+    internal static double MapFixedFmsqThreshold(
+        int level,
+        int fixedSensitivity = SquelchConfig.DefaultFixedSensitivity)
     {
         double t = FixedSquelchLevel(level);
-        return 1.0 - Math.Pow(t, FixedSquelchCurve) * 0.8;
+        return 1.0 - Math.Pow(t, FixedSquelchCurve(fixedSensitivity)) * 0.8;
     }
 
     private static double FixedSquelchLevel(int level) =>
         Math.Clamp(level, 0, 100) / 100.0;
+
+    private static double FixedSquelchSensitivity(int fixedSensitivity) =>
+        Math.Clamp(
+            fixedSensitivity,
+            SquelchConfig.MinFixedSensitivity,
+            SquelchConfig.MaxFixedSensitivity) / 100.0;
+
+    private static double FixedSquelchCurve(int fixedSensitivity) =>
+        FixedSquelchMinCurve + FixedSquelchSensitivity(fixedSensitivity);
 
     // WDSP bandpass takes signed frequencies: LSB-family modes live in negative
     // baseband (low=-high, high=-low), USB-family in positive. CW follows the

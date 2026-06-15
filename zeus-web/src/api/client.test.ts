@@ -1808,7 +1808,12 @@ describe('POST helpers', () => {
       .mockResolvedValue(jsonResponse(okState));
     vi.stubGlobal('fetch', fetchMock);
 
-    const cfg: SquelchConfigDto = { enabled: true, level: 42, adaptive: true };
+    const cfg: SquelchConfigDto = {
+      enabled: true,
+      level: 42,
+      adaptive: true,
+      fixedSensitivity: 70,
+    };
     await setSquelch(cfg);
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('/api/rx/squelch');
@@ -2000,11 +2005,12 @@ describe('normalizeSquelch', () => {
     const s = normalizeState({
       status: 'Connected',
       mode: 'USB',
-      squelch: { enabled: true, level: 73, adaptive: false },
+      squelch: { enabled: true, level: 73, adaptive: false, fixedSensitivity: 84 },
     });
     expect(s.squelch.enabled).toBe(true);
     expect(s.squelch.level).toBe(73);
     expect(s.squelch.adaptive).toBe(false);
+    expect(s.squelch.fixedSensitivity).toBe(84);
   });
 
   it('defaults enabled to false when the field is missing or garbage', () => {
@@ -2029,6 +2035,17 @@ describe('normalizeSquelch', () => {
   it('defaults adaptive mode on for older payloads', () => {
     expect(normalizeSquelch({ enabled: true, level: 20 }).adaptive).toBe(true);
     expect(normalizeSquelch({ enabled: true, level: 20, adaptive: 'yes' }).adaptive).toBe(true);
+  });
+
+  it('defaults fixed sensitivity for older payloads', () => {
+    expect(normalizeSquelch({ enabled: true, level: 20 }).fixedSensitivity).toBe(70);
+    expect(normalizeSquelch({ enabled: true, level: 20, fixedSensitivity: 'hot' }).fixedSensitivity).toBe(70);
+  });
+
+  it('clamps and rounds fixed sensitivity into 0..100', () => {
+    expect(normalizeSquelch({ enabled: true, fixedSensitivity: -5 }).fixedSensitivity).toBe(0);
+    expect(normalizeSquelch({ enabled: true, fixedSensitivity: 250 }).fixedSensitivity).toBe(100);
+    expect(normalizeSquelch({ enabled: true, fixedSensitivity: 42.6 }).fixedSensitivity).toBe(43);
   });
 });
 

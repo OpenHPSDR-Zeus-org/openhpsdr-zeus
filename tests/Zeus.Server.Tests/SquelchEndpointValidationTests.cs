@@ -59,6 +59,7 @@ public class SquelchEndpointValidationTests : IClassFixture<SquelchEndpointValid
         Assert.Equal(enabled, snap!.Enabled);
         Assert.Equal(level, snap.Level);
         Assert.True(snap.Adaptive);
+        Assert.Equal(SquelchConfig.DefaultFixedSensitivity, snap.FixedSensitivity);
     }
 
     [Fact]
@@ -69,7 +70,7 @@ public class SquelchEndpointValidationTests : IClassFixture<SquelchEndpointValid
         using var client = _factory.CreateClient();
 
         var resp = await client.PostAsJsonAsync(
-            "/api/rx/squelch", new { squelch = new { enabled = true, level = 42, adaptive = false } });
+            "/api/rx/squelch", new { squelch = new { enabled = true, level = 42, adaptive = false, fixedSensitivity = 85 } });
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
 
         var snap = radio.Snapshot().Squelch;
@@ -77,6 +78,7 @@ public class SquelchEndpointValidationTests : IClassFixture<SquelchEndpointValid
         Assert.True(snap!.Enabled);
         Assert.Equal(42, snap.Level);
         Assert.False(snap.Adaptive);
+        Assert.Equal(85, snap.FixedSensitivity);
     }
 
     [Theory]
@@ -101,6 +103,31 @@ public class SquelchEndpointValidationTests : IClassFixture<SquelchEndpointValid
         Assert.Equal(before?.Enabled, after?.Enabled);
         Assert.Equal(before?.Level, after?.Level);
         Assert.Equal(before?.Adaptive, after?.Adaptive);
+        Assert.Equal(before?.FixedSensitivity, after?.FixedSensitivity);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(101)]
+    [InlineData(999)]
+    public async Task PostOutOfRangeFixedSensitivity_Returns400_AndDoesNotMutateState(int fixedSensitivity)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var radio = scope.ServiceProvider.GetRequiredService<RadioService>();
+        var before = radio.Snapshot().Squelch;
+        using var client = _factory.CreateClient();
+
+        using var content = new StringContent(
+            $"{{\"squelch\":{{\"enabled\":true,\"level\":20,\"adaptive\":false,\"fixedSensitivity\":{fixedSensitivity}}}}}",
+            Encoding.UTF8, "application/json");
+        var resp = await client.PostAsync("/api/rx/squelch", content);
+        Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
+
+        var after = radio.Snapshot().Squelch;
+        Assert.Equal(before?.Enabled, after?.Enabled);
+        Assert.Equal(before?.Level, after?.Level);
+        Assert.Equal(before?.Adaptive, after?.Adaptive);
+        Assert.Equal(before?.FixedSensitivity, after?.FixedSensitivity);
     }
 
     public sealed class Factory : WebApplicationFactory<Program>

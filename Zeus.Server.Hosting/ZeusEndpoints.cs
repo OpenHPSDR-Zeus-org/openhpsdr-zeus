@@ -797,10 +797,13 @@ public static class ZeusEndpoints
         app.MapPost("/api/rx/squelch", (SquelchSetRequest req, RadioService r) =>
         {
             log.LogInformation(
-                "api.rx.squelch enabled={Enabled} level={Level}",
-                req.Squelch.Enabled, req.Squelch.Level);
+                "api.rx.squelch enabled={Enabled} level={Level} adaptive={Adaptive} fixedSensitivity={FixedSensitivity}",
+                req.Squelch.Enabled, req.Squelch.Level, req.Squelch.Adaptive, req.Squelch.FixedSensitivity);
             if (req.Squelch.Level < 0 || req.Squelch.Level > 100)
                 return Results.BadRequest(new { error = $"Squelch Level {req.Squelch.Level} out of range 0..100" });
+            if (req.Squelch.FixedSensitivity < SquelchConfig.MinFixedSensitivity ||
+                req.Squelch.FixedSensitivity > SquelchConfig.MaxFixedSensitivity)
+                return Results.BadRequest(new { error = $"Squelch FixedSensitivity {req.Squelch.FixedSensitivity} out of range 0..100" });
             return Results.Ok(r.SetSquelch(req.Squelch));
         });
 

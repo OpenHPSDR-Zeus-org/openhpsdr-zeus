@@ -385,13 +385,21 @@ public sealed record AgcConfig(
 // AMSQ, FM → FMSQ) and clears the other two. Adaptive=true uses the live
 // S-meter/noise-floor gate in DspPipelineService; Adaptive=false uses WDSP's
 // fixed per-mode squelch stages. Level is a unitless 0..100 where higher =
-// tighter squelch. Defaults Enabled=false, Level=0, Adaptive=true keep squelch
-// off while making new/old clients land on the more intuitive dynamic mode once
-// enabled. Persisted globally via DspSettingsStore — same pattern as Agc/Nr.
+// tighter squelch. FixedSensitivity shapes the fixed-mode level mapping:
+// higher values keep weak/moderate signals open more easily. Defaults
+// Enabled=false, Level=0, Adaptive=true keep squelch off while making new/old
+// clients land on the more intuitive dynamic mode once enabled. Persisted
+// globally via DspSettingsStore — same pattern as Agc/Nr.
 public sealed record SquelchConfig(
     bool Enabled = false,
     int Level = 0,
-    bool Adaptive = true);
+    bool Adaptive = true,
+    int FixedSensitivity = 70)
+{
+    public const int MinFixedSensitivity = 0;
+    public const int MaxFixedSensitivity = 100;
+    public const int DefaultFixedSensitivity = 70;
+}
 
 // Operator-facing TX leveling configuration (issue: DSP controls Thetis parity
 // §6.1-6.3). Bundles the three TXA dynamics stages the operator reaches for:

@@ -95,18 +95,21 @@ export const AGC_CONFIG_DEFAULT: AgcConfigDto = {
 // routes run + threshold to the WDSP squelch stage matching the current RX
 // mode (SSB/CW → SSQL, AM/SAM → AMSQ, FM → FMSQ). `adaptive` enables the
 // server-side noise-floor gate; false keeps the fixed WDSP squelch stages.
-// `level` is a unitless 0..100 where higher = tighter squelch. Mirrors
+// `level` is a unitless 0..100 where higher = tighter squelch.
+// `fixedSensitivity` is 0..100 and only shapes fixed-mode SQL. Mirrors
 // Zeus.Contracts SquelchConfig.
 export type SquelchConfigDto = {
   enabled: boolean;
   level: number;
   adaptive: boolean;
+  fixedSensitivity: number;
 };
 
 export const SQUELCH_CONFIG_DEFAULT: SquelchConfigDto = {
   enabled: false,
   level: 0,
   adaptive: true,
+  fixedSensitivity: 70,
 };
 
 // TX leveling — ALC (max-gain + decay), Leveler (on/off + decay), Compressor
@@ -1455,10 +1458,15 @@ export function normalizeSquelch(raw: unknown): SquelchConfigDto {
     typeof r.level === 'number' && Number.isFinite(r.level)
       ? Math.max(0, Math.min(100, Math.round(r.level)))
       : 0;
+  const fixedSensitivity =
+    typeof r.fixedSensitivity === 'number' && Number.isFinite(r.fixedSensitivity)
+      ? Math.max(0, Math.min(100, Math.round(r.fixedSensitivity)))
+      : SQUELCH_CONFIG_DEFAULT.fixedSensitivity;
   return {
     enabled: typeof r.enabled === 'boolean' ? r.enabled : false,
     level,
     adaptive: typeof r.adaptive === 'boolean' ? r.adaptive : true,
+    fixedSensitivity,
   };
 }
 

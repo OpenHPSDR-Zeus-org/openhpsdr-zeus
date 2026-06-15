@@ -43,7 +43,7 @@ public class SquelchSettingsPersistenceTests : IDisposable
     [Fact]
     public void SetSquelch_EnabledConfig_RoundTripsAllFields()
     {
-        var cfg = new SquelchConfig(Enabled: true, Level: 42, Adaptive: false);
+        var cfg = new SquelchConfig(Enabled: true, Level: 42, Adaptive: false, FixedSensitivity: 88);
 
         using (var store = BuildStore())
             store.SetSquelch(cfg);
@@ -55,6 +55,7 @@ public class SquelchSettingsPersistenceTests : IDisposable
         Assert.True(back!.Enabled);
         Assert.Equal(42, back.Level);
         Assert.False(back.Adaptive);
+        Assert.Equal(88, back.FixedSensitivity);
     }
 
     // --- 2. Default off (level 0) round-trips faithfully -------------------
@@ -73,6 +74,7 @@ public class SquelchSettingsPersistenceTests : IDisposable
         Assert.False(back!.Enabled);
         Assert.Equal(0, back.Level);
         Assert.True(back.Adaptive);
+        Assert.Equal(SquelchConfig.DefaultFixedSensitivity, back.FixedSensitivity);
     }
 
     // --- 3. Fresh / legacy entry: GetSquelch returns null -----------------
@@ -104,7 +106,7 @@ public class SquelchSettingsPersistenceTests : IDisposable
     public void SetSquelch_UpsertOverwritesExistingConfig()
     {
         var first  = new SquelchConfig(Enabled: true, Level: 10);
-        var second = new SquelchConfig(Enabled: true, Level: 75, Adaptive: false);
+        var second = new SquelchConfig(Enabled: true, Level: 75, Adaptive: false, FixedSensitivity: 35);
 
         using var store = BuildStore();
         store.SetSquelch(first);
@@ -115,5 +117,6 @@ public class SquelchSettingsPersistenceTests : IDisposable
         Assert.True(back!.Enabled);
         Assert.Equal(75, back.Level);
         Assert.False(back.Adaptive);
+        Assert.Equal(35, back.FixedSensitivity);
     }
 }

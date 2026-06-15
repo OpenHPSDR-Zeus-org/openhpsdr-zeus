@@ -59,6 +59,7 @@ export function SquelchSettingsSection() {
 
   const stage = stageForMode(mode);
   const levelDisabled = !connected || squelch.adaptive;
+  const fixedSensitivityDisabled = !connected || squelch.adaptive;
 
   return (
     <div className="dsp-cfg">
@@ -104,6 +105,35 @@ export function SquelchSettingsSection() {
           style={{ color: squelch.adaptive ? 'var(--fg-3)' : undefined }}
         >
           {squelch.adaptive ? 'AUTO' : squelch.level}
+        </span>
+      </label>
+
+      <label className="dsp-cfg-row">
+        <span className="dsp-cfg-label">
+          Sensitivity
+          <span className="dsp-cfg-hint"> fixed SQL</span>
+        </span>
+        <input
+          type="range"
+          min={0}
+          max={100}
+          step={1}
+          value={squelch.fixedSensitivity}
+          disabled={fixedSensitivityDisabled}
+          title={squelch.adaptive ? 'DYN mode tracks the noise floor automatically' : 'Fixed SQL sensitivity'}
+          onChange={(e) => send({ ...squelch, fixedSensitivity: Number(e.currentTarget.value) })}
+          style={{
+            flex: 1,
+            cursor: fixedSensitivityDisabled ? 'not-allowed' : 'pointer',
+            accentColor: fixedSensitivityDisabled ? 'var(--fg-3)' : 'var(--accent)',
+            opacity: fixedSensitivityDisabled ? 0.55 : 1,
+          }}
+        />
+        <span
+          className="dsp-cfg-unit mono"
+          style={{ color: fixedSensitivityDisabled ? 'var(--fg-3)' : undefined }}
+        >
+          {squelch.fixedSensitivity}
         </span>
       </label>
 

@@ -79,6 +79,34 @@ public class WdspDspEngineTests
     }
 
     [Fact]
+    public void FixedSquelchMapping_SensitivityShapesLowAndMidLevels()
+    {
+        const int Level = 25;
+
+        var looseSsql = WdspDspEngine.MapFixedSsqlThreshold(Level, fixedSensitivity: 100);
+        var defaultSsql = WdspDspEngine.MapFixedSsqlThreshold(Level);
+        var tightSsql = WdspDspEngine.MapFixedSsqlThreshold(Level, fixedSensitivity: 0);
+        Assert.True(looseSsql < defaultSsql);
+        Assert.True(defaultSsql < tightSsql);
+
+        var looseAmsq = WdspDspEngine.MapFixedAmsqThresholdDb(Level, fixedSensitivity: 100);
+        var defaultAmsq = WdspDspEngine.MapFixedAmsqThresholdDb(Level);
+        var tightAmsq = WdspDspEngine.MapFixedAmsqThresholdDb(Level, fixedSensitivity: 0);
+        Assert.True(looseAmsq < defaultAmsq);
+        Assert.True(defaultAmsq < tightAmsq);
+
+        var looseFmsq = WdspDspEngine.MapFixedFmsqThreshold(Level, fixedSensitivity: 100);
+        var defaultFmsq = WdspDspEngine.MapFixedFmsqThreshold(Level);
+        var tightFmsq = WdspDspEngine.MapFixedFmsqThreshold(Level, fixedSensitivity: 0);
+        Assert.True(looseFmsq > defaultFmsq);
+        Assert.True(defaultFmsq > tightFmsq);
+
+        Assert.Equal(0.32, WdspDspEngine.MapFixedSsqlThreshold(100, fixedSensitivity: 100), precision: 6);
+        Assert.Equal(-50.0, WdspDspEngine.MapFixedAmsqThresholdDb(100, fixedSensitivity: 0), precision: 6);
+        Assert.Equal(0.2, WdspDspEngine.MapFixedFmsqThreshold(100, fixedSensitivity: 100), precision: 6);
+    }
+
+    [Fact]
     public void FixedSquelchRun_LevelZeroIsOpenPassThrough()
     {
         Assert.False(WdspDspEngine.ShouldRunFixedSquelch(
