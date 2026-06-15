@@ -857,8 +857,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         }
     }
 
-    private static int Int24Clamp(float v)
+    internal static int Int24Clamp(float v)
     {
+        if (!float.IsFinite(v)) return 0;
         if (v >  1.0f) v =  1.0f;
         if (v < -1.0f) v = -1.0f;
         // 8_388_607 = 2^23 - 1. Using the ceiling (8_388_608) would map +1.0
