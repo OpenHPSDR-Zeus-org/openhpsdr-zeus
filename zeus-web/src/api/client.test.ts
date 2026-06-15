@@ -66,6 +66,7 @@ import {
   fetchHardwareKeyingStatus,
   fetchRadioDigInDiagnostics,
   fetchRadioNetworkProfile,
+  fetchRadioPaThermalDiagnostics,
   fetchRadioPowerCalibration,
   fetchRadioSupplyAlarms,
   fetchSmartNrCondition,
@@ -1938,6 +1939,47 @@ describe('POST helpers', () => {
     expect(status.p2.rawScaledSupplyVolts).toBe(13.8);
     expect(status.p2.supplyVoltsTrusted).toBe(true);
     expect(status.p2.scaleStatus).toBe('trusted');
+  });
+
+  it('fetchRadioPaThermalDiagnostics reads decoded and unmapped thermal status', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      activeProtocol: 'P2',
+      connectedBoard: 'OrionMkII',
+      effectiveBoard: 'OrionMkII',
+      orionMkIIVariant: 'G2',
+      supportsTemperatureTelemetry: true,
+      temperatureDecoded: false,
+      temperatureAvailable: false,
+      source: 'p2-g2-temperature-slot-unmapped',
+      status: 'p2-g2-temp-unmapped',
+      tempC: null,
+      rawAdc: null,
+      ageMs: null,
+      lastUpdatedUtc: null,
+      warningTempC: 50,
+      criticalTempC: 55,
+      manualReference: 'G2 manual documents temperature sensors and fan cooling.',
+      diagnosticRecommendation: 'Capture P2 diagnostics markers before arming thermal inhibit.',
+      generatedUtc: '2026-06-15T01:00:01Z',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const status = await fetchRadioPaThermalDiagnostics();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/pa-thermal');
+    expect(init?.method).toBeUndefined();
+    expect(status.activeProtocol).toBe('P2');
+    expect(status.connectedBoard).toBe('OrionMkII');
+    expect(status.supportsTemperatureTelemetry).toBe(true);
+    expect(status.temperatureDecoded).toBe(false);
+    expect(status.temperatureAvailable).toBe(false);
+    expect(status.source).toBe('p2-g2-temperature-slot-unmapped');
+    expect(status.status).toBe('p2-g2-temp-unmapped');
+    expect(status.tempC).toBeNull();
+    expect(status.warningTempC).toBe(50);
+    expect(status.criticalTempC).toBe(55);
   });
 
   it('fetchRadioNetworkProfile reads active transport counters', async () => {

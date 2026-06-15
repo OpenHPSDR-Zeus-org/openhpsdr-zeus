@@ -1107,6 +1107,28 @@ export type RadioSupplyAlarmsDto = {
   generatedUtc: string;
 };
 
+export type RadioPaThermalDiagnosticsDto = {
+  schemaVersion: number;
+  activeProtocol: 'P1' | 'P2' | null;
+  connectedBoard: string;
+  effectiveBoard: string;
+  orionMkIIVariant: string;
+  supportsTemperatureTelemetry: boolean;
+  temperatureDecoded: boolean;
+  temperatureAvailable: boolean;
+  source: string;
+  status: string;
+  tempC: number | null;
+  rawAdc: number | null;
+  ageMs: number | null;
+  lastUpdatedUtc: string | null;
+  warningTempC: number;
+  criticalTempC: number;
+  manualReference: string | null;
+  diagnosticRecommendation: string | null;
+  generatedUtc: string;
+};
+
 export type RadioNetworkCountersDto = {
   attached: boolean;
   totalFrames: number;
@@ -3230,6 +3252,34 @@ function normalizeRadioSupplyAlarms(raw: unknown): RadioSupplyAlarmsDto {
   };
 }
 
+function normalizeRadioPaThermalDiagnostics(raw: unknown): RadioPaThermalDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    activeProtocol: diagActiveProtocol(r.activeProtocol),
+    connectedBoard: diagString(r.connectedBoard) ?? 'Unknown',
+    effectiveBoard: diagString(r.effectiveBoard) ?? 'Unknown',
+    orionMkIIVariant: diagString(r.orionMkIIVariant) ?? 'G2',
+    supportsTemperatureTelemetry: Boolean(r.supportsTemperatureTelemetry),
+    temperatureDecoded: Boolean(r.temperatureDecoded),
+    temperatureAvailable: Boolean(r.temperatureAvailable),
+    source: diagString(r.source) ?? 'unavailable',
+    status: diagString(r.status) ?? 'unknown',
+    tempC: diagNumber(r.tempC),
+    rawAdc: diagNumber(r.rawAdc),
+    ageMs: diagNumber(r.ageMs),
+    lastUpdatedUtc: diagString(r.lastUpdatedUtc),
+    warningTempC: diagNumber(r.warningTempC) ?? 50,
+    criticalTempC: diagNumber(r.criticalTempC) ?? 55,
+    manualReference: diagString(r.manualReference),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+    generatedUtc:
+      typeof r.generatedUtc === 'string'
+        ? r.generatedUtc
+        : new Date().toISOString(),
+  };
+}
+
 function normalizeRadioNetworkCounters(raw: unknown): RadioNetworkCountersDto {
   const r = asDiagRecord(raw);
   return {
@@ -4252,6 +4302,16 @@ export function fetchRadioSupplyAlarms(
     '/api/radio/supply-alarms',
     { signal },
     normalizeRadioSupplyAlarms,
+  );
+}
+
+export function fetchRadioPaThermalDiagnostics(
+  signal?: AbortSignal,
+): Promise<RadioPaThermalDiagnosticsDto> {
+  return jsonFetch(
+    '/api/radio/pa-thermal',
+    { signal },
+    normalizeRadioPaThermalDiagnostics,
   );
 }
 

@@ -12,6 +12,7 @@ import {
   fetchHardwareKeyingStatus,
   fetchRadioDigInDiagnostics,
   fetchRadioNetworkProfile,
+  fetchRadioPaThermalDiagnostics,
   fetchRadioSupplyAlarms,
   fetchRadios,
   fetchSmartNrCondition,
@@ -32,6 +33,7 @@ import {
   type RadioNetworkCountersDto,
   type RadioDigInDiagnosticsDto,
   type RadioNetworkProfileDto,
+  type RadioPaThermalDiagnosticsDto,
   type RadioInfoDto,
   type RadioSupplyAlarmsDto,
   type SmartNrConditionDto,
@@ -162,6 +164,11 @@ function count(v: number | null | undefined): string {
 function volts(v: number | null | undefined): string {
   if (v === null || v === undefined) return '-';
   return `${v.toFixed(2)} V`;
+}
+
+function celsius(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '-';
+  return `${v.toFixed(1)} C`;
 }
 
 function hz(v: number | null | undefined): string {
@@ -389,6 +396,36 @@ function SupplyAlarmDiagnostics({ alarms }: { alarms: RadioSupplyAlarmsDto | nul
       <SupplyReading label="Protocol 1" reading={alarms.p1} />
       <SupplyReading label="Protocol 2" reading={alarms.p2} />
       <DiagnosticRecommendation text={alarms.diagnosticRecommendation} />
+    </div>
+  );
+}
+
+function PaThermalDiagnostics({ thermal }: { thermal: RadioPaThermalDiagnosticsDto | null }) {
+  if (!thermal) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for PA thermal telemetry.</div>;
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Protocol', value: thermal.activeProtocol },
+          { label: 'Connected', value: thermal.connectedBoard },
+          { label: 'Effective', value: thermal.effectiveBoard },
+          { label: 'Variant', value: thermal.orionMkIIVariant },
+          { label: 'Supported', value: boolLabel(thermal.supportsTemperatureTelemetry) },
+          { label: 'Decoded', value: boolLabel(thermal.temperatureDecoded) },
+          { label: 'Available', value: boolLabel(thermal.temperatureAvailable) },
+          { label: 'Status', value: thermal.status },
+          { label: 'Source', value: thermal.source },
+          { label: 'Temp', value: celsius(thermal.tempC) },
+          { label: 'Raw ADC', value: thermal.rawAdc === null ? null : thermal.rawAdc.toFixed(1) },
+          { label: 'Age', value: age(thermal.ageMs) },
+          { label: 'Updated', value: time(thermal.lastUpdatedUtc) },
+          { label: 'Warn', value: celsius(thermal.warningTempC) },
+          { label: 'Critical', value: celsius(thermal.criticalTempC) },
+          { label: 'Generated', value: time(thermal.generatedUtc) },
+        ]}
+      />
+      <DiagnosticRecommendation text={thermal.diagnosticRecommendation} />
+      <DiagnosticRecommendation text={thermal.manualReference} />
     </div>
   );
 }
@@ -999,7 +1036,7 @@ function featureNextStep(id: string): string {
     case 'rx.auto-attenuation.adc-overload':
       return 'Use the live ADC protection endpoint for per-radio presets, overload history, and profile suggestions based on band noise and ADC headroom.';
     case 'pa.telemetry.power-supply':
-      return 'Add calibrated PA/supply meters, per-radio conversion constants, warning thresholds, and supply sag alarms.';
+      return 'Map the G2 P2 PA-temperature word with marker captures, then add per-radio supply and thermal thresholds before arming TX inhibits.';
     case 'hardware.user-io':
       return 'Expose user ADC/DIN labels, thresholds, debounce, and safe action bindings after each physical line is correlated.';
     case 'hardware.front-panel.leds':
@@ -1652,6 +1689,7 @@ export function HardwareDiagnosticsPanel() {
   const [radios, setRadios] = useState<RadioInfoDto[] | null>(null);
   const [keying, setKeying] = useState<HardwareKeyingStatusDto | null>(null);
   const [supplyAlarms, setSupplyAlarms] = useState<RadioSupplyAlarmsDto | null>(null);
+  const [paThermal, setPaThermal] = useState<RadioPaThermalDiagnosticsDto | null>(null);
   const [networkProfile, setNetworkProfile] = useState<RadioNetworkProfileDto | null>(null);
   const [txDiagnostics, setTxDiagnostics] = useState<TxDiagnosticsDto | null>(null);
   const [smartNrCondition, setSmartNrCondition] = useState<SmartNrConditionDto | null>(null);
@@ -1704,10 +1742,11 @@ export function HardwareDiagnosticsPanel() {
   const loadEndpointDiagnostics = useCallback(async (signal?: AbortSignal) => {
     setEndpointBusy(true);
     try {
-      const [nextKeying, nextSupply, nextNetwork, nextTx, nextSmartNr, nextDspLive, nextLabels, nextActions, nextDigIn] =
+      const [nextKeying, nextSupply, nextThermal, nextNetwork, nextTx, nextSmartNr, nextDspLive, nextLabels, nextActions, nextDigIn] =
         await Promise.allSettled([
           fetchHardwareKeyingStatus(signal),
           fetchRadioSupplyAlarms(signal),
+          fetchRadioPaThermalDiagnostics(signal),
           fetchRadioNetworkProfile(signal),
           fetchTxDiagnostics(signal),
           fetchSmartNrCondition(signal),
@@ -1719,6 +1758,7 @@ export function HardwareDiagnosticsPanel() {
 
       if (nextKeying.status === 'fulfilled') setKeying(nextKeying.value);
       if (nextSupply.status === 'fulfilled') setSupplyAlarms(nextSupply.value);
+      if (nextThermal.status === 'fulfilled') setPaThermal(nextThermal.value);
       if (nextNetwork.status === 'fulfilled') setNetworkProfile(nextNetwork.value);
       if (nextTx.status === 'fulfilled') setTxDiagnostics(nextTx.value);
       if (nextSmartNr.status === 'fulfilled') setSmartNrCondition(nextSmartNr.value);
@@ -1727,7 +1767,7 @@ export function HardwareDiagnosticsPanel() {
       if (nextActions.status === 'fulfilled') setUserIoActions(nextActions.value);
       if (nextDigIn.status === 'fulfilled') setDigInDiagnostics(nextDigIn.value);
 
-      const failures = [nextKeying, nextSupply, nextNetwork, nextTx, nextSmartNr, nextDspLive, nextLabels, nextActions, nextDigIn]
+      const failures = [nextKeying, nextSupply, nextThermal, nextNetwork, nextTx, nextSmartNr, nextDspLive, nextLabels, nextActions, nextDigIn]
         .filter(
           (result): result is PromiseRejectedResult =>
             result.status === 'rejected' &&
@@ -2372,6 +2412,14 @@ export function HardwareDiagnosticsPanel() {
                 <span className="ps-card-hint">scaled P1/P2 supply telemetry</span>
               </h4>
               <SupplyAlarmDiagnostics alarms={supplyAlarms} />
+            </div>
+
+            <div className="ps-card">
+              <h4>
+                PA Thermal Diagnostics
+                <span className="ps-card-hint">decoded HL2 temp / G2 P2 mapping status</span>
+              </h4>
+              <PaThermalDiagnostics thermal={paThermal} />
             </div>
 
             <div className="ps-card">

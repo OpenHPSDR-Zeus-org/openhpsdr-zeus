@@ -688,6 +688,27 @@ public sealed record RadioSupplyAlarmsDto(
     string DiagnosticRecommendation,
     DateTimeOffset GeneratedUtc);
 
+public sealed record RadioPaThermalDiagnosticsDto(
+    int SchemaVersion,
+    string? ActiveProtocol,
+    string ConnectedBoard,
+    string EffectiveBoard,
+    string OrionMkIIVariant,
+    bool SupportsTemperatureTelemetry,
+    bool TemperatureDecoded,
+    bool TemperatureAvailable,
+    string Source,
+    string Status,
+    double? TempC,
+    double? RawAdc,
+    long? AgeMs,
+    DateTimeOffset? LastUpdatedUtc,
+    double WarningTempC,
+    double CriticalTempC,
+    string ManualReference,
+    string DiagnosticRecommendation,
+    DateTimeOffset GeneratedUtc);
+
 public sealed record RadioNetworkCountersDto(
     bool Attached,
     long TotalFrames,

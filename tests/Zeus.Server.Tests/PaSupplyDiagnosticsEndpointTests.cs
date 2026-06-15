@@ -6,6 +6,7 @@ using System.Net;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Zeus.Contracts;
@@ -15,6 +16,9 @@ namespace Zeus.Server.Tests;
 
 public sealed class PaSupplyDiagnosticsEndpointTests
 {
+    private static ushort RawForTempC(double tempC)
+        => (ushort)Math.Round((tempC / 100.0 + 0.5) * 4096.0 / 3.26);
+
     [Fact]
     public async Task PowerCalibration_ReturnsExistingMeterCalibrationAndEmptyTelemetry()
     {
@@ -98,6 +102,68 @@ public sealed class PaSupplyDiagnosticsEndpointTests
     }
 
     [Fact]
+    public async Task PaThermal_ReturnsG2P2MappingGapStatus()
+    {
+        using var factory = new Factory();
+        using var client = factory.CreateClient();
+        factory.Services.GetRequiredService<TxMetersService>()
+            .ApplyPaTempSmoothed(RawForTempC(44.0));
+        var radio = factory.Services.GetRequiredService<RadioService>();
+        radio.MarkProtocol2Connected(
+            endpoint: "192.168.1.25:1024",
+            sampleRateHz: 384_000,
+            client: null,
+            boardKind: HpsdrBoardKind.OrionMkII);
+
+        var resp = await client.GetAsync("/api/radio/pa-thermal");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+        var root = body.RootElement;
+
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("P2", root.GetProperty("activeProtocol").GetString());
+        Assert.Equal("OrionMkII", root.GetProperty("connectedBoard").GetString());
+        Assert.Equal("G2", root.GetProperty("orionMkIIVariant").GetString());
+        Assert.True(root.GetProperty("supportsTemperatureTelemetry").GetBoolean());
+        Assert.False(root.GetProperty("temperatureDecoded").GetBoolean());
+        Assert.False(root.GetProperty("temperatureAvailable").GetBoolean());
+        Assert.Equal("p2-g2-temperature-slot-unmapped", root.GetProperty("source").GetString());
+        Assert.Equal("p2-g2-temp-unmapped", root.GetProperty("status").GetString());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("tempC").ValueKind);
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("rawAdc").ValueKind);
+        Assert.Contains("temperature sensors", root.GetProperty("manualReference").GetString());
+        Assert.Contains("has not mapped the G2 Protocol-2 PA-temperature word", root.GetProperty("diagnosticRecommendation").GetString());
+    }
+
+    [Fact]
+    public async Task PaThermal_ReturnsDecodedP1TemperatureWhenSampleArrives()
+    {
+        using var factory = new Factory();
+        using var client = factory.CreateClient();
+        var txMeters = factory.Services.GetRequiredService<TxMetersService>();
+
+        txMeters.ApplyPaTempSmoothed(RawForTempC(44.0));
+
+        var resp = await client.GetAsync("/api/radio/pa-thermal");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+        var root = body.RootElement;
+
+        Assert.True(root.GetProperty("supportsTemperatureTelemetry").GetBoolean());
+        Assert.True(root.GetProperty("temperatureDecoded").GetBoolean());
+        Assert.True(root.GetProperty("temperatureAvailable").GetBoolean());
+        Assert.Equal("p1-hl2-c0-0x08-ain0", root.GetProperty("source").GetString());
+        Assert.Equal("fresh", root.GetProperty("status").GetString());
+        Assert.InRange(root.GetProperty("tempC").GetDouble(), 43.5, 44.5);
+        Assert.Equal(50.0, root.GetProperty("warningTempC").GetDouble());
+        Assert.Equal(55.0, root.GetProperty("criticalTempC").GetDouble());
+        Assert.True(root.GetProperty("ageMs").GetInt64() >= 0);
+        Assert.Contains("decoded from the Protocol-1 HL2 C&C echo slot", root.GetProperty("diagnosticRecommendation").GetString());
+    }
+
+    [Fact]
     public async Task HardwareDiagnostics_AdvertisesLivePaSupplyEndpoints()
     {
         using var factory = new Factory();
@@ -118,6 +184,7 @@ public sealed class PaSupplyDiagnosticsEndpointTests
 
         Assert.Contains("/api/radio/power-calibration", controls);
         Assert.Contains("/api/radio/supply-alarms", controls);
+        Assert.Contains("/api/radio/pa-thermal", controls);
         Assert.Contains("/api/pa-settings", controls);
         Assert.DoesNotContain("planned:/api/radio/power-calibration", controls);
         Assert.DoesNotContain("planned:/api/radio/supply-alarms", controls);
@@ -125,6 +192,17 @@ public sealed class PaSupplyDiagnosticsEndpointTests
 
     private sealed class Factory : WebApplicationFactory<Program>
     {
+        private readonly string _dbPath = Path.Combine(
+            Path.GetTempPath(),
+            $"zeus-prefs-pa-diag-{Guid.NewGuid():N}.db");
+        private readonly string? _previousPrefsPath;
+
+        public Factory()
+        {
+            _previousPrefsPath = Environment.GetEnvironmentVariable("ZEUS_PREFS_PATH");
+            Environment.SetEnvironmentVariable("ZEUS_PREFS_PATH", _dbPath);
+        }
+
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Test");
@@ -132,6 +210,13 @@ public sealed class PaSupplyDiagnosticsEndpointTests
             {
                 services.RemoveAll<IHostedService>();
             });
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            Environment.SetEnvironmentVariable("ZEUS_PREFS_PATH", _previousPrefsPath);
+            try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
         }
     }
 }
