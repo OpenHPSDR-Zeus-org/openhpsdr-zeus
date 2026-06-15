@@ -9,10 +9,12 @@ const BASE: TxFidelitySnapshot = {
   txMonitorEnabled: false,
   micDbfs: -24,
   wdspMicPk: -10,
+  micAv: -21,
   lvlrGr: 4,
   cfcGr: 2,
   alcGr: 5,
   outPk: -8,
+  outAv: -19,
   swr: 1.1,
   psEnabled: true,
   psCorrecting: true,
@@ -33,10 +35,12 @@ describe('analyzeTxFidelity', () => {
     expect(a.liveSpectralDensity).toBeGreaterThanOrEqual(60);
     expect(a.densityFit).toBeGreaterThanOrEqual(80);
     expect(a.densityStatus).toBe('matched');
+    expect(a.crestStatus).toBe('controlled');
+    expect(a.outCrestDb).toBeCloseTo(11, 1);
   });
 
   it('flags under-driven audio', () => {
-    const a = analyzeTxFidelity({ ...BASE, wdspMicPk: -36, alcGr: 0.2 });
+    const a = analyzeTxFidelity({ ...BASE, wdspMicPk: -36, outPk: -24, outAv: -37, alcGr: 0.2 });
     expect(a.state).toBe('under');
     expect(a.label).toBe('Under-driven');
     expect(a.detail).toContain('Mic peak is low');
@@ -44,6 +48,21 @@ describe('analyzeTxFidelity', () => {
     expect(a.recommendation).toBe('Raise mic gain toward -12 to -6 dBFS peaks');
     expect(a.actionTone).toBe('raise');
     expect(a.densityStatus).toBe('thin');
+  });
+
+  it('detects high-crest speech as too open for dense profiles', () => {
+    const a = analyzeTxFidelity({
+      ...BASE,
+      wdspMicPk: -12,
+      micAv: -34,
+      outPk: -9,
+      outAv: -31,
+      targetSpectralDensity: 100,
+    });
+    expect(a.state).toBe('under');
+    expect(a.crestStatus).toBe('open');
+    expect(a.detail).toContain('Crest factor is too open');
+    expect(a.recommendation).toBe('Add controlled speech density before adding RF drive');
   });
 
   it('flags hard limiting before clipping', () => {
@@ -86,6 +105,8 @@ describe('analyzeTxFidelity', () => {
     const a = analyzeTxFidelity({
       ...BASE,
       wdspMicPk: -8,
+      micAv: -13,
+      outAv: -12,
       alcGr: 9.5,
       lvlrGr: 12,
       cfcGr: 9,
@@ -95,6 +116,23 @@ describe('analyzeTxFidelity', () => {
     expect(a.densityStatus).toBe('forced');
     expect(a.detail).toContain('Density is forced by compression');
     expect(a.recommendation).toBe('Lower mic gain or ALC max gain');
+  });
+
+  it('flags pinched crest factor even before clipping', () => {
+    const a = analyzeTxFidelity({
+      ...BASE,
+      wdspMicPk: -8,
+      micAv: -12,
+      outPk: -7,
+      outAv: -11,
+      alcGr: 5,
+      lvlrGr: 4,
+      cfcGr: 4,
+    });
+    expect(a.state).toBe('hot');
+    expect(a.crestStatus).toBe('pinched');
+    expect(a.detail).toContain('Crest factor is pinched');
+    expect(a.recommendation).toBe('Reduce CFC density before raising drive');
   });
 
   it('surfaces PureSignal feedback and calibration health', () => {

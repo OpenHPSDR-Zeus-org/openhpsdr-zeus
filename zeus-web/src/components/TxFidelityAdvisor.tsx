@@ -11,6 +11,10 @@ function fmtGr(v: number): string {
   return `${v.toFixed(1)} dB`;
 }
 
+function fmtCrest(v: number | null): string {
+  return v === null ? '--' : `${v.toFixed(1)} dB`;
+}
+
 function fmtValue(v: number | null, suffix = ''): string {
   return v === null ? '--' : `${v.toFixed(0)}${suffix}`;
 }
@@ -44,10 +48,12 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
   const txMonitorEnabled = useTxStore((s) => s.txMonitorEnabled);
   const micDbfs = useTxStore((s) => s.micDbfs);
   const wdspMicPk = useTxStore((s) => s.wdspMicPk);
+  const micAv = useTxStore((s) => s.micAv);
   const lvlrGr = useTxStore((s) => s.lvlrGr);
   const cfcGr = useTxStore((s) => s.cfcGr);
   const alcGr = useTxStore((s) => s.alcGr);
   const outPk = useTxStore((s) => s.outPk);
+  const outAv = useTxStore((s) => s.outAv);
   const swr = useTxStore((s) => s.swr);
   const psEnabled = useTxStore((s) => s.psEnabled);
   const psCorrecting = useTxStore((s) => s.psCorrecting);
@@ -60,10 +66,12 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
     txMonitorEnabled,
     micDbfs,
     wdspMicPk,
+    micAv,
     lvlrGr,
     cfcGr,
     alcGr,
     outPk,
+    outAv,
     swr,
     psEnabled,
     psCorrecting,
@@ -180,6 +188,7 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
         <span style={{ whiteSpace: 'nowrap' }}>
           DENS {fmtDensity(analysis.liveSpectralDensity, analysis.targetSpectralDensity)}
         </span>
+        <span style={{ whiteSpace: 'nowrap' }}>CREST {fmtCrest(analysis.outCrestDb ?? analysis.micCrestDb)}</span>
         <span style={{ whiteSpace: 'nowrap' }}>ALC {fmtGr(analysis.alcGr)}</span>
         <span style={{ whiteSpace: 'nowrap' }}>LVL {fmtGr(analysis.lvlrGr)}</span>
         <span style={{ whiteSpace: 'nowrap' }}>CFC {fmtGr(analysis.cfcGr)}</span>
