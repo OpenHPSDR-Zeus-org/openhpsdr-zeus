@@ -21,7 +21,10 @@ export type SmartNrStatus = {
   reason: string;
   maxSnrDb: number;
   occupancyPct: number;
+  coherentOccupancyPct: number;
+  impulsivePct: number;
   peakCount: number;
+  coherentPeakCount: number;
   pending: boolean;
   applied: boolean;
   nr: NrConfigDto | null;
