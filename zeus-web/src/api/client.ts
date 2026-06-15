@@ -899,6 +899,58 @@ export type FrontendDspSceneDiagnosticsPayload = {
   coherentSubthresholdSignal?: boolean | null;
 };
 
+export type FrontendAudioPlaybackDiagnosticsDto = {
+  schemaVersion: number;
+  available: boolean;
+  ageMs: number | null;
+  sourceAgeMs: number | null;
+  sourceClockSkewMs: number | null;
+  status: string;
+  fresh: boolean;
+  stale: boolean;
+  diagnosticRecommendation: string | null;
+  atUtc: string | null;
+  sourceAtUtc: string | null;
+  sourceClientId: string | null;
+  playbackState: string | null;
+  contextState: string | null;
+  bufferedSamples: number;
+  bufferedMs: number | null;
+  sampleRateHz: number;
+  contextSampleRateHz: number;
+  baseLatencyMs: number | null;
+  outputLatencyMs: number | null;
+  underrunCount: number;
+  droppedSamples: number;
+  latePushCount: number;
+  latenessVsScheduleCount: number;
+  pendingSources: number;
+  bufferTargetMs: number | null;
+  bufferMaxMs: number | null;
+  errorMessage: string | null;
+};
+
+export type FrontendAudioPlaybackDiagnosticsPayload = {
+  sourceAtUtc?: string | null;
+  sourceClientId?: string | null;
+  playbackState?: string | null;
+  contextState?: string | null;
+  bufferedSamples?: number | null;
+  bufferedMs?: number | null;
+  sampleRateHz?: number | null;
+  contextSampleRateHz?: number | null;
+  baseLatencyMs?: number | null;
+  outputLatencyMs?: number | null;
+  underrunCount?: number | null;
+  droppedSamples?: number | null;
+  latePushCount?: number | null;
+  latenessVsScheduleCount?: number | null;
+  pendingSources?: number | null;
+  bufferTargetMs?: number | null;
+  bufferMaxMs?: number | null;
+  errorMessage?: string | null;
+};
+
 export type SmartNrConditionDto = {
   schemaVersion: number;
   available: boolean;
@@ -1617,6 +1669,7 @@ export type HardwareDiagnosticsDto = {
   capabilities: BoardCapabilities;
   dsp: HardwareDspDiagnosticsDto;
   frontendDspScene: FrontendDspSceneDiagnosticsDto;
+  frontendAudioPlayback: FrontendAudioPlaybackDiagnosticsDto;
   pureSignal: HardwarePureSignalDiagnosticsDto;
   digIn: RadioDigInDiagnosticsDto;
   g2Sensors: G2SensorMappingDiagnosticsDto;
@@ -2310,7 +2363,10 @@ function normalizeDspFilterOptionCatalog(raw: unknown): HardwareDspFilterOptionC
     ];
   return {
     iqBufferSizes: numberArray(r.iqBufferSizes, [64, 128, 256, 512, 1024]),
-    filterTapSizes: numberArray(r.filterTapSizes, [1024, 2048, 4096, 8192, 16384]),
+    filterTapSizes: numberArray(
+      r.filterTapSizes,
+      [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144],
+    ),
     filterTypes: stringArray(r.filterTypes, ['Linear Phase', 'Low Latency']),
     filterWindows: windows,
     slowModeChangeWarning: diagString(r.slowModeChangeWarning) ?? '',
@@ -2838,6 +2894,72 @@ function normalizeFrontendDspScene(raw: unknown): FrontendDspSceneDiagnosticsDto
     peakCount: diagNumber(r.peakCount),
     coherentPeakCount: diagNumber(r.coherentPeakCount),
     coherentSubthresholdSignal: diagBool(r.coherentSubthresholdSignal),
+  };
+}
+
+function normalizeFrontendAudioPlayback(raw: unknown): FrontendAudioPlaybackDiagnosticsDto {
+  if (raw === null || raw === undefined) {
+    return {
+      schemaVersion: 0,
+      available: false,
+      ageMs: null,
+      sourceAgeMs: null,
+      sourceClockSkewMs: null,
+      status: 'unavailable',
+      fresh: false,
+      stale: false,
+      diagnosticRecommendation: 'Frontend RX playback diagnostics are not available from this backend yet; use server RX audio diagnostics and browser console probes until OpenhpsdrZeus is restarted.',
+      atUtc: null,
+      sourceAtUtc: null,
+      sourceClientId: null,
+      playbackState: null,
+      contextState: null,
+      bufferedSamples: 0,
+      bufferedMs: null,
+      sampleRateHz: 0,
+      contextSampleRateHz: 0,
+      baseLatencyMs: null,
+      outputLatencyMs: null,
+      underrunCount: 0,
+      droppedSamples: 0,
+      latePushCount: 0,
+      latenessVsScheduleCount: 0,
+      pendingSources: 0,
+      bufferTargetMs: null,
+      bufferMaxMs: null,
+      errorMessage: null,
+    };
+  }
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    available: Boolean(r.available),
+    ageMs: diagNumber(r.ageMs),
+    sourceAgeMs: diagNumber(r.sourceAgeMs),
+    sourceClockSkewMs: diagNumber(r.sourceClockSkewMs),
+    status: diagString(r.status) ?? 'unknown',
+    fresh: Boolean(r.fresh),
+    stale: Boolean(r.stale),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+    atUtc: diagString(r.atUtc),
+    sourceAtUtc: diagString(r.sourceAtUtc),
+    sourceClientId: diagString(r.sourceClientId),
+    playbackState: diagString(r.playbackState),
+    contextState: diagString(r.contextState),
+    bufferedSamples: diagNumber(r.bufferedSamples) ?? 0,
+    bufferedMs: diagNumber(r.bufferedMs),
+    sampleRateHz: diagNumber(r.sampleRateHz) ?? 0,
+    contextSampleRateHz: diagNumber(r.contextSampleRateHz) ?? 0,
+    baseLatencyMs: diagNumber(r.baseLatencyMs),
+    outputLatencyMs: diagNumber(r.outputLatencyMs),
+    underrunCount: diagNumber(r.underrunCount) ?? 0,
+    droppedSamples: diagNumber(r.droppedSamples) ?? 0,
+    latePushCount: diagNumber(r.latePushCount) ?? 0,
+    latenessVsScheduleCount: diagNumber(r.latenessVsScheduleCount) ?? 0,
+    pendingSources: diagNumber(r.pendingSources) ?? 0,
+    bufferTargetMs: diagNumber(r.bufferTargetMs),
+    bufferMaxMs: diagNumber(r.bufferMaxMs),
+    errorMessage: diagString(r.errorMessage),
   };
 }
 
@@ -3856,6 +3978,7 @@ function normalizeHardwareDiagnostics(raw: unknown): HardwareDiagnosticsDto {
     capabilities: parseBoardCapabilities(r.capabilities),
     dsp: normalizeDspDiagnostics(r.dsp),
     frontendDspScene: normalizeFrontendDspScene(r.frontendDspScene),
+    frontendAudioPlayback: normalizeFrontendAudioPlayback(r.frontendAudioPlayback),
     pureSignal: normalizePureSignalDiagnostics(r.pureSignal),
     digIn: normalizeRadioDigInDiagnostics(r.digIn),
     g2Sensors: normalizeG2SensorMappingDiagnostics(r.g2Sensors),
@@ -4244,6 +4367,32 @@ export function fetchFrontendDspSceneDiagnostics(
     '/api/radio/diagnostics/dsp-scene',
     { signal },
     normalizeFrontendDspScene,
+  );
+}
+
+export function publishFrontendAudioPlaybackDiagnostics(
+  payload: FrontendAudioPlaybackDiagnosticsPayload,
+  signal?: AbortSignal,
+): Promise<FrontendAudioPlaybackDiagnosticsDto> {
+  return jsonFetch(
+    '/api/radio/diagnostics/audio-playback',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal,
+    },
+    normalizeFrontendAudioPlayback,
+  );
+}
+
+export function fetchFrontendAudioPlaybackDiagnostics(
+  signal?: AbortSignal,
+): Promise<FrontendAudioPlaybackDiagnosticsDto> {
+  return jsonFetch(
+    '/api/radio/diagnostics/audio-playback',
+    { signal },
+    normalizeFrontendAudioPlayback,
   );
 }
 

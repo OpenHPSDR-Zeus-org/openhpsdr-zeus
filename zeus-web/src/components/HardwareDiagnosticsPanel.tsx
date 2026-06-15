@@ -1814,6 +1814,7 @@ export function HardwareDiagnosticsPanel() {
   const rxDynamicRange = dsp?.rxDynamicRange;
   const audio = dsp?.audio;
   const listenability = dsp?.listenability;
+  const frontendAudio = diag?.frontendAudioPlayback;
   const dspFields: Field[] = [
     { label: 'Engine', value: dsp?.engineKind },
     { label: 'Runtime', value: dsp?.engine },
@@ -1868,6 +1869,30 @@ export function HardwareDiagnosticsPanel() {
     { label: 'SQL Gain', value: audio?.squelchGateGain },
     { label: 'Monitor Backlog', value: audio?.monitorBacklogSamples },
     { label: 'Audio Sinks', value: audio?.audioSinkCount },
+  ];
+  const frontendAudioFields: Field[] = [
+    { label: 'Client Playback', value: frontendAudio?.status },
+    { label: 'Client Fresh', value: boolLabel(frontendAudio?.fresh) },
+    { label: 'Client Stale', value: boolLabel(frontendAudio?.stale) },
+    { label: 'Client Age', value: age(frontendAudio?.ageMs) },
+    { label: 'Client Source Age', value: age(frontendAudio?.sourceAgeMs) },
+    { label: 'Client', value: frontendAudio?.sourceClientId },
+    { label: 'Playback State', value: frontendAudio?.playbackState },
+    { label: 'Context State', value: frontendAudio?.contextState },
+    { label: 'Buffered', value: frontendAudio?.bufferedMs === null || frontendAudio?.bufferedMs === undefined ? null : `${frontendAudio.bufferedMs.toFixed(1)} ms` },
+    { label: 'Buffered Samples', value: count(frontendAudio?.bufferedSamples) },
+    { label: 'Playback Rate', value: hz(frontendAudio?.sampleRateHz) },
+    { label: 'Context Rate', value: hz(frontendAudio?.contextSampleRateHz) },
+    { label: 'Base Latency', value: frontendAudio?.baseLatencyMs === null || frontendAudio?.baseLatencyMs === undefined ? null : `${frontendAudio.baseLatencyMs.toFixed(1)} ms` },
+    { label: 'Output Latency', value: frontendAudio?.outputLatencyMs === null || frontendAudio?.outputLatencyMs === undefined ? null : `${frontendAudio.outputLatencyMs.toFixed(1)} ms` },
+    { label: 'Underruns', value: count(frontendAudio?.underrunCount) },
+    { label: 'Dropped Samples', value: count(frontendAudio?.droppedSamples) },
+    { label: 'Late WS/Main', value: count(frontendAudio?.latePushCount) },
+    { label: 'Render Late', value: count(frontendAudio?.latenessVsScheduleCount) },
+    { label: 'Pending Sources', value: count(frontendAudio?.pendingSources) },
+    { label: 'Buffer Target', value: frontendAudio?.bufferTargetMs === null || frontendAudio?.bufferTargetMs === undefined ? null : `${frontendAudio.bufferTargetMs.toFixed(1)} ms` },
+    { label: 'Buffer Max', value: frontendAudio?.bufferMaxMs === null || frontendAudio?.bufferMaxMs === undefined ? null : `${frontendAudio.bufferMaxMs.toFixed(1)} ms` },
+    { label: 'Playback Error', value: frontendAudio?.errorMessage },
   ];
   const rxDspFields: Field[] = [
     { label: 'RX DSP Status', value: rxDsp?.status },
@@ -2134,6 +2159,9 @@ export function HardwareDiagnosticsPanel() {
           <FieldGrid fields={audioFields} />
         </div>
         <div style={{ marginTop: 10 }}>
+          <FieldGrid fields={frontendAudioFields} />
+        </div>
+        <div style={{ marginTop: 10 }}>
           <FieldGrid fields={rxDspFields} />
         </div>
         <div style={{ marginTop: 10 }}>
@@ -2146,6 +2174,7 @@ export function HardwareDiagnosticsPanel() {
         <DiagnosticRecommendation text={rxMeters?.diagnosticRecommendation} />
         <DiagnosticRecommendation text={listenability?.recommendation} />
         <DiagnosticRecommendation text={audio?.diagnosticRecommendation} />
+        <DiagnosticRecommendation text={frontendAudio?.diagnosticRecommendation} />
         <DiagnosticRecommendation text={display?.diagnosticRecommendation} />
       </div>
 

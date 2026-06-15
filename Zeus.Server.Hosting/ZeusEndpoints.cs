@@ -1611,6 +1611,17 @@ public static class ZeusEndpoints
             return Results.Ok(scene.Snapshot());
         });
 
+        app.MapPost("/api/radio/diagnostics/audio-playback", (FrontendAudioPlaybackDiagnosticsRequest req, FrontendAudioPlaybackDiagnosticsService playback) =>
+        {
+            playback.Update(req);
+            return Results.Ok(playback.Snapshot());
+        });
+
+        app.MapGet("/api/radio/diagnostics/audio-playback", (FrontendAudioPlaybackDiagnosticsService playback) =>
+        {
+            return Results.Ok(playback.Snapshot());
+        });
+
         app.MapGet("/api/dsp/nr-condition", (FrontendDspSceneDiagnosticsService scene, DspPipelineService dsp, RadioService radio) =>
         {
             var state = radio.Snapshot();

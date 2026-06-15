@@ -60,6 +60,7 @@ import {
   createHardwareDiagnosticsMarker,
   fetchCfcPresets,
   fetchExternalPttStatus,
+  fetchFrontendAudioPlaybackDiagnostics,
   fetchFrontendDspSceneDiagnostics,
   fetchG2SensorMappingDiagnostics,
   fetchHardwareDiagnostics,
@@ -75,6 +76,7 @@ import {
   fetchUserIoLabels,
   fetchAdcProtection,
   fetchTxFidelityPolicy,
+  publishFrontendAudioPlaybackDiagnostics,
   publishFrontendDspSceneDiagnostics,
   normalizeAgc,
   normalizeAdcProtectionStatus,
@@ -802,14 +804,14 @@ describe('POST helpers', () => {
             },
             optionCatalog: {
               iqBufferSizes: [64, 128, 256, 512, 1024],
-              filterTapSizes: [1024, 2048, 4096, 8192, 16384],
+              filterTapSizes: [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144],
               filterTypes: ['Linear Phase', 'Low Latency'],
               filterWindows: [
                 { id: 0, label: 'BH-4', notes: 'Thetis default in DSP Options; sharper transition.' },
                 { id: 1, label: 'BH-7', notes: 'Deeper cutoff; this is the current Zeus WDSP call.' },
               ],
               slowModeChangeWarning: 'Thetis warns that different buffer sizes, tap sizes, or filter types can force a slow mode change.',
-              source: 'Thetis setup.designer.cs DSP Options dropdowns',
+              source: 'Thetis DSP Options mode defaults + Zeus WDSPwisdom 64..262144 startup planning ladder',
             },
             activeRx: {
               mode: 'USB',
@@ -895,6 +897,36 @@ describe('POST helpers', () => {
           peakCount: 3,
           coherentPeakCount: 2,
           coherentSubthresholdSignal: true,
+        },
+        frontendAudioPlayback: {
+          schemaVersion: 1,
+          available: true,
+          ageMs: 35,
+          sourceAgeMs: 48,
+          sourceClockSkewMs: null,
+          status: 'client-playback-healthy',
+          fresh: true,
+          stale: false,
+          diagnosticRecommendation: 'Frontend RX playback is fresh with no reported underruns.',
+          atUtc: '2026-06-15T01:00:00Z',
+          sourceAtUtc: '2026-06-15T00:59:59Z',
+          sourceClientId: 'frontend-audio',
+          playbackState: 'playing',
+          contextState: 'running',
+          bufferedSamples: 14400,
+          bufferedMs: 300,
+          sampleRateHz: 48000,
+          contextSampleRateHz: 48000,
+          baseLatencyMs: 22,
+          outputLatencyMs: 48,
+          underrunCount: 0,
+          droppedSamples: 0,
+          latePushCount: 0,
+          latenessVsScheduleCount: 0,
+          pendingSources: 15,
+          bufferTargetMs: 300,
+          bufferMaxMs: 500,
+          errorMessage: null,
         },
         pureSignal: {
           schemaVersion: 1,
@@ -1115,7 +1147,9 @@ describe('POST helpers', () => {
     expect(diag.dsp.filterGeometry.receiverBandwidth.unexposedReceiverCount).toBe(9);
     expect(diag.dsp.filterGeometry.receiverBandwidth.reservedSlots[1]?.slot).toBe(1);
     expect(diag.dsp.filterGeometry.optionCatalog.iqBufferSizes).toEqual([64, 128, 256, 512, 1024]);
+    expect(diag.dsp.filterGeometry.optionCatalog.filterTapSizes[0]).toBe(64);
     expect(diag.dsp.filterGeometry.optionCatalog.filterTapSizes).toContain(16384);
+    expect(diag.dsp.filterGeometry.optionCatalog.filterTapSizes).toContain(262144);
     expect(diag.dsp.filterGeometry.optionCatalog.filterWindows[1]?.label).toBe('BH-7');
     expect(diag.dsp.filterGeometry.activeRx.filterWindow).toBe('BH-7');
     expect(diag.dsp.filterGeometry.thetisMatrix[1]?.filterType).toBe('Linear Phase');
@@ -1130,6 +1164,12 @@ describe('POST helpers', () => {
     expect(diag.frontendDspScene.smartNrRecommendation).toBe('Hold headroom; use Smart NR/filtering');
     expect(diag.frontendDspScene.coherentPeakCount).toBe(2);
     expect(diag.frontendDspScene.coherentSubthresholdSignal).toBe(true);
+    expect(diag.frontendAudioPlayback.available).toBe(true);
+    expect(diag.frontendAudioPlayback.status).toBe('client-playback-healthy');
+    expect(diag.frontendAudioPlayback.bufferedMs).toBe(300);
+    expect(diag.frontendAudioPlayback.baseLatencyMs).toBe(22);
+    expect(diag.frontendAudioPlayback.outputLatencyMs).toBe(48);
+    expect(diag.frontendAudioPlayback.pendingSources).toBe(15);
     expect(diag.pureSignal.feedbackSource).toBe('external');
     expect(diag.pureSignal.rfBypassSelected).toBe(true);
     expect(diag.pureSignal.feedbackLevelRaw).toBe(151.2);
@@ -1293,6 +1333,137 @@ describe('POST helpers', () => {
     expect(scene.smartNrRxChainTone).toBe('optimize');
     expect(scene.smartNrRxChainScore).toBe(68);
     expect(scene.coherentSubthresholdSignal).toBe(true);
+  });
+
+  it('publishFrontendAudioPlaybackDiagnostics posts browser RX playback health', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      available: true,
+      ageMs: 24,
+      sourceAgeMs: 36,
+      sourceClockSkewMs: null,
+      status: 'client-main-thread-late',
+      fresh: true,
+      stale: false,
+      diagnosticRecommendation: 'Frontend RX playback underruns include late websocket/main-thread delivery.',
+      atUtc: '2026-06-15T13:00:02Z',
+      sourceAtUtc: '2026-06-15T13:00:01Z',
+      sourceClientId: 'frontend-audio',
+      playbackState: 'playing',
+      contextState: 'running',
+      bufferedSamples: 7200,
+      bufferedMs: 150,
+      sampleRateHz: 48000,
+      contextSampleRateHz: 48000,
+      baseLatencyMs: 22,
+      outputLatencyMs: 48,
+      underrunCount: 3,
+      droppedSamples: 0,
+      latePushCount: 2,
+      latenessVsScheduleCount: 1,
+      pendingSources: 7,
+      bufferTargetMs: 300,
+      bufferMaxMs: 500,
+      errorMessage: null,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const playback = await publishFrontendAudioPlaybackDiagnostics({
+      sourceAtUtc: '2026-06-15T13:00:01Z',
+      sourceClientId: 'frontend-audio',
+      playbackState: 'playing',
+      contextState: 'running',
+      bufferedSamples: 7200,
+      bufferedMs: 150,
+      sampleRateHz: 48000,
+      contextSampleRateHz: 48000,
+      baseLatencyMs: 22,
+      outputLatencyMs: 48,
+      underrunCount: 3,
+      droppedSamples: 0,
+      latePushCount: 2,
+      latenessVsScheduleCount: 1,
+      pendingSources: 7,
+      bufferTargetMs: 300,
+      bufferMaxMs: 500,
+      errorMessage: null,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/diagnostics/audio-playback');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({
+      sourceAtUtc: '2026-06-15T13:00:01Z',
+      sourceClientId: 'frontend-audio',
+      playbackState: 'playing',
+      contextState: 'running',
+      bufferedSamples: 7200,
+      bufferedMs: 150,
+      sampleRateHz: 48000,
+      contextSampleRateHz: 48000,
+      baseLatencyMs: 22,
+      outputLatencyMs: 48,
+      underrunCount: 3,
+      droppedSamples: 0,
+      latePushCount: 2,
+      latenessVsScheduleCount: 1,
+      pendingSources: 7,
+      bufferTargetMs: 300,
+      bufferMaxMs: 500,
+      errorMessage: null,
+    });
+    expect(playback.available).toBe(true);
+    expect(playback.status).toBe('client-main-thread-late');
+    expect(playback.playbackState).toBe('playing');
+    expect(playback.bufferedMs).toBe(150);
+    expect(playback.underrunCount).toBe(3);
+    expect(playback.latePushCount).toBe(2);
+    expect(playback.pendingSources).toBe(7);
+  });
+
+  it('fetchFrontendAudioPlaybackDiagnostics reads the latest browser RX playback snapshot', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      available: true,
+      ageMs: 12,
+      sourceAgeMs: 15,
+      sourceClockSkewMs: null,
+      status: 'client-playback-healthy',
+      fresh: true,
+      stale: false,
+      diagnosticRecommendation: 'Frontend RX playback is fresh with no reported underruns.',
+      atUtc: '2026-06-15T13:00:02Z',
+      sourceAtUtc: '2026-06-15T13:00:01Z',
+      sourceClientId: 'frontend-audio',
+      playbackState: 'playing',
+      contextState: 'running',
+      bufferedSamples: 14400,
+      bufferedMs: 300,
+      sampleRateHz: 48000,
+      contextSampleRateHz: 48000,
+      baseLatencyMs: 22,
+      outputLatencyMs: null,
+      underrunCount: 0,
+      droppedSamples: 0,
+      latePushCount: 0,
+      latenessVsScheduleCount: 0,
+      pendingSources: 15,
+      bufferTargetMs: 300,
+      bufferMaxMs: 500,
+      errorMessage: null,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const playback = await fetchFrontendAudioPlaybackDiagnostics();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/diagnostics/audio-playback');
+    expect(init?.method).toBeUndefined();
+    expect(playback.status).toBe('client-playback-healthy');
+    expect(playback.sourceClientId).toBe('frontend-audio');
+    expect(playback.contextState).toBe('running');
+    expect(playback.bufferedSamples).toBe(14400);
+    expect(playback.outputLatencyMs).toBeNull();
   });
 
   it('fetchSmartNrCondition reads live Smart NR condition evidence', async () => {

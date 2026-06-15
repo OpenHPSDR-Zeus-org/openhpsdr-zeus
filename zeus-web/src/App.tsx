@@ -70,6 +70,7 @@ import { SettingsView, type SettingsTabId } from './components/SettingsMenu';
 import { SignalIntelligenceController } from './components/SignalIntelligenceController';
 import { SmartNrController } from './components/SmartNrController';
 import { DspSceneDiagnosticsPublisher } from './components/DspSceneDiagnosticsPublisher';
+import { AudioPlaybackDiagnosticsPublisher } from './components/AudioPlaybackDiagnosticsPublisher';
 import { ThemeApplier } from './components/ThemeApplier';
 import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
@@ -679,6 +680,7 @@ export default function App() {
           <SignalIntelligenceController />
           <SmartNrController />
           <DspSceneDiagnosticsPublisher />
+          <AudioPlaybackDiagnosticsPublisher />
           <MobileApp />
         </SpectrumWheelActionsContext.Provider>
       </WorkspaceContext.Provider>
@@ -693,6 +695,7 @@ export default function App() {
     <SignalIntelligenceController />
     <SmartNrController />
     <DspSceneDiagnosticsPublisher />
+    <AudioPlaybackDiagnosticsPublisher />
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
       {/* Left layout bar — issue #241. Spans the full app height; lists named
           layouts for the active radio with switch/add/delete/reset actions. */}

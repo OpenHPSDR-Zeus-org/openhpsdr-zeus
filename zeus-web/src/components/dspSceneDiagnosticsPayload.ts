@@ -10,7 +10,7 @@ import type { SmartNrStatus } from '../state/smart-nr-store';
 
 let sessionClientId: string | null = null;
 
-function frontendClientId(): string {
+export function frontendClientId(): string {
   if (sessionClientId) return sessionClientId;
   const random = globalThis.crypto?.randomUUID?.()
     ?? Math.random().toString(36).slice(2, 10);

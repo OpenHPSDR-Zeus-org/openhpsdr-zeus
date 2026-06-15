@@ -961,7 +961,7 @@ public class DspPipelineService : BackgroundService,
         string status = wdsp ? "active-fixed-profile" : engine is SyntheticDspEngine ? "synthetic-profile" : "engine-unavailable";
         int[] sampleRates = [48_000, 96_000, 192_000, 384_000, 768_000, 1_536_000];
         int[] iqBufferSizes = [64, 128, 256, 512, 1024];
-        int[] filterTapSizes = [1024, 2048, 4096, 8192, 16384];
+        int[] filterTapSizes = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144];
         string[] filterTypes = ["Linear Phase", "Low Latency"];
         object[] filterWindows =
         [
@@ -998,7 +998,7 @@ public class DspPipelineService : BackgroundService,
                 filterTypes,
                 filterWindows,
                 slowModeChangeWarning = "Thetis warns that different buffer sizes, tap sizes, or filter types can force a slow mode change; Zeus keeps these fixed until RXA/TXA/analyzer rebuild can be made atomic.",
-                source = "Thetis setup.designer.cs DSP Options dropdowns",
+                source = "Thetis DSP Options mode defaults + Zeus WDSPwisdom 64..262144 startup planning ladder",
             },
             activeRx = new
             {
@@ -1063,7 +1063,7 @@ public class DspPipelineService : BackgroundService,
                 status = "not-exposed-as-filter-display-setting",
                 notes = "Zeus exposes live filter edges, presets, panadapter scale, and mini-pan visuals, but not Thetis's separate high-resolution filter-characteristics display toggle yet.",
             },
-            diagnosticRecommendation = "All verified hardware sample-rate sizes and Thetis DSP option sizes are now visible. Zeus currently runs a fixed RXA/TXA profile and calls WDSP window index 1 (BH-7) while the Thetis screenshot defaults to BH-4; keep the controls read-only until OpenChannel/DSP buffer/tap/window changes can be rebuilt atomically across RXA, TXA, monitor, and analyzers.",
+            diagnosticRecommendation = "All verified hardware sample-rate sizes, Thetis mode-default DSP sizes, and the full Zeus WDSP planning ladder are visible. Zeus currently runs a fixed RXA/TXA profile and calls WDSP window index 1 (BH-7) while the Thetis screenshot defaults to BH-4; keep the controls read-only until OpenChannel/DSP buffer/tap/window changes can be rebuilt atomically across RXA, TXA, monitor, and analyzers.",
             source = "Thetis DSP Options filter matrix + Zeus WdspDspEngine OpenChannel/SetRXABandpassWindow/SetTXABandpassWindow profile",
         };
     }

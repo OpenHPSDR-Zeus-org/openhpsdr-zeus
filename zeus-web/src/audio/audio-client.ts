@@ -76,6 +76,25 @@ export type AudioStats = {
   latenessVsScheduleCount: number;
 };
 
+export type AudioPlaybackDiagnosticsSnapshot = {
+  playbackState: AudioClientState['kind'];
+  contextState: string | null;
+  bufferedSamples: number;
+  bufferedMs: number | null;
+  sampleRateHz: number;
+  contextSampleRateHz: number;
+  baseLatencyMs: number | null;
+  outputLatencyMs: number | null;
+  underrunCount: number;
+  droppedSamples: number;
+  latePushCount: number;
+  latenessVsScheduleCount: number;
+  pendingSources: number;
+  bufferTargetMs: number;
+  bufferMaxMs: number;
+  errorMessage: string | null;
+};
+
 type Listener = (state: AudioClientState, stats: AudioStats | null) => void;
 
 // 300 ms re-anchor floor. The 100 ms baseline (and earlier 50 ms experiment,
@@ -117,6 +136,34 @@ class AudioClient {
 
   get currentState(): AudioClientState { return this.state; }
   get currentStats(): AudioStats | null { return this.stats; }
+
+  diagnosticsSnapshot(): AudioPlaybackDiagnosticsSnapshot {
+    const ctx = this.context;
+    const sampleRate = ctx?.sampleRate ?? 0;
+    const bufferedSamples = this.stats?.available ?? 0;
+    const bufferedMs = sampleRate > 0 ? Math.round(bufferedSamples * 1000 / sampleRate) : null;
+    const contextWithOutputLatency = ctx as (AudioContext & { outputLatency?: number }) | null;
+    return {
+      playbackState: this.state.kind,
+      contextState: ctx?.state ?? null,
+      bufferedSamples,
+      bufferedMs,
+      sampleRateHz: sampleRate,
+      contextSampleRateHz: sampleRate,
+      baseLatencyMs: typeof ctx?.baseLatency === 'number' ? Math.round(ctx.baseLatency * 1000) : null,
+      outputLatencyMs: typeof contextWithOutputLatency?.outputLatency === 'number'
+        ? Math.round(contextWithOutputLatency.outputLatency * 1000)
+        : null,
+      underrunCount: this.underruns,
+      droppedSamples: this.dropped,
+      latePushCount: this.latePushCount,
+      latenessVsScheduleCount: this.latenessVsScheduleCount,
+      pendingSources: this.pending.size,
+      bufferTargetMs: BUFFER_TARGET_SECS * 1000,
+      bufferMaxMs: BUFFER_MAX_SECS * 1000,
+      errorMessage: this.state.kind === 'error' ? this.state.message : null,
+    };
+  }
 
   subscribe(listener: Listener): () => void {
     this.listeners.add(listener);

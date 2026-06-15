@@ -193,7 +193,13 @@ public sealed class G2SensorMappingDiagnosticsEndpointTests
         Assert.Equal("rx-meters+radio-state+adc-protection", rxDynamicRange.GetProperty("source").GetString());
         Assert.Equal("BH-7", filterGeometry.GetProperty("activeRx").GetProperty("filterWindow").GetString());
         Assert.Equal(1024, filterGeometry.GetProperty("optionCatalog").GetProperty("iqBufferSizes")[4].GetInt32());
-        Assert.Equal(16384, filterGeometry.GetProperty("optionCatalog").GetProperty("filterTapSizes")[4].GetInt32());
+        var tapSizes = filterGeometry.GetProperty("optionCatalog").GetProperty("filterTapSizes")
+            .EnumerateArray()
+            .Select(item => item.GetInt32())
+            .ToArray();
+        Assert.Equal(64, tapSizes[0]);
+        Assert.Contains(16_384, tapSizes);
+        Assert.Contains(262_144, tapSizes);
         Assert.Equal("BH-4", filterGeometry.GetProperty("optionCatalog").GetProperty("filterWindows")[0].GetProperty("label").GetString());
         Assert.Equal("BH-7", filterGeometry.GetProperty("optionCatalog").GetProperty("filterWindows")[1].GetProperty("label").GetString());
         Assert.Equal(384_000, filterGeometry.GetProperty("hardwareLimits").GetProperty("maxRxSampleRateHz").GetInt32());

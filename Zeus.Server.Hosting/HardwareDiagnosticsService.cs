@@ -130,6 +130,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
     private readonly DspPipelineService _dsp;
     private readonly WdspWisdomInitializer _wisdom;
     private readonly FrontendDspSceneDiagnosticsService _frontendDspScene;
+    private readonly FrontendAudioPlaybackDiagnosticsService _frontendAudioPlayback;
     private readonly object _sync = new();
     private IProtocol1Client? _p1Client;
     private Zeus.Protocol2.Protocol2Client? _p2Client;
@@ -173,12 +174,14 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         RadioService radio,
         DspPipelineService dsp,
         WdspWisdomInitializer wisdom,
-        FrontendDspSceneDiagnosticsService frontendDspScene)
+        FrontendDspSceneDiagnosticsService frontendDspScene,
+        FrontendAudioPlaybackDiagnosticsService frontendAudioPlayback)
     {
         _radio = radio;
         _dsp = dsp;
         _wisdom = wisdom;
         _frontendDspScene = frontendDspScene;
+        _frontendAudioPlayback = frontendAudioPlayback;
         _radio.Connected += OnP1Connected;
         _radio.Disconnected += OnP1Disconnected;
         _radio.P2Connected += OnP2Connected;
@@ -224,6 +227,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 capabilities = caps,
                 dsp = _dsp.SnapshotDiagnostics(_wisdom),
                 frontendDspScene = _frontendDspScene.Snapshot(),
+                frontendAudioPlayback = _frontendAudioPlayback.Snapshot(),
                 pureSignal = BuildPureSignalDiagnostics(state, connected, effective),
                 digIn = BuildDigInDiagnostics(
                     _activeProtocol,
