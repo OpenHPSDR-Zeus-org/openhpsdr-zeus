@@ -44,7 +44,7 @@ function sameNr(a: NrConfigDto, b: NrConfigDto): boolean {
 }
 
 function shouldHoldForRxChain(rx: RxChainAnalysis): boolean {
-  return rx.state === 'overload' || rx.state === 'underfilled' || rx.actionTone === 'protect';
+  return rx.state === 'overload' || rx.state === 'underfilled';
 }
 
 export function SmartNrController() {

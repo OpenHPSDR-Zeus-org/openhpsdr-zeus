@@ -243,6 +243,24 @@ describe('SmartNrController', () => {
     expect(useSmartNrStore.getState().status?.rxChainRecommendation).toBe('Add 3-6 dB attenuation');
   });
 
+  it('does not hold auto NR solely because signed AGC gain is cutting', () => {
+    useRxMetersStore.setState({
+      signalPk: -61,
+      signalAv: -64,
+      adcPk: -18,
+      adcAv: -32,
+      agcGain: -24,
+      agcEnvPk: -62,
+      agcEnvAv: -65,
+    });
+
+    for (let i = 0; i < 6; i++) feed(denseSsbNoise());
+
+    expect(setNrMock).toHaveBeenCalledTimes(1);
+    expect(useSmartNrStore.getState().status?.heldByRxChain).toBe(false);
+    expect(useSmartNrStore.getState().status?.rxChainLabel).toBe('AGC stressed');
+  });
+
   it('falls back to NR2 instead of applying NR4 when diagnostics reports SBNR unavailable', async () => {
     useConnectionStore.setState({ mode: 'CWU' });
     fetchHardwareDiagnosticsMock.mockResolvedValue({
