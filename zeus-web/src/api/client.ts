@@ -458,6 +458,28 @@ export type HardwareFeatureSurfaceDto = {
   notes: string;
 };
 
+export type HardwareDspDiagnosticsDto = {
+  schemaVersion: number;
+  engine: string;
+  engineKind: string;
+  wdspActive: boolean;
+  synthetic: boolean;
+  channelId: number;
+  sampleRateHz: number;
+  displayWidth: number;
+  tickRateHz: number;
+  audioOutputRateHz: number;
+  txBlockSamples: number;
+  txOutputSamples: number;
+  txMonitorRequested: boolean;
+  rxSinkAttached: boolean;
+  audioSinkCount: number;
+  monitorBacklogSamples: number;
+  wdspWisdomPhase: string;
+  wdspWisdomStatus: string;
+  readiness: string;
+};
+
 export type HardwareP1DiagnosticsDto = {
   packets: number;
   lastUpdatedUtc: string | null;
@@ -658,6 +680,7 @@ export type HardwareDiagnosticsDto = {
   effectiveBoard: string;
   orionMkIIVariant: string;
   capabilities: BoardCapabilities;
+  dsp: HardwareDspDiagnosticsDto;
   activeProtocol: 'P1' | 'P2' | null;
   p1: HardwareP1DiagnosticsDto;
   p2: HardwareP2DiagnosticsDto;
@@ -1206,6 +1229,31 @@ function normalizeFeatureSurfaces(raw: unknown): HardwareFeatureSurfaceDto[] {
   });
 }
 
+function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    engine: diagString(r.engine) ?? 'Unknown',
+    engineKind: diagString(r.engineKind) ?? 'Unknown',
+    wdspActive: Boolean(r.wdspActive),
+    synthetic: Boolean(r.synthetic),
+    channelId: diagNumber(r.channelId) ?? 0,
+    sampleRateHz: diagNumber(r.sampleRateHz) ?? 0,
+    displayWidth: diagNumber(r.displayWidth) ?? 0,
+    tickRateHz: diagNumber(r.tickRateHz) ?? 0,
+    audioOutputRateHz: diagNumber(r.audioOutputRateHz) ?? 0,
+    txBlockSamples: diagNumber(r.txBlockSamples) ?? 0,
+    txOutputSamples: diagNumber(r.txOutputSamples) ?? 0,
+    txMonitorRequested: Boolean(r.txMonitorRequested),
+    rxSinkAttached: Boolean(r.rxSinkAttached),
+    audioSinkCount: diagNumber(r.audioSinkCount) ?? 0,
+    monitorBacklogSamples: diagNumber(r.monitorBacklogSamples) ?? 0,
+    wdspWisdomPhase: diagString(r.wdspWisdomPhase) ?? 'Unknown',
+    wdspWisdomStatus: diagString(r.wdspWisdomStatus) ?? '',
+    readiness: diagString(r.readiness) ?? 'unknown',
+  };
+}
+
 function diagNumberArray(raw: unknown): number[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((v) => diagNumber(v) ?? 0);
@@ -1442,6 +1490,7 @@ function normalizeHardwareDiagnostics(raw: unknown): HardwareDiagnosticsDto {
     orionMkIIVariant:
       typeof r.orionMkIIVariant === 'string' ? r.orionMkIIVariant : 'G2',
     capabilities: parseBoardCapabilities(r.capabilities),
+    dsp: normalizeDspDiagnostics(r.dsp),
     activeProtocol,
     p1: {
       packets: diagNumber(p1.packets) ?? 0,

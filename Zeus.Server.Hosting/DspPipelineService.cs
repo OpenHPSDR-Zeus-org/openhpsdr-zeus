@@ -541,6 +541,39 @@ public class DspPipelineService : BackgroundService,
     /// _engineLock to serialise themselves against each other.</summary>
     public virtual IDspEngine? CurrentEngine => Volatile.Read(ref _engine);
 
+    public object SnapshotDiagnostics(WdspWisdomInitializer wisdom)
+    {
+        var engine = Volatile.Read(ref _engine);
+        bool wdspActive = engine is WdspDspEngine;
+        bool synthetic = engine is SyntheticDspEngine;
+        return new
+        {
+            schemaVersion = 1,
+            engine = engine?.GetType().Name ?? "None",
+            engineKind = wdspActive ? "WDSP" : synthetic ? "Synthetic" : engine is null ? "None" : "Other",
+            wdspActive,
+            synthetic,
+            channelId = Volatile.Read(ref _channelId),
+            sampleRateHz = Volatile.Read(ref _sampleRateHz),
+            displayWidth = Width,
+            tickRateHz = Math.Round(1.0 / TickPeriod.TotalSeconds, 1),
+            audioOutputRateHz = AudioOutputRateHz,
+            txBlockSamples = engine?.TxBlockSamples ?? 0,
+            txOutputSamples = engine?.TxOutputSamples ?? 0,
+            txMonitorRequested = engine?.IsTxMonitorOn ?? false,
+            rxSinkAttached = _rxSinkAttached,
+            audioSinkCount = _audioSinks.Length,
+            monitorBacklogSamples = MonitorBacklog,
+            wdspWisdomPhase = wisdom.Phase.ToString(),
+            wdspWisdomStatus = wisdom.Status,
+            readiness = wdspActive
+                ? "wdsp-active"
+                : synthetic
+                    ? "synthetic-idle-or-fallback"
+                    : "no-engine",
+        };
+    }
+
     /// <summary>Raised after the engine instance is swapped (Synthetic ↔ WDSP).
     /// Subscribers receive the new <see cref="IDspEngine"/> (never null).</summary>
     public event Action<IDspEngine>? EngineChanged;

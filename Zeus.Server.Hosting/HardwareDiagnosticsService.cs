@@ -10,6 +10,7 @@
 using System.Buffers.Binary;
 using Microsoft.Extensions.Hosting;
 using Zeus.Contracts;
+using Zeus.Dsp.Wdsp;
 using Zeus.Protocol1;
 
 namespace Zeus.Server;
@@ -22,6 +23,8 @@ namespace Zeus.Server;
 public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
 {
     private readonly RadioService _radio;
+    private readonly DspPipelineService _dsp;
+    private readonly WdspWisdomInitializer _wisdom;
     private readonly object _sync = new();
     private IProtocol1Client? _p1Client;
     private Zeus.Protocol2.Protocol2Client? _p2Client;
@@ -61,9 +64,14 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
     private readonly List<MappingMarker> _mappingMarkers = new();
     private int _nextMarkerId = 1;
 
-    public HardwareDiagnosticsService(RadioService radio)
+    public HardwareDiagnosticsService(
+        RadioService radio,
+        DspPipelineService dsp,
+        WdspWisdomInitializer wisdom)
     {
         _radio = radio;
+        _dsp = dsp;
+        _wisdom = wisdom;
         _radio.Connected += OnP1Connected;
         _radio.Disconnected += OnP1Disconnected;
         _radio.P2Connected += OnP2Connected;
@@ -107,6 +115,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 effectiveBoard = effective.ToString(),
                 orionMkIIVariant = variant.ToString(),
                 capabilities = caps,
+                dsp = _dsp.SnapshotDiagnostics(_wisdom),
                 activeProtocol = _activeProtocol,
                 p1 = new
                 {
@@ -1097,6 +1106,13 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             status = "mapped",
             notes = "RX ADC count, MKII BPF, ADC supply, L/R swap, telemetry presence, audio amp, RX2 attenuation mode, rated watts",
         },
+        new
+        {
+            field = "DSP runtime readiness",
+            source = "DspPipelineService + WDSP wisdom bootstrap",
+            status = "decoded",
+            notes = "Active DSP engine, channel/rate, RX sink ownership, TX block geometry, TX monitor state, and WDSP wisdom/model readiness are exposed in diagnostics.dsp",
+        },
     ];
 
     private static readonly object[] CandidateSettings =
@@ -1200,6 +1216,55 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         },
         new
         {
+            id = "rx.signal-intelligence.weak-signal",
+            title = "RX weak-signal display intelligence",
+            category = "rx-dsp",
+            implementationStatus = "control-ready",
+            userConfigurable = true,
+            source = "Panadapter CFAR floor, temporal confidence, Signal Pop, Snap-to, and auto scene profiles",
+            telemetryPaths = new[]
+            {
+                "dsp.engineKind",
+                "dsp.sampleRateHz",
+                "frontend.signalEnhance.sceneStatus",
+                "frontend.signalEstimator.noiseFloor",
+                "frontend.signalEstimator.signalConfidence",
+            },
+            candidateControls = new[]
+            {
+                "Settings > DSP > Signal Intelligence",
+                "planned:/api/dsp/display-intelligence",
+            },
+            safetyClass = "rx-safe",
+            notes = "Existing RX display logic now has floor-normalized Signal Pop, snap-to-carrier, temporal confidence, and coherent auto-profile classification; next step is persisting scene diagnostics server-side for remote/headless monitoring.",
+        },
+        new
+        {
+            id = "rx.smart-nr.adaptive",
+            title = "Smart NR adaptive condition logic",
+            category = "rx-dsp",
+            implementationStatus = "control-ready",
+            userConfigurable = true,
+            source = "Frontend condition analyzer plus WDSP NR/NB/ANF/SNB controls",
+            telemetryPaths = new[]
+            {
+                "dsp.engineKind",
+                "frontend.smartNr.status",
+                "frontend.signalEstimator.noiseFloor",
+                "frontend.signalEstimator.signalConfidence",
+                "dsp.wdspWisdomPhase",
+            },
+            candidateControls = new[]
+            {
+                "Settings > DSP > Smart NR Automation",
+                "/api/nr-ui-prefs",
+                "planned:/api/dsp/nr-condition",
+            },
+            safetyClass = "rx-safe",
+            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; a backend scene feed would make the same intelligence available to remote clients and recordings.",
+        },
+        new
+        {
             id = "pa.telemetry.power-supply",
             title = "PA and supply telemetry",
             category = "power",
@@ -1224,6 +1289,32 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             },
             safetyClass = "tx-monitoring-only",
             notes = "Raw power and supply channels are exposed for calibrated meters, warning thresholds, and per-radio calibration menus.",
+        },
+        new
+        {
+            id = "tx.fidelity.spectral-density",
+            title = "TX fidelity and spectral-density advisor",
+            category = "tx-audio",
+            implementationStatus = "control-ready",
+            userConfigurable = true,
+            source = "WDSP TX stage meters, TX monitor, PureSignal feedback, Audio Suite chain meters, and IMD tools",
+            telemetryPaths = new[]
+            {
+                "dsp.txBlockSamples",
+                "dsp.txOutputSamples",
+                "dsp.txMonitorRequested",
+                "/api/tx/diag",
+                "/api/audio-suite/chain/meters",
+            },
+            candidateControls = new[]
+            {
+                "/api/audio-suite/processing-mode",
+                "/api/audio-suite/chain/meters",
+                "planned:/api/tx/fidelity-policy",
+                "planned:/api/tx/spectral-density-target",
+            },
+            safetyClass = "tx-monitoring-only",
+            notes = "The existing TX advisor can score mic/leveler/ALC/CFC/output/PureSignal health; diagnostics now expose the DSP runtime needed to prove the high-rate TX path is active before judging station-quality audio.",
         },
         new
         {

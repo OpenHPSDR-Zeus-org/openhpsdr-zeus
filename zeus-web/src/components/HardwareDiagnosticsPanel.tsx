@@ -258,6 +258,12 @@ function featureNextStep(id: string): string {
       return 'Add guarded hardware key/PTT configuration with explicit arming, sidetone policy, and external PTT ownership display.';
     case 'hardware.mapping.correlation':
       return 'Turn the marker API into guided capture recipes so a single radio action can be mapped and promoted to a typed setting.';
+    case 'rx.signal-intelligence.weak-signal':
+      return 'Persist coherent scene metrics from Signal Intelligence so remote/headless sessions can audit weak-signal classification, Signal Pop, and snap behavior.';
+    case 'rx.smart-nr.adaptive':
+      return 'Promote the Smart NR condition analyzer into a shared DSP scene feed so RX automation, recordings, and diagnostics use the same weak-signal/noise classification.';
+    case 'tx.fidelity.spectral-density':
+      return 'Add a TX fidelity policy endpoint for target headroom, occupied bandwidth, PureSignal feedback health, and spectral-density warnings tied to station profiles.';
     default:
       return 'Promote the advertised telemetry into a typed setting only after the hardware path is correlated and gated by board capability.';
   }
@@ -273,6 +279,9 @@ function rankFeature(item: HardwareFeatureSurfaceDto, plannedCount: number): num
   if (item.safetyClass === 'rx-safe' || item.safetyClass === 'tx-monitoring-only') score += 1;
   if (item.safetyClass.includes('tx-capable')) score -= 1;
   if (item.id === 'rx.auto-attenuation.adc-overload') score += 2;
+  if (item.id === 'rx.signal-intelligence.weak-signal') score += 3;
+  if (item.id === 'rx.smart-nr.adaptive') score += 3;
+  if (item.id === 'tx.fidelity.spectral-density') score += 3;
   if (item.id === 'pa.telemetry.power-supply') score += 1;
   return score;
 }
@@ -904,6 +913,27 @@ export function HardwareDiagnosticsPanel() {
     { label: 'Anvelina DX OC', value: boolLabel(caps?.supportsAnvelinaDxOc) },
   ];
 
+  const dsp = diag?.dsp;
+  const dspFields: Field[] = [
+    { label: 'Engine', value: dsp?.engineKind },
+    { label: 'Runtime', value: dsp?.engine },
+    { label: 'Readiness', value: dsp?.readiness },
+    { label: 'WDSP Active', value: boolLabel(dsp?.wdspActive) },
+    { label: 'Wisdom', value: dsp?.wdspWisdomPhase },
+    { label: 'Channel', value: dsp?.channelId },
+    { label: 'DSP Rate', value: dsp?.sampleRateHz },
+    { label: 'Display Width', value: dsp?.displayWidth },
+    { label: 'Tick Hz', value: dsp?.tickRateHz },
+    { label: 'Audio Out', value: dsp?.audioOutputRateHz },
+    { label: 'TX Block', value: dsp?.txBlockSamples },
+    { label: 'TX IQ Out', value: dsp?.txOutputSamples },
+    { label: 'TX Monitor', value: boolLabel(dsp?.txMonitorRequested) },
+    { label: 'RX Sink', value: boolLabel(dsp?.rxSinkAttached) },
+    { label: 'Audio Sinks', value: dsp?.audioSinkCount },
+    { label: 'Monitor Backlog', value: dsp?.monitorBacklogSamples },
+    { label: 'Wisdom Status', value: dsp?.wdspWisdomStatus },
+  ];
+
   const p1 = diag?.p1;
   const p1Fields: Field[] = [
     { label: 'Packets', value: p1?.packets },
@@ -996,6 +1026,14 @@ export function HardwareDiagnosticsPanel() {
           <span className="ps-card-hint">Thetis-derived static map</span>
         </h4>
         <FieldGrid fields={capabilityFields} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          DSP Runtime
+          <span className="ps-card-hint">engine, timing, TX path, WDSP readiness</span>
+        </h4>
+        <FieldGrid fields={dspFields} />
       </div>
 
       <div className="ps-card">

@@ -475,6 +475,26 @@ describe('POST helpers', () => {
         hardwareDiagnosticsApiVersion: 1,
         connectionStatus: 'Connected',
         mode: 'USB',
+        dsp: {
+          schemaVersion: 1,
+          engine: 'WdspDspEngine',
+          engineKind: 'WDSP',
+          wdspActive: true,
+          channelId: 1,
+          sampleRateHz: 192000,
+          displayWidth: 2048,
+          tickRateHz: 30,
+          audioOutputRateHz: 48000,
+          txBlockSamples: 1024,
+          txOutputSamples: 4096,
+          txMonitorRequested: true,
+          rxSinkAttached: true,
+          audioSinkCount: 1,
+          monitorBacklogSamples: 0,
+          wdspWisdomPhase: 'Ready',
+          wdspWisdomStatus: '',
+          readiness: 'wdsp-active',
+        },
         mapping: {
           schemaVersion: 2,
           markers: [
@@ -519,6 +539,9 @@ describe('POST helpers', () => {
       notes: 'toggle RX2',
     });
     expect(diag.hardwareDiagnosticsApiVersion).toBe(1);
+    expect(diag.dsp.engineKind).toBe('WDSP');
+    expect(diag.dsp.txOutputSamples).toBe(4096);
+    expect(diag.dsp.txMonitorRequested).toBe(true);
     expect(diag.mapping.schemaVersion).toBe(2);
     expect(diag.mapping.markers[0]?.label).toBe('RX2 on');
     expect(diag.featureSurfaces[0]?.id).toBe('hardware.mapping.correlation');
