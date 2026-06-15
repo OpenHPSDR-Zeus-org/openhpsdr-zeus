@@ -218,14 +218,18 @@ export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
   }
 
   if (reasons.some((r) => r.includes('AGC'))) {
+    const agcCutting = agcGain < -10;
+    const adcHasCleanHeadroom = adcPk === null || adcPk <= -12;
     return {
       state: 'agc-stressed',
       label: 'AGC stressed',
       detail: reasons.join(' · '),
-      recommendation: agcGain < -10
-        ? 'Add headroom or reduce RF gain'
+      recommendation: agcCutting
+        ? adcHasCleanHeadroom
+          ? 'Narrow passband or lower AGC top; keep RF gain'
+          : 'Add headroom or reduce RF gain'
         : 'Reduce attenuation or narrow the passband',
-      actionTone: agcGain < -10 ? 'protect' : 'optimize',
+      actionTone: agcCutting && !adcHasCleanHeadroom ? 'protect' : 'optimize',
       score: finalScore,
       ...baseMetrics,
     };

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+using Microsoft.Extensions.Logging.Abstractions;
+
 namespace Zeus.Protocol2.Tests;
 
 public class TxIqQuantizerTests
@@ -22,5 +24,27 @@ public class TxIqQuantizerTests
     public void Int24Clamp_ZerosNonFiniteSamples(float sample)
     {
         Assert.Equal(0, Protocol2Client.Int24Clamp(sample));
+    }
+
+    [Fact]
+    public void TxIqDiagnosticsSnapshot_StartsEmptyAndStopped()
+    {
+        var client = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
+
+        var diag = client.TxIqDiagnosticsSnapshot();
+
+        Assert.Equal(0, diag.InputComplexSamples);
+        Assert.Equal(0, diag.PacketsQueued);
+        Assert.Equal(0, diag.PacketsSent);
+        Assert.Equal(0, diag.QueuedPackets);
+        Assert.Equal(0, diag.QueueWriteFailures);
+        Assert.Equal(0, diag.SendFailures);
+        Assert.Equal(0, diag.ResetDrainedPackets);
+        Assert.Equal(0, diag.ScratchComplexSamples);
+        Assert.Equal(0u, diag.NextSequence);
+        Assert.Equal(0, diag.LastPacketsPerSecond);
+        Assert.Equal(0, diag.LastFifoModelSamples);
+        Assert.Null(diag.LastRateTimestampUtc);
+        Assert.False(diag.SenderRunning);
     }
 }

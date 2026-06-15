@@ -54,6 +54,21 @@ using Zeus.Contracts;
 
 namespace Zeus.Protocol2;
 
+public readonly record struct Protocol2TxIqDiagnostics(
+    long InputComplexSamples,
+    long PacketsQueued,
+    long PacketsSent,
+    long QueuedPackets,
+    long QueueWriteFailures,
+    long SendFailures,
+    long ResetDrainedPackets,
+    int ScratchComplexSamples,
+    uint NextSequence,
+    int LastPacketsPerSecond,
+    long LastFifoModelSamples,
+    DateTimeOffset? LastRateTimestampUtc,
+    bool SenderRunning);
+
 /// <summary>
 /// Protocol 2 (OpenHPSDR "new protocol" / Thetis "ETH") streaming client.
 /// Mirrors Zeus.Protocol1.Protocol1Client's lifecycle surface where it
@@ -223,6 +238,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     private readonly Channel<byte[]> _txIqQueue = Channel.CreateUnbounded<byte[]>(
         new UnboundedChannelOptions { SingleReader = true });
     private Task? _txIqSenderTask;
+    private long _txIqInputComplexSamples;
+    private long _txIqPacketsQueued;
+    private long _txIqPacketsSent;
+    private long _txIqQueuedPackets;
+    private long _txIqQueueWriteFailures;
+    private long _txIqSendFailures;
+    private long _txIqResetDrainedPackets;
+    private int _txIqLastPacketsPerSecond;
+    private long _txIqLastFifoModelSamples;
+    private long _txIqLastRateUtcTicks;
 
     // ---- PureSignal feedback (DDC0 + DDC1 paired on UDP 1035) ----
     // PS feedback decoder: when armed, packets on port 1035 carry interleaved
@@ -258,6 +283,34 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     public ChannelReader<IqFrame> IqFrames => _iqFrames.Reader;
     public long TotalFrames => Interlocked.Read(ref _totalFrames);
     public long DroppedFrames => Interlocked.Read(ref _droppedFrames);
+    public Protocol2TxIqDiagnostics TxIqDiagnosticsSnapshot()
+    {
+        int scratchComplexSamples;
+        uint nextSequence;
+        lock (_txIqGate)
+        {
+            scratchComplexSamples = _txIqScratchCount / 2;
+            nextSequence = _seqCmdTxIq;
+        }
+
+        long lastRateTicks = Interlocked.Read(ref _txIqLastRateUtcTicks);
+        return new Protocol2TxIqDiagnostics(
+            InputComplexSamples: Interlocked.Read(ref _txIqInputComplexSamples),
+            PacketsQueued: Interlocked.Read(ref _txIqPacketsQueued),
+            PacketsSent: Interlocked.Read(ref _txIqPacketsSent),
+            QueuedPackets: Math.Max(0, Interlocked.Read(ref _txIqQueuedPackets)),
+            QueueWriteFailures: Interlocked.Read(ref _txIqQueueWriteFailures),
+            SendFailures: Interlocked.Read(ref _txIqSendFailures),
+            ResetDrainedPackets: Interlocked.Read(ref _txIqResetDrainedPackets),
+            ScratchComplexSamples: scratchComplexSamples,
+            NextSequence: nextSequence,
+            LastPacketsPerSecond: Volatile.Read(ref _txIqLastPacketsPerSecond),
+            LastFifoModelSamples: Interlocked.Read(ref _txIqLastFifoModelSamples),
+            LastRateTimestampUtc: lastRateTicks > 0
+                ? new DateTimeOffset(lastRateTicks, TimeSpan.Zero)
+                : null,
+            SenderRunning: _txIqSenderTask is { IsCompleted: false });
+    }
 
     // ---- Synchronous RX sink (iter5: collapse pumps onto RxLoop thread) -----
     // Optional sink attached via AttachRxSink. When non-null, RxLoop calls
@@ -706,6 +759,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if ((iqInterleaved.Length & 1) != 0)
             throw new ArgumentException("interleaved length must be even (I,Q pairs)", nameof(iqInterleaved));
 
+        Interlocked.Add(ref _txIqInputComplexSamples, iqInterleaved.Length / 2);
         lock (_txIqGate)
         {
             int idx = 0;
@@ -730,7 +784,13 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // Drain any queued-but-unsent packets so a fresh key-down starts
         // from an empty FIFO model and the radio isn't playing 10 ms of
         // the previous transmission's IQ when PTT re-engages.
-        while (_txIqQueue.Reader.TryRead(out _)) { }
+        long drained = 0;
+        while (_txIqQueue.Reader.TryRead(out _)) drained++;
+        if (drained > 0)
+        {
+            Interlocked.Add(ref _txIqResetDrainedPackets, drained);
+            Interlocked.Add(ref _txIqQueuedPackets, -drained);
+        }
     }
 
     private void FlushTxIqLocked()
@@ -760,7 +820,15 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // the DAC rate so the radio's TX FIFO stays level — sending the full
         // 8-packet burst from one WDSP cycle straight to the wire overfills
         // then starves the FIFO, showing up as a pulsed carrier.
-        _txIqQueue.Writer.TryWrite(p);
+        if (_txIqQueue.Writer.TryWrite(p))
+        {
+            Interlocked.Increment(ref _txIqPacketsQueued);
+            Interlocked.Increment(ref _txIqQueuedPackets);
+        }
+        else
+        {
+            Interlocked.Increment(ref _txIqQueueWriteFailures);
+        }
         _txIqScratchCount = 0;
     }
 
@@ -803,6 +871,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 catch (OperationCanceledException) { break; }
                 catch (ChannelClosedException) { break; }
                 if (!reader.TryRead(out var packet)) continue;
+                Interlocked.Decrement(ref _txIqQueuedPackets);
 
                 // Drain by wall-clock since the previous send.
                 long now = Stopwatch.GetTimestamp();
@@ -826,10 +895,16 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 }
 
                 fifoSamples += TxIqSamplesPerPacket;
-                try { _sock!.SendTo(packet, ep); rateCount++; }
+                try
+                {
+                    _sock!.SendTo(packet, ep);
+                    rateCount++;
+                    Interlocked.Increment(ref _txIqPacketsSent);
+                }
                 catch (ObjectDisposedException) { break; }
                 catch (SocketException ex)
                 {
+                    Interlocked.Increment(ref _txIqSendFailures);
                     _log.LogWarning(ex, "p2.txiq send failed");
                 }
 
@@ -842,6 +917,9 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                     // killed the sender 24ms into key-down — no TX output at all.)
                     try
                     {
+                        Volatile.Write(ref _txIqLastPacketsPerSecond, rateCount);
+                        Interlocked.Exchange(ref _txIqLastFifoModelSamples, (long)Math.Round(fifoSamples));
+                        Interlocked.Exchange(ref _txIqLastRateUtcTicks, DateTimeOffset.UtcNow.UtcTicks);
                         _log.LogInformation("p2.tx.rate pkts/s={Pps} fifoModel={Fifo:F0}",
                             rateCount, fifoSamples);
                     }
