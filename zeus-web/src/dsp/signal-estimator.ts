@@ -378,6 +378,7 @@ export type SignalEnhanceSceneInput = {
   mode: RxMode;
   spectrum: Float32Array | null;
   floor: Float32Array | null;
+  confidence?: Float32Array | null;
   hzPerPixel: number;
 };
 
@@ -385,9 +386,14 @@ export type SignalEnhanceScene = {
   profileId: SignalEnhancePresetId;
   baseProfileId: SignalEnhancePresetId;
   peakCount: number;
+  coherentPeakCount: number;
   peaksPer10Khz: number;
+  coherentPeaksPer10Khz: number;
   occupiedRatio: number;
+  coherentOccupiedRatio: number;
+  impulsiveOccupiedRatio: number;
   maxSnrDb: number;
+  coherentMaxSnrDb: number;
 };
 
 export type SignalEnhanceSceneStatus = {
@@ -406,51 +412,98 @@ const SCENE_BUSY_PEAKS_PER_10KHZ = 3.5;
 const SCENE_BUSY_OCCUPIED_RATIO = 0.14;
 const SCENE_DX_MAX_PEAKS_PER_10KHZ = 1.6;
 const SCENE_DX_MAX_SNR_DB = 24;
+const SCENE_IMPULSE_GATE_DB = 12;
+const SCENE_IMPULSE_CONFIDENCE_CEILING = 0.25;
 
 /** Recommend a Signal Intelligence profile from current mode + spectrum scene.
  *  The mode remains the primary constraint: CW and digital keep their narrow
  *  ridge-heavy profiles. Voice-like modes can adapt between Voice, DX, and
- *  Contest by looking at CFAR SNR peaks and occupied-bin density. */
+ *  Contest by looking at CFAR SNR peaks and occupied-bin density. When the
+ *  temporal confidence map is available, scene changes require coherent
+ *  repeated-bin evidence so one-frame QRN/FFT speckles do not trigger DX or
+ *  Contest profiles. */
 export function recommendSignalEnhanceScene(input: SignalEnhanceSceneInput): SignalEnhanceScene {
   const baseProfileId = signalEnhanceProfileForMode(input.mode);
   const spec = input.spectrum;
   const f = input.floor;
+  const confidence = input.confidence;
   if (spec === null || f === null || spec.length < 3 || f.length !== spec.length || input.hzPerPixel <= 0) {
     return {
       profileId: baseProfileId,
       baseProfileId,
       peakCount: 0,
+      coherentPeakCount: 0,
       peaksPer10Khz: 0,
+      coherentPeaksPer10Khz: 0,
       occupiedRatio: 0,
+      coherentOccupiedRatio: 0,
+      impulsiveOccupiedRatio: 0,
       maxSnrDb: 0,
+      coherentMaxSnrDb: 0,
     };
   }
 
+  const useConfidence = confidence !== null && confidence !== undefined && confidence.length === spec.length;
   let peakCount = 0;
+  let coherentPeakCount = 0;
   let occupied = 0;
+  let coherentOccupied = 0;
+  let impulsiveOccupied = 0;
   let maxSnrDb = 0;
+  let coherentMaxSnrDb = 0;
   for (let i = 1; i < spec.length - 1; i++) {
     const snr = spec[i]! - f[i]!;
+    const c = useConfidence ? confidence[i]! : 1;
+    const coherent = c >= COHERENCE_HOLD_GATE;
     if (snr >= SCENE_PEAK_GATE_DB) occupied++;
+    if (snr >= SCENE_PEAK_GATE_DB && coherent) coherentOccupied++;
+    if (useConfidence && snr >= SCENE_IMPULSE_GATE_DB && c < SCENE_IMPULSE_CONFIDENCE_CEILING) {
+      impulsiveOccupied++;
+    }
     if (snr > maxSnrDb) maxSnrDb = snr;
+    if (coherent && snr > coherentMaxSnrDb) coherentMaxSnrDb = snr;
     if (snr >= SCENE_PEAK_GATE_DB && spec[i]! >= spec[i - 1]! && spec[i]! > spec[i + 1]!) {
       peakCount++;
+      if (coherent) coherentPeakCount++;
     }
   }
   const span10Khz = Math.max(1, (spec.length * input.hzPerPixel) / 10_000);
   const peaksPer10Khz = peakCount / span10Khz;
+  const coherentPeaksPer10Khz = coherentPeakCount / span10Khz;
   const occupiedRatio = occupied / spec.length;
+  const coherentOccupiedRatio = coherentOccupied / spec.length;
+  const impulsiveOccupiedRatio = impulsiveOccupied / spec.length;
+  const scenePeaksPer10Khz = useConfidence ? coherentPeaksPer10Khz : peaksPer10Khz;
+  const scenePeakCount = useConfidence ? coherentPeakCount : peakCount;
+  const sceneOccupiedRatio = useConfidence ? coherentOccupiedRatio : occupiedRatio;
+  const sceneMaxSnrDb = useConfidence ? coherentMaxSnrDb : maxSnrDb;
 
   let profileId = baseProfileId;
   if (baseProfileId === 'voice') {
-    if (peaksPer10Khz >= SCENE_BUSY_PEAKS_PER_10KHZ || occupiedRatio >= SCENE_BUSY_OCCUPIED_RATIO) {
+    if (scenePeaksPer10Khz >= SCENE_BUSY_PEAKS_PER_10KHZ || sceneOccupiedRatio >= SCENE_BUSY_OCCUPIED_RATIO) {
       profileId = 'contest';
-    } else if (peakCount > 0 && peaksPer10Khz <= SCENE_DX_MAX_PEAKS_PER_10KHZ && maxSnrDb <= SCENE_DX_MAX_SNR_DB) {
+    } else if (
+      scenePeakCount > 0 &&
+      scenePeaksPer10Khz <= SCENE_DX_MAX_PEAKS_PER_10KHZ &&
+      sceneMaxSnrDb <= SCENE_DX_MAX_SNR_DB
+    ) {
       profileId = 'dx';
     }
   }
 
-  return { profileId, baseProfileId, peakCount, peaksPer10Khz, occupiedRatio, maxSnrDb };
+  return {
+    profileId,
+    baseProfileId,
+    peakCount,
+    coherentPeakCount,
+    peaksPer10Khz,
+    coherentPeaksPer10Khz,
+    occupiedRatio,
+    coherentOccupiedRatio,
+    impulsiveOccupiedRatio,
+    maxSnrDb,
+    coherentMaxSnrDb,
+  };
 }
 
 function clampFinite(v: unknown, min: number, max: number, fallback: number): number {
