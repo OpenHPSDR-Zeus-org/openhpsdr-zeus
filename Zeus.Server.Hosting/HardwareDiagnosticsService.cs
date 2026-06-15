@@ -1328,11 +1328,11 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             {
                 "/api/audio-suite/processing-mode",
                 "/api/audio-suite/chain/meters",
-                "planned:/api/tx/fidelity-policy",
-                "planned:/api/tx/spectral-density-target",
+                "/api/tx/fidelity-policy",
+                "/api/tx/station-profiles",
             },
             safetyClass = "tx-monitoring-only",
-            notes = "The existing TX advisor can score mic/leveler/ALC/CFC/output/PureSignal health; diagnostics now expose the DSP runtime needed to prove the high-rate TX path is active before judging station-quality audio.",
+            notes = "The existing TX advisor can score mic/leveler/ALC/CFC/output/PureSignal health; the TX fidelity policy now persists the active station target while diagnostics prove the high-rate TX path before judging station-quality audio.",
         },
         new
         {

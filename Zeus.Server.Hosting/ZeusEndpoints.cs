@@ -753,9 +753,24 @@ public static class ZeusEndpoints
             return Results.Ok(r.SetTxLeveling(cfg));
         });
 
-        // TX station-profile overrides. Built-in Studio/eSSB/DX defaults live in
-        // the frontend; these routes persist only operator edits so the panel,
-        // Settings, and future diagnostics mapper all share one durable API.
+        // TX fidelity policy and station-profile overrides. Built-in Studio/eSSB/DX
+        // defaults live in the frontend; these routes persist only active target
+        // selection and operator edits so diagnostics never duplicate profile data.
+        app.MapGet("/api/tx/fidelity-policy", (TxFidelityPolicyStore store) =>
+            Results.Ok(store.Get()));
+
+        app.MapPut("/api/tx/fidelity-policy", (TxFidelityPolicyDto req, TxFidelityPolicyStore store) =>
+        {
+            if (!TryValidateTxFidelityPolicy(req, out var err))
+                return Results.BadRequest(new { error = err });
+
+            var saved = store.Set(req);
+            log.LogInformation(
+                "api.tx.fidelityPolicy profile={ProfileId} density={Density}",
+                saved.ProfileId, saved.TargetSpectralDensity);
+            return Results.Ok(saved);
+        });
+
         app.MapGet("/api/tx/station-profiles", (TxStationProfileStore store) =>
             Results.Ok(new TxStationProfilesResponse(store.GetAll())));
 
@@ -1933,6 +1948,19 @@ public static class ZeusEndpoints
         }
         error = "profile id must be one of studio-ssb, essb, dx";
         return false;
+    }
+
+    static bool TryValidateTxFidelityPolicy(TxFidelityPolicyDto policy, out string error)
+    {
+        if (!TryValidateTxStationProfileId(policy.ProfileId, out error))
+            return false;
+        if (policy.TargetSpectralDensity < 0 || policy.TargetSpectralDensity > 100)
+        {
+            error = "targetSpectralDensity must be 0..100";
+            return false;
+        }
+        error = "";
+        return true;
     }
 
     static bool TryValidateTxStationProfile(TxStationProfileDto profile, out string error)

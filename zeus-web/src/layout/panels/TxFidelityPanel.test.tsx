@@ -6,7 +6,11 @@ import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { act, render } from '../../components/meters/__tests__/harness';
-import { fetchTxStationProfiles } from '../../api/client';
+import {
+  fetchTxFidelityPolicy,
+  fetchTxStationProfiles,
+  saveTxFidelityPolicy,
+} from '../../api/client';
 import { txStationProfileToDto, STUDIO_SSB_PROFILE } from '../../audio/tx-station-profile';
 import { TxFidelityPanel } from './TxFidelityPanel';
 
@@ -14,6 +18,10 @@ vi.mock('../../api/client', async () => {
   const actual = await vi.importActual<typeof import('../../api/client')>('../../api/client');
   return {
     ...actual,
+    fetchTxFidelityPolicy: vi.fn(() =>
+      Promise.resolve({ profileId: 'studio-ssb', targetSpectralDensity: 55 }),
+    ),
+    saveTxFidelityPolicy: vi.fn(async (policy: unknown) => policy),
     fetchTxStationProfiles: vi.fn(() => Promise.resolve([])),
     saveTxStationProfile: vi.fn(async (profile: unknown) => profile),
     resetTxStationProfile: vi.fn(async () => undefined),
@@ -105,6 +113,30 @@ describe('TxFidelityPanel', () => {
     unmount();
   });
 
+  it('loads the persisted TX fidelity policy into the station selector', async () => {
+    vi.mocked(fetchTxFidelityPolicy).mockResolvedValueOnce({
+      profileId: 'dx',
+      targetSpectralDensity: 100,
+    });
+
+    const { container, unmount } = render(createElement(TxFidelityPanel));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const profileButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="TX station profile"]',
+    );
+    expect(profileButton).not.toBeNull();
+    expect(profileButton!.textContent).toContain('DX Punch');
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="TX spectral density"]')?.value).toBe('100');
+    expect(container.textContent).toContain('DENS --/100');
+
+    unmount();
+  });
+
   it('renders configurable station profiles and updates the profile summary', async () => {
     const { container, unmount } = render(createElement(TxFidelityPanel));
 
@@ -133,6 +165,10 @@ describe('TxFidelityPanel', () => {
       profileOptions.find((option) => option.textContent === 'DX Punch')!.click();
     });
 
+    expect(saveTxFidelityPolicy).toHaveBeenCalledWith({
+      profileId: 'dx',
+      targetSpectralDensity: 100,
+    });
     expect(container.textContent).toContain('DX CFC');
     expect(
       Array.from(container.querySelectorAll<HTMLButtonElement>('button')).some(

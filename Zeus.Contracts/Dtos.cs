@@ -1110,3 +1110,7 @@ public sealed record TxStationProfileDto(
     int SpectralDensity);
 
 public sealed record TxStationProfilesResponse(IReadOnlyList<TxStationProfileDto> Profiles);
+
+public sealed record TxFidelityPolicyDto(
+    string ProfileId,
+    int TargetSpectralDensity);

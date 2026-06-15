@@ -279,7 +279,7 @@ function featureNextStep(id: string): string {
     case 'rx.smart-nr.adaptive':
       return 'Correlate Smart NR recommendations with RX-chain health over time so automation can distinguish noise-floor cleanup from ADC/headroom protection.';
     case 'tx.fidelity.spectral-density':
-      return 'Add a TX fidelity policy endpoint for target headroom, occupied bandwidth, PureSignal feedback health, and spectral-density warnings tied to station profiles.';
+      return 'Use the TX fidelity policy and station profiles to keep target headroom, occupied bandwidth, PureSignal feedback health, and spectral-density warnings tied to the active station profile.';
     default:
       return 'Promote the advertised telemetry into a typed setting only after the hardware path is correlated and gated by board capability.';
   }

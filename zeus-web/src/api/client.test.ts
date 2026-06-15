@@ -58,6 +58,7 @@ import {
   createHardwareDiagnosticsMarker,
   fetchHardwareDiagnostics,
   fetchAdcProtection,
+  fetchTxFidelityPolicy,
   publishFrontendDspSceneDiagnostics,
   normalizeAgc,
   normalizeAdcProtectionStatus,
@@ -77,6 +78,7 @@ import {
   setAttenuator,
   setAutoAtt,
   setAdcProtection,
+  saveTxFidelityPolicy,
   setLevelerMaxGain,
   setMicGain,
   setMode,
@@ -453,6 +455,49 @@ describe('POST helpers', () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('/api/rx/adc-protection');
     expect(init?.method ?? 'GET').toBe('GET');
+  });
+
+  it('fetchTxFidelityPolicy normalizes the active TX policy', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      profileId: 'DX',
+      targetSpectralDensity: 101,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const policy = await fetchTxFidelityPolicy();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/tx/fidelity-policy');
+    expect(init?.method ?? 'GET').toBe('GET');
+    expect(policy).toEqual({
+      profileId: 'dx',
+      targetSpectralDensity: 100,
+    });
+  });
+
+  it('saveTxFidelityPolicy puts profile id and density target', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      profileId: 'essb',
+      targetSpectralDensity: 88,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const policy = await saveTxFidelityPolicy({
+      profileId: 'essb',
+      targetSpectralDensity: 88,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/tx/fidelity-policy');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({
+      profileId: 'essb',
+      targetSpectralDensity: 88,
+    });
+    expect(policy).toEqual({
+      profileId: 'essb',
+      targetSpectralDensity: 88,
+    });
   });
 
   it('setAdcProtection puts the partial config to /api/rx/adc-protection', async () => {

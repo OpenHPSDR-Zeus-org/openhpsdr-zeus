@@ -399,6 +399,16 @@ export type TxStationProfilesResponseDto = {
   profiles: TxStationProfileDto[];
 };
 
+export type TxFidelityPolicyDto = {
+  profileId: string;
+  targetSpectralDensity: number;
+};
+
+export const TX_FIDELITY_POLICY_DEFAULT: TxFidelityPolicyDto = {
+  profileId: 'studio-ssb',
+  targetSpectralDensity: 55,
+};
+
 // Pihpsdr classic-mode default — voice-band split the operator recognises
 // from PowerSDR. Master OFF + zeroed comp/post means a fresh enable is
 // audibly transparent. Mirrors CfcConfig.Default on the server.
@@ -1200,6 +1210,23 @@ function normalizeTxStationProfileResponse(raw: unknown): TxStationProfileDto[] 
   return profiles
     .map(normalizeTxStationProfile)
     .filter((profile): profile is TxStationProfileDto => profile !== null);
+}
+
+function normalizeTxFidelityPolicy(raw: unknown): TxFidelityPolicyDto {
+  if (!raw || typeof raw !== 'object') return TX_FIDELITY_POLICY_DEFAULT;
+  const r = raw as Record<string, unknown>;
+  const profileId = typeof r.profileId === 'string'
+    ? r.profileId.trim().toLowerCase()
+    : TX_FIDELITY_POLICY_DEFAULT.profileId;
+  return {
+    profileId: profileId || TX_FIDELITY_POLICY_DEFAULT.profileId,
+    targetSpectralDensity: clampInt(
+      r.targetSpectralDensity,
+      0,
+      100,
+      TX_FIDELITY_POLICY_DEFAULT.targetSpectralDensity,
+    ),
+  };
 }
 
 function cloneCfc(c: CfcConfigDto): CfcConfigDto {
@@ -2821,6 +2848,32 @@ export function fetchTxStationProfiles(
     '/api/tx/station-profiles',
     { signal },
     normalizeTxStationProfileResponse,
+  );
+}
+
+export function fetchTxFidelityPolicy(
+  signal?: AbortSignal,
+): Promise<TxFidelityPolicyDto> {
+  return jsonFetch(
+    '/api/tx/fidelity-policy',
+    { signal },
+    normalizeTxFidelityPolicy,
+  );
+}
+
+export function saveTxFidelityPolicy(
+  policy: TxFidelityPolicyDto,
+  signal?: AbortSignal,
+): Promise<TxFidelityPolicyDto> {
+  return jsonFetch(
+    '/api/tx/fidelity-policy',
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(policy),
+      signal,
+    },
+    normalizeTxFidelityPolicy,
   );
 }
 

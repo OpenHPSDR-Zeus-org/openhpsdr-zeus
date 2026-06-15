@@ -4,11 +4,13 @@
 // components/TxFidelityAdvisor so the same surface can be reused later in
 // compact/mobile contexts without depending on workspace chrome.
 
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 
 import {
+  fetchTxFidelityPolicy,
   fetchTxStationProfiles,
   resetTxStationProfile,
+  saveTxFidelityPolicy,
   saveTxStationProfile,
   setCfcConfig,
   setLevelerMaxGain,
@@ -19,6 +21,7 @@ import {
 import {
   formatTxStationProfileSummary,
   getTxStationProfile,
+  isTxStationProfileId,
   mergeTxStationProfileOverrides,
   resolveTxStationProfile,
   sanitizeTxStationProfile,
@@ -108,10 +111,16 @@ function profileDefaults(): TxStationProfile[] {
 }
 
 type TxStationProfilesProps = {
+  selectedProfileId: TxStationProfileId;
+  onPolicyChange?: (profileId: TxStationProfileId, spectralDensity: number) => void;
   onTargetSpectralDensityChange?: (density: number) => void;
 };
 
-function TxStationProfiles({ onTargetSpectralDensityChange }: TxStationProfilesProps = {}) {
+function TxStationProfiles({
+  selectedProfileId,
+  onPolicyChange,
+  onTargetSpectralDensityChange,
+}: TxStationProfilesProps) {
   const status = useConnectionStore((s) => s.status);
   const mode = useConnectionStore((s) => s.mode);
   const applyState = useConnectionStore((s) => s.applyState);
@@ -128,8 +137,6 @@ function TxStationProfiles({ onTargetSpectralDensityChange }: TxStationProfilesP
   const vstEngineAvailable = useAudioSuiteStore((s) => s.vstEngineAvailable);
   const vstEngineActive = useAudioSuiteStore((s) => s.vstEngineActive);
   const [profiles, setProfiles] = useState<TxStationProfile[]>(profileDefaults);
-  const [selectedProfileId, setSelectedProfileId] =
-    useState<TxStationProfileId>(STUDIO_SSB_PROFILE.id);
   const [phase, setPhase] = useState<ApplyPhase>('idle');
   const [message, setMessage] = useState(STUDIO_SSB_PROFILE.summary);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
@@ -143,7 +150,7 @@ function TxStationProfiles({ onTargetSpectralDensityChange }: TxStationProfilesP
 
   useEffect(() => {
     onTargetSpectralDensityChange?.(selectedProfile.spectralDensity);
-  }, [onTargetSpectralDensityChange, selectedProfile.spectralDensity]);
+  }, [onTargetSpectralDensityChange, selectedProfile.id, selectedProfile.spectralDensity]);
 
   useEffect(() => {
     let active = true;
@@ -175,7 +182,7 @@ function TxStationProfiles({ onTargetSpectralDensityChange }: TxStationProfilesP
 
   function selectProfile(profileId: string) {
     const profile = getTxStationProfile(profileId, profiles);
-    setSelectedProfileId(profile.id);
+    onPolicyChange?.(profile.id, profile.spectralDensity);
     setProfileMenuOpen(false);
     setAudioProfileMenuOpen(false);
     setPhase('idle');
@@ -216,6 +223,9 @@ function TxStationProfiles({ onTargetSpectralDensityChange }: TxStationProfilesP
       const fallback = getTxStationProfile(saved.id, TX_STATION_PROFILES);
       const sanitized = sanitizeTxStationProfile(saved, fallback);
       setProfiles((prev) => prev.map((profile) => (profile.id === sanitized.id ? sanitized : profile)));
+      if (sanitized.id === selectedProfileId) {
+        onPolicyChange?.(sanitized.id, sanitized.spectralDensity);
+      }
       setPhase('saved');
       setMessage(`${sanitized.label} saved / density ${sanitized.spectralDensity}`);
     } catch (err) {
@@ -232,6 +242,7 @@ function TxStationProfiles({ onTargetSpectralDensityChange }: TxStationProfilesP
       const defaults = profileDefaults();
       const restored = getTxStationProfile(selectedProfile.id, defaults);
       setProfiles((prev) => prev.map((profile) => (profile.id === restored.id ? restored : profile)));
+      onPolicyChange?.(restored.id, restored.spectralDensity);
       setPhase('idle');
       setMessage(formatTxStationProfileSummary(restored));
     } catch (err) {
@@ -820,9 +831,44 @@ function TxStationProfiles({ onTargetSpectralDensityChange }: TxStationProfilesP
 }
 
 export function TxFidelityPanel() {
+  const policyTouchedRef = useRef(false);
+  const [selectedProfileId, setSelectedProfileId] = useState<TxStationProfileId>(
+    STUDIO_SSB_PROFILE.id,
+  );
   const [targetSpectralDensity, setTargetSpectralDensity] = useState(
     STUDIO_SSB_PROFILE.spectralDensity,
   );
+
+  useEffect(() => {
+    let active = true;
+    fetchTxFidelityPolicy()
+      .then((policy) => {
+        if (!active || policyTouchedRef.current) return;
+        const profileId = isTxStationProfileId(policy.profileId)
+          ? policy.profileId
+          : STUDIO_SSB_PROFILE.id;
+        setSelectedProfileId(profileId);
+        setTargetSpectralDensity(policy.targetSpectralDensity);
+      })
+      .catch(() => {
+        /* Keep the built-in Studio SSB default when the policy is unavailable. */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const updatePolicy = useCallback((profileId: TxStationProfileId, spectralDensity: number) => {
+    policyTouchedRef.current = true;
+    setSelectedProfileId(profileId);
+    setTargetSpectralDensity(spectralDensity);
+    void saveTxFidelityPolicy({
+      profileId,
+      targetSpectralDensity: spectralDensity,
+    }).catch(() => {
+      /* The advisor stays usable even if the preference write fails. */
+    });
+  }, []);
 
   return (
     <div
@@ -840,7 +886,11 @@ export function TxFidelityPanel() {
       }}
     >
       <TxFidelityAdvisor targetSpectralDensity={targetSpectralDensity} />
-      <TxStationProfiles onTargetSpectralDensityChange={setTargetSpectralDensity} />
+      <TxStationProfiles
+        selectedProfileId={selectedProfileId}
+        onPolicyChange={updatePolicy}
+        onTargetSpectralDensityChange={setTargetSpectralDensity}
+      />
     </div>
   );
 }
