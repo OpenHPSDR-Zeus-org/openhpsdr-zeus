@@ -70,7 +70,10 @@ describe('SmartNrSettingsSection', () => {
       reason: 'Weak narrow-signal profile',
       maxSnrDb: 14,
       occupancyPct: 3,
+      coherentOccupancyPct: 1.5,
+      impulsivePct: 0,
       peakCount: 1,
+      coherentPeakCount: 1,
       pending: false,
       applied: false,
       nr: suggested,
@@ -84,6 +87,9 @@ describe('SmartNrSettingsSection', () => {
       .find((b) => b.textContent?.trim() === 'Apply');
 
     expect(apply).toBeDefined();
+    expect(container.textContent).toContain('COH 1.5%');
+    expect(container.textContent).toContain('CPK 1');
+    expect(container.textContent).toContain('IMP 0.0%');
 
     act(() => {
       apply!.click();

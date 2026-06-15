@@ -150,6 +150,9 @@ export function SmartNrSettingsSection() {
           <span className="mono">
             SNR {status.maxSnrDb.toFixed(1)} dB · OCC {status.occupancyPct.toFixed(1)}% · PK {status.peakCount}
           </span>
+          <span className="mono">
+            COH {status.coherentOccupancyPct.toFixed(1)}% · CPK {status.coherentPeakCount} · IMP {status.impulsivePct.toFixed(1)}%
+          </span>
           {automationMode === 'suggest' && status.nr && !status.pending && !status.applied && (
             <button
               type="button"
