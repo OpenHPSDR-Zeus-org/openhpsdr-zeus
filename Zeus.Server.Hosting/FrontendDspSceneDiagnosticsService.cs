@@ -127,6 +127,7 @@ public sealed class FrontendDspSceneDiagnosticsService
             if (_latest is null)
             {
                 var health = Health(null, null, null, null);
+                var alignment = NrRuntimeAlignment(null, nrRuntime);
                 return new(
                     SchemaVersion: 1,
                     Available: false,
@@ -163,12 +164,17 @@ public sealed class FrontendDspSceneDiagnosticsService
                     Nr4Readiness: nrRuntime.Nr4Readiness,
                     RequestedNrMode: nrRuntime.RequestedNrMode,
                     EffectiveNrMode: nrRuntime.EffectiveNrMode,
+                    ExpectedNrMode: alignment.ExpectedNrMode,
+                    RuntimeAligned: alignment.RuntimeAligned,
+                    RuntimeAlignmentStatus: alignment.Status,
+                    RuntimeAlignmentRecommendation: alignment.Recommendation,
                     RxChain: rxChain,
                     DiagnosticRecommendation: health.Recommendation,
                     GeneratedUtc: now);
             }
 
             var timing = Timing(_latest, now);
+            var runtimeAlignment = NrRuntimeAlignment(_latest, nrRuntime);
             return new(
                 SchemaVersion: _latest.SchemaVersion,
                 Available: true,
@@ -205,6 +211,10 @@ public sealed class FrontendDspSceneDiagnosticsService
                 Nr4Readiness: nrRuntime.Nr4Readiness,
                 RequestedNrMode: nrRuntime.RequestedNrMode,
                 EffectiveNrMode: nrRuntime.EffectiveNrMode,
+                ExpectedNrMode: runtimeAlignment.ExpectedNrMode,
+                RuntimeAligned: runtimeAlignment.RuntimeAligned,
+                RuntimeAlignmentStatus: runtimeAlignment.Status,
+                RuntimeAlignmentRecommendation: runtimeAlignment.Recommendation,
                 RxChain: rxChain,
                 DiagnosticRecommendation: timing.Health.Recommendation,
                 GeneratedUtc: now);
@@ -388,10 +398,87 @@ public sealed class FrontendDspSceneDiagnosticsService
             || latest.CoherentPeakCount is not null
             || latest.CoherentSubthresholdSignal is not null);
 
+    private static SmartNrRuntimeAlignment NrRuntimeAlignment(
+        FrontendDspSceneSnapshot? latest,
+        DspNrRuntimeSnapshot nrRuntime)
+    {
+        string? profile = Clean(latest?.SmartNrProfile, 48);
+        if (string.IsNullOrWhiteSpace(profile))
+        {
+            return new(
+                ExpectedNrMode: null,
+                RuntimeAligned: null,
+                Status: "no-profile",
+                Recommendation: "No Smart NR profile has been published yet, so backend NR runtime alignment cannot be evaluated.");
+        }
+
+        string? expected = ExpectedNrMode(profile);
+        if (expected is null)
+        {
+            return new(
+                ExpectedNrMode: null,
+                RuntimeAligned: null,
+                Status: "profile-not-mapped",
+                Recommendation: $"Smart NR profile {profile} has no one-to-one WDSP NR mode mapping; use the requested/effective NR mode and notch/blanker diagnostics directly.");
+        }
+
+        if (!nrRuntime.WdspActive)
+        {
+            return new(
+                ExpectedNrMode: expected,
+                RuntimeAligned: false,
+                Status: "runtime-inactive",
+                Recommendation: $"Smart NR recommends {profile}, which maps to WDSP {expected}, but WDSP is not active yet.");
+        }
+
+        if (string.Equals(nrRuntime.EffectiveNrMode, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            return new(
+                ExpectedNrMode: expected,
+                RuntimeAligned: true,
+                Status: "aligned",
+                Recommendation: $"Smart NR profile {profile} is aligned with the effective WDSP NR mode ({nrRuntime.EffectiveNrMode}).");
+        }
+
+        if (string.Equals(nrRuntime.RequestedNrMode, expected, StringComparison.OrdinalIgnoreCase))
+        {
+            return new(
+                ExpectedNrMode: expected,
+                RuntimeAligned: false,
+                Status: "apply-pending",
+                Recommendation: $"Smart NR profile {profile} maps to WDSP {expected}, and that mode is requested, but the effective runtime is still {nrRuntime.EffectiveNrMode}; wait for the DSP apply path before judging audio.");
+        }
+
+        return new(
+            ExpectedNrMode: expected,
+            RuntimeAligned: false,
+            Status: "mismatched",
+            Recommendation: $"Smart NR profile {profile} maps to WDSP {expected}, but the backend is requested={nrRuntime.RequestedNrMode} effective={nrRuntime.EffectiveNrMode}; reapply Smart NR or inspect the DSP apply path before tuning by ear.");
+    }
+
+    private static string? ExpectedNrMode(string profile)
+    {
+        var normalized = profile.Trim().ToUpperInvariant();
+        return normalized switch
+        {
+            "NR1" => "Anr",
+            "NR2" => "Emnr",
+            "NR4" => "Sbnr",
+            "LIGHT" => "Off",
+            "NOTCH" => "Off",
+            _ => null,
+        };
+    }
     private sealed record FrontendDspSceneHealth(
         string Status,
         bool Fresh,
         bool Stale,
+        string Recommendation);
+
+    private sealed record SmartNrRuntimeAlignment(
+        string? ExpectedNrMode,
+        bool? RuntimeAligned,
+        string Status,
         string Recommendation);
 
     private sealed record FrontendDspSceneTiming(

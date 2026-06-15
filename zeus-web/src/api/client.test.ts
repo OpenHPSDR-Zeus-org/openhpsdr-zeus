@@ -1026,6 +1026,10 @@ describe('POST helpers', () => {
       nr4Readiness: 'missing-sbnr-exports',
       requestedNrMode: 'Sbnr',
       effectiveNrMode: 'Off',
+      expectedNrMode: 'Emnr',
+      runtimeAligned: false,
+      runtimeAlignmentStatus: 'mismatched',
+      runtimeAlignmentRecommendation: 'Smart NR profile NR2 maps to WDSP Emnr, but the backend is requested=Sbnr effective=Off.',
       rxChain: {
         schemaVersion: 1,
         source: 'backend-radio-state',
@@ -1077,6 +1081,10 @@ describe('POST helpers', () => {
     expect(condition.nr4Readiness).toBe('missing-sbnr-exports');
     expect(condition.requestedNrMode).toBe('Sbnr');
     expect(condition.effectiveNrMode).toBe('Off');
+    expect(condition.expectedNrMode).toBe('Emnr');
+    expect(condition.runtimeAligned).toBe(false);
+    expect(condition.runtimeAlignmentStatus).toBe('mismatched');
+    expect(condition.runtimeAlignmentRecommendation).toContain('maps to WDSP Emnr');
     expect(condition.rxChain.source).toBe('backend-radio-state');
     expect(condition.rxChain.autoAgcEnabled).toBe(true);
     expect(condition.rxChain.agcMode).toBe('Fast');

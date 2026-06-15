@@ -755,6 +755,10 @@ export type SmartNrConditionDto = {
   nr4Readiness: string;
   requestedNrMode: string;
   effectiveNrMode: string;
+  expectedNrMode: string | null;
+  runtimeAligned: boolean | null;
+  runtimeAlignmentStatus: string;
+  runtimeAlignmentRecommendation: string;
   rxChain: SmartNrRxChainRuntimeDto;
   diagnosticRecommendation: string | null;
   generatedUtc: string;
@@ -2267,6 +2271,12 @@ function normalizeSmartNrCondition(raw: unknown): SmartNrConditionDto {
     nr4Readiness: diagString(r.nr4Readiness) ?? 'unknown',
     requestedNrMode: diagString(r.requestedNrMode) ?? 'Off',
     effectiveNrMode: diagString(r.effectiveNrMode) ?? 'Off',
+    expectedNrMode: diagString(r.expectedNrMode),
+    runtimeAligned: diagBool(r.runtimeAligned),
+    runtimeAlignmentStatus: diagString(r.runtimeAlignmentStatus) ?? 'unknown',
+    runtimeAlignmentRecommendation:
+      diagString(r.runtimeAlignmentRecommendation) ??
+      'Smart NR runtime alignment is not available from this backend yet.',
     rxChain: normalizeSmartNrRxChainRuntime(r.rxChain),
     diagnosticRecommendation: diagString(r.diagnosticRecommendation),
     generatedUtc:

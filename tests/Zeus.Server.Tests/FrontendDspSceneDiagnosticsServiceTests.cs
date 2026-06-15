@@ -7,6 +7,11 @@ namespace Zeus.Server.Tests;
 
 public sealed class FrontendDspSceneDiagnosticsServiceTests
 {
+    private static readonly JsonSerializerOptions CamelCaseJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+    };
+
     [Fact]
     public void Update_StoresSanitizedFrontendSceneForDiagnosticsSnapshot()
     {
@@ -228,4 +233,104 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.Contains("future", root.GetProperty("diagnosticRecommendation").GetString());
         Assert.Contains("clocks", root.GetProperty("diagnosticRecommendation").GetString());
     }
-}
+    [Fact]
+    public void SmartNrCondition_ReportsAlignedNr2Runtime()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        PublishScene(service, smartNrProfile: "NR2");
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(
+            service.SmartNrCondition(Runtime(requested: "Emnr", effective: "Emnr")),
+            CamelCaseJson));
+        var root = doc.RootElement;
+
+        Assert.Equal("Emnr", root.GetProperty("expectedNrMode").GetString());
+        Assert.True(root.GetProperty("runtimeAligned").GetBoolean());
+        Assert.Equal("aligned", root.GetProperty("runtimeAlignmentStatus").GetString());
+        Assert.Contains("aligned", root.GetProperty("runtimeAlignmentRecommendation").GetString());
+    }
+
+    [Fact]
+    public void SmartNrCondition_ReportsPendingWhenRequestedModeHasNotApplied()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        PublishScene(service, smartNrProfile: "NR4");
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(
+            service.SmartNrCondition(Runtime(requested: "Sbnr", effective: "Emnr")),
+            CamelCaseJson));
+        var root = doc.RootElement;
+
+        Assert.Equal("Sbnr", root.GetProperty("expectedNrMode").GetString());
+        Assert.False(root.GetProperty("runtimeAligned").GetBoolean());
+        Assert.Equal("apply-pending", root.GetProperty("runtimeAlignmentStatus").GetString());
+        Assert.Contains("effective runtime is still Emnr", root.GetProperty("runtimeAlignmentRecommendation").GetString());
+    }
+
+    [Theory]
+    [InlineData("Notch")]
+    [InlineData("Light")]
+    public void SmartNrCondition_MapsNonSpectralProfilesToOff(string profile)
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        PublishScene(service, smartNrProfile: profile);
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(
+            service.SmartNrCondition(Runtime(requested: "Emnr", effective: "Emnr")),
+            CamelCaseJson));
+        var root = doc.RootElement;
+
+        Assert.Equal("Off", root.GetProperty("expectedNrMode").GetString());
+        Assert.False(root.GetProperty("runtimeAligned").GetBoolean());
+        Assert.Equal("mismatched", root.GetProperty("runtimeAlignmentStatus").GetString());
+        Assert.Contains("maps to WDSP Off", root.GetProperty("runtimeAlignmentRecommendation").GetString());
+    }
+
+    [Fact]
+    public void SmartNrCondition_ReportsNoProfileBeforeSceneEvidence()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(
+            service.SmartNrCondition(Runtime(requested: "Off", effective: "Off")),
+            CamelCaseJson));
+        var root = doc.RootElement;
+
+        Assert.True(root.GetProperty("expectedNrMode").ValueKind is JsonValueKind.Null);
+        Assert.True(root.GetProperty("runtimeAligned").ValueKind is JsonValueKind.Null);
+        Assert.Equal("no-profile", root.GetProperty("runtimeAlignmentStatus").GetString());
+        Assert.Contains("cannot be evaluated", root.GetProperty("runtimeAlignmentRecommendation").GetString());
+    }
+
+    private static void PublishScene(FrontendDspSceneDiagnosticsService service, string smartNrProfile) =>
+        service.Update(new FrontendDspSceneDiagnosticsRequest(
+            SourceClientId: "client",
+            Mode: "USB",
+            SignalProfile: "dx",
+            SignalReason: "coherent ridge",
+            SmartNrProfile: smartNrProfile,
+            SmartNrReason: "test recommendation",
+            SmartNrRecommendation: "test",
+            SmartNrHeldByRxChain: false,
+            SmartNrRxChainLabel: "RX chain optimized",
+            SmartNrRxChainRecommendation: "Hold front-end settings",
+            SmartNrRxChainTone: "neutral",
+            SmartNrRxChainScore: 91,
+            MaxSnrDb: 12.3,
+            CoherentMaxSnrDb: 11.8,
+            OccupiedPct: 2.1,
+            CoherentOccupiedPct: 1.9,
+            ImpulsivePct: 0,
+            PeakCount: 2,
+            CoherentPeakCount: 2,
+            CoherentSubthresholdSignal: false));
+
+    private static DspNrRuntimeSnapshot Runtime(string requested, string effective, bool active = true) =>
+        new(
+            WdspActive: active,
+            WdspNativeLoadable: true,
+            WdspEmnrPost2Available: true,
+            WdspNr4SbnrAvailable: true,
+            Nr4Readiness: "available",
+            RequestedNrMode: requested,
+            EffectiveNrMode: effective);}

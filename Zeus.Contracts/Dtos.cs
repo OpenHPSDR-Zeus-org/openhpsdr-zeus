@@ -163,6 +163,10 @@ public sealed record SmartNrConditionDto(
     string Nr4Readiness,
     string RequestedNrMode,
     string EffectiveNrMode,
+    string? ExpectedNrMode,
+    bool? RuntimeAligned,
+    string RuntimeAlignmentStatus,
+    string RuntimeAlignmentRecommendation,
     SmartNrRxChainRuntimeDto RxChain,
     string DiagnosticRecommendation,
     DateTimeOffset GeneratedUtc);
