@@ -500,6 +500,10 @@ describe('POST helpers', () => {
           schemaVersion: 1,
           available: true,
           ageMs: 450,
+          status: 'fresh',
+          fresh: true,
+          stale: false,
+          diagnosticRecommendation: 'Frontend DSP scene telemetry is fresh and ready for remote diagnostics.',
           atUtc: '2026-06-15T01:00:00Z',
           sourceClientId: 'frontend-test',
           mode: 'USB',
@@ -566,6 +570,10 @@ describe('POST helpers', () => {
     expect(diag.dsp.txOutputSamples).toBe(4096);
     expect(diag.dsp.txMonitorRequested).toBe(true);
     expect(diag.frontendDspScene.available).toBe(true);
+    expect(diag.frontendDspScene.status).toBe('fresh');
+    expect(diag.frontendDspScene.fresh).toBe(true);
+    expect(diag.frontendDspScene.stale).toBe(false);
+    expect(diag.frontendDspScene.diagnosticRecommendation).toContain('fresh');
     expect(diag.frontendDspScene.signalProfile).toBe('dx');
     expect(diag.frontendDspScene.smartNrRecommendation).toBe('Hold headroom; use Smart NR/filtering');
     expect(diag.frontendDspScene.coherentPeakCount).toBe(2);
@@ -579,6 +587,10 @@ describe('POST helpers', () => {
       schemaVersion: 1,
       available: true,
       ageMs: 12,
+      status: 'fresh',
+      fresh: true,
+      stale: false,
+      diagnosticRecommendation: 'Frontend DSP scene telemetry is fresh and ready for remote diagnostics.',
       atUtc: '2026-06-15T01:00:00Z',
       sourceClientId: 'frontend-test',
       mode: 'USB',
@@ -610,6 +622,8 @@ describe('POST helpers', () => {
       peakCount: 1,
     });
     expect(scene.available).toBe(true);
+    expect(scene.status).toBe('fresh');
+    expect(scene.fresh).toBe(true);
     expect(scene.signalProfile).toBe('dx');
     expect(scene.smartNrProfile).toBe('NR4');
   });

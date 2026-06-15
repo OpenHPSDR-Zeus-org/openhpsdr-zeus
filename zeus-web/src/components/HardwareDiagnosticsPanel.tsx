@@ -275,9 +275,9 @@ function featureNextStep(id: string): string {
     case 'hardware.mapping.correlation':
       return 'Turn the marker API into guided capture recipes so a single radio action can be mapped and promoted to a typed setting.';
     case 'rx.signal-intelligence.weak-signal':
-      return 'Persist coherent scene metrics from Signal Intelligence so remote/headless sessions can audit weak-signal classification, Signal Pop, and snap behavior.';
+      return 'Use the mirrored coherent scene metrics to annotate recordings, compare clients, and gate future server-side weak-signal policy safely.';
     case 'rx.smart-nr.adaptive':
-      return 'Promote the Smart NR condition analyzer into a shared DSP scene feed so RX automation, recordings, and diagnostics use the same weak-signal/noise classification.';
+      return 'Correlate Smart NR recommendations with RX-chain health over time so automation can distinguish noise-floor cleanup from ADC/headroom protection.';
     case 'tx.fidelity.spectral-density':
       return 'Add a TX fidelity policy endpoint for target headroom, occupied bandwidth, PureSignal feedback health, and spectral-density warnings tied to station profiles.';
     default:
@@ -953,7 +953,11 @@ export function HardwareDiagnosticsPanel() {
   const scene = diag?.frontendDspScene;
   const sceneFields: Field[] = [
     { label: 'Available', value: boolLabel(scene?.available) },
+    { label: 'Status', value: scene?.status },
+    { label: 'Fresh', value: boolLabel(scene?.fresh) },
+    { label: 'Stale', value: boolLabel(scene?.stale) },
     { label: 'Age', value: age(scene?.ageMs) },
+    { label: 'Diagnostic Action', value: scene?.diagnosticRecommendation },
     { label: 'Client', value: scene?.sourceClientId },
     { label: 'Mode', value: scene?.mode },
     { label: 'Signal Profile', value: scene?.signalProfile },

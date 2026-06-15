@@ -12,6 +12,8 @@ namespace Zeus.Server;
 public sealed class FrontendDspSceneDiagnosticsService
 {
     private const int MaxText = 180;
+    private const long FreshSceneMs = 15_000;
+    private const long StaleSceneMs = 45_000;
     private readonly object _sync = new();
     private FrontendDspSceneSnapshot? _latest;
 
@@ -51,20 +53,30 @@ public sealed class FrontendDspSceneDiagnosticsService
         {
             if (_latest is null)
             {
+                var health = Health(null, null);
                 return new
                 {
                     schemaVersion = 1,
                     available = false,
                     ageMs = (int?)null,
+                    status = health.Status,
+                    fresh = false,
+                    stale = false,
+                    diagnosticRecommendation = health.Recommendation,
                 };
             }
 
             var ageMs = Math.Max(0L, (long)(DateTimeOffset.UtcNow - _latest.AtUtc).TotalMilliseconds);
+            var sceneHealth = Health(ageMs, _latest);
             return new
             {
                 schemaVersion = _latest.SchemaVersion,
                 available = true,
                 ageMs,
+                status = sceneHealth.Status,
+                fresh = sceneHealth.Fresh,
+                stale = sceneHealth.Stale,
+                diagnosticRecommendation = sceneHealth.Recommendation,
                 atUtc = _latest.AtUtc,
                 sourceClientId = _latest.SourceClientId,
                 mode = _latest.Mode,
@@ -104,6 +116,58 @@ public sealed class FrontendDspSceneDiagnosticsService
 
     private static int? NonNegative(int? value) =>
         value is { } v && v >= 0 ? v : null;
+
+    private static FrontendDspSceneHealth Health(long? ageMs, FrontendDspSceneSnapshot? latest)
+    {
+        if (ageMs is null)
+        {
+            return new(
+                "missing",
+                Fresh: false,
+                Stale: false,
+                "No frontend DSP scene has been published yet; open a Zeus client with Signal Intelligence or Smart NR active to audit weak-signal automation.");
+        }
+
+        if (ageMs > StaleSceneMs)
+        {
+            return new(
+                "stale",
+                Fresh: false,
+                Stale: true,
+                "Frontend DSP scene telemetry is stale; verify a client is open and publishing Signal Intelligence and Smart NR evidence.");
+        }
+
+        if (ageMs > FreshSceneMs)
+        {
+            return new(
+                "aging",
+                Fresh: false,
+                Stale: false,
+                "Frontend DSP scene telemetry is aging; wait for the next refresh or check client connectivity if this persists.");
+        }
+
+        if (latest?.SmartNrHeldByRxChain == true)
+        {
+            return new(
+                "fresh",
+                Fresh: true,
+                Stale: false,
+                "Frontend DSP scene telemetry is fresh; Smart NR is currently constrained by RX-chain health.");
+        }
+
+        return new(
+            "fresh",
+            Fresh: true,
+            Stale: false,
+            "Frontend DSP scene telemetry is fresh and ready for remote diagnostics.");
+
+    }
+
+    private sealed record FrontendDspSceneHealth(
+        string Status,
+        bool Fresh,
+        bool Stale,
+        string Recommendation);
 }
 
 public sealed record FrontendDspSceneDiagnosticsRequest(

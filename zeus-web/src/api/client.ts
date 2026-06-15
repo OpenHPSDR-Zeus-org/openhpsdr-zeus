@@ -484,6 +484,10 @@ export type FrontendDspSceneDiagnosticsDto = {
   schemaVersion: number;
   available: boolean;
   ageMs: number | null;
+  status: string;
+  fresh: boolean;
+  stale: boolean;
+  diagnosticRecommendation: string | null;
   atUtc: string | null;
   sourceClientId: string | null;
   mode: RxMode | null;
@@ -1303,6 +1307,10 @@ function normalizeFrontendDspScene(raw: unknown): FrontendDspSceneDiagnosticsDto
     schemaVersion: diagNumber(r.schemaVersion) ?? 0,
     available: Boolean(r.available),
     ageMs: diagNumber(r.ageMs),
+    status: diagString(r.status) ?? 'unknown',
+    fresh: Boolean(r.fresh),
+    stale: Boolean(r.stale),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
     atUtc: diagString(r.atUtc),
     sourceClientId: diagString(r.sourceClientId),
     mode: normalizeMode(r.mode),
