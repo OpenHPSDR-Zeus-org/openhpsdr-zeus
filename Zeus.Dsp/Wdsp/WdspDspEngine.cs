@@ -3183,9 +3183,11 @@ public sealed class WdspDspEngine : IDspEngine
     // based on the channel's current RX mode, the other two are forced off.
     // Adaptive squelch is handled later in DspPipelineService from the live
     // S-meter/noise floor, so WDSP fixed stages stay off when Adaptive=true.
-    // Fixed mapping keeps the useful part of the slider in range:
-    // - SSQL: 0..0.32 (Thetis/WU2O default 0.16 lands at level 50)
-    // - AMSQ: -140..-50 dB instead of reaching unusably high 0 dB
+    // Fixed mapping keeps the useful part of the slider in range while keeping
+    // the low end sensitive. Level 0 is treated as fully open/pass-through;
+    // above that, the curve rises slowly so 1-30 stays near-open.
+    // - SSQL: 0..0.32, shaped so low levels stay permissive
+    // - AMSQ: -150..-50 dB, shaped so low levels remain very permissive
     // - FMSQ: 1.0..0.2 noise threshold, inverted so higher = tighter
     // Called from SetSquelch AND SetMode so a mode change re-asserts the
     // fixed squelch on the new stage and clears the old.
@@ -3193,8 +3195,8 @@ public sealed class WdspDspEngine : IDspEngine
     {
         int id = state.Id;
         var cfg = state.CurrentSquelch;
-        int run = cfg.Enabled && !cfg.Adaptive ? 1 : 0;
         int level = Math.Clamp(cfg.Level, 0, 100);
+        int run = ShouldRunFixedSquelch(cfg) ? 1 : 0;
 
         // Which stage owns this mode? Everything off first, then turn one on.
         bool isAm = state.CurrentMode is RxaMode.AM or RxaMode.SAM;
@@ -3224,14 +3226,31 @@ public sealed class WdspDspEngine : IDspEngine
         }
     }
 
-    internal static double MapFixedSsqlThreshold(int level) =>
-        Math.Clamp(level, 0, 100) * 0.0032;
+    private const double FixedSquelchCurve = 1.35;
 
-    internal static double MapFixedAmsqThresholdDb(int level) =>
-        -140.0 + Math.Clamp(level, 0, 100) * 0.9;
+    internal static bool ShouldRunFixedSquelch(SquelchConfig cfg) =>
+        cfg.Enabled && !cfg.Adaptive && Math.Clamp(cfg.Level, 0, 100) > 0;
 
-    internal static double MapFixedFmsqThreshold(int level) =>
-        1.0 - Math.Clamp(level, 0, 100) * 0.008;
+    internal static double MapFixedSsqlThreshold(int level)
+    {
+        double t = FixedSquelchLevel(level);
+        return Math.Pow(t, FixedSquelchCurve) * 0.32;
+    }
+
+    internal static double MapFixedAmsqThresholdDb(int level)
+    {
+        double t = FixedSquelchLevel(level);
+        return -150.0 + Math.Pow(t, FixedSquelchCurve) * 100.0;
+    }
+
+    internal static double MapFixedFmsqThreshold(int level)
+    {
+        double t = FixedSquelchLevel(level);
+        return 1.0 - Math.Pow(t, FixedSquelchCurve) * 0.8;
+    }
+
+    private static double FixedSquelchLevel(int level) =>
+        Math.Clamp(level, 0, 100) / 100.0;
 
     // WDSP bandpass takes signed frequencies: LSB-family modes live in negative
     // baseband (low=-high, high=-low), USB-family in positive. CW follows the

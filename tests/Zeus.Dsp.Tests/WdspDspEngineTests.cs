@@ -63,16 +63,34 @@ public class WdspDspEngineTests
     public void FixedSquelchMapping_UsesSensitiveOperatorRange()
     {
         Assert.Equal(0.0, WdspDspEngine.MapFixedSsqlThreshold(0), precision: 6);
-        Assert.Equal(0.16, WdspDspEngine.MapFixedSsqlThreshold(50), precision: 6);
+        Assert.InRange(WdspDspEngine.MapFixedSsqlThreshold(10), 0.012, 0.016);
+        Assert.InRange(WdspDspEngine.MapFixedSsqlThreshold(50), 0.12, 0.13);
         Assert.Equal(0.32, WdspDspEngine.MapFixedSsqlThreshold(100), precision: 6);
 
-        Assert.Equal(-140.0, WdspDspEngine.MapFixedAmsqThresholdDb(0), precision: 6);
-        Assert.Equal(-95.0, WdspDspEngine.MapFixedAmsqThresholdDb(50), precision: 6);
+        Assert.Equal(-150.0, WdspDspEngine.MapFixedAmsqThresholdDb(0), precision: 6);
+        Assert.InRange(WdspDspEngine.MapFixedAmsqThresholdDb(10), -147.0, -144.0);
+        Assert.InRange(WdspDspEngine.MapFixedAmsqThresholdDb(50), -112.0, -109.0);
         Assert.Equal(-50.0, WdspDspEngine.MapFixedAmsqThresholdDb(100), precision: 6);
 
         Assert.Equal(1.0, WdspDspEngine.MapFixedFmsqThreshold(0), precision: 6);
-        Assert.Equal(0.6, WdspDspEngine.MapFixedFmsqThreshold(50), precision: 6);
+        Assert.InRange(WdspDspEngine.MapFixedFmsqThreshold(10), 0.95, 0.98);
+        Assert.InRange(WdspDspEngine.MapFixedFmsqThreshold(50), 0.68, 0.70);
         Assert.Equal(0.2, WdspDspEngine.MapFixedFmsqThreshold(100), precision: 6);
+    }
+
+    [Fact]
+    public void FixedSquelchRun_LevelZeroIsOpenPassThrough()
+    {
+        Assert.False(WdspDspEngine.ShouldRunFixedSquelch(
+            new SquelchConfig(Enabled: true, Level: 0, Adaptive: false)));
+        Assert.False(WdspDspEngine.ShouldRunFixedSquelch(
+            new SquelchConfig(Enabled: true, Level: -10, Adaptive: false)));
+        Assert.True(WdspDspEngine.ShouldRunFixedSquelch(
+            new SquelchConfig(Enabled: true, Level: 1, Adaptive: false)));
+        Assert.False(WdspDspEngine.ShouldRunFixedSquelch(
+            new SquelchConfig(Enabled: true, Level: 1, Adaptive: true)));
+        Assert.False(WdspDspEngine.ShouldRunFixedSquelch(
+            new SquelchConfig(Enabled: false, Level: 1, Adaptive: false)));
     }
 
     private static bool WdspAvailable()
