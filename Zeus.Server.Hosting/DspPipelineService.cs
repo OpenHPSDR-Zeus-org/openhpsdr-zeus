@@ -124,23 +124,17 @@ public class DspPipelineService : BackgroundService,
     /// insert handler. Single volatile write; safe from the control thread.</summary>
     public void SetRxAudioPluginHandler(RxAudioBlockHandler? handler) => _rxAudioPluginHandler = handler;
 
+    internal static float SanitizeAudioSample(float sample)
+    {
+        if (!float.IsFinite(sample)) return 0f;
+        return Math.Clamp(sample, -1f, 1f);
+    }
+
     internal static void SanitizeAudioBuffer(Span<float> samples)
     {
         for (int i = 0; i < samples.Length; i++)
         {
-            float sample = samples[i];
-            if (!float.IsFinite(sample))
-            {
-                samples[i] = 0f;
-            }
-            else if (sample > 1f)
-            {
-                samples[i] = 1f;
-            }
-            else if (sample < -1f)
-            {
-                samples[i] = -1f;
-            }
+            samples[i] = SanitizeAudioSample(samples[i]);
         }
     }
 
