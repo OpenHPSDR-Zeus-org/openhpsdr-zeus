@@ -676,19 +676,19 @@ export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
     const current = get();
     const next = normalizeTuning({ ...current, ...patch, profileId: patch.profileId ?? 'custom' }, current);
     set({ ...next, autoProfileEnabled: false });
-    resetSignalHold();
+    resetSignalState();
     persist(get());
   },
   applySignalEnhanceProfile: (profileId) => {
     const next = normalizeTuning({ profileId, ...SIGNAL_ENHANCE_PROFILES[profileId] });
     set({ ...next, autoProfileEnabled: false });
-    resetSignalHold();
+    resetSignalState();
     persist(get());
   },
   applySignalEnhanceAutoProfile: (profileId) => {
     const next = normalizeTuning({ profileId, ...SIGNAL_ENHANCE_PROFILES[profileId] });
     set({ ...next, autoProfileEnabled: true });
-    resetSignalHold();
+    resetSignalState();
     persist(get());
   },
   applySignalEnhanceModeProfile: (mode) => {
@@ -701,14 +701,14 @@ export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
       get().applySignalEnhanceAutoProfile(profileId);
     } else {
       set({ autoProfileEnabled });
-      resetSignalHold();
+      resetSignalState();
       persist(get());
     }
   },
   resetSignalEnhanceTuning: () => {
     const next = normalizeTuning({ profileId: 'balanced', ...SIGNAL_ENHANCE_PROFILES.balanced });
     set({ ...next, autoProfileEnabled: false });
-    resetSignalHold();
+    resetSignalState();
     persist(get());
   },
 }));
@@ -836,7 +836,7 @@ function updateFloor(spec: Float32Array, hzPerPixel: number, key: string): void 
   if (floor === null || floor.length !== n) floor = new Float32Array(n);
   if (quietRef === null || quietRef.length !== n) quietRef = new Float32Array(n);
   if (reset) {
-    resetSignalHold();
+    resetSignalState();
     resetSnapHistory();
   }
 
@@ -853,26 +853,29 @@ function updateFloor(spec: Float32Array, hzPerPixel: number, key: string): void 
   }
   geomKey = key;
   lastHzPerPixel = hzPerPixel;
-  updateSignalHold(spec);
+  updateSignalState(spec);
   updateSnapHistory(spec);
 }
 
-function updateSignalHold(spec: Float32Array): void {
+function updateSignalState(spec: Float32Array): void {
   const st = useSignalEnhanceStore.getState();
   const f = floor;
   const n = spec.length;
-  if (!st.popEnabled || f === null || f.length !== n) {
-    resetSignalHold();
+  const needsConfidence =
+    st.popEnabled || st.snapEnabled || st.autoProfileEnabled || estimatorConsumers > 0;
+  if (!needsConfidence || f === null || f.length !== n) {
+    resetSignalState();
     return;
   }
-  if (signalHold === null || signalHold.length !== n) signalHold = new Float32Array(n);
   if (signalConfidence === null || signalConfidence.length !== n) signalConfidence = new Float32Array(n);
   if (previousSnr === null || previousSnr.length !== n) previousSnr = new Float32Array(n);
-  const hold = signalHold;
   const conf = signalConfidence;
   const prev = previousSnr;
   const gate = st.popFloorDb;
   const coherenceHoldGate = st.coherenceHoldGate;
+  if (!st.popEnabled) signalHold = null;
+  else if (signalHold === null || signalHold.length !== n) signalHold = new Float32Array(n);
+  const hold = signalHold;
   for (let i = 0; i < n; i++) {
     const snr = spec[i]! - f[i]!;
     const leftSnr = i > 0 ? spec[i - 1]! - f[i - 1]! : -Infinity;
@@ -894,21 +897,27 @@ function updateSignalHold(spec: Float32Array): void {
       ? targetConfidence
       : conf[i]! * COHERENCE_DECAY;
 
-    const target = snr >= gate ? snr : 0;
-    const holdDecay = conf[i]! >= coherenceHoldGate
-      ? POP_PERSIST_DECAY
-      : POP_PERSIST_DECAY * 0.55;
-    const decayed = hold[i]! * holdDecay;
-    const next = target > decayed ? target : decayed;
-    hold[i] = next >= gate && conf[i]! >= coherenceHoldGate ? next : 0;
+    if (hold !== null) {
+      const target = snr >= gate ? snr : 0;
+      const holdDecay = conf[i]! >= coherenceHoldGate
+        ? POP_PERSIST_DECAY
+        : POP_PERSIST_DECAY * 0.55;
+      const decayed = hold[i]! * holdDecay;
+      const next = target > decayed ? target : decayed;
+      hold[i] = next >= gate && conf[i]! >= coherenceHoldGate ? next : 0;
+    }
     prev[i] = snr;
   }
 }
 
-function resetSignalHold(): void {
+function resetSignalState(): void {
   signalHold = null;
   signalConfidence = null;
   previousSnr = null;
+}
+
+function resetSignalHold(): void {
+  signalHold = null;
 }
 
 /** Per-frame waterfall memory for snap. Runs only while Snap is enabled (it is

@@ -311,6 +311,43 @@ describe('signal estimator — spatial floor', () => {
     expect(confidence[0]!).toBeLessThan(0.05);
   });
 
+  it('builds temporal confidence for automation consumers when Signal Pop is off', () => {
+    useSignalEnhanceStore.setState({ popEnabled: false, autoProfileEnabled: true });
+    const spec = new Float32Array(WIDTH).fill(NOISE_DB);
+    spec[150] = NOISE_DB + 15;
+    for (let k = 0; k < 5; k++) pushFrame(spec);
+
+    const confidence = getSignalConfidence()!;
+    expect(confidence).not.toBeNull();
+    expect(confidence[150]!).toBeGreaterThan(0.5);
+    expect(confidence[0]!).toBeLessThan(0.05);
+  });
+
+  it('rejects one-frame auto-profile impulses even when Signal Pop is off', () => {
+    useSignalEnhanceStore.setState({ popEnabled: false, autoProfileEnabled: true });
+    const noise = new Float32Array(WIDTH).fill(NOISE_DB);
+    for (let k = 0; k < 5; k++) pushFrame(noise);
+
+    const impulse = new Float32Array(WIDTH).fill(NOISE_DB);
+    impulse[150] = NOISE_DB + 15;
+    pushFrame(impulse);
+
+    const confidence = getSignalConfidence()!;
+    const scene = recommendSignalEnhanceScene({
+      mode: 'USB',
+      spectrum: impulse,
+      floor: getNoiseFloor(),
+      confidence,
+      hzPerPixel: HZ_PER_PX,
+    });
+
+    expect(confidence[150]!).toBeLessThan(useSignalEnhanceStore.getState().coherenceHoldGate);
+    expect(scene.peakCount).toBe(1);
+    expect(scene.coherentPeakCount).toBe(0);
+    expect(scene.impulsiveOccupiedRatio).toBeGreaterThan(0);
+    expect(scene.profileId).toBe('voice');
+  });
+
   it('does not give a one-frame isolated impulse a persistent trail', () => {
     useSignalEnhanceStore.setState({ popEnabled: true });
     const noise = new Float32Array(WIDTH).fill(NOISE_DB);
