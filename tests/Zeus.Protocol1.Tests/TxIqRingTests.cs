@@ -115,6 +115,27 @@ public class TxIqRingTests
     }
 
     [Fact]
+    public void Saturation_ZerosNonFiniteFloats()
+    {
+        var ring = new TxIqRing(capacityPairs: 4);
+        ring.Write(new float[]
+        {
+            float.NaN,
+            float.PositiveInfinity,
+            float.NegativeInfinity,
+            0.5f,
+        });
+
+        var (i0, q0) = ring.Next(1.0);
+        var (i1, q1) = ring.Next(1.0);
+
+        Assert.Equal(0, i0);
+        Assert.Equal(0, q0);
+        Assert.Equal(0, i1);
+        Assert.Equal((short)Math.Round(0.5f * short.MaxValue), q1);
+    }
+
+    [Fact]
     public void AmplitudeScale_IsApplied()
     {
         var ring = new TxIqRing(capacityPairs: 4);

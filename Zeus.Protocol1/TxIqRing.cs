@@ -175,6 +175,7 @@ public sealed class TxIqRing : ITxIqSource
         // WDSP TXA hands back normalised floats (≈−1..+1). Saturate rather
         // than letting int-cast wrap — a spike above 1.0 is rare in practice
         // and wrapping would introduce loud click artefacts on the air.
+        if (!float.IsFinite(v)) return 0;
         float clamped = v;
         if (clamped > 1.0f) clamped = 1.0f;
         else if (clamped < -1.0f) clamped = -1.0f;
