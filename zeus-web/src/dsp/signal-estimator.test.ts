@@ -254,6 +254,28 @@ describe('signal estimator — spatial floor', () => {
     expect(scene.impulsiveOccupiedRatio).toBe(0);
   });
 
+  it('fails closed on invalid scene geometry without emitting NaN metrics', () => {
+    const floor = new Float32Array(WIDTH).fill(NOISE_DB);
+    const spec = spectrumWithCarrier();
+
+    for (const hzPerPixel of [Number.NaN, Infinity, 0, -1]) {
+      const scene = recommendSignalEnhanceScene({
+        mode: 'USB',
+        spectrum: spec,
+        floor,
+        hzPerPixel,
+      });
+
+      expect(scene.profileId).toBe('voice');
+      expect(scene.peakCount).toBe(0);
+      expect(scene.peaksPer10Khz).toBe(0);
+      expect(scene.occupiedRatio).toBe(0);
+      expect(scene.maxSnrDb).toBe(0);
+      expect(Number.isFinite(scene.peaksPer10Khz)).toBe(true);
+      expect(Number.isFinite(scene.coherentPeaksPer10Khz)).toBe(true);
+    }
+  });
+
   it('stays cold (no floor, zero cost) when both Pop and Snap are off', () => {
     pushFrame(spectrumWithCarrier());
     expect(getNoiseFloor()).toBeNull();
@@ -263,6 +285,25 @@ describe('signal estimator — spatial floor', () => {
     useSignalEnhanceStore.setState({ autoProfileEnabled: true, popEnabled: false, snapEnabled: false });
     pushFrame(spectrumWithCarrier());
     expect(getNoiseFloor()).not.toBeNull();
+  });
+
+  it('does not warm the estimator from invalid frame geometry', () => {
+    useSignalEnhanceStore.setState({ popEnabled: true });
+    maybeUpdateEstimator({
+      panDb: spectrumWithCarrier(),
+      panValid: true,
+      width: WIDTH + 1,
+      hzPerPixel: HZ_PER_PX,
+    });
+    expect(getNoiseFloor()).toBeNull();
+
+    maybeUpdateEstimator({
+      panDb: spectrumWithCarrier(),
+      panValid: true,
+      width: WIDTH,
+      hzPerPixel: Number.NaN,
+    });
+    expect(getNoiseFloor()).toBeNull();
   });
 
   it('estimates the floor from neighbours — a steady carrier does NOT raise its own floor', () => {
@@ -596,6 +637,39 @@ describe('signal estimator — peak markers (CFAR)', () => {
     expect(computeSnapTuneHz(bad, CENTER, HZ_PER_PX, clickHz, 5000, 'USB')).toBeNull();
     expect(computeSnapToLineHz(bad, CENTER, HZ_PER_PX, 'USB', clickHz, 5000)).toBeNull();
     expect(signalExtentHz(bad, CENTER, HZ_PER_PX, clickHz, 5000)).toBeNull();
+  });
+
+  it('fails closed when snap and marker geometry is non-finite', () => {
+    useSignalEnhanceStore.setState({ snapEnabled: true });
+    for (let k = 0; k < 5; k++) pushFrame(spectrumWithCarrier());
+    const spec = spectrumWithCarrier();
+    const clickHz = CENTER + (CARRIER_BIN - WIDTH / 2) * HZ_PER_PX;
+
+    for (const centerHz of [Number.NaN, Infinity]) {
+      expect(detectPeaks(spec, centerHz, HZ_PER_PX)).toEqual([]);
+      expect(findPeakHz(spec, centerHz, HZ_PER_PX, clickHz)).toBeNull();
+      expect(findNearestPeakHz(spec, centerHz, HZ_PER_PX, clickHz, 5000)).toBeNull();
+      expect(computeSnapTuneHz(spec, centerHz, HZ_PER_PX, clickHz, 5000, 'USB')).toBeNull();
+      expect(computeSnapToLineHz(spec, centerHz, HZ_PER_PX, 'USB', clickHz, 5000)).toBeNull();
+      expect(signalExtentHz(spec, centerHz, HZ_PER_PX, clickHz, 5000)).toBeNull();
+      expect(measureSnapLock(spec, centerHz, HZ_PER_PX, 'USB', clickHz, 500)).toBeNull();
+    }
+
+    for (const hzPerPixel of [Number.NaN, Infinity, 0, -1]) {
+      expect(detectPeaks(spec, CENTER, hzPerPixel)).toEqual([]);
+      expect(findPeakHz(spec, CENTER, hzPerPixel, clickHz)).toBeNull();
+      expect(findNearestPeakHz(spec, CENTER, hzPerPixel, clickHz, 5000)).toBeNull();
+      expect(computeSnapTuneHz(spec, CENTER, hzPerPixel, clickHz, 5000, 'USB')).toBeNull();
+      expect(computeSnapToLineHz(spec, CENTER, hzPerPixel, 'USB', clickHz, 5000)).toBeNull();
+      expect(signalExtentHz(spec, CENTER, hzPerPixel, clickHz, 5000)).toBeNull();
+      expect(measureSnapLock(spec, CENTER, hzPerPixel, 'USB', clickHz, 500)).toBeNull();
+    }
+
+    expect(findNearestPeakHz(spec, CENTER, HZ_PER_PX, clickHz, Number.NaN)).toBeNull();
+    expect(computeSnapTuneHz(spec, CENTER, HZ_PER_PX, clickHz, Infinity, 'USB')).toBeNull();
+    expect(computeSnapToLineHz(spec, CENTER, HZ_PER_PX, 'USB', clickHz, -1)).toBeNull();
+    expect(signalExtentHz(spec, CENTER, HZ_PER_PX, clickHz, Number.NaN)).toBeNull();
+    expect(measureSnapLock(spec, CENTER, HZ_PER_PX, 'USB', clickHz, -1)).toBeNull();
   });
 
   it('peakAlpha scales with SNR and stays within [0.45, 1]', () => {

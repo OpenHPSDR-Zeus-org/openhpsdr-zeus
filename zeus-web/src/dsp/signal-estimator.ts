@@ -447,6 +447,18 @@ function finiteLinearPowerWeight(snrDb: number): number {
   return Math.pow(10, Math.min(120, Math.max(0, snrDb)) / 10);
 }
 
+function validHzPerPixel(hzPerPixel: number): boolean {
+  return Number.isFinite(hzPerPixel) && hzPerPixel > 0;
+}
+
+function validSpectrumGeometry(centerHz: number, hzPerPixel: number): boolean {
+  return Number.isFinite(centerHz) && validHzPerPixel(hzPerPixel);
+}
+
+function validSearchRadiusHz(radiusHz: number): boolean {
+  return Number.isFinite(radiusHz) && radiusHz >= 0;
+}
+
 function sceneSnr(spec: Float32Array, f: Float32Array, index: number): number | null {
   return optionalSnr(spec, f, spec.length, index);
 }
@@ -469,7 +481,7 @@ export function recommendSignalEnhanceScene(input: SignalEnhanceSceneInput): Sig
   const spec = input.spectrum;
   const f = input.floor;
   const confidence = input.confidence;
-  if (spec === null || f === null || spec.length < 3 || f.length !== spec.length || input.hzPerPixel <= 0) {
+  if (spec === null || f === null || spec.length < 3 || f.length !== spec.length || !validHzPerPixel(input.hzPerPixel)) {
     return {
       profileId: baseProfileId,
       baseProfileId,
@@ -823,6 +835,7 @@ export function maybeUpdateEstimator(f: EstimatorFrame): void {
   const st = useSignalEnhanceStore.getState();
   if (!st.popEnabled && !st.snapEnabled && !st.autoProfileEnabled && estimatorConsumers === 0) return;
   if (!f.panValid || !f.panDb || f.panDb.length === 0) return;
+  if (f.panDb.length !== f.width || !validHzPerPixel(f.hzPerPixel)) return;
   updateFloor(f.panDb, f.hzPerPixel, makeGeomKey(f.width, f.hzPerPixel));
 }
 
@@ -889,7 +902,7 @@ function updateFloor(spec: Float32Array, hzPerPixel: number, key: string): void 
     resetSnapHistory();
   }
 
-  let radius = hzPerPixel > 0 ? Math.round(FLOOR_WINDOW_HZ / hzPerPixel / 2) : FLOOR_MIN_RADIUS_BINS;
+  let radius = validHzPerPixel(hzPerPixel) ? Math.round(FLOOR_WINDOW_HZ / hzPerPixel / 2) : FLOOR_MIN_RADIUS_BINS;
   radius = Math.max(FLOOR_MIN_RADIUS_BINS, Math.min(FLOOR_MAX_RADIUS_BINS, radius));
   quietPercentile(spec, radius, quietRef);
 
@@ -1055,7 +1068,7 @@ export function resetEstimator(): void {
 
 function computeLocalMeanPositiveSnr(raw: Float32Array, f: Float32Array, hold: Float32Array | null, out: Float32Array): void {
   const n = raw.length;
-  let radius = lastHzPerPixel > 0 ? Math.round(POP_RIDGE_WINDOW_HZ / lastHzPerPixel / 2) : POP_RIDGE_MIN_RADIUS_BINS;
+  let radius = validHzPerPixel(lastHzPerPixel) ? Math.round(POP_RIDGE_WINDOW_HZ / lastHzPerPixel / 2) : POP_RIDGE_MIN_RADIUS_BINS;
   radius = Math.max(POP_RIDGE_MIN_RADIUS_BINS, Math.min(POP_RIDGE_MAX_RADIUS_BINS, radius));
 
   const snrAt = (i: number): number => {
@@ -1222,9 +1235,7 @@ export function findPeakHz(
   const n = spec.length;
   if (
     n < 3 ||
-    hzPerPixel <= 0 ||
-    !Number.isFinite(hzPerPixel) ||
-    !Number.isFinite(centerHz) ||
+    !validSpectrumGeometry(centerHz, hzPerPixel) ||
     !Number.isFinite(clickHz)
   ) return null;
   const f = floor;
@@ -1278,7 +1289,7 @@ function coherentThreshold(baseDb: number, index: number, n: number): number {
 export function detectPeaks(spec: Float32Array, centerHz: number, hzPerPixel: number): DetectedPeak[] {
   const n = spec.length;
   const f = floor;
-  if (n < 3 || hzPerPixel <= 0 || !Number.isFinite(hzPerPixel) || f === null || f.length !== n) return [];
+  if (n < 3 || !validSpectrumGeometry(centerHz, hzPerPixel) || f === null || f.length !== n) return [];
   const st = useSignalEnhanceStore.getState();
   const half = n / 2;
   const found: Array<{ bin: number; snrDb: number }> = [];
@@ -1424,7 +1435,7 @@ export function findNearestPeakHz(
   clickHz: number,
   maxRadiusHz: number,
 ): number | null {
-  if (!Number.isFinite(clickHz) || !Number.isFinite(maxRadiusHz) || maxRadiusHz < 0) return null;
+  if (!validSpectrumGeometry(centerHz, hzPerPixel) || !Number.isFinite(clickHz) || !validSearchRadiusHz(maxRadiusHz)) return null;
   const peaks = detectPeaks(spec, centerHz, hzPerPixel);
   let best: number | null = null;
   let bestDist = Infinity;
@@ -1534,12 +1545,9 @@ export function computeSnapTuneHz(
   const n = spec.length;
   if (
     n < 3 ||
-    hzPerPixel <= 0 ||
-    !Number.isFinite(hzPerPixel) ||
-    !Number.isFinite(centerHz) ||
+    !validSpectrumGeometry(centerHz, hzPerPixel) ||
     !Number.isFinite(clickHz) ||
-    !Number.isFinite(maxRadiusHz) ||
-    maxRadiusHz < 0
+    !validSearchRadiusHz(maxRadiusHz)
   ) return null;
   const f = floor;
   const half = n / 2;
@@ -1643,12 +1651,9 @@ export function computeSnapToLineHz(
   const n = spec.length;
   if (
     n < 3 ||
-    hzPerPixel <= 0 ||
-    !Number.isFinite(hzPerPixel) ||
-    !Number.isFinite(centerHz) ||
+    !validSpectrumGeometry(centerHz, hzPerPixel) ||
     !Number.isFinite(lineHz) ||
-    !Number.isFinite(maxRadiusHz) ||
-    maxRadiusHz < 0
+    !validSearchRadiusHz(maxRadiusHz)
   ) return null;
   const f = floor;
   const half = n / 2;
@@ -1702,12 +1707,9 @@ export function signalExtentHz(
   const n = spec.length;
   if (
     n < 3 ||
-    hzPerPixel <= 0 ||
-    !Number.isFinite(hzPerPixel) ||
-    !Number.isFinite(centerHz) ||
+    !validSpectrumGeometry(centerHz, hzPerPixel) ||
     !Number.isFinite(nearHz) ||
-    !Number.isFinite(maxRadiusHz) ||
-    maxRadiusHz < 0
+    !validSearchRadiusHz(maxRadiusHz)
   ) return null;
   const f = floor;
   const half = n / 2;
@@ -1772,12 +1774,9 @@ export function measureSnapLock(
   const n = spec.length;
   if (
     n < 3 ||
-    hzPerPixel <= 0 ||
-    !Number.isFinite(hzPerPixel) ||
-    !Number.isFinite(centerHz) ||
+    !validSpectrumGeometry(centerHz, hzPerPixel) ||
     !Number.isFinite(anchorBodyHz) ||
-    !Number.isFinite(captureHz) ||
-    captureHz < 0
+    !validSearchRadiusHz(captureHz)
   ) return null;
   const f = floor;
   const half = n / 2;
