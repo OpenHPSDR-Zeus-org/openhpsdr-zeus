@@ -63,6 +63,7 @@ import {
   fetchRadioPowerCalibration,
   fetchRadioSupplyAlarms,
   fetchSmartNrCondition,
+  fetchTxDiagnostics,
   fetchUserIoActions,
   fetchUserIoLabels,
   fetchAdcProtection,
@@ -790,6 +791,64 @@ describe('POST helpers', () => {
     expect(condition.nr4Readiness).toBe('missing-sbnr-exports');
     expect(condition.requestedNrMode).toBe('Sbnr');
     expect(condition.effectiveNrMode).toBe('Off');
+  });
+
+  it('fetchTxDiagnostics reads P2 DUC egress counters', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      iqSourceType: 'Zeus.Protocol1.TxIqRing',
+      iqSourceIsRing: true,
+      ring: {
+        totalWritten: 960,
+        totalRead: 0,
+        count: 0,
+        dropped: 0,
+        capacity: 16384,
+        recentMag: 0.125,
+      },
+      ingest: {
+        totalMicSamples: 480,
+        totalTxBlocks: 1,
+        droppedFrames: 0,
+      },
+      protocol2: {
+        inputComplexSamples: 240,
+        packetsQueued: 1,
+        packetsSent: 1,
+        queuedPackets: 0,
+        queueWriteFailures: 0,
+        sendFailures: 0,
+        resetDrainedPackets: 0,
+        scratchComplexSamples: 0,
+        nextSequence: 1,
+        lastPacketsPerSecond: 800,
+        lastFifoModelSamples: 1200,
+        lastRateTimestampUtc: '2026-06-15T13:00:00Z',
+        senderRunning: true,
+      },
+      txPlugins: {
+        masterBypassed: false,
+        bypassedForRemoteTx: false,
+      },
+      vstEngine: {
+        active: false,
+        degradedBlocks: 2,
+      },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const diag = await fetchTxDiagnostics();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/tx/diag');
+    expect(init?.method).toBeUndefined();
+    expect(diag.iqSourceIsRing).toBe(true);
+    expect(diag.ring.totalWritten).toBe(960);
+    expect(diag.ingest.totalTxBlocks).toBe(1);
+    expect(diag.protocol2?.packetsSent).toBe(1);
+    expect(diag.protocol2?.lastPacketsPerSecond).toBe(800);
+    expect(diag.protocol2?.senderRunning).toBe(true);
+    expect(diag.txPlugins?.masterBypassed).toBe(false);
+    expect(diag.vstEngine?.degradedBlocks).toBe(2);
   });
 
   it('fetchExternalPttStatus reads read-only external PTT ownership state', async () => {
