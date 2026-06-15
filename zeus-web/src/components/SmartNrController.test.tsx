@@ -47,6 +47,12 @@ function weakCwSignal(): Float32Array {
   return spec;
 }
 
+function extremelyWeakSignal(): Float32Array {
+  const spec = new Float32Array(WIDTH).fill(NOISE_DB);
+  spec[120] = NOISE_DB + 8;
+  return spec;
+}
+
 function quietNoise(): Float32Array {
   return new Float32Array(WIDTH).fill(NOISE_DB);
 }
@@ -259,6 +265,25 @@ describe('SmartNrController', () => {
     expect(setNrMock).toHaveBeenCalledTimes(1);
     expect(useSmartNrStore.getState().status?.heldByRxChain).toBe(false);
     expect(useSmartNrStore.getState().status?.rxChainLabel).toBe('AGC stressed');
+  });
+
+  it('uses live AGC boost as weak-signal evidence for Smart NR', () => {
+    useConnectionStore.setState({ mode: 'DIGU' });
+    useRxMetersStore.setState({
+      signalPk: -123,
+      signalAv: -127,
+      adcPk: -18,
+      adcAv: -44,
+      agcGain: 42,
+      agcEnvPk: -124,
+      agcEnvAv: -128,
+    });
+
+    for (let i = 0; i < 6; i++) feed(extremelyWeakSignal());
+
+    expect(setNrMock).toHaveBeenCalledTimes(1);
+    expect(setNrMock.mock.calls[0]?.[0].nrMode).toBe('Sbnr');
+    expect(useSmartNrStore.getState().status?.reason).toContain('Weak-signal assist');
   });
 
   it('falls back to NR2 instead of applying NR4 when diagnostics reports SBNR unavailable', async () => {

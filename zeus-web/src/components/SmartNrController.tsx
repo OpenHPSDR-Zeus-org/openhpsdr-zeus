@@ -168,20 +168,6 @@ export function SmartNrController() {
       refreshDspCapabilities(now);
 
       const display = useDisplayStore.getState();
-      const rec = recommendSmartNr({
-        spectrum: display.panValid ? display.panDb : null,
-        floor: getNoiseFloor(),
-        confidence: getSignalConfidence(),
-        current: conn.nr,
-        mode: conn.mode,
-      });
-      if (!rec) return;
-
-      const capability = adaptSmartNrToDspCapabilities(
-        shapeSmartNrRecommendation(rec, settings),
-        dspCapabilities,
-      );
-      const shaped = capability.nr;
       const rxMeters = useRxMetersStore.getState();
       const rx = analyzeRxChain({
         signalPk: rxMeters.signalPk,
@@ -193,6 +179,25 @@ export function SmartNrController() {
         agcEnvAv: rxMeters.agcEnvAv,
         fallbackDbm: tx.rxDbm,
       });
+      const rec = recommendSmartNr({
+        spectrum: display.panValid ? display.panDb : null,
+        floor: getNoiseFloor(),
+        confidence: getSignalConfidence(),
+        rx: {
+          signalDbm: rx.signalDbm,
+          adcHeadroomDb: rx.adcHeadroomDb,
+          agcGain: rx.agcGain,
+        },
+        current: conn.nr,
+        mode: conn.mode,
+      });
+      if (!rec) return;
+
+      const capability = adaptSmartNrToDspCapabilities(
+        shapeSmartNrRecommendation(rec, settings),
+        dspCapabilities,
+      );
+      const shaped = capability.nr;
       const heldByRxChain = shouldHoldForRxChain(rx);
       if (settings.automationMode === 'suggest') {
         setStatus(rec, shaped, false, false, rx, heldByRxChain, capability);

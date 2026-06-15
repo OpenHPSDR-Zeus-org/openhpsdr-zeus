@@ -1081,23 +1081,30 @@ export function HardwareDiagnosticsPanel() {
     setEndpointBusy(true);
     try {
       const [nextKeying, nextSupply, nextNetwork, nextLabels, nextActions] =
-        await Promise.all([
+        await Promise.allSettled([
           fetchHardwareKeyingStatus(signal),
           fetchRadioSupplyAlarms(signal),
           fetchRadioNetworkProfile(signal),
           fetchUserIoLabels(signal),
           fetchUserIoActions(signal),
         ]);
-      setKeying(nextKeying);
-      setSupplyAlarms(nextSupply);
-      setNetworkProfile(nextNetwork);
-      setUserIoLabels(nextLabels);
-      setUserIoActions(nextActions);
-      setEndpointError(null);
-    } catch (err) {
-      if ((err as DOMException).name !== 'AbortError') {
-        setEndpointError(err instanceof Error ? err.message : String(err));
-      }
+
+      if (nextKeying.status === 'fulfilled') setKeying(nextKeying.value);
+      if (nextSupply.status === 'fulfilled') setSupplyAlarms(nextSupply.value);
+      if (nextNetwork.status === 'fulfilled') setNetworkProfile(nextNetwork.value);
+      if (nextLabels.status === 'fulfilled') setUserIoLabels(nextLabels.value);
+      if (nextActions.status === 'fulfilled') setUserIoActions(nextActions.value);
+
+      const failures = [nextKeying, nextSupply, nextNetwork, nextLabels, nextActions]
+        .filter(
+          (result): result is PromiseRejectedResult =>
+            result.status === 'rejected' &&
+            (result.reason as DOMException).name !== 'AbortError'
+        )
+        .map((result) =>
+          result.reason instanceof Error ? result.reason.message : String(result.reason)
+        );
+      setEndpointError(failures.length > 0 ? failures.join(' / ') : null);
     } finally {
       setEndpointBusy(false);
     }
