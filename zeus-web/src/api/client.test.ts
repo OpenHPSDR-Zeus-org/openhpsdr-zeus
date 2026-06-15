@@ -596,6 +596,28 @@ describe('POST helpers', () => {
             qualityReasons: ['wdsp-active', 'nr-requested-not-effective', 'nr-capability-limited'],
             diagnosticRecommendation: 'Use NR2/EMNR until NR4/SBNR exports are available.',
           },
+          rxMeters: {
+            schemaVersion: 1,
+            status: 'adc-hot',
+            source: 'wdsp-rxa-meter-ring',
+            fresh: true,
+            stale: false,
+            ageMs: 250,
+            channelId: 1,
+            rxDbm: -44.6,
+            signalPkDbm: -38.2,
+            signalAvDbm: -49,
+            adcPkDbfs: -1.8,
+            adcAvDbfs: -14.3,
+            adcHeadroomDb: 1.8,
+            agcGainDb: -9.5,
+            agcEnvPkDbm: -35,
+            agcEnvAvDbm: -48,
+            signalUsable: true,
+            adcUsable: true,
+            agcEnvelopeUsable: true,
+            diagnosticRecommendation: 'RX ADC peak is within 3 dB of full scale.',
+          },
           display: {
             schemaVersion: 1,
             status: 'fresh',
@@ -756,6 +778,14 @@ describe('POST helpers', () => {
     expect(diag.dsp.rxDsp.activeFeatures).toContain('manual-notches');
     expect(diag.dsp.rxDsp.qualityReasons).toContain('nr-capability-limited');
     expect(diag.dsp.rxDsp.diagnosticRecommendation).toContain('NR2/EMNR');
+    expect(diag.dsp.rxMeters.status).toBe('adc-hot');
+    expect(diag.dsp.rxMeters.fresh).toBe(true);
+    expect(diag.dsp.rxMeters.rxDbm).toBe(-44.6);
+    expect(diag.dsp.rxMeters.adcPkDbfs).toBe(-1.8);
+    expect(diag.dsp.rxMeters.adcHeadroomDb).toBe(1.8);
+    expect(diag.dsp.rxMeters.agcGainDb).toBe(-9.5);
+    expect(diag.dsp.rxMeters.signalUsable).toBe(true);
+    expect(diag.dsp.rxMeters.diagnosticRecommendation).toContain('within 3 dB');
     expect(diag.dsp.display.status).toBe('fresh');
     expect(diag.dsp.display.panSource).toBe('rx');
     expect(diag.dsp.display.waterfallSource).toBe('rx');

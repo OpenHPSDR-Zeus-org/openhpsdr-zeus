@@ -550,6 +550,29 @@ export type HardwareRxDspDiagnosticsDto = {
   diagnosticRecommendation: string | null;
 };
 
+export type HardwareRxMetersDiagnosticsDto = {
+  schemaVersion: number;
+  status: string;
+  source: string;
+  fresh: boolean;
+  stale: boolean;
+  ageMs: number | null;
+  channelId: number;
+  rxDbm: number | null;
+  signalPkDbm: number | null;
+  signalAvDbm: number | null;
+  adcPkDbfs: number | null;
+  adcAvDbfs: number | null;
+  adcHeadroomDb: number | null;
+  agcGainDb: number | null;
+  agcEnvPkDbm: number | null;
+  agcEnvAvDbm: number | null;
+  signalUsable: boolean;
+  adcUsable: boolean;
+  agcEnvelopeUsable: boolean;
+  diagnosticRecommendation: string | null;
+};
+
 export type HardwareDspDiagnosticsDto = {
   schemaVersion: number;
   engine: string;
@@ -574,6 +597,7 @@ export type HardwareDspDiagnosticsDto = {
   audioSinkCount: number;
   monitorBacklogSamples: number;
   rxDsp: HardwareRxDspDiagnosticsDto;
+  rxMeters: HardwareRxMetersDiagnosticsDto;
   display: HardwareDisplayDiagnosticsDto;
   wdspWisdomPhase: string;
   wdspWisdomStatus: string;
@@ -1873,6 +1897,7 @@ function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
     audioSinkCount: diagNumber(r.audioSinkCount) ?? 0,
     monitorBacklogSamples: diagNumber(r.monitorBacklogSamples) ?? 0,
     rxDsp: normalizeHardwareRxDspDiagnostics(r.rxDsp),
+    rxMeters: normalizeHardwareRxMetersDiagnostics(r.rxMeters),
     display: normalizeHardwareDisplayDiagnostics(r.display),
     wdspWisdomPhase: diagString(r.wdspWisdomPhase) ?? 'Unknown',
     wdspWisdomStatus: diagString(r.wdspWisdomStatus) ?? '',
@@ -1956,6 +1981,56 @@ function normalizeHardwareRxDspDiagnostics(raw: unknown): HardwareRxDspDiagnosti
     appliedSquelchMatchesRequested: r.appliedSquelchMatchesRequested === undefined ? true : Boolean(r.appliedSquelchMatchesRequested),
     activeFeatures: diagStringArray(r.activeFeatures),
     qualityReasons: diagStringArray(r.qualityReasons),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+  };
+}
+
+function normalizeHardwareRxMetersDiagnostics(raw: unknown): HardwareRxMetersDiagnosticsDto {
+  if (raw === null || raw === undefined) {
+    return {
+      schemaVersion: 0,
+      status: 'unavailable',
+      source: 'unknown',
+      fresh: false,
+      stale: true,
+      ageMs: null,
+      channelId: 0,
+      rxDbm: null,
+      signalPkDbm: null,
+      signalAvDbm: null,
+      adcPkDbfs: null,
+      adcAvDbfs: null,
+      adcHeadroomDb: null,
+      agcGainDb: null,
+      agcEnvPkDbm: null,
+      agcEnvAvDbm: null,
+      signalUsable: false,
+      adcUsable: false,
+      agcEnvelopeUsable: false,
+      diagnosticRecommendation: 'RXA stage-meter diagnostics are not available from this backend yet; restart OpenhpsdrZeus after updating to expose signal/ADC/AGC stage evidence.',
+    };
+  }
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    status: diagString(r.status) ?? 'unknown',
+    source: diagString(r.source) ?? 'unknown',
+    fresh: Boolean(r.fresh),
+    stale: Boolean(r.stale),
+    ageMs: diagNumber(r.ageMs),
+    channelId: diagNumber(r.channelId) ?? 0,
+    rxDbm: diagNumber(r.rxDbm),
+    signalPkDbm: diagNumber(r.signalPkDbm),
+    signalAvDbm: diagNumber(r.signalAvDbm),
+    adcPkDbfs: diagNumber(r.adcPkDbfs),
+    adcAvDbfs: diagNumber(r.adcAvDbfs),
+    adcHeadroomDb: diagNumber(r.adcHeadroomDb),
+    agcGainDb: diagNumber(r.agcGainDb),
+    agcEnvPkDbm: diagNumber(r.agcEnvPkDbm),
+    agcEnvAvDbm: diagNumber(r.agcEnvAvDbm),
+    signalUsable: Boolean(r.signalUsable),
+    adcUsable: Boolean(r.adcUsable),
+    agcEnvelopeUsable: Boolean(r.agcEnvelopeUsable),
     diagnosticRecommendation: diagString(r.diagnosticRecommendation),
   };
 }
