@@ -174,7 +174,7 @@ describe('refill hold', () => {
     }
   });
 
-  it('is cleared by snapTo (reset path — zoom / sample-rate change)', () => {
+  it('is cleared by snapTo (hard reset path)', () => {
     vc.snapTo(14_200_000, 93.75);
     vc.nudgeTargetHz(500);
     expect(vc.isWithinRefillHold(240)).toBe(true);
