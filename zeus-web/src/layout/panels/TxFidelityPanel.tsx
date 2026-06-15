@@ -37,7 +37,17 @@ import { useAudioSuiteStore, type AudioProfileSummary } from '../../state/audio-
 import { useConnectionStore } from '../../state/connection-store';
 import { useTxStore } from '../../state/tx-store';
 
-type ApplyPhase = 'idle' | 'applying' | 'applied' | 'saving' | 'saved' | 'resetting' | 'error';
+type ApplyPhase =
+  | 'idle'
+  | 'pending'
+  | 'applying'
+  | 'applied'
+  | 'saving'
+  | 'saved'
+  | 'resetting'
+  | 'error';
+
+type ActivationReason = 'selected' | 'chain' | 'saved' | 'reset';
 
 function controlInputStyle(): CSSProperties {
   return {
@@ -119,6 +129,28 @@ function chooseSuggestedAudioProfileName(
   return '';
 }
 
+function activationPendingMessage(profile: TxStationProfile, reason: ActivationReason): string {
+  const action =
+    reason === 'saved'
+      ? 'saved'
+      : reason === 'reset'
+        ? 'reset'
+        : reason === 'chain'
+          ? 'chain selected'
+          : 'selected';
+  return `${profile.label} ${action} / connect to apply`;
+}
+
+function activationSuccessMessage(profile: TxStationProfile, reason: ActivationReason): string {
+  const action =
+    reason === 'saved'
+      ? 'saved and active'
+      : reason === 'reset'
+        ? 'reset and active'
+        : 'active';
+  return `${profile.label} ${action} / ${formatTxStationProfileSummary(profile)}`;
+}
+
 type TxStationProfilesProps = {
   selectedProfileId: TxStationProfileId;
   onPolicyChange?: (profileId: TxStationProfileId, spectralDensity: number) => void;
@@ -145,10 +177,14 @@ function TxStationProfiles({
   const [message, setMessage] = useState(formatTxStationProfileSummary(STUDIO_SSB_PROFILE));
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [audioProfileMenuOpen, setAudioProfileMenuOpen] = useState(false);
+  const pendingActivationRef = useRef<{
+    profileId: TxStationProfileId;
+    reason: ActivationReason;
+  } | null>(null);
+  const activationSeqRef = useRef(0);
 
   const selectedProfile = getTxStationProfile(selectedProfileId, profiles);
   const busy = phase === 'applying' || phase === 'saving' || phase === 'resetting';
-  const applyDisabled = status !== 'Connected' || busy;
   const profileSummary = formatTxStationProfileSummary(selectedProfile);
   const displayedMessage = phase === 'idle' ? profileSummary : message;
 
@@ -183,18 +219,99 @@ function TxStationProfiles({
     }
   }, [phase, profiles, selectedProfileId]);
 
+  const applyStationProfile = useCallback(
+    async (profile: TxStationProfile, reason: ActivationReason) => {
+      const seq = ++activationSeqRef.current;
+
+      if (status !== 'Connected') {
+        pendingActivationRef.current = { profileId: profile.id, reason };
+        setPhase('pending');
+        setMessage(activationPendingMessage(profile, reason));
+        return;
+      }
+
+      const resolved = resolveTxStationProfile(profile, mode);
+      const { cfcConfig, filter } = resolved;
+      const audioProfileName = profile.audioSuiteProfileName?.trim() ?? '';
+      setPhase('applying');
+      setMessage('Applying...');
+      try {
+        if (audioProfileName.length > 0) {
+          const result = await applyAudioProfile(audioProfileName);
+          if (!result.ok) {
+            throw new Error(result.error || `Audio Suite profile "${audioProfileName}" did not apply`);
+          }
+        }
+
+        const mic = await setMicGain(profile.micGainDb);
+        setMicGainDb(mic.micGainDb);
+
+        const leveler = await setLevelerMaxGain(profile.levelerMaxGainDb);
+        setLevelerMaxGainDb(leveler.levelerMaxGainDb);
+
+        let state = await setTxLeveling(profile.txLeveling);
+        applyState(state);
+        hydrateTxFromState(state);
+
+        state = await setTxFilter(filter.lowHz, filter.highHz);
+        applyState(state);
+        hydrateTxFromState(state);
+
+        state = await setCfcConfig(cfcConfig);
+        applyState(state);
+        hydrateTxFromState(state);
+        setCfcConfigLocal(state.cfc);
+
+        if (seq !== activationSeqRef.current) return;
+        setPhase('applied');
+        setMessage(activationSuccessMessage(profile, reason));
+      } catch (err) {
+        if (seq !== activationSeqRef.current) return;
+        setPhase('error');
+        setMessage(err instanceof Error ? err.message : 'Apply failed');
+      }
+    },
+    [
+      applyAudioProfile,
+      applyState,
+      hydrateTxFromState,
+      mode,
+      setCfcConfigLocal,
+      setLevelerMaxGainDb,
+      setMicGainDb,
+      status,
+    ],
+  );
+
+  const activateStationProfile = useCallback(
+    (profile: TxStationProfile, reason: ActivationReason) => {
+      pendingActivationRef.current = null;
+      void applyStationProfile(profile, reason);
+    },
+    [applyStationProfile],
+  );
+
+  useEffect(() => {
+    if (status !== 'Connected') return;
+    const pending = pendingActivationRef.current;
+    if (!pending) return;
+    pendingActivationRef.current = null;
+    const profile = getTxStationProfile(pending.profileId, profiles);
+    void applyStationProfile(profile, pending.reason);
+  }, [applyStationProfile, profiles, status]);
+
   function selectProfile(profileId: string) {
     const profile = getTxStationProfile(profileId, profiles);
     onPolicyChange?.(profile.id, profile.spectralDensity);
     setProfileMenuOpen(false);
     setAudioProfileMenuOpen(false);
-    setPhase('idle');
-    setMessage(formatTxStationProfileSummary(profile));
+    activateStationProfile(profile, 'selected');
   }
 
   function selectAudioProfile(name: string) {
     const savedProfile = audioProfiles.find((profile) => profile.name === name);
-    patchSelectedProfile({
+    const next = {
+      ...selectedProfile,
       audioSuiteProfileName: name,
       ...(savedProfile
         ? {
@@ -202,18 +319,23 @@ function TxStationProfiles({
             audioSuiteBypassed: savedProfile.masterBypass,
           }
         : {}),
-    });
+    };
+    updateSelectedProfile(next);
     setAudioProfileMenuOpen(false);
+    activateStationProfile(next, 'chain');
   }
 
   function bindSuggestedAudioProfile(name: string) {
     const savedProfile = audioProfiles.find((profile) => profile.name === name);
-    patchSelectedProfile({
+    const next = {
+      ...selectedProfile,
       audioSuiteRoute: savedProfile?.processingMode ?? 'vst',
       audioSuiteBypassed: savedProfile?.masterBypass ?? false,
       audioSuiteProfileName: name,
-    });
+    };
+    updateSelectedProfile(next);
     setAudioProfileMenuOpen(false);
+    activateStationProfile(next, 'chain');
   }
 
   function updateSelectedProfile(next: TxStationProfile) {
@@ -248,8 +370,7 @@ function TxStationProfiles({
       if (sanitized.id === selectedProfileId) {
         onPolicyChange?.(sanitized.id, sanitized.spectralDensity);
       }
-      setPhase('saved');
-      setMessage(`${sanitized.label} saved / density ${sanitized.spectralDensity}`);
+      activateStationProfile(sanitized, 'saved');
     } catch (err) {
       setPhase('error');
       setMessage(err instanceof Error ? err.message : 'Save failed');
@@ -265,52 +386,10 @@ function TxStationProfiles({
       const restored = getTxStationProfile(selectedProfile.id, defaults);
       setProfiles((prev) => prev.map((profile) => (profile.id === restored.id ? restored : profile)));
       onPolicyChange?.(restored.id, restored.spectralDensity);
-      setPhase('idle');
-      setMessage(formatTxStationProfileSummary(restored));
+      activateStationProfile(restored, 'reset');
     } catch (err) {
       setPhase('error');
       setMessage(err instanceof Error ? err.message : 'Reset failed');
-    }
-  }
-
-  async function applyStationProfile() {
-    const resolved = resolveTxStationProfile(selectedProfile, mode);
-    const { cfcConfig, filter } = resolved;
-    const audioProfileName = selectedProfile.audioSuiteProfileName?.trim() ?? '';
-    setPhase('applying');
-    setMessage('Applying...');
-    try {
-      if (audioProfileName.length > 0) {
-        const result = await applyAudioProfile(audioProfileName);
-        if (!result.ok) {
-          throw new Error(result.error || `Audio Suite profile "${audioProfileName}" did not apply`);
-        }
-      }
-
-      const mic = await setMicGain(selectedProfile.micGainDb);
-      setMicGainDb(mic.micGainDb);
-
-      const leveler = await setLevelerMaxGain(selectedProfile.levelerMaxGainDb);
-      setLevelerMaxGainDb(leveler.levelerMaxGainDb);
-
-      let state = await setTxLeveling(selectedProfile.txLeveling);
-      applyState(state);
-      hydrateTxFromState(state);
-
-      state = await setTxFilter(filter.lowHz, filter.highHz);
-      applyState(state);
-      hydrateTxFromState(state);
-
-      state = await setCfcConfig(cfcConfig);
-      applyState(state);
-      hydrateTxFromState(state);
-      setCfcConfigLocal(state.cfc);
-
-      setPhase('applied');
-      setMessage(`${selectedProfile.label} applied / ${formatTxStationProfileSummary(selectedProfile)}`);
-    } catch (err) {
-      setPhase('error');
-      setMessage(err instanceof Error ? err.message : 'Apply failed');
     }
   }
 
@@ -330,7 +409,7 @@ function TxStationProfiles({
     ? `${selectedAudioProfile.processingMode === 'vst' ? 'VST' : 'Native'} route / ${
         selectedAudioProfile.masterBypass ? 'rack bypass' : 'rack hot'
       } saved in chain profile`
-    : 'Apply leaves the current Audio Suite chain unchanged';
+    : 'No chain profile selected; current Audio Suite chain stays active';
 
   return (
     <section
@@ -350,7 +429,7 @@ function TxStationProfiles({
       <div
         style={{
           display: 'grid',
-          gridTemplateColumns: 'minmax(0, 1fr) auto',
+          gridTemplateColumns: 'minmax(0, 1fr)',
           gap: 7,
           alignItems: 'end',
           minWidth: 0,
@@ -365,6 +444,7 @@ function TxStationProfiles({
               aria-haspopup="listbox"
               aria-expanded={profileMenuOpen}
               disabled={busy}
+              title={selectedProfile.applyTitle}
               onClick={() => setProfileMenuOpen((open) => !open)}
               style={{
                 display: 'grid',
@@ -434,32 +514,6 @@ function TxStationProfiles({
             )}
           </div>
         </div>
-        <button
-          type="button"
-          disabled={applyDisabled}
-          onClick={applyStationProfile}
-          title={selectedProfile.applyTitle}
-          style={{
-            minWidth: 62,
-            height: 28,
-            border: '1px solid var(--accent)',
-            borderRadius: 4,
-            background:
-              phase === 'applied'
-                ? 'var(--signal)'
-                : phase === 'error'
-                  ? 'var(--tx)'
-                  : 'var(--bg-2)',
-            color: phase === 'applied' || phase === 'error' ? '#fff' : 'var(--fg-0)',
-            cursor: applyDisabled ? 'not-allowed' : 'pointer',
-            fontSize: 11,
-            fontWeight: 900,
-            padding: '0 10px',
-            textTransform: 'uppercase',
-          }}
-        >
-          {phase === 'applying' ? 'Applying' : phase === 'applied' ? 'Applied' : 'Apply'}
-        </button>
       </div>
 
       <div
@@ -517,6 +571,7 @@ function TxStationProfiles({
                   aria-label="TX profile audio suite profile"
                   aria-haspopup="listbox"
                   aria-expanded={audioProfileMenuOpen}
+                  disabled={busy}
                   onClick={() => setAudioProfileMenuOpen((open) => !open)}
                   style={{
                     display: 'grid',
@@ -531,7 +586,7 @@ function TxStationProfiles({
                     borderRadius: 4,
                     background: 'var(--bg-0)',
                     color: 'var(--fg-0)',
-                    cursor: 'pointer',
+                    cursor: busy ? 'not-allowed' : 'pointer',
                     fontSize: 10,
                     fontWeight: 800,
                     padding: '0 7px',
@@ -640,6 +695,7 @@ function TxStationProfiles({
                 </span>
                 <button
                   type="button"
+                  disabled={busy}
                   onClick={() => bindSuggestedAudioProfile(suggestedAudioProfileName)}
                   style={{
                     height: 23,
@@ -647,7 +703,7 @@ function TxStationProfiles({
                     borderRadius: 4,
                     background: 'var(--bg-1)',
                     color: 'var(--fg-0)',
-                    cursor: 'pointer',
+                    cursor: busy ? 'not-allowed' : 'pointer',
                     fontSize: 10,
                     fontWeight: 900,
                     padding: '0 8px',
