@@ -638,6 +638,9 @@ describe('POST helpers', () => {
             squelchOpen: true,
             squelchTailActive: false,
             squelchGateGain: 1,
+            squelchMode: 'adaptive',
+            squelchGateSource: 'backend-adaptive',
+            squelchOpenKnown: true,
             monitorBacklogSamples: 0,
             audioSinkCount: 1,
             diagnosticRecommendation: 'RX audio frames are fresh.',
@@ -816,6 +819,9 @@ describe('POST helpers', () => {
     expect(diag.dsp.audio.rmsDbfs).toBe(-30);
     expect(diag.dsp.audio.peakDbfs).toBe(-14.9);
     expect(diag.dsp.audio.squelchOpen).toBe(true);
+    expect(diag.dsp.audio.squelchMode).toBe('adaptive');
+    expect(diag.dsp.audio.squelchGateSource).toBe('backend-adaptive');
+    expect(diag.dsp.audio.squelchOpenKnown).toBe(true);
     expect(diag.dsp.audio.diagnosticRecommendation).toContain('fresh');
     expect(diag.dsp.display.status).toBe('fresh');
     expect(diag.dsp.display.panSource).toBe('rx');

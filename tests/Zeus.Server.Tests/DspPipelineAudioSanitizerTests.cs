@@ -221,8 +221,45 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.True(diag.SquelchEnabled);
         Assert.False(diag.SquelchOpen);
         Assert.Equal(0.0, diag.SquelchGateGain);
+        Assert.Equal("adaptive", diag.SquelchMode);
+        Assert.Equal("backend-adaptive", diag.SquelchGateSource);
+        Assert.True(diag.SquelchOpenKnown);
         Assert.Null(diag.RmsDbfs);
         Assert.Contains("adaptive squelch", diag.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildAudioPathDiagnostics_ReportsSilentFixedSquelchAsWdspGate()
+    {
+        var diag = DspPipelineService.BuildAudioPathDiagnostics(
+            valid: true,
+            ageMs: 16,
+            lastSeq: 126,
+            framesBroadcast: 15,
+            source: "rx",
+            sampleRateHz: 48_000,
+            sampleCount: 1600,
+            rms: 0.0,
+            peak: 0.0,
+            txMonitorRequested: false,
+            squelchEnabled: true,
+            squelchOpen: true,
+            squelchTailActive: false,
+            squelchGain: 1.0,
+            monitorBacklogSamples: 0,
+            audioSinkCount: 2,
+            squelchMode: "fixed",
+            squelchGateSource: "wdsp-fixed",
+            squelchOpenKnown: false);
+
+        Assert.Equal("silent", diag.Status);
+        Assert.True(diag.SquelchEnabled);
+        Assert.True(diag.SquelchOpen);
+        Assert.False(diag.SquelchOpenKnown);
+        Assert.Equal("fixed", diag.SquelchMode);
+        Assert.Equal("wdsp-fixed", diag.SquelchGateSource);
+        Assert.Equal(1.0, diag.SquelchGateGain);
+        Assert.Contains("fixed SQL is active", diag.DiagnosticRecommendation);
     }
 
     [Fact]

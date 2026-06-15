@@ -596,6 +596,9 @@ export type HardwareAudioDiagnosticsDto = {
   squelchOpen: boolean;
   squelchTailActive: boolean;
   squelchGateGain: number | null;
+  squelchMode: string;
+  squelchGateSource: string;
+  squelchOpenKnown: boolean;
   monitorBacklogSamples: number;
   audioSinkCount: number;
   diagnosticRecommendation: string | null;
@@ -2101,6 +2104,9 @@ function normalizeHardwareAudioDiagnostics(raw: unknown): HardwareAudioDiagnosti
       squelchOpen: false,
       squelchTailActive: false,
       squelchGateGain: null,
+      squelchMode: 'unknown',
+      squelchGateSource: 'unknown',
+      squelchOpenKnown: false,
       monitorBacklogSamples: 0,
       audioSinkCount: 0,
       diagnosticRecommendation: 'RX audio-path diagnostics are not available from this backend yet; restart OpenhpsdrZeus after updating to expose final audio-frame freshness, RMS, peak, squelch, and TX-monitor evidence.',
@@ -2127,6 +2133,9 @@ function normalizeHardwareAudioDiagnostics(raw: unknown): HardwareAudioDiagnosti
     squelchOpen: Boolean(r.squelchOpen),
     squelchTailActive: Boolean(r.squelchTailActive),
     squelchGateGain: diagNumber(r.squelchGateGain),
+    squelchMode: diagString(r.squelchMode) ?? 'unknown',
+    squelchGateSource: diagString(r.squelchGateSource) ?? 'unknown',
+    squelchOpenKnown: Boolean(r.squelchOpenKnown),
     monitorBacklogSamples: diagNumber(r.monitorBacklogSamples) ?? 0,
     audioSinkCount: diagNumber(r.audioSinkCount) ?? 0,
     diagnosticRecommendation: diagString(r.diagnosticRecommendation),
