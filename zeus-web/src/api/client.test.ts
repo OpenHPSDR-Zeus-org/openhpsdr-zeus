@@ -482,6 +482,10 @@ describe('POST helpers', () => {
           engine: 'WdspDspEngine',
           engineKind: 'WDSP',
           wdspActive: true,
+          wdspNativeLoadable: true,
+          wdspEmnrPost2Available: true,
+          wdspNr4SbnrAvailable: false,
+          nr4Readiness: 'missing-sbnr-exports',
           channelId: 1,
           sampleRateHz: 192000,
           displayWidth: 2048,
@@ -571,6 +575,10 @@ describe('POST helpers', () => {
     expect(diag.dsp.engineKind).toBe('WDSP');
     expect(diag.dsp.txOutputSamples).toBe(4096);
     expect(diag.dsp.txMonitorRequested).toBe(true);
+    expect(diag.dsp.wdspNativeLoadable).toBe(true);
+    expect(diag.dsp.wdspEmnrPost2Available).toBe(true);
+    expect(diag.dsp.wdspNr4SbnrAvailable).toBe(false);
+    expect(diag.dsp.nr4Readiness).toBe('missing-sbnr-exports');
     expect(diag.frontendDspScene.available).toBe(true);
     expect(diag.frontendDspScene.status).toBe('fresh');
     expect(diag.frontendDspScene.fresh).toBe(true);

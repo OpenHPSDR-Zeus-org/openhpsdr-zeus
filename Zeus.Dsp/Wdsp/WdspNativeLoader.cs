@@ -53,6 +53,7 @@ internal static class WdspNativeLoader
     private static bool _registered;
     private static bool _probedLoadable;
     private static bool _loadable;
+    private static readonly Dictionary<string, bool> ExportCache = new(StringComparer.Ordinal);
 
     internal static void EnsureResolverRegistered()
     {
@@ -83,6 +84,35 @@ internal static class WdspNativeLoader
             }
             _probedLoadable = true;
             return _loadable;
+        }
+    }
+
+    internal static bool TryProbeExport(string symbolName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(symbolName);
+
+        EnsureResolverRegistered();
+        lock (Gate)
+        {
+            if (ExportCache.TryGetValue(symbolName, out bool available))
+                return available;
+
+            if (!TryResolve(typeof(NativeMethods).Assembly, out var handle))
+            {
+                ExportCache[symbolName] = false;
+                return false;
+            }
+
+            try
+            {
+                available = NativeLibrary.TryGetExport(handle, symbolName, out _);
+                ExportCache[symbolName] = available;
+                return available;
+            }
+            finally
+            {
+                NativeLibrary.Free(handle);
+            }
         }
     }
 

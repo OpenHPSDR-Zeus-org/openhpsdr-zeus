@@ -464,6 +464,10 @@ export type HardwareDspDiagnosticsDto = {
   engineKind: string;
   wdspActive: boolean;
   synthetic: boolean;
+  wdspNativeLoadable: boolean;
+  wdspEmnrPost2Available: boolean;
+  wdspNr4SbnrAvailable: boolean;
+  nr4Readiness: string;
   channelId: number;
   sampleRateHz: number;
   displayWidth: number;
@@ -1294,6 +1298,10 @@ function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
     engineKind: diagString(r.engineKind) ?? 'Unknown',
     wdspActive: Boolean(r.wdspActive),
     synthetic: Boolean(r.synthetic),
+    wdspNativeLoadable: Boolean(r.wdspNativeLoadable),
+    wdspEmnrPost2Available: Boolean(r.wdspEmnrPost2Available),
+    wdspNr4SbnrAvailable: Boolean(r.wdspNr4SbnrAvailable),
+    nr4Readiness: diagString(r.nr4Readiness) ?? 'unknown',
     channelId: diagNumber(r.channelId) ?? 0,
     sampleRateHz: diagNumber(r.sampleRateHz) ?? 0,
     displayWidth: diagNumber(r.displayWidth) ?? 0,

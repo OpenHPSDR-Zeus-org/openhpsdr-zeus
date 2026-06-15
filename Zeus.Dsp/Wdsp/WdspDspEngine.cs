@@ -113,6 +113,44 @@ public sealed class WdspDspEngine : IDspEngine
     private const double AnalyzerKaiserPi = 14.0;
     private const double AnalyzerKeepTime = 0.1;
 
+    private static readonly string[] EmnrPost2RequiredExports =
+    [
+        nameof(NativeMethods.SetRXAEMNRpost2Run),
+        nameof(NativeMethods.SetRXAEMNRpost2Factor),
+        nameof(NativeMethods.SetRXAEMNRpost2Nlevel),
+        nameof(NativeMethods.SetRXAEMNRpost2Taper),
+        nameof(NativeMethods.SetRXAEMNRpost2Rate),
+    ];
+
+    private static readonly string[] SbnrRequiredExports =
+    [
+        nameof(NativeMethods.SetRXASBNRRun),
+        nameof(NativeMethods.SetRXASBNRPosition),
+        nameof(NativeMethods.SetRXASBNRreductionAmount),
+        nameof(NativeMethods.SetRXASBNRsmoothingFactor),
+        nameof(NativeMethods.SetRXASBNRwhiteningFactor),
+        nameof(NativeMethods.SetRXASBNRnoiseRescale),
+        nameof(NativeMethods.SetRXASBNRpostFilterThreshold),
+        nameof(NativeMethods.SetRXASBNRnoiseScalingType),
+    ];
+
+    internal static bool NativeLibraryLoadable => WdspNativeLoader.TryProbe();
+
+    internal static bool EmnrPost2Available => AllNativeExportsAvailable(EmnrPost2RequiredExports);
+
+    internal static bool Nr4SbnrAvailable => AllNativeExportsAvailable(SbnrRequiredExports);
+
+    private static bool AllNativeExportsAvailable(string[] symbolNames)
+    {
+        if (!WdspNativeLoader.TryProbe()) return false;
+        for (int i = 0; i < symbolNames.Length; i++)
+        {
+            if (!WdspNativeLoader.TryProbeExport(symbolNames[i]))
+                return false;
+        }
+        return true;
+    }
+
     private enum RxaMode
     {
         LSB = 0, USB = 1, DSB = 2, CWL = 3, CWU = 4,
