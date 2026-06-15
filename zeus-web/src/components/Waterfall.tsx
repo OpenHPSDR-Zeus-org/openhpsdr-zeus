@@ -82,6 +82,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   // (WebView2) app has no reachable DevTools. Only shown when something the
   // waterfall needs is missing (#629).
   const [glCaps, setGlCaps] = useState<WfGlCaps | null>(null);
+  const [glError, setGlError] = useState<string | null>(null);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -120,25 +121,43 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     // frame-consumer registration. Reads colormap/transparency LIVE so a
     // rebuild lands on the operator's current state, not a stale closure.
     const buildRenderer = (): boolean => {
-      const ctx = canvas.getContext('webgl2', {
-        antialias: false,
-        alpha: true,
-        premultipliedAlpha: true,
-      });
-      if (!ctx) {
-        console.error('WebGL2 not available');
+      try {
+        const ctx = canvas.getContext('webgl2', {
+          antialias: false,
+          alpha: true,
+          premultipliedAlpha: true,
+        });
+        if (!ctx) {
+          console.error('WebGL2 not available');
+          setGlCaps(null);
+          setGlError('WebGL2 not available');
+          return false;
+        }
+        gl = ctx;
+        renderer = createWfRenderer(ctx);
+        rendererRef.current = renderer;
+        renderer.setTransparent(transparentRef.current);
+        applyRenderLook();
+        setGlCaps(renderer.caps);
+        setGlError(null);
+        return true;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[waterfall] renderer unavailable', err);
+        renderer = null;
+        rendererRef.current = null;
+        setGlCaps(null);
+        setGlError(message);
         return false;
       }
-      gl = ctx;
-      renderer = createWfRenderer(ctx);
-      rendererRef.current = renderer;
-      renderer.setTransparent(transparentRef.current);
-      applyRenderLook();
-      setGlCaps(renderer.caps);
-      return true;
     };
 
-    if (!buildRenderer()) return;
+    if (!buildRenderer()) {
+      return () => {
+        releaseFrameConsumer();
+        rendererRef.current = null;
+      };
+    }
 
     let lastSeqDrawn = -1;
     let tickCounter = 0;
@@ -502,6 +521,29 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
           title={`GPU: ${glCaps.gpu}`}
         >
           wf: float_linear unsupported → NEAREST fallback
+        </div>
+      )}
+      {glError && (
+        <div
+          role="status"
+          style={{
+            position: 'absolute',
+            top: 6,
+            left: 6,
+            right: 6,
+            padding: '4px 6px',
+            fontSize: 10,
+            fontFamily: 'monospace',
+            color: 'var(--fg-0)',
+            background: 'rgba(0,0,0,0.62)',
+            border: '1px solid rgba(255,255,255,0.22)',
+            borderRadius: 3,
+            pointerEvents: 'none',
+            zIndex: 3,
+          }}
+          title={glError}
+        >
+          Waterfall renderer unavailable
         </div>
       )}
       <WfDbScale />
