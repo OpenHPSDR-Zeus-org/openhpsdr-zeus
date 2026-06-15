@@ -823,6 +823,18 @@ export type Protocol2TxIqDiagnosticsDto = {
   senderRunning: boolean;
 };
 
+export type TxEgressHealthDto = {
+  schemaVersion: number;
+  generatedUtc: string;
+  activeTransport: string;
+  healthStatus: string;
+  p2Attached: boolean;
+  p2Live: boolean;
+  p2LastActivityAgeMs: number | null;
+  p1RingDropRatioPct: number;
+  diagnosticRecommendation: string | null;
+};
+
 export type TxPluginDiagnosticsDto = {
   masterBypassed: boolean;
   bypassedForRemoteTx: boolean;
@@ -834,11 +846,13 @@ export type VstEngineDiagnosticsDto = {
 };
 
 export type TxDiagnosticsDto = {
+  generatedUtc: string;
   iqSourceType: string | null;
   iqSourceIsRing: boolean;
   ring: TxRingDiagnosticsDto;
   ingest: TxIngestDiagnosticsDto;
   protocol2: Protocol2TxIqDiagnosticsDto | null;
+  egress: TxEgressHealthDto;
   txPlugins: TxPluginDiagnosticsDto | null;
   vstEngine: VstEngineDiagnosticsDto | null;
 };
@@ -1803,6 +1817,37 @@ function normalizeProtocol2TxIqDiagnostics(raw: unknown): Protocol2TxIqDiagnosti
   };
 }
 
+function normalizeTxEgressHealth(raw: unknown): TxEgressHealthDto {
+  if (raw === null || raw === undefined) {
+    return {
+      schemaVersion: 0,
+      generatedUtc: new Date().toISOString(),
+      activeTransport: 'unknown',
+      healthStatus: 'unknown',
+      p2Attached: false,
+      p2Live: false,
+      p2LastActivityAgeMs: null,
+      p1RingDropRatioPct: 0,
+      diagnosticRecommendation: 'TX egress health is not available from this backend yet; use raw counters until OpenhpsdrZeus is restarted.',
+    };
+  }
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    generatedUtc:
+      typeof r.generatedUtc === 'string'
+        ? r.generatedUtc
+        : new Date().toISOString(),
+    activeTransport: diagString(r.activeTransport) ?? 'unknown',
+    healthStatus: diagString(r.healthStatus) ?? 'unknown',
+    p2Attached: Boolean(r.p2Attached),
+    p2Live: Boolean(r.p2Live),
+    p2LastActivityAgeMs: diagNumber(r.p2LastActivityAgeMs),
+    p1RingDropRatioPct: diagNumber(r.p1RingDropRatioPct) ?? 0,
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+  };
+}
+
 function normalizeTxDiagnostics(raw: unknown): TxDiagnosticsDto {
   const r = asDiagRecord(raw);
   const pluginRaw = r.txPlugins === null || r.txPlugins === undefined
@@ -1812,11 +1857,16 @@ function normalizeTxDiagnostics(raw: unknown): TxDiagnosticsDto {
     ? null
     : asDiagRecord(r.vstEngine);
   return {
+    generatedUtc:
+      typeof r.generatedUtc === 'string'
+        ? r.generatedUtc
+        : new Date().toISOString(),
     iqSourceType: diagString(r.iqSourceType),
     iqSourceIsRing: Boolean(r.iqSourceIsRing),
     ring: normalizeTxRingDiagnostics(r.ring),
     ingest: normalizeTxIngestDiagnostics(r.ingest),
     protocol2: normalizeProtocol2TxIqDiagnostics(r.protocol2),
+    egress: normalizeTxEgressHealth(r.egress),
     txPlugins: pluginRaw === null
       ? null
       : {
