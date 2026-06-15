@@ -63,6 +63,8 @@ import {
   fetchRadioPowerCalibration,
   fetchRadioSupplyAlarms,
   fetchSmartNrCondition,
+  fetchUserIoActions,
+  fetchUserIoLabels,
   fetchAdcProtection,
   fetchTxFidelityPolicy,
   publishFrontendDspSceneDiagnostics,
@@ -1015,6 +1017,81 @@ describe('POST helpers', () => {
     expect(profile.p2.droppedFrames).toBe(3);
     expect(profile.p2.hiPriorityPackets).toBe(900);
     expect(profile.healthStatus).toBe('loss-detected');
+  });
+
+  it('fetchUserIoLabels reads default P2 user I/O labels and values', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      activeProtocol: 'P2',
+      p2Attached: true,
+      p2Packets: 12,
+      p2LastUpdatedUtc: '2026-06-15T01:00:00Z',
+      lines: [
+        {
+          id: 'userAdc0',
+          kind: 'analog',
+          label: 'User ADC 0',
+          rawAdc: 32768,
+          normalizedPct: 50,
+          digitalState: null,
+        },
+        {
+          id: 'userDigital0',
+          kind: 'digital',
+          label: 'User Digital 0',
+          rawAdc: null,
+          normalizedPct: null,
+          digitalState: true,
+        },
+      ],
+      diagnosticRecommendation: 'P2 user I/O lines are decoded with default labels.',
+      generatedUtc: '2026-06-15T01:00:01Z',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const labels = await fetchUserIoLabels();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/user-io/labels');
+    expect(init?.method).toBeUndefined();
+    expect(labels.activeProtocol).toBe('P2');
+    expect(labels.p2Attached).toBe(true);
+    expect(labels.lines[0]?.rawAdc).toBe(32768);
+    expect(labels.lines[0]?.normalizedPct).toBe(50);
+    expect(labels.lines[1]?.digitalState).toBe(true);
+  });
+
+  it('fetchUserIoActions reads unarmed action binding readiness', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      activeProtocol: 'P2',
+      p2Attached: true,
+      p2Packets: 12,
+      p2LastUpdatedUtc: '2026-06-15T01:00:00Z',
+      actionBindingsConfigured: false,
+      lines: [
+        {
+          id: 'userDigital7',
+          kind: 'digital',
+          label: 'User Digital 7',
+          rawAdc: null,
+          normalizedPct: null,
+          digitalState: false,
+        },
+      ],
+      diagnosticRecommendation: 'User I/O action bindings are intentionally unarmed.',
+      generatedUtc: '2026-06-15T01:00:01Z',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const actions = await fetchUserIoActions();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/user-io/actions');
+    expect(init?.method).toBeUndefined();
+    expect(actions.actionBindingsConfigured).toBe(false);
+    expect(actions.lines[0]?.id).toBe('userDigital7');
+    expect(actions.lines[0]?.digitalState).toBe(false);
   });
 
   it('raises ApiError with server-provided error text on 400', async () => {

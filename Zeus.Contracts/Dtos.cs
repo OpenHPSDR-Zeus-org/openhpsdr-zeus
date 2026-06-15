@@ -270,6 +270,35 @@ public sealed record RadioNetworkProfileDto(
     string DiagnosticRecommendation,
     DateTimeOffset GeneratedUtc);
 
+public sealed record UserIoLineDto(
+    string Id,
+    string Kind,
+    string Label,
+    ushort? RawAdc,
+    double? NormalizedPct,
+    bool? DigitalState);
+
+public sealed record UserIoLabelsDto(
+    int SchemaVersion,
+    string? ActiveProtocol,
+    bool P2Attached,
+    long P2Packets,
+    DateTimeOffset? P2LastUpdatedUtc,
+    IReadOnlyList<UserIoLineDto> Lines,
+    string DiagnosticRecommendation,
+    DateTimeOffset GeneratedUtc);
+
+public sealed record UserIoActionsDto(
+    int SchemaVersion,
+    string? ActiveProtocol,
+    bool P2Attached,
+    long P2Packets,
+    DateTimeOffset? P2LastUpdatedUtc,
+    bool ActionBindingsConfigured,
+    IReadOnlyList<UserIoLineDto> Lines,
+    string DiagnosticRecommendation,
+    DateTimeOffset GeneratedUtc);
+
 // Operator-facing AGC configuration (issue: DSP controls Thetis parity §4).
 // Mode selects a canned profile (Long/Slow/Med/Fast/Fixed) or Custom; the
 // nullable params are only consulted in Custom mode (and FixedGainDb only in
