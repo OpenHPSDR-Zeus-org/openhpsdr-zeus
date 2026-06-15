@@ -430,10 +430,18 @@ public static class ZeusEndpoints
         // (Protocol1Client via ITxIqSource) stats. Useful for "is the mic reaching
         // TXA, and is the EP2 packer actually reading the ring" questions without
         // hunting through logs. Free to call, exposes no secrets.
-        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, DspPipelineService dsp, AudioPluginBridge? pluginBridge, Zeus.Plugins.Host.Audio.VstEngineController? vstEngine) =>
+        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, DspPipelineService dsp, TxService tx, HardwareDiagnosticsService hardware, ExternalPttService externalPtt, AudioPluginBridge? pluginBridge, Zeus.Plugins.Host.Audio.VstEngineController? vstEngine) =>
         {
             var generatedUtc = DateTimeOffset.UtcNow;
             var p2Tx = dsp.ActiveP2Client?.TxIqDiagnosticsSnapshot();
+            var keying = hardware.KeyingSnapshot(externalPtt.Snapshot());
+            var power = hardware.PowerCalibrationSnapshot();
+            var activePower = string.Equals(power.ActiveProtocol, "P2", StringComparison.OrdinalIgnoreCase)
+                ? power.P2
+                : power.P1;
+            bool? hardwarePtt = string.Equals(keying.ActiveProtocol, "P2", StringComparison.OrdinalIgnoreCase)
+                ? keying.P2PttIn
+                : keying.P1HardwarePtt;
             return Results.Ok(new
             {
                 generatedUtc,
@@ -446,7 +454,12 @@ public static class ZeusEndpoints
                     generatedUtc,
                     ring.TotalWritten,
                     ring.Dropped,
-                    p2Tx),
+                    p2Tx,
+                    tx.IsMoxOn,
+                    tx.IsTunOn,
+                    tx.IsTwoToneOn,
+                    hardwarePtt,
+                    activePower.FwdWatts),
                 txPlugins = pluginBridge is null ? null : new
                 {
                     masterBypassed = pluginBridge.IsMasterBypassed,
@@ -2264,8 +2277,16 @@ public static class ZeusEndpoints
         DateTimeOffset generatedUtc,
         long p1RingTotalWritten,
         long p1RingDropped,
-        Protocol2TxIqDiagnostics? p2)
+        Protocol2TxIqDiagnostics? p2,
+        bool hostMoxOn = false,
+        bool hostTunOn = false,
+        bool hostTwoToneOn = false,
+        bool? hardwarePtt = null,
+        double? forwardWatts = null)
     {
+        const double RfDetectedWatts = 0.05;
+        bool hostTxActive = hostMoxOn || hostTunOn || hostTwoToneOn;
+        bool rfDetected = forwardWatts is > RfDetectedWatts;
         double p1RingDropRatioPct = p1RingTotalWritten <= 0
             ? 0.0
             : Math.Round(p1RingDropped * 100.0 / p1RingTotalWritten, 3);
@@ -2280,6 +2301,14 @@ public static class ZeusEndpoints
                 P2Live: false,
                 P2LastActivityAgeMs: null,
                 P1RingDropRatioPct: p1RingDropRatioPct,
+                HostMoxOn: hostMoxOn,
+                HostTunOn: hostTunOn,
+                HostTwoToneOn: hostTwoToneOn,
+                HostTxActive: hostTxActive,
+                HardwarePtt: hardwarePtt,
+                ForwardWatts: forwardWatts,
+                RfDetected: rfDetected,
+                RfEvidenceStatus: RfEvidenceStatus(hostTxActive, rfDetected, p2Live: false, hardwarePtt: hardwarePtt),
                 DiagnosticRecommendation: p1RingDropRatioPct > 1.0
                     ? "No Protocol 2 TX client is attached and the P1 TX IQ ring is dropping samples; verify the active radio transport before judging TX audio fidelity."
                     : "No Protocol 2 TX client is attached; P1 ring counters are the only visible TX egress path.");
@@ -2311,7 +2340,18 @@ public static class ZeusEndpoints
         else if (p2Live)
         {
             health = "p2-live";
-            recommendation = "P2 DUC egress is live. Use P2 queued/sent packets, packet rate, FIFO model, and failure counters as the TX egress truth; P1 ring drops are legacy context while P2 is active.";
+            if (rfDetected)
+            {
+                recommendation = "P2 DUC egress and RF forward-power evidence are live. Use P2 queued/sent packets, packet rate, FIFO model, failure counters, and PA watts together for TX density and fidelity decisions.";
+            }
+            else if (hostTxActive)
+            {
+                recommendation = "Host TX is keyed and P2 DUC egress is live, but PA forward power is not detected; keep drive low and verify TX inhibit, band/PA routing, and antenna/load before judging fidelity.";
+            }
+            else
+            {
+                recommendation = "P2 DUC packets are live while host MOX/TUN/two-tone and PA forward power are idle; treat this as off-air TX monitor or idle packet flow, not on-air spectral-density proof.";
+            }
         }
         else if (p2Diag.InputComplexSamples > 0 || p2Diag.PacketsSent > 0)
         {
@@ -2333,7 +2373,28 @@ public static class ZeusEndpoints
             P2Live: p2Live,
             P2LastActivityAgeMs: ageMs is { } age ? Math.Round(age, 0) : null,
             P1RingDropRatioPct: p1RingDropRatioPct,
+            HostMoxOn: hostMoxOn,
+            HostTunOn: hostTunOn,
+            HostTwoToneOn: hostTwoToneOn,
+            HostTxActive: hostTxActive,
+            HardwarePtt: hardwarePtt,
+            ForwardWatts: forwardWatts,
+            RfDetected: rfDetected,
+            RfEvidenceStatus: RfEvidenceStatus(hostTxActive, rfDetected, p2Live, hardwarePtt),
             DiagnosticRecommendation: recommendation);
+    }
+
+    static string RfEvidenceStatus(
+        bool hostTxActive,
+        bool rfDetected,
+        bool p2Live,
+        bool? hardwarePtt)
+    {
+        if (rfDetected) return "rf-active";
+        if (hostTxActive) return "host-keyed-no-forward-power";
+        if (hardwarePtt == true) return "hardware-ptt-input-no-forward-power";
+        if (p2Live) return "transport-live-rf-idle";
+        return "rf-idle";
     }
 
     static HpsdrSampleRate MapHpsdrSampleRate(int hz) => hz switch
@@ -2364,6 +2425,14 @@ internal sealed record TxEgressHealthDto(
     bool P2Live,
     double? P2LastActivityAgeMs,
     double P1RingDropRatioPct,
+    bool HostMoxOn,
+    bool HostTunOn,
+    bool HostTwoToneOn,
+    bool HostTxActive,
+    bool? HardwarePtt,
+    double? ForwardWatts,
+    bool RfDetected,
+    string RfEvidenceStatus,
     string DiagnosticRecommendation);
 internal sealed record HardwareDiagnosticsMarkerRequest(string? Label, string? Notes);
 internal sealed record WavRecordStartRequest(string? Source);

@@ -21,16 +21,50 @@ public sealed class TxEgressHealthDiagnosticsTests
                 inputComplexSamples: 240,
                 packetsSent: 1,
                 lastPacketsPerSecond: 801,
-                lastRateTimestampUtc: generated.AddMilliseconds(-1000)));
+                lastRateTimestampUtc: generated.AddMilliseconds(-1000)),
+            hostMoxOn: true,
+            forwardWatts: 15.2);
 
         Assert.Equal(1, health.SchemaVersion);
         Assert.Equal("P2", health.ActiveTransport);
         Assert.Equal("p2-live", health.HealthStatus);
         Assert.True(health.P2Attached);
         Assert.True(health.P2Live);
+        Assert.True(health.HostTxActive);
+        Assert.True(health.RfDetected);
+        Assert.Equal("rf-active", health.RfEvidenceStatus);
+        Assert.Equal(15.2, health.ForwardWatts);
         Assert.Equal(1000.0, health.P2LastActivityAgeMs.GetValueOrDefault());
         Assert.Equal(0.0, health.P1RingDropRatioPct);
-        Assert.Contains("P2 DUC egress is live", health.DiagnosticRecommendation);
+        Assert.Contains("RF forward-power evidence", health.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildTxEgressHealth_DistinguishesLiveTransportFromRfEvidence()
+    {
+        var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
+
+        var health = ZeusEndpoints.BuildTxEgressHealth(
+            generated,
+            p1RingTotalWritten: 0,
+            p1RingDropped: 0,
+            p2: P2(
+                inputComplexSamples: 240,
+                packetsSent: 1,
+                lastPacketsPerSecond: 801,
+                lastRateTimestampUtc: generated.AddMilliseconds(-500)),
+            hostMoxOn: false,
+            hostTunOn: false,
+            hostTwoToneOn: false,
+            hardwarePtt: false,
+            forwardWatts: 0.0);
+
+        Assert.Equal("p2-live", health.HealthStatus);
+        Assert.True(health.P2Live);
+        Assert.False(health.HostTxActive);
+        Assert.False(health.RfDetected);
+        Assert.Equal("transport-live-rf-idle", health.RfEvidenceStatus);
+        Assert.Contains("off-air TX monitor or idle packet flow", health.DiagnosticRecommendation);
     }
 
     [Fact]
@@ -75,6 +109,7 @@ public sealed class TxEgressHealthDiagnosticsTests
         Assert.Equal("p2-send-failures", health.HealthStatus);
         Assert.True(health.P2Attached);
         Assert.True(health.P2Live);
+        Assert.Equal("transport-live-rf-idle", health.RfEvidenceStatus);
         Assert.Contains("write/send failures", health.DiagnosticRecommendation);
     }
 
@@ -95,6 +130,9 @@ public sealed class TxEgressHealthDiagnosticsTests
         Assert.False(health.P2Live);
         Assert.Null(health.P2LastActivityAgeMs);
         Assert.Equal(2.5, health.P1RingDropRatioPct);
+        Assert.False(health.HostTxActive);
+        Assert.False(health.RfDetected);
+        Assert.Equal("rf-idle", health.RfEvidenceStatus);
         Assert.Contains("P1 TX IQ ring is dropping samples", health.DiagnosticRecommendation);
     }
 

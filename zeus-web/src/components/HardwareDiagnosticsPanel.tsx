@@ -360,9 +360,17 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
       <FieldGrid
         fields={[
           { label: 'Health', value: egress.healthStatus },
+          { label: 'RF Evidence', value: egress.rfEvidenceStatus },
           { label: 'Transport', value: egress.activeTransport },
           { label: 'P2 Attached', value: boolLabel(egress.p2Attached) },
           { label: 'P2 Live', value: boolLabel(egress.p2Live) },
+          { label: 'Host TX', value: boolLabel(egress.hostTxActive) },
+          { label: 'MOX', value: boolLabel(egress.hostMoxOn) },
+          { label: 'TUN', value: boolLabel(egress.hostTunOn) },
+          { label: 'Two-Tone', value: boolLabel(egress.hostTwoToneOn) },
+          { label: 'Hardware PTT', value: boolLabel(egress.hardwarePtt) },
+          { label: 'RF Detected', value: boolLabel(egress.rfDetected) },
+          { label: 'Forward Power', value: egress.forwardWatts === null ? null : `${egress.forwardWatts.toFixed(2)} W` },
           { label: 'P2 Activity Age', value: age(egress.p2LastActivityAgeMs) },
           { label: 'P1 Drop Ratio', value: pct(egress.p1RingDropRatioPct) },
           { label: 'Health Updated', value: time(egress.generatedUtc) },

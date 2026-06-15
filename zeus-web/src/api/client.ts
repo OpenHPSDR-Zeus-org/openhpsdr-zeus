@@ -832,6 +832,14 @@ export type TxEgressHealthDto = {
   p2Live: boolean;
   p2LastActivityAgeMs: number | null;
   p1RingDropRatioPct: number;
+  hostMoxOn: boolean;
+  hostTunOn: boolean;
+  hostTwoToneOn: boolean;
+  hostTxActive: boolean;
+  hardwarePtt: boolean | null;
+  forwardWatts: number | null;
+  rfDetected: boolean;
+  rfEvidenceStatus: string;
   diagnosticRecommendation: string | null;
 };
 
@@ -1828,6 +1836,14 @@ function normalizeTxEgressHealth(raw: unknown): TxEgressHealthDto {
       p2Live: false,
       p2LastActivityAgeMs: null,
       p1RingDropRatioPct: 0,
+      hostMoxOn: false,
+      hostTunOn: false,
+      hostTwoToneOn: false,
+      hostTxActive: false,
+      hardwarePtt: null,
+      forwardWatts: null,
+      rfDetected: false,
+      rfEvidenceStatus: 'unknown',
       diagnosticRecommendation: 'TX egress health is not available from this backend yet; use raw counters until OpenhpsdrZeus is restarted.',
     };
   }
@@ -1844,6 +1860,14 @@ function normalizeTxEgressHealth(raw: unknown): TxEgressHealthDto {
     p2Live: Boolean(r.p2Live),
     p2LastActivityAgeMs: diagNumber(r.p2LastActivityAgeMs),
     p1RingDropRatioPct: diagNumber(r.p1RingDropRatioPct) ?? 0,
+    hostMoxOn: Boolean(r.hostMoxOn),
+    hostTunOn: Boolean(r.hostTunOn),
+    hostTwoToneOn: Boolean(r.hostTwoToneOn),
+    hostTxActive: Boolean(r.hostTxActive),
+    hardwarePtt: diagBool(r.hardwarePtt),
+    forwardWatts: diagNumber(r.forwardWatts),
+    rfDetected: Boolean(r.rfDetected),
+    rfEvidenceStatus: diagString(r.rfEvidenceStatus) ?? 'unknown',
     diagnosticRecommendation: diagString(r.diagnosticRecommendation),
   };
 }

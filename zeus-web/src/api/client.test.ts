@@ -871,7 +871,15 @@ describe('POST helpers', () => {
         p2Live: true,
         p2LastActivityAgeMs: 1000,
         p1RingDropRatioPct: 0,
-        diagnosticRecommendation: 'P2 DUC egress is live.',
+        hostMoxOn: true,
+        hostTunOn: false,
+        hostTwoToneOn: false,
+        hostTxActive: true,
+        hardwarePtt: false,
+        forwardWatts: 15.2,
+        rfDetected: true,
+        rfEvidenceStatus: 'rf-active',
+        diagnosticRecommendation: 'P2 DUC egress and RF forward-power evidence are live.',
       },
       txPlugins: {
         masterBypassed: false,
@@ -898,7 +906,12 @@ describe('POST helpers', () => {
     expect(diag.egress.healthStatus).toBe('p2-live');
     expect(diag.egress.p2Live).toBe(true);
     expect(diag.egress.p2LastActivityAgeMs).toBe(1000);
-    expect(diag.egress.diagnosticRecommendation).toBe('P2 DUC egress is live.');
+    expect(diag.egress.hostTxActive).toBe(true);
+    expect(diag.egress.hardwarePtt).toBe(false);
+    expect(diag.egress.forwardWatts).toBe(15.2);
+    expect(diag.egress.rfDetected).toBe(true);
+    expect(diag.egress.rfEvidenceStatus).toBe('rf-active');
+    expect(diag.egress.diagnosticRecommendation).toBe('P2 DUC egress and RF forward-power evidence are live.');
     expect(diag.txPlugins?.masterBypassed).toBe(false);
     expect(diag.vstEngine?.degradedBlocks).toBe(2);
   });
