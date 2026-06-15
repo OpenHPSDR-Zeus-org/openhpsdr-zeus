@@ -19,6 +19,7 @@ import {
   getNoiseFloor,
   getSignalConfidence,
   recommendSignalEnhanceScene,
+  registerEstimatorConsumer,
   signalEnhanceSettingsFromState,
   useSignalEnhanceStore,
   type SignalEnhanceScene,
@@ -167,6 +168,7 @@ export function SignalIntelligenceController() {
     let lastSceneAt = 0;
     let pendingProfile: SignalEnhancePresetId | null = null;
     let pendingCount = 0;
+    const releaseDiagnosticsEstimator = registerEstimatorConsumer();
 
     const resetPending = () => {
       pendingProfile = null;
@@ -186,12 +188,6 @@ export function SignalIntelligenceController() {
       lastSceneAt = now;
 
       const enhance = useSignalEnhanceStore.getState();
-      if (!enhance.autoProfileEnabled) {
-        if (enhance.sceneStatus !== null) enhance.setSignalEnhanceSceneStatus(null);
-        resetPending();
-        return;
-      }
-
       const conn = useConnectionStore.getState();
       const display = useDisplayStore.getState();
       const scene = recommendSignalEnhanceScene({
@@ -202,6 +198,10 @@ export function SignalIntelligenceController() {
         hzPerPixel: display.hzPerPixel,
       });
       publishSceneStatus(scene);
+      if (!enhance.autoProfileEnabled) {
+        resetPending();
+        return;
+      }
       if (scene.profileId === enhance.profileId) {
         resetPending();
         return;
@@ -225,8 +225,7 @@ export function SignalIntelligenceController() {
     });
     const unsubEnhance = useSignalEnhanceStore.subscribe((state, prev) => {
       if (state.autoProfileEnabled && !prev.autoProfileEnabled) applyModeProfile();
-      if (!state.autoProfileEnabled && (prev.autoProfileEnabled || state.sceneStatus !== null)) {
-        state.setSignalEnhanceSceneStatus(null);
+      if (!state.autoProfileEnabled && prev.autoProfileEnabled) {
         resetPending();
       }
     });
@@ -239,6 +238,7 @@ export function SignalIntelligenceController() {
       unsubConn();
       unsubEnhance();
       unsubDisplay();
+      releaseDiagnosticsEstimator();
     };
   }, []);
 

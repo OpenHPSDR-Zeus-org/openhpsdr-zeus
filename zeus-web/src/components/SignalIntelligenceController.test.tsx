@@ -7,7 +7,9 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DISPLAY_INTELLIGENCE_DEFAULTS } from '../api/display-intelligence';
-import { useSignalEnhanceStore } from '../dsp/signal-estimator';
+import { resetEstimator, useSignalEnhanceStore } from '../dsp/signal-estimator';
+import type { DecodedFrame } from '../realtime/frame';
+import { useDisplayStore } from '../state/display-store';
 import { SignalIntelligenceController } from './SignalIntelligenceController';
 
 describe('SignalIntelligenceController display-intelligence sync', () => {
@@ -27,6 +29,18 @@ describe('SignalIntelligenceController display-intelligence sync', () => {
       root.unmount();
     });
     container.remove();
+    resetEstimator();
+    useDisplayStore.setState({
+      connected: false,
+      width: 0,
+      centerHz: 0n,
+      hzPerPixel: 0,
+      panDb: null,
+      wfDb: null,
+      panValid: false,
+      wfValid: false,
+      lastSeq: 0,
+    });
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
@@ -42,6 +56,27 @@ describe('SignalIntelligenceController display-intelligence sync', () => {
   async function flushPromises() {
     await Promise.resolve();
     await Promise.resolve();
+  }
+
+  function frameWithWeakCarrier(seq = 1): DecodedFrame {
+    const width = 256;
+    const panDb = new Float32Array(width).fill(-110);
+    panDb[150] = -78;
+    return {
+      msgType: 1,
+      headerFlags: 0,
+      seq,
+      tsUnixMs: Date.now(),
+      rxId: 0,
+      bodyFlags: 1,
+      panValid: true,
+      wfValid: false,
+      width,
+      centerHz: 7_251_000n,
+      hzPerPixel: 100,
+      panDb,
+      wfDb: new Float32Array(width),
+    };
   }
 
   it('hydrates Signal Intelligence from the backend policy', async () => {
@@ -200,5 +235,28 @@ describe('SignalIntelligenceController display-intelligence sync', () => {
       snapEnabled: true,
       snapRadiusHz: 5000,
     });
+  });
+
+  it('publishes live scene metrics for diagnostics even when Auto Profile is off', async () => {
+    vi.setSystemTime(new Date('2026-06-15T01:00:00Z'));
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(DISPLAY_INTELLIGENCE_DEFAULTS));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => {
+      root.render(<SignalIntelligenceController />);
+      await flushPromises();
+    });
+
+    expect(useSignalEnhanceStore.getState().autoProfileEnabled).toBe(false);
+
+    act(() => {
+      useDisplayStore.getState().pushFrame(frameWithWeakCarrier());
+    });
+
+    const scene = useSignalEnhanceStore.getState().sceneStatus;
+    expect(scene).not.toBeNull();
+    expect(scene?.maxSnrDb).toBeGreaterThan(20);
+    expect(scene?.occupiedPct).toBeGreaterThan(0);
+    expect(useSignalEnhanceStore.getState().autoProfileEnabled).toBe(false);
   });
 });
