@@ -21,11 +21,13 @@ import {
   getSnapHistorySpectrum,
   maybeUpdateEstimator,
   measureOccupiedBandwidth,
+  measureSignalExtent,
   measureSnapLock,
   peakAlpha,
   resetEstimator,
   SIGNAL_ENHANCE_PROFILES,
   recommendSignalEnhanceScene,
+  signalExtentHz,
   signalEnhanceProfileForMode,
   useSignalEnhanceStore,
 } from './signal-estimator';
@@ -490,6 +492,30 @@ describe('signal estimator — spatial floor', () => {
     enhanceInto(spec, out); // no floor yet
     expect(Array.from(out).every((v) => v === 0)).toBe(true);
   });
+
+  it('keeps non-finite estimator samples dark and out of confidence memory', () => {
+    useSignalEnhanceStore.setState({ popEnabled: true });
+    const noise = new Float32Array(WIDTH).fill(NOISE_DB);
+    for (let k = 0; k < 5; k++) pushFrame(noise);
+
+    const bad = new Float32Array(WIDTH).fill(NOISE_DB);
+    bad[149] = Infinity;
+    bad[150] = NaN;
+    bad[151] = -Infinity;
+    pushFrame(bad);
+
+    const out = new Float32Array(WIDTH).fill(0.5);
+    enhanceInto(bad, out);
+    const confidence = getSignalConfidence()!;
+
+    expect(Array.from(out).every(Number.isFinite)).toBe(true);
+    expect(out[149]).toBe(0);
+    expect(out[150]).toBe(0);
+    expect(out[151]).toBe(0);
+    expect(confidence[149]).toBe(0);
+    expect(confidence[150]).toBe(0);
+    expect(confidence[151]).toBe(0);
+  });
 });
 
 describe('signal estimator — snap-to-signal', () => {
@@ -554,9 +580,28 @@ describe('signal estimator — peak markers (CFAR)', () => {
     expect(detectPeaks(spectrumWithCarrier(), CENTER, HZ_PER_PX)).toEqual([]);
   });
 
+  it('does not treat non-finite bins as snap peaks or signal extents', () => {
+    useSignalEnhanceStore.setState({ snapEnabled: true });
+    const noise = new Float32Array(WIDTH).fill(NOISE_DB);
+    for (let k = 0; k < 5; k++) pushFrame(noise);
+
+    const bad = new Float32Array(WIDTH).fill(NOISE_DB);
+    bad[149] = Infinity;
+    bad[150] = NaN;
+    bad[151] = -Infinity;
+    const clickHz = CENTER + (150 - WIDTH / 2) * HZ_PER_PX;
+
+    expect(detectPeaks(bad, CENTER, HZ_PER_PX)).toEqual([]);
+    expect(findPeakHz(bad, CENTER, HZ_PER_PX, clickHz)).toBeNull();
+    expect(computeSnapTuneHz(bad, CENTER, HZ_PER_PX, clickHz, 5000, 'USB')).toBeNull();
+    expect(computeSnapToLineHz(bad, CENTER, HZ_PER_PX, 'USB', clickHz, 5000)).toBeNull();
+    expect(signalExtentHz(bad, CENTER, HZ_PER_PX, clickHz, 5000)).toBeNull();
+  });
+
   it('peakAlpha scales with SNR and stays within [0.45, 1]', () => {
     expect(peakAlpha(0)).toBe(0.45);
     expect(peakAlpha(1000)).toBe(1);
+    expect(peakAlpha(NaN)).toBe(0.45);
     expect(peakAlpha(30)).toBeGreaterThan(0.45);
     expect(peakAlpha(30)).toBeLessThan(1);
   });
@@ -928,5 +973,23 @@ describe('measureOccupiedBandwidth', () => {
     const [lo, hi] = measureOccupiedBandwidth(spec, 128, 6, 5);
     expect(lo).toBe(123);
     expect(hi).toBe(133);
+  });
+
+  it('keeps non-finite bandwidth and extent measurements bounded', () => {
+    const badCrest = new Float32Array(WIDTH).fill(NOISE_DB);
+    badCrest[120] = NaN;
+    expect(measureOccupiedBandwidth(badCrest, 120, 6, 40)).toEqual([120, 120]);
+    expect(measureSignalExtent(badCrest, null, 120, 3, 40)).toEqual([120, 120]);
+    expect(measureOccupiedBandwidth(badCrest, NaN, 6, 40)).toEqual([0, 0]);
+    expect(measureSignalExtent(badCrest, null, NaN, 3, 40)).toEqual([0, 0]);
+
+    const spec = new Float32Array(WIDTH).fill(NOISE_DB);
+    const floor = new Float32Array(WIDTH).fill(NOISE_DB - 5);
+    for (let i = 116; i <= 124; i++) spec[i] = -55 - Math.abs(i - 120);
+    floor[119] = NaN;
+
+    const [lo, hi] = measureSignalExtent(spec, floor, 120, 3, 40);
+    expect(lo).toBe(120);
+    expect(hi).toBeGreaterThan(120);
   });
 });
