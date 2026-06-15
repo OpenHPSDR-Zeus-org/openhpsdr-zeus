@@ -275,7 +275,7 @@ function featureNextStep(id: string): string {
     case 'hardware.mapping.correlation':
       return 'Turn the marker API into guided capture recipes so a single radio action can be mapped and promoted to a typed setting.';
     case 'rx.signal-intelligence.weak-signal':
-      return 'Use the mirrored coherent scene metrics to annotate recordings, compare clients, and gate future server-side weak-signal policy safely.';
+      return 'Use the display-intelligence API and mirrored coherent scene metrics to annotate recordings, compare clients, and gate future server-side weak-signal policy safely.';
     case 'rx.smart-nr.adaptive':
       return 'Correlate Smart NR recommendations with RX-chain health over time so automation can distinguish noise-floor cleanup from ADC/headroom protection.';
     case 'tx.fidelity.spectral-density':
