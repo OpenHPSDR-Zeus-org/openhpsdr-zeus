@@ -128,7 +128,7 @@ internal sealed class TxMicBlockResampler
         {
             int need = OutputBlockSamples - _outputFill;
             int take = Math.Min(need, samples.Length);
-            CopyFinite(samples[..take], _outputBlock.AsSpan(_outputFill, take));
+            CopySanitized(samples[..take], _outputBlock.AsSpan(_outputFill, take));
             _outputFill += take;
             generated += take;
             pos += take;
@@ -143,13 +143,13 @@ internal sealed class TxMicBlockResampler
         while (samples.Length - pos >= OutputBlockSamples)
         {
             var src = samples.Slice(pos, OutputBlockSamples);
-            if (AllFinite(src))
+            if (AllCanonicalSamples(src))
             {
                 _emit(src);
             }
             else
             {
-                CopyFinite(src, _outputBlock);
+                CopySanitized(src, _outputBlock);
                 _emit(_outputBlock);
             }
             generated += OutputBlockSamples;
@@ -160,7 +160,7 @@ internal sealed class TxMicBlockResampler
         int rem = samples.Length - pos;
         if (rem > 0)
         {
-            CopyFinite(samples.Slice(pos, rem), _outputBlock.AsSpan(0, rem));
+            CopySanitized(samples.Slice(pos, rem), _outputBlock.AsSpan(0, rem));
             _outputFill = rem;
             generated += rem;
         }
@@ -214,7 +214,7 @@ internal sealed class TxMicBlockResampler
 
     private void AppendOutputSample(float sample)
     {
-        _outputBlock[_outputFill++] = float.IsFinite(sample) ? sample : 0f;
+        _outputBlock[_outputFill++] = DspPipelineService.SanitizeAudioSample(sample);
         if (_outputFill < OutputBlockSamples) return;
 
         _emit(_outputBlock);
@@ -224,7 +224,7 @@ internal sealed class TxMicBlockResampler
     private void AppendInput(ReadOnlySpan<float> samples)
     {
         EnsureInputCapacity(_inputLength + samples.Length);
-        CopyFinite(samples, _inputBuffer.AsSpan(_inputLength, samples.Length));
+        CopySanitized(samples, _inputBuffer.AsSpan(_inputLength, samples.Length));
         _inputLength += samples.Length;
         _nextRealInputIndex += samples.Length;
     }
@@ -258,21 +258,21 @@ internal sealed class TxMicBlockResampler
         Array.Resize(ref _inputBuffer, newSize);
     }
 
-    private static bool AllFinite(ReadOnlySpan<float> samples)
+    private static bool AllCanonicalSamples(ReadOnlySpan<float> samples)
     {
         for (int i = 0; i < samples.Length; i++)
         {
-            if (!float.IsFinite(samples[i])) return false;
+            float sample = samples[i];
+            if (!float.IsFinite(sample) || sample < -1f || sample > 1f) return false;
         }
         return true;
     }
 
-    private static void CopyFinite(ReadOnlySpan<float> src, Span<float> dst)
+    private static void CopySanitized(ReadOnlySpan<float> src, Span<float> dst)
     {
         for (int i = 0; i < src.Length; i++)
         {
-            float v = src[i];
-            dst[i] = float.IsFinite(v) ? v : 0f;
+            dst[i] = DspPipelineService.SanitizeAudioSample(src[i]);
         }
     }
 }
