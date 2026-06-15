@@ -148,6 +148,25 @@ public sealed class FrontendDspSceneDiagnosticsService
                 "Frontend DSP scene telemetry is aging; wait for the next refresh or check client connectivity if this persists.");
         }
 
+        bool coherentSubthreshold = latest?.CoherentSubthresholdSignal == true;
+        if (coherentSubthreshold && latest?.SmartNrHeldByRxChain == true)
+        {
+            return new(
+                "fresh",
+                Fresh: true,
+                Stale: false,
+                "Frontend DSP scene telemetry is fresh; a coherent subthreshold weak-signal ridge is present, but Smart NR is constrained by RX-chain health.");
+        }
+
+        if (coherentSubthreshold)
+        {
+            return new(
+                "fresh",
+                Fresh: true,
+                Stale: false,
+                "Frontend DSP scene telemetry is fresh; coherent subthreshold weak-signal evidence is present, so preserve RX headroom and use gentle Smart NR/filtering.");
+        }
+
         if (latest?.SmartNrHeldByRxChain == true)
         {
             return new(

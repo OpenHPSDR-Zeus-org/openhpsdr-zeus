@@ -42,6 +42,7 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.True(root.GetProperty("fresh").GetBoolean());
         Assert.False(root.GetProperty("stale").GetBoolean());
         Assert.Contains("fresh", root.GetProperty("diagnosticRecommendation").GetString());
+        Assert.Contains("subthreshold weak-signal", root.GetProperty("diagnosticRecommendation").GetString());
         Assert.Equal("dx", root.GetProperty("signalProfile").GetString());
         Assert.Equal("NR2", root.GetProperty("smartNrProfile").GetString());
         Assert.Equal(3, root.GetProperty("peakCount").GetInt32());
@@ -62,5 +63,36 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.False(root.GetProperty("fresh").GetBoolean());
         Assert.False(root.GetProperty("stale").GetBoolean());
         Assert.Contains("No frontend DSP scene", root.GetProperty("diagnosticRecommendation").GetString());
+    }
+
+    [Fact]
+    public void Snapshot_ReportsWeakSignalWhenRxChainHoldsSmartNr()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+
+        service.Update(new FrontendDspSceneDiagnosticsRequest(
+            SourceClientId: "client",
+            Mode: "USB",
+            SignalProfile: "dx",
+            SignalReason: "coherent ridge below normal gate",
+            SmartNrProfile: "NR2",
+            SmartNrReason: "weak signal",
+            SmartNrRecommendation: "Wait for RX chain",
+            SmartNrHeldByRxChain: true,
+            SmartNrRxChainLabel: "ADC headroom limited",
+            MaxSnrDb: 7.1,
+            CoherentMaxSnrDb: 6.8,
+            OccupiedPct: 1.2,
+            CoherentOccupiedPct: 0.8,
+            ImpulsivePct: 0,
+            PeakCount: 0,
+            CoherentPeakCount: 0,
+            CoherentSubthresholdSignal: true));
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(service.Snapshot()));
+        var recommendation = doc.RootElement.GetProperty("diagnosticRecommendation").GetString();
+
+        Assert.Contains("coherent subthreshold weak-signal", recommendation);
+        Assert.Contains("constrained by RX-chain health", recommendation);
     }
 }
