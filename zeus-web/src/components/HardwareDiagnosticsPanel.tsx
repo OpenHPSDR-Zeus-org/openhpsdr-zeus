@@ -958,6 +958,7 @@ export function HardwareDiagnosticsPanel() {
     { label: 'Stale', value: boolLabel(scene?.stale) },
     { label: 'Age', value: age(scene?.ageMs) },
     { label: 'Source Age', value: age(scene?.sourceAgeMs) },
+    { label: 'Source Skew', value: age(scene?.sourceClockSkewMs) },
     { label: 'Diagnostic Action', value: scene?.diagnosticRecommendation },
     { label: 'Client', value: scene?.sourceClientId },
     { label: 'Mode', value: scene?.mode },
