@@ -34,6 +34,7 @@ const SAMPLE_INTERVAL_MS = 1500;
 const PROFILE_SWITCH_DWELL_SAMPLES = 6;
 const APPLY_COOLDOWN_MS = 15000;
 const DSP_CAPABILITY_REFRESH_MS = 30000;
+const DSP_CAPABILITY_TIMEOUT_MS = 2500;
 
 function round1(v: number): number {
   return Math.round(v * 10) / 10;
@@ -44,7 +45,7 @@ function sameNr(a: NrConfigDto, b: NrConfigDto): boolean {
 }
 
 function shouldHoldForRxChain(rx: RxChainAnalysis): boolean {
-  return rx.state === 'overload' || rx.state === 'underfilled';
+  return rx.state === 'overload' || rx.state === 'underfilled' || (rx.state === 'agc-stressed' && rx.actionTone === 'protect');
 }
 
 export function SmartNrController() {
@@ -56,7 +57,9 @@ export function SmartNrController() {
     let pendingCount = 0;
     let abort: AbortController | null = null;
     let diagnosticsAbort: AbortController | null = null;
+    let diagnosticsTimeout: number | null = null;
     let diagnosticsInFlight = false;
+    let diagnosticsRequestId = 0;
     let dspCapabilities: SmartNrDspCapabilities | null = null;
     let releaseEstimatorConsumer: (() => void) | null = null;
 
@@ -74,16 +77,29 @@ export function SmartNrController() {
       }
     };
 
+    const clearDiagnosticsTimeout = () => {
+      if (diagnosticsTimeout === null) return;
+      window.clearTimeout(diagnosticsTimeout);
+      diagnosticsTimeout = null;
+    };
     const refreshDspCapabilities = (now: number) => {
       if (diagnosticsInFlight || now - lastDspCapabilityRefreshAt < DSP_CAPABILITY_REFRESH_MS) return;
       lastDspCapabilityRefreshAt = now;
       diagnosticsInFlight = true;
       diagnosticsAbort?.abort();
       const ac = new AbortController();
+      const requestId = ++diagnosticsRequestId;
       diagnosticsAbort = ac;
+      diagnosticsTimeout = window.setTimeout(() => {
+        if (requestId !== diagnosticsRequestId || diagnosticsAbort !== ac) return;
+        ac.abort();
+        diagnosticsAbort = null;
+        diagnosticsInFlight = false;
+        diagnosticsTimeout = null;
+      }, DSP_CAPABILITY_TIMEOUT_MS);
       fetchHardwareDiagnostics(ac.signal)
         .then((diag) => {
-          if (ac.signal.aborted) return;
+          if (ac.signal.aborted || requestId !== diagnosticsRequestId) return;
           dspCapabilities = {
             wdspActive: diag.dsp.wdspActive,
             wdspEmnrPost2Available: diag.dsp.wdspEmnrPost2Available,
@@ -95,7 +111,10 @@ export function SmartNrController() {
           // snapshot and retry on the next refresh interval.
         })
         .finally(() => {
-          if (diagnosticsAbort === ac) diagnosticsInFlight = false;
+          if (requestId !== diagnosticsRequestId) return;
+          if (diagnosticsAbort === ac) diagnosticsAbort = null;
+          clearDiagnosticsTimeout();
+          diagnosticsInFlight = false;
         });
     };
 
@@ -169,16 +188,22 @@ export function SmartNrController() {
 
       const display = useDisplayStore.getState();
       const rxMeters = useRxMetersStore.getState();
-      const rx = analyzeRxChain({
-        signalPk: rxMeters.signalPk,
-        signalAv: rxMeters.signalAv,
-        adcPk: rxMeters.adcPk,
-        adcAv: rxMeters.adcAv,
-        agcGain: rxMeters.agcGain,
-        agcEnvPk: rxMeters.agcEnvPk,
-        agcEnvAv: rxMeters.agcEnvAv,
-        fallbackDbm: tx.rxDbm,
-      });
+      const rx = analyzeRxChain(
+        {
+          signalPk: rxMeters.signalPk,
+          signalAv: rxMeters.signalAv,
+          adcPk: rxMeters.adcPk,
+          adcAv: rxMeters.adcAv,
+          agcGain: rxMeters.agcGain,
+          agcEnvPk: rxMeters.agcEnvPk,
+          agcEnvAv: rxMeters.agcEnvAv,
+          fallbackDbm: tx.rxDbm,
+        },
+        {
+          autoAgcEnabled: conn.autoAgcEnabled,
+          autoAttEnabled: conn.autoAttEnabled,
+        },
+      );
       const rec = recommendSmartNr({
         spectrum: display.panValid ? display.panDb : null,
         floor: getNoiseFloor(),
@@ -252,7 +277,9 @@ export function SmartNrController() {
 
     return () => {
       abort?.abort();
+      diagnosticsRequestId++;
       diagnosticsAbort?.abort();
+      clearDiagnosticsTimeout();
       releaseEstimatorConsumer?.();
       unsubDisplay();
       unsubSettings();

@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createElement, type ComponentType } from 'react';
 
 import { render } from './meters/__tests__/harness';
+import { useConnectionStore } from '../state/connection-store';
 import { useRxMetersStore } from '../state/rx-meters-store';
 import { useTxStore } from '../state/tx-store';
 import { SMeterLive } from './SMeterLive';
@@ -33,6 +34,10 @@ beforeAll(() => {
 });
 
 function resetStores() {
+  useConnectionStore.setState({
+    autoAgcEnabled: false,
+    autoAttEnabled: true,
+  });
   useTxStore.setState({
     moxOn: false,
     tunOn: false,
@@ -97,6 +102,29 @@ describe('SMeterLive', () => {
 
     expect(container.textContent).not.toContain('RX chain optimized');
     expect(container.textContent).not.toContain('ADC HD');
+
+    unmount();
+  });
+
+  it('shows auto-optimizing AGC health while auto AGC is correcting stress', () => {
+    useConnectionStore.setState({
+      autoAgcEnabled: true,
+      autoAttEnabled: true,
+    });
+    useTxStore.setState({ rxDbm: -130 });
+    useRxMetersStore.setState({
+      signalPk: -58,
+      signalAv: -63,
+      adcPk: -5,
+      adcAv: -18,
+      agcGain: -32,
+      agcEnvPk: -60,
+      agcEnvAv: -66,
+    });
+
+    const { container, unmount } = render(createElement(SMeterLiveComponent));
+
+    expect(container.textContent).toContain('AGC auto-optimizing');
 
     unmount();
   });

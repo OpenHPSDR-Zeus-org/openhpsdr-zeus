@@ -47,6 +47,11 @@ export type RxChainAnalysis = {
   agcEnvCrestDb: number | null;
 };
 
+export type RxChainAnalysisOptions = {
+  autoAgcEnabled?: boolean;
+  autoAttEnabled?: boolean;
+};
+
 export function validMeterDb(v: number): boolean {
   return Number.isFinite(v) && v > METER_SENTINEL_DB;
 }
@@ -84,7 +89,7 @@ export function preferredRxSignalDbm(s: RxChainSnapshot): {
   return { dbm: null, source: 'none' };
 }
 
-export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
+export function analyzeRxChain(s: RxChainSnapshot, options: RxChainAnalysisOptions = {}): RxChainAnalysis {
   const preferred = preferredRxSignalDbm(s);
   const signalDbm = preferred.dbm;
   const adcPk = validMeterDb(s.adcPk) ? s.adcPk : null;
@@ -220,16 +225,29 @@ export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
   if (reasons.some((r) => r.includes('AGC'))) {
     const agcCutting = agcGain < -10;
     const adcHasCleanHeadroom = adcPk === null || adcPk <= -12;
+    const autoAgcResolving = !!options.autoAgcEnabled;
+    const autoAttResolving = agcCutting && !adcHasCleanHeadroom && !!options.autoAttEnabled;
+    const autoResolving = autoAgcResolving || autoAttResolving;
     return {
       state: 'agc-stressed',
-      label: 'AGC stressed',
+      label: autoResolving ? 'AGC auto-optimizing' : 'AGC stressed',
       detail: reasons.join(' · '),
       recommendation: agcCutting
         ? adcHasCleanHeadroom
-          ? 'Narrow passband or lower AGC top; keep RF gain'
+          ? options.autoAgcEnabled
+            ? 'Auto AGC lowering AGC top'
+            : 'Narrow passband or lower AGC top; keep RF gain'
+          : options.autoAgcEnabled && options.autoAttEnabled
+          ? 'Auto AGC/ATT restoring headroom'
+          : options.autoAgcEnabled
+          ? 'Auto AGC lowering AGC top; add attenuation if needed'
+          : options.autoAttEnabled
+          ? 'Auto ATT adding headroom'
           : 'Add headroom or reduce RF gain'
+        : options.autoAgcEnabled
+        ? 'Auto AGC tracking weak-signal gain'
         : 'Reduce attenuation or narrow the passband',
-      actionTone: agcCutting && !adcHasCleanHeadroom ? 'protect' : 'optimize',
+      actionTone: agcCutting && !adcHasCleanHeadroom && !autoResolving ? 'protect' : 'optimize',
       score: finalScore,
       ...baseMetrics,
     };
