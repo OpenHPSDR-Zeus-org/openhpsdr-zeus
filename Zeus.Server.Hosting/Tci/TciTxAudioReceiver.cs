@@ -24,40 +24,39 @@ namespace Zeus.Server.Tci;
 /// <see cref="Reset"/> calls (issued on MOX falling edge by the session)
 /// don't tear a frame mid-decode.
 ///
-/// Frame-size decoupling: TCI clients send TX audio in arbitrary block sizes.
-/// The receiver forwards complete 960-sample mic frames immediately and keeps
-/// only the partial carry block for the next call.
+/// Frame-size decoupling: TCI clients send TX audio in arbitrary block sizes
+/// and sample rates. The receiver keeps source parsing here, then delegates
+/// anti-aliased 48 kHz conversion and block framing to the shared TX mic
+/// resampler used by WAV and plugin on-air playback.
 /// </summary>
 internal sealed class TciTxAudioReceiver : IDisposable
 {
-    public const int OutputSampleRate = 48_000;
-    public const int MinInputSampleRate = 8_000;
-    public const int MaxInputSampleRate = OutputSampleRate;
+    public const int OutputSampleRate = TxMicBlockResampler.OutputSampleRate;
+    public const int MinInputSampleRate = TxMicBlockResampler.MinInputSampleRate;
+    public const int MaxInputSampleRate = TxMicBlockResampler.MaxInputSampleRate;
 
     /// <summary>Mic block size downstream <see cref="TxAudioIngest"/> consumes (20 ms @ 48 kHz).</summary>
-    public const int OutputBlockSamples = 960;
-    private const int OutputBlockBytes = OutputBlockSamples * 4;
+    public const int OutputBlockSamples = TxMicBlockResampler.OutputBlockSamples;
+    private const int OutputBlockBytes = TxMicBlockResampler.OutputBlockBytes;
 
     private readonly Action<ReadOnlyMemory<byte>> _forward;
     private readonly ILogger _log;
     private readonly Action<int>? _onMonoSamplesQueued;
+    private readonly TxMicBlockResampler _resampler;
 
     private readonly object _sync = new();
-    private readonly float[] _monoAccumulator = new float[OutputBlockSamples];
-    private int _monoFill;
     private readonly byte[] _outputBuffer = new byte[OutputBlockBytes];
 
     private long _totalFramesAccepted;
     private long _totalFramesDropped;
     private long _totalSamplesForwarded;
-    private int _lastInputSampleRate = OutputSampleRate;
-    private double _resamplePhase;
 
     public TciTxAudioReceiver(Action<ReadOnlyMemory<byte>> forwardF32leMicBlock, ILogger log, Action<int>? onMonoSamplesQueued = null)
     {
         _forward = forwardF32leMicBlock ?? throw new ArgumentNullException(nameof(forwardF32leMicBlock));
         _log = log;
         _onMonoSamplesQueued = onMonoSamplesQueued;
+        _resampler = new TxMicBlockResampler(ForwardBlock);
     }
 
     public long TotalFramesAccepted { get { lock (_sync) return _totalFramesAccepted; } }
@@ -70,9 +69,8 @@ internal sealed class TciTxAudioReceiver : IDisposable
     /// offset 20 (total scalar floats: frames × channels for stereo, frames for
     /// mono per markdown spec §7.5). <paramref name="channels"/> is the
     /// per-session negotiated audio_stream_channels value (1 or 2; default 2).
-    /// Sample rates below 48 kHz are linearly resampled to the fixed downstream
-    /// 48 kHz mic-block contract. Rates above 48 kHz are rejected rather than
-    /// downsampled without an anti-alias filter.
+    /// Supported sample rates are converted to the fixed downstream 48 kHz
+    /// mic-block contract with the shared anti-aliased TX resampler.
     /// </summary>
     public void AcceptTxAudio(
         ReadOnlySpan<byte> samplePayload,
@@ -149,9 +147,10 @@ internal sealed class TciTxAudioReceiver : IDisposable
                     }
                 }
 
-                var (queued, forwarded) = AppendMonoAtOutputRate(mono, sampleRate);
+                int pendingBefore = _resampler.PendingOutputSamples;
+                _resampler.Accept(mono, sampleRate);
                 _totalFramesAccepted++;
-                _onMonoSamplesQueued?.Invoke(queued - forwarded);
+                _onMonoSamplesQueued?.Invoke(_resampler.PendingOutputSamples - pendingBefore);
             }
         }
         finally
@@ -160,63 +159,16 @@ internal sealed class TciTxAudioReceiver : IDisposable
         }
     }
 
-    private (int Queued, int Forwarded) AppendMonoAtOutputRate(ReadOnlySpan<float> mono, int sampleRate)
+    private void ForwardBlock(ReadOnlySpan<float> block)
     {
-        if (sampleRate != _lastInputSampleRate)
-        {
-            _lastInputSampleRate = sampleRate;
-            _resamplePhase = 0;
-        }
-
-        int queued = 0;
-        int forwarded = 0;
-        if (sampleRate == OutputSampleRate)
-        {
-            _resamplePhase = 0;
-            for (int i = 0; i < mono.Length; i++)
-            {
-                forwarded += AppendOutputSample(mono[i]);
-            }
-            return (mono.Length, forwarded);
-        }
-
-        double step = sampleRate / (double)OutputSampleRate;
-        double phase = _resamplePhase;
-        while (phase < mono.Length)
-        {
-            int idx = (int)phase;
-            double frac = phase - idx;
-            float a = mono[idx];
-            float b = idx + 1 < mono.Length ? mono[idx + 1] : a;
-            forwarded += AppendOutputSample(a + (float)((b - a) * frac));
-            queued++;
-            phase += step;
-        }
-        _resamplePhase = phase - mono.Length;
-        return (queued, forwarded);
-    }
-
-    private int AppendOutputSample(float sample)
-    {
-        if (_monoFill >= _monoAccumulator.Length)
-        {
-            _log.LogWarning("tci.tx.audio overflow fill={Fill} cap={Cap}", _monoFill, _monoAccumulator.Length);
-            _monoFill = 0;
-            _totalFramesDropped++;
-        }
-        _monoAccumulator[_monoFill++] = sample;
-        if (_monoFill < OutputBlockSamples) return 0;
-
         for (int i = 0; i < OutputBlockSamples; i++)
         {
             BinaryPrimitives.WriteSingleLittleEndian(
                 _outputBuffer.AsSpan(i * 4, 4),
-                _monoAccumulator[i]);
+                block[i]);
         }
         _forward(_outputBuffer);
-        _monoFill = 0;
         _totalSamplesForwarded += OutputBlockSamples;
-        return OutputBlockSamples;
     }
 
     /// <summary>
@@ -228,9 +180,7 @@ internal sealed class TciTxAudioReceiver : IDisposable
     {
         lock (_sync)
         {
-            _monoFill = 0;
-            _lastInputSampleRate = OutputSampleRate;
-            _resamplePhase = 0;
+            _resampler.Reset();
         }
     }
 
