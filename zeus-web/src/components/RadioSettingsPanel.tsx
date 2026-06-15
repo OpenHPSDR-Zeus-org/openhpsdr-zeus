@@ -26,7 +26,7 @@ import {
   type AntennaName,
   type RxAuxName,
 } from '../state/antenna-store';
-import { useAudioStore } from '../state/audio-store';
+import { useAudioStore, type TxAudioSource } from '../state/audio-store';
 import { useHl2GpioStore } from '../state/hl2-gpio-store';
 import { usePttStore } from '../state/ptt-store';
 import { bandOf } from './design/data';
@@ -49,6 +49,28 @@ const RX_AUX_LABEL: Record<RxAuxName, string> = {
 // HL2 user GPIO line labels (4-bit user_dig_out → MCP23008).
 const GPIO_LINES = [0, 1, 2, 3] as const;
 
+// TX-audio source labels for the single-select segmented control. The control
+// is a radio-button group (role="radiogroup") bound to the ONE TxAudioSource
+// enum value — exactly one is active at a time, so the prior bug (independent
+// checkboxes that came up checked and let you pick more than one) is
+// structurally impossible. Host is always offered; the radio jacks render only
+// when the connected board exposes them (board-gated below).
+const AUDIO_SOURCE_LABEL: Record<TxAudioSource, string> = {
+  Host: 'Host',
+  RadioMic: 'Radio Mic',
+  RadioLineIn: 'Radio Line In',
+  RadioBalancedXlr: 'Radio Balanced',
+};
+
+// Explicit confirmation copy for enabling mic bias — the floating-connector
+// RF / PTT-hang risk (plan §7). Wording is a maintainer (Brian) call; kept
+// short and factual. Only gates turning bias ON; turning it OFF is unguarded.
+const MIC_BIAS_CONFIRM =
+  'Enable mic bias?\n\n' +
+  'This supplies DC bias voltage on the mic connector for electret ' +
+  'microphones. On a floating or unconnected mic jack it can hang PTT or ' +
+  'couple RF. Leave it OFF unless your microphone needs bias.';
+
 export function RadioSettingsPanel() {
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const caps = useRadioStore((s) => s.capabilities);
@@ -65,6 +87,30 @@ export function RadioSettingsPanel() {
   const updateAudio = useAudioStore((s) => s.update);
   const hasCodecAudio = caps.hasOnboardCodec;
   const hasHl2Audio = caps.hermesLite2MicFrontEnd;
+
+  // Board-gated single-select source list. Host is ALWAYS present and is the
+  // default; each radio jack appears only when its capability flag is set.
+  // HL2 (no codec, no radio jacks) collapses to Host-only — handled by the
+  // dedicated note branch below, so this list is for codec boards.
+  const audioSources: TxAudioSource[] = [
+    'Host',
+    ...(hasCodecAudio ? (['RadioMic'] as const) : []),
+    ...(caps.hasRadioLineIn ? (['RadioLineIn'] as const) : []),
+    ...(caps.hasBalancedXlr ? (['RadioBalancedXlr'] as const) : []),
+  ];
+
+  const onSelectSource = (next: TxAudioSource) => {
+    if (next === audio.source) return;
+    void updateAudio({ source: next });
+  };
+
+  // Mic bias is OFF by default and gated behind an explicit confirmation when
+  // turning it ON (floating-connector RF / PTT-hang risk, plan §7). Turning it
+  // off needs no confirmation.
+  const onToggleMicBias = (next: boolean) => {
+    if (next && !window.confirm(MIC_BIAS_CONFIRM)) return;
+    void updateAudio({ micBias: next });
+  };
 
   const gpio = useHl2GpioStore((s) => s.state);
   const gpioInflight = useHl2GpioStore((s) => s.inflight);
@@ -253,41 +299,42 @@ export function RadioSettingsPanel() {
             </div>
           ) : (
             <>
-              {/* Single-select TX-audio source — board-gated, cannot
-                  double-pick. Host always present; radio jacks render only when
-                  the connected board exposes them. */}
+              {/* Single-select TX-audio source — a radio-button group bound to
+                  the ONE TxAudioSource value, so it is physically impossible to
+                  pick more than one (illegal states unrepresentable). Board-
+                  gated: Host always present; radio jacks render only when the
+                  connected board exposes them. */}
               <div className="ps-field">
                 <div className="ps-name">
                   TX Audio Source
                   <em>
                     Which input feeds the transmitter. Host uses the computer
                     mic / audio chain; the radio options digitize the rig's own
-                    analog jacks.
+                    analog jacks. Exactly one is active at a time.
                   </em>
                 </div>
-                <select
-                  className="ps-select-mini"
-                  value={audio.source}
-                  disabled={audioInflight}
-                  onChange={(e) =>
-                    void updateAudio({
-                      source: e.target.value as typeof audio.source,
-                    })
-                  }
+                <div
+                  className="btn-row wrap"
+                  role="radiogroup"
+                  aria-label="TX audio source"
                 >
-                  <option value="Host">Host</option>
-                  {hasCodecAudio ? (
-                    <option value="RadioMic">Radio Mic</option>
-                  ) : null}
-                  {caps.hasRadioLineIn ? (
-                    <option value="RadioLineIn">Radio Line In</option>
-                  ) : null}
-                  {caps.hasBalancedXlr ? (
-                    <option value="RadioBalancedXlr">
-                      Radio Balanced (XLR)
-                    </option>
-                  ) : null}
-                </select>
+                  {audioSources.map((src) => {
+                    const active = audio.source === src;
+                    return (
+                      <button
+                        key={src}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        className={`btn sm ${active ? 'active' : ''}`}
+                        disabled={audioInflight}
+                        onClick={() => onSelectSource(src)}
+                      >
+                        {AUDIO_SOURCE_LABEL[src]}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* Mic boost — parameter of Radio Mic / Balanced. */}
@@ -332,9 +379,7 @@ export function RadioSettingsPanel() {
                       type="checkbox"
                       checked={audio.micBias}
                       disabled={audioInflight}
-                      onChange={(e) =>
-                        void updateAudio({ micBias: e.target.checked })
-                      }
+                      onChange={(e) => onToggleMicBias(e.target.checked)}
                     />
                     <span className="ps-check-box" />
                     <span>{audio.micBias ? 'On' : 'Off (default)'}</span>
