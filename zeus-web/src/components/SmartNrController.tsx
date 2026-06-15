@@ -11,13 +11,16 @@
 // repository for the full text, or https://www.gnu.org/licenses/.
 
 import { useEffect } from 'react';
-import { setNr, type NrConfigDto, type RadioStateDto } from '../api/client';
+import { fetchHardwareDiagnostics, setNr, type NrConfigDto, type RadioStateDto } from '../api/client';
 import { getNoiseFloor, getSignalConfidence, registerEstimatorConsumer } from '../dsp/signal-estimator';
 import {
+  adaptSmartNrToDspCapabilities,
   labelSmartNrProfile,
   recommendSmartNr,
   shapeSmartNrRecommendation,
   smartNrProfileKey,
+  type SmartNrCapabilityAdaptation,
+  type SmartNrDspCapabilities,
   type SmartNrRecommendation,
 } from '../dsp/smart-nr';
 import { analyzeRxChain, type RxChainAnalysis } from '../dsp/rx-chain-health';
@@ -30,6 +33,7 @@ import { useTxStore } from '../state/tx-store';
 const SAMPLE_INTERVAL_MS = 1500;
 const PROFILE_SWITCH_DWELL_SAMPLES = 6;
 const APPLY_COOLDOWN_MS = 15000;
+const DSP_CAPABILITY_REFRESH_MS = 30000;
 
 function round1(v: number): number {
   return Math.round(v * 10) / 10;
@@ -47,9 +51,13 @@ export function SmartNrController() {
   useEffect(() => {
     let lastAt = 0;
     let lastAppliedAt = Number.NEGATIVE_INFINITY;
+    let lastDspCapabilityRefreshAt = Number.NEGATIVE_INFINITY;
     let pendingProfileKey: string | null = null;
     let pendingCount = 0;
     let abort: AbortController | null = null;
+    let diagnosticsAbort: AbortController | null = null;
+    let diagnosticsInFlight = false;
+    let dspCapabilities: SmartNrDspCapabilities | null = null;
     let releaseEstimatorConsumer: (() => void) | null = null;
 
     const resetPending = () => {
@@ -66,6 +74,31 @@ export function SmartNrController() {
       }
     };
 
+    const refreshDspCapabilities = (now: number) => {
+      if (diagnosticsInFlight || now - lastDspCapabilityRefreshAt < DSP_CAPABILITY_REFRESH_MS) return;
+      lastDspCapabilityRefreshAt = now;
+      diagnosticsInFlight = true;
+      diagnosticsAbort?.abort();
+      const ac = new AbortController();
+      diagnosticsAbort = ac;
+      fetchHardwareDiagnostics(ac.signal)
+        .then((diag) => {
+          if (ac.signal.aborted) return;
+          dspCapabilities = {
+            wdspActive: diag.dsp.wdspActive,
+            wdspEmnrPost2Available: diag.dsp.wdspEmnrPost2Available,
+            wdspNr4SbnrAvailable: diag.dsp.wdspNr4SbnrAvailable,
+          };
+        })
+        .catch(() => {
+          // Diagnostics capability is advisory. Keep the last known-good
+          // snapshot and retry on the next refresh interval.
+        })
+        .finally(() => {
+          if (diagnosticsAbort === ac) diagnosticsInFlight = false;
+        });
+    };
+
     const setStatus = (
       rec: SmartNrRecommendation,
       shaped: NrConfigDto,
@@ -73,6 +106,7 @@ export function SmartNrController() {
       applied: boolean,
       rx: RxChainAnalysis | null = null,
       heldByRxChain = false,
+      capability: SmartNrCapabilityAdaptation | null = null,
     ) => {
       const c = rec.condition;
       const rxStatus = rx !== null && rx.state !== 'waiting' ? rx : null;
@@ -80,6 +114,8 @@ export function SmartNrController() {
         atUtc: new Date().toISOString(),
         profile: labelSmartNrProfile(shaped),
         reason: rec.reason,
+        capabilityLimited: capability?.capabilityLimited || undefined,
+        capabilityRecommendation: capability?.capabilityRecommendation,
         heldByRxChain,
         rxChainLabel: rxStatus?.label,
         rxChainRecommendation: rxStatus?.recommendation,
@@ -129,6 +165,7 @@ export function SmartNrController() {
         resetPending();
         return;
       }
+      refreshDspCapabilities(now);
 
       const display = useDisplayStore.getState();
       const rec = recommendSmartNr({
@@ -140,7 +177,11 @@ export function SmartNrController() {
       });
       if (!rec) return;
 
-      const shaped = shapeSmartNrRecommendation(rec, settings);
+      const capability = adaptSmartNrToDspCapabilities(
+        shapeSmartNrRecommendation(rec, settings),
+        dspCapabilities,
+      );
+      const shaped = capability.nr;
       const rxMeters = useRxMetersStore.getState();
       const rx = analyzeRxChain({
         signalPk: rxMeters.signalPk,
@@ -154,37 +195,37 @@ export function SmartNrController() {
       });
       const heldByRxChain = shouldHoldForRxChain(rx);
       if (settings.automationMode === 'suggest') {
-        setStatus(rec, shaped, false, false, rx, heldByRxChain);
+        setStatus(rec, shaped, false, false, rx, heldByRxChain, capability);
         resetPending();
         return;
       }
       if (heldByRxChain) {
-        setStatus(rec, shaped, false, false, rx, true);
+        setStatus(rec, shaped, false, false, rx, true, capability);
         resetPending();
         return;
       }
       if (sameNr(conn.nr, shaped)) {
-        setStatus(rec, shaped, false, false, rx);
+        setStatus(rec, shaped, false, false, rx, false, capability);
         resetPending();
         return;
       }
       const targetProfileKey = smartNrProfileKey(shaped);
       const currentProfileKey = smartNrProfileKey(conn.nr);
       if (targetProfileKey === currentProfileKey) {
-        setStatus(rec, shaped, false, false, rx);
+        setStatus(rec, shaped, false, false, rx, false, capability);
         resetPending();
         return;
       }
       if (pendingProfileKey !== targetProfileKey) {
         pendingProfileKey = targetProfileKey;
         pendingCount = 1;
-        setStatus(rec, shaped, true, false, rx);
+        setStatus(rec, shaped, true, false, rx, false, capability);
         return;
       }
       pendingCount++;
       const requiredDwell = Math.max(settings.dwellSamples, PROFILE_SWITCH_DWELL_SAMPLES);
       const ready = pendingCount >= requiredDwell && now - lastAppliedAt >= APPLY_COOLDOWN_MS;
-      setStatus(rec, shaped, !ready, ready, rx);
+      setStatus(rec, shaped, !ready, ready, rx, false, capability);
       if (ready) {
         lastAppliedAt = now;
         applyNr(shaped);
@@ -206,6 +247,7 @@ export function SmartNrController() {
 
     return () => {
       abort?.abort();
+      diagnosticsAbort?.abort();
       releaseEstimatorConsumer?.();
       unsubDisplay();
       unsubSettings();

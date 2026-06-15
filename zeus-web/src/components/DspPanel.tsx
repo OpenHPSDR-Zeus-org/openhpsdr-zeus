@@ -191,6 +191,9 @@ export function DspPanel() {
   const smartNrTitle = smartNrStatus
     ? [
         smartNrStatus.reason,
+        smartNrStatus.capabilityLimited && smartNrStatus.capabilityRecommendation
+          ? smartNrStatus.capabilityRecommendation
+          : null,
         smartNrStatus.rxChainLabel && smartNrStatus.rxChainRecommendation
           ? `${smartNrStatus.rxChainLabel}: ${smartNrStatus.rxChainRecommendation}`
           : null,
@@ -290,7 +293,15 @@ export function DspPanel() {
             </button>
           ) : smartNrStatus && (
             <span className="mono">
-              {smartNrStatus.heldByRxChain ? 'RX HOLD' : smartNrStatus.pending ? 'DWELL' : smartNrStatus.applied ? 'APPLIED' : 'READY'}
+              {smartNrStatus.heldByRxChain
+                ? 'RX HOLD'
+                : smartNrStatus.capabilityLimited
+                  ? 'DSP CAP'
+                  : smartNrStatus.pending
+                    ? 'DWELL'
+                    : smartNrStatus.applied
+                      ? 'APPLIED'
+                      : 'READY'}
             </span>
           )}
         </div>
