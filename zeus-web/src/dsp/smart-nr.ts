@@ -16,6 +16,10 @@ export type SmartNrCondition = {
   coherentOccupancy6: number;
   impulsiveOccupancy12: number;
   peakCount: number;
+  coherentPeakCount: number;
+  coherentRidgeCount: number;
+  widestCoherentRunBins: number;
+  isolatedHotBinCount: number;
   hasSignal: boolean;
   weakSparse: boolean;
   denseNoise: boolean;
@@ -136,10 +140,44 @@ export function analyzeSmartNrCondition(
   }
 
   let peakCount = 0;
+  let coherentPeakCount = 0;
   for (let i = 1; i < n - 1; i++) {
     const v = snr[i]!;
-    if (v >= 10 && v >= snr[i - 1]! && v > snr[i + 1]!) peakCount++;
+    const localPeak = v >= 10 && v >= snr[i - 1]! && v > snr[i + 1]!;
+    if (localPeak) {
+      peakCount++;
+      if (!useConfidence || confidence![i]! >= 0.45) coherentPeakCount++;
+    }
   }
+
+  let coherentRidgeCount = 0;
+  let widestCoherentRunBins = 0;
+  let coherentRun = 0;
+  const closeCoherentRun = () => {
+    if (coherentRun === 0) return;
+    coherentRidgeCount++;
+    widestCoherentRunBins = Math.max(widestCoherentRunBins, coherentRun);
+    coherentRun = 0;
+  };
+
+  let isolatedHotBinCount = 0;
+  for (let i = 0; i < n; i++) {
+    const v = snr[i]!;
+    const c = useConfidence ? confidence![i]! : 1;
+    const isCoherent = v >= 6 && c >= 0.45;
+    if (isCoherent) {
+      coherentRun++;
+    } else {
+      closeCoherentRun();
+    }
+
+    const left = i > 0 ? snr[i - 1]! : -Infinity;
+    const right = i < n - 1 ? snr[i + 1]! : -Infinity;
+    if (useConfidence && v >= 12 && c < 0.25 && left < 6 && right < 6) {
+      isolatedHotBinCount++;
+    }
+  }
+  closeCoherentRun();
 
   const sortedSnr = [...snr].sort((a, b) => a - b);
   const p50SnrDb = percentile(sortedSnr, 0.5);
@@ -150,19 +188,29 @@ export function analyzeSmartNrCondition(
   const coherentOccupancy6 = coherentAbove6 / n;
   const impulsiveOccupancy12 = impulsiveAbove12 / n;
   const hasSignal = maxSnrDb >= 8;
-  const impulsiveNoise = impulsiveOccupancy12 > 0.018 && coherentOccupancy6 < occupancy6 * 0.5;
+  const isolatedImpulseFloor = Math.max(3, Math.ceil(n * 0.01));
+  const impulsiveNoise =
+    (impulsiveOccupancy12 > 0.018 || isolatedHotBinCount >= isolatedImpulseFloor) &&
+    coherentOccupancy6 < occupancy6 * 0.5;
+  const hasCoherentSignal = !useConfidence || coherentPeakCount > 0 || coherentRidgeCount > 0;
+  const sparseCoherentRidge =
+    !useConfidence || widestCoherentRunBins <= Math.max(8, Math.ceil(n * 0.04));
   const weakSparse =
     !impulsiveNoise &&
     hasSignal &&
+    hasCoherentSignal &&
+    sparseCoherentRidge &&
     maxSnrDb < 24 &&
     occupancy12 < 0.08 &&
     coherentOccupancy6 < 0.12;
   const denseNoise =
     !impulsiveNoise &&
     (occupancy6 > 0.18 || p90SnrDb > 8 || occupancy12 > 0.12 || coherentOccupancy6 > 0.14);
+  const tonalPeakCount = useConfidence ? coherentPeakCount : peakCount;
   const tonalInterference =
-    peakCount > 0 &&
-    peakCount <= 24 &&
+    !impulsiveNoise &&
+    tonalPeakCount > 0 &&
+    tonalPeakCount <= 24 &&
     maxSnrDb >= 18 &&
     occupancy12 < 0.12;
 
@@ -176,6 +224,10 @@ export function analyzeSmartNrCondition(
     coherentOccupancy6,
     impulsiveOccupancy12,
     peakCount,
+    coherentPeakCount,
+    coherentRidgeCount,
+    widestCoherentRunBins,
+    isolatedHotBinCount,
     hasSignal,
     weakSparse,
     denseNoise,

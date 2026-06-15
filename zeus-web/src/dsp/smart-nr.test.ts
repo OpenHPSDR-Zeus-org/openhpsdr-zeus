@@ -15,6 +15,10 @@ function noise(): Float32Array {
   return new Float32Array(WIDTH).fill(NOISE_DB);
 }
 
+function confidence(value = 0): Float32Array {
+  return new Float32Array(WIDTH).fill(value);
+}
+
 describe('smart NR supervisor', () => {
   it('classifies weak sparse narrow signals', () => {
     const spec = noise();
@@ -23,6 +27,31 @@ describe('smart NR supervisor', () => {
     expect(c.hasSignal).toBe(true);
     expect(c.weakSparse).toBe(true);
     expect(c.denseNoise).toBe(false);
+  });
+
+  it('uses coherent ridges as weak-signal evidence when confidence is available', () => {
+    const spec = noise();
+    const conf = confidence();
+    spec[119] = NOISE_DB + 13;
+    spec[120] = NOISE_DB + 15;
+    spec[121] = NOISE_DB + 13;
+    conf[119] = 0.78;
+    conf[120] = 0.86;
+    conf[121] = 0.78;
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      confidence: conf,
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'DIGU',
+    })!;
+
+    expect(rec.condition.weakSparse).toBe(true);
+    expect(rec.condition.coherentRidgeCount).toBe(1);
+    expect(rec.condition.widestCoherentRunBins).toBe(3);
+    expect(rec.condition.coherentPeakCount).toBe(1);
+    expect(rec.nr.nrMode).toBe('Sbnr');
   });
 
   it('recommends NR4/SBNR for weak CW and digital ridges', () => {
@@ -69,14 +98,57 @@ describe('smart NR supervisor', () => {
     expect(rec.nr.snbEnabled).toBe(true);
   });
 
+  it('does not mistake a lone low-confidence spike for a weak signal or tone', () => {
+    const spec = noise();
+    const conf = confidence();
+    spec[120] = NOISE_DB + 25;
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      confidence: conf,
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'USB',
+    })!;
+
+    expect(rec.condition.hasSignal).toBe(true);
+    expect(rec.condition.weakSparse).toBe(false);
+    expect(rec.condition.impulsiveNoise).toBe(false);
+    expect(rec.condition.tonalInterference).toBe(false);
+    expect(rec.condition.coherentRidgeCount).toBe(0);
+    expect(rec.condition.isolatedHotBinCount).toBe(1);
+    expect(rec.nr.nrMode).toBe('Off');
+    expect(rec.nr.nbMode).toBe('Off');
+    expect(rec.nr.anfEnabled).toBe(false);
+  });
+
+  it('classifies broad coherent raised noise as dense instead of weak-sparse', () => {
+    const spec = noise();
+    const conf = confidence(0.82);
+    for (let i = 72; i < 184; i++) spec[i] = NOISE_DB + 11;
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      confidence: conf,
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'USB',
+    })!;
+
+    expect(rec.condition.denseNoise).toBe(true);
+    expect(rec.condition.weakSparse).toBe(false);
+    expect(rec.condition.widestCoherentRunBins).toBe(112);
+    expect(rec.nr.nrMode).toBe('Emnr');
+  });
+
   it('treats non-coherent bright bins as impulsive noise, not weak-signal NR', () => {
     const spec = noise();
-    const confidence = new Float32Array(WIDTH);
+    const conf = confidence();
     for (let i = 40; i < 160; i += 12) spec[i] = NOISE_DB + 25;
     const rec = recommendSmartNr({
       spectrum: spec,
       floor: floor(),
-      confidence,
+      confidence: conf,
       current: { ...NR_CONFIG_DEFAULT, nbThreshold: 20 },
       mode: 'USB',
     })!;
@@ -159,12 +231,12 @@ describe('smart NR supervisor', () => {
 
   it('honors disabled blanker and notch helpers while shaping', () => {
     const spec = noise();
-    const confidence = new Float32Array(WIDTH);
+    const conf = confidence();
     for (let i = 40; i < 160; i += 12) spec[i] = NOISE_DB + 25;
     const rec = recommendSmartNr({
       spectrum: spec,
       floor: floor(),
-      confidence,
+      confidence: conf,
       current: { ...NR_CONFIG_DEFAULT, nbThreshold: 20 },
       mode: 'USB',
     })!;
