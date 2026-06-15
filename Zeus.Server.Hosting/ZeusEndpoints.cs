@@ -1516,6 +1516,16 @@ public static class ZeusEndpoints
             return Results.Ok(scene.SmartNrCondition(dsp.SnapshotNrRuntime()));
         });
 
+        app.MapGet("/api/tx/external-ptt", (ExternalPttService externalPtt) =>
+        {
+            return Results.Ok(externalPtt.Snapshot());
+        });
+
+        app.MapGet("/api/cw/hardware-keying", (HardwareDiagnosticsService diag, ExternalPttService externalPtt) =>
+        {
+            return Results.Ok(diag.KeyingSnapshot(externalPtt.Snapshot()));
+        });
+
         // Operator-selected variant for the 0x0A wire-byte alias family
         // (issue #218). Routes calibration / PA gain / rated-watts dispatch
         // when the connected board is OrionMkII. Default G2 preserves

@@ -163,6 +163,40 @@ public sealed record SmartNrConditionDto(
     string DiagnosticRecommendation,
     DateTimeOffset GeneratedUtc);
 
+public sealed record ExternalPttStatusDto(
+    int SchemaVersion,
+    bool Available,
+    string Protocol,
+    bool? HardwarePtt,
+    bool? CwKeyDown,
+    bool OwnedMox,
+    int HangTimeMs,
+    bool MoxOn,
+    bool TunOn,
+    bool TwoToneOn,
+    string? MoxOwner,
+    bool CwMode,
+    bool SidetoneAvailable,
+    string DiagnosticRecommendation,
+    DateTimeOffset GeneratedUtc);
+
+public sealed record HardwareKeyingStatusDto(
+    int SchemaVersion,
+    string? ActiveProtocol,
+    long P1Packets,
+    DateTimeOffset? P1LastUpdatedUtc,
+    bool? P1HardwarePtt,
+    bool? P1CwKeyDown,
+    long P2Packets,
+    DateTimeOffset? P2LastUpdatedUtc,
+    bool? P2PttIn,
+    bool? P2DotIn,
+    bool? P2DashIn,
+    bool? P2SidetoneActive,
+    ExternalPttStatusDto ExternalPtt,
+    string DiagnosticRecommendation,
+    DateTimeOffset GeneratedUtc);
+
 // Operator-facing AGC configuration (issue: DSP controls Thetis parity §4).
 // Mode selects a canned profile (Long/Slow/Med/Fast/Fixed) or Custom; the
 // nullable params are only consulted in Custom mode (and FixedGainDb only in

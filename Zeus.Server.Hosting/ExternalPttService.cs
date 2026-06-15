@@ -14,6 +14,7 @@
 // statement and per-component attribution.
 
 using Microsoft.Extensions.Hosting;
+using Zeus.Contracts;
 using Zeus.Protocol1;
 
 namespace Zeus.Server;
@@ -103,6 +104,50 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         _hangTimer?.Dispose();
     }
 
+    public ExternalPttStatusDto Snapshot()
+    {
+        IProtocol1Client? client;
+        bool owned;
+        lock (_sync)
+        {
+            client = _client;
+            owned = _owned;
+        }
+
+        bool available = client is not null;
+        bool? hardwarePtt = client?.HardwarePtt;
+        bool? cwKeyDown = client?.CwKeyDown;
+        var mode = _radio.Snapshot().Mode;
+        bool moxOn = _tx.IsMoxOn;
+        bool tunOn = _tx.IsTunOn;
+        bool twoToneOn = _tx.IsTwoToneOn;
+        string? owner = _tx.MoxOwner?.ToString();
+        string recommendation = !available
+            ? "No Protocol-1 hardware PTT client is attached; external PTT takeover is idle."
+            : owned
+                ? "External PTT owns MOX through the hardware source path; falling edges release only hardware-owned transmissions after hang time."
+                : hardwarePtt == true && !moxOn
+                    ? "Hardware PTT is asserted but MOX is not active; check connection state, band guard, and TX interlocks."
+                    : "External PTT takeover is armed and read-only diagnostics are live.";
+
+        return new(
+            SchemaVersion: 1,
+            Available: available,
+            Protocol: available ? "P1" : "none",
+            HardwarePtt: hardwarePtt,
+            CwKeyDown: cwKeyDown,
+            OwnedMox: owned,
+            HangTimeMs: (int)HangTime.TotalMilliseconds,
+            MoxOn: moxOn,
+            TunOn: tunOn,
+            TwoToneOn: twoToneOn,
+            MoxOwner: owner,
+            CwMode: IsCwMode(mode),
+            SidetoneAvailable: _sidetone is not null,
+            DiagnosticRecommendation: recommendation,
+            GeneratedUtc: DateTimeOffset.UtcNow);
+    }
+
     private void OnConnected(IProtocol1Client client)
     {
         lock (_sync) { _client = client; _owned = false; }
@@ -142,8 +187,8 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         else HandleFalling();
     }
 
-    private static bool IsCwMode(Zeus.Contracts.RxMode mode) =>
-        mode is Zeus.Contracts.RxMode.CWU or Zeus.Contracts.RxMode.CWL;
+    private static bool IsCwMode(RxMode mode) =>
+        mode is RxMode.CWU or RxMode.CWL;
 
     private void HandleRising()
     {
@@ -167,7 +212,7 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         // subsequent fall is handled by HandleFalling regardless of ordering.
         _ = Task.Run(() =>
         {
-            if (_tx.TrySetMox(true, out var err))
+            if (_tx.TrySetMox(true, MoxSource.Hardware, out var err))
             {
                 _log.LogInformation("externalPtt.takeover.applied");
             }
@@ -206,7 +251,7 @@ public sealed class ExternalPttService : IHostedService, IDisposable
         lock (_sync) { releaseNow = _owned; _owned = false; }
         if (!releaseNow) return;
 
-        if (_tx.TrySetMox(false, out var err))
+        if (_tx.TrySetMox(false, MoxSource.Hardware, out var err))
         {
             _log.LogInformation("externalPtt.release.applied");
         }

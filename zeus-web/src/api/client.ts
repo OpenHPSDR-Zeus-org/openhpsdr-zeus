@@ -585,6 +585,42 @@ export type SmartNrConditionDto = {
   generatedUtc: string;
 };
 
+export type ExternalPttStatusDto = {
+  schemaVersion: number;
+  available: boolean;
+  protocol: string;
+  hardwarePtt: boolean | null;
+  cwKeyDown: boolean | null;
+  ownedMox: boolean;
+  hangTimeMs: number;
+  moxOn: boolean;
+  tunOn: boolean;
+  twoToneOn: boolean;
+  moxOwner: string | null;
+  cwMode: boolean;
+  sidetoneAvailable: boolean;
+  diagnosticRecommendation: string | null;
+  generatedUtc: string;
+};
+
+export type HardwareKeyingStatusDto = {
+  schemaVersion: number;
+  activeProtocol: 'P1' | 'P2' | null;
+  p1Packets: number;
+  p1LastUpdatedUtc: string | null;
+  p1HardwarePtt: boolean | null;
+  p1CwKeyDown: boolean | null;
+  p2Packets: number;
+  p2LastUpdatedUtc: string | null;
+  p2PttIn: boolean | null;
+  p2DotIn: boolean | null;
+  p2DashIn: boolean | null;
+  p2SidetoneActive: boolean | null;
+  externalPtt: ExternalPttStatusDto;
+  diagnosticRecommendation: string | null;
+  generatedUtc: string;
+};
+
 export type HardwareP1DiagnosticsDto = {
   packets: number;
   lastUpdatedUtc: string | null;
@@ -1464,6 +1500,58 @@ function normalizeSmartNrCondition(raw: unknown): SmartNrConditionDto {
   };
 }
 
+function normalizeExternalPttStatus(raw: unknown): ExternalPttStatusDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    available: Boolean(r.available),
+    protocol: diagString(r.protocol) ?? 'none',
+    hardwarePtt: diagBool(r.hardwarePtt),
+    cwKeyDown: diagBool(r.cwKeyDown),
+    ownedMox: Boolean(r.ownedMox),
+    hangTimeMs: diagNumber(r.hangTimeMs) ?? 0,
+    moxOn: Boolean(r.moxOn),
+    tunOn: Boolean(r.tunOn),
+    twoToneOn: Boolean(r.twoToneOn),
+    moxOwner: diagString(r.moxOwner),
+    cwMode: Boolean(r.cwMode),
+    sidetoneAvailable: Boolean(r.sidetoneAvailable),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+    generatedUtc:
+      typeof r.generatedUtc === 'string'
+        ? r.generatedUtc
+        : new Date().toISOString(),
+  };
+}
+
+function normalizeHardwareKeyingStatus(raw: unknown): HardwareKeyingStatusDto {
+  const r = asDiagRecord(raw);
+  const activeProtocol =
+    r.activeProtocol === 'P1' || r.activeProtocol === 'P2'
+      ? r.activeProtocol
+      : null;
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    activeProtocol,
+    p1Packets: diagNumber(r.p1Packets) ?? 0,
+    p1LastUpdatedUtc: diagString(r.p1LastUpdatedUtc),
+    p1HardwarePtt: diagBool(r.p1HardwarePtt),
+    p1CwKeyDown: diagBool(r.p1CwKeyDown),
+    p2Packets: diagNumber(r.p2Packets) ?? 0,
+    p2LastUpdatedUtc: diagString(r.p2LastUpdatedUtc),
+    p2PttIn: diagBool(r.p2PttIn),
+    p2DotIn: diagBool(r.p2DotIn),
+    p2DashIn: diagBool(r.p2DashIn),
+    p2SidetoneActive: diagBool(r.p2SidetoneActive),
+    externalPtt: normalizeExternalPttStatus(r.externalPtt),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+    generatedUtc:
+      typeof r.generatedUtc === 'string'
+        ? r.generatedUtc
+        : new Date().toISOString(),
+  };
+}
+
 function diagNumberArray(raw: unknown): number[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((v) => diagNumber(v) ?? 0);
@@ -1983,6 +2071,26 @@ export function fetchSmartNrCondition(
     '/api/dsp/nr-condition',
     { signal },
     normalizeSmartNrCondition,
+  );
+}
+
+export function fetchExternalPttStatus(
+  signal?: AbortSignal,
+): Promise<ExternalPttStatusDto> {
+  return jsonFetch(
+    '/api/tx/external-ptt',
+    { signal },
+    normalizeExternalPttStatus,
+  );
+}
+
+export function fetchHardwareKeyingStatus(
+  signal?: AbortSignal,
+): Promise<HardwareKeyingStatusDto> {
+  return jsonFetch(
+    '/api/cw/hardware-keying',
+    { signal },
+    normalizeHardwareKeyingStatus,
   );
 }
 

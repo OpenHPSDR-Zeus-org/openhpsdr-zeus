@@ -180,6 +180,38 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         }
     }
 
+    public HardwareKeyingStatusDto KeyingSnapshot(ExternalPttStatusDto externalPtt)
+    {
+        ArgumentNullException.ThrowIfNull(externalPtt);
+
+        lock (_sync)
+        {
+            string recommendation = _activeProtocol switch
+            {
+                "P1" => "Protocol-1 hardware PTT and CW key echo are live; external PTT takeover status is available separately.",
+                "P2" => "Protocol-2 PTT, dot, dash, and sidetone telemetry are live; host-side external PTT takeover is Protocol-1 only.",
+                _ => "No hardware keying telemetry is attached; connect a radio to audit PTT, dot, dash, and sidetone inputs.",
+            };
+
+            return new(
+                SchemaVersion: 1,
+                ActiveProtocol: _activeProtocol,
+                P1Packets: _p1Packets,
+                P1LastUpdatedUtc: _p1LastUpdatedUtc,
+                P1HardwarePtt: _p1HardwarePtt,
+                P1CwKeyDown: _p1CwKeyDown,
+                P2Packets: _p2Packets,
+                P2LastUpdatedUtc: _p2LastUpdatedUtc,
+                P2PttIn: _p2HadSample ? _p2Last.PttIn : (bool?)null,
+                P2DotIn: _p2HadSample ? _p2Last.DotIn : (bool?)null,
+                P2DashIn: _p2HadSample ? _p2Last.DashIn : (bool?)null,
+                P2SidetoneActive: _p2HadSample ? _p2Last.SidetoneActive : (bool?)null,
+                ExternalPtt: externalPtt,
+                DiagnosticRecommendation: recommendation,
+                GeneratedUtc: DateTimeOffset.UtcNow);
+        }
+    }
+
     public void ResetMapping()
     {
         lock (_sync)
@@ -1394,11 +1426,11 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             },
             candidateControls = new[]
             {
-                "planned:/api/cw/hardware-keying",
-                "planned:/api/tx/external-ptt",
+                "/api/cw/hardware-keying",
+                "/api/tx/external-ptt",
             },
             safetyClass = "tx-capable-requires-confirmation",
-            notes = "The telemetry is decoded; control surfaces must remain explicitly armed because they can key TX.",
+            notes = "The telemetry is decoded and exposed through read-only keying/PTT status APIs; any future write controls must remain explicitly armed because they can key TX.",
         },
     ];
 }

@@ -294,7 +294,8 @@ public static class ZeusHost
         // PTT line) into a host MOX request — without it the gateware-driven
         // CW carrier transmits while Zeus stays unkeyed (UI off, meters at
         // idle cadence, FR-6 timeout disarmed).
-        builder.Services.AddHostedService<ExternalPttService>();
+        builder.Services.AddSingleton<ExternalPttService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<ExternalPttService>());
 
         // QRZ.com XML client. HttpClient default timeout is 100 s — cap at 10 s so a
         // hung login surfaces quickly in the UI.

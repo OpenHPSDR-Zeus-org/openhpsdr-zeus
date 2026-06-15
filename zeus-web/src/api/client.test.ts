@@ -56,7 +56,9 @@ import {
   SQUELCH_CONFIG_DEFAULT,
   TX_LEVELING_CONFIG_DEFAULT,
   createHardwareDiagnosticsMarker,
+  fetchExternalPttStatus,
   fetchHardwareDiagnostics,
+  fetchHardwareKeyingStatus,
   fetchSmartNrCondition,
   fetchAdcProtection,
   fetchTxFidelityPolicy,
@@ -783,6 +785,91 @@ describe('POST helpers', () => {
     expect(condition.nr4Readiness).toBe('missing-sbnr-exports');
     expect(condition.requestedNrMode).toBe('Sbnr');
     expect(condition.effectiveNrMode).toBe('Off');
+  });
+
+  it('fetchExternalPttStatus reads read-only external PTT ownership state', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      available: true,
+      protocol: 'P1',
+      hardwarePtt: true,
+      cwKeyDown: false,
+      ownedMox: true,
+      hangTimeMs: 250,
+      moxOn: true,
+      tunOn: false,
+      twoToneOn: false,
+      moxOwner: 'Hardware',
+      cwMode: true,
+      sidetoneAvailable: true,
+      diagnosticRecommendation: 'External PTT owns MOX through the hardware source path.',
+      generatedUtc: '2026-06-15T01:00:01Z',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const status = await fetchExternalPttStatus();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/tx/external-ptt');
+    expect(init?.method).toBeUndefined();
+    expect(status.available).toBe(true);
+    expect(status.protocol).toBe('P1');
+    expect(status.hardwarePtt).toBe(true);
+    expect(status.ownedMox).toBe(true);
+    expect(status.hangTimeMs).toBe(250);
+    expect(status.moxOwner).toBe('Hardware');
+    expect(status.cwMode).toBe(true);
+  });
+
+  it('fetchHardwareKeyingStatus reads decoded P1 and P2 key telemetry', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      activeProtocol: 'P2',
+      p1Packets: 12,
+      p1LastUpdatedUtc: '2026-06-15T00:59:50Z',
+      p1HardwarePtt: false,
+      p1CwKeyDown: null,
+      p2Packets: 45,
+      p2LastUpdatedUtc: '2026-06-15T01:00:00Z',
+      p2PttIn: true,
+      p2DotIn: false,
+      p2DashIn: true,
+      p2SidetoneActive: true,
+      externalPtt: {
+        schemaVersion: 1,
+        available: false,
+        protocol: 'none',
+        hardwarePtt: null,
+        cwKeyDown: null,
+        ownedMox: false,
+        hangTimeMs: 250,
+        moxOn: false,
+        tunOn: false,
+        twoToneOn: false,
+        moxOwner: null,
+        cwMode: false,
+        sidetoneAvailable: false,
+        diagnosticRecommendation: 'External PTT takeover is idle.',
+        generatedUtc: '2026-06-15T01:00:01Z',
+      },
+      diagnosticRecommendation: 'Protocol-2 PTT, dot, dash, and sidetone telemetry are live.',
+      generatedUtc: '2026-06-15T01:00:01Z',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const status = await fetchHardwareKeyingStatus();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/cw/hardware-keying');
+    expect(init?.method).toBeUndefined();
+    expect(status.activeProtocol).toBe('P2');
+    expect(status.p1Packets).toBe(12);
+    expect(status.p2Packets).toBe(45);
+    expect(status.p2PttIn).toBe(true);
+    expect(status.p2DashIn).toBe(true);
+    expect(status.p2SidetoneActive).toBe(true);
+    expect(status.externalPtt.available).toBe(false);
+    expect(status.externalPtt.hangTimeMs).toBe(250);
   });
 
   it('raises ApiError with server-provided error text on 400', async () => {
