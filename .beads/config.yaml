@@ -1,3 +1,3 @@
 no-git-ops: true
 
-# sync.remote: "https://doltremoteapi.dolthub.com/kb2uka/openhpsdr-zeus"
+sync.remote: "https://doltremoteapi.dolthub.com/iamexemplar/openhpsdr-zeus"
