@@ -7,21 +7,23 @@
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
 //
-// ActivationSpotsService — aggregates live POTA + SOTA activation spots and
+// ActivationSpotsService — aggregates live POTA + SOTA + DX-cluster spots and
 // caches them for the Spots panel (GET /api/spots/activations). Inspired by
 // POTACAT (github.com/Waffleslop/POTACAT, GPL-2.0): same public feeds, but
 // re-implemented in Zeus's stack so click-to-tune drives the Zeus VFO instead
 // of Hamlib rigctld.
 //
 // This is a self-contained background poller. It touches NOTHING on the radio
-// / DSP / TX path — it only fetches two public JSON feeds on a timer and holds
-// the merged result in memory. If a feed is unreachable the last good cache is
-// kept; one source failing never blanks the other. It is unrelated to the TCI
+// / DSP / TX path — it only fetches public JSON feeds on a timer and holds the
+// merged result in memory. If a feed is unreachable the last good cache is
+// kept; one source failing never blanks the others. It is unrelated to the TCI
 // DX-cluster SpotManager (Zeus.Server.Tci).
 //
-// Feeds:
-//   POTA: https://api.pota.app/spot/activator   (frequency in kHz, string)
-//   SOTA: https://api2.sota.org.uk/api/spots/N/all (frequency in MHz, string)
+// Each source URL is operator-configurable in Settings -> Spots; the defaults
+// (and the unit each feed reports frequency in) are:
+//   POTA: https://api.pota.app/spot/activator       (kHz string)
+//   SOTA: https://api2.sota.org.uk/api/spots/N/all   (MHz string)
+//   DX:   https://www.dxsummit.fi/api/v1/spots        (kHz string; off by default)
 
 using System.Globalization;
 using System.Text.Json;
@@ -39,9 +41,6 @@ namespace Zeus.Server;
 /// </summary>
 public sealed class ActivationSpotsService : BackgroundService
 {
-    private const string PotaUrl = "https://api.pota.app/spot/activator";
-    private const string SotaUrl = "https://api2.sota.org.uk/api/spots/50/all";
-
     private static readonly HttpClient Http = CreateClient();
 
     private static readonly JsonSerializerOptions JsonOpts = new()
@@ -133,17 +132,23 @@ public sealed class ActivationSpotsService : BackgroundService
     {
         // Fetch the enabled feeds concurrently. A null result means that fetch
         // errored (vs an empty list, which means the feed is genuinely quiet).
-        var potaTask = cfg.PotaEnabled ? FetchPotaAsync(ct) : Task.FromResult<IReadOnlyList<ActivationSpotDto>?>(Array.Empty<ActivationSpotDto>());
-        var sotaTask = cfg.SotaEnabled ? FetchSotaAsync(ct) : Task.FromResult<IReadOnlyList<ActivationSpotDto>?>(Array.Empty<ActivationSpotDto>());
-        await Task.WhenAll(potaTask, sotaTask).ConfigureAwait(false);
+        // A disabled feed resolves to an empty list (not null) so it doesn't
+        // count as a failure that would keep a stale snapshot.
+        var empty = Task.FromResult<IReadOnlyList<ActivationSpotDto>?>(Array.Empty<ActivationSpotDto>());
+        var potaTask = cfg.PotaEnabled ? FetchPotaAsync(cfg.PotaUrl, ct) : empty;
+        var sotaTask = cfg.SotaEnabled ? FetchSotaAsync(cfg.SotaUrl, ct) : empty;
+        var dxTask = cfg.DxEnabled ? FetchDxAsync(cfg.DxUrl, ct) : empty;
+        await Task.WhenAll(potaTask, sotaTask, dxTask).ConfigureAwait(false);
 
         var pota = potaTask.Result;
         var sota = sotaTask.Result;
-        var anyFailed = pota is null || sota is null;
+        var dx = dxTask.Result;
+        var anyFailed = pota is null || sota is null || dx is null;
 
-        var merged = new List<ActivationSpotDto>((pota?.Count ?? 0) + (sota?.Count ?? 0));
+        var merged = new List<ActivationSpotDto>((pota?.Count ?? 0) + (sota?.Count ?? 0) + (dx?.Count ?? 0));
         if (pota is not null) merged.AddRange(pota);
         if (sota is not null) merged.AddRange(sota);
+        if (dx is not null) merged.AddRange(dx);
 
         // Keep the previous snapshot if every fetch we attempted failed — a
         // transient outage shouldn't blank a good list. Otherwise publish
@@ -154,20 +159,21 @@ public sealed class ActivationSpotsService : BackgroundService
             return;
         }
 
-        // Newest first. SpotTime is ISO-8601 (UTC, no offset) from both feeds,
+        // Newest first. SpotTime is ISO-8601 (UTC, no offset) from every feed,
         // so ordinal string compare is chronological.
         merged.Sort((a, b) => string.CompareOrdinal(b.SpotTime, a.SpotTime));
         _spots = merged;
 
-        _log.LogDebug("activation-spots polled pota={Pota} sota={Sota}", pota?.Count ?? -1, sota?.Count ?? -1);
+        _log.LogDebug("activation-spots polled pota={Pota} sota={Sota} dx={Dx}",
+            pota?.Count ?? -1, sota?.Count ?? -1, dx?.Count ?? -1);
     }
 
     // Returns null on error so the caller can keep the last good snapshot.
-    private async Task<IReadOnlyList<ActivationSpotDto>?> FetchPotaAsync(CancellationToken ct)
+    private async Task<IReadOnlyList<ActivationSpotDto>?> FetchPotaAsync(string url, CancellationToken ct)
     {
         try
         {
-            var raw = await Http.GetFromJsonSafeAsync<List<PotaSpot>>(PotaUrl, JsonOpts, ct).ConfigureAwait(false);
+            var raw = await Http.GetFromJsonSafeAsync<List<PotaSpot>>(url, JsonOpts, ct).ConfigureAwait(false);
             if (raw is null) return Array.Empty<ActivationSpotDto>();
 
             var list = new List<ActivationSpotDto>(raw.Count);
@@ -199,11 +205,11 @@ public sealed class ActivationSpotsService : BackgroundService
     }
 
     // Returns null on error so the caller can keep the last good snapshot.
-    private async Task<IReadOnlyList<ActivationSpotDto>?> FetchSotaAsync(CancellationToken ct)
+    private async Task<IReadOnlyList<ActivationSpotDto>?> FetchSotaAsync(string url, CancellationToken ct)
     {
         try
         {
-            var raw = await Http.GetFromJsonSafeAsync<List<SotaSpot>>(SotaUrl, JsonOpts, ct).ConfigureAwait(false);
+            var raw = await Http.GetFromJsonSafeAsync<List<SotaSpot>>(url, JsonOpts, ct).ConfigureAwait(false);
             if (raw is null) return Array.Empty<ActivationSpotDto>();
 
             var list = new List<ActivationSpotDto>(raw.Count);
@@ -237,6 +243,46 @@ public sealed class ActivationSpotsService : BackgroundService
         }
     }
 
+    // Returns null on error so the caller can keep the last good snapshot.
+    // Targets the DXSummit JSON shape (de_call / dx_call / frequency-kHz / time /
+    // info), the de-facto public DX-cluster feed; an operator can point DxUrl at
+    // any mirror or cluster gateway that serves the same array-of-objects shape.
+    private async Task<IReadOnlyList<ActivationSpotDto>?> FetchDxAsync(string url, CancellationToken ct)
+    {
+        try
+        {
+            var raw = await Http.GetFromJsonSafeAsync<List<DxSpot>>(url, JsonOpts, ct).ConfigureAwait(false);
+            if (raw is null) return Array.Empty<ActivationSpotDto>();
+
+            var list = new List<ActivationSpotDto>(raw.Count);
+            foreach (var s in raw)
+            {
+                var hz = FreqElementKHz(s.Frequency);
+                if (hz <= 0 || string.IsNullOrWhiteSpace(s.DxCall)) continue;
+                // The "activator" of a DX spot is the station being worked
+                // (dx_call); the spotter (de_call) is who reported it.
+                list.Add(new ActivationSpotDto(
+                    Source: "DX",
+                    Activator: s.DxCall!.Trim().ToUpperInvariant(),
+                    FreqHz: hz,
+                    Mode: (s.Mode ?? "").Trim().ToUpperInvariant(),
+                    Reference: "",
+                    Name: string.IsNullOrWhiteSpace(s.Info) ? null : s.Info!.Trim(),
+                    Location: string.IsNullOrWhiteSpace(s.DxCountry) ? null : s.DxCountry!.Trim(),
+                    Grid: null,
+                    Comments: string.IsNullOrWhiteSpace(s.Info) ? null : s.Info!.Trim(),
+                    Spotter: string.IsNullOrWhiteSpace(s.DeCall) ? null : s.DeCall!.Trim().ToUpperInvariant(),
+                    SpotTime: s.Time ?? ""));
+            }
+            return list;
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "DX spot fetch failed");
+            return null;
+        }
+    }
+
     // POTA reports frequency as a kHz string, e.g. "14076" or "14076.0".
     private static long ParseKHz(string? s) =>
         double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var khz)
@@ -248,6 +294,14 @@ public sealed class ActivationSpotsService : BackgroundService
         double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var mhz)
             ? (long)Math.Round(mhz * 1_000_000.0)
             : 0;
+
+    // DX frequency (kHz) tolerant of either a JSON string or a JSON number.
+    private static long FreqElementKHz(JsonElement el) => el.ValueKind switch
+    {
+        JsonValueKind.String => ParseKHz(el.GetString()),
+        JsonValueKind.Number when el.TryGetDouble(out var khz) => (long)Math.Round(khz * 1_000.0),
+        _ => 0,
+    };
 
     // ----- upstream feed shapes (only the fields we consume) -----
 
@@ -278,6 +332,21 @@ public sealed class ActivationSpotsService : BackgroundService
         public string? Mode { get; set; }
         public string? Comments { get; set; }
         public string? TimeStamp { get; set; }
+    }
+
+    // DXSummit /api/v1/spots shape (snake_case JSON → explicit JsonPropertyName
+    // since these don't match the PropertyNameCaseInsensitive camel/Pascal rule).
+    private sealed class DxSpot
+    {
+        [JsonPropertyName("de_call")] public string? DeCall { get; set; }
+        [JsonPropertyName("dx_call")] public string? DxCall { get; set; }
+        // DXSummit may serialize frequency as a JSON string ("14074.0") or a
+        // number (14074.0); JsonElement accepts either, parsed by FreqElementKHz.
+        [JsonPropertyName("frequency")] public JsonElement Frequency { get; set; }
+        [JsonPropertyName("info")] public string? Info { get; set; }
+        [JsonPropertyName("time")] public string? Time { get; set; }
+        [JsonPropertyName("mode")] public string? Mode { get; set; }
+        [JsonPropertyName("dx_country")] public string? DxCountry { get; set; }
     }
 }
 

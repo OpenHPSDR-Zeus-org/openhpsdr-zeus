@@ -23,7 +23,7 @@ import {
 } from '../api/client';
 import { useConnectionStore } from './connection-store';
 
-export type SpotSourceFilter = 'ALL' | 'POTA' | 'SOTA';
+export type SpotSourceFilter = 'ALL' | 'POTA' | 'SOTA' | 'DX';
 
 interface SpotsState {
   spots: ActivationSpotDto[];

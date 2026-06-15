@@ -332,6 +332,7 @@ export type RadioStateDto = {
   psCalibrationStalled?: boolean;
   psIntsSpiPreset: string;
   psFeedbackSource: 'internal' | 'external';
+  txMonitorEnabled: boolean;
   // Drive slider state — server is authoritative, hydrated into tx-store on
   // every fresh RadioStateDto so a relaunch picks up the operator's last
   // value instead of the localStorage default clobbering the server's
@@ -379,6 +380,13 @@ export type CfcConfigDto = {
   preCompDb: number;
   prePeqDb: number;
   bands: CfcBandDto[];
+};
+
+export type CfcPresetDto = {
+  name: string;
+  config: CfcConfigDto;
+  createdUtc: string;
+  updatedUtc: string;
 };
 
 export type TxStationProfileDto = {
@@ -857,6 +865,10 @@ export type TxEgressHealthDto = {
   p2QueuedPackets: number | null;
   p2TransportFailures: number;
   qualityReasons: string[];
+  txDutyProfile: string;
+  continuousDutyRecommendedMaxWatts: number | null;
+  continuousDutyLimitExceeded: boolean;
+  continuousDutyManualReference: string | null;
   diagnosticRecommendation: string | null;
 };
 
@@ -1456,6 +1468,8 @@ export function normalizeState(raw: unknown): RadioStateDto {
     psIntsSpiPreset: typeof r.psIntsSpiPreset === 'string' ? r.psIntsSpiPreset : '16/256',
     psFeedbackSource:
       r.psFeedbackSource === 'External' || r.psFeedbackSource === 'external' ? 'external' : 'internal',
+    txMonitorEnabled:
+      typeof r.txMonitorEnabled === 'boolean' ? r.txMonitorEnabled : false,
     // Drive sliders — server is authoritative. Defaults mirror RadioService
     // private-field seeds (_drivePct=0, _tunePct=10) so a state frame from an
     // older server (no DrivePct/TunePct fields) deserialises cleanly.
@@ -1513,6 +1527,27 @@ export function normalizeCfc(raw: unknown): CfcConfigDto {
     prePeqDb: typeof r.prePeqDb === 'number' ? r.prePeqDb : 0,
     bands,
   };
+}
+
+function normalizeCfcPreset(raw: unknown): CfcPresetDto | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const name = typeof r.name === 'string' ? r.name.trim() : '';
+  if (!name) return null;
+  return {
+    name,
+    config: normalizeCfc(r.config),
+    createdUtc: typeof r.createdUtc === 'string' ? r.createdUtc : '',
+    updatedUtc: typeof r.updatedUtc === 'string' ? r.updatedUtc : '',
+  };
+}
+
+function normalizeCfcPresetsResponse(raw: unknown): CfcPresetDto[] {
+  const r = raw as { presets?: unknown };
+  const presets = Array.isArray(r?.presets) ? r.presets : [];
+  return presets
+    .map(normalizeCfcPreset)
+    .filter((preset): preset is CfcPresetDto => preset !== null);
 }
 
 function normalizeTxStationProfile(raw: unknown): TxStationProfileDto | null {
@@ -1875,6 +1910,10 @@ function normalizeTxEgressHealth(raw: unknown): TxEgressHealthDto {
       p2QueuedPackets: null,
       p2TransportFailures: 0,
       qualityReasons: ['tx-egress-health-unavailable'],
+      txDutyProfile: 'unknown',
+      continuousDutyRecommendedMaxWatts: null,
+      continuousDutyLimitExceeded: false,
+      continuousDutyManualReference: null,
       diagnosticRecommendation: 'TX egress health is not available from this backend yet; use raw counters until OpenhpsdrZeus is restarted.',
     };
   }
@@ -1909,6 +1948,10 @@ function normalizeTxEgressHealth(raw: unknown): TxEgressHealthDto {
     qualityReasons: Array.isArray(r.qualityReasons)
       ? r.qualityReasons.map((item) => diagString(item)).filter((item): item is string => item !== null)
       : [],
+    txDutyProfile: diagString(r.txDutyProfile) ?? 'unknown',
+    continuousDutyRecommendedMaxWatts: diagNumber(r.continuousDutyRecommendedMaxWatts),
+    continuousDutyLimitExceeded: Boolean(r.continuousDutyLimitExceeded),
+    continuousDutyManualReference: diagString(r.continuousDutyManualReference),
     diagnosticRecommendation: diagString(r.diagnosticRecommendation),
   };
 }
@@ -2525,11 +2568,11 @@ export function fetchRadios(signal?: AbortSignal): Promise<RadioInfoDto[]> {
   return jsonFetch('/api/radios', { signal }, normalizeRadios);
 }
 
-/** A POTA/SOTA activation spot from GET /api/spots/activations. `freqHz` is
- *  absolute Hz (server normalizes POTA kHz / SOTA MHz). `mode` is the raw
- *  upstream string (SSB/CW/FT8/…) — map it to an RxMode at tune time. */
+/** A POTA / SOTA / DX activation spot from GET /api/spots/activations. `freqHz`
+ *  is absolute Hz (server normalizes POTA kHz / SOTA MHz / DX kHz). `mode` is
+ *  the raw upstream string (SSB/CW/FT8/…) — map it to an RxMode at tune time. */
 export interface ActivationSpotDto {
-  source: 'POTA' | 'SOTA';
+  source: 'POTA' | 'SOTA' | 'DX';
   activator: string;
   freqHz: number;
   mode: string;
@@ -2576,7 +2619,19 @@ export interface SpotsSettings {
   cwTuneOffsetHz: number;
   /** Hz added to the dial when tuning a digital spot. */
   digiTuneOffsetHz: number;
+  /** Include the DX-cluster feed (off by default — high volume). */
+  dxEnabled: boolean;
+  /** POTA feed endpoint (blank/invalid falls back to the default on the server). */
+  potaUrl: string;
+  /** SOTA feed endpoint. */
+  sotaUrl: string;
+  /** DX-cluster feed endpoint (DXSummit-compatible JSON shape). */
+  dxUrl: string;
 }
+
+const DEFAULT_POTA_URL = 'https://api.pota.app/spot/activator';
+const DEFAULT_SOTA_URL = 'https://api2.sota.org.uk/api/spots/50/all';
+const DEFAULT_DX_URL = 'https://www.dxsummit.fi/api/v1/spots?limit=50';
 
 export const SPOTS_SETTINGS_DEFAULTS: SpotsSettings = {
   enabled: true,
@@ -2593,10 +2648,18 @@ export const SPOTS_SETTINGS_DEFAULTS: SpotsSettings = {
   latestPerActivator: false,
   cwTuneOffsetHz: 0,
   digiTuneOffsetHz: 0,
+  dxEnabled: false,
+  potaUrl: DEFAULT_POTA_URL,
+  sotaUrl: DEFAULT_SOTA_URL,
+  dxUrl: DEFAULT_DX_URL,
 };
 
 const SPOTS_MAX_AGE_LIMIT = 1440;
 const SPOTS_MAX_TUNE_OFFSET = 5_000;
+
+function urlOrDefault(v: unknown, fallback: string): string {
+  return typeof v === 'string' && v.trim().length > 0 ? v.trim() : fallback;
+}
 
 function toStringArray(v: unknown): string[] {
   if (!Array.isArray(v)) return [];
@@ -2627,6 +2690,10 @@ function normalizeSpotsSettings(raw: unknown): SpotsSettings {
     pollIntervalSeconds: clampInt(r.pollIntervalSeconds, 30, 600, 60),
     cwTuneOffsetHz: clampInt(r.cwTuneOffsetHz, -SPOTS_MAX_TUNE_OFFSET, SPOTS_MAX_TUNE_OFFSET, 0),
     digiTuneOffsetHz: clampInt(r.digiTuneOffsetHz, -SPOTS_MAX_TUNE_OFFSET, SPOTS_MAX_TUNE_OFFSET, 0),
+    dxEnabled: r.dxEnabled ?? false,
+    potaUrl: urlOrDefault(r.potaUrl, DEFAULT_POTA_URL),
+    sotaUrl: urlOrDefault(r.sotaUrl, DEFAULT_SOTA_URL),
+    dxUrl: urlOrDefault(r.dxUrl, DEFAULT_DX_URL),
   };
 }
 
@@ -3898,6 +3965,37 @@ export async function setCfcConfig(
       signal,
     },
     (raw) => normalizeState(raw),
+  );
+}
+
+export async function fetchCfcPresets(signal?: AbortSignal): Promise<CfcPresetDto[]> {
+  return jsonFetch(
+    '/api/tx/cfc/presets',
+    { signal },
+    (raw) => normalizeCfcPresetsResponse(raw),
+  );
+}
+
+export async function saveCfcPreset(
+  name: string,
+  cfg: CfcConfigDto,
+  signal?: AbortSignal,
+): Promise<CfcPresetDto> {
+  return jsonFetch(
+    `/api/tx/cfc/presets/${encodeURIComponent(name)}`,
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ config: cfg }),
+      signal,
+    },
+    (raw) =>
+      normalizeCfcPreset(raw) ?? {
+        name,
+        config: normalizeCfc(cfg),
+        createdUtc: '',
+        updatedUtc: '',
+      },
   );
 }
 
