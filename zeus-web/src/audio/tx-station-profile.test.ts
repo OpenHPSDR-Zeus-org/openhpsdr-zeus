@@ -122,7 +122,7 @@ describe('TX station profile catalog', () => {
         spectralDensity: 88,
       }),
     ).toBe(
-      'VST route / rack bypass / chain ESSB Broadcast / density 88 eSSB CFC / SSB 40..5400 Hz',
+      'chain ESSB Broadcast / density 88 eSSB CFC / SSB 40..5400 Hz',
     );
   });
 });

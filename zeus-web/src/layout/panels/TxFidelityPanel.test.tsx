@@ -241,32 +241,8 @@ describe('TxFidelityPanel', () => {
     expect(container.querySelector<HTMLInputElement>('input[aria-label="TX profile high cut"]')?.value).toBe('2850');
     expect(container.textContent).toContain('SSB 300..2850 Hz');
     expect(container.textContent).toContain('DENS --/100');
-
-    const routeButtons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
-        '[aria-label="TX profile audio route"] button',
-      ),
-    );
-    expect(routeButtons.map((button) => button.textContent)).toEqual([
-      'Native',
-      'VST',
-    ]);
-    expect(routeButtons[1]?.getAttribute('aria-pressed')).toBe('true');
-
-    await act(async () => {
-      routeButtons[0]!.click();
-    });
-    expect(container.textContent).toContain('Native route');
-
-    const rackButtons = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
-        '[aria-label="TX profile audio suite rack"] button',
-      ),
-    );
-    await act(async () => {
-      rackButtons[1]!.click();
-    });
-    expect(container.textContent).toContain('rack bypass');
+    expect(container.querySelector('[aria-label="TX profile audio route"]')).toBeNull();
+    expect(container.querySelector('[aria-label="TX profile audio suite rack"]')).toBeNull();
 
     const audioProfileButton = container.querySelector<HTMLButtonElement>(
       'button[aria-label="TX profile audio suite profile"]',
@@ -283,7 +259,7 @@ describe('TxFidelityPanel', () => {
       ),
     );
     expect(audioProfileOptions.map((option) => option.textContent)).toEqual([
-      'Use current rack',
+      'Use current chain',
       'ESSB Broadcast',
       'Native x1',
     ]);
@@ -292,14 +268,7 @@ describe('TxFidelityPanel', () => {
       audioProfileOptions[1]!.click();
     });
     expect(container.textContent).toContain('chain ESSB Broadcast');
-    expect(container.textContent).toContain('rack hot');
-    expect(
-      Array.from(
-        container.querySelectorAll<HTMLButtonElement>(
-          '[aria-label="TX profile audio route"] button',
-        ),
-      )[1]?.getAttribute('aria-pressed'),
-    ).toBe('true');
+    expect(container.textContent).toContain('VST route / rack hot saved in chain profile');
 
     await act(async () => {
       audioProfileButton!.click();
@@ -313,14 +282,7 @@ describe('TxFidelityPanel', () => {
       refreshedAudioProfileOptions.find((option) => option.textContent === 'Native x1')!.click();
     });
     expect(container.textContent).toContain('chain Native x1');
-    expect(container.textContent).toContain('rack bypass');
-    expect(
-      Array.from(
-        container.querySelectorAll<HTMLButtonElement>(
-          '[aria-label="TX profile audio route"] button',
-        ),
-      )[0]?.getAttribute('aria-pressed'),
-    ).toBe('true');
+    expect(container.textContent).toContain('Native route / rack bypass saved in chain profile');
 
     unmount();
   });
