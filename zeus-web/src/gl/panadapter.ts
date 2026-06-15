@@ -64,6 +64,8 @@ export type PanRenderer = {
   // applied inside draw via the FILL_ALPHA_TOP uniform; callers pass plain
   // RGB. No GL re-init — the next draw picks up the new uniform values.
   setTraceColor: (r: number, g: number, b: number) => void;
+  /** Enables and tunes the high-contrast Signal Pop visual treatment. */
+  setPopMode: (active: boolean, intensity?: number) => void;
   dispose: () => void;
 };
 
@@ -91,6 +93,7 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
   let traceR = 1.0;
   let traceG = 0.627;
   let traceB = 0.157;
+  let popIntensity = 1;
 
   const traceProg = buildProgram(gl, PAN_VS, PAN_FS);
   const uTraceWidth = gl.getUniformLocation(traceProg, 'uWidth');
@@ -98,6 +101,7 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
   const uTraceDbMax = gl.getUniformLocation(traceProg, 'uDbMax');
   const uTraceOffsetPx = gl.getUniformLocation(traceProg, 'uOffsetPx');
   const uTraceColor = gl.getUniformLocation(traceProg, 'uColor');
+  const uTracePopIntensity = gl.getUniformLocation(traceProg, 'uPopIntensity');
 
   const fillProg = buildProgram(gl, PAN_FILL_VS, PAN_FILL_FS);
   const uFillWidth = gl.getUniformLocation(fillProg, 'uWidth');
@@ -107,6 +111,7 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
   const uFillColor = gl.getUniformLocation(fillProg, 'uColor');
   const uFillAlphaTop = gl.getUniformLocation(fillProg, 'uFillAlphaTop');
   const uFillPan = gl.getUniformLocation(fillProg, 'uPan');
+  const uFillPopIntensity = gl.getUniformLocation(fillProg, 'uPopIntensity');
 
   // Trace VBO: one float per bin, rendered as LINE_STRIP for the sharp
   // top edge. Fill reuses the same data via a 1-row R32F texture sampled
@@ -210,6 +215,7 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
       gl.uniform1f(uFillOffsetPx, offsetPx);
       gl.uniform3f(uFillColor, traceR, traceG, traceB);
       gl.uniform1f(uFillAlphaTop, FILL_ALPHA_TOP);
+      gl.uniform1f(uFillPopIntensity, popIntensity);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, panDb.length * 2);
 
       // Sharp trace line on top.
@@ -231,6 +237,7 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
       gl.uniform1f(uTraceDbMax, dbMax);
       gl.uniform1f(uTraceOffsetPx, offsetPx);
       gl.uniform3f(uTraceColor, traceR, traceG, traceB);
+      gl.uniform1f(uTracePopIntensity, popIntensity);
       gl.drawArrays(gl.LINE_STRIP, 0, panDb.length);
 
       gl.useProgram(cursorProg);
@@ -244,6 +251,9 @@ export function createPanRenderer(gl: WebGL2RenderingContext): PanRenderer {
       traceR = r;
       traceG = g;
       traceB = b;
+    },
+    setPopMode(active, intensity = active ? 1 : 0) {
+      popIntensity = Math.max(0, Math.min(1, intensity));
     },
     dispose() {
       gl.deleteBuffer(traceVbo);
