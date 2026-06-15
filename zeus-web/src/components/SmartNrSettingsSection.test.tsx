@@ -68,6 +68,11 @@ describe('SmartNrSettingsSection', () => {
       atUtc: '2026-06-14T00:00:00.000Z',
       profile: 'NR4',
       reason: 'Weak narrow-signal profile',
+      heldByRxChain: true,
+      rxChainLabel: 'ADC overload risk',
+      rxChainRecommendation: 'Add 3-6 dB attenuation',
+      rxChainTone: 'protect',
+      rxChainScore: 32,
       maxSnrDb: 14,
       occupancyPct: 3,
       coherentOccupancyPct: 1.5,
@@ -90,6 +95,8 @@ describe('SmartNrSettingsSection', () => {
     expect(container.textContent).toContain('COH 1.5%');
     expect(container.textContent).toContain('CPK 1');
     expect(container.textContent).toContain('IMP 0.0%');
+    expect(container.textContent).toContain('RX HOLD');
+    expect(container.textContent).toContain('ADC overload risk: Add 3-6 dB attenuation');
 
     act(() => {
       apply!.click();

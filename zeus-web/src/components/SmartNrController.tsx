@@ -20,8 +20,10 @@ import {
   smartNrProfileKey,
   type SmartNrRecommendation,
 } from '../dsp/smart-nr';
+import { analyzeRxChain, type RxChainAnalysis } from '../dsp/rx-chain-health';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
+import { useRxMetersStore } from '../state/rx-meters-store';
 import { useSmartNrStore } from '../state/smart-nr-store';
 import { useTxStore } from '../state/tx-store';
 
@@ -35,6 +37,10 @@ function round1(v: number): number {
 
 function sameNr(a: NrConfigDto, b: NrConfigDto): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+function shouldHoldForRxChain(rx: RxChainAnalysis): boolean {
+  return rx.state === 'overload' || rx.state === 'underfilled' || rx.actionTone === 'protect';
 }
 
 export function SmartNrController() {
@@ -60,12 +66,25 @@ export function SmartNrController() {
       }
     };
 
-    const setStatus = (rec: SmartNrRecommendation, shaped: NrConfigDto, pending: boolean, applied: boolean) => {
+    const setStatus = (
+      rec: SmartNrRecommendation,
+      shaped: NrConfigDto,
+      pending: boolean,
+      applied: boolean,
+      rx: RxChainAnalysis | null = null,
+      heldByRxChain = false,
+    ) => {
       const c = rec.condition;
+      const rxStatus = rx !== null && rx.state !== 'waiting' ? rx : null;
       useSmartNrStore.getState().setStatus({
         atUtc: new Date().toISOString(),
         profile: labelSmartNrProfile(shaped),
         reason: rec.reason,
+        heldByRxChain,
+        rxChainLabel: rxStatus?.label,
+        rxChainRecommendation: rxStatus?.recommendation,
+        rxChainTone: rxStatus?.actionTone,
+        rxChainScore: rxStatus?.score,
         maxSnrDb: round1(c.maxSnrDb),
         occupancyPct: round1(c.occupancy6 * 100),
         coherentOccupancyPct: round1(c.coherentOccupancy6 * 100),
@@ -121,33 +140,50 @@ export function SmartNrController() {
       if (!rec) return;
 
       const shaped = shapeSmartNrRecommendation(rec, settings);
+      const rxMeters = useRxMetersStore.getState();
+      const rx = analyzeRxChain({
+        signalPk: rxMeters.signalPk,
+        signalAv: rxMeters.signalAv,
+        adcPk: rxMeters.adcPk,
+        adcAv: rxMeters.adcAv,
+        agcGain: rxMeters.agcGain,
+        agcEnvPk: rxMeters.agcEnvPk,
+        agcEnvAv: rxMeters.agcEnvAv,
+        fallbackDbm: tx.rxDbm,
+      });
+      const heldByRxChain = shouldHoldForRxChain(rx);
       if (settings.automationMode === 'suggest') {
-        setStatus(rec, shaped, false, false);
+        setStatus(rec, shaped, false, false, rx, heldByRxChain);
+        resetPending();
+        return;
+      }
+      if (heldByRxChain) {
+        setStatus(rec, shaped, false, false, rx, true);
         resetPending();
         return;
       }
       if (sameNr(conn.nr, shaped)) {
-        setStatus(rec, shaped, false, false);
+        setStatus(rec, shaped, false, false, rx);
         resetPending();
         return;
       }
       const targetProfileKey = smartNrProfileKey(shaped);
       const currentProfileKey = smartNrProfileKey(conn.nr);
       if (targetProfileKey === currentProfileKey) {
-        setStatus(rec, shaped, false, false);
+        setStatus(rec, shaped, false, false, rx);
         resetPending();
         return;
       }
       if (pendingProfileKey !== targetProfileKey) {
         pendingProfileKey = targetProfileKey;
         pendingCount = 1;
-        setStatus(rec, shaped, true, false);
+        setStatus(rec, shaped, true, false, rx);
         return;
       }
       pendingCount++;
       const requiredDwell = Math.max(settings.dwellSamples, PROFILE_SWITCH_DWELL_SAMPLES);
       const ready = pendingCount >= requiredDwell && now - lastAppliedAt >= APPLY_COOLDOWN_MS;
-      setStatus(rec, shaped, !ready, ready);
+      setStatus(rec, shaped, !ready, ready, rx);
       if (ready) {
         lastAppliedAt = now;
         applyNr(shaped);

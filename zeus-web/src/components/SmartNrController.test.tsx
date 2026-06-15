@@ -25,6 +25,7 @@ import {
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
+import { useRxMetersStore } from '../state/rx-meters-store';
 import { useSmartNrStore } from '../state/smart-nr-store';
 import { useTxStore } from '../state/tx-store';
 import { SmartNrController } from './SmartNrController';
@@ -40,6 +41,18 @@ function denseSsbNoise(): Float32Array {
 
 function quietNoise(): Float32Array {
   return new Float32Array(WIDTH).fill(NOISE_DB);
+}
+
+function resetRxMeters() {
+  useRxMetersStore.setState({
+    signalPk: -Infinity,
+    signalAv: -Infinity,
+    adcPk: -Infinity,
+    adcAv: -Infinity,
+    agcGain: 0,
+    agcEnvPk: -Infinity,
+    agcEnvAv: -Infinity,
+  });
 }
 
 function mockState(nr: NrConfigDto): RadioStateDto {
@@ -122,7 +135,9 @@ describe('SmartNrController', () => {
     useTxStore.setState({
       moxOn: false,
       tunOn: false,
+      rxDbm: -160,
     });
+    resetRxMeters();
     useDisplayStore.setState({
       panDb: null,
       panValid: false,
@@ -151,6 +166,7 @@ describe('SmartNrController', () => {
       panValid: false,
       lastSeq: 0,
     });
+    resetRxMeters();
     vi.useRealTimers();
   });
 
@@ -184,5 +200,24 @@ describe('SmartNrController', () => {
     for (let i = 0; i < 6; i++) feed(quietNoise());
 
     expect(setNrMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds auto NR when the RX chain needs headroom first', () => {
+    useRxMetersStore.setState({
+      signalPk: -61,
+      signalAv: -64,
+      adcPk: -1.5,
+      adcAv: -12,
+      agcGain: -8,
+      agcEnvPk: -62,
+      agcEnvAv: -65,
+    });
+
+    for (let i = 0; i < 8; i++) feed(denseSsbNoise());
+
+    expect(setNrMock).not.toHaveBeenCalled();
+    expect(useSmartNrStore.getState().status?.heldByRxChain).toBe(true);
+    expect(useSmartNrStore.getState().status?.rxChainLabel).toBe('ADC overload risk');
+    expect(useSmartNrStore.getState().status?.rxChainRecommendation).toBe('Add 3-6 dB attenuation');
   });
 });

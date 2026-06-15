@@ -153,6 +153,14 @@ export function SmartNrSettingsSection() {
           <span className="mono">
             COH {status.coherentOccupancyPct.toFixed(1)}% · CPK {status.coherentPeakCount} · IMP {status.impulsivePct.toFixed(1)}%
           </span>
+          {status.rxChainLabel && status.rxChainRecommendation && (
+            <span
+              className={`smart-nr-rx-advice ${status.rxChainTone === 'protect' ? 'protect' : status.rxChainTone === 'optimize' ? 'optimize' : ''}`}
+            >
+              <span className="mono">RX {status.heldByRxChain ? 'HOLD' : status.rxChainScore ?? '--'}</span>
+              <span>{status.rxChainLabel}: {status.rxChainRecommendation}</span>
+            </span>
+          )}
           {automationMode === 'suggest' && status.nr && !status.pending && !status.applied && (
             <button
               type="button"
