@@ -1589,9 +1589,12 @@ public static class ZeusEndpoints
             return Results.Ok(scene.Snapshot());
         });
 
-        app.MapGet("/api/dsp/nr-condition", (FrontendDspSceneDiagnosticsService scene, DspPipelineService dsp) =>
+        app.MapGet("/api/dsp/nr-condition", (FrontendDspSceneDiagnosticsService scene, DspPipelineService dsp, RadioService radio) =>
         {
-            return Results.Ok(scene.SmartNrCondition(dsp.SnapshotNrRuntime()));
+            var state = radio.Snapshot();
+            return Results.Ok(scene.SmartNrCondition(
+                dsp.SnapshotNrRuntime(),
+                BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus())));
         });
 
         app.MapGet("/api/tx/external-ptt", (ExternalPttService externalPtt) =>
@@ -2350,6 +2353,38 @@ public static class ZeusEndpoints
     }
 
     static bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
+
+    internal static SmartNrRxChainRuntimeDto BuildSmartNrRxChainRuntime(StateDto state, AdcProtectionStatusDto adc)
+    {
+        var agc = state.Agc ?? new AgcConfig();
+        var squelch = state.Squelch ?? new SquelchConfig();
+
+        return new(
+            SchemaVersion: 1,
+            Source: "backend-radio-state",
+            AutoAgcEnabled: state.AutoAgcEnabled,
+            AgcMode: agc.Mode.ToString(),
+            AgcTopDb: Math.Round(state.AgcTopDb, 1),
+            AgcOffsetDb: Math.Round(state.AgcOffsetDb, 1),
+            EffectiveAgcTopDb: Math.Round(state.AgcTopDb + state.AgcOffsetDb, 1),
+            AutoAttEnabled: state.AutoAttEnabled,
+            AdcProtectionEnabled: adc.Config.Enabled,
+            AttenDb: adc.AttenDb,
+            AttOffsetDb: adc.OffsetDb,
+            EffectiveAttenDb: adc.EffectiveDb,
+            AdcOverloadWarning: adc.Warning,
+            AdcOverloadLevel: adc.OverloadLevel,
+            LastOverloadBits: adc.LastOverloadBits,
+            Adc0MaxMagnitude: adc.Adc0MaxMagnitude,
+            Adc1MaxMagnitude: adc.Adc1MaxMagnitude,
+            Adc0MaxMagnitudeAtOverload: adc.Adc0MaxMagnitudeAtOverload,
+            Adc1MaxMagnitudeAtOverload: adc.Adc1MaxMagnitudeAtOverload,
+            LastAdcTelemetryUtc: adc.LastTelemetryUtc,
+            SquelchEnabled: squelch.Enabled,
+            SquelchAdaptive: squelch.Adaptive,
+            SquelchLevel: squelch.Level,
+            PreampOn: state.PreampOn);
+    }
 
     internal static object BuildTxStageDiagnostics(TxStageMeters stage, bool hostTxActive)
     {

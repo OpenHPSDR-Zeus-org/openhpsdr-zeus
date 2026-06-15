@@ -11,11 +11,64 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Zeus.Contracts;
 
 namespace Zeus.Server.Tests;
 
 public sealed class SmartNrConditionEndpointTests
 {
+    [Fact]
+    public void BuildSmartNrRxChainRuntime_ExposesAgcAttenuationAndAdcState()
+    {
+        var state = new StateDto(
+            Status: ConnectionStatus.Connected,
+            Endpoint: "192.0.2.10:1024",
+            VfoHz: 7_262_000,
+            Mode: RxMode.LSB,
+            FilterLowHz: -3500,
+            FilterHighHz: -100,
+            SampleRate: 384_000,
+            AgcTopDb: 83,
+            Agc: new AgcConfig(Mode: AgcMode.Fast),
+            Squelch: new SquelchConfig(Enabled: true, Level: 18, Adaptive: true),
+            AttenDb: 1,
+            AutoAttEnabled: true,
+            AttOffsetDb: 2,
+            AdcOverloadWarning: true,
+            AutoAgcEnabled: true,
+            AgcOffsetDb: -31,
+            PreampOn: true);
+        var adc = new AdcProtectionStatusDto(
+            Config: new AdcProtectionConfig(Enabled: true),
+            AttenDb: 1,
+            OffsetDb: 2,
+            EffectiveDb: 3,
+            Warning: true,
+            OverloadLevel: 4,
+            LastOverloadBits: 0x03,
+            Adc0MaxMagnitude: 44_000,
+            Adc1MaxMagnitude: null,
+            Adc0MaxMagnitudeAtOverload: 50_000,
+            Adc1MaxMagnitudeAtOverload: 0,
+            LastTelemetryUtc: DateTimeOffset.UtcNow);
+
+        var runtime = ZeusEndpoints.BuildSmartNrRxChainRuntime(state, adc);
+
+        Assert.Equal("backend-radio-state", runtime.Source);
+        Assert.True(runtime.AutoAgcEnabled);
+        Assert.Equal("Fast", runtime.AgcMode);
+        Assert.Equal(52, runtime.EffectiveAgcTopDb);
+        Assert.True(runtime.AutoAttEnabled);
+        Assert.Equal(3, runtime.EffectiveAttenDb);
+        Assert.True(runtime.AdcOverloadWarning);
+        Assert.Equal(4, runtime.AdcOverloadLevel);
+        Assert.Equal((ushort)44_000, runtime.Adc0MaxMagnitude);
+        Assert.Null(runtime.Adc1MaxMagnitude);
+        Assert.True(runtime.SquelchEnabled);
+        Assert.Equal(18, runtime.SquelchLevel);
+        Assert.True(runtime.PreampOn);
+    }
+
     [Fact]
     public async Task GetBeforeFrontendScene_ReturnsMissingConditionWithNrRuntime()
     {
@@ -32,11 +85,16 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Equal("missing", root.GetProperty("status").GetString());
         Assert.False(root.GetProperty("fresh").GetBoolean());
         Assert.False(root.GetProperty("stale").GetBoolean());
-        Assert.Equal("Off", root.GetProperty("requestedNrMode").GetString());
-        Assert.Equal("Off", root.GetProperty("effectiveNrMode").GetString());
+        Assert.Contains(root.GetProperty("requestedNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Sbnr" });
+        Assert.Contains(root.GetProperty("effectiveNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Sbnr" });
         Assert.Contains(
             root.GetProperty("nr4Readiness").GetString(),
             new[] { "available", "missing-sbnr-exports", "wdsp-native-unloadable" });
+        var rxChain = root.GetProperty("rxChain");
+        Assert.Equal("backend-radio-state", rxChain.GetProperty("source").GetString());
+        Assert.True(double.IsFinite(rxChain.GetProperty("agcTopDb").GetDouble()));
+        Assert.True(double.IsFinite(rxChain.GetProperty("effectiveAgcTopDb").GetDouble()));
+        Assert.True(rxChain.GetProperty("autoAttEnabled").GetBoolean());
         Assert.Contains("No frontend DSP scene", root.GetProperty("diagnosticRecommendation").GetString());
     }
 
@@ -95,7 +153,12 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Equal(6.8, root.GetProperty("coherentMaxSnrDb").GetDouble());
         Assert.Equal(1, root.GetProperty("peakCount").GetInt32());
         Assert.True(root.GetProperty("coherentSubthresholdSignal").GetBoolean());
-        Assert.Equal("Off", root.GetProperty("effectiveNrMode").GetString());
+        Assert.Contains(root.GetProperty("effectiveNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Sbnr" });
+        var rxChain = root.GetProperty("rxChain");
+        Assert.Equal("backend-radio-state", rxChain.GetProperty("source").GetString());
+        Assert.Contains(rxChain.GetProperty("agcMode").GetString(), new[] { "Fixed", "Long", "Slow", "Med", "Fast", "Custom" });
+        Assert.True(rxChain.GetProperty("adcProtectionEnabled").GetBoolean());
+        Assert.Contains(rxChain.GetProperty("squelchEnabled").ValueKind, new[] { JsonValueKind.True, JsonValueKind.False });
         Assert.Contains("constrained by RX-chain health", root.GetProperty("diagnosticRecommendation").GetString());
     }
 

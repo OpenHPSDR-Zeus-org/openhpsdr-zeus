@@ -13,6 +13,7 @@ import {
   fetchRadioNetworkProfile,
   fetchRadioSupplyAlarms,
   fetchRadios,
+  fetchSmartNrCondition,
   fetchTxDiagnostics,
   fetchUserIoActions,
   fetchUserIoLabels,
@@ -30,6 +31,7 @@ import {
   type RadioNetworkProfileDto,
   type RadioInfoDto,
   type RadioSupplyAlarmsDto,
+  type SmartNrConditionDto,
   type RadioSupplyReadingDto,
   type TxDiagnosticsDto,
   type UserIoActionsDto,
@@ -1297,6 +1299,7 @@ export function HardwareDiagnosticsPanel() {
   const [supplyAlarms, setSupplyAlarms] = useState<RadioSupplyAlarmsDto | null>(null);
   const [networkProfile, setNetworkProfile] = useState<RadioNetworkProfileDto | null>(null);
   const [txDiagnostics, setTxDiagnostics] = useState<TxDiagnosticsDto | null>(null);
+  const [smartNrCondition, setSmartNrCondition] = useState<SmartNrConditionDto | null>(null);
   const [userIoLabels, setUserIoLabels] = useState<UserIoLabelsDto | null>(null);
   const [userIoActions, setUserIoActions] = useState<UserIoActionsDto | null>(null);
   const [digInDiagnostics, setDigInDiagnostics] = useState<RadioDigInDiagnosticsDto | null>(null);
@@ -1344,12 +1347,13 @@ export function HardwareDiagnosticsPanel() {
   const loadEndpointDiagnostics = useCallback(async (signal?: AbortSignal) => {
     setEndpointBusy(true);
     try {
-      const [nextKeying, nextSupply, nextNetwork, nextTx, nextLabels, nextActions, nextDigIn] =
+      const [nextKeying, nextSupply, nextNetwork, nextTx, nextSmartNr, nextLabels, nextActions, nextDigIn] =
         await Promise.allSettled([
           fetchHardwareKeyingStatus(signal),
           fetchRadioSupplyAlarms(signal),
           fetchRadioNetworkProfile(signal),
           fetchTxDiagnostics(signal),
+          fetchSmartNrCondition(signal),
           fetchUserIoLabels(signal),
           fetchUserIoActions(signal),
           fetchRadioDigInDiagnostics(signal),
@@ -1359,11 +1363,12 @@ export function HardwareDiagnosticsPanel() {
       if (nextSupply.status === 'fulfilled') setSupplyAlarms(nextSupply.value);
       if (nextNetwork.status === 'fulfilled') setNetworkProfile(nextNetwork.value);
       if (nextTx.status === 'fulfilled') setTxDiagnostics(nextTx.value);
+      if (nextSmartNr.status === 'fulfilled') setSmartNrCondition(nextSmartNr.value);
       if (nextLabels.status === 'fulfilled') setUserIoLabels(nextLabels.value);
       if (nextActions.status === 'fulfilled') setUserIoActions(nextActions.value);
       if (nextDigIn.status === 'fulfilled') setDigInDiagnostics(nextDigIn.value);
 
-      const failures = [nextKeying, nextSupply, nextNetwork, nextTx, nextLabels, nextActions, nextDigIn]
+      const failures = [nextKeying, nextSupply, nextNetwork, nextTx, nextSmartNr, nextLabels, nextActions, nextDigIn]
         .filter(
           (result): result is PromiseRejectedResult =>
             result.status === 'rejected' &&
@@ -1530,6 +1535,37 @@ export function HardwareDiagnosticsPanel() {
     { label: 'Source Updated', value: time(scene?.sourceAtUtc) },
     { label: 'Updated', value: time(scene?.atUtc) },
   ];
+  const nrCondition = smartNrCondition;
+  const rxChain = nrCondition?.rxChain;
+  const rxChainFields: Field[] = [
+    { label: 'NR Condition', value: nrCondition?.status },
+    { label: 'NR Profile', value: nrCondition?.profile },
+    { label: 'NR Runtime', value: nrCondition ? `${nrCondition.requestedNrMode} -> ${nrCondition.effectiveNrMode}` : null },
+    { label: 'RX Source', value: rxChain?.source },
+    { label: 'Auto AGC', value: boolLabel(rxChain?.autoAgcEnabled) },
+    { label: 'AGC Mode', value: rxChain?.agcMode },
+    { label: 'AGC Top', value: db(rxChain?.agcTopDb) },
+    { label: 'AGC Offset', value: db(rxChain?.agcOffsetDb) },
+    { label: 'AGC Effective', value: db(rxChain?.effectiveAgcTopDb) },
+    { label: 'Auto ATT', value: boolLabel(rxChain?.autoAttEnabled) },
+    { label: 'ADC Protect', value: boolLabel(rxChain?.adcProtectionEnabled) },
+    { label: 'ATT Base', value: db(rxChain?.attenDb) },
+    { label: 'ATT Offset', value: db(rxChain?.attOffsetDb) },
+    { label: 'ATT Effective', value: db(rxChain?.effectiveAttenDb) },
+    { label: 'ADC Warning', value: boolLabel(rxChain?.adcOverloadWarning) },
+    { label: 'Overload Level', value: rxChain?.adcOverloadLevel },
+    { label: 'Overload Bits', value: hex(rxChain?.lastOverloadBits, 2) },
+    { label: 'ADC0 Max', value: adc(rxChain?.adc0MaxMagnitude) },
+    { label: 'ADC1 Max', value: adc(rxChain?.adc1MaxMagnitude) },
+    { label: 'ADC0 Trip', value: adc(rxChain?.adc0MaxMagnitudeAtOverload) },
+    { label: 'ADC1 Trip', value: adc(rxChain?.adc1MaxMagnitudeAtOverload) },
+    { label: 'ADC Updated', value: time(rxChain?.lastAdcTelemetryUtc) },
+    { label: 'Squelch', value: boolLabel(rxChain?.squelchEnabled) },
+    { label: 'Squelch Mode', value: rxChain ? (rxChain.squelchAdaptive ? 'Adaptive' : 'Fixed') : null },
+    { label: 'Squelch Level', value: rxChain?.squelchLevel },
+    { label: 'Preamp', value: boolLabel(rxChain?.preampOn) },
+    { label: 'NR Generated', value: time(nrCondition?.generatedUtc) },
+  ];
 
   const p1 = diag?.p1;
   const p1Fields: Field[] = [
@@ -1647,6 +1683,10 @@ export function HardwareDiagnosticsPanel() {
           <span className="ps-card-hint">frontend Signal Intelligence and Smart NR evidence</span>
         </h4>
         <FieldGrid fields={sceneFields} />
+        <div style={{ marginTop: 10 }}>
+          <FieldGrid fields={rxChainFields} />
+        </div>
+        <DiagnosticRecommendation text={nrCondition?.diagnosticRecommendation} />
       </div>
 
       <div className="ps-card">
