@@ -1479,6 +1479,7 @@ export function HardwareDiagnosticsPanel() {
   ];
 
   const dsp = diag?.dsp;
+  const display = dsp?.display;
   const dspFields: Field[] = [
     { label: 'Engine', value: dsp?.engineKind },
     { label: 'Runtime', value: dsp?.engine },
@@ -1503,6 +1504,35 @@ export function HardwareDiagnosticsPanel() {
     { label: 'Audio Sinks', value: dsp?.audioSinkCount },
     { label: 'Monitor Backlog', value: dsp?.monitorBacklogSamples },
     { label: 'Wisdom Status', value: dsp?.wdspWisdomStatus },
+  ];
+  const displayFields: Field[] = [
+    { label: 'Display Status', value: display?.status },
+    { label: 'Clients', value: display?.clientCount },
+    { label: 'Frames', value: display?.framesBroadcast },
+    { label: 'Last Seq', value: display?.lastSeq },
+    { label: 'Frame Age', value: age(display?.lastFrameAgeMs) },
+    { label: 'Keyed', value: boolLabel(display?.keyed) },
+    { label: 'PS Monitor', value: boolLabel(display?.psMonitorRequested) },
+    { label: 'PS Feedback', value: boolLabel(display?.psFeedbackCorrecting) },
+    { label: 'Width', value: display?.width },
+    { label: 'Center', value: hz(display?.centerHz) },
+    { label: 'Hz / Pixel', value: display?.hzPerPixel },
+    { label: 'Pan Valid', value: boolLabel(display?.panValid) },
+    { label: 'Pan Source', value: display?.panSource },
+    { label: 'Pan Age', value: age(display?.pan.ageMs) },
+    { label: 'Pan Bins', value: display?.pan.validBins },
+    { label: 'Pan Min', value: db(display?.pan.minDb) },
+    { label: 'Pan Max', value: db(display?.pan.maxDb) },
+    { label: 'Pan Mean', value: db(display?.pan.meanDb) },
+    { label: 'Pan Range', value: db(display?.pan.dynamicRangeDb) },
+    { label: 'WF Valid', value: boolLabel(display?.waterfallValid) },
+    { label: 'WF Source', value: display?.waterfallSource },
+    { label: 'WF Age', value: age(display?.waterfall.ageMs) },
+    { label: 'WF Bins', value: display?.waterfall.validBins },
+    { label: 'WF Min', value: db(display?.waterfall.minDb) },
+    { label: 'WF Max', value: db(display?.waterfall.maxDb) },
+    { label: 'WF Mean', value: db(display?.waterfall.meanDb) },
+    { label: 'WF Range', value: db(display?.waterfall.dynamicRangeDb) },
   ];
 
   const scene = diag?.frontendDspScene;
@@ -1675,6 +1705,10 @@ export function HardwareDiagnosticsPanel() {
           <span className="ps-card-hint">engine, timing, TX path, WDSP readiness</span>
         </h4>
         <FieldGrid fields={dspFields} />
+        <div style={{ marginTop: 10 }}>
+          <FieldGrid fields={displayFields} />
+        </div>
+        <DiagnosticRecommendation text={display?.diagnosticRecommendation} />
       </div>
 
       <div className="ps-card">

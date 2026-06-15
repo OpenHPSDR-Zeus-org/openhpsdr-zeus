@@ -479,6 +479,39 @@ export type HardwareFeatureSurfaceDto = {
   notes: string;
 };
 
+export type HardwareDisplayBufferDiagnosticsDto = {
+  valid: boolean;
+  ageMs: number | null;
+  validBins: number;
+  minDb: number | null;
+  maxDb: number | null;
+  meanDb: number | null;
+  dynamicRangeDb: number | null;
+};
+
+export type HardwareDisplayDiagnosticsDto = {
+  schemaVersion: number;
+  status: string;
+  clientCount: number;
+  framesBroadcast: number;
+  lastSeq: number;
+  lastFrameAgeMs: number | null;
+  lastFrameUnixMs: number | null;
+  panValid: boolean;
+  waterfallValid: boolean;
+  panSource: string;
+  waterfallSource: string;
+  keyed: boolean;
+  psMonitorRequested: boolean;
+  psFeedbackCorrecting: boolean;
+  width: number;
+  centerHz: number | null;
+  hzPerPixel: number | null;
+  pan: HardwareDisplayBufferDiagnosticsDto;
+  waterfall: HardwareDisplayBufferDiagnosticsDto;
+  diagnosticRecommendation: string | null;
+};
+
 export type HardwareDspDiagnosticsDto = {
   schemaVersion: number;
   engine: string;
@@ -502,6 +535,7 @@ export type HardwareDspDiagnosticsDto = {
   rxSinkAttached: boolean;
   audioSinkCount: number;
   monitorBacklogSamples: number;
+  display: HardwareDisplayDiagnosticsDto;
   wdspWisdomPhase: string;
   wdspWisdomStatus: string;
   readiness: string;
@@ -1773,9 +1807,49 @@ function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
     rxSinkAttached: Boolean(r.rxSinkAttached),
     audioSinkCount: diagNumber(r.audioSinkCount) ?? 0,
     monitorBacklogSamples: diagNumber(r.monitorBacklogSamples) ?? 0,
+    display: normalizeHardwareDisplayDiagnostics(r.display),
     wdspWisdomPhase: diagString(r.wdspWisdomPhase) ?? 'Unknown',
     wdspWisdomStatus: diagString(r.wdspWisdomStatus) ?? '',
     readiness: diagString(r.readiness) ?? 'unknown',
+  };
+}
+
+function normalizeHardwareDisplayBufferDiagnostics(raw: unknown): HardwareDisplayBufferDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  return {
+    valid: Boolean(r.valid),
+    ageMs: diagNumber(r.ageMs),
+    validBins: diagNumber(r.validBins) ?? 0,
+    minDb: diagNumber(r.minDb),
+    maxDb: diagNumber(r.maxDb),
+    meanDb: diagNumber(r.meanDb),
+    dynamicRangeDb: diagNumber(r.dynamicRangeDb),
+  };
+}
+
+function normalizeHardwareDisplayDiagnostics(raw: unknown): HardwareDisplayDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    status: diagString(r.status) ?? 'unknown',
+    clientCount: diagNumber(r.clientCount) ?? 0,
+    framesBroadcast: diagNumber(r.framesBroadcast) ?? 0,
+    lastSeq: diagNumber(r.lastSeq) ?? 0,
+    lastFrameAgeMs: diagNumber(r.lastFrameAgeMs),
+    lastFrameUnixMs: diagNumber(r.lastFrameUnixMs),
+    panValid: Boolean(r.panValid),
+    waterfallValid: Boolean(r.waterfallValid),
+    panSource: diagString(r.panSource) ?? 'none',
+    waterfallSource: diagString(r.waterfallSource) ?? 'none',
+    keyed: Boolean(r.keyed),
+    psMonitorRequested: Boolean(r.psMonitorRequested),
+    psFeedbackCorrecting: Boolean(r.psFeedbackCorrecting),
+    width: diagNumber(r.width) ?? 0,
+    centerHz: diagNumber(r.centerHz),
+    hzPerPixel: diagNumber(r.hzPerPixel),
+    pan: normalizeHardwareDisplayBufferDiagnostics(r.pan),
+    waterfall: normalizeHardwareDisplayBufferDiagnostics(r.waterfall),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
   };
 }
 

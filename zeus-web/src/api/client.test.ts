@@ -559,6 +559,44 @@ describe('POST helpers', () => {
           rxSinkAttached: true,
           audioSinkCount: 1,
           monitorBacklogSamples: 0,
+          display: {
+            schemaVersion: 1,
+            status: 'fresh',
+            clientCount: 1,
+            framesBroadcast: 42,
+            lastSeq: 42,
+            lastFrameAgeMs: 35,
+            lastFrameUnixMs: 1781539200000,
+            panValid: true,
+            waterfallValid: true,
+            panSource: 'rx',
+            waterfallSource: 'rx',
+            keyed: false,
+            psMonitorRequested: false,
+            psFeedbackCorrecting: false,
+            width: 2048,
+            centerHz: 7262000,
+            hzPerPixel: 187.5,
+            pan: {
+              valid: true,
+              ageMs: 35,
+              validBins: 2048,
+              minDb: -126.4,
+              maxDb: -71.2,
+              meanDb: -112.5,
+              dynamicRangeDb: 55.2,
+            },
+            waterfall: {
+              valid: true,
+              ageMs: 35,
+              validBins: 2048,
+              minDb: -128.2,
+              maxDb: -73.8,
+              meanDb: -113.1,
+              dynamicRangeDb: 54.4,
+            },
+            diagnosticRecommendation: 'Display analyzer frames are fresh.',
+          },
           wdspWisdomPhase: 'Ready',
           wdspWisdomStatus: '',
           readiness: 'wdsp-active',
@@ -673,6 +711,11 @@ describe('POST helpers', () => {
     expect(diag.dsp.nr4Readiness).toBe('missing-sbnr-exports');
     expect(diag.dsp.requestedNrMode).toBe('Sbnr');
     expect(diag.dsp.effectiveNrMode).toBe('Off');
+    expect(diag.dsp.display.status).toBe('fresh');
+    expect(diag.dsp.display.panSource).toBe('rx');
+    expect(diag.dsp.display.waterfallSource).toBe('rx');
+    expect(diag.dsp.display.pan.maxDb).toBe(-71.2);
+    expect(diag.dsp.display.waterfall.dynamicRangeDb).toBe(54.4);
     expect(diag.frontendDspScene.available).toBe(true);
     expect(diag.frontendDspScene.status).toBe('fresh');
     expect(diag.frontendDspScene.fresh).toBe(true);

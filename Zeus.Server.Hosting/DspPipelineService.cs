@@ -691,6 +691,20 @@ public class DspPipelineService : BackgroundService,
     private long _calPanCenterHz;
     private long _calPanSnapshotMs;
     private readonly object _calPanLock = new();
+    private readonly float[] _diagWfSnapshot = new float[Width];
+    private long _diagWfSnapshotMs;
+    private long _diagDisplayFrameMs;
+    private uint _diagDisplaySeq;
+    private long _diagDisplayFrameCount;
+    private bool _diagLastPanValid;
+    private bool _diagLastWfValid;
+    private string _diagLastPanSource = "none";
+    private string _diagLastWfSource = "none";
+    private bool _diagLastKeyed;
+    private bool _diagLastPsMonitorRequested;
+    private bool _diagLastPsFeedbackCorrecting;
+    private const long DisplayFreshMs = 2_000;
+    private const long DisplayAgingMs = 5_000;
 
     // CW sidetone source mixed into the RX audio bus while a CW keying
     // path (CwEngine macros / cw_msg / raw-key, or ExternalPttService
@@ -850,6 +864,7 @@ public class DspPipelineService : BackgroundService,
             rxSinkAttached = _rxSinkAttached,
             audioSinkCount = _audioSinks.Length,
             monitorBacklogSamples = MonitorBacklog,
+            display = SnapshotDisplayDiagnostics(engine),
             wdspWisdomPhase = wisdom.Phase.ToString(),
             wdspWisdomStatus = wisdom.Status,
             readiness = wdspActive
@@ -857,6 +872,111 @@ public class DspPipelineService : BackgroundService,
                 : synthetic
                     ? "synthetic-idle-or-fallback"
                     : "no-engine",
+        };
+    }
+
+    private object SnapshotDisplayDiagnostics(IDspEngine? engine)
+    {
+        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        int clients = _hub.ClientCount;
+
+        lock (_calPanLock)
+        {
+            long? frameAgeMs = _diagDisplayFrameMs > 0 ? Math.Max(0, nowMs - _diagDisplayFrameMs) : null;
+            long? panAgeMs = _calPanSnapshotMs > 0 ? Math.Max(0, nowMs - _calPanSnapshotMs) : null;
+            long? wfAgeMs = _diagWfSnapshotMs > 0 ? Math.Max(0, nowMs - _diagWfSnapshotMs) : null;
+            string status = DisplayHealthStatus(engine, clients, frameAgeMs, _diagLastPanValid, _diagLastWfValid);
+
+            return new
+            {
+                schemaVersion = 1,
+                status,
+                clientCount = clients,
+                framesBroadcast = _diagDisplayFrameCount,
+                lastSeq = _diagDisplaySeq,
+                lastFrameAgeMs = frameAgeMs,
+                lastFrameUnixMs = _diagDisplayFrameMs > 0 ? _diagDisplayFrameMs : (long?)null,
+                panValid = _diagLastPanValid,
+                waterfallValid = _diagLastWfValid,
+                panSource = _diagLastPanSource,
+                waterfallSource = _diagLastWfSource,
+                keyed = _diagLastKeyed,
+                psMonitorRequested = _diagLastPsMonitorRequested,
+                psFeedbackCorrecting = _diagLastPsFeedbackCorrecting,
+                width = Width,
+                centerHz = _calPanCenterHz == 0 ? (long?)null : _calPanCenterHz,
+                hzPerPixel = _calPanHzPerPixel > 0 ? Math.Round(_calPanHzPerPixel, 3) : (double?)null,
+                pan = BuildDisplayBufferDiagnostics(_diagLastPanValid, _calPanSnapshot, panAgeMs),
+                waterfall = BuildDisplayBufferDiagnostics(_diagLastWfValid, _diagWfSnapshot, wfAgeMs),
+                diagnosticRecommendation = DisplayDiagnosticRecommendation(status, clients, _diagLastPanValid, _diagLastWfValid, _diagLastPanSource, _diagLastWfSource),
+            };
+        }
+    }
+
+    private static string DisplayHealthStatus(
+        IDspEngine? engine,
+        int clientCount,
+        long? frameAgeMs,
+        bool panValid,
+        bool wfValid)
+    {
+        if (engine is null) return "no-engine";
+        if (engine is SyntheticDspEngine) return "synthetic-idle";
+        if (clientCount <= 0) return "idle-no-clients";
+        if (frameAgeMs is null) return "missing";
+        if (frameAgeMs <= DisplayFreshMs && (panValid || wfValid)) return "fresh";
+        if (frameAgeMs <= DisplayAgingMs) return "aging";
+        return "stale";
+    }
+
+    private static string DisplayDiagnosticRecommendation(
+        string status,
+        int clientCount,
+        bool panValid,
+        bool wfValid,
+        string panSource,
+        string wfSource) =>
+        status switch
+        {
+            "fresh" => $"Display analyzer frames are fresh; panadapter={panSource} valid={panValid}, waterfall={wfSource} valid={wfValid}.",
+            "aging" => "Display analyzer frames are aging; watch for UI disconnects, analyzer starvation, or a paused frontend display path.",
+            "stale" => "Display analyzer frames are stale; verify a Zeus client is connected and that the DSP pipeline is receiving IQ frames.",
+            "idle-no-clients" => "No realtime clients are attached to the streaming hub, so the server is skipping panadapter/waterfall frame generation to save DSP work.",
+            "synthetic-idle" => "The DSP engine is synthetic; connect a radio before judging panadapter or waterfall fidelity.",
+            "no-engine" => "No DSP engine is active; connect or restart the DSP pipeline before judging display telemetry.",
+            _ when clientCount > 0 && !panValid && !wfValid => "A realtime client is attached but no valid panadapter or waterfall frame has been captured yet; wait for the next analyzer tick or inspect WDSP readiness.",
+            _ => "Display analyzer telemetry is not ready yet.",
+        };
+
+    internal static object BuildDisplayBufferDiagnostics(bool valid, ReadOnlySpan<float> samples, long? ageMs)
+    {
+        int validBins = 0;
+        double sum = 0.0;
+        float min = float.PositiveInfinity;
+        float max = float.NegativeInfinity;
+
+        if (valid)
+        {
+            foreach (float sample in samples)
+            {
+                if (!float.IsFinite(sample)) continue;
+                validBins++;
+                sum += sample;
+                if (sample < min) min = sample;
+                if (sample > max) max = sample;
+            }
+        }
+
+        bool hasStats = valid && validBins > 0;
+        return new
+        {
+            valid,
+            ageMs,
+            validBins,
+            minDb = hasStats ? Math.Round(min, 1) : (double?)null,
+            maxDb = hasStats ? Math.Round(max, 1) : (double?)null,
+            meanDb = hasStats ? Math.Round(sum / validBins, 1) : (double?)null,
+            dynamicRangeDb = hasStats ? Math.Round(max - min, 1) : (double?)null,
         };
     }
 
@@ -2289,6 +2409,9 @@ public class DspPipelineService : BackgroundService,
         double nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         bool pan = false, wf = false;
         bool psFbPanUsed = false, psFbWfUsed = false;
+        bool psFeedbackCorrecting = false;
+        string panSource = "none";
+        string wfSource = "none";
         double rxAudioRmsForMeter = double.NaN;
         if (hasClients)
         {
@@ -2312,33 +2435,50 @@ public class DspPipelineService : BackgroundService,
             if (_keyed)
             {
                 if (_appliedPsEnabled && _psMonitorEnabled
-                    && engine.GetPsStageMeters().Correcting)
+                    && (psFeedbackCorrecting = engine.GetPsStageMeters().Correcting))
                 {
                     pan = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Panadapter, panBuf);
                     wf = engine.TryGetPsFeedbackDisplayPixels(DisplayPixout.Waterfall, wfBuf);
                     psFbPanUsed = pan;
                     psFbWfUsed = wf;
+                    if (pan) panSource = "ps-feedback";
+                    if (wf) wfSource = "ps-feedback";
                 }
-                if (!pan) pan = engine.TryGetTxDisplayPixels(DisplayPixout.Panadapter, panBuf);
-                if (!wf) wf = engine.TryGetTxDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+                if (!pan)
+                {
+                    pan = engine.TryGetTxDisplayPixels(DisplayPixout.Panadapter, panBuf);
+                    if (pan) panSource = "tx";
+                }
+                if (!wf)
+                {
+                    wf = engine.TryGetTxDisplayPixels(DisplayPixout.Waterfall, wfBuf);
+                    if (wf) wfSource = "tx";
+                }
             }
             if (_keyed && _psMonitorEnabled)
             {
                 _psMonitorTickCount++;
                 if (_psMonitorTickCount % 30 == 0)
                 {
-                    var m = engine.GetPsStageMeters();
                     _log.LogInformation(
                         "psMonitor.gate keyed=1 psEn={PsEn} mon=1 corr={Corr} psFbPan={Pan} psFbWf={Wf}",
-                        _appliedPsEnabled, m.Correcting, psFbPanUsed, psFbWfUsed);
+                        _appliedPsEnabled, psFeedbackCorrecting, psFbPanUsed, psFbWfUsed);
                 }
             }
             else
             {
                 _psMonitorTickCount = 0;
             }
-            if (!pan) pan = engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, panBuf);
-            if (!wf) wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
+            if (!pan)
+            {
+                pan = engine.TryGetDisplayPixels(channel, DisplayPixout.Panadapter, panBuf);
+                if (pan) panSource = "rx";
+            }
+            if (!wf)
+            {
+                wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
+                if (wf) wfSource = "rx";
+            }
 
             // Flip to display order (low freq left, high freq right). WDSP emits
             // pixel 0 = highest positive frequency — see doc 03 §10 and
@@ -2397,6 +2537,14 @@ public class DspPipelineService : BackgroundService,
                     _calPanSnapshotMs = (long)nowMs;
                 }
             }
+            if (wf)
+            {
+                lock (_calPanLock)
+                {
+                    Array.Copy(wfBuf, _diagWfSnapshot, Width);
+                    _diagWfSnapshotMs = (long)nowMs;
+                }
+            }
 
             var frame = new DisplayFrame(
                 Seq: ++_seq,
@@ -2412,6 +2560,20 @@ public class DspPipelineService : BackgroundService,
                 HzPerPixel: hzPerPixel,
                 PanDb: panBuf,
                 WfDb: wfBuf);
+
+            lock (_calPanLock)
+            {
+                _diagDisplayFrameMs = (long)nowMs;
+                _diagDisplaySeq = frame.Seq;
+                _diagDisplayFrameCount++;
+                _diagLastPanValid = pan;
+                _diagLastWfValid = wf;
+                _diagLastPanSource = panSource;
+                _diagLastWfSource = wfSource;
+                _diagLastKeyed = _keyed;
+                _diagLastPsMonitorRequested = _psMonitorEnabled;
+                _diagLastPsFeedbackCorrecting = psFeedbackCorrecting;
+            }
 
             _hub.Broadcast(frame);
         }

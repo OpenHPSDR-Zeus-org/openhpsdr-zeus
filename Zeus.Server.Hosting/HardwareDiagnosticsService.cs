@@ -1990,6 +1990,11 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             {
                 "dsp.engineKind",
                 "dsp.sampleRateHz",
+                "dsp.display.status",
+                "dsp.display.panSource",
+                "dsp.display.waterfallSource",
+                "dsp.display.pan.maxDb",
+                "dsp.display.waterfall.dynamicRangeDb",
                 "frontendDspScene.status",
                 "frontendDspScene.signalProfile",
                 "frontendDspScene.signalReason",

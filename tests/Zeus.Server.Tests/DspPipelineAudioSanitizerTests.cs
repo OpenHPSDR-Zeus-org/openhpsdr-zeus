@@ -2,6 +2,7 @@
 
 using Zeus.Server;
 using Zeus.Contracts;
+using System.Text.Json;
 
 namespace Zeus.Server.Tests;
 
@@ -59,6 +60,47 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.Equal(-200f, bins[3]);
         Assert.Equal(12.5f, bins[4]);
         Assert.Equal(-200f, bins[5]);
+    }
+
+    [Fact]
+    public void BuildDisplayBufferDiagnostics_ReportsFiniteDisplayStats()
+    {
+        float[] bins =
+        {
+            -120.25f,
+            -100.5f,
+            float.NaN,
+            -80f,
+            float.PositiveInfinity,
+        };
+
+        using var doc = JsonSerializer.SerializeToDocument(
+            DspPipelineService.BuildDisplayBufferDiagnostics(valid: true, bins, ageMs: 33));
+        var root = doc.RootElement;
+
+        Assert.True(root.GetProperty("valid").GetBoolean());
+        Assert.Equal(33, root.GetProperty("ageMs").GetInt64());
+        Assert.Equal(3, root.GetProperty("validBins").GetInt32());
+        Assert.Equal(-120.2, root.GetProperty("minDb").GetDouble());
+        Assert.Equal(-80.0, root.GetProperty("maxDb").GetDouble());
+        Assert.Equal(-100.2, root.GetProperty("meanDb").GetDouble());
+        Assert.Equal(40.2, root.GetProperty("dynamicRangeDb").GetDouble());
+    }
+
+    [Fact]
+    public void BuildDisplayBufferDiagnostics_SuppressesStatsWhenInvalid()
+    {
+        using var doc = JsonSerializer.SerializeToDocument(
+            DspPipelineService.BuildDisplayBufferDiagnostics(valid: false, new[] { -80f, -90f }, ageMs: null));
+        var root = doc.RootElement;
+
+        Assert.False(root.GetProperty("valid").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("ageMs").ValueKind);
+        Assert.Equal(0, root.GetProperty("validBins").GetInt32());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("minDb").ValueKind);
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("maxDb").ValueKind);
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("meanDb").ValueKind);
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("dynamicRangeDb").ValueKind);
     }
 
     [Fact]
