@@ -12,6 +12,15 @@
 
 import { create } from 'zustand';
 import type { NrConfigDto } from '../api/client';
+import {
+  SMART_NR_DEFAULT_AGGRESSIVENESS,
+  SMART_NR_DEFAULT_MAX_BLANKER_THRESHOLD,
+  SMART_NR_MAX_AGGRESSIVENESS,
+  SMART_NR_MAX_BLANKER_THRESHOLD,
+  SMART_NR_MIN_AGGRESSIVENESS,
+  SMART_NR_MIN_BLANKER_THRESHOLD,
+} from '../dsp/smart-nr';
+import { clampFinite } from '../util/number';
 
 export type SmartNrAutomationMode = 'manual' | 'suggest' | 'auto';
 
@@ -57,16 +66,12 @@ const STORAGE_KEY = 'zeus.smartNr';
 
 const DEFAULT_SETTINGS: SmartNrSettings = {
   automationMode: 'manual',
-  aggressiveness: 55,
+  aggressiveness: SMART_NR_DEFAULT_AGGRESSIVENESS,
   autoBlankerEnabled: true,
   autoNotchEnabled: true,
-  maxBlankerThreshold: 16,
+  maxBlankerThreshold: SMART_NR_DEFAULT_MAX_BLANKER_THRESHOLD,
   dwellSamples: 5,
 };
-
-function clampFinite(v: unknown, min: number, max: number, fallback: number): number {
-  return typeof v === 'number' && Number.isFinite(v) ? Math.max(min, Math.min(max, v)) : fallback;
-}
 
 function isAutomationMode(v: unknown): v is SmartNrAutomationMode {
   return v === 'manual' || v === 'suggest' || v === 'auto';
@@ -75,10 +80,20 @@ function isAutomationMode(v: unknown): v is SmartNrAutomationMode {
 function normalizeSettings(raw: Partial<SmartNrSettings> = {}): SmartNrSettings {
   return {
     automationMode: isAutomationMode(raw.automationMode) ? raw.automationMode : DEFAULT_SETTINGS.automationMode,
-    aggressiveness: clampFinite(raw.aggressiveness, 0, 100, DEFAULT_SETTINGS.aggressiveness),
+    aggressiveness: clampFinite(
+      raw.aggressiveness,
+      SMART_NR_MIN_AGGRESSIVENESS,
+      SMART_NR_MAX_AGGRESSIVENESS,
+      DEFAULT_SETTINGS.aggressiveness,
+    ),
     autoBlankerEnabled: raw.autoBlankerEnabled !== false,
     autoNotchEnabled: raw.autoNotchEnabled !== false,
-    maxBlankerThreshold: clampFinite(raw.maxBlankerThreshold, 8, 30, DEFAULT_SETTINGS.maxBlankerThreshold),
+    maxBlankerThreshold: clampFinite(
+      raw.maxBlankerThreshold,
+      SMART_NR_MIN_BLANKER_THRESHOLD,
+      SMART_NR_MAX_BLANKER_THRESHOLD,
+      DEFAULT_SETTINGS.maxBlankerThreshold,
+    ),
     dwellSamples: Math.round(clampFinite(raw.dwellSamples, 3, 8, DEFAULT_SETTINGS.dwellSamples)),
   };
 }

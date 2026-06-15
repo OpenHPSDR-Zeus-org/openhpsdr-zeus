@@ -301,6 +301,30 @@ describe('smart NR supervisor', () => {
     expect(aggressive.nr4PostFilterThreshold).toBe(-5);
   });
 
+  it('shapes malformed tuning without emitting non-finite WDSP parameters', () => {
+    const spec = noise();
+    const conf = confidence();
+    for (let i = 40; i < 160; i += 12) spec[i] = NOISE_DB + 25;
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      confidence: conf,
+      current: { ...NR_CONFIG_DEFAULT, nbThreshold: Number.NaN },
+      mode: 'USB',
+    })!;
+
+    const shaped = shapeSmartNrRecommendation(rec, {
+      aggressiveness: Number.NaN,
+      autoBlankerEnabled: true,
+      autoNotchEnabled: true,
+      maxBlankerThreshold: Number.NaN,
+    });
+
+    expect(shaped.nbMode).toBe('Nb2');
+    expect(shaped.nbThreshold).toBe(16);
+    expect(Number.isFinite(shaped.nbThreshold)).toBe(true);
+  });
+
   it('honors disabled blanker and notch helpers while shaping', () => {
     const spec = noise();
     const conf = confidence();

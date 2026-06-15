@@ -39,6 +39,7 @@
 
 import { create } from 'zustand';
 import type { RxMode } from '../api/client';
+import { clampFinite } from '../util/number';
 
 // ── Floor-estimator tuning ──────────────────────────────────────────────────
 // Spatial reference window, in Hz. A low percentile is taken over roughly
@@ -569,10 +570,6 @@ export function recommendSignalEnhanceScene(input: SignalEnhanceSceneInput): Sig
     maxSnrDb,
     coherentMaxSnrDb,
   };
-}
-
-function clampFinite(v: unknown, min: number, max: number, fallback: number): number {
-  return typeof v === 'number' && Number.isFinite(v) ? Math.max(min, Math.min(max, v)) : fallback;
 }
 
 function isProfileId(v: unknown): v is SignalEnhanceProfileId {

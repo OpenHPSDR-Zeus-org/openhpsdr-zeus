@@ -5,6 +5,14 @@
 // WDSP NR/blanker profile for the operator to apply explicitly.
 
 import type { NrConfigDto, RxMode } from '../api/client';
+import { clampFinite } from '../util/number';
+
+export const SMART_NR_MIN_AGGRESSIVENESS = 0;
+export const SMART_NR_MAX_AGGRESSIVENESS = 100;
+export const SMART_NR_DEFAULT_AGGRESSIVENESS = 55;
+export const SMART_NR_MIN_BLANKER_THRESHOLD = 8;
+export const SMART_NR_MAX_BLANKER_THRESHOLD = 30;
+export const SMART_NR_DEFAULT_MAX_BLANKER_THRESHOLD = 16;
 
 export type SmartNrCondition = {
   maxSnrDb: number;
@@ -70,16 +78,18 @@ export function smartNrProfileKey(nr: NrConfigDto): string {
 
 export function shapeSmartNrRecommendation(rec: SmartNrRecommendation, tuning: SmartNrTuning): NrConfigDto {
   const next: NrConfigDto = { ...rec.nr };
-  const gain = Math.max(0, Math.min(1, tuning.aggressiveness / 100));
+  const aggressiveness = clampSmartNrAggressiveness(tuning.aggressiveness);
+  const maxBlankerThreshold = clampSmartNrBlankerThreshold(tuning.maxBlankerThreshold);
+  const gain = aggressiveness / 100;
 
-  if (!tuning.autoBlankerEnabled) {
+  if (tuning.autoBlankerEnabled === false) {
     next.nbMode = 'Off';
     next.snbEnabled = false;
   } else if (next.nbMode !== 'Off') {
-    next.nbThreshold = Math.min(next.nbThreshold, tuning.maxBlankerThreshold);
+    next.nbThreshold = Math.min(clampSmartNrBlankerThreshold(next.nbThreshold), maxBlankerThreshold);
   }
 
-  if (!tuning.autoNotchEnabled) {
+  if (tuning.autoNotchEnabled === false) {
     next.anfEnabled = false;
     next.nbpNotchesEnabled = false;
   }
@@ -94,11 +104,29 @@ export function shapeSmartNrRecommendation(rec: SmartNrRecommendation, tuning: S
     next.emnrAeRun = gain >= 0.25;
   }
 
-  if (tuning.aggressiveness < 25 && !rec.condition.impulsiveNoise && !rec.condition.tonalInterference) {
+  if (aggressiveness < 25 && !rec.condition.impulsiveNoise && !rec.condition.tonalInterference) {
     next.nrMode = 'Off';
   }
 
   return next;
+}
+
+function clampSmartNrAggressiveness(value: unknown): number {
+  return clampFinite(
+    value,
+    SMART_NR_MIN_AGGRESSIVENESS,
+    SMART_NR_MAX_AGGRESSIVENESS,
+    SMART_NR_DEFAULT_AGGRESSIVENESS,
+  );
+}
+
+function clampSmartNrBlankerThreshold(value: unknown): number {
+  return clampFinite(
+    value,
+    SMART_NR_MIN_BLANKER_THRESHOLD,
+    SMART_NR_MAX_BLANKER_THRESHOLD,
+    SMART_NR_DEFAULT_MAX_BLANKER_THRESHOLD,
+  );
 }
 
 function percentile(sorted: number[], q: number): number {
@@ -271,6 +299,13 @@ function isCarrierMode(mode: RxMode): boolean {
   return mode === 'AM' || mode === 'SAM' || mode === 'DSB' || mode === 'FM';
 }
 
+function impulsiveBlankerThreshold(current: NrConfigDto): number {
+  return Math.max(
+    SMART_NR_MIN_BLANKER_THRESHOLD,
+    Math.min(clampSmartNrBlankerThreshold(current.nbThreshold), SMART_NR_DEFAULT_MAX_BLANKER_THRESHOLD),
+  );
+}
+
 function withNr4(current: NrConfigDto, c: SmartNrCondition, mode: RxMode): NrConfigDto {
   const weak = c.weakSparse;
   return {
@@ -280,7 +315,7 @@ function withNr4(current: NrConfigDto, c: SmartNrCondition, mode: RxMode): NrCon
     snbEnabled: c.denseNoise || c.impulsiveNoise,
     nbpNotchesEnabled: c.tonalInterference,
     nbMode: c.impulsiveNoise ? 'Nb2' : 'Off',
-    nbThreshold: c.impulsiveNoise ? Math.max(8, Math.min(current.nbThreshold, 16)) : current.nbThreshold,
+    nbThreshold: c.impulsiveNoise ? impulsiveBlankerThreshold(current) : current.nbThreshold,
     nr4ReductionAmount: weak ? 8 : 10,
     nr4SmoothingFactor: isCwOrDigital(mode) ? 8 : 14,
     nr4WhiteningFactor: weak ? 8 : 4,
@@ -297,7 +332,7 @@ function withNr2(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
     snbEnabled: c.denseNoise || c.impulsiveNoise,
     nbpNotchesEnabled: c.tonalInterference,
     nbMode: c.impulsiveNoise ? 'Nb2' : 'Off',
-    nbThreshold: c.impulsiveNoise ? Math.max(8, Math.min(current.nbThreshold, 16)) : current.nbThreshold,
+    nbThreshold: c.impulsiveNoise ? impulsiveBlankerThreshold(current) : current.nbThreshold,
     emnrGainMethod: 2,
     emnrNpeMethod: c.denseNoise ? 1 : 0,
     emnrAeRun: true,
@@ -317,7 +352,7 @@ function quietProfile(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
     snbEnabled: c.impulsiveNoise,
     nbpNotchesEnabled: c.tonalInterference,
     nbMode: c.impulsiveNoise ? 'Nb2' : 'Off',
-    nbThreshold: c.impulsiveNoise ? Math.max(8, Math.min(current.nbThreshold, 16)) : current.nbThreshold,
+    nbThreshold: c.impulsiveNoise ? impulsiveBlankerThreshold(current) : current.nbThreshold,
   };
 }
 
