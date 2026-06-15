@@ -974,6 +974,7 @@ export function HardwareDiagnosticsPanel() {
     { label: 'Impulsive', value: pct(scene?.impulsivePct) },
     { label: 'Peaks', value: scene?.peakCount },
     { label: 'Coherent Peaks', value: scene?.coherentPeakCount },
+    { label: 'Subthreshold Ridge', value: boolLabel(scene?.coherentSubthresholdSignal) },
     { label: 'Updated', value: time(scene?.atUtc) },
   ];
 

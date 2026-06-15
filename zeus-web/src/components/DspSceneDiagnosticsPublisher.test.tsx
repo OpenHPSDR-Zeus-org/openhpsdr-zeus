@@ -37,6 +37,7 @@ describe('buildFrontendDspSceneDiagnosticsPayload', () => {
       impulsivePct: 0.8,
       peakCount: 2,
       coherentPeakCount: 1,
+      coherentSubthresholdSignal: true,
       pending: false,
       applied: true,
       nr: NR_CONFIG_DEFAULT,
@@ -60,6 +61,7 @@ describe('buildFrontendDspSceneDiagnosticsPayload', () => {
       impulsivePct: 0.8,
       peakCount: 2,
       coherentPeakCount: 1,
+      coherentSubthresholdSignal: true,
     });
     expect(payload?.sourceClientId).toMatch(/^frontend-/);
   });

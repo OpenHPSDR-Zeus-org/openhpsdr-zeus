@@ -505,6 +505,7 @@ export type FrontendDspSceneDiagnosticsDto = {
   impulsivePct: number | null;
   peakCount: number | null;
   coherentPeakCount: number | null;
+  coherentSubthresholdSignal: boolean | null;
 };
 
 export type FrontendDspSceneDiagnosticsPayload = {
@@ -524,6 +525,7 @@ export type FrontendDspSceneDiagnosticsPayload = {
   impulsivePct?: number | null;
   peakCount?: number | null;
   coherentPeakCount?: number | null;
+  coherentSubthresholdSignal?: boolean | null;
 };
 
 export type HardwareP1DiagnosticsDto = {
@@ -1328,6 +1330,7 @@ function normalizeFrontendDspScene(raw: unknown): FrontendDspSceneDiagnosticsDto
     impulsivePct: diagNumber(r.impulsivePct),
     peakCount: diagNumber(r.peakCount),
     coherentPeakCount: diagNumber(r.coherentPeakCount),
+    coherentSubthresholdSignal: diagBool(r.coherentSubthresholdSignal),
   };
 }
 

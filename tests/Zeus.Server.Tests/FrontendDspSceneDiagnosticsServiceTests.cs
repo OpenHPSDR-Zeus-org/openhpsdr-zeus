@@ -28,7 +28,8 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
             CoherentOccupiedPct: 2.36,
             ImpulsivePct: 0.12,
             PeakCount: 3,
-            CoherentPeakCount: 2));
+            CoherentPeakCount: 2,
+            CoherentSubthresholdSignal: true));
 
         Assert.Equal("client one", stored.SourceClientId);
         Assert.Equal(18.2, stored.MaxSnrDb);
@@ -44,6 +45,7 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.Equal("dx", root.GetProperty("signalProfile").GetString());
         Assert.Equal("NR2", root.GetProperty("smartNrProfile").GetString());
         Assert.Equal(3, root.GetProperty("peakCount").GetInt32());
+        Assert.True(root.GetProperty("coherentSubthresholdSignal").GetBoolean());
         Assert.True(root.GetProperty("ageMs").GetInt64() >= 0);
     }
 
