@@ -42,6 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { GripVertical, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
@@ -51,7 +52,74 @@ import { LeafletWorldMap } from '../../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../../components/design/LeafletMapErrorBoundary';
 import { useConnectionStore } from '../../state/connection-store';
 import { useRotatorStore } from '../../state/rotator-store';
+import { useLayoutStore } from '../../state/layout-store';
 import { useWorkspace } from '../WorkspaceContext';
+import type { WorkspaceTile } from '../workspace';
+
+// Persisted spectrum/waterfall split: fraction of the stack height given to
+// the panadapter (the waterfall gets the remainder). Default 0.4 so the
+// waterfall is the larger of the two out of the box; the operator can drag
+// the divider to rebalance and the choice survives reloads via localStorage
+// (and the server-backed workspace layout when a tile is provided).
+const SPLIT_STORAGE_KEY = 'zeus.layout.spectrumSplit';
+const SPLIT_CONFIG_KEY = 'spectrumSplit';
+const DEFAULT_SPLIT = 0.4;
+const MIN_SPLIT = 0.15;
+const MAX_SPLIT = 0.85;
+
+function clampSplit(v: number): number {
+  return Math.min(MAX_SPLIT, Math.max(MIN_SPLIT, v));
+}
+
+function isValidSplit(v: number): boolean {
+  return Number.isFinite(v) && v >= MIN_SPLIT && v <= MAX_SPLIT;
+}
+
+function readInstanceSplit(raw: unknown): number | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const v = (raw as Record<string, unknown>)[SPLIT_CONFIG_KEY];
+  return typeof v === 'number' && isValidSplit(v) ? v : null;
+}
+
+function mergeInstanceSplit(raw: unknown, split: number): Record<string, unknown> {
+  const base =
+    raw && typeof raw === 'object' && !Array.isArray(raw)
+      ? { ...(raw as Record<string, unknown>) }
+      : {};
+  base[SPLIT_CONFIG_KEY] = clampSplit(split);
+  return base;
+}
+
+function readLegacySplit(): number | null {
+  try {
+    if (typeof localStorage === 'undefined') return null;
+    const raw = localStorage.getItem(SPLIT_STORAGE_KEY);
+    if (raw === null) return null;
+    const v = Number.parseFloat(raw);
+    if (!isValidSplit(v)) return null;
+    return v;
+  } catch {
+    return null;
+  }
+}
+
+function readInitialSplit(raw: unknown): number {
+  return readInstanceSplit(raw) ?? readLegacySplit() ?? DEFAULT_SPLIT;
+}
+
+function writeLegacySplit(v: number): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(SPLIT_STORAGE_KEY, String(clampSplit(v)));
+  } catch {
+    // quota exceeded / private mode — in-memory state still holds for this session.
+  }
+}
+
+interface HeroPanelProps {
+  onRemove?: () => void;
+  tile?: WorkspaceTile;
+}
 
 // Hero panel: Panadapter + Waterfall with optional Leaflet world-map overlay.
 // Registered as headerless in panels.ts — this component owns the single
@@ -60,7 +128,7 @@ import { useWorkspace } from '../WorkspaceContext';
 // the ⌥ map-mode hint, the HZ/PX readout, and the close X. Interactive
 // controls inside stop mousedown propagation so a click on a chip / slider /
 // input doesn't initiate a tile drag (mirrors the MetersPanel pattern).
-export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
+export function HeroPanel({ onRemove, tile }: HeroPanelProps = {}) {
   const {
     terminatorActive,
     imageMode,
@@ -85,6 +153,81 @@ export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
     submitBeam,
   } = useWorkspace();
   const connected = useConnectionStore((s) => s.status === 'Connected');
+  const updateTileInstanceConfig = useLayoutStore((s) => s.updateTileInstanceConfig);
+  const layoutLoaded = useLayoutStore((s) => s.isLoaded);
+  const layoutRadioKey = useLayoutStore((s) => s.radioKey);
+  const activeLayoutId = useLayoutStore((s) => s.activeLayoutId);
+
+  const stackRef = useRef<HTMLDivElement | null>(null);
+  const [split, setSplit] = useState(() => readInitialSplit(tile?.instanceConfig));
+  const [splitDragging, setSplitDragging] = useState(false);
+
+  useEffect(() => {
+    const persisted = readInstanceSplit(tile?.instanceConfig);
+    if (persisted === null) return;
+    setSplit((current) => (Math.abs(current - persisted) < 0.001 ? current : persisted));
+  }, [tile?.uid, tile?.instanceConfig]);
+
+  // One-time migration from the previous localStorage-only split into the
+  // server-backed workspace layout config. The localStorage mirror remains as
+  // an immediate fallback, but the tile config is the restart-safe source.
+  useEffect(() => {
+    if (!layoutLoaded) return;
+    if (!tile) return;
+    if (readInstanceSplit(tile.instanceConfig) !== null) return;
+    const legacy = readLegacySplit();
+    if (legacy === null) return;
+    updateTileInstanceConfig(tile.uid, mergeInstanceSplit(tile.instanceConfig, legacy));
+  }, [
+    activeLayoutId,
+    layoutLoaded,
+    layoutRadioKey,
+    tile?.uid,
+    tile?.instanceConfig,
+    updateTileInstanceConfig,
+  ]);
+
+  const persistSplit = useCallback(
+    (next: number) => {
+      const clamped = clampSplit(next);
+      writeLegacySplit(clamped);
+      if (tile) {
+        updateTileInstanceConfig(tile.uid, mergeInstanceSplit(tile.instanceConfig, clamped));
+      }
+    },
+    [tile, updateTileInstanceConfig],
+  );
+
+  // Drag the divider to rebalance the panadapter/waterfall split. We attach
+  // window-level move/up listeners (rather than relying on the divider's own
+  // pointer events) so the drag keeps tracking even when the cursor outruns
+  // the slim hit area. stopPropagation keeps RGL from treating it as a tile
+  // drag; preventDefault suppresses text selection during the gesture.
+  const onSplitterPointerDown = (e: ReactPointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const stack = stackRef.current;
+    if (!stack) return;
+    const rect = stack.getBoundingClientRect();
+    if (rect.height <= 0) return;
+    setSplitDragging(true);
+    let latest = split;
+    const onMove = (ev: PointerEvent) => {
+      const frac = (ev.clientY - rect.top) / rect.height;
+      latest = clampSplit(frac);
+      setSplit(latest);
+    };
+    const onEnd = () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onEnd);
+      window.removeEventListener('pointercancel', onEnd);
+      setSplitDragging(false);
+      persistSplit(latest);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onEnd);
+    window.addEventListener('pointercancel', onEnd);
+  };
 
   const handleRotateToBearing = (brg: number) => {
     const rot = useRotatorStore.getState();
@@ -240,16 +383,25 @@ export function HeroPanel({ onRemove }: { onRemove?: () => void } = {}) {
           </LeafletMapErrorBoundary>
         </div>
         <div
+          ref={stackRef}
           data-spectrum-stack
           style={{
             position: 'absolute',
             inset: 0,
             display: 'grid',
-            gridTemplateRows: '1fr 1fr',
+            gridTemplateRows: `${split}fr 8px ${1 - split}fr`,
             zIndex: 1,
           }}
         >
           {connected && <Panadapter />}
+          <div
+            className={`spectrum-splitter ${splitDragging ? 'dragging' : ''}`}
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Resize panadapter and waterfall"
+            title="Drag to resize panadapter / waterfall"
+            onPointerDown={onSplitterPointerDown}
+          />
           {connected && <Waterfall transparent={bgActive} />}
         </div>
       </div>

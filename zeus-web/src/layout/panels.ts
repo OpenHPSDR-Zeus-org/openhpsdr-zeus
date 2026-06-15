@@ -43,6 +43,7 @@
 // License for details.
 
 import type { ComponentType } from 'react';
+import type { WorkspaceTile } from './workspace';
 import { HeroPanel } from './panels/HeroPanel';
 import { VfoPanel } from './panels/VfoPanel';
 import { SMeterPanel } from './panels/SMeterPanel';
@@ -114,8 +115,10 @@ const VALID_PANEL_CATEGORIES = new Set<string>(PANEL_CATEGORIES);
  *  `<def.component />`. Multi-instance panels with per-instance config
  *  (just `meters` today) take a typed prop pair instead; `PanelTile` knows
  *  to switch on `def.id === 'meters'` for that wiring. Headerless panels
- *  receive `onRemove` so the close button they own can drop the tile. */
-export type PanelComponentProps = { onRemove?: () => void };
+ *  receive `onRemove` so the close button they own can drop the tile. The
+ *  optional `tile` lets a headerless panel persist per-tile UI state (e.g.
+ *  HeroPanel's panadapter/waterfall split) into the workspace layout config. */
+export type PanelComponentProps = { onRemove?: () => void; tile?: WorkspaceTile };
 
 export interface PanelDef {
   id: string;
