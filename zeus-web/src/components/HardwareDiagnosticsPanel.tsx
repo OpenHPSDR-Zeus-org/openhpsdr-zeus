@@ -23,6 +23,7 @@ import {
   type HardwareKeyingStatusDto,
   type HardwareMappingMarkerDto,
   type HardwareP1MapDto,
+  type HardwarePureSignalDiagnosticsDto,
   type RadioNetworkCountersDto,
   type RadioNetworkProfileDto,
   type RadioInfoDto,
@@ -339,6 +340,52 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
         ]}
       />
       <DiagnosticRecommendation text={recommendation} />
+    </div>
+  );
+}
+
+function PureSignalFeedbackDiagnostics({ diag }: { diag: HardwarePureSignalDiagnosticsDto | null | undefined }) {
+  if (!diag) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for PureSignal diagnostics.</div>;
+  const mode = diag.single ? 'Single' : diag.auto ? 'Auto' : 'Manual';
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Armed', value: boolLabel(diag.enabled) },
+          { label: 'Source', value: diag.feedbackSource },
+          { label: 'External Path', value: boolLabel(diag.externalFeedbackPathSupported) },
+          { label: 'RF Bypass Required', value: boolLabel(diag.rfBypassRequired) },
+          { label: 'RF Bypass Selected', value: boolLabel(diag.rfBypassSelected) },
+          { label: 'Health', value: diag.healthStatus },
+          { label: 'Correcting', value: boolLabel(diag.correcting) },
+          { label: 'Cal State', value: diag.calState },
+          { label: 'Stalled', value: boolLabel(diag.calibrationStalled) },
+          { label: 'Monitor PA Output', value: boolLabel(diag.monitorEnabled) },
+        ]}
+      />
+      <FieldGrid
+        fields={[
+          { label: 'Feedback Raw', value: diag.feedbackLevelRaw.toFixed(1) },
+          { label: 'Feedback %', value: pct(diag.feedbackLevelPct) },
+          { label: 'Target Raw', value: diag.feedbackTargetRaw.toFixed(1) },
+          {
+            label: 'Usable Window',
+            value: `${diag.feedbackUsableMinRaw}-${diag.feedbackUsableMaxRaw}`,
+          },
+          {
+            label: 'Centered Window',
+            value: `${diag.feedbackCenteredMinRaw}-${diag.feedbackCenteredMaxRaw}`,
+          },
+          { label: 'TX Feedback Attn', value: db(diag.txFeedbackAttenuationDb) },
+          { label: 'Attn Floor', value: db(diag.txFeedbackAttenuationDbMin) },
+          { label: 'HW Peak', value: diag.hwPeak.toFixed(4) },
+          { label: 'HW Peak Default', value: diag.hwPeakDefault.toFixed(4) },
+          { label: 'Auto Attn', value: boolLabel(diag.autoAttenuate) },
+          { label: 'Cal Mode', value: mode },
+        ]}
+      />
+      <DiagnosticRecommendation text={diag.diagnosticRecommendation} />
+      <DiagnosticRecommendation text={diag.manualReference} />
     </div>
   );
 }
@@ -1479,6 +1526,14 @@ export function HardwareDiagnosticsPanel() {
           <span className="ps-card-hint">mic ingest / P1 ring / P2 DUC packets</span>
         </h4>
         <TxEgressDiagnostics diag={txDiagnostics} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          PureSignal Feedback Health
+          <span className="ps-card-hint">internal coupler / RF Bypass / calcc window</span>
+        </h4>
+        <PureSignalFeedbackDiagnostics diag={diag?.pureSignal} />
       </div>
 
       <div className="ps-card">

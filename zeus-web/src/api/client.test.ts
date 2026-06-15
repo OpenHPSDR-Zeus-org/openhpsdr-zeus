@@ -584,6 +584,36 @@ describe('POST helpers', () => {
           coherentPeakCount: 2,
           coherentSubthresholdSignal: true,
         },
+        pureSignal: {
+          schemaVersion: 1,
+          enabled: true,
+          monitorEnabled: true,
+          auto: true,
+          single: false,
+          autoAttenuate: true,
+          feedbackSource: 'External',
+          externalFeedback: true,
+          externalFeedbackPathSupported: true,
+          rfBypassRequired: true,
+          rfBypassSelected: true,
+          feedbackLevelRaw: 151.2,
+          feedbackLevelPct: 59.1,
+          feedbackTargetRaw: 152.293,
+          feedbackUsableMinRaw: 128,
+          feedbackUsableMaxRaw: 181,
+          feedbackCenteredMinRaw: 138,
+          feedbackCenteredMaxRaw: 176,
+          txFeedbackAttenuationDb: 4,
+          txFeedbackAttenuationDbMin: 0,
+          hwPeak: 0.6121,
+          hwPeakDefault: 0.6121,
+          calState: 8,
+          correcting: true,
+          calibrationStalled: false,
+          healthStatus: 'centered-correcting',
+          manualReference: 'ANAN G2 manual: external PureSignal feedback should enter RF Bypass.',
+          diagnosticRecommendation: 'External RF Bypass feedback is centered and correcting.',
+        },
         mapping: {
           schemaVersion: 2,
           markers: [
@@ -647,6 +677,11 @@ describe('POST helpers', () => {
     expect(diag.frontendDspScene.smartNrRecommendation).toBe('Hold headroom; use Smart NR/filtering');
     expect(diag.frontendDspScene.coherentPeakCount).toBe(2);
     expect(diag.frontendDspScene.coherentSubthresholdSignal).toBe(true);
+    expect(diag.pureSignal.feedbackSource).toBe('external');
+    expect(diag.pureSignal.rfBypassSelected).toBe(true);
+    expect(diag.pureSignal.feedbackLevelRaw).toBe(151.2);
+    expect(diag.pureSignal.healthStatus).toBe('centered-correcting');
+    expect(diag.pureSignal.diagnosticRecommendation).toContain('centered');
     expect(diag.mapping.schemaVersion).toBe(2);
     expect(diag.mapping.markers[0]?.label).toBe('RX2 on');
     expect(diag.featureSurfaces[0]?.id).toBe('hardware.mapping.correlation');
