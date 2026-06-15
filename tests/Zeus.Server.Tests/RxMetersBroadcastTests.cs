@@ -147,6 +147,87 @@ public class RxMetersBroadcastTests
     }
 
     [Fact]
+    public void BuildRxMetersDiagnostics_FlagsHotAdcHeadroom()
+    {
+        var frame = new RxMetersV2Frame(
+            SignalPk: -38.2f,
+            SignalAv: -49.0f,
+            AdcPk: -1.8f,
+            AdcAv: -14.3f,
+            AgcGain: -9.5f,
+            AgcEnvPk: -35.0f,
+            AgcEnvAv: -48.0f);
+
+        var diag = DspPipelineService.BuildRxMetersDiagnostics(
+            valid: true,
+            ageMs: 250,
+            channelId: 1,
+            rxDbm: -44.6,
+            frame);
+
+        Assert.Equal(1, diag.SchemaVersion);
+        Assert.Equal("adc-hot", diag.Status);
+        Assert.True(diag.Fresh);
+        Assert.False(diag.Stale);
+        Assert.Equal(1, diag.ChannelId);
+        Assert.Equal(-44.6, diag.RxDbm);
+        Assert.Equal(-1.8, diag.AdcPkDbfs);
+        Assert.Equal(1.8, diag.AdcHeadroomDb);
+        Assert.Equal(-9.5, diag.AgcGainDb);
+        Assert.True(diag.SignalUsable);
+        Assert.True(diag.AdcUsable);
+        Assert.Contains("within 3 dB", diag.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildRxMetersDiagnostics_FlagsWeakSignalAgcBoost()
+    {
+        var frame = new RxMetersV2Frame(
+            SignalPk: -106.1f,
+            SignalAv: -118.0f,
+            AdcPk: -37.0f,
+            AdcAv: -55.0f,
+            AgcGain: 42.3f,
+            AgcEnvPk: -92.0f,
+            AgcEnvAv: -104.0f);
+
+        var diag = DspPipelineService.BuildRxMetersDiagnostics(
+            valid: true,
+            ageMs: 400,
+            channelId: 1,
+            rxDbm: -109.5,
+            frame);
+
+        Assert.Equal("weak-signal-boost", diag.Status);
+        Assert.Equal(-106.1, diag.SignalPkDbm);
+        Assert.Equal(-37.0, diag.AdcPkDbfs);
+        Assert.Equal(37.0, diag.AdcHeadroomDb);
+        Assert.Equal(42.3, diag.AgcGainDb);
+        Assert.Contains("strongly boosting", diag.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildRxMetersDiagnostics_MissingSuppressesDefaultStructReadings()
+    {
+        var diag = DspPipelineService.BuildRxMetersDiagnostics(
+            valid: false,
+            ageMs: null,
+            channelId: 0,
+            rxDbm: double.NaN,
+            default);
+
+        Assert.Equal("missing", diag.Status);
+        Assert.False(diag.Fresh);
+        Assert.True(diag.Stale);
+        Assert.Null(diag.RxDbm);
+        Assert.Null(diag.SignalPkDbm);
+        Assert.Null(diag.AdcPkDbfs);
+        Assert.Null(diag.AgcGainDb);
+        Assert.False(diag.SignalUsable);
+        Assert.False(diag.AdcUsable);
+    }
+
+    [Fact]
     public void StreamingHub_BroadcastRxMetersV2_NoOpWhenNoClients()
     {
         // Mirrors TxMetersSwrTripTests's hub-without-clients pattern: the

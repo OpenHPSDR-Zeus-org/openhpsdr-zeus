@@ -1502,6 +1502,7 @@ export function HardwareDiagnosticsPanel() {
   const dsp = diag?.dsp;
   const display = dsp?.display;
   const rxDsp = dsp?.rxDsp;
+  const rxMeters = dsp?.rxMeters;
   const dspFields: Field[] = [
     { label: 'Engine', value: dsp?.engineKind },
     { label: 'Runtime', value: dsp?.engine },
@@ -1563,6 +1564,26 @@ export function HardwareDiagnosticsPanel() {
       label: 'DSP Reasons',
       value: rxDsp ? (rxDsp.qualityReasons.length > 0 ? rxDsp.qualityReasons.join(', ') : 'none') : null,
     },
+  ];
+  const rxMeterFields: Field[] = [
+    { label: 'RXA Meter Status', value: rxMeters?.status },
+    { label: 'Meter Source', value: rxMeters?.source },
+    { label: 'Fresh', value: boolLabel(rxMeters?.fresh) },
+    { label: 'Stale', value: boolLabel(rxMeters?.stale) },
+    { label: 'Age', value: age(rxMeters?.ageMs) },
+    { label: 'Channel', value: rxMeters?.channelId },
+    { label: 'S-Meter', value: db(rxMeters?.rxDbm) },
+    { label: 'Signal Pk', value: db(rxMeters?.signalPkDbm) },
+    { label: 'Signal Av', value: db(rxMeters?.signalAvDbm) },
+    { label: 'ADC Pk', value: db(rxMeters?.adcPkDbfs) },
+    { label: 'ADC Av', value: db(rxMeters?.adcAvDbfs) },
+    { label: 'ADC Headroom', value: db(rxMeters?.adcHeadroomDb) },
+    { label: 'AGC Gain', value: db(rxMeters?.agcGainDb) },
+    { label: 'AGC Env Pk', value: db(rxMeters?.agcEnvPkDbm) },
+    { label: 'AGC Env Av', value: db(rxMeters?.agcEnvAvDbm) },
+    { label: 'Signal Usable', value: boolLabel(rxMeters?.signalUsable) },
+    { label: 'ADC Usable', value: boolLabel(rxMeters?.adcUsable) },
+    { label: 'AGC Env Usable', value: boolLabel(rxMeters?.agcEnvelopeUsable) },
   ];
   const displayFields: Field[] = [
     { label: 'Display Status', value: display?.status },
@@ -1768,9 +1789,13 @@ export function HardwareDiagnosticsPanel() {
           <FieldGrid fields={rxDspFields} />
         </div>
         <div style={{ marginTop: 10 }}>
+          <FieldGrid fields={rxMeterFields} />
+        </div>
+        <div style={{ marginTop: 10 }}>
           <FieldGrid fields={displayFields} />
         </div>
         <DiagnosticRecommendation text={rxDsp?.diagnosticRecommendation} />
+        <DiagnosticRecommendation text={rxMeters?.diagnosticRecommendation} />
         <DiagnosticRecommendation text={display?.diagnosticRecommendation} />
       </div>
 

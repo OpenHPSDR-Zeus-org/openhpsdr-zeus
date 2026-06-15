@@ -705,6 +705,14 @@ public class DspPipelineService : BackgroundService,
     private bool _diagLastPsFeedbackCorrecting;
     private const long DisplayFreshMs = 2_000;
     private const long DisplayAgingMs = 5_000;
+    private readonly object _rxMeterDiagLock = new();
+    private bool _diagRxMetersValid;
+    private long _diagRxMetersMs;
+    private int _diagRxMetersChannelId;
+    private double _diagRxDbm = double.NaN;
+    private RxMetersV2Frame _diagRxMeters;
+    private const long RxMetersFreshMs = 2_500;
+    private const long RxMetersAgingMs = 10_000;
 
     // CW sidetone source mixed into the RX audio bus while a CW keying
     // path (CwEngine macros / cw_msg / raw-key, or ExternalPttService
@@ -859,6 +867,7 @@ public class DspPipelineService : BackgroundService,
                 _appliedNr,
                 _appliedAgc,
                 _appliedSquelch),
+            rxMeters = SnapshotRxMetersDiagnostics(),
             squelch = SnapshotAdaptiveSquelchDiagnostics(state.Squelch ?? new SquelchConfig()),
             channelId = Volatile.Read(ref _channelId),
             sampleRateHz = Volatile.Read(ref _sampleRateHz),
@@ -919,6 +928,115 @@ public class DspPipelineService : BackgroundService,
             };
         }
     }
+
+    private object SnapshotRxMetersDiagnostics()
+    {
+        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        bool valid;
+        long sampleMs;
+        int channelId;
+        double rxDbm;
+        RxMetersV2Frame meters;
+        lock (_rxMeterDiagLock)
+        {
+            valid = _diagRxMetersValid;
+            sampleMs = _diagRxMetersMs;
+            channelId = _diagRxMetersChannelId;
+            rxDbm = _diagRxDbm;
+            meters = _diagRxMeters;
+        }
+
+        long? ageMs = valid && sampleMs > 0 ? Math.Max(0, nowMs - sampleMs) : null;
+        return BuildRxMetersDiagnostics(valid, ageMs, channelId, rxDbm, meters);
+    }
+
+    internal static RxMetersDiagnosticsDto BuildRxMetersDiagnostics(
+        bool valid,
+        long? ageMs,
+        int channelId,
+        double rxDbm,
+        RxMetersV2Frame meters)
+    {
+        double? signalPk = valid ? RxStageLevelDb(meters.SignalPk) : null;
+        double? signalAv = valid ? RxStageLevelDb(meters.SignalAv) : null;
+        double? adcPk = valid ? RxStageLevelDb(meters.AdcPk) : null;
+        double? adcAv = valid ? RxStageLevelDb(meters.AdcAv) : null;
+        double? agcGain = valid && double.IsFinite(meters.AgcGain) ? Math.Round(meters.AgcGain, 1) : null;
+        double? agcEnvPk = valid ? RxStageLevelDb(meters.AgcEnvPk) : null;
+        double? agcEnvAv = valid ? RxStageLevelDb(meters.AgcEnvAv) : null;
+        double? rxDbmOut = valid && double.IsFinite(rxDbm) ? Math.Round(rxDbm, 1) : null;
+        double? adcHeadroomDb = adcPk is { } pk ? Math.Round(Math.Max(0.0, -pk), 1) : null;
+        bool fresh = valid && ageMs is <= RxMetersFreshMs;
+        bool stale = !valid || ageMs is null || ageMs > RxMetersAgingMs;
+        bool signalUsable = signalPk.HasValue || signalAv.HasValue || rxDbmOut.HasValue;
+        bool adcUsable = adcPk.HasValue || adcAv.HasValue;
+        bool agcEnvUsable = agcEnvPk.HasValue || agcEnvAv.HasValue;
+
+        string status;
+        string recommendation;
+        if (!valid)
+        {
+            status = "missing";
+            recommendation = "No RXA stage-meter frame has been captured yet; connect the radio and confirm IQ/audio ticks before judging RX fidelity.";
+        }
+        else if (stale)
+        {
+            status = "stale";
+            recommendation = "RXA stage meters are stale; verify the DSP tick path and active websocket/radio connection before tuning weak-signal or AGC settings.";
+        }
+        else if (adcPk is > -3.0)
+        {
+            status = "adc-hot";
+            recommendation = "RX ADC peak is within 3 dB of full scale; add attenuation or reduce preamp/front-end gain before increasing NR or AGC boost.";
+        }
+        else if (agcGain is < -20.0)
+        {
+            status = "agc-cutting";
+            recommendation = "RX AGC is cutting heavily, which indicates a hot signal or overload-prone front end; restore ADC/AGC headroom before judging recovered audio.";
+        }
+        else if (agcGain is > 35.0 && (signalPk is null || signalPk < -90.0))
+        {
+            status = "weak-signal-boost";
+            recommendation = "RX AGC is strongly boosting a weak signal; use Smart NR and narrow filtering carefully while watching ADC headroom and coherent SNR.";
+        }
+        else if (!signalUsable && !adcUsable && !agcEnvUsable)
+        {
+            status = "sentinel";
+            recommendation = "RXA meter fields are still at sentinel/bypassed values; wait for WDSP RXA meters to tick or use the fallback S-meter only as proof of audio activity.";
+        }
+        else
+        {
+            status = "fresh";
+            recommendation = "RXA stage meters are fresh; use S-meter, ADC dBFS, AGC gain, and AGC envelope together when tuning weak-signal fidelity.";
+        }
+
+        return new RxMetersDiagnosticsDto(
+            SchemaVersion: 1,
+            Status: status,
+            Source: "wdsp-rxa-meter-ring",
+            Fresh: fresh,
+            Stale: stale,
+            AgeMs: ageMs,
+            ChannelId: channelId,
+            RxDbm: rxDbmOut,
+            SignalPkDbm: signalPk,
+            SignalAvDbm: signalAv,
+            AdcPkDbfs: adcPk,
+            AdcAvDbfs: adcAv,
+            AdcHeadroomDb: adcHeadroomDb,
+            AgcGainDb: agcGain,
+            AgcEnvPkDbm: agcEnvPk,
+            AgcEnvAvDbm: agcEnvAv,
+            SignalUsable: signalUsable,
+            AdcUsable: adcUsable,
+            AgcEnvelopeUsable: agcEnvUsable,
+            DiagnosticRecommendation: recommendation);
+    }
+
+    private static double? RxStageLevelDb(float value) =>
+        float.IsFinite(value) && value > -199.5f
+            ? Math.Round(value, 1)
+            : null;
 
     private static string DisplayHealthStatus(
         IDspEngine? engine,
@@ -2899,6 +3017,14 @@ public class DspPipelineService : BackgroundService,
             var rx = engine.GetRxStageMeters(channel);
             var v2 = BuildRxMetersV2(rx, rxCalOffsetDb);
             _radio.HandleRxMetersForAutoAgc(dbm, v2.AdcPk, v2.AgcGain, Environment.TickCount64);
+            lock (_rxMeterDiagLock)
+            {
+                _diagRxMetersValid = true;
+                _diagRxMetersMs = (long)nowMs;
+                _diagRxMetersChannelId = channel;
+                _diagRxDbm = dbm;
+                _diagRxMeters = v2;
+            }
             _hub.Broadcast(v2);
             RxMetersV2Updated?.Invoke(channel, v2);
         }
@@ -2985,4 +3111,26 @@ internal sealed record DspRxChainDiagnosticsDto(
     bool AppliedSquelchMatchesRequested,
     string[] ActiveFeatures,
     string[] QualityReasons,
+    string DiagnosticRecommendation);
+
+internal sealed record RxMetersDiagnosticsDto(
+    int SchemaVersion,
+    string Status,
+    string Source,
+    bool Fresh,
+    bool Stale,
+    long? AgeMs,
+    int ChannelId,
+    double? RxDbm,
+    double? SignalPkDbm,
+    double? SignalAvDbm,
+    double? AdcPkDbfs,
+    double? AdcAvDbfs,
+    double? AdcHeadroomDb,
+    double? AgcGainDb,
+    double? AgcEnvPkDbm,
+    double? AgcEnvAvDbm,
+    bool SignalUsable,
+    bool AdcUsable,
+    bool AgcEnvelopeUsable,
     string DiagnosticRecommendation);
