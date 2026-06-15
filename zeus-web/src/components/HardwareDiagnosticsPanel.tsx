@@ -1509,6 +1509,7 @@ export function HardwareDiagnosticsPanel() {
   const rxDsp = dsp?.rxDsp;
   const rxMeters = dsp?.rxMeters;
   const audio = dsp?.audio;
+  const listenability = dsp?.listenability;
   const dspFields: Field[] = [
     { label: 'Engine', value: dsp?.engineKind },
     { label: 'Runtime', value: dsp?.engine },
@@ -1535,6 +1536,11 @@ export function HardwareDiagnosticsPanel() {
     { label: 'Wisdom Status', value: dsp?.wdspWisdomStatus },
   ];
   const audioFields: Field[] = [
+    { label: 'Listenability', value: listenability?.status },
+    { label: 'Listen Tone', value: listenability?.tone },
+    { label: 'Signal Present', value: boolLabel(listenability?.signalPresent) },
+    { label: 'Audio Recovered', value: boolLabel(listenability?.audioRecovered) },
+    { label: 'Listen Blocker', value: listenability?.blocker },
     { label: 'Audio Status', value: audio?.status },
     { label: 'Source', value: audio?.source },
     { label: 'Fresh', value: boolLabel(audio?.fresh) },
@@ -1834,6 +1840,7 @@ export function HardwareDiagnosticsPanel() {
         </div>
         <DiagnosticRecommendation text={rxDsp?.diagnosticRecommendation} />
         <DiagnosticRecommendation text={rxMeters?.diagnosticRecommendation} />
+        <DiagnosticRecommendation text={listenability?.recommendation} />
         <DiagnosticRecommendation text={audio?.diagnosticRecommendation} />
         <DiagnosticRecommendation text={display?.diagnosticRecommendation} />
       </div>
