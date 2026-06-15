@@ -418,11 +418,37 @@ const SCENE_DX_MAX_PEAKS_PER_10KHZ = 1.6;
 const SCENE_DX_MAX_SNR_DB = 24;
 const SCENE_IMPULSE_GATE_DB = 12;
 const SCENE_IMPULSE_CONFIDENCE_CEILING = 0.25;
+const FALLBACK_FLOOR_DB = -200;
+
+function finiteSample(arr: Float32Array, index: number): number | null {
+  const v = arr[index]!;
+  return Number.isFinite(v) ? v : null;
+}
+
+function optionalFloorDb(f: Float32Array | null, n: number, index: number): number | null {
+  if (f === null || f.length !== n) return FALLBACK_FLOOR_DB;
+  const floorDb = f[index]!;
+  return Number.isFinite(floorDb) ? floorDb : null;
+}
+
+function optionalSnr(spec: Float32Array, f: Float32Array | null, n: number, index: number): number | null {
+  const sample = finiteSample(spec, index);
+  const floorDb = optionalFloorDb(f, n, index);
+  return sample !== null && floorDb !== null ? sample - floorDb : null;
+}
+
+function finiteConfidenceValue(conf: Float32Array | null, n: number, index: number): number {
+  if (conf === null || conf.length !== n) return 0;
+  const c = conf[index]!;
+  return Number.isFinite(c) ? Math.max(0, Math.min(1, c)) : 0;
+}
+
+function finiteLinearPowerWeight(snrDb: number): number {
+  return Math.pow(10, Math.min(120, Math.max(0, snrDb)) / 10);
+}
 
 function sceneSnr(spec: Float32Array, f: Float32Array, index: number): number | null {
-  const sample = spec[index]!;
-  const floorDb = f[index]!;
-  return Number.isFinite(sample) && Number.isFinite(floorDb) ? sample - floorDb : null;
+  return optionalSnr(spec, f, spec.length, index);
 }
 
 function sceneConfidence(confidence: Float32Array | null | undefined, index: number, useConfidence: boolean): number {
@@ -900,12 +926,13 @@ function updateSignalState(spec: Float32Array): void {
   else if (signalHold === null || signalHold.length !== n) signalHold = new Float32Array(n);
   const hold = signalHold;
   for (let i = 0; i < n; i++) {
-    const snr = spec[i]! - f[i]!;
-    const leftSnr = i > 0 ? spec[i - 1]! - f[i - 1]! : -Infinity;
-    const rightSnr = i + 1 < n ? spec[i + 1]! - f[i + 1]! : -Infinity;
+    const snr = optionalSnr(spec, f, n, i) ?? 0;
+    const leftSnr = i > 0 ? optionalSnr(spec, f, n, i - 1) ?? -Infinity : -Infinity;
+    const rightSnr = i + 1 < n ? optionalSnr(spec, f, n, i + 1) ?? -Infinity : -Infinity;
     const neighbourSupported = leftSnr >= gate || rightSnr >= gate;
-    const previousSupported = prev[i]! >= gate;
-    const stable = previousSupported && Math.abs(snr - prev[i]!) <= 10;
+    const prevSnr = Number.isFinite(prev[i]!) ? prev[i]! : 0;
+    const previousSupported = prevSnr >= gate;
+    const stable = previousSupported && Math.abs(snr - prevSnr) <= 10;
     const snrNorm = Math.max(0, Math.min(1, (snr - gate) / COHERENCE_SNR_FULL_DB));
     const targetConfidence = snr >= gate
       ? Math.min(
@@ -916,16 +943,18 @@ function updateSignalState(spec: Float32Array): void {
         (stable ? 0.10 : 0),
       )
       : 0;
-    conf[i] = targetConfidence > conf[i]! * COHERENCE_DECAY
+    const decayedConfidence = finiteConfidenceValue(conf, n, i) * COHERENCE_DECAY;
+    conf[i] = targetConfidence > decayedConfidence
       ? targetConfidence
-      : conf[i]! * COHERENCE_DECAY;
+      : decayedConfidence;
 
     if (hold !== null) {
       const target = snr >= gate ? snr : 0;
       const holdDecay = conf[i]! >= coherenceHoldGate
         ? POP_PERSIST_DECAY
         : POP_PERSIST_DECAY * 0.55;
-      const decayed = hold[i]! * holdDecay;
+      const held = Number.isFinite(hold[i]!) ? hold[i]! : 0;
+      const decayed = held * holdDecay;
       const next = target > decayed ? target : decayed;
       hold[i] = next >= gate && conf[i]! >= coherenceHoldGate ? next : 0;
     }
@@ -959,11 +988,12 @@ function updateSnapHistory(spec: Float32Array): void {
   if (snapHistorySnr === null || snapHistorySnr.length !== n) snapHistorySnr = new Float32Array(n);
   const h = snapHistorySnr;
   for (let i = 0; i < n; i++) {
-    const snr = spec[i]! - f[i]!;
-    if (snr >= SNAP_HISTORY_GATE_DB) {
+    const snr = optionalSnr(spec, f, n, i);
+    if (snr !== null && snr >= SNAP_HISTORY_GATE_DB) {
       h[i] = snr;
     } else {
-      const decayed = h[i]! - SNAP_HISTORY_DROP_DB;
+      const held = Number.isFinite(h[i]!) ? h[i]! : 0;
+      const decayed = held - SNAP_HISTORY_DROP_DB;
       h[i] = decayed > 0 ? decayed : 0;
     }
   }
@@ -987,8 +1017,10 @@ export function getSnapHistorySpectrum(): Float32Array | null {
   const out = snapHistorySpec;
   let any = false;
   for (let i = 0; i < n; i++) {
-    out[i] = f[i]! + h[i]!;
-    if (h[i]! > 0) any = true;
+    const floorDb = Number.isFinite(f[i]!) ? f[i]! : FALLBACK_FLOOR_DB;
+    const held = Number.isFinite(h[i]!) ? h[i]! : 0;
+    out[i] = floorDb + held;
+    if (held > 0) any = true;
   }
   return any ? out : null;
 }
@@ -1027,8 +1059,8 @@ function computeLocalMeanPositiveSnr(raw: Float32Array, f: Float32Array, hold: F
   radius = Math.max(POP_RIDGE_MIN_RADIUS_BINS, Math.min(POP_RIDGE_MAX_RADIUS_BINS, radius));
 
   const snrAt = (i: number): number => {
-    const live = raw[i]! - f[i]!;
-    const held = hold ? hold[i]! : 0;
+    const live = optionalSnr(raw, f, n, i) ?? 0;
+    const held = hold && Number.isFinite(hold[i]!) ? hold[i]! : 0;
     const snr = live > held ? live : held;
     return snr > 0 ? snr : 0;
   };
@@ -1065,8 +1097,8 @@ function maybeClampImpulseSnr(
   if (liveSnr < st.popFloorDb + st.impulseRejectDb) return snr;
 
   const n = raw.length;
-  const leftSnr = i > 0 ? raw[i - 1]! - f[i - 1]! : -Infinity;
-  const rightSnr = i + 1 < n ? raw[i + 1]! - f[i + 1]! : -Infinity;
+  const leftSnr = i > 0 ? optionalSnr(raw, f, n, i - 1) ?? -Infinity : -Infinity;
+  const rightSnr = i + 1 < n ? optionalSnr(raw, f, n, i + 1) ?? -Infinity : -Infinity;
   const neighbourSnr = Math.max(leftSnr, rightSnr, 0);
   if (liveSnr - neighbourSnr < st.impulseRejectDb) return snr;
 
@@ -1084,13 +1116,15 @@ function displaySnrForBin(
   i: number,
   clampImpulse: boolean,
 ): number {
-  const liveSnr = raw[i]! - f[i]!;
-  const confidence = conf ? conf[i]! : 0;
+  const liveSnr = optionalSnr(raw, f, raw.length, i) ?? 0;
+  const confidence = finiteConfidenceValue(conf, raw.length, i);
+  const held = hold && Number.isFinite(hold[i]!) ? hold[i]! : 0;
   const heldSnr = hold && confidence >= st.coherenceHoldGate
-    ? hold[i]! * (0.45 + 0.55 * confidence)
+    ? held * (0.45 + 0.55 * confidence)
     : 0;
   let snr = heldSnr > liveSnr ? heldSnr : liveSnr;
-  const contrast = snr - mean[i]!;
+  const localMean = Number.isFinite(mean[i]!) ? mean[i]! : 0;
+  const contrast = snr - localMean;
   if (contrast > 0) snr += Math.min(st.ridgeMaxBoostDb, contrast * st.ridgeBoost);
   if (snr >= st.popFloorDb) {
     const ridgeWeight = contrast <= 0 ? 0.15 : Math.min(1, contrast / 12);
@@ -1186,7 +1220,13 @@ export function findPeakHz(
   clickHz: number,
 ): number | null {
   const n = spec.length;
-  if (n < 3 || hzPerPixel <= 0) return null;
+  if (
+    n < 3 ||
+    hzPerPixel <= 0 ||
+    !Number.isFinite(hzPerPixel) ||
+    !Number.isFinite(centerHz) ||
+    !Number.isFinite(clickHz)
+  ) return null;
   const f = floor;
   const st = useSignalEnhanceStore.getState();
   const half = n / 2;
@@ -1197,11 +1237,15 @@ export function findPeakHz(
   let bestBin = -1;
   let bestVal = -Infinity;
   for (let i = lo; i <= hi; i++) {
-    const v = spec[i]!;
-    const fl = f && f.length === n ? f[i]! : -200;
-    if (v < fl + coherentThreshold(st.snapMinSnrDb, i, n)) continue;
+    const v = finiteSample(spec, i);
+    if (v === null) continue;
+    const snr = optionalSnr(spec, f, n, i);
+    if (snr === null || snr < coherentThreshold(st.snapMinSnrDb, i, n)) continue;
+    const left = finiteSample(spec, i - 1);
+    const right = finiteSample(spec, i + 1);
+    if (left === null || right === null) continue;
     // Local maximum so we land on the carrier crest, not its skirt.
-    if (v >= spec[i - 1]! && v >= spec[i + 1]! && v > bestVal) {
+    if (v >= left && v >= right && v > bestVal) {
       bestVal = v;
       bestBin = i;
     }
@@ -1218,7 +1262,7 @@ export type DetectedPeak = {
 };
 
 function confidenceAt(index: number, n: number): number {
-  return signalConfidence && signalConfidence.length === n ? signalConfidence[index]! : 0;
+  return finiteConfidenceValue(signalConfidence, n, index);
 }
 
 function coherentThreshold(baseDb: number, index: number, n: number): number {
@@ -1234,17 +1278,22 @@ function coherentThreshold(baseDb: number, index: number, n: number): number {
 export function detectPeaks(spec: Float32Array, centerHz: number, hzPerPixel: number): DetectedPeak[] {
   const n = spec.length;
   const f = floor;
-  if (n < 3 || hzPerPixel <= 0 || f === null || f.length !== n) return [];
+  if (n < 3 || hzPerPixel <= 0 || !Number.isFinite(hzPerPixel) || f === null || f.length !== n) return [];
   const st = useSignalEnhanceStore.getState();
   const half = n / 2;
   const found: Array<{ bin: number; snrDb: number }> = [];
   for (let i = 1; i < n - 1; i++) {
-    const v = spec[i]!;
-    const snr = v - f[i]!;
+    const v = finiteSample(spec, i);
+    if (v === null) continue;
+    const snr = optionalSnr(spec, f, n, i);
+    if (snr === null) continue;
     if (snr < coherentThreshold(st.peakMinSnrDb, i, n)) continue;
+    const left = finiteSample(spec, i - 1);
+    const right = finiteSample(spec, i + 1);
+    if (left === null || right === null) continue;
     // `>=` left / `>` right accepts a flat top once (at its right edge) rather
     // than emitting a marker for every bin of the plateau.
-    if (v >= spec[i - 1]! && v > spec[i + 1]!) {
+    if (v >= left && v > right) {
       found.push({ bin: i, snrDb: snr + confidenceAt(i, n) * 2 });
     }
   }
@@ -1268,6 +1317,7 @@ export function detectPeaks(spec: Float32Array, centerHz: number, hzPerPixel: nu
 
 /** Normalised marker opacity (0..1) for a peak SNR, for the amber tick alpha. */
 export function peakAlpha(snrDb: number): number {
+  if (!Number.isFinite(snrDb)) return 0.45;
   return Math.max(0.45, Math.min(1, snrDb / PEAK_FULL_SNR_DB));
 }
 
@@ -1284,13 +1334,17 @@ export function measureOccupiedBandwidth(
 ): [number, number] {
   const n = spec.length;
   if (n === 0) return [0, 0];
+  if (!Number.isFinite(centerBin)) return [0, 0];
+  const radiusBins = Number.isFinite(maxRadiusBins) && maxRadiusBins > 0 ? Math.round(maxRadiusBins) : 0;
   const cb = Math.max(0, Math.min(n - 1, Math.round(centerBin)));
-  const crest = spec[cb]!;
+  const crest = finiteSample(spec, cb);
+  if (crest === null || !Number.isFinite(dropDb)) return [cb, cb];
   const thresh = crest - dropDb;
   let lo = cb;
   let prev = crest;
-  for (let i = cb - 1, stop = Math.max(0, cb - maxRadiusBins); i >= stop; i--) {
-    const v = spec[i]!;
+  for (let i = cb - 1, stop = Math.max(0, cb - radiusBins); i >= stop; i--) {
+    const v = finiteSample(spec, i);
+    if (v === null) break;
     if (v < thresh) break; // dropped past the edge
     if (v > prev + 3) break; // rising again → into an adjacent signal
     prev = v;
@@ -1298,8 +1352,9 @@ export function measureOccupiedBandwidth(
   }
   prev = crest;
   let hi = cb;
-  for (let i = cb + 1, stop = Math.min(n - 1, cb + maxRadiusBins); i <= stop; i++) {
-    const v = spec[i]!;
+  for (let i = cb + 1, stop = Math.min(n - 1, cb + radiusBins); i <= stop; i++) {
+    const v = finiteSample(spec, i);
+    if (v === null) break;
     if (v < thresh) break;
     if (v > prev + 3) break;
     prev = v;
@@ -1323,22 +1378,32 @@ export function measureSignalExtent(
 ): [number, number] {
   const n = spec.length;
   if (n === 0) return [0, 0];
+  if (!Number.isFinite(centerBin)) return [0, 0];
+  const radiusBins = Number.isFinite(maxRadiusBins) && maxRadiusBins > 0 ? Math.round(maxRadiusBins) : 0;
   const haveFloor = floorArr !== null && floorArr.length === n;
   const cb = Math.max(0, Math.min(n - 1, Math.round(centerBin)));
-  const edgeOf = (i: number) => (haveFloor ? floorArr![i]! : -200) + edgeMarginDb;
+  const crest = finiteSample(spec, cb);
+  if (crest === null || !Number.isFinite(edgeMarginDb)) return [cb, cb];
+  const edgeOf = (i: number) => {
+    if (!haveFloor) return FALLBACK_FLOOR_DB + edgeMarginDb;
+    const floorDb = floorArr![i]!;
+    return Number.isFinite(floorDb) ? floorDb + edgeMarginDb : Infinity;
+  };
   let lo = cb;
-  let prev = spec[cb]!;
-  for (let i = cb - 1, stop = Math.max(0, cb - maxRadiusBins); i >= stop; i--) {
-    const v = spec[i]!;
+  let prev = crest;
+  for (let i = cb - 1, stop = Math.max(0, cb - radiusBins); i >= stop; i--) {
+    const v = finiteSample(spec, i);
+    if (v === null) break;
     if (v <= edgeOf(i)) break; // sank into the noise
     if (v > prev + 3) break; // rising again → adjacent signal
     prev = v;
     lo = i;
   }
-  prev = spec[cb]!;
+  prev = crest;
   let hi = cb;
-  for (let i = cb + 1, stop = Math.min(n - 1, cb + maxRadiusBins); i <= stop; i++) {
-    const v = spec[i]!;
+  for (let i = cb + 1, stop = Math.min(n - 1, cb + radiusBins); i <= stop; i++) {
+    const v = finiteSample(spec, i);
+    if (v === null) break;
     if (v <= edgeOf(i)) break;
     if (v > prev + 3) break;
     prev = v;
@@ -1359,6 +1424,7 @@ export function findNearestPeakHz(
   clickHz: number,
   maxRadiusHz: number,
 ): number | null {
+  if (!Number.isFinite(clickHz) || !Number.isFinite(maxRadiusHz) || maxRadiusHz < 0) return null;
   const peaks = detectPeaks(spec, centerHz, hzPerPixel);
   let best: number | null = null;
   let bestDist = Infinity;
@@ -1377,12 +1443,14 @@ export function findNearestPeakHz(
 function refinePeakBin(spec: Float32Array, bin: number): number {
   const n = spec.length;
   if (bin <= 0 || bin >= n - 1) return bin;
-  const l = spec[bin - 1]!;
-  const c = spec[bin]!;
-  const r = spec[bin + 1]!;
+  const l = finiteSample(spec, bin - 1);
+  const c = finiteSample(spec, bin);
+  const r = finiteSample(spec, bin + 1);
+  if (l === null || c === null || r === null) return bin;
   const denom = l - 2 * c + r;
-  if (denom === 0) return bin;
+  if (denom === 0 || !Number.isFinite(denom)) return bin;
   let delta = (0.5 * (l - r)) / denom;
+  if (!Number.isFinite(delta)) return bin;
   if (delta < -1) delta = -1;
   else if (delta > 1) delta = 1;
   return bin + delta;
@@ -1400,8 +1468,8 @@ function walkEdgeBin(spec: Float32Array, startBin: number, dir: number, maxBins:
   for (let steps = 0; steps < maxBins; steps++) {
     const j = i + dir;
     if (j < 0 || j >= n) break;
-    const fl = f && f.length === n ? f[j]! : -200;
-    if (spec[j]! > fl + coherentThreshold(SNAP_EDGE_SNR_DB, j, n)) {
+    const snr = optionalSnr(spec, f, n, j);
+    if (snr !== null && snr > coherentThreshold(SNAP_EDGE_SNR_DB, j, n)) {
       edge = j;
       gap = 0;
     } else if (++gap > SNAP_EDGE_GAP_BINS) {
@@ -1419,14 +1487,26 @@ function centroidBin(spec: Float32Array, lo: number, hi: number): number {
   let wsum = 0;
   let bsum = 0;
   for (let i = lo; i <= hi; i++) {
-    const fl = f && f.length === n ? f[i]! : -200;
-    const snr = spec[i]! - fl;
-    if (snr <= 0) continue;
-    const w = Math.pow(10, snr / 10); // dB → linear power
+    const snr = optionalSnr(spec, f, n, i);
+    if (snr === null || snr <= 0) continue;
+    const w = finiteLinearPowerWeight(snr); // dB → bounded linear power
     wsum += w;
     bsum += w * i;
   }
   return wsum > 0 ? bsum / wsum : 0.5 * (lo + hi);
+}
+
+function strongestFiniteBin(spec: Float32Array, lo: number, hi: number, fallback: number): number {
+  let bestBin = fallback;
+  let best = finiteSample(spec, fallback) ?? -Infinity;
+  for (let i = lo; i <= hi; i++) {
+    const sample = finiteSample(spec, i);
+    if (sample !== null && sample > best) {
+      best = sample;
+      bestBin = i;
+    }
+  }
+  return bestBin;
 }
 
 /** Mode-aware "tune in perfectly" target for a snap click. Anchors on the
@@ -1452,11 +1532,18 @@ export function computeSnapTuneHz(
   mode: RxMode,
 ): number | null {
   const n = spec.length;
-  if (n < 3 || hzPerPixel <= 0) return null;
+  if (
+    n < 3 ||
+    hzPerPixel <= 0 ||
+    !Number.isFinite(hzPerPixel) ||
+    !Number.isFinite(centerHz) ||
+    !Number.isFinite(clickHz) ||
+    !Number.isFinite(maxRadiusHz) ||
+    maxRadiusHz < 0
+  ) return null;
   const f = floor;
   const half = n / 2;
   const st = useSignalEnhanceStore.getState();
-  const flAt = (i: number): number => (f && f.length === n ? f[i]! : -200);
 
   // Anchor: the strongest bin within the search radius that clears the floor.
   // This is what makes "click in the middle of a signal" work — we don't
@@ -1468,9 +1555,12 @@ export function computeSnapTuneHz(
   let anchor = -1;
   let anchorVal = -Infinity;
   for (let i = lo; i <= hi; i++) {
-    if (spec[i]! < flAt(i) + coherentThreshold(st.snapMinSnrDb, i, n)) continue;
-    if (spec[i]! > anchorVal) {
-      anchorVal = spec[i]!;
+    const sample = finiteSample(spec, i);
+    if (sample === null) continue;
+    const snr = optionalSnr(spec, f, n, i);
+    if (snr === null || snr < coherentThreshold(st.snapMinSnrDb, i, n)) continue;
+    if (sample > anchorVal) {
+      anchorVal = sample;
       anchor = i;
     }
   }
@@ -1485,8 +1575,7 @@ export function computeSnapTuneHz(
     case 'CWU':
     case 'CWL': {
       // Narrow carrier: the crest of the blob, sub-bin. Backend adds the pitch.
-      let pk = anchor;
-      for (let i = loEdge; i <= hiEdge; i++) if (spec[i]! > spec[pk]!) pk = i;
+      const pk = strongestFiniteBin(spec, loEdge, hiEdge, anchor);
       return binToHz(refinePeakBin(spec, pk));
     }
     case 'USB':
@@ -1514,8 +1603,7 @@ function modeTuneHz(
   switch (mode) {
     case 'CWU':
     case 'CWL': {
-      let pk = loEdge;
-      for (let i = loEdge; i <= hiEdge; i++) if (spec[i]! > spec[pk]!) pk = i;
+      const pk = strongestFiniteBin(spec, loEdge, hiEdge, loEdge);
       return binToHz(refinePeakBin(spec, pk));
     }
     case 'USB':
@@ -1553,11 +1641,18 @@ export function computeSnapToLineHz(
   maxRadiusHz: number,
 ): number | null {
   const n = spec.length;
-  if (n < 3 || hzPerPixel <= 0) return null;
+  if (
+    n < 3 ||
+    hzPerPixel <= 0 ||
+    !Number.isFinite(hzPerPixel) ||
+    !Number.isFinite(centerHz) ||
+    !Number.isFinite(lineHz) ||
+    !Number.isFinite(maxRadiusHz) ||
+    maxRadiusHz < 0
+  ) return null;
   const f = floor;
   const half = n / 2;
   const st = useSignalEnhanceStore.getState();
-  const flAt = (i: number): number => (f && f.length === n ? f[i]! : -200);
   const binToHz = (b: number): number => centerHz + (b - half) * hzPerPixel;
   const maxBins = Math.max(2, Math.round(SNAP_MAX_SIGNAL_HZ / hzPerPixel));
 
@@ -1566,7 +1661,8 @@ export function computeSnapToLineHz(
   let i = 1;
   const end = n - 2;
   while (i <= end) {
-    if (spec[i]! < flAt(i) + coherentThreshold(st.snapMinSnrDb, i, n)) {
+    const snr = optionalSnr(spec, f, n, i);
+    if (snr === null || snr < coherentThreshold(st.snapMinSnrDb, i, n)) {
       i++;
       continue;
     }
@@ -1604,11 +1700,18 @@ export function signalExtentHz(
   maxRadiusHz: number,
 ): { loHz: number; hiHz: number; crestHz: number } | null {
   const n = spec.length;
-  if (n < 3 || hzPerPixel <= 0) return null;
+  if (
+    n < 3 ||
+    hzPerPixel <= 0 ||
+    !Number.isFinite(hzPerPixel) ||
+    !Number.isFinite(centerHz) ||
+    !Number.isFinite(nearHz) ||
+    !Number.isFinite(maxRadiusHz) ||
+    maxRadiusHz < 0
+  ) return null;
   const f = floor;
   const half = n / 2;
   const st = useSignalEnhanceStore.getState();
-  const flAt = (i: number): number => (f && f.length === n ? f[i]! : -200);
   const binToHz = (b: number): number => centerHz + (b - half) * hzPerPixel;
   const clickBin = Math.round((nearHz - centerHz) / hzPerPixel + half);
   const radius = Math.max(2, Math.round(maxRadiusHz / hzPerPixel));
@@ -1617,9 +1720,12 @@ export function signalExtentHz(
   let anchor = -1;
   let anchorVal = -Infinity;
   for (let i = lo; i <= hi; i++) {
-    if (spec[i]! < flAt(i) + coherentThreshold(st.snapMinSnrDb, i, n)) continue;
-    if (spec[i]! > anchorVal) {
-      anchorVal = spec[i]!;
+    const sample = finiteSample(spec, i);
+    if (sample === null) continue;
+    const snr = optionalSnr(spec, f, n, i);
+    if (snr === null || snr < coherentThreshold(st.snapMinSnrDb, i, n)) continue;
+    if (sample > anchorVal) {
+      anchorVal = sample;
       anchor = i;
     }
   }
@@ -1627,8 +1733,7 @@ export function signalExtentHz(
   const maxBins = Math.max(2, Math.round(SNAP_MAX_SIGNAL_HZ / hzPerPixel));
   const loEdge = walkEdgeBin(spec, anchor, -1, maxBins);
   const hiEdge = walkEdgeBin(spec, anchor, +1, maxBins);
-  let pk = anchor;
-  for (let i = loEdge; i <= hiEdge; i++) if (spec[i]! > spec[pk]!) pk = i;
+  const pk = strongestFiniteBin(spec, loEdge, hiEdge, anchor);
   return { loHz: binToHz(loEdge), hiHz: binToHz(hiEdge), crestHz: binToHz(refinePeakBin(spec, pk)) };
 }
 
@@ -1665,11 +1770,18 @@ export function measureSnapLock(
   anchorLevelDb?: number,
 ): SnapLockMeasure | null {
   const n = spec.length;
-  if (n < 3 || hzPerPixel <= 0) return null;
+  if (
+    n < 3 ||
+    hzPerPixel <= 0 ||
+    !Number.isFinite(hzPerPixel) ||
+    !Number.isFinite(centerHz) ||
+    !Number.isFinite(anchorBodyHz) ||
+    !Number.isFinite(captureHz) ||
+    captureHz < 0
+  ) return null;
   const f = floor;
   const half = n / 2;
   const st = useSignalEnhanceStore.getState();
-  const flAt = (i: number): number => (f && f.length === n ? f[i]! : -200);
   const binToHz = (b: number): number => centerHz + (b - half) * hzPerPixel;
   const anchorBin = Math.round((anchorBodyHz - centerHz) / hzPerPixel + half);
   const capBins = Math.max(1, Math.round(captureHz / hzPerPixel));
@@ -1685,12 +1797,19 @@ export function measureSnapLock(
   // is inert, so first-frame and unlocked callers behave exactly as before.
   let bestBin = -1;
   let bestDist = Infinity;
+  let bestLevelDb = -Infinity;
   for (let i = lo; i <= hi; i++) {
-    if (spec[i]! < flAt(i) + coherentThreshold(st.snapMinSnrDb, i, n)) continue;
-    if (spec[i]! >= spec[i - 1]! && spec[i]! >= spec[i + 1]!) {
+    const sample = finiteSample(spec, i);
+    if (sample === null) continue;
+    const snr = optionalSnr(spec, f, n, i);
+    if (snr === null || snr < coherentThreshold(st.snapMinSnrDb, i, n)) continue;
+    const left = finiteSample(spec, i - 1);
+    const right = finiteSample(spec, i + 1);
+    if (left !== null && right !== null && sample >= left && sample >= right) {
       if (
         anchorLevelDb !== undefined &&
-        spec[i]! - anchorLevelDb > SNAP_LOCK_IDENTITY_REJECT_DB &&
+        Number.isFinite(anchorLevelDb) &&
+        sample - anchorLevelDb > SNAP_LOCK_IDENTITY_REJECT_DB &&
         Math.abs(i - anchorBin) >= dispBins
       ) {
         continue; // displaced + much louder ⇒ a different carrier, not our lock.
@@ -1699,6 +1818,7 @@ export function measureSnapLock(
       if (d < bestDist) {
         bestDist = d;
         bestBin = i;
+        bestLevelDb = sample;
       }
     }
   }
@@ -1710,6 +1830,6 @@ export function measureSnapLock(
   return {
     dialHz: modeTuneHz(spec, loEdge, hiEdge, mode, binToHz),
     bodyHz: binToHz(centroidBin(spec, loEdge, hiEdge)),
-    levelDb: spec[bestBin]!,
+    levelDb: bestLevelDb,
   };
 }
