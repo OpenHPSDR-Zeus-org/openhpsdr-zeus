@@ -1475,6 +1475,12 @@ public static class ZeusEndpoints
             return Results.Ok(diag.Snapshot());
         });
 
+        app.MapPost("/api/radio/diagnostics/dsp-scene", (FrontendDspSceneDiagnosticsRequest req, FrontendDspSceneDiagnosticsService scene) =>
+        {
+            scene.Update(req);
+            return Results.Ok(scene.Snapshot());
+        });
+
         // Operator-selected variant for the 0x0A wire-byte alias family
         // (issue #218). Routes calibration / PA gain / rated-watts dispatch
         // when the connected board is OrionMkII. Default G2 preserves
