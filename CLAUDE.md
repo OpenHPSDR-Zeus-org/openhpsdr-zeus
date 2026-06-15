@@ -23,7 +23,7 @@ AI agents opening PRs against this repo may autonomously fix:
 - **Default values** — anything an operator will notice on first connect: TX power, filter widths, AGC, meter calibration, default band/mode, color palette. One bug report is not evidence that the default is wrong for everyone.
 - **Feature scope creep** — if the issue says "fix meter," fix the meter. Don't add a new meter, refactor the meter pipeline, or rename the meter types.
 
-When uncertain, implement the minimal fix and note in the PR description that design decisions need maintainer review. The maintainer (Brian, EI6LF) is the sole authority on visual design, UX, and defaults.
+When uncertain, implement the minimal fix and note in the PR description that design decisions need maintainer review. **Brian (EI6LF) and Doug (KB2UKA) are the authorities on visual design, UX, and defaults** — either can make or approve these calls; nothing is deferred to Brian alone. Doug routinely makes UX/visual/default decisions directly (e.g. menu structure, control behavior), so "red-light" means "needs Brian's or Doug's sign-off," not "parked on Brian."
 
 ## Load-Bearing Invariants
 
