@@ -36,6 +36,9 @@ public sealed class FrontendDspSceneDiagnosticsService
             SmartNrRecommendation: Clean(request.SmartNrRecommendation, MaxText),
             SmartNrHeldByRxChain: request.SmartNrHeldByRxChain,
             SmartNrRxChainLabel: Clean(request.SmartNrRxChainLabel, 80),
+            SmartNrRxChainRecommendation: Clean(request.SmartNrRxChainRecommendation, MaxText),
+            SmartNrRxChainTone: CleanRxChainTone(request.SmartNrRxChainTone),
+            SmartNrRxChainScore: Score(request.SmartNrRxChainScore),
             MaxSnrDb: Finite(request.MaxSnrDb),
             CoherentMaxSnrDb: Finite(request.CoherentMaxSnrDb),
             OccupiedPct: Percent(request.OccupiedPct),
@@ -97,6 +100,9 @@ public sealed class FrontendDspSceneDiagnosticsService
                 smartNrRecommendation = _latest.SmartNrRecommendation,
                 smartNrHeldByRxChain = _latest.SmartNrHeldByRxChain,
                 smartNrRxChainLabel = _latest.SmartNrRxChainLabel,
+                smartNrRxChainRecommendation = _latest.SmartNrRxChainRecommendation,
+                smartNrRxChainTone = _latest.SmartNrRxChainTone,
+                smartNrRxChainScore = _latest.SmartNrRxChainScore,
                 maxSnrDb = _latest.MaxSnrDb,
                 coherentMaxSnrDb = _latest.CoherentMaxSnrDb,
                 occupiedPct = _latest.OccupiedPct,
@@ -136,6 +142,9 @@ public sealed class FrontendDspSceneDiagnosticsService
                     Recommendation: null,
                     HeldByRxChain: null,
                     RxChainLabel: null,
+                    RxChainRecommendation: null,
+                    RxChainTone: null,
+                    RxChainScore: null,
                     MaxSnrDb: null,
                     CoherentMaxSnrDb: null,
                     OccupiedPct: null,
@@ -174,6 +183,9 @@ public sealed class FrontendDspSceneDiagnosticsService
                 Recommendation: _latest.SmartNrRecommendation,
                 HeldByRxChain: _latest.SmartNrHeldByRxChain,
                 RxChainLabel: _latest.SmartNrRxChainLabel,
+                RxChainRecommendation: _latest.SmartNrRxChainRecommendation,
+                RxChainTone: _latest.SmartNrRxChainTone,
+                RxChainScore: _latest.SmartNrRxChainScore,
                 MaxSnrDb: _latest.MaxSnrDb,
                 CoherentMaxSnrDb: _latest.CoherentMaxSnrDb,
                 OccupiedPct: _latest.OccupiedPct,
@@ -212,6 +224,15 @@ public sealed class FrontendDspSceneDiagnosticsService
 
     private static int? NonNegative(int? value) =>
         value is { } v && v >= 0 ? v : null;
+
+    private static int? Score(int? value) =>
+        value is { } v ? Math.Clamp(v, 0, 100) : null;
+
+    private static string? CleanRxChainTone(string? raw)
+    {
+        var tone = Clean(raw, 16)?.ToLowerInvariant();
+        return tone is "neutral" or "optimize" or "protect" ? tone : null;
+    }
 
     private static FrontendDspSceneTiming Timing(FrontendDspSceneSnapshot latest, DateTimeOffset now)
     {
@@ -297,11 +318,12 @@ public sealed class FrontendDspSceneDiagnosticsService
         bool coherentSubthreshold = latest?.CoherentSubthresholdSignal == true;
         if (coherentSubthreshold && latest?.SmartNrHeldByRxChain == true)
         {
+            var reason = RxChainStatusReason(latest);
             return new(
                 "fresh",
                 Fresh: true,
                 Stale: false,
-                "Frontend DSP scene telemetry is fresh; a coherent subthreshold weak-signal ridge is present, but Smart NR is constrained by RX-chain health.");
+                $"Frontend DSP scene telemetry is fresh; a coherent subthreshold weak-signal ridge is present, but Smart NR is constrained by RX-chain health{reason}.");
         }
 
         if (coherentSubthreshold)
@@ -315,11 +337,22 @@ public sealed class FrontendDspSceneDiagnosticsService
 
         if (latest?.SmartNrHeldByRxChain == true)
         {
+            var reason = RxChainStatusReason(latest);
             return new(
                 "fresh",
                 Fresh: true,
                 Stale: false,
-                "Frontend DSP scene telemetry is fresh; Smart NR is currently constrained by RX-chain health.");
+                $"Frontend DSP scene telemetry is fresh; Smart NR is currently constrained by RX-chain health{reason}.");
+        }
+
+        if (latest?.SmartNrRxChainScore is { } score && score < 80)
+        {
+            var reason = RxChainStatusReason(latest);
+            return new(
+                "fresh",
+                Fresh: true,
+                Stale: false,
+                $"Frontend DSP scene telemetry is fresh; RX-chain health needs attention{reason}.");
         }
 
         return new(
@@ -337,6 +370,10 @@ public sealed class FrontendDspSceneDiagnosticsService
             || !string.IsNullOrWhiteSpace(latest.SmartNrProfile)
             || !string.IsNullOrWhiteSpace(latest.SmartNrReason)
             || !string.IsNullOrWhiteSpace(latest.SmartNrRecommendation)
+            || !string.IsNullOrWhiteSpace(latest.SmartNrRxChainLabel)
+            || !string.IsNullOrWhiteSpace(latest.SmartNrRxChainRecommendation)
+            || !string.IsNullOrWhiteSpace(latest.SmartNrRxChainTone)
+            || latest.SmartNrRxChainScore is not null
             || latest.MaxSnrDb is not null
             || latest.CoherentMaxSnrDb is not null
             || latest.OccupiedPct is not null
@@ -357,6 +394,21 @@ public sealed class FrontendDspSceneDiagnosticsService
         long? SourceAgeMs,
         long? SourceClockSkewMs,
         FrontendDspSceneHealth Health);
+
+    private static string RxChainStatusReason(FrontendDspSceneSnapshot? latest)
+    {
+        if (latest is null) return "";
+        var label = Clean(latest.SmartNrRxChainLabel, 80);
+        var recommendation = Clean(latest.SmartNrRxChainRecommendation, MaxText);
+        var score = latest.SmartNrRxChainScore is { } s ? $" score {s}/100" : "";
+        if (!string.IsNullOrWhiteSpace(label) && !string.IsNullOrWhiteSpace(recommendation))
+            return $": {label}{score}; {recommendation}";
+        if (!string.IsNullOrWhiteSpace(label))
+            return $": {label}{score}";
+        if (!string.IsNullOrWhiteSpace(recommendation))
+            return $": {recommendation}{score}";
+        return score.Length > 0 ? $":{score}" : "";
+    }
 }
 
 public sealed record FrontendDspSceneDiagnosticsRequest(
@@ -369,6 +421,9 @@ public sealed record FrontendDspSceneDiagnosticsRequest(
     string? SmartNrRecommendation,
     bool? SmartNrHeldByRxChain,
     string? SmartNrRxChainLabel,
+    string? SmartNrRxChainRecommendation,
+    string? SmartNrRxChainTone,
+    int? SmartNrRxChainScore,
     double? MaxSnrDb,
     double? CoherentMaxSnrDb,
     double? OccupiedPct,
@@ -392,6 +447,9 @@ public sealed record FrontendDspSceneSnapshot(
     string? SmartNrRecommendation,
     bool? SmartNrHeldByRxChain,
     string? SmartNrRxChainLabel,
+    string? SmartNrRxChainRecommendation,
+    string? SmartNrRxChainTone,
+    int? SmartNrRxChainScore,
     double? MaxSnrDb,
     double? CoherentMaxSnrDb,
     double? OccupiedPct,

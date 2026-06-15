@@ -23,6 +23,9 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
             SmartNrRecommendation: "Hold levels; use Smart NR/filtering",
             SmartNrHeldByRxChain: false,
             SmartNrRxChainLabel: "RX chain optimized",
+            SmartNrRxChainRecommendation: "Hold front-end settings",
+            SmartNrRxChainTone: "neutral",
+            SmartNrRxChainScore: 91,
             MaxSnrDb: 18.24,
             CoherentMaxSnrDb: 17.86,
             OccupiedPct: 4.42,
@@ -48,6 +51,9 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.Contains("subthreshold weak-signal", root.GetProperty("diagnosticRecommendation").GetString());
         Assert.Equal("dx", root.GetProperty("signalProfile").GetString());
         Assert.Equal("NR2", root.GetProperty("smartNrProfile").GetString());
+        Assert.Equal("Hold front-end settings", root.GetProperty("smartNrRxChainRecommendation").GetString());
+        Assert.Equal("neutral", root.GetProperty("smartNrRxChainTone").GetString());
+        Assert.Equal(91, root.GetProperty("smartNrRxChainScore").GetInt32());
         Assert.Equal(3, root.GetProperty("peakCount").GetInt32());
         Assert.True(root.GetProperty("coherentSubthresholdSignal").GetBoolean());
         Assert.True(root.GetProperty("ageMs").GetInt64() >= 0);
@@ -85,6 +91,9 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
             SmartNrRecommendation: "Wait for RX chain",
             SmartNrHeldByRxChain: true,
             SmartNrRxChainLabel: "ADC headroom limited",
+            SmartNrRxChainRecommendation: "Add 3-6 dB attenuation",
+            SmartNrRxChainTone: "protect",
+            SmartNrRxChainScore: 62,
             MaxSnrDb: 7.1,
             CoherentMaxSnrDb: 6.8,
             OccupiedPct: 1.2,
@@ -99,6 +108,8 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
 
         Assert.Contains("coherent subthreshold weak-signal", recommendation);
         Assert.Contains("constrained by RX-chain health", recommendation);
+        Assert.Contains("ADC headroom limited", recommendation);
+        Assert.Contains("Add 3-6 dB attenuation", recommendation);
     }
 
     [Fact]
@@ -116,6 +127,9 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
             SmartNrRecommendation: "Wait for live evidence",
             SmartNrHeldByRxChain: false,
             SmartNrRxChainLabel: "RX chain optimized",
+            SmartNrRxChainRecommendation: "Hold front-end settings",
+            SmartNrRxChainTone: "neutral",
+            SmartNrRxChainScore: 96,
             MaxSnrDb: 7.1,
             CoherentMaxSnrDb: 6.8,
             OccupiedPct: 1.2,
@@ -152,6 +166,9 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
             SmartNrRecommendation: null,
             SmartNrHeldByRxChain: null,
             SmartNrRxChainLabel: null,
+            SmartNrRxChainRecommendation: null,
+            SmartNrRxChainTone: null,
+            SmartNrRxChainScore: null,
             MaxSnrDb: null,
             CoherentMaxSnrDb: null,
             OccupiedPct: null,
@@ -187,6 +204,9 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
             SmartNrRecommendation: "Wait for valid clock",
             SmartNrHeldByRxChain: false,
             SmartNrRxChainLabel: "RX chain optimized",
+            SmartNrRxChainRecommendation: "Hold front-end settings",
+            SmartNrRxChainTone: "neutral",
+            SmartNrRxChainScore: 94,
             MaxSnrDb: 7.1,
             CoherentMaxSnrDb: 6.8,
             OccupiedPct: 1.2,

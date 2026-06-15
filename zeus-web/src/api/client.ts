@@ -551,6 +551,9 @@ export type FrontendDspSceneDiagnosticsDto = {
   smartNrRecommendation: string | null;
   smartNrHeldByRxChain: boolean | null;
   smartNrRxChainLabel: string | null;
+  smartNrRxChainRecommendation: string | null;
+  smartNrRxChainTone: string | null;
+  smartNrRxChainScore: number | null;
   maxSnrDb: number | null;
   coherentMaxSnrDb: number | null;
   occupiedPct: number | null;
@@ -572,6 +575,9 @@ export type FrontendDspSceneDiagnosticsPayload = {
   smartNrRecommendation?: string | null;
   smartNrHeldByRxChain?: boolean | null;
   smartNrRxChainLabel?: string | null;
+  smartNrRxChainRecommendation?: string | null;
+  smartNrRxChainTone?: string | null;
+  smartNrRxChainScore?: number | null;
   maxSnrDb?: number | null;
   coherentMaxSnrDb?: number | null;
   occupiedPct?: number | null;
@@ -600,6 +606,9 @@ export type SmartNrConditionDto = {
   recommendation: string | null;
   heldByRxChain: boolean | null;
   rxChainLabel: string | null;
+  rxChainRecommendation: string | null;
+  rxChainTone: string | null;
+  rxChainScore: number | null;
   maxSnrDb: number | null;
   coherentMaxSnrDb: number | null;
   occupiedPct: number | null;
@@ -1730,6 +1739,9 @@ function normalizeFrontendDspScene(raw: unknown): FrontendDspSceneDiagnosticsDto
     smartNrRecommendation: diagString(r.smartNrRecommendation),
     smartNrHeldByRxChain: diagBool(r.smartNrHeldByRxChain),
     smartNrRxChainLabel: diagString(r.smartNrRxChainLabel),
+    smartNrRxChainRecommendation: diagString(r.smartNrRxChainRecommendation),
+    smartNrRxChainTone: diagString(r.smartNrRxChainTone),
+    smartNrRxChainScore: diagNumber(r.smartNrRxChainScore),
     maxSnrDb: diagNumber(r.maxSnrDb),
     coherentMaxSnrDb: diagNumber(r.coherentMaxSnrDb),
     occupiedPct: diagNumber(r.occupiedPct),
@@ -1761,6 +1773,9 @@ function normalizeSmartNrCondition(raw: unknown): SmartNrConditionDto {
     recommendation: diagString(r.recommendation),
     heldByRxChain: diagBool(r.heldByRxChain),
     rxChainLabel: diagString(r.rxChainLabel),
+    rxChainRecommendation: diagString(r.rxChainRecommendation),
+    rxChainTone: diagString(r.rxChainTone),
+    rxChainScore: diagNumber(r.rxChainScore),
     maxSnrDb: diagNumber(r.maxSnrDb),
     coherentMaxSnrDb: diagNumber(r.coherentMaxSnrDb),
     occupiedPct: diagNumber(r.occupiedPct),
