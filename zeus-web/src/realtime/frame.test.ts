@@ -125,4 +125,44 @@ describe('decodeDisplayFrame', () => {
     new DataView(buf).setUint16(2, BODY_FIXED_BYTES + 4, true);
     expect(() => decodeDisplayFrame(buf)).toThrow(FrameDecodeError);
   });
+
+  it('rejects invalid display geometry before exposing bin arrays', () => {
+    for (const patch of [
+      (dv: DataView) => dv.setUint16(HEADER_BYTES + 2, 0, true),
+      (dv: DataView) => dv.setFloat32(HEADER_BYTES + 12, Number.NaN, true),
+      (dv: DataView) => dv.setFloat32(HEADER_BYTES + 12, Infinity, true),
+      (dv: DataView) => dv.setFloat32(HEADER_BYTES + 12, 0, true),
+    ]) {
+      const buf = encodeDisplayFrame(sampleFrame(64));
+      patch(new DataView(buf));
+      expect(() => decodeDisplayFrame(buf)).toThrow(FrameDecodeError);
+    }
+  });
+});
+
+describe('encodeDisplayFrame', () => {
+  it('rejects invalid geometry instead of wrapping it onto the wire', () => {
+    expect(() => encodeDisplayFrame(sampleFrame(0))).toThrow(FrameDecodeError);
+    expect(() =>
+      encodeDisplayFrame({
+        ...sampleFrame(64),
+        hzPerPixel: Number.NaN,
+      }),
+    ).toThrow(FrameDecodeError);
+  });
+
+  it('rejects bin arrays that do not match the declared frame width', () => {
+    expect(() =>
+      encodeDisplayFrame({
+        ...sampleFrame(64),
+        panDb: new Float32Array(63),
+      }),
+    ).toThrow(FrameDecodeError);
+    expect(() =>
+      encodeDisplayFrame({
+        ...sampleFrame(64),
+        wfDb: new Float32Array(65),
+      }),
+    ).toThrow(FrameDecodeError);
+  });
 });

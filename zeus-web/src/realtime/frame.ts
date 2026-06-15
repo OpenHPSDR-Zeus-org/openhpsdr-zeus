@@ -70,6 +70,16 @@ export class FrameDecodeError extends Error {
   }
 }
 
+function validDisplayGeometry(width: number, hzPerPixel: number): boolean {
+  return (
+    Number.isInteger(width) &&
+    width > 0 &&
+    width <= 0xffff &&
+    Number.isFinite(hzPerPixel) &&
+    hzPerPixel > 0
+  );
+}
+
 export function decodeDisplayFrame(buffer: ArrayBuffer): DecodedFrame {
   if (buffer.byteLength < HEADER_BYTES + BODY_FIXED_BYTES) {
     throw new FrameDecodeError(
@@ -101,6 +111,11 @@ export function decodeDisplayFrame(buffer: ArrayBuffer): DecodedFrame {
   const width = dv.getUint16(HEADER_BYTES + 2, true);
   const centerHz = dv.getBigInt64(HEADER_BYTES + 4, true);
   const hzPerPixel = dv.getFloat32(HEADER_BYTES + 12, true);
+  if (!validDisplayGeometry(width, hzPerPixel)) {
+    throw new FrameDecodeError(
+      `invalid display geometry: width ${width}, hzPerPixel ${hzPerPixel}`,
+    );
+  }
 
   const pixelBytes = width * 4;
   const needed = BODY_FIXED_BYTES + pixelBytes * 2;
@@ -154,6 +169,16 @@ export function encodeDisplayFrame(frame: {
   wfDb: Float32Array;
 }): ArrayBuffer {
   const { width } = frame;
+  if (!validDisplayGeometry(width, frame.hzPerPixel)) {
+    throw new FrameDecodeError(
+      `invalid display geometry: width ${width}, hzPerPixel ${frame.hzPerPixel}`,
+    );
+  }
+  if (frame.panDb.length !== width || frame.wfDb.length !== width) {
+    throw new FrameDecodeError(
+      `display bin length mismatch: width ${width}, pan ${frame.panDb.length}, wf ${frame.wfDb.length}`,
+    );
+  }
   const pixelBytes = width * 4;
   const payloadLen = BODY_FIXED_BYTES + pixelBytes * 2;
   const total = HEADER_BYTES + payloadLen;
