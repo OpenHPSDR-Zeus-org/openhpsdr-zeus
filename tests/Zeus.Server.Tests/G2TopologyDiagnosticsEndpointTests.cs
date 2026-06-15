@@ -1,0 +1,101 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Endpoint coverage for the ANAN G2 receiver topology diagnostics surfaced
+// from the manual audit.
+
+using System.Net;
+using System.Text.Json;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Hosting;
+using Zeus.Contracts;
+
+namespace Zeus.Server.Tests;
+
+public sealed class G2TopologyDiagnosticsEndpointTests
+{
+    [Fact]
+    public async Task HardwareDiagnostics_ReportsG2TopologyCapabilityFacts()
+    {
+        using var factory = new Factory();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var radio = scope.ServiceProvider.GetRequiredService<RadioService>();
+            radio.MarkProtocol2Connected(
+                "192.168.1.21:1024",
+                1_536_000,
+                boardKind: HpsdrBoardKind.OrionMkII);
+        }
+
+        using var client = factory.CreateClient();
+        var resp = await client.GetAsync("/api/radio/diagnostics");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+        var root = body.RootElement;
+        var caps = root.GetProperty("capabilities");
+
+        Assert.Equal("OrionMkII", root.GetProperty("effectiveBoard").GetString());
+        Assert.Equal("G2", root.GetProperty("orionMkIIVariant").GetString());
+        Assert.Equal(2, caps.GetProperty("rxAdcCount").GetInt32());
+        Assert.True(caps.GetProperty("mkiiBpf").GetBoolean());
+        Assert.True(caps.GetProperty("hasSteppedAttenuationRx2").GetBoolean());
+        Assert.Equal(1_536_000, caps.GetProperty("maxRxSampleRateHz").GetInt32());
+
+        var manualReference = root.GetProperty("referenceMap")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("field").GetString() == "G2 manual receiver topology");
+        Assert.Equal("audited", manualReference.GetProperty("status").GetString());
+        Assert.Contains("10 independent DDC receivers", manualReference.GetProperty("notes").GetString());
+        Assert.Contains("ADC2 ground-on-TX", manualReference.GetProperty("notes").GetString());
+    }
+
+    [Fact]
+    public async Task HardwareDiagnostics_AdvertisesG2ReceiverTopologySurface()
+    {
+        using var factory = new Factory();
+        using var client = factory.CreateClient();
+
+        var resp = await client.GetAsync("/api/radio/diagnostics");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+        var surface = body.RootElement
+            .GetProperty("featureSurfaces")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "rx.g2.receiver-topology");
+        var telemetry = surface.GetProperty("telemetryPaths")
+            .EnumerateArray()
+            .Select(item => item.GetString())
+            .ToArray();
+        var controls = surface.GetProperty("candidateControls")
+            .EnumerateArray()
+            .Select(item => item.GetString())
+            .ToArray();
+        var notes = surface.GetProperty("notes").GetString();
+
+        Assert.Equal("telemetry-ready", surface.GetProperty("implementationStatus").GetString());
+        Assert.Contains("capabilities.rxAdcCount", telemetry);
+        Assert.Contains("capabilities.maxRxSampleRateHz", telemetry);
+        Assert.Contains("p2.adc0MaxMagnitude", telemetry);
+        Assert.Contains("p2.adc1MaxMagnitude", telemetry);
+        Assert.Contains("Settings > Hardware > Receiver Topology", controls);
+        Assert.Contains("10 independent DDC receivers", notes);
+        Assert.Contains("ADC2 ground-on-TX", notes);
+    }
+
+    private sealed class Factory : WebApplicationFactory<Program>
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment("Test");
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IHostedService>();
+            });
+        }
+    }
+}

@@ -1636,7 +1636,14 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             field = "Static board capabilities",
             source = "Thetis clsHardwareSpecific.cs + docs/references/protocol-1/thetis-board-matrix.md",
             status = "mapped",
-            notes = "RX ADC count, MKII BPF, ADC supply, L/R swap, telemetry presence, audio amp, RX2 attenuation mode, rated watts",
+            notes = "RX ADC count, MKII BPF, ADC supply, L/R swap, telemetry presence, audio amp, RX2 attenuation mode, rated watts, and the G2-class 1.536 MHz DDC ceiling",
+        },
+        new
+        {
+            field = "G2 manual receiver topology",
+            source = "ANAN G2 user manual: block diagram, feature list, and specifications",
+            status = "audited",
+            notes = "Manual confirms dual phase-synchronous ADCs, independent ADC filter-bank paths, RX2/ADC2 routing, 10 independent DDC receivers, and ADC2 ground-on-TX hardware behavior; Zeus exposes the safe topology facts and live ADC telemetry while leaving unmapped routing controls read-only.",
         },
         new
         {
@@ -1659,7 +1666,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         {
             field = "Board-specific hardware options",
             status = "candidate",
-            notes = "Thetis gates Alex/Apollo/MKII/Orion options by model. Zeus should surface only controls backed by BoardCapabilities and persisted per radio.",
+            notes = "Thetis gates Alex/Apollo/MKII/Orion options by model. Zeus should surface only controls backed by BoardCapabilities and persisted per radio; G2 ADC2 ground-on-TX and 10-DDC assignment stay read-only until their protocol/UI mapping is verified.",
         },
         new
         {
@@ -1720,6 +1727,39 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             },
             safetyClass = "rx-safe",
             notes = "Machine-readable before/after deltas let new hardware actions be mapped by labeling one controlled action at a time.",
+        },
+        new
+        {
+            id = "rx.g2.receiver-topology",
+            title = "G2 receiver ADC topology and wide DDC capacity",
+            category = "rx-hardware",
+            implementationStatus = "telemetry-ready",
+            userConfigurable = true,
+            source = "ANAN G2 manual block diagram/specifications + BoardCapabilities + P2 hi-priority ADC telemetry",
+            telemetryPaths = new[]
+            {
+                "connectedBoard",
+                "effectiveBoard",
+                "orionMkIIVariant",
+                "capabilities.rxAdcCount",
+                "capabilities.mkiiBpf",
+                "capabilities.hasSteppedAttenuationRx2",
+                "capabilities.maxRxSampleRateHz",
+                "p2.adcOverloadBits",
+                "p2.adc0MaxMagnitude",
+                "p2.adc1MaxMagnitude",
+                "p2.adc0MaxMagnitudeAtOverload",
+                "p2.adc1MaxMagnitudeAtOverload",
+            },
+            candidateControls = new[]
+            {
+                "/api/radio/diagnostics",
+                "/api/radio/capabilities",
+                "/api/radio/network-profile",
+                "Settings > Hardware > Receiver Topology",
+            },
+            safetyClass = "rx-safe",
+            notes = "The G2/Saturn manual topology is now visible as safe diagnostics: dual phase-synchronous ADCs, independent MKII/preselector filter-bank paths, RX2 stepped attenuation, and the 48 kHz..1.536 MHz P2 DDC ceiling. The manual's 10 independent DDC receivers and ADC2 ground-on-TX behavior remain explicitly marked as not exposed operator controls until protocol mapping and live marker captures prove the safe control surface.",
         },
         new
         {

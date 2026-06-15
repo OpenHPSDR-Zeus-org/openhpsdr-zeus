@@ -94,6 +94,17 @@ function volts(v: number | null | undefined): string {
   return `${v.toFixed(2)} V`;
 }
 
+function hz(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '-';
+  if (!Number.isFinite(v)) return '-';
+  if (v >= 1_000_000) {
+    const mhz = v / 1_000_000;
+    return `${Number.isInteger(mhz) ? mhz.toFixed(0) : mhz.toFixed(3)} MHz`;
+  }
+  if (v >= 1000) return `${v / 1000} kHz`;
+  return `${v} Hz`;
+}
+
 function FieldGrid({ fields }: { fields: Field[] }) {
   return (
     <div
@@ -281,6 +292,59 @@ function NetworkProfileDiagnostics({ profile }: { profile: RadioNetworkProfileDt
       <NetworkCounters label="Protocol 1 Counters" counters={profile.p1} />
       <NetworkCounters label="Protocol 2 Counters" counters={profile.p2} />
       <DiagnosticRecommendation text={profile.diagnosticRecommendation} />
+    </div>
+  );
+}
+
+function ReceiverTopologyDiagnostics({ diag }: { diag: HardwareDiagnosticsDto | null }) {
+  if (!diag) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for topology diagnostics.</div>;
+  const caps = diag.capabilities;
+  const p2 = diag.p2;
+  const dualAdc = caps.rxAdcCount >= 2;
+  const saturnClass = diag.effectiveBoard === 'OrionMkII' && dualAdc && caps.mkiiBpf;
+  const g2Class = saturnClass && caps.maxRxSampleRateHz >= 1_536_000;
+  const zeusRxSurface = dualAdc ? 'RX1/RX2 exposed' : 'RX1 exposed';
+  const manualRxCapacity = g2Class
+    ? '10 independent DDC receivers'
+    : saturnClass
+      ? 'Saturn-class dual DDC topology'
+      : 'not applicable';
+  const recommendation = g2Class
+    ? 'G2 topology is recognized from the manual-backed capability map: dual phase-synchronous ADCs, independent MKII/preselector paths, RX2 stepped attenuation, and the 1.536 MHz DDC ceiling. Zeus exposes RX1/RX2 plus live P2 ADC max/overload telemetry; 10-DDC assignment and ADC2 ground-on-TX remain read-only gaps until protocol mapping is verified.'
+    : dualAdc
+      ? 'This board exposes a dual-ADC topology. Zeus can monitor both ADC max/overload paths, but any board-specific ADC2 transmit routing should stay read-only until verified for this variant.'
+      : 'This board is single-ADC; G2 ADC2 and RX2 routing controls do not apply.';
+
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Board', value: diag.effectiveBoard },
+          { label: '0x0A Variant', value: diag.orionMkIIVariant },
+          { label: 'RX ADCs', value: caps.rxAdcCount },
+          { label: 'Dual Phase Sync', value: boolLabel(dualAdc) },
+          { label: 'Independent Filter Banks', value: boolLabel(dualAdc && caps.mkiiBpf) },
+          { label: 'MKII Preselector', value: boolLabel(caps.mkiiBpf) },
+          { label: 'RX2 Stepped ATT', value: boolLabel(caps.hasSteppedAttenuationRx2) },
+          { label: 'Max DDC BW', value: hz(caps.maxRxSampleRateHz) },
+          { label: 'Manual RX Capacity', value: manualRxCapacity },
+          { label: 'Zeus RX Surface', value: zeusRxSurface },
+          { label: 'ADC2 Ground on TX', value: g2Class ? 'not exposed' : 'not applicable' },
+          { label: '6m LNA / Filters', value: caps.mkiiBpf ? 'manual-backed, no separate runtime telemetry' : 'not applicable' },
+        ]}
+      />
+      <FieldGrid
+        fields={[
+          { label: 'P2 Packets', value: p2.packets },
+          { label: 'P2 Updated', value: time(p2.lastUpdatedUtc) },
+          { label: 'ADC Overload', value: hex(p2.adcOverloadBits, 2) },
+          { label: 'ADC0 Max', value: adc(p2.adc0MaxMagnitude) },
+          { label: 'ADC1 Max', value: adc(p2.adc1MaxMagnitude) },
+          { label: 'ADC0 Over Max', value: adc(p2.adc0MaxMagnitudeAtOverload) },
+          { label: 'ADC1 Over Max', value: adc(p2.adc1MaxMagnitudeAtOverload) },
+        ]}
+      />
+      <DiagnosticRecommendation text={recommendation} />
     </div>
   );
 }
@@ -1471,6 +1535,14 @@ export function HardwareDiagnosticsPanel() {
           <span className="ps-card-hint">Thetis-derived static map</span>
         </h4>
         <FieldGrid fields={capabilityFields} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          Receiver Topology
+          <span className="ps-card-hint">G2 manual ADC / DDC / filter-bank audit</span>
+        </h4>
+        <ReceiverTopologyDiagnostics diag={diag} />
       </div>
 
       <div className="ps-card">
