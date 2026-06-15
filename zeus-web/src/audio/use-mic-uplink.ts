@@ -43,23 +43,12 @@
 // License for details.
 
 import { useEffect } from 'react';
-import { startMicUplink, type MicUplinkHandle } from './mic-uplink';
-import { sendMicPcm } from '../realtime/ws-client';
+import {
+  ensureMicUplinkRunning,
+  retainMicUplinkConsumer,
+} from './mic-uplink-session';
 import { useTxStore } from '../state/tx-store';
 import { useCapabilitiesStore } from '../state/capabilities-store';
-import { warnOnce } from '../util/logger';
-
-// Silence floor for the mic meter — below this we clamp so the UI doesn't
-// render -∞ and so the bar snaps to fully-empty on a quiet mic.
-const MIC_DBFS_FLOOR = -100;
-
-// Visual update cadence for MicMeter. The mic worklet emits a peak per
-// 20 ms block (50 Hz); driving Zustand at that rate triggers ~50 React
-// reconciliations a second of the bottom-bar meter, which is invisible to
-// the operator but a real CPU drain. We bucket the worklet's per-block
-// peaks across a ~50 ms window (20 Hz visual rate, smoother than TV) and
-// emit the *maximum* of each window so clip indication stays accurate.
-const MIC_VISUAL_INTERVAL_MS = 50;
 
 /**
  * Opens the mic AudioWorklet on mount and keeps it running while the app
@@ -91,52 +80,10 @@ export function useMicUplink(): void {
       return;
     }
 
-    let handle: MicUplinkHandle | null = null;
-    let disposed = false;
-    let windowPeak = 0;
-    let lastEmit = 0;
-
-    startMicUplink((samples, peak) => {
-      // Level: always pushed so MicMeter animates on RX. Bucket the
-      // per-block peaks across MIC_VISUAL_INTERVAL_MS and emit the max so
-      // a transient clip is never lost between visual ticks.
-      if (peak > windowPeak) windowPeak = peak;
-      const now = performance.now();
-      if (now - lastEmit >= MIC_VISUAL_INTERVAL_MS) {
-        const dbfs = windowPeak > 0
-          ? Math.max(MIC_DBFS_FLOOR, 20 * Math.log10(windowPeak))
-          : MIC_DBFS_FLOOR;
-        useTxStore.getState().setMicDbfs(dbfs);
-        lastEmit = now;
-        windowPeak = 0;
-      }
-
-      // Samples: forwarded when the local operator has actually keyed
-      // (MoxButton / spacebar PTT / MobilePttButton), or when TX Monitor /
-      // Audio Suite audition is on so the off-air monitor can run through
-      // the same server-side TX chain. Still gated on localMicArmed rather
-      // than moxOn for keyed TX so a server-side MOX edge from a TCI client
-      // (WSJT-X / MSHV) doesn't make the browser race the TCI audio path into
-      // TxAudioIngest._accumulator. See issue #346.
-      const tx = useTxStore.getState();
-      if (tx.localMicArmed || tx.txMonitorEnabled) sendMicPcm(samples);
-    })
-      .then((h) => {
-        if (disposed) { void h.stop(); return; }
-        handle = h;
-        useTxStore.getState().setMicError(null);
-      })
-      .catch((err: unknown) => {
-        const msg = err instanceof Error ? err.message : String(err);
-        warnOnce('mic-uplink-failed', `mic capture unavailable: ${msg}`);
-        useTxStore.getState().setMicError(msg);
-      });
-
-    return () => {
-      disposed = true;
-      const h = handle;
-      handle = null;
-      if (h) void h.stop();
-    };
+    const release = retainMicUplinkConsumer();
+    void ensureMicUplinkRunning().catch(() => {
+      /* mic-uplink-session stores the visible error */
+    });
+    return release;
   }, [capsLoaded, hostMode]);
 }

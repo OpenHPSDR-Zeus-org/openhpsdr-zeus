@@ -100,7 +100,7 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
     }
 
     [Fact]
-    public void AutoAgc_LowersEffectiveGainWhenWdspAgcIsCutting()
+    public void AutoAgc_LowersEffectiveGainWhenWdspAgcIsCuttingAndAdcIsNearFullScale()
     {
         using var radio = NewRadio();
         radio.SetAgcTop(60.0);
@@ -114,6 +114,21 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
     }
 
     [Fact]
+    public void AutoAgc_DoesNotLowerEffectiveGainWhenWdspAgcCutsWithCleanAdcHeadroom()
+    {
+        using var radio = NewRadio();
+        radio.SetAgcTop(52.0);
+        radio.SetAutoAgc(true);
+
+        for (int i = 0; i < 20; i++)
+            radio.HandleRxMetersForAutoAgc(signalDbm: -75.0, adcPkDbfs: -60.0, agcGainDb: -24.5, nowMs: i * 500);
+
+        var snap = radio.Snapshot();
+        Assert.Equal(52.0, snap.AgcTopDb);
+        Assert.Equal(0.0, snap.AgcOffsetDb);
+    }
+
+    [Fact]
     public void AutoAgc_RecoversNegativeOffsetWhenAgcCutClears()
     {
         using var radio = NewRadio();
@@ -121,7 +136,7 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         radio.SetAutoAgc(true);
 
         for (int i = 0; i < 4; i++)
-            radio.HandleRxMetersForAutoAgc(signalDbm: -72.0, adcPkDbfs: -8.0, agcGainDb: -28.0, nowMs: i * 500);
+            radio.HandleRxMetersForAutoAgc(signalDbm: -72.0, adcPkDbfs: -5.0, agcGainDb: -28.0, nowMs: i * 500);
 
         Assert.Equal(-2.0, radio.Snapshot().AgcOffsetDb);
 

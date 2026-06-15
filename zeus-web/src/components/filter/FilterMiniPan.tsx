@@ -70,7 +70,7 @@ const BRACKET_MIN_SNR_DB = 6;         // only mark carriers this far above the f
 const BRACKET_TRACK_TOLERANCE_HZ = 260; // nearby detections belong to the same visual marker
 const BRACKET_TRACK_TTL_MS = 1800;     // keep marker state briefly across missed detections
 const BRACKET_SMOOTH_ALPHA = 0.055;    // EMA for measured signal edges
-const BRACKET_LABEL_MAX = 3;           // visible numeric labels; guides may still show
+const BRACKET_LABEL_MAX = 1;           // one active bandwidth lock; guides may still show
 const BRACKET_LABEL_HOLD_MS = 1500;    // minimum dwell before small label changes
 const BRACKET_LABEL_CONFIRM_MS = 900;  // candidate value must persist before replacing a label
 const BRACKET_LABEL_QUANTUM_HZ = 100;  // kHz labels step by 0.1 kHz
@@ -79,6 +79,9 @@ const BRACKET_LABEL_JUMP_CONFIRM_MS = 350; // but only after a brief confirmatio
 const BRACKET_LABEL_MIN_CONFIDENCE = 0.45;
 const BRACKET_CONFIDENCE_SPAN_HZ = 550; // edge disagreement that drains confidence
 const BRACKET_OVERLAP_RATIO = 0.45;    // suppress duplicate labels on the same signal hump
+const EQ_NODE_MAX = 3;                 // strongest frequency nodes shown in analyzer mode
+const EQ_NODE_MIN_CONFIDENCE = 0.32;
+const MEASUREMENT_PEAK_HOLD_MS = 1000; // hold prominent-frequency readouts for operator readability
 const PEAKHOLD_DECAY_PX = 0.45;       // peak-hold envelope fall rate (px/frame ≈ 13 px/s)
 const FIT_HIT_PX = 26;                // click-to-fit grab radius around a carrier
 const FIT_MARGIN_HZ = 120;            // breathing room added each side when fitting
@@ -103,6 +106,10 @@ type BracketTrack = {
   candidateBwHz: number;
   candidateSince: number;
   confidence: number;
+  snrDb: number;
+  heldCrestHz: number;
+  heldSnrDb: number;
+  heldUntil: number;
   lastLabelAt: number;
   lastSeenAt: number;
 };
@@ -250,6 +257,7 @@ function smoothedBracketMeasurement(
   crestHz: number,
   loHz: number,
   hiHz: number,
+  snrDb: number,
 ): BracketTrack {
   let best: BracketTrack | null = null;
   let bestDist = BRACKET_TRACK_TOLERANCE_HZ;
@@ -272,6 +280,10 @@ function smoothedBracketMeasurement(
       candidateBwHz: quantizedBwHz,
       candidateSince: now,
       confidence: 0.35,
+      snrDb,
+      heldCrestHz: crestHz,
+      heldSnrDb: snrDb,
+      heldUntil: now + MEASUREMENT_PEAK_HOLD_MS,
       lastLabelAt: now,
       lastSeenAt: now,
     };
@@ -286,7 +298,14 @@ function smoothedBracketMeasurement(
   best.crestHz += (crestHz - best.crestHz) * Math.min(0.4, edgeAlpha * 1.5);
   best.loHz += (loHz - best.loHz) * edgeAlpha;
   best.hiHz += (hiHz - best.hiHz) * edgeAlpha;
+  best.snrDb += (snrDb - best.snrDb) * 0.14;
   best.lastSeenAt = now;
+
+  if (best.snrDb >= best.heldSnrDb || now >= best.heldUntil) {
+    best.heldCrestHz = best.crestHz;
+    best.heldSnrDb = best.snrDb;
+    best.heldUntil = now + MEASUREMENT_PEAK_HOLD_MS;
+  }
 
   const smoothedBwHz = Math.max(0, best.hiHz - best.loHz);
   const widthErrorHz = Math.abs(rawBwHz - smoothedBwHz);
@@ -748,6 +767,27 @@ export function FilterMiniPan() {
         const drawnBands: Array<{ loPx: number; hiPx: number }> = [];
         const drawnLabels: Array<{ left: number; right: number; top: number; bottom: number }> = [];
         let labelCount = 0;
+        let nodeCount = 0;
+        const placeChip = (
+          centerX: number,
+          baseBy: number,
+          chipW: number,
+          chipH: number,
+        ): { by: number; rect: { left: number; right: number; top: number; bottom: number } } | null => {
+          const laneGap = Math.max(2, Math.round(2 * dpr));
+          const lx = Math.max(chipW / 2 + 2, Math.min(w - chipW / 2 - 2, centerX));
+          for (let lane = 0; lane < 3; lane++) {
+            const by = Math.max(plotTop + chipH + 1, baseBy - lane * (chipH + laneGap));
+            const rect = {
+              left: lx - chipW / 2,
+              right: lx + chipW / 2,
+              top: by - chipH,
+              bottom: by,
+            };
+            if (!drawnLabels.some((r) => rectsOverlap(rect, r))) return { by, rect };
+          }
+          return null;
+        };
         for (const p of peaks) {
           const xC = ((p.hz - loHz) / spanHz) * w;
           if (xC < 0 || xC > w) continue;
@@ -765,7 +805,7 @@ export function FilterMiniPan() {
             loEdgeHz = dCenter + (obLo - half) * d.hzPerPixel;
             hiEdgeHz = dCenter + (obHi - half) * d.hzPerPixel;
           }
-          const track = smoothedBracketMeasurement(bracketTracks, now, ext.crestHz, loEdgeHz, hiEdgeHz);
+          const track = smoothedBracketMeasurement(bracketTracks, now, ext.crestHz, loEdgeHz, hiEdgeHz, p.snrDb);
           loEdgeHz = track.loHz;
           hiEdgeHz = track.hiHz;
           if (hiEdgeHz < loEdgeHz) {
@@ -780,15 +820,17 @@ export function FilterMiniPan() {
           }
           drawnBands.push({ loPx: xL, hiPx: xR });
           const bwHz = track.labelBwHz;
-          const markerCrestHz = track.crestHz;
+          const markerCrestHz = track.heldCrestHz;
           const markerCenterX = ((markerCrestHz - loHz) / spanHz) * w;
           const inBand = markerCrestHz - vfo >= c.filterLowHz && markerCrestHz - vfo <= c.filterHighHz;
           const col = inBand ? accent : signal;
+          const prominence = Math.max(0, Math.min(1, (track.heldSnrDb - BRACKET_MIN_SNR_DB) / 30));
+          const guideAlpha = inBand ? 0.95 : 0.34 + 0.34 * prominence;
 
           // 1) Occupied-band wash — brighten the detected extent above the heat
           //    so the band itself reads as a distinct block.
           if (traceSm) {
-            ctx.fillStyle = col(0.16);
+            ctx.fillStyle = col(inBand ? 0.16 : 0.07 + 0.06 * prominence);
             const xa = Math.max(0, Math.round(xL));
             const xb = Math.min(w, Math.round(xR));
             for (let x = xa; x < xb; x++) ctx.fillRect(x, traceSm[x]!, 1, baseY - traceSm[x]!);
@@ -797,9 +839,9 @@ export function FilterMiniPan() {
           // 2) Bright full-height edge guides with glow — the crisp left/right
           //    boundaries the eye locks onto.
           ctx.save();
-          ctx.shadowColor = col(0.8);
-          ctx.shadowBlur = Math.round(6 * dpr);
-          ctx.strokeStyle = col(0.95);
+          ctx.shadowColor = col(inBand ? 0.8 : 0.25 + 0.35 * prominence);
+          ctx.shadowBlur = Math.round((inBand ? 6 : 3) * dpr);
+          ctx.strokeStyle = col(guideAlpha);
           ctx.lineWidth = Math.max(1.5, 1.5 * dpr);
           for (const ex of [xL, xR]) {
             if (ex < 0 || ex > w) continue;
@@ -812,7 +854,7 @@ export function FilterMiniPan() {
 
           // 3) Inward carets at the baseline so the edges point at the band.
           const cz = Math.round(4 * dpr);
-          ctx.fillStyle = col(1);
+          ctx.fillStyle = col(inBand ? 1 : 0.52 + 0.28 * prominence);
           if (xL >= 0 && xL <= w) {
             ctx.beginPath();
             ctx.moveTo(xL, baseY);
@@ -830,13 +872,67 @@ export function FilterMiniPan() {
             ctx.fill();
           }
 
-          // 4) Width label above the signal crest, on a readability chip.
-          const canLabel = (inBand || labelCount < BRACKET_LABEL_MAX) && track.confidence >= BRACKET_LABEL_MIN_CONFIDENCE;
+          // 4) EQ/analyzer node: the fast realtime readout is now the most
+          //    prominent frequency, not a twitchy bandwidth number.
+          const crestY = traceSm
+            ? traceSm[Math.max(0, Math.min(w - 1, Math.round(markerCenterX)))]!
+            : plotTop;
+          if (nodeCount < EQ_NODE_MAX && track.confidence >= EQ_NODE_MIN_CONFIDENCE) {
+            const rank = nodeCount + 1;
+            const nodeY = Math.max(plotTop + Math.round(8 * dpr), Math.min(plotBottom - Math.round(8 * dpr), crestY));
+            const nodeR = Math.max(4, Math.round(5 * dpr));
+            ctx.save();
+            ctx.strokeStyle = col(0.18 + 0.35 * prominence);
+            ctx.lineWidth = Math.max(1, 1 * dpr);
+            ctx.setLineDash([Math.max(2, Math.round(2 * dpr)), Math.max(3, Math.round(4 * dpr))]);
+            ctx.beginPath();
+            ctx.moveTo(Math.round(markerCenterX) + 0.5, nodeY + nodeR);
+            ctx.lineTo(Math.round(markerCenterX) + 0.5, baseY - Math.round(3 * dpr));
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.shadowColor = col(0.55 + 0.35 * prominence);
+            ctx.shadowBlur = Math.round((4 + 4 * prominence) * dpr);
+            ctx.fillStyle = 'rgba(12, 14, 18, 0.74)';
+            ctx.strokeStyle = col(0.72 + 0.28 * prominence);
+            ctx.lineWidth = Math.max(1.5, 1.5 * dpr);
+            ctx.beginPath();
+            ctx.arc(markerCenterX, nodeY, nodeR, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = col(1);
+            ctx.font = `800 ${Math.round(7 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;
+            ctx.textBaseline = 'middle';
+            ctx.textAlign = 'center';
+            ctx.fillText(String(rank), markerCenterX, nodeY + Math.round(0.5 * dpr));
+            ctx.restore();
+
+            const nodeLabel = `P${rank} ${formatCutOffset(markerCrestHz - vfo)}`;
+            ctx.font = `700 ${Math.round(8 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;
+            ctx.textBaseline = 'bottom';
+            ctx.textAlign = 'center';
+            const nodeLw = ctx.measureText(nodeLabel).width;
+            const nodePadX = Math.round(4 * dpr);
+            const nodeChipW = nodeLw + nodePadX * 2;
+            const nodeChipH = Math.round(12 * dpr);
+            const nodePlaced = placeChip(markerCenterX, nodeY - nodeR - Math.round(3 * dpr), nodeChipW, nodeChipH);
+            if (nodePlaced) {
+              ctx.fillStyle = 'rgba(12, 14, 18, 0.58)';
+              ctx.fillRect(nodePlaced.rect.left, nodePlaced.rect.top, nodeChipW, nodeChipH);
+              ctx.fillStyle = col(0.82 + 0.18 * prominence);
+              ctx.fillText(nodeLabel, (nodePlaced.rect.left + nodePlaced.rect.right) / 2, nodePlaced.by - Math.round(2 * dpr));
+              drawnLabels.push(nodePlaced.rect);
+            }
+            ctx.textAlign = 'start';
+            ctx.textBaseline = 'alphabetic';
+            nodeCount++;
+          }
+
+          // 5) Slower active bandwidth lock. Only the in-passband signal gets
+          //    this number; nearby signals are interpreted through the P-nodes.
+          const canLabel = inBand && labelCount < BRACKET_LABEL_MAX && track.confidence >= BRACKET_LABEL_MIN_CONFIDENCE;
           if (canLabel) {
-            const crestY = traceSm
-              ? traceSm[Math.max(0, Math.min(w - 1, Math.round(markerCenterX)))]!
-              : plotTop;
-            const label = `BW ${formatFilterWidth(0, Math.round(bwHz))}`;
+            const label = `BW LOCK ${formatFilterWidth(0, Math.round(bwHz))}`;
             ctx.font = `700 ${Math.round(9 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;
             ctx.textBaseline = 'bottom';
             ctx.textAlign = 'center';
@@ -844,31 +940,21 @@ export function FilterMiniPan() {
             const chipPadX = Math.round(5 * dpr);
             const chipW = lw + chipPadX * 2;
             const chipH = Math.round(14 * dpr);
-            const laneGap = Math.max(2, Math.round(2 * dpr));
-            const lx = Math.max(chipW / 2 + 2, Math.min(w - chipW / 2 - 2, (xL + xR) / 2));
             const baseBy = Math.max(plotTop + chipH + 1, crestY - Math.round(6 * dpr));
-            let placed: { by: number; rect: { left: number; right: number; top: number; bottom: number } } | null = null;
-            for (let lane = 0; lane < 3; lane++) {
-              const by = Math.max(plotTop + chipH + 1, baseBy - lane * (chipH + laneGap));
-              const rect = {
-                left: lx - chipW / 2,
-                right: lx + chipW / 2,
-                top: by - chipH,
-                bottom: by,
-              };
-              if (!drawnLabels.some((r) => rectsOverlap(rect, r))) {
-                placed = { by, rect };
-                break;
-              }
-            }
+            const placed = placeChip((xL + xR) / 2, baseBy, chipW, chipH);
             if (placed) {
               const chipAlpha = 0.46 + 0.24 * track.confidence;
               ctx.fillStyle = `rgba(12, 14, 18, ${chipAlpha.toFixed(3)})`;
               ctx.fillRect(placed.rect.left, placed.rect.top, chipW, chipH);
               ctx.fillStyle = col(0.22 + 0.58 * track.confidence);
-              ctx.fillRect(placed.rect.left, placed.rect.bottom - Math.max(1, Math.round(2 * dpr)), chipW * track.confidence, Math.max(1, Math.round(2 * dpr)));
+              ctx.fillRect(
+                placed.rect.left,
+                placed.rect.bottom - Math.max(1, Math.round(2 * dpr)),
+                chipW * track.confidence,
+                Math.max(1, Math.round(2 * dpr)),
+              );
               ctx.fillStyle = col(0.75 + 0.25 * track.confidence);
-              ctx.fillText(label, lx, placed.by - Math.round(3 * dpr));
+              ctx.fillText(label, (placed.rect.left + placed.rect.right) / 2, placed.by - Math.round(3 * dpr));
               drawnLabels.push(placed.rect);
               labelCount++;
             }
@@ -908,27 +994,26 @@ export function FilterMiniPan() {
           const leftSkirtX = Math.max(0, Lx - skirtPx);
           const leftSkirt = ctx.createLinearGradient(leftSkirtX, 0, Math.max(leftSkirtX + 1, Lx), 0);
           leftSkirt.addColorStop(0, accent(0.00));
-          leftSkirt.addColorStop(1, accent(0.20));
+          leftSkirt.addColorStop(1, accent(0.09));
           ctx.fillStyle = leftSkirt;
           ctx.fillRect(leftSkirtX, pbTop, Math.min(w, Lx) - leftSkirtX, pbBottom - pbTop);
         }
         if (Rx > 0 && Rx < w) {
           const rightSkirtR = Math.min(w, Rx + skirtPx);
           const rightSkirt = ctx.createLinearGradient(Math.min(w, Rx), 0, rightSkirtR, 0);
-          rightSkirt.addColorStop(0, accent(0.20));
+          rightSkirt.addColorStop(0, accent(0.09));
           rightSkirt.addColorStop(1, accent(0.00));
           ctx.fillStyle = rightSkirt;
           ctx.fillRect(Math.max(0, Rx), pbTop, rightSkirtR - Math.max(0, Rx), pbBottom - pbTop);
         }
 
-        // 2) Filled passband — a clean rectangle between the two cut walls.
-        //    Accent vertical gradient plus a center glow gives the selected
-        //    bandwidth a live, glassy read without changing its exact geometry.
+        // 2) Transparent passband glass. The selected bandwidth should frame
+        //    spectrum detail, not cover it; precision comes from the rail/walls.
         const pbGrad = ctx.createLinearGradient(0, pbTop, 0, pbBottom);
-        pbGrad.addColorStop(0.0, accent(0.34));
-        pbGrad.addColorStop(0.34, accent(0.18));
-        pbGrad.addColorStop(0.72, accent(0.08));
-        pbGrad.addColorStop(1.0, accent(0.02));
+        pbGrad.addColorStop(0.0, accent(0.12));
+        pbGrad.addColorStop(0.34, accent(0.055));
+        pbGrad.addColorStop(0.72, accent(0.025));
+        pbGrad.addColorStop(1.0, accent(0.00));
         ctx.fillStyle = pbGrad;
         ctx.fillRect(fillL, pbTop, Math.max(0, fillR - fillL), pbBottom - pbTop);
         if (fillR > fillL) {
@@ -937,8 +1022,8 @@ export function FilterMiniPan() {
           ctx.rect(fillL, pbTop, fillR - fillL, pbBottom - pbTop);
           ctx.clip();
           const glow = ctx.createRadialGradient((Lx + Rx) / 2, pbTop, 0, (Lx + Rx) / 2, pbTop, Math.max(1, (fillR - fillL) * 0.65));
-          glow.addColorStop(0, accent(0.22));
-          glow.addColorStop(0.58, accent(0.06));
+          glow.addColorStop(0, accent(0.07));
+          glow.addColorStop(0.58, accent(0.02));
           glow.addColorStop(1, accent(0));
           ctx.fillStyle = glow;
           ctx.fillRect(fillL, pbTop, fillR - fillL, pbBottom - pbTop);

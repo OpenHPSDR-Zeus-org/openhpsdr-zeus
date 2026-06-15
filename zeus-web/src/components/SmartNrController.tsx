@@ -104,6 +104,7 @@ export function SmartNrController() {
             wdspActive: diag.dsp.wdspActive,
             wdspEmnrPost2Available: diag.dsp.wdspEmnrPost2Available,
             wdspNr4SbnrAvailable: diag.dsp.wdspNr4SbnrAvailable,
+            wdspNr5SpnrAvailable: diag.dsp.wdspNr5SpnrAvailable,
           };
         })
         .catch(() => {

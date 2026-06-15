@@ -162,6 +162,8 @@ uniform float uH;
 uniform float uBgAlpha;
 uniform float uViewOffsetUv;
 uniform float uSeedDb;
+uniform float uPopActive;
+uniform float uPopIntensity;
 out vec4 fragColor;
 void main() {
   float agePx = (1.0 - vUv.y) * uH;
@@ -171,6 +173,10 @@ void main() {
     ? uSeedDb
     : texture(uHistory, vec2(srcX, (row + 0.5) / uH)).r;
   float n = clamp((v - uDbMin) / (uDbMax - uDbMin), 0.0, 1.0);
+  float popI = clamp(uPopIntensity, 0.0, 1.0) * step(0.5, uPopActive);
+  float lifted = pow(n, mix(1.0, 0.62, popI));
+  float micro = smoothstep(0.015, 0.20, n) * 0.10 * popI;
+  n = clamp(max(lifted, n + micro), 0.0, 1.0);
   vec4 c = texture(uLut, vec2(n, 0.5));
   float a = mix(smoothstep(0.05, 0.9, n), 1.0, uBgAlpha);
   fragColor = vec4(c.rgb * a, a);

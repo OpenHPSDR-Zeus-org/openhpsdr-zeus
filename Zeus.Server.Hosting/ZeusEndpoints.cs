@@ -426,7 +426,7 @@ public static class ZeusEndpoints
         // (Protocol1Client via ITxIqSource) stats. Useful for "is the mic reaching
         // TXA, and is the EP2 packer actually reading the ring" questions without
         // hunting through logs. Free to call, exposes no secrets.
-        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, DspPipelineService dsp, TxService tx, RadioService radio, HardwareDiagnosticsService hardware, ExternalPttService externalPtt, AudioPluginBridge? pluginBridge, Zeus.Plugins.Host.Audio.VstEngineController? vstEngine) =>
+        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, DspPipelineService dsp, TxService tx, RadioService radio, StreamingHub hub, HardwareDiagnosticsService hardware, ExternalPttService externalPtt, AudioPluginBridge? pluginBridge, Zeus.Plugins.Host.Audio.VstEngineController? vstEngine) =>
         {
             var generatedUtc = DateTimeOffset.UtcNow;
             var p2Tx = dsp.ActiveP2Client?.TxIqDiagnosticsSnapshot();
@@ -447,6 +447,7 @@ public static class ZeusEndpoints
                 iqSourceType = src.GetType().FullName,
                 iqSourceIsRing = ReferenceEquals(src, ring),
                 ring = new { ring.TotalWritten, ring.TotalRead, ring.Count, ring.Dropped, ring.Capacity, ring.RecentMag },
+                micUplink = hub.MicInboundDiagnosticsSnapshot(generatedUtc),
                 ingest = new { ingest.TotalMicSamples, ingest.TotalTxBlocks, ingest.DroppedFrames },
                 protocol2 = p2Tx,
                 audioPath = BuildTxAudioPathHealth(
@@ -1828,6 +1829,91 @@ public static class ZeusEndpoints
             return Results.Ok(store.DeleteNamed(radio ?? "default", id));
         });
 
+        // Prefs-database (profile) selector. All Zeus prefs/settings/layouts live
+        // in a single LiteDB resolved by PrefsDbPath.Get() at startup; the active
+        // choice is a pointer file (NOT inside any DB). Switching applies on the
+        // next launch, so /api/prefs/active-database flags restartRequired and the
+        // frontend follows up with POST /api/app/restart.
+        app.MapGet("/api/prefs/databases", () =>
+            Results.Ok(new PrefsDatabasesDto(PrefsDbPath.ActiveRelativePath(), PrefsDbPath.ListProfiles())));
+
+        app.MapPost("/api/prefs/active-database", (SetActiveDatabaseRequest req) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.RelativePath))
+                return Results.BadRequest(new { error = "relativePath required" });
+            try
+            {
+                PrefsDbPath.SetActive(req.RelativePath);
+                return Results.Ok(new { restartRequired = true });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
+        app.MapPost("/api/prefs/databases", (CreateDatabaseRequest req) =>
+        {
+            try
+            {
+                PrefsDbPath.CreateProfile(req.Name);
+                return Results.Ok(new PrefsDatabasesDto(PrefsDbPath.ActiveRelativePath(), PrefsDbPath.ListProfiles()));
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
+        app.MapPost("/api/prefs/databases/import", (ImportDatabaseRequest req) =>
+        {
+            try
+            {
+                PrefsDbPath.ImportProfile(req.SourcePath, req.Name);
+                return Results.Ok(new PrefsDatabasesDto(PrefsDbPath.ActiveRelativePath(), PrefsDbPath.ListProfiles()));
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        });
+
+        // File-picker import: the webview can't hand the server a filesystem
+        // path, so the chosen .db is uploaded as multipart and written into the
+        // profiles dir here. Antiforgery is disabled — this is a loopback /
+        // LAN-token API, not a cookie-auth form post.
+        app.MapPost("/api/prefs/databases/upload", async (HttpRequest req) =>
+        {
+            try
+            {
+                if (!req.HasFormContentType)
+                    return Results.BadRequest(new { error = "Expected a multipart file upload." });
+                var form = await req.ReadFormAsync();
+                var file = form.Files.GetFile("file") ?? form.Files.FirstOrDefault();
+                if (file is null || file.Length == 0)
+                    return Results.BadRequest(new { error = "No file uploaded." });
+
+                var nameField = form.TryGetValue("name", out var n) ? n.ToString() : null;
+                var profileName = string.IsNullOrWhiteSpace(nameField)
+                    ? Path.GetFileNameWithoutExtension(file.FileName)
+                    : nameField;
+
+                await using var stream = file.OpenReadStream();
+                PrefsDbPath.ImportProfileFromStream(stream, profileName);
+                return Results.Ok(new PrefsDatabasesDto(PrefsDbPath.ActiveRelativePath(), PrefsDbPath.ListProfiles()));
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+        }).DisableAntiforgery();
+
+        app.MapPost("/api/app/restart", (AppRestartService restart) =>
+        {
+            restart.RequestRestart();
+            return Results.Ok(new { restarting = true });
+        });
+
         app.MapGet("/api/qrz/status", (QrzService qrz) => qrz.GetStatus());
 
         app.MapPost("/api/qrz/login", async (QrzLoginRequest req, QrzService qrz, HttpContext ctx) =>
@@ -1879,6 +1965,24 @@ public static class ZeusEndpoints
             await qrz.SetApiKeyAsync(req.ApiKey, ctx.RequestAborted);
             return Results.Ok(qrz.GetStatus());
         });
+
+        // Point-to-point propagation (DE → DX). Proxies the HamClock sidecar's
+        // ITU-R P.533-14 engine; always returns 200 with an {available:false}
+        // payload when the engine is offline so the QRZ card can degrade quietly.
+        app.MapGet("/api/propagation", async (
+            PropagationService prop, HttpContext ctx,
+            double deLat, double deLon, double dxLat, double dxLon,
+            string? mode, double? power, string? antenna, double? freq) =>
+        {
+            var result = await prop.PredictAsync(
+                deLat, deLon, dxLat, dxLon, mode, power, antenna, freq, ctx.RequestAborted);
+            return Results.Ok(result);
+        });
+
+        // Comprehensive solar / space-weather snapshot (proxies HamClock's N0NBH
+        // feed). Always 200 with {available:false} when the sidecar is offline.
+        app.MapGet("/api/spacewx", async (SpaceWeatherService sw, HttpContext ctx) =>
+            Results.Ok(await sw.GetAsync(ctx.RequestAborted)));
 
         app.MapGet("/api/log/entries", async (LogService logService, HttpContext ctx, int skip = 0, int take = 100) =>
         {

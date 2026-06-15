@@ -101,6 +101,7 @@ export function analyzeRxChain(s: RxChainSnapshot, options: RxChainAnalysisOptio
   const adcUtilizationPct = adcPk === null ? null : pctBetween(adcPk, -96, -3);
   const adcCrestDb = stageCrestDb(adcPk, adcAv);
   const agcEnvCrestDb = stageCrestDb(agcEnvPk, agcEnvAv);
+  const adcHasCleanHeadroom = adcPk === null || adcPk <= -12;
   const baseMetrics = {
     signalDbm,
     signalSource: preferred.source,
@@ -190,10 +191,10 @@ export function analyzeRxChain(s: RxChainSnapshot, options: RxChainAnalysisOptio
   } else if (agcGain > 32) {
     score -= 10;
     reasons.push('AGC boost is high');
-  } else if (agcGain < -18) {
+  } else if (agcGain < -18 && !adcHasCleanHeadroom) {
     score -= 22;
     reasons.push('AGC is cutting deeply');
-  } else if (agcGain < -10) {
+  } else if (agcGain < -10 && !adcHasCleanHeadroom) {
     score -= 10;
     reasons.push('AGC is cutting the signal');
   }
@@ -224,7 +225,6 @@ export function analyzeRxChain(s: RxChainSnapshot, options: RxChainAnalysisOptio
 
   if (reasons.some((r) => r.includes('AGC'))) {
     const agcCutting = agcGain < -10;
-    const adcHasCleanHeadroom = adcPk === null || adcPk <= -12;
     const autoAgcResolving = !!options.autoAgcEnabled;
     const autoAttResolving = agcCutting && !adcHasCleanHeadroom && !!options.autoAttEnabled;
     const autoResolving = autoAgcResolving || autoAttResolving;
@@ -233,14 +233,10 @@ export function analyzeRxChain(s: RxChainSnapshot, options: RxChainAnalysisOptio
       label: autoResolving ? 'AGC auto-optimizing' : 'AGC stressed',
       detail: reasons.join(' · '),
       recommendation: agcCutting
-        ? adcHasCleanHeadroom
-          ? options.autoAgcEnabled
-            ? 'Auto AGC lowering AGC top'
-            : 'Narrow passband or lower AGC top; keep RF gain'
-          : options.autoAgcEnabled && options.autoAttEnabled
+        ? options.autoAgcEnabled && options.autoAttEnabled
           ? 'Auto AGC/ATT restoring headroom'
           : options.autoAgcEnabled
-          ? 'Auto AGC lowering AGC top; add attenuation if needed'
+          ? 'Auto AGC reducing AGC-T under ADC pressure'
           : options.autoAttEnabled
           ? 'Auto ATT adding headroom'
           : 'Add headroom or reduce RF gain'
@@ -280,7 +276,9 @@ export function analyzeRxChain(s: RxChainSnapshot, options: RxChainAnalysisOptio
   return {
     state: 'optimized',
     label: 'RX chain optimized',
-    detail: reasons.join(' · ') || 'ADC headroom and AGC gain are in range.',
+    detail: reasons.join(' · ') || (agcGain < -10 && adcHasCleanHeadroom
+      ? 'AGC is normalizing signal level with clean ADC headroom.'
+      : 'ADC headroom and AGC gain are in range.'),
     recommendation: 'Hold front-end settings',
     actionTone: 'neutral',
     score: finalScore,

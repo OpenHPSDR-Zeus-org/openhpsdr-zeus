@@ -18,6 +18,7 @@ export type Capabilities = {
   platform: ZeusPlatform;
   architecture: string;
   version: string;
+  lanHttpsUrls: string[];
   features: CapabilitiesFeatures;
 };
 
@@ -34,6 +35,10 @@ function parsePlatform(v: unknown): ZeusPlatform {
   return 'unknown';
 }
 
+function asStringArray(v: unknown): string[] {
+  return Array.isArray(v) ? v.filter((item): item is string => typeof item === 'string') : [];
+}
+
 export function parseCapabilities(raw: unknown): Capabilities {
   const o = (raw ?? {}) as Record<string, unknown>;
   return {
@@ -41,6 +46,7 @@ export function parseCapabilities(raw: unknown): Capabilities {
     platform: parsePlatform(o.platform),
     architecture: asString(o.architecture, 'unknown'),
     version: asString(o.version, 'unknown'),
+    lanHttpsUrls: asStringArray(o.lanHttpsUrls),
     features: {} as CapabilitiesFeatures,
   };
 }

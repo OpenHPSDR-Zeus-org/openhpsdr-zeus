@@ -114,6 +114,20 @@ export type Contact = {
   photoUrl?: string;
   /** Optional deep link to the QRZ.com page for the click-through. */
   qrzUrl?: string;
+  // ── Enrichment added with the QRZ-card upgrade (all optional) ───────────
+  /** License codes string from QRZ (e.g. "HVE"), shown beside the class. */
+  licenseCodes?: string | null;
+  /** Years since the license effective date, when derivable. */
+  licensedYears?: number | null;
+  /** QSL acceptance flags from QRZ (null = unknown). */
+  qslLotw?: boolean | null;
+  qslEqsl?: boolean | null;
+  qslMail?: boolean | null;
+  qslManager?: string | null;
+  /** Daylight state at the contact's QTH right now. */
+  dayNight?: 'day' | 'grayline' | 'night' | null;
+  /** Short distance unit summary, e.g. "5,920 km · 3,678 mi". */
+  distanceLabel?: string | null;
 };
 
 export const CONTACTS: Record<string, Contact> = {

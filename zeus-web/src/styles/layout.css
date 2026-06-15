@@ -36,6 +36,20 @@
 .app > .workspace-area    { grid-column: 2; grid-row: 2; min-height: 0; }
 .app > .transport         { grid-column: 2; grid-row: 3; }
 
+.detached-workspace-app {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  width: 100vw;
+  background: var(--bg-0);
+  color: var(--fg-0);
+}
+.detached-workspace-app > .workspace-area {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 /* Workspace area — flex column owning the alert banner + the active
    layout (or settings view). The empty alert banner returns a 0-height
    placeholder, so with no flex gap the topbar→first-panel distance is
@@ -145,6 +159,11 @@
   background: var(--bg-2);
   color: var(--fg-0);
   filter: none;
+}
+.left-layout-bar .lb-item.dragging .lb-tab {
+  border-color: var(--accent);
+  color: var(--accent);
+  opacity: 0.72;
 }
 .left-layout-bar .lb-item.active .lb-tab {
   background: var(--bg-2);
@@ -2001,6 +2020,119 @@
 .qrz-row .k { color: var(--fg-1); font-size: 11px; font-weight: 600; }
 .qrz-row .v { color: var(--fg-0); font-size: 12px; font-weight: 700; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .qrz-row .v.accent { color: var(--accent); }
+
+/* ── QSL channels ──────────────────────────────────────────────────────── */
+.qrz-qsl-row {
+  display: grid; grid-template-columns: 88px 1fr; align-items: center;
+  gap: 12px; padding: 4px 0 2px;
+}
+.qrz-qsl-row .k { color: var(--fg-1); font-size: 11px; font-weight: 600; }
+.qrz-qsl-badges { display: flex; gap: 4px; flex-wrap: wrap; }
+.qrz-qsl-badge {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.04em;
+  padding: 1px 6px; border-radius: var(--r-xs);
+  background: var(--ok-soft); color: var(--ok); border: 1px solid var(--ok);
+}
+
+/* ── Point-to-point propagation (HamClock P.533-14 engine) ─────────────── */
+.qrz-prop {
+  margin-top: 8px; padding-top: 6px;
+  border-top: 1px solid rgba(74,158,255,0.2);
+  /* Per-status accent, overridden by the modifier classes below. */
+  --prop-c: var(--fg-2);
+}
+.qrz-prop-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.qrz-prop-solar { font-size: 9px; color: var(--fg-2); white-space: nowrap; }
+.qrz-prop-body { display: flex; align-items: stretch; gap: 12px; margin-top: 6px; }
+
+.qrz-prop-current {
+  display: flex; align-items: center; gap: 8px;
+  padding: 4px 10px 4px 8px; border-radius: var(--r-sm, 4px);
+  background: var(--bg-2); border: 1px solid var(--prop-c);
+  flex-shrink: 0;
+}
+.qrz-prop-pct {
+  font-size: 26px; font-weight: 800; line-height: 1; color: var(--prop-c);
+  font-family: var(--font-mono, 'Archivo Narrow', sans-serif);
+}
+.qrz-prop-pct-sym { font-size: 12px; font-weight: 700; margin-left: 1px; }
+.qrz-prop-meta { display: flex; flex-direction: column; gap: 2px; }
+.qrz-prop-band { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: var(--prop-c); text-transform: uppercase; }
+.qrz-prop-snr { font-size: 9px; color: var(--fg-2); }
+
+.qrz-prop-bands { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.qrz-prop-bands-label { color: var(--fg-2); }
+.qrz-prop-chips { display: flex; gap: 4px; flex-wrap: wrap; }
+.qrz-prop-chip {
+  font-size: 9px; font-weight: 600; padding: 1px 6px;
+  border-radius: var(--r-xs); background: var(--bg-2);
+  border: 1px solid var(--prop-c); color: var(--fg-1);
+}
+.qrz-prop-chip b { color: var(--prop-c); font-weight: 800; }
+.qrz-prop-foot { margin-top: 5px; color: var(--fg-2); font-size: 9px; }
+
+/* Status → colour. CLOSED keeps the muted default. */
+.qrz-prop--good   { --prop-c: var(--ok); }
+.qrz-prop--fair   { --prop-c: var(--power); }
+.qrz-prop--poor   { --prop-c: var(--tx); }
+.qrz-prop--closed { --prop-c: var(--fg-2); }
+
+/* ── Solar / Space Weather panel ───────────────────────────────────────── */
+.swx-panel { display: flex; flex-direction: column; height: 100%; overflow: auto; }
+.swx-head {
+  display: flex; align-items: center; gap: 6px;
+  padding: 4px 8px; border-bottom: 1px solid var(--panel-border, var(--line-strong));
+}
+.swx-title { font-size: 11px; font-weight: 700; color: var(--accent); letter-spacing: 0.04em; }
+.swx-updated { color: var(--fg-2); white-space: nowrap; }
+.swx-empty { padding: 16px; color: var(--fg-2); }
+.swx-body { padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+
+.swx-stats {
+  display: grid; gap: 4px;
+  grid-template-columns: repeat(auto-fit, minmax(82px, 1fr));
+}
+.swx-stat {
+  display: flex; flex-direction: column; align-items: center; gap: 1px;
+  padding: 5px 4px; background: var(--bg-2);
+  border: 1px solid var(--line-strong); border-radius: var(--r-xs);
+  text-align: center;
+}
+.swx-stat-label { color: var(--fg-2); letter-spacing: 0.06em; text-transform: uppercase; }
+.swx-stat-value { font-size: 16px; font-weight: 800; color: var(--fg-0); line-height: 1.05; }
+.swx-stat-sub { color: var(--fg-2); font-size: 8px; }
+
+.swx-section-label {
+  font-size: 9px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--fg-2); padding-bottom: 2px; margin-top: 2px;
+  border-bottom: 1px solid rgba(74,158,255,0.2);
+}
+
+.swx-bands { display: flex; flex-direction: column; gap: 3px; }
+.swx-bands-head, .swx-bands-row {
+  display: grid; grid-template-columns: 72px 1fr 1fr; gap: 4px; align-items: center;
+}
+.swx-bands-head span { color: var(--fg-2); text-align: center; }
+.swx-band-name { font-size: 11px; font-weight: 700; color: var(--fg-1); }
+.swx-band-cell {
+  font-size: 11px; font-weight: 700; text-align: center;
+  padding: 3px 4px; border-radius: var(--r-xs);
+  background: var(--bg-2); border: 1px solid var(--line-strong);
+}
+
+.swx-vhf { display: flex; flex-direction: column; gap: 2px; }
+.swx-vhf-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 2px 0; border-bottom: 1px dotted rgba(255,255,255,0.06);
+}
+.swx-vhf-name { font-size: 11px; color: var(--fg-1); }
+.swx-vhf-cond { font-size: 11px; font-weight: 700; white-space: nowrap; }
+
+/* Status colours, shared across stat values, band cells and VHF rows. */
+.swx--good  { color: var(--ok); border-color: var(--ok); }
+.swx--fair  { color: var(--power); border-color: var(--power); }
+.swx--poor  { color: var(--tx); border-color: var(--tx); }
+.swx--muted { color: var(--fg-2); }
 
 .cs-input {
   width: 90px;

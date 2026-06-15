@@ -131,9 +131,12 @@ public sealed class DspPipelineAudioSanitizerTests
             WdspNativeLoadable: true,
             WdspEmnrPost2Available: true,
             WdspNr4SbnrAvailable: false,
+            WdspNr5SpnrAvailable: false,
             Nr4Readiness: "missing-sbnr-exports",
+            Nr5Readiness: "missing-spnr-exports",
             RequestedNrMode: "Sbnr",
-            EffectiveNrMode: "Off");
+            EffectiveNrMode: "Off",
+            Nr5SpnrDiagnostics: null);
 
         var diag = DspPipelineService.BuildRxDspChainDiagnostics(
             state,
@@ -269,6 +272,41 @@ public sealed class DspPipelineAudioSanitizerTests
 
         Assert.InRange(Rms(block), 0.10f, 0.15f);
         Assert.True(state.GainDb > 20.0);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_RampsBoostAcrossBlock()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState();
+        float[] block = new float[1024];
+
+        Array.Fill(block, 0.01f);
+        DspPipelineService.ApplyRxAudioLeveler(block, ref state);
+
+        Assert.Equal(2.0, state.GainDb, precision: 6);
+        Assert.InRange(block[0], 0.0099f, 0.0102f);
+        Assert.InRange(block[^1], 0.0125f, 0.0127f);
+
+        Array.Fill(block, 0.01f);
+        DspPipelineService.ApplyRxAudioLeveler(block, ref state);
+
+        Assert.Equal(4.0, state.GainDb, precision: 6);
+        Assert.InRange(block[0], 0.0125f, 0.0128f);
+        Assert.InRange(block[^1], 0.0157f, 0.0160f);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_RampsSmallCutsAcrossBlock()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState { GainDb = 6.0 };
+        float[] block = new float[1024];
+
+        Array.Fill(block, 0.07943282f); // -22 dBFS, so target level asks for +4 dB.
+        DspPipelineService.ApplyRxAudioLeveler(block, ref state);
+
+        Assert.Equal(4.0, state.GainDb, precision: 3);
+        Assert.InRange(block[0], 0.157f, 0.159f);
+        Assert.InRange(block[^1], 0.125f, 0.127f);
     }
 
     [Fact]

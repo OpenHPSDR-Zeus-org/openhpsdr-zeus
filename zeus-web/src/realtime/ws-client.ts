@@ -46,6 +46,7 @@ import { decodeDisplayFrame, FrameDecodeError, MSG_TYPE_DISPLAY_FRAME } from './
 import { AudioFrameDecodeError, MSG_TYPE_AUDIO_PCM, decodeAudioFrame } from '../audio/frame';
 import { getAudioClient } from '../audio/audio-client';
 import { isNativeAudio } from '../audio/host-mode';
+import { useMicUplinkDiagnosticsStore } from '../audio/mic-uplink-diagnostics-store';
 import { useMicPeakStore } from '../audio/mic-peak-store';
 import { useConnectionStore, type WisdomPhase } from '../state/connection-store';
 import { hasActiveFrameConsumers, useDisplayStore } from '../state/display-store';
@@ -208,9 +209,41 @@ const SPOT_LIST_MIN_BYTES = 3; // type + count
 // Shared by startRealtime / sendMicPcm. Single WS instance at a time; writes
 // are no-ops when the socket isn't open.
 let activeWs: WebSocket | null = null;
+let micTransportWaiters: Array<() => void> = [];
+
+export type MicPcmSendResult = 'sent' | 'native' | 'closed' | 'bad-size' | 'send-error';
 
 function wsUrl(path: string): string {
   return buildWsUrl(path);
+}
+
+function notifyMicTransportReady(): void {
+  const waiters = micTransportWaiters;
+  micTransportWaiters = [];
+  for (const resolve of waiters) resolve();
+}
+
+export function isMicPcmTransportReady(): boolean {
+  const ws = activeWs;
+  return !isNativeAudio() && !!ws && ws.readyState === WebSocket.OPEN;
+}
+
+export function waitForMicPcmTransportReady(timeoutMs = 1500): Promise<boolean> {
+  if (isMicPcmTransportReady()) return Promise.resolve(true);
+  if (isNativeAudio()) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (ready: boolean) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      micTransportWaiters = micTransportWaiters.filter((w) => w !== waiter);
+      resolve(ready);
+    };
+    const waiter = () => finish(true);
+    const timer = setTimeout(() => finish(isMicPcmTransportReady()), timeoutMs);
+    micTransportWaiters.push(waiter);
+  });
 }
 
 /**
@@ -218,21 +251,24 @@ function wsUrl(path: string): string {
  * No-op when disconnected, so callers can blast blocks at 50 Hz without
  * needing to gate on connection state.
  */
-export function sendMicPcm(samples: Float32Array): void {
+export function sendMicPcm(samples: Float32Array): MicPcmSendResult {
   // Phase 2c — desktop mode captures mic natively in the host process
   // (Phase 2b). The hook in use-mic-uplink.ts already skips startMicUplink
   // entirely in this mode, but if any future caller emits 0x20 frames
   // directly we still must not put them on the wire (the server's native
   // capture would race the duplicate uplink).
-  if (isNativeAudio()) return;
+  if (isNativeAudio()) return 'native';
   const ws = activeWs;
-  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    useMicUplinkDiagnosticsStore.getState().setTransportReady(false);
+    return 'closed';
+  }
   if (samples.length !== MIC_PCM_SAMPLES) {
     warnOnce(
       'ws-mic-pcm-size',
       `mic block must be ${MIC_PCM_SAMPLES} samples; got ${samples.length}`,
     );
-    return;
+    return 'bad-size';
   }
   const buf = new ArrayBuffer(MIC_PCM_BYTES);
   const view = new DataView(buf);
@@ -245,8 +281,10 @@ export function sendMicPcm(samples: Float32Array): void {
   }
   try {
     ws.send(buf);
+    return 'sent';
   } catch (err) {
     warnOnce('ws-mic-send', 'mic send failed', err);
+    return 'send-error';
   }
 }
 
@@ -273,9 +311,12 @@ export function startRealtime(path = '/ws'): () => void {
     ws.onopen = () => {
       backoff = INITIAL_BACKOFF_MS;
       setConnected(true);
+      useMicUplinkDiagnosticsStore.getState().setTransportReady(true);
+      notifyMicTransportReady();
     };
     ws.onclose = () => {
       setConnected(false);
+      useMicUplinkDiagnosticsStore.getState().setTransportReady(false);
       // PRD FR-6: if the WS drops while keyed, the UI must not keep showing TX.
       // Server-side, StreamingHub drops MOX on its end — this is the paired
       // client-side cleanup so the MOX button reverts to RX even if we can't
@@ -288,6 +329,7 @@ export function startRealtime(path = '/ws'): () => void {
       schedule();
     };
     ws.onerror = () => {
+      useMicUplinkDiagnosticsStore.getState().setTransportReady(false);
       /* onclose will fire next */
     };
     ws.onmessage = (ev) => {

@@ -15,7 +15,7 @@
 // which also nudges the server-side poller to refresh.
 
 import { useEffect, useState } from 'react';
-import { useSpotsStore } from '../state/spots-store';
+import { useSpotsStore, requestSpotNotificationPermission } from '../state/spots-store';
 import { SPOT_BANDS, type SpotModeGroup } from '../state/spots-store';
 import { SPOTS_SETTINGS_DEFAULTS, type SpotsSettings } from '../api/client';
 
@@ -170,6 +170,68 @@ function Chip({
     >
       {children}
     </button>
+  );
+}
+
+/** Add/remove callsigns on the watchlist. Adds on Enter or the + button;
+ *  callsigns are upper-cased and the server de-dupes. */
+function WatchlistEditor({
+  watchlist,
+  disabled,
+  onChange,
+}: {
+  watchlist: string[];
+  disabled?: boolean;
+  onChange: (next: string[]) => void;
+}) {
+  const [draft, setDraft] = useState('');
+  const add = () => {
+    const c = draft.trim().toUpperCase();
+    if (!c) return;
+    if (!watchlist.includes(c)) onChange([...watchlist, c]);
+    setDraft('');
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, opacity: disabled ? 0.5 : 1 }}>
+      <span style={{ display: 'flex', gap: 6 }}>
+        <input
+          type="text"
+          spellCheck={false}
+          autoComplete="off"
+          value={draft}
+          disabled={disabled}
+          placeholder="Add callsign…"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              add();
+            }
+          }}
+          style={{ ...urlInputStyle, flex: 1, textTransform: 'uppercase' }}
+        />
+        <button type="button" className="btn sm" disabled={disabled || draft.trim().length === 0} onClick={add}>
+          +
+        </button>
+      </span>
+      {watchlist.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          {watchlist.map((c) => (
+            <button
+              key={c}
+              type="button"
+              className="btn sm active"
+              disabled={disabled}
+              title="Remove from watchlist"
+              onClick={() => onChange(watchlist.filter((x) => x !== c))}
+              style={{ fontFamily: 'monospace' }}
+            >
+              ★ {c} ✕
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -356,6 +418,13 @@ export function SpotsSettingsPanel() {
             hint="Drop spots whose comment says QRT / QSY / closing / packing up."
           />
           <Toggle
+            checked={settings.hideWorked}
+            disabled={disabled}
+            onChange={(v) => patch({ hideWorked: v })}
+            label="Hide worked stations"
+            hint="Drop spots whose activator is already in your Zeus logbook. Worked stations still show a ✓ when this is off."
+          />
+          <Toggle
             checked={settings.latestPerActivator}
             disabled={disabled}
             onChange={(v) => patch({ latestPerActivator: v })}
@@ -383,6 +452,48 @@ export function SpotsSettingsPanel() {
               <span style={hintStyle}>minutes (0 = no limit). Hide spots older than this.</span>
             </span>
           </label>
+        </section>
+
+        {/* ----- Watchlist + alerts (panel-side) ----- */}
+        <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={sectionTitleStyle}>WATCHLIST &amp; ALERTS</div>
+          <WatchlistEditor
+            watchlist={settings.watchlist}
+            disabled={disabled}
+            onChange={(next) => patch({ watchlist: next })}
+          />
+          <span style={hintStyle}>
+            Watched calls show a ★ in the table. With alerts on, Zeus notifies you when one is spotted.
+          </span>
+          <Toggle
+            checked={settings.alertsEnabled}
+            disabled={disabled || settings.watchlist.length === 0}
+            onChange={async (v) => {
+              if (v) await requestSpotNotificationPermission();
+              patch({ alertsEnabled: v });
+            }}
+            label="Alert on watched calls"
+            hint="Raise a desktop notification when a watchlist callsign appears. Needs browser notification permission."
+          />
+          <Toggle
+            checked={settings.alertSound}
+            disabled={disabled || !settings.alertsEnabled}
+            onChange={(v) => patch({ alertSound: v })}
+            label="Play a sound with alerts"
+            hint="A short audio cue alongside the desktop notification."
+          />
+        </section>
+
+        {/* ----- QRZ enrichment (panel-side; uses the QRZ session) ----- */}
+        <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={sectionTitleStyle}>QRZ ENRICHMENT</div>
+          <Toggle
+            checked={settings.enrichQrz}
+            disabled={disabled}
+            onChange={(v) => patch({ enrichQrz: v })}
+            label="Show operator names from QRZ"
+            hint="Resolve the operator's name for each spot via your QRZ session (cached per callsign). Requires QRZ to be logged in; off by default to respect the XML-API quota."
+          />
         </section>
 
         {/* ----- Click-to-tune (panel-side, drives the Zeus radio) ----- */}
@@ -460,6 +571,29 @@ export function SpotsSettingsPanel() {
             Dial offsets are added to the spot frequency when you click a CW or digital spot — handy if
             you prefer to land slightly off the published frequency. Leave at 0 to tune exactly.
           </span>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={labelStyle}>Scan dwell</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="number"
+                min={2}
+                max={120}
+                step={1}
+                value={settings.scanDwellSeconds}
+                disabled={disabled}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n)) {
+                    patch({ scanDwellSeconds: Math.min(120, Math.max(2, Math.round(n))) });
+                  }
+                }}
+                style={numInputStyle}
+              />
+              <span style={hintStyle}>
+                seconds (2–120) — how long the ▶ Scan button dwells on each spot before stepping.
+              </span>
+            </span>
+          </label>
         </section>
       </div>
     </div>

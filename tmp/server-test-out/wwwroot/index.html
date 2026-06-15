@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" data-variant="console" data-fonts="geist" style="height:100%">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a1220" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/zeus-icon-192.png" />
+    <link rel="icon" type="image/png" sizes="512x512" href="/zeus-icon-512.png" />
+    <link rel="apple-touch-icon" href="/zeus-icon-192.png" />
+    <title>OpenHpsdr Zeus</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo+Narrow:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <!-- Import map for plugin ES modules. Plugins bundle their own JSX
+         runtime but external-ise `react` / `react/jsx-runtime`; the
+         browser resolves those bare specifiers through this map to
+         host-served shims that re-export from window.__zeus, so plugin
+         and host share one React instance (required for hooks). -->
+
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "/zeus-sdk/react.js",
+          "react/jsx-runtime": "/zeus-sdk/react-jsx-runtime.js"
+        }
+      }
+    </script>
+    <script type="module" crossorigin src="/assets/index-BpdI8gf8.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Dijx2z8Z.css">
+  <link rel="manifest" href="/manifest.webmanifest"></head>
+  <body style="height:100%;margin:0">
+    <div id="root" style="height:100%"></div>
+  </body>
+</html>

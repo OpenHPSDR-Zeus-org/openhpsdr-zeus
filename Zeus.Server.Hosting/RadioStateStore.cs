@@ -218,6 +218,7 @@ public sealed class RadioStateNotchEntry
     public double CenterHz { get; set; }
     public double WidthHz { get; set; }
     public bool Active { get; set; } = true;
+    public string? Source { get; set; }
 }
 
 // Per-board sample-rate memory. Keyed by board byte (plus variant byte for

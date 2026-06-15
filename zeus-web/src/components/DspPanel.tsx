@@ -58,14 +58,15 @@ import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
 // a TX-only stage and lives with the other TX controls now.
 
 // Mirrors NrControls.tsx — cycle order matches Thetis WDSP semantics. NR3
-// (RNNR) is intentionally skipped — see issue #79. The four modes are
-// mutually exclusive in WDSP so they all ride the single nrMode.
-const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
+// (RNNR) is intentionally skipped — see issue #79. The modes are mutually
+// exclusive in WDSP so they all ride the single nrMode.
+const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr', 'Nr5'];
 const NR_LABEL: Record<NrMode, string> = {
   Off: 'NR',
   Anr: 'NR',
   Emnr: 'NR2',
   Sbnr: 'NR4',
+  Nr5: 'NR5',
 };
 
 function nrButtonTitle(mode: NrMode): string {
@@ -74,10 +75,12 @@ function nrButtonTitle(mode: NrMode): string {
     case 'Anr': return 'NR1 (ANR, time-domain LMS) — right-click for tunables';
     case 'Emnr': return 'NR2 (EMNR, spectral) — right-click for tunables';
     case 'Sbnr': return 'NR4 (SBNR, libspecbleach) — right-click for tunables';
+    case 'Nr5': return 'NR5 (SPNR weak-signal spectral NR, experimental)';
   }
 }
 
-// NR1 / NR2 / NR4 each have a tunables panel. NR4 panel was suppressed
+// NR1 / NR2 / NR4 each have a tunables panel. NR5 uses fixed experimental
+// defaults until its bench/on-air behavior is proven. NR4 panel was suppressed
 // pre-#162 (libwdsp didn't export SetRXASBNR*); now that Phase 1 binaries
 // ship the symbols on linux-x64 + win-x64, the panel is reachable again.
 // Mirrors NrControls.tsx.

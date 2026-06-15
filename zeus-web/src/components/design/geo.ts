@@ -52,6 +52,74 @@ const R_EARTH_KM = 6371;
 const toRad = (deg: number) => (deg * Math.PI) / 180;
 const toDeg = (rad: number) => (rad * 180) / Math.PI;
 
+/**
+ * Solar elevation angle (degrees above the horizon) at a point and instant.
+ * Standard NOAA approximation — accurate to a fraction of a degree, plenty for
+ * a day/night/grayline read on the QRZ card. Negative = sun below horizon.
+ */
+export function solarElevationDeg(
+  lat: number,
+  lon: number,
+  date: Date = new Date(),
+): number {
+  const startOfYear = Date.UTC(date.getUTCFullYear(), 0, 0);
+  const dayOfYear = (Date.UTC(
+    date.getUTCFullYear(),
+    date.getUTCMonth(),
+    date.getUTCDate(),
+  ) - startOfYear) / 86_400_000;
+  const hoursUtc =
+    date.getUTCHours() + date.getUTCMinutes() / 60 + date.getUTCSeconds() / 3600;
+
+  // Fractional year (radians).
+  const γ = ((2 * Math.PI) / 365) * (dayOfYear - 1 + (hoursUtc - 12) / 24);
+  // Equation of time (minutes).
+  const eqTime =
+    229.18 *
+    (0.000075 +
+      0.001868 * Math.cos(γ) -
+      0.032077 * Math.sin(γ) -
+      0.014615 * Math.cos(2 * γ) -
+      0.040849 * Math.sin(2 * γ));
+  // Solar declination (radians).
+  const decl =
+    0.006918 -
+    0.399912 * Math.cos(γ) +
+    0.070257 * Math.sin(γ) -
+    0.006758 * Math.cos(2 * γ) +
+    0.000907 * Math.sin(2 * γ) -
+    0.002697 * Math.cos(3 * γ) +
+    0.00148 * Math.sin(3 * γ);
+
+  const timeOffset = eqTime + 4 * lon; // lon east-positive, minutes
+  const trueSolarTime = hoursUtc * 60 + timeOffset; // minutes
+  const hourAngle = toRad(trueSolarTime / 4 - 180);
+
+  const latR = toRad(lat);
+  const cosZenith =
+    Math.sin(latR) * Math.sin(decl) +
+    Math.cos(latR) * Math.cos(decl) * Math.cos(hourAngle);
+  const zenith = Math.acos(Math.max(-1, Math.min(1, cosZenith)));
+  return 90 - toDeg(zenith);
+}
+
+export type DayNight = 'day' | 'grayline' | 'night';
+
+/**
+ * Classify a point's local lighting from solar elevation. "grayline" is the
+ * twilight band around the terminator — the enhanced-DX window operators chase.
+ */
+export function dayNightAt(
+  lat: number,
+  lon: number,
+  date: Date = new Date(),
+): DayNight {
+  const el = solarElevationDeg(lat, lon, date);
+  if (el > 6) return 'day';
+  if (el >= -6) return 'grayline';
+  return 'night';
+}
+
 /** Haversine great-circle distance in kilometres. */
 export function distanceKm(
   lat1: number,

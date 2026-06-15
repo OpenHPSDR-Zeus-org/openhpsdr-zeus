@@ -145,6 +145,7 @@ describe('SmartNrController', () => {
         wdspActive: true,
         wdspEmnrPost2Available: true,
         wdspNr4SbnrAvailable: true,
+        wdspNr5SpnrAvailable: true,
       },
     });
     useSmartNrStore.getState().resetSettings();
@@ -265,7 +266,7 @@ describe('SmartNrController', () => {
 
     expect(setNrMock).toHaveBeenCalledTimes(1);
     expect(useSmartNrStore.getState().status?.heldByRxChain).toBe(false);
-    expect(useSmartNrStore.getState().status?.rxChainLabel).toBe('AGC stressed');
+    expect(useSmartNrStore.getState().status?.rxChainLabel).toBe('RX chain optimized');
   });
 
   it('holds auto NR when live AGC diagnostics require front-end protection', () => {
@@ -331,7 +332,7 @@ describe('SmartNrController', () => {
     for (let i = 0; i < 6; i++) feed(extremelyWeakSignal());
 
     expect(setNrMock).toHaveBeenCalledTimes(1);
-    expect(setNrMock.mock.calls[0]?.[0].nrMode).toBe('Sbnr');
+    expect(setNrMock.mock.calls[0]?.[0].nrMode).toBe('Nr5');
     expect(useSmartNrStore.getState().status?.reason).toContain('Weak-signal assist');
   });
 
@@ -364,6 +365,7 @@ describe('SmartNrController', () => {
         wdspActive: true,
         wdspEmnrPost2Available: true,
         wdspNr4SbnrAvailable: false,
+        wdspNr5SpnrAvailable: true,
       },
     });
 

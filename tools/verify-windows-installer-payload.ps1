@@ -57,26 +57,18 @@ foreach ($nativeName in @("wdsp.dll", "miniaudio.dll", "zeus-vst-bridge.dll")) {
     [System.Runtime.InteropServices.NativeLibrary]::Free($handle)
 }
 
-# Validate the managed VST bridge resolver against the installed layout. This
-# catches the easy-to-miss case where the DLL is present under runtimes/<rid>/
-# native but P/Invoke still searches only next to the executable or on PATH.
+# Validate the managed VST bridge resolver against the installed layout by
+# running the published app itself. Loading the net10.0 host assembly inside
+# PowerShell uses PowerShell's runtime context instead of the publish payload's
+# runtime context, which can fail before the VST resolver is exercised.
 try {
-    $hostAssembly = [System.Reflection.Assembly]::LoadFrom((Join-Path $publishPath "Zeus.Plugins.Host.dll"))
-    $abiType = $hostAssembly.GetType("Zeus.Plugins.Host.Audio.VstBridgeAbi", $true)
-    $bridgeType = $hostAssembly.GetType("Zeus.Plugins.Host.Audio.VstBridgeNative", $true)
-    $abi = [int]$abiType.GetField("Current").GetRawConstantValue()
-    $bridge = [Activator]::CreateInstance($bridgeType)
-    $initStatus = [int]$bridgeType.GetMethod("Init").Invoke($bridge, [object[]]@($abi))
-    if ($initStatus -ne 0) {
-        throw "VST bridge init returned status $initStatus"
+    $probeOutput = & (Join-Path $publishPath "OpenhpsdrZeus.exe") --verify-vst-bridge 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        throw ($probeOutput -join [Environment]::NewLine)
     }
-    [void]$bridgeType.GetMethod("Shutdown").Invoke($bridge, [object[]]@())
 }
 catch {
     $ex = $_.Exception
-    if ($ex -is [System.Reflection.TargetInvocationException] -and $ex.InnerException) {
-        $ex = $ex.InnerException
-    }
     throw "Managed VST bridge failed to load from installer payload: $($ex.Message)"
 }
 

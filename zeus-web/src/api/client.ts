@@ -66,7 +66,7 @@ export type RxMode =
   | 'DIGL'
   | 'DIGU';
 
-export type NrMode = 'Off' | 'Anr' | 'Emnr' | 'Sbnr';
+export type NrMode = 'Off' | 'Anr' | 'Emnr' | 'Sbnr' | 'Nr5';
 export type NbMode = 'Off' | 'Nb1' | 'Nb2';
 
 // RXA AGC mode. PascalCase strings match the server's JsonStringEnumConverter
@@ -515,6 +515,36 @@ export type HardwareDisplayDiagnosticsDto = {
   diagnosticRecommendation: string | null;
 };
 
+export type Nr5SpnrDiagnosticsDto = {
+  schemaVersion: number;
+  channelId: number;
+  run: boolean;
+  position: number;
+  learnedFrames: number;
+  aggressiveness: number;
+  agcRun: boolean;
+  targetRms: number;
+  maxGain: number;
+  agcGain: number;
+  agcGainDb: number;
+  presencePeak: number;
+  saliencePeak: number;
+  coherencePeak: number;
+  ridgePeak: number;
+  meanGain: number;
+  minGain: number;
+  suppressionDb: number;
+  noiseFloorDb: number;
+  floorReductionDb: number;
+  dynamicRangeDb: number;
+  signalConfidence: number;
+  agcGate: number;
+  inputRms: number;
+  inputDbfs: number;
+  outputRms: number;
+  outputDbfs: number;
+};
+
 export type HardwareRxDspDiagnosticsDto = {
   schemaVersion: number;
   status: string;
@@ -544,7 +574,10 @@ export type HardwareRxDspDiagnosticsDto = {
   wdspNativeLoadable: boolean;
   wdspEmnrPost2Available: boolean;
   wdspNr4SbnrAvailable: boolean;
+  wdspNr5SpnrAvailable: boolean;
   nr4Readiness: string;
+  nr5Readiness: string;
+  nr5SpnrDiagnostics: Nr5SpnrDiagnosticsDto | null;
   appliedNrMatchesRequested: boolean;
   appliedAgcMatchesRequested: boolean;
   appliedSquelchMatchesRequested: boolean;
@@ -610,9 +643,12 @@ export type HardwareDspDiagnosticsDto = {
   wdspNativeLoadable: boolean;
   wdspEmnrPost2Available: boolean;
   wdspNr4SbnrAvailable: boolean;
+  wdspNr5SpnrAvailable: boolean;
   nr4Readiness: string;
+  nr5Readiness: string;
   requestedNrMode: string;
   effectiveNrMode: string;
+  nr5SpnrDiagnostics: Nr5SpnrDiagnosticsDto | null;
   channelId: number;
   sampleRateHz: number;
   displayWidth: number;
@@ -755,9 +791,12 @@ export type SmartNrConditionDto = {
   wdspNativeLoadable: boolean;
   wdspEmnrPost2Available: boolean;
   wdspNr4SbnrAvailable: boolean;
+  wdspNr5SpnrAvailable: boolean;
   nr4Readiness: string;
+  nr5Readiness: string;
   requestedNrMode: string;
   effectiveNrMode: string;
+  nr5SpnrDiagnostics: Nr5SpnrDiagnosticsDto | null;
   expectedNrMode: string | null;
   runtimeAligned: boolean | null;
   runtimeAlignmentStatus: string;
@@ -1357,7 +1396,7 @@ const MODE_ORDER: readonly RxMode[] = [
   'DIGU',
 ];
 
-const NR_MODE_ORDER: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
+const NR_MODE_ORDER: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr', 'Nr5'];
 const NB_MODE_ORDER: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
 
 export function normalizeStatus(v: unknown): ConnectionStatus {
@@ -1890,6 +1929,42 @@ function diagStringArray(raw: unknown): string[] {
   return raw.filter((v): v is string => typeof v === 'string');
 }
 
+function normalizeNr5SpnrDiagnostics(raw: unknown): Nr5SpnrDiagnosticsDto | null {
+  if (raw === null || raw === undefined) return null;
+  const r = asDiagRecord(raw);
+  const schemaVersion = diagNumber(r.schemaVersion);
+  if (schemaVersion === null) return null;
+  return {
+    schemaVersion,
+    channelId: diagNumber(r.channelId) ?? 0,
+    run: Boolean(r.run),
+    position: diagNumber(r.position) ?? 0,
+    learnedFrames: diagNumber(r.learnedFrames) ?? 0,
+    aggressiveness: diagNumber(r.aggressiveness) ?? 0,
+    agcRun: Boolean(r.agcRun),
+    targetRms: diagNumber(r.targetRms) ?? 0,
+    maxGain: diagNumber(r.maxGain) ?? 0,
+    agcGain: diagNumber(r.agcGain) ?? 0,
+    agcGainDb: diagNumber(r.agcGainDb) ?? 0,
+    presencePeak: diagNumber(r.presencePeak) ?? 0,
+    saliencePeak: diagNumber(r.saliencePeak) ?? 0,
+    coherencePeak: diagNumber(r.coherencePeak) ?? 0,
+    ridgePeak: diagNumber(r.ridgePeak) ?? 0,
+    meanGain: diagNumber(r.meanGain) ?? 1,
+    minGain: diagNumber(r.minGain) ?? 1,
+    suppressionDb: diagNumber(r.suppressionDb) ?? 0,
+    noiseFloorDb: diagNumber(r.noiseFloorDb) ?? 0,
+    floorReductionDb: diagNumber(r.floorReductionDb) ?? 0,
+    dynamicRangeDb: diagNumber(r.dynamicRangeDb) ?? 0,
+    signalConfidence: diagNumber(r.signalConfidence) ?? 0,
+    agcGate: diagNumber(r.agcGate) ?? 0,
+    inputRms: diagNumber(r.inputRms) ?? 0,
+    inputDbfs: diagNumber(r.inputDbfs) ?? -240,
+    outputRms: diagNumber(r.outputRms) ?? 0,
+    outputDbfs: diagNumber(r.outputDbfs) ?? -240,
+  };
+}
+
 function normalizeFeatureSurfaces(raw: unknown): HardwareFeatureSurfaceDto[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((entry) => {
@@ -1920,9 +1995,12 @@ function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
     wdspNativeLoadable: Boolean(r.wdspNativeLoadable),
     wdspEmnrPost2Available: Boolean(r.wdspEmnrPost2Available),
     wdspNr4SbnrAvailable: Boolean(r.wdspNr4SbnrAvailable),
+    wdspNr5SpnrAvailable: Boolean(r.wdspNr5SpnrAvailable),
     nr4Readiness: diagString(r.nr4Readiness) ?? 'unknown',
+    nr5Readiness: diagString(r.nr5Readiness) ?? 'unknown',
     requestedNrMode: diagString(r.requestedNrMode) ?? 'Off',
     effectiveNrMode: diagString(r.effectiveNrMode) ?? 'Off',
+    nr5SpnrDiagnostics: normalizeNr5SpnrDiagnostics(r.nr5SpnrDiagnostics),
     channelId: diagNumber(r.channelId) ?? 0,
     sampleRateHz: diagNumber(r.sampleRateHz) ?? 0,
     displayWidth: diagNumber(r.displayWidth) ?? 0,
@@ -1975,7 +2053,10 @@ function normalizeHardwareRxDspDiagnostics(raw: unknown): HardwareRxDspDiagnosti
       wdspNativeLoadable: false,
       wdspEmnrPost2Available: false,
       wdspNr4SbnrAvailable: false,
+      wdspNr5SpnrAvailable: false,
       nr4Readiness: 'unknown',
+      nr5Readiness: 'unknown',
+      nr5SpnrDiagnostics: null,
       appliedNrMatchesRequested: true,
       appliedAgcMatchesRequested: true,
       appliedSquelchMatchesRequested: true,
@@ -2014,7 +2095,10 @@ function normalizeHardwareRxDspDiagnostics(raw: unknown): HardwareRxDspDiagnosti
     wdspNativeLoadable: Boolean(r.wdspNativeLoadable),
     wdspEmnrPost2Available: Boolean(r.wdspEmnrPost2Available),
     wdspNr4SbnrAvailable: Boolean(r.wdspNr4SbnrAvailable),
+    wdspNr5SpnrAvailable: Boolean(r.wdspNr5SpnrAvailable),
     nr4Readiness: diagString(r.nr4Readiness) ?? 'unknown',
+    nr5Readiness: diagString(r.nr5Readiness) ?? 'unknown',
+    nr5SpnrDiagnostics: normalizeNr5SpnrDiagnostics(r.nr5SpnrDiagnostics),
     appliedNrMatchesRequested: r.appliedNrMatchesRequested === undefined ? true : Boolean(r.appliedNrMatchesRequested),
     appliedAgcMatchesRequested: r.appliedAgcMatchesRequested === undefined ? true : Boolean(r.appliedAgcMatchesRequested),
     appliedSquelchMatchesRequested: r.appliedSquelchMatchesRequested === undefined ? true : Boolean(r.appliedSquelchMatchesRequested),
@@ -2276,9 +2360,12 @@ function normalizeSmartNrCondition(raw: unknown): SmartNrConditionDto {
     wdspNativeLoadable: Boolean(r.wdspNativeLoadable),
     wdspEmnrPost2Available: Boolean(r.wdspEmnrPost2Available),
     wdspNr4SbnrAvailable: Boolean(r.wdspNr4SbnrAvailable),
+    wdspNr5SpnrAvailable: Boolean(r.wdspNr5SpnrAvailable),
     nr4Readiness: diagString(r.nr4Readiness) ?? 'unknown',
+    nr5Readiness: diagString(r.nr5Readiness) ?? 'unknown',
     requestedNrMode: diagString(r.requestedNrMode) ?? 'Off',
     effectiveNrMode: diagString(r.effectiveNrMode) ?? 'Off',
+    nr5SpnrDiagnostics: normalizeNr5SpnrDiagnostics(r.nr5SpnrDiagnostics),
     expectedNrMode: diagString(r.expectedNrMode),
     runtimeAligned: diagBool(r.runtimeAligned),
     runtimeAlignmentStatus: diagString(r.runtimeAlignmentStatus) ?? 'unknown',
@@ -3314,6 +3401,148 @@ export function updateSpotsSettings(
       signal,
     },
     normalizeSpotsSettings,
+  );
+}
+
+/** One prefs database (profile) from GET /api/prefs/databases. Mirrors
+ *  Zeus.Contracts.PrefsDatabaseInfo. `relativePath` is under the Zeus data dir
+ *  ("zeus-prefs.db" or "profiles/<name>.db"); `modifiedUtcMs` is Unix epoch ms
+ *  (0 when the file does not exist yet, i.e. a never-written Default). */
+export interface PrefsDatabaseInfo {
+  name: string;
+  relativePath: string;
+  sizeBytes: number;
+  modifiedUtcMs: number;
+  active: boolean;
+}
+
+/** GET /api/prefs/databases — the active profile plus every available one.
+ *  Mirrors Zeus.Contracts.PrefsDatabasesDto. */
+export interface PrefsDatabasesDto {
+  activeRelativePath: string;
+  databases: PrefsDatabaseInfo[];
+}
+
+function normalizePrefsDatabases(raw: unknown): PrefsDatabasesDto {
+  const obj = (raw ?? {}) as Record<string, unknown>;
+  const list = Array.isArray(obj.databases) ? obj.databases : [];
+  const databases: PrefsDatabaseInfo[] = list.map((entry) => {
+    const e = (entry ?? {}) as Record<string, unknown>;
+    return {
+      name: typeof e.name === 'string' ? e.name : '',
+      relativePath: typeof e.relativePath === 'string' ? e.relativePath : '',
+      sizeBytes: typeof e.sizeBytes === 'number' ? e.sizeBytes : 0,
+      modifiedUtcMs: typeof e.modifiedUtcMs === 'number' ? e.modifiedUtcMs : 0,
+      active: e.active === true,
+    };
+  });
+  return {
+    activeRelativePath:
+      typeof obj.activeRelativePath === 'string' ? obj.activeRelativePath : '',
+    databases,
+  };
+}
+
+export function listPrefsDatabases(
+  signal?: AbortSignal,
+): Promise<PrefsDatabasesDto> {
+  return jsonFetch('/api/prefs/databases', { signal }, normalizePrefsDatabases);
+}
+
+/** Point the active-profile pointer at `relativePath`. Takes effect on the next
+ *  launch — the caller should follow up with restartApp(). Resolves to the
+ *  server's { restartRequired } acknowledgement. */
+export function setActivePrefsDatabase(
+  relativePath: string,
+  signal?: AbortSignal,
+): Promise<{ restartRequired: boolean }> {
+  return jsonFetch(
+    '/api/prefs/active-database',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ relativePath }),
+      signal,
+    },
+    (raw) => {
+      const o = (raw ?? {}) as Record<string, unknown>;
+      return { restartRequired: o.restartRequired === true };
+    },
+  );
+}
+
+/** Create a new empty named profile and return the refreshed list. */
+export function createPrefsDatabase(
+  name: string,
+  signal?: AbortSignal,
+): Promise<PrefsDatabasesDto> {
+  return jsonFetch(
+    '/api/prefs/databases',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
+      signal,
+    },
+    normalizePrefsDatabases,
+  );
+}
+
+/** Import an existing .db from a server-side file path as a new profile and
+ *  return the refreshed list. `name` defaults to the source file name. */
+export function importPrefsDatabase(
+  sourcePath: string,
+  name?: string,
+  signal?: AbortSignal,
+): Promise<PrefsDatabasesDto> {
+  return jsonFetch(
+    '/api/prefs/databases/import',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sourcePath, name: name ?? null }),
+      signal,
+    },
+    normalizePrefsDatabases,
+  );
+}
+
+/** Import a user-picked .db file (chosen via a native file dialog) by
+ *  uploading its bytes as multipart form-data. The webview can't give the
+ *  server a filesystem path, so we send the contents and the server writes
+ *  them into the profiles dir. `name` defaults to the uploaded file name. */
+export function uploadPrefsDatabase(
+  file: File,
+  name?: string,
+  signal?: AbortSignal,
+): Promise<PrefsDatabasesDto> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  if (name && name.trim().length > 0) form.append('name', name.trim());
+  // No explicit content-type — the browser sets the multipart boundary.
+  return jsonFetch(
+    '/api/prefs/databases/upload',
+    { method: 'POST', body: form, signal },
+    normalizePrefsDatabases,
+  );
+}
+
+/** Ask the backend to relaunch itself (a fresh copy with the same args, after
+ *  this process exits). Used after switching the active prefs database. */
+export function restartApp(
+  signal?: AbortSignal,
+): Promise<{ restarting: boolean }> {
+  return jsonFetch(
+    '/api/app/restart',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      signal,
+    },
+    (raw) => {
+      const o = (raw ?? {}) as Record<string, unknown>;
+      return { restarting: o.restarting === true };
+    },
   );
 }
 

@@ -64,6 +64,7 @@ afterEach(() => {
   useSignalEnhanceStore.setState({
     popEnabled: false,
     snapEnabled: false,
+    autoNotchEnabled: false,
     visualAgcEnabled: true,
     impulseRejectEnabled: true,
   });

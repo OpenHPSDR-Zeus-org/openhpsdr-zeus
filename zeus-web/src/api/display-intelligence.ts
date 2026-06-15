@@ -7,6 +7,7 @@ export type DisplayIntelligenceSettings = {
   profileId: 'balanced' | 'dx' | 'cw' | 'digital' | 'voice' | 'contest' | 'custom';
   popEnabled: boolean;
   snapEnabled: boolean;
+  autoNotchEnabled: boolean;
   autoProfileEnabled: boolean;
   visualAgcEnabled: boolean;
   impulseRejectEnabled: boolean;
@@ -29,6 +30,7 @@ export const DISPLAY_INTELLIGENCE_DEFAULTS: DisplayIntelligenceSettings = {
   profileId: 'balanced',
   popEnabled: false,
   snapEnabled: false,
+  autoNotchEnabled: false,
   autoProfileEnabled: false,
   visualAgcEnabled: true,
   impulseRejectEnabled: true,
@@ -79,6 +81,7 @@ export function normalizeDisplayIntelligenceSettings(raw: unknown): DisplayIntel
     profileId: profileId(typeof r.profileId === 'string' ? r.profileId.trim().toLowerCase() : r.profileId),
     popEnabled: typeof r.popEnabled === 'boolean' ? r.popEnabled : d.popEnabled,
     snapEnabled: typeof r.snapEnabled === 'boolean' ? r.snapEnabled : d.snapEnabled,
+    autoNotchEnabled: typeof r.autoNotchEnabled === 'boolean' ? r.autoNotchEnabled : d.autoNotchEnabled,
     autoProfileEnabled: typeof r.autoProfileEnabled === 'boolean' ? r.autoProfileEnabled : d.autoProfileEnabled,
     visualAgcEnabled: typeof r.visualAgcEnabled === 'boolean' ? r.visualAgcEnabled : d.visualAgcEnabled,
     impulseRejectEnabled: typeof r.impulseRejectEnabled === 'boolean' ? r.impulseRejectEnabled : d.impulseRejectEnabled,

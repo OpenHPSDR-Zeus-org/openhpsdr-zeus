@@ -58,6 +58,22 @@ export type QrzStation = {
   cqZone: number | null;
   ituZone: number | null;
   imageUrl: string | null;
+  // ── Extended fields (added alongside the QRZ-card enrichment work) ──────
+  licenseClass: string | null;
+  licenseCodes: string | null;
+  /** Current-grant effective date (yyyy-MM-dd). Not necessarily first-licensed. */
+  licenseEffectiveDate: string | null;
+  licenseExpiresDate: string | null;
+  email: string | null;
+  acceptsLotw: boolean | null;
+  acceptsEqsl: boolean | null;
+  acceptsMailQsl: boolean | null;
+  qslManager: string | null;
+  /** Hours offset from UTC for the contact's QTH (QRZ GMTOffset). */
+  gmtOffset: number | null;
+  timeZone: string | null;
+  observesDst: boolean | null;
+  born: number | null;
 };
 
 export type QrzStatus = {
@@ -81,6 +97,10 @@ function toStr(v: unknown): string | null {
   return typeof v === 'string' && v.length > 0 ? v : null;
 }
 
+function toBool(v: unknown): boolean | null {
+  return typeof v === 'boolean' ? v : null;
+}
+
 function normalizeStation(raw: unknown): QrzStation {
   const r = (raw ?? {}) as Record<string, unknown>;
   return {
@@ -97,6 +117,19 @@ function normalizeStation(raw: unknown): QrzStation {
     cqZone: toNum(r.cqZone),
     ituZone: toNum(r.ituZone),
     imageUrl: toStr(r.imageUrl),
+    licenseClass: toStr(r.licenseClass),
+    licenseCodes: toStr(r.licenseCodes),
+    licenseEffectiveDate: toStr(r.licenseEffectiveDate),
+    licenseExpiresDate: toStr(r.licenseExpiresDate),
+    email: toStr(r.email),
+    acceptsLotw: toBool(r.acceptsLotw),
+    acceptsEqsl: toBool(r.acceptsEqsl),
+    acceptsMailQsl: toBool(r.acceptsMailQsl),
+    qslManager: toStr(r.qslManager),
+    gmtOffset: toNum(r.gmtOffset),
+    timeZone: toStr(r.timeZone),
+    observesDst: toBool(r.observesDst),
+    born: toNum(r.born),
   };
 }
 

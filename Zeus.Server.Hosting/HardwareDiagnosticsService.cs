@@ -2061,7 +2061,9 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "dsp.wdspWisdomPhase",
                 "dsp.wdspEmnrPost2Available",
                 "dsp.wdspNr4SbnrAvailable",
+                "dsp.wdspNr5SpnrAvailable",
                 "dsp.nr4Readiness",
+                "dsp.nr5Readiness",
                 "/api/dsp/nr-condition.rxChain.agcTopDb",
                 "/api/dsp/nr-condition.rxChain.agcOffsetDb",
                 "/api/dsp/nr-condition.rxChain.effectiveAgcTopDb",
@@ -2078,7 +2080,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "/api/dsp/nr-condition",
             },
             safetyClass = "rx-safe",
-            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the direct NR-condition API and backend diagnostics feed preserve the active profile, recommendation, RX-chain hold reason, requested/effective NR mode, ANF/SNB/NB/manual-notch runtime state, WDSP NR2/NR4 native capability, backend AGC/ATT/ADC/squelch operating point, and final RX/TX-monitor audio-frame freshness/RMS/peak evidence for remote clients and recordings.",
+            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the direct NR-condition API and backend diagnostics feed preserve the active profile, recommendation, RX-chain hold reason, requested/effective NR mode, ANF/SNB/NB/manual-notch runtime state, WDSP NR2/NR4/NR5 native capability, backend AGC/ATT/ADC/squelch operating point, and final RX/TX-monitor audio-frame freshness/RMS/peak evidence for remote clients and recordings.",
         },
         new
         {

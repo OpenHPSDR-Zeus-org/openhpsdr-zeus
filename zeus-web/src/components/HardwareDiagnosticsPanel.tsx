@@ -46,9 +46,67 @@ type Field = {
   value: string | number | null | undefined;
 };
 
+type HardwareTabId = 'overview' | 'rx-dsp' | 'tx-ptt' | 'io' | 'protocol' | 'mapping';
+
+const HARDWARE_TABS: ReadonlyArray<{ id: HardwareTabId; label: string; hint: string }> = [
+  { id: 'overview', label: 'Overview', hint: 'board / inventory' },
+  { id: 'rx-dsp', label: 'RX / DSP', hint: 'receive path' },
+  { id: 'tx-ptt', label: 'TX / PTT', hint: 'keying / PA / PS' },
+  { id: 'io', label: 'I/O', hint: 'pins / actions' },
+  { id: 'protocol', label: 'Protocol', hint: 'P1 / P2 live' },
+  { id: 'mapping', label: 'Mapping', hint: 'raw capture' },
+];
+
+type StatusTone = 'idle' | 'ok' | 'warn' | 'bad';
+
+type HardwareStatusItem = {
+  label: string;
+  value: string | number | null | undefined;
+  tone?: StatusTone;
+};
+
 function dash(v: string | number | null | undefined): string {
   if (v === null || v === undefined || v === '') return '-';
   return String(v);
+}
+
+function statusTone(value: string | null | undefined): StatusTone {
+  if (!value) return 'idle';
+  const normalized = value.toLowerCase();
+  if (
+    normalized.includes('error') ||
+    normalized.includes('fail') ||
+    normalized.includes('fault') ||
+    normalized.includes('alarm') ||
+    normalized.includes('blocked') ||
+    normalized.includes('stale')
+  ) {
+    return 'bad';
+  }
+  if (
+    normalized.includes('warn') ||
+    normalized.includes('degraded') ||
+    normalized.includes('waiting') ||
+    normalized.includes('unknown')
+  ) {
+    return 'warn';
+  }
+  if (
+    normalized.includes('ok') ||
+    normalized.includes('ready') ||
+    normalized.includes('healthy') ||
+    normalized.includes('connected') ||
+    normalized.includes('live') ||
+    normalized.includes('fresh')
+  ) {
+    return 'ok';
+  }
+  return 'idle';
+}
+
+function boolTone(value: boolean | null | undefined, goodWhen = true): StatusTone {
+  if (value === null || value === undefined) return 'idle';
+  return value === goodWhen ? 'ok' : 'bad';
 }
 
 function boolLabel(v: boolean | null | undefined): string {
@@ -86,6 +144,11 @@ function db(v: number | null | undefined): string {
 function pct(v: number | null | undefined): string {
   if (v === null || v === undefined) return '-';
   return `${v.toFixed(1)}%`;
+}
+
+function lin(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '-';
+  return Math.abs(v) < 0.01 ? v.toFixed(6) : v.toFixed(3);
 }
 
 function count(v: number | null | undefined): string {
@@ -152,6 +215,55 @@ function FieldGrid({ fields }: { fields: Field[] }) {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function HardwareStatusStrip({ items }: { items: HardwareStatusItem[] }) {
+  return (
+    <div className="hardware-status-strip" aria-label="Hardware status summary">
+      {items.map((item) => (
+        <div key={item.label} className={`hardware-status-chip is-${item.tone ?? 'idle'}`}>
+          <span>{item.label}</span>
+          <strong className="mono">{dash(item.value)}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HardwareTabStrip({
+  active,
+  badges,
+  onSelect,
+}: {
+  active: HardwareTabId;
+  badges: Partial<Record<HardwareTabId, string>>;
+  onSelect: (tab: HardwareTabId) => void;
+}) {
+  return (
+    <div className="hardware-tabs" role="tablist" aria-label="Hardware diagnostics sections">
+      {HARDWARE_TABS.map((tab) => {
+        const selected = active === tab.id;
+        return (
+          <button
+            key={tab.id}
+            id={`hardware-tab-${tab.id}`}
+            type="button"
+            role="tab"
+            aria-selected={selected}
+            aria-controls={`hardware-panel-${tab.id}`}
+            className={`hardware-tab${selected ? ' is-active' : ''}`}
+            onClick={() => onSelect(tab.id)}
+          >
+            <span className="hardware-tab-copy">
+              <span className="hardware-tab-label">{tab.label}</span>
+              <span className="hardware-tab-hint">{tab.hint}</span>
+            </span>
+            <span className="hardware-tab-badge">{badges[tab.id] ?? '-'}</span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -1334,6 +1446,7 @@ export function HardwareDiagnosticsPanel() {
   const [marking, setMarking] = useState(false);
   const [markerLabel, setMarkerLabel] = useState('');
   const [markerNotes, setMarkerNotes] = useState('');
+  const [activeTab, setActiveTab] = useState<HardwareTabId>('overview');
 
   const load = useCallback(async (signal?: AbortSignal) => {
     setBusy(true);
@@ -1504,6 +1617,7 @@ export function HardwareDiagnosticsPanel() {
   const rxDsp = dsp?.rxDsp;
   const rxMeters = dsp?.rxMeters;
   const audio = dsp?.audio;
+  const nr5Spnr = dsp?.nr5SpnrDiagnostics ?? rxDsp?.nr5SpnrDiagnostics ?? smartNrCondition?.nr5SpnrDiagnostics ?? null;
   const dspFields: Field[] = [
     { label: 'Engine', value: dsp?.engineKind },
     { label: 'Runtime', value: dsp?.engine },
@@ -1512,9 +1626,23 @@ export function HardwareDiagnosticsPanel() {
     { label: 'WDSP Native', value: boolLabel(dsp?.wdspNativeLoadable) },
     { label: 'NR2 Post2', value: boolLabel(dsp?.wdspEmnrPost2Available) },
     { label: 'NR4 SBNR', value: boolLabel(dsp?.wdspNr4SbnrAvailable) },
+    { label: 'NR5 SPNR', value: boolLabel(dsp?.wdspNr5SpnrAvailable) },
     { label: 'NR4 Readiness', value: dsp?.nr4Readiness },
+    { label: 'NR5 Readiness', value: dsp?.nr5Readiness },
     { label: 'NR Requested', value: dsp?.requestedNrMode },
     { label: 'NR Effective', value: dsp?.effectiveNrMode },
+    { label: 'NR5 Learning', value: nr5Spnr ? count(nr5Spnr.learnedFrames) : null },
+    { label: 'NR5 Presence', value: lin(nr5Spnr?.presencePeak) },
+    { label: 'NR5 Salience', value: lin(nr5Spnr?.saliencePeak) },
+    { label: 'NR5 Coherence', value: lin(nr5Spnr?.coherencePeak) },
+    { label: 'NR5 Ridge', value: lin(nr5Spnr?.ridgePeak) },
+    { label: 'NR5 Confidence', value: lin(nr5Spnr?.signalConfidence) },
+    { label: 'NR5 AGC Gate', value: lin(nr5Spnr?.agcGate) },
+    { label: 'NR5 Suppression', value: db(nr5Spnr?.suppressionDb) },
+    { label: 'NR5 Floor Push', value: db(nr5Spnr?.floorReductionDb) },
+    { label: 'NR5 Range', value: db(nr5Spnr?.dynamicRangeDb) },
+    { label: 'NR5 AGC Gain', value: db(nr5Spnr?.agcGainDb) },
+    { label: 'NR5 Output', value: db(nr5Spnr?.outputDbfs) },
     { label: 'Wisdom', value: dsp?.wdspWisdomPhase },
     { label: 'Channel', value: dsp?.channelId },
     { label: 'DSP Rate', value: dsp?.sampleRateHz },
@@ -1575,7 +1703,21 @@ export function HardwareDiagnosticsPanel() {
     { label: 'NB Threshold', value: rxDsp?.nbThreshold },
     { label: 'Manual Notches', value: rxDsp?.manualNotchCount },
     { label: 'Active Notches', value: rxDsp?.activeManualNotchCount },
+    { label: 'NR5 SPNR', value: boolLabel(rxDsp?.wdspNr5SpnrAvailable) },
     { label: 'NR4 Ready', value: rxDsp?.nr4Readiness },
+    { label: 'NR5 Ready', value: rxDsp?.nr5Readiness },
+    { label: 'NR5 Run', value: boolLabel(nr5Spnr?.run) },
+    { label: 'NR5 AGC', value: boolLabel(nr5Spnr?.agcRun) },
+    { label: 'NR5 Target', value: lin(nr5Spnr?.targetRms) },
+    { label: 'NR5 In', value: db(nr5Spnr?.inputDbfs) },
+    { label: 'NR5 Out', value: db(nr5Spnr?.outputDbfs) },
+    { label: 'NR5 Noise', value: db(nr5Spnr?.noiseFloorDb) },
+    { label: 'NR5 Coherence', value: lin(nr5Spnr?.coherencePeak) },
+    { label: 'NR5 Ridge', value: lin(nr5Spnr?.ridgePeak) },
+    { label: 'NR5 Confidence', value: lin(nr5Spnr?.signalConfidence) },
+    { label: 'NR5 AGC Gate', value: lin(nr5Spnr?.agcGate) },
+    { label: 'NR5 Floor Push', value: db(nr5Spnr?.floorReductionDb) },
+    { label: 'NR5 Range', value: db(nr5Spnr?.dynamicRangeDb) },
     { label: 'NR Applied', value: boolLabel(rxDsp?.appliedNrMatchesRequested) },
     { label: 'AGC Applied', value: boolLabel(rxDsp?.appliedAgcMatchesRequested) },
     { label: 'SQL Applied', value: boolLabel(rxDsp?.appliedSquelchMatchesRequested) },
@@ -1748,281 +1890,363 @@ export function HardwareDiagnosticsPanel() {
     { label: 'HW LEDs', value: hex(p2?.hardwareLeds, 4) },
   ];
 
+  const protocolBadge =
+    (p2?.packets ?? 0) > 0
+      ? 'P2 live'
+      : (p1?.packets ?? 0) > 0
+        ? 'P1 live'
+        : 'capture';
+  const tabBadges: Partial<Record<HardwareTabId, string>> = {
+    overview: radios ? `${radios.length} radio${radios.length === 1 ? '' : 's'}` : 'scan',
+    'rx-dsp': audio?.status ?? dsp?.readiness ?? rxMeters?.status ?? 'DSP',
+    'tx-ptt': txDiagnostics?.egress.healthStatus ?? (keying?.externalPtt.ownedMox ? 'PTT' : 'idle'),
+    io: `${(userIoLabels?.lines.length ?? userIoActions?.lines.length ?? 0)} lines`,
+    protocol: protocolBadge,
+    mapping: `${diag?.mapping.markers.length ?? 0} marks`,
+  };
+  const hardwareStatus: HardwareStatusItem[] = [
+    {
+      label: 'Connection',
+      value: diag?.connectionStatus ?? (busy ? 'loading' : null),
+      tone: statusTone(diag?.connectionStatus),
+    },
+    {
+      label: 'Board',
+      value: diag?.effectiveBoard,
+      tone: diag?.effectiveBoard ? 'ok' : 'idle',
+    },
+    {
+      label: 'Protocol',
+      value: diag?.activeProtocol,
+      tone: diag?.activeProtocol ? 'ok' : 'idle',
+    },
+    {
+      label: 'DSP',
+      value: dsp?.readiness ?? dsp?.engineKind,
+      tone: statusTone(dsp?.readiness ?? dsp?.engineKind),
+    },
+    {
+      label: 'RX Chain',
+      value: nrCondition?.status ?? rxMeters?.status,
+      tone: statusTone(nrCondition?.status ?? rxMeters?.status),
+    },
+    {
+      label: 'RX Audio',
+      value: audio?.status,
+      tone: statusTone(audio?.status),
+    },
+    {
+      label: 'TX Path',
+      value: txDiagnostics?.egress.healthStatus,
+      tone: statusTone(txDiagnostics?.egress.healthStatus),
+    },
+    {
+      label: 'Supply',
+      value: supplyAlarms?.alarmStatus ?? boolLabel(supplyAlarms?.alarmActive),
+      tone: supplyAlarms?.alarmStatus
+        ? statusTone(supplyAlarms.alarmStatus)
+        : boolTone(supplyAlarms?.alarmActive, false),
+    },
+    {
+      label: 'Mapping',
+      value: protocolBadge,
+      tone: protocolBadge.endsWith('live') ? 'ok' : 'idle',
+    },
+  ];
+
   return (
-    <div className="ps-shell">
-      <div className="ps-card">
-        <h4>
-          Hardware Diagnostics
-          <span className="ps-card-hint">
-            {busy ? 'refreshing' : diag ? `updated ${time(diag.generatedUtc)}` : 'loading'}
-          </span>
-        </h4>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-          <button type="button" className="btn sm" onClick={() => void load()} disabled={busy}>
-            REFRESH
-          </button>
-          {error && (
-            <span style={{ alignSelf: 'center', fontSize: 11, color: 'var(--tx)' }}>
-              {error}
+    <div className="ps-shell hardware-shell">
+      <div className="ps-card hardware-summary-card">
+        <div className="hardware-summary-head">
+          <h4>
+            Hardware Diagnostics
+            <span className="ps-card-hint">
+              {busy ? 'refreshing' : diag ? `updated ${time(diag.generatedUtc)}` : 'loading'}
             </span>
-          )}
+          </h4>
+          <div className="hardware-summary-actions">
+            <button type="button" className="btn sm" onClick={() => void load()} disabled={busy}>
+              REFRESH
+            </button>
+            <button type="button" className="btn sm" onClick={() => void scan()} disabled={scanning}>
+              SCAN
+            </button>
+          </div>
         </div>
+        {(error || inventoryError || endpointError) && (
+          <div className="hardware-error-row">
+            {error && <span>Hardware: {error}</span>}
+            {inventoryError && <span>Inventory: {inventoryError}</span>}
+            {endpointError && <span>Endpoint: {endpointError}</span>}
+          </div>
+        )}
+        <HardwareStatusStrip items={hardwareStatus} />
         <FieldGrid fields={connectionFields} />
       </div>
 
-      <div className="ps-card">
-        <h4>
-          Network Inventory
-          <span className="ps-card-hint">
-            {scanning ? 'scanning' : `${radios?.length ?? 0} discovered`}
-          </span>
-        </h4>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-          <button type="button" className="btn sm" onClick={() => void scan()} disabled={scanning}>
-            SCAN
-          </button>
-          {inventoryError && (
-            <span style={{ alignSelf: 'center', fontSize: 11, color: 'var(--tx)' }}>
-              {inventoryError}
-            </span>
-          )}
-        </div>
-        <RadioInventory radios={radios} />
-      </div>
+      <HardwareTabStrip active={activeTab} badges={tabBadges} onSelect={setActiveTab} />
 
-      <div className="ps-card">
-        <h4>
-          Board Capabilities
-          <span className="ps-card-hint">Thetis-derived static map</span>
-        </h4>
-        <FieldGrid fields={capabilityFields} />
-      </div>
+      <div
+        id={`hardware-panel-${activeTab}`}
+        role="tabpanel"
+        aria-labelledby={`hardware-tab-${activeTab}`}
+        className="hardware-tab-panel"
+      >
+        {activeTab === 'overview' && (
+          <>
+            <div className="ps-card">
+              <h4>
+                Network Inventory
+                <span className="ps-card-hint">
+                  {scanning ? 'scanning' : `${radios?.length ?? 0} discovered`}
+                </span>
+              </h4>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+                <button type="button" className="btn sm" onClick={() => void scan()} disabled={scanning}>
+                  SCAN
+                </button>
+                {inventoryError && (
+                  <span style={{ alignSelf: 'center', fontSize: 11, color: 'var(--tx)' }}>
+                    {inventoryError}
+                  </span>
+                )}
+              </div>
+              <RadioInventory radios={radios} />
+            </div>
 
-      <div className="ps-card">
-        <h4>
-          Receiver Topology
-          <span className="ps-card-hint">G2 manual ADC / DDC / filter-bank audit</span>
-        </h4>
-        <ReceiverTopologyDiagnostics diag={diag} />
-      </div>
+            <div className="ps-card">
+              <h4>
+                Board Capabilities
+                <span className="ps-card-hint">Thetis-derived static map</span>
+              </h4>
+              <FieldGrid fields={capabilityFields} />
+            </div>
 
-      <div className="ps-card">
-        <h4>
-          DSP Runtime
-          <span className="ps-card-hint">engine, timing, TX path, WDSP readiness</span>
-        </h4>
-        <FieldGrid fields={dspFields} />
-        <div style={{ marginTop: 10 }}>
-          <FieldGrid fields={audioFields} />
-        </div>
-        <div style={{ marginTop: 10 }}>
-          <FieldGrid fields={rxDspFields} />
-        </div>
-        <div style={{ marginTop: 10 }}>
-          <FieldGrid fields={rxMeterFields} />
-        </div>
-        <div style={{ marginTop: 10 }}>
-          <FieldGrid fields={displayFields} />
-        </div>
-        <DiagnosticRecommendation text={rxDsp?.diagnosticRecommendation} />
-        <DiagnosticRecommendation text={rxMeters?.diagnosticRecommendation} />
-        <DiagnosticRecommendation text={audio?.diagnosticRecommendation} />
-        <DiagnosticRecommendation text={display?.diagnosticRecommendation} />
-      </div>
-
-      <div className="ps-card">
-        <h4>
-          DSP Scene Intelligence
-          <span className="ps-card-hint">frontend Signal Intelligence and Smart NR evidence</span>
-        </h4>
-        <FieldGrid fields={sceneFields} />
-        <div style={{ marginTop: 10 }}>
-          <FieldGrid fields={rxChainFields} />
-        </div>
-        <DiagnosticRecommendation text={nrCondition?.diagnosticRecommendation} />
-      </div>
-
-      <div className="ps-card">
-        <h4>
-          Hardware Keying &amp; External PTT
-          <span className="ps-card-hint">
-            {endpointBusy ? 'refreshing' : 'decoded /api/cw/hardware-keying'}
-          </span>
-        </h4>
-        {endpointError && (
-          <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--tx)' }}>
-            {endpointError}
-          </div>
+            <div className="ps-card">
+              <h4>
+                Receiver Topology
+                <span className="ps-card-hint">G2 manual ADC / DDC / filter-bank audit</span>
+              </h4>
+              <ReceiverTopologyDiagnostics diag={diag} />
+            </div>
+          </>
         )}
-        <HardwareKeyingDiagnostics status={keying} />
-      </div>
 
-      <div className="ps-card">
-        <h4>
-          G2 Dig In TX Disable
-          <span className="ps-card-hint">rear jack tip CW key / ring active-low inhibit</span>
-        </h4>
-        <DigInDiagnostics diag={digInDiagnostics ?? diag?.digIn ?? null} />
-      </div>
+        {activeTab === 'rx-dsp' && (
+          <>
+            <div className="ps-card">
+              <h4>
+                DSP Runtime
+                <span className="ps-card-hint">engine, timing, TX path, WDSP readiness</span>
+              </h4>
+              <FieldGrid fields={dspFields} />
+              <div style={{ marginTop: 10 }}>
+                <FieldGrid fields={audioFields} />
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <FieldGrid fields={rxDspFields} />
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <FieldGrid fields={rxMeterFields} />
+              </div>
+              <div style={{ marginTop: 10 }}>
+                <FieldGrid fields={displayFields} />
+              </div>
+              <DiagnosticRecommendation text={rxDsp?.diagnosticRecommendation} />
+              <DiagnosticRecommendation text={rxMeters?.diagnosticRecommendation} />
+              <DiagnosticRecommendation text={audio?.diagnosticRecommendation} />
+              <DiagnosticRecommendation text={display?.diagnosticRecommendation} />
+            </div>
 
-      <div className="ps-card">
-        <h4>
-          PA Supply Alarms
-          <span className="ps-card-hint">scaled P1/P2 supply telemetry</span>
-        </h4>
-        <SupplyAlarmDiagnostics alarms={supplyAlarms} />
-      </div>
-
-      <div className="ps-card">
-        <h4>
-          Radio Network Profile
-          <span className="ps-card-hint">transport health / frame loss / hi-priority flow</span>
-        </h4>
-        <NetworkProfileDiagnostics profile={networkProfile} />
-      </div>
-
-      <div className="ps-card">
-        <h4>
-          TX Egress Diagnostics
-          <span className="ps-card-hint">mic ingest / P1 ring / P2 DUC packets</span>
-        </h4>
-        <TxEgressDiagnostics diag={txDiagnostics} />
-      </div>
-
-      <div className="ps-card">
-        <h4>
-          PureSignal Feedback Health
-          <span className="ps-card-hint">internal coupler / RF Bypass / calcc window</span>
-        </h4>
-        <PureSignalFeedbackDiagnostics diag={diag?.pureSignal} />
-      </div>
-
-      <div className="ps-card">
-        <h4>
-          User I/O Labels &amp; Actions
-          <span className="ps-card-hint">P2 analog/digital lines and guarded bindings</span>
-        </h4>
-        <UserIoDiagnostics labels={userIoLabels} actions={userIoActions} />
-      </div>
-
-      <div className="ps-card">
-        <h4>
-          Next-Level Opportunities
-          <span className="ps-card-hint">ranked from live diagnostics</span>
-        </h4>
-        <HardwareOpportunityMatrix items={diag?.featureSurfaces ?? []} />
-      </div>
-
-      <div className="ps-card">
-        <h4>
-          Protocol 1 Live
-          <span className="ps-card-hint">C&amp;C echo telemetry</span>
-        </h4>
-        <FieldGrid fields={p1Fields} />
-      </div>
-
-      <div className="ps-card">
-        <h4>
-          Protocol 2 Live
-          <span className="ps-card-hint">hi-priority status</span>
-        </h4>
-        <FieldGrid fields={p2Fields} />
-      </div>
-
-      <div className="ps-card">
-        <h4>
-          Mapping Capture
-          <span className="ps-card-hint">
-            raw status byte map · {diag?.mapping.markers.length ?? 0} markers
-          </span>
-        </h4>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-          <button type="button" className="btn sm" onClick={() => void resetMap()} disabled={resettingMap}>
-            RESET MAP
-          </button>
-          <button type="button" className="btn sm" onClick={() => void load()} disabled={busy}>
-            REFRESH
-          </button>
-          <button type="button" className="btn sm" onClick={() => void createMarker('Baseline')} disabled={marking}>
-            BASELINE
-          </button>
-          <button type="button" className="btn sm" onClick={() => void createMarker('After RX Action')} disabled={marking}>
-            RX ACTION
-          </button>
-          <button type="button" className="btn sm" onClick={() => void createMarker()} disabled={marking}>
-            MARK
-          </button>
-        </div>
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'minmax(160px, 0.7fr) minmax(220px, 1.3fr)',
-            gap: 8,
-            marginBottom: 12,
-          }}
-        >
-          <input
-            value={markerLabel}
-            onChange={(event) => setMarkerLabel(event.target.value)}
-            placeholder="Marker label"
-            maxLength={80}
-            style={{
-              minWidth: 0,
-              padding: '6px 8px',
-              background: 'var(--bg-0)',
-              color: 'var(--fg-0)',
-              border: '1px solid var(--panel-border)',
-              borderRadius: 'var(--r-sm)',
-              fontSize: 12,
-            }}
-          />
-          <input
-            value={markerNotes}
-            onChange={(event) => setMarkerNotes(event.target.value)}
-            placeholder="Notes"
-            maxLength={220}
-            style={{
-              minWidth: 0,
-              padding: '6px 8px',
-              background: 'var(--bg-0)',
-              color: 'var(--fg-0)',
-              border: '1px solid var(--panel-border)',
-              borderRadius: 'var(--r-sm)',
-              fontSize: 12,
-            }}
-          />
-        </div>
-        {diag?.mapping && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-            <MarkerTimeline markers={diag.mapping.markers} />
-            <P2ByteMap map={diag.mapping.p2HiPriority} />
-            <P1Map map={diag.mapping.p1} />
-          </div>
+            <div className="ps-card">
+              <h4>
+                DSP Scene Intelligence
+                <span className="ps-card-hint">frontend Signal Intelligence and Smart NR evidence</span>
+              </h4>
+              <FieldGrid fields={sceneFields} />
+              <div style={{ marginTop: 10 }}>
+                <FieldGrid fields={rxChainFields} />
+              </div>
+              <DiagnosticRecommendation text={nrCondition?.diagnosticRecommendation} />
+            </div>
+          </>
         )}
-      </div>
 
-      <div className="ps-card">
-        <h4>
-          Reference Map
-          <span className="ps-card-hint">Thetis parity anchors</span>
-        </h4>
-        <MappingRows items={diag?.referenceMap ?? []} />
-      </div>
+        {activeTab === 'tx-ptt' && (
+          <>
+            <div className="ps-card">
+              <h4>
+                Hardware Keying &amp; External PTT
+                <span className="ps-card-hint">
+                  {endpointBusy ? 'refreshing' : 'decoded /api/cw/hardware-keying'}
+                </span>
+              </h4>
+              {endpointError && (
+                <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--tx)' }}>
+                  {endpointError}
+                </div>
+              )}
+              <HardwareKeyingDiagnostics status={keying} />
+            </div>
 
-      <div className="ps-card">
-        <h4>
-          Feature Surfaces
-          <span className="ps-card-hint">API hooks for future controls</span>
-        </h4>
-        <FeatureSurfaceRows items={diag?.featureSurfaces ?? []} />
-      </div>
+            <div className="ps-card">
+              <h4>
+                G2 Dig In TX Disable
+                <span className="ps-card-hint">rear jack tip CW key / ring active-low inhibit</span>
+              </h4>
+              <DigInDiagnostics diag={digInDiagnostics ?? diag?.digIn ?? null} />
+            </div>
 
-      <div className="ps-card">
-        <h4>
-          Settings Candidates
-          <span className="ps-card-hint">configurable follow-up surfaces</span>
-        </h4>
-        <MappingRows items={diag?.candidateSettings ?? []} />
+            <div className="ps-card">
+              <h4>
+                TX Egress Diagnostics
+                <span className="ps-card-hint">mic ingest / P1 ring / P2 DUC packets</span>
+              </h4>
+              <TxEgressDiagnostics diag={txDiagnostics} />
+            </div>
+
+            <div className="ps-card">
+              <h4>
+                PA Supply Alarms
+                <span className="ps-card-hint">scaled P1/P2 supply telemetry</span>
+              </h4>
+              <SupplyAlarmDiagnostics alarms={supplyAlarms} />
+            </div>
+
+            <div className="ps-card">
+              <h4>
+                PureSignal Feedback Health
+                <span className="ps-card-hint">internal coupler / RF Bypass / calcc window</span>
+              </h4>
+              <PureSignalFeedbackDiagnostics diag={diag?.pureSignal} />
+            </div>
+          </>
+        )}
+
+        {activeTab === 'io' && (
+          <>
+            <div className="ps-card">
+              <h4>
+                User I/O Labels &amp; Actions
+                <span className="ps-card-hint">P2 analog/digital lines and guarded bindings</span>
+              </h4>
+              <UserIoDiagnostics labels={userIoLabels} actions={userIoActions} />
+            </div>
+
+            <div className="ps-card">
+              <h4>
+                Next-Level Opportunities
+                <span className="ps-card-hint">ranked from live diagnostics</span>
+              </h4>
+              <HardwareOpportunityMatrix items={diag?.featureSurfaces ?? []} />
+            </div>
+          </>
+        )}
+
+        {activeTab === 'protocol' && (
+          <>
+            <div className="ps-card">
+              <h4>
+                Protocol 1 Live
+                <span className="ps-card-hint">C&amp;C echo telemetry</span>
+              </h4>
+              <FieldGrid fields={p1Fields} />
+            </div>
+
+            <div className="ps-card">
+              <h4>
+                Protocol 2 Live
+                <span className="ps-card-hint">hi-priority status</span>
+              </h4>
+              <FieldGrid fields={p2Fields} />
+            </div>
+
+            <div className="ps-card">
+              <h4>
+                Radio Network Profile
+                <span className="ps-card-hint">transport health / frame loss / hi-priority flow</span>
+              </h4>
+              <NetworkProfileDiagnostics profile={networkProfile} />
+            </div>
+          </>
+        )}
+
+        {activeTab === 'mapping' && (
+          <>
+            <div className="ps-card">
+              <h4>
+                Mapping Capture
+                <span className="ps-card-hint">
+                  raw status byte map · {diag?.mapping.markers.length ?? 0} markers
+                </span>
+              </h4>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                <button type="button" className="btn sm" onClick={() => void resetMap()} disabled={resettingMap}>
+                  RESET MAP
+                </button>
+                <button type="button" className="btn sm" onClick={() => void load()} disabled={busy}>
+                  REFRESH
+                </button>
+                <button type="button" className="btn sm" onClick={() => void createMarker('Baseline')} disabled={marking}>
+                  BASELINE
+                </button>
+                <button type="button" className="btn sm" onClick={() => void createMarker('After RX Action')} disabled={marking}>
+                  RX ACTION
+                </button>
+                <button type="button" className="btn sm" onClick={() => void createMarker()} disabled={marking}>
+                  MARK
+                </button>
+              </div>
+              <div className="hardware-marker-grid">
+                <input
+                  value={markerLabel}
+                  onChange={(event) => setMarkerLabel(event.target.value)}
+                  placeholder="Marker label"
+                  maxLength={80}
+                  className="hardware-marker-input"
+                />
+                <input
+                  value={markerNotes}
+                  onChange={(event) => setMarkerNotes(event.target.value)}
+                  placeholder="Notes"
+                  maxLength={220}
+                  className="hardware-marker-input"
+                />
+              </div>
+              {diag?.mapping && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+                  <MarkerTimeline markers={diag.mapping.markers} />
+                  <P2ByteMap map={diag.mapping.p2HiPriority} />
+                  <P1Map map={diag.mapping.p1} />
+                </div>
+              )}
+            </div>
+
+            <div className="ps-card">
+              <h4>
+                Reference Map
+                <span className="ps-card-hint">Thetis parity anchors</span>
+              </h4>
+              <MappingRows items={diag?.referenceMap ?? []} />
+            </div>
+
+            <div className="ps-card">
+              <h4>
+                Feature Surfaces
+                <span className="ps-card-hint">API hooks for future controls</span>
+              </h4>
+              <FeatureSurfaceRows items={diag?.featureSurfaces ?? []} />
+            </div>
+
+            <div className="ps-card">
+              <h4>
+                Settings Candidates
+                <span className="ps-card-hint">configurable follow-up surfaces</span>
+              </h4>
+              <MappingRows items={diag?.candidateSettings ?? []} />
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

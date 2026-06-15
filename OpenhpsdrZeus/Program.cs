@@ -44,10 +44,12 @@
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Photino.NET;
+using Zeus.Plugins.Host.Audio;
 using Zeus.Server;
 
 // Single binary, three modes:
@@ -80,6 +82,24 @@ using Zeus.Server;
 public partial class Program
 {
     private const int DefaultDesktopHttpPort = 6061;
+    // Size of the deterministic loopback-port scan range (6061..6080). The
+    // loopback port IS the web origin, and the webview keeps UI settings in
+    // localStorage keyed to that origin — so the port must stay stable across
+    // launches or saved layout/preferences appear to vanish. See
+    // ResolveDesktopHttpPort.
+    private const int DesktopHttpPortScanCount = 20;
+    private static readonly JsonSerializerOptions WebMessageJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
+    private sealed class WorkspaceWindowRequest
+    {
+        public string? Type { get; set; }
+        public string? LayoutId { get; set; }
+        public string? Title { get; set; }
+        public string? Url { get; set; }
+    }
 
     // OpenhpsdrZeus.csproj defaults to OutputType=Exe (console subsystem) so that
     // headless service mode keeps a usable banner / log on stdout. On Windows that
@@ -131,6 +151,11 @@ public partial class Program
         // Must run before any TX pacing starts — see RaiseTimerResolutionOnWindows.
         RaiseTimerResolutionOnWindows();
 
+        if (args.Contains("--verify-vst-bridge"))
+        {
+            return VerifyVstBridge();
+        }
+
         if (args.Contains("--desktop"))
         {
             HideConsoleOnWindows();
@@ -149,6 +174,35 @@ public partial class Program
         }
 
         return RunService(args).GetAwaiter().GetResult();
+    }
+
+    private static int VerifyVstBridge()
+    {
+        try
+        {
+            var bridge = new VstBridgeNative();
+            var initStatus = bridge.Init(VstBridgeAbi.Current);
+            if (initStatus != VstBridgeStatus.Ok)
+            {
+                Console.Error.WriteLine($"VST bridge init returned status {initStatus}.");
+                return 1;
+            }
+
+            var shutdownStatus = bridge.Shutdown();
+            if (shutdownStatus != VstBridgeStatus.Ok)
+            {
+                Console.Error.WriteLine($"VST bridge shutdown returned status {shutdownStatus}.");
+                return 1;
+            }
+
+            Console.WriteLine("VST bridge verified.");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"VST bridge verification failed: {ex.GetBaseException().Message}");
+            return 1;
+        }
     }
 
     private static Task<int> RunService(string[] args)
@@ -275,6 +329,7 @@ public partial class Program
         // resolves correctly from `dotnet run` output and from a published bundle.
         var iconFileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "zeus.ico" : "zeus.png";
         var iconPath = Path.Combine(AppContext.BaseDirectory, iconFileName);
+        var detachedWorkspaceWindows = new List<PhotinoWindow>();
 
         var window = new PhotinoWindow()
             .SetTitle("Zeus")
@@ -284,6 +339,12 @@ public partial class Program
             .SetSize(initialWidth, initialHeight)
             .Center()
             .SetIconFile(iconPath)
+            .RegisterWebMessageReceivedHandler((sender, msg) =>
+            {
+                if (sender is not PhotinoWindow owner) return;
+                if (!TryReadWorkspaceWindowRequest(msg, out var request)) return;
+                OpenWorkspaceWindow(owner, detachedWorkspaceWindows, request, iconPath);
+            })
             .Load(new Uri(startUrl));
 
         // Remember the last NORMAL (non-maximized) frame size as resize events
@@ -401,6 +462,17 @@ public partial class Program
         // macOS this satisfies Cocoa's "UI on main thread" requirement; Kestrel
         // runs on its own thread-pool, untouched by the windowing loop.
         window.WaitForClose();
+        foreach (var child in detachedWorkspaceWindows.ToArray())
+        {
+            try
+            {
+                child.Close();
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"detached workspace close failed: {ex.Message}");
+            }
+        }
 
         // Geometry was already persisted by the closing handler above, while the
         // native window was still alive. We deliberately do NOT save here — the
@@ -410,21 +482,92 @@ public partial class Program
         return 0;
     }
 
+    private static bool TryReadWorkspaceWindowRequest(string message, out WorkspaceWindowRequest request)
+    {
+        request = new WorkspaceWindowRequest();
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<WorkspaceWindowRequest>(message, WebMessageJsonOptions);
+            if (parsed?.Type != "zeus.openWorkspaceWindow") return false;
+            if (string.IsNullOrWhiteSpace(parsed.LayoutId)) return false;
+            if (string.IsNullOrWhiteSpace(parsed.Url)) return false;
+            if (!Uri.TryCreate(parsed.Url, UriKind.Absolute, out _)) return false;
+            request = parsed;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static void OpenWorkspaceWindow(
+        PhotinoWindow owner,
+        List<PhotinoWindow> detachedWorkspaceWindows,
+        WorkspaceWindowRequest request,
+        string iconPath)
+    {
+        if (!Uri.TryCreate(request.Url, UriKind.Absolute, out var uri)) return;
+        var layoutTitle = string.IsNullOrWhiteSpace(request.Title)
+            ? "Workspace"
+            : request.Title.Trim();
+        var child = new PhotinoWindow(owner)
+            .SetTitle($"Zeus - {layoutTitle}")
+            .SetUseOsDefaultLocation(true)
+            .SetMinWidth(900)
+            .SetMinHeight(600)
+            .SetSize(1180, 760)
+            .SetIconFile(iconPath)
+            .RegisterWindowClosingHandler((sender, _) =>
+            {
+                if (sender is PhotinoWindow closed)
+                    detachedWorkspaceWindows.Remove(closed);
+                return false;
+            })
+            .Load(uri);
+
+        detachedWorkspaceWindows.Add(child);
+        try
+        {
+            child.WaitForClose();
+        }
+        catch (Exception ex)
+        {
+            detachedWorkspaceWindows.Remove(child);
+            Console.Error.WriteLine($"detached workspace open failed: {ex.Message}");
+        }
+    }
+
     private static int ResolveDesktopHttpPort()
     {
         var raw = Environment.GetEnvironmentVariable("ZEUS_DESKTOP_PORT");
         if (int.TryParse(raw, out var configured))
         {
+            // Explicit 0 means "operator wants an OS-assigned port" — honour it.
             if (configured == 0) return 0;
             if (configured is > 0 and <= 65535 && IsLoopbackPortAvailable(configured))
                 return configured;
-            Console.WriteLine($"ZEUS_DESKTOP_PORT={configured} is unavailable; using an OS-assigned port.");
-            return 0;
+            Console.WriteLine($"ZEUS_DESKTOP_PORT={configured} is unavailable; scanning the default range.");
+            // fall through to the deterministic scan rather than a random port
         }
 
-        return IsLoopbackPortAvailable(DefaultDesktopHttpPort)
-            ? DefaultDesktopHttpPort
-            : 0;
+        // The loopback port is the web origin, and the webview keeps UI settings
+        // in localStorage keyed to that origin. A random (OS-assigned) port makes
+        // every launch a fresh origin, stranding the operator's saved layout and
+        // preferences — the symptom is "all my settings disappeared". Prefer a
+        // small DETERMINISTIC range (6061..6080) so the origin stays stable across
+        // launches. Only fall back to a random port if the whole range is taken
+        // (several Zeus instances already running), and say so loudly.
+        for (var port = DefaultDesktopHttpPort; port < DefaultDesktopHttpPort + DesktopHttpPortScanCount; port++)
+        {
+            if (IsLoopbackPortAvailable(port)) return port;
+        }
+
+        Console.WriteLine(
+            $"Desktop loopback ports {DefaultDesktopHttpPort}..{DefaultDesktopHttpPort + DesktopHttpPortScanCount - 1} " +
+            "are all in use; falling back to an OS-assigned port. UI settings (localStorage) will not match a " +
+            "previous session for this launch.");
+        return 0;
     }
 
     private static bool IsLoopbackPortAvailable(int port)

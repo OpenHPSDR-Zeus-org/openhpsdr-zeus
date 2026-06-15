@@ -12,18 +12,13 @@ import {
   resetTxStationProfile,
   saveTxFidelityPolicy,
   saveTxStationProfile,
-  setCfcConfig,
-  setLevelerMaxGain,
-  setMicGain,
-  setTxFilter,
-  setTxLeveling,
 } from '../../api/client';
+import { applyTxStationProfile } from '../../audio/apply-tx-station-profile';
 import {
   formatTxStationProfileSummary,
   getTxStationProfile,
   isTxStationProfileId,
   mergeTxStationProfileOverrides,
-  resolveTxStationProfile,
   sanitizeTxStationProfile,
   STUDIO_SSB_PROFILE,
   TX_STATION_PROFILES,
@@ -230,37 +225,18 @@ function TxStationProfiles({
         return;
       }
 
-      const resolved = resolveTxStationProfile(profile, mode);
-      const { cfcConfig, filter } = resolved;
-      const audioProfileName = profile.audioSuiteProfileName?.trim() ?? '';
       setPhase('applying');
       setMessage('Applying...');
       try {
-        if (audioProfileName.length > 0) {
-          const result = await applyAudioProfile(audioProfileName);
-          if (!result.ok) {
-            throw new Error(result.error || `Audio Suite profile "${audioProfileName}" did not apply`);
-          }
-        }
-
-        const mic = await setMicGain(profile.micGainDb);
-        setMicGainDb(mic.micGainDb);
-
-        const leveler = await setLevelerMaxGain(profile.levelerMaxGainDb);
-        setLevelerMaxGainDb(leveler.levelerMaxGainDb);
-
-        let state = await setTxLeveling(profile.txLeveling);
-        applyState(state);
-        hydrateTxFromState(state);
-
-        state = await setTxFilter(filter.lowHz, filter.highHz);
-        applyState(state);
-        hydrateTxFromState(state);
-
-        state = await setCfcConfig(cfcConfig);
-        applyState(state);
-        hydrateTxFromState(state);
-        setCfcConfigLocal(state.cfc);
+        await applyTxStationProfile(profile, {
+          mode,
+          applyState,
+          hydrateTxFromState,
+          setMicGainDb,
+          setLevelerMaxGainDb,
+          setCfcConfigLocal,
+          applyAudioProfile,
+        });
 
         if (seq !== activationSeqRef.current) return;
         setPhase('applied');

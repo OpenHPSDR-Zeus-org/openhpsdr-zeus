@@ -100,6 +100,7 @@ function seed() {
       platform: 'linux',
       architecture: 'x64',
       version: 'test',
+      lanHttpsUrls: [],
       features: {},
     },
     localToServer: false,

@@ -259,6 +259,109 @@
   overflow: auto;
 }
 
+/* URL Embed panel — headerless tile that frames an arbitrary page. The
+ * header strip carries an address bar between the drag grip and the close
+ * X; the body is an edge-to-edge iframe (or an empty-state prompt). */
+.url-embed-bar {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.url-embed-input {
+  flex: 1;
+  min-width: 0;
+  height: 18px;
+  padding: 0 6px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-0);
+  background: var(--bg-0, rgba(0, 0, 0, 0.35));
+  border: 1px solid var(--line);
+  border-radius: var(--r-xs, 2px);
+  outline: none;
+}
+.url-embed-input::placeholder {
+  color: var(--fg-3);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.url-embed-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-soft, rgba(46, 142, 255, 0.14));
+}
+.url-embed-input--error,
+.url-embed-input--error:focus {
+  border-color: var(--tx);
+  box-shadow: 0 0 0 1px rgba(230, 58, 43, 0.25);
+}
+.url-embed-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border: 0;
+  border-radius: var(--r-xs, 2px);
+  background: transparent;
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: background var(--dur-fast), color var(--dur-fast);
+}
+.url-embed-btn:hover {
+  color: var(--accent-bright, var(--accent));
+  background: var(--bg-2);
+}
+.url-embed-btn:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.url-embed-body {
+  overflow: hidden;
+}
+.url-embed-frame {
+  width: 100%;
+  height: 100%;
+  border: none;
+  display: block;
+  min-height: 0;
+  background: #fff;
+}
+.url-embed-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 100%;
+  padding: 16px 24px;
+  text-align: center;
+  color: var(--fg-3);
+}
+.url-embed-empty-title {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--fg-1);
+}
+.url-embed-empty-hint {
+  margin: 0;
+  max-width: 32ch;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--fg-3);
+}
+.url-embed-empty-error {
+  margin: 0;
+  font-size: 11px;
+  color: var(--tx);
+}
+
 .workspace-tile--unavailable {
   border-style: dashed;
 }

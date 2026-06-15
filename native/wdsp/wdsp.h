@@ -880,6 +880,26 @@ extern void SetRXASBNRnoiseScalingType(int channel, int noise_scaling_type);
 extern void SetRXASBNRPosition(int channel, int position);
 
 //
+// Interfaces from spnr.c
+//
+
+extern void SetRXASPNRRun (int channel, int run);
+extern void SetRXASPNRPosition(int channel, int position);
+extern void SetRXASPNRAggressiveness(int channel, double aggressiveness);
+extern void SetRXASPNRAgcRun(int channel, int run);
+extern void SetRXASPNRAgcTarget(int channel, double target);
+extern int GetRXASPNRDiagnostics(int channel, int* run, int* position, int* learned_frames,
+                                 int* agc_run, double* aggressiveness, double* target_rms,
+                                 double* max_gain, double* agc_gain,
+                                 double* presence_peak, double* salience_peak,
+                                 double* mean_gain, double* min_gain,
+                                 double* noise_floor_db, double* input_rms,
+                                 double* output_rms);
+extern int GetRXASPNRAdvancedDiagnostics(int channel, double* coherence_peak, double* ridge_peak,
+                                         double* floor_reduction_db, double* dynamic_range_db);
+extern int GetRXASPNRDeepDiagnostics(int channel, double* signal_confidence, double* agc_gate);
+
+//
 // Interfaces from sender.c
 //
 

@@ -26,10 +26,11 @@ import {
 import { absoluteStrategy } from 'react-grid-layout/core';
 import { Puzzle, Settings } from 'lucide-react';
 import { useWorkspace } from './WorkspaceContext';
-import { useLayoutStore } from '../state/layout-store';
+import { parseLayoutOrDefault, useLayoutStore } from '../state/layout-store';
 import { getPanelDef } from './panels';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import {
+  EMPTY_WORKSPACE_LAYOUT,
   WORKSPACE_GRID_COLS,
   WORKSPACE_ROW_HEIGHT_MIN_PX,
   WORKSPACE_ROW_HEIGHT_PX,
@@ -48,18 +49,45 @@ import {
   type MeterGroupConfig,
 } from '../components/meter-group/meterGroupConfig';
 import { HeroPanel } from './panels/HeroPanel';
+import { UrlEmbedPanel } from './panels/UrlEmbedPanel';
+import {
+  parseUrlEmbedConfig,
+  type UrlEmbedConfig,
+} from './panels/urlEmbedConfig';
 
-export function FlexWorkspace() {
+interface FlexWorkspaceProps {
+  /** Omitted = current dock-selected layout; set = fixed detached workspace. */
+  layoutId?: string;
+  showAddPanelModal?: boolean;
+}
+
+export function FlexWorkspace({
+  layoutId,
+  showAddPanelModal = true,
+}: FlexWorkspaceProps = {}) {
   const { terminatorActive } = useWorkspace();
   // Loading is driven by App.tsx via loadForRadio(boardKey) — no local
-  // first-load effect here. The active layout's parsed WorkspaceLayout
-  // arrives via `workspace` once that resolves.
-  const workspace = useLayoutStore((s) => s.workspace);
+  // first-load effect here. The dock-selected layout uses `workspace`; a
+  // detached window parses its fixed layout id directly from the layouts list.
+  const activeLayoutId = useLayoutStore((s) => s.activeLayoutId);
+  const activeWorkspace = useLayoutStore((s) => s.workspace);
+  const targetLayoutJson = useLayoutStore((s) =>
+    layoutId ? s.layouts.find((l) => l.id === layoutId)?.layoutJson : undefined,
+  );
+  const targetLayoutId = layoutId ?? activeLayoutId;
+  const workspace = useMemo(() => {
+    if (!layoutId) return activeWorkspace;
+    return targetLayoutJson
+      ? parseLayoutOrDefault(targetLayoutJson)
+      : EMPTY_WORKSPACE_LAYOUT;
+  }, [activeWorkspace, layoutId, targetLayoutJson]);
   const isLoaded = useLayoutStore((s) => s.isLoaded);
   const syncToServerBeforeUnload = useLayoutStore((s) => s.syncToServerBeforeUnload);
-  const addTile = useLayoutStore((s) => s.addTile);
-  const removeTile = useLayoutStore((s) => s.removeTile);
-  const updateTilePlacement = useLayoutStore((s) => s.updateTilePlacement);
+  const addTileToLayout = useLayoutStore((s) => s.addTileToLayout);
+  const removeTileFromLayout = useLayoutStore((s) => s.removeTileFromLayout);
+  const updateTilePlacementInLayout = useLayoutStore(
+    (s) => s.updateTilePlacementInLayout,
+  );
   // Modal visibility lifted into the store so the trigger button can live
   // in the LeftLayoutBar — the workspace just renders the modal when the
   // store says open.
@@ -88,7 +116,7 @@ export function FlexWorkspace() {
       // (including the very first paint). Diff each item against the store
       // and only PUT through when something actually moved.
       for (const item of next) {
-        updateTilePlacement(item.i, {
+        updateTilePlacementInLayout(targetLayoutId, item.i, {
           x: item.x,
           y: item.y,
           w: item.w,
@@ -96,14 +124,14 @@ export function FlexWorkspace() {
         });
       }
     },
-    [updateTilePlacement],
+    [targetLayoutId, updateTilePlacementInLayout],
   );
 
   const onAddPanel = useCallback(
     (panelId: string) => {
-      addTile(panelId);
+      addTileToLayout(targetLayoutId, panelId);
     },
-    [addTile],
+    [addTileToLayout, targetLayoutId],
   );
 
   // Brief loading state while the server fetch resolves. We render the
@@ -113,11 +141,12 @@ export function FlexWorkspace() {
       <WorkspaceCanvas
         tiles={workspace.tiles}
         isLoaded={isLoaded}
+        layoutId={targetLayoutId}
         onLayoutChange={onLayoutChange}
         onRequestRemoveTile={(uid, title) => setPendingRemoveTile({ uid, title })}
       />
       <TerminatorLines active={terminatorActive} />
-      {addPanelOpen && (
+      {showAddPanelModal && addPanelOpen && (
         <AddPanelModal
           existingPanels={existingPanels}
           onAdd={onAddPanel}
@@ -130,7 +159,7 @@ export function FlexWorkspace() {
           confirmLabel="Remove Panel"
           onCancel={() => setPendingRemoveTile(null)}
           onConfirm={() => {
-            removeTile(pendingRemoveTile.uid);
+            removeTileFromLayout(targetLayoutId, pendingRemoveTile.uid);
             setPendingRemoveTile(null);
           }}
         >
@@ -149,6 +178,7 @@ export function FlexWorkspace() {
 interface WorkspaceCanvasProps {
   tiles: WorkspaceTile[];
   isLoaded: boolean;
+  layoutId: string;
   onLayoutChange: (next: Layout) => void;
   onRequestRemoveTile: (uid: string, title: string) => void;
 }
@@ -156,6 +186,7 @@ interface WorkspaceCanvasProps {
 function WorkspaceCanvas({
   tiles,
   isLoaded,
+  layoutId,
   onLayoutChange,
   onRequestRemoveTile,
 }: WorkspaceCanvasProps) {
@@ -296,7 +327,11 @@ function WorkspaceCanvas({
         >
           {tiles.map((tile) => (
             <div key={tile.uid} data-tile-uid={tile.uid}>
-              <PanelTile tile={tile} onRequestRemoveTile={onRequestRemoveTile} />
+              <PanelTile
+                tile={tile}
+                layoutId={layoutId}
+                onRequestRemoveTile={onRequestRemoveTile}
+              />
             </div>
           ))}
         </ResponsiveGridLayout>
@@ -307,6 +342,7 @@ function WorkspaceCanvas({
 
 interface PanelTileProps {
   tile: WorkspaceTile;
+  layoutId: string;
   onRequestRemoveTile: (uid: string, title: string) => void;
 }
 
@@ -316,6 +352,7 @@ interface PanelTileProps {
 // and `onRemoveTile` is the stable zustand action reference.
 const PanelTile = memo(function PanelTile({
   tile,
+  layoutId,
   onRequestRemoveTile,
 }: PanelTileProps) {
   const def = getPanelDef(tile.panelId);
@@ -323,6 +360,7 @@ const PanelTile = memo(function PanelTile({
     return (
       <UnavailablePanelTile
         tile={tile}
+        layoutId={layoutId}
         onRequestRemoveTile={onRequestRemoveTile}
       />
     );
@@ -335,7 +373,7 @@ const PanelTile = memo(function PanelTile({
   if (def.headerless) {
     return (
       <div className="workspace-tile workspace-tile--headerless">
-        <PanelBody tile={tile} onRemove={handleRemove} />
+        <PanelBody tile={tile} layoutId={layoutId} onRemove={handleRemove} />
       </div>
     );
   }
@@ -343,7 +381,7 @@ const PanelTile = memo(function PanelTile({
     <div className="workspace-tile">
       <TileChrome title={def.name} onRemove={handleRemove} />
       <div className="workspace-tile-body">
-        <PanelBody tile={tile} />
+        <PanelBody tile={tile} layoutId={layoutId} />
       </div>
     </div>
   );
@@ -351,18 +389,23 @@ const PanelTile = memo(function PanelTile({
 
 function PanelBody({
   tile,
+  layoutId,
   onRemove,
 }: {
   tile: WorkspaceTile;
+  layoutId: string;
   onRemove?: () => void;
 }) {
   // Per-tile config-bound rendering for multi-instance / configurable
   // panels. Single-instance panels just render their component as-is.
   if (tile.panelId === 'hero') {
-    return <HeroPanel tile={tile} onRemove={onRemove} />;
+    return <HeroPanel tile={tile} layoutId={layoutId} onRemove={onRemove} />;
   }
   if (tile.panelId === 'metergroup') {
-    return <MeterGroupTileBody tile={tile} onRemove={onRemove} />;
+    return <MeterGroupTileBody tile={tile} layoutId={layoutId} onRemove={onRemove} />;
+  }
+  if (tile.panelId === 'urlembed') {
+    return <UrlEmbedTileBody tile={tile} layoutId={layoutId} onRemove={onRemove} />;
   }
   const def = getPanelDef(tile.panelId);
   if (!def) return null;
@@ -421,24 +464,28 @@ function UnavailablePanelTile({
 
 function MeterGroupTileBody({
   tile,
+  layoutId,
   onRemove,
 }: {
   tile: WorkspaceTile;
+  layoutId: string;
   onRemove?: () => void;
 }) {
   const updateTileInstanceConfig = useLayoutStore(
-    (s) => s.updateTileInstanceConfig,
+    (s) => s.updateTileInstanceConfigInLayout,
   );
-  const updateTilePlacement = useLayoutStore((s) => s.updateTilePlacement);
+  const updateTilePlacement = useLayoutStore(
+    (s) => s.updateTilePlacementInLayout,
+  );
   const config: MeterGroupConfig = useMemo(
     () => parseMeterGroupConfig(tile.instanceConfig),
     [tile.instanceConfig],
   );
   const setConfig = useCallback(
     (next: MeterGroupConfig) => {
-      updateTileInstanceConfig(tile.uid, next);
+      updateTileInstanceConfig(layoutId, tile.uid, next);
     },
-    [tile.uid, updateTileInstanceConfig],
+    [layoutId, tile.uid, updateTileInstanceConfig],
   );
 
   // Auto-fit the tile to its widget set. Operators add a Meter Group, drop
@@ -458,16 +505,44 @@ function MeterGroupTileBody({
     const targetH =
       config.direction === 'column' ? Math.max(3, widgetCount * 3) : t.h;
     if (targetW !== t.w || targetH !== t.h) {
-      updateTilePlacement(t.uid, {
+      updateTilePlacement(layoutId, t.uid, {
         x: t.x,
         y: t.y,
         w: targetW,
         h: targetH,
       });
     }
-  }, [config.widgets.length, config.direction, updateTilePlacement]);
+  }, [config.widgets.length, config.direction, layoutId, updateTilePlacement]);
 
   return (
     <MeterGroupPanel config={config} setConfig={setConfig} onRemove={onRemove} />
+  );
+}
+
+function UrlEmbedTileBody({
+  tile,
+  layoutId,
+  onRemove,
+}: {
+  tile: WorkspaceTile;
+  layoutId: string;
+  onRemove?: () => void;
+}) {
+  const updateTileInstanceConfig = useLayoutStore(
+    (s) => s.updateTileInstanceConfigInLayout,
+  );
+  const config: UrlEmbedConfig = useMemo(
+    () => parseUrlEmbedConfig(tile.instanceConfig),
+    [tile.instanceConfig],
+  );
+  const setConfig = useCallback(
+    (next: UrlEmbedConfig) => {
+      updateTileInstanceConfig(layoutId, tile.uid, next);
+    },
+    [layoutId, tile.uid, updateTileInstanceConfig],
+  );
+
+  return (
+    <UrlEmbedPanel config={config} setConfig={setConfig} onRemove={onRemove} />
   );
 }

@@ -52,16 +52,18 @@ import {
 import { useConnectionStore } from '../state/connection-store';
 import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
 
-// NR-button cycle mirrors Thetis: Off → NR1 (ANR, time-domain LMS) → NR2
-// (EMNR, Ephraim–Malah spectral) → NR4 (SBNR, libspecbleach). NR3 (RNNR)
-// is intentionally skipped — see issue #79. The four modes are mutually
-// exclusive in WDSP so they all ride the one enum.
-const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
+// NR-button cycle mirrors Thetis: Off -> NR1 (ANR, time-domain LMS) -> NR2
+// (EMNR, Ephraim-Malah spectral) -> NR4 (SBNR, libspecbleach) -> NR5
+// (SPNR weak-signal spectral NR). NR3 (RNNR) is intentionally skipped; see
+// issue #79. The modes are mutually exclusive in WDSP so they all ride the
+// one enum.
+const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr', 'Nr5'];
 const NR_LABEL: Record<NrMode, string> = {
   Off: 'NR',
   Anr: 'NR',
   Emnr: 'NR2',
   Sbnr: 'NR4',
+  Nr5: 'NR5',
 };
 
 const NB_CYCLE: readonly NbMode[] = ['Off', 'Nb1', 'Nb2'];
@@ -81,13 +83,16 @@ function nrButtonTitle(mode: NrMode): string {
     case 'Anr': return 'NR1 (ANR, time-domain LMS)';
     case 'Emnr': return 'NR2 (EMNR, spectral)';
     case 'Sbnr': return 'NR4 (SBNR, libspecbleach)';
+    case 'Nr5': return 'NR5 (SPNR weak-signal spectral NR, experimental)';
   }
 }
 
-// NR1 / NR2 / NR4 each have a tunables panel. NR4 was suppressed pre-#162
-// (libwdsp didn't export SetRXASBNR*); now that Phase 1 binaries ship the
-// symbols on linux-x64 + win-x64, the panel is reachable again. The ⚙
-// button stays hidden for NR Off because there's nothing to configure.
+// NR1 / NR2 / NR4 each have a tunables panel. NR5 uses fixed experimental
+// defaults until its bench/on-air behavior is proven. NR4 was suppressed
+// pre-#162 (libwdsp didn't export SetRXASBNR*); now that Phase 1 binaries
+// ship the symbols on linux-x64 + win-x64, the panel is reachable again. The
+// settings button stays hidden for NR Off and NR5 because there's nothing to
+// configure.
 function settingsModeFor(nrMode: NrMode): NrSettingsMode {
   if (nrMode === 'Anr' || nrMode === 'Emnr' || nrMode === 'Sbnr') return nrMode;
   return 'Emnr';

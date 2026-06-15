@@ -15,11 +15,27 @@
 
 import { create } from 'zustand';
 import { useLayoutStore } from './layout-store';
+import type { WorkspaceLayout } from '../layout/workspace';
 
 /** Name of the auto-created HamClock layout in the LeftLayoutBar. */
 export const HAMCLOCK_LAYOUT_NAME = 'HamClock';
 /** Panel registry id for the HamClock iframe tile. */
 export const HAMCLOCK_PANEL_ID = 'hamclock';
+const HAMCLOCK_TILE_UID = 'tile-hamclock';
+
+const HAMCLOCK_WORKSPACE: WorkspaceLayout = {
+  schemaVersion: 8,
+  tiles: [
+    {
+      uid: HAMCLOCK_TILE_UID,
+      panelId: HAMCLOCK_PANEL_ID,
+      x: 0,
+      y: 0,
+      w: 24,
+      h: 48,
+    },
+  ],
+};
 
 /** Mirror of the backend HamClockStatus record. */
 export interface HamClockStatus {
@@ -136,16 +152,13 @@ export const useHamClockStore = create<HamClockState>()((set) => ({
       ls.setActiveLayout(existing.id);
       return;
     }
-    // Create the layout (addLayout switches to it and seeds the default radio
-    // tiles), then replace those with a single full-bleed HamClock tile.
+    // Create the layout already containing the single full-bleed HamClock
+    // tile, so the first persisted layout is the correct one.
     ls.addLayout(HAMCLOCK_LAYOUT_NAME, {
       icon: '🕐',
       description: 'OpenHamClock dashboard',
+      workspace: HAMCLOCK_WORKSPACE,
     });
-    const seeded = useLayoutStore.getState().workspace.tiles.map((t) => t.uid);
-    for (const uid of seeded) useLayoutStore.getState().removeTile(uid);
-    const uid = useLayoutStore.getState().addTile(HAMCLOCK_PANEL_ID);
-    useLayoutStore.getState().updateTilePlacement(uid, { x: 0, y: 0, w: 24, h: 48 });
   },
 
   disableWorkspace: () => {

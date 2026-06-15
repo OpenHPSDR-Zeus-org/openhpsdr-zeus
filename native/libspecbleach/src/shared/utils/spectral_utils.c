@@ -227,11 +227,15 @@ bool get_rolling_median_spectrum(float *median_spectrum,
                                  const float *current_spectrum_buffer,
                                  const uint32_t number_of_blocks,
                                  const uint32_t spectrum_size) {
-  if (!median_spectrum || !current_spectrum_buffer || spectrum_size <= 0U) {
+  if (!median_spectrum || !current_spectrum_buffer || number_of_blocks <= 0U ||
+      spectrum_size <= 0U) {
     return false;
   }
 
-  float tmp_buffer[number_of_blocks];
+  float *tmp_buffer = malloc((size_t)number_of_blocks * sizeof(*tmp_buffer));
+  if (!tmp_buffer) {
+    return false;
+  }
 
   for (uint32_t i = 1U; i < spectrum_size; i++) {
     for (uint32_t j = 0U; j < number_of_blocks; j++) {
@@ -249,5 +253,6 @@ bool get_rolling_median_spectrum(float *median_spectrum,
     }
   }
 
+  free(tmp_buffer);
   return true;
 }

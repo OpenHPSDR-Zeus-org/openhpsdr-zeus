@@ -49,7 +49,7 @@ set(WDSP_SOURCES
     icfir.c iir.c impulse_cache.c iobuffs.c iqc.c linux_port.c lmath.c main.c
     matchedCW.c meter.c meterlog10.c nbp.c nob.c nobII.c osctrl.c patchpanel.c
     resample.c rmatch.c RXA.c sender.c shift.c siphon.c slew.c snb.c ssql.c
-    syncbuffs.c TXA.c utilities.c varsamp.c version.c wcpAGC.c wisdom.c zetaHat.c
+    spnr.c syncbuffs.c TXA.c utilities.c varsamp.c version.c wcpAGC.c wisdom.c zetaHat.c
 )
 
 # NR3 — RNNoise gate.
@@ -112,6 +112,13 @@ endif()
 # -----------------------------------------------------------------------------
 find_package(PkgConfig QUIET)
 set(_fftw_found FALSE)
+set(FFTW_ROOT "" CACHE PATH "Optional FFTW install root containing fftw3.h and FFTW import libraries")
+set(_fftw_hint_roots)
+foreach(_fftw_hint "${FFTW_ROOT}" "$ENV{FFTW_ROOT}")
+    if(_fftw_hint)
+        list(APPEND _fftw_hint_roots "${_fftw_hint}")
+    endif()
+endforeach()
 
 if(PkgConfig_FOUND)
     pkg_check_modules(FFTW3 QUIET fftw3)
@@ -133,6 +140,31 @@ if(NOT _fftw_found)
         set(_fftw_found TRUE)
         message(STATUS "FFTW3 found via CMake config (vcpkg or system package)")
     endif()
+endif()
+
+# Local Windows / manually unpacked FFTW fallback. Thetis-style FFTW folders keep
+# fftw3.h and the import libraries side-by-side rather than in include/lib.
+if(NOT _fftw_found AND _fftw_hint_roots)
+    foreach(_prefix IN LISTS _fftw_hint_roots)
+        if(EXISTS "${_prefix}/include/fftw3.h")
+            set(_fftw_include_dir "${_prefix}/include")
+            set(_fftw_library_dirs "${_prefix}/lib" "${_prefix}")
+        elseif(EXISTS "${_prefix}/fftw3.h")
+            set(_fftw_include_dir "${_prefix}")
+            set(_fftw_library_dirs "${_prefix}")
+        else()
+            continue()
+        endif()
+
+        find_library(FFTW3_LIBRARY NAMES fftw3 libfftw3-3 libfftw3 PATHS ${_fftw_library_dirs} NO_DEFAULT_PATH)
+        if(FFTW3_LIBRARY)
+            target_include_directories(wdsp PRIVATE "${_fftw_include_dir}")
+            target_link_libraries(wdsp PRIVATE "${FFTW3_LIBRARY}")
+            set(_fftw_found TRUE)
+            message(STATUS "FFTW3 found via FFTW_ROOT: ${FFTW3_LIBRARY}")
+            break()
+        endif()
+    endforeach()
 endif()
 
 # macOS Homebrew fallback (arm64: /opt/homebrew, x86_64: /usr/local).
@@ -232,6 +264,29 @@ if(WDSP_WITH_NR4)
             set(_fftw3f_found TRUE)
             message(STATUS "FFTW3f found via find_library: ${FFTW3F_LIBRARY}")
         endif()
+    endif()
+
+    if(NOT _fftw3f_found AND _fftw_hint_roots)
+        foreach(_prefix IN LISTS _fftw_hint_roots)
+            if(EXISTS "${_prefix}/include/fftw3.h")
+                set(_fftw_include_dir "${_prefix}/include")
+                set(_fftw_library_dirs "${_prefix}/lib" "${_prefix}")
+            elseif(EXISTS "${_prefix}/fftw3.h")
+                set(_fftw_include_dir "${_prefix}")
+                set(_fftw_library_dirs "${_prefix}")
+            else()
+                continue()
+            endif()
+
+            find_library(FFTW3F_LIBRARY_HINT NAMES fftw3f libfftw3f-3 libfftw3f PATHS ${_fftw_library_dirs} NO_DEFAULT_PATH)
+            if(FFTW3F_LIBRARY_HINT)
+                target_include_directories(specbleach PRIVATE "${_fftw_include_dir}")
+                target_link_libraries(specbleach PRIVATE "${FFTW3F_LIBRARY_HINT}")
+                set(_fftw3f_found TRUE)
+                message(STATUS "FFTW3f found via FFTW_ROOT: ${FFTW3F_LIBRARY_HINT}")
+                break()
+            endif()
+        endforeach()
     endif()
 
     if(NOT _fftw3f_found AND APPLE)

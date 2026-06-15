@@ -119,6 +119,7 @@ function writeLegacySplit(v: number): void {
 interface HeroPanelProps {
   onRemove?: () => void;
   tile?: WorkspaceTile;
+  layoutId?: string;
 }
 
 // Hero panel: Panadapter + Waterfall with optional Leaflet world-map overlay.
@@ -128,7 +129,7 @@ interface HeroPanelProps {
 // the ⌥ map-mode hint, the HZ/PX readout, and the close X. Interactive
 // controls inside stop mousedown propagation so a click on a chip / slider /
 // input doesn't initiate a tile drag (mirrors the MetersPanel pattern).
-export function HeroPanel({ onRemove, tile }: HeroPanelProps = {}) {
+export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
   const {
     terminatorActive,
     imageMode,
@@ -153,10 +154,13 @@ export function HeroPanel({ onRemove, tile }: HeroPanelProps = {}) {
     submitBeam,
   } = useWorkspace();
   const connected = useConnectionStore((s) => s.status === 'Connected');
-  const updateTileInstanceConfig = useLayoutStore((s) => s.updateTileInstanceConfig);
+  const updateTileInstanceConfig = useLayoutStore(
+    (s) => s.updateTileInstanceConfigInLayout,
+  );
   const layoutLoaded = useLayoutStore((s) => s.isLoaded);
   const layoutRadioKey = useLayoutStore((s) => s.radioKey);
   const activeLayoutId = useLayoutStore((s) => s.activeLayoutId);
+  const targetLayoutId = layoutId ?? activeLayoutId;
 
   const stackRef = useRef<HTMLDivElement | null>(null);
   const [split, setSplit] = useState(() => readInitialSplit(tile?.instanceConfig));
@@ -177,11 +181,15 @@ export function HeroPanel({ onRemove, tile }: HeroPanelProps = {}) {
     if (readInstanceSplit(tile.instanceConfig) !== null) return;
     const legacy = readLegacySplit();
     if (legacy === null) return;
-    updateTileInstanceConfig(tile.uid, mergeInstanceSplit(tile.instanceConfig, legacy));
+    updateTileInstanceConfig(
+      targetLayoutId,
+      tile.uid,
+      mergeInstanceSplit(tile.instanceConfig, legacy),
+    );
   }, [
-    activeLayoutId,
     layoutLoaded,
     layoutRadioKey,
+    targetLayoutId,
     tile?.uid,
     tile?.instanceConfig,
     updateTileInstanceConfig,
@@ -192,10 +200,14 @@ export function HeroPanel({ onRemove, tile }: HeroPanelProps = {}) {
       const clamped = clampSplit(next);
       writeLegacySplit(clamped);
       if (tile) {
-        updateTileInstanceConfig(tile.uid, mergeInstanceSplit(tile.instanceConfig, clamped));
+        updateTileInstanceConfig(
+          targetLayoutId,
+          tile.uid,
+          mergeInstanceSplit(tile.instanceConfig, clamped),
+        );
       }
     },
-    [tile, updateTileInstanceConfig],
+    [targetLayoutId, tile, updateTileInstanceConfig],
   );
 
   // Drag the divider to rebalance the panadapter/waterfall split. We attach

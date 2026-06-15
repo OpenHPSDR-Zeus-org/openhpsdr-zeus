@@ -134,11 +134,34 @@ public sealed class WdspDspEngine : IDspEngine
         nameof(NativeMethods.SetRXASBNRnoiseScalingType),
     ];
 
+    private static readonly string[] SpnrRequiredExports =
+    [
+        nameof(NativeMethods.SetRXASPNRRun),
+        nameof(NativeMethods.SetRXASPNRPosition),
+        nameof(NativeMethods.SetRXASPNRAggressiveness),
+        nameof(NativeMethods.SetRXASPNRAgcRun),
+        nameof(NativeMethods.SetRXASPNRAgcTarget),
+    ];
+
     internal static bool NativeLibraryLoadable => WdspNativeLoader.TryProbe();
 
     internal static bool EmnrPost2Available => AllNativeExportsAvailable(EmnrPost2RequiredExports);
 
     internal static bool Nr4SbnrAvailable => AllNativeExportsAvailable(SbnrRequiredExports);
+
+    internal static bool Nr5SpnrAvailable => AllNativeExportsAvailable(SpnrRequiredExports);
+
+    internal static bool Nr5SpnrDiagnosticsAvailable =>
+        WdspNativeLoader.TryProbe() &&
+        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRDiagnostics));
+
+    internal static bool Nr5SpnrAdvancedDiagnosticsAvailable =>
+        WdspNativeLoader.TryProbe() &&
+        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRAdvancedDiagnostics));
+
+    internal static bool Nr5SpnrDeepDiagnosticsAvailable =>
+        WdspNativeLoader.TryProbe() &&
+        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRDeepDiagnostics));
 
     private static bool AllNativeExportsAvailable(string[] symbolNames)
     {
@@ -150,6 +173,17 @@ public sealed class WdspDspEngine : IDspEngine
         }
         return true;
     }
+
+    private static double FiniteOrZero(double value) =>
+        double.IsFinite(value) ? value : 0.0;
+
+    private static double RoundDiag(double value, int digits = 3) =>
+        Math.Round(FiniteOrZero(value), digits);
+
+    private static double LinearToDb(double value) =>
+        value > 1.0e-12 && double.IsFinite(value)
+            ? 20.0 * Math.Log10(value)
+            : -240.0;
 
     private enum RxaMode
     {
@@ -533,6 +567,9 @@ public sealed class WdspDspEngine : IDspEngine
         StopChannel(state);
     }
 
+    public bool IsRxChannelOpen(int channelId) =>
+        _channels.TryGetValue(channelId, out var state) && !state.Stopped;
+
     public void FeedIq(int channelId, ReadOnlySpan<double> interleavedIqSamples)
     {
         if (!_channels.TryGetValue(channelId, out var state)) return;
@@ -737,6 +774,7 @@ public sealed class WdspDspEngine : IDspEngine
             case NrMode.Anr:
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
+                TrySetSpnrRun(channelId, 0);
                 NativeMethods.SetRXAANRVals(channelId, NrDefaults.AnrTaps, NrDefaults.AnrDelay, NrDefaults.AnrGain, NrDefaults.AnrLeakage);
                 NativeMethods.SetRXAANRPosition(channelId, NrDefaults.Position);
                 NativeMethods.SetRXAANRRun(channelId, 1);
@@ -744,6 +782,7 @@ public sealed class WdspDspEngine : IDspEngine
             case NrMode.Emnr:
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
+                TrySetSpnrRun(channelId, 0);
                 // Core EMNR algorithm selectors (gain method, NPE method, AE
                 // filter) plus the optional Trained-method T1/T2 tuning. All
                 // operator-tunable; null fields fall back to NrDefaults so the
@@ -766,13 +805,25 @@ public sealed class WdspDspEngine : IDspEngine
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetEmnrPost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
+                TrySetSpnrRun(channelId, 0);
                 ApplyNr4Sbnr(channelId, cfg);
+                break;
+            case NrMode.Nr5:
+                // NR5 — Zeus experimental signal-preserving NR. It learns a
+                // per-bin noise model online and includes a bounded output
+                // normalizer, so it remains mutually exclusive with NR1/2/4.
+                NativeMethods.SetRXAANRRun(channelId, 0);
+                TrySetEmnrPost2Run(channelId, 0);
+                NativeMethods.SetRXAEMNRRun(channelId, 0);
+                TrySetSbnrRun(channelId, 0);
+                ApplyNr5Spnr(channelId);
                 break;
             default:
                 NativeMethods.SetRXAANRRun(channelId, 0);
                 TrySetEmnrPost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
+                TrySetSpnrRun(channelId, 0);
                 break;
         }
 
@@ -990,6 +1041,27 @@ public sealed class WdspDspEngine : IDspEngine
         }
     }
 
+    // NR5 (SPNR) parameter push + Run=1. Defaults are conservative while the
+    // mode is experimental: moderate suppression, post-NR audio normalization
+    // on, and a target below full scale so WDSP AGC still has headroom.
+    private void ApplyNr5Spnr(int channelId)
+    {
+        try
+        {
+            NativeMethods.SetRXASPNRPosition(channelId, NrDefaults.Nr5Position);
+            NativeMethods.SetRXASPNRAggressiveness(channelId, NrDefaults.Nr5Aggressiveness);
+            NativeMethods.SetRXASPNRAgcTarget(channelId, NrDefaults.Nr5AgcTargetRms);
+            NativeMethods.SetRXASPNRAgcRun(channelId, 1);
+            NativeMethods.SetRXASPNRRun(channelId, 1);
+        }
+        catch (EntryPointNotFoundException ex)
+        {
+            _log.LogWarning(
+                "wdsp.spnr.unavailable channel={Id} reason=\"libwdsp build does not export NR5/SPNR symbols\" detail={Msg}",
+                channelId, ex.Message);
+        }
+    }
+
     // Pre-Phase-1-binary safe Run=0 — the only SBNR call we make outside the
     // Sbnr arm. EntryPointNotFoundException here just means "the library
     // doesn't have SBNR; nothing to turn off."
@@ -997,6 +1069,127 @@ public sealed class WdspDspEngine : IDspEngine
     {
         try { NativeMethods.SetRXASBNRRun(channelId, run); }
         catch (EntryPointNotFoundException) { /* libwdsp pre-Phase-1; SBNR is a no-op */ }
+    }
+
+    private void TrySetSpnrRun(int channelId, int run)
+    {
+        try { NativeMethods.SetRXASPNRRun(channelId, run); }
+        catch (EntryPointNotFoundException) { /* libwdsp lacks NR5; nothing to turn off */ }
+    }
+
+    public Nr5SpnrDiagnosticsDto? TryGetNr5SpnrDiagnostics(int channelId)
+    {
+        if (channelId < 0 || !IsRxChannelOpen(channelId) || !Nr5SpnrDiagnosticsAvailable)
+            return null;
+
+        try
+        {
+            int ok = NativeMethods.GetRXASPNRDiagnostics(
+                channelId,
+                out int run,
+                out int position,
+                out int learnedFrames,
+                out int agcRun,
+                out double aggressiveness,
+                out double targetRms,
+                out double maxGain,
+                out double agcGain,
+                out double presencePeak,
+                out double saliencePeak,
+                out double meanGain,
+                out double minGain,
+                out double noiseFloorDb,
+                out double inputRms,
+                out double outputRms);
+
+            if (ok == 0) return null;
+
+            double coherencePeak = 0.0;
+            double ridgePeak = 0.0;
+            double floorReductionDb = 0.0;
+            double dynamicRangeDb = 0.0;
+            double signalConfidence = 0.0;
+            double agcGate = 0.0;
+            if (Nr5SpnrAdvancedDiagnosticsAvailable)
+            {
+                try
+                {
+                    int advancedOk = NativeMethods.GetRXASPNRAdvancedDiagnostics(
+                        channelId,
+                        out coherencePeak,
+                        out ridgePeak,
+                        out floorReductionDb,
+                        out dynamicRangeDb);
+                    if (advancedOk == 0)
+                    {
+                        coherencePeak = 0.0;
+                        ridgePeak = 0.0;
+                        floorReductionDb = 0.0;
+                        dynamicRangeDb = 0.0;
+                    }
+                }
+                catch (EntryPointNotFoundException)
+                {
+                    coherencePeak = 0.0;
+                    ridgePeak = 0.0;
+                    floorReductionDb = 0.0;
+                    dynamicRangeDb = 0.0;
+                }
+            }
+            if (Nr5SpnrDeepDiagnosticsAvailable)
+            {
+                try
+                {
+                    int deepOk = NativeMethods.GetRXASPNRDeepDiagnostics(
+                        channelId,
+                        out signalConfidence,
+                        out agcGate);
+                    if (deepOk == 0)
+                    {
+                        signalConfidence = 0.0;
+                        agcGate = 0.0;
+                    }
+                }
+                catch (EntryPointNotFoundException)
+                {
+                    signalConfidence = 0.0;
+                    agcGate = 0.0;
+                }
+            }
+
+            return new Nr5SpnrDiagnosticsDto(
+                SchemaVersion: 3,
+                ChannelId: channelId,
+                Run: run != 0,
+                Position: position,
+                LearnedFrames: Math.Max(0, learnedFrames),
+                Aggressiveness: RoundDiag(aggressiveness, 3),
+                AgcRun: agcRun != 0,
+                TargetRms: RoundDiag(targetRms, 6),
+                MaxGain: RoundDiag(maxGain, 3),
+                AgcGain: RoundDiag(agcGain, 3),
+                AgcGainDb: RoundDiag(LinearToDb(agcGain), 1),
+                PresencePeak: RoundDiag(presencePeak, 3),
+                SaliencePeak: RoundDiag(saliencePeak, 3),
+                CoherencePeak: RoundDiag(coherencePeak, 3),
+                RidgePeak: RoundDiag(ridgePeak, 3),
+                MeanGain: RoundDiag(meanGain, 3),
+                MinGain: RoundDiag(minGain, 3),
+                SuppressionDb: RoundDiag(LinearToDb(meanGain), 1),
+                NoiseFloorDb: RoundDiag(noiseFloorDb, 1),
+                FloorReductionDb: RoundDiag(floorReductionDb, 1),
+                DynamicRangeDb: RoundDiag(dynamicRangeDb, 1),
+                SignalConfidence: RoundDiag(signalConfidence, 3),
+                AgcGate: RoundDiag(agcGate, 3),
+                InputRms: RoundDiag(inputRms, 6),
+                InputDbfs: RoundDiag(LinearToDb(inputRms), 1),
+                OutputRms: RoundDiag(outputRms, 6),
+                OutputDbfs: RoundDiag(LinearToDb(outputRms), 1));
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return null;
+        }
     }
 
     // Same shape as TrySetSbnrRun for the post2 Run=0 calls we issue when
@@ -1063,6 +1256,15 @@ public sealed class WdspDspEngine : IDspEngine
         public const double Nr4PostFilterThreshold = -10.0;
         public const int Nr4NoiseScalingType = 0;
         public const int Nr4Position = 1;
+
+        // NR5 (SPNR) defaults. The native stage learns its own noise floor and
+        // signal-presence model online. Aggressiveness is 0..1; target RMS is
+        // linear post-NR audio. Position=1 keeps it after WDSP AGC, matching
+        // Zeus's NR2/NR4 default path while NR5's own bounded normalizer evens
+        // out very weak copy without chasing pure noise.
+        public const int Nr5Position = 1;
+        public const double Nr5Aggressiveness = 0.62;
+        public const double Nr5AgcTargetRms = 0.075;
 
         // NB1/NB2 runtime-steady-state params — what Thetis actually runs with
         // once radio.cs's NB property setters have fired (tau=advtime=hangtime
@@ -1882,6 +2084,7 @@ public sealed class WdspDspEngine : IDspEngine
         {
             EnsureMonitorChannelOpen();
         }
+        ClearMonitorAudioRing();
 
         // Flip TXA's run state if the audition path's requirement diverges
         // from MOX's. Without this the chain stays quiescent (state=0) when
@@ -1923,6 +2126,14 @@ public sealed class WdspDspEngine : IDspEngine
         int? id = _monitorChannelId;
         if (id is null) return 0;
         return ReadAudio(id.Value, output);
+    }
+
+    private void ClearMonitorAudioRing()
+    {
+        int? id = _monitorChannelId;
+        if (id is null) return;
+        if (!_channels.TryGetValue(id.Value, out var state)) return;
+        lock (state.AudioGate) { state.AudioCount = 0; }
     }
 
     /// <summary>Volatile-read so callers can gate the audio-broadcast path

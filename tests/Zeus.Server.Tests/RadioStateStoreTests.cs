@@ -70,7 +70,7 @@ public class RadioStateStoreTests : IDisposable
                 Notches = new List<RadioStateNotchEntry>
                 {
                     new() { CenterHz = 7_255_300, WidthHz = 125, Active = true },
-                    new() { CenterHz = 7_256_000, WidthHz = 80, Active = false },
+                    new() { CenterHz = 7_256_000, WidthHz = 80, Active = false, Source = "auto" },
                 },
                 DrivePct = 47,
                 TunePct = 23,
@@ -107,9 +107,11 @@ public class RadioStateStoreTests : IDisposable
         Assert.Equal(7_255_300, got.Notches[0].CenterHz);
         Assert.Equal(125, got.Notches[0].WidthHz);
         Assert.True(got.Notches[0].Active);
+        Assert.Null(got.Notches[0].Source);
         Assert.Equal(7_256_000, got.Notches[1].CenterHz);
         Assert.Equal(80, got.Notches[1].WidthHz);
         Assert.False(got.Notches[1].Active);
+        Assert.Equal("auto", got.Notches[1].Source);
         Assert.Equal(47, got.DrivePct);
         Assert.Equal(23, got.TunePct);
     }

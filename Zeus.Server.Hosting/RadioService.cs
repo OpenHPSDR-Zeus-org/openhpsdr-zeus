@@ -175,6 +175,7 @@ public sealed class RadioService : IDisposable
     private const double AgcMaxEffectiveAgcT = 100.0;
     private const double AgcCutStressThresholdDb = -10.0;
     private const double AgcCutTargetDb = -8.0;
+    private const double AgcAdcPressureThresholdDbfs = -6.0;
     private double _agcOffsetDb;
     private long _lastAgcTickMs = long.MinValue;
     private readonly double[] _noiseFloorWindow = new double[AgcNoiseFloorWindowSamples];
@@ -330,7 +331,7 @@ public sealed class RadioService : IDisposable
             _cwTxFilter = new(rsSnap.CwTxFilterLoAbs, rsSnap.CwTxFilterHiAbs);
             _preampOn = rsSnap.PreampOn;
             _notches = rsSnap.Notches
-                .Select(n => new NotchDto(n.CenterHz, n.WidthHz, n.Active))
+                .Select(n => new NotchDto(n.CenterHz, n.WidthHz, n.Active, NormalizeNotchSource(n.Source)))
                 .ToList();
             _drivePct = Math.Clamp(rsSnap.DrivePct, 0, 100);
             _tunePct = Math.Clamp(rsSnap.TunePct, 0, 100);
@@ -1578,6 +1579,7 @@ public sealed class RadioService : IDisposable
             bool hasSignalMeter = double.IsFinite(signalDbm) && signalDbm > -250.0;
             bool hasAgcGain = double.IsFinite(agcGainDb) && agcGainDb > -199.5;
             bool hasAdcPeak = double.IsFinite(adcPkDbfs) && adcPkDbfs > -199.5;
+            bool adcUnderPressure = hasAdcPeak && adcPkDbfs > AgcAdcPressureThresholdDbfs;
             if (!hasSignalMeter && !hasAgcGain) return;
 
             // If we paused for longer than the analysis window (TX,
@@ -1623,21 +1625,21 @@ public sealed class RadioService : IDisposable
                 const double TargetAudioDb = -40.0;     // desired audio-output noise level
                 double targetEffective = Math.Clamp(
                     TargetAudioDb - noiseFloor, AgcMinEffectiveAgcT, AgcMaxEffectiveAgcT);
-                // Preserve the existing weak/quiet-band behavior: noise-floor
-                // tracking can add live gain, but it does not lower the user's
-                // baseline unless the signed AGC meter below proves overload
-                // recovery is needed.
+                // Preserve weak/quiet-band behavior: noise-floor tracking can
+                // add live gain, but it does not lower the user's baseline.
+                // Normal WDSP AGC reduction is the loudness normalizer; only
+                // ADC pressure below is allowed to pull AGC-T down.
                 desiredOffset = Math.Max(0.0, targetEffective - _state.AgcTopDb);
             }
-            else if (_agcOffsetDb < 0.0 && (!hasAgcGain || agcGainDb >= AgcCutStressThresholdDb))
+            else if (_agcOffsetDb < 0.0 && (!hasAgcGain || agcGainDb >= AgcCutStressThresholdDb || !adcUnderPressure))
             {
                 desiredOffset = 0.0;
             }
 
-            if (hasAgcGain && agcGainDb < AgcCutStressThresholdDb)
+            if (hasAgcGain && agcGainDb < AgcCutStressThresholdDb && adcUnderPressure)
             {
                 double effectiveNow = _state.AgcTopDb + _agcOffsetDb;
-                double adcUrgencyDb = hasAdcPeak && adcPkDbfs > -6.0 ? Math.Min(6.0, adcPkDbfs + 6.0) : 0.0;
+                double adcUrgencyDb = Math.Min(6.0, adcPkDbfs + 6.0);
                 double targetEffective = Math.Clamp(
                     effectiveNow + (agcGainDb - AgcCutTargetDb) - adcUrgencyDb,
                     AgcMinEffectiveAgcT,
@@ -2063,7 +2065,7 @@ public sealed class RadioService : IDisposable
             if (!double.IsFinite(n.CenterHz) || !double.IsFinite(n.WidthHz)) continue;
             if (n.WidthHz < MinNotchWidthHz || n.WidthHz > MaxNotchWidthHz) continue;
             if (n.CenterHz <= 0) continue;
-            cleaned.Add(n);
+            cleaned.Add(new NotchDto(n.CenterHz, n.WidthHz, n.Active, NormalizeNotchSource(n.Source)));
             if (cleaned.Count >= MaxNotches) break;
         }
 
@@ -2083,6 +2085,9 @@ public sealed class RadioService : IDisposable
     private const int MaxNotches = 64;
     private const double MinNotchWidthHz = 1.0;
     private const double MaxNotchWidthHz = 50_000.0;
+
+    private static string? NormalizeNotchSource(string? source) =>
+        string.Equals(source, "auto", StringComparison.OrdinalIgnoreCase) ? "auto" : null;
 
     // Right-click popover save for NR2 (EMNR) post2 tunables. Merges only
     // the non-null fields onto the current NrConfig so the operator can edit
@@ -2496,6 +2501,7 @@ public sealed class RadioService : IDisposable
                     CenterHz = n.CenterHz,
                     WidthHz = n.WidthHz,
                     Active = n.Active,
+                    Source = NormalizeNotchSource(n.Source),
                 }).ToList(),
                 UpdatedUtc = DateTime.UtcNow,
             });

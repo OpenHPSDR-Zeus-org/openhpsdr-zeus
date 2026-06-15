@@ -232,6 +232,10 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // (6.5 ms of audio buffered in the radio). Past that we pace; below it
     // we send as fast as packets are ready so the radio never underruns.
     private const double TxFifoTargetSamples = 1250.0;
+    // Keep live TX realtime if the producer briefly overruns the paced DUC
+    // sender. 32 packets is about 40 ms at 800 packets/s, enough for normal
+    // WDSP bursts but too small to become audible delayed speech.
+    private const int TxIqMaxQueuedPackets = 32;
     private readonly float[] _txIqScratch = new float[TxIqSamplesPerPacket * 2];
     private int _txIqScratchCount;
     private readonly object _txIqGate = new();
@@ -785,11 +789,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // from an empty FIFO model and the radio isn't playing 10 ms of
         // the previous transmission's IQ when PTT re-engages.
         long drained = 0;
-        while (_txIqQueue.Reader.TryRead(out _)) drained++;
+        while (_txIqQueue.Reader.TryRead(out _))
+        {
+            drained++;
+            DecrementTxIqQueuedPacketsIfPositive();
+        }
         if (drained > 0)
         {
             Interlocked.Add(ref _txIqResetDrainedPackets, drained);
-            Interlocked.Add(ref _txIqQueuedPackets, -drained);
         }
     }
 
@@ -820,6 +827,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         // the DAC rate so the radio's TX FIFO stays level — sending the full
         // 8-packet burst from one WDSP cycle straight to the wire overfills
         // then starves the FIFO, showing up as a pulsed carrier.
+        DropStaleTxIqPacketsIfBackedUpLocked();
         if (_txIqQueue.Writer.TryWrite(p))
         {
             Interlocked.Increment(ref _txIqPacketsQueued);
@@ -830,6 +838,25 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
             Interlocked.Increment(ref _txIqQueueWriteFailures);
         }
         _txIqScratchCount = 0;
+    }
+
+    private void DropStaleTxIqPacketsIfBackedUpLocked()
+    {
+        while (Volatile.Read(ref _txIqQueuedPackets) >= TxIqMaxQueuedPackets
+               && _txIqQueue.Reader.TryRead(out _))
+        {
+            DecrementTxIqQueuedPacketsIfPositive();
+        }
+    }
+
+    private void DecrementTxIqQueuedPacketsIfPositive()
+    {
+        while (true)
+        {
+            long current = Volatile.Read(ref _txIqQueuedPackets);
+            if (current <= 0) return;
+            if (Interlocked.CompareExchange(ref _txIqQueuedPackets, current - 1, current) == current) return;
+        }
     }
 
     private void TxIqSenderLoop(CancellationToken ct)
@@ -871,7 +898,7 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 catch (OperationCanceledException) { break; }
                 catch (ChannelClosedException) { break; }
                 if (!reader.TryRead(out var packet)) continue;
-                Interlocked.Decrement(ref _txIqQueuedPackets);
+                DecrementTxIqQueuedPacketsIfPositive();
 
                 // Drain by wall-clock since the previous send.
                 long now = Stopwatch.GetTimestamp();

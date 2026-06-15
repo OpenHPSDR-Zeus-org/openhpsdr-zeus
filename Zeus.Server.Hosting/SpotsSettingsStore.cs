@@ -68,7 +68,15 @@ public sealed class SpotsSettingsStore : IDisposable
                 // Null on older rows; Normalized() resolves blanks to defaults.
                 PotaUrl: e.PotaUrl ?? "",
                 SotaUrl: e.SotaUrl ?? "",
-                DxUrl: e.DxUrl ?? "").Normalized();
+                DxUrl: e.DxUrl ?? "",
+                Watchlist: e.Watchlist,
+                AlertsEnabled: e.AlertsEnabled,
+                AlertSound: e.AlertSound,
+                HideWorked: e.HideWorked,
+                EnrichQrz: e.EnrichQrz,
+                // Older rows default the column to 0; coerce to the seed so the
+                // scanner doesn't dwell for zero seconds. Normalized() clamps.
+                ScanDwellSeconds: e.ScanDwellSeconds <= 0 ? 8 : e.ScanDwellSeconds).Normalized();
         }
     }
 
@@ -104,6 +112,12 @@ public sealed class SpotsSettingsStore : IDisposable
                 existing.PotaUrl = s.PotaUrl;
                 existing.SotaUrl = s.SotaUrl;
                 existing.DxUrl = s.DxUrl;
+                existing.Watchlist = s.Watchlist?.ToList();
+                existing.AlertsEnabled = s.AlertsEnabled;
+                existing.AlertSound = s.AlertSound;
+                existing.HideWorked = s.HideWorked;
+                existing.EnrichQrz = s.EnrichQrz;
+                existing.ScanDwellSeconds = s.ScanDwellSeconds;
                 existing.UpdatedUtc = nowUtc;
                 _state.Update(existing);
             }
@@ -131,6 +145,12 @@ public sealed class SpotsSettingsStore : IDisposable
         PotaUrl = s.PotaUrl,
         SotaUrl = s.SotaUrl,
         DxUrl = s.DxUrl,
+        Watchlist = s.Watchlist?.ToList(),
+        AlertsEnabled = s.AlertsEnabled,
+        AlertSound = s.AlertSound,
+        HideWorked = s.HideWorked,
+        EnrichQrz = s.EnrichQrz,
+        ScanDwellSeconds = s.ScanDwellSeconds,
         UpdatedUtc = nowUtc,
     };
 
@@ -160,5 +180,12 @@ public sealed class SpotsSettingsEntry
     public string? PotaUrl { get; set; }
     public string? SotaUrl { get; set; }
     public string? DxUrl { get; set; }
+    // Watchlist callsigns + alert/enrichment prefs. Null/absent on older rows.
+    public List<string>? Watchlist { get; set; }
+    public bool AlertsEnabled { get; set; }
+    public bool AlertSound { get; set; } = true;
+    public bool HideWorked { get; set; }
+    public bool EnrichQrz { get; set; }
+    public int ScanDwellSeconds { get; set; } = 8;
     public DateTime UpdatedUtc { get; set; }
 }

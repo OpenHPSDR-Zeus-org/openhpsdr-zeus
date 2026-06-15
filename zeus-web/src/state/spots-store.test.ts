@@ -11,6 +11,8 @@ import {
   spotModeGroup,
   freqHzToBand,
   spotIsQrt,
+  isWatchedCall,
+  spotIsWorked,
   applySpotSettingsFilters,
 } from './spots-store';
 import { SPOTS_SETTINGS_DEFAULTS, type ActivationSpotDto, type SpotsSettings } from '../api/client';
@@ -150,5 +152,37 @@ describe('applySpotSettingsFilters', () => {
     expect(out).toHaveLength(2);
     expect(out.filter((s) => s.activator === 'W1AW')).toHaveLength(1);
     expect(out.find((s) => s.activator === 'W1AW')!.spotTime).toBe('2026-06-14T12:00:00');
+  });
+
+  it('hides worked stations only when hideWorked is on and a worked set is supplied', () => {
+    const list = [spot({ activator: 'W1AW' }), spot({ activator: 'K2ABC' })];
+    const worked = new Set(['W1AW']);
+    // hideWorked on + worked set → drop the worked call.
+    const hidden = applySpotSettingsFilters(list, settings({ hideWorked: true }), now, worked);
+    expect(hidden.map((s) => s.activator)).toEqual(['K2ABC']);
+    // hideWorked off → keep everything even with a worked set.
+    expect(applySpotSettingsFilters(list, settings({ hideWorked: false }), now, worked)).toHaveLength(2);
+    // hideWorked on but no worked set → no-op (can't know what's worked).
+    expect(applySpotSettingsFilters(list, settings({ hideWorked: true }), now)).toHaveLength(2);
+  });
+});
+
+describe('isWatchedCall', () => {
+  it('matches case-insensitively against the upper-cased watchlist', () => {
+    expect(isWatchedCall('w1aw', ['W1AW', 'K2ABC'])).toBe(true);
+    expect(isWatchedCall('N0CALL', ['W1AW'])).toBe(false);
+  });
+
+  it('is false for an empty watchlist', () => {
+    expect(isWatchedCall('W1AW', [])).toBe(false);
+  });
+});
+
+describe('spotIsWorked', () => {
+  it('matches the activator against the worked-call set, case-insensitively', () => {
+    const worked = new Set(['W1AW']);
+    expect(spotIsWorked(spot({ activator: 'w1aw' }), worked)).toBe(true);
+    expect(spotIsWorked(spot({ activator: 'K2ABC' }), worked)).toBe(false);
+    expect(spotIsWorked(spot({ activator: 'W1AW' }), new Set())).toBe(false);
   });
 });

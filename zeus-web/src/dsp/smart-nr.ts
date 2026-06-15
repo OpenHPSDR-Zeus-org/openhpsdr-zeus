@@ -47,7 +47,7 @@ export type SmartNrRecommendation = {
 
 export type SmartNrDspCapabilities = Pick<
   HardwareDspDiagnosticsDto,
-  'wdspActive' | 'wdspEmnrPost2Available' | 'wdspNr4SbnrAvailable'
+  'wdspActive' | 'wdspEmnrPost2Available' | 'wdspNr4SbnrAvailable' | 'wdspNr5SpnrAvailable'
 >;
 
 export type SmartNrCapabilityAdaptation = {
@@ -80,6 +80,7 @@ export type SmartNrRxContext = {
 
 export function labelSmartNrProfile(nr: NrConfigDto): string {
   if (nr.nbMode !== 'Off' && nr.snbEnabled) return `${nr.nbMode}+SNB`;
+  if (nr.nrMode === 'Nr5') return 'NR5';
   if (nr.nrMode === 'Sbnr') return 'NR4';
   if (nr.nrMode === 'Emnr') return 'NR2';
   if (nr.nrMode === 'Anr') return 'NR1';
@@ -156,6 +157,19 @@ export function adaptSmartNrToDspCapabilities(
 
   let next = nr;
   const notes: string[] = [];
+  if (next.nrMode === 'Nr5' && capabilities.wdspNr5SpnrAvailable === false) {
+    next = {
+      ...next,
+      nrMode: 'Sbnr',
+      nr4ReductionAmount: 7,
+      nr4SmoothingFactor: 6,
+      nr4WhiteningFactor: 10,
+      nr4PostFilterThreshold: -9,
+      nr4NoiseScalingType: next.snbEnabled ? 1 : 0,
+    };
+    notes.push('NR5/SPNR unavailable in the active WDSP build; using NR4/SBNR fallback.');
+  }
+
   if (next.nrMode === 'Sbnr' && capabilities.wdspNr4SbnrAvailable === false) {
     next = {
       ...next,
@@ -459,6 +473,18 @@ function withNr4(current: NrConfigDto, c: SmartNrCondition, mode: RxMode): NrCon
   };
 }
 
+function withNr5(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
+  return {
+    ...current,
+    nrMode: 'Nr5',
+    anfEnabled: c.tonalInterference,
+    snbEnabled: c.denseNoise || c.impulsiveNoise,
+    nbpNotchesEnabled: c.tonalInterference,
+    nbMode: c.impulsiveNoise ? 'Nb2' : 'Off',
+    nbThreshold: c.impulsiveNoise ? impulsiveBlankerThreshold(current) : current.nbThreshold,
+  };
+}
+
 function withNr2(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
   const rxWeak = c.rxAssistedWeakSignal;
   const copyAssist = c.coherentCopySignal && !c.weakSparse && !c.denseNoise;
@@ -501,24 +527,32 @@ export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | n
   let nr: NrConfigDto;
   let reason: string;
   if (isCwOrDigital(input.mode)) {
+    const nr5WeakSignal = condition.rxAssistedWeakSignal || condition.coherentSubthresholdSignal;
     nr = condition.hasSignal || condition.denseNoise
-      ? withNr4(input.current, condition, input.mode)
+      ? nr5WeakSignal
+        ? withNr5(input.current, condition)
+        : withNr4(input.current, condition, input.mode)
       : quietProfile(input.current, condition);
     reason = condition.rxAssistedWeakSignal
-      ? 'Weak-signal assist: AGC/RX telemetry confirms a marginal copy; use NR4/SBNR with narrow whitening.'
+      ? 'Weak-signal assist: AGC/RX telemetry confirms a marginal copy; use NR5/SPNR for signal-preserving noise reduction.'
+      : condition.coherentSubthresholdSignal
+      ? 'Coherent subthreshold profile: temporal confidence sees a buried ridge; use NR5/SPNR before broader spectral whitening.'
       : condition.weakSparse
       ? 'Weak narrow-signal profile: NR4/SBNR with mild whitening.'
       : condition.impulsiveNoise
         ? 'Impulsive-noise profile: engage NB2/SNB while keeping spectral NR conservative.'
       : 'CW/digital profile: spectral NR with conservative blanking.';
   } else if (isVoiceSsb(input.mode)) {
+    const nr5WeakSignal = condition.rxAssistedWeakSignal || condition.coherentSubthresholdSignal;
     nr = condition.weakSparse || condition.denseNoise || condition.coherentCopySignal
-      ? withNr2(input.current, condition)
+      ? nr5WeakSignal
+        ? withNr5(input.current, condition)
+        : withNr2(input.current, condition)
       : quietProfile(input.current, condition);
     reason = condition.rxAssistedWeakSignal
-      ? 'Weak-signal assist: AGC/RX telemetry confirms marginal SSB copy; use low-artifact NR2/EMNR.'
+      ? 'Weak-signal assist: AGC/RX telemetry confirms marginal SSB copy; use NR5/SPNR with output normalization.'
       : condition.coherentSubthresholdSignal
-      ? 'SSB coherent weak-signal profile: temporal confidence confirms a subthreshold ridge; use low-artifact NR2/EMNR.'
+      ? 'SSB coherent weak-signal profile: temporal confidence confirms a subthreshold ridge; use NR5/SPNR.'
       : condition.weakSparse
       ? 'SSB weak-signal profile: sparse coherent energy above the floor; use low-artifact NR2/EMNR.'
       : condition.coherentCopySignal

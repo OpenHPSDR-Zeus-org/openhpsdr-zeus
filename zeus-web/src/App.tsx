@@ -45,6 +45,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
+import { currentDetachedWorkspaceLayoutId } from './layout/workspace-windows';
 import { ConfirmDialog } from './layout/ConfirmDialog';
 import { AfGainSlider } from './components/AfGainSlider';
 import { AgcSlider } from './components/AgcSlider';
@@ -76,7 +77,7 @@ import { TunButton } from './components/TunButton';
 import { BOARD_LABELS } from './api/radio';
 import { useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
 import { CONTACTS, bandOf } from './components/design/data';
-import { bearingDeg, distanceKm } from './components/design/geo';
+import { bearingDeg, distanceKm, dayNightAt } from './components/design/geo';
 import { startRealtime } from './realtime/ws-client';
 import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
@@ -109,9 +110,13 @@ import type { Contact } from './components/design/data';
 const STATE_POLL_MS = 1000;
 
 export default function App() {
+  const detachedLayoutId = useMemo(() => currentDetachedWorkspaceLayoutId(), []);
   const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
   const settingsInitialTab = useLayoutStore((s) => s.settingsInitialTab);
   const setSettingsView = useLayoutStore((s) => s.setSettingsView);
+  const detachedLayoutName = useLayoutStore((s) =>
+    detachedLayoutId ? s.layouts.find((l) => l.id === detachedLayoutId)?.name : undefined,
+  );
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [installUpdate, setInstallUpdate] = useState<(() => Promise<void>) | null>(null);
   const [confirmResetLayout, setConfirmResetLayout] = useState<{
@@ -666,6 +671,35 @@ export default function App() {
     handleLogQso, handleClearQrz, runQrzLookup,
   ]);
 
+  if (detachedLayoutId) {
+    return (
+      <BandPlanProvider>
+      <WorkspaceContext.Provider value={workspaceCtx}>
+      <SpectrumWheelActionsContext.Provider value={spectrumWheelActions}>
+      <ThemeApplier />
+      <SignalIntelligenceController />
+      <SmartNrController />
+      <DspSceneDiagnosticsPublisher />
+      <div
+        className="detached-workspace-app"
+        data-screen-label={`Detached Workspace · ${detachedLayoutName ?? detachedLayoutId}`}
+      >
+        <div className="workspace-area detached-workspace-area">
+          <AlertBanner />
+          <FlexWorkspace
+            key={detachedLayoutId}
+            layoutId={detachedLayoutId}
+            showAddPanelModal={false}
+          />
+        </div>
+        {disconnectedOverlay}
+      </div>
+      </SpectrumWheelActionsContext.Provider>
+      </WorkspaceContext.Provider>
+      </BandPlanProvider>
+    );
+  }
+
   // Mobile viewport short-circuit. All initialization hooks above (realtime,
   // state poll, keyboard, mic uplink, service worker) have already run, so
   // the mobile shell inherits the same live data feeds and the same store
@@ -873,6 +907,35 @@ export default function App() {
 // QRZ XML gives us a sparser record than the design-time Contact type; fill
 // the design-only fields ("local", "rig", "ant", "age"…) with em-dashes so
 // QrzCard still renders without needing a schema change.
+/** "2008-05-12" → 2008. Returns null for empty/unparseable values. */
+function licenseYear(efdate: string | null): number | null {
+  if (!efdate) return null;
+  const m = /(\d{4})/.exec(efdate);
+  if (!m) return null;
+  const y = Number(m[1]);
+  return y >= 1900 && y <= 2100 ? y : null;
+}
+
+/** Contact's wall-clock time from the QRZ GMT offset, e.g. "03:14". */
+function localTimeFromOffset(gmtOffset: number | null, tz: string | null): string {
+  if (gmtOffset == null) return '—';
+  const utcMs = Date.now() + new Date().getTimezoneOffset() * 60_000;
+  const d = new Date(utcMs + gmtOffset * 3_600_000);
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return tz ? `${hh}:${mm} ${tz}` : `${hh}:${mm}`;
+}
+
+/** "LoTW · eQSL · Direct" summary, or "—" when nothing is known. */
+function qslSummary(s: QrzStation): string {
+  const parts: string[] = [];
+  if (s.acceptsLotw) parts.push('LoTW');
+  if (s.acceptsEqsl) parts.push('eQSL');
+  if (s.acceptsMailQsl) parts.push('Direct');
+  if (s.qslManager) parts.push(`via ${s.qslManager}`);
+  return parts.length ? parts.join(' · ') : '—';
+}
+
 function qrzStationToContact(s: QrzStation | null, home: QrzStation | null): Contact | null {
   if (!s || s.lat == null || s.lon == null) return null;
   const bearing = home?.lat != null && home?.lon != null
@@ -886,6 +949,14 @@ function qrzStationToContact(s: QrzStation | null, home: QrzStation | null): Con
   const initials = (first + last) || s.callsign.slice(0, 2);
   const location = [s.city, s.state, s.country].filter(Boolean).join(', ') || (s.country ?? '—');
   const fullName = [s.firstName, s.name].filter(Boolean).join(' ') || '—';
+
+  const licYear = licenseYear(s.licenseEffectiveDate);
+  const licensedYears = licYear != null ? new Date().getFullYear() - licYear : null;
+  const distanceMi = distance * 0.621371;
+  const distanceLabel = distance > 0
+    ? `${Math.round(distance).toLocaleString()} km · ${Math.round(distanceMi).toLocaleString()} mi`
+    : null;
+
   return {
     callsign: s.callsign,
     name: fullName,
@@ -896,21 +967,30 @@ function qrzStationToContact(s: QrzStation | null, home: QrzStation | null): Con
     latlon: `${Math.abs(s.lat).toFixed(2)}°${s.lat >= 0 ? 'N' : 'S'} / ${Math.abs(s.lon).toFixed(2)}°${s.lon >= 0 ? 'E' : 'W'}`,
     lat: s.lat,
     lon: s.lon,
-    local: '—',
-    qsl: '—',
-    licensed: '—',
+    local: localTimeFromOffset(s.gmtOffset, s.timeZone),
+    qsl: qslSummary(s),
+    licensed: licYear != null ? String(licYear) : '—',
     initials,
     flag: '',
     bearing,
     distance,
     age: 0,
-    class: '—',
+    class: s.licenseClass ?? '—',
     rig: '—',
     ant: '—',
     power: '—',
     qth: s.city ?? s.country ?? '—',
-    email: '—',
+    email: s.email ?? '—',
     photoUrl: s.imageUrl ?? undefined,
     qrzUrl: `https://www.qrz.com/db/${s.callsign}`,
+    // Enrichment
+    licenseCodes: s.licenseCodes,
+    licensedYears,
+    qslLotw: s.acceptsLotw,
+    qslEqsl: s.acceptsEqsl,
+    qslMail: s.acceptsMailQsl,
+    qslManager: s.qslManager,
+    dayNight: dayNightAt(s.lat, s.lon),
+    distanceLabel,
   };
 }

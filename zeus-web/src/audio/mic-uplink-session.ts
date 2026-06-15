@@ -1,0 +1,131 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF),
+//                         Douglas J. Cerrato (KB2UKA), and contributors.
+//
+// Shared browser-mic uplink session. The app-level hook starts this on mount
+// when browser audio is active; mobile PTT can also call ensureMicUplinkRunning
+// from the touch gesture so mobile browsers are allowed to grant/resume the
+// microphone before Zeus keys MOX.
+
+import { startMicUplink, type MicUplinkHandle } from './mic-uplink';
+import { useMicUplinkDiagnosticsStore } from './mic-uplink-diagnostics-store';
+import { createMicUplinkAutoGain } from './mic-uplink-gain';
+import { sendMicPcm } from '../realtime/ws-client';
+import { useTxStore } from '../state/tx-store';
+import { warnOnce } from '../util/logger';
+
+const MIC_DBFS_FLOOR = -100;
+const MIC_VISUAL_INTERVAL_MS = 50;
+
+let handle: MicUplinkHandle | null = null;
+let starting: Promise<MicUplinkHandle> | null = null;
+let consumers = 0;
+let stopWhenIdle = false;
+let windowPeak = 0;
+let lastEmit = 0;
+let forceTxSend = false;
+const txAutoGain = createMicUplinkAutoGain();
+
+function micErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function onMicBlock(samples: Float32Array, peak: number): void {
+  const tx = useTxStore.getState();
+  const shouldSend = forceTxSend || tx.localMicArmed || tx.txMonitorEnabled;
+  const outbound = shouldSend
+    ? txAutoGain.process(samples, peak)
+    : { samples, peak, gain: 1 };
+
+  if (outbound.peak > windowPeak) windowPeak = outbound.peak;
+  const now = performance.now();
+  if (now - lastEmit >= MIC_VISUAL_INTERVAL_MS) {
+    const dbfs = windowPeak > 0
+      ? Math.max(MIC_DBFS_FLOOR, 20 * Math.log10(windowPeak))
+      : MIC_DBFS_FLOOR;
+    useTxStore.getState().setMicDbfs(dbfs);
+    useMicUplinkDiagnosticsStore.getState().recordLocalBlock(dbfs);
+    lastEmit = now;
+    windowPeak = 0;
+  }
+
+  if (shouldSend) {
+    const result = sendMicPcm(outbound.samples);
+    useMicUplinkDiagnosticsStore.getState().recordSendResult(result);
+  }
+}
+
+export function setMicUplinkTxForced(on: boolean): void {
+  forceTxSend = on;
+  useMicUplinkDiagnosticsStore.getState().setTxForced(on);
+}
+
+export function retainMicUplinkConsumer(): () => void {
+  consumers += 1;
+  stopWhenIdle = false;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    consumers = Math.max(0, consumers - 1);
+    if (consumers === 0) {
+      stopWhenIdle = true;
+      void stopMicUplinkRunning();
+    }
+  };
+}
+
+export async function ensureMicUplinkRunning(): Promise<boolean> {
+  if (handle) {
+    try {
+      await handle.resume?.();
+      useTxStore.getState().setMicError(null);
+      return true;
+    } catch (err) {
+      const msg = micErrorMessage(err);
+      useTxStore.getState().setMicError(msg);
+      throw err;
+    }
+  }
+
+  if (!starting) {
+    starting = startMicUplink(onMicBlock)
+      .then((h) => {
+        handle = h;
+        useTxStore.getState().setMicError(null);
+        if (stopWhenIdle && consumers === 0) {
+          void stopMicUplinkRunning();
+        }
+        return h;
+      })
+      .catch((err: unknown) => {
+        const msg = micErrorMessage(err);
+        warnOnce('mic-uplink-failed', `mic capture unavailable: ${msg}`);
+        useTxStore.getState().setMicError(msg);
+        throw err;
+      })
+      .finally(() => {
+        starting = null;
+      });
+  }
+
+  await starting;
+  return handle !== null;
+}
+
+export async function stopMicUplinkRunning(): Promise<void> {
+  const h = handle;
+  handle = null;
+  stopWhenIdle = false;
+  windowPeak = 0;
+  lastEmit = 0;
+  txAutoGain.reset();
+  setMicUplinkTxForced(false);
+  if (h) await h.stop();
+}
+
+export function isMicUplinkRunning(): boolean {
+  return handle !== null;
+}

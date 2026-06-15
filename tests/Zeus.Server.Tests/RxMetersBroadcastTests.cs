@@ -207,7 +207,7 @@ public class RxMetersBroadcastTests
     }
 
     [Fact]
-    public void BuildRxMetersDiagnostics_SeparatesAutoAgcTrimFromAdcOverload()
+    public void BuildRxMetersDiagnostics_TreatsAgcCutWithCleanHeadroomAsNormalizing()
     {
         var frame = new RxMetersV2Frame(
             SignalPk: -77.7f,
@@ -225,10 +225,10 @@ public class RxMetersBroadcastTests
             rxDbm: -86.3,
             frame);
 
-        Assert.Equal("agc-auto-trim", diag.Status);
+        Assert.Equal("agc-normalizing", diag.Status);
         Assert.Equal(61.6, diag.AdcHeadroomDb);
         Assert.Equal(-24.5, diag.AgcGainDb);
-        Assert.Contains("Auto AGC lowering", diag.DiagnosticRecommendation);
+        Assert.Contains("normalizing", diag.DiagnosticRecommendation);
     }
 
     [Fact]

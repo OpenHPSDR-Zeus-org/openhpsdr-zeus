@@ -87,6 +87,7 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
   const analysis = analyzeTxFidelity(snapshot);
   const color = stateColor(analysis.state);
   const nextColor = actionColor(analysis.actionTone, color);
+  const score = analysis.score > 0 ? `${analysis.score}` : '--';
 
   return (
     <section
@@ -94,67 +95,96 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
       title={analysis.detail}
       style={{
         display: 'grid',
-        gridTemplateColumns: '54px minmax(0, 1fr)',
-        gridTemplateAreas: "'score summary' 'metrics metrics'",
-        columnGap: 10,
-        rowGap: 5,
-        alignItems: 'center',
-        padding: '8px 12px',
-        border: '1px solid var(--line)',
-        borderRadius: 6,
-        background: 'linear-gradient(180deg, var(--panel-top), var(--panel-bot))',
-        boxShadow: `inset 3px 0 0 ${color}`,
+        gridTemplateColumns: 'minmax(0, 1fr)',
+        gap: 7,
+        alignItems: 'start',
+        padding: '9px 10px 10px',
+        border: '1px solid var(--line-strong)',
+        borderRadius: 'var(--r-lg)',
+        background: 'linear-gradient(180deg, var(--bg-2), var(--panel-bot))',
+        boxShadow: `inset 0 1px 0 var(--panel-hl-top), inset 3px 0 0 ${color}`,
         minWidth: 0,
       }}
     >
       <div
-        className="mono"
         style={{
-          gridArea: 'score',
-          width: 54,
-          boxSizing: 'border-box',
-          textAlign: 'center',
-          padding: '3px 7px',
-          border: `1px solid ${color}`,
-          color,
-          background: 'var(--bg-2)',
-          fontSize: 11,
-          fontWeight: 800,
+          display: 'grid',
+          gridTemplateColumns: 'minmax(0, 1fr) auto',
+          gridTemplateAreas: "'status score' 'detail detail' 'next next'",
+          gap: '4px 8px',
+          alignItems: 'center',
+          minWidth: 0,
         }}
       >
-        {analysis.score > 0 ? `${analysis.score}` : '--'}
-      </div>
-      <div style={{ gridArea: 'summary', minWidth: 0 }}>
         <div
           style={{
+            gridArea: 'status',
             display: 'flex',
-            gap: 8,
-            alignItems: 'baseline',
+            gap: 6,
+            alignItems: 'center',
             flexWrap: 'wrap',
             minWidth: 0,
+            rowGap: 2,
           }}
         >
           <span
             style={{
               color: 'var(--fg-0)',
-              fontWeight: 800,
+              fontWeight: 900,
               fontSize: 12,
+              flex: '0 1 auto',
+              lineHeight: 1.1,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
             }}
           >
             {analysis.label}
           </span>
-          <span className="label-xs" style={{ color, fontWeight: 800, flexShrink: 0 }}>
+          <span
+            className="label-xs"
+            style={{
+              flexShrink: 0,
+              padding: '1px 5px',
+              border: `1px solid ${color}`,
+              borderRadius: 'var(--r-sm)',
+              color,
+              background: 'var(--bg-1)',
+              fontWeight: 900,
+            }}
+          >
             FIDELITY
           </span>
         </div>
         <div
+          className="mono"
           style={{
+            gridArea: 'score',
+            minWidth: 42,
+            height: 22,
+            display: 'grid',
+            placeItems: 'center',
+            boxSizing: 'border-box',
+            padding: '0 7px',
+            border: `1px solid ${color}`,
+            borderRadius: 'var(--r-md)',
+            color,
+            background: 'var(--bg-1)',
+            fontSize: 11,
+            fontWeight: 900,
+          }}
+        >
+          {score}
+        </div>
+        <div
+          style={{
+            gridArea: 'detail',
             color: 'var(--fg-2)',
             fontSize: 11,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
+            lineHeight: 1.25,
+            overflowWrap: 'break-word',
+            whiteSpace: 'normal',
           }}
         >
           {analysis.detail}
@@ -162,12 +192,17 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
         <div
           className="mono"
           style={{
+            gridArea: 'next',
+            padding: '4px 6px',
+            border: '1px solid var(--line)',
+            borderRadius: 'var(--r-md)',
+            background: 'var(--bg-1)',
             color: nextColor,
             fontSize: 10,
-            fontWeight: 800,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
+            fontWeight: 900,
+            lineHeight: 1.2,
+            overflowWrap: 'break-word',
+            whiteSpace: 'normal',
           }}
         >
           NEXT {analysis.recommendation}
@@ -176,7 +211,6 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
       <div
         className="mono"
         style={{
-          gridArea: 'metrics',
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))',
           gap: '4px 10px',

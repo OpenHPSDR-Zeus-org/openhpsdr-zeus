@@ -9,9 +9,26 @@
 // type, and controls are the existing Zeus surface (tokens.css + the
 // component library) per the maintainer's brief.
 
-import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { setMode, type RxMode } from '../api/client';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import {
+  fetchTxFidelityPolicy,
+  fetchTxStationProfiles,
+  saveTxFidelityPolicy,
+  setMode,
+  type RxMode,
+} from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { applyTxStationProfile } from '../audio/apply-tx-station-profile';
+import { useMicUplinkDiagnosticsStore } from '../audio/mic-uplink-diagnostics-store';
+import {
+  formatTxStationProfileSummary,
+  getTxStationProfile,
+  mergeTxStationProfileOverrides,
+  STUDIO_SSB_PROFILE,
+  type TxStationProfile,
+  type TxStationProfileId,
+} from '../audio/tx-station-profile';
+import { useAudioSuiteStore } from '../state/audio-suite-store';
 import { useQrzStore } from '../state/qrz-store';
 import { useTxStore } from '../state/tx-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
@@ -43,6 +60,8 @@ import './mobile.css';
 const MODES: readonly RxMode[] = ['LSB', 'USB', 'CWL', 'CWU', 'AM', 'FM', 'DIGU'];
 
 const MOBILE_QUERY = '(max-width: 900px)';
+const MOBILE_VIEWPORT_LOCK =
+  'width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover';
 
 // Reactive viewport check. `?mobile=1` forces the mobile shell on for desktop
 // previews; `?desktop=1` forces it off so the desktop layout survives narrow
@@ -72,6 +91,30 @@ export function useIsMobileViewport(): boolean {
   return mobile;
 }
 
+function useMobileZoomLock(): void {
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    const viewport = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
+    const previousViewport = viewport?.getAttribute('content') ?? null;
+    viewport?.setAttribute('content', MOBILE_VIEWPORT_LOCK);
+
+    const preventZoomGesture = (event: Event) => event.preventDefault();
+    const listenerOptions: AddEventListenerOptions = { passive: false };
+    document.addEventListener('gesturestart', preventZoomGesture, listenerOptions);
+    document.addEventListener('gesturechange', preventZoomGesture, listenerOptions);
+    document.addEventListener('gestureend', preventZoomGesture, listenerOptions);
+
+    return () => {
+      if (viewport && previousViewport != null) {
+        viewport.setAttribute('content', previousViewport);
+      }
+      document.removeEventListener('gesturestart', preventZoomGesture, listenerOptions);
+      document.removeEventListener('gesturechange', preventZoomGesture, listenerOptions);
+      document.removeEventListener('gestureend', preventZoomGesture, listenerOptions);
+    };
+  }, []);
+}
+
 type MobileTab = 'radio' | 'tools';
 type MobileToolId = 'tx' | 'rotator' | 'qrz' | 'dsp';
 
@@ -86,6 +129,7 @@ function compassPoint(deg: number): string {
 }
 
 export function MobileApp() {
+  useMobileZoomLock();
   const status = useConnectionStore((s) => s.status);
   const endpoint = useConnectionStore((s) => s.endpoint);
   const lastEndpoint = useConnectionStore((s) => s.lastConnectedEndpoint);
@@ -303,10 +347,12 @@ export function MobileApp() {
 
             <div className="m-mox-block">
               <MicGate />
+              <MobileTxProfileSelect />
               <div className="m-ptt-row">
                 <MobilePttButton />
                 <div className="m-ptt-tun"><TunButton /></div>
               </div>
+              <MicUplinkDiagnostics />
             </div>
 
             <Section label="Mode · Band">
@@ -339,6 +385,200 @@ export function MobileApp() {
           <ToolDetail tool={toolOpen} onBack={() => setToolOpen(null)} />
         )}
       </main>
+    </div>
+  );
+}
+
+type MobileTxProfilePhase = 'loading' | 'idle' | 'pending' | 'applying' | 'applied' | 'error';
+
+function mobileTxProfileActiveMessage(profile: TxStationProfile): string {
+  return `${profile.label} active / ${formatTxStationProfileSummary(profile)}`;
+}
+
+function MobileTxProfileSelect() {
+  const status = useConnectionStore((s) => s.status);
+  const mode = useConnectionStore((s) => s.mode);
+  const applyState = useConnectionStore((s) => s.applyState);
+  const hydrateTxFromState = useTxStore((s) => s.hydrateFromState);
+  const setMicGainDb = useTxStore((s) => s.setMicGainDb);
+  const setLevelerMaxGainDb = useTxStore((s) => s.setLevelerMaxGainDb);
+  const setCfcConfigLocal = useTxStore((s) => s.setCfcConfig);
+  const loadAudioProfiles = useAudioSuiteStore((s) => s.loadProfiles);
+  const applyAudioProfile = useAudioSuiteStore((s) => s.applyProfile);
+  const [profiles, setProfiles] = useState<TxStationProfile[]>(() =>
+    mergeTxStationProfileOverrides([]),
+  );
+  const [selectedProfileId, setSelectedProfileId] = useState<TxStationProfileId>(
+    STUDIO_SSB_PROFILE.id,
+  );
+  const [phase, setPhase] = useState<MobileTxProfilePhase>('loading');
+  const [message, setMessage] = useState(formatTxStationProfileSummary(STUDIO_SSB_PROFILE));
+  const pendingProfileRef = useRef<TxStationProfileId | null>(null);
+  const activationSeqRef = useRef(0);
+  const connected = status === 'Connected';
+  const selectedProfile = getTxStationProfile(selectedProfileId, profiles);
+  const busy = phase === 'loading' || phase === 'applying';
+  const displayedMessage = phase === 'idle'
+    ? formatTxStationProfileSummary(selectedProfile)
+    : message;
+
+  useEffect(() => {
+    let active = true;
+    const ctrl = new AbortController();
+    setPhase('loading');
+    void loadAudioProfiles();
+
+    Promise.allSettled([
+      fetchTxStationProfiles(ctrl.signal),
+      fetchTxFidelityPolicy(ctrl.signal),
+    ]).then(([profileResult, policyResult]) => {
+      if (!active) return;
+      const nextProfiles =
+        profileResult.status === 'fulfilled'
+          ? mergeTxStationProfileOverrides(profileResult.value)
+          : mergeTxStationProfileOverrides([]);
+      const nextProfile =
+        policyResult.status === 'fulfilled'
+          ? getTxStationProfile(policyResult.value.profileId, nextProfiles)
+          : STUDIO_SSB_PROFILE;
+      setProfiles(nextProfiles);
+      setSelectedProfileId(nextProfile.id);
+      setPhase('idle');
+      setMessage(formatTxStationProfileSummary(nextProfile));
+    });
+
+    return () => {
+      active = false;
+      ctrl.abort();
+    };
+  }, [loadAudioProfiles]);
+
+  const activateProfile = useCallback(
+    async (profile: TxStationProfile, persistPolicy: boolean) => {
+      const seq = ++activationSeqRef.current;
+      pendingProfileRef.current = null;
+      setSelectedProfileId(profile.id);
+
+      let policySaveFailed = false;
+      if (persistPolicy) {
+        try {
+          await saveTxFidelityPolicy({
+            profileId: profile.id,
+            targetSpectralDensity: profile.spectralDensity,
+          });
+        } catch {
+          policySaveFailed = true;
+        }
+      }
+
+      if (status !== 'Connected') {
+        pendingProfileRef.current = profile.id;
+        setPhase(policySaveFailed ? 'error' : 'pending');
+        setMessage(
+          policySaveFailed
+            ? `${profile.label} selected / preference save failed`
+            : `${profile.label} selected / connect to apply`,
+        );
+        return;
+      }
+
+      setPhase('applying');
+      setMessage(`Applying ${profile.label}...`);
+      try {
+        await applyTxStationProfile(profile, {
+          mode,
+          applyState,
+          hydrateTxFromState,
+          setMicGainDb,
+          setLevelerMaxGainDb,
+          setCfcConfigLocal,
+          applyAudioProfile,
+        });
+        if (seq !== activationSeqRef.current) return;
+        setPhase(policySaveFailed ? 'error' : 'applied');
+        setMessage(
+          policySaveFailed
+            ? `${profile.label} active / preference save failed`
+            : mobileTxProfileActiveMessage(profile),
+        );
+      } catch (err) {
+        if (seq !== activationSeqRef.current) return;
+        setPhase('error');
+        setMessage(err instanceof Error ? err.message : 'TX profile apply failed');
+      }
+    },
+    [
+      applyAudioProfile,
+      applyState,
+      hydrateTxFromState,
+      mode,
+      setCfcConfigLocal,
+      setLevelerMaxGainDb,
+      setMicGainDb,
+      status,
+    ],
+  );
+
+  useEffect(() => {
+    if (!connected) return;
+    const pendingProfileId = pendingProfileRef.current;
+    if (!pendingProfileId) return;
+    const profile = getTxStationProfile(pendingProfileId, profiles);
+    void activateProfile(profile, false);
+  }, [activateProfile, connected, profiles]);
+
+  return (
+    <div className="m-tx-profile" aria-label="TX audio profile selector">
+      <label className="m-control">
+        <span className="m-control-lbl">TX Profile</span>
+        <select
+          className="m-select"
+          aria-label="TX audio profile"
+          value={selectedProfile.id}
+          disabled={busy}
+          onChange={(e) => {
+            const profile = getTxStationProfile(e.target.value, profiles);
+            void activateProfile(profile, true);
+          }}
+        >
+          {profiles.map((profile) => (
+            <option key={profile.id} value={profile.id}>
+              {profile.label}
+            </option>
+          ))}
+        </select>
+      </label>
+      <div
+        className={`m-tx-profile-status${phase === 'error' ? ' is-error' : ''}`}
+        title={displayedMessage}
+      >
+        {displayedMessage}
+      </div>
+    </div>
+  );
+}
+
+function MicUplinkDiagnostics() {
+  const micDbfs = useTxStore((s) => s.micDbfs);
+  const localBlocks = useMicUplinkDiagnosticsStore((s) => s.localBlocks);
+  const sentBlocks = useMicUplinkDiagnosticsStore((s) => s.sentBlocks);
+  const droppedBlocks = useMicUplinkDiagnosticsStore((s) => s.droppedBlocks);
+  const transportReady = useMicUplinkDiagnosticsStore((s) => s.transportReady);
+  const txForced = useMicUplinkDiagnosticsStore((s) => s.txForced);
+  const lastDropReason = useMicUplinkDiagnosticsStore((s) => s.lastDropReason);
+  const moxOn = useTxStore((s) => s.moxOn);
+  const localMicArmed = useTxStore((s) => s.localMicArmed);
+
+  return (
+    <div className="m-uplink-diag" aria-label="Mic uplink diagnostics">
+      <span>MIC {micDbfs.toFixed(0)} dBfs</span>
+      <span>{transportReady ? 'WS open' : 'WS closed'}</span>
+      <span>{moxOn ? 'MOX on' : 'MOX off'}</span>
+      <span>{localMicArmed ? 'armed' : 'disarmed'}</span>
+      <span>{txForced ? 'force on' : 'force off'}</span>
+      <span>local {localBlocks}</span>
+      <span>sent {sentBlocks}</span>
+      {droppedBlocks > 0 && <span>drop {droppedBlocks}{lastDropReason ? ` ${lastDropReason}` : ''}</span>}
     </div>
   );
 }

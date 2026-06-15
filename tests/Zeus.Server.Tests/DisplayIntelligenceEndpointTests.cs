@@ -40,6 +40,7 @@ public sealed class DisplayIntelligenceEndpointTests : IDisposable
         using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
         Assert.Equal("balanced", body.RootElement.GetProperty("profileId").GetString());
         Assert.False(body.RootElement.GetProperty("popEnabled").GetBoolean());
+        Assert.False(body.RootElement.GetProperty("autoNotchEnabled").GetBoolean());
         Assert.True(body.RootElement.GetProperty("visualAgcEnabled").GetBoolean());
         Assert.Equal(4000, body.RootElement.GetProperty("snapRadiusHz").GetInt32());
     }
@@ -52,6 +53,7 @@ public sealed class DisplayIntelligenceEndpointTests : IDisposable
             profileId = "dx",
             popEnabled = true,
             snapEnabled = true,
+            autoNotchEnabled = true,
             autoProfileEnabled = true,
             visualAgcEnabled = true,
             impulseRejectEnabled = true,
@@ -79,6 +81,7 @@ public sealed class DisplayIntelligenceEndpointTests : IDisposable
             using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
             Assert.Equal("dx", body.RootElement.GetProperty("profileId").GetString());
             Assert.Equal(92, body.RootElement.GetProperty("popRenderIntensity").GetInt32());
+            Assert.True(body.RootElement.GetProperty("autoNotchEnabled").GetBoolean());
         }
 
         using (var restarted = new Factory(_dbPath))
@@ -90,14 +93,15 @@ public sealed class DisplayIntelligenceEndpointTests : IDisposable
             using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
             Assert.Equal("dx", body.RootElement.GetProperty("profileId").GetString());
             Assert.True(body.RootElement.GetProperty("popEnabled").GetBoolean());
+            Assert.True(body.RootElement.GetProperty("autoNotchEnabled").GetBoolean());
             Assert.Equal(5000, body.RootElement.GetProperty("snapRadiusHz").GetInt32());
         }
     }
 
     [Theory]
-    [InlineData("{\"profileId\":\"wide\",\"popEnabled\":false,\"snapEnabled\":false,\"autoProfileEnabled\":false,\"visualAgcEnabled\":true,\"impulseRejectEnabled\":true,\"popFloorDb\":3,\"popSpanDb\":30,\"popGamma\":0.5,\"popRenderIntensity\":72,\"coherenceHoldGate\":0.45,\"coherenceBoostDb\":4,\"ridgeBoost\":0.35,\"ridgeMaxBoostDb\":8,\"visualAgcStrength\":45,\"impulseRejectDb\":18,\"snapRadiusHz\":4000,\"snapMinSnrDb\":6,\"peakMinSnrDb\":8}")]
-    [InlineData("{\"profileId\":\"balanced\",\"popEnabled\":false,\"snapEnabled\":false,\"autoProfileEnabled\":false,\"visualAgcEnabled\":true,\"impulseRejectEnabled\":true,\"popFloorDb\":99,\"popSpanDb\":30,\"popGamma\":0.5,\"popRenderIntensity\":72,\"coherenceHoldGate\":0.45,\"coherenceBoostDb\":4,\"ridgeBoost\":0.35,\"ridgeMaxBoostDb\":8,\"visualAgcStrength\":45,\"impulseRejectDb\":18,\"snapRadiusHz\":4000,\"snapMinSnrDb\":6,\"peakMinSnrDb\":8}")]
-    [InlineData("{\"profileId\":\"balanced\",\"popEnabled\":false,\"snapEnabled\":false,\"autoProfileEnabled\":false,\"visualAgcEnabled\":true,\"impulseRejectEnabled\":true,\"popFloorDb\":3,\"popSpanDb\":30,\"popGamma\":0.5,\"popRenderIntensity\":72,\"coherenceHoldGate\":0.45,\"coherenceBoostDb\":4,\"ridgeBoost\":0.35,\"ridgeMaxBoostDb\":8,\"visualAgcStrength\":45,\"impulseRejectDb\":18,\"snapRadiusHz\":50,\"snapMinSnrDb\":6,\"peakMinSnrDb\":8}")]
+    [InlineData("{\"profileId\":\"wide\",\"popEnabled\":false,\"snapEnabled\":false,\"autoNotchEnabled\":false,\"autoProfileEnabled\":false,\"visualAgcEnabled\":true,\"impulseRejectEnabled\":true,\"popFloorDb\":3,\"popSpanDb\":30,\"popGamma\":0.5,\"popRenderIntensity\":72,\"coherenceHoldGate\":0.45,\"coherenceBoostDb\":4,\"ridgeBoost\":0.35,\"ridgeMaxBoostDb\":8,\"visualAgcStrength\":45,\"impulseRejectDb\":18,\"snapRadiusHz\":4000,\"snapMinSnrDb\":6,\"peakMinSnrDb\":8}")]
+    [InlineData("{\"profileId\":\"balanced\",\"popEnabled\":false,\"snapEnabled\":false,\"autoNotchEnabled\":false,\"autoProfileEnabled\":false,\"visualAgcEnabled\":true,\"impulseRejectEnabled\":true,\"popFloorDb\":99,\"popSpanDb\":30,\"popGamma\":0.5,\"popRenderIntensity\":72,\"coherenceHoldGate\":0.45,\"coherenceBoostDb\":4,\"ridgeBoost\":0.35,\"ridgeMaxBoostDb\":8,\"visualAgcStrength\":45,\"impulseRejectDb\":18,\"snapRadiusHz\":4000,\"snapMinSnrDb\":6,\"peakMinSnrDb\":8}")]
+    [InlineData("{\"profileId\":\"balanced\",\"popEnabled\":false,\"snapEnabled\":false,\"autoNotchEnabled\":false,\"autoProfileEnabled\":false,\"visualAgcEnabled\":true,\"impulseRejectEnabled\":true,\"popFloorDb\":3,\"popSpanDb\":30,\"popGamma\":0.5,\"popRenderIntensity\":72,\"coherenceHoldGate\":0.45,\"coherenceBoostDb\":4,\"ridgeBoost\":0.35,\"ridgeMaxBoostDb\":8,\"visualAgcStrength\":45,\"impulseRejectDb\":18,\"snapRadiusHz\":50,\"snapMinSnrDb\":6,\"peakMinSnrDb\":8}")]
     public async Task PutInvalidSettings_Returns400(string json)
     {
         using var factory = new Factory(_dbPath);

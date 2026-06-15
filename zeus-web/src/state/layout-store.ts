@@ -99,7 +99,10 @@ interface LayoutState {
   // Layout-level mutators (LeftLayoutBar API):
   /** Create a new layout for the current radio, seeded from
    *  DEFAULT_WORKSPACE_LAYOUT, and switch to it. Returns the new id. */
-  addLayout: (name: string, meta?: { icon?: string; description?: string }) => string;
+  addLayout: (
+    name: string,
+    meta?: { icon?: string; description?: string; workspace?: WorkspaceLayout },
+  ) => string;
   /** Delete a layout. If it was active, the server promotes the first
    *  remaining layout to active; if there are zero remaining the client
    *  re-seeds Default. */
@@ -120,15 +123,35 @@ interface LayoutState {
   // debounced PUT to /api/ui/layouts.
   /** Append a fresh tile for `panelId`. */
   addTile: (panelId: string, opts?: { instanceConfig?: unknown }) => string;
+  /** Append a fresh tile to a specific layout without making it active. */
+  addTileToLayout: (
+    layoutId: string,
+    panelId: string,
+    opts?: { instanceConfig?: unknown },
+  ) => string | null;
   /** Remove the tile with the given uid. */
   removeTile: (uid: string) => void;
+  /** Remove a tile from a specific layout without making it active. */
+  removeTileFromLayout: (layoutId: string, uid: string) => void;
   /** Replace a tile's grid placement (x/y/w/h). */
   updateTilePlacement: (
     uid: string,
     layout: Pick<WorkspaceTile, 'x' | 'y' | 'w' | 'h'>,
   ) => void;
+  /** Replace a tile's grid placement in a specific layout. */
+  updateTilePlacementInLayout: (
+    layoutId: string,
+    uid: string,
+    layout: Pick<WorkspaceTile, 'x' | 'y' | 'w' | 'h'>,
+  ) => void;
   /** Replace a tile's instanceConfig blob. */
   updateTileInstanceConfig: (uid: string, instanceConfig: unknown) => void;
+  /** Replace a tile's instanceConfig blob in a specific layout. */
+  updateTileInstanceConfigInLayout: (
+    layoutId: string,
+    uid: string,
+    instanceConfig: unknown,
+  ) => void;
 
   // Back-compat surface (still used by SettingsMenu before #241 lands the
   // LeftLayoutBar). resetLayout calls resetActiveLayout.
@@ -158,7 +181,7 @@ function defaultSeedLayout(): NamedLayout {
   };
 }
 
-function parseLayoutOrDefault(json: string): WorkspaceLayout {
+export function parseLayoutOrDefault(json: string): WorkspaceLayout {
   try {
     const parsed = parseWorkspaceLayout(JSON.parse(json));
     return parsed.tiles.length === 0 ? DEFAULT_WORKSPACE_LAYOUT : parsed;
@@ -259,7 +282,8 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
 
   addLayout: (name, meta) => {
     const id = `layout-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-    const json = serializeWorkspace(DEFAULT_WORKSPACE_LAYOUT);
+    const initialWorkspace = meta?.workspace ?? DEFAULT_WORKSPACE_LAYOUT;
+    const json = serializeWorkspace(initialWorkspace);
     const next: NamedLayout = {
       id,
       name: name || 'Untitled',
@@ -361,7 +385,15 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   },
 
   addTile: (panelId, opts) => {
-    const { workspace } = get();
+    return get().addTileToLayout(get().activeLayoutId, panelId, opts) ?? '';
+  },
+
+  addTileToLayout: (layoutId, panelId, opts) => {
+    const target = findActive(get().layouts, layoutId);
+    if (!target && layoutId !== get().activeLayoutId) return null;
+    const workspace = layoutId === get().activeLayoutId
+      ? get().workspace
+      : parseLayoutOrDefault(target!.layoutJson);
     const placement = placeTileInGrid(panelId, workspace.tiles);
     const uid = newTileUid();
     const tile: WorkspaceTile = {
@@ -376,22 +408,38 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       ...workspace,
       tiles: [...workspace.tiles, tile],
     };
-    applyWorkspaceMutation(set, get, next);
+    applyWorkspaceMutationForLayout(set, get, layoutId, next);
     return uid;
   },
 
   removeTile: (uid) => {
-    const { workspace } = get();
+    get().removeTileFromLayout(get().activeLayoutId, uid);
+  },
+
+  removeTileFromLayout: (layoutId, uid) => {
+    const target = findActive(get().layouts, layoutId);
+    if (!target && layoutId !== get().activeLayoutId) return;
+    const workspace = layoutId === get().activeLayoutId
+      ? get().workspace
+      : parseLayoutOrDefault(target!.layoutJson);
     if (!workspace.tiles.some((t) => t.uid === uid)) return;
     const next: WorkspaceLayout = {
       ...workspace,
       tiles: workspace.tiles.filter((t) => t.uid !== uid),
     };
-    applyWorkspaceMutation(set, get, next);
+    applyWorkspaceMutationForLayout(set, get, layoutId, next);
   },
 
   updateTilePlacement: (uid, layout) => {
-    const { workspace } = get();
+    get().updateTilePlacementInLayout(get().activeLayoutId, uid, layout);
+  },
+
+  updateTilePlacementInLayout: (layoutId, uid, layout) => {
+    const target = findActive(get().layouts, layoutId);
+    if (!target && layoutId !== get().activeLayoutId) return;
+    const workspace = layoutId === get().activeLayoutId
+      ? get().workspace
+      : parseLayoutOrDefault(target!.layoutJson);
     let changed = false;
     const tiles = workspace.tiles.map((t) => {
       if (t.uid !== uid) return t;
@@ -407,35 +455,47 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       return { ...t, ...layout };
     });
     if (!changed) return;
-    applyWorkspaceMutation(set, get, { ...workspace, tiles });
+    applyWorkspaceMutationForLayout(set, get, layoutId, { ...workspace, tiles });
   },
 
   updateTileInstanceConfig: (uid, instanceConfig) => {
-    const { workspace } = get();
+    get().updateTileInstanceConfigInLayout(get().activeLayoutId, uid, instanceConfig);
+  },
+
+  updateTileInstanceConfigInLayout: (layoutId, uid, instanceConfig) => {
+    const target = findActive(get().layouts, layoutId);
+    if (!target && layoutId !== get().activeLayoutId) return;
+    const workspace = layoutId === get().activeLayoutId
+      ? get().workspace
+      : parseLayoutOrDefault(target!.layoutJson);
     if (!workspace.tiles.some((t) => t.uid === uid)) return;
     const tiles = workspace.tiles.map((t) =>
       t.uid === uid ? { ...t, instanceConfig } : t,
     );
-    applyWorkspaceMutation(set, get, { ...workspace, tiles });
+    applyWorkspaceMutationForLayout(set, get, layoutId, { ...workspace, tiles });
   },
 
   resetLayout: () => get().resetActiveLayout(),
 }));
 
-function applyWorkspaceMutation(
+function applyWorkspaceMutationForLayout(
   set: (partial: Partial<LayoutState>) => void,
   get: () => LayoutState,
+  layoutId: string,
   next: WorkspaceLayout,
 ) {
-  // Mirror the new tiles into the active NamedLayout's serialized JSON so
-  // a subsequent setActive(id) round-trip doesn't regress the change.
+  // Mirror the new tiles into the target NamedLayout's serialized JSON so
+  // switching/focusing that layout later doesn't regress the change.
   const { layouts, activeLayoutId, radioKey } = get();
   const json = serializeWorkspace(next);
-  const active = findActive(layouts, activeLayoutId);
-  if (active) {
-    const updated: NamedLayout = { ...active, layoutJson: json };
-    const newLayouts = layouts.map((l) => (l.id === activeLayoutId ? updated : l));
-    set({ workspace: next, layouts: newLayouts });
+  const target = findActive(layouts, layoutId);
+  if (target) {
+    const updated: NamedLayout = { ...target, layoutJson: json };
+    const newLayouts = layouts.map((l) => (l.id === layoutId ? updated : l));
+    set({
+      layouts: newLayouts,
+      ...(layoutId === activeLayoutId ? { workspace: next } : {}),
+    });
     scheduleSave(radioKey, updated);
   } else {
     // Test / unhydrated state — just update workspace.

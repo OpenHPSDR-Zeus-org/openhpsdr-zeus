@@ -31,11 +31,21 @@ public sealed class CapabilitiesService
         var platform = DetectPlatform();
         var architecture = RuntimeInformation.ProcessArchitecture.ToString().ToLowerInvariant();
 
+        var httpsPort = options.UseHttpsLanCert
+            ? (options.HttpsPort > 0 ? options.HttpsPort : LanCertificate.GetHttpsPort())
+            : 0;
+        var lanHttpsUrls = httpsPort > 0
+            ? LanCertificate.GetLanIps()
+                .Select(ip => $"https://{ip}:{httpsPort}")
+                .ToArray()
+            : Array.Empty<string>();
+
         _snapshot = new CapabilitiesSnapshot(
             Host: options.HostMode == ZeusHostMode.Desktop ? "desktop" : "server",
             Platform: platform,
             Architecture: architecture,
             Version: version,
+            LanHttpsUrls: lanHttpsUrls,
             Features: new FeatureMatrix());
 
         _shareOverLan = options.HostMode == ZeusHostMode.Desktop && options.ShareOverLan;
@@ -80,6 +90,7 @@ public sealed record CapabilitiesSnapshot(
     string Platform,
     string Architecture,
     string Version,
+    IReadOnlyList<string> LanHttpsUrls,
     FeatureMatrix Features);
 
 public sealed record FeatureMatrix();

@@ -81,7 +81,7 @@ describe('smart NR supervisor', () => {
     expect(rec.condition.coherentSubthresholdSignal).toBe(true);
     expect(rec.condition.hasSignal).toBe(true);
     expect(rec.condition.weakSparse).toBe(true);
-    expect(rec.nr.nrMode).toBe('Sbnr');
+    expect(rec.nr.nrMode).toBe('Nr5');
   });
 
   it('uses RX chain telemetry to preserve faint sparse weak-signal NR decisions', () => {
@@ -103,7 +103,7 @@ describe('smart NR supervisor', () => {
     expect(rec.condition.rxAssistedWeakSignal).toBe(true);
     expect(rec.condition.hasSignal).toBe(true);
     expect(rec.condition.weakSparse).toBe(true);
-    expect(rec.nr.nrMode).toBe('Sbnr');
+    expect(rec.nr.nrMode).toBe('Nr5');
   });
 
   it('does not promote low-confidence subthreshold energy as a signal', () => {
@@ -146,13 +146,12 @@ describe('smart NR supervisor', () => {
     expect(rec.condition.maxSnrDb).toBeLessThan(6);
     expect(rec.condition.rxAssistedWeakSignal).toBe(true);
     expect(rec.condition.weakSparse).toBe(true);
-    expect(rec.nr.nrMode).toBe('Sbnr');
-    expect(rec.nr.nr4ReductionAmount).toBe(7);
-    expect(rec.nr.nr4WhiteningFactor).toBe(10);
+    expect(rec.nr.nrMode).toBe('Nr5');
+    expect(rec.nr.nbMode).toBe('Off');
     expect(rec.reason).toContain('Weak-signal assist');
   });
 
-  it('uses low-artifact NR2 for RX-assisted weak SSB copy', () => {
+  it('uses NR5 for RX-assisted weak SSB copy', () => {
     const spec = noise();
     spec[120] = NOISE_DB + 8;
 
@@ -169,14 +168,11 @@ describe('smart NR supervisor', () => {
     })!;
 
     expect(rec.condition.rxAssistedWeakSignal).toBe(true);
-    expect(rec.nr.nrMode).toBe('Emnr');
-    expect(rec.nr.emnrPost2Run).toBe(true);
-    expect(rec.nr.emnrPost2Factor).toBe(10);
-    expect(rec.nr.emnrPost2Nlevel).toBe(10);
+    expect(rec.nr.nrMode).toBe('Nr5');
     expect(rec.nr.nbMode).toBe('Off');
   });
 
-  it('reports coherent subthreshold SSB as a weak-signal NR2 profile', () => {
+  it('reports coherent subthreshold SSB as a weak-signal NR5 profile', () => {
     const spec = noise();
     const conf = confidence();
     spec[119] = NOISE_DB + 9.4;
@@ -197,9 +193,7 @@ describe('smart NR supervisor', () => {
     expect(rec.condition.maxSnrDb).toBeLessThan(8);
     expect(rec.condition.coherentSubthresholdSignal).toBe(true);
     expect(rec.condition.weakSparse).toBe(true);
-    expect(rec.nr.nrMode).toBe('Emnr');
-    expect(rec.nr.emnrPost2Factor).toBe(12);
-    expect(rec.nr.emnrPost2Nlevel).toBe(12);
+    expect(rec.nr.nrMode).toBe('Nr5');
     expect(rec.reason).toContain('coherent weak-signal');
     expect(rec.reason).toContain('subthreshold ridge');
   });
@@ -527,6 +521,7 @@ describe('smart NR supervisor', () => {
       wdspActive: true,
       wdspEmnrPost2Available: true,
       wdspNr4SbnrAvailable: false,
+      wdspNr5SpnrAvailable: true,
     });
 
     expect(shaped.nrMode).toBe('Sbnr');
@@ -544,6 +539,7 @@ describe('smart NR supervisor', () => {
         wdspActive: true,
         wdspEmnrPost2Available: false,
         wdspNr4SbnrAvailable: true,
+        wdspNr5SpnrAvailable: true,
       },
     );
 
@@ -552,5 +548,22 @@ describe('smart NR supervisor', () => {
     expect(adapted.nr.emnrAeRun).toBe(true);
     expect(adapted.capabilityLimited).toBe(true);
     expect(adapted.capabilityRecommendation).toContain('post2');
+  });
+
+  it('downgrades NR5 weak-signal recommendations when SPNR exports are unavailable', () => {
+    const adapted = adaptSmartNrToDspCapabilities(
+      { ...NR_CONFIG_DEFAULT, nrMode: 'Nr5' },
+      {
+        wdspActive: true,
+        wdspEmnrPost2Available: true,
+        wdspNr4SbnrAvailable: true,
+        wdspNr5SpnrAvailable: false,
+      },
+    );
+
+    expect(adapted.nr.nrMode).toBe('Sbnr');
+    expect(adapted.nr.nr4ReductionAmount).toBe(7);
+    expect(adapted.capabilityLimited).toBe(true);
+    expect(adapted.capabilityRecommendation).toContain('NR5/SPNR unavailable');
   });
 });

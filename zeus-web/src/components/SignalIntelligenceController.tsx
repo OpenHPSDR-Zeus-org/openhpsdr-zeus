@@ -26,12 +26,16 @@ import {
   type SignalEnhancePersisted,
   type SignalEnhancePresetId,
 } from '../dsp/signal-estimator';
+import { createAutoNotchTracker, detectAutoNotches } from '../dsp/auto-notch';
 import { useConnectionStore } from '../state/connection-store';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
+import { useNotchStore } from '../state/notch-store';
+import { useTxStore } from '../state/tx-store';
 
 const SCENE_SAMPLE_INTERVAL_MS = 1000;
 const SCENE_DWELL_SAMPLES = 3;
 const SETTINGS_SAVE_DEBOUNCE_MS = 350;
+const EMPTY_AUTO_NOTCH_SIGNATURE = '[]';
 
 function sceneReason(scene: SignalEnhanceScene): string {
   if (scene.profileId === 'contest') return 'crowded span';
@@ -59,6 +63,21 @@ function publishSceneStatus(scene: SignalEnhanceScene): void {
     maxSnrDb: Math.round(scene.maxSnrDb * 10) / 10,
     coherentMaxSnrDb: Math.round(scene.coherentMaxSnrDb * 10) / 10,
   });
+}
+
+function autoNotchSignature(notches: Array<{ centerHz: number; widthHz: number }>): string {
+  return JSON.stringify(
+    notches
+      .map((n) => [Math.round(n.centerHz), Math.round(n.widthHz)] as const)
+      .sort((a, b) => a[0] - b[0] || a[1] - b[1]),
+  );
+}
+
+function clearAutoNotchesIfPresent(): void {
+  const notch = useNotchStore.getState();
+  if (notch.notches.some((n) => n.source === 'auto')) {
+    notch.clearAutoNotches();
+  }
 }
 
 function mergeHydratedSettings(
@@ -166,6 +185,8 @@ export function SignalIntelligenceController() {
 
   useEffect(() => {
     let lastSceneAt = 0;
+    let lastAutoNotchesJson = EMPTY_AUTO_NOTCH_SIGNATURE;
+    const autoNotchTracker = createAutoNotchTracker();
     let pendingProfile: SignalEnhancePresetId | null = null;
     let pendingCount = 0;
     const releaseDiagnosticsFrames = registerFrameConsumer();
@@ -181,6 +202,49 @@ export function SignalIntelligenceController() {
       if (!enhance.autoProfileEnabled) return;
       enhance.applySignalEnhanceModeProfile(useConnectionStore.getState().mode);
       resetPending();
+    };
+
+    const resetAutoNotches = () => {
+      autoNotchTracker.clear();
+      clearAutoNotchesIfPresent();
+      lastAutoNotchesJson = EMPTY_AUTO_NOTCH_SIGNATURE;
+    };
+
+    const syncAutoNotches = () => {
+      const conn = useConnectionStore.getState();
+      const tx = useTxStore.getState();
+      const shouldRun =
+        conn.status === 'Connected' &&
+        conn.nr.anfEnabled &&
+        !tx.moxOn &&
+        !tx.tunOn;
+
+      if (!shouldRun) {
+        resetAutoNotches();
+        return;
+      }
+
+      const display = useDisplayStore.getState();
+      const notch = useNotchStore.getState();
+      const candidates = detectAutoNotches({
+        spectrum: display.panValid ? display.panDb : null,
+        floor: getNoiseFloor(),
+        confidence: getSignalConfidence(),
+        centerHz: display.centerHz,
+        hzPerPixel: display.hzPerPixel,
+        existingNotches: notch.notches,
+      });
+      const tracked = autoNotchTracker.update(candidates, notch.notches).map((n) => ({
+        centerHz: Math.round(n.centerHz),
+        widthHz: Math.round(n.widthHz),
+      }));
+
+      const nextJson = autoNotchSignature(tracked);
+      const currentJson = autoNotchSignature(notch.notches.filter((n) => n.source === 'auto'));
+      if (nextJson !== lastAutoNotchesJson || currentJson !== nextJson) {
+        notch.replaceAutoNotches(tracked);
+        lastAutoNotchesJson = nextJson;
+      }
     };
 
     const maybeApplyScene = () => {
@@ -199,6 +263,7 @@ export function SignalIntelligenceController() {
         hzPerPixel: display.hzPerPixel,
       });
       publishSceneStatus(scene);
+      syncAutoNotches();
       if (!enhance.autoProfileEnabled) {
         resetPending();
         return;
@@ -223,6 +288,12 @@ export function SignalIntelligenceController() {
 
     const unsubConn = useConnectionStore.subscribe((state, prev) => {
       if (state.mode !== prev.mode || state.status !== prev.status) applyModeProfile();
+      if (
+        (state.status !== prev.status && state.status !== 'Connected') ||
+        (state.nr.anfEnabled !== prev.nr.anfEnabled && !state.nr.anfEnabled)
+      ) {
+        resetAutoNotches();
+      }
     });
     const unsubEnhance = useSignalEnhanceStore.subscribe((state, prev) => {
       if (state.autoProfileEnabled && !prev.autoProfileEnabled) applyModeProfile();
@@ -230,14 +301,19 @@ export function SignalIntelligenceController() {
         resetPending();
       }
     });
+    const unsubTx = useTxStore.subscribe((state, prev) => {
+      if ((state.moxOn && !prev.moxOn) || (state.tunOn && !prev.tunOn)) resetAutoNotches();
+    });
     const unsubDisplay = useDisplayStore.subscribe((state, prev) => {
       if (state.lastSeq !== prev.lastSeq) maybeApplyScene();
     });
 
     applyModeProfile();
+    if (!useConnectionStore.getState().nr.anfEnabled) resetAutoNotches();
     return () => {
       unsubConn();
       unsubEnhance();
+      unsubTx();
       unsubDisplay();
       releaseDiagnosticsFrames();
       releaseDiagnosticsEstimator();

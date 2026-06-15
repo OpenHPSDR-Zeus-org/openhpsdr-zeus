@@ -24,7 +24,13 @@
 //
 // Issue #241: visual chrome reuses tokens.css; no new colors are introduced.
 
-import { useMemo, useState, type CSSProperties } from 'react';
+import {
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type DragEvent,
+} from 'react';
 import { useLayoutStore } from '../state/layout-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import {
@@ -32,6 +38,7 @@ import {
   type LayoutSettingsValue,
 } from '../layout/LayoutSettingsModal';
 import { ConfirmDialog } from '../layout/ConfirmDialog';
+import { openWorkspaceWindow } from '../layout/workspace-windows';
 
 type ModalState =
   | { kind: 'closed' }
@@ -40,6 +47,7 @@ type ModalState =
   | { kind: 'delete'; id: string; name: string };
 
 export function LeftLayoutBar() {
+  const barRef = useRef<HTMLElement | null>(null);
   const layouts = useLayoutStore((s) => s.layouts);
   const activeLayoutId = useLayoutStore((s) => s.activeLayoutId);
   const setActiveLayout = useLayoutStore((s) => s.setActiveLayout);
@@ -76,6 +84,7 @@ export function LeftLayoutBar() {
   }, [rxTraceColor]);
 
   const [modal, setModal] = useState<ModalState>({ kind: 'closed' });
+  const [draggingLayoutId, setDraggingLayoutId] = useState<string | null>(null);
 
   const handleAdd = () => setModal({ kind: 'create' });
 
@@ -105,8 +114,34 @@ export function LeftLayoutBar() {
   const editingLayout =
     modal.kind === 'edit' ? layouts.find((l) => l.id === modal.id) : undefined;
 
+  const handleLayoutDragStart = (e: DragEvent<HTMLButtonElement>, id: string, name: string) => {
+    setDraggingLayoutId(id);
+    e.dataTransfer.effectAllowed = 'copy';
+    e.dataTransfer.setData('application/x-zeus-layout-id', id);
+    e.dataTransfer.setData('text/plain', name);
+  };
+
+  const handleLayoutDragEnd = (
+    e: DragEvent<HTMLButtonElement>,
+    layout: { id: string; name: string },
+  ) => {
+    setDraggingLayoutId(null);
+    const rect = barRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const hasClientPoint = e.clientX !== 0 || e.clientY !== 0;
+    const inDock =
+      hasClientPoint &&
+      e.clientX >= rect.left &&
+      e.clientX <= rect.right &&
+      e.clientY >= rect.top &&
+      e.clientY <= rect.bottom;
+    if (!inDock) {
+      openWorkspaceWindow(layout.id, layout.name);
+    }
+  };
+
   return (
-    <aside className="left-layout-bar" aria-label="Layouts" style={tintStyle}>
+    <aside ref={barRef} className="left-layout-bar" aria-label="Layouts" style={tintStyle}>
       <div className="lb-list" role="tablist" aria-orientation="vertical">
         {!isLoaded ? (
           <div className="lb-empty" aria-hidden>…</div>
@@ -121,14 +156,20 @@ export function LeftLayoutBar() {
                 ? `${l.name} — ${l.description}`
                 : `${l.name} (gear to edit)`;
               return (
-                <div key={l.id} className={`lb-item ${active ? 'active' : ''}`}>
+                <div
+                  key={l.id}
+                  className={`lb-item ${active ? 'active' : ''} ${draggingLayoutId === l.id ? 'dragging' : ''}`}
+                >
                   <button
                     type="button"
                     className="lb-tab"
                     role="tab"
                     aria-selected={active}
+                    draggable
+                    onDragStart={(e) => handleLayoutDragStart(e, l.id, l.name)}
+                    onDragEnd={(e) => handleLayoutDragEnd(e, l)}
                     onClick={() => setActiveLayout(l.id)}
-                    title={tooltip}
+                    title={`${tooltip} — drag off the dock to open in a window`}
                   >
                     <span
                       className={`lb-tab-icon ${l.icon ? '' : 'lb-tab-icon-fallback'}`}

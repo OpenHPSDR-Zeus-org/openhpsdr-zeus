@@ -538,6 +538,244 @@
   font-weight: 400;
 }
 
+/* ── Hardware diagnostics inner navigation ───────────────── */
+.hardware-shell {
+  gap: 12px;
+}
+
+.hardware-summary-card {
+  display: grid;
+  gap: 12px;
+}
+
+.hardware-summary-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.hardware-summary-head h4 {
+  flex: 1 1 260px;
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.hardware-summary-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.hardware-error-row {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--tx);
+  border-radius: var(--r-sm);
+  background: var(--tx-soft);
+  color: var(--fg-0);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.hardware-status-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(128px, 1fr));
+  gap: 8px;
+}
+
+.hardware-status-chip {
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--panel-border);
+  border-left: 3px solid var(--fg-4);
+  border-radius: var(--r-sm);
+  background: var(--bg-0);
+}
+
+.hardware-status-chip span {
+  display: block;
+  overflow: hidden;
+  color: var(--fg-3);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.hardware-status-chip strong {
+  display: block;
+  overflow-wrap: anywhere;
+  margin-top: 3px;
+  color: var(--fg-0);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.hardware-status-chip.is-ok {
+  border-left-color: var(--ok);
+  background: var(--ok-soft);
+}
+
+.hardware-status-chip.is-warn {
+  border-left-color: var(--power);
+  background: var(--power-soft);
+}
+
+.hardware-status-chip.is-bad {
+  border-left-color: var(--tx);
+  background: var(--tx-soft);
+}
+
+.hardware-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.hardware-tab {
+  flex: 0 0 138px;
+  min-height: 54px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  background: var(--bg-0);
+  color: var(--fg-2);
+  cursor: pointer;
+  text-align: left;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.hardware-tab:hover {
+  background: var(--bg-2);
+  color: var(--fg-1);
+}
+
+.hardware-tab:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.hardware-tab.is-active {
+  border-color: var(--accent);
+  background: var(--bg-2);
+  color: var(--fg-0);
+  box-shadow: inset 0 0 0 1px var(--accent-soft);
+}
+
+.hardware-tab-copy {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.hardware-tab-label {
+  overflow: hidden;
+  font-size: 10.5px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.hardware-tab-hint {
+  overflow: hidden;
+  color: var(--fg-3);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hardware-tab-badge {
+  flex: 0 0 auto;
+  max-width: 58px;
+  overflow: hidden;
+  padding: 2px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs);
+  background: var(--bg-1);
+  color: var(--fg-2);
+  font-size: 9.5px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hardware-tab.is-active .hardware-tab-badge {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.hardware-tab-panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.hardware-marker-grid {
+  display: grid;
+  grid-template-columns: minmax(160px, 0.7fr) minmax(220px, 1.3fr);
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.hardware-marker-input {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  background: var(--bg-0);
+  color: var(--fg-0);
+  font-size: 12px;
+}
+
+.hardware-marker-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (max-width: 720px) {
+  .hardware-summary-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .hardware-summary-actions {
+    justify-content: flex-start;
+  }
+
+  .hardware-summary-actions .btn {
+    flex: 1 1 92px;
+  }
+
+  .hardware-status-strip {
+    grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  }
+
+  .hardware-marker-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── Signal Intelligence settings ─────────────────────────── */
 .sig-intel {
   display: grid;

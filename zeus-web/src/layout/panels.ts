@@ -68,6 +68,8 @@ import { AnalogMeterPanel } from './panels/AnalogMeterPanel';
 import { WavRecorderPanel } from './panels/WavRecorderPanel';
 import { HamClockPanel } from './panels/HamClockPanel';
 import { SpotsPanel } from './panels/SpotsPanel';
+import { SpaceWeatherPanel } from './panels/SpaceWeatherPanel';
+import { UrlEmbedPanel } from './panels/UrlEmbedPanel';
 
 export type PanelCategory =
   | 'spectrum'
@@ -418,6 +420,30 @@ export const PANELS: Record<string, PanelDef> = {
     // Wants the whole workspace — it's a full dashboard embedded as an iframe.
     minW: 8,
     minH: 16,
+  },
+  spacewx: {
+    id: 'spacewx',
+    name: 'Solar · Space Weather',
+    category: 'tools',
+    tags: ['solar', 'space weather', 'propagation', 'sfi', 'flux', 'sunspots', 'k-index', 'a-index', 'aurora', 'muf', 'bands', 'n0nbh', 'hamqsl'],
+    component: SpaceWeatherPanel,
+    minW: 6,
+    minH: 10,
+  },
+  urlembed: {
+    id: 'urlembed',
+    name: 'URL Embed',
+    category: 'tools',
+    tags: ['url', 'embed', 'iframe', 'web', 'browser', 'page', 'link', 'site'],
+    component: UrlEmbedPanel,
+    // Multi-instance so an operator can pin as many pages as they like —
+    // each tile holds its own assigned URL in instanceConfig.
+    multiInstance: true,
+    // Headerless: the panel owns its header strip so the address bar can
+    // live alongside the drag grip and close X.
+    headerless: true,
+    minW: 6,
+    minH: 8,
   },
 };
 

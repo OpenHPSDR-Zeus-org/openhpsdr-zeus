@@ -46,6 +46,8 @@ import type { Contact } from './data';
 import { bearingDeg } from './geo';
 import { useQrzStore } from '../../state/qrz-store';
 import { useRotatorStore } from '../../state/rotator-store';
+import { useContactPropagation } from '../../state/use-contact-propagation';
+import type { PropagationBand } from '../../api/propagation';
 
 type QrzCardProps = {
   contact: Contact | null;
@@ -61,10 +63,31 @@ function fmtBearing(deg: number): string {
   return `${Math.round(((deg % 360) + 360) % 360).toString().padStart(3, '0')}°`;
 }
 
+const DAY_NIGHT_GLYPH: Record<string, { icon: string; label: string }> = {
+  day: { icon: '☀', label: 'daytime' },
+  night: { icon: '☾', label: 'nighttime' },
+  grayline: { icon: '◑', label: 'grayline' },
+};
+
+/** Map a P.533 status to a token-driven colour class. */
+function propClass(status: string): string {
+  switch (status.toUpperCase()) {
+    case 'GOOD': return 'qrz-prop--good';
+    case 'FAIR': return 'qrz-prop--fair';
+    case 'POOR': return 'qrz-prop--poor';
+    default: return 'qrz-prop--closed';
+  }
+}
+
 export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, onClear, canClear }: QrzCardProps) {
   const qrzHome = useQrzStore((s) => s.home);
   const rotConnected = useRotatorStore((s) => !!s.status?.connected);
   const setRotatorAz = useRotatorStore((s) => s.setAzimuth);
+  // Point-to-point propagation (you → contact). Hook is unconditional so it sits
+  // above the early returns; it no-ops when there's no contact or home coords.
+  const { data: prop } = useContactPropagation(
+    contact ? { lat: contact.lat, lon: contact.lon } : null,
+  );
 
   // Show "Not found" if there's a lookup error
   if (lookupError) {
@@ -100,12 +123,35 @@ export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, 
   // 2× portrait rework — those fields are rarely consulted in-shack and the
   // operator usually wants the portrait + grid + location front-and-centre
   // for a quick "who am I talking to?" read.
+  const dn = contact.dayNight ? DAY_NIGHT_GLYPH[contact.dayNight] : null;
   const rows: [string, string][] = [
     ['Grid', contact.grid],
     ['Lat/Lon', contact.latlon],
     ['CQ·ITU', `${contact.cq} · ${contact.itu}`],
-    ['Local', contact.local],
   ];
+  if (contact.distanceLabel) rows.push(['Distance', contact.distanceLabel]);
+  // Short-/long-path beam headings from home → contact (independent of rotator).
+  if (qrzHome?.lat != null && qrzHome?.lon != null) {
+    const sp = bearingDeg(qrzHome.lat, qrzHome.lon, contact.lat, contact.lon);
+    rows.push(['Beam', `SP ${fmtBearing(sp)} · LP ${fmtBearing((sp + 180) % 360)}`]);
+  }
+
+  const classTag = contact.class !== '—'
+    ? `${contact.class}${contact.licenseCodes ? ` ${contact.licenseCodes}` : ''}`
+    : null;
+  const licTag = contact.licensed !== '—'
+    ? `Lic. ${contact.licensed}${contact.licensedYears != null
+      ? ` · ${contact.licensedYears} yr${contact.licensedYears === 1 ? '' : 's'}`
+      : ''}`
+    : null;
+
+  // QSL channels the operator actually accepts (null flags ⇒ unknown ⇒ hidden).
+  const qslBadges: string[] = [];
+  if (contact.qslLotw) qslBadges.push('LoTW');
+  if (contact.qslEqsl) qslBadges.push('eQSL');
+  if (contact.qslMail) qslBadges.push('Direct');
+  if (contact.qslManager) qslBadges.push(`via ${contact.qslManager}`);
+
   return (
     <div className="qrz-card">
       <div className="qrz-card-main">
@@ -117,9 +163,13 @@ export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, 
               {contact.flag} {contact.location}
             </div>
             <div className="qrz-tags">
-              <span className="qrz-tag">{contact.class}</span>
-              <span className="qrz-tag">Lic. {contact.licensed}</span>
-              <span className="qrz-tag">Age {contact.age}</span>
+              {classTag && <span className="qrz-tag">{classTag}</span>}
+              {licTag && <span className="qrz-tag">{licTag}</span>}
+              {dn && (
+                <span className="qrz-tag" title={`It is ${dn.label} at ${contact.callsign}`}>
+                  {dn.icon} {contact.local !== '—' ? contact.local : dn.label}
+                </span>
+              )}
             </div>
           </div>
           <div className="qrz-section-label">Location · Station</div>
@@ -131,6 +181,16 @@ export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, 
               </div>
             ))}
           </div>
+          {qslBadges.length > 0 && (
+            <div className="qrz-qsl-row">
+              <span className="k label-xs">QSL</span>
+              <span className="qrz-qsl-badges">
+                {qslBadges.map((b) => (
+                  <span key={b} className="qrz-qsl-badge">{b}</span>
+                ))}
+              </span>
+            </div>
+          )}
         </div>
         <div className="qrz-portrait qrz-portrait--large">
           <div className="qrz-portrait-bg" aria-hidden>
@@ -154,6 +214,64 @@ export function QrzCard({ contact, enriching, lookupError, onLogQso, canLogQso, 
           {enriching && <div className="qrz-scan" />}
         </div>
       </div>
+
+      {prop?.available && (
+        <div className="qrz-prop">
+          <div className="qrz-prop-head">
+            <span className="qrz-section-label">Propagation · you → {contact.callsign}</span>
+            <span className="qrz-prop-solar mono">
+              SFI {Math.round(prop.sfi)} · K {prop.kIndex} · MUF {prop.muf.toFixed(1)}
+            </span>
+          </div>
+          <div className="qrz-prop-body">
+            {prop.currentBand ? (
+              <div className={`qrz-prop-current ${propClass(prop.currentBand.status)}`}>
+                <div className="qrz-prop-pct">
+                  {prop.currentBand.reliability}
+                  <span className="qrz-prop-pct-sym">%</span>
+                </div>
+                <div className="qrz-prop-meta">
+                  <div className="qrz-prop-band">
+                    {prop.currentBand.band} · {prop.currentBand.status}
+                  </div>
+                  {prop.currentBand.snr && (
+                    <div className="qrz-prop-snr mono">SNR {prop.currentBand.snr}</div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="qrz-prop-current qrz-prop--closed">
+                <div className="qrz-prop-meta">
+                  <div className="qrz-prop-band">Tune to an HF band</div>
+                </div>
+              </div>
+            )}
+            <div className="qrz-prop-bands">
+              <div className="qrz-prop-bands-label label-xs">Best bands now</div>
+              <div className="qrz-prop-chips">
+                {(() => {
+                  const open = prop.bands.filter((b: PropagationBand) => b.reliability > 0);
+                  if (open.length === 0) {
+                    return <span className="qrz-prop-chip qrz-prop--closed">No bands open</span>;
+                  }
+                  return open.slice(0, 4).map((b: PropagationBand) => (
+                    <span
+                      key={b.band}
+                      className={`qrz-prop-chip ${propClass(b.status)}`}
+                      title={`${b.reliability}% reliability · ${b.snr}`}
+                    >
+                      {b.band} <b>{b.reliability}%</b>
+                    </span>
+                  ));
+                })()}
+              </div>
+            </div>
+          </div>
+          <div className="qrz-prop-foot label-xs">
+            {prop.model} · {prop.distanceKm.toLocaleString()} km path
+          </div>
+        </div>
+      )}
 
       <div className="qrz-footer">
         <span className="mono" style={{ color: 'var(--fg-2)', fontSize: 10 }}>

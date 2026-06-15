@@ -61,6 +61,7 @@ import { clampFinite } from '../util/number';
 export type MicUplinkBlockHandler = (samples: Float32Array, peak: number) => void;
 
 export type MicUplinkHandle = {
+  resume?: () => Promise<void>;
   stop: () => Promise<void>;
 };
 
@@ -105,6 +106,10 @@ export async function startMicUplink(
   };
 
   try {
+    const resume = async () => {
+      if (context.state === 'suspended') await context.resume();
+    };
+
     if (context.state === 'suspended') {
       try { await context.resume(); } catch { /* may resolve later */ }
     }
@@ -112,7 +117,8 @@ export async function startMicUplink(
     const source = context.createMediaStreamSource(stream);
     const node = new AudioWorkletNode(context, 'mic-uplink', {
       numberOfInputs: 1,
-      numberOfOutputs: 0,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
       channelCount: 1,
       channelCountMode: 'explicit',
       channelInterpretation: 'discrete',
@@ -124,13 +130,19 @@ export async function startMicUplink(
         onBlock(samples, peak);
       }
     };
+    const silentSink = context.createGain();
+    silentSink.gain.value = 0;
     source.connect(node);
+    node.connect(silentSink);
+    silentSink.connect(context.destination);
 
     return {
+      resume,
       stop: async () => {
         try { node.port.onmessage = null; } catch { /* ignore */ }
         try { source.disconnect(); } catch { /* ignore */ }
         try { node.disconnect(); } catch { /* ignore */ }
+        try { silentSink.disconnect(); } catch { /* ignore */ }
         cleanupStream();
         try { await context.close(); } catch { /* ignore */ }
       },

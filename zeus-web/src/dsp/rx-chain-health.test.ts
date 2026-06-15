@@ -105,7 +105,7 @@ describe('rx-chain-health', () => {
     expect(a.actionTone).toBe('optimize');
   });
 
-  it('does not recommend reducing RF gain when AGC is cutting but ADC headroom is clean', () => {
+  it('treats AGC cutting with clean ADC headroom as normal level normalization', () => {
     const a = analyzeRxChain({
       ...BASE,
       signalPk: -58,
@@ -115,10 +115,11 @@ describe('rx-chain-health', () => {
       agcGain: -32,
     });
 
-    expect(a.state).toBe('agc-stressed');
-    expect(a.detail).toContain('AGC is cutting deeply');
-    expect(a.recommendation).toBe('Narrow passband or lower AGC top; keep RF gain');
-    expect(a.actionTone).toBe('optimize');
+    expect(a.state).toBe('optimized');
+    expect(a.label).toBe('RX chain optimized');
+    expect(a.detail).toContain('normalizing');
+    expect(a.recommendation).toBe('Hold front-end settings');
+    expect(a.actionTone).toBe('neutral');
   });
 
   it('keeps RF headroom advice when AGC cutting happens near ADC limits', () => {

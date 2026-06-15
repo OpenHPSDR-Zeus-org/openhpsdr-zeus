@@ -66,7 +66,6 @@ public class TxAudioIngestTests
         public int TxOutputSamples => BlockSize;
         public int ProcessedBlocks { get; private set; }
         public float[]? LastMicBlock { get; private set; }
-
         public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved)
         {
             if (micMono.Length != BlockSize) throw new ArgumentException("mic length");
@@ -267,6 +266,22 @@ public class TxAudioIngestTests
 
         var payload = BuildMicPcmPayload(_ => 0.5f);
         ingest.OnMicPcmBytesFromMic(payload);
+        Assert.Equal(MicBlockSamples, ingest.TotalMicSamples);
+    }
+
+    [Fact]
+    public void FromBrowserMic_SuppressesNativeMicWithinHysteresisWindow()
+    {
+        var engine = new StubEngine();
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytesFromBrowserMic(payload);
+        ingest.OnMicPcmBytesFromMic(payload);
+
         Assert.Equal(MicBlockSamples, ingest.TotalMicSamples);
     }
 

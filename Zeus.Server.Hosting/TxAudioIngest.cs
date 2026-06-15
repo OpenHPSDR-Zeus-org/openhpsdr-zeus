@@ -117,9 +117,14 @@ public sealed class TxAudioIngest : IDisposable
     private const int TciHysteresisMs = 500;
     private long _lastTciTickMs;
     // WAV-playback-source recency: set on every OnMicPcmBytesFromWav call so a
-    // concurrent native-mic frame within TciHysteresisMs is suppressed — the
+    // concurrent native-mic frame within TciHysteresisMs is suppressed -- the
     // recording replaces the live mic on the air, they never mix.
     private long _lastWavTickMs;
+    // Browser/mobile mic recency: desktop mode has NativeMicCapture running
+    // continuously, so remote WebSocket mic frames must temporarily own the
+    // "live mic" source. Otherwise mobile PTT mixes phone audio with desktop
+    // capture silence and feeds TXA at roughly 2x realtime.
+    private long _lastBrowserMicTickMs;
 
     /// <summary>
     /// True when a TCI client is the authoritative source of TX audio right now
@@ -182,7 +187,7 @@ public sealed class TxAudioIngest : IDisposable
         _preKeyOpenAtTicks = preKeyOpenAtTicks ?? (static () => 0L);
         _hub = hub;
         _log = log;
-        _handler = OnMicPcmBytesFromMic;
+        _handler = OnMicPcmBytesFromBrowserMic;
         _hub.MicPcmReceived += _handler;
     }
 
@@ -236,20 +241,40 @@ public sealed class TxAudioIngest : IDisposable
     }
 
     /// <summary>
-    /// Source-tagged entry point for the local mic path (browser
-    /// <c>getUserMedia</c> via <see cref="StreamingHub.MicPcmReceived"/>, or
-    /// <see cref="NativeMicCapture"/> in desktop mode). Drops the block
-    /// silently if TCI fed within the last <see cref="TciHysteresisMs"/>
-    /// milliseconds so a TCI source is never mixed with mic silence.
+    /// Source-tagged entry point for browser/mobile mic audio from
+    /// <see cref="StreamingHub.MicPcmReceived"/>. Browser mic is still local
+    /// audio for the processing chain, but it owns the live-mic source while
+    /// fresh so desktop <see cref="NativeMicCapture"/> cannot double-feed TXA.
+    /// </summary>
+    internal void OnMicPcmBytesFromBrowserMic(ReadOnlyMemory<byte> f32lePayload)
+    {
+        long now = Environment.TickCount64;
+        Volatile.Write(ref _lastBrowserMicTickMs, now);
+        if (ShouldSuppressForAuthoritativeSource(now)) return;
+        OnMicPcmBytes(f32lePayload);
+    }
+
+    /// <summary>
+    /// Source-tagged entry point for the desktop native mic path. Drops the
+    /// block silently if TCI, WAV playback, or browser/mobile mic fed within
+    /// the last <see cref="TciHysteresisMs"/> milliseconds so sources never
+    /// mix or overrun the TX path.
     /// </summary>
     internal void OnMicPcmBytesFromMic(ReadOnlyMemory<byte> f32lePayload)
     {
         long now = Environment.TickCount64;
-        long lastTci = Volatile.Read(ref _lastTciTickMs);
-        if (lastTci != 0 && now - lastTci < TciHysteresisMs) return;
-        long lastWav = Volatile.Read(ref _lastWavTickMs);
-        if (lastWav != 0 && now - lastWav < TciHysteresisMs) return;
+        if (ShouldSuppressForAuthoritativeSource(now)) return;
+        long lastBrowserMic = Volatile.Read(ref _lastBrowserMicTickMs);
+        if (lastBrowserMic != 0 && now - lastBrowserMic < TciHysteresisMs) return;
         OnMicPcmBytes(f32lePayload);
+    }
+
+    private bool ShouldSuppressForAuthoritativeSource(long now)
+    {
+        long lastTci = Volatile.Read(ref _lastTciTickMs);
+        if (lastTci != 0 && now - lastTci < TciHysteresisMs) return true;
+        long lastWav = Volatile.Read(ref _lastWavTickMs);
+        return lastWav != 0 && now - lastWav < TciHysteresisMs;
     }
 
     /// <summary>Source-tagged entry point for WAV-recording playback to the

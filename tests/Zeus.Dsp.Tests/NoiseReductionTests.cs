@@ -69,34 +69,29 @@ public class NoiseReductionTests
     // Wdsp_Nb1_*) cover the same P/Invoke seams without the 192× iteration.
     //
     // Set ZEUS_RUN_WDSP_COMBINATORIAL=1 to opt into the full walk when
-    // bench-debugging an NR / NB / SBNR engine change.
+    // bench-debugging an NR / NB / SBNR / SPNR engine change.
     private static bool CombinatorialWdspOptedIn() =>
         string.Equals(Environment.GetEnvironmentVariable("ZEUS_RUN_WDSP_COMBINATORIAL"), "1",
                       StringComparison.Ordinal);
 
     // True only when the bundled libwdsp exports the SBNR (NR4) symbols.
-    // Phase 1 of issue #79 has not shipped yet — until it does, theories
-    // that try to actually arm SBNR Run=1 must Skip.IfNot on this so the
-    // suite stays green. Probes via a no-op call inside try/catch so we
-    // exercise exactly the same EntryPoint path the engine does.
+    // Probe the symbol table instead of calling SetRXASBNRRun: WDSP channel
+    // setters dereference RXA state and are only safe after OpenChannel.
     private static bool SbnrAvailable()
     {
-        if (!WdspAvailable()) return false;
-        try
-        {
-            // SetRXASBNRRun(channel=0, run=0) is a no-op even if libwdsp
-            // does export the symbol — no SBNR struct needs to exist for
-            // a Run=0 call. We're only probing for the entry point.
-            NativeMethods.SetRXASBNRRun(0, 0);
-            return true;
-        }
-        catch (EntryPointNotFoundException) { return false; }
-        catch { return true; /* any other throw means the symbol exists */ }
+        try { return WdspDspEngine.Nr4SbnrAvailable; }
+        catch { return false; }
+    }
+
+    private static bool SpnrAvailable()
+    {
+        try { return WdspDspEngine.Nr5SpnrAvailable; }
+        catch { return false; }
     }
 
     public static IEnumerable<object[]> AllCombos()
     {
-        foreach (var nr in new[] { NrMode.Off, NrMode.Anr, NrMode.Emnr, NrMode.Sbnr })
+        foreach (var nr in new[] { NrMode.Off, NrMode.Anr, NrMode.Emnr, NrMode.Sbnr, NrMode.Nr5 })
         foreach (var anf in new[] { false, true })
         foreach (var snb in new[] { false, true })
         foreach (var notches in new[] { false, true })
@@ -149,6 +144,8 @@ public class NoiseReductionTests
         Skip.IfNot(CombinatorialWdspOptedIn(), "Combinatorial WDSP walk is diagnostic-only — set ZEUS_RUN_WDSP_COMBINATORIAL=1 to run.");
         if (cfg.NrMode == NrMode.Sbnr)
             Skip.IfNot(SbnrAvailable(), "Requires libwdsp rebuild — Phase 1 of issue #79; bundled binaries do not export SBNR symbols.");
+        if (cfg.NrMode == NrMode.Nr5)
+            Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
 
         using var engine = new WdspDspEngine();
         int channel = engine.OpenChannel(192_000, 1024);
@@ -165,8 +162,8 @@ public class NoiseReductionTests
     [SkippableFact]
     public void Wdsp_TogglingNrModes_DoesNotLeaveBothEnabled()
     {
-        // NR button cycle is Off/NR1/NR2/NR4 — only one of ANR/EMNR/SBNR may
-        // be running at a time. Proven here by cycling through each mode; the
+        // NR button cycle is Off/NR1/NR2/NR4/NR5 — only one of ANR/EMNR/SBNR/SPNR
+        // may be running at a time. Proven here by cycling through each mode; the
         // engine must issue the counter-Run(0) before toggling the other on.
         // Off transitions are exercised even when SBNR symbols are missing so
         // we still cover the OFF-from-SBNR engine path (TrySetSbnrRun(0)).
@@ -182,6 +179,12 @@ public class NoiseReductionTests
             if (SbnrAvailable())
             {
                 engine.SetNoiseReduction(channel, new NrConfig(NrMode.Sbnr));
+                engine.SetNoiseReduction(channel, new NrConfig(NrMode.Anr));
+            }
+
+            if (SpnrAvailable())
+            {
+                engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
                 engine.SetNoiseReduction(channel, new NrConfig(NrMode.Anr));
             }
 
@@ -214,6 +217,254 @@ public class NoiseReductionTests
             engine.CloseChannel(channel);
         }
     }
+
+    [SkippableFact]
+    public void Wdsp_Nr5Mode_DoesNotCrashWhenSymbolsMissing()
+    {
+        Skip.IfNot(WdspAvailable(), "libwdsp not available");
+        using var engine = new WdspDspEngine();
+        int channel = engine.OpenChannel(192_000, 1024);
+        try
+        {
+            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
+            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Off));
+        }
+        finally
+        {
+            engine.CloseChannel(channel);
+        }
+    }
+
+    [SkippableFact]
+    public void Wdsp_Nr5Diagnostics_LearnAfterIqFlows()
+    {
+        Skip.IfNot(WdspAvailable(), "libwdsp not available");
+        Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
+
+        const int SampleRate = 192_000;
+        const int Width = 2048;
+        const int TotalComplex = 256 * 1024;
+
+        using var engine = new WdspDspEngine();
+        int channel = engine.OpenChannel(SampleRate, Width);
+        try
+        {
+            engine.SetMode(channel, RxMode.USB);
+            engine.SetFilter(channel, 150, 2850);
+            engine.SetAgcTop(channel, 80.0);
+            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
+
+            var iq = new double[TotalComplex * 2];
+            uint noise = 0x12345678u;
+            for (int n = 0; n < TotalComplex; n++)
+            {
+                noise = 1664525u * noise + 1013904223u;
+                double white = ((noise >> 8) / 16777216.0 - 0.5) * 0.012;
+                double weakPhase = 2.0 * Math.PI * 1_250.0 * n / SampleRate;
+                double strongPhase = 2.0 * Math.PI * 2_050.0 * n / SampleRate;
+                iq[2 * n] = white + 0.018 * Math.Cos(weakPhase) + 0.06 * Math.Cos(strongPhase);
+                iq[2 * n + 1] = white + 0.018 * Math.Sin(weakPhase) + 0.06 * Math.Sin(strongPhase);
+            }
+
+            for (int off = 0; off < TotalComplex; off += 126)
+            {
+                int take = Math.Min(126, TotalComplex - off);
+                engine.FeedIq(channel, iq.AsSpan(2 * off, 2 * take));
+            }
+
+            var audio = new float[2048];
+            Nr5SpnrDiagnosticsDto? diag = null;
+            for (int i = 0; i < 80; i++)
+            {
+                Thread.Sleep(20);
+                engine.ReadAudio(channel, audio);
+                diag = engine.TryGetNr5SpnrDiagnostics(channel);
+                if (diag is { LearnedFrames: > 55, InputRms: > 0.0, OutputRms: > 0.0 }) break;
+            }
+
+            Assert.NotNull(diag);
+            Assert.True(diag.Run, "NR5 should still be running");
+            Assert.True(diag.LearnedFrames > 55, $"expected learned NR5 frames, got {diag.LearnedFrames}");
+            Assert.True(diag.InputRms > 0.0, $"expected input RMS, got {diag.InputRms}");
+            Assert.True(diag.OutputRms > 0.0, $"expected output RMS, got {diag.OutputRms}");
+            Assert.Equal(3, diag.SchemaVersion);
+            Assert.InRange(diag.CoherencePeak, 0.0, 1.0);
+            Assert.InRange(diag.RidgePeak, 0.0, 1.0);
+            Assert.InRange(diag.SignalConfidence, 0.0, 1.0);
+            Assert.InRange(diag.AgcGate, 0.0, 1.0);
+            Assert.InRange(diag.MeanGain, 0.0, 1.0);
+            Assert.InRange(diag.MinGain, 0.0, 1.0);
+            Assert.True(diag.FloorReductionDb >= 0.0, $"expected non-negative floor push, got {diag.FloorReductionDb}");
+            Assert.True(diag.DynamicRangeDb >= 0.0, $"expected non-negative NR5 dynamic range, got {diag.DynamicRangeDb}");
+            if (WdspDspEngine.Nr5SpnrAdvancedDiagnosticsAvailable)
+            {
+                Assert.True(
+                    diag.CoherencePeak > 0.0 || diag.RidgePeak > 0.0,
+                    $"expected coherent/ridge weak-signal evidence, got coherence={diag.CoherencePeak} ridge={diag.RidgePeak}");
+                Assert.True(diag.DynamicRangeDb > 0.0, $"expected NR5 spectral dynamic range, got {diag.DynamicRangeDb}");
+            }
+            if (WdspDspEngine.Nr5SpnrDeepDiagnosticsAvailable)
+            {
+                Assert.True(diag.SignalConfidence > 0.0, $"expected NR5 signal confidence, got {diag.SignalConfidence}");
+                Assert.True(diag.AgcGate > 0.0, $"expected NR5 AGC signal gate, got {DescribeNr5(diag)}");
+            }
+            Assert.True(diag.AgcGain > 0.0, $"expected AGC gain, got {diag.AgcGain}");
+        }
+        finally
+        {
+            engine.CloseChannel(channel);
+        }
+    }
+
+    [SkippableFact]
+    public void Wdsp_Nr5DeepGate_DoesNotLiftNoiseOnlyFrames()
+    {
+        Skip.IfNot(WdspAvailable(), "libwdsp not available");
+        Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
+        Skip.IfNot(WdspDspEngine.Nr5SpnrDeepDiagnosticsAvailable, "Requires libwdsp rebuild with NR5 deep diagnostics exports.");
+
+        const int SampleRate = 192_000;
+        const int Width = 2048;
+        const int TotalComplex = 256 * 1024;
+
+        using var engine = new WdspDspEngine();
+        int channel = engine.OpenChannel(SampleRate, Width);
+        try
+        {
+            engine.SetMode(channel, RxMode.USB);
+            engine.SetFilter(channel, 150, 2850);
+            engine.SetAgcTop(channel, 80.0);
+            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
+
+            var iq = new double[TotalComplex * 2];
+            uint noise = 0x9e3779b9u;
+            for (int n = 0; n < TotalComplex; n++)
+            {
+                noise = 1664525u * noise + 1013904223u;
+                double i = ((noise >> 8) / 16777216.0 - 0.5) * 0.020;
+                noise = 1664525u * noise + 1013904223u;
+                double q = ((noise >> 8) / 16777216.0 - 0.5) * 0.020;
+                iq[2 * n] = i;
+                iq[2 * n + 1] = q;
+            }
+
+            for (int off = 0; off < TotalComplex; off += 126)
+            {
+                int take = Math.Min(126, TotalComplex - off);
+                engine.FeedIq(channel, iq.AsSpan(2 * off, 2 * take));
+            }
+
+            var audio = new float[2048];
+            Nr5SpnrDiagnosticsDto? diag = null;
+            for (int i = 0; i < 100; i++)
+            {
+                Thread.Sleep(20);
+                engine.ReadAudio(channel, audio);
+                diag = engine.TryGetNr5SpnrDiagnostics(channel);
+                if (diag is { LearnedFrames: > 20, InputRms: > 0.0, OutputRms: > 0.0 }) break;
+            }
+
+            Assert.NotNull(diag);
+            Assert.True(diag.LearnedFrames > 20, $"expected learned NR5 frames, got {diag.LearnedFrames}");
+            Assert.True(diag.FloorReductionDb >= 2.6, $"expected deep floor pressure on noise-only frames, got {diag.FloorReductionDb}");
+            Assert.True(diag.MeanGain <= 0.45, $"expected low mean gain on noise-only frames, got {DescribeNr5(diag)}");
+            Assert.InRange(diag.SignalConfidence, 0.0, 1.0);
+            Assert.InRange(diag.SignalConfidence, 0.0, 0.45);
+            Assert.InRange(diag.AgcGate, 0.0, 0.45);
+        }
+        finally
+        {
+            engine.CloseChannel(channel);
+        }
+    }
+
+    [SkippableFact]
+    public void Wdsp_Nr5DeepGate_SeparatesBuriedToneFromNoise()
+    {
+        Skip.IfNot(WdspAvailable(), "libwdsp not available");
+        Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
+        Skip.IfNot(WdspDspEngine.Nr5SpnrDeepDiagnosticsAvailable, "Requires libwdsp rebuild with NR5 deep diagnostics exports.");
+
+        const int SampleRate = 192_000;
+        const int Width = 2048;
+        const int WarmupComplex = 128 * 1024;
+        const int TotalComplex = 512 * 1024;
+
+        Nr5SpnrDiagnosticsDto RunFixture(bool includeTone)
+        {
+            using var engine = new WdspDspEngine();
+            int channel = engine.OpenChannel(SampleRate, Width);
+            try
+            {
+                engine.SetMode(channel, RxMode.USB);
+                engine.SetFilter(channel, 150, 2850);
+                engine.SetAgcTop(channel, 80.0);
+                engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
+
+                var iq = new double[TotalComplex * 2];
+                uint noise = 0x7f4a7c15u;
+                for (int n = 0; n < TotalComplex; n++)
+                {
+                    noise = 1664525u * noise + 1013904223u;
+                    double i = ((noise >> 8) / 16777216.0 - 0.5) * 0.020;
+                    noise = 1664525u * noise + 1013904223u;
+                    double q = ((noise >> 8) / 16777216.0 - 0.5) * 0.020;
+                    if (includeTone && n >= WarmupComplex)
+                    {
+                        double phase = 2.0 * Math.PI * 1_500.0 * (n - WarmupComplex) / SampleRate;
+                        i += 0.016 * Math.Cos(phase);
+                        q += 0.016 * Math.Sin(phase);
+                    }
+
+                    iq[2 * n] = i;
+                    iq[2 * n + 1] = q;
+                }
+
+                for (int off = 0; off < TotalComplex; off += 126)
+                {
+                    int take = Math.Min(126, TotalComplex - off);
+                    engine.FeedIq(channel, iq.AsSpan(2 * off, 2 * take));
+                }
+
+                var audio = new float[2048];
+                Nr5SpnrDiagnosticsDto? diag = null;
+                for (int i = 0; i < 160; i++)
+                {
+                    Thread.Sleep(20);
+                    engine.ReadAudio(channel, audio);
+                    diag = engine.TryGetNr5SpnrDiagnostics(channel);
+                    if (diag is { LearnedFrames: > 100, InputRms: > 0.0, OutputRms: > 0.0 }) break;
+                }
+
+                Assert.NotNull(diag);
+                return diag;
+            }
+            finally
+            {
+                engine.CloseChannel(channel);
+            }
+        }
+
+        var noiseOnly = RunFixture(includeTone: false);
+        var buriedTone = RunFixture(includeTone: true);
+
+        Assert.True(
+            buriedTone.SignalConfidence > noiseOnly.SignalConfidence + 0.001,
+            $"expected buried tone confidence above noise-only confidence; tone={DescribeNr5(buriedTone)}, noise={DescribeNr5(noiseOnly)}");
+        Assert.True(
+            buriedTone.AgcGate > noiseOnly.AgcGate,
+            $"expected buried tone AGC gate above noise-only gate; tone={DescribeNr5(buriedTone)}, noise={DescribeNr5(noiseOnly)}");
+        Assert.True(
+            buriedTone.MeanGain > noiseOnly.MeanGain,
+            $"expected preserved signal bins to lift mean gain above noise-only; tone={DescribeNr5(buriedTone)}, noise={DescribeNr5(noiseOnly)}");
+    }
+
+    private static string DescribeNr5(Nr5SpnrDiagnosticsDto diag) =>
+        $"learned={diag.LearnedFrames} conf={diag.SignalConfidence:F3} gate={diag.AgcGate:F3} " +
+        $"presence={diag.PresencePeak:F3} salience={diag.SaliencePeak:F3} " +
+        $"coherence={diag.CoherencePeak:F3} ridge={diag.RidgePeak:F3} " +
+        $"meanGain={diag.MeanGain:F3} minGain={diag.MinGain:F3} " +
+        $"floor={diag.FloorReductionDb:F1}dB dr={diag.DynamicRangeDb:F1}dB";
 
     // REST contract round-trip. The server registers a JsonStringEnumConverter
     // in Program.cs so NrMode/NbMode go on the wire as "Anr"/"Nb1" etc.; this
@@ -264,6 +515,21 @@ public class NoiseReductionTests
 
         Assert.NotNull(back);
         Assert.Equal(state.Nr, back!.Nr);
+    }
+
+    [Fact]
+    public void NrSetRequest_JsonRoundTrip_PreservesNr5()
+    {
+        var opts = new JsonSerializerOptions();
+        opts.Converters.Add(new JsonStringEnumConverter());
+
+        var req = new NrSetRequest(new NrConfig(NrMode: NrMode.Nr5));
+        string json = JsonSerializer.Serialize(req, opts);
+        var back = JsonSerializer.Deserialize<NrSetRequest>(json, opts);
+
+        Assert.NotNull(back);
+        Assert.Equal(NrMode.Nr5, back!.Nr.NrMode);
+        Assert.Contains("\"Nr5\"", json);
     }
 
     // NB1/NB2 lifecycle across a full toggle cycle. Proves: (1) create_anbEXT /

@@ -133,6 +133,17 @@ export function spotAgeSeconds(spot: ActivationSpotDto, nowMs: number = Date.now
   return Math.max(0, Math.round((nowMs - t) / 1000));
 }
 
+/** True if the activator is on the operator's watchlist (entries are upper-cased). */
+export function isWatchedCall(activator: string, watchlist: readonly string[]): boolean {
+  if (watchlist.length === 0) return false;
+  return watchlist.includes(activator.trim().toUpperCase());
+}
+
+/** True if the activator already appears in the local logbook (worked-before). */
+export function spotIsWorked(spot: ActivationSpotDto, workedCalls: ReadonlySet<string>): boolean {
+  return workedCalls.has(spot.activator.trim().toUpperCase());
+}
+
 /** Quick text/source view filter (panel chips + search box). */
 export function spotMatchesFilters(
   spot: ActivationSpotDto,
@@ -159,15 +170,18 @@ export function applySpotSettingsFilters(
   spots: ActivationSpotDto[],
   settings: SpotsSettings,
   nowMs: number = Date.now(),
+  workedCalls?: ReadonlySet<string>,
 ): ActivationSpotDto[] {
   // Compare case-insensitively so a hand-crafted POST ('20M' vs '20m') still
   // matches the canonical lowercase band keys / uppercase mode-group keys.
   const bands = settings.bands.map((b) => b.toUpperCase());
   const modes = settings.modes.map((m) => m.toUpperCase());
   const maxAgeSecs = settings.maxAgeMinutes > 0 ? settings.maxAgeMinutes * 60 : 0;
+  const hideWorked = settings.hideWorked && workedCalls !== undefined && workedCalls.size > 0;
 
   let out = spots.filter((s) => {
     if (settings.hideQrt && spotIsQrt(s)) return false;
+    if (hideWorked && spotIsWorked(s, workedCalls)) return false;
     if (bands.length > 0) {
       const b = freqHzToBand(s.freqHz);
       if (b === null || !bands.includes(b.toUpperCase())) return false;
@@ -193,6 +207,107 @@ export function applySpotSettingsFilters(
   return out;
 }
 
+// --- Watch alerts -----------------------------------------------------------
+// Keys of watched spots we've already alerted on, deduped by activator +
+// kHz-rounded frequency so a re-post on the same frequency doesn't re-fire,
+// but a move to a new band does. Keys that age out of the feed are pruned so a
+// later re-appearance alerts again. Module-level (survives store churn).
+const alertedSpotKeys = new Set<string>();
+
+function watchAlertKey(s: ActivationSpotDto): string {
+  return `${s.activator.toUpperCase()}|${Math.round(s.freqHz / 1000)}`;
+}
+
+/** Ask the browser for notification permission (idempotent, best-effort). Call
+ *  this from a user gesture — e.g. when the operator enables alerts. */
+export async function requestSpotNotificationPermission(): Promise<boolean> {
+  try {
+    if (typeof Notification === 'undefined') return false;
+    if (Notification.permission === 'granted') return true;
+    if (Notification.permission === 'denied') return false;
+    return (await Notification.requestPermission()) === 'granted';
+  } catch {
+    return false;
+  }
+}
+
+let alertAudioCtx: AudioContext | null = null;
+
+/** A short two-tone chirp via WebAudio — no asset dependency. Fails silently if
+ *  the AudioContext is unavailable or suspended (e.g. no prior user gesture). */
+function playWatchBeep(): void {
+  try {
+    const Ctor =
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext }).AudioContext ??
+      (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!Ctor) return;
+    alertAudioCtx ??= new Ctor();
+    const ctx = alertAudioCtx;
+    const now = ctx.currentTime;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.18, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.35);
+    gain.connect(ctx.destination);
+    const osc = ctx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, now);
+    osc.frequency.setValueAtTime(1320, now + 0.12);
+    osc.connect(gain);
+    osc.start(now);
+    osc.stop(now + 0.36);
+  } catch {
+    /* audio blocked — silent */
+  }
+}
+
+/** Fire desktop + sound alerts for any freshly-spotted watchlist activators.
+ *  Respects hideQrt and maxAge so stale / closing spots don't nag. */
+function processWatchAlerts(spots: ActivationSpotDto[], settings: SpotsSettings, nowMs: number): void {
+  if (!settings.alertsEnabled || settings.watchlist.length === 0) return;
+  const watch = new Set(settings.watchlist); // already upper-cased
+  const maxAgeSecs = settings.maxAgeMinutes > 0 ? settings.maxAgeMinutes * 60 : 0;
+
+  const currentKeys = new Set<string>();
+  const fresh: ActivationSpotDto[] = [];
+  for (const s of spots) {
+    if (!watch.has(s.activator.toUpperCase())) continue;
+    if (settings.hideQrt && spotIsQrt(s)) continue;
+    if (maxAgeSecs > 0) {
+      const age = spotAgeSeconds(s, nowMs);
+      if (age !== null && age > maxAgeSecs) continue;
+    }
+    const k = watchAlertKey(s);
+    currentKeys.add(k);
+    if (!alertedSpotKeys.has(k)) fresh.push(s);
+  }
+
+  // Prune keys no longer present so a future re-spot re-alerts.
+  for (const k of [...alertedSpotKeys]) if (!currentKeys.has(k)) alertedSpotKeys.delete(k);
+
+  if (fresh.length === 0) return;
+  for (const s of fresh) alertedSpotKeys.add(watchAlertKey(s));
+
+  // One notification summarising the batch (avoids a popup storm), then the cue.
+  try {
+    if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+      const lead = fresh[0]!;
+      const title =
+        fresh.length === 1
+          ? `★ ${lead.activator} spotted`
+          : `★ ${fresh.length} watched calls spotted`;
+      const body =
+        fresh.length === 1
+          ? `${(lead.freqHz / 1_000_000).toFixed(3)} MHz ${lead.mode || ''}${lead.reference ? ` · ${lead.reference}` : ''}`.trim()
+          : fresh.map((s) => s.activator).join(', ');
+      new Notification(title, { body, tag: 'zeus-spot-watch' });
+    }
+  } catch {
+    /* notifications unavailable — sound still plays */
+  }
+  if (settings.alertSound) playWatchBeep();
+}
+
 export const useSpotsStore = create<SpotsState>()((set, get) => ({
   spots: [],
   loading: false,
@@ -212,7 +327,10 @@ export const useSpotsStore = create<SpotsState>()((set, get) => ({
     set({ loading: true });
     try {
       const spots = await fetchActivationSpots();
-      set({ spots, error: null, loading: false, lastUpdated: Date.now() });
+      const now = Date.now();
+      set({ spots, error: null, loading: false, lastUpdated: now });
+      // Raise watch alerts for any freshly-spotted watchlist calls.
+      processWatchAlerts(spots, get().settings, now);
     } catch (err) {
       set({
         error: err instanceof Error ? err.message : 'Failed to load spots',

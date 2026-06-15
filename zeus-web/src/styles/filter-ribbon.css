@@ -175,21 +175,21 @@
   background: transparent;
 }
 
-/* Live passband-width readout, click-to-edit. Floats at the vertical middle of
-   the mini-pan, horizontally centred over the passband (left set inline) — the
-   focal BW number. Compact mono pill, neutral chip family (no new palette). */
+/* Live passband-width readout, click-to-edit. Sits in the mini-pan's reserved
+   top callout band, horizontally centred over the passband (left set inline),
+   so it aligns with LOW CUT / HIGH CUT without covering the spectrum trace. */
 .filter-minipan-width-pill,
 .filter-minipan-width-input {
   position: absolute;
-  top: 50%;
+  top: 3px;
   left: 50%;
-  transform: translate(-50%, -50%);
-  font-size: 12.5px;
+  transform: translateX(-50%);
+  font-size: 10.5px;
   font-weight: 700;
   letter-spacing: 0;
   font-variant-numeric: tabular-nums;
-  line-height: 1;
-  padding: 4px 9px;
+  line-height: 1.1;
+  padding: 2px 7px;
   border-radius: var(--r-sm, 3px);
   color: var(--fg-0, #edeef1);
   background:
@@ -222,10 +222,10 @@
     0 0 0 1px rgba(0, 0, 0, 0.55),
     0 0 22px color-mix(in srgb, var(--accent-bright, #4ea6ff) 48%, transparent),
     inset 0 1px 0 rgba(255, 255, 255, 0.20);
-  transform: translate(-50%, -50%) scale(1.02);
+  transform: translateX(-50%) scale(1.02);
 }
 .filter-minipan-width-input {
-  width: 78px;
+  width: 64px;
   text-align: center;
   outline: none;
   border-color: var(--accent, #4a9eff);

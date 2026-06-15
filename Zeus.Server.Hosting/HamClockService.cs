@@ -82,6 +82,11 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         ?? $"https://github.com/accius/openhamclock/archive/refs/tags/{DefaultTag}.zip";
 
     private const int MaxLogLines = 400;
+    // HamClock persists most UI preferences in browser localStorage. Because
+    // localStorage is scoped by origin, including port, Zeus should keep the
+    // sidecar port stable across restarts whenever possible.
+    internal const int DefaultStablePort = 59950;
+    private const string PortOverrideEnvVar = "ZEUS_HAMCLOCK_PORT";
 
     // Single client for download + health-poll. GitHub codeload follows a
     // redirect to its asset CDN; HttpClient follows it by default.
@@ -152,6 +157,39 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         File.Exists(Path.Combine(dir, "dist", "index.html"));
 
     // -- Status ----------------------------------------------------------
+
+    /// <summary>
+    /// The TCP port the sidecar is currently listening on, or null when it is
+    /// not running. Used by <see cref="PropagationService"/> to reach the
+    /// HamClock REST API (solar + ITU-R P.533-14 propagation) on localhost.
+    /// </summary>
+    public int? RunningPort
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _proc is { HasExited: false } ? _port : null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The port the sidecar would normally bind: the <c>ZEUS_HAMCLOCK_PORT</c>
+    /// override when valid, otherwise <see cref="DefaultStablePort"/>. Used as a
+    /// best-effort fallback by <see cref="PropagationService"/> so propagation
+    /// works even when the sidecar was started outside this Zeus process — the
+    /// caller treats a failed localhost probe as "unavailable", so guessing the
+    /// port is harmless.
+    /// </summary>
+    public int ConfiguredPort
+    {
+        get
+        {
+            var raw = Environment.GetEnvironmentVariable(PortOverrideEnvVar);
+            return int.TryParse(raw, out var p) && p is > 0 and <= 65535 ? p : DefaultStablePort;
+        }
+    }
 
     public HamClockStatus Snapshot()
     {
@@ -285,15 +323,22 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             if (!await EnsureNodeAsync().ConfigureAwait(false))
                 throw new InvalidOperationException("Node.js is unavailable — reinstall HamClock from Settings.");
 
-            var port = FreeTcpPort();
+            var port = ResolvePortForStart(
+                Environment.GetEnvironmentVariable(PortOverrideEnvVar),
+                ReadEnvPort(),
+                IsTcpPortAvailable,
+                FreeTcpPort,
+                Append);
             Append($"Starting HamClock server on port {port}…");
 
             // HamClock's own server/config loads .env with precedence over
-            // process.env, and creates .env from .env.example on first run with
-            // a pinned PORT=3001. So passing PORT via the environment is not
-            // enough — we write the chosen port into .env. server.js binds
-            // app.listen(PORT, '0.0.0.0'), so HOST is moot; only PORT matters.
-            EnsureEnvPort(port);
+            // process.env, and creates .env from .env.example on first run.
+            // Passing PORT via the environment is not enough — write the
+            // chosen stable port into .env, and enable HamClock's server-side
+            // settings sync so preferences also persist in data/settings.json.
+            // server.js binds app.listen(PORT, '0.0.0.0'), so port availability
+            // must be checked against all IPv4 interfaces.
+            EnsureEnvSettings(port);
             // Covers installs that predate the frameguard patch (idempotent).
             PatchHelmetFrameguard();
 
@@ -696,10 +741,10 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     /// <summary>
     /// Ensure <c>.env</c> in the install dir pins HamClock's PORT to the one we
     /// chose (its config gives .env precedence over process.env). Seeds from
-    /// .env.example if .env doesn't exist yet, then upserts the PORT and
-    /// AUTO_UPDATE_ENABLED keys, preserving every other line.
+    /// .env.example if .env doesn't exist yet, then upserts the Zeus-managed
+    /// keys, preserving every other line.
     /// </summary>
-    private static void EnsureEnvPort(int port)
+    private static void EnsureEnvSettings(int port)
     {
         var envPath = Path.Combine(InstallDir, ".env");
         string content;
@@ -710,9 +755,77 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             var example = Path.Combine(InstallDir, ".env.example");
             content = File.Exists(example) ? File.ReadAllText(example) : string.Empty;
         }
+        content = BuildEnvContent(content, port);
+        File.WriteAllText(envPath, content);
+    }
+
+    internal static string BuildEnvContent(string content, int port)
+    {
         content = UpsertEnvKey(content, "PORT", port.ToString());
         content = UpsertEnvKey(content, "AUTO_UPDATE_ENABLED", "false");
-        File.WriteAllText(envPath, content);
+        content = UpsertEnvKey(content, "SETTINGS_SYNC", "true");
+        return content;
+    }
+
+    private static int? ReadEnvPort()
+    {
+        var envPath = Path.Combine(InstallDir, ".env");
+        if (!File.Exists(envPath)) return null;
+        return ReadEnvPortFromContent(File.ReadAllText(envPath));
+    }
+
+    internal static int? ReadEnvPortFromContent(string content)
+    {
+        foreach (var rawLine in content.Replace("\r\n", "\n").Split('\n'))
+        {
+            var line = rawLine.TrimStart();
+            if (line.StartsWith('#')) continue;
+            if (!line.StartsWith("PORT=", StringComparison.Ordinal)) continue;
+            var value = line["PORT=".Length..].Trim().Trim('"', '\'');
+            return TryParsePort(value, out var port) ? port : null;
+        }
+        return null;
+    }
+
+    internal static int ResolvePortForStart(
+        string? overridePort,
+        int? savedPort,
+        Func<int, bool> isAvailable,
+        Func<int> freePort,
+        Action<string>? note = null)
+    {
+        if (!string.IsNullOrWhiteSpace(overridePort))
+        {
+            if (TryParsePort(overridePort, out var configured))
+            {
+                if (isAvailable(configured)) return configured;
+                note?.Invoke($"{PortOverrideEnvVar}={configured} is unavailable; falling back.");
+            }
+            else
+            {
+                note?.Invoke($"{PortOverrideEnvVar} is not a valid TCP port; falling back.");
+            }
+        }
+
+        if (savedPort is int saved)
+        {
+            if (isAvailable(saved)) return saved;
+            note?.Invoke($"Saved HamClock port {saved} is unavailable; selecting another port.");
+        }
+
+        if (isAvailable(DefaultStablePort)) return DefaultStablePort;
+
+        var fallback = freePort();
+        note?.Invoke($"Default HamClock port {DefaultStablePort} is unavailable; using {fallback}.");
+        return fallback;
+    }
+
+    internal static bool TryParsePort(string? raw, out int port)
+    {
+        if (int.TryParse(raw, out port) && port is > 0 and <= 65535)
+            return true;
+        port = 0;
+        return false;
     }
 
     /// <summary>
@@ -767,9 +880,24 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         return string.Join("\n", lines);
     }
 
+    private static bool IsTcpPortAvailable(int port)
+    {
+        try
+        {
+            using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            socket.ExclusiveAddressUse = true;
+            socket.Bind(new IPEndPoint(IPAddress.Any, port));
+            return true;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
+    }
+
     private static int FreeTcpPort()
     {
-        var l = new TcpListener(IPAddress.Loopback, 0);
+        var l = new TcpListener(IPAddress.Any, 0);
         l.Start();
         var port = ((IPEndPoint)l.LocalEndpoint).Port;
         l.Stop();

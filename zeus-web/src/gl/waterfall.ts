@@ -169,7 +169,11 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   const uBgAlpha = gl.getUniformLocation(drawProg, 'uBgAlpha');
   const uViewOffsetUv = gl.getUniformLocation(drawProg, 'uViewOffsetUv');
   const uSeedDbDraw = gl.getUniformLocation(drawProg, 'uSeedDb');
+  const uPopActive = gl.getUniformLocation(drawProg, 'uPopActive');
+  const uPopIntensity = gl.getUniformLocation(drawProg, 'uPopIntensity');
   let bgAlpha = 1;
+  let popActive = false;
+  let popIntensity = 0;
 
   const remapProg = buildProgram(gl, WF_VS, WF_REMAP_FS);
   const uRemapSrc = gl.getUniformLocation(remapProg, 'uSrc');
@@ -382,9 +386,9 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
     setTransparent(transparent) {
       bgAlpha = transparent ? 0 : 1;
     },
-    setPopMode() {
-      // POP is expressed through the renderer LUT; the shader remains the
-      // portable baseline waterfall program.
+    setPopMode(active, intensity = active ? 1 : 0) {
+      popActive = active;
+      popIntensity = Number.isFinite(intensity) ? Math.max(0, Math.min(1, intensity)) : 0;
     },
     clearHistory() {
       if (texWidth > 0) resetTextures(texWidth);
@@ -425,6 +429,8 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
       gl.uniform1f(uBgAlpha, bgAlpha);
       gl.uniform1f(uViewOffsetUv, viewOffsetUv);
       gl.uniform1f(uSeedDbDraw, SEED_DB);
+      gl.uniform1f(uPopActive, popActive ? 1 : 0);
+      gl.uniform1f(uPopIntensity, popIntensity);
       gl.bindVertexArray(vao);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
       gl.bindVertexArray(null);

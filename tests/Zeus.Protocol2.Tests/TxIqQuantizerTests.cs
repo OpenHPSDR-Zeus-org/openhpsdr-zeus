@@ -47,4 +47,29 @@ public class TxIqQuantizerTests
         Assert.Null(diag.LastRateTimestampUtc);
         Assert.False(diag.SenderRunning);
     }
+
+    [Fact]
+    public void SendTxIq_CapsQueuedPacketsToRealtimeWindow()
+    {
+        var client = new Protocol2Client(NullLogger<Protocol2Client>.Instance);
+        using var sock = new System.Net.Sockets.Socket(
+            System.Net.Sockets.AddressFamily.InterNetwork,
+            System.Net.Sockets.SocketType.Dgram,
+            System.Net.Sockets.ProtocolType.Udp);
+        typeof(Protocol2Client)
+            .GetField("_sock", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(client, sock);
+        typeof(Protocol2Client)
+            .GetField("_rxTask", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(client, Task.CompletedTask);
+        var iq = new float[240 * 2 * 40];
+        Array.Fill(iq, 0.1f);
+
+        client.SendTxIq(iq);
+        var diag = client.TxIqDiagnosticsSnapshot();
+
+        Assert.Equal(40, diag.PacketsQueued);
+        Assert.Equal(32, diag.QueuedPackets);
+        Assert.Equal(40u, diag.NextSequence);
+    }
 }

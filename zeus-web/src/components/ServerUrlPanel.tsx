@@ -11,6 +11,7 @@ import {
   isCapacitorRuntime,
   setServerBaseUrl,
 } from '../serverUrl';
+import { useCapabilitiesStore } from '../state/capabilities-store';
 
 // Settings tab: lets the operator point a Capacitor / standalone build at a
 // specific Zeus.Server on their LAN (e.g. http://192.168.1.23:6060). Browser
@@ -22,12 +23,22 @@ export function ServerUrlPanel() {
   const [touched, setTouched] = useState(false);
   const [savedAt, setSavedAt] = useState<number | null>(null);
   const isCapacitor = isCapacitorRuntime();
+  const capabilities = useCapabilitiesStore((s) => s.capabilities);
+  const capabilitiesLoaded = useCapabilitiesStore((s) => s.loaded);
+  const capabilitiesInflight = useCapabilitiesStore((s) => s.inflight);
+  const refreshCapabilities = useCapabilitiesStore((s) => s.refresh);
+  const mobileHttpsUrls = prioritizeCurrentHost(capabilities?.lanHttpsUrls ?? []);
 
   useEffect(() => {
     if (!savedAt) return;
     const t = setTimeout(() => setSavedAt(null), 2000);
     return () => clearTimeout(t);
   }, [savedAt]);
+
+  useEffect(() => {
+    if (capabilitiesLoaded || capabilitiesInflight) return;
+    void refreshCapabilities();
+  }, [capabilitiesLoaded, capabilitiesInflight, refreshCapabilities]);
 
   const trimmed = value.trim();
   const error = trimmed === '' ? null : validateUrl(trimmed);
@@ -79,6 +90,56 @@ export function ServerUrlPanel() {
         </code>
         .
       </p>
+
+      <div
+        style={{
+          marginTop: 16,
+          padding: 10,
+          fontSize: 11,
+          lineHeight: 1.5,
+          color: 'var(--fg-2)',
+          background: 'var(--bg-2)',
+          border: '1px solid var(--panel-border)',
+          borderRadius: 'var(--r-sm)',
+        }}
+      >
+        <div
+          style={{
+            marginBottom: 6,
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: '0.1em',
+            textTransform: 'uppercase',
+            color: 'var(--fg-1)',
+          }}
+        >
+          Mobile browser HTTPS
+        </div>
+        {mobileHttpsUrls.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            {mobileHttpsUrls.map((url) => (
+              <a
+                key={url}
+                href={url}
+                style={{
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  color: 'var(--accent)',
+                  wordBreak: 'break-all',
+                }}
+              >
+                {url}
+              </a>
+            ))}
+          </div>
+        ) : (
+          <span>
+            No HTTPS LAN address was reported by this Zeus.Server. Start Zeus
+            with LAN HTTPS enabled to use phone microphone access from a
+            browser.
+          </span>
+        )}
+      </div>
 
       <label style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 16 }}>
         <span
@@ -199,5 +260,19 @@ function validateUrl(raw: string): string | null {
     return null;
   } catch {
     return 'Invalid URL';
+  }
+}
+
+function prioritizeCurrentHost(urls: string[]): string[] {
+  const unique = Array.from(new Set(urls));
+  if (typeof window === 'undefined') return unique;
+
+  try {
+    const currentHost = window.location.hostname.toLowerCase();
+    const matching = unique.find((url) => new URL(url).hostname.toLowerCase() === currentHost);
+    if (!matching) return unique;
+    return [matching, ...unique.filter((url) => url !== matching)];
+  } catch {
+    return unique;
   }
 }

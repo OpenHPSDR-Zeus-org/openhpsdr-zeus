@@ -60,12 +60,13 @@ public enum ConnectionStatus { Disconnected, Connecting, Connected, Error }
 
 // Thetis NR-button state: Off = no spectral NR, Anr = NR1 (time-domain LMS),
 // Emnr = NR2 (Ephraim–Malah spectral), Sbnr = NR4 (libspecbleach spectral
-// bleaching — issue #79). NR3 (RNNR) is intentionally absent: training data
-// for the bundled RNNoise model is voice-corpus-only and underperforms on
-// HF noise. All four modes are mutually exclusive in WDSP, so the button
-// carries them in one enum. Byte order is fixed — appending only — because
-// persisted DspSettingsStore rows would mis-deserialize on a reorder.
-public enum NrMode : byte { Off, Anr, Emnr, Sbnr = 3 }
+// bleaching — issue #79), Nr5 = Zeus experimental signal-preserving NR.
+// NR3 (RNNR) is intentionally absent: training data for the bundled RNNoise
+// model is voice-corpus-only and underperforms on HF noise. All modes are
+// mutually exclusive in WDSP, so the button carries them in one enum. Byte
+// order is fixed — appending only — because persisted DspSettingsStore rows
+// would mis-deserialize on a reorder.
+public enum NrMode : byte { Off, Anr, Emnr, Sbnr = 3, Nr5 = 4 }
 
 // Pre-RXA time-domain blanker. Nb1 = ANB (noise blanker), Nb2 = NOB (noise gate).
 // Engine silently ignores this until the pre-RXA pipeline lands (task #4);
@@ -160,9 +161,12 @@ public sealed record SmartNrConditionDto(
     bool WdspNativeLoadable,
     bool WdspEmnrPost2Available,
     bool WdspNr4SbnrAvailable,
+    bool WdspNr5SpnrAvailable,
     string Nr4Readiness,
+    string Nr5Readiness,
     string RequestedNrMode,
     string EffectiveNrMode,
+    Nr5SpnrDiagnosticsDto? Nr5SpnrDiagnostics,
     string? ExpectedNrMode,
     bool? RuntimeAligned,
     string RuntimeAlignmentStatus,
@@ -170,6 +174,35 @@ public sealed record SmartNrConditionDto(
     SmartNrRxChainRuntimeDto RxChain,
     string DiagnosticRecommendation,
     DateTimeOffset GeneratedUtc);
+
+public sealed record Nr5SpnrDiagnosticsDto(
+    int SchemaVersion,
+    int ChannelId,
+    bool Run,
+    int Position,
+    int LearnedFrames,
+    double Aggressiveness,
+    bool AgcRun,
+    double TargetRms,
+    double MaxGain,
+    double AgcGain,
+    double AgcGainDb,
+    double PresencePeak,
+    double SaliencePeak,
+    double CoherencePeak,
+    double RidgePeak,
+    double MeanGain,
+    double MinGain,
+    double SuppressionDb,
+    double NoiseFloorDb,
+    double FloorReductionDb,
+    double DynamicRangeDb,
+    double SignalConfidence,
+    double AgcGate,
+    double InputRms,
+    double InputDbfs,
+    double OutputRms,
+    double OutputDbfs);
 
 public sealed record SmartNrRxChainRuntimeDto(
     int SchemaVersion,
@@ -421,14 +454,16 @@ public sealed record TxLevelingConfig(
     bool CompressorEnabled = false,
     double CompressorGainDb = 0.0);
 
-// A manual notch filter (MNF) — a band the operator paints onto the spectrum
-// to remove EMF/birdies from the RX audio via WDSP's notch database (nbp.c).
-// CenterHz/WidthHz are ABSOLUTE RF in Hz (WDSP repositions them as the radio
-// tunes, via RXANBPSetTuneFrequency). Active mirrors the per-notch enable flag.
-public sealed record NotchDto(double CenterHz, double WidthHz, bool Active = true);
+// A notch filter (MNF) — a band the operator paints, or Signal Intelligence
+// auto-detects, to remove EMF/birdies from the RX audio via WDSP's notch
+// database (nbp.c). CenterHz/WidthHz are ABSOLUTE RF in Hz (WDSP repositions
+// them as the radio tunes, via RXANBPSetTuneFrequency). Active mirrors the
+// per-notch enable flag. Source is null/manual for operator notches and "auto"
+// for live-detected EMF bars that the frontend may refresh independently.
+public sealed record NotchDto(double CenterHz, double WidthHz, bool Active = true, string? Source = null);
 
-// Full manual-notch list — the client posts the complete set on every change
-// (and on connect), so the server/engine never has to reconcile deltas.
+// Full notch list — the client posts the complete set on every change (and on
+// connect), so the server/engine never has to reconcile deltas.
 public sealed record NotchListRequest(IReadOnlyList<NotchDto> Notches);
 
 public sealed record StateDto(
@@ -729,12 +764,28 @@ public sealed record SpotsSettings(
     // --- per-source feed URLs (blank falls back to the built-in default) ---
     string PotaUrl = SpotsSettings.DefaultPotaUrl,
     string SotaUrl = SpotsSettings.DefaultSotaUrl,
-    string DxUrl = SpotsSettings.DefaultDxUrl)
+    string DxUrl = SpotsSettings.DefaultDxUrl,
+    // --- watchlist + alerts (frontend-consumed; persisted for cross-device) ---
+    // Callsigns to flag with a ★ and (optionally) raise a desktop/sound alert
+    // for when they appear in the feed. Empty = watch nothing.
+    IReadOnlyList<string>? Watchlist = null,
+    bool AlertsEnabled = false,
+    bool AlertSound = true,
+    // --- worked-before + QRZ enrichment (frontend-consumed) ---
+    // HideWorked drops spots whose activator is already in the local logbook;
+    // EnrichQrz lazily resolves operator names via the QRZ session (off by
+    // default to respect the XML-API quota).
+    bool HideWorked = false,
+    bool EnrichQrz = false,
+    // --- scan mode: seconds the VFO dwells on each spot before stepping ---
+    int ScanDwellSeconds = 8)
 {
     public const int MinPollSeconds = 30;
     public const int MaxPollSeconds = 600;
     public const int MaxAgeMinutesLimit = 1440;   // 24 h
     public const int MaxTuneOffsetHz = 5_000;
+    public const int MinScanDwellSeconds = 2;
+    public const int MaxScanDwellSeconds = 120;
 
     // Built-in source endpoints. POTA reports kHz, SOTA reports MHz, DXSummit
     // (the de-facto public JSON DX-cluster feed) reports kHz. Operators can
@@ -761,6 +812,8 @@ public sealed record SpotsSettings(
         PotaUrl = NormalizeUrl(PotaUrl, DefaultPotaUrl),
         SotaUrl = NormalizeUrl(SotaUrl, DefaultSotaUrl),
         DxUrl = NormalizeUrl(DxUrl, DefaultDxUrl),
+        Watchlist = NormalizeCalls(Watchlist),
+        ScanDwellSeconds = Math.Clamp(ScanDwellSeconds, MinScanDwellSeconds, MaxScanDwellSeconds),
     };
 
     // Blank or non-http(s) URLs fall back to the default so a cleared field
@@ -784,6 +837,22 @@ public sealed record SpotsSettings(
         {
             if (string.IsNullOrWhiteSpace(k)) continue;
             var t = k.Trim();
+            if (seen.Add(t)) outp.Add(t);
+        }
+        return outp.Count == 0 ? null : outp;
+    }
+
+    // Watchlist entries are callsigns: trim, upper-case (so matching against the
+    // upper-cased activator is exact), and de-duplicate. Blank list → null.
+    private static IReadOnlyList<string>? NormalizeCalls(IReadOnlyList<string>? calls)
+    {
+        if (calls is null || calls.Count == 0) return null;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var outp = new List<string>(calls.Count);
+        foreach (var c in calls)
+        {
+            if (string.IsNullOrWhiteSpace(c)) continue;
+            var t = c.Trim().ToUpperInvariant();
             if (seen.Add(t)) outp.Add(t);
         }
         return outp.Count == 0 ? null : outp;
@@ -1064,6 +1133,30 @@ public sealed record SaveNamedLayoutRequest(
 
 public sealed record SetActiveLayoutRequest(string RadioKey, string LayoutId);
 
+// Prefs-database (profile) selector. All Zeus settings/layouts/prefs persist in
+// a single LiteDB file resolved by PrefsDbPath.Get() at startup. The operator
+// can keep several named databases and pick which is active from the connect
+// screen; the choice lives in a pointer file (active-profile.txt) — NOT inside
+// any prefs DB — and applies on the next launch. The legacy zeus-prefs.db is the
+// always-present "Default" profile. RelativePath is under the Zeus data dir
+// ("zeus-prefs.db" or "profiles/<name>.db"). ModifiedUtcMs is Unix epoch ms.
+public sealed record PrefsDatabaseInfo(
+    string Name,
+    string RelativePath,
+    long SizeBytes,
+    long ModifiedUtcMs,
+    bool Active);
+
+public sealed record PrefsDatabasesDto(
+    string ActiveRelativePath,
+    IReadOnlyList<PrefsDatabaseInfo> Databases);
+
+public sealed record SetActiveDatabaseRequest(string RelativePath);
+
+public sealed record CreateDatabaseRequest(string Name);
+
+public sealed record ImportDatabaseRequest(string SourcePath, string? Name);
+
 // Per-band PA settings. Mirrors Thetis `PAProfile._gainValues[]` / piHPSDR
 // `band->pa_calibration` (single scalar dB per band — 9-point curve is a
 // Phase-4 follow-up). OcTx / OcRx are 7-bit Open-Collector masks driving the
@@ -1195,6 +1288,7 @@ public sealed record DisplayIntelligenceSettingsDto(
     string ProfileId,
     bool PopEnabled,
     bool SnapEnabled,
+    bool AutoNotchEnabled,
     bool AutoProfileEnabled,
     bool VisualAgcEnabled,
     bool ImpulseRejectEnabled,

@@ -243,12 +243,14 @@ describe('normalizeNrMode / normalizeNbMode', () => {
   it('accepts string forms', () => {
     expect(normalizeNrMode('Anr')).toBe('Anr');
     expect(normalizeNrMode('Emnr')).toBe('Emnr');
+    expect(normalizeNrMode('Nr5')).toBe('Nr5');
     expect(normalizeNbMode('Nb1')).toBe('Nb1');
   });
   it('maps numeric ordinals', () => {
     expect(normalizeNrMode(0)).toBe('Off');
     expect(normalizeNrMode(1)).toBe('Anr');
     expect(normalizeNrMode(2)).toBe('Emnr');
+    expect(normalizeNrMode(4)).toBe('Nr5');
     expect(normalizeNbMode(2)).toBe('Nb2');
   });
   it('falls back to Off on garbage', () => {
@@ -545,9 +547,40 @@ describe('POST helpers', () => {
           wdspNativeLoadable: true,
           wdspEmnrPost2Available: true,
           wdspNr4SbnrAvailable: false,
+          wdspNr5SpnrAvailable: false,
           nr4Readiness: 'missing-sbnr-exports',
+          nr5Readiness: 'missing-spnr-exports',
           requestedNrMode: 'Sbnr',
           effectiveNrMode: 'Off',
+          nr5SpnrDiagnostics: {
+            schemaVersion: 3,
+            channelId: 1,
+            run: true,
+            position: 1,
+            learnedFrames: 42,
+            aggressiveness: 0.62,
+            agcRun: true,
+            targetRms: 0.075,
+            maxGain: 12,
+            agcGain: 1.45,
+            agcGainDb: 3.2,
+            presencePeak: 0.72,
+            saliencePeak: 0.31,
+            coherencePeak: 0.68,
+            ridgePeak: 0.59,
+            meanGain: 0.64,
+            minGain: 0.22,
+            suppressionDb: -3.9,
+            noiseFloorDb: -118.5,
+            floorReductionDb: 0.8,
+            dynamicRangeDb: 24.6,
+            signalConfidence: 0.73,
+            agcGate: 0.82,
+            inputRms: 0.021,
+            inputDbfs: -33.6,
+            outputRms: 0.064,
+            outputDbfs: -23.9,
+          },
           channelId: 1,
           sampleRateHz: 192000,
           displayWidth: 2048,
@@ -588,7 +621,38 @@ describe('POST helpers', () => {
             wdspNativeLoadable: true,
             wdspEmnrPost2Available: true,
             wdspNr4SbnrAvailable: false,
+            wdspNr5SpnrAvailable: false,
             nr4Readiness: 'missing-sbnr-exports',
+            nr5Readiness: 'missing-spnr-exports',
+            nr5SpnrDiagnostics: {
+              schemaVersion: 3,
+              channelId: 1,
+              run: true,
+              position: 1,
+              learnedFrames: 42,
+              aggressiveness: 0.62,
+              agcRun: true,
+              targetRms: 0.075,
+              maxGain: 12,
+              agcGain: 1.45,
+              agcGainDb: 3.2,
+              presencePeak: 0.72,
+              saliencePeak: 0.31,
+              coherencePeak: 0.68,
+              ridgePeak: 0.59,
+              meanGain: 0.64,
+              minGain: 0.22,
+              suppressionDb: -3.9,
+              noiseFloorDb: -118.5,
+              floorReductionDb: 0.8,
+              dynamicRangeDb: 24.6,
+              signalConfidence: 0.73,
+              agcGate: 0.82,
+              inputRms: 0.021,
+              inputDbfs: -33.6,
+              outputRms: 0.064,
+              outputDbfs: -23.9,
+            },
             appliedNrMatchesRequested: true,
             appliedAgcMatchesRequested: true,
             appliedSquelchMatchesRequested: true,
@@ -791,14 +855,30 @@ describe('POST helpers', () => {
     expect(diag.dsp.wdspNativeLoadable).toBe(true);
     expect(diag.dsp.wdspEmnrPost2Available).toBe(true);
     expect(diag.dsp.wdspNr4SbnrAvailable).toBe(false);
+    expect(diag.dsp.wdspNr5SpnrAvailable).toBe(false);
     expect(diag.dsp.nr4Readiness).toBe('missing-sbnr-exports');
+    expect(diag.dsp.nr5Readiness).toBe('missing-spnr-exports');
     expect(diag.dsp.requestedNrMode).toBe('Sbnr');
     expect(diag.dsp.effectiveNrMode).toBe('Off');
+    expect(diag.dsp.nr5SpnrDiagnostics?.learnedFrames).toBe(42);
+    expect(diag.dsp.nr5SpnrDiagnostics?.agcGainDb).toBe(3.2);
+    expect(diag.dsp.nr5SpnrDiagnostics?.coherencePeak).toBe(0.68);
+    expect(diag.dsp.nr5SpnrDiagnostics?.dynamicRangeDb).toBe(24.6);
+    expect(diag.dsp.nr5SpnrDiagnostics?.signalConfidence).toBe(0.73);
+    expect(diag.dsp.nr5SpnrDiagnostics?.agcGate).toBe(0.82);
     expect(diag.dsp.rxDsp.status).toBe('nr-capability-limited');
     expect(diag.dsp.rxDsp.agcMode).toBe('Fast');
     expect(diag.dsp.rxDsp.effectiveAgcTopDb).toBe(62);
     expect(diag.dsp.rxDsp.effectiveNbpNotchesRun).toBe(true);
     expect(diag.dsp.rxDsp.activeManualNotchCount).toBe(1);
+    expect(diag.dsp.rxDsp.wdspNr5SpnrAvailable).toBe(false);
+    expect(diag.dsp.rxDsp.nr5Readiness).toBe('missing-spnr-exports');
+    expect(diag.dsp.rxDsp.nr5SpnrDiagnostics?.presencePeak).toBe(0.72);
+    expect(diag.dsp.rxDsp.nr5SpnrDiagnostics?.suppressionDb).toBe(-3.9);
+    expect(diag.dsp.rxDsp.nr5SpnrDiagnostics?.ridgePeak).toBe(0.59);
+    expect(diag.dsp.rxDsp.nr5SpnrDiagnostics?.floorReductionDb).toBe(0.8);
+    expect(diag.dsp.rxDsp.nr5SpnrDiagnostics?.signalConfidence).toBe(0.73);
+    expect(diag.dsp.rxDsp.nr5SpnrDiagnostics?.agcGate).toBe(0.82);
     expect(diag.dsp.rxDsp.activeFeatures).toContain('manual-notches');
     expect(diag.dsp.rxDsp.qualityReasons).toContain('nr-capability-limited');
     expect(diag.dsp.rxDsp.diagnosticRecommendation).toContain('NR2/EMNR');
@@ -960,7 +1040,7 @@ describe('POST helpers', () => {
       smartNrProfile: 'NR2',
       smartNrRecommendation: 'Keep RX headroom and use gentle NR2',
       smartNrRxChainLabel: 'AGC stressed',
-      smartNrRxChainRecommendation: 'Auto AGC lowering AGC top',
+      smartNrRxChainRecommendation: 'Auto AGC reducing AGC-T under ADC pressure',
       smartNrRxChainTone: 'optimize',
       smartNrRxChainScore: 68,
       maxSnrDb: 5.6,
@@ -983,7 +1063,7 @@ describe('POST helpers', () => {
     expect(scene.signalProfile).toBe('weak-sparse');
     expect(scene.smartNrProfile).toBe('NR2');
     expect(scene.smartNrRxChainLabel).toBe('AGC stressed');
-    expect(scene.smartNrRxChainRecommendation).toBe('Auto AGC lowering AGC top');
+    expect(scene.smartNrRxChainRecommendation).toBe('Auto AGC reducing AGC-T under ADC pressure');
     expect(scene.smartNrRxChainTone).toBe('optimize');
     expect(scene.smartNrRxChainScore).toBe(68);
     expect(scene.coherentSubthresholdSignal).toBe(true);
@@ -1023,9 +1103,40 @@ describe('POST helpers', () => {
       wdspNativeLoadable: true,
       wdspEmnrPost2Available: true,
       wdspNr4SbnrAvailable: false,
+      wdspNr5SpnrAvailable: false,
       nr4Readiness: 'missing-sbnr-exports',
+      nr5Readiness: 'missing-spnr-exports',
       requestedNrMode: 'Sbnr',
       effectiveNrMode: 'Off',
+      nr5SpnrDiagnostics: {
+        schemaVersion: 3,
+        channelId: 0,
+        run: true,
+        position: 1,
+        learnedFrames: 64,
+        aggressiveness: 0.62,
+        agcRun: true,
+        targetRms: 0.075,
+        maxGain: 12,
+        agcGain: 1.2,
+        agcGainDb: 1.6,
+        presencePeak: 0.44,
+        saliencePeak: 0.25,
+        coherencePeak: 0.51,
+        ridgePeak: 0.43,
+        meanGain: 0.71,
+        minGain: 0.28,
+        suppressionDb: -3,
+        noiseFloorDb: -121.2,
+        floorReductionDb: 0.6,
+        dynamicRangeDb: 18.9,
+        signalConfidence: 0.55,
+        agcGate: 0.61,
+        inputRms: 0.018,
+        inputDbfs: -34.9,
+        outputRms: 0.055,
+        outputDbfs: -25.2,
+      },
       expectedNrMode: 'Emnr',
       runtimeAligned: false,
       runtimeAlignmentStatus: 'mismatched',
@@ -1078,9 +1189,17 @@ describe('POST helpers', () => {
     expect(condition.maxSnrDb).toBe(7.1);
     expect(condition.coherentSubthresholdSignal).toBe(true);
     expect(condition.wdspNr4SbnrAvailable).toBe(false);
+    expect(condition.wdspNr5SpnrAvailable).toBe(false);
     expect(condition.nr4Readiness).toBe('missing-sbnr-exports');
+    expect(condition.nr5Readiness).toBe('missing-spnr-exports');
     expect(condition.requestedNrMode).toBe('Sbnr');
     expect(condition.effectiveNrMode).toBe('Off');
+    expect(condition.nr5SpnrDiagnostics?.learnedFrames).toBe(64);
+    expect(condition.nr5SpnrDiagnostics?.outputDbfs).toBe(-25.2);
+    expect(condition.nr5SpnrDiagnostics?.coherencePeak).toBe(0.51);
+    expect(condition.nr5SpnrDiagnostics?.dynamicRangeDb).toBe(18.9);
+    expect(condition.nr5SpnrDiagnostics?.signalConfidence).toBe(0.55);
+    expect(condition.nr5SpnrDiagnostics?.agcGate).toBe(0.61);
     expect(condition.expectedNrMode).toBe('Emnr');
     expect(condition.runtimeAligned).toBe(false);
     expect(condition.runtimeAlignmentStatus).toBe('mismatched');

@@ -77,6 +77,10 @@ export type QrzStoreState = {
   rememberedUsername: string;
   // Last lookup result, shown in QrzCard / used to render map target.
   lastLookup: QrzStation | null;
+  // Per-callsign cache of resolved stations (null = looked up, no result), used
+  // by bulk consumers like the Spots panel to show operator names without
+  // re-hitting the XML API for a call already seen this session.
+  nameCache: Record<string, QrzStation | null>;
   // Transient UI state for async ops.
   loginInFlight: boolean;
   lookupInFlight: boolean;
@@ -88,9 +92,18 @@ export type QrzStoreState = {
   login: (username: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
   lookup: (callsign: string) => Promise<QrzStation | null>;
+  // Cached, in-flight-deduped lookup for bulk callers. Returns immediately from
+  // cache when possible; only fires one network request per callsign. No-ops
+  // (returns null) when QRZ isn't connected, so it's safe to call optimistically.
+  lookupCached: (callsign: string) => Promise<QrzStation | null>;
   clearLookup: () => void;
   setApiKey: (apiKey: string | null) => Promise<void>;
 };
+
+// In-flight lookups, deduped by callsign. Module-level (not store state) so a
+// pending fetch doesn't trigger re-renders; only the resolved value lands in
+// nameCache, which is store state.
+const inFlightLookups = new Map<string, Promise<QrzStation | null>>();
 
 function applyStatus(status: QrzStatus): Partial<QrzStoreState> {
   return {
@@ -102,13 +115,14 @@ function applyStatus(status: QrzStatus): Partial<QrzStoreState> {
   };
 }
 
-export const useQrzStore = create<QrzStoreState>((set) => ({
+export const useQrzStore = create<QrzStoreState>((set, get) => ({
   connected: false,
   hasXmlSubscription: false,
   hasApiKey: false,
   home: null,
   rememberedUsername: readSavedUsername(),
   lastLookup: null,
+  nameCache: {},
   loginInFlight: false,
   lookupInFlight: false,
   loginError: null,
@@ -141,7 +155,8 @@ export const useQrzStore = create<QrzStoreState>((set) => ({
     try {
       await qrzLogout();
     } finally {
-      set({ connected: false, hasXmlSubscription: false, home: null, lastLookup: null, loginError: null, lookupError: null });
+      inFlightLookups.clear();
+      set({ connected: false, hasXmlSubscription: false, home: null, lastLookup: null, nameCache: {}, loginError: null, lookupError: null });
     }
   },
 
@@ -158,6 +173,40 @@ export const useQrzStore = create<QrzStoreState>((set) => ({
       set({ lookupInFlight: false, lookupError: msg });
       return null;
     }
+  },
+
+  lookupCached: async (callsign) => {
+    const key = callsign.trim().toUpperCase();
+    if (!key) return null;
+
+    // Already resolved this session (station or a definitive miss).
+    const cached = get().nameCache[key];
+    if (cached !== undefined) return cached;
+
+    // Coalesce concurrent requests for the same call.
+    const pending = inFlightLookups.get(key);
+    if (pending) return pending;
+
+    // No point hitting the API when there's no QRZ session — leave the cache
+    // untouched so it retries once the operator logs in.
+    if (!get().connected) return null;
+
+    const p = (async (): Promise<QrzStation | null> => {
+      try {
+        const station = await qrzLookup(key);
+        set((s) => ({ nameCache: { ...s.nameCache, [key]: station } }));
+        return station;
+      } catch {
+        // Cache the miss so a not-found / errored call isn't retried every
+        // render. clearLookup-on-logout (below) resets this for a new session.
+        set((s) => ({ nameCache: { ...s.nameCache, [key]: null } }));
+        return null;
+      } finally {
+        inFlightLookups.delete(key);
+      }
+    })();
+    inFlightLookups.set(key, p);
+    return p;
   },
 
   clearLookup: () => set({ lastLookup: null, lookupError: null }),

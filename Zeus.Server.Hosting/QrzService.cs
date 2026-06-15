@@ -246,7 +246,21 @@ public sealed class QrzService
             Dxcc: ParseInt(Get(el, "dxcc")),
             CqZone: ParseInt(Get(el, "cqzone")),
             ItuZone: ParseInt(Get(el, "ituzone")),
-            ImageUrl: Get(el, "image"));
+            ImageUrl: Get(el, "image"),
+            // Extended fields — QRZ returns these in the same <Callsign> element.
+            LicenseClass: NullIfEmpty(Get(el, "class")),
+            LicenseCodes: NullIfEmpty(Get(el, "codes")),
+            LicenseEffectiveDate: NullIfEmpty(Get(el, "efdate")),
+            LicenseExpiresDate: NullIfEmpty(Get(el, "expdate")),
+            Email: NullIfEmpty(Get(el, "email")),
+            AcceptsLotw: ParseQslFlag(Get(el, "lotw")),
+            AcceptsEqsl: ParseQslFlag(Get(el, "eqsl")),
+            AcceptsMailQsl: ParseQslFlag(Get(el, "mqsl")),
+            QslManager: NullIfEmpty(Get(el, "qslmgr")),
+            GmtOffset: ParseDouble(Get(el, "GMTOffset")),
+            TimeZone: NullIfEmpty(Get(el, "TimeZone")),
+            ObservesDst: ParseDstFlag(Get(el, "DST")),
+            Born: ParseInt(Get(el, "born")));
     }
 
     // Assumes _gate is held.
@@ -291,6 +305,26 @@ public sealed class QrzService
 
     private static int? ParseInt(string? s) =>
         int.TryParse(s, out var v) ? v : null;
+
+    private static string? NullIfEmpty(string? s) =>
+        string.IsNullOrWhiteSpace(s) ? null : s.Trim();
+
+    // QRZ QSL flags are "1" (accepts) / "0" (does not). Absent → unknown (null).
+    private static bool? ParseQslFlag(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        var t = s.Trim();
+        if (t == "1") return true;
+        if (t == "0") return false;
+        return null;
+    }
+
+    // QRZ <DST> is "Y"/"N".
+    private static bool? ParseDstFlag(string? s)
+    {
+        if (string.IsNullOrWhiteSpace(s)) return null;
+        return s.Trim().Equals("Y", StringComparison.OrdinalIgnoreCase);
+    }
 
     // QRZ occasionally returns microdegree-scaled coordinates (value × 1e6). If the raw
     // value is outside the valid range but would be valid when divided by 1e6, normalize.

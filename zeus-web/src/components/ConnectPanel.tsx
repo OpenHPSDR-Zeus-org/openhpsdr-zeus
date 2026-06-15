@@ -50,6 +50,12 @@ import {
   disconnectP2 as apiDisconnectP2,
   fetchRadios,
   fetchState,
+  listPrefsDatabases,
+  setActivePrefsDatabase,
+  createPrefsDatabase,
+  uploadPrefsDatabase,
+  restartApp,
+  type PrefsDatabaseInfo,
   type RadioInfoDto,
 } from '../api/client';
 import {
@@ -87,6 +93,217 @@ function sampleRateCeiling(protocol: ProtocolChoice, boardMaxRateHz: number): nu
 function highestAllowedSampleRate(maxHz: number): SampleRate {
   return [...SAMPLE_RATES].reverse().find((r) => r <= maxHz) ?? 48_000;
 }
+
+// Compact "12.3 KB" / "4.0 MB" for the prefs-database picker. 0 bytes (a
+// never-written Default) renders as "empty".
+function formatDbSize(bytes: number): string {
+  if (!bytes || bytes <= 0) return 'empty';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+// "never" for an unwritten Default, else a short local date.
+function formatDbSaved(modifiedUtcMs: number): string {
+  if (!modifiedUtcMs || modifiedUtcMs <= 0) return 'never';
+  return new Date(modifiedUtcMs).toLocaleDateString();
+}
+
+function prefsDbOptionLabel(db: PrefsDatabaseInfo): string {
+  const parts = [formatDbSize(db.sizeBytes), formatDbSaved(db.modifiedUtcMs)];
+  if (db.active) parts.push('ACTIVE');
+  return `${db.name} (${parts.join(' · ')})`;
+}
+
+// Compact prefs-database (profile) selector for the connect screen. Switching
+// applies on restart, so the change confirms, flips the server pointer, then
+// relaunches. New uses window.prompt for the name; Import opens a native file
+// dialog and uploads the chosen .db.
+function PrefsDatabaseRow() {
+  const [databases, setDatabases] = useState<PrefsDatabaseInfo[] | null>(null);
+  const [activeRel, setActiveRel] = useState<string>('');
+  const [busy, setBusy] = useState(false);
+  const [restarting, setRestarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const refresh = useCallback(async (signal?: AbortSignal) => {
+    try {
+      const dto = await listPrefsDatabases(signal);
+      setDatabases(dto.databases);
+      setActiveRel(dto.activeRelativePath);
+    } catch (e) {
+      if ((e as { name?: string })?.name === 'AbortError') return;
+      setError(e instanceof Error ? e.message : 'Failed to load databases');
+    }
+  }, []);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    void refresh(ctrl.signal);
+    return () => ctrl.abort();
+  }, [refresh]);
+
+  const onSwitch = useCallback(
+    async (relativePath: string) => {
+      if (relativePath === activeRel) return;
+      if (!window.confirm('Switch database and restart Zeus?')) return;
+      setError(null);
+      setBusy(true);
+      try {
+        await setActivePrefsDatabase(relativePath);
+        setRestarting(true);
+        await restartApp();
+      } catch (e) {
+        setRestarting(false);
+        setError(e instanceof Error ? e.message : 'Failed to switch database');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [activeRel],
+  );
+
+  const onNew = useCallback(async () => {
+    const name = window.prompt('New database name:');
+    if (name === null) return;
+    setError(null);
+    setBusy(true);
+    try {
+      const dto = await createPrefsDatabase(name.trim());
+      setDatabases(dto.databases);
+      setActiveRel(dto.activeRelativePath);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to create database');
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Open the native OS file dialog; the upload runs in onFileChosen once the
+  // operator picks a file.
+  const onImport = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
+
+  const onFileChosen = useCallback(
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      // Reset so re-picking the same file still fires onChange next time.
+      e.target.value = '';
+      if (!file) return;
+      setError(null);
+      setBusy(true);
+      try {
+        const dto = await uploadPrefsDatabase(file);
+        setDatabases(dto.databases);
+        setActiveRel(dto.activeRelativePath);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to import database');
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
+
+  const disabled = busy || restarting || databases === null;
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+        padding: '8px 14px',
+        borderBottom: '1px solid var(--panel-border)',
+        background: 'var(--bg-1)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span className="label-xs" style={{ color: 'var(--fg-2)', minWidth: 58 }}>
+          Database
+        </span>
+        <select
+          aria-label="Active prefs database"
+          value={activeRel}
+          disabled={disabled}
+          onChange={(e) => void onSwitch(e.target.value)}
+          style={{ ...prefsDbSelectStyle, flex: 1 }}
+        >
+          {databases === null && <option value="">Loading…</option>}
+          {(databases ?? []).map((db) => (
+            <option key={db.relativePath} value={db.relativePath}>
+              {prefsDbOptionLabel(db)}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          className="label-xs"
+          disabled={disabled}
+          onClick={() => void onNew()}
+          style={prefsDbButtonStyle}
+          title="Create a new database"
+        >
+          ＋ New
+        </button>
+        <button
+          type="button"
+          className="label-xs"
+          disabled={disabled}
+          onClick={() => void onImport()}
+          style={prefsDbButtonStyle}
+          title="Import an existing .db file"
+        >
+          Import
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".db"
+          onChange={(e) => void onFileChosen(e)}
+          style={{ display: 'none' }}
+          aria-hidden
+          tabIndex={-1}
+        />
+      </div>
+      {restarting && (
+        <span className="label-xs" style={{ color: 'var(--fg-3)' }}>
+          Restarting…
+        </span>
+      )}
+      {error && (
+        <span className="label-xs" style={{ color: 'var(--tx)' }}>
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+const prefsDbSelectStyle: React.CSSProperties = {
+  background: 'var(--bg-0)',
+  color: 'var(--fg-0)',
+  border: '1px solid var(--panel-border)',
+  borderRadius: 'var(--r-sm)',
+  padding: '4px 6px',
+  fontFamily: 'var(--font-mono)',
+  fontSize: 11,
+  outline: 'none',
+  minWidth: 0,
+};
+
+const prefsDbButtonStyle: React.CSSProperties = {
+  background: 'var(--bg-0)',
+  color: 'var(--fg-2)',
+  border: '1px solid var(--panel-border)',
+  borderRadius: 'var(--r-sm)',
+  padding: '4px 8px',
+  cursor: 'pointer',
+  whiteSpace: 'nowrap',
+};
 
 // Same set as the Settings RadioSelector, in the same order. Auto first so
 // the default Manual-mode connect behaviour is "let discovery decide".
@@ -528,6 +745,8 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
         </div>
       </div>
       <div style={{ height: 180 }} />
+
+      {!compact && <PrefsDatabaseRow />}
 
       <div
         style={{

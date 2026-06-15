@@ -10,12 +10,13 @@
 // option) any later version. See the LICENSE file at the root of this
 // repository for the full text, or https://www.gnu.org/licenses/.
 
-// Manual notch filters ("dynamically notch out EMF").
+// Manual and auto notch filters ("dynamically notch out EMF").
 //
-// A notch is an absolute-frequency band the operator paints onto the spectrum.
-// NotchOverlay masks the band out of the panadapter/waterfall and the backend
-// applies the same list to WDSP manual-notch filters so the interference is
-// removed from the audio too.
+// A notch is an absolute-frequency band the operator paints onto the spectrum
+// or Signal Intelligence detects as a persistent narrow EMF bar. NotchOverlay
+// masks the band out of the panadapter/waterfall and the backend applies the
+// same list to WDSP manual-notch filters so the interference is removed from
+// the audio too.
 //
 // Notches are absolute Hz (not display-relative), so they stay glued to the
 // interference across tuning. Persisted server-side; localStorage is only a
@@ -29,6 +30,7 @@ export type Notch = {
   id: string;
   centerHz: number;
   widthHz: number;
+  source?: 'manual' | 'auto';
 };
 
 function toWireNotches(notches: Notch[]) {
@@ -36,6 +38,7 @@ function toWireNotches(notches: Notch[]) {
     centerHz: n.centerHz,
     widthHz: n.widthHz,
     active: true,
+    source: n.source ?? 'manual',
   }));
 }
 
@@ -97,12 +100,13 @@ function normalizeNotches(raw: unknown, serverPayload: boolean): Notch[] {
   if (!Array.isArray(raw)) return [];
   const out: Notch[] = [];
   for (const item of raw) {
-    const row = item as { centerHz?: unknown; widthHz?: unknown; active?: unknown };
+    const row = item as { centerHz?: unknown; widthHz?: unknown; active?: unknown; source?: unknown };
     if (serverPayload && row.active === false) continue;
     const c = row.centerHz;
     const w = row.widthHz;
     if (typeof c === 'number' && typeof w === 'number' && Number.isFinite(c) && Number.isFinite(w)) {
-      out.push({ id: nextId(), centerHz: c, widthHz: Math.max(MIN_NOTCH_WIDTH_HZ, w) });
+      const source = row.source === 'auto' ? 'auto' : undefined;
+      out.push({ id: nextId(), centerHz: c, widthHz: Math.max(MIN_NOTCH_WIDTH_HZ, w), source });
     }
   }
   return out;
@@ -113,7 +117,7 @@ function persist(notches: Notch[]): void {
     if (typeof localStorage === 'undefined') return;
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify(notches.map((n) => ({ centerHz: n.centerHz, widthHz: n.widthHz }))),
+      JSON.stringify(notches.map((n) => ({ centerHz: n.centerHz, widthHz: n.widthHz, source: n.source }))),
     );
   } catch {
     // quota / private mode — in-memory state remains the source of truth.
@@ -131,6 +135,8 @@ export type NotchState = {
   updateNotch: (id: string, centerHz: number, widthHz: number) => void;
   removeNotch: (id: string) => void;
   clearAll: () => void;
+  replaceAutoNotches: (notches: Array<{ centerHz: number; widthHz: number }>) => void;
+  clearAutoNotches: () => void;
   setArmed: (v: boolean) => void;
   toggleArmed: () => void;
   setPending: (p: { centerHz: number; widthHz: number } | null) => void;
@@ -165,6 +171,28 @@ export const useNotchStore = create<NotchState>((set, get) => ({
   clearAll: () => {
     set({ notches: [] });
     persist([]);
+    pushToBackend();
+  },
+  replaceAutoNotches: (autoNotches) => {
+    const manual = get().notches.filter((n) => n.source !== 'auto');
+    const auto = autoNotches
+      .filter((n) => Number.isFinite(n.centerHz) && Number.isFinite(n.widthHz))
+      .map((n): Notch => ({
+        id: nextId(),
+        centerHz: n.centerHz,
+        widthHz: Math.max(MIN_NOTCH_WIDTH_HZ, n.widthHz),
+        source: 'auto',
+      }));
+    const notches = [...manual, ...auto];
+    set({ notches });
+    persist(notches);
+    pushToBackend();
+  },
+  clearAutoNotches: () => {
+    const notches = get().notches.filter((n) => n.source !== 'auto');
+    if (notches.length === get().notches.length) return;
+    set({ notches });
+    persist(notches);
     pushToBackend();
   },
   setArmed: (armed) => set({ armed, pending: armed ? get().pending : null }),

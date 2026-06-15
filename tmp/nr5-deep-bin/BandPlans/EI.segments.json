@@ -1,0 +1,9 @@
+{
+  "$comment": "Ireland (EI) overrides on IARU_R1. Source: ComReg WT11 amateur licence conditions. Last verified: 2026-04. Defaults are best-effort — operators are responsible for their own licence.",
+  "regionId": "EI",
+  "segments": [
+    { "lowHz": 7000000,  "highHz": 7039999,  "label": "40M CW",          "allocation": "Amateur", "modeRestriction": "CwOnly", "maxPowerW": null, "notes": null },
+    { "lowHz": 7040000,  "highHz": 7199999,  "label": "40M Mixed",       "allocation": "Amateur", "modeRestriction": "Any",    "maxPowerW": null, "notes": null },
+    { "lowHz": 5351500,  "highHz": 5366500,  "label": "60M (secondary)", "allocation": "Amateur", "modeRestriction": "Any",    "maxPowerW": null, "notes": "15 W EIRP cap — see ComReg WT11" }
+  ]
+}

@@ -16,6 +16,8 @@
   /* Status-bar / dynamic-island clearance + bottom home-indicator clearance */
   padding-top: env(safe-area-inset-top, 0);
   padding-bottom: env(safe-area-inset-bottom, 0);
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
 }
 
 /* ── Topbar ────────────────────────────────────────────── */
@@ -444,6 +446,26 @@
   grid-template-columns: 1fr 1fr 1fr;
   gap: 6px;
 }
+.m-tx-profile {
+  display: grid;
+  gap: 5px;
+  padding: 8px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md);
+  min-width: 0;
+}
+.m-tx-profile-status {
+  min-width: 0;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.m-tx-profile-status.is-error { color: var(--tx); }
 /* PTT row — PTT takes 80% of the width, TUN sits to its right at 20%
    so the operator can key tune without leaving the radio screen. PTT
    is the single biggest tap target on mobile so it stays dominant. */
@@ -453,7 +475,12 @@
   gap: 6px;
   align-items: stretch;
 }
-.m-ptt-row .mobile-ptt-btn { width: 100%; }
+.m-ptt-row .mobile-ptt-btn {
+  width: 100%;
+  min-height: 112px;
+  flex-direction: column;
+  gap: 4px;
+}
 /* Desktop styles add `transform: translateY(1px)` on the .tx state for a
    press-down feel — disorienting on a phone where the surrounding row
    stays put, so we pin it. */
@@ -467,6 +494,21 @@
   padding: 8px 4px;
   font-size: 13px;
   font-weight: 700;
+}
+.m-uplink-diag {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1.3;
+}
+.m-uplink-diag span {
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--panel-1);
 }
 /* Compact the secondary buttons so three fit comfortably across. */
 .m-mox-row .btn,
@@ -521,6 +563,15 @@
 }
 .m-select:disabled { opacity: 0.4; cursor: not-allowed; }
 .m-select:focus { outline: 1px solid var(--accent); outline-offset: 1px; }
+
+/* iOS Safari zooms the whole viewport when focused form controls render below
+   16px. Keep mobile inputs at that floor so tapping selects/sliders never
+   magnifies the shell. */
+.m-app input:not([type='range']),
+.m-app select,
+.m-app textarea {
+  font-size: 16px !important;
+}
 
 /* Re-style the BandButtons / TuningStepWidget mobile <select> variants so
    they match .m-select. Inside `.m-controls` we flip the legacy

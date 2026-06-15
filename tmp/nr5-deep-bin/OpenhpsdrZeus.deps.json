@@ -1,0 +1,237 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v10.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v10.0": {
+      "OpenhpsdrZeus/0.9.1-dev": {
+        "dependencies": {
+          "Photino.NET": "4.0.16",
+          "Zeus.Server.Hosting": "0.9.1-dev",
+          "Zeus.Plugins.Contracts": "0.9.1.0"
+        },
+        "runtime": {
+          "OpenhpsdrZeus.dll": {}
+        }
+      },
+      "LiteDB/5.0.21": {
+        "runtime": {
+          "lib/netstandard2.0/LiteDB.dll": {
+            "assemblyVersion": "5.0.21.0",
+            "fileVersion": "5.0.21.0"
+          }
+        }
+      },
+      "Photino.Native/4.0.22": {
+        "runtimeTargets": {
+          "runtimes/linux-arm64/native/Photino.Native.so": {
+            "rid": "linux-arm64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/linux-x64/native/Photino.Native.so": {
+            "rid": "linux-x64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/osx-arm64/native/Photino.Native.dylib": {
+            "rid": "osx-arm64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/osx-x64/native/Photino.Native.dylib": {
+            "rid": "osx-x64",
+            "assetType": "native",
+            "fileVersion": "0.0.0.0"
+          },
+          "runtimes/win-arm64/native/Photino.Native.dll": {
+            "rid": "win-arm64",
+            "assetType": "native",
+            "fileVersion": "4.0.0.0"
+          },
+          "runtimes/win-arm64/native/WebView2Loader.dll": {
+            "rid": "win-arm64",
+            "assetType": "native",
+            "fileVersion": "1.0.2903.40"
+          },
+          "runtimes/win-x64/native/Photino.Native.dll": {
+            "rid": "win-x64",
+            "assetType": "native",
+            "fileVersion": "4.0.0.0"
+          },
+          "runtimes/win-x64/native/WebView2Loader.dll": {
+            "rid": "win-x64",
+            "assetType": "native",
+            "fileVersion": "1.0.2903.40"
+          }
+        }
+      },
+      "Photino.NET/4.0.16": {
+        "dependencies": {
+          "Photino.Native": "4.0.22"
+        },
+        "runtime": {
+          "lib/net9.0/Photino.NET.dll": {
+            "assemblyVersion": "4.0.16.0",
+            "fileVersion": "4.0.16.0"
+          }
+        }
+      },
+      "Openhpsdr.Zeus.Plugins.Contracts/0.9.1-dev": {
+        "runtime": {
+          "Zeus.Plugins.Contracts.dll": {
+            "assemblyVersion": "0.9.1.0",
+            "fileVersion": "0.9.1.0"
+          }
+        }
+      },
+      "Zeus.Contracts/0.9.1-dev": {
+        "runtime": {
+          "Zeus.Contracts.dll": {
+            "assemblyVersion": "0.9.1.0",
+            "fileVersion": "0.9.1.0"
+          }
+        }
+      },
+      "Zeus.Dsp/0.9.1-dev": {
+        "dependencies": {
+          "Zeus.Contracts": "0.9.1-dev"
+        },
+        "runtime": {
+          "Zeus.Dsp.dll": {
+            "assemblyVersion": "0.9.1.0",
+            "fileVersion": "0.9.1.0"
+          }
+        }
+      },
+      "Zeus.Plugins.Host/0.9.1-dev": {
+        "dependencies": {
+          "LiteDB": "5.0.21",
+          "Openhpsdr.Zeus.Plugins.Contracts": "0.9.1-dev"
+        },
+        "runtime": {
+          "Zeus.Plugins.Host.dll": {
+            "assemblyVersion": "0.9.1.0",
+            "fileVersion": "0.9.1.0"
+          }
+        }
+      },
+      "Zeus.Protocol1/0.9.1-dev": {
+        "dependencies": {
+          "Zeus.Contracts": "0.9.1-dev"
+        },
+        "runtime": {
+          "Zeus.Protocol1.dll": {
+            "assemblyVersion": "0.9.1.0",
+            "fileVersion": "0.9.1.0"
+          }
+        }
+      },
+      "Zeus.Protocol2/0.9.1-dev": {
+        "dependencies": {
+          "Zeus.Contracts": "0.9.1-dev"
+        },
+        "runtime": {
+          "Zeus.Protocol2.dll": {
+            "assemblyVersion": "0.9.1.0",
+            "fileVersion": "0.9.1.0"
+          }
+        }
+      },
+      "Zeus.Server.Hosting/0.9.1-dev": {
+        "dependencies": {
+          "LiteDB": "5.0.21",
+          "Zeus.Contracts": "0.9.1-dev",
+          "Zeus.Dsp": "0.9.1-dev",
+          "Zeus.Plugins.Host": "0.9.1-dev",
+          "Zeus.Protocol1": "0.9.1-dev",
+          "Zeus.Protocol2": "0.9.1-dev"
+        },
+        "runtime": {
+          "Zeus.Server.Hosting.dll": {
+            "assemblyVersion": "0.9.1.0",
+            "fileVersion": "0.9.1.0"
+          }
+        }
+      },
+      "Zeus.Plugins.Contracts/0.9.1.0": {
+        "runtime": {
+          "Zeus.Plugins.Contracts.dll": {
+            "assemblyVersion": "0.9.1.0",
+            "fileVersion": "0.9.1.0"
+          }
+        }
+      }
+    }
+  },
+  "libraries": {
+    "OpenhpsdrZeus/0.9.1-dev": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "LiteDB/5.0.21": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-ykJ7ffFl7P9YQKR/PLci6zupiLrsSCNkOTiw6OtzntH7d2kCYp5L1+3a/pksKgTEHcJBoPXFtg7VZSGVBseN9w==",
+      "path": "litedb/5.0.21",
+      "hashPath": "litedb.5.0.21.nupkg.sha512"
+    },
+    "Photino.Native/4.0.22": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-VIHipEOe4CZ7HElZE8zTwcvANOsCZ2yak/4nQ4LXzjdlwIjdbY8htmHfNR6rRPgWlCfTfT349GCa6V6Id2/Xyg==",
+      "path": "photino.native/4.0.22",
+      "hashPath": "photino.native.4.0.22.nupkg.sha512"
+    },
+    "Photino.NET/4.0.16": {
+      "type": "package",
+      "serviceable": true,
+      "sha512": "sha512-2oTFsxt8XpLlVvtChlBD8HzLw6MgfHF+DQ4aLEDfgc4GbYjumEywB1JMfWDChm2Whfkr4ZF7DV2deRrpitiBcw==",
+      "path": "photino.net/4.0.16",
+      "hashPath": "photino.net.4.0.16.nupkg.sha512"
+    },
+    "Openhpsdr.Zeus.Plugins.Contracts/0.9.1-dev": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Zeus.Contracts/0.9.1-dev": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Zeus.Dsp/0.9.1-dev": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Zeus.Plugins.Host/0.9.1-dev": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Zeus.Protocol1/0.9.1-dev": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Zeus.Protocol2/0.9.1-dev": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Zeus.Server.Hosting/0.9.1-dev": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    },
+    "Zeus.Plugins.Contracts/0.9.1.0": {
+      "type": "reference",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

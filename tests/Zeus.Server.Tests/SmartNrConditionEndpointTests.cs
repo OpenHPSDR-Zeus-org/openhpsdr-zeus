@@ -85,11 +85,14 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Equal("missing", root.GetProperty("status").GetString());
         Assert.False(root.GetProperty("fresh").GetBoolean());
         Assert.False(root.GetProperty("stale").GetBoolean());
-        Assert.Contains(root.GetProperty("requestedNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Sbnr" });
-        Assert.Contains(root.GetProperty("effectiveNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Sbnr" });
+        Assert.Contains(root.GetProperty("requestedNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Sbnr", "Nr5" });
+        Assert.Contains(root.GetProperty("effectiveNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Sbnr", "Nr5" });
         Assert.Contains(
             root.GetProperty("nr4Readiness").GetString(),
             new[] { "available", "missing-sbnr-exports", "wdsp-native-unloadable" });
+        Assert.Contains(
+            root.GetProperty("nr5Readiness").GetString(),
+            new[] { "available", "missing-spnr-exports", "wdsp-native-unloadable" });
         var rxChain = root.GetProperty("rxChain");
         Assert.Equal("backend-radio-state", rxChain.GetProperty("source").GetString());
         Assert.True(double.IsFinite(rxChain.GetProperty("agcTopDb").GetDouble()));
@@ -153,7 +156,7 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Equal(6.8, root.GetProperty("coherentMaxSnrDb").GetDouble());
         Assert.Equal(1, root.GetProperty("peakCount").GetInt32());
         Assert.True(root.GetProperty("coherentSubthresholdSignal").GetBoolean());
-        Assert.Contains(root.GetProperty("effectiveNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Sbnr" });
+        Assert.Contains(root.GetProperty("effectiveNrMode").GetString(), new[] { "Off", "Anr", "Emnr", "Sbnr", "Nr5" });
         var rxChain = root.GetProperty("rxChain");
         Assert.Equal("backend-radio-state", rxChain.GetProperty("source").GetString());
         Assert.Contains(rxChain.GetProperty("agcMode").GetString(), new[] { "Fixed", "Long", "Slow", "Med", "Fast", "Custom" });
@@ -177,7 +180,7 @@ public sealed class SmartNrConditionEndpointTests
             smartNrProfile = "NR2",
             smartNrRecommendation = "Keep RX headroom and use gentle NR2",
             smartNrRxChainLabel = "AGC stressed",
-            smartNrRxChainRecommendation = "Auto AGC lowering AGC top",
+            smartNrRxChainRecommendation = "Auto AGC reducing AGC-T under ADC pressure",
             smartNrRxChainTone = "optimize",
             smartNrRxChainScore = 68,
             maxSnrDb = 5.64,
@@ -204,7 +207,7 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Equal("weak-sparse", root.GetProperty("signalProfile").GetString());
         Assert.Equal("NR2", root.GetProperty("smartNrProfile").GetString());
         Assert.Equal("AGC stressed", root.GetProperty("smartNrRxChainLabel").GetString());
-        Assert.Equal("Auto AGC lowering AGC top", root.GetProperty("smartNrRxChainRecommendation").GetString());
+        Assert.Equal("Auto AGC reducing AGC-T under ADC pressure", root.GetProperty("smartNrRxChainRecommendation").GetString());
         Assert.Equal("optimize", root.GetProperty("smartNrRxChainTone").GetString());
         Assert.Equal(68, root.GetProperty("smartNrRxChainScore").GetInt32());
         Assert.Equal(5.6, root.GetProperty("maxSnrDb").GetDouble());

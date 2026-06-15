@@ -44,6 +44,8 @@
 
 import { useCallback, useRef } from 'react';
 import { setMox } from '../api/client';
+import { ensureMicUplinkRunning, setMicUplinkTxForced } from '../audio/mic-uplink-session';
+import { waitForMicPcmTransportReady } from '../realtime/ws-client';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 
@@ -58,10 +60,31 @@ export function MobilePttButton() {
   const setMoxOn = useTxStore((s) => s.setMoxOn);
   const setLocalMicArmed = useTxStore((s) => s.setLocalMicArmed);
   const abortRef = useRef<AbortController | null>(null);
+  const gestureRef = useRef(0);
 
   const drive = useCallback(
-    (on: boolean) => {
-      if (useTxStore.getState().moxOn === on) return;
+    async (on: boolean) => {
+      const gesture = ++gestureRef.current;
+      if (on) {
+        try {
+          const micReady = await ensureMicUplinkRunning();
+          if (!micReady) return;
+          const transportReady = await waitForMicPcmTransportReady();
+          if (!transportReady) return;
+        } catch {
+          setMicUplinkTxForced(false);
+          return;
+        }
+        if (gesture !== gestureRef.current) return;
+        setMicUplinkTxForced(true);
+      } else {
+        setMicUplinkTxForced(false);
+      }
+
+      if (useTxStore.getState().moxOn === on) {
+        if (!on && useTxStore.getState().localMicArmed) setLocalMicArmed(false);
+        return;
+      }
       setMoxOn(on);
       setLocalMicArmed(on);
       abortRef.current?.abort();
@@ -71,6 +94,7 @@ export function MobilePttButton() {
         if (!ctrl.signal.aborted) {
           setMoxOn(!on);
           setLocalMicArmed(!on);
+          if (on) setMicUplinkTxForced(false);
         }
       });
     },
@@ -81,7 +105,7 @@ export function MobilePttButton() {
     (e: React.PointerEvent<HTMLButtonElement>) => {
       if (!connected) return;
       e.currentTarget.setPointerCapture(e.pointerId);
-      drive(true);
+      void drive(true);
     },
     [connected, drive],
   );
@@ -91,7 +115,7 @@ export function MobilePttButton() {
       if (e.currentTarget.hasPointerCapture(e.pointerId)) {
         e.currentTarget.releasePointerCapture(e.pointerId);
       }
-      drive(false);
+      void drive(false);
     },
     [drive],
   );

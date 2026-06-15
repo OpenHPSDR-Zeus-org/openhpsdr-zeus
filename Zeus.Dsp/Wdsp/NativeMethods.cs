@@ -443,6 +443,65 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXASBNRnoiseScalingType(int channel, int noise_scaling_type);
 
+    // SPNR (NR5) — Zeus experimental signal-preserving NR. Symbols defined in
+    // native/wdsp/spnr.c. The engine guards calls so older bundled libwdsp
+    // builds degrade to NR-off instead of throwing through the worker.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASPNRRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASPNRPosition(int channel, int position);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASPNRAggressiveness(int channel, double aggressiveness);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASPNRAgcRun(int channel, int run);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASPNRAgcTarget(int channel, double target);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int GetRXASPNRDiagnostics(
+        int channel,
+        out int run,
+        out int position,
+        out int learnedFrames,
+        out int agcRun,
+        out double aggressiveness,
+        out double targetRms,
+        out double maxGain,
+        out double agcGain,
+        out double presencePeak,
+        out double saliencePeak,
+        out double meanGain,
+        out double minGain,
+        out double noiseFloorDb,
+        out double inputRms,
+        out double outputRms);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int GetRXASPNRAdvancedDiagnostics(
+        int channel,
+        out double coherencePeak,
+        out double ridgePeak,
+        out double floorReductionDb,
+        out double dynamicRangeDb);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int GetRXASPNRDeepDiagnostics(
+        int channel,
+        out double signalConfidence,
+        out double agcGate);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXASNBARun(int channel, int run);

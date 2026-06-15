@@ -204,7 +204,7 @@ public sealed class RadioServiceBandwidthPersistenceTests : IDisposable
             radio1.SetNotches(new[]
             {
                 new NotchDto(14_200_500, 75, true),
-                new NotchDto(14_201_250, 125, false),
+                new NotchDto(14_201_250, 125, false, "auto"),
             });
         }
 
@@ -215,8 +215,10 @@ public sealed class RadioServiceBandwidthPersistenceTests : IDisposable
         Assert.Equal(14_200_500, notches[0].CenterHz);
         Assert.Equal(75, notches[0].WidthHz);
         Assert.True(notches[0].Active);
+        Assert.Null(notches[0].Source);
         Assert.Equal(14_201_250, notches[1].CenterHz);
         Assert.Equal(125, notches[1].WidthHz);
         Assert.False(notches[1].Active);
+        Assert.Equal("auto", notches[1].Source);
     }
 }

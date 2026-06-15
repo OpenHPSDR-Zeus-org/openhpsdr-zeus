@@ -7,6 +7,7 @@
 // frame at the silence floor (which exercises the dBFS conversion edge).
 
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Buffers.Binary;
 using Xunit;
 using Zeus.Contracts;
 using Zeus.Server;
@@ -49,5 +50,30 @@ public class StreamingHubMicPeakTests
         var frame = new MicPeakFrame(PeakDbfs: 0f, TimestampUnixMs: 1L);
         var ex = Record.Exception(() => hub.Broadcast(in frame));
         Assert.Null(ex);
+    }
+
+    [Fact]
+    public void DispatchInbound_MicPcm_UpdatesRawUplinkDiagnostics()
+    {
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        var frame = new byte[1 + 960 * 4];
+        frame[0] = 0x20;
+        BinaryPrimitives.WriteSingleLittleEndian(frame.AsSpan(1, 4), 0.25f);
+        BinaryPrimitives.WriteSingleLittleEndian(frame.AsSpan(5, 4), -0.75f);
+
+        int receivedBytes = 0;
+        hub.MicPcmReceived += payload => receivedBytes = payload.Length;
+
+        hub.DispatchInbound(frame);
+
+        var diag = hub.MicInboundDiagnosticsSnapshot(DateTimeOffset.UtcNow);
+        Assert.Equal(960 * 4, receivedBytes);
+        Assert.Equal(1, diag.Frames);
+        Assert.Equal(960 * 4, diag.Bytes);
+        Assert.Equal(960 * 4, diag.LastPayloadBytes);
+        Assert.True(diag.LastFrameUnixMs > 0);
+        Assert.True(diag.LastFrameAgeMs >= 0);
+        Assert.Equal(0.75f, diag.LastPeak, precision: 4);
+        Assert.Equal(0, diag.ConnectedClients);
     }
 }

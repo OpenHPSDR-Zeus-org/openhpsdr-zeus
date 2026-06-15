@@ -1,0 +1,4 @@
+C:/Users/Admin/Desktop/openhpsdr-zeus/native/build-nr5-live-ninja/CMakeFiles/wdsp.dir
+C:/Users/Admin/Desktop/openhpsdr-zeus/native/build-nr5-live-ninja/CMakeFiles/specbleach.dir
+C:/Users/Admin/Desktop/openhpsdr-zeus/native/build-nr5-live-ninja/CMakeFiles/edit_cache.dir
+C:/Users/Admin/Desktop/openhpsdr-zeus/native/build-nr5-live-ninja/CMakeFiles/rebuild_cache.dir

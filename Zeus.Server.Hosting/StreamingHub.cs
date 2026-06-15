@@ -43,6 +43,7 @@
 // License for details.
 
 using System.Buffers;
+using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Threading.Channels;
@@ -98,6 +99,11 @@ public sealed class StreamingHub
     private long _dropsDisplay;
     private long _dropsMeter;
     private long _dropsOther;
+    private long _micInboundFrames;
+    private long _micInboundBytes;
+    private long _lastMicInboundUnixMs;
+    private int _lastMicPayloadBytes;
+    private int _lastMicPeakBits;
     private long _lastLoggedAudio;
     private long _lastLoggedDisplay;
     private long _lastLoggedMeter;
@@ -133,6 +139,20 @@ public sealed class StreamingHub
     }
 
     public int ClientCount => _clients.Count;
+
+    public MicInboundDiagnostics MicInboundDiagnosticsSnapshot(DateTimeOffset now)
+    {
+        long lastUnixMs = Volatile.Read(ref _lastMicInboundUnixMs);
+        long? ageMs = lastUnixMs > 0 ? Math.Max(0, now.ToUnixTimeMilliseconds() - lastUnixMs) : null;
+        return new MicInboundDiagnostics(
+            Frames: Interlocked.Read(ref _micInboundFrames),
+            Bytes: Interlocked.Read(ref _micInboundBytes),
+            LastFrameUnixMs: lastUnixMs > 0 ? lastUnixMs : null,
+            LastFrameAgeMs: ageMs,
+            LastPayloadBytes: Volatile.Read(ref _lastMicPayloadBytes),
+            LastPeak: BitConverter.Int32BitsToSingle(Volatile.Read(ref _lastMicPeakBits)),
+            ConnectedClients: ClientCount);
+    }
 
     /// <summary>Updates the hub's cached wisdom phase so clients attaching
     /// after the one-shot broadcast still receive the current state.</summary>
@@ -193,9 +213,11 @@ public sealed class StreamingHub
         switch (type)
         {
             case MsgTypeMicPcm:
+                var payload = frame.Slice(1);
+                RecordMicInbound(payload);
                 if (MicPcmReceived is { } handler)
                 {
-                    try { handler(frame.Slice(1)); }
+                    try { handler(payload); }
                     catch (Exception ex) { _log.LogWarning(ex, "MicPcmReceived handler threw"); }
                 }
                 break;
@@ -205,6 +227,26 @@ public sealed class StreamingHub
                 _log.LogDebug("ws.inbound unknown type=0x{Type:X2} len={Len}", type, frame.Length);
                 break;
         }
+    }
+
+    private void RecordMicInbound(ReadOnlyMemory<byte> payload)
+    {
+        Interlocked.Increment(ref _micInboundFrames);
+        Interlocked.Add(ref _micInboundBytes, payload.Length);
+        Volatile.Write(ref _lastMicPayloadBytes, payload.Length);
+        Volatile.Write(ref _lastMicInboundUnixMs, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        float peak = 0f;
+        var span = payload.Span;
+        int sampleBytes = span.Length - (span.Length % 4);
+        for (int offset = 0; offset < sampleBytes; offset += 4)
+        {
+            float sample = BinaryPrimitives.ReadSingleLittleEndian(span.Slice(offset, 4));
+            if (!float.IsFinite(sample)) continue;
+            float abs = sample < 0 ? -sample : sample;
+            if (abs > peak) peak = abs;
+        }
+        Volatile.Write(ref _lastMicPeakBits, BitConverter.SingleToInt32Bits(peak));
     }
 
     // Each Broadcast(...) below allocates the wire payload directly into a
@@ -676,3 +718,12 @@ public sealed class StreamingHub
         public Span<byte> GetSpan(int sizeHint = 0) => _buf.AsSpan(_written, _capacity - _written);
     }
 }
+
+public sealed record MicInboundDiagnostics(
+    long Frames,
+    long Bytes,
+    long? LastFrameUnixMs,
+    long? LastFrameAgeMs,
+    int LastPayloadBytes,
+    float LastPeak,
+    int ConnectedClients);

@@ -14,6 +14,7 @@ import { DEFAULT_WORKSPACE_LAYOUT } from '../../layout/defaultLayout';
 import {
   parseWorkspaceLayout,
   EMPTY_WORKSPACE_LAYOUT,
+  type WorkspaceLayout,
 } from '../../layout/workspace';
 
 describe('layout-store / workspace tile mutators', () => {
@@ -114,6 +115,82 @@ describe('layout-store / workspace tile mutators', () => {
       .getState()
       .workspace.tiles.find((t) => t.uid === uid);
     expect(tile?.instanceConfig).toEqual(cfg);
+  });
+
+  it('per-layout placement updates do not switch or mutate the active workspace', () => {
+    const otherWorkspace: WorkspaceLayout = {
+      schemaVersion: 8,
+      tiles: [{ uid: 'tile-other', panelId: 'cw', x: 0, y: 0, w: 8, h: 8 }],
+    };
+    useLayoutStore.setState({
+      radioKey: 'radio-1',
+      layouts: [
+        {
+          id: 'layout-a',
+          name: 'A',
+          layoutJson: JSON.stringify(DEFAULT_WORKSPACE_LAYOUT),
+        },
+        {
+          id: 'layout-b',
+          name: 'B',
+          layoutJson: JSON.stringify(otherWorkspace),
+        },
+      ],
+      activeLayoutId: 'layout-a',
+      workspace: DEFAULT_WORKSPACE_LAYOUT,
+      isLoaded: true,
+    });
+    const activeBefore = useLayoutStore.getState().workspace;
+
+    useLayoutStore.getState().updateTilePlacementInLayout('layout-b', 'tile-other', {
+      x: 4,
+      y: 6,
+      w: 10,
+      h: 12,
+    });
+
+    const state = useLayoutStore.getState();
+    expect(state.activeLayoutId).toBe('layout-a');
+    expect(state.workspace).toBe(activeBefore);
+    const layoutB = state.layouts.find((l) => l.id === 'layout-b');
+    const parsed = JSON.parse(layoutB!.layoutJson) as WorkspaceLayout;
+    expect(parsed.tiles[0]).toMatchObject({ x: 4, y: 6, w: 10, h: 12 });
+  });
+
+  it('addTileToLayout appends to a detached layout without changing the dock selection', () => {
+    const otherWorkspace: WorkspaceLayout = {
+      schemaVersion: 8,
+      tiles: [{ uid: 'tile-other', panelId: 'cw', x: 0, y: 0, w: 8, h: 8 }],
+    };
+    useLayoutStore.setState({
+      radioKey: 'radio-1',
+      layouts: [
+        {
+          id: 'layout-a',
+          name: 'A',
+          layoutJson: JSON.stringify(DEFAULT_WORKSPACE_LAYOUT),
+        },
+        {
+          id: 'layout-b',
+          name: 'B',
+          layoutJson: JSON.stringify(otherWorkspace),
+        },
+      ],
+      activeLayoutId: 'layout-a',
+      workspace: DEFAULT_WORKSPACE_LAYOUT,
+      isLoaded: true,
+    });
+
+    const uid = useLayoutStore.getState().addTileToLayout('layout-b', 'cw');
+
+    const state = useLayoutStore.getState();
+    expect(uid).toMatch(/^tile-/);
+    expect(state.activeLayoutId).toBe('layout-a');
+    expect(state.workspace.tiles.some((t) => t.uid === uid)).toBe(false);
+    const layoutB = state.layouts.find((l) => l.id === 'layout-b');
+    const parsed = JSON.parse(layoutB!.layoutJson) as WorkspaceLayout;
+    expect(parsed.tiles).toHaveLength(2);
+    expect(parsed.tiles[1]).toMatchObject({ uid, panelId: 'cw' });
   });
 
   it('debounced save persists the mutated layout after a quick layout switch', async () => {

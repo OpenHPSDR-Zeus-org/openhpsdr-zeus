@@ -151,6 +151,7 @@ public class DspPipelineService : BackgroundService,
     private const double RxLevelerMaxBoostDb = 36.0;
     private const double RxLevelerMaxCutDb = -24.0;
     private const double RxLevelerBoostSlewDbPerBlock = 2.0;
+    private const double RxLevelerSmoothCutDb = 6.0;
     private const double RxLevelerPeakCeiling = 0.92;
     private const int AdaptiveSquelchWindowSamples = 12;
     private const int AdaptiveSquelchMinSamples = 2;
@@ -263,7 +264,14 @@ public class DspPipelineService : BackgroundService,
         }
 
         state.GainDb = nextDb;
-        double gain = Math.Pow(10.0, nextDb / 20.0);
+        double cutDb = currentDb - nextDb;
+        bool smoothCut = cutDb > 0.0 && cutDb <= RxLevelerSmoothCutDb;
+        double startDb = nextDb > currentDb || smoothCut ? currentDb : nextDb;
+        double deltaDb = nextDb - startDb;
+        double gain = Math.Pow(10.0, startDb / 20.0);
+        double gainStep = deltaDb != 0.0
+            ? Math.Pow(10.0, deltaDb / (20.0 * samples.Length))
+            : 1.0;
         for (int i = 0; i < samples.Length; i++)
         {
             float s = samples[i];
@@ -273,6 +281,7 @@ public class DspPipelineService : BackgroundService,
                 continue;
             }
 
+            gain *= gainStep;
             samples[i] = SoftLimitRxAudioSample((float)(s * gain));
         }
     }
@@ -869,14 +878,16 @@ public class DspPipelineService : BackgroundService,
     {
         var engine = Volatile.Read(ref _engine);
         var state = _radio.Snapshot();
-        return BuildNrRuntime(engine, state);
+        int channelId = Volatile.Read(ref _channelId);
+        return BuildNrRuntime(engine, state, channelId);
     }
 
     public object SnapshotDiagnostics(WdspWisdomInitializer wisdom)
     {
         var engine = Volatile.Read(ref _engine);
         var state = _radio.Snapshot();
-        var nrRuntime = BuildNrRuntime(engine, state);
+        int channelId = Volatile.Read(ref _channelId);
+        var nrRuntime = BuildNrRuntime(engine, state, channelId);
         bool wdspActive = nrRuntime.WdspActive;
         bool synthetic = engine is SyntheticDspEngine;
         return new
@@ -889,9 +900,12 @@ public class DspPipelineService : BackgroundService,
             wdspNativeLoadable = nrRuntime.WdspNativeLoadable,
             wdspEmnrPost2Available = nrRuntime.WdspEmnrPost2Available,
             wdspNr4SbnrAvailable = nrRuntime.WdspNr4SbnrAvailable,
+            wdspNr5SpnrAvailable = nrRuntime.WdspNr5SpnrAvailable,
             nr4Readiness = nrRuntime.Nr4Readiness,
+            nr5Readiness = nrRuntime.Nr5Readiness,
             requestedNrMode = nrRuntime.RequestedNrMode,
             effectiveNrMode = nrRuntime.EffectiveNrMode,
+            nr5SpnrDiagnostics = nrRuntime.Nr5SpnrDiagnostics,
             rxDsp = BuildRxDspChainDiagnostics(
                 state,
                 _radio.Notches,
@@ -1234,8 +1248,8 @@ public class DspPipelineService : BackgroundService,
         }
         else if (agcGain is < -20.0)
         {
-            status = "agc-auto-trim";
-            recommendation = "RX AGC is cutting while the ADC still has healthy headroom; this looks like Auto AGC lowering the effective top, so judge recovered audio with RX audio RMS/peak and scene SNR before adding attenuation.";
+            status = "agc-normalizing";
+            recommendation = "RX AGC is normalizing a strong signal while ADC headroom is clean; keep AGC-T and RF gain stable, and judge recovered audio with RX audio RMS/peak and scene SNR.";
         }
         else if (agcGain is > 35.0 && (signalPk is null || signalPk < -90.0))
         {
@@ -1423,32 +1437,49 @@ public class DspPipelineService : BackgroundService,
         };
     }
 
-    private static DspNrRuntimeSnapshot BuildNrRuntime(IDspEngine? engine, StateDto state)
+    private static DspNrRuntimeSnapshot BuildNrRuntime(IDspEngine? engine, StateDto state, int channelId)
     {
         bool wdspActive = engine is WdspDspEngine;
         bool wdspNativeLoadable = WdspDspEngine.NativeLibraryLoadable;
         bool wdspEmnrPost2Available = WdspDspEngine.EmnrPost2Available;
         bool wdspNr4SbnrAvailable = WdspDspEngine.Nr4SbnrAvailable;
+        bool wdspNr5SpnrAvailable = WdspDspEngine.Nr5SpnrAvailable;
         var nr = state.Nr ?? new NrConfig();
         string requestedNrMode = nr.NrMode.ToString();
         string effectiveNrMode = wdspActive
-            ? nr.NrMode == NrMode.Sbnr && !wdspNr4SbnrAvailable
-                ? NrMode.Off.ToString()
-                : requestedNrMode
+            ? nr.NrMode switch
+            {
+                NrMode.Sbnr when !wdspNr4SbnrAvailable => NrMode.Off.ToString(),
+                NrMode.Nr5 when !wdspNr5SpnrAvailable => NrMode.Off.ToString(),
+                _ => requestedNrMode,
+            }
             : NrMode.Off.ToString();
+        Nr5SpnrDiagnosticsDto? nr5SpnrDiagnostics =
+            state.Status == ConnectionStatus.Connected &&
+            string.Equals(effectiveNrMode, NrMode.Nr5.ToString(), StringComparison.OrdinalIgnoreCase) &&
+            engine is WdspDspEngine wdsp
+                ? wdsp.TryGetNr5SpnrDiagnostics(channelId)
+                : null;
 
         return new(
             WdspActive: wdspActive,
             WdspNativeLoadable: wdspNativeLoadable,
             WdspEmnrPost2Available: wdspEmnrPost2Available,
             WdspNr4SbnrAvailable: wdspNr4SbnrAvailable,
+            WdspNr5SpnrAvailable: wdspNr5SpnrAvailable,
             Nr4Readiness: wdspNr4SbnrAvailable
                 ? "available"
                 : wdspNativeLoadable
                     ? "missing-sbnr-exports"
                     : "wdsp-native-unloadable",
+            Nr5Readiness: wdspNr5SpnrAvailable
+                ? "available"
+                : wdspNativeLoadable
+                    ? "missing-spnr-exports"
+                    : "wdsp-native-unloadable",
             RequestedNrMode: requestedNrMode,
-            EffectiveNrMode: effectiveNrMode);
+            EffectiveNrMode: effectiveNrMode,
+            Nr5SpnrDiagnostics: nr5SpnrDiagnostics);
     }
 
     internal static DspRxChainDiagnosticsDto BuildRxDspChainDiagnostics(
@@ -1513,7 +1544,7 @@ public class DspPipelineService : BackgroundService,
         else if (nrCapabilityLimited)
         {
             status = "nr-capability-limited";
-            recommendation = "The requested NR mode is not effective on the active WDSP build; use NR2/EMNR or update the bundled WDSP/SBNR exports before relying on NR4 weak-signal cleanup.";
+            recommendation = "The requested NR mode is not effective on the active WDSP build; use NR2/EMNR or update the bundled WDSP NR4/NR5 exports before relying on newer weak-signal cleanup modes.";
         }
         else if (!appliedNrMatches || !appliedAgcMatches || !appliedSquelchMatches)
         {
@@ -1575,7 +1606,10 @@ public class DspPipelineService : BackgroundService,
             WdspNativeLoadable: nrRuntime.WdspNativeLoadable,
             WdspEmnrPost2Available: nrRuntime.WdspEmnrPost2Available,
             WdspNr4SbnrAvailable: nrRuntime.WdspNr4SbnrAvailable,
+            WdspNr5SpnrAvailable: nrRuntime.WdspNr5SpnrAvailable,
             Nr4Readiness: nrRuntime.Nr4Readiness,
+            Nr5Readiness: nrRuntime.Nr5Readiness,
+            Nr5SpnrDiagnostics: nrRuntime.Nr5SpnrDiagnostics,
             AppliedNrMatchesRequested: appliedNrMatches,
             AppliedAgcMatchesRequested: appliedAgcMatches,
             AppliedSquelchMatchesRequested: appliedSquelchMatches,
@@ -3321,9 +3355,12 @@ public sealed record DspNrRuntimeSnapshot(
     bool WdspNativeLoadable,
     bool WdspEmnrPost2Available,
     bool WdspNr4SbnrAvailable,
+    bool WdspNr5SpnrAvailable,
     string Nr4Readiness,
+    string Nr5Readiness,
     string RequestedNrMode,
-    string EffectiveNrMode);
+    string EffectiveNrMode,
+    Nr5SpnrDiagnosticsDto? Nr5SpnrDiagnostics);
 
 internal sealed record DspRxChainDiagnosticsDto(
     int SchemaVersion,
@@ -3354,7 +3391,10 @@ internal sealed record DspRxChainDiagnosticsDto(
     bool WdspNativeLoadable,
     bool WdspEmnrPost2Available,
     bool WdspNr4SbnrAvailable,
+    bool WdspNr5SpnrAvailable,
     string Nr4Readiness,
+    string Nr5Readiness,
+    Nr5SpnrDiagnosticsDto? Nr5SpnrDiagnostics,
     bool AppliedNrMatchesRequested,
     bool AppliedAgcMatchesRequested,
     bool AppliedSquelchMatchesRequested,

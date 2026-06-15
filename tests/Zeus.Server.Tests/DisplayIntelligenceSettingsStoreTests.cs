@@ -31,6 +31,7 @@ public sealed class DisplayIntelligenceSettingsStoreTests : IDisposable
         Assert.Equal("balanced", settings.ProfileId);
         Assert.False(settings.PopEnabled);
         Assert.False(settings.SnapEnabled);
+        Assert.False(settings.AutoNotchEnabled);
         Assert.True(settings.VisualAgcEnabled);
         Assert.True(settings.ImpulseRejectEnabled);
         Assert.Equal(30.0, settings.PopSpanDb);
@@ -46,6 +47,7 @@ public sealed class DisplayIntelligenceSettingsStoreTests : IDisposable
                 ProfileId: " DX ",
                 PopEnabled: true,
                 SnapEnabled: true,
+                AutoNotchEnabled: true,
                 AutoProfileEnabled: true,
                 VisualAgcEnabled: false,
                 ImpulseRejectEnabled: false,
@@ -65,6 +67,7 @@ public sealed class DisplayIntelligenceSettingsStoreTests : IDisposable
 
             Assert.Equal("dx", saved.ProfileId);
             Assert.True(saved.PopEnabled);
+            Assert.True(saved.AutoNotchEnabled);
             Assert.Equal(92, saved.PopRenderIntensity);
         }
 
@@ -74,6 +77,7 @@ public sealed class DisplayIntelligenceSettingsStoreTests : IDisposable
         Assert.Equal("dx", settings.ProfileId);
         Assert.True(settings.PopEnabled);
         Assert.True(settings.SnapEnabled);
+        Assert.True(settings.AutoNotchEnabled);
         Assert.False(settings.VisualAgcEnabled);
         Assert.Equal(24.0, settings.PopSpanDb);
         Assert.Equal(5000, settings.SnapRadiusHz);

@@ -25,6 +25,7 @@ describe('display-intelligence API', () => {
       profileId: 'DX',
       popEnabled: true,
       snapEnabled: true,
+      autoNotchEnabled: true,
       autoProfileEnabled: true,
       visualAgcEnabled: false,
       impulseRejectEnabled: false,
@@ -46,6 +47,7 @@ describe('display-intelligence API', () => {
       profileId: 'dx',
       popEnabled: true,
       snapEnabled: true,
+      autoNotchEnabled: true,
       autoProfileEnabled: true,
       visualAgcEnabled: false,
       impulseRejectEnabled: false,
@@ -84,6 +86,7 @@ describe('display-intelligence API', () => {
       ...DISPLAY_INTELLIGENCE_DEFAULTS,
       profileId: 'cw',
       snapEnabled: true,
+      autoNotchEnabled: true,
     }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -91,6 +94,7 @@ describe('display-intelligence API', () => {
       ...DISPLAY_INTELLIGENCE_DEFAULTS,
       profileId: 'cw',
       snapEnabled: true,
+      autoNotchEnabled: true,
     });
 
     const [url, init] = fetchMock.mock.calls[0]!;
@@ -99,8 +103,10 @@ describe('display-intelligence API', () => {
     expect(JSON.parse((init?.body ?? '') as string)).toMatchObject({
       profileId: 'cw',
       snapEnabled: true,
+      autoNotchEnabled: true,
     });
     expect(settings.profileId).toBe('cw');
     expect(settings.snapEnabled).toBe(true);
+    expect(settings.autoNotchEnabled).toBe(true);
   });
 });

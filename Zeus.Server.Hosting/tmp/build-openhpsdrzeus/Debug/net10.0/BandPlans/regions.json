@@ -1,0 +1,12 @@
+{
+  "$comment": "Region catalog — source: IARU, ComReg, Ofcom, FCC. Last verified: 2026-04.",
+  "regions": [
+    { "id": "IARU_R1", "displayName": "IARU Region 1",          "shortCode": "R1",    "parentId": null },
+    { "id": "IARU_R2", "displayName": "IARU Region 2",          "shortCode": "R2",    "parentId": null },
+    { "id": "IARU_R3", "displayName": "IARU Region 3",          "shortCode": "R3",    "parentId": null },
+    { "id": "EI",      "displayName": "Ireland (EI — ComReg)",  "shortCode": "EI",    "parentId": "IARU_R1" },
+    { "id": "G",       "displayName": "United Kingdom (G — Ofcom)", "shortCode": "G", "parentId": "IARU_R1" },
+    { "id": "US_FCC_GENERAL", "displayName": "US FCC General",  "shortCode": "K-Gen", "parentId": "IARU_R2" },
+    { "id": "US_FCC_EXTRA",   "displayName": "US FCC Extra",    "shortCode": "K-Ext", "parentId": "IARU_R2" }
+  ]
+}

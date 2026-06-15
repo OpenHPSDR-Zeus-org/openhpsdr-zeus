@@ -23,6 +23,7 @@ describe('notch-store backend hydration', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
@@ -65,7 +66,43 @@ describe('notch-store backend hydration', () => {
     expect(postUrl).toBe('/api/rx/notches');
     expect(postInit?.method).toBe('POST');
     expect(JSON.parse((postInit?.body ?? '{}') as string)).toEqual({
-      notches: [{ centerHz: 7_255_300, widthHz: 125, active: true }],
+      notches: [{ centerHz: 7_255_300, widthHz: 125, active: true, source: 'manual' }],
     });
+  });
+
+  it('replaces auto notches without disturbing manual notches', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(response([]));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { useNotchStore } = await import('./notch-store');
+    useNotchStore.setState({
+      notches: [
+        { id: 'm1', centerHz: 14_200_100, widthHz: 120 },
+        { id: 'a1', centerHz: 14_201_000, widthHz: 90, source: 'auto' },
+      ],
+    });
+
+    useNotchStore.getState().replaceAutoNotches([{ centerHz: 14_202_000, widthHz: 80 }]);
+
+    expect(useNotchStore.getState().notches).toEqual([
+      { id: 'm1', centerHz: 14_200_100, widthHz: 120 },
+      { id: expect.any(String), centerHz: 14_202_000, widthHz: 80, source: 'auto' },
+    ]);
+    expect(JSON.parse(localStorage.getItem('zeus.notches') ?? '[]')).toEqual([
+      { centerHz: 14_200_100, widthHz: 120 },
+      { centerHz: 14_202_000, widthHz: 80, source: 'auto' },
+    ]);
+
+    await vi.runOnlyPendingTimersAsync();
+    const [, postInit] = fetchMock.mock.calls.at(-1) ?? [];
+    expect(postInit?.method).toBe('POST');
+    expect(JSON.parse((postInit?.body ?? '{}') as string)).toEqual({
+      notches: [
+        { centerHz: 14_200_100, widthHz: 120, active: true, source: 'manual' },
+        { centerHz: 14_202_000, widthHz: 80, active: true, source: 'auto' },
+      ],
+    });
+    vi.useRealTimers();
   });
 });

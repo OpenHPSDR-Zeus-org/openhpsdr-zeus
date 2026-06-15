@@ -219,6 +219,8 @@ export type SignalEnhanceState = SignalEnhanceTuning & {
   popEnabled: boolean;
   /** Snap-to-signal on panadapter/waterfall click. */
   snapEnabled: boolean;
+  /** Legacy persisted display-intelligence switch; ANF now arms live auto-notch tracking. */
+  autoNotchEnabled: boolean;
   /** Follow the receiver mode with the matching profile (CW, digital, voice). */
   autoProfileEnabled: boolean;
   /** Per-frame Pop span adaptation for sparse/weak scenes. */
@@ -229,6 +231,7 @@ export type SignalEnhanceState = SignalEnhanceTuning & {
   sceneStatus: SignalEnhanceSceneStatus | null;
   setPopEnabled: (v: boolean) => void;
   setSnapEnabled: (v: boolean) => void;
+  setAutoNotchEnabled: (v: boolean) => void;
   setVisualAgcEnabled: (v: boolean) => void;
   setImpulseRejectEnabled: (v: boolean) => void;
   setSignalEnhanceSceneStatus: (status: SignalEnhanceSceneStatus | null) => void;
@@ -246,6 +249,7 @@ export type SignalEnhanceState = SignalEnhanceTuning & {
 export type SignalEnhancePersisted = {
   popEnabled: boolean;
   snapEnabled: boolean;
+  autoNotchEnabled: boolean;
   autoProfileEnabled: boolean;
   visualAgcEnabled: boolean;
   impulseRejectEnabled: boolean;
@@ -615,6 +619,7 @@ function readPersisted(): SignalEnhancePersisted {
       return {
         popEnabled: false,
         snapEnabled: false,
+        autoNotchEnabled: false,
         autoProfileEnabled: false,
         visualAgcEnabled: true,
         impulseRejectEnabled: true,
@@ -626,6 +631,7 @@ function readPersisted(): SignalEnhancePersisted {
       return {
         popEnabled: false,
         snapEnabled: false,
+        autoNotchEnabled: false,
         autoProfileEnabled: false,
         visualAgcEnabled: true,
         impulseRejectEnabled: true,
@@ -636,6 +642,7 @@ function readPersisted(): SignalEnhancePersisted {
     return {
       popEnabled: parsed.popEnabled === true,
       snapEnabled: parsed.snapEnabled === true,
+      autoNotchEnabled: parsed.autoNotchEnabled === true,
       autoProfileEnabled: parsed.autoProfileEnabled === true,
       visualAgcEnabled: parsed.visualAgcEnabled !== false,
       impulseRejectEnabled: parsed.impulseRejectEnabled !== false,
@@ -645,6 +652,7 @@ function readPersisted(): SignalEnhancePersisted {
     return {
       popEnabled: false,
       snapEnabled: false,
+      autoNotchEnabled: false,
       autoProfileEnabled: false,
       visualAgcEnabled: true,
       impulseRejectEnabled: true,
@@ -659,6 +667,7 @@ function persist(s: SignalEnhancePersisted): void {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
       popEnabled: s.popEnabled,
       snapEnabled: s.snapEnabled,
+      autoNotchEnabled: s.autoNotchEnabled,
       autoProfileEnabled: s.autoProfileEnabled,
       visualAgcEnabled: s.visualAgcEnabled,
       impulseRejectEnabled: s.impulseRejectEnabled,
@@ -686,6 +695,7 @@ export function signalEnhanceSettingsFromState(s: SignalEnhanceState): SignalEnh
   return {
     popEnabled: s.popEnabled,
     snapEnabled: s.snapEnabled,
+    autoNotchEnabled: s.autoNotchEnabled,
     autoProfileEnabled: s.autoProfileEnabled,
     visualAgcEnabled: s.visualAgcEnabled,
     impulseRejectEnabled: s.impulseRejectEnabled,
@@ -711,6 +721,7 @@ const persisted = readPersisted();
 export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
   popEnabled: persisted.popEnabled,
   snapEnabled: persisted.snapEnabled,
+  autoNotchEnabled: persisted.autoNotchEnabled,
   autoProfileEnabled: persisted.autoProfileEnabled,
   visualAgcEnabled: persisted.visualAgcEnabled,
   impulseRejectEnabled: persisted.impulseRejectEnabled,
@@ -736,6 +747,10 @@ export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
   },
   setSnapEnabled: (snapEnabled) => {
     set({ snapEnabled });
+    persist(get());
+  },
+  setAutoNotchEnabled: (autoNotchEnabled) => {
+    set({ autoNotchEnabled });
     persist(get());
   },
   setVisualAgcEnabled: (visualAgcEnabled) => {
@@ -785,6 +800,7 @@ export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
     const next = {
       popEnabled: settings.popEnabled,
       snapEnabled: settings.snapEnabled,
+      autoNotchEnabled: settings.autoNotchEnabled,
       autoProfileEnabled: settings.autoProfileEnabled,
       visualAgcEnabled: settings.visualAgcEnabled,
       impulseRejectEnabled: settings.impulseRejectEnabled,

@@ -29,7 +29,7 @@ long-running project a lot of the DSP heritage traces back to.
 ## What's in the box
 
 - **WebGL panadapter + waterfall** with zoom, click-to-tune, drag-pan gestures
-- **DSP panel**: NB, NR (NR1 / NR2 / NR4), ANF, SNB, NBP — NR2 (EMNR) at Thetis parity (Method, Trained, Post-Process), all driven by WDSP under the hood
+- **DSP panel**: NB, NR (NR1 / NR2 / NR4 / experimental NR5), ANF, SNB, NBP — NR2 (EMNR) at Thetis parity (Method, Trained, Post-Process), all driven by WDSP under the hood
 - **Bands / modes / bandwidth / AGC / S-ATT step attenuator / PRE preamp / drive / mic gain**
 - **TX**: PTT, TUNE, mic uplink, TX stage meters, SWR-trip and TX-timeout
   protection

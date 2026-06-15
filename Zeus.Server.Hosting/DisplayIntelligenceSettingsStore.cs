@@ -43,6 +43,7 @@ public sealed class DisplayIntelligenceSettingsStore : IDisposable
                     e.ProfileId,
                     e.PopEnabled,
                     e.SnapEnabled,
+                    e.AutoNotchEnabled,
                     e.AutoProfileEnabled,
                     e.VisualAgcEnabled,
                     e.ImpulseRejectEnabled,
@@ -72,6 +73,7 @@ public sealed class DisplayIntelligenceSettingsStore : IDisposable
             e.ProfileId = normalized.ProfileId;
             e.PopEnabled = normalized.PopEnabled;
             e.SnapEnabled = normalized.SnapEnabled;
+            e.AutoNotchEnabled = normalized.AutoNotchEnabled;
             e.AutoProfileEnabled = normalized.AutoProfileEnabled;
             e.VisualAgcEnabled = normalized.VisualAgcEnabled;
             e.ImpulseRejectEnabled = normalized.ImpulseRejectEnabled;
@@ -99,6 +101,7 @@ public sealed class DisplayIntelligenceSettingsStore : IDisposable
         ProfileId: "balanced",
         PopEnabled: false,
         SnapEnabled: false,
+        AutoNotchEnabled: false,
         AutoProfileEnabled: false,
         VisualAgcEnabled: true,
         ImpulseRejectEnabled: true,
@@ -164,6 +167,7 @@ public sealed class DisplayIntelligenceSettingsEntry
     public string ProfileId { get; set; } = "balanced";
     public bool PopEnabled { get; set; }
     public bool SnapEnabled { get; set; }
+    public bool AutoNotchEnabled { get; set; }
     public bool AutoProfileEnabled { get; set; }
     public bool VisualAgcEnabled { get; set; } = true;
     public bool ImpulseRejectEnabled { get; set; } = true;

@@ -233,6 +233,7 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.Contains("future", root.GetProperty("diagnosticRecommendation").GetString());
         Assert.Contains("clocks", root.GetProperty("diagnosticRecommendation").GetString());
     }
+
     [Fact]
     public void SmartNrCondition_ReportsAlignedNr2Runtime()
     {
@@ -248,6 +249,22 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.True(root.GetProperty("runtimeAligned").GetBoolean());
         Assert.Equal("aligned", root.GetProperty("runtimeAlignmentStatus").GetString());
         Assert.Contains("aligned", root.GetProperty("runtimeAlignmentRecommendation").GetString());
+    }
+
+    [Fact]
+    public void SmartNrCondition_ReportsAlignedNr5Runtime()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        PublishScene(service, smartNrProfile: "NR5");
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(
+            service.SmartNrCondition(Runtime(requested: "Nr5", effective: "Nr5")),
+            CamelCaseJson));
+        var root = doc.RootElement;
+
+        Assert.Equal("Nr5", root.GetProperty("expectedNrMode").GetString());
+        Assert.True(root.GetProperty("runtimeAligned").GetBoolean());
+        Assert.Equal("aligned", root.GetProperty("runtimeAlignmentStatus").GetString());
     }
 
     [Fact]
@@ -331,6 +348,10 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
             WdspNativeLoadable: true,
             WdspEmnrPost2Available: true,
             WdspNr4SbnrAvailable: true,
+            WdspNr5SpnrAvailable: true,
             Nr4Readiness: "available",
+            Nr5Readiness: "available",
             RequestedNrMode: requested,
-            EffectiveNrMode: effective);}
+            EffectiveNrMode: effective,
+            Nr5SpnrDiagnostics: null);
+}

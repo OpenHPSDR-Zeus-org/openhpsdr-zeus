@@ -1,0 +1,17 @@
+{
+  "$comment": "United Kingdom (G) overrides on IARU_R1. Source: Ofcom Amateur Radio Licence. Last verified: 2026-04. Defaults are best-effort — operators are responsible for their own licence.",
+  "regionId": "G",
+  "segments": [
+    { "lowHz": 5258500,  "highHz": 5263999,  "label": "60M Ch 1",        "allocation": "Amateur", "modeRestriction": "Any", "maxPowerW": 100, "notes": "USB dial — Ofcom 60m channelised" },
+    { "lowHz": 5276000,  "highHz": 5276500,  "label": "60M Ch 2",        "allocation": "Amateur", "modeRestriction": "Any", "maxPowerW": 100, "notes": "USB dial — Ofcom 60m channelised" },
+    { "lowHz": 5288500,  "highHz": 5289000,  "label": "60M Ch 3",        "allocation": "Amateur", "modeRestriction": "Any", "maxPowerW": 100, "notes": "USB dial — Ofcom 60m channelised" },
+    { "lowHz": 5298000,  "highHz": 5298500,  "label": "60M Ch 4",        "allocation": "Amateur", "modeRestriction": "Any", "maxPowerW": 100, "notes": "USB dial — Ofcom 60m channelised" },
+    { "lowHz": 5313000,  "highHz": 5313500,  "label": "60M Ch 5",        "allocation": "Amateur", "modeRestriction": "Any", "maxPowerW": 100, "notes": "USB dial — Ofcom 60m channelised" },
+    { "lowHz": 5333000,  "highHz": 5333500,  "label": "60M Ch 6",        "allocation": "Amateur", "modeRestriction": "Any", "maxPowerW": 100, "notes": "USB dial — Ofcom 60m channelised" },
+    { "lowHz": 5354000,  "highHz": 5354500,  "label": "60M Ch 7",        "allocation": "Amateur", "modeRestriction": "Any", "maxPowerW": 100, "notes": "USB dial — Ofcom 60m channelised" },
+    { "lowHz": 5362000,  "highHz": 5362500,  "label": "60M Ch 8",        "allocation": "Amateur", "modeRestriction": "Any", "maxPowerW": 100, "notes": "USB dial — Ofcom 60m channelised" },
+    { "lowHz": 5380000,  "highHz": 5380500,  "label": "60M Ch 9",        "allocation": "Amateur", "modeRestriction": "Any", "maxPowerW": 100, "notes": "USB dial — Ofcom 60m channelised" },
+    { "lowHz": 5398500,  "highHz": 5399000,  "label": "60M Ch 10",       "allocation": "Amateur", "modeRestriction": "Any", "maxPowerW": 100, "notes": "USB dial — Ofcom 60m channelised" },
+    { "lowHz": 5403500,  "highHz": 5404000,  "label": "60M Ch 11",       "allocation": "Amateur", "modeRestriction": "Any", "maxPowerW": 100, "notes": "USB dial — Ofcom 60m channelised" }
+  ]
+}

@@ -6,14 +6,17 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { NR_CONFIG_DEFAULT } from '../api/client';
 import { DISPLAY_INTELLIGENCE_DEFAULTS } from '../api/display-intelligence';
 import { resetEstimator, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import type { DecodedFrame } from '../realtime/frame';
+import { useConnectionStore } from '../state/connection-store';
 import {
   _resetFrameConsumerCount,
   hasActiveFrameConsumers,
   useDisplayStore,
 } from '../state/display-store';
+import { useNotchStore } from '../state/notch-store';
 import { SignalIntelligenceController } from './SignalIntelligenceController';
 
 describe('SignalIntelligenceController display-intelligence sync', () => {
@@ -35,6 +38,7 @@ describe('SignalIntelligenceController display-intelligence sync', () => {
     container.remove();
     resetEstimator();
     _resetFrameConsumerCount();
+    useConnectionStore.setState({ status: 'Disconnected', mode: 'USB', nr: { ...NR_CONFIG_DEFAULT } });
     useDisplayStore.setState({
       connected: false,
       width: 0,
@@ -46,6 +50,7 @@ describe('SignalIntelligenceController display-intelligence sync', () => {
       wfValid: false,
       lastSeq: 0,
     });
+    useNotchStore.setState({ notches: [], armed: false, pending: null });
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
@@ -82,6 +87,15 @@ describe('SignalIntelligenceController display-intelligence sync', () => {
       panDb,
       wfDb: new Float32Array(width),
     };
+  }
+
+  function frameWithEmfBar(seq = 1): DecodedFrame {
+    const frame = frameWithWeakCarrier(seq);
+    frame.panDb.fill(-110);
+    frame.panDb[149] = -94;
+    frame.panDb[150] = -78;
+    frame.panDb[151] = -94;
+    return frame;
   }
 
   it('hydrates Signal Intelligence from the backend policy', async () => {
@@ -263,6 +277,96 @@ describe('SignalIntelligenceController display-intelligence sync', () => {
     expect(scene?.maxSnrDb).toBeGreaterThan(20);
     expect(scene?.occupiedPct).toBeGreaterThan(0);
     expect(useSignalEnhanceStore.getState().autoProfileEnabled).toBe(false);
+  });
+
+  it('syncs persistent narrow EMF bars into auto notches while ANF is enabled', async () => {
+    vi.setSystemTime(new Date('2026-06-15T01:05:00Z'));
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (_input, init) =>
+      jsonResponse(init?.method === 'POST'
+        ? []
+        : DISPLAY_INTELLIGENCE_DEFAULTS),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    useConnectionStore.setState({
+      status: 'Connected',
+      mode: 'USB',
+      nr: { ...NR_CONFIG_DEFAULT, anfEnabled: true },
+    });
+
+    await act(async () => {
+      root.render(<SignalIntelligenceController />);
+      await flushPromises();
+    });
+
+    expect(useSignalEnhanceStore.getState().autoNotchEnabled).toBe(false);
+
+    act(() => {
+      useDisplayStore.getState().pushFrame(frameWithEmfBar(1));
+    });
+    expect(useNotchStore.getState().notches.filter((n) => n.source === 'auto')).toEqual([]);
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+      useDisplayStore.getState().pushFrame(frameWithEmfBar(2));
+      vi.advanceTimersByTime(1000);
+      useDisplayStore.getState().pushFrame(frameWithEmfBar(3));
+      await flushPromises();
+    });
+
+    const autoNotches = useNotchStore.getState().notches.filter((n) => n.source === 'auto');
+    expect(autoNotches).toHaveLength(1);
+    expect(autoNotches[0]!.centerHz).toBe(7_253_200);
+    expect(autoNotches[0]!.widthHz).toBeGreaterThanOrEqual(240);
+
+    await act(async () => {
+      vi.advanceTimersByTime(130);
+      await flushPromises();
+    });
+
+    const postCall = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/rx/notches' && init?.method === 'POST',
+    );
+    expect(postCall).toBeDefined();
+    expect(JSON.parse((postCall![1]?.body ?? '{}') as string)).toEqual({
+      notches: [
+        {
+          centerHz: 7_253_200,
+          widthHz: autoNotches[0]!.widthHz,
+          active: true,
+          source: 'auto',
+        },
+      ],
+    });
+  });
+
+  it('keeps legacy Auto Notch settings inactive until ANF is enabled', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      ...DISPLAY_INTELLIGENCE_DEFAULTS,
+      autoNotchEnabled: true,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    useConnectionStore.setState({
+      status: 'Connected',
+      mode: 'USB',
+      nr: { ...NR_CONFIG_DEFAULT, anfEnabled: false },
+    });
+
+    await act(async () => {
+      root.render(<SignalIntelligenceController />);
+      await flushPromises();
+    });
+
+    await act(async () => {
+      useDisplayStore.getState().pushFrame(frameWithEmfBar(1));
+      vi.advanceTimersByTime(1000);
+      useDisplayStore.getState().pushFrame(frameWithEmfBar(2));
+      vi.advanceTimersByTime(1000);
+      useDisplayStore.getState().pushFrame(frameWithEmfBar(3));
+      await flushPromises();
+    });
+
+    expect(useSignalEnhanceStore.getState().autoNotchEnabled).toBe(true);
+    expect(useNotchStore.getState().notches.filter((n) => n.source === 'auto')).toEqual([]);
   });
 
   it('keeps display frame decoding active for realtime diagnostics while mounted', async () => {

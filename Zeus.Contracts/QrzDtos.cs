@@ -63,7 +63,28 @@ public sealed record QrzStation(
     int? Dxcc,
     int? CqZone,
     int? ItuZone,
-    string? ImageUrl);
+    string? ImageUrl,
+    // ── Extended QRZ XML fields (additive; older clients ignore these) ──────
+    // License class ("Extra", "General", "CEPT", …) and codes string.
+    string? LicenseClass = null,
+    string? LicenseCodes = null,
+    // Effective date of the current license grant (QRZ <efdate>, ISO yyyy-MM-dd).
+    // NOTE: this is the current-grant date, not necessarily first-licensed —
+    // it is the best the QRZ XML feed provides.
+    string? LicenseEffectiveDate = null,
+    string? LicenseExpiresDate = null,
+    string? Email = null,
+    // QSL preferences (QRZ flags: 1 = accepts, 0 = does not).
+    bool? AcceptsLotw = null,
+    bool? AcceptsEqsl = null,
+    bool? AcceptsMailQsl = null,
+    string? QslManager = null,
+    // Time-zone hints for computing the contact's local time.
+    double? GmtOffset = null,
+    string? TimeZone = null,
+    bool? ObservesDst = null,
+    // Operator birth year, when public.
+    int? Born = null);
 
 public sealed record QrzStatus(
     bool Connected,
@@ -72,3 +93,29 @@ public sealed record QrzStatus(
     string? Error,
     bool HasStoredCredentials = false,
     bool HasApiKey = false);
+
+// ── Point-to-point propagation (DE → DX) ──────────────────────────────────
+// Sourced from the HamClock sidecar's ITU-R P.533-14 engine (with a built-in
+// estimation fallback) via PropagationService. Zeus does not compute the
+// physics itself — it proxies, caches, and shapes the result for the UI.
+
+public sealed record PropagationBand(
+    string Band,        // e.g. "20m"
+    double FreqMhz,     // band centre used by the model
+    int Reliability,    // 0..99 % circuit reliability for the current hour
+    string Snr,         // e.g. "+12dB"
+    string Status);     // GOOD | FAIR | POOR | CLOSED
+
+public sealed record PropagationResult(
+    bool Available,                 // false → engine unreachable / not running
+    string? Unavailable,            // human-readable reason when !Available
+    string Model,                   // "ITU-R P.533-14" or "Built-in estimation"
+    double Sfi,
+    double Ssn,
+    double KIndex,
+    double Muf,                     // MUF for the path, MHz
+    double Luf,                     // LUF for the path, MHz
+    int DistanceKm,
+    int CurrentHourUtc,
+    IReadOnlyList<PropagationBand> Bands,  // sorted best → worst
+    PropagationBand? CurrentBand);  // prediction for the radio's active band, if known

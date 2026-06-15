@@ -136,6 +136,9 @@ struct _rxa {
   struct {
     SBNR p; // NR3 + NR4 support (nr4)
   } sbnr;
+  struct {
+    SPNR p; // Zeus NR5 support
+  } spnr;
 
   struct {
     SPEAK p;
@@ -182,7 +185,7 @@ extern __declspec (dllexport) void SetRXAMode (int channel, int mode);
 extern void RXAResCheck (int channel);
 
 extern void RXAbp1Check (int channel, int amd_run, int snba_run, int emnr_run, int anf_run, int anr_run, int rnnr_run,
-                         int sbnr_run);  // NR3 + NR4 support
+                         int sbnr_run, int spnr_run);  // NR3 + NR4 + NR5 support
 
 extern void RXAbp1Set (int channel);
 
