@@ -950,6 +950,14 @@ describe('POST helpers', () => {
         forwardWatts: 15.2,
         rfDetected: true,
         rfEvidenceStatus: 'rf-active',
+        qualityScore: 100,
+        qualityTone: 'ready',
+        p2PacketRateStatus: 'fresh',
+        p2LastPacketsPerSecond: 800,
+        p2FifoModelSamples: 1200,
+        p2QueuedPackets: 0,
+        p2TransportFailures: 0,
+        qualityReasons: ['p2-rate-fresh', 'host-tx-active', 'rf-forward-power-present'],
         diagnosticRecommendation: 'P2 DUC egress and RF forward-power evidence are live.',
       },
       txPlugins: {
@@ -982,6 +990,14 @@ describe('POST helpers', () => {
     expect(diag.egress.forwardWatts).toBe(15.2);
     expect(diag.egress.rfDetected).toBe(true);
     expect(diag.egress.rfEvidenceStatus).toBe('rf-active');
+    expect(diag.egress.qualityScore).toBe(100);
+    expect(diag.egress.qualityTone).toBe('ready');
+    expect(diag.egress.p2PacketRateStatus).toBe('fresh');
+    expect(diag.egress.p2LastPacketsPerSecond).toBe(800);
+    expect(diag.egress.p2FifoModelSamples).toBe(1200);
+    expect(diag.egress.p2QueuedPackets).toBe(0);
+    expect(diag.egress.p2TransportFailures).toBe(0);
+    expect(diag.egress.qualityReasons).toContain('rf-forward-power-present');
     expect(diag.egress.diagnosticRecommendation).toBe('P2 DUC egress and RF forward-power evidence are live.');
     expect(diag.txPlugins?.masterBypassed).toBe(false);
     expect(diag.vstEngine?.degradedBlocks).toBe(2);

@@ -36,6 +36,15 @@ public sealed class TxEgressHealthDiagnosticsTests
         Assert.Equal(15.2, health.ForwardWatts);
         Assert.Equal(1000.0, health.P2LastActivityAgeMs.GetValueOrDefault());
         Assert.Equal(0.0, health.P1RingDropRatioPct);
+        Assert.Equal(100, health.QualityScore);
+        Assert.Equal("ready", health.QualityTone);
+        Assert.Equal("fresh", health.P2PacketRateStatus);
+        Assert.Equal(801, health.P2LastPacketsPerSecond);
+        Assert.Equal(1200, health.P2FifoModelSamples);
+        Assert.Equal(0, health.P2QueuedPackets);
+        Assert.Equal(0, health.P2TransportFailures);
+        Assert.Contains("p2-rate-fresh", health.QualityReasons);
+        Assert.Contains("rf-forward-power-present", health.QualityReasons);
         Assert.Contains("RF forward-power evidence", health.DiagnosticRecommendation);
     }
 
@@ -64,6 +73,10 @@ public sealed class TxEgressHealthDiagnosticsTests
         Assert.False(health.HostTxActive);
         Assert.False(health.RfDetected);
         Assert.Equal("transport-live-rf-idle", health.RfEvidenceStatus);
+        Assert.Equal(74, health.QualityScore);
+        Assert.Equal("verify", health.QualityTone);
+        Assert.Contains("host-tx-idle", health.QualityReasons);
+        Assert.Contains("rf-forward-power-missing", health.QualityReasons);
         Assert.Contains("off-air TX monitor or idle packet flow", health.DiagnosticRecommendation);
     }
 
@@ -86,6 +99,10 @@ public sealed class TxEgressHealthDiagnosticsTests
         Assert.True(health.P2Attached);
         Assert.False(health.P2Live);
         Assert.Equal(10_000.0, health.P2LastActivityAgeMs.GetValueOrDefault());
+        Assert.Equal(46, health.QualityScore);
+        Assert.Equal("verify", health.QualityTone);
+        Assert.Equal("stale", health.P2PacketRateStatus);
+        Assert.Contains("p2-rate-stale", health.QualityReasons);
         Assert.Contains("not live right now", health.DiagnosticRecommendation);
     }
 
@@ -110,6 +127,11 @@ public sealed class TxEgressHealthDiagnosticsTests
         Assert.True(health.P2Attached);
         Assert.True(health.P2Live);
         Assert.Equal("transport-live-rf-idle", health.RfEvidenceStatus);
+        Assert.Equal(18, health.QualityScore);
+        Assert.Equal("protect", health.QualityTone);
+        Assert.Equal(3, health.P2TransportFailures);
+        Assert.Contains("p2-queue-write-failures", health.QualityReasons);
+        Assert.Contains("p2-send-failures", health.QualityReasons);
         Assert.Contains("write/send failures", health.DiagnosticRecommendation);
     }
 
@@ -133,6 +155,15 @@ public sealed class TxEgressHealthDiagnosticsTests
         Assert.False(health.HostTxActive);
         Assert.False(health.RfDetected);
         Assert.Equal("rf-idle", health.RfEvidenceStatus);
+        Assert.Equal(30, health.QualityScore);
+        Assert.Equal("verify", health.QualityTone);
+        Assert.Equal("missing", health.P2PacketRateStatus);
+        Assert.Null(health.P2LastPacketsPerSecond);
+        Assert.Null(health.P2FifoModelSamples);
+        Assert.Null(health.P2QueuedPackets);
+        Assert.Equal(0, health.P2TransportFailures);
+        Assert.Contains("p2-unattached", health.QualityReasons);
+        Assert.Contains("p1-ring-drop-pressure", health.QualityReasons);
         Assert.Contains("P1 TX IQ ring is dropping samples", health.DiagnosticRecommendation);
     }
 

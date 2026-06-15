@@ -849,6 +849,14 @@ export type TxEgressHealthDto = {
   forwardWatts: number | null;
   rfDetected: boolean;
   rfEvidenceStatus: string;
+  qualityScore: number;
+  qualityTone: string;
+  p2PacketRateStatus: string;
+  p2LastPacketsPerSecond: number | null;
+  p2FifoModelSamples: number | null;
+  p2QueuedPackets: number | null;
+  p2TransportFailures: number;
+  qualityReasons: string[];
   diagnosticRecommendation: string | null;
 };
 
@@ -1859,6 +1867,14 @@ function normalizeTxEgressHealth(raw: unknown): TxEgressHealthDto {
       forwardWatts: null,
       rfDetected: false,
       rfEvidenceStatus: 'unknown',
+      qualityScore: 0,
+      qualityTone: 'unknown',
+      p2PacketRateStatus: 'missing',
+      p2LastPacketsPerSecond: null,
+      p2FifoModelSamples: null,
+      p2QueuedPackets: null,
+      p2TransportFailures: 0,
+      qualityReasons: ['tx-egress-health-unavailable'],
       diagnosticRecommendation: 'TX egress health is not available from this backend yet; use raw counters until OpenhpsdrZeus is restarted.',
     };
   }
@@ -1883,6 +1899,16 @@ function normalizeTxEgressHealth(raw: unknown): TxEgressHealthDto {
     forwardWatts: diagNumber(r.forwardWatts),
     rfDetected: Boolean(r.rfDetected),
     rfEvidenceStatus: diagString(r.rfEvidenceStatus) ?? 'unknown',
+    qualityScore: diagNumber(r.qualityScore) ?? 0,
+    qualityTone: diagString(r.qualityTone) ?? 'unknown',
+    p2PacketRateStatus: diagString(r.p2PacketRateStatus) ?? 'missing',
+    p2LastPacketsPerSecond: diagNumber(r.p2LastPacketsPerSecond),
+    p2FifoModelSamples: diagNumber(r.p2FifoModelSamples),
+    p2QueuedPackets: diagNumber(r.p2QueuedPackets),
+    p2TransportFailures: diagNumber(r.p2TransportFailures) ?? 0,
+    qualityReasons: Array.isArray(r.qualityReasons)
+      ? r.qualityReasons.map((item) => diagString(item)).filter((item): item is string => item !== null)
+      : [],
     diagnosticRecommendation: diagString(r.diagnosticRecommendation),
   };
 }

@@ -2297,6 +2297,7 @@ public static class ZeusEndpoints
             : Math.Round(p1RingDropped * 100.0 / p1RingTotalWritten, 3);
         if (p2 is not { } p2Diag)
         {
+            var rfStatus = RfEvidenceStatus(hostTxActive, rfDetected, p2Live: false, hardwarePtt: hardwarePtt);
             return new TxEgressHealthDto(
                 SchemaVersion: 1,
                 GeneratedUtc: generatedUtc,
@@ -2313,7 +2314,22 @@ public static class ZeusEndpoints
                 HardwarePtt: hardwarePtt,
                 ForwardWatts: forwardWatts,
                 RfDetected: rfDetected,
-                RfEvidenceStatus: RfEvidenceStatus(hostTxActive, rfDetected, p2Live: false, hardwarePtt: hardwarePtt),
+                RfEvidenceStatus: rfStatus,
+                QualityScore: TxEgressQualityScore("p2-unattached", hostTxActive, rfDetected, p2: null, p1RingDropRatioPct),
+                QualityTone: TxEgressQualityTone("p2-unattached", hostTxActive, rfDetected),
+                P2PacketRateStatus: "missing",
+                P2LastPacketsPerSecond: null,
+                P2FifoModelSamples: null,
+                P2QueuedPackets: null,
+                P2TransportFailures: 0,
+                QualityReasons: TxEgressQualityReasons(
+                    p2Attached: false,
+                    p2Live: false,
+                    packetRateStatus: "missing",
+                    p2: null,
+                    hostTxActive,
+                    rfDetected,
+                    p1RingDropRatioPct),
                 DiagnosticRecommendation: p1RingDropRatioPct > 1.0
                     ? "No Protocol 2 TX client is attached and the P1 TX IQ ring is dropping samples; verify the active radio transport before judging TX audio fidelity."
                     : "No Protocol 2 TX client is attached; P1 ring counters are the only visible TX egress path.");
@@ -2323,6 +2339,7 @@ public static class ZeusEndpoints
             ? Math.Max(0.0, (generatedUtc - lastRate).TotalMilliseconds)
             : null;
         bool p2Live = p2Diag.LastPacketsPerSecond > 0 && ageMs is <= 2500.0;
+        string packetRateStatus = P2PacketRateStatus(p2Diag.LastPacketsPerSecond, ageMs);
         long failures = p2Diag.QueueWriteFailures + p2Diag.SendFailures;
         string health;
         string recommendation;
@@ -2386,7 +2403,101 @@ public static class ZeusEndpoints
             ForwardWatts: forwardWatts,
             RfDetected: rfDetected,
             RfEvidenceStatus: RfEvidenceStatus(hostTxActive, rfDetected, p2Live, hardwarePtt),
+            QualityScore: TxEgressQualityScore(health, hostTxActive, rfDetected, p2Diag, p1RingDropRatioPct),
+            QualityTone: TxEgressQualityTone(health, hostTxActive, rfDetected),
+            P2PacketRateStatus: packetRateStatus,
+            P2LastPacketsPerSecond: p2Diag.LastPacketsPerSecond,
+            P2FifoModelSamples: p2Diag.LastFifoModelSamples,
+            P2QueuedPackets: p2Diag.QueuedPackets,
+            P2TransportFailures: failures,
+            QualityReasons: TxEgressQualityReasons(
+                p2Attached: true,
+                p2Live,
+                packetRateStatus,
+                p2Diag,
+                hostTxActive,
+                rfDetected,
+                p1RingDropRatioPct),
             DiagnosticRecommendation: recommendation);
+    }
+
+    static int TxEgressQualityScore(
+        string health,
+        bool hostTxActive,
+        bool rfDetected,
+        Protocol2TxIqDiagnostics? p2,
+        double p1RingDropRatioPct)
+    {
+        var score = health switch
+        {
+            "p2-live" when hostTxActive && rfDetected => 100,
+            "p2-live" when hostTxActive => 62,
+            "p2-live" => 74,
+            "p2-waiting-for-tx" => 68,
+            "p2-stale" => 46,
+            "p2-queue-backed-up" => 42,
+            "p2-send-failures" => 18,
+            "p2-sender-stopped" => 12,
+            "p2-unattached" => 50,
+            _ => 40,
+        };
+
+        if (p2 is null && p1RingDropRatioPct > 1.0) score -= 20;
+        if (p2 is { QueuedPackets: > 0 and <= 12 } p2Diag)
+            score -= Math.Min(10, (int)p2Diag.QueuedPackets);
+        return Math.Clamp(score, 0, 100);
+    }
+
+    static string TxEgressQualityTone(string health, bool hostTxActive, bool rfDetected)
+    {
+        if (health is "p2-sender-stopped" or "p2-send-failures" or "p2-queue-backed-up")
+            return "protect";
+        if (health == "p2-live" && hostTxActive && !rfDetected)
+            return "protect";
+        if (health == "p2-live" && rfDetected)
+            return "ready";
+        if (health == "p2-waiting-for-tx")
+            return "standby";
+        return "verify";
+    }
+
+    static string P2PacketRateStatus(int packetsPerSecond, double? ageMs)
+    {
+        if (packetsPerSecond <= 0 || ageMs is null) return "missing";
+        if (ageMs <= 2500.0) return "fresh";
+        if (ageMs <= 15_000.0) return "stale";
+        return "expired";
+    }
+
+    static string[] TxEgressQualityReasons(
+        bool p2Attached,
+        bool p2Live,
+        string packetRateStatus,
+        Protocol2TxIqDiagnostics? p2,
+        bool hostTxActive,
+        bool rfDetected,
+        double p1RingDropRatioPct)
+    {
+        var reasons = new List<string>();
+        if (!p2Attached)
+        {
+            reasons.Add("p2-unattached");
+        }
+        else if (p2 is { } p2Diag)
+        {
+            reasons.Add(p2Live ? "p2-rate-fresh" : $"p2-rate-{packetRateStatus}");
+            if (!p2Diag.SenderRunning) reasons.Add("p2-sender-stopped");
+            if (p2Diag.QueueWriteFailures > 0) reasons.Add("p2-queue-write-failures");
+            if (p2Diag.SendFailures > 0) reasons.Add("p2-send-failures");
+            if (p2Diag.QueuedPackets > 12) reasons.Add("p2-queue-backed-up");
+            if (p2Diag.InputComplexSamples > 0) reasons.Add("tx-iq-seen");
+            if (p2Diag.LastFifoModelSamples > 0) reasons.Add("p2-fifo-modeled");
+        }
+
+        reasons.Add(hostTxActive ? "host-tx-active" : "host-tx-idle");
+        reasons.Add(rfDetected ? "rf-forward-power-present" : "rf-forward-power-missing");
+        if (p1RingDropRatioPct > 1.0) reasons.Add("p1-ring-drop-pressure");
+        return reasons.ToArray();
     }
 
     static string RfEvidenceStatus(
@@ -2438,6 +2549,14 @@ internal sealed record TxEgressHealthDto(
     double? ForwardWatts,
     bool RfDetected,
     string RfEvidenceStatus,
+    int QualityScore,
+    string QualityTone,
+    string P2PacketRateStatus,
+    int? P2LastPacketsPerSecond,
+    long? P2FifoModelSamples,
+    long? P2QueuedPackets,
+    long P2TransportFailures,
+    string[] QualityReasons,
     string DiagnosticRecommendation);
 internal sealed record HardwareDiagnosticsMarkerRequest(string? Label, string? Notes);
 internal sealed record WavRecordStartRequest(string? Source);
