@@ -35,7 +35,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-// AudioWorkletProcessor that accumulates mono mic samples into 960-sample
+// AudioWorkletProcessor that converts mono mic samples into 960-sample
 // (20 ms @ 48 kHz) blocks and transfers each block to the main thread over
 // this.port. Matches the server-side MSG_TYPE_MIC_PCM = 0x20 contract.
 //
@@ -43,17 +43,39 @@
 // without ES-module transpilation. AudioWorklet loader (addModule) needs a URL
 // to a standalone JS file with no imports; a bundled worker chunk won't work.
 //
-// Sample rate: we rely on the caller creating the AudioContext with
-// sampleRate: 48000 so the implicit `sampleRate` global inside this processor
-// equals 48000. If that contract breaks we'd need a resampler here.
+// Sample rate: 48 kHz contexts take the fast path. If a browser/device ignores
+// the requested AudioContext rate, a small windowed-sinc converter keeps the
+// downstream TX mic-block contract correct instead of mis-framing audio.
 
+const OUTPUT_RATE = 48000;
 const BLOCK_SAMPLES = 960;
+const RESAMPLE_RADIUS = 16;
+
+function sinc(x) {
+  if (Math.abs(x) < 1e-8) return 1;
+  const pix = Math.PI * x;
+  return Math.sin(pix) / pix;
+}
+
+function raisedCosineWindow(distance) {
+  if (distance >= RESAMPLE_RADIUS) return 0;
+  return 0.5 + 0.5 * Math.cos(Math.PI * distance / RESAMPLE_RADIUS);
+}
 
 class MicUplinkProcessor extends AudioWorkletProcessor {
   constructor() {
     super();
     this._buf = new Float32Array(BLOCK_SAMPLES);
     this._fill = 0;
+    const actualSampleRate = typeof sampleRate === 'number' ? sampleRate : OUTPUT_RATE;
+    this._inputRate = Number.isFinite(actualSampleRate) && actualSampleRate > 0
+      ? actualSampleRate
+      : OUTPUT_RATE;
+    this._passthrough = this._inputRate === OUTPUT_RATE;
+    this._input = [];
+    this._phase = 0;
+    this._step = this._inputRate / OUTPUT_RATE;
+    this._cutoff = Math.min(0.5, (OUTPUT_RATE / this._inputRate) * 0.5) * 0.94;
   }
 
   process(inputs) {
@@ -61,6 +83,11 @@ class MicUplinkProcessor extends AudioWorkletProcessor {
     if (!input || input.length === 0) return true;
     const ch = input[0];
     if (!ch) return true;
+
+    if (!this._passthrough) {
+      this._appendResampled(ch);
+      return true;
+    }
 
     let srcIdx = 0;
     while (srcIdx < ch.length) {
@@ -71,22 +98,64 @@ class MicUplinkProcessor extends AudioWorkletProcessor {
       srcIdx += take;
 
       if (this._fill === BLOCK_SAMPLES) {
-        // Transfer the buffer to the main thread (zero-copy) and allocate
-        // a fresh one. New-alloc cost is ~192 KB/s at 50 Hz, acceptable.
-        // Peak-level computation runs here (once per 20 ms block) so the
-        // main thread can drive a mic meter at exactly the uplink cadence.
-        const out = this._buf;
-        let peak = 0;
-        for (let i = 0; i < BLOCK_SAMPLES; i++) {
-          const a = out[i] < 0 ? -out[i] : out[i];
-          if (a > peak) peak = a;
-        }
-        this._buf = new Float32Array(BLOCK_SAMPLES);
-        this._fill = 0;
-        this.port.postMessage({ samples: out, peak }, [out.buffer]);
+        this._emitBlock();
       }
     }
     return true;
+  }
+
+  _appendResampled(ch) {
+    for (let i = 0; i < ch.length; i++) this._input.push(ch[i]);
+
+    while (this._phase + RESAMPLE_RADIUS < this._input.length) {
+      this._appendOutputSample(this._sampleAt(this._phase));
+      this._phase += this._step;
+    }
+
+    const drop = Math.max(0, Math.floor(this._phase) - RESAMPLE_RADIUS);
+    if (drop > 0) {
+      this._input = this._input.slice(drop);
+      this._phase -= drop;
+    }
+  }
+
+  _sampleAt(phase) {
+    const start = Math.ceil(phase - RESAMPLE_RADIUS);
+    const end = Math.floor(phase + RESAMPLE_RADIUS);
+    let sum = 0;
+    let norm = 0;
+    for (let i = start; i <= end; i++) {
+      if (i < 0 || i >= this._input.length) continue;
+      const d = phase - i;
+      const w = 2 * this._cutoff * sinc(2 * this._cutoff * d) *
+        raisedCosineWindow(Math.abs(d));
+      sum += this._input[i] * w;
+      norm += w;
+    }
+    return norm !== 0 ? sum / norm : 0;
+  }
+
+  _appendOutputSample(sample) {
+    this._buf[this._fill++] = sample;
+    if (this._fill === BLOCK_SAMPLES) {
+      this._emitBlock();
+    }
+  }
+
+  _emitBlock() {
+    // Transfer the buffer to the main thread (zero-copy) and allocate a fresh
+    // one. New-alloc cost is ~192 KB/s at 50 Hz, acceptable. Peak-level
+    // computation runs here (once per 20 ms block) so the main thread can drive
+    // a mic meter at exactly the uplink cadence.
+    const out = this._buf;
+    let peak = 0;
+    for (let i = 0; i < BLOCK_SAMPLES; i++) {
+      const a = out[i] < 0 ? -out[i] : out[i];
+      if (a > peak) peak = a;
+    }
+    this._buf = new Float32Array(BLOCK_SAMPLES);
+    this._fill = 0;
+    this.port.postMessage({ samples: out, peak }, [out.buffer]);
   }
 }
 
