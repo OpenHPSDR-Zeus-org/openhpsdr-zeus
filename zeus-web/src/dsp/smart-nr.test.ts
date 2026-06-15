@@ -54,6 +54,52 @@ describe('smart NR supervisor', () => {
     expect(rec.nr.nrMode).toBe('Sbnr');
   });
 
+  it('promotes sustained coherent subthreshold ridges for weak-signal NR', () => {
+    const spec = noise();
+    const conf = confidence();
+    spec[119] = NOISE_DB + 9.4;
+    spec[120] = NOISE_DB + 9.8;
+    spec[121] = NOISE_DB + 9.2;
+    conf[119] = 0.74;
+    conf[120] = 0.86;
+    conf[121] = 0.73;
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      confidence: conf,
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'DIGU',
+    })!;
+
+    expect(rec.condition.maxSnrDb).toBeLessThan(8);
+    expect(rec.condition.coherentSubthresholdSignal).toBe(true);
+    expect(rec.condition.hasSignal).toBe(true);
+    expect(rec.condition.weakSparse).toBe(true);
+    expect(rec.nr.nrMode).toBe('Sbnr');
+  });
+
+  it('does not promote low-confidence subthreshold energy as a signal', () => {
+    const spec = noise();
+    const conf = confidence();
+    spec[119] = NOISE_DB + 9.4;
+    spec[120] = NOISE_DB + 9.8;
+    spec[121] = NOISE_DB + 9.2;
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      confidence: conf,
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'DIGU',
+    })!;
+
+    expect(rec.condition.coherentSubthresholdSignal).toBe(false);
+    expect(rec.condition.hasSignal).toBe(false);
+    expect(rec.condition.weakSparse).toBe(false);
+    expect(rec.nr.nrMode).toBe('Off');
+  });
+
   it('recommends NR4/SBNR for weak CW and digital ridges', () => {
     const spec = noise();
     spec[120] = NOISE_DB + 14;

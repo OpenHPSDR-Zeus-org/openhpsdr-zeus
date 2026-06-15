@@ -20,6 +20,7 @@ export type SmartNrCondition = {
   coherentRidgeCount: number;
   widestCoherentRunBins: number;
   isolatedHotBinCount: number;
+  coherentSubthresholdSignal: boolean;
   hasSignal: boolean;
   weakSparse: boolean;
   denseNoise: boolean;
@@ -187,14 +188,25 @@ export function analyzeSmartNrCondition(
   const occupancy12 = above12 / n;
   const coherentOccupancy6 = coherentAbove6 / n;
   const impulsiveOccupancy12 = impulsiveAbove12 / n;
-  const hasSignal = maxSnrDb >= 8;
   const isolatedImpulseFloor = Math.max(3, Math.ceil(n * 0.01));
   const impulsiveNoise =
     (impulsiveOccupancy12 > 0.018 || isolatedHotBinCount >= isolatedImpulseFloor) &&
     coherentOccupancy6 < occupancy6 * 0.5;
   const hasCoherentSignal = !useConfidence || coherentPeakCount > 0 || coherentRidgeCount > 0;
+  // Temporal confidence can prove a persistent weak ridge before any single bin
+  // reaches the normal 8 dB instantaneous signal gate.
+  const coherentSubthresholdSignal =
+    useConfidence &&
+    maxSnrDb >= 6 &&
+    maxSnrDb < 8 &&
+    coherentRidgeCount > 0 &&
+    widestCoherentRunBins <= Math.max(6, Math.ceil(n * 0.025)) &&
+    coherentOccupancy6 > 0 &&
+    coherentOccupancy6 < 0.05 &&
+    occupancy12 === 0;
   const sparseCoherentRidge =
     !useConfidence || widestCoherentRunBins <= Math.max(8, Math.ceil(n * 0.04));
+  const hasSignal = maxSnrDb >= 8 || coherentSubthresholdSignal;
   const weakSparse =
     !impulsiveNoise &&
     hasSignal &&
@@ -228,6 +240,7 @@ export function analyzeSmartNrCondition(
     coherentRidgeCount,
     widestCoherentRunBins,
     isolatedHotBinCount,
+    coherentSubthresholdSignal,
     hasSignal,
     weakSparse,
     denseNoise,
