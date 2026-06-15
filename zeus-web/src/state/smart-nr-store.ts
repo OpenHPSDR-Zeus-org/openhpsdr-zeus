@@ -19,6 +19,11 @@ export type SmartNrStatus = {
   atUtc: string | null;
   profile: string;
   reason: string;
+  heldByRxChain?: boolean;
+  rxChainLabel?: string;
+  rxChainRecommendation?: string;
+  rxChainTone?: 'neutral' | 'optimize' | 'protect';
+  rxChainScore?: number;
   maxSnrDb: number;
   occupancyPct: number;
   coherentOccupancyPct: number;

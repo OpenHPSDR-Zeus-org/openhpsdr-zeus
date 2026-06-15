@@ -788,6 +788,31 @@
   white-space: nowrap;
 }
 
+.smart-nr-rx-advice {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding-top: 6px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.smart-nr-rx-advice.protect {
+  color: var(--tx);
+}
+
+.smart-nr-rx-advice.optimize {
+  color: var(--power);
+}
+
+.smart-nr-rx-advice > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .smart-nr-apply {
   min-width: 58px;
 }

@@ -188,6 +188,14 @@ export function DspPanel() {
 
   const nrActive = nr.nrMode !== 'Off';
   const nbActive = nr.nbMode !== 'Off';
+  const smartNrTitle = smartNrStatus
+    ? [
+        smartNrStatus.reason,
+        smartNrStatus.rxChainLabel && smartNrStatus.rxChainRecommendation
+          ? `${smartNrStatus.rxChainLabel}: ${smartNrStatus.rxChainRecommendation}`
+          : null,
+      ].filter(Boolean).join(' · ')
+    : 'Smart NR automation is waiting for spectrum data';
 
   return (
     <div className="dsp-grid">
@@ -267,7 +275,7 @@ export function DspPanel() {
         </button>
       </div>
       {smartNrMode !== 'manual' && (
-        <div className="dsp-smart-status" title={smartNrStatus?.reason ?? 'Smart NR automation is waiting for spectrum data'}>
+        <div className="dsp-smart-status" title={smartNrTitle}>
           <span className="mono">{smartNrMode.toUpperCase()}</span>
           <span>{smartNrStatus?.profile ?? 'WAIT'}</span>
           {smartNrMode === 'suggest' && smartNrStatus?.nr && !smartNrStatus.pending && !smartNrStatus.applied ? (
@@ -282,7 +290,7 @@ export function DspPanel() {
             </button>
           ) : smartNrStatus && (
             <span className="mono">
-              {smartNrStatus.pending ? 'DWELL' : smartNrStatus.applied ? 'APPLIED' : 'READY'}
+              {smartNrStatus.heldByRxChain ? 'RX HOLD' : smartNrStatus.pending ? 'DWELL' : smartNrStatus.applied ? 'APPLIED' : 'READY'}
             </span>
           )}
         </div>
