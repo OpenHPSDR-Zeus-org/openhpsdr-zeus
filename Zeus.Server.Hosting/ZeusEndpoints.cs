@@ -1541,6 +1541,16 @@ public static class ZeusEndpoints
             return Results.Ok(diag.NetworkProfileSnapshot());
         });
 
+        app.MapGet("/api/radio/user-io/labels", (HardwareDiagnosticsService diag) =>
+        {
+            return Results.Ok(diag.UserIoLabelsSnapshot());
+        });
+
+        app.MapGet("/api/radio/user-io/actions", (HardwareDiagnosticsService diag) =>
+        {
+            return Results.Ok(diag.UserIoActionsSnapshot());
+        });
+
         // Operator-selected variant for the 0x0A wire-byte alias family
         // (issue #218). Routes calibration / PA gain / rated-watts dispatch
         // when the connected board is OrionMkII. Default G2 preserves

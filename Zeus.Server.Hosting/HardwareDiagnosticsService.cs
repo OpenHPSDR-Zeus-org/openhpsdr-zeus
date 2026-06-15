@@ -330,6 +330,49 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         }
     }
 
+    public UserIoLabelsDto UserIoLabelsSnapshot()
+    {
+        lock (_sync)
+        {
+            var lines = BuildUserIoLines(_p2HadSample ? _p2Last : null);
+            var recommendation = _p2HadSample
+                ? "P2 user I/O lines are decoded with default labels; add a mapping marker before treating any line as a station action."
+                : "No P2 user I/O sample has arrived yet; connect a Protocol-2 radio and use mapping markers to correlate accessory lines.";
+
+            return new(
+                SchemaVersion: 1,
+                ActiveProtocol: _activeProtocol,
+                P2Attached: _p2Client is not null,
+                P2Packets: _p2Packets,
+                P2LastUpdatedUtc: _p2LastUpdatedUtc,
+                Lines: lines,
+                DiagnosticRecommendation: recommendation,
+                GeneratedUtc: DateTimeOffset.UtcNow);
+        }
+    }
+
+    public UserIoActionsDto UserIoActionsSnapshot()
+    {
+        lock (_sync)
+        {
+            var lines = BuildUserIoLines(_p2HadSample ? _p2Last : null);
+            var recommendation = _p2HadSample
+                ? "User I/O action bindings are intentionally unarmed; verify line identity with diagnostics markers before binding station automation."
+                : "No P2 user I/O state is available yet, so action bindings remain unarmed.";
+
+            return new(
+                SchemaVersion: 1,
+                ActiveProtocol: _activeProtocol,
+                P2Attached: _p2Client is not null,
+                P2Packets: _p2Packets,
+                P2LastUpdatedUtc: _p2LastUpdatedUtc,
+                ActionBindingsConfigured: false,
+                Lines: lines,
+                DiagnosticRecommendation: recommendation,
+                GeneratedUtc: DateTimeOffset.UtcNow);
+        }
+    }
+
     public void ResetMapping()
     {
         lock (_sync)
@@ -628,6 +671,51 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         return (
             "clean",
             "The active transport has delivered RX frames without observed sequence gaps in this session.");
+    }
+
+    private static UserIoLineDto[] BuildUserIoLines(Zeus.Protocol2.P2TelemetryReading? reading)
+    {
+        ushort? userAdc0 = reading?.UserAdc0;
+        ushort? userAdc1 = reading?.UserAdc1;
+        ushort? userAdc2 = reading?.UserAdc2;
+        ushort? userAdc3 = reading?.UserAdc3;
+        byte? digital = reading?.UserDigitalIn;
+
+        var lines = new List<UserIoLineDto>(12)
+        {
+            AnalogLine("userAdc0", "User ADC 0", userAdc0),
+            AnalogLine("userAdc1", "User ADC 1", userAdc1),
+            AnalogLine("userAdc2", "User ADC 2", userAdc2),
+            AnalogLine("userAdc3", "User ADC 3", userAdc3),
+        };
+
+        for (int bit = 0; bit < 8; bit++)
+        {
+            bool? state = digital is { } value ? (value & (1 << bit)) != 0 : null;
+            lines.Add(new(
+                Id: $"userDigital{bit}",
+                Kind: "digital",
+                Label: $"User Digital {bit}",
+                RawAdc: null,
+                NormalizedPct: null,
+                DigitalState: state));
+        }
+
+        return lines.ToArray();
+    }
+
+    private static UserIoLineDto AnalogLine(string id, string label, ushort? raw)
+    {
+        double? pct = raw is { } value
+            ? Round(value / 65535.0 * 100.0, 2)
+            : null;
+        return new(
+            Id: id,
+            Kind: "analog",
+            Label: label,
+            RawAdc: raw,
+            NormalizedPct: pct,
+            DigitalState: null);
     }
 
     private void OnP1Telemetry(TelemetryReading reading)
@@ -1684,11 +1772,11 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             },
             candidateControls = new[]
             {
-                "planned:/api/radio/user-io/labels",
-                "planned:/api/radio/user-io/actions",
+                "/api/radio/user-io/labels",
+                "/api/radio/user-io/actions",
             },
             safetyClass = "rx-safe",
-            notes = "Expose configurable labels, thresholds, and action bindings for Orion/G2 external IO once physical lines are correlated.",
+            notes = "P2 user ADC and digital input lines now have direct read-only labels and action-readiness snapshots; station automation remains unarmed until physical lines are correlated with diagnostics markers.",
         },
         new
         {

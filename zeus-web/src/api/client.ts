@@ -700,6 +700,38 @@ export type RadioNetworkProfileDto = {
   generatedUtc: string;
 };
 
+export type UserIoLineDto = {
+  id: string;
+  kind: string;
+  label: string;
+  rawAdc: number | null;
+  normalizedPct: number | null;
+  digitalState: boolean | null;
+};
+
+export type UserIoLabelsDto = {
+  schemaVersion: number;
+  activeProtocol: 'P1' | 'P2' | null;
+  p2Attached: boolean;
+  p2Packets: number;
+  p2LastUpdatedUtc: string | null;
+  lines: UserIoLineDto[];
+  diagnosticRecommendation: string | null;
+  generatedUtc: string;
+};
+
+export type UserIoActionsDto = {
+  schemaVersion: number;
+  activeProtocol: 'P1' | 'P2' | null;
+  p2Attached: boolean;
+  p2Packets: number;
+  p2LastUpdatedUtc: string | null;
+  actionBindingsConfigured: boolean;
+  lines: UserIoLineDto[];
+  diagnosticRecommendation: string | null;
+  generatedUtc: string;
+};
+
 export type HardwareP1DiagnosticsDto = {
   packets: number;
   lastUpdatedUtc: string | null;
@@ -1737,6 +1769,58 @@ function normalizeRadioNetworkProfile(raw: unknown): RadioNetworkProfileDto {
   };
 }
 
+function normalizeUserIoLine(raw: unknown): UserIoLineDto {
+  const r = asDiagRecord(raw);
+  return {
+    id: diagString(r.id) ?? 'unknown',
+    kind: diagString(r.kind) ?? 'unknown',
+    label: diagString(r.label) ?? 'User I/O',
+    rawAdc: diagNumber(r.rawAdc),
+    normalizedPct: diagNumber(r.normalizedPct),
+    digitalState: diagBool(r.digitalState),
+  };
+}
+
+function normalizeUserIoLines(raw: unknown): UserIoLineDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(normalizeUserIoLine);
+}
+
+function normalizeUserIoLabels(raw: unknown): UserIoLabelsDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    activeProtocol: diagActiveProtocol(r.activeProtocol),
+    p2Attached: Boolean(r.p2Attached),
+    p2Packets: diagNumber(r.p2Packets) ?? 0,
+    p2LastUpdatedUtc: diagString(r.p2LastUpdatedUtc),
+    lines: normalizeUserIoLines(r.lines),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+    generatedUtc:
+      typeof r.generatedUtc === 'string'
+        ? r.generatedUtc
+        : new Date().toISOString(),
+  };
+}
+
+function normalizeUserIoActions(raw: unknown): UserIoActionsDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    activeProtocol: diagActiveProtocol(r.activeProtocol),
+    p2Attached: Boolean(r.p2Attached),
+    p2Packets: diagNumber(r.p2Packets) ?? 0,
+    p2LastUpdatedUtc: diagString(r.p2LastUpdatedUtc),
+    actionBindingsConfigured: Boolean(r.actionBindingsConfigured),
+    lines: normalizeUserIoLines(r.lines),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+    generatedUtc:
+      typeof r.generatedUtc === 'string'
+        ? r.generatedUtc
+        : new Date().toISOString(),
+  };
+}
+
 function diagNumberArray(raw: unknown): number[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((v) => diagNumber(v) ?? 0);
@@ -2306,6 +2390,26 @@ export function fetchRadioNetworkProfile(
     '/api/radio/network-profile',
     { signal },
     normalizeRadioNetworkProfile,
+  );
+}
+
+export function fetchUserIoLabels(
+  signal?: AbortSignal,
+): Promise<UserIoLabelsDto> {
+  return jsonFetch(
+    '/api/radio/user-io/labels',
+    { signal },
+    normalizeUserIoLabels,
+  );
+}
+
+export function fetchUserIoActions(
+  signal?: AbortSignal,
+): Promise<UserIoActionsDto> {
+  return jsonFetch(
+    '/api/radio/user-io/actions',
+    { signal },
+    normalizeUserIoActions,
   );
 }
 
