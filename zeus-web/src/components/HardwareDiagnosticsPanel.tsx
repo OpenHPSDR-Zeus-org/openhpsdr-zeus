@@ -360,6 +360,7 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
   if (!diag) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for TX diagnostics.</div>;
   const p2 = diag.protocol2;
   const egress = diag.egress;
+  const audioPath = diag.audioPath;
   return (
     <div style={{ display: 'grid', gap: 10 }}>
       <FieldGrid
@@ -380,6 +381,25 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
           { label: 'P1 Drop Ratio', value: pct(egress.p1RingDropRatioPct) },
           { label: 'Health Updated', value: time(egress.generatedUtc) },
           { label: 'Endpoint Updated', value: time(diag.generatedUtc) },
+        ]}
+      />
+      <FieldGrid
+        fields={[
+          { label: 'Audio Path', value: audioPath.status },
+          { label: 'Path Host TX', value: boolLabel(audioPath.hostTxActive) },
+          { label: 'P2 DUC Live', value: boolLabel(audioPath.p2DucLive) },
+          { label: 'P2 Waiting', value: boolLabel(audioPath.p2WaitingForTx) },
+          { label: 'P2 IQ In', value: count(audioPath.p2InputComplexSamples) },
+          { label: 'P2 Sent', value: count(audioPath.p2PacketsSent) },
+          { label: 'P2 Queue', value: count(audioPath.p2QueuedPackets) },
+          { label: 'P2 Path Age', value: age(audioPath.p2LastActivityAgeMs) },
+          { label: 'Path Mic Samples', value: count(audioPath.totalMicSamples) },
+          { label: 'Path TX Blocks', value: count(audioPath.totalTxBlocks) },
+          { label: 'Path Mic Drops', value: count(audioPath.droppedFrames) },
+          { label: 'P1 Fill', value: pct(audioPath.ringFillPct) },
+          { label: 'P1 Path Drops', value: count(audioPath.ringDropped) },
+          { label: 'P1 Path Drop Ratio', value: pct(audioPath.ringDropRatioPct) },
+          { label: 'P1 Path Mag', value: audioPath.ringRecentMag.toFixed(3) },
         ]}
       />
       <FieldGrid
@@ -447,6 +467,7 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
           { label: 'VST Degraded', value: count(diag.vstEngine?.degradedBlocks) },
         ]}
       />
+      <DiagnosticRecommendation text={audioPath.diagnosticRecommendation} />
       <DiagnosticRecommendation text={diag.stage.diagnosticRecommendation} />
       <DiagnosticRecommendation text={egress.diagnosticRecommendation} />
     </div>

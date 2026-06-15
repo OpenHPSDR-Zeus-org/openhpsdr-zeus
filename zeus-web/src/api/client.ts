@@ -889,6 +889,31 @@ export type TxIngestDiagnosticsDto = {
   droppedFrames: number;
 };
 
+export type TxAudioPathHealthDto = {
+  schemaVersion: number;
+  status: string;
+  hostTxActive: boolean;
+  p2Attached: boolean;
+  p2DucLive: boolean;
+  p2WaitingForTx: boolean;
+  p2LastActivityAgeMs: number | null;
+  p2InputComplexSamples: number;
+  p2PacketsSent: number;
+  p2QueuedPackets: number | null;
+  totalMicSamples: number;
+  totalTxBlocks: number;
+  droppedFrames: number;
+  ringTotalWritten: number;
+  ringTotalRead: number;
+  ringCount: number;
+  ringCapacity: number;
+  ringFillPct: number;
+  ringDropped: number;
+  ringDropRatioPct: number;
+  ringRecentMag: number;
+  diagnosticRecommendation: string | null;
+};
+
 export type Protocol2TxIqDiagnosticsDto = {
   inputComplexSamples: number;
   packetsQueued: number;
@@ -979,6 +1004,7 @@ export type TxDiagnosticsDto = {
   ring: TxRingDiagnosticsDto;
   ingest: TxIngestDiagnosticsDto;
   protocol2: Protocol2TxIqDiagnosticsDto | null;
+  audioPath: TxAudioPathHealthDto;
   stage: TxStageDiagnosticsDto;
   egress: TxEgressHealthDto;
   txPlugins: TxPluginDiagnosticsDto | null;
@@ -2025,6 +2051,60 @@ function normalizeTxIngestDiagnostics(raw: unknown): TxIngestDiagnosticsDto {
   };
 }
 
+function normalizeTxAudioPathHealth(raw: unknown): TxAudioPathHealthDto {
+  if (raw === null || raw === undefined) {
+    return {
+      schemaVersion: 0,
+      status: 'unavailable',
+      hostTxActive: false,
+      p2Attached: false,
+      p2DucLive: false,
+      p2WaitingForTx: false,
+      p2LastActivityAgeMs: null,
+      p2InputComplexSamples: 0,
+      p2PacketsSent: 0,
+      p2QueuedPackets: null,
+      totalMicSamples: 0,
+      totalTxBlocks: 0,
+      droppedFrames: 0,
+      ringTotalWritten: 0,
+      ringTotalRead: 0,
+      ringCount: 0,
+      ringCapacity: 0,
+      ringFillPct: 0,
+      ringDropped: 0,
+      ringDropRatioPct: 0,
+      ringRecentMag: 0,
+      diagnosticRecommendation: 'TX audio-path health is not available from this backend yet; use raw ring, ingest, and P2 counters until OpenhpsdrZeus is restarted.',
+    };
+  }
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    status: diagString(r.status) ?? 'unknown',
+    hostTxActive: Boolean(r.hostTxActive),
+    p2Attached: Boolean(r.p2Attached),
+    p2DucLive: Boolean(r.p2DucLive),
+    p2WaitingForTx: Boolean(r.p2WaitingForTx),
+    p2LastActivityAgeMs: diagNumber(r.p2LastActivityAgeMs),
+    p2InputComplexSamples: diagNumber(r.p2InputComplexSamples) ?? 0,
+    p2PacketsSent: diagNumber(r.p2PacketsSent) ?? 0,
+    p2QueuedPackets: diagNumber(r.p2QueuedPackets),
+    totalMicSamples: diagNumber(r.totalMicSamples) ?? 0,
+    totalTxBlocks: diagNumber(r.totalTxBlocks) ?? 0,
+    droppedFrames: diagNumber(r.droppedFrames) ?? 0,
+    ringTotalWritten: diagNumber(r.ringTotalWritten) ?? 0,
+    ringTotalRead: diagNumber(r.ringTotalRead) ?? 0,
+    ringCount: diagNumber(r.ringCount) ?? 0,
+    ringCapacity: diagNumber(r.ringCapacity) ?? 0,
+    ringFillPct: diagNumber(r.ringFillPct) ?? 0,
+    ringDropped: diagNumber(r.ringDropped) ?? 0,
+    ringDropRatioPct: diagNumber(r.ringDropRatioPct) ?? 0,
+    ringRecentMag: diagNumber(r.ringRecentMag) ?? 0,
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+  };
+}
+
 function normalizeProtocol2TxIqDiagnostics(raw: unknown): Protocol2TxIqDiagnosticsDto | null {
   if (raw === null || raw === undefined) return null;
   const r = asDiagRecord(raw);
@@ -2154,6 +2234,9 @@ function normalizeTxDiagnostics(raw: unknown): TxDiagnosticsDto {
   const vstRaw = r.vstEngine === null || r.vstEngine === undefined
     ? null
     : asDiagRecord(r.vstEngine);
+  const ring = normalizeTxRingDiagnostics(r.ring);
+  const ingest = normalizeTxIngestDiagnostics(r.ingest);
+  const protocol2 = normalizeProtocol2TxIqDiagnostics(r.protocol2);
   return {
     generatedUtc:
       typeof r.generatedUtc === 'string'
@@ -2161,9 +2244,10 @@ function normalizeTxDiagnostics(raw: unknown): TxDiagnosticsDto {
         : new Date().toISOString(),
     iqSourceType: diagString(r.iqSourceType),
     iqSourceIsRing: Boolean(r.iqSourceIsRing),
-    ring: normalizeTxRingDiagnostics(r.ring),
-    ingest: normalizeTxIngestDiagnostics(r.ingest),
-    protocol2: normalizeProtocol2TxIqDiagnostics(r.protocol2),
+    ring,
+    ingest,
+    protocol2,
+    audioPath: normalizeTxAudioPathHealth(r.audioPath),
     stage: normalizeTxStageDiagnostics(r.stage),
     egress: normalizeTxEgressHealth(r.egress),
     txPlugins: pluginRaw === null

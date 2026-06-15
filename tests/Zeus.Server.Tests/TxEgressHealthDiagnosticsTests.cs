@@ -64,6 +64,46 @@ public sealed class TxEgressHealthDiagnosticsTests
     }
 
     [Fact]
+    public void BuildTxAudioPathHealth_ClassifiesIdleP2StandbyRingPressure()
+    {
+        var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
+
+        var health = ZeusEndpoints.BuildTxAudioPathHealth(
+            generated,
+            ringTotalWritten: 520_192,
+            ringTotalRead: 0,
+            ringCount: 16_384,
+            ringDropped: 487_424,
+            ringCapacity: 16_384,
+            ringRecentMag: 0.0004,
+            totalMicSamples: 130_560,
+            totalTxBlocks: 254,
+            droppedFrames: 0,
+            p2: P2(
+                inputComplexSamples: 0,
+                packetsQueued: 0,
+                packetsSent: 0,
+                queuedPackets: 0,
+                lastPacketsPerSecond: 0,
+                lastFifoModelSamples: 0),
+            hostTxActive: false);
+
+        Assert.Equal(1, health.SchemaVersion);
+        Assert.Equal("standby-ring-pressure", health.Status);
+        Assert.False(health.HostTxActive);
+        Assert.True(health.P2Attached);
+        Assert.False(health.P2DucLive);
+        Assert.True(health.P2WaitingForTx);
+        Assert.Null(health.P2LastActivityAgeMs);
+        Assert.Equal(0, health.P2InputComplexSamples);
+        Assert.Equal(0, health.P2PacketsSent);
+        Assert.Equal(100.0, health.RingFillPct);
+        Assert.Equal(93.701, health.RingDropRatioPct);
+        Assert.Equal(0.0, health.RingRecentMag);
+        Assert.Contains("standby ingest pressure", health.DiagnosticRecommendation);
+    }
+
+    [Fact]
     public void BuildTxEgressHealth_MarksRecentP2RateAsLive()
     {
         var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
@@ -193,6 +233,36 @@ public sealed class TxEgressHealthDiagnosticsTests
         Assert.Equal("stale", health.P2PacketRateStatus);
         Assert.Contains("p2-rate-stale", health.QualityReasons);
         Assert.Contains("not live right now", health.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildTxEgressHealth_MarksIdleP2RingDropsAsStandbyPressure()
+    {
+        var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
+
+        var health = ZeusEndpoints.BuildTxEgressHealth(
+            generated,
+            p1RingTotalWritten: 1000,
+            p1RingDropped: 25,
+            p2: P2(
+                inputComplexSamples: 0,
+                packetsQueued: 0,
+                packetsSent: 0,
+                queuedPackets: 0,
+                lastPacketsPerSecond: 0,
+                lastFifoModelSamples: 0),
+            hostMoxOn: false,
+            hostTunOn: false,
+            hostTwoToneOn: false,
+            forwardWatts: 0.0);
+
+        Assert.Equal("p2-waiting-for-tx", health.HealthStatus);
+        Assert.True(health.P2Attached);
+        Assert.False(health.HostTxActive);
+        Assert.Equal(2.5, health.P1RingDropRatioPct);
+        Assert.Contains("p1-ring-standby-pressure", health.QualityReasons);
+        Assert.DoesNotContain("p1-ring-drop-pressure", health.QualityReasons);
+        Assert.Contains("standby drops are not on-air P2 egress evidence", health.DiagnosticRecommendation);
     }
 
     [Fact]

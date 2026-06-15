@@ -2095,6 +2095,13 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "dsp.txBlockSamples",
                 "dsp.txOutputSamples",
                 "dsp.txMonitorRequested",
+                "tx.audioPath.status",
+                "tx.audioPath.ringFillPct",
+                "tx.audioPath.ringDropRatioPct",
+                "tx.audioPath.p2DucLive",
+                "tx.audioPath.p2InputComplexSamples",
+                "tx.audioPath.p2PacketsSent",
+                "tx.egress.qualityReasons",
                 "pureSignal.feedbackSource",
                 "pureSignal.healthStatus",
                 "pureSignal.feedbackLevelRaw",
@@ -2114,7 +2121,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "/api/tx/ps/monitor",
             },
             safetyClass = "tx-monitoring-only",
-            notes = "The existing TX advisor can score mic/leveler/ALC/CFC/output/PureSignal health; the TX fidelity policy now persists the active station target while diagnostics prove the high-rate TX path and PS feedback path before judging station-quality audio.",
+            notes = "The existing TX advisor can score mic/leveler/ALC/CFC/output/PureSignal health; /api/tx/diag now separates standby P1 compatibility-ring pressure from active P2 DUC egress evidence before judging station-quality audio.",
         },
         new
         {

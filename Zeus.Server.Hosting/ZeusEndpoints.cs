@@ -449,6 +449,19 @@ public static class ZeusEndpoints
                 ring = new { ring.TotalWritten, ring.TotalRead, ring.Count, ring.Dropped, ring.Capacity, ring.RecentMag },
                 ingest = new { ingest.TotalMicSamples, ingest.TotalTxBlocks, ingest.DroppedFrames },
                 protocol2 = p2Tx,
+                audioPath = BuildTxAudioPathHealth(
+                    generatedUtc,
+                    ring.TotalWritten,
+                    ring.TotalRead,
+                    ring.Count,
+                    ring.Dropped,
+                    ring.Capacity,
+                    ring.RecentMag,
+                    ingest.TotalMicSamples,
+                    ingest.TotalTxBlocks,
+                    ingest.DroppedFrames,
+                    p2Tx,
+                    hostTxActive),
                 stage = BuildTxStageDiagnostics(txStage, hostTxActive),
                 egress = BuildTxEgressHealth(
                     generatedUtc,
@@ -2444,6 +2457,107 @@ public static class ZeusEndpoints
         return Math.Round(Math.Max(0.0, value), 1);
     }
 
+    internal static TxAudioPathHealthDto BuildTxAudioPathHealth(
+        DateTimeOffset generatedUtc,
+        long ringTotalWritten,
+        long ringTotalRead,
+        int ringCount,
+        long ringDropped,
+        int ringCapacity,
+        double ringRecentMag,
+        long totalMicSamples,
+        long totalTxBlocks,
+        long droppedFrames,
+        Protocol2TxIqDiagnostics? p2,
+        bool hostTxActive)
+    {
+        double ringFillPct = ringCapacity <= 0
+            ? 0.0
+            : Math.Round(Math.Clamp(ringCount * 100.0 / ringCapacity, 0.0, 100.0), 1);
+        double ringDropRatioPct = ringTotalWritten <= 0
+            ? 0.0
+            : Math.Round(ringDropped * 100.0 / ringTotalWritten, 3);
+        long p2InputComplexSamples = p2?.InputComplexSamples ?? 0;
+        long p2PacketsSent = p2?.PacketsSent ?? 0;
+        long? p2QueuedPackets = p2?.QueuedPackets;
+        double? p2AgeMs = p2?.LastRateTimestampUtc is { } lastRate
+            ? Math.Max(0.0, (generatedUtc - lastRate).TotalMilliseconds)
+            : null;
+        bool p2DucLive = p2 is { LastPacketsPerSecond: > 0 } && p2AgeMs is <= 2500.0;
+        bool p2WaitingForTx = p2 is { SenderRunning: true }
+            && !p2DucLive
+            && p2InputComplexSamples <= 0
+            && p2PacketsSent <= 0;
+        bool ingestSeen = totalMicSamples > 0
+            || totalTxBlocks > 0
+            || ringTotalWritten > 0
+            || ringTotalRead > 0;
+        bool ringPressure = ringDropRatioPct > 1.0
+            || (ringDropped > 0 && ringFillPct >= 95.0);
+
+        string status;
+        string recommendation;
+        if (!ingestSeen)
+        {
+            status = "idle";
+            recommendation = "No TX audio or TX IQ has reached the ingest path yet; key MOX/TUN, run two-tone, or enable TX monitor audio before judging station fidelity.";
+        }
+        else if (hostTxActive && ringPressure)
+        {
+            status = "tx-ring-pressure";
+            recommendation = "Host TX is active and the TX IQ ring is dropping or full; reduce TX processing burst pressure, verify P2 DUC packet flow, and avoid increasing drive or density until egress is clean.";
+        }
+        else if (hostTxActive && (p2DucLive || p2InputComplexSamples > 0 || p2PacketsSent > 0))
+        {
+            status = "tx-audio-flowing";
+            recommendation = "TX audio is reaching the active DUC path; use TXA stage peaks, ALC/CFC gain reduction, P2 packets, RF power, and PureSignal feedback together for fidelity tuning.";
+        }
+        else if (hostTxActive)
+        {
+            status = "tx-waiting-for-p2-iq";
+            recommendation = "Host TX is active but P2 DUC input counters are not advancing; keep drive low and verify WDSP TXA output, TX monitor routing, and transport selection.";
+        }
+        else if (p2 is not null && p2WaitingForTx && ringPressure)
+        {
+            status = "standby-ring-pressure";
+            recommendation = "Host TX is idle and P2 DUC has no input; P1 compatibility-ring drops are standby ingest pressure, not on-air P2 egress evidence. Key MOX/TUN or enable a TX monitor path and watch P2 input/packet counters.";
+        }
+        else if (!hostTxActive && ringPressure)
+        {
+            status = "idle-ring-pressure";
+            recommendation = "TX ingest is producing IQ while host TX is idle and the ring is dropping; treat this as standby path pressure unless it persists after keying with live P2 DUC packets.";
+        }
+        else
+        {
+            status = "standby-audio-present";
+            recommendation = "TX audio or WDSP TXA activity is visible while host TX is idle; this is useful for monitor-path tuning, but on-air density still requires keyed P2 packets and RF/PureSignal evidence.";
+        }
+
+        return new TxAudioPathHealthDto(
+            SchemaVersion: 1,
+            Status: status,
+            HostTxActive: hostTxActive,
+            P2Attached: p2 is not null,
+            P2DucLive: p2DucLive,
+            P2WaitingForTx: p2WaitingForTx,
+            P2LastActivityAgeMs: p2AgeMs is { } age ? Math.Round(age, 0) : null,
+            P2InputComplexSamples: p2InputComplexSamples,
+            P2PacketsSent: p2PacketsSent,
+            P2QueuedPackets: p2QueuedPackets,
+            TotalMicSamples: totalMicSamples,
+            TotalTxBlocks: totalTxBlocks,
+            DroppedFrames: droppedFrames,
+            RingTotalWritten: ringTotalWritten,
+            RingTotalRead: ringTotalRead,
+            RingCount: ringCount,
+            RingCapacity: ringCapacity,
+            RingFillPct: ringFillPct,
+            RingDropped: ringDropped,
+            RingDropRatioPct: ringDropRatioPct,
+            RingRecentMag: Math.Round(ringRecentMag, 3),
+            DiagnosticRecommendation: recommendation);
+    }
+
     internal static TxEgressHealthDto BuildTxEgressHealth(
         DateTimeOffset generatedUtc,
         long p1RingTotalWritten,
@@ -2561,7 +2675,9 @@ public static class ZeusEndpoints
         else
         {
             health = "p2-waiting-for-tx";
-            recommendation = "P2 DUC sender is attached and waiting for TX IQ; key MOX/TUN or feed mic/TX monitor audio to validate live egress.";
+            recommendation = !hostTxActive && p1RingDropRatioPct > 1.0
+                ? "P2 DUC sender is attached and waiting for TX IQ; P1 compatibility-ring standby drops are not on-air P2 egress evidence until MOX/TUN is keyed and P2 input/packet counters advance."
+                : "P2 DUC sender is attached and waiting for TX IQ; key MOX/TUN or feed mic/TX monitor audio to validate live egress.";
         }
 
         var p2QualityScore = TxEgressQualityScore(health, hostTxActive, rfDetected, p2Diag, p1RingDropRatioPct);
@@ -2727,7 +2843,12 @@ public static class ZeusEndpoints
         reasons.Add(rfDetected ? "rf-forward-power-present" : "rf-forward-power-missing");
         if (duty.RecommendedMaxWatts is not null) reasons.Add("continuous-duty-mode");
         if (duty.LimitExceeded) reasons.Add("continuous-duty-limit-exceeded");
-        if (p1RingDropRatioPct > 1.0) reasons.Add("p1-ring-drop-pressure");
+        if (p1RingDropRatioPct > 1.0)
+        {
+            reasons.Add(p2Attached && !hostTxActive
+                ? "p1-ring-standby-pressure"
+                : "p1-ring-drop-pressure");
+        }
         return reasons.ToArray();
     }
 
@@ -2763,6 +2884,29 @@ internal sealed record ChainMembershipSetRequest(bool Active);
 internal sealed record ScanVstDirectoryRequest(string Directory);
 internal sealed record MasterBypassSetRequest(bool Bypassed);
 internal sealed record ProcessingModeSetRequest(string Mode);
+internal sealed record TxAudioPathHealthDto(
+    int SchemaVersion,
+    string Status,
+    bool HostTxActive,
+    bool P2Attached,
+    bool P2DucLive,
+    bool P2WaitingForTx,
+    double? P2LastActivityAgeMs,
+    long P2InputComplexSamples,
+    long P2PacketsSent,
+    long? P2QueuedPackets,
+    long TotalMicSamples,
+    long TotalTxBlocks,
+    long DroppedFrames,
+    long RingTotalWritten,
+    long RingTotalRead,
+    int RingCount,
+    int RingCapacity,
+    double RingFillPct,
+    long RingDropped,
+    double RingDropRatioPct,
+    double RingRecentMag,
+    string DiagnosticRecommendation);
 internal sealed record TxEgressHealthDto(
     int SchemaVersion,
     DateTimeOffset GeneratedUtc,

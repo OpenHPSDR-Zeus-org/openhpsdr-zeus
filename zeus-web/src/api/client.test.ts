@@ -1015,6 +1015,30 @@ describe('POST helpers', () => {
         lastRateTimestampUtc: '2026-06-15T13:00:00Z',
         senderRunning: true,
       },
+      audioPath: {
+        schemaVersion: 1,
+        status: 'tx-audio-flowing',
+        hostTxActive: true,
+        p2Attached: true,
+        p2DucLive: true,
+        p2WaitingForTx: false,
+        p2LastActivityAgeMs: 1000,
+        p2InputComplexSamples: 240,
+        p2PacketsSent: 1,
+        p2QueuedPackets: 0,
+        totalMicSamples: 480,
+        totalTxBlocks: 1,
+        droppedFrames: 0,
+        ringTotalWritten: 960,
+        ringTotalRead: 0,
+        ringCount: 0,
+        ringCapacity: 16384,
+        ringFillPct: 0,
+        ringDropped: 0,
+        ringDropRatioPct: 0,
+        ringRecentMag: 0.125,
+        diagnosticRecommendation: 'TX audio is reaching the active DUC path.',
+      },
       stage: {
         schemaVersion: 1,
         source: 'wdsp-txa-meter-ring',
@@ -1092,6 +1116,14 @@ describe('POST helpers', () => {
     expect(diag.protocol2?.packetsSent).toBe(1);
     expect(diag.protocol2?.lastPacketsPerSecond).toBe(800);
     expect(diag.protocol2?.senderRunning).toBe(true);
+    expect(diag.audioPath.status).toBe('tx-audio-flowing');
+    expect(diag.audioPath.p2DucLive).toBe(true);
+    expect(diag.audioPath.p2WaitingForTx).toBe(false);
+    expect(diag.audioPath.p2LastActivityAgeMs).toBe(1000);
+    expect(diag.audioPath.p2InputComplexSamples).toBe(240);
+    expect(diag.audioPath.ringCapacity).toBe(16384);
+    expect(diag.audioPath.ringRecentMag).toBe(0.125);
+    expect(diag.audioPath.diagnosticRecommendation).toBe('TX audio is reaching the active DUC path.');
     expect(diag.stage.status).toBe('active');
     expect(diag.stage.source).toBe('wdsp-txa-meter-ring');
     expect(diag.stage.micPkDbfs).toBe(-10.2);
