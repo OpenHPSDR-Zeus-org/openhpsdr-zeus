@@ -11,6 +11,10 @@ function fmtGr(v: number): string {
   return `${v.toFixed(1)} dB`;
 }
 
+function fmtValue(v: number | null, suffix = ''): string {
+  return v === null ? '--' : `${v.toFixed(0)}${suffix}`;
+}
+
 function stateColor(state: string): string {
   if (state === 'sweet' || state === 'monitor') return 'var(--signal)';
   if (state === 'clip' || state === 'hot') return 'var(--tx)';
@@ -28,8 +32,12 @@ export function TxFidelityAdvisor() {
   const cfcGr = useTxStore((s) => s.cfcGr);
   const alcGr = useTxStore((s) => s.alcGr);
   const outPk = useTxStore((s) => s.outPk);
+  const swr = useTxStore((s) => s.swr);
   const psEnabled = useTxStore((s) => s.psEnabled);
   const psCorrecting = useTxStore((s) => s.psCorrecting);
+  const psFeedbackLevel = useTxStore((s) => s.psFeedbackLevel);
+  const psCalState = useTxStore((s) => s.psCalState);
+  const psCalibrationStalled = useTxStore((s) => s.psCalibrationStalled);
   const snapshot = {
     moxOn,
     tunOn,
@@ -40,8 +48,12 @@ export function TxFidelityAdvisor() {
     cfcGr,
     alcGr,
     outPk,
+    swr,
     psEnabled,
     psCorrecting,
+    psFeedbackLevel,
+    psCalState,
+    psCalibrationStalled,
   };
   const analysis = analyzeTxFidelity(snapshot);
   const color = stateColor(analysis.state);
@@ -133,9 +145,12 @@ export function TxFidelityAdvisor() {
         }}
       >
         <span style={{ whiteSpace: 'nowrap' }}>MIC {fmtDb(analysis.micDbfs)}</span>
+        <span style={{ whiteSpace: 'nowrap' }}>OUT {fmtDb(analysis.outDbfs)}</span>
         <span style={{ whiteSpace: 'nowrap' }}>ALC {fmtGr(analysis.alcGr)}</span>
         <span style={{ whiteSpace: 'nowrap' }}>LVL {fmtGr(analysis.lvlrGr)}</span>
         <span style={{ whiteSpace: 'nowrap' }}>CFC {fmtGr(analysis.cfcGr)}</span>
+        <span style={{ whiteSpace: 'nowrap' }}>SWR {analysis.swr.toFixed(2)}</span>
+        <span style={{ whiteSpace: 'nowrap' }}>PSFB {fmtValue(analysis.psFeedbackLevel)}</span>
       </div>
     </section>
   );

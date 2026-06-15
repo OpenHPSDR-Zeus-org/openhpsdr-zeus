@@ -26,8 +26,12 @@ describe('TxFidelityAdvisor', () => {
       cfcGr: 0,
       alcGr: 0,
       outPk: -Infinity,
+      swr: 1.0,
       psEnabled: false,
       psCorrecting: false,
+      psFeedbackLevel: 0,
+      psCalState: 0,
+      psCalibrationStalled: false,
     });
   });
 
@@ -39,14 +43,21 @@ describe('TxFidelityAdvisor', () => {
       lvlrGr: 4,
       cfcGr: 2,
       outPk: -3,
+      swr: 1.15,
       psEnabled: true,
       psCorrecting: true,
+      psFeedbackLevel: 150,
+      psCalState: 0,
+      psCalibrationStalled: false,
     });
 
     const { container, unmount } = render(createElement(TxFidelityAdvisor));
 
     expect(container.textContent).toContain('Broadcast sweet spot');
     expect(container.textContent).toContain('FIDELITY');
+    expect(container.textContent).toContain('OUT -3.0 dBFS');
+    expect(container.textContent).toContain('SWR 1.15');
+    expect(container.textContent).toContain('PSFB 150');
 
     act(() => {
       useTxStore.setState({ wdspMicPk: -1, alcGr: 12 });

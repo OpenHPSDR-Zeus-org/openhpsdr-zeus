@@ -13,8 +13,12 @@ const BASE: TxFidelitySnapshot = {
   cfcGr: 2,
   alcGr: 5,
   outPk: -8,
+  swr: 1.1,
   psEnabled: true,
   psCorrecting: true,
+  psFeedbackLevel: 150,
+  psCalState: 0,
+  psCalibrationStalled: false,
 };
 
 describe('analyzeTxFidelity', () => {
@@ -45,6 +49,34 @@ describe('analyzeTxFidelity', () => {
     const output = analyzeTxFidelity({ ...BASE, outPk: 0 });
     expect(mic.state).toBe('clip');
     expect(output.state).toBe('clip');
+  });
+
+  it('flags tight TX output headroom before hard clipping', () => {
+    const a = analyzeTxFidelity({ ...BASE, wdspMicPk: -9, alcGr: 4, outPk: -0.6 });
+    expect(a.state).toBe('hot');
+    expect(a.label).toBe('Too hot');
+    expect(a.outDbfs).toBeCloseTo(-0.6, 1);
+    expect(a.detail).toContain('TX output has almost no headroom');
+  });
+
+  it('surfaces PureSignal feedback and calibration health', () => {
+    const a = analyzeTxFidelity({
+      ...BASE,
+      psCorrecting: false,
+      psFeedbackLevel: 94,
+      psCalibrationStalled: true,
+    });
+    expect(a.state).toBe('hot');
+    expect(a.score).toBeLessThan(50);
+    expect(a.psFeedbackLevel).toBe(94);
+    expect(a.detail).toContain('PureSignal calibration stalled');
+    expect(a.detail).toContain('PureSignal feedback 94 outside 128..181');
+  });
+
+  it('warns on unsafe RF match even when audio dynamics look clean', () => {
+    const a = analyzeTxFidelity({ ...BASE, swr: 3.2 });
+    expect(a.state).toBe('hot');
+    expect(a.detail).toContain('SWR protection risk');
   });
 
   it('does not judge voice fidelity during tune carrier', () => {
