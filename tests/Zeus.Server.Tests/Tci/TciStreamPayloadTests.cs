@@ -138,6 +138,30 @@ public class TciStreamPayloadTests
     }
 
     [Fact]
+    public void BuildAudioFromFloats_PreservesMonoWhenOneChannelRequested()
+    {
+        ReadOnlySpan<float> mono = stackalloc float[] { 0.1f, -0.2f, 0.3f };
+        var frame = TciStreamPayload.BuildAudioFromFloats(0, 24000, mono, channels: 1);
+
+        Assert.Equal(64 + mono.Length * 4, frame.Length);
+        Assert.Equal((uint)mono.Length, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(20)));
+        Assert.Equal(24_000u, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(4)));
+        Assert.Equal((uint)TciStreamType.RxAudioStream, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(24)));
+
+        for (int i = 0; i < mono.Length; i++)
+            Assert.Equal(mono[i], BitConverter.ToSingle(frame, 64 + i * 4));
+    }
+
+    [Fact]
+    public void BuildAudioFromFloats_RejectsUnsupportedChannelCount()
+    {
+        var mono = new[] { 0.1f };
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            TciStreamPayload.BuildAudioFromFloats(0, 48000, mono, channels: 3));
+    }
+
+    [Fact]
     public void BuildAudioFromFloats_SampleRateWrittenToHeader()
     {
         ReadOnlySpan<float> samples = stackalloc float[] { 0.0f };

@@ -77,8 +77,8 @@ public static class TciHandshake
         cmds.Add(TciProtocol.Command("iq_samplerate", sampleRate));
         cmds.Add(TciProtocol.Command("audio_samplerate", 48000));
 
-        // Audio stream negotiation — channels=2 (stereo) per TCI spec §5.8/§7.2.
-        // Mono RX audio is duplicated to L=R in TciStreamPayload.BuildAudioFromFloats.
+        // Audio stream negotiation — default to channels=2 (stereo) for broad
+        // TCI client compatibility; clients may opt into channels=1 later.
         cmds.Add(TciProtocol.Command("audio_stream_sample_type", "float32"));
         cmds.Add(TciProtocol.Command("audio_stream_channels", 2));
         cmds.Add(TciProtocol.Command("audio_stream_samples", 2048));
