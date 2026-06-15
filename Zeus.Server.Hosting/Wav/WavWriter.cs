@@ -44,7 +44,7 @@ public sealed class WavWriter : IDisposable
         Span<byte> buf = stackalloc byte[4];
         foreach (float s in samples)
         {
-            BinaryPrimitives.WriteSingleLittleEndian(buf, s);
+            BinaryPrimitives.WriteSingleLittleEndian(buf, DspPipelineService.SanitizeAudioSample(s));
             _bw.Write(buf);
         }
         _dataBytes += (long)samples.Length * 4;

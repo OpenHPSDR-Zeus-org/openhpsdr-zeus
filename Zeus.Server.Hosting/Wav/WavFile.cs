@@ -94,7 +94,8 @@ public static class WavFile
         {
             float acc = 0f;
             for (int c = 0; c < channels; c++)
-                acc += BinaryPrimitives.ReadSingleLittleEndian(span.Slice((f * channels + c) * 4, 4));
+                acc += DspPipelineService.SanitizeAudioSample(
+                    BinaryPrimitives.ReadSingleLittleEndian(span.Slice((f * channels + c) * 4, 4)));
             mono[f] = acc / channels;
         }
         return mono;
