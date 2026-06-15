@@ -57,6 +57,7 @@ import {
   TX_LEVELING_CONFIG_DEFAULT,
   createHardwareDiagnosticsMarker,
   fetchAdcProtection,
+  publishFrontendDspSceneDiagnostics,
   normalizeAgc,
   normalizeAdcProtectionStatus,
   normalizeAgcMode,
@@ -495,6 +496,28 @@ describe('POST helpers', () => {
           wdspWisdomStatus: '',
           readiness: 'wdsp-active',
         },
+        frontendDspScene: {
+          schemaVersion: 1,
+          available: true,
+          ageMs: 450,
+          atUtc: '2026-06-15T01:00:00Z',
+          sourceClientId: 'frontend-test',
+          mode: 'USB',
+          signalProfile: 'dx',
+          signalReason: 'sparse weak signal',
+          smartNrProfile: 'NR2',
+          smartNrReason: 'SSB noise profile',
+          smartNrRecommendation: 'Hold headroom; use Smart NR/filtering',
+          smartNrHeldByRxChain: false,
+          smartNrRxChainLabel: 'RX chain optimized',
+          maxSnrDb: 17.9,
+          coherentMaxSnrDb: 16.8,
+          occupiedPct: 4.2,
+          coherentOccupiedPct: 2.1,
+          impulsivePct: 0.4,
+          peakCount: 3,
+          coherentPeakCount: 2,
+        },
         mapping: {
           schemaVersion: 2,
           markers: [
@@ -542,9 +565,53 @@ describe('POST helpers', () => {
     expect(diag.dsp.engineKind).toBe('WDSP');
     expect(diag.dsp.txOutputSamples).toBe(4096);
     expect(diag.dsp.txMonitorRequested).toBe(true);
+    expect(diag.frontendDspScene.available).toBe(true);
+    expect(diag.frontendDspScene.signalProfile).toBe('dx');
+    expect(diag.frontendDspScene.smartNrRecommendation).toBe('Hold headroom; use Smart NR/filtering');
+    expect(diag.frontendDspScene.coherentPeakCount).toBe(2);
     expect(diag.mapping.schemaVersion).toBe(2);
     expect(diag.mapping.markers[0]?.label).toBe('RX2 on');
     expect(diag.featureSurfaces[0]?.id).toBe('hardware.mapping.correlation');
+  });
+
+  it('publishFrontendDspSceneDiagnostics posts frontend scene evidence', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      available: true,
+      ageMs: 12,
+      atUtc: '2026-06-15T01:00:00Z',
+      sourceClientId: 'frontend-test',
+      mode: 'USB',
+      signalProfile: 'dx',
+      smartNrProfile: 'NR4',
+      maxSnrDb: 12.5,
+      peakCount: 1,
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const scene = await publishFrontendDspSceneDiagnostics({
+      sourceClientId: 'frontend-test',
+      mode: 'USB',
+      signalProfile: 'dx',
+      smartNrProfile: 'NR4',
+      maxSnrDb: 12.5,
+      peakCount: 1,
+    });
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/diagnostics/dsp-scene');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({
+      sourceClientId: 'frontend-test',
+      mode: 'USB',
+      signalProfile: 'dx',
+      smartNrProfile: 'NR4',
+      maxSnrDb: 12.5,
+      peakCount: 1,
+    });
+    expect(scene.available).toBe(true);
+    expect(scene.signalProfile).toBe('dx');
+    expect(scene.smartNrProfile).toBe('NR4');
   });
 
   it('raises ApiError with server-provided error text on 400', async () => {

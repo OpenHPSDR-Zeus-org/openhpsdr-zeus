@@ -25,6 +25,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
     private readonly RadioService _radio;
     private readonly DspPipelineService _dsp;
     private readonly WdspWisdomInitializer _wisdom;
+    private readonly FrontendDspSceneDiagnosticsService _frontendDspScene;
     private readonly object _sync = new();
     private IProtocol1Client? _p1Client;
     private Zeus.Protocol2.Protocol2Client? _p2Client;
@@ -67,11 +68,13 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
     public HardwareDiagnosticsService(
         RadioService radio,
         DspPipelineService dsp,
-        WdspWisdomInitializer wisdom)
+        WdspWisdomInitializer wisdom,
+        FrontendDspSceneDiagnosticsService frontendDspScene)
     {
         _radio = radio;
         _dsp = dsp;
         _wisdom = wisdom;
+        _frontendDspScene = frontendDspScene;
         _radio.Connected += OnP1Connected;
         _radio.Disconnected += OnP1Disconnected;
         _radio.P2Connected += OnP2Connected;
@@ -116,6 +119,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 orionMkIIVariant = variant.ToString(),
                 capabilities = caps,
                 dsp = _dsp.SnapshotDiagnostics(_wisdom),
+                frontendDspScene = _frontendDspScene.Snapshot(),
                 activeProtocol = _activeProtocol,
                 p1 = new
                 {
@@ -1226,6 +1230,9 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             {
                 "dsp.engineKind",
                 "dsp.sampleRateHz",
+                "frontendDspScene.signalProfile",
+                "frontendDspScene.signalReason",
+                "frontendDspScene.coherentMaxSnrDb",
                 "frontend.signalEnhance.sceneStatus",
                 "frontend.signalEstimator.noiseFloor",
                 "frontend.signalEstimator.signalConfidence",
@@ -1236,7 +1243,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "planned:/api/dsp/display-intelligence",
             },
             safetyClass = "rx-safe",
-            notes = "Existing RX display logic now has floor-normalized Signal Pop, snap-to-carrier, temporal confidence, and coherent auto-profile classification; next step is persisting scene diagnostics server-side for remote/headless monitoring.",
+            notes = "Existing RX display logic now has floor-normalized Signal Pop, snap-to-carrier, temporal confidence, and coherent auto-profile classification; diagnostics mirror the current frontend scene so remote/headless monitoring can audit weak-signal decisions.",
         },
         new
         {
@@ -1249,6 +1256,9 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             telemetryPaths = new[]
             {
                 "dsp.engineKind",
+                "frontendDspScene.smartNrProfile",
+                "frontendDspScene.smartNrRecommendation",
+                "frontendDspScene.smartNrHeldByRxChain",
                 "frontend.smartNr.status",
                 "frontend.signalEstimator.noiseFloor",
                 "frontend.signalEstimator.signalConfidence",
@@ -1261,7 +1271,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "planned:/api/dsp/nr-condition",
             },
             safetyClass = "rx-safe",
-            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; a backend scene feed would make the same intelligence available to remote clients and recordings.",
+            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the backend diagnostics feed now preserves the active profile, recommendation, and RX-chain hold reason for remote clients and recordings.",
         },
         new
         {

@@ -52,6 +52,22 @@ function time(v: string | null | undefined): string {
   return Number.isNaN(d.getTime()) ? v : d.toLocaleTimeString();
 }
 
+function age(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '-';
+  if (v < 1000) return `${Math.max(0, Math.round(v))} ms`;
+  return `${Math.round(v / 1000)} s`;
+}
+
+function db(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '-';
+  return `${v.toFixed(1)} dB`;
+}
+
+function pct(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '-';
+  return `${v.toFixed(1)}%`;
+}
+
 function FieldGrid({ fields }: { fields: Field[] }) {
   return (
     <div
@@ -934,6 +950,29 @@ export function HardwareDiagnosticsPanel() {
     { label: 'Wisdom Status', value: dsp?.wdspWisdomStatus },
   ];
 
+  const scene = diag?.frontendDspScene;
+  const sceneFields: Field[] = [
+    { label: 'Available', value: boolLabel(scene?.available) },
+    { label: 'Age', value: age(scene?.ageMs) },
+    { label: 'Client', value: scene?.sourceClientId },
+    { label: 'Mode', value: scene?.mode },
+    { label: 'Signal Profile', value: scene?.signalProfile },
+    { label: 'Signal Reason', value: scene?.signalReason },
+    { label: 'Smart NR', value: scene?.smartNrProfile },
+    { label: 'Smart NR Reason', value: scene?.smartNrReason },
+    { label: 'Smart NR Action', value: scene?.smartNrRecommendation },
+    { label: 'RX Hold', value: boolLabel(scene?.smartNrHeldByRxChain) },
+    { label: 'RX Chain', value: scene?.smartNrRxChainLabel },
+    { label: 'Max SNR', value: db(scene?.maxSnrDb) },
+    { label: 'Coherent Max', value: db(scene?.coherentMaxSnrDb) },
+    { label: 'Occupied', value: pct(scene?.occupiedPct) },
+    { label: 'Coherent Occ', value: pct(scene?.coherentOccupiedPct) },
+    { label: 'Impulsive', value: pct(scene?.impulsivePct) },
+    { label: 'Peaks', value: scene?.peakCount },
+    { label: 'Coherent Peaks', value: scene?.coherentPeakCount },
+    { label: 'Updated', value: time(scene?.atUtc) },
+  ];
+
   const p1 = diag?.p1;
   const p1Fields: Field[] = [
     { label: 'Packets', value: p1?.packets },
@@ -1034,6 +1073,14 @@ export function HardwareDiagnosticsPanel() {
           <span className="ps-card-hint">engine, timing, TX path, WDSP readiness</span>
         </h4>
         <FieldGrid fields={dspFields} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          DSP Scene Intelligence
+          <span className="ps-card-hint">frontend Signal Intelligence and Smart NR evidence</span>
+        </h4>
+        <FieldGrid fields={sceneFields} />
       </div>
 
       <div className="ps-card">

@@ -354,6 +354,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<RadioStateStore>();
         builder.Services.AddSingleton<QrzService>();
         builder.Services.AddSingleton<LogService>();
+        builder.Services.AddSingleton<FrontendDspSceneDiagnosticsService>();
         builder.Services.AddSingleton<HardwareDiagnosticsService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<HardwareDiagnosticsService>());
 

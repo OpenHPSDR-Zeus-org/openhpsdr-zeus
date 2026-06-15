@@ -480,6 +480,48 @@ export type HardwareDspDiagnosticsDto = {
   readiness: string;
 };
 
+export type FrontendDspSceneDiagnosticsDto = {
+  schemaVersion: number;
+  available: boolean;
+  ageMs: number | null;
+  atUtc: string | null;
+  sourceClientId: string | null;
+  mode: RxMode | null;
+  signalProfile: string | null;
+  signalReason: string | null;
+  smartNrProfile: string | null;
+  smartNrReason: string | null;
+  smartNrRecommendation: string | null;
+  smartNrHeldByRxChain: boolean | null;
+  smartNrRxChainLabel: string | null;
+  maxSnrDb: number | null;
+  coherentMaxSnrDb: number | null;
+  occupiedPct: number | null;
+  coherentOccupiedPct: number | null;
+  impulsivePct: number | null;
+  peakCount: number | null;
+  coherentPeakCount: number | null;
+};
+
+export type FrontendDspSceneDiagnosticsPayload = {
+  sourceClientId?: string | null;
+  mode?: RxMode | null;
+  signalProfile?: string | null;
+  signalReason?: string | null;
+  smartNrProfile?: string | null;
+  smartNrReason?: string | null;
+  smartNrRecommendation?: string | null;
+  smartNrHeldByRxChain?: boolean | null;
+  smartNrRxChainLabel?: string | null;
+  maxSnrDb?: number | null;
+  coherentMaxSnrDb?: number | null;
+  occupiedPct?: number | null;
+  coherentOccupiedPct?: number | null;
+  impulsivePct?: number | null;
+  peakCount?: number | null;
+  coherentPeakCount?: number | null;
+};
+
 export type HardwareP1DiagnosticsDto = {
   packets: number;
   lastUpdatedUtc: string | null;
@@ -681,6 +723,7 @@ export type HardwareDiagnosticsDto = {
   orionMkIIVariant: string;
   capabilities: BoardCapabilities;
   dsp: HardwareDspDiagnosticsDto;
+  frontendDspScene: FrontendDspSceneDiagnosticsDto;
   activeProtocol: 'P1' | 'P2' | null;
   p1: HardwareP1DiagnosticsDto;
   p2: HardwareP2DiagnosticsDto;
@@ -1254,6 +1297,32 @@ function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
   };
 }
 
+function normalizeFrontendDspScene(raw: unknown): FrontendDspSceneDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    available: Boolean(r.available),
+    ageMs: diagNumber(r.ageMs),
+    atUtc: diagString(r.atUtc),
+    sourceClientId: diagString(r.sourceClientId),
+    mode: normalizeMode(r.mode),
+    signalProfile: diagString(r.signalProfile),
+    signalReason: diagString(r.signalReason),
+    smartNrProfile: diagString(r.smartNrProfile),
+    smartNrReason: diagString(r.smartNrReason),
+    smartNrRecommendation: diagString(r.smartNrRecommendation),
+    smartNrHeldByRxChain: diagBool(r.smartNrHeldByRxChain),
+    smartNrRxChainLabel: diagString(r.smartNrRxChainLabel),
+    maxSnrDb: diagNumber(r.maxSnrDb),
+    coherentMaxSnrDb: diagNumber(r.coherentMaxSnrDb),
+    occupiedPct: diagNumber(r.occupiedPct),
+    coherentOccupiedPct: diagNumber(r.coherentOccupiedPct),
+    impulsivePct: diagNumber(r.impulsivePct),
+    peakCount: diagNumber(r.peakCount),
+    coherentPeakCount: diagNumber(r.coherentPeakCount),
+  };
+}
+
 function diagNumberArray(raw: unknown): number[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((v) => diagNumber(v) ?? 0);
@@ -1491,6 +1560,7 @@ function normalizeHardwareDiagnostics(raw: unknown): HardwareDiagnosticsDto {
       typeof r.orionMkIIVariant === 'string' ? r.orionMkIIVariant : 'G2',
     capabilities: parseBoardCapabilities(r.capabilities),
     dsp: normalizeDspDiagnostics(r.dsp),
+    frontendDspScene: normalizeFrontendDspScene(r.frontendDspScene),
     activeProtocol,
     p1: {
       packets: diagNumber(p1.packets) ?? 0,
@@ -1746,6 +1816,22 @@ export function createHardwareDiagnosticsMarker(
       signal,
     },
     normalizeHardwareDiagnostics,
+  );
+}
+
+export function publishFrontendDspSceneDiagnostics(
+  payload: FrontendDspSceneDiagnosticsPayload,
+  signal?: AbortSignal,
+): Promise<FrontendDspSceneDiagnosticsDto> {
+  return jsonFetch(
+    '/api/radio/diagnostics/dsp-scene',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+      signal,
+    },
+    normalizeFrontendDspScene,
   );
 }
 
