@@ -2584,6 +2584,7 @@ public static class ZeusEndpoints
             var qualityScore = TxEgressQualityScore("p2-unattached", hostTxActive, rfDetected, p2: null, p1RingDropRatioPct);
             var qualityTone = TxEgressQualityTone("p2-unattached", hostTxActive, rfDetected, duty.LimitExceeded);
             var qualityReasons = TxEgressQualityReasons(
+                health: "p2-unattached",
                 p2Attached: false,
                 p2Live: false,
                 packetRateStatus: "missing",
@@ -2669,8 +2670,16 @@ public static class ZeusEndpoints
         }
         else if (p2Diag.InputComplexSamples > 0 || p2Diag.PacketsSent > 0)
         {
-            health = "p2-stale";
-            recommendation = "P2 DUC counters have prior TX activity but are not live right now; key MOX/TUN or enable TX monitor to verify real-time egress before making fidelity decisions.";
+            if (hostTxActive)
+            {
+                health = "p2-stale";
+                recommendation = "Host TX is active but P2 DUC counters are stale; keep drive low and verify WDSP TXA output, TX monitor routing, and P2 packet pacing before judging fidelity.";
+            }
+            else
+            {
+                health = "p2-post-tx-idle";
+                recommendation = "P2 DUC counters show prior TX activity, but host TX and RF are idle now; treat this as last-TX history, not an active egress fault, and key MOX/TUN or TX monitor when you want a fresh fidelity reading.";
+            }
         }
         else
         {
@@ -2683,6 +2692,7 @@ public static class ZeusEndpoints
         var p2QualityScore = TxEgressQualityScore(health, hostTxActive, rfDetected, p2Diag, p1RingDropRatioPct);
         var p2QualityTone = TxEgressQualityTone(health, hostTxActive, rfDetected, duty.LimitExceeded);
         var p2QualityReasons = TxEgressQualityReasons(
+            health,
             p2Attached: true,
             p2Live,
             packetRateStatus,
@@ -2776,6 +2786,7 @@ public static class ZeusEndpoints
             "p2-live" when hostTxActive => 62,
             "p2-live" => 74,
             "p2-waiting-for-tx" => 68,
+            "p2-post-tx-idle" => 72,
             "p2-stale" => 46,
             "p2-queue-backed-up" => 42,
             "p2-send-failures" => 18,
@@ -2800,7 +2811,7 @@ public static class ZeusEndpoints
             return "protect";
         if (health == "p2-live" && rfDetected)
             return "ready";
-        if (health == "p2-waiting-for-tx")
+        if (health is "p2-waiting-for-tx" or "p2-post-tx-idle")
             return "standby";
         return "verify";
     }
@@ -2814,6 +2825,7 @@ public static class ZeusEndpoints
     }
 
     static string[] TxEgressQualityReasons(
+        string health,
         bool p2Attached,
         bool p2Live,
         string packetRateStatus,
@@ -2837,6 +2849,7 @@ public static class ZeusEndpoints
             if (p2Diag.QueuedPackets > 12) reasons.Add("p2-queue-backed-up");
             if (p2Diag.InputComplexSamples > 0) reasons.Add("tx-iq-seen");
             if (p2Diag.LastFifoModelSamples > 0) reasons.Add("p2-fifo-modeled");
+            if (health == "p2-post-tx-idle") reasons.Add("p2-post-tx-idle");
         }
 
         reasons.Add(hostTxActive ? "host-tx-active" : "host-tx-idle");
