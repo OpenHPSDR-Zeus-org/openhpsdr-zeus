@@ -58,6 +58,7 @@ export function SquelchSettingsSection() {
   );
 
   const stage = stageForMode(mode);
+  const levelDisabled = !connected || squelch.adaptive;
 
   return (
     <div className="dsp-cfg">
@@ -79,7 +80,7 @@ export function SquelchSettingsSection() {
         <span className="dsp-cfg-label">
           Level
           <span className="dsp-cfg-hint">
-            {squelch.adaptive ? ' floor margin' : ' higher = tighter'}
+            {squelch.adaptive ? ' automatic' : ' higher = tighter'}
           </span>
         </span>
         <input
@@ -88,11 +89,22 @@ export function SquelchSettingsSection() {
           max={100}
           step={1}
           value={squelch.level}
-          disabled={!connected}
+          disabled={levelDisabled}
+          title={squelch.adaptive ? 'DYN mode tracks the noise floor automatically' : 'Fixed squelch threshold'}
           onChange={(e) => send({ ...squelch, level: Number(e.currentTarget.value) })}
-          style={{ flex: 1, accentColor: 'var(--accent)' }}
+          style={{
+            flex: 1,
+            cursor: levelDisabled ? 'not-allowed' : 'pointer',
+            accentColor: levelDisabled ? 'var(--fg-3)' : 'var(--accent)',
+            opacity: levelDisabled ? 0.55 : 1,
+          }}
         />
-        <span className="dsp-cfg-unit mono">{squelch.level}</span>
+        <span
+          className="dsp-cfg-unit mono"
+          style={{ color: squelch.adaptive ? 'var(--fg-3)' : undefined }}
+        >
+          {squelch.adaptive ? 'AUTO' : squelch.level}
+        </span>
       </label>
 
       <div className="dsp-cfg-row">

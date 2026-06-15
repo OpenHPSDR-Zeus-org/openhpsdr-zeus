@@ -152,14 +152,15 @@ public class DspPipelineService : BackgroundService,
     private const double RxLevelerMaxCutDb = -24.0;
     private const double RxLevelerBoostSlewDbPerBlock = 2.0;
     private const double RxLevelerPeakCeiling = 0.92;
-    private const int AdaptiveSquelchWindowSamples = 15;
-    private const int AdaptiveSquelchMinSamples = 4;
-    private const double AdaptiveSquelchFloorPercentile = 0.25;
-    private const double AdaptiveSquelchFloorRiseSlewDb = 0.5;
-    private const double AdaptiveSquelchFloorFallSlewDb = 4.0;
-    private const int AdaptiveSquelchCloseHoldBlocks = 9;
-    private const double AdaptiveSquelchAttackPerBlock = 0.45;
-    private const double AdaptiveSquelchReleasePerBlock = 0.16;
+    private const int AdaptiveSquelchWindowSamples = 12;
+    private const int AdaptiveSquelchMinSamples = 2;
+    private const double AdaptiveSquelchFloorPercentile = 0.20;
+    private const double AdaptiveSquelchFloorRiseSlewDb = 0.35;
+    private const double AdaptiveSquelchFloorFallSlewDb = 6.0;
+    private const int AdaptiveSquelchCloseHoldBlocks = 6;
+    private const double AdaptiveSquelchAttackPerBlock = 0.85;
+    private const double AdaptiveSquelchReleasePerBlock = 0.20;
+    private const double AdaptiveSquelchOpenMarginDb = 3.0;
 
     internal static float SanitizeAudioSample(float sample)
     {
@@ -264,8 +265,14 @@ public class DspPipelineService : BackgroundService,
         }
     }
 
-    internal static double AdaptiveSquelchMarginDb(int level) =>
-        2.0 + Math.Clamp(level, 0, 100) * 0.10;
+    internal static double AudioRmsToFallbackDbm(double rms)
+    {
+        if (!double.IsFinite(rms)) return double.NaN;
+        double dbfs = 20.0 * Math.Log10(Math.Max(rms, 1e-10));
+        return dbfs - 50.0;
+    }
+
+    internal static double AdaptiveSquelchMarginDb() => AdaptiveSquelchOpenMarginDb;
 
     internal static void UpdateAdaptiveSquelchMeter(
         AdaptiveSquelchState state,
@@ -313,7 +320,7 @@ public class DspPipelineService : BackgroundService,
             return;
         }
 
-        double marginDb = AdaptiveSquelchMarginDb(cfg.Level);
+        double marginDb = AdaptiveSquelchMarginDb();
         double openThreshold = state.NoiseFloorDbm + marginDb;
         double closeThreshold = openThreshold - Math.Clamp(marginDb * 0.4, 2.0, 5.0);
 
@@ -2388,6 +2395,12 @@ public class DspPipelineService : BackgroundService,
 
             if (!txMonitorOn)
             {
+                var squelch = state.Squelch ?? new SquelchConfig();
+                UpdateAdaptiveSquelchMeter(
+                    _adaptiveSquelch,
+                    squelch,
+                    AudioRmsToFallbackDbm(rxAudioRmsForMeter));
+
                 // RX audio plugin insert (rx.post-demod slot, e.g. a CW SCAF
                 // audio filter). Runs in place over the demodulated band audio
                 // AFTER the MOX fade and BEFORE the sidetone mix, so the filter
@@ -2400,7 +2413,7 @@ public class DspPipelineService : BackgroundService,
 
                 ApplyAdaptiveSquelch(
                     audioBuf.AsSpan(0, audioSampleCount),
-                    state.Squelch ?? new SquelchConfig(),
+                    squelch,
                     _adaptiveSquelch);
 
                 // Final receive loudness guard. WDSP AGC and NR have already
@@ -2489,11 +2502,9 @@ public class DspPipelineService : BackgroundService,
                 // noise later. Empirical offset of -50 dBm puts typical 20m
                 // band noise near S2/S3 instead of pinning at S0.
                 double rms = double.IsFinite(rxAudioRmsForMeter) ? rxAudioRmsForMeter : 0.0;
-                double dbfs = 20.0 * Math.Log10(Math.Max(rms, 1e-10));
-                dbm = dbfs - 50.0; // rough uncalibrated conversion
+                dbm = AudioRmsToFallbackDbm(rms);
             }
             if (!double.IsFinite(dbm)) dbm = -160.0;
-            UpdateAdaptiveSquelchMeter(_adaptiveSquelch, state.Squelch ?? new SquelchConfig(), dbm);
             _hub.Broadcast(new RxMeterFrame((float)dbm));
             RxMeterUpdated?.Invoke(channel, dbm);
 

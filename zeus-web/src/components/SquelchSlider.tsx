@@ -20,8 +20,9 @@
 // Inline RX squelch control: SQL on/off + threshold slider. A single
 // mode-aware control — the server routes run + threshold to the WDSP squelch
 // stage matching the current RX mode (SSB/CW → SSQL, AM/SAM → AMSQ, FM → FMSQ).
-// Level 0..100, higher = tighter. Mirrors AgcSlider's toolbar idiom (live-slider
-// stream-on-drag, optimistic send + applyState reconcile).
+// Level 0..100 in fixed mode, higher = tighter. DYN mode is automatic and owns
+// the threshold. Mirrors AgcSlider's toolbar idiom (live-slider stream-on-drag,
+// optimistic send + applyState reconcile).
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { setSquelch } from '../api/client';
@@ -41,6 +42,7 @@ export function SquelchSlider() {
   // state updates don't yank the thumb back (same pattern as AgcSlider).
   const [dragValue, setDragValue] = useState<number | null>(null);
   const sliderValue = dragValue ?? squelch.level;
+  const levelDisabled = !connected || squelch.adaptive;
 
   const toggleAbort = useRef<AbortController | null>(null);
 
@@ -142,7 +144,8 @@ export function SquelchSlider() {
         max={MAX}
         step={1}
         value={sliderValue}
-        disabled={!connected}
+        disabled={levelDisabled}
+        title={squelch.adaptive ? 'DYN mode tracks the noise floor automatically' : 'Fixed squelch threshold'}
         onChange={(e) => {
           const v = Number(e.currentTarget.value);
           setDragValue(v);
@@ -161,13 +164,23 @@ export function SquelchSlider() {
           liveSlider.flush();
           setDragValue(null);
         }}
-        style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}
+        style={{
+          flex: 1,
+          cursor: levelDisabled ? 'not-allowed' : 'pointer',
+          accentColor: levelDisabled ? 'var(--fg-3)' : 'var(--accent)',
+          opacity: levelDisabled ? 0.55 : 1,
+        }}
       />
       <span
         className="mono"
-        style={{ width: 28, textAlign: 'right', color: 'var(--fg-1)', fontSize: 11 }}
+        style={{
+          width: 36,
+          textAlign: 'right',
+          color: squelch.adaptive ? 'var(--fg-3)' : 'var(--fg-1)',
+          fontSize: 11,
+        }}
       >
-        {sliderValue}
+        {squelch.adaptive ? 'AUTO' : sliderValue}
       </span>
     </label>
   );

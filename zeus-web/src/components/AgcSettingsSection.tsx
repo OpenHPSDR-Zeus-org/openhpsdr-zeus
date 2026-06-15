@@ -132,6 +132,7 @@ export function AgcSettingsSection() {
   const isCustom = agc.mode === 'Custom';
   const isFixed = agc.mode === 'Fixed';
   const effectiveTop = Math.round(Math.max(0, Math.min(120, agcTopDb + offsetDb)));
+  const topDisabled = !connected || autoEnabled;
 
   return (
     <div className="dsp-cfg">
@@ -185,11 +186,22 @@ export function AgcSettingsSection() {
           max={120}
           step={1}
           value={agcTopDb}
-          disabled={!connected || autoEnabled}
+          disabled={topDisabled}
+          title={autoEnabled ? 'Auto-AGC is controlling max gain' : 'AGC-T max gain'}
           onChange={(e) => sendTop(Number(e.currentTarget.value))}
-          style={{ flex: 1, accentColor: 'var(--accent)' }}
+          style={{
+            flex: 1,
+            cursor: topDisabled ? 'not-allowed' : 'pointer',
+            accentColor: topDisabled ? 'var(--fg-3)' : 'var(--accent)',
+            opacity: topDisabled ? 0.55 : 1,
+          }}
         />
-        <span className="dsp-cfg-unit mono">{agcTopDb} dB</span>
+        <span
+          className="dsp-cfg-unit mono"
+          style={{ color: autoEnabled ? 'var(--fg-3)' : undefined }}
+        >
+          {agcTopDb} dB
+        </span>
       </label>
 
       {/* Custom-mode tunables — always shown (Thetis-verbose), disabled unless CUSTOM. */}
