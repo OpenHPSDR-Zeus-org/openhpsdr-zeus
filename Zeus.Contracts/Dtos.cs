@@ -124,6 +124,45 @@ public sealed record NrConfig(
     double? EmnrTrainT1 = null,
     double? EmnrTrainT2 = null);
 
+// Direct Smart NR diagnostic surface. The Smart NR analyzer still lives in
+// the frontend DSP-scene path; this DTO exposes that live condition together
+// with the backend NR runtime facts used by hardware diagnostics.
+public sealed record SmartNrConditionDto(
+    int SchemaVersion,
+    bool Available,
+    string Status,
+    bool Fresh,
+    bool Stale,
+    long? AgeMs,
+    DateTimeOffset? AtUtc,
+    DateTimeOffset? SourceAtUtc,
+    long? SourceAgeMs,
+    long? SourceClockSkewMs,
+    string? SourceClientId,
+    string? Mode,
+    string? Profile,
+    string? Reason,
+    string? Recommendation,
+    bool? HeldByRxChain,
+    string? RxChainLabel,
+    double? MaxSnrDb,
+    double? CoherentMaxSnrDb,
+    double? OccupiedPct,
+    double? CoherentOccupiedPct,
+    double? ImpulsivePct,
+    int? PeakCount,
+    int? CoherentPeakCount,
+    bool? CoherentSubthresholdSignal,
+    bool WdspActive,
+    bool WdspNativeLoadable,
+    bool WdspEmnrPost2Available,
+    bool WdspNr4SbnrAvailable,
+    string Nr4Readiness,
+    string RequestedNrMode,
+    string EffectiveNrMode,
+    string DiagnosticRecommendation,
+    DateTimeOffset GeneratedUtc);
+
 // Operator-facing AGC configuration (issue: DSP controls Thetis parity §4).
 // Mode selects a canned profile (Long/Slow/Med/Fast/Fixed) or Custom; the
 // nullable params are only consulted in Custom mode (and FixedGainDb only in

@@ -57,6 +57,7 @@ import {
   TX_LEVELING_CONFIG_DEFAULT,
   createHardwareDiagnosticsMarker,
   fetchHardwareDiagnostics,
+  fetchSmartNrCondition,
   fetchAdcProtection,
   fetchTxFidelityPolicy,
   publishFrontendDspSceneDiagnostics,
@@ -724,6 +725,64 @@ describe('POST helpers', () => {
     expect(scene.signalProfile).toBe('dx');
     expect(scene.smartNrProfile).toBe('NR4');
     expect(scene.coherentSubthresholdSignal).toBe(true);
+  });
+
+  it('fetchSmartNrCondition reads live Smart NR condition evidence', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      available: true,
+      status: 'fresh',
+      fresh: true,
+      stale: false,
+      ageMs: 18,
+      atUtc: '2026-06-15T01:00:00Z',
+      sourceAtUtc: '2026-06-15T00:59:59Z',
+      sourceAgeMs: 1018,
+      sourceClockSkewMs: null,
+      sourceClientId: 'frontend-test',
+      mode: 'USB',
+      profile: 'NR2',
+      reason: 'weak sparse signal',
+      recommendation: 'Keep RX headroom and use gentle NR2',
+      heldByRxChain: true,
+      rxChainLabel: 'ADC headroom limited',
+      maxSnrDb: 7.1,
+      coherentMaxSnrDb: 6.8,
+      occupiedPct: 1.2,
+      coherentOccupiedPct: 0.8,
+      impulsivePct: 0.1,
+      peakCount: 1,
+      coherentPeakCount: 1,
+      coherentSubthresholdSignal: true,
+      wdspActive: true,
+      wdspNativeLoadable: true,
+      wdspEmnrPost2Available: true,
+      wdspNr4SbnrAvailable: false,
+      nr4Readiness: 'missing-sbnr-exports',
+      requestedNrMode: 'Sbnr',
+      effectiveNrMode: 'Off',
+      diagnosticRecommendation: 'Smart NR is currently constrained by RX-chain health.',
+      generatedUtc: '2026-06-15T01:00:01Z',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const condition = await fetchSmartNrCondition();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/dsp/nr-condition');
+    expect(init?.method).toBeUndefined();
+    expect(condition.available).toBe(true);
+    expect(condition.status).toBe('fresh');
+    expect(condition.mode).toBe('USB');
+    expect(condition.profile).toBe('NR2');
+    expect(condition.heldByRxChain).toBe(true);
+    expect(condition.rxChainLabel).toBe('ADC headroom limited');
+    expect(condition.maxSnrDb).toBe(7.1);
+    expect(condition.coherentSubthresholdSignal).toBe(true);
+    expect(condition.wdspNr4SbnrAvailable).toBe(false);
+    expect(condition.nr4Readiness).toBe('missing-sbnr-exports');
+    expect(condition.requestedNrMode).toBe('Sbnr');
+    expect(condition.effectiveNrMode).toBe('Off');
   });
 
   it('raises ApiError with server-provided error text on 400', async () => {
