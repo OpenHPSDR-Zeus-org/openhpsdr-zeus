@@ -243,6 +243,9 @@ function SupplyReading({
           { label: 'Updated', value: time(reading.lastUpdatedUtc) },
           { label: 'Supply ADC', value: adc(reading.supplyVoltsAdc) },
           { label: 'Supply Volts', value: volts(reading.supplyVolts) },
+          { label: 'Raw Scaled', value: volts(reading.rawScaledSupplyVolts) },
+          { label: 'Scale Status', value: reading.scaleStatus },
+          { label: 'Trusted', value: boolLabel(reading.supplyVoltsTrusted) },
         ]}
       />
     </div>

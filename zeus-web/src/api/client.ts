@@ -707,6 +707,9 @@ export type RadioSupplyReadingDto = {
   lastUpdatedUtc: string | null;
   supplyVoltsAdc: number | null;
   supplyVolts: number | null;
+  rawScaledSupplyVolts: number | null;
+  supplyVoltsTrusted: boolean;
+  scaleStatus: string;
 };
 
 export type RadioSupplyAlarmsDto = {
@@ -2088,6 +2091,9 @@ function normalizeRadioSupplyReading(raw: unknown): RadioSupplyReadingDto {
     lastUpdatedUtc: diagString(r.lastUpdatedUtc),
     supplyVoltsAdc: diagNumber(r.supplyVoltsAdc),
     supplyVolts: diagNumber(r.supplyVolts),
+    rawScaledSupplyVolts: diagNumber(r.rawScaledSupplyVolts),
+    supplyVoltsTrusted: Boolean(r.supplyVoltsTrusted),
+    scaleStatus: diagString(r.scaleStatus) ?? 'unknown',
   };
 }
 

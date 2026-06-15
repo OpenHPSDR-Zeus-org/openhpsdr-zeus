@@ -232,7 +232,10 @@ public sealed record RadioSupplyReadingDto(
     long Packets,
     DateTimeOffset? LastUpdatedUtc,
     ushort? SupplyVoltsAdc,
-    double? SupplyVolts);
+    double? SupplyVolts,
+    double? RawScaledSupplyVolts,
+    bool SupplyVoltsTrusted,
+    string ScaleStatus);
 
 public sealed record RadioSupplyAlarmsDto(
     int SchemaVersion,

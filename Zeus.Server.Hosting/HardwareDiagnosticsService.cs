@@ -52,6 +52,9 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
     private const int PsFeedbackUsableMaxRaw = 181;
     private const int PsFeedbackCenteredMinRaw = 138;
     private const int PsFeedbackCenteredMaxRaw = 176;
+    private const double G2SupplyPlausibleMinVolts = 10.0;
+    private const double G2SupplyPlausibleMaxVolts = 18.0;
+    private const double GenericSupplyPlausibleMaxVolts = 35.0;
 
     private readonly RadioService _radio;
     private readonly DspPipelineService _dsp;
@@ -519,12 +522,16 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 _p1Packets,
                 _p1LastUpdatedUtc,
                 _p1SupplyVoltsAdc,
-                caps.AdcSupplyMv);
+                caps.AdcSupplyMv,
+                effective,
+                variant);
             var p2 = BuildSupplyReading(
                 _p2Packets,
                 _p2LastUpdatedUtc,
                 _p2HadSample ? _p2Last.SupplyVoltsAdc : (ushort?)null,
-                caps.AdcSupplyMv);
+                caps.AdcSupplyMv,
+                effective,
+                variant);
             var (alarmActive, alarmStatus, recommendation) =
                 EvaluateSupplyTelemetry(caps, p1, p2);
 
@@ -769,23 +776,30 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             Swr: swr);
     }
 
-    private static RadioSupplyReadingDto BuildSupplyReading(
+    internal static RadioSupplyReadingDto BuildSupplyReading(
         long packets,
         DateTimeOffset? lastUpdatedUtc,
         ushort? supplyVoltsAdc,
-        int adcSupplyMv)
+        int adcSupplyMv,
+        HpsdrBoardKind effectiveBoard,
+        OrionMkIIVariant variant)
     {
-        var volts = supplyVoltsAdc is { } adc && adcSupplyMv > 0
+        var rawScaledVolts = supplyVoltsAdc is { } adc && adcSupplyMv > 0
             ? Round(adc * adcSupplyMv / 1000.0, 2)
             : (double?)null;
+        var scaleStatus = SupplyScaleStatus(rawScaledVolts, effectiveBoard, variant);
+        var trusted = scaleStatus == "trusted";
         return new(
             Packets: packets,
             LastUpdatedUtc: lastUpdatedUtc,
             SupplyVoltsAdc: supplyVoltsAdc,
-            SupplyVolts: volts);
+            SupplyVolts: trusted ? rawScaledVolts : null,
+            RawScaledSupplyVolts: rawScaledVolts,
+            SupplyVoltsTrusted: trusted,
+            ScaleStatus: scaleStatus);
     }
 
-    private static (bool AlarmActive, string AlarmStatus, string Recommendation)
+    internal static (bool AlarmActive, string AlarmStatus, string Recommendation)
         EvaluateSupplyTelemetry(
             BoardCapabilities caps,
             RadioSupplyReadingDto p1,
@@ -799,7 +813,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "The effective board does not advertise supply-voltage telemetry; PA protection should use SWR and timeout guards for this hardware.");
         }
 
-        if (p1.SupplyVolts is null && p2.SupplyVolts is null)
+        if (p1.SupplyVoltsAdc is null && p2.SupplyVoltsAdc is null)
         {
             return (
                 false,
@@ -815,6 +829,14 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "A supply telemetry sample decoded to zero volts; inspect the ADC mapping or hardware before trusting PA operation.");
         }
 
+        if (IsUnverifiedSupplyScale(p1) || IsUnverifiedSupplyScale(p2))
+        {
+            return (
+                false,
+                "scale-unverified",
+                "Supply telemetry is arriving, but the static board scale produces an implausible voltage for this radio. Treat the raw ADC as diagnostics-only and add per-radio calibration/thresholds before using it for TX inhibit.");
+        }
+
         return (
             false,
             "telemetry-ready",
@@ -822,7 +844,32 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
     }
 
     private static bool IsInvalidSupply(RadioSupplyReadingDto reading) =>
-        reading.SupplyVolts is { } volts && volts <= 0.0;
+        reading.ScaleStatus == "invalid-zero";
+
+    private static bool IsUnverifiedSupplyScale(RadioSupplyReadingDto reading) =>
+        reading.ScaleStatus == "scale-unverified";
+
+    private static string SupplyScaleStatus(
+        double? rawScaledVolts,
+        HpsdrBoardKind effectiveBoard,
+        OrionMkIIVariant variant)
+    {
+        if (rawScaledVolts is null) return "missing";
+        if (rawScaledVolts <= 0.0) return "invalid-zero";
+        if (!SupplyScalePlausible(rawScaledVolts.Value, effectiveBoard, variant))
+            return "scale-unverified";
+        return "trusted";
+    }
+
+    private static bool SupplyScalePlausible(
+        double volts,
+        HpsdrBoardKind effectiveBoard,
+        OrionMkIIVariant variant)
+    {
+        if (effectiveBoard == HpsdrBoardKind.OrionMkII && variant == OrionMkIIVariant.G2)
+            return volts is >= G2SupplyPlausibleMinVolts and <= G2SupplyPlausibleMaxVolts;
+        return volts <= GenericSupplyPlausibleMaxVolts;
+    }
 
     private static double Round(double value, int digits) =>
         double.IsFinite(value) ? Math.Round(value, digits) : 0.0;

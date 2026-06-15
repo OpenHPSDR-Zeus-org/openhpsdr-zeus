@@ -1169,12 +1169,18 @@ describe('POST helpers', () => {
         lastUpdatedUtc: null,
         supplyVoltsAdc: null,
         supplyVolts: null,
+        rawScaledSupplyVolts: null,
+        supplyVoltsTrusted: false,
+        scaleStatus: 'missing',
       },
       p2: {
         packets: 42,
         lastUpdatedUtc: '2026-06-15T01:00:00Z',
         supplyVoltsAdc: 276,
         supplyVolts: 13.8,
+        rawScaledSupplyVolts: 13.8,
+        supplyVoltsTrusted: true,
+        scaleStatus: 'trusted',
       },
       diagnosticRecommendation: 'Live supply voltage is decoded and scaled.',
       generatedUtc: '2026-06-15T01:00:01Z',
@@ -1192,6 +1198,9 @@ describe('POST helpers', () => {
     expect(status.alarmStatus).toBe('telemetry-ready');
     expect(status.p2.supplyVoltsAdc).toBe(276);
     expect(status.p2.supplyVolts).toBe(13.8);
+    expect(status.p2.rawScaledSupplyVolts).toBe(13.8);
+    expect(status.p2.supplyVoltsTrusted).toBe(true);
+    expect(status.p2.scaleStatus).toBe('trusted');
   });
 
   it('fetchRadioNetworkProfile reads active transport counters', async () => {

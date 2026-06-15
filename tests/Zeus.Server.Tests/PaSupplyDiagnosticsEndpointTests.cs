@@ -8,6 +8,8 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Zeus.Contracts;
+using Zeus.Server;
 
 namespace Zeus.Server.Tests;
 
@@ -61,7 +63,38 @@ public sealed class PaSupplyDiagnosticsEndpointTests
         Assert.False(root.GetProperty("alarmActive").GetBoolean());
         Assert.Equal("unsupported", root.GetProperty("alarmStatus").GetString());
         Assert.Equal(JsonValueKind.Null, root.GetProperty("p1").GetProperty("supplyVolts").ValueKind);
+        Assert.Equal("missing", root.GetProperty("p1").GetProperty("scaleStatus").GetString());
         Assert.Contains("does not advertise supply-voltage telemetry", root.GetProperty("diagnosticRecommendation").GetString());
+    }
+
+    [Fact]
+    public void SupplyAlarms_FlagsLiveG2P2StaticScaleAsUnverified()
+    {
+        var p1 = HardwareDiagnosticsService.BuildSupplyReading(
+            packets: 0,
+            lastUpdatedUtc: null,
+            supplyVoltsAdc: null,
+            adcSupplyMv: 50,
+            effectiveBoard: HpsdrBoardKind.OrionMkII,
+            variant: OrionMkIIVariant.G2);
+        var p2 = HardwareDiagnosticsService.BuildSupplyReading(
+            packets: 25,
+            lastUpdatedUtc: DateTimeOffset.UtcNow,
+            supplyVoltsAdc: 1600,
+            adcSupplyMv: 50,
+            effectiveBoard: HpsdrBoardKind.OrionMkII,
+            variant: OrionMkIIVariant.G2);
+        var caps = BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, OrionMkIIVariant.G2);
+
+        var result = HardwareDiagnosticsService.EvaluateSupplyTelemetry(caps, p1, p2);
+
+        Assert.Equal(80.0, p2.RawScaledSupplyVolts);
+        Assert.Null(p2.SupplyVolts);
+        Assert.False(p2.SupplyVoltsTrusted);
+        Assert.Equal("scale-unverified", p2.ScaleStatus);
+        Assert.False(result.AlarmActive);
+        Assert.Equal("scale-unverified", result.AlarmStatus);
+        Assert.Contains("implausible voltage", result.Recommendation);
     }
 
     [Fact]
