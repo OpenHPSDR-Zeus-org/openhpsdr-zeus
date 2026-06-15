@@ -305,7 +305,7 @@ export const PANELS: Record<string, PanelDef> = {
     component: TxFidelityPanel,
     maxW: 6,
     minW: 4,
-    minH: 4,
+    minH: 20,
   },
   tx: {
     id: 'tx',

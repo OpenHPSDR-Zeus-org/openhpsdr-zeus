@@ -663,6 +663,12 @@ public class DspPipelineService : BackgroundService,
         {
             _radio.ActiveClient?.SetHl2TxStepAttenuationDb(hl2Attn);
         }
+        // P1's Connected event is raised after RadioService already broadcast
+        // Status=Connected, so the first state callback can hit the synthetic
+        // engine we are replacing here. Replay the canonical state now so a
+        // persisted PS arm actually reaches the freshly-opened WDSP engine even
+        // when ApplyPsHwPeakForConnection did not move any StateDto fields.
+        OnRadioStateChanged(_radio.Snapshot());
     }
 
     private void OnRadioDisconnected()

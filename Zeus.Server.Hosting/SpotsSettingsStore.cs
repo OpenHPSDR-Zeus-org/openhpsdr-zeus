@@ -56,7 +56,14 @@ public sealed class SpotsSettingsStore : IDisposable
                 PollIntervalSeconds: e.PollIntervalSeconds,
                 SetModeOnTune: e.SetModeOnTune,
                 TuneOnlyWhenConnected: e.TuneOnlyWhenConnected,
-                CwSideband: e.CwSideband ?? "CWU").Normalized();
+                CwSideband: e.CwSideband ?? "CWU",
+                Bands: e.Bands,
+                Modes: e.Modes,
+                HideQrt: e.HideQrt,
+                MaxAgeMinutes: e.MaxAgeMinutes,
+                LatestPerActivator: e.LatestPerActivator,
+                CwTuneOffsetHz: e.CwTuneOffsetHz,
+                DigiTuneOffsetHz: e.DigiTuneOffsetHz).Normalized();
         }
     }
 
@@ -81,6 +88,13 @@ public sealed class SpotsSettingsStore : IDisposable
                 existing.SetModeOnTune = s.SetModeOnTune;
                 existing.TuneOnlyWhenConnected = s.TuneOnlyWhenConnected;
                 existing.CwSideband = s.CwSideband;
+                existing.Bands = s.Bands?.ToList();
+                existing.Modes = s.Modes?.ToList();
+                existing.HideQrt = s.HideQrt;
+                existing.MaxAgeMinutes = s.MaxAgeMinutes;
+                existing.LatestPerActivator = s.LatestPerActivator;
+                existing.CwTuneOffsetHz = s.CwTuneOffsetHz;
+                existing.DigiTuneOffsetHz = s.DigiTuneOffsetHz;
                 existing.UpdatedUtc = nowUtc;
                 _state.Update(existing);
             }
@@ -97,6 +111,13 @@ public sealed class SpotsSettingsStore : IDisposable
         SetModeOnTune = s.SetModeOnTune,
         TuneOnlyWhenConnected = s.TuneOnlyWhenConnected,
         CwSideband = s.CwSideband,
+        Bands = s.Bands?.ToList(),
+        Modes = s.Modes?.ToList(),
+        HideQrt = s.HideQrt,
+        MaxAgeMinutes = s.MaxAgeMinutes,
+        LatestPerActivator = s.LatestPerActivator,
+        CwTuneOffsetHz = s.CwTuneOffsetHz,
+        DigiTuneOffsetHz = s.DigiTuneOffsetHz,
         UpdatedUtc = nowUtc,
     };
 
@@ -113,5 +134,13 @@ public sealed class SpotsSettingsEntry
     public bool SetModeOnTune { get; set; } = true;
     public bool TuneOnlyWhenConnected { get; set; } = true;
     public string? CwSideband { get; set; } = "CWU";
+    // Stored as plain string lists; null/absent (older rows) means "no filter".
+    public List<string>? Bands { get; set; }
+    public List<string>? Modes { get; set; }
+    public bool HideQrt { get; set; } = true;
+    public int MaxAgeMinutes { get; set; }
+    public bool LatestPerActivator { get; set; }
+    public int CwTuneOffsetHz { get; set; }
+    public int DigiTuneOffsetHz { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

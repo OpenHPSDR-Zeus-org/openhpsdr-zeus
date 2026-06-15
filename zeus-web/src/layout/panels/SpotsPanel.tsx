@@ -18,6 +18,8 @@ import {
   useSpotsStore,
   spotMatchesFilters,
   spotModeToRxMode,
+  applySpotSettingsFilters,
+  freqHzToBand,
   type SpotSourceFilter,
 } from '../../state/spots-store';
 import type { ActivationSpotDto } from '../../api/client';
@@ -63,10 +65,18 @@ export function SpotsPanel() {
     return () => window.clearInterval(id);
   }, [loadSettings, loadSpots]);
 
-  const visible = useMemo(
-    () => spots.filter((s) => spotMatchesFilters(s, source, query)),
-    [spots, source, query],
+  // Two stages: the persisted operator settings (band / mode / QRT / age /
+  // dedup) gate the list globally, then the panel-local source chips + search
+  // box narrow the view.
+  const settingsFiltered = useMemo(
+    () => applySpotSettingsFilters(spots, settings),
+    [spots, settings],
   );
+  const visible = useMemo(
+    () => settingsFiltered.filter((s) => spotMatchesFilters(s, source, query)),
+    [settingsFiltered, source, query],
+  );
+  const hiddenByFilters = spots.length - settingsFiltered.length;
 
   if (settingsLoaded && !settings.enabled) {
     return (
@@ -143,7 +153,11 @@ export function SpotsPanel() {
           <div style={{ padding: 12, fontSize: 12, color: 'var(--tx)' }}>{error}</div>
         ) : visible.length === 0 ? (
           <div style={{ padding: 12, fontSize: 12, color: 'var(--fg-2)' }}>
-            {spots.length === 0 ? 'No spots yet — waiting for the feed…' : 'No spots match the filter.'}
+            {spots.length === 0
+              ? 'No spots yet — waiting for the feed…'
+              : hiddenByFilters > 0 && settingsFiltered.length === 0
+                ? 'All spots hidden by your filters (Settings → Spots).'
+                : 'No spots match the filter.'}
           </div>
         ) : (
           <table className="mono" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
@@ -151,6 +165,7 @@ export function SpotsPanel() {
               <tr style={{ color: 'var(--fg-2)', textAlign: 'left' }}>
                 <th style={thStyle}>Call</th>
                 <th style={thStyle}>Freq</th>
+                <th style={thStyle}>Band</th>
                 <th style={thStyle}>Mode</th>
                 <th style={thStyle}>Ref</th>
                 <th style={{ ...thStyle, textAlign: 'right' }}>Age</th>
@@ -169,6 +184,24 @@ export function SpotsPanel() {
           </table>
         )}
       </div>
+
+      <div
+        style={{
+          padding: '3px 8px',
+          borderTop: '1px solid var(--panel-border)',
+          fontSize: 10,
+          color: 'var(--fg-3)',
+          display: 'flex',
+          justifyContent: 'space-between',
+          gap: 8,
+        }}
+      >
+        <span>
+          {visible.length} shown
+          {hiddenByFilters > 0 ? ` · ${hiddenByFilters} hidden by filters` : ''}
+        </span>
+        <span>{spots.length} total</span>
+      </div>
     </div>
   );
 }
@@ -183,6 +216,7 @@ function SpotRow({
   onTune: () => void;
 }) {
   const rx = spotModeToRxMode(spot.mode, spot.freqHz, cwSideband);
+  const band = freqHzToBand(spot.freqHz);
   const title = [spot.name, spot.location, spot.comments].filter(Boolean).join(' · ');
   return (
     <tr
@@ -197,6 +231,7 @@ function SpotRow({
         {spot.activator}
       </td>
       <td style={tdStyle}>{fmtFreq(spot.freqHz)}</td>
+      <td style={{ ...tdStyle, color: 'var(--fg-2)' }}>{band ?? '—'}</td>
       <td style={tdStyle}>{spot.mode || rx}</td>
       <td style={{ ...tdStyle, color: 'var(--fg-2)' }}>{spot.reference}</td>
       <td style={{ ...tdStyle, textAlign: 'right', color: 'var(--fg-2)' }}>{fmtAge(spot.spotTime)}</td>

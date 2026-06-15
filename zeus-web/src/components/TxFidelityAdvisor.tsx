@@ -52,8 +52,10 @@ export function TxFidelityAdvisor() {
       title={analysis.detail}
       style={{
         display: 'grid',
-        gridTemplateColumns: 'auto minmax(0, 1fr) auto',
-        gap: 10,
+        gridTemplateColumns: '54px minmax(0, 1fr)',
+        gridTemplateAreas: "'score summary' 'metrics metrics'",
+        columnGap: 10,
+        rowGap: 5,
         alignItems: 'center',
         padding: '8px 12px',
         border: '1px solid var(--line)',
@@ -66,7 +68,9 @@ export function TxFidelityAdvisor() {
       <div
         className="mono"
         style={{
-          minWidth: 54,
+          gridArea: 'score',
+          width: 54,
+          boxSizing: 'border-box',
           textAlign: 'center',
           padding: '3px 7px',
           border: `1px solid ${color}`,
@@ -78,19 +82,27 @@ export function TxFidelityAdvisor() {
       >
         {analysis.score > 0 ? `${analysis.score}` : '--'}
       </div>
-      <div style={{ minWidth: 0 }}>
+      <div style={{ gridArea: 'summary', minWidth: 0 }}>
         <div
           style={{
             display: 'flex',
             gap: 8,
             alignItems: 'baseline',
+            flexWrap: 'wrap',
             minWidth: 0,
           }}
         >
-          <span style={{ color: 'var(--fg-0)', fontWeight: 800, fontSize: 12 }}>
+          <span
+            style={{
+              color: 'var(--fg-0)',
+              fontWeight: 800,
+              fontSize: 12,
+              whiteSpace: 'nowrap',
+            }}
+          >
             {analysis.label}
           </span>
-          <span className="label-xs" style={{ color, fontWeight: 800 }}>
+          <span className="label-xs" style={{ color, fontWeight: 800, flexShrink: 0 }}>
             FIDELITY
           </span>
         </div>
@@ -109,19 +121,21 @@ export function TxFidelityAdvisor() {
       <div
         className="mono"
         style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          justifyContent: 'flex-end',
-          gap: '4px 8px',
+          gridArea: 'metrics',
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(96px, 1fr))',
+          gap: '4px 10px',
+          justifyItems: 'start',
           color: 'var(--fg-2)',
           fontSize: 10,
+          lineHeight: 1.25,
           minWidth: 0,
         }}
       >
-        <span>MIC {fmtDb(analysis.micDbfs)}</span>
-        <span>ALC {fmtGr(analysis.alcGr)}</span>
-        <span>LVL {fmtGr(analysis.lvlrGr)}</span>
-        <span>CFC {fmtGr(analysis.cfcGr)}</span>
+        <span style={{ whiteSpace: 'nowrap' }}>MIC {fmtDb(analysis.micDbfs)}</span>
+        <span style={{ whiteSpace: 'nowrap' }}>ALC {fmtGr(analysis.alcGr)}</span>
+        <span style={{ whiteSpace: 'nowrap' }}>LVL {fmtGr(analysis.lvlrGr)}</span>
+        <span style={{ whiteSpace: 'nowrap' }}>CFC {fmtGr(analysis.cfcGr)}</span>
       </div>
     </section>
   );

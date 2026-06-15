@@ -281,9 +281,9 @@ public sealed class RadioService : IDisposable
                 _lastPresetPerMode[m] = filterPresetStore.GetLastSelectedPreset(m);
         }
 
-        // Load persisted PS settings — operator's calibration tuning. Master
-        // arm flag is deliberately NOT persisted (parity with MOX); the
-        // timing/preset/auto-att/HW-peak tuning is. PsHwPeak is resolved
+        // Load persisted PS settings — operator's calibration tuning and
+        // standing master-arm preference. Actual transmit/keying actions
+        // (MOX/TUN/TwoToneEnabled) still reset each session. PsHwPeak is resolved
         // per-radio in ApplyPsHwPeakForConnection (called from
         // ConnectAsync / ConnectP2Async), which prefers the persisted
         // per-board value when present and falls back to the factory
@@ -369,7 +369,7 @@ public sealed class RadioService : IDisposable
             AutoAgcEnabled: rsSnap?.AutoAgcEnabled ?? false,
             AgcOffsetDb: 0.0,       // always reset — control-loop accumulator
             // PS persisted fields (or DTO defaults when not persisted yet).
-            // PsEnabled NOT persisted — always starts off each session.
+            PsEnabled: ps?.Enabled ?? false,
             PsAuto: ps?.Auto ?? true,
             PsPtol: ps?.Ptol ?? false,
             PsAutoAttenuate: ps?.AutoAttenuate ?? true,
@@ -419,9 +419,9 @@ public sealed class RadioService : IDisposable
     /// callers don't drop fields by writing only what they touched. Called
     /// from SetPs, SetPsAdvanced, SetPsFeedbackSource, and SetTwoTone.
     ///
-    /// PsEnabled / TwoToneEnabled (master arm flags) are intentionally NOT
-    /// in the entry — same operator-action discipline as MOX/TUN. PsHwPeak
-    /// IS persisted per-connected-board via the HwPeakByBoard dictionary;
+    /// PsEnabled is persisted as the operator's standing PS preference.
+    /// TwoToneEnabled remains session-only because it can key the transmitter.
+    /// PsHwPeak IS persisted per-connected-board via the HwPeakByBoard dictionary;
     /// when no board is currently connected the HwPeak portion of the write
     /// is skipped (existing per-board entries are preserved untouched).
     /// </summary>
@@ -454,6 +454,7 @@ public sealed class RadioService : IDisposable
         }
         _psStore.Upsert(new PsSettingsEntry
         {
+            Enabled = snap.PsEnabled,
             Auto = snap.PsAuto,
             Ptol = snap.PsPtol,
             AutoAttenuate = snap.PsAutoAttenuate,
@@ -2095,9 +2096,8 @@ public sealed class RadioService : IDisposable
             PsAuto = req.Auto,
             PsSingle = req.Single,
         });
-        // Persist Auto/Single change so the operator's cal-mode preference
-        // sticks across restarts. (PsEnabled is the master arm — not
-        // persisted; same discipline as MOX/TUN.)
+        // Persist PS arm + cal-mode preference so the operator's selected PS
+        // state survives restarts. Actual transmit/keying actions still do not.
         PersistPsState();
         return Snapshot();
     }
@@ -2143,7 +2143,7 @@ public sealed class RadioService : IDisposable
     /// from the PS-feedback analyzer instead of the post-CFIR TX analyzer
     /// so the operator sees the actual on-air RF rather than the
     /// predistorted baseband. Operator viewing preference — NOT persisted
-    /// across sessions (same discipline as PsEnabled / MOX).
+    /// across sessions.
     /// </summary>
     public StateDto SetPsMonitor(PsMonitorSetRequest req)
     {

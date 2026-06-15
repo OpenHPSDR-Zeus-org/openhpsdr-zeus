@@ -30,8 +30,8 @@ namespace Zeus.Server.Tests;
 /// PureSignal settings persistence — guards the round-3 fix where SetPs and
 /// SetTwoTone silently failed to call _psStore.Upsert. After the fix, every
 /// Set* path that mutates a persisted PS field must drop a doc into the
-/// LiteDB-backed store. Master-arm flags (PsEnabled, TwoToneEnabled) are
-/// intentionally NOT persisted — same operator-action discipline as MOX/TUN.
+/// LiteDB-backed store. PsEnabled is a persisted standing preference;
+/// TwoToneEnabled remains session-only because it can key the transmitter.
 /// </summary>
 public class PsPersistenceTests : IDisposable
 {
@@ -61,15 +61,17 @@ public class PsPersistenceTests : IDisposable
     }
 
     [Fact]
-    public void SetPs_PersistsAutoFlag()
+    public void SetPs_PersistsEnabledAndAutoFlag()
     {
         var (radio, store) = BuildRadioWithStore();
 
-        // Operator picks Single mode — persisted Auto field flips false.
-        radio.SetPs(new PsControlSetRequest(Enabled: false, Auto: false, Single: true));
+        // Operator arms PS and picks Single mode — persisted fields reflect
+        // both the standing arm preference and the cal-mode preference.
+        radio.SetPs(new PsControlSetRequest(Enabled: true, Auto: false, Single: true));
 
         var entry = store.Get();
         Assert.NotNull(entry);
+        Assert.True(entry!.Enabled);
         Assert.False(entry!.Auto);
     }
 
@@ -150,6 +152,7 @@ public class PsPersistenceTests : IDisposable
     {
         // Round-trip: write via one RadioService, restart, read via second.
         var (radio1, _) = BuildRadioWithStore();
+        radio1.SetPs(new PsControlSetRequest(Enabled: true, Auto: false, Single: false));
         radio1.SetTwoTone(new TwoToneSetRequest(
             Enabled: false, Freq1: 900.0, Freq2: 2200.0, Mag: 0.42));
         radio1.SetPsAdvanced(new PsAdvancedSetRequest(
@@ -161,14 +164,16 @@ public class PsPersistenceTests : IDisposable
         var (radio2, _) = BuildRadioWithStore();
         var snap = radio2.Snapshot();
 
+        Assert.True(snap.PsEnabled);
+        Assert.False(snap.PsAuto);
         Assert.Equal(900.0, snap.TwoToneFreq1);
         Assert.Equal(2200.0, snap.TwoToneFreq2);
         Assert.Equal(0.42, snap.TwoToneMag);
         Assert.Equal(0.35, snap.PsMoxDelaySec);
         Assert.Equal("16/512", snap.PsIntsSpiPreset);
         Assert.Equal(PsFeedbackSource.External, snap.PsFeedbackSource);
-        // Master-arm flag should NOT survive — TwoToneEnabled stays false on
-        // every fresh session even if Enabled=true had been set previously.
+        // Transmit/keying arm should NOT survive — TwoToneEnabled stays false
+        // on every fresh session even if Enabled=true had been set previously.
         Assert.False(snap.TwoToneEnabled);
     }
 

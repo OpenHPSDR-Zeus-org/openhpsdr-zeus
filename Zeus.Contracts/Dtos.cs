@@ -269,10 +269,10 @@ public sealed record StateDto(
     double AgcOffsetDb = 0.0,
 
     // ---- PureSignal predistortion (TXA-side; WDSP calcc/iqc stages) ----
-    // PsEnabled is the master arm bit. Deliberately NOT persisted server-side
-    // — operator must re-arm each session (parity with MOX). The other PS
-    // fields ARE persisted via PsSettingsStore so the operator's calibration
-    // tuning survives restarts.
+    // PsEnabled is the master arm bit. Persisted server-side as a standing
+    // operator preference so PS stays armed across restarts until changed.
+    // Actual transmit/keying actions (MOX/TUN/TwoToneEnabled) remain
+    // session-only.
     bool PsEnabled = false,
     // PsMonitorEnabled — operator-facing "Monitor PA output" toggle
     // (issue #121). When true AND PsEnabled AND PS has converged
@@ -283,7 +283,7 @@ public sealed record StateDto(
     // Thetis-style predistorted view. Hidden / disabled in the UI on
     // boards that have no PS feedback path (e.g. HermesLite2). NOT
     // persisted server-side: this is an operator viewing preference,
-    // resets to off each session same as PsEnabled.
+    // resets to off each session.
     bool PsMonitorEnabled = false,
     // TX Monitor — operator-facing audition toggle (issue #106 follow-up).
     // When true, the engine demodulates the post-CFIR TX IQ back to mono
@@ -293,7 +293,7 @@ public sealed record StateDto(
     // is OFF so VST plugins receive samples and meters animate continuously.
     // RX audio is suppressed in the broadcast while monitor is on so the
     // operator hears only the TX audition. NOT persisted across sessions —
-    // resets to off each connect, matching MOX/TUN/PsEnabled discipline.
+    // resets to off each connect, matching MOX/TUN discipline.
     bool TxMonitorEnabled = false,
     bool PsAuto = true,             // continuous adapt by default once armed
     bool PsSingle = false,          // one-shot SetPSControl(1,1,0,0)
@@ -445,9 +445,18 @@ public sealed record VfoSetRequest(long Hz);
 /// zeus-prefs.db (<c>SpotsSettingsStore</c>) and shared with the frontend.
 /// <para>The server-side poller honours <see cref="Enabled"/> /
 /// <see cref="PotaEnabled"/> / <see cref="SotaEnabled"/> /
-/// <see cref="PollIntervalSeconds"/>; the panel's click-to-tune honours
-/// <see cref="SetModeOnTune"/>, <see cref="TuneOnlyWhenConnected"/>, and
-/// <see cref="CwSideband"/>.</para></summary>
+/// <see cref="PollIntervalSeconds"/>. Everything else is consumed by the
+/// frontend: the display filters (<see cref="Bands"/>, <see cref="Modes"/>,
+/// <see cref="HideQrt"/>, <see cref="MaxAgeMinutes"/>,
+/// <see cref="LatestPerActivator"/>) decide which cached spots the panel
+/// shows, and the click-to-tune options (<see cref="SetModeOnTune"/>,
+/// <see cref="TuneOnlyWhenConnected"/>, <see cref="CwSideband"/>,
+/// <see cref="CwTuneOffsetHz"/>, <see cref="DigiTuneOffsetHz"/>) decide what a
+/// click does.</para>
+/// <para><see cref="Bands"/> holds band keys (e.g. "20m"); empty means "all
+/// bands". <see cref="Modes"/> holds mode-group keys (CW / PHONE / DIGITAL /
+/// FM / AM); empty means "all modes". These are intentionally string lists so
+/// new bands/modes don't need a wire-format change.</para></summary>
 public sealed record SpotsSettings(
     bool Enabled = true,
     bool PotaEnabled = true,
@@ -455,18 +464,51 @@ public sealed record SpotsSettings(
     int PollIntervalSeconds = 60,
     bool SetModeOnTune = true,
     bool TuneOnlyWhenConnected = true,
-    string CwSideband = "CWU")
+    string CwSideband = "CWU",
+    // --- display filters (empty list = no restriction) ---
+    IReadOnlyList<string>? Bands = null,
+    IReadOnlyList<string>? Modes = null,
+    bool HideQrt = true,
+    int MaxAgeMinutes = 0,
+    bool LatestPerActivator = false,
+    // --- click-to-tune dial offsets (Hz, added to the spot frequency) ---
+    int CwTuneOffsetHz = 0,
+    int DigiTuneOffsetHz = 0)
 {
     public const int MinPollSeconds = 30;
     public const int MaxPollSeconds = 600;
+    public const int MaxAgeMinutesLimit = 1440;   // 24 h
+    public const int MaxTuneOffsetHz = 5_000;
 
-    /// <summary>Clamp the poll interval and coerce CwSideband to a valid value,
-    /// so a hand-crafted POST or a stale persisted row can't wedge the poller.</summary>
+    /// <summary>Clamp numeric ranges and coerce CwSideband to a valid value, so a
+    /// hand-crafted POST or a stale persisted row can't wedge the poller or feed
+    /// nonsense to the radio. Band/mode keys are trimmed and de-duplicated
+    /// (case-insensitively) but their case is preserved — the frontend matches
+    /// them case-insensitively, so canonical "20m" / "CW" round-trip intact.</summary>
     public SpotsSettings Normalized() => this with
     {
         PollIntervalSeconds = Math.Clamp(PollIntervalSeconds, MinPollSeconds, MaxPollSeconds),
         CwSideband = string.Equals(CwSideband, "CWL", StringComparison.OrdinalIgnoreCase) ? "CWL" : "CWU",
+        Bands = NormalizeKeys(Bands),
+        Modes = NormalizeKeys(Modes),
+        MaxAgeMinutes = Math.Clamp(MaxAgeMinutes, 0, MaxAgeMinutesLimit),
+        CwTuneOffsetHz = Math.Clamp(CwTuneOffsetHz, -MaxTuneOffsetHz, MaxTuneOffsetHz),
+        DigiTuneOffsetHz = Math.Clamp(DigiTuneOffsetHz, -MaxTuneOffsetHz, MaxTuneOffsetHz),
     };
+
+    private static IReadOnlyList<string>? NormalizeKeys(IReadOnlyList<string>? keys)
+    {
+        if (keys is null || keys.Count == 0) return null;
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var outp = new List<string>(keys.Count);
+        foreach (var k in keys)
+        {
+            if (string.IsNullOrWhiteSpace(k)) continue;
+            var t = k.Trim();
+            if (seen.Add(t)) outp.Add(t);
+        }
+        return outp.Count == 0 ? null : outp;
+    }
 }
 
 /// <summary>A POTA or SOTA activation spot, normalized for the Spots panel.
@@ -1045,3 +1087,26 @@ public sealed record CfcConfig(
 }
 
 public sealed record CfcSetRequest(CfcConfig Config);
+
+// ---- TX station profiles -------------------------------------------------
+// Operator-tunable macro profiles for the TX voice chain. The frontend owns
+// the built-in defaults; the server persists edited overrides so Studio SSB,
+// eSSB, and DX punch profiles survive restart and can become a stable API
+// surface for settings/diagnostics.
+public sealed record TxStationProfileDto(
+    string Id,
+    string Label,
+    string Summary,
+    string ApplyTitle,
+    string AudioSuiteRoute,
+    bool AudioSuiteBypassed,
+    string? AudioSuiteProfileName,
+    double MicGainDb,
+    double LevelerMaxGainDb,
+    TxLevelingConfig TxLeveling,
+    CfcConfig CfcConfig,
+    int LowCutHz,
+    int HighCutHz,
+    int SpectralDensity);
+
+public sealed record TxStationProfilesResponse(IReadOnlyList<TxStationProfileDto> Profiles);

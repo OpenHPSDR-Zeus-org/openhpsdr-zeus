@@ -753,6 +753,41 @@ public static class ZeusEndpoints
             return Results.Ok(r.SetTxLeveling(cfg));
         });
 
+        // TX station-profile overrides. Built-in Studio/eSSB/DX defaults live in
+        // the frontend; these routes persist only operator edits so the panel,
+        // Settings, and future diagnostics mapper all share one durable API.
+        app.MapGet("/api/tx/station-profiles", (TxStationProfileStore store) =>
+            Results.Ok(new TxStationProfilesResponse(store.GetAll())));
+
+        app.MapPut("/api/tx/station-profiles/{id}", (string id, TxStationProfileDto req, TxStationProfileStore store) =>
+        {
+            var routeId = id.Trim().ToLowerInvariant();
+            if (!TryValidateTxStationProfileId(routeId, out var idErr))
+                return Results.BadRequest(new { error = idErr });
+            if (!string.Equals(req.Id, routeId, StringComparison.OrdinalIgnoreCase))
+                return Results.BadRequest(new { error = "profile id must match route id" });
+
+            var profile = req with { Id = routeId };
+            if (!TryValidateTxStationProfile(profile, out var err))
+                return Results.BadRequest(new { error = err });
+
+            var saved = store.Upsert(profile);
+            log.LogInformation(
+                "api.tx.stationProfile id={Id} mic={Mic:F1} leveler={Leveler:F1} low={Low} high={High} density={Density}",
+                saved.Id, saved.MicGainDb, saved.LevelerMaxGainDb, saved.LowCutHz, saved.HighCutHz, saved.SpectralDensity);
+            return Results.Ok(saved);
+        });
+
+        app.MapDelete("/api/tx/station-profiles/{id}", (string id, TxStationProfileStore store) =>
+        {
+            var routeId = id.Trim().ToLowerInvariant();
+            if (!TryValidateTxStationProfileId(routeId, out var idErr))
+                return Results.BadRequest(new { error = idErr });
+            var removed = store.Delete(routeId);
+            log.LogInformation("api.tx.stationProfile.reset id={Id} removed={Removed}", routeId, removed);
+            return Results.Ok(new { id = routeId, removed });
+        });
+
         app.MapPost("/api/rx/afGain", (RxAfGainSetRequest req, RadioService r) =>
         {
             log.LogInformation("api.rx.afGain db={Db:F1}", req.Db);
@@ -1875,6 +1910,143 @@ public static class ZeusEndpoints
         error = $"atten must be in {HpsdrAtten.MinDb}..{HpsdrAtten.MaxDb} dB, got {db}.";
         return false;
     }
+
+    static readonly HashSet<string> TxStationProfileIds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "studio-ssb",
+        "essb",
+        "dx",
+    };
+
+    static bool TryValidateTxStationProfileId(string? id, out string error)
+    {
+        if (!string.IsNullOrWhiteSpace(id) && TxStationProfileIds.Contains(id))
+        {
+            error = "";
+            return true;
+        }
+        error = "profile id must be one of studio-ssb, essb, dx";
+        return false;
+    }
+
+    static bool TryValidateTxStationProfile(TxStationProfileDto profile, out string error)
+    {
+        if (!TryValidateTxStationProfileId(profile.Id, out error))
+            return false;
+        if (string.IsNullOrWhiteSpace(profile.Label))
+        {
+            error = "label required";
+            return false;
+        }
+        if (!string.Equals(profile.AudioSuiteRoute, "native", StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(profile.AudioSuiteRoute, "vst", StringComparison.OrdinalIgnoreCase))
+        {
+            error = "audioSuiteRoute must be 'native' or 'vst'";
+            return false;
+        }
+        if (profile.AudioSuiteProfileName is { Length: > 96 })
+        {
+            error = "audioSuiteProfileName must be 96 characters or fewer";
+            return false;
+        }
+        if (!IsFinite(profile.MicGainDb) || profile.MicGainDb < -40.0 || profile.MicGainDb > 10.0)
+        {
+            error = "micGainDb must be -40..10 dB";
+            return false;
+        }
+        if (!IsFinite(profile.LevelerMaxGainDb) || profile.LevelerMaxGainDb < 0.0 || profile.LevelerMaxGainDb > 20.0)
+        {
+            error = "levelerMaxGainDb must be 0..20 dB";
+            return false;
+        }
+        if (profile.LowCutHz < 20 || profile.LowCutHz > 600)
+        {
+            error = "lowCutHz must be 20..600 Hz";
+            return false;
+        }
+        if (profile.HighCutHz < 1500 || profile.HighCutHz > 6000 || profile.HighCutHz <= profile.LowCutHz)
+        {
+            error = "highCutHz must be 1500..6000 Hz and greater than lowCutHz";
+            return false;
+        }
+        if (profile.SpectralDensity < 0 || profile.SpectralDensity > 100)
+        {
+            error = "spectralDensity must be 0..100";
+            return false;
+        }
+
+        var tx = profile.TxLeveling;
+        if (tx is null)
+        {
+            error = "txLeveling required";
+            return false;
+        }
+        if (!IsFinite(tx.AlcMaxGainDb) || tx.AlcMaxGainDb < 0.0 || tx.AlcMaxGainDb > 120.0)
+        {
+            error = "alcMaxGainDb must be 0..120 dB";
+            return false;
+        }
+        if (tx.AlcDecayMs < 1 || tx.AlcDecayMs > 50)
+        {
+            error = "alcDecayMs must be 1..50";
+            return false;
+        }
+        if (tx.LevelerDecayMs < 1 || tx.LevelerDecayMs > 5000)
+        {
+            error = "levelerDecayMs must be 1..5000";
+            return false;
+        }
+        if (!IsFinite(tx.CompressorGainDb) || tx.CompressorGainDb < 0.0 || tx.CompressorGainDb > 20.0)
+        {
+            error = "compressorGainDb must be 0..20 dB";
+            return false;
+        }
+
+        var cfc = profile.CfcConfig;
+        if (cfc is null)
+        {
+            error = "cfcConfig required";
+            return false;
+        }
+        if (!IsFinite(cfc.PreCompDb) || cfc.PreCompDb < -12.0 || cfc.PreCompDb > 12.0)
+        {
+            error = "preCompDb must be -12..12 dB";
+            return false;
+        }
+        if (!IsFinite(cfc.PrePeqDb) || cfc.PrePeqDb < -12.0 || cfc.PrePeqDb > 12.0)
+        {
+            error = "prePeqDb must be -12..12 dB";
+            return false;
+        }
+        if (cfc.Bands is null || cfc.Bands.Length != 10)
+        {
+            error = $"cfcConfig.bands must have exactly 10 entries; got {cfc.Bands?.Length ?? 0}";
+            return false;
+        }
+        foreach (var band in cfc.Bands)
+        {
+            if (!IsFinite(band.FreqHz) || band.FreqHz < 20.0 || band.FreqHz > 6000.0)
+            {
+                error = "cfc band freqHz must be 20..6000 Hz";
+                return false;
+            }
+            if (!IsFinite(band.CompLevelDb) || band.CompLevelDb < 0.0 || band.CompLevelDb > 20.0)
+            {
+                error = "cfc band compLevelDb must be 0..20 dB";
+                return false;
+            }
+            if (!IsFinite(band.PostGainDb) || band.PostGainDb < -12.0 || band.PostGainDb > 12.0)
+            {
+                error = "cfc band postGainDb must be -12..12 dB";
+                return false;
+            }
+        }
+
+        error = "";
+        return true;
+    }
+
+    static bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
 
     static HpsdrSampleRate MapHpsdrSampleRate(int hz) => hz switch
     {
