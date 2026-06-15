@@ -1175,6 +1175,11 @@ describe('POST helpers', () => {
         alcGrDb: 3.5,
         outPkDbfs: -1.8,
         outAvDbfs: -12.0,
+        outputHeadroomDb: 1.8,
+        outputCrestFactorDb: 10.2,
+        densityStatus: 'density-optimized',
+        densityTone: 'ready',
+        densityRecommendation: 'TX output density and headroom are in the target window.',
         diagnosticRecommendation: 'WDSP TXA stage meters are live.',
       },
       egress: {
@@ -1245,6 +1250,11 @@ describe('POST helpers', () => {
     expect(diag.stage.cfcGrDb).toBe(1.4);
     expect(diag.stage.alcGrDb).toBe(3.5);
     expect(diag.stage.outPkDbfs).toBe(-1.8);
+    expect(diag.stage.outputHeadroomDb).toBe(1.8);
+    expect(diag.stage.outputCrestFactorDb).toBe(10.2);
+    expect(diag.stage.densityStatus).toBe('density-optimized');
+    expect(diag.stage.densityTone).toBe('ready');
+    expect(diag.stage.densityRecommendation).toContain('target window');
     expect(diag.stage.diagnosticRecommendation).toBe('WDSP TXA stage meters are live.');
     expect(diag.egress.healthStatus).toBe('p2-live');
     expect(diag.egress.p2Live).toBe(true);

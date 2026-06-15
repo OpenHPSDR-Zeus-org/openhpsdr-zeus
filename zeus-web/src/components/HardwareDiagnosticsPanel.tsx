@@ -422,6 +422,10 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
           { label: 'TXA Stage', value: diag.stage.status },
           { label: 'Stage Source', value: diag.stage.source },
           { label: 'Stage Host TX', value: boolLabel(diag.stage.hostTxActive) },
+          { label: 'TX Density', value: diag.stage.densityStatus },
+          { label: 'Density Tone', value: diag.stage.densityTone },
+          { label: 'Headroom', value: db(diag.stage.outputHeadroomDb) },
+          { label: 'Crest Factor', value: db(diag.stage.outputCrestFactorDb) },
           { label: 'Mic Pk', value: db(diag.stage.micPkDbfs) },
           { label: 'Mic Av', value: db(diag.stage.micAvDbfs) },
           { label: 'EQ Pk', value: db(diag.stage.eqPkDbfs) },
@@ -468,6 +472,7 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
         ]}
       />
       <DiagnosticRecommendation text={audioPath.diagnosticRecommendation} />
+      <DiagnosticRecommendation text={diag.stage.densityRecommendation} />
       <DiagnosticRecommendation text={diag.stage.diagnosticRecommendation} />
       <DiagnosticRecommendation text={egress.diagnosticRecommendation} />
     </div>

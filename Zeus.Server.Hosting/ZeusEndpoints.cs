@@ -2415,6 +2415,7 @@ public static class ZeusEndpoints
         string status = hostTxActive
             ? hasLevelEvidence ? "active" : "waiting-for-stage-meters"
             : "idle";
+        var density = BuildTxStageDensityDiagnostics(stage, hostTxActive, hasLevelEvidence);
 
         return new
         {
@@ -2439,6 +2440,11 @@ public static class ZeusEndpoints
             alcGrDb = TxGainReductionDb(stage.AlcGr),
             outPkDbfs = TxLevelDb(stage.OutPk),
             outAvDbfs = TxLevelDb(stage.OutAv),
+            outputHeadroomDb = density.OutputHeadroomDb,
+            outputCrestFactorDb = density.OutputCrestFactorDb,
+            densityStatus = density.Status,
+            densityTone = density.Tone,
+            densityRecommendation = density.Recommendation,
             diagnosticRecommendation = status switch
             {
                 "active" => "WDSP TXA stage meters are live; use Mic/Leveler/CFC/ALC/OUT peaks and gain reduction to tune station audio and spectral density.",
@@ -2446,6 +2452,88 @@ public static class ZeusEndpoints
                 _ => "TXA stage meters are idle; key MOX/TUN or enable the TX monitor path to evaluate mic, leveler, CFC, ALC, and output quality.",
             },
         };
+    }
+
+    internal static TxStageDensityDiagnostics BuildTxStageDensityDiagnostics(
+        TxStageMeters stage,
+        bool hostTxActive,
+        bool hasLevelEvidence)
+    {
+        double? outPk = TxLevelDb(stage.OutPk);
+        double? outAv = TxLevelDb(stage.OutAv);
+        double alcGr = TxGainReductionDb(stage.AlcGr);
+        double cfcGr = TxGainReductionDb(stage.CfcGr);
+        double? headroom = outPk is { } pk ? Math.Round(Math.Max(0.0, -pk), 1) : null;
+        double? crest = outPk is { } pk2 && outAv is { } av
+            ? Math.Round(Math.Max(0.0, pk2 - av), 1)
+            : null;
+
+        if (!hostTxActive)
+        {
+            return new(
+                OutputHeadroomDb: headroom,
+                OutputCrestFactorDb: crest,
+                Status: "idle",
+                Tone: "standby",
+                Recommendation: "TXA density diagnostics are idle; key MOX/TUN or enable TX monitor before judging on-air spectral density.");
+        }
+
+        if (!hasLevelEvidence || outPk is null || outAv is null || headroom is null || crest is null)
+        {
+            return new(
+                OutputHeadroomDb: headroom,
+                OutputCrestFactorDb: crest,
+                Status: "waiting-for-stage-meters",
+                Tone: "verify",
+                Recommendation: "TX is keyed but output density cannot be evaluated until WDSP TXA output peak and average meters are live.");
+        }
+
+        if (headroom < 1.0 || stage.OutPk > -0.5f)
+        {
+            return new(
+                OutputHeadroomDb: headroom,
+                OutputCrestFactorDb: crest,
+                Status: "clip-risk",
+                Tone: "protect",
+                Recommendation: "TX output is within 1 dB of digital full scale; reduce mic gain, drive, CFC, or ALC pressure before increasing density.");
+        }
+
+        if (alcGr >= 8.0)
+        {
+            return new(
+                OutputHeadroomDb: headroom,
+                OutputCrestFactorDb: crest,
+                Status: "alc-heavy",
+                Tone: "protect",
+                Recommendation: "ALC is carrying heavy gain reduction; back down mic gain or upstream compression so the leveler/CFC shape density before ALC clamps the waveform.");
+        }
+
+        if (crest > 14.0 || outAv < -24.0)
+        {
+            return new(
+                OutputHeadroomDb: headroom,
+                OutputCrestFactorDb: crest,
+                Status: "underfilled",
+                Tone: "optimize",
+                Recommendation: "TX output has high crest factor or low average level; raise mic/leveler drive or add gentle CFC/compression while preserving headroom.");
+        }
+
+        if (crest < 4.0 && cfcGr >= 6.0)
+        {
+            return new(
+                OutputHeadroomDb: headroom,
+                OutputCrestFactorDb: crest,
+                Status: "over-dense",
+                Tone: "protect",
+                Recommendation: "TX output is very dense with strong CFC gain reduction; reduce CFC/compression if speech edges sound flat or adjacent-channel splatter rises.");
+        }
+
+        return new(
+            OutputHeadroomDb: headroom,
+            OutputCrestFactorDb: crest,
+            Status: "density-optimized",
+            Tone: "ready",
+            Recommendation: "TX output density and headroom are in the target window; confirm with RF power, PureSignal feedback, and an off-air monitor.");
     }
 
     private static bool IsUsableTxLevel(float value) =>
@@ -2906,6 +2994,12 @@ internal sealed record ChainMembershipSetRequest(bool Active);
 internal sealed record ScanVstDirectoryRequest(string Directory);
 internal sealed record MasterBypassSetRequest(bool Bypassed);
 internal sealed record ProcessingModeSetRequest(string Mode);
+internal sealed record TxStageDensityDiagnostics(
+    double? OutputHeadroomDb,
+    double? OutputCrestFactorDb,
+    string Status,
+    string Tone,
+    string Recommendation);
 internal sealed record TxAudioPathHealthDto(
     int SchemaVersion,
     string Status,

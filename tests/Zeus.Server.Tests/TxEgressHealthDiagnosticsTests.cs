@@ -25,6 +25,10 @@ public sealed class TxEgressHealthDiagnosticsTests
         Assert.Equal(JsonValueKind.Null, root.GetProperty("micPkDbfs").ValueKind);
         Assert.Equal(JsonValueKind.Null, root.GetProperty("outPkDbfs").ValueKind);
         Assert.Equal(0.0, root.GetProperty("alcGrDb").GetDouble());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("outputHeadroomDb").ValueKind);
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("outputCrestFactorDb").ValueKind);
+        Assert.Equal("idle", root.GetProperty("densityStatus").GetString());
+        Assert.Equal("standby", root.GetProperty("densityTone").GetString());
     }
 
     [Fact]
@@ -60,7 +64,107 @@ public sealed class TxEgressHealthDiagnosticsTests
         Assert.Equal(1.4, root.GetProperty("cfcGrDb").GetDouble());
         Assert.Equal(3.5, root.GetProperty("alcGrDb").GetDouble());
         Assert.Equal(-1.8, root.GetProperty("outPkDbfs").GetDouble());
+        Assert.Equal(1.8, root.GetProperty("outputHeadroomDb").GetDouble());
+        Assert.Equal(10.2, root.GetProperty("outputCrestFactorDb").GetDouble());
+        Assert.Equal("density-optimized", root.GetProperty("densityStatus").GetString());
+        Assert.Equal("ready", root.GetProperty("densityTone").GetString());
+        Assert.Contains("target window", root.GetProperty("densityRecommendation").GetString());
         Assert.Contains("stage meters are live", root.GetProperty("diagnosticRecommendation").GetString());
+    }
+
+    [Fact]
+    public void BuildTxStageDiagnostics_FlagsClipRiskFromOutputHeadroom()
+    {
+        var stage = new TxStageMeters(
+            MicPk: -6.0f,
+            MicAv: -16.0f,
+            EqPk: -5.8f,
+            EqAv: -15.5f,
+            LvlrPk: -4.9f,
+            LvlrAv: -14.7f,
+            LvlrGr: 2.0f,
+            CfcPk: -3.0f,
+            CfcAv: -12.5f,
+            CfcGr: 2.0f,
+            CompPk: -2.0f,
+            CompAv: -11.0f,
+            AlcPk: -0.4f,
+            AlcAv: -10.5f,
+            AlcGr: 2.0f,
+            OutPk: -0.4f,
+            OutAv: -10.0f);
+
+        using var doc = JsonSerializer.SerializeToDocument(
+            ZeusEndpoints.BuildTxStageDiagnostics(stage, hostTxActive: true));
+        var root = doc.RootElement;
+
+        Assert.Equal(0.4, root.GetProperty("outputHeadroomDb").GetDouble());
+        Assert.Equal("clip-risk", root.GetProperty("densityStatus").GetString());
+        Assert.Equal("protect", root.GetProperty("densityTone").GetString());
+        Assert.Contains("digital full scale", root.GetProperty("densityRecommendation").GetString());
+    }
+
+    [Fact]
+    public void BuildTxStageDiagnostics_FlagsUnderfilledOutput()
+    {
+        var stage = new TxStageMeters(
+            MicPk: -18.0f,
+            MicAv: -35.0f,
+            EqPk: -17.5f,
+            EqAv: -34.5f,
+            LvlrPk: -16.8f,
+            LvlrAv: -33.8f,
+            LvlrGr: 0.5f,
+            CfcPk: -16.0f,
+            CfcAv: -33.0f,
+            CfcGr: 0.2f,
+            CompPk: -15.5f,
+            CompAv: -32.0f,
+            AlcPk: -15.0f,
+            AlcAv: -31.0f,
+            AlcGr: 0.0f,
+            OutPk: -15.0f,
+            OutAv: -31.0f);
+
+        using var doc = JsonSerializer.SerializeToDocument(
+            ZeusEndpoints.BuildTxStageDiagnostics(stage, hostTxActive: true));
+        var root = doc.RootElement;
+
+        Assert.Equal(16.0, root.GetProperty("outputCrestFactorDb").GetDouble());
+        Assert.Equal("underfilled", root.GetProperty("densityStatus").GetString());
+        Assert.Equal("optimize", root.GetProperty("densityTone").GetString());
+        Assert.Contains("raise mic/leveler drive", root.GetProperty("densityRecommendation").GetString());
+    }
+
+    [Fact]
+    public void BuildTxStageDiagnostics_FlagsHeavyAlcBeforeDensityOptimization()
+    {
+        var stage = new TxStageMeters(
+            MicPk: -8.0f,
+            MicAv: -19.0f,
+            EqPk: -7.5f,
+            EqAv: -18.0f,
+            LvlrPk: -6.5f,
+            LvlrAv: -17.0f,
+            LvlrGr: 4.0f,
+            CfcPk: -5.5f,
+            CfcAv: -16.0f,
+            CfcGr: 3.0f,
+            CompPk: -5.0f,
+            CompAv: -15.5f,
+            AlcPk: -2.0f,
+            AlcAv: -12.0f,
+            AlcGr: 9.2f,
+            OutPk: -2.0f,
+            OutAv: -12.0f);
+
+        using var doc = JsonSerializer.SerializeToDocument(
+            ZeusEndpoints.BuildTxStageDiagnostics(stage, hostTxActive: true));
+        var root = doc.RootElement;
+
+        Assert.Equal("alc-heavy", root.GetProperty("densityStatus").GetString());
+        Assert.Equal("protect", root.GetProperty("densityTone").GetString());
+        Assert.Contains("ALC is carrying heavy gain reduction", root.GetProperty("densityRecommendation").GetString());
     }
 
     [Fact]
