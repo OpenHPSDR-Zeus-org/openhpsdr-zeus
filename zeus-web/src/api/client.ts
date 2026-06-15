@@ -766,6 +766,32 @@ export type UserIoActionsDto = {
   generatedUtc: string;
 };
 
+export type RadioDigInDiagnosticsDto = {
+  schemaVersion: number;
+  activeProtocol: 'P1' | 'P2' | null;
+  connectedBoard: string;
+  effectiveBoard: string;
+  orionMkIIVariant: string;
+  p2Attached: boolean;
+  p2Packets: number;
+  p2LastUpdatedUtc: string | null;
+  userDigitalIn: number | null;
+  txDisableLineId: string;
+  txDisableLineName: string;
+  txDisableBit: number;
+  txDisableRawHigh: boolean | null;
+  txDisableActive: boolean | null;
+  txDisablePolarity: string;
+  txDisableMappingStatus: string;
+  txInhibitBehaviorArmed: boolean;
+  cwKeyTipSource: string;
+  cwKeyTipDown: boolean | null;
+  cwDashInputDown: boolean | null;
+  manualReference: string | null;
+  diagnosticRecommendation: string | null;
+  generatedUtc: string;
+};
+
 export type TxRingDiagnosticsDto = {
   totalWritten: number;
   totalRead: number;
@@ -1020,6 +1046,7 @@ export type HardwareDiagnosticsDto = {
   dsp: HardwareDspDiagnosticsDto;
   frontendDspScene: FrontendDspSceneDiagnosticsDto;
   pureSignal: HardwarePureSignalDiagnosticsDto;
+  digIn: RadioDigInDiagnosticsDto;
   activeProtocol: 'P1' | 'P2' | null;
   p1: HardwareP1DiagnosticsDto;
   p2: HardwareP2DiagnosticsDto;
@@ -2015,6 +2042,38 @@ function normalizeUserIoActions(raw: unknown): UserIoActionsDto {
   };
 }
 
+function normalizeRadioDigInDiagnostics(raw: unknown): RadioDigInDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    activeProtocol: diagActiveProtocol(r.activeProtocol),
+    connectedBoard: diagString(r.connectedBoard) ?? 'Unknown',
+    effectiveBoard: diagString(r.effectiveBoard) ?? 'Unknown',
+    orionMkIIVariant: diagString(r.orionMkIIVariant) ?? 'G2',
+    p2Attached: Boolean(r.p2Attached),
+    p2Packets: diagNumber(r.p2Packets) ?? 0,
+    p2LastUpdatedUtc: diagString(r.p2LastUpdatedUtc),
+    userDigitalIn: diagNumber(r.userDigitalIn),
+    txDisableLineId: diagString(r.txDisableLineId) ?? 'userDigital0',
+    txDisableLineName: diagString(r.txDisableLineName) ?? 'User I/O IO4',
+    txDisableBit: diagNumber(r.txDisableBit) ?? 0,
+    txDisableRawHigh: diagBool(r.txDisableRawHigh),
+    txDisableActive: diagBool(r.txDisableActive),
+    txDisablePolarity: diagString(r.txDisablePolarity) ?? 'active-low',
+    txDisableMappingStatus: diagString(r.txDisableMappingStatus) ?? 'unknown',
+    txInhibitBehaviorArmed: Boolean(r.txInhibitBehaviorArmed),
+    cwKeyTipSource: diagString(r.cwKeyTipSource) ?? 'p2.dotIn',
+    cwKeyTipDown: diagBool(r.cwKeyTipDown),
+    cwDashInputDown: diagBool(r.cwDashInputDown),
+    manualReference: diagString(r.manualReference),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+    generatedUtc:
+      typeof r.generatedUtc === 'string'
+        ? r.generatedUtc
+        : new Date().toISOString(),
+  };
+}
+
 function diagNumberArray(raw: unknown): number[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((v) => diagNumber(v) ?? 0);
@@ -2254,6 +2313,7 @@ function normalizeHardwareDiagnostics(raw: unknown): HardwareDiagnosticsDto {
     dsp: normalizeDspDiagnostics(r.dsp),
     frontendDspScene: normalizeFrontendDspScene(r.frontendDspScene),
     pureSignal: normalizePureSignalDiagnostics(r.pureSignal),
+    digIn: normalizeRadioDigInDiagnostics(r.digIn),
     activeProtocol,
     p1: {
       packets: diagNumber(p1.packets) ?? 0,
@@ -2666,6 +2726,16 @@ export function fetchUserIoActions(
     '/api/radio/user-io/actions',
     { signal },
     normalizeUserIoActions,
+  );
+}
+
+export function fetchRadioDigInDiagnostics(
+  signal?: AbortSignal,
+): Promise<RadioDigInDiagnosticsDto> {
+  return jsonFetch(
+    '/api/radio/dig-in',
+    { signal },
+    normalizeRadioDigInDiagnostics,
   );
 }
 

@@ -9,6 +9,7 @@ import {
   createHardwareDiagnosticsMarker,
   fetchHardwareDiagnostics,
   fetchHardwareKeyingStatus,
+  fetchRadioDigInDiagnostics,
   fetchRadioNetworkProfile,
   fetchRadioSupplyAlarms,
   fetchRadios,
@@ -25,6 +26,7 @@ import {
   type HardwareP1MapDto,
   type HardwarePureSignalDiagnosticsDto,
   type RadioNetworkCountersDto,
+  type RadioDigInDiagnosticsDto,
   type RadioNetworkProfileDto,
   type RadioInfoDto,
   type RadioSupplyAlarmsDto,
@@ -513,6 +515,48 @@ function UserIoDiagnostics({
       />
       <UserIoLineRows lines={lines} />
       <DiagnosticRecommendation text={actions?.diagnosticRecommendation ?? labels?.diagnosticRecommendation} />
+    </div>
+  );
+}
+
+function DigInDiagnostics({ diag }: { diag: RadioDigInDiagnosticsDto | null }) {
+  if (!diag) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for Dig In telemetry.</div>;
+  const inhibitLabel =
+    diag.txDisableActive === null
+      ? 'UNKNOWN'
+      : diag.txDisableActive
+        ? 'ACTIVE'
+        : 'INACTIVE';
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Protocol', value: diag.activeProtocol },
+          { label: 'Board', value: diag.effectiveBoard },
+          { label: '0x0A Variant', value: diag.orionMkIIVariant },
+          { label: 'P2 Attached', value: boolLabel(diag.p2Attached) },
+          { label: 'P2 Packets', value: diag.p2Packets },
+          { label: 'P2 Updated', value: time(diag.p2LastUpdatedUtc) },
+          { label: 'User DIN', value: hex(diag.userDigitalIn, 2) },
+          { label: 'Mapping', value: diag.txDisableMappingStatus },
+        ]}
+      />
+      <FieldGrid
+        fields={[
+          { label: 'TX Disable', value: inhibitLabel },
+          { label: 'Line', value: `${diag.txDisableLineName} / ${diag.txDisableLineId}` },
+          { label: 'Bit', value: diag.txDisableBit },
+          { label: 'Raw High', value: boolLabel(diag.txDisableRawHigh) },
+          { label: 'Polarity', value: diag.txDisablePolarity },
+          { label: 'TX Blocking Armed', value: boolLabel(diag.txInhibitBehaviorArmed) },
+          { label: 'CW Tip Source', value: diag.cwKeyTipSource },
+          { label: 'CW Tip Down', value: boolLabel(diag.cwKeyTipDown) },
+          { label: 'Dash Input', value: boolLabel(diag.cwDashInputDown) },
+          { label: 'Generated', value: time(diag.generatedUtc) },
+        ]}
+      />
+      <DiagnosticRecommendation text={diag.diagnosticRecommendation} />
+      <DiagnosticRecommendation text={diag.manualReference} />
     </div>
   );
 }
@@ -1214,6 +1258,7 @@ export function HardwareDiagnosticsPanel() {
   const [txDiagnostics, setTxDiagnostics] = useState<TxDiagnosticsDto | null>(null);
   const [userIoLabels, setUserIoLabels] = useState<UserIoLabelsDto | null>(null);
   const [userIoActions, setUserIoActions] = useState<UserIoActionsDto | null>(null);
+  const [digInDiagnostics, setDigInDiagnostics] = useState<RadioDigInDiagnosticsDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inventoryError, setInventoryError] = useState<string | null>(null);
   const [endpointError, setEndpointError] = useState<string | null>(null);
@@ -1258,7 +1303,7 @@ export function HardwareDiagnosticsPanel() {
   const loadEndpointDiagnostics = useCallback(async (signal?: AbortSignal) => {
     setEndpointBusy(true);
     try {
-      const [nextKeying, nextSupply, nextNetwork, nextTx, nextLabels, nextActions] =
+      const [nextKeying, nextSupply, nextNetwork, nextTx, nextLabels, nextActions, nextDigIn] =
         await Promise.allSettled([
           fetchHardwareKeyingStatus(signal),
           fetchRadioSupplyAlarms(signal),
@@ -1266,6 +1311,7 @@ export function HardwareDiagnosticsPanel() {
           fetchTxDiagnostics(signal),
           fetchUserIoLabels(signal),
           fetchUserIoActions(signal),
+          fetchRadioDigInDiagnostics(signal),
         ]);
 
       if (nextKeying.status === 'fulfilled') setKeying(nextKeying.value);
@@ -1274,8 +1320,9 @@ export function HardwareDiagnosticsPanel() {
       if (nextTx.status === 'fulfilled') setTxDiagnostics(nextTx.value);
       if (nextLabels.status === 'fulfilled') setUserIoLabels(nextLabels.value);
       if (nextActions.status === 'fulfilled') setUserIoActions(nextActions.value);
+      if (nextDigIn.status === 'fulfilled') setDigInDiagnostics(nextDigIn.value);
 
-      const failures = [nextKeying, nextSupply, nextNetwork, nextTx, nextLabels, nextActions]
+      const failures = [nextKeying, nextSupply, nextNetwork, nextTx, nextLabels, nextActions, nextDigIn]
         .filter(
           (result): result is PromiseRejectedResult =>
             result.status === 'rejected' &&
@@ -1574,6 +1621,14 @@ export function HardwareDiagnosticsPanel() {
           </div>
         )}
         <HardwareKeyingDiagnostics status={keying} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          G2 Dig In TX Disable
+          <span className="ps-card-hint">rear jack tip CW key / ring active-low inhibit</span>
+        </h4>
+        <DigInDiagnostics diag={digInDiagnostics ?? diag?.digIn ?? null} />
       </div>
 
       <div className="ps-card">

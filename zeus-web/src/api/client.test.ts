@@ -59,6 +59,7 @@ import {
   fetchExternalPttStatus,
   fetchHardwareDiagnostics,
   fetchHardwareKeyingStatus,
+  fetchRadioDigInDiagnostics,
   fetchRadioNetworkProfile,
   fetchRadioPowerCalibration,
   fetchRadioSupplyAlarms,
@@ -1186,6 +1187,47 @@ describe('POST helpers', () => {
     expect(actions.actionBindingsConfigured).toBe(false);
     expect(actions.lines[0]?.id).toBe('userDigital7');
     expect(actions.lines[0]?.digitalState).toBe(false);
+  });
+
+  it('fetchRadioDigInDiagnostics reads G2 TX Disable mapping', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      activeProtocol: 'P2',
+      connectedBoard: 'OrionMkII',
+      effectiveBoard: 'OrionMkII',
+      orionMkIIVariant: 'G2',
+      p2Attached: true,
+      p2Packets: 18,
+      p2LastUpdatedUtc: '2026-06-15T01:00:00Z',
+      userDigitalIn: 0,
+      txDisableLineId: 'userDigital1',
+      txDisableLineName: 'User I/O IO5',
+      txDisableBit: 1,
+      txDisableRawHigh: false,
+      txDisableActive: true,
+      txDisablePolarity: 'active-low',
+      txDisableMappingStatus: 'thetis-p2-saturn-io5',
+      txInhibitBehaviorArmed: false,
+      cwKeyTipSource: 'p2.dotIn',
+      cwKeyTipDown: true,
+      cwDashInputDown: false,
+      manualReference: 'ANAN G2 manual.',
+      diagnosticRecommendation: 'Dig In TX Disable is active-low.',
+      generatedUtc: '2026-06-15T01:00:01Z',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const digIn = await fetchRadioDigInDiagnostics();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/dig-in');
+    expect(init?.method).toBeUndefined();
+    expect(digIn.txDisableLineId).toBe('userDigital1');
+    expect(digIn.txDisableBit).toBe(1);
+    expect(digIn.txDisableRawHigh).toBe(false);
+    expect(digIn.txDisableActive).toBe(true);
+    expect(digIn.txInhibitBehaviorArmed).toBe(false);
+    expect(digIn.cwKeyTipDown).toBe(true);
   });
 
   it('raises ApiError with server-provided error text on 400', async () => {

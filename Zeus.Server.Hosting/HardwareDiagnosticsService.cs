@@ -15,6 +15,31 @@ using Zeus.Protocol1;
 
 namespace Zeus.Server;
 
+internal sealed record G2DigInDiagnosticsDto(
+    int SchemaVersion,
+    string? ActiveProtocol,
+    string ConnectedBoard,
+    string EffectiveBoard,
+    string OrionMkIIVariant,
+    bool P2Attached,
+    long P2Packets,
+    DateTimeOffset? P2LastUpdatedUtc,
+    byte? UserDigitalIn,
+    string TxDisableLineId,
+    string TxDisableLineName,
+    int TxDisableBit,
+    bool? TxDisableRawHigh,
+    bool? TxDisableActive,
+    string TxDisablePolarity,
+    string TxDisableMappingStatus,
+    bool TxInhibitBehaviorArmed,
+    string CwKeyTipSource,
+    bool? CwKeyTipDown,
+    bool? CwDashInputDown,
+    string ManualReference,
+    string DiagnosticRecommendation,
+    DateTimeOffset GeneratedUtc);
+
 /// <summary>
 /// Read-only hardware diagnostic accumulator. Mirrors the live fields Thetis
 /// keeps in ChannelMaster network.c/networkproto1.c, but exposes them as a
@@ -127,6 +152,15 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 dsp = _dsp.SnapshotDiagnostics(_wisdom),
                 frontendDspScene = _frontendDspScene.Snapshot(),
                 pureSignal = BuildPureSignalDiagnostics(state, connected, effective),
+                digIn = BuildDigInDiagnostics(
+                    _activeProtocol,
+                    _p2Client is not null,
+                    _p2Packets,
+                    _p2LastUpdatedUtc,
+                    connected,
+                    effective,
+                    variant,
+                    _p2HadSample ? _p2Last : null),
                 activeProtocol = _activeProtocol,
                 p1 = new
                 {
@@ -184,6 +218,26 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 candidateSettings = CandidateSettings,
                 featureSurfaces = FeatureSurfaces,
             };
+        }
+    }
+
+    internal G2DigInDiagnosticsDto DigInSnapshot()
+    {
+        var connected = _radio.ConnectedBoardKind;
+        var effective = _radio.EffectiveBoardKind;
+        var variant = _radio.EffectiveOrionMkIIVariant;
+
+        lock (_sync)
+        {
+            return BuildDigInDiagnostics(
+                _activeProtocol,
+                _p2Client is not null,
+                _p2Packets,
+                _p2LastUpdatedUtc,
+                connected,
+                effective,
+                variant,
+                _p2HadSample ? _p2Last : null);
         }
     }
 
@@ -288,6 +342,90 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             ? "External RF Bypass feedback is in range but correction is not active yet; keep the safe two-tone/TX condition steady until calcc converges."
             : "PureSignal feedback is in range but correction is not active yet; keep TX conditions steady until calcc converges.",
     };
+
+    internal static G2DigInDiagnosticsDto BuildDigInDiagnostics(
+        string? activeProtocol,
+        bool p2Attached,
+        long p2Packets,
+        DateTimeOffset? p2LastUpdatedUtc,
+        HpsdrBoardKind connected,
+        HpsdrBoardKind effective,
+        OrionMkIIVariant variant,
+        Zeus.Protocol2.P2TelemetryReading? p2Reading)
+    {
+        int txDisableBit = P2TxDisableBit(effective, variant);
+        string txDisableLineId = $"userDigital{txDisableBit}";
+        string txDisableLineName = txDisableBit == 1
+            ? "User I/O IO5"
+            : "User I/O IO4";
+        byte? userDigital = p2Reading?.UserDigitalIn;
+        bool? rawHigh = userDigital is { } value
+            ? (value & (1 << txDisableBit)) != 0
+            : null;
+        bool? active = rawHigh is { } high ? !high : null;
+        bool? cwTip = p2Reading?.DotIn;
+        bool? dash = p2Reading?.DashIn;
+        bool saturnMapping = UsesSaturnP2TxDisableLine(effective, variant);
+        string mappingStatus = activeProtocol == "P2"
+            ? saturnMapping
+                ? "thetis-p2-saturn-io5"
+                : "thetis-p2-io4"
+            : "waiting-for-p2";
+
+        return new G2DigInDiagnosticsDto(
+            SchemaVersion: 1,
+            ActiveProtocol: activeProtocol,
+            ConnectedBoard: connected.ToString(),
+            EffectiveBoard: effective.ToString(),
+            OrionMkIIVariant: variant.ToString(),
+            P2Attached: p2Attached,
+            P2Packets: p2Packets,
+            P2LastUpdatedUtc: p2LastUpdatedUtc,
+            UserDigitalIn: userDigital,
+            TxDisableLineId: txDisableLineId,
+            TxDisableLineName: txDisableLineName,
+            TxDisableBit: txDisableBit,
+            TxDisableRawHigh: rawHigh,
+            TxDisableActive: active,
+            TxDisablePolarity: "active-low",
+            TxDisableMappingStatus: mappingStatus,
+            TxInhibitBehaviorArmed: false,
+            CwKeyTipSource: "p2.dotIn",
+            CwKeyTipDown: cwTip,
+            CwDashInputDown: dash,
+            ManualReference: "ANAN G2 manual: rear-panel Dig In stereo jack uses tip for CW key and ring for TX Disable; grounding TX Disable signals the SDR client to request transmit inhibit. Thetis maps G2-class Protocol-2 TX Inhibit to HPSP 1025 byte 59 bit 1, exposed in Zeus as p2.userDigitalIn bit 1 / userDigital1.",
+            DiagnosticRecommendation: DigInRecommendation(activeProtocol, p2Reading is not null, active),
+            GeneratedUtc: DateTimeOffset.UtcNow);
+    }
+
+    private static bool UsesSaturnP2TxDisableLine(HpsdrBoardKind effective, OrionMkIIVariant variant) =>
+        effective == HpsdrBoardKind.OrionMkII
+        && variant is OrionMkIIVariant.Anan7000DLE
+            or OrionMkIIVariant.Anan8000DLE
+            or OrionMkIIVariant.G2
+            or OrionMkIIVariant.G2_1K
+            or OrionMkIIVariant.AnvelinaPro3
+            or OrionMkIIVariant.RedPitaya;
+
+    private static int P2TxDisableBit(HpsdrBoardKind effective, OrionMkIIVariant variant) =>
+        UsesSaturnP2TxDisableLine(effective, variant) ? 1 : 0;
+
+    private static string DigInRecommendation(
+        string? activeProtocol,
+        bool hasP2Sample,
+        bool? txDisableActive)
+    {
+        if (activeProtocol != "P2")
+            return "Dig In TX Disable mapping is currently decoded from Protocol-2 hi-priority status; connect a P2 G2/Saturn-class radio before using this diagnostic.";
+
+        if (!hasP2Sample)
+            return "Protocol 2 is attached but no hi-priority user-digital sample has arrived yet; wait for HPSP 1025 telemetry or add a mapping marker while toggling the Dig In ring contact.";
+
+        if (txDisableActive == true)
+            return "Dig In TX Disable is active-low and currently active. Zeus reports the inhibit state but does not block MOX/TUN yet; do not rely on it as the sole transmit safety interlock until a hardware-inhibit policy is explicitly armed.";
+
+        return "Dig In TX Disable is inactive. The mapped line is monitored read-only; future TX inhibit behavior should be opt-in and gated to verified board mappings.";
+    }
 
     public HardwareKeyingStatusDto KeyingSnapshot(ExternalPttStatusDto externalPtt)
     {
@@ -1597,7 +1735,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
     {
         [0] = "flags: PTT bit0, Dot bit1, Dash bit2, PLL bit4, sidetone bit7",
         [1] = "ADC0..7 overload bitmask",
-        [55] = "user digital input bitfield",
+        [55] = "user digital input bitfield: P2 byte 59 after sequence prefix; Thetis maps IO4 bit0 and G2-class TX Disable/IO5 bit1",
     };
 
     private static readonly IReadOnlyDictionary<int, string> P2KnownWordFields = new Dictionary<int, string>
@@ -1623,6 +1761,13 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             source = "Thetis ChannelMaster/network.c:689-758",
             status = "decoded",
             notes = "PTT, dot, dash, PLL, ADC overloads, FWD/REV/exciter, ADC max magnitude, supply, user ADCs, user digital input, hardware LEDs",
+        },
+        new
+        {
+            field = "G2 Dig In TX Disable",
+            source = "ANAN G2 manual Dig In connector + Thetis Console.PollTXInhibit/netInterface.c getUserI05_p2",
+            status = "decoded-read-only",
+            notes = "The G2 manual assigns Dig In tip to CW key and ring to TX Disable. Thetis reads Protocol-2 HPSP 1025 byte 59 bit 1 (Zeus p2.userDigitalIn bit 1 / userDigital1 / IO5) for G2-class TX Inhibit and treats the grounded input as active-low.",
         },
         new
         {
@@ -1666,7 +1811,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         {
             field = "Board-specific hardware options",
             status = "candidate",
-            notes = "Thetis gates Alex/Apollo/MKII/Orion options by model. Zeus should surface only controls backed by BoardCapabilities and persisted per radio; G2 ADC2 ground-on-TX and 10-DDC assignment stay read-only until their protocol/UI mapping is verified.",
+            notes = "Thetis gates Alex/Apollo/MKII/Orion options by model. Zeus should surface only controls backed by BoardCapabilities and persisted per radio; G2 ADC2 ground-on-TX and 10-DDC assignment stay read-only until their protocol/UI mapping is verified. G2 Dig In TX Disable is decoded as read-only diagnostics first; TX blocking must remain opt-in and board-gated.",
         },
         new
         {
@@ -1926,14 +2071,19 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "p2.userAdc2",
                 "p2.userAdc3",
                 "p2.userDigitalIn",
+                "digIn.txDisableLineId",
+                "digIn.txDisableActive",
+                "digIn.txDisableMappingStatus",
+                "digIn.cwKeyTipDown",
             },
             candidateControls = new[]
             {
                 "/api/radio/user-io/labels",
                 "/api/radio/user-io/actions",
+                "/api/radio/dig-in",
             },
             safetyClass = "rx-safe",
-            notes = "P2 user ADC and digital input lines now have direct read-only labels and action-readiness snapshots; station automation remains unarmed until physical lines are correlated with diagnostics markers.",
+            notes = "P2 user ADC and digital input lines now have direct read-only labels, action-readiness snapshots, and a G2 Dig In TX Disable view. The TX Disable ring contact is decoded from the Thetis P2 IO5 mapping but station automation and TX blocking remain unarmed until a hardware-inhibit policy is explicitly enabled.",
         },
         new
         {
