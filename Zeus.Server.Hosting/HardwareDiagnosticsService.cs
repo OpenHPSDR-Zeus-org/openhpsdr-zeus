@@ -86,6 +86,30 @@ internal sealed record G2SensorMappingDiagnosticsDto(
     string DiagnosticRecommendation,
     DateTimeOffset GeneratedUtc);
 
+internal sealed record G2FirmwareOptionDto(
+    string Id,
+    string Label,
+    bool? Enabled,
+    bool ThetisDefaultEnabled,
+    string Status,
+    string Source,
+    string Notes);
+
+internal sealed record G2FirmwareOptionsDiagnosticsDto(
+    int SchemaVersion,
+    string? ActiveProtocol,
+    string ConnectedBoard,
+    string EffectiveBoard,
+    string OrionMkIIVariant,
+    bool G2Class,
+    double MaxRxFrequencyMhz,
+    string MaxRxFrequencyStatus,
+    G2FirmwareOptionDto[] Options,
+    string MissingControlSurface,
+    string ManualReference,
+    string DiagnosticRecommendation,
+    DateTimeOffset GeneratedUtc);
+
 /// <summary>
 /// Read-only hardware diagnostic accumulator. Mirrors the live fields Thetis
 /// keeps in ChannelMaster network.c/networkproto1.c, but exposes them as a
@@ -220,6 +244,11 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                     variant,
                     _p2HadSample ? _p2Last : null,
                     _p2HiPriorityMap.CandidateUnknownWords(12)),
+                g2FirmwareOptions = BuildG2FirmwareOptionsDiagnostics(
+                    _activeProtocol,
+                    connected,
+                    effective,
+                    variant),
                 activeProtocol = _activeProtocol,
                 p1 = new
                 {
@@ -583,6 +612,59 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         "waiting-for-telemetry" => "Protocol 2 is attached but no hi-priority sample has arrived yet; wait for UDP 1025 telemetry before adding sensor mapping markers.",
         _ => $"{mapped.Count} live P2 telemetry fields are mapped, while {unmapped.Count} G2 manual sensor fields still require marker correlation. Use Settings > Hardware > Mapping Capture with one controlled action at a time before trusting any current, fan, or P2 thermal automation.",
     };
+
+    internal static G2FirmwareOptionsDiagnosticsDto BuildG2FirmwareOptionsDiagnostics(
+        string? activeProtocol,
+        HpsdrBoardKind connected,
+        HpsdrBoardKind effective,
+        OrionMkIIVariant variant)
+    {
+        bool g2Class = IsG2ManualSensorBoard(effective, variant);
+        string ditherStatus = g2Class ? "protocol-control-unmapped" : "not-g2";
+        string randomStatus = g2Class ? "protocol-control-unmapped" : "not-g2";
+        string maxRxStatus = g2Class ? "wired-vfo-clamp" : "generic-vfo-clamp";
+
+        var options = new[]
+        {
+            new G2FirmwareOptionDto(
+                Id: "adc-dither",
+                Label: "ADC dither",
+                Enabled: null,
+                ThetisDefaultEnabled: true,
+                Status: ditherStatus,
+                Source: "Thetis Setup > General > ANAN-G2 Options calls NetworkIO.SetADCDither(1/0)",
+                Notes: "The G2/Thetis option addresses ADC nonlinearity errors. Zeus does not yet have the verified Protocol-2 command bytes, so the setting is reported as an explicit gap instead of sending an unsafe firmware write."),
+            new G2FirmwareOptionDto(
+                Id: "adc-random",
+                Label: "ADC randomizer",
+                Enabled: null,
+                ThetisDefaultEnabled: true,
+                Status: randomStatus,
+                Source: "Thetis Setup > General > ANAN-G2 Options calls NetworkIO.SetADCRandom(1/0)",
+                Notes: "The Thetis option enables the ADC digital-output randomizer to reduce digital feedback artifacts. Zeus will expose it as a write only after the P2 command mapping is proven on a live G2 capture."),
+        };
+
+        string recommendation = g2Class
+            ? "MaxRXFreq parity is enforced by the 0..60 MHz VFO clamp. Keep the firmware ADC dither/random defaults enabled in the radio until Zeus has a verified Protocol-2 command path; use mapping markers before adding writable controls."
+            : "This board is not a G2/Saturn-class target for the ANAN-G2 dither/random option block; use the board-specific hardware options already exposed for the active radio.";
+
+        return new G2FirmwareOptionsDiagnosticsDto(
+            SchemaVersion: 1,
+            ActiveProtocol: activeProtocol,
+            ConnectedBoard: connected.ToString(),
+            EffectiveBoard: effective.ToString(),
+            OrionMkIIVariant: variant.ToString(),
+            G2Class: g2Class,
+            MaxRxFrequencyMhz: 60.0,
+            MaxRxFrequencyStatus: maxRxStatus,
+            Options: options,
+            MissingControlSurface: g2Class
+                ? "SetADCDither/SetADCRandom Protocol-2 command mapping is not implemented in Zeus yet."
+                : "No G2 ADC random/dither surface applies to this board.",
+            ManualReference: "Thetis ANAN-G2 Options: Dither Enabled, Random Enabled, MaxRXFreq 60.00; G2 manual identifies Saturn-class receiver hardware.",
+            DiagnosticRecommendation: recommendation,
+            GeneratedUtc: DateTimeOffset.UtcNow);
+    }
 
     internal static G2DigInDiagnosticsDto BuildDigInDiagnostics(
         string? activeProtocol,
@@ -2100,6 +2182,13 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         },
         new
         {
+            field = "G2 dynamic-range and TX-fidelity potential",
+            source = "ANAN G2 manual specifications and benefits",
+            status = "audited",
+            notes = "Manual targets include RMDR 116 dB at 2 kHz offset, -149 dB phase noise at 10 kHz, 90 dB image rejection, dual 16-bit phase-synchronous ADCs, 16-bit DAC transmit, -68 dB typical IMD3 at 100 W, and better than -80 dBc carrier/opposite-sideband suppression. Zeus exposes live ADC overload/headroom, sample-rate ceiling, RX DSP/meter/listenability, TX egress, TX stage meters, and PureSignal feedback diagnostics so future controls can be tied to measured fidelity instead of static assumptions.",
+        },
+        new
+        {
             field = "PA thermal telemetry",
             source = "ANAN G2 user manual V1.4 thermal sensor/fan guidance + HL2 P1 C&C temperature slot",
             status = "partially-decoded",
@@ -2111,6 +2200,13 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             source = "ANAN G2 manual V1.4 PA/supply feature list + biascheck utility",
             status = "mapping-required",
             notes = "Manual evidence confirms hardware current/voltage/temperature sensors, thermally compensated bias, internal/external fan support, and biascheck Driver Current / PA Current readings. Zeus exposes mapped P2 power/supply/user I/O fields plus candidate unknown telemetry words, but PA current, driver current, P2 temperature, and fan state remain unassigned until live marker captures prove the offsets.",
+        },
+        new
+        {
+            field = "G2 ADC dither/random and MaxRXFreq",
+            source = "Thetis Setup > General > ANAN-G2 Options",
+            status = "partially-mapped",
+            notes = "Thetis exposes Dither Enabled, Random Enabled, and MaxRXFreq 60.00. Zeus enforces the 60 MHz VFO clamp, but SetADCDither/SetADCRandom are still a deliberate unmapped Protocol-2 control gap until the command bytes are captured and verified.",
         },
         new
         {
@@ -2146,6 +2242,24 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             field = "G2 PA sensor mapping workflow",
             status = "candidate",
             notes = "Settings > Hardware now surfaces the mapped/unmapped G2 sensor inventory and candidate variable P2 words. Operator controls for PA current, driver current, P2 thermal inhibit, or fan automation must stay disabled until mapping markers correlate one controlled hardware action at a time.",
+        },
+        new
+        {
+            field = "G2 ADC dither/random controls",
+            status = "blocked-on-protocol-mapping",
+            notes = "Thetis calls NetworkIO.SetADCDither and SetADCRandom for the ANAN-G2 option checkboxes. Zeus now exposes the gap in diagnostics and Settings > Hardware, but does not send firmware writes until the P2 command mapping is proven.",
+        },
+        new
+        {
+            field = "WDSP filter buffers, taps, type, window, and impulse cache",
+            status = "diagnostics-ready",
+            notes = "Settings > DSP now lists the full Thetis filter matrix, full selectable size catalogs, board-supported DDC sample-rate ladder, and Zeus's active fixed WDSP profile. Runtime tap/type/window/cache controls remain separate follow-up work because changing OpenChannel/DSP buffer geometry is a shared RX/TX engine contract.",
+        },
+        new
+        {
+            field = "G2 dynamic-range and fidelity controls",
+            status = "diagnostics-ready",
+            notes = "The hardware potential is now visible in diagnostics: ADC headroom/overload, 1.536 MHz G2 DDC ceiling, manual RMDR/image-rejection/DAC/IMD targets, PureSignal feedback, TX egress, and WDSP filter geometry. Writable controls should be added only where the P2 command path or WDSP rebuild path is verified.",
         },
     ];
 
@@ -2232,7 +2346,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "Settings > Hardware > Receiver Topology",
             },
             safetyClass = "rx-safe",
-            notes = "The G2/Saturn manual topology is now visible as safe diagnostics: dual phase-synchronous ADCs, independent MKII/preselector filter-bank paths, RX2 stepped attenuation, and the 48 kHz..1.536 MHz P2 DDC ceiling. The manual's 10 independent DDC receivers and ADC2 ground-on-TX behavior remain explicitly marked as not exposed operator controls until protocol mapping and live marker captures prove the safe control surface.",
+            notes = "The G2/Saturn manual topology is now visible as safe diagnostics: dual phase-synchronous ADCs, independent MKII/preselector filter-bank paths, RX2 stepped attenuation, 116 dB RMDR at 2 kHz, 90 dB image rejection target, and the 48 kHz..1.536 MHz P2 DDC ceiling. The manual's 10 independent DDC receivers and ADC2 ground-on-TX behavior remain explicitly marked as not exposed operator controls until protocol mapping and live marker captures prove the safe control surface.",
         },
         new
         {
@@ -2423,6 +2537,51 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             },
             safetyClass = "tx-monitoring-only",
             notes = "The G2 manual documents PA current, driver current, temperature sensors, thermally compensated bias, and fan support. Zeus now lists mapped P2 power/supply/user-I/O fields and the remaining unmapped manual sensors, with live unknown-word candidates from the P2 hi-priority map so controlled marker captures can prove the offsets before any protection automation is armed.",
+        },
+        new
+        {
+            id = "rx.g2.adc-options",
+            title = "G2 ADC dither, randomizer, and MaxRXFreq parity",
+            category = "rx-hardware",
+            implementationStatus = "diagnostics-ready",
+            userConfigurable = false,
+            source = "Thetis ANAN-G2 Options + RadioService VFO clamp",
+            telemetryPaths = new[]
+            {
+                "g2FirmwareOptions.maxRxFrequencyMhz",
+                "g2FirmwareOptions.options",
+                "g2FirmwareOptions.missingControlSurface",
+            },
+            candidateControls = new[]
+            {
+                "Settings > Hardware > G2 Firmware Options",
+                "/api/radio/diagnostics",
+            },
+            safetyClass = "rx-safe",
+            notes = "MaxRXFreq is matched by Zeus's 0..60 MHz clamp. ADC dither/random are visible as explicit unmapped G2 controls so they are not forgotten, but remain read-only until a verified Protocol-2 command capture proves the safe firmware write path.",
+        },
+        new
+        {
+            id = "rx.wdsp.filter-architecture",
+            title = "WDSP buffer, tap, type, window, and cache matrix",
+            category = "rx-dsp",
+            implementationStatus = "diagnostics-ready",
+            userConfigurable = false,
+            source = "Thetis DSP Options + Zeus WdspDspEngine OpenChannel profile",
+            telemetryPaths = new[]
+            {
+                "dsp.filterGeometry.activeRx",
+                "dsp.filterGeometry.activeTx",
+                "dsp.filterGeometry.thetisMatrix",
+                "dsp.filterGeometry.impulseCache",
+            },
+            candidateControls = new[]
+            {
+                "Settings > DSP > WDSP Filter Architecture",
+                "/api/radio/diagnostics",
+            },
+            safetyClass = "rx-safe",
+            notes = "Zeus now exposes the full Thetis reference matrix and its active fixed WDSP profile in Settings. Runtime buffer/tap/type/window/cache editing remains intentionally disabled until the RX audio, TXA, monitor, and analyzer contracts can be rebuilt atomically.",
         },
         new
         {

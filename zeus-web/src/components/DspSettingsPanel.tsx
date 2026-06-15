@@ -17,6 +17,7 @@
 import { AgcSettingsSection } from './AgcSettingsSection';
 import { AdcProtectionSettingsSection } from './AdcProtectionSettingsSection';
 import { BandwidthSettingsSection } from './BandwidthSettingsSection';
+import { DspFilterArchitectureSection } from './DspFilterArchitectureSection';
 import { SquelchSettingsSection } from './SquelchSettingsSection';
 import { SignalIntelligenceSettingsSection } from './SignalIntelligenceSettingsSection';
 import { SmartNrSettingsSection } from './SmartNrSettingsSection';
@@ -35,6 +36,13 @@ export function DspSettingsPanel() {
           <span className="ps-card-hint">DDC sample rate (48…1536 kHz)</span>
         </h4>
         <BandwidthSettingsSection />
+      </div>
+      <div className="ps-card">
+        <h4>
+          WDSP Filter Architecture
+          <span className="ps-card-hint">buffers / taps / window / cache</span>
+        </h4>
+        <DspFilterArchitectureSection />
       </div>
       <div className="ps-card">
         <h4>

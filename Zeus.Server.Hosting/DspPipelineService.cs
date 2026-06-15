@@ -910,6 +910,11 @@ public class DspPipelineService : BackgroundService,
             rxDsp,
             rxMeters,
             squelch,
+            filterGeometry = BuildFilterGeometryDiagnostics(
+                state,
+                engine,
+                wisdom,
+                BoardCapabilitiesTable.For(_radio.EffectiveBoardKind, _radio.EffectiveOrionMkIIVariant)),
             channelId = Volatile.Read(ref _channelId),
             sampleRateHz = Volatile.Read(ref _sampleRateHz),
             displayWidth = Width,
@@ -933,6 +938,136 @@ public class DspPipelineService : BackgroundService,
                     : "no-engine",
         };
     }
+
+    private static object BuildFilterGeometryDiagnostics(
+        StateDto state,
+        IDspEngine? engine,
+        WdspWisdomInitializer wisdom,
+        BoardCapabilities caps)
+    {
+        bool wdsp = engine is WdspDspEngine;
+        int txBlock = engine?.TxBlockSamples ?? 0;
+        int txOut = engine?.TxOutputSamples ?? 0;
+        string status = wdsp ? "active-fixed-profile" : engine is SyntheticDspEngine ? "synthetic-profile" : "engine-unavailable";
+        int[] sampleRates = [48_000, 96_000, 192_000, 384_000, 768_000, 1_536_000];
+        int[] iqBufferSizes = [64, 128, 256, 512, 1024];
+        int[] filterTapSizes = [1024, 2048, 4096, 8192, 16384];
+        string[] filterTypes = ["Linear Phase", "Low Latency"];
+        object[] filterWindows =
+        [
+            new { id = 0, label = "BH-4", notes = "Thetis default in DSP Options; sharper transition." },
+            new { id = 1, label = "BH-7", notes = "Deeper cutoff; this is the current Zeus WDSP call." },
+        ];
+
+        return new
+        {
+            schemaVersion = 1,
+            status,
+            operatorConfigurable = false,
+            hardwareLimits = new
+            {
+                rxAdcCount = caps.RxAdcCount,
+                maxRxSampleRateHz = caps.MaxRxSampleRateHz,
+                activeSampleRateHz = state.SampleRate,
+                sampleRates = sampleRates.Select(rate => new
+                {
+                    sampleRateHz = rate,
+                    label = $"{rate / 1000} kHz",
+                    boardSupported = rate <= caps.MaxRxSampleRateHz,
+                    protocol2Required = rate > 384_000,
+                    active = rate == state.SampleRate,
+                    status = rate <= caps.MaxRxSampleRateHz
+                        ? rate > 384_000 ? "hardware-supported-p2-only" : "hardware-supported"
+                        : "above-board-capability",
+                }).ToArray(),
+            },
+            optionCatalog = new
+            {
+                iqBufferSizes,
+                filterTapSizes,
+                filterTypes,
+                filterWindows,
+                slowModeChangeWarning = "Thetis warns that different buffer sizes, tap sizes, or filter types can force a slow mode change; Zeus keeps these fixed until RXA/TXA/analyzer rebuild can be made atomic.",
+                source = "Thetis setup.designer.cs DSP Options dropdowns",
+            },
+            activeRx = new
+            {
+                mode = state.Mode.ToString(),
+                filterLowHz = state.FilterLowHz,
+                filterHighHz = state.FilterHighHz,
+                filterPresetName = state.FilterPresetName,
+                inputBufferSize = 1024,
+                dspBufferSize = 1024,
+                filterWindowId = 1,
+                filterWindow = "BH-7",
+                filterType = "Low Latency",
+                filterTaps = (int?)null,
+                status = wdsp ? "wired-fixed" : "not-wdsp",
+            },
+            activeTx = new
+            {
+                mode = state.Mode.ToString(),
+                filterLowHz = state.TxFilterLowHz,
+                filterHighHz = state.TxFilterHighHz,
+                inputBufferSize = txBlock,
+                dspBufferSize = txBlock > 0 ? 1024 : 0,
+                outputBufferSize = txOut,
+                filterWindowId = 1,
+                filterWindow = "BH-7",
+                filterType = "profile-fixed",
+                filterTaps = (int?)null,
+                cfirCompensation = txOut > txBlock && txBlock > 0,
+                status = wdsp ? "wired-fixed" : "not-wdsp",
+            },
+            thetisMatrix = new[]
+            {
+                ThetisFilterRow("SSB/AM", "RX", 1024, 16384, "Low Latency", "BH-4", "reference"),
+                ThetisFilterRow("SSB/AM", "TX", 1024, 16384, "Linear Phase", "BH-4", "reference"),
+                ThetisFilterRow("FM", "RX", 256, 4096, "Low Latency", "BH-4", "reference"),
+                ThetisFilterRow("FM", "TX", 128, 1024, "Low Latency", "BH-4", "reference"),
+                ThetisFilterRow("CW", "RX", 64, 4096, "Low Latency", "BH-4", "reference"),
+                ThetisFilterRow("CW", "TX", null, null, "Mode generated", "BH-4", "reference-no-separate-tx-row"),
+                ThetisFilterRow("Digital", "RX", 64, 4096, "Low Latency", "BH-4", "reference"),
+                ThetisFilterRow("Digital", "TX", 64, 4096, "Low Latency", "BH-4", "reference"),
+            },
+            impulseCache = new
+            {
+                fftwWisdomPhase = wisdom.Phase.ToString(),
+                fftwWisdomStatus = wisdom.Status,
+                fftwWisdomCache = true,
+                filterImpulseCache = false,
+                saveRestoreImpulseCacheFile = false,
+                status = "fftw-wisdom-only",
+                notes = "Zeus initializes WDSP FFTW wisdom at startup. Thetis's separate Filter Impulse Cache and save/restore cache-file controls are not runtime settings in Zeus yet.",
+            },
+            highResolutionFilterDisplay = new
+            {
+                enabled = false,
+                status = "not-exposed-as-filter-display-setting",
+                notes = "Zeus exposes live filter edges, presets, panadapter scale, and mini-pan visuals, but not Thetis's separate high-resolution filter-characteristics display toggle yet.",
+            },
+            diagnosticRecommendation = "All verified hardware sample-rate sizes and Thetis DSP option sizes are now visible. Zeus currently runs a fixed RXA/TXA profile and calls WDSP window index 1 (BH-7) while the Thetis screenshot defaults to BH-4; keep the controls read-only until OpenChannel/DSP buffer/tap/window changes can be rebuilt atomically across RXA, TXA, monitor, and analyzers.",
+            source = "Thetis DSP Options filter matrix + Zeus WdspDspEngine OpenChannel/SetRXABandpassWindow/SetTXABandpassWindow profile",
+        };
+    }
+
+    private static object ThetisFilterRow(
+        string modeFamily,
+        string direction,
+        int? iqBufferSize,
+        int? filterTaps,
+        string filterType,
+        string filterWindow,
+        string status) => new
+        {
+            modeFamily,
+            direction,
+            iqBufferSize,
+            filterTaps,
+            filterType,
+            filterWindow,
+            status,
+        };
 
     private object SnapshotDisplayDiagnostics(IDspEngine? engine)
     {

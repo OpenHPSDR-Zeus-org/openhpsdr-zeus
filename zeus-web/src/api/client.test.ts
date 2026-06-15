@@ -694,6 +694,88 @@ describe('POST helpers', () => {
             },
             diagnosticRecommendation: 'Display analyzer frames are fresh.',
           },
+          filterGeometry: {
+            schemaVersion: 1,
+            status: 'active-fixed-profile',
+            operatorConfigurable: false,
+            hardwareLimits: {
+              rxAdcCount: 2,
+              maxRxSampleRateHz: 1536000,
+              activeSampleRateHz: 192000,
+              sampleRates: [
+                { sampleRateHz: 48000, label: '48 kHz', boardSupported: true, protocol2Required: false, active: false, status: 'hardware-supported' },
+                { sampleRateHz: 96000, label: '96 kHz', boardSupported: true, protocol2Required: false, active: false, status: 'hardware-supported' },
+                { sampleRateHz: 192000, label: '192 kHz', boardSupported: true, protocol2Required: false, active: true, status: 'hardware-supported' },
+                { sampleRateHz: 384000, label: '384 kHz', boardSupported: true, protocol2Required: false, active: false, status: 'hardware-supported' },
+                { sampleRateHz: 768000, label: '768 kHz', boardSupported: true, protocol2Required: true, active: false, status: 'hardware-supported-p2-only' },
+                { sampleRateHz: 1536000, label: '1536 kHz', boardSupported: true, protocol2Required: true, active: false, status: 'hardware-supported-p2-only' },
+              ],
+            },
+            optionCatalog: {
+              iqBufferSizes: [64, 128, 256, 512, 1024],
+              filterTapSizes: [1024, 2048, 4096, 8192, 16384],
+              filterTypes: ['Linear Phase', 'Low Latency'],
+              filterWindows: [
+                { id: 0, label: 'BH-4', notes: 'Thetis default in DSP Options; sharper transition.' },
+                { id: 1, label: 'BH-7', notes: 'Deeper cutoff; this is the current Zeus WDSP call.' },
+              ],
+              slowModeChangeWarning: 'Thetis warns that different buffer sizes, tap sizes, or filter types can force a slow mode change.',
+              source: 'Thetis setup.designer.cs DSP Options dropdowns',
+            },
+            activeRx: {
+              mode: 'USB',
+              filterLowHz: 150,
+              filterHighHz: 2850,
+              filterPresetName: 'F6',
+              inputBufferSize: 1024,
+              dspBufferSize: 1024,
+              filterWindowId: 1,
+              filterWindow: 'BH-7',
+              filterType: 'Low Latency',
+              filterTaps: null,
+              status: 'wired-fixed',
+            },
+            activeTx: {
+              mode: 'USB',
+              filterLowHz: 150,
+              filterHighHz: 2850,
+              inputBufferSize: 512,
+              dspBufferSize: 1024,
+              outputBufferSize: 2048,
+              filterWindowId: 1,
+              filterWindow: 'BH-7',
+              filterType: 'profile-fixed',
+              filterTaps: null,
+              cfirCompensation: true,
+              status: 'wired-fixed',
+            },
+            thetisMatrix: [
+              { modeFamily: 'SSB/AM', direction: 'RX', iqBufferSize: 1024, filterTaps: 16384, filterType: 'Low Latency', filterWindow: 'BH-4', status: 'reference' },
+              { modeFamily: 'SSB/AM', direction: 'TX', iqBufferSize: 1024, filterTaps: 16384, filterType: 'Linear Phase', filterWindow: 'BH-4', status: 'reference' },
+              { modeFamily: 'FM', direction: 'RX', iqBufferSize: 256, filterTaps: 4096, filterType: 'Low Latency', filterWindow: 'BH-4', status: 'reference' },
+              { modeFamily: 'FM', direction: 'TX', iqBufferSize: 128, filterTaps: 1024, filterType: 'Low Latency', filterWindow: 'BH-4', status: 'reference' },
+              { modeFamily: 'CW', direction: 'RX', iqBufferSize: 64, filterTaps: 4096, filterType: 'Low Latency', filterWindow: 'BH-4', status: 'reference' },
+              { modeFamily: 'CW', direction: 'TX', iqBufferSize: null, filterTaps: null, filterType: 'Mode generated', filterWindow: 'BH-4', status: 'reference-no-separate-tx-row' },
+              { modeFamily: 'Digital', direction: 'RX', iqBufferSize: 64, filterTaps: 4096, filterType: 'Low Latency', filterWindow: 'BH-4', status: 'reference' },
+              { modeFamily: 'Digital', direction: 'TX', iqBufferSize: 64, filterTaps: 4096, filterType: 'Low Latency', filterWindow: 'BH-4', status: 'reference' },
+            ],
+            impulseCache: {
+              fftwWisdomPhase: 'Ready',
+              fftwWisdomStatus: '',
+              fftwWisdomCache: true,
+              filterImpulseCache: false,
+              saveRestoreImpulseCacheFile: false,
+              status: 'fftw-wisdom-only',
+              notes: 'Zeus initializes WDSP FFTW wisdom at startup.',
+            },
+            highResolutionFilterDisplay: {
+              enabled: false,
+              status: 'not-exposed-as-filter-display-setting',
+              notes: 'Zeus exposes live filter edges.',
+            },
+            diagnosticRecommendation: 'All verified hardware sample-rate sizes and Thetis DSP option sizes are now visible.',
+            source: 'Thetis DSP Options filter matrix + Zeus WdspDspEngine profile',
+          },
           wdspWisdomPhase: 'Ready',
           wdspWisdomStatus: '',
           readiness: 'wdsp-active',
@@ -804,6 +886,40 @@ describe('POST helpers', () => {
           diagnosticRecommendation: 'Use Mapping Capture before trusting current, fan, or thermal automation.',
           generatedUtc: '2026-06-15T01:00:01Z',
         },
+        g2FirmwareOptions: {
+          schemaVersion: 1,
+          activeProtocol: 'P2',
+          connectedBoard: 'OrionMkII',
+          effectiveBoard: 'OrionMkII',
+          orionMkIIVariant: 'G2',
+          g2Class: true,
+          maxRxFrequencyMhz: 60,
+          maxRxFrequencyStatus: 'wired-vfo-clamp',
+          options: [
+            {
+              id: 'adc-dither',
+              label: 'ADC dither',
+              enabled: null,
+              thetisDefaultEnabled: true,
+              status: 'protocol-control-unmapped',
+              source: 'Thetis Setup > General > ANAN-G2 Options calls NetworkIO.SetADCDither(1/0)',
+              notes: 'gap',
+            },
+            {
+              id: 'adc-random',
+              label: 'ADC randomizer',
+              enabled: null,
+              thetisDefaultEnabled: true,
+              status: 'protocol-control-unmapped',
+              source: 'Thetis Setup > General > ANAN-G2 Options calls NetworkIO.SetADCRandom(1/0)',
+              notes: 'gap',
+            },
+          ],
+          missingControlSurface: 'SetADCDither/SetADCRandom Protocol-2 command mapping is not implemented in Zeus yet.',
+          manualReference: 'Thetis ANAN-G2 Options: Dither Enabled, Random Enabled, MaxRXFreq 60.00.',
+          diagnosticRecommendation: 'MaxRXFreq parity is enforced.',
+          generatedUtc: '2026-06-15T01:00:02Z',
+        },
         mapping: {
           schemaVersion: 2,
           markers: [
@@ -894,6 +1010,15 @@ describe('POST helpers', () => {
     expect(diag.dsp.display.waterfallSource).toBe('rx');
     expect(diag.dsp.display.pan.maxDb).toBe(-71.2);
     expect(diag.dsp.display.waterfall.dynamicRangeDb).toBe(54.4);
+    expect(diag.dsp.filterGeometry.hardwareLimits.maxRxSampleRateHz).toBe(1536000);
+    expect(diag.dsp.filterGeometry.hardwareLimits.sampleRates.find((r) => r.sampleRateHz === 1536000)?.boardSupported)
+      .toBe(true);
+    expect(diag.dsp.filterGeometry.optionCatalog.iqBufferSizes).toEqual([64, 128, 256, 512, 1024]);
+    expect(diag.dsp.filterGeometry.optionCatalog.filterTapSizes).toContain(16384);
+    expect(diag.dsp.filterGeometry.optionCatalog.filterWindows[1]?.label).toBe('BH-7');
+    expect(diag.dsp.filterGeometry.activeRx.filterWindow).toBe('BH-7');
+    expect(diag.dsp.filterGeometry.thetisMatrix[1]?.filterType).toBe('Linear Phase');
+    expect(diag.dsp.filterGeometry.impulseCache.status).toBe('fftw-wisdom-only');
     expect(diag.frontendDspScene.available).toBe(true);
     expect(diag.frontendDspScene.status).toBe('fresh');
     expect(diag.frontendDspScene.fresh).toBe(true);
@@ -914,6 +1039,9 @@ describe('POST helpers', () => {
     expect(diag.g2Sensors.unmappedManualSensors[0]?.currentTelemetryStatus).toBe('p2-g2-pa-current-unmapped');
     expect(diag.g2Sensors.candidateWords[0]?.hexOffset).toBe('0x1C');
     expect(diag.g2Sensors.diagnosticRecommendation).toContain('Mapping Capture');
+    expect(diag.g2FirmwareOptions.options[0]?.id).toBe('adc-dither');
+    expect(diag.g2FirmwareOptions.maxRxFrequencyMhz).toBe(60);
+    expect(diag.g2FirmwareOptions.options[1]?.status).toBe('protocol-control-unmapped');
     expect(diag.mapping.schemaVersion).toBe(2);
     expect(diag.mapping.markers[0]?.label).toBe('RX2 on');
     expect(diag.featureSurfaces[0]?.id).toBe('hardware.mapping.correlation');

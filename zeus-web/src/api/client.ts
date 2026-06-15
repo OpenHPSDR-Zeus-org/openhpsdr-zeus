@@ -614,6 +614,94 @@ export type HardwareRxListenabilityDiagnosticsDto = {
   recommendation: string | null;
 };
 
+export type HardwareDspFilterActiveDto = {
+  mode: string;
+  filterLowHz: number;
+  filterHighHz: number;
+  filterPresetName: string | null;
+  inputBufferSize: number;
+  dspBufferSize: number;
+  outputBufferSize?: number;
+  filterWindowId: number;
+  filterWindow: string;
+  filterType: string;
+  filterTaps: number | null;
+  cfirCompensation?: boolean;
+  status: string;
+};
+
+export type HardwareDspFilterMatrixRowDto = {
+  modeFamily: string;
+  direction: string;
+  iqBufferSize: number | null;
+  filterTaps: number | null;
+  filterType: string;
+  filterWindow: string;
+  status: string;
+};
+
+export type HardwareDspFilterImpulseCacheDto = {
+  fftwWisdomPhase: string;
+  fftwWisdomStatus: string;
+  fftwWisdomCache: boolean;
+  filterImpulseCache: boolean;
+  saveRestoreImpulseCacheFile: boolean;
+  status: string;
+  notes: string;
+};
+
+export type HardwareDspHighResolutionFilterDisplayDto = {
+  enabled: boolean;
+  status: string;
+  notes: string;
+};
+
+export type HardwareDspSampleRateOptionDto = {
+  sampleRateHz: number;
+  label: string;
+  boardSupported: boolean;
+  protocol2Required: boolean;
+  active: boolean;
+  status: string;
+};
+
+export type HardwareDspHardwareLimitsDto = {
+  rxAdcCount: number;
+  maxRxSampleRateHz: number;
+  activeSampleRateHz: number;
+  sampleRates: HardwareDspSampleRateOptionDto[];
+};
+
+export type HardwareDspFilterWindowOptionDto = {
+  id: number;
+  label: string;
+  notes: string;
+};
+
+export type HardwareDspFilterOptionCatalogDto = {
+  iqBufferSizes: number[];
+  filterTapSizes: number[];
+  filterTypes: string[];
+  filterWindows: HardwareDspFilterWindowOptionDto[];
+  slowModeChangeWarning: string;
+  source: string;
+};
+
+export type HardwareDspFilterGeometryDto = {
+  schemaVersion: number;
+  status: string;
+  operatorConfigurable: boolean;
+  hardwareLimits: HardwareDspHardwareLimitsDto;
+  optionCatalog: HardwareDspFilterOptionCatalogDto;
+  activeRx: HardwareDspFilterActiveDto;
+  activeTx: HardwareDspFilterActiveDto;
+  thetisMatrix: HardwareDspFilterMatrixRowDto[];
+  impulseCache: HardwareDspFilterImpulseCacheDto;
+  highResolutionFilterDisplay: HardwareDspHighResolutionFilterDisplayDto;
+  diagnosticRecommendation: string;
+  source: string;
+};
+
 export type HardwareDspDiagnosticsDto = {
   schemaVersion: number;
   engine: string;
@@ -642,6 +730,7 @@ export type HardwareDspDiagnosticsDto = {
   audio: HardwareAudioDiagnosticsDto;
   listenability: HardwareRxListenabilityDiagnosticsDto;
   display: HardwareDisplayDiagnosticsDto;
+  filterGeometry: HardwareDspFilterGeometryDto;
   wdspWisdomPhase: string;
   wdspWisdomStatus: string;
   readiness: string;
@@ -1386,6 +1475,32 @@ export type G2SensorMappingDiagnosticsDto = {
   generatedUtc: string;
 };
 
+export type G2FirmwareOptionDto = {
+  id: string;
+  label: string;
+  enabled: boolean | null;
+  thetisDefaultEnabled: boolean;
+  status: string;
+  source: string;
+  notes: string;
+};
+
+export type G2FirmwareOptionsDiagnosticsDto = {
+  schemaVersion: number;
+  activeProtocol: 'P1' | 'P2' | null;
+  connectedBoard: string;
+  effectiveBoard: string;
+  orionMkIIVariant: string;
+  g2Class: boolean;
+  maxRxFrequencyMhz: number;
+  maxRxFrequencyStatus: string;
+  options: G2FirmwareOptionDto[];
+  missingControlSurface: string;
+  manualReference: string;
+  diagnosticRecommendation: string;
+  generatedUtc: string;
+};
+
 export type HardwareDiagnosticsDto = {
   hardwareDiagnosticsApiVersion: number;
   generatedUtc: string;
@@ -1403,6 +1518,7 @@ export type HardwareDiagnosticsDto = {
   pureSignal: HardwarePureSignalDiagnosticsDto;
   digIn: RadioDigInDiagnosticsDto;
   g2Sensors: G2SensorMappingDiagnosticsDto;
+  g2FirmwareOptions: G2FirmwareOptionsDiagnosticsDto;
   activeProtocol: 'P1' | 'P2' | null;
   p1: HardwareP1DiagnosticsDto;
   p2: HardwareP2DiagnosticsDto;
@@ -2001,6 +2117,139 @@ function normalizeFeatureSurfaces(raw: unknown): HardwareFeatureSurfaceDto[] {
   });
 }
 
+function normalizeDspFilterActive(raw: unknown): HardwareDspFilterActiveDto {
+  const r = asDiagRecord(raw);
+  return {
+    mode: diagString(r.mode) ?? 'Unknown',
+    filterLowHz: diagNumber(r.filterLowHz) ?? 0,
+    filterHighHz: diagNumber(r.filterHighHz) ?? 0,
+    filterPresetName: diagString(r.filterPresetName),
+    inputBufferSize: diagNumber(r.inputBufferSize) ?? 0,
+    dspBufferSize: diagNumber(r.dspBufferSize) ?? 0,
+    outputBufferSize: diagNumber(r.outputBufferSize) ?? undefined,
+    filterWindowId: diagNumber(r.filterWindowId) ?? 0,
+    filterWindow: diagString(r.filterWindow) ?? 'unknown',
+    filterType: diagString(r.filterType) ?? 'unknown',
+    filterTaps: diagNumber(r.filterTaps),
+    cfirCompensation: typeof r.cfirCompensation === 'boolean' ? r.cfirCompensation : undefined,
+    status: diagString(r.status) ?? 'unknown',
+  };
+}
+
+function normalizeDspFilterMatrix(raw: unknown): HardwareDspFilterMatrixRowDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    return {
+      modeFamily: diagString(r.modeFamily) ?? '',
+      direction: diagString(r.direction) ?? '',
+      iqBufferSize: diagNumber(r.iqBufferSize),
+      filterTaps: diagNumber(r.filterTaps),
+      filterType: diagString(r.filterType) ?? '',
+      filterWindow: diagString(r.filterWindow) ?? '',
+      status: diagString(r.status) ?? 'unknown',
+    };
+  });
+}
+
+function normalizeDspHardwareLimits(raw: unknown): HardwareDspHardwareLimitsDto {
+  const r = asDiagRecord(raw);
+  const sampleRates = Array.isArray(r.sampleRates)
+    ? r.sampleRates.map((entry) => {
+      const item = asDiagRecord(entry);
+      const sampleRateHz = diagNumber(item.sampleRateHz) ?? 0;
+      return {
+        sampleRateHz,
+        label: diagString(item.label) ?? (sampleRateHz > 0 ? `${sampleRateHz / 1000} kHz` : ''),
+        boardSupported: Boolean(item.boardSupported),
+        protocol2Required: Boolean(item.protocol2Required),
+        active: Boolean(item.active),
+        status: diagString(item.status) ?? 'unknown',
+      };
+    })
+    : [48_000, 96_000, 192_000, 384_000, 768_000, 1_536_000].map((sampleRateHz) => ({
+      sampleRateHz,
+      label: `${sampleRateHz / 1000} kHz`,
+      boardSupported: sampleRateHz <= 384_000,
+      protocol2Required: sampleRateHz > 384_000,
+      active: false,
+      status: sampleRateHz <= 384_000 ? 'hardware-supported' : 'unknown-board-capability',
+    }));
+  return {
+    rxAdcCount: diagNumber(r.rxAdcCount) ?? 0,
+    maxRxSampleRateHz: diagNumber(r.maxRxSampleRateHz) ?? 384_000,
+    activeSampleRateHz: diagNumber(r.activeSampleRateHz) ?? 0,
+    sampleRates,
+  };
+}
+
+function normalizeDspFilterOptionCatalog(raw: unknown): HardwareDspFilterOptionCatalogDto {
+  const r = asDiagRecord(raw);
+  const numberArray = (value: unknown, fallback: number[]) =>
+    Array.isArray(value)
+      ? value.filter((entry): entry is number => typeof entry === 'number' && Number.isFinite(entry))
+      : fallback;
+  const stringArray = (value: unknown, fallback: string[]) =>
+    Array.isArray(value)
+      ? value.filter((entry): entry is string => typeof entry === 'string')
+      : fallback;
+  const windows = Array.isArray(r.filterWindows)
+    ? r.filterWindows.map((entry) => {
+      const item = asDiagRecord(entry);
+      return {
+        id: diagNumber(item.id) ?? 0,
+        label: diagString(item.label) ?? '',
+        notes: diagString(item.notes) ?? '',
+      };
+    })
+    : [
+      { id: 0, label: 'BH-4', notes: 'Thetis default; sharper transition.' },
+      { id: 1, label: 'BH-7', notes: 'Deeper cutoff.' },
+    ];
+  return {
+    iqBufferSizes: numberArray(r.iqBufferSizes, [64, 128, 256, 512, 1024]),
+    filterTapSizes: numberArray(r.filterTapSizes, [1024, 2048, 4096, 8192, 16384]),
+    filterTypes: stringArray(r.filterTypes, ['Linear Phase', 'Low Latency']),
+    filterWindows: windows,
+    slowModeChangeWarning: diagString(r.slowModeChangeWarning) ?? '',
+    source: diagString(r.source) ?? '',
+  };
+}
+
+function normalizeDspFilterGeometry(raw: unknown): HardwareDspFilterGeometryDto {
+  const r = asDiagRecord(raw);
+  const impulse = asDiagRecord(r.impulseCache);
+  const highRes = asDiagRecord(r.highResolutionFilterDisplay);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    status: diagString(r.status) ?? 'unavailable',
+    operatorConfigurable: Boolean(r.operatorConfigurable),
+    hardwareLimits: normalizeDspHardwareLimits(r.hardwareLimits),
+    optionCatalog: normalizeDspFilterOptionCatalog(r.optionCatalog),
+    activeRx: normalizeDspFilterActive(r.activeRx),
+    activeTx: normalizeDspFilterActive(r.activeTx),
+    thetisMatrix: normalizeDspFilterMatrix(r.thetisMatrix),
+    impulseCache: {
+      fftwWisdomPhase: diagString(impulse.fftwWisdomPhase) ?? 'Unknown',
+      fftwWisdomStatus: diagString(impulse.fftwWisdomStatus) ?? '',
+      fftwWisdomCache: Boolean(impulse.fftwWisdomCache),
+      filterImpulseCache: Boolean(impulse.filterImpulseCache),
+      saveRestoreImpulseCacheFile: Boolean(impulse.saveRestoreImpulseCacheFile),
+      status: diagString(impulse.status) ?? 'unknown',
+      notes: diagString(impulse.notes) ?? '',
+    },
+    highResolutionFilterDisplay: {
+      enabled: Boolean(highRes.enabled),
+      status: diagString(highRes.status) ?? 'unknown',
+      notes: diagString(highRes.notes) ?? '',
+    },
+    diagnosticRecommendation:
+      diagString(r.diagnosticRecommendation)
+      ?? 'WDSP filter-architecture diagnostics are not available from this backend yet.',
+    source: diagString(r.source) ?? '',
+  };
+}
+
 function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
   const r = asDiagRecord(raw);
   return {
@@ -2031,6 +2280,7 @@ function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
     audio: normalizeHardwareAudioDiagnostics(r.audio),
     listenability: normalizeHardwareRxListenabilityDiagnostics(r.listenability),
     display: normalizeHardwareDisplayDiagnostics(r.display),
+    filterGeometry: normalizeDspFilterGeometry(r.filterGeometry),
     wdspWisdomPhase: diagString(r.wdspWisdomPhase) ?? 'Unknown',
     wdspWisdomStatus: diagString(r.wdspWisdomStatus) ?? '',
     readiness: diagString(r.readiness) ?? 'unknown',
@@ -3249,6 +3499,48 @@ function normalizeG2SensorMappingDiagnostics(raw: unknown): G2SensorMappingDiagn
   };
 }
 
+function normalizeG2FirmwareOptions(raw: unknown): G2FirmwareOptionsDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  const activeProtocol =
+    r.activeProtocol === 'P1' || r.activeProtocol === 'P2'
+      ? r.activeProtocol
+      : null;
+  const options = Array.isArray(r.options)
+    ? r.options.map((entry) => {
+      const item = asDiagRecord(entry);
+      return {
+        id: diagString(item.id) ?? '',
+        label: diagString(item.label) ?? '',
+        enabled: diagBool(item.enabled),
+        thetisDefaultEnabled: Boolean(item.thetisDefaultEnabled),
+        status: diagString(item.status) ?? 'unknown',
+        source: diagString(item.source) ?? '',
+        notes: diagString(item.notes) ?? '',
+      };
+    })
+    : [];
+
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 1,
+    activeProtocol,
+    connectedBoard: diagString(r.connectedBoard) ?? 'Unknown',
+    effectiveBoard: diagString(r.effectiveBoard) ?? 'Unknown',
+    orionMkIIVariant: diagString(r.orionMkIIVariant) ?? 'G2',
+    g2Class: Boolean(r.g2Class),
+    maxRxFrequencyMhz: diagNumber(r.maxRxFrequencyMhz) ?? 60,
+    maxRxFrequencyStatus: diagString(r.maxRxFrequencyStatus) ?? 'unknown',
+    options,
+    missingControlSurface: diagString(r.missingControlSurface) ?? '',
+    manualReference:
+      diagString(r.manualReference)
+      ?? 'G2 firmware option diagnostics are not available from this backend yet.',
+    diagnosticRecommendation:
+      diagString(r.diagnosticRecommendation)
+      ?? 'Restart OpenhpsdrZeus after updating to expose G2 dither/random/MaxRXFreq diagnostics.',
+    generatedUtc: diagString(r.generatedUtc) ?? new Date().toISOString(),
+  };
+}
+
 function normalizeHardwareDiagnostics(raw: unknown): HardwareDiagnosticsDto {
   const r = asDiagRecord(raw);
   const p1 = asDiagRecord(r.p1);
@@ -3281,6 +3573,7 @@ function normalizeHardwareDiagnostics(raw: unknown): HardwareDiagnosticsDto {
     pureSignal: normalizePureSignalDiagnostics(r.pureSignal),
     digIn: normalizeRadioDigInDiagnostics(r.digIn),
     g2Sensors: normalizeG2SensorMappingDiagnostics(r.g2Sensors),
+    g2FirmwareOptions: normalizeG2FirmwareOptions(r.g2FirmwareOptions),
     activeProtocol,
     p1: {
       packets: diagNumber(p1.packets) ?? 0,
