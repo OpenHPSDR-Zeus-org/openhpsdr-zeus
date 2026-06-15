@@ -1839,6 +1839,13 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         },
         new
         {
+            field = "PA thermal telemetry",
+            source = "ANAN G2 user manual V1.4 thermal sensor/fan guidance + HL2 P1 C&C temperature slot",
+            status = "partially-decoded",
+            notes = "HL2/P1 PA temperature is decoded from C&C echo slot 0x08 AIN0. The G2 manual confirms temperature sensors and cooling hardware, but the G2/P2 PA-temperature word is still exposed as an explicit unmapped diagnostics gap until captured and verified.",
+        },
+        new
+        {
             field = "DSP runtime readiness",
             source = "DspPipelineService + WDSP wisdom bootstrap",
             status = "decoded",
@@ -2098,15 +2105,19 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "p2.fwdAdc",
                 "p2.revAdc",
                 "p2.supplyVoltsAdc",
+                "/api/radio/pa-thermal.status",
+                "/api/radio/pa-thermal.tempC",
+                "/api/radio/pa-thermal.ageMs",
             },
             candidateControls = new[]
             {
                 "/api/radio/power-calibration",
                 "/api/radio/supply-alarms",
+                "/api/radio/pa-thermal",
                 "/api/pa-settings",
             },
             safetyClass = "tx-monitoring-only",
-            notes = "Raw P1/P2 power ADC telemetry now has a direct calibrated snapshot that reuses the live TX meter math; supply-voltage ADCs are scaled from board capabilities and exposed as advisory alarm evidence until per-radio high/low thresholds are configured.",
+            notes = "Raw P1/P2 power ADC telemetry now has a direct calibrated snapshot that reuses the live TX meter math; supply-voltage ADCs are scaled from board capabilities and exposed as advisory alarm evidence until per-radio high/low thresholds are configured. PA thermal diagnostics decode the existing HL2/P1 temperature path and explicitly flag the G2/P2 temperature word as unmapped, matching the G2 manual's sensor/fan hardware without inventing an unverified value.",
         },
         new
         {

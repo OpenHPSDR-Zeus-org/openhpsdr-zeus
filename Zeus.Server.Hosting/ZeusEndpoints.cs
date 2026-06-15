@@ -1633,6 +1633,11 @@ public static class ZeusEndpoints
             return Results.Ok(diag.SupplyAlarmsSnapshot());
         });
 
+        app.MapGet("/api/radio/pa-thermal", (TxMetersService txMeters) =>
+        {
+            return Results.Ok(txMeters.PaThermalSnapshot());
+        });
+
         app.MapGet("/api/radio/network-profile", (HardwareDiagnosticsService diag) =>
         {
             return Results.Ok(diag.NetworkProfileSnapshot());

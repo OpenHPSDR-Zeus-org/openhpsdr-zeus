@@ -132,6 +132,9 @@ public sealed class TxMetersService : BackgroundService
     // floating ADC settles.
     private const float PaTempMinC = -40f;
     private const float PaTempMaxC = 125f;
+    private const double PaTempWarningC = 50.0;
+    private const double PaTempCriticalC = 55.0;
+    private static readonly TimeSpan PaTempFreshWindow = TimeSpan.FromSeconds(5);
 
     private readonly StreamingHub _hub;
     private readonly RadioService _radio;
@@ -162,6 +165,7 @@ public sealed class TxMetersService : BackgroundService
     // show up before / after the FWD-REF pair on any given packet.
     private double _paTempAdc;
     private bool _seenPaTempSample;
+    private DateTimeOffset? _paTempUpdatedUtc;
     private bool _seenSample;
     // SWR trip state: timestamp when SWR first exceeded threshold, or null if
     // SWR is currently below threshold. Checked on every meter tick (100 ms).
@@ -325,9 +329,11 @@ public sealed class TxMetersService : BackgroundService
             {
                 _paTempAdc = raw;
                 _seenPaTempSample = true;
+                _paTempUpdatedUtc = DateTimeOffset.UtcNow;
                 return;
             }
             _paTempAdc = SmoothAlpha * _paTempAdc + (1.0 - SmoothAlpha) * raw;
+            _paTempUpdatedUtc = DateTimeOffset.UtcNow;
         }
     }
 
@@ -348,6 +354,120 @@ public sealed class TxMetersService : BackgroundService
         if (tempC > PaTempMaxC) tempC = PaTempMaxC;
         return (float)tempC;
     }
+
+    public RadioPaThermalDiagnosticsDto PaThermalSnapshot()
+    {
+        var state = _radio.Snapshot();
+        var connected = _radio.ConnectedBoardKind;
+        var effective = _radio.EffectiveBoardKind;
+        var variant = _radio.EffectiveOrionMkIIVariant;
+        bool p1Active = _subscribedClient is not null || _radio.ActiveClient is not null;
+        bool p2Active = IsProtocol2Active(state, connected);
+        bool g2Class = effective == HpsdrBoardKind.OrionMkII && variant == OrionMkIIVariant.G2;
+        bool hl2Class = effective == HpsdrBoardKind.HermesLite2 || connected == HpsdrBoardKind.HermesLite2;
+
+        bool seen;
+        double rawAdc;
+        DateTimeOffset? updatedUtc;
+        lock (_sync)
+        {
+            seen = _seenPaTempSample;
+            rawAdc = _paTempAdc;
+            updatedUtc = _paTempUpdatedUtc;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        long? ageMs = updatedUtc is { } ts
+            ? Math.Max(0L, (long)(now - ts).TotalMilliseconds)
+            : null;
+        double? tempC = seen ? Round(ConvertPaTempAdcToCelsius(rawAdc), 1) : null;
+
+        bool decoded = seen || hl2Class;
+        bool supported = seen || hl2Class || g2Class;
+        bool available = seen;
+        string? activeProtocol = p1Active ? "P1" : p2Active ? "P2" : state.Status == ConnectionStatus.Connected ? "unknown" : null;
+        string source;
+        string status;
+        string recommendation;
+
+        if (g2Class && p2Active)
+        {
+            source = "p2-g2-temperature-slot-unmapped";
+            status = "p2-g2-temp-unmapped";
+            decoded = false;
+            available = false;
+            tempC = null;
+            ageMs = null;
+            updatedUtc = null;
+            recommendation = "The G2 manual confirms current, voltage, temperature sensors and fan cooling, but Zeus has not mapped the G2 Protocol-2 PA-temperature word yet. Capture P2 diagnostics markers during TX warm-up and fan transitions before arming thermal inhibit; use RF, SWR, supply, and duty-cycle telemetry as live protection evidence meanwhile.";
+        }
+        else if (seen)
+        {
+            source = "p1-hl2-c0-0x08-ain0";
+            status = ThermalStatus(tempC.GetValueOrDefault(), ageMs);
+            recommendation = status == "stale"
+                ? "PA temperature was decoded from the Protocol-1 HL2 C&C echo slot, but the sample is stale; verify the telemetry stream before relying on thermal guidance."
+                : "PA temperature is decoded from the Protocol-1 HL2 C&C echo slot and can be correlated with SWR, duty cycle, and fan behavior during TX tests.";
+        }
+        else if (g2Class)
+        {
+            source = "p2-g2-temperature-slot-unmapped";
+            status = "p2-g2-temp-unmapped";
+            decoded = false;
+            recommendation = "The G2 manual confirms current, voltage, temperature sensors and fan cooling, but Zeus has not mapped the G2 Protocol-2 PA-temperature word yet. Capture P2 diagnostics markers during TX warm-up and fan transitions before arming thermal inhibit; use RF, SWR, supply, and duty-cycle telemetry as live protection evidence meanwhile.";
+        }
+        else if (hl2Class)
+        {
+            source = "p1-hl2-c0-0x08-ain0";
+            status = "waiting-for-p1-temp";
+            recommendation = "HL2 PA temperature decoding is available, but no C&C temperature sample has arrived yet; keep the radio connected and verify the P1 telemetry stream.";
+        }
+        else
+        {
+            source = "unavailable";
+            status = "unsupported";
+            decoded = false;
+            recommendation = "This board does not currently have a mapped PA-temperature telemetry path in Zeus; PA protection should rely on SWR, timeout, RF power, supply, and duty-cycle diagnostics.";
+        }
+
+        return new(
+            SchemaVersion: 1,
+            ActiveProtocol: activeProtocol,
+            ConnectedBoard: connected.ToString(),
+            EffectiveBoard: effective.ToString(),
+            OrionMkIIVariant: variant.ToString(),
+            SupportsTemperatureTelemetry: supported,
+            TemperatureDecoded: decoded,
+            TemperatureAvailable: available,
+            Source: source,
+            Status: status,
+            TempC: tempC,
+            RawAdc: available ? Round(rawAdc, 1) : null,
+            AgeMs: ageMs,
+            LastUpdatedUtc: updatedUtc,
+            WarningTempC: PaTempWarningC,
+            CriticalTempC: PaTempCriticalC,
+            ManualReference: "ANAN G2 manual V1.4: PA/supply feature list, specifications, and cooling guidance document current, voltage, temperature sensors, thermally compensated bias, and internal/external fan support.",
+            DiagnosticRecommendation: recommendation,
+            GeneratedUtc: now);
+    }
+
+    private bool IsProtocol2Active(StateDto state, HpsdrBoardKind connected)
+        => _subscribedP2Client is not null
+           || (state.Status == ConnectionStatus.Connected
+               && _radio.ActiveClient is null
+               && connected != HpsdrBoardKind.Unknown);
+
+    private static string ThermalStatus(double tempC, long? ageMs)
+    {
+        if (ageMs is null || ageMs.Value > PaTempFreshWindow.TotalMilliseconds) return "stale";
+        if (tempC >= PaTempCriticalC) return "critical";
+        if (tempC >= PaTempWarningC) return "warm";
+        return "fresh";
+    }
+
+    private static double Round(double value, int digits) =>
+        double.IsFinite(value) ? Math.Round(value, digits) : 0.0;
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -696,6 +816,7 @@ public sealed class TxMetersService : BackgroundService
             _refAdcPeak = 0;
             _paTempAdc = 0;
             _seenPaTempSample = false;
+            _paTempUpdatedUtc = null;
             _seenSample = false;
             _swrAboveThresholdSince = null;
             _diagFwdSlotCount = 0;
@@ -730,6 +851,13 @@ public sealed class TxMetersService : BackgroundService
     {
         _subscribedP2Client = client;
         client.TelemetryReceived += OnP2Telemetry;
+        lock (_sync)
+        {
+            _paTempAdc = 0;
+            _seenPaTempSample = false;
+            _paTempUpdatedUtc = null;
+            _diagPaTempSlotCount = 0;
+        }
         _log.LogInformation("tx.meters subscribed to p2 hi-priority telemetry");
     }
 
@@ -744,6 +872,9 @@ public sealed class TxMetersService : BackgroundService
             _refAdc = 0;
             _fwdAdcPeak = 0;
             _refAdcPeak = 0;
+            _paTempAdc = 0;
+            _seenPaTempSample = false;
+            _paTempUpdatedUtc = null;
             _seenSample = false;
             _swrAboveThresholdSince = null;
             _diagFwdSlotCount = 0;
