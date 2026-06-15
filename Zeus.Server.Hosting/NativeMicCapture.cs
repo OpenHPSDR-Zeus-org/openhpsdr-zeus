@@ -152,11 +152,11 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
             if (ch == 1)
             {
-                var src = input.Slice(srcIdx, take);
-                src.CopyTo(new Span<float>(_accum, _accumFill, take));
                 for (int i = 0; i < take; i++)
                 {
-                    float a = src[i];
+                    float sample = SanitizeCapturedSample(input[srcIdx + i]);
+                    _accum[_accumFill + i] = sample;
+                    float a = sample;
                     if (a < 0) a = -a;
                     if (a > winPeak) winPeak = a;
                 }
@@ -167,10 +167,7 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
                 float invCh = 1.0f / ch;
                 for (int i = 0; i < take; i++)
                 {
-                    float sum = 0f;
-                    int baseIdx = (srcIdx + i) * ch;
-                    for (int c = 0; c < ch; c++) sum += input[baseIdx + c];
-                    float mono = sum * invCh;
+                    float mono = DownmixCapturedFrame(input, (srcIdx + i) * ch, ch, invCh);
                     _accum[_accumFill + i] = mono;
                     float a = mono < 0 ? -mono : mono;
                     if (a > winPeak) winPeak = a;
@@ -284,5 +281,20 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
             _ => $"kind={kind}",
         };
         _log.LogInformation("audio.native.tx event {Event}", label);
+    }
+
+    internal static float SanitizeCapturedSample(float sample)
+        => DspPipelineService.SanitizeAudioSample(sample);
+
+    internal static float DownmixCapturedFrame(
+        ReadOnlySpan<float> interleavedSamples,
+        int frameBaseIndex,
+        int channels,
+        float inverseChannels)
+    {
+        float sum = 0f;
+        for (int c = 0; c < channels; c++)
+            sum += SanitizeCapturedSample(interleavedSamples[frameBaseIndex + c]);
+        return SanitizeCapturedSample(sum * inverseChannels);
     }
 }
