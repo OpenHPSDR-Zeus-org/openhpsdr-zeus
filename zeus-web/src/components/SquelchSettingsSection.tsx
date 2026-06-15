@@ -28,10 +28,10 @@ type Stage = { name: string; detail: string };
 
 function stageForMode(mode: RxMode): Stage {
   if (mode === 'AM' || mode === 'SAM')
-    return { name: 'AM (AMSQ)', detail: 'level → −150…0 dB carrier threshold' };
+    return { name: 'AM (AMSQ)', detail: 'fixed level → carrier threshold' };
   if (mode === 'FM')
     return { name: 'FM (FMSQ)', detail: 'level → noise-gate threshold' };
-  return { name: 'Voice (SSQL)', detail: 'level → 0…1 syllabic threshold' };
+  return { name: 'Voice (SSQL)', detail: 'fixed level → syllabic threshold' };
 }
 
 export function SquelchSettingsSection() {
@@ -78,7 +78,9 @@ export function SquelchSettingsSection() {
       <label className="dsp-cfg-row">
         <span className="dsp-cfg-label">
           Level
-          <span className="dsp-cfg-hint"> higher = tighter</span>
+          <span className="dsp-cfg-hint">
+            {squelch.adaptive ? ' floor margin' : ' higher = tighter'}
+          </span>
         </span>
         <input
           type="range"
@@ -93,12 +95,27 @@ export function SquelchSettingsSection() {
         <span className="dsp-cfg-unit mono">{squelch.level}</span>
       </label>
 
+      <div className="dsp-cfg-row">
+        <span className="dsp-cfg-label">Mode</span>
+        <button
+          type="button"
+          disabled={!connected}
+          aria-pressed={squelch.adaptive}
+          onClick={() => connected && send({ ...squelch, adaptive: !squelch.adaptive })}
+          className={`btn sm ${squelch.adaptive ? 'active' : ''}`}
+          title="Switch between adaptive noise-floor squelch and fixed WDSP squelch"
+        >
+          {squelch.adaptive ? 'DYN' : 'FIX'}
+        </button>
+      </div>
+
       {/* Which WDSP stage the current mode routes to — makes the single
           mode-aware control self-explanatory. */}
       <div className="dsp-cfg-row">
         <span className="dsp-cfg-label">Active</span>
         <span className="dsp-cfg-hint" style={{ flex: 1 }}>
-          {stage.name} — {stage.detail}
+          {squelch.adaptive ? 'Adaptive floor gate' : stage.name} —{' '}
+          {squelch.adaptive ? 'opens above the measured band noise' : stage.detail}
         </span>
       </div>
     </div>

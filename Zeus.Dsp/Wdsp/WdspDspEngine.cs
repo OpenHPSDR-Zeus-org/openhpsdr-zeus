@@ -192,9 +192,11 @@ public sealed class WdspDspEngine : IDspEngine
         // AGC mode last applied via SetAgc / ApplyAgcDefaults. MED matches the
         // open-time default; surfaced so callers / tests can read back the mode.
         public AgcMode CurrentAgcMode = AgcMode.Med;
-        // RX squelch config last applied via SetSquelch. Default off so a fresh
-        // channel matches Thetis (all squelch off). Re-asserted on every
-        // SetMode so a mode change moves the run/threshold to the new stage.
+        // RX squelch config last applied via SetSquelch. Default off/adaptive
+        // so a fresh channel matches Thetis (all squelch off) while the UI
+        // defaults to the server-side noise-floor gate once enabled.
+        // Re-asserted on every SetMode so a mode change moves fixed-mode
+        // run/threshold to the new stage.
         public SquelchConfig CurrentSquelch = new();
         // Read by RunWorker to gate xanbEXT/xnobEXT; writes only from SetNoiseReduction.
         // Single-writer on the pipeline thread + word-sized read on the worker = safe
@@ -3177,16 +3179,21 @@ public sealed class WdspDspEngine : IDspEngine
         NativeMethods.SetRXAFMSQRun(id, 0);
     }
 
-    // Squelch is mode-aware (Thetis §5.3): exactly one WDSP stage runs based on
-    // the channel's current RX mode, the other two are forced off. Threshold
-    // mapping from Level 0..100: SSQL/FMSQ Level/100 (0..1), AMSQ
-    // -150 + Level*1.5 (-150..0 dB). Called from SetSquelch AND SetMode so a
-    // mode change re-asserts squelch on the new stage and clears the old.
+    // Fixed squelch is mode-aware (Thetis §5.3): exactly one WDSP stage runs
+    // based on the channel's current RX mode, the other two are forced off.
+    // Adaptive squelch is handled later in DspPipelineService from the live
+    // S-meter/noise floor, so WDSP fixed stages stay off when Adaptive=true.
+    // Fixed mapping keeps the useful part of the slider in range:
+    // - SSQL: 0..0.32 (Thetis/WU2O default 0.16 lands at level 50)
+    // - AMSQ: -140..-50 dB instead of reaching unusably high 0 dB
+    // - FMSQ: 1.0..0.2 noise threshold, inverted so higher = tighter
+    // Called from SetSquelch AND SetMode so a mode change re-asserts the
+    // fixed squelch on the new stage and clears the old.
     private static void ApplySquelchLocked(ChannelState state)
     {
         int id = state.Id;
         var cfg = state.CurrentSquelch;
-        int run = cfg.Enabled ? 1 : 0;
+        int run = cfg.Enabled && !cfg.Adaptive ? 1 : 0;
         int level = Math.Clamp(cfg.Level, 0, 100);
 
         // Which stage owns this mode? Everything off first, then turn one on.
@@ -3198,28 +3205,33 @@ public sealed class WdspDspEngine : IDspEngine
         {
             NativeMethods.SetRXASSQLRun(id, 0);
             NativeMethods.SetRXAFMSQRun(id, 0);
-            NativeMethods.SetRXAAMSQThreshold(id, -150.0 + level * 1.5);
+            NativeMethods.SetRXAAMSQThreshold(id, MapFixedAmsqThresholdDb(level));
             NativeMethods.SetRXAAMSQRun(id, run);
         }
         else if (isFm)
         {
             NativeMethods.SetRXASSQLRun(id, 0);
             NativeMethods.SetRXAAMSQRun(id, 0);
-            // FMSQ is a NOISE gate: it opens when avnoise < 0.9*threshold
-            // (fmsq.c:154,251), so a HIGHER WDSP threshold opens more easily —
-            // the inverse of SSQL/AMSQ. Invert here so the operator slider keeps
-            // "higher Level = tighter squelch" parity across all three stages.
-            NativeMethods.SetRXAFMSQThreshold(id, (100 - level) / 100.0);
+            NativeMethods.SetRXAFMSQThreshold(id, MapFixedFmsqThreshold(level));
             NativeMethods.SetRXAFMSQRun(id, run);
         }
         else
         {
             NativeMethods.SetRXAAMSQRun(id, 0);
             NativeMethods.SetRXAFMSQRun(id, 0);
-            NativeMethods.SetRXASSQLThreshold(id, level / 100.0);
+            NativeMethods.SetRXASSQLThreshold(id, MapFixedSsqlThreshold(level));
             NativeMethods.SetRXASSQLRun(id, run);
         }
     }
+
+    internal static double MapFixedSsqlThreshold(int level) =>
+        Math.Clamp(level, 0, 100) * 0.0032;
+
+    internal static double MapFixedAmsqThresholdDb(int level) =>
+        -140.0 + Math.Clamp(level, 0, 100) * 0.9;
+
+    internal static double MapFixedFmsqThreshold(int level) =>
+        1.0 - Math.Clamp(level, 0, 100) * 0.008;
 
     // WDSP bandpass takes signed frequencies: LSB-family modes live in negative
     // baseband (low=-high, high=-low), USB-family in positive. CW follows the

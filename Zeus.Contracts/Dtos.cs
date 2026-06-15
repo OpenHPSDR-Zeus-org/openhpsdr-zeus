@@ -318,13 +318,16 @@ public sealed record AgcConfig(
 // Operator-facing RX squelch configuration (issue: DSP controls Thetis parity
 // §5). A single mode-aware control: the engine routes run + threshold to the
 // WDSP squelch stage matching the current RX mode (SSB/CW → SSQL, AM/SAM →
-// AMSQ, FM → FMSQ) and clears the other two. Level is a unitless 0..100 where
-// higher = tighter squelch; the engine maps it per-stage (SSQL/FMSQ 0..1,
-// AMSQ -150..0 dB). Defaults Enabled=false, Level=0 match Thetis (all squelch
-// off). Persisted globally via DspSettingsStore — same pattern as Agc/Nr.
+// AMSQ, FM → FMSQ) and clears the other two. Adaptive=true uses the live
+// S-meter/noise-floor gate in DspPipelineService; Adaptive=false uses WDSP's
+// fixed per-mode squelch stages. Level is a unitless 0..100 where higher =
+// tighter squelch. Defaults Enabled=false, Level=0, Adaptive=true keep squelch
+// off while making new/old clients land on the more intuitive dynamic mode once
+// enabled. Persisted globally via DspSettingsStore — same pattern as Agc/Nr.
 public sealed record SquelchConfig(
     bool Enabled = false,
-    int Level = 0);
+    int Level = 0,
+    bool Adaptive = true);
 
 // Operator-facing TX leveling configuration (issue: DSP controls Thetis parity
 // §6.1-6.3). Bundles the three TXA dynamics stages the operator reaches for:

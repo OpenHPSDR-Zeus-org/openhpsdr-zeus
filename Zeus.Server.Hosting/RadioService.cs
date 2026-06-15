@@ -1981,7 +1981,8 @@ public sealed class RadioService : IDisposable
 
     // RX squelch (mode-aware single control). Replace-style like SetAgc; the
     // engine apply happens in DspPipelineService via the _appliedSquelch latch.
-    // Level is clamped to 0..100 here so a persisted/echoed value is always sane.
+    // Level is clamped to 0..100 here so a persisted/echoed value is always
+    // sane. Adaptive defaults in SquelchConfig keep older clients dynamic.
     public StateDto SetSquelch(SquelchConfig cfg)
     {
         ArgumentNullException.ThrowIfNull(cfg);

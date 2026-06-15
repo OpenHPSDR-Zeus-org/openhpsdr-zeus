@@ -58,6 +58,25 @@ public class SquelchEndpointValidationTests : IClassFixture<SquelchEndpointValid
         Assert.NotNull(snap);
         Assert.Equal(enabled, snap!.Enabled);
         Assert.Equal(level, snap.Level);
+        Assert.True(snap.Adaptive);
+    }
+
+    [Fact]
+    public async Task PostFixedConfig_Returns200_AndUpdatesAdaptiveFlag()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var radio = scope.ServiceProvider.GetRequiredService<RadioService>();
+        using var client = _factory.CreateClient();
+
+        var resp = await client.PostAsJsonAsync(
+            "/api/rx/squelch", new { squelch = new { enabled = true, level = 42, adaptive = false } });
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+
+        var snap = radio.Snapshot().Squelch;
+        Assert.NotNull(snap);
+        Assert.True(snap!.Enabled);
+        Assert.Equal(42, snap.Level);
+        Assert.False(snap.Adaptive);
     }
 
     [Theory]
@@ -81,6 +100,7 @@ public class SquelchEndpointValidationTests : IClassFixture<SquelchEndpointValid
         var after = radio.Snapshot().Squelch;
         Assert.Equal(before?.Enabled, after?.Enabled);
         Assert.Equal(before?.Level, after?.Level);
+        Assert.Equal(before?.Adaptive, after?.Adaptive);
     }
 
     public sealed class Factory : WebApplicationFactory<Program>

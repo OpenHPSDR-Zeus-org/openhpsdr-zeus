@@ -208,7 +208,8 @@ public sealed class DspSettingsStore : IDisposable
         if (e is null || e.SquelchEnabled is null) return null;
         return new SquelchConfig(
             Enabled: e.SquelchEnabled.Value,
-            Level: e.SquelchLevel ?? 0);
+            Level: e.SquelchLevel ?? 0,
+            Adaptive: e.SquelchAdaptive ?? true);
     }
 
     public void SetSquelch(SquelchConfig config, string profileId = "default")
@@ -246,6 +247,7 @@ public sealed class DspSettingsStore : IDisposable
     {
         e.SquelchEnabled = c.Enabled;
         e.SquelchLevel = c.Level;
+        e.SquelchAdaptive = c.Adaptive;
     }
 
     // TX leveling (issue: DSP controls Thetis parity §6.1-6.3). Persisted as
@@ -528,9 +530,11 @@ public sealed class DspSettingsEntry
     public double? AgcFixedGainDb { get; set; }
     // RX squelch (issue: DSP controls Thetis parity §5). SquelchEnabled null on
     // legacy rows → GetSquelch() returns null → RadioService uses the off
-    // default. Level defaults to 0 when only Enabled was written.
+    // default. Level defaults to 0 and Adaptive defaults to true when older
+    // rows only have Enabled/Level.
     public bool? SquelchEnabled { get; set; }
     public int? SquelchLevel { get; set; }
+    public bool? SquelchAdaptive { get; set; }
     // TX leveling (issue: DSP controls Thetis parity §6.1-6.3). TxLevelingSet
     // null on legacy rows → GetTxLeveling() returns null → RadioService uses the
     // TxLevelingConfig defaults. A single "was-written" marker (TxLevelingSet)

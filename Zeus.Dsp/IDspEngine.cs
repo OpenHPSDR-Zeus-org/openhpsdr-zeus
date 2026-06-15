@@ -82,14 +82,15 @@ public interface IDspEngine : IDisposable
     /// Med baseline for any null). No-op on Synthetic.</summary>
     void SetAgc(int channelId, AgcConfig cfg);
 
-    /// <summary>Apply the RX squelch config (Thetis parity §5). A single
+    /// <summary>Apply the RX fixed-squelch config (Thetis parity §5). A single
     /// mode-aware control: the engine routes run + mapped threshold to the WDSP
     /// squelch stage matching the channel's current RX mode (SSB/CW → SSQL,
-    /// AM/SAM → AMSQ, FM → FMSQ) and forces the other two stages off. Level
-    /// 0..100 maps per-stage (SSQL/FMSQ <c>Level/100</c>; AMSQ
-    /// <c>-150 + Level*1.5</c> dB). Tau/max-tail use Thetis defaults set at
-    /// channel open. Re-asserted on every mode change so a fresh stage picks up
-    /// the operator's squelch. No-op on Synthetic.</summary>
+    /// AM/SAM → AMSQ, FM → FMSQ) and forces the other two stages off when
+    /// <see cref="SquelchConfig.Adaptive"/> is false. Adaptive squelch is
+    /// applied by the server audio pipeline, so WDSP's fixed stages are kept
+    /// off in that mode. Tau/max-tail use Thetis defaults set at channel open.
+    /// Re-asserted on every mode change so a fresh stage picks up the
+    /// operator's squelch. No-op on Synthetic.</summary>
     void SetSquelch(int channelId, SquelchConfig cfg);
 
     /// <summary>Apply the TX leveling config (Thetis parity §6.1-6.3). Drives

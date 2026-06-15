@@ -131,12 +131,35 @@ public class DspPipelineService : BackgroundService,
 
     private RxAudioLevelerState _rxAudioLeveler;
 
+    internal sealed class AdaptiveSquelchState
+    {
+        internal readonly double[] Window = new double[AdaptiveSquelchWindowSamples];
+        internal readonly double[] Scratch = new double[AdaptiveSquelchWindowSamples];
+        public int WindowIndex;
+        public int WindowFill;
+        public double NoiseFloorDbm = double.NaN;
+        public double LastSignalDbm = double.NaN;
+        public bool Open;
+        public int CloseHoldBlocks;
+        public double Gain;
+    }
+
+    private AdaptiveSquelchState _adaptiveSquelch = new();
+
     private const double RxLevelerTargetRmsDb = -18.0;
     private const double RxLevelerGateRmsDb = -72.0;
     private const double RxLevelerMaxBoostDb = 36.0;
     private const double RxLevelerMaxCutDb = -24.0;
     private const double RxLevelerBoostSlewDbPerBlock = 2.0;
     private const double RxLevelerPeakCeiling = 0.92;
+    private const int AdaptiveSquelchWindowSamples = 15;
+    private const int AdaptiveSquelchMinSamples = 4;
+    private const double AdaptiveSquelchFloorPercentile = 0.25;
+    private const double AdaptiveSquelchFloorRiseSlewDb = 0.5;
+    private const double AdaptiveSquelchFloorFallSlewDb = 4.0;
+    private const int AdaptiveSquelchCloseHoldBlocks = 9;
+    private const double AdaptiveSquelchAttackPerBlock = 0.45;
+    private const double AdaptiveSquelchReleasePerBlock = 0.16;
 
     internal static float SanitizeAudioSample(float sample)
     {
@@ -159,6 +182,18 @@ public class DspPipelineService : BackgroundService,
             if (!float.IsFinite(dbBins[i]))
                 dbBins[i] = DisplayInvalidBinDb;
         }
+    }
+
+    private static double Rms(ReadOnlySpan<float> samples)
+    {
+        if (samples.Length == 0) return 0.0;
+        double sumSq = 0.0;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            double s = samples[i];
+            sumSq += s * s;
+        }
+        return Math.Sqrt(sumSq / samples.Length);
     }
 
     internal static void ApplyRxAudioLeveler(Span<float> samples, ref RxAudioLevelerState state)
@@ -227,6 +262,112 @@ public class DspPipelineService : BackgroundService,
 
             samples[i] = SoftLimitRxAudioSample((float)(s * gain));
         }
+    }
+
+    internal static double AdaptiveSquelchMarginDb(int level) =>
+        2.0 + Math.Clamp(level, 0, 100) * 0.10;
+
+    internal static void UpdateAdaptiveSquelchMeter(
+        AdaptiveSquelchState state,
+        SquelchConfig cfg,
+        double signalDbm)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        ArgumentNullException.ThrowIfNull(cfg);
+        if (!double.IsFinite(signalDbm) || signalDbm <= -250.0) return;
+
+        signalDbm = Math.Clamp(signalDbm, -200.0, 60.0);
+        state.LastSignalDbm = signalDbm;
+        state.Window[state.WindowIndex] = signalDbm;
+        state.WindowIndex = (state.WindowIndex + 1) % state.Window.Length;
+        if (state.WindowFill < state.Window.Length) state.WindowFill++;
+
+        if (state.WindowFill >= AdaptiveSquelchMinSamples)
+        {
+            Array.Copy(state.Window, state.Scratch, state.WindowFill);
+            Array.Sort(state.Scratch, 0, state.WindowFill);
+            int floorIndex = Math.Clamp(
+                (int)Math.Round((state.WindowFill - 1) * AdaptiveSquelchFloorPercentile),
+                0,
+                state.WindowFill - 1);
+            double candidateFloor = state.Scratch[floorIndex];
+            if (!double.IsFinite(state.NoiseFloorDbm))
+            {
+                state.NoiseFloorDbm = candidateFloor;
+            }
+            else if (candidateFloor > state.NoiseFloorDbm)
+            {
+                state.NoiseFloorDbm = Math.Min(candidateFloor, state.NoiseFloorDbm + AdaptiveSquelchFloorRiseSlewDb);
+            }
+            else
+            {
+                state.NoiseFloorDbm = Math.Max(candidateFloor, state.NoiseFloorDbm - AdaptiveSquelchFloorFallSlewDb);
+            }
+        }
+
+        if (!cfg.Enabled || !cfg.Adaptive || state.WindowFill < AdaptiveSquelchMinSamples
+            || !double.IsFinite(state.NoiseFloorDbm))
+        {
+            state.Open = false;
+            state.CloseHoldBlocks = 0;
+            return;
+        }
+
+        double marginDb = AdaptiveSquelchMarginDb(cfg.Level);
+        double openThreshold = state.NoiseFloorDbm + marginDb;
+        double closeThreshold = openThreshold - Math.Clamp(marginDb * 0.4, 2.0, 5.0);
+
+        if (signalDbm >= openThreshold)
+        {
+            state.Open = true;
+            state.CloseHoldBlocks = AdaptiveSquelchCloseHoldBlocks;
+        }
+        else if (state.Open)
+        {
+            if (signalDbm >= closeThreshold)
+            {
+                state.CloseHoldBlocks = AdaptiveSquelchCloseHoldBlocks;
+            }
+            else if (state.CloseHoldBlocks > 0)
+            {
+                state.CloseHoldBlocks--;
+            }
+            else
+            {
+                state.Open = false;
+            }
+        }
+    }
+
+    internal static void ApplyAdaptiveSquelch(
+        Span<float> samples,
+        SquelchConfig cfg,
+        AdaptiveSquelchState state)
+    {
+        ArgumentNullException.ThrowIfNull(cfg);
+        ArgumentNullException.ThrowIfNull(state);
+        if (samples.Length == 0 || !cfg.Enabled || !cfg.Adaptive) return;
+
+        double target = state.WindowFill >= AdaptiveSquelchMinSamples && state.Open ? 1.0 : 0.0;
+        double start = Math.Clamp(double.IsFinite(state.Gain) ? state.Gain : 0.0, 0.0, 1.0);
+        double end = target > start
+            ? Math.Min(target, start + AdaptiveSquelchAttackPerBlock)
+            : Math.Max(target, start - AdaptiveSquelchReleasePerBlock);
+        double delta = end - start;
+        double denom = samples.Length;
+
+        for (int i = 0; i < samples.Length; i++)
+        {
+            double gain = start + delta * ((i + 1) / denom);
+            samples[i] *= (float)gain;
+        }
+
+        if (end <= 0.0001 && target == 0.0)
+        {
+            samples.Clear();
+            end = 0.0;
+        }
+        state.Gain = end;
     }
 
     private static float SoftLimitRxAudioSample(float sample)
@@ -1292,6 +1433,7 @@ public class DspPipelineService : BackgroundService,
     private void ApplyStateToNewChannel(IDspEngine engine, int channelId)
     {
         _rxAudioLeveler = default;
+        _adaptiveSquelch = new AdaptiveSquelchState();
         var s = _radio.Snapshot();
         var nr = s.Nr ?? new NrConfig();
         var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
@@ -2059,6 +2201,7 @@ public class DspPipelineService : BackgroundService,
         double nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         bool pan = false, wf = false;
         bool psFbPanUsed = false, psFbWfUsed = false;
+        double rxAudioRmsForMeter = double.NaN;
         if (hasClients)
         {
             // While keyed (MOX or TUN — see _keyed comment) pull from the TX
@@ -2205,6 +2348,7 @@ public class DspPipelineService : BackgroundService,
         if (audioSampleCount > 0)
         {
             SanitizeAudioBuffer(audioBuf.AsSpan(0, audioSampleCount));
+            rxAudioRmsForMeter = Rms(audioBuf.AsSpan(0, audioSampleCount));
 
             // MOX-edge fade envelope. Ramps the first ~5 ms of this block
             // either down (rising edge: last block before TX silence) or up
@@ -2253,6 +2397,11 @@ public class DspPipelineService : BackgroundService,
                 var rxAudioHandler = _rxAudioPluginHandler;
                 if (rxAudioHandler is not null && audioSampleCount > 0)
                     rxAudioHandler(audioBuf.AsSpan(0, audioSampleCount), audioSampleCount, AudioOutputRateHz);
+
+                ApplyAdaptiveSquelch(
+                    audioBuf.AsSpan(0, audioSampleCount),
+                    state.Squelch ?? new SquelchConfig(),
+                    _adaptiveSquelch);
 
                 // Final receive loudness guard. WDSP AGC and NR have already
                 // run by this point (and any RX audio plugin has had its shot),
@@ -2339,20 +2488,12 @@ public class DspPipelineService : BackgroundService,
                 // 0 dBFS audio ~= S9+ signal; calibrate against ambient band
                 // noise later. Empirical offset of -50 dBm puts typical 20m
                 // band noise near S2/S3 instead of pinning at S0.
-                double rms = 0.0;
-                if (audioSampleCount > 0)
-                {
-                    for (int i = 0; i < audioSampleCount; i++)
-                    {
-                        double v = audioBuf[i];
-                        rms += v * v;
-                    }
-                    rms = Math.Sqrt(rms / audioSampleCount);
-                }
+                double rms = double.IsFinite(rxAudioRmsForMeter) ? rxAudioRmsForMeter : 0.0;
                 double dbfs = 20.0 * Math.Log10(Math.Max(rms, 1e-10));
                 dbm = dbfs - 50.0; // rough uncalibrated conversion
             }
             if (!double.IsFinite(dbm)) dbm = -160.0;
+            UpdateAdaptiveSquelchMeter(_adaptiveSquelch, state.Squelch ?? new SquelchConfig(), dbm);
             _hub.Broadcast(new RxMeterFrame((float)dbm));
             RxMeterUpdated?.Invoke(channel, dbm);
 

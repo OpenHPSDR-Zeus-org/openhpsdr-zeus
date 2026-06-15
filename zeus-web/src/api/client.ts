@@ -93,16 +93,20 @@ export const AGC_CONFIG_DEFAULT: AgcConfigDto = {
 
 // RX squelch — a single mode-aware control (Thetis parity §5). The server
 // routes run + threshold to the WDSP squelch stage matching the current RX
-// mode (SSB/CW → SSQL, AM/SAM → AMSQ, FM → FMSQ). `level` is a unitless
-// 0..100 where higher = tighter squelch. Mirrors Zeus.Contracts SquelchConfig.
+// mode (SSB/CW → SSQL, AM/SAM → AMSQ, FM → FMSQ). `adaptive` enables the
+// server-side noise-floor gate; false keeps the fixed WDSP squelch stages.
+// `level` is a unitless 0..100 where higher = tighter squelch. Mirrors
+// Zeus.Contracts SquelchConfig.
 export type SquelchConfigDto = {
   enabled: boolean;
   level: number;
+  adaptive: boolean;
 };
 
 export const SQUELCH_CONFIG_DEFAULT: SquelchConfigDto = {
   enabled: false,
   level: 0,
+  adaptive: true,
 };
 
 // TX leveling — ALC (max-gain + decay), Leveler (on/off + decay), Compressor
@@ -1166,6 +1170,7 @@ export function normalizeSquelch(raw: unknown): SquelchConfigDto {
   return {
     enabled: typeof r.enabled === 'boolean' ? r.enabled : false,
     level,
+    adaptive: typeof r.adaptive === 'boolean' ? r.adaptive : true,
   };
 }
 

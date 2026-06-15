@@ -1373,7 +1373,7 @@ describe('POST helpers', () => {
       .mockResolvedValue(jsonResponse(okState));
     vi.stubGlobal('fetch', fetchMock);
 
-    const cfg: SquelchConfigDto = { enabled: true, level: 42 };
+    const cfg: SquelchConfigDto = { enabled: true, level: 42, adaptive: true };
     await setSquelch(cfg);
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('/api/rx/squelch');
@@ -1502,10 +1502,11 @@ describe('normalizeSquelch', () => {
     const s = normalizeState({
       status: 'Connected',
       mode: 'USB',
-      squelch: { enabled: true, level: 73 },
+      squelch: { enabled: true, level: 73, adaptive: false },
     });
     expect(s.squelch.enabled).toBe(true);
     expect(s.squelch.level).toBe(73);
+    expect(s.squelch.adaptive).toBe(false);
   });
 
   it('defaults enabled to false when the field is missing or garbage', () => {
@@ -1525,6 +1526,11 @@ describe('normalizeSquelch', () => {
 
   it('rounds a fractional level to the nearest integer', () => {
     expect(normalizeSquelch({ enabled: true, level: 42.6 }).level).toBe(43);
+  });
+
+  it('defaults adaptive mode on for older payloads', () => {
+    expect(normalizeSquelch({ enabled: true, level: 20 }).adaptive).toBe(true);
+    expect(normalizeSquelch({ enabled: true, level: 20, adaptive: 'yes' }).adaptive).toBe(true);
   });
 });
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using Zeus.Server;
+using Zeus.Contracts;
 
 namespace Zeus.Server.Tests;
 
@@ -108,5 +109,62 @@ public sealed class DspPipelineAudioSanitizerTests
 
         Assert.InRange(Rms(block), 0.12f, 0.14f);
         Assert.InRange(state.GainDb, -18.0, -16.0);
+    }
+
+    [Fact]
+    public void AdaptiveSquelch_LearnsFloorAndOpensAboveMargin()
+    {
+        var state = new DspPipelineService.AdaptiveSquelchState();
+        var cfg = new SquelchConfig(Enabled: true, Level: 20, Adaptive: true);
+
+        for (int i = 0; i < 5; i++)
+            DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -100.0);
+
+        Assert.False(state.Open);
+        Assert.InRange(state.NoiseFloorDbm, -101.0, -99.0);
+
+        DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -94.0);
+
+        Assert.True(state.Open);
+        Assert.Equal(4.0, DspPipelineService.AdaptiveSquelchMarginDb(20), precision: 6);
+    }
+
+    [Fact]
+    public void AdaptiveSquelch_AppliesMuteUntilGateOpens()
+    {
+        var state = new DspPipelineService.AdaptiveSquelchState();
+        var cfg = new SquelchConfig(Enabled: true, Level: 20, Adaptive: true);
+        float[] block = new float[256];
+
+        for (int i = 0; i < 5; i++)
+            DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -100.0);
+
+        Array.Fill(block, 0.25f);
+        DspPipelineService.ApplyAdaptiveSquelch(block, cfg, state);
+        Assert.Equal(0f, Rms(block));
+        Assert.Equal(0.0, state.Gain);
+
+        DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -94.0);
+        Array.Fill(block, 0.25f);
+        DspPipelineService.ApplyAdaptiveSquelch(block, cfg, state);
+
+        Assert.InRange(Rms(block), 0.05f, 0.12f);
+        Assert.True(state.Gain > 0.0);
+    }
+
+    [Fact]
+    public void AdaptiveSquelch_FloorRisesSlowlyThroughStrongSignals()
+    {
+        var state = new DspPipelineService.AdaptiveSquelchState();
+        var cfg = new SquelchConfig(Enabled: true, Level: 20, Adaptive: true);
+
+        for (int i = 0; i < 6; i++)
+            DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -100.0);
+        double learnedFloor = state.NoiseFloorDbm;
+
+        for (int i = 0; i < 6; i++)
+            DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -70.0);
+
+        Assert.True(state.NoiseFloorDbm <= learnedFloor + 3.0);
     }
 }

@@ -59,6 +59,22 @@ public class WdspCollection { }
 [Collection("Wdsp")]
 public class WdspDspEngineTests
 {
+    [Fact]
+    public void FixedSquelchMapping_UsesSensitiveOperatorRange()
+    {
+        Assert.Equal(0.0, WdspDspEngine.MapFixedSsqlThreshold(0), precision: 6);
+        Assert.Equal(0.16, WdspDspEngine.MapFixedSsqlThreshold(50), precision: 6);
+        Assert.Equal(0.32, WdspDspEngine.MapFixedSsqlThreshold(100), precision: 6);
+
+        Assert.Equal(-140.0, WdspDspEngine.MapFixedAmsqThresholdDb(0), precision: 6);
+        Assert.Equal(-95.0, WdspDspEngine.MapFixedAmsqThresholdDb(50), precision: 6);
+        Assert.Equal(-50.0, WdspDspEngine.MapFixedAmsqThresholdDb(100), precision: 6);
+
+        Assert.Equal(1.0, WdspDspEngine.MapFixedFmsqThreshold(0), precision: 6);
+        Assert.Equal(0.6, WdspDspEngine.MapFixedFmsqThreshold(50), precision: 6);
+        Assert.Equal(0.2, WdspDspEngine.MapFixedFmsqThreshold(100), precision: 6);
+    }
+
     private static bool WdspAvailable()
     {
         try { return WdspNativeLoader.TryProbe(); }

@@ -5,7 +5,7 @@
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
 // Persistence coverage for the RX squelch store (Phase 2 of the DSP controls
-// Thetis-parity work). Both nullable squelch fields on DspSettingsEntry must
+// Thetis-parity work). Nullable squelch fields on DspSettingsEntry must
 // round-trip through LiteDB so the operator's squelch configuration survives a
 // backend restart.
 //
@@ -43,7 +43,7 @@ public class SquelchSettingsPersistenceTests : IDisposable
     [Fact]
     public void SetSquelch_EnabledConfig_RoundTripsAllFields()
     {
-        var cfg = new SquelchConfig(Enabled: true, Level: 42);
+        var cfg = new SquelchConfig(Enabled: true, Level: 42, Adaptive: false);
 
         using (var store = BuildStore())
             store.SetSquelch(cfg);
@@ -54,6 +54,7 @@ public class SquelchSettingsPersistenceTests : IDisposable
         Assert.NotNull(back);
         Assert.True(back!.Enabled);
         Assert.Equal(42, back.Level);
+        Assert.False(back.Adaptive);
     }
 
     // --- 2. Default off (level 0) round-trips faithfully -------------------
@@ -71,6 +72,7 @@ public class SquelchSettingsPersistenceTests : IDisposable
         Assert.NotNull(back);
         Assert.False(back!.Enabled);
         Assert.Equal(0, back.Level);
+        Assert.True(back.Adaptive);
     }
 
     // --- 3. Fresh / legacy entry: GetSquelch returns null -----------------
@@ -102,7 +104,7 @@ public class SquelchSettingsPersistenceTests : IDisposable
     public void SetSquelch_UpsertOverwritesExistingConfig()
     {
         var first  = new SquelchConfig(Enabled: true, Level: 10);
-        var second = new SquelchConfig(Enabled: true, Level: 75);
+        var second = new SquelchConfig(Enabled: true, Level: 75, Adaptive: false);
 
         using var store = BuildStore();
         store.SetSquelch(first);
@@ -112,5 +114,6 @@ public class SquelchSettingsPersistenceTests : IDisposable
         Assert.NotNull(back);
         Assert.True(back!.Enabled);
         Assert.Equal(75, back.Level);
+        Assert.False(back.Adaptive);
     }
 }

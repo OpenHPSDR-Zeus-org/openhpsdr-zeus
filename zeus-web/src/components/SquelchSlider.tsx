@@ -79,6 +79,22 @@ export function SquelchSlider() {
       });
   }, [squelch, connected, setLocalSquelch, applyState]);
 
+  const toggleAdaptive = useCallback(() => {
+    if (!connected) return;
+    toggleAbort.current?.abort();
+    const ac = new AbortController();
+    toggleAbort.current = ac;
+    const next = { ...squelch, adaptive: !squelch.adaptive };
+    setLocalSquelch(next);
+    setSquelch(next, ac.signal)
+      .then((s) => {
+        if (!ac.signal.aborted) applyState(s);
+      })
+      .catch(() => {
+        /* state subscription will reconcile on next broadcast */
+      });
+  }, [squelch, connected, setLocalSquelch, applyState]);
+
   useEffect(
     () => () => {
       toggleAbort.current?.abort();
@@ -87,7 +103,7 @@ export function SquelchSlider() {
   );
 
   return (
-    <label className="knob-group" style={{ minWidth: 170 }}>
+    <label className="knob-group" style={{ minWidth: 210 }}>
       <button
         type="button"
         onClick={toggle}
@@ -103,6 +119,22 @@ export function SquelchSlider() {
         style={{ whiteSpace: 'nowrap' }}
       >
         SQL
+      </button>
+      <button
+        type="button"
+        onClick={toggleAdaptive}
+        disabled={!connected}
+        aria-pressed={squelch.adaptive}
+        aria-label={squelch.adaptive ? 'Adaptive squelch' : 'Fixed squelch'}
+        title={
+          squelch.adaptive
+            ? 'Adaptive squelch tracks the noise floor'
+            : 'Fixed WDSP squelch threshold'
+        }
+        className={`btn sm ${squelch.adaptive ? 'active' : ''}`}
+        style={{ whiteSpace: 'nowrap', minWidth: 42 }}
+      >
+        {squelch.adaptive ? 'DYN' : 'FIX'}
       </button>
       <input
         type="range"
