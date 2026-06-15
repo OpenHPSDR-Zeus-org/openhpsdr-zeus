@@ -1265,6 +1265,8 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "frontend.smartNr.status",
                 "frontend.signalEstimator.noiseFloor",
                 "frontend.signalEstimator.signalConfidence",
+                "dsp.requestedNrMode",
+                "dsp.effectiveNrMode",
                 "dsp.wdspWisdomPhase",
                 "dsp.wdspEmnrPost2Available",
                 "dsp.wdspNr4SbnrAvailable",
@@ -1277,7 +1279,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "planned:/api/dsp/nr-condition",
             },
             safetyClass = "rx-safe",
-            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the backend diagnostics feed preserves the active profile, recommendation, RX-chain hold reason, and WDSP NR2/NR4 native capability for remote clients and recordings.",
+            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the backend diagnostics feed preserves the active profile, recommendation, RX-chain hold reason, requested/effective NR mode, and WDSP NR2/NR4 native capability for remote clients and recordings.",
         },
         new
         {

@@ -486,6 +486,8 @@ describe('POST helpers', () => {
           wdspEmnrPost2Available: true,
           wdspNr4SbnrAvailable: false,
           nr4Readiness: 'missing-sbnr-exports',
+          requestedNrMode: 'Sbnr',
+          effectiveNrMode: 'Off',
           channelId: 1,
           sampleRateHz: 192000,
           displayWidth: 2048,
@@ -579,6 +581,8 @@ describe('POST helpers', () => {
     expect(diag.dsp.wdspEmnrPost2Available).toBe(true);
     expect(diag.dsp.wdspNr4SbnrAvailable).toBe(false);
     expect(diag.dsp.nr4Readiness).toBe('missing-sbnr-exports');
+    expect(diag.dsp.requestedNrMode).toBe('Sbnr');
+    expect(diag.dsp.effectiveNrMode).toBe('Off');
     expect(diag.frontendDspScene.available).toBe(true);
     expect(diag.frontendDspScene.status).toBe('fresh');
     expect(diag.frontendDspScene.fresh).toBe(true);

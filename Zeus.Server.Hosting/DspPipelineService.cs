@@ -573,6 +573,14 @@ public class DspPipelineService : BackgroundService,
         bool wdspNativeLoadable = WdspDspEngine.NativeLibraryLoadable;
         bool wdspEmnrPost2Available = WdspDspEngine.EmnrPost2Available;
         bool wdspNr4SbnrAvailable = WdspDspEngine.Nr4SbnrAvailable;
+        var state = _radio.Snapshot();
+        var nr = state.Nr ?? new NrConfig();
+        string requestedNrMode = nr.NrMode.ToString();
+        string effectiveNrMode = wdspActive
+            ? nr.NrMode == NrMode.Sbnr && !wdspNr4SbnrAvailable
+                ? NrMode.Off.ToString()
+                : requestedNrMode
+            : NrMode.Off.ToString();
         return new
         {
             schemaVersion = 1,
@@ -588,6 +596,8 @@ public class DspPipelineService : BackgroundService,
                 : wdspNativeLoadable
                     ? "missing-sbnr-exports"
                     : "wdsp-native-unloadable",
+            requestedNrMode,
+            effectiveNrMode,
             channelId = Volatile.Read(ref _channelId),
             sampleRateHz = Volatile.Read(ref _sampleRateHz),
             displayWidth = Width,

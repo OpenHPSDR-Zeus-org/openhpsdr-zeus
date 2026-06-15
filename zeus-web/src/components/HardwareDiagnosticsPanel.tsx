@@ -939,6 +939,8 @@ export function HardwareDiagnosticsPanel() {
     { label: 'NR2 Post2', value: boolLabel(dsp?.wdspEmnrPost2Available) },
     { label: 'NR4 SBNR', value: boolLabel(dsp?.wdspNr4SbnrAvailable) },
     { label: 'NR4 Readiness', value: dsp?.nr4Readiness },
+    { label: 'NR Requested', value: dsp?.requestedNrMode },
+    { label: 'NR Effective', value: dsp?.effectiveNrMode },
     { label: 'Wisdom', value: dsp?.wdspWisdomPhase },
     { label: 'Channel', value: dsp?.channelId },
     { label: 'DSP Rate', value: dsp?.sampleRateHz },
