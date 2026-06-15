@@ -212,6 +212,11 @@ public sealed class G2SensorMappingDiagnosticsEndpointTests
         Assert.Equal("BH-4", filterGeometry.GetProperty("optionCatalog").GetProperty("filterWindows")[0].GetProperty("label").GetString());
         Assert.Equal("BH-7", filterGeometry.GetProperty("optionCatalog").GetProperty("filterWindows")[1].GetProperty("label").GetString());
         Assert.Equal(384_000, filterGeometry.GetProperty("hardwareLimits").GetProperty("maxRxSampleRateHz").GetInt32());
+        var runtimeControl = filterGeometry.GetProperty("runtimeSampleRateControl");
+        Assert.Equal("waiting-for-connection", runtimeControl.GetProperty("status").GetString());
+        Assert.False(runtimeControl.GetProperty("writable").GetBoolean());
+        Assert.False(runtimeControl.GetProperty("requiresReconnect").GetBoolean());
+        Assert.Equal(384_000, runtimeControl.GetProperty("maxWritableSampleRateHz").GetInt32());
         Assert.Contains(filterGeometry.GetProperty("thetisMatrix").EnumerateArray(), row =>
             row.GetProperty("modeFamily").GetString() == "SSB/AM"
             && row.GetProperty("direction").GetString() == "TX"

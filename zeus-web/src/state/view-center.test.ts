@@ -184,16 +184,21 @@ describe('refill hold', () => {
 
   it('derives holdMs from the sample rate, clamped to the radio range', () => {
     // 16384-pt FFT: 192 kHz ≈ 85 ms fill → ~240 ms hold; 48 kHz ≈ 341 ms
-    // fill → ~508 ms hold.
+    // fill → ~508 ms hold; G2 1536 kHz ≈ 11 ms fill → ~161 ms hold.
     const hold192 = vc.refillHoldMsForSampleRate(192_000);
     const hold48 = vc.refillHoldMsForSampleRate(48_000);
+    const hold1536 = vc.refillHoldMsForSampleRate(1_536_000);
     expect(hold192).toBeGreaterThan(200);
     expect(hold192).toBeLessThan(300);
     expect(hold48).toBeGreaterThan(450);
     expect(hold48).toBeLessThan(560);
+    expect(hold1536).toBeGreaterThan(150);
+    expect(hold1536).toBeLessThan(175);
+    expect(hold1536).toBeLessThan(hold192);
     // Bogus rates clamp instead of producing multi-second holds.
     expect(vc.refillHoldMsForSampleRate(0)).toBe(vc.refillHoldMsForSampleRate(192_000));
     expect(vc.refillHoldMsForSampleRate(1)).toBe(vc.refillHoldMsForSampleRate(48_000));
+    expect(vc.refillHoldMsForSampleRate(9_999_999)).toBe(vc.refillHoldMsForSampleRate(1_536_000));
   });
 });
 

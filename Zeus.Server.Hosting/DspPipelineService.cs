@@ -1749,7 +1749,7 @@ public class DspPipelineService : BackgroundService,
         bool wdsp = engine is WdspDspEngine;
         int txBlock = engine?.TxBlockSamples ?? 0;
         int txOut = engine?.TxOutputSamples ?? 0;
-        string status = wdsp ? "active-fixed-profile" : engine is SyntheticDspEngine ? "synthetic-profile" : "engine-unavailable";
+        string status = wdsp ? "runtime-rate-writable-fixed-profile" : engine is SyntheticDspEngine ? "synthetic-profile" : "engine-unavailable";
         int[] sampleRates = [48_000, 96_000, 192_000, 384_000, 768_000, 1_536_000];
         int[] iqBufferSizes = [64, 128, 256, 512, 1024];
         int[] filterTapSizes = [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144];
@@ -1759,12 +1759,19 @@ public class DspPipelineService : BackgroundService,
             new { id = 0, label = "BH-4", notes = "Thetis default in DSP Options; sharper transition." },
             new { id = 1, label = "BH-7", notes = "Deeper cutoff; this is the current Zeus WDSP call." },
         ];
+        var receiverBandwidth = BuildReceiverBandwidthDiagnostics(
+            state,
+            caps,
+            connectedBoard,
+            effectiveBoard,
+            variant,
+            protocol2Active);
 
         return new
         {
             schemaVersion = 1,
             status,
-            operatorConfigurable = false,
+            operatorConfigurable = true,
             hardwareLimits = new
             {
                 rxAdcCount = caps.RxAdcCount,
@@ -1782,6 +1789,10 @@ public class DspPipelineService : BackgroundService,
                         : "above-board-capability",
                 }).ToArray(),
             },
+            runtimeSampleRateControl = BuildRuntimeSampleRateControlDiagnostics(
+                state,
+                caps,
+                protocol2Active),
             optionCatalog = new
             {
                 iqBufferSizes,
@@ -1820,13 +1831,7 @@ public class DspPipelineService : BackgroundService,
                 cfirCompensation = txOut > txBlock && txBlock > 0,
                 status = wdsp ? "wired-fixed" : "not-wdsp",
             },
-            receiverBandwidth = BuildReceiverBandwidthDiagnostics(
-                state,
-                caps,
-                connectedBoard,
-                effectiveBoard,
-                variant,
-                protocol2Active),
+            receiverBandwidth,
             thetisMatrix = new[]
             {
                 ThetisFilterRow("SSB/AM", "RX", 1024, 16384, "Low Latency", "BH-4", "reference"),
@@ -1854,8 +1859,64 @@ public class DspPipelineService : BackgroundService,
                 status = "not-exposed-as-filter-display-setting",
                 notes = "Zeus exposes live filter edges, presets, panadapter scale, and mini-pan visuals, but not Thetis's separate high-resolution filter-characteristics display toggle yet.",
             },
-            diagnosticRecommendation = "All verified hardware sample-rate sizes, Thetis mode-default DSP sizes, and the full Zeus WDSP planning ladder are visible. Zeus currently runs a fixed RXA/TXA profile and calls WDSP window index 1 (BH-7) while the Thetis screenshot defaults to BH-4; keep the controls read-only until OpenChannel/DSP buffer/tap/window changes can be rebuilt atomically across RXA, TXA, monitor, and analyzers.",
+            diagnosticRecommendation = "All verified hardware sample-rate sizes, Thetis mode-default DSP sizes, and the full Zeus WDSP planning ladder are visible. The live DDC sample rate is operator-writable through Settings > DSP > Bandwidth and /api/sampleRate; RXA/TXA buffer/tap/window geometry remains fixed until OpenChannel/DSP buffer/tap/window changes can be rebuilt atomically across RXA, TXA, monitor, and analyzers.",
             source = "Thetis DSP Options filter matrix + Zeus WdspDspEngine OpenChannel/SetRXABandpassWindow/SetTXABandpassWindow profile",
+        };
+    }
+
+    private static object BuildRuntimeSampleRateControlDiagnostics(
+        StateDto state,
+        BoardCapabilities caps,
+        bool protocol2Active)
+    {
+        bool connected = state.Status == ConnectionStatus.Connected;
+        int activeRate = Math.Max(0, state.SampleRate);
+        int boardMax = Math.Max(48_000, caps.MaxRxSampleRateHz);
+        int protocolMax = protocol2Active ? boardMax : Math.Min(boardMax, 384_000);
+        bool p2WidebandCapable = boardMax > 384_000;
+        bool widebandWritable = connected && protocol2Active && p2WidebandCapable;
+        string status;
+        string recommendation;
+
+        if (!connected)
+        {
+            status = "waiting-for-connection";
+            recommendation = "Connect a radio before changing the runtime DDC sample rate.";
+        }
+        else if (p2WidebandCapable && !protocol2Active)
+        {
+            status = "wideband-requires-p2";
+            recommendation = "This radio can use 768/1536 kHz DDC rates, but the current connection is not Protocol 2; reconnect over P2 before widening the span.";
+        }
+        else if (p2WidebandCapable && activeRate < boardMax)
+        {
+            status = "wideband-control-ready";
+            recommendation = "Wider 768/1536 kHz spans are available now; increase the DDC sample rate when weak-signal search bandwidth matters and host/network headroom is clean.";
+        }
+        else if (p2WidebandCapable)
+        {
+            status = "max-wideband-active";
+            recommendation = "The active DDC sample rate is already at the verified board maximum; improve copy with filters, dynamic range, and display intelligence rather than widening the span.";
+        }
+        else
+        {
+            status = "board-capability-limited";
+            recommendation = "The verified board ceiling is 384 kHz or lower; keep the DDC rate within the P1/P2 baseline ladder and optimize with front-end staging and DSP.";
+        }
+
+        return new
+        {
+            status,
+            writable = connected,
+            requiresReconnect = false,
+            activeSampleRateHz = activeRate,
+            maxBoardSampleRateHz = boardMax,
+            maxWritableSampleRateHz = protocolMax,
+            protocol2Active,
+            widebandWritable,
+            settingsSurface = "Settings > DSP > Bandwidth",
+            apiRoute = "/api/sampleRate",
+            diagnosticRecommendation = recommendation,
         };
     }
 

@@ -853,8 +853,8 @@ describe('POST helpers', () => {
           },
           filterGeometry: {
             schemaVersion: 1,
-            status: 'active-fixed-profile',
-            operatorConfigurable: false,
+            status: 'runtime-rate-writable-fixed-profile',
+            operatorConfigurable: true,
             hardwareLimits: {
               rxAdcCount: 2,
               maxRxSampleRateHz: 1536000,
@@ -867,6 +867,19 @@ describe('POST helpers', () => {
                 { sampleRateHz: 768000, label: '768 kHz', boardSupported: true, protocol2Required: true, active: false, status: 'hardware-supported-p2-only' },
                 { sampleRateHz: 1536000, label: '1536 kHz', boardSupported: true, protocol2Required: true, active: false, status: 'hardware-supported-p2-only' },
               ],
+            },
+            runtimeSampleRateControl: {
+              status: 'wideband-control-ready',
+              writable: true,
+              requiresReconnect: false,
+              activeSampleRateHz: 192000,
+              maxBoardSampleRateHz: 1536000,
+              maxWritableSampleRateHz: 1536000,
+              protocol2Active: true,
+              widebandWritable: true,
+              settingsSurface: 'Settings > DSP > Bandwidth',
+              apiRoute: '/api/sampleRate',
+              diagnosticRecommendation: 'Wider 768/1536 kHz spans are available now.',
             },
             receiverBandwidth: {
               schemaVersion: 1,
@@ -1334,6 +1347,12 @@ describe('POST helpers', () => {
     expect(diag.dsp.filterGeometry.hardwareLimits.maxRxSampleRateHz).toBe(1536000);
     expect(diag.dsp.filterGeometry.hardwareLimits.sampleRates.find((r) => r.sampleRateHz === 1536000)?.boardSupported)
       .toBe(true);
+    expect(diag.dsp.filterGeometry.operatorConfigurable).toBe(true);
+    expect(diag.dsp.filterGeometry.runtimeSampleRateControl.status).toBe('wideband-control-ready');
+    expect(diag.dsp.filterGeometry.runtimeSampleRateControl.maxWritableSampleRateHz).toBe(1536000);
+    expect(diag.dsp.filterGeometry.runtimeSampleRateControl.widebandWritable).toBe(true);
+    expect(diag.dsp.filterGeometry.runtimeSampleRateControl.requiresReconnect).toBe(false);
+    expect(diag.dsp.filterGeometry.runtimeSampleRateControl.apiRoute).toBe('/api/sampleRate');
     expect(diag.dsp.filterGeometry.receiverBandwidth.status).toBe('wideband-underused');
     expect(diag.dsp.filterGeometry.receiverBandwidth.utilizationPct).toBe(12.5);
     expect(diag.dsp.filterGeometry.receiverBandwidth.activeUserDdcIndex).toBe(2);

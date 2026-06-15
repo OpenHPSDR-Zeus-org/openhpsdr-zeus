@@ -231,10 +231,11 @@ const HOLD_MARGIN_MS = 150;
 /** Refill-hold duration for the current sample rate: 1.05 × FFT fill time
  *  + 150 ms (Thetis display.cs:6360 uses fftFillTime*1.05+2 frames; our
  *  margin also covers Phase 0's 100 ms fast-attack settle). Rate is clamped
- *  to the radio's real range so a transient bogus StateDto can't produce a
- *  multi-second hold (adversary: zoom-transition mis-derivation). */
+ *  to the verified OpenHPSDR RX/DDC ladder through the G2 1.536 MHz ceiling
+ *  so a transient bogus StateDto can't produce a multi-second hold
+ *  (adversary: zoom-transition mis-derivation). */
 export function refillHoldMsForSampleRate(sampleRateHz: number): number {
-  const rate = Math.min(384_000, Math.max(48_000, sampleRateHz || 192_000));
+  const rate = Math.min(1_536_000, Math.max(48_000, sampleRateHz || 192_000));
   return (ANALYZER_FFT_SIZE / rate) * 1000 * 1.05 + HOLD_MARGIN_MS;
 }
 

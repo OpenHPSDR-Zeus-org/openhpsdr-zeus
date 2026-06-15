@@ -826,11 +826,26 @@ export type HardwareDspReceiverBandwidthDto = {
   diagnosticRecommendation: string;
 };
 
+export type HardwareDspRuntimeSampleRateControlDto = {
+  status: string;
+  writable: boolean;
+  requiresReconnect: boolean;
+  activeSampleRateHz: number;
+  maxBoardSampleRateHz: number;
+  maxWritableSampleRateHz: number;
+  protocol2Active: boolean;
+  widebandWritable: boolean;
+  settingsSurface: string;
+  apiRoute: string;
+  diagnosticRecommendation: string;
+};
+
 export type HardwareDspFilterGeometryDto = {
   schemaVersion: number;
   status: string;
   operatorConfigurable: boolean;
   hardwareLimits: HardwareDspHardwareLimitsDto;
+  runtimeSampleRateControl: HardwareDspRuntimeSampleRateControlDto;
   optionCatalog: HardwareDspFilterOptionCatalogDto;
   activeRx: HardwareDspFilterActiveDto;
   activeTx: HardwareDspFilterActiveDto;
@@ -2767,6 +2782,24 @@ function normalizeDspReceiverBandwidth(raw: unknown): HardwareDspReceiverBandwid
   };
 }
 
+function normalizeDspRuntimeSampleRateControl(raw: unknown): HardwareDspRuntimeSampleRateControlDto {
+  const r = asDiagRecord(raw);
+  return {
+    status: diagString(r.status) ?? 'unavailable',
+    writable: Boolean(r.writable),
+    requiresReconnect: Boolean(r.requiresReconnect),
+    activeSampleRateHz: diagNumber(r.activeSampleRateHz) ?? 0,
+    maxBoardSampleRateHz: diagNumber(r.maxBoardSampleRateHz) ?? 384_000,
+    maxWritableSampleRateHz: diagNumber(r.maxWritableSampleRateHz) ?? 384_000,
+    protocol2Active: Boolean(r.protocol2Active),
+    widebandWritable: Boolean(r.widebandWritable),
+    settingsSurface: diagString(r.settingsSurface) ?? 'Settings > DSP > Bandwidth',
+    apiRoute: diagString(r.apiRoute) ?? '/api/sampleRate',
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation)
+      ?? 'Runtime DDC sample-rate diagnostics are not available from this backend yet.',
+  };
+}
+
 function normalizeDspFilterGeometry(raw: unknown): HardwareDspFilterGeometryDto {
   const r = asDiagRecord(raw);
   const impulse = asDiagRecord(r.impulseCache);
@@ -2776,6 +2809,7 @@ function normalizeDspFilterGeometry(raw: unknown): HardwareDspFilterGeometryDto 
     status: diagString(r.status) ?? 'unavailable',
     operatorConfigurable: Boolean(r.operatorConfigurable),
     hardwareLimits: normalizeDspHardwareLimits(r.hardwareLimits),
+    runtimeSampleRateControl: normalizeDspRuntimeSampleRateControl(r.runtimeSampleRateControl),
     optionCatalog: normalizeDspFilterOptionCatalog(r.optionCatalog),
     activeRx: normalizeDspFilterActive(r.activeRx),
     activeTx: normalizeDspFilterActive(r.activeTx),

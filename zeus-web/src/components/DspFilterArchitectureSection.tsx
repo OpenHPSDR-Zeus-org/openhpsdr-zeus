@@ -145,7 +145,7 @@ export function DspFilterArchitectureSection() {
       <div className="dsp-cfg-row">
         <span className="dsp-cfg-label">Status</span>
         <span className="dsp-cfg-hint" style={{ flex: 1 }}>
-          {diag.status} · {diag.operatorConfigurable ? 'operator configurable' : 'fixed profile'} · {time(generatedUtc)}
+          {diag.status} · {diag.runtimeSampleRateControl.writable ? 'rate writable' : 'diagnostic only'} · {time(generatedUtc)}
         </span>
         <button type="button" className="btn sm" onClick={() => void load()} disabled={busy}>
           REFRESH
@@ -162,7 +162,19 @@ export function DspFilterArchitectureSection() {
           { label: 'Tap Sizes', value: diag.optionCatalog.filterTapSizes.join(' / ') },
           { label: 'Filter Types', value: diag.optionCatalog.filterTypes.join(' / ') },
           { label: 'Windows', value: diag.optionCatalog.filterWindows.map((w) => `${w.label}=${w.id}`).join(' / ') },
-          { label: 'Config Surface', value: diag.operatorConfigurable ? 'writable' : 'diagnostic only' },
+          { label: 'Config Surface', value: diag.operatorConfigurable ? 'rate writable / DSP fixed' : 'diagnostic only' },
+        ]}
+      />
+
+      <FieldGrid
+        fields={[
+          { label: 'Rate Control', value: diag.runtimeSampleRateControl.status },
+          { label: 'Writable', value: boolLabel(diag.runtimeSampleRateControl.writable) },
+          { label: 'Reconnect', value: diag.runtimeSampleRateControl.requiresReconnect ? 'required' : 'live' },
+          { label: 'Max Writable', value: hz(diag.runtimeSampleRateControl.maxWritableSampleRateHz) },
+          { label: 'Wideband Write', value: boolLabel(diag.runtimeSampleRateControl.widebandWritable) },
+          { label: 'Surface', value: diag.runtimeSampleRateControl.settingsSurface },
+          { label: 'API', value: diag.runtimeSampleRateControl.apiRoute },
         ]}
       />
 
@@ -304,6 +316,7 @@ export function DspFilterArchitectureSection() {
 
       <div style={noteStyle}>{diag.optionCatalog.slowModeChangeWarning}</div>
       <div style={noteStyle}>{diag.receiverBandwidth.diagnosticRecommendation}</div>
+      <div style={noteStyle}>{diag.runtimeSampleRateControl.diagnosticRecommendation}</div>
       <div className="mono" style={{ ...noteStyle, color: 'var(--fg-3)' }}>{diag.receiverBandwidth.source}</div>
       <div className="mono" style={{ ...noteStyle, color: 'var(--fg-3)' }}>{diag.optionCatalog.source}</div>
       <div style={noteStyle}>{diag.impulseCache.notes}</div>
