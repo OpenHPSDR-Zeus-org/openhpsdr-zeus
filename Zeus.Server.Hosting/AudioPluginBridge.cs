@@ -47,7 +47,6 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private readonly Func<bool> _isMoxOn;
     private readonly Func<bool> _isMonitorOn;
     private readonly Func<bool> _isTciTxAudioActive;
-    private readonly IAuditionAudioSink _audition;
     private int _remoteBypassLogCount; // for one-time diagnostic log during verification/on-air testing
     private readonly ChainOrderService? _chainOrder;
     // Out-of-process VST engine route (opt-in "VST" processing mode). Null in
@@ -132,7 +131,6 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         _isMoxOn = isMoxOn;
         _isMonitorOn = isMonitorOn;
         _isTciTxAudioActive = isTciTxAudioActive ?? (() => false);
-        _audition = audition;
         _chainOrder = chainOrder;
         _vstEngine = vstEngine;
         _log = log;
@@ -160,7 +158,6 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         _isMoxOn = isMoxOn;
         _isMonitorOn = isMonitorOn;
         _isTciTxAudioActive = isTciTxAudioActive ?? (() => false);
-        _audition = audition ?? new NoOpAuditionAudioSink();
         _chainOrder = null;
         _log = log;
         _engineIsWdsp = engineIsWdsp;
@@ -448,10 +445,12 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     /// Span{float}, AudioBlockContext)"/> ensures the two paths never
     /// collide on the chain's <c>_scratch</c> buffer in that window.</para>
     ///
-    /// <para>Output samples are discarded — the only side effect is
-    /// updating each plugin's last-input / last-output / last-GR
-    /// meter fields, which the REST <c>/meters</c> polling surfaces
-    /// to the React panels.</para>
+    /// <para>Output samples are discarded — audible Audio Suite audition is
+    /// handled by the WDSP TX-monitor path so it includes the full TXA chain
+    /// (leveler, compressor, CFC, ALC, bandpass/CFIR), not just the plugin
+    /// insert output. This preview path only updates each plugin's last-input
+    /// / last-output / last-GR meter fields, which the REST <c>/meters</c>
+    /// polling surfaces to the React panels.</para>
     ///
     /// <para>Realtime contract: never allocates on the heap, never
     /// throws (the caller wraps in try/catch as defence in depth),
@@ -472,11 +471,9 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
 
         // Stack-allocated buffers — at the desktop mic block size (960
         // samples / 20 ms) this is 2 * 960 * 4 = 7.5 KiB on the stack,
-        // well under the realtime stackalloc budget. The output is
-        // either pushed to the audition sink (when the operator has
-        // engaged the Audio Suite "Audition" toggle) or discarded; in
-        // both cases the side-effect on each plugin's last-meter fields
-        // is what drives the IN / OUT / GR animation in the panels.
+        // well under the realtime stackalloc budget. The output is discarded;
+        // the side-effect on each plugin's last-meter fields is what drives
+        // the IN / OUT / GR animation in the panels.
         Span<float> previewOut = stackalloc float[mic.Length];
         var ctx = new AudioBlockContext(
             sampleRate: sampleRate,
@@ -486,11 +483,10 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             mox: false);
 
         // VST mode: route the live mic block through the out-of-process engine so
-        // the operator can monitor and meter the VST chain OFF-AIR, exactly as the
-        // native chain animates its meters here on-bench. The engine processes the
-        // block, so the VST's own GUI meters move and the audition feed below plays
-        // the VST's output (not the native chain's). When the engine isn't the
-        // active route, fall through to the native in-process chain unchanged.
+        // the operator can meter the VST chain OFF-AIR, exactly as the native
+        // chain animates its meters here on-bench. Audible audition is owned by
+        // TX Monitor, not this preview output. When the engine isn't the active
+        // route, fall through to the native in-process chain unchanged.
         if (!TryProcessThroughEngine(mic, previewOut, ctx))
         {
             Span<float> previewScratch = stackalloc float[mic.Length];
@@ -498,17 +494,10 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         }
         DspPipelineService.SanitizeAudioBuffer(previewOut);
 
-        // Audition path: when the operator has audition turned on, push
-        // the chain's output into the audition sink so they hear what
-        // the plugins are doing to their voice through the same
-        // headphones/speakers that play RX audio. The sink no-ops
-        // internally when audition is disabled, but the IsEnabled
-        // short-circuit here keeps the hot-path "audition off" case
-        // free of even a virtual call.
-        if (_audition.IsEnabled)
-        {
-            _audition.PublishAudition(previewOut, sampleRate);
-        }
+        // Do not publish previewOut to any local sink. Audio Suite audition is
+        // the TX Monitor path, which runs this same mic block through
+        // ProcessTxBlock and demodulates the post-output IQ for a full-chain
+        // comparison with on-air TX audio.
     }
 
     /// <summary>

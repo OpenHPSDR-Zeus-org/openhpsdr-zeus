@@ -884,6 +884,9 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   const scanVstDirectory = useAudioSuiteStore((s) => s.scanVstDirectory);
   const uninstallPlugin = useAudioSuiteStore((s) => s.uninstallPlugin);
   const processingMode = useAudioSuiteStore((s) => s.processingMode);
+  const loadProcessingModeFromServer = useAudioSuiteStore(
+    (s) => s.loadProcessingModeFromServer,
+  );
   const loadChainOrderFromServer = useAudioSuiteStore(
     (s) => s.loadChainOrderFromServer,
   );
@@ -940,6 +943,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   useEffect(() => {
     if (!embedded && !isOpen) return;
     loadChainOrderFromServer();
+    loadProcessingModeFromServer();
     loadAuditionState();
     loadMasterBypassFromServer();
     loadProfiles();
@@ -947,6 +951,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     embedded,
     isOpen,
     loadChainOrderFromServer,
+    loadProcessingModeFromServer,
     loadAuditionState,
     loadMasterBypassFromServer,
     loadProfiles,
@@ -1143,9 +1148,23 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     }
   }, [profiles, profilesLoaded, selectedProfile, setSelectedProfile]);
 
-  const onSelectProfile = (name: string) => {
-    setSelectedProfile(name);
-    if (name) void applyProfile(name);
+  const onSelectProfile = async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setSelectedProfile('');
+      return;
+    }
+    const previous = selectedProfile;
+    setSelectedProfile(trimmed);
+    setVstNotice(null);
+    const result = await applyProfile(trimmed);
+    if (!result.ok) {
+      setSelectedProfile(previous);
+      setVstNotice({
+        tone: 'error',
+        text: `Profile apply failed:\n${result.error || `Could not apply "${trimmed}"`}`,
+      });
+    }
   };
   const onSaveProfile = () => {
     setProfileDialogError(null);
@@ -1410,8 +1429,8 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           Audio Suite
         </span>
 
-        {/* Audition toggle. Disabled when host mode is server (audition
-            sink is a no-op in browser mode v1 per Phase 1 ADR). */}
+        {/* Audition toggle. Drives the full TX-monitor path so the operator
+            hears the same processed signal that would reach the radio. */}
         <button
           type="button"
           data-no-drag
@@ -1420,9 +1439,9 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           title={
             auditionSupported
               ? auditionEnabled
-                ? 'Audition is ON — chain output is mixed into your RX playback'
-                : 'Audition is OFF — click to hear the chain on your headphones'
-              : 'Audition is desktop-only in this version'
+                ? 'Audition is ON — full TX chain monitor is mixed into your RX playback'
+                : 'Audition is OFF — click to hear the full TX chain on your headphones'
+              : 'Audition is unavailable in this host mode'
           }
           style={{
             marginLeft: 'auto',
@@ -1493,7 +1512,9 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
         </span>
         <select
           value={selectedProfile}
-          onChange={(e) => onSelectProfile(e.target.value)}
+          onChange={(e) => {
+            void onSelectProfile(e.target.value);
+          }}
           title="Apply a saved profile"
           style={{
             flex: 1,
@@ -1512,7 +1533,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           </option>
           {profiles.map((p) => (
             <option key={p.name} value={p.name}>
-              {p.name}
+              {p.name} [{p.processingMode === 'vst' ? 'VST' : 'Native'}]
             </option>
           ))}
         </select>
