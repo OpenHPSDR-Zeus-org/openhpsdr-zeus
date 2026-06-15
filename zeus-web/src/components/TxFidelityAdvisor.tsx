@@ -26,6 +26,13 @@ function stateColor(state: string): string {
   return 'var(--fg-2)';
 }
 
+function actionColor(tone: string, fallback: string): string {
+  if (tone === 'protect') return 'var(--tx)';
+  if (tone === 'reduce') return 'var(--power)';
+  if (tone === 'raise') return 'var(--accent)';
+  return fallback;
+}
+
 type TxFidelityAdvisorProps = {
   targetSpectralDensity?: number;
 };
@@ -67,6 +74,7 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
   };
   const analysis = analyzeTxFidelity(snapshot);
   const color = stateColor(analysis.state);
+  const nextColor = actionColor(analysis.actionTone, color);
 
   return (
     <section
@@ -138,6 +146,19 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
           }}
         >
           {analysis.detail}
+        </div>
+        <div
+          className="mono"
+          style={{
+            color: nextColor,
+            fontSize: 10,
+            fontWeight: 800,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          NEXT {analysis.recommendation}
         </div>
       </div>
       <div

@@ -55,6 +55,7 @@ describe('TxFidelityAdvisor', () => {
 
     expect(container.textContent).toContain('Broadcast sweet spot');
     expect(container.textContent).toContain('FIDELITY');
+    expect(container.textContent).toContain('NEXT Hold levels; PureSignal is correcting the PA');
     expect(container.textContent).toContain('OUT -3.0 dBFS');
     expect(container.textContent).toMatch(/DENS \d+\/55/);
     expect(container.textContent).toContain('SWR 1.15');
@@ -65,6 +66,7 @@ describe('TxFidelityAdvisor', () => {
     });
 
     expect(container.textContent).toContain('Too hot');
+    expect(container.textContent).toContain('NEXT Lower mic gain until peaks stay below -6 dBFS');
     unmount();
   });
 
@@ -86,6 +88,7 @@ describe('TxFidelityAdvisor', () => {
     expect(container.textContent).toMatch(/DENS \d+\/100/);
     expect(container.textContent).toContain('Under-driven');
     expect(container.textContent).toContain('TX density is below profile target');
+    expect(container.textContent).toContain('NEXT Increase mic gain or profile density before adding drive');
 
     unmount();
   });

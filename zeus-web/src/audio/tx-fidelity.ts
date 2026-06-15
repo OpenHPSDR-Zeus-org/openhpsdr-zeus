@@ -24,11 +24,14 @@ export type TxFidelitySnapshot = {
 
 export type TxFidelityState = 'idle' | 'monitor' | 'tune' | 'under' | 'sweet' | 'hot' | 'clip';
 export type TxDensityStatus = 'unknown' | 'thin' | 'matched' | 'forced';
+export type TxFidelityActionTone = 'neutral' | 'raise' | 'reduce' | 'protect';
 
 export type TxFidelityAnalysis = {
   state: TxFidelityState;
   label: string;
   detail: string;
+  recommendation: string;
+  actionTone: TxFidelityActionTone;
   score: number;
   micDbfs: number | null;
   alcGr: number;
@@ -161,6 +164,8 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
       state: 'tune',
       label: 'Tune carrier',
       detail: 'Voice-chain fidelity is evaluated during MOX or TX monitor.',
+      recommendation: 'Use MOX or TX monitor for voice-chain metering',
+      actionTone: 'neutral',
       score: 0,
       ...baseMetrics,
     };
@@ -173,6 +178,10 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
       detail: s.txMonitorEnabled
         ? 'TX monitor is armed; speak to meter the chain without RF.'
         : 'Enable TX monitor or key MOX to meter station fidelity.',
+      recommendation: s.txMonitorEnabled
+        ? 'Speak into the mic to meter the TX chain'
+        : 'Enable TX monitor before adjusting speech processing',
+      actionTone: 'neutral',
       score: 0,
       ...baseMetrics,
     };
@@ -190,6 +199,8 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
       state: 'clip',
       label: 'Clip risk',
       detail: 'Back down mic gain or drive; peaks are reaching full scale.',
+      recommendation: 'Back down mic gain or drive now',
+      actionTone: 'protect',
       score: 10,
       ...baseMetrics,
     };
@@ -288,19 +299,27 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     (r) => r.includes('low') || r.includes('below profile target'),
   );
   if (hasHotReason || (finalScore < 45 && !hasUnderReason)) {
+    const recommendation = recommendHotAction(s, micDbfs, outDbfs, alcGr, lvlrGr, cfcGr, density);
     return {
       state: 'hot',
       label: 'Too hot',
       detail: reasons.join(' · ') || 'Reduce mic gain or ALC drive.',
+      recommendation,
+      actionTone: recommendation.startsWith('Stop RF') || recommendation.startsWith('Correct PureSignal')
+        ? 'protect'
+        : 'reduce',
       score: finalScore,
       ...baseMetrics,
     };
   }
   if (finalScore < 70 || hasUnderReason) {
+    const recommendation = recommendUnderAction(micDbfs, alcGr, density);
     return {
       state: 'under',
       label: 'Under-driven',
       detail: reasons.join(' · ') || 'Raise mic gain until voice peaks sit around -12 to -6 dBFS.',
+      recommendation,
+      actionTone: 'raise',
       score: finalScore,
       ...baseMetrics,
     };
@@ -315,7 +334,47 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     state: stateBase,
     label: auditioning ? 'Monitor sweet spot' : 'Broadcast sweet spot',
     detail: `Mic/ALC dynamics are in range; ${ps}.`,
+    recommendation: s.psEnabled && s.psCorrecting
+      ? 'Hold levels; PureSignal is correcting the PA'
+      : 'Hold levels; keep peaks below clipping',
+    actionTone: 'neutral',
     score: finalScore,
     ...baseMetrics,
   };
+}
+
+function recommendHotAction(
+  s: TxFidelitySnapshot,
+  micDbfs: number | null,
+  outDbfs: number | null,
+  alcGr: number,
+  lvlrGr: number,
+  cfcGr: number,
+  density: TxDensityStatus,
+): string {
+  if (s.swr >= 3) return 'Stop RF and check antenna match';
+  if (s.psCalibrationStalled) return 'Correct PureSignal feedback before increasing drive';
+  if (s.psEnabled && s.psFeedbackLevel > 181) return 'Add PS feedback attenuation or lower HW peak';
+  if (s.psEnabled && s.psFeedbackLevel > 0 && s.psFeedbackLevel < 128) {
+    return 'Reduce PS feedback attenuation or raise HW peak';
+  }
+  if (micDbfs !== null && micDbfs > -3) return 'Lower mic gain until peaks stay below -6 dBFS';
+  if (outDbfs !== null && outDbfs > -3) return 'Reduce drive or ALC max gain for TX output headroom';
+  if (alcGr > 8) return 'Lower mic gain or ALC max gain';
+  if (lvlrGr > 10) return 'Lower leveler max gain or slow the leveler';
+  if (cfcGr > 7 || density === 'forced') return 'Reduce CFC density before raising drive';
+  if (s.swr >= 2) return 'Reduce power and inspect the RF match';
+  return 'Back off the hottest TX stage';
+}
+
+function recommendUnderAction(
+  micDbfs: number | null,
+  alcGr: number,
+  density: TxDensityStatus,
+): string {
+  if (micDbfs === null) return 'Enable mic audio and verify the selected input';
+  if (micDbfs < -30) return 'Raise mic gain toward -12 to -6 dBFS peaks';
+  if (density === 'thin') return 'Increase mic gain or profile density before adding drive';
+  if (alcGr < 1) return 'Raise mic gain until ALC works lightly';
+  return 'Add controlled speech density, not RF drive';
 }
