@@ -654,12 +654,26 @@ public sealed record SpotsSettings(
     bool LatestPerActivator = false,
     // --- click-to-tune dial offsets (Hz, added to the spot frequency) ---
     int CwTuneOffsetHz = 0,
-    int DigiTuneOffsetHz = 0)
+    int DigiTuneOffsetHz = 0,
+    // --- DX-cluster source (off by default; POTA + SOTA stay on) ---
+    bool DxEnabled = false,
+    // --- per-source feed URLs (blank falls back to the built-in default) ---
+    string PotaUrl = SpotsSettings.DefaultPotaUrl,
+    string SotaUrl = SpotsSettings.DefaultSotaUrl,
+    string DxUrl = SpotsSettings.DefaultDxUrl)
 {
     public const int MinPollSeconds = 30;
     public const int MaxPollSeconds = 600;
     public const int MaxAgeMinutesLimit = 1440;   // 24 h
     public const int MaxTuneOffsetHz = 5_000;
+
+    // Built-in source endpoints. POTA reports kHz, SOTA reports MHz, DXSummit
+    // (the de-facto public JSON DX-cluster feed) reports kHz. Operators can
+    // override any of these in Settings -> Spots to point at a mirror or an
+    // alternative cluster that speaks the same JSON shape.
+    public const string DefaultPotaUrl = "https://api.pota.app/spot/activator";
+    public const string DefaultSotaUrl = "https://api2.sota.org.uk/api/spots/50/all";
+    public const string DefaultDxUrl = "https://www.dxsummit.fi/api/v1/spots?limit=50";
 
     /// <summary>Clamp numeric ranges and coerce CwSideband to a valid value, so a
     /// hand-crafted POST or a stale persisted row can't wedge the poller or feed
@@ -675,7 +689,22 @@ public sealed record SpotsSettings(
         MaxAgeMinutes = Math.Clamp(MaxAgeMinutes, 0, MaxAgeMinutesLimit),
         CwTuneOffsetHz = Math.Clamp(CwTuneOffsetHz, -MaxTuneOffsetHz, MaxTuneOffsetHz),
         DigiTuneOffsetHz = Math.Clamp(DigiTuneOffsetHz, -MaxTuneOffsetHz, MaxTuneOffsetHz),
+        PotaUrl = NormalizeUrl(PotaUrl, DefaultPotaUrl),
+        SotaUrl = NormalizeUrl(SotaUrl, DefaultSotaUrl),
+        DxUrl = NormalizeUrl(DxUrl, DefaultDxUrl),
     };
+
+    // Blank or non-http(s) URLs fall back to the default so a cleared field
+    // can't silently disable a source or smuggle a file:// / unexpected scheme.
+    private static string NormalizeUrl(string? url, string fallback)
+    {
+        var u = url?.Trim();
+        if (string.IsNullOrEmpty(u)) return fallback;
+        return Uri.TryCreate(u, UriKind.Absolute, out var parsed)
+            && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps)
+            ? u
+            : fallback;
+    }
 
     private static IReadOnlyList<string>? NormalizeKeys(IReadOnlyList<string>? keys)
     {

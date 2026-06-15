@@ -63,7 +63,12 @@ public sealed class SpotsSettingsStore : IDisposable
                 MaxAgeMinutes: e.MaxAgeMinutes,
                 LatestPerActivator: e.LatestPerActivator,
                 CwTuneOffsetHz: e.CwTuneOffsetHz,
-                DigiTuneOffsetHz: e.DigiTuneOffsetHz).Normalized();
+                DigiTuneOffsetHz: e.DigiTuneOffsetHz,
+                DxEnabled: e.DxEnabled,
+                // Null on older rows; Normalized() resolves blanks to defaults.
+                PotaUrl: e.PotaUrl ?? "",
+                SotaUrl: e.SotaUrl ?? "",
+                DxUrl: e.DxUrl ?? "").Normalized();
         }
     }
 
@@ -95,6 +100,10 @@ public sealed class SpotsSettingsStore : IDisposable
                 existing.LatestPerActivator = s.LatestPerActivator;
                 existing.CwTuneOffsetHz = s.CwTuneOffsetHz;
                 existing.DigiTuneOffsetHz = s.DigiTuneOffsetHz;
+                existing.DxEnabled = s.DxEnabled;
+                existing.PotaUrl = s.PotaUrl;
+                existing.SotaUrl = s.SotaUrl;
+                existing.DxUrl = s.DxUrl;
                 existing.UpdatedUtc = nowUtc;
                 _state.Update(existing);
             }
@@ -118,6 +127,10 @@ public sealed class SpotsSettingsStore : IDisposable
         LatestPerActivator = s.LatestPerActivator,
         CwTuneOffsetHz = s.CwTuneOffsetHz,
         DigiTuneOffsetHz = s.DigiTuneOffsetHz,
+        DxEnabled = s.DxEnabled,
+        PotaUrl = s.PotaUrl,
+        SotaUrl = s.SotaUrl,
+        DxUrl = s.DxUrl,
         UpdatedUtc = nowUtc,
     };
 
@@ -142,5 +155,10 @@ public sealed class SpotsSettingsEntry
     public bool LatestPerActivator { get; set; }
     public int CwTuneOffsetHz { get; set; }
     public int DigiTuneOffsetHz { get; set; }
+    public bool DxEnabled { get; set; }
+    // Null/absent on older rows; SpotsSettings.Normalized() resolves to defaults.
+    public string? PotaUrl { get; set; }
+    public string? SotaUrl { get; set; }
+    public string? DxUrl { get; set; }
     public DateTime UpdatedUtc { get; set; }
 }

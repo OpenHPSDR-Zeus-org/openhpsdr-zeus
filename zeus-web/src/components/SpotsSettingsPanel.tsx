@@ -14,10 +14,10 @@
 // dial offsets). Every change applies immediately (POST /api/spots/settings),
 // which also nudges the server-side poller to refresh.
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useSpotsStore } from '../state/spots-store';
 import { SPOT_BANDS, type SpotModeGroup } from '../state/spots-store';
-import type { SpotsSettings } from '../api/client';
+import { SPOTS_SETTINGS_DEFAULTS, type SpotsSettings } from '../api/client';
 
 const MODE_GROUPS: ReadonlyArray<{ key: SpotModeGroup; label: string }> = [
   { key: 'CW', label: 'CW' },
@@ -82,6 +82,72 @@ function Toggle({
   );
 }
 
+const urlInputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '6px 8px',
+  fontSize: 11,
+  fontFamily: 'monospace',
+  background: 'var(--bg-0)',
+  border: '1px solid var(--panel-border)',
+  borderRadius: 'var(--r-sm)',
+  color: 'var(--fg-0)',
+};
+
+/** A feed-URL text field. Commits on blur / Enter (not per keystroke) so a
+ *  half-typed URL isn't POSTed and bounced back to the default mid-edit. */
+function UrlField({
+  label,
+  value,
+  defaultValue,
+  disabled,
+  onCommit,
+}: {
+  label: string;
+  value: string;
+  defaultValue: string;
+  disabled?: boolean;
+  onCommit: (v: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => setDraft(value), [value]);
+  const commit = () => {
+    if (draft !== value) onCommit(draft);
+  };
+  return (
+    <label style={{ display: 'flex', flexDirection: 'column', gap: 4, opacity: disabled ? 0.5 : 1 }}>
+      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={labelStyle}>{label}</span>
+        {value !== defaultValue && (
+          <button
+            type="button"
+            className="btn sm"
+            disabled={disabled}
+            onClick={() => {
+              setDraft(defaultValue);
+              onCommit(defaultValue);
+            }}
+          >
+            RESET
+          </button>
+        )}
+      </span>
+      <input
+        type="text"
+        spellCheck={false}
+        autoComplete="off"
+        value={draft}
+        disabled={disabled}
+        onChange={(e) => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+        }}
+        style={urlInputStyle}
+      />
+    </label>
+  );
+}
+
 /** A toggleable filter chip — used by the band and mode multi-selects. */
 function Chip({
   active,
@@ -136,7 +202,7 @@ export function SpotsSettingsPanel() {
           color: 'var(--fg-2)',
         }}
       >
-        POTA / SOTA SPOTS {saving && <span style={{ color: 'var(--accent)' }}>· saving…</span>}
+        POTA / SOTA / DX SPOTS {saving && <span style={{ color: 'var(--accent)' }}>· saving…</span>}
       </h3>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -162,6 +228,13 @@ export function SpotsSettingsPanel() {
             onChange={(v) => patch({ sotaEnabled: v })}
             label="SOTA (Summits on the Air)"
           />
+          <Toggle
+            checked={settings.dxEnabled}
+            disabled={disabled}
+            onChange={(v) => patch({ dxEnabled: v })}
+            label="DX cluster (DXSummit feed)"
+            hint="General HF/VHF DX spots from the cluster feed. Off by default — it can be high-volume."
+          />
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
             <span style={labelStyle}>Poll interval</span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -183,6 +256,36 @@ export function SpotsSettingsPanel() {
               <span style={hintStyle}>seconds (30–600) — how often the server re-fetches.</span>
             </span>
           </label>
+        </section>
+
+        {/* ----- Per-source feed URLs (server-side) ----- */}
+        <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={sectionTitleStyle}>FEED URLS</div>
+          <UrlField
+            label="POTA URL"
+            value={settings.potaUrl}
+            defaultValue={SPOTS_SETTINGS_DEFAULTS.potaUrl}
+            disabled={disabled || !settings.potaEnabled}
+            onCommit={(v) => patch({ potaUrl: v })}
+          />
+          <UrlField
+            label="SOTA URL"
+            value={settings.sotaUrl}
+            defaultValue={SPOTS_SETTINGS_DEFAULTS.sotaUrl}
+            disabled={disabled || !settings.sotaEnabled}
+            onCommit={(v) => patch({ sotaUrl: v })}
+          />
+          <UrlField
+            label="DX URL"
+            value={settings.dxUrl}
+            defaultValue={SPOTS_SETTINGS_DEFAULTS.dxUrl}
+            disabled={disabled || !settings.dxEnabled}
+            onCommit={(v) => patch({ dxUrl: v })}
+          />
+          <span style={hintStyle}>
+            Point a source at a mirror or alternative endpoint that serves the same JSON shape.
+            Blank (or an invalid URL) resets to the default. POTA &amp; DX report kHz, SOTA reports MHz.
+          </span>
         </section>
 
         {/* ----- Display filters (panel-side) ----- */}
