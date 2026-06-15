@@ -618,6 +618,30 @@ describe('POST helpers', () => {
             agcEnvelopeUsable: true,
             diagnosticRecommendation: 'RX ADC peak is within 3 dB of full scale.',
           },
+          audio: {
+            schemaVersion: 1,
+            status: 'fresh',
+            source: 'rx',
+            fresh: true,
+            stale: false,
+            ageMs: 35,
+            framesBroadcast: 128,
+            lastSeq: 128,
+            sampleRateHz: 48000,
+            sampleCount: 1600,
+            rmsLinear: 0.031623,
+            peakLinear: 0.18,
+            rmsDbfs: -30,
+            peakDbfs: -14.9,
+            txMonitorRequested: false,
+            squelchEnabled: true,
+            squelchOpen: true,
+            squelchTailActive: false,
+            squelchGateGain: 1,
+            monitorBacklogSamples: 0,
+            audioSinkCount: 1,
+            diagnosticRecommendation: 'RX audio frames are fresh.',
+          },
           display: {
             schemaVersion: 1,
             status: 'fresh',
@@ -786,6 +810,13 @@ describe('POST helpers', () => {
     expect(diag.dsp.rxMeters.agcGainDb).toBe(-9.5);
     expect(diag.dsp.rxMeters.signalUsable).toBe(true);
     expect(diag.dsp.rxMeters.diagnosticRecommendation).toContain('within 3 dB');
+    expect(diag.dsp.audio.status).toBe('fresh');
+    expect(diag.dsp.audio.source).toBe('rx');
+    expect(diag.dsp.audio.framesBroadcast).toBe(128);
+    expect(diag.dsp.audio.rmsDbfs).toBe(-30);
+    expect(diag.dsp.audio.peakDbfs).toBe(-14.9);
+    expect(diag.dsp.audio.squelchOpen).toBe(true);
+    expect(diag.dsp.audio.diagnosticRecommendation).toContain('fresh');
     expect(diag.dsp.display.status).toBe('fresh');
     expect(diag.dsp.display.panSource).toBe('rx');
     expect(diag.dsp.display.waterfallSource).toBe('rx');

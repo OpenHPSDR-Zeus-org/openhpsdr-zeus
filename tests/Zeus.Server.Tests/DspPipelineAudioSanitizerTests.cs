@@ -164,6 +164,98 @@ public sealed class DspPipelineAudioSanitizerTests
     }
 
     [Fact]
+    public void BuildAudioPathDiagnostics_FlagsClippingRisk()
+    {
+        var diag = DspPipelineService.BuildAudioPathDiagnostics(
+            valid: true,
+            ageMs: 18,
+            lastSeq: 123,
+            framesBroadcast: 12,
+            source: "rx",
+            sampleRateHz: 48_000,
+            sampleCount: 1600,
+            rms: 0.22,
+            peak: 0.991,
+            txMonitorRequested: false,
+            squelchEnabled: false,
+            squelchOpen: true,
+            squelchTailActive: false,
+            squelchGain: 1.0,
+            monitorBacklogSamples: 0,
+            audioSinkCount: 1);
+
+        Assert.Equal("clipping-risk", diag.Status);
+        Assert.True(diag.Fresh);
+        Assert.False(diag.Stale);
+        Assert.Equal("rx", diag.Source);
+        Assert.Equal(123u, diag.LastSeq);
+        Assert.Equal(12, diag.FramesBroadcast);
+        Assert.Equal(-13.2, diag.RmsDbfs);
+        Assert.Equal(-0.1, diag.PeakDbfs);
+        Assert.Contains("full scale", diag.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildAudioPathDiagnostics_ReportsAdaptiveSquelchMute()
+    {
+        var diag = DspPipelineService.BuildAudioPathDiagnostics(
+            valid: true,
+            ageMs: 12,
+            lastSeq: 124,
+            framesBroadcast: 13,
+            source: "rx",
+            sampleRateHz: 48_000,
+            sampleCount: 1600,
+            rms: 0.0,
+            peak: 0.0,
+            txMonitorRequested: false,
+            squelchEnabled: true,
+            squelchOpen: false,
+            squelchTailActive: false,
+            squelchGain: 0.0,
+            monitorBacklogSamples: 0,
+            audioSinkCount: 2);
+
+        Assert.Equal("muted-by-squelch", diag.Status);
+        Assert.True(diag.Fresh);
+        Assert.True(diag.SquelchEnabled);
+        Assert.False(diag.SquelchOpen);
+        Assert.Equal(0.0, diag.SquelchGateGain);
+        Assert.Null(diag.RmsDbfs);
+        Assert.Contains("adaptive squelch", diag.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildAudioPathDiagnostics_ReportsTxMonitorSource()
+    {
+        var diag = DspPipelineService.BuildAudioPathDiagnostics(
+            valid: true,
+            ageMs: 40,
+            lastSeq: 125,
+            framesBroadcast: 14,
+            source: "tx-monitor",
+            sampleRateHz: 48_000,
+            sampleCount: 1600,
+            rms: 0.05,
+            peak: 0.18,
+            txMonitorRequested: true,
+            squelchEnabled: true,
+            squelchOpen: false,
+            squelchTailActive: true,
+            squelchGain: 0.35,
+            monitorBacklogSamples: 240,
+            audioSinkCount: 2);
+
+        Assert.Equal("tx-monitor", diag.Status);
+        Assert.Equal("tx-monitor", diag.Source);
+        Assert.True(diag.TxMonitorRequested);
+        Assert.Equal(-26.0, diag.RmsDbfs);
+        Assert.Equal(-14.9, diag.PeakDbfs);
+        Assert.Equal(0.35, diag.SquelchGateGain);
+        Assert.Contains("processed transmit monitor", diag.DiagnosticRecommendation);
+    }
+
+    [Fact]
     public void ApplyRxAudioLeveler_LiftsWeakAudioTowardSpeechLevel()
     {
         var state = new DspPipelineService.RxAudioLevelerState();

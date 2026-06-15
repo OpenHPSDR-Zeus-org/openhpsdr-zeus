@@ -573,6 +573,31 @@ export type HardwareRxMetersDiagnosticsDto = {
   diagnosticRecommendation: string | null;
 };
 
+export type HardwareAudioDiagnosticsDto = {
+  schemaVersion: number;
+  status: string;
+  source: string;
+  fresh: boolean;
+  stale: boolean;
+  ageMs: number | null;
+  framesBroadcast: number;
+  lastSeq: number;
+  sampleRateHz: number;
+  sampleCount: number;
+  rmsLinear: number | null;
+  peakLinear: number | null;
+  rmsDbfs: number | null;
+  peakDbfs: number | null;
+  txMonitorRequested: boolean;
+  squelchEnabled: boolean;
+  squelchOpen: boolean;
+  squelchTailActive: boolean;
+  squelchGateGain: number | null;
+  monitorBacklogSamples: number;
+  audioSinkCount: number;
+  diagnosticRecommendation: string | null;
+};
+
 export type HardwareDspDiagnosticsDto = {
   schemaVersion: number;
   engine: string;
@@ -598,6 +623,7 @@ export type HardwareDspDiagnosticsDto = {
   monitorBacklogSamples: number;
   rxDsp: HardwareRxDspDiagnosticsDto;
   rxMeters: HardwareRxMetersDiagnosticsDto;
+  audio: HardwareAudioDiagnosticsDto;
   display: HardwareDisplayDiagnosticsDto;
   wdspWisdomPhase: string;
   wdspWisdomStatus: string;
@@ -1898,6 +1924,7 @@ function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
     monitorBacklogSamples: diagNumber(r.monitorBacklogSamples) ?? 0,
     rxDsp: normalizeHardwareRxDspDiagnostics(r.rxDsp),
     rxMeters: normalizeHardwareRxMetersDiagnostics(r.rxMeters),
+    audio: normalizeHardwareAudioDiagnostics(r.audio),
     display: normalizeHardwareDisplayDiagnostics(r.display),
     wdspWisdomPhase: diagString(r.wdspWisdomPhase) ?? 'Unknown',
     wdspWisdomStatus: diagString(r.wdspWisdomStatus) ?? '',
@@ -2031,6 +2058,60 @@ function normalizeHardwareRxMetersDiagnostics(raw: unknown): HardwareRxMetersDia
     signalUsable: Boolean(r.signalUsable),
     adcUsable: Boolean(r.adcUsable),
     agcEnvelopeUsable: Boolean(r.agcEnvelopeUsable),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+  };
+}
+
+function normalizeHardwareAudioDiagnostics(raw: unknown): HardwareAudioDiagnosticsDto {
+  if (raw === null || raw === undefined) {
+    return {
+      schemaVersion: 0,
+      status: 'unavailable',
+      source: 'unknown',
+      fresh: false,
+      stale: true,
+      ageMs: null,
+      framesBroadcast: 0,
+      lastSeq: 0,
+      sampleRateHz: 0,
+      sampleCount: 0,
+      rmsLinear: null,
+      peakLinear: null,
+      rmsDbfs: null,
+      peakDbfs: null,
+      txMonitorRequested: false,
+      squelchEnabled: false,
+      squelchOpen: false,
+      squelchTailActive: false,
+      squelchGateGain: null,
+      monitorBacklogSamples: 0,
+      audioSinkCount: 0,
+      diagnosticRecommendation: 'RX audio-path diagnostics are not available from this backend yet; restart OpenhpsdrZeus after updating to expose final audio-frame freshness, RMS, peak, squelch, and TX-monitor evidence.',
+    };
+  }
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    status: diagString(r.status) ?? 'unknown',
+    source: diagString(r.source) ?? 'unknown',
+    fresh: Boolean(r.fresh),
+    stale: Boolean(r.stale),
+    ageMs: diagNumber(r.ageMs),
+    framesBroadcast: diagNumber(r.framesBroadcast) ?? 0,
+    lastSeq: diagNumber(r.lastSeq) ?? 0,
+    sampleRateHz: diagNumber(r.sampleRateHz) ?? 0,
+    sampleCount: diagNumber(r.sampleCount) ?? 0,
+    rmsLinear: diagNumber(r.rmsLinear),
+    peakLinear: diagNumber(r.peakLinear),
+    rmsDbfs: diagNumber(r.rmsDbfs),
+    peakDbfs: diagNumber(r.peakDbfs),
+    txMonitorRequested: Boolean(r.txMonitorRequested),
+    squelchEnabled: Boolean(r.squelchEnabled),
+    squelchOpen: Boolean(r.squelchOpen),
+    squelchTailActive: Boolean(r.squelchTailActive),
+    squelchGateGain: diagNumber(r.squelchGateGain),
+    monitorBacklogSamples: diagNumber(r.monitorBacklogSamples) ?? 0,
+    audioSinkCount: diagNumber(r.audioSinkCount) ?? 0,
     diagnosticRecommendation: diagString(r.diagnosticRecommendation),
   };
 }
@@ -3100,6 +3181,18 @@ export interface SpotsSettings {
   sotaUrl: string;
   /** DX-cluster feed endpoint (DXSummit-compatible JSON shape). */
   dxUrl: string;
+  /** Callsigns to flag with a ★ and alert on (upper-case, deduped server-side). */
+  watchlist: string[];
+  /** Raise a desktop notification when a watched call appears in the feed. */
+  alertsEnabled: boolean;
+  /** Also play a short audio cue with the alert. */
+  alertSound: boolean;
+  /** Hide spots whose activator is already in the local logbook. */
+  hideWorked: boolean;
+  /** Lazily resolve operator names via the QRZ session (respects the quota). */
+  enrichQrz: boolean;
+  /** Seconds the VFO dwells on each spot in scan mode (2–120). */
+  scanDwellSeconds: number;
 }
 
 const DEFAULT_POTA_URL = 'https://api.pota.app/spot/activator';
@@ -3125,10 +3218,18 @@ export const SPOTS_SETTINGS_DEFAULTS: SpotsSettings = {
   potaUrl: DEFAULT_POTA_URL,
   sotaUrl: DEFAULT_SOTA_URL,
   dxUrl: DEFAULT_DX_URL,
+  watchlist: [],
+  alertsEnabled: false,
+  alertSound: true,
+  hideWorked: false,
+  enrichQrz: false,
+  scanDwellSeconds: 8,
 };
 
 const SPOTS_MAX_AGE_LIMIT = 1440;
 const SPOTS_MAX_TUNE_OFFSET = 5_000;
+const SPOTS_MIN_SCAN_DWELL = 2;
+const SPOTS_MAX_SCAN_DWELL = 120;
 
 function urlOrDefault(v: unknown, fallback: string): string {
   return typeof v === 'string' && v.trim().length > 0 ? v.trim() : fallback;
@@ -3167,6 +3268,14 @@ function normalizeSpotsSettings(raw: unknown): SpotsSettings {
     potaUrl: urlOrDefault(r.potaUrl, DEFAULT_POTA_URL),
     sotaUrl: urlOrDefault(r.sotaUrl, DEFAULT_SOTA_URL),
     dxUrl: urlOrDefault(r.dxUrl, DEFAULT_DX_URL),
+    // Watchlist entries are upper-cased so the panel can match them against the
+    // (already upper-cased) activator with a plain Set lookup.
+    watchlist: toStringArray(r.watchlist).map((c) => c.toUpperCase()),
+    alertsEnabled: r.alertsEnabled ?? false,
+    alertSound: r.alertSound ?? true,
+    hideWorked: r.hideWorked ?? false,
+    enrichQrz: r.enrichQrz ?? false,
+    scanDwellSeconds: clampInt(r.scanDwellSeconds, SPOTS_MIN_SCAN_DWELL, SPOTS_MAX_SCAN_DWELL, 8),
   };
 }
 

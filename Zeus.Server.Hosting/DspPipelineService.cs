@@ -198,6 +198,17 @@ public class DspPipelineService : BackgroundService,
         return Math.Sqrt(sumSq / samples.Length);
     }
 
+    private static double PeakAbs(ReadOnlySpan<float> samples)
+    {
+        double peak = 0.0;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            double value = Math.Abs(samples[i]);
+            if (double.IsFinite(value) && value > peak) peak = value;
+        }
+        return peak;
+    }
+
     internal static void ApplyRxAudioLeveler(Span<float> samples, ref RxAudioLevelerState state)
     {
         if (samples.Length == 0) return;
@@ -713,6 +724,27 @@ public class DspPipelineService : BackgroundService,
     private RxMetersV2Frame _diagRxMeters;
     private const long RxMetersFreshMs = 2_500;
     private const long RxMetersAgingMs = 10_000;
+    private readonly object _audioDiagLock = new();
+    private bool _diagAudioValid;
+    private long _diagAudioFrameMs;
+    private uint _diagAudioSeq;
+    private long _diagAudioFrameCount;
+    private string _diagAudioSource = "none";
+    private int _diagAudioSampleRateHz;
+    private int _diagAudioSampleCount;
+    private double _diagAudioRms = double.NaN;
+    private double _diagAudioPeak = double.NaN;
+    private bool _diagAudioTxMonitorRequested;
+    private bool _diagAudioSquelchEnabled;
+    private bool _diagAudioSquelchOpen;
+    private bool _diagAudioSquelchTailActive;
+    private double _diagAudioSquelchGain = double.NaN;
+    private long _diagAudioMonitorBacklogSamples;
+    private int _diagAudioSinkCount;
+    private const long AudioFreshMs = 2_000;
+    private const long AudioAgingMs = 5_000;
+    private const double AudioClippingRiskLinear = 0.98;
+    private const double AudioSilentRmsDbfs = -90.0;
 
     // CW sidetone source mixed into the RX audio bus while a CW keying
     // path (CwEngine macros / cw_msg / raw-key, or ExternalPttService
@@ -880,6 +912,7 @@ public class DspPipelineService : BackgroundService,
             rxSinkAttached = _rxSinkAttached,
             audioSinkCount = _audioSinks.Length,
             monitorBacklogSamples = MonitorBacklog,
+            audio = SnapshotAudioDiagnostics(),
             display = SnapshotDisplayDiagnostics(engine),
             wdspWisdomPhase = wisdom.Phase.ToString(),
             wdspWisdomStatus = wisdom.Status,
@@ -950,6 +983,211 @@ public class DspPipelineService : BackgroundService,
         return BuildRxMetersDiagnostics(valid, ageMs, channelId, rxDbm, meters);
     }
 
+    private AudioPathDiagnosticsDto SnapshotAudioDiagnostics()
+    {
+        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        bool valid;
+        long frameMs;
+        uint lastSeq;
+        long framesBroadcast;
+        string source;
+        int sampleRateHz;
+        int sampleCount;
+        double rms;
+        double peak;
+        bool txMonitorRequested;
+        bool squelchEnabled;
+        bool squelchOpen;
+        bool squelchTailActive;
+        double squelchGain;
+        long monitorBacklogSamples;
+        int audioSinkCount;
+
+        lock (_audioDiagLock)
+        {
+            valid = _diagAudioValid;
+            frameMs = _diagAudioFrameMs;
+            lastSeq = _diagAudioSeq;
+            framesBroadcast = _diagAudioFrameCount;
+            source = _diagAudioSource;
+            sampleRateHz = _diagAudioSampleRateHz;
+            sampleCount = _diagAudioSampleCount;
+            rms = _diagAudioRms;
+            peak = _diagAudioPeak;
+            txMonitorRequested = _diagAudioTxMonitorRequested;
+            squelchEnabled = _diagAudioSquelchEnabled;
+            squelchOpen = _diagAudioSquelchOpen;
+            squelchTailActive = _diagAudioSquelchTailActive;
+            squelchGain = _diagAudioSquelchGain;
+            monitorBacklogSamples = _diagAudioMonitorBacklogSamples;
+            audioSinkCount = _diagAudioSinkCount;
+        }
+
+        long? ageMs = valid && frameMs > 0 ? Math.Max(0, nowMs - frameMs) : null;
+        return BuildAudioPathDiagnostics(
+            valid,
+            ageMs,
+            lastSeq,
+            framesBroadcast,
+            source,
+            sampleRateHz,
+            sampleCount,
+            rms,
+            peak,
+            txMonitorRequested,
+            squelchEnabled,
+            squelchOpen,
+            squelchTailActive,
+            squelchGain,
+            monitorBacklogSamples,
+            audioSinkCount);
+    }
+
+    internal static AudioPathDiagnosticsDto BuildAudioPathDiagnostics(
+        bool valid,
+        long? ageMs,
+        uint lastSeq,
+        long framesBroadcast,
+        string? source,
+        int sampleRateHz,
+        int sampleCount,
+        double rms,
+        double peak,
+        bool txMonitorRequested,
+        bool squelchEnabled,
+        bool squelchOpen,
+        bool squelchTailActive,
+        double squelchGain,
+        long monitorBacklogSamples,
+        int audioSinkCount)
+    {
+        source = string.IsNullOrWhiteSpace(source) ? "none" : source;
+        bool fresh = valid && ageMs is <= AudioFreshMs;
+        bool stale = !valid || ageMs is null || ageMs > AudioAgingMs;
+        bool clippingRisk = valid && double.IsFinite(peak) && peak >= AudioClippingRiskLinear;
+        bool mutedBySquelch = valid && string.Equals(source, "rx", StringComparison.OrdinalIgnoreCase)
+            && squelchEnabled && !squelchOpen;
+        double? rmsDbfs = AudioLinearToDbfs(rms);
+        double? peakDbfs = AudioLinearToDbfs(peak);
+        bool silent = valid && (rmsDbfs is null || rmsDbfs <= AudioSilentRmsDbfs);
+        bool monitorBacklog = valid && monitorBacklogSamples > Math.Max(sampleRateHz / 10, sampleCount * 3L);
+
+        string status;
+        string recommendation;
+        if (!valid)
+        {
+            status = "missing";
+            recommendation = "No RX audio frame has been published yet; connect the radio or attach an audio client before judging receive audio fidelity.";
+        }
+        else if (stale)
+        {
+            status = "stale";
+            recommendation = "RX audio frames are stale; verify the DSP tick path, audio sinks, and websocket/native audio consumers before tuning weak-signal audio.";
+        }
+        else if (clippingRisk)
+        {
+            status = "clipping-risk";
+            recommendation = "RX audio is approaching full scale; reduce RX leveler boost, front-end gain, or plugin output before evaluating fidelity.";
+        }
+        else if (string.Equals(source, "tx-monitor", StringComparison.OrdinalIgnoreCase))
+        {
+            status = "tx-monitor";
+            recommendation = "TX monitor audio is replacing RX audio, so listen-time diagnostics are currently showing the processed transmit monitor path.";
+        }
+        else if (mutedBySquelch)
+        {
+            status = "muted-by-squelch";
+            recommendation = "RX audio is fresh but gated by adaptive squelch; lower the threshold or disable squelch before using silence as weak-signal evidence.";
+        }
+        else if (monitorBacklog)
+        {
+            status = "monitor-backlog";
+            recommendation = "Local playback monitor audio is queued faster than the RX bus is draining; reduce injected playback level/rate before judging band audio.";
+        }
+        else if (silent)
+        {
+            status = "silent";
+            recommendation = "RX audio frames are fresh but near silence; cross-check S-meter, panadapter peaks, squelch, mode/filter, and audio sink volume.";
+        }
+        else
+        {
+            status = "fresh";
+            recommendation = "RX audio frames are fresh; use RMS/peak dBFS with RXA meters, squelch state, and display SNR to tune weak-signal fidelity.";
+        }
+
+        return new AudioPathDiagnosticsDto(
+            SchemaVersion: 1,
+            Status: status,
+            Source: source,
+            Fresh: fresh,
+            Stale: stale,
+            AgeMs: ageMs,
+            FramesBroadcast: framesBroadcast,
+            LastSeq: lastSeq,
+            SampleRateHz: sampleRateHz,
+            SampleCount: sampleCount,
+            RmsLinear: valid && double.IsFinite(rms) ? Math.Round(rms, 6) : null,
+            PeakLinear: valid && double.IsFinite(peak) ? Math.Round(peak, 6) : null,
+            RmsDbfs: rmsDbfs,
+            PeakDbfs: peakDbfs,
+            TxMonitorRequested: txMonitorRequested,
+            SquelchEnabled: squelchEnabled,
+            SquelchOpen: squelchOpen,
+            SquelchTailActive: squelchTailActive,
+            SquelchGateGain: double.IsFinite(squelchGain) ? Math.Round(Math.Clamp(squelchGain, 0.0, 1.0), 3) : null,
+            MonitorBacklogSamples: monitorBacklogSamples,
+            AudioSinkCount: audioSinkCount,
+            DiagnosticRecommendation: recommendation);
+    }
+
+    private static double? AudioLinearToDbfs(double value) =>
+        double.IsFinite(value) && value > 0.0
+            ? Math.Round(20.0 * Math.Log10(Math.Max(value, 1e-12)), 1)
+            : null;
+
+    private void CaptureAudioDiagnostics(
+        string source,
+        in AudioFrame frame,
+        double rms,
+        double peak,
+        bool txMonitorRequested,
+        SquelchConfig squelch)
+    {
+        bool squelchOpen = !squelch.Enabled || !squelch.Adaptive || _adaptiveSquelch.Open;
+        bool squelchTailActive = IsAdaptiveSquelchTailActive(squelch, _adaptiveSquelch);
+        double squelchGain = squelch.Enabled && squelch.Adaptive ? _adaptiveSquelch.Gain : 1.0;
+        long monitorBacklogSamples = MonitorBacklog;
+
+        lock (_audioDiagLock)
+        {
+            _diagAudioValid = true;
+            _diagAudioFrameMs = (long)frame.TsUnixMs;
+            _diagAudioSeq = frame.Seq;
+            _diagAudioFrameCount++;
+            _diagAudioSource = source;
+            _diagAudioSampleRateHz = checked((int)frame.SampleRateHz);
+            _diagAudioSampleCount = frame.SampleCount;
+            _diagAudioRms = rms;
+            _diagAudioPeak = peak;
+            _diagAudioTxMonitorRequested = txMonitorRequested;
+            _diagAudioSquelchEnabled = squelch.Enabled;
+            _diagAudioSquelchOpen = squelchOpen;
+            _diagAudioSquelchTailActive = squelchTailActive;
+            _diagAudioSquelchGain = squelchGain;
+            _diagAudioMonitorBacklogSamples = monitorBacklogSamples;
+            _diagAudioSinkCount = _audioSinks.Length;
+        }
+    }
+
+    private static bool IsAdaptiveSquelchTailActive(SquelchConfig cfg, AdaptiveSquelchState state)
+    {
+        if (!cfg.Enabled || !cfg.Adaptive || !state.Open || state.CloseHoldBlocks <= 0) return false;
+        if (!double.IsFinite(state.NoiseFloorDbm) || !double.IsFinite(state.LastSignalDbm)) return false;
+        double marginDb = AdaptiveSquelchMarginDb();
+        double closeThreshold = state.NoiseFloorDbm + marginDb - AdaptiveSquelchCloseHysteresisDb(marginDb);
+        return state.LastSignalDbm < closeThreshold;
+    }
+
     internal static RxMetersDiagnosticsDto BuildRxMetersDiagnostics(
         bool valid,
         long? ageMs,
@@ -989,10 +1227,15 @@ public class DspPipelineService : BackgroundService,
             status = "adc-hot";
             recommendation = "RX ADC peak is within 3 dB of full scale; add attenuation or reduce preamp/front-end gain before increasing NR or AGC boost.";
         }
-        else if (agcGain is < -20.0)
+        else if (agcGain is < -20.0 && adcHeadroomDb is <= 15.0)
         {
             status = "agc-cutting";
             recommendation = "RX AGC is cutting heavily, which indicates a hot signal or overload-prone front end; restore ADC/AGC headroom before judging recovered audio.";
+        }
+        else if (agcGain is < -20.0)
+        {
+            status = "agc-auto-trim";
+            recommendation = "RX AGC is cutting while the ADC still has healthy headroom; this looks like Auto AGC lowering the effective top, so judge recovered audio with RX audio RMS/peak and scene SNR before adding attenuation.";
         }
         else if (agcGain is > 35.0 && (signalPk is null || signalPk < -90.0))
         {
@@ -2937,6 +3180,8 @@ public class DspPipelineService : BackgroundService,
                 // alike. No-op (one volatile read) when nothing is queued.
                 MixMonitorInject(audioBuf.AsSpan(0, audioSampleCount));
                 SanitizeAudioBuffer(audioBuf.AsSpan(0, audioSampleCount));
+                double finalAudioRms = Rms(audioBuf.AsSpan(0, audioSampleCount));
+                double finalAudioPeak = PeakAbs(audioBuf.AsSpan(0, audioSampleCount));
 
                 var audioFrame = new AudioFrame(
                     Seq: ++_audioSeq,
@@ -2946,6 +3191,7 @@ public class DspPipelineService : BackgroundService,
                     SampleRateHz: (uint)AudioOutputRateHz,
                     SampleCount: (ushort)audioSampleCount,
                     Samples: new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
+                CaptureAudioDiagnostics("rx", in audioFrame, finalAudioRms, finalAudioPeak, txMonitorOn, squelch);
                 PublishAudio(in audioFrame);
                 RxAudioAvailable?.Invoke(0, AudioOutputRateHz, new ReadOnlyMemory<float>(audioBuf, 0, audioSampleCount));
             }
@@ -2962,6 +3208,8 @@ public class DspPipelineService : BackgroundService,
             if (monCount > 0)
             {
                 SanitizeAudioBuffer(audioBuf.AsSpan(0, monCount));
+                double finalAudioRms = Rms(audioBuf.AsSpan(0, monCount));
+                double finalAudioPeak = PeakAbs(audioBuf.AsSpan(0, monCount));
 
                 var monFrame = new AudioFrame(
                     Seq: ++_audioSeq,
@@ -2971,6 +3219,7 @@ public class DspPipelineService : BackgroundService,
                     SampleRateHz: (uint)AudioOutputRateHz,
                     SampleCount: (ushort)monCount,
                     Samples: new ReadOnlyMemory<float>(audioBuf, 0, monCount));
+                CaptureAudioDiagnostics("tx-monitor", in monFrame, finalAudioRms, finalAudioPeak, txMonitorOn, state.Squelch ?? new SquelchConfig());
                 PublishAudio(in monFrame);
                 // TX-air tap source: the processed transmit audio (what goes on
                 // the air). Read-only fan-out to IRxAudioTapPlugin/ITxAudioTapPlugin
@@ -3133,4 +3382,28 @@ internal sealed record RxMetersDiagnosticsDto(
     bool SignalUsable,
     bool AdcUsable,
     bool AgcEnvelopeUsable,
+    string DiagnosticRecommendation);
+
+internal sealed record AudioPathDiagnosticsDto(
+    int SchemaVersion,
+    string Status,
+    string Source,
+    bool Fresh,
+    bool Stale,
+    long? AgeMs,
+    long FramesBroadcast,
+    uint LastSeq,
+    int SampleRateHz,
+    int SampleCount,
+    double? RmsLinear,
+    double? PeakLinear,
+    double? RmsDbfs,
+    double? PeakDbfs,
+    bool TxMonitorRequested,
+    bool SquelchEnabled,
+    bool SquelchOpen,
+    bool SquelchTailActive,
+    double? SquelchGateGain,
+    long MonitorBacklogSamples,
+    int AudioSinkCount,
     string DiagnosticRecommendation);

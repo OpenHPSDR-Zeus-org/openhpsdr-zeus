@@ -207,6 +207,31 @@ public class RxMetersBroadcastTests
     }
 
     [Fact]
+    public void BuildRxMetersDiagnostics_SeparatesAutoAgcTrimFromAdcOverload()
+    {
+        var frame = new RxMetersV2Frame(
+            SignalPk: -77.7f,
+            SignalAv: -86.3f,
+            AdcPk: -61.6f,
+            AdcAv: -70.5f,
+            AgcGain: -24.5f,
+            AgcEnvPk: -72.5f,
+            AgcEnvAv: -81.7f);
+
+        var diag = DspPipelineService.BuildRxMetersDiagnostics(
+            valid: true,
+            ageMs: 40,
+            channelId: 0,
+            rxDbm: -86.3,
+            frame);
+
+        Assert.Equal("agc-auto-trim", diag.Status);
+        Assert.Equal(61.6, diag.AdcHeadroomDb);
+        Assert.Equal(-24.5, diag.AgcGainDb);
+        Assert.Contains("Auto AGC lowering", diag.DiagnosticRecommendation);
+    }
+
+    [Fact]
     public void BuildRxMetersDiagnostics_MissingSuppressesDefaultStructReadings()
     {
         var diag = DspPipelineService.BuildRxMetersDiagnostics(
