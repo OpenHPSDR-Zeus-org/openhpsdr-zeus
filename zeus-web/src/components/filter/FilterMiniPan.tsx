@@ -64,6 +64,8 @@ export function FilterMiniPan() {
     lastWriteAt: number;
     flushTimer: number | null;
     pointerId: number;
+    inFlight: boolean;
+    dirty: boolean;
   } | null>(null);
 
   useEffect(() => {
@@ -332,8 +334,17 @@ export function FilterMiniPan() {
     const d = dragRef.current;
     if (!d) return;
     d.flushTimer = null;
+    if (d.inFlight) { d.dirty = true; return; }   // coalesce: one POST at a time
+    d.inFlight = true;
     d.lastWriteAt = performance.now();
-    setFilter(d.pendingLo, d.pendingHi, d.activeSlot).catch(() => {});
+    setFilter(d.pendingLo, d.pendingHi, d.activeSlot)
+      .catch(() => {})
+      .finally(() => {
+        const dd = dragRef.current;
+        if (!dd) return;
+        dd.inFlight = false;
+        if (dd.dirty) { dd.dirty = false; flushPending(); }  // send the latest
+      });
   };
 
   const schedule = () => {
@@ -383,6 +394,8 @@ export function FilterMiniPan() {
       lastWriteAt: 0,
       flushTimer: null,
       pointerId: e.pointerId,
+      inFlight: false,
+      dirty: false,
     };
 
     if (activeSlot !== c.filterPresetName) {

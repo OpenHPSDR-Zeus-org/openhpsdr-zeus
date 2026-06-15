@@ -170,6 +170,13 @@ public sealed class WdspDspEngine : IDspEngine
     // so we don't register it in _channels. _txaLock serializes OpenTxChannel
     // vs SetMox vs teardown — all three are rare, so a plain lock is fine.
     private readonly object _txaLock = new();
+    // FFTW plan create/destroy is NOT thread-safe (bundled libfftw3 built without
+    // --enable-threads). Every bandpass setter below rebuilds a plan; concurrent
+    // HTTP-worker filter updates double-free without this. Static = process-wide:
+    // RXA, TXA, and TXA-monitor channels all share one FFTW planner.
+    // LEAF LOCK: never acquire any other lock while holding this; safe to hold
+    // _txaLock/_monitorLock around it (one-way nesting, no cycle).
+    private static readonly object _fftwPlannerGate = new();
     // Counter throttles fexchange2-error logging so a persistent wire-protocol
     // mismatch doesn't flood the log. First 8 errors are visible then suppressed.
     private int _txFexchangeErrLogged;
@@ -387,9 +394,12 @@ public sealed class WdspDspEngine : IDspEngine
         NativeMethods.SetRXAPanelBinaural(id, 0);
         NativeMethods.SetRXAPanelGain1(id, 1.0);
         NativeMethods.SetRXAMode(id, (int)RxaMode.USB);
-        NativeMethods.SetRXABandpassFreqs(id, 150.0, 2850.0);
-        NativeMethods.RXANBPSetFreqs(id, 150.0, 2850.0);
-        NativeMethods.SetRXASNBAOutputBandwidth(id, 150.0, 2850.0);
+        lock (_fftwPlannerGate)
+        {
+            NativeMethods.SetRXABandpassFreqs(id, 150.0, 2850.0);
+            NativeMethods.RXANBPSetFreqs(id, 150.0, 2850.0);
+            NativeMethods.SetRXASNBAOutputBandwidth(id, 150.0, 2850.0);
+        }
 
         ApplyAgcDefaults(id);
 
@@ -533,9 +543,16 @@ public sealed class WdspDspEngine : IDspEngine
         // an `rx_osc = -(dial - centre)` then calls SetRXAShiftFreq(-osc), so
         // the net argument is (dial - centre) = our shiftHz. Same goes to
         // the nbp0 stage that enforces SSB sideband.
-        NativeMethods.SetRXAShiftFreq(channelId, shiftHz);
-        NativeMethods.RXANBPSetShiftFrequency(channelId, shiftHz);
-        NativeMethods.SetRXAShiftRun(channelId, shiftHz != 0 ? 1 : 0);
+        // RXANBPSetShiftFrequency rebuilds the nbp0 FIR (calc_nbp_lightweight),
+        // so it must share _fftwPlannerGate with the bandpass setters — a CTUN
+        // shift on tune can otherwise race a concurrent filter recompute and
+        // double-free the FFTW plan. Same leaf lock, no value/order change.
+        lock (_fftwPlannerGate)
+        {
+            NativeMethods.SetRXAShiftFreq(channelId, shiftHz);
+            NativeMethods.RXANBPSetShiftFrequency(channelId, shiftHz);
+            NativeMethods.SetRXAShiftRun(channelId, shiftHz != 0 ? 1 : 0);
+        }
     }
 
     public void SetRxDisplayFastAttack(int channelId, bool fast)
@@ -1153,7 +1170,10 @@ public sealed class WdspDspEngine : IDspEngine
             // re-asserts this from the live StateDto (TxFilterLowHz/HighHz)
             // immediately after OpenTxChannel so operator-edited widths survive
             // a protocol switch / engine reopen.
-            NativeMethods.SetTXABandpassFreqs(id, 150.0, 2850.0);
+            lock (_fftwPlannerGate)
+            {
+                NativeMethods.SetTXABandpassFreqs(id, 150.0, 2850.0);
+            }
             NativeMethods.SetTXABandpassWindow(id, 1);
             // Intentionally NOT calling SetTXABandpassRun(id, 1): despite the
             // name it sets bp1.run (the compressor-only aux bandpass), not bp0,
@@ -1605,7 +1625,10 @@ public sealed class WdspDspEngine : IDspEngine
         lock (_txaLock)
         {
             if (_txaChannelId is not int txa) return;
-            NativeMethods.SetTXABandpassFreqs(txa, lowHz, highHz);
+            lock (_fftwPlannerGate)
+            {
+                NativeMethods.SetTXABandpassFreqs(txa, lowHz, highHz);
+            }
         }
         // Mirror the filter onto the monitor channel so the audition stays at
         // the same bandwidth as the on-air signal. Stash the values regardless
@@ -2898,9 +2921,12 @@ public sealed class WdspDspEngine : IDspEngine
         // Thetis rxa.cs:110-124: every filter change updates all three stages.
         // SetRXABandpassFreqs alone only affects bp1, which is bypassed for SSB.
         // nbp0 (RXANBPSetFreqs) is what actually carries the SSB passband.
-        NativeMethods.SetRXABandpassFreqs(state.Id, low, high);
-        NativeMethods.RXANBPSetFreqs(state.Id, low, high);
-        NativeMethods.SetRXASNBAOutputBandwidth(state.Id, low, high);
+        lock (_fftwPlannerGate)
+        {
+            NativeMethods.SetRXABandpassFreqs(state.Id, low, high);
+            NativeMethods.RXANBPSetFreqs(state.Id, low, high);
+            NativeMethods.SetRXASNBAOutputBandwidth(state.Id, low, high);
+        }
     }
 
     private static RxaMode MapMode(RxMode mode) => mode switch
