@@ -160,7 +160,7 @@ internal static class TciStreamPayload
             if (!IsCleanAudio(samples))
             {
                 var mono = new float[samples.Length];
-                CopyAudio(samples, mono);
+                CopySanitizedAudio(samples, mono);
                 return Build(
                     receiver,
                     sampleRate,
@@ -182,7 +182,7 @@ internal static class TciStreamPayload
         var stereo = new float[samples.Length * 2];
         for (int i = 0; i < samples.Length; i++)
         {
-            float sample = SanitizeAudioSample(samples[i]);
+            float sample = DspPipelineService.SanitizeAudioSample(samples[i]);
             stereo[i * 2] = sample;
             stereo[i * 2 + 1] = sample;
         }
@@ -213,15 +213,9 @@ internal static class TciStreamPayload
         return true;
     }
 
-    private static void CopyAudio(ReadOnlySpan<float> source, Span<float> destination)
+    private static void CopySanitizedAudio(ReadOnlySpan<float> source, Span<float> destination)
     {
         for (int i = 0; i < source.Length; i++)
-            destination[i] = SanitizeAudioSample(source[i]);
-    }
-
-    private static float SanitizeAudioSample(float sample)
-    {
-        if (!float.IsFinite(sample)) return 0f;
-        return Math.Clamp(sample, -1f, 1f);
+            destination[i] = DspPipelineService.SanitizeAudioSample(source[i]);
     }
 }

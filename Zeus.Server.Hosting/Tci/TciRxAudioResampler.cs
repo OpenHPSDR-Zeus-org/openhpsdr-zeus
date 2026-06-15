@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+using Zeus.Server;
+
 namespace Zeus.Server.Tci;
 
 internal sealed class TciRxAudioResampler
@@ -39,7 +41,7 @@ internal sealed class TciRxAudioResampler
         if (inputSampleRate == outputSampleRate)
         {
             var copy = new float[samples.Length];
-            CopyFinite(samples, copy);
+            CopySanitized(samples, copy);
             return copy;
         }
 
@@ -104,7 +106,7 @@ internal sealed class TciRxAudioResampler
                 sum += _inputBuffer[bufferOffset + tap] * coeffs[tap];
 
             if (generated == output.Length) Array.Resize(ref output, output.Length * 2);
-            output[generated++] = (float)Math.Clamp(sum, -1.0, 1.0);
+            output[generated++] = DspPipelineService.SanitizeAudioSample((float)Math.Clamp(sum, -1.0, 1.0));
             _nextOutputSampleIndex++;
         }
 
@@ -119,7 +121,7 @@ internal sealed class TciRxAudioResampler
     private void AppendInput(ReadOnlySpan<float> samples)
     {
         EnsureInputCapacity(_inputLength + samples.Length);
-        CopyFinite(samples, _inputBuffer.AsSpan(_inputLength, samples.Length));
+        CopySanitized(samples, _inputBuffer.AsSpan(_inputLength, samples.Length));
         _inputLength += samples.Length;
         _nextRealInputIndex += samples.Length;
     }
@@ -146,12 +148,11 @@ internal sealed class TciRxAudioResampler
         Array.Resize(ref _inputBuffer, newSize);
     }
 
-    private static void CopyFinite(ReadOnlySpan<float> src, Span<float> dst)
+    private static void CopySanitized(ReadOnlySpan<float> src, Span<float> dst)
     {
         for (int i = 0; i < src.Length; i++)
         {
-            float v = src[i];
-            dst[i] = float.IsFinite(v) ? v : 0f;
+            dst[i] = DspPipelineService.SanitizeAudioSample(src[i]);
         }
     }
 }

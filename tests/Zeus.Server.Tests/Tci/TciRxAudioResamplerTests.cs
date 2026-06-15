@@ -20,6 +20,23 @@ public class TciRxAudioResamplerTests
     }
 
     [Fact]
+    public void Convert48kTo48k_SanitizesNonFiniteAndOverrangeSamples()
+    {
+        var resampler = new TciRxAudioResampler();
+        var input = new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity, 1.5f, -2f, 0.25f };
+
+        var output = resampler.Convert(input, 48_000, 48_000);
+
+        Assert.Equal(input.Length, output.Length);
+        Assert.Equal(0f, output[0]);
+        Assert.Equal(0f, output[1]);
+        Assert.Equal(0f, output[2]);
+        Assert.Equal(1f, output[3]);
+        Assert.Equal(-1f, output[4]);
+        Assert.Equal(0.25f, output[5]);
+    }
+
+    [Fact]
     public void Convert48kTo8k_AttenuatesAboveTargetNyquist()
     {
         var output = Convert(GenerateSine(48_000, 6_000, seconds: 0.30), 8_000);
