@@ -311,6 +311,40 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // per-protocol because the protocol projects do not reference each other.
     private IRxPacketSink? _rxSink;
 
+    // ---- Radio-mic stream (UDP 1026) — external-ports plan, §3 -------------
+    // The radio digitises its analog jack (mic / line-in / balanced-XLR) and
+    // ships it on source port 1026. We DROP it by default (the RX loop just
+    // skips it) — there is ZERO added RX cost unless a radio audio source is
+    // armed and a handler is attached via AttachRadioMicHandler. The handler is
+    // called SYNCHRONOUSLY on the RX loop thread with a span over the receive
+    // buffer; it must copy/consume before returning (RadioMicReceiver does, by
+    // re-blocking into its own accumulator). Set via Interlocked so the
+    // attach/detach on a source switch is a full fence against the RX thread.
+    private volatile RadioMicPacketHandler? _radioMicHandler;
+
+    /// <summary>
+    /// Synchronous handler for one decoded UDP-1026 radio-mic packet. Invoked on
+    /// the RX loop thread with a span over the live receive buffer — copy before
+    /// returning. The packet is the raw 132-byte 1026 payload (4-byte BE seq +
+    /// 64 × int16 BE @ 48 kHz); decoding/re-blocking is the handler's job.
+    /// </summary>
+    public delegate void RadioMicPacketHandler(ReadOnlySpan<byte> packet);
+
+    /// <summary>
+    /// Attach the radio-mic (UDP 1026) handler. Until this is set the 1026
+    /// stream is dropped with one cheap srcPort comparison — Host-default has no
+    /// added cost. Pass <c>null</c> (or call <see cref="DetachRadioMicHandler"/>)
+    /// on a switch back to Host.
+    /// </summary>
+    public void AttachRadioMicHandler(RadioMicPacketHandler handler)
+    {
+        ArgumentNullException.ThrowIfNull(handler);
+        _radioMicHandler = handler;
+    }
+
+    /// <summary>Detach the radio-mic handler, reverting to drop-on-RX.</summary>
+    public void DetachRadioMicHandler() => _radioMicHandler = null;
+
     /// <summary>
     /// Attach a synchronous RX sink. While non-null, the RX loop calls the
     /// sink directly INSTEAD of writing to <see cref="IqFrames"/> /
@@ -1899,8 +1933,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                     // because TxMetersService had no telemetry feed.
                     HandleHiPriStatusPacket(buf);
                 }
-                // mic samples (1026), wideband ADC0..7 (1027..1034)
-                // intentionally ignored for now — separate features.
+                else if (srcPort == 1026)
+                {
+                    // Radio-mic stream (external-ports plan, §3): the radio's
+                    // digitised analog jack (mic / line-in / balanced-XLR),
+                    // 4-byte BE seq + 64 × int16 BE @ 48 kHz = 132 bytes
+                    // (pihpsdr new_protocol.c process_mic_data). Dropped unless
+                    // a radio audio source is armed AND a handler is attached —
+                    // the volatile read is the only added cost under Host. The
+                    // handler decodes + re-blocks synchronously on this thread.
+                    var radioMic = _radioMicHandler;
+                    if (radioMic is not null && n >= 132)
+                        radioMic(new ReadOnlySpan<byte>(buf, 0, n));
+                }
+                // wideband ADC0..7 (1027..1034) intentionally ignored — a
+                // separate feature.
             }
         }
         finally

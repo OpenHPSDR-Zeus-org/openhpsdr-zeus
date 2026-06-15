@@ -205,6 +205,19 @@ public class DspPipelineService : BackgroundService,
     // keeping it isolated avoids touching any P1 behavior.
     private Zeus.Protocol2.Protocol2Client? _p2Client;
 
+    // Radio-mic (UDP 1026) routing — external-ports plan, §3 (Pass B). The
+    // re-blocker buffers 64-sample 1026 packets into the 960-sample mic blocks
+    // TxAudioIngest consumes; it forwards into OnMicPcmBytesFromRadioMic, whose
+    // in-lock _activeSource gate drops them unless a radio jack is armed. The
+    // 1026 handler is attached to the live P2 client ONLY while a radio source
+    // is selected, so Host-default has zero added RX cost. Both are lazily wired
+    // (TxAudioIngest depends on this service, so it's resolved through a factory
+    // to avoid a DI cycle — feedback_di_cycle_iservice_provider pattern).
+    private readonly Func<TxAudioIngest?>? _txIngestFactory;
+    private TxAudioIngest? _txIngest;
+    private RadioMicReceiver? _radioMicReceiver;
+    private bool _radioMicAttached;
+
     private RxMode _appliedMode = RxMode.USB;
     private int _appliedLowHz;
     private int _appliedHighHz;
@@ -415,7 +428,8 @@ public class DspPipelineService : BackgroundService,
         StreamingHub hub,
         IEnumerable<IRxAudioSink> audioSinks,
         ILoggerFactory loggerFactory,
-        CwSidetoneSource? sidetone = null)
+        CwSidetoneSource? sidetone = null,
+        Func<TxAudioIngest?>? txIngestFactory = null)
     {
         _radio = radio;
         _hub = hub;
@@ -425,6 +439,24 @@ public class DspPipelineService : BackgroundService,
         _sidetone = sidetone;
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<DspPipelineService>();
+        _txIngestFactory = txIngestFactory;
+    }
+
+    // Lazily resolve TxAudioIngest (DI cycle avoidance — see field comment) and
+    // build the radio-mic re-blocker on first use. Returns null in tests that
+    // didn't supply a factory; the radio-mic path then simply no-ops.
+    private TxAudioIngest? ResolveTxIngest()
+    {
+        if (_txIngest is not null) return _txIngest;
+        _txIngest = _txIngestFactory?.Invoke();
+        if (_txIngest is not null && _radioMicReceiver is null)
+        {
+            var ingest = _txIngest;
+            _radioMicReceiver = new RadioMicReceiver(
+                block => ingest.OnMicPcmBytesFromRadioMic(block),
+                _loggerFactory.CreateLogger<RadioMicReceiver>());
+        }
+        return _txIngest;
     }
 
     private void PublishAudio(in AudioFrame frame)
@@ -1306,6 +1338,13 @@ public class DspPipelineService : BackgroundService,
 
     private void OnAudioFrontEndChanged(AudioFrontEndPush a)
     {
+        // PASS B — route the radio-mic STREAM (external-ports plan, §3). This
+        // runs on EVERY resolved-source push (store edit AND connect, via
+        // ReplayAudioFrontEnd) so the pipeline's active source tracks the wire
+        // bytes. Done BEFORE the byte forward and independent of _p2Client so a
+        // switch back to Host always quiesces the gate even mid-disconnect.
+        ApplyRadioMicRouting(a.Source);
+
         var p2 = _p2Client;
         if (p2 is null) return;
         // TxSpecific byte 50 mic_control flags + byte 51 line_in_gain, already
@@ -1313,6 +1352,51 @@ public class DspPipelineService : BackgroundService,
         // RadioService.PushAudioFrontEnd. The forwarder pushes the literal bytes
         // with no source interpretation of its own (external-ports plan, §2).
         p2.SetAudioFrontEndBytes(a.MicControlByte, a.LineInGain);
+    }
+
+    // Arm/disarm the radio-mic stream for a resolved TxAudioSource
+    // (external-ports plan, §3, atomic single-select). Idempotent and cheap on
+    // Host (the common case): it sets the in-lock _activeSource on TxAudioIngest
+    // (which quiesces its WDSP accumulator), resets the 1026 re-blocker so no
+    // pre-switch audio stitches onto the post-switch source, and attaches /
+    // detaches the UDP-1026 decode on the live P2 client so there is zero added
+    // RX cost while Host is selected. P1 radios have no 1026 stream — the handler
+    // simply never fires there; the _activeSource gate still arbitrates host vs
+    // (absent) radio harmlessly.
+    private void ApplyRadioMicRouting(TxAudioSource source)
+    {
+        var ingest = ResolveTxIngest();
+        if (ingest is null) return;
+
+        bool radioActive = source != TxAudioSource.Host;
+
+        // Arm the in-lock single-select gate FIRST. Under TxAudioIngest._sync
+        // this flips _activeSource and clears its half-written WDSP block, so the
+        // instant the gate is armed the host mic is dropped (radio armed) or the
+        // radio mic is dropped (Host armed) — no overlap window.
+        ingest.SetActiveSource(source);
+
+        // Always reset the re-blocker on any switch so a <960-sample remainder
+        // of the old source can't stitch onto the new one.
+        _radioMicReceiver?.Reset();
+
+        var p2 = _p2Client;
+        if (radioActive)
+        {
+            // Subscribe the 1026 decode only while a radio jack is armed. No-op
+            // if already attached or if P1 (no 1026 stream / null p2Client).
+            if (!_radioMicAttached && p2 is not null && _radioMicReceiver is not null)
+            {
+                var rb = _radioMicReceiver;
+                p2.AttachRadioMicHandler(rb.Accept);
+                _radioMicAttached = true;
+            }
+        }
+        else if (_radioMicAttached)
+        {
+            p2?.DetachRadioMicHandler();
+            _radioMicAttached = false;
+        }
     }
 
     private void OnPaSnapshotChanged(PaRuntimeSnapshot snap)
@@ -1414,6 +1498,12 @@ public class DspPipelineService : BackgroundService,
         // and no further callbacks land. client.StopAsync joins the RX task,
         // so by the time it returns the RX thread is gone.
         DetachRxSinkP2();
+        // The 1026 radio-mic handler is bound to this client instance; clear our
+        // attach latch so a reconnect (which re-fires ReplayAudioFrontEnd) re-
+        // attaches against the fresh client. The handler reference dies with the
+        // disposed client. Quiesce the re-blocker so no stale remainder survives.
+        _radioMicAttached = false;
+        _radioMicReceiver?.Reset();
         try { await client.StopAsync(ct).ConfigureAwait(false); } catch { }
         await client.DisposeAsync().ConfigureAwait(false);
 

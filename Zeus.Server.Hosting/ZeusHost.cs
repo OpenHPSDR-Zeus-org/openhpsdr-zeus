@@ -270,7 +270,17 @@ public static class ZeusHost
         // Clients are told to keep Connect disabled until phase=Ready.
         builder.Services.AddSingleton<WdspWisdomInitializer>();
         builder.Services.AddHostedService<WisdomBootstrapService>();
-        builder.Services.AddSingleton<DspPipelineService>();
+        builder.Services.AddSingleton<DspPipelineService>(sp => new DspPipelineService(
+            sp.GetRequiredService<RadioService>(),
+            sp.GetRequiredService<StreamingHub>(),
+            sp.GetServices<IRxAudioSink>(),
+            sp.GetRequiredService<ILoggerFactory>(),
+            sp.GetService<CwSidetoneSource>(),
+            // Lazy factory: TxAudioIngest depends on DspPipelineService, so it
+            // MUST be resolved on demand (after both singletons exist) to avoid a
+            // DI cycle. Used only by the Pass-B radio-mic routing (external-ports
+            // §3), first invoked on the first audio-front-end push.
+            () => sp.GetRequiredService<TxAudioIngest>()));
         builder.Services.AddHostedService(sp => sp.GetRequiredService<DspPipelineService>());
         // Per-radio frequency calibration (issue #325). Stateless coordinator —
         // owns no resources, just a SemaphoreSlim to prevent re-entry.
