@@ -173,8 +173,6 @@ function txStationProfileCfcLabel(profileId: TxStationProfileId): string {
 }
 
 export function formatTxStationProfileSummary(profile: TxStationProfile): string {
-  const route = profile.audioSuiteRoute === 'vst' ? 'VST route' : 'Native route';
-  const rack = profile.audioSuiteBypassed ? 'rack bypass' : 'rack hot';
   const chain = profile.audioSuiteProfileName?.trim();
   const density =
     profile.spectralDensity >= 100
@@ -184,9 +182,7 @@ export function formatTxStationProfileSummary(profile: TxStationProfile): string
   const highCutHz = Math.max(lowCutHz + 100, clampInt(profile.highCutHz, 1500, 6000));
 
   return [
-    route,
-    rack,
-    chain ? `chain ${chain}` : '',
+    chain ? `chain ${chain}` : 'current Audio Suite chain',
     `${density} ${txStationProfileCfcLabel(profile.id)}`,
     `SSB ${lowCutHz}..${highCutHz} Hz`,
   ]
@@ -300,9 +296,9 @@ export function resolveTxStationProfile(
 export const STUDIO_SSB_PROFILE: TxStationProfile = {
   id: 'studio-ssb',
   label: 'Studio SSB',
-  summary: 'Native / rack bypass / CFC presence / 2.9k SSB / density 55',
+  summary: 'Current Audio Suite chain / CFC presence / 2.9k SSB / density 55',
   applyTitle:
-    'Apply a clean TX baseline: native route, Audio Suite bypass, ALC/leveler defaults, CFC post-EQ presence, and sideband-correct SSB TX filter.',
+    'Apply a clean TX baseline: ALC/leveler defaults, CFC post-EQ presence, and sideband-correct SSB TX filter. The selected Audio Suite chain owns route and rack state.',
   audioSuiteRoute: STUDIO_SSB_AUDIO_SUITE_ROUTE,
   audioSuiteBypassed: true,
   audioSuiteProfileName: '',
@@ -318,9 +314,9 @@ export const STUDIO_SSB_PROFILE: TxStationProfile = {
 export const ESSB_PROFILE: TxStationProfile = {
   id: 'essb',
   label: 'eSSB Wide',
-  summary: 'VST route / rack hot / max-density eSSB CFC / 5.0k SSB',
+  summary: 'Current Audio Suite chain / max-density eSSB CFC / 5.0k SSB',
   applyTitle:
-    'Apply a wide high-density eSSB voice profile: VST-capable Audio Suite route, lower mic gain, slower leveler action, 5 kHz sideband-correct TX filter, and the max-density eSSB CFC curve.',
+    'Apply a wide high-density eSSB voice profile: lower mic gain, slower leveler action, 5 kHz sideband-correct TX filter, and the max-density eSSB CFC curve. The selected Audio Suite chain owns route and rack state.',
   audioSuiteRoute: ESSB_AUDIO_SUITE_ROUTE,
   audioSuiteBypassed: false,
   audioSuiteProfileName: '',
@@ -336,9 +332,9 @@ export const ESSB_PROFILE: TxStationProfile = {
 export const DX_PROFILE: TxStationProfile = {
   id: 'dx',
   label: 'DX Punch',
-  summary: 'VST route / rack hot / max-density DX CFC / 2.6k SSB',
+  summary: 'Current Audio Suite chain / max-density DX CFC / 2.6k SSB',
   applyTitle:
-    'Apply a pileup profile: VST-capable Audio Suite route, trimmed lows, fast leveler recovery, dense CFC presence, and a narrow sideband-correct TX filter for intelligibility.',
+    'Apply a pileup profile: trimmed lows, fast leveler recovery, dense CFC presence, and a narrow sideband-correct TX filter for intelligibility. The selected Audio Suite chain owns route and rack state.',
   audioSuiteRoute: DX_AUDIO_SUITE_ROUTE,
   audioSuiteBypassed: false,
   audioSuiteProfileName: '',

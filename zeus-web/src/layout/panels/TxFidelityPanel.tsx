@@ -68,25 +68,6 @@ function controlLabelStyle(): CSSProperties {
   };
 }
 
-function miniToggleStyle(active: boolean): CSSProperties {
-  return {
-    minWidth: 0,
-    height: 24,
-    border: active ? '1px solid var(--accent)' : '1px solid var(--line)',
-    borderRadius: 4,
-    background: active ? 'var(--accent)' : 'var(--bg-1)',
-    color: active ? '#fff' : 'var(--fg-1)',
-    cursor: 'pointer',
-    fontSize: 10,
-    fontWeight: 900,
-    overflow: 'hidden',
-    padding: '0 7px',
-    textOverflow: 'ellipsis',
-    textTransform: 'uppercase',
-    whiteSpace: 'nowrap',
-  };
-}
-
 function miniMenuOptionStyle(active: boolean): CSSProperties {
   return {
     width: '100%',
@@ -156,17 +137,12 @@ function TxStationProfiles({
   const setMicGainDb = useTxStore((s) => s.setMicGainDb);
   const setLevelerMaxGainDb = useTxStore((s) => s.setLevelerMaxGainDb);
   const setCfcConfigLocal = useTxStore((s) => s.setCfcConfig);
-  const setMasterBypassed = useAudioSuiteStore((s) => s.setMasterBypassed);
-  const setProcessingMode = useAudioSuiteStore((s) => s.setProcessingMode);
   const loadAudioProfiles = useAudioSuiteStore((s) => s.loadProfiles);
   const applyAudioProfile = useAudioSuiteStore((s) => s.applyProfile);
-  const loadProcessingMode = useAudioSuiteStore((s) => s.loadProcessingModeFromServer);
   const audioProfiles = useAudioSuiteStore((s) => s.profiles);
-  const vstEngineAvailable = useAudioSuiteStore((s) => s.vstEngineAvailable);
-  const vstEngineActive = useAudioSuiteStore((s) => s.vstEngineActive);
   const [profiles, setProfiles] = useState<TxStationProfile[]>(profileDefaults);
   const [phase, setPhase] = useState<ApplyPhase>('idle');
-  const [message, setMessage] = useState(STUDIO_SSB_PROFILE.summary);
+  const [message, setMessage] = useState(formatTxStationProfileSummary(STUDIO_SSB_PROFILE));
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [audioProfileMenuOpen, setAudioProfileMenuOpen] = useState(false);
 
@@ -199,8 +175,7 @@ function TxStationProfiles({
 
   useEffect(() => {
     void loadAudioProfiles();
-    void loadProcessingMode();
-  }, [loadAudioProfiles, loadProcessingMode]);
+  }, [loadAudioProfiles]);
 
   useEffect(() => {
     if (phase === 'idle') {
@@ -305,14 +280,12 @@ function TxStationProfiles({
     setPhase('applying');
     setMessage('Applying...');
     try {
-      await setProcessingMode(selectedProfile.audioSuiteRoute);
       if (audioProfileName.length > 0) {
         const result = await applyAudioProfile(audioProfileName);
         if (!result.ok) {
           throw new Error(result.error || `Audio Suite profile "${audioProfileName}" did not apply`);
         }
       }
-      await setMasterBypassed(selectedProfile.audioSuiteBypassed);
 
       const mic = await setMicGain(selectedProfile.micGainDb);
       setMicGainDb(mic.micGainDb);
@@ -346,18 +319,18 @@ function TxStationProfiles({
   const selectedAudioProfileMissing =
     selectedAudioProfileName.length > 0 &&
     !audioProfileNames.includes(selectedAudioProfileName);
+  const selectedAudioProfile = selectedAudioProfileName
+    ? audioProfiles.find((profile) => profile.name === selectedAudioProfileName)
+    : undefined;
   const suggestedAudioProfileName = chooseSuggestedAudioProfileName(
     selectedProfile,
     audioProfiles,
   );
-  const vstRouteNote =
-    selectedProfile.audioSuiteRoute === 'vst'
-      ? vstEngineActive
-        ? 'VST engine active'
-        : vstEngineAvailable
-          ? 'VST engine installed'
-          : 'VST engine unavailable; native chain remains the fallback'
-      : 'Native in-process chain';
+  const audioProfileNote = selectedAudioProfile
+    ? `${selectedAudioProfile.processingMode === 'vst' ? 'VST' : 'Native'} route / ${
+        selectedAudioProfile.masterBypass ? 'rack bypass' : 'rack hot'
+      } saved in chain profile`
+    : 'Apply leaves the current Audio Suite chain unchanged';
 
   return (
     <section
@@ -536,77 +509,6 @@ function TxStationProfiles({
               background: 'var(--bg-1)',
             }}
           >
-            <div
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
-                gap: 6,
-                minWidth: 0,
-              }}
-            >
-              <label style={controlLabelStyle()}>
-                Route
-                <span
-                  role="group"
-                  aria-label="TX profile audio route"
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: 4,
-                    minWidth: 0,
-                  }}
-                >
-                  <button
-                    type="button"
-                    aria-pressed={selectedProfile.audioSuiteRoute === 'native'}
-                    onClick={() => patchSelectedProfile({ audioSuiteRoute: 'native' })}
-                    style={miniToggleStyle(selectedProfile.audioSuiteRoute === 'native')}
-                  >
-                    Native
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={selectedProfile.audioSuiteRoute === 'vst'}
-                    onClick={() => patchSelectedProfile({ audioSuiteRoute: 'vst' })}
-                    style={miniToggleStyle(selectedProfile.audioSuiteRoute === 'vst')}
-                  >
-                    VST
-                  </button>
-                </span>
-              </label>
-
-              <label style={controlLabelStyle()}>
-                Rack
-                <span
-                  role="group"
-                  aria-label="TX profile audio suite rack"
-                  style={{
-                    display: 'grid',
-                    gridTemplateColumns: '1fr 1fr',
-                    gap: 4,
-                    minWidth: 0,
-                  }}
-                >
-                  <button
-                    type="button"
-                    aria-pressed={!selectedProfile.audioSuiteBypassed}
-                    onClick={() => patchSelectedProfile({ audioSuiteBypassed: false })}
-                    style={miniToggleStyle(!selectedProfile.audioSuiteBypassed)}
-                  >
-                    Hot
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={selectedProfile.audioSuiteBypassed}
-                    onClick={() => patchSelectedProfile({ audioSuiteBypassed: true })}
-                    style={miniToggleStyle(selectedProfile.audioSuiteBypassed)}
-                  >
-                    Byp
-                  </button>
-                </span>
-              </label>
-            </div>
-
             <label style={controlLabelStyle()}>
               Chain Profile
               <div style={{ position: 'relative', minWidth: 0 }}>
@@ -644,7 +546,7 @@ function TxStationProfiles({
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    {selectedAudioProfileName || 'Use current rack'}
+                    {selectedAudioProfileName || 'Use current chain'}
                   </span>
                   <span aria-hidden style={{ color: 'var(--fg-2)', fontSize: 10 }}>
                     {audioProfileMenuOpen ? '^' : 'v'}
@@ -678,7 +580,7 @@ function TxStationProfiles({
                       onClick={() => selectAudioProfile('')}
                       style={miniMenuOptionStyle(!selectedAudioProfileName)}
                     >
-                      Use current rack
+                      Use current chain
                     </button>
                     {selectedAudioProfileMissing && (
                       <button
@@ -769,12 +671,12 @@ function TxStationProfiles({
               title={
                 selectedAudioProfileMissing
                   ? `Audio Suite profile "${selectedAudioProfileName}" is not currently saved.`
-                  : vstRouteNote
+                  : audioProfileNote
               }
             >
               {selectedAudioProfileMissing
                 ? `Missing chain profile: ${selectedAudioProfileName}`
-                : vstRouteNote}
+                : audioProfileNote}
             </div>
           </div>
 
