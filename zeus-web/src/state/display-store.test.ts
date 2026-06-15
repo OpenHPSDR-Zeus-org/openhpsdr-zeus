@@ -119,4 +119,73 @@ describe('display frame bin sanitizer', () => {
     expect(Array.from(state.panDb ?? [])).toEqual([-88, -200, -76, -200]);
     expect(state.wfDb).toBe(wfDb);
   });
+
+  it('marks a valid-bit payload invalid when its bin count does not match frame width', () => {
+    const panDb = new Float32Array([-88, -82, -76]);
+    const wfDb = new Float32Array([-95, -92, -90, -89]);
+    const frame: DecodedFrame = {
+      msgType: 0x01,
+      headerFlags: 0,
+      seq: 100,
+      tsUnixMs: 1_700_000_000_001,
+      rxId: 0,
+      bodyFlags: 0x03,
+      panValid: true,
+      wfValid: true,
+      width: 4,
+      centerHz: 14_074_000n,
+      hzPerPixel: 46.875,
+      panDb,
+      wfDb,
+    };
+
+    useDisplayStore.getState().pushFrame(frame);
+
+    const state = useDisplayStore.getState();
+    expect(state.lastSeq).toBe(100);
+    expect(state.width).toBe(4);
+    expect(state.hzPerPixel).toBe(46.875);
+    expect(state.panValid).toBe(false);
+    expect(state.panDb).toBeNull();
+    expect(state.wfValid).toBe(true);
+    expect(state.wfDb).toBe(wfDb);
+  });
+
+  it('fails closed on unusable frame geometry', () => {
+    const panDb = new Float32Array([-88, -82, -76, -74]);
+    const wfDb = new Float32Array([-95, -92, -90, -89]);
+
+    for (const [i, bad] of [
+      { width: 0, hzPerPixel: 46.875 },
+      { width: 4.5, hzPerPixel: 46.875 },
+      { width: 4, hzPerPixel: Number.NaN },
+      { width: 4, hzPerPixel: Infinity },
+      { width: 4, hzPerPixel: 0 },
+    ].entries()) {
+      const frame: DecodedFrame = {
+        msgType: 0x01,
+        headerFlags: 0,
+        seq: 200 + i,
+        tsUnixMs: 1_700_000_000_002,
+        rxId: 0,
+        bodyFlags: 0x03,
+        panValid: true,
+        wfValid: true,
+        centerHz: 14_074_000n,
+        panDb,
+        wfDb,
+        ...bad,
+      };
+
+      useDisplayStore.getState().pushFrame(frame);
+
+      const state = useDisplayStore.getState();
+      expect(state.width).toBe(0);
+      expect(state.hzPerPixel).toBe(0);
+      expect(state.panValid).toBe(false);
+      expect(state.wfValid).toBe(false);
+      expect(state.panDb).toBeNull();
+      expect(state.wfDb).toBeNull();
+    }
+  });
 });

@@ -79,6 +79,24 @@ export function sanitizeDisplayBins(bins: Float32Array): Float32Array {
   return sanitized;
 }
 
+function validFrameGeometry(width: number, hzPerPixel: number): boolean {
+  return (
+    Number.isInteger(width) &&
+    width > 0 &&
+    Number.isFinite(hzPerPixel) &&
+    hzPerPixel > 0
+  );
+}
+
+function validPayload(
+  enabled: boolean,
+  bins: Float32Array,
+  width: number,
+  geometryValid: boolean,
+): boolean {
+  return enabled && geometryValid && bins.length === width;
+}
+
 export const useDisplayStore = create<DisplayState>((set) => ({
   connected: false,
   width: 0,
@@ -91,11 +109,22 @@ export const useDisplayStore = create<DisplayState>((set) => ({
   lastSeq: 0,
   setConnected: (connected) => set({ connected }),
   pushFrame: (f) => {
-    const panDb = f.panValid ? sanitizeDisplayBins(f.panDb) : f.panDb;
-    const wfDb = f.wfValid ? sanitizeDisplayBins(f.wfDb) : f.wfDb;
-    const cleanFrame = panDb === f.panDb && wfDb === f.wfDb
+    const geometryValid = validFrameGeometry(f.width, f.hzPerPixel);
+    const width = geometryValid ? f.width : 0;
+    const hzPerPixel = geometryValid ? f.hzPerPixel : 0;
+    const panValid = validPayload(f.panValid, f.panDb, width, geometryValid);
+    const wfValid = validPayload(f.wfValid, f.wfDb, width, geometryValid);
+    const panDb = panValid ? sanitizeDisplayBins(f.panDb) : f.panDb;
+    const wfDb = wfValid ? sanitizeDisplayBins(f.wfDb) : f.wfDb;
+    const cleanFrame =
+      panDb === f.panDb &&
+      wfDb === f.wfDb &&
+      panValid === f.panValid &&
+      wfValid === f.wfValid &&
+      width === f.width &&
+      hzPerPixel === f.hzPerPixel
       ? f
-      : { ...f, panDb, wfDb };
+      : { ...f, width, hzPerPixel, panValid, wfValid, panDb, wfDb };
 
     // Advance the shared noise-floor tracker BEFORE notifying subscribers, so
     // the panadapter/waterfall enhance this frame against this frame's floor.
@@ -105,8 +134,8 @@ export const useDisplayStore = create<DisplayState>((set) => ({
       width: cleanFrame.width,
       centerHz: cleanFrame.centerHz,
       hzPerPixel: cleanFrame.hzPerPixel,
-      panDb: cleanFrame.panDb,
-      wfDb: cleanFrame.wfDb,
+      panDb: cleanFrame.panValid ? cleanFrame.panDb : null,
+      wfDb: cleanFrame.wfValid ? cleanFrame.wfDb : null,
       panValid: cleanFrame.panValid,
       wfValid: cleanFrame.wfValid,
       lastSeq: cleanFrame.seq,
