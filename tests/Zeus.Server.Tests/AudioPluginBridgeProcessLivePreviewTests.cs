@@ -195,6 +195,23 @@ public class AudioPluginBridgeProcessLivePreviewTests
     }
 
     [Fact]
+    public void Audition_Enabled_Publishes_Sanitized_Chain_Output_To_Sink()
+    {
+        var sink = new SpyAuditionSink(enabledInitial: true);
+        var bridge = new AudioPluginBridge(
+            isMoxOn: () => false,
+            isMonitorOn: () => false,
+            log: NullLogger<AudioPluginBridge>.Instance,
+            audition: sink);
+        bridge.Chain.SetSlot(0, new DirtyOutputPlugin());
+        bridge.Chain.MasterBypassed = false;
+
+        RunPreview(bridge, 6);
+
+        Assert.Equal<float>(new float[] { 0f, 0f, 0f, 1f, -1f, 0.25f }, sink.LastSamples);
+    }
+
+    [Fact]
     public void TciRemoteTxActive_Bypasses_InsertChain_In_TxPath()
     {
         var spy = new SpyPlugin();
@@ -230,6 +247,24 @@ public class AudioPluginBridgeProcessLivePreviewTests
         Assert.Equal(48000, spy.LastSampleRate);
     }
 
+    [Fact]
+    public void TxPath_Sanitizes_InsertChain_Output_Before_Wdsp()
+    {
+        var bridge = new AudioPluginBridge(
+            isMoxOn: () => true,
+            isMonitorOn: () => false,
+            log: NullLogger<AudioPluginBridge>.Instance);
+        bridge.Chain.SetSlot(0, new DirtyOutputPlugin());
+        bridge.Chain.MasterBypassed = false;
+
+        Span<float> input = stackalloc float[6];
+        Span<float> output = stackalloc float[6];
+
+        bridge.ProcessTxForTest(input, output, frames: 6);
+
+        Assert.Equal<float>(new float[] { 0f, 0f, 0f, 1f, -1f, 0.25f }, output.ToArray());
+    }
+
     private static void RunPreview(AudioPluginBridge bridge, int frames)
     {
         Span<float> mic = stackalloc float[frames];
@@ -250,6 +285,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
         public int PublishCallCount;
         public int LastPublishLength;
         public int LastSampleRate;
+        public float[] LastSamples = Array.Empty<float>();
         public SpyAuditionSink(bool enabledInitial) { IsEnabled = enabledInitial; }
         public bool IsEnabled { get; private set; }
         public void SetEnabled(bool enabled) { IsEnabled = enabled; }
@@ -258,6 +294,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
             PublishCallCount++;
             LastPublishLength = monoSamples.Length;
             LastSampleRate = sampleRate;
+            LastSamples = monoSamples.ToArray();
         }
     }
 
@@ -281,6 +318,23 @@ public class AudioPluginBridgeProcessLivePreviewTests
             LastChannels = ctx.Channels;
             LastFrames = ctx.Frames;
             input.CopyTo(output);
+        }
+    }
+
+    private sealed class DirtyOutputPlugin : IAudioPlugin
+    {
+        public string DisplayName => "dirty";
+        public AudioPluginRequirements Requirements => new(48000, 1, 256);
+        public Task InitializeAudioAsync(IAudioHost host, CancellationToken ct) => Task.CompletedTask;
+        public Task ShutdownAudioAsync(CancellationToken ct) => Task.CompletedTask;
+        public void Process(ReadOnlySpan<float> input, Span<float> output, AudioBlockContext ctx)
+        {
+            output[0] = float.NaN;
+            output[1] = float.PositiveInfinity;
+            output[2] = float.NegativeInfinity;
+            output[3] = 1.5f;
+            output[4] = -2f;
+            output[5] = 0.25f;
         }
     }
 }

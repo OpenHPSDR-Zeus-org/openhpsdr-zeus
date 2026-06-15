@@ -368,8 +368,10 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             return;
         }
 
+        int sampleCount = frames * channels;
         var ctx = new AudioBlockContext(sampleRate, channels, frames, sampleTime: 0, mox: true);
         _chain.Process(input, output, ctx);
+        DspPipelineService.SanitizeAudioBuffer(output[..sampleCount]);
     }
 
     /// <summary>
@@ -385,19 +387,22 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     {
         var vst = _vstEngine;
         if (vst is not { IsActive: true }) return false;
+        int sampleCount = ctx.Frames * ctx.Channels;
         if (Interlocked.CompareExchange(ref _engineGate, 1, 0) != 0)
         {
             input.CopyTo(output);            // other thread owns the engine this instant
+            DspPipelineService.SanitizeAudioBuffer(output[..sampleCount]);
             _engineInPeak = BlockPeak(input);
-            _engineOutPeak = _engineInPeak;  // passthrough → out == in
+            _engineOutPeak = BlockPeak(output[..sampleCount]);
             return true;
         }
         try { vst.Process(input, output, ctx); }
         finally { Volatile.Write(ref _engineGate, 0); }
+        DspPipelineService.SanitizeAudioBuffer(output[..sampleCount]);
         // Sample master IN/OUT peaks so the Audio Suite meters stay live in VST
         // mode (the native chain's own metering path didn't run).
         _engineInPeak = BlockPeak(input);
-        _engineOutPeak = BlockPeak(output[..ctx.Frames]);
+        _engineOutPeak = BlockPeak(output[..sampleCount]);
         return true;
     }
 
@@ -409,6 +414,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         for (int i = 0; i < block.Length; i++)
         {
             float a = block[i];
+            if (!float.IsFinite(a)) continue;
             if (a < 0f) a = -a;
             if (a > peak) peak = a;
         }
@@ -490,6 +496,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             Span<float> previewScratch = stackalloc float[mic.Length];
             _chain.Process(mic, previewOut, previewScratch, ctx);
         }
+        DspPipelineService.SanitizeAudioBuffer(previewOut);
 
         // Audition path: when the operator has audition turned on, push
         // the chain's output into the audition sink so they hear what

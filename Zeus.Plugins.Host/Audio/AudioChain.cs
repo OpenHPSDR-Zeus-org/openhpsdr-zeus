@@ -34,7 +34,9 @@ public sealed class AudioChain : IAsyncDisposable
     // slot 0 (_inPeak) and leaving the last active slot (_outPeak).
     // Written on the realtime thread in Process, read (lock-free) by
     // the control thread for the /api/audio-suite/chain/meters poll.
-    // Linear 0..1-ish (can exceed 1 on overshoot); the UI maps to dBFS.
+    // Linear peak. Finite overshoot is preserved for plugin-chain headroom;
+    // non-finite samples are ignored/repaired before they can poison meters or
+    // downstream slots.
     private volatile float _inPeak;
     private volatile float _outPeak;
 
@@ -73,10 +75,20 @@ public sealed class AudioChain : IAsyncDisposable
         for (int i = 0; i < block.Length; i++)
         {
             float a = block[i];
+            if (!float.IsFinite(a)) continue;
             if (a < 0f) a = -a;
             if (a > peak) peak = a;
         }
         return peak;
+    }
+
+    private static void RepairNonFiniteSamples(Span<float> block)
+    {
+        for (int i = 0; i < block.Length; i++)
+        {
+            if (!float.IsFinite(block[i]))
+                block[i] = 0f;
+        }
     }
 
     public IAudioPlugin? GetSlot(int index)
@@ -208,9 +220,17 @@ public sealed class AudioChain : IAsyncDisposable
             if (plugin is null || slot.Bypassed) continue;
 
             if (currentIsOutput)
-                plugin.Process(output[..needed], scratch[..needed], ctx);
+            {
+                var next = scratch[..needed];
+                plugin.Process(output[..needed], next, ctx);
+                RepairNonFiniteSamples(next);
+            }
             else
-                plugin.Process(scratch[..needed], output[..needed], ctx);
+            {
+                var next = output[..needed];
+                plugin.Process(scratch[..needed], next, ctx);
+                RepairNonFiniteSamples(next);
+            }
 
             currentIsOutput = !currentIsOutput;
         }

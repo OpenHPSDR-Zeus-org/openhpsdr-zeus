@@ -242,6 +242,39 @@ public class AudioChainTests
         Assert.Equal<float>(new float[] { 12, 14, 16, 18 }, out1.ToArray()); // (x+5)*2
     }
 
+    [Fact]
+    public void PluginOutput_RepairsNonFiniteSamples_WithoutClampingFiniteHeadroom()
+    {
+        var chain = new AudioChain();
+        chain.SetSlot(0, new DirtyOutputPlugin());
+
+        Span<float> input = stackalloc float[] { 0.125f, -0.125f, 0.25f, -0.25f, 0.5f, -0.5f };
+        Span<float> output = stackalloc float[6];
+
+        chain.Process(input, output, Ctx(frames: 6));
+
+        Assert.Equal<float>(new float[] { 0f, 0f, 0f, 1.5f, -2f, 0.25f }, output.ToArray());
+        Assert.Equal(0.5f, chain.Meters.In);
+        Assert.Equal(2f, chain.Meters.Out);
+    }
+
+    [Fact]
+    public void DownstreamPlugin_ReceivesNonFiniteRepairedOutput_FromPreviousSlot()
+    {
+        var chain = new AudioChain();
+        var capture = new CaptureAndCopyPlugin();
+        chain.SetSlot(0, new DirtyOutputPlugin());
+        chain.SetSlot(1, capture);
+
+        Span<float> input = stackalloc float[6];
+        Span<float> output = stackalloc float[6];
+
+        chain.Process(input, output, Ctx(frames: 6));
+
+        Assert.Equal<float>(new float[] { 0f, 0f, 0f, 1.5f, -2f, 0.25f }, capture.LastInput);
+        Assert.Equal<float>(capture.LastInput, output.ToArray());
+    }
+
     private sealed class AddPlugin : IAudioPlugin
     {
         private readonly float _bias;
@@ -267,6 +300,37 @@ public class AudioChainTests
         public void Process(ReadOnlySpan<float> input, Span<float> output, AudioBlockContext ctx)
         {
             for (int i = 0; i < input.Length; i++) output[i] = input[i] * _k;
+        }
+    }
+
+    private sealed class DirtyOutputPlugin : IAudioPlugin
+    {
+        public string DisplayName => "dirty";
+        public AudioPluginRequirements Requirements => new(48000, 1, 256);
+        public Task InitializeAudioAsync(IAudioHost host, CancellationToken ct) => Task.CompletedTask;
+        public Task ShutdownAudioAsync(CancellationToken ct) => Task.CompletedTask;
+        public void Process(ReadOnlySpan<float> input, Span<float> output, AudioBlockContext ctx)
+        {
+            output[0] = float.NaN;
+            output[1] = float.PositiveInfinity;
+            output[2] = float.NegativeInfinity;
+            output[3] = 1.5f;
+            output[4] = -2f;
+            output[5] = 0.25f;
+        }
+    }
+
+    private sealed class CaptureAndCopyPlugin : IAudioPlugin
+    {
+        public float[] LastInput { get; private set; } = Array.Empty<float>();
+        public string DisplayName => "capture";
+        public AudioPluginRequirements Requirements => new(48000, 1, 256);
+        public Task InitializeAudioAsync(IAudioHost host, CancellationToken ct) => Task.CompletedTask;
+        public Task ShutdownAudioAsync(CancellationToken ct) => Task.CompletedTask;
+        public void Process(ReadOnlySpan<float> input, Span<float> output, AudioBlockContext ctx)
+        {
+            LastInput = input.ToArray();
+            input.CopyTo(output);
         }
     }
 }
