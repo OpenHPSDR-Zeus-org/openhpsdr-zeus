@@ -30,6 +30,7 @@ export type SmartNrStatus = {
   impulsivePct: number;
   peakCount: number;
   coherentPeakCount: number;
+  coherentSubthresholdSignal?: boolean;
   pending: boolean;
   applied: boolean;
   nr: NrConfigDto | null;

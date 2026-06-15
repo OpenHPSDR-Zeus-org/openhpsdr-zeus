@@ -44,5 +44,6 @@ export function buildFrontendDspSceneDiagnosticsPayload(
     impulsivePct: n(smart?.impulsivePct ?? signal?.impulsivePct),
     peakCount: n(smart?.peakCount ?? signal?.peakCount),
     coherentPeakCount: n(smart?.coherentPeakCount ?? signal?.coherentPeakCount),
+    coherentSubthresholdSignal: smart?.coherentSubthresholdSignal ?? null,
   };
 }

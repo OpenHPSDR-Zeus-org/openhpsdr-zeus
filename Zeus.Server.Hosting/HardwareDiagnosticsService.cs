@@ -1261,6 +1261,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "frontendDspScene.smartNrProfile",
                 "frontendDspScene.smartNrRecommendation",
                 "frontendDspScene.smartNrHeldByRxChain",
+                "frontendDspScene.coherentSubthresholdSignal",
                 "frontend.smartNr.status",
                 "frontend.signalEstimator.noiseFloor",
                 "frontend.signalEstimator.signalConfidence",

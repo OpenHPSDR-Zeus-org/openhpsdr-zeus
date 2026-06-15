@@ -38,7 +38,8 @@ public sealed class FrontendDspSceneDiagnosticsService
             CoherentOccupiedPct: Percent(request.CoherentOccupiedPct),
             ImpulsivePct: Percent(request.ImpulsivePct),
             PeakCount: NonNegative(request.PeakCount),
-            CoherentPeakCount: NonNegative(request.CoherentPeakCount));
+            CoherentPeakCount: NonNegative(request.CoherentPeakCount),
+            CoherentSubthresholdSignal: request.CoherentSubthresholdSignal);
 
         lock (_sync)
         {
@@ -94,6 +95,7 @@ public sealed class FrontendDspSceneDiagnosticsService
                 impulsivePct = _latest.ImpulsivePct,
                 peakCount = _latest.PeakCount,
                 coherentPeakCount = _latest.CoherentPeakCount,
+                coherentSubthresholdSignal = _latest.CoherentSubthresholdSignal,
             };
         }
     }
@@ -186,7 +188,8 @@ public sealed record FrontendDspSceneDiagnosticsRequest(
     double? CoherentOccupiedPct,
     double? ImpulsivePct,
     int? PeakCount,
-    int? CoherentPeakCount);
+    int? CoherentPeakCount,
+    bool? CoherentSubthresholdSignal);
 
 public sealed record FrontendDspSceneSnapshot(
     int SchemaVersion,
@@ -206,4 +209,5 @@ public sealed record FrontendDspSceneSnapshot(
     double? CoherentOccupiedPct,
     double? ImpulsivePct,
     int? PeakCount,
-    int? CoherentPeakCount);
+    int? CoherentPeakCount,
+    bool? CoherentSubthresholdSignal);

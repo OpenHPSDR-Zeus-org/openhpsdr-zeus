@@ -521,6 +521,7 @@ describe('POST helpers', () => {
           impulsivePct: 0.4,
           peakCount: 3,
           coherentPeakCount: 2,
+          coherentSubthresholdSignal: true,
         },
         mapping: {
           schemaVersion: 2,
@@ -577,6 +578,7 @@ describe('POST helpers', () => {
     expect(diag.frontendDspScene.signalProfile).toBe('dx');
     expect(diag.frontendDspScene.smartNrRecommendation).toBe('Hold headroom; use Smart NR/filtering');
     expect(diag.frontendDspScene.coherentPeakCount).toBe(2);
+    expect(diag.frontendDspScene.coherentSubthresholdSignal).toBe(true);
     expect(diag.mapping.schemaVersion).toBe(2);
     expect(diag.mapping.markers[0]?.label).toBe('RX2 on');
     expect(diag.featureSurfaces[0]?.id).toBe('hardware.mapping.correlation');
@@ -598,6 +600,7 @@ describe('POST helpers', () => {
       smartNrProfile: 'NR4',
       maxSnrDb: 12.5,
       peakCount: 1,
+      coherentSubthresholdSignal: true,
     }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -608,6 +611,7 @@ describe('POST helpers', () => {
       smartNrProfile: 'NR4',
       maxSnrDb: 12.5,
       peakCount: 1,
+      coherentSubthresholdSignal: true,
     });
 
     const [url, init] = fetchMock.mock.calls[0]!;
@@ -620,12 +624,14 @@ describe('POST helpers', () => {
       smartNrProfile: 'NR4',
       maxSnrDb: 12.5,
       peakCount: 1,
+      coherentSubthresholdSignal: true,
     });
     expect(scene.available).toBe(true);
     expect(scene.status).toBe('fresh');
     expect(scene.fresh).toBe(true);
     expect(scene.signalProfile).toBe('dx');
     expect(scene.smartNrProfile).toBe('NR4');
+    expect(scene.coherentSubthresholdSignal).toBe(true);
   });
 
   it('raises ApiError with server-provided error text on 400', async () => {

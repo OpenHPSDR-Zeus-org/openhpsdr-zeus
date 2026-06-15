@@ -91,6 +91,7 @@ export function SmartNrController() {
         impulsivePct: round1(c.impulsiveOccupancy12 * 100),
         peakCount: c.peakCount,
         coherentPeakCount: c.coherentPeakCount,
+        coherentSubthresholdSignal: c.coherentSubthresholdSignal,
         pending,
         applied,
         nr: shaped,
