@@ -28,6 +28,8 @@ export type SmartNrStatus = {
   atUtc: string | null;
   profile: string;
   reason: string;
+  capabilityLimited?: boolean;
+  capabilityRecommendation?: string;
   heldByRxChain?: boolean;
   rxChainLabel?: string;
   rxChainRecommendation?: string;

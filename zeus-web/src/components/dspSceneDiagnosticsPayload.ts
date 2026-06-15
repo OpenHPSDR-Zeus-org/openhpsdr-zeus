@@ -48,7 +48,7 @@ export function buildFrontendDspSceneDiagnosticsPayload(
     signalReason: signal?.reason ?? null,
     smartNrProfile: smart?.profile ?? null,
     smartNrReason: smart?.reason ?? null,
-    smartNrRecommendation: smart?.rxChainRecommendation ?? smart?.reason ?? null,
+    smartNrRecommendation: smart?.rxChainRecommendation ?? smart?.capabilityRecommendation ?? smart?.reason ?? null,
     smartNrHeldByRxChain: smart?.heldByRxChain ?? null,
     smartNrRxChainLabel: smart?.rxChainLabel ?? null,
     maxSnrDb: n(smart?.maxSnrDb ?? signal?.maxSnrDb),

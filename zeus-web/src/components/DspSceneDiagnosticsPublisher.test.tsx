@@ -105,4 +105,28 @@ describe('buildFrontendDspSceneDiagnosticsPayload', () => {
 
     expect(payload?.sourceAtUtc).toBe('2026-06-15T01:00:30Z');
   });
+
+  it('publishes DSP capability limits as the Smart NR action when RX chain is clear', () => {
+    const smart: SmartNrStatus = {
+      atUtc: '2026-06-15T01:00:30Z',
+      profile: 'NR2',
+      reason: 'weak narrow signal',
+      capabilityLimited: true,
+      capabilityRecommendation: 'NR4/SBNR unavailable; using NR2/EMNR fallback.',
+      maxSnrDb: 7.2,
+      occupancyPct: 1.2,
+      coherentOccupancyPct: 0.8,
+      impulsivePct: 0,
+      peakCount: 1,
+      coherentPeakCount: 1,
+      pending: false,
+      applied: false,
+      nr: NR_CONFIG_DEFAULT,
+    };
+
+    const payload = buildFrontendDspSceneDiagnosticsPayload('CWU', null, smart);
+
+    expect(payload?.smartNrProfile).toBe('NR2');
+    expect(payload?.smartNrRecommendation).toBe('NR4/SBNR unavailable; using NR2/EMNR fallback.');
+  });
 });
