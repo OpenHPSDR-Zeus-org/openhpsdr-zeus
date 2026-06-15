@@ -645,6 +645,15 @@ describe('POST helpers', () => {
             audioSinkCount: 1,
             diagnosticRecommendation: 'RX audio frames are fresh.',
           },
+          listenability: {
+            schemaVersion: 1,
+            status: 'audio-recovered',
+            tone: 'ready',
+            signalPresent: true,
+            audioRecovered: true,
+            blocker: 'none',
+            recommendation: 'RX signal evidence and recovered audio agree.',
+          },
           display: {
             schemaVersion: 1,
             status: 'fresh',
@@ -823,6 +832,12 @@ describe('POST helpers', () => {
     expect(diag.dsp.audio.squelchGateSource).toBe('backend-adaptive');
     expect(diag.dsp.audio.squelchOpenKnown).toBe(true);
     expect(diag.dsp.audio.diagnosticRecommendation).toContain('fresh');
+    expect(diag.dsp.listenability.status).toBe('audio-recovered');
+    expect(diag.dsp.listenability.tone).toBe('ready');
+    expect(diag.dsp.listenability.signalPresent).toBe(true);
+    expect(diag.dsp.listenability.audioRecovered).toBe(true);
+    expect(diag.dsp.listenability.blocker).toBe('none');
+    expect(diag.dsp.listenability.recommendation).toContain('recovered audio agree');
     expect(diag.dsp.display.status).toBe('fresh');
     expect(diag.dsp.display.panSource).toBe('rx');
     expect(diag.dsp.display.waterfallSource).toBe('rx');
