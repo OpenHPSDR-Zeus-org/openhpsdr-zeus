@@ -34,7 +34,7 @@ public sealed class PsEndpointPersistenceTests : IDisposable
                 new { enabled = true, auto = false, single = false });
 
             Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-            await using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+            using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
             Assert.True(body.RootElement.GetProperty("psEnabled").GetBoolean());
             Assert.False(body.RootElement.GetProperty("psAuto").GetBoolean());
         }
@@ -45,7 +45,7 @@ public sealed class PsEndpointPersistenceTests : IDisposable
             var resp = await client.GetAsync("/api/state");
 
             Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
-            await using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+            using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
             Assert.True(body.RootElement.GetProperty("psEnabled").GetBoolean());
             Assert.False(body.RootElement.GetProperty("psAuto").GetBoolean());
         }
