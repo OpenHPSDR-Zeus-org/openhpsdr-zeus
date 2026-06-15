@@ -10,10 +10,24 @@ import {
   _resetFrameConsumerCount,
   hasActiveFrameConsumers,
   registerFrameConsumer,
+  sanitizeDisplayBins,
+  useDisplayStore,
 } from './display-store';
+import type { DecodedFrame } from '../realtime/frame';
 
 afterEach(() => {
   _resetFrameConsumerCount();
+  useDisplayStore.setState({
+    connected: false,
+    width: 0,
+    centerHz: 0n,
+    hzPerPixel: 0,
+    panDb: null,
+    wfDb: null,
+    panValid: false,
+    wfValid: false,
+    lastSeq: 0,
+  });
 });
 
 describe('frame consumer registry', () => {
@@ -58,5 +72,51 @@ describe('frame consumer registry', () => {
     expect(hasActiveFrameConsumers()).toBe(true);
     b();
     expect(hasActiveFrameConsumers()).toBe(false);
+  });
+});
+
+describe('display frame bin sanitizer', () => {
+  it('returns the original array when every bin is finite', () => {
+    const bins = new Float32Array([-120, -80, -42.5]);
+
+    expect(sanitizeDisplayBins(bins)).toBe(bins);
+  });
+
+  it('copies and floors non-finite bins without changing finite dB values', () => {
+    const bins = new Float32Array([-120, Number.NaN, -42.5, Infinity, -Infinity]);
+
+    const sanitized = sanitizeDisplayBins(bins);
+
+    expect(sanitized).not.toBe(bins);
+    expect(Array.from(sanitized)).toEqual([-120, -200, -42.5, -200, -200]);
+    expect(Number.isNaN(bins[1])).toBe(true);
+  });
+
+  it('pushFrame stores sanitized bins before publishing state', () => {
+    const panDb = new Float32Array([-88, Number.NaN, -76, Infinity]);
+    const wfDb = new Float32Array([-95, -92, -90, -89]);
+    const frame: DecodedFrame = {
+      msgType: 0x01,
+      headerFlags: 0,
+      seq: 99,
+      tsUnixMs: 1_700_000_000_000,
+      rxId: 0,
+      bodyFlags: 0x03,
+      panValid: true,
+      wfValid: true,
+      width: 4,
+      centerHz: 14_074_000n,
+      hzPerPixel: 46.875,
+      panDb,
+      wfDb,
+    };
+
+    useDisplayStore.getState().pushFrame(frame);
+
+    const state = useDisplayStore.getState();
+    expect(state.lastSeq).toBe(99);
+    expect(state.panDb).not.toBe(panDb);
+    expect(Array.from(state.panDb ?? [])).toEqual([-88, -200, -76, -200]);
+    expect(state.wfDb).toBe(wfDb);
   });
 });

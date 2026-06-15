@@ -46,6 +46,8 @@ import { create } from 'zustand';
 import type { DecodedFrame } from '../realtime/frame';
 import { maybeUpdateEstimator } from '../dsp/signal-estimator';
 
+const DISPLAY_INVALID_BIN_DB = -200;
+
 export type DisplayState = {
   connected: boolean;
   width: number;
@@ -60,6 +62,23 @@ export type DisplayState = {
   pushFrame: (f: DecodedFrame) => void;
 };
 
+export function sanitizeDisplayBins(bins: Float32Array): Float32Array {
+  let firstBad = -1;
+  for (let i = 0; i < bins.length; i++) {
+    if (!Number.isFinite(bins[i])) {
+      firstBad = i;
+      break;
+    }
+  }
+  if (firstBad < 0) return bins;
+
+  const sanitized = new Float32Array(bins);
+  for (let i = firstBad; i < sanitized.length; i++) {
+    if (!Number.isFinite(sanitized[i])) sanitized[i] = DISPLAY_INVALID_BIN_DB;
+  }
+  return sanitized;
+}
+
 export const useDisplayStore = create<DisplayState>((set) => ({
   connected: false,
   width: 0,
@@ -72,19 +91,25 @@ export const useDisplayStore = create<DisplayState>((set) => ({
   lastSeq: 0,
   setConnected: (connected) => set({ connected }),
   pushFrame: (f) => {
+    const panDb = f.panValid ? sanitizeDisplayBins(f.panDb) : f.panDb;
+    const wfDb = f.wfValid ? sanitizeDisplayBins(f.wfDb) : f.wfDb;
+    const cleanFrame = panDb === f.panDb && wfDb === f.wfDb
+      ? f
+      : { ...f, panDb, wfDb };
+
     // Advance the shared noise-floor tracker BEFORE notifying subscribers, so
     // the panadapter/waterfall enhance this frame against this frame's floor.
     // No-op (zero cost) unless Signal Pop or Snap is enabled.
-    maybeUpdateEstimator(f);
+    maybeUpdateEstimator(cleanFrame);
     set({
-      width: f.width,
-      centerHz: f.centerHz,
-      hzPerPixel: f.hzPerPixel,
-      panDb: f.panDb,
-      wfDb: f.wfDb,
-      panValid: f.panValid,
-      wfValid: f.wfValid,
-      lastSeq: f.seq,
+      width: cleanFrame.width,
+      centerHz: cleanFrame.centerHz,
+      hzPerPixel: cleanFrame.hzPerPixel,
+      panDb: cleanFrame.panDb,
+      wfDb: cleanFrame.wfDb,
+      panValid: cleanFrame.panValid,
+      wfValid: cleanFrame.wfValid,
+      lastSeq: cleanFrame.seq,
     });
   },
 }));
