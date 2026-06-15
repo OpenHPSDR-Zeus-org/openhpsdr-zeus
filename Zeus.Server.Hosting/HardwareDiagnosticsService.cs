@@ -2234,8 +2234,14 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         new
         {
             field = "P2 ADC overload/max-magnitude driven auto-attenuation",
-            status = "candidate",
-            notes = "Thetis records max magnitude at overload. Zeus now exposes the raw values; the next step is a user-configurable P2 auto-ATT strategy.",
+            status = "control-ready",
+            notes = "Thetis records max magnitude at overload. Zeus exposes raw overload/magnitude telemetry, configurable ADC protection, and a read-only RX dynamic-range advisor that recommends small S-ATT/PRE moves without duplicating the existing controls.",
+        },
+        new
+        {
+            field = "RX dynamic-range advisor",
+            status = "diagnostics-ready",
+            notes = "Settings > Hardware now correlates live RXA ADC headroom, AGC gain, S-meter, preamp, manual S-ATT, auto-ATT offset, and ADC protection state into concrete overload/weak-signal recommendations. It is intentionally read-only; existing PRE/S-ATT/ADC protection controls remain the only writable surfaces.",
         },
         new
         {
@@ -2372,6 +2378,35 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             },
             safetyClass = "rx-safe",
             notes = "Orion/G2 overload and magnitude telemetry now drive the configurable ADC protection endpoint with fast attack, slow release, offset caps, and P2 magnitude soft limits.",
+        },
+        new
+        {
+            id = "rx.dynamic-range.advisor",
+            title = "RX dynamic-range advisor",
+            category = "rx-protection",
+            implementationStatus = "diagnostics-ready",
+            userConfigurable = false,
+            source = "RXA stage meters + RadioService preamp/attenuator/auto-ATT state",
+            telemetryPaths = new[]
+            {
+                "dsp.rxDynamicRange.status",
+                "dsp.rxDynamicRange.tone",
+                "dsp.rxDynamicRange.adcHeadroomDb",
+                "dsp.rxDynamicRange.agcGainDb",
+                "dsp.rxDynamicRange.effectiveAttenDb",
+                "dsp.rxDynamicRange.preampOn",
+                "dsp.rxDynamicRange.actions",
+            },
+            candidateControls = new[]
+            {
+                "Settings > Hardware > RX Dynamic Range Advisor",
+                "/api/radio/diagnostics",
+                "/api/rx/adc-protection",
+                "/api/attenuator",
+                "/api/preamp",
+            },
+            safetyClass = "rx-safe",
+            notes = "The advisor is a read-only decision layer that correlates live ADC headroom, AGC gain, S-meter, S-ATT, auto-ATT offset, ADC protection, and preamp state. It recommends small RF-chain moves for overload protection or weak-signal lift without duplicating the existing writable controls.",
         },
         new
         {

@@ -891,6 +891,7 @@ public class DspPipelineService : BackgroundService,
             _appliedAgc,
             _appliedSquelch);
         var rxMeters = SnapshotRxMetersDiagnostics();
+        var adcProtection = _radio.GetAdcProtectionStatus();
         var squelch = SnapshotAdaptiveSquelchDiagnostics(squelchConfig);
         var audio = SnapshotAudioDiagnostics();
         var display = SnapshotDisplayDiagnostics(engine);
@@ -909,6 +910,7 @@ public class DspPipelineService : BackgroundService,
             effectiveNrMode = nrRuntime.EffectiveNrMode,
             rxDsp,
             rxMeters,
+            rxDynamicRange = BuildRxDynamicRangeDiagnostics(state, rxMeters, adcProtection),
             squelch,
             filterGeometry = BuildFilterGeometryDiagnostics(
                 state,
@@ -1466,6 +1468,206 @@ public class DspPipelineService : BackgroundService,
             SignalUsable: signalUsable,
             AdcUsable: adcUsable,
             AgcEnvelopeUsable: agcEnvUsable,
+            DiagnosticRecommendation: recommendation);
+    }
+
+    internal static RxDynamicRangeDiagnosticsDto BuildRxDynamicRangeDiagnostics(
+        StateDto state,
+        RxMetersDiagnosticsDto rxMeters,
+        AdcProtectionStatusDto adc)
+    {
+        const double targetMinDb = 6.0;
+        const double targetMaxDb = 30.0;
+        const double weakSignalHeadroomDb = 32.0;
+        const double weakSignalFloorDbm = -92.0;
+
+        double? headroom = rxMeters.AdcHeadroomDb;
+        double? adcPk = rxMeters.AdcPkDbfs;
+        double? agcGain = rxMeters.AgcGainDb;
+        double? signalPk = rxMeters.SignalPkDbm;
+        bool fresh = rxMeters.Fresh && !rxMeters.Stale;
+        bool missingMeters = string.Equals(rxMeters.Status, "missing", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(rxMeters.Status, "unavailable", StringComparison.OrdinalIgnoreCase);
+        bool overloadRisk = state.AdcOverloadWarning || adc.Warning || headroom is <= targetMinDb || adcPk is > -targetMinDb;
+        bool frontEndHot = fresh && agcGain is < -20.0 && headroom is <= 15.0;
+        bool weakSignalOpportunity = fresh
+            && !overloadRisk
+            && headroom is >= weakSignalHeadroomDb
+            && (agcGain is >= 30.0 || signalPk is null || signalPk <= weakSignalFloorDbm);
+        bool frontEndUnderused = weakSignalOpportunity
+            && (!state.PreampOn || adc.EffectiveDb > 0);
+        bool headroomOptimal = fresh
+            && !overloadRisk
+            && headroom is >= targetMinDb and <= targetMaxDb
+            && agcGain is > -20.0 and < 35.0;
+
+        var reasons = new List<string>();
+        var actions = new List<RxDynamicRangeActionDto>();
+
+        if (!fresh)
+        {
+            reasons.Add(missingMeters ? "rx-meters-missing" : "rx-meters-stale");
+            actions.Add(new RxDynamicRangeActionDto(
+                "verify-rx-meter-feed",
+                "Verify RXA meters",
+                "required",
+                "Wait for fresh RXA stage-meter frames before using dynamic-range guidance."));
+        }
+        else
+        {
+            if (overloadRisk)
+            {
+                reasons.Add(state.AdcOverloadWarning || adc.Warning ? "adc-overload-warning" : "adc-headroom-low");
+                actions.Add(new RxDynamicRangeActionDto(
+                    "add-attenuation",
+                    "Add 3-6 dB attenuation",
+                    state.AutoAttEnabled ? "auto-or-manual" : "manual",
+                    state.AutoAttEnabled
+                        ? "Auto-ATT is enabled; confirm it is raising offset quickly enough, or add manual attenuation if the ADC remains hot."
+                        : "Increase S-ATT or reduce external/front-end gain before applying more AGC or NR."));
+                if (state.PreampOn)
+                {
+                    actions.Add(new RxDynamicRangeActionDto(
+                        "disable-preamp",
+                        "Disable preamp",
+                        "candidate",
+                        "The preamp is on while ADC headroom is limited; turn it off before adding large attenuation."));
+                }
+            }
+
+            if (frontEndHot)
+            {
+                reasons.Add("agc-cutting-with-limited-headroom");
+                actions.Add(new RxDynamicRangeActionDto(
+                    "restore-agc-headroom",
+                    "Restore AGC headroom",
+                    "candidate",
+                    "AGC is cutting hard while ADC headroom is limited; lower RF gain first, then judge recovered audio."));
+            }
+
+            if (weakSignalOpportunity)
+            {
+                reasons.Add(frontEndUnderused ? "front-end-underused" : "weak-signal-headroom-available");
+                if (adc.EffectiveDb > 0)
+                {
+                    actions.Add(new RxDynamicRangeActionDto(
+                        "reduce-attenuation",
+                        "Reduce attenuation 3-6 dB",
+                        "candidate",
+                        "ADC headroom is large and the signal is weak; reduce S-ATT in small steps while watching overload bits."));
+                }
+                if (!state.PreampOn)
+                {
+                    actions.Add(new RxDynamicRangeActionDto(
+                        "enable-preamp",
+                        "Try preamp",
+                        "candidate",
+                        "ADC headroom is large enough to test the hardware preamp for weak-signal lift; keep it off if band noise jumps without copy improvement."));
+                }
+                actions.Add(new RxDynamicRangeActionDto(
+                    "hold-narrow-nr",
+                    "Use narrow filter / Smart NR",
+                    "active",
+                    "The front end has headroom; use coherent display evidence, narrower filters, and low-artifact NR before chasing more gain."));
+            }
+
+            if (headroomOptimal)
+            {
+                reasons.Add("adc-headroom-in-target-window");
+                actions.Add(new RxDynamicRangeActionDto(
+                    "hold-current-rf-chain",
+                    "Hold RF chain",
+                    "active",
+                    "ADC headroom is in the target window; tune copy with filters, AGC mode/top, and Smart NR rather than changing preamp or attenuation."));
+            }
+
+            if (actions.Count == 0)
+            {
+                reasons.Add("observe");
+                actions.Add(new RxDynamicRangeActionDto(
+                    "observe",
+                    "Observe",
+                    "standby",
+                    "RX dynamic-range telemetry is fresh but does not call for an RF-chain change."));
+            }
+        }
+
+        string status;
+        string tone;
+        string recommendation;
+        if (!fresh)
+        {
+            status = missingMeters ? "missing" : "stale";
+            tone = "verify";
+            recommendation = "RX dynamic-range advisor is waiting for fresh RXA stage meters before recommending RF-chain changes.";
+        }
+        else if (overloadRisk)
+        {
+            status = "adc-headroom-limited";
+            tone = "danger";
+            recommendation = "ADC headroom is limited; protect the converter first with attenuation/preamp changes before increasing AGC, NR, or audio gain.";
+        }
+        else if (frontEndHot)
+        {
+            status = "front-end-hot";
+            tone = "warning";
+            recommendation = "AGC is cutting hard with limited converter headroom; reduce RF gain until both ADC and AGC have room.";
+        }
+        else if (frontEndUnderused)
+        {
+            status = "weak-signal-rf-chain-underused";
+            tone = "ready";
+            recommendation = "The weak-signal path has spare ADC headroom; try less attenuation or preamp in small steps while watching overload telemetry.";
+        }
+        else if (weakSignalOpportunity)
+        {
+            status = "weak-signal-headroom-ready";
+            tone = "ready";
+            recommendation = "Weak-signal evidence has adequate ADC headroom; hold RF gain and refine with filter width, AGC, and Smart NR.";
+        }
+        else if (headroomOptimal)
+        {
+            status = "dynamic-range-ready";
+            tone = "ready";
+            recommendation = "RX front-end dynamic range is in the target window; preserve this RF-chain state while tuning DSP.";
+        }
+        else
+        {
+            status = "watching";
+            tone = "standby";
+            recommendation = "RX dynamic-range telemetry is fresh; keep watching ADC headroom, AGC gain, and signal level as band conditions change.";
+        }
+
+        return new RxDynamicRangeDiagnosticsDto(
+            SchemaVersion: 1,
+            Status: status,
+            Tone: tone,
+            Fresh: fresh,
+            Stale: rxMeters.Stale,
+            AgeMs: rxMeters.AgeMs,
+            Source: "rx-meters+radio-state+adc-protection",
+            SampleRateHz: state.SampleRate,
+            AttenDb: adc.AttenDb,
+            AttOffsetDb: adc.OffsetDb,
+            EffectiveAttenDb: adc.EffectiveDb,
+            PreampOn: state.PreampOn,
+            AutoAttEnabled: state.AutoAttEnabled,
+            AdcProtectionEnabled: adc.Config.Enabled,
+            AdcOverloadWarning: state.AdcOverloadWarning || adc.Warning,
+            AdcOverloadLevel: adc.OverloadLevel,
+            TargetHeadroomMinDb: targetMinDb,
+            TargetHeadroomMaxDb: targetMaxDb,
+            RxDbm: rxMeters.RxDbm,
+            SignalPkDbm: signalPk,
+            AdcPkDbfs: adcPk,
+            AdcHeadroomDb: headroom,
+            AgcGainDb: agcGain,
+            HeadroomOptimal: headroomOptimal,
+            OverloadRisk: overloadRisk,
+            WeakSignalOpportunity: weakSignalOpportunity,
+            FrontEndUnderused: frontEndUnderused,
+            Reasons: reasons.ToArray(),
+            Actions: actions.ToArray(),
             DiagnosticRecommendation: recommendation);
     }
 
@@ -3698,6 +3900,44 @@ internal sealed record RxMetersDiagnosticsDto(
     bool SignalUsable,
     bool AdcUsable,
     bool AgcEnvelopeUsable,
+    string DiagnosticRecommendation);
+
+internal sealed record RxDynamicRangeActionDto(
+    string Id,
+    string Label,
+    string Status,
+    string Notes);
+
+internal sealed record RxDynamicRangeDiagnosticsDto(
+    int SchemaVersion,
+    string Status,
+    string Tone,
+    bool Fresh,
+    bool Stale,
+    long? AgeMs,
+    string Source,
+    int SampleRateHz,
+    int AttenDb,
+    int AttOffsetDb,
+    int EffectiveAttenDb,
+    bool PreampOn,
+    bool AutoAttEnabled,
+    bool AdcProtectionEnabled,
+    bool AdcOverloadWarning,
+    int AdcOverloadLevel,
+    double TargetHeadroomMinDb,
+    double TargetHeadroomMaxDb,
+    double? RxDbm,
+    double? SignalPkDbm,
+    double? AdcPkDbfs,
+    double? AdcHeadroomDb,
+    double? AgcGainDb,
+    bool HeadroomOptimal,
+    bool OverloadRisk,
+    bool WeakSignalOpportunity,
+    bool FrontEndUnderused,
+    string[] Reasons,
+    RxDynamicRangeActionDto[] Actions,
     string DiagnosticRecommendation);
 
 internal sealed record RxListenabilityDiagnosticsDto(

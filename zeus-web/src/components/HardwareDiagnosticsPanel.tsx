@@ -30,6 +30,7 @@ import {
   type HardwareMappingMarkerDto,
   type HardwareP1MapDto,
   type HardwarePureSignalDiagnosticsDto,
+  type HardwareRxDynamicRangeDiagnosticsDto,
   type RadioNetworkCountersDto,
   type RadioDigInDiagnosticsDto,
   type RadioNetworkProfileDto,
@@ -171,6 +172,67 @@ function DiagnosticRecommendation({ text }: { text: string | null | undefined })
   return (
     <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.35, color: 'var(--fg-2)' }}>
       {text}
+    </div>
+  );
+}
+
+function RxDynamicRangeAdvisor({ diag }: { diag: HardwareRxDynamicRangeDiagnosticsDto | null | undefined }) {
+  if (!diag) {
+    return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for RX dynamic-range diagnostics.</div>;
+  }
+  const fields: Field[] = [
+    { label: 'Status', value: diag.status },
+    { label: 'Tone', value: diag.tone },
+    { label: 'Fresh', value: boolLabel(diag.fresh) },
+    { label: 'Age', value: age(diag.ageMs) },
+    { label: 'Sample Rate', value: hz(diag.sampleRateHz) },
+    { label: 'Target Window', value: `${diag.targetHeadroomMinDb}..${diag.targetHeadroomMaxDb} dB` },
+    { label: 'ADC Headroom', value: db(diag.adcHeadroomDb) },
+    { label: 'ADC Peak', value: db(diag.adcPkDbfs) },
+    { label: 'AGC Gain', value: db(diag.agcGainDb) },
+    { label: 'Signal Peak', value: db(diag.signalPkDbm) },
+    { label: 'S-Meter', value: db(diag.rxDbm) },
+    { label: 'PRE', value: boolLabel(diag.preampOn) },
+    { label: 'ATT Base', value: db(diag.attenDb) },
+    { label: 'ATT Offset', value: db(diag.attOffsetDb) },
+    { label: 'ATT Effective', value: db(diag.effectiveAttenDb) },
+    { label: 'Auto ATT', value: boolLabel(diag.autoAttEnabled) },
+    { label: 'ADC Protect', value: boolLabel(diag.adcProtectionEnabled) },
+    { label: 'ADC Warning', value: boolLabel(diag.adcOverloadWarning) },
+    { label: 'Overload Level', value: diag.adcOverloadLevel },
+    { label: 'Headroom OK', value: boolLabel(diag.headroomOptimal) },
+    { label: 'Overload Risk', value: boolLabel(diag.overloadRisk) },
+    { label: 'Weak-Signal Lift', value: boolLabel(diag.weakSignalOpportunity) },
+    { label: 'RF Underused', value: boolLabel(diag.frontEndUnderused) },
+    { label: 'Reasons', value: diag.reasons.length > 0 ? diag.reasons.join(', ') : 'none' },
+  ];
+
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <FieldGrid fields={fields} />
+      {diag.actions.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={tableStyle}>
+            <thead>
+              <tr>
+                <th style={thStyle}>Action</th>
+                <th style={thStyle}>Status</th>
+                <th style={thStyle}>Notes</th>
+              </tr>
+            </thead>
+            <tbody>
+              {diag.actions.map((action) => (
+                <tr key={action.id || action.label}>
+                  <td style={tdStyle}>{action.label}</td>
+                  <td style={tdStyle} className="mono">{action.status}</td>
+                  <td style={tdStyle}>{action.notes}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <DiagnosticRecommendation text={diag.diagnosticRecommendation} />
     </div>
   );
 }
@@ -1715,6 +1777,7 @@ export function HardwareDiagnosticsPanel() {
   const display = dsp?.display;
   const rxDsp = dsp?.rxDsp;
   const rxMeters = dsp?.rxMeters;
+  const rxDynamicRange = dsp?.rxDynamicRange;
   const audio = dsp?.audio;
   const listenability = dsp?.listenability;
   const dspFields: Field[] = [
@@ -2050,6 +2113,14 @@ export function HardwareDiagnosticsPanel() {
         <DiagnosticRecommendation text={listenability?.recommendation} />
         <DiagnosticRecommendation text={audio?.diagnosticRecommendation} />
         <DiagnosticRecommendation text={display?.diagnosticRecommendation} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          RX Dynamic Range Advisor
+          <span className="ps-card-hint">ADC headroom / AGC / preamp / S-ATT</span>
+        </h4>
+        <RxDynamicRangeAdvisor diag={rxDynamicRange} />
       </div>
 
       <div className="ps-card">

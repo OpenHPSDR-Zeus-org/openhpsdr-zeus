@@ -576,6 +576,46 @@ export type HardwareRxMetersDiagnosticsDto = {
   diagnosticRecommendation: string | null;
 };
 
+export type HardwareRxDynamicRangeActionDto = {
+  id: string;
+  label: string;
+  status: string;
+  notes: string;
+};
+
+export type HardwareRxDynamicRangeDiagnosticsDto = {
+  schemaVersion: number;
+  status: string;
+  tone: string;
+  fresh: boolean;
+  stale: boolean;
+  ageMs: number | null;
+  source: string;
+  sampleRateHz: number;
+  attenDb: number;
+  attOffsetDb: number;
+  effectiveAttenDb: number;
+  preampOn: boolean;
+  autoAttEnabled: boolean;
+  adcProtectionEnabled: boolean;
+  adcOverloadWarning: boolean;
+  adcOverloadLevel: number;
+  targetHeadroomMinDb: number;
+  targetHeadroomMaxDb: number;
+  rxDbm: number | null;
+  signalPkDbm: number | null;
+  adcPkDbfs: number | null;
+  adcHeadroomDb: number | null;
+  agcGainDb: number | null;
+  headroomOptimal: boolean;
+  overloadRisk: boolean;
+  weakSignalOpportunity: boolean;
+  frontEndUnderused: boolean;
+  reasons: string[];
+  actions: HardwareRxDynamicRangeActionDto[];
+  diagnosticRecommendation: string | null;
+};
+
 export type HardwareAudioDiagnosticsDto = {
   schemaVersion: number;
   status: string;
@@ -727,6 +767,7 @@ export type HardwareDspDiagnosticsDto = {
   monitorBacklogSamples: number;
   rxDsp: HardwareRxDspDiagnosticsDto;
   rxMeters: HardwareRxMetersDiagnosticsDto;
+  rxDynamicRange: HardwareRxDynamicRangeDiagnosticsDto;
   audio: HardwareAudioDiagnosticsDto;
   listenability: HardwareRxListenabilityDiagnosticsDto;
   display: HardwareDisplayDiagnosticsDto;
@@ -2277,6 +2318,7 @@ function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
     monitorBacklogSamples: diagNumber(r.monitorBacklogSamples) ?? 0,
     rxDsp: normalizeHardwareRxDspDiagnostics(r.rxDsp),
     rxMeters: normalizeHardwareRxMetersDiagnostics(r.rxMeters),
+    rxDynamicRange: normalizeHardwareRxDynamicRangeDiagnostics(r.rxDynamicRange),
     audio: normalizeHardwareAudioDiagnostics(r.audio),
     listenability: normalizeHardwareRxListenabilityDiagnostics(r.listenability),
     display: normalizeHardwareDisplayDiagnostics(r.display),
@@ -2437,6 +2479,87 @@ function normalizeHardwareRxMetersDiagnostics(raw: unknown): HardwareRxMetersDia
     signalUsable: Boolean(r.signalUsable),
     adcUsable: Boolean(r.adcUsable),
     agcEnvelopeUsable: Boolean(r.agcEnvelopeUsable),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+  };
+}
+
+function normalizeHardwareRxDynamicRangeDiagnostics(raw: unknown): HardwareRxDynamicRangeDiagnosticsDto {
+  if (raw === null || raw === undefined) {
+    return {
+      schemaVersion: 0,
+      status: 'unavailable',
+      tone: 'verify',
+      fresh: false,
+      stale: true,
+      ageMs: null,
+      source: 'unknown',
+      sampleRateHz: 0,
+      attenDb: 0,
+      attOffsetDb: 0,
+      effectiveAttenDb: 0,
+      preampOn: false,
+      autoAttEnabled: false,
+      adcProtectionEnabled: false,
+      adcOverloadWarning: false,
+      adcOverloadLevel: 0,
+      targetHeadroomMinDb: 6,
+      targetHeadroomMaxDb: 30,
+      rxDbm: null,
+      signalPkDbm: null,
+      adcPkDbfs: null,
+      adcHeadroomDb: null,
+      agcGainDb: null,
+      headroomOptimal: false,
+      overloadRisk: false,
+      weakSignalOpportunity: false,
+      frontEndUnderused: false,
+      reasons: ['rx-dynamic-range-unavailable'],
+      actions: [],
+      diagnosticRecommendation: 'RX dynamic-range advisor diagnostics are not available from this backend yet; restart OpenhpsdrZeus after updating to correlate ADC headroom, AGC gain, attenuation, and preamp state.',
+    };
+  }
+  const r = asDiagRecord(raw);
+  const actions = Array.isArray(r.actions)
+    ? r.actions.map((entry) => {
+      const item = asDiagRecord(entry);
+      return {
+        id: diagString(item.id) ?? '',
+        label: diagString(item.label) ?? '',
+        status: diagString(item.status) ?? '',
+        notes: diagString(item.notes) ?? '',
+      };
+    })
+    : [];
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    status: diagString(r.status) ?? 'unknown',
+    tone: diagString(r.tone) ?? 'verify',
+    fresh: Boolean(r.fresh),
+    stale: Boolean(r.stale),
+    ageMs: diagNumber(r.ageMs),
+    source: diagString(r.source) ?? 'unknown',
+    sampleRateHz: diagNumber(r.sampleRateHz) ?? 0,
+    attenDb: diagNumber(r.attenDb) ?? 0,
+    attOffsetDb: diagNumber(r.attOffsetDb) ?? 0,
+    effectiveAttenDb: diagNumber(r.effectiveAttenDb) ?? 0,
+    preampOn: Boolean(r.preampOn),
+    autoAttEnabled: Boolean(r.autoAttEnabled),
+    adcProtectionEnabled: Boolean(r.adcProtectionEnabled),
+    adcOverloadWarning: Boolean(r.adcOverloadWarning),
+    adcOverloadLevel: diagNumber(r.adcOverloadLevel) ?? 0,
+    targetHeadroomMinDb: diagNumber(r.targetHeadroomMinDb) ?? 6,
+    targetHeadroomMaxDb: diagNumber(r.targetHeadroomMaxDb) ?? 30,
+    rxDbm: diagNumber(r.rxDbm),
+    signalPkDbm: diagNumber(r.signalPkDbm),
+    adcPkDbfs: diagNumber(r.adcPkDbfs),
+    adcHeadroomDb: diagNumber(r.adcHeadroomDb),
+    agcGainDb: diagNumber(r.agcGainDb),
+    headroomOptimal: Boolean(r.headroomOptimal),
+    overloadRisk: Boolean(r.overloadRisk),
+    weakSignalOpportunity: Boolean(r.weakSignalOpportunity),
+    frontEndUnderused: Boolean(r.frontEndUnderused),
+    reasons: diagStringArray(r.reasons),
+    actions,
     diagnosticRecommendation: diagString(r.diagnosticRecommendation),
   };
 }

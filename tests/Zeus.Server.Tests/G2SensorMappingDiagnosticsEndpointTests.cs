@@ -159,6 +159,10 @@ public sealed class G2SensorMappingDiagnosticsEndpointTests
         Assert.Contains("No G2 ADC", g2FirmwareOptions.GetProperty("missingControlSurface").GetString());
 
         var filterGeometry = root.GetProperty("dsp").GetProperty("filterGeometry");
+        var rxDynamicRange = root.GetProperty("dsp").GetProperty("rxDynamicRange");
+        Assert.Equal("missing", rxDynamicRange.GetProperty("status").GetString());
+        Assert.Equal("verify", rxDynamicRange.GetProperty("tone").GetString());
+        Assert.Equal("rx-meters+radio-state+adc-protection", rxDynamicRange.GetProperty("source").GetString());
         Assert.Equal("BH-7", filterGeometry.GetProperty("activeRx").GetProperty("filterWindow").GetString());
         Assert.Equal(1024, filterGeometry.GetProperty("optionCatalog").GetProperty("iqBufferSizes")[4].GetInt32());
         Assert.Equal(16384, filterGeometry.GetProperty("optionCatalog").GetProperty("filterTapSizes")[4].GetInt32());

@@ -253,6 +253,92 @@ public class RxMetersBroadcastTests
     }
 
     [Fact]
+    public void BuildRxDynamicRangeDiagnostics_WaitsForFreshRxMeters()
+    {
+        var rxMeters = DspPipelineService.BuildRxMetersDiagnostics(
+            valid: false,
+            ageMs: null,
+            channelId: 0,
+            rxDbm: double.NaN,
+            default);
+
+        var diag = DspPipelineService.BuildRxDynamicRangeDiagnostics(
+            DefaultState(),
+            rxMeters,
+            DefaultAdcProtection());
+
+        Assert.Equal("missing", diag.Status);
+        Assert.Equal("verify", diag.Tone);
+        Assert.False(diag.Fresh);
+        Assert.Contains("rx-meters-missing", diag.Reasons);
+        Assert.Contains(diag.Actions, action => action.Id == "verify-rx-meter-feed");
+    }
+
+    [Fact]
+    public void BuildRxDynamicRangeDiagnostics_FlagsAdcHeadroomRiskAndPreampAction()
+    {
+        var rxMeters = DspPipelineService.BuildRxMetersDiagnostics(
+            valid: true,
+            ageMs: 120,
+            channelId: 1,
+            rxDbm: -44.6,
+            new RxMetersV2Frame(
+                SignalPk: -38.2f,
+                SignalAv: -49.0f,
+                AdcPk: -1.8f,
+                AdcAv: -14.3f,
+                AgcGain: -9.5f,
+                AgcEnvPk: -35.0f,
+                AgcEnvAv: -48.0f));
+
+        var diag = DspPipelineService.BuildRxDynamicRangeDiagnostics(
+            DefaultState(preampOn: true, autoAttEnabled: false, adcOverloadWarning: true),
+            rxMeters,
+            DefaultAdcProtection(warning: true, overloadLevel: 4));
+
+        Assert.Equal("adc-headroom-limited", diag.Status);
+        Assert.Equal("danger", diag.Tone);
+        Assert.True(diag.OverloadRisk);
+        Assert.True(diag.PreampOn);
+        Assert.Contains("adc-overload-warning", diag.Reasons);
+        Assert.Contains(diag.Actions, action => action.Id == "add-attenuation" && action.Status == "manual");
+        Assert.Contains(diag.Actions, action => action.Id == "disable-preamp");
+        Assert.Contains("protect the converter", diag.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildRxDynamicRangeDiagnostics_FindsWeakSignalFrontEndOpportunity()
+    {
+        var rxMeters = DspPipelineService.BuildRxMetersDiagnostics(
+            valid: true,
+            ageMs: 80,
+            channelId: 1,
+            rxDbm: -109.5,
+            new RxMetersV2Frame(
+                SignalPk: -106.1f,
+                SignalAv: -118.0f,
+                AdcPk: -37.0f,
+                AdcAv: -55.0f,
+                AgcGain: 42.3f,
+                AgcEnvPk: -92.0f,
+                AgcEnvAv: -104.0f));
+
+        var diag = DspPipelineService.BuildRxDynamicRangeDiagnostics(
+            DefaultState(preampOn: false, attenDb: 12),
+            rxMeters,
+            DefaultAdcProtection(attenDb: 12, effectiveDb: 12));
+
+        Assert.Equal("weak-signal-rf-chain-underused", diag.Status);
+        Assert.Equal("ready", diag.Tone);
+        Assert.True(diag.WeakSignalOpportunity);
+        Assert.True(diag.FrontEndUnderused);
+        Assert.Equal(12, diag.EffectiveAttenDb);
+        Assert.Contains("front-end-underused", diag.Reasons);
+        Assert.Contains(diag.Actions, action => action.Id == "reduce-attenuation");
+        Assert.Contains(diag.Actions, action => action.Id == "enable-preamp");
+    }
+
+    [Fact]
     public void StreamingHub_BroadcastRxMetersV2_NoOpWhenNoClients()
     {
         // Mirrors TxMetersSwrTripTests's hub-without-clients pattern: the
@@ -265,4 +351,40 @@ public class RxMetersBroadcastTests
         hub.Broadcast(frame);
         Assert.Equal(0, hub.ClientCount);
     }
+
+    private static StateDto DefaultState(
+        bool preampOn = false,
+        bool autoAttEnabled = true,
+        bool adcOverloadWarning = false,
+        int attenDb = 0) => new(
+            Status: ConnectionStatus.Connected,
+            Endpoint: "192.168.1.25:1024",
+            VfoHz: 14_200_000,
+            Mode: RxMode.USB,
+            FilterLowHz: 150,
+            FilterHighHz: 2850,
+            SampleRate: 192_000,
+            AttenDb: attenDb,
+            AutoAttEnabled: autoAttEnabled,
+            AdcOverloadWarning: adcOverloadWarning,
+            PreampOn: preampOn);
+
+    private static AdcProtectionStatusDto DefaultAdcProtection(
+        int attenDb = 0,
+        int offsetDb = 0,
+        int? effectiveDb = null,
+        bool warning = false,
+        int overloadLevel = 0) => new(
+            Config: new AdcProtectionConfig(Enabled: true),
+            AttenDb: attenDb,
+            OffsetDb: offsetDb,
+            EffectiveDb: effectiveDb ?? Math.Clamp(attenDb + offsetDb, 0, 31),
+            Warning: warning,
+            OverloadLevel: overloadLevel,
+            LastOverloadBits: 0,
+            Adc0MaxMagnitude: null,
+            Adc1MaxMagnitude: null,
+            Adc0MaxMagnitudeAtOverload: 0,
+            Adc1MaxMagnitudeAtOverload: 0,
+            LastTelemetryUtc: null);
 }

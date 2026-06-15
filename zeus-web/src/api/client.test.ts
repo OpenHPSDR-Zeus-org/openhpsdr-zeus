@@ -620,6 +620,51 @@ describe('POST helpers', () => {
             agcEnvelopeUsable: true,
             diagnosticRecommendation: 'RX ADC peak is within 3 dB of full scale.',
           },
+          rxDynamicRange: {
+            schemaVersion: 1,
+            status: 'adc-headroom-limited',
+            tone: 'danger',
+            fresh: true,
+            stale: false,
+            ageMs: 250,
+            source: 'rx-meters+radio-state+adc-protection',
+            sampleRateHz: 192000,
+            attenDb: 3,
+            attOffsetDb: 2,
+            effectiveAttenDb: 5,
+            preampOn: true,
+            autoAttEnabled: true,
+            adcProtectionEnabled: true,
+            adcOverloadWarning: true,
+            adcOverloadLevel: 4,
+            targetHeadroomMinDb: 6,
+            targetHeadroomMaxDb: 30,
+            rxDbm: -44.6,
+            signalPkDbm: -38.2,
+            adcPkDbfs: -1.8,
+            adcHeadroomDb: 1.8,
+            agcGainDb: -9.5,
+            headroomOptimal: false,
+            overloadRisk: true,
+            weakSignalOpportunity: false,
+            frontEndUnderused: false,
+            reasons: ['adc-overload-warning'],
+            actions: [
+              {
+                id: 'add-attenuation',
+                label: 'Add 3-6 dB attenuation',
+                status: 'auto-or-manual',
+                notes: 'Auto-ATT is enabled.',
+              },
+              {
+                id: 'disable-preamp',
+                label: 'Disable preamp',
+                status: 'candidate',
+                notes: 'The preamp is on while ADC headroom is limited.',
+              },
+            ],
+            diagnosticRecommendation: 'ADC headroom is limited; protect the converter first.',
+          },
           audio: {
             schemaVersion: 1,
             status: 'fresh',
@@ -989,6 +1034,12 @@ describe('POST helpers', () => {
     expect(diag.dsp.rxMeters.agcGainDb).toBe(-9.5);
     expect(diag.dsp.rxMeters.signalUsable).toBe(true);
     expect(diag.dsp.rxMeters.diagnosticRecommendation).toContain('within 3 dB');
+    expect(diag.dsp.rxDynamicRange.status).toBe('adc-headroom-limited');
+    expect(diag.dsp.rxDynamicRange.tone).toBe('danger');
+    expect(diag.dsp.rxDynamicRange.effectiveAttenDb).toBe(5);
+    expect(diag.dsp.rxDynamicRange.overloadRisk).toBe(true);
+    expect(diag.dsp.rxDynamicRange.actions[0]?.id).toBe('add-attenuation');
+    expect(diag.dsp.rxDynamicRange.actions[1]?.id).toBe('disable-preamp');
     expect(diag.dsp.audio.status).toBe('fresh');
     expect(diag.dsp.audio.source).toBe('rx');
     expect(diag.dsp.audio.framesBroadcast).toBe(128);
