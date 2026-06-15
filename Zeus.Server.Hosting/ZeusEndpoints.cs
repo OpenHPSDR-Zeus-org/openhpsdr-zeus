@@ -2492,6 +2492,7 @@ public static class ZeusEndpoints
             || totalTxBlocks > 0
             || ringTotalWritten > 0
             || ringTotalRead > 0;
+        bool p2PriorActivity = p2InputComplexSamples > 0 || p2PacketsSent > 0;
         bool ringPressure = ringDropRatioPct > 1.0
             || (ringDropped > 0 && ringFillPct >= 95.0);
 
@@ -2521,6 +2522,11 @@ public static class ZeusEndpoints
         {
             status = "standby-ring-pressure";
             recommendation = "Host TX is idle and P2 DUC has no input; P1 compatibility-ring drops are standby ingest pressure, not on-air P2 egress evidence. Key MOX/TUN or enable a TX monitor path and watch P2 input/packet counters.";
+        }
+        else if (!hostTxActive && ringPressure && p2PriorActivity)
+        {
+            status = "post-tx-ring-pressure";
+            recommendation = "Host TX is idle and P2 DUC counters show prior TX activity; ring pressure is last-TX or standby ingest history, not current on-air audio-path proof. Key MOX/TUN or TX monitor when you need a fresh fidelity reading.";
         }
         else if (!hostTxActive && ringPressure)
         {

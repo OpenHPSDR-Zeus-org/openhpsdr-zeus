@@ -104,6 +104,73 @@ public sealed class TxEgressHealthDiagnosticsTests
     }
 
     [Fact]
+    public void BuildTxAudioPathHealth_ClassifiesIdlePriorP2RingPressureAsPostTxHistory()
+    {
+        var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
+
+        var health = ZeusEndpoints.BuildTxAudioPathHealth(
+            generated,
+            ringTotalWritten: 2_859_008,
+            ringTotalRead: 0,
+            ringCount: 16_384,
+            ringDropped: 2_826_240,
+            ringCapacity: 16_384,
+            ringRecentMag: 0.0,
+            totalMicSamples: 715_200,
+            totalTxBlocks: 1_396,
+            droppedFrames: 0,
+            p2: P2(
+                inputComplexSamples: 2_859_008,
+                packetsSent: 11_881,
+                queuedPackets: 0,
+                lastPacketsPerSecond: 799,
+                lastRateTimestampUtc: generated.AddMinutes(-6)),
+            hostTxActive: false);
+
+        Assert.Equal("post-tx-ring-pressure", health.Status);
+        Assert.False(health.HostTxActive);
+        Assert.True(health.P2Attached);
+        Assert.False(health.P2DucLive);
+        Assert.False(health.P2WaitingForTx);
+        Assert.Equal(360_000.0, health.P2LastActivityAgeMs.GetValueOrDefault());
+        Assert.Equal(2_859_008, health.P2InputComplexSamples);
+        Assert.Equal(11_881, health.P2PacketsSent);
+        Assert.Equal(100.0, health.RingFillPct);
+        Assert.Equal(98.854, health.RingDropRatioPct);
+        Assert.Contains("last-TX or standby ingest history", health.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildTxAudioPathHealth_KeepsActiveRingPressureAsTxFault()
+    {
+        var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
+
+        var health = ZeusEndpoints.BuildTxAudioPathHealth(
+            generated,
+            ringTotalWritten: 16_384,
+            ringTotalRead: 0,
+            ringCount: 16_384,
+            ringDropped: 4_096,
+            ringCapacity: 16_384,
+            ringRecentMag: 0.2,
+            totalMicSamples: 4_096,
+            totalTxBlocks: 8,
+            droppedFrames: 0,
+            p2: P2(
+                inputComplexSamples: 2_048,
+                packetsSent: 8,
+                queuedPackets: 0,
+                lastPacketsPerSecond: 800,
+                lastRateTimestampUtc: generated.AddMilliseconds(-250)),
+            hostTxActive: true);
+
+        Assert.Equal("tx-ring-pressure", health.Status);
+        Assert.True(health.HostTxActive);
+        Assert.True(health.P2DucLive);
+        Assert.Contains("Host TX is active", health.DiagnosticRecommendation);
+    }
+
+    [Fact]
     public void BuildTxEgressHealth_MarksRecentP2RateAsLive()
     {
         var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
