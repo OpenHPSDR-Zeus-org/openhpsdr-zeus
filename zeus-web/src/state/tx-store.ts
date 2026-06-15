@@ -48,6 +48,30 @@ import { persist } from 'zustand/middleware';
 import type { CfcConfigDto, RadioStateDto } from '../api/client';
 import { CFC_CONFIG_DEFAULT } from '../api/client';
 
+const QUIET_DBFS = -Infinity;
+const QUIET_MIC_DBFS = -100;
+const RX_FLOOR_DBM = -160;
+
+function finiteDb(value: number): number {
+  return Number.isFinite(value) ? value : QUIET_DBFS;
+}
+
+function finiteOr(value: number, fallback: number): number {
+  return Number.isFinite(value) ? value : fallback;
+}
+
+function nonNegativeFinite(value: number): number {
+  return Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+function positiveFinite(value: number, fallback: number): number {
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function finiteInteger(value: number, fallback: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.trunc(value)) : fallback;
+}
+
 // TX-side state. Intentionally separate from connection-store so the TX panel
 // can mount/unmount cleanly and so TX-specific fields (drivePercent, micGainDb,
 // meter values, SWR alert) can accumulate here as subsequent slices land.
@@ -346,36 +370,36 @@ export const useTxStore = create<TxState>()(
       outPk: -Infinity,
       outAv: -Infinity,
       setMeters: (m) => set({
-        fwdWatts: m.fwdWatts,
-        refWatts: m.refWatts,
-        swr: m.swr,
-        wdspMicPk: m.micPk,
-        micAv: m.micAv,
-        eqPk: m.eqPk,
-        eqAv: m.eqAv,
-        lvlrPk: m.lvlrPk,
-        lvlrAv: m.lvlrAv,
-        lvlrGr: m.lvlrGr,
-        cfcPk: m.cfcPk,
-        cfcAv: m.cfcAv,
-        cfcGr: m.cfcGr,
-        compPk: m.compPk,
-        compAv: m.compAv,
-        alcPk: m.alcPk,
-        alcAv: m.alcAv,
-        alcGr: m.alcGr,
-        outPk: m.outPk,
-        outAv: m.outAv,
+        fwdWatts: nonNegativeFinite(m.fwdWatts),
+        refWatts: nonNegativeFinite(m.refWatts),
+        swr: positiveFinite(m.swr, 1),
+        wdspMicPk: finiteDb(m.micPk),
+        micAv: finiteDb(m.micAv),
+        eqPk: finiteDb(m.eqPk),
+        eqAv: finiteDb(m.eqAv),
+        lvlrPk: finiteDb(m.lvlrPk),
+        lvlrAv: finiteDb(m.lvlrAv),
+        lvlrGr: nonNegativeFinite(m.lvlrGr),
+        cfcPk: finiteDb(m.cfcPk),
+        cfcAv: finiteDb(m.cfcAv),
+        cfcGr: nonNegativeFinite(m.cfcGr),
+        compPk: finiteDb(m.compPk),
+        compAv: finiteDb(m.compAv),
+        alcPk: finiteDb(m.alcPk),
+        alcAv: finiteDb(m.alcAv),
+        alcGr: nonNegativeFinite(m.alcGr),
+        outPk: finiteDb(m.outPk),
+        outAv: finiteDb(m.outAv),
       }),
-      setMicDbfs: (dbfs) => set({ micDbfs: dbfs }),
+      setMicDbfs: (dbfs) => set({ micDbfs: finiteOr(dbfs, QUIET_MIC_DBFS) }),
       micError: null,
       setMicError: (msg) => set({ micError: msg }),
       rxDbm: -160,
-      setRxDbm: (dbm) => set({ rxDbm: dbm }),
+      setRxDbm: (dbm) => set({ rxDbm: finiteOr(dbm, RX_FLOOR_DBM) }),
       alert: null,
       setAlert: (a) => set({ alert: a }),
       paTempC: null,
-      setPaTempC: (c) => set({ paTempC: c }),
+      setPaTempC: (c) => set({ paTempC: Number.isFinite(c) ? c : null }),
 
       // PureSignal — psEnabled is server-persisted; psSingle / live read-out
       // remain per-session.
@@ -421,11 +445,11 @@ export const useTxStore = create<TxState>()(
       psMaxTxEnvelope: 0,
       psCalibrationStalled: false,
       setPsMeters: (m) => set({
-        psFeedbackLevel: m.feedbackLevel,
-        psCorrectionDb: m.correctionDb,
-        psCalState: m.calState,
+        psFeedbackLevel: nonNegativeFinite(m.feedbackLevel),
+        psCorrectionDb: finiteOr(m.correctionDb, 0),
+        psCalState: finiteInteger(m.calState, 0),
         psCorrecting: m.correcting,
-        psMaxTxEnvelope: m.maxTxEnvelope,
+        psMaxTxEnvelope: nonNegativeFinite(m.maxTxEnvelope),
       }),
 
       // Two-tone — defaults match pihpsdr.

@@ -15,6 +15,16 @@
 
 import { create } from 'zustand';
 
+const QUIET_DB = -Infinity;
+
+function finiteDb(value: number): number {
+  return Number.isFinite(value) ? value : QUIET_DB;
+}
+
+function finiteOrZero(value: number): number {
+  return Number.isFinite(value) ? value : 0;
+}
+
 export interface RxMeters {
   signalPk: number; // dBm, calibrated
   signalAv: number; // dBm, calibrated
@@ -41,12 +51,12 @@ export const useRxMetersStore = create<RxMetersState>((set) => ({
   agcEnvAv: -Infinity,
   setMeters: (m) =>
     set({
-      signalPk: m.signalPk,
-      signalAv: m.signalAv,
-      adcPk: m.adcPk,
-      adcAv: m.adcAv,
-      agcGain: m.agcGain,
-      agcEnvPk: m.agcEnvPk,
-      agcEnvAv: m.agcEnvAv,
+      signalPk: finiteDb(m.signalPk),
+      signalAv: finiteDb(m.signalAv),
+      adcPk: finiteDb(m.adcPk),
+      adcAv: finiteDb(m.adcAv),
+      agcGain: finiteOrZero(m.agcGain),
+      agcEnvPk: finiteDb(m.agcEnvPk),
+      agcEnvAv: finiteDb(m.agcEnvAv),
     }),
 }));
