@@ -136,6 +136,7 @@ export function AgcSlider() {
   // the effective AGC on the DSP so the user can watch the auto ramp.
   const sliderValue = dragValue ?? userAgc;
   const effective = Math.round(Math.max(MIN, Math.min(MAX, sliderValue + offsetDb)));
+  const sliderDisabled = !connected || autoEnabled;
 
   const autoAbort = useRef<AbortController | null>(null);
   const agcAbort = useRef<AbortController | null>(null);
@@ -272,7 +273,8 @@ export function AgcSlider() {
           max={MAX}
           step={1}
           value={sliderValue}
-          disabled={!connected || autoEnabled}
+          disabled={sliderDisabled}
+          title={autoEnabled ? 'Auto-AGC is controlling AGC-T' : 'AGC-T top gain'}
           onChange={(e) => {
             const v = Number(e.currentTarget.value);
             setDragValue(v);
@@ -290,7 +292,12 @@ export function AgcSlider() {
             liveSlider.flush();
             setDragValue(null);
           }}
-          style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}
+          style={{
+            flex: 1,
+            cursor: sliderDisabled ? 'not-allowed' : 'pointer',
+            accentColor: sliderDisabled ? 'var(--fg-3)' : 'var(--accent)',
+            opacity: sliderDisabled ? 0.55 : 1,
+          }}
         />
         <span
           className="mono"
@@ -298,7 +305,7 @@ export function AgcSlider() {
             flex: '0 0 auto',
             width: 44,
             textAlign: 'right',
-            color: 'var(--fg-1)',
+            color: autoEnabled ? 'var(--fg-3)' : 'var(--fg-1)',
             fontSize: 11,
             whiteSpace: 'nowrap',
           }}

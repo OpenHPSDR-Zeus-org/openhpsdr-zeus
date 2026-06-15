@@ -684,6 +684,7 @@ export function PsSettingsPanel() {
               min={psTxFeedbackAttenuationDbMin}
               max={31}
               step={1}
+              disabled={psAutoAttenuate}
               onChange={(v) => {
                 setPsTxFeedbackAttenuationDb(v);
                 setPsFeedbackAttenuation(v).catch(() => {});

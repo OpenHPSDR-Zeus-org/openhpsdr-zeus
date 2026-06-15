@@ -65,6 +65,7 @@ export function AttenuatorSlider() {
   // the effective atten on the hardware so the user can watch the auto ramp.
   const sliderValue = dragValue ?? userAtten;
   const effective = Math.min(MAX, sliderValue + offsetDb);
+  const sliderDisabled = !connected || autoEnabled;
 
   const autoAbort = useRef<AbortController | null>(null);
 
@@ -135,7 +136,8 @@ export function AttenuatorSlider() {
         max={MAX}
         step={1}
         value={sliderValue}
-        disabled={!connected || autoEnabled}
+        disabled={sliderDisabled}
+        title={autoEnabled ? 'Auto-ATT is controlling attenuation' : 'Step attenuator'}
         onChange={(e) => {
           const v = Number(e.currentTarget.value);
           setDragValue(v);
@@ -153,9 +155,22 @@ export function AttenuatorSlider() {
           liveSlider.flush();
           setDragValue(null);
         }}
-        style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--accent)' }}
+        style={{
+          flex: 1,
+          cursor: sliderDisabled ? 'not-allowed' : 'pointer',
+          accentColor: sliderDisabled ? 'var(--fg-3)' : 'var(--accent)',
+          opacity: sliderDisabled ? 0.55 : 1,
+        }}
       />
-      <span className="mono" style={{ width: 48, textAlign: 'right', color: overload ? 'var(--power)' : 'var(--fg-1)', fontSize: 11 }}>
+      <span
+        className="mono"
+        style={{
+          width: 48,
+          textAlign: 'right',
+          color: overload ? 'var(--power)' : autoEnabled ? 'var(--fg-3)' : 'var(--fg-1)',
+          fontSize: 11,
+        }}
+      >
         {effective} dB
       </span>
     </label>
