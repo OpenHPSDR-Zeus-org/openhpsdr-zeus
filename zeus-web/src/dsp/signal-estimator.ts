@@ -83,6 +83,7 @@ const FLOOR_TIME_EMA = 0.3;
 const DEFAULT_POP_FLOOR_DB = 3;
 const DEFAULT_POP_SPAN_DB = 30;
 const DEFAULT_POP_GAMMA = 0.5;
+const DEFAULT_POP_RENDER_INTENSITY = 72;
 // Display-only persistence for weak ridges. The WDSP display frame rate can
 // miss short CW/digital bursts or make weak voice traces flicker; a fast peak
 // hold lets real signal energy leave a short visual afterimage while the gate
@@ -188,6 +189,8 @@ export type SignalEnhanceTuning = {
   popSpanDb: number;
   /** Pop compression exponent (<1 lifts weak signals relative to strong). */
   popGamma: number;
+  /** 0..100 strength for the Signal Pop shader glow and active surface chrome. */
+  popRenderIntensity: number;
   /** Confidence threshold required before signal energy can persist/glow. */
   coherenceHoldGate: number;
   /** Display-only dB lift for repeated/neighbour-supported signal energy. */
@@ -258,6 +261,7 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     popFloorDb: DEFAULT_POP_FLOOR_DB,
     popSpanDb: DEFAULT_POP_SPAN_DB,
     popGamma: DEFAULT_POP_GAMMA,
+    popRenderIntensity: DEFAULT_POP_RENDER_INTENSITY,
     coherenceHoldGate: COHERENCE_HOLD_GATE,
     coherenceBoostDb: COHERENCE_VISUAL_BOOST_DB,
     ridgeBoost: POP_RIDGE_BOOST,
@@ -272,6 +276,7 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     popFloorDb: 2,
     popSpanDb: 24,
     popGamma: 0.42,
+    popRenderIntensity: 92,
     coherenceHoldGate: 0.38,
     coherenceBoostDb: 5.5,
     ridgeBoost: 0.5,
@@ -286,6 +291,7 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     popFloorDb: 2.5,
     popSpanDb: 22,
     popGamma: 0.46,
+    popRenderIntensity: 88,
     coherenceHoldGate: 0.4,
     coherenceBoostDb: 5,
     ridgeBoost: 0.65,
@@ -300,6 +306,7 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     popFloorDb: 2.5,
     popSpanDb: 26,
     popGamma: 0.48,
+    popRenderIntensity: 84,
     coherenceHoldGate: 0.42,
     coherenceBoostDb: 4.5,
     ridgeBoost: 0.55,
@@ -314,6 +321,7 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     popFloorDb: 3.5,
     popSpanDb: 34,
     popGamma: 0.55,
+    popRenderIntensity: 62,
     coherenceHoldGate: 0.48,
     coherenceBoostDb: 3.5,
     ridgeBoost: 0.32,
@@ -328,6 +336,7 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     popFloorDb: 4,
     popSpanDb: 28,
     popGamma: 0.5,
+    popRenderIntensity: 78,
     coherenceHoldGate: 0.55,
     coherenceBoostDb: 3,
     ridgeBoost: 0.45,
@@ -468,6 +477,7 @@ function normalizeTuning(raw: SignalEnhanceTuningPatch = {}, fallback: SignalEnh
     popFloorDb: clampFinite(raw.popFloorDb, 0, 12, base.popFloorDb),
     popSpanDb: clampFinite(raw.popSpanDb, 12, 60, base.popSpanDb),
     popGamma: clampFinite(raw.popGamma, 0.3, 1.2, base.popGamma),
+    popRenderIntensity: clampFinite(raw.popRenderIntensity, 0, 100, base.popRenderIntensity),
     coherenceHoldGate: clampFinite(raw.coherenceHoldGate, 0.2, 0.8, base.coherenceHoldGate),
     coherenceBoostDb: clampFinite(raw.coherenceBoostDb, 0, 8, base.coherenceBoostDb),
     ridgeBoost: clampFinite(raw.ridgeBoost, 0, 0.8, base.ridgeBoost),
@@ -537,6 +547,7 @@ function persist(s: SignalEnhancePersisted): void {
       popFloorDb: s.popFloorDb,
       popSpanDb: s.popSpanDb,
       popGamma: s.popGamma,
+      popRenderIntensity: s.popRenderIntensity,
       coherenceHoldGate: s.coherenceHoldGate,
       coherenceBoostDb: s.coherenceBoostDb,
       ridgeBoost: s.ridgeBoost,
@@ -565,6 +576,7 @@ export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
   popFloorDb: persisted.popFloorDb,
   popSpanDb: persisted.popSpanDb,
   popGamma: persisted.popGamma,
+  popRenderIntensity: persisted.popRenderIntensity,
   coherenceHoldGate: persisted.coherenceHoldGate,
   coherenceBoostDb: persisted.coherenceBoostDb,
   ridgeBoost: persisted.ridgeBoost,

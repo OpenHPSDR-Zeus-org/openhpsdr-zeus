@@ -42,7 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type CSSProperties } from 'react';
 import { createPanRenderer, hexToRgbFloats } from '../gl/panadapter';
 import { planForFrame } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
@@ -64,6 +64,12 @@ import { NotchOverlay } from './NotchOverlay';
 export function Panadapter() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
+  const popRenderIntensity = useSignalEnhanceStore((s) => s.popRenderIntensity);
+  const moxOn = useTxStore((s) => s.moxOn);
+  const tunOn = useTxStore((s) => s.tunOn);
+  const popActive = popEnabled && !moxOn && !tunOn;
+  const popIntensityCss = Math.max(0, Math.min(1, popRenderIntensity / 100)).toFixed(2);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -140,10 +146,12 @@ export function Panadapter() {
       // values (enhanceInto), so the colormap maps [0,1] directly. Keyed/TX
       // keeps the absolute dB window.
       const popOn = pop.popEnabled && !keyed;
+      const popIntensity = popOn ? Math.max(0, Math.min(1, pop.popRenderIntensity / 100)) : 0;
       const dbMin = popOn ? 0 : keyed ? s.txDbMin : s.dbMin;
       const dbMax = popOn ? 1 : keyed ? s.txDbMax : s.dbMax;
       const { r, g, b } = hexToRgbFloats(s.rxTraceColor);
       renderer.setTraceColor(r, g, b);
+      renderer.setPopMode(popOn, popIntensity);
       // Fractional offset — the shaders take a float uOffsetPx, so the
       // glide is sub-pixel-smooth for free (issue #597).
       const offsetPx =
@@ -259,6 +267,7 @@ export function Panadapter() {
         state.popFloorDb !== prev.popFloorDb ||
         state.popSpanDb !== prev.popSpanDb ||
         state.popGamma !== prev.popGamma ||
+        state.popRenderIntensity !== prev.popRenderIntensity ||
         state.coherenceHoldGate !== prev.coherenceHoldGate ||
         state.coherenceBoostDb !== prev.coherenceBoostDb ||
         state.ridgeBoost !== prev.ridgeBoost ||
@@ -330,13 +339,16 @@ export function Panadapter() {
   return (
     <div
       ref={containerRef}
-      className="spectrum-canvas"
+      className={`spectrum-canvas${popActive ? ' pop-enhanced' : ''}`}
       style={{
         position: 'relative',
         minHeight: 0,
         width: '100%',
         height: '100%',
-        background: 'var(--spec-bg)',
+        background: popActive ? 'var(--pop-surface-bg)' : 'var(--spec-bg)',
+        ...(popActive
+          ? ({ ['--pop-intensity' as string]: popIntensityCss } as CSSProperties)
+          : undefined),
       }}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />

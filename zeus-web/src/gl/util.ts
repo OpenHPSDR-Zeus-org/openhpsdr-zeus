@@ -49,8 +49,14 @@ export function compile(gl: WebGL2RenderingContext, type: number, src: string): 
   gl.compileShader(sh);
   if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) {
     const log = gl.getShaderInfoLog(sh) ?? '';
+    const stage =
+      type === gl.VERTEX_SHADER
+        ? 'vertex'
+        : type === gl.FRAGMENT_SHADER
+          ? 'fragment'
+          : String(type);
     gl.deleteShader(sh);
-    throw new Error(`shader compile failed: ${log}`);
+    throw new Error(`shader compile failed (${stage}): ${log || 'no compiler log'}`);
   }
   return sh;
 }

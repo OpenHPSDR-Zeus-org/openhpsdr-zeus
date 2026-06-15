@@ -76,11 +76,17 @@ describe('signal estimator — spatial floor', () => {
     expect(useSignalEnhanceStore.getState().profileId).toBe('dx');
     expect(useSignalEnhanceStore.getState().popSpanDb).toBe(SIGNAL_ENHANCE_PROFILES.dx.popSpanDb);
 
-    store.setSignalEnhanceTuning({ popFloorDb: -10, popGamma: 2, snapRadiusHz: 99_999 });
+    store.setSignalEnhanceTuning({
+      popFloorDb: -10,
+      popGamma: 2,
+      popRenderIntensity: 250,
+      snapRadiusHz: 99_999,
+    });
     const tuned = useSignalEnhanceStore.getState();
     expect(tuned.profileId).toBe('custom');
     expect(tuned.popFloorDb).toBe(0);
     expect(tuned.popGamma).toBe(1.2);
+    expect(tuned.popRenderIntensity).toBe(100);
     expect(tuned.snapRadiusHz).toBe(12_000);
   });
 

@@ -42,7 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { createWfRenderer, type WfGlCaps } from '../gl/waterfall';
 import { planForFrame, resetFramePlan } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
@@ -53,6 +53,7 @@ import { enhanceInto, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import * as viewCenter from '../state/view-center';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
+import type { RenderColormapId } from '../gl/colormap';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
 import { NotchOverlay } from './NotchOverlay';
 import { PassbandOverlay } from './PassbandOverlay';
@@ -75,6 +76,12 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cursorRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<ReturnType<typeof createWfRenderer> | null>(null);
+  const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
+  const popRenderIntensity = useSignalEnhanceStore((s) => s.popRenderIntensity);
+  const moxOn = useTxStore((s) => s.moxOn);
+  const tunOn = useTxStore((s) => s.tunOn);
+  const popActive = popEnabled && !moxOn && !tunOn;
+  const popIntensityCss = Math.max(0, Math.min(1, popRenderIntensity / 100)).toFixed(2);
   // Live transparency, read by buildRenderer() on context-restore so a rebuild
   // mid-QRZ-mode comes back transparent rather than occluding the map (#629).
   const transparentRef = useRef(transparent);
@@ -100,6 +107,20 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     let gl: WebGL2RenderingContext | null = null;
     let renderer: ReturnType<typeof createWfRenderer> | null = null;
     let contextLost = false;
+    const isPopRenderActive = () => {
+      const { popEnabled } = useSignalEnhanceStore.getState();
+      const { moxOn, tunOn } = useTxStore.getState();
+      return popEnabled && !moxOn && !tunOn;
+    };
+    const applyRenderLook = () => {
+      if (!renderer) return;
+      const signalEnhance = useSignalEnhanceStore.getState();
+      const active = isPopRenderActive();
+      const intensity = active ? Math.max(0, Math.min(1, signalEnhance.popRenderIntensity / 100)) : 0;
+      const colormap: RenderColormapId = active ? 'pop' : useDisplaySettingsStore.getState().colormap;
+      renderer.setPopMode(active, intensity);
+      renderer.setColormap(colormap);
+    };
 
     // (Re)acquire the context and build a fresh renderer with every GL
     // resource. Returns false if WebGL2 is unavailable. Does NOT touch the
@@ -118,8 +139,8 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       gl = ctx;
       renderer = createWfRenderer(ctx);
       rendererRef.current = renderer;
-      renderer.setColormap(useDisplaySettingsStore.getState().colormap);
       renderer.setTransparent(transparentRef.current);
+      applyRenderLook();
       setGlCaps(renderer.caps);
       return true;
     };
@@ -156,10 +177,12 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       // values (enhanceInto), so the colormap maps [0,1] directly. Keyed/TX
       // keeps the absolute dB window.
       const popOn = pop.popEnabled && !keyed;
+      const popIntensity = popOn ? Math.max(0, Math.min(1, pop.popRenderIntensity / 100)) : 0;
       // Mirror DbScale.tsx — keyed (MOX/TUN) renders the TX waterfall
       // window so the operator's RX noise-floor view stays put.
       const dbMin = popOn ? 0 : keyed ? wfTxDbMin : wfDbMin;
       const dbMax = popOn ? 1 : keyed ? wfTxDbMax : wfDbMax;
+      renderer.setPopMode(popOn, popIntensity);
       renderer.draw(
         dbMin,
         dbMax,
@@ -319,7 +342,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     const unsubSettings = useDisplaySettingsStore.subscribe((state, prev) => {
       if (contextLost || !renderer) return;
       if (state.colormap !== prev.colormap) {
-        renderer.setColormap(state.colormap);
+        applyRenderLook();
         requestRedraw();
         return;
       }
@@ -341,6 +364,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     // spectrum-tick rate.
     const unsubTx = useTxStore.subscribe((state, prev) => {
       if (state.moxOn !== prev.moxOn || state.tunOn !== prev.tunOn) {
+        applyRenderLook();
         requestRedraw();
       }
     });
@@ -350,12 +374,14 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     // clipped band against the new range. New rows fill in from the top.
     const unsubEnhance = useSignalEnhanceStore.subscribe((state, prev) => {
       if (state.popEnabled !== prev.popEnabled) {
+        applyRenderLook();
         renderer?.clearHistory();
         requestRedraw();
       } else if (
         state.popFloorDb !== prev.popFloorDb ||
         state.popSpanDb !== prev.popSpanDb ||
         state.popGamma !== prev.popGamma ||
+        state.popRenderIntensity !== prev.popRenderIntensity ||
         state.coherenceHoldGate !== prev.coherenceHoldGate ||
         state.coherenceBoostDb !== prev.coherenceBoostDb ||
         state.ridgeBoost !== prev.ridgeBoost ||
@@ -446,13 +472,16 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   return (
     <div
       ref={containerRef}
-      className="waterfall-canvas"
+      className={`waterfall-canvas${popActive ? ' pop-enhanced' : ''}`}
       style={{
         position: 'relative',
         minHeight: 0,
         width: '100%',
         height: '100%',
-        background: 'var(--wf-0)',
+        background: popActive ? 'var(--pop-surface-bg)' : 'var(--wf-0)',
+        ...(popActive
+          ? ({ ['--pop-intensity' as string]: popIntensityCss } as CSSProperties)
+          : undefined),
       }}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />

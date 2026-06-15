@@ -166,6 +166,34 @@ function sanitizeAudioSuiteRoute(
   return route === 'vst' || route === 'native' ? route : fallback;
 }
 
+function txStationProfileCfcLabel(profileId: TxStationProfileId): string {
+  if (profileId === 'essb') return 'eSSB CFC';
+  if (profileId === 'dx') return 'DX CFC';
+  return 'CFC presence';
+}
+
+export function formatTxStationProfileSummary(profile: TxStationProfile): string {
+  const route = profile.audioSuiteRoute === 'vst' ? 'VST route' : 'Native route';
+  const rack = profile.audioSuiteBypassed ? 'rack bypass' : 'rack hot';
+  const chain = profile.audioSuiteProfileName?.trim();
+  const density =
+    profile.spectralDensity >= 100
+      ? 'max-density'
+      : `density ${clampInt(profile.spectralDensity, 0, 100)}`;
+  const lowCutHz = clampInt(profile.lowCutHz, 20, 600);
+  const highCutHz = Math.max(lowCutHz + 100, clampInt(profile.highCutHz, 1500, 6000));
+
+  return [
+    route,
+    rack,
+    chain ? `chain ${chain}` : '',
+    `${density} ${txStationProfileCfcLabel(profile.id)}`,
+    `SSB ${lowCutHz}..${highCutHz} Hz`,
+  ]
+    .filter(Boolean)
+    .join(' / ');
+}
+
 export function cloneStudioSsbCfcConfig(): CfcConfigDto {
   return cloneCfcConfig(STUDIO_SSB_CFC_CONFIG);
 }
@@ -413,5 +441,8 @@ export function mergeTxStationProfileOverrides(
 }
 
 export function txStationProfileToDto(profile: TxStationProfile): TxStationProfileDto {
-  return cloneTxStationProfile(profile);
+  return {
+    ...cloneTxStationProfile(profile),
+    summary: formatTxStationProfileSummary(profile),
+  };
 }

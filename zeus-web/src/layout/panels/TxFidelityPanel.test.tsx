@@ -99,7 +99,8 @@ describe('TxFidelityPanel', () => {
       'eSSB Wide',
       'DX Punch',
     ]);
-    expect(container.textContent).toContain('Saved operator profile');
+    expect(container.textContent).toContain('density 55 CFC presence');
+    expect(container.textContent).toContain('SSB 150..2900 Hz');
 
     unmount();
   });
@@ -125,7 +126,8 @@ describe('TxFidelityPanel', () => {
       'eSSB Wide',
       'DX Punch',
     ]);
-    expect(container.textContent).toContain('2.9k SSB');
+    expect(container.textContent).toContain('density 55 CFC presence');
+    expect(container.textContent).toContain('SSB 150..2900 Hz');
 
     await act(async () => {
       profileOptions.find((option) => option.textContent === 'DX Punch')!.click();
@@ -139,6 +141,7 @@ describe('TxFidelityPanel', () => {
     ).toBe(true);
     expect(container.querySelector<HTMLInputElement>('input[aria-label="TX spectral density"]')?.value).toBe('100');
     expect(container.querySelector<HTMLInputElement>('input[aria-label="TX profile high cut"]')?.value).toBe('2850');
+    expect(container.textContent).toContain('SSB 300..2850 Hz');
 
     const routeButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>(
@@ -150,6 +153,21 @@ describe('TxFidelityPanel', () => {
       'VST',
     ]);
     expect(routeButtons[1]?.getAttribute('aria-pressed')).toBe('true');
+
+    await act(async () => {
+      routeButtons[0]!.click();
+    });
+    expect(container.textContent).toContain('Native route');
+
+    const rackButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        '[aria-label="TX profile audio suite rack"] button',
+      ),
+    );
+    await act(async () => {
+      rackButtons[1]!.click();
+    });
+    expect(container.textContent).toContain('rack bypass');
 
     const audioProfileButton = container.querySelector<HTMLButtonElement>(
       'button[aria-label="TX profile audio suite profile"]',
@@ -169,6 +187,11 @@ describe('TxFidelityPanel', () => {
       'Use current rack',
       'ESSB Broadcast',
     ]);
+
+    await act(async () => {
+      audioProfileOptions[1]!.click();
+    });
+    expect(container.textContent).toContain('chain ESSB Broadcast');
 
     unmount();
   });

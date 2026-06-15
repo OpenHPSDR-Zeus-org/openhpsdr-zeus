@@ -53,6 +53,16 @@ export function labelSmartNrProfile(nr: NrConfigDto): string {
   return 'Light';
 }
 
+export function smartNrProfileKey(nr: NrConfigDto): string {
+  return [
+    nr.nrMode,
+    nr.nbMode,
+    nr.anfEnabled ? 'anf' : 'no-anf',
+    nr.snbEnabled ? 'snb' : 'no-snb',
+    nr.nbpNotchesEnabled ? 'nbp' : 'no-nbp',
+  ].join('|');
+}
+
 export function shapeSmartNrRecommendation(rec: SmartNrRecommendation, tuning: SmartNrTuning): NrConfigDto {
   const next: NrConfigDto = { ...rec.nr };
   const gain = Math.max(0, Math.min(1, tuning.aggressiveness / 100));
@@ -199,7 +209,6 @@ function withNr4(current: NrConfigDto, c: SmartNrCondition, mode: RxMode): NrCon
     nr4ReductionAmount: weak ? 8 : 10,
     nr4SmoothingFactor: isCwOrDigital(mode) ? 8 : 14,
     nr4WhiteningFactor: weak ? 8 : 4,
-    nr4NoiseRescale: 2,
     nr4PostFilterThreshold: weak ? -8 : -6,
     nr4NoiseScalingType: c.denseNoise ? 1 : 0,
   };

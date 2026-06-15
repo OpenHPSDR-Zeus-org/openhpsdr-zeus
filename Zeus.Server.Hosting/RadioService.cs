@@ -166,9 +166,13 @@ public sealed class RadioService : IDisposable
     // noise-floor calibration. Closed-looping on the live S-meter (the prior
     // implementation) ramped to max gain on quiet bands and clipped when
     // signal returned.
+    private const int AgcNoiseFloorWindowSamples = 12; // 12 × 500 ms = 6 s
+    private const double AgcNoiseFloorPercentile = 0.20;
+    private const double AgcDeadbandDb = 1.5;
+    private const double AgcSlewPerTickDb = 0.5;
     private double _agcOffsetDb;
     private long _lastAgcTickMs = long.MinValue;
-    private readonly double[] _noiseFloorWindow = new double[10]; // 10 × 500 ms = 5 s
+    private readonly double[] _noiseFloorWindow = new double[AgcNoiseFloorWindowSamples];
     private int _noiseFloorWindowIdx;
     private int _noiseFloorWindowFill;
 
@@ -1530,9 +1534,10 @@ public sealed class RadioService : IDisposable
             if (_mox) return;   // Pause during TX
             if (!double.IsFinite(signalDbm) || signalDbm <= -250.0) return;
 
-            // If we paused for >5 s (TX, just-toggled-on, RX dropout) the
+            // If we paused for longer than the analysis window (TX,
+            // just-toggled-on, RX dropout) the
             // window may hold stale samples — clear before re-accumulating.
-            if (_lastAgcTickMs != long.MinValue && nowMs - _lastAgcTickMs > 5000)
+            if (_lastAgcTickMs != long.MinValue && nowMs - _lastAgcTickMs > AgcNoiseFloorWindowSamples * 500)
             {
                 _noiseFloorWindowFill = 0;
                 _noiseFloorWindowIdx = 0;
@@ -1546,15 +1551,19 @@ public sealed class RadioService : IDisposable
             _noiseFloorWindowIdx = (_noiseFloorWindowIdx + 1) % _noiseFloorWindow.Length;
             if (_noiseFloorWindowFill < _noiseFloorWindow.Length) _noiseFloorWindowFill++;
 
-            // Wait for ~3 s of samples before adjusting so the minimum is meaningful.
-            if (_noiseFloorWindowFill < 6) return;
+            // Wait for a full window before adjusting so short fades do not
+            // immediately move AGC-T.
+            if (_noiseFloorWindowFill < _noiseFloorWindow.Length) return;
 
-            noiseFloor = double.PositiveInfinity;
+            var sorted = new double[_noiseFloorWindowFill];
             for (int i = 0; i < _noiseFloorWindowFill; i++)
-            {
-                double v = _noiseFloorWindow[i];
-                if (v < noiseFloor) noiseFloor = v;
-            }
+                sorted[i] = _noiseFloorWindow[i];
+            Array.Sort(sorted);
+            int floorIndex = Math.Clamp(
+                (int)Math.Round((sorted.Length - 1) * AgcNoiseFloorPercentile),
+                0,
+                sorted.Length - 1);
+            noiseFloor = sorted[floorIndex];
 
             // Auto-AGC chooses an *absolute* effective AGC-T from the noise
             // floor: place the band noise at TargetAudioDb after WDSP's
@@ -1570,12 +1579,11 @@ public sealed class RadioService : IDisposable
             double desiredOffset = targetEffective - _state.AgcTopDb;
 
             double delta = desiredOffset - _agcOffsetDb;
-            if (Math.Abs(delta) < 0.5) return;
+            if (Math.Abs(delta) < AgcDeadbandDb) return;
 
-            const double SlewPerTickDb = 1.0;
             _agcOffsetDb = delta > 0
-                ? Math.Min(desiredOffset, _agcOffsetDb + SlewPerTickDb)
-                : Math.Max(desiredOffset, _agcOffsetDb - SlewPerTickDb);
+                ? Math.Min(desiredOffset, _agcOffsetDb + AgcSlewPerTickDb)
+                : Math.Max(desiredOffset, _agcOffsetDb - AgcSlewPerTickDb);
 
             _state = _state with { AgcOffsetDb = _agcOffsetDb };
             newOffset = _agcOffsetDb;

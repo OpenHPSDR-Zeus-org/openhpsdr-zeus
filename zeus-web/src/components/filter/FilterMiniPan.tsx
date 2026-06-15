@@ -78,7 +78,7 @@ const OBW_FRACTION = 0.99;            // ITU occupied-bandwidth power fraction (
 // ticks, VFO centre tick) and the spectrum trace are resolved from
 // --fg-0 / --fg-1 / --fg-2 at draw time so the Theme Settings token pickers
 // drive them.
-const COL_VFO_CENTER = 'rgba(200, 205, 215, 0.08)'; // very subtle neutral VFO line
+const COL_VFO_CENTER = 'rgba(200, 205, 215, 0.14)'; // subtle neutral VFO line
 const COL_CUT_TICK = 'rgba(220, 225, 232, 0.35)';   // hairline callout connecting label to wall
 
 type DragMode = 'lo' | 'hi' | 'inside';
@@ -264,7 +264,7 @@ export function FilterMiniPan() {
     const releaseEstimator = registerEstimatorConsumer();
 
     let rafHandle = 0;
-    let lastSeq = -1;
+    let lastSeq: number | null = null;
     let traceY: Float32Array | null = null; // reused per-column trace Y buffer
     let traceSm: Float32Array | null = null; // reused smoothed-trace buffer
     let peakHoldY: Float32Array | null = null; // per-column peak-hold envelope (Y)
@@ -279,7 +279,7 @@ export function FilterMiniPan() {
       rafHandle = 0;
       const d = useDisplayStore.getState();
       const c = useConnectionStore.getState();
-      if (d.lastSeq === lastSeq) return;
+      if (lastSeq !== null && d.lastSeq === lastSeq) return;
       lastSeq = d.lastSeq;
 
       const spanHz = spanHzRef.current;
@@ -298,11 +298,19 @@ export function FilterMiniPan() {
       // from the Theme Settings panel flow through these tokens.
       const cs = getComputedStyle(document.documentElement);
       const fg0 = cs.getPropertyValue('--fg-0').trim() || '#edeef1';
+      const fg1 = cs.getPropertyValue('--fg-1').trim() || '#cccccc';
       const fg2 = cs.getPropertyValue('--fg-2').trim() || '#7c8088';
+      const fg3 = cs.getPropertyValue('--fg-3').trim() || '#5a5a60';
       const colTickLabel = fg2;
       const colTickLabelCenter = fg0;
       const colCutKey = fg2;
       const colCutVal = fg0;
+      const [fg0r, fg0g, fg0b] = parseRgb(fg0);
+      const [fg1r, fg1g, fg1b] = parseRgb(fg1);
+      const [fg3r, fg3g, fg3b] = parseRgb(fg3);
+      const ink0 = (a: number) => `rgba(${fg0r}, ${fg0g}, ${fg0b}, ${a})`;
+      const ink1 = (a: number) => `rgba(${fg1r}, ${fg1g}, ${fg1b}, ${a})`;
+      const ink3 = (a: number) => `rgba(${fg3r}, ${fg3g}, ${fg3b}, ${a})`;
       // Accent drives the active-filter passband (focus/state token, CLAUDE.md).
       const [ar, ag, ab] = parseRgb(cs.getPropertyValue('--accent') || '#4a9eff');
       const accent = (a: number) => `rgba(${ar}, ${ag}, ${ab}, ${a})`;
@@ -321,7 +329,48 @@ export function FilterMiniPan() {
       const labelH = Math.round(22 * dpr);
       const axisH = Math.round(14 * dpr);
       const plotTop = labelH;
-      const plotH = h - axisH - labelH;
+      const plotH = Math.max(1, h - axisH - labelH);
+      const plotBottom = plotTop + plotH;
+      const tickStep = tickStepForSpan(spanHz);
+
+      // Instrument well: the canvas owns the display surface so the docked
+      // tile reads like a small SDR scope instead of a flat transparent strip.
+      const bg = ctx.createLinearGradient(0, 0, 0, h);
+      bg.addColorStop(0.0, 'rgba(255, 255, 255, 0.035)');
+      bg.addColorStop(0.18, 'rgba(255, 255, 255, 0.010)');
+      bg.addColorStop(1.0, 'rgba(0, 0, 0, 0.22)');
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, w, h);
+
+      const well = ctx.createLinearGradient(0, plotTop, 0, plotBottom);
+      well.addColorStop(0.0, 'rgba(255, 255, 255, 0.030)');
+      well.addColorStop(0.38, 'rgba(255, 255, 255, 0.010)');
+      well.addColorStop(1.0, 'rgba(0, 0, 0, 0.24)');
+      ctx.fillStyle = well;
+      ctx.fillRect(0, plotTop, w, plotH);
+
+      ctx.save();
+      ctx.lineWidth = 1 * dpr;
+      for (let i = 1; i <= 3; i++) {
+        const y = Math.round(plotTop + (plotH * i) / 4) + 0.5;
+        ctx.strokeStyle = ink3(0.28);
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(w, y);
+        ctx.stroke();
+      }
+      const halfGridTicks = Math.ceil(spanHz / tickStep / 2);
+      for (let i = -halfGridTicks; i <= halfGridTicks; i++) {
+        const offHz = i * tickStep;
+        const x = ((offHz + spanHz / 2) / spanHz) * w;
+        if (x < 0 || x > w) continue;
+        ctx.strokeStyle = offHz === 0 ? ink1(0.16) : ink3(0.20);
+        ctx.beginPath();
+        ctx.moveTo(Math.round(x) + 0.5, plotTop);
+        ctx.lineTo(Math.round(x) + 0.5, plotBottom);
+        ctx.stroke();
+      }
+      ctx.restore();
 
       const vfo = Number(c.vfoHz);
       const panDb = d.panDb;
@@ -473,7 +522,7 @@ export function FilterMiniPan() {
           sm[x] = (a + b + c) / 3;
         }
 
-        const baseY = plotTop + plotH;
+        const baseY = plotBottom;
 
         // Heat trace — each column is filled from the baseline up to the trace
         // with the signal colour, its alpha scaled by how high the trace sits in
@@ -563,7 +612,7 @@ export function FilterMiniPan() {
       // This is the panel's headline feature: see each signal AND its bandwidth.
       if (floor !== null && panDb && binsPerHz > 0) {
         const dCenter = Number(d.centerHz);
-        const baseY = plotTop + plotH;
+        const baseY = plotBottom;
         const half = panDb.length / 2;
         // Measure on the time-averaged spectrum once it exists (stable width);
         // fall back to the live frame for the very first frames.
@@ -659,28 +708,76 @@ export function FilterMiniPan() {
 
       if (onScreen) {
         const pbTop = plotTop + Math.round(4 * dpr);
-        const pbBottom = plotTop + plotH;
+        const pbBottom = plotBottom;
         const Lx = passLeftPx;
         const Rx = passRightPx;
         // Clamp the fill rectangle to the canvas (edges can sit off-screen).
         const fillL = Math.max(0, Lx);
         const fillR = Math.min(w, Rx);
 
-        // 1) Filled passband — a clean rectangle between the two cut walls (no
-        //    outward skirts). Accent vertical gradient: bright at the top, fades
-        //    to nothing at the floor, so it reads as the active filter window.
+        // 1) Focus mask + transition skirts. The accepted passband stays clear
+        //    while out-of-band spectrum is visually pushed back.
+        if (fillL > 0) {
+          const leftScrim = ctx.createLinearGradient(0, 0, fillL, 0);
+          leftScrim.addColorStop(0, 'rgba(0, 0, 0, 0.46)');
+          leftScrim.addColorStop(1, 'rgba(0, 0, 0, 0.22)');
+          ctx.fillStyle = leftScrim;
+          ctx.fillRect(0, plotTop, fillL, plotH);
+        }
+        if (fillR < w) {
+          const rightScrim = ctx.createLinearGradient(fillR, 0, w, 0);
+          rightScrim.addColorStop(0, 'rgba(0, 0, 0, 0.22)');
+          rightScrim.addColorStop(1, 'rgba(0, 0, 0, 0.46)');
+          ctx.fillStyle = rightScrim;
+          ctx.fillRect(fillR, plotTop, w - fillR, plotH);
+        }
+        const skirtPx = Math.max(Math.round(10 * dpr), Math.min(Math.round(34 * dpr), Math.round((fillR - fillL) * 0.18)));
+        if (Lx > 0 && Lx < w) {
+          const leftSkirtX = Math.max(0, Lx - skirtPx);
+          const leftSkirt = ctx.createLinearGradient(leftSkirtX, 0, Math.max(leftSkirtX + 1, Lx), 0);
+          leftSkirt.addColorStop(0, accent(0.00));
+          leftSkirt.addColorStop(1, accent(0.20));
+          ctx.fillStyle = leftSkirt;
+          ctx.fillRect(leftSkirtX, pbTop, Math.min(w, Lx) - leftSkirtX, pbBottom - pbTop);
+        }
+        if (Rx > 0 && Rx < w) {
+          const rightSkirtR = Math.min(w, Rx + skirtPx);
+          const rightSkirt = ctx.createLinearGradient(Math.min(w, Rx), 0, rightSkirtR, 0);
+          rightSkirt.addColorStop(0, accent(0.20));
+          rightSkirt.addColorStop(1, accent(0.00));
+          ctx.fillStyle = rightSkirt;
+          ctx.fillRect(Math.max(0, Rx), pbTop, rightSkirtR - Math.max(0, Rx), pbBottom - pbTop);
+        }
+
+        // 2) Filled passband — a clean rectangle between the two cut walls.
+        //    Accent vertical gradient plus a center glow gives the selected
+        //    bandwidth a live, glassy read without changing its exact geometry.
         const pbGrad = ctx.createLinearGradient(0, pbTop, 0, pbBottom);
-        pbGrad.addColorStop(0.0, accent(0.28));
-        pbGrad.addColorStop(0.55, accent(0.11));
+        pbGrad.addColorStop(0.0, accent(0.34));
+        pbGrad.addColorStop(0.34, accent(0.18));
+        pbGrad.addColorStop(0.72, accent(0.08));
         pbGrad.addColorStop(1.0, accent(0.02));
         ctx.fillStyle = pbGrad;
         ctx.fillRect(fillL, pbTop, Math.max(0, fillR - fillL), pbBottom - pbTop);
+        if (fillR > fillL) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.rect(fillL, pbTop, fillR - fillL, pbBottom - pbTop);
+          ctx.clip();
+          const glow = ctx.createRadialGradient((Lx + Rx) / 2, pbTop, 0, (Lx + Rx) / 2, pbTop, Math.max(1, (fillR - fillL) * 0.65));
+          glow.addColorStop(0, accent(0.22));
+          glow.addColorStop(0.58, accent(0.06));
+          glow.addColorStop(1, accent(0));
+          ctx.fillStyle = glow;
+          ctx.fillRect(fillL, pbTop, fillR - fillL, pbBottom - pbTop);
+          ctx.restore();
+        }
 
-        // 2) Bright glowing flat top — a single horizontal line spanning the
+        // 3) Bright glowing flat top — a single horizontal line spanning the
         //    passband (the filter's flat top), with no angled tails at the ends.
         ctx.save();
-        ctx.shadowColor = accent(0.7);
-        ctx.shadowBlur = Math.round(8 * dpr);
+        ctx.shadowColor = accent(0.75);
+        ctx.shadowBlur = Math.round(10 * dpr);
         ctx.strokeStyle = accent(0.95);
         ctx.lineWidth = Math.max(1.5, 1.5 * dpr);
         ctx.beginPath();
@@ -689,7 +786,29 @@ export function FilterMiniPan() {
         ctx.stroke();
         ctx.restore();
 
-        // 3) Exact cut walls — full-height accent lines mark the precise LOW/
+        // Width ruler, tucked below the top rail so the passband reads as a
+        // measured object even when the DOM width pill is over the trace.
+        const rulerY = pbTop + Math.round(11 * dpr);
+        const rulerInset = Math.round(11 * dpr);
+        const rulerL = Math.max(0, Lx + rulerInset);
+        const rulerR = Math.min(w, Rx - rulerInset);
+        if (rulerR - rulerL > Math.round(24 * dpr)) {
+          ctx.strokeStyle = accent(0.42);
+          ctx.lineWidth = 1 * dpr;
+          ctx.beginPath();
+          ctx.moveTo(rulerL, rulerY + 0.5);
+          ctx.lineTo(rulerR, rulerY + 0.5);
+          ctx.stroke();
+          ctx.strokeStyle = accent(0.72);
+          for (const x of [rulerL, (rulerL + rulerR) / 2, rulerR]) {
+            ctx.beginPath();
+            ctx.moveTo(Math.round(x) + 0.5, rulerY - Math.round(3 * dpr));
+            ctx.lineTo(Math.round(x) + 0.5, rulerY + Math.round(3 * dpr));
+            ctx.stroke();
+          }
+        }
+
+        // 4) Exact cut walls — full-height accent lines mark the precise LOW/
         //    HIGH cut and close the passband rectangle's sides.
         ctx.save();
         ctx.shadowColor = accent(0.6);
@@ -704,7 +823,7 @@ export function FilterMiniPan() {
         }
         ctx.restore();
 
-        // 4) Grab handles — rounded pills centred on each wall with two grip
+        // 5) Grab handles — rounded pills centred on each wall with two grip
         //    lines, so the drag affordance is obvious. The hovered edge brightens.
         const hoverEdge = hoverEdgeRef.current;
         const handleW = Math.round(7 * dpr);
@@ -713,16 +832,23 @@ export function FilterMiniPan() {
         const drawHandle = (wx: number, hot: boolean) => {
           const x = Math.round(wx) - handleW / 2;
           ctx.save();
-          ctx.shadowColor = 'rgba(0, 0, 0, 0.5)';
-          ctx.shadowBlur = Math.round(3 * dpr);
-          ctx.fillStyle = hot ? accent(1) : accent(0.85);
+          ctx.shadowColor = hot ? accent(0.72) : 'rgba(0, 0, 0, 0.55)';
+          ctx.shadowBlur = hot ? Math.round(9 * dpr) : Math.round(4 * dpr);
+          const handleGrad = ctx.createLinearGradient(0, handleY, 0, handleY + handleH);
+          handleGrad.addColorStop(0, hot ? accent(1.0) : accent(0.88));
+          handleGrad.addColorStop(0.48, hot ? accent(0.84) : accent(0.66));
+          handleGrad.addColorStop(1, hot ? accent(0.72) : accent(0.52));
+          ctx.fillStyle = handleGrad;
           const r = Math.round(2 * dpr);
           ctx.beginPath();
           ctx.roundRect(x, handleY, handleW, handleH, r);
           ctx.fill();
+          ctx.strokeStyle = ink0(hot ? 0.70 : 0.42);
+          ctx.lineWidth = 1 * dpr;
+          ctx.stroke();
           ctx.restore();
           // Grip lines.
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+          ctx.strokeStyle = ink0(0.86);
           ctx.lineWidth = 1 * dpr;
           const gx = Math.round(wx);
           const g1 = handleY + handleH * 0.34;
@@ -753,14 +879,6 @@ export function FilterMiniPan() {
           if (wallX < 0 || wallX > w) return;
           const key = side === 'lo' ? 'LOW CUT' : 'HIGH CUT';
 
-          // Hairline from label bottom down to the wall top.
-          ctx.strokeStyle = COL_CUT_TICK;
-          ctx.lineWidth = 1 * dpr;
-          ctx.beginPath();
-          ctx.moveTo(Math.round(wallX) + 0.5, valY + valFontPx + Math.round(1 * dpr));
-          ctx.lineTo(Math.round(wallX) + 0.5, pbTop);
-          ctx.stroke();
-
           // Measure both lines to find clamp bounds.
           ctx.font = valFont;
           const valW = ctx.measureText(value).width;
@@ -769,18 +887,41 @@ export function FilterMiniPan() {
           const keyW = ctx.measureText(key).width;
           const halfMax = Math.max(valW, keyW) / 2;
           const cx = Math.max(halfMax + padX, Math.min(w - halfMax - padX, wallX));
+          const chipPadX = Math.round(5 * dpr);
+          const chipH = valY + valFontPx + Math.round(3 * dpr);
+          const chipW = Math.min(w - padX * 2, halfMax * 2 + chipPadX * 2);
+          const chipX = Math.max(padX, Math.min(w - chipW - padX, cx - chipW / 2));
+          const chipCx = chipX + chipW / 2;
+
+          ctx.save();
+          ctx.fillStyle = 'rgba(7, 9, 13, 0.68)';
+          ctx.strokeStyle = accent(0.20);
+          ctx.lineWidth = 1 * dpr;
+          ctx.beginPath();
+          ctx.roundRect(chipX, 0, chipW, chipH, Math.round(3 * dpr));
+          ctx.fill();
+          ctx.stroke();
+          ctx.restore();
+
+          // Hairline from label chip down to the wall top.
+          ctx.strokeStyle = COL_CUT_TICK;
+          ctx.lineWidth = 1 * dpr;
+          ctx.beginPath();
+          ctx.moveTo(Math.round(wallX) + 0.5, chipH + Math.round(1 * dpr));
+          ctx.lineTo(Math.round(wallX) + 0.5, pbTop);
+          ctx.stroke();
 
           // Key (top, muted, letter-spaced).
           ctx.textBaseline = 'top';
           ctx.textAlign = 'center';
           ctx.fillStyle = colCutKey;
-          ctx.fillText(key, cx, keyY);
+          ctx.fillText(key, chipCx, keyY);
 
           // Value (bold, brighter, no letter-spacing).
           ctx.letterSpacing = '0px';
           ctx.font = valFont;
           ctx.fillStyle = colCutVal;
-          ctx.fillText(value, cx, valY);
+          ctx.fillText(value, chipCx, valY);
         };
 
         drawCallout(passLeftPx, 'lo', formatCutOffset(c.filterLowHz));
@@ -793,7 +934,6 @@ export function FilterMiniPan() {
 
       // X-axis tick labels. One label every tickStep (scaled by span), centered
       // on the VFO. VFO sits at the middle tick.
-      const tickStep = tickStepForSpan(spanHz);
       ctx.fillStyle = colTickLabel;
       ctx.font = `${Math.round(9.5 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;
       ctx.textBaseline = 'middle';
@@ -818,7 +958,7 @@ export function FilterMiniPan() {
     // Allow the imperative handlers (wheel zoom) to force a redraw even though
     // nothing in the stores changed.
     const requestRedraw = () => {
-      lastSeq = -1;
+      lastSeq = null;
       if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
     };
     redrawRef.current = requestRedraw;

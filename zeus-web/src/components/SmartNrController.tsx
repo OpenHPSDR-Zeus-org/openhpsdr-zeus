@@ -17,6 +17,7 @@ import {
   labelSmartNrProfile,
   recommendSmartNr,
   shapeSmartNrRecommendation,
+  smartNrProfileKey,
   type SmartNrRecommendation,
 } from '../dsp/smart-nr';
 import { useConnectionStore } from '../state/connection-store';
@@ -25,6 +26,8 @@ import { useSmartNrStore } from '../state/smart-nr-store';
 import { useTxStore } from '../state/tx-store';
 
 const SAMPLE_INTERVAL_MS = 1500;
+const PROFILE_SWITCH_DWELL_SAMPLES = 6;
+const APPLY_COOLDOWN_MS = 15000;
 
 function round1(v: number): number {
   return Math.round(v * 10) / 10;
@@ -37,13 +40,14 @@ function sameNr(a: NrConfigDto, b: NrConfigDto): boolean {
 export function SmartNrController() {
   useEffect(() => {
     let lastAt = 0;
-    let pendingKey: string | null = null;
+    let lastAppliedAt = Number.NEGATIVE_INFINITY;
+    let pendingProfileKey: string | null = null;
     let pendingCount = 0;
     let abort: AbortController | null = null;
     let releaseEstimatorConsumer: (() => void) | null = null;
 
     const resetPending = () => {
-      pendingKey = null;
+      pendingProfileKey = null;
       pendingCount = 0;
     };
     const syncEstimatorConsumer = () => {
@@ -114,7 +118,6 @@ export function SmartNrController() {
       if (!rec) return;
 
       const shaped = shapeSmartNrRecommendation(rec, settings);
-      const key = JSON.stringify(shaped);
       if (settings.automationMode === 'suggest') {
         setStatus(rec, shaped, false, false);
         resetPending();
@@ -125,16 +128,25 @@ export function SmartNrController() {
         resetPending();
         return;
       }
-      if (pendingKey !== key) {
-        pendingKey = key;
+      const targetProfileKey = smartNrProfileKey(shaped);
+      const currentProfileKey = smartNrProfileKey(conn.nr);
+      if (targetProfileKey === currentProfileKey) {
+        setStatus(rec, shaped, false, false);
+        resetPending();
+        return;
+      }
+      if (pendingProfileKey !== targetProfileKey) {
+        pendingProfileKey = targetProfileKey;
         pendingCount = 1;
         setStatus(rec, shaped, true, false);
         return;
       }
       pendingCount++;
-      const ready = pendingCount >= settings.dwellSamples;
+      const requiredDwell = Math.max(settings.dwellSamples, PROFILE_SWITCH_DWELL_SAMPLES);
+      const ready = pendingCount >= requiredDwell && now - lastAppliedAt >= APPLY_COOLDOWN_MS;
       setStatus(rec, shaped, !ready, ready);
       if (ready) {
+        lastAppliedAt = now;
         applyNr(shaped);
         resetPending();
       }

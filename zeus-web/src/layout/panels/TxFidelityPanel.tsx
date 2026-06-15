@@ -17,6 +17,7 @@ import {
   setTxLeveling,
 } from '../../api/client';
 import {
+  formatTxStationProfileSummary,
   getTxStationProfile,
   mergeTxStationProfileOverrides,
   resolveTxStationProfile,
@@ -133,6 +134,8 @@ function TxStationProfiles() {
   const selectedProfile = getTxStationProfile(selectedProfileId, profiles);
   const busy = phase === 'applying' || phase === 'saving' || phase === 'resetting';
   const applyDisabled = status !== 'Connected' || busy;
+  const profileSummary = formatTxStationProfileSummary(selectedProfile);
+  const displayedMessage = phase === 'idle' ? profileSummary : message;
 
   useEffect(() => {
     let active = true;
@@ -158,7 +161,7 @@ function TxStationProfiles() {
 
   useEffect(() => {
     if (phase === 'idle') {
-      setMessage(getTxStationProfile(selectedProfileId, profiles).summary);
+      setMessage(formatTxStationProfileSummary(getTxStationProfile(selectedProfileId, profiles)));
     }
   }, [phase, profiles, selectedProfileId]);
 
@@ -168,7 +171,7 @@ function TxStationProfiles() {
     setProfileMenuOpen(false);
     setAudioProfileMenuOpen(false);
     setPhase('idle');
-    setMessage(profile.summary);
+    setMessage(formatTxStationProfileSummary(profile));
   }
 
   function selectAudioProfile(name: string) {
@@ -181,7 +184,7 @@ function TxStationProfiles() {
     const sanitized = sanitizeTxStationProfile(txStationProfileToDto(next), fallback);
     setProfiles((prev) => prev.map((profile) => (profile.id === sanitized.id ? sanitized : profile)));
     setPhase('idle');
-    setMessage(sanitized.summary);
+    setMessage(formatTxStationProfileSummary(sanitized));
   }
 
   function patchSelectedProfile(patch: Partial<TxStationProfile>) {
@@ -222,7 +225,7 @@ function TxStationProfiles() {
       const restored = getTxStationProfile(selectedProfile.id, defaults);
       setProfiles((prev) => prev.map((profile) => (profile.id === restored.id ? restored : profile)));
       setPhase('idle');
-      setMessage(restored.summary);
+      setMessage(formatTxStationProfileSummary(restored));
     } catch (err) {
       setPhase('error');
       setMessage(err instanceof Error ? err.message : 'Reset failed');
@@ -262,9 +265,7 @@ function TxStationProfiles() {
       setCfcConfigLocal(state.cfc);
 
       setPhase('applied');
-      setMessage(
-        `${selectedProfile.label} / ${selectedProfile.audioSuiteRoute.toUpperCase()} ${selectedProfile.audioSuiteBypassed ? 'BYP' : 'HOT'} / D${selectedProfile.spectralDensity} / ${filter.lowHz}..${filter.highHz} Hz`,
-      );
+      setMessage(`${selectedProfile.label} applied / ${formatTxStationProfileSummary(selectedProfile)}`);
     } catch (err) {
       setPhase('error');
       setMessage(err instanceof Error ? err.message : 'Apply failed');
@@ -314,31 +315,31 @@ function TxStationProfiles() {
           <div style={{ position: 'relative', minWidth: 0 }}>
             <button
               type="button"
-            aria-label="TX station profile"
+              aria-label="TX station profile"
               aria-haspopup="listbox"
               aria-expanded={profileMenuOpen}
-            disabled={busy}
+              disabled={busy}
               onClick={() => setProfileMenuOpen((open) => !open)}
-            style={{
+              style={{
                 display: 'grid',
                 gridTemplateColumns: 'minmax(0, 1fr) auto',
                 alignItems: 'center',
                 gap: 6,
-              width: '100%',
-              minWidth: 0,
-              height: 28,
+                width: '100%',
+                minWidth: 0,
+                height: 28,
                 boxSizing: 'border-box',
                 border: '1px solid var(--accent)',
                 borderRadius: 4,
                 background: 'var(--bg-1)',
                 color: 'var(--fg-0)',
                 cursor: busy ? 'not-allowed' : 'pointer',
-              fontSize: 11,
-              fontWeight: 900,
+                fontSize: 11,
+                fontWeight: 900,
                 padding: '0 8px',
-              textTransform: 'uppercase',
-            }}
-          >
+                textTransform: 'uppercase',
+              }}
+            >
               <span
                 className="mono"
                 style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
@@ -425,8 +426,9 @@ function TxStationProfiles() {
           textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
         }}
+        title={displayedMessage}
       >
-        {message}
+        {displayedMessage}
       </div>
 
       <details

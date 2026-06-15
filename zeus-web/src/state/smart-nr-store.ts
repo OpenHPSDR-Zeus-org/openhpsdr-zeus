@@ -52,7 +52,7 @@ const DEFAULT_SETTINGS: SmartNrSettings = {
   autoBlankerEnabled: true,
   autoNotchEnabled: true,
   maxBlankerThreshold: 16,
-  dwellSamples: 3,
+  dwellSamples: 5,
 };
 
 function clampFinite(v: unknown, min: number, max: number, fallback: number): number {
@@ -70,7 +70,7 @@ function normalizeSettings(raw: Partial<SmartNrSettings> = {}): SmartNrSettings 
     autoBlankerEnabled: raw.autoBlankerEnabled !== false,
     autoNotchEnabled: raw.autoNotchEnabled !== false,
     maxBlankerThreshold: clampFinite(raw.maxBlankerThreshold, 8, 30, DEFAULT_SETTINGS.maxBlankerThreshold),
-    dwellSamples: Math.round(clampFinite(raw.dwellSamples, 1, 8, DEFAULT_SETTINGS.dwellSamples)),
+    dwellSamples: Math.round(clampFinite(raw.dwellSamples, 3, 8, DEFAULT_SETTINGS.dwellSamples)),
   };
 }
 
