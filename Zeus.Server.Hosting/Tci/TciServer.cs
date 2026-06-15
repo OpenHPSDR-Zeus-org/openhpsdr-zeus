@@ -337,18 +337,10 @@ public sealed class TciServer : IHostedService, IDisposable
     {
         if (_clients.IsEmpty) return;
 
-        bool anyWants = false;
         foreach (var session in _clients.Values)
         {
-            if (session.WantsAudioStream(receiver)) { anyWants = true; break; }
-        }
-
-        if (!anyWants) return;
-
-        var payload = TciStreamPayload.BuildAudioFromFloats(receiver, sampleRateHz, samples.Span);
-        foreach (var session in _clients.Values)
-        {
-            if (session.WantsAudioStream(receiver))
+            if (session.TryBuildRxAudioFrame(receiver, sampleRateHz, samples.Span, out var payload)
+                && payload is not null)
                 session.SendBinary(payload);
         }
     }

@@ -19,10 +19,6 @@ internal sealed class TxMicBlockResampler
     public const int MinInputSampleRate = 8_000;
     public const int MaxInputSampleRate = 768_000;
 
-    private const int FilterTaps = 96;
-    private const int FilterHalf = FilterTaps / 2;
-    private const int PhaseCount = 2048;
-
     private readonly TxMicBlockReady _emit;
     private readonly float[] _outputBlock = new float[OutputBlockSamples];
 
@@ -34,7 +30,7 @@ internal sealed class TxMicBlockResampler
     private double _nextOutputInputPosition;
     private int _outputFill;
     private int _inputSampleRate;
-    private Kernel? _kernel;
+    private WindowedSincKernel? _kernel;
 
     public TxMicBlockResampler(TxMicBlockReady emit)
     {
@@ -72,7 +68,7 @@ internal sealed class TxMicBlockResampler
 
         if (_inputSampleRate != 0 && _inputSampleRate != OutputSampleRate && _inputLength > 0)
         {
-            AppendPadding(FilterTaps);
+            AppendPadding(WindowedSincKernel.Taps);
             var result = ProcessAvailable(final: true, generated, emitted);
             generated += result.OutputSamplesGenerated;
             emitted += result.OutputSamplesEmitted;
@@ -104,19 +100,21 @@ internal sealed class TxMicBlockResampler
     private void ResetForRate(int inputSampleRate)
     {
         _inputLength = 0;
-        _inputStartIndex = -FilterHalf;
+        _inputStartIndex = -WindowedSincKernel.Half;
         _nextRealInputIndex = 0;
         _nextOutputSampleIndex = 0;
         _nextOutputInputPosition = 0;
         _outputFill = 0;
         _inputSampleRate = inputSampleRate;
-        _kernel = inputSampleRate == OutputSampleRate ? null : Kernel.ForRate(inputSampleRate);
+        _kernel = inputSampleRate == OutputSampleRate
+            ? null
+            : WindowedSincKernel.ForRates(inputSampleRate, OutputSampleRate);
 
         if (inputSampleRate != OutputSampleRate)
         {
-            EnsureInputCapacity(FilterHalf);
-            Array.Clear(_inputBuffer, 0, FilterHalf);
-            _inputLength = FilterHalf;
+            EnsureInputCapacity(WindowedSincKernel.Half);
+            Array.Clear(_inputBuffer, 0, WindowedSincKernel.Half);
+            _inputLength = WindowedSincKernel.Half;
         }
     }
 
@@ -184,22 +182,22 @@ internal sealed class TxMicBlockResampler
             _nextOutputInputPosition = _nextOutputSampleIndex * _inputSampleRate / (double)OutputSampleRate;
             int center = (int)Math.Floor(_nextOutputInputPosition);
             double frac = _nextOutputInputPosition - center;
-            int phase = (int)Math.Round(frac * PhaseCount);
-            if (phase == PhaseCount)
+            int phase = (int)Math.Round(frac * WindowedSincKernel.PhaseCount);
+            if (phase == WindowedSincKernel.PhaseCount)
             {
                 phase = 0;
                 center++;
             }
 
-            int first = center - FilterHalf + 1;
-            int last = first + FilterTaps - 1;
+            int first = center - WindowedSincKernel.Half + 1;
+            int last = first + WindowedSincKernel.Taps - 1;
             if (last > availableEnd) break;
             if (first < _inputStartIndex) break;
 
-            var coeffs = kernel.Coefficients.AsSpan(phase * FilterTaps, FilterTaps);
+            var coeffs = kernel.Coefficients.AsSpan(phase * WindowedSincKernel.Taps, WindowedSincKernel.Taps);
             int bufferOffset = first - _inputStartIndex;
             double sum = 0;
-            for (int tap = 0; tap < FilterTaps; tap++)
+            for (int tap = 0; tap < WindowedSincKernel.Taps; tap++)
                 sum += _inputBuffer[bufferOffset + tap] * coeffs[tap];
 
             AppendOutputSample((float)Math.Clamp(sum, -1.0, 1.0));
@@ -242,9 +240,9 @@ internal sealed class TxMicBlockResampler
     {
         if (_inputLength == 0) return;
         int center = (int)Math.Floor(_nextOutputInputPosition);
-        int keepFrom = final ? center - FilterHalf + 1 : center - FilterTaps;
+        int keepFrom = final ? center - WindowedSincKernel.Half + 1 : center - WindowedSincKernel.Taps;
         int drop = keepFrom - _inputStartIndex;
-        if (drop <= FilterTaps || drop >= _inputLength) return;
+        if (drop <= WindowedSincKernel.Taps || drop >= _inputLength) return;
 
         int remain = _inputLength - drop;
         Array.Copy(_inputBuffer, drop, _inputBuffer, 0, remain);
@@ -275,64 +273,6 @@ internal sealed class TxMicBlockResampler
         {
             float v = src[i];
             dst[i] = float.IsFinite(v) ? v : 0f;
-        }
-    }
-
-    private sealed class Kernel
-    {
-        public readonly float[] Coefficients;
-
-        private Kernel(float[] coefficients)
-        {
-            Coefficients = coefficients;
-        }
-
-        public static Kernel ForRate(int inputSampleRate)
-        {
-            var coeffs = new float[PhaseCount * FilterTaps];
-            double cutoff = 0.475 * Math.Min(1.0, OutputSampleRate / (double)inputSampleRate);
-
-            for (int phase = 0; phase < PhaseCount; phase++)
-            {
-                double frac = phase / (double)PhaseCount;
-                double dc = 0;
-                int phaseOffset = phase * FilterTaps;
-                for (int tap = 0; tap < FilterTaps; tap++)
-                {
-                    double distance = frac + FilterHalf - 1 - tap;
-                    double window = BlackmanHarris(tap);
-                    double coeff = 2.0 * cutoff * Sinc(2.0 * cutoff * distance) * window;
-                    coeffs[phaseOffset + tap] = (float)coeff;
-                    dc += coeff;
-                }
-
-                if (Math.Abs(dc) < 1e-12) continue;
-                double scale = 1.0 / dc;
-                for (int tap = 0; tap < FilterTaps; tap++)
-                    coeffs[phaseOffset + tap] = (float)(coeffs[phaseOffset + tap] * scale);
-            }
-
-            return new Kernel(coeffs);
-        }
-
-        private static double Sinc(double x)
-        {
-            if (Math.Abs(x) < 1e-12) return 1.0;
-            double pix = Math.PI * x;
-            return Math.Sin(pix) / pix;
-        }
-
-        private static double BlackmanHarris(int tap)
-        {
-            const double a0 = 0.35875;
-            const double a1 = 0.48829;
-            const double a2 = 0.14128;
-            const double a3 = 0.01168;
-            double x = 2.0 * Math.PI * tap / (FilterTaps - 1);
-            return a0
-                - a1 * Math.Cos(x)
-                + a2 * Math.Cos(2.0 * x)
-                - a3 * Math.Cos(3.0 * x);
         }
     }
 }

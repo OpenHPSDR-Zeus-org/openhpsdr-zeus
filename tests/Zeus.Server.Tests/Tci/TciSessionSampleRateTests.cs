@@ -17,4 +17,15 @@ public class TciSessionSampleRateTests
     {
         Assert.Equal(expected, TciSession.ClampIqSampleRateRequest(requested));
     }
+
+    [Theory]
+    [InlineData(1, 8_000)]
+    [InlineData(8_000, 8_000)]
+    [InlineData(24_000, 24_000)]
+    [InlineData(48_000, 48_000)]
+    [InlineData(96_000, 48_000)]
+    public void ClampAudioSampleRateRequest_CoversTciRxAudioRange(int requested, int expected)
+    {
+        Assert.Equal(expected, TciSession.ClampAudioSampleRateRequest(requested));
+    }
 }

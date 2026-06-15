@@ -80,6 +80,7 @@ public sealed class TciSession : IDisposable
     private readonly TciRateLimiter _rateLimiter;
     private readonly TxAudioIngest? _txAudioIngest;
     private readonly TciTxAudioReceiver? _txAudioReceiver;
+    private readonly TciRxAudioResampler _rxAudioResampler = new();
     private readonly CwEngine _cwEngine;
     private readonly CwSettingsStore _cwSettings;
 
@@ -160,6 +161,9 @@ public sealed class TciSession : IDisposable
     internal static int ClampIqSampleRateRequest(int rate) =>
         Math.Clamp(rate, MinIqSampleRate, MaxIqSampleRate);
 
+    internal static int ClampAudioSampleRateRequest(int rate) =>
+        Math.Clamp(rate, 8_000, DspPipelineService.AudioOutputRateHz);
+
     public TciSession(
         Guid id,
         WebSocket ws,
@@ -196,6 +200,35 @@ public sealed class TciSession : IDisposable
     /// audio source via <c>TRX:0,true,tci;</c>. Used by <see cref="TciServer"/>
     /// to gate TX_CHRONO frame emission to this session.</summary>
     public bool TxSourceIsTci { get { lock (_streamLock) return _txSourceIsTci; } }
+
+    internal bool TryBuildRxAudioFrame(int receiver, int sampleRateHz, ReadOnlySpan<float> samples, out byte[]? frame)
+    {
+        lock (_streamLock)
+        {
+            if (!_audioStreamEnabled.Contains(receiver))
+            {
+                frame = null;
+                return false;
+            }
+
+            int targetRate = _audioSampleRate;
+            if (targetRate == sampleRateHz)
+            {
+                frame = TciStreamPayload.BuildAudioFromFloats(receiver, sampleRateHz, samples);
+                return true;
+            }
+
+            var converted = _rxAudioResampler.Convert(samples, sampleRateHz, targetRate);
+            if (converted.Length == 0)
+            {
+                frame = null;
+                return false;
+            }
+
+            frame = TciStreamPayload.BuildAudioFromFloats(receiver, targetRate, converted);
+            return true;
+        }
+    }
 
     /// <summary>Drop any TX audio buffered in the receiver. Call on MOX
     /// falling edge so the next keyed-up TX doesn't replay a stale tail.</summary>
@@ -1410,20 +1443,26 @@ public sealed class TciSession : IDisposable
     private void HandleAudioSampleRate(string[] args)
     {
         // audio_samplerate:<rate>  or  audio_samplerate (query)
-        // Range: [8000, 48000]. Zeus always delivers audio at 48 kHz (the DSP
-        // pipeline output rate). Down-sampling to the requested rate is not yet
-        // implemented, so always echo 48000 — same honesty rule as IQ above.
-        const int deliveryRate = 48000;
+        // Range: [8000, 48000]. RX audio is produced by the DSP pipeline at
+        // 48 kHz and downsampled per TCI session when a client requests a
+        // lower delivery rate.
         if (args.Length == 0)
         {
-            Send(TciProtocol.Command("audio_samplerate", deliveryRate));
+            Send(TciProtocol.Command("audio_samplerate", AudioSampleRate));
             return;
         }
         if (TciProtocol.TryParseInt(args[0], out int rate))
         {
-            rate = Math.Clamp(rate, 8000, 48000);
-            lock (_streamLock) _audioSampleRate = rate;
-            Send(TciProtocol.Command("audio_samplerate", deliveryRate));
+            rate = ClampAudioSampleRateRequest(rate);
+            lock (_streamLock)
+            {
+                if (_audioSampleRate != rate)
+                {
+                    _audioSampleRate = rate;
+                    _rxAudioResampler.Reset();
+                }
+            }
+            Send(TciProtocol.Command("audio_samplerate", rate));
         }
     }
 
@@ -1432,7 +1471,11 @@ public sealed class TciSession : IDisposable
         lock (_streamLock)
         {
             if (enable) _audioStreamEnabled.Add(rx);
-            else _audioStreamEnabled.Remove(rx);
+            else
+            {
+                _audioStreamEnabled.Remove(rx);
+                _rxAudioResampler.Reset();
+            }
         }
         Send(TciProtocol.Command("audio_start", rx, enable));
     }
