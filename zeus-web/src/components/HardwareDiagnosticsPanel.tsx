@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import {
   createHardwareDiagnosticsMarker,
+  fetchDspLiveDiagnostics,
   fetchHardwareDiagnostics,
   fetchHardwareKeyingStatus,
   fetchRadioDigInDiagnostics,
@@ -18,6 +19,7 @@ import {
   fetchUserIoActions,
   fetchUserIoLabels,
   resetHardwareDiagnosticsMap,
+  type DspLiveDiagnosticsDto,
   type HardwareByteStreamMapDto,
   type HardwareDiagnosticItemDto,
   type HardwareDiagnosticsDto,
@@ -25,6 +27,7 @@ import {
   type HardwareKeyingStatusDto,
   type HardwareMappingMarkerDto,
   type HardwareP1MapDto,
+  type HardwarePotentialDto,
   type HardwarePureSignalDiagnosticsDto,
   type RadioNetworkCountersDto,
   type RadioDigInDiagnosticsDto,
@@ -429,7 +432,7 @@ function ReceiverTopologyDiagnostics({ diag }: { diag: HardwareDiagnosticsDto | 
       ? 'Saturn-class dual DDC topology'
       : 'not applicable';
   const recommendation = g2Class
-    ? 'G2 topology is recognized from the manual-backed capability map: dual phase-synchronous ADCs, independent MKII/preselector paths, RX2 stepped attenuation, and the 1.536 MHz DDC ceiling. Zeus exposes RX1/RX2 plus live P2 ADC max/overload telemetry; 10-DDC assignment and ADC2 ground-on-TX remain read-only gaps until protocol mapping is verified.'
+    ? 'G2 topology is recognized from the manual-backed capability map: dual phase-synchronous ADCs, independent MKII/preselector paths, RX2 stepped attenuation, and the 1.536 MHz DDC ceiling. Zeus exposes RX1/RX2 plus live P2 ADC max/overload telemetry; 10-DDC assignment and dither/random writes remain read-only gaps, while ADC2 ground-on-TX is automatic P2 protection with no operator override.'
     : dualAdc
       ? 'This board exposes a dual-ADC topology. Zeus can monitor both ADC max/overload paths, but any board-specific ADC2 transmit routing should stay read-only until verified for this variant.'
       : 'This board is single-ADC; G2 ADC2 and RX2 routing controls do not apply.';
@@ -448,7 +451,7 @@ function ReceiverTopologyDiagnostics({ diag }: { diag: HardwareDiagnosticsDto | 
           { label: 'Max DDC BW', value: hz(caps.maxRxSampleRateHz) },
           { label: 'Manual RX Capacity', value: manualRxCapacity },
           { label: 'Zeus RX Surface', value: zeusRxSurface },
-          { label: 'ADC2 Ground on TX', value: g2Class ? 'not exposed' : 'not applicable' },
+          { label: 'ADC2 Ground on TX', value: g2Class ? 'auto on TX' : 'not applicable' },
           { label: '6m LNA / Filters', value: caps.mkiiBpf ? 'manual-backed, no separate runtime telemetry' : 'not applicable' },
         ]}
       />
@@ -464,6 +467,110 @@ function ReceiverTopologyDiagnostics({ diag }: { diag: HardwareDiagnosticsDto | 
         ]}
       />
       <DiagnosticRecommendation text={recommendation} />
+    </div>
+  );
+}
+
+function HardwarePotentialDiagnostics({ potential }: { potential: HardwarePotentialDto | null }) {
+  if (!potential) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for hardware-potential diagnostics.</div>;
+  const ladder = potential.fullRxSampleRateLadderHz.map(hz).join(' / ');
+  const readyItems = potential.items.filter((item) => item.userConfigurable).length;
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Connected', value: potential.connectedBoard },
+          { label: 'Effective', value: potential.effectiveBoard },
+          { label: 'Variant', value: potential.orionMkIIVariant },
+          { label: 'Protocol', value: potential.activeProtocol },
+          { label: 'G2 Class', value: boolLabel(potential.g2Class) },
+          { label: 'Current Rate', value: hz(potential.currentSampleRateHz) },
+          { label: 'Max RX Rate', value: hz(potential.maxRxSampleRateHz) },
+          { label: 'Full Ladder', value: ladder },
+          { label: 'Audited Items', value: potential.items.length },
+          { label: 'Configurable Now', value: readyItems },
+        ]}
+      />
+
+      <div style={{ display: 'grid', gap: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--fg-0)' }}>RX Sample-Rate Capability</span>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(132px, 1fr))', gap: 8 }}>
+          {potential.sampleRates.map((rate) => (
+            <div
+              key={rate.rateHz}
+              style={{
+                padding: '8px 9px',
+                background: 'var(--bg-0)',
+                border: '1px solid var(--panel-border)',
+                borderRadius: 'var(--r-sm)',
+                display: 'grid',
+                gap: 5,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+                <strong className="mono" style={{ fontSize: 12, color: 'var(--fg-0)' }}>
+                  {rate.label || hz(rate.rateHz)}
+                </strong>
+                <span className={`hardware-status-chip is-${statusTone(rate.status)}`} style={{ padding: '1px 6px' }}>
+                  {rate.status}
+                </span>
+              </div>
+              <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
+                board {boolLabel(rate.supportedByBoard)} / protocol {boolLabel(rate.supportedByActiveProtocol)}
+                {rate.currentlySelected ? ' / selected' : ''}
+              </div>
+              <div style={{ fontSize: 10, color: 'var(--fg-2)', lineHeight: 1.35 }}>{rate.notes}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <FieldGrid
+        fields={[
+          { label: 'Dither / Random Audit', value: potential.ditherRandomAudit.join(' | ') },
+          { label: 'Filter / Window Audit', value: potential.filterAndWindowAudit.join(' | ') },
+        ]}
+      />
+
+      <div style={{ display: 'grid', gap: 8 }}>
+        <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--fg-0)' }}>Hardware Potential Items</span>
+        {potential.items.map((item) => (
+          <div
+            key={item.id}
+            style={{
+              padding: '9px 10px',
+              background: 'var(--bg-0)',
+              border: '1px solid var(--panel-border)',
+              borderRadius: 'var(--r-sm)',
+              display: 'grid',
+              gap: 8,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <strong style={{ fontSize: 12, color: 'var(--fg-0)' }}>{item.title}</strong>
+              <span className={`hardware-status-chip is-${statusTone(item.implementationStatus)}`} style={{ padding: '1px 6px' }}>
+                {item.implementationStatus}
+              </span>
+              <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
+                {item.category} / {item.safetyClass}
+              </span>
+            </div>
+            <FieldGrid
+              fields={[
+                { label: 'Configurable', value: boolLabel(item.userConfigurable) },
+                { label: 'Manual Capability', value: item.manualCapability },
+                { label: 'Current Exposure', value: item.currentExposure },
+                { label: 'Current Controls', value: item.currentControls.join(' | ') || '-' },
+                { label: 'Telemetry Paths', value: item.telemetryPaths.join(' | ') || '-' },
+                { label: 'Blockers', value: item.blockers.join(' | ') || '-' },
+                { label: 'Next Step', value: item.nextStep },
+              ]}
+            />
+          </div>
+        ))}
+      </div>
+
+      <DiagnosticRecommendation text={potential.diagnosticRecommendation} />
     </div>
   );
 }
@@ -1034,6 +1141,108 @@ function HardwareOpportunityMatrix({ items }: { items: HardwareFeatureSurfaceDto
   );
 }
 
+function DspLiveDiagnosticsPanel({ diag }: { diag: DspLiveDiagnosticsDto | null }) {
+  if (!diag) {
+    return (
+      <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>
+        Waiting for live DSP modernization diagnostics.
+      </div>
+    );
+  }
+
+  const candidates = diag.externalEngineCandidates.slice(0, 4);
+  const constraints = diag.constraints.length > 0 ? diag.constraints.join(', ') : 'none';
+  const actions = diag.recommendedActions.length > 0 ? diag.recommendedActions.join(' / ') : 'none';
+  const evidence = diag.evidence.length > 0 ? diag.evidence.join(', ') : 'none';
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Status', value: diag.status },
+          { label: 'Tone', value: diag.qualityTone },
+          { label: 'Score', value: `${diag.readinessScore}/100` },
+          { label: 'Live Benchmark', value: boolLabel(diag.readyForLiveBenchmark) },
+          { label: 'Rollout Gate', value: diag.rolloutGate },
+          { label: 'Scene', value: `${diag.frontendSceneStatus} / ${age(diag.frontendSceneAgeMs)}` },
+          { label: 'Runtime', value: `${diag.requestedNrMode} -> ${diag.effectiveNrMode}` },
+          { label: 'NR Aligned', value: boolLabel(diag.runtimeAligned) },
+          { label: 'RX Chain', value: diag.rxChainScore === null ? diag.rxChainLabel : `${diag.rxChainScore} / ${diag.rxChainLabel ?? '-'}` },
+          { label: 'NR5 Confidence', value: lin(diag.nr5SignalConfidence) },
+          { label: 'NR5 AGC Gate', value: lin(diag.nr5AgcGate) },
+          { label: 'NR5 Floor Push', value: db(diag.nr5FloorReductionDb) },
+          { label: 'Benchmark Plan', value: diag.benchmarkPlanEndpoint },
+          { label: 'Scenarios', value: diag.benchmarkScenarioCount },
+          { label: 'Next Scenarios', value: diag.nextBenchmarkScenarios.join(', ') || '-' },
+          { label: 'Tools', value: diag.candidateTools.join(', ') || '-' },
+        ]}
+      />
+      <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', overflowWrap: 'anywhere' }}>
+        evidence: {evidence}
+      </div>
+      <div className="mono" style={{ fontSize: 10, color: diag.constraints.length > 0 ? 'var(--tx)' : 'var(--fg-3)', overflowWrap: 'anywhere' }}>
+        constraints: {constraints}
+      </div>
+      <div style={{ fontSize: 11, lineHeight: 1.35, color: 'var(--fg-2)' }}>
+        actions: {actions}
+      </div>
+      {diag.benchmarkAcceptanceGates.length > 0 && (
+        <div className="mono" style={{ fontSize: 10, color: 'var(--fg-3)', overflowWrap: 'anywhere' }}>
+          benchmark gates: {diag.benchmarkAcceptanceGates.join(' / ')}
+        </div>
+      )}
+      {candidates.length > 0 && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {candidates.map((candidate) => (
+            <div
+              key={candidate.id}
+              style={{
+                padding: '8px 10px',
+                background: 'var(--bg-0)',
+                border: '1px solid var(--panel-border)',
+                borderRadius: 'var(--r-sm)',
+              }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                }}
+              >
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--fg-0)' }}>
+                  {candidate.name || candidate.id}
+                </span>
+                <span className="mono" style={{ fontSize: 10, color: 'var(--accent)' }}>
+                  {candidate.defaultState} / {candidate.rolloutPolicy}
+                </span>
+              </div>
+              <FieldGrid
+                fields={[
+                  { label: 'Family', value: candidate.family },
+                  { label: 'Integration', value: candidate.integrationPoint },
+                  { label: 'License', value: candidate.license },
+                  { label: 'Runtime Risk', value: candidate.runtimeRisk },
+                  { label: 'Latency Risk', value: candidate.latencyRisk },
+                  { label: 'Safety Risk', value: candidate.radioSafetyRisk },
+                ]}
+              />
+              <div className="mono" style={{ marginTop: 6, fontSize: 10, color: 'var(--fg-3)' }}>
+                benchmarks: {candidate.requiredBenchmarks.join(', ') || '-'}
+              </div>
+              <div className="mono" style={{ marginTop: 3, fontSize: 10, color: 'var(--fg-3)' }}>
+                blockers: {candidate.blockers.join(' / ') || '-'}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <DiagnosticRecommendation text={diag.diagnosticRecommendation} />
+    </div>
+  );
+}
+
 function FeatureSurfaceRows({ items }: { items: HardwareFeatureSurfaceDto[] }) {
   if (items.length === 0) {
     return (
@@ -1433,6 +1642,7 @@ export function HardwareDiagnosticsPanel() {
   const [networkProfile, setNetworkProfile] = useState<RadioNetworkProfileDto | null>(null);
   const [txDiagnostics, setTxDiagnostics] = useState<TxDiagnosticsDto | null>(null);
   const [smartNrCondition, setSmartNrCondition] = useState<SmartNrConditionDto | null>(null);
+  const [dspLiveDiagnostics, setDspLiveDiagnostics] = useState<DspLiveDiagnosticsDto | null>(null);
   const [userIoLabels, setUserIoLabels] = useState<UserIoLabelsDto | null>(null);
   const [userIoActions, setUserIoActions] = useState<UserIoActionsDto | null>(null);
   const [digInDiagnostics, setDigInDiagnostics] = useState<RadioDigInDiagnosticsDto | null>(null);
@@ -1481,13 +1691,14 @@ export function HardwareDiagnosticsPanel() {
   const loadEndpointDiagnostics = useCallback(async (signal?: AbortSignal) => {
     setEndpointBusy(true);
     try {
-      const [nextKeying, nextSupply, nextNetwork, nextTx, nextSmartNr, nextLabels, nextActions, nextDigIn] =
+      const [nextKeying, nextSupply, nextNetwork, nextTx, nextSmartNr, nextDspLive, nextLabels, nextActions, nextDigIn] =
         await Promise.allSettled([
           fetchHardwareKeyingStatus(signal),
           fetchRadioSupplyAlarms(signal),
           fetchRadioNetworkProfile(signal),
           fetchTxDiagnostics(signal),
           fetchSmartNrCondition(signal),
+          fetchDspLiveDiagnostics(signal),
           fetchUserIoLabels(signal),
           fetchUserIoActions(signal),
           fetchRadioDigInDiagnostics(signal),
@@ -1498,11 +1709,12 @@ export function HardwareDiagnosticsPanel() {
       if (nextNetwork.status === 'fulfilled') setNetworkProfile(nextNetwork.value);
       if (nextTx.status === 'fulfilled') setTxDiagnostics(nextTx.value);
       if (nextSmartNr.status === 'fulfilled') setSmartNrCondition(nextSmartNr.value);
+      if (nextDspLive.status === 'fulfilled') setDspLiveDiagnostics(nextDspLive.value);
       if (nextLabels.status === 'fulfilled') setUserIoLabels(nextLabels.value);
       if (nextActions.status === 'fulfilled') setUserIoActions(nextActions.value);
       if (nextDigIn.status === 'fulfilled') setDigInDiagnostics(nextDigIn.value);
 
-      const failures = [nextKeying, nextSupply, nextNetwork, nextTx, nextSmartNr, nextLabels, nextActions, nextDigIn]
+      const failures = [nextKeying, nextSupply, nextNetwork, nextTx, nextSmartNr, nextDspLive, nextLabels, nextActions, nextDigIn]
         .filter(
           (result): result is PromiseRejectedResult =>
             result.status === 'rejected' &&
@@ -1898,7 +2110,7 @@ export function HardwareDiagnosticsPanel() {
         : 'capture';
   const tabBadges: Partial<Record<HardwareTabId, string>> = {
     overview: radios ? `${radios.length} radio${radios.length === 1 ? '' : 's'}` : 'scan',
-    'rx-dsp': audio?.status ?? dsp?.readiness ?? rxMeters?.status ?? 'DSP',
+    'rx-dsp': dspLiveDiagnostics?.status ?? audio?.status ?? dsp?.readiness ?? rxMeters?.status ?? 'DSP',
     'tx-ptt': txDiagnostics?.egress.healthStatus ?? (keying?.externalPtt.ownedMox ? 'PTT' : 'idle'),
     io: `${(userIoLabels?.lines.length ?? userIoActions?.lines.length ?? 0)} lines`,
     protocol: protocolBadge,
@@ -1922,8 +2134,8 @@ export function HardwareDiagnosticsPanel() {
     },
     {
       label: 'DSP',
-      value: dsp?.readiness ?? dsp?.engineKind,
-      tone: statusTone(dsp?.readiness ?? dsp?.engineKind),
+      value: dspLiveDiagnostics?.status ?? dsp?.readiness ?? dsp?.engineKind,
+      tone: statusTone(dspLiveDiagnostics?.status ?? dsp?.readiness ?? dsp?.engineKind),
     },
     {
       label: 'RX Chain',
@@ -2029,6 +2241,14 @@ export function HardwareDiagnosticsPanel() {
               </h4>
               <ReceiverTopologyDiagnostics diag={diag} />
             </div>
+
+            <div className="ps-card">
+              <h4>
+                Hardware Potential
+                <span className="ps-card-hint">sample rates / dither / filters / TX fidelity</span>
+              </h4>
+              <HardwarePotentialDiagnostics potential={diag?.hardwarePotential ?? null} />
+            </div>
           </>
         )}
 
@@ -2068,6 +2288,14 @@ export function HardwareDiagnosticsPanel() {
                 <FieldGrid fields={rxChainFields} />
               </div>
               <DiagnosticRecommendation text={nrCondition?.diagnosticRecommendation} />
+            </div>
+
+            <div className="ps-card">
+              <h4>
+                DSP Modernization Readiness
+                <span className="ps-card-hint">live gate for NR5 / benchmark / external candidates</span>
+              </h4>
+              <DspLiveDiagnosticsPanel diag={dspLiveDiagnostics} />
             </div>
           </>
         )}

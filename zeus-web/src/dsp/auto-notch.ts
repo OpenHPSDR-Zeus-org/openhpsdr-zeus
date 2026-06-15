@@ -43,7 +43,13 @@ export type AutoNotchTracker = {
 const MIN_SNR_DB = 14;
 const MIN_CONFIDENCE = 0.52;
 const MIN_WIDTH_HZ = 45;
-const MAX_WIDTH_HZ = 750;
+const NARROW_MAX_WIDTH_HZ = 750;
+const MAX_WIDTH_HZ = 12_000;
+const WIDE_MAX_MIDSPAN_HZ = 5_000;
+const WIDE_MIN_SNR_DB = 28;
+const WIDE_EDGE_MIN_SNR_DB = 24;
+const WIDE_MIN_CONFIDENCE = 0.7;
+const WIDE_EDGE_BINS = 3;
 const EDGE_PAD_HZ = 40;
 const MERGE_HZ = 120;
 const MAX_AUTO_NOTCHES = 16;
@@ -83,6 +89,24 @@ function candidateSort(a: AutoNotchCandidate, b: AutoNotchCandidate): number {
 
 function clampWidth(widthHz: number): number {
   return Math.max(MIN_WIDTH_HZ, Math.min(MAX_WIDTH_HZ, widthHz));
+}
+
+function isWideBlockerRun(
+  occupiedHz: number,
+  lo: number,
+  hi: number,
+  n: number,
+  crestSnr: number,
+  avgConfidence: number,
+): boolean {
+  if (occupiedHz <= NARROW_MAX_WIDTH_HZ) return true;
+  if (occupiedHz > MAX_WIDTH_HZ) return false;
+  if (avgConfidence < WIDE_MIN_CONFIDENCE) return false;
+
+  const edgeVisible = lo <= WIDE_EDGE_BINS || hi >= n - 1 - WIDE_EDGE_BINS;
+  if (edgeVisible) return crestSnr >= WIDE_EDGE_MIN_SNR_DB;
+
+  return occupiedHz <= WIDE_MAX_MIDSPAN_HZ && crestSnr >= WIDE_MIN_SNR_DB;
 }
 
 function quantizeHz(value: number): number {
@@ -236,16 +260,14 @@ export function detectAutoNotches(input: AutoNotchInput): AutoNotchCandidate[] {
     }
 
     const occupiedHz = Math.max(hzPerPixel, (hi - lo + 1) * hzPerPixel);
-    if (occupiedHz <= MAX_WIDTH_HZ) {
-      const widthHz = Math.max(
-        MIN_WIDTH_HZ,
-        Math.min(MAX_WIDTH_HZ, occupiedHz + EDGE_PAD_HZ + hzPerPixel * 2),
-      );
+    const avgConfidence = bins > 0 ? confidenceSum / bins : c;
+    if (isWideBlockerRun(occupiedHz, lo, hi, n, crestSnr, avgConfidence)) {
+      const widthHz = clampWidth(occupiedHz + EDGE_PAD_HZ + hzPerPixel * 2);
       const candidate = {
         centerHz: binToHz(crest, n, centerHz, hzPerPixel),
         widthHz,
         snrDb: crestSnr,
-        confidence: bins > 0 ? confidenceSum / bins : c,
+        confidence: avgConfidence,
       };
       if (!isCoveredByManualNotch(candidate, input.existingNotches ?? [])) {
         raw.push(candidate);

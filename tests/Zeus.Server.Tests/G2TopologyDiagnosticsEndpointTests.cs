@@ -51,6 +51,26 @@ public sealed class G2TopologyDiagnosticsEndpointTests
         Assert.Equal("audited", manualReference.GetProperty("status").GetString());
         Assert.Contains("10 independent DDC receivers", manualReference.GetProperty("notes").GetString());
         Assert.Contains("ADC2 ground-on-TX", manualReference.GetProperty("notes").GetString());
+
+        var hardwarePotential = root.GetProperty("hardwarePotential");
+        Assert.True(hardwarePotential.GetProperty("g2Class").GetBoolean());
+        Assert.Equal(
+            new[] { 48_000, 96_000, 192_000, 384_000, 768_000, 1_536_000 },
+            hardwarePotential.GetProperty("sampleRates")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("rateHz").GetInt32())
+                .ToArray());
+        Assert.Contains("65536", string.Join(" ", hardwarePotential.GetProperty("filterAndWindowAudit").EnumerateArray().Select(item => item.GetString())));
+
+        var potentialItems = hardwarePotential.GetProperty("items").EnumerateArray().ToArray();
+        var groundOnTx = potentialItems.Single(item => item.GetProperty("id").GetString() == "rx.adc2-ground-on-tx");
+        Assert.Equal("auto-protection-wired", groundOnTx.GetProperty("implementationStatus").GetString());
+
+        var ditherRandom = potentialItems.Single(item => item.GetProperty("id").GetString() == "rx.adc-dither-random");
+        Assert.Equal("protocol-gap-read-only", ditherRandom.GetProperty("implementationStatus").GetString());
+
+        var filterPolicy = potentialItems.Single(item => item.GetProperty("id").GetString() == "rx.filter-taps-window-sizes");
+        Assert.Equal("p-invoke-gap", filterPolicy.GetProperty("implementationStatus").GetString());
     }
 
     [Fact]
@@ -84,7 +104,7 @@ public sealed class G2TopologyDiagnosticsEndpointTests
         Assert.Contains("p2.adc1MaxMagnitude", telemetry);
         Assert.Contains("Settings > Hardware > Receiver Topology", controls);
         Assert.Contains("10 independent DDC receivers", notes);
-        Assert.Contains("ADC2 ground-on-TX", notes);
+        Assert.Contains("Automatic ground-on-TX protection is wired", notes);
     }
 
     private sealed class Factory : WebApplicationFactory<Program>

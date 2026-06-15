@@ -65,6 +65,7 @@ typedef struct _spnr {
   double agc_gain;
   double agc_gate;
   double agc_env;
+  double agc_level_drive;
   double agc_attack;
   double agc_release;
   double diag_input_rms;

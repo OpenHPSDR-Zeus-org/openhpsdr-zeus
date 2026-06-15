@@ -40,9 +40,14 @@ not the separate panadapter display FFT.
 10. Smooth gain changes across frames to reduce musical-noise pumping.
 11. Reconstruct with overlap-add.
 12. Build a signal-confidence gate from presence, salience, coherence, and
-   ridge memory. The output normalizer uses a smoothed RMS envelope and slow
-   gate decay, so short confidence/RMS dips do not make the recovered audio
-   audibly pump up and down.
+   ridge memory. The output normalizer uses that gate to authorize leveling,
+   then drives confirmed weak and strong signals toward the same target RMS.
+   Its RMS envelope follows confirmed signal drops faster than noise-only
+   drops, confirmed signals can use a wider makeup range, and explicit gain
+   slew limits plus a held level-drive keep the leveling action from audibly
+   pumping up and down. A final RMS limiter catches sudden powerful frames
+   above target without feeding that limiter reduction back into the long-term
+   AGC gain, avoiding fade-out/fade-in recovery cycles after loud bursts.
 13. Report `dynamicRangeDb` against the effective post-NR floor, so diagnostics
     track usable recovered-signal range rather than only the pre-suppression
     learned input floor.

@@ -55,6 +55,15 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
     private const double G2SupplyPlausibleMinVolts = 10.0;
     private const double G2SupplyPlausibleMaxVolts = 18.0;
     private const double GenericSupplyPlausibleMaxVolts = 35.0;
+    private static readonly int[] FullRxSampleRateLadderHz =
+    [
+        48_000,
+        96_000,
+        192_000,
+        384_000,
+        768_000,
+        1_536_000,
+    ];
 
     private readonly RadioService _radio;
     private readonly DspPipelineService _dsp;
@@ -218,6 +227,13 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                         .ToArray(),
                 },
                 referenceMap = ReferenceMap,
+                hardwarePotential = BuildHardwarePotential(
+                    state,
+                    _activeProtocol,
+                    connected,
+                    effective,
+                    variant,
+                    caps),
                 candidateSettings = CandidateSettings,
                 featureSurfaces = FeatureSurfaces,
             };
@@ -1778,6 +1794,304 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         _ => (null, null, "Unknown or firmware-specific C&C echo slot"),
     };
 
+    private static HardwarePotentialDto BuildHardwarePotential(
+        StateDto state,
+        string? activeProtocol,
+        HpsdrBoardKind connected,
+        HpsdrBoardKind effective,
+        OrionMkIIVariant variant,
+        BoardCapabilities caps)
+    {
+        bool g2Class = effective == HpsdrBoardKind.OrionMkII
+            && caps.RxAdcCount >= 2
+            && caps.MkiiBpf
+            && caps.MaxRxSampleRateHz >= 1_536_000;
+        string protocol = string.IsNullOrWhiteSpace(activeProtocol) ? "none" : activeProtocol;
+
+        var sampleRates = FullRxSampleRateLadderHz
+            .Select(rate => BuildSampleRateCapability(rate, state.SampleRate, caps.MaxRxSampleRateHz, protocol))
+            .ToArray();
+
+        return new HardwarePotentialDto(
+            SchemaVersion: 1,
+            GeneratedUtc: DateTimeOffset.UtcNow,
+            ConnectedBoard: connected.ToString(),
+            EffectiveBoard: effective.ToString(),
+            OrionMkIIVariant: variant.ToString(),
+            G2Class: g2Class,
+            ActiveProtocol: protocol,
+            CurrentSampleRateHz: state.SampleRate,
+            MaxRxSampleRateHz: caps.MaxRxSampleRateHz,
+            FullRxSampleRateLadderHz: FullRxSampleRateLadderHz,
+            SampleRates: sampleRates,
+            Items:
+            [
+                new(
+                    Id: "rx.ddc.sample-rate-ladder",
+                    Title: "Full RX/DDC sample-rate ladder",
+                    Category: "rx-hardware",
+                    ManualCapability: "G2-class Protocol-2 DDC receive bandwidth spans 48 kHz, 96 kHz, 192 kHz, 384 kHz, 768 kHz, and 1.536 MHz.",
+                    CurrentExposure: "Connect and sample-rate APIs already accept the full ladder; BoardCapabilities gates G2-class radios at 1.536 MHz and Protocol 1 at 384 kHz.",
+                    ImplementationStatus: g2Class ? "control-ready" : "board-limited",
+                    SafetyClass: "rx-safe",
+                    UserConfigurable: true,
+                    TelemetryPaths:
+                    [
+                        "sampleRate",
+                        "capabilities.maxRxSampleRateHz",
+                        "hardwarePotential.sampleRates",
+                        "activeProtocol",
+                    ],
+                    CurrentControls:
+                    [
+                        "/api/connect/p2",
+                        "/api/sampleRate",
+                        "Settings > Hardware > Hardware Potential",
+                    ],
+                    Blockers: g2Class ? [] : ["Effective board is not identified as a G2-class OrionMkII/Saturn radio."],
+                    NextStep: "Benchmark panadapter, waterfall, RX audio, and network loss at each supported rate before changing defaults above 192 kHz."),
+                new(
+                    Id: "rx.dual-adc.phase-sync",
+                    Title: "Dual phase-synchronous ADC receive paths",
+                    Category: "rx-hardware",
+                    ManualCapability: "The G2 manual identifies two 16-bit phase-synchronous ADCs with independent preselector/filter-bank paths and antenna diversity potential.",
+                    CurrentExposure: "Zeus exposes RX1/RX2 topology, live P2 ADC overload bits, live ADC0/ADC1 max magnitude, and max-at-overload capture.",
+                    ImplementationStatus: caps.RxAdcCount >= 2 ? "telemetry-ready" : "board-limited",
+                    SafetyClass: "rx-safe",
+                    UserConfigurable: true,
+                    TelemetryPaths:
+                    [
+                        "capabilities.rxAdcCount",
+                        "capabilities.mkiiBpf",
+                        "p2.adcOverloadBits",
+                        "p2.adc0MaxMagnitude",
+                        "p2.adc1MaxMagnitude",
+                    ],
+                    CurrentControls:
+                    [
+                        "/api/radio/diagnostics",
+                        "Settings > Hardware > Receiver Topology",
+                    ],
+                    Blockers: caps.RxAdcCount >= 2 ? [] : ["The effective board exposes only one ADC."],
+                    NextStep: "Add a board-gated ADC diversity/assignment panel only after controlled marker captures prove the safe routing commands."),
+                new(
+                    Id: "rx.g2.ten-ddc-pool",
+                    Title: "Ten independent DDC receiver pool",
+                    Category: "rx-hardware",
+                    ManualCapability: "The G2/Saturn FPGA can present up to 10 independent DDC receivers assignable to either ADC.",
+                    CurrentExposure: "Zeus currently exposes the operator RX1/RX2 surface and P2 transport telemetry; it does not expose arbitrary 10-DDC routing.",
+                    ImplementationStatus: "manual-confirmed-gap",
+                    SafetyClass: "rx-safe-after-mapping",
+                    UserConfigurable: false,
+                    TelemetryPaths:
+                    [
+                        "hardwarePotential",
+                        "mapping.p2HiPriority",
+                        "mapping.markers",
+                    ],
+                    CurrentControls:
+                    [
+                        "/api/radio/diagnostics/map/marker",
+                        "Settings > Hardware > Mapping Capture",
+                    ],
+                    Blockers:
+                    [
+                        "No verified Zeus control model for additional DDC assignment yet.",
+                        "UI/audio ownership and stream fan-out need explicit resource accounting before exposing more receivers.",
+                    ],
+                    NextStep: "Use mapping markers while toggling known client-side receiver actions, then add a read-only DDC allocation table before any write controls."),
+                new(
+                    Id: "rx.adc2-ground-on-tx",
+                    Title: "ADC2 ground-on-TX protection",
+                    Category: "rx-protection",
+                    ManualCapability: "The G2 PA topology includes ADC2/RX2 grounding during transmit to protect the second receive path.",
+                    CurrentExposure: "The Protocol-2 high-priority command path already asserts the Saturn/Alex1 RX_GNDonTX bit while keyed; no operator override is exposed.",
+                    ImplementationStatus: g2Class ? "auto-protection-wired" : "auto-protection-path-defined",
+                    SafetyClass: "tx-protection",
+                    UserConfigurable: false,
+                    TelemetryPaths:
+                    [
+                        "activeProtocol",
+                        "tx.protocol2.senderRunning",
+                        "hardwarePotential.items.rx.adc2-ground-on-tx",
+                    ],
+                    CurrentControls:
+                    [
+                        "Protocol2Client.SendCmdHighPriority",
+                        "Settings > Hardware > Receiver Topology",
+                    ],
+                    Blockers:
+                    [
+                        "No separate operator override should be exposed until it has a hardware safety review.",
+                    ],
+                    NextStep: "Keep automatic protection enabled and add marker-capture evidence around keyed/unkeyed transitions if an operator-visible status line is needed."),
+                new(
+                    Id: "rx.adc-dither-random",
+                    Title: "ADC dither and randomization",
+                    Category: "rx-dynamic-range",
+                    ManualCapability: "The supplied G2 manual does not document a dither/random operator control, while Protocol-1 lineage has legacy RAND/DITHER bits.",
+                    CurrentExposure: "Zeus has HL2-specific optional toggles; no verified G2 Protocol-2 dither/random write control is exposed.",
+                    ImplementationStatus: "protocol-gap-read-only",
+                    SafetyClass: "rx-safe-after-mapping",
+                    UserConfigurable: false,
+                    TelemetryPaths:
+                    [
+                        "hardwarePotential.ditherRandomAudit",
+                        "mapping.p1",
+                        "mapping.p2HiPriority",
+                    ],
+                    CurrentControls:
+                    [
+                        "/api/radio/hl2-options",
+                        "/api/radio/diagnostics/map/marker",
+                    ],
+                    Blockers:
+                    [
+                        "No verified G2 Protocol-2 byte/bit mapping is present in Zeus.",
+                        "The supplied G2 manual does not identify a dither/random control.",
+                        "Protocol-1 HL2 repurposes the old DITHER bit as Band Volts PWM, so blindly reusing legacy labels would be unsafe.",
+                    ],
+                    NextStep: "Capture before/after marker deltas from a known-good reference client before adding a board-gated G2 dither/random settings panel."),
+                new(
+                    Id: "rx.filter-taps-window-sizes",
+                    Title: "RX/TX FIR tap sizes, windows, and phase policy",
+                    Category: "dsp-fidelity",
+                    ManualCapability: "The G2 hardware can feed wide DDC spans up to 1.536 MHz; studio-quality weak-signal work needs filter length/window/phase policy matched to mode, latency, and display bandwidth.",
+                    CurrentExposure: "Zeus wires RX/TX bandpass frequencies and the Blackman-Harris baseline. Advanced WDSP tap count, minimum-phase/linear-phase, and window selectors remain benchmark candidates.",
+                    ImplementationStatus: "p-invoke-gap",
+                    SafetyClass: "rx-safe-tx-benchmark-required",
+                    UserConfigurable: false,
+                    TelemetryPaths:
+                    [
+                        "hardwarePotential.filterAndWindowAudit",
+                        "dsp.rxDsp.filterLowHz",
+                        "dsp.rxDsp.filterHighHz",
+                        "dsp.sampleRateHz",
+                    ],
+                    CurrentControls:
+                    [
+                        "Settings > DSP",
+                        "Settings > Hardware > Hardware Potential",
+                    ],
+                    Blockers:
+                    [
+                        "Native WDSP setters for all requested tap/window/phase combinations are not fully wrapped.",
+                        "TX changes need spectral-density, occupied-bandwidth, IMD, latency, and PureSignal regression tests before operator defaults change.",
+                    ],
+                    NextStep: "Wrap verified WDSP filter setters, benchmark all tap sizes/windows by mode, then expose only combinations that pass RX latency and TX spectral-mask gates."),
+                new(
+                    Id: "tx.puresignal.external-rf-bypass",
+                    Title: "External PureSignal feedback through RF Bypass",
+                    Category: "tx-linearity",
+                    ManualCapability: "The G2 manual identifies RF Bypass as the external PA PureSignal feedback input path.",
+                    CurrentExposure: "Zeus exposes PureSignal source, RF Bypass requirement/selection, live feedback raw level, centered/usable windows, and correction status.",
+                    ImplementationStatus: "control-ready",
+                    SafetyClass: "tx-safe-with-bench",
+                    UserConfigurable: true,
+                    TelemetryPaths:
+                    [
+                        "pureSignal.externalFeedbackPathSupported",
+                        "pureSignal.feedbackLevelRaw",
+                        "pureSignal.healthStatus",
+                        "tx.stage.outPkDbfs",
+                    ],
+                    CurrentControls:
+                    [
+                        "Settings > PureSignal",
+                        "/api/ps/config",
+                        "/api/tx/diagnostics",
+                    ],
+                    Blockers: [],
+                    NextStep: "Use live TX stage meters plus PureSignal feedback health to tune drive, leveler, ALC, and CFC without exceeding feedback windows."),
+                new(
+                    Id: "tx.audio-inputs.mic-line-xlr",
+                    Title: "Mic, line, and XLR input fidelity paths",
+                    Category: "tx-audio",
+                    ManualCapability: "The G2 exposes front-panel mic/headphone/CW plus rear-panel XLR and line input paths; p2app supports selecting audio input modes such as XLR and jack.",
+                    CurrentExposure: "Zeus exposes host mic ingest, TX stage meters, TX audio tools, and plugin/VST chains; it does not yet surface G2 hardware audio input selection.",
+                    ImplementationStatus: "manual-confirmed-gap",
+                    SafetyClass: "tx-safe-after-mapping",
+                    UserConfigurable: false,
+                    TelemetryPaths:
+                    [
+                        "tx.audioPath",
+                        "tx.stage",
+                        "hardwarePotential.items.tx.audio-inputs.mic-line-xlr",
+                    ],
+                    CurrentControls:
+                    [
+                        "Settings > TX Audio Tools",
+                        "Settings > Hardware > Mapping Capture",
+                    ],
+                    Blockers:
+                    [
+                        "No verified Protocol-2 audio-source selector is wired in Zeus.",
+                        "Input switching must preserve TX inhibit, level calibration, and latency accounting.",
+                    ],
+                    NextStep: "Map hardware audio-source changes with markers, then add a G2-only audio source panel with per-source level calibration and TX meter validation."),
+            ],
+            DitherRandomAudit:
+            [
+                "G2 manual: no explicit dither/random control found in the supplied manual.",
+                "Protocol-1 lineage: Config C3 includes legacy RAND/DITHER bits; Zeus keeps those clean for non-HL2 boards.",
+                "HL2 exception: the old DITHER bit is repurposed as Band Volts PWM and is already isolated in /api/radio/hl2-options.",
+                "G2 action: keep dither/random read-only until a verified Protocol-2 byte/bit transition is captured.",
+            ],
+            FilterAndWindowAudit:
+            [
+                "Current wired path: RX/TX bandpass frequencies and Blackman-Harris window baseline.",
+                "Candidate tap sizes to benchmark before exposing: 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536.",
+                "Candidate windows to verify before exposing: Blackman-Harris, Hamming, Hann, Blackman, Kaiser when backed by WDSP/native setters.",
+                "Latency policies to expose after native setters: low-latency/minimum-phase and linear-phase.",
+            ],
+            DiagnosticRecommendation: g2Class
+                ? "G2-class hardware potential is visible. Wide sample rates and PureSignal feedback are control-ready; dither/random, 10-DDC routing, hardware audio-source selection, and deep FIR filter controls stay read-only until marker captures and benchmarks prove safe mappings."
+                : "The effective board is not identified as a G2-class 1.536 MHz Saturn radio; keep G2-only dynamic-range controls hidden and use the conservative board capability ceiling.");
+    }
+
+    private static HardwareSampleRateCapabilityDto BuildSampleRateCapability(
+        int rateHz,
+        int selectedRateHz,
+        int maxBoardRateHz,
+        string activeProtocol)
+    {
+        bool supportedByBoard = rateHz <= maxBoardRateHz;
+        bool p2 = string.Equals(activeProtocol, "P2", StringComparison.OrdinalIgnoreCase);
+        bool p1 = string.Equals(activeProtocol, "P1", StringComparison.OrdinalIgnoreCase);
+        bool supportedByProtocol = supportedByBoard && (p2 || (p1 && rateHz <= 384_000));
+        bool selected = selectedRateHz == rateHz;
+
+        string status =
+            !supportedByBoard ? "board-limited" :
+            supportedByProtocol && selected ? "selected" :
+            supportedByProtocol ? "available" :
+            rateHz > 384_000 ? "requires-p2" :
+            activeProtocol == "none" ? "connect-radio" :
+            "protocol-limited";
+
+        string notes =
+            status == "selected" ? "Active receive sample rate." :
+            status == "available" ? "Board and active protocol can use this rate." :
+            status == "requires-p2" ? "This wideband rate is Protocol-2/G2-class only." :
+            status == "board-limited" ? "The effective board capability ceiling is lower than this rate." :
+            status == "connect-radio" ? "Connect a radio before this rate can be validated against the active protocol." :
+            "The active protocol cannot safely use this rate.";
+
+        return new HardwareSampleRateCapabilityDto(
+            RateHz: rateHz,
+            Label: RateLabel(rateHz),
+            SupportedByBoard: supportedByBoard,
+            SupportedByActiveProtocol: supportedByProtocol,
+            CurrentlySelected: selected,
+            Status: status,
+            Notes: notes);
+    }
+
+    private static string RateLabel(int rateHz) =>
+        rateHz >= 1_000_000
+            ? $"{rateHz / 1_000_000.0:0.###} MHz"
+            : $"{rateHz / 1000} kHz";
+
     private static readonly IReadOnlyDictionary<int, string> P2KnownByteFields = new Dictionary<int, string>
     {
         [0] = "flags: PTT bit0, Dot bit1, Dash bit2, PLL bit4, sidetone bit7",
@@ -1835,7 +2149,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             field = "G2 manual receiver topology",
             source = "ANAN G2 user manual: block diagram, feature list, and specifications",
             status = "audited",
-            notes = "Manual confirms dual phase-synchronous ADCs, independent ADC filter-bank paths, RX2/ADC2 routing, 10 independent DDC receivers, and ADC2 ground-on-TX hardware behavior; Zeus exposes the safe topology facts and live ADC telemetry while leaving unmapped routing controls read-only.",
+            notes = "Manual confirms dual phase-synchronous ADCs, independent ADC filter-bank paths, RX2/ADC2 routing, 10 independent DDC receivers, and ADC2 ground-on-TX hardware behavior; Zeus exposes the safe topology facts, live ADC telemetry, and automatic Saturn/Alex1 ground-on-TX protection while leaving unmapped routing controls read-only.",
         },
         new
         {
@@ -1858,7 +2172,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         {
             field = "Board-specific hardware options",
             status = "candidate",
-            notes = "Thetis gates Alex/Apollo/MKII/Orion options by model. Zeus should surface only controls backed by BoardCapabilities and persisted per radio; G2 ADC2 ground-on-TX and 10-DDC assignment stay read-only until their protocol/UI mapping is verified. G2 Dig In TX Disable is decoded as read-only diagnostics first; TX blocking must remain opt-in and board-gated.",
+            notes = "Thetis gates Alex/Apollo/MKII/Orion options by model. Zeus should surface only controls backed by BoardCapabilities and persisted per radio; G2 ADC2 ground-on-TX is automatic protection, while any operator override, 10-DDC assignment, and dither/random writes stay read-only until their protocol/UI mapping is verified. G2 Dig In TX Disable is decoded as read-only diagnostics first; TX blocking must remain opt-in and board-gated.",
         },
         new
         {
@@ -1951,7 +2265,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "Settings > Hardware > Receiver Topology",
             },
             safetyClass = "rx-safe",
-            notes = "The G2/Saturn manual topology is now visible as safe diagnostics: dual phase-synchronous ADCs, independent MKII/preselector filter-bank paths, RX2 stepped attenuation, and the 48 kHz..1.536 MHz P2 DDC ceiling. The manual's 10 independent DDC receivers and ADC2 ground-on-TX behavior remain explicitly marked as not exposed operator controls until protocol mapping and live marker captures prove the safe control surface.",
+            notes = "The G2/Saturn manual topology is now visible as safe diagnostics: dual phase-synchronous ADCs, independent MKII/preselector filter-bank paths, RX2 stepped attenuation, and the 48 kHz..1.536 MHz P2 DDC ceiling. Automatic ground-on-TX protection is wired for ADC2 ground-on-TX behavior; the manual's 10 independent DDC receivers, operator override, and dither/random writes remain explicitly marked as read-only until protocol mapping and live marker captures prove the safe control surface.",
         },
         new
         {
@@ -2064,6 +2378,29 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "dsp.wdspNr5SpnrAvailable",
                 "dsp.nr4Readiness",
                 "dsp.nr5Readiness",
+                "/api/dsp/live-diagnostics.status",
+                "/api/dsp/live-diagnostics.readinessScore",
+                "/api/dsp/live-diagnostics.constraints",
+                "/api/dsp/live-diagnostics.recommendedActions",
+                "/api/dsp/live-diagnostics.externalEngineCandidates",
+                "/api/dsp/external-engine-candidates[].id",
+                "/api/dsp/external-engine-candidates[].blockers",
+                "/api/dsp/external-engine-candidates[].requiredBenchmarks",
+                "/api/dsp/benchmark-plan.rolloutGate",
+                "/api/dsp/benchmark-plan.globalAcceptanceGates",
+                "/api/dsp/benchmark-plan.scenarios[].id",
+                "/api/dsp/benchmark-plan.scenarios[].requiredMetrics",
+                "/api/dsp/benchmark-plan.scenarios[].acceptanceGates",
+                "/api/dsp/benchmark-capture-manifest.status",
+                "/api/dsp/benchmark-capture-manifest.scenarioIds",
+                "/api/dsp/benchmark-capture-manifest.requiredArtifacts",
+                "/api/dsp/benchmark-capture-manifest.preflightChecks",
+                "/api/dsp/benchmark-capture-manifest.stopConditions",
+                "/api/dsp/modernization-snapshot.status",
+                "/api/dsp/modernization-snapshot.evidenceCompletenessScore",
+                "/api/dsp/modernization-snapshot.missingEvidence",
+                "/api/dsp/modernization-snapshot.includedEndpoints",
+                "/api/dsp/modernization-snapshot.includedArtifacts",
                 "/api/dsp/nr-condition.rxChain.agcTopDb",
                 "/api/dsp/nr-condition.rxChain.agcOffsetDb",
                 "/api/dsp/nr-condition.rxChain.effectiveAgcTopDb",
@@ -2078,9 +2415,14 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "/api/radio/diagnostics",
                 "/api/radio/diagnostics/dsp-scene",
                 "/api/dsp/nr-condition",
+                "/api/dsp/live-diagnostics",
+                "/api/dsp/external-engine-candidates",
+                "/api/dsp/benchmark-plan",
+                "/api/dsp/benchmark-capture-manifest",
+                "/api/dsp/modernization-snapshot",
             },
             safetyClass = "rx-safe",
-            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the direct NR-condition API and backend diagnostics feed preserve the active profile, recommendation, RX-chain hold reason, requested/effective NR mode, ANF/SNB/NB/manual-notch runtime state, WDSP NR2/NR4/NR5 native capability, backend AGC/ATT/ADC/squelch operating point, and final RX/TX-monitor audio-frame freshness/RMS/peak evidence for remote clients and recordings.",
+            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the direct NR-condition API and backend diagnostics feed preserve the active profile, recommendation, RX-chain hold reason, requested/effective NR mode, ANF/SNB/NB/manual-notch runtime state, WDSP NR2/NR4/NR5 native capability, backend AGC/ATT/ADC/squelch operating point, and final RX/TX-monitor audio-frame freshness/RMS/peak evidence for remote clients and recordings. The live-diagnostics API fuses that evidence into a modernization readiness score, constraints list, recommended next tools, opt-in external-engine candidate gates, and benchmark-plan scenario IDs; the benchmark-capture manifest turns that state into a concrete G2 evidence checklist; the modernization snapshot bundles all of those read-only surfaces into one capture artifact.",
         },
         new
         {

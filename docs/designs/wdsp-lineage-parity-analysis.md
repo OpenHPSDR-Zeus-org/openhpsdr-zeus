@@ -88,6 +88,46 @@ DC offset, windowed RMS movement, and coherent tone power. Later WDSP-backed ben
 reuse the fixtures and add SINAD-style metrics, artifact scores, per-stage timing, allocation, and
 hardware capture comparisons.
 
+The benchmark acceptance surface is `/api/dsp/benchmark-plan`. It publishes the required scenario
+catalog for live tools and scripts: frontend scene freshness, weak CW/carrier preservation,
+SSB-like speech, fading carrier, impulse noise, strong adjacent signal, noise-only gating, AGC
+level steps, squelch transitions, TX two-tone, TX voice-like audio, PureSignal-safe bypass, and
+WDSP channel lifecycle. Each scenario lists required comparisons, metrics, artifacts, and failure
+gates. This endpoint is the checklist for G2 capture sessions and later cross-radio validation.
+
+The capture manifest surface is `/api/dsp/benchmark-capture-manifest`. It combines the current live
+diagnostics state with the benchmark plan into a concrete evidence checklist: scenario IDs to run,
+required endpoint snapshots, offline fixture metrics, audio/spectrum artifacts, preflight checks,
+stop conditions, and operator notes. A manifest can be saved with a G2 session to prove what evidence
+was required at the time of capture.
+
+The one-call evidence bundle is `/api/dsp/modernization-snapshot`. It nests the current Smart NR
+condition, live diagnostics, benchmark plan, capture manifest, and external-engine candidate catalog
+with an evidence completeness score and missing-evidence list. Capture tools should save this once
+at the start and end of a G2 session so later review can reconstruct the exact readiness state.
+The local helper `tools/capture-dsp-modernization-bundle.ps1` captures that endpoint plus the
+supporting diagnostics endpoints into an ignored `captures/dsp-modernization/<timestamp>/` folder:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\capture-dsp-modernization-bundle.ps1 -BaseUrl http://localhost:6060 -Label g2-nr5-before
+```
+
+The live readiness surface is `/api/dsp/live-diagnostics`. It is read-only and combines the current
+Smart NR condition, WDSP native capability probes, frontend DSP scene freshness, RX-chain health,
+and NR5/SPNR diagnostics into a tool-friendly readiness score, constraint list, recommended action,
+and candidate tool list for G2 benchmark sessions. It is an evidence aggregator only; it does not
+change DSP defaults or promote experimental behavior.
+
+The optional external-engine catalog is `/api/dsp/external-engine-candidates`. It classifies every
+non-WDSP candidate as a post-demod bakeoff target with explicit blockers:
+
+| Candidate | Role | Initial risk | Required gate |
+|---|---|---|---|
+| RNNoise | Small C neural speech denoiser | Speech-trained model can damage CW/data/non-speech HF content | Package/model review, speech fixture win, weak-carrier bypass proof |
+| DeepFilterNet | Modern full-band neural speech enhancement | Heavy Rust/Python/model packaging and latency risk | Model license/package review, artifact score win, G2 CPU/latency proof |
+| SpeexDSP | Classic DSP baseline/utilities | AGC/noise processing can fight WDSP AGC | Feature-level gating, no pumping, meter/squelch stability |
+| WebRTC Audio Processing | Communications audio NS/VAD reference | AEC/AGC/high-pass defaults can corrupt radio gain staging | NS/VAD-only spike, AGC/AEC disabled, no TX/PureSignal coupling |
+
 ## Modernization Policy
 
 1. Stabilize parity first. Do not tune around an unknown Zeus/Thetis delta.

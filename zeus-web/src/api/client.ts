@@ -806,6 +806,73 @@ export type SmartNrConditionDto = {
   generatedUtc: string;
 };
 
+export type DspExternalEngineCandidateDto = {
+  schemaVersion: number;
+  id: string;
+  name: string;
+  family: string;
+  integrationPoint: string;
+  defaultState: string;
+  rolloutPolicy: string;
+  license: string;
+  packagingStatus: string;
+  runtimeRisk: string;
+  latencyRisk: string;
+  radioSafetyRisk: string;
+  strengths: string[];
+  requiredBenchmarks: string[];
+  requiredEvidence: string[];
+  blockers: string[];
+  referenceUrls: string[];
+};
+
+export type DspLiveDiagnosticsDto = {
+  schemaVersion: number;
+  generatedUtc: string;
+  status: string;
+  qualityTone: string;
+  readinessScore: number;
+  readyForLiveBenchmark: boolean;
+  rolloutGate: string;
+  wdspActive: boolean;
+  wdspNativeLoadable: boolean;
+  wdspEmnrPost2Available: boolean;
+  wdspNr4SbnrAvailable: boolean;
+  wdspNr5SpnrAvailable: boolean;
+  nr4Readiness: string;
+  nr5Readiness: string;
+  frontendSceneAvailable: boolean;
+  frontendSceneStatus: string;
+  frontendSceneFresh: boolean;
+  frontendSceneStale: boolean;
+  frontendSceneAgeMs: number | null;
+  smartNrProfile: string | null;
+  expectedNrMode: string | null;
+  runtimeAligned: boolean | null;
+  runtimeAlignmentStatus: string;
+  requestedNrMode: string;
+  effectiveNrMode: string;
+  heldByRxChain: boolean | null;
+  rxChainScore: number | null;
+  rxChainTone: string | null;
+  rxChainLabel: string | null;
+  nr5SpnrDiagnostics: Nr5SpnrDiagnosticsDto | null;
+  nr5SignalConfidence: number | null;
+  nr5AgcGate: number | null;
+  nr5MeanGain: number | null;
+  nr5FloorReductionDb: number | null;
+  evidence: string[];
+  constraints: string[];
+  recommendedActions: string[];
+  candidateTools: string[];
+  benchmarkPlanEndpoint: string;
+  benchmarkScenarioCount: number;
+  nextBenchmarkScenarios: string[];
+  benchmarkAcceptanceGates: string[];
+  externalEngineCandidates: DspExternalEngineCandidateDto[];
+  diagnosticRecommendation: string | null;
+};
+
 export type SmartNrRxChainRuntimeDto = {
   schemaVersion: number;
   source: string;
@@ -1334,6 +1401,49 @@ export type HardwareMappingDto = {
   markers: HardwareMappingMarkerDto[];
 };
 
+export type HardwareSampleRateCapabilityDto = {
+  rateHz: number;
+  label: string;
+  supportedByBoard: boolean;
+  supportedByActiveProtocol: boolean;
+  currentlySelected: boolean;
+  status: string;
+  notes: string;
+};
+
+export type HardwarePotentialItemDto = {
+  id: string;
+  title: string;
+  category: string;
+  manualCapability: string;
+  currentExposure: string;
+  implementationStatus: string;
+  safetyClass: string;
+  userConfigurable: boolean;
+  telemetryPaths: string[];
+  currentControls: string[];
+  blockers: string[];
+  nextStep: string;
+};
+
+export type HardwarePotentialDto = {
+  schemaVersion: number;
+  generatedUtc: string;
+  connectedBoard: string;
+  effectiveBoard: string;
+  orionMkIIVariant: string;
+  g2Class: boolean;
+  activeProtocol: 'P1' | 'P2' | 'none' | string;
+  currentSampleRateHz: number;
+  maxRxSampleRateHz: number;
+  fullRxSampleRateLadderHz: number[];
+  sampleRates: HardwareSampleRateCapabilityDto[];
+  items: HardwarePotentialItemDto[];
+  ditherRandomAudit: string[];
+  filterAndWindowAudit: string[];
+  diagnosticRecommendation: string | null;
+};
+
 export type HardwareDiagnosticsDto = {
   hardwareDiagnosticsApiVersion: number;
   generatedUtc: string;
@@ -1355,6 +1465,7 @@ export type HardwareDiagnosticsDto = {
   p2: HardwareP2DiagnosticsDto;
   mapping: HardwareMappingDto;
   referenceMap: HardwareDiagnosticItemDto[];
+  hardwarePotential: HardwarePotentialDto;
   candidateSettings: HardwareDiagnosticItemDto[];
   featureSurfaces: HardwareFeatureSurfaceDto[];
 };
@@ -2381,6 +2492,81 @@ function normalizeSmartNrCondition(raw: unknown): SmartNrConditionDto {
   };
 }
 
+function normalizeDspExternalEngineCandidate(raw: unknown): DspExternalEngineCandidateDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    id: diagString(r.id) ?? '',
+    name: diagString(r.name) ?? '',
+    family: diagString(r.family) ?? '',
+    integrationPoint: diagString(r.integrationPoint) ?? '',
+    defaultState: diagString(r.defaultState) ?? 'off',
+    rolloutPolicy: diagString(r.rolloutPolicy) ?? 'candidate-only-opt-in-bakeoff',
+    license: diagString(r.license) ?? '',
+    packagingStatus: diagString(r.packagingStatus) ?? '',
+    runtimeRisk: diagString(r.runtimeRisk) ?? 'unknown',
+    latencyRisk: diagString(r.latencyRisk) ?? 'unknown',
+    radioSafetyRisk: diagString(r.radioSafetyRisk) ?? 'unknown',
+    strengths: diagStringArray(r.strengths),
+    requiredBenchmarks: diagStringArray(r.requiredBenchmarks),
+    requiredEvidence: diagStringArray(r.requiredEvidence),
+    blockers: diagStringArray(r.blockers),
+    referenceUrls: diagStringArray(r.referenceUrls),
+  };
+}
+
+function normalizeDspLiveDiagnostics(raw: unknown): DspLiveDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    generatedUtc: diagString(r.generatedUtc) ?? new Date().toISOString(),
+    status: diagString(r.status) ?? 'unavailable',
+    qualityTone: diagString(r.qualityTone) ?? 'standby',
+    readinessScore: diagNumber(r.readinessScore) ?? 0,
+    readyForLiveBenchmark: Boolean(r.readyForLiveBenchmark),
+    rolloutGate: diagString(r.rolloutGate) ?? 'opt-in-only',
+    wdspActive: Boolean(r.wdspActive),
+    wdspNativeLoadable: Boolean(r.wdspNativeLoadable),
+    wdspEmnrPost2Available: Boolean(r.wdspEmnrPost2Available),
+    wdspNr4SbnrAvailable: Boolean(r.wdspNr4SbnrAvailable),
+    wdspNr5SpnrAvailable: Boolean(r.wdspNr5SpnrAvailable),
+    nr4Readiness: diagString(r.nr4Readiness) ?? 'unknown',
+    nr5Readiness: diagString(r.nr5Readiness) ?? 'unknown',
+    frontendSceneAvailable: Boolean(r.frontendSceneAvailable),
+    frontendSceneStatus: diagString(r.frontendSceneStatus) ?? 'unknown',
+    frontendSceneFresh: Boolean(r.frontendSceneFresh),
+    frontendSceneStale: Boolean(r.frontendSceneStale),
+    frontendSceneAgeMs: diagNumber(r.frontendSceneAgeMs),
+    smartNrProfile: diagString(r.smartNrProfile),
+    expectedNrMode: diagString(r.expectedNrMode),
+    runtimeAligned: diagBool(r.runtimeAligned),
+    runtimeAlignmentStatus: diagString(r.runtimeAlignmentStatus) ?? 'unknown',
+    requestedNrMode: diagString(r.requestedNrMode) ?? 'Off',
+    effectiveNrMode: diagString(r.effectiveNrMode) ?? 'Off',
+    heldByRxChain: diagBool(r.heldByRxChain),
+    rxChainScore: diagNumber(r.rxChainScore),
+    rxChainTone: diagString(r.rxChainTone),
+    rxChainLabel: diagString(r.rxChainLabel),
+    nr5SpnrDiagnostics: normalizeNr5SpnrDiagnostics(r.nr5SpnrDiagnostics),
+    nr5SignalConfidence: diagNumber(r.nr5SignalConfidence),
+    nr5AgcGate: diagNumber(r.nr5AgcGate),
+    nr5MeanGain: diagNumber(r.nr5MeanGain),
+    nr5FloorReductionDb: diagNumber(r.nr5FloorReductionDb),
+    evidence: diagStringArray(r.evidence),
+    constraints: diagStringArray(r.constraints),
+    recommendedActions: diagStringArray(r.recommendedActions),
+    candidateTools: diagStringArray(r.candidateTools),
+    benchmarkPlanEndpoint: diagString(r.benchmarkPlanEndpoint) ?? '/api/dsp/benchmark-plan',
+    benchmarkScenarioCount: diagNumber(r.benchmarkScenarioCount) ?? 0,
+    nextBenchmarkScenarios: diagStringArray(r.nextBenchmarkScenarios),
+    benchmarkAcceptanceGates: diagStringArray(r.benchmarkAcceptanceGates),
+    externalEngineCandidates: Array.isArray(r.externalEngineCandidates)
+      ? r.externalEngineCandidates.map(normalizeDspExternalEngineCandidate)
+      : [],
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+  };
+}
+
 function normalizeSmartNrRxChainRuntime(raw: unknown): SmartNrRxChainRuntimeDto {
   const r = asDiagRecord(raw);
   return {
@@ -3100,6 +3286,72 @@ function normalizeHardwareMapping(raw: unknown): HardwareMappingDto {
   };
 }
 
+const FULL_RX_SAMPLE_RATE_LADDER_HZ = [48_000, 96_000, 192_000, 384_000, 768_000, 1_536_000];
+
+function normalizeHardwareSampleRates(raw: unknown): HardwareSampleRateCapabilityDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    return {
+      rateHz: diagNumber(r.rateHz) ?? 0,
+      label: diagString(r.label) ?? '',
+      supportedByBoard: Boolean(r.supportedByBoard),
+      supportedByActiveProtocol: Boolean(r.supportedByActiveProtocol),
+      currentlySelected: Boolean(r.currentlySelected),
+      status: diagString(r.status) ?? 'unknown',
+      notes: diagString(r.notes) ?? '',
+    };
+  });
+}
+
+function normalizeHardwarePotentialItems(raw: unknown): HardwarePotentialItemDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    return {
+      id: diagString(r.id) ?? '',
+      title: diagString(r.title) ?? '',
+      category: diagString(r.category) ?? '',
+      manualCapability: diagString(r.manualCapability) ?? '',
+      currentExposure: diagString(r.currentExposure) ?? '',
+      implementationStatus: diagString(r.implementationStatus) ?? 'unknown',
+      safetyClass: diagString(r.safetyClass) ?? 'unknown',
+      userConfigurable: Boolean(r.userConfigurable),
+      telemetryPaths: diagStringArray(r.telemetryPaths),
+      currentControls: diagStringArray(r.currentControls),
+      blockers: diagStringArray(r.blockers),
+      nextStep: diagString(r.nextStep) ?? '',
+    };
+  });
+}
+
+function normalizeHardwarePotential(raw: unknown): HardwarePotentialDto {
+  const r = asDiagRecord(raw);
+  const protocol = diagString(r.activeProtocol) ?? 'none';
+  const fullLadder = diagNumberArray(r.fullRxSampleRateLadderHz);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    generatedUtc: diagString(r.generatedUtc) ?? new Date().toISOString(),
+    connectedBoard: diagString(r.connectedBoard) ?? 'Unknown',
+    effectiveBoard: diagString(r.effectiveBoard) ?? 'Unknown',
+    orionMkIIVariant: diagString(r.orionMkIIVariant) ?? 'G2',
+    g2Class: Boolean(r.g2Class),
+    activeProtocol: protocol,
+    currentSampleRateHz: diagNumber(r.currentSampleRateHz) ?? 0,
+    maxRxSampleRateHz: diagNumber(r.maxRxSampleRateHz) ?? 0,
+    fullRxSampleRateLadderHz: fullLadder.length
+      ? fullLadder
+      : [...FULL_RX_SAMPLE_RATE_LADDER_HZ],
+    sampleRates: normalizeHardwareSampleRates(r.sampleRates),
+    items: normalizeHardwarePotentialItems(r.items),
+    ditherRandomAudit: diagStringArray(r.ditherRandomAudit),
+    filterAndWindowAudit: diagStringArray(r.filterAndWindowAudit),
+    diagnosticRecommendation:
+      diagString(r.diagnosticRecommendation) ??
+      'Hardware-potential diagnostics are not available from this backend yet; restart OpenhpsdrZeus after updating to expose sample-rate, dither/random, and filter/window audits.',
+  };
+}
+
 function normalizeHardwareDiagnostics(raw: unknown): HardwareDiagnosticsDto {
   const r = asDiagRecord(raw);
   const p1 = asDiagRecord(r.p1);
@@ -3176,6 +3428,7 @@ function normalizeHardwareDiagnostics(raw: unknown): HardwareDiagnosticsDto {
     },
     mapping: normalizeHardwareMapping(r.mapping),
     referenceMap: normalizeDiagnosticItems(r.referenceMap),
+    hardwarePotential: normalizeHardwarePotential(r.hardwarePotential),
     candidateSettings: normalizeDiagnosticItems(r.candidateSettings),
     featureSurfaces: normalizeFeatureSurfaces(r.featureSurfaces),
   };
@@ -3667,6 +3920,16 @@ export function fetchSmartNrCondition(
     '/api/dsp/nr-condition',
     { signal },
     normalizeSmartNrCondition,
+  );
+}
+
+export function fetchDspLiveDiagnostics(
+  signal?: AbortSignal,
+): Promise<DspLiveDiagnosticsDto> {
+  return jsonFetch(
+    '/api/dsp/live-diagnostics',
+    { signal },
+    normalizeDspLiveDiagnostics,
   );
 }
 

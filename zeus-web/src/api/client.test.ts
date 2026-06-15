@@ -61,6 +61,7 @@ import {
   fetchCfcPresets,
   fetchExternalPttStatus,
   fetchFrontendDspSceneDiagnostics,
+  fetchDspLiveDiagnostics,
   fetchHardwareDiagnostics,
   fetchHardwareKeyingStatus,
   fetchRadioDigInDiagnostics,
@@ -822,6 +823,71 @@ describe('POST helpers', () => {
             },
           ],
         },
+        hardwarePotential: {
+          schemaVersion: 1,
+          generatedUtc: '2026-06-15T07:20:00Z',
+          connectedBoard: 'OrionMkII',
+          effectiveBoard: 'OrionMkII',
+          orionMkIIVariant: 'G2',
+          g2Class: true,
+          activeProtocol: 'P2',
+          currentSampleRateHz: 1536000,
+          maxRxSampleRateHz: 1536000,
+          fullRxSampleRateLadderHz: [48000, 96000, 192000, 384000, 768000, 1536000],
+          sampleRates: [
+            {
+              rateHz: 48000,
+              label: '48 kHz',
+              supportedByBoard: true,
+              supportedByActiveProtocol: true,
+              currentlySelected: false,
+              status: 'available',
+              notes: 'Board and active protocol can use this rate.',
+            },
+            {
+              rateHz: 1536000,
+              label: '1.536 MHz',
+              supportedByBoard: true,
+              supportedByActiveProtocol: true,
+              currentlySelected: true,
+              status: 'selected',
+              notes: 'Active receive sample rate.',
+            },
+          ],
+          items: [
+            {
+              id: 'rx.adc2-ground-on-tx',
+              title: 'ADC2 ground-on-TX protection',
+              category: 'rx-protection',
+              manualCapability: 'The G2 PA topology includes ADC2/RX2 grounding during transmit.',
+              currentExposure: 'Protocol-2 high-priority command path already asserts RX_GNDonTX while keyed.',
+              implementationStatus: 'auto-protection-wired',
+              safetyClass: 'tx-protection',
+              userConfigurable: false,
+              telemetryPaths: ['activeProtocol'],
+              currentControls: ['Protocol2Client.SendCmdHighPriority'],
+              blockers: ['No separate operator override should be exposed.'],
+              nextStep: 'Keep automatic protection enabled.',
+            },
+            {
+              id: 'rx.filter-taps-window-sizes',
+              title: 'RX/TX FIR tap sizes, windows, and phase policy',
+              category: 'dsp-fidelity',
+              manualCapability: 'G2 can feed wide DDC spans up to 1.536 MHz.',
+              currentExposure: 'Blackman-Harris baseline is wired.',
+              implementationStatus: 'p-invoke-gap',
+              safetyClass: 'rx-safe-tx-benchmark-required',
+              userConfigurable: false,
+              telemetryPaths: ['hardwarePotential.filterAndWindowAudit'],
+              currentControls: ['Settings > DSP'],
+              blockers: ['Native WDSP setters are not fully wrapped.'],
+              nextStep: 'Benchmark all tap sizes.',
+            },
+          ],
+          ditherRandomAudit: ['G2 manual: no explicit dither/random control found.'],
+          filterAndWindowAudit: ['Candidate tap sizes: 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536.'],
+          diagnosticRecommendation: 'G2-class hardware potential is visible.',
+        },
         featureSurfaces: [
           {
             id: 'hardware.mapping.correlation',
@@ -919,6 +985,13 @@ describe('POST helpers', () => {
     expect(diag.pureSignal.diagnosticRecommendation).toContain('centered');
     expect(diag.mapping.schemaVersion).toBe(2);
     expect(diag.mapping.markers[0]?.label).toBe('RX2 on');
+    expect(diag.hardwarePotential.g2Class).toBe(true);
+    expect(diag.hardwarePotential.sampleRates.map((rate) => rate.rateHz)).toEqual([48000, 1536000]);
+    expect(diag.hardwarePotential.fullRxSampleRateLadderHz).toContain(1536000);
+    expect(diag.hardwarePotential.items[0]?.id).toBe('rx.adc2-ground-on-tx');
+    expect(diag.hardwarePotential.items[0]?.implementationStatus).toBe('auto-protection-wired');
+    expect(diag.hardwarePotential.ditherRandomAudit[0]).toContain('dither/random');
+    expect(diag.hardwarePotential.filterAndWindowAudit[0]).toContain('65536');
     expect(diag.featureSurfaces[0]?.id).toBe('hardware.mapping.correlation');
   });
 
@@ -1213,6 +1286,128 @@ describe('POST helpers', () => {
     expect(condition.rxChain.adc0MaxMagnitude).toBe(44000);
     expect(condition.rxChain.adc1MaxMagnitude).toBeNull();
     expect(condition.rxChain.squelchEnabled).toBe(true);
+  });
+
+  it('fetchDspLiveDiagnostics reads modernization readiness and benchmark gates', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      generatedUtc: '2026-06-15T18:22:00Z',
+      status: 'ready-for-live-benchmark',
+      qualityTone: 'ready',
+      readinessScore: 91,
+      readyForLiveBenchmark: true,
+      rolloutGate: 'opt-in-only-until-benchmark-and-g2-on-air-acceptance',
+      wdspActive: true,
+      wdspNativeLoadable: true,
+      wdspEmnrPost2Available: true,
+      wdspNr4SbnrAvailable: true,
+      wdspNr5SpnrAvailable: true,
+      nr4Readiness: 'available',
+      nr5Readiness: 'available',
+      frontendSceneAvailable: true,
+      frontendSceneStatus: 'fresh',
+      frontendSceneFresh: true,
+      frontendSceneStale: false,
+      frontendSceneAgeMs: 42,
+      smartNrProfile: 'NR5',
+      expectedNrMode: 'Nr5',
+      runtimeAligned: true,
+      runtimeAlignmentStatus: 'aligned',
+      requestedNrMode: 'Nr5',
+      effectiveNrMode: 'Nr5',
+      heldByRxChain: false,
+      rxChainScore: 94,
+      rxChainTone: 'neutral',
+      rxChainLabel: 'RX chain optimized',
+      nr5SignalConfidence: 0.73,
+      nr5AgcGate: 0.66,
+      nr5MeanGain: 0.58,
+      nr5FloorReductionDb: 7.3,
+      nr5SpnrDiagnostics: {
+        schemaVersion: 3,
+        channelId: 0,
+        run: true,
+        position: 1,
+        learnedFrames: 80,
+        aggressiveness: 0.62,
+        agcRun: true,
+        targetRms: 0.075,
+        maxGain: 12,
+        agcGain: 1.7,
+        agcGainDb: 4.6,
+        presencePeak: 0.8,
+        saliencePeak: 0.7,
+        coherencePeak: 0.65,
+        ridgePeak: 0.61,
+        meanGain: 0.58,
+        minGain: 0.18,
+        suppressionDb: 9.1,
+        noiseFloorDb: -58,
+        floorReductionDb: 7.3,
+        dynamicRangeDb: 18.4,
+        signalConfidence: 0.73,
+        agcGate: 0.66,
+        inputRms: 0.031,
+        inputDbfs: -30.2,
+        outputRms: 0.068,
+        outputDbfs: -23.4,
+      },
+      evidence: ['wdsp-active', 'ready-for-g2-live-benchmark'],
+      constraints: [],
+      recommendedActions: ['Capture a G2 live benchmark run.'],
+      candidateTools: ['nr5-spnr-diagnostics', 'external-post-demod-bakeoff:rnnoise'],
+      benchmarkPlanEndpoint: '/api/dsp/benchmark-plan',
+      benchmarkScenarioCount: 12,
+      nextBenchmarkScenarios: ['weak-cw-carrier', 'agc-level-step'],
+      benchmarkAcceptanceGates: ['No audible AGC or NR pumping.'],
+      externalEngineCandidates: [
+        {
+          schemaVersion: 1,
+          id: 'rnnoise',
+          name: 'RNNoise',
+          family: 'neural-speech-denoiser',
+          integrationPoint: 'post-demod-rx-audio-speech-only',
+          defaultState: 'off',
+          rolloutPolicy: 'candidate-only-opt-in-bakeoff',
+          license: 'BSD-3-Clause',
+          packagingStatus: 'native-c-library-not-vendored',
+          runtimeRisk: 'medium',
+          latencyRisk: 'low-medium',
+          radioSafetyRisk: 'medium: speech-trained model may damage weak CW',
+          strengths: ['Small C runtime'],
+          requiredBenchmarks: ['ssb-like-speech', 'weak-cw-carrier'],
+          requiredEvidence: ['Must preserve weak carrier/CW fixtures.'],
+          blockers: ['No bundled native package or model artifact.'],
+          referenceUrls: ['https://github.com/xiph/rnnoise'],
+        },
+      ],
+      diagnosticRecommendation: 'Live diagnostics are aligned enough for a G2 benchmark capture.',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const diag = await fetchDspLiveDiagnostics();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/dsp/live-diagnostics');
+    expect(init?.method).toBeUndefined();
+    expect(diag.status).toBe('ready-for-live-benchmark');
+    expect(diag.readinessScore).toBe(91);
+    expect(diag.readyForLiveBenchmark).toBe(true);
+    expect(diag.wdspNr5SpnrAvailable).toBe(true);
+    expect(diag.frontendSceneFresh).toBe(true);
+    expect(diag.runtimeAligned).toBe(true);
+    expect(diag.nr5SpnrDiagnostics?.learnedFrames).toBe(80);
+    expect(diag.nr5SignalConfidence).toBe(0.73);
+    expect(diag.evidence).toContain('ready-for-g2-live-benchmark');
+    expect(diag.candidateTools).toContain('nr5-spnr-diagnostics');
+    expect(diag.benchmarkPlanEndpoint).toBe('/api/dsp/benchmark-plan');
+    expect(diag.benchmarkScenarioCount).toBe(12);
+    expect(diag.nextBenchmarkScenarios).toEqual(['weak-cw-carrier', 'agc-level-step']);
+    expect(diag.benchmarkAcceptanceGates[0]).toContain('pumping');
+    expect(diag.externalEngineCandidates[0]?.id).toBe('rnnoise');
+    expect(diag.externalEngineCandidates[0]?.defaultState).toBe('off');
+    expect(diag.externalEngineCandidates[0]?.requiredBenchmarks).toContain('weak-cw-carrier');
+    expect(diag.externalEngineCandidates[0]?.blockers[0]).toContain('No bundled native package');
   });
 
   it('fetchTxDiagnostics reads P2 DUC egress counters', async () => {

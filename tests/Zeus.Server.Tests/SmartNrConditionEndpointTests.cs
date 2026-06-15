@@ -166,6 +166,210 @@ public sealed class SmartNrConditionEndpointTests
     }
 
     [Fact]
+    public async Task GetLiveDiagnostics_ReturnsToolFriendlyModernizationSummary()
+    {
+        using var factory = new Factory();
+        using var client = factory.CreateClient();
+
+        var post = await client.PostAsJsonAsync("/api/radio/diagnostics/dsp-scene", new
+        {
+            sourceClientId = "frontend-live",
+            mode = "USB",
+            signalProfile = "dx",
+            signalReason = "coherent weak ridge",
+            smartNrProfile = "NR2",
+            smartNrReason = "weak sparse signal",
+            smartNrRecommendation = "Keep RX headroom and use gentle NR2",
+            smartNrHeldByRxChain = false,
+            smartNrRxChainLabel = "RX chain optimized",
+            smartNrRxChainRecommendation = "Hold front-end settings",
+            smartNrRxChainTone = "neutral",
+            smartNrRxChainScore = 91,
+            maxSnrDb = 7.14,
+            coherentMaxSnrDb = 6.83,
+            occupiedPct = 1.23,
+            coherentOccupiedPct = 0.84,
+            impulsivePct = 0.12,
+            peakCount = 1,
+            coherentPeakCount = 1,
+            coherentSubthresholdSignal = true,
+            sourceAtUtc = DateTimeOffset.UtcNow.AddSeconds(-1),
+        });
+        Assert.Equal(HttpStatusCode.OK, post.StatusCode);
+
+        var resp = await client.GetAsync("/api/dsp/live-diagnostics");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+        var root = body.RootElement;
+
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.True(root.GetProperty("readinessScore").GetInt32() >= 0);
+        Assert.Equal("opt-in-only-until-benchmark-and-g2-on-air-acceptance", root.GetProperty("rolloutGate").GetString());
+        Assert.True(root.GetProperty("frontendSceneAvailable").GetBoolean());
+        Assert.Equal("NR2", root.GetProperty("smartNrProfile").GetString());
+        Assert.Contains(root.GetProperty("status").GetString(), new[]
+        {
+            "dsp-engine-unavailable",
+            "frontend-scene-missing",
+            "smart-nr-runtime-misaligned",
+            "smart-nr-apply-pending",
+            "verify-before-tuning",
+            "ready-for-live-benchmark",
+        });
+
+        var tools = root.GetProperty("candidateTools").EnumerateArray().Select(item => item.GetString()).ToArray();
+        Assert.Contains("offline-dsp-benchmark-harness", tools);
+        Assert.Contains("dsp-benchmark-acceptance-plan", tools);
+        Assert.Contains("g2-live-capture", tools);
+        Assert.Contains("external-post-demod-bakeoff:rnnoise", tools);
+        Assert.Contains("external-post-demod-bakeoff:deepfilternet", tools);
+        Assert.Equal("/api/dsp/benchmark-plan", root.GetProperty("benchmarkPlanEndpoint").GetString());
+        Assert.True(root.GetProperty("benchmarkScenarioCount").GetInt32() >= 12);
+        Assert.NotEmpty(root.GetProperty("nextBenchmarkScenarios").EnumerateArray());
+        Assert.Contains(
+            root.GetProperty("benchmarkAcceptanceGates").EnumerateArray().Select(item => item.GetString()),
+            gate => gate is not null && gate.Contains("No weak-signal loss", StringComparison.Ordinal));
+
+        var candidates = root.GetProperty("externalEngineCandidates")
+            .EnumerateArray()
+            .Select(item => item.GetProperty("id").GetString())
+            .ToArray();
+        Assert.Contains("rnnoise", candidates);
+        Assert.Contains("deepfilternet", candidates);
+        Assert.Contains("speexdsp", candidates);
+        Assert.Contains("webrtc-apm", candidates);
+    }
+
+    [Fact]
+    public async Task GetBenchmarkPlan_ReturnsModernizationAcceptanceScenarios()
+    {
+        using var factory = new Factory();
+        using var client = factory.CreateClient();
+
+        var resp = await client.GetAsync("/api/dsp/benchmark-plan");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+        var root = body.RootElement;
+
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("G2", root.GetProperty("firstHardwareTarget").GetString());
+        Assert.Contains(
+            root.GetProperty("requiredComparisons").EnumerateArray().Select(item => item.GetString()),
+            item => item == "thetis-parity");
+        Assert.Contains(
+            root.GetProperty("globalAcceptanceGates").EnumerateArray().Select(item => item.GetString()),
+            item => item is not null && item.Contains("No TX clipping", StringComparison.Ordinal));
+
+        var scenarios = root.GetProperty("scenarios").EnumerateArray().ToArray();
+        Assert.True(scenarios.Length >= 12);
+        var ids = scenarios.Select(item => item.GetProperty("id").GetString()).ToArray();
+        Assert.Contains("weak-cw-carrier", ids);
+        Assert.Contains("ssb-like-speech", ids);
+        Assert.Contains("tx-puresignal-safe-bypass", ids);
+        Assert.Contains("wdsp-channel-lifecycle", ids);
+
+        var pureSignal = scenarios.Single(item => item.GetProperty("id").GetString() == "tx-puresignal-safe-bypass");
+        Assert.Equal("hardware-capture-required", pureSignal.GetProperty("fixtureStatus").GetString());
+        Assert.Contains(
+            pureSignal.GetProperty("acceptanceGates").EnumerateArray().Select(item => item.GetString()),
+            item => item is not null && item.Contains("PureSignal", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GetBenchmarkCaptureManifest_ReturnsCurrentEvidenceChecklist()
+    {
+        using var factory = new Factory();
+        using var client = factory.CreateClient();
+
+        var resp = await client.GetAsync("/api/dsp/benchmark-capture-manifest");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+        var root = body.RootElement;
+
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.StartsWith("dsp-capture-", root.GetProperty("manifestId").GetString(), StringComparison.Ordinal);
+        Assert.Equal("G2", root.GetProperty("hardwareTarget").GetString());
+        Assert.Equal("/api/dsp/live-diagnostics", root.GetProperty("liveDiagnosticsEndpoint").GetString());
+        Assert.Equal("/api/dsp/benchmark-plan", root.GetProperty("benchmarkPlanEndpoint").GetString());
+        Assert.Equal("/api/dsp/external-engine-candidates", root.GetProperty("externalEngineCandidatesEndpoint").GetString());
+        Assert.Contains(
+            root.GetProperty("scenarioIds").EnumerateArray().Select(item => item.GetString()),
+            item => item == "wdsp-channel-lifecycle");
+        Assert.Contains(
+            root.GetProperty("requiredComparisons").EnumerateArray().Select(item => item.GetString()),
+            item => item == "current-zeus");
+        Assert.NotEmpty(root.GetProperty("preflightChecks").EnumerateArray());
+        Assert.NotEmpty(root.GetProperty("stopConditions").EnumerateArray());
+
+        var artifacts = root.GetProperty("requiredArtifacts").EnumerateArray().ToArray();
+        Assert.Contains(artifacts, item => item.GetProperty("id").GetString() == "live-diagnostics-json");
+        Assert.Contains(artifacts, item => item.GetProperty("source").GetString() == "/api/radio/diagnostics/dsp-scene");
+        Assert.Contains(artifacts, item => item.GetProperty("id").GetString() == "offline-fixture-metrics");
+    }
+
+    [Fact]
+    public async Task GetModernizationSnapshot_ReturnsOneCallEvidenceBundle()
+    {
+        using var factory = new Factory();
+        using var client = factory.CreateClient();
+
+        var resp = await client.GetAsync("/api/dsp/modernization-snapshot");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+        var root = body.RootElement;
+
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.StartsWith("dsp-modernization-", root.GetProperty("snapshotId").GetString(), StringComparison.Ordinal);
+        Assert.True(root.GetProperty("evidenceCompletenessScore").GetInt32() is >= 0 and <= 100);
+        Assert.Equal("G2", root.GetProperty("hardwareTarget").GetString());
+        Assert.Contains(
+            root.GetProperty("includedEndpoints").EnumerateArray().Select(item => item.GetString()),
+            item => item == "/api/dsp/modernization-snapshot");
+        Assert.Contains(
+            root.GetProperty("includedArtifacts").EnumerateArray().Select(item => item.GetString()),
+            item => item == "live-diagnostics-json");
+        Assert.Contains(
+            root.GetProperty("missingEvidence").EnumerateArray().Select(item => item.GetString()),
+            item => item == "frontend-dsp-scene");
+        Assert.Equal(1, root.GetProperty("smartNrCondition").GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(1, root.GetProperty("liveDiagnostics").GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(1, root.GetProperty("benchmarkPlan").GetProperty("schemaVersion").GetInt32());
+        Assert.Equal(1, root.GetProperty("captureManifest").GetProperty("schemaVersion").GetInt32());
+        Assert.NotEmpty(root.GetProperty("externalEngineCandidates").EnumerateArray());
+    }
+
+    [Fact]
+    public async Task GetExternalEngineCandidates_ReturnsOptInBakeoffCatalog()
+    {
+        using var factory = new Factory();
+        using var client = factory.CreateClient();
+
+        var resp = await client.GetAsync("/api/dsp/external-engine-candidates");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+        var candidates = body.RootElement.EnumerateArray().ToArray();
+
+        Assert.Equal(4, candidates.Length);
+        var ids = candidates.Select(item => item.GetProperty("id").GetString()).ToArray();
+        Assert.Equal(new[] { "rnnoise", "deepfilternet", "speexdsp", "webrtc-apm" }, ids);
+        Assert.All(candidates, item =>
+        {
+            Assert.Equal("off", item.GetProperty("defaultState").GetString());
+            Assert.Equal("candidate-only-opt-in-bakeoff", item.GetProperty("rolloutPolicy").GetString());
+            Assert.Contains("post-demod", item.GetProperty("integrationPoint").GetString());
+            Assert.NotEmpty(item.GetProperty("requiredBenchmarks").EnumerateArray());
+            Assert.NotEmpty(item.GetProperty("requiredEvidence").EnumerateArray());
+            Assert.NotEmpty(item.GetProperty("blockers").EnumerateArray());
+            Assert.NotEmpty(item.GetProperty("referenceUrls").EnumerateArray());
+        });
+    }
+
+    [Fact]
     public async Task GetDspSceneAfterFrontendPost_ReturnsSceneSnapshot()
     {
         using var factory = new Factory();
@@ -235,8 +439,26 @@ public sealed class SmartNrConditionEndpointTests
             .ToArray();
 
         Assert.Contains("/api/dsp/nr-condition", controls);
+        Assert.Contains("/api/dsp/live-diagnostics", controls);
+        Assert.Contains("/api/dsp/external-engine-candidates", controls);
+        Assert.Contains("/api/dsp/benchmark-plan", controls);
+        Assert.Contains("/api/dsp/benchmark-capture-manifest", controls);
+        Assert.Contains("/api/dsp/modernization-snapshot", controls);
         Assert.Contains("/api/radio/diagnostics/dsp-scene", controls);
         Assert.DoesNotContain("planned:/api/dsp/nr-condition", controls);
+
+        var telemetry = smartNr.GetProperty("telemetryPaths")
+            .EnumerateArray()
+            .Select(item => item.GetString())
+            .ToArray();
+        Assert.Contains("/api/dsp/live-diagnostics.externalEngineCandidates", telemetry);
+        Assert.Contains("/api/dsp/external-engine-candidates[].requiredBenchmarks", telemetry);
+        Assert.Contains("/api/dsp/benchmark-plan.globalAcceptanceGates", telemetry);
+        Assert.Contains("/api/dsp/benchmark-plan.scenarios[].acceptanceGates", telemetry);
+        Assert.Contains("/api/dsp/benchmark-capture-manifest.requiredArtifacts", telemetry);
+        Assert.Contains("/api/dsp/benchmark-capture-manifest.stopConditions", telemetry);
+        Assert.Contains("/api/dsp/modernization-snapshot.evidenceCompletenessScore", telemetry);
+        Assert.Contains("/api/dsp/modernization-snapshot.missingEvidence", telemetry);
     }
 
     private sealed class Factory : WebApplicationFactory<Program>

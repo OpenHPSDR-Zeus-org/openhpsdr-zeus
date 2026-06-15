@@ -1614,6 +1614,52 @@ public static class ZeusEndpoints
                 BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus())));
         });
 
+        app.MapGet("/api/dsp/live-diagnostics", (FrontendDspSceneDiagnosticsService scene, DspPipelineService dsp, RadioService radio) =>
+        {
+            var state = radio.Snapshot();
+            var condition = scene.SmartNrCondition(
+                dsp.SnapshotNrRuntime(),
+                BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus()));
+            return Results.Ok(DspLiveDiagnosticsService.Build(condition));
+        });
+
+        app.MapGet("/api/dsp/external-engine-candidates", () =>
+        {
+            return Results.Ok(DspExternalEngineCandidateCatalog.All());
+        });
+
+        app.MapGet("/api/dsp/benchmark-plan", () =>
+        {
+            return Results.Ok(DspBenchmarkPlanCatalog.Build());
+        });
+
+        app.MapGet("/api/dsp/benchmark-capture-manifest", (FrontendDspSceneDiagnosticsService scene, DspPipelineService dsp, RadioService radio) =>
+        {
+            var state = radio.Snapshot();
+            var condition = scene.SmartNrCondition(
+                dsp.SnapshotNrRuntime(),
+                BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus()));
+            var live = DspLiveDiagnosticsService.Build(condition);
+            return Results.Ok(DspBenchmarkCaptureManifestService.Build(live, DspBenchmarkPlanCatalog.Build()));
+        });
+
+        app.MapGet("/api/dsp/modernization-snapshot", (FrontendDspSceneDiagnosticsService scene, DspPipelineService dsp, RadioService radio) =>
+        {
+            var state = radio.Snapshot();
+            var condition = scene.SmartNrCondition(
+                dsp.SnapshotNrRuntime(),
+                BuildSmartNrRxChainRuntime(state, radio.GetAdcProtectionStatus()));
+            var live = DspLiveDiagnosticsService.Build(condition);
+            var plan = DspBenchmarkPlanCatalog.Build();
+            var manifest = DspBenchmarkCaptureManifestService.Build(live, plan);
+            return Results.Ok(DspModernizationEvidenceSnapshotService.Build(
+                condition,
+                live,
+                plan,
+                manifest,
+                DspExternalEngineCandidateCatalog.All()));
+        });
+
         app.MapGet("/api/tx/external-ptt", (ExternalPttService externalPtt) =>
         {
             return Results.Ok(externalPtt.Snapshot());

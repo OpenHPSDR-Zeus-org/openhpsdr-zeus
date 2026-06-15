@@ -20,6 +20,20 @@ function arrays(): {
   };
 }
 
+function paintRun(
+  spectrum: Float32Array,
+  confidence: Float32Array,
+  lo: number,
+  hi: number,
+  snrDb: number,
+  confidenceValue: number,
+): void {
+  for (let i = lo; i <= hi; i++) {
+    spectrum[i] = NOISE_DB + snrDb;
+    confidence[i] = confidenceValue;
+  }
+}
+
 describe('auto notch detector', () => {
   it('detects a persistent narrow EMF bar', () => {
     const { spectrum, floor, confidence } = arrays();
@@ -62,6 +76,41 @@ describe('auto notch detector', () => {
     expect(notches).toEqual([]);
   });
 
+  it('detects strong coherent blockers wider than the narrow bar limit', () => {
+    const { spectrum, floor, confidence } = arrays();
+    paintRun(spectrum, confidence, 68, 77, 34, 0.84);
+    paintRun(spectrum, confidence, 88, 97, 32, 0.82);
+
+    const notches = detectAutoNotches({
+      spectrum,
+      floor,
+      confidence,
+      centerHz: CENTER_HZ,
+      hzPerPixel: 100,
+    });
+
+    expect(notches).toHaveLength(2);
+    expect(notches[0]!.widthHz).toBeGreaterThan(750);
+    expect(notches[1]!.widthHz).toBeGreaterThan(750);
+  });
+
+  it('detects partially visible wide blockers at the edge of the display', () => {
+    const { spectrum, floor, confidence } = arrays();
+    paintRun(spectrum, confidence, 0, 12, 25, 0.76);
+
+    const notches = detectAutoNotches({
+      spectrum,
+      floor,
+      confidence,
+      centerHz: CENTER_HZ,
+      hzPerPixel: 100,
+    });
+
+    expect(notches).toHaveLength(1);
+    expect(notches[0]!.centerHz).toBeLessThan(CENTER_HZ - 5_000);
+    expect(notches[0]!.widthHz).toBeGreaterThan(1_000);
+  });
+
   it('does not replace a manual notch already covering the bar', () => {
     const { spectrum, floor, confidence } = arrays();
     spectrum[72] = -94;
@@ -99,6 +148,19 @@ describe('auto notch detector', () => {
     expect(verified[0]!.hits).toBe(3);
     expect(verified[0]!.centerHz).toBeGreaterThan(CENTER_HZ + 90);
     expect(verified[0]!.centerHz).toBeLessThan(CENTER_HZ + 120);
+  });
+
+  it('keeps verified wide blocker widths instead of clamping them narrow', () => {
+    const tracker = createAutoNotchTracker({ verifySamples: 1 });
+    const verified = tracker.update([{
+      centerHz: CENTER_HZ + 2_000,
+      widthHz: 3_200,
+      snrDb: 34,
+      confidence: 0.86,
+    }]);
+
+    expect(verified).toHaveLength(1);
+    expect(verified[0]!.widthHz).toBe(3_200);
   });
 
   it('holds verified notches through brief missed samples', () => {

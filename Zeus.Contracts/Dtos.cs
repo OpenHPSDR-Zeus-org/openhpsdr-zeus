@@ -175,6 +175,204 @@ public sealed record SmartNrConditionDto(
     string DiagnosticRecommendation,
     DateTimeOffset GeneratedUtc);
 
+// Machine-readable benchmark plan for WDSP modernization. These scenarios are
+// evidence requirements, not runtime DSP behavior.
+public sealed record DspBenchmarkScenarioDto(
+    int SchemaVersion,
+    string Id,
+    string Name,
+    string Phase,
+    string SignalPath,
+    string FixtureStatus,
+    string[] AppliesTo,
+    string[] RequiredComparisons,
+    string[] RequiredMetrics,
+    string[] AcceptanceGates,
+    string[] RequiredArtifacts,
+    string[] FailureModes,
+    string[] RelatedTools);
+
+public sealed record DspBenchmarkPlanDto(
+    int SchemaVersion,
+    DateTimeOffset GeneratedUtc,
+    string Status,
+    string RolloutGate,
+    string FirstHardwareTarget,
+    string[] RequiredHardwareBeforeGraduation,
+    string[] RequiredComparisons,
+    string[] GlobalAcceptanceGates,
+    DspBenchmarkScenarioDto[] Scenarios);
+
+public sealed record DspBenchmarkCaptureArtifactDto(
+    int SchemaVersion,
+    string Id,
+    string Kind,
+    string Source,
+    string Purpose,
+    string Cadence,
+    bool Required,
+    string[] ScenarioIds);
+
+public sealed record DspBenchmarkCaptureManifestDto(
+    int SchemaVersion,
+    DateTimeOffset GeneratedUtc,
+    string ManifestId,
+    string Status,
+    bool ReadyForCapture,
+    string CaptureGate,
+    string HardwareTarget,
+    string LiveDiagnosticsStatus,
+    int LiveReadinessScore,
+    string LiveDiagnosticsEndpoint,
+    string BenchmarkPlanEndpoint,
+    string ExternalEngineCandidatesEndpoint,
+    string[] ScenarioIds,
+    string[] RequiredComparisons,
+    string[] GlobalAcceptanceGates,
+    string[] PreflightChecks,
+    string[] StopConditions,
+    string[] Constraints,
+    string[] RecommendedActions,
+    DspBenchmarkCaptureArtifactDto[] RequiredArtifacts,
+    string[] OperatorNotes);
+
+public sealed record DspModernizationEvidenceSnapshotDto(
+    int SchemaVersion,
+    DateTimeOffset GeneratedUtc,
+    string SnapshotId,
+    string Status,
+    int EvidenceCompletenessScore,
+    bool ReadyForLiveBenchmark,
+    bool ReadyForCapture,
+    string RolloutGate,
+    string HardwareTarget,
+    string[] IncludedEndpoints,
+    string[] IncludedArtifacts,
+    string[] MissingEvidence,
+    string[] NextActions,
+    SmartNrConditionDto SmartNrCondition,
+    DspLiveDiagnosticsDto LiveDiagnostics,
+    DspBenchmarkPlanDto BenchmarkPlan,
+    DspBenchmarkCaptureManifestDto CaptureManifest,
+    DspExternalEngineCandidateDto[] ExternalEngineCandidates);
+
+// Read-only catalog entry for optional external DSP/ML engines. These are
+// candidates for post-demod audio bakeoffs, not replacements for WDSP IQ
+// processing or approval to change operator defaults.
+public sealed record DspExternalEngineCandidateDto(
+    int SchemaVersion,
+    string Id,
+    string Name,
+    string Family,
+    string IntegrationPoint,
+    string DefaultState,
+    string RolloutPolicy,
+    string License,
+    string PackagingStatus,
+    string RuntimeRisk,
+    string LatencyRisk,
+    string RadioSafetyRisk,
+    string[] Strengths,
+    string[] RequiredBenchmarks,
+    string[] RequiredEvidence,
+    string[] Blockers,
+    string[] ReferenceUrls);
+
+// Tool-facing live DSP modernization summary. This fuses the Smart NR scene,
+// WDSP runtime capability, RX-chain health, and NR5/SPNR diagnostics into one
+// read-only gate for G2/on-air benchmarking. It is diagnostic evidence only:
+// RolloutGate remains opt-in unless a separate benchmark + hardware review
+// approves changing defaults.
+public sealed record DspLiveDiagnosticsDto(
+    int SchemaVersion,
+    DateTimeOffset GeneratedUtc,
+    string Status,
+    string QualityTone,
+    int ReadinessScore,
+    bool ReadyForLiveBenchmark,
+    string RolloutGate,
+    bool WdspActive,
+    bool WdspNativeLoadable,
+    bool WdspEmnrPost2Available,
+    bool WdspNr4SbnrAvailable,
+    bool WdspNr5SpnrAvailable,
+    string Nr4Readiness,
+    string Nr5Readiness,
+    bool FrontendSceneAvailable,
+    string FrontendSceneStatus,
+    bool FrontendSceneFresh,
+    bool FrontendSceneStale,
+    long? FrontendSceneAgeMs,
+    string? SmartNrProfile,
+    string? ExpectedNrMode,
+    bool? RuntimeAligned,
+    string RuntimeAlignmentStatus,
+    string RequestedNrMode,
+    string EffectiveNrMode,
+    bool? HeldByRxChain,
+    int? RxChainScore,
+    string? RxChainTone,
+    string? RxChainLabel,
+    Nr5SpnrDiagnosticsDto? Nr5SpnrDiagnostics,
+    double? Nr5SignalConfidence,
+    double? Nr5AgcGate,
+    double? Nr5MeanGain,
+    double? Nr5FloorReductionDb,
+    string[] Evidence,
+    string[] Constraints,
+    string[] RecommendedActions,
+    string[] CandidateTools,
+    string BenchmarkPlanEndpoint,
+    int BenchmarkScenarioCount,
+    string[] NextBenchmarkScenarios,
+    string[] BenchmarkAcceptanceGates,
+    DspExternalEngineCandidateDto[] ExternalEngineCandidates,
+    string DiagnosticRecommendation);
+
+// Read-only audit of what the connected/effective hardware can do versus
+// what Zeus currently exposes as a safe control. This is deliberately
+// diagnostics-only: write controls must be added through board-gated APIs
+// after the exact wire mapping is verified.
+public sealed record HardwareSampleRateCapabilityDto(
+    int RateHz,
+    string Label,
+    bool SupportedByBoard,
+    bool SupportedByActiveProtocol,
+    bool CurrentlySelected,
+    string Status,
+    string Notes);
+
+public sealed record HardwarePotentialItemDto(
+    string Id,
+    string Title,
+    string Category,
+    string ManualCapability,
+    string CurrentExposure,
+    string ImplementationStatus,
+    string SafetyClass,
+    bool UserConfigurable,
+    string[] TelemetryPaths,
+    string[] CurrentControls,
+    string[] Blockers,
+    string NextStep);
+
+public sealed record HardwarePotentialDto(
+    int SchemaVersion,
+    DateTimeOffset GeneratedUtc,
+    string ConnectedBoard,
+    string EffectiveBoard,
+    string OrionMkIIVariant,
+    bool G2Class,
+    string ActiveProtocol,
+    int CurrentSampleRateHz,
+    int MaxRxSampleRateHz,
+    int[] FullRxSampleRateLadderHz,
+    HardwareSampleRateCapabilityDto[] SampleRates,
+    HardwarePotentialItemDto[] Items,
+    string[] DitherRandomAudit,
+    string[] FilterAndWindowAudit,
+    string DiagnosticRecommendation);
+
 public sealed record Nr5SpnrDiagnosticsDto(
     int SchemaVersion,
     int ChannelId,
