@@ -72,6 +72,7 @@ const STORAGE_KEY = 'zeus.display.dbRange';
 const TX_STORAGE_KEY = 'zeus.display.txDbRange';
 const WF_STORAGE_KEY = 'zeus.display.wfDbRange';
 const WF_TX_STORAGE_KEY = 'zeus.display.wfTxDbRange';
+const WF_CADENCE_STORAGE_KEY = 'zeus.display.wfRowCadence';
 
 // Legacy localStorage keys — pre-server-side storage. Read once on first
 // load to migrate the operator's existing image / colour up to the backend,
@@ -101,6 +102,36 @@ export type PanBackgroundMode = 'basic' | 'beam-map' | 'image';
 // 'fill' → cover (fills the panel, may crop)
 // 'stretch' → 100% 100% (distorts to fit exactly)
 export type BackgroundImageFit = 'fit' | 'fill' | 'stretch';
+
+// Number of server display frames per waterfall row upload. 1 = every
+// frame (~30 Hz), 2 = current balanced default (~15 Hz), 3 = lower CPU
+// scroll (~10 Hz). Shift/reset still run every frame so tuning remains
+// visually locked to the panadapter.
+export type WaterfallRowCadence = 1 | 2 | 3;
+export const DEFAULT_WF_ROW_CADENCE: WaterfallRowCadence = 2;
+
+function normalizeWaterfallRowCadence(raw: unknown): WaterfallRowCadence {
+  const n = typeof raw === 'number' ? raw : Number(raw);
+  return n === 1 || n === 2 || n === 3 ? n : DEFAULT_WF_ROW_CADENCE;
+}
+
+function readSavedWaterfallRowCadence(): WaterfallRowCadence {
+  try {
+    if (typeof localStorage === 'undefined') return DEFAULT_WF_ROW_CADENCE;
+    return normalizeWaterfallRowCadence(localStorage.getItem(WF_CADENCE_STORAGE_KEY));
+  } catch {
+    return DEFAULT_WF_ROW_CADENCE;
+  }
+}
+
+function writeSavedWaterfallRowCadence(value: WaterfallRowCadence): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(WF_CADENCE_STORAGE_KEY, String(value));
+  } catch {
+    // quota exceeded / private mode — accept silently.
+  }
+}
 
 function readLegacyRxTraceColor(): string | null {
   try {
@@ -280,6 +311,7 @@ export type DisplaySettingsState = {
   txDbMin: number;
   txDbMax: number;
   colormap: ColormapId;
+  waterfallRowCadence: WaterfallRowCadence;
   // Panadapter background overlay mode + (optional) user image. See the
   // PanBackgroundMode and BackgroundImageFit types above. Persisted on the
   // backend (zeus-prefs.db) so a single setting follows the operator across
@@ -302,6 +334,7 @@ export type DisplaySettingsState = {
   setRxTraceColor: (v: string) => Promise<void>;
   setAutoRange: (v: boolean) => void;
   setColormap: (id: ColormapId) => void;
+  setWaterfallRowCadence: (value: WaterfallRowCadence) => void;
   updateAutoRange: (wfDb: Float32Array) => void;
   // Shift dbMin and dbMax together by `deltaDb`. Used by the draggable dB
   // scale overlay on the panadapter with content-follows-finger semantics:
@@ -353,6 +386,7 @@ const initialRange = readSavedRange();
 const initialTxRange = readSavedTxRange();
 const initialWfRange = readSavedWfRange();
 const initialWfTxRange = readSavedWfTxRange();
+const initialWaterfallRowCadence = readSavedWaterfallRowCadence();
 
 export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) => ({
   autoRange: false,
@@ -365,6 +399,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   txDbMin: initialTxRange.txDbMin,
   txDbMax: initialTxRange.txDbMax,
   colormap: 'blue',
+  waterfallRowCadence: initialWaterfallRowCadence,
   // Defaults until the server-side fetch lands (see hydrateFromServer at the
   // bottom of this file). The operator briefly sees a plain panadapter on
   // first paint instead of their saved image — acceptable trade-off for not
@@ -462,6 +497,11 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     }
   },
   setColormap: (colormap) => set({ colormap }),
+  setWaterfallRowCadence: (value) => {
+    const next = normalizeWaterfallRowCadence(value);
+    set({ waterfallRowCadence: next });
+    writeSavedWaterfallRowCadence(next);
+  },
   shiftDbRange: (deltaDb) => {
     // While AUTO is on, the live dbMin/dbMax are EMA-smoothed band-tracking
     // outputs (often messy floats and a tighter span than the user's saved

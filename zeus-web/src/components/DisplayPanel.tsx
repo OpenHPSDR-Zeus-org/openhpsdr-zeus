@@ -16,6 +16,7 @@
 import { BackgroundSettingsPanel } from './BackgroundSettingsPanel';
 import { ThemeSettingsPanel } from './ThemeSettingsPanel';
 import { TraceColorPanel } from './TraceColorPanel';
+import { WaterfallColormapPanel } from './WaterfallColormapPanel';
 
 export function DisplayPanel() {
   return (
@@ -23,6 +24,7 @@ export function DisplayPanel() {
       <ThemeSettingsPanel />
       <BackgroundSettingsPanel />
       <TraceColorPanel />
+      <WaterfallColormapPanel />
     </div>
   );
 }
