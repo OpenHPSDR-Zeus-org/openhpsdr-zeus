@@ -570,6 +570,9 @@ public class DspPipelineService : BackgroundService,
         var engine = Volatile.Read(ref _engine);
         bool wdspActive = engine is WdspDspEngine;
         bool synthetic = engine is SyntheticDspEngine;
+        bool wdspNativeLoadable = WdspDspEngine.NativeLibraryLoadable;
+        bool wdspEmnrPost2Available = WdspDspEngine.EmnrPost2Available;
+        bool wdspNr4SbnrAvailable = WdspDspEngine.Nr4SbnrAvailable;
         return new
         {
             schemaVersion = 1,
@@ -577,6 +580,14 @@ public class DspPipelineService : BackgroundService,
             engineKind = wdspActive ? "WDSP" : synthetic ? "Synthetic" : engine is null ? "None" : "Other",
             wdspActive,
             synthetic,
+            wdspNativeLoadable,
+            wdspEmnrPost2Available,
+            wdspNr4SbnrAvailable,
+            nr4Readiness = wdspNr4SbnrAvailable
+                ? "available"
+                : wdspNativeLoadable
+                    ? "missing-sbnr-exports"
+                    : "wdsp-native-unloadable",
             channelId = Volatile.Read(ref _channelId),
             sampleRateHz = Volatile.Read(ref _sampleRateHz),
             displayWidth = Width,

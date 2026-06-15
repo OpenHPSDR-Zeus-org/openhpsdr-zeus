@@ -1115,7 +1115,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             field = "DSP runtime readiness",
             source = "DspPipelineService + WDSP wisdom bootstrap",
             status = "decoded",
-            notes = "Active DSP engine, channel/rate, RX sink ownership, TX block geometry, TX monitor state, and WDSP wisdom/model readiness are exposed in diagnostics.dsp",
+            notes = "Active DSP engine, channel/rate, RX sink ownership, TX block geometry, TX monitor state, WDSP wisdom/model readiness, and NR native-export capability are exposed in diagnostics.dsp",
         },
     ];
 
@@ -1266,6 +1266,9 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "frontend.signalEstimator.noiseFloor",
                 "frontend.signalEstimator.signalConfidence",
                 "dsp.wdspWisdomPhase",
+                "dsp.wdspEmnrPost2Available",
+                "dsp.wdspNr4SbnrAvailable",
+                "dsp.nr4Readiness",
             },
             candidateControls = new[]
             {
@@ -1274,7 +1277,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "planned:/api/dsp/nr-condition",
             },
             safetyClass = "rx-safe",
-            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the backend diagnostics feed now preserves the active profile, recommendation, and RX-chain hold reason for remote clients and recordings.",
+            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the backend diagnostics feed preserves the active profile, recommendation, RX-chain hold reason, and WDSP NR2/NR4 native capability for remote clients and recordings.",
         },
         new
         {
