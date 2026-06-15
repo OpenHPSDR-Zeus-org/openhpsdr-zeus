@@ -22,10 +22,14 @@ describe('TxFidelityAdvisor', () => {
       txMonitorEnabled: false,
       micDbfs: -100,
       wdspMicPk: -Infinity,
+      micAv: -Infinity,
       lvlrGr: 0,
       cfcGr: 0,
+      compPk: -Infinity,
+      compAv: -Infinity,
       alcGr: 0,
       outPk: -Infinity,
+      outAv: -Infinity,
       swr: 1.0,
       psEnabled: false,
       psCorrecting: false,
@@ -39,10 +43,14 @@ describe('TxFidelityAdvisor', () => {
     useTxStore.setState({
       moxOn: true,
       wdspMicPk: -10,
+      micAv: -21,
       alcGr: 3,
       lvlrGr: 4,
       cfcGr: 2,
+      compPk: -10,
+      compAv: -20,
       outPk: -3,
+      outAv: -14,
       swr: 1.15,
       psEnabled: true,
       psCorrecting: true,
@@ -58,6 +66,7 @@ describe('TxFidelityAdvisor', () => {
     expect(container.textContent).toContain('NEXT Hold levels; PureSignal is correcting the PA');
     expect(container.textContent).toContain('OUT -3.0 dBFS');
     expect(container.textContent).toMatch(/DENS \d+\/55/);
+    expect(container.textContent).toContain('COMP 10.0 dB');
     expect(container.textContent).toContain('SWR 1.15');
     expect(container.textContent).toContain('PSFB 150');
 
@@ -74,10 +83,14 @@ describe('TxFidelityAdvisor', () => {
     useTxStore.setState({
       moxOn: true,
       wdspMicPk: -10,
+      micAv: -21,
       alcGr: 3,
       lvlrGr: 4,
       cfcGr: 2,
+      compPk: -10,
+      compAv: -20,
       outPk: -3,
+      outAv: -14,
       swr: 1.15,
     });
 
