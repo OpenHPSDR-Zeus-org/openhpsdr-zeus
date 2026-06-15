@@ -138,6 +138,18 @@ public class TciHandshakeTests
         Assert.Contains("if_limits:-48000,48000;", handshake96);
     }
 
+    [Theory]
+    [InlineData(768000, "if_limits:-384000,384000;", "iq_samplerate:768000;")]
+    [InlineData(1536000, "if_limits:-768000,768000;", "iq_samplerate:1536000;")]
+    public void BuildHandshake_ExposesProtocol2WidebandIqRates(int sampleRate, string expectedIfLimits, string expectedIqRate)
+    {
+        var state = CreateTestState();
+        var handshake = TciHandshake.BuildHandshake(state, sampleRate, false, false, 50);
+
+        Assert.Contains(expectedIfLimits, handshake);
+        Assert.Contains(expectedIqRate, handshake);
+    }
+
     [Fact]
     public void BuildHandshake_IncludesSampleRates()
     {
