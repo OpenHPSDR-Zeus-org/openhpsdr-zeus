@@ -621,6 +621,59 @@ export type HardwareKeyingStatusDto = {
   generatedUtc: string;
 };
 
+export type RadioPowerReadingDto = {
+  packets: number;
+  lastUpdatedUtc: string | null;
+  exciterAdc: number | null;
+  fwdAdc: number | null;
+  revAdc: number | null;
+  fwdWatts: number | null;
+  refWatts: number | null;
+  swr: number | null;
+};
+
+export type RadioPowerCalibrationDto = {
+  schemaVersion: number;
+  activeProtocol: 'P1' | 'P2' | null;
+  connectedBoard: string;
+  effectiveBoard: string;
+  orionMkIIVariant: string;
+  calibrationBoard: string;
+  bridgeVolt: number;
+  refVoltage: number;
+  adcCalOffset: number;
+  calibrationMaxWatts: number;
+  calibrationFallbackApplied: boolean;
+  capabilityMaxPowerWatts: number;
+  p1: RadioPowerReadingDto;
+  p2: RadioPowerReadingDto;
+  diagnosticRecommendation: string | null;
+  generatedUtc: string;
+};
+
+export type RadioSupplyReadingDto = {
+  packets: number;
+  lastUpdatedUtc: string | null;
+  supplyVoltsAdc: number | null;
+  supplyVolts: number | null;
+};
+
+export type RadioSupplyAlarmsDto = {
+  schemaVersion: number;
+  activeProtocol: 'P1' | 'P2' | null;
+  effectiveBoard: string;
+  orionMkIIVariant: string;
+  supportsSupplyTelemetry: boolean;
+  adcSupplyMv: number;
+  activeThresholdsConfigured: boolean;
+  alarmActive: boolean;
+  alarmStatus: string;
+  p1: RadioSupplyReadingDto;
+  p2: RadioSupplyReadingDto;
+  diagnosticRecommendation: string | null;
+  generatedUtc: string;
+};
+
 export type HardwareP1DiagnosticsDto = {
   packets: number;
   lastUpdatedUtc: string | null;
@@ -1524,15 +1577,15 @@ function normalizeExternalPttStatus(raw: unknown): ExternalPttStatusDto {
   };
 }
 
+function diagActiveProtocol(raw: unknown): 'P1' | 'P2' | null {
+  return raw === 'P1' || raw === 'P2' ? raw : null;
+}
+
 function normalizeHardwareKeyingStatus(raw: unknown): HardwareKeyingStatusDto {
   const r = asDiagRecord(raw);
-  const activeProtocol =
-    r.activeProtocol === 'P1' || r.activeProtocol === 'P2'
-      ? r.activeProtocol
-      : null;
   return {
     schemaVersion: diagNumber(r.schemaVersion) ?? 0,
-    activeProtocol,
+    activeProtocol: diagActiveProtocol(r.activeProtocol),
     p1Packets: diagNumber(r.p1Packets) ?? 0,
     p1LastUpdatedUtc: diagString(r.p1LastUpdatedUtc),
     p1HardwarePtt: diagBool(r.p1HardwarePtt),
@@ -1544,6 +1597,77 @@ function normalizeHardwareKeyingStatus(raw: unknown): HardwareKeyingStatusDto {
     p2DashIn: diagBool(r.p2DashIn),
     p2SidetoneActive: diagBool(r.p2SidetoneActive),
     externalPtt: normalizeExternalPttStatus(r.externalPtt),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+    generatedUtc:
+      typeof r.generatedUtc === 'string'
+        ? r.generatedUtc
+        : new Date().toISOString(),
+  };
+}
+
+function normalizeRadioPowerReading(raw: unknown): RadioPowerReadingDto {
+  const r = asDiagRecord(raw);
+  return {
+    packets: diagNumber(r.packets) ?? 0,
+    lastUpdatedUtc: diagString(r.lastUpdatedUtc),
+    exciterAdc: diagNumber(r.exciterAdc),
+    fwdAdc: diagNumber(r.fwdAdc),
+    revAdc: diagNumber(r.revAdc),
+    fwdWatts: diagNumber(r.fwdWatts),
+    refWatts: diagNumber(r.refWatts),
+    swr: diagNumber(r.swr),
+  };
+}
+
+function normalizeRadioPowerCalibration(raw: unknown): RadioPowerCalibrationDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    activeProtocol: diagActiveProtocol(r.activeProtocol),
+    connectedBoard: diagString(r.connectedBoard) ?? 'Unknown',
+    effectiveBoard: diagString(r.effectiveBoard) ?? 'Unknown',
+    orionMkIIVariant: diagString(r.orionMkIIVariant) ?? 'G2',
+    calibrationBoard: diagString(r.calibrationBoard) ?? 'Unknown',
+    bridgeVolt: diagNumber(r.bridgeVolt) ?? 0,
+    refVoltage: diagNumber(r.refVoltage) ?? 0,
+    adcCalOffset: diagNumber(r.adcCalOffset) ?? 0,
+    calibrationMaxWatts: diagNumber(r.calibrationMaxWatts) ?? 0,
+    calibrationFallbackApplied: Boolean(r.calibrationFallbackApplied),
+    capabilityMaxPowerWatts: diagNumber(r.capabilityMaxPowerWatts) ?? 0,
+    p1: normalizeRadioPowerReading(r.p1),
+    p2: normalizeRadioPowerReading(r.p2),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+    generatedUtc:
+      typeof r.generatedUtc === 'string'
+        ? r.generatedUtc
+        : new Date().toISOString(),
+  };
+}
+
+function normalizeRadioSupplyReading(raw: unknown): RadioSupplyReadingDto {
+  const r = asDiagRecord(raw);
+  return {
+    packets: diagNumber(r.packets) ?? 0,
+    lastUpdatedUtc: diagString(r.lastUpdatedUtc),
+    supplyVoltsAdc: diagNumber(r.supplyVoltsAdc),
+    supplyVolts: diagNumber(r.supplyVolts),
+  };
+}
+
+function normalizeRadioSupplyAlarms(raw: unknown): RadioSupplyAlarmsDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    activeProtocol: diagActiveProtocol(r.activeProtocol),
+    effectiveBoard: diagString(r.effectiveBoard) ?? 'Unknown',
+    orionMkIIVariant: diagString(r.orionMkIIVariant) ?? 'G2',
+    supportsSupplyTelemetry: Boolean(r.supportsSupplyTelemetry),
+    adcSupplyMv: diagNumber(r.adcSupplyMv) ?? 0,
+    activeThresholdsConfigured: Boolean(r.activeThresholdsConfigured),
+    alarmActive: Boolean(r.alarmActive),
+    alarmStatus: diagString(r.alarmStatus) ?? 'unknown',
+    p1: normalizeRadioSupplyReading(r.p1),
+    p2: normalizeRadioSupplyReading(r.p2),
     diagnosticRecommendation: diagString(r.diagnosticRecommendation),
     generatedUtc:
       typeof r.generatedUtc === 'string'
@@ -2091,6 +2215,26 @@ export function fetchHardwareKeyingStatus(
     '/api/cw/hardware-keying',
     { signal },
     normalizeHardwareKeyingStatus,
+  );
+}
+
+export function fetchRadioPowerCalibration(
+  signal?: AbortSignal,
+): Promise<RadioPowerCalibrationDto> {
+  return jsonFetch(
+    '/api/radio/power-calibration',
+    { signal },
+    normalizeRadioPowerCalibration,
+  );
+}
+
+export function fetchRadioSupplyAlarms(
+  signal?: AbortSignal,
+): Promise<RadioSupplyAlarmsDto> {
+  return jsonFetch(
+    '/api/radio/supply-alarms',
+    { signal },
+    normalizeRadioSupplyAlarms,
   );
 }
 

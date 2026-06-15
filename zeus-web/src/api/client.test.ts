@@ -59,6 +59,8 @@ import {
   fetchExternalPttStatus,
   fetchHardwareDiagnostics,
   fetchHardwareKeyingStatus,
+  fetchRadioPowerCalibration,
+  fetchRadioSupplyAlarms,
   fetchSmartNrCondition,
   fetchAdcProtection,
   fetchTxFidelityPolicy,
@@ -870,6 +872,100 @@ describe('POST helpers', () => {
     expect(status.p2SidetoneActive).toBe(true);
     expect(status.externalPtt.available).toBe(false);
     expect(status.externalPtt.hangTimeMs).toBe(250);
+  });
+
+  it('fetchRadioPowerCalibration reads calibrated PA power evidence', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      activeProtocol: 'P1',
+      connectedBoard: 'OrionMkII',
+      effectiveBoard: 'OrionMkII',
+      orionMkIIVariant: 'G2',
+      calibrationBoard: 'OrionMkII',
+      bridgeVolt: 0.12,
+      refVoltage: 5,
+      adcCalOffset: 32,
+      calibrationMaxWatts: 100,
+      calibrationFallbackApplied: false,
+      capabilityMaxPowerWatts: 120,
+      p1: {
+        packets: 24,
+        lastUpdatedUtc: '2026-06-15T01:00:00Z',
+        exciterAdc: 100,
+        fwdAdc: 1800,
+        revAdc: 120,
+        fwdWatts: 44.02,
+        refWatts: 0.1,
+        swr: 1.1,
+      },
+      p2: {
+        packets: 0,
+        lastUpdatedUtc: null,
+        exciterAdc: null,
+        fwdAdc: null,
+        revAdc: null,
+        fwdWatts: null,
+        refWatts: null,
+        swr: null,
+      },
+      diagnosticRecommendation: 'PA telemetry is decoded with the same board calibration.',
+      generatedUtc: '2026-06-15T01:00:01Z',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const status = await fetchRadioPowerCalibration();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/power-calibration');
+    expect(init?.method).toBeUndefined();
+    expect(status.activeProtocol).toBe('P1');
+    expect(status.connectedBoard).toBe('OrionMkII');
+    expect(status.bridgeVolt).toBe(0.12);
+    expect(status.calibrationFallbackApplied).toBe(false);
+    expect(status.p1.fwdAdc).toBe(1800);
+    expect(status.p1.fwdWatts).toBe(44.02);
+    expect(status.p2.fwdWatts).toBeNull();
+  });
+
+  it('fetchRadioSupplyAlarms reads supply telemetry and advisory alarm state', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      activeProtocol: 'P2',
+      effectiveBoard: 'OrionMkII',
+      orionMkIIVariant: 'G2',
+      supportsSupplyTelemetry: true,
+      adcSupplyMv: 50,
+      activeThresholdsConfigured: false,
+      alarmActive: false,
+      alarmStatus: 'telemetry-ready',
+      p1: {
+        packets: 0,
+        lastUpdatedUtc: null,
+        supplyVoltsAdc: null,
+        supplyVolts: null,
+      },
+      p2: {
+        packets: 42,
+        lastUpdatedUtc: '2026-06-15T01:00:00Z',
+        supplyVoltsAdc: 276,
+        supplyVolts: 13.8,
+      },
+      diagnosticRecommendation: 'Live supply voltage is decoded and scaled.',
+      generatedUtc: '2026-06-15T01:00:01Z',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const status = await fetchRadioSupplyAlarms();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/supply-alarms');
+    expect(init?.method).toBeUndefined();
+    expect(status.activeProtocol).toBe('P2');
+    expect(status.supportsSupplyTelemetry).toBe(true);
+    expect(status.activeThresholdsConfigured).toBe(false);
+    expect(status.alarmStatus).toBe('telemetry-ready');
+    expect(status.p2.supplyVoltsAdc).toBe(276);
+    expect(status.p2.supplyVolts).toBe(13.8);
   });
 
   it('raises ApiError with server-provided error text on 400', async () => {
