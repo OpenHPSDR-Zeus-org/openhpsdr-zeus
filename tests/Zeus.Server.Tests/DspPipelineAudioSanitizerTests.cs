@@ -123,10 +123,10 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.False(state.Open);
         Assert.InRange(state.NoiseFloorDbm, -101.0, -99.0);
 
-        DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -96.0);
+        DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -97.0);
 
         Assert.True(state.Open);
-        Assert.Equal(3.0, DspPipelineService.AdaptiveSquelchMarginDb(), precision: 6);
+        Assert.Equal(2.5, DspPipelineService.AdaptiveSquelchMarginDb(), precision: 6);
     }
 
     [Fact]
@@ -144,12 +144,42 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.Equal(0f, Rms(block));
         Assert.Equal(0.0, state.Gain);
 
-        DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -96.0);
+        DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -97.0);
         Array.Fill(block, 0.25f);
         DspPipelineService.ApplyAdaptiveSquelch(block, cfg, state);
 
-        Assert.InRange(Rms(block), 0.10f, 0.16f);
-        Assert.True(state.Gain > 0.7);
+        Assert.InRange(Rms(block), 0.16f, 0.19f);
+        Assert.Equal(1.0, state.Gain, precision: 6);
+    }
+
+    [Fact]
+    public void AdaptiveSquelch_HoldsTailAcrossShortSpeechPause()
+    {
+        var state = new DspPipelineService.AdaptiveSquelchState();
+        var cfg = new SquelchConfig(Enabled: true, Level: 20, Adaptive: true);
+        float[] block = new float[256];
+
+        for (int i = 0; i < 3; i++)
+            DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -100.0);
+
+        DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -97.0);
+        Array.Fill(block, 0.25f);
+        DspPipelineService.ApplyAdaptiveSquelch(block, cfg, state);
+        Assert.True(state.Open);
+        Assert.Equal(1.0, state.Gain, precision: 6);
+
+        for (int i = 0; i < 6; i++)
+            DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -120.0);
+
+        Array.Fill(block, 0.25f);
+        DspPipelineService.ApplyAdaptiveSquelch(block, cfg, state);
+        Assert.True(state.Open);
+        Assert.True(Rms(block) > 0.20f);
+
+        for (int i = 0; i < 10; i++)
+            DspPipelineService.UpdateAdaptiveSquelchMeter(state, cfg, -120.0);
+
+        Assert.False(state.Open);
     }
 
     [Fact]

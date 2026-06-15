@@ -155,12 +155,13 @@ public class DspPipelineService : BackgroundService,
     private const int AdaptiveSquelchWindowSamples = 12;
     private const int AdaptiveSquelchMinSamples = 2;
     private const double AdaptiveSquelchFloorPercentile = 0.20;
-    private const double AdaptiveSquelchFloorRiseSlewDb = 0.35;
-    private const double AdaptiveSquelchFloorFallSlewDb = 6.0;
-    private const int AdaptiveSquelchCloseHoldBlocks = 6;
-    private const double AdaptiveSquelchAttackPerBlock = 0.85;
-    private const double AdaptiveSquelchReleasePerBlock = 0.20;
-    private const double AdaptiveSquelchOpenMarginDb = 3.0;
+    private const double AdaptiveSquelchFloorRiseSlewDb = 0.25;
+    private const double AdaptiveSquelchFloorFallSlewDb = 7.0;
+    private const int AdaptiveSquelchCloseHoldBlocks = 12;
+    private const double AdaptiveSquelchAttackPerBlock = 1.0;
+    private const double AdaptiveSquelchReleasePerBlock = 0.14;
+    private const double AdaptiveSquelchOpenMarginDb = 2.5;
+    private const double AdaptiveSquelchOpenInitialGain = 0.35;
 
     internal static float SanitizeAudioSample(float sample)
     {
@@ -274,6 +275,9 @@ public class DspPipelineService : BackgroundService,
 
     internal static double AdaptiveSquelchMarginDb() => AdaptiveSquelchOpenMarginDb;
 
+    private static double AdaptiveSquelchCloseHysteresisDb(double marginDb) =>
+        Math.Clamp(marginDb * 0.5, 1.5, 4.0);
+
     internal static void UpdateAdaptiveSquelchMeter(
         AdaptiveSquelchState state,
         SquelchConfig cfg,
@@ -322,7 +326,7 @@ public class DspPipelineService : BackgroundService,
 
         double marginDb = AdaptiveSquelchMarginDb();
         double openThreshold = state.NoiseFloorDbm + marginDb;
-        double closeThreshold = openThreshold - Math.Clamp(marginDb * 0.4, 2.0, 5.0);
+        double closeThreshold = openThreshold - AdaptiveSquelchCloseHysteresisDb(marginDb);
 
         if (signalDbm >= openThreshold)
         {
@@ -357,6 +361,10 @@ public class DspPipelineService : BackgroundService,
 
         double target = state.WindowFill >= AdaptiveSquelchMinSamples && state.Open ? 1.0 : 0.0;
         double start = Math.Clamp(double.IsFinite(state.Gain) ? state.Gain : 0.0, 0.0, 1.0);
+        if (target > 0.0 && start < AdaptiveSquelchOpenInitialGain)
+        {
+            start = AdaptiveSquelchOpenInitialGain;
+        }
         double end = target > start
             ? Math.Min(target, start + AdaptiveSquelchAttackPerBlock)
             : Math.Max(target, start - AdaptiveSquelchReleasePerBlock);
@@ -830,6 +838,7 @@ public class DspPipelineService : BackgroundService,
             nr4Readiness = nrRuntime.Nr4Readiness,
             requestedNrMode = nrRuntime.RequestedNrMode,
             effectiveNrMode = nrRuntime.EffectiveNrMode,
+            squelch = SnapshotAdaptiveSquelchDiagnostics(state.Squelch ?? new SquelchConfig()),
             channelId = Volatile.Read(ref _channelId),
             sampleRateHz = Volatile.Read(ref _sampleRateHz),
             displayWidth = Width,
@@ -848,6 +857,81 @@ public class DspPipelineService : BackgroundService,
                 : synthetic
                     ? "synthetic-idle-or-fallback"
                     : "no-engine",
+        };
+    }
+
+    private static double? FiniteOrNull(double value) =>
+        double.IsFinite(value) ? Math.Round(value, 2) : null;
+
+    private object SnapshotAdaptiveSquelchDiagnostics(SquelchConfig cfg)
+    {
+        var s = _adaptiveSquelch;
+        double marginDb = AdaptiveSquelchMarginDb();
+        double hysteresisDb = AdaptiveSquelchCloseHysteresisDb(marginDb);
+        double? floorDbm = FiniteOrNull(s.NoiseFloorDbm);
+        double? signalDbm = FiniteOrNull(s.LastSignalDbm);
+        double? openThresholdDbm = floorDbm + marginDb;
+        double? closeThresholdDbm = openThresholdDbm - hysteresisDb;
+        double? deltaDb = signalDbm - floorDbm;
+        bool ready = s.WindowFill >= AdaptiveSquelchMinSamples && floorDbm.HasValue;
+        bool tailActive = ready
+            && s.Open
+            && signalDbm.HasValue
+            && closeThresholdDbm.HasValue
+            && signalDbm.Value < closeThresholdDbm.Value
+            && s.CloseHoldBlocks > 0;
+        string status = !cfg.Enabled
+            ? "disabled"
+            : !cfg.Adaptive
+                ? "fixed-mode"
+                : !ready
+                    ? "learning-floor"
+                    : tailActive
+                        ? "tail-hold"
+                        : s.Open
+                            ? "open"
+                            : "closed";
+
+        double blockMs = TickPeriod.TotalMilliseconds;
+        double holdMs = Math.Round(s.CloseHoldBlocks * blockMs, 0);
+        double configuredHoldMs = Math.Round(AdaptiveSquelchCloseHoldBlocks * blockMs, 0);
+        double configuredReleaseMs = Math.Round(Math.Ceiling(1.0 / AdaptiveSquelchReleasePerBlock) * blockMs, 0);
+
+        return new
+        {
+            schemaVersion = 1,
+            enabled = cfg.Enabled,
+            adaptive = cfg.Adaptive,
+            status,
+            ready,
+            open = s.Open,
+            gateGain = Math.Round(Math.Clamp(double.IsFinite(s.Gain) ? s.Gain : 0.0, 0.0, 1.0), 3),
+            signalDbm,
+            noiseFloorDbm = floorDbm,
+            signalOverFloorDb = deltaDb,
+            openThresholdDbm = FiniteOrNull(openThresholdDbm ?? double.NaN),
+            closeThresholdDbm = FiniteOrNull(closeThresholdDbm ?? double.NaN),
+            marginDb,
+            hysteresisDb,
+            tailActive,
+            closeHoldBlocks = s.CloseHoldBlocks,
+            closeHoldMs = holdMs,
+            configuredHoldMs,
+            configuredReleaseMs,
+            windowFill = s.WindowFill,
+            windowSamples = AdaptiveSquelchWindowSamples,
+            attackPerBlock = AdaptiveSquelchAttackPerBlock,
+            releasePerBlock = AdaptiveSquelchReleasePerBlock,
+            source = "rx-audio-rms",
+            diagnosticRecommendation = status switch
+            {
+                "learning-floor" => "DYN SQL is learning the current audio noise floor.",
+                "tail-hold" => "DYN SQL is holding the gate open briefly to preserve word endings.",
+                "open" => "DYN SQL is open on a signal above the learned noise floor.",
+                "closed" => "DYN SQL is closed; signal is below the learned open threshold.",
+                "fixed-mode" => "Fixed SQL is active; DYN diagnostics are learning but not gating.",
+                _ => "SQL is disabled; DYN diagnostics are learning but not gating.",
+            },
         };
     }
 
