@@ -42,16 +42,16 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-// Mic uplink: getUserMedia → AudioContext @ 48 kHz → MediaStreamSource →
-// AudioWorkletNode('mic-uplink'). The worklet frames 128-sample ScriptProcessor
-// chunks into 960-sample (20 ms) blocks and posts them here; we forward each
-// block to the caller-supplied handler (typically ws-client to ship [0x20] ...).
+// Mic uplink: getUserMedia -> AudioContext -> MediaStreamSource ->
+// AudioWorkletNode('mic-uplink'). The worklet emits 960-sample 48 kHz blocks
+// and posts them here; we forward each block to the caller-supplied handler
+// (typically ws-client to ship [0x20] ...).
 //
 //
 // Ham-radio constraints: echoCancellation/noiseSuppression/autoGainControl all
 // OFF so WDSP TXA is the only thing shaping mic audio. Browser constraint
-// request for sampleRate: 48000 — most browsers honor this; if not, the
-// worklet will mis-frame (resampler is a future concern).
+// request for sampleRate: 48000. Most browsers honor this, and the worklet
+// resamples the actual AudioWorklet rate if a device/browser does not.
 
 import { isNativeAudio } from './host-mode';
 
