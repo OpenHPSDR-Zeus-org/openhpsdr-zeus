@@ -145,13 +145,27 @@ internal static class TciStreamPayload
     }
 
     /// <summary>
-    /// Builds an RX audio frame from mono FLOAT32 samples, duplicating each
-    /// sample to L=R for stereo output. TCI v1.x mandates stereo Float32
-    /// at 48 kHz on RX audio streams (spec §7.2, §7.6); a mono frame would
-    /// be misinterpreted at half-rate by spec-compliant clients.
+    /// Builds an RX audio frame from mono FLOAT32 samples using the negotiated
+    /// audio_stream_channels count. Stereo duplicates each sample to L=R for
+    /// compatibility with the handshake default; mono preserves the scalar
+    /// count requested by clients that opt into audio_stream_channels=1.
     /// </summary>
-    public static byte[] BuildAudioFromFloats(int receiver, int sampleRate, ReadOnlySpan<float> samples)
+    public static byte[] BuildAudioFromFloats(int receiver, int sampleRate, ReadOnlySpan<float> samples, int channels = 2)
     {
+        if (channels != 1 && channels != 2)
+            throw new ArgumentOutOfRangeException(nameof(channels), channels, "TCI RX audio supports one or two Float32 channels.");
+
+        if (channels == 1)
+        {
+            return Build(
+                receiver,
+                sampleRate,
+                TciSampleType.Float32,
+                length: samples.Length,
+                streamType: TciStreamType.RxAudioStream,
+                samplePayload: MemoryMarshal.AsBytes(samples));
+        }
+
         var stereo = new float[samples.Length * 2];
         for (int i = 0; i < samples.Length; i++)
         {

@@ -90,7 +90,7 @@ public sealed class TciSession : IDisposable
     private bool _txSourceIsTci;
     // Negotiated audio_stream channel count and sample rate. Defaults match
     // the handshake-advertised values (stereo, 48 kHz). Per spec §5.8 the
-    // client may set audio_stream_channels=1 for mono uploads.
+    // client may set audio_stream_channels=1 for mono binary audio.
     private int _audioStreamChannels = 2;
     // Per-session digital-mode pitch offsets (DIGL_OFFSET / DIGU_OFFSET).
     // Stored only — Zeus has no backend for these yet, but we acknowledge
@@ -212,9 +212,10 @@ public sealed class TciSession : IDisposable
             }
 
             int targetRate = _audioSampleRate;
+            int targetChannels = _audioStreamChannels;
             if (targetRate == sampleRateHz)
             {
-                frame = TciStreamPayload.BuildAudioFromFloats(receiver, sampleRateHz, samples);
+                frame = TciStreamPayload.BuildAudioFromFloats(receiver, sampleRateHz, samples, targetChannels);
                 return true;
             }
 
@@ -225,7 +226,7 @@ public sealed class TciSession : IDisposable
                 return false;
             }
 
-            frame = TciStreamPayload.BuildAudioFromFloats(receiver, targetRate, converted);
+            frame = TciStreamPayload.BuildAudioFromFloats(receiver, targetRate, converted, targetChannels);
             return true;
         }
     }
@@ -1485,8 +1486,8 @@ public sealed class TciSession : IDisposable
         // audio_stream_sample_type, audio_stream_channels, audio_stream_samples,
         // tx_stream_audio_buffering — server echoes whatever the client sets
         // (TCI spec §5.8 subscription burst). Zeus honours audio_stream_channels
-        // for inbound TX audio decode; the others are echo-only so the client
-        // sees its requested config reflected.
+        // for inbound TX audio decode and outbound RX audio payload shape; the
+        // others are echo-only so the client sees its requested config reflected.
         if (args.Length == 0)
         {
             // Query — re-emit the handshake-advertised value
@@ -1501,9 +1502,9 @@ public sealed class TciSession : IDisposable
             Send($"{command}:{value};");
             return;
         }
-        // SET form. For audio_stream_channels we latch the value so the TX
-        // audio receiver knows how to interpret inbound binary frames
-        // (mono vs stereo mixdown).
+        // SET form. For audio_stream_channels we latch the value so binary
+        // audio paths use the same mono/stereo payload shape in both
+        // directions.
         if (string.Equals(command, "audio_stream_channels", StringComparison.OrdinalIgnoreCase)
             && TciProtocol.TryParseInt(args[0], out int ch)
             && (ch == 1 || ch == 2))
