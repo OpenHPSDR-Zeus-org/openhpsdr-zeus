@@ -12,6 +12,8 @@ const BASE: TxFidelitySnapshot = {
   micAv: -21,
   lvlrGr: 4,
   cfcGr: 2,
+  compPk: -10,
+  compAv: -21,
   alcGr: 5,
   outPk: -8,
   outAv: -19,
@@ -133,6 +135,25 @@ describe('analyzeTxFidelity', () => {
     expect(a.crestStatus).toBe('pinched');
     expect(a.detail).toContain('Crest factor is pinched');
     expect(a.recommendation).toBe('Reduce CFC density before raising drive');
+  });
+
+  it('attributes pinched crest to the compressor when output crest is unavailable', () => {
+    const a = analyzeTxFidelity({
+      ...BASE,
+      outPk: -Infinity,
+      outAv: -Infinity,
+      compPk: -7,
+      compAv: -10,
+      alcGr: 4,
+      lvlrGr: 4,
+      cfcGr: 1,
+    });
+    expect(a.state).toBe('hot');
+    expect(a.crestStatus).toBe('pinched');
+    expect(a.compDbfs).toBeCloseTo(-7, 1);
+    expect(a.compCrestDb).toBeCloseTo(3, 1);
+    expect(a.detail).toContain('Compressor crest is pinched');
+    expect(a.recommendation).toBe('Reduce compressor gain before raising drive');
   });
 
   it('surfaces PureSignal feedback and calibration health', () => {
