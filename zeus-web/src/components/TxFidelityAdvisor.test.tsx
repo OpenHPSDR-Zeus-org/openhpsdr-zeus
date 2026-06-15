@@ -56,6 +56,7 @@ describe('TxFidelityAdvisor', () => {
     expect(container.textContent).toContain('Broadcast sweet spot');
     expect(container.textContent).toContain('FIDELITY');
     expect(container.textContent).toContain('OUT -3.0 dBFS');
+    expect(container.textContent).toMatch(/DENS \d+\/55/);
     expect(container.textContent).toContain('SWR 1.15');
     expect(container.textContent).toContain('PSFB 150');
 
@@ -64,6 +65,28 @@ describe('TxFidelityAdvisor', () => {
     });
 
     expect(container.textContent).toContain('Too hot');
+    unmount();
+  });
+
+  it('renders live density against an explicit station-profile target', () => {
+    useTxStore.setState({
+      moxOn: true,
+      wdspMicPk: -10,
+      alcGr: 3,
+      lvlrGr: 4,
+      cfcGr: 2,
+      outPk: -3,
+      swr: 1.15,
+    });
+
+    const { container, unmount } = render(
+      createElement(TxFidelityAdvisor, { targetSpectralDensity: 100 }),
+    );
+
+    expect(container.textContent).toMatch(/DENS \d+\/100/);
+    expect(container.textContent).toContain('Under-driven');
+    expect(container.textContent).toContain('TX density is below profile target');
+
     unmount();
   });
 });

@@ -142,6 +142,7 @@ describe('TxFidelityPanel', () => {
     expect(container.querySelector<HTMLInputElement>('input[aria-label="TX spectral density"]')?.value).toBe('100');
     expect(container.querySelector<HTMLInputElement>('input[aria-label="TX profile high cut"]')?.value).toBe('2850');
     expect(container.textContent).toContain('SSB 300..2850 Hz');
+    expect(container.textContent).toContain('DENS --/100');
 
     const routeButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>(

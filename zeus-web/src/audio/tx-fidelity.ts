@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 const BYPASSED_DBFS_THRESHOLD = -200;
+const DEFAULT_SPECTRAL_DENSITY_TARGET = 55;
 
 export type TxFidelitySnapshot = {
   moxOn: boolean;
@@ -18,9 +19,11 @@ export type TxFidelitySnapshot = {
   psFeedbackLevel: number;
   psCalState: number;
   psCalibrationStalled: boolean;
+  targetSpectralDensity?: number;
 };
 
 export type TxFidelityState = 'idle' | 'monitor' | 'tune' | 'under' | 'sweet' | 'hot' | 'clip';
+export type TxDensityStatus = 'unknown' | 'thin' | 'matched' | 'forced';
 
 export type TxFidelityAnalysis = {
   state: TxFidelityState;
@@ -34,6 +37,10 @@ export type TxFidelityAnalysis = {
   outDbfs: number | null;
   swr: number;
   psFeedbackLevel: number | null;
+  targetSpectralDensity: number;
+  liveSpectralDensity: number | null;
+  densityFit: number | null;
+  densityStatus: TxDensityStatus;
 };
 
 function validDbfs(v: number): boolean {
@@ -44,8 +51,57 @@ function finiteOrZero(v: number): number {
   return Number.isFinite(v) ? v : 0;
 }
 
+function clamp(v: number, min: number, max: number): number {
+  if (!Number.isFinite(v)) return min;
+  return Math.max(min, Math.min(max, v));
+}
+
 function clampScore(v: number): number {
   return Math.max(0, Math.min(100, Math.round(v)));
+}
+
+function pctBetween(v: number, low: number, high: number): number {
+  return clamp(((v - low) / (high - low)) * 100, 0, 100);
+}
+
+function estimateLiveSpectralDensity(
+  micDbfs: number | null,
+  outDbfs: number | null,
+  alcGr: number,
+  lvlrGr: number,
+  cfcGr: number,
+): number | null {
+  if (micDbfs === null) return null;
+  const micDensity = pctBetween(micDbfs, -36, -6);
+  const outDensity = outDbfs === null ? micDensity : pctBetween(outDbfs, -24, -4);
+  const dynamicsDensity = clamp(alcGr * 5 + lvlrGr * 3 + cfcGr * 2.5, 0, 100);
+  return clampScore(micDensity * 0.3 + outDensity * 0.25 + dynamicsDensity * 0.45);
+}
+
+function densityStatus(
+  liveSpectralDensity: number | null,
+  targetSpectralDensity: number,
+  micDbfs: number | null,
+  outDbfs: number | null,
+  alcGr: number,
+  lvlrGr: number,
+  cfcGr: number,
+): TxDensityStatus {
+  if (liveSpectralDensity === null) return 'unknown';
+  if (liveSpectralDensity < targetSpectralDensity - 18) return 'thin';
+
+  const forcedByLimiter =
+    (micDbfs !== null && micDbfs > -3) ||
+    (outDbfs !== null && outDbfs > -2) ||
+    alcGr > 10 ||
+    lvlrGr > 10 ||
+    cfcGr > 7;
+  const forcedByTargetOvershoot =
+    liveSpectralDensity > targetSpectralDensity + 30 &&
+    (alcGr > 7 || lvlrGr > 8 || cfcGr > 6);
+
+  if (forcedByLimiter || forcedByTargetOvershoot) return 'forced';
+  return 'matched';
 }
 
 export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
@@ -63,6 +119,28 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
   const swr = Number.isFinite(s.swr) && s.swr > 0 ? s.swr : 1;
   const psFeedbackLevel =
     Number.isFinite(s.psFeedbackLevel) && s.psFeedbackLevel > 0 ? s.psFeedbackLevel : null;
+  const targetSpectralDensity = clampScore(
+    Number.isFinite(s.targetSpectralDensity)
+      ? s.targetSpectralDensity ?? DEFAULT_SPECTRAL_DENSITY_TARGET
+      : DEFAULT_SPECTRAL_DENSITY_TARGET,
+  );
+  const activeVoiceChain = !s.tunOn && (keyed || auditioning);
+  const liveSpectralDensity = activeVoiceChain
+    ? estimateLiveSpectralDensity(micDbfs, outDbfs, alcGr, lvlrGr, cfcGr)
+    : null;
+  const densityFit =
+    liveSpectralDensity === null
+      ? null
+      : clampScore(100 - Math.abs(liveSpectralDensity - targetSpectralDensity) * 1.6);
+  const density = densityStatus(
+    liveSpectralDensity,
+    targetSpectralDensity,
+    micDbfs,
+    outDbfs,
+    alcGr,
+    lvlrGr,
+    cfcGr,
+  );
 
   const baseMetrics = {
     micDbfs,
@@ -72,6 +150,10 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     outDbfs,
     swr,
     psFeedbackLevel,
+    targetSpectralDensity,
+    liveSpectralDensity,
+    densityFit,
+    densityStatus: density,
   };
 
   if (s.tunOn) {
@@ -153,6 +235,20 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     reasons.push('CFC compression is heavy');
   }
 
+  if (liveSpectralDensity !== null && densityFit !== null) {
+    if (density === 'thin') {
+      const shortfall = targetSpectralDensity - liveSpectralDensity;
+      score -= Math.min(24, Math.max(8, shortfall * 0.6));
+      reasons.push('TX density is below profile target');
+    } else if (density === 'forced') {
+      const overshoot = Math.max(0, liveSpectralDensity - targetSpectralDensity);
+      score -= Math.min(24, Math.max(10, overshoot * 0.4));
+      reasons.push('Density is forced by compression');
+    } else if (densityFit < 70) {
+      score -= 8;
+    }
+  }
+
   if (swr >= 3) {
     score -= 40;
     reasons.push('SWR protection risk');
@@ -180,16 +276,18 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
   }
 
   const finalScore = clampScore(score);
-  if (
-    finalScore < 45 ||
-    reasons.some((r) =>
-      r.includes('hot') ||
-      r.includes('hard') ||
-      r.includes('headroom') ||
-      r.includes('stalled') ||
-      r.includes('SWR protection')
-    )
-  ) {
+  const hasHotReason = reasons.some((r) =>
+    r.includes('hot') ||
+    r.includes('hard') ||
+    r.includes('headroom') ||
+    r.includes('stalled') ||
+    r.includes('SWR protection') ||
+    r.includes('forced')
+  );
+  const hasUnderReason = reasons.some(
+    (r) => r.includes('low') || r.includes('below profile target'),
+  );
+  if (hasHotReason || (finalScore < 45 && !hasUnderReason)) {
     return {
       state: 'hot',
       label: 'Too hot',
@@ -198,7 +296,7 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
       ...baseMetrics,
     };
   }
-  if (finalScore < 70 || reasons.some((r) => r.includes('low'))) {
+  if (finalScore < 70 || hasUnderReason) {
     return {
       state: 'under',
       label: 'Under-driven',

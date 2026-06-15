@@ -28,6 +28,9 @@ describe('analyzeTxFidelity', () => {
     expect(a.label).toBe('Broadcast sweet spot');
     expect(a.score).toBeGreaterThanOrEqual(90);
     expect(a.detail).toContain('PureSignal correcting');
+    expect(a.liveSpectralDensity).toBeGreaterThanOrEqual(60);
+    expect(a.densityFit).toBeGreaterThanOrEqual(80);
+    expect(a.densityStatus).toBe('matched');
   });
 
   it('flags under-driven audio', () => {
@@ -35,6 +38,8 @@ describe('analyzeTxFidelity', () => {
     expect(a.state).toBe('under');
     expect(a.label).toBe('Under-driven');
     expect(a.detail).toContain('Mic peak is low');
+    expect(a.detail).toContain('TX density is below profile target');
+    expect(a.densityStatus).toBe('thin');
   });
 
   it('flags hard limiting before clipping', () => {
@@ -57,6 +62,28 @@ describe('analyzeTxFidelity', () => {
     expect(a.label).toBe('Too hot');
     expect(a.outDbfs).toBeCloseTo(-0.6, 1);
     expect(a.detail).toContain('TX output has almost no headroom');
+  });
+
+  it('matches live density against the station profile target', () => {
+    const a = analyzeTxFidelity({ ...BASE, targetSpectralDensity: 100 });
+    expect(a.state).toBe('under');
+    expect(a.targetSpectralDensity).toBe(100);
+    expect(a.liveSpectralDensity).toBeLessThan(80);
+    expect(a.detail).toContain('TX density is below profile target');
+  });
+
+  it('flags forced density from an over-compressed speech chain', () => {
+    const a = analyzeTxFidelity({
+      ...BASE,
+      wdspMicPk: -8,
+      alcGr: 9.5,
+      lvlrGr: 12,
+      cfcGr: 9,
+    });
+    expect(a.state).toBe('hot');
+    expect(a.label).toBe('Too hot');
+    expect(a.densityStatus).toBe('forced');
+    expect(a.detail).toContain('Density is forced by compression');
   });
 
   it('surfaces PureSignal feedback and calibration health', () => {
@@ -83,5 +110,7 @@ describe('analyzeTxFidelity', () => {
     const a = analyzeTxFidelity({ ...BASE, moxOn: false, tunOn: true });
     expect(a.state).toBe('tune');
     expect(a.score).toBe(0);
+    expect(a.liveSpectralDensity).toBeNull();
+    expect(a.densityFit).toBeNull();
   });
 });
