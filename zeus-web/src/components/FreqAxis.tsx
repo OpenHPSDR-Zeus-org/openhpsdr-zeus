@@ -47,6 +47,7 @@ import { useDisplayStore } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import * as viewCenter from '../state/view-center';
+import { useRulerPanGesture } from '../util/use-ruler-pan-gesture';
 
 function pickStrideHz(spanHz: number, targetTicks: number): number {
   if (spanHz <= 0) return 1;
@@ -91,6 +92,9 @@ export function FreqAxis() {
 
   const tickStripRef = useRef<HTMLDivElement | null>(null);
   const markerRef = useRef<HTMLDivElement | null>(null);
+  const rulerRef = useRef<HTMLDivElement | null>(null);
+
+  useRulerPanGesture(rulerRef, !!width && hzPerPixel > 0);
 
   useEffect(() => {
     const update = () => {
@@ -169,8 +173,13 @@ export function FreqAxis() {
       {/* Outer strip: fixed background + overflow clip. Inner strip: the
           tick content, slid by the draw-bus callback — so the background
           never moves and overscanned ticks scroll in from the edges. */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-5 overflow-hidden bg-neutral-950/70">
-        <div ref={tickStripRef} className="absolute inset-0">
+      <div
+        ref={rulerRef}
+        className="pointer-events-auto absolute inset-x-0 top-0 z-10 h-5 overflow-hidden bg-neutral-950/70"
+        style={{ touchAction: 'none', userSelect: 'none' }}
+        title="Drag to pan the frequency view"
+      >
+        <div ref={tickStripRef} className="pointer-events-none absolute inset-0">
           {ticks.map((t) => (
             <div
               key={t.hz}

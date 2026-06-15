@@ -186,7 +186,14 @@
 }
 
 /* Preset chips */
-.cfc-presets { display: flex; gap: 6px; align-items: center; }
+.cfc-presets {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  min-width: 0;
+}
 .cfc-presets .lab {
   font-family: var(--font-mono);
   font-size: 9.5px;
@@ -208,10 +215,87 @@
   cursor: pointer;
 }
 .cfc-presets .chip:hover { color: var(--fg-1); border-color: var(--cfc-line-2); }
+.cfc-presets .chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cfc-presets .chip:disabled:hover {
+  color: var(--fg-2);
+  border-color: var(--panel-border);
+}
 .cfc-presets .chip.on {
   color: var(--fg-0);
   background: color-mix(in oklab, var(--accent) 25%, var(--bg-0));
   border-color: var(--accent);
+}
+.cfc-user-presets {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 6px;
+  padding-left: 8px;
+  border-left: 1px solid var(--panel-border);
+}
+.cfc-user-presets select {
+  max-width: 160px;
+  min-width: 104px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  color: var(--fg-2);
+  border-radius: 0;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.cfc-user-presets select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.cfc-user-presets select:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.cfc-presets .preset-error,
+.cfc-preset-dialog-error {
+  color: var(--tx);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+.cfc-preset-dialog-error {
+  margin: 0 0 8px;
+}
+
+@media (max-width: 1100px) {
+  .cfc-master {
+    grid-template-columns: auto auto 1fr;
+  }
+  .cfc-presets {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+  .cfc-master .m-trims {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 700px) {
+  .cfc-master {
+    grid-template-columns: 1fr;
+    align-items: flex-start;
+  }
+  .cfc-master .m-toggles,
+  .cfc-master .m-trims,
+  .cfc-presets {
+    justify-content: flex-start;
+  }
+  .cfc-user-presets {
+    margin-left: 0;
+    padding-left: 0;
+    border-left: 0;
+  }
 }
 
 /* Bypass dim */

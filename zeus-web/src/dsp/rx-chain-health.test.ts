@@ -135,4 +135,39 @@ describe('rx-chain-health', () => {
     expect(a.recommendation).toBe('Add headroom or reduce RF gain');
     expect(a.actionTone).toBe('protect');
   });
+
+  it('reports AGC stress as auto-resolving when auto AGC and auto ATT are active', () => {
+    const a = analyzeRxChain(
+      {
+        ...BASE,
+        signalPk: -58,
+        signalAv: -63,
+        adcPk: -5,
+        adcAv: -18,
+        agcGain: -32,
+      },
+      {
+        autoAgcEnabled: true,
+        autoAttEnabled: true,
+      },
+    );
+
+    expect(a.state).toBe('agc-stressed');
+    expect(a.label).toBe('AGC auto-optimizing');
+    expect(a.recommendation).toBe('Auto AGC/ATT restoring headroom');
+    expect(a.actionTone).toBe('optimize');
+  });
+
+  it('labels high AGC boost as auto-optimizing when auto AGC is active', () => {
+    const a = analyzeRxChain(
+      { ...BASE, signalPk: -118, adcPk: -72, agcGain: 48 },
+      { autoAgcEnabled: true },
+    );
+
+    expect(a.state).toBe('agc-stressed');
+    expect(a.label).toBe('AGC auto-optimizing');
+    expect(a.detail).toContain('heavy boost');
+    expect(a.recommendation).toBe('Auto AGC tracking weak-signal gain');
+    expect(a.actionTone).toBe('optimize');
+  });
 });

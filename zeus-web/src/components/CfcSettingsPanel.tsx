@@ -15,13 +15,14 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import type { CfcBandDto, CfcConfigDto } from '../api/client';
-import { setCfcConfig } from '../api/client';
+import type { CfcBandDto, CfcConfigDto, CfcPresetDto } from '../api/client';
+import { fetchCfcPresets, saveCfcPreset, setCfcConfig } from '../api/client';
 import {
   DX_CFC_CONFIG,
   ESSB_CFC_CONFIG,
   STUDIO_SSB_CFC_CONFIG,
 } from '../audio/tx-station-profile';
+import { TextInputDialog } from '../layout/TextInputDialog';
 import { useTxStore } from '../state/tx-store';
 
 import './CfcSettingsPanel.css';
@@ -167,11 +168,48 @@ function bandsMatch(a: CfcBandDto[], b: CfcBandDto[]): boolean {
   return true;
 }
 
+function cloneCfcConfig(config: CfcConfigDto): CfcConfigDto {
+  return {
+    enabled: config.enabled,
+    postEqEnabled: config.postEqEnabled,
+    preCompDb: config.preCompDb,
+    prePeqDb: config.prePeqDb,
+    bands: config.bands.map((b) => ({ ...b })),
+  };
+}
+
+function presetKey(name: string): string {
+  return name.trim().toLowerCase();
+}
+
+function sortPresets(presets: CfcPresetDto[]): CfcPresetDto[] {
+  return [...presets].sort((a, b) =>
+    a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }),
+  );
+}
+
+function upsertPreset(presets: CfcPresetDto[], saved: CfcPresetDto): CfcPresetDto[] {
+  const key = presetKey(saved.name);
+  return sortPresets([
+    ...presets.filter((preset) => presetKey(preset.name) !== key),
+    saved,
+  ]);
+}
+
+function presetErrorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message ? error.message : fallback;
+}
+
 export function CfcSettingsPanel() {
   const cfc = useTxStore((s) => s.cfcConfig);
   const setLocal = useTxStore((s) => s.setCfcConfig);
 
   const [activeIdx, setActiveIdx] = useState(4);
+  const [savedPresets, setSavedPresets] = useState<CfcPresetDto[]>([]);
+  const [selectedSavedPreset, setSelectedSavedPreset] = useState('');
+  const [presetDialogOpen, setPresetDialogOpen] = useState(false);
+  const [presetError, setPresetError] = useState<string | null>(null);
+  const [presetSaving, setPresetSaving] = useState(false);
   const dragRef = useRef<DragState | null>(null);
   const dragMovedRef = useRef(false);
 
@@ -195,6 +233,18 @@ export function CfcSettingsPanel() {
     return () => ro.disconnect();
   }, []);
   const innerW = vbW - PAD_L - PAD_R;
+
+  useEffect(() => {
+    const ac = new AbortController();
+    fetchCfcPresets(ac.signal)
+      .then((presets) => setSavedPresets(sortPresets(presets)))
+      .catch((error) => {
+        if (!ac.signal.aborted) {
+          setPresetError(presetErrorMessage(error, 'Unable to load CFC presets'));
+        }
+      });
+    return () => ac.abort();
+  }, []);
 
   // Optimistic-update gate (used outside of drag). Drag updates local state
   // every mousemove and only POSTs once on mouseup — POSTing per-pixel
@@ -287,8 +337,49 @@ export function CfcSettingsPanel() {
     [cfc, push],
   );
 
+  const applySavedPreset = useCallback(
+    (name: string) => {
+      const preset = savedPresets.find((item) => presetKey(item.name) === presetKey(name));
+      if (!preset) {
+        setSelectedSavedPreset('');
+        return;
+      }
+      setSelectedSavedPreset(preset.name);
+      setPresetError(null);
+      push(cloneCfcConfig(preset.config));
+    },
+    [push, savedPresets],
+  );
+
+  const saveCurrentPreset = useCallback(
+    async (name: string): Promise<boolean> => {
+      const cleanName = name.trim();
+      if (!cleanName) {
+        setPresetError('Preset name required');
+        return false;
+      }
+
+      setPresetSaving(true);
+      setPresetError(null);
+      try {
+        const saved = await saveCfcPreset(cleanName, useTxStore.getState().cfcConfig);
+        setSavedPresets((presets) => upsertPreset(presets, saved));
+        setSelectedSavedPreset(saved.name);
+        return true;
+      } catch (error) {
+        setPresetError(presetErrorMessage(error, 'Unable to save CFC preset'));
+        return false;
+      } finally {
+        setPresetSaving(false);
+      }
+    },
+    [],
+  );
+
   const applyPreset = useCallback(
     (preset: 'flat' | 'voice' | 'studio' | 'essb' | 'dx') => {
+      setSelectedSavedPreset('');
+      setPresetError(null);
       if (preset === 'flat') {
         push({
           ...cfc,
@@ -468,6 +559,51 @@ export function CfcSettingsPanel() {
           >
             DX
           </button>
+          <div className="cfc-user-presets">
+            <select
+              value={selectedSavedPreset}
+              aria-label="Saved CFC presets"
+              title="Saved CFC presets"
+              disabled={presetSaving || savedPresets.length === 0}
+              onChange={(e) => {
+                const name = e.target.value;
+                if (!name) {
+                  setSelectedSavedPreset('');
+                  return;
+                }
+                applySavedPreset(name);
+              }}
+            >
+              <option value="">{savedPresets.length ? 'Saved' : 'No saved'}</option>
+              {savedPresets.map((preset) => (
+                <option key={preset.name} value={preset.name}>
+                  {preset.name}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="chip action"
+              disabled={presetSaving}
+              onClick={() => {
+                setPresetError(null);
+                setPresetDialogOpen(true);
+              }}
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              className="chip action"
+              disabled={presetSaving || !selectedSavedPreset}
+              onClick={() => { void saveCurrentPreset(selectedSavedPreset); }}
+            >
+              Overwrite
+            </button>
+          </div>
+          {presetError && !presetDialogOpen && (
+            <span className="preset-error" role="status">{presetError}</span>
+          )}
         </div>
       </div>
 
@@ -627,6 +763,29 @@ export function CfcSettingsPanel() {
           ))}
         </div>
       </div>
+
+      {presetDialogOpen && (
+        <TextInputDialog
+          title="Save CFC preset"
+          label="Preset name"
+          initialValue={selectedSavedPreset}
+          placeholder="Ragchew"
+          confirmLabel={presetSaving ? 'Saving' : 'Save Preset'}
+          onCancel={() => {
+            if (presetSaving) return;
+            setPresetDialogOpen(false);
+            setPresetError(null);
+          }}
+          onSubmit={async (name) => {
+            const saved = await saveCurrentPreset(name);
+            if (saved) setPresetDialogOpen(false);
+          }}
+        >
+          {presetError && (
+            <p className="cfc-preset-dialog-error" role="alert">{presetError}</p>
+          )}
+        </TextInputDialog>
+      )}
     </div>
   );
 }

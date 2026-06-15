@@ -148,4 +148,57 @@ describe('SignalIntelligenceController display-intelligence sync', () => {
 
     expect(useSignalEnhanceStore.getState().profileId).toBe('cw');
   });
+
+  it('merges an early Pop toggle into the server policy instead of resetting untouched settings', async () => {
+    let resolveFetch!: (response: Response) => void;
+    const fetchPromise = new Promise<Response>((resolve) => {
+      resolveFetch = resolve;
+    });
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation((_input, init) => {
+      if (init?.method === 'PUT') return Promise.resolve(jsonResponse(JSON.parse(init.body as string)));
+      return fetchPromise;
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await act(async () => {
+      root.render(<SignalIntelligenceController />);
+      await flushPromises();
+    });
+
+    act(() => {
+      useSignalEnhanceStore.getState().setPopEnabled(true);
+    });
+
+    resolveFetch(jsonResponse({
+      ...DISPLAY_INTELLIGENCE_DEFAULTS,
+      profileId: 'dx',
+      popEnabled: false,
+      snapEnabled: true,
+      snapRadiusHz: 5000,
+    }));
+
+    await act(async () => {
+      await flushPromises();
+    });
+
+    const state = useSignalEnhanceStore.getState();
+    expect(state.popEnabled).toBe(true);
+    expect(state.profileId).toBe('dx');
+    expect(state.snapEnabled).toBe(true);
+    expect(state.snapRadiusHz).toBe(5000);
+
+    await act(async () => {
+      vi.advanceTimersByTime(400);
+      await flushPromises();
+    });
+
+    const putCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PUT');
+    expect(putCall).toBeDefined();
+    expect(JSON.parse((putCall![1]?.body ?? '') as string)).toMatchObject({
+      profileId: 'dx',
+      popEnabled: true,
+      snapEnabled: true,
+      snapRadiusHz: 5000,
+    });
+  });
 });

@@ -11,7 +11,12 @@ import {
   fetchTxStationProfiles,
   saveTxFidelityPolicy,
 } from '../../api/client';
-import { txStationProfileToDto, STUDIO_SSB_PROFILE } from '../../audio/tx-station-profile';
+import {
+  txStationProfileToDto,
+  DX_PROFILE,
+  STUDIO_SSB_PROFILE,
+} from '../../audio/tx-station-profile';
+import { useConnectionStore } from '../../state/connection-store';
 import { TxFidelityPanel } from './TxFidelityPanel';
 
 vi.mock('../../api/client', async () => {
@@ -82,6 +87,12 @@ describe('TxFidelityPanel', () => {
             { status: 200, headers: { 'content-type': 'application/json' } },
           );
         }
+        if (url === '/api/tx/leveling' || url === '/api/tx-filter' || url === '/api/tx/cfc') {
+          return new Response(JSON.stringify({ status: 'Connected', mode: 'USB' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
         return new Response('{}', {
           status: 200,
           headers: { 'content-type': 'application/json' },
@@ -93,6 +104,10 @@ describe('TxFidelityPanel', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+    useConnectionStore.setState({
+      status: 'Disconnected',
+      mode: 'USB',
+    });
   });
 
   it('loads saved station profile labels into the selector', async () => {
@@ -170,7 +185,7 @@ describe('TxFidelityPanel', () => {
       bindButton!.click();
     });
 
-    expect(container.textContent).toContain('chain ESSB Broadcast');
+    expect(container.textContent).toContain('ESSB Broadcast');
 
     unmount();
   });
@@ -231,18 +246,17 @@ describe('TxFidelityPanel', () => {
       profileId: 'dx',
       targetSpectralDensity: 100,
     });
-    expect(container.textContent).toContain('DX CFC');
+    expect(container.textContent).toContain('DX Punch selected / connect to apply');
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="TX spectral density"]')?.value).toBe('100');
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="TX profile high cut"]')?.value).toBe('2850');
+    expect(container.textContent).toContain('DENS --/100');
+    expect(container.querySelector('[aria-label="TX profile audio route"]')).toBeNull();
+    expect(container.querySelector('[aria-label="TX profile audio suite rack"]')).toBeNull();
     expect(
       Array.from(container.querySelectorAll<HTMLButtonElement>('button')).some(
         (button) => button.textContent === 'Apply',
       ),
-    ).toBe(true);
-    expect(container.querySelector<HTMLInputElement>('input[aria-label="TX spectral density"]')?.value).toBe('100');
-    expect(container.querySelector<HTMLInputElement>('input[aria-label="TX profile high cut"]')?.value).toBe('2850');
-    expect(container.textContent).toContain('SSB 300..2850 Hz');
-    expect(container.textContent).toContain('DENS --/100');
-    expect(container.querySelector('[aria-label="TX profile audio route"]')).toBeNull();
-    expect(container.querySelector('[aria-label="TX profile audio suite rack"]')).toBeNull();
+    ).toBe(false);
 
     const audioProfileButton = container.querySelector<HTMLButtonElement>(
       'button[aria-label="TX profile audio suite profile"]',
@@ -267,7 +281,7 @@ describe('TxFidelityPanel', () => {
     await act(async () => {
       audioProfileOptions[1]!.click();
     });
-    expect(container.textContent).toContain('chain ESSB Broadcast');
+    expect(container.textContent).toContain('ESSB Broadcast');
     expect(container.textContent).toContain('VST route / rack hot saved in chain profile');
 
     await act(async () => {
@@ -281,8 +295,68 @@ describe('TxFidelityPanel', () => {
     await act(async () => {
       refreshedAudioProfileOptions.find((option) => option.textContent === 'Native x1')!.click();
     });
-    expect(container.textContent).toContain('chain Native x1');
+    expect(container.textContent).toContain('Native x1');
     expect(container.textContent).toContain('Native route / rack bypass saved in chain profile');
+
+    unmount();
+  });
+
+  it('auto-applies the bound chain profile when a station profile is selected', async () => {
+    act(() => {
+      useConnectionStore.setState({
+        status: 'Connected',
+        mode: 'USB',
+      });
+    });
+    vi.mocked(fetchTxStationProfiles).mockResolvedValueOnce([
+      {
+        ...txStationProfileToDto(DX_PROFILE),
+        audioSuiteProfileName: 'ESSB Broadcast',
+      },
+    ]);
+
+    const { container, unmount } = render(createElement(TxFidelityPanel));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const profileButton = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="TX station profile"]',
+    );
+    expect(profileButton).not.toBeNull();
+
+    await act(async () => {
+      profileButton!.click();
+    });
+
+    const profileOptions = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="option"]'),
+    );
+    await act(async () => {
+      profileOptions.find((option) => option.textContent === 'DX Punch')!.click();
+    });
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await Promise.resolve();
+    });
+
+    const fetchUrls = vi
+      .mocked(fetch)
+      .mock.calls.map(([input]) => String(input));
+    expect(fetchUrls).toContain('/api/audio-suite/profiles/ESSB%20Broadcast/apply');
+    expect(fetchUrls).toContain('/api/mic-gain');
+    expect(fetchUrls).toContain('/api/tx/leveler-max-gain');
+    expect(fetchUrls).toContain('/api/tx/leveling');
+    expect(fetchUrls).toContain('/api/tx-filter');
+    expect(fetchUrls).toContain('/api/tx/cfc');
+    expect(container.textContent).toContain('DX Punch active');
+    expect(
+      Array.from(container.querySelectorAll<HTMLButtonElement>('button')).some(
+        (button) => button.textContent === 'Apply',
+      ),
+    ).toBe(false);
 
     unmount();
   });

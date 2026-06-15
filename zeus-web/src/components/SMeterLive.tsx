@@ -44,6 +44,7 @@
 
 import { SMeter } from './SMeter';
 import { analyzeRxChain } from '../dsp/rx-chain-health';
+import { useConnectionStore } from '../state/connection-store';
 import { useRxMetersStore } from '../state/rx-meters-store';
 import { useTxStore } from '../state/tx-store';
 
@@ -75,19 +76,24 @@ export function SMeterLive({ hideChips = false }: { hideChips?: boolean } = {}) 
   const agcGain = useRxMetersStore((s) => s.agcGain);
   const agcEnvPk = useRxMetersStore((s) => s.agcEnvPk);
   const agcEnvAv = useRxMetersStore((s) => s.agcEnvAv);
+  const autoAgcEnabled = useConnectionStore((s) => s.autoAgcEnabled);
+  const autoAttEnabled = useConnectionStore((s) => s.autoAttEnabled);
   const transmitting = moxOn || tunOn;
 
   const swrColor = swr >= 3 ? 'var(--tx)' : swr >= 2 ? 'var(--power)' : 'var(--fg-0)';
-  const rx = analyzeRxChain({
-    signalPk,
-    signalAv,
-    adcPk,
-    adcAv,
-    agcGain,
-    agcEnvPk,
-    agcEnvAv,
-    fallbackDbm: fallbackRxDbm,
-  });
+  const rx = analyzeRxChain(
+    {
+      signalPk,
+      signalAv,
+      adcPk,
+      adcAv,
+      agcGain,
+      agcEnvPk,
+      agcEnvAv,
+      fallbackDbm: fallbackRxDbm,
+    },
+    { autoAgcEnabled, autoAttEnabled },
+  );
   const rxDbm = rx.signalDbm ?? fallbackRxDbm;
   const rxColor =
     rx.state === 'overload'

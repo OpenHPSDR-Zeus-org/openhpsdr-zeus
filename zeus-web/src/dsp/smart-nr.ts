@@ -31,6 +31,7 @@ export type SmartNrCondition = {
   confidenceAvailable: boolean;
   coherentSubthresholdSignal: boolean;
   rxAssistedWeakSignal: boolean;
+  coherentCopySignal: boolean;
   hasSignal: boolean;
   weakSparse: boolean;
   denseNoise: boolean;
@@ -127,8 +128,13 @@ export function shapeSmartNrRecommendation(rec: SmartNrRecommendation, tuning: S
   } else if (next.nrMode === 'Emnr') {
     const rxWeak = rec.condition.rxAssistedWeakSignal;
     const weak = rec.condition.weakSparse;
-    next.emnrPost2Factor = Math.round((rxWeak ? 6 : weak ? 7 : 8) + gain * (rxWeak ? 8 : weak ? 8 : 10));
-    next.emnrPost2Nlevel = Math.round((rxWeak ? 6 : weak ? 7 : 8) + gain * (rxWeak ? 6 : weak ? 8 : 10));
+    const copyAssist = rec.condition.coherentCopySignal && !weak && !rec.condition.denseNoise;
+    next.emnrPost2Factor = Math.round(
+      (rxWeak ? 6 : copyAssist ? 7 : weak ? 7 : 8) + gain * (rxWeak ? 8 : copyAssist ? 7 : weak ? 8 : 10),
+    );
+    next.emnrPost2Nlevel = Math.round(
+      (rxWeak ? 6 : copyAssist ? 7 : weak ? 7 : 8) + gain * (rxWeak ? 6 : copyAssist ? 7 : weak ? 8 : 10),
+    );
     next.emnrNpeMethod = rec.condition.denseNoise ? 1 : 0;
     next.emnrAeRun = gain >= 0.25;
   }
@@ -327,8 +333,23 @@ export function analyzeSmartNrCondition(
     !impulsiveNoise &&
     (occupancy6 > 0.18 || p90SnrDb > 8 || occupancy12 > 0.12 || coherentOccupancy6 > 0.14);
   const tonalPeakCount = useConfidence ? coherentPeakCount : peakCount;
+  const copyAssistSpread =
+    (tonalPeakCount >= 12 && coherentOccupancy6 >= 0.055) ||
+    (tonalPeakCount > 24 && coherentOccupancy6 >= 0.025);
+  const coherentCopySignal =
+    !impulsiveNoise &&
+    !denseNoise &&
+    hasSignal &&
+    tonalPeakCount >= 12 &&
+    tonalPeakCount <= 96 &&
+    maxSnrDb >= 8 &&
+    maxSnrDb < 42 &&
+    occupancy12 < 0.12 &&
+    copyAssistSpread &&
+    coherentOccupancy6 < 0.14;
   const tonalInterference =
     !impulsiveNoise &&
+    !coherentCopySignal &&
     tonalPeakCount > 0 &&
     tonalPeakCount <= 24 &&
     maxSnrDb >= 18 &&
@@ -351,6 +372,7 @@ export function analyzeSmartNrCondition(
     confidenceAvailable: useConfidence,
     coherentSubthresholdSignal,
     rxAssistedWeakSignal: false,
+    coherentCopySignal,
     hasSignal,
     weakSparse,
     denseNoise,
@@ -439,6 +461,7 @@ function withNr4(current: NrConfigDto, c: SmartNrCondition, mode: RxMode): NrCon
 
 function withNr2(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
   const rxWeak = c.rxAssistedWeakSignal;
+  const copyAssist = c.coherentCopySignal && !c.weakSparse && !c.denseNoise;
   return {
     ...current,
     nrMode: 'Emnr',
@@ -451,8 +474,8 @@ function withNr2(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
     emnrNpeMethod: c.denseNoise ? 1 : 0,
     emnrAeRun: true,
     emnrPost2Run: true,
-    emnrPost2Factor: rxWeak ? 10 : c.weakSparse ? 12 : 15,
-    emnrPost2Nlevel: rxWeak ? 10 : c.weakSparse ? 12 : 15,
+    emnrPost2Factor: rxWeak ? 10 : copyAssist ? 11 : c.weakSparse ? 12 : 15,
+    emnrPost2Nlevel: rxWeak ? 10 : copyAssist ? 11 : c.weakSparse ? 12 : 15,
     emnrPost2Rate: 5,
     emnrPost2Taper: 12,
   };
@@ -489,11 +512,17 @@ export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | n
         ? 'Impulsive-noise profile: engage NB2/SNB while keeping spectral NR conservative.'
       : 'CW/digital profile: spectral NR with conservative blanking.';
   } else if (isVoiceSsb(input.mode)) {
-    nr = condition.weakSparse || condition.denseNoise
+    nr = condition.weakSparse || condition.denseNoise || condition.coherentCopySignal
       ? withNr2(input.current, condition)
       : quietProfile(input.current, condition);
     reason = condition.rxAssistedWeakSignal
       ? 'Weak-signal assist: AGC/RX telemetry confirms marginal SSB copy; use low-artifact NR2/EMNR.'
+      : condition.coherentSubthresholdSignal
+      ? 'SSB coherent weak-signal profile: temporal confidence confirms a subthreshold ridge; use low-artifact NR2/EMNR.'
+      : condition.weakSparse
+      ? 'SSB weak-signal profile: sparse coherent energy above the floor; use low-artifact NR2/EMNR.'
+      : condition.coherentCopySignal
+      ? 'SSB copy-assist profile: coherent voice energy without dense noise; use low-artifact NR2/EMNR.'
       : condition.impulsiveNoise
       ? 'SSB impulse profile: use NB2/SNB for non-coherent spikes before heavier NR.'
       : condition.denseNoise

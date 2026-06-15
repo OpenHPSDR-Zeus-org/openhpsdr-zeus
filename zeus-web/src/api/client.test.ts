@@ -45,17 +45,20 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   AgcConfigDto,
+  CfcConfigDto,
   SquelchConfigDto,
   TxLevelingConfigDto,
 } from './client';
 import {
   AGC_CONFIG_DEFAULT,
   ApiError,
+  CFC_CONFIG_DEFAULT,
   connect,
   NR_CONFIG_DEFAULT,
   SQUELCH_CONFIG_DEFAULT,
   TX_LEVELING_CONFIG_DEFAULT,
   createHardwareDiagnosticsMarker,
+  fetchCfcPresets,
   fetchExternalPttStatus,
   fetchFrontendDspSceneDiagnostics,
   fetchHardwareDiagnostics,
@@ -90,6 +93,7 @@ import {
   setAutoAtt,
   setAdcProtection,
   saveTxFidelityPolicy,
+  saveCfcPreset,
   setLevelerMaxGain,
   setMicGain,
   setMode,
@@ -958,6 +962,10 @@ describe('POST helpers', () => {
         p2QueuedPackets: 0,
         p2TransportFailures: 0,
         qualityReasons: ['p2-rate-fresh', 'host-tx-active', 'rf-forward-power-present'],
+        txDutyProfile: 'continuous-duty',
+        continuousDutyRecommendedMaxWatts: 30,
+        continuousDutyLimitExceeded: true,
+        continuousDutyManualReference: 'ANAN-G2 manual: Data/AM/FM continuous-duty guidance.',
         diagnosticRecommendation: 'P2 DUC egress and RF forward-power evidence are live.',
       },
       txPlugins: {
@@ -998,6 +1006,10 @@ describe('POST helpers', () => {
     expect(diag.egress.p2QueuedPackets).toBe(0);
     expect(diag.egress.p2TransportFailures).toBe(0);
     expect(diag.egress.qualityReasons).toContain('rf-forward-power-present');
+    expect(diag.egress.txDutyProfile).toBe('continuous-duty');
+    expect(diag.egress.continuousDutyRecommendedMaxWatts).toBe(30);
+    expect(diag.egress.continuousDutyLimitExceeded).toBe(true);
+    expect(diag.egress.continuousDutyManualReference).toContain('ANAN-G2 manual');
     expect(diag.egress.diagnosticRecommendation).toBe('P2 DUC egress and RF forward-power evidence are live.');
     expect(diag.txPlugins?.masterBypassed).toBe(false);
     expect(diag.vstEngine?.degradedBlocks).toBe(2);
@@ -1558,6 +1570,69 @@ describe('POST helpers', () => {
     expect(url).toBe('/api/tx/leveling');
     expect(init?.method).toBe('POST');
     expect(JSON.parse((init?.body ?? '') as string)).toEqual({ txLeveling: cfg });
+  });
+
+  it('fetchCfcPresets gets saved CFC presets and normalizes configs', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({
+        presets: [
+          {
+            name: ' Ragchew ',
+            config: {
+              enabled: true,
+              preCompDb: 2,
+              bands: [
+                { freqHz: 80, compLevelDb: 1, postGainDb: -1 },
+              ],
+            },
+            createdUtc: '2026-06-15T10:00:00Z',
+            updatedUtc: '2026-06-15T10:01:00Z',
+          },
+          { name: '', config: CFC_CONFIG_DEFAULT },
+        ],
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const presets = await fetchCfcPresets();
+
+    expect(fetchMock.mock.calls[0]![0]).toBe('/api/tx/cfc/presets');
+    expect(presets).toHaveLength(1);
+    expect(presets[0]!.name).toBe('Ragchew');
+    expect(presets[0]!.config.enabled).toBe(true);
+    expect(presets[0]!.config.postEqEnabled).toBe(false);
+    expect(presets[0]!.config.bands).toHaveLength(10);
+    expect(presets[0]!.config.bands[0]).toEqual({ freqHz: 80, compLevelDb: 1, postGainDb: -1 });
+    expect(presets[0]!.config.bands[1]).toEqual(CFC_CONFIG_DEFAULT.bands[1]);
+  });
+
+  it('saveCfcPreset puts { config } to the encoded CFC preset route', async () => {
+    const cfg: CfcConfigDto = {
+      ...CFC_CONFIG_DEFAULT,
+      enabled: true,
+      preCompDb: 1.5,
+      bands: CFC_CONFIG_DEFAULT.bands.map((band, idx) =>
+        idx === 4 ? { ...band, compLevelDb: 5.5 } : { ...band },
+      ),
+    };
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({
+        name: 'DX Wide',
+        config: cfg,
+        createdUtc: '2026-06-15T10:00:00Z',
+        updatedUtc: '2026-06-15T10:02:00Z',
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const saved = await saveCfcPreset('DX Wide', cfg);
+    const [url, init] = fetchMock.mock.calls[0]!;
+
+    expect(url).toBe('/api/tx/cfc/presets/DX%20Wide');
+    expect(init?.method).toBe('PUT');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({ config: cfg });
+    expect(saved.name).toBe('DX Wide');
+    expect(saved.config.bands[4]!.compLevelDb).toBe(5.5);
   });
 });
 

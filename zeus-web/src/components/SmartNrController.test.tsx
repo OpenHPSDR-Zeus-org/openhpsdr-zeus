@@ -112,6 +112,7 @@ function mockState(nr: NrConfigDto): RadioStateDto {
     psTxFeedbackAttenuationDbMin: 0,
     psIntsSpiPreset: '16/256',
     psFeedbackSource: 'internal',
+    txMonitorEnabled: false,
     drivePercent: 0,
     tunePercent: 10,
     txMoxPreKeyDelayMs: 0,
@@ -267,6 +268,54 @@ describe('SmartNrController', () => {
     expect(useSmartNrStore.getState().status?.rxChainLabel).toBe('AGC stressed');
   });
 
+  it('holds auto NR when live AGC diagnostics require front-end protection', () => {
+    useConnectionStore.setState({
+      autoAgcEnabled: false,
+      autoAttEnabled: false,
+    });
+    useRxMetersStore.setState({
+      signalPk: -58,
+      signalAv: -63,
+      adcPk: -5,
+      adcAv: -18,
+      agcGain: -32,
+      agcEnvPk: -60,
+      agcEnvAv: -66,
+    });
+
+    for (let i = 0; i < 8; i++) feed(denseSsbNoise());
+
+    expect(setNrMock).not.toHaveBeenCalled();
+    expect(useSmartNrStore.getState().status?.heldByRxChain).toBe(true);
+    expect(useSmartNrStore.getState().status?.rxChainLabel).toBe('AGC stressed');
+    expect(useSmartNrStore.getState().status?.rxChainRecommendation).toBe('Add headroom or reduce RF gain');
+    expect(useSmartNrStore.getState().status?.rxChainTone).toBe('protect');
+  });
+
+  it('lets auto AGC and auto ATT settle protective AGC diagnostics without blocking Smart NR', () => {
+    useConnectionStore.setState({
+      autoAgcEnabled: true,
+      autoAttEnabled: true,
+    });
+    useRxMetersStore.setState({
+      signalPk: -58,
+      signalAv: -63,
+      adcPk: -5,
+      adcAv: -18,
+      agcGain: -32,
+      agcEnvPk: -60,
+      agcEnvAv: -66,
+    });
+
+    for (let i = 0; i < 6; i++) feed(denseSsbNoise());
+
+    expect(setNrMock).toHaveBeenCalledTimes(1);
+    expect(useSmartNrStore.getState().status?.heldByRxChain).toBe(false);
+    expect(useSmartNrStore.getState().status?.rxChainLabel).toBe('AGC auto-optimizing');
+    expect(useSmartNrStore.getState().status?.rxChainRecommendation).toBe('Auto AGC/ATT restoring headroom');
+    expect(useSmartNrStore.getState().status?.rxChainTone).toBe('optimize');
+  });
+
   it('uses live AGC boost as weak-signal evidence for Smart NR', () => {
     useConnectionStore.setState({ mode: 'DIGU' });
     useRxMetersStore.setState({
@@ -284,6 +333,28 @@ describe('SmartNrController', () => {
     expect(setNrMock).toHaveBeenCalledTimes(1);
     expect(setNrMock.mock.calls[0]?.[0].nrMode).toBe('Sbnr');
     expect(useSmartNrStore.getState().status?.reason).toContain('Weak-signal assist');
+  });
+
+  it('times out a stuck hardware diagnostics request and retries on a later sample', async () => {
+    let aborts = 0;
+    fetchHardwareDiagnosticsMock.mockImplementation((signal?: AbortSignal) => new Promise((_resolve, reject) => {
+      signal?.addEventListener('abort', () => {
+        aborts++;
+        reject(new Error('diagnostics aborted'));
+      });
+    }));
+
+    feed(weakCwSignal());
+    expect(fetchHardwareDiagnosticsMock).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(3000);
+    await flushPromises();
+
+    now += 30_000;
+    feed(weakCwSignal());
+
+    expect(aborts).toBe(1);
+    expect(fetchHardwareDiagnosticsMock).toHaveBeenCalledTimes(2);
   });
 
   it('falls back to NR2 instead of applying NR4 when diagnostics reports SBNR unavailable', async () => {

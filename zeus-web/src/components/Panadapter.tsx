@@ -227,8 +227,8 @@ export function Panadapter() {
       const frameCenter = Number(state.centerHz);
 
       if (decision.kind === 'reset') {
-        // Geometry changed (first frame / zoom / sample rate / width): the
-        // old anchor is meaningless. Snap the view — no glide — and adopt
+        // Hard reset (first frame / width change / no-overlap jump): the old
+        // anchor is meaningless. Snap the view — no glide — and adopt
         // immediately; the refill hold doesn't apply across a reset.
         viewCenter.snapTo(frameCenter, state.hzPerPixel);
         if (state.panValid && state.panDb) {

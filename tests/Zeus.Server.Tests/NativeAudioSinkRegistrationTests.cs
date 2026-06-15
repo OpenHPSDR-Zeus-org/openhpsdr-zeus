@@ -72,9 +72,9 @@ public class NativeAudioSinkRegistrationTests
         Assert.Contains(hosted, h => h.GetType().Name == "NativeAudioSink");
         Assert.Contains(hosted, h => h.GetType().Name == "NativeMicCapture");
 
-        // Audio Suite audition: desktop mode binds IAuditionAudioSink to
-        // the same NativeAudioSink instance so the audition mix happens
-        // in the same playback path as RX.
+        // Local side-channel playback: desktop mode binds IAuditionAudioSink
+        // to the same NativeAudioSink instance so published mono monitor
+        // samples share the RX playback path.
         var audition = app.Services.GetRequiredService<IAuditionAudioSink>();
         var nativeSink = app.Services.GetRequiredService<NativeAudioSink>();
         Assert.Same(nativeSink, audition);
@@ -96,7 +96,7 @@ public class NativeAudioSinkRegistrationTests
         var app = ZeusHost.Build(Array.Empty<string>(), opts);
 
         var audition = app.Services.GetRequiredService<IAuditionAudioSink>();
-        // Browser mode gets the no-op — audition is desktop-only in v1.
+        // Browser mode gets the no-op local side-channel implementation.
         Assert.IsType<NoOpAuditionAudioSink>(audition);
         Assert.False(audition.IsEnabled);
 

@@ -47,12 +47,14 @@
 //
 // Input is the "last-seen" frame geometry (width, hzPerPixel, centerHz) and
 // the incoming frame's same fields. Output tells the renderer what to do:
-//   - reset: wipe history (first frame, width or hzPerPixel changed, or
-//     the LO moved far enough that the whole visible span is new data)
+//   - reset: wipe history (first frame, width changed, or the LO moved far
+//     enough that the whole visible span is new data)
 //   - push:  no translation needed, upload the new row normally
 //   - shift: ping-pong horizontal shift by `shiftPx` columns; suppress
 //     this tick's row blit and remember the residual sub-pixel delta so
 //     subsequent fine retunes accumulate instead of being dropped
+//   - rescale: hzPerPixel changed but the old/new spans overlap, so resample
+//     the existing history around the new center instead of throwing it away
 //
 // Sign convention: shiftPx = round((oldCenter − newCenter) / hzPerPixel).
 // The server emits `wfDb` with low freq on the left / high
@@ -69,9 +71,10 @@ export type WfShiftInput = {
 };
 
 export type WfShiftDecision =
-  | { kind: 'reset'; reason: 'first' | 'width' | 'hzPerPixel' | 'span' }
+  | { kind: 'reset'; reason: 'first' | 'width' | 'span' }
   | { kind: 'push' }
-  | { kind: 'shift'; shiftPx: number; residualCenterHz: bigint };
+  | { kind: 'shift'; shiftPx: number; residualCenterHz: bigint }
+  | { kind: 'rescale'; srcXScale: number; srcCenterOffsetUv: number };
 
 export function planWaterfallUpdate(i: WfShiftInput): WfShiftDecision {
   if (i.lastWidth === 0 || i.lastCenterHz === null) {
@@ -79,7 +82,22 @@ export function planWaterfallUpdate(i: WfShiftInput): WfShiftDecision {
   }
   if (i.lastWidth !== i.nextWidth) return { kind: 'reset', reason: 'width' };
   if (i.lastHzPerPixel !== i.nextHzPerPixel) {
-    return { kind: 'reset', reason: 'hzPerPixel' };
+    const oldSpanHz = i.lastWidth * i.lastHzPerPixel;
+    const newSpanHz = i.nextWidth * i.nextHzPerPixel;
+    const oldCenterHz = Number(i.lastCenterHz);
+    const newCenterHz = Number(i.nextCenterHz);
+    const oldLo = oldCenterHz - oldSpanHz / 2;
+    const oldHi = oldCenterHz + oldSpanHz / 2;
+    const newLo = newCenterHz - newSpanHz / 2;
+    const newHi = newCenterHz + newSpanHz / 2;
+    if (Math.max(oldLo, newLo) >= Math.min(oldHi, newHi)) {
+      return { kind: 'reset', reason: 'span' };
+    }
+    return {
+      kind: 'rescale',
+      srcXScale: i.nextHzPerPixel / i.lastHzPerPixel,
+      srcCenterOffsetUv: (newCenterHz - oldCenterHz) / oldSpanHz,
+    };
   }
   const deltaHz = Number(i.lastCenterHz - i.nextCenterHz);
   const shiftPx = Math.round(deltaHz / i.nextHzPerPixel);

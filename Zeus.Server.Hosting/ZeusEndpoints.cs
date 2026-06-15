@@ -108,25 +108,21 @@ public static class ZeusEndpoints
             return Results.Ok(new { supported = true, muted = sink.IsMuted });
         });
 
-        // Audio Suite audition toggle — when on, the audio plugin chain's
-        // output (the operator's mic through EQ / Comp / Exciter / Bass /
-        // Reverb / future plugins) is mixed into the same RX playback path
-        // so the operator can hear the chain's effect on their voice without
-        // keying the radio. Pairs with the live pre-MOX meter tap; both
-        // require the same NativeMicCapture → AudioPluginBridge.ProcessLivePreview
-        // path to be running. Browser mode reports supported=false (audition
-        // is desktop-only in v1).
-        app.MapGet("/api/audio-suite/audition", (IAuditionAudioSink audition) =>
+        // Audio Suite audition toggle — operator-facing alias for TX Monitor.
+        // It drives the WDSP TX-monitor path, which demodulates post-TXA IQ
+        // back to mono audio after the full transmit chain (Audio Suite/VST
+        // route, leveler, compressor, CFC, ALC, bandpass, CFIR). This keeps
+        // Audio Suite "Audition ON" a 1:1 off-air comparison with what would
+        // reach the radio, rather than the older plugin-chain-only preview.
+        app.MapGet("/api/audio-suite/audition", (RadioService radio) =>
         {
-            bool supported = audition is not NoOpAuditionAudioSink;
-            return Results.Ok(new { supported, enabled = audition.IsEnabled });
+            return Results.Ok(new { supported = true, enabled = radio.Snapshot().TxMonitorEnabled });
         });
-        app.MapPut("/api/audio-suite/audition", (AuditionSetRequest body, IAuditionAudioSink audition) =>
+        app.MapPut("/api/audio-suite/audition",
+            (AuditionSetRequest body, RadioService radio) =>
         {
-            if (audition is NoOpAuditionAudioSink)
-                return Results.NotFound(new { error = "audition not available in this host mode" });
-            audition.SetEnabled(body.Enabled);
-            return Results.Ok(new { supported = true, enabled = audition.IsEnabled });
+            var state = radio.SetTxMonitor(new TxMonitorSetRequest(body.Enabled));
+            return Results.Ok(new { supported = true, enabled = state.TxMonitorEnabled });
         });
 
         // Audio Suite master bypass — single operator-facing toggle that
@@ -430,10 +426,11 @@ public static class ZeusEndpoints
         // (Protocol1Client via ITxIqSource) stats. Useful for "is the mic reaching
         // TXA, and is the EP2 packer actually reading the ring" questions without
         // hunting through logs. Free to call, exposes no secrets.
-        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, DspPipelineService dsp, TxService tx, HardwareDiagnosticsService hardware, ExternalPttService externalPtt, AudioPluginBridge? pluginBridge, Zeus.Plugins.Host.Audio.VstEngineController? vstEngine) =>
+        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, DspPipelineService dsp, TxService tx, RadioService radio, HardwareDiagnosticsService hardware, ExternalPttService externalPtt, AudioPluginBridge? pluginBridge, Zeus.Plugins.Host.Audio.VstEngineController? vstEngine) =>
         {
             var generatedUtc = DateTimeOffset.UtcNow;
             var p2Tx = dsp.ActiveP2Client?.TxIqDiagnosticsSnapshot();
+            var radioState = radio.Snapshot();
             var keying = hardware.KeyingSnapshot(externalPtt.Snapshot());
             var power = hardware.PowerCalibrationSnapshot();
             var activePower = string.Equals(power.ActiveProtocol, "P2", StringComparison.OrdinalIgnoreCase)
@@ -459,7 +456,9 @@ public static class ZeusEndpoints
                     tx.IsTunOn,
                     tx.IsTwoToneOn,
                     hardwarePtt,
-                    activePower.FwdWatts),
+                    activePower.FwdWatts,
+                    radioState.Mode,
+                    IsG2DutyGuidance(power.EffectiveBoard, power.OrionMkIIVariant)),
                 txPlugins = pluginBridge is null ? null : new
                 {
                     masterBypassed = pluginBridge.IsMasterBypassed,
@@ -1234,6 +1233,23 @@ public static class ZeusEndpoints
                 "api.tx.cfc enabled={Enabled} peq={Peq} preComp={Pre:F1}dB prePeq={PrePeq:F1}dB",
                 req.Config.Enabled, req.Config.PostEqEnabled, req.Config.PreCompDb, req.Config.PrePeqDb);
             return Results.Ok(r.SetCfc(req));
+        });
+
+        app.MapGet("/api/tx/cfc/presets", (CfcPresetStore store) =>
+            Results.Ok(new { presets = store.List() }));
+
+        app.MapPut("/api/tx/cfc/presets/{name}", (string name, CfcSetRequest req, CfcPresetStore store) =>
+        {
+            if (!TryValidateCfcPresetName(name, out var cleanName, out var nameError))
+                return Results.BadRequest(new { error = nameError });
+            if (req?.Config is not { } config)
+                return Results.BadRequest(new { error = "Config required" });
+            if (!TryValidateCfcPresetConfig(config, out var configError))
+                return Results.BadRequest(new { error = configError });
+
+            var saved = store.Save(cleanName, config);
+            log.LogInformation("api.tx.cfc.presets.save name={Name}", saved.Name);
+            return Results.Ok(saved);
         });
 
         app.MapPost("/api/rx/zoom", (ZoomSetRequest req, RadioService r) =>
@@ -2082,6 +2098,60 @@ public static class ZeusEndpoints
         return true;
     }
 
+    static bool TryValidateCfcPresetName(string? name, out string cleanName, out string error)
+    {
+        cleanName = (name ?? string.Empty).Trim();
+        if (cleanName.Length == 0)
+        {
+            error = "Preset name required";
+            return false;
+        }
+        if (cleanName.Length > 80)
+        {
+            error = "Preset name must be 80 characters or fewer";
+            return false;
+        }
+        if (cleanName.Any(c => char.IsControl(c) || c is '/' or '\\' or '?' or '#'))
+        {
+            error = "Preset name contains an invalid character";
+            return false;
+        }
+
+        error = "";
+        return true;
+    }
+
+    static bool TryValidateCfcPresetConfig(CfcConfig? cfc, out string error)
+    {
+        if (cfc is null)
+        {
+            error = "Config required";
+            return false;
+        }
+        if (!IsFinite(cfc.PreCompDb) || !IsFinite(cfc.PrePeqDb))
+        {
+            error = "CFC preCompDb and prePeqDb must be finite";
+            return false;
+        }
+        if (cfc.Bands is null || cfc.Bands.Length != 10)
+        {
+            error = $"Bands must have exactly 10 entries; got {cfc.Bands?.Length ?? 0}";
+            return false;
+        }
+        for (var i = 0; i < cfc.Bands.Length; i++)
+        {
+            var band = cfc.Bands[i];
+            if (!IsFinite(band.FreqHz) || !IsFinite(band.CompLevelDb) || !IsFinite(band.PostGainDb))
+            {
+                error = $"CFC band {i + 1} values must be finite";
+                return false;
+            }
+        }
+
+        error = "";
+        return true;
+    }
+
     static bool TryValidateDisplayIntelligenceSettings(DisplayIntelligenceSettingsDto settings, out string error)
     {
         var profileId = settings.ProfileId?.Trim().ToLowerInvariant();
@@ -2287,17 +2357,32 @@ public static class ZeusEndpoints
         bool hostTunOn = false,
         bool hostTwoToneOn = false,
         bool? hardwarePtt = null,
-        double? forwardWatts = null)
+        double? forwardWatts = null,
+        RxMode? txMode = null,
+        bool g2DutyGuidance = false)
     {
         const double RfDetectedWatts = 0.05;
         bool hostTxActive = hostMoxOn || hostTunOn || hostTwoToneOn;
         bool rfDetected = forwardWatts is > RfDetectedWatts;
+        var duty = TxDutyGuidance(txMode, g2DutyGuidance, forwardWatts, hostTxActive);
         double p1RingDropRatioPct = p1RingTotalWritten <= 0
             ? 0.0
             : Math.Round(p1RingDropped * 100.0 / p1RingTotalWritten, 3);
         if (p2 is not { } p2Diag)
         {
             var rfStatus = RfEvidenceStatus(hostTxActive, rfDetected, p2Live: false, hardwarePtt: hardwarePtt);
+            var qualityScore = TxEgressQualityScore("p2-unattached", hostTxActive, rfDetected, p2: null, p1RingDropRatioPct);
+            var qualityTone = TxEgressQualityTone("p2-unattached", hostTxActive, rfDetected, duty.LimitExceeded);
+            var qualityReasons = TxEgressQualityReasons(
+                p2Attached: false,
+                p2Live: false,
+                packetRateStatus: "missing",
+                p2: null,
+                hostTxActive,
+                rfDetected,
+                p1RingDropRatioPct,
+                duty);
+            if (duty.LimitExceeded) qualityScore = Math.Min(qualityScore, 35);
             return new TxEgressHealthDto(
                 SchemaVersion: 1,
                 GeneratedUtc: generatedUtc,
@@ -2315,21 +2400,18 @@ public static class ZeusEndpoints
                 ForwardWatts: forwardWatts,
                 RfDetected: rfDetected,
                 RfEvidenceStatus: rfStatus,
-                QualityScore: TxEgressQualityScore("p2-unattached", hostTxActive, rfDetected, p2: null, p1RingDropRatioPct),
-                QualityTone: TxEgressQualityTone("p2-unattached", hostTxActive, rfDetected),
+                QualityScore: qualityScore,
+                QualityTone: qualityTone,
                 P2PacketRateStatus: "missing",
                 P2LastPacketsPerSecond: null,
                 P2FifoModelSamples: null,
                 P2QueuedPackets: null,
                 P2TransportFailures: 0,
-                QualityReasons: TxEgressQualityReasons(
-                    p2Attached: false,
-                    p2Live: false,
-                    packetRateStatus: "missing",
-                    p2: null,
-                    hostTxActive,
-                    rfDetected,
-                    p1RingDropRatioPct),
+                QualityReasons: qualityReasons,
+                TxDutyProfile: duty.Profile,
+                ContinuousDutyRecommendedMaxWatts: duty.RecommendedMaxWatts,
+                ContinuousDutyLimitExceeded: duty.LimitExceeded,
+                ContinuousDutyManualReference: duty.ManualReference,
                 DiagnosticRecommendation: p1RingDropRatioPct > 1.0
                     ? "No Protocol 2 TX client is attached and the P1 TX IQ ring is dropping samples; verify the active radio transport before judging TX audio fidelity."
                     : "No Protocol 2 TX client is attached; P1 ring counters are the only visible TX egress path.");
@@ -2386,6 +2468,19 @@ public static class ZeusEndpoints
             recommendation = "P2 DUC sender is attached and waiting for TX IQ; key MOX/TUN or feed mic/TX monitor audio to validate live egress.";
         }
 
+        var p2QualityScore = TxEgressQualityScore(health, hostTxActive, rfDetected, p2Diag, p1RingDropRatioPct);
+        var p2QualityTone = TxEgressQualityTone(health, hostTxActive, rfDetected, duty.LimitExceeded);
+        var p2QualityReasons = TxEgressQualityReasons(
+            p2Attached: true,
+            p2Live,
+            packetRateStatus,
+            p2Diag,
+            hostTxActive,
+            rfDetected,
+            p1RingDropRatioPct,
+            duty);
+        if (duty.LimitExceeded) p2QualityScore = Math.Min(p2QualityScore, 35);
+
         return new TxEgressHealthDto(
             SchemaVersion: 1,
             GeneratedUtc: generatedUtc,
@@ -2403,22 +2498,57 @@ public static class ZeusEndpoints
             ForwardWatts: forwardWatts,
             RfDetected: rfDetected,
             RfEvidenceStatus: RfEvidenceStatus(hostTxActive, rfDetected, p2Live, hardwarePtt),
-            QualityScore: TxEgressQualityScore(health, hostTxActive, rfDetected, p2Diag, p1RingDropRatioPct),
-            QualityTone: TxEgressQualityTone(health, hostTxActive, rfDetected),
+            QualityScore: p2QualityScore,
+            QualityTone: p2QualityTone,
             P2PacketRateStatus: packetRateStatus,
             P2LastPacketsPerSecond: p2Diag.LastPacketsPerSecond,
             P2FifoModelSamples: p2Diag.LastFifoModelSamples,
             P2QueuedPackets: p2Diag.QueuedPackets,
             P2TransportFailures: failures,
-            QualityReasons: TxEgressQualityReasons(
-                p2Attached: true,
-                p2Live,
-                packetRateStatus,
-                p2Diag,
-                hostTxActive,
-                rfDetected,
-                p1RingDropRatioPct),
+            QualityReasons: p2QualityReasons,
+            TxDutyProfile: duty.Profile,
+            ContinuousDutyRecommendedMaxWatts: duty.RecommendedMaxWatts,
+            ContinuousDutyLimitExceeded: duty.LimitExceeded,
+            ContinuousDutyManualReference: duty.ManualReference,
             DiagnosticRecommendation: recommendation);
+    }
+
+    static bool IsG2DutyGuidance(string? effectiveBoard, string? variant) =>
+        string.Equals(effectiveBoard, HpsdrBoardKind.OrionMkII.ToString(), StringComparison.OrdinalIgnoreCase)
+        && string.Equals(variant, OrionMkIIVariant.G2.ToString(), StringComparison.OrdinalIgnoreCase);
+
+    static TxDutyGuidanceDto TxDutyGuidance(
+        RxMode? mode,
+        bool g2DutyGuidance,
+        double? forwardWatts,
+        bool hostTxActive)
+    {
+        const double G2ContinuousDutyWatts = 30.0;
+        bool continuousDuty = mode is RxMode.AM or RxMode.FM or RxMode.SAM or RxMode.DSB or RxMode.DIGL or RxMode.DIGU;
+        if (!g2DutyGuidance)
+        {
+            return new(
+                Profile: continuousDuty ? "continuous-duty" : "pep-intermittent",
+                RecommendedMaxWatts: null,
+                LimitExceeded: false,
+                ManualReference: null);
+        }
+
+        if (!continuousDuty)
+        {
+            return new(
+                Profile: "pep-intermittent",
+                RecommendedMaxWatts: null,
+                LimitExceeded: false,
+                ManualReference: "ANAN-G2 manual: 100 W class operation is intended for intermittent PEP modes; Data/AM/FM and other continuous-duty modes should be operated at 30 W or less.");
+        }
+
+        bool exceeded = hostTxActive && forwardWatts is > G2ContinuousDutyWatts;
+        return new(
+            Profile: "continuous-duty",
+            RecommendedMaxWatts: G2ContinuousDutyWatts,
+            LimitExceeded: exceeded,
+            ManualReference: "ANAN-G2 manual: Data/AM/FM and other continuous-duty modes must be operated at 30 W or less; AM carrier output is specified as 1-30 W.");
     }
 
     static int TxEgressQualityScore(
@@ -2448,8 +2578,10 @@ public static class ZeusEndpoints
         return Math.Clamp(score, 0, 100);
     }
 
-    static string TxEgressQualityTone(string health, bool hostTxActive, bool rfDetected)
+    static string TxEgressQualityTone(string health, bool hostTxActive, bool rfDetected, bool dutyLimitExceeded)
     {
+        if (dutyLimitExceeded)
+            return "protect";
         if (health is "p2-sender-stopped" or "p2-send-failures" or "p2-queue-backed-up")
             return "protect";
         if (health == "p2-live" && hostTxActive && !rfDetected)
@@ -2476,7 +2608,8 @@ public static class ZeusEndpoints
         Protocol2TxIqDiagnostics? p2,
         bool hostTxActive,
         bool rfDetected,
-        double p1RingDropRatioPct)
+        double p1RingDropRatioPct,
+        TxDutyGuidanceDto duty)
     {
         var reasons = new List<string>();
         if (!p2Attached)
@@ -2496,6 +2629,8 @@ public static class ZeusEndpoints
 
         reasons.Add(hostTxActive ? "host-tx-active" : "host-tx-idle");
         reasons.Add(rfDetected ? "rf-forward-power-present" : "rf-forward-power-missing");
+        if (duty.RecommendedMaxWatts is not null) reasons.Add("continuous-duty-mode");
+        if (duty.LimitExceeded) reasons.Add("continuous-duty-limit-exceeded");
         if (p1RingDropRatioPct > 1.0) reasons.Add("p1-ring-drop-pressure");
         return reasons.ToArray();
     }
@@ -2557,7 +2692,16 @@ internal sealed record TxEgressHealthDto(
     long? P2QueuedPackets,
     long P2TransportFailures,
     string[] QualityReasons,
+    string TxDutyProfile,
+    double? ContinuousDutyRecommendedMaxWatts,
+    bool ContinuousDutyLimitExceeded,
+    string? ContinuousDutyManualReference,
     string DiagnosticRecommendation);
+internal sealed record TxDutyGuidanceDto(
+    string Profile,
+    double? RecommendedMaxWatts,
+    bool LimitExceeded,
+    string? ManualReference);
 internal sealed record HardwareDiagnosticsMarkerRequest(string? Label, string? Notes);
 internal sealed record WavRecordStartRequest(string? Source);
 internal sealed record WavPlayRequest(string? File);

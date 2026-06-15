@@ -55,12 +55,13 @@
 // shift tick avoids a discontinuity between the just-shifted top row and the
 // pre-retune frame underneath.
 //
-// Reset conditions (|shift| ≥ width, width change, hzPerPixel change) re-
-// seed both textures at -200 dB so uninitialised columns render as the
-// noise-floor colour rather than a 0 dB yellow band.
+// Reset conditions (|shift| ≥ width or width change) re-seed both textures
+// at -200 dB so uninitialised columns render as the noise-floor colour rather
+// than a 0 dB yellow band. Hz-per-pixel changes are resampled in-place when
+// the old and new spans overlap, so zooming preserves waterfall history.
 
 import { buildProgram } from './util';
-import { WF_VS, WF_FS, WF_SHIFT_FS } from './shaders';
+import { WF_VS, WF_FS, WF_REMAP_FS } from './shaders';
 import { lutFor, type RenderColormapId } from './colormap';
 import type { WfShiftDecision } from './wf-shift';
 
@@ -170,10 +171,11 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   const uSeedDbDraw = gl.getUniformLocation(drawProg, 'uSeedDb');
   let bgAlpha = 1;
 
-  const shiftProg = buildProgram(gl, WF_VS, WF_SHIFT_FS);
-  const uShiftSrc = gl.getUniformLocation(shiftProg, 'uSrc');
-  const uShiftUv = gl.getUniformLocation(shiftProg, 'uShiftUv');
-  const uShiftSeed = gl.getUniformLocation(shiftProg, 'uSeedDb');
+  const remapProg = buildProgram(gl, WF_VS, WF_REMAP_FS);
+  const uRemapSrc = gl.getUniformLocation(remapProg, 'uSrc');
+  const uRemapSrcXScale = gl.getUniformLocation(remapProg, 'uSrcXScale');
+  const uRemapSrcCenterOffsetUv = gl.getUniformLocation(remapProg, 'uSrcCenterOffsetUv');
+  const uRemapSeed = gl.getUniformLocation(remapProg, 'uSeedDb');
 
   const vao = gl.createVertexArray()!;
   const vbo = gl.createBuffer()!;
@@ -290,8 +292,8 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
     );
   };
 
-  const performShift = (shiftPx: number) => {
-    if (texWidth === 0) return; // not seeded yet — nothing to shift
+  const performRemap = (srcCenterOffsetUv: number, srcXScale: number) => {
+    if (texWidth === 0) return; // not seeded yet — nothing to remap
     const src = active === 0 ? textures[0] : textures[1];
     const dst = active === 0 ? textures[1] : textures[0];
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
@@ -303,17 +305,23 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
       0,
     );
     gl.viewport(0, 0, texWidth, HISTORY_ROWS);
-    gl.useProgram(shiftProg);
+    gl.useProgram(remapProg);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, src);
-    gl.uniform1i(uShiftSrc, 0);
-    gl.uniform1f(uShiftUv, shiftPx / texWidth);
-    gl.uniform1f(uShiftSeed, SEED_DB);
+    gl.uniform1i(uRemapSrc, 0);
+    gl.uniform1f(uRemapSrcXScale, srcXScale);
+    gl.uniform1f(uRemapSrcCenterOffsetUv, srcCenterOffsetUv);
+    gl.uniform1f(uRemapSeed, SEED_DB);
     gl.bindVertexArray(vao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     active = (1 - active) as 0 | 1;
+  };
+
+  const performShift = (shiftPx: number) => {
+    if (texWidth === 0) return;
+    performRemap(-shiftPx / texWidth, 1);
   };
 
   return {
@@ -356,6 +364,15 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
           // Suppress the new-row blit this tick per doc 08 §5 so we don't
           // overlay a post-retune row on top of a just-shifted frame.
           lastCenterHz = decision.residualCenterHz;
+          break;
+        case 'rescale':
+          // Remap each historical column to the equivalent absolute-frequency
+          // column under the new hz/px. This keeps zoom changes continuous:
+          // zoom-in crops around the center; zoom-out exposes seeded edges.
+          performRemap(decision.srcCenterOffsetUv, decision.srcXScale);
+          if (wfDb && !options?.skipRowUpload) uploadRow(wfDb);
+          lastCenterHz = centerHz;
+          lastHzPerPixel = hzPerPixel;
           break;
       }
     },
@@ -429,7 +446,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
       gl.deleteBuffer(vbo);
       gl.deleteVertexArray(vao);
       gl.deleteProgram(drawProg);
-      gl.deleteProgram(shiftProg);
+      gl.deleteProgram(remapProg);
     },
   };
 }
