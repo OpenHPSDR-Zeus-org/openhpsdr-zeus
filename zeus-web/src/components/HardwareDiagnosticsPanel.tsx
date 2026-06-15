@@ -1503,6 +1503,7 @@ export function HardwareDiagnosticsPanel() {
   const display = dsp?.display;
   const rxDsp = dsp?.rxDsp;
   const rxMeters = dsp?.rxMeters;
+  const audio = dsp?.audio;
   const dspFields: Field[] = [
     { label: 'Engine', value: dsp?.engineKind },
     { label: 'Runtime', value: dsp?.engine },
@@ -1527,6 +1528,28 @@ export function HardwareDiagnosticsPanel() {
     { label: 'Audio Sinks', value: dsp?.audioSinkCount },
     { label: 'Monitor Backlog', value: dsp?.monitorBacklogSamples },
     { label: 'Wisdom Status', value: dsp?.wdspWisdomStatus },
+  ];
+  const audioFields: Field[] = [
+    { label: 'Audio Status', value: audio?.status },
+    { label: 'Source', value: audio?.source },
+    { label: 'Fresh', value: boolLabel(audio?.fresh) },
+    { label: 'Stale', value: boolLabel(audio?.stale) },
+    { label: 'Age', value: age(audio?.ageMs) },
+    { label: 'Frames', value: count(audio?.framesBroadcast) },
+    { label: 'Last Seq', value: audio?.lastSeq },
+    { label: 'Rate', value: audio?.sampleRateHz },
+    { label: 'Samples', value: audio?.sampleCount },
+    { label: 'RMS', value: db(audio?.rmsDbfs) },
+    { label: 'Peak', value: db(audio?.peakDbfs) },
+    { label: 'RMS Linear', value: audio?.rmsLinear },
+    { label: 'Peak Linear', value: audio?.peakLinear },
+    { label: 'TX Monitor', value: boolLabel(audio?.txMonitorRequested) },
+    { label: 'Squelch', value: boolLabel(audio?.squelchEnabled) },
+    { label: 'SQL Open', value: boolLabel(audio?.squelchOpen) },
+    { label: 'SQL Tail', value: boolLabel(audio?.squelchTailActive) },
+    { label: 'SQL Gain', value: audio?.squelchGateGain },
+    { label: 'Monitor Backlog', value: audio?.monitorBacklogSamples },
+    { label: 'Audio Sinks', value: audio?.audioSinkCount },
   ];
   const rxDspFields: Field[] = [
     { label: 'RX DSP Status', value: rxDsp?.status },
@@ -1786,6 +1809,9 @@ export function HardwareDiagnosticsPanel() {
         </h4>
         <FieldGrid fields={dspFields} />
         <div style={{ marginTop: 10 }}>
+          <FieldGrid fields={audioFields} />
+        </div>
+        <div style={{ marginTop: 10 }}>
           <FieldGrid fields={rxDspFields} />
         </div>
         <div style={{ marginTop: 10 }}>
@@ -1796,6 +1822,7 @@ export function HardwareDiagnosticsPanel() {
         </div>
         <DiagnosticRecommendation text={rxDsp?.diagnosticRecommendation} />
         <DiagnosticRecommendation text={rxMeters?.diagnosticRecommendation} />
+        <DiagnosticRecommendation text={audio?.diagnosticRecommendation} />
         <DiagnosticRecommendation text={display?.diagnosticRecommendation} />
       </div>
 

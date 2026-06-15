@@ -2051,6 +2051,13 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "dsp.rxMeters.adcHeadroomDb",
                 "dsp.rxMeters.agcGainDb",
                 "dsp.rxMeters.signalUsable",
+                "dsp.audio.status",
+                "dsp.audio.source",
+                "dsp.audio.rmsDbfs",
+                "dsp.audio.peakDbfs",
+                "dsp.audio.squelchOpen",
+                "dsp.audio.txMonitorRequested",
+                "dsp.audio.monitorBacklogSamples",
                 "dsp.wdspWisdomPhase",
                 "dsp.wdspEmnrPost2Available",
                 "dsp.wdspNr4SbnrAvailable",
@@ -2066,11 +2073,12 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             {
                 "Settings > DSP > Smart NR Automation",
                 "/api/nr-ui-prefs",
+                "/api/radio/diagnostics",
                 "/api/radio/diagnostics/dsp-scene",
                 "/api/dsp/nr-condition",
             },
             safetyClass = "rx-safe",
-            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the direct NR-condition API and backend diagnostics feed preserve the active profile, recommendation, RX-chain hold reason, requested/effective NR mode, ANF/SNB/NB/manual-notch runtime state, WDSP NR2/NR4 native capability, and the backend AGC/ATT/ADC/squelch operating point for remote clients and recordings.",
+            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the direct NR-condition API and backend diagnostics feed preserve the active profile, recommendation, RX-chain hold reason, requested/effective NR mode, ANF/SNB/NB/manual-notch runtime state, WDSP NR2/NR4 native capability, backend AGC/ATT/ADC/squelch operating point, and final RX/TX-monitor audio-frame freshness/RMS/peak evidence for remote clients and recordings.",
         },
         new
         {
