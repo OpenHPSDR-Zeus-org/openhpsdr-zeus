@@ -123,6 +123,26 @@ public class DspPipelineService : BackgroundService,
     /// insert handler. Single volatile write; safe from the control thread.</summary>
     public void SetRxAudioPluginHandler(RxAudioBlockHandler? handler) => _rxAudioPluginHandler = handler;
 
+    internal static void SanitizeAudioBuffer(Span<float> samples)
+    {
+        for (int i = 0; i < samples.Length; i++)
+        {
+            float sample = samples[i];
+            if (!float.IsFinite(sample))
+            {
+                samples[i] = 0f;
+            }
+            else if (sample > 1f)
+            {
+                samples[i] = 1f;
+            }
+            else if (sample < -1f)
+            {
+                samples[i] = -1f;
+            }
+        }
+    }
+
     // Local-playback monitor inject (e.g. the Recorder plugin playing a clip
     // back locally). SPSC ring: producer = plugin playback thread via
     // EnqueueMonitorAudio, consumer = Tick. Mixed into the RX audio block so a
@@ -2041,6 +2061,8 @@ public class DspPipelineService : BackgroundService,
         int audioSampleCount = engine.ReadAudio(channel, audioBuf);
         if (audioSampleCount > 0)
         {
+            SanitizeAudioBuffer(audioBuf.AsSpan(0, audioSampleCount));
+
             // MOX-edge fade envelope. Ramps the first ~5 ms of this block
             // either down (rising edge: last block before TX silence) or up
             // (falling edge: first block of RX resume). Each flag is a
@@ -2102,6 +2124,7 @@ public class DspPipelineService : BackgroundService,
                 // block, so it reaches every sink in browser and desktop modes
                 // alike. No-op (one volatile read) when nothing is queued.
                 MixMonitorInject(audioBuf.AsSpan(0, audioSampleCount));
+                SanitizeAudioBuffer(audioBuf.AsSpan(0, audioSampleCount));
 
                 var audioFrame = new AudioFrame(
                     Seq: ++_audioSeq,
@@ -2126,6 +2149,8 @@ public class DspPipelineService : BackgroundService,
             int monCount = engine.ReadTxMonitorAudio(audioBuf.AsSpan());
             if (monCount > 0)
             {
+                SanitizeAudioBuffer(audioBuf.AsSpan(0, monCount));
+
                 var monFrame = new AudioFrame(
                     Seq: ++_audioSeq,
                     TsUnixMs: nowMs,
