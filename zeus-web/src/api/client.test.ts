@@ -1435,6 +1435,25 @@ describe('POST helpers', () => {
         lastRateTimestampUtc: '2026-06-15T13:00:00Z',
         senderRunning: true,
       },
+      micUplink: {
+        schemaVersion: 1,
+        status: 'live',
+        subscriberAttached: true,
+        clientCount: 1,
+        expectedFrameSamples: 960,
+        expectedFrameBytes: 3840,
+        totalFrames: 24,
+        totalSamples: 23040,
+        totalBytes: 92160,
+        lastFrameBytes: 3840,
+        lastFrameSamples: 960,
+        lastFrameAgeMs: 80,
+        lastFrameUtc: '2026-06-15T13:00:00.920Z',
+        invalidFrames: 1,
+        oversizeMessages: 0,
+        unknownFrames: 2,
+        diagnosticRecommendation: 'Mic PCM uplink is live.',
+      },
       audioPath: {
         schemaVersion: 1,
         status: 'tx-audio-flowing',
@@ -1446,6 +1465,13 @@ describe('POST helpers', () => {
         p2InputComplexSamples: 240,
         p2PacketsSent: 1,
         p2QueuedPackets: 0,
+        requiresMicUplink: true,
+        micUplinkStatus: 'live',
+        micUplinkLastFrameAgeMs: 80,
+        micUplinkFrames: 24,
+        micUplinkSamples: 23040,
+        micUplinkInvalidFrames: 1,
+        micUplinkOversizeMessages: 0,
         totalMicSamples: 480,
         totalTxBlocks: 1,
         droppedFrames: 0,
@@ -1546,9 +1572,20 @@ describe('POST helpers', () => {
     expect(diag.audioPath.p2WaitingForTx).toBe(false);
     expect(diag.audioPath.p2LastActivityAgeMs).toBe(1000);
     expect(diag.audioPath.p2InputComplexSamples).toBe(240);
+    expect(diag.audioPath.requiresMicUplink).toBe(true);
+    expect(diag.audioPath.micUplinkStatus).toBe('live');
+    expect(diag.audioPath.micUplinkFrames).toBe(24);
+    expect(diag.audioPath.micUplinkInvalidFrames).toBe(1);
     expect(diag.audioPath.ringCapacity).toBe(16384);
     expect(diag.audioPath.ringRecentMag).toBe(0.125);
     expect(diag.audioPath.diagnosticRecommendation).toBe('TX audio is reaching the active DUC path.');
+    expect(diag.micUplink.status).toBe('live');
+    expect(diag.micUplink.subscriberAttached).toBe(true);
+    expect(diag.micUplink.expectedFrameSamples).toBe(960);
+    expect(diag.micUplink.totalFrames).toBe(24);
+    expect(diag.micUplink.lastFrameAgeMs).toBe(80);
+    expect(diag.micUplink.invalidFrames).toBe(1);
+    expect(diag.micUplink.unknownFrames).toBe(2);
     expect(diag.stage.status).toBe('active');
     expect(diag.stage.source).toBe('wdsp-txa-meter-ring');
     expect(diag.stage.micPkDbfs).toBe(-10.2);

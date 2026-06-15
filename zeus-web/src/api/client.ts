@@ -1195,6 +1195,13 @@ export type TxAudioPathHealthDto = {
   p2InputComplexSamples: number;
   p2PacketsSent: number;
   p2QueuedPackets: number | null;
+  requiresMicUplink: boolean;
+  micUplinkStatus: string;
+  micUplinkLastFrameAgeMs: number | null;
+  micUplinkFrames: number;
+  micUplinkSamples: number;
+  micUplinkInvalidFrames: number;
+  micUplinkOversizeMessages: number;
   totalMicSamples: number;
   totalTxBlocks: number;
   droppedFrames: number;
@@ -1223,6 +1230,26 @@ export type Protocol2TxIqDiagnosticsDto = {
   lastFifoModelSamples: number;
   lastRateTimestampUtc: string | null;
   senderRunning: boolean;
+};
+
+export type TxMicUplinkDiagnosticsDto = {
+  schemaVersion: number;
+  status: string;
+  subscriberAttached: boolean;
+  clientCount: number;
+  expectedFrameSamples: number;
+  expectedFrameBytes: number;
+  totalFrames: number;
+  totalSamples: number;
+  totalBytes: number;
+  lastFrameBytes: number;
+  lastFrameSamples: number;
+  lastFrameAgeMs: number | null;
+  lastFrameUtc: string | null;
+  invalidFrames: number;
+  oversizeMessages: number;
+  unknownFrames: number;
+  diagnosticRecommendation: string | null;
 };
 
 export type TxEgressHealthDto = {
@@ -1304,6 +1331,7 @@ export type TxDiagnosticsDto = {
   ring: TxRingDiagnosticsDto;
   ingest: TxIngestDiagnosticsDto;
   protocol2: Protocol2TxIqDiagnosticsDto | null;
+  micUplink: TxMicUplinkDiagnosticsDto;
   audioPath: TxAudioPathHealthDto;
   stage: TxStageDiagnosticsDto;
   egress: TxEgressHealthDto;
@@ -2930,6 +2958,13 @@ function normalizeTxAudioPathHealth(raw: unknown): TxAudioPathHealthDto {
       p2InputComplexSamples: 0,
       p2PacketsSent: 0,
       p2QueuedPackets: null,
+      requiresMicUplink: false,
+      micUplinkStatus: 'unknown',
+      micUplinkLastFrameAgeMs: null,
+      micUplinkFrames: 0,
+      micUplinkSamples: 0,
+      micUplinkInvalidFrames: 0,
+      micUplinkOversizeMessages: 0,
       totalMicSamples: 0,
       totalTxBlocks: 0,
       droppedFrames: 0,
@@ -2956,6 +2991,13 @@ function normalizeTxAudioPathHealth(raw: unknown): TxAudioPathHealthDto {
     p2InputComplexSamples: diagNumber(r.p2InputComplexSamples) ?? 0,
     p2PacketsSent: diagNumber(r.p2PacketsSent) ?? 0,
     p2QueuedPackets: diagNumber(r.p2QueuedPackets),
+    requiresMicUplink: Boolean(r.requiresMicUplink),
+    micUplinkStatus: diagString(r.micUplinkStatus) ?? 'unknown',
+    micUplinkLastFrameAgeMs: diagNumber(r.micUplinkLastFrameAgeMs),
+    micUplinkFrames: diagNumber(r.micUplinkFrames) ?? 0,
+    micUplinkSamples: diagNumber(r.micUplinkSamples) ?? 0,
+    micUplinkInvalidFrames: diagNumber(r.micUplinkInvalidFrames) ?? 0,
+    micUplinkOversizeMessages: diagNumber(r.micUplinkOversizeMessages) ?? 0,
     totalMicSamples: diagNumber(r.totalMicSamples) ?? 0,
     totalTxBlocks: diagNumber(r.totalTxBlocks) ?? 0,
     droppedFrames: diagNumber(r.droppedFrames) ?? 0,
@@ -2988,6 +3030,50 @@ function normalizeProtocol2TxIqDiagnostics(raw: unknown): Protocol2TxIqDiagnosti
     lastFifoModelSamples: diagNumber(r.lastFifoModelSamples) ?? 0,
     lastRateTimestampUtc: diagString(r.lastRateTimestampUtc),
     senderRunning: Boolean(r.senderRunning),
+  };
+}
+
+function normalizeTxMicUplinkDiagnostics(raw: unknown): TxMicUplinkDiagnosticsDto {
+  if (raw === null || raw === undefined) {
+    return {
+      schemaVersion: 0,
+      status: 'unavailable',
+      subscriberAttached: false,
+      clientCount: 0,
+      expectedFrameSamples: 960,
+      expectedFrameBytes: 3840,
+      totalFrames: 0,
+      totalSamples: 0,
+      totalBytes: 0,
+      lastFrameBytes: 0,
+      lastFrameSamples: 0,
+      lastFrameAgeMs: null,
+      lastFrameUtc: null,
+      invalidFrames: 0,
+      oversizeMessages: 0,
+      unknownFrames: 0,
+      diagnosticRecommendation: 'TX mic uplink diagnostics are not available from this backend yet; use ingest counters and TXA stage meters until OpenhpsdrZeus is restarted.',
+    };
+  }
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    status: diagString(r.status) ?? 'unknown',
+    subscriberAttached: Boolean(r.subscriberAttached),
+    clientCount: diagNumber(r.clientCount) ?? 0,
+    expectedFrameSamples: diagNumber(r.expectedFrameSamples) ?? 960,
+    expectedFrameBytes: diagNumber(r.expectedFrameBytes) ?? 3840,
+    totalFrames: diagNumber(r.totalFrames) ?? 0,
+    totalSamples: diagNumber(r.totalSamples) ?? 0,
+    totalBytes: diagNumber(r.totalBytes) ?? 0,
+    lastFrameBytes: diagNumber(r.lastFrameBytes) ?? 0,
+    lastFrameSamples: diagNumber(r.lastFrameSamples) ?? 0,
+    lastFrameAgeMs: diagNumber(r.lastFrameAgeMs),
+    lastFrameUtc: diagString(r.lastFrameUtc),
+    invalidFrames: diagNumber(r.invalidFrames) ?? 0,
+    oversizeMessages: diagNumber(r.oversizeMessages) ?? 0,
+    unknownFrames: diagNumber(r.unknownFrames) ?? 0,
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
   };
 }
 
@@ -3118,6 +3204,7 @@ function normalizeTxDiagnostics(raw: unknown): TxDiagnosticsDto {
     ring,
     ingest,
     protocol2,
+    micUplink: normalizeTxMicUplinkDiagnostics(r.micUplink),
     audioPath: normalizeTxAudioPathHealth(r.audioPath),
     stage: normalizeTxStageDiagnostics(r.stage),
     egress: normalizeTxEgressHealth(r.egress),

@@ -5,6 +5,7 @@
 using Zeus.Protocol2;
 using Zeus.Contracts;
 using Zeus.Dsp;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Text.Json;
 
 namespace Zeus.Server.Tests;
@@ -275,6 +276,143 @@ public sealed class TxEgressHealthDiagnosticsTests
     }
 
     [Fact]
+    public void StreamingHubMicInboundDiagnostics_TracksValidMicPcmFrames()
+    {
+        var hub = new StreamingHub(NullLogger<StreamingHub>.Instance);
+        int receivedFrames = 0;
+        hub.MicPcmReceived += payload =>
+        {
+            receivedFrames++;
+            Assert.Equal(3840, payload.Length);
+        };
+
+        byte[] wire = new byte[1 + 3840];
+        wire[0] = 0x20;
+        hub.DispatchInbound(wire);
+
+        var diag = hub.MicInboundDiagnosticsSnapshot(DateTimeOffset.UtcNow.AddMilliseconds(100));
+
+        Assert.Equal("live", diag.Status);
+        Assert.True(diag.SubscriberAttached);
+        Assert.Equal(960, diag.ExpectedFrameSamples);
+        Assert.Equal(3840, diag.ExpectedFrameBytes);
+        Assert.Equal(1, diag.TotalFrames);
+        Assert.Equal(960, diag.TotalSamples);
+        Assert.Equal(3840, diag.TotalBytes);
+        Assert.Equal(3840, diag.LastFrameBytes);
+        Assert.Equal(960, diag.LastFrameSamples);
+        Assert.Equal(0, diag.InvalidFrames);
+        Assert.NotNull(diag.LastFrameUtc);
+        Assert.NotNull(diag.LastFrameAgeMs);
+        Assert.Equal(1, receivedFrames);
+    }
+
+    [Fact]
+    public void StreamingHubMicInboundDiagnostics_FlagsMalformedMicPcmFrames()
+    {
+        var hub = new StreamingHub(NullLogger<StreamingHub>.Instance);
+        int receivedFrames = 0;
+        hub.MicPcmReceived += _ => receivedFrames++;
+
+        byte[] wire = new byte[1 + 4];
+        wire[0] = 0x20;
+        hub.DispatchInbound(wire);
+
+        var diag = hub.MicInboundDiagnosticsSnapshot(DateTimeOffset.UtcNow);
+
+        Assert.Equal("invalid-only", diag.Status);
+        Assert.True(diag.SubscriberAttached);
+        Assert.Equal(0, diag.TotalFrames);
+        Assert.Equal(1, diag.InvalidFrames);
+        Assert.Equal(0, receivedFrames);
+        Assert.Contains("invalid size", diag.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildTxAudioPathHealth_ClassifiesMissingRequiredMicUplink()
+    {
+        var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
+
+        var health = ZeusEndpoints.BuildTxAudioPathHealth(
+            generated,
+            ringTotalWritten: 0,
+            ringTotalRead: 0,
+            ringCount: 0,
+            ringDropped: 0,
+            ringCapacity: 16_384,
+            ringRecentMag: 0.0,
+            totalMicSamples: 0,
+            totalTxBlocks: 0,
+            droppedFrames: 0,
+            p2: P2(senderRunning: true),
+            hostTxActive: true,
+            micUplink: MicUplink(status: "waiting-for-mic"),
+            requiresMicUplink: true);
+
+        Assert.Equal("tx-mic-uplink-missing", health.Status);
+        Assert.True(health.RequiresMicUplink);
+        Assert.Equal("waiting-for-mic", health.MicUplinkStatus);
+        Assert.Equal(0, health.MicUplinkFrames);
+        Assert.Contains("no mic PCM frames", health.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildTxAudioPathHealth_ClassifiesInvalidRequiredMicUplink()
+    {
+        var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
+
+        var health = ZeusEndpoints.BuildTxAudioPathHealth(
+            generated,
+            ringTotalWritten: 0,
+            ringTotalRead: 0,
+            ringCount: 0,
+            ringDropped: 0,
+            ringCapacity: 16_384,
+            ringRecentMag: 0.0,
+            totalMicSamples: 0,
+            totalTxBlocks: 0,
+            droppedFrames: 0,
+            p2: P2(senderRunning: true),
+            hostTxActive: true,
+            micUplink: MicUplink(status: "invalid-only", invalidFrames: 2),
+            requiresMicUplink: true);
+
+        Assert.Equal("tx-mic-uplink-invalid", health.Status);
+        Assert.Equal("invalid-only", health.MicUplinkStatus);
+        Assert.Equal(2, health.MicUplinkInvalidFrames);
+        Assert.Contains("invalid mic uplink frames", health.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildTxAudioPathHealth_ClassifiesStaleRequiredMicUplinkBeforeIngest()
+    {
+        var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
+
+        var health = ZeusEndpoints.BuildTxAudioPathHealth(
+            generated,
+            ringTotalWritten: 0,
+            ringTotalRead: 0,
+            ringCount: 0,
+            ringDropped: 0,
+            ringCapacity: 16_384,
+            ringRecentMag: 0.0,
+            totalMicSamples: 0,
+            totalTxBlocks: 0,
+            droppedFrames: 0,
+            p2: P2(senderRunning: true),
+            hostTxActive: true,
+            micUplink: MicUplink(status: "stale", frames: 12, samples: 11_520, ageMs: 2200.0),
+            requiresMicUplink: true);
+
+        Assert.Equal("tx-mic-uplink-stale", health.Status);
+        Assert.Equal("stale", health.MicUplinkStatus);
+        Assert.Equal(2200.0, health.MicUplinkLastFrameAgeMs);
+        Assert.Equal(12, health.MicUplinkFrames);
+        Assert.Equal(11_520, health.MicUplinkSamples);
+        Assert.Contains("mic uplink is stale", health.DiagnosticRecommendation);
+    }
+
+    [Fact]
     public void BuildTxEgressHealth_MarksRecentP2RateAsLive()
     {
         var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
@@ -525,6 +663,34 @@ public sealed class TxEgressHealthDiagnosticsTests
         Assert.Contains("p2-unattached", health.QualityReasons);
         Assert.Contains("p1-ring-drop-pressure", health.QualityReasons);
         Assert.Contains("P1 TX IQ ring is dropping samples", health.DiagnosticRecommendation);
+    }
+
+    static TxMicUplinkDiagnosticsDto MicUplink(
+        string status,
+        long frames = 0,
+        long samples = 0,
+        double? ageMs = null,
+        long invalidFrames = 0,
+        long oversizeMessages = 0)
+    {
+        return new TxMicUplinkDiagnosticsDto(
+            SchemaVersion: 1,
+            Status: status,
+            SubscriberAttached: true,
+            ClientCount: 1,
+            ExpectedFrameSamples: 960,
+            ExpectedFrameBytes: 3840,
+            TotalFrames: frames,
+            TotalSamples: samples,
+            TotalBytes: frames * 3840,
+            LastFrameBytes: frames > 0 ? 3840 : 0,
+            LastFrameSamples: frames > 0 ? 960 : 0,
+            LastFrameAgeMs: ageMs,
+            LastFrameUtc: ageMs is null ? null : DateTimeOffset.UtcNow.AddMilliseconds(-ageMs.Value),
+            InvalidFrames: invalidFrames,
+            OversizeMessages: oversizeMessages,
+            UnknownFrames: 0,
+            DiagnosticRecommendation: "test");
     }
 
     static Protocol2TxIqDiagnostics P2(

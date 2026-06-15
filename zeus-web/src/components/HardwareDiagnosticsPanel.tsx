@@ -630,6 +630,7 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
   const p2 = diag.protocol2;
   const egress = diag.egress;
   const audioPath = diag.audioPath;
+  const micUplink = diag.micUplink;
   return (
     <div style={{ display: 'grid', gap: 10 }}>
       <FieldGrid
@@ -662,6 +663,13 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
           { label: 'P2 Sent', value: count(audioPath.p2PacketsSent) },
           { label: 'P2 Queue', value: count(audioPath.p2QueuedPackets) },
           { label: 'P2 Path Age', value: age(audioPath.p2LastActivityAgeMs) },
+          { label: 'Needs Mic Uplink', value: boolLabel(audioPath.requiresMicUplink) },
+          { label: 'Mic Uplink', value: audioPath.micUplinkStatus },
+          { label: 'Mic Uplink Age', value: age(audioPath.micUplinkLastFrameAgeMs) },
+          { label: 'Mic Uplink Frames', value: count(audioPath.micUplinkFrames) },
+          { label: 'Mic Uplink Samples', value: count(audioPath.micUplinkSamples) },
+          { label: 'Mic Uplink Invalid', value: count(audioPath.micUplinkInvalidFrames) },
+          { label: 'Mic Uplink Oversize', value: count(audioPath.micUplinkOversizeMessages) },
           { label: 'Path Mic Samples', value: count(audioPath.totalMicSamples) },
           { label: 'Path TX Blocks', value: count(audioPath.totalTxBlocks) },
           { label: 'Path Mic Drops', value: count(audioPath.droppedFrames) },
@@ -669,6 +677,25 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
           { label: 'P1 Path Drops', value: count(audioPath.ringDropped) },
           { label: 'P1 Path Drop Ratio', value: pct(audioPath.ringDropRatioPct) },
           { label: 'P1 Path Mag', value: audioPath.ringRecentMag.toFixed(3) },
+        ]}
+      />
+      <FieldGrid
+        fields={[
+          { label: 'Uplink Status', value: micUplink.status },
+          { label: 'Subscriber Attached', value: boolLabel(micUplink.subscriberAttached) },
+          { label: 'WS Clients', value: count(micUplink.clientCount) },
+          { label: 'Expected Samples', value: count(micUplink.expectedFrameSamples) },
+          { label: 'Expected Bytes', value: count(micUplink.expectedFrameBytes) },
+          { label: 'Frames', value: count(micUplink.totalFrames) },
+          { label: 'Samples', value: count(micUplink.totalSamples) },
+          { label: 'Bytes', value: count(micUplink.totalBytes) },
+          { label: 'Last Samples', value: count(micUplink.lastFrameSamples) },
+          { label: 'Last Bytes', value: count(micUplink.lastFrameBytes) },
+          { label: 'Last Age', value: age(micUplink.lastFrameAgeMs) },
+          { label: 'Last Frame', value: time(micUplink.lastFrameUtc) },
+          { label: 'Invalid Frames', value: count(micUplink.invalidFrames) },
+          { label: 'Oversize Messages', value: count(micUplink.oversizeMessages) },
+          { label: 'Unknown Frames', value: count(micUplink.unknownFrames) },
         ]}
       />
       <FieldGrid
@@ -740,6 +767,7 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
           { label: 'VST Degraded', value: count(diag.vstEngine?.degradedBlocks) },
         ]}
       />
+      <DiagnosticRecommendation text={micUplink.diagnosticRecommendation} />
       <DiagnosticRecommendation text={audioPath.diagnosticRecommendation} />
       <DiagnosticRecommendation text={diag.stage.densityRecommendation} />
       <DiagnosticRecommendation text={diag.stage.diagnosticRecommendation} />
