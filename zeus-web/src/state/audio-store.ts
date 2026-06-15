@@ -4,41 +4,65 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
-// Global (per-radio, NOT per-band) audio front-end (external-ports plan,
-// Phase 4). Mirrors /api/radio/audio, which is server-authoritative: the
-// backend reads AudioSettingsStore and pushes the selection to the live radio
-// through PushAudioFrontEnd, so the frontend never clobbers the server on
-// connect — it only loads + PUTs operator edits.
+// Global (per-radio, NOT per-band) TX-audio SOURCE (external-ports plan, §2/§11).
+// Mirrors /api/radio/audio, which is server-authoritative: the backend reads
+// AudioSettingsStore, CLAMPS the source against the connected board, and pushes
+// the resolved selection to the live radio through PushAudioFrontEnd, so the
+// frontend never clobbers the server on connect — it only loads + PUTs operator
+// edits. The GET response carries per-board source-availability gates so the
+// single-select picker offers only the sources the board has (Host is always
+// available).
 //
-// The GET response carries the capability gates (hasOnboardCodec for the
-// Hermes-class mic-boost / line-in controls; hermesLite2MicFrontEnd for the
-// HL2 mic_trs(balanced) / mic_bias / line-in-gain controls) so the panel can
-// render the right controls.
+// This replaces the prior four-bool model (lineIn/balancedInput peers); line-in
+// and balanced are now distinct `source` enum values.
 
 import { create } from 'zustand';
 
+// Must match Zeus.Contracts.TxAudioSource (string round-trips via STJ enum
+// names — the wire carries the member name, e.g. "RadioMic").
+export type TxAudioSource = 'Host' | 'RadioMic' | 'RadioLineIn' | 'RadioBalancedXlr';
+
+const SOURCES: readonly TxAudioSource[] = ['Host', 'RadioMic', 'RadioLineIn', 'RadioBalancedXlr'];
+
 export interface AudioFrontEnd {
+  // Per-board source-availability gates (read-only / server-set).
   hasOnboardCodec: boolean;
   hermesLite2MicFrontEnd: boolean;
-  lineIn: boolean;
+  hasRadioLineIn: boolean;
+  hasBalancedXlr: boolean;
+  hasMicBias: boolean;
+  // The resolved (board-clamped) source + its params.
+  source: TxAudioSource;
   micBoost: boolean;
   micBias: boolean;
-  balancedInput: boolean;
   lineInGain: number;
 }
 
 const DEFAULT_AUDIO: AudioFrontEnd = {
   hasOnboardCodec: false,
   hermesLite2MicFrontEnd: false,
-  lineIn: false,
+  hasRadioLineIn: false,
+  hasBalancedXlr: false,
+  hasMicBias: false,
+  source: 'Host',
   micBoost: false,
   micBias: false,
-  balancedInput: false,
   lineInGain: 0,
 };
 
 function parseBool(v: unknown, fallback: boolean): boolean {
   return typeof v === 'boolean' ? v : fallback;
+}
+
+function parseSource(v: unknown): TxAudioSource {
+  // Tolerate the numeric enum form (0..3) as well as the STJ member-name form.
+  if (typeof v === 'string' && (SOURCES as readonly string[]).includes(v)) {
+    return v as TxAudioSource;
+  }
+  if (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v < SOURCES.length) {
+    return SOURCES[v] ?? 'Host';
+  }
+  return 'Host';
 }
 
 function parse(raw: unknown): AudioFrontEnd {
@@ -48,10 +72,12 @@ function parse(raw: unknown): AudioFrontEnd {
   return {
     hasOnboardCodec: parseBool(r.hasOnboardCodec, false),
     hermesLite2MicFrontEnd: parseBool(r.hermesLite2MicFrontEnd, false),
-    lineIn: parseBool(r.lineIn, false),
+    hasRadioLineIn: parseBool(r.hasRadioLineIn, false),
+    hasBalancedXlr: parseBool(r.hasBalancedXlr, false),
+    hasMicBias: parseBool(r.hasMicBias, false),
+    source: parseSource(r.source),
     micBoost: parseBool(r.micBoost, false),
     micBias: parseBool(r.micBias, false),
-    balancedInput: parseBool(r.balancedInput, false),
     lineInGain: Math.min(31, Math.max(0, Math.round(gain))),
   };
 }
@@ -59,7 +85,7 @@ function parse(raw: unknown): AudioFrontEnd {
 // The mutable subset an operator can PUT (the gates are read-only / server-set).
 export type AudioFrontEndEdit = Pick<
   AudioFrontEnd,
-  'lineIn' | 'micBoost' | 'micBias' | 'balancedInput' | 'lineInGain'
+  'source' | 'micBoost' | 'micBias' | 'lineInGain'
 >;
 
 export async function fetchAudioFrontEnd(
@@ -114,14 +140,14 @@ export const useAudioStore = create<AudioStore>((set, get) => ({
 
   update: async (patch) => {
     // Optimistic local update, rollback on error — same idiom as the antenna
-    // store. The PUT returns the canonical settings (incl. clamped gain) which
-    // we adopt so the local view stays in lockstep with the server.
+    // store. The PUT returns the canonical settings (incl. board-clamped source
+    // + clamped gain) which we adopt so the local view stays in lockstep with
+    // the server.
     const prev = get().settings;
     const edit: AudioFrontEndEdit = {
-      lineIn: patch.lineIn ?? prev.lineIn,
+      source: patch.source ?? prev.source,
       micBoost: patch.micBoost ?? prev.micBoost,
       micBias: patch.micBias ?? prev.micBias,
-      balancedInput: patch.balancedInput ?? prev.balancedInput,
       lineInGain: patch.lineInGain ?? prev.lineInGain,
     };
     set({ settings: { ...prev, ...edit }, inflight: true, error: null });

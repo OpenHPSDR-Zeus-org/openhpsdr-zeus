@@ -1308,16 +1308,11 @@ public class DspPipelineService : BackgroundService,
     {
         var p2 = _p2Client;
         if (p2 is null) return;
-        // TxSpecific byte 50 mic_control flags + byte 51 line_in_gain. The
-        // payload is already per-board-gated by RadioService.PushAudioFrontEnd,
-        // so a non-audio board forwards the all-default (no-op) state. On P2 the
-        // balanced-input select is the Saturn XLR bit (byte 50 bit 5).
-        p2.SetAudioFrontEnd(
-            lineIn: a.LineIn,
-            micBoost: a.MicBoost,
-            micBias: a.MicBias,
-            xlr: a.BalancedInput,
-            lineInGain: a.LineInGain);
+        // TxSpecific byte 50 mic_control flags + byte 51 line_in_gain, already
+        // RESOLVED (board-clamped + source-encoded, Host → 0) by
+        // RadioService.PushAudioFrontEnd. The forwarder pushes the literal bytes
+        // with no source interpretation of its own (external-ports plan, §2).
+        p2.SetAudioFrontEndBytes(a.MicControlByte, a.LineInGain);
     }
 
     private void OnPaSnapshotChanged(PaRuntimeSnapshot snap)

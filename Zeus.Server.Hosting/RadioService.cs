@@ -1367,38 +1367,107 @@ public sealed class RadioService : IDisposable
     // wire output bit-for-bit.
     private void PushAudioFrontEnd()
     {
-        var sel = _audioStore?.Get() ?? AudioFrontEndSelection.Default;
-        var caps = BoardCapabilitiesTable.For(EffectiveBoardKind, EffectiveOrionMkIIVariant);
+        var sel = _audioStore?.Get() ?? AudioSourceSelection.Default;
+        var board = EffectiveBoardKind;
+        var variant = EffectiveOrionMkIIVariant;
+        var caps = BoardCapabilitiesTable.For(board, variant);
 
-        // Per-board gating. A board with neither codec nor HL2 mic front-end
-        // gets the all-default (no-op) state, so nothing new ever reaches the
-        // wire. mic_bias is additionally guarded: only HL2 (HermesLite2MicFrontEnd)
-        // and codec boards (HasOnboardCodec) expose it, and it stays whatever
-        // the operator stored — defaulting OFF — but a non-audio board can never
-        // emit it.
-        bool audioCapable = caps.HasOnboardCodec || caps.HermesLite2MicFrontEnd;
-        var eff = audioCapable ? sel : AudioFrontEndSelection.Default;
+        // CLAMP the persisted source against the connected board's capabilities
+        // (external-ports plan, §5/§8). Any source the board can't honour falls
+        // back to Host so the wire is never handed a jack the hardware lacks:
+        //   - HL2 (no onboard codec) is Host-only — any radio source → Host.
+        //   - RadioLineIn requires HasRadioLineIn (200D + 0x0A family).
+        //   - RadioBalancedXlr requires HasBalancedXlr (G2 / G2-1K only).
+        //   - RadioMic requires an audio front-end at all (codec OR HL2 mic —
+        //     but HL2's "mic front-end" is not a host-suppressing TX source in
+        //     v1, so RadioMic needs the codec).
+        // The mic-bias param is additionally suppressed on boards without
+        // HasMicBias, so a stale bias bit can never reach a non-bias board.
+        var resolved = ClampAudioSource(sel, caps);
 
-        // P1: codec boards carry mic_boost/mic_linein on the 0x12 frame; HL2
-        // carries mic_trs(=balanced) / mic_bias / line_in_gain on the 0x14
-        // frame. The ControlFrame writer gates which fields actually land per
-        // board, so passing the full set is safe — the wrong-board fields are
-        // ignored. On HL2 the "balanced input" select maps to mic_trs (the
-        // TRS/balanced front-end pin), so BalancedInput drives MicTrs there.
+        // Encode the wire bytes as PURE FUNCTIONS of the resolved source (§2).
+        // Host → literal zero on every surface, byte-identical to today; no
+        // param fallthrough.
+        var encoder = ExternalPortEncoders.For(board, variant);
+        var portState = new ExternalPortState(
+            Source: resolved.Source,
+            MicBoost: resolved.MicBoost,
+            MicBias: resolved.MicBias,
+            LineInGain: resolved.LineInGain);
+
+        // P1 codec boards (Hermes-class): mic_boost on the 0x12 frame. HL2 is
+        // Host-only — the encoder returns all-clear, and ControlFrame's
+        // read-modify-write keeps the PS bit + C4 PGA intact. mic_trs/mic_bias/
+        // line_in_gain are NOT host-suppressing TX sources on HL2 in v1, so they
+        // stay clear (Host). The P1 SetAudioFrontEnd signature is preserved.
+        var (p1Boost, p1LineIn) = encoder.EncodeP1CodecAudioBits(in portState);
         ActiveClient?.SetAudioFrontEnd(
-            micBoost: eff.MicBoost,
-            micLineIn: eff.LineIn,
-            micTrs: eff.BalancedInput,
-            micBias: eff.MicBias,
-            lineInGain: eff.LineInGain);
+            micBoost: p1Boost,
+            micLineIn: p1LineIn,
+            micTrs: false,
+            micBias: false,
+            lineInGain: 0);
 
-        // P2: forward to the live Protocol2Client via DspPipelineService.
+        // P2 (0x0A Saturn family): forward the resolved literal byte-50
+        // mic_control + byte-51 line_in_gain to the live Protocol2Client via
+        // DspPipelineService. The forwarder does no source interpretation.
+        byte micControl = encoder.EncodeP2MicControlByte(in portState);
+        byte lineInGain = encoder.EncodeP2LineInGainByte(in portState);
         AudioFrontEndChanged?.Invoke(new AudioFrontEndPush(
-            LineIn: eff.LineIn,
-            MicBoost: eff.MicBoost,
-            MicBias: eff.MicBias,
-            BalancedInput: eff.BalancedInput,
-            LineInGain: eff.LineInGain));
+            Source: resolved.Source,
+            MicControlByte: micControl,
+            LineInGain: lineInGain));
+
+        // Mirror the RESOLVED source into StateDto so the frontend hydrates from
+        // the server and never clobbers it on connect (PR #359/#360 pattern).
+        Mutate(s => s.TxAudioSource == resolved.Source ? s : s with { TxAudioSource = resolved.Source });
+
+        // PASS B SEAM: the actual radio-mic STREAM routing into the TX pipeline
+        // (1026 parse → 960-sample re-block → OnMicPcmBytesFromRadioMic) and the
+        // in-lock `_activeSource` single-select arbitration in TxAudioIngest are
+        // NOT wired here — Pass A only pushes the wire bytes + StateDto + clamp.
+        // Pass B reads `resolved.Source` (or StateDto.TxAudioSource) to set the
+        // pipeline's active source and suppress the host mic when a radio jack is
+        // chosen. Until then, host audio continues to flow regardless of Source.
+    }
+
+    /// <summary>
+    /// Clamp a persisted <see cref="AudioSourceSelection"/> against a board's
+    /// capabilities (external-ports plan, §5/§8). Returns Host (with no params)
+    /// whenever the board cannot honour the requested jack, and drops the
+    /// mic-bias param on boards without <c>HasMicBias</c>. Pure — no side
+    /// effects — so the endpoint and the push share one definition.
+    /// </summary>
+    internal static AudioSourceSelection ClampAudioSource(AudioSourceSelection sel, BoardCapabilities caps)
+    {
+        // A board with neither the stream codec nor the HL2 mic front-end has no
+        // audio jacks at all → Host.
+        bool audioCapable = caps.HasOnboardCodec || caps.HermesLite2MicFrontEnd;
+        if (!audioCapable) return AudioSourceSelection.Default;
+
+        switch (sel.Source)
+        {
+            case TxAudioSource.RadioMic:
+                // RadioMic needs the stream codec (HL2's mic front-end is not a
+                // host-suppressing TX source in v1). Drop bias on non-bias boards.
+                if (!caps.HasOnboardCodec) return AudioSourceSelection.Default;
+                return sel with { MicBias = sel.MicBias && caps.HasMicBias };
+
+            case TxAudioSource.RadioLineIn:
+                if (!caps.HasOnboardCodec || !caps.HasRadioLineIn)
+                    return AudioSourceSelection.Default;
+                // Line-in carries gain, not mic params.
+                return new AudioSourceSelection(TxAudioSource.RadioLineIn, MicBoost: false, MicBias: false, LineInGain: sel.LineInGain);
+
+            case TxAudioSource.RadioBalancedXlr:
+                if (!caps.HasOnboardCodec || !caps.HasBalancedXlr)
+                    return AudioSourceSelection.Default;
+                return sel with { MicBias = sel.MicBias && caps.HasMicBias, LineInGain = 0 };
+
+            case TxAudioSource.Host:
+            default:
+                return AudioSourceSelection.Default;
+        }
     }
 
     // DspPipelineService calls this right after a P2 client is created so the

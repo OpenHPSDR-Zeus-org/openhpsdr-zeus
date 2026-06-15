@@ -53,6 +53,19 @@ export interface BoardCapabilities {
   /** Board has the Hermes-Lite 2 mic/PTT/line-in front-end (register 0x14).
    *  HL2 only. Gates the HL2 audio front-end controls. */
   hermesLite2MicFrontEnd: boolean;
+  /** Board has an analog line-in jack selectable as the TX-audio source
+   *  (TxAudioSource.RadioLineIn). True for ANAN-200D + the whole 0x0A Saturn
+   *  family; false for pure Hermes-class P1, ANAN-G2E, Metis, HL2. Gates the
+   *  Line-In source option + its gain slider. */
+  hasRadioLineIn: boolean;
+  /** Board has a switchable balanced XLR mic input (TxAudioSource.RadioBalancedXlr).
+   *  Saturn-FPGA ANAN-G2 / G2-1K only. Gates the Balanced-XLR source option. */
+  hasBalancedXlr: boolean;
+  /** Board exposes the Orion mic-bias enable on its mic jack. True for
+   *  ANAN-200D / 7000DLE / 8000DLE / G2 / G2-1K / ANVELINA-PRO3; false for
+   *  Red Pitaya, Hermes-class, ANAN-G2E, Metis, HL2. Gates the (confirmation-
+   *  guarded) mic-bias toggle that appears with RadioMic. */
+  hasMicBias: boolean;
   // ---- External-port control (Phase 5) ----
   /** Board has a second RX antenna path (dual-Alex / dual-RX). True for the
    *  dual-ADC boards (100D/200D/0x0A family). Gates the RX2-antenna selector. */
@@ -83,6 +96,9 @@ export const UNKNOWN_BOARD_CAPABILITIES: BoardCapabilities = {
   hasRxAntennaRelays: false,
   hasOnboardCodec: false,
   hermesLite2MicFrontEnd: false,
+  hasRadioLineIn: false,
+  hasBalancedXlr: false,
+  hasMicBias: false,
   hasRx2AntennaPath: false,
   hasHl2UserGpio: false,
 };
@@ -137,6 +153,18 @@ export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
       typeof r.hermesLite2MicFrontEnd === 'boolean'
         ? r.hermesLite2MicFrontEnd
         : UNKNOWN_BOARD_CAPABILITIES.hermesLite2MicFrontEnd,
+    hasRadioLineIn:
+      typeof r.hasRadioLineIn === 'boolean'
+        ? r.hasRadioLineIn
+        : UNKNOWN_BOARD_CAPABILITIES.hasRadioLineIn,
+    hasBalancedXlr:
+      typeof r.hasBalancedXlr === 'boolean'
+        ? r.hasBalancedXlr
+        : UNKNOWN_BOARD_CAPABILITIES.hasBalancedXlr,
+    hasMicBias:
+      typeof r.hasMicBias === 'boolean'
+        ? r.hasMicBias
+        : UNKNOWN_BOARD_CAPABILITIES.hasMicBias,
     hasRx2AntennaPath:
       typeof r.hasRx2AntennaPath === 'boolean'
         ? r.hasRx2AntennaPath

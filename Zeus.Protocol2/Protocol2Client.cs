@@ -1274,7 +1274,23 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (micBoost) ctl |= MicControlMicBoost;
         if (micBias)  ctl |= MicControlMicBias;
         if (xlr)      ctl |= MicControlXlr;
-        _micControl = ctl;
+        SetAudioFrontEndBytes(ctl, lineInGain);
+    }
+
+    /// <summary>
+    /// Set the audio front-end from already-composed wire bytes (external-ports
+    /// plan, §2). The TX-audio source model resolves byte-50 mic_control and
+    /// byte-51 line_in_gain as pure functions of the selected
+    /// <c>TxAudioSource</c> upstream (RadioService / ExternalPortEncoder), so the
+    /// client just latches them and re-pushes CmdTx on the next TX cycle. With
+    /// <c>micControl == 0 &amp;&amp; lineInGain == 0</c> (the Host source) the CmdTx
+    /// tail is byte-identical to today. Verifying that SendCmdTx fires on every
+    /// change is load-bearing — the radio keeps its last-remembered input
+    /// otherwise (pihpsdr transmit_specific risk, §8).
+    /// </summary>
+    public void SetAudioFrontEndBytes(byte micControl, byte lineInGain)
+    {
+        _micControl = micControl;
         _lineInGain = lineInGain;
         if (_rxTask is not null) SendCmdTx();
     }

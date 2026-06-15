@@ -83,6 +83,14 @@ internal static class BoardCapabilitiesTable
             // keeps SupportsAnvelinaDxOc=false so the wire path stays
             // closed on G2 / 7000DLE / Apache OrionMkII original / etc.
             OrionMkIIVariant.AnvelinaPro3 => SaturnAnvelinaPro3,
+            // Red Pitaya — Saturn-class hardware but Thetis DISABLES the Orion
+            // mic-bias panel there (HasMicBias=false) and has no balanced XLR.
+            OrionMkIIVariant.RedPitaya    => SaturnRedPitaya,
+            // G2 / G2-1K (Saturn FPGA) get the balanced-XLR jack; G2-1K already
+            // fans out above for the kilowatt meter axis. The bare default (G2 /
+            // 7000DLE) lands on Saturn, which carries the XLR jack — narrowed
+            // for 7000DLE below if needed (7000DLE has no XLR).
+            OrionMkIIVariant.Anan7000DLE  => Saturn7000DLE,
             _                             => Saturn,
         },
         // --- ANAN-G2E (HermesC10, N1GP) ---
@@ -173,7 +181,12 @@ internal static class BoardCapabilitiesTable
         HasRxAntennaRelays: true,
         HasOnboardCodec: true,
         RxAuxInputs: RxAuxInputs.All,
-        HasRx2AntennaPath: true);
+        HasRx2AntennaPath: true,
+        // ANAN-200D (Orion): analog line-in jack + Orion mic bias (Thetis ORION
+        // bias panel Enabled). No balanced XLR. P1 — but it has the stream codec
+        // and the radio-controlled front-end, so line-in/bias are offered (§6).
+        HasRadioLineIn: true,
+        HasMicBias: true);
 
     // 0x0A family default (G2 / 7000DLE / OrionMkII / ANVELINA-PRO3 /
     // Red Pitaya). Saturn-class facts. 100–200 W typical → 120 W axis.
@@ -199,28 +212,54 @@ internal static class BoardCapabilitiesTable
         // BYPASS (bit 11) is bit-identical to PS external feedback — PS owns it
         // while armed (§3.4(2)).
         RxAuxInputs: RxAuxInputs.All,
-        HasRx2AntennaPath: true);
+        HasRx2AntennaPath: true,
+        // TX-audio jacks (§6). The bare Saturn fingerprint is ANAN-G2 (the 0x0A
+        // default variant): analog line-in jack + Orion mic-bias + switchable
+        // balanced XLR (Saturn FPGA). 7000DLE / 8000DLE / ANVELINA / Red Pitaya
+        // narrow these per their own fingerprints below.
+        HasRadioLineIn: true,
+        HasBalancedXlr: true,
+        HasMicBias: true);
 
-    // ANAN-8000DLE — 250 W per Apache spec; axis snaps to that.
+    // ANAN-8000DLE — 250 W per Apache spec; axis snaps to that. Line-in + mic
+    // bias, NO balanced XLR (XLR is G2 / G2-1K only).
     private static readonly BoardCapabilities Saturn8000DLE = Saturn with
     {
         MaxPowerWatts = 250,
+        HasBalancedXlr = false,
     };
 
-    // ANAN-G2-1K — kilowatt-class with internal 1 kW PA. Same Saturn fingerprint
-    // but the meter axis needs the room.
+    // ANAN-G2-1K — kilowatt-class with internal 1 kW PA. Saturn-FPGA, so it
+    // keeps the balanced-XLR jack + mic bias; only the meter axis differs.
     private static readonly BoardCapabilities SaturnG2_1K = Saturn with
     {
         MaxPowerWatts = 1000,
+    };
+
+    // ANAN-7000DLE — Saturn-class but no balanced XLR (G2 / G2-1K only).
+    // Keeps analog line-in + Orion mic bias (Thetis ORION bias panel Enabled).
+    private static readonly BoardCapabilities Saturn7000DLE = Saturn with
+    {
+        HasBalancedXlr = false,
     };
 
     // ANVELINA-PRO3 (EU2AV). Saturn-class fingerprint plus the DX OC
     // extension (USEROUT7..10) wired into P2 byte 1397 bits [4:1] —
     // issue #407, EU2AV's Open_Collector_Anvelina_DX for Thetis spec.
     // This is the only variant where SupportsAnvelinaDxOc flips true.
+    // Line-in + mic bias (Thetis ORION bias panel Enabled), NO balanced XLR.
     private static readonly BoardCapabilities SaturnAnvelinaPro3 = Saturn with
     {
         SupportsAnvelinaDxOc = true,
+        HasBalancedXlr = false,
+    };
+
+    // Red Pitaya (DH1KLM). Saturn-class hardware but Thetis DISABLES the Orion
+    // mic-bias panel for it, and there is no balanced XLR. Analog line-in only.
+    private static readonly BoardCapabilities SaturnRedPitaya = Saturn with
+    {
+        HasBalancedXlr = false,
+        HasMicBias = false,
     };
 
     private static readonly BoardCapabilities HermesC10 = new(
@@ -261,7 +300,12 @@ internal static class BoardCapabilitiesTable
         HasRxAntennaRelays: true,
         HasOnboardCodec: true,
         RxAuxInputs: RxAuxInputs.All,
-        HasRx2AntennaPath: true);
+        HasRx2AntennaPath: true,
+        // Apache OrionMkII original: analog line-in jack, NO balanced XLR
+        // (Saturn-FPGA G2 / G2-1K only). HasMicBias stays FALSE — the corrected
+        // §6 bias set is exactly {200D, 7000DLE, 8000DLE, G2, G2-1K, ANVELINA};
+        // the Apache OrionMkII original firmware is not in it.
+        HasRadioLineIn: true);
 
     // HermesLite2 — rated 5 W stock but operators routinely run to 10 W with
     // adequate cooling, so the meter axis is 10 W to cover the realistic

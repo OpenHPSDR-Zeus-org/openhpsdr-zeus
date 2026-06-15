@@ -86,4 +86,30 @@ public class CmdTxAudioFrontEndTests
         Assert.Equal((byte)0x33, p[50]);
         Assert.Equal((byte)31, p[51]);
     }
+
+    // ---- HOST BYTE-IDENTICAL: FULL-BUFFER differential golden (regression guard) ----
+
+    [Theory]
+    [InlineData(false, false)] // PS off
+    [InlineData(true,  true)]  // PS on + PA
+    public void CmdTx_HostSource_Is_FullBuffer_ByteIdentical_To_PreFeatureEmission(
+        bool psEnabled, bool paEnabled)
+    {
+        // The TX-audio source model resolves Host → micControl=0, lineInGain=0
+        // (ExternalPortEncoder, verified in the server-test purity suite). With
+        // those literal zeros the WHOLE 60-byte CmdTx buffer must be identical to
+        // the pre-feature emission (the overload that omits the audio args — i.e.
+        // the historical all-zero tail). Asserting the full buffer, not just 50/51,
+        // is the regression guard the plan requires.
+        var baseline = Protocol2Client.ComposeCmdTxBuffer(
+            seq: 7, sampleRateKhz: 48, txStepAttnDb: 19, paEnabled: paEnabled, psEnabled: psEnabled);
+        var hostResolved = Protocol2Client.ComposeCmdTxBuffer(
+            seq: 7, sampleRateKhz: 48, txStepAttnDb: 19, paEnabled: paEnabled, psEnabled: psEnabled,
+            micControl: 0, lineInGain: 0);
+
+        Assert.Equal(baseline.Length, hostResolved.Length);
+        Assert.Equal(60, hostResolved.Length);
+        Assert.True(baseline.AsSpan().SequenceEqual(hostResolved),
+            "Host source must reproduce the pre-feature CmdTx buffer byte-for-byte.");
+    }
 }

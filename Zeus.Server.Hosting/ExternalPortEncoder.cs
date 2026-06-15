@@ -59,27 +59,34 @@ public readonly record struct ExternalPortState(
     /// <summary>Open-collector RX mask (7-bit). Carried for completeness;
     /// emission stays on the existing OC path in Phase 1.</summary>
     byte OcRxMask = 0,
-    // ---- Audio front-end (external-ports plan, Phase 4) --------------------
-    // Global per-radio (NOT per-band). Verified byte layouts:
-    //   P1 Hermes-class codec (0x12 frame): C2[0]=MicBoost, C2[1]=LineIn.
-    //   P1 HL2 (0x14 frame, read-modify-write): C1[4]=BalancedInput (mic_trs),
-    //     C1[5]=MicBias, C2[4:0]=LineInGain (PS C2[6] + C4 PGA preserved).
-    //   P2 TxSpecific byte 50: bit0=LineIn, bit1=MicBoost, bit4=MicBias,
-    //     bit5=BalancedInput(XLR); byte 51=LineInGain.
-    // All default off / 0 → byte-identical to today on every board.
-    /// <summary>Line-in vs mic select (true = line-in).</summary>
-    bool LineIn = false,
-    /// <summary>Mic boost (Hermes-class codec / P2).</summary>
+    // ---- TX-audio source (external-ports plan, §2) ------------------------
+    // Global per-radio (NOT per-band). The wire bytes are PURE FUNCTIONS of
+    // Source (plus that source's params). Verified byte layouts:
+    //   P2 TxSpecific byte 50 mic_control:
+    //     Host=0x00; RadioMic=(boost?0x02)|(bias?0x10); RadioLineIn=0x01;
+    //     RadioBalancedXlr=0x20 (| opt boost/bias). byte 51 = LineInGain only
+    //     for RadioLineIn, else 0.
+    //   P1 Hermes-class codec (0x12 frame): C2[0]=mic_boost (RadioMic only),
+    //     C2[1]=mic_linein (unreachable on pure-P1 in v1 — no radio-mic RX path).
+    //   P1 HL2 (0x14 frame): Host-only — HL2 has no codec, audio bits stay clear
+    //     (PS C2[6] + C4 PGA preserved by the existing read-modify-write).
+    // Source==Host → every audio surface is literal zero, byte-identical to
+    // today; the encoder must NOT fall through to read the params under Host.
+    /// <summary>The single mutually-exclusive TX-audio source.</summary>
+    TxAudioSource Source = TxAudioSource.Host,
+    /// <summary>Mic boost — parameter of <see cref="TxAudioSource.RadioMic"/>
+    /// (and optionally XLR). Ignored under Host / RadioLineIn.</summary>
     bool MicBoost = false,
-    /// <summary>Mic bias enable. DEFAULTS OFF — enabling on a floating
-    /// connector can hang PTT; the gate guards it.</summary>
+    /// <summary>Mic bias enable — parameter of <see cref="TxAudioSource.RadioMic"/>
+    /// (and XLR). DEFAULTS OFF — enabling on a floating connector can hang PTT;
+    /// the gate guards it. Ignored under Host / RadioLineIn.</summary>
     bool MicBias = false,
-    /// <summary>Balanced / TRS input select (HL2 mic_trs / Saturn XLR).</summary>
-    bool BalancedInput = false,
-    /// <summary>Line-in gain, 0..31 (HL2 0x14 C2[4:0] / P2 byte 51).</summary>
+    /// <summary>Line-in gain, 0..31 — parameter of
+    /// <see cref="TxAudioSource.RadioLineIn"/>. Ignored under every other
+    /// source.</summary>
     byte LineInGain = 0)
 {
-    /// <summary>Default state: ANT1 / ANT1 / no OC / mic input, no boost/bias,
+    /// <summary>Default state: ANT1 / ANT1 / no OC / Host audio, no boost/bias,
     /// gain 0 — reproduces today's wire emission bit-for-bit on every board.</summary>
     public static readonly ExternalPortState Default = new();
 }
@@ -111,15 +118,37 @@ public interface IExternalPortEncoder
     uint EncodeP2TxAntennaBits(in ExternalPortState state);
 
     /// <summary>
-    /// Encode the Protocol-2 TxSpecific (port 1026) byte-50 mic_control flags
-    /// for the desired audio front-end state (external-ports plan, Phase 4).
-    /// Only emitted on codec boards; a board without
+    /// Encode the Protocol-2 TxSpecific (port 1026) byte-50 mic_control flags as
+    /// a PURE FUNCTION of <see cref="ExternalPortState.Source"/> (external-ports
+    /// plan, §2). Only emitted on codec boards; a board without
     /// <see cref="BoardCapabilities.HasOnboardCodec"/> returns 0 so its
     /// TxSpecific tail stays byte-identical to today. Bit layout (Thetis
     /// network.c:1226-1233): bit0=line_in, bit1=mic_boost, bit4=mic_bias,
-    /// bit5=balanced/XLR. Pairs with byte 51 = <c>LineInGain</c>.
+    /// bit5=balanced/XLR. <see cref="TxAudioSource.Host"/> returns LITERAL 0 with
+    /// NO fallthrough that reads the params, so a persisted non-zero
+    /// MicBoost/MicBias can never leak onto the wire after a revert to Host.
+    /// Pairs with <see cref="EncodeP2LineInGainByte"/> (byte 51).
     /// </summary>
     byte EncodeP2MicControlByte(in ExternalPortState state);
+
+    /// <summary>
+    /// Encode the Protocol-2 TxSpecific byte-51 line_in_gain (0..31). Non-zero
+    /// ONLY for <see cref="TxAudioSource.RadioLineIn"/>; every other source
+    /// (including Host) returns 0 so the radio's last-remembered gain is cleared
+    /// the moment line-in is deselected. Pure function of Source.
+    /// </summary>
+    byte EncodeP2LineInGainByte(in ExternalPortState state);
+
+    /// <summary>
+    /// Resolve the Protocol-1 codec (0x12 DriveFilter frame) audio bits as a
+    /// PURE FUNCTION of <see cref="ExternalPortState.Source"/>. C2[0]=mic_boost,
+    /// C2[1]=mic_linein. <see cref="TxAudioSource.RadioMic"/> drives mic_boost
+    /// from the param; every other source (Host included) returns
+    /// <c>(false,false)</c> — no param leak. RadioLineIn is intentionally
+    /// unreachable on pure-P1 codec boards in v1 (no P1 radio-mic RX path, §2/§6),
+    /// so mic_linein stays clear. HL2 is Host-only and never calls this.
+    /// </summary>
+    (bool MicBoost, bool MicLineIn) EncodeP1CodecAudioBits(in ExternalPortState state);
 }
 
 /// <summary>
@@ -165,6 +194,16 @@ public sealed class Protocol1PortEncoder : IExternalPortEncoder
         // P1 codec boards carry mic_boost/mic_linein on the 0x12 frame
         // (ControlFrame), not the P2 TxSpecific byte 50. No P2 byte here.
         => 0;
+
+    public byte EncodeP2LineInGainByte(in ExternalPortState state)
+        // P1 boards have no P2 TxSpecific byte 51.
+        => 0;
+
+    public (bool MicBoost, bool MicLineIn) EncodeP1CodecAudioBits(in ExternalPortState state)
+        // Pure function of Source: RadioMic → mic_boost; Host / everything else
+        // → all clear (no param leak). RadioLineIn is intentionally unreachable
+        // on pure-P1 codec boards in v1.
+        => ExternalPortAudio.P1CodecAudioBits(state.Source, state.MicBoost);
 }
 
 /// <summary>
@@ -209,42 +248,77 @@ public sealed class Protocol2PortEncoder : IExternalPortEncoder
     {
         // Gate on codec presence: a board without the stream codec gets the
         // zero byte, so its TxSpecific tail is byte-identical to today. The
-        // shared helper is the single source of the byte-50 bit math (the same
-        // constants Protocol2Client.SetAudioFrontEnd composes).
+        // shared helper is the single source of the byte-50 bit math, computed
+        // PURELY from the source — Host returns literal 0 with no param read.
         if (!_hasOnboardCodec) return 0;
-        return ExternalPortAudio.P2MicControlByte(
-            lineIn: state.LineIn,
-            micBoost: state.MicBoost,
-            micBias: state.MicBias,
-            balanced: state.BalancedInput);
+        return ExternalPortAudio.P2MicControlByte(state.Source, state.MicBoost, state.MicBias);
     }
+
+    public byte EncodeP2LineInGainByte(in ExternalPortState state)
+    {
+        // byte 51 is non-zero only for RadioLineIn; suppressed (0) for every
+        // other source so a deselected line-in jack drops its remembered gain.
+        if (!_hasOnboardCodec) return 0;
+        return ExternalPortAudio.P2LineInGainByte(state.Source, state.LineInGain);
+    }
+
+    public (bool MicBoost, bool MicLineIn) EncodeP1CodecAudioBits(in ExternalPortState state)
+        // P2 boards do not use the P1 0x12 codec frame.
+        => (false, false);
 }
 
 /// <summary>
-/// Shared pure helpers for the audio front-end bit math (external-ports plan,
-/// Phase 4). The single source of truth for the P2 TxSpecific byte-50
-/// mic_control flag layout (Thetis network.c:1226-1233), so the encoder seam
-/// and any test compute the same byte. The P1 audio bits (0x12 mic_boost/linein
-/// and 0x14 mic_trs/mic_bias/line_in_gain) live in ControlFrame, which owns the
-/// per-board gating for the Protocol-1 frames.
+/// Shared PURE audio-source bit math (external-ports plan, §2). Single source of
+/// truth for the P2 TxSpecific byte-50 mic_control / byte-51 line_in_gain layout
+/// (Thetis network.c:1226-1233) and the P1 0x12 codec bits, computed straight
+/// from <see cref="TxAudioSource"/> so the encoder seam and any test agree.
+///
+/// CRUCIAL PURITY INVARIANT: <see cref="TxAudioSource.Host"/> returns literal 0
+/// on every surface WITHOUT reading MicBoost/MicBias/LineInGain — a persisted
+/// non-zero param must never leak onto the wire after a revert to Host. The
+/// switch's Host arm short-circuits before any param is consulted.
 /// </summary>
 internal static class ExternalPortAudio
 {
     // TxSpecific byte-50 mic_control flags (Thetis network.c:1226-1233).
-    private const byte LineInBit   = 0x01; // bit0
-    private const byte MicBoostBit = 0x02; // bit1
-    private const byte MicBiasBit  = 0x10; // bit4 (enable Orion mic bias)
-    private const byte XlrBit       = 0x20; // bit5 (balanced/XLR input — Saturn)
+    private const byte LineInBit   = 0x01; // bit0 — line-in select
+    private const byte MicBoostBit = 0x02; // bit1 — mic boost
+    private const byte MicBiasBit  = 0x10; // bit4 — enable Orion mic bias
+    private const byte XlrBit       = 0x20; // bit5 — balanced/XLR input (Saturn)
 
-    public static byte P2MicControlByte(bool lineIn, bool micBoost, bool micBias, bool balanced)
+    /// <summary>P2 byte-50 mic_control as a pure function of the source.</summary>
+    public static byte P2MicControlByte(TxAudioSource source, bool micBoost, bool micBias) => source switch
     {
-        byte b = 0;
-        if (lineIn)   b |= LineInBit;
-        if (micBoost) b |= MicBoostBit;
-        if (micBias)  b |= MicBiasBit;
-        if (balanced) b |= XlrBit;
-        return b;
-    }
+        // Host: literal zero, no param read. The analog jacks are suppressed.
+        TxAudioSource.Host => 0,
+        // RadioMic: boost (bit1) + bias (bit4) from the params, mic jack implied
+        // (no line-in / XLR bit).
+        TxAudioSource.RadioMic =>
+            (byte)((micBoost ? MicBoostBit : 0) | (micBias ? MicBiasBit : 0)),
+        // RadioLineIn: line-in select (bit0); gain rides byte 51. Mic params do
+        // not apply.
+        TxAudioSource.RadioLineIn => LineInBit,
+        // RadioBalancedXlr: XLR select (bit5) | optional boost/bias (the XLR
+        // front-end still honours the Orion mic-bias / boost stage on G2).
+        TxAudioSource.RadioBalancedXlr =>
+            (byte)(XlrBit | (micBoost ? MicBoostBit : 0) | (micBias ? MicBiasBit : 0)),
+        _ => 0,
+    };
+
+    /// <summary>P2 byte-51 line_in_gain — non-zero ONLY for RadioLineIn.</summary>
+    public static byte P2LineInGainByte(TxAudioSource source, byte lineInGain) =>
+        source == TxAudioSource.RadioLineIn ? (byte)(lineInGain & 0x1F) : (byte)0;
+
+    /// <summary>P1 0x12 codec bits (mic_boost C2[0], mic_linein C2[1]) as a pure
+    /// function of the source. RadioMic drives mic_boost; everything else,
+    /// including Host, returns all-clear — no param leak.</summary>
+    public static (bool MicBoost, bool MicLineIn) P1CodecAudioBits(TxAudioSource source, bool micBoost) => source switch
+    {
+        TxAudioSource.RadioMic => (micBoost, false),
+        // RadioLineIn is unreachable on pure-P1 codec boards in v1 (no P1
+        // radio-mic RX path); Host/XLR are not P1-codec sources. All clear.
+        _ => (false, false),
+    };
 }
 
 /// <summary>
@@ -275,9 +349,18 @@ public sealed class HermesLite2PortEncoder : IExternalPortEncoder
         => Protocol2Client.EncodeTxAntennaBits(txAnt: 1);
 
     public byte EncodeP2MicControlByte(in ExternalPortState state)
-        // HL2 is Protocol 1 with no stream codec — its mic front-end rides the
-        // 0x14 frame (ControlFrame read-modify-write), not the P2 TxSpecific.
+        // HL2 has no stream codec and no P2 TxSpecific frame at all.
         => 0;
+
+    public byte EncodeP2LineInGainByte(in ExternalPortState state)
+        // HL2 has no P2 TxSpecific byte 51.
+        => 0;
+
+    public (bool MicBoost, bool MicLineIn) EncodeP1CodecAudioBits(in ExternalPortState state)
+        // HL2 is Host-only (no onboard codec — §2/§6). Its 0x14 audio bits stay
+        // clear and the existing ControlFrame read-modify-write preserves the
+        // C2[6] PureSignal bit + the C4 PGA byte. Never emit codec audio bits.
+        => (false, false);
 }
 
 /// <summary>

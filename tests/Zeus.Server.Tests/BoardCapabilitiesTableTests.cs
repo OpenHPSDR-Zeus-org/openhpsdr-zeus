@@ -320,4 +320,65 @@ public class BoardCapabilitiesTableTests
         foreach (var board in Enum.GetValues<HpsdrBoardKind>())
             Assert.Equal(AlexRevision.Modern, BoardCapabilitiesTable.For(board).AlexRevision);
     }
+
+    // ---- TX-audio source jacks (external-ports plan, §6) — EXACT matrix ----
+
+    [Fact]
+    public void HasMicBias_Exactly_The_Six_BiasCapable_Boards()
+    {
+        // CRITICAL §6: bias TRUE only for ANAN-200D + 7000DLE + 8000DLE + G2 +
+        // G2-1K + ANVELINA-PRO3; FALSE for Red Pitaya + every Hermes-class + G2E
+        // + Metis + HL2 + Apache OrionMkII original.
+        Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.Orion).HasMicBias); // 200D
+        Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, OrionMkIIVariant.Anan7000DLE).HasMicBias);
+        Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, OrionMkIIVariant.Anan8000DLE).HasMicBias);
+        Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, OrionMkIIVariant.G2).HasMicBias);
+        Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, OrionMkIIVariant.G2_1K).HasMicBias);
+        Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, OrionMkIIVariant.AnvelinaPro3).HasMicBias);
+
+        // FALSE set.
+        Assert.False(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, OrionMkIIVariant.RedPitaya).HasMicBias);
+        Assert.False(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, OrionMkIIVariant.OrionMkII).HasMicBias);
+        Assert.False(BoardCapabilitiesTable.For(HpsdrBoardKind.Metis).HasMicBias);
+        Assert.False(BoardCapabilitiesTable.For(HpsdrBoardKind.Hermes).HasMicBias);
+        Assert.False(BoardCapabilitiesTable.For(HpsdrBoardKind.HermesII).HasMicBias);
+        Assert.False(BoardCapabilitiesTable.For(HpsdrBoardKind.Angelia).HasMicBias); // 100D
+        Assert.False(BoardCapabilitiesTable.For(HpsdrBoardKind.HermesC10).HasMicBias); // G2E
+        Assert.False(BoardCapabilitiesTable.For(HpsdrBoardKind.HermesLite2).HasMicBias);
+    }
+
+    [Fact]
+    public void HasBalancedXlr_Only_G2_And_G2_1K()
+    {
+        // §6: balanced XLR is the Saturn-FPGA G2 / G2-1K only.
+        Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, OrionMkIIVariant.G2).HasBalancedXlr);
+        Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, OrionMkIIVariant.G2_1K).HasBalancedXlr);
+
+        foreach (var v in new[] {
+            OrionMkIIVariant.Anan7000DLE, OrionMkIIVariant.Anan8000DLE,
+            OrionMkIIVariant.OrionMkII, OrionMkIIVariant.AnvelinaPro3, OrionMkIIVariant.RedPitaya })
+            Assert.False(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, v).HasBalancedXlr);
+
+        foreach (var board in new[] {
+            HpsdrBoardKind.Metis, HpsdrBoardKind.Hermes, HpsdrBoardKind.HermesII,
+            HpsdrBoardKind.Angelia, HpsdrBoardKind.Orion, HpsdrBoardKind.HermesC10,
+            HpsdrBoardKind.HermesLite2 })
+            Assert.False(BoardCapabilitiesTable.For(board).HasBalancedXlr);
+    }
+
+    [Fact]
+    public void HasRadioLineIn_On_200D_And_All_0x0A_Not_HermesClass_Or_HL2()
+    {
+        // §6: line-in on ANAN-200D + every 0x0A variant. NOT on pure Hermes-class
+        // P1 (no P1 radio-mic RX path in v1), ANAN-G2E, Metis, HL2.
+        Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.Orion).HasRadioLineIn); // 200D
+        foreach (var v in Enum.GetValues<OrionMkIIVariant>())
+            Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, v).HasRadioLineIn);
+
+        foreach (var board in new[] {
+            HpsdrBoardKind.Metis, HpsdrBoardKind.Hermes, HpsdrBoardKind.HermesII,
+            HpsdrBoardKind.Angelia /* 100D */, HpsdrBoardKind.HermesC10 /* G2E */,
+            HpsdrBoardKind.HermesLite2 })
+            Assert.False(BoardCapabilitiesTable.For(board).HasRadioLineIn);
+    }
 }

@@ -225,112 +225,139 @@ export function RadioSettingsPanel() {
             </span>
           </h4>
 
-          {/* Line-in vs mic select — present on both codec and HL2 paths. */}
-          <div className="ps-field">
-            <div className="ps-name">
-              Input Source
-              <em>
-                Select the line-in jack instead of the microphone input.
-              </em>
-            </div>
-            <label className="ps-check">
-              <input
-                type="checkbox"
-                checked={audio.lineIn}
-                disabled={audioInflight}
-                onChange={(e) => void updateAudio({ lineIn: e.target.checked })}
-              />
-              <span className="ps-check-box" />
-              <span>{audio.lineIn ? 'Line In' : 'Microphone'}</span>
-            </label>
-          </div>
-
-          {/* Mic boost — Hermes-class codec boards only. */}
-          {hasCodecAudio ? (
+          {/* HL2 has no codec → Host-only; render a note, no picker. */}
+          {hasHl2Audio && !hasCodecAudio ? (
             <div className="ps-field">
               <div className="ps-name">
-                Mic Boost
-                <em>+20 dB microphone preamp boost.</em>
+                TX Audio Source
+                <em>
+                  Hermes-Lite 2 has no onboard audio codec — TX audio comes from
+                  the host (USB / Ethernet) only.
+                </em>
               </div>
-              <label className="ps-check">
-                <input
-                  type="checkbox"
-                  checked={audio.micBoost}
+              <select className="ps-select-mini" value="Host" disabled>
+                <option value="Host">Host</option>
+              </select>
+            </div>
+          ) : (
+            <>
+              {/* Single-select TX-audio source — board-gated, cannot
+                  double-pick. Host always present; radio jacks render only when
+                  the connected board exposes them. */}
+              <div className="ps-field">
+                <div className="ps-name">
+                  TX Audio Source
+                  <em>
+                    Which input feeds the transmitter. Host uses the computer
+                    mic / audio chain; the radio options digitize the rig's own
+                    analog jacks.
+                  </em>
+                </div>
+                <select
+                  className="ps-select-mini"
+                  value={audio.source}
                   disabled={audioInflight}
-                  onChange={(e) => void updateAudio({ micBoost: e.target.checked })}
-                />
-                <span className="ps-check-box" />
-                <span>{audio.micBoost ? 'On' : 'Off'}</span>
-              </label>
-            </div>
-          ) : null}
+                  onChange={(e) =>
+                    void updateAudio({
+                      source: e.target.value as typeof audio.source,
+                    })
+                  }
+                >
+                  <option value="Host">Host</option>
+                  {hasCodecAudio ? (
+                    <option value="RadioMic">Radio Mic</option>
+                  ) : null}
+                  {caps.hasRadioLineIn ? (
+                    <option value="RadioLineIn">Radio Line In</option>
+                  ) : null}
+                  {caps.hasBalancedXlr ? (
+                    <option value="RadioBalancedXlr">
+                      Radio Balanced (XLR)
+                    </option>
+                  ) : null}
+                </select>
+              </div>
 
-          {/* Balanced / TRS input — HL2 mic_trs (balanced) or Saturn XLR. */}
-          <div className="ps-field">
-            <div className="ps-name">
-              Balanced Input
-              <em>
-                {hasHl2Audio
-                  ? 'Use the TRS (balanced) mic pin on the HL2 front-end.'
-                  : 'Select the balanced (XLR) microphone input.'}
-              </em>
-            </div>
-            <label className="ps-check">
-              <input
-                type="checkbox"
-                checked={audio.balancedInput}
-                disabled={audioInflight}
-                onChange={(e) => void updateAudio({ balancedInput: e.target.checked })}
-              />
-              <span className="ps-check-box" />
-              <span>{audio.balancedInput ? 'Balanced' : 'Standard'}</span>
-            </label>
-          </div>
+              {/* Mic boost — parameter of Radio Mic / Balanced. */}
+              {audio.source === 'RadioMic' ||
+              audio.source === 'RadioBalancedXlr' ? (
+                <div className="ps-field">
+                  <div className="ps-name">
+                    Mic Boost
+                    <em>+20 dB microphone preamp boost.</em>
+                  </div>
+                  <label className="ps-check">
+                    <input
+                      type="checkbox"
+                      checked={audio.micBoost}
+                      disabled={audioInflight}
+                      onChange={(e) =>
+                        void updateAudio({ micBoost: e.target.checked })
+                      }
+                    />
+                    <span className="ps-check-box" />
+                    <span>{audio.micBoost ? 'On' : 'Off'}</span>
+                  </label>
+                </div>
+              ) : null}
 
-          {/* Mic bias — DEFAULTS OFF, floating-connector PTT-hang guard. */}
-          <div className="ps-field">
-            <div className="ps-name">
-              Mic Bias
-              <em>
-                Supply bias voltage for electret microphones. Leave OFF unless
-                your mic needs it — enabling it on a floating / unconnected
-                connector can hang PTT.
-              </em>
-            </div>
-            <label className="ps-check">
-              <input
-                type="checkbox"
-                checked={audio.micBias}
-                disabled={audioInflight}
-                onChange={(e) => void updateAudio({ micBias: e.target.checked })}
-              />
-              <span className="ps-check-box" />
-              <span>{audio.micBias ? 'On' : 'Off (default)'}</span>
-            </label>
-          </div>
+              {/* Mic bias — DEFAULTS OFF, floating-connector PTT-hang guard.
+                  Parameter of Radio Mic / Balanced, bias-capable boards only. */}
+              {caps.hasMicBias &&
+              (audio.source === 'RadioMic' ||
+                audio.source === 'RadioBalancedXlr') ? (
+                <div className="ps-field">
+                  <div className="ps-name">
+                    Mic Bias
+                    <em>
+                      Supply bias voltage for electret microphones. Leave OFF
+                      unless your mic needs it — enabling it on a floating /
+                      unconnected connector can hang PTT.
+                    </em>
+                  </div>
+                  <label className="ps-check">
+                    <input
+                      type="checkbox"
+                      checked={audio.micBias}
+                      disabled={audioInflight}
+                      onChange={(e) =>
+                        void updateAudio({ micBias: e.target.checked })
+                      }
+                    />
+                    <span className="ps-check-box" />
+                    <span>{audio.micBias ? 'On' : 'Off (default)'}</span>
+                  </label>
+                </div>
+              ) : null}
 
-          {/* Line-in gain 0..31 — present on both paths. */}
-          <div className="ps-field">
-            <div className="ps-name">
-              Line-In Gain
-              <em>Line-in input gain (0–31).</em>
-            </div>
-            <input
-              className="ps-select-mini"
-              type="number"
-              min={0}
-              max={31}
-              step={1}
-              value={audio.lineInGain}
-              disabled={audioInflight}
-              onChange={(e) => {
-                const n = Number.parseInt(e.target.value, 10);
-                if (!Number.isNaN(n)) {
-                  void updateAudio({ lineInGain: Math.min(31, Math.max(0, n)) });
-                }
-              }}
-            />
-          </div>
+              {/* Line-in gain 0..31 — parameter of Radio Line In. */}
+              {audio.source === 'RadioLineIn' ? (
+                <div className="ps-field">
+                  <div className="ps-name">
+                    Line-In Gain
+                    <em>Line-in input gain (0–31).</em>
+                  </div>
+                  <input
+                    className="ps-select-mini"
+                    type="number"
+                    min={0}
+                    max={31}
+                    step={1}
+                    value={audio.lineInGain}
+                    disabled={audioInflight}
+                    onChange={(e) => {
+                      const n = Number.parseInt(e.target.value, 10);
+                      if (!Number.isNaN(n)) {
+                        void updateAudio({
+                          lineInGain: Math.min(31, Math.max(0, n)),
+                        });
+                      }
+                    }}
+                  />
+                </div>
+              ) : null}
+            </>
+          )}
         </div>
       ) : null}
 

@@ -1223,24 +1223,32 @@ public static class ZeusEndpoints
         app.MapGet("/api/radio/audio", (RadioService radio, AudioSettingsStore store) =>
         {
             var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
-            var sel = store.Get();
+            // Surface the RESOLVED (board-clamped) source so the picker hydrates
+            // from what the server is actually pushing, not a stale persisted
+            // jack the current board can't honour.
+            var resolved = RadioService.ClampAudioSource(store.Get(), caps);
             return Results.Ok(new AudioFrontEndDto(
                 HasOnboardCodec: caps.HasOnboardCodec,
                 HermesLite2MicFrontEnd: caps.HermesLite2MicFrontEnd,
-                LineIn: sel.LineIn,
-                MicBoost: sel.MicBoost,
-                MicBias: sel.MicBias,
-                BalancedInput: sel.BalancedInput,
-                LineInGain: sel.LineInGain));
+                HasRadioLineIn: caps.HasRadioLineIn,
+                HasBalancedXlr: caps.HasBalancedXlr,
+                HasMicBias: caps.HasMicBias,
+                Source: resolved.Source,
+                MicBoost: resolved.MicBoost,
+                MicBias: resolved.MicBias,
+                LineInGain: resolved.LineInGain));
         });
 
-        // PUT the whole global audio front-end. Capability-gated: 409 when the
+        // PUT the whole global TX-audio source. Capability-gated: 409 when the
         // connected board has no audio front-end at all (neither codec nor HL2
-        // mic), so a non-audio board can never be handed audio bytes. LineInGain
-        // is clamped 0..31. The save fires AudioSettingsStore.Changed ->
-        // RadioService.PushAudioFrontEnd, which gates per-board and pushes
-        // server-authoritatively to the live client (P1 SetAudioFrontEnd / P2
-        // TxSpecific 50/51) — never via the frontend, so no clobber-on-connect.
+        // mic), so a non-audio board can never be handed audio bytes. The
+        // requested Source is CLAMPED against the board's capabilities (an
+        // unsupported jack → Host) before persisting, so the store never holds a
+        // source the wire can't emit on this board. LineInGain is clamped 0..31.
+        // The save fires AudioSettingsStore.Changed -> RadioService.PushAudioFrontEnd,
+        // which re-clamps + pushes server-authoritatively to the live client
+        // (P1 SetAudioFrontEnd / P2 TxSpecific 50/51) and mirrors the resolved
+        // source into StateDto — never via the frontend, so no clobber-on-connect.
         app.MapPut("/api/radio/audio", (AudioFrontEndSetRequest req, RadioService radio, AudioSettingsStore store) =>
         {
             if (req is null)
@@ -1251,22 +1259,26 @@ public static class ZeusEndpoints
             if (!audioCapable)
                 return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no audio front-end" });
 
-            store.Set(new AudioFrontEndSelection(
-                LineIn: req.LineIn,
+            var requested = new AudioSourceSelection(
+                Source: req.Source,
                 MicBoost: req.MicBoost,
                 MicBias: req.MicBias,
-                BalancedInput: req.BalancedInput,
-                LineInGain: (byte)Math.Clamp(req.LineInGain, 0, 31)));
+                LineInGain: (byte)Math.Clamp(req.LineInGain, 0, 31));
+            // Clamp to the board before persisting — a board that lacks the
+            // requested jack stores Host, never the illegal source.
+            store.Set(RadioService.ClampAudioSource(requested, caps));
 
-            var sel = store.Get();
+            var resolved = RadioService.ClampAudioSource(store.Get(), caps);
             return Results.Ok(new AudioFrontEndDto(
                 caps.HasOnboardCodec,
                 caps.HermesLite2MicFrontEnd,
-                sel.LineIn,
-                sel.MicBoost,
-                sel.MicBias,
-                sel.BalancedInput,
-                sel.LineInGain));
+                caps.HasRadioLineIn,
+                caps.HasBalancedXlr,
+                caps.HasMicBias,
+                resolved.Source,
+                resolved.MicBoost,
+                resolved.MicBias,
+                resolved.LineInGain));
         });
 
         // HL2 user GPIO (external-ports plan, Phase 5). 4-bit user_dig_out →

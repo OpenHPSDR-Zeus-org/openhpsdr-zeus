@@ -186,6 +186,32 @@ public sealed record BoardCapabilities(
     /// but not the stream codec. mic_bias defaults OFF (enabling it on a
     /// floating connector can hang PTT) and is guarded.</summary>
     bool HermesLite2MicFrontEnd = false,
+    // ---- TX-audio source jacks (external-ports plan, §6) ------------------
+    // Static per-board facts gating which <see cref="Contracts.TxAudioSource"/>
+    // options the Radio Settings panel offers. Additive optional fields — older
+    // frontends ignore them; conservative defaults (false) so an unknown board
+    // never advertises a jack it may not physically have. Host is ALWAYS
+    // available regardless of these flags.
+    /// <summary>Board has an analog line-in jack the operator can select as the
+    /// TX-audio source (<see cref="Contracts.TxAudioSource.RadioLineIn"/>). True
+    /// for ANAN-200D (Orion) and the whole 0x0A Saturn family; false for pure
+    /// Hermes-class P1 boards (no P1 radio-mic receive path in v1 — §6),
+    /// ANAN-G2E, Metis, and Hermes-Lite 2.</summary>
+    bool HasRadioLineIn = false,
+    /// <summary>Board has a switchable balanced XLR microphone input
+    /// (<see cref="Contracts.TxAudioSource.RadioBalancedXlr"/>). True ONLY for
+    /// the Saturn-FPGA ANAN-G2 and ANAN-G2-1K; offered nowhere else (use this
+    /// flag, never <see cref="HasAudioAmplifier"/>, to gate XLR).</summary>
+    bool HasBalancedXlr = false,
+    /// <summary>Board exposes the Orion mic-bias enable on its mic jack. In
+    /// Thetis the bias control lives in <c>pnlGeneralHardwareORION</c> and is
+    /// Enabled for ANAN-200D, ANAN-7000DLE, ANAN-8000DLE, ANAN-G2, ANAN-G2-1K,
+    /// and ANVELINA-PRO3. FALSE for Red Pitaya (Thetis disables the panel
+    /// there), Hermes, ANAN-G2E, ANAN-10/10E/100/100B/100D, Metis, and HL2.
+    /// Do NOT derive this from <see cref="HasAudioAmplifier"/>. mic_bias
+    /// defaults OFF and is gated behind explicit operator confirmation on every
+    /// bias-capable board (floating-connector RF / PTT-hang risk).</summary>
+    bool HasMicBias = false,
     // ---- External-port control, Phase 5 -----------------------------------
     /// <summary>The RX auxiliary inputs (EXT1/EXT2/XVTR/BYPASS) this board's
     /// Alex / filter board exposes. <see cref="Contracts.RxAuxInputs.All"/> for

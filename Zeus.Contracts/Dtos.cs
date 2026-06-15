@@ -311,7 +311,16 @@ public sealed record StateDto(
     // (Thetis: Setup → DSP → Keyer → CW Pitch). On the wire now so
     // the frontend already consumes the live value — when the setting
     // lands, only the server-side source changes.
-    int CwPitchHz = CwDefaults.PitchHz);
+    int CwPitchHz = CwDefaults.PitchHz,
+
+    // ---- TX-audio source (external-ports plan, §2/§8) ----
+    // The RESOLVED (board-clamped) TX-audio source the server is currently
+    // pushing. RadioService reads AudioSettingsStore, clamps the persisted
+    // selection against the connected board's capabilities (a jack the board
+    // lacks falls back to Host), and mirrors the resolved value here so the
+    // frontend HYDRATES from the server and never clobbers it on connect
+    // (the PR #359/#360 pattern). Default Host = 0 reproduces today's behaviour.
+    TxAudioSource TxAudioSource = TxAudioSource.Host);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both
@@ -633,29 +642,38 @@ public sealed record AntennaSetRequest(string Band, string TxAnt, string RxAnt, 
 public sealed record Hl2GpioDto(bool Supported, int Bits);
 public sealed record Hl2GpioSetRequest(int Bits);
 
-// Global (per-radio, NOT per-band) audio front-end selection (external-ports
-// plan, Phase 4). GET carries the capability gates so the panel renders the
-// right controls: HasOnboardCodec gates the Hermes-class mic-boost / line-in
-// controls; HermesLite2MicFrontEnd gates the HL2 mic_trs(balanced) / mic_bias /
-// line-in-gain controls. BalancedInput is the Saturn XLR / HL2 TRS select.
-// mic_bias defaults OFF (enabling it on a floating connector can hang PTT).
+// Global (per-radio, NOT per-band) TX-audio SOURCE selection (external-ports
+// plan, §2/§11). GET carries the per-board source-availability gates so the
+// single-select picker renders only the sources the connected board offers
+// (Host is always available): HasOnboardCodec gates RadioMic; HasRadioLineIn
+// gates RadioLineIn; HasBalancedXlr gates RadioBalancedXlr; HasMicBias gates the
+// mic-bias toggle. HermesLite2MicFrontEnd is carried so the panel can render the
+// HL2 "audio over USB/Ethernet" note (HL2 is Host-only).
+//
+// `Source` is the RESOLVED (board-clamped) source the server is pushing — the
+// frontend hydrates from it and never clobbers the server on connect. MicBoost /
+// MicBias / LineInGain are the parameters OF the selected source. The legacy
+// `LineIn` / `BalancedInput` fields are dropped — line-in / balanced are now
+// distinct `Source` values.
 public sealed record AudioFrontEndDto(
     bool HasOnboardCodec,
     bool HermesLite2MicFrontEnd,
-    bool LineIn,
+    bool HasRadioLineIn,
+    bool HasBalancedXlr,
+    bool HasMicBias,
+    TxAudioSource Source,
     bool MicBoost,
     bool MicBias,
-    bool BalancedInput,
     int LineInGain);
 
-// Mutating version — sets the whole global audio front-end. LineInGain is
-// clamped to 0..31 server-side. The server returns the persisted state plus
+// Mutating version — sets the whole global TX-audio source. LineInGain is
+// clamped to 0..31 server-side. The server clamps Source against the board's
+// capabilities (an unsupported jack → Host) and returns the resolved state plus
 // the live capability gates.
 public sealed record AudioFrontEndSetRequest(
-    bool LineIn,
+    TxAudioSource Source,
     bool MicBoost,
     bool MicBias,
-    bool BalancedInput,
     int LineInGain);
 
 // HL2-specific optional toggles surfaced via /api/radio/hl2-options.
