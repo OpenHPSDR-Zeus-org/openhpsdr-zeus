@@ -118,6 +118,29 @@ public sealed class G2SensorMappingDiagnosticsEndpointTests
     }
 
     [Fact]
+    public void G2FirmwareOptions_ReportsUnmappedDitherRandomAndMaxRxClamp()
+    {
+        var diag = HardwareDiagnosticsService.BuildG2FirmwareOptionsDiagnostics(
+            "P2",
+            HpsdrBoardKind.OrionMkII,
+            HpsdrBoardKind.OrionMkII,
+            OrionMkIIVariant.G2);
+
+        Assert.True(diag.G2Class);
+        Assert.Equal(60.0, diag.MaxRxFrequencyMhz);
+        Assert.Equal("wired-vfo-clamp", diag.MaxRxFrequencyStatus);
+        Assert.Contains(diag.Options, option =>
+            option.Id == "adc-dither"
+            && option.Status == "protocol-control-unmapped"
+            && option.ThetisDefaultEnabled);
+        Assert.Contains(diag.Options, option =>
+            option.Id == "adc-random"
+            && option.Status == "protocol-control-unmapped"
+            && option.ThetisDefaultEnabled);
+        Assert.Contains("MaxRXFreq", diag.DiagnosticRecommendation);
+    }
+
+    [Fact]
     public async Task HardwareDiagnostics_AdvertisesG2SensorMappingSurface()
     {
         using var factory = new Factory();
@@ -130,16 +153,45 @@ public sealed class G2SensorMappingDiagnosticsEndpointTests
         var root = body.RootElement;
         Assert.True(root.TryGetProperty("g2Sensors", out var g2Sensors));
         Assert.Equal("not-g2", g2Sensors.GetProperty("status").GetString());
+        Assert.True(root.TryGetProperty("g2FirmwareOptions", out var g2FirmwareOptions));
+        Assert.Equal(60.0, g2FirmwareOptions.GetProperty("maxRxFrequencyMhz").GetDouble());
+        Assert.Equal("not-g2", g2FirmwareOptions.GetProperty("options")[0].GetProperty("status").GetString());
+        Assert.Contains("No G2 ADC", g2FirmwareOptions.GetProperty("missingControlSurface").GetString());
+
+        var filterGeometry = root.GetProperty("dsp").GetProperty("filterGeometry");
+        Assert.Equal("BH-7", filterGeometry.GetProperty("activeRx").GetProperty("filterWindow").GetString());
+        Assert.Equal(1024, filterGeometry.GetProperty("optionCatalog").GetProperty("iqBufferSizes")[4].GetInt32());
+        Assert.Equal(16384, filterGeometry.GetProperty("optionCatalog").GetProperty("filterTapSizes")[4].GetInt32());
+        Assert.Equal("BH-4", filterGeometry.GetProperty("optionCatalog").GetProperty("filterWindows")[0].GetProperty("label").GetString());
+        Assert.Equal("BH-7", filterGeometry.GetProperty("optionCatalog").GetProperty("filterWindows")[1].GetProperty("label").GetString());
+        Assert.Equal(384_000, filterGeometry.GetProperty("hardwareLimits").GetProperty("maxRxSampleRateHz").GetInt32());
+        Assert.Contains(filterGeometry.GetProperty("thetisMatrix").EnumerateArray(), row =>
+            row.GetProperty("modeFamily").GetString() == "SSB/AM"
+            && row.GetProperty("direction").GetString() == "TX"
+            && row.GetProperty("filterType").GetString() == "Linear Phase");
+        Assert.Equal("fftw-wisdom-only", filterGeometry.GetProperty("impulseCache").GetProperty("status").GetString());
 
         var reference = root.GetProperty("referenceMap")
             .EnumerateArray()
             .Single(item => item.GetProperty("field").GetString() == "G2 current, bias, thermal, and fan sensors");
         Assert.Equal("mapping-required", reference.GetProperty("status").GetString());
         Assert.Contains("Driver Current / PA Current", reference.GetProperty("notes").GetString());
+        var adcReference = root.GetProperty("referenceMap")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("field").GetString() == "G2 ADC dither/random and MaxRXFreq");
+        Assert.Equal("partially-mapped", adcReference.GetProperty("status").GetString());
+        var dynamicRangeReference = root.GetProperty("referenceMap")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("field").GetString() == "G2 dynamic-range and TX-fidelity potential");
+        Assert.Contains("RMDR 116 dB", dynamicRangeReference.GetProperty("notes").GetString());
 
         var surface = root.GetProperty("featureSurfaces")
             .EnumerateArray()
             .Single(item => item.GetProperty("id").GetString() == "pa.g2.sensor-mapping");
+        Assert.Contains(root.GetProperty("featureSurfaces").EnumerateArray(), item =>
+            item.GetProperty("id").GetString() == "rx.g2.adc-options");
+        Assert.Contains(root.GetProperty("featureSurfaces").EnumerateArray(), item =>
+            item.GetProperty("id").GetString() == "rx.wdsp.filter-architecture");
         var telemetry = surface.GetProperty("telemetryPaths")
             .EnumerateArray()
             .Select(item => item.GetString())

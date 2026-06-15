@@ -20,6 +20,7 @@ import {
   fetchUserIoActions,
   fetchUserIoLabels,
   resetHardwareDiagnosticsMap,
+  type G2FirmwareOptionsDiagnosticsDto,
   type G2SensorMappingDiagnosticsDto,
   type HardwareByteStreamMapDto,
   type HardwareDiagnosticItemDto,
@@ -423,6 +424,57 @@ function G2SensorMappingDiagnostics({ sensors }: { sensors: G2SensorMappingDiagn
   );
 }
 
+function G2FirmwareOptionsDiagnostics({ options }: { options: G2FirmwareOptionsDiagnosticsDto | null }) {
+  if (!options) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for G2 firmware option diagnostics.</div>;
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Protocol', value: options.activeProtocol },
+          { label: 'Connected', value: options.connectedBoard },
+          { label: 'Effective', value: options.effectiveBoard },
+          { label: 'Variant', value: options.orionMkIIVariant },
+          { label: 'G2 Class', value: boolLabel(options.g2Class) },
+          { label: 'MaxRXFreq', value: `${options.maxRxFrequencyMhz.toFixed(2)} MHz` },
+          { label: 'MaxRX Status', value: options.maxRxFrequencyStatus },
+          { label: 'Generated', value: time(options.generatedUtc) },
+        ]}
+      />
+
+      <div style={{ overflowX: 'auto' }}>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={thStyle}>Option</th>
+              <th style={thStyle}>Thetis Default</th>
+              <th style={thStyle}>Live</th>
+              <th style={thStyle}>Status</th>
+              <th style={thStyle}>Source</th>
+              <th style={thStyle}>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {options.options.map((option) => (
+              <tr key={option.id}>
+                <td style={tdStyle}>{option.label}</td>
+                <td style={tdStyle} className="mono">{boolLabel(option.thetisDefaultEnabled)}</td>
+                <td style={tdStyle} className="mono">{boolLabel(option.enabled)}</td>
+                <td style={tdStyle} className="mono">{option.status}</td>
+                <td style={tdStyle}>{option.source}</td>
+                <td style={tdStyle}>{option.notes}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <DiagnosticRecommendation text={options.missingControlSurface} />
+      <DiagnosticRecommendation text={options.diagnosticRecommendation} />
+      <DiagnosticRecommendation text={options.manualReference} />
+    </div>
+  );
+}
+
 function NetworkProfileDiagnostics({ profile }: { profile: RadioNetworkProfileDto | null }) {
   if (!profile) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for network profile.</div>;
   return (
@@ -462,7 +514,7 @@ function ReceiverTopologyDiagnostics({ diag }: { diag: HardwareDiagnosticsDto | 
       ? 'Saturn-class dual DDC topology'
       : 'not applicable';
   const recommendation = g2Class
-    ? 'G2 topology is recognized from the manual-backed capability map: dual phase-synchronous ADCs, independent MKII/preselector paths, RX2 stepped attenuation, and the 1.536 MHz DDC ceiling. Zeus exposes RX1/RX2 plus live P2 ADC max/overload telemetry; 10-DDC assignment and ADC2 ground-on-TX remain read-only gaps until protocol mapping is verified.'
+    ? 'G2 topology is recognized from the manual-backed capability map: dual phase-synchronous ADCs, independent MKII/preselector paths, RX2 stepped attenuation, 116 dB RMDR at 2 kHz, 90 dB image-rejection target, 16-bit DAC TX, and the 1.536 MHz DDC ceiling. Zeus exposes RX1/RX2 plus live P2 ADC max/overload telemetry; 10-DDC assignment, ADC2 ground-on-TX, and ADC dither/random writes remain read-only gaps until protocol mapping is verified.'
     : dualAdc
       ? 'This board exposes a dual-ADC topology. Zeus can monitor both ADC max/overload paths, but any board-specific ADC2 transmit routing should stay read-only until verified for this variant.'
       : 'This board is single-ADC; G2 ADC2 and RX2 routing controls do not apply.';
@@ -479,6 +531,10 @@ function ReceiverTopologyDiagnostics({ diag }: { diag: HardwareDiagnosticsDto | 
           { label: 'MKII Preselector', value: boolLabel(caps.mkiiBpf) },
           { label: 'RX2 Stepped ATT', value: boolLabel(caps.hasSteppedAttenuationRx2) },
           { label: 'Max DDC BW', value: hz(caps.maxRxSampleRateHz) },
+          { label: 'Manual RMDR', value: g2Class ? '116 dB @ 2 kHz' : 'not applicable' },
+          { label: 'Image Rejection', value: g2Class ? '90 dB target' : 'not applicable' },
+          { label: 'TX DAC', value: g2Class ? '16 bit' : 'not applicable' },
+          { label: 'TX IMD3', value: g2Class ? '-68 dB typical @ 100 W' : 'not applicable' },
           { label: 'Manual RX Capacity', value: manualRxCapacity },
           { label: 'Zeus RX Surface', value: zeusRxSurface },
           { label: 'ADC2 Ground on TX', value: g2Class ? 'not exposed' : 'not applicable' },
@@ -2045,6 +2101,14 @@ export function HardwareDiagnosticsPanel() {
           <span className="ps-card-hint">decoded HL2 temp / G2 P2 mapping status</span>
         </h4>
         <PaThermalDiagnostics thermal={paThermal} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          G2 Firmware Options
+          <span className="ps-card-hint">dither / random / MaxRXFreq parity</span>
+        </h4>
+        <G2FirmwareOptionsDiagnostics options={diag?.g2FirmwareOptions ?? null} />
       </div>
 
       <div className="ps-card">
