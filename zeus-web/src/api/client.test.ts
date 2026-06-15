@@ -61,6 +61,7 @@ import {
   fetchCfcPresets,
   fetchExternalPttStatus,
   fetchFrontendDspSceneDiagnostics,
+  fetchG2SensorMappingDiagnostics,
   fetchHardwareDiagnostics,
   fetchHardwareKeyingStatus,
   fetchRadioDigInDiagnostics,
@@ -754,6 +755,55 @@ describe('POST helpers', () => {
           manualReference: 'ANAN G2 manual: external PureSignal feedback should enter RF Bypass.',
           diagnosticRecommendation: 'External RF Bypass feedback is centered and correcting.',
         },
+        g2Sensors: {
+          schemaVersion: 1,
+          activeProtocol: 'P2',
+          connectedBoard: 'OrionMkII',
+          effectiveBoard: 'OrionMkII',
+          orionMkIIVariant: 'G2',
+          g2Class: true,
+          p2Attached: true,
+          p2Packets: 42,
+          p2LastUpdatedUtc: '2026-06-15T01:00:00Z',
+          status: 'manual-sensors-unmapped',
+          mappedSensors: [
+            {
+              id: 'pa-forward-power',
+              label: 'PA forward power ADC',
+              telemetryPath: 'p2.fwdAdc',
+              source: 'Thetis P2 hi-priority word 0x0A',
+              rawValue: 91,
+              status: 'mapped-live',
+              notes: 'Feeds PA watts.',
+            },
+          ],
+          unmappedManualSensors: [
+            {
+              id: 'pa-current',
+              label: 'PA current',
+              manualEvidence: 'biascheck reads PA Current',
+              currentTelemetryStatus: 'p2-g2-pa-current-unmapped',
+              requiredCapture: 'Capture TUN markers before scaling amps.',
+              safetyClass: 'tx-monitoring-only',
+            },
+          ],
+          candidateWords: [
+            {
+              offset: 28,
+              hexOffset: '0x1C',
+              known: null,
+              last: 58752,
+              min: 0,
+              max: 65280,
+              changeCount: 37,
+              status: 'unknown-variable',
+              mappingHint: 'Create before/after markers.',
+            },
+          ],
+          manualReference: 'G2 manual documents current, voltage, temperature sensors.',
+          diagnosticRecommendation: 'Use Mapping Capture before trusting current, fan, or thermal automation.',
+          generatedUtc: '2026-06-15T01:00:01Z',
+        },
         mapping: {
           schemaVersion: 2,
           markers: [
@@ -859,6 +909,11 @@ describe('POST helpers', () => {
     expect(diag.pureSignal.feedbackLevelRaw).toBe(151.2);
     expect(diag.pureSignal.healthStatus).toBe('centered-correcting');
     expect(diag.pureSignal.diagnosticRecommendation).toContain('centered');
+    expect(diag.g2Sensors.status).toBe('manual-sensors-unmapped');
+    expect(diag.g2Sensors.mappedSensors[0]?.telemetryPath).toBe('p2.fwdAdc');
+    expect(diag.g2Sensors.unmappedManualSensors[0]?.currentTelemetryStatus).toBe('p2-g2-pa-current-unmapped');
+    expect(diag.g2Sensors.candidateWords[0]?.hexOffset).toBe('0x1C');
+    expect(diag.g2Sensors.diagnosticRecommendation).toContain('Mapping Capture');
     expect(diag.mapping.schemaVersion).toBe(2);
     expect(diag.mapping.markers[0]?.label).toBe('RX2 on');
     expect(diag.featureSurfaces[0]?.id).toBe('hardware.mapping.correlation');
@@ -1530,6 +1585,71 @@ describe('POST helpers', () => {
     expect(status.tempC).toBeNull();
     expect(status.warningTempC).toBe(50);
     expect(status.criticalTempC).toBe(55);
+  });
+
+  it('fetchG2SensorMappingDiagnostics reads mapped fields and unmapped manual sensors', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      activeProtocol: 'P2',
+      connectedBoard: 'OrionMkII',
+      effectiveBoard: 'OrionMkII',
+      orionMkIIVariant: 'G2',
+      g2Class: true,
+      p2Attached: true,
+      p2Packets: 250,
+      p2LastUpdatedUtc: '2026-06-15T01:00:00Z',
+      status: 'manual-sensors-unmapped',
+      mappedSensors: [
+        {
+          id: 'supply-voltage',
+          label: 'Supply volts ADC',
+          telemetryPath: 'p2.supplyVoltsAdc',
+          source: 'Thetis P2 hi-priority word 0x2D',
+          rawValue: 1613,
+          status: 'mapped-live',
+          notes: 'Raw supply-voltage ADC is live.',
+        },
+      ],
+      unmappedManualSensors: [
+        {
+          id: 'driver-current',
+          label: 'Driver current',
+          manualEvidence: 'biascheck reads Driver Current.',
+          currentTelemetryStatus: 'p2-g2-driver-current-unmapped',
+          requiredCapture: 'Capture receive idle plus staged TUN drive markers.',
+          safetyClass: 'tx-monitoring-only',
+        },
+      ],
+      candidateWords: [
+        {
+          offset: 30,
+          hexOffset: '0x1E',
+          known: null,
+          last: 5376,
+          min: 0,
+          max: 7168,
+          changeCount: 15,
+          status: 'unknown-variable',
+          mappingHint: 'Create before/after markers.',
+        },
+      ],
+      manualReference: 'G2 manual documents current, voltage, temperature sensors.',
+      diagnosticRecommendation: 'Use Settings > Hardware > Mapping Capture.',
+      generatedUtc: '2026-06-15T01:00:01Z',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const status = await fetchG2SensorMappingDiagnostics();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/g2-sensors');
+    expect(init?.method).toBeUndefined();
+    expect(status.g2Class).toBe(true);
+    expect(status.p2Packets).toBe(250);
+    expect(status.mappedSensors[0]?.rawValue).toBe(1613);
+    expect(status.unmappedManualSensors[0]?.id).toBe('driver-current');
+    expect(status.candidateWords[0]?.offset).toBe(30);
+    expect(status.diagnosticRecommendation).toContain('Mapping Capture');
   });
 
   it('fetchRadioNetworkProfile reads active transport counters', async () => {

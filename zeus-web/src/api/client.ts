@@ -1336,6 +1336,56 @@ export type HardwareMappingDto = {
   markers: HardwareMappingMarkerDto[];
 };
 
+export type G2MappedSensorDto = {
+  id: string;
+  label: string;
+  telemetryPath: string;
+  source: string;
+  rawValue: number | null;
+  status: string;
+  notes: string;
+};
+
+export type G2UnmappedManualSensorDto = {
+  id: string;
+  label: string;
+  manualEvidence: string;
+  currentTelemetryStatus: string;
+  requiredCapture: string;
+  safetyClass: string;
+};
+
+export type G2CandidateTelemetryWordDto = {
+  offset: number;
+  hexOffset: string;
+  known: string | null;
+  last: number;
+  min: number;
+  max: number;
+  changeCount: number;
+  status: string;
+  mappingHint: string;
+};
+
+export type G2SensorMappingDiagnosticsDto = {
+  schemaVersion: number;
+  activeProtocol: 'P1' | 'P2' | null;
+  connectedBoard: string;
+  effectiveBoard: string;
+  orionMkIIVariant: string;
+  g2Class: boolean;
+  p2Attached: boolean;
+  p2Packets: number;
+  p2LastUpdatedUtc: string | null;
+  status: string;
+  mappedSensors: G2MappedSensorDto[];
+  unmappedManualSensors: G2UnmappedManualSensorDto[];
+  candidateWords: G2CandidateTelemetryWordDto[];
+  manualReference: string;
+  diagnosticRecommendation: string;
+  generatedUtc: string;
+};
+
 export type HardwareDiagnosticsDto = {
   hardwareDiagnosticsApiVersion: number;
   generatedUtc: string;
@@ -1352,6 +1402,7 @@ export type HardwareDiagnosticsDto = {
   frontendDspScene: FrontendDspSceneDiagnosticsDto;
   pureSignal: HardwarePureSignalDiagnosticsDto;
   digIn: RadioDigInDiagnosticsDto;
+  g2Sensors: G2SensorMappingDiagnosticsDto;
   activeProtocol: 'P1' | 'P2' | null;
   p1: HardwareP1DiagnosticsDto;
   p2: HardwareP2DiagnosticsDto;
@@ -3118,6 +3169,86 @@ function normalizeHardwareMapping(raw: unknown): HardwareMappingDto {
   };
 }
 
+function normalizeG2MappedSensors(raw: unknown): G2MappedSensorDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    return {
+      id: diagString(r.id) ?? '',
+      label: diagString(r.label) ?? '',
+      telemetryPath: diagString(r.telemetryPath) ?? '',
+      source: diagString(r.source) ?? '',
+      rawValue: diagNumber(r.rawValue),
+      status: diagString(r.status) ?? 'unknown',
+      notes: diagString(r.notes) ?? '',
+    };
+  });
+}
+
+function normalizeG2UnmappedManualSensors(raw: unknown): G2UnmappedManualSensorDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    return {
+      id: diagString(r.id) ?? '',
+      label: diagString(r.label) ?? '',
+      manualEvidence: diagString(r.manualEvidence) ?? '',
+      currentTelemetryStatus: diagString(r.currentTelemetryStatus) ?? 'unknown',
+      requiredCapture: diagString(r.requiredCapture) ?? '',
+      safetyClass: diagString(r.safetyClass) ?? 'tx-monitoring-only',
+    };
+  });
+}
+
+function normalizeG2CandidateTelemetryWords(raw: unknown): G2CandidateTelemetryWordDto[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((entry) => {
+    const r = asDiagRecord(entry);
+    const offset = diagNumber(r.offset) ?? 0;
+    return {
+      offset,
+      hexOffset: diagString(r.hexOffset) ?? `0x${offset.toString(16).toUpperCase().padStart(2, '0')}`,
+      known: diagString(r.known),
+      last: diagNumber(r.last) ?? 0,
+      min: diagNumber(r.min) ?? 0,
+      max: diagNumber(r.max) ?? 0,
+      changeCount: diagNumber(r.changeCount) ?? 0,
+      status: diagString(r.status) ?? 'unknown',
+      mappingHint: diagString(r.mappingHint) ?? '',
+    };
+  });
+}
+
+function normalizeG2SensorMappingDiagnostics(raw: unknown): G2SensorMappingDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  const activeProtocol =
+    r.activeProtocol === 'P1' || r.activeProtocol === 'P2'
+      ? r.activeProtocol
+      : null;
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 1,
+    activeProtocol,
+    connectedBoard: diagString(r.connectedBoard) ?? 'Unknown',
+    effectiveBoard: diagString(r.effectiveBoard) ?? 'Unknown',
+    orionMkIIVariant: diagString(r.orionMkIIVariant) ?? 'G2',
+    g2Class: Boolean(r.g2Class),
+    p2Attached: Boolean(r.p2Attached),
+    p2Packets: diagNumber(r.p2Packets) ?? 0,
+    p2LastUpdatedUtc: diagString(r.p2LastUpdatedUtc),
+    status: diagString(r.status) ?? 'unavailable',
+    mappedSensors: normalizeG2MappedSensors(r.mappedSensors),
+    unmappedManualSensors: normalizeG2UnmappedManualSensors(r.unmappedManualSensors),
+    candidateWords: normalizeG2CandidateTelemetryWords(r.candidateWords),
+    manualReference:
+      diagString(r.manualReference)
+      ?? 'G2 sensor mapping diagnostics are not available from this backend yet.',
+    diagnosticRecommendation:
+      diagString(r.diagnosticRecommendation)
+      ?? 'Restart OpenhpsdrZeus after updating to expose G2 PA current, driver current, fan, and P2 thermal mapping guidance.',
+    generatedUtc: diagString(r.generatedUtc) ?? new Date().toISOString(),
+  };
+}
+
 function normalizeHardwareDiagnostics(raw: unknown): HardwareDiagnosticsDto {
   const r = asDiagRecord(raw);
   const p1 = asDiagRecord(r.p1);
@@ -3149,6 +3280,7 @@ function normalizeHardwareDiagnostics(raw: unknown): HardwareDiagnosticsDto {
     frontendDspScene: normalizeFrontendDspScene(r.frontendDspScene),
     pureSignal: normalizePureSignalDiagnostics(r.pureSignal),
     digIn: normalizeRadioDigInDiagnostics(r.digIn),
+    g2Sensors: normalizeG2SensorMappingDiagnostics(r.g2Sensors),
     activeProtocol,
     p1: {
       packets: diagNumber(p1.packets) ?? 0,
@@ -3603,6 +3735,16 @@ export function fetchRadioPaThermalDiagnostics(
     '/api/radio/pa-thermal',
     { signal },
     normalizeRadioPaThermalDiagnostics,
+  );
+}
+
+export function fetchG2SensorMappingDiagnostics(
+  signal?: AbortSignal,
+): Promise<G2SensorMappingDiagnosticsDto> {
+  return jsonFetch(
+    '/api/radio/g2-sensors',
+    { signal },
+    normalizeG2SensorMappingDiagnostics,
   );
 }
 

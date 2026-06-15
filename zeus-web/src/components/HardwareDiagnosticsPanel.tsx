@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import {
   createHardwareDiagnosticsMarker,
+  fetchG2SensorMappingDiagnostics,
   fetchHardwareDiagnostics,
   fetchHardwareKeyingStatus,
   fetchRadioDigInDiagnostics,
@@ -19,6 +20,7 @@ import {
   fetchUserIoActions,
   fetchUserIoLabels,
   resetHardwareDiagnosticsMap,
+  type G2SensorMappingDiagnosticsDto,
   type HardwareByteStreamMapDto,
   type HardwareDiagnosticItemDto,
   type HardwareDiagnosticsDto,
@@ -311,6 +313,112 @@ function PaThermalDiagnostics({ thermal }: { thermal: RadioPaThermalDiagnosticsD
       />
       <DiagnosticRecommendation text={thermal.diagnosticRecommendation} />
       <DiagnosticRecommendation text={thermal.manualReference} />
+    </div>
+  );
+}
+
+function G2SensorMappingDiagnostics({ sensors }: { sensors: G2SensorMappingDiagnosticsDto | null }) {
+  if (!sensors) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for G2 sensor mapping diagnostics.</div>;
+  return (
+    <div style={{ display: 'grid', gap: 12 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Protocol', value: sensors.activeProtocol },
+          { label: 'Connected', value: sensors.connectedBoard },
+          { label: 'Effective', value: sensors.effectiveBoard },
+          { label: 'Variant', value: sensors.orionMkIIVariant },
+          { label: 'G2 Class', value: boolLabel(sensors.g2Class) },
+          { label: 'P2 Attached', value: boolLabel(sensors.p2Attached) },
+          { label: 'P2 Packets', value: sensors.p2Packets },
+          { label: 'P2 Updated', value: time(sensors.p2LastUpdatedUtc) },
+          { label: 'Status', value: sensors.status },
+          { label: 'Mapped Fields', value: sensors.mappedSensors.length },
+          { label: 'Unmapped Manual', value: sensors.unmappedManualSensors.length },
+          { label: 'Candidate Words', value: sensors.candidateWords.length },
+          { label: 'Generated', value: time(sensors.generatedUtc) },
+        ]}
+      />
+
+      <div style={{ overflowX: 'auto' }}>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={thStyle}>Mapped Field</th>
+              <th style={thStyle}>Path</th>
+              <th style={thStyle}>Raw</th>
+              <th style={thStyle}>Status</th>
+              <th style={thStyle}>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sensors.mappedSensors.map((sensor) => (
+              <tr key={sensor.id}>
+                <td style={tdStyle}>{sensor.label}</td>
+                <td style={tdStyle} className="mono">{sensor.telemetryPath}</td>
+                <td style={tdStyle} className="mono">{adc(sensor.rawValue)}</td>
+                <td style={tdStyle}>{sensor.status}</td>
+                <td style={tdStyle}>{sensor.notes}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{ overflowX: 'auto' }}>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={thStyle}>Unmapped Manual Sensor</th>
+              <th style={thStyle}>Current Status</th>
+              <th style={thStyle}>Required Capture</th>
+              <th style={thStyle}>Safety</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sensors.unmappedManualSensors.map((sensor) => (
+              <tr key={sensor.id}>
+                <td style={tdStyle}>
+                  <div>{sensor.label}</div>
+                  <div style={{ marginTop: 3, color: 'var(--fg-3)' }}>{sensor.manualEvidence}</div>
+                </td>
+                <td style={tdStyle} className="mono">{sensor.currentTelemetryStatus}</td>
+                <td style={tdStyle}>{sensor.requiredCapture}</td>
+                <td style={tdStyle} className="mono">{sensor.safetyClass}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {sensors.candidateWords.length > 0 && (
+        <div style={{ overflowX: 'auto' }}>
+          <table style={tableStyle}>
+            <thead>
+              <tr>
+                <th style={thStyle}>Word</th>
+                <th style={thStyle}>Last</th>
+                <th style={thStyle}>Range</th>
+                <th style={thStyle}>Changes</th>
+                <th style={thStyle}>Mapping Hint</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sensors.candidateWords.map((word) => (
+                <tr key={word.offset}>
+                  <td style={tdStyle} className="mono">{word.hexOffset}</td>
+                  <td style={tdStyle} className="mono">{word.last} / {hex(word.last, 4)}</td>
+                  <td style={tdStyle} className="mono">{word.min}..{word.max}</td>
+                  <td style={tdStyle} className="mono">{word.changeCount}</td>
+                  <td style={tdStyle}>{word.mappingHint}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <DiagnosticRecommendation text={sensors.diagnosticRecommendation} />
+      <DiagnosticRecommendation text={sensors.manualReference} />
     </div>
   );
 }
@@ -1361,6 +1469,7 @@ export function HardwareDiagnosticsPanel() {
   const [keying, setKeying] = useState<HardwareKeyingStatusDto | null>(null);
   const [supplyAlarms, setSupplyAlarms] = useState<RadioSupplyAlarmsDto | null>(null);
   const [paThermal, setPaThermal] = useState<RadioPaThermalDiagnosticsDto | null>(null);
+  const [g2Sensors, setG2Sensors] = useState<G2SensorMappingDiagnosticsDto | null>(null);
   const [networkProfile, setNetworkProfile] = useState<RadioNetworkProfileDto | null>(null);
   const [txDiagnostics, setTxDiagnostics] = useState<TxDiagnosticsDto | null>(null);
   const [smartNrCondition, setSmartNrCondition] = useState<SmartNrConditionDto | null>(null);
@@ -1411,11 +1520,12 @@ export function HardwareDiagnosticsPanel() {
   const loadEndpointDiagnostics = useCallback(async (signal?: AbortSignal) => {
     setEndpointBusy(true);
     try {
-      const [nextKeying, nextSupply, nextThermal, nextNetwork, nextTx, nextSmartNr, nextLabels, nextActions, nextDigIn] =
+      const [nextKeying, nextSupply, nextThermal, nextG2Sensors, nextNetwork, nextTx, nextSmartNr, nextLabels, nextActions, nextDigIn] =
         await Promise.allSettled([
           fetchHardwareKeyingStatus(signal),
           fetchRadioSupplyAlarms(signal),
           fetchRadioPaThermalDiagnostics(signal),
+          fetchG2SensorMappingDiagnostics(signal),
           fetchRadioNetworkProfile(signal),
           fetchTxDiagnostics(signal),
           fetchSmartNrCondition(signal),
@@ -1427,6 +1537,7 @@ export function HardwareDiagnosticsPanel() {
       if (nextKeying.status === 'fulfilled') setKeying(nextKeying.value);
       if (nextSupply.status === 'fulfilled') setSupplyAlarms(nextSupply.value);
       if (nextThermal.status === 'fulfilled') setPaThermal(nextThermal.value);
+      if (nextG2Sensors.status === 'fulfilled') setG2Sensors(nextG2Sensors.value);
       if (nextNetwork.status === 'fulfilled') setNetworkProfile(nextNetwork.value);
       if (nextTx.status === 'fulfilled') setTxDiagnostics(nextTx.value);
       if (nextSmartNr.status === 'fulfilled') setSmartNrCondition(nextSmartNr.value);
@@ -1434,7 +1545,7 @@ export function HardwareDiagnosticsPanel() {
       if (nextActions.status === 'fulfilled') setUserIoActions(nextActions.value);
       if (nextDigIn.status === 'fulfilled') setDigInDiagnostics(nextDigIn.value);
 
-      const failures = [nextKeying, nextSupply, nextThermal, nextNetwork, nextTx, nextSmartNr, nextLabels, nextActions, nextDigIn]
+      const failures = [nextKeying, nextSupply, nextThermal, nextG2Sensors, nextNetwork, nextTx, nextSmartNr, nextLabels, nextActions, nextDigIn]
         .filter(
           (result): result is PromiseRejectedResult =>
             result.status === 'rejected' &&
@@ -1934,6 +2045,14 @@ export function HardwareDiagnosticsPanel() {
           <span className="ps-card-hint">decoded HL2 temp / G2 P2 mapping status</span>
         </h4>
         <PaThermalDiagnostics thermal={paThermal} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          G2 Sensor Mapping
+          <span className="ps-card-hint">manual current / thermal / fan capture plan</span>
+        </h4>
+        <G2SensorMappingDiagnostics sensors={g2Sensors ?? diag?.g2Sensors ?? null} />
       </div>
 
       <div className="ps-card">

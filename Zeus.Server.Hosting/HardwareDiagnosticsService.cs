@@ -40,6 +40,52 @@ internal sealed record G2DigInDiagnosticsDto(
     string DiagnosticRecommendation,
     DateTimeOffset GeneratedUtc);
 
+internal sealed record G2MappedSensorDto(
+    string Id,
+    string Label,
+    string TelemetryPath,
+    string Source,
+    int? RawValue,
+    string Status,
+    string Notes);
+
+internal sealed record G2UnmappedManualSensorDto(
+    string Id,
+    string Label,
+    string ManualEvidence,
+    string CurrentTelemetryStatus,
+    string RequiredCapture,
+    string SafetyClass);
+
+internal sealed record G2CandidateTelemetryWordDto(
+    int Offset,
+    string HexOffset,
+    string? Known,
+    ushort Last,
+    ushort Min,
+    ushort Max,
+    int ChangeCount,
+    string Status,
+    string MappingHint);
+
+internal sealed record G2SensorMappingDiagnosticsDto(
+    int SchemaVersion,
+    string? ActiveProtocol,
+    string ConnectedBoard,
+    string EffectiveBoard,
+    string OrionMkIIVariant,
+    bool G2Class,
+    bool P2Attached,
+    long P2Packets,
+    DateTimeOffset? P2LastUpdatedUtc,
+    string Status,
+    G2MappedSensorDto[] MappedSensors,
+    G2UnmappedManualSensorDto[] UnmappedManualSensors,
+    G2CandidateTelemetryWordDto[] CandidateWords,
+    string ManualReference,
+    string DiagnosticRecommendation,
+    DateTimeOffset GeneratedUtc);
+
 /// <summary>
 /// Read-only hardware diagnostic accumulator. Mirrors the live fields Thetis
 /// keeps in ChannelMaster network.c/networkproto1.c, but exposes them as a
@@ -164,6 +210,16 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                     effective,
                     variant,
                     _p2HadSample ? _p2Last : null),
+                g2Sensors = BuildG2SensorMappingDiagnostics(
+                    _activeProtocol,
+                    _p2Client is not null,
+                    _p2Packets,
+                    _p2LastUpdatedUtc,
+                    connected,
+                    effective,
+                    variant,
+                    _p2HadSample ? _p2Last : null,
+                    _p2HiPriorityMap.CandidateUnknownWords(12)),
                 activeProtocol = _activeProtocol,
                 p1 = new
                 {
@@ -221,6 +277,27 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 candidateSettings = CandidateSettings,
                 featureSurfaces = FeatureSurfaces,
             };
+        }
+    }
+
+    internal G2SensorMappingDiagnosticsDto G2SensorMappingSnapshot()
+    {
+        var connected = _radio.ConnectedBoardKind;
+        var effective = _radio.EffectiveBoardKind;
+        var variant = _radio.EffectiveOrionMkIIVariant;
+
+        lock (_sync)
+        {
+            return BuildG2SensorMappingDiagnostics(
+                _activeProtocol,
+                _p2Client is not null,
+                _p2Packets,
+                _p2LastUpdatedUtc,
+                connected,
+                effective,
+                variant,
+                _p2HadSample ? _p2Last : null,
+                _p2HiPriorityMap.CandidateUnknownWords(12));
         }
     }
 
@@ -344,6 +421,167 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         _ => external
             ? "External RF Bypass feedback is in range but correction is not active yet; keep the safe two-tone/TX condition steady until calcc converges."
             : "PureSignal feedback is in range but correction is not active yet; keep TX conditions steady until calcc converges.",
+    };
+
+    internal static G2SensorMappingDiagnosticsDto BuildG2SensorMappingDiagnostics(
+        string? activeProtocol,
+        bool p2Attached,
+        long p2Packets,
+        DateTimeOffset? p2LastUpdatedUtc,
+        HpsdrBoardKind connected,
+        HpsdrBoardKind effective,
+        OrionMkIIVariant variant,
+        Zeus.Protocol2.P2TelemetryReading? p2Reading,
+        IReadOnlyList<G2CandidateTelemetryWordDto>? candidateWords = null)
+    {
+        bool g2Class = IsG2ManualSensorBoard(effective, variant);
+        bool hasP2Sample = p2Reading is not null;
+        string status = G2SensorMappingStatus(g2Class, activeProtocol, hasP2Sample);
+
+        var mapped = new[]
+        {
+            MappedSensor("exciter-power", "Exciter power ADC", "p2.exciterAdc", Raw(p2Reading?.ExciterAdc),
+                "Thetis P2 hi-priority word 0x02", hasP2Sample,
+                "Raw exciter-drive evidence for TX chain health and low-level RF presence."),
+            MappedSensor("pa-forward-power", "PA forward power ADC", "p2.fwdAdc", Raw(p2Reading?.FwdAdc),
+                "Thetis P2 hi-priority word 0x0A", hasP2Sample,
+                "Feeds the existing PA watts/SWR calibration snapshot; use with TX egress diagnostics before changing drive."),
+            MappedSensor("pa-reverse-power", "PA reverse power ADC", "p2.revAdc", Raw(p2Reading?.RevAdc),
+                "Thetis P2 hi-priority word 0x12", hasP2Sample,
+                "Feeds reflected-power and SWR evidence; required before any automated TX protection decision."),
+            MappedSensor("supply-voltage", "Supply volts ADC", "p2.supplyVoltsAdc", Raw(p2Reading?.SupplyVoltsAdc),
+                "Thetis P2 hi-priority word 0x2D", hasP2Sample,
+                "Raw supply-voltage ADC is live; G2 scaling remains advisory until per-radio calibration is verified."),
+            MappedSensor("user-adc0", "User ADC 0", "p2.userAdc0", Raw(p2Reading?.UserAdc0),
+                "Thetis P2 hi-priority word 0x35", hasP2Sample,
+                "Accessory analog input; label and action bindings stay separate from PA sensor mapping."),
+            MappedSensor("user-adc1", "User ADC 1", "p2.userAdc1", Raw(p2Reading?.UserAdc1),
+                "Thetis P2 hi-priority word 0x33", hasP2Sample,
+                "Accessory analog input; useful as a correlation reference when mapping unknown sensor words."),
+            MappedSensor("user-adc2", "User ADC 2", "p2.userAdc2", Raw(p2Reading?.UserAdc2),
+                "Thetis P2 hi-priority word 0x31", hasP2Sample,
+                "Accessory analog input; useful as a correlation reference when mapping unknown sensor words."),
+            MappedSensor("user-adc3", "User ADC 3", "p2.userAdc3", Raw(p2Reading?.UserAdc3),
+                "Thetis P2 hi-priority word 0x2F", hasP2Sample,
+                "Accessory analog input; useful as a correlation reference when mapping unknown sensor words."),
+            MappedSensor("user-digital", "User digital inputs", "p2.userDigitalIn", Raw(p2Reading?.UserDigitalIn),
+                "Thetis P2 hi-priority byte 0x37", hasP2Sample,
+                "Includes the decoded G2 Dig In TX Disable line; read-only until a board-gated inhibit policy is explicitly armed."),
+            MappedSensor("hardware-leds", "Hardware LED/front-panel word", "p2.hardwareLeds", Raw(p2Reading?.HardwareLeds),
+                "Thetis P2 hi-priority word 0x1A", hasP2Sample,
+                "Remote mirror for hardware/front-panel reconciliation, not a PA protection sensor."),
+        };
+
+        var unmapped = g2Class
+            ? new[]
+            {
+                UnmappedSensor(
+                    "pa-temperature",
+                    "PA temperature sensor",
+                    "The G2 manual lists temperature sensors and internal/external fan cooling support.",
+                    "p2-g2-temperature-slot-unmapped",
+                    "Add baseline, low-power TX warm-up, fan transition, and cool-down markers; accept only a monotonic thermal candidate before publishing degrees C.",
+                    "tx-protection-mapping-required"),
+                UnmappedSensor(
+                    "pa-current",
+                    "PA current",
+                    "The G2 biascheck utility reads PA Current from hardware telemetry.",
+                    "p2-g2-pa-current-unmapped",
+                    "Capture receive idle, TUN into a dummy load at low drive, and 30 W continuous-duty markers; correlate against supply volts and forward power before scaling amps.",
+                    "tx-monitoring-only"),
+                UnmappedSensor(
+                    "driver-current",
+                    "Driver current",
+                    "The G2 biascheck utility reads Driver Current separately from PA Current.",
+                    "p2-g2-driver-current-unmapped",
+                    "Capture receive idle plus staged TUN drive markers; require separation from forward-power ADC before using it as bias evidence.",
+                    "tx-monitoring-only"),
+                UnmappedSensor(
+                    "fan-state",
+                    "Internal/external fan state",
+                    "The G2 manual documents internal fan and external fan support tied to PA cooling.",
+                    "p2-g2-fan-state-unmapped",
+                    "Capture manual fan transitions or thermal threshold crossings with mapping markers; do not infer fan state from temperature alone.",
+                    "tx-monitoring-only"),
+            }
+            : Array.Empty<G2UnmappedManualSensorDto>();
+
+        return new G2SensorMappingDiagnosticsDto(
+            SchemaVersion: 1,
+            ActiveProtocol: activeProtocol,
+            ConnectedBoard: connected.ToString(),
+            EffectiveBoard: effective.ToString(),
+            OrionMkIIVariant: variant.ToString(),
+            G2Class: g2Class,
+            P2Attached: p2Attached,
+            P2Packets: p2Packets,
+            P2LastUpdatedUtc: p2LastUpdatedUtc,
+            Status: status,
+            MappedSensors: mapped,
+            UnmappedManualSensors: unmapped,
+            CandidateWords: candidateWords?.ToArray() ?? [],
+            ManualReference: "ANAN G2 manual V1.4: PA/supply feature list and biascheck tooling document current, voltage, temperature sensors, thermally compensated bias, and internal/external fan support.",
+            DiagnosticRecommendation: G2SensorMappingRecommendation(status, mapped, unmapped),
+            GeneratedUtc: DateTimeOffset.UtcNow);
+    }
+
+    private static G2MappedSensorDto MappedSensor(
+        string id,
+        string label,
+        string telemetryPath,
+        int? rawValue,
+        string source,
+        bool hasP2Sample,
+        string notes) =>
+        new(
+            Id: id,
+            Label: label,
+            TelemetryPath: telemetryPath,
+            Source: source,
+            RawValue: rawValue,
+            Status: hasP2Sample ? "mapped-live" : "mapped-waiting-for-p2-sample",
+            Notes: notes);
+
+    private static G2UnmappedManualSensorDto UnmappedSensor(
+        string id,
+        string label,
+        string manualEvidence,
+        string currentTelemetryStatus,
+        string requiredCapture,
+        string safetyClass) =>
+        new(
+            Id: id,
+            Label: label,
+            ManualEvidence: manualEvidence,
+            CurrentTelemetryStatus: currentTelemetryStatus,
+            RequiredCapture: requiredCapture,
+            SafetyClass: safetyClass);
+
+    private static int? Raw(ushort? value) => value.HasValue ? value.Value : null;
+
+    private static int? Raw(byte? value) => value.HasValue ? value.Value : null;
+
+    private static bool IsG2ManualSensorBoard(HpsdrBoardKind effective, OrionMkIIVariant variant) =>
+        effective == HpsdrBoardKind.OrionMkII
+        && variant is OrionMkIIVariant.G2 or OrionMkIIVariant.G2_1K;
+
+    private static string G2SensorMappingStatus(bool g2Class, string? activeProtocol, bool hasP2Sample)
+    {
+        if (!g2Class) return "not-g2";
+        if (activeProtocol != "P2") return "waiting-for-p2";
+        if (!hasP2Sample) return "waiting-for-telemetry";
+        return "manual-sensors-unmapped";
+    }
+
+    private static string G2SensorMappingRecommendation(
+        string status,
+        IReadOnlyCollection<G2MappedSensorDto> mapped,
+        IReadOnlyCollection<G2UnmappedManualSensorDto> unmapped) => status switch
+    {
+        "not-g2" => "This diagnostic targets ANAN G2/Saturn-class manual sensor mapping; use the generic PA supply, PA thermal, and user-I/O diagnostics for this board.",
+        "waiting-for-p2" => "Connect the G2 with Protocol 2 before mapping PA current, driver current, temperature, or fan telemetry.",
+        "waiting-for-telemetry" => "Protocol 2 is attached but no hi-priority sample has arrived yet; wait for UDP 1025 telemetry before adding sensor mapping markers.",
+        _ => $"{mapped.Count} live P2 telemetry fields are mapped, while {unmapped.Count} G2 manual sensor fields still require marker correlation. Use Settings > Hardware > Mapping Capture with one controlled action at a time before trusting any current, fan, or P2 thermal automation.",
     };
 
     internal static G2DigInDiagnosticsDto BuildDigInDiagnostics(
@@ -1448,6 +1686,29 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 knownWords);
         }
 
+        public G2CandidateTelemetryWordDto[] CandidateUnknownWords(int maxCount)
+        {
+            int wordLength = Math.Max(0, _length - 1);
+            if (_samples == 0 || wordLength == 0 || maxCount <= 0) return [];
+
+            return Enumerable.Range(0, wordLength)
+                .Where(i => !_knownWords.ContainsKey(i) && _wordChangeCounts[i] > 0)
+                .OrderByDescending(i => _wordChangeCounts[i])
+                .ThenBy(i => i)
+                .Take(maxCount)
+                .Select(i => new G2CandidateTelemetryWordDto(
+                    Offset: i,
+                    HexOffset: $"0x{i:X2}",
+                    Known: null,
+                    Last: _wordLast[i],
+                    Min: _wordMin[i],
+                    Max: _wordMax[i],
+                    ChangeCount: _wordChangeCounts[i],
+                    Status: "unknown-variable",
+                    MappingHint: "Create before/after markers around one controlled G2 action and require repeatable direction/range before assigning this word to a current, temperature, or fan sensor."))
+                .ToArray();
+        }
+
         private void EnsureCapacity(int length)
         {
             if (_last.Length >= length) return;
@@ -1846,6 +2107,13 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         },
         new
         {
+            field = "G2 current, bias, thermal, and fan sensors",
+            source = "ANAN G2 manual V1.4 PA/supply feature list + biascheck utility",
+            status = "mapping-required",
+            notes = "Manual evidence confirms hardware current/voltage/temperature sensors, thermally compensated bias, internal/external fan support, and biascheck Driver Current / PA Current readings. Zeus exposes mapped P2 power/supply/user I/O fields plus candidate unknown telemetry words, but PA current, driver current, P2 temperature, and fan state remain unassigned until live marker captures prove the offsets.",
+        },
+        new
+        {
             field = "DSP runtime readiness",
             source = "DspPipelineService + WDSP wisdom bootstrap",
             status = "decoded",
@@ -1872,6 +2140,12 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             field = "P2 ADC overload/max-magnitude driven auto-attenuation",
             status = "candidate",
             notes = "Thetis records max magnitude at overload. Zeus now exposes the raw values; the next step is a user-configurable P2 auto-ATT strategy.",
+        },
+        new
+        {
+            field = "G2 PA sensor mapping workflow",
+            status = "candidate",
+            notes = "Settings > Hardware now surfaces the mapped/unmapped G2 sensor inventory and candidate variable P2 words. Operator controls for PA current, driver current, P2 thermal inhibit, or fan automation must stay disabled until mapping markers correlate one controlled hardware action at a time.",
         },
     ];
 
@@ -2108,16 +2382,47 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "/api/radio/pa-thermal.status",
                 "/api/radio/pa-thermal.tempC",
                 "/api/radio/pa-thermal.ageMs",
+                "g2Sensors.status",
+                "g2Sensors.unmappedManualSensors",
             },
             candidateControls = new[]
             {
                 "/api/radio/power-calibration",
                 "/api/radio/supply-alarms",
                 "/api/radio/pa-thermal",
+                "/api/radio/g2-sensors",
                 "/api/pa-settings",
             },
             safetyClass = "tx-monitoring-only",
             notes = "Raw P1/P2 power ADC telemetry now has a direct calibrated snapshot that reuses the live TX meter math; supply-voltage ADCs are scaled from board capabilities and exposed as advisory alarm evidence until per-radio high/low thresholds are configured. PA thermal diagnostics decode the existing HL2/P1 temperature path and explicitly flag the G2/P2 temperature word as unmapped, matching the G2 manual's sensor/fan hardware without inventing an unverified value.",
+        },
+        new
+        {
+            id = "pa.g2.sensor-mapping",
+            title = "G2 current, thermal, and fan sensor mapping",
+            category = "power",
+            implementationStatus = "mapping-ready",
+            userConfigurable = true,
+            source = "ANAN G2 manual V1.4 + P2 hi-priority marker correlation",
+            telemetryPaths = new[]
+            {
+                "g2Sensors.status",
+                "g2Sensors.mappedSensors",
+                "g2Sensors.unmappedManualSensors",
+                "g2Sensors.candidateWords",
+                "mapping.p2HiPriority.words",
+                "mapping.markers",
+            },
+            candidateControls = new[]
+            {
+                "/api/radio/g2-sensors",
+                "/api/radio/diagnostics",
+                "/api/radio/diagnostics/map/reset",
+                "/api/radio/diagnostics/map/marker",
+                "Settings > Hardware > G2 Sensor Mapping",
+            },
+            safetyClass = "tx-monitoring-only",
+            notes = "The G2 manual documents PA current, driver current, temperature sensors, thermally compensated bias, and fan support. Zeus now lists mapped P2 power/supply/user-I/O fields and the remaining unmapped manual sensors, with live unknown-word candidates from the P2 hi-priority map so controlled marker captures can prove the offsets before any protection automation is armed.",
         },
         new
         {
