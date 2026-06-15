@@ -1230,6 +1230,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             {
                 "dsp.engineKind",
                 "dsp.sampleRateHz",
+                "frontendDspScene.status",
                 "frontendDspScene.signalProfile",
                 "frontendDspScene.signalReason",
                 "frontendDspScene.coherentMaxSnrDb",
@@ -1256,6 +1257,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             telemetryPaths = new[]
             {
                 "dsp.engineKind",
+                "frontendDspScene.status",
                 "frontendDspScene.smartNrProfile",
                 "frontendDspScene.smartNrRecommendation",
                 "frontendDspScene.smartNrHeldByRxChain",
