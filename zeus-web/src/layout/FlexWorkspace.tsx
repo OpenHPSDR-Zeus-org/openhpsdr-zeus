@@ -305,9 +305,9 @@ function PanelBody({
   // onRemove so their close button can drop the tile (matches the meter
   // group special-case above without pulling in its per-tile config).
   if (def.headerless && onRemove) {
-    return <Component onRemove={onRemove} />;
+    return <Component onRemove={onRemove} tile={tile} />;
   }
-  return <Component />;
+  return <Component tile={tile} />;
 }
 
 function MeterGroupTileBody({
