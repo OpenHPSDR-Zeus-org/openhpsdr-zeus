@@ -559,6 +559,43 @@ describe('POST helpers', () => {
           rxSinkAttached: true,
           audioSinkCount: 1,
           monitorBacklogSamples: 0,
+          rxDsp: {
+            schemaVersion: 1,
+            status: 'nr-capability-limited',
+            mode: 'USB',
+            filterLowHz: 150,
+            filterHighHz: 2850,
+            filterPresetName: 'F6',
+            agcMode: 'Fast',
+            agcTopDb: 68,
+            autoAgcEnabled: true,
+            agcOffsetDb: -6,
+            effectiveAgcTopDb: 62,
+            squelchEnabled: true,
+            squelchAdaptive: true,
+            squelchLevel: 18,
+            requestedNrMode: 'Sbnr',
+            effectiveNrMode: 'Off',
+            anfEnabled: true,
+            snbEnabled: true,
+            nbpNotchesEnabled: false,
+            effectiveNbpNotchesRun: true,
+            nbMode: 'Nb1',
+            nbThreshold: 18,
+            manualNotchCount: 2,
+            activeManualNotchCount: 1,
+            wdspActive: true,
+            wdspNativeLoadable: true,
+            wdspEmnrPost2Available: true,
+            wdspNr4SbnrAvailable: false,
+            nr4Readiness: 'missing-sbnr-exports',
+            appliedNrMatchesRequested: true,
+            appliedAgcMatchesRequested: true,
+            appliedSquelchMatchesRequested: true,
+            activeFeatures: ['anf', 'snb', 'manual-notches', 'nb1', 'auto-agc'],
+            qualityReasons: ['wdsp-active', 'nr-requested-not-effective', 'nr-capability-limited'],
+            diagnosticRecommendation: 'Use NR2/EMNR until NR4/SBNR exports are available.',
+          },
           display: {
             schemaVersion: 1,
             status: 'fresh',
@@ -711,6 +748,14 @@ describe('POST helpers', () => {
     expect(diag.dsp.nr4Readiness).toBe('missing-sbnr-exports');
     expect(diag.dsp.requestedNrMode).toBe('Sbnr');
     expect(diag.dsp.effectiveNrMode).toBe('Off');
+    expect(diag.dsp.rxDsp.status).toBe('nr-capability-limited');
+    expect(diag.dsp.rxDsp.agcMode).toBe('Fast');
+    expect(diag.dsp.rxDsp.effectiveAgcTopDb).toBe(62);
+    expect(diag.dsp.rxDsp.effectiveNbpNotchesRun).toBe(true);
+    expect(diag.dsp.rxDsp.activeManualNotchCount).toBe(1);
+    expect(diag.dsp.rxDsp.activeFeatures).toContain('manual-notches');
+    expect(diag.dsp.rxDsp.qualityReasons).toContain('nr-capability-limited');
+    expect(diag.dsp.rxDsp.diagnosticRecommendation).toContain('NR2/EMNR');
     expect(diag.dsp.display.status).toBe('fresh');
     expect(diag.dsp.display.panSource).toBe('rx');
     expect(diag.dsp.display.waterfallSource).toBe('rx');

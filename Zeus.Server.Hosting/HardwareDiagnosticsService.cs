@@ -1842,7 +1842,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             field = "DSP runtime readiness",
             source = "DspPipelineService + WDSP wisdom bootstrap",
             status = "decoded",
-            notes = "Active DSP engine, channel/rate, RX sink ownership, TX block geometry, TX monitor state, WDSP wisdom/model readiness, and NR native-export capability are exposed in diagnostics.dsp",
+            notes = "Active DSP engine, channel/rate, RX sink ownership, TX block geometry, TX monitor state, RX DSP chain state, WDSP wisdom/model readiness, and NR native-export capability are exposed in diagnostics.dsp",
         },
     ];
 
@@ -1990,6 +1990,9 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             {
                 "dsp.engineKind",
                 "dsp.sampleRateHz",
+                "dsp.rxDsp.status",
+                "dsp.rxDsp.activeFeatures",
+                "dsp.rxDsp.qualityReasons",
                 "dsp.display.status",
                 "dsp.display.panSource",
                 "dsp.display.waterfallSource",
@@ -2033,6 +2036,13 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "frontend.signalEstimator.signalConfidence",
                 "dsp.requestedNrMode",
                 "dsp.effectiveNrMode",
+                "dsp.rxDsp.status",
+                "dsp.rxDsp.anfEnabled",
+                "dsp.rxDsp.snbEnabled",
+                "dsp.rxDsp.nbMode",
+                "dsp.rxDsp.effectiveNbpNotchesRun",
+                "dsp.rxDsp.activeManualNotchCount",
+                "dsp.rxDsp.appliedNrMatchesRequested",
                 "dsp.wdspWisdomPhase",
                 "dsp.wdspEmnrPost2Available",
                 "dsp.wdspNr4SbnrAvailable",
@@ -2052,7 +2062,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "/api/dsp/nr-condition",
             },
             safetyClass = "rx-safe",
-            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the direct NR-condition API and backend diagnostics feed preserve the active profile, recommendation, RX-chain hold reason, requested/effective NR mode, WDSP NR2/NR4 native capability, and the backend AGC/ATT/ADC/squelch operating point for remote clients and recordings.",
+            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the direct NR-condition API and backend diagnostics feed preserve the active profile, recommendation, RX-chain hold reason, requested/effective NR mode, ANF/SNB/NB/manual-notch runtime state, WDSP NR2/NR4 native capability, and the backend AGC/ATT/ADC/squelch operating point for remote clients and recordings.",
         },
         new
         {

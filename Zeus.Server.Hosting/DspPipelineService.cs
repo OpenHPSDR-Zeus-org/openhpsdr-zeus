@@ -852,6 +852,13 @@ public class DspPipelineService : BackgroundService,
             nr4Readiness = nrRuntime.Nr4Readiness,
             requestedNrMode = nrRuntime.RequestedNrMode,
             effectiveNrMode = nrRuntime.EffectiveNrMode,
+            rxDsp = BuildRxDspChainDiagnostics(
+                state,
+                _radio.Notches,
+                nrRuntime,
+                _appliedNr,
+                _appliedAgc,
+                _appliedSquelch),
             squelch = SnapshotAdaptiveSquelchDiagnostics(state.Squelch ?? new SquelchConfig()),
             channelId = Volatile.Read(ref _channelId),
             sampleRateHz = Volatile.Read(ref _sampleRateHz),
@@ -1081,6 +1088,139 @@ public class DspPipelineService : BackgroundService,
                     : "wdsp-native-unloadable",
             RequestedNrMode: requestedNrMode,
             EffectiveNrMode: effectiveNrMode);
+    }
+
+    internal static DspRxChainDiagnosticsDto BuildRxDspChainDiagnostics(
+        StateDto state,
+        IReadOnlyList<NotchDto>? notches,
+        DspNrRuntimeSnapshot nrRuntime,
+        NrConfig? appliedNr = null,
+        AgcConfig? appliedAgc = null,
+        SquelchConfig? appliedSquelch = null)
+    {
+        var nr = state.Nr ?? new NrConfig();
+        var agc = state.Agc ?? new AgcConfig(AgcMode.Med);
+        var squelch = state.Squelch ?? new SquelchConfig();
+        int notchCount = notches?.Count ?? 0;
+        int activeNotchCount = notches?.Count(static n => n.Active) ?? 0;
+        bool effectiveNbpRun = nr.NbpNotchesEnabled || activeNotchCount > 0;
+        bool requestedNr = nr.NrMode != NrMode.Off;
+        bool effectiveNr = !string.Equals(nrRuntime.EffectiveNrMode, NrMode.Off.ToString(), StringComparison.OrdinalIgnoreCase);
+        bool nrCapabilityLimited = requestedNr && !effectiveNr;
+        bool weakSignalAssist = effectiveNr || nr.AnfEnabled || nr.SnbEnabled;
+        bool impulseControl = nr.NbMode != NbMode.Off;
+        bool notchControl = effectiveNbpRun || activeNotchCount > 0;
+        bool appliedNrMatches = appliedNr is null || nr.Equals(appliedNr);
+        bool appliedAgcMatches = appliedAgc is null || agc.Equals(appliedAgc);
+        bool appliedSquelchMatches = appliedSquelch is null || squelch.Equals(appliedSquelch);
+        double effectiveAgcTopDb = Math.Round(state.AgcTopDb + state.AgcOffsetDb, 1);
+
+        var activeFeatures = new List<string>();
+        if (effectiveNr) activeFeatures.Add($"nr-{nrRuntime.EffectiveNrMode.ToLowerInvariant()}");
+        if (nr.AnfEnabled) activeFeatures.Add("anf");
+        if (nr.SnbEnabled) activeFeatures.Add("snb");
+        if (effectiveNbpRun) activeFeatures.Add("nbp-notches");
+        if (activeNotchCount > 0) activeFeatures.Add("manual-notches");
+        if (impulseControl) activeFeatures.Add(nr.NbMode.ToString().ToLowerInvariant());
+        if (squelch.Enabled) activeFeatures.Add(squelch.Adaptive ? "adaptive-squelch" : "fixed-squelch");
+        if (state.AutoAgcEnabled) activeFeatures.Add("auto-agc");
+        if (state.AutoAttEnabled) activeFeatures.Add("auto-att");
+
+        var reasons = new List<string>();
+        reasons.Add(nrRuntime.WdspActive ? "wdsp-active" : "wdsp-inactive");
+        reasons.Add(effectiveNr ? "nr-effective" : requestedNr ? "nr-requested-not-effective" : "nr-off");
+        if (nrCapabilityLimited) reasons.Add("nr-capability-limited");
+        if (nr.AnfEnabled) reasons.Add("anf-enabled");
+        if (nr.SnbEnabled) reasons.Add("snb-enabled");
+        if (effectiveNbpRun) reasons.Add("nbp-notches-running");
+        if (activeNotchCount > 0) reasons.Add("manual-notches-active");
+        if (impulseControl) reasons.Add("noise-blanker-enabled");
+        if (squelch.Enabled) reasons.Add(squelch.Adaptive ? "adaptive-squelch-enabled" : "fixed-squelch-enabled");
+        if (state.AutoAgcEnabled) reasons.Add("auto-agc-enabled");
+        if (state.AgcOffsetDb != 0.0) reasons.Add("agc-offset-active");
+        if (!appliedNrMatches) reasons.Add("nr-apply-pending");
+        if (!appliedAgcMatches) reasons.Add("agc-apply-pending");
+        if (!appliedSquelchMatches) reasons.Add("squelch-apply-pending");
+
+        string status;
+        string recommendation;
+        if (!nrRuntime.WdspActive)
+        {
+            status = "dsp-engine-unavailable";
+            recommendation = "WDSP RX processing is not active; connect or restart the DSP engine before judging NR, notch, blanker, or AGC fidelity.";
+        }
+        else if (nrCapabilityLimited)
+        {
+            status = "nr-capability-limited";
+            recommendation = "The requested NR mode is not effective on the active WDSP build; use NR2/EMNR or update the bundled WDSP/SBNR exports before relying on NR4 weak-signal cleanup.";
+        }
+        else if (!appliedNrMatches || !appliedAgcMatches || !appliedSquelchMatches)
+        {
+            status = "apply-pending";
+            recommendation = "The requested RX DSP state has not fully matched the applied engine latch yet; wait for the next state apply before evaluating signal quality.";
+        }
+        else if (weakSignalAssist && impulseControl && notchControl)
+        {
+            status = "full-cleanup-chain-active";
+            recommendation = "NR/ANF/SNB, impulse blanking, and notch control are active; tune by watching scene SNR, RX headroom, AGC gain, and display ridge stability together.";
+        }
+        else if (weakSignalAssist)
+        {
+            status = "weak-signal-assist-active";
+            recommendation = "Weak-signal DSP assistance is active; verify that Smart NR scene evidence improves coherent SNR without masking speech or CW edges.";
+        }
+        else if (impulseControl || notchControl)
+        {
+            status = "interference-cleanup-active";
+            recommendation = "Interference cleanup is active without spectral NR; use this for pulse noise or carriers, and enable Smart NR only if the scene evidence shows weak coherent signal structure.";
+        }
+        else if (squelch.Enabled)
+        {
+            status = "squelch-gated";
+            recommendation = "Squelch is gating RX audio; verify the threshold before using silence as evidence that no weak signal is present.";
+        }
+        else
+        {
+            status = "baseline";
+            recommendation = "RX DSP cleanup is baseline; for weak signals, use Smart NR suggestions plus targeted ANF/manual notches/NB only when scene and ADC-headroom diagnostics support it.";
+        }
+
+        return new DspRxChainDiagnosticsDto(
+            SchemaVersion: 1,
+            Status: status,
+            Mode: state.Mode.ToString(),
+            FilterLowHz: state.FilterLowHz,
+            FilterHighHz: state.FilterHighHz,
+            FilterPresetName: state.FilterPresetName,
+            AgcMode: agc.Mode.ToString(),
+            AgcTopDb: Math.Round(state.AgcTopDb, 1),
+            AutoAgcEnabled: state.AutoAgcEnabled,
+            AgcOffsetDb: Math.Round(state.AgcOffsetDb, 1),
+            EffectiveAgcTopDb: effectiveAgcTopDb,
+            SquelchEnabled: squelch.Enabled,
+            SquelchAdaptive: squelch.Adaptive,
+            SquelchLevel: squelch.Level,
+            RequestedNrMode: nrRuntime.RequestedNrMode,
+            EffectiveNrMode: nrRuntime.EffectiveNrMode,
+            AnfEnabled: nr.AnfEnabled,
+            SnbEnabled: nr.SnbEnabled,
+            NbpNotchesEnabled: nr.NbpNotchesEnabled,
+            EffectiveNbpNotchesRun: effectiveNbpRun,
+            NbMode: nr.NbMode.ToString(),
+            NbThreshold: Math.Round(nr.NbThreshold, 1),
+            ManualNotchCount: notchCount,
+            ActiveManualNotchCount: activeNotchCount,
+            WdspActive: nrRuntime.WdspActive,
+            WdspNativeLoadable: nrRuntime.WdspNativeLoadable,
+            WdspEmnrPost2Available: nrRuntime.WdspEmnrPost2Available,
+            WdspNr4SbnrAvailable: nrRuntime.WdspNr4SbnrAvailable,
+            Nr4Readiness: nrRuntime.Nr4Readiness,
+            AppliedNrMatchesRequested: appliedNrMatches,
+            AppliedAgcMatchesRequested: appliedAgcMatches,
+            AppliedSquelchMatchesRequested: appliedSquelchMatches,
+            ActiveFeatures: activeFeatures.ToArray(),
+            QualityReasons: reasons.ToArray(),
+            DiagnosticRecommendation: recommendation);
     }
 
     /// <summary>Raised after the engine instance is swapped (Synthetic ↔ WDSP).
@@ -2809,3 +2949,40 @@ public sealed record DspNrRuntimeSnapshot(
     string Nr4Readiness,
     string RequestedNrMode,
     string EffectiveNrMode);
+
+internal sealed record DspRxChainDiagnosticsDto(
+    int SchemaVersion,
+    string Status,
+    string Mode,
+    int FilterLowHz,
+    int FilterHighHz,
+    string? FilterPresetName,
+    string AgcMode,
+    double AgcTopDb,
+    bool AutoAgcEnabled,
+    double AgcOffsetDb,
+    double EffectiveAgcTopDb,
+    bool SquelchEnabled,
+    bool SquelchAdaptive,
+    int SquelchLevel,
+    string RequestedNrMode,
+    string EffectiveNrMode,
+    bool AnfEnabled,
+    bool SnbEnabled,
+    bool NbpNotchesEnabled,
+    bool EffectiveNbpNotchesRun,
+    string NbMode,
+    double NbThreshold,
+    int ManualNotchCount,
+    int ActiveManualNotchCount,
+    bool WdspActive,
+    bool WdspNativeLoadable,
+    bool WdspEmnrPost2Available,
+    bool WdspNr4SbnrAvailable,
+    string Nr4Readiness,
+    bool AppliedNrMatchesRequested,
+    bool AppliedAgcMatchesRequested,
+    bool AppliedSquelchMatchesRequested,
+    string[] ActiveFeatures,
+    string[] QualityReasons,
+    string DiagnosticRecommendation);

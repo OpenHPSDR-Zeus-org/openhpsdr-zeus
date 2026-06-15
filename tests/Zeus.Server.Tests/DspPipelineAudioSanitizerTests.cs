@@ -104,6 +104,66 @@ public sealed class DspPipelineAudioSanitizerTests
     }
 
     [Fact]
+    public void BuildRxDspChainDiagnostics_FlagsNrCapabilityLimitsAndManualNotches()
+    {
+        var state = new StateDto(
+            Status: ConnectionStatus.Connected,
+            Endpoint: "192.168.1.25:1024",
+            VfoHz: 7_262_000,
+            Mode: RxMode.LSB,
+            FilterLowHz: -2850,
+            FilterHighHz: -150,
+            SampleRate: 384_000,
+            AgcTopDb: 68.0,
+            Agc: new AgcConfig(AgcMode.Fast),
+            Squelch: new SquelchConfig(Enabled: true, Level: 18, Adaptive: true),
+            Nr: new NrConfig(
+                NrMode: NrMode.Sbnr,
+                AnfEnabled: true,
+                SnbEnabled: true,
+                NbpNotchesEnabled: false,
+                NbMode: NbMode.Nb1,
+                NbThreshold: 18.0),
+            AutoAgcEnabled: true,
+            AgcOffsetDb: -6.0);
+        var runtime = new DspNrRuntimeSnapshot(
+            WdspActive: true,
+            WdspNativeLoadable: true,
+            WdspEmnrPost2Available: true,
+            WdspNr4SbnrAvailable: false,
+            Nr4Readiness: "missing-sbnr-exports",
+            RequestedNrMode: "Sbnr",
+            EffectiveNrMode: "Off");
+
+        var diag = DspPipelineService.BuildRxDspChainDiagnostics(
+            state,
+            new[]
+            {
+                new NotchDto(7_261_200, 80, Active: true),
+                new NotchDto(7_261_800, 120, Active: false),
+            },
+            runtime,
+            appliedNr: state.Nr,
+            appliedAgc: state.Agc,
+            appliedSquelch: state.Squelch);
+
+        Assert.Equal(1, diag.SchemaVersion);
+        Assert.Equal("nr-capability-limited", diag.Status);
+        Assert.Equal("Sbnr", diag.RequestedNrMode);
+        Assert.Equal("Off", diag.EffectiveNrMode);
+        Assert.True(diag.AnfEnabled);
+        Assert.True(diag.SnbEnabled);
+        Assert.Equal("Nb1", diag.NbMode);
+        Assert.Equal(2, diag.ManualNotchCount);
+        Assert.Equal(1, diag.ActiveManualNotchCount);
+        Assert.True(diag.EffectiveNbpNotchesRun);
+        Assert.Equal(62.0, diag.EffectiveAgcTopDb);
+        Assert.Contains("manual-notches", diag.ActiveFeatures);
+        Assert.Contains("nr-capability-limited", diag.QualityReasons);
+        Assert.Contains("NR2/EMNR", diag.DiagnosticRecommendation);
+    }
+
+    [Fact]
     public void ApplyRxAudioLeveler_LiftsWeakAudioTowardSpeechLevel()
     {
         var state = new DspPipelineService.RxAudioLevelerState();

@@ -512,6 +512,44 @@ export type HardwareDisplayDiagnosticsDto = {
   diagnosticRecommendation: string | null;
 };
 
+export type HardwareRxDspDiagnosticsDto = {
+  schemaVersion: number;
+  status: string;
+  mode: string;
+  filterLowHz: number;
+  filterHighHz: number;
+  filterPresetName: string | null;
+  agcMode: string;
+  agcTopDb: number;
+  autoAgcEnabled: boolean;
+  agcOffsetDb: number;
+  effectiveAgcTopDb: number;
+  squelchEnabled: boolean;
+  squelchAdaptive: boolean;
+  squelchLevel: number;
+  requestedNrMode: string;
+  effectiveNrMode: string;
+  anfEnabled: boolean;
+  snbEnabled: boolean;
+  nbpNotchesEnabled: boolean;
+  effectiveNbpNotchesRun: boolean;
+  nbMode: string;
+  nbThreshold: number;
+  manualNotchCount: number;
+  activeManualNotchCount: number;
+  wdspActive: boolean;
+  wdspNativeLoadable: boolean;
+  wdspEmnrPost2Available: boolean;
+  wdspNr4SbnrAvailable: boolean;
+  nr4Readiness: string;
+  appliedNrMatchesRequested: boolean;
+  appliedAgcMatchesRequested: boolean;
+  appliedSquelchMatchesRequested: boolean;
+  activeFeatures: string[];
+  qualityReasons: string[];
+  diagnosticRecommendation: string | null;
+};
+
 export type HardwareDspDiagnosticsDto = {
   schemaVersion: number;
   engine: string;
@@ -535,6 +573,7 @@ export type HardwareDspDiagnosticsDto = {
   rxSinkAttached: boolean;
   audioSinkCount: number;
   monitorBacklogSamples: number;
+  rxDsp: HardwareRxDspDiagnosticsDto;
   display: HardwareDisplayDiagnosticsDto;
   wdspWisdomPhase: string;
   wdspWisdomStatus: string;
@@ -1833,10 +1872,91 @@ function normalizeDspDiagnostics(raw: unknown): HardwareDspDiagnosticsDto {
     rxSinkAttached: Boolean(r.rxSinkAttached),
     audioSinkCount: diagNumber(r.audioSinkCount) ?? 0,
     monitorBacklogSamples: diagNumber(r.monitorBacklogSamples) ?? 0,
+    rxDsp: normalizeHardwareRxDspDiagnostics(r.rxDsp),
     display: normalizeHardwareDisplayDiagnostics(r.display),
     wdspWisdomPhase: diagString(r.wdspWisdomPhase) ?? 'Unknown',
     wdspWisdomStatus: diagString(r.wdspWisdomStatus) ?? '',
     readiness: diagString(r.readiness) ?? 'unknown',
+  };
+}
+
+function normalizeHardwareRxDspDiagnostics(raw: unknown): HardwareRxDspDiagnosticsDto {
+  if (raw === null || raw === undefined) {
+    return {
+      schemaVersion: 0,
+      status: 'unavailable',
+      mode: 'unknown',
+      filterLowHz: 0,
+      filterHighHz: 0,
+      filterPresetName: null,
+      agcMode: 'unknown',
+      agcTopDb: 0,
+      autoAgcEnabled: false,
+      agcOffsetDb: 0,
+      effectiveAgcTopDb: 0,
+      squelchEnabled: false,
+      squelchAdaptive: true,
+      squelchLevel: 0,
+      requestedNrMode: 'Off',
+      effectiveNrMode: 'Off',
+      anfEnabled: false,
+      snbEnabled: false,
+      nbpNotchesEnabled: false,
+      effectiveNbpNotchesRun: false,
+      nbMode: 'Off',
+      nbThreshold: 20,
+      manualNotchCount: 0,
+      activeManualNotchCount: 0,
+      wdspActive: false,
+      wdspNativeLoadable: false,
+      wdspEmnrPost2Available: false,
+      wdspNr4SbnrAvailable: false,
+      nr4Readiness: 'unknown',
+      appliedNrMatchesRequested: true,
+      appliedAgcMatchesRequested: true,
+      appliedSquelchMatchesRequested: true,
+      activeFeatures: [],
+      qualityReasons: ['rx-dsp-chain-unavailable'],
+      diagnosticRecommendation: 'RX DSP chain diagnostics are not available from this backend yet; restart OpenhpsdrZeus after updating to expose NR/NB/ANF/notch runtime state.',
+    };
+  }
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    status: diagString(r.status) ?? 'unknown',
+    mode: diagString(r.mode) ?? 'unknown',
+    filterLowHz: diagNumber(r.filterLowHz) ?? 0,
+    filterHighHz: diagNumber(r.filterHighHz) ?? 0,
+    filterPresetName: diagString(r.filterPresetName),
+    agcMode: diagString(r.agcMode) ?? 'unknown',
+    agcTopDb: diagNumber(r.agcTopDb) ?? 0,
+    autoAgcEnabled: Boolean(r.autoAgcEnabled),
+    agcOffsetDb: diagNumber(r.agcOffsetDb) ?? 0,
+    effectiveAgcTopDb: diagNumber(r.effectiveAgcTopDb) ?? 0,
+    squelchEnabled: Boolean(r.squelchEnabled),
+    squelchAdaptive: r.squelchAdaptive === undefined ? true : Boolean(r.squelchAdaptive),
+    squelchLevel: diagNumber(r.squelchLevel) ?? 0,
+    requestedNrMode: diagString(r.requestedNrMode) ?? 'Off',
+    effectiveNrMode: diagString(r.effectiveNrMode) ?? 'Off',
+    anfEnabled: Boolean(r.anfEnabled),
+    snbEnabled: Boolean(r.snbEnabled),
+    nbpNotchesEnabled: Boolean(r.nbpNotchesEnabled),
+    effectiveNbpNotchesRun: Boolean(r.effectiveNbpNotchesRun),
+    nbMode: diagString(r.nbMode) ?? 'Off',
+    nbThreshold: diagNumber(r.nbThreshold) ?? 20,
+    manualNotchCount: diagNumber(r.manualNotchCount) ?? 0,
+    activeManualNotchCount: diagNumber(r.activeManualNotchCount) ?? 0,
+    wdspActive: Boolean(r.wdspActive),
+    wdspNativeLoadable: Boolean(r.wdspNativeLoadable),
+    wdspEmnrPost2Available: Boolean(r.wdspEmnrPost2Available),
+    wdspNr4SbnrAvailable: Boolean(r.wdspNr4SbnrAvailable),
+    nr4Readiness: diagString(r.nr4Readiness) ?? 'unknown',
+    appliedNrMatchesRequested: r.appliedNrMatchesRequested === undefined ? true : Boolean(r.appliedNrMatchesRequested),
+    appliedAgcMatchesRequested: r.appliedAgcMatchesRequested === undefined ? true : Boolean(r.appliedAgcMatchesRequested),
+    appliedSquelchMatchesRequested: r.appliedSquelchMatchesRequested === undefined ? true : Boolean(r.appliedSquelchMatchesRequested),
+    activeFeatures: diagStringArray(r.activeFeatures),
+    qualityReasons: diagStringArray(r.qualityReasons),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
   };
 }
 

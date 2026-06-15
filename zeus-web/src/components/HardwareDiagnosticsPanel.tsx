@@ -1501,6 +1501,7 @@ export function HardwareDiagnosticsPanel() {
 
   const dsp = diag?.dsp;
   const display = dsp?.display;
+  const rxDsp = dsp?.rxDsp;
   const dspFields: Field[] = [
     { label: 'Engine', value: dsp?.engineKind },
     { label: 'Runtime', value: dsp?.engine },
@@ -1525,6 +1526,43 @@ export function HardwareDiagnosticsPanel() {
     { label: 'Audio Sinks', value: dsp?.audioSinkCount },
     { label: 'Monitor Backlog', value: dsp?.monitorBacklogSamples },
     { label: 'Wisdom Status', value: dsp?.wdspWisdomStatus },
+  ];
+  const rxDspFields: Field[] = [
+    { label: 'RX DSP Status', value: rxDsp?.status },
+    { label: 'Mode', value: rxDsp?.mode },
+    { label: 'Filter Low', value: hz(rxDsp?.filterLowHz) },
+    { label: 'Filter High', value: hz(rxDsp?.filterHighHz) },
+    { label: 'Filter Preset', value: rxDsp?.filterPresetName },
+    { label: 'AGC Mode', value: rxDsp?.agcMode },
+    { label: 'AGC Top', value: db(rxDsp?.agcTopDb) },
+    { label: 'Auto AGC', value: boolLabel(rxDsp?.autoAgcEnabled) },
+    { label: 'AGC Offset', value: db(rxDsp?.agcOffsetDb) },
+    { label: 'AGC Effective', value: db(rxDsp?.effectiveAgcTopDb) },
+    { label: 'Squelch', value: boolLabel(rxDsp?.squelchEnabled) },
+    { label: 'SQL Mode', value: rxDsp ? (rxDsp.squelchAdaptive ? 'Adaptive' : 'Fixed') : null },
+    { label: 'SQL Level', value: rxDsp?.squelchLevel },
+    { label: 'NR Requested', value: rxDsp?.requestedNrMode },
+    { label: 'NR Effective', value: rxDsp?.effectiveNrMode },
+    { label: 'ANF', value: boolLabel(rxDsp?.anfEnabled) },
+    { label: 'SNB', value: boolLabel(rxDsp?.snbEnabled) },
+    { label: 'NBP Notches', value: boolLabel(rxDsp?.nbpNotchesEnabled) },
+    { label: 'NBP Effective', value: boolLabel(rxDsp?.effectiveNbpNotchesRun) },
+    { label: 'NB Mode', value: rxDsp?.nbMode },
+    { label: 'NB Threshold', value: rxDsp?.nbThreshold },
+    { label: 'Manual Notches', value: rxDsp?.manualNotchCount },
+    { label: 'Active Notches', value: rxDsp?.activeManualNotchCount },
+    { label: 'NR4 Ready', value: rxDsp?.nr4Readiness },
+    { label: 'NR Applied', value: boolLabel(rxDsp?.appliedNrMatchesRequested) },
+    { label: 'AGC Applied', value: boolLabel(rxDsp?.appliedAgcMatchesRequested) },
+    { label: 'SQL Applied', value: boolLabel(rxDsp?.appliedSquelchMatchesRequested) },
+    {
+      label: 'Active Features',
+      value: rxDsp ? (rxDsp.activeFeatures.length > 0 ? rxDsp.activeFeatures.join(', ') : 'none') : null,
+    },
+    {
+      label: 'DSP Reasons',
+      value: rxDsp ? (rxDsp.qualityReasons.length > 0 ? rxDsp.qualityReasons.join(', ') : 'none') : null,
+    },
   ];
   const displayFields: Field[] = [
     { label: 'Display Status', value: display?.status },
@@ -1727,8 +1765,12 @@ export function HardwareDiagnosticsPanel() {
         </h4>
         <FieldGrid fields={dspFields} />
         <div style={{ marginTop: 10 }}>
+          <FieldGrid fields={rxDspFields} />
+        </div>
+        <div style={{ marginTop: 10 }}>
           <FieldGrid fields={displayFields} />
         </div>
+        <DiagnosticRecommendation text={rxDsp?.diagnosticRecommendation} />
         <DiagnosticRecommendation text={display?.diagnosticRecommendation} />
       </div>
 
