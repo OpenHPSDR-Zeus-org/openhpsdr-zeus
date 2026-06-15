@@ -93,6 +93,9 @@ export type ConnectionState = {
   // PS-toggle disabled branch.
   connectedProtocol: 'P1' | 'P2' | null;
   preampOn: boolean;
+  // Hardware NCO / panadapter centre. The frequency-axis ruler drag moves this
+  // without touching vfoHz so the operator can pan to off-screen spectrum.
+  radioLoHz: number;
   nr: NrConfigDto;
   zoomLevel: ZoomLevel;
   inflight: boolean;
@@ -147,6 +150,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   boardId: null,
   connectedProtocol: null,
   preampOn: false,
+  radioLoHz: 14_200_000,
   nr: { ...NR_CONFIG_DEFAULT },
   zoomLevel: 1,
   inflight: false,
@@ -179,6 +183,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       autoAttEnabled: s.autoAttEnabled,
       attOffsetDb: s.attOffsetDb,
       adcOverloadWarning: s.adcOverloadWarning,
+      radioLoHz: s.radioLoHz > 0 ? s.radioLoHz : prev.radioLoHz,
       nr: s.nr,
       zoomLevel: s.zoomLevel,
     })),
