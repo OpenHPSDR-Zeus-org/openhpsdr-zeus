@@ -46,6 +46,8 @@ import { createContext, useContext, useEffect, type RefObject } from 'react';
 import { setVfo, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
+import { computeSnapToLineHz, getSnapHistorySpectrum, useSignalEnhanceStore } from '../dsp/signal-estimator';
+import { armSnapLock } from './snap-lock';
 import * as viewCenter from '../state/view-center';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 
@@ -55,6 +57,11 @@ const CLICK_SLOP_PX = 3;
 // and band presets bypass it. Ham-friendly default; becomes user-settable
 // once the UX exists.
 const PAN_STEP_HZ = 500;
+// Snap-to-signal reach: a click in snap mode grabs the nearest signal whose
+// mode-aware tuning edge sits within this many screen pixels of the cursor
+// (converted to Hz at the live scale). Past it, the click tunes normally — so
+// clicking empty spectrum still lands where you clicked.
+const SNAP_RADIUS_PX = 80;
 // Wheel tune step now follows the operator's TuningStepWidget choice
 // (toolbar-favorites-store.stepHz). Read at event time inside the wheel
 // handler so the latest value applies on every notch. Arrow-key tuning
@@ -181,8 +188,10 @@ export function usePanTuneGesture(
       if (pendingRaf === 0) pendingRaf = requestAnimationFrame(flushPending);
     };
 
-    const commitFinal = (hz: number) => {
-      const snapped = snapHz(hz);
+    // `exact` skips the PAN_STEP_HZ grid — used by snap-to-signal so the dial
+    // lands on the measured carrier, not the nearest round 500 Hz.
+    const commitFinal = (hz: number, exact = false) => {
+      const snapped = exact ? clampHz(hz) : snapHz(hz);
       // Delta against the commanded chain — NOT an absolute write into the
       // view-center (frame centers are dial ∓ cw-pitch in CW; absolutes
       // would oscillate the display by ±pitch on every CW commit).
@@ -383,7 +392,61 @@ export function usePanTuneGesture(
         const view = readView();
         if (!view) return;
         const frac = (e.clientX - rect.left) / rect.width;
-        commitFinal(view.centerHz + (frac - 0.5) * view.spanHz);
+        const clickHz = view.centerHz + (frac - 0.5) * view.spanHz;
+        // Snap-to-signal: when enabled, a click FAVOURS THE LINE UNDER THE
+        // CURSOR — it scans the visible spectrum near the click and tunes to
+        // whichever signal has its mode-aware edge closest to where you clicked
+        // (USB low edge, LSB high edge, CW zero-beat, AM centroid). So the click
+        // locks onto the nearest signal, edge-aligned for the mode, while still
+        // honouring where you clicked. If the live frame has nothing near the
+        // click, fall back to the waterfall memory (recently-seen, now-faded
+        // signals); only if THAT is empty too does the click tune normally.
+        const enhance = useSignalEnhanceStore.getState();
+        if (enhance.snapEnabled) {
+          const ds = useDisplayStore.getState();
+          if (ds.panDb && ds.hzPerPixel > 0 && rect.width > 0) {
+            // Zoom-consistent grab distance with an operator/profile cap: the
+            // pixel reach keeps snap feel stable while Snap Radius stops a
+            // zoomed-out click from grabbing across too much spectrum.
+            const maxRadiusHz = Math.min(ds.hzPerPixel * SNAP_RADIUS_PX, enhance.snapRadiusHz);
+            const mode = useConnectionStore.getState().mode;
+            const centerHz = Number(ds.centerHz);
+            let tuneHz = computeSnapToLineHz(
+              ds.panDb,
+              centerHz,
+              ds.hzPerPixel,
+              mode,
+              clickHz,
+              maxRadiusHz,
+            );
+            // Only a LIVE signal can be tracked frame-to-frame; a waterfall-memory
+            // hit is by definition not on screen right now, so it tunes once but
+            // does not arm the self-correcting lock.
+            const fromLive = tuneHz != null;
+            if (tuneHz == null) {
+              // Nothing live near the click — consult the waterfall memory.
+              const history = getSnapHistorySpectrum();
+              if (history) {
+                tuneHz = computeSnapToLineHz(history, centerHz, ds.hzPerPixel, mode, clickHz, maxRadiusHz);
+              }
+            }
+            if (tuneHz != null) {
+              // Quantise to the operator's configured tuning step. The raw
+              // signal edge/peak shifts by tens of Hz frame-to-frame as the
+              // noise floor breathes; landing on the nearest step gives a
+              // stable, clean dial instead of a jittery sub-Hz frequency.
+              const step = useToolbarFavoritesStore.getState().stepHz;
+              const stepped = step > 0 ? Math.round(tuneHz / step) * step : tuneHz;
+              commitFinal(stepped, true);
+              // Engage the self-correcting lock so the dial follows this signal as
+              // it drifts. clickHz sits inside the signal body — the tracker's
+              // anchor. Disengages itself on manual tune / mode change / signal loss.
+              if (fromLive) armSnapLock({ dialHz: stepped, anchorBodyHz: clickHz, mode });
+              return;
+            }
+          }
+        }
+        commitFinal(clickHz);
       }
     };
 
