@@ -188,11 +188,11 @@ public static class ZeusHost
             builder.Services.AddSingleton<NativeAudioSink>();
             builder.Services.AddSingleton<IRxAudioSink>(sp =>
                 sp.GetRequiredService<NativeAudioSink>());
-            // Same singleton serves the Audio Suite pre-MOX audition sink
-            // so the audition mix happens in the same playback path the
-            // operator already hears RX audio through. Browser mode (the
-            // else branch below) gets a NoOp impl so DI is satisfied
-            // without forcing audition feature branches in callers.
+            // Same singleton serves local mono side-channel playback
+            // (currently WAV/local monitor paths) in the same playback path
+            // the operator already hears RX audio through. Browser mode (the
+            // else branch below) gets a NoOp impl so DI is satisfied without
+            // forcing host-mode branches in callers.
             builder.Services.AddSingleton<IAuditionAudioSink>(sp =>
                 sp.GetRequiredService<NativeAudioSink>());
             builder.Services.AddHostedService(sp =>
@@ -224,11 +224,9 @@ public static class ZeusHost
         else
         {
             builder.Services.AddSingleton<IRxAudioSink, WebSocketAudioSink>();
-            // Audition is desktop-only in v1; browser mode gets the no-op
-            // implementation so AudioPluginBridge has a non-null sink to
-            // call into. Browser parity is a future phase that will
-            // stream audition over the SignalR hub for the worklet to
-            // mix client-side.
+            // The native local playback side-channel is desktop-only; browser
+            // mode gets the no-op implementation. Audio Suite audition is
+            // exposed in both modes through the TX Monitor path instead.
             builder.Services.AddSingleton<IAuditionAudioSink, NoOpAuditionAudioSink>();
         }
         // WDSPwisdom bootstrap: run FFTW plan caching on a worker at app start so the
@@ -304,6 +302,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<BandMemoryStore>();
         builder.Services.AddSingleton<LayoutStore>();
         builder.Services.AddSingleton<DspSettingsStore>();
+        builder.Services.AddSingleton<CfcPresetStore>();
         builder.Services.AddSingleton<PaSettingsStore>();
         builder.Services.AddSingleton<PreferredRadioStore>();
         builder.Services.AddSingleton<PsSettingsStore>();

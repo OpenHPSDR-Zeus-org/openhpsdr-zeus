@@ -14,10 +14,10 @@
 //     persisted to localStorage — on reload we fetch fresh from the
 //     server to avoid drift if the operator reorders on a second
 //     client (or a backend restart loaded a different order).
-//   - Audition state: whether the Audio Suite is mixing the plugin
-//     chain's output into the operator's RX playback path. Server
-//     state (IAuditionAudioSink.IsEnabled); store mirrors. Not
-//     persisted — defaults off on every fresh boot.
+//   - Audition state: whether the Audio Suite is mixing the full TX-monitor
+//     output into the operator's RX playback path. Server state
+//     (StateDto.TxMonitorEnabled); store mirrors. Not persisted — defaults
+//     off on every fresh boot.
 //   - Master bypass: single operator-facing toggle that disengages
 //     the entire plugin chain (NoiseGate / EQ / Comp / Exciter / Bass
 //     / Reverb). Server-side default on first install is true
@@ -34,6 +34,7 @@
 
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { useTxStore } from './tx-store';
 
 /** Minimum window dimensions enforced on drag-resize. */
 export const AUDIO_SUITE_WINDOW_MIN_WIDTH = 480;
@@ -96,8 +97,8 @@ interface AudioSuiteState {
   //   (3) reorderChain() local optimistic update before PUT
   chainOrder: string[];
 
-  // Audition (desktop-only feature; server returns supported=false on
-  // browser mode and the toggle is disabled).
+  // Audition (full TX-monitor path; server reports whether this host can
+  // expose it).
   auditionSupported: boolean;
   auditionEnabled: boolean;
 
@@ -592,8 +593,10 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             auditionSupported: body.supported ?? false,
             auditionEnabled: body.enabled ?? false,
           });
+          useTxStore.getState().setTxMonitorEnabled(body.enabled ?? false);
         } catch {
           set({ auditionSupported: false, auditionEnabled: false });
+          useTxStore.getState().setTxMonitorEnabled(false);
         }
       },
 
@@ -601,6 +604,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         const prev = get().auditionEnabled;
         // Optimistic update so the toggle feels instant.
         set({ auditionEnabled: enabled });
+        useTxStore.getState().setTxMonitorEnabled(enabled);
         try {
           const res = await fetch('/api/audio-suite/audition', {
             method: 'PUT',
@@ -609,13 +613,20 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           });
           if (!res.ok) {
             set({ auditionEnabled: prev });
+            useTxStore.getState().setTxMonitorEnabled(prev);
             // eslint-disable-next-line no-console
             console.warn(
               `audio-suite audition PUT rejected: ${res.status} ${res.statusText}`,
             );
+            return;
           }
+          const body = (await res.json()) as { enabled?: boolean };
+          const serverEnabled = body.enabled ?? enabled;
+          set({ auditionEnabled: serverEnabled });
+          useTxStore.getState().setTxMonitorEnabled(serverEnabled);
         } catch (err) {
           set({ auditionEnabled: prev });
+          useTxStore.getState().setTxMonitorEnabled(prev);
           // eslint-disable-next-line no-console
           console.warn('audio-suite audition PUT threw', err);
         }

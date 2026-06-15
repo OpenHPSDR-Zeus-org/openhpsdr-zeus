@@ -68,8 +68,8 @@
 //   an EXTERNAL tune (CAT/TCI, band button, typed entry, mode change) — we
 //   retarget and glide there, which also arms the refill hold so mislabeled
 //   mid-retune frames are not adopted (see Panadapter.tsx).
-// - `snapTo` is the 'reset' path (zoom/sample-rate/width change): no glide,
-//   no hold — geometry changed, the next frame is authoritative.
+// - `snapTo` is the hard-reset path (first frame, width change, or no overlap):
+//   no glide, no hold — the next frame is authoritative.
 //
 // Kill switch: set VIEW_CENTER_TWEEN_ENABLED = false (or TAU_MS = 0) to
 // snap-to-target every tick — restores today's stepping feel while keeping
@@ -174,8 +174,7 @@ export function markOptimisticTune(): void {
 }
 
 /** Hard-set view == target == centerHz with no glide. The 'reset' path:
- *  zoom / sample-rate / width changed, so the previous geometry (and any
- *  in-flight tween) is meaningless. Clears the refill hold. */
+ *  first frame, width change, or no-overlap jump. Clears the refill hold. */
 export function snapTo(centerHz: number, nextHzPerPixel?: number): void {
   targetHz = centerHz;
   viewHz = centerHz;

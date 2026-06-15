@@ -117,6 +117,43 @@ describe('audio-suite-store profile selection', () => {
     ]);
   });
 
+  it('switches back to native mode returned by a profile apply', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/audio-suite/profiles/Native%20rack/apply') {
+        return response({
+          pluginIds: ['com.openhpsdr.zeus.samples.eq'],
+          processingMode: 'native',
+          engineAvailable: true,
+          engineActive: false,
+          masterBypass: false,
+        });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { useAudioSuiteStore } = await import('./audio-suite-store');
+    useAudioSuiteStore.setState({
+      processingMode: 'vst',
+      vstEngineAvailable: true,
+      vstEngineActive: true,
+      masterBypassed: true,
+      chainOrder: ['com.openhpsdr.zeus.vst.comp'],
+    });
+
+    const result = await useAudioSuiteStore.getState().applyProfile('Native rack');
+
+    expect(result).toEqual({ ok: true });
+    expect(useAudioSuiteStore.getState().processingMode).toBe('native');
+    expect(useAudioSuiteStore.getState().vstEngineAvailable).toBe(true);
+    expect(useAudioSuiteStore.getState().vstEngineActive).toBe(false);
+    expect(useAudioSuiteStore.getState().masterBypassed).toBe(false);
+    expect(useAudioSuiteStore.getState().chainOrder).toEqual([
+      'com.openhpsdr.zeus.samples.eq',
+    ]);
+  });
+
   it('reports profile apply failures', async () => {
     const fetchMock = vi
       .fn<typeof fetch>()
@@ -128,5 +165,28 @@ describe('audio-suite-store profile selection', () => {
 
     expect(result).toEqual({ ok: false, error: 'missing profile' });
     expect(useAudioSuiteStore.getState().selectedProfile).toBe('');
+  });
+
+  it('mirrors audition onto the TX monitor store', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/audio-suite/audition') {
+        return response({ supported: true, enabled: true });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { useAudioSuiteStore } = await import('./audio-suite-store');
+    const { useTxStore } = await import('./tx-store');
+
+    await useAudioSuiteStore.getState().setAuditionEnabled(true);
+
+    expect(useAudioSuiteStore.getState().auditionEnabled).toBe(true);
+    expect(useTxStore.getState().txMonitorEnabled).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith('/api/audio-suite/audition', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    });
   });
 });

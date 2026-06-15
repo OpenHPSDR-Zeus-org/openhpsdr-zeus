@@ -13,6 +13,7 @@ import {
   type AdcProtectionStatusDto,
 } from '../api/client';
 import { analyzeRxChain } from '../dsp/rx-chain-health';
+import { useConnectionStore } from '../state/connection-store';
 import { useRxMetersStore } from '../state/rx-meters-store';
 import { useTxStore } from '../state/tx-store';
 import { Slider } from './design/Slider';
@@ -77,6 +78,8 @@ export function AdcProtectionSettingsSection() {
   const agcGain = useRxMetersStore((s) => s.agcGain);
   const agcEnvPk = useRxMetersStore((s) => s.agcEnvPk);
   const agcEnvAv = useRxMetersStore((s) => s.agcEnvAv);
+  const autoAgcEnabled = useConnectionStore((s) => s.autoAgcEnabled);
+  const autoAttEnabled = useConnectionStore((s) => s.autoAttEnabled);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -143,16 +146,19 @@ export function AdcProtectionSettingsSection() {
     commit({ ...ADC_PROTECTION_CONFIG_DEFAULT }, true);
   }, [commit]);
 
-  const rx = analyzeRxChain({
-    signalPk,
-    signalAv,
-    adcPk,
-    adcAv,
-    agcGain,
-    agcEnvPk,
-    agcEnvAv,
-    fallbackDbm: fallbackRxDbm,
-  });
+  const rx = analyzeRxChain(
+    {
+      signalPk,
+      signalAv,
+      adcPk,
+      adcAv,
+      agcGain,
+      agcEnvPk,
+      agcEnvAv,
+      fallbackDbm: fallbackRxDbm,
+    },
+    { autoAgcEnabled, autoAttEnabled },
+  );
   const rxWarn = rx.actionTone === 'protect';
   const rxOptimize = rx.actionTone === 'optimize';
   const metrics: Metric[] = [

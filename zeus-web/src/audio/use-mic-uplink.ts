@@ -65,9 +65,9 @@ const MIC_VISUAL_INTERVAL_MS = 50;
  * Opens the mic AudioWorklet on mount and keeps it running while the app
  * is live. Peak dBFS of every 20 ms block is pushed to tx-store so the
  * MicMeter renders even on RX — the operator needs to know the mic is
- * being picked up *before* keying. Uplink samples are only forwarded to
- * the server when MOX is on; during RX the worklet still runs but the
- * wire path is a no-op.
+ * being picked up *before* keying. Uplink samples are forwarded to the
+ * server only for local TX or TX Monitor / Audio Suite audition; during
+ * normal RX the worklet still runs but the wire path is a no-op.
  *
  * getUserMedia requires a user gesture on first grant, but Chrome remembers
  * the grant per-origin for the session, so the capture starts silently on
@@ -111,13 +111,15 @@ export function useMicUplink(): void {
         windowPeak = 0;
       }
 
-      // Samples: only forwarded when the local operator has actually keyed
-      // (MoxButton / spacebar PTT / MobilePttButton). Capturing always +
-      // gating here avoids a ~300 ms getUserMedia cold-start on every MOX.
-      // Gated on localMicArmed rather than moxOn so a server-side MOX edge
-      // from a TCI client (WSJT-X / MSHV) doesn't make the browser race the
-      // TCI audio path into TxAudioIngest._accumulator. See issue #346.
-      if (useTxStore.getState().localMicArmed) sendMicPcm(samples);
+      // Samples: forwarded when the local operator has actually keyed
+      // (MoxButton / spacebar PTT / MobilePttButton), or when TX Monitor /
+      // Audio Suite audition is on so the off-air monitor can run through
+      // the same server-side TX chain. Still gated on localMicArmed rather
+      // than moxOn for keyed TX so a server-side MOX edge from a TCI client
+      // (WSJT-X / MSHV) doesn't make the browser race the TCI audio path into
+      // TxAudioIngest._accumulator. See issue #346.
+      const tx = useTxStore.getState();
+      if (tx.localMicArmed || tx.txMonitorEnabled) sendMicPcm(samples);
     })
       .then((h) => {
         if (disposed) { void h.stop(); return; }

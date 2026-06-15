@@ -98,4 +98,35 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         Assert.Equal(80.0, snap.AgcTopDb);
         Assert.Equal(0.0, snap.AgcOffsetDb);
     }
+
+    [Fact]
+    public void AutoAgc_LowersEffectiveGainWhenWdspAgcIsCutting()
+    {
+        using var radio = NewRadio();
+        radio.SetAgcTop(60.0);
+        radio.SetAutoAgc(true);
+
+        radio.HandleRxMetersForAutoAgc(signalDbm: -72.0, adcPkDbfs: -5.0, agcGainDb: -28.0, nowMs: 0);
+
+        var snap = radio.Snapshot();
+        Assert.Equal(60.0, snap.AgcTopDb);
+        Assert.Equal(-0.5, snap.AgcOffsetDb);
+    }
+
+    [Fact]
+    public void AutoAgc_RecoversNegativeOffsetWhenAgcCutClears()
+    {
+        using var radio = NewRadio();
+        radio.SetAgcTop(60.0);
+        radio.SetAutoAgc(true);
+
+        for (int i = 0; i < 4; i++)
+            radio.HandleRxMetersForAutoAgc(signalDbm: -72.0, adcPkDbfs: -8.0, agcGainDb: -28.0, nowMs: i * 500);
+
+        Assert.Equal(-2.0, radio.Snapshot().AgcOffsetDb);
+
+        radio.HandleRxMetersForAutoAgc(signalDbm: -92.0, adcPkDbfs: -18.0, agcGainDb: 0.0, nowMs: 2_000);
+
+        Assert.Equal(-1.5, radio.Snapshot().AgcOffsetDb);
+    }
 }

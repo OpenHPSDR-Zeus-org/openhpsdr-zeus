@@ -106,12 +106,12 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
     // open either way so there's no pop and no fight with the OS mixer.
     private volatile bool _muted;
 
-    // Audition enable flag — set via REST /api/audio-suite/audition by
-    // the operator toggling the Audio Suite window's Audition button.
-    // Read on the miniaudio capture worker thread inside PublishAudition
-    // and on the playback worker thread inside OnPlaybackData. Volatile
-    // is sufficient: a stale read across a toggle just means one extra
-    // (or one missing) audition block, inaudible.
+    // Local side-channel enable flag. Audio Suite audition now uses the full
+    // TX Monitor path; this ring remains available for desktop-only local
+    // playback sources such as WAV monitor playback. Read on the miniaudio
+    // capture worker thread inside PublishAudition and on the playback worker
+    // thread inside OnPlaybackData. Volatile is sufficient: a stale read
+    // across a toggle just means one extra (or one missing) block, inaudible.
     private volatile bool _auditionEnabled;
 
     public bool IsMuted => _muted;
@@ -230,9 +230,9 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
     /// TxService.TxActiveChanged subscriber. On the rising edge (TX
     /// engaging via MOX, TUN, or TwoTone) drains the RX audio ring so
     /// the operator hears instant silence rather than the accumulated
-    /// pre-TX backlog. The audition ring is left alone — audition is
-    /// gated separately and pre-MOX preview is meaningful right up to
-    /// the MOX edge; the existing audition gates handle the rest.
+    /// pre-TX backlog. The local side-channel ring is left alone because its
+    /// publishers are gated separately; the existing side-channel gates handle
+    /// the rest.
     /// On falling edge (TX releasing → back to RX) this is a no-op
     /// because the ring is already empty after the drain; new RX
     /// samples land in an empty ring and reach the speaker promptly.
@@ -301,13 +301,12 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
             Interlocked.Add(ref _underrunSamples, totalFrames - read);
         }
 
-        // Audition mixing: when the operator has audition turned on,
-        // sum the audio plugin chain's output into the mono buffer
-        // BEFORE channel expansion. We use a second stack-alloc'd
-        // scratch span so we don't touch the audition ring on the
-        // common audition-off path. Audition underrun is benign — the
-        // operator just hears silence for that gap, which is what they
-        // expect when the mic isn't producing.
+        // Local side-channel mixing: when enabled, sum published mono monitor
+        // samples into the RX mono buffer BEFORE channel expansion. We use a
+        // second stack-alloc'd scratch span so we don't touch the side-channel
+        // ring on the common disabled path. Underrun is benign — the operator
+        // just hears silence for that gap, which is what they expect when the
+        // publisher isn't producing.
         if (_auditionEnabled)
         {
             Span<float> aud = totalFrames <= 4096

@@ -22,6 +22,7 @@ import {
   signalEnhanceSettingsFromState,
   useSignalEnhanceStore,
   type SignalEnhanceScene,
+  type SignalEnhancePersisted,
   type SignalEnhancePresetId,
 } from '../dsp/signal-estimator';
 import { useConnectionStore } from '../state/connection-store';
@@ -59,15 +60,31 @@ function publishSceneStatus(scene: SignalEnhanceScene): void {
   });
 }
 
+function mergeHydratedSettings(
+  server: SignalEnhancePersisted,
+  initial: SignalEnhancePersisted,
+  current: SignalEnhancePersisted,
+): SignalEnhancePersisted {
+  const merged: SignalEnhancePersisted = { ...server };
+  for (const key of Object.keys(server) as Array<keyof SignalEnhancePersisted>) {
+    if (!Object.is(current[key], initial[key])) {
+      (merged[key] as SignalEnhancePersisted[typeof key]) = current[key];
+    }
+  }
+  return merged;
+}
+
 // Always-mounted controller for Settings > DSP > Signal Intelligence.
 // The settings panel only edits state; this component performs the live
 // automation while the operator is back on the panadapter.
 export function SignalIntelligenceController() {
+  const initialSettingsRef = useRef<SignalEnhancePersisted | null>(null);
   const initialSettingsJsonRef = useRef<string | null>(null);
+  if (initialSettingsRef.current === null) {
+    initialSettingsRef.current = signalEnhanceSettingsFromState(useSignalEnhanceStore.getState());
+  }
   if (initialSettingsJsonRef.current === null) {
-    initialSettingsJsonRef.current = JSON.stringify(
-      signalEnhanceSettingsFromState(useSignalEnhanceStore.getState()),
-    );
+    initialSettingsJsonRef.current = JSON.stringify(initialSettingsRef.current);
   }
 
   useEffect(() => {
@@ -113,12 +130,19 @@ export function SignalIntelligenceController() {
 
     fetchDisplayIntelligenceSettings()
       .then((settings) => {
-        const currentJson = JSON.stringify(signalEnhanceSettingsFromState(useSignalEnhanceStore.getState()));
-        if (!active || touched || currentJson !== initialSettingsJsonRef.current) return;
+        const current = signalEnhanceSettingsFromState(useSignalEnhanceStore.getState());
+        const currentJson = JSON.stringify(current);
+        const localChanged = touched || currentJson !== initialSettingsJsonRef.current;
+        if (!active) return;
+        const serverJson = JSON.stringify(settings);
+        const next = localChanged
+          ? mergeHydratedSettings(settings, initialSettingsRef.current!, current)
+          : settings;
         hydrating = true;
-        useSignalEnhanceStore.getState().applySignalEnhanceSettings(settings);
+        useSignalEnhanceStore.getState().applySignalEnhanceSettings(next);
         hydrating = false;
-        lastSavedJson = JSON.stringify(signalEnhanceSettingsFromState(useSignalEnhanceStore.getState()));
+        lastSavedJson = localChanged ? serverJson : JSON.stringify(signalEnhanceSettingsFromState(useSignalEnhanceStore.getState()));
+        if (localChanged) scheduleSave();
       })
       .catch(() => {
         /* Browser-local Signal Intelligence settings stay active if the backend is unavailable. */

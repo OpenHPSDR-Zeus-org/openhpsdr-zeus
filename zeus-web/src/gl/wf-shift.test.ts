@@ -67,10 +67,36 @@ describe('planWaterfallUpdate', () => {
     ).toEqual({ kind: 'reset', reason: 'width' });
   });
 
-  it('resets when hzPerPixel changes (sampleRate or span change)', () => {
+  it('rescales when hzPerPixel changes and spans overlap', () => {
     expect(
       planWaterfallUpdate({ ...base, nextHzPerPixel: 50 }),
-    ).toEqual({ kind: 'reset', reason: 'hzPerPixel' });
+    ).toEqual({
+      kind: 'rescale',
+      srcXScale: 0.5,
+      srcCenterOffsetUv: 0,
+    });
+  });
+
+  it('includes center offset when rescaling during a tune', () => {
+    const d = planWaterfallUpdate({
+      ...base,
+      nextCenterHz: 14_201_000n,
+      nextHzPerPixel: 50,
+    });
+    expect(d).toMatchObject({
+      kind: 'rescale',
+      srcXScale: 0.5,
+    });
+    expect(d.kind === 'rescale' ? d.srcCenterOffsetUv : 0).toBeCloseTo(1000 / (1024 * 100));
+  });
+
+  it('resets when a zoomed span no longer overlaps old history', () => {
+    const d = planWaterfallUpdate({
+      ...base,
+      nextCenterHz: 14_400_000n,
+      nextHzPerPixel: 50,
+    });
+    expect(d).toEqual({ kind: 'reset', reason: 'span' });
   });
 
   it('pushes a row when center is unchanged', () => {

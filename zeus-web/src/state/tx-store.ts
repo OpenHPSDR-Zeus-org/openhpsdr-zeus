@@ -498,6 +498,7 @@ export const useTxStore = create<TxState>()(
           psTxFeedbackAttenuationDb: s.psTxFeedbackAttenuationDb,
           psTxFeedbackAttenuationDbMin: s.psTxFeedbackAttenuationDbMin,
           psCalibrationStalled: s.psCalibrationStalled ?? false,
+          txMonitorEnabled: s.txMonitorEnabled,
           twoToneFreq1: s.twoToneFreq1,
           twoToneFreq2: s.twoToneFreq2,
           twoToneMag: s.twoToneMag,

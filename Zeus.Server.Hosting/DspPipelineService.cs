@@ -730,9 +730,6 @@ public class DspPipelineService : BackgroundService,
         // push to the P2 client directly (ActiveClient is P1-only), so we
         // listen for changes here and forward them to the live P2 client.
         _radio.FrequencyCorrectionFactorChanged += OnFrequencyCorrectionFactorChanged;
-        // Wire up Auto-AGC: feed RX meter readings to RadioService control loop
-        RxMeterUpdated += (channelId, dbm) => _radio.HandleRxMeterForAutoAgc(dbm, Environment.TickCount64);
-
         using var timer = new PeriodicTimer(TickPeriod);
 
         try
@@ -2515,6 +2512,7 @@ public class DspPipelineService : BackgroundService,
             //
             var rx = engine.GetRxStageMeters(channel);
             var v2 = BuildRxMetersV2(rx, rxCalOffsetDb);
+            _radio.HandleRxMetersForAutoAgc(dbm, v2.AdcPk, v2.AgcGain, Environment.TickCount64);
             _hub.Broadcast(v2);
             RxMetersV2Updated?.Invoke(channel, v2);
         }

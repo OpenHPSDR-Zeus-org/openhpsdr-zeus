@@ -126,12 +126,14 @@ public class AudioPluginBridgeProcessLivePreviewTests
         Assert.False(spy.LastCtxMox);
     }
 
-    // -- Audition wiring -----------------------------------------------
+    // -- Full-chain audition split -------------------------------------
 
     [Fact]
-    public void Audition_Enabled_Publishes_Chain_Output_To_Sink()
+    public void Preview_DoesNotPublish_PluginOnlyOutput_ToAuditionSink()
     {
-        // Pass-through plugin so we can assert what the sink received.
+        // Audio Suite Audition now uses the WDSP TX-monitor path. The
+        // live-preview tap still runs plugins for meters, but it must not
+        // publish plugin-only audio to the legacy local sink.
         var spy = new SpyPlugin();
         var sink = new SpyAuditionSink(enabledInitial: true);
         var bridge = new AudioPluginBridge(
@@ -144,18 +146,15 @@ public class AudioPluginBridgeProcessLivePreviewTests
 
         RunPreview(bridge, 256);
 
-        Assert.Equal(1, sink.PublishCallCount);
-        Assert.Equal(256, sink.LastPublishLength);
-        Assert.Equal(48_000, sink.LastSampleRate);
+        Assert.Equal(1, spy.ProcessCallCount);
+        Assert.Equal(0, sink.PublishCallCount);
     }
 
     [Fact]
-    public void Audition_Disabled_Skips_Sink_But_Still_Updates_Meters()
+    public void Preview_SinkDisabled_StillUpdatesMeters()
     {
-        // Meter-only path — the chain still runs (plugins see Process)
-        // but the audition sink should never see the output. The
-        // IsEnabled short-circuit also keeps the cost of the audition
-        // tap to a single virtual call.
+        // Meter-only path — the chain still runs (plugins see Process), but
+        // audible monitoring is owned by TX Monitor, not this local sink.
         var spy = new SpyPlugin();
         var sink = new SpyAuditionSink(enabledInitial: false);
         var bridge = new AudioPluginBridge(
@@ -173,7 +172,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
     }
 
     [Fact]
-    public void Audition_Skipped_When_Mox_On_Even_If_Enabled()
+    public void Preview_Skipped_When_Mox_On_Even_If_SinkEnabled()
     {
         // Existing MOX gate wins: even with audition turned on, the
         // preview path short-circuits on MOX and the audition sink
@@ -195,7 +194,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
     }
 
     [Fact]
-    public void Audition_Enabled_Publishes_Sanitized_Chain_Output_To_Sink()
+    public void Preview_DirtyPluginOutput_DoesNotReachAuditionSink()
     {
         var sink = new SpyAuditionSink(enabledInitial: true);
         var bridge = new AudioPluginBridge(
@@ -208,7 +207,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
 
         RunPreview(bridge, 6);
 
-        Assert.Equal<float>(new float[] { 0f, 0f, 0f, 1f, -1f, 0.25f }, sink.LastSamples);
+        Assert.Equal(0, sink.PublishCallCount);
     }
 
     [Fact]

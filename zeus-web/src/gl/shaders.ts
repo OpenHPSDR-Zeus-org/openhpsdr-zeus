@@ -176,19 +176,22 @@ void main() {
   fragColor = vec4(c.rgb * a, a);
 }`;
 
-// Horizontal-shift pass for doc 08 §5 ping-pong: sample the previous history
-// at vUv.x - shiftUv, fall back to a background-noise seed dB where the shift
-// exposes fresh columns. Rendered into the inactive R32F texture; the main
-// WF_FS then reads from the now-active texture next draw.
-export const WF_SHIFT_FS = /* glsl */ `#version 300 es
+// Horizontal remap pass for doc 08 §5 ping-pong: sample the previous history
+// at the absolute-frequency equivalent of the destination x. Plain retunes
+// use scale=1 and an offset; zoom changes use scale=nextHzPerPixel/oldHzPerPixel
+// so the old waterfall history narrows/widens around the new center instead
+// of being wiped. Rendered into the inactive R32F texture; the main WF_FS then
+// reads from the now-active texture next draw.
+export const WF_REMAP_FS = /* glsl */ `#version 300 es
 precision highp float;
 in vec2 vUv;
 uniform sampler2D uSrc;
-uniform float uShiftUv;
+uniform float uSrcXScale;
+uniform float uSrcCenterOffsetUv;
 uniform float uSeedDb;
 layout(location = 0) out vec4 fragColor;
 void main() {
-  float srcX = vUv.x - uShiftUv;
+  float srcX = 0.5 + uSrcCenterOffsetUv + (vUv.x - 0.5) * uSrcXScale;
   float v = (srcX < 0.0 || srcX > 1.0)
     ? uSeedDb
     : texture(uSrc, vec2(srcX, vUv.y)).r;

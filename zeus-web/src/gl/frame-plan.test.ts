@@ -48,12 +48,13 @@ describe('frame-plan decision semantics (parity with the per-component trackers)
     expect(d3.kind).toBe('shift');
   });
 
-  it('geometry changes are resets', () => {
+  it('width changes reset but zoom changes rescale overlapping history', () => {
     planForFrame({ seq: 1, centerHz: 14_200_000n, hzPerPixel: HZPP, width: W });
     const dWidth = planForFrame({ seq: 2, centerHz: 14_200_000n, hzPerPixel: HZPP, width: W / 2 });
     expect(dWidth.kind).toBe('reset');
     const dZoom = planForFrame({ seq: 3, centerHz: 14_200_000n, hzPerPixel: HZPP / 2, width: W / 2 });
-    expect(dZoom.kind).toBe('reset');
+    expect(dZoom).toMatchObject({ kind: 'rescale', srcXScale: 0.5 });
+    expect(plannedDataCenterHz()).toBe(14_200_000n);
   });
 
   it('a move ≥ the full span is a reset', () => {

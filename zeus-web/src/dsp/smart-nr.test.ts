@@ -176,6 +176,34 @@ describe('smart NR supervisor', () => {
     expect(rec.nr.nbMode).toBe('Off');
   });
 
+  it('reports coherent subthreshold SSB as a weak-signal NR2 profile', () => {
+    const spec = noise();
+    const conf = confidence();
+    spec[119] = NOISE_DB + 9.4;
+    spec[120] = NOISE_DB + 9.9;
+    spec[121] = NOISE_DB + 9.3;
+    conf[119] = 0.72;
+    conf[120] = 0.84;
+    conf[121] = 0.72;
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      confidence: conf,
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'LSB',
+    })!;
+
+    expect(rec.condition.maxSnrDb).toBeLessThan(8);
+    expect(rec.condition.coherentSubthresholdSignal).toBe(true);
+    expect(rec.condition.weakSparse).toBe(true);
+    expect(rec.nr.nrMode).toBe('Emnr');
+    expect(rec.nr.emnrPost2Factor).toBe(12);
+    expect(rec.nr.emnrPost2Nlevel).toBe(12);
+    expect(rec.reason).toContain('coherent weak-signal');
+    expect(rec.reason).toContain('subthreshold ridge');
+  });
+
   it('recommends NR4/SBNR for weak CW and digital ridges', () => {
     const spec = noise();
     spec[120] = NOISE_DB + 14;
@@ -218,6 +246,60 @@ describe('smart NR supervisor', () => {
     expect(rec.nr.emnrAeRun).toBe(true);
     expect(rec.nr.emnrPost2Run).toBe(true);
     expect(rec.nr.snbEnabled).toBe(true);
+  });
+
+  it('uses low-artifact NR2 for live-diagnostic coherent SSB copy assist', () => {
+    const spec = noise();
+    const conf = confidence();
+    for (let i = 64; i < 164; i += 4) {
+      spec[i] = NOISE_DB + 32;
+      conf[i] = 0.86;
+    }
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      confidence: conf,
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'USB',
+    })!;
+
+    expect(rec.condition.weakSparse).toBe(false);
+    expect(rec.condition.denseNoise).toBe(false);
+    expect(rec.condition.tonalInterference).toBe(false);
+    expect(rec.condition.coherentCopySignal).toBe(true);
+    expect(rec.nr.nrMode).toBe('Emnr');
+    expect(rec.nr.emnrPost2Factor).toBe(11);
+    expect(rec.nr.emnrPost2Nlevel).toBe(11);
+    expect(rec.nr.nbMode).toBe('Off');
+    expect(rec.nr.snbEnabled).toBe(false);
+    expect(rec.reason).toContain('copy-assist');
+  });
+
+  it('treats spread coherent SSB peaks as copy assist instead of a notch-only case', () => {
+    const spec = noise();
+    const conf = confidence();
+    for (let i = 72; i < 144; i += 4) {
+      spec[i] = NOISE_DB + 29;
+      conf[i] = 0.86;
+    }
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      confidence: conf,
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'USB',
+    })!;
+
+    expect(rec.condition.coherentPeakCount).toBe(18);
+    expect(rec.condition.coherentOccupancy6).toBeGreaterThan(0.06);
+    expect(rec.condition.tonalInterference).toBe(false);
+    expect(rec.condition.coherentCopySignal).toBe(true);
+    expect(rec.nr.nrMode).toBe('Emnr');
+    expect(rec.nr.anfEnabled).toBe(false);
+    expect(rec.nr.nbpNotchesEnabled).toBe(false);
+    expect(rec.reason).toContain('copy-assist');
   });
 
   it('does not mistake a lone low-confidence spike for a weak signal or tone', () => {
