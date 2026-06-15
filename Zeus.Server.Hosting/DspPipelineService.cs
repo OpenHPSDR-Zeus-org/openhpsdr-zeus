@@ -62,6 +62,7 @@ public class DspPipelineService : BackgroundService,
     private const int SyntheticSampleRateHz = 192_000;
     public const int AudioOutputRateHz = 48_000;
     private const int AudioDrainCapacity = 2048;
+    private const float DisplayInvalidBinDb = -200f;
     private static readonly TimeSpan TickPeriod = TimeSpan.FromMilliseconds(1000.0 / 30.0);
 
     private readonly RadioService _radio;
@@ -140,6 +141,15 @@ public class DspPipelineService : BackgroundService,
             {
                 samples[i] = -1f;
             }
+        }
+    }
+
+    internal static void SanitizeDisplayBuffer(Span<float> dbBins)
+    {
+        for (int i = 0; i < dbBins.Length; i++)
+        {
+            if (!float.IsFinite(dbBins[i]))
+                dbBins[i] = DisplayInvalidBinDb;
         }
     }
 
@@ -1978,6 +1988,8 @@ public class DspPipelineService : BackgroundService,
             // (still flagged invalid, but bandwidth wasted and timing-sensitive).
             if (pan) Array.Reverse(panBuf);
             if (wf) Array.Reverse(wfBuf);
+            if (pan) SanitizeDisplayBuffer(panBuf);
+            if (wf) SanitizeDisplayBuffer(wfBuf);
 
             var flags = DisplayBodyFlags.None;
             if (pan) flags |= DisplayBodyFlags.PanValid;

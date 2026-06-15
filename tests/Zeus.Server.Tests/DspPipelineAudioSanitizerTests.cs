@@ -28,4 +28,27 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.Equal(-1f, samples[4]);
         Assert.Equal(0.125f, samples[5]);
     }
+
+    [Fact]
+    public void SanitizeDisplayBuffer_ReplacesOnlyNonFiniteBins()
+    {
+        float[] bins =
+        {
+            -140.5f,
+            float.NaN,
+            -73.25f,
+            float.PositiveInfinity,
+            12.5f,
+            float.NegativeInfinity,
+        };
+
+        DspPipelineService.SanitizeDisplayBuffer(bins);
+
+        Assert.Equal(-140.5f, bins[0]);
+        Assert.Equal(-200f, bins[1]);
+        Assert.Equal(-73.25f, bins[2]);
+        Assert.Equal(-200f, bins[3]);
+        Assert.Equal(12.5f, bins[4]);
+        Assert.Equal(-200f, bins[5]);
+    }
 }
