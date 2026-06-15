@@ -937,6 +937,30 @@ describe('POST helpers', () => {
         lastRateTimestampUtc: '2026-06-15T13:00:00Z',
         senderRunning: true,
       },
+      stage: {
+        schemaVersion: 1,
+        source: 'wdsp-txa-meter-ring',
+        status: 'active',
+        hostTxActive: true,
+        micPkDbfs: -10.2,
+        micAvDbfs: -21.4,
+        eqPkDbfs: -9.8,
+        eqAvDbfs: -20.5,
+        lvlrPkDbfs: -8.5,
+        lvlrAvDbfs: -18.4,
+        lvlrGrDb: 2.1,
+        cfcPkDbfs: -7.7,
+        cfcAvDbfs: -17.2,
+        cfcGrDb: 1.4,
+        compPkDbfs: -6.8,
+        compAvDbfs: -16.9,
+        alcPkDbfs: -4.2,
+        alcAvDbfs: -15.1,
+        alcGrDb: 3.5,
+        outPkDbfs: -1.8,
+        outAvDbfs: -12.0,
+        diagnosticRecommendation: 'WDSP TXA stage meters are live.',
+      },
       egress: {
         schemaVersion: 1,
         generatedUtc: '2026-06-15T13:00:01Z',
@@ -990,6 +1014,14 @@ describe('POST helpers', () => {
     expect(diag.protocol2?.packetsSent).toBe(1);
     expect(diag.protocol2?.lastPacketsPerSecond).toBe(800);
     expect(diag.protocol2?.senderRunning).toBe(true);
+    expect(diag.stage.status).toBe('active');
+    expect(diag.stage.source).toBe('wdsp-txa-meter-ring');
+    expect(diag.stage.micPkDbfs).toBe(-10.2);
+    expect(diag.stage.lvlrGrDb).toBe(2.1);
+    expect(diag.stage.cfcGrDb).toBe(1.4);
+    expect(diag.stage.alcGrDb).toBe(3.5);
+    expect(diag.stage.outPkDbfs).toBe(-1.8);
+    expect(diag.stage.diagnosticRecommendation).toBe('WDSP TXA stage meters are live.');
     expect(diag.egress.healthStatus).toBe('p2-live');
     expect(diag.egress.p2Live).toBe(true);
     expect(diag.egress.p2LastActivityAgeMs).toBe(1000);

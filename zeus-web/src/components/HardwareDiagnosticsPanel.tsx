@@ -397,6 +397,30 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
       />
       <FieldGrid
         fields={[
+          { label: 'TXA Stage', value: diag.stage.status },
+          { label: 'Stage Source', value: diag.stage.source },
+          { label: 'Stage Host TX', value: boolLabel(diag.stage.hostTxActive) },
+          { label: 'Mic Pk', value: db(diag.stage.micPkDbfs) },
+          { label: 'Mic Av', value: db(diag.stage.micAvDbfs) },
+          { label: 'EQ Pk', value: db(diag.stage.eqPkDbfs) },
+          { label: 'EQ Av', value: db(diag.stage.eqAvDbfs) },
+          { label: 'Leveler Pk', value: db(diag.stage.lvlrPkDbfs) },
+          { label: 'Leveler Av', value: db(diag.stage.lvlrAvDbfs) },
+          { label: 'Leveler GR', value: db(diag.stage.lvlrGrDb) },
+          { label: 'CFC Pk', value: db(diag.stage.cfcPkDbfs) },
+          { label: 'CFC Av', value: db(diag.stage.cfcAvDbfs) },
+          { label: 'CFC GR', value: db(diag.stage.cfcGrDb) },
+          { label: 'Comp Pk', value: db(diag.stage.compPkDbfs) },
+          { label: 'Comp Av', value: db(diag.stage.compAvDbfs) },
+          { label: 'ALC Pk', value: db(diag.stage.alcPkDbfs) },
+          { label: 'ALC Av', value: db(diag.stage.alcAvDbfs) },
+          { label: 'ALC GR', value: db(diag.stage.alcGrDb) },
+          { label: 'Out Pk', value: db(diag.stage.outPkDbfs) },
+          { label: 'Out Av', value: db(diag.stage.outAvDbfs) },
+        ]}
+      />
+      <FieldGrid
+        fields={[
           { label: 'P2 Attached', value: boolLabel(Boolean(p2)) },
           { label: 'Sender Running', value: boolLabel(p2?.senderRunning) },
           { label: 'IQ Samples In', value: count(p2?.inputComplexSamples) },
@@ -421,6 +445,7 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
           { label: 'VST Degraded', value: count(diag.vstEngine?.degradedBlocks) },
         ]}
       />
+      <DiagnosticRecommendation text={diag.stage.diagnosticRecommendation} />
       <DiagnosticRecommendation text={egress.diagnosticRecommendation} />
     </div>
   );

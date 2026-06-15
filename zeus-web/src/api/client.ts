@@ -885,6 +885,31 @@ export type VstEngineDiagnosticsDto = {
   degradedBlocks: number;
 };
 
+export type TxStageDiagnosticsDto = {
+  schemaVersion: number;
+  source: string;
+  status: string;
+  hostTxActive: boolean;
+  micPkDbfs: number | null;
+  micAvDbfs: number | null;
+  eqPkDbfs: number | null;
+  eqAvDbfs: number | null;
+  lvlrPkDbfs: number | null;
+  lvlrAvDbfs: number | null;
+  lvlrGrDb: number;
+  cfcPkDbfs: number | null;
+  cfcAvDbfs: number | null;
+  cfcGrDb: number;
+  compPkDbfs: number | null;
+  compAvDbfs: number | null;
+  alcPkDbfs: number | null;
+  alcAvDbfs: number | null;
+  alcGrDb: number;
+  outPkDbfs: number | null;
+  outAvDbfs: number | null;
+  diagnosticRecommendation: string | null;
+};
+
 export type TxDiagnosticsDto = {
   generatedUtc: string;
   iqSourceType: string | null;
@@ -892,6 +917,7 @@ export type TxDiagnosticsDto = {
   ring: TxRingDiagnosticsDto;
   ingest: TxIngestDiagnosticsDto;
   protocol2: Protocol2TxIqDiagnosticsDto | null;
+  stage: TxStageDiagnosticsDto;
   egress: TxEgressHealthDto;
   txPlugins: TxPluginDiagnosticsDto | null;
   vstEngine: VstEngineDiagnosticsDto | null;
@@ -1959,6 +1985,34 @@ function normalizeTxEgressHealth(raw: unknown): TxEgressHealthDto {
   };
 }
 
+function normalizeTxStageDiagnostics(raw: unknown): TxStageDiagnosticsDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    source: diagString(r.source) ?? 'unknown',
+    status: diagString(r.status) ?? 'idle',
+    hostTxActive: Boolean(r.hostTxActive),
+    micPkDbfs: diagNumber(r.micPkDbfs),
+    micAvDbfs: diagNumber(r.micAvDbfs),
+    eqPkDbfs: diagNumber(r.eqPkDbfs),
+    eqAvDbfs: diagNumber(r.eqAvDbfs),
+    lvlrPkDbfs: diagNumber(r.lvlrPkDbfs),
+    lvlrAvDbfs: diagNumber(r.lvlrAvDbfs),
+    lvlrGrDb: diagNumber(r.lvlrGrDb) ?? 0,
+    cfcPkDbfs: diagNumber(r.cfcPkDbfs),
+    cfcAvDbfs: diagNumber(r.cfcAvDbfs),
+    cfcGrDb: diagNumber(r.cfcGrDb) ?? 0,
+    compPkDbfs: diagNumber(r.compPkDbfs),
+    compAvDbfs: diagNumber(r.compAvDbfs),
+    alcPkDbfs: diagNumber(r.alcPkDbfs),
+    alcAvDbfs: diagNumber(r.alcAvDbfs),
+    alcGrDb: diagNumber(r.alcGrDb) ?? 0,
+    outPkDbfs: diagNumber(r.outPkDbfs),
+    outAvDbfs: diagNumber(r.outAvDbfs),
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+  };
+}
+
 function normalizeTxDiagnostics(raw: unknown): TxDiagnosticsDto {
   const r = asDiagRecord(raw);
   const pluginRaw = r.txPlugins === null || r.txPlugins === undefined
@@ -1977,6 +2031,7 @@ function normalizeTxDiagnostics(raw: unknown): TxDiagnosticsDto {
     ring: normalizeTxRingDiagnostics(r.ring),
     ingest: normalizeTxIngestDiagnostics(r.ingest),
     protocol2: normalizeProtocol2TxIqDiagnostics(r.protocol2),
+    stage: normalizeTxStageDiagnostics(r.stage),
     egress: normalizeTxEgressHealth(r.egress),
     txPlugins: pluginRaw === null
       ? null

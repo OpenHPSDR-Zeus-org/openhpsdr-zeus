@@ -433,6 +433,8 @@ public static class ZeusEndpoints
             var radioState = radio.Snapshot();
             var keying = hardware.KeyingSnapshot(externalPtt.Snapshot());
             var power = hardware.PowerCalibrationSnapshot();
+            bool hostTxActive = tx.IsMoxOn || tx.IsTunOn || tx.IsTwoToneOn;
+            var txStage = dsp.CurrentEngine?.GetTxStageMeters() ?? TxStageMeters.Silent;
             var activePower = string.Equals(power.ActiveProtocol, "P2", StringComparison.OrdinalIgnoreCase)
                 ? power.P2
                 : power.P1;
@@ -447,6 +449,7 @@ public static class ZeusEndpoints
                 ring = new { ring.TotalWritten, ring.TotalRead, ring.Count, ring.Dropped, ring.Capacity, ring.RecentMag },
                 ingest = new { ingest.TotalMicSamples, ingest.TotalTxBlocks, ingest.DroppedFrames },
                 protocol2 = p2Tx,
+                stage = BuildTxStageDiagnostics(txStage, hostTxActive),
                 egress = BuildTxEgressHealth(
                     generatedUtc,
                     ring.TotalWritten,
@@ -2347,6 +2350,64 @@ public static class ZeusEndpoints
     }
 
     static bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
+
+    internal static object BuildTxStageDiagnostics(TxStageMeters stage, bool hostTxActive)
+    {
+        bool hasLevelEvidence =
+            IsUsableTxLevel(stage.MicPk)
+            || IsUsableTxLevel(stage.EqPk)
+            || IsUsableTxLevel(stage.LvlrPk)
+            || IsUsableTxLevel(stage.CfcPk)
+            || IsUsableTxLevel(stage.CompPk)
+            || IsUsableTxLevel(stage.AlcPk)
+            || IsUsableTxLevel(stage.OutPk);
+        string status = hostTxActive
+            ? hasLevelEvidence ? "active" : "waiting-for-stage-meters"
+            : "idle";
+
+        return new
+        {
+            schemaVersion = 1,
+            source = "wdsp-txa-meter-ring",
+            status,
+            hostTxActive,
+            micPkDbfs = TxLevelDb(stage.MicPk),
+            micAvDbfs = TxLevelDb(stage.MicAv),
+            eqPkDbfs = TxLevelDb(stage.EqPk),
+            eqAvDbfs = TxLevelDb(stage.EqAv),
+            lvlrPkDbfs = TxLevelDb(stage.LvlrPk),
+            lvlrAvDbfs = TxLevelDb(stage.LvlrAv),
+            lvlrGrDb = TxGainReductionDb(stage.LvlrGr),
+            cfcPkDbfs = TxLevelDb(stage.CfcPk),
+            cfcAvDbfs = TxLevelDb(stage.CfcAv),
+            cfcGrDb = TxGainReductionDb(stage.CfcGr),
+            compPkDbfs = TxLevelDb(stage.CompPk),
+            compAvDbfs = TxLevelDb(stage.CompAv),
+            alcPkDbfs = TxLevelDb(stage.AlcPk),
+            alcAvDbfs = TxLevelDb(stage.AlcAv),
+            alcGrDb = TxGainReductionDb(stage.AlcGr),
+            outPkDbfs = TxLevelDb(stage.OutPk),
+            outAvDbfs = TxLevelDb(stage.OutAv),
+            diagnosticRecommendation = status switch
+            {
+                "active" => "WDSP TXA stage meters are live; use Mic/Leveler/CFC/ALC/OUT peaks and gain reduction to tune station audio and spectral density.",
+                "waiting-for-stage-meters" => "TX is keyed but WDSP TXA stage meters have not published yet; keep feeding mic/two-tone IQ and verify the TX ingest path.",
+                _ => "TXA stage meters are idle; key MOX/TUN or enable the TX monitor path to evaluate mic, leveler, CFC, ALC, and output quality.",
+            },
+        };
+    }
+
+    private static bool IsUsableTxLevel(float value) =>
+        float.IsFinite(value) && value > -300.0f;
+
+    private static double? TxLevelDb(float value) =>
+        IsUsableTxLevel(value) ? Math.Round(value, 1) : null;
+
+    private static double TxGainReductionDb(float value)
+    {
+        if (!float.IsFinite(value)) return 0.0;
+        return Math.Round(Math.Max(0.0, value), 1);
+    }
 
     internal static TxEgressHealthDto BuildTxEgressHealth(
         DateTimeOffset generatedUtc,

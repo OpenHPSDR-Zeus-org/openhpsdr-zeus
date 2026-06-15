@@ -4,11 +4,65 @@
 
 using Zeus.Protocol2;
 using Zeus.Contracts;
+using Zeus.Dsp;
+using System.Text.Json;
 
 namespace Zeus.Server.Tests;
 
 public sealed class TxEgressHealthDiagnosticsTests
 {
+    [Fact]
+    public void BuildTxStageDiagnostics_SuppressesIdleSentinelLevels()
+    {
+        using var doc = JsonSerializer.SerializeToDocument(
+            ZeusEndpoints.BuildTxStageDiagnostics(TxStageMeters.Silent, hostTxActive: false));
+        var root = doc.RootElement;
+
+        Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("wdsp-txa-meter-ring", root.GetProperty("source").GetString());
+        Assert.Equal("idle", root.GetProperty("status").GetString());
+        Assert.False(root.GetProperty("hostTxActive").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("micPkDbfs").ValueKind);
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("outPkDbfs").ValueKind);
+        Assert.Equal(0.0, root.GetProperty("alcGrDb").GetDouble());
+    }
+
+    [Fact]
+    public void BuildTxStageDiagnostics_ExposesFiniteStageMeters()
+    {
+        var stage = new TxStageMeters(
+            MicPk: -10.24f,
+            MicAv: -21.4f,
+            EqPk: -9.8f,
+            EqAv: -20.5f,
+            LvlrPk: -8.5f,
+            LvlrAv: -18.4f,
+            LvlrGr: 2.12f,
+            CfcPk: -7.7f,
+            CfcAv: -17.2f,
+            CfcGr: 1.44f,
+            CompPk: -6.8f,
+            CompAv: -16.9f,
+            AlcPk: -4.2f,
+            AlcAv: -15.1f,
+            AlcGr: 3.51f,
+            OutPk: -1.8f,
+            OutAv: -12.0f);
+
+        using var doc = JsonSerializer.SerializeToDocument(
+            ZeusEndpoints.BuildTxStageDiagnostics(stage, hostTxActive: true));
+        var root = doc.RootElement;
+
+        Assert.Equal("active", root.GetProperty("status").GetString());
+        Assert.True(root.GetProperty("hostTxActive").GetBoolean());
+        Assert.Equal(-10.2, root.GetProperty("micPkDbfs").GetDouble());
+        Assert.Equal(2.1, root.GetProperty("lvlrGrDb").GetDouble());
+        Assert.Equal(1.4, root.GetProperty("cfcGrDb").GetDouble());
+        Assert.Equal(3.5, root.GetProperty("alcGrDb").GetDouble());
+        Assert.Equal(-1.8, root.GetProperty("outPkDbfs").GetDouble());
+        Assert.Contains("stage meters are live", root.GetProperty("diagnosticRecommendation").GetString());
+    }
+
     [Fact]
     public void BuildTxEgressHealth_MarksRecentP2RateAsLive()
     {
