@@ -197,6 +197,55 @@ public sealed record HardwareKeyingStatusDto(
     string DiagnosticRecommendation,
     DateTimeOffset GeneratedUtc);
 
+public sealed record RadioPowerReadingDto(
+    long Packets,
+    DateTimeOffset? LastUpdatedUtc,
+    ushort? ExciterAdc,
+    ushort? FwdAdc,
+    ushort? RevAdc,
+    double? FwdWatts,
+    double? RefWatts,
+    double? Swr);
+
+public sealed record RadioPowerCalibrationDto(
+    int SchemaVersion,
+    string? ActiveProtocol,
+    string ConnectedBoard,
+    string EffectiveBoard,
+    string OrionMkIIVariant,
+    string CalibrationBoard,
+    double BridgeVolt,
+    double RefVoltage,
+    int AdcCalOffset,
+    double CalibrationMaxWatts,
+    bool CalibrationFallbackApplied,
+    double CapabilityMaxPowerWatts,
+    RadioPowerReadingDto P1,
+    RadioPowerReadingDto P2,
+    string DiagnosticRecommendation,
+    DateTimeOffset GeneratedUtc);
+
+public sealed record RadioSupplyReadingDto(
+    long Packets,
+    DateTimeOffset? LastUpdatedUtc,
+    ushort? SupplyVoltsAdc,
+    double? SupplyVolts);
+
+public sealed record RadioSupplyAlarmsDto(
+    int SchemaVersion,
+    string? ActiveProtocol,
+    string EffectiveBoard,
+    string OrionMkIIVariant,
+    bool SupportsSupplyTelemetry,
+    int AdcSupplyMv,
+    bool ActiveThresholdsConfigured,
+    bool AlarmActive,
+    string AlarmStatus,
+    RadioSupplyReadingDto P1,
+    RadioSupplyReadingDto P2,
+    string DiagnosticRecommendation,
+    DateTimeOffset GeneratedUtc);
+
 // Operator-facing AGC configuration (issue: DSP controls Thetis parity §4).
 // Mode selects a canned profile (Long/Slow/Med/Fast/Fixed) or Custom; the
 // nullable params are only consulted in Custom mode (and FixedGainDb only in

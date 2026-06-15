@@ -212,6 +212,92 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         }
     }
 
+    public RadioPowerCalibrationDto PowerCalibrationSnapshot()
+    {
+        var connected = _radio.ConnectedBoardKind;
+        var effective = _radio.EffectiveBoardKind;
+        var variant = _radio.EffectiveOrionMkIIVariant;
+        var cal = RadioCalibrations.For(connected, variant);
+        var caps = BoardCapabilitiesTable.For(effective, variant);
+
+        lock (_sync)
+        {
+            var p1 = BuildPowerReading(
+                _p1Packets,
+                _p1LastUpdatedUtc,
+                _p1ExciterAdc,
+                _p1FwdAdc,
+                _p1RevAdc,
+                cal);
+            var p2 = BuildPowerReading(
+                _p2Packets,
+                _p2LastUpdatedUtc,
+                _p2HadSample ? _p2Last.ExciterAdc : (ushort?)null,
+                _p2HadSample ? _p2Last.FwdAdc : (ushort?)null,
+                _p2HadSample ? _p2Last.RevAdc : (ushort?)null,
+                cal);
+            var recommendation = p1.FwdWatts is null && p2.FwdWatts is null
+                ? "No PA forward/reflected telemetry has been observed yet; connect and key the radio at low drive to validate the bridge ADC path."
+                : "PA telemetry is decoded with the same board calibration and watts/SWR math used by the live TX meters.";
+
+            return new(
+                SchemaVersion: 1,
+                ActiveProtocol: _activeProtocol,
+                ConnectedBoard: connected.ToString(),
+                EffectiveBoard: effective.ToString(),
+                OrionMkIIVariant: variant.ToString(),
+                CalibrationBoard: connected.ToString(),
+                BridgeVolt: cal.BridgeVolt,
+                RefVoltage: cal.RefVoltage,
+                AdcCalOffset: cal.AdcCalOffset,
+                CalibrationMaxWatts: cal.MaxWatts,
+                CalibrationFallbackApplied: connected == HpsdrBoardKind.Unknown,
+                CapabilityMaxPowerWatts: caps.MaxPowerWatts,
+                P1: p1,
+                P2: p2,
+                DiagnosticRecommendation: recommendation,
+                GeneratedUtc: DateTimeOffset.UtcNow);
+        }
+    }
+
+    public RadioSupplyAlarmsDto SupplyAlarmsSnapshot()
+    {
+        var effective = _radio.EffectiveBoardKind;
+        var variant = _radio.EffectiveOrionMkIIVariant;
+        var caps = BoardCapabilitiesTable.For(effective, variant);
+
+        lock (_sync)
+        {
+            var p1 = BuildSupplyReading(
+                _p1Packets,
+                _p1LastUpdatedUtc,
+                _p1SupplyVoltsAdc,
+                caps.AdcSupplyMv);
+            var p2 = BuildSupplyReading(
+                _p2Packets,
+                _p2LastUpdatedUtc,
+                _p2HadSample ? _p2Last.SupplyVoltsAdc : (ushort?)null,
+                caps.AdcSupplyMv);
+            var (alarmActive, alarmStatus, recommendation) =
+                EvaluateSupplyTelemetry(caps, p1, p2);
+
+            return new(
+                SchemaVersion: 1,
+                ActiveProtocol: _activeProtocol,
+                EffectiveBoard: effective.ToString(),
+                OrionMkIIVariant: variant.ToString(),
+                SupportsSupplyTelemetry: caps.HasVolts,
+                AdcSupplyMv: caps.AdcSupplyMv,
+                ActiveThresholdsConfigured: false,
+                AlarmActive: alarmActive,
+                AlarmStatus: alarmStatus,
+                P1: p1,
+                P2: p2,
+                DiagnosticRecommendation: recommendation,
+                GeneratedUtc: DateTimeOffset.UtcNow);
+        }
+    }
+
     public void ResetMapping()
     {
         lock (_sync)
@@ -330,6 +416,94 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         client.HiPriorityStatusPayloadReceived -= OnP2HiPriorityPayload;
         _p2Client = null;
     }
+
+    private static RadioPowerReadingDto BuildPowerReading(
+        long packets,
+        DateTimeOffset? lastUpdatedUtc,
+        ushort? exciterAdc,
+        ushort? fwdAdc,
+        ushort? revAdc,
+        RadioCalibration cal)
+    {
+        double? fwdWatts = null;
+        double? refWatts = null;
+        double? swr = null;
+        if (fwdAdc is { } fwd && revAdc is { } rev)
+        {
+            var computed = TxMetersService.ComputeMeters(fwd, rev, cal);
+            fwdWatts = Round(computed.FwdWatts, 2);
+            refWatts = Round(computed.RefWatts, 2);
+            swr = Round(computed.Swr, 2);
+        }
+
+        return new(
+            Packets: packets,
+            LastUpdatedUtc: lastUpdatedUtc,
+            ExciterAdc: exciterAdc,
+            FwdAdc: fwdAdc,
+            RevAdc: revAdc,
+            FwdWatts: fwdWatts,
+            RefWatts: refWatts,
+            Swr: swr);
+    }
+
+    private static RadioSupplyReadingDto BuildSupplyReading(
+        long packets,
+        DateTimeOffset? lastUpdatedUtc,
+        ushort? supplyVoltsAdc,
+        int adcSupplyMv)
+    {
+        var volts = supplyVoltsAdc is { } adc && adcSupplyMv > 0
+            ? Round(adc * adcSupplyMv / 1000.0, 2)
+            : (double?)null;
+        return new(
+            Packets: packets,
+            LastUpdatedUtc: lastUpdatedUtc,
+            SupplyVoltsAdc: supplyVoltsAdc,
+            SupplyVolts: volts);
+    }
+
+    private static (bool AlarmActive, string AlarmStatus, string Recommendation)
+        EvaluateSupplyTelemetry(
+            BoardCapabilities caps,
+            RadioSupplyReadingDto p1,
+            RadioSupplyReadingDto p2)
+    {
+        if (!caps.HasVolts)
+        {
+            return (
+                false,
+                "unsupported",
+                "The effective board does not advertise supply-voltage telemetry; PA protection should use SWR and timeout guards for this hardware.");
+        }
+
+        if (p1.SupplyVolts is null && p2.SupplyVolts is null)
+        {
+            return (
+                false,
+                "missing",
+                "Supply telemetry is supported but no voltage sample has arrived yet; connect the radio and watch P1/P2 telemetry before arming supply alarms.");
+        }
+
+        if (IsInvalidSupply(p1) || IsInvalidSupply(p2))
+        {
+            return (
+                true,
+                "invalid-zero",
+                "A supply telemetry sample decoded to zero volts; inspect the ADC mapping or hardware before trusting PA operation.");
+        }
+
+        return (
+            false,
+            "telemetry-ready",
+            "Live supply voltage is decoded and scaled; add per-radio high/low thresholds before using this diagnostic surface to inhibit TX.");
+    }
+
+    private static bool IsInvalidSupply(RadioSupplyReadingDto reading) =>
+        reading.SupplyVolts is { } volts && volts <= 0.0;
+
+    private static double Round(double value, int digits) =>
+        double.IsFinite(value) ? Math.Round(value, digits) : 0.0;
 
     private void OnP1Telemetry(TelemetryReading reading)
     {
@@ -1334,11 +1508,12 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             },
             candidateControls = new[]
             {
-                "planned:/api/radio/power-calibration",
-                "planned:/api/radio/supply-alarms",
+                "/api/radio/power-calibration",
+                "/api/radio/supply-alarms",
+                "/api/pa-settings",
             },
             safetyClass = "tx-monitoring-only",
-            notes = "Raw power and supply channels are exposed for calibrated meters, warning thresholds, and per-radio calibration menus.",
+            notes = "Raw P1/P2 power ADC telemetry now has a direct calibrated snapshot that reuses the live TX meter math; supply-voltage ADCs are scaled from board capabilities and exposed as advisory alarm evidence until per-radio high/low thresholds are configured.",
         },
         new
         {
