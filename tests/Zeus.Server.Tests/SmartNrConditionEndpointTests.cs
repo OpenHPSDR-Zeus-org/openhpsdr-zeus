@@ -57,6 +57,9 @@ public sealed class SmartNrConditionEndpointTests
             smartNrRecommendation = "Keep RX headroom and use gentle NR2",
             smartNrHeldByRxChain = true,
             smartNrRxChainLabel = "ADC headroom limited",
+            smartNrRxChainRecommendation = "Add 3-6 dB attenuation",
+            smartNrRxChainTone = "protect",
+            smartNrRxChainScore = 62,
             maxSnrDb = 7.14,
             coherentMaxSnrDb = 6.83,
             occupiedPct = 1.23,
@@ -85,6 +88,9 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Equal("Keep RX headroom and use gentle NR2", root.GetProperty("recommendation").GetString());
         Assert.True(root.GetProperty("heldByRxChain").GetBoolean());
         Assert.Equal("ADC headroom limited", root.GetProperty("rxChainLabel").GetString());
+        Assert.Equal("Add 3-6 dB attenuation", root.GetProperty("rxChainRecommendation").GetString());
+        Assert.Equal("protect", root.GetProperty("rxChainTone").GetString());
+        Assert.Equal(62, root.GetProperty("rxChainScore").GetInt32());
         Assert.Equal(7.1, root.GetProperty("maxSnrDb").GetDouble());
         Assert.Equal(6.8, root.GetProperty("coherentMaxSnrDb").GetDouble());
         Assert.Equal(1, root.GetProperty("peakCount").GetInt32());
@@ -107,6 +113,10 @@ public sealed class SmartNrConditionEndpointTests
             signalReason = "single coherent ridge",
             smartNrProfile = "NR2",
             smartNrRecommendation = "Keep RX headroom and use gentle NR2",
+            smartNrRxChainLabel = "AGC stressed",
+            smartNrRxChainRecommendation = "Auto AGC lowering AGC top",
+            smartNrRxChainTone = "optimize",
+            smartNrRxChainScore = 68,
             maxSnrDb = 5.64,
             coherentMaxSnrDb = 5.31,
             occupiedPct = 0.74,
@@ -130,6 +140,10 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Equal("LSB", root.GetProperty("mode").GetString());
         Assert.Equal("weak-sparse", root.GetProperty("signalProfile").GetString());
         Assert.Equal("NR2", root.GetProperty("smartNrProfile").GetString());
+        Assert.Equal("AGC stressed", root.GetProperty("smartNrRxChainLabel").GetString());
+        Assert.Equal("Auto AGC lowering AGC top", root.GetProperty("smartNrRxChainRecommendation").GetString());
+        Assert.Equal("optimize", root.GetProperty("smartNrRxChainTone").GetString());
+        Assert.Equal(68, root.GetProperty("smartNrRxChainScore").GetInt32());
         Assert.Equal(5.6, root.GetProperty("maxSnrDb").GetDouble());
         Assert.Equal(5.3, root.GetProperty("coherentMaxSnrDb").GetDouble());
         Assert.True(root.GetProperty("coherentSubthresholdSignal").GetBoolean());

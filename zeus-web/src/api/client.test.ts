@@ -731,6 +731,10 @@ describe('POST helpers', () => {
       mode: 'USB',
       signalProfile: 'dx',
       smartNrProfile: 'NR4',
+      smartNrRxChainLabel: 'ADC headroom limited',
+      smartNrRxChainRecommendation: 'Add 3-6 dB attenuation',
+      smartNrRxChainTone: 'protect',
+      smartNrRxChainScore: 62,
       maxSnrDb: 12.5,
       peakCount: 1,
       coherentSubthresholdSignal: true,
@@ -743,6 +747,10 @@ describe('POST helpers', () => {
       mode: 'USB',
       signalProfile: 'dx',
       smartNrProfile: 'NR4',
+      smartNrRxChainLabel: 'ADC headroom limited',
+      smartNrRxChainRecommendation: 'Add 3-6 dB attenuation',
+      smartNrRxChainTone: 'protect',
+      smartNrRxChainScore: 62,
       maxSnrDb: 12.5,
       peakCount: 1,
       coherentSubthresholdSignal: true,
@@ -757,6 +765,10 @@ describe('POST helpers', () => {
       mode: 'USB',
       signalProfile: 'dx',
       smartNrProfile: 'NR4',
+      smartNrRxChainLabel: 'ADC headroom limited',
+      smartNrRxChainRecommendation: 'Add 3-6 dB attenuation',
+      smartNrRxChainTone: 'protect',
+      smartNrRxChainScore: 62,
       maxSnrDb: 12.5,
       peakCount: 1,
       coherentSubthresholdSignal: true,
@@ -769,6 +781,9 @@ describe('POST helpers', () => {
     expect(scene.sourceClockSkewMs).toBe(6020);
     expect(scene.signalProfile).toBe('dx');
     expect(scene.smartNrProfile).toBe('NR4');
+    expect(scene.smartNrRxChainRecommendation).toBe('Add 3-6 dB attenuation');
+    expect(scene.smartNrRxChainTone).toBe('protect');
+    expect(scene.smartNrRxChainScore).toBe(62);
     expect(scene.coherentSubthresholdSignal).toBe(true);
   });
 
@@ -791,6 +806,10 @@ describe('POST helpers', () => {
       signalReason: 'single coherent ridge',
       smartNrProfile: 'NR2',
       smartNrRecommendation: 'Keep RX headroom and use gentle NR2',
+      smartNrRxChainLabel: 'AGC stressed',
+      smartNrRxChainRecommendation: 'Auto AGC lowering AGC top',
+      smartNrRxChainTone: 'optimize',
+      smartNrRxChainScore: 68,
       maxSnrDb: 5.6,
       coherentMaxSnrDb: 5.3,
       peakCount: 1,
@@ -810,6 +829,10 @@ describe('POST helpers', () => {
     expect(scene.sourceClientId).toBe('frontend-live');
     expect(scene.signalProfile).toBe('weak-sparse');
     expect(scene.smartNrProfile).toBe('NR2');
+    expect(scene.smartNrRxChainLabel).toBe('AGC stressed');
+    expect(scene.smartNrRxChainRecommendation).toBe('Auto AGC lowering AGC top');
+    expect(scene.smartNrRxChainTone).toBe('optimize');
+    expect(scene.smartNrRxChainScore).toBe(68);
     expect(scene.coherentSubthresholdSignal).toBe(true);
   });
 
@@ -832,6 +855,9 @@ describe('POST helpers', () => {
       recommendation: 'Keep RX headroom and use gentle NR2',
       heldByRxChain: true,
       rxChainLabel: 'ADC headroom limited',
+      rxChainRecommendation: 'Add 3-6 dB attenuation',
+      rxChainTone: 'protect',
+      rxChainScore: 62,
       maxSnrDb: 7.1,
       coherentMaxSnrDb: 6.8,
       occupiedPct: 1.2,
@@ -863,6 +889,9 @@ describe('POST helpers', () => {
     expect(condition.profile).toBe('NR2');
     expect(condition.heldByRxChain).toBe(true);
     expect(condition.rxChainLabel).toBe('ADC headroom limited');
+    expect(condition.rxChainRecommendation).toBe('Add 3-6 dB attenuation');
+    expect(condition.rxChainTone).toBe('protect');
+    expect(condition.rxChainScore).toBe(62);
     expect(condition.maxSnrDb).toBe(7.1);
     expect(condition.coherentSubthresholdSignal).toBe(true);
     expect(condition.wdspNr4SbnrAvailable).toBe(false);
