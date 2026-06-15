@@ -17,6 +17,11 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { CfcBandDto, CfcConfigDto } from '../api/client';
 import { setCfcConfig } from '../api/client';
+import {
+  DX_CFC_CONFIG,
+  ESSB_CFC_CONFIG,
+  STUDIO_SSB_CFC_CONFIG,
+} from '../audio/tx-station-profile';
 import { useTxStore } from '../state/tx-store';
 
 import './CfcSettingsPanel.css';
@@ -283,17 +288,48 @@ export function CfcSettingsPanel() {
   );
 
   const applyPreset = useCallback(
-    (preset: 'flat' | 'voice') => {
+    (preset: 'flat' | 'voice' | 'studio' | 'essb' | 'dx') => {
       if (preset === 'flat') {
         push({
           ...cfc,
+          enabled: true,
+          postEqEnabled: false,
           preCompDb: 0,
           prePeqDb: 0,
           bands: FLAT_BANDS.map((b) => ({ ...b })),
         });
+      } else if (preset === 'studio') {
+        push({
+          ...cfc,
+          enabled: true,
+          preCompDb: STUDIO_SSB_CFC_CONFIG.preCompDb,
+          prePeqDb: STUDIO_SSB_CFC_CONFIG.prePeqDb,
+          postEqEnabled: STUDIO_SSB_CFC_CONFIG.postEqEnabled,
+          bands: STUDIO_SSB_CFC_CONFIG.bands.map((b) => ({ ...b })),
+        });
+      } else if (preset === 'essb') {
+        push({
+          ...cfc,
+          enabled: true,
+          preCompDb: ESSB_CFC_CONFIG.preCompDb,
+          prePeqDb: ESSB_CFC_CONFIG.prePeqDb,
+          postEqEnabled: ESSB_CFC_CONFIG.postEqEnabled,
+          bands: ESSB_CFC_CONFIG.bands.map((b) => ({ ...b })),
+        });
+      } else if (preset === 'dx') {
+        push({
+          ...cfc,
+          enabled: true,
+          preCompDb: DX_CFC_CONFIG.preCompDb,
+          prePeqDb: DX_CFC_CONFIG.prePeqDb,
+          postEqEnabled: DX_CFC_CONFIG.postEqEnabled,
+          bands: DX_CFC_CONFIG.bands.map((b) => ({ ...b })),
+        });
       } else {
         push({
           ...cfc,
+          enabled: true,
+          postEqEnabled: true,
           preCompDb: 3,
           prePeqDb: 0,
           bands: VOICE_BANDS.map((b) => ({ ...b })),
@@ -305,6 +341,21 @@ export function CfcSettingsPanel() {
 
   const isFlat = bandsMatch(cfc.bands, FLAT_BANDS) && cfc.preCompDb === 0 && cfc.prePeqDb === 0;
   const isVoice = bandsMatch(cfc.bands, VOICE_BANDS) && cfc.preCompDb === 3 && cfc.prePeqDb === 0;
+  const isStudio =
+    bandsMatch(cfc.bands, STUDIO_SSB_CFC_CONFIG.bands) &&
+    cfc.preCompDb === STUDIO_SSB_CFC_CONFIG.preCompDb &&
+    cfc.prePeqDb === STUDIO_SSB_CFC_CONFIG.prePeqDb &&
+    cfc.postEqEnabled === STUDIO_SSB_CFC_CONFIG.postEqEnabled;
+  const isEssb =
+    bandsMatch(cfc.bands, ESSB_CFC_CONFIG.bands) &&
+    cfc.preCompDb === ESSB_CFC_CONFIG.preCompDb &&
+    cfc.prePeqDb === ESSB_CFC_CONFIG.prePeqDb &&
+    cfc.postEqEnabled === ESSB_CFC_CONFIG.postEqEnabled;
+  const isDx =
+    bandsMatch(cfc.bands, DX_CFC_CONFIG.bands) &&
+    cfc.preCompDb === DX_CFC_CONFIG.preCompDb &&
+    cfc.prePeqDb === DX_CFC_CONFIG.prePeqDb &&
+    cfc.postEqEnabled === DX_CFC_CONFIG.postEqEnabled;
 
   return (
     <div className="cfc-panel">
@@ -395,6 +446,27 @@ export function CfcSettingsPanel() {
             onClick={() => applyPreset('voice')}
           >
             Voice
+          </button>
+          <button
+            type="button"
+            className={`chip ${isStudio ? 'on' : ''}`}
+            onClick={() => applyPreset('studio')}
+          >
+            Studio
+          </button>
+          <button
+            type="button"
+            className={`chip ${isEssb ? 'on' : ''}`}
+            onClick={() => applyPreset('essb')}
+          >
+            ESSB
+          </button>
+          <button
+            type="button"
+            className={`chip ${isDx ? 'on' : ''}`}
+            onClick={() => applyPreset('dx')}
+          >
+            DX
           </button>
         </div>
       </div>

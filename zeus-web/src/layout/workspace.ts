@@ -89,6 +89,7 @@ export const DEFAULT_TILE_SPAN: Record<string, { w: number; h: number }> = {
   qrz: { w: 6, h: 12 },
   logbook: { w: 6, h: 12 },
   txmeters: { w: 6, h: 12 },
+  txfidelity: { w: 6, h: 22 },
   vfo: { w: 6, h: 8 },
   smeter: { w: 6, h: 4 },
   dsp: { w: 6, h: 6 },

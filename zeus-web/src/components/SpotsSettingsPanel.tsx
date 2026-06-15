@@ -7,14 +7,25 @@
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
 //
-// SpotsSettingsPanel — Settings → Spots. Edits the POTA/SOTA feed toggles,
-// poll interval, and click-to-tune behaviour persisted by SpotsSettingsStore.
-// Changes apply immediately (POST /api/spots/settings), which also nudges the
-// server-side poller to refresh.
+// SpotsSettingsPanel — Settings → Spots. Full operator control over the
+// POTA/SOTA Spots feature: feed sources + poll interval (honoured server-side),
+// display filters (band / mode / QRT / age / dedup, applied in the panel), and
+// click-to-tune behaviour (set-mode, connection gate, CW sideband, per-mode
+// dial offsets). Every change applies immediately (POST /api/spots/settings),
+// which also nudges the server-side poller to refresh.
 
 import { useEffect } from 'react';
 import { useSpotsStore } from '../state/spots-store';
+import { SPOT_BANDS, type SpotModeGroup } from '../state/spots-store';
 import type { SpotsSettings } from '../api/client';
+
+const MODE_GROUPS: ReadonlyArray<{ key: SpotModeGroup; label: string }> = [
+  { key: 'CW', label: 'CW' },
+  { key: 'PHONE', label: 'Phone' },
+  { key: 'DIGITAL', label: 'Digital' },
+  { key: 'FM', label: 'FM' },
+  { key: 'AM', label: 'AM' },
+];
 
 const labelStyle: React.CSSProperties = {
   fontSize: 12,
@@ -24,6 +35,22 @@ const hintStyle: React.CSSProperties = {
   fontSize: 10,
   lineHeight: 1.4,
   color: 'var(--fg-3)',
+};
+const sectionTitleStyle: React.CSSProperties = {
+  fontSize: 11,
+  fontWeight: 600,
+  letterSpacing: '0.06em',
+  color: 'var(--fg-2)',
+};
+const numInputStyle: React.CSSProperties = {
+  width: 90,
+  padding: '6px 8px',
+  fontSize: 12,
+  fontFamily: 'monospace',
+  background: 'var(--bg-0)',
+  border: '1px solid var(--panel-border)',
+  borderRadius: 'var(--r-sm)',
+  color: 'var(--fg-0)',
 };
 
 function Toggle({
@@ -55,6 +82,31 @@ function Toggle({
   );
 }
 
+/** A toggleable filter chip — used by the band and mode multi-selects. */
+function Chip({
+  active,
+  disabled,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onClick}
+      className={`btn sm${active ? ' active' : ''}`}
+      style={{ minWidth: 44 }}
+    >
+      {children}
+    </button>
+  );
+}
+
 export function SpotsSettingsPanel() {
   const settings = useSpotsStore((s) => s.settings);
   const saving = useSpotsStore((s) => s.savingSettings);
@@ -67,8 +119,13 @@ export function SpotsSettingsPanel() {
 
   const patch = (p: Partial<SpotsSettings>) => void saveSettings({ ...settings, ...p });
 
+  const toggleInList = (list: string[], key: string): string[] =>
+    list.includes(key) ? list.filter((k) => k !== key) : [...list, key];
+
+  const disabled = !settings.enabled;
+
   return (
-    <div style={{ maxWidth: 600 }}>
+    <div style={{ maxWidth: 640 }}>
       <h3
         style={{
           margin: '0 0 14px',
@@ -82,7 +139,7 @@ export function SpotsSettingsPanel() {
         POTA / SOTA SPOTS {saving && <span style={{ color: 'var(--accent)' }}>· saving…</span>}
       </h3>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         <Toggle
           checked={settings.enabled}
           onChange={(v) => patch({ enabled: v })}
@@ -90,53 +147,144 @@ export function SpotsSettingsPanel() {
           hint="Master switch. When off, the server stops polling and the panel shows nothing."
         />
 
+        {/* ----- Sources + poll interval (server-side) ----- */}
         <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-2)' }}>SOURCES</div>
+          <div style={sectionTitleStyle}>SOURCES</div>
           <Toggle
             checked={settings.potaEnabled}
-            disabled={!settings.enabled}
+            disabled={disabled}
             onChange={(v) => patch({ potaEnabled: v })}
             label="POTA (Parks on the Air)"
           />
           <Toggle
             checked={settings.sotaEnabled}
-            disabled={!settings.enabled}
+            disabled={disabled}
             onChange={(v) => patch({ sotaEnabled: v })}
             label="SOTA (Summits on the Air)"
           />
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
+            <span style={labelStyle}>Poll interval</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="number"
+                min={30}
+                max={600}
+                step={5}
+                value={settings.pollIntervalSeconds}
+                disabled={disabled}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n)) {
+                    patch({ pollIntervalSeconds: Math.min(600, Math.max(30, Math.round(n))) });
+                  }
+                }}
+                style={numInputStyle}
+              />
+              <span style={hintStyle}>seconds (30–600) — how often the server re-fetches.</span>
+            </span>
+          </label>
         </section>
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-2)' }}>POLL INTERVAL</span>
-          <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <input
-              type="number"
-              min={30}
-              max={600}
-              step={5}
-              value={settings.pollIntervalSeconds}
-              disabled={!settings.enabled}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                if (Number.isFinite(n)) patch({ pollIntervalSeconds: Math.min(600, Math.max(30, Math.round(n))) });
-              }}
-              style={{
-                width: 90,
-                padding: '6px 8px',
-                fontSize: 12,
-                fontFamily: 'monospace',
-                background: 'var(--bg-0)',
-                border: '1px solid var(--panel-border)',
-                borderRadius: 'var(--r-sm)',
-                color: 'var(--fg-0)',
-              }}
-            />
-            <span style={hintStyle}>seconds (30–600)</span>
-          </span>
-        </label>
+        {/* ----- Display filters (panel-side) ----- */}
+        <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={sectionTitleStyle}>FILTERS</div>
 
-        <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--fg-2)' }}>CLICK-TO-TUNE</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={labelStyle}>Bands</span>
+              {settings.bands.length > 0 && (
+                <button type="button" className="btn sm" onClick={() => patch({ bands: [] })}>
+                  ALL
+                </button>
+              )}
+            </span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {SPOT_BANDS.map((b) => (
+                <Chip
+                  key={b.key}
+                  active={settings.bands.includes(b.key)}
+                  disabled={disabled}
+                  onClick={() => patch({ bands: toggleInList(settings.bands, b.key) })}
+                >
+                  {b.key}
+                </Chip>
+              ))}
+            </div>
+            <span style={hintStyle}>
+              {settings.bands.length === 0
+                ? 'All bands shown. Select bands to show only those.'
+                : `Showing only: ${settings.bands.join(', ')}`}
+            </span>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={labelStyle}>Modes</span>
+              {settings.modes.length > 0 && (
+                <button type="button" className="btn sm" onClick={() => patch({ modes: [] })}>
+                  ALL
+                </button>
+              )}
+            </span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {MODE_GROUPS.map((m) => (
+                <Chip
+                  key={m.key}
+                  active={settings.modes.includes(m.key)}
+                  disabled={disabled}
+                  onClick={() => patch({ modes: toggleInList(settings.modes, m.key) })}
+                >
+                  {m.label}
+                </Chip>
+              ))}
+            </div>
+            <span style={hintStyle}>
+              {settings.modes.length === 0
+                ? 'All modes shown. Unrecognised modes (FT8, JS8, RTTY…) count as Digital.'
+                : `Showing only: ${settings.modes.join(', ')}`}
+            </span>
+          </div>
+
+          <Toggle
+            checked={settings.hideQrt}
+            disabled={disabled}
+            onChange={(v) => patch({ hideQrt: v })}
+            label="Hide QRT spots"
+            hint="Drop spots whose comment says QRT / QSY / closing / packing up."
+          />
+          <Toggle
+            checked={settings.latestPerActivator}
+            disabled={disabled}
+            onChange={(v) => patch({ latestPerActivator: v })}
+            label="Latest spot per activator only"
+            hint="Collapse repeats so each operator appears once (their newest spot)."
+          />
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <span style={labelStyle}>Maximum age</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                type="number"
+                min={0}
+                max={1440}
+                step={5}
+                value={settings.maxAgeMinutes}
+                disabled={disabled}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n)) {
+                    patch({ maxAgeMinutes: Math.min(1440, Math.max(0, Math.round(n))) });
+                  }
+                }}
+                style={numInputStyle}
+              />
+              <span style={hintStyle}>minutes (0 = no limit). Hide spots older than this.</span>
+            </span>
+          </label>
+        </section>
+
+        {/* ----- Click-to-tune (panel-side, drives the Zeus radio) ----- */}
+        <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={sectionTitleStyle}>CLICK-TO-TUNE</div>
           <Toggle
             checked={settings.setModeOnTune}
             onChange={(v) => patch({ setModeOnTune: v })}
@@ -150,19 +298,11 @@ export function SpotsSettingsPanel() {
             hint="Block click-to-tune unless Zeus has an active radio connection."
           />
           <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            <span style={{ fontSize: 12, color: 'var(--fg-1)' }}>CW sideband</span>
+            <span style={labelStyle}>CW sideband</span>
             <select
               value={settings.cwSideband}
               onChange={(e) => patch({ cwSideband: e.target.value === 'CWL' ? 'CWL' : 'CWU' })}
-              style={{
-                width: 140,
-                padding: '6px 8px',
-                fontSize: 12,
-                background: 'var(--bg-0)',
-                border: '1px solid var(--panel-border)',
-                borderRadius: 'var(--r-sm)',
-                color: 'var(--fg-0)',
-              }}
+              style={{ ...numInputStyle, width: 150, fontFamily: 'inherit' }}
             >
               <option value="CWU">CWU (upper)</option>
               <option value="CWL">CWL (lower)</option>
@@ -171,6 +311,52 @@ export function SpotsSettingsPanel() {
               Which CW sideband a CW spot tunes to. SSB spots pick LSB below 10 MHz / USB above automatically.
             </span>
           </label>
+          <div style={{ display: 'flex', gap: 18, flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={labelStyle}>CW dial offset</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="number"
+                  min={-5000}
+                  max={5000}
+                  step={10}
+                  value={settings.cwTuneOffsetHz}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    if (Number.isFinite(n)) {
+                      patch({ cwTuneOffsetHz: Math.min(5000, Math.max(-5000, Math.round(n))) });
+                    }
+                  }}
+                  style={numInputStyle}
+                />
+                <span style={hintStyle}>Hz</span>
+              </span>
+            </label>
+            <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <span style={labelStyle}>Digital dial offset</span>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="number"
+                  min={-5000}
+                  max={5000}
+                  step={10}
+                  value={settings.digiTuneOffsetHz}
+                  onChange={(e) => {
+                    const n = Number(e.target.value);
+                    if (Number.isFinite(n)) {
+                      patch({ digiTuneOffsetHz: Math.min(5000, Math.max(-5000, Math.round(n))) });
+                    }
+                  }}
+                  style={numInputStyle}
+                />
+                <span style={hintStyle}>Hz</span>
+              </span>
+            </label>
+          </div>
+          <span style={hintStyle}>
+            Dial offsets are added to the spot frequency when you click a CW or digital spot — handy if
+            you prefer to land slightly off the published frequency. Leave at 0 to tune exactly.
+          </span>
         </section>
       </div>
     </div>

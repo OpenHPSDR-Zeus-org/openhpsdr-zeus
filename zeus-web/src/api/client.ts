@@ -299,10 +299,11 @@ export type RadioStateDto = {
   preampOn: boolean;
   nr: NrConfigDto;
   zoomLevel: ZoomLevel;
-  // PureSignal persisted tunings — server is the source of truth, hydrated
+  // PureSignal persisted settings — server is the source of truth, hydrated
   // into tx-store on connect so a fresh browser (no localStorage) sees the
-  // operator's last dial-in. PsEnabled, PsSingle, TwoToneEnabled (master-arm
-  // flags) are intentionally session-only and left out.
+  // operator's last dial-in. PsEnabled is the persisted standing arm
+  // preference; PsSingle and TwoToneEnabled remain session-only.
+  psEnabled: boolean;
   psAuto: boolean;
   psPtol: boolean;
   psAutoAttenuate: boolean;
@@ -375,6 +376,27 @@ export type CfcConfigDto = {
   preCompDb: number;
   prePeqDb: number;
   bands: CfcBandDto[];
+};
+
+export type TxStationProfileDto = {
+  id: string;
+  label: string;
+  summary: string;
+  applyTitle: string;
+  audioSuiteRoute: 'native' | 'vst';
+  audioSuiteBypassed: boolean;
+  audioSuiteProfileName?: string | null;
+  micGainDb: number;
+  levelerMaxGainDb: number;
+  txLeveling: TxLevelingConfigDto;
+  cfcConfig: CfcConfigDto;
+  lowCutHz: number;
+  highCutHz: number;
+  spectralDensity: number;
+};
+
+export type TxStationProfilesResponseDto = {
+  profiles: TxStationProfileDto[];
 };
 
 // Pihpsdr classic-mode default — voice-band split the operator recognises
@@ -977,8 +999,9 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // the engine's declared defaults so the UI has something to render.
     nr: normalizeNr(r.nr),
     zoomLevel: normalizeZoomLevel(r.zoomLevel),
-    // PureSignal persisted tunings. Defaults match RadioService.cs init and
+    // PureSignal persisted settings. Defaults match RadioService.cs init and
     // PsSettingsEntry — older servers without the fields fall back cleanly.
+    psEnabled: typeof r.psEnabled === 'boolean' ? r.psEnabled : false,
     psAuto: typeof r.psAuto === 'boolean' ? r.psAuto : true,
     psPtol: typeof r.psPtol === 'boolean' ? r.psPtol : false,
     psAutoAttenuate: typeof r.psAutoAttenuate === 'boolean' ? r.psAutoAttenuate : true,
@@ -1057,6 +1080,40 @@ export function normalizeCfc(raw: unknown): CfcConfigDto {
     prePeqDb: typeof r.prePeqDb === 'number' ? r.prePeqDb : 0,
     bands,
   };
+}
+
+function normalizeTxStationProfile(raw: unknown): TxStationProfileDto | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const id = typeof r.id === 'string' ? r.id.trim() : '';
+  if (!id) return null;
+  return {
+    id,
+    label: typeof r.label === 'string' ? r.label : id,
+    summary: typeof r.summary === 'string' ? r.summary : '',
+    applyTitle: typeof r.applyTitle === 'string' ? r.applyTitle : '',
+    audioSuiteRoute: r.audioSuiteRoute === 'vst' ? 'vst' : 'native',
+    audioSuiteBypassed:
+      typeof r.audioSuiteBypassed === 'boolean' ? r.audioSuiteBypassed : true,
+    audioSuiteProfileName:
+      typeof r.audioSuiteProfileName === 'string' ? r.audioSuiteProfileName : '',
+    micGainDb: typeof r.micGainDb === 'number' ? r.micGainDb : 0,
+    levelerMaxGainDb:
+      typeof r.levelerMaxGainDb === 'number' ? r.levelerMaxGainDb : 8,
+    txLeveling: normalizeTxLeveling(r.txLeveling),
+    cfcConfig: normalizeCfc(r.cfcConfig),
+    lowCutHz: clampInt(r.lowCutHz, 20, 600, 150),
+    highCutHz: clampInt(r.highCutHz, 1500, 6000, 2900),
+    spectralDensity: clampInt(r.spectralDensity, 0, 100, 50),
+  };
+}
+
+function normalizeTxStationProfileResponse(raw: unknown): TxStationProfileDto[] {
+  const r = raw as { profiles?: unknown };
+  const profiles = Array.isArray(r?.profiles) ? r.profiles : [];
+  return profiles
+    .map(normalizeTxStationProfile)
+    .filter((profile): profile is TxStationProfileDto => profile !== null);
 }
 
 function cloneCfc(c: CfcConfigDto): CfcConfigDto {
@@ -1518,6 +1575,20 @@ export interface SpotsSettings {
   setModeOnTune: boolean;
   tuneOnlyWhenConnected: boolean;
   cwSideband: 'CWU' | 'CWL';
+  /** Band-key allow-list (e.g. ['20m','40m']); empty = all bands. */
+  bands: string[];
+  /** Mode-group allow-list (CW / PHONE / DIGITAL / FM / AM); empty = all. */
+  modes: string[];
+  /** Drop spots whose comment marks the activator QRT/closing. */
+  hideQrt: boolean;
+  /** Hide spots older than this many minutes; 0 = no age limit. */
+  maxAgeMinutes: number;
+  /** Collapse to the single newest spot per activator. */
+  latestPerActivator: boolean;
+  /** Hz added to the dial when tuning a CW spot (e.g. for CW pitch offset). */
+  cwTuneOffsetHz: number;
+  /** Hz added to the dial when tuning a digital spot. */
+  digiTuneOffsetHz: number;
 }
 
 export const SPOTS_SETTINGS_DEFAULTS: SpotsSettings = {
@@ -1528,7 +1599,32 @@ export const SPOTS_SETTINGS_DEFAULTS: SpotsSettings = {
   setModeOnTune: true,
   tuneOnlyWhenConnected: true,
   cwSideband: 'CWU',
+  bands: [],
+  modes: [],
+  hideQrt: true,
+  maxAgeMinutes: 0,
+  latestPerActivator: false,
+  cwTuneOffsetHz: 0,
+  digiTuneOffsetHz: 0,
 };
+
+const SPOTS_MAX_AGE_LIMIT = 1440;
+const SPOTS_MAX_TUNE_OFFSET = 5_000;
+
+function toStringArray(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  // Preserve case (canonical band keys are lowercase '20m', mode-group keys are
+  // uppercase 'CW'); the filter pipeline compares case-insensitively.
+  return v
+    .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+    .map((x) => x.trim());
+}
+
+function clampInt(v: unknown, lo: number, hi: number, fallback: number): number {
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(hi, Math.max(lo, Math.round(n)));
+}
 
 function normalizeSpotsSettings(raw: unknown): SpotsSettings {
   const r = (raw ?? {}) as Partial<SpotsSettings>;
@@ -1536,6 +1632,14 @@ function normalizeSpotsSettings(raw: unknown): SpotsSettings {
     ...SPOTS_SETTINGS_DEFAULTS,
     ...r,
     cwSideband: r.cwSideband === 'CWL' ? 'CWL' : 'CWU',
+    bands: toStringArray(r.bands),
+    modes: toStringArray(r.modes),
+    hideQrt: r.hideQrt ?? SPOTS_SETTINGS_DEFAULTS.hideQrt,
+    maxAgeMinutes: clampInt(r.maxAgeMinutes, 0, SPOTS_MAX_AGE_LIMIT, 0),
+    latestPerActivator: r.latestPerActivator ?? false,
+    pollIntervalSeconds: clampInt(r.pollIntervalSeconds, 30, 600, 60),
+    cwTuneOffsetHz: clampInt(r.cwTuneOffsetHz, -SPOTS_MAX_TUNE_OFFSET, SPOTS_MAX_TUNE_OFFSET, 0),
+    digiTuneOffsetHz: clampInt(r.digiTuneOffsetHz, -SPOTS_MAX_TUNE_OFFSET, SPOTS_MAX_TUNE_OFFSET, 0),
   };
 }
 
@@ -2538,6 +2642,43 @@ export async function setTxMonitor(
       signal,
     },
     (raw) => raw as RadioStateDto,
+  );
+}
+
+export function fetchTxStationProfiles(
+  signal?: AbortSignal,
+): Promise<TxStationProfileDto[]> {
+  return jsonFetch(
+    '/api/tx/station-profiles',
+    { signal },
+    normalizeTxStationProfileResponse,
+  );
+}
+
+export function saveTxStationProfile(
+  profile: TxStationProfileDto,
+  signal?: AbortSignal,
+): Promise<TxStationProfileDto> {
+  return jsonFetch(
+    `/api/tx/station-profiles/${encodeURIComponent(profile.id)}`,
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(profile),
+      signal,
+    },
+    (raw) => normalizeTxStationProfile(raw) ?? profile,
+  );
+}
+
+export async function resetTxStationProfile(
+  id: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  await jsonFetch(
+    `/api/tx/station-profiles/${encodeURIComponent(id)}`,
+    { method: 'DELETE', signal },
+    () => null,
   );
 }
 

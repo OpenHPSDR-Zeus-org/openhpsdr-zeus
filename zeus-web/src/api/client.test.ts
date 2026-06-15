@@ -183,6 +183,10 @@ describe('normalizeState', () => {
     expect(s.adcOverloadWarning).toBe(false);
     expect(s.preampOn).toBe(false);
   });
+  it('reads persisted PureSignal arm state from the server', () => {
+    expect(normalizeState({ psEnabled: true }).psEnabled).toBe(true);
+    expect(normalizeState({ psEnabled: 'yes' }).psEnabled).toBe(false);
+  });
   it('reads preamp state from the server', () => {
     expect(normalizeState({ preampOn: true }).preampOn).toBe(true);
   });

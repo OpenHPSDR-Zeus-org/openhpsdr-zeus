@@ -190,10 +190,10 @@ export type TxState = {
   setPaTempC: (c: number) => void;
 
   // ---- PureSignal (predistortion) — MsgType 0x18 at 10 Hz when armed.
-  // psEnabled is the master arm; not persisted (parity with MOX).
-  // psAuto / psSingle are the cal-mode select. The advanced fields are
-  // persisted because they're per-rack tuning the operator dials in once
-  // and rarely revisits.
+  // psEnabled is the persisted standing master arm preference. psAuto /
+  // psSingle are the cal-mode select. The advanced fields are persisted
+  // because they're per-rack tuning the operator dials in once and rarely
+  // revisits.
   psEnabled: boolean;
   setPsEnabled: (on: boolean) => void;
   psAuto: boolean;
@@ -241,8 +241,8 @@ export type TxState = {
   // PS-Monitor (issue #121) — operator-facing "Monitor PA output" toggle.
   // When on AND PS armed AND PS converged, the TX panadapter source flips
   // from the predistorted TX-IQ analyzer to the PS-feedback analyzer
-  // (post-PA loopback). Default off; not persisted (parity with psEnabled
-  // — viewing preference, resets each session). Hidden / disabled in the
+  // (post-PA loopback). Default off; not persisted — viewing preference,
+  // resets each session. Hidden / disabled in the
   // UI on boards with no PS feedback path (e.g. HermesLite2).
   psMonitorEnabled: boolean;
   setPsMonitorEnabled: (on: boolean) => void;
@@ -295,8 +295,8 @@ export type TxState = {
   // Hydrate the persistable PS / TwoTone fields from the server's StateDto.
   // Called from ConnectPanel and App.tsx alongside connection-store.applyState
   // so a fresh browser (no localStorage) sees the operator's last persisted
-  // dial-in instead of the hard-coded defaults. Master-arm fields are
-  // intentionally NOT hydrated — the operator must re-arm each session.
+  // dial-in instead of the hard-coded defaults. Actual transmit/keying arms
+  // such as MOX/TUN/TwoTone remain session-only.
   hydrateFromState: (s: RadioStateDto) => void;
 };
 
@@ -377,8 +377,8 @@ export const useTxStore = create<TxState>()(
       paTempC: null,
       setPaTempC: (c) => set({ paTempC: c }),
 
-      // PureSignal — psEnabled / psSingle / live read-out are NOT persisted;
-      // operator must re-arm each session.
+      // PureSignal — psEnabled is server-persisted; psSingle / live read-out
+      // remain per-session.
       psEnabled: false,
       setPsEnabled: (on) => set({ psEnabled: on }),
       psAuto: true,
@@ -457,6 +457,7 @@ export const useTxStore = create<TxState>()(
           micGainDb: s.micGainDb,
           levelerMaxGainDb: s.levelerMaxGainDb,
           txMoxPreKeyDelayMs: s.txMoxPreKeyDelayMs,
+          psEnabled: s.psEnabled,
           psAuto: s.psAuto,
           psPtol: s.psPtol,
           psAutoAttenuate: s.psAutoAttenuate,
@@ -481,8 +482,9 @@ export const useTxStore = create<TxState>()(
     }),
     {
       name: 'zeus-tx',
-      // Persist only operator-tuning fields. Master arm bits (psEnabled,
-      // twoToneOn, mox/tun) are transient per-session.
+      // Persist only operator-tuning fields in localStorage. PS master arm is
+      // server-authoritative and hydrated from RadioStateDto; twoToneOn and
+      // mox/tun are transient per-session.
       //
       // Drive / TUN drive / mic gain / Leveler max-gain are deliberately NOT
       // mirrored here. They are server-authoritative (StateDto.{DrivePct,
