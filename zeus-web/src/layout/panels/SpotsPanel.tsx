@@ -26,7 +26,20 @@ import {
 import type { ActivationSpotDto } from '../../api/client';
 
 const POLL_MS = 45_000;
-const SOURCES: SpotSourceFilter[] = ['ALL', 'POTA', 'SOTA'];
+const SOURCES: SpotSourceFilter[] = ['ALL', 'POTA', 'SOTA', 'DX'];
+
+// Per-source marker colour. POTA = accent blue, SOTA = output yellow, DX = TX
+// red — all existing palette tokens, no new colours introduced.
+function sourceColor(source: ActivationSpotDto['source']): string {
+  switch (source) {
+    case 'POTA':
+      return 'var(--accent)';
+    case 'SOTA':
+      return 'var(--power)';
+    default:
+      return 'var(--tx)';
+  }
+}
 
 type SortKey = 'call' | 'freq' | 'band' | 'mode' | 'ref' | 'age';
 type SortDir = 'asc' | 'desc';
@@ -306,7 +319,7 @@ function SpotRow({
       onMouseLeave={(e) => (e.currentTarget.style.background = '')}
     >
       <td style={{ ...tdStyle, fontWeight: 700 }}>
-        <span style={{ color: spot.source === 'POTA' ? 'var(--accent)' : 'var(--power)' }}>●</span>{' '}
+        <span style={{ color: sourceColor(spot.source) }}>●</span>{' '}
         {spot.activator}
       </td>
       <td style={tdStyle}>{fmtFreq(spot.freqHz)}</td>
