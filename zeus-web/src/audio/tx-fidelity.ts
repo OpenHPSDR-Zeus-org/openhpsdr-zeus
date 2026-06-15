@@ -9,10 +9,12 @@ export type TxFidelitySnapshot = {
   txMonitorEnabled: boolean;
   micDbfs: number;
   wdspMicPk: number;
+  micAv: number;
   lvlrGr: number;
   cfcGr: number;
   alcGr: number;
   outPk: number;
+  outAv: number;
   swr: number;
   psEnabled: boolean;
   psCorrecting: boolean;
@@ -24,6 +26,7 @@ export type TxFidelitySnapshot = {
 
 export type TxFidelityState = 'idle' | 'monitor' | 'tune' | 'under' | 'sweet' | 'hot' | 'clip';
 export type TxDensityStatus = 'unknown' | 'thin' | 'matched' | 'forced';
+export type TxCrestStatus = 'unknown' | 'open' | 'controlled' | 'pinched';
 export type TxFidelityActionTone = 'neutral' | 'raise' | 'reduce' | 'protect';
 
 export type TxFidelityAnalysis = {
@@ -38,6 +41,9 @@ export type TxFidelityAnalysis = {
   lvlrGr: number;
   cfcGr: number;
   outDbfs: number | null;
+  micCrestDb: number | null;
+  outCrestDb: number | null;
+  crestStatus: TxCrestStatus;
   swr: number;
   psFeedbackLevel: number | null;
   targetSpectralDensity: number;
@@ -70,6 +76,8 @@ function pctBetween(v: number, low: number, high: number): number {
 function estimateLiveSpectralDensity(
   micDbfs: number | null,
   outDbfs: number | null,
+  micCrestDb: number | null,
+  outCrestDb: number | null,
   alcGr: number,
   lvlrGr: number,
   cfcGr: number,
@@ -78,7 +86,17 @@ function estimateLiveSpectralDensity(
   const micDensity = pctBetween(micDbfs, -36, -6);
   const outDensity = outDbfs === null ? micDensity : pctBetween(outDbfs, -24, -4);
   const dynamicsDensity = clamp(alcGr * 5 + lvlrGr * 3 + cfcGr * 2.5, 0, 100);
-  return clampScore(micDensity * 0.3 + outDensity * 0.25 + dynamicsDensity * 0.45);
+  const crestDb = outCrestDb ?? micCrestDb;
+  if (crestDb === null) {
+    return clampScore(micDensity * 0.3 + outDensity * 0.25 + dynamicsDensity * 0.45);
+  }
+  const crestDensity = clamp(((24 - crestDb) / 18) * 100, 0, 100);
+  return clampScore(
+    micDensity * 0.22 +
+    outDensity * 0.2 +
+    dynamicsDensity * 0.38 +
+    crestDensity * 0.2,
+  );
 }
 
 function densityStatus(
@@ -107,6 +125,25 @@ function densityStatus(
   return 'matched';
 }
 
+function crestDb(peak: number | null, avg: number | null): number | null {
+  if (peak === null || avg === null || avg > peak) return null;
+  return peak - avg;
+}
+
+function classifyCrest(
+  micCrestDb: number | null,
+  outCrestDb: number | null,
+  alcGr: number,
+  lvlrGr: number,
+  cfcGr: number,
+): TxCrestStatus {
+  const c = outCrestDb ?? micCrestDb;
+  if (c === null) return 'unknown';
+  if (c > 18) return 'open';
+  if (c < 6 || (c < 8 && (alcGr > 8 || lvlrGr > 8 || cfcGr > 6))) return 'pinched';
+  return 'controlled';
+}
+
 export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
   const keyed = s.moxOn || s.tunOn;
   const auditioning = s.txMonitorEnabled && !keyed;
@@ -119,6 +156,11 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
   const lvlrGr = finiteOrZero(s.lvlrGr);
   const cfcGr = finiteOrZero(s.cfcGr);
   const outDbfs = validDbfs(s.outPk) ? s.outPk : null;
+  const micAvgDbfs = validDbfs(s.micAv) ? s.micAv : null;
+  const outAvgDbfs = validDbfs(s.outAv) ? s.outAv : null;
+  const micCrestDb = crestDb(micDbfs, micAvgDbfs);
+  const outCrestDb = crestDb(outDbfs, outAvgDbfs);
+  const crest = classifyCrest(micCrestDb, outCrestDb, alcGr, lvlrGr, cfcGr);
   const swr = Number.isFinite(s.swr) && s.swr > 0 ? s.swr : 1;
   const psFeedbackLevel =
     Number.isFinite(s.psFeedbackLevel) && s.psFeedbackLevel > 0 ? s.psFeedbackLevel : null;
@@ -129,7 +171,7 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
   );
   const activeVoiceChain = !s.tunOn && (keyed || auditioning);
   const liveSpectralDensity = activeVoiceChain
-    ? estimateLiveSpectralDensity(micDbfs, outDbfs, alcGr, lvlrGr, cfcGr)
+    ? estimateLiveSpectralDensity(micDbfs, outDbfs, micCrestDb, outCrestDb, alcGr, lvlrGr, cfcGr)
     : null;
   const densityFit =
     liveSpectralDensity === null
@@ -151,6 +193,9 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     lvlrGr,
     cfcGr,
     outDbfs,
+    micCrestDb,
+    outCrestDb,
+    crestStatus: crest,
     swr,
     psFeedbackLevel,
     targetSpectralDensity,
@@ -260,6 +305,16 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     }
   }
 
+  if (activeVoiceChain) {
+    if (crest === 'open') {
+      score -= 10;
+      reasons.push('Crest factor is too open for the density target');
+    } else if (crest === 'pinched') {
+      score -= 16;
+      reasons.push('Crest factor is pinched by processing');
+    }
+  }
+
   if (swr >= 3) {
     score -= 40;
     reasons.push('SWR protection risk');
@@ -293,13 +348,23 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     r.includes('headroom') ||
     r.includes('stalled') ||
     r.includes('SWR protection') ||
-    r.includes('forced')
+    r.includes('forced') ||
+    r.includes('pinched')
   );
   const hasUnderReason = reasons.some(
-    (r) => r.includes('low') || r.includes('below profile target'),
+    (r) => r.includes('low') || r.includes('below profile target') || r.includes('too open'),
   );
   if (hasHotReason || (finalScore < 45 && !hasUnderReason)) {
-    const recommendation = recommendHotAction(s, micDbfs, outDbfs, alcGr, lvlrGr, cfcGr, density);
+    const recommendation = recommendHotAction(
+      s,
+      micDbfs,
+      outDbfs,
+      alcGr,
+      lvlrGr,
+      cfcGr,
+      density,
+      crest,
+    );
     return {
       state: 'hot',
       label: 'Too hot',
@@ -313,7 +378,7 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     };
   }
   if (finalScore < 70 || hasUnderReason) {
-    const recommendation = recommendUnderAction(micDbfs, alcGr, density);
+    const recommendation = recommendUnderAction(micDbfs, alcGr, density, crest);
     return {
       state: 'under',
       label: 'Under-driven',
@@ -351,6 +416,7 @@ function recommendHotAction(
   lvlrGr: number,
   cfcGr: number,
   density: TxDensityStatus,
+  crest: TxCrestStatus,
 ): string {
   if (s.swr >= 3) return 'Stop RF and check antenna match';
   if (s.psCalibrationStalled) return 'Correct PureSignal feedback before increasing drive';
@@ -362,7 +428,9 @@ function recommendHotAction(
   if (outDbfs !== null && outDbfs > -3) return 'Reduce drive or ALC max gain for TX output headroom';
   if (alcGr > 8) return 'Lower mic gain or ALC max gain';
   if (lvlrGr > 10) return 'Lower leveler max gain or slow the leveler';
-  if (cfcGr > 7 || density === 'forced') return 'Reduce CFC density before raising drive';
+  if (cfcGr > 7 || density === 'forced' || crest === 'pinched') {
+    return 'Reduce CFC density before raising drive';
+  }
   if (s.swr >= 2) return 'Reduce power and inspect the RF match';
   return 'Back off the hottest TX stage';
 }
@@ -371,9 +439,11 @@ function recommendUnderAction(
   micDbfs: number | null,
   alcGr: number,
   density: TxDensityStatus,
+  crest: TxCrestStatus,
 ): string {
   if (micDbfs === null) return 'Enable mic audio and verify the selected input';
   if (micDbfs < -30) return 'Raise mic gain toward -12 to -6 dBFS peaks';
+  if (crest === 'open') return 'Add controlled speech density before adding RF drive';
   if (density === 'thin') return 'Increase mic gain or profile density before adding drive';
   if (alcGr < 1) return 'Raise mic gain until ALC works lightly';
   return 'Add controlled speech density, not RF drive';
