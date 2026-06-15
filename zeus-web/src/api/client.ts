@@ -548,6 +548,43 @@ export type FrontendDspSceneDiagnosticsPayload = {
   coherentSubthresholdSignal?: boolean | null;
 };
 
+export type SmartNrConditionDto = {
+  schemaVersion: number;
+  available: boolean;
+  status: string;
+  fresh: boolean;
+  stale: boolean;
+  ageMs: number | null;
+  atUtc: string | null;
+  sourceAtUtc: string | null;
+  sourceAgeMs: number | null;
+  sourceClockSkewMs: number | null;
+  sourceClientId: string | null;
+  mode: RxMode | null;
+  profile: string | null;
+  reason: string | null;
+  recommendation: string | null;
+  heldByRxChain: boolean | null;
+  rxChainLabel: string | null;
+  maxSnrDb: number | null;
+  coherentMaxSnrDb: number | null;
+  occupiedPct: number | null;
+  coherentOccupiedPct: number | null;
+  impulsivePct: number | null;
+  peakCount: number | null;
+  coherentPeakCount: number | null;
+  coherentSubthresholdSignal: boolean | null;
+  wdspActive: boolean;
+  wdspNativeLoadable: boolean;
+  wdspEmnrPost2Available: boolean;
+  wdspNr4SbnrAvailable: boolean;
+  nr4Readiness: string;
+  requestedNrMode: string;
+  effectiveNrMode: string;
+  diagnosticRecommendation: string | null;
+  generatedUtc: string;
+};
+
 export type HardwareP1DiagnosticsDto = {
   packets: number;
   lastUpdatedUtc: string | null;
@@ -1384,6 +1421,49 @@ function normalizeFrontendDspScene(raw: unknown): FrontendDspSceneDiagnosticsDto
   };
 }
 
+function normalizeSmartNrCondition(raw: unknown): SmartNrConditionDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    available: Boolean(r.available),
+    status: diagString(r.status) ?? 'unknown',
+    fresh: Boolean(r.fresh),
+    stale: Boolean(r.stale),
+    ageMs: diagNumber(r.ageMs),
+    atUtc: diagString(r.atUtc),
+    sourceAtUtc: diagString(r.sourceAtUtc),
+    sourceAgeMs: diagNumber(r.sourceAgeMs),
+    sourceClockSkewMs: diagNumber(r.sourceClockSkewMs),
+    sourceClientId: diagString(r.sourceClientId),
+    mode: modeFromWire(r.mode),
+    profile: diagString(r.profile),
+    reason: diagString(r.reason),
+    recommendation: diagString(r.recommendation),
+    heldByRxChain: diagBool(r.heldByRxChain),
+    rxChainLabel: diagString(r.rxChainLabel),
+    maxSnrDb: diagNumber(r.maxSnrDb),
+    coherentMaxSnrDb: diagNumber(r.coherentMaxSnrDb),
+    occupiedPct: diagNumber(r.occupiedPct),
+    coherentOccupiedPct: diagNumber(r.coherentOccupiedPct),
+    impulsivePct: diagNumber(r.impulsivePct),
+    peakCount: diagNumber(r.peakCount),
+    coherentPeakCount: diagNumber(r.coherentPeakCount),
+    coherentSubthresholdSignal: diagBool(r.coherentSubthresholdSignal),
+    wdspActive: Boolean(r.wdspActive),
+    wdspNativeLoadable: Boolean(r.wdspNativeLoadable),
+    wdspEmnrPost2Available: Boolean(r.wdspEmnrPost2Available),
+    wdspNr4SbnrAvailable: Boolean(r.wdspNr4SbnrAvailable),
+    nr4Readiness: diagString(r.nr4Readiness) ?? 'unknown',
+    requestedNrMode: diagString(r.requestedNrMode) ?? 'Off',
+    effectiveNrMode: diagString(r.effectiveNrMode) ?? 'Off',
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+    generatedUtc:
+      typeof r.generatedUtc === 'string'
+        ? r.generatedUtc
+        : new Date().toISOString(),
+  };
+}
+
 function diagNumberArray(raw: unknown): number[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((v) => diagNumber(v) ?? 0);
@@ -1893,6 +1973,16 @@ export function publishFrontendDspSceneDiagnostics(
       signal,
     },
     normalizeFrontendDspScene,
+  );
+}
+
+export function fetchSmartNrCondition(
+  signal?: AbortSignal,
+): Promise<SmartNrConditionDto> {
+  return jsonFetch(
+    '/api/dsp/nr-condition',
+    { signal },
+    normalizeSmartNrCondition,
   );
 }
 

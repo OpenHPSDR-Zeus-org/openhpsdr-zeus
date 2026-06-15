@@ -7,6 +7,8 @@
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
 
+using Zeus.Contracts;
+
 namespace Zeus.Server;
 
 public sealed class FrontendDspSceneDiagnosticsService
@@ -72,36 +74,19 @@ public sealed class FrontendDspSceneDiagnosticsService
                 };
             }
 
-            var now = DateTimeOffset.UtcNow;
-            var ageMs = Math.Max(0L, (long)(now - _latest.AtUtc).TotalMilliseconds);
-            long? sourceAgeMs = null;
-            long? sourceClockSkewMs = null;
-            if (_latest.SourceAtUtc is { } sourceAt)
-            {
-                var sourceDeltaMs = (long)(now - sourceAt).TotalMilliseconds;
-                if (sourceDeltaMs >= 0)
-                {
-                    sourceAgeMs = sourceDeltaMs;
-                }
-                else
-                {
-                    sourceAgeMs = 0;
-                    sourceClockSkewMs = -sourceDeltaMs;
-                }
-            }
-            var sceneHealth = Health(ageMs, sourceAgeMs, sourceClockSkewMs, _latest);
+            var timing = Timing(_latest, DateTimeOffset.UtcNow);
             return new
             {
                 schemaVersion = _latest.SchemaVersion,
                 available = true,
-                ageMs,
+                ageMs = timing.AgeMs,
                 sourceAtUtc = _latest.SourceAtUtc,
-                sourceAgeMs,
-                sourceClockSkewMs,
-                status = sceneHealth.Status,
-                fresh = sceneHealth.Fresh,
-                stale = sceneHealth.Stale,
-                diagnosticRecommendation = sceneHealth.Recommendation,
+                sourceAgeMs = timing.SourceAgeMs,
+                sourceClockSkewMs = timing.SourceClockSkewMs,
+                status = timing.Health.Status,
+                fresh = timing.Health.Fresh,
+                stale = timing.Health.Stale,
+                diagnosticRecommendation = timing.Health.Recommendation,
                 atUtc = _latest.AtUtc,
                 sourceClientId = _latest.SourceClientId,
                 mode = _latest.Mode,
@@ -124,6 +109,91 @@ public sealed class FrontendDspSceneDiagnosticsService
         }
     }
 
+    public SmartNrConditionDto SmartNrCondition(DspNrRuntimeSnapshot nrRuntime)
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        lock (_sync)
+        {
+            if (_latest is null)
+            {
+                var health = Health(null, null, null, null);
+                return new(
+                    SchemaVersion: 1,
+                    Available: false,
+                    Status: health.Status,
+                    Fresh: false,
+                    Stale: false,
+                    AgeMs: null,
+                    AtUtc: null,
+                    SourceAtUtc: null,
+                    SourceAgeMs: null,
+                    SourceClockSkewMs: null,
+                    SourceClientId: null,
+                    Mode: null,
+                    Profile: null,
+                    Reason: null,
+                    Recommendation: null,
+                    HeldByRxChain: null,
+                    RxChainLabel: null,
+                    MaxSnrDb: null,
+                    CoherentMaxSnrDb: null,
+                    OccupiedPct: null,
+                    CoherentOccupiedPct: null,
+                    ImpulsivePct: null,
+                    PeakCount: null,
+                    CoherentPeakCount: null,
+                    CoherentSubthresholdSignal: null,
+                    WdspActive: nrRuntime.WdspActive,
+                    WdspNativeLoadable: nrRuntime.WdspNativeLoadable,
+                    WdspEmnrPost2Available: nrRuntime.WdspEmnrPost2Available,
+                    WdspNr4SbnrAvailable: nrRuntime.WdspNr4SbnrAvailable,
+                    Nr4Readiness: nrRuntime.Nr4Readiness,
+                    RequestedNrMode: nrRuntime.RequestedNrMode,
+                    EffectiveNrMode: nrRuntime.EffectiveNrMode,
+                    DiagnosticRecommendation: health.Recommendation,
+                    GeneratedUtc: now);
+            }
+
+            var timing = Timing(_latest, now);
+            return new(
+                SchemaVersion: _latest.SchemaVersion,
+                Available: true,
+                Status: timing.Health.Status,
+                Fresh: timing.Health.Fresh,
+                Stale: timing.Health.Stale,
+                AgeMs: timing.AgeMs,
+                AtUtc: _latest.AtUtc,
+                SourceAtUtc: _latest.SourceAtUtc,
+                SourceAgeMs: timing.SourceAgeMs,
+                SourceClockSkewMs: timing.SourceClockSkewMs,
+                SourceClientId: _latest.SourceClientId,
+                Mode: _latest.Mode,
+                Profile: _latest.SmartNrProfile,
+                Reason: _latest.SmartNrReason,
+                Recommendation: _latest.SmartNrRecommendation,
+                HeldByRxChain: _latest.SmartNrHeldByRxChain,
+                RxChainLabel: _latest.SmartNrRxChainLabel,
+                MaxSnrDb: _latest.MaxSnrDb,
+                CoherentMaxSnrDb: _latest.CoherentMaxSnrDb,
+                OccupiedPct: _latest.OccupiedPct,
+                CoherentOccupiedPct: _latest.CoherentOccupiedPct,
+                ImpulsivePct: _latest.ImpulsivePct,
+                PeakCount: _latest.PeakCount,
+                CoherentPeakCount: _latest.CoherentPeakCount,
+                CoherentSubthresholdSignal: _latest.CoherentSubthresholdSignal,
+                WdspActive: nrRuntime.WdspActive,
+                WdspNativeLoadable: nrRuntime.WdspNativeLoadable,
+                WdspEmnrPost2Available: nrRuntime.WdspEmnrPost2Available,
+                WdspNr4SbnrAvailable: nrRuntime.WdspNr4SbnrAvailable,
+                Nr4Readiness: nrRuntime.Nr4Readiness,
+                RequestedNrMode: nrRuntime.RequestedNrMode,
+                EffectiveNrMode: nrRuntime.EffectiveNrMode,
+                DiagnosticRecommendation: timing.Health.Recommendation,
+                GeneratedUtc: now);
+        }
+    }
+
     private static string? Clean(string? raw, int maxLength)
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
@@ -142,6 +212,28 @@ public sealed class FrontendDspSceneDiagnosticsService
 
     private static int? NonNegative(int? value) =>
         value is { } v && v >= 0 ? v : null;
+
+    private static FrontendDspSceneTiming Timing(FrontendDspSceneSnapshot latest, DateTimeOffset now)
+    {
+        var ageMs = Math.Max(0L, (long)(now - latest.AtUtc).TotalMilliseconds);
+        long? sourceAgeMs = null;
+        long? sourceClockSkewMs = null;
+        if (latest.SourceAtUtc is { } sourceAt)
+        {
+            var sourceDeltaMs = (long)(now - sourceAt).TotalMilliseconds;
+            if (sourceDeltaMs >= 0)
+            {
+                sourceAgeMs = sourceDeltaMs;
+            }
+            else
+            {
+                sourceAgeMs = 0;
+                sourceClockSkewMs = -sourceDeltaMs;
+            }
+        }
+
+        return new(ageMs, sourceAgeMs, sourceClockSkewMs, Health(ageMs, sourceAgeMs, sourceClockSkewMs, latest));
+    }
 
     private static FrontendDspSceneHealth Health(
         long? ageMs,
@@ -234,6 +326,12 @@ public sealed class FrontendDspSceneDiagnosticsService
         bool Fresh,
         bool Stale,
         string Recommendation);
+
+    private sealed record FrontendDspSceneTiming(
+        long AgeMs,
+        long? SourceAgeMs,
+        long? SourceClockSkewMs,
+        FrontendDspSceneHealth Health);
 }
 
 public sealed record FrontendDspSceneDiagnosticsRequest(

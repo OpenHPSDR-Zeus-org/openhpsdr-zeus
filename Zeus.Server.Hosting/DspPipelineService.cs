@@ -565,39 +565,33 @@ public class DspPipelineService : BackgroundService,
     /// _engineLock to serialise themselves against each other.</summary>
     public virtual IDspEngine? CurrentEngine => Volatile.Read(ref _engine);
 
+    public DspNrRuntimeSnapshot SnapshotNrRuntime()
+    {
+        var engine = Volatile.Read(ref _engine);
+        var state = _radio.Snapshot();
+        return BuildNrRuntime(engine, state);
+    }
+
     public object SnapshotDiagnostics(WdspWisdomInitializer wisdom)
     {
         var engine = Volatile.Read(ref _engine);
-        bool wdspActive = engine is WdspDspEngine;
-        bool synthetic = engine is SyntheticDspEngine;
-        bool wdspNativeLoadable = WdspDspEngine.NativeLibraryLoadable;
-        bool wdspEmnrPost2Available = WdspDspEngine.EmnrPost2Available;
-        bool wdspNr4SbnrAvailable = WdspDspEngine.Nr4SbnrAvailable;
         var state = _radio.Snapshot();
-        var nr = state.Nr ?? new NrConfig();
-        string requestedNrMode = nr.NrMode.ToString();
-        string effectiveNrMode = wdspActive
-            ? nr.NrMode == NrMode.Sbnr && !wdspNr4SbnrAvailable
-                ? NrMode.Off.ToString()
-                : requestedNrMode
-            : NrMode.Off.ToString();
+        var nrRuntime = BuildNrRuntime(engine, state);
+        bool wdspActive = nrRuntime.WdspActive;
+        bool synthetic = engine is SyntheticDspEngine;
         return new
         {
             schemaVersion = 1,
             engine = engine?.GetType().Name ?? "None",
             engineKind = wdspActive ? "WDSP" : synthetic ? "Synthetic" : engine is null ? "None" : "Other",
-            wdspActive,
+            wdspActive = nrRuntime.WdspActive,
             synthetic,
-            wdspNativeLoadable,
-            wdspEmnrPost2Available,
-            wdspNr4SbnrAvailable,
-            nr4Readiness = wdspNr4SbnrAvailable
-                ? "available"
-                : wdspNativeLoadable
-                    ? "missing-sbnr-exports"
-                    : "wdsp-native-unloadable",
-            requestedNrMode,
-            effectiveNrMode,
+            wdspNativeLoadable = nrRuntime.WdspNativeLoadable,
+            wdspEmnrPost2Available = nrRuntime.WdspEmnrPost2Available,
+            wdspNr4SbnrAvailable = nrRuntime.WdspNr4SbnrAvailable,
+            nr4Readiness = nrRuntime.Nr4Readiness,
+            requestedNrMode = nrRuntime.RequestedNrMode,
+            effectiveNrMode = nrRuntime.EffectiveNrMode,
             channelId = Volatile.Read(ref _channelId),
             sampleRateHz = Volatile.Read(ref _sampleRateHz),
             displayWidth = Width,
@@ -617,6 +611,34 @@ public class DspPipelineService : BackgroundService,
                     ? "synthetic-idle-or-fallback"
                     : "no-engine",
         };
+    }
+
+    private static DspNrRuntimeSnapshot BuildNrRuntime(IDspEngine? engine, StateDto state)
+    {
+        bool wdspActive = engine is WdspDspEngine;
+        bool wdspNativeLoadable = WdspDspEngine.NativeLibraryLoadable;
+        bool wdspEmnrPost2Available = WdspDspEngine.EmnrPost2Available;
+        bool wdspNr4SbnrAvailable = WdspDspEngine.Nr4SbnrAvailable;
+        var nr = state.Nr ?? new NrConfig();
+        string requestedNrMode = nr.NrMode.ToString();
+        string effectiveNrMode = wdspActive
+            ? nr.NrMode == NrMode.Sbnr && !wdspNr4SbnrAvailable
+                ? NrMode.Off.ToString()
+                : requestedNrMode
+            : NrMode.Off.ToString();
+
+        return new(
+            WdspActive: wdspActive,
+            WdspNativeLoadable: wdspNativeLoadable,
+            WdspEmnrPost2Available: wdspEmnrPost2Available,
+            WdspNr4SbnrAvailable: wdspNr4SbnrAvailable,
+            Nr4Readiness: wdspNr4SbnrAvailable
+                ? "available"
+                : wdspNativeLoadable
+                    ? "missing-sbnr-exports"
+                    : "wdsp-native-unloadable",
+            RequestedNrMode: requestedNrMode,
+            EffectiveNrMode: effectiveNrMode);
     }
 
     /// <summary>Raised after the engine instance is swapped (Synthetic ↔ WDSP).
@@ -2282,3 +2304,12 @@ public class DspPipelineService : BackgroundService,
     private static float ApplyRxMeterCalibration(float value, float calOffsetDb) =>
         value <= -199.5f ? value : value + calOffsetDb;
 }
+
+public sealed record DspNrRuntimeSnapshot(
+    bool WdspActive,
+    bool WdspNativeLoadable,
+    bool WdspEmnrPost2Available,
+    bool WdspNr4SbnrAvailable,
+    string Nr4Readiness,
+    string RequestedNrMode,
+    string EffectiveNrMode);

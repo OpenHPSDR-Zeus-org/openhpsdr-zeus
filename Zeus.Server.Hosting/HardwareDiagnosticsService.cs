@@ -1276,10 +1276,10 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             {
                 "Settings > DSP > Smart NR Automation",
                 "/api/nr-ui-prefs",
-                "planned:/api/dsp/nr-condition",
+                "/api/dsp/nr-condition",
             },
             safetyClass = "rx-safe",
-            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the backend diagnostics feed preserves the active profile, recommendation, RX-chain hold reason, requested/effective NR mode, and WDSP NR2/NR4 native capability for remote clients and recordings.",
+            notes = "Smart NR already separates weak sparse signals, tonal interference, dense noise, and impulsive artifacts; the direct NR-condition API and backend diagnostics feed preserve the active profile, recommendation, RX-chain hold reason, requested/effective NR mode, and WDSP NR2/NR4 native capability for remote clients and recordings.",
         },
         new
         {
