@@ -84,6 +84,28 @@ describe('smart NR supervisor', () => {
     expect(rec.nr.nrMode).toBe('Sbnr');
   });
 
+  it('uses RX chain telemetry to preserve faint sparse weak-signal NR decisions', () => {
+    const spec = noise();
+    spec[120] = NOISE_DB + 8;
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'CWU',
+      rx: {
+        signalDbm: -118,
+        adcHeadroomDb: 18,
+        agcGain: 38,
+      },
+    })!;
+
+    expect(rec.condition.rxAssistedWeakSignal).toBe(true);
+    expect(rec.condition.hasSignal).toBe(true);
+    expect(rec.condition.weakSparse).toBe(true);
+    expect(rec.nr.nrMode).toBe('Sbnr');
+  });
+
   it('does not promote low-confidence subthreshold energy as a signal', () => {
     const spec = noise();
     const conf = confidence();
@@ -103,6 +125,55 @@ describe('smart NR supervisor', () => {
     expect(rec.condition.hasSignal).toBe(false);
     expect(rec.condition.weakSparse).toBe(false);
     expect(rec.nr.nrMode).toBe('Off');
+  });
+
+  it('uses RX and AGC telemetry to recover sparse sub-6 dB weak-signal copy', () => {
+    const spec = noise();
+    spec[120] = NOISE_DB + 8;
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'DIGU',
+      rx: {
+        signalDbm: -123,
+        adcHeadroomDb: 18,
+        agcGain: 42,
+      },
+    })!;
+
+    expect(rec.condition.maxSnrDb).toBeLessThan(6);
+    expect(rec.condition.rxAssistedWeakSignal).toBe(true);
+    expect(rec.condition.weakSparse).toBe(true);
+    expect(rec.nr.nrMode).toBe('Sbnr');
+    expect(rec.nr.nr4ReductionAmount).toBe(7);
+    expect(rec.nr.nr4WhiteningFactor).toBe(10);
+    expect(rec.reason).toContain('Weak-signal assist');
+  });
+
+  it('uses low-artifact NR2 for RX-assisted weak SSB copy', () => {
+    const spec = noise();
+    spec[120] = NOISE_DB + 8;
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'USB',
+      rx: {
+        signalDbm: -121,
+        adcHeadroomDb: 20,
+        agcGain: 38,
+      },
+    })!;
+
+    expect(rec.condition.rxAssistedWeakSignal).toBe(true);
+    expect(rec.nr.nrMode).toBe('Emnr');
+    expect(rec.nr.emnrPost2Run).toBe(true);
+    expect(rec.nr.emnrPost2Factor).toBe(10);
+    expect(rec.nr.emnrPost2Nlevel).toBe(10);
+    expect(rec.nr.nbMode).toBe('Off');
   });
 
   it('recommends NR4/SBNR for weak CW and digital ridges', () => {

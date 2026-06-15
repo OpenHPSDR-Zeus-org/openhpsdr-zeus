@@ -57,13 +57,18 @@ public sealed class RepoUpdateService
             var upstreamRef = upstream.Ok ? NullIfEmpty(upstream.Out) : null;
             var remote = upstreamRef is { } u && u.Contains('/') ? u[..u.IndexOf('/')] : null;
 
-            string? fetchError = null;
+            // Surface an explicit note when there's no upstream (detached HEAD or a
+            // branch with no tracking ref) so the UI doesn't fall through to a
+            // misleading "up to date" with behind=0.
+            string? note = upstreamRef is null
+                ? "No upstream branch configured — set one with: git branch --set-upstream-to=<remote>/<branch>"
+                : null;
             if (fetch && remote is not null)
             {
                 var f = await GitAsync(ct, 30_000, "fetch", "--quiet", remote);
                 if (!f.Ok)
                 {
-                    fetchError = $"fetch failed (offline?): {Trunc(PreferErr(f))}";
+                    note = $"fetch failed (offline?): {Trunc(PreferErr(f))}";
                     _log.LogDebug("git fetch failed: {Err}", PreferErr(f));
                 }
             }
@@ -108,7 +113,7 @@ public sealed class RepoUpdateService
                 LatestRemoteSubject: latestSubject,
                 RemoteUrl: remoteUrl,
                 CheckedUtc: DateTime.UtcNow.ToString("o"),
-                Error: fetchError);
+                Error: note);
         }
         catch (Exception ex)
         {
@@ -178,13 +183,17 @@ public sealed class RepoUpdateService
         psi.ArgumentList.Add(_repoRoot!);
         foreach (var a in args) psi.ArgumentList.Add(a);
 
-        using var p = new Process { StartInfo = psi };
-        p.Start();
-        var outTask = p.StandardOutput.ReadToEndAsync(ct);
-        var errTask = p.StandardError.ReadToEndAsync(ct);
-
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(timeoutMs);
+
+        using var p = new Process { StartInfo = psi };
+        p.Start();
+        // Read both pipes concurrently (avoids the classic full-buffer deadlock)
+        // and bind them to the timeout token so a process that exits but never
+        // closes its pipes can't hang the read past the timeout.
+        var outTask = p.StandardOutput.ReadToEndAsync(cts.Token);
+        var errTask = p.StandardError.ReadToEndAsync(cts.Token);
+
         try
         {
             await p.WaitForExitAsync(cts.Token).ConfigureAwait(false);
@@ -192,6 +201,9 @@ public sealed class RepoUpdateService
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
             try { p.Kill(entireProcessTree: true); } catch { /* best effort */ }
+            // Observe the abandoned reads so they don't surface as unobserved
+            // task exceptions once the killed process's pipes close.
+            try { await Task.WhenAll(outTask, errTask).ConfigureAwait(false); } catch { /* ignore */ }
             return (false, string.Empty, "git timed out");
         }
 

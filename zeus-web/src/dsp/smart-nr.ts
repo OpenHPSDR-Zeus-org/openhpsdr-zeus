@@ -28,7 +28,9 @@ export type SmartNrCondition = {
   coherentRidgeCount: number;
   widestCoherentRunBins: number;
   isolatedHotBinCount: number;
+  confidenceAvailable: boolean;
   coherentSubthresholdSignal: boolean;
+  rxAssistedWeakSignal: boolean;
   hasSignal: boolean;
   weakSparse: boolean;
   denseNoise: boolean;
@@ -64,8 +66,15 @@ export type SmartNrInput = {
   spectrum: Float32Array | null;
   floor: Float32Array | null;
   confidence?: Float32Array | null;
+  rx?: SmartNrRxContext | null;
   current: NrConfigDto;
   mode: RxMode;
+};
+
+export type SmartNrRxContext = {
+  signalDbm?: number | null;
+  adcHeadroomDb?: number | null;
+  agcGain?: number | null;
 };
 
 export function labelSmartNrProfile(nr: NrConfigDto): string {
@@ -106,12 +115,21 @@ export function shapeSmartNrRecommendation(rec: SmartNrRecommendation, tuning: S
   }
 
   if (next.nrMode === 'Sbnr') {
-    next.nr4ReductionAmount = Math.round(5 + gain * 8);
-    next.nr4WhiteningFactor = rec.condition.weakSparse ? Math.round(4 + gain * 6) : Math.round(gain * 5);
-    next.nr4PostFilterThreshold = Math.round(-10 + gain * 5);
+    const rxWeak = rec.condition.rxAssistedWeakSignal;
+    next.nr4ReductionAmount = Math.round((rxWeak ? 4 : 5) + gain * (rxWeak ? 5 : 8));
+    next.nr4SmoothingFactor = rec.condition.weakSparse
+      ? Math.round((rxWeak ? 4 : 6) + gain * (rxWeak ? 4 : 5))
+      : Math.round(8 + gain * 8);
+    next.nr4WhiteningFactor = rec.condition.weakSparse
+      ? Math.round((rxWeak ? 6 : 4) + gain * 6)
+      : Math.round(gain * 5);
+    next.nr4PostFilterThreshold = Math.round((rxWeak ? -12 : -10) + gain * (rxWeak ? 4 : 5));
   } else if (next.nrMode === 'Emnr') {
-    next.emnrPost2Factor = Math.round(8 + gain * 10);
-    next.emnrPost2Nlevel = Math.round(8 + gain * 10);
+    const rxWeak = rec.condition.rxAssistedWeakSignal;
+    const weak = rec.condition.weakSparse;
+    next.emnrPost2Factor = Math.round((rxWeak ? 6 : weak ? 7 : 8) + gain * (rxWeak ? 8 : weak ? 8 : 10));
+    next.emnrPost2Nlevel = Math.round((rxWeak ? 6 : weak ? 7 : 8) + gain * (rxWeak ? 6 : weak ? 8 : 10));
+    next.emnrNpeMethod = rec.condition.denseNoise ? 1 : 0;
     next.emnrAeRun = gain >= 0.25;
   }
 
@@ -330,7 +348,9 @@ export function analyzeSmartNrCondition(
     coherentRidgeCount,
     widestCoherentRunBins,
     isolatedHotBinCount,
+    confidenceAvailable: useConfidence,
     coherentSubthresholdSignal,
+    rxAssistedWeakSignal: false,
     hasSignal,
     weakSparse,
     denseNoise,
@@ -341,6 +361,46 @@ export function analyzeSmartNrCondition(
 
 function isCwOrDigital(mode: RxMode): boolean {
   return mode === 'CWU' || mode === 'CWL' || mode === 'DIGU' || mode === 'DIGL';
+}
+
+function finiteOrNull(value: number | null | undefined): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function applyRxWeakSignalEvidence(
+  condition: SmartNrCondition,
+  rx: SmartNrRxContext | null | undefined,
+): SmartNrCondition {
+  if (!rx || condition.denseNoise || condition.impulsiveNoise) return condition;
+
+  const signalDbm = finiteOrNull(rx.signalDbm);
+  const adcHeadroomDb = finiteOrNull(rx.adcHeadroomDb);
+  const agcGain = finiteOrNull(rx.agcGain);
+  const readableWeakSignal = signalDbm !== null && signalDbm > -145 && signalDbm < -112;
+  const agcRecoveringWeakCopy = agcGain !== null && agcGain >= 30;
+  const frontEndHasRoom = adcHeadroomDb === null || adcHeadroomDb >= 10;
+  const faintSparseShape =
+    condition.maxSnrDb >= 4 &&
+    condition.occupancy12 < 0.04 &&
+    condition.occupancy6 < 0.12 &&
+    condition.widestCoherentRunBins <= Math.max(8, Math.ceil(condition.peakCount + 8));
+  const confidenceAllows =
+    !condition.confidenceAvailable ||
+    condition.maxSnrDb < 6 ||
+    condition.coherentPeakCount > 0 ||
+    condition.coherentRidgeCount > 0 ||
+    condition.coherentSubthresholdSignal;
+
+  if (!readableWeakSignal || !agcRecoveringWeakCopy || !frontEndHasRoom || !faintSparseShape || !confidenceAllows) {
+    return condition;
+  }
+
+  return {
+    ...condition,
+    rxAssistedWeakSignal: true,
+    hasSignal: true,
+    weakSparse: true,
+  };
 }
 
 function isVoiceSsb(mode: RxMode): boolean {
@@ -360,6 +420,7 @@ function impulsiveBlankerThreshold(current: NrConfigDto): number {
 
 function withNr4(current: NrConfigDto, c: SmartNrCondition, mode: RxMode): NrConfigDto {
   const weak = c.weakSparse;
+  const rxWeak = c.rxAssistedWeakSignal;
   return {
     ...current,
     nrMode: 'Sbnr',
@@ -368,15 +429,16 @@ function withNr4(current: NrConfigDto, c: SmartNrCondition, mode: RxMode): NrCon
     nbpNotchesEnabled: c.tonalInterference,
     nbMode: c.impulsiveNoise ? 'Nb2' : 'Off',
     nbThreshold: c.impulsiveNoise ? impulsiveBlankerThreshold(current) : current.nbThreshold,
-    nr4ReductionAmount: weak ? 8 : 10,
-    nr4SmoothingFactor: isCwOrDigital(mode) ? 8 : 14,
-    nr4WhiteningFactor: weak ? 8 : 4,
-    nr4PostFilterThreshold: weak ? -8 : -6,
+    nr4ReductionAmount: rxWeak ? 7 : weak ? 8 : 10,
+    nr4SmoothingFactor: rxWeak ? (isCwOrDigital(mode) ? 5 : 10) : isCwOrDigital(mode) ? 8 : 14,
+    nr4WhiteningFactor: rxWeak ? 10 : weak ? 8 : 4,
+    nr4PostFilterThreshold: rxWeak ? -9 : weak ? -8 : -6,
     nr4NoiseScalingType: c.denseNoise ? 1 : 0,
   };
 }
 
 function withNr2(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
+  const rxWeak = c.rxAssistedWeakSignal;
   return {
     ...current,
     nrMode: 'Emnr',
@@ -389,8 +451,8 @@ function withNr2(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
     emnrNpeMethod: c.denseNoise ? 1 : 0,
     emnrAeRun: true,
     emnrPost2Run: true,
-    emnrPost2Factor: c.weakSparse ? 12 : 15,
-    emnrPost2Nlevel: c.weakSparse ? 12 : 15,
+    emnrPost2Factor: rxWeak ? 10 : c.weakSparse ? 12 : 15,
+    emnrPost2Nlevel: rxWeak ? 10 : c.weakSparse ? 12 : 15,
     emnrPost2Rate: 5,
     emnrPost2Taper: 12,
   };
@@ -409,8 +471,9 @@ function quietProfile(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
 }
 
 export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | null {
-  const condition = analyzeSmartNrCondition(input.spectrum, input.floor, input.confidence ?? null);
-  if (!condition) return null;
+  const baseCondition = analyzeSmartNrCondition(input.spectrum, input.floor, input.confidence ?? null);
+  if (!baseCondition) return null;
+  const condition = applyRxWeakSignalEvidence(baseCondition, input.rx);
 
   let nr: NrConfigDto;
   let reason: string;
@@ -418,7 +481,9 @@ export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | n
     nr = condition.hasSignal || condition.denseNoise
       ? withNr4(input.current, condition, input.mode)
       : quietProfile(input.current, condition);
-    reason = condition.weakSparse
+    reason = condition.rxAssistedWeakSignal
+      ? 'Weak-signal assist: AGC/RX telemetry confirms a marginal copy; use NR4/SBNR with narrow whitening.'
+      : condition.weakSparse
       ? 'Weak narrow-signal profile: NR4/SBNR with mild whitening.'
       : condition.impulsiveNoise
         ? 'Impulsive-noise profile: engage NB2/SNB while keeping spectral NR conservative.'
@@ -427,7 +492,9 @@ export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | n
     nr = condition.weakSparse || condition.denseNoise
       ? withNr2(input.current, condition)
       : quietProfile(input.current, condition);
-    reason = condition.impulsiveNoise
+    reason = condition.rxAssistedWeakSignal
+      ? 'Weak-signal assist: AGC/RX telemetry confirms marginal SSB copy; use low-artifact NR2/EMNR.'
+      : condition.impulsiveNoise
       ? 'SSB impulse profile: use NB2/SNB for non-coherent spikes before heavier NR.'
       : condition.denseNoise
       ? 'SSB noise profile: NR2/EMNR with artifact eliminator and comfort noise.'
@@ -436,7 +503,9 @@ export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | n
     nr = condition.denseNoise || condition.weakSparse
       ? withNr4(input.current, condition, input.mode)
       : quietProfile(input.current, condition);
-    reason = condition.denseNoise
+    reason = condition.rxAssistedWeakSignal
+      ? 'Weak-signal assist: use mild NR4/SBNR while AGC preserves the carrier.'
+      : condition.denseNoise
       ? 'Carrier-mode noise profile: mild NR4/SBNR without time-domain blanking.'
       : 'Carrier-mode clean profile: avoid unnecessary NR distortion.';
   } else {
