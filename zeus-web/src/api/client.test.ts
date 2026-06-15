@@ -59,6 +59,7 @@ import {
   fetchExternalPttStatus,
   fetchHardwareDiagnostics,
   fetchHardwareKeyingStatus,
+  fetchRadioNetworkProfile,
   fetchRadioPowerCalibration,
   fetchRadioSupplyAlarms,
   fetchSmartNrCondition,
@@ -966,6 +967,54 @@ describe('POST helpers', () => {
     expect(status.alarmStatus).toBe('telemetry-ready');
     expect(status.p2.supplyVoltsAdc).toBe(276);
     expect(status.p2.supplyVolts).toBe(13.8);
+  });
+
+  it('fetchRadioNetworkProfile reads active transport counters', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      schemaVersion: 1,
+      connectionStatus: 'Connected',
+      endpoint: '192.168.1.10:1024',
+      activeProtocol: 'P2',
+      sampleRateHz: 384000,
+      connectedBoard: 'OrionMkII',
+      effectiveBoard: 'OrionMkII',
+      orionMkIIVariant: 'G2',
+      transport: 'udp',
+      p1: {
+        attached: false,
+        totalFrames: 0,
+        droppedFrames: 0,
+        dropRatioPct: 0,
+        hiPriorityPackets: null,
+        psPairedPackets: null,
+      },
+      p2: {
+        attached: true,
+        totalFrames: 12000,
+        droppedFrames: 3,
+        dropRatioPct: 0.025,
+        hiPriorityPackets: 900,
+        psPairedPackets: null,
+      },
+      healthStatus: 'loss-detected',
+      diagnosticRecommendation: 'UDP sequence gaps are present.',
+      generatedUtc: '2026-06-15T01:00:01Z',
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const profile = await fetchRadioNetworkProfile();
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/radio/network-profile');
+    expect(init?.method).toBeUndefined();
+    expect(profile.connectionStatus).toBe('Connected');
+    expect(profile.endpoint).toBe('192.168.1.10:1024');
+    expect(profile.activeProtocol).toBe('P2');
+    expect(profile.sampleRateHz).toBe(384000);
+    expect(profile.p2.attached).toBe(true);
+    expect(profile.p2.droppedFrames).toBe(3);
+    expect(profile.p2.hiPriorityPackets).toBe(900);
+    expect(profile.healthStatus).toBe('loss-detected');
   });
 
   it('raises ApiError with server-provided error text on 400', async () => {

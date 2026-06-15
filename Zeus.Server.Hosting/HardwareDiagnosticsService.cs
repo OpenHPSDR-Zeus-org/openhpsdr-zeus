@@ -298,6 +298,38 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         }
     }
 
+    public RadioNetworkProfileDto NetworkProfileSnapshot()
+    {
+        var state = _radio.Snapshot();
+        var connected = _radio.ConnectedBoardKind;
+        var effective = _radio.EffectiveBoardKind;
+        var variant = _radio.EffectiveOrionMkIIVariant;
+
+        lock (_sync)
+        {
+            var p1 = BuildNetworkCounters(_p1Client);
+            var p2 = BuildNetworkCounters(_p2Client);
+            var (healthStatus, recommendation) =
+                EvaluateNetworkProfile(state.Status, _activeProtocol, p1, p2);
+
+            return new(
+                SchemaVersion: 1,
+                ConnectionStatus: state.Status.ToString(),
+                Endpoint: state.Endpoint,
+                ActiveProtocol: _activeProtocol,
+                SampleRateHz: state.SampleRate,
+                ConnectedBoard: connected.ToString(),
+                EffectiveBoard: effective.ToString(),
+                OrionMkIIVariant: variant.ToString(),
+                Transport: "udp",
+                P1: p1,
+                P2: p2,
+                HealthStatus: healthStatus,
+                DiagnosticRecommendation: recommendation,
+                GeneratedUtc: DateTimeOffset.UtcNow);
+        }
+    }
+
     public void ResetMapping()
     {
         lock (_sync)
@@ -504,6 +536,99 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
 
     private static double Round(double value, int digits) =>
         double.IsFinite(value) ? Math.Round(value, digits) : 0.0;
+
+    private static RadioNetworkCountersDto BuildNetworkCounters(IProtocol1Client? client)
+    {
+        if (client is null)
+            return EmptyNetworkCounters();
+
+        var total = client.TotalFrames;
+        var dropped = client.DroppedFrames;
+        return new(
+            Attached: true,
+            TotalFrames: total,
+            DroppedFrames: dropped,
+            DropRatioPct: DropRatioPct(total, dropped),
+            HiPriorityPackets: null,
+            PsPairedPackets: client.PsPairedPacketCount);
+    }
+
+    private static RadioNetworkCountersDto BuildNetworkCounters(Zeus.Protocol2.Protocol2Client? client)
+    {
+        if (client is null)
+            return EmptyNetworkCounters();
+
+        var total = client.TotalFrames;
+        var dropped = client.DroppedFrames;
+        return new(
+            Attached: true,
+            TotalFrames: total,
+            DroppedFrames: dropped,
+            DropRatioPct: DropRatioPct(total, dropped),
+            HiPriorityPackets: client.HiPriPacketCount,
+            PsPairedPackets: null);
+    }
+
+    private static RadioNetworkCountersDto EmptyNetworkCounters() => new(
+        Attached: false,
+        TotalFrames: 0,
+        DroppedFrames: 0,
+        DropRatioPct: 0,
+        HiPriorityPackets: null,
+        PsPairedPackets: null);
+
+    private static double DropRatioPct(long totalFrames, long droppedFrames)
+    {
+        var denominator = totalFrames + droppedFrames;
+        if (denominator <= 0) return 0;
+        return Round(droppedFrames * 100.0 / denominator, 3);
+    }
+
+    private static (string HealthStatus, string Recommendation) EvaluateNetworkProfile(
+        ConnectionStatus status,
+        string? activeProtocol,
+        RadioNetworkCountersDto p1,
+        RadioNetworkCountersDto p2)
+    {
+        if (status != ConnectionStatus.Connected)
+        {
+            return (
+                "disconnected",
+                "No radio transport is active; connect a radio before evaluating packet loss or sample-rate headroom.");
+        }
+
+        var active = activeProtocol switch
+        {
+            "P1" => p1,
+            "P2" => p2,
+            _ => null,
+        };
+
+        if (active is null || !active.Attached)
+        {
+            return (
+                "state-only",
+                "Radio state is connected but no protocol client is attached to diagnostics; reconnect to bind transport counters.");
+        }
+
+        if (active.TotalFrames <= 0)
+        {
+            return (
+                "waiting-for-rx",
+                "The transport is attached but no RX IQ frames have arrived yet; verify the radio stream has started and the selected sample rate is supported.");
+        }
+
+        if (active.DroppedFrames > 0)
+        {
+            return (
+                "loss-detected",
+                "UDP sequence gaps are present; reduce RX sample rate, check NIC power management, and prefer a direct wired LAN path before judging DSP quality.");
+        }
+
+        return (
+            "clean",
+            "The active transport has delivered RX frames without observed sequence gaps in this session.");
+    }
 
     private void OnP1Telemetry(TelemetryReading reading)
     {
@@ -1370,10 +1495,10 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             {
                 "/api/radios",
                 "/api/radio/variant",
-                "planned:/api/radio/network-profile",
+                "/api/radio/network-profile",
             },
             safetyClass = "rx-safe",
-            notes = "Stable board identity, firmware, raw discovery reply, and Thetis-derived capability gates for showing only hardware-backed settings.",
+            notes = "Stable board identity, firmware, raw discovery reply, Thetis-derived capability gates, and live transport counters now give clients a direct network profile before DSP quality is judged.",
         },
         new
         {

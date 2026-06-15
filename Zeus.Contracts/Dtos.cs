@@ -246,6 +246,30 @@ public sealed record RadioSupplyAlarmsDto(
     string DiagnosticRecommendation,
     DateTimeOffset GeneratedUtc);
 
+public sealed record RadioNetworkCountersDto(
+    bool Attached,
+    long TotalFrames,
+    long DroppedFrames,
+    double DropRatioPct,
+    long? HiPriorityPackets,
+    long? PsPairedPackets);
+
+public sealed record RadioNetworkProfileDto(
+    int SchemaVersion,
+    string ConnectionStatus,
+    string? Endpoint,
+    string? ActiveProtocol,
+    int SampleRateHz,
+    string ConnectedBoard,
+    string EffectiveBoard,
+    string OrionMkIIVariant,
+    string Transport,
+    RadioNetworkCountersDto P1,
+    RadioNetworkCountersDto P2,
+    string HealthStatus,
+    string DiagnosticRecommendation,
+    DateTimeOffset GeneratedUtc);
+
 // Operator-facing AGC configuration (issue: DSP controls Thetis parity §4).
 // Mode selects a canned profile (Long/Slow/Med/Fast/Fixed) or Custom; the
 // nullable params are only consulted in Custom mode (and FixedGainDb only in

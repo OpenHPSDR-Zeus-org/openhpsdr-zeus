@@ -674,6 +674,32 @@ export type RadioSupplyAlarmsDto = {
   generatedUtc: string;
 };
 
+export type RadioNetworkCountersDto = {
+  attached: boolean;
+  totalFrames: number;
+  droppedFrames: number;
+  dropRatioPct: number;
+  hiPriorityPackets: number | null;
+  psPairedPackets: number | null;
+};
+
+export type RadioNetworkProfileDto = {
+  schemaVersion: number;
+  connectionStatus: string;
+  endpoint: string | null;
+  activeProtocol: 'P1' | 'P2' | null;
+  sampleRateHz: number;
+  connectedBoard: string;
+  effectiveBoard: string;
+  orionMkIIVariant: string;
+  transport: string;
+  p1: RadioNetworkCountersDto;
+  p2: RadioNetworkCountersDto;
+  healthStatus: string;
+  diagnosticRecommendation: string | null;
+  generatedUtc: string;
+};
+
 export type HardwareP1DiagnosticsDto = {
   packets: number;
   lastUpdatedUtc: string | null;
@@ -1676,6 +1702,41 @@ function normalizeRadioSupplyAlarms(raw: unknown): RadioSupplyAlarmsDto {
   };
 }
 
+function normalizeRadioNetworkCounters(raw: unknown): RadioNetworkCountersDto {
+  const r = asDiagRecord(raw);
+  return {
+    attached: Boolean(r.attached),
+    totalFrames: diagNumber(r.totalFrames) ?? 0,
+    droppedFrames: diagNumber(r.droppedFrames) ?? 0,
+    dropRatioPct: diagNumber(r.dropRatioPct) ?? 0,
+    hiPriorityPackets: diagNumber(r.hiPriorityPackets),
+    psPairedPackets: diagNumber(r.psPairedPackets),
+  };
+}
+
+function normalizeRadioNetworkProfile(raw: unknown): RadioNetworkProfileDto {
+  const r = asDiagRecord(raw);
+  return {
+    schemaVersion: diagNumber(r.schemaVersion) ?? 0,
+    connectionStatus: diagString(r.connectionStatus) ?? 'Disconnected',
+    endpoint: diagString(r.endpoint),
+    activeProtocol: diagActiveProtocol(r.activeProtocol),
+    sampleRateHz: diagNumber(r.sampleRateHz) ?? 0,
+    connectedBoard: diagString(r.connectedBoard) ?? 'Unknown',
+    effectiveBoard: diagString(r.effectiveBoard) ?? 'Unknown',
+    orionMkIIVariant: diagString(r.orionMkIIVariant) ?? 'G2',
+    transport: diagString(r.transport) ?? 'udp',
+    p1: normalizeRadioNetworkCounters(r.p1),
+    p2: normalizeRadioNetworkCounters(r.p2),
+    healthStatus: diagString(r.healthStatus) ?? 'unknown',
+    diagnosticRecommendation: diagString(r.diagnosticRecommendation),
+    generatedUtc:
+      typeof r.generatedUtc === 'string'
+        ? r.generatedUtc
+        : new Date().toISOString(),
+  };
+}
+
 function diagNumberArray(raw: unknown): number[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((v) => diagNumber(v) ?? 0);
@@ -2235,6 +2296,16 @@ export function fetchRadioSupplyAlarms(
     '/api/radio/supply-alarms',
     { signal },
     normalizeRadioSupplyAlarms,
+  );
+}
+
+export function fetchRadioNetworkProfile(
+  signal?: AbortSignal,
+): Promise<RadioNetworkProfileDto> {
+  return jsonFetch(
+    '/api/radio/network-profile',
+    { signal },
+    normalizeRadioNetworkProfile,
   );
 }
 
