@@ -64,6 +64,9 @@ type WaterfallProps = {
   transparent?: boolean;
 };
 
+const CONTEXT_LOSS_TEARDOWN_DELAY_MS = 250;
+const pendingContextLossTimers = new WeakMap<HTMLCanvasElement, number>();
+
 export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -88,6 +91,12 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
+
+    const pendingContextLossTimer = pendingContextLossTimers.get(canvas);
+    if (pendingContextLossTimer !== undefined) {
+      window.clearTimeout(pendingContextLossTimer);
+      pendingContextLossTimers.delete(canvas);
+    }
 
     // Tell the realtime client that decoded spectrum frames are needed —
     // ws-client.ts skips decodeDisplayFrame entirely when no consumer is
@@ -426,10 +435,20 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       cancelDrawBusFrame(redraw);
       releaseFrameConsumer();
       renderer?.dispose();
-      // Free the ANGLE context slot now rather than waiting for GC — on a
-      // disconnect/reconnect cycle the Waterfall remounts, and ANGLE caps the
-      // number of live WebGL contexts (#629).
-      gl?.getExtension('WEBGL_lose_context')?.loseContext();
+      // Free the ANGLE context slot on real unmounts, but give React
+      // StrictMode's development-only effect remount a chance to cancel it.
+      // Losing the context synchronously during that probe leaves the reused
+      // canvas with a half-restored WebGL context; ANGLE then reports missing
+      // extensions and shader compilation fails with an empty compiler log.
+      const loseContext = gl?.getExtension('WEBGL_lose_context');
+      if (loseContext) {
+        const timer = window.setTimeout(() => {
+          if (pendingContextLossTimers.get(canvas) !== timer) return;
+          pendingContextLossTimers.delete(canvas);
+          loseContext.loseContext();
+        }, CONTEXT_LOSS_TEARDOWN_DELAY_MS);
+        pendingContextLossTimers.set(canvas, timer);
+      }
       rendererRef.current = null;
     };
   }, []);
