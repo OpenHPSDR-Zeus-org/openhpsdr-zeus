@@ -43,6 +43,8 @@ describe('rx-chain-health', () => {
     expect(a.score).toBeGreaterThanOrEqual(90);
     expect(a.adcHeadroomDb).toBe(18);
     expect(a.signalSource).toBe('rx-meters-v2');
+    expect(a.recommendation).toBe('Hold front-end settings');
+    expect(a.actionTone).toBe('neutral');
   });
 
   it('flags ADC overload before weak signals get masked', () => {
@@ -51,6 +53,8 @@ describe('rx-chain-health', () => {
     expect(a.label).toBe('ADC overload risk');
     expect(a.score).toBeLessThan(20);
     expect(a.detail).toContain('full scale');
+    expect(a.recommendation).toBe('Add attenuation now');
+    expect(a.actionTone).toBe('protect');
   });
 
   it('flags an under-filled ADC when a readable signal is wasting dynamic range', () => {
@@ -58,6 +62,8 @@ describe('rx-chain-health', () => {
     expect(a.state).toBe('underfilled');
     expect(a.label).toBe('Front end under-filled');
     expect(a.detail).toContain('ADC is under-filled');
+    expect(a.recommendation).toContain('Recover dynamic range');
+    expect(a.actionTone).toBe('optimize');
   });
 
   it('classifies high-boost weak-signal copy as AGC-stressed', () => {
@@ -65,5 +71,7 @@ describe('rx-chain-health', () => {
     expect(a.state).toBe('agc-stressed');
     expect(a.label).toBe('AGC stressed');
     expect(a.detail).toContain('heavy boost');
+    expect(a.recommendation).toContain('Reduce attenuation');
+    expect(a.actionTone).toBe('optimize');
   });
 });

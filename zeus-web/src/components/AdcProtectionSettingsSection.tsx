@@ -12,6 +12,9 @@ import {
   type AdcProtectionConfigDto,
   type AdcProtectionStatusDto,
 } from '../api/client';
+import { analyzeRxChain } from '../dsp/rx-chain-health';
+import { useRxMetersStore } from '../state/rx-meters-store';
+import { useTxStore } from '../state/tx-store';
 import { Slider } from './design/Slider';
 
 const SAVE_DEBOUNCE_MS = 220;
@@ -22,6 +25,10 @@ function hex(v: number, width = 2): string {
 
 function adc(v: number | null): string {
   return v === null ? '--' : `${v}`;
+}
+
+function db(v: number | null, digits = 1): string {
+  return v === null ? '--' : `${v.toFixed(digits)} dB`;
 }
 
 function time(v: string | null): string {
@@ -62,6 +69,14 @@ export function AdcProtectionSettingsSection() {
   const saveTimer = useRef<number | null>(null);
   const saveAbort = useRef<AbortController | null>(null);
   const dirty = useRef(false);
+  const fallbackRxDbm = useTxStore((s) => s.rxDbm);
+  const signalPk = useRxMetersStore((s) => s.signalPk);
+  const signalAv = useRxMetersStore((s) => s.signalAv);
+  const adcPk = useRxMetersStore((s) => s.adcPk);
+  const adcAv = useRxMetersStore((s) => s.adcAv);
+  const agcGain = useRxMetersStore((s) => s.agcGain);
+  const agcEnvPk = useRxMetersStore((s) => s.agcEnvPk);
+  const agcEnvAv = useRxMetersStore((s) => s.agcEnvAv);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     try {
@@ -128,7 +143,32 @@ export function AdcProtectionSettingsSection() {
     commit({ ...ADC_PROTECTION_CONFIG_DEFAULT }, true);
   }, [commit]);
 
+  const rx = analyzeRxChain({
+    signalPk,
+    signalAv,
+    adcPk,
+    adcAv,
+    agcGain,
+    agcEnvPk,
+    agcEnvAv,
+    fallbackDbm: fallbackRxDbm,
+  });
+  const rxWarn = rx.actionTone === 'protect';
+  const rxOptimize = rx.actionTone === 'optimize';
   const metrics: Metric[] = [
+    {
+      label: 'RX Fit',
+      value: `${rx.score > 0 ? rx.score : '--'} ${rx.label}`,
+      hot: rxWarn || rxOptimize,
+    },
+    { label: 'RX Action', value: rx.recommendation, hot: rxWarn },
+    { label: 'WDSP ADC Pk', value: db(rx.adcPk), hot: rxWarn },
+    { label: 'ADC Headroom', value: db(rx.adcHeadroomDb, 0), hot: rxWarn },
+    {
+      label: 'WDSP AGC',
+      value: `${rx.agcGain >= 0 ? '+' : ''}${rx.agcGain.toFixed(0)} dB`,
+      hot: rx.state === 'agc-stressed',
+    },
     { label: 'Effective', value: `${status?.effectiveDb ?? 0} dB`, hot: status?.warning },
     { label: 'Baseline', value: `${status?.attenDb ?? 0} dB` },
     { label: 'Auto Offset', value: `${status?.offsetDb ?? 0} dB`, hot: (status?.offsetDb ?? 0) > 0 },

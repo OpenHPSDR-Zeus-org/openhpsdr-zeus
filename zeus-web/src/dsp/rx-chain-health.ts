@@ -25,10 +25,14 @@ export type RxChainState =
   | 'agc-stressed'
   | 'overload';
 
+export type RxChainActionTone = 'neutral' | 'optimize' | 'protect';
+
 export type RxChainAnalysis = {
   state: RxChainState;
   label: string;
   detail: string;
+  recommendation: string;
+  actionTone: RxChainActionTone;
   score: number;
   signalDbm: number | null;
   signalSource: RxSignalSource;
@@ -98,6 +102,8 @@ export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
       state: 'waiting',
       label: 'RX telemetry waiting',
       detail: 'Waiting for calibrated signal, ADC, and AGC stage meters.',
+      recommendation: 'Collect RX stage meters',
+      actionTone: 'neutral',
       score: 0,
       ...baseMetrics,
     };
@@ -108,6 +114,8 @@ export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
       state: 'waiting',
       label: 'RX signal only',
       detail: 'Using the legacy S-meter while waiting for calibrated ADC and AGC stage meters.',
+      recommendation: 'Wait for calibrated ADC/AGC telemetry',
+      actionTone: 'neutral',
       score: 0,
       ...baseMetrics,
     };
@@ -120,6 +128,10 @@ export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
       detail: adcPk > -1
         ? 'ADC peaks are nearly full scale; add attenuation or reduce RF gain before weak signals are masked.'
         : 'ADC headroom is tight; leave more front-end margin for impulse noise and strong adjacent signals.',
+      recommendation: adcPk > -1
+        ? 'Add attenuation now'
+        : 'Add 3-6 dB attenuation',
+      actionTone: 'protect',
       score: adcPk > -1 ? 12 : 32,
       ...baseMetrics,
     };
@@ -172,6 +184,8 @@ export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
       state: 'underfilled',
       label: 'Front end under-filled',
       detail: reasons.join(' · '),
+      recommendation: 'Recover dynamic range; reduce attenuation if safe',
+      actionTone: 'optimize',
       score: finalScore,
       ...baseMetrics,
     };
@@ -182,6 +196,10 @@ export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
       state: 'agc-stressed',
       label: 'AGC stressed',
       detail: reasons.join(' · '),
+      recommendation: agcGain < -10
+        ? 'Add headroom or reduce RF gain'
+        : 'Reduce attenuation or narrow the passband',
+      actionTone: agcGain < -10 ? 'protect' : 'optimize',
       score: finalScore,
       ...baseMetrics,
     };
@@ -192,6 +210,8 @@ export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
       state: 'weak',
       label: 'Weak-signal posture',
       detail: reasons.join(' · ') || 'ADC headroom is preserved while tracking a weak signal.',
+      recommendation: 'Hold headroom; use Smart NR/filtering',
+      actionTone: 'neutral',
       score: finalScore,
       ...baseMetrics,
     };
@@ -202,6 +222,8 @@ export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
       state: 'quiet',
       label: 'Quiet receiver',
       detail: reasons.join(' · ') || 'Receiver chain is idle or below calibrated S-meter floor.',
+      recommendation: 'Hold gain until a signal appears',
+      actionTone: 'neutral',
       score: finalScore,
       ...baseMetrics,
     };
@@ -211,6 +233,8 @@ export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
     state: 'optimized',
     label: 'RX chain optimized',
     detail: reasons.join(' · ') || 'ADC headroom and AGC gain are in range.',
+    recommendation: 'Hold front-end settings',
+    actionTone: 'neutral',
     score: finalScore,
     ...baseMetrics,
   };
