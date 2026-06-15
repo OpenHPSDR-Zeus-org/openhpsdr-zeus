@@ -238,14 +238,18 @@ export type SignalEnhanceState = SignalEnhanceTuning & {
   applySignalEnhanceProfile: (profileId: SignalEnhancePresetId) => void;
   applySignalEnhanceAutoProfile: (profileId: SignalEnhancePresetId) => void;
   applySignalEnhanceModeProfile: (mode: RxMode) => void;
+  applySignalEnhanceSettings: (settings: SignalEnhancePersisted) => void;
   setSignalEnhanceAutoProfile: (enabled: boolean, mode?: RxMode) => void;
   resetSignalEnhanceTuning: () => void;
 };
 
-type SignalEnhancePersisted = Pick<
-  SignalEnhanceState,
-  'popEnabled' | 'snapEnabled' | 'autoProfileEnabled' | 'visualAgcEnabled' | 'impulseRejectEnabled'
-> & SignalEnhanceTuning;
+export type SignalEnhancePersisted = {
+  popEnabled: boolean;
+  snapEnabled: boolean;
+  autoProfileEnabled: boolean;
+  visualAgcEnabled: boolean;
+  impulseRejectEnabled: boolean;
+} & SignalEnhanceTuning;
 type SignalEnhanceTuningValues = Omit<SignalEnhanceTuning, 'profileId'>;
 
 export const SIGNAL_ENHANCE_PROFILE_ORDER: readonly SignalEnhancePresetId[] = [
@@ -678,6 +682,30 @@ function persist(s: SignalEnhancePersisted): void {
   }
 }
 
+export function signalEnhanceSettingsFromState(s: SignalEnhanceState): SignalEnhancePersisted {
+  return {
+    popEnabled: s.popEnabled,
+    snapEnabled: s.snapEnabled,
+    autoProfileEnabled: s.autoProfileEnabled,
+    visualAgcEnabled: s.visualAgcEnabled,
+    impulseRejectEnabled: s.impulseRejectEnabled,
+    profileId: s.profileId,
+    popFloorDb: s.popFloorDb,
+    popSpanDb: s.popSpanDb,
+    popGamma: s.popGamma,
+    popRenderIntensity: s.popRenderIntensity,
+    coherenceHoldGate: s.coherenceHoldGate,
+    coherenceBoostDb: s.coherenceBoostDb,
+    ridgeBoost: s.ridgeBoost,
+    ridgeMaxBoostDb: s.ridgeMaxBoostDb,
+    visualAgcStrength: s.visualAgcStrength,
+    impulseRejectDb: s.impulseRejectDb,
+    snapRadiusHz: s.snapRadiusHz,
+    snapMinSnrDb: s.snapMinSnrDb,
+    peakMinSnrDb: s.peakMinSnrDb,
+  };
+}
+
 const persisted = readPersisted();
 
 export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
@@ -752,6 +780,20 @@ export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
   applySignalEnhanceModeProfile: (mode) => {
     const profileId = signalEnhanceProfileForMode(mode);
     get().applySignalEnhanceAutoProfile(profileId);
+  },
+  applySignalEnhanceSettings: (settings) => {
+    const next = {
+      popEnabled: settings.popEnabled,
+      snapEnabled: settings.snapEnabled,
+      autoProfileEnabled: settings.autoProfileEnabled,
+      visualAgcEnabled: settings.visualAgcEnabled,
+      impulseRejectEnabled: settings.impulseRejectEnabled,
+      ...normalizeTuning(settings),
+    };
+    set(next);
+    if (!next.popEnabled) resetSignalHold();
+    resetSignalState();
+    persist(get());
   },
   setSignalEnhanceAutoProfile: (autoProfileEnabled, mode) => {
     if (autoProfileEnabled && mode) {

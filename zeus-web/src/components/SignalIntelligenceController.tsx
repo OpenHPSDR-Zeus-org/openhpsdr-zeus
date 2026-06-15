@@ -10,11 +10,16 @@
 // option) any later version. See the LICENSE file at the root of this
 // repository for the full text, or https://www.gnu.org/licenses/.
 
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
+import {
+  fetchDisplayIntelligenceSettings,
+  saveDisplayIntelligenceSettings,
+} from '../api/display-intelligence';
 import {
   getNoiseFloor,
   getSignalConfidence,
   recommendSignalEnhanceScene,
+  signalEnhanceSettingsFromState,
   useSignalEnhanceStore,
   type SignalEnhanceScene,
   type SignalEnhancePresetId,
@@ -24,6 +29,7 @@ import { useDisplayStore } from '../state/display-store';
 
 const SCENE_SAMPLE_INTERVAL_MS = 1000;
 const SCENE_DWELL_SAMPLES = 3;
+const SETTINGS_SAVE_DEBOUNCE_MS = 350;
 
 function sceneReason(scene: SignalEnhanceScene): string {
   if (scene.profileId === 'contest') return 'crowded span';
@@ -57,6 +63,82 @@ function publishSceneStatus(scene: SignalEnhanceScene): void {
 // The settings panel only edits state; this component performs the live
 // automation while the operator is back on the panadapter.
 export function SignalIntelligenceController() {
+  const initialSettingsJsonRef = useRef<string | null>(null);
+  if (initialSettingsJsonRef.current === null) {
+    initialSettingsJsonRef.current = JSON.stringify(
+      signalEnhanceSettingsFromState(useSignalEnhanceStore.getState()),
+    );
+  }
+
+  useEffect(() => {
+    let active = true;
+    let touched = false;
+    let hydrating = false;
+    let saveTimer: number | null = null;
+    let saveAbort: AbortController | null = null;
+    let lastSavedJson = JSON.stringify(signalEnhanceSettingsFromState(useSignalEnhanceStore.getState()));
+
+    const clearSaveTimer = () => {
+      if (saveTimer !== null) {
+        window.clearTimeout(saveTimer);
+        saveTimer = null;
+      }
+    };
+
+    const scheduleSave = () => {
+      touched = true;
+      const snapshot = signalEnhanceSettingsFromState(useSignalEnhanceStore.getState());
+      const json = JSON.stringify(snapshot);
+      clearSaveTimer();
+      if (json === lastSavedJson) return;
+      saveTimer = window.setTimeout(() => {
+        saveTimer = null;
+        saveAbort?.abort();
+        const controller = new AbortController();
+        saveAbort = controller;
+        void saveDisplayIntelligenceSettings(snapshot, controller.signal)
+          .then((saved) => {
+            if (!controller.signal.aborted) {
+              lastSavedJson = JSON.stringify(saved);
+            }
+          })
+          .catch(() => {
+            /* Local store and localStorage remain authoritative until the next change. */
+          })
+          .finally(() => {
+            if (saveAbort === controller) saveAbort = null;
+          });
+      }, SETTINGS_SAVE_DEBOUNCE_MS);
+    };
+
+    fetchDisplayIntelligenceSettings()
+      .then((settings) => {
+        const currentJson = JSON.stringify(signalEnhanceSettingsFromState(useSignalEnhanceStore.getState()));
+        if (!active || touched || currentJson !== initialSettingsJsonRef.current) return;
+        hydrating = true;
+        useSignalEnhanceStore.getState().applySignalEnhanceSettings(settings);
+        hydrating = false;
+        lastSavedJson = JSON.stringify(signalEnhanceSettingsFromState(useSignalEnhanceStore.getState()));
+      })
+      .catch(() => {
+        /* Browser-local Signal Intelligence settings stay active if the backend is unavailable. */
+      });
+
+    const unsubEnhance = useSignalEnhanceStore.subscribe((state, prev) => {
+      if (hydrating) return;
+      const nextJson = JSON.stringify(signalEnhanceSettingsFromState(state));
+      const prevJson = JSON.stringify(signalEnhanceSettingsFromState(prev));
+      if (nextJson !== prevJson) scheduleSave();
+    });
+
+    return () => {
+      active = false;
+      clearSaveTimer();
+      saveAbort?.abort();
+      unsubEnhance();
+    };
+  }, []);
+
   useEffect(() => {
     let lastSceneAt = 0;
     let pendingProfile: SignalEnhancePresetId | null = null;

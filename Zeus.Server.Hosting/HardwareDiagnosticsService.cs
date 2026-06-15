@@ -1241,10 +1241,10 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             candidateControls = new[]
             {
                 "Settings > DSP > Signal Intelligence",
-                "planned:/api/dsp/display-intelligence",
+                "/api/dsp/display-intelligence",
             },
             safetyClass = "rx-safe",
-            notes = "Existing RX display logic now has floor-normalized Signal Pop, snap-to-carrier, temporal confidence, and coherent auto-profile classification; diagnostics mirror the current frontend scene so remote/headless monitoring can audit weak-signal decisions.",
+            notes = "Existing RX display logic now has floor-normalized Signal Pop, snap-to-carrier, temporal confidence, and coherent auto-profile classification; the display-intelligence API persists the active weak-signal display policy while diagnostics mirror live frontend scene evidence.",
         },
         new
         {

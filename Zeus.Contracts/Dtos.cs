@@ -908,6 +908,31 @@ public sealed record DisplaySettingsSetRequest(
     double? WfTxDbMin = null,
     double? WfTxDbMax = null);
 
+// Server-side mirror of the frontend Signal Intelligence weak-signal display
+// controls. The DSP math remains in zeus-web's signal-estimator; this DTO lets
+// the active operator profile and tuning follow the radio across browsers and
+// lets diagnostics audit which weak-signal display policy is active.
+public sealed record DisplayIntelligenceSettingsDto(
+    string ProfileId,
+    bool PopEnabled,
+    bool SnapEnabled,
+    bool AutoProfileEnabled,
+    bool VisualAgcEnabled,
+    bool ImpulseRejectEnabled,
+    double PopFloorDb,
+    double PopSpanDb,
+    double PopGamma,
+    int PopRenderIntensity,
+    double CoherenceHoldGate,
+    double CoherenceBoostDb,
+    double RidgeBoost,
+    double RidgeMaxBoostDb,
+    int VisualAgcStrength,
+    int ImpulseRejectDb,
+    int SnapRadiusHz,
+    double SnapMinSnrDb,
+    double PeakMinSnrDb);
+
 // Per-mode disclosure state for the inline NR settings accordion that hangs
 // below the DSP NR toggle row. Three independent booleans — one per NR
 // algorithm. Persisted server-side (LiteDB) so the operator's "I always
