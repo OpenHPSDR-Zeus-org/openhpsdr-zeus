@@ -3,6 +3,7 @@
 // Focused coverage for /api/tx/diag egress health classification.
 
 using Zeus.Protocol2;
+using Zeus.Contracts;
 
 namespace Zeus.Server.Tests;
 
@@ -45,7 +46,41 @@ public sealed class TxEgressHealthDiagnosticsTests
         Assert.Equal(0, health.P2TransportFailures);
         Assert.Contains("p2-rate-fresh", health.QualityReasons);
         Assert.Contains("rf-forward-power-present", health.QualityReasons);
+        Assert.Equal("pep-intermittent", health.TxDutyProfile);
+        Assert.Null(health.ContinuousDutyRecommendedMaxWatts);
+        Assert.False(health.ContinuousDutyLimitExceeded);
         Assert.Contains("RF forward-power evidence", health.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildTxEgressHealth_FlagsG2ContinuousDutyPowerAboveManualLimit()
+    {
+        var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
+
+        var health = ZeusEndpoints.BuildTxEgressHealth(
+            generated,
+            p1RingTotalWritten: 960,
+            p1RingDropped: 0,
+            p2: P2(
+                inputComplexSamples: 240,
+                packetsSent: 1,
+                lastPacketsPerSecond: 801,
+                lastRateTimestampUtc: generated.AddMilliseconds(-750)),
+            hostMoxOn: true,
+            forwardWatts: 45.0,
+            txMode: RxMode.AM,
+            g2DutyGuidance: true);
+
+        Assert.Equal("p2-live", health.HealthStatus);
+        Assert.True(health.RfDetected);
+        Assert.Equal("continuous-duty", health.TxDutyProfile);
+        Assert.Equal(30.0, health.ContinuousDutyRecommendedMaxWatts);
+        Assert.True(health.ContinuousDutyLimitExceeded);
+        Assert.Contains("30 W or less", health.ContinuousDutyManualReference);
+        Assert.Equal("protect", health.QualityTone);
+        Assert.Equal(35, health.QualityScore);
+        Assert.Contains("continuous-duty-mode", health.QualityReasons);
+        Assert.Contains("continuous-duty-limit-exceeded", health.QualityReasons);
     }
 
     [Fact]
