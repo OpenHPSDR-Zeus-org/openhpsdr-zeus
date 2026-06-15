@@ -60,8 +60,8 @@ function validDbfs(v: number): boolean {
   return Number.isFinite(v) && v > BYPASSED_DBFS_THRESHOLD;
 }
 
-function finiteOrZero(v: number): number {
-  return Number.isFinite(v) ? v : 0;
+function gainReductionDb(v: number): number {
+  return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
 function clamp(v: number, min: number, max: number): number {
@@ -160,9 +160,9 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     : validDbfs(s.micDbfs)
       ? s.micDbfs
       : null;
-  const alcGr = finiteOrZero(s.alcGr);
-  const lvlrGr = finiteOrZero(s.lvlrGr);
-  const cfcGr = finiteOrZero(s.cfcGr);
+  const alcGr = gainReductionDb(s.alcGr);
+  const lvlrGr = gainReductionDb(s.lvlrGr);
+  const cfcGr = gainReductionDb(s.cfcGr);
   const outDbfs = validDbfs(s.outPk) ? s.outPk : null;
   const micAvgDbfs = validDbfs(s.micAv) ? s.micAv : null;
   const compDbfs = validDbfs(s.compPk) ? s.compPk : null;
@@ -392,6 +392,8 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
       compCrestDb,
       density,
       crest,
+      swr,
+      psFeedbackLevel,
     );
     return {
       state: 'hot',
@@ -446,11 +448,15 @@ function recommendHotAction(
   compCrestDb: number | null,
   density: TxDensityStatus,
   crest: TxCrestStatus,
+  swr: number,
+  psFeedbackLevel: number | null,
 ): string {
-  if (s.swr >= 3) return 'Stop RF and check antenna match';
+  if (swr >= 3) return 'Stop RF and check antenna match';
   if (s.psCalibrationStalled) return 'Correct PureSignal feedback before increasing drive';
-  if (s.psEnabled && s.psFeedbackLevel > 181) return 'Add PS feedback attenuation or lower HW peak';
-  if (s.psEnabled && s.psFeedbackLevel > 0 && s.psFeedbackLevel < 128) {
+  if (s.psEnabled && psFeedbackLevel !== null && psFeedbackLevel > 181) {
+    return 'Add PS feedback attenuation or lower HW peak';
+  }
+  if (s.psEnabled && psFeedbackLevel !== null && psFeedbackLevel < 128) {
     return 'Reduce PS feedback attenuation or raise HW peak';
   }
   if (micDbfs !== null && micDbfs > -3) return 'Lower mic gain until peaks stay below -6 dBFS';
@@ -461,7 +467,7 @@ function recommendHotAction(
   if (cfcGr > 7 || density === 'forced' || crest === 'pinched') {
     return 'Reduce CFC density before raising drive';
   }
-  if (s.swr >= 2) return 'Reduce power and inspect the RF match';
+  if (swr >= 2) return 'Reduce power and inspect the RF match';
   return 'Back off the hottest TX stage';
 }
 
