@@ -957,6 +957,7 @@ export function HardwareDiagnosticsPanel() {
     { label: 'Fresh', value: boolLabel(scene?.fresh) },
     { label: 'Stale', value: boolLabel(scene?.stale) },
     { label: 'Age', value: age(scene?.ageMs) },
+    { label: 'Source Age', value: age(scene?.sourceAgeMs) },
     { label: 'Diagnostic Action', value: scene?.diagnosticRecommendation },
     { label: 'Client', value: scene?.sourceClientId },
     { label: 'Mode', value: scene?.mode },
@@ -975,6 +976,7 @@ export function HardwareDiagnosticsPanel() {
     { label: 'Peaks', value: scene?.peakCount },
     { label: 'Coherent Peaks', value: scene?.coherentPeakCount },
     { label: 'Subthreshold Ridge', value: boolLabel(scene?.coherentSubthresholdSignal) },
+    { label: 'Source Updated', value: time(scene?.sourceAtUtc) },
     { label: 'Updated', value: time(scene?.atUtc) },
   ];
 

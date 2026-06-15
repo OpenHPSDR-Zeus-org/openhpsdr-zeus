@@ -11,6 +11,7 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
     public void Update_StoresSanitizedFrontendSceneForDiagnosticsSnapshot()
     {
         var service = new FrontendDspSceneDiagnosticsService();
+        var sourceAt = DateTimeOffset.UtcNow.AddSeconds(-1);
 
         var stored = service.Update(new FrontendDspSceneDiagnosticsRequest(
             SourceClientId: "  client   one  ",
@@ -29,9 +30,11 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
             ImpulsivePct: 0.12,
             PeakCount: 3,
             CoherentPeakCount: 2,
-            CoherentSubthresholdSignal: true));
+            CoherentSubthresholdSignal: true,
+            SourceAtUtc: sourceAt));
 
         Assert.Equal("client one", stored.SourceClientId);
+        Assert.Equal(sourceAt, stored.SourceAtUtc);
         Assert.Equal(18.2, stored.MaxSnrDb);
         Assert.Equal(17.9, stored.CoherentMaxSnrDb);
 
@@ -48,6 +51,8 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.Equal(3, root.GetProperty("peakCount").GetInt32());
         Assert.True(root.GetProperty("coherentSubthresholdSignal").GetBoolean());
         Assert.True(root.GetProperty("ageMs").GetInt64() >= 0);
+        Assert.True(root.GetProperty("sourceAgeMs").GetInt64() >= 0);
+        Assert.Equal(sourceAt, root.GetProperty("sourceAtUtc").GetDateTimeOffset());
     }
 
     [Fact]
@@ -94,5 +99,41 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
 
         Assert.Contains("coherent subthreshold weak-signal", recommendation);
         Assert.Contains("constrained by RX-chain health", recommendation);
+    }
+
+    [Fact]
+    public void Snapshot_ReportsStaleWhenSourceEvidenceIsOldDespiteFreshPublish()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+
+        service.Update(new FrontendDspSceneDiagnosticsRequest(
+            SourceClientId: "client",
+            Mode: "USB",
+            SignalProfile: "dx",
+            SignalReason: "old scene",
+            SmartNrProfile: "NR2",
+            SmartNrReason: "old weak signal",
+            SmartNrRecommendation: "Wait for live evidence",
+            SmartNrHeldByRxChain: false,
+            SmartNrRxChainLabel: "RX chain optimized",
+            MaxSnrDb: 7.1,
+            CoherentMaxSnrDb: 6.8,
+            OccupiedPct: 1.2,
+            CoherentOccupiedPct: 0.8,
+            ImpulsivePct: 0,
+            PeakCount: 0,
+            CoherentPeakCount: 0,
+            CoherentSubthresholdSignal: true,
+            SourceAtUtc: DateTimeOffset.UtcNow.AddSeconds(-60)));
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(service.Snapshot()));
+        var root = doc.RootElement;
+
+        Assert.Equal("stale", root.GetProperty("status").GetString());
+        Assert.False(root.GetProperty("fresh").GetBoolean());
+        Assert.True(root.GetProperty("stale").GetBoolean());
+        Assert.True(root.GetProperty("ageMs").GetInt64() < 45_000);
+        Assert.True(root.GetProperty("sourceAgeMs").GetInt64() >= 45_000);
+        Assert.Contains("source evidence is stale", root.GetProperty("diagnosticRecommendation").GetString());
     }
 }

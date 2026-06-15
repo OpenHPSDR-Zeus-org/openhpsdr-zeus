@@ -21,6 +21,19 @@ function n(v: number | null | undefined): number | null {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
 }
 
+function latestIso(...values: Array<string | null | undefined>): string | null {
+  let best: string | null = null;
+  let bestMs = Number.NEGATIVE_INFINITY;
+  for (const value of values) {
+    if (typeof value !== 'string') continue;
+    const ms = Date.parse(value);
+    if (!Number.isFinite(ms) || ms <= bestMs) continue;
+    best = value;
+    bestMs = ms;
+  }
+  return best;
+}
+
 export function buildFrontendDspSceneDiagnosticsPayload(
   mode: RxMode,
   signal: SignalEnhanceSceneStatus | null,
@@ -28,6 +41,7 @@ export function buildFrontendDspSceneDiagnosticsPayload(
 ): FrontendDspSceneDiagnosticsPayload | null {
   if (!signal && !smart) return null;
   return {
+    sourceAtUtc: latestIso(signal?.atUtc, smart?.atUtc),
     sourceClientId: frontendClientId(),
     mode,
     signalProfile: signal?.profileId ?? null,

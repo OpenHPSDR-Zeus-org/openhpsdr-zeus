@@ -489,6 +489,8 @@ export type FrontendDspSceneDiagnosticsDto = {
   stale: boolean;
   diagnosticRecommendation: string | null;
   atUtc: string | null;
+  sourceAtUtc: string | null;
+  sourceAgeMs: number | null;
   sourceClientId: string | null;
   mode: RxMode | null;
   signalProfile: string | null;
@@ -509,6 +511,7 @@ export type FrontendDspSceneDiagnosticsDto = {
 };
 
 export type FrontendDspSceneDiagnosticsPayload = {
+  sourceAtUtc?: string | null;
   sourceClientId?: string | null;
   mode?: RxMode | null;
   signalProfile?: string | null;
@@ -1314,6 +1317,8 @@ function normalizeFrontendDspScene(raw: unknown): FrontendDspSceneDiagnosticsDto
     stale: Boolean(r.stale),
     diagnosticRecommendation: diagString(r.diagnosticRecommendation),
     atUtc: diagString(r.atUtc),
+    sourceAtUtc: diagString(r.sourceAtUtc),
+    sourceAgeMs: diagNumber(r.sourceAgeMs),
     sourceClientId: diagString(r.sourceClientId),
     mode: normalizeMode(r.mode),
     signalProfile: diagString(r.signalProfile),

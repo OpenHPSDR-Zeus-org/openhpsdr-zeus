@@ -9,7 +9,7 @@ import { buildFrontendDspSceneDiagnosticsPayload } from './dspSceneDiagnosticsPa
 describe('buildFrontendDspSceneDiagnosticsPayload', () => {
   it('mirrors Signal Intelligence and Smart NR evidence into diagnostics payloads', () => {
     const signal: SignalEnhanceSceneStatus = {
-      atUtc: '2026-06-15T01:00:00Z',
+      atUtc: '2026-06-15T01:00:10Z',
       profileId: 'dx',
       baseProfileId: 'voice',
       reason: 'sparse coherent weak-signal scene',
@@ -46,6 +46,7 @@ describe('buildFrontendDspSceneDiagnosticsPayload', () => {
     const payload = buildFrontendDspSceneDiagnosticsPayload('USB', signal, smart);
 
     expect(payload).toMatchObject({
+      sourceAtUtc: '2026-06-15T01:00:10Z',
       mode: 'USB',
       signalProfile: 'dx',
       signalReason: 'sparse coherent weak-signal scene',
@@ -68,5 +69,40 @@ describe('buildFrontendDspSceneDiagnosticsPayload', () => {
 
   it('does not publish when no frontend scene evidence exists', () => {
     expect(buildFrontendDspSceneDiagnosticsPayload('USB', null, null)).toBeNull();
+  });
+
+  it('uses the latest valid source analysis timestamp', () => {
+    const signal: SignalEnhanceSceneStatus = {
+      atUtc: '2026-06-15T01:00:00Z',
+      profileId: 'dx',
+      baseProfileId: 'voice',
+      reason: 'sparse weak signal',
+      peakCount: 1,
+      coherentPeakCount: 1,
+      peaksPer10Khz: 0.4,
+      occupiedPct: 1.2,
+      coherentOccupiedPct: 0.8,
+      impulsivePct: 0,
+      maxSnrDb: 7.2,
+      coherentMaxSnrDb: 6.9,
+    };
+    const smart: SmartNrStatus = {
+      atUtc: '2026-06-15T01:00:30Z',
+      profile: 'NR4',
+      reason: 'weak narrow signal',
+      maxSnrDb: 7.2,
+      occupancyPct: 1.2,
+      coherentOccupancyPct: 0.8,
+      impulsivePct: 0,
+      peakCount: 1,
+      coherentPeakCount: 1,
+      pending: false,
+      applied: true,
+      nr: NR_CONFIG_DEFAULT,
+    };
+
+    const payload = buildFrontendDspSceneDiagnosticsPayload('USB', signal, smart);
+
+    expect(payload?.sourceAtUtc).toBe('2026-06-15T01:00:30Z');
   });
 });

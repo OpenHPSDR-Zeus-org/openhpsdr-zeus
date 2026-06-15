@@ -23,6 +23,7 @@ public sealed class FrontendDspSceneDiagnosticsService
         var snapshot = new FrontendDspSceneSnapshot(
             SchemaVersion: 1,
             AtUtc: now,
+            SourceAtUtc: request.SourceAtUtc,
             SourceClientId: Clean(request.SourceClientId, 64),
             Mode: Clean(request.Mode, 16),
             SignalProfile: Clean(request.SignalProfile, 48),
@@ -54,12 +55,14 @@ public sealed class FrontendDspSceneDiagnosticsService
         {
             if (_latest is null)
             {
-                var health = Health(null, null);
+                var health = Health(null, null, null);
                 return new
                 {
                     schemaVersion = 1,
                     available = false,
                     ageMs = (int?)null,
+                    sourceAtUtc = (DateTimeOffset?)null,
+                    sourceAgeMs = (int?)null,
                     status = health.Status,
                     fresh = false,
                     stale = false,
@@ -68,12 +71,17 @@ public sealed class FrontendDspSceneDiagnosticsService
             }
 
             var ageMs = Math.Max(0L, (long)(DateTimeOffset.UtcNow - _latest.AtUtc).TotalMilliseconds);
-            var sceneHealth = Health(ageMs, _latest);
+            long? sourceAgeMs = _latest.SourceAtUtc is { } sourceAt
+                ? Math.Max(0L, (long)(DateTimeOffset.UtcNow - sourceAt).TotalMilliseconds)
+                : null;
+            var sceneHealth = Health(ageMs, sourceAgeMs, _latest);
             return new
             {
                 schemaVersion = _latest.SchemaVersion,
                 available = true,
                 ageMs,
+                sourceAtUtc = _latest.SourceAtUtc,
+                sourceAgeMs,
                 status = sceneHealth.Status,
                 fresh = sceneHealth.Fresh,
                 stale = sceneHealth.Stale,
@@ -119,7 +127,7 @@ public sealed class FrontendDspSceneDiagnosticsService
     private static int? NonNegative(int? value) =>
         value is { } v && v >= 0 ? v : null;
 
-    private static FrontendDspSceneHealth Health(long? ageMs, FrontendDspSceneSnapshot? latest)
+    private static FrontendDspSceneHealth Health(long? ageMs, long? sourceAgeMs, FrontendDspSceneSnapshot? latest)
     {
         if (ageMs is null)
         {
@@ -130,22 +138,30 @@ public sealed class FrontendDspSceneDiagnosticsService
                 "No frontend DSP scene has been published yet; open a Zeus client with Signal Intelligence or Smart NR active to audit weak-signal automation.");
         }
 
-        if (ageMs > StaleSceneMs)
+        long effectiveAgeMs = Math.Max(ageMs.Value, sourceAgeMs ?? ageMs.Value);
+
+        if (effectiveAgeMs > StaleSceneMs)
         {
+            string staleSubject = sourceAgeMs is { } sourceAge && sourceAge > StaleSceneMs
+                ? "source evidence"
+                : "telemetry";
             return new(
                 "stale",
                 Fresh: false,
                 Stale: true,
-                "Frontend DSP scene telemetry is stale; verify a client is open and publishing Signal Intelligence and Smart NR evidence.");
+                $"Frontend DSP scene {staleSubject} is stale; verify a client is open and publishing live Signal Intelligence and Smart NR evidence.");
         }
 
-        if (ageMs > FreshSceneMs)
+        if (effectiveAgeMs > FreshSceneMs)
         {
+            string agingSubject = sourceAgeMs is { } sourceAge && sourceAge > FreshSceneMs
+                ? "source evidence"
+                : "telemetry";
             return new(
                 "aging",
                 Fresh: false,
                 Stale: false,
-                "Frontend DSP scene telemetry is aging; wait for the next refresh or check client connectivity if this persists.");
+                $"Frontend DSP scene {agingSubject} is aging; wait for the next live spectrum refresh or check client connectivity if this persists.");
         }
 
         bool coherentSubthreshold = latest?.CoherentSubthresholdSignal == true;
@@ -208,11 +224,13 @@ public sealed record FrontendDspSceneDiagnosticsRequest(
     double? ImpulsivePct,
     int? PeakCount,
     int? CoherentPeakCount,
-    bool? CoherentSubthresholdSignal);
+    bool? CoherentSubthresholdSignal,
+    DateTimeOffset? SourceAtUtc = null);
 
 public sealed record FrontendDspSceneSnapshot(
     int SchemaVersion,
     DateTimeOffset AtUtc,
+    DateTimeOffset? SourceAtUtc,
     string? SourceClientId,
     string? Mode,
     string? SignalProfile,

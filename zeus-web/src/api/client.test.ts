@@ -594,6 +594,8 @@ describe('POST helpers', () => {
       stale: false,
       diagnosticRecommendation: 'Frontend DSP scene telemetry is fresh and ready for remote diagnostics.',
       atUtc: '2026-06-15T01:00:00Z',
+      sourceAtUtc: '2026-06-15T00:59:58Z',
+      sourceAgeMs: 2012,
       sourceClientId: 'frontend-test',
       mode: 'USB',
       signalProfile: 'dx',
@@ -605,6 +607,7 @@ describe('POST helpers', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const scene = await publishFrontendDspSceneDiagnostics({
+      sourceAtUtc: '2026-06-15T00:59:58Z',
       sourceClientId: 'frontend-test',
       mode: 'USB',
       signalProfile: 'dx',
@@ -618,6 +621,7 @@ describe('POST helpers', () => {
     expect(url).toBe('/api/radio/diagnostics/dsp-scene');
     expect(init?.method).toBe('POST');
     expect(JSON.parse((init?.body ?? '') as string)).toEqual({
+      sourceAtUtc: '2026-06-15T00:59:58Z',
       sourceClientId: 'frontend-test',
       mode: 'USB',
       signalProfile: 'dx',
@@ -629,6 +633,8 @@ describe('POST helpers', () => {
     expect(scene.available).toBe(true);
     expect(scene.status).toBe('fresh');
     expect(scene.fresh).toBe(true);
+    expect(scene.sourceAtUtc).toBe('2026-06-15T00:59:58Z');
+    expect(scene.sourceAgeMs).toBe(2012);
     expect(scene.signalProfile).toBe('dx');
     expect(scene.smartNrProfile).toBe('NR4');
     expect(scene.coherentSubthresholdSignal).toBe(true);
