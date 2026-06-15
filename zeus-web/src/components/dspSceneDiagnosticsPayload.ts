@@ -4,6 +4,7 @@ import type {
   FrontendDspSceneDiagnosticsPayload,
   RxMode,
 } from '../api/client';
+import type { RxChainAnalysis } from '../dsp/rx-chain-health';
 import type { SignalEnhanceSceneStatus } from '../dsp/signal-estimator';
 import type { SmartNrStatus } from '../state/smart-nr-store';
 
@@ -38,7 +39,13 @@ export function buildFrontendDspSceneDiagnosticsPayload(
   mode: RxMode,
   signal: SignalEnhanceSceneStatus | null,
   smart: SmartNrStatus | null,
+  rxChain: RxChainAnalysis | null = null,
 ): FrontendDspSceneDiagnosticsPayload | null {
+  const rxLabel = smart?.rxChainLabel ?? rxChain?.label ?? null;
+  const rxRecommendation = smart?.rxChainRecommendation ?? rxChain?.recommendation ?? null;
+  const rxTone = smart?.rxChainTone ?? rxChain?.actionTone ?? null;
+  const rxScore = smart?.rxChainScore ?? rxChain?.score;
+
   return {
     sourceAtUtc: latestIso(signal?.atUtc, smart?.atUtc),
     sourceClientId: frontendClientId(),
@@ -47,12 +54,12 @@ export function buildFrontendDspSceneDiagnosticsPayload(
     signalReason: signal?.reason ?? null,
     smartNrProfile: smart?.profile ?? null,
     smartNrReason: smart?.reason ?? null,
-    smartNrRecommendation: smart?.rxChainRecommendation ?? smart?.capabilityRecommendation ?? smart?.reason ?? null,
+    smartNrRecommendation: smart?.rxChainRecommendation ?? smart?.capabilityRecommendation ?? smart?.reason ?? rxRecommendation,
     smartNrHeldByRxChain: smart?.heldByRxChain ?? null,
-    smartNrRxChainLabel: smart?.rxChainLabel ?? null,
-    smartNrRxChainRecommendation: smart?.rxChainRecommendation ?? null,
-    smartNrRxChainTone: smart?.rxChainTone ?? null,
-    smartNrRxChainScore: n(smart?.rxChainScore),
+    smartNrRxChainLabel: rxLabel,
+    smartNrRxChainRecommendation: rxRecommendation,
+    smartNrRxChainTone: rxTone,
+    smartNrRxChainScore: n(rxScore),
     maxSnrDb: n(smart?.maxSnrDb ?? signal?.maxSnrDb),
     coherentMaxSnrDb: n(signal?.coherentMaxSnrDb),
     occupiedPct: n(smart?.occupancyPct ?? signal?.occupiedPct),

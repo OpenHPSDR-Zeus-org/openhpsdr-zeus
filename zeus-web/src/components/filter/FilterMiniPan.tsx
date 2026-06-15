@@ -65,19 +65,24 @@ const DRAG_MIN_INTERVAL_MS = 50;
 const EDGE_HIT_PX = 6;
 const SNAP_PULL_HZ = 150;             // magnetic pull radius for edge→carrier snap
 const EDGE_ANCHOR_HZ = 400;           // radius to lock signal-extent onto a carrier crest
-const BRACKET_MAX = 8;                // most signal-edge markers drawn at once
+const BRACKET_MAX = 6;                // most signal-edge markers drawn at once
 const BRACKET_MIN_SNR_DB = 6;         // only mark carriers this far above the floor
 const BRACKET_TRACK_TOLERANCE_HZ = 260; // nearby detections belong to the same visual marker
 const BRACKET_TRACK_TTL_MS = 1800;     // keep marker state briefly across missed detections
-const BRACKET_SMOOTH_ALPHA = 0.1;      // EMA for measured signal edges
-const BRACKET_LABEL_HOLD_MS = 700;     // minimum dwell before small label changes
+const BRACKET_SMOOTH_ALPHA = 0.055;    // EMA for measured signal edges
+const BRACKET_LABEL_MAX = 3;           // visible numeric labels; guides may still show
+const BRACKET_LABEL_HOLD_MS = 1500;    // minimum dwell before small label changes
+const BRACKET_LABEL_CONFIRM_MS = 900;  // candidate value must persist before replacing a label
 const BRACKET_LABEL_QUANTUM_HZ = 100;  // kHz labels step by 0.1 kHz
-const BRACKET_LABEL_JUMP_HZ = 300;     // real bandwidth changes can break the dwell early
+const BRACKET_LABEL_JUMP_HZ = 600;     // real bandwidth changes can break the dwell early
+const BRACKET_LABEL_JUMP_CONFIRM_MS = 350; // but only after a brief confirmation
+const BRACKET_LABEL_MIN_CONFIDENCE = 0.45;
+const BRACKET_CONFIDENCE_SPAN_HZ = 550; // edge disagreement that drains confidence
 const BRACKET_OVERLAP_RATIO = 0.45;    // suppress duplicate labels on the same signal hump
 const PEAKHOLD_DECAY_PX = 0.45;       // peak-hold envelope fall rate (px/frame ≈ 13 px/s)
 const FIT_HIT_PX = 26;                // click-to-fit grab radius around a carrier
 const FIT_MARGIN_HZ = 120;            // breathing room added each side when fitting
-const AVG_ALPHA = 0.035;              // PSD time-average EMA (~1.2 s) for a stable width
+const AVG_ALPHA = 0.02;               // PSD time-average EMA (~2 s) for instrument-like width
 const OBW_FRACTION = 0.99;            // ITU occupied-bandwidth power fraction (99%)
 
 // Palette — passband walls / dots / halo are neutral silvery (read on both
@@ -95,6 +100,9 @@ type BracketTrack = {
   loHz: number;
   hiHz: number;
   labelBwHz: number;
+  candidateBwHz: number;
+  candidateSince: number;
+  confidence: number;
   lastLabelAt: number;
   lastSeenAt: number;
 };
@@ -254,12 +262,16 @@ function smoothedBracketMeasurement(
   }
 
   const rawBwHz = Math.max(0, hiHz - loHz);
+  const quantizedBwHz = quantizeBracketBandwidth(rawBwHz);
   if (!best) {
     const track: BracketTrack = {
       crestHz,
       loHz,
       hiHz,
-      labelBwHz: quantizeBracketBandwidth(rawBwHz),
+      labelBwHz: quantizedBwHz,
+      candidateBwHz: quantizedBwHz,
+      candidateSince: now,
+      confidence: 0.35,
       lastLabelAt: now,
       lastSeenAt: now,
     };
@@ -276,12 +288,27 @@ function smoothedBracketMeasurement(
   best.hiHz += (hiHz - best.hiHz) * edgeAlpha;
   best.lastSeenAt = now;
 
-  const nextLabelHz = quantizeBracketBandwidth(Math.max(0, best.hiHz - best.loHz));
+  const smoothedBwHz = Math.max(0, best.hiHz - best.loHz);
+  const widthErrorHz = Math.abs(rawBwHz - smoothedBwHz);
+  const targetConfidence = Math.max(0, Math.min(1, 1 - widthErrorHz / BRACKET_CONFIDENCE_SPAN_HZ));
+  best.confidence += (targetConfidence - best.confidence) * 0.16;
+
+  const nextLabelHz = quantizeBracketBandwidth(smoothedBwHz);
+  if (nextLabelHz !== best.candidateBwHz) {
+    best.candidateBwHz = nextLabelHz;
+    best.candidateSince = now;
+  }
+
+  const labelDwelled = now - best.lastLabelAt >= BRACKET_LABEL_HOLD_MS;
+  const candidateConfirmed = now - best.candidateSince >= BRACKET_LABEL_CONFIRM_MS;
+  const jumpConfirmed =
+    Math.abs(best.candidateBwHz - best.labelBwHz) >= BRACKET_LABEL_JUMP_HZ &&
+    now - best.candidateSince >= BRACKET_LABEL_JUMP_CONFIRM_MS;
   if (
-    now - best.lastLabelAt >= BRACKET_LABEL_HOLD_MS ||
-    Math.abs(nextLabelHz - best.labelBwHz) >= BRACKET_LABEL_JUMP_HZ
+    best.candidateBwHz !== best.labelBwHz &&
+    ((labelDwelled && candidateConfirmed) || jumpConfirmed)
   ) {
-    best.labelBwHz = nextLabelHz;
+    best.labelBwHz = best.candidateBwHz;
     best.lastLabelAt = now;
   }
   return best;
@@ -295,6 +322,10 @@ function rangeOverlapRatio(aLo: number, aHi: number, bLo: number, bHi: number): 
   const overlap = Math.max(0, Math.min(hiA, hiB) - Math.max(loA, loB));
   const denom = Math.max(1, Math.min(hiA - loA, hiB - loB));
   return overlap / denom;
+}
+
+function rectsOverlap(a: { left: number; right: number; top: number; bottom: number }, b: { left: number; right: number; top: number; bottom: number }): boolean {
+  return a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
 }
 
 export function FilterMiniPan() {
@@ -715,6 +746,8 @@ export function FilterMiniPan() {
           .filter((p) => p.snrDb >= BRACKET_MIN_SNR_DB)
           .slice(0, BRACKET_MAX); // detectPeaks returns strongest-first
         const drawnBands: Array<{ loPx: number; hiPx: number }> = [];
+        const drawnLabels: Array<{ left: number; right: number; top: number; bottom: number }> = [];
+        let labelCount = 0;
         for (const p of peaks) {
           const xC = ((p.hz - loHz) / spanHz) * w;
           if (xC < 0 || xC > w) continue;
@@ -798,22 +831,50 @@ export function FilterMiniPan() {
           }
 
           // 4) Width label above the signal crest, on a readability chip.
-          const crestY = traceSm
-            ? traceSm[Math.max(0, Math.min(w - 1, Math.round(markerCenterX)))]!
-            : plotTop;
-          const by = Math.max(plotTop + Math.round(10 * dpr), crestY - Math.round(6 * dpr));
-          const label = formatFilterWidth(0, Math.round(bwHz));
-          ctx.font = `700 ${Math.round(9 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;
-          ctx.textBaseline = 'bottom';
-          ctx.textAlign = 'center';
-          const lw = ctx.measureText(label).width;
-          const lx = Math.max(lw / 2 + 2, Math.min(w - lw / 2 - 2, (xL + xR) / 2));
-          ctx.fillStyle = 'rgba(12, 14, 18, 0.6)';
-          ctx.fillRect(lx - lw / 2 - 3, by - Math.round(11 * dpr), lw + 6, Math.round(11 * dpr));
-          ctx.fillStyle = col(1);
-          ctx.fillText(label, lx, by - Math.round(1 * dpr));
-          ctx.textAlign = 'start';
-          ctx.textBaseline = 'alphabetic';
+          const canLabel = (inBand || labelCount < BRACKET_LABEL_MAX) && track.confidence >= BRACKET_LABEL_MIN_CONFIDENCE;
+          if (canLabel) {
+            const crestY = traceSm
+              ? traceSm[Math.max(0, Math.min(w - 1, Math.round(markerCenterX)))]!
+              : plotTop;
+            const label = `BW ${formatFilterWidth(0, Math.round(bwHz))}`;
+            ctx.font = `700 ${Math.round(9 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;
+            ctx.textBaseline = 'bottom';
+            ctx.textAlign = 'center';
+            const lw = ctx.measureText(label).width;
+            const chipPadX = Math.round(5 * dpr);
+            const chipW = lw + chipPadX * 2;
+            const chipH = Math.round(14 * dpr);
+            const laneGap = Math.max(2, Math.round(2 * dpr));
+            const lx = Math.max(chipW / 2 + 2, Math.min(w - chipW / 2 - 2, (xL + xR) / 2));
+            const baseBy = Math.max(plotTop + chipH + 1, crestY - Math.round(6 * dpr));
+            let placed: { by: number; rect: { left: number; right: number; top: number; bottom: number } } | null = null;
+            for (let lane = 0; lane < 3; lane++) {
+              const by = Math.max(plotTop + chipH + 1, baseBy - lane * (chipH + laneGap));
+              const rect = {
+                left: lx - chipW / 2,
+                right: lx + chipW / 2,
+                top: by - chipH,
+                bottom: by,
+              };
+              if (!drawnLabels.some((r) => rectsOverlap(rect, r))) {
+                placed = { by, rect };
+                break;
+              }
+            }
+            if (placed) {
+              const chipAlpha = 0.46 + 0.24 * track.confidence;
+              ctx.fillStyle = `rgba(12, 14, 18, ${chipAlpha.toFixed(3)})`;
+              ctx.fillRect(placed.rect.left, placed.rect.top, chipW, chipH);
+              ctx.fillStyle = col(0.22 + 0.58 * track.confidence);
+              ctx.fillRect(placed.rect.left, placed.rect.bottom - Math.max(1, Math.round(2 * dpr)), chipW * track.confidence, Math.max(1, Math.round(2 * dpr)));
+              ctx.fillStyle = col(0.75 + 0.25 * track.confidence);
+              ctx.fillText(label, lx, placed.by - Math.round(3 * dpr));
+              drawnLabels.push(placed.rect);
+              labelCount++;
+            }
+            ctx.textAlign = 'start';
+            ctx.textBaseline = 'alphabetic';
+          }
         }
       }
 

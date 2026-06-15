@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 import { describe, expect, it } from 'vitest';
+import type { RxChainAnalysis } from '../dsp/rx-chain-health';
 import type { SignalEnhanceSceneStatus } from '../dsp/signal-estimator';
 import type { SmartNrStatus } from '../state/smart-nr-store';
 import { NR_CONFIG_DEFAULT } from '../api/client';
@@ -96,6 +97,42 @@ describe('buildFrontendDspSceneDiagnosticsPayload', () => {
       coherentSubthresholdSignal: null,
     });
     expect(payload?.sourceClientId).toMatch(/^frontend-/);
+  });
+
+  it('publishes live RX-chain evidence even when Smart NR has no profile yet', () => {
+    const rx: RxChainAnalysis = {
+      state: 'agc-stressed',
+      label: 'AGC auto-optimizing',
+      detail: 'AGC is cutting deeply',
+      recommendation: 'Auto AGC/ATT restoring headroom',
+      actionTone: 'optimize',
+      score: 68,
+      signalDbm: -75,
+      signalSource: 'rx-meters-v2',
+      adcPk: -61,
+      adcAv: -72,
+      adcHeadroomDb: 61,
+      adcUtilizationPct: 37,
+      adcCrestDb: 11,
+      agcGain: -25,
+      agcEnvPk: -64,
+      agcEnvAv: -73,
+      agcEnvCrestDb: 9,
+    };
+
+    const payload = buildFrontendDspSceneDiagnosticsPayload('LSB', null, null, rx);
+
+    expect(payload).toMatchObject({
+      mode: 'LSB',
+      smartNrProfile: null,
+      smartNrReason: null,
+      smartNrRecommendation: 'Auto AGC/ATT restoring headroom',
+      smartNrHeldByRxChain: null,
+      smartNrRxChainLabel: 'AGC auto-optimizing',
+      smartNrRxChainRecommendation: 'Auto AGC/ATT restoring headroom',
+      smartNrRxChainTone: 'optimize',
+      smartNrRxChainScore: 68,
+    });
   });
 
   it('uses the latest valid source analysis timestamp', () => {
