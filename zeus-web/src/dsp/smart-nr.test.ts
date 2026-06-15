@@ -206,6 +206,32 @@ describe('smart NR supervisor', () => {
     expect(rec.nr.nbThreshold).toBe(16);
   });
 
+  it('ignores non-finite bins when classifying Smart NR conditions', () => {
+    const spec = noise();
+    const f = floor();
+    const conf = confidence(0.8);
+    spec[80] = Infinity;
+    spec[90] = NaN;
+    spec[100] = -Infinity;
+    f[110] = NaN;
+    conf[80] = Infinity;
+
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: f,
+      confidence: conf,
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'DIGU',
+    })!;
+
+    expect(rec.condition.maxSnrDb).toBe(0);
+    expect(rec.condition.hasSignal).toBe(false);
+    expect(rec.condition.weakSparse).toBe(false);
+    expect(rec.condition.denseNoise).toBe(false);
+    expect(rec.condition.impulsiveNoise).toBe(false);
+    expect(rec.nr.nrMode).toBe('Off');
+  });
+
   it('uses notch helpers for strong sparse tonal interference', () => {
     const spec = noise();
     spec[90] = NOISE_DB + 35;

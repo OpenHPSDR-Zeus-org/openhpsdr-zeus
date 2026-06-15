@@ -419,6 +419,18 @@ const SCENE_DX_MAX_SNR_DB = 24;
 const SCENE_IMPULSE_GATE_DB = 12;
 const SCENE_IMPULSE_CONFIDENCE_CEILING = 0.25;
 
+function sceneSnr(spec: Float32Array, f: Float32Array, index: number): number | null {
+  const sample = spec[index]!;
+  const floorDb = f[index]!;
+  return Number.isFinite(sample) && Number.isFinite(floorDb) ? sample - floorDb : null;
+}
+
+function sceneConfidence(confidence: Float32Array | null | undefined, index: number, useConfidence: boolean): number {
+  if (!useConfidence) return 1;
+  const c = confidence![index]!;
+  return Number.isFinite(c) ? Math.max(0, Math.min(1, c)) : 0;
+}
+
 /** Recommend a Signal Intelligence profile from current mode + spectrum scene.
  *  The mode remains the primary constraint: CW and digital keep their narrow
  *  ridge-heavy profiles. Voice-like modes can adapt between Voice, DX, and
@@ -456,8 +468,9 @@ export function recommendSignalEnhanceScene(input: SignalEnhanceSceneInput): Sig
   let maxSnrDb = 0;
   let coherentMaxSnrDb = 0;
   for (let i = 1; i < spec.length - 1; i++) {
-    const snr = spec[i]! - f[i]!;
-    const c = useConfidence ? confidence[i]! : 1;
+    const snr = sceneSnr(spec, f, i);
+    if (snr === null) continue;
+    const c = sceneConfidence(confidence, i, useConfidence);
     const coherent = c >= COHERENCE_HOLD_GATE;
     if (snr >= SCENE_PEAK_GATE_DB) occupied++;
     if (snr >= SCENE_PEAK_GATE_DB && coherent) coherentOccupied++;
@@ -466,7 +479,17 @@ export function recommendSignalEnhanceScene(input: SignalEnhanceSceneInput): Sig
     }
     if (snr > maxSnrDb) maxSnrDb = snr;
     if (coherent && snr > coherentMaxSnrDb) coherentMaxSnrDb = snr;
-    if (snr >= SCENE_PEAK_GATE_DB && spec[i]! >= spec[i - 1]! && spec[i]! > spec[i + 1]!) {
+    const center = spec[i]!;
+    const left = spec[i - 1]!;
+    const right = spec[i + 1]!;
+    if (
+      snr >= SCENE_PEAK_GATE_DB &&
+      Number.isFinite(center) &&
+      Number.isFinite(left) &&
+      Number.isFinite(right) &&
+      center >= left &&
+      center > right
+    ) {
       peakCount++;
       if (coherent) coherentPeakCount++;
     }

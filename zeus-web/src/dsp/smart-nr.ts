@@ -108,8 +108,18 @@ function percentile(sorted: number[], q: number): number {
 }
 
 function fallbackFloorDb(spec: Float32Array): number {
-  const sorted = Array.from(spec).sort((a, b) => a - b);
+  const sorted = Array.from(spec).filter(Number.isFinite).sort((a, b) => a - b);
   return percentile(sorted, 0.2) + 3;
+}
+
+function finiteSnr(sample: number, floorDb: number): number {
+  return Number.isFinite(sample) && Number.isFinite(floorDb) ? sample - floorDb : 0;
+}
+
+function finiteConfidence(confidence: Float32Array | null, index: number, useConfidence: boolean): number {
+  if (!useConfidence) return 1;
+  const c = confidence![index]!;
+  return Number.isFinite(c) ? Math.max(0, Math.min(1, c)) : 0;
 }
 
 export function analyzeSmartNrCondition(
@@ -130,8 +140,8 @@ export function analyzeSmartNrCondition(
   let impulsiveAbove12 = 0;
   for (let i = 0; i < n; i++) {
     const f = useFloor ? floor![i]! : globalFloor;
-    const v = spectrum[i]! - f;
-    const c = useConfidence ? confidence![i]! : 1;
+    const v = finiteSnr(spectrum[i]!, f);
+    const c = finiteConfidence(confidence, i, useConfidence);
     snr[i] = v;
     if (v > maxSnrDb) maxSnrDb = v;
     if (v >= 6) above6++;
@@ -164,7 +174,7 @@ export function analyzeSmartNrCondition(
   let isolatedHotBinCount = 0;
   for (let i = 0; i < n; i++) {
     const v = snr[i]!;
-    const c = useConfidence ? confidence![i]! : 1;
+    const c = finiteConfidence(confidence, i, useConfidence);
     const isCoherent = v >= 6 && c >= 0.45;
     if (isCoherent) {
       coherentRun++;

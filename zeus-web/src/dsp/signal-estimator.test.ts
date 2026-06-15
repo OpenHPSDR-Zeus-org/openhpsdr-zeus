@@ -226,6 +226,32 @@ describe('signal estimator — spatial floor', () => {
     }).profileId).toBe('digital');
   });
 
+  it('ignores non-finite bins when recommending scene profiles', () => {
+    const floor = new Float32Array(WIDTH).fill(NOISE_DB);
+    const spec = new Float32Array(WIDTH).fill(NOISE_DB);
+    const confidence = new Float32Array(WIDTH).fill(0.8);
+    spec[80] = Infinity;
+    spec[90] = NaN;
+    spec[100] = -Infinity;
+    floor[110] = NaN;
+    confidence[80] = Infinity;
+
+    const scene = recommendSignalEnhanceScene({
+      mode: 'USB',
+      spectrum: spec,
+      floor,
+      confidence,
+      hzPerPixel: HZ_PER_PX,
+    });
+
+    expect(scene.profileId).toBe('voice');
+    expect(scene.peakCount).toBe(0);
+    expect(scene.coherentPeakCount).toBe(0);
+    expect(scene.maxSnrDb).toBe(0);
+    expect(scene.coherentMaxSnrDb).toBe(0);
+    expect(scene.impulsiveOccupiedRatio).toBe(0);
+  });
+
   it('stays cold (no floor, zero cost) when both Pop and Snap are off', () => {
     pushFrame(spectrumWithCarrier());
     expect(getNoiseFloor()).toBeNull();
