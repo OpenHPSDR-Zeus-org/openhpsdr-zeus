@@ -27,7 +27,7 @@ import {
   type SignalEnhancePresetId,
 } from '../dsp/signal-estimator';
 import { useConnectionStore } from '../state/connection-store';
-import { useDisplayStore } from '../state/display-store';
+import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 
 const SCENE_SAMPLE_INTERVAL_MS = 1000;
 const SCENE_DWELL_SAMPLES = 3;
@@ -168,6 +168,7 @@ export function SignalIntelligenceController() {
     let lastSceneAt = 0;
     let pendingProfile: SignalEnhancePresetId | null = null;
     let pendingCount = 0;
+    const releaseDiagnosticsFrames = registerFrameConsumer();
     const releaseDiagnosticsEstimator = registerEstimatorConsumer();
 
     const resetPending = () => {
@@ -238,6 +239,7 @@ export function SignalIntelligenceController() {
       unsubConn();
       unsubEnhance();
       unsubDisplay();
+      releaseDiagnosticsFrames();
       releaseDiagnosticsEstimator();
     };
   }, []);
