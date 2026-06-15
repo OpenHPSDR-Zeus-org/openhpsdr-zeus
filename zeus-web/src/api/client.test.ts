@@ -56,6 +56,7 @@ import {
   SQUELCH_CONFIG_DEFAULT,
   TX_LEVELING_CONFIG_DEFAULT,
   createHardwareDiagnosticsMarker,
+  fetchHardwareDiagnostics,
   fetchAdcProtection,
   publishFrontendDspSceneDiagnostics,
   normalizeAgc,
@@ -574,6 +575,7 @@ describe('POST helpers', () => {
     expect(diag.frontendDspScene.status).toBe('fresh');
     expect(diag.frontendDspScene.fresh).toBe(true);
     expect(diag.frontendDspScene.stale).toBe(false);
+    expect(diag.frontendDspScene.mode).toBe('USB');
     expect(diag.frontendDspScene.diagnosticRecommendation).toContain('fresh');
     expect(diag.frontendDspScene.signalProfile).toBe('dx');
     expect(diag.frontendDspScene.smartNrRecommendation).toBe('Hold headroom; use Smart NR/filtering');
@@ -582,6 +584,31 @@ describe('POST helpers', () => {
     expect(diag.mapping.schemaVersion).toBe(2);
     expect(diag.mapping.markers[0]?.label).toBe('RX2 on');
     expect(diag.featureSurfaces[0]?.id).toBe('hardware.mapping.correlation');
+  });
+
+  it('keeps frontend DSP scene mode null when diagnostics are unavailable', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      hardwareDiagnosticsApiVersion: 1,
+      connectionStatus: 'Connected',
+      mode: 'USB',
+      frontendDspScene: {
+        schemaVersion: 1,
+        available: false,
+        ageMs: null,
+        status: 'missing',
+        fresh: false,
+        stale: false,
+        diagnosticRecommendation: 'No frontend DSP scene has been published yet.',
+      },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const diag = await fetchHardwareDiagnostics();
+
+    expect(diag.frontendDspScene.available).toBe(false);
+    expect(diag.frontendDspScene.status).toBe('missing');
+    expect(diag.frontendDspScene.mode).toBeNull();
+    expect(diag.mode).toBe('USB');
   });
 
   it('publishFrontendDspSceneDiagnostics posts frontend scene evidence', async () => {
@@ -596,6 +623,7 @@ describe('POST helpers', () => {
       atUtc: '2026-06-15T01:00:00Z',
       sourceAtUtc: '2026-06-15T00:59:58Z',
       sourceAgeMs: 2012,
+      sourceClockSkewMs: 6020,
       sourceClientId: 'frontend-test',
       mode: 'USB',
       signalProfile: 'dx',
@@ -635,6 +663,7 @@ describe('POST helpers', () => {
     expect(scene.fresh).toBe(true);
     expect(scene.sourceAtUtc).toBe('2026-06-15T00:59:58Z');
     expect(scene.sourceAgeMs).toBe(2012);
+    expect(scene.sourceClockSkewMs).toBe(6020);
     expect(scene.signalProfile).toBe('dx');
     expect(scene.smartNrProfile).toBe('NR4');
     expect(scene.coherentSubthresholdSignal).toBe(true);

@@ -491,6 +491,7 @@ export type FrontendDspSceneDiagnosticsDto = {
   atUtc: string | null;
   sourceAtUtc: string | null;
   sourceAgeMs: number | null;
+  sourceClockSkewMs: number | null;
   sourceClientId: string | null;
   mode: RxMode | null;
   signalProfile: string | null;
@@ -794,16 +795,20 @@ export function normalizeStatus(v: unknown): ConnectionStatus {
   return 'Error';
 }
 
-export function normalizeMode(v: unknown): RxMode {
+function modeFromWire(v: unknown): RxMode | null {
   if (typeof v === 'string') {
     return (MODE_ORDER as readonly string[]).includes(v)
       ? (v as RxMode)
-      : 'USB';
+      : null;
   }
   if (typeof v === 'number' && Number.isInteger(v)) {
-    return MODE_ORDER[v] ?? 'USB';
+    return MODE_ORDER[v] ?? null;
   }
-  return 'USB';
+  return null;
+}
+
+export function normalizeMode(v: unknown): RxMode {
+  return modeFromWire(v) ?? 'USB';
 }
 
 export function normalizeNrMode(v: unknown): NrMode {
@@ -1319,8 +1324,9 @@ function normalizeFrontendDspScene(raw: unknown): FrontendDspSceneDiagnosticsDto
     atUtc: diagString(r.atUtc),
     sourceAtUtc: diagString(r.sourceAtUtc),
     sourceAgeMs: diagNumber(r.sourceAgeMs),
+    sourceClockSkewMs: diagNumber(r.sourceClockSkewMs),
     sourceClientId: diagString(r.sourceClientId),
-    mode: normalizeMode(r.mode),
+    mode: modeFromWire(r.mode),
     signalProfile: diagString(r.signalProfile),
     signalReason: diagString(r.signalReason),
     smartNrProfile: diagString(r.smartNrProfile),
