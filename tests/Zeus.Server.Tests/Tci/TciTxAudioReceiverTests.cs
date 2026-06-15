@@ -57,6 +57,18 @@ public class TciTxAudioReceiverTests
         return bytes;
     }
 
+    private static double DecodedRms(byte[] f32leBlock)
+    {
+        double sum = 0;
+        int count = f32leBlock.Length / 4;
+        for (int i = 0; i < count; i++)
+        {
+            float sample = BinaryPrimitives.ReadSingleLittleEndian(f32leBlock.AsSpan(i * 4, 4));
+            sum += sample * sample;
+        }
+        return Math.Sqrt(sum / count);
+    }
+
     [Fact]
     public void Stereo48k_FullBlock_ForwardsOne960SampleMicBlock()
     {
@@ -149,26 +161,26 @@ public class TciTxAudioReceiverTests
     }
 
     [Fact]
-    public void Stereo24k_ResamplesToOne48kMicBlock()
+    public void Stereo24k_ResamplesWithSharedTxConverter()
     {
         var forwarded = new List<byte[]>();
         Action<ReadOnlyMemory<byte>> capture = m => forwarded.Add(m.ToArray());
         var receiver = new TciTxAudioReceiver(capture, NullLogger.Instance);
 
-        var mono = Enumerable.Range(0, 480).Select(i => i / 480f).ToArray();
-        var payload = EncodeStereoFloats(mono);
+        var first = EncodeStereoFloats(Enumerable.Range(0, 480).Select(i => i / 480f).ToArray());
+        var second = EncodeStereoFloats(Enumerable.Range(480, 480).Select(i => i / 960f).ToArray());
 
-        receiver.AcceptTxAudio(payload, TciSampleType.Float32, 960, channels: 2, sampleRate: 24000);
+        receiver.AcceptTxAudio(first, TciSampleType.Float32, 960, channels: 2, sampleRate: 24000);
+        Assert.Empty(forwarded);
+
+        receiver.AcceptTxAudio(second, TciSampleType.Float32, 960, channels: 2, sampleRate: 24000);
 
         Assert.Single(forwarded);
         Assert.Equal(960 * 4, forwarded[0].Length);
         Assert.Equal(0, receiver.TotalFramesDropped);
-        Assert.Equal(1, receiver.TotalFramesAccepted);
+        Assert.Equal(2, receiver.TotalFramesAccepted);
         Assert.Equal(960, receiver.TotalSamplesForwarded);
-
-        Assert.Equal(mono[0], BinaryPrimitives.ReadSingleLittleEndian(forwarded[0].AsSpan(0, 4)), precision: 5);
-        Assert.Equal((mono[0] + mono[1]) * 0.5f, BinaryPrimitives.ReadSingleLittleEndian(forwarded[0].AsSpan(4, 4)), precision: 5);
-        Assert.Equal(mono[1], BinaryPrimitives.ReadSingleLittleEndian(forwarded[0].AsSpan(8, 4)), precision: 5);
+        Assert.True(DecodedRms(forwarded[0]) > 0.05);
     }
 
     [Fact]
@@ -180,28 +192,36 @@ public class TciTxAudioReceiverTests
 
         var first = EncodeStereoFloats(Enumerable.Range(0, 441).Select(i => i / 441f).ToArray());
         var second = EncodeStereoFloats(Enumerable.Range(0, 441).Select(i => (441 + i) / 882f).ToArray());
+        var third = EncodeStereoFloats(Enumerable.Range(0, 441).Select(i => (882 + i) / 1323f).ToArray());
 
         receiver.AcceptTxAudio(first, TciSampleType.Float32, 882, channels: 2, sampleRate: 44100);
         Assert.Empty(forwarded);
 
         receiver.AcceptTxAudio(second, TciSampleType.Float32, 882, channels: 2, sampleRate: 44100);
+        Assert.Empty(forwarded);
+
+        receiver.AcceptTxAudio(third, TciSampleType.Float32, 882, channels: 2, sampleRate: 44100);
         Assert.Single(forwarded);
         Assert.Equal(960, receiver.TotalSamplesForwarded);
-        Assert.Equal(2, receiver.TotalFramesAccepted);
+        Assert.Equal(3, receiver.TotalFramesAccepted);
     }
 
     [Fact]
-    public void AboveOutputSampleRate_DropsFrame()
+    public void Stereo96k_DownsamplesTo48kMicBlock()
     {
         var forwarded = new List<byte[]>();
         Action<ReadOnlyMemory<byte>> capture = m => forwarded.Add(m.ToArray());
         var receiver = new TciTxAudioReceiver(capture, NullLogger.Instance);
 
-        var payload = EncodeStereoFloats(new float[960]);
-        receiver.AcceptTxAudio(payload, TciSampleType.Float32, 1920, channels: 2, sampleRate: 96000);
+        var payload = EncodeStereoFloats(Enumerable.Range(0, 3840)
+            .Select(i => (float)Math.Sin(2.0 * Math.PI * 1_000.0 * i / 96_000.0))
+            .ToArray());
+        receiver.AcceptTxAudio(payload, TciSampleType.Float32, 7680, channels: 2, sampleRate: 96000);
 
-        Assert.Empty(forwarded);
-        Assert.Equal(1, receiver.TotalFramesDropped);
+        Assert.Single(forwarded);
+        Assert.Equal(0, receiver.TotalFramesDropped);
+        Assert.Equal(960, receiver.TotalSamplesForwarded);
+        Assert.True(DecodedRms(forwarded[0]) > 0.2);
     }
 
     [Fact]

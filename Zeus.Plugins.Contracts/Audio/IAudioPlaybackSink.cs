@@ -45,7 +45,8 @@ public interface IAudioPlaybackSink
     /// Inject a block of mono float32 samples into the TX audio chain so it is
     /// transmitted (processed by the normal TX path like live speech). Only
     /// reaches the air while <see cref="IsMoxOn"/>; the host does not key.
-    /// Samples must be 48 kHz mono; the host packetises into TX mic blocks.
+    /// Supported sample rates are converted to the host's 48 kHz TX mic-block
+    /// contract before packetising.
     /// </summary>
     void PlayOnAir(ReadOnlySpan<float> samples, int sampleRate);
 }

@@ -16,20 +16,11 @@ namespace Zeus.Server;
 
 internal sealed class PluginPlaybackSink : IAudioPlaybackSink
 {
-    // TxAudioIngest accepts mic blocks of exactly this size (960 samples f32le).
-    private const int MicBlockSamples = 960;
-    private const int MicBlockBytes = MicBlockSamples * 4;
-
     private readonly TxAudioIngest _txIngest;
     private readonly DspPipelineService _pipeline;
     private readonly TxService _tx;
     private readonly ILogger<PluginPlaybackSink> _log;
-
-    // Carry-over buffer so PlayOnAir can re-block arbitrary spans into the
-    // 960-sample TX mic blocks the ingest requires. Single-threaded use is
-    // expected (the plugin's playback pump), so a plain field is fine.
-    private readonly float[] _airCarry = new float[MicBlockSamples];
-    private int _airCarryLen;
+    private readonly TxMicBlockResampler _airResampler;
 
     public PluginPlaybackSink(
         TxAudioIngest txIngest,
@@ -41,6 +32,7 @@ internal sealed class PluginPlaybackSink : IAudioPlaybackSink
         _pipeline = pipeline;
         _tx = tx;
         _log = log;
+        _airResampler = new TxMicBlockResampler(EmitAir);
     }
 
     public bool IsMoxOn => _tx.IsMoxOn;
@@ -58,48 +50,24 @@ internal sealed class PluginPlaybackSink : IAudioPlaybackSink
 
     public void PlayOnAir(ReadOnlySpan<float> samples, int sampleRate)
     {
-        // Re-block into 960-sample TX mic frames, carrying any remainder to the
-        // next call. f32le bytes == float on little-endian (all supported RIDs).
-        int pos = 0;
-
-        // Top up an in-flight carry block first.
-        if (_airCarryLen > 0)
+        if (!TxMicBlockResampler.IsSupportedInputSampleRate(sampleRate))
         {
-            int need = MicBlockSamples - _airCarryLen;
-            int take = Math.Min(need, samples.Length);
-            samples.Slice(0, take).CopyTo(_airCarry.AsSpan(_airCarryLen, take));
-            _airCarryLen += take;
-            pos += take;
-            if (_airCarryLen == MicBlockSamples)
-            {
-                EmitAir(_airCarry.AsSpan(0, MicBlockSamples));
-                _airCarryLen = 0;
-            }
+            _log.LogDebug("plugin.playback.air dropped unsupported sampleRate={Rate}", sampleRate);
+            return;
         }
 
-        while (samples.Length - pos >= MicBlockSamples)
-        {
-            EmitAir(samples.Slice(pos, MicBlockSamples));
-            pos += MicBlockSamples;
-        }
-
-        int rem = samples.Length - pos;
-        if (rem > 0)
-        {
-            samples.Slice(pos, rem).CopyTo(_airCarry.AsSpan(0, rem));
-            _airCarryLen = rem;
-        }
+        _airResampler.Accept(samples, sampleRate);
     }
 
     private void EmitAir(ReadOnlySpan<float> block)
     {
         // f32le payload — copy the floats into a byte buffer the ingest owns
         // for the synchronous call.
-        var bytes = ArrayPool<byte>.Shared.Rent(MicBlockBytes);
+        var bytes = ArrayPool<byte>.Shared.Rent(TxMicBlockResampler.OutputBlockBytes);
         try
         {
             System.Runtime.InteropServices.MemoryMarshal.AsBytes(block).CopyTo(bytes);
-            _txIngest.OnMicPcmBytesFromWav(new ReadOnlyMemory<byte>(bytes, 0, MicBlockBytes));
+            _txIngest.OnMicPcmBytesFromWav(new ReadOnlyMemory<byte>(bytes, 0, TxMicBlockResampler.OutputBlockBytes));
         }
         finally
         {

@@ -39,19 +39,17 @@ public enum WavRecorderState
 /// of a ring another consumer depends on.</para>
 ///
 /// <para><b>Playback</b> streams a WAV to the local monitor via
-/// <see cref="IAuditionAudioSink"/> (mixed into the operator's RX output). Over-
-/// the-air playback — keyed transmission of a recording, bypassing the TX DSP
-/// chain — is a separate layer wired on top of this once the local path is
-/// bench-verified; this class deliberately does not touch the TX/IQ path yet.</para>
+/// <see cref="IAuditionAudioSink"/> (mixed into the operator's RX output), or
+/// to the air via <see cref="TxAudioIngest"/> so the recording is processed by
+/// the normal TX chain like live speech.</para>
 ///
 /// Threading: capture callbacks arrive on the WDSP worker; playback runs on a
 /// dedicated pump thread. All state transitions take <see cref="_sync"/>.
 /// </summary>
 public sealed class WavRecorderService : IDisposable
 {
-    // Local-playback cadence: 20 ms blocks @ 48 kHz, matching the mic worklet
-    // and the audition ring's expectations.
-    private const int PlaybackBlockSamples = 960;
+    // Playback cadence: 20 ms blocks @ 48 kHz, matching the mic worklet,
+    // TxAudioIngest, and the audition ring's expectations.
     private const int PlaybackBlockMs = 20;
 
     private readonly DspPipelineService _pipeline;
@@ -271,43 +269,76 @@ public sealed class WavRecorderService : IDisposable
 
     private void PlaybackPump(float[] samples, int rate, bool onAir, CancellationToken ct)
     {
-        // Over-air injection needs f32le 960-sample blocks (the ingest's mic
-        // block shape); the last partial block is zero-padded to a full block.
-        byte[]? airBlock = onAir ? new byte[PlaybackBlockSamples * 4] : null;
+        // Playback is paced by the 48 kHz mic-block clock. Non-48 kHz files
+        // are converted once here so both desktop audition and over-air TX see
+        // the canonical 960-sample block shape.
+        byte[]? airBlock = null;
         try
         {
+            if (!TxMicBlockResampler.IsSupportedInputSampleRate(rate))
+            {
+                _log.LogWarning("wav.play unsupported sampleRate={Rate}", rate);
+                return;
+            }
+
+            airBlock = onAir ? new byte[TxMicBlockResampler.OutputBlockBytes] : null;
             int pos = 0;
             var sw = System.Diagnostics.Stopwatch.StartNew();
             long nextDueMs = 0;
+            bool stop = false;
+            int sourceBlockSamples = Math.Max(1, (int)Math.Round(rate * (PlaybackBlockMs / 1000.0)));
+
+            void Pace()
+            {
+                nextDueMs += PlaybackBlockMs;
+                long waitMs = nextDueMs - sw.ElapsedMilliseconds;
+                if (waitMs > 0) ct.WaitHandle.WaitOne((int)waitMs);
+            }
+
+            void EmitBlock(ReadOnlySpan<float> block)
+            {
+                if (ct.IsCancellationRequested)
+                {
+                    stop = true;
+                    return;
+                }
+
+                if (onAir)
+                {
+                    if (!_tx.IsMoxOn)
+                    {
+                        stop = true;
+                        return;
+                    }
+
+                    var span = airBlock!.AsSpan();
+                    for (int i = 0; i < TxMicBlockResampler.OutputBlockSamples; i++)
+                        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(i * 4, 4), block[i]);
+                    _txIngest.OnMicPcmBytesFromWav(airBlock);
+                }
+                else
+                {
+                    _audition.PublishAudition(block, TxMicBlockResampler.OutputSampleRate);
+                }
+
+                Pace();
+            }
+
+            var converter = new TxMicBlockResampler(EmitBlock);
             while (pos < samples.Length && !ct.IsCancellationRequested)
             {
                 // Unkeying mid-clip stops an over-air playback (samples would be
                 // dropped by the MOX gate anyway, and the live mic should resume).
                 if (onAir && !_tx.IsMoxOn) break;
+                if (stop) break;
 
-                int n = Math.Min(PlaybackBlockSamples, samples.Length - pos);
-                if (onAir)
-                {
-                    var span = airBlock!.AsSpan();
-                    for (int i = 0; i < PlaybackBlockSamples; i++)
-                    {
-                        float s = i < n ? samples[pos + i] : 0f; // zero-pad tail
-                        BinaryPrimitives.WriteSingleLittleEndian(span.Slice(i * 4, 4), s);
-                    }
-                    _txIngest.OnMicPcmBytesFromWav(airBlock);
-                }
-                else
-                {
-                    _audition.PublishAudition(samples.AsSpan(pos, n), rate);
-                }
+                int n = Math.Min(sourceBlockSamples, samples.Length - pos);
+                converter.Accept(samples.AsSpan(pos, n), rate);
                 pos += n;
-
-                // Pace at ~real time so neither the audition ring (~341 ms) nor
-                // the TX accumulator is overrun. Sleep to the next block deadline.
-                nextDueMs += PlaybackBlockMs;
-                long waitMs = nextDueMs - sw.ElapsedMilliseconds;
-                if (waitMs > 0) Thread.Sleep((int)waitMs);
             }
+
+            if (!ct.IsCancellationRequested && !stop && (!onAir || _tx.IsMoxOn))
+                converter.FlushZeroPadded();
         }
         catch (Exception ex)
         {
