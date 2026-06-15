@@ -34,6 +34,14 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
     }
 
     [Fact]
+    public void FreshRadio_UsesWdspMediumAgcTopBaseline()
+    {
+        using var radio = NewRadio();
+
+        Assert.Equal(80.0, radio.Snapshot().AgcTopDb);
+    }
+
+    [Fact]
     public void AutoAgc_WaitsForFullNoiseWindow()
     {
         using var radio = NewRadio();
@@ -74,5 +82,20 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         radio.HandleRxMeterForAutoAgc(-100.0, 12 * 500);
 
         Assert.Equal(1.0, radio.Snapshot().AgcOffsetDb);
+    }
+
+    [Fact]
+    public void AutoAgc_DoesNotPullEffectiveGainBelowUserBaseline()
+    {
+        using var radio = NewRadio();
+        radio.SetAgcTop(80.0);
+        radio.SetAutoAgc(true);
+
+        for (int i = 0; i < 12; i++)
+            radio.HandleRxMeterForAutoAgc(-90.0, i * 500);
+
+        var snap = radio.Snapshot();
+        Assert.Equal(80.0, snap.AgcTopDb);
+        Assert.Equal(0.0, snap.AgcOffsetDb);
     }
 }

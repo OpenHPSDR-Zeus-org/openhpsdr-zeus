@@ -39,6 +39,7 @@ import { DspSettingsPanel } from './DspSettingsPanel';
 import { PluginsPanel } from '../plugins/components/PluginsPanel';
 import { HamClockSettingsPanel } from './HamClockSettingsPanel';
 import { SpotsSettingsPanel } from './SpotsSettingsPanel';
+import { UpdatesPanel } from './UpdatesPanel';
 import { HardwareDiagnosticsPanel } from './HardwareDiagnosticsPanel';
 
 export type SettingsTabId =
@@ -58,6 +59,7 @@ export type SettingsTabId =
   | 'server'
   | 'radio'
   | 'calibration'
+  | 'updates'
   | 'about';
 
 const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
@@ -77,6 +79,7 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'server', label: 'SERVER' },
   { id: 'radio', label: 'RADIO' },
   { id: 'calibration', label: 'CALIBRATION' },
+  { id: 'updates', label: 'UPDATES' },
   { id: 'about', label: 'ABOUT' },
 ];
 
@@ -196,6 +199,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {active === 'server' && <ServerUrlPanel />}
           {active === 'radio' && hasHl2OptionalToggles && <RadioOptionsPanel />}
           {active === 'calibration' && <CalibrationPanel />}
+          {active === 'updates' && <UpdatesPanel />}
           {active === 'about' && <AboutPanel />}
         </div>
       </div>

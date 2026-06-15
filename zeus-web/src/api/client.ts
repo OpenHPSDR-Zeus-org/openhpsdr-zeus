@@ -2279,6 +2279,57 @@ export function updateSpotsSettings(
   );
 }
 
+/** Status of the local git checkout vs its configured upstream
+ *  (GET /api/system/update). Mirrors Zeus.Contracts.RepoUpdateStatus. */
+export interface RepoUpdateStatus {
+  isGitRepo: boolean;
+  branch: string | null;
+  currentSha: string | null;
+  currentShortSha: string | null;
+  currentSubject: string | null;
+  upstreamRef: string | null;
+  behind: number;
+  ahead: number;
+  dirty: boolean;
+  canFastForward: boolean;
+  latestRemoteSha: string | null;
+  latestRemoteSubject: string | null;
+  remoteUrl: string | null;
+  checkedUtc: string | null;
+  error: string | null;
+}
+
+/** Result of POST /api/system/update/pull. Mirrors Zeus.Contracts.RepoUpdateResult. */
+export interface RepoUpdateResult {
+  ok: boolean;
+  newSha: string | null;
+  requiresRebuild: boolean;
+  message: string;
+}
+
+/** Check how far the running checkout is behind upstream. `fetch=false` skips
+ *  the network and reports the last-known counts. */
+export function fetchUpdateStatus(
+  fetch = true,
+  signal?: AbortSignal,
+): Promise<RepoUpdateStatus> {
+  return jsonFetch(
+    `/api/system/update?fetch=${fetch ? 'true' : 'false'}`,
+    { signal },
+    (raw) => raw as RepoUpdateStatus,
+  );
+}
+
+/** Fast-forward the checkout to upstream. Source only — a rebuild + restart is
+ *  still required (result.requiresRebuild). */
+export function pullUpdate(signal?: AbortSignal): Promise<RepoUpdateResult> {
+  return jsonFetch(
+    '/api/system/update/pull',
+    { method: 'POST', signal },
+    (raw) => raw as RepoUpdateResult,
+  );
+}
+
 export function fetchHardwareDiagnostics(
   signal?: AbortSignal,
 ): Promise<HardwareDiagnosticsDto> {

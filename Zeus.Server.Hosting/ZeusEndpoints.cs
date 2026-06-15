@@ -68,6 +68,24 @@ public static class ZeusEndpoints
                 return Results.Ok(saved);
             });
 
+        // Self-update from the git checkout. GET reports how far behind the
+        // configured upstream the running source is (fetch=false skips the
+        // network and reports the last-known counts); POST fast-forwards. Neither
+        // rebuilds/restarts — the UI tells the operator to run scripts/update.*
+        // and restart. Backed by RepoUpdateService.
+        app.MapGet("/api/system/update",
+            async (RepoUpdateService updates, bool? fetch, CancellationToken ct) =>
+                Results.Ok(await updates.GetStatusAsync(fetch ?? true, ct)));
+
+        app.MapPost("/api/system/update/pull",
+            async (RepoUpdateService updates, CancellationToken ct) =>
+            {
+                var result = await updates.PullAsync(ct);
+                log.LogInformation("api.system.update.pull ok={Ok} newSha={Sha} msg={Msg}",
+                    result.Ok, result.NewSha, result.Message);
+                return Results.Ok(result);
+            });
+
         // Native RX audio (miniaudio) — desktop-mode mute control. The
         // Mute/Unmute button in the Photino window POSTs here to silence
         // the OS playback device. NativeAudioSink is only registered in
@@ -200,17 +218,17 @@ public static class ZeusEndpoints
             return Results.BadRequest(new { error = err });
         });
 
-        // Audio Suite profiles — named snapshots of the chain config
-        // (active plugin order + parked set + master bypass). Lets the
-        // operator save a whole rack layout and recall it in one click.
-        // Chain-level only in v1: per-plugin knob positions are NOT
-        // captured (a running plugin reads its settings only at init, so
-        // there's no live-reload path to apply them yet).
+        // Audio Suite profiles — named snapshots of the processing route
+        // (Native/VST), active plugin order, parked set, master bypass, and
+        // VST plugin state blobs. Lets the operator save a whole rack layout
+        // and recall it in one click, including switching back to the route
+        // the profile was saved with.
         app.MapGet("/api/audio-suite/profiles", (AudioProfileService profiles) =>
         {
             var list = profiles.List().Select(p => new
             {
                 name = p.Name,
+                processingMode = p.ProcessingMode.ToString().ToLowerInvariant(),
                 order = p.Order,
                 parked = p.Parked,
                 masterBypass = p.MasterBypass,
@@ -229,6 +247,7 @@ public static class ZeusEndpoints
             return Results.Ok(new
             {
                 name = entry.Name,
+                processingMode = entry.ProcessingMode.ToString().ToLowerInvariant(),
                 order = entry.Order,
                 parked = entry.Parked,
                 masterBypass = entry.MasterBypass,
@@ -238,10 +257,24 @@ public static class ZeusEndpoints
             });
         });
         // POST applies the named profile to the live chain.
-        app.MapPost("/api/audio-suite/profiles/{name}/apply", (string name, AudioProfileService profiles, ChainOrderService chainOrder) =>
+        app.MapPost("/api/audio-suite/profiles/{name}/apply", async (
+            string name,
+            AudioProfileService profiles,
+            ChainOrderService chainOrder,
+            AudioProcessingModeService mode,
+            AudioChainMasterBypassService masterBypass,
+            CancellationToken ct) =>
         {
-            if (profiles.Apply(name))
-                return Results.Ok(new { pluginIds = chainOrder.CurrentOrder });
+            var profile = await profiles.ApplyAsync(name, ct);
+            if (profile is not null)
+                return Results.Ok(new
+                {
+                    pluginIds = chainOrder.CurrentOrder,
+                    processingMode = mode.Mode.ToString().ToLowerInvariant(),
+                    engineActive = mode.EngineActive,
+                    engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
+                    masterBypass = masterBypass.IsBypassed,
+                });
             return Results.NotFound(new { error = $"no audio profile named '{name}'" });
         });
         app.MapDelete("/api/audio-suite/profiles/{name}", (string name, AudioProfileService profiles) =>

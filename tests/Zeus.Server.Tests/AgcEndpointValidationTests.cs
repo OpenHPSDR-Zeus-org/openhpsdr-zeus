@@ -6,7 +6,9 @@
 //
 // Endpoint validation tests for POST /api/rx/agc. Drives the real handler via
 // WebApplicationFactory and asserts that:
+//   - AgcMode ordinals stay pinned to WDSP / Thetis wire values.
 //   - Valid AgcMode strings (PascalCase) are accepted with 200.
+//   - Valid AgcMode numeric wire values (0..5) are accepted with 200.
 //   - An out-of-range / unknown AgcMode (the Enum.IsDefined guard) returns 400
 //     and does not mutate RadioService state.
 //
@@ -30,8 +32,8 @@ namespace Zeus.Server.Tests;
 
 /// <summary>
 /// Tests the <c>Enum.IsDefined</c> guard on <c>POST /api/rx/agc</c>.
-/// A numeric cast that falls outside the <see cref="AgcMode"/> range (0..5)
-/// must be rejected with 400 and must not mutate <see cref="RadioService"/> state.
+/// Valid <see cref="AgcMode"/> strings and ordinals must map to the same state,
+/// while unknown values must be rejected without mutating <see cref="RadioService"/>.
 /// </summary>
 public class AgcEndpointValidationTests : IClassFixture<AgcEndpointValidationTests.Factory>
 {
@@ -39,11 +41,23 @@ public class AgcEndpointValidationTests : IClassFixture<AgcEndpointValidationTes
     public AgcEndpointValidationTests(Factory factory) => _factory = factory;
 
     [Theory]
+    [InlineData(0, AgcMode.Fixed)]
+    [InlineData(1, AgcMode.Long)]
+    [InlineData(2, AgcMode.Slow)]
+    [InlineData(3, AgcMode.Med)]
+    [InlineData(4, AgcMode.Fast)]
+    [InlineData(5, AgcMode.Custom)]
+    public void AgcMode_OrdinalsMatchWdspThetisWireValues(int ordinal, AgcMode mode)
+    {
+        Assert.Equal(ordinal, (int)mode);
+    }
+
+    [Theory]
+    [InlineData("Fixed")]
+    [InlineData("Long")]
+    [InlineData("Slow")]
     [InlineData("Med")]
     [InlineData("Fast")]
-    [InlineData("Slow")]
-    [InlineData("Long")]
-    [InlineData("Fixed")]
     [InlineData("Custom")]
     public async Task PostValidMode_Returns200_AndUpdatesState(string mode)
     {
@@ -56,13 +70,30 @@ public class AgcEndpointValidationTests : IClassFixture<AgcEndpointValidationTes
         Assert.Equal(mode, radio.Snapshot().Agc?.Mode.ToString());
     }
 
+    [Theory]
+    [InlineData(0, AgcMode.Fixed)]
+    [InlineData(1, AgcMode.Long)]
+    [InlineData(2, AgcMode.Slow)]
+    [InlineData(3, AgcMode.Med)]
+    [InlineData(4, AgcMode.Fast)]
+    [InlineData(5, AgcMode.Custom)]
+    public async Task PostValidNumericMode_Returns200_AndUpdatesState(int modeValue, AgcMode expected)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var radio = scope.ServiceProvider.GetRequiredService<RadioService>();
+        using var client = _factory.CreateClient();
+
+        using var content = new StringContent(
+            $"{{\"agc\":{{\"mode\":{modeValue}}}}}", Encoding.UTF8, "application/json");
+        var resp = await client.PostAsync("/api/rx/agc", content);
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        Assert.Equal(expected, radio.Snapshot().Agc?.Mode);
+    }
+
     [Fact]
     public async Task PostOutOfRangeMode_Returns400_AndDoesNotMutateState()
     {
-        // Cast 99 into AgcMode — outside the 0..5 range. System.Text.Json
-        // deserializes unknown numeric enum values to their raw integer without
-        // throwing, so the Enum.IsDefined guard is the only thing catching this.
-        // Send as raw JSON to bypass the JsonStringEnumConverter path.
         using var scope = _factory.Services.CreateScope();
         var radio = scope.ServiceProvider.GetRequiredService<RadioService>();
         var before = radio.Snapshot().Agc?.Mode;

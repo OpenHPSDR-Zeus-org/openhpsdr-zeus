@@ -16,6 +16,30 @@
 import { Workbox } from 'workbox-window';
 import { isCapacitorRuntime } from '../serverUrl';
 
+async function isDesktopHost(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/capabilities', { cache: 'no-store' });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { host?: unknown };
+    return body.host === 'desktop';
+  } catch {
+    return false;
+  }
+}
+
+async function unregisterExistingServiceWorkers(): Promise<boolean> {
+  const registrations = await navigator.serviceWorker.getRegistrations();
+  const hadRegistrations = registrations.length > 0 || !!navigator.serviceWorker.controller;
+  await Promise.all(registrations.map((registration) => registration.unregister()));
+
+  if ('caches' in window) {
+    const keys = await caches.keys();
+    await Promise.all(keys.map((key) => caches.delete(key)));
+  }
+
+  return hadRegistrations;
+}
+
 /**
  * Register the service worker and handle updates.
  * Returns a function to trigger update installation.
@@ -41,45 +65,59 @@ export function registerServiceWorker(
     return null;
   }
 
-  const wb = new Workbox('/sw.js');
   let registration: ServiceWorkerRegistration | undefined;
+  let disabledForDesktop = false;
 
-  // Handle service worker waiting to activate
-  // This fires when a new service worker has installed but is waiting
-  // for the old one to be released (usually when tabs are still open)
-  wb.addEventListener('waiting', () => {
-    console.log('New service worker waiting to activate');
-    onUpdateAvailable();
-  });
+  const register = async () => {
+    if (await isDesktopHost()) {
+      disabledForDesktop = true;
+      const hadServiceWorker = await unregisterExistingServiceWorkers();
+      if (hadServiceWorker) window.location.reload();
+      return;
+    }
 
-  // Handle case where service worker is already waiting when we register
-  wb.addEventListener('controlling', () => {
-    console.log('New service worker is now controlling the page');
-    // Reload to use the new service worker
-    window.location.reload();
-  });
+    const wb = new Workbox('/sw.js');
 
-  // Register the service worker
-  wb.register()
-    .then((reg) => {
-      registration = reg;
-      console.log('Service worker registered successfully');
-
-      // Check for updates every 60 seconds when the page is visible
-      setInterval(() => {
-        if (document.visibilityState === 'visible') {
-          reg?.update().catch((err) => {
-            console.warn('SW update check failed:', err);
-          });
-        }
-      }, 60000);
-    })
-    .catch((err) => {
-      console.error('Service worker registration failed:', err);
+    // Handle service worker waiting to activate
+    // This fires when a new service worker has installed but is waiting
+    // for the old one to be released (usually when tabs are still open)
+    wb.addEventListener('waiting', () => {
+      console.log('New service worker waiting to activate');
+      onUpdateAvailable();
     });
+
+    // Handle case where service worker is already waiting when we register
+    wb.addEventListener('controlling', () => {
+      console.log('New service worker is now controlling the page');
+      // Reload to use the new service worker
+      window.location.reload();
+    });
+
+    // Register the service worker
+    wb.register()
+      .then((reg) => {
+        registration = reg;
+        console.log('Service worker registered successfully');
+
+        // Check for updates every 60 seconds when the page is visible
+        setInterval(() => {
+          if (document.visibilityState === 'visible') {
+            reg?.update().catch((err) => {
+              console.warn('SW update check failed:', err);
+            });
+          }
+        }, 60000);
+      })
+      .catch((err) => {
+        console.error('Service worker registration failed:', err);
+      });
+  };
+
+  void register();
 
   // Return function to trigger update installation
   return async () => {
+    if (disabledForDesktop) return;
     if (!registration?.waiting) {
       console.warn('No service worker waiting to install');
       return;

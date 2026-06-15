@@ -31,8 +31,9 @@ import {
   type TxStationProfile,
   type TxStationProfileId,
 } from '../../audio/tx-station-profile';
+import { AudioChainMeters } from '../../components/AudioChainMeters';
 import { TxFidelityAdvisor } from '../../components/TxFidelityAdvisor';
-import { useAudioSuiteStore } from '../../state/audio-suite-store';
+import { useAudioSuiteStore, type AudioProfileSummary } from '../../state/audio-suite-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { useTxStore } from '../../state/tx-store';
 
@@ -108,6 +109,33 @@ function miniMenuOptionStyle(active: boolean): CSSProperties {
 
 function profileDefaults(): TxStationProfile[] {
   return mergeTxStationProfileOverrides([]);
+}
+
+function chooseSuggestedAudioProfileName(
+  profile: TxStationProfile,
+  audioProfiles: ReadonlyArray<AudioProfileSummary>,
+): string {
+  const names = audioProfiles
+    .filter((audioProfile) => audioProfile.processingMode === profile.audioSuiteRoute)
+    .map((audioProfile) => audioProfile.name.trim())
+    .filter(Boolean);
+  if (names.length === 0 || profile.audioSuiteRoute !== 'vst' || profile.audioSuiteProfileName?.trim()) {
+    return '';
+  }
+
+  const keywordsByProfile: Record<TxStationProfileId, string[]> = {
+    'studio-ssb': ['studio', 'ssb', 'broadcast'],
+    essb: ['essb', 'broadcast', 'wide', 'studio'],
+    dx: ['dx', 'punch', 'contest', 'pileup'],
+  };
+  const keywords = keywordsByProfile[profile.id];
+  const lowered = names.map((name) => name.toLowerCase());
+  for (const keyword of keywords) {
+    const match = lowered.findIndex((name) => name.includes(keyword));
+    if (match >= 0) return names[match]!;
+  }
+
+  return '';
 }
 
 type TxStationProfilesProps = {
@@ -190,7 +218,26 @@ function TxStationProfiles({
   }
 
   function selectAudioProfile(name: string) {
-    patchSelectedProfile({ audioSuiteProfileName: name });
+    const savedProfile = audioProfiles.find((profile) => profile.name === name);
+    patchSelectedProfile({
+      audioSuiteProfileName: name,
+      ...(savedProfile
+        ? {
+            audioSuiteRoute: savedProfile.processingMode,
+            audioSuiteBypassed: savedProfile.masterBypass,
+          }
+        : {}),
+    });
+    setAudioProfileMenuOpen(false);
+  }
+
+  function bindSuggestedAudioProfile(name: string) {
+    const savedProfile = audioProfiles.find((profile) => profile.name === name);
+    patchSelectedProfile({
+      audioSuiteRoute: savedProfile?.processingMode ?? 'vst',
+      audioSuiteBypassed: savedProfile?.masterBypass ?? false,
+      audioSuiteProfileName: name,
+    });
     setAudioProfileMenuOpen(false);
   }
 
@@ -260,7 +307,10 @@ function TxStationProfiles({
     try {
       await setProcessingMode(selectedProfile.audioSuiteRoute);
       if (audioProfileName.length > 0) {
-        await applyAudioProfile(audioProfileName);
+        const result = await applyAudioProfile(audioProfileName);
+        if (!result.ok) {
+          throw new Error(result.error || `Audio Suite profile "${audioProfileName}" did not apply`);
+        }
       }
       await setMasterBypassed(selectedProfile.audioSuiteBypassed);
 
@@ -296,6 +346,10 @@ function TxStationProfiles({
   const selectedAudioProfileMissing =
     selectedAudioProfileName.length > 0 &&
     !audioProfileNames.includes(selectedAudioProfileName);
+  const suggestedAudioProfileName = chooseSuggestedAudioProfileName(
+    selectedProfile,
+    audioProfiles,
+  );
   const vstRouteNote =
     selectedProfile.audioSuiteRoute === 'vst'
       ? vstEngineActive
@@ -654,6 +708,55 @@ function TxStationProfiles({
               </div>
             </label>
 
+            {suggestedAudioProfileName && (
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(0, 1fr) auto',
+                  gap: 6,
+                  alignItems: 'center',
+                  minWidth: 0,
+                  padding: '5px 6px',
+                  border: '1px solid var(--accent-soft)',
+                  borderRadius: 4,
+                  background: 'var(--bg-2)',
+                }}
+              >
+                <span
+                  className="mono"
+                  style={{
+                    minWidth: 0,
+                    color: 'var(--fg-2)',
+                    fontSize: 9.5,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  title={`Suggested Audio Suite chain: ${suggestedAudioProfileName}`}
+                >
+                  Suggested chain: {suggestedAudioProfileName}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => bindSuggestedAudioProfile(suggestedAudioProfileName)}
+                  style={{
+                    height: 23,
+                    border: '1px solid var(--accent)',
+                    borderRadius: 4,
+                    background: 'var(--bg-1)',
+                    color: 'var(--fg-0)',
+                    cursor: 'pointer',
+                    fontSize: 10,
+                    fontWeight: 900,
+                    padding: '0 8px',
+                    textTransform: 'uppercase',
+                  }}
+                >
+                  Bind
+                </button>
+              </div>
+            )}
+
             <div
               className="mono"
               style={{
@@ -886,6 +989,7 @@ export function TxFidelityPanel() {
       }}
     >
       <TxFidelityAdvisor targetSpectralDensity={targetSpectralDensity} />
+      <AudioChainMeters compact title="Audio Suite Chain" />
       <TxStationProfiles
         selectedProfileId={selectedProfileId}
         onPolicyChange={updatePolicy}

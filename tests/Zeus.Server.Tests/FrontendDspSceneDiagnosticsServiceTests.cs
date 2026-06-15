@@ -138,6 +138,41 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
     }
 
     [Fact]
+    public void Snapshot_ReportsFreshHeartbeatWhenClientHasNoSceneEvidenceYet()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+
+        service.Update(new FrontendDspSceneDiagnosticsRequest(
+            SourceClientId: "client",
+            Mode: "USB",
+            SignalProfile: null,
+            SignalReason: null,
+            SmartNrProfile: null,
+            SmartNrReason: null,
+            SmartNrRecommendation: null,
+            SmartNrHeldByRxChain: null,
+            SmartNrRxChainLabel: null,
+            MaxSnrDb: null,
+            CoherentMaxSnrDb: null,
+            OccupiedPct: null,
+            CoherentOccupiedPct: null,
+            ImpulsivePct: null,
+            PeakCount: null,
+            CoherentPeakCount: null,
+            CoherentSubthresholdSignal: null,
+            SourceAtUtc: null));
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(service.Snapshot()));
+        var root = doc.RootElement;
+
+        Assert.Equal("fresh", root.GetProperty("status").GetString());
+        Assert.True(root.GetProperty("fresh").GetBoolean());
+        Assert.False(root.GetProperty("stale").GetBoolean());
+        Assert.Contains("heartbeat is fresh", root.GetProperty("diagnosticRecommendation").GetString());
+        Assert.Contains("no Signal Intelligence or Smart NR", root.GetProperty("diagnosticRecommendation").GetString());
+    }
+
+    [Fact]
     public void Snapshot_ReportsClockSkewWhenFrontendSourceTimeIsInTheFuture()
     {
         var service = new FrontendDspSceneDiagnosticsService();

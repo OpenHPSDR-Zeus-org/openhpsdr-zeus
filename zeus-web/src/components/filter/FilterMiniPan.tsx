@@ -67,10 +67,17 @@ const SNAP_PULL_HZ = 150;             // magnetic pull radius for edge→carrier
 const EDGE_ANCHOR_HZ = 400;           // radius to lock signal-extent onto a carrier crest
 const BRACKET_MAX = 8;                // most signal-edge markers drawn at once
 const BRACKET_MIN_SNR_DB = 6;         // only mark carriers this far above the floor
+const BRACKET_TRACK_TOLERANCE_HZ = 260; // nearby detections belong to the same visual marker
+const BRACKET_TRACK_TTL_MS = 1800;     // keep marker state briefly across missed detections
+const BRACKET_SMOOTH_ALPHA = 0.1;      // EMA for measured signal edges
+const BRACKET_LABEL_HOLD_MS = 700;     // minimum dwell before small label changes
+const BRACKET_LABEL_QUANTUM_HZ = 100;  // kHz labels step by 0.1 kHz
+const BRACKET_LABEL_JUMP_HZ = 300;     // real bandwidth changes can break the dwell early
+const BRACKET_OVERLAP_RATIO = 0.45;    // suppress duplicate labels on the same signal hump
 const PEAKHOLD_DECAY_PX = 0.45;       // peak-hold envelope fall rate (px/frame ≈ 13 px/s)
 const FIT_HIT_PX = 26;                // click-to-fit grab radius around a carrier
 const FIT_MARGIN_HZ = 120;            // breathing room added each side when fitting
-const AVG_ALPHA = 0.08;               // PSD time-average EMA (~0.5 s) for a stable width
+const AVG_ALPHA = 0.035;              // PSD time-average EMA (~1.2 s) for a stable width
 const OBW_FRACTION = 0.99;            // ITU occupied-bandwidth power fraction (99%)
 
 // Palette — passband walls / dots / halo are neutral silvery (read on both
@@ -82,6 +89,15 @@ const COL_VFO_CENTER = 'rgba(200, 205, 215, 0.14)'; // subtle neutral VFO line
 const COL_CUT_TICK = 'rgba(220, 225, 232, 0.35)';   // hairline callout connecting label to wall
 
 type DragMode = 'lo' | 'hi' | 'inside';
+
+type BracketTrack = {
+  crestHz: number;
+  loHz: number;
+  hiHz: number;
+  labelBwHz: number;
+  lastLabelAt: number;
+  lastSeenAt: number;
+};
 
 function presetIsFixed(name: string | null): boolean {
   return !!name && /^F([1-9]|10)$/.test(name);
@@ -214,6 +230,73 @@ function occupiedBandBins(
   return [lo, hi <= lo ? lo : hi];
 }
 
+function quantizeBracketBandwidth(hz: number): number {
+  const safeHz = Math.max(0, hz);
+  if (safeHz < 1000) return Math.round(safeHz / 10) * 10;
+  return Math.round(safeHz / BRACKET_LABEL_QUANTUM_HZ) * BRACKET_LABEL_QUANTUM_HZ;
+}
+
+function smoothedBracketMeasurement(
+  tracks: BracketTrack[],
+  now: number,
+  crestHz: number,
+  loHz: number,
+  hiHz: number,
+): BracketTrack {
+  let best: BracketTrack | null = null;
+  let bestDist = BRACKET_TRACK_TOLERANCE_HZ;
+  for (const t of tracks) {
+    const dist = Math.abs(t.crestHz - crestHz);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = t;
+    }
+  }
+
+  const rawBwHz = Math.max(0, hiHz - loHz);
+  if (!best) {
+    const track: BracketTrack = {
+      crestHz,
+      loHz,
+      hiHz,
+      labelBwHz: quantizeBracketBandwidth(rawBwHz),
+      lastLabelAt: now,
+      lastSeenAt: now,
+    };
+    tracks.push(track);
+    return track;
+  }
+
+  if (best.lastSeenAt === now) return best;
+
+  const stale = now - best.lastSeenAt > 500;
+  const edgeAlpha = stale ? 0.35 : BRACKET_SMOOTH_ALPHA;
+  best.crestHz += (crestHz - best.crestHz) * Math.min(0.4, edgeAlpha * 1.5);
+  best.loHz += (loHz - best.loHz) * edgeAlpha;
+  best.hiHz += (hiHz - best.hiHz) * edgeAlpha;
+  best.lastSeenAt = now;
+
+  const nextLabelHz = quantizeBracketBandwidth(Math.max(0, best.hiHz - best.loHz));
+  if (
+    now - best.lastLabelAt >= BRACKET_LABEL_HOLD_MS ||
+    Math.abs(nextLabelHz - best.labelBwHz) >= BRACKET_LABEL_JUMP_HZ
+  ) {
+    best.labelBwHz = nextLabelHz;
+    best.lastLabelAt = now;
+  }
+  return best;
+}
+
+function rangeOverlapRatio(aLo: number, aHi: number, bLo: number, bHi: number): number {
+  const loA = Math.min(aLo, aHi);
+  const hiA = Math.max(aLo, aHi);
+  const loB = Math.min(bLo, bHi);
+  const hiB = Math.max(bLo, bHi);
+  const overlap = Math.max(0, Math.min(hiA, hiB) - Math.max(loA, loB));
+  const denom = Math.max(1, Math.min(hiA - loA, hiB - loB));
+  return overlap / denom;
+}
+
 export function FilterMiniPan() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Visible span lives in a ref (read by the imperative draw loop) plus a state
@@ -274,9 +357,12 @@ export function FilterMiniPan() {
     let avgLin: Float32Array | null = null; // time-averaged linear power per bin
     let avgDb: Float32Array | null = null; // averaged spectrum in dB (for the edge walk)
     let avgKey = ''; // geometry key; reset the average when it changes
+    let bracketTracks: BracketTrack[] = []; // smoothed signal-bandwidth annotations
+    let bracketKey = ''; // geometry key; reset annotations when the display window changes
 
     const draw = () => {
       rafHandle = 0;
+      const now = performance.now();
       const d = useDisplayStore.getState();
       const c = useConnectionStore.getState();
       if (lastSeq !== null && d.lastSeq === lastSeq) return;
@@ -609,17 +695,26 @@ export function FilterMiniPan() {
       // UNMISTAKABLE: an occupied-band wash, bright full-height edge guides with
       // glow, inward carets at the baseline, and a width label. The carrier the
       // filter is sitting on is drawn in accent; the rest in the signal colour.
-      // This is the panel's headline feature: see each signal AND its bandwidth.
+      // Widths are tracked/held over time so the labels read as instruments,
+      // not instantaneous detector noise.
       if (floor !== null && panDb && binsPerHz > 0) {
         const dCenter = Number(d.centerHz);
         const baseY = plotBottom;
         const half = panDb.length / 2;
+        const nextBracketKey = `${d.centerHz}:${d.hzPerPixel}:${panDb.length}:${spanHz}`;
+        if (nextBracketKey !== bracketKey) {
+          bracketKey = nextBracketKey;
+          bracketTracks = [];
+        } else {
+          bracketTracks = bracketTracks.filter((t) => now - t.lastSeenAt <= BRACKET_TRACK_TTL_MS);
+        }
         // Measure on the time-averaged spectrum once it exists (stable width);
         // fall back to the live frame for the very first frames.
         const measSpec = avgDb && avgDb.length === panDb.length ? avgDb : panDb;
         const peaks = detectPeaks(panDb, dCenter, d.hzPerPixel)
           .filter((p) => p.snrDb >= BRACKET_MIN_SNR_DB)
           .slice(0, BRACKET_MAX); // detectPeaks returns strongest-first
+        const drawnBands: Array<{ loPx: number; hiPx: number }> = [];
         for (const p of peaks) {
           const xC = ((p.hz - loHz) / spanHz) * w;
           if (xC < 0 || xC > w) continue;
@@ -637,10 +732,24 @@ export function FilterMiniPan() {
             loEdgeHz = dCenter + (obLo - half) * d.hzPerPixel;
             hiEdgeHz = dCenter + (obHi - half) * d.hzPerPixel;
           }
+          const track = smoothedBracketMeasurement(bracketTracks, now, ext.crestHz, loEdgeHz, hiEdgeHz);
+          loEdgeHz = track.loHz;
+          hiEdgeHz = track.hiHz;
+          if (hiEdgeHz < loEdgeHz) {
+            const swap = loEdgeHz;
+            loEdgeHz = hiEdgeHz;
+            hiEdgeHz = swap;
+          }
           const xL = ((loEdgeHz - loHz) / spanHz) * w;
           const xR = ((hiEdgeHz - loHz) / spanHz) * w;
-          const bwHz = Math.max(0, hiEdgeHz - loEdgeHz);
-          const inBand = ext.crestHz - vfo >= c.filterLowHz && ext.crestHz - vfo <= c.filterHighHz;
+          if (drawnBands.some((r) => rangeOverlapRatio(xL, xR, r.loPx, r.hiPx) >= BRACKET_OVERLAP_RATIO)) {
+            continue;
+          }
+          drawnBands.push({ loPx: xL, hiPx: xR });
+          const bwHz = track.labelBwHz;
+          const markerCrestHz = track.crestHz;
+          const markerCenterX = ((markerCrestHz - loHz) / spanHz) * w;
+          const inBand = markerCrestHz - vfo >= c.filterLowHz && markerCrestHz - vfo <= c.filterHighHz;
           const col = inBand ? accent : signal;
 
           // 1) Occupied-band wash — brighten the detected extent above the heat
@@ -689,7 +798,9 @@ export function FilterMiniPan() {
           }
 
           // 4) Width label above the signal crest, on a readability chip.
-          const crestY = traceSm ? traceSm[Math.max(0, Math.min(w - 1, Math.round(xC)))]! : plotTop;
+          const crestY = traceSm
+            ? traceSm[Math.max(0, Math.min(w - 1, Math.round(markerCenterX)))]!
+            : plotTop;
           const by = Math.max(plotTop + Math.round(10 * dpr), crestY - Math.round(6 * dpr));
           const label = formatFilterWidth(0, Math.round(bwHz));
           ctx.font = `700 ${Math.round(9 * dpr)}px "SFMono-Regular", ui-monospace, monospace`;

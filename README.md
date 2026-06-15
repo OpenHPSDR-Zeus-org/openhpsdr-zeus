@@ -90,6 +90,21 @@ See the wiki's [Developer Guide](https://github.com/Kb2uka/openhpsdr-zeus/wiki/D
 for prerequisites, the two-terminal dev loop, project layout, tests, and
 conventions.
 
+## Updating
+
+If you run Zeus from a git checkout, **Settings → Updates** shows how far behind
+the upstream repo you are and can fast-forward your checkout with one click.
+A pull only changes source — rebuild and restart to apply it:
+
+```bash
+pwsh scripts/update.ps1   # Windows
+./scripts/update.sh       # macOS / Linux
+```
+
+Each script fast-forwards to upstream (refusing if you have uncommitted
+changes), rebuilds the web UI into `wwwroot`, rebuilds the .NET host, and then
+asks you to restart Zeus.
+
 ## Acknowledgements
 
 OpenHPSDR Zeus stands on the shoulders of the OpenHPSDR community. Most of

@@ -285,6 +285,15 @@ public sealed class FrontendDspSceneDiagnosticsService
                 $"Frontend DSP scene {agingSubject} is aging; wait for the next live spectrum refresh or check client connectivity if this persists.");
         }
 
+        if (!HasSceneEvidence(latest))
+        {
+            return new(
+                "fresh",
+                Fresh: true,
+                Stale: false,
+                "Frontend DSP scene heartbeat is fresh; no Signal Intelligence or Smart NR source evidence has been published yet.");
+        }
+
         bool coherentSubthreshold = latest?.CoherentSubthresholdSignal == true;
         if (coherentSubthreshold && latest?.SmartNrHeldByRxChain == true)
         {
@@ -320,6 +329,22 @@ public sealed class FrontendDspSceneDiagnosticsService
             "Frontend DSP scene telemetry is fresh and ready for remote diagnostics.");
 
     }
+
+    private static bool HasSceneEvidence(FrontendDspSceneSnapshot? latest) =>
+        latest is not null
+        && (!string.IsNullOrWhiteSpace(latest.SignalProfile)
+            || !string.IsNullOrWhiteSpace(latest.SignalReason)
+            || !string.IsNullOrWhiteSpace(latest.SmartNrProfile)
+            || !string.IsNullOrWhiteSpace(latest.SmartNrReason)
+            || !string.IsNullOrWhiteSpace(latest.SmartNrRecommendation)
+            || latest.MaxSnrDb is not null
+            || latest.CoherentMaxSnrDb is not null
+            || latest.OccupiedPct is not null
+            || latest.CoherentOccupiedPct is not null
+            || latest.ImpulsivePct is not null
+            || latest.PeakCount is not null
+            || latest.CoherentPeakCount is not null
+            || latest.CoherentSubthresholdSignal is not null);
 
     private sealed record FrontendDspSceneHealth(
         string Status,

@@ -47,6 +47,8 @@ import {
   DEFAULT_WF_ROW_CADENCE,
   FIXED_DB_MAX,
   FIXED_DB_MIN,
+  TX_FIXED_DB_MAX,
+  TX_FIXED_DB_MIN,
   useDisplaySettingsStore,
 } from './display-settings-store';
 
@@ -55,6 +57,12 @@ function resetStore() {
     autoRange: false,
     dbMin: FIXED_DB_MIN,
     dbMax: FIXED_DB_MAX,
+    txDbMin: TX_FIXED_DB_MIN,
+    txDbMax: TX_FIXED_DB_MAX,
+    wfDbMin: FIXED_DB_MIN,
+    wfDbMax: FIXED_DB_MAX,
+    wfTxDbMin: TX_FIXED_DB_MIN,
+    wfTxDbMax: TX_FIXED_DB_MAX,
     waterfallRowCadence: DEFAULT_WF_ROW_CADENCE,
   });
 }
@@ -143,5 +151,49 @@ describe('display-settings-store', () => {
 
     s.setWaterfallRowCadence(99 as never);
     expect(useDisplaySettingsStore.getState().waterfallRowCadence).toBe(DEFAULT_WF_ROW_CADENCE);
+  });
+
+  it('sets explicit RX/TX panadapter and waterfall dB windows', () => {
+    const s = useDisplaySettingsStore.getState();
+
+    s.setAutoRange(true);
+    s.setDbRange(-132, -42);
+    s.setTxDbRange(-76, 14);
+    s.setWfDbRange(-138, -58);
+    s.setWfTxDbRange(-82, 18);
+
+    expect(useDisplaySettingsStore.getState()).toMatchObject({
+      autoRange: false,
+      dbMin: -132,
+      dbMax: -42,
+      txDbMin: -76,
+      txDbMax: 14,
+      wfDbMin: -138,
+      wfDbMax: -58,
+      wfTxDbMin: -82,
+      wfTxDbMax: 18,
+    });
+  });
+
+  it('resets all explicit dB windows to defaults', () => {
+    const s = useDisplaySettingsStore.getState();
+    s.setDbRange(-132, -42);
+    s.setTxDbRange(-76, 14);
+    s.setWfDbRange(-138, -58);
+    s.setWfTxDbRange(-82, 18);
+
+    s.resetDbRanges();
+
+    expect(useDisplaySettingsStore.getState()).toMatchObject({
+      autoRange: false,
+      dbMin: FIXED_DB_MIN,
+      dbMax: FIXED_DB_MAX,
+      txDbMin: TX_FIXED_DB_MIN,
+      txDbMax: TX_FIXED_DB_MAX,
+      wfDbMin: FIXED_DB_MIN,
+      wfDbMax: FIXED_DB_MAX,
+      wfTxDbMin: TX_FIXED_DB_MIN,
+      wfTxDbMax: TX_FIXED_DB_MAX,
+    });
   });
 });

@@ -26,11 +26,26 @@ interface ChainMetersDto {
   outputDb: number;
 }
 
+type AudioChainMetersProps = {
+  compact?: boolean;
+  title?: string;
+};
+
 /** Map a linear peak (0..1+) to a 0..1 bar fraction on a dB scale. */
 function fractionFromDb(db: number): number {
+  if (!Number.isFinite(db)) return 0;
   if (db <= FLOOR_DB) return 0;
   if (db >= 0) return 1;
   return 1 - db / FLOOR_DB; // db in (FLOOR_DB,0) → (0,1)
+}
+
+function normalizeMeters(body: Partial<ChainMetersDto>): ChainMetersDto {
+  return {
+    inputPeak: Number.isFinite(body.inputPeak) ? body.inputPeak! : 0,
+    outputPeak: Number.isFinite(body.outputPeak) ? body.outputPeak! : 0,
+    inputDb: Number.isFinite(body.inputDb) ? body.inputDb! : FLOOR_DB,
+    outputDb: Number.isFinite(body.outputDb) ? body.outputDb! : FLOOR_DB,
+  };
 }
 
 function zoneColor(frac: number): string {
@@ -141,7 +156,7 @@ function LevelBar({ label, db }: { label: string; db: number }) {
   );
 }
 
-export function AudioChainMeters() {
+export function AudioChainMeters({ compact = false, title }: AudioChainMetersProps = {}) {
   const [meters, setMeters] = useState<ChainMetersDto>({
     inputPeak: 0,
     outputPeak: 0,
@@ -156,8 +171,8 @@ export function AudioChainMeters() {
       try {
         const res = await fetch('/api/audio-suite/chain/meters');
         if (alive && res.ok) {
-          const body = (await res.json()) as ChainMetersDto;
-          setMeters(body);
+          const body = (await res.json()) as Partial<ChainMetersDto>;
+          setMeters(normalizeMeters(body));
         }
       } catch {
         /* transient — keep last reading, try again next tick */
@@ -176,12 +191,29 @@ export function AudioChainMeters() {
       style={{
         display: 'flex',
         flexDirection: 'column',
-        gap: 6,
-        padding: '10px 14px',
-        background: 'var(--bg-1)',
-        borderBottom: '1px solid var(--line)',
+        gap: compact ? 5 : 6,
+        padding: compact ? '7px 8px' : '10px 14px',
+        background: compact ? 'var(--bg-2)' : 'var(--bg-1)',
+        border: compact ? '1px solid var(--line)' : undefined,
+        borderBottom: compact ? undefined : '1px solid var(--line)',
+        borderRadius: compact ? 4 : undefined,
+        minWidth: 0,
       }}
     >
+      {title && (
+        <div
+          className="label-xs"
+          style={{
+            color: 'var(--fg-2)',
+            fontWeight: 800,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}
+        >
+          {title}
+        </div>
+      )}
       <LevelBar label="In" db={meters.inputDb} />
       <LevelBar label="Out" db={meters.outputDb} />
     </div>
