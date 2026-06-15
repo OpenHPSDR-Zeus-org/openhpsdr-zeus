@@ -582,6 +582,14 @@ public sealed class RadioService : IDisposable
         var board = ResolveBoardKindForPreferences(
             discoveredKind,
             protocol2 ? HpsdrBoardKind.OrionMkII : HpsdrBoardKind.Unknown);
+        int maxHz = MaxAllowedSampleRateHz(board, protocol2);
+        if (requested > maxHz)
+        {
+            _log.LogWarning(
+                "radio.connect requested sample-rate {Requested} exceeds board={Board} max={Max}; clamping",
+                requested, board, maxHz);
+            requested = maxHz;
+        }
 
         if (_radioStateStore is null || board == HpsdrBoardKind.Unknown)
             return requested;
@@ -590,15 +598,26 @@ public sealed class RadioService : IDisposable
         if (!storedHz.HasValue)
             return requested;
 
-        if (!protocol2 && storedHz.Value > 384_000)
+        var stored = MapSampleRate(storedHz.Value).SampleRateHz();
+        if (stored > maxHz)
         {
             _log.LogWarning(
-                "radio.connect sample-rate store has P2-only rate={Rate} for board={Board}; using requested P1 rate={Requested}",
-                storedHz.Value, board, requested);
+                "radio.connect sample-rate store has rate={Rate} above board={Board} max={Max}; using requested rate={Requested}",
+                stored, board, maxHz, requested);
             return requested;
         }
 
-        return MapSampleRate(storedHz.Value).SampleRateHz();
+        return stored;
+    }
+
+    private int MaxAllowedSampleRateHz(HpsdrBoardKind board, bool protocol2)
+    {
+        var boardMax = BoardCapabilitiesTable
+            .For(board, EffectiveOrionMkIIVariant)
+            .MaxRxSampleRateHz;
+        return protocol2
+            ? boardMax
+            : Math.Min(boardMax, 384_000);
     }
 
     private HpsdrBoardKind ResolveBoardKindForPreferences(HpsdrBoardKind discoveredKind, HpsdrBoardKind fallbackKind)
@@ -1278,11 +1297,28 @@ public sealed class RadioService : IDisposable
         // cannot represent 768/1536 kHz — clamp on the P1 path so a stray request
         // can't silently wrap to 48/96 kHz. Protocol 2 (ActiveClient is null;
         // rate carried as u16 kHz) takes the full 48..1536 kHz ladder.
-        if (_activeClient is not null && rate > HpsdrSampleRate.Rate384k)
+        bool protocol2;
+        bool protocol1;
+        lock (_sync)
+        {
+            protocol1 = _activeClient is not null;
+            protocol2 = _p2Active;
+        }
+
+        if (protocol1 && rate > HpsdrSampleRate.Rate384k)
         {
             _log.LogWarning(
                 "radio.setSampleRate rate={Rate} unsupported on Protocol 1; clamping to 384k", rate);
             rate = HpsdrSampleRate.Rate384k;
+        }
+        var board = ConnectedBoardKind;
+        int maxHz = MaxAllowedSampleRateHz(board, protocol2 && !protocol1);
+        if (rate.SampleRateHz() > maxHz)
+        {
+            _log.LogWarning(
+                "radio.setSampleRate rate={Rate} exceeds board={Board} max={Max}; clamping",
+                rate, board, maxHz);
+            rate = MapSampleRate(maxHz);
         }
         int hz = rate.SampleRateHz();
         Mutate(s => s with { SampleRate = hz });
@@ -1292,7 +1328,6 @@ public sealed class RadioService : IDisposable
         // bandwidth change was a no-op on P2 / G2 before this).
         ActiveClient?.SetSampleRate(rate);
         SampleRateChanged?.Invoke(hz);
-        var board = ConnectedBoardKind;
         if (board != HpsdrBoardKind.Unknown)
             _radioStateStore?.SetBoardSampleRate(board, hz, EffectiveOrionMkIIVariant);
         return Snapshot();

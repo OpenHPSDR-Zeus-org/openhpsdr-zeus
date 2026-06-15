@@ -31,6 +31,10 @@ export interface BoardCapabilities {
    *  ANAN-8000DLE = 250 W, ANAN-G2-1K = 1000 W. Operator override lives in
    *  the PA settings panel. */
   maxPowerWatts: number;
+  /** Maximum supported RX/DDC sample rate in Hz. Protocol 1 remains capped
+   *  at 384 kHz, while bench-confirmed Protocol 2 G2-class radios can expose
+   *  768/1536 kHz. Unknown or conservative boards report 384 kHz. */
+  maxRxSampleRateHz: number;
   /** True when the connected board is Anvelina-PRO3 over Protocol 2 — it
    *  exposes USEROUT7..10 via EU2AV's Open_Collector_Anvelina_DX spec
    *  (issue Kb2uka/openhpsdr-zeus#407, wire byte 1397 bits [4:1]). The
@@ -55,8 +59,19 @@ export const UNKNOWN_BOARD_CAPABILITIES: BoardCapabilities = {
   supportsPathIllustrator: false,
   hasHl2OptionalToggles: false,
   maxPowerWatts: 100,
+  maxRxSampleRateHz: 384_000,
   supportsAnvelinaDxOc: false,
 };
+
+function parseSampleRateCeiling(raw: unknown): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) {
+    return UNKNOWN_BOARD_CAPABILITIES.maxRxSampleRateHz;
+  }
+  const hz = Math.round(raw);
+  return hz >= 48_000 && hz <= 1_536_000
+    ? hz
+    : UNKNOWN_BOARD_CAPABILITIES.maxRxSampleRateHz;
+}
 
 export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
   if (!raw || typeof raw !== 'object') return UNKNOWN_BOARD_CAPABILITIES;
@@ -88,6 +103,7 @@ export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
       typeof r.maxPowerWatts === 'number' && r.maxPowerWatts > 0
         ? r.maxPowerWatts
         : UNKNOWN_BOARD_CAPABILITIES.maxPowerWatts,
+    maxRxSampleRateHz: parseSampleRateCeiling(r.maxRxSampleRateHz),
     supportsAnvelinaDxOc:
       typeof r.supportsAnvelinaDxOc === 'boolean'
         ? r.supportsAnvelinaDxOc
