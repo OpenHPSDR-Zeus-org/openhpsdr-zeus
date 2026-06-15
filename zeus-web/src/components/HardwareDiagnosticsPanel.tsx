@@ -354,16 +354,21 @@ function ReceiverTopologyDiagnostics({ diag }: { diag: HardwareDiagnosticsDto | 
 function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
   if (!diag) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for TX diagnostics.</div>;
   const p2 = diag.protocol2;
-  const p2Failures = (p2?.queueWriteFailures ?? 0) + (p2?.sendFailures ?? 0);
-  const recommendation = p2
-    ? p2Failures > 0
-      ? 'P2 DUC egress has write/send failures; stop judging audio quality until the transport is clean.'
-      : p2.queuedPackets > 12
-        ? 'P2 DUC queue is backing up; check host scheduling before increasing TX density.'
-        : 'For G2/P2 TX, use Protocol 2 DUC queued/sent packets as the egress truth; P1 ring counters are only legacy context.'
-    : 'No active Protocol 2 TX diagnostics are attached; P1 ring counters are the only visible egress path.';
+  const egress = diag.egress;
   return (
     <div style={{ display: 'grid', gap: 10 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Health', value: egress.healthStatus },
+          { label: 'Transport', value: egress.activeTransport },
+          { label: 'P2 Attached', value: boolLabel(egress.p2Attached) },
+          { label: 'P2 Live', value: boolLabel(egress.p2Live) },
+          { label: 'P2 Activity Age', value: age(egress.p2LastActivityAgeMs) },
+          { label: 'P1 Drop Ratio', value: pct(egress.p1RingDropRatioPct) },
+          { label: 'Health Updated', value: time(egress.generatedUtc) },
+          { label: 'Endpoint Updated', value: time(diag.generatedUtc) },
+        ]}
+      />
       <FieldGrid
         fields={[
           { label: 'IQ Source', value: diag.iqSourceType?.split('.').at(-1) ?? diag.iqSourceType },
@@ -405,7 +410,7 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
           { label: 'VST Degraded', value: count(diag.vstEngine?.degradedBlocks) },
         ]}
       />
-      <DiagnosticRecommendation text={recommendation} />
+      <DiagnosticRecommendation text={egress.diagnosticRecommendation} />
     </div>
   );
 }

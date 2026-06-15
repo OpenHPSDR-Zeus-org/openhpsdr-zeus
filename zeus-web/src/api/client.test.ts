@@ -831,6 +831,7 @@ describe('POST helpers', () => {
 
   it('fetchTxDiagnostics reads P2 DUC egress counters', async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
+      generatedUtc: '2026-06-15T13:00:01Z',
       iqSourceType: 'Zeus.Protocol1.TxIqRing',
       iqSourceIsRing: true,
       ring: {
@@ -861,6 +862,17 @@ describe('POST helpers', () => {
         lastRateTimestampUtc: '2026-06-15T13:00:00Z',
         senderRunning: true,
       },
+      egress: {
+        schemaVersion: 1,
+        generatedUtc: '2026-06-15T13:00:01Z',
+        activeTransport: 'P2',
+        healthStatus: 'p2-live',
+        p2Attached: true,
+        p2Live: true,
+        p2LastActivityAgeMs: 1000,
+        p1RingDropRatioPct: 0,
+        diagnosticRecommendation: 'P2 DUC egress is live.',
+      },
       txPlugins: {
         masterBypassed: false,
         bypassedForRemoteTx: false,
@@ -883,6 +895,10 @@ describe('POST helpers', () => {
     expect(diag.protocol2?.packetsSent).toBe(1);
     expect(diag.protocol2?.lastPacketsPerSecond).toBe(800);
     expect(diag.protocol2?.senderRunning).toBe(true);
+    expect(diag.egress.healthStatus).toBe('p2-live');
+    expect(diag.egress.p2Live).toBe(true);
+    expect(diag.egress.p2LastActivityAgeMs).toBe(1000);
+    expect(diag.egress.diagnosticRecommendation).toBe('P2 DUC egress is live.');
     expect(diag.txPlugins?.masterBypassed).toBe(false);
     expect(diag.vstEngine?.degradedBlocks).toBe(2);
   });

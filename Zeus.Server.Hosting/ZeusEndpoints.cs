@@ -12,6 +12,7 @@ using Zeus.Dsp;
 using Zeus.Dsp.Wdsp;
 using Zeus.Protocol1;
 using Zeus.Protocol1.Discovery;
+using Zeus.Protocol2;
 using Zeus.Server.Tci;
 
 namespace Zeus.Server;
@@ -431,13 +432,21 @@ public static class ZeusEndpoints
         // hunting through logs. Free to call, exposes no secrets.
         app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, DspPipelineService dsp, AudioPluginBridge? pluginBridge, Zeus.Plugins.Host.Audio.VstEngineController? vstEngine) =>
         {
+            var generatedUtc = DateTimeOffset.UtcNow;
+            var p2Tx = dsp.ActiveP2Client?.TxIqDiagnosticsSnapshot();
             return Results.Ok(new
             {
+                generatedUtc,
                 iqSourceType = src.GetType().FullName,
                 iqSourceIsRing = ReferenceEquals(src, ring),
                 ring = new { ring.TotalWritten, ring.TotalRead, ring.Count, ring.Dropped, ring.Capacity, ring.RecentMag },
                 ingest = new { ingest.TotalMicSamples, ingest.TotalTxBlocks, ingest.DroppedFrames },
-                protocol2 = dsp.ActiveP2Client?.TxIqDiagnosticsSnapshot(),
+                protocol2 = p2Tx,
+                egress = BuildTxEgressHealth(
+                    generatedUtc,
+                    ring.TotalWritten,
+                    ring.Dropped,
+                    p2Tx),
                 txPlugins = pluginBridge is null ? null : new
                 {
                     masterBypassed = pluginBridge.IsMasterBypassed,
@@ -2251,6 +2260,82 @@ public static class ZeusEndpoints
 
     static bool IsFinite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
 
+    internal static TxEgressHealthDto BuildTxEgressHealth(
+        DateTimeOffset generatedUtc,
+        long p1RingTotalWritten,
+        long p1RingDropped,
+        Protocol2TxIqDiagnostics? p2)
+    {
+        double p1RingDropRatioPct = p1RingTotalWritten <= 0
+            ? 0.0
+            : Math.Round(p1RingDropped * 100.0 / p1RingTotalWritten, 3);
+        if (p2 is not { } p2Diag)
+        {
+            return new TxEgressHealthDto(
+                SchemaVersion: 1,
+                GeneratedUtc: generatedUtc,
+                ActiveTransport: "P1",
+                HealthStatus: "p2-unattached",
+                P2Attached: false,
+                P2Live: false,
+                P2LastActivityAgeMs: null,
+                P1RingDropRatioPct: p1RingDropRatioPct,
+                DiagnosticRecommendation: p1RingDropRatioPct > 1.0
+                    ? "No Protocol 2 TX client is attached and the P1 TX IQ ring is dropping samples; verify the active radio transport before judging TX audio fidelity."
+                    : "No Protocol 2 TX client is attached; P1 ring counters are the only visible TX egress path.");
+        }
+
+        double? ageMs = p2Diag.LastRateTimestampUtc is { } lastRate
+            ? Math.Max(0.0, (generatedUtc - lastRate).TotalMilliseconds)
+            : null;
+        bool p2Live = p2Diag.LastPacketsPerSecond > 0 && ageMs is <= 2500.0;
+        long failures = p2Diag.QueueWriteFailures + p2Diag.SendFailures;
+        string health;
+        string recommendation;
+
+        if (!p2Diag.SenderRunning)
+        {
+            health = "p2-sender-stopped";
+            recommendation = "Protocol 2 is attached but the DUC sender task is not running; reconnect the radio before trusting TX egress telemetry.";
+        }
+        else if (failures > 0)
+        {
+            health = "p2-send-failures";
+            recommendation = "P2 DUC egress has write/send failures; stop judging audio quality until the transport is clean.";
+        }
+        else if (p2Diag.QueuedPackets > 12)
+        {
+            health = "p2-queue-backed-up";
+            recommendation = "P2 DUC queue is backing up; check host scheduling and packet pacing before increasing TX density.";
+        }
+        else if (p2Live)
+        {
+            health = "p2-live";
+            recommendation = "P2 DUC egress is live. Use P2 queued/sent packets, packet rate, FIFO model, and failure counters as the TX egress truth; P1 ring drops are legacy context while P2 is active.";
+        }
+        else if (p2Diag.InputComplexSamples > 0 || p2Diag.PacketsSent > 0)
+        {
+            health = "p2-stale";
+            recommendation = "P2 DUC counters have prior TX activity but are not live right now; key MOX/TUN or enable TX monitor to verify real-time egress before making fidelity decisions.";
+        }
+        else
+        {
+            health = "p2-waiting-for-tx";
+            recommendation = "P2 DUC sender is attached and waiting for TX IQ; key MOX/TUN or feed mic/TX monitor audio to validate live egress.";
+        }
+
+        return new TxEgressHealthDto(
+            SchemaVersion: 1,
+            GeneratedUtc: generatedUtc,
+            ActiveTransport: "P2",
+            HealthStatus: health,
+            P2Attached: true,
+            P2Live: p2Live,
+            P2LastActivityAgeMs: ageMs is { } age ? Math.Round(age, 0) : null,
+            P1RingDropRatioPct: p1RingDropRatioPct,
+            DiagnosticRecommendation: recommendation);
+    }
+
     static HpsdrSampleRate MapHpsdrSampleRate(int hz) => hz switch
     {
         48_000 => HpsdrSampleRate.Rate48k,
@@ -2270,6 +2355,16 @@ internal sealed record ChainMembershipSetRequest(bool Active);
 internal sealed record ScanVstDirectoryRequest(string Directory);
 internal sealed record MasterBypassSetRequest(bool Bypassed);
 internal sealed record ProcessingModeSetRequest(string Mode);
+internal sealed record TxEgressHealthDto(
+    int SchemaVersion,
+    DateTimeOffset GeneratedUtc,
+    string ActiveTransport,
+    string HealthStatus,
+    bool P2Attached,
+    bool P2Live,
+    double? P2LastActivityAgeMs,
+    double P1RingDropRatioPct,
+    string DiagnosticRecommendation);
 internal sealed record HardwareDiagnosticsMarkerRequest(string? Label, string? Notes);
 internal sealed record WavRecordStartRequest(string? Source);
 internal sealed record WavPlayRequest(string? File);
