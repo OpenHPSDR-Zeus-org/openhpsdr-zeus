@@ -42,6 +42,9 @@ describe('rx-chain-health', () => {
     expect(a.label).toBe('RX chain optimized');
     expect(a.score).toBeGreaterThanOrEqual(90);
     expect(a.adcHeadroomDb).toBe(18);
+    expect(a.adcCrestDb).toBe(12);
+    expect(a.agcEnvAv).toBe(-86);
+    expect(a.agcEnvCrestDb).toBe(6);
     expect(a.signalSource).toBe('rx-meters-v2');
     expect(a.recommendation).toBe('Hold front-end settings');
     expect(a.actionTone).toBe('neutral');
@@ -64,6 +67,33 @@ describe('rx-chain-health', () => {
     expect(a.detail).toContain('ADC is under-filled');
     expect(a.recommendation).toContain('Recover dynamic range');
     expect(a.actionTone).toBe('optimize');
+  });
+
+  it('uses ADC average to catch a readable signal with only transient peak fill', () => {
+    const a = analyzeRxChain({
+      ...BASE,
+      signalPk: -86,
+      adcPk: -38,
+      adcAv: -92,
+    });
+
+    expect(a.state).toBe('underfilled');
+    expect(a.detail).toContain('ADC average is under-filled');
+    expect(a.adcCrestDb).toBe(54);
+    expect(a.actionTone).toBe('optimize');
+  });
+
+  it('does not treat a low ADC average as under-filled when peak fill is healthy', () => {
+    const a = analyzeRxChain({
+      ...BASE,
+      signalPk: -86,
+      adcPk: -18,
+      adcAv: -92,
+    });
+
+    expect(a.state).toBe('optimized');
+    expect(a.detail).not.toContain('under-filled');
+    expect(a.adcCrestDb).toBe(74);
   });
 
   it('classifies high-boost weak-signal copy as AGC-stressed', () => {

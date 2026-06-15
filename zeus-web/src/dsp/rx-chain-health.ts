@@ -40,8 +40,11 @@ export type RxChainAnalysis = {
   adcAv: number | null;
   adcHeadroomDb: number | null;
   adcUtilizationPct: number | null;
+  adcCrestDb: number | null;
   agcGain: number;
   agcEnvPk: number | null;
+  agcEnvAv: number | null;
+  agcEnvCrestDb: number | null;
 };
 
 export function validMeterDb(v: number): boolean {
@@ -65,6 +68,10 @@ function pctBetween(v: number, low: number, high: number): number {
   return clamp(((v - low) / (high - low)) * 100, 0, 100);
 }
 
+function stageCrestDb(peak: number | null, avg: number | null): number | null {
+  return peak !== null && avg !== null && avg <= peak ? peak - avg : null;
+}
+
 export function preferredRxSignalDbm(s: RxChainSnapshot): {
   dbm: number | null;
   source: RxSignalSource;
@@ -84,8 +91,11 @@ export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
   const adcAv = validMeterDb(s.adcAv) ? s.adcAv : null;
   const agcGain = Number.isFinite(s.agcGain) ? s.agcGain : 0;
   const agcEnvPk = validMeterDb(s.agcEnvPk) ? s.agcEnvPk : null;
+  const agcEnvAv = validMeterDb(s.agcEnvAv) ? s.agcEnvAv : null;
   const adcHeadroomDb = adcPk === null ? null : Math.max(0, -adcPk);
   const adcUtilizationPct = adcPk === null ? null : pctBetween(adcPk, -96, -3);
+  const adcCrestDb = stageCrestDb(adcPk, adcAv);
+  const agcEnvCrestDb = stageCrestDb(agcEnvPk, agcEnvAv);
   const baseMetrics = {
     signalDbm,
     signalSource: preferred.source,
@@ -93,8 +103,11 @@ export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
     adcAv,
     adcHeadroomDb,
     adcUtilizationPct,
+    adcCrestDb,
     agcGain,
     agcEnvPk,
+    agcEnvAv,
+    agcEnvCrestDb,
   };
 
   if (signalDbm === null && adcPk === null) {
@@ -144,12 +157,25 @@ export function analyzeRxChain(s: RxChainSnapshot): RxChainAnalysis {
     if (adcPk > -6) {
       score -= 22;
       reasons.push('ADC headroom is tight');
-    } else if (adcPk < -76 && signalDbm !== null && signalDbm > -112) {
-      score -= 28;
-      reasons.push('ADC is under-filled for the received signal');
-    } else if (adcPk < -88) {
-      score -= 12;
-      reasons.push('ADC trace is near the floor');
+    } else {
+      const readableSignal = signalDbm !== null && signalDbm > -112;
+      const peakUnderfilled = readableSignal && adcPk < -76;
+      const bodyUnderfilled =
+        readableSignal &&
+        adcAv !== null &&
+        adcPk < -36 &&
+        adcAv < -86;
+      if (peakUnderfilled || bodyUnderfilled) {
+        score -= peakUnderfilled ? 28 : 22;
+        reasons.push(
+          peakUnderfilled
+            ? 'ADC is under-filled for the received signal'
+            : 'ADC average is under-filled for the received signal',
+        );
+      } else if (adcPk < -88) {
+        score -= 12;
+        reasons.push('ADC trace is near the floor');
+      }
     }
   }
 
