@@ -65,11 +65,13 @@ public class TxAudioIngestTests
         public int TxBlockSamples => BlockSize;
         public int TxOutputSamples => BlockSize;
         public int ProcessedBlocks { get; private set; }
+        public float[]? LastMicBlock { get; private set; }
 
         public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved)
         {
             if (micMono.Length != BlockSize) throw new ArgumentException("mic length");
             if (iqInterleaved.Length != 2 * BlockSize) throw new ArgumentException("iq length");
+            LastMicBlock = micMono.ToArray();
             // Copy mic into I, Q = 0 so tests can trace a specific block end-to-end.
             for (int i = 0; i < BlockSize; i++)
             {
@@ -198,6 +200,40 @@ public class TxAudioIngestTests
         ingest.OnMicPcmBytes(new byte[100]);
         Assert.Equal(1, ingest.DroppedFrames);
         Assert.Equal(0, engine.ProcessedBlocks);
+    }
+
+    [Fact]
+    public void MicPayload_SanitizesNonFiniteAndOverrangeSamplesBeforeWdsp()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        var first = BuildMicPcmPayload(i => i switch
+        {
+            0 => float.NaN,
+            1 => float.PositiveInfinity,
+            2 => float.NegativeInfinity,
+            3 => 1.75f,
+            4 => -2.5f,
+            5 => 0.25f,
+            _ => 0f,
+        });
+        var second = BuildMicPcmPayload(_ => 0f);
+
+        ingest.OnMicPcmBytes(first);
+        ingest.OnMicPcmBytes(second);
+
+        Assert.Equal(1, engine.ProcessedBlocks);
+        Assert.NotNull(engine.LastMicBlock);
+        Assert.Equal(0f, engine.LastMicBlock![0]);
+        Assert.Equal(0f, engine.LastMicBlock[1]);
+        Assert.Equal(0f, engine.LastMicBlock[2]);
+        Assert.Equal(1f, engine.LastMicBlock[3]);
+        Assert.Equal(-1f, engine.LastMicBlock[4]);
+        Assert.Equal(0.25f, engine.LastMicBlock[5]);
     }
 
     [Fact]
