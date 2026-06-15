@@ -1005,11 +1005,9 @@ public static class ZeusEndpoints
             return Results.Ok(r.Snapshot());
         });
 
-        // PureSignal master arm + cal-mode. P1 is gated off in the frontend in v1
-        // because the Protocol1Client wire-format work for PS isn't done yet, but
-        // the server endpoint stays open — RadioService.SetPs sets the StateDto bit
-        // and the engine receives SetPsEnabled either way; only the radio-side
-        // feedback path is P2-only. See hermes.md / TODO(ps-p1).
+        // PureSignal master arm + cal-mode. RadioService.SetPs sets the
+        // StateDto bit; DspPipelineService then sequences the active P1 or P2
+        // feedback wire path before arming the WDSP engine.
         app.MapPost("/api/tx/ps", (PsControlSetRequest req, RadioService r) =>
         {
             log.LogInformation(

@@ -96,10 +96,8 @@ export type ConnectionState = {
   boardId: string | null;
   // Connected protocol — 'P1' or 'P2', or null when disconnected. Set by
   // ConnectPanel on a successful /api/connect or /api/connect/p2 call so
-  // protocol-gated features (e.g. PureSignal v1 — P2 only) can disable
-  // their controls cleanly without round-tripping the discovery list.
-  // TODO(ps-p1): once Protocol1 PureSignal lands, this gate can drop the
-  // PS-toggle disabled branch.
+  // protocol-gated features can disable their controls cleanly without
+  // round-tripping the discovery list.
   connectedProtocol: 'P1' | 'P2' | null;
   preampOn: boolean;
   // CTUN (click-tune / centred tuning). When true, a panadapter click tunes
