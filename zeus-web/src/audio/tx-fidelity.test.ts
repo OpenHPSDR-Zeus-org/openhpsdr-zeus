@@ -76,6 +76,25 @@ describe('analyzeTxFidelity', () => {
     expect(a.actionTone).toBe('reduce');
   });
 
+  it('keeps recommendations aligned with sanitized malformed TX telemetry', () => {
+    const a = analyzeTxFidelity({
+      ...BASE,
+      wdspMicPk: -2.5,
+      alcGr: 12,
+      lvlrGr: -5,
+      cfcGr: -2,
+      swr: Infinity,
+      psFeedbackLevel: Infinity,
+    });
+
+    expect(a.state).toBe('hot');
+    expect(a.swr).toBe(1);
+    expect(a.psFeedbackLevel).toBeNull();
+    expect(a.lvlrGr).toBe(0);
+    expect(a.cfcGr).toBe(0);
+    expect(a.recommendation).toBe('Lower mic gain until peaks stay below -6 dBFS');
+  });
+
   it('treats full-scale mic or output as clipping risk', () => {
     const mic = analyzeTxFidelity({ ...BASE, wdspMicPk: 0 });
     const output = analyzeTxFidelity({ ...BASE, outPk: 0 });
