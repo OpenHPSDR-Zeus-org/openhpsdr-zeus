@@ -5,11 +5,13 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 const setNrMock = vi.hoisted(() => vi.fn<(nr: NrConfigDto, signal?: AbortSignal) => Promise<RadioStateDto>>());
+const fetchHardwareDiagnosticsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../api/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../api/client')>();
   return {
     ...actual,
+    fetchHardwareDiagnostics: fetchHardwareDiagnosticsMock,
     setNr: setNrMock,
   };
 });
@@ -36,6 +38,12 @@ const NOISE_DB = -110;
 function denseSsbNoise(): Float32Array {
   const spec = new Float32Array(WIDTH).fill(NOISE_DB);
   for (let i = 64; i < 192; i++) spec[i] = NOISE_DB + 12;
+  return spec;
+}
+
+function weakCwSignal(): Float32Array {
+  const spec = new Float32Array(WIDTH).fill(NOISE_DB);
+  spec[120] = NOISE_DB + 14;
   return spec;
 }
 
@@ -124,6 +132,14 @@ describe('SmartNrController', () => {
     vi.setSystemTime(now);
     setNrMock.mockReset();
     setNrMock.mockImplementation((nr) => Promise.resolve(mockState(nr)));
+    fetchHardwareDiagnosticsMock.mockReset();
+    fetchHardwareDiagnosticsMock.mockResolvedValue({
+      dsp: {
+        wdspActive: true,
+        wdspEmnrPost2Available: true,
+        wdspNr4SbnrAvailable: true,
+      },
+    });
     useSmartNrStore.getState().resetSettings();
     useSmartNrStore.getState().setSettings({ dwellSamples: 3 });
     useSmartNrStore.getState().setAutomationMode('auto');
@@ -182,6 +198,12 @@ describe('SmartNrController', () => {
     now += 1500;
   }
 
+  async function flushPromises() {
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
   it('waits for a stable profile dwell before applying auto NR', () => {
     for (let i = 0; i < 5; i++) feed(denseSsbNoise());
 
@@ -219,5 +241,25 @@ describe('SmartNrController', () => {
     expect(useSmartNrStore.getState().status?.heldByRxChain).toBe(true);
     expect(useSmartNrStore.getState().status?.rxChainLabel).toBe('ADC overload risk');
     expect(useSmartNrStore.getState().status?.rxChainRecommendation).toBe('Add 3-6 dB attenuation');
+  });
+
+  it('falls back to NR2 instead of applying NR4 when diagnostics reports SBNR unavailable', async () => {
+    useConnectionStore.setState({ mode: 'CWU' });
+    fetchHardwareDiagnosticsMock.mockResolvedValue({
+      dsp: {
+        wdspActive: true,
+        wdspEmnrPost2Available: true,
+        wdspNr4SbnrAvailable: false,
+      },
+    });
+
+    feed(weakCwSignal());
+    await flushPromises();
+    for (let i = 0; i < 6; i++) feed(weakCwSignal());
+
+    expect(setNrMock).toHaveBeenCalledTimes(1);
+    expect(setNrMock.mock.calls[0]?.[0].nrMode).toBe('Emnr');
+    expect(useSmartNrStore.getState().status?.capabilityLimited).toBe(true);
+    expect(useSmartNrStore.getState().status?.capabilityRecommendation).toContain('NR4/SBNR unavailable');
   });
 });

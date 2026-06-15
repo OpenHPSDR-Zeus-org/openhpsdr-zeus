@@ -2,7 +2,12 @@
 
 import { describe, expect, it } from 'vitest';
 import { NR_CONFIG_DEFAULT } from '../api/client';
-import { analyzeSmartNrCondition, recommendSmartNr, shapeSmartNrRecommendation } from './smart-nr';
+import {
+  adaptSmartNrToDspCapabilities,
+  analyzeSmartNrCondition,
+  recommendSmartNr,
+  shapeSmartNrRecommendation,
+} from './smart-nr';
 
 const WIDTH = 256;
 const NOISE_DB = -110;
@@ -348,5 +353,51 @@ describe('smart NR supervisor', () => {
     expect(shaped.snbEnabled).toBe(false);
     expect(shaped.anfEnabled).toBe(false);
     expect(shaped.nbpNotchesEnabled).toBe(false);
+  });
+
+  it('downgrades NR4 recommendations to NR2 when SBNR exports are unavailable', () => {
+    const spec = noise();
+    spec[120] = NOISE_DB + 14;
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      current: { ...NR_CONFIG_DEFAULT },
+      mode: 'CWU',
+    })!;
+    const shaped = shapeSmartNrRecommendation(rec, {
+      aggressiveness: 100,
+      autoBlankerEnabled: true,
+      autoNotchEnabled: true,
+      maxBlankerThreshold: 12,
+    });
+    const adapted = adaptSmartNrToDspCapabilities(shaped, {
+      wdspActive: true,
+      wdspEmnrPost2Available: true,
+      wdspNr4SbnrAvailable: false,
+    });
+
+    expect(shaped.nrMode).toBe('Sbnr');
+    expect(adapted.nr.nrMode).toBe('Emnr');
+    expect(adapted.nr.emnrAeRun).toBe(true);
+    expect(adapted.nr.emnrPost2Run).toBe(true);
+    expect(adapted.capabilityLimited).toBe(true);
+    expect(adapted.capabilityRecommendation).toContain('NR4/SBNR unavailable');
+  });
+
+  it('keeps EMNR core but disables post2 when those exports are unavailable', () => {
+    const adapted = adaptSmartNrToDspCapabilities(
+      { ...NR_CONFIG_DEFAULT, nrMode: 'Emnr', emnrPost2Run: true, emnrAeRun: true },
+      {
+        wdspActive: true,
+        wdspEmnrPost2Available: false,
+        wdspNr4SbnrAvailable: true,
+      },
+    );
+
+    expect(adapted.nr.nrMode).toBe('Emnr');
+    expect(adapted.nr.emnrPost2Run).toBe(false);
+    expect(adapted.nr.emnrAeRun).toBe(true);
+    expect(adapted.capabilityLimited).toBe(true);
+    expect(adapted.capabilityRecommendation).toContain('post2');
   });
 });

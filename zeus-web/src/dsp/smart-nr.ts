@@ -4,7 +4,7 @@
 // replace WDSP; it inspects the current panadapter spectrum and picks a sane
 // WDSP NR/blanker profile for the operator to apply explicitly.
 
-import type { NrConfigDto, RxMode } from '../api/client';
+import type { HardwareDspDiagnosticsDto, NrConfigDto, RxMode } from '../api/client';
 import { clampFinite } from '../util/number';
 
 export const SMART_NR_MIN_AGGRESSIVENESS = 0;
@@ -40,6 +40,17 @@ export type SmartNrRecommendation = {
   nr: NrConfigDto;
   condition: SmartNrCondition;
   reason: string;
+};
+
+export type SmartNrDspCapabilities = Pick<
+  HardwareDspDiagnosticsDto,
+  'wdspActive' | 'wdspEmnrPost2Available' | 'wdspNr4SbnrAvailable'
+>;
+
+export type SmartNrCapabilityAdaptation = {
+  nr: NrConfigDto;
+  capabilityLimited: boolean;
+  capabilityRecommendation?: string;
 };
 
 export type SmartNrTuning = {
@@ -109,6 +120,47 @@ export function shapeSmartNrRecommendation(rec: SmartNrRecommendation, tuning: S
   }
 
   return next;
+}
+
+export function adaptSmartNrToDspCapabilities(
+  nr: NrConfigDto,
+  capabilities: SmartNrDspCapabilities | null,
+): SmartNrCapabilityAdaptation {
+  if (capabilities === null) {
+    return { nr, capabilityLimited: false };
+  }
+
+  let next = nr;
+  const notes: string[] = [];
+  if (next.nrMode === 'Sbnr' && capabilities.wdspNr4SbnrAvailable === false) {
+    next = {
+      ...next,
+      nrMode: 'Emnr',
+      emnrGainMethod: 2,
+      emnrNpeMethod: next.snbEnabled ? 1 : 0,
+      emnrAeRun: true,
+      emnrPost2Run: capabilities.wdspEmnrPost2Available !== false,
+      emnrPost2Factor: next.nr4ReductionAmount ?? 12,
+      emnrPost2Nlevel: next.nr4ReductionAmount ?? 12,
+      emnrPost2Rate: 5,
+      emnrPost2Taper: 12,
+    };
+    notes.push('NR4/SBNR unavailable in the active WDSP build; using NR2/EMNR fallback.');
+  }
+
+  if (next.nrMode === 'Emnr' && capabilities.wdspEmnrPost2Available === false && next.emnrPost2Run !== false) {
+    next = {
+      ...next,
+      emnrPost2Run: false,
+    };
+    notes.push('NR2 post2 comfort-noise exports unavailable; running core EMNR without post2.');
+  }
+
+  return {
+    nr: next,
+    capabilityLimited: notes.length > 0,
+    capabilityRecommendation: notes.length > 0 ? notes.join(' ') : undefined,
+  };
 }
 
 function clampSmartNrAggressiveness(value: unknown): number {

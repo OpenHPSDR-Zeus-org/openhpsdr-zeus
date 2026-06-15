@@ -147,6 +147,12 @@ export function SmartNrSettingsSection() {
         <div className="smart-nr-status">
           <span className="mono">{status.profile}</span>
           <span>{status.reason}</span>
+          {status.capabilityLimited && status.capabilityRecommendation && (
+            <span className="smart-nr-rx-advice optimize">
+              <span className="mono">DSP CAP</span>
+              <span>{status.capabilityRecommendation}</span>
+            </span>
+          )}
           <span className="mono">
             SNR {status.maxSnrDb.toFixed(1)} dB · OCC {status.occupancyPct.toFixed(1)}% · PK {status.peakCount}
           </span>
