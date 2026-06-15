@@ -134,7 +134,7 @@ internal static class TciStreamPayload
     {
         var floats = new float[interleavedIQ.Length];
         for (int i = 0; i < interleavedIQ.Length; i++)
-            floats[i] = (float)interleavedIQ[i];
+            floats[i] = SanitizeIqSample(interleavedIQ[i]);
         return Build(
             receiver,
             sampleRate,
@@ -157,6 +157,19 @@ internal static class TciStreamPayload
 
         if (channels == 1)
         {
+            if (!IsCleanAudio(samples))
+            {
+                var mono = new float[samples.Length];
+                CopyAudio(samples, mono);
+                return Build(
+                    receiver,
+                    sampleRate,
+                    TciSampleType.Float32,
+                    length: mono.Length,
+                    streamType: TciStreamType.RxAudioStream,
+                    samplePayload: MemoryMarshal.AsBytes(mono.AsSpan()));
+            }
+
             return Build(
                 receiver,
                 sampleRate,
@@ -169,8 +182,9 @@ internal static class TciStreamPayload
         var stereo = new float[samples.Length * 2];
         for (int i = 0; i < samples.Length; i++)
         {
-            stereo[i * 2] = samples[i];
-            stereo[i * 2 + 1] = samples[i];
+            float sample = SanitizeAudioSample(samples[i]);
+            stereo[i * 2] = sample;
+            stereo[i * 2 + 1] = sample;
         }
         return Build(
             receiver,
@@ -179,5 +193,35 @@ internal static class TciStreamPayload
             length: stereo.Length,
             streamType: TciStreamType.RxAudioStream,
             samplePayload: MemoryMarshal.AsBytes(stereo.AsSpan()));
+    }
+
+    private static float SanitizeIqSample(double sample)
+    {
+        if (!double.IsFinite(sample)) return 0f;
+        float value = (float)sample;
+        return float.IsFinite(value) ? value : 0f;
+    }
+
+    private static bool IsCleanAudio(ReadOnlySpan<float> samples)
+    {
+        for (int i = 0; i < samples.Length; i++)
+        {
+            float sample = samples[i];
+            if (!float.IsFinite(sample) || sample < -1f || sample > 1f)
+                return false;
+        }
+        return true;
+    }
+
+    private static void CopyAudio(ReadOnlySpan<float> source, Span<float> destination)
+    {
+        for (int i = 0; i < source.Length; i++)
+            destination[i] = SanitizeAudioSample(source[i]);
+    }
+
+    private static float SanitizeAudioSample(float sample)
+    {
+        if (!float.IsFinite(sample)) return 0f;
+        return Math.Clamp(sample, -1f, 1f);
     }
 }

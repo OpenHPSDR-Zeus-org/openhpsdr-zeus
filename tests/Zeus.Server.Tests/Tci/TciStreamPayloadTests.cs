@@ -106,6 +106,28 @@ public class TciStreamPayloadTests
     }
 
     [Fact]
+    public void BuildIqFromDoubles_ZerosNonFiniteOrFloatOverflowSamples()
+    {
+        ReadOnlySpan<double> samples = stackalloc double[]
+        {
+            1.0,
+            double.NaN,
+            double.PositiveInfinity,
+            double.NegativeInfinity,
+            (double)float.MaxValue * 2.0,
+            -0.25,
+        };
+        var frame = TciStreamPayload.BuildIqFromDoubles(0, 48000, samples);
+
+        Assert.Equal(1.0f, PayloadFloat(frame, 0));
+        Assert.Equal(0.0f, PayloadFloat(frame, 1));
+        Assert.Equal(0.0f, PayloadFloat(frame, 2));
+        Assert.Equal(0.0f, PayloadFloat(frame, 3));
+        Assert.Equal(0.0f, PayloadFloat(frame, 4));
+        Assert.Equal(-0.25f, PayloadFloat(frame, 5));
+    }
+
+    [Fact]
     public void BuildAudioFromFloats_HeaderTypedAsFloat32RxAudio()
     {
         ReadOnlySpan<float> samples = stackalloc float[] { 0.1f, -0.2f, 0.3f, -0.4f };
@@ -138,6 +160,28 @@ public class TciStreamPayloadTests
     }
 
     [Fact]
+    public void BuildAudioFromFloats_ClipsAndZerosStereoPayload()
+    {
+        ReadOnlySpan<float> mono = stackalloc float[]
+        {
+            1.25f,
+            -1.5f,
+            float.NaN,
+            float.PositiveInfinity,
+            0.5f,
+        };
+        var frame = TciStreamPayload.BuildAudioFromFloats(0, 48000, mono);
+        ReadOnlySpan<float> expected = stackalloc float[] { 1.0f, -1.0f, 0.0f, 0.0f, 0.5f };
+
+        Assert.Equal(64 + mono.Length * 2 * 4, frame.Length);
+        for (int i = 0; i < expected.Length; i++)
+        {
+            Assert.Equal(expected[i], PayloadFloat(frame, i * 2));
+            Assert.Equal(expected[i], PayloadFloat(frame, i * 2 + 1));
+        }
+    }
+
+    [Fact]
     public void BuildAudioFromFloats_PreservesMonoWhenOneChannelRequested()
     {
         ReadOnlySpan<float> mono = stackalloc float[] { 0.1f, -0.2f, 0.3f };
@@ -150,6 +194,26 @@ public class TciStreamPayloadTests
 
         for (int i = 0; i < mono.Length; i++)
             Assert.Equal(mono[i], BitConverter.ToSingle(frame, 64 + i * 4));
+    }
+
+    [Fact]
+    public void BuildAudioFromFloats_ClipsAndZerosMonoPayload()
+    {
+        ReadOnlySpan<float> mono = stackalloc float[]
+        {
+            1.25f,
+            -1.5f,
+            float.NaN,
+            float.NegativeInfinity,
+            0.25f,
+        };
+        var frame = TciStreamPayload.BuildAudioFromFloats(0, 24000, mono, channels: 1);
+        ReadOnlySpan<float> expected = stackalloc float[] { 1.0f, -1.0f, 0.0f, 0.0f, 0.25f };
+
+        Assert.Equal(64 + mono.Length * 4, frame.Length);
+        Assert.Equal((uint)mono.Length, BinaryPrimitives.ReadUInt32LittleEndian(frame.AsSpan(20)));
+        for (int i = 0; i < expected.Length; i++)
+            Assert.Equal(expected[i], PayloadFloat(frame, i));
     }
 
     [Fact]
@@ -220,4 +284,7 @@ public class TciStreamPayloadTests
         Assert.Equal(TciStreamType.TxChrono, hdr.StreamType);
         Assert.Equal(4096u, hdr.Length);
     }
+
+    private static float PayloadFloat(byte[] frame, int sampleIndex) =>
+        BitConverter.ToSingle(frame, 64 + sampleIndex * 4);
 }
