@@ -63,6 +63,9 @@ namespace Zeus.Server.Tci;
 /// </summary>
 public sealed class TciSession : IDisposable
 {
+    internal const int MinIqSampleRate = 48_000;
+    internal const int MaxIqSampleRate = 1_536_000;
+
     private const int MaxInboundTextBytes = 8 * 1024;
     private const int MaxInboundBinaryBytes = 2 * 1024 * 1024; // 2 MB for future binary frames
 
@@ -126,7 +129,7 @@ public sealed class TciSession : IDisposable
     }
 
     /// <summary>
-    /// Last client-requested IQ sample rate, clamped to [48000, 384000].
+    /// Last client-requested IQ sample rate, clamped to [48000, 1536000].
     /// Reserved for Path B per-session decimation. The actual delivery rate is
     /// always the hardware rate (<c>_radio.Snapshot().SampleRate</c>); this
     /// stored value is NOT echoed back to the client.
@@ -153,6 +156,9 @@ public sealed class TciSession : IDisposable
     {
         get { lock (_streamLock) return _audioSampleRate; }
     }
+
+    internal static int ClampIqSampleRateRequest(int rate) =>
+        Math.Clamp(rate, MinIqSampleRate, MaxIqSampleRate);
 
     public TciSession(
         Guid id,
@@ -1350,7 +1356,7 @@ public sealed class TciSession : IDisposable
     private void HandleIqSampleRate(string[] args)
     {
         // iq_samplerate:<rate>  or  iq_samplerate (query)
-        // Range matches Thetis: [48000, 384000].
+        // Range follows the Zeus/ANAN G2 Protocol-2 ladder: [48000, 1536000].
         //
         // Always echo the hardware delivery rate, NOT the requested rate.
         // IQ frames are published at the radio's native sample rate regardless
@@ -1366,7 +1372,7 @@ public sealed class TciSession : IDisposable
         if (TciProtocol.TryParseInt(args[0], out int rate))
         {
             // Store for future Path B decimation; echo what will actually arrive.
-            rate = Math.Clamp(rate, 48000, 384000);
+            rate = ClampIqSampleRateRequest(rate);
             lock (_streamLock) _iqSampleRate = rate;
             Send(TciProtocol.Command("iq_samplerate", hwRate));
         }
