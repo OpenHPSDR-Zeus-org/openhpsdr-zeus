@@ -41,6 +41,8 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using System.Net;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
@@ -77,6 +79,8 @@ using Zeus.Server;
 
 public partial class Program
 {
+    private const int DefaultDesktopHttpPort = 6061;
+
     // OpenhpsdrZeus.csproj defaults to OutputType=Exe (console subsystem) so that
     // headless service mode keeps a usable banner / log on stdout. On Windows that
     // also means a console window pops up alongside the Photino frame in --desktop
@@ -194,18 +198,17 @@ public partial class Program
         // Photino calls below stay on the main thread; Kestrel runs on its own
         // thread pool either way and is unaffected.
 
-        // Two listeners: loopback HTTP on an OS-assigned port (the Photino webview
-        // is the only consumer of this one — picking port 0 lets the OS hand us
-        // a guaranteed-free port; we read it back from IServer after StartAsync
-        // so there's no TOCTOU race with a concurrent listener), plus LAN HTTPS
+        // Two listeners: loopback HTTP for the Photino webview, plus LAN HTTPS
         // on :6443 with the existing self-signed cert so a phone or laptop on
         // the same network can pick up the session while the operator is away
-        // from the shack PC. ShareOverLan=true is what decouples the two listener
-        // bindings inside ZeusHost — see the comment by Kestrel.ConfigureKestrel.
+        // from the shack PC. Keep the loopback origin stable when possible:
+        // a random port makes every desktop launch a new web origin, which
+        // strands localStorage-backed UI preferences. If the preferred port is
+        // busy we fall back to port 0 so Zeus still launches.
         var hostOptions = new ZeusHostOptions
         {
             HostMode = ZeusHostMode.Desktop,
-            HttpPort = 0,
+            HttpPort = ResolveDesktopHttpPort(),
             BindAllInterfaces = false,
             UseHttpsLanCert = true,
             ShareOverLan = true,
@@ -405,6 +408,38 @@ public partial class Program
         Console.WriteLine("Window closed; stopping backend.");
         app.StopAsync().GetAwaiter().GetResult();
         return 0;
+    }
+
+    private static int ResolveDesktopHttpPort()
+    {
+        var raw = Environment.GetEnvironmentVariable("ZEUS_DESKTOP_PORT");
+        if (int.TryParse(raw, out var configured))
+        {
+            if (configured == 0) return 0;
+            if (configured is > 0 and <= 65535 && IsLoopbackPortAvailable(configured))
+                return configured;
+            Console.WriteLine($"ZEUS_DESKTOP_PORT={configured} is unavailable; using an OS-assigned port.");
+            return 0;
+        }
+
+        return IsLoopbackPortAvailable(DefaultDesktopHttpPort)
+            ? DefaultDesktopHttpPort
+            : 0;
+    }
+
+    private static bool IsLoopbackPortAvailable(int port)
+    {
+        try
+        {
+            using var socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            socket.ExclusiveAddressUse = true;
+            socket.Bind(new IPEndPoint(IPAddress.Loopback, port));
+            return true;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
     }
 
     private static int RunServerWithStatus(string[] args)

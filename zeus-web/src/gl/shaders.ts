@@ -48,17 +48,36 @@ uniform float uWidth;
 uniform float uDbMin;
 uniform float uDbMax;
 uniform float uOffsetPx;
+out float vLevel;
 void main() {
   float x = (float(gl_VertexID) + 0.5 + uOffsetPx) / uWidth;
   float n = clamp((aDb - uDbMin) / (uDbMax - uDbMin), 0.0, 1.0);
+  vLevel = n;
   gl_Position = vec4(x * 2.0 - 1.0, n * 2.0 - 1.0, 0.0, 1.0);
 }`;
 
 export const PAN_FS = /* glsl */ `#version 300 es
 precision highp float;
+in float vLevel;
 uniform vec3 uColor;
+uniform float uPopIntensity;
 out vec4 fragColor;
-void main() { fragColor = vec4(uColor, 1.0); }`;
+vec3 popRamp(float n) {
+  vec3 low = vec3(0.02, 0.20, 0.34);
+  vec3 mid = vec3(0.00, 0.86, 1.00);
+  vec3 hot = vec3(1.00, 0.72, 0.26);
+  vec3 peak = vec3(1.00, 0.97, 0.82);
+  vec3 c = mix(low, mid, smoothstep(0.04, 0.48, n));
+  c = mix(c, hot, smoothstep(0.46, 0.82, n));
+  return mix(c, peak, smoothstep(0.82, 1.0, n));
+}
+void main() {
+  float popI = clamp(uPopIntensity, 0.0, 1.0);
+  vec3 c = mix(uColor, popRamp(vLevel), popI);
+  c += vec3(0.08, 0.12, 0.06) * smoothstep(0.58, 1.0, vLevel) * popI;
+  c = min(c, vec3(1.0));
+  fragColor = vec4(c, 1.0);
+}`;
 
 // Fill under the trace. Pan dB values live in a 1-row R32F texture; vertex
 // IDs map 2i → bottom vertex for bin i, 2i+1 → top, so texelFetch at
@@ -73,6 +92,7 @@ uniform float uDbMax;
 uniform float uOffsetPx;
 uniform float uFillAlphaTop;
 out float v_alpha;
+out float v_level;
 void main() {
   int binIdx = gl_VertexID >> 1;
   bool isTop = (gl_VertexID & 1) == 1;
@@ -81,15 +101,34 @@ void main() {
   float n = clamp((aDb - uDbMin) / (uDbMax - uDbMin), 0.0, 1.0);
   float y = isTop ? (n * 2.0 - 1.0) : -1.0;
   v_alpha = isTop ? uFillAlphaTop : 0.0;
+  v_level = n;
   gl_Position = vec4(x * 2.0 - 1.0, y, 0.0, 1.0);
 }`;
 
 export const PAN_FILL_FS = /* glsl */ `#version 300 es
 precision highp float;
 in float v_alpha;
+in float v_level;
 uniform vec3 uColor;
+uniform float uPopIntensity;
 out vec4 fragColor;
-void main() { fragColor = vec4(uColor * v_alpha, v_alpha); }`;
+vec3 popRamp(float n) {
+  vec3 floorGlow = vec3(0.00, 0.10, 0.18);
+  vec3 weak = vec3(0.00, 0.52, 0.78);
+  vec3 strong = vec3(0.14, 0.96, 0.92);
+  vec3 peak = vec3(1.00, 0.72, 0.30);
+  vec3 c = mix(floorGlow, weak, smoothstep(0.02, 0.34, n));
+  c = mix(c, strong, smoothstep(0.30, 0.70, n));
+  return mix(c, peak, smoothstep(0.72, 1.0, n));
+}
+void main() {
+  vec4 base = vec4(uColor * v_alpha, v_alpha);
+  float popI = clamp(uPopIntensity, 0.0, 1.0);
+  float lift = smoothstep(0.04, 0.92, v_level);
+  float alpha = v_alpha * mix(0.42, 0.86, lift);
+  vec3 c = popRamp(v_level) * alpha;
+  fragColor = mix(base, vec4(c, alpha), popI);
+}`;
 
 export const CURSOR_VS = /* glsl */ `#version 300 es
 layout(location = 0) in vec2 aPos;
@@ -121,20 +160,10 @@ uniform float uDbMax;
 uniform float uWriteRow;
 uniform float uH;
 uniform float uBgAlpha;
-// Issue #597: fractional view offset in UV units —
-// (historyCenterHz − viewCenterHz) / spanHz. The history texture itself is
-// only rebased in integer pixels (ping-pong shift); this term slides the
-// SAMPLING window fractionally so the waterfall glides with the animated
-// view-center between rebases. Same sign convention as WF_SHIFT_FS's
-// uShiftUv: positive slides displayed content right. Columns the slide
-// exposes fall back to uSeedDb (noise-floor colour), matching the shift
-// pass convention.
 uniform float uViewOffsetUv;
 uniform float uSeedDb;
 out vec4 fragColor;
 void main() {
-  // vUv.y == 1.0 at top of canvas; newest row sits at the top.
-  // row = (writeRow - (1 - vUv.y) * H) mod H, normalised.
   float agePx = (1.0 - vUv.y) * uH;
   float row = mod(uWriteRow - agePx + uH, uH);
   float srcX = vUv.x - uViewOffsetUv;
@@ -143,10 +172,6 @@ void main() {
     : texture(uHistory, vec2(srcX, (row + 0.5) / uH)).r;
   float n = clamp((v - uDbMin) / (uDbMax - uDbMin), 0.0, 1.0);
   vec4 c = texture(uLut, vec2(n, 0.5));
-  // uBgAlpha=1 → fully opaque (normal mode). uBgAlpha=0 → noise floor is
-  // fully transparent and signal peaks fade in proportionally; map/background
-  // shows through between carriers. Smoothstep widens the signal-visible band
-  // a touch so weaker activity still registers.
   float a = mix(smoothstep(0.05, 0.9, n), 1.0, uBgAlpha);
   fragColor = vec4(c.rgb * a, a);
 }`;

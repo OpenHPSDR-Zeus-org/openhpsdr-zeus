@@ -58,7 +58,7 @@ export function SpectrumControls() {
             ? 'Signal Pop ON: per-bin noise-floor subtraction (weak signals brightened)'
             : 'Signal Pop: subtract the adaptive noise floor so weak signals pop'
         }
-        className={`btn sm ${popEnabled ? 'active' : ''}`}
+        className={`btn sm pop-btn ${popEnabled ? 'active' : ''}`}
       >
         POP
       </button>

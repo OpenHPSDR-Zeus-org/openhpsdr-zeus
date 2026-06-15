@@ -196,6 +196,15 @@ export function SignalIntelligenceSettingsSection() {
           onChange={(popGamma) => setSignalEnhanceTuning({ popGamma })}
         />
         <TuneSlider
+          label="Pop Glow"
+          value={state.popRenderIntensity}
+          min={0}
+          max={100}
+          unit="%"
+          precision={0}
+          onChange={(popRenderIntensity) => setSignalEnhanceTuning({ popRenderIntensity })}
+        />
+        <TuneSlider
           label="Coherence Gate"
           value={state.coherenceHoldGate}
           min={0.2}

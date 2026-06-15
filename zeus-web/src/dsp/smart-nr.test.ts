@@ -40,6 +40,19 @@ describe('smart NR supervisor', () => {
     expect(rec.nr.nbMode).toBe('Off');
   });
 
+  it('preserves the operator NR4 output rescale instead of stamping volume', () => {
+    const spec = noise();
+    spec[120] = NOISE_DB + 14;
+    const rec = recommendSmartNr({
+      spectrum: spec,
+      floor: floor(),
+      current: { ...NR_CONFIG_DEFAULT, nr4NoiseRescale: 1.25 },
+      mode: 'CWU',
+    })!;
+
+    expect(rec.nr.nr4NoiseRescale).toBe(1.25);
+  });
+
   it('recommends NR2/EMNR for dense noisy SSB conditions', () => {
     const spec = noise();
     for (let i = 64; i < 192; i++) spec[i] = NOISE_DB + 12;

@@ -61,7 +61,7 @@
 
 import { buildProgram } from './util';
 import { WF_VS, WF_FS, WF_SHIFT_FS } from './shaders';
-import { lutFor, type ColormapId } from './colormap';
+import { lutFor, type RenderColormapId } from './colormap';
 import type { WfShiftDecision } from './wf-shift';
 
 const HISTORY_ROWS = 512;
@@ -103,7 +103,9 @@ export type WfRenderer = {
    *  the history's anchor center and the view (issue #597). Null renders
    *  with zero offset (pre-first-frame / tests). */
   draw: (dbMin: number, dbMax: number, viewCenterHz?: number | null) => void;
-  setColormap: (id: ColormapId) => void;
+  setColormap: (id: RenderColormapId) => void;
+  /** Enables and tunes the Signal Pop waterfall shader treatment. */
+  setPopMode: (active: boolean, intensity?: number) => void;
   /** 1.0 = opaque (default). 0.0 = noise floor fades to transparent so a
    *  background layer (e.g. the QRZ-mode Leaflet map) shows through. */
   setTransparent: (transparent: boolean) => void;
@@ -203,7 +205,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   const fbo = gl.createFramebuffer()!;
 
   const lutTex = gl.createTexture()!;
-  const uploadLut = (id: ColormapId) => {
+  const uploadLut = (id: RenderColormapId) => {
     gl.bindTexture(gl.TEXTURE_2D, lutTex);
     gl.texImage2D(
       gl.TEXTURE_2D,
@@ -362,6 +364,10 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
     },
     setTransparent(transparent) {
       bgAlpha = transparent ? 0 : 1;
+    },
+    setPopMode() {
+      // POP is expressed through the renderer LUT; the shader remains the
+      // portable baseline waterfall program.
     },
     clearHistory() {
       if (texWidth > 0) resetTextures(texWidth);

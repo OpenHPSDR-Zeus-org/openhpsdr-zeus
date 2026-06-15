@@ -49,10 +49,7 @@ import {
   type NrConfigDto,
   type NrMode,
 } from '../api/client';
-import { getNoiseFloor, getSignalConfidence } from '../dsp/signal-estimator';
-import { labelSmartNrProfile, recommendSmartNr, shapeSmartNrRecommendation } from '../dsp/smart-nr';
 import { useConnectionStore } from '../state/connection-store';
-import { useDisplayStore } from '../state/display-store';
 import { useSmartNrStore } from '../state/smart-nr-store';
 import { Slider } from './design/Slider';
 import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
@@ -100,16 +97,11 @@ const NB_LABEL: Record<NbMode, string> = {
   Nb2: 'NB2',
 };
 
-function round1(v: number): number {
-  return Math.round(v * 10) / 10;
-}
-
 export function DspPanel() {
   const nr = useConnectionStore((s) => s.nr);
   const setLocalNr = useConnectionStore((s) => s.setNr);
   const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
-  const mode = useConnectionStore((s) => s.mode);
   const smartNrMode = useSmartNrStore((s) => s.automationMode);
   const smartNrStatus = useSmartNrStore((s) => s.status);
   const setSmartNrMode = useSmartNrStore((s) => s.setAutomationMode);
@@ -180,32 +172,8 @@ export function DspPanel() {
     }
 
     setSmartNrMode('auto');
-    const display = useDisplayStore.getState();
-    const rec = recommendSmartNr({
-      spectrum: display.panValid ? display.panDb : null,
-      floor: getNoiseFloor(),
-      confidence: getSignalConfidence(),
-      current: nr,
-      mode,
-    });
-    if (!rec) {
-      setSmartNrStatus(null);
-      return;
-    }
-    const shaped = shapeSmartNrRecommendation(rec, useSmartNrStore.getState());
-    send(shaped);
-    setSmartNrStatus({
-      atUtc: new Date().toISOString(),
-      profile: labelSmartNrProfile(shaped),
-      reason: rec.reason,
-      maxSnrDb: round1(rec.condition.maxSnrDb),
-      occupancyPct: round1(rec.condition.occupancy6 * 100),
-      peakCount: rec.condition.peakCount,
-      pending: false,
-      applied: true,
-      nr: shaped,
-    });
-  }, [connected, smartNrMode, setSmartNrMode, setSmartNrStatus, nr, mode, send]);
+    setSmartNrStatus(null);
+  }, [connected, smartNrMode, setSmartNrMode, setSmartNrStatus]);
 
   const applySuggestedSmartNr = useCallback(() => {
     if (!connected || !smartNrStatus?.nr) return;
@@ -255,7 +223,7 @@ export function DspPanel() {
           className={`btn sm ${smartNrMode !== 'manual' ? 'active' : ''}`}
           title={
             smartNrMode === 'manual'
-              ? 'SMART - arm automatic panadapter-driven NR and apply the current recommendation'
+              ? 'SMART - arm automatic panadapter-driven NR after a stable dwell'
               : 'SMART active - click to return NR automation to manual'
           }
         >

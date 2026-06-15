@@ -13,19 +13,62 @@
 // re-implemented as a native Zeus panel so a click drives the connected radio
 // instead of Hamlib rigctld.
 
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   useSpotsStore,
   spotMatchesFilters,
   spotModeToRxMode,
   applySpotSettingsFilters,
   freqHzToBand,
+  spotAgeSeconds,
   type SpotSourceFilter,
 } from '../../state/spots-store';
 import type { ActivationSpotDto } from '../../api/client';
 
 const POLL_MS = 45_000;
 const SOURCES: SpotSourceFilter[] = ['ALL', 'POTA', 'SOTA'];
+
+type SortKey = 'call' | 'freq' | 'band' | 'mode' | 'ref' | 'age';
+type SortDir = 'asc' | 'desc';
+
+const COLUMNS: ReadonlyArray<{ key: SortKey; label: string; align?: 'right' }> = [
+  { key: 'call', label: 'Call' },
+  { key: 'freq', label: 'Freq' },
+  { key: 'band', label: 'Band' },
+  { key: 'mode', label: 'Mode' },
+  { key: 'ref', label: 'Ref' },
+  { key: 'age', label: 'Age', align: 'right' },
+];
+
+// Comparator for ascending order. Freq and Band both order by frequency (band
+// is just a coarse label over the same axis, so alpha-sorting '10m' before
+// '160m' would be wrong). Age uses elapsed seconds, so ascending = newest
+// first; unknown ages sink to the bottom. Ties break by frequency then call so
+// the order is stable across re-sorts.
+function compareSpots(a: ActivationSpotDto, b: ActivationSpotDto, key: SortKey): number {
+  let d = 0;
+  switch (key) {
+    case 'call':
+      d = a.activator.localeCompare(b.activator);
+      break;
+    case 'freq':
+    case 'band':
+      d = a.freqHz - b.freqHz;
+      break;
+    case 'mode':
+      d = (a.mode || '').localeCompare(b.mode || '');
+      break;
+    case 'ref':
+      d = a.reference.localeCompare(b.reference);
+      break;
+    case 'age':
+      d = (spotAgeSeconds(a) ?? Infinity) - (spotAgeSeconds(b) ?? Infinity);
+      break;
+  }
+  if (d !== 0) return d;
+  if (a.freqHz !== b.freqHz) return a.freqHz - b.freqHz;
+  return a.activator.localeCompare(b.activator);
+}
 
 function fmtFreq(hz: number): string {
   return (hz / 1_000_000).toFixed(3);
@@ -56,6 +99,20 @@ export function SpotsPanel() {
   const loadSettings = useSpotsStore((s) => s.loadSettings);
   const tuneToSpot = useSpotsStore((s) => s.tuneToSpot);
 
+  // Column sort (panel-local). Default Age ascending = newest first, matching
+  // the server's default ordering.
+  const [sortKey, setSortKey] = useState<SortKey>('age');
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
+
+  const toggleSort = (key: SortKey) => {
+    if (key === sortKey) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
   // Pull settings once, then poll the cache on the interval. The server polls
   // upstream on its own timer; this just refreshes our view of its cache.
   useEffect(() => {
@@ -72,10 +129,15 @@ export function SpotsPanel() {
     () => applySpotSettingsFilters(spots, settings),
     [spots, settings],
   );
-  const visible = useMemo(
+  const filtered = useMemo(
     () => settingsFiltered.filter((s) => spotMatchesFilters(s, source, query)),
     [settingsFiltered, source, query],
   );
+  const visible = useMemo(() => {
+    const sorted = [...filtered].sort((a, b) => compareSpots(a, b, sortKey));
+    if (sortDir === 'desc') sorted.reverse();
+    return sorted;
+  }, [filtered, sortKey, sortDir]);
   const hiddenByFilters = spots.length - settingsFiltered.length;
 
   if (settingsLoaded && !settings.enabled) {
@@ -163,12 +225,29 @@ export function SpotsPanel() {
           <table className="mono" style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ color: 'var(--fg-2)', textAlign: 'left' }}>
-                <th style={thStyle}>Call</th>
-                <th style={thStyle}>Freq</th>
-                <th style={thStyle}>Band</th>
-                <th style={thStyle}>Mode</th>
-                <th style={thStyle}>Ref</th>
-                <th style={{ ...thStyle, textAlign: 'right' }}>Age</th>
+                {COLUMNS.map((col) => {
+                  const active = sortKey === col.key;
+                  return (
+                    <th
+                      key={col.key}
+                      onClick={() => toggleSort(col.key)}
+                      title={`Sort by ${col.label}`}
+                      aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+                      style={{
+                        ...thStyle,
+                        textAlign: col.align ?? 'left',
+                        cursor: 'pointer',
+                        userSelect: 'none',
+                        color: active ? 'var(--accent)' : undefined,
+                      }}
+                    >
+                      {col.label}
+                      <span style={{ opacity: active ? 1 : 0.25, marginLeft: 3 }}>
+                        {active ? (sortDir === 'asc' ? '▲' : '▼') : '↕'}
+                      </span>
+                    </th>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>

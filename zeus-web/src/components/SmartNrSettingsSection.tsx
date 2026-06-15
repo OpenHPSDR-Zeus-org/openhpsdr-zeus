@@ -136,7 +136,7 @@ export function SmartNrSettingsSection() {
         <Slider
           label="Dwell"
           value={dwellSamples}
-          min={1}
+          min={3}
           max={8}
           onChange={(v) => setSettings({ dwellSamples: Math.round(v) })}
           formatValue={(v) => `${Math.round(v)} frames`}

@@ -178,6 +178,19 @@ export default function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchState(ctrl.signal)
+      .then((next) => {
+        useConnectionStore.getState().applyState(next);
+        useTxStore.getState().hydrateFromState(next);
+      })
+      .catch(() => {
+        /* ConnectPanel reports startup/API failures in the visible UI. */
+      });
+    return () => ctrl.abort();
+  }, []);
+
   // Fetch host capabilities once on mount. The backend snapshot is built
   // at startup and doesn't change at runtime, so a single fetch is enough;
   // failures fall back to "no features available" which hides feature-gated
@@ -207,10 +220,9 @@ export default function App() {
           // trustVfo:false — a poll response generated before the operator's
           // latest tune must not rewind the dial mid-gesture (issue #597).
           useConnectionStore.getState().applyState(next, { trustVfo: false });
-          // Hydrate persistable PS / TwoTone fields from the server's StateDto
-          // so server-persisted edits (e.g. operator changed MOX delay on
-          // another tab) reach this tab even after the initial connect-time
-          // hydrate. Master-arm fields are session-only and skipped.
+          // Hydrate server-persisted TX/PS fields from StateDto so edits made
+          // in another tab or before a desktop relaunch reach this store after
+          // the startup/connect-time hydrate.
           useTxStore.getState().hydrateFromState(next);
         }
       } catch {

@@ -903,6 +903,15 @@
   box-shadow: 0 0 0 1px rgba(46,142,255,0.5), 0 0 14px rgba(46,142,255,0.35);
   text-shadow: none;
 }
+.btn.pop-btn.active {
+  background: linear-gradient(180deg, #11a8d4 0%, #075c8b 100%);
+  border-color: rgba(96, 226, 255, 0.85);
+  color: #ffffff;
+  box-shadow:
+    0 0 0 1px rgba(96, 226, 255, 0.55),
+    0 0 16px rgba(0, 208, 255, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
 .btn.sm { padding: 0.3em 0.7em;  font-size: clamp(10px, 0.1vw + 9.5px, 12px); }
 .btn.lg { padding: 0.55em 1em;   font-size: clamp(13px, 0.2vw + 10px, 15px); }
 .btn.ghost {
@@ -1216,8 +1225,60 @@
   background: #000;
   user-select: none;
 }
-.spectrum-canvas { display: block; width: 100%; background: #081228; transition: opacity 400ms ease, background 400ms ease; }
-.waterfall-canvas { display: block; width: 100%; background: var(--wf-0); transition: opacity 400ms ease, background 400ms ease; }
+.spectrum-canvas,
+.waterfall-canvas {
+  --pop-surface-bg:
+    radial-gradient(ellipse at 50% 0%, rgba(0, 206, 255, 0.12), transparent 52%),
+    linear-gradient(180deg, #071016 0%, #020304 100%);
+  position: relative;
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  isolation: isolate;
+  transition: opacity 400ms ease, background 400ms ease;
+}
+.spectrum-canvas { background: #081228; }
+.waterfall-canvas { background: var(--wf-0); }
+.spectrum-canvas > canvas,
+.waterfall-canvas > canvas {
+  position: relative;
+  z-index: 0;
+}
+.spectrum-canvas.pop-enhanced,
+.waterfall-canvas.pop-enhanced {
+  background: var(--pop-surface-bg);
+}
+.spectrum-canvas.pop-enhanced::before,
+.waterfall-canvas.pop-enhanced::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  background:
+    linear-gradient(90deg, rgba(95, 226, 255, 0.11) 0 1px, transparent 1px 100%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.055) 0 1px, transparent 1px 100%),
+    linear-gradient(180deg, transparent 0 48%, rgba(255, 255, 255, 0.045) 50%, transparent 52% 100%);
+  background-size: 72px 100%, 100% 28px, 100% 6px;
+  opacity: calc(0.08 + var(--pop-intensity, 1) * 0.24);
+  mix-blend-mode: screen;
+}
+.waterfall-canvas.pop-enhanced::before {
+  background-size: 64px 100%, 100% 24px, 100% 5px;
+  opacity: calc(0.06 + var(--pop-intensity, 1) * 0.18);
+}
+.spectrum-canvas.pop-enhanced::after,
+.waterfall-canvas.pop-enhanced::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 2;
+  box-shadow:
+    inset 0 0 0 1px rgba(96, 226, 255, 0.18),
+    inset 0 18px 28px rgba(0, 214, 255, 0.08),
+    inset 0 -20px 36px rgba(0, 0, 0, 0.58);
+}
 
 /* Draggable divider between the panadapter and waterfall rows of the
    spectrum stack. Sits in its own grid row so it never overlaps either
@@ -1425,6 +1486,7 @@
 .tuning-cursor {
   position: absolute;
   top: 0; left: 50%; bottom: 0;
+  z-index: 5;
   width: 2px;
   background: var(--tx);
   box-shadow: 0 0 6px var(--tx);

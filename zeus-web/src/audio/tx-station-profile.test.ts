@@ -20,6 +20,7 @@ import {
   ESSB_MIC_GAIN_DB,
   ESSB_TX_LEVELING,
   essbTxFilterForMode,
+  formatTxStationProfileSummary,
   getTxStationProfile,
   mergeTxStationProfileOverrides,
   resolveTxStationProfile,
@@ -109,6 +110,20 @@ describe('TX station profile catalog', () => {
     expect(getTxStationProfile('essb', profiles).spectralDensity).toBe(88);
     expect(getTxStationProfile('essb', profiles).audioSuiteProfileName).toBe('ESSB Broadcast');
     expect(getTxStationProfile('dx', profiles).highCutHz).toBe(DX_PROFILE.highCutHz);
+  });
+
+  it('formats the panel summary from live profile settings', () => {
+    expect(
+      formatTxStationProfileSummary({
+        ...ESSB_PROFILE,
+        audioSuiteProfileName: 'ESSB Broadcast',
+        audioSuiteBypassed: true,
+        highCutHz: 5400,
+        spectralDensity: 88,
+      }),
+    ).toBe(
+      'VST route / rack bypass / chain ESSB Broadcast / density 88 eSSB CFC / SSB 40..5400 Hz',
+    );
   });
 });
 

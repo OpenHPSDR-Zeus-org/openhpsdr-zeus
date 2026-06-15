@@ -59,6 +59,7 @@
 // continuous form for our use case.
 
 export type ColormapId = 'blue' | 'inferno' | 'viridis';
+export type RenderColormapId = ColormapId | 'pop';
 
 export type ColormapSpec = {
   id: ColormapId;
@@ -109,6 +110,18 @@ const VIRIDIS_ANCHORS: Anchor[] = [
   [1.0, [253, 231, 37]],
 ];
 
+const POP_ANCHORS: Anchor[] = [
+  [0.0, [0, 0, 0]],
+  [0.22, [0, 0, 0]],
+  [0.34, [2, 18, 34]],
+  [0.46, [0, 74, 122]],
+  [0.58, [0, 178, 220]],
+  [0.70, [42, 236, 200]],
+  [0.82, [232, 214, 82]],
+  [0.92, [255, 118, 40]],
+  [1.0, [255, 248, 214]],
+];
+
 function sampleAnchors(anchors: Anchor[], t: number): [number, number, number] {
   let lo = anchors[0]!;
   let hi = anchors[anchors.length - 1]!;
@@ -143,13 +156,15 @@ function buildLut(anchors: Anchor[]): Uint8Array {
 }
 
 // Lazy-cached so palette swaps at runtime don't re-interpolate each time.
-const CACHE: Partial<Record<ColormapId, Uint8Array>> = {};
+const CACHE: Partial<Record<RenderColormapId, Uint8Array>> = {};
 
-export function lutFor(id: ColormapId): Uint8Array {
+export function lutFor(id: RenderColormapId): Uint8Array {
   const cached = CACHE[id];
   if (cached) return cached;
   const anchors =
-    id === 'inferno'
+    id === 'pop'
+      ? POP_ANCHORS
+      : id === 'inferno'
       ? INFERNO_ANCHORS
       : id === 'viridis'
         ? VIRIDIS_ANCHORS
