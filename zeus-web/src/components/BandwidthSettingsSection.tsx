@@ -27,6 +27,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { setSampleRate, type SampleRate } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useRadioStore } from '../state/radio-store';
 
 const RATES: readonly SampleRate[] = [
   48_000, 96_000, 192_000, 384_000, 768_000, 1_536_000,
@@ -38,6 +39,7 @@ export function BandwidthSettingsSection() {
   const protocol = useConnectionStore((s) => s.connectedProtocol);
   const applyState = useConnectionStore((s) => s.applyState);
   const connected = useConnectionStore((s) => s.status === 'Connected');
+  const boardMaxRateHz = useRadioStore((s) => s.capabilities.maxRxSampleRateHz);
 
   const abort = useRef<AbortController | null>(null);
   useEffect(() => () => abort.current?.abort(), []);
@@ -54,9 +56,10 @@ export function BandwidthSettingsSection() {
     [applyState],
   );
 
-  // 768/1536 are P2-only. Treat unknown protocol (null, e.g. after reload)
-  // conservatively as the P1 cap so we never offer a rung the radio rejects.
-  const allowHigh = protocol === 'P2';
+  // 768/1536 are P2-only and board-capability gated. Treat unknown protocol
+  // (null, e.g. after reload) conservatively as the P1 cap so we never offer
+  // a rung the radio rejects.
+  const protocolMaxRateHz = protocol === 'P2' ? boardMaxRateHz : P1_MAX_SAMPLE_RATE;
 
   return (
     <div className="dsp-cfg">
@@ -67,7 +70,9 @@ export function BandwidthSettingsSection() {
         </span>
         <div className="dsp-cfg-btns">
           {RATES.map((r) => {
-            const locked = r > P1_MAX_SAMPLE_RATE && !allowHigh;
+            const protocolLocked = r > P1_MAX_SAMPLE_RATE && protocol !== 'P2';
+            const capabilityLocked = r > protocolMaxRateHz;
+            const locked = protocolLocked || capabilityLocked;
             const isActive = sampleRate === r;
             return (
               <button
@@ -78,8 +83,10 @@ export function BandwidthSettingsSection() {
                 onClick={() => !isActive && send(r)}
                 className={`btn sm ${isActive ? 'active' : ''}`}
                 title={
-                  locked
+                  protocolLocked
                     ? `${r / 1000} kHz needs a Protocol-2 connection`
+                    : capabilityLocked
+                      ? `${r / 1000} kHz exceeds this radio's ${protocolMaxRateHz / 1000} kHz RX/DDC capability`
                     : `Set DDC bandwidth to ${r / 1000} kHz`
                 }
               >
@@ -95,7 +102,7 @@ export function BandwidthSettingsSection() {
         <span className="dsp-cfg-hint" style={{ flex: 1 }}>
           {sampleRate / 1000} kHz
           {protocol != null ? ` · ${protocol}` : ''}
-          {!allowHigh ? ' · ≤384 kHz on Protocol-1' : ''}
+          {` · max ${protocolMaxRateHz / 1000} kHz`}
         </span>
       </div>
     </div>

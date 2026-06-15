@@ -43,7 +43,9 @@ internal static class BoardCapabilitiesTable
     /// matching capability fingerprint. The Apache OrionMkII original
     /// (<see cref="OrionMkIIVariant.OrionMkII"/>) lacks volts/amps/audio-amp
     /// telemetry per <c>clsHardwareSpecific.cs:249-262, 459-468</c>; every
-    /// other 0x0A variant shares the Saturn-class Saturn fingerprint.
+    /// other 0x0A variant shares the Saturn-class Saturn fingerprint; G2
+    /// variants additionally advertise the bench-confirmed 1536 kHz P2 RX/DDC
+    /// ceiling instead of the conservative 384 kHz fallback.
     /// </summary>
     public static BoardCapabilities For(HpsdrBoardKind board, OrionMkIIVariant variant) => board switch
     {
@@ -77,6 +79,7 @@ internal static class BoardCapabilitiesTable
         {
             OrionMkIIVariant.OrionMkII    => OrionMkIIOriginal,
             OrionMkIIVariant.Anan8000DLE  => Saturn8000DLE,
+            OrionMkIIVariant.G2           => SaturnG2,
             OrionMkIIVariant.G2_1K        => SaturnG2_1K,
             // Anvelina-PRO3 — Saturn-class facts plus the EU2AV DX OC
             // extension flag (issue #407). Every other Saturn variant
@@ -155,8 +158,10 @@ internal static class BoardCapabilitiesTable
         SupportsPathIllustrator: true,
         MaxPowerWatts: 120);
 
-    // 0x0A family default (G2 / 7000DLE / OrionMkII / ANVELINA-PRO3 /
-    // Red Pitaya). Saturn-class facts. 100–200 W typical → 120 W axis.
+    // 0x0A family conservative baseline (7000DLE / 8000DLE / OrionMkII /
+    // ANVELINA-PRO3 / Red Pitaya). Saturn-class facts. 100–200 W typical →
+    // 120 W axis. Keep MaxRxSampleRateHz at the safe 384 kHz baseline here;
+    // explicit G2 variants below unlock the 1536 kHz P2 DDC ladder.
     private static readonly BoardCapabilities Saturn = new(
         RxAdcCount: 2,
         MkiiBpf: true,
@@ -169,6 +174,13 @@ internal static class BoardCapabilitiesTable
         SupportsPathIllustrator: false,
         MaxPowerWatts: 120);
 
+    // ANAN-G2 — local Thetis parity notes pin RX1/RX2 at
+    // 48/96/192/384/768/1536 kHz over Protocol 2.
+    private static readonly BoardCapabilities SaturnG2 = Saturn with
+    {
+        MaxRxSampleRateHz = 1_536_000,
+    };
+
     // ANAN-8000DLE — 250 W per Apache spec; axis snaps to that.
     private static readonly BoardCapabilities Saturn8000DLE = Saturn with
     {
@@ -177,7 +189,7 @@ internal static class BoardCapabilitiesTable
 
     // ANAN-G2-1K — kilowatt-class with internal 1 kW PA. Same Saturn fingerprint
     // but the meter axis needs the room.
-    private static readonly BoardCapabilities SaturnG2_1K = Saturn with
+    private static readonly BoardCapabilities SaturnG2_1K = SaturnG2 with
     {
         MaxPowerWatts = 1000,
     };

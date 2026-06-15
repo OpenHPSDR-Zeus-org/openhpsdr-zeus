@@ -66,6 +66,50 @@ public sealed class RadioServiceBandwidthPersistenceTests : IDisposable
     }
 
     [Fact]
+    public void P2ConnectSampleRate_RestoresPersistedWidebandG2Rate()
+    {
+        using var store = NewStateStore();
+        store.SetBoardSampleRate(HpsdrBoardKind.OrionMkII, 1_536_000, OrionMkIIVariant.G2);
+        using var radio = NewRadio(store);
+
+        var resolved = radio.ResolveConnectSampleRateHz(
+            HpsdrBoardKind.OrionMkII,
+            requestedHz: 192_000,
+            protocol2: true);
+
+        Assert.Equal(1_536_000, resolved);
+    }
+
+    [Fact]
+    public void P2ConnectSampleRate_ClampsRequestedRateToBoardCapability()
+    {
+        using var store = NewStateStore();
+        using var radio = NewRadio(store);
+
+        var resolved = radio.ResolveConnectSampleRateHz(
+            HpsdrBoardKind.HermesC10,
+            requestedHz: 1_536_000,
+            protocol2: true);
+
+        Assert.Equal(384_000, resolved);
+    }
+
+    [Fact]
+    public void P2ConnectSampleRate_IgnoresPersistedRateAboveBoardCapability()
+    {
+        using var store = NewStateStore();
+        store.SetBoardSampleRate(HpsdrBoardKind.HermesC10, 1_536_000, OrionMkIIVariant.G2);
+        using var radio = NewRadio(store);
+
+        var resolved = radio.ResolveConnectSampleRateHz(
+            HpsdrBoardKind.HermesC10,
+            requestedHz: 192_000,
+            protocol2: true);
+
+        Assert.Equal(192_000, resolved);
+    }
+
+    [Fact]
     public void P2ConnectSampleRate_UnknownBoardUsesOrionFallback()
     {
         using var store = NewStateStore();
