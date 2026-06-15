@@ -14,6 +14,8 @@ import { createRoot, type Root } from 'react-dom/client';
 
 import { RadioOptionsPanel } from './RadioOptionsPanel';
 import { useRadioOptionsStore } from '../state/radio-options-store';
+import { useRadioStore } from '../state/radio-store';
+import { UNKNOWN_BOARD_CAPABILITIES } from '../api/board-capabilities';
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -25,10 +27,54 @@ function jsonResponse(body: unknown, status = 200): Response {
 function resetStore() {
   useRadioOptionsStore.setState({
     options: { bandVolts: false },
+    g2Options: {
+      ditherEnabled: true,
+      randomEnabled: true,
+      maxRxFreqMHz: 60,
+      supported: false,
+    },
     loaded: false,
     inflight: false,
     error: null,
   });
+  useRadioStore.setState((s) => ({
+    ...s,
+    capabilities: UNKNOWN_BOARD_CAPABILITIES,
+  }));
+}
+
+function stubRadioOptionsFetch(
+  hl2: Record<string, unknown> = { bandVolts: false },
+  g2: Record<string, unknown> = {
+    ditherEnabled: true,
+    randomEnabled: true,
+    maxRxFreqMHz: 60,
+    supported: false,
+  },
+) {
+  const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+    const url = typeof input === 'string'
+      ? input
+      : input instanceof URL
+        ? input.toString()
+        : input.url;
+    if (url === '/api/radio/hl2-options') {
+      return jsonResponse(init?.method === 'PUT' ? JSON.parse((init.body ?? '{}') as string) : hl2);
+    }
+    if (url === '/api/radio/g2-options') {
+      if (init?.method === 'PUT') {
+        return jsonResponse({
+          ...g2,
+          ...JSON.parse((init.body ?? '{}') as string),
+          supported: true,
+        });
+      }
+      return jsonResponse(g2);
+    }
+    return jsonResponse({});
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
 }
 
 // Resolves after every microtask in the current scheduler queue — used to
@@ -60,10 +106,14 @@ describe('RadioOptionsPanel', () => {
   });
 
   it('renders the Band Volts checkbox and caption text', async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(jsonResponse({ bandVolts: false }));
-    vi.stubGlobal('fetch', fetchMock);
+    useRadioStore.setState((s) => ({
+      ...s,
+      capabilities: {
+        ...UNKNOWN_BOARD_CAPABILITIES,
+        hasHl2OptionalToggles: true,
+      },
+    }));
+    stubRadioOptionsFetch({ bandVolts: false });
 
     await act(async () => {
       root.render(<RadioOptionsPanel />);
@@ -83,19 +133,21 @@ describe('RadioOptionsPanel', () => {
   });
 
   it('loads the initial value from GET /api/radio/hl2-options', async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValue(jsonResponse({ bandVolts: true }));
-    vi.stubGlobal('fetch', fetchMock);
+    useRadioStore.setState((s) => ({
+      ...s,
+      capabilities: {
+        ...UNKNOWN_BOARD_CAPABILITIES,
+        hasHl2OptionalToggles: true,
+      },
+    }));
+    const fetchMock = stubRadioOptionsFetch({ bandVolts: true });
 
     await act(async () => {
       root.render(<RadioOptionsPanel />);
     });
     await flushMicrotasks();
 
-    expect(fetchMock).toHaveBeenCalled();
-    const firstCallUrl = fetchMock.mock.calls[0]![0];
-    expect(firstCallUrl).toBe('/api/radio/hl2-options');
+    expect(fetchMock).toHaveBeenCalledWith('/api/radio/hl2-options', expect.anything());
 
     const checkbox = container.querySelector<HTMLInputElement>(
       'input[type="checkbox"]',
@@ -104,13 +156,14 @@ describe('RadioOptionsPanel', () => {
   });
 
   it('toggles state and PUTs the new value with the correct body', async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      // GET on mount
-      .mockResolvedValueOnce(jsonResponse({ bandVolts: false }))
-      // PUT after click
-      .mockResolvedValueOnce(jsonResponse({ bandVolts: true }));
-    vi.stubGlobal('fetch', fetchMock);
+    useRadioStore.setState((s) => ({
+      ...s,
+      capabilities: {
+        ...UNKNOWN_BOARD_CAPABILITIES,
+        hasHl2OptionalToggles: true,
+      },
+    }));
+    const fetchMock = stubRadioOptionsFetch({ bandVolts: false });
 
     await act(async () => {
       root.render(<RadioOptionsPanel />);
@@ -127,8 +180,11 @@ describe('RadioOptionsPanel', () => {
     });
     await flushMicrotasks();
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [url, init] = fetchMock.mock.calls[1]!;
+    const putCall = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/radio/hl2-options' && init?.method === 'PUT',
+    );
+    expect(putCall).toBeDefined();
+    const [url, init] = putCall!;
     expect(url).toBe('/api/radio/hl2-options');
     expect(init?.method).toBe('PUT');
     expect(init?.headers).toMatchObject({ 'content-type': 'application/json' });
@@ -137,5 +193,53 @@ describe('RadioOptionsPanel', () => {
     });
 
     expect(useRadioOptionsStore.getState().options.bandVolts).toBe(true);
+  });
+
+  it('renders and updates ANAN-G2 dither/random options', async () => {
+    useRadioStore.setState((s) => ({
+      ...s,
+      capabilities: {
+        ...UNKNOWN_BOARD_CAPABILITIES,
+        supportsG2AdcOptions: true,
+      },
+    }));
+    const fetchMock = stubRadioOptionsFetch(
+      { bandVolts: false },
+      {
+        ditherEnabled: true,
+        randomEnabled: true,
+        maxRxFreqMHz: 60,
+        supported: true,
+      },
+    );
+
+    await act(async () => {
+      root.render(<RadioOptionsPanel />);
+    });
+    await flushMicrotasks();
+
+    expect(container.textContent).toContain('ANAN-G2 Options');
+    expect(container.textContent).toContain('Dither Enabled');
+    expect(container.textContent).toContain('Random Enabled');
+    expect(container.textContent).toContain('MaxRXFreq');
+    expect(container.textContent).toContain('60.00 MHz');
+
+    const checkboxes = Array.from(
+      container.querySelectorAll<HTMLInputElement>('input[type="checkbox"]'),
+    );
+    expect(checkboxes).toHaveLength(2);
+
+    await act(async () => {
+      checkboxes[0]!.click();
+    });
+    await flushMicrotasks();
+
+    const ditherPut = fetchMock.mock.calls.find(
+      ([url, init]) => url === '/api/radio/g2-options'
+        && init?.method === 'PUT'
+        && JSON.parse((init.body ?? '{}') as string).ditherEnabled === false,
+    );
+    expect(ditherPut).toBeDefined();
+    expect(useRadioOptionsStore.getState().g2Options.ditherEnabled).toBe(false);
   });
 });

@@ -179,6 +179,7 @@ internal static class BoardCapabilitiesTable
     private static readonly BoardCapabilities SaturnG2 = Saturn with
     {
         MaxRxSampleRateHz = 1_536_000,
+        SupportsG2AdcOptions = true,
     };
 
     // ANAN-8000DLE — 250 W per Apache spec; axis snaps to that.

@@ -25,6 +25,7 @@ describe('parseBoardCapabilities', () => {
       hasSteppedAttenuationRx2: true,
       supportsPathIllustrator: false,
       hasHl2OptionalToggles: false,
+      supportsG2AdcOptions: true,
       maxPowerWatts: 120,
       maxRxSampleRateHz: 1_536_000,
     });
@@ -35,6 +36,7 @@ describe('parseBoardCapabilities', () => {
     expect(caps.supportsPathIllustrator).toBe(false);
     expect(caps.maxPowerWatts).toBe(120);
     expect(caps.maxRxSampleRateHz).toBe(1_536_000);
+    expect(caps.supportsG2AdcOptions).toBe(true);
   });
 
   it('falls back to UNKNOWN_BOARD_CAPABILITIES on garbage input', () => {
@@ -86,6 +88,13 @@ describe('parseBoardCapabilities', () => {
     expect(parseBoardCapabilities({}).hasHl2OptionalToggles).toBe(false);
     expect(
       parseBoardCapabilities({ hasHl2OptionalToggles: true }).hasHl2OptionalToggles,
+    ).toBe(true);
+  });
+
+  it('supportsG2AdcOptions defaults to false and round-trips when set', () => {
+    expect(parseBoardCapabilities({}).supportsG2AdcOptions).toBe(false);
+    expect(
+      parseBoardCapabilities({ supportsG2AdcOptions: true }).supportsG2AdcOptions,
     ).toBe(true);
   });
 });

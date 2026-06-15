@@ -1927,6 +1927,53 @@ public sealed class RadioService : IDisposable
     public bool GetHl2BandVolts() =>
         _preferredRadioStore?.GetEnableHl2BandVolts() ?? false;
 
+    private bool SupportsG2AdcOptions(HpsdrBoardKind board, OrionMkIIVariant variant) =>
+        BoardCapabilitiesTable.For(board, variant).SupportsG2AdcOptions;
+
+    private (bool Supported, bool DitherEnabled, bool RandomEnabled) ResolveG2AdcOptionsFor(
+        HpsdrBoardKind board,
+        OrionMkIIVariant variant)
+    {
+        bool supported = SupportsG2AdcOptions(board, variant);
+        bool dither = supported && (_preferredRadioStore?.GetG2AdcDitherEnabled() ?? true);
+        bool random = supported && (_preferredRadioStore?.GetG2AdcRandomEnabled() ?? true);
+        return (supported, dither, random);
+    }
+
+    public (bool Supported, bool DitherEnabled, bool RandomEnabled) ResolveG2AdcOptionsForWire(
+        HpsdrBoardKind connectedBoard)
+    {
+        var board = connectedBoard != HpsdrBoardKind.Unknown
+            ? connectedBoard
+            : EffectiveBoardKind;
+        return ResolveG2AdcOptionsFor(board, EffectiveOrionMkIIVariant);
+    }
+
+    public G2OptionsDto GetG2Options()
+    {
+        var options = ResolveG2AdcOptionsFor(EffectiveBoardKind, EffectiveOrionMkIIVariant);
+        return new G2OptionsDto(
+            DitherEnabled: _preferredRadioStore?.GetG2AdcDitherEnabled() ?? true,
+            RandomEnabled: _preferredRadioStore?.GetG2AdcRandomEnabled() ?? true,
+            MaxRxFreqMHz: 60.0,
+            Supported: options.Supported);
+    }
+
+    public G2OptionsDto SetG2Options(G2OptionsSetRequest req)
+    {
+        _preferredRadioStore?.SetG2AdcOptions(req.DitherEnabled, req.RandomEnabled);
+        var options = GetG2Options();
+        ApplyG2AdcOptionsToP2Client(_p2Client, ConnectedBoardKind);
+        return options;
+    }
+
+    public void ApplyG2AdcOptionsToP2Client(Protocol2Client? client, HpsdrBoardKind connectedBoard)
+    {
+        if (client is null) return;
+        var options = ResolveG2AdcOptionsForWire(connectedBoard);
+        client.SetAdcDitherRandom(options.DitherEnabled, options.RandomEnabled);
+    }
+
     /// <summary>
     /// Raised after the operator's frequency-correction factor (issue #325)
     /// has been persisted and pushed to the active P1 client. P2 subscribers
@@ -2660,6 +2707,7 @@ public sealed class RadioService : IDisposable
         // P2 is alive — PA defaults should reflect G2 / Orion class so the
         // operator sees realistic numbers when they open the PA panel.
         RecomputePaAndPush();
+        ApplyG2AdcOptionsToP2Client(client, ConnectedBoardKind);
         // Fire AFTER the state mutation + PA recompute so subscribers see a
         // fully-coherent RadioService when they read board kind / snapshot.
         if (client is not null) P2Connected?.Invoke(client);

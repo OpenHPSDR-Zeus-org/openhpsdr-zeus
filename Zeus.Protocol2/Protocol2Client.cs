@@ -176,6 +176,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // gain. Default 0 dB matches the radio's power-on state; no UI surface
     // yet, but the wire byte is in place. Issue #415.
     private byte _rx1StepAttnDb;
+    // ANAN-G2/Saturn ADC dither and digital-output randomizer. These land in
+    // CmdRx bytes 5 and 6 respectively; Thetis toggles ADC0..2 together from
+    // the G2 options block. Defaults remain off until RadioService gates and
+    // replays the persisted G2 options for a verified G2-class board.
+    private bool _adcDitherEnabled;
+    private bool _adcRandomEnabled;
     // TX step attenuator (0..31 dB) — Thetis network.c:1238-1242 writes the
     // same value to bytes 57/58/59 of CmdTx (one per ADC tap). The PS
     // auto-attenuate loop adjusts this when info[4] feedback level lands
@@ -654,6 +660,19 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     {
         _rx1StepAttnDb = (byte)Math.Clamp(db, 0, 31);
         if (_rxTask is not null) SendCmdHighPriority(run: true);
+    }
+
+    /// <summary>
+    /// Enable/disable ADC dither and the ADC digital-output randomizer in
+    /// CmdRx bytes 5/6. Thetis drives these as global G2 options and writes
+    /// the same value to ADC0..2, which Zeus mirrors through
+    /// <see cref="AdcOptionMask"/>.
+    /// </summary>
+    public void SetAdcDitherRandom(bool ditherEnabled, bool randomEnabled)
+    {
+        _adcDitherEnabled = ditherEnabled;
+        _adcRandomEnabled = randomEnabled;
+        if (_rxTask is not null) SendCmdRx();
     }
 
     public void SetDriveByte(byte value)
@@ -1172,23 +1191,36 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         _                        => G2RxDdc,
     };
 
+    internal static byte AdcOptionMask(byte numAdc)
+    {
+        // Thetis SetADCDither/SetADCRandom writes ADC0, ADC1, and ADC2
+        // together, and CmdRx masks those three bits into bytes 5/6. For the
+        // two-ADC G2 this preserves Thetis parity; firmware ignores any
+        // non-present ADC bit.
+        return numAdc == 0 ? (byte)0 : (byte)0x07;
+    }
+
     // Static byte composer — pure function over (seq, numAdc, sampleRateKhz,
-    // psEnabled, boardKind). Exposed internal so wire-format tests don't
-    // need a live socket. SendCmdRx constructs the same bytes and pushes to
-    // UDP. boardKind defaults to OrionMkII for backward compat — every
-    // pre-Brick2 caller (and every pre-Brick2 test) keeps the DDC2 wire shape.
+    // psEnabled, boardKind, ADC options). Exposed internal so wire-format
+    // tests don't need a live socket. SendCmdRx constructs the same bytes and
+    // pushes to UDP. boardKind defaults to OrionMkII for backward compat —
+    // every pre-Brick2 caller (and every pre-Brick2 test) keeps the DDC2 wire
+    // shape and zero ADC option bytes.
     internal static byte[] ComposeCmdRxBuffer(
         uint seq,
         byte numAdc,
         ushort sampleRateKhz,
         bool psEnabled,
-        HpsdrBoardKind boardKind = HpsdrBoardKind.OrionMkII)
+        HpsdrBoardKind boardKind = HpsdrBoardKind.OrionMkII,
+        bool adcDitherEnabled = false,
+        bool adcRandomEnabled = false)
     {
         var p = new byte[BufLen];
         WriteBeU32(p, 0, seq);
         p[4] = numAdc;
-        p[5] = 0;
-        p[6] = 0;
+        byte adcMask = AdcOptionMask(numAdc);
+        p[5] = adcDitherEnabled ? adcMask : (byte)0;
+        p[6] = adcRandomEnabled ? adcMask : (byte)0;
         int rxDdc = RxBaseDdc(boardKind);
         byte ddcEnable = (byte)(1 << rxDdc);
 
@@ -1234,7 +1266,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         //   ComposeCmdRxBuffer also enables DDC0, configures DDC0/1 at
         //   192 kHz / 24-bit, and sets byte 1363 = 0x02 to sync DDC1→DDC0
         //   (pihpsdr new_protocol.c:1611-1630).
-        var p = ComposeCmdRxBuffer(_seqCmdRx++, _numAdc, (ushort)_sampleRateKhz, _psFeedbackEnabled, _boardKind);
+        var p = ComposeCmdRxBuffer(
+            _seqCmdRx++,
+            _numAdc,
+            (ushort)_sampleRateKhz,
+            _psFeedbackEnabled,
+            _boardKind,
+            _adcDitherEnabled,
+            _adcRandomEnabled);
         _sock!.SendTo(p, new IPEndPoint(_radioEndpoint!.Address, 1025));
     }
 

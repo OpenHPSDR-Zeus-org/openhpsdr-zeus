@@ -1545,8 +1545,9 @@ public static class ZeusEndpoints
         });
 
         // Radio selection — operator preference seeding, with discovery as the
-        // tiebreaker. Preferred=="Auto" removes the override (stored as absence,
-        // not a sentinel enum value). Effective = Connected when connected (which
+        // tiebreaker. Preferred=="Auto" clears only the preferred board while
+        // preserving sibling hardware options stored on the same row.
+        // Effective = Connected when connected (which
         // may itself be overridden if OverrideDetection is true), Preferred when
         // not connected, Unknown otherwise.
         app.MapGet("/api/radio/selection", (PreferredRadioStore prefs, RadioService radio) =>
@@ -1783,6 +1784,23 @@ public static class ZeusEndpoints
 
             var effective = radio.SetHl2BandVolts(req.BandVolts);
             return Results.Ok(new Hl2OptionsDto(BandVolts: effective));
+        });
+
+        // ANAN-G2 / Saturn-class ADC options. Dither/random write Protocol-2
+        // CmdRx bytes 5/6 when the connected/effective board advertises
+        // SupportsG2AdcOptions; non-G2 boards still persist the preference but
+        // report Supported=false and receive zeroed wire bits.
+        app.MapGet("/api/radio/g2-options", (RadioService radio) =>
+        {
+            return Results.Ok(radio.GetG2Options());
+        });
+
+        app.MapPut("/api/radio/g2-options", (G2OptionsSetRequest req, RadioService radio) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+
+            return Results.Ok(radio.SetG2Options(req));
         });
 
         // Per-radio frequency calibration (issue #325). GET returns the

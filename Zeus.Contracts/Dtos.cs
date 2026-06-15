@@ -1639,6 +1639,22 @@ public sealed record Hl2OptionsDto(bool BandVolts);
 // (e.g. PUT becoming a partial update with nullable fields).
 public sealed record Hl2OptionsSetRequest(bool BandVolts);
 
+// ANAN-G2 / Saturn-class ADC options surfaced via /api/radio/g2-options.
+// Dither and randomizer default on, matching the Thetis G2 option block.
+// MaxRxFreqMHz is read-only: Zeus enforces the same 0..60 MHz ceiling in
+// the VFO/radio-LO clamps rather than duplicating a second user setting.
+public sealed record G2OptionsDto(
+    bool DitherEnabled,
+    bool RandomEnabled,
+    double MaxRxFreqMHz,
+    bool Supported);
+
+// Partial update so future G2 options can be added without forcing clients
+// to echo fields they did not intend to change.
+public sealed record G2OptionsSetRequest(
+    bool? DitherEnabled = null,
+    bool? RandomEnabled = null);
+
 // Panadapter background settings — Mode is one of "basic" | "beam-map" |
 // "image"; Fit is one of "fit" | "fill" | "stretch". Image bytes are NOT
 // shipped in this DTO; HasImage signals whether GET /api/display-settings/image

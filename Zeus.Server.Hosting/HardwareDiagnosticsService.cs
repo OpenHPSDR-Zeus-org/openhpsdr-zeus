@@ -257,7 +257,8 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                     _activeProtocol,
                     connected,
                     effective,
-                    variant),
+                    variant,
+                    _radio.GetG2Options()),
                 activeProtocol = _activeProtocol,
                 p1 = new
                 {
@@ -633,35 +634,44 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         string? activeProtocol,
         HpsdrBoardKind connected,
         HpsdrBoardKind effective,
-        OrionMkIIVariant variant)
+        OrionMkIIVariant variant,
+        G2OptionsDto? g2Options = null)
     {
         bool g2Class = IsG2ManualSensorBoard(effective, variant);
-        string ditherStatus = g2Class ? "protocol-control-unmapped" : "not-g2";
-        string randomStatus = g2Class ? "protocol-control-unmapped" : "not-g2";
+        bool supported = g2Class && (g2Options?.Supported ?? true);
+        string optionStatus = supported
+            ? activeProtocol == "P2" ? "mapped-live" : "mapped-ready"
+            : "not-g2";
         string maxRxStatus = g2Class ? "wired-vfo-clamp" : "generic-vfo-clamp";
+        bool? ditherEnabled = supported ? g2Options?.DitherEnabled ?? true : null;
+        bool? randomEnabled = supported ? g2Options?.RandomEnabled ?? true : null;
 
         var options = new[]
         {
             new G2FirmwareOptionDto(
                 Id: "adc-dither",
                 Label: "ADC dither",
-                Enabled: null,
+                Enabled: ditherEnabled,
                 ThetisDefaultEnabled: true,
-                Status: ditherStatus,
-                Source: "Thetis Setup > General > ANAN-G2 Options calls NetworkIO.SetADCDither(1/0)",
-                Notes: "The G2/Thetis option addresses ADC nonlinearity errors. Zeus does not yet have the verified Protocol-2 command bytes, so the setting is reported as an explicit gap instead of sending an unsafe firmware write."),
+                Status: optionStatus,
+                Source: "Thetis Setup > General > ANAN-G2 Options calls NetworkIO.SetADCDither; Protocol-2 CmdRx byte 5 carries ADC0..2 dither bits",
+                Notes: supported
+                    ? "Zeus persists this setting in /api/radio/g2-options and writes the Thetis-compatible CmdRx byte 5 mask for verified G2-class Protocol-2 boards."
+                    : "This board is not a verified G2-class target for the ANAN-G2 ADC dither option."),
             new G2FirmwareOptionDto(
                 Id: "adc-random",
                 Label: "ADC randomizer",
-                Enabled: null,
+                Enabled: randomEnabled,
                 ThetisDefaultEnabled: true,
-                Status: randomStatus,
-                Source: "Thetis Setup > General > ANAN-G2 Options calls NetworkIO.SetADCRandom(1/0)",
-                Notes: "The Thetis option enables the ADC digital-output randomizer to reduce digital feedback artifacts. Zeus will expose it as a write only after the P2 command mapping is proven on a live G2 capture."),
+                Status: optionStatus,
+                Source: "Thetis Setup > General > ANAN-G2 Options calls NetworkIO.SetADCRandom; Protocol-2 CmdRx byte 6 carries ADC0..2 randomizer bits",
+                Notes: supported
+                    ? "Zeus persists this setting in /api/radio/g2-options and writes the Thetis-compatible CmdRx byte 6 mask for verified G2-class Protocol-2 boards."
+                    : "This board is not a verified G2-class target for the ANAN-G2 ADC randomizer option."),
         };
 
         string recommendation = g2Class
-            ? "MaxRXFreq parity is enforced by the 0..60 MHz VFO clamp. Keep the firmware ADC dither/random defaults enabled in the radio until Zeus has a verified Protocol-2 command path; use mapping markers before adding writable controls."
+            ? "MaxRXFreq parity is enforced by the 0..60 MHz VFO clamp. Keep dither/random enabled for best ADC linearity and digital-output decorrelation unless a controlled measurement shows a rig-specific reason to disable them."
             : "This board is not a G2/Saturn-class target for the ANAN-G2 dither/random option block; use the board-specific hardware options already exposed for the active radio.";
 
         return new G2FirmwareOptionsDiagnosticsDto(
@@ -675,7 +685,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             MaxRxFrequencyStatus: maxRxStatus,
             Options: options,
             MissingControlSurface: g2Class
-                ? "SetADCDither/SetADCRandom Protocol-2 command mapping is not implemented in Zeus yet."
+                ? "None: /api/radio/g2-options writes the verified Protocol-2 CmdRx dither/random bytes for G2-class boards."
                 : "No G2 ADC random/dither surface applies to this board.",
             ManualReference: "Thetis ANAN-G2 Options: Dither Enabled, Random Enabled, MaxRXFreq 60.00; G2 manual identifies Saturn-class receiver hardware.",
             DiagnosticRecommendation: recommendation,
@@ -2519,8 +2529,8 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         {
             field = "G2 ADC dither/random and MaxRXFreq",
             source = "Thetis Setup > General > ANAN-G2 Options",
-            status = "partially-mapped",
-            notes = "Thetis exposes Dither Enabled, Random Enabled, and MaxRXFreq 60.00. Zeus enforces the 60 MHz VFO clamp, but SetADCDither/SetADCRandom are still a deliberate unmapped Protocol-2 control gap until the command bytes are captured and verified.",
+            status = "decoded",
+            notes = "Thetis exposes Dither Enabled, Random Enabled, and MaxRXFreq 60.00. Zeus enforces the 60 MHz VFO clamp and now writes the verified Protocol-2 CmdRx byte 5/6 ADC dither/random masks through /api/radio/g2-options.",
         },
         new
         {
@@ -2566,8 +2576,8 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
         new
         {
             field = "G2 ADC dither/random controls",
-            status = "blocked-on-protocol-mapping",
-            notes = "Thetis calls NetworkIO.SetADCDither and SetADCRandom for the ANAN-G2 option checkboxes. Zeus now exposes the gap in diagnostics and Settings > Hardware, but does not send firmware writes until the P2 command mapping is proven.",
+            status = "control-ready",
+            notes = "Thetis calls NetworkIO.SetADCDither and SetADCRandom for the ANAN-G2 option checkboxes. Zeus exposes the same persisted controls in Settings > Radio for verified G2-class boards and writes Protocol-2 CmdRx byte 5/6 masks live.",
         },
         new
         {
@@ -2949,9 +2959,9 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             id = "rx.g2.adc-options",
             title = "G2 ADC dither, randomizer, and MaxRXFreq parity",
             category = "rx-hardware",
-            implementationStatus = "diagnostics-ready",
-            userConfigurable = false,
-            source = "Thetis ANAN-G2 Options + RadioService VFO clamp",
+            implementationStatus = "control-ready",
+            userConfigurable = true,
+            source = "Thetis ANAN-G2 Options + ChannelMaster CmdRx bytes 5/6 + RadioService VFO clamp",
             telemetryPaths = new[]
             {
                 "g2FirmwareOptions.maxRxFrequencyMhz",
@@ -2960,11 +2970,13 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
             },
             candidateControls = new[]
             {
+                "Settings > Radio > ANAN-G2 Options",
+                "/api/radio/g2-options",
                 "Settings > Hardware > G2 Firmware Options",
                 "/api/radio/diagnostics",
             },
             safetyClass = "rx-safe",
-            notes = "MaxRXFreq is matched by Zeus's 0..60 MHz clamp. ADC dither/random are visible as explicit unmapped G2 controls so they are not forgotten, but remain read-only until a verified Protocol-2 command capture proves the safe firmware write path.",
+            notes = "MaxRXFreq is matched by Zeus's 0..60 MHz clamp. ADC dither/random now persist defaults-on and write the Thetis-compatible Protocol-2 CmdRx masks only when the active capability fingerprint advertises G2 ADC options.",
         },
         new
         {

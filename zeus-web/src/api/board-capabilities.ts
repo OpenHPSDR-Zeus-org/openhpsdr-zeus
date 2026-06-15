@@ -24,6 +24,10 @@ export interface BoardCapabilities {
    *  and hermes-lite2-protocol.md addr 0x00 bit 11). Gates the RADIO tab
    *  in SettingsMenu. False on every non-HL2 board. */
   hasHl2OptionalToggles: boolean;
+  /** True when the connected/effective board exposes ANAN-G2/Saturn ADC
+   *  dither/randomizer controls over Protocol-2 CmdRx bytes 5/6. Gates the
+   *  ANAN-G2 Options section in the RADIO tab. */
+  supportsG2AdcOptions: boolean;
   /** Rated maximum forward output power in watts. Used as the default top
    *  of the TX power meter axis so a fresh connect to any radio gives a
    *  meter that's neither cramped nor blank. HermesLite2 / Hermes = 10 W,
@@ -58,6 +62,7 @@ export const UNKNOWN_BOARD_CAPABILITIES: BoardCapabilities = {
   hasSteppedAttenuationRx2: false,
   supportsPathIllustrator: false,
   hasHl2OptionalToggles: false,
+  supportsG2AdcOptions: false,
   maxPowerWatts: 100,
   maxRxSampleRateHz: 384_000,
   supportsAnvelinaDxOc: false,
@@ -99,6 +104,10 @@ export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
       typeof r.hasHl2OptionalToggles === 'boolean'
         ? r.hasHl2OptionalToggles
         : UNKNOWN_BOARD_CAPABILITIES.hasHl2OptionalToggles,
+    supportsG2AdcOptions:
+      typeof r.supportsG2AdcOptions === 'boolean'
+        ? r.supportsG2AdcOptions
+        : UNKNOWN_BOARD_CAPABILITIES.supportsG2AdcOptions,
     maxPowerWatts:
       typeof r.maxPowerWatts === 'number' && r.maxPowerWatts > 0
         ? r.maxPowerWatts

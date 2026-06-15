@@ -97,26 +97,29 @@ export function SettingsView({ initialTab, onClose }: Props) {
   const savePa = usePaStore((s) => s.save);
   const loadPa = usePaStore((s) => s.load);
   const paInflight = usePaStore((s) => s.inflight);
-  // RADIO tab is HL2-only. Hidden on every other board (the backend always
-  // answers /api/radio/hl2-options 200, but operators on Hermes / ANAN /
-  // Orion / G2 have no use for a one-checkbox tab that does nothing for
-  // them — so we gate visibility on the per-board capability flag).
+  // RADIO tab is board-option-only. Hidden unless the active capability
+  // fingerprint advertises an option surface that writes a real firmware
+  // field (HL2 Band Volts or ANAN-G2 ADC dither/random).
   const hasHl2OptionalToggles = useRadioStore(
     (s) => s.capabilities.hasHl2OptionalToggles,
   );
+  const supportsG2AdcOptions = useRadioStore(
+    (s) => s.capabilities.supportsG2AdcOptions,
+  );
+  const hasRadioOptions = hasHl2OptionalToggles || supportsG2AdcOptions;
   const visibleTabs = useMemo(
-    () => TABS.filter((t) => t.id !== 'radio' || hasHl2OptionalToggles),
-    [hasHl2OptionalToggles],
+    () => TABS.filter((t) => t.id !== 'radio' || hasRadioOptions),
+    [hasRadioOptions],
   );
 
   // If the operator was sitting on the RADIO tab and the board changed
-  // (re-discovery now reports a non-HL2), bounce them back to PA so they
+  // (re-discovery now reports no radio options), bounce them back to PA so they
   // don't get stuck on an empty tabpanel.
   useEffect(() => {
-    if (active === 'radio' && !hasHl2OptionalToggles) {
+    if (active === 'radio' && !hasRadioOptions) {
       setActive('pa');
     }
-  }, [active, hasHl2OptionalToggles]);
+  }, [active, hasRadioOptions]);
 
   useEffect(() => {
     if (initialTab) setActive(initialTab);
@@ -197,7 +200,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {active === 'hamclock' && <HamClockSettingsPanel />}
           {active === 'spots' && <SpotsSettingsPanel />}
           {active === 'server' && <ServerUrlPanel />}
-          {active === 'radio' && hasHl2OptionalToggles && <RadioOptionsPanel />}
+          {active === 'radio' && hasRadioOptions && <RadioOptionsPanel />}
           {active === 'calibration' && <CalibrationPanel />}
           {active === 'updates' && <UpdatesPanel />}
           {active === 'about' && <AboutPanel />}

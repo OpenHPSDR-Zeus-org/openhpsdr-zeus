@@ -54,6 +54,36 @@ public class PsWireFormatTests
     }
 
     [Fact]
+    public void CmdRx_G2AdcOptions_Write_Dither_And_Random_Bytes()
+    {
+        var p = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 7,
+            numAdc: 2,
+            sampleRateKhz: 192,
+            psEnabled: false,
+            adcDitherEnabled: true,
+            adcRandomEnabled: true);
+
+        Assert.Equal((byte)0x07, p[5]); // Thetis SetADCDither writes ADC0..2
+        Assert.Equal((byte)0x07, p[6]); // Thetis SetADCRandom writes ADC0..2
+    }
+
+    [Fact]
+    public void CmdRx_G2AdcOptions_Can_Be_Disabled_Independently()
+    {
+        var p = Protocol2Client.ComposeCmdRxBuffer(
+            seq: 7,
+            numAdc: 2,
+            sampleRateKhz: 192,
+            psEnabled: false,
+            adcDitherEnabled: true,
+            adcRandomEnabled: false);
+
+        Assert.Equal((byte)0x07, p[5]);
+        Assert.Equal((byte)0x00, p[6]);
+    }
+
+    [Fact]
     public void CmdRx_PsArmed_EnablesDdc0AndSyncBit()
     {
         var p = Protocol2Client.ComposeCmdRxBuffer(

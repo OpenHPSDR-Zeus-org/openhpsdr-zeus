@@ -118,7 +118,7 @@ public sealed class G2SensorMappingDiagnosticsEndpointTests
     }
 
     [Fact]
-    public void G2FirmwareOptions_ReportsUnmappedDitherRandomAndMaxRxClamp()
+    public void G2FirmwareOptions_ReportsMappedDitherRandomAndMaxRxClamp()
     {
         var diag = HardwareDiagnosticsService.BuildG2FirmwareOptionsDiagnostics(
             "P2",
@@ -131,13 +131,41 @@ public sealed class G2SensorMappingDiagnosticsEndpointTests
         Assert.Equal("wired-vfo-clamp", diag.MaxRxFrequencyStatus);
         Assert.Contains(diag.Options, option =>
             option.Id == "adc-dither"
-            && option.Status == "protocol-control-unmapped"
+            && option.Status == "mapped-live"
+            && option.Enabled == true
             && option.ThetisDefaultEnabled);
         Assert.Contains(diag.Options, option =>
             option.Id == "adc-random"
-            && option.Status == "protocol-control-unmapped"
+            && option.Status == "mapped-live"
+            && option.Enabled == true
             && option.ThetisDefaultEnabled);
-        Assert.Contains("MaxRXFreq", diag.DiagnosticRecommendation);
+        Assert.Contains("/api/radio/g2-options", diag.MissingControlSurface);
+        Assert.Contains("Keep dither/random enabled", diag.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void G2FirmwareOptions_ReportsPersistedOptionValuesBeforeP2Connect()
+    {
+        var diag = HardwareDiagnosticsService.BuildG2FirmwareOptionsDiagnostics(
+            activeProtocol: null,
+            connected: HpsdrBoardKind.Unknown,
+            effective: HpsdrBoardKind.OrionMkII,
+            variant: OrionMkIIVariant.G2,
+            g2Options: new G2OptionsDto(
+                DitherEnabled: false,
+                RandomEnabled: true,
+                MaxRxFreqMHz: 60.0,
+                Supported: true));
+
+        Assert.True(diag.G2Class);
+        Assert.Contains(diag.Options, option =>
+            option.Id == "adc-dither"
+            && option.Status == "mapped-ready"
+            && option.Enabled == false);
+        Assert.Contains(diag.Options, option =>
+            option.Id == "adc-random"
+            && option.Status == "mapped-ready"
+            && option.Enabled == true);
     }
 
     [Fact]
@@ -183,7 +211,7 @@ public sealed class G2SensorMappingDiagnosticsEndpointTests
         var adcReference = root.GetProperty("referenceMap")
             .EnumerateArray()
             .Single(item => item.GetProperty("field").GetString() == "G2 ADC dither/random and MaxRXFreq");
-        Assert.Equal("partially-mapped", adcReference.GetProperty("status").GetString());
+        Assert.Equal("decoded", adcReference.GetProperty("status").GetString());
         var dynamicRangeReference = root.GetProperty("referenceMap")
             .EnumerateArray()
             .Single(item => item.GetProperty("field").GetString() == "G2 dynamic-range and TX-fidelity potential");
@@ -194,6 +222,15 @@ public sealed class G2SensorMappingDiagnosticsEndpointTests
             .Single(item => item.GetProperty("id").GetString() == "pa.g2.sensor-mapping");
         Assert.Contains(root.GetProperty("featureSurfaces").EnumerateArray(), item =>
             item.GetProperty("id").GetString() == "rx.g2.adc-options");
+        var adcSurface = root.GetProperty("featureSurfaces")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("id").GetString() == "rx.g2.adc-options");
+        Assert.Equal("control-ready", adcSurface.GetProperty("implementationStatus").GetString());
+        Assert.True(adcSurface.GetProperty("userConfigurable").GetBoolean());
+        Assert.Contains(adcSurface.GetProperty("candidateControls").EnumerateArray(), item =>
+            item.GetString() == "/api/radio/g2-options");
+        Assert.Contains(adcSurface.GetProperty("candidateControls").EnumerateArray(), item =>
+            item.GetString() == "Settings > Radio > ANAN-G2 Options");
         Assert.Contains(root.GetProperty("featureSurfaces").EnumerateArray(), item =>
             item.GetProperty("id").GetString() == "rx.wdsp.filter-architecture");
         var telemetry = surface.GetProperty("telemetryPaths")

@@ -89,11 +89,35 @@ public sealed class PreferredRadioStore : IDisposable
     {
         lock (_sync)
         {
-            // "Auto" = delete the row, so a future Get() returns null cleanly
-            // without us reserving a sentinel value in the enum.
+            // "Auto" = store Unknown in the board slot so Get() returns null
+            // without dropping sibling preferences that share this row
+            // (variant, HL2 toggles, G2 ADC options, frequency calibration).
             if (board is null || board == HpsdrBoardKind.Unknown)
             {
-                _entries.DeleteAll();
+                var existing = _entries.FindAll().FirstOrDefault();
+                if (existing is null)
+                {
+                    _entries.Insert(new PreferredRadioEntry
+                    {
+                        Board = HpsdrBoardKind.Unknown,
+                        OverrideDetection = false,
+                        UpdatedUtc = DateTime.UtcNow,
+                    });
+                }
+                else
+                {
+                    existing.Board = HpsdrBoardKind.Unknown;
+                    if (overrideDetection.HasValue)
+                    {
+                        existing.OverrideDetection = overrideDetection.Value;
+                    }
+                    else
+                    {
+                        existing.OverrideDetection = false;
+                    }
+                    existing.UpdatedUtc = DateTime.UtcNow;
+                    _entries.Update(existing);
+                }
             }
             else
             {
@@ -231,6 +255,62 @@ public sealed class PreferredRadioStore : IDisposable
     }
 
     /// <summary>
+    /// ANAN-G2/Saturn ADC dither enable. Defaults to <c>true</c>, matching
+    /// the Thetis G2 option block. Nullable storage lets older LiteDB rows
+    /// that pre-date the field inherit the default-on behaviour.
+    /// </summary>
+    public bool GetG2AdcDitherEnabled()
+    {
+        lock (_sync)
+        {
+            var e = _entries.FindAll().FirstOrDefault();
+            return e?.G2AdcDitherEnabled ?? true;
+        }
+    }
+
+    /// <summary>
+    /// ANAN-G2/Saturn ADC digital-output randomizer. Defaults to
+    /// <c>true</c>, matching Thetis' Random Enabled default.
+    /// </summary>
+    public bool GetG2AdcRandomEnabled()
+    {
+        lock (_sync)
+        {
+            var e = _entries.FindAll().FirstOrDefault();
+            return e?.G2AdcRandomEnabled ?? true;
+        }
+    }
+
+    public void SetG2AdcOptions(bool? ditherEnabled = null, bool? randomEnabled = null)
+    {
+        lock (_sync)
+        {
+            var existing = _entries.FindAll().FirstOrDefault();
+            if (existing is null)
+            {
+                _entries.Insert(new PreferredRadioEntry
+                {
+                    Board = HpsdrBoardKind.Unknown,
+                    OverrideDetection = false,
+                    G2AdcDitherEnabled = ditherEnabled ?? true,
+                    G2AdcRandomEnabled = randomEnabled ?? true,
+                    UpdatedUtc = DateTime.UtcNow,
+                });
+            }
+            else
+            {
+                if (ditherEnabled.HasValue)
+                    existing.G2AdcDitherEnabled = ditherEnabled.Value;
+                if (randomEnabled.HasValue)
+                    existing.G2AdcRandomEnabled = randomEnabled.Value;
+                existing.UpdatedUtc = DateTime.UtcNow;
+                _entries.Update(existing);
+            }
+        }
+        Changed?.Invoke();
+    }
+
+    /// <summary>
     /// Per-radio frequency-correction factor for crystal/clock drift
     /// (issue #325). Dimensionless multiplier near 1.0 applied host-side
     /// at the Protocol-1 and Protocol-2 SetVfoAHz seams before the value
@@ -304,6 +384,14 @@ public sealed class PreferredRadioEntry
     /// <c>false</c> for older rows that pre-date this field, which matches
     /// the shipping default.</summary>
     public bool EnableHl2BandVolts { get; set; }
+    /// <summary>ANAN-G2/Saturn ADC dither enable. Nullable so upgraded rows
+    /// can inherit the default-on value instead of silently disabling a radio
+    /// option Thetis leaves enabled.</summary>
+    public bool? G2AdcDitherEnabled { get; set; }
+    /// <summary>ANAN-G2/Saturn ADC digital-output randomizer. Nullable for
+    /// the same upgrade-default reason as <see cref="G2AdcDitherEnabled"/>.
+    /// </summary>
+    public bool? G2AdcRandomEnabled { get; set; }
     /// <summary>Per-radio frequency-correction factor (issue #325).
     /// Dimensionless multiplier near 1.0; 1.0 = uncalibrated. LiteDB
     /// hydrates as 0.0 for older rows that pre-date this field; the

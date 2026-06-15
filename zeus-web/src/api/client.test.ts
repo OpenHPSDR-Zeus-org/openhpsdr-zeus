@@ -1098,20 +1098,20 @@ describe('POST helpers', () => {
             {
               id: 'adc-dither',
               label: 'ADC dither',
-              enabled: null,
+              enabled: true,
               thetisDefaultEnabled: true,
-              status: 'protocol-control-unmapped',
-              source: 'Thetis Setup > General > ANAN-G2 Options calls NetworkIO.SetADCDither(1/0)',
-              notes: 'gap',
+              status: 'mapped-live',
+              source: 'Thetis Setup > General > ANAN-G2 Options calls NetworkIO.SetADCDither; Protocol-2 CmdRx byte 5 carries ADC0..2 dither bits',
+              notes: 'Zeus persists this setting in /api/radio/g2-options and writes the CmdRx byte 5 mask.',
             },
             {
               id: 'adc-random',
               label: 'ADC randomizer',
-              enabled: null,
+              enabled: true,
               thetisDefaultEnabled: true,
-              status: 'protocol-control-unmapped',
-              source: 'Thetis Setup > General > ANAN-G2 Options calls NetworkIO.SetADCRandom(1/0)',
-              notes: 'gap',
+              status: 'mapped-live',
+              source: 'Thetis Setup > General > ANAN-G2 Options calls NetworkIO.SetADCRandom; Protocol-2 CmdRx byte 6 carries ADC0..2 randomizer bits',
+              notes: 'Zeus persists this setting in /api/radio/g2-options and writes the CmdRx byte 6 mask.',
             },
           ],
           missingControlSurface: 'SetADCDither/SetADCRandom Protocol-2 command mapping is not implemented in Zeus yet.',
@@ -1333,7 +1333,7 @@ describe('POST helpers', () => {
     expect(diag.g2Sensors.diagnosticRecommendation).toContain('Mapping Capture');
     expect(diag.g2FirmwareOptions.options[0]?.id).toBe('adc-dither');
     expect(diag.g2FirmwareOptions.maxRxFrequencyMhz).toBe(60);
-    expect(diag.g2FirmwareOptions.options[1]?.status).toBe('protocol-control-unmapped');
+    expect(diag.g2FirmwareOptions.options[1]?.status).toBe('mapped-live');
     expect(diag.mapping.schemaVersion).toBe(2);
     expect(diag.mapping.markers[0]?.label).toBe('RX2 on');
     expect(diag.hardwarePotential.g2Class).toBe(true);

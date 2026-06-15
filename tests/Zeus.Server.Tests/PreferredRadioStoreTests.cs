@@ -183,6 +183,24 @@ public class PreferredRadioStoreTests : IDisposable
     }
 
     [Fact]
+    public void Setting_Auto_Preserves_Sibling_Hardware_Options()
+    {
+        using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        store.Set(HpsdrBoardKind.OrionMkII);
+        store.SetOrionMkIIVariant(OrionMkIIVariant.G2_1K);
+        store.SetEnableHl2BandVolts(true);
+        store.SetG2AdcOptions(ditherEnabled: false, randomEnabled: false);
+
+        store.Set(null);
+
+        Assert.Null(store.Get());
+        Assert.Equal(OrionMkIIVariant.G2_1K, store.GetOrionMkIIVariant());
+        Assert.True(store.GetEnableHl2BandVolts());
+        Assert.False(store.GetG2AdcDitherEnabled());
+        Assert.False(store.GetG2AdcRandomEnabled());
+    }
+
+    [Fact]
     public void Hl2BandVolts_Changed_Fires_On_Set()
     {
         using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
@@ -190,6 +208,56 @@ public class PreferredRadioStoreTests : IDisposable
         store.Changed += () => fired++;
         store.SetEnableHl2BandVolts(true);
         store.SetEnableHl2BandVolts(false);
+        Assert.Equal(2, fired);
+    }
+
+    // ---- G2 ADC dither/random defaults ----
+
+    [Fact]
+    public void Empty_Store_Returns_True_For_G2_Adc_Dither_And_Random()
+    {
+        using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        Assert.True(store.GetG2AdcDitherEnabled());
+        Assert.True(store.GetG2AdcRandomEnabled());
+    }
+
+    [Fact]
+    public void G2_Adc_Options_Round_Trip_And_Persist()
+    {
+        using (var s1 = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath))
+        {
+            s1.SetG2AdcOptions(ditherEnabled: false, randomEnabled: true);
+        }
+
+        using var s2 = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        Assert.False(s2.GetG2AdcDitherEnabled());
+        Assert.True(s2.GetG2AdcRandomEnabled());
+    }
+
+    [Fact]
+    public void G2_Adc_Options_Coexist_With_Board_Variant_And_Hl2()
+    {
+        using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        store.Set(HpsdrBoardKind.OrionMkII);
+        store.SetOrionMkIIVariant(OrionMkIIVariant.G2_1K);
+        store.SetEnableHl2BandVolts(true);
+        store.SetG2AdcOptions(ditherEnabled: false, randomEnabled: false);
+
+        Assert.Equal(HpsdrBoardKind.OrionMkII, store.Get());
+        Assert.Equal(OrionMkIIVariant.G2_1K, store.GetOrionMkIIVariant());
+        Assert.True(store.GetEnableHl2BandVolts());
+        Assert.False(store.GetG2AdcDitherEnabled());
+        Assert.False(store.GetG2AdcRandomEnabled());
+    }
+
+    [Fact]
+    public void G2_Adc_Options_Changed_Fires_On_Set()
+    {
+        using var store = new PreferredRadioStore(NullLogger<PreferredRadioStore>.Instance, _dbPath);
+        int fired = 0;
+        store.Changed += () => fired++;
+        store.SetG2AdcOptions(ditherEnabled: false);
+        store.SetG2AdcOptions(randomEnabled: false);
         Assert.Equal(2, fired);
     }
 }

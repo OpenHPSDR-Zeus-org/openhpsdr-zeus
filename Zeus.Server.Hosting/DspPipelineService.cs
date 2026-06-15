@@ -3982,6 +3982,11 @@ public class DspPipelineService : BackgroundService,
         // first CmdHighPriority(run=1) so the operator's calibration applies
         // to the very first NCO phase-word. 1.0 = factory default, no-op.
         client.SetFrequencyCorrectionFactor(_radio.GetFrequencyCorrectionFactor());
+        // ANAN-G2/Saturn ADC dither/random options live in CmdRx bytes 5/6.
+        // Seed before StartAsync so the first receive-specific command
+        // matches the persisted setting; RadioService also replays after
+        // MarkProtocol2Connected and on live setting changes.
+        _radio.ApplyG2AdcOptionsToP2Client(client, boardKind);
 
         int rateHz = _radio.ResolveConnectSampleRateHz(
             boardKind,

@@ -87,6 +87,7 @@ public class BoardCapabilitiesTableTests
         Assert.True(caps.HasSteppedAttenuationRx2);
         Assert.False(caps.SupportsPathIllustrator);
         Assert.Equal(1_536_000, caps.MaxRxSampleRateHz);
+        Assert.True(caps.SupportsG2AdcOptions);
     }
 
     [Fact]
@@ -230,6 +231,20 @@ public class BoardCapabilitiesTableTests
     {
         var caps = BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, variant);
         Assert.Equal(expectedHz, caps.MaxRxSampleRateHz);
+    }
+
+    [Theory]
+    [InlineData(OrionMkIIVariant.G2, true)]
+    [InlineData(OrionMkIIVariant.G2_1K, true)]
+    [InlineData(OrionMkIIVariant.Anan7000DLE, false)]
+    [InlineData(OrionMkIIVariant.Anan8000DLE, false)]
+    [InlineData(OrionMkIIVariant.OrionMkII, false)]
+    [InlineData(OrionMkIIVariant.AnvelinaPro3, false)]
+    [InlineData(OrionMkIIVariant.RedPitaya, false)]
+    public void SupportsG2AdcOptions_Only_Verified_G2_Variants(OrionMkIIVariant variant, bool expected)
+    {
+        var caps = BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, variant);
+        Assert.Equal(expected, caps.SupportsG2AdcOptions);
     }
 
     public static IEnumerable<object[]> EveryBoardKind() =>

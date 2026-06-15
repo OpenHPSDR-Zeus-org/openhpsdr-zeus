@@ -83,6 +83,13 @@ function stubSettingsFetch(overrides: Record<string, unknown> = {}) {
           return jsonResponse({ profiles: [] });
         case '/api/radio/hl2-options':
           return jsonResponse({ bandVolts: false });
+        case '/api/radio/g2-options':
+          return jsonResponse({
+            ditherEnabled: true,
+            randomEnabled: true,
+            maxRxFreqMHz: 60,
+            supported: false,
+          });
         default:
           return jsonResponse({});
       }
@@ -186,8 +193,8 @@ describe('SettingsView — RADIO tab gating', () => {
     seedRadioCaps({ hasHl2OptionalToggles: false });
   });
 
-  it('hides the RADIO tab when hasHl2OptionalToggles is false', async () => {
-    seedRadioCaps({ hasHl2OptionalToggles: false });
+  it('hides the RADIO tab when no board radio options are supported', async () => {
+    seedRadioCaps({ hasHl2OptionalToggles: false, supportsG2AdcOptions: false });
     await act(async () => {
       root.render(<SettingsView onClose={() => {}} />);
       await flushEffects();
@@ -229,5 +236,39 @@ describe('SettingsView — RADIO tab gating', () => {
     });
     expect(container.textContent).toContain('Band Volts');
     expect(container.textContent).toContain('Enable Band Volts PWM output');
+  });
+
+  it('shows the RADIO tab and renders G2 options when supportsG2AdcOptions is true', async () => {
+    stubSettingsFetch({
+      '/api/radio/capabilities': {
+        ...UNKNOWN_BOARD_CAPABILITIES,
+        supportsG2AdcOptions: true,
+      },
+      '/api/radio/g2-options': {
+        ditherEnabled: true,
+        randomEnabled: true,
+        maxRxFreqMHz: 60,
+        supported: true,
+      },
+    });
+
+    seedRadioCaps({ supportsG2AdcOptions: true });
+    await act(async () => {
+      root.render(<SettingsView onClose={() => {}} />);
+      await flushEffects();
+    });
+    const tabButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="tablist"] button'),
+    );
+    expect(tabButtons.map((b) => b.textContent?.trim() ?? '')).toContain('RADIO');
+
+    const radioTab = tabButtons.find((b) => b.textContent?.trim() === 'RADIO');
+    await act(async () => {
+      radioTab!.click();
+      await flushEffects();
+    });
+    expect(container.textContent).toContain('ANAN-G2 Options');
+    expect(container.textContent).toContain('Dither Enabled');
+    expect(container.textContent).toContain('Random Enabled');
   });
 });
