@@ -9,7 +9,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DISPLAY_INTELLIGENCE_DEFAULTS } from '../api/display-intelligence';
 import { resetEstimator, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import type { DecodedFrame } from '../realtime/frame';
-import { useDisplayStore } from '../state/display-store';
+import {
+  _resetFrameConsumerCount,
+  hasActiveFrameConsumers,
+  useDisplayStore,
+} from '../state/display-store';
 import { SignalIntelligenceController } from './SignalIntelligenceController';
 
 describe('SignalIntelligenceController display-intelligence sync', () => {
@@ -30,6 +34,7 @@ describe('SignalIntelligenceController display-intelligence sync', () => {
     });
     container.remove();
     resetEstimator();
+    _resetFrameConsumerCount();
     useDisplayStore.setState({
       connected: false,
       width: 0,
@@ -258,5 +263,25 @@ describe('SignalIntelligenceController display-intelligence sync', () => {
     expect(scene?.maxSnrDb).toBeGreaterThan(20);
     expect(scene?.occupiedPct).toBeGreaterThan(0);
     expect(useSignalEnhanceStore.getState().autoProfileEnabled).toBe(false);
+  });
+
+  it('keeps display frame decoding active for realtime diagnostics while mounted', async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(DISPLAY_INTELLIGENCE_DEFAULTS));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(hasActiveFrameConsumers()).toBe(false);
+
+    await act(async () => {
+      root.render(<SignalIntelligenceController />);
+      await flushPromises();
+    });
+
+    expect(hasActiveFrameConsumers()).toBe(true);
+
+    act(() => {
+      root.unmount();
+    });
+
+    expect(hasActiveFrameConsumers()).toBe(false);
   });
 });
