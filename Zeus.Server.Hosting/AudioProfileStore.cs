@@ -16,12 +16,14 @@ namespace Zeus.Server;
 /// upsert, no schema migrations (LiteDB tolerates rows written by older
 /// builds with missing fields).</para>
 ///
-/// <para><b>Scope:</b> a profile captures the chain shape (active order,
-/// parked set, master bypass) AND each VST plugin's full parameter state
+/// <para><b>Scope:</b> a profile captures the Audio Suite route
+/// (Native/VST), chain shape (active order, parked set, master bypass) AND
+/// each VST plugin's full parameter state
 /// (<see cref="AudioProfileEntry.PluginStates"/>) — the opaque base64 blob
 /// from the engine's <c>getStateInformation</c>, restored via
 /// <c>setStateInformation</c> on apply. Native (in-process) plugins still
-/// carry their settings in <c>PluginSettingsStore</c>, not here.</para>
+/// carry their live knob settings in <c>PluginSettingsStore</c>; the profile
+/// restores the native route plus the saved chain-level layout.</para>
 /// </summary>
 public sealed class AudioProfileStore : IDisposable
 {
@@ -66,6 +68,7 @@ public sealed class AudioProfileStore : IDisposable
     /// </summary>
     public AudioProfileEntry Save(
         string name,
+        AudioProcessingMode processingMode,
         IReadOnlyList<string> order,
         IReadOnlyList<string> parked,
         bool masterBypass,
@@ -83,6 +86,7 @@ public sealed class AudioProfileStore : IDisposable
                 var entry = new AudioProfileEntry
                 {
                     Name = name,
+                    ProcessingMode = processingMode,
                     Order = order.ToList(),
                     Parked = parked.ToList(),
                     MasterBypass = masterBypass,
@@ -93,6 +97,7 @@ public sealed class AudioProfileStore : IDisposable
                 _profiles.Insert(entry);
                 return entry;
             }
+            existing.ProcessingMode = processingMode;
             existing.Order = order.ToList();
             existing.Parked = parked.ToList();
             existing.MasterBypass = masterBypass;
@@ -117,6 +122,12 @@ public sealed class AudioProfileEntry
 {
     public int Id { get; set; }
     public string Name { get; set; } = "";
+    /// <summary>
+    /// Audio Suite route active when the profile was saved. Missing on older
+    /// rows deserialises to the enum default (Native), preserving legacy
+    /// profile behaviour.
+    /// </summary>
+    public AudioProcessingMode ProcessingMode { get; set; } = AudioProcessingMode.Native;
     public List<string> Order { get; set; } = new();
     public List<string> Parked { get; set; } = new();
     public bool MasterBypass { get; set; }

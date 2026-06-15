@@ -335,6 +335,11 @@ export type DisplaySettingsState = {
   setAutoRange: (v: boolean) => void;
   setColormap: (id: ColormapId) => void;
   setWaterfallRowCadence: (value: WaterfallRowCadence) => void;
+  setDbRange: (dbMin: number, dbMax: number) => void;
+  setTxDbRange: (txDbMin: number, txDbMax: number) => void;
+  setWfDbRange: (wfDbMin: number, wfDbMax: number) => void;
+  setWfTxDbRange: (wfTxDbMin: number, wfTxDbMax: number) => void;
+  resetDbRanges: () => void;
   updateAutoRange: (wfDb: Float32Array) => void;
   // Shift dbMin and dbMax together by `deltaDb`. Used by the draggable dB
   // scale overlay on the panadapter with content-follows-finger semantics:
@@ -501,6 +506,48 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     const next = normalizeWaterfallRowCadence(value);
     set({ waterfallRowCadence: next });
     writeSavedWaterfallRowCadence(next);
+  },
+  setDbRange: (dbMin, dbMax) => {
+    const next = sanitizeRange(dbMin, dbMax, FIXED_DB_MIN, FIXED_DB_MAX);
+    set({ autoRange: false, dbMin: next.min, dbMax: next.max });
+    writeSavedRange(next.min, next.max);
+    scheduleDbRangeSave();
+  },
+  setTxDbRange: (txDbMin, txDbMax) => {
+    const next = sanitizeRange(txDbMin, txDbMax, TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
+    set({ txDbMin: next.min, txDbMax: next.max });
+    writeSavedTxRange(next.min, next.max);
+    scheduleDbRangeSave();
+  },
+  setWfDbRange: (wfDbMin, wfDbMax) => {
+    const next = sanitizeRange(wfDbMin, wfDbMax, FIXED_DB_MIN, FIXED_DB_MAX);
+    set({ wfDbMin: next.min, wfDbMax: next.max });
+    writeSavedWfRange(next.min, next.max);
+    scheduleDbRangeSave();
+  },
+  setWfTxDbRange: (wfTxDbMin, wfTxDbMax) => {
+    const next = sanitizeRange(wfTxDbMin, wfTxDbMax, TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
+    set({ wfTxDbMin: next.min, wfTxDbMax: next.max });
+    writeSavedWfTxRange(next.min, next.max);
+    scheduleDbRangeSave();
+  },
+  resetDbRanges: () => {
+    set({
+      autoRange: false,
+      dbMin: FIXED_DB_MIN,
+      dbMax: FIXED_DB_MAX,
+      txDbMin: TX_FIXED_DB_MIN,
+      txDbMax: TX_FIXED_DB_MAX,
+      wfDbMin: FIXED_DB_MIN,
+      wfDbMax: FIXED_DB_MAX,
+      wfTxDbMin: TX_FIXED_DB_MIN,
+      wfTxDbMax: TX_FIXED_DB_MAX,
+    });
+    writeSavedRange(FIXED_DB_MIN, FIXED_DB_MAX);
+    writeSavedTxRange(TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
+    writeSavedWfRange(FIXED_DB_MIN, FIXED_DB_MAX);
+    writeSavedWfTxRange(TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
+    scheduleDbRangeSave();
   },
   shiftDbRange: (deltaDb) => {
     // While AUTO is on, the live dbMin/dbMax are EMA-smoothed band-tracking

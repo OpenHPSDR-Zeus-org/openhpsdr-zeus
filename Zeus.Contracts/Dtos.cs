@@ -1314,3 +1314,40 @@ public sealed record TxStationProfilesResponse(IReadOnlyList<TxStationProfileDto
 public sealed record TxFidelityPolicyDto(
     string ProfileId,
     int TargetSpectralDensity);
+
+/// <summary>Status of the local git checkout relative to its configured
+/// upstream, for the Settings -> Updates panel (GET /api/system/update).
+/// <para>When <see cref="IsGitRepo"/> is false the app is running from a
+/// non-git build and the UI falls back to manual-update guidance. All SHAs are
+/// short form. <see cref="Behind"/>/<see cref="Ahead"/> count commits relative
+/// to <see cref="UpstreamRef"/> (e.g. "upstream/main"). <see cref="CanFastForward"/>
+/// is true only when behind &gt; 0, HEAD is an ancestor of the upstream tip, and
+/// the working tree is clean. <see cref="Error"/> carries a human message when a
+/// git call failed (e.g. offline fetch); the rest of the fields hold the last
+/// locally-known values in that case.</para></summary>
+public sealed record RepoUpdateStatus(
+    bool IsGitRepo,
+    string? Branch,
+    string? CurrentSha,
+    string? CurrentShortSha,
+    string? CurrentSubject,
+    string? UpstreamRef,
+    int Behind,
+    int Ahead,
+    bool Dirty,
+    bool CanFastForward,
+    string? LatestRemoteSha,
+    string? LatestRemoteSubject,
+    string? RemoteUrl,
+    string? CheckedUtc,
+    string? Error);
+
+/// <summary>Result of a fast-forward pull (POST /api/system/update/pull).
+/// <see cref="RequiresRebuild"/> is true whenever source actually changed —
+/// the running binaries are stale until the operator rebuilds and restarts
+/// (see scripts/update.*). <see cref="Message"/> is operator-facing.</summary>
+public sealed record RepoUpdateResult(
+    bool Ok,
+    string? NewSha,
+    bool RequiresRebuild,
+    string Message);

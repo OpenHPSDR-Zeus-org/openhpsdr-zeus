@@ -67,8 +67,29 @@ describe('buildFrontendDspSceneDiagnosticsPayload', () => {
     expect(payload?.sourceClientId).toMatch(/^frontend-/);
   });
 
-  it('does not publish when no frontend scene evidence exists', () => {
-    expect(buildFrontendDspSceneDiagnosticsPayload('USB', null, null)).toBeNull();
+  it('publishes a fresh client heartbeat when no scene evidence exists yet', () => {
+    const payload = buildFrontendDspSceneDiagnosticsPayload('USB', null, null);
+
+    expect(payload).toMatchObject({
+      sourceAtUtc: null,
+      mode: 'USB',
+      signalProfile: null,
+      signalReason: null,
+      smartNrProfile: null,
+      smartNrReason: null,
+      smartNrRecommendation: null,
+      smartNrHeldByRxChain: null,
+      smartNrRxChainLabel: null,
+      maxSnrDb: null,
+      coherentMaxSnrDb: null,
+      occupiedPct: null,
+      coherentOccupiedPct: null,
+      impulsivePct: null,
+      peakCount: null,
+      coherentPeakCount: null,
+      coherentSubthresholdSignal: null,
+    });
+    expect(payload?.sourceClientId).toMatch(/^frontend-/);
   });
 
   it('uses the latest valid source analysis timestamp', () => {

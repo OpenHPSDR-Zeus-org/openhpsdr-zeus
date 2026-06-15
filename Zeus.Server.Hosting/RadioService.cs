@@ -55,6 +55,7 @@ namespace Zeus.Server;
 public sealed class RadioService : IDisposable
 {
     private const int DefaultHpsdrPort = 1024;
+    internal const double DefaultAgcTopDb = 80.0;
 
     private readonly object _sync = new();
     private readonly ILoggerFactory _loggerFactory;
@@ -344,12 +345,12 @@ public sealed class RadioService : IDisposable
             FilterLowHz: rsSnap?.FilterLowHz ?? 100,
             FilterHighHz: rsSnap?.FilterHighHz ?? 2850,
             SampleRate: 192_000,    // set at connect time; not in global snapshot
-            // Maintainer-chosen baseline of 45 dB (Thetis "AGC slow / fast"
-            // sits in this range and reads less aggressive than the WDSP
-            // 80 dB internal default on quiet bands). Operator overrides
-            // persist via DspSettingsStore.SetAgcTopDb so the value sticks
-            // across restarts; null on first run gets the 45 dB seed.
-            AgcTopDb: _dspSettingsStore.GetAgcTopDb() ?? 45.0,
+            // Thetis / WDSP AGC_MEDIUM baseline. This gives the RX AGC enough
+            // headroom to normalize weak post-demod audio immediately after a
+            // fresh start. Operator overrides persist via
+            // DspSettingsStore.SetAgcTopDb so deliberate lower AGC-T settings
+            // still stick across restarts.
+            AgcTopDb: _dspSettingsStore.GetAgcTopDb() ?? DefaultAgcTopDb,
             Agc: persistedAgc,
             Squelch: persistedSquelch,
             TxLeveling: persistedTxLeveling,
@@ -1611,7 +1612,11 @@ public sealed class RadioService : IDisposable
             const double MaxEffectiveAgcT = 100.0;
             double targetEffective = Math.Clamp(
                 TargetAudioDb - noiseFloor, MinEffectiveAgcT, MaxEffectiveAgcT);
-            double desiredOffset = targetEffective - _state.AgcTopDb;
+            // Auto-AGC should normalize weak/quiet conditions without turning
+            // down a baseline the operator already chose. If the sampled band
+            // calls for less gain than the baseline, decay any prior boost back
+            // to zero and leave the effective AGC-T at the user's setting.
+            double desiredOffset = Math.Max(0.0, targetEffective - _state.AgcTopDb);
 
             double delta = desiredOffset - _agcOffsetDb;
             if (Math.Abs(delta) < AgcDeadbandDb) return;

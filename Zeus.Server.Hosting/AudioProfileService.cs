@@ -4,10 +4,11 @@ namespace Zeus.Server;
 /// <summary>
 /// Orchestrates Audio Suite profiles: capturing the current chain
 /// configuration into a named snapshot and applying a saved one back.
-/// A profile spans two seams — <see cref="ChainOrderService"/> (active
-/// order + parked set) and <see cref="AudioChainMasterBypassService"/>
-/// (master lever) — so this service is the single place that reads /
-/// writes both atomically on the operator's behalf.
+/// A profile spans three seams — <see cref="AudioProcessingModeService"/>
+/// (Native/VST route), <see cref="ChainOrderService"/> (active order +
+/// parked set), and <see cref="AudioChainMasterBypassService"/> (master
+/// lever) — so this service is the single place that reads / writes them on
+/// the operator's behalf.
 /// </summary>
 public sealed class AudioProfileService
 {
@@ -46,35 +47,39 @@ public sealed class AudioProfileService
         var states = await _mode.CaptureChainStatesAsync(CaptureTimeout).ConfigureAwait(false);
         var entry = _store.Save(
             name,
+            _mode.Mode,
             _chainOrder.CurrentOrder,
             _chainOrder.ParkedIds,
             _masterBypass.IsBypassed,
             states);
         _log.LogInformation(
-            "Audio profile '{Name}' saved ({Active} active, {Parked} parked, {States} VST states, masterBypass={Bypass})",
-            name, entry.Order.Count, entry.Parked.Count, states.Count, entry.MasterBypass);
+            "Audio profile '{Name}' saved (mode={Mode}, {Active} active, {Parked} parked, {States} VST states, masterBypass={Bypass})",
+            name, entry.ProcessingMode, entry.Order.Count, entry.Parked.Count, states.Count, entry.MasterBypass);
         return entry;
     }
 
     /// <summary>
-    /// Apply a saved profile by name. Returns false if no such profile.
-    /// Order matters: arm the saved per-plugin states FIRST so the chain reload
-    /// triggered by the membership/order reconcile restores each plugin's voicing,
-    /// then set the master lever so the chain is in its final shape before it goes
-    /// hot / inert.
+    /// Apply a saved profile by name. Returns null if no such profile.
+    /// Order matters: arm the saved per-plugin states FIRST so any VST engine
+    /// chain reload restores each plugin's voicing, switch to the route the
+    /// profile was saved with, then reconcile membership/order and set the
+    /// master lever.
     /// </summary>
-    public bool Apply(string name)
+    public async Task<AudioProfileEntry?> ApplyAsync(
+        string name,
+        CancellationToken ct = default)
     {
         var profile = _store.Get(name);
-        if (profile is null) return false;
+        if (profile is null) return null;
 
         _mode.SetPluginStates(profile.PluginStates);
+        await _mode.SetModeAsync(profile.ProcessingMode, ct).ConfigureAwait(false);
         _chainOrder.ApplyMembershipAndOrder(profile.Order, profile.Parked);
         _masterBypass.SetMasterBypassed(profile.MasterBypass);
         _log.LogInformation(
-            "Audio profile '{Name}' applied ({States} VST states restored)",
-            name, profile.PluginStates.Count);
-        return true;
+            "Audio profile '{Name}' applied (mode={Mode}, {States} VST states restored)",
+            name, profile.ProcessingMode, profile.PluginStates.Count);
+        return profile;
     }
 
     public bool Delete(string name) => _store.Delete(name);

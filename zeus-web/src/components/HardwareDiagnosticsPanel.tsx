@@ -8,15 +8,28 @@ import { useCallback, useEffect, useState, type CSSProperties } from 'react';
 import {
   createHardwareDiagnosticsMarker,
   fetchHardwareDiagnostics,
+  fetchHardwareKeyingStatus,
+  fetchRadioNetworkProfile,
+  fetchRadioSupplyAlarms,
   fetchRadios,
+  fetchUserIoActions,
+  fetchUserIoLabels,
   resetHardwareDiagnosticsMap,
   type HardwareByteStreamMapDto,
   type HardwareDiagnosticItemDto,
   type HardwareDiagnosticsDto,
   type HardwareFeatureSurfaceDto,
+  type HardwareKeyingStatusDto,
   type HardwareMappingMarkerDto,
   type HardwareP1MapDto,
+  type RadioNetworkCountersDto,
+  type RadioNetworkProfileDto,
   type RadioInfoDto,
+  type RadioSupplyAlarmsDto,
+  type RadioSupplyReadingDto,
+  type UserIoActionsDto,
+  type UserIoLabelsDto,
+  type UserIoLineDto,
 } from '../api/client';
 
 const INVENTORY_INTERVAL_MS = 10_000;
@@ -68,6 +81,11 @@ function pct(v: number | null | undefined): string {
   return `${v.toFixed(1)}%`;
 }
 
+function volts(v: number | null | undefined): string {
+  if (v === null || v === undefined) return '-';
+  return `${v.toFixed(2)} V`;
+}
+
 function FieldGrid({ fields }: { fields: Field[] }) {
   return (
     <div
@@ -111,6 +129,213 @@ function FieldGrid({ fields }: { fields: Field[] }) {
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+function DiagnosticRecommendation({ text }: { text: string | null | undefined }) {
+  if (!text) return null;
+  return (
+    <div style={{ marginTop: 8, fontSize: 11, lineHeight: 1.35, color: 'var(--fg-2)' }}>
+      {text}
+    </div>
+  );
+}
+
+function NetworkCounters({
+  label,
+  counters,
+}: {
+  label: string;
+  counters: RadioNetworkCountersDto;
+}) {
+  return (
+    <div style={{ display: 'grid', gap: 7 }}>
+      <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--fg-0)' }}>{label}</span>
+      <FieldGrid
+        fields={[
+          { label: 'Attached', value: boolLabel(counters.attached) },
+          { label: 'Frames', value: counters.totalFrames },
+          { label: 'Drops', value: counters.droppedFrames },
+          { label: 'Drop Ratio', value: pct(counters.dropRatioPct) },
+          { label: 'Hi Priority', value: counters.hiPriorityPackets },
+          { label: 'PS Paired', value: counters.psPairedPackets },
+        ]}
+      />
+    </div>
+  );
+}
+
+function HardwareKeyingDiagnostics({ status }: { status: HardwareKeyingStatusDto | null }) {
+  if (!status) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for keying diagnostics.</div>;
+  const ext = status.externalPtt;
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Protocol', value: status.activeProtocol },
+          { label: 'P1 Packets', value: status.p1Packets },
+          { label: 'P1 Updated', value: time(status.p1LastUpdatedUtc) },
+          { label: 'P1 HW PTT', value: boolLabel(status.p1HardwarePtt) },
+          { label: 'P1 CW Key', value: boolLabel(status.p1CwKeyDown) },
+          { label: 'P2 Packets', value: status.p2Packets },
+          { label: 'P2 Updated', value: time(status.p2LastUpdatedUtc) },
+          { label: 'P2 PTT', value: boolLabel(status.p2PttIn) },
+          { label: 'P2 Dot', value: boolLabel(status.p2DotIn) },
+          { label: 'P2 Dash', value: boolLabel(status.p2DashIn) },
+          { label: 'P2 Sidetone', value: boolLabel(status.p2SidetoneActive) },
+          { label: 'Generated', value: time(status.generatedUtc) },
+        ]}
+      />
+      <FieldGrid
+        fields={[
+          { label: 'External PTT', value: boolLabel(ext.available) },
+          { label: 'PTT Protocol', value: ext.protocol },
+          { label: 'Owns MOX', value: boolLabel(ext.ownedMox) },
+          { label: 'MOX Owner', value: ext.moxOwner },
+          { label: 'Hang', value: `${ext.hangTimeMs} ms` },
+          { label: 'MOX', value: boolLabel(ext.moxOn) },
+          { label: 'TUN', value: boolLabel(ext.tunOn) },
+          { label: 'Two Tone', value: boolLabel(ext.twoToneOn) },
+          { label: 'CW Mode', value: boolLabel(ext.cwMode) },
+          { label: 'Sidetone', value: boolLabel(ext.sidetoneAvailable) },
+        ]}
+      />
+      <DiagnosticRecommendation text={status.diagnosticRecommendation ?? ext.diagnosticRecommendation} />
+    </div>
+  );
+}
+
+function SupplyReading({
+  label,
+  reading,
+}: {
+  label: string;
+  reading: RadioSupplyReadingDto;
+}) {
+  return (
+    <div style={{ display: 'grid', gap: 7 }}>
+      <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--fg-0)' }}>{label}</span>
+      <FieldGrid
+        fields={[
+          { label: 'Packets', value: reading.packets },
+          { label: 'Updated', value: time(reading.lastUpdatedUtc) },
+          { label: 'Supply ADC', value: adc(reading.supplyVoltsAdc) },
+          { label: 'Supply Volts', value: volts(reading.supplyVolts) },
+        ]}
+      />
+    </div>
+  );
+}
+
+function SupplyAlarmDiagnostics({ alarms }: { alarms: RadioSupplyAlarmsDto | null }) {
+  if (!alarms) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for supply telemetry.</div>;
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Protocol', value: alarms.activeProtocol },
+          { label: 'Board', value: alarms.effectiveBoard },
+          { label: 'Variant', value: alarms.orionMkIIVariant },
+          { label: 'Supported', value: boolLabel(alarms.supportsSupplyTelemetry) },
+          { label: 'Scale', value: `${alarms.adcSupplyMv} mV/step` },
+          { label: 'Thresholds', value: boolLabel(alarms.activeThresholdsConfigured) },
+          { label: 'Alarm', value: boolLabel(alarms.alarmActive) },
+          { label: 'Status', value: alarms.alarmStatus },
+          { label: 'Generated', value: time(alarms.generatedUtc) },
+        ]}
+      />
+      <SupplyReading label="Protocol 1" reading={alarms.p1} />
+      <SupplyReading label="Protocol 2" reading={alarms.p2} />
+      <DiagnosticRecommendation text={alarms.diagnosticRecommendation} />
+    </div>
+  );
+}
+
+function NetworkProfileDiagnostics({ profile }: { profile: RadioNetworkProfileDto | null }) {
+  if (!profile) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for network profile.</div>;
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Status', value: profile.connectionStatus },
+          { label: 'Endpoint', value: profile.endpoint },
+          { label: 'Protocol', value: profile.activeProtocol },
+          { label: 'Transport', value: profile.transport },
+          { label: 'Sample Rate', value: profile.sampleRateHz ? `${profile.sampleRateHz / 1000} kHz` : null },
+          { label: 'Connected', value: profile.connectedBoard },
+          { label: 'Effective', value: profile.effectiveBoard },
+          { label: 'Variant', value: profile.orionMkIIVariant },
+          { label: 'Health', value: profile.healthStatus },
+          { label: 'Generated', value: time(profile.generatedUtc) },
+        ]}
+      />
+      <NetworkCounters label="Protocol 1 Counters" counters={profile.p1} />
+      <NetworkCounters label="Protocol 2 Counters" counters={profile.p2} />
+      <DiagnosticRecommendation text={profile.diagnosticRecommendation} />
+    </div>
+  );
+}
+
+function UserIoLineRows({ lines }: { lines: UserIoLineDto[] }) {
+  if (lines.length === 0) {
+    return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>No user I/O lines decoded yet.</div>;
+  }
+  return (
+    <div style={{ display: 'grid', gap: 8 }}>
+      {lines.map((line) => (
+        <div
+          key={`${line.id}:${line.kind}`}
+          style={{
+            padding: '8px 10px',
+            background: 'var(--bg-0)',
+            border: '1px solid var(--panel-border)',
+            borderRadius: 'var(--r-sm)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--fg-0)' }}>{line.label}</span>
+            <span className="mono" style={{ fontSize: 10, color: 'var(--fg-3)' }}>
+              {line.id} / {line.kind}
+            </span>
+          </div>
+          <FieldGrid
+            fields={[
+              { label: 'Raw ADC', value: adc(line.rawAdc) },
+              { label: 'Normalized', value: pct(line.normalizedPct) },
+              { label: 'Digital', value: boolLabel(line.digitalState) },
+            ]}
+          />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function UserIoDiagnostics({
+  labels,
+  actions,
+}: {
+  labels: UserIoLabelsDto | null;
+  actions: UserIoActionsDto | null;
+}) {
+  if (!labels && !actions) return <div style={{ fontSize: 12, color: 'var(--fg-2)' }}>Waiting for user I/O telemetry.</div>;
+  const lines = labels?.lines.length ? labels.lines : actions?.lines ?? [];
+  return (
+    <div style={{ display: 'grid', gap: 10 }}>
+      <FieldGrid
+        fields={[
+          { label: 'Protocol', value: labels?.activeProtocol ?? actions?.activeProtocol },
+          { label: 'P2 Attached', value: boolLabel(labels?.p2Attached ?? actions?.p2Attached) },
+          { label: 'P2 Packets', value: labels?.p2Packets ?? actions?.p2Packets },
+          { label: 'P2 Updated', value: time(labels?.p2LastUpdatedUtc ?? actions?.p2LastUpdatedUtc) },
+          { label: 'Labels', value: labels?.lines.length ?? 0 },
+          { label: 'Actions Armed', value: boolLabel(actions?.actionBindingsConfigured) },
+          { label: 'Generated', value: time(labels?.generatedUtc ?? actions?.generatedUtc) },
+        ]}
+      />
+      <UserIoLineRows lines={lines} />
+      <DiagnosticRecommendation text={actions?.diagnosticRecommendation ?? labels?.diagnosticRecommendation} />
     </div>
   );
 }
@@ -806,10 +1031,17 @@ function MarkerTimeline({ markers }: { markers: HardwareMappingMarkerDto[] }) {
 export function HardwareDiagnosticsPanel() {
   const [diag, setDiag] = useState<HardwareDiagnosticsDto | null>(null);
   const [radios, setRadios] = useState<RadioInfoDto[] | null>(null);
+  const [keying, setKeying] = useState<HardwareKeyingStatusDto | null>(null);
+  const [supplyAlarms, setSupplyAlarms] = useState<RadioSupplyAlarmsDto | null>(null);
+  const [networkProfile, setNetworkProfile] = useState<RadioNetworkProfileDto | null>(null);
+  const [userIoLabels, setUserIoLabels] = useState<UserIoLabelsDto | null>(null);
+  const [userIoActions, setUserIoActions] = useState<UserIoActionsDto | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [inventoryError, setInventoryError] = useState<string | null>(null);
+  const [endpointError, setEndpointError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [endpointBusy, setEndpointBusy] = useState(false);
   const [resettingMap, setResettingMap] = useState(false);
   const [marking, setMarking] = useState(false);
   const [markerLabel, setMarkerLabel] = useState('');
@@ -842,6 +1074,32 @@ export function HardwareDiagnosticsPanel() {
       }
     } finally {
       setScanning(false);
+    }
+  }, []);
+
+  const loadEndpointDiagnostics = useCallback(async (signal?: AbortSignal) => {
+    setEndpointBusy(true);
+    try {
+      const [nextKeying, nextSupply, nextNetwork, nextLabels, nextActions] =
+        await Promise.all([
+          fetchHardwareKeyingStatus(signal),
+          fetchRadioSupplyAlarms(signal),
+          fetchRadioNetworkProfile(signal),
+          fetchUserIoLabels(signal),
+          fetchUserIoActions(signal),
+        ]);
+      setKeying(nextKeying);
+      setSupplyAlarms(nextSupply);
+      setNetworkProfile(nextNetwork);
+      setUserIoLabels(nextLabels);
+      setUserIoActions(nextActions);
+      setEndpointError(null);
+    } catch (err) {
+      if ((err as DOMException).name !== 'AbortError') {
+        setEndpointError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setEndpointBusy(false);
     }
   }, []);
 
@@ -901,6 +1159,16 @@ export function HardwareDiagnosticsPanel() {
       window.clearInterval(id);
     };
   }, [scan]);
+
+  useEffect(() => {
+    const ac = new AbortController();
+    void loadEndpointDiagnostics(ac.signal);
+    const id = window.setInterval(() => void loadEndpointDiagnostics(), 2000);
+    return () => {
+      ac.abort();
+      window.clearInterval(id);
+    };
+  }, [loadEndpointDiagnostics]);
 
   const caps = diag?.capabilities;
   const connectionFields: Field[] = [
@@ -1096,6 +1364,45 @@ export function HardwareDiagnosticsPanel() {
           <span className="ps-card-hint">frontend Signal Intelligence and Smart NR evidence</span>
         </h4>
         <FieldGrid fields={sceneFields} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          Hardware Keying &amp; External PTT
+          <span className="ps-card-hint">
+            {endpointBusy ? 'refreshing' : 'decoded /api/cw/hardware-keying'}
+          </span>
+        </h4>
+        {endpointError && (
+          <div style={{ marginBottom: 8, fontSize: 11, color: 'var(--tx)' }}>
+            {endpointError}
+          </div>
+        )}
+        <HardwareKeyingDiagnostics status={keying} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          PA Supply Alarms
+          <span className="ps-card-hint">scaled P1/P2 supply telemetry</span>
+        </h4>
+        <SupplyAlarmDiagnostics alarms={supplyAlarms} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          Radio Network Profile
+          <span className="ps-card-hint">transport health / frame loss / hi-priority flow</span>
+        </h4>
+        <NetworkProfileDiagnostics profile={networkProfile} />
+      </div>
+
+      <div className="ps-card">
+        <h4>
+          User I/O Labels &amp; Actions
+          <span className="ps-card-hint">P2 analog/digital lines and guarded bindings</span>
+        </h4>
+        <UserIoDiagnostics labels={userIoLabels} actions={userIoActions} />
       </div>
 
       <div className="ps-card">

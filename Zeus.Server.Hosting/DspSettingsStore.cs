@@ -103,8 +103,8 @@ public sealed class DspSettingsStore : IDisposable
     // AGC top (max gain). Persisted as a nullable scalar on the existing
     // DspSettingsEntry — null means "first run, RadioService applies its
     // baseline default" so the operator's saved AGC-T survives restarts but
-    // a fresh install picks up the maintainer-chosen baseline (currently
-    // 45 dB — see RadioService.cs).
+    // a fresh install picks up the Thetis / WDSP AGC_MEDIUM baseline
+    // (currently 80 dB — see RadioService.cs).
     public double? GetAgcTopDb(string profileId = "default")
     {
         var e = _entries.FindOne(x => x.ProfileId == profileId);

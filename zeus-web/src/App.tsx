@@ -75,7 +75,6 @@ import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
 import { BOARD_LABELS } from './api/radio';
 import { useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
-import { useSwUpdatePrompt } from './pwa/useSwUpdatePrompt';
 import { CONTACTS, bandOf } from './components/design/data';
 import { bearingDeg, distanceKm } from './components/design/geo';
 import { startRealtime } from './realtime/ws-client';
@@ -110,7 +109,6 @@ import type { Contact } from './components/design/data';
 const STATE_POLL_MS = 1000;
 
 export default function App() {
-  useSwUpdatePrompt();
   const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
   const settingsInitialTab = useLayoutStore((s) => s.settingsInitialTab);
   const setSettingsView = useLayoutStore((s) => s.setSettingsView);

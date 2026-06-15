@@ -39,7 +39,6 @@ export function buildFrontendDspSceneDiagnosticsPayload(
   signal: SignalEnhanceSceneStatus | null,
   smart: SmartNrStatus | null,
 ): FrontendDspSceneDiagnosticsPayload | null {
-  if (!signal && !smart) return null;
   return {
     sourceAtUtc: latestIso(signal?.atUtc, smart?.atUtc),
     sourceClientId: frontendClientId(),

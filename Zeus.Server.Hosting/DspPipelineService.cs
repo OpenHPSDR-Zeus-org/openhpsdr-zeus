@@ -124,6 +124,20 @@ public class DspPipelineService : BackgroundService,
     /// insert handler. Single volatile write; safe from the control thread.</summary>
     public void SetRxAudioPluginHandler(RxAudioBlockHandler? handler) => _rxAudioPluginHandler = handler;
 
+    internal struct RxAudioLevelerState
+    {
+        public double GainDb;
+    }
+
+    private RxAudioLevelerState _rxAudioLeveler;
+
+    private const double RxLevelerTargetRmsDb = -18.0;
+    private const double RxLevelerGateRmsDb = -72.0;
+    private const double RxLevelerMaxBoostDb = 36.0;
+    private const double RxLevelerMaxCutDb = -24.0;
+    private const double RxLevelerBoostSlewDbPerBlock = 2.0;
+    private const double RxLevelerPeakCeiling = 0.92;
+
     internal static float SanitizeAudioSample(float sample)
     {
         if (!float.IsFinite(sample)) return 0f;
@@ -145,6 +159,85 @@ public class DspPipelineService : BackgroundService,
             if (!float.IsFinite(dbBins[i]))
                 dbBins[i] = DisplayInvalidBinDb;
         }
+    }
+
+    internal static void ApplyRxAudioLeveler(Span<float> samples, ref RxAudioLevelerState state)
+    {
+        if (samples.Length == 0) return;
+
+        double sumSq = 0.0;
+        double peak = 0.0;
+        for (int i = 0; i < samples.Length; i++)
+        {
+            float s = samples[i];
+            if (!float.IsFinite(s)) continue;
+            double a = Math.Abs(s);
+            if (a > peak) peak = a;
+            sumSq += (double)s * s;
+        }
+
+        double rms = Math.Sqrt(sumSq / samples.Length);
+        double desiredDb;
+        if (rms <= 0.0)
+        {
+            desiredDb = 0.0;
+        }
+        else
+        {
+            double rmsDb = 20.0 * Math.Log10(Math.Max(rms, 1e-12));
+            desiredDb = rmsDb < RxLevelerGateRmsDb
+                ? 0.0
+                : RxLevelerTargetRmsDb - rmsDb;
+        }
+
+        desiredDb = Math.Clamp(desiredDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+        if (peak > 1e-9)
+        {
+            double peakHeadroomDb = 20.0 * Math.Log10(RxLevelerPeakCeiling / peak);
+            desiredDb = Math.Min(desiredDb, peakHeadroomDb);
+        }
+        desiredDb = Math.Clamp(desiredDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+
+        double currentDb = double.IsFinite(state.GainDb) ? state.GainDb : 0.0;
+        double nextDb;
+        if (desiredDb < currentDb)
+        {
+            // Immediate attack against loud arrivals: the current block is
+            // inspected before gain is applied, so big signals cut gain before
+            // broadcast instead of riding the previous weak-signal boost.
+            nextDb = desiredDb;
+        }
+        else
+        {
+            // Slower weak-signal lift keeps noise from pumping while still
+            // bringing cleaned NR audio up over a few ticks.
+            nextDb = Math.Min(desiredDb, currentDb + RxLevelerBoostSlewDbPerBlock);
+        }
+
+        state.GainDb = nextDb;
+        double gain = Math.Pow(10.0, nextDb / 20.0);
+        for (int i = 0; i < samples.Length; i++)
+        {
+            float s = samples[i];
+            if (!float.IsFinite(s))
+            {
+                samples[i] = 0f;
+                continue;
+            }
+
+            samples[i] = SoftLimitRxAudioSample((float)(s * gain));
+        }
+    }
+
+    private static float SoftLimitRxAudioSample(float sample)
+    {
+        float a = Math.Abs(sample);
+        if (a <= RxLevelerPeakCeiling) return sample;
+
+        double over = (a - RxLevelerPeakCeiling) / (1.0 - RxLevelerPeakCeiling);
+        double limited = RxLevelerPeakCeiling + (1.0 - RxLevelerPeakCeiling) * Math.Tanh(over);
+        limited = Math.Min(1.0, limited);
+        return MathF.CopySign((float)limited, sample);
     }
 
     // Local-playback monitor inject (e.g. the Recorder plugin playing a clip
@@ -1198,6 +1291,7 @@ public class DspPipelineService : BackgroundService,
 
     private void ApplyStateToNewChannel(IDspEngine engine, int channelId)
     {
+        _rxAudioLeveler = default;
         var s = _radio.Snapshot();
         var nr = s.Nr ?? new NrConfig();
         var agc = s.Agc ?? new AgcConfig(AgcMode.Med);
@@ -2159,6 +2253,12 @@ public class DspPipelineService : BackgroundService,
                 var rxAudioHandler = _rxAudioPluginHandler;
                 if (rxAudioHandler is not null && audioSampleCount > 0)
                     rxAudioHandler(audioBuf.AsSpan(0, audioSampleCount), audioSampleCount, AudioOutputRateHz);
+
+                // Final receive loudness guard. WDSP AGC and NR have already
+                // run by this point (and any RX audio plugin has had its shot),
+                // so weak cleaned audio can be lifted without letting a sudden
+                // strong signal blast the speaker.
+                ApplyRxAudioLeveler(audioBuf.AsSpan(0, audioSampleCount), ref _rxAudioLeveler);
 
                 // CW sidetone is mixed (+=) into the RX block so every
                 // downstream sink — browser WS, native audio, TCI audio

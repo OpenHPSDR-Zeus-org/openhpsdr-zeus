@@ -40,17 +40,30 @@ export const AUDIO_SUITE_WINDOW_MIN_WIDTH = 480;
 export const AUDIO_SUITE_WINDOW_MIN_HEIGHT = 360;
 
 /**
- * A saved Audio Suite profile — a named snapshot of the chain config
- * (active order + parked set + master bypass). Mirrors the server
- * AudioProfileEntry. Chain-level only in v1 (no per-plugin knob state).
+ * A saved Audio Suite profile — a named snapshot of the processing route
+ * (native/VST), chain config (active order + parked set + master bypass),
+ * and any VST state blobs captured server-side. Mirrors the server
+ * AudioProfileEntry summary.
  */
 export interface AudioProfileSummary {
   name: string;
+  processingMode: 'native' | 'vst';
   order: string[];
   parked: string[];
   masterBypass: boolean;
   createdUtc: string;
   updatedUtc: string;
+}
+
+type AudioProfileSummaryResponse = Omit<AudioProfileSummary, 'processingMode'> & {
+  processingMode?: string;
+};
+
+function normalizeAudioProfileSummary(profile: AudioProfileSummaryResponse): AudioProfileSummary {
+  return {
+    ...profile,
+    processingMode: profile.processingMode === 'vst' ? 'vst' : 'native',
+  };
 }
 
 /** Result of a VST directory scan (POST /api/audio-suite/scan-vst-directory). */
@@ -155,7 +168,7 @@ interface AudioSuiteState {
   // Profile plumbing.
   loadProfiles(): Promise<void>;
   saveProfile(name: string): Promise<AudioProfileMutationResult>;
-  applyProfile(name: string): Promise<void>;
+  applyProfile(name: string): Promise<AudioProfileMutationResult>;
   deleteProfile(name: string): Promise<AudioProfileMutationResult>;
 
   // Scan a directory for VST3 plugins, register each, and refresh the
@@ -317,9 +330,9 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         try {
           const res = await fetch('/api/audio-suite/profiles');
           if (!res.ok) return;
-          const body = (await res.json()) as { profiles?: AudioProfileSummary[] };
-          const nextProfiles = body.profiles;
-          if (Array.isArray(nextProfiles)) {
+          const body = (await res.json()) as { profiles?: AudioProfileSummaryResponse[] };
+          if (Array.isArray(body.profiles)) {
+            const nextProfiles = body.profiles.map(normalizeAudioProfileSummary);
             set((s) => ({
               profiles: nextProfiles,
               profilesLoaded: true,
@@ -360,26 +373,55 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       },
 
       applyProfile: async (name) => {
+        const trimmed = name.trim();
+        if (!trimmed) return { ok: false, error: 'Profile name is required.' };
         try {
           const res = await fetch(
-            `/api/audio-suite/profiles/${encodeURIComponent(name)}/apply`,
+            `/api/audio-suite/profiles/${encodeURIComponent(trimmed)}/apply`,
             { method: 'POST' },
           );
           if (!res.ok) {
+            const error = await profileErrorMessage(res);
             // eslint-disable-next-line no-console
-            console.warn(`audio-suite profile apply rejected: ${res.status}`);
-            return;
+            console.warn(`audio-suite profile apply rejected: ${error}`);
+            return { ok: false, error };
           }
-          // Server returns the new active order; master-bypass + order
-          // also arrive via WS broadcast, but adopt the response so the
-          // rack updates instantly.
-          const body = (await res.json()) as { pluginIds?: string[] };
+          // Server returns the new active order, processing route, and
+          // master-bypass state; order + bypass also arrive via WS broadcast,
+          // but adopt the response so the rack updates instantly.
+          const body = (await res.json()) as {
+            pluginIds?: string[];
+            processingMode?: string;
+            engineAvailable?: boolean;
+            engineActive?: boolean;
+            masterBypass?: boolean;
+          };
           if (Array.isArray(body.pluginIds)) set({ chainOrder: body.pluginIds });
-          // Master bypass may have changed; refresh it from the server.
-          await get().loadMasterBypassFromServer();
+          if (body.processingMode === 'vst' || body.processingMode === 'native') {
+            set({
+              processingMode: body.processingMode,
+              vstEngineAvailable: body.engineAvailable === true,
+              vstEngineActive: body.engineActive === true,
+            });
+          }
+          if (typeof body.masterBypass === 'boolean') {
+            set({ masterBypassed: body.masterBypass });
+          }
+          set({ selectedProfile: trimmed });
+          if (
+            body.processingMode !== 'vst' &&
+            body.processingMode !== 'native'
+          ) {
+            await get().loadProcessingModeFromServer();
+          }
+          if (typeof body.masterBypass !== 'boolean') {
+            await get().loadMasterBypassFromServer();
+          }
+          return { ok: true };
         } catch (err) {
           // eslint-disable-next-line no-console
           console.warn('audio-suite profile apply threw', err);
+          return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
       },
 
