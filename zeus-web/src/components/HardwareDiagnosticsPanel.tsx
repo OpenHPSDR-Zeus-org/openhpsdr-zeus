@@ -925,6 +925,7 @@ export function HardwareDiagnosticsPanel() {
     { label: 'RX2 Step ATT', value: boolLabel(caps?.hasSteppedAttenuationRx2) },
     { label: 'Path Illustrator', value: boolLabel(caps?.supportsPathIllustrator) },
     { label: 'Max Watts', value: caps?.maxPowerWatts },
+    { label: 'Max RX Rate', value: caps ? `${caps.maxRxSampleRateHz / 1000} kHz` : null },
     { label: 'HL2 Options', value: boolLabel(caps?.hasHl2OptionalToggles) },
     { label: 'Anvelina DX OC', value: boolLabel(caps?.supportsAnvelinaDxOc) },
   ];

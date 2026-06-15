@@ -86,6 +86,7 @@ public class BoardCapabilitiesTableTests
         Assert.True(caps.HasAudioAmplifier);
         Assert.True(caps.HasSteppedAttenuationRx2);
         Assert.False(caps.SupportsPathIllustrator);
+        Assert.Equal(1_536_000, caps.MaxRxSampleRateHz);
     }
 
     [Fact]
@@ -166,6 +167,7 @@ public class BoardCapabilitiesTableTests
         Assert.True(caps.AdcSupplyMv == 33 || caps.AdcSupplyMv == 50,
             $"{board} has unexpected ADC supply {caps.AdcSupplyMv} mV");
         Assert.InRange(caps.MaxPowerWatts, 1, 2000);
+        Assert.InRange(caps.MaxRxSampleRateHz, 48_000, 1_536_000);
     }
 
     [Theory]
@@ -199,6 +201,35 @@ public class BoardCapabilitiesTableTests
         // G2-1K (1 kW) from the rest of the Saturn family (120 W).
         var caps = BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, variant);
         Assert.Equal(expectedW, caps.MaxPowerWatts);
+    }
+
+    [Theory]
+    [InlineData(HpsdrBoardKind.HermesLite2)]
+    [InlineData(HpsdrBoardKind.Metis)]
+    [InlineData(HpsdrBoardKind.Hermes)]
+    [InlineData(HpsdrBoardKind.HermesII)]
+    [InlineData(HpsdrBoardKind.Angelia)]
+    [InlineData(HpsdrBoardKind.Orion)]
+    [InlineData(HpsdrBoardKind.HermesC10)]
+    [InlineData(HpsdrBoardKind.Unknown)]
+    public void MaxRxSampleRateHz_Conservative_Boards_Default_To_384k(HpsdrBoardKind board)
+    {
+        var caps = BoardCapabilitiesTable.For(board);
+        Assert.Equal(384_000, caps.MaxRxSampleRateHz);
+    }
+
+    [Theory]
+    [InlineData(OrionMkIIVariant.G2, 1_536_000)]
+    [InlineData(OrionMkIIVariant.G2_1K, 1_536_000)]
+    [InlineData(OrionMkIIVariant.Anan7000DLE, 384_000)]
+    [InlineData(OrionMkIIVariant.Anan8000DLE, 384_000)]
+    [InlineData(OrionMkIIVariant.OrionMkII, 384_000)]
+    [InlineData(OrionMkIIVariant.AnvelinaPro3, 384_000)]
+    [InlineData(OrionMkIIVariant.RedPitaya, 384_000)]
+    public void MaxRxSampleRateHz_OrionMkII_Variant_FanOut(OrionMkIIVariant variant, int expectedHz)
+    {
+        var caps = BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, variant);
+        Assert.Equal(expectedHz, caps.MaxRxSampleRateHz);
     }
 
     public static IEnumerable<object[]> EveryBoardKind() =>

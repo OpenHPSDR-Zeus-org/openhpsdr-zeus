@@ -78,6 +78,16 @@ const IPV4_RE = /^(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[0
 const SAMPLE_RATES: SampleRate[] = [48_000, 96_000, 192_000, 384_000, 768_000, 1_536_000];
 const P1_MAX_SAMPLE_RATE = 384_000;
 
+function sampleRateCeiling(protocol: ProtocolChoice, boardMaxRateHz: number): number {
+  return protocol === 'P2'
+    ? boardMaxRateHz
+    : P1_MAX_SAMPLE_RATE;
+}
+
+function highestAllowedSampleRate(maxHz: number): SampleRate {
+  return [...SAMPLE_RATES].reverse().find((r) => r <= maxHz) ?? 48_000;
+}
+
 // Same set as the Settings RadioSelector, in the same order. Auto first so
 // the default Manual-mode connect behaviour is "let discovery decide".
 // Post-#218 Phase 4: Griffin renamed → HermesII, HermesC10 (G2E) added.
@@ -167,6 +177,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   const manualFormDefaults = useConnectStore((s) => s.manualFormDefaults);
   const setManualFormDefaults = useConnectStore((s) => s.setManualFormDefaults);
   const lastConnectedId = useConnectStore((s) => s.lastConnectedId);
+  const boardMaxRateHz = useRadioStore((s) => s.capabilities.maxRxSampleRateHz);
 
   const [radios, setRadios] = useState<RadioInfoDto[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -183,6 +194,12 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   const [manualBoard, setManualBoard] = useState<BoardKind>(manualFormDefaults.board ?? 'Auto');
   const [manualSave, setManualSave] = useState(true);
   const [manualError, setManualError] = useState<string | null>(null);
+  const manualMaxRateHz = sampleRateCeiling(manualProtocol, boardMaxRateHz);
+
+  useEffect(() => {
+    if (manualSampleRate <= manualMaxRateHz) return;
+    setManualSampleRate(highestAllowedSampleRate(manualMaxRateHz));
+  }, [manualMaxRateHz, manualSampleRate]);
 
   useEffect(() => {
     inflightRef.current = inflight;
@@ -679,6 +696,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
             setProtocol={setManualProtocol}
             sampleRate={manualSampleRate}
             setSampleRate={setManualSampleRate}
+            maxSampleRateHz={manualMaxRateHz}
             board={manualBoard}
             setBoard={setManualBoard}
             save={manualSave}
@@ -796,6 +814,7 @@ interface ManualModeProps {
   port: number; setPort: (v: number) => void;
   protocol: ProtocolChoice; setProtocol: (v: ProtocolChoice) => void;
   sampleRate: SampleRate; setSampleRate: (v: SampleRate) => void;
+  maxSampleRateHz: number;
   board: BoardKind; setBoard: (v: BoardKind) => void;
   save: boolean; setSave: (v: boolean) => void;
   error: string | null;
@@ -899,7 +918,7 @@ function ManualMode(p: ManualModeProps) {
             onChange={(e) => p.setSampleRate(Number(e.target.value) as SampleRate)}
             style={inputStyle}
           >
-            {SAMPLE_RATES.filter((r) => p.protocol === 'P2' || r <= P1_MAX_SAMPLE_RATE).map((r) => (
+            {SAMPLE_RATES.filter((r) => r <= p.maxSampleRateHz).map((r) => (
               <option key={r} value={r}>{r / 1000} kHz</option>
             ))}
           </select>

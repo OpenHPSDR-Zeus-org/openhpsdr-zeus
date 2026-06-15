@@ -71,6 +71,13 @@ public sealed record BoardCapabilities(
     /// still override per-rig in the PA settings panel; this is the
     /// out-of-the-box default the meter axis snaps to on connect.</summary>
     int MaxPowerWatts,
+    /// <summary>Maximum supported RX/DDC sample rate in Hz for this board
+    /// capability fingerprint. Protocol 1 still caps at 384 kHz, but
+    /// Protocol 2 G2-class radios can expose the full 48..1536 kHz ladder
+    /// when the hardware is known to support it. Unknown / conservative
+    /// boards report 384 kHz so persisted or UI-driven wideband requests do
+    /// not overrun hardware that has not been bench-confirmed.</summary>
+    int MaxRxSampleRateHz = 384_000,
     /// <summary>True when the board exposes the HL2-only optional toggles
     /// surfaced by <c>/api/radio/hl2-options</c> (Band Volts PWM enable,
     /// future mi0bot HL2 toggles). The frontend gates the HL2 settings panel
@@ -95,7 +102,8 @@ public sealed record BoardCapabilities(
     /// pre-connect UI doesn't show conditional panels for unknown
     /// hardware. <see cref="MaxPowerWatts"/> defaults to 100 W so the
     /// power meter has a usable axis range before the radio identifies
-    /// itself.</summary>
+    /// itself, and <see cref="MaxRxSampleRateHz"/> defaults to 384 kHz so
+    /// P2-only wideband rates stay locked until the board is identified.</summary>
     public static readonly BoardCapabilities UnknownDefaults = new(
         RxAdcCount: 1,
         MkiiBpf: false,
@@ -106,5 +114,6 @@ public sealed record BoardCapabilities(
         HasAudioAmplifier: false,
         HasSteppedAttenuationRx2: false,
         SupportsPathIllustrator: false,
-        MaxPowerWatts: 100);
+        MaxPowerWatts: 100,
+        MaxRxSampleRateHz: 384_000);
 }

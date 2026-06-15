@@ -26,6 +26,7 @@ describe('parseBoardCapabilities', () => {
       supportsPathIllustrator: false,
       hasHl2OptionalToggles: false,
       maxPowerWatts: 120,
+      maxRxSampleRateHz: 1_536_000,
     });
     expect(caps.rxAdcCount).toBe(2);
     expect(caps.mkiiBpf).toBe(true);
@@ -33,6 +34,7 @@ describe('parseBoardCapabilities', () => {
     expect(caps.hasVolts).toBe(true);
     expect(caps.supportsPathIllustrator).toBe(false);
     expect(caps.maxPowerWatts).toBe(120);
+    expect(caps.maxRxSampleRateHz).toBe(1_536_000);
   });
 
   it('falls back to UNKNOWN_BOARD_CAPABILITIES on garbage input', () => {
@@ -46,6 +48,7 @@ describe('parseBoardCapabilities', () => {
     expect(caps.adcSupplyMv).toBe(UNKNOWN_BOARD_CAPABILITIES.adcSupplyMv);
     expect(caps.hasVolts).toBe(false);
     expect(caps.maxPowerWatts).toBe(UNKNOWN_BOARD_CAPABILITIES.maxPowerWatts);
+    expect(caps.maxRxSampleRateHz).toBe(UNKNOWN_BOARD_CAPABILITIES.maxRxSampleRateHz);
   });
 
   it('rejects non-positive maxPowerWatts and falls back to default', () => {
@@ -63,6 +66,20 @@ describe('parseBoardCapabilities', () => {
   it('accepts kilowatt-class radios (G2-1K)', () => {
     const caps = parseBoardCapabilities({ maxPowerWatts: 1000 });
     expect(caps.maxPowerWatts).toBe(1000);
+  });
+
+  it('rejects impossible maxRxSampleRateHz values and falls back to default', () => {
+    expect(parseBoardCapabilities({ maxRxSampleRateHz: 0 }).maxRxSampleRateHz).toBe(
+      UNKNOWN_BOARD_CAPABILITIES.maxRxSampleRateHz,
+    );
+    expect(parseBoardCapabilities({ maxRxSampleRateHz: 3_072_000 }).maxRxSampleRateHz).toBe(
+      UNKNOWN_BOARD_CAPABILITIES.maxRxSampleRateHz,
+    );
+  });
+
+  it('accepts the G2 wideband RX/DDC ceiling', () => {
+    const caps = parseBoardCapabilities({ maxRxSampleRateHz: 1_536_000 });
+    expect(caps.maxRxSampleRateHz).toBe(1_536_000);
   });
 
   it('hasHl2OptionalToggles defaults to false and round-trips when set', () => {
