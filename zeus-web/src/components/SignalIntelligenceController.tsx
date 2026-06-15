@@ -13,6 +13,7 @@
 import { useEffect } from 'react';
 import {
   getNoiseFloor,
+  getSignalConfidence,
   recommendSignalEnhanceScene,
   useSignalEnhanceStore,
   type SignalEnhanceScene,
@@ -85,6 +86,7 @@ export function SignalIntelligenceController() {
         mode: conn.mode,
         spectrum: display.panValid ? display.panDb : null,
         floor: getNoiseFloor(),
+        confidence: getSignalConfidence(),
         hzPerPixel: display.hzPerPixel,
       });
       publishSceneStatus(scene);

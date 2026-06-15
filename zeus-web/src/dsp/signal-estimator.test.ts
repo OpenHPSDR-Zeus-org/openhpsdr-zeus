@@ -144,6 +144,69 @@ describe('signal estimator — spatial floor', () => {
     expect(busyScene.peaksPer10Khz).toBeGreaterThan(3.5);
   });
 
+  it('uses temporal confidence to reject impulsive scene changes', () => {
+    const floor = new Float32Array(WIDTH).fill(NOISE_DB);
+    const lowConfidence = new Float32Array(WIDTH);
+
+    const sparseImpulse = new Float32Array(WIDTH).fill(NOISE_DB);
+    sparseImpulse[140] = NOISE_DB + 15;
+    const impulseScene = recommendSignalEnhanceScene({
+      mode: 'USB',
+      spectrum: sparseImpulse,
+      floor,
+      confidence: lowConfidence,
+      hzPerPixel: HZ_PER_PX,
+    });
+    expect(impulseScene.profileId).toBe('voice');
+    expect(impulseScene.peakCount).toBe(1);
+    expect(impulseScene.coherentPeakCount).toBe(0);
+    expect(impulseScene.impulsiveOccupiedRatio).toBeGreaterThan(0);
+
+    const sparseCoherent = new Float32Array(WIDTH).fill(NOISE_DB);
+    const coherentConfidence = new Float32Array(WIDTH);
+    sparseCoherent[140] = NOISE_DB + 15;
+    coherentConfidence[140] = 0.8;
+    const dxScene = recommendSignalEnhanceScene({
+      mode: 'USB',
+      spectrum: sparseCoherent,
+      floor,
+      confidence: coherentConfidence,
+      hzPerPixel: HZ_PER_PX,
+    });
+    expect(dxScene.profileId).toBe('dx');
+    expect(dxScene.coherentPeakCount).toBe(1);
+    expect(dxScene.coherentMaxSnrDb).toBeCloseTo(15, 5);
+  });
+
+  it('requires coherent crowding before selecting the Contest profile', () => {
+    const floor = new Float32Array(WIDTH).fill(NOISE_DB);
+    const crowded = new Float32Array(WIDTH).fill(NOISE_DB);
+    for (let i = 20; i < WIDTH - 20; i += 8) crowded[i] = NOISE_DB + 30;
+
+    const nonCoherentScene = recommendSignalEnhanceScene({
+      mode: 'USB',
+      spectrum: crowded,
+      floor,
+      confidence: new Float32Array(WIDTH),
+      hzPerPixel: HZ_PER_PX,
+    });
+    expect(nonCoherentScene.profileId).toBe('voice');
+    expect(nonCoherentScene.peakCount).toBeGreaterThan(10);
+    expect(nonCoherentScene.coherentPeakCount).toBe(0);
+
+    const coherentConfidence = new Float32Array(WIDTH);
+    for (let i = 20; i < WIDTH - 20; i += 8) coherentConfidence[i] = 0.8;
+    const coherentScene = recommendSignalEnhanceScene({
+      mode: 'USB',
+      spectrum: crowded,
+      floor,
+      confidence: coherentConfidence,
+      hzPerPixel: HZ_PER_PX,
+    });
+    expect(coherentScene.profileId).toBe('contest');
+    expect(coherentScene.coherentPeaksPer10Khz).toBeGreaterThan(3.5);
+  });
+
   it('keeps mode-specific CW and digital profiles even on busy scenes', () => {
     const floor = new Float32Array(WIDTH).fill(NOISE_DB);
     const crowded = new Float32Array(WIDTH).fill(NOISE_DB);
