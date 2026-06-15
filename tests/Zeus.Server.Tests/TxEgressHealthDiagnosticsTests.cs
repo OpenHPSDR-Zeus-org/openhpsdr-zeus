@@ -210,7 +210,7 @@ public sealed class TxEgressHealthDiagnosticsTests
     }
 
     [Fact]
-    public void BuildTxEgressHealth_MarksPriorP2TrafficAsStaleWhenRateIsOld()
+    public void BuildTxEgressHealth_MarksIdlePriorP2TrafficAsPostTxHistory()
     {
         var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
 
@@ -224,15 +224,45 @@ public sealed class TxEgressHealthDiagnosticsTests
                 lastPacketsPerSecond: 801,
                 lastRateTimestampUtc: generated.AddSeconds(-10)));
 
+        Assert.Equal("p2-post-tx-idle", health.HealthStatus);
+        Assert.True(health.P2Attached);
+        Assert.False(health.P2Live);
+        Assert.False(health.HostTxActive);
+        Assert.Equal(10_000.0, health.P2LastActivityAgeMs.GetValueOrDefault());
+        Assert.Equal(72, health.QualityScore);
+        Assert.Equal("standby", health.QualityTone);
+        Assert.Equal("stale", health.P2PacketRateStatus);
+        Assert.Contains("p2-rate-stale", health.QualityReasons);
+        Assert.Contains("p2-post-tx-idle", health.QualityReasons);
+        Assert.Contains("last-TX history", health.DiagnosticRecommendation);
+    }
+
+    [Fact]
+    public void BuildTxEgressHealth_MarksActiveTxStaleP2TrafficAsVerifyFault()
+    {
+        var generated = new DateTimeOffset(2026, 6, 15, 14, 0, 0, TimeSpan.Zero);
+
+        var health = ZeusEndpoints.BuildTxEgressHealth(
+            generated,
+            p1RingTotalWritten: 960,
+            p1RingDropped: 0,
+            p2: P2(
+                inputComplexSamples: 240,
+                packetsSent: 1,
+                lastPacketsPerSecond: 801,
+                lastRateTimestampUtc: generated.AddSeconds(-10)),
+            hostMoxOn: true);
+
         Assert.Equal("p2-stale", health.HealthStatus);
         Assert.True(health.P2Attached);
         Assert.False(health.P2Live);
+        Assert.True(health.HostTxActive);
         Assert.Equal(10_000.0, health.P2LastActivityAgeMs.GetValueOrDefault());
         Assert.Equal(46, health.QualityScore);
         Assert.Equal("verify", health.QualityTone);
         Assert.Equal("stale", health.P2PacketRateStatus);
         Assert.Contains("p2-rate-stale", health.QualityReasons);
-        Assert.Contains("not live right now", health.DiagnosticRecommendation);
+        Assert.Contains("counters are stale", health.DiagnosticRecommendation);
     }
 
     [Fact]
