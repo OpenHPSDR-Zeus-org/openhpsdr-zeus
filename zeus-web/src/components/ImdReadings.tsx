@@ -85,11 +85,13 @@ export function ImdReadings() {
         setResult({ ok: false, reason: 'waiting for spectrum' });
         return;
       }
+      const tx = useTxStore.getState();
       const r = computeImd({
         db: s.panDb,
         width: s.panDb.length,
         centerHz: Number(s.centerHz),
         hzPerPixel: s.hzPerPixel,
+        expectedToneSpacingHz: Math.abs(tx.twoToneFreq2 - tx.twoToneFreq1),
       });
       if (r.ok) {
         const smoothed = emaRef.current ? blend(emaRef.current, r, EMA_ALPHA) : r;

@@ -37,6 +37,8 @@ export interface ImdInput {
   /** Hz at the centre pixel (width/2). */
   centerHz: number;
   hzPerPixel: number;
+  /** Optional local two-tone generator spacing, used to avoid picking IMD/spurs as fundamentals. */
+  expectedToneSpacingHz?: number;
 }
 
 export interface ImdProduct {
@@ -75,9 +77,21 @@ interface Peak {
   dbm: number;
 }
 
+interface FundamentalPair {
+  low: Peak;
+  high: Peak;
+  spacingPenaltyPx: number;
+}
+
+interface CandidateReadout {
+  readout: ImdReadout;
+  score: number;
+}
+
 // Tones closer than this (pixels) can't be resolved — Thetis uses the same
 // pixel_diff > 10 gate before attempting to place the IMD products.
 const MIN_TONE_SEP_PX = 11;
+const MAX_EXPECTED_PAIR_CANDIDATES = 24;
 
 /** All local maxima, strongest first. Noise bumps are fine — findImd only
  *  considers candidates near each predicted product position. */
@@ -125,38 +139,67 @@ function findImd(
   return best;
 }
 
-/**
- * Locate the two fundamentals + IMD3/IMD5 products in a panadapter spectrum and
- * compute IMD suppression. Returns {ok:false, reason} when the tones can't be
- * resolved (no signal, tones merged, or zoomed too far out).
- */
-export function computeImd(input: ImdInput): ImdResult {
-  const { db, width, centerHz, hzPerPixel } = input;
-  if (!width || width < 16 || hzPerPixel <= 0) return { ok: false, reason: 'no spectrum' };
+function pairFromPeaks(a: Peak, b: Peak, spacingPenaltyPx = 0): FundamentalPair {
+  return a.x <= b.x
+    ? { low: a, high: b, spacingPenaltyPx }
+    : { low: b, high: a, spacingPenaltyPx };
+}
 
-  const peaks = findPeaks(db, width);
-  if (peaks.length < 2) return { ok: false, reason: 'no signal' };
-
-  // Two fundamentals: the strongest peak, plus the strongest peak far enough
-  // away to be the other tone (not a shoulder of the same blob).
+function defaultFundamentalPair(peaks: Peak[]): FundamentalPair | null {
   const f0 = peaks[0];
-  if (f0 === undefined) return { ok: false, reason: 'no signal' };
-  let f1: Peak | null = null;
+  if (f0 === undefined) return null;
   for (let i = 1; i < peaks.length; i++) {
     const p = peaks[i];
     if (p === undefined) continue;
-    if (Math.abs(p.x - f0.x) >= MIN_TONE_SEP_PX) {
-      f1 = p;
-      break;
+    if (Math.abs(p.x - f0.x) >= MIN_TONE_SEP_PX) return pairFromPeaks(f0, p);
+  }
+  return null;
+}
+
+function expectedSpacingPx(input: ImdInput): number | null {
+  const expectedHz = input.expectedToneSpacingHz;
+  if (!Number.isFinite(expectedHz) || expectedHz === undefined || expectedHz <= 0) return null;
+  const px = Math.abs(expectedHz / input.hzPerPixel);
+  return px >= MIN_TONE_SEP_PX ? px : null;
+}
+
+function expectedFundamentalPairs(peaks: Peak[], expectedPx: number): FundamentalPair[] {
+  const tolerancePx = Math.max(3, expectedPx * 0.08);
+  const search = peaks.slice(0, Math.min(peaks.length, MAX_EXPECTED_PAIR_CANDIDATES));
+  const pairs: FundamentalPair[] = [];
+  for (let i = 0; i < search.length; i++) {
+    const a = search[i];
+    if (!a) continue;
+    for (let j = i + 1; j < search.length; j++) {
+      const b = search[j];
+      if (!b) continue;
+      const distancePx = Math.abs(a.x - b.x);
+      const spacingPenaltyPx = Math.abs(distancePx - expectedPx);
+      if (distancePx >= MIN_TONE_SEP_PX && spacingPenaltyPx <= tolerancePx) {
+        pairs.push(pairFromPeaks(a, b, spacingPenaltyPx));
+      }
     }
   }
-  if (!f1) return { ok: false, reason: 'tones merged — increase zoom' };
+  pairs.sort((a, b) => {
+    const spacing = a.spacingPenaltyPx - b.spacingPenaltyPx;
+    if (spacing !== 0) return spacing;
+    return Math.min(b.low.dbm, b.high.dbm) - Math.min(a.low.dbm, a.high.dbm);
+  });
+  return pairs;
+}
 
-  const pixelDiff = Math.abs(f0.x - f1.x);
-  if (pixelDiff <= 10) return { ok: false, reason: 'increase zoom' };
+function measurePair(
+  peaks: Peak[],
+  pair: FundamentalPair,
+  centerHz: number,
+  hzPerPixel: number,
+  width: number,
+): CandidateReadout | null {
+  const lowX = pair.low.x;
+  const highX = pair.high.x;
+  const pixelDiff = highX - lowX;
+  if (pixelDiff <= 10) return null;
 
-  const lowX = Math.min(f0.x, f1.x);
-  const highX = Math.max(f0.x, f1.x);
   const midX = lowX + pixelDiff / 2;
   const lowGroup = peaks.filter((p) => p.x < midX);
   const highGroup = peaks.filter((p) => p.x > midX);
@@ -167,9 +210,7 @@ export function computeImd(input: ImdInput): ImdResult {
   const i3H = findImd(highGroup, 3, pixelDiff, highX, false);
   const i5L = findImd(lowGroup, 5, pixelDiff, lowX, true);
   const i5H = findImd(highGroup, 5, pixelDiff, highX, false);
-  if (!fL || !fH || !i3L || !i3H || !i5L || !i5H) {
-    return { ok: false, reason: 'IMD peaks off-screen — widen span' };
-  }
+  if (!fL || !fH || !i3L || !i3H || !i5L || !i5H) return null;
 
   const dbcMin = Math.min(fL.dbm, fH.dbm);
   const imd3max = Math.max(i3L.dbm, i3H.dbm);
@@ -178,10 +219,11 @@ export function computeImd(input: ImdInput): ImdResult {
   const imd5dBc = dbcMin - imd5max;
   const oip3 = dbcMin + imd3dBc / 2;
   const oip5 = dbcMin + imd5dBc / 2;
-
   const hz = (x: number) => centerHz + (x - width / 2) * hzPerPixel;
-
-  return {
+  const balancePenalty = Math.abs(fL.dbm - fH.dbm) * 0.2;
+  const productScore = Math.max(-20, Math.min(60, imd3dBc)) * 0.25
+    + Math.max(-20, Math.min(80, imd5dBc)) * 0.1;
+  const readout: ImdReadout = {
     ok: true,
     f0LowerDbm: fL.dbm,
     f0UpperDbm: fH.dbm,
@@ -205,4 +247,44 @@ export function computeImd(input: ImdInput): ImdResult {
     oip3,
     oip5,
   };
+
+  return {
+    readout,
+    score: Math.min(fL.dbm, fH.dbm) + productScore - balancePenalty - pair.spacingPenaltyPx,
+  };
+}
+
+/**
+ * Locate the two fundamentals + IMD3/IMD5 products in a panadapter spectrum and
+ * compute IMD suppression. Returns {ok:false, reason} when the tones can't be
+ * resolved (no signal, tones merged, or zoomed too far out).
+ */
+export function computeImd(input: ImdInput): ImdResult {
+  const { db, width, centerHz, hzPerPixel } = input;
+  if (!width || width < 16 || hzPerPixel <= 0) return { ok: false, reason: 'no spectrum' };
+
+  const peaks = findPeaks(db, width);
+  if (peaks.length < 2) return { ok: false, reason: 'no signal' };
+
+  const expectedPx = expectedSpacingPx(input);
+  if (expectedPx !== null) {
+    const candidates = expectedFundamentalPairs(peaks, expectedPx);
+    if (candidates.length === 0) {
+      return { ok: false, reason: 'two-tone spacing not found — adjust span' };
+    }
+
+    const measured = candidates
+      .map((pair) => measurePair(peaks, pair, centerHz, hzPerPixel, width))
+      .filter((r): r is CandidateReadout => r !== null)
+      .sort((a, b) => b.score - a.score);
+    const best = measured[0];
+    if (best) return best.readout;
+    return { ok: false, reason: 'IMD peaks off-screen — widen span' };
+  }
+
+  const pair = defaultFundamentalPair(peaks);
+  if (!pair) return { ok: false, reason: 'tones merged — increase zoom' };
+  const measured = measurePair(peaks, pair, centerHz, hzPerPixel, width);
+  if (!measured) return { ok: false, reason: 'IMD peaks off-screen — widen span' };
+  return measured.readout;
 }

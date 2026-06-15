@@ -52,6 +52,56 @@ describe('computeImd', () => {
     expect(r.f0UpperHz).toBeCloseTo(centerHz + 1900, 0);
   });
 
+  it('uses expected generator spacing to avoid picking a strong IMD product as a fundamental', () => {
+    const db = spectrum(width, -120, [
+      [582, 0], // fundamental low
+      [702, -0.5], // fundamental high
+      [462, -0.2], // very strong IMD3 lower product
+      [822, -30], // IMD3 upper
+      [342, -35], // IMD5 lower
+      [942, -45], // IMD5 upper
+    ]);
+
+    const withoutSpacing = computeImd({ db, width, centerHz, hzPerPixel });
+    expect(withoutSpacing.ok).toBe(false);
+
+    const r = computeImd({
+      db,
+      width,
+      centerHz,
+      hzPerPixel,
+      expectedToneSpacingHz: 1200,
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+
+    expect(r.f0LowerHz).toBeCloseTo(centerHz + 700, 0);
+    expect(r.f0UpperHz).toBeCloseTo(centerHz + 1900, 0);
+    expect(r.imd3.dbc).toBeCloseTo(-0.3, 1);
+  });
+
+  it('reports a spacing miss when displayed peaks do not match the generator', () => {
+    const db = spectrum(width, -120, [
+      [582, 0],
+      [702, 0],
+      [462, -30],
+      [822, -30],
+      [342, -50],
+      [942, -50],
+    ]);
+
+    const r = computeImd({
+      db,
+      width,
+      centerHz,
+      hzPerPixel,
+      expectedToneSpacingHz: 1500,
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toContain('two-tone spacing not found');
+  });
+
   it('reports a miss when the tones are merged / zoomed too far out', () => {
     // Two peaks only 5 px apart — below the resolve threshold.
     const db = spectrum(width, -120, [
