@@ -51,6 +51,8 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
   const micAv = useTxStore((s) => s.micAv);
   const lvlrGr = useTxStore((s) => s.lvlrGr);
   const cfcGr = useTxStore((s) => s.cfcGr);
+  const compPk = useTxStore((s) => s.compPk);
+  const compAv = useTxStore((s) => s.compAv);
   const alcGr = useTxStore((s) => s.alcGr);
   const outPk = useTxStore((s) => s.outPk);
   const outAv = useTxStore((s) => s.outAv);
@@ -69,6 +71,8 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
     micAv,
     lvlrGr,
     cfcGr,
+    compPk,
+    compAv,
     alcGr,
     outPk,
     outAv,
@@ -188,7 +192,10 @@ export function TxFidelityAdvisor(props: TxFidelityAdvisorProps) {
         <span style={{ whiteSpace: 'nowrap' }}>
           DENS {fmtDensity(analysis.liveSpectralDensity, analysis.targetSpectralDensity)}
         </span>
-        <span style={{ whiteSpace: 'nowrap' }}>CREST {fmtCrest(analysis.outCrestDb ?? analysis.micCrestDb)}</span>
+        <span style={{ whiteSpace: 'nowrap' }}>
+          CREST {fmtCrest(analysis.outCrestDb ?? analysis.compCrestDb ?? analysis.micCrestDb)}
+        </span>
+        <span style={{ whiteSpace: 'nowrap' }}>COMP {fmtCrest(analysis.compCrestDb)}</span>
         <span style={{ whiteSpace: 'nowrap' }}>ALC {fmtGr(analysis.alcGr)}</span>
         <span style={{ whiteSpace: 'nowrap' }}>LVL {fmtGr(analysis.lvlrGr)}</span>
         <span style={{ whiteSpace: 'nowrap' }}>CFC {fmtGr(analysis.cfcGr)}</span>
