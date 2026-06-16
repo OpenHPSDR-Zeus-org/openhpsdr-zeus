@@ -253,6 +253,7 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             // Make "Use My Current Location" work on the desktop webview (no HTML5
             // Geolocation API) via a native-first shim with a coarse IP fallback.
             PatchGeolocationFallback();
+            PatchSettingsPersistence();
 
             lock (_gate) { _phase = HamClockPhase.Installed; _busy = false; }
             Append("HamClock installed. Click Start to launch the panel.");
@@ -308,6 +309,7 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             // Covers pre-existing installs + re-injects after a dist/ rebuild that
             // regenerated index.html without the marker (idempotent).
             PatchGeolocationFallback();
+            PatchSettingsPersistence();
 
             var psi = MakePsi("node", "server.js", InstallDir);
             // Belt-and-suspenders env (overridden by .env, but harmless).
@@ -869,6 +871,99 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             catch (Exception ex)
             {
                 Append($"  (geolocation fallback patch skipped for {rel}: {ex.Message})");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Inject a server-backed-localStorage shim into HamClock's served HTML so its
+    /// settings survive restarts. The desktop webview (WebKit) partitions the
+    /// cross-origin HamClock iframe's localStorage as third-party / ephemeral
+    /// storage, so it is wiped every launch (settings reset, first-visit popup).
+    /// HamClock's own SETTINGS_SYNC saves to disk but does not reliably restore
+    /// into localStorage on boot. This shim — running BEFORE HamClock's deferred
+    /// module bundle — synchronously pulls /api/settings into localStorage (so the
+    /// app boots as a returning visitor with settings intact) and mirrors
+    /// openhamclock_*/ohc_* writes back to the server (debounced). Same-origin
+    /// (the sidecar's own port), so no CORS. Idempotent via the ZEUS_SETTINGS_PERSIST
+    /// marker; re-injected after any rebuild. Requires SETTINGS_SYNC=true (set by
+    /// EnsureEnvPort) for the /api/settings store to be live.
+    /// </summary>
+    private void PatchSettingsPersistence()
+    {
+        const string shim =
+@"<!-- ZEUS_SETTINGS_PERSIST: server-backed localStorage so HamClock settings survive the webview's ephemeral iframe storage (KB2UKA) -->
+<script>
+(function () {
+  function ok(k) {
+    return !!k && (k.indexOf('openhamclock_') === 0 || k.indexOf('ohc_') === 0)
+      && k !== 'openhamclock_profiles' && k !== 'openhamclock_activeProfile';
+  }
+  // 1) PULL — synchronously restore persisted settings into localStorage BEFORE
+  //    HamClock's deferred module bundle reads them, so the app boots as a
+  //    returning visitor (settings present, no first-visit popup). Same-origin
+  //    request to the sidecar's own /api/settings (SETTINGS_SYNC persists to disk).
+  try {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/settings', false);
+    xhr.send(null);
+    if (xhr.status >= 200 && xhr.status < 300) {
+      var data = JSON.parse(xhr.responseText || '{}');
+      for (var k in data) {
+        if (Object.prototype.hasOwnProperty.call(data, k) && ok(k) && typeof data[k] === 'string') {
+          try { localStorage.setItem(k, data[k]); } catch (e) {}
+        }
+      }
+    }
+  } catch (e) {}
+  // 2) MIRROR — persist openhamclock_*/ohc_* writes back to the server (debounced).
+  var timer = null;
+  function push() {
+    timer = null;
+    try {
+      var out = {};
+      for (var i = 0; i < localStorage.length; i++) {
+        var key = localStorage.key(i);
+        if (ok(key)) out[key] = localStorage.getItem(key);
+      }
+      fetch('/api/settings', { method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(out) }).catch(function () {});
+    } catch (e) {}
+  }
+  try {
+    var origSet = localStorage.setItem.bind(localStorage);
+    localStorage.setItem = function (k, v) {
+      origSet(k, v);
+      if (ok(k)) { if (timer) clearTimeout(timer); timer = setTimeout(push, 800); }
+    };
+  } catch (e) {}
+})();
+</script>
+";
+
+        foreach (var rel in new[] { "dist", "public" })
+        {
+            try
+            {
+                var file = Path.Combine(InstallDir, rel, "index.html");
+                if (!File.Exists(file)) continue;
+                var src = File.ReadAllText(file);
+                if (src.Contains("ZEUS_SETTINGS_PERSIST", StringComparison.Ordinal)) continue; // already patched
+                const string anchor = "</head>";
+                var idx = src.IndexOf(anchor, StringComparison.Ordinal);
+                if (idx < 0)
+                {
+                    Append($"  (note: couldn't inject settings-persistence into {rel}/index.html — </head> not found)");
+                    continue;
+                }
+                src = src.Insert(idx, shim);
+                File.WriteAllText(file, src);
+                Append($"Patched HamClock settings persistence into {rel}/index.html.");
+            }
+            catch (Exception ex)
+            {
+                Append($"  (settings-persistence patch skipped for {rel}: {ex.Message})");
             }
         }
     }
