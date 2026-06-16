@@ -2002,6 +2002,7 @@
   letter-spacing: 0;
   line-height: 0.96;
   text-shadow: 0 0 10px rgba(78,166,255,0.18);
+  transform: translateY(2px);
 }
 .freq-display.compact .freq-digits .digit {
   padding: 0;
