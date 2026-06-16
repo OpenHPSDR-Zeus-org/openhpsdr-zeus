@@ -484,6 +484,14 @@ public static class ZeusHost
         builder.Services.AddHostedService(sp => sp.GetRequiredService<SpotBroadcastService>());
         builder.Services.AddSingleton<TciManagementService>();
 
+        // HamClockService — optional, on-demand embed of OpenHamClock (MIT,
+        // github.com/accius/openhamclock) as a Zeus panel. Entirely inert until
+        // the operator clicks Install in Settings → HamClock; nothing here
+        // touches the radio / DSP / TX path. Registered as a hosted service
+        // only so its sidecar Node process is killed on Zeus shutdown.
+        builder.Services.AddSingleton<HamClockService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<HamClockService>());
+
         var app = builder.Build();
 
         // Surface the listening endpoints up front so the operator can pick one
