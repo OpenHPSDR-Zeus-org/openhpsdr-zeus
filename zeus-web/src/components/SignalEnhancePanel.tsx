@@ -13,19 +13,16 @@
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
 //
-// Display-tab surface that exposes the signal-enhance engine (Christian Suarez
-// N9WAR's pop / snap / peak-marker work, commit 8d949e2e). The engine, GL
-// pop-remap, snap-lock gesture and peak overlay all landed wired and waiting on
-// the store flags — but no UI control ever wrote them, so the features were
-// dark. This panel is the missing writer: it toggles `popEnabled` /
-// `snapEnabled` on the same store the renderers and gesture already read.
+// Display-tab surface for the signal-enhance engine (Christian Suarez N9WAR's
+// pop / snap / peak-marker work, commit 8d949e2e). Only **Signal Pop** is
+// exposed: it toggles `popEnabled` on the same store the GL pop-remap reads.
 //
-// Peak markers are intentionally coupled to Snap (PeakMarkerOverlay gates on
-// `snapEnabled`): the ticks show where a snap click will land, so they only
-// make sense while Snap is engaged. An independent peak-marker flag is a
-// store-shape + default change that needs maintainer sign-off — see the branch
-// notes — so it is deliberately not added here.
+// Snap-to-signal (and its coupled peak markers — PeakMarkerOverlay gates on
+// `snapEnabled`) was pulled from the UI per maintainer (KB2UKA) direction. The
+// engine / snap-lock gesture / overlay code stays in place but dormant, and
+// this panel forces `snapEnabled` off so it can't linger enabled with no toggle.
 
+import { useEffect } from 'react';
 import { useSignalEnhanceStore } from '../dsp/signal-estimator';
 
 type ToggleRow = {
@@ -38,8 +35,13 @@ type ToggleRow = {
 export function SignalEnhancePanel() {
   const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
   const setPopEnabled = useSignalEnhanceStore((s) => s.setPopEnabled);
-  const snapEnabled = useSignalEnhanceStore((s) => s.snapEnabled);
   const setSnapEnabled = useSignalEnhanceStore((s) => s.setSnapEnabled);
+
+  // Snap-to-signal is no longer exposed in the UI — force it off so a
+  // previously-enabled state (and its peak markers) can't linger with no toggle.
+  useEffect(() => {
+    setSnapEnabled(false);
+  }, [setSnapEnabled]);
 
   const rows: ToggleRow[] = [
     {
@@ -48,12 +50,6 @@ export function SignalEnhancePanel() {
       enabled: popEnabled,
       onToggle: setPopEnabled,
     },
-    {
-      label: 'Snap to Signal',
-      help: 'A tune click jumps to the nearest detected carrier instead of the exact pixel. Also shows peak markers — small ticks at each detected signal so you can see where a click will land.',
-      enabled: snapEnabled,
-      onToggle: setSnapEnabled,
-    },
   ];
 
   return (
@@ -61,7 +57,7 @@ export function SignalEnhancePanel() {
       <div style={sectionHead}>
         <h3 style={sectionH3}>Signal Enhance</h3>
         <p style={sectionP}>
-          Display-only aids that surface weak signals and help you land tune clicks on a carrier. They never touch transmit and pause during TX.
+          A display-only aid that lifts weak signals out of the noise on the panadapter and waterfall. It never touches transmit and pauses during TX.
         </p>
       </div>
 
