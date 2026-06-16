@@ -1195,11 +1195,75 @@
 .tuning-cursor {
   position: absolute;
   top: 0; left: 50%; bottom: 0;
+  z-index: 5;
   width: 2px;
   background: var(--tx);
   box-shadow: 0 0 6px var(--tx);
   opacity: 0.8;
   pointer-events: none;
+}
+
+/* Thetis-style hover crosshair + filter-passband preview (see
+   FilterCursorOverlay.tsx). Translucent grey band mirrors Thetis's
+   65/255-alpha white filter brush; the vertical line uses the --accent focus
+   token (this is an interactive selection affordance) and marks the exact
+   click-tune frequency. All children translate in px from the surface origin
+   and never intercept pointer events. Fades via opacity on enter/leave. */
+.filter-cursor {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  pointer-events: none;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.filter-cursor-band {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: 0;
+  width: 0;
+  will-change: transform, width;
+  background: rgba(255, 255, 255, 0.14);
+  border-left: 1px solid rgba(255, 255, 255, 0.30);
+  border-right: 1px solid rgba(255, 255, 255, 0.30);
+  box-sizing: border-box;
+}
+.filter-cursor-v {
+  position: absolute;
+  top: 0; bottom: 0;
+  left: -1px;
+  width: 1px;
+  will-change: transform;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  opacity: 0.9;
+}
+.filter-cursor-h {
+  position: absolute;
+  left: 0; right: 0;
+  top: 0;
+  height: 1px;
+  will-change: transform;
+  background: var(--accent);
+  opacity: 0.25;
+}
+.filter-cursor-readout {
+  position: absolute;
+  top: 0; left: 0;
+  will-change: transform;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: var(--r-md);
+  background: rgba(8, 12, 20, 0.82);
+  color: var(--accent);
+  font-family: 'Archivo Narrow', sans-serif;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+  white-space: nowrap;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
 }
 
 /* ===== Frequency display (panel) ===== */
