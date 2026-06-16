@@ -43,7 +43,7 @@
 // License for details.
 
 import { useEffect, useRef } from 'react';
-import { useDisplayStore } from '../state/display-store';
+import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import * as viewCenter from '../state/view-center';
@@ -82,14 +82,15 @@ function formatMHz(hz: number, strideHz: number): string {
 // and sits ±cw_pitch from centre in CWU/CWL.
 type FreqAxisProps = {
   receiver?: 'A' | 'B';
+  stitched?: boolean;
 };
 
-export function FreqAxis({ receiver = 'A' }: FreqAxisProps = {}) {
-  const centerHz = useDisplayStore((s) => s.centerHz);
-  const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
+export function FreqAxis({ receiver = 'A', stitched = false }: FreqAxisProps = {}) {
+  const centerHz = useDisplayStore((s) => selectDisplaySlice(s, receiver).centerHz);
+  const hzPerPixel = useDisplayStore((s) => selectDisplaySlice(s, receiver).hzPerPixel);
   // Header width — present even on frames whose pan payload is invalid, so
   // the axis doesn't unmount during a brief invalid-frame run.
-  const width = useDisplayStore((s) => s.width);
+  const width = useDisplayStore((s) => selectDisplaySlice(s, receiver).width);
   // NOTE deliberately NO vfoHz selector: during a tuning gesture vfoHz
   // updates at input rate and a selector here would re-render this
   // component at display rate. The draw-bus callback reads it directly.
@@ -98,15 +99,18 @@ export function FreqAxis({ receiver = 'A' }: FreqAxisProps = {}) {
   const markerRef = useRef<HTMLDivElement | null>(null);
   const rulerRef = useRef<HTMLDivElement | null>(null);
 
-  useRulerPanGesture(rulerRef, !!width && hzPerPixel > 0);
+  useRulerPanGesture(rulerRef, receiver === 'A' && !!width && hzPerPixel > 0);
 
   useEffect(() => {
     const update = () => {
-      const s = useDisplayStore.getState();
+      const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
       if (!s.width || s.hzPerPixel <= 0) return;
       const spanHz = s.width * s.hzPerPixel;
+      const conn = useConnectionStore.getState();
       const layoutCenter = Number(s.centerHz);
-      const view = viewCenter.isInitialized()
+      const view = receiver === 'B'
+        ? layoutCenter
+        : viewCenter.isInitialized()
         ? viewCenter.getViewCenterHz()
         : layoutCenter;
       // Ticks were laid out around layoutCenter; sliding the strip by the
@@ -126,7 +130,6 @@ export function FreqAxis({ receiver = 'A' }: FreqAxisProps = {}) {
         // marker PINNED to the zero line during a glide (vfo and target
         // move in lockstep at input time) instead of leading off it and
         // easing back (operator feedback, 2026-06-12).
-        const conn = useConnectionStore.getState();
         const vfoHz = receiver === 'B' ? conn.vfoBHz : conn.vfoHz;
         const dialOffsetHz =
           receiver === 'B'
@@ -143,7 +146,7 @@ export function FreqAxis({ receiver = 'A' }: FreqAxisProps = {}) {
       if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz) schedule();
     });
     const unsubFrame = useDisplayStore.subscribe((s, prev) => {
-      if (s.lastSeq !== prev.lastSeq) schedule();
+      if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(prev, receiver).lastSeq) schedule();
     });
     schedule();
     return () => {
@@ -158,12 +161,12 @@ export function FreqAxis({ receiver = 'A' }: FreqAxisProps = {}) {
 
   const spanHz = width * hzPerPixel;
   const stride = pickStrideHz(spanHz, 6);
+  const conn = useConnectionStore.getState();
   const center = Number(centerHz);
   const startHz = center - spanHz / 2;
   const endHz = center + spanHz / 2;
   // Initial (pre-draw-bus) marker position; the callback refines it against
   // the animated view-center on the next frame.
-  const conn = useConnectionStore.getState();
   const selectedVfoHz = receiver === 'B' ? conn.vfoBHz : conn.vfoHz;
   const dialPct = ((selectedVfoHz - startHz) / spanHz) * 100;
 
@@ -209,11 +212,13 @@ export function FreqAxis({ receiver = 'A' }: FreqAxisProps = {}) {
         marker lives inside the (amber) passband overlay, so it uses the
         accent blue + a 2px width to read clearly against the amber fill.
        */}
-      <div
-        ref={markerRef}
-        className="pointer-events-none absolute inset-y-0 z-[15] -translate-x-1/2"
-        style={{ left: `${dialPct}%`, width: 2, background: 'var(--accent)' }}
-      />
+      {!stitched && (
+        <div
+          ref={markerRef}
+          className="pointer-events-none absolute inset-y-0 z-[15] -translate-x-1/2"
+          style={{ left: `${dialPct}%`, width: 2, background: 'var(--accent)' }}
+        />
+      )}
     </>
   );
 }

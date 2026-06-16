@@ -45,7 +45,7 @@
 import { createContext, useContext, useEffect, type RefObject } from 'react';
 import { setVfo, setVfoB, setZoom, ZOOM_MAX, ZOOM_MIN, type ZoomLevel } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
-import { useDisplayStore } from '../state/display-store';
+import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { computeSnapToLineHz, getSnapHistorySpectrum, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { armSnapLock } from './snap-lock';
 import { useNotchStore } from '../state/notch-store';
@@ -76,9 +76,8 @@ const NOTCH_CLICK_WIDTH_HZ = 150;
 // deltas to one discrete tick per this many pixels of deltaY.
 const WHEEL_NOTCH_PX = 40;
 
-// Exported so the hover filter-cursor preview (FilterCursorOverlay) resolves
-// the exact frequency a click will commit — the readout can't lie about where
-// you'll land if it runs the same snap the gesture does.
+// Grid snap helper for ordinary click/drag tuning. Snap-to-signal goes through
+// resolvePanTuneTarget so click and hover share the same carrier target.
 export function snapHz(hz: number): number {
   if (!Number.isFinite(hz)) return 0;
   const snapped = Math.round(hz / PAN_STEP_HZ) * PAN_STEP_HZ;
@@ -105,8 +104,145 @@ export const SpectrumWheelActionsContext = createContext<SpectrumWheelActions>({
 
 export type SpectrumReceiver = 'A' | 'B';
 
-function readView(): { centerHz: number; spanHz: number } | null {
-  const s = useDisplayStore.getState();
+export type PanTuneTarget = {
+  tuneHz: number;
+  snappedToSignal: boolean;
+  fromLive: boolean;
+  anchorBodyHz: number;
+};
+
+export function resolvePanTuneTarget(
+  lineHz: number,
+  includeHistory = true,
+  receiver: SpectrumReceiver = 'A',
+): PanTuneTarget {
+  const fallbackHz = snapHz(lineHz);
+  const fallback = {
+    tuneHz: fallbackHz,
+    snappedToSignal: false,
+    fromLive: false,
+    anchorBodyHz: Number.isFinite(lineHz) ? lineHz : fallbackHz,
+  };
+  if (!Number.isFinite(lineHz)) return fallback;
+
+  const enhance = useSignalEnhanceStore.getState();
+  if (!enhance.snapEnabled) return fallback;
+
+  const ds = selectDisplaySlice(useDisplayStore.getState(), receiver);
+  if (!ds.panDb || ds.hzPerPixel <= 0) return fallback;
+
+  const maxRadiusHz = Math.min(ds.hzPerPixel * SNAP_RADIUS_PX, enhance.snapRadiusHz);
+  const mode = useConnectionStore.getState().mode;
+  const centerHz = Number(ds.centerHz);
+  const liveHz = computeSnapToLineHz(
+    ds.panDb,
+    centerHz,
+    ds.hzPerPixel,
+    mode,
+    lineHz,
+    maxRadiusHz,
+  );
+  if (liveHz != null) {
+    return {
+      tuneHz: clampHz(Math.round(liveHz)),
+      snappedToSignal: true,
+      fromLive: true,
+      anchorBodyHz: lineHz,
+    };
+  }
+
+  if (includeHistory && receiver === 'A') {
+    const history = getSnapHistorySpectrum();
+    if (history) {
+      const historyHz = computeSnapToLineHz(history, centerHz, ds.hzPerPixel, mode, lineHz, maxRadiusHz);
+      if (historyHz != null) {
+        return {
+          tuneHz: clampHz(Math.round(historyHz)),
+          snappedToSignal: true,
+          fromLive: false,
+          anchorBodyHz: lineHz,
+        };
+      }
+    }
+  }
+
+  return fallback;
+}
+
+type VfoNudgeController = {
+  commandedHz: () => number;
+  nudgeVfo: (deltaHz: number) => void;
+  cancel: () => void;
+};
+
+export function createVfoNudgeController(receiver: SpectrumReceiver = 'A'): VfoNudgeController {
+  const receiverIsB = receiver === 'B';
+  let pendingHz: number | null = null;
+  let pendingAbort: AbortController | null = null;
+  let pendingRaf = 0;
+
+  const readVfo = () => {
+    const s = useConnectionStore.getState();
+    return receiverIsB ? s.vfoBHz : s.vfoHz;
+  };
+  const writeVfo = (hz: number) => {
+    useConnectionStore.setState(receiverIsB ? { vfoBHz: hz } : { vfoHz: hz });
+  };
+  const postVfo = (hz: number, signal?: AbortSignal) =>
+    receiverIsB ? setVfoB(hz, signal) : setVfo(hz, signal);
+  const tunesOffCenter = () => receiverIsB || useConnectionStore.getState().ctunEnabled;
+  const commandedHz = () => pendingHz ?? readVfo();
+
+  const flushPending = () => {
+    pendingRaf = 0;
+    const hz = pendingHz;
+    pendingHz = null;
+    if (hz == null) return;
+    viewCenter.markOptimisticTune();
+    writeVfo(hz);
+    pendingAbort?.abort();
+    const ctrl = new AbortController();
+    pendingAbort = ctrl;
+    postVfo(hz, ctrl.signal).catch(() => {});
+  };
+
+  const scheduleFlush = () => {
+    if (pendingRaf === 0) pendingRaf = requestAnimationFrame(flushPending);
+  };
+
+  const nudgeVfo = (deltaHz: number) => {
+    const cur = commandedHz();
+    const next = clampHz(cur + deltaHz);
+    if (tunesOffCenter()) {
+      viewCenter.markOptimisticTune();
+    } else {
+      viewCenter.nudgeTargetHz(next - cur);
+    }
+    writeVfo(next);
+    pendingHz = next;
+    scheduleFlush();
+  };
+
+  const cancel = () => {
+    if (pendingRaf !== 0) {
+      cancelAnimationFrame(pendingRaf);
+      pendingRaf = 0;
+    }
+    pendingAbort?.abort();
+    pendingAbort = null;
+    pendingHz = null;
+  };
+
+  return { commandedHz, nudgeVfo, cancel };
+}
+
+export type PanTuneGestureOptions = {
+  touchMode?: 'normal' | 'pinch-only';
+  tuneReceiver?: SpectrumReceiver;
+};
+
+function readView(receiver: SpectrumReceiver = 'A'): { centerHz: number; spanHz: number } | null {
+  const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
   if (!s.panDb || s.hzPerPixel <= 0) return null;
   return {
     centerHz: Number(s.centerHz),
@@ -124,12 +260,15 @@ function readView(): { centerHz: number; spanHz: number } | null {
 export function usePanTuneGesture(
   canvasRef: RefObject<HTMLCanvasElement | null>,
   receiver: SpectrumReceiver = 'A',
+  options: PanTuneGestureOptions = {},
 ) {
   const wheelActions = useContext(SpectrumWheelActionsContext);
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const receiverIsB = receiver === 'B';
+    const tuneReceiver = options.tuneReceiver ?? receiver;
+    const receiverIsB = tuneReceiver === 'B';
+    const touchPinchOnly = options.touchMode === 'pinch-only';
 
     type Drag = { startX: number; startHz: number; spanHz: number; moved: boolean };
     type MapDrag = { lastX: number; lastY: number };
@@ -305,6 +444,10 @@ export function usePanTuneGesture(
         e.preventDefault();
         return;
       }
+      if (touchPinchOnly && e.pointerType === 'touch') {
+        e.preventDefault();
+        return;
+      }
       // alt held → drag the background map instead of panning the spectrum.
       // Mirrors M-hold drag behavior without the pointer-events:none swap.
       if (e.altKey) {
@@ -314,7 +457,7 @@ export function usePanTuneGesture(
         canvas.style.cursor = 'grabbing';
         return;
       }
-      const view = readView();
+      const view = readView(receiver);
       if (!view) return;
       // NOTCH armed: paint a notch band instead of tuning. Capture the start
       // frequency; move/up build the band.
@@ -350,7 +493,7 @@ export function usePanTuneGesture(
       }
       if (notchDrag) {
         const rect = canvas.getBoundingClientRect();
-        const view = readView();
+        const view = readView(receiver);
         if (!view || rect.width <= 0) return;
         const frac = (e.clientX - rect.left) / rect.width;
         const curHz = view.centerHz + (frac - 0.5) * view.spanHz;
@@ -446,7 +589,7 @@ export function usePanTuneGesture(
         // pointercancel discards the in-progress notch; a real release commits.
         if (e.type !== 'pointercancel') {
           const rect = canvas.getBoundingClientRect();
-          const view = readView();
+          const view = readView(receiver);
           if (view && rect.width > 0) {
             const frac = (e.clientX - rect.left) / rect.width;
             const curHz = view.centerHz + (frac - 0.5) * view.spanHz;
@@ -502,62 +645,28 @@ export function usePanTuneGesture(
         }
       } else {
         // click-to-tune: resolve the clicked frequency against the live view.
-        const view = readView();
+        const view = readView(receiver);
         if (!view) return;
         const frac = (e.clientX - rect.left) / rect.width;
         const clickHz = view.centerHz + (frac - 0.5) * view.spanHz;
-        // Snap-to-signal: when enabled, a click FAVOURS THE LINE UNDER THE
-        // CURSOR — it scans the visible spectrum near the click and tunes to
-        // whichever signal has its mode-aware edge closest to where you clicked
-        // (USB low edge, LSB high edge, CW zero-beat, AM centroid). So the click
-        // locks onto the nearest signal, edge-aligned for the mode, while still
-        // honouring where you clicked. If the live frame has nothing near the
-        // click, fall back to the waterfall memory (recently-seen, now-faded
-        // signals); only if THAT is empty too does the click tune normally.
-        const enhance = useSignalEnhanceStore.getState();
-        if (enhance.snapEnabled) {
-          const ds = useDisplayStore.getState();
-          if (ds.panDb && ds.hzPerPixel > 0 && rect.width > 0) {
-            // Zoom-consistent grab distance with an operator/profile cap: the
-            // pixel reach keeps snap feel stable while Snap Radius stops a
-            // zoomed-out click from grabbing across too much spectrum.
-            const maxRadiusHz = Math.min(ds.hzPerPixel * SNAP_RADIUS_PX, enhance.snapRadiusHz);
-            const mode = useConnectionStore.getState().mode;
-            const centerHz = Number(ds.centerHz);
-            let tuneHz = computeSnapToLineHz(
-              ds.panDb,
-              centerHz,
-              ds.hzPerPixel,
-              mode,
-              clickHz,
-              maxRadiusHz,
-            );
-            // Only a LIVE signal can be tracked frame-to-frame; a waterfall-memory
-            // hit is by definition not on screen right now, so it tunes once but
-            // does not arm the self-correcting lock.
-            const fromLive = tuneHz != null;
-            if (tuneHz == null) {
-              // Nothing live near the click — consult the waterfall memory.
-              const history = getSnapHistorySpectrum();
-              if (history) {
-                tuneHz = computeSnapToLineHz(history, centerHz, ds.hzPerPixel, mode, clickHz, maxRadiusHz);
-              }
-            }
-            if (tuneHz != null) {
-              // Quantise to the operator's configured tuning step. The raw
-              // signal edge/peak shifts by tens of Hz frame-to-frame as the
-              // noise floor breathes; landing on the nearest step gives a
-              // stable, clean dial instead of a jittery sub-Hz frequency.
-              const step = useToolbarFavoritesStore.getState().stepHz;
-              const stepped = step > 0 ? Math.round(tuneHz / step) * step : tuneHz;
-              commitFinal(stepped, true);
-              // Engage the self-correcting lock so the dial follows this signal as
-              // it drifts. clickHz sits inside the signal body — the tracker's
-              // anchor. Disengages itself on manual tune / mode change / signal loss.
-              if (fromLive && !receiverIsB) armSnapLock({ dialHz: stepped, anchorBodyHz: clickHz, mode });
-              return;
-            }
+        // Snap-to-signal: when enabled, favour the signal body under/near the
+        // cursor and return that signal's mode-aware tuning frequency. The
+        // shared resolver also drives the hover preview so it cannot advertise
+        // one target and commit another.
+        const target = resolvePanTuneTarget(clickHz, true, receiver);
+        if (target.snappedToSignal) {
+          commitFinal(target.tuneHz, true);
+          // Only a LIVE signal can be tracked frame-to-frame; a waterfall-memory
+          // hit is by definition not on screen right now, so it tunes once but
+          // does not arm the self-correcting lock.
+          if (target.fromLive && !receiverIsB && receiver === 'A') {
+            armSnapLock({
+              dialHz: target.tuneHz,
+              anchorBodyHz: target.anchorBodyHz,
+              mode: useConnectionStore.getState().mode,
+            });
           }
+          return;
         }
         commitFinal(clickHz);
       }
@@ -620,5 +729,5 @@ export function usePanTuneGesture(
       canvas.removeEventListener('pointercancel', onPointerUp);
       canvas.removeEventListener('wheel', onWheel);
     };
-  }, [canvasRef, receiver, wheelActions]);
+  }, [canvasRef, receiver, wheelActions, options.touchMode, options.tuneReceiver]);
 }

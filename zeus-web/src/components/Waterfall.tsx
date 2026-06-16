@@ -47,7 +47,7 @@ import { createWfRenderer, type WfGlCaps } from '../gl/waterfall';
 import { planForFrame, resetFramePlan } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { useConnectionStore } from '../state/connection-store';
-import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
+import { registerFrameConsumer, selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import {
   enhanceInto,
@@ -55,9 +55,10 @@ import {
   registerEstimatorConsumer,
   useSignalEnhanceStore,
 } from '../dsp/signal-estimator';
+import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
 import * as viewCenter from '../state/view-center';
 import { useTxStore } from '../state/tx-store';
-import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
+import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
 import type { RenderColormapId } from '../gl/colormap';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
 import { NotchOverlay } from './NotchOverlay';
@@ -67,6 +68,11 @@ import { WfDbScale } from './WfDbScale';
 type WaterfallProps = {
   /** When true, noise floor fades to transparent so the QRZ-mode map shows through. */
   transparent?: boolean;
+  receiver?: 'A' | 'B';
+  touchMode?: PanTuneGestureOptions['touchMode'];
+  tuneReceiver?: PanTuneGestureOptions['tuneReceiver'];
+  stitched?: boolean;
+  foreground?: boolean;
 };
 
 type WaterfallValueDomain = 'rx-db' | 'pop' | 'tx-db';
@@ -74,7 +80,14 @@ type WaterfallValueDomain = 'rx-db' | 'pop' | 'tx-db';
 const CONTEXT_LOSS_TEARDOWN_DELAY_MS = 250;
 const pendingContextLossTimers = new WeakMap<HTMLCanvasElement, number>();
 
-export function Waterfall({ transparent = false }: WaterfallProps = {}) {
+export function Waterfall({
+  transparent = false,
+  receiver = 'A',
+  touchMode = 'normal',
+  tuneReceiver,
+  stitched = false,
+  foreground = true,
+}: WaterfallProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const cursorRef = useRef<HTMLDivElement | null>(null);
@@ -204,6 +217,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     // (texSubImage2D), so unlike the panadapter texture a single reused buffer
     // is safe — there's no deferred reference-identity dirty check here.
     let enhBuf: Float32Array | null = null;
+    let stitchBuf: Float32Array | null = null;
     // Visibility gating: skip the rAF redraw when the waterfall tile is
     // scrolled offscreen or the tab is hidden. We still push frames into
     // the history texture so when visibility resumes the operator sees a
@@ -211,6 +225,17 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     let inViewport = true;
     let pageVisible = !document.hidden;
     const isActive = () => inViewport && pageVisible;
+    const visualCenterHz = () => {
+      if (receiver === 'B') {
+        const slice = selectDisplaySlice(useDisplayStore.getState(), receiver);
+        return slice.width && slice.hzPerPixel > 0
+          ? Number(slice.centerHz)
+          : useConnectionStore.getState().vfoBHz;
+      }
+      return viewCenter.isInitialized()
+        ? viewCenter.getViewCenterHz()
+        : Number(useDisplayStore.getState().centerHz);
+    };
 
     const redraw = () => {
       if (contextLost || !renderer) return;
@@ -234,7 +259,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       renderer.draw(
         dbMin,
         dbMax,
-        viewCenter.isInitialized() ? viewCenter.getViewCenterHz() : null,
+        visualCenterHz(),
       );
     };
     const requestRedraw = () => {
@@ -301,10 +326,10 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       // planner to emit a 'reset' on the next frame so the textures re-seed,
       // and seed immediately from the last-held frame so a paused-RX restore
       // is not left blank.
-      resetFramePlan();
+      resetFramePlan(receiver);
       contextLost = false;
       resize();
-      const st = useDisplayStore.getState();
+      const st = selectDisplaySlice(useDisplayStore.getState(), receiver);
       const wfDb = st.wfValid && st.wfDb ? st.wfDb : null;
       renderer!.pushFrame({ kind: 'reset', reason: 'first' }, wfDb, st.centerHz, st.hzPerPixel);
       requestRedraw();
@@ -333,19 +358,22 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
 
     const unsub = useDisplayStore.subscribe((state) => {
       if (contextLost || !renderer) return;
-      if (state.lastSeq === lastSeqDrawn) return;
-      lastSeqDrawn = state.lastSeq;
+      const slice = selectDisplaySlice(state, receiver);
+      if (slice.lastSeq === 0) return;
+      if (slice.lastSeq === lastSeqDrawn) return;
+      lastSeqDrawn = slice.lastSeq;
       // Shared per-frame plan (issue #597): identical decision to the
       // panadapter's, computed once per seq — and the geometry (shift/reset)
       // applies even on frames whose wf payload is invalid, so the history
       // can never drift against the trace.
       const decision = planForFrame({
-        seq: state.lastSeq,
-        centerHz: state.centerHz,
-        hzPerPixel: state.hzPerPixel,
-        width: state.width,
+        seq: slice.lastSeq,
+        centerHz: slice.centerHz,
+        hzPerPixel: slice.hzPerPixel,
+        width: slice.width,
+        planKey: receiver,
       });
-      const wfDb = state.wfValid && state.wfDb ? state.wfDb : null;
+      const wfDb = slice.wfValid && slice.wfDb ? slice.wfDb : null;
       wfFrames++;
       if (wfDb) wfValidFrames++;
       if (wfDb) {
@@ -353,28 +381,41 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
         // stamped with the LO their data was captured at, so the shared
         // shift planner places them correctly even mid-retune.
         // Feed the auto-range tracker — it's a no-op when AUTO is off.
-        useDisplaySettingsStore.getState().updateAutoRange(wfDb);
+        if (receiver === 'A') useDisplaySettingsStore.getState().updateAutoRange(wfDb);
       }
       // RX only: substitute the per-bin floor-subtracted texture row so weak
       // coherent carriers get shape before the colormap. Gated off while keyed
       // because TX pixels are a different dB domain.
-      let wfForPush = wfDb;
+      let wfForPush: Float32Array | null = null;
       if (wfDb) {
         const { moxOn, tunOn } = useTxStore.getState();
-        if (!moxOn && !tunOn) {
-          if (!enhBuf || enhBuf.length !== wfDb.length) enhBuf = new Float32Array(wfDb.length);
-          if (useSignalEnhanceStore.getState().popEnabled) enhanceInto(wfDb, enhBuf);
-          else enhanceWaterfallTextureInto(wfDb, enhBuf);
-          wfForPush = enhBuf;
+        let rowForPush = wfDb;
+        if (stitched && !moxOn && !tunOn) {
+          rowForPush = normalizeStitchedBins(
+            wfDb,
+            stitchBuf,
+            stitchFloorShiftDb(receiver, 'waterfall'),
+          );
+          if (rowForPush !== wfDb) stitchBuf = rowForPush;
         }
+        if (!moxOn && !tunOn) {
+          if (!enhBuf || enhBuf.length !== rowForPush.length) enhBuf = new Float32Array(rowForPush.length);
+          if (useSignalEnhanceStore.getState().popEnabled) enhanceInto(rowForPush, enhBuf);
+          else enhanceWaterfallTextureInto(rowForPush, enhBuf);
+          rowForPush = enhBuf;
+        }
+        wfForPush = rowForPush;
       }
-      renderer.pushFrame(decision, wfForPush, state.centerHz, state.hzPerPixel);
+      renderer.pushFrame(decision, wfForPush, slice.centerHz, slice.hzPerPixel);
       requestRedraw();
     });
 
     // View-center motion → redraw at display rate while gliding (the
     // fractional sampling offset in draw() moves the visible window).
     const unsubViewCenter = viewCenter.subscribe(requestRedraw);
+    const unsubConn = useConnectionStore.subscribe((state, prev) => {
+      if (receiver === 'B' && state.vfoBHz !== prev.vfoBHz) requestRedraw();
+    });
 
     // Repaint on dB-range or colormap changes so the WfDbScale drag and the
     // colormap swap land without waiting for the next server frame. Re-upload
@@ -449,6 +490,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     return () => {
       unsub();
       unsubViewCenter();
+      unsubConn();
       unsubSettings();
       unsubTx();
       unsubEnhance();
@@ -481,7 +523,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       }
       rendererRef.current = null;
     };
-  }, []);
+  }, [receiver, stitched]);
 
   // Keep the renderer's transparency flag in sync without remounting so the
   // history texture survives a QRZ engage/disengage. draw() runs on the next
@@ -500,14 +542,17 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     const update = () => {
       const cur = cursorRef.current;
       if (!cur) return;
-      const s = useDisplayStore.getState();
+      const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
       if (!s.width || s.hzPerPixel <= 0) {
         cur.style.left = '50%';
         return;
       }
       const spanHz = s.width * s.hzPerPixel;
-      const vfoHz = useConnectionStore.getState().vfoHz;
-      const dialOffsetHz = viewCenter.isInitialized()
+      const c = useConnectionStore.getState();
+      const vfoHz = receiver === 'B' ? c.vfoBHz : c.vfoHz;
+      const dialOffsetHz = receiver === 'B'
+        ? vfoHz - Number(s.centerHz)
+        : viewCenter.isInitialized()
         ? vfoHz - viewCenter.getTargetCenterHz()
         : 0;
       cur.style.left = `${((spanHz / 2 + dialOffsetHz) / spanHz) * 100}%`;
@@ -515,10 +560,10 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     const schedule = () => requestDrawBusFrame(update);
     const unsubVc = viewCenter.subscribe(schedule);
     const unsubConn = useConnectionStore.subscribe((s, prev) => {
-      if (s.vfoHz !== prev.vfoHz) schedule();
+      if (s.vfoHz !== prev.vfoHz || s.vfoBHz !== prev.vfoBHz) schedule();
     });
     const unsubFrame = useDisplayStore.subscribe((s, prev) => {
-      if (s.lastSeq !== prev.lastSeq) schedule();
+      if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(prev, receiver).lastSeq) schedule();
     });
     schedule();
     return () => {
@@ -527,9 +572,9 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       unsubFrame();
       cancelDrawBusFrame(update);
     };
-  }, []);
+  }, [receiver]);
 
-  usePanTuneGesture(canvasRef);
+  usePanTuneGesture(canvasRef, receiver, { touchMode, tuneReceiver });
 
   return (
     <div
@@ -541,6 +586,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
         width: '100%',
         height: '100%',
         background: popActive ? 'var(--pop-surface-bg)' : 'var(--wf-0)',
+        opacity: 1,
         ...(popActive
           ? ({
               ['--pop-intensity' as string]: popIntensityCss,
@@ -599,16 +645,24 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
           Waterfall renderer unavailable
         </div>
       )}
-      <WfDbScale />
-      <div
-        ref={cursorRef}
-        className="tuning-cursor"
-        style={{ left: '50%', pointerEvents: 'none' }}
-      />
-      <PassbandOverlay resizable containerRef={containerRef} />
-      <FilterCursorOverlay containerRef={containerRef} />
-      {/* No delete ✕ here — the single control lives on the panadapter (top). */}
-      <NotchOverlay resizable containerRef={containerRef} />
+      {(!stitched || receiver === 'A') && <WfDbScale />}
+      {!stitched && (
+        <div
+          ref={cursorRef}
+          className="tuning-cursor"
+          style={{ left: '50%', pointerEvents: 'none' }}
+        />
+      )}
+      {(!stitched || foreground) && (
+        <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
+      )}
+      {receiver === 'A' && (!stitched || foreground) && (
+        <>
+          <FilterCursorOverlay containerRef={containerRef} />
+          {/* No delete x here — the single control lives on the panadapter (top). */}
+          <NotchOverlay resizable containerRef={containerRef} />
+        </>
+      )}
     </div>
   );
 }

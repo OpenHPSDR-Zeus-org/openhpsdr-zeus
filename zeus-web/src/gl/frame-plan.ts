@@ -59,18 +59,43 @@
 
 import { planWaterfallUpdate, type WfShiftDecision } from './wf-shift';
 
-let plannedSeq = -1;
-let plannedDecision: WfShiftDecision = { kind: 'reset', reason: 'first' };
-let lastCenterHz: bigint | null = null;
-let lastHzPerPixel = 0;
-let lastWidth = 0;
+type FramePlanTracker = {
+  plannedSeq: number;
+  plannedDecision: WfShiftDecision;
+  lastCenterHz: bigint | null;
+  lastHzPerPixel: number;
+  lastWidth: number;
+};
+
+const DEFAULT_PLAN_KEY = 'default';
+const trackers = new Map<string, FramePlanTracker>();
 
 export type FramePlanInput = {
   seq: number;
   centerHz: bigint;
   hzPerPixel: number;
   width: number;
+  planKey?: string;
 };
+
+function createTracker(): FramePlanTracker {
+  return {
+    plannedSeq: -1,
+    plannedDecision: { kind: 'reset', reason: 'first' },
+    lastCenterHz: null,
+    lastHzPerPixel: 0,
+    lastWidth: 0,
+  };
+}
+
+function trackerFor(planKey: string): FramePlanTracker {
+  let tracker = trackers.get(planKey);
+  if (!tracker) {
+    tracker = createTracker();
+    trackers.set(planKey, tracker);
+  }
+  return tracker;
+}
 
 /**
  * Decision for frame `seq`. Memoized: the first caller for a given seq
@@ -80,43 +105,44 @@ export type FramePlanInput = {
  * every store update, so this holds by construction.
  */
 export function planForFrame(i: FramePlanInput): WfShiftDecision {
-  if (i.seq === plannedSeq) return plannedDecision;
+  const tracker = trackerFor(i.planKey ?? DEFAULT_PLAN_KEY);
+  if (i.seq === tracker.plannedSeq) return tracker.plannedDecision;
   const decision = planWaterfallUpdate({
-    lastCenterHz,
-    lastHzPerPixel,
-    lastWidth,
+    lastCenterHz: tracker.lastCenterHz,
+    lastHzPerPixel: tracker.lastHzPerPixel,
+    lastWidth: tracker.lastWidth,
     nextCenterHz: i.centerHz,
     nextHzPerPixel: i.hzPerPixel,
     nextWidth: i.width,
   });
   switch (decision.kind) {
     case 'reset':
-      lastCenterHz = i.centerHz;
-      lastHzPerPixel = i.hzPerPixel;
-      lastWidth = i.width;
+      tracker.lastCenterHz = i.centerHz;
+      tracker.lastHzPerPixel = i.hzPerPixel;
+      tracker.lastWidth = i.width;
       break;
     case 'push':
       // lastCenterHz intentionally unchanged so sub-pixel retunes accumulate
       // (same convention as the original per-component trackers).
       break;
     case 'shift':
-      lastCenterHz = decision.residualCenterHz;
+      tracker.lastCenterHz = decision.residualCenterHz;
       break;
     case 'rescale':
-      lastCenterHz = i.centerHz;
-      lastHzPerPixel = i.hzPerPixel;
-      lastWidth = i.width;
+      tracker.lastCenterHz = i.centerHz;
+      tracker.lastHzPerPixel = i.hzPerPixel;
+      tracker.lastWidth = i.width;
       break;
   }
-  plannedSeq = i.seq;
-  plannedDecision = decision;
+  tracker.plannedSeq = i.seq;
+  tracker.plannedDecision = decision;
   return decision;
 }
 
 /** The center frequency the planner currently believes the on-screen data
  *  is anchored at (post-shift residual). Null before the first frame. */
-export function plannedDataCenterHz(): bigint | null {
-  return lastCenterHz;
+export function plannedDataCenterHz(planKey = DEFAULT_PLAN_KEY): bigint | null {
+  return trackers.get(planKey)?.lastCenterHz ?? null;
 }
 
 /** Forget all tracker state so the next observed frame is planned as a clean
@@ -126,12 +152,12 @@ export function plannedDataCenterHz(): bigint | null {
  *  would otherwise emit 'push'/'shift', never 'reset'. Resetting the shared
  *  tracker forces the seeding 'reset'. The panadapter simply re-snaps its
  *  surviving CPU-side anchor on the same frame (a single snap, no glide). */
-export function resetFramePlan(): void {
-  plannedSeq = -1;
-  plannedDecision = { kind: 'reset', reason: 'first' };
-  lastCenterHz = null;
-  lastHzPerPixel = 0;
-  lastWidth = 0;
+export function resetFramePlan(planKey?: string): void {
+  if (planKey === undefined) {
+    trackers.clear();
+    return;
+  }
+  trackers.set(planKey, createTracker());
 }
 
 /** Test alias — kept so existing specs import the same behaviour. */

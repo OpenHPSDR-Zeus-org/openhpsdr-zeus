@@ -680,6 +680,14 @@ public static class ZeusEndpoints
             return r.SetRx2(req);
         });
 
+        app.MapPost("/api/tx/vfo", (TxVfoSetRequest req, RadioService r) =>
+        {
+            if (!Enum.IsDefined(req.TxVfo))
+                return Results.BadRequest(new { error = $"unknown txVfo {req.TxVfo}" });
+            log.LogInformation("api.tx.vfo txVfo={TxVfo}", req.TxVfo);
+            return Results.Ok(r.SetTxVfo(req.TxVfo));
+        });
+
         // Set the radio's hardware NCO (LO) frequency directly. Does not
         // move VfoHz — used by the panadapter pure-pan gesture when a drag
         // would carry the viewport outside the IQ capture window.
@@ -2558,8 +2566,12 @@ public static class ZeusEndpoints
         var squelch = state.Squelch ?? new SquelchConfig();
 
         return new(
-            SchemaVersion: 1,
+            SchemaVersion: 2,
             Source: "backend-radio-state",
+            FilterLowHz: state.FilterLowHz,
+            FilterHighHz: state.FilterHighHz,
+            FilterWidthHz: Math.Abs(state.FilterHighHz - state.FilterLowHz),
+            FilterPresetName: state.FilterPresetName,
             AutoAgcEnabled: state.AutoAgcEnabled,
             AgcMode: agc.Mode.ToString(),
             AgcTopDb: Math.Round(state.AgcTopDb, 1),

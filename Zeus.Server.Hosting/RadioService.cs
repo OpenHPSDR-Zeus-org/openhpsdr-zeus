@@ -417,6 +417,7 @@ public sealed class RadioService : IDisposable
                 : (rsSnap?.VfoHz ?? 14_200_000),
             Rx2AudioMode: rsSnap?.Rx2AudioMode ?? Zeus.Contracts.Rx2AudioMode.Both,
             Rx2AfGainDb: Math.Clamp(rsSnap?.Rx2AfGainDb ?? 0.0, -50.0, 20.0),
+            TxVfo: rsSnap?.TxVfo ?? TxVfo.A,
             CwPitchHz: CwOffset.CwPitchHz,
             CtunEnabled: rsSnap?.CtunEnabled ?? false,
             PreampOn: rsSnap?.PreampOn ?? false);
@@ -812,13 +813,21 @@ public sealed class RadioService : IDisposable
     public StateDto SetVfoB(long hz)
     {
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
+        long previousTx;
+        lock (_sync) previousTx = TxFrequencyHz(_state);
         Mutate(s => s with { VfoBHz = clamped });
+        if (BandUtils.FreqToBand(previousTx) != BandUtils.FreqToBand(TxFrequencyHz(Snapshot())))
+        {
+            RecomputePaAndPush();
+        }
         return Snapshot();
     }
 
     public StateDto SetRx2(Rx2SetRequest req)
     {
         ArgumentNullException.ThrowIfNull(req);
+        long previousTx;
+        lock (_sync) previousTx = TxFrequencyHz(_state);
         Mutate(s =>
         {
             long nextVfoB = req.VfoBHz.HasValue
@@ -839,17 +848,42 @@ public sealed class RadioService : IDisposable
                 Rx2AfGainDb = nextGain,
             };
         });
+        if (BandUtils.FreqToBand(previousTx) != BandUtils.FreqToBand(TxFrequencyHz(Snapshot())))
+        {
+            RecomputePaAndPush();
+        }
         return Snapshot();
     }
 
+    public StateDto SetTxVfo(TxVfo txVfo)
+    {
+        if (!Enum.IsDefined(txVfo))
+            throw new ArgumentOutOfRangeException(nameof(txVfo), txVfo, "Unknown TX VFO");
+        long previousTx;
+        lock (_sync) previousTx = TxFrequencyHz(_state);
+        Mutate(s => s.TxVfo == txVfo ? s : s with { TxVfo = txVfo });
+        var snap = Snapshot();
+        if (BandUtils.FreqToBand(previousTx) != BandUtils.FreqToBand(TxFrequencyHz(snap)))
+        {
+            RecomputePaAndPush();
+        }
+        return snap;
+    }
+
+    public static long TxFrequencyHz(StateDto state) =>
+        state.TxVfo == TxVfo.B ? state.VfoBHz : state.VfoHz;
+
+    public static long TxEffectiveLoHz(StateDto state) =>
+        CwOffset.EffectiveLoHz(state.Mode, TxFrequencyHz(state));
+
     public StateDto SwapVfos()
     {
-        long previousA = 0;
+        long previousTx = 0;
         long newA = 0;
         RxMode mode = RxMode.USB;
         Mutate(s =>
         {
-            previousA = s.VfoHz;
+            previousTx = TxFrequencyHz(s);
             newA = Math.Clamp(s.VfoBHz, 0L, 60_000_000L);
             mode = s.Mode;
             return s with
@@ -860,7 +894,7 @@ public sealed class RadioService : IDisposable
             };
         });
         ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(mode, newA));
-        if (BandUtils.FreqToBand(previousA) != BandUtils.FreqToBand(newA))
+        if (BandUtils.FreqToBand(previousTx) != BandUtils.FreqToBand(TxFrequencyHz(Snapshot())))
         {
             RecomputePaAndPush();
         }
@@ -997,13 +1031,12 @@ public sealed class RadioService : IDisposable
     // (or CTUN off — only CTUN records). Guarded by _sync.
     private long _ctunPreTxLoHz = long.MinValue;
 
-    // Capture the frozen RX centre exactly once per key-down, but only under
-    // CTUN — when CTUN is off the LO already tracks the dial so there is
-    // nothing to restore and recording would change the classic post-TX
-    // behaviour. Caller must hold _sync.
+    // Capture the receive centre exactly once per key-down when TX must move
+    // the shared radio LO away from the current RX view. That is CTUN and TX B.
+    // Caller must hold _sync.
     private void RememberFrozenLoUnderLock()
     {
-        if (_state.CtunEnabled && _ctunPreTxLoHz == long.MinValue)
+        if ((_state.CtunEnabled || _state.TxVfo == TxVfo.B) && _ctunPreTxLoHz == long.MinValue)
             _ctunPreTxLoHz = _state.RadioLoHz;
     }
 
@@ -1014,11 +1047,9 @@ public sealed class RadioService : IDisposable
         long currentLo;
         lock (_sync)
         {
-            vfo = _state.VfoHz;
+            vfo = TxFrequencyHz(_state);
             mode = _state.Mode;
             currentLo = _state.RadioLoHz;
-            // Under CTUN the NCO is frozen off the dial; remember it so we can
-            // restore the operator's RX view after the over.
             RememberFrozenLoUnderLock();
         }
         if (mode != RxMode.CWU && mode != RxMode.CWL) return false;
@@ -1048,8 +1079,8 @@ public sealed class RadioService : IDisposable
         long currentLo;
         lock (_sync)
         {
-            if (!_state.CtunEnabled) return false;
-            vfo = _state.VfoHz;
+            if (!_state.CtunEnabled && _state.TxVfo != TxVfo.B) return false;
+            vfo = TxFrequencyHz(_state);
             mode = _state.Mode;
             currentLo = _state.RadioLoHz;
             RememberFrozenLoUnderLock();
@@ -1956,7 +1987,8 @@ public sealed class RadioService : IDisposable
         // PA Settings for a radio not yet connected; once a radio IS on the
         // wire, EffectiveBoardKind == ConnectedBoardKind (discovery wins).
         var cfg = _paStore.GetAll(EffectiveBoardKind, EffectiveOrionMkIIVariant);
-        var bandName = BandUtils.FreqToBand(stateSnap.VfoHz);
+        var txHz = TxFrequencyHz(stateSnap);
+        var bandName = BandUtils.FreqToBand(txHz);
         var bandCfg = bandName is not null
             ? cfg.Bands.FirstOrDefault(b => b.Band == bandName) ?? new PaBandSettingsDto(bandName)
             : new PaBandSettingsDto("unknown");
@@ -1976,8 +2008,8 @@ public sealed class RadioService : IDisposable
         bool paEnabled = cfg.Global.PaEnabled && !bandCfg.DisablePa;
 
         _log.LogInformation(
-            "pa.recompute tunActive={Tun} pct={Pct} band={Band} gainDb={Gain:F2} maxW={Max} profile={Profile} -> byte={Byte} paEn={PaEn} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocDxTx=0x{OcDxTx:X2} ocDxRx=0x{OcDxRx:X2}",
-            tunActive, activePct, bandName ?? "?", bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts, driveProfile.BoardLabel, driveByte, paEnabled,
+            "pa.recompute tunActive={Tun} pct={Pct} txVfo={TxVfo} txHz={TxHz} band={Band} gainDb={Gain:F2} maxW={Max} profile={Profile} -> byte={Byte} paEn={PaEn} ocTx=0x{OcTx:X2} ocRx=0x{OcRx:X2} ocDxTx=0x{OcDxTx:X2} ocDxRx=0x{OcDxRx:X2}",
+            tunActive, activePct, stateSnap.TxVfo, txHz, bandName ?? "?", bandCfg.PaGainDb, cfg.Global.PaMaxPowerWatts, driveProfile.BoardLabel, driveByte, paEnabled,
             bandCfg.OcTx, bandCfg.OcRx, bandCfg.OcDxTx, bandCfg.OcDxRx);
 
         ActiveClient?.SetDriveByte(driveByte);
@@ -2563,6 +2595,7 @@ public sealed class RadioService : IDisposable
                 VfoBHz = snap.VfoBHz,
                 Rx2AudioMode = snap.Rx2AudioMode,
                 Rx2AfGainDb = snap.Rx2AfGainDb,
+                TxVfo = snap.TxVfo,
                 CtunEnabled = snap.CtunEnabled,
                 Notches = notches.Select(n => new RadioStateNotchEntry
                 {

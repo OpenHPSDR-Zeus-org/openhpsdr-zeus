@@ -156,6 +156,7 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
   } = useWorkspace();
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
+  const rxFocus = useConnectionStore((s) => s.rxFocus);
   const updateTileInstanceConfig = useLayoutStore(
     (s) => s.updateTileInstanceConfigInLayout,
   );
@@ -258,6 +259,16 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
   // tile-drag start. The .workspace-tile-header strip itself stays the
   // drag handle.
   const stopDrag = (e: ReactPointerEvent | ReactMouseEvent) => e.stopPropagation();
+
+  const stitchedGridStyle = {
+    position: 'relative',
+    minHeight: 0,
+    height: '100%',
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+    gap: 0,
+    overflow: 'hidden',
+  } as const;
 
   return (
     <div
@@ -412,16 +423,24 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
           {connected && (
             rx2Enabled ? (
               <div
-                style={{
-                  minHeight: 0,
-                  height: '100%',
-                  display: 'grid',
-                  gridTemplateRows: '1fr 1px 1fr',
-                }}
+                style={stitchedGridStyle}
               >
-                <Panadapter receiver="A" />
-                <div style={{ background: 'var(--line)' }} />
-                <Panadapter receiver="B" />
+                <div style={{ minWidth: 0, minHeight: 0 }}>
+                  <Panadapter
+                    receiver="A"
+                    stitched
+                    foreground={rxFocus === 'A'}
+                    tuneReceiver={rxFocus}
+                  />
+                </div>
+                <div style={{ minWidth: 0, minHeight: 0 }}>
+                  <Panadapter
+                    receiver="B"
+                    stitched
+                    foreground={rxFocus === 'B'}
+                    tuneReceiver={rxFocus}
+                  />
+                </div>
               </div>
             ) : (
               <Panadapter receiver="A" />
@@ -435,7 +454,32 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
             title="Drag to resize panadapter / waterfall"
             onPointerDown={onSplitterPointerDown}
           />
-          {connected && <Waterfall transparent={bgActive} />}
+          {connected && (
+            rx2Enabled ? (
+              <div style={stitchedGridStyle}>
+                <div style={{ minWidth: 0, minHeight: 0 }}>
+                  <Waterfall
+                    receiver="A"
+                    transparent={bgActive}
+                    stitched
+                    foreground={rxFocus === 'A'}
+                    tuneReceiver={rxFocus}
+                  />
+                </div>
+                <div style={{ minWidth: 0, minHeight: 0 }}>
+                  <Waterfall
+                    receiver="B"
+                    transparent={bgActive}
+                    stitched
+                    foreground={rxFocus === 'B'}
+                    tuneReceiver={rxFocus}
+                  />
+                </div>
+              </div>
+            ) : (
+              <Waterfall transparent={bgActive} />
+            )
+          )}
         </div>
       </div>
     </div>

@@ -258,7 +258,8 @@ public sealed class CwEngine : BackgroundService
         // (LO − baseband_hz), not (LO + baseband_hz) — i.e. the "I − jQ"
         // complex-baseband convention. Verified on a live HL2 2026-05-24
         // (EA5IUE bench test).
-        int basebandHz = (int)(snap.RadioLoHz - snap.VfoHz);
+        long txHz = RadioService.TxFrequencyHz(snap);
+        int basebandHz = (int)(snap.RadioLoHz - txHz);
 
         if (!_tx.TrySetMox(true, MoxSource.Cwx, out var err))
         {
@@ -270,8 +271,8 @@ public sealed class CwEngine : BackgroundService
         }
         Notify(new CwEngineStatus(CwEngineState.Sending, job.Text, job.Wpm, queueDepth));
         _log.LogInformation(
-            "cw.send text={Text} wpm={Wpm} mode={Mode} vfo={Vfo}Hz lo={Lo}Hz baseband={Bb}Hz loRealigned={LoRealigned}",
-            Truncate(job.Text), job.Wpm, snap.Mode, snap.VfoHz, snap.RadioLoHz, basebandHz, loRealigned);
+            "cw.send text={Text} wpm={Wpm} mode={Mode} txVfo={TxVfo} txHz={TxHz}Hz lo={Lo}Hz baseband={Bb}Hz loRealigned={LoRealigned}",
+            Truncate(job.Text), job.Wpm, snap.Mode, snap.TxVfo, txHz, snap.RadioLoHz, basebandHz, loRealigned);
 
         // Phase accumulator runs continuously across symbols so the tone
         // stays coherent through inter-element gaps (no phase pop on
@@ -362,7 +363,8 @@ public sealed class CwEngine : BackgroundService
         // the keying source (text macro vs. raw key from logger).
         bool loRealigned = _radio.AlignLoForCwTx();
         var snap = _radio.Snapshot();
-        int basebandHz = (int)(snap.RadioLoHz - snap.VfoHz);
+        long txHz = RadioService.TxFrequencyHz(snap);
+        int basebandHz = (int)(snap.RadioLoHz - txHz);
 
         if (!_tx.TrySetMox(true, MoxSource.Cwx, out var err))
         {
@@ -374,8 +376,8 @@ public sealed class CwEngine : BackgroundService
         }
         Notify(new CwEngineStatus(CwEngineState.Sending, "<keyer>", 0, queueDepth));
         _log.LogInformation(
-            "cw.keyer.down baseband={Bb}Hz durationMs={Dur} loRealigned={LoR}",
-            basebandHz, job.DurationMs?.ToString() ?? "until-release", loRealigned);
+            "cw.keyer.down txVfo={TxVfo} txHz={TxHz}Hz baseband={Bb}Hz durationMs={Dur} loRealigned={LoR}",
+            snap.TxVfo, txHz, basebandHz, job.DurationMs?.ToString() ?? "until-release", loRealigned);
 
         double phase = 0.0;
         double phaseStep = 2.0 * Math.PI * basebandHz / SampleRateHz;

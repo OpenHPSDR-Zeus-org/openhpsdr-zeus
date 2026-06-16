@@ -47,6 +47,7 @@ import { setMox } from '../api/client';
 import { ensureTxStationProfileActivated } from '../audio/tx-station-profile-activation';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
+import { runTxBandPreflight } from '../tx/tx-band-preflight';
 
 /**
  * Click to toggle MOX. Optimistic update with rollback on server refusal
@@ -67,6 +68,11 @@ export function MoxButton() {
         setArming(true);
         try {
           await ensureTxStationProfileActivated();
+          const ready = await runTxBandPreflight();
+          if (!ready) {
+            setArming(false);
+            return;
+          }
         } catch (err) {
           console.warn('tx station profile activation failed; MOX cancelled', err);
           setArming(false);

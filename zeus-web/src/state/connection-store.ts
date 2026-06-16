@@ -56,6 +56,7 @@ import {
   type Rx2AudioMode,
   type RxMode,
   type SquelchConfigDto,
+  type TxVfo,
   type TxLevelingConfigDto,
   type ZoomLevel,
 } from '../api/client';
@@ -75,6 +76,8 @@ export type ConnectionState = {
   rx2Enabled: boolean;
   rx2AudioMode: Rx2AudioMode;
   rx2AfGainDb: number;
+  txVfo: TxVfo;
+  rxFocus: TxVfo;
   mode: RxMode;
   filterLowHz: number;
   filterHighHz: number;
@@ -141,6 +144,7 @@ export type ConnectionState = {
   setAgc: (agc: AgcConfigDto) => void;
   setSquelch: (squelch: SquelchConfigDto) => void;
   setTxLeveling: (txLeveling: TxLevelingConfigDto) => void;
+  setRxFocus: (rxFocus: TxVfo) => void;
   setZoomLevel: (level: ZoomLevel) => void;
   setLastConnectedEndpoint: (ep: string | null) => void;
   setWisdomPhase: (phase: WisdomPhase) => void;
@@ -155,6 +159,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   rx2Enabled: false,
   rx2AudioMode: 'both',
   rx2AfGainDb: 0,
+  txVfo: 'A',
+  rxFocus: 'A',
   mode: 'USB',
   filterLowHz: 150,
   filterHighHz: 2850,
@@ -199,6 +205,8 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       rx2Enabled: s.rx2Enabled,
       rx2AudioMode: s.rx2AudioMode,
       rx2AfGainDb: s.rx2AfGainDb,
+      txVfo: s.txVfo,
+      rxFocus: s.rx2Enabled ? prev.rxFocus : 'A',
       mode: s.mode,
       filterLowHz: s.filterLowHz,
       filterHighHz: s.filterHighHz,
@@ -232,6 +240,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   setAgc: (agc) => set({ agc }),
   setSquelch: (squelch) => set({ squelch }),
   setTxLeveling: (txLeveling) => set({ txLeveling }),
+  setRxFocus: (rxFocus) => set({ rxFocus }),
   setZoomLevel: (zoomLevel) => set({ zoomLevel }),
   setLastConnectedEndpoint: (lastConnectedEndpoint) =>
     set({ lastConnectedEndpoint }),

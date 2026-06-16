@@ -67,6 +67,7 @@ export type RxMode =
   | 'DIGU';
 
 export type Rx2AudioMode = 'both' | 'rx1' | 'rx2';
+export type TxVfo = 'A' | 'B';
 
 export type NrMode = 'Off' | 'Anr' | 'Emnr' | 'Sbnr' | 'Nr5';
 export type NbMode = 'Off' | 'Nb1' | 'Nb2';
@@ -277,6 +278,7 @@ export type RadioStateDto = {
   rx2Enabled: boolean;
   rx2AudioMode: Rx2AudioMode;
   rx2AfGainDb: number;
+  txVfo: TxVfo;
   mode: RxMode;
   filterLowHz: number;
   filterHighHz: number;
@@ -1583,6 +1585,17 @@ export function normalizeRx2AudioMode(v: unknown): Rx2AudioMode {
   return 'both';
 }
 
+export function normalizeTxVfo(v: unknown): TxVfo {
+  if (typeof v === 'string') {
+    const upper = v.toUpperCase();
+    return upper === 'B' ? 'B' : 'A';
+  }
+  if (typeof v === 'number' && Number.isInteger(v)) {
+    return v === 1 ? 'B' : 'A';
+  }
+  return 'A';
+}
+
 export function normalizeNrMode(v: unknown): NrMode {
   if (typeof v === 'string') {
     return (NR_MODE_ORDER as readonly string[]).includes(v)
@@ -1826,6 +1839,7 @@ export function normalizeState(raw: unknown): RadioStateDto {
     rx2Enabled: typeof r.rx2Enabled === 'boolean' ? r.rx2Enabled : false,
     rx2AudioMode: normalizeRx2AudioMode(r.rx2AudioMode),
     rx2AfGainDb: typeof r.rx2AfGainDb === 'number' ? r.rx2AfGainDb : 0,
+    txVfo: normalizeTxVfo(r.txVfo),
     mode: normalizeMode(r.mode),
     filterLowHz: typeof r.filterLowHz === 'number' ? r.filterLowHz : 0,
     filterHighHz: typeof r.filterHighHz === 'number' ? r.filterHighHz : 0,
@@ -4275,6 +4289,22 @@ export function setRx2(
             : rx2AudioModeToWire(req.audioMode),
         afGainDb: req.afGainDb,
       }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+export function setTxVfo(
+  txVfo: TxVfo,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/tx/vfo',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ txVfo: txVfo === 'B' ? 1 : 0 }),
       signal,
     },
     normalizeState,

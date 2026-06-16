@@ -190,6 +190,7 @@ public sealed class RadioStateEntry
     public long VfoBHz { get; set; } = 14_200_000;
     public Zeus.Contracts.Rx2AudioMode Rx2AudioMode { get; set; } = Zeus.Contracts.Rx2AudioMode.Both;
     public double Rx2AfGainDb { get; set; }
+    public TxVfo TxVfo { get; set; } = TxVfo.A;
     // CTUN (click-tune / centred-tuning) toggle. See StateDto.CtunEnabled.
     // Persisted so the operator's preference survives a restart.
     public bool CtunEnabled { get; set; }

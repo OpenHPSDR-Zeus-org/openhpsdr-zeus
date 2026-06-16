@@ -27,6 +27,19 @@ describe('frame-plan memoization', () => {
     // 500 Hz / 93.75 ≈ 5.33 px → integer shift of 5
     expect(d).toMatchObject({ kind: 'shift', shiftPx: -5 });
   });
+
+  it('keeps receiver trackers isolated when RX1 and RX2 share sequence timing', () => {
+    const a1 = planForFrame({ seq: 1, centerHz: 14_200_000n, hzPerPixel: HZPP, width: W, planKey: 'A' });
+    const b1 = planForFrame({ seq: 1, centerHz: 7_200_000n, hzPerPixel: HZPP, width: W, planKey: 'B' });
+    expect(a1.kind).toBe('reset');
+    expect(b1.kind).toBe('reset');
+
+    const a2 = planForFrame({ seq: 3, centerHz: 14_200_500n, hzPerPixel: HZPP, width: W, planKey: 'A' });
+    const b2 = planForFrame({ seq: 4, centerHz: 7_200_000n, hzPerPixel: HZPP, width: W, planKey: 'B' });
+    expect(a2).toMatchObject({ kind: 'shift', shiftPx: -5 });
+    expect(b2.kind).toBe('push');
+    expect(plannedDataCenterHz('B')).toBe(7_200_000n);
+  });
 });
 
 describe('frame-plan decision semantics (parity with the per-component trackers)', () => {

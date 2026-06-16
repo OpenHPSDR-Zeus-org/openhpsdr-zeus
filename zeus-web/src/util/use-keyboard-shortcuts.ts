@@ -57,6 +57,7 @@ import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import { useTxStore } from '../state/tx-store';
 import { ACTIVE_MAP_REF } from '../state/active-map-ref';
 import { ensureTxStationProfileActivated } from '../audio/tx-station-profile-activation';
+import { runTxBandPreflight } from '../tx/tx-band-preflight';
 
 // The arrow-key tune step follows the operator's TuningStepWidget choice
 // (toolbar-favorites-store.stepHz). Read at event time inside bumpTune so
@@ -163,6 +164,8 @@ export function useKeyboardShortcuts() {
         if (on) {
           try {
             await ensureTxStationProfileActivated();
+            const ready = await runTxBandPreflight();
+            if (!ready) return;
           } catch {
             return;
           }

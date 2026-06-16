@@ -48,6 +48,21 @@ import { maybeUpdateEstimator } from '../dsp/signal-estimator';
 
 const DISPLAY_INVALID_BIN_DB = -200;
 
+export type SpectrumReceiver = 'A' | 'B';
+
+export type ReceiverDisplaySlice = {
+  width: number;
+  centerHz: bigint;
+  hzPerPixel: number;
+  panDb: Float32Array | null;
+  wfDb: Float32Array | null;
+  panValid: boolean;
+  wfValid: boolean;
+  panFloorDb: number | null;
+  wfFloorDb: number | null;
+  lastSeq: number;
+};
+
 export type DisplayState = {
   connected: boolean;
   width: number;
@@ -57,10 +72,28 @@ export type DisplayState = {
   wfDb: Float32Array | null;
   panValid: boolean;
   wfValid: boolean;
+  panFloorDb: number | null;
+  wfFloorDb: number | null;
   lastSeq: number;
+  rx2: ReceiverDisplaySlice;
   setConnected: (c: boolean) => void;
   pushFrame: (f: DecodedFrame) => void;
 };
+
+export function createEmptyDisplaySlice(): ReceiverDisplaySlice {
+  return {
+    width: 0,
+    centerHz: 0n,
+    hzPerPixel: 0,
+    panDb: null,
+    wfDb: null,
+    panValid: false,
+    wfValid: false,
+    panFloorDb: null,
+    wfFloorDb: null,
+    lastSeq: 0,
+  };
+}
 
 export function sanitizeDisplayBins(bins: Float32Array): Float32Array {
   let firstBad = -1;
@@ -97,6 +130,79 @@ function validPayload(
   return enabled && geometryValid && bins.length === width;
 }
 
+function estimateDisplayFloorDb(bins: Float32Array | null): number | null {
+  if (!bins || bins.length === 0) return null;
+  const sample: number[] = [];
+  const stride = Math.max(1, Math.floor(bins.length / 512));
+  for (let i = 0; i < bins.length; i += stride) {
+    const v = bins[i];
+    if (v !== undefined && Number.isFinite(v) && v > DISPLAY_INVALID_BIN_DB + 1) {
+      sample.push(v);
+    }
+  }
+  if (sample.length < 8) return null;
+  sample.sort((a, b) => a - b);
+  return sample[Math.floor(sample.length * 0.22)] ?? null;
+}
+
+function cleanFrame(f: DecodedFrame): DecodedFrame {
+  const geometryValid = validFrameGeometry(f.width, f.hzPerPixel);
+  const width = geometryValid ? f.width : 0;
+  const hzPerPixel = geometryValid ? f.hzPerPixel : 0;
+  const panValid = validPayload(f.panValid, f.panDb, width, geometryValid);
+  const wfValid = validPayload(f.wfValid, f.wfDb, width, geometryValid);
+  const panDb = panValid ? sanitizeDisplayBins(f.panDb) : f.panDb;
+  const wfDb = wfValid ? sanitizeDisplayBins(f.wfDb) : f.wfDb;
+  return panDb === f.panDb &&
+    wfDb === f.wfDb &&
+    panValid === f.panValid &&
+    wfValid === f.wfValid &&
+    width === f.width &&
+    hzPerPixel === f.hzPerPixel
+    ? f
+    : { ...f, width, hzPerPixel, panValid, wfValid, panDb, wfDb };
+}
+
+function sliceFromFrame(f: DecodedFrame): ReceiverDisplaySlice {
+  const panDb = f.panValid ? f.panDb : null;
+  const wfDb = f.wfValid ? f.wfDb : null;
+  return {
+    width: f.width,
+    centerHz: f.centerHz,
+    hzPerPixel: f.hzPerPixel,
+    panDb,
+    wfDb,
+    panValid: f.panValid,
+    wfValid: f.wfValid,
+    panFloorDb: estimateDisplayFloorDb(panDb),
+    wfFloorDb: estimateDisplayFloorDb(wfDb),
+    lastSeq: f.seq,
+  };
+}
+
+export function receiverFromRxId(rxId: number): SpectrumReceiver {
+  return rxId === 1 ? 'B' : 'A';
+}
+
+export function selectDisplaySlice(
+  state: DisplayState,
+  receiver: SpectrumReceiver = 'A',
+): ReceiverDisplaySlice {
+  if (receiver === 'B') return state.rx2;
+  return {
+    width: state.width,
+    centerHz: state.centerHz,
+    hzPerPixel: state.hzPerPixel,
+    panDb: state.panDb,
+    wfDb: state.wfDb,
+    panValid: state.panValid,
+    wfValid: state.wfValid,
+    panFloorDb: state.panFloorDb,
+    wfFloorDb: state.wfFloorDb,
+    lastSeq: state.lastSeq,
+  };
+}
+
 export const useDisplayStore = create<DisplayState>((set) => ({
   connected: false,
   width: 0,
@@ -106,39 +212,27 @@ export const useDisplayStore = create<DisplayState>((set) => ({
   wfDb: null,
   panValid: false,
   wfValid: false,
+  panFloorDb: null,
+  wfFloorDb: null,
   lastSeq: 0,
+  rx2: createEmptyDisplaySlice(),
   setConnected: (connected) => set({ connected }),
   pushFrame: (f) => {
-    const geometryValid = validFrameGeometry(f.width, f.hzPerPixel);
-    const width = geometryValid ? f.width : 0;
-    const hzPerPixel = geometryValid ? f.hzPerPixel : 0;
-    const panValid = validPayload(f.panValid, f.panDb, width, geometryValid);
-    const wfValid = validPayload(f.wfValid, f.wfDb, width, geometryValid);
-    const panDb = panValid ? sanitizeDisplayBins(f.panDb) : f.panDb;
-    const wfDb = wfValid ? sanitizeDisplayBins(f.wfDb) : f.wfDb;
-    const cleanFrame =
-      panDb === f.panDb &&
-      wfDb === f.wfDb &&
-      panValid === f.panValid &&
-      wfValid === f.wfValid &&
-      width === f.width &&
-      hzPerPixel === f.hzPerPixel
-      ? f
-      : { ...f, width, hzPerPixel, panValid, wfValid, panDb, wfDb };
+    const clean = cleanFrame(f);
+    const receiver = receiverFromRxId(clean.rxId);
+    const nextSlice = sliceFromFrame(clean);
+
+    if (receiver === 'B') {
+      set({ rx2: nextSlice });
+      return;
+    }
 
     // Advance the shared noise-floor tracker BEFORE notifying subscribers, so
     // the panadapter/waterfall enhance this frame against this frame's floor.
     // No-op (zero cost) unless Signal Pop or Snap is enabled.
-    maybeUpdateEstimator(cleanFrame);
+    maybeUpdateEstimator(clean);
     set({
-      width: cleanFrame.width,
-      centerHz: cleanFrame.centerHz,
-      hzPerPixel: cleanFrame.hzPerPixel,
-      panDb: cleanFrame.panValid ? cleanFrame.panDb : null,
-      wfDb: cleanFrame.wfValid ? cleanFrame.wfDb : null,
-      panValid: cleanFrame.panValid,
-      wfValid: cleanFrame.wfValid,
-      lastSeq: cleanFrame.seq,
+      ...nextSlice,
     });
   },
 }));

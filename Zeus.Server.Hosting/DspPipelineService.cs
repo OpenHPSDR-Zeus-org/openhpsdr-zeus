@@ -889,6 +889,8 @@ public class DspPipelineService : BackgroundService,
     // ExecuteAsync), so no synchronisation is needed.
     private readonly float[] _panBuf = new float[Width];
     private readonly float[] _wfBuf = new float[Width];
+    private readonly float[] _rx2PanBuf = new float[Width];
+    private readonly float[] _rx2WfBuf = new float[Width];
     private readonly float[] _audioBuf = new float[AudioDrainCapacity];
     private readonly float[] _rx2AudioBuf = new float[AudioDrainCapacity];
 
@@ -3641,6 +3643,33 @@ public class DspPipelineService : BackgroundService,
             }
 
             _hub.Broadcast(frame);
+
+            if (state.Rx2Enabled && rx2Channel >= 0)
+            {
+                bool rx2Pan = engine.TryGetDisplayPixels(rx2Channel, DisplayPixout.Panadapter, _rx2PanBuf);
+                bool rx2Wf = engine.TryGetDisplayPixels(rx2Channel, DisplayPixout.Waterfall, _rx2WfBuf);
+                if (rx2Pan) Array.Reverse(_rx2PanBuf);
+                if (rx2Wf) Array.Reverse(_rx2WfBuf);
+                if (rx2Pan) SanitizeDisplayBuffer(_rx2PanBuf);
+                if (rx2Wf) SanitizeDisplayBuffer(_rx2WfBuf);
+
+                var rx2Flags = DisplayBodyFlags.None;
+                if (rx2Pan) rx2Flags |= DisplayBodyFlags.PanValid;
+                if (rx2Wf) rx2Flags |= DisplayBodyFlags.WfValid;
+
+                var rx2Frame = new DisplayFrame(
+                    Seq: ++_seq,
+                    TsUnixMs: nowMs,
+                    RxId: 1,
+                    BodyFlags: rx2Flags,
+                    Width: Width,
+                    CenterHz: CwOffset.EffectiveLoHz(state.Mode, state.VfoBHz),
+                    HzPerPixel: hzPerPixel,
+                    PanDb: _rx2PanBuf,
+                    WfDb: _rx2WfBuf);
+
+                _hub.Broadcast(rx2Frame);
+            }
         }
         else
         {

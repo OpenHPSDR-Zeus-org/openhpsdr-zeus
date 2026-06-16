@@ -170,13 +170,14 @@ public sealed class TxService
     {
         if (_bandPlan.TxGuardIgnore) { error = null; return true; }
         var state = _radio.Snapshot();
-        if (_bandPlan.InBand(state.VfoHz, state.Mode)) { error = null; return true; }
-        var seg = _bandPlan.GetSegment(state.VfoHz);
+        var txHz = RadioService.TxFrequencyHz(state);
+        if (_bandPlan.InBand(txHz, state.Mode)) { error = null; return true; }
+        var seg = _bandPlan.GetSegment(txHz);
         var segLabel = seg is not null
             ? $"{seg.Label} ({seg.ModeRestriction})"
             : "no amateur allocation";
-        error = $"TX blocked: {state.VfoHz / 1_000_000.0:F4} MHz is out of band for mode {state.Mode} in region {_bandPlan.CurrentRegion.DisplayName} ({segLabel})";
-        _log.LogWarning("tx.guard.blocked vfo={Vfo}Hz mode={Mode} region={Region}", state.VfoHz, state.Mode, _bandPlan.CurrentRegion.Id);
+        error = $"TX blocked: {txHz / 1_000_000.0:F4} MHz ({state.TxVfo}) is out of band for mode {state.Mode} in region {_bandPlan.CurrentRegion.DisplayName} ({segLabel})";
+        _log.LogWarning("tx.guard.blocked txVfo={TxVfo} txHz={TxHz}Hz mode={Mode} region={Region}", state.TxVfo, txHz, state.Mode, _bandPlan.CurrentRegion.Id);
         // Surface the block in the UI via the same AlertFrame path that SWR
         // trips and TX timeouts use (AlertKind.OutOfBand reserved for this).
         // The frontend AlertBanner consumes this automatically.

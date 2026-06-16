@@ -86,6 +86,7 @@ import {
   normalizeSquelch,
   normalizeState,
   normalizeStatus,
+  normalizeTxVfo,
   normalizeTxLeveling,
   setAgc,
   setAgcTop,
@@ -103,6 +104,7 @@ import {
   setPreamp,
   setSampleRate,
   setTun,
+  setTxVfo,
   setZoom,
 } from './client';
 
@@ -157,6 +159,19 @@ describe('normalizeRx2AudioMode', () => {
   });
 });
 
+describe('normalizeTxVfo', () => {
+  it('accepts numeric and string enum values', () => {
+    expect(normalizeTxVfo(0)).toBe('A');
+    expect(normalizeTxVfo(1)).toBe('B');
+    expect(normalizeTxVfo('A')).toBe('A');
+    expect(normalizeTxVfo('b')).toBe('B');
+  });
+  it('falls back to A on garbage', () => {
+    expect(normalizeTxVfo(42)).toBe('A');
+    expect(normalizeTxVfo('nope')).toBe('A');
+  });
+});
+
 describe('normalizeState', () => {
   it('reads a camelCase StateDto with numeric enums', () => {
     const s = normalizeState({
@@ -167,6 +182,7 @@ describe('normalizeState', () => {
       rx2Enabled: true,
       rx2AudioMode: 2,
       rx2AfGainDb: -3,
+      txVfo: 1,
       mode: 1,
       filterLowHz: 150,
       filterHighHz: 2850,
@@ -180,6 +196,7 @@ describe('normalizeState', () => {
     expect(s.rx2Enabled).toBe(true);
     expect(s.rx2AudioMode).toBe('rx2');
     expect(s.rx2AfGainDb).toBe(-3);
+    expect(s.txVfo).toBe('B');
     expect(s.sampleRate).toBe(192_000);
     expect(s.preampOn).toBe(false);
   });
@@ -206,6 +223,7 @@ describe('normalizeState', () => {
     expect(s.rx2Enabled).toBe(false);
     expect(s.rx2AudioMode).toBe('both');
     expect(s.rx2AfGainDb).toBe(0);
+    expect(s.txVfo).toBe('A');
     expect(s.mode).toBe('USB');
     expect(s.nr).toEqual(NR_CONFIG_DEFAULT);
     expect(s.zoomLevel).toBe(1);
@@ -2118,6 +2136,19 @@ describe('POST helpers', () => {
     expect(url).toBe('/api/tx/tun');
     expect(init?.method).toBe('POST');
     expect(JSON.parse((init?.body ?? '') as string)).toEqual({ on: true });
+  });
+
+  it('setTxVfo posts the selected VFO enum and normalizes returned state', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(jsonResponse({ txVfo: 1, vfoHz: 14_200_000 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(setTxVfo('B')).resolves.toMatchObject({ txVfo: 'B' });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe('/api/tx/vfo');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse((init?.body ?? '') as string)).toEqual({ txVfo: 1 });
   });
 
   it('setTun rethrows 404 so missing backend routes roll back', async () => {

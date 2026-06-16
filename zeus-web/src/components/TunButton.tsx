@@ -47,6 +47,7 @@ import { setTun } from '../api/client';
 import { ensureTxStationProfileActivated } from '../audio/tx-station-profile-activation';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
+import { runTxBandPreflight } from '../tx/tx-band-preflight';
 
 /**
  * PRD FR-7: TUN keys a single-tone carrier (WDSP SetTXAPostGen*) and is
@@ -67,17 +68,23 @@ export function TunButton() {
         setArming(true);
         try {
           await ensureTxStationProfileActivated();
+          const approved = await runTxBandPreflight();
+          if (!approved) {
+            setArming(false);
+            return;
+          }
         } catch (err) {
-          console.warn('tx station profile activation failed; TUN cancelled', err);
+          console.warn('TX preflight failed; TUN cancelled', err);
           setArming(false);
           return;
         }
         setArming(false);
       }
       setTunOn(next);
-      setTun(next).catch(() => {
-        setTunOn(!next);
-      });
+      setTun(next)
+        .catch(() => {
+          setTunOn(!next);
+        });
     })();
   }, [tunOn, setTunOn]);
 

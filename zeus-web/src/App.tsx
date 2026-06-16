@@ -73,6 +73,7 @@ import { SmartNrController } from './components/SmartNrController';
 import { DspSceneDiagnosticsPublisher } from './components/DspSceneDiagnosticsPublisher';
 import { ThemeApplier } from './components/ThemeApplier';
 import { TxStationProfileActivator } from './components/TxStationProfileActivator';
+import { TxBandSafetyDialog } from './tx/TxBandSafetyDialog';
 import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
 import { BOARD_LABELS } from './api/radio';
@@ -99,7 +100,8 @@ import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/u
 import { BandPlanProvider } from './context/BandPlanContext';
 import { registerServiceWorker } from './service-worker/registerSW';
 import { UpdatePrompt } from './service-worker/UpdatePrompt';
-import { MobileApp, useIsMobileViewport } from './mobile/MobileApp';
+import { MobileApp } from './mobile/MobileApp';
+import { useDesktopViewportLock, useIsMobileViewport } from './mobile/use-mobile-viewport';
 import type L from 'leaflet';
 import type { QrzStation } from './api/qrz';
 import type { Contact } from './components/design/data';
@@ -609,11 +611,14 @@ export default function App() {
     );
   }, [connected, settingsViewOpen]);
 
+  const desktopHost = useCapabilitiesStore((s) => s.capabilities?.host === 'desktop');
+  useDesktopViewportLock(desktopHost);
+
   // Mobile viewport (≤900px) reactively tracked. Also honours `?mobile=1` so
   // the mobile shell can be previewed on a desktop browser without resizing.
-  // The matchMedia listener is mounted in a layout effect so we don't paint
-  // a stale variant after a window resize / device-rotate.
-  const isMobile = useIsMobileViewport();
+  // Desktop-host loopback views keep the desktop shell so the browser view and
+  // Photino app do not diverge. LAN clients still follow the breakpoint.
+  const isMobile = useIsMobileViewport({ forceDesktop: desktopHost });
 
   // Bundle workspace state into a context so panel components can consume it
   // without prop-drilling through the FlexWorkspace factory.
@@ -889,6 +894,7 @@ export default function App() {
           <p>This keeps the layout tab but replaces its current panel positions.</p>
         </ConfirmDialog>
       )}
+      <TxBandSafetyDialog />
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
     </div>
     </SpectrumWheelActionsContext.Provider>

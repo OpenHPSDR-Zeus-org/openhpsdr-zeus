@@ -970,6 +970,7 @@ public sealed record StateDto(
     long VfoBHz = 14_200_000,
     Zeus.Contracts.Rx2AudioMode Rx2AudioMode = Zeus.Contracts.Rx2AudioMode.Both,
     double Rx2AfGainDb = 0.0,
+    Zeus.Contracts.TxVfo TxVfo = Zeus.Contracts.TxVfo.A,
 
     // CW sidetone pitch in Hz. Currently a baked-in constant
     // (CwDefaults.PitchHz); will become a user-settable preference
@@ -1029,6 +1030,12 @@ public enum Rx2AudioMode
     Both = 0,
     Rx1 = 1,
     Rx2 = 2,
+}
+
+public enum TxVfo : byte
+{
+    A = 0,
+    B = 1,
 }
 
 public sealed record Rx2SetRequest(
@@ -1225,6 +1232,8 @@ public sealed record RxAfGainSetRequest(double Db);
 public sealed record AttenuatorSetRequest(int Db);
 
 public sealed record MoxSetRequest(bool On);
+
+public sealed record TxVfoSetRequest(TxVfo TxVfo);
 
 public sealed record DriveSetRequest(int Percent);
 

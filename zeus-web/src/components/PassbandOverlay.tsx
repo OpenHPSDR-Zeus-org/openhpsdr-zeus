@@ -43,7 +43,7 @@
 // License for details.
 
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
-import { useDisplayStore } from '../state/display-store';
+import { selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { useConnectionStore } from '../state/connection-store';
 import { setFilter } from '../api/client';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
@@ -92,10 +92,10 @@ export function PassbandOverlay({
   containerRef,
   receiver = 'A',
 }: PassbandOverlayProps = {}) {
-  const centerHz = useDisplayStore((s) => s.centerHz);
-  const hzPerPixel = useDisplayStore((s) => s.hzPerPixel);
+  const centerHz = useDisplayStore((s) => selectDisplaySlice(s, receiver).centerHz);
+  const hzPerPixel = useDisplayStore((s) => selectDisplaySlice(s, receiver).hzPerPixel);
   // Header width — survives frames whose pan payload is invalid.
-  const width = useDisplayStore((s) => s.width);
+  const width = useDisplayStore((s) => selectDisplaySlice(s, receiver).width);
   const filterLowHz = useConnectionStore((s) => s.filterLowHz);
   const filterHighHz = useConnectionStore((s) => s.filterHighHz);
   const selectedVfoHz = useConnectionStore((s) =>
@@ -115,13 +115,14 @@ export function PassbandOverlay({
     if (!el) return null;
     const rect = el.getBoundingClientRect();
     if (rect.width <= 0) return null;
-    const s = useDisplayStore.getState();
+    const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
     const len = s.panDb?.length ?? s.width;
     if (!len || s.hzPerPixel <= 0) return null;
     const span = len * s.hzPerPixel;
     const frac = (clientX - rect.left) / rect.width;
-    const absHz = Number(s.centerHz) - span / 2 + frac * span;
     const c = useConnectionStore.getState();
+    const visualCenter = Number(s.centerHz);
+    const absHz = visualCenter - span / 2 + frac * span;
     return absHz - Number(receiver === 'B' ? c.vfoBHz : c.vfoHz);
   };
 
@@ -198,10 +199,13 @@ export function PassbandOverlay({
     const update = () => {
       const rect = rectRef.current;
       if (!rect) return;
-      const s = useDisplayStore.getState();
+      const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
       if (!s.width || s.hzPerPixel <= 0) return;
       const spanHz = s.width * s.hzPerPixel;
-      const view = viewCenter.isInitialized()
+      const conn = useConnectionStore.getState();
+      const view = receiver === 'B'
+        ? Number(s.centerHz)
+        : viewCenter.isInitialized()
         ? viewCenter.getViewCenterHz()
         : Number(s.centerHz);
       // The passband hangs off the VIEW center — which is, by definition,
@@ -210,16 +214,17 @@ export function PassbandOverlay({
       // spectrum slides underneath it; anchoring to the commanded target
       // instead made it lead off the line and ease back (operator feedback,
       // 2026-06-12).
-      const conn = useConnectionStore.getState();
       // Hang the passband off the dial, expressed as the dial's settled offset
       // from the display center — the same (vfo − targetCenter) the FreqAxis
       // marker uses. Outside CTUN the dial sits on the view center so this is
       // ~0 and the filter stays pinned to the zero line during a glide; under
       // CTUN the dial roams off-centre and the passband tracks it.
-      const dialOffsetHz = viewCenter.isInitialized()
+      const dialOffsetHz = receiver === 'B'
+        ? conn.vfoBHz - view
+        : viewCenter.isInitialized()
         ? conn.vfoHz - viewCenter.getTargetCenterHz()
         : 0;
-      const passCenter = receiver === 'B' ? conn.vfoBHz : view + dialOffsetHz;
+      const passCenter = view + dialOffsetHz;
       const startHz = view - spanHz / 2;
       const leftPct = ((passCenter + conn.filterLowHz - startHz) / spanHz) * 100;
       const rightPct = ((passCenter + conn.filterHighHz - startHz) / spanHz) * 100;
@@ -244,7 +249,7 @@ export function PassbandOverlay({
       }
     });
     const unsubFrame = useDisplayStore.subscribe((s, prev) => {
-      if (s.lastSeq !== prev.lastSeq) schedule();
+      if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(prev, receiver).lastSeq) schedule();
     });
     schedule();
     return () => {

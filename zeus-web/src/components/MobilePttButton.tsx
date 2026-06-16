@@ -49,6 +49,7 @@ import { ensureTxStationProfileActivated } from '../audio/tx-station-profile-act
 import { waitForMicPcmTransportReady } from '../realtime/ws-client';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
+import { runTxBandPreflight } from '../tx/tx-band-preflight';
 
 // Press-and-hold PTT for mobile. Pointer events mirror the spacebar-PTT
 // pattern in use-keyboard-shortcuts — driveMox(true) on pointerdown,
@@ -69,6 +70,11 @@ export function MobilePttButton() {
       if (on) {
         try {
           await ensureTxStationProfileActivated();
+          const ready = await runTxBandPreflight();
+          if (!ready) {
+            setMicUplinkTxForced(false);
+            return;
+          }
         } catch {
           setMicUplinkTxForced(false);
           return;

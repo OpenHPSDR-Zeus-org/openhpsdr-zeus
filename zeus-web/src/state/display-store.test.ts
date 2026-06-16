@@ -8,9 +8,11 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   _resetFrameConsumerCount,
+  createEmptyDisplaySlice,
   hasActiveFrameConsumers,
   registerFrameConsumer,
   sanitizeDisplayBins,
+  selectDisplaySlice,
   useDisplayStore,
 } from './display-store';
 import type { DecodedFrame } from '../realtime/frame';
@@ -26,7 +28,10 @@ afterEach(() => {
     wfDb: null,
     panValid: false,
     wfValid: false,
+    panFloorDb: null,
+    wfFloorDb: null,
     lastSeq: 0,
+    rx2: createEmptyDisplaySlice(),
   });
 });
 
@@ -118,6 +123,54 @@ describe('display frame bin sanitizer', () => {
     expect(state.panDb).not.toBe(panDb);
     expect(Array.from(state.panDb ?? [])).toEqual([-88, -200, -76, -200]);
     expect(state.wfDb).toBe(wfDb);
+    expect(state.panFloorDb).toBeNull();
+  });
+
+  it('stores RX2 frames separately without replacing the primary receiver slice', () => {
+    const rx1Pan = new Float32Array([-90, -88, -87, -86]);
+    useDisplayStore.getState().pushFrame({
+      msgType: 0x01,
+      headerFlags: 0,
+      seq: 11,
+      tsUnixMs: 1_700_000_000_000,
+      rxId: 0,
+      bodyFlags: 0x03,
+      panValid: true,
+      wfValid: true,
+      width: 4,
+      centerHz: 14_200_000n,
+      hzPerPixel: 93.75,
+      panDb: rx1Pan,
+      wfDb: rx1Pan,
+    });
+
+    const rx2Pan = new Float32Array([-120, -118, -117, -116]);
+    useDisplayStore.getState().pushFrame({
+      msgType: 0x01,
+      headerFlags: 0,
+      seq: 12,
+      tsUnixMs: 1_700_000_000_001,
+      rxId: 1,
+      bodyFlags: 0x03,
+      panValid: true,
+      wfValid: true,
+      width: 4,
+      centerHz: 7_200_000n,
+      hzPerPixel: 93.75,
+      panDb: rx2Pan,
+      wfDb: rx2Pan,
+    });
+
+    const state = useDisplayStore.getState();
+    expect(state.lastSeq).toBe(11);
+    expect(state.centerHz).toBe(14_200_000n);
+    expect(state.panDb).toBe(rx1Pan);
+    expect(selectDisplaySlice(state, 'B').wfFloorDb).toBeNull();
+    expect(selectDisplaySlice(state, 'B')).toMatchObject({
+      lastSeq: 12,
+      centerHz: 7_200_000n,
+      panDb: rx2Pan,
+    });
   });
 
   it('marks a valid-bit payload invalid when its bin count does not match frame width', () => {

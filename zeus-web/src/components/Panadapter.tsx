@@ -46,13 +46,14 @@ import { useEffect, useRef, type CSSProperties } from 'react';
 import { createPanRenderer, hexToRgbFloats } from '../gl/panadapter';
 import { planForFrame } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
-import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
+import { registerFrameConsumer, selectDisplaySlice, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { useConnectionStore } from '../state/connection-store';
 import { enhanceInto, useSignalEnhanceStore } from '../dsp/signal-estimator';
+import { normalizeStitchedBins, stitchFloorShiftDb } from '../dsp/stitch-normalizer';
 import * as viewCenter from '../state/view-center';
 import { useTxStore } from '../state/tx-store';
-import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
+import { usePanTuneGesture, type PanTuneGestureOptions } from '../util/use-pan-tune-gesture';
 import { FilterCursorOverlay } from './FilterCursorOverlay';
 import { FreqAxis } from './FreqAxis';
 import { PassbandOverlay } from './PassbandOverlay';
@@ -64,9 +65,19 @@ import { NotchOverlay } from './NotchOverlay';
 
 type PanadapterProps = {
   receiver?: 'A' | 'B';
+  touchMode?: PanTuneGestureOptions['touchMode'];
+  tuneReceiver?: PanTuneGestureOptions['tuneReceiver'];
+  stitched?: boolean;
+  foreground?: boolean;
 };
 
-export function Panadapter({ receiver = 'A' }: PanadapterProps = {}) {
+export function Panadapter({
+  receiver = 'A',
+  touchMode = 'normal',
+  tuneReceiver,
+  stitched = false,
+  foreground = true,
+}: PanadapterProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const vfoHz = useConnectionStore((s) =>
@@ -116,19 +127,29 @@ export function Panadapter({ receiver = 'A' }: PanadapterProps = {}) {
     // silently dropped during a glide.
     let lastRawPan: Float32Array | null = null;
     const enhScratch: Array<Float32Array | null> = [null, null];
+    let stitchScratch: Float32Array | null = null;
     let enhSlot = 0;
     const buildAnchor = (raw: Float32Array): Float32Array => {
       const { popEnabled } = useSignalEnhanceStore.getState();
       const { moxOn, tunOn } = useTxStore.getState();
+      let source = raw;
+      if (stitched && !moxOn && !tunOn) {
+        source = normalizeStitchedBins(
+          raw,
+          stitchScratch,
+          stitchFloorShiftDb(receiver, 'pan'),
+        );
+        if (source !== raw) stitchScratch = source;
+      }
       // Pop is an RX weak-signal aid; the TX trace lives in a different dB
       // domain (speech against a calibrated scale), so leave it raw while keyed.
-      if (!popEnabled || moxOn || tunOn) return raw;
+      if (!popEnabled || moxOn || tunOn) return source;
       let buf = enhScratch[enhSlot];
-      if (!buf || buf.length !== raw.length) {
-        buf = new Float32Array(raw.length);
+      if (!buf || buf.length !== source.length) {
+        buf = new Float32Array(source.length);
         enhScratch[enhSlot] = buf;
       }
-      enhanceInto(raw, buf);
+      enhanceInto(source, buf);
       enhSlot ^= 1;
       return buf;
     };
@@ -139,6 +160,17 @@ export function Panadapter({ receiver = 'A' }: PanadapterProps = {}) {
     let inViewport = true;
     let pageVisible = !document.hidden;
     const isActive = () => inViewport && pageVisible;
+    const visualCenterHz = () => {
+      if (receiver === 'B') {
+        const slice = selectDisplaySlice(useDisplayStore.getState(), receiver);
+        return slice.width && slice.hzPerPixel > 0
+          ? Number(slice.centerHz)
+          : useConnectionStore.getState().vfoBHz;
+      }
+      return viewCenter.isInitialized()
+        ? viewCenter.getViewCenterHz()
+        : Number(useDisplayStore.getState().centerHz);
+    };
 
     const redraw = () => {
       if (!anchorPan) return;
@@ -163,8 +195,8 @@ export function Panadapter({ receiver = 'A' }: PanadapterProps = {}) {
       // Fractional offset — the shaders take a float uOffsetPx, so the
       // glide is sub-pixel-smooth for free (issue #597).
       const offsetPx =
-        anchorHzPerPixel > 0 && viewCenter.isInitialized()
-          ? (anchorCenterHz - viewCenter.getViewCenterHz()) / anchorHzPerPixel
+        anchorHzPerPixel > 0
+          ? (anchorCenterHz - visualCenterHz()) / anchorHzPerPixel
           : 0;
       renderer.draw(anchorPan, dbMin, dbMax, offsetPx);
     };
@@ -221,46 +253,49 @@ export function Panadapter({ receiver = 'A' }: PanadapterProps = {}) {
 
     let lastSeqDrawn = -1;
     const unsub = useDisplayStore.subscribe((state) => {
-      if (state.lastSeq === lastSeqDrawn) return;
-      lastSeqDrawn = state.lastSeq;
+      const slice = selectDisplaySlice(state, receiver);
+      if (slice.lastSeq === 0) return;
+      if (slice.lastSeq === lastSeqDrawn) return;
+      lastSeqDrawn = slice.lastSeq;
       // The planner must see EVERY frame — including ones whose pan payload
       // is invalid — so its tracker can never drift against the waterfall's
       // view of the same stream (issue #597 dual-tracker divergence fix).
       const decision = planForFrame({
-        seq: state.lastSeq,
-        centerHz: state.centerHz,
-        hzPerPixel: state.hzPerPixel,
-        width: state.width,
+        seq: slice.lastSeq,
+        centerHz: slice.centerHz,
+        hzPerPixel: slice.hzPerPixel,
+        width: slice.width,
+        planKey: receiver,
       });
-      const frameCenter = Number(state.centerHz);
+      const frameCenter = Number(slice.centerHz);
 
       if (decision.kind === 'reset') {
         // Hard reset (first frame / width change / no-overlap jump): the old
         // anchor is meaningless. Snap the view — no glide — and adopt
         // immediately; the refill hold doesn't apply across a reset.
-        viewCenter.snapTo(frameCenter, state.hzPerPixel);
-        if (state.panValid && state.panDb) {
-          lastRawPan = state.panDb;
-          anchorPan = buildAnchor(state.panDb);
+        if (receiver === 'A') viewCenter.snapTo(frameCenter, slice.hzPerPixel);
+        if (slice.panValid && slice.panDb) {
+          lastRawPan = slice.panDb;
+          anchorPan = buildAnchor(slice.panDb);
           anchorCenterHz = frameCenter;
-          anchorHzPerPixel = state.hzPerPixel;
+          anchorHzPerPixel = slice.hzPerPixel;
         }
       } else {
         // push/shift: feed the frame center back to the view-center. With no
         // recent operator gesture this recognises external tunes (CAT/TCI,
         // band buttons, typed entry, mode changes) and glides there — which
         // also arms the refill hold via the target-change stamp.
-        viewCenter.reconcileFrame(frameCenter, state.hzPerPixel);
+        if (receiver === 'A') viewCenter.reconcileFrame(frameCenter, slice.hzPerPixel);
         // Adoption is unconditional (issue #597 Phase 2): the backend now
         // stamps CenterHz with the LO the pixels were actually computed at
         // (delay-compensated LO-history lookup), so mid-retune frames are
         // self-describing — the anchor model draws them where their data
         // belongs and the old refill-hold heuristic is unnecessary.
-        if (state.panValid && state.panDb) {
-          lastRawPan = state.panDb;
-          anchorPan = buildAnchor(state.panDb);
+        if (slice.panValid && slice.panDb) {
+          lastRawPan = slice.panDb;
+          anchorPan = buildAnchor(slice.panDb);
           anchorCenterHz = frameCenter;
-          anchorHzPerPixel = state.hzPerPixel;
+          anchorHzPerPixel = slice.hzPerPixel;
         }
       }
 
@@ -293,6 +328,9 @@ export function Panadapter({ receiver = 'A' }: PanadapterProps = {}) {
     // View-center motion → redraw at display rate while gliding. The
     // subscription is silent when the tween loop is parked (zero idle cost).
     const unsubViewCenter = viewCenter.subscribe(requestRedraw);
+    const unsubConn = useConnectionStore.subscribe((state, prev) => {
+      if (receiver === 'B' && state.vfoBHz !== prev.vfoBHz) requestRedraw();
+    });
 
     // Repaint on dB-range / trace-color updates so auto-range and the Display
     // settings panel apply without waiting for the next server frame. The
@@ -330,6 +368,7 @@ export function Panadapter({ receiver = 'A' }: PanadapterProps = {}) {
     return () => {
       unsub();
       unsubViewCenter();
+      unsubConn();
       unsubSettings();
       unsubTx();
       unsubEnhance();
@@ -340,9 +379,9 @@ export function Panadapter({ receiver = 'A' }: PanadapterProps = {}) {
       renderer.dispose();
       releaseFrameConsumer();
     };
-  }, []);
+  }, [receiver, stitched]);
 
-  usePanTuneGesture(canvasRef, receiver);
+  usePanTuneGesture(canvasRef, receiver, { touchMode, tuneReceiver });
 
   return (
     <div
@@ -354,6 +393,7 @@ export function Panadapter({ receiver = 'A' }: PanadapterProps = {}) {
         width: '100%',
         height: '100%',
         background: popActive ? 'var(--pop-surface-bg)' : 'var(--spec-bg)',
+        opacity: 1,
         ...(popActive
           ? ({ ['--pop-intensity' as string]: popIntensityCss } as CSSProperties)
           : undefined),
@@ -371,15 +411,22 @@ export function Panadapter({ receiver = 'A' }: PanadapterProps = {}) {
         }}
       >
         {receiver === 'B' ? 'RX2 · VFO B' : 'RX1 · VFO A'} · {(vfoHz / 1e6).toFixed(6)}
+        {stitched && foreground ? ' · FOCUS' : ''}
       </div>
-      <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
-      <FilterCursorOverlay containerRef={containerRef} />
-      <SpotOverlay />
-      <PeakMarkerOverlay />
-      <NotchOverlay interactive resizable containerRef={containerRef} />
-      <ImdReadings />
-      <FreqAxis receiver={receiver} />
-      <DbScale />
+      {(!stitched || foreground) && (
+        <PassbandOverlay resizable containerRef={containerRef} receiver={receiver} />
+      )}
+      {receiver === 'A' && (!stitched || foreground) && (
+        <>
+          <FilterCursorOverlay containerRef={containerRef} />
+          <SpotOverlay />
+          <PeakMarkerOverlay />
+          <NotchOverlay interactive resizable containerRef={containerRef} />
+          <ImdReadings />
+        </>
+      )}
+      <FreqAxis receiver={receiver} stitched={stitched} />
+      {(!stitched || receiver === 'A') && <DbScale />}
     </div>
   );
 }
