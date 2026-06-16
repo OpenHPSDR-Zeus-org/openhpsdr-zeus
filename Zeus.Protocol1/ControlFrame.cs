@@ -248,7 +248,42 @@ internal static class ControlFrame
         // WriteCwKeyerConfigPayload. Default mode Straight makes the write a
         // no-op until the operator opts into iambic. See zeus-bks.
         int CwKeyerSpeedWpm = 0,
-        CwKeyerMode CwKeyerMode = CwKeyerMode.Straight);
+        CwKeyerMode CwKeyerMode = CwKeyerMode.Straight,
+        // ---- Audio front-end (external-ports plan, Phase 4) -----------------
+        // Two distinct P1 audio surfaces, both verified against ramdor Thetis
+        // networkproto1.c and piHPSDR old_protocol.c:
+        //
+        //  (a) Hermes-class codec boards — DriveFilter (0x12) frame:
+        //        C2[0] = mic_boost, C2[1] = mic_linein
+        //      (Thetis networkproto1.c:581; piHPSDR old_protocol.c:2154-2156.)
+        //      These default false → byte-identical to today's 0x12 frame.
+        //
+        //  (b) Hermes-Lite 2 — 0x0a / wire-0x14 frame (read-modify-write):
+        //        C1[4] = mic_trs, C1[5] = mic_bias, C2[4:0] = line_in_gain
+        //      (Thetis networkproto1.c:597-599 case 11; same in mi0bot.)
+        //      The SAME frame carries C2[6] = puresignal_run and the C4 PGA /
+        //      step-attenuator byte — those are written by the existing
+        //      WriteAttenuatorPayload logic and MUST survive. The audio fields
+        //      only set their own bits on top.
+        //
+        // mic_bias defaults OFF — enabling it on a floating connector can hang
+        // PTT (BoardCapabilities.HermesLite2MicFrontEnd guards the surface).
+        // mic_ptt routing is a PTT-IN concern (plan §2.7), not this phase, so
+        // it is intentionally not written here (stays 0, as today).
+        bool MicBoost = false,
+        bool MicLineIn = false,
+        bool MicTrs = false,
+        bool MicBias = false,
+        byte LineInGain = 0,
+        // ---- HL2 user GPIO (external-ports plan, Phase 5) -------------------
+        // 4-bit user_dig_out, emitted on this same 0x0a / wire-0x14 frame at
+        // C3[3:0] → MCP23008 (verified Thetis-mi0bot networkproto1.c:774:
+        // `C3 = prn->user_dig_out & 0b00001111;`). HL2 only. Default 0 →
+        // byte-identical to today (the frame's C3 was previously written 0).
+        // Written via read-modify-write in WriteAttenuatorPayload alongside the
+        // audio bits, PS bit, and C4 step-attenuator — none of which touch
+        // C3, so the four GPIO bits are independent.
+        byte UserDigOut = 0);
 
     /// <summary>
     /// Write the 5 C&amp;C bytes for <paramref name="register"/> given the current
@@ -296,6 +331,18 @@ internal static class ControlFrame
                 if (state.Board == HpsdrBoardKind.HermesLite2 && state.Mox)
                 {
                     cc[2] |= 0x08;
+                }
+                // Hermes-class codec boards carry mic_boost (C2[0]) and
+                // mic_linein (C2[1]) on this 0x12 frame — Thetis
+                // networkproto1.c:581, piHPSDR old_protocol.c:2154-2156. HL2
+                // has no stream codec and routes mic/line through the 0x14
+                // frame instead, so it is excluded here. Both default false so
+                // an operator who never touches the audio panel emits the same
+                // bytes as today (byte-identical default-unsent).
+                else if (state.Board != HpsdrBoardKind.HermesLite2)
+                {
+                    if (state.MicBoost) cc[2] |= 0x01;   // C2[0] mic_boost
+                    if (state.MicLineIn) cc[2] |= 0x02;  // C2[1] mic_linein
                 }
                 break;
 
@@ -355,8 +402,43 @@ internal static class ControlFrame
 
         c14[0] = 0;   // C1 — reserved on this register
         c14[1] = 0;   // C2
-        c14[2] = 0;   // C3
+        c14[2] = 0;   // C3 — HL2 user_dig_out [3:0] set below
         c14[3] = c4;
+
+        // HL2 user GPIO (external-ports plan, Phase 5). The 4-bit user_dig_out
+        // lands in C3[3:0] of this same 0x0a / wire-0x14 frame (Thetis-mi0bot
+        // networkproto1.c:774). Read-modify-write: OR ONLY the low nibble so the
+        // (currently unused) high C3 bits stay clear and the audio / PS / C4
+        // bytes — written below and above — are untouched. Default 0 → byte-
+        // identical to today. HL2 only; on other boards C3 stays 0.
+        if (s.Board == HpsdrBoardKind.HermesLite2)
+        {
+            c14[2] |= (byte)(s.UserDigOut & 0x0F);
+        }
+
+        // HL2 mic front-end (external-ports plan, Phase 4). This C0=0x14 frame
+        // is register 0x0a, which on HL2 carries the real mic/line-in front-
+        // end ALONGSIDE puresignal_run and the C4 step-attenuator byte. The
+        // verified layout (Thetis networkproto1.c:597-599 case 11; identical in
+        // mi0bot):
+        //   C1[4] = mic_trs, C1[5] = mic_bias, C1[6] = mic_ptt
+        //   C2[4:0] = line_in_gain, C2[6] = puresignal_run
+        // We READ-MODIFY-WRITE: set ONLY the audio bits, leaving the C4 PGA /
+        // step-attenuator byte (already in c14[3]) and the C2[6] PS bit (set
+        // below) untouched. mic_ptt is a PTT-IN concern (plan §2.7), not this
+        // phase, so C1[6] is intentionally left 0 — same as today. mic_bias
+        // (C1[5]) defaults OFF: enabling it on a floating connector can hang
+        // PTT, so the operator must opt in explicitly via the audio panel.
+        if (s.Board == HpsdrBoardKind.HermesLite2)
+        {
+            byte c1 = 0;
+            if (s.MicTrs)  c1 |= 1 << 4;   // C1[4] mic_trs
+            if (s.MicBias) c1 |= 1 << 5;   // C1[5] mic_bias
+            c14[0] = c1;
+            // line_in_gain is the low 5 bits of C2; OR it in so the PS bit
+            // (set below) and the reserved high bits stay clear.
+            c14[1] |= (byte)(s.LineInGain & 0x1F);
+        }
 
         // HL2 PureSignal: register 0x0a bit 22 = puresignal_run. Bit 22 lives
         // in C2 bit 6 (22 - 16 = 6) of this same C0=0x14 frame. mi0bot
@@ -365,7 +447,8 @@ internal static class ControlFrame
         // have their PS-enable bit elsewhere on the wire (Protocol 2's
         // ALEX_PS_BIT) so we only flip C2[6] when we know we're talking to
         // an HL2. Issue #172. PR #119 placed this in C3 — that bug is the
-        // canonical regression to guard.
+        // canonical regression to guard. The audio OR above does NOT touch
+        // C2[6], so adding line_in_gain can never disturb puresignal_run.
         if (s.Board == HpsdrBoardKind.HermesLite2 && s.PsEnabled)
         {
             c14[1] |= 1 << 6;   // C2 bit 6 = puresignal_run
@@ -491,9 +574,56 @@ internal static class ControlFrame
         // them, so the rename is purely client-side.
         if (s.EnableHl2BandVolts) c3 |= 1 << 3;
         if (s.PreampOn) c3 |= 1 << 4;             // Q#2: single global preamp bit for MVP.
-        c3 |= (byte)(((byte)s.RxAntenna & 0x07) << 5);
+        // RX-antenna relay bits C3[7:5]. Emitted through the external-port
+        // encoder seam (see Zeus.Server.Hosting.IExternalPortEncoder) so every
+        // antenna-relay bit on the wire flows through one board-branched
+        // firewall. This pure helper is the single source of the C3[7:5] math;
+        // the encoder calls it too, guaranteeing the bytes are identical.
+        c3 |= EncodeRxAntennaC3Bits(s.RxAntenna, s.Board);
         c14[2] = c3;
 
+        WriteC4DuplexAndRxCount(c14, in s);
+    }
+
+    /// <summary>
+    /// Pure encoder for the Protocol-1 Config-frame RX-antenna relay bits
+    /// (C3[7:5]). Single source of truth for the antenna-relay math: both the
+    /// inline Config-frame write and
+    /// <c>Zeus.Server.Hosting.Protocol1PortEncoder</c> call this, so the bytes
+    /// on the wire are identical regardless of who composed them.
+    ///
+    /// Phase 2 (external-ports plan) ACTIVATES the wire-layer clamp: on a board
+    /// with no RX-antenna relay (HL2's single jack — C3[5] forwards to the
+    /// N2ADR antenna pad, it does NOT drive an ANT1/2/3 relay), the selection
+    /// is forced to ANT1 here so a stale per-band ANT2/3 value can never flip
+    /// the N2ADR pad. This is the wire layer of the three-layer defence (UI /
+    /// REST / wire); it holds even if an upstream layer is bypassed. For every
+    /// relay-capable board the bytes are unchanged — byte-identical to Phase 1
+    /// and to today, so the default-ANT1 golden tests stay green.
+    /// </summary>
+    internal static byte EncodeRxAntennaC3Bits(HpsdrAntenna rxAntenna, HpsdrBoardKind board)
+    {
+        // Wire-layer clamp: relay-less boards (HL2) ignore an ANT2/3 request.
+        // The capability record proper lives in Zeus.Server.Hosting (which this
+        // assembly cannot reference), so the single relay-less P1 board is named
+        // directly here — see BoardCapabilities.HasRxAntennaRelays, false for HL2
+        // only across the P1 lineup.
+        if (!P1BoardHasRxAntennaRelays(board)) rxAntenna = HpsdrAntenna.Ant1;
+        return (byte)(((byte)rxAntenna & 0x07) << 5);
+    }
+
+    /// <summary>
+    /// Whether a Protocol-1 board has switchable RX-antenna relays (ANT1/2/3).
+    /// Mirrors <c>BoardCapabilities.HasRxAntennaRelays</c> for the P1 lineup:
+    /// every ANAN / Hermes-class board does; Hermes-Lite 2 does not (single
+    /// jack). Kept local to the protocol assembly so the wire-layer clamp does
+    /// not need a reference to Zeus.Server.Hosting.
+    /// </summary>
+    internal static bool P1BoardHasRxAntennaRelays(HpsdrBoardKind board) =>
+        board != HpsdrBoardKind.HermesLite2;
+
+    private static void WriteC4DuplexAndRxCount(Span<byte> c14, in CcState s)
+    {
         // C4: Alex TX antenna [1:0] = 0 (RX-only MVP), duplex [2] = 1 (always, per
         // old_protocol.c:2661), N-1 receivers at [5:3]. mi0bot
         // networkproto1.c:973 — `C4 |= (nddc - 1) << 3`. Single-RX default

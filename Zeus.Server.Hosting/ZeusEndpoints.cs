@@ -1150,6 +1150,179 @@ public static class ZeusEndpoints
             return Results.Ok(new Hl2OptionsDto(BandVolts: effective));
         });
 
+        // Per-band TX/RX antenna relay selection (external-ports plan, Phase 2).
+        // GET returns the relay-capability gates + all HF bands' stored
+        // selections (defaulting to ANT1/ANT1). The frontend gates the TX/RX
+        // selectors on hasTxAntennaRelays / hasRxAntennaRelays. Always 200 —
+        // a non-relay board simply reports the gates false and ANT1 rows.
+        app.MapGet("/api/radio/antenna", (RadioService radio, AntennaSettingsStore store) =>
+        {
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            var bands = store.GetAll()
+                .Select(b => new AntennaBandDto(b.Band, b.TxAnt.ToString(), b.RxAnt.ToString(), b.RxAux.ToString()))
+                .ToArray();
+            return Results.Ok(new AntennaSettingsDto(
+                HasTxAntennaRelays: caps.HasTxAntennaRelays,
+                HasRxAntennaRelays: caps.HasRxAntennaRelays,
+                Bands: bands,
+                AvailableRxAux: AvailableRxAux(caps.RxAuxInputs),
+                AlexRevision: caps.AlexRevision.ToString()));
+        });
+
+        // PUT one band's antenna selection. Capability-gated: 400 on a malformed
+        // body / unknown band / unparseable antenna; 409 when the request asks
+        // for a relay the connected board does not have (a non-ANT1 TX on a
+        // board without TX relays, or non-ANT1 RX on a board without RX relays).
+        // ANT1 is always accepted (it is the hardwired default on every board).
+        app.MapPut("/api/radio/antenna", (AntennaSetRequest req, RadioService radio, AntennaSettingsStore store) =>
+        {
+            if (req is null || string.IsNullOrWhiteSpace(req.Band))
+                return Results.BadRequest(new { error = "band required" });
+            if (!BandUtils.HfBands.Contains(req.Band))
+                return Results.BadRequest(new { error = $"unknown band '{req.Band}'" });
+            if (!Enum.TryParse<HpsdrAntenna>(req.TxAnt, ignoreCase: true, out var txAnt))
+                return Results.BadRequest(new { error = $"unknown txAnt '{req.TxAnt}'" });
+            if (!Enum.TryParse<HpsdrAntenna>(req.RxAnt, ignoreCase: true, out var rxAnt))
+                return Results.BadRequest(new { error = $"unknown rxAnt '{req.RxAnt}'" });
+            var rxAuxStr = string.IsNullOrWhiteSpace(req.RxAux) ? "None" : req.RxAux;
+            if (!Enum.TryParse<RxAuxInputSel>(rxAuxStr, ignoreCase: true, out var rxAux))
+                return Results.BadRequest(new { error = $"unknown rxAux '{req.RxAux}'" });
+
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            if (txAnt != HpsdrAntenna.Ant1 && !caps.HasTxAntennaRelays)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no TX antenna relays; only Ant1 is valid" });
+            if (rxAnt != HpsdrAntenna.Ant1 && !caps.HasRxAntennaRelays)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no RX antenna relays; only Ant1 is valid" });
+            // RX-aux 409: reject an aux input the connected board's Alex/filter
+            // board does not expose (HL2 has none). None is always accepted.
+            if (rxAux != RxAuxInputSel.None && !RxAuxSupported(rxAux, caps.RxAuxInputs))
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} does not expose RX-aux input {rxAux}" });
+
+            // Save fires Changed → RadioService.RecomputePaAndPush, which reads
+            // the new per-band selection and pushes it server-authoritatively to
+            // the live client (P1 SetAntennaRx / P2 SetAntennas) — never via the
+            // frontend, so no clobber-on-connect. The wire layer defers a mid-key
+            // relay change to the unkey edge; PS owns the K36/BYPASS relay while
+            // armed regardless of an aux=BYPASS pick (§3.4(2)).
+            store.SetBand(req.Band, txAnt, rxAnt, rxAux);
+
+            var bands = store.GetAll()
+                .Select(b => new AntennaBandDto(b.Band, b.TxAnt.ToString(), b.RxAnt.ToString(), b.RxAux.ToString()))
+                .ToArray();
+            return Results.Ok(new AntennaSettingsDto(
+                caps.HasTxAntennaRelays, caps.HasRxAntennaRelays, bands,
+                AvailableRxAux(caps.RxAuxInputs), caps.AlexRevision.ToString()));
+        });
+
+        // Global (per-radio) audio front-end (external-ports plan, Phase 4).
+        // GET returns the capability gates + the persisted selection. The
+        // frontend renders the Hermes-class controls (mic boost / line-in) when
+        // hasOnboardCodec, and the HL2 controls (mic_trs / mic_bias /
+        // line-in-gain) when hermesLite2MicFrontEnd. Always 200 — a board with
+        // neither reports both gates false and the panel shows nothing.
+        app.MapGet("/api/radio/audio", (RadioService radio, AudioSettingsStore store) =>
+        {
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            // Surface the RESOLVED (board-clamped) source so the picker hydrates
+            // from what the server is actually pushing, not a stale persisted
+            // jack the current board can't honour.
+            var resolved = RadioService.ClampAudioSource(store.Get(), caps);
+            return Results.Ok(new AudioFrontEndDto(
+                HasOnboardCodec: caps.HasOnboardCodec,
+                HermesLite2MicFrontEnd: caps.HermesLite2MicFrontEnd,
+                HasRadioLineIn: caps.HasRadioLineIn,
+                HasBalancedXlr: caps.HasBalancedXlr,
+                HasMicBias: caps.HasMicBias,
+                Source: resolved.Source,
+                MicBoost: resolved.MicBoost,
+                MicBias: resolved.MicBias,
+                LineInGain: resolved.LineInGain));
+        });
+
+        // PUT the whole global TX-audio source. Capability-gated: 409 when the
+        // connected board has no audio front-end at all (neither codec nor HL2
+        // mic), so a non-audio board can never be handed audio bytes. The
+        // requested Source is CLAMPED against the board's capabilities (an
+        // unsupported jack → Host) before persisting, so the store never holds a
+        // source the wire can't emit on this board. LineInGain is clamped 0..31.
+        // The save fires AudioSettingsStore.Changed -> RadioService.PushAudioFrontEnd,
+        // which re-clamps + pushes server-authoritatively to the live client
+        // (P1 SetAudioFrontEnd / P2 TxSpecific 50/51) and mirrors the resolved
+        // source into StateDto — never via the frontend, so no clobber-on-connect.
+        app.MapPut("/api/radio/audio", (AudioFrontEndSetRequest req, RadioService radio, AudioSettingsStore store) =>
+        {
+            if (req is null)
+                return Results.BadRequest(new { error = "body required" });
+
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            bool audioCapable = caps.HasOnboardCodec || caps.HermesLite2MicFrontEnd;
+            if (!audioCapable)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no audio front-end" });
+
+            var requested = new AudioSourceSelection(
+                Source: req.Source,
+                MicBoost: req.MicBoost,
+                MicBias: req.MicBias,
+                LineInGain: (byte)Math.Clamp(req.LineInGain, 0, 31));
+            // Clamp to the board before persisting — a board that lacks the
+            // requested jack stores Host, never the illegal source.
+            store.Set(RadioService.ClampAudioSource(requested, caps));
+
+            var resolved = RadioService.ClampAudioSource(store.Get(), caps);
+            return Results.Ok(new AudioFrontEndDto(
+                caps.HasOnboardCodec,
+                caps.HermesLite2MicFrontEnd,
+                caps.HasRadioLineIn,
+                caps.HasBalancedXlr,
+                caps.HasMicBias,
+                resolved.Source,
+                resolved.MicBoost,
+                resolved.MicBias,
+                resolved.LineInGain));
+        });
+
+        // HL2 user GPIO (external-ports plan, Phase 5). 4-bit user_dig_out →
+        // register 0x0a (wire 0x14) C3[3:0] MCP23008. GET returns the gate +
+        // persisted mask; always 200. The frontend renders the toggle group
+        // only when supported (HL2). PUT 409s on a non-HL2 board so the GPIO
+        // bits can never reach the wire on a board without them.
+        app.MapGet("/api/radio/hl2-gpio", (RadioService radio) =>
+        {
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            return Results.Ok(new Hl2GpioDto(caps.HasHl2UserGpio, radio.GetHl2GpioMask() & 0x0F));
+        });
+        app.MapPut("/api/radio/hl2-gpio", (Hl2GpioSetRequest req, RadioService radio) =>
+        {
+            if (req is null) return Results.BadRequest(new { error = "body required" });
+            var caps = BoardCapabilitiesTable.For(radio.EffectiveBoardKind, radio.EffectiveOrionMkIIVariant);
+            if (!caps.HasHl2UserGpio)
+                return Results.Conflict(new { error = $"board {radio.EffectiveBoardKind} has no user GPIO" });
+            radio.SetHl2GpioMask((byte)(req.Bits & 0x0F));
+            return Results.Ok(new Hl2GpioDto(true, radio.GetHl2GpioMask() & 0x0F));
+        });
+
+        // Hardware-PTT-IN status + enable gate (external-ports plan §4). GET
+        // returns the live footswitch/mic-PTT level (per-protocol source: P1
+        // HardwarePttChanged, P2 UDP-1025 PttIn), the MOX-promotion enable gate,
+        // and the fixed 250 ms hang. Ungated — every board has a PTT-IN. The
+        // lamp is also pushed live via the PttStatus (0x33) hub frame; this
+        // endpoint is for first-paint hydration. PUT toggles the enable gate.
+        app.MapGet("/api/radio/ptt-status", (ExternalPttService ptt, PttSettingsStore store) =>
+            Results.Ok(new PttStatusDto(
+                Keyed: ptt.IsKeyed,
+                Enabled: store.Get(),
+                HangMs: ExternalPttService.HangMs)));
+
+        app.MapPut("/api/radio/ptt-status", (PttEnableSetRequest req, ExternalPttService ptt, PttSettingsStore store) =>
+        {
+            if (req is null) return Results.BadRequest(new { error = "body required" });
+            store.Set(req.Enabled);
+            return Results.Ok(new PttStatusDto(
+                Keyed: ptt.IsKeyed,
+                Enabled: store.Get(),
+                HangMs: ExternalPttService.HangMs));
+        });
+
         // Per-radio frequency calibration (issue #325). GET returns the
         // persisted correction factor + its ppm representation. POST
         // /calibrate runs the one-button auto-cal procedure (snapshot
@@ -1479,6 +1652,28 @@ public static class ZeusEndpoints
         0x0A => HpsdrBoardKind.OrionMkII,
         0x14 => HpsdrBoardKind.HermesC10,
         _    => HpsdrBoardKind.Unknown,
+    };
+
+    // Map the board's RxAuxInputs capability flags to the aux-input strings the
+    // frontend renders (external-ports plan, Phase 5). Order is fixed for a
+    // stable UI: EXT1, EXT2, XVTR, BYPASS. Empty on a board with no aux inputs.
+    static string[] AvailableRxAux(RxAuxInputs caps)
+    {
+        var list = new List<string>(4);
+        if (caps.HasFlag(RxAuxInputs.Ext1))  list.Add(nameof(RxAuxInputSel.Ext1));
+        if (caps.HasFlag(RxAuxInputs.Ext2))  list.Add(nameof(RxAuxInputSel.Ext2));
+        if (caps.HasFlag(RxAuxInputs.Xvtr))  list.Add(nameof(RxAuxInputSel.Xvtr));
+        if (caps.HasFlag(RxAuxInputs.Bypass)) list.Add(nameof(RxAuxInputSel.Bypass));
+        return list.ToArray();
+    }
+
+    static bool RxAuxSupported(RxAuxInputSel sel, RxAuxInputs caps) => sel switch
+    {
+        RxAuxInputSel.Ext1   => caps.HasFlag(RxAuxInputs.Ext1),
+        RxAuxInputSel.Ext2   => caps.HasFlag(RxAuxInputs.Ext2),
+        RxAuxInputSel.Xvtr   => caps.HasFlag(RxAuxInputs.Xvtr),
+        RxAuxInputSel.Bypass => caps.HasFlag(RxAuxInputs.Bypass),
+        _                    => true, // None always allowed
     };
 
     static HpsdrBoardKind? ParseBoardKind(string? raw)

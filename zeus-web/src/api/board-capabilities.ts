@@ -37,6 +37,42 @@ export interface BoardCapabilities {
    *  PA Settings panel's DX OUT subsection renders unconditionally but
    *  disables itself when this flag is false. */
   supportsAnvelinaDxOc: boolean;
+  // ---- External-port control (external-ports plan) ----
+  /** Board has switchable TX antenna relays (ANT1/2/3) — 0x0A / Saturn family
+   *  only. Gates the TX-antenna selector in the Radio Settings menu. */
+  hasTxAntennaRelays: boolean;
+  /** Board has switchable RX antenna relays (ANT1/2/3) via its Alex board.
+   *  True for every ANAN board; false for Hermes-Lite 2 (single jack — its
+   *  selection is clamped to ANT1 at the wire layer). Gates the RX-antenna
+   *  selector. */
+  hasRxAntennaRelays: boolean;
+  /** Board decodes the host audio stream (TLV320 codec) carrying the
+   *  Hermes-class mic/line-in front-end. True for ANAN; false for HL2 (no
+   *  stream codec). Gates the Hermes-class audio front-end controls. */
+  hasOnboardCodec: boolean;
+  /** Board has the Hermes-Lite 2 mic/PTT/line-in front-end (register 0x14).
+   *  HL2 only. Gates the HL2 audio front-end controls. */
+  hermesLite2MicFrontEnd: boolean;
+  /** Board has an analog line-in jack selectable as the TX-audio source
+   *  (TxAudioSource.RadioLineIn). True for ANAN-200D + the whole 0x0A Saturn
+   *  family; false for pure Hermes-class P1, ANAN-G2E, Metis, HL2. Gates the
+   *  Line-In source option + its gain slider. */
+  hasRadioLineIn: boolean;
+  /** Board has a switchable balanced XLR mic input (TxAudioSource.RadioBalancedXlr).
+   *  Saturn-FPGA ANAN-G2 / G2-1K only. Gates the Balanced-XLR source option. */
+  hasBalancedXlr: boolean;
+  /** Board exposes the Orion mic-bias enable on its mic jack. True for
+   *  ANAN-200D / 7000DLE / 8000DLE / G2 / G2-1K / ANVELINA-PRO3; false for
+   *  Red Pitaya, Hermes-class, ANAN-G2E, Metis, HL2. Gates the (confirmation-
+   *  guarded) mic-bias toggle that appears with RadioMic. */
+  hasMicBias: boolean;
+  // ---- External-port control (Phase 5) ----
+  /** Board has a second RX antenna path (dual-Alex / dual-RX). True for the
+   *  dual-ADC boards (100D/200D/0x0A family). Gates the RX2-antenna selector. */
+  hasRx2AntennaPath: boolean;
+  /** Board has the 4-bit HL2 user GPIO (user_dig_out on register 0x14 C3[3:0]).
+   *  HL2 only. Gates the user GPIO toggle group. */
+  hasHl2UserGpio: boolean;
 }
 
 // Safe defaults matching Zeus.Contracts.BoardCapabilities.UnknownDefaults —
@@ -56,6 +92,15 @@ export const UNKNOWN_BOARD_CAPABILITIES: BoardCapabilities = {
   hasHl2OptionalToggles: false,
   maxPowerWatts: 100,
   supportsAnvelinaDxOc: false,
+  hasTxAntennaRelays: false,
+  hasRxAntennaRelays: false,
+  hasOnboardCodec: false,
+  hermesLite2MicFrontEnd: false,
+  hasRadioLineIn: false,
+  hasBalancedXlr: false,
+  hasMicBias: false,
+  hasRx2AntennaPath: false,
+  hasHl2UserGpio: false,
 };
 
 export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
@@ -92,6 +137,42 @@ export function parseBoardCapabilities(raw: unknown): BoardCapabilities {
       typeof r.supportsAnvelinaDxOc === 'boolean'
         ? r.supportsAnvelinaDxOc
         : UNKNOWN_BOARD_CAPABILITIES.supportsAnvelinaDxOc,
+    hasTxAntennaRelays:
+      typeof r.hasTxAntennaRelays === 'boolean'
+        ? r.hasTxAntennaRelays
+        : UNKNOWN_BOARD_CAPABILITIES.hasTxAntennaRelays,
+    hasRxAntennaRelays:
+      typeof r.hasRxAntennaRelays === 'boolean'
+        ? r.hasRxAntennaRelays
+        : UNKNOWN_BOARD_CAPABILITIES.hasRxAntennaRelays,
+    hasOnboardCodec:
+      typeof r.hasOnboardCodec === 'boolean'
+        ? r.hasOnboardCodec
+        : UNKNOWN_BOARD_CAPABILITIES.hasOnboardCodec,
+    hermesLite2MicFrontEnd:
+      typeof r.hermesLite2MicFrontEnd === 'boolean'
+        ? r.hermesLite2MicFrontEnd
+        : UNKNOWN_BOARD_CAPABILITIES.hermesLite2MicFrontEnd,
+    hasRadioLineIn:
+      typeof r.hasRadioLineIn === 'boolean'
+        ? r.hasRadioLineIn
+        : UNKNOWN_BOARD_CAPABILITIES.hasRadioLineIn,
+    hasBalancedXlr:
+      typeof r.hasBalancedXlr === 'boolean'
+        ? r.hasBalancedXlr
+        : UNKNOWN_BOARD_CAPABILITIES.hasBalancedXlr,
+    hasMicBias:
+      typeof r.hasMicBias === 'boolean'
+        ? r.hasMicBias
+        : UNKNOWN_BOARD_CAPABILITIES.hasMicBias,
+    hasRx2AntennaPath:
+      typeof r.hasRx2AntennaPath === 'boolean'
+        ? r.hasRx2AntennaPath
+        : UNKNOWN_BOARD_CAPABILITIES.hasRx2AntennaPath,
+    hasHl2UserGpio:
+      typeof r.hasHl2UserGpio === 'boolean'
+        ? r.hasHl2UserGpio
+        : UNKNOWN_BOARD_CAPABILITIES.hasHl2UserGpio,
   };
 }
 

@@ -228,7 +228,22 @@ public sealed record PaRuntimeSnapshot(
     byte OcRxMask,
     bool PaEnabled,
     byte OcDxTxMask = 0,
-    byte OcDxRxMask = 0);
+    byte OcDxRxMask = 0,
+    // Per-band antenna relay selection (external-ports plan, Phase 2). Pushed
+    // to the Protocol2Client alongside OC. HasTxAntennaRelays is the board/
+    // variant gate so the P2 client only advertises ANT2/3 on a relay-capable
+    // board; the RX-antenna wire clamp for relay-less boards lives in
+    // ControlFrame.EncodeRxAntennaC3Bits (P1) and is independent of this.
+    HpsdrAntenna TxAntenna = HpsdrAntenna.Ant1,
+    HpsdrAntenna RxAntenna = HpsdrAntenna.Ant1,
+    bool HasTxAntennaRelays = false,
+    // RX auxiliary input + MkII-BPF RX-select gate (external-ports plan,
+    // Phase 5). RxAuxInput is the 0-based selector (0=None/base ANT, 1=EXT1,
+    // 2=EXT2, 3=XVTR, 4=BYPASS) the Protocol2Client expects. MkiiBpfRxSelect
+    // tells the P2 client to OR in the Saturn master RX-select bit alongside
+    // any aux. Default 0 / false reproduces today's wire bit-for-bit.
+    int RxAuxInput = 0,
+    bool MkiiBpfRxSelect = false);
 
 public sealed class PaBandEntry
 {

@@ -182,4 +182,15 @@ public enum MsgType : byte
     // argb:u32 LE, callsignLen:u8, callsign:UTF-8, modeLen:u8, mode:UTF-8,
     // commentLen:u16 LE, comment:UTF-8.
     SpotList = 0x32,
+
+    // Server → client (hardware PTT-IN status edge). Broadcast on every
+    // footswitch / mic-PTT / rear-KEY edge so the Radio Settings "PTT-IN:
+    // idle / keyed" lamp tracks the physical input regardless of protocol.
+    // The source is per-protocol (external-ports plan §4): P1 boards via the
+    // Protocol1Client HardwarePttChanged event, P2 boards via the UDP-1025
+    // hi-priority status PttIn bit. Read-only indicator — does NOT drive MOX
+    // (ExternalPttService promotes the same edges into MOX separately through
+    // the TxService.TrySetMox arbitration). Payload: [type:1][keyed:u8] = 2
+    // bytes total. See PttStatusFrame.cs.
+    PttStatus = 0x33,
 }

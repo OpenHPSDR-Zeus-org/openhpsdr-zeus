@@ -368,4 +368,205 @@ public class TxAudioIngestTests
         Assert.NotNull(lastP2);
         Assert.Contains(lastP2!, v => v == 0.5f);   // not muted
     }
+
+    // ---- Atomic single-select gate (external-ports plan, §3) ----------------
+
+    // Default _activeSource is Host, so a radio-mic-tagged block is dropped under
+    // Host without ever reaching WDSP — host audio is byte/behaviour-identical to
+    // today (the host block tag == _activeSource == Host).
+    [Fact]
+    public void RadioMic_DroppedUnderHost_HostPasses()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        Assert.Equal(MicBlockSource.Host, ingest.ActiveSource);   // default
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytesFromRadioMic(payload);    // tag=RadioMic, armed=Host → drop
+        ingest.OnMicPcmBytesFromRadioMic(payload);
+        Assert.Equal(0, ingest.TotalMicSamples);      // radio mic never accumulated
+        Assert.Equal(2, ingest.DroppedFrames);
+
+        ingest.OnMicPcmBytesFromMic(payload);         // host passes
+        Assert.Equal(MicBlockSamples, ingest.TotalMicSamples);
+    }
+
+    // Arm a radio jack: the host mic is dropped immediately by the in-lock tag
+    // compare (no overlap window), and the radio-mic stream flows.
+    [Fact]
+    public void HostSuppressedUnderRadioSource_RadioFlows()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        ingest.SetActiveSource(TxAudioSource.RadioMic);
+        Assert.Equal(MicBlockSource.RadioMic, ingest.ActiveSource);
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytesFromMic(payload);         // host tag, radio armed → drop
+        ingest.OnMicPcmBytesFromMic(payload);
+        Assert.Equal(0, ingest.TotalMicSamples);
+
+        ingest.OnMicPcmBytesFromRadioMic(payload);    // radio passes
+        Assert.Equal(MicBlockSamples, ingest.TotalMicSamples);
+    }
+
+    // SetActiveSource quiesces the WDSP accumulator on a switch so no half-block
+    // of the old source survives onto the new source.
+    [Fact]
+    public void SourceSwitch_ClearsAccumulator()
+    {
+        var engine = new StubEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        var payload = BuildMicPcmPayload(_ => 0.5f);
+        ingest.OnMicPcmBytesFromMic(payload);     // 960 host samples sit in accumulator (< 1024)
+        Assert.Equal(0, engine.ProcessedBlocks);  // no flush yet
+
+        ingest.SetActiveSource(TxAudioSource.RadioMic);   // switch → accumulator cleared
+
+        // Feed exactly one 960-sample radio block: were the 960 host samples NOT
+        // cleared, 960+960=1920 ≥ 1024 would flush a block. After the clear, a
+        // single radio block is still < 1024, so still no flush — proving the
+        // pre-switch host audio did not stitch onto the radio audio.
+        ingest.OnMicPcmBytesFromRadioMic(payload);
+        Assert.Equal(0, engine.ProcessedBlocks);
+    }
+
+    // CONCURRENCY DOUBLE-FEED (external-ports plan, §3, the crux test): two
+    // producer threads — one host-tagged, one radio-tagged — hammer the ingest
+    // while the active source is flipped repeatedly underneath them. For every
+    // WDSP block, exactly one source may have contributed, because the host/radio
+    // arbitration is decided IN-LOCK against a single _activeSource snapshot. We
+    // assert (a) no exceptions / torn state, and (b) the WDSP block count never
+    // exceeds the number of accepted-source blocks (i.e. the rejected source's
+    // blocks never reached the accumulator and contributed to a flush).
+    [Fact]
+    public void ConcurrentHostAndRadio_AcrossSourceFlips_ExactlyOneSourcePerBlock()
+    {
+        // Counting engine: every block it processes MUST be uniform (all samples
+        // equal), because host blocks are all 0.25 and radio blocks are all 0.75.
+        // If the in-lock gate ever let two sources straddle one WDSP block, the
+        // accumulator would contain a 0.25/0.75 boundary and the block would be
+        // non-uniform → the engine flags it.
+        var engine = new UniformAssertEngine { BlockSize = 1024 };
+        var ring = new TxIqRing();
+        var hub = new StreamingHub(new NullLogger<StreamingHub>());
+        using var ingest = new TxAudioIngest(
+            ring, () => engine, () => true, hub, new NullLogger<TxAudioIngest>());
+
+        var hostPayload = BuildMicPcmPayload(_ => 0.25f);
+        var radioPayload = BuildMicPcmPayload(_ => 0.75f);
+
+        const int iterations = 5000;
+        using var start = new ManualResetEventSlim(false);
+        Exception? failure = null;
+
+        var hostThread = new Thread(() =>
+        {
+            start.Wait();
+            try { for (int i = 0; i < iterations; i++) ingest.OnMicPcmBytesFromMic(hostPayload); }
+            catch (Exception ex) { Volatile.Write(ref failure, ex); }
+        });
+        var radioThread = new Thread(() =>
+        {
+            start.Wait();
+            try { for (int i = 0; i < iterations; i++) ingest.OnMicPcmBytesFromRadioMic(radioPayload); }
+            catch (Exception ex) { Volatile.Write(ref failure, ex); }
+        });
+        var flipThread = new Thread(() =>
+        {
+            start.Wait();
+            for (int i = 0; i < iterations; i++)
+                ingest.SetActiveSource((i & 1) == 0 ? TxAudioSource.RadioMic : TxAudioSource.Host);
+        });
+
+        hostThread.Start();
+        radioThread.Start();
+        flipThread.Start();
+        start.Set();
+        hostThread.Join();
+        radioThread.Join();
+        flipThread.Join();
+
+        Assert.Null(failure);                   // no torn block ever reached WDSP
+        Assert.False(engine.SawMixedBlock);     // no block straddled both sources
+        Assert.True(engine.ProcessedBlocks > 0);// the path actually ran
+    }
+
+    // Engine that asserts every WDSP block is uniform (single source). A mixed
+    // block (host 0.25 + radio 0.75 in the same 1024 samples) sets SawMixedBlock.
+    private sealed class UniformAssertEngine : IDspEngine
+    {
+        public int BlockSize { get; set; } = 1024;
+        public int TxBlockSamples => BlockSize;
+        public int TxOutputSamples => BlockSize;
+        public int ProcessedBlocks { get; private set; }
+        public bool SawMixedBlock { get; private set; }
+
+        public int ProcessTxBlock(ReadOnlySpan<float> micMono, Span<float> iqInterleaved)
+        {
+            float first = micMono[0];
+            for (int i = 1; i < micMono.Length; i++)
+                if (micMono[i] != first) { SawMixedBlock = true; break; }
+            for (int i = 0; i < BlockSize; i++) { iqInterleaved[2 * i] = micMono[i]; iqInterleaved[2 * i + 1] = 0f; }
+            ProcessedBlocks++;
+            return BlockSize;
+        }
+
+        public int OpenChannel(int sampleRateHz, int pixelWidth) => 0;
+        public void CloseChannel(int channelId) { }
+        public void FeedIq(int channelId, ReadOnlySpan<double> interleavedIqSamples) { }
+        public void SetMode(int channelId, RxMode mode) { }
+        public void SetFilter(int channelId, int lowHz, int highHz) { }
+        public void SetVfoHz(int channelId, long vfoHz) { }
+        public void SetCtunShift(int channelId, int shiftHz) { }
+        public void SetAgcTop(int channelId, double topDb) { }
+        public void SetRxDisplayFastAttack(int channelId, bool fast) { }
+        public void SetRxAfGainDb(int channelId, double db) { }
+        public void SetNoiseReduction(int channelId, NrConfig cfg) { }
+        public void SetZoom(int channelId, int level) { }
+        public int ReadAudio(int channelId, Span<float> output) => 0;
+        public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;
+        public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
+        public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
+        public int OpenTxChannel(int outputRateHz = 48_000) => 0;
+        public void SetMox(bool moxOn) { }
+        public double GetRxaSignalDbm(int channelId) => -140.0;
+        public RxStageMeters GetRxStageMeters(int channelId) => RxStageMeters.Silent;
+        public void SetTxMode(RxMode mode) { }
+        public void SetTxFilter(int lowHz, int highHz) { }
+        public void SetTxPanelGain(double linearGain) { }
+        public void SetTxLevelerMaxGain(double maxGainDb) { }
+        public void SetTxTune(bool on) { }
+        public TxStageMeters GetTxStageMeters() => TxStageMeters.Silent;
+        public void SetTwoTone(bool on, double freq1, double freq2, double mag) { }
+        public void SetPsEnabled(bool enabled) { }
+        public void SetPsControl(bool autoCal, bool singleCal) { }
+        public void SetPsHold(bool hold) { }
+        public void SetPsAdvanced(bool ptol, double moxDelaySec, double loopDelaySec,
+                                  double ampDelayNs, double hwPeak, int ints, int spi) { }
+        public void SetPsHwPeak(double hwPeak) { }
+        public void FeedPsFeedbackBlock(ReadOnlySpan<float> txI, ReadOnlySpan<float> txQ,
+                                        ReadOnlySpan<float> rxI, ReadOnlySpan<float> rxQ) { }
+        public PsStageMeters GetPsStageMeters() => PsStageMeters.Silent;
+        public void ResetPs() { }
+        public void SavePsCorrection(string path) { }
+        public void RestorePsCorrection(string path) { }
+        public void SetCfcConfig(CfcConfig cfg) { }
+        public void SetTxMonitorEnabled(bool enabled) { }
+        public int ReadTxMonitorAudio(Span<float> output) => 0;
+        public bool IsTxMonitorOn => false;
+        public void Dispose() { }
+    }
 }

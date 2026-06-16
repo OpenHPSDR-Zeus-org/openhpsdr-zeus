@@ -27,6 +27,7 @@ import { CalibrationPanel } from './CalibrationPanel';
 import { DisplayPanel } from './DisplayPanel';
 import { QrzSettingsPanel } from './QrzSettingsPanel';
 import { RadioOptionsPanel } from './RadioOptionsPanel';
+import { RadioSettingsPanel } from './RadioSettingsPanel';
 import { RotatorSettingsPanel } from './RotatorSettingsPanel';
 import { ServerUrlPanel } from './ServerUrlPanel';
 import { TciSettingsPanel } from './TciSettingsPanel';
@@ -49,6 +50,7 @@ export type SettingsTabId =
   | 'plugins'
   | 'server'
   | 'radio'
+  | 'radio-settings'
   | 'calibration'
   | 'about';
 
@@ -64,6 +66,7 @@ const TABS: ReadonlyArray<{ id: SettingsTabId; label: string }> = [
   { id: 'plugins', label: 'PLUGINS' },
   { id: 'server', label: 'SERVER' },
   { id: 'radio', label: 'RADIO' },
+  { id: 'radio-settings', label: 'RADIO SETTINGS' },
   { id: 'calibration', label: 'CALIBRATION' },
   { id: 'about', label: 'ABOUT' },
 ];
@@ -89,19 +92,41 @@ export function SettingsView({ initialTab, onClose }: Props) {
   const hasHl2OptionalToggles = useRadioStore(
     (s) => s.capabilities.hasHl2OptionalToggles,
   );
+  // RADIO SETTINGS tab appears when the board exposes ANY external port the
+  // panel can drive: antenna relays (Phase 2), the audio front-end (Phase 4),
+  // or the Phase-5 ports (RX-aux inputs, HL2 user GPIO). HL2 has no antenna
+  // relays but DOES have the mic front-end + user GPIO, so it must light the
+  // tab too — broadened here so those HL2 controls are reachable.
+  const hasExternalPorts = useRadioStore(
+    (s) =>
+      s.capabilities.hasTxAntennaRelays ||
+      s.capabilities.hasRxAntennaRelays ||
+      s.capabilities.hasOnboardCodec ||
+      s.capabilities.hermesLite2MicFrontEnd ||
+      s.capabilities.hasHl2UserGpio ||
+      s.capabilities.hasRx2AntennaPath,
+  );
   const visibleTabs = useMemo(
-    () => TABS.filter((t) => t.id !== 'radio' || hasHl2OptionalToggles),
-    [hasHl2OptionalToggles],
+    () =>
+      TABS.filter((t) => {
+        if (t.id === 'radio') return hasHl2OptionalToggles;
+        if (t.id === 'radio-settings') return hasExternalPorts;
+        return true;
+      }),
+    [hasHl2OptionalToggles, hasExternalPorts],
   );
 
-  // If the operator was sitting on the RADIO tab and the board changed
-  // (re-discovery now reports a non-HL2), bounce them back to PA so they
-  // don't get stuck on an empty tabpanel.
+  // If the operator was sitting on a board-gated tab and the board changed
+  // (re-discovery now reports a board without that capability), bounce them
+  // back to PA so they don't get stuck on an empty tabpanel.
   useEffect(() => {
     if (active === 'radio' && !hasHl2OptionalToggles) {
       setActive('pa');
     }
-  }, [active, hasHl2OptionalToggles]);
+    if (active === 'radio-settings' && !hasExternalPorts) {
+      setActive('pa');
+    }
+  }, [active, hasHl2OptionalToggles, hasExternalPorts]);
 
   useEffect(() => {
     if (initialTab) setActive(initialTab);
@@ -179,6 +204,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           {active === 'plugins' && <PluginsPanel />}
           {active === 'server' && <ServerUrlPanel />}
           {active === 'radio' && hasHl2OptionalToggles && <RadioOptionsPanel />}
+          {active === 'radio-settings' && hasExternalPorts && <RadioSettingsPanel />}
           {active === 'calibration' && <CalibrationPanel />}
           {active === 'about' && <AboutPanel />}
         </div>

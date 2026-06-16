@@ -311,7 +311,16 @@ public sealed record StateDto(
     // (Thetis: Setup → DSP → Keyer → CW Pitch). On the wire now so
     // the frontend already consumes the live value — when the setting
     // lands, only the server-side source changes.
-    int CwPitchHz = CwDefaults.PitchHz);
+    int CwPitchHz = CwDefaults.PitchHz,
+
+    // ---- TX-audio source (external-ports plan, §2/§8) ----
+    // The RESOLVED (board-clamped) TX-audio source the server is currently
+    // pushing. RadioService reads AudioSettingsStore, clamps the persisted
+    // selection against the connected board's capabilities (a jack the board
+    // lacks falls back to Host), and mirrors the resolved value here so the
+    // frontend HYDRATES from the server and never clobbers it on connect
+    // (the PR #359/#360 pattern). Default Host = 0 reproduces today's behaviour.
+    TxAudioSource TxAudioSource = TxAudioSource.Host);
 
 /// <summary>Canonical CW constants shared between backend and wire DTOs.
 /// Single source of truth — CwOffset (server-side) and StateDto both
@@ -599,6 +608,83 @@ public sealed record RadioSelectionSetRequest(
 // (issue #218). String-typed for forward compatibility — server parses
 // against the OrionMkIIVariant enum. Empty / unknown rejected with 400.
 public sealed record RadioVariantSetRequest(string Variant);
+
+// Per-band TX/RX antenna relay selection surfaced via /api/radio/antenna
+// (external-ports plan, Phase 2). Antenna strings are "Ant1" | "Ant2" |
+// "Ant3" (forward-compatible, parsed against HpsdrAntenna server-side). The
+// GET response carries the relay-capability gates so the frontend can render
+// the right selectors; the per-band rows let the panel show all HF bands.
+// RxAux is the auxiliary RX input string: "None" | "Ext1" | "Ext2" | "Xvtr" |
+// "Bypass" (external-ports plan, Phase 5). "None" uses the base RX-antenna
+// relay. Forward-compatible: parsed against RxAuxInputSel server-side.
+public sealed record AntennaBandDto(string Band, string TxAnt, string RxAnt, string RxAux = "None");
+
+// AvailableRxAux is the set of aux-input strings the connected board's Alex /
+// filter board exposes (so the frontend renders only valid options). Empty on
+// boards with no aux inputs (HL2). AlexRevision is the (operator-set, NOT
+// wire-discoverable) K36-BYPASS-direction family: "Modern" (Rev 24+, PS routes
+// to BYPASS — the safe default) or "Legacy15Or16".
+public sealed record AntennaSettingsDto(
+    bool HasTxAntennaRelays,
+    bool HasRxAntennaRelays,
+    IReadOnlyList<AntennaBandDto> Bands,
+    IReadOnlyList<string>? AvailableRxAux = null,
+    string AlexRevision = "Modern");
+
+// Mutating version — sets ONE band's antenna + RX-aux selection. Band must be a
+// known HF band; TxAnt/RxAnt must parse to HpsdrAntenna; RxAux to RxAuxInputSel.
+// The server rejects a request targeting a relay/aux the board lacks with 409.
+public sealed record AntennaSetRequest(string Band, string TxAnt, string RxAnt, string RxAux = "None");
+
+// HL2 user GPIO (external-ports plan, Phase 5). 4-bit user_dig_out → the
+// register 0x0a (wire 0x14) C3[3:0] MCP23008 lines. Bits is the low-nibble mask;
+// Supported gates the panel (HL2 only).
+public sealed record Hl2GpioDto(bool Supported, int Bits);
+public sealed record Hl2GpioSetRequest(int Bits);
+
+// Hardware-PTT-IN status + enable gate (external-ports plan, §4). Read-only
+// `Keyed` is the live footswitch / mic-PTT / rear-KEY level (per-protocol
+// source: P1 HardwarePttChanged, P2 UDP-1025 PttIn). `Enabled` gates MOX
+// promotion (defaults ON); when off the lamp still tracks the input but the
+// hardware edge is not lifted to MOX. `HangMs` is the fixed 250 ms release
+// hang, surfaced read-only for the UI label. Every board has a PTT-IN, so this
+// is ungated.
+public sealed record PttStatusDto(bool Keyed, bool Enabled, int HangMs);
+public sealed record PttEnableSetRequest(bool Enabled);
+
+// Global (per-radio, NOT per-band) TX-audio SOURCE selection (external-ports
+// plan, §2/§11). GET carries the per-board source-availability gates so the
+// single-select picker renders only the sources the connected board offers
+// (Host is always available): HasOnboardCodec gates RadioMic; HasRadioLineIn
+// gates RadioLineIn; HasBalancedXlr gates RadioBalancedXlr; HasMicBias gates the
+// mic-bias toggle. HermesLite2MicFrontEnd is carried so the panel can render the
+// HL2 "audio over USB/Ethernet" note (HL2 is Host-only).
+//
+// `Source` is the RESOLVED (board-clamped) source the server is pushing — the
+// frontend hydrates from it and never clobbers the server on connect. MicBoost /
+// MicBias / LineInGain are the parameters OF the selected source. The legacy
+// `LineIn` / `BalancedInput` fields are dropped — line-in / balanced are now
+// distinct `Source` values.
+public sealed record AudioFrontEndDto(
+    bool HasOnboardCodec,
+    bool HermesLite2MicFrontEnd,
+    bool HasRadioLineIn,
+    bool HasBalancedXlr,
+    bool HasMicBias,
+    TxAudioSource Source,
+    bool MicBoost,
+    bool MicBias,
+    int LineInGain);
+
+// Mutating version — sets the whole global TX-audio source. LineInGain is
+// clamped to 0..31 server-side. The server clamps Source against the board's
+// capabilities (an unsupported jack → Host) and returns the resolved state plus
+// the live capability gates.
+public sealed record AudioFrontEndSetRequest(
+    TxAudioSource Source,
+    bool MicBoost,
+    bool MicBias,
+    int LineInGain);
 
 // HL2-specific optional toggles surfaced via /api/radio/hl2-options.
 // Shape is an object (not a bare bool) so future mi0bot HL2 toggles can
