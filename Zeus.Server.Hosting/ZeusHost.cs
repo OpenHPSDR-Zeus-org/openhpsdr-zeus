@@ -138,16 +138,23 @@ public static class ZeusHost
         // HamClock comes up — no operator toggle, no restart. Kestrel's listener
         // is wired at host build (there is no runtime TCI toggle), so we force it
         // on here. This only changes LISTENER PRESENCE: an idle TCI listener with
-        // no client is inert and never touches the radio / DSP / TX path. Skipped
-        // when the operator has deliberately persisted a TCI config (persistedTci
-        // not null) — their explicit choice (incl. a different port or disabled)
-        // wins. The matching in-process TciOptions.Enabled is forced below so
+        // no client is inert and never touches the radio / DSP / TX path. Applied
+        // in desktop mode regardless of any persisted TCI config: the bundled
+        // rig-bridge hard-needs :40001 reachable on LOOPBACK, and any-IP (below)
+        // includes 127.0.0.1 for the bridge AND the LAN IP for external loggers,
+        // so it only ADDS loopback — it never reduces an operator's LAN access.
+        // The matching in-process TciOptions.Enabled is forced below so
         // TciServer.StartAsync doesn't early-return on !Enabled.
-        var desktopAutoTci = persistedTci is null && options.HostMode == ZeusHostMode.Desktop;
+        var desktopAutoTci = options.HostMode == ZeusHostMode.Desktop;
         if (desktopAutoTci)
         {
             tciEnabled = true;
-            tciBindAddress = "localhost";
+            // Bind all IPv4 (0.0.0.0) — NOT "localhost", which resolved to the
+            // machine's LAN IP here (e.g. 10.70.x:40001) and left 127.0.0.1 with
+            // nothing, so the bundled rig-bridge (connecting to loopback) got
+            // ECONNREFUSED. 0.0.0.0 covers 127.0.0.1 for the bridge AND the LAN
+            // for external loggers (N1MM/Log4OM), matching the normal TCI default.
+            tciBindAddress = "0.0.0.0";
             tciPort = 40001;
         }
 

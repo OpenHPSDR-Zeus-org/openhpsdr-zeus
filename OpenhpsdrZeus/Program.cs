@@ -343,11 +343,15 @@ public partial class Program
                 path = UniquePath(path);
 
                 await File.WriteAllBytesAsync(path, bytes).ConfigureAwait(false);
-                w.SendNotification("Download complete", path);
+                // Do NOT call any Photino native UI here (SendNotification etc.):
+                // it must run on the Cocoa main thread and throws an uncaught
+                // NSException off it, which a managed try/catch CANNOT catch — it
+                // terminates the whole process. The file is in ~/Downloads; just log.
+                Console.WriteLine($"[download] saved to {path}");
             }
             catch (Exception ex)
             {
-                w.SendNotification("Download failed", ex.Message);
+                Console.Error.WriteLine($"[download] failed for {url}: {ex.Message}");
             }
         });
     }

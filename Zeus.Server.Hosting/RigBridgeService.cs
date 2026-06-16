@@ -193,7 +193,10 @@ public sealed class RigBridgeService : IHostedService, IAsyncDisposable
             root["radio"] = radio;
 
             var tci = root["tci"] as JsonObject ?? new JsonObject();
-            tci["host"] = "localhost";
+            // 127.0.0.1, not "localhost": Node resolves localhost to ::1 (IPv6)
+            // first on macOS, but Zeus's TCI listener is IPv4 — force IPv4 loopback
+            // so the WS connects instead of ECONNREFUSED on the IPv6 attempt.
+            tci["host"] = "127.0.0.1";
             tci["port"] = TciPort;
             tci["trx"] = 0;
             tci["vfo"] = 0;
@@ -216,6 +219,52 @@ public sealed class RigBridgeService : IHostedService, IAsyncDisposable
     /// if the bundled agent isn't present (older HamClock installs). Never throws —
     /// click-to-tune is a best-effort convenience, not a launch blocker.
     /// </summary>
+    /// <summary>
+    /// Install the rig-bridge agent's own npm dependencies (node-forge, ws,
+    /// express, serialport, xmlrpc) into rig-bridge/node_modules — once, lazily,
+    /// on first start. HamClock's root install doesn't cover this sub-package.
+    /// serialport ships prebuilt binaries (prebuild-install), so no native
+    /// toolchain is required. Idempotent: a no-op once node-forge is present.
+    /// </summary>
+    private async Task<bool> EnsureDepsInstalledAsync()
+    {
+        var marker = Path.Combine(RigBridgeDir, "node_modules", "node-forge", "package.json");
+        if (File.Exists(marker)) return true;
+
+        Append("Installing rig-bridge dependencies (first run)…");
+        var psi = await HamClock
+            .MakeNodePsiAsync("npm", "install --no-audit --no-fund --omit=dev", RigBridgeDir)
+            .ConfigureAwait(false);
+        if (psi is null)
+        {
+            Append("Node/npm unavailable — can't install rig-bridge deps (reinstall HamClock).");
+            return false;
+        }
+        psi.Environment["NODE_ENV"] = "production";
+        try
+        {
+            using var p = new Process { StartInfo = psi, EnableRaisingEvents = true };
+            p.OutputDataReceived += (_, e) => { if (e.Data is not null) Append("[rb-npm] " + e.Data); };
+            p.ErrorDataReceived += (_, e) => { if (e.Data is not null) Append("[rb-npm!] " + e.Data); };
+            if (!p.Start()) { Append("Failed to start npm for rig-bridge."); return false; }
+            p.BeginOutputReadLine();
+            p.BeginErrorReadLine();
+            await p.WaitForExitAsync().ConfigureAwait(false);
+            if (p.ExitCode != 0)
+            {
+                Append($"rig-bridge npm install failed (exit {p.ExitCode}).");
+                return false;
+            }
+            Append("rig-bridge dependencies installed.");
+            return File.Exists(marker);
+        }
+        catch (Exception ex)
+        {
+            Append($"rig-bridge dep install error: {ex.Message}");
+            return false;
+        }
+    }
+
     public async Task StartAsync()
     {
         lock (_gate) { if (_proc is { HasExited: false }) return; }
@@ -228,6 +277,16 @@ public sealed class RigBridgeService : IHostedService, IAsyncDisposable
 
         var token = GetOrCreateApiToken();
         WriteConfig(token);
+
+        // The rig-bridge is a SEPARATE npm package (its own package.json:
+        // node-forge, ws, express, serialport, xmlrpc) — HamClock's root install
+        // doesn't cover it, so without this its node_modules is missing and
+        // require('node-forge') in core/tls.js crashes it on load. Install once.
+        if (!await EnsureDepsInstalledAsync().ConfigureAwait(false))
+        {
+            Append("rig-bridge dependencies unavailable — click-to-tune unavailable.");
+            return;
+        }
 
         try
         {
