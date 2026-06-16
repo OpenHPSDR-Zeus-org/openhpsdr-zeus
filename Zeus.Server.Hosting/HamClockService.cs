@@ -250,6 +250,9 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             // frameguard), which blocks embedding it in the Zeus workspace iframe.
             // We own this local copy, so disable frameguard.
             PatchHelmetFrameguard();
+            // Make "Use My Current Location" work on the desktop webview (no HTML5
+            // Geolocation API) via a native-first shim with a coarse IP fallback.
+            PatchGeolocationFallback();
 
             lock (_gate) { _phase = HamClockPhase.Installed; _busy = false; }
             Append("HamClock installed. Click Start to launch the panel.");
@@ -302,6 +305,9 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             EnsureEnvPort(port);
             // Covers installs that predate the frameguard patch (idempotent).
             PatchHelmetFrameguard();
+            // Covers pre-existing installs + re-injects after a dist/ rebuild that
+            // regenerated index.html without the marker (idempotent).
+            PatchGeolocationFallback();
 
             var psi = MakePsi("node", "server.js", InstallDir);
             // Belt-and-suspenders env (overridden by .env, but harmless).
@@ -751,6 +757,111 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         catch (Exception ex)
         {
             Append($"  (frameguard patch skipped: {ex.Message})");
+        }
+    }
+
+    /// <summary>
+    /// Inject a native-first geolocation shim into HamClock's served HTML so the
+    /// "Use My Current Location" button works on every platform. HamClock calls
+    /// only navigator.geolocation.getCurrentPosition; the macOS desktop webview
+    /// (Photino → WKWebView) does not implement the HTML5 Geolocation API, so the
+    /// call always fails there. The shim tries the NATIVE API first (preserving
+    /// exact browser / Windows-WebView2 behaviour), and only on failure — or when
+    /// the API is absent entirely — falls back to a user-initiated, coarse
+    /// (city-level) IP lookup, mapped into the standard GeolocationPosition shape.
+    /// Idempotent — a no-op once the ZEUS_GEO_FALLBACK marker is present. Targets
+    /// the global navigator.geolocation, so it is independent of the hashed Vite
+    /// bundle filename and survives rebuilds (re-injected on the next start).
+    /// </summary>
+    private void PatchGeolocationFallback()
+    {
+        // Inline (non-module) script: runs at parse time, before the deferred
+        // ES-module bundle, so the global patch is installed first. The bundle
+        // reads navigator.geolocation at call time, so it picks this up unchanged.
+        const string shim =
+@"<!-- ZEUS_GEO_FALLBACK: native-first geolocation with IP fallback (KB2UKA) -->
+<script>
+(function () {
+  var geo = navigator.geolocation;
+  var nativeGet = geo && geo.getCurrentPosition ? geo.getCurrentPosition.bind(geo) : null;
+  // City-level, no-key, CORS + HTTPS services; both expose flat latitude/longitude.
+  var IP_SERVICES = ['https://ipapi.co/json/', 'https://ipwho.is/'];
+  function ipLookup() {
+    var i = 0;
+    function tryNext() {
+      if (i >= IP_SERVICES.length) return Promise.reject(new Error('IP geolocation failed'));
+      var url = IP_SERVICES[i++];
+      return fetch(url, { cache: 'no-store' }).then(function (res) {
+        if (!res.ok) return tryNext();
+        return res.json().then(function (j) {
+          if (!j || j.success === false) return tryNext();
+          var lat = Number(j.latitude), lon = Number(j.longitude);
+          if (!isFinite(lat) || !isFinite(lon)) return tryNext();
+          // Coarse, user-initiated lookup — tag accuracy ~city-level (metres).
+          return { coords: { latitude: lat, longitude: lon, accuracy: 50000,
+            altitude: null, altitudeAccuracy: null, heading: null, speed: null },
+            timestamp: Date.now() };
+        });
+      }).catch(function () { return tryNext(); });
+    }
+    return tryNext();
+  }
+  function patched(success, error, options) {
+    function fallback(failCode, failMsg) {
+      ipLookup().then(success).catch(function () {
+        if (error) error({ code: failCode, message: failMsg });
+      });
+    }
+    if (nativeGet) {
+      // 1) NATIVE FIRST — exact existing web / Windows-WebView2 behaviour.
+      nativeGet(success, function () {
+        // 2) Native failed (incl. macOS WKWebView) -> IP fallback.
+        fallback(2, 'Location unavailable (native + IP failed)');
+      }, options);
+    } else {
+      fallback(2, 'Location unavailable (IP lookup failed)');
+    }
+  }
+  if (navigator.geolocation) {
+    try { navigator.geolocation.getCurrentPosition = patched; } catch (e) {}
+  } else {
+    // macOS WKWebView: the geolocation object is absent, so HamClock's
+    // `navigator.geolocation ? ... : alert('unsupported')` would alert. Synthesize
+    // the object so the happy path is taken and the IP fallback runs.
+    try {
+      Object.defineProperty(navigator, 'geolocation', {
+        value: { getCurrentPosition: patched, watchPosition: function () {}, clearWatch: function () {} },
+        configurable: true
+      });
+    } catch (e) {}
+  }
+})();
+</script>
+";
+
+        foreach (var rel in new[] { "dist", "public" })
+        {
+            try
+            {
+                var file = Path.Combine(InstallDir, rel, "index.html");
+                if (!File.Exists(file)) continue;
+                var src = File.ReadAllText(file);
+                if (src.Contains("ZEUS_GEO_FALLBACK", StringComparison.Ordinal)) continue; // already patched
+                const string anchor = "</head>";
+                var idx = src.IndexOf(anchor, StringComparison.Ordinal);
+                if (idx < 0)
+                {
+                    Append($"  (note: couldn't inject geolocation fallback into {rel}/index.html — </head> not found)");
+                    continue;
+                }
+                src = src.Insert(idx, shim);
+                File.WriteAllText(file, src);
+                Append($"Patched HamClock geolocation fallback into {rel}/index.html.");
+            }
+            catch (Exception ex)
+            {
+                Append($"  (geolocation fallback patch skipped for {rel}: {ex.Message})");
+            }
         }
     }
 
