@@ -52,6 +52,7 @@ import { enhanceInto, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import * as viewCenter from '../state/view-center';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
+import { FilterCursorOverlay } from './FilterCursorOverlay';
 import { FreqAxis } from './FreqAxis';
 import { PassbandOverlay } from './PassbandOverlay';
 import { ImdReadings } from './ImdReadings';
@@ -350,6 +351,7 @@ export function Panadapter() {
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
       <PassbandOverlay />
+      <FilterCursorOverlay containerRef={containerRef} />
       <SpotOverlay />
       <PeakMarkerOverlay />
       <ImdReadings />
