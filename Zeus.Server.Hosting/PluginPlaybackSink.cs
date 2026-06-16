@@ -2,10 +2,10 @@
 //
 // PluginPlaybackSink — host implementation of IAudioPlaybackSink. Lets a
 // plugin (e.g. the Recorder) play a clip locally (mixed into RX audio via the
-// audition sink) or inject it into the TX chain to go on the air. Mirrors how
+// preview sink) or inject it into the TX chain to go on the air. Mirrors how
 // the built-in WavRecorderService plays back: on-air goes through
 // TxAudioIngest.OnMicPcmBytesFromWav (processed by the normal TX chain) and
-// only reaches the air under operator MOX; local goes through the audition
+// only reaches the air under operator MOX; local goes through the preview
 // sink. This wrapper NEVER keys the radio.
 
 using System.Buffers;
@@ -39,7 +39,7 @@ internal sealed class PluginPlaybackSink : IAudioPlaybackSink
 
     // Local playback mixes straight into the RX audio bus (see
     // DspPipelineService.EnqueueMonitorAudio), which reaches every sink in both
-    // browser and desktop modes — so no audition enable/restore is needed. The
+    // browser and desktop modes — so no preview enable/restore is needed. The
     // token is a harmless no-op kept for contract symmetry.
     public IDisposable BeginLocalMonitor() => NoopSession.Instance;
 

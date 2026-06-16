@@ -72,7 +72,7 @@ const STORAGE_KEY = 'zeus.display.dbRange';
 const TX_STORAGE_KEY = 'zeus.display.txDbRange';
 const WF_STORAGE_KEY = 'zeus.display.wfDbRange';
 const WF_TX_STORAGE_KEY = 'zeus.display.wfTxDbRange';
-const WF_CADENCE_STORAGE_KEY = 'zeus.display.wfRowCadence';
+const WF_SCROLL_SPEED_STORAGE_KEY = 'zeus.display.wfScrollSpeed';
 
 // Legacy localStorage keys — pre-server-side storage. Read once on first
 // load to migrate the operator's existing image / colour up to the backend,
@@ -103,31 +103,31 @@ export type PanBackgroundMode = 'basic' | 'beam-map' | 'image';
 // 'stretch' → 100% 100% (distorts to fit exactly)
 export type BackgroundImageFit = 'fit' | 'fill' | 'stretch';
 
-// Number of server display frames per waterfall row upload. 1 = every
-// frame (~30 Hz), 2 = current balanced default (~15 Hz), 3 = lower CPU
-// scroll (~10 Hz). Shift/reset still run every frame so tuning remains
-// visually locked to the panadapter.
-export type WaterfallRowCadence = 1 | 2 | 3;
-export const DEFAULT_WF_ROW_CADENCE: WaterfallRowCadence = 2;
+export const WATERFALL_SCROLL_SPEED_MIN = 0.25;
+export const WATERFALL_SCROLL_SPEED_MAX = 2.5;
+export const WATERFALL_SCROLL_SPEED_STEP = 0.05;
+export const DEFAULT_WF_SCROLL_SPEED = 1;
 
-function normalizeWaterfallRowCadence(raw: unknown): WaterfallRowCadence {
+function normalizeWaterfallScrollSpeed(raw: unknown): number {
   const n = typeof raw === 'number' ? raw : Number(raw);
-  return n === 1 || n === 2 || n === 3 ? n : DEFAULT_WF_ROW_CADENCE;
+  if (!Number.isFinite(n)) return DEFAULT_WF_SCROLL_SPEED;
+  const clamped = Math.max(WATERFALL_SCROLL_SPEED_MIN, Math.min(WATERFALL_SCROLL_SPEED_MAX, n));
+  return Math.round(clamped / WATERFALL_SCROLL_SPEED_STEP) * WATERFALL_SCROLL_SPEED_STEP;
 }
 
-function readSavedWaterfallRowCadence(): WaterfallRowCadence {
+function readSavedWaterfallScrollSpeed(): number {
   try {
-    if (typeof localStorage === 'undefined') return DEFAULT_WF_ROW_CADENCE;
-    return normalizeWaterfallRowCadence(localStorage.getItem(WF_CADENCE_STORAGE_KEY));
+    if (typeof localStorage === 'undefined') return DEFAULT_WF_SCROLL_SPEED;
+    return normalizeWaterfallScrollSpeed(localStorage.getItem(WF_SCROLL_SPEED_STORAGE_KEY));
   } catch {
-    return DEFAULT_WF_ROW_CADENCE;
+    return DEFAULT_WF_SCROLL_SPEED;
   }
 }
 
-function writeSavedWaterfallRowCadence(value: WaterfallRowCadence): void {
+function writeSavedWaterfallScrollSpeed(value: number): void {
   try {
     if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(WF_CADENCE_STORAGE_KEY, String(value));
+    localStorage.setItem(WF_SCROLL_SPEED_STORAGE_KEY, String(value));
   } catch {
     // quota exceeded / private mode — accept silently.
   }
@@ -311,7 +311,7 @@ export type DisplaySettingsState = {
   txDbMin: number;
   txDbMax: number;
   colormap: ColormapId;
-  waterfallRowCadence: WaterfallRowCadence;
+  waterfallScrollSpeed: number;
   // Panadapter background overlay mode + (optional) user image. See the
   // PanBackgroundMode and BackgroundImageFit types above. Persisted on the
   // backend (zeus-prefs.db) so a single setting follows the operator across
@@ -334,7 +334,7 @@ export type DisplaySettingsState = {
   setRxTraceColor: (v: string) => Promise<void>;
   setAutoRange: (v: boolean) => void;
   setColormap: (id: ColormapId) => void;
-  setWaterfallRowCadence: (value: WaterfallRowCadence) => void;
+  setWaterfallScrollSpeed: (value: number) => void;
   setDbRange: (dbMin: number, dbMax: number) => void;
   setTxDbRange: (txDbMin: number, txDbMax: number) => void;
   setWfDbRange: (wfDbMin: number, wfDbMax: number) => void;
@@ -391,7 +391,7 @@ const initialRange = readSavedRange();
 const initialTxRange = readSavedTxRange();
 const initialWfRange = readSavedWfRange();
 const initialWfTxRange = readSavedWfTxRange();
-const initialWaterfallRowCadence = readSavedWaterfallRowCadence();
+const initialWaterfallScrollSpeed = readSavedWaterfallScrollSpeed();
 
 export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) => ({
   autoRange: false,
@@ -404,7 +404,7 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   txDbMin: initialTxRange.txDbMin,
   txDbMax: initialTxRange.txDbMax,
   colormap: 'blue',
-  waterfallRowCadence: initialWaterfallRowCadence,
+  waterfallScrollSpeed: initialWaterfallScrollSpeed,
   // Defaults until the server-side fetch lands (see hydrateFromServer at the
   // bottom of this file). The operator briefly sees a plain panadapter on
   // first paint instead of their saved image — acceptable trade-off for not
@@ -502,10 +502,10 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     }
   },
   setColormap: (colormap) => set({ colormap }),
-  setWaterfallRowCadence: (value) => {
-    const next = normalizeWaterfallRowCadence(value);
-    set({ waterfallRowCadence: next });
-    writeSavedWaterfallRowCadence(next);
+  setWaterfallScrollSpeed: (value) => {
+    const next = normalizeWaterfallScrollSpeed(value);
+    set({ waterfallScrollSpeed: next });
+    writeSavedWaterfallScrollSpeed(next);
   },
   setDbRange: (dbMin, dbMax) => {
     const next = sanitizeRange(dbMin, dbMax, FIXED_DB_MIN, FIXED_DB_MAX);

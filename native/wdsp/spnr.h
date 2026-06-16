@@ -73,6 +73,8 @@ typedef struct _spnr {
   double agc_level_drive;
   double agc_makeup_gain;
   double agc_recovery_hold;
+  double agc_continuity_hold;
+  double agc_weak_signal_memory;
   double agc_attack;
   double agc_release;
   double diag_input_rms;
@@ -87,11 +89,17 @@ typedef struct _spnr {
   double diag_floor_reduction_db;
   double diag_dynamic_range_db;
   double diag_signal_probability;
+  double diag_texture_fill;
+  double diag_mask_smoothing;
   double diag_signal_confidence;
   double diag_agc_gate;
   double diag_level_drive;
   double diag_recovery_drive;
   double diag_makeup_gain;
+  double diag_output_peak;
+  double diag_peak_evidence;
+  double diag_peak_limit;
+  double diag_peak_reduction_db;
 } spnr, *SPNR;
 
 extern SPNR create_spnr(int run, int position, int size, double* in, double* out,

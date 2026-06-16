@@ -167,9 +167,9 @@ describe('audio-suite-store profile selection', () => {
     expect(useAudioSuiteStore.getState().selectedProfile).toBe('');
   });
 
-  it('mirrors audition onto the TX monitor store', async () => {
+  it('mirrors preview onto the TX monitor store', async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
-      if (String(input) === '/api/audio-suite/audition') {
+      if (String(input) === '/api/audio-suite/preview') {
         return response({ supported: true, enabled: true });
       }
       return response({});
@@ -179,27 +179,27 @@ describe('audio-suite-store profile selection', () => {
     const { useAudioSuiteStore } = await import('./audio-suite-store');
     const { useTxStore } = await import('./tx-store');
 
-    await useAudioSuiteStore.getState().setAuditionEnabled(true);
+    await useAudioSuiteStore.getState().setPreviewEnabled(true);
 
-    expect(useAudioSuiteStore.getState().auditionEnabled).toBe(true);
+    expect(useAudioSuiteStore.getState().previewEnabled).toBe(true);
     expect(useTxStore.getState().txMonitorEnabled).toBe(true);
-    expect(fetchMock).toHaveBeenCalledWith('/api/audio-suite/audition', {
+    expect(fetchMock).toHaveBeenCalledWith('/api/audio-suite/preview', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ enabled: true }),
     });
   });
 
-  it('mirrors TX monitor changes back onto audition state', async () => {
+  it('mirrors TX monitor changes back onto preview state', async () => {
     const { useTxStore } = await import('./tx-store');
     useTxStore.getState().setTxMonitorEnabled(true);
 
     const { useAudioSuiteStore } = await import('./audio-suite-store');
 
-    expect(useAudioSuiteStore.getState().auditionEnabled).toBe(true);
+    expect(useAudioSuiteStore.getState().previewEnabled).toBe(true);
 
     useTxStore.getState().setTxMonitorEnabled(false);
 
-    expect(useAudioSuiteStore.getState().auditionEnabled).toBe(false);
+    expect(useAudioSuiteStore.getState().previewEnabled).toBe(false);
   });
 });

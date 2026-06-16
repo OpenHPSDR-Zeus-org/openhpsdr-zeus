@@ -227,7 +227,7 @@ public static class ZeusHost
             // the operator already hears RX audio through. Browser mode (the
             // else branch below) gets a NoOp impl so DI is satisfied without
             // forcing host-mode branches in callers.
-            builder.Services.AddSingleton<IAuditionAudioSink>(sp =>
+            builder.Services.AddSingleton<IPreviewAudioSink>(sp =>
                 sp.GetRequiredService<NativeAudioSink>());
             builder.Services.AddHostedService(sp =>
                 sp.GetRequiredService<NativeAudioSink>());
@@ -259,9 +259,9 @@ public static class ZeusHost
         {
             builder.Services.AddSingleton<IRxAudioSink, WebSocketAudioSink>();
             // The native local playback side-channel is desktop-only; browser
-            // mode gets the no-op implementation. Audio Suite audition is
+            // mode gets the no-op implementation. Audio Suite preview is
             // exposed in both modes through the TX Monitor path instead.
-            builder.Services.AddSingleton<IAuditionAudioSink, NoOpAuditionAudioSink>();
+            builder.Services.AddSingleton<IPreviewAudioSink, NoOpPreviewAudioSink>();
         }
         // WDSPwisdom bootstrap: run FFTW plan caching on a worker at app start so the
         // first /api/connect isn't blocked for ~2 min while WDSP plans FFTs 64..262144.
@@ -313,7 +313,7 @@ public static class ZeusHost
         // PluginQrzLookup, and the voyeur-engines-v1 build workflow.
         // WAV recorder/player: taps DspPipelineService RX + TX-monitor audio to
         // record float32 WAVs (default save folder = Downloads) and plays them
-        // back locally via the audition sink. Over-the-air playback is layered
+        // back locally via the preview sink. Over-the-air playback is layered
         // on later. Singleton resolved on first /api/wav call; its ctor wires
         // the pipeline event subscriptions.
         builder.Services.AddSingleton<Zeus.Server.Wav.WavRecorderService>();
@@ -435,7 +435,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioTapBridge>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioTapBridge>());
 
-        // PluginPlaybackSink lets a plugin play a clip locally (audition) or
+        // PluginPlaybackSink lets a plugin play a clip locally (preview) or
         // inject it on the air (TX chain, under operator MOX). Surfaced to
         // plugins via IPluginContext.Playback.
         builder.Services.AddSingleton<Zeus.Plugins.Contracts.Audio.IAudioPlaybackSink, PluginPlaybackSink>();

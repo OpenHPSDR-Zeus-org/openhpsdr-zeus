@@ -339,14 +339,14 @@ public interface IDspEngine : IDisposable
     /// is open or on Synthetic.</summary>
     void SetCfcConfig(CfcConfig cfg);
 
-    // ----------------- TX Monitor (audition path, issue #106 follow-up) ----
+    // ----------------- TX Monitor (preview path, issue #106 follow-up) ----
     // Lets the operator hear the post-bandpass / post-CFIR TX audio on a local
     // audio sink — with or without keying — so they can dial in the
     // EQ, leveler, and bandwidth profile pre-RF. Implemented in the WDSP
     // engine as a private RXA channel that demodulates the on-air IQ back to
     // 48 kHz mono audio. Synthetic no-ops; ReadTxMonitorAudio returns 0.
 
-    /// <summary>Operator toggle for the TX-monitor audition path. When true,
+    /// <summary>Operator toggle for the TX-monitor preview path. When true,
     /// the engine starts demodulating the post-CFIR TX IQ and exposes the
     /// resulting mono audio via <see cref="ReadTxMonitorAudio"/>. When false,
     /// stops feeding the monitor channel; subsequent ReadTxMonitorAudio calls

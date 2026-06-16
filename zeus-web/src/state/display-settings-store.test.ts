@@ -44,9 +44,11 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  DEFAULT_WF_ROW_CADENCE,
+  DEFAULT_WF_SCROLL_SPEED,
   FIXED_DB_MAX,
   FIXED_DB_MIN,
+  WATERFALL_SCROLL_SPEED_MAX,
+  WATERFALL_SCROLL_SPEED_MIN,
   TX_FIXED_DB_MAX,
   TX_FIXED_DB_MIN,
   useDisplaySettingsStore,
@@ -63,7 +65,7 @@ function resetStore() {
     wfDbMax: FIXED_DB_MAX,
     wfTxDbMin: TX_FIXED_DB_MIN,
     wfTxDbMax: TX_FIXED_DB_MAX,
-    waterfallRowCadence: DEFAULT_WF_ROW_CADENCE,
+    waterfallScrollSpeed: DEFAULT_WF_SCROLL_SPEED,
   });
 }
 
@@ -135,22 +137,25 @@ describe('display-settings-store', () => {
     expect(Number.isFinite(dbMax)).toBe(true);
   });
 
-  it('keeps balanced waterfall row cadence by default', () => {
-    const { waterfallRowCadence } = useDisplaySettingsStore.getState();
-    expect(waterfallRowCadence).toBe(DEFAULT_WF_ROW_CADENCE);
+  it('keeps smooth waterfall scroll speed by default', () => {
+    const { waterfallScrollSpeed } = useDisplaySettingsStore.getState();
+    expect(waterfallScrollSpeed).toBe(DEFAULT_WF_SCROLL_SPEED);
   });
 
-  it('updates waterfall row cadence to valid operator choices only', () => {
+  it('updates waterfall scroll speed continuously within operator limits', () => {
     const s = useDisplaySettingsStore.getState();
 
-    s.setWaterfallRowCadence(1);
-    expect(useDisplaySettingsStore.getState().waterfallRowCadence).toBe(1);
+    s.setWaterfallScrollSpeed(0.55);
+    expect(useDisplaySettingsStore.getState().waterfallScrollSpeed).toBe(0.55);
 
-    s.setWaterfallRowCadence(3);
-    expect(useDisplaySettingsStore.getState().waterfallRowCadence).toBe(3);
+    s.setWaterfallScrollSpeed(1.37);
+    expect(useDisplaySettingsStore.getState().waterfallScrollSpeed).toBe(1.35);
 
-    s.setWaterfallRowCadence(99 as never);
-    expect(useDisplaySettingsStore.getState().waterfallRowCadence).toBe(DEFAULT_WF_ROW_CADENCE);
+    s.setWaterfallScrollSpeed(-5);
+    expect(useDisplaySettingsStore.getState().waterfallScrollSpeed).toBe(WATERFALL_SCROLL_SPEED_MIN);
+
+    s.setWaterfallScrollSpeed(99);
+    expect(useDisplaySettingsStore.getState().waterfallScrollSpeed).toBe(WATERFALL_SCROLL_SPEED_MAX);
   });
 
   it('sets explicit RX/TX panadapter and waterfall dB windows', () => {

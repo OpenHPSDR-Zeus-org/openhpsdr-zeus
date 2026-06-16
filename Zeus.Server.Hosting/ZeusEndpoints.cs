@@ -108,22 +108,25 @@ public static class ZeusEndpoints
             return Results.Ok(new { supported = true, muted = sink.IsMuted });
         });
 
-        // Audio Suite audition toggle — operator-facing alias for TX Monitor.
-        // It drives the WDSP TX-monitor path, which demodulates post-TXA IQ
-        // back to mono audio after the full transmit chain (Audio Suite/VST
-        // route, leveler, compressor, CFC, ALC, bandpass, CFIR). This keeps
-        // Audio Suite "Audition ON" a 1:1 off-air comparison with what would
-        // reach the radio, rather than the older plugin-chain-only preview.
-        app.MapGet("/api/audio-suite/audition", (RadioService radio) =>
+        static IResult GetAudioSuitePreview(RadioService radio)
         {
             return Results.Ok(new { supported = true, enabled = radio.Snapshot().TxMonitorEnabled });
-        });
-        app.MapPut("/api/audio-suite/audition",
-            (AuditionSetRequest body, RadioService radio) =>
+        }
+
+        static IResult SetAudioSuitePreview(PreviewSetRequest body, RadioService radio)
         {
             var state = radio.SetTxMonitor(new TxMonitorSetRequest(body.Enabled));
             return Results.Ok(new { supported = true, enabled = state.TxMonitorEnabled });
-        });
+        }
+
+        // Audio Suite Preview toggle — operator-facing alias for TX Monitor.
+        // It drives the WDSP TX-monitor path, which demodulates post-TXA IQ
+        // back to mono audio after the full transmit chain (Audio Suite/VST
+        // route, leveler, compressor, CFC, ALC, bandpass, CFIR). This keeps
+        // Audio Suite "Preview ON" a 1:1 off-air comparison with what would
+        // reach the radio, rather than the older plugin-chain-only preview.
+        app.MapGet("/api/audio-suite/preview", GetAudioSuitePreview);
+        app.MapPut("/api/audio-suite/preview", SetAudioSuitePreview);
 
         // Audio Suite master bypass — single operator-facing toggle that
         // disengages the entire plugin chain in one click. Default on first
@@ -321,7 +324,7 @@ public static class ZeusEndpoints
         // Audio Suite chain-level IN/OUT signal meters. Linear peak of
         // the block entering / leaving the TX insert chain, plus dBFS.
         // Reads 0 until the chain processes audio — which only happens
-        // during MOX/TX or desktop-mode audition (mic preview). The
+        // during MOX/TX or desktop-mode preview (mic preview). The
         // Audio Suite window polls this ~15 Hz while open, mirroring the
         // per-plugin /meters polling (no new WS frame / wire-format
         // change).
@@ -1146,7 +1149,7 @@ public static class ZeusEndpoints
             return Results.Ok(new { reset = true });
         });
 
-        // TX Monitor — audition-path toggle (issue #106 follow-up). Engages a
+        // TX Monitor — preview-path toggle (issue #106 follow-up). Engages a
         // parallel demod of the post-CFIR TX IQ so the operator hears the
         // chain output at the actual TX bandwidth, with or without keying.
         // RX audio is suppressed in the broadcast while monitor is on. The
@@ -3065,7 +3068,7 @@ public static class ZeusEndpoints
 }
 
 internal sealed record NativeMuteRequest(bool Muted);
-internal sealed record AuditionSetRequest(bool Enabled);
+internal sealed record PreviewSetRequest(bool Enabled);
 internal sealed record ChainOrderSetRequest(List<string> PluginIds);
 internal sealed record ChainMembershipSetRequest(bool Active);
 internal sealed record ScanVstDirectoryRequest(string Directory);

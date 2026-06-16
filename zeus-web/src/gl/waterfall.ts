@@ -65,7 +65,7 @@ import { WF_VS, WF_FS, WF_REMAP_FS } from './shaders';
 import { lutFor, type RenderColormapId } from './colormap';
 import type { WfShiftDecision } from './wf-shift';
 
-const HISTORY_ROWS = 512;
+const HISTORY_ROWS = 4096;
 const SEED_DB = -200;
 
 export type PushOptions = {
@@ -107,6 +107,8 @@ export type WfRenderer = {
   setColormap: (id: RenderColormapId) => void;
   /** Enables and tunes the Signal Pop waterfall shader treatment. */
   setPopMode: (active: boolean, intensity?: number, reliefDepth?: number, smoothness?: number) => void;
+  /** Continuous vertical waterfall scroll rate. 1.0 is one display pixel per frame. */
+  setScrollSpeed: (speed: number) => void;
   /** 1.0 = opaque (default). 0.0 = noise floor fades to transparent so a
    *  background layer (e.g. the QRZ-mode Leaflet map) shows through. */
   setTransparent: (transparent: boolean) => void;
@@ -116,6 +118,7 @@ export type WfRenderer = {
   debugState: () => {
     texWidth: number;
     writeRow: number;
+    scrollSpeed: number;
     lastViewOffsetUv: number;
     contextLost: boolean;
   };
@@ -166,6 +169,8 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   const uDbMax = gl.getUniformLocation(drawProg, 'uDbMax');
   const uWriteRow = gl.getUniformLocation(drawProg, 'uWriteRow');
   const uH = gl.getUniformLocation(drawProg, 'uH');
+  const uVisibleRows = gl.getUniformLocation(drawProg, 'uVisibleRows');
+  const uScrollSpeed = gl.getUniformLocation(drawProg, 'uScrollSpeed');
   const uBgAlpha = gl.getUniformLocation(drawProg, 'uBgAlpha');
   const uViewOffsetUv = gl.getUniformLocation(drawProg, 'uViewOffsetUv');
   const uSeedDbDraw = gl.getUniformLocation(drawProg, 'uSeedDb');
@@ -179,6 +184,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   let popIntensity = 0;
   let reliefDepth = 0;
   let smoothness = 0;
+  let scrollSpeed = 1;
 
   const remapProg = buildProgram(gl, WF_VS, WF_REMAP_FS);
   const uRemapSrc = gl.getUniformLocation(remapProg, 'uSrc');
@@ -397,6 +403,9 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
       reliefDepth = Number.isFinite(nextReliefDepth) ? Math.max(0, Math.min(1, nextReliefDepth)) : 0;
       smoothness = Number.isFinite(nextSmoothness) ? Math.max(0, Math.min(1, nextSmoothness)) : 0;
     },
+    setScrollSpeed(speed) {
+      scrollSpeed = Number.isFinite(speed) ? Math.max(0.25, Math.min(2.5, speed)) : 1;
+    },
     clearHistory() {
       if (texWidth > 0) resetTextures(texWidth);
     },
@@ -433,6 +442,8 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
       gl.uniform1f(uDbMax, dbMax);
       gl.uniform1f(uWriteRow, writeRow);
       gl.uniform1f(uH, HISTORY_ROWS);
+      gl.uniform1f(uVisibleRows, Math.max(1, canvasH));
+      gl.uniform1f(uScrollSpeed, scrollSpeed);
       gl.uniform1f(uBgAlpha, bgAlpha);
       gl.uniform1f(uViewOffsetUv, viewOffsetUv);
       gl.uniform1f(uSeedDbDraw, SEED_DB);
@@ -450,6 +461,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
       return {
         texWidth,
         writeRow,
+        scrollSpeed,
         lastViewOffsetUv,
         contextLost: gl.isContextLost(),
       };

@@ -260,12 +260,38 @@ foreach ($artifact in (Get-JsonArray $captureManifest "requiredArtifacts")) {
         Add-ArtifactRecord `
             -Artifacts $artifacts `
             -SeenArtifactIds $seenArtifactIds `
+            -Id "live-diagnostics-matrix-report-baseline" `
+            -Kind "diagnostics-matrix-json" `
+            -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
+            -Purpose "$purpose Baseline matrix report with self-consistency and trace-index hash evidence." `
+            -Cadence $cadence `
+            -Path "artifacts/live-diagnostics-matrix-report.baseline.json" `
+            -Required $required `
+            -ScenarioIds $scenarioIds `
+            -ComparisonIds @("current-zeus")
+
+        Add-ArtifactRecord `
+            -Artifacts $artifacts `
+            -SeenArtifactIds $seenArtifactIds `
             -Id $id `
             -Kind $kind `
             -Source $source `
             -Purpose "$purpose Candidate matrix index." `
             -Cadence $cadence `
             -Path "artifacts/live-diagnostics-trace-index.candidate.json" `
+            -Required $required `
+            -ScenarioIds $scenarioIds `
+            -ComparisonIds @("nr5-spnr")
+
+        Add-ArtifactRecord `
+            -Artifacts $artifacts `
+            -SeenArtifactIds $seenArtifactIds `
+            -Id "live-diagnostics-matrix-report-candidate" `
+            -Kind "diagnostics-matrix-json" `
+            -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
+            -Purpose "$purpose Candidate matrix report with self-consistency and trace-index hash evidence." `
+            -Cadence $cadence `
+            -Path "artifacts/live-diagnostics-matrix-report.candidate.json" `
             -Required $required `
             -ScenarioIds $scenarioIds `
             -ComparisonIds @("nr5-spnr")
@@ -299,6 +325,34 @@ if (-not $seenArtifactIds.ContainsKey("fixture-metric-comparison-report")) {
         -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds")
 }
 
+if ($IncludeOptionalArtifacts -and -not $seenArtifactIds.ContainsKey("external-engine-bakeoff-report")) {
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "external-engine-bakeoff-report" `
+        -Kind "external-candidate-report-json" `
+        -Source "tools/summarize-dsp-external-engine-candidates.ps1" `
+        -Purpose "Summarize opt-in external DSP/ML candidate readiness, blockers, risk tiers, required benchmark coverage, and snapshot sync before any post-demod bakeoff." `
+        -Cadence "once-per-capture-bundle-when-external-engines-are-reviewed" `
+        -Path "artifacts/external-engine-bakeoff-report.json" `
+        -Required $false `
+        -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds")
+}
+
+if ($IncludeOptionalArtifacts -and -not $seenArtifactIds.ContainsKey("live-diagnostics-history")) {
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "live-diagnostics-history" `
+        -Kind "diagnostics-history-json" `
+        -Source "tools/summarize-dsp-live-diagnostics-history.ps1" `
+        -Purpose "Summarize captured NR5/NR2 live diagnostics attempts, rank best weak-signal and lowest-pumping traces, preserve safety-class rollups, and bind each history trace to watcher-summary/JSONL SHA-256 provenance before choosing the next candidate comparison." `
+        -Cadence "once-after-several-live-diagnostics-attempts" `
+        -Path "artifacts/live-diagnostics-history.json" `
+        -Required $false `
+        -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds")
+}
+
 if (-not $seenArtifactIds.ContainsKey("operator-notes")) {
     Add-ArtifactRecord `
         -Artifacts $artifacts `
@@ -324,14 +378,17 @@ $output = [ordered]@{
         "This scaffold is derived from benchmark-capture-manifest.json.",
         "Endpoint JSON is validated through bundle-index.json unless -IncludeEndpointJson is used.",
         "Use watch-dsp-live-diagnostics.ps1 for optional diagnostics-jsonl traces across live scenario windows.",
-        "Use run-dsp-live-diagnostics-matrix.ps1 for optional multi-scenario trace indexes; pass separate -IndexPath values for baseline and candidate runs. With -IncludeOptionalArtifacts, this scaffold emits separate baseline and candidate live-diagnostics-trace-index entries.",
-        "Use compare-dsp-live-diagnostics-traces.ps1 to compare baseline and candidate live traces before accepting a candidate window.",
+        "Use run-dsp-live-diagnostics-matrix.ps1 for optional multi-scenario trace indexes; pass separate -IndexPath and -ReportPath values for baseline and candidate runs. With -IncludeOptionalArtifacts, this scaffold emits separate baseline/candidate live-diagnostics-trace-index and live-diagnostics-matrix-report entries.",
+        "Use compare-dsp-live-diagnostics-traces.ps1 with -BundleDir to compare baseline and candidate live traces before accepting a candidate window while keeping report paths portable.",
         "Use compare-dsp-live-diagnostics-matrix.ps1 with -BundleDir to compare baseline and candidate trace indexes across all captured live scenarios while keeping report paths portable.",
+        "Use summarize-dsp-live-diagnostics-history.ps1 with -BundleDir after several NR5/NR2 live attempts so best weak-signal, lowest-pumping, latest tuning directions, and per-trace watcher-summary/JSONL hashes are preserved as portable review evidence.",
+        "Use summarize-dsp-external-engine-candidates.ps1 with -BundleDir before any external DSP/ML bakeoff so RNNoise/DeepFilterNet/SpeexDSP/WebRTC blockers, risk, and required evidence stay explicit.",
         "For acceptance review, set the live-diagnostics-trace-comparison artifact required=true after the comparison report is captured so regressions fail strict validation.",
         "For single-comparison artifact indexes, add comparisonIds to the artifact entry so validation checks only the captured comparison scope.",
         "Run audit-wdsp-native-symbols.ps1 with -RequireBinaryExports for the required wdsp-native-symbol-audit.json before accepting native or P/Invoke changes.",
         "Run audit-wdsp-runtime-artifacts.ps1 for the required wdsp-runtime-artifact-audit.json before claiming packaged NR4/NR5 support for any RID.",
         "For plural audio, spectrum, and trace evidence, store an index JSON at the generated path with a files array of bundle-relative evidence file paths plus scenario/candidate metadata.",
+        "Use run-dsp-wdsp-fixture-evidence.ps1 with -BundleDir to generate WDSP-backed offline fixture metrics plus portable audio/spectrum evidence indexes before running fixture comparison; run-dsp-offline-fixture-evidence.ps1 is only a deterministic schema fallback.",
         "Run compare-dsp-fixture-metrics.ps1 after offline-fixture-metrics.json is filled; strict validation requires dsp-fixture-metric-comparison.json.",
         "Run validate-dsp-modernization-bundle.ps1 with -RequireArtifactFiles only after every required path exists and is non-empty."
     )

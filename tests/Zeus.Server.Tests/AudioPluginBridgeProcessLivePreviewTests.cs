@@ -58,7 +58,7 @@ public class AudioPluginBridgeProcessLivePreviewTests
         var spy = new SpyPlugin();
         var bridge = new AudioPluginBridge(
             isMoxOn: () => false,
-            isMonitorOn: () => true,        // <- audition mode
+            isMonitorOn: () => true,        // <- preview mode
             log: NullLogger<AudioPluginBridge>.Instance);
         bridge.Chain.SetSlot(0, spy);
         bridge.Chain.MasterBypassed = false;
@@ -127,21 +127,21 @@ public class AudioPluginBridgeProcessLivePreviewTests
         Assert.False(spy.LastCtxMox);
     }
 
-    // -- Full-chain audition split -------------------------------------
+    // -- Full-chain preview split -------------------------------------
 
     [Fact]
-    public void Preview_DoesNotPublish_PluginOnlyOutput_ToAuditionSink()
+    public void Preview_DoesNotPublish_PluginOnlyOutput_ToPreviewSink()
     {
-        // Audio Suite Audition now uses the WDSP TX-monitor path. The
+        // Audio Suite Preview now uses the WDSP TX-monitor path. The
         // live-preview tap still runs plugins for meters, but it must not
         // publish plugin-only audio to the legacy local sink.
         var spy = new SpyPlugin();
-        var sink = new SpyAuditionSink(enabledInitial: true);
+        var sink = new SpyPreviewSink(enabledInitial: true);
         var bridge = new AudioPluginBridge(
             isMoxOn: () => false,
             isMonitorOn: () => false,
             log: NullLogger<AudioPluginBridge>.Instance,
-            audition: sink);
+            preview: sink);
         bridge.Chain.SetSlot(0, spy);
         bridge.Chain.MasterBypassed = false;
 
@@ -157,34 +157,34 @@ public class AudioPluginBridgeProcessLivePreviewTests
         // Meter-only path — the chain still runs (plugins see Process), but
         // audible monitoring is owned by TX Monitor, not this local sink.
         var spy = new SpyPlugin();
-        var sink = new SpyAuditionSink(enabledInitial: false);
+        var sink = new SpyPreviewSink(enabledInitial: false);
         var bridge = new AudioPluginBridge(
             isMoxOn: () => false,
             isMonitorOn: () => false,
             log: NullLogger<AudioPluginBridge>.Instance,
-            audition: sink);
+            preview: sink);
         bridge.Chain.SetSlot(0, spy);
         bridge.Chain.MasterBypassed = false;
 
         RunPreview(bridge, 256);
 
         Assert.Equal(1, spy.ProcessCallCount);     // chain still ran (meters animated)
-        Assert.Equal(0, sink.PublishCallCount);    // but audition was not published
+        Assert.Equal(0, sink.PublishCallCount);    // but preview was not published
     }
 
     [Fact]
     public void Preview_Skipped_When_Mox_On_Even_If_SinkEnabled()
     {
-        // Existing MOX gate wins: even with audition turned on, the
-        // preview path short-circuits on MOX and the audition sink
+        // Existing MOX gate wins: even with preview turned on, the
+        // preview path short-circuits on MOX and the preview sink
         // sees nothing for the duration of TX.
         var spy = new SpyPlugin();
-        var sink = new SpyAuditionSink(enabledInitial: true);
+        var sink = new SpyPreviewSink(enabledInitial: true);
         var bridge = new AudioPluginBridge(
             isMoxOn: () => true,
             isMonitorOn: () => false,
             log: NullLogger<AudioPluginBridge>.Instance,
-            audition: sink);
+            preview: sink);
         bridge.Chain.SetSlot(0, spy);
         bridge.Chain.MasterBypassed = false;
 
@@ -195,14 +195,14 @@ public class AudioPluginBridgeProcessLivePreviewTests
     }
 
     [Fact]
-    public void Preview_DirtyPluginOutput_DoesNotReachAuditionSink()
+    public void Preview_DirtyPluginOutput_DoesNotReachPreviewSink()
     {
-        var sink = new SpyAuditionSink(enabledInitial: true);
+        var sink = new SpyPreviewSink(enabledInitial: true);
         var bridge = new AudioPluginBridge(
             isMoxOn: () => false,
             isMonitorOn: () => false,
             log: NullLogger<AudioPluginBridge>.Instance,
-            audition: sink);
+            preview: sink);
         bridge.Chain.SetSlot(0, new DirtyOutputPlugin());
         bridge.Chain.MasterBypassed = false;
 
@@ -334,16 +334,16 @@ public class AudioPluginBridgeProcessLivePreviewTests
         field.SetValue(target, value);
     }
 
-    private sealed class SpyAuditionSink : IAuditionAudioSink
+    private sealed class SpyPreviewSink : IPreviewAudioSink
     {
         public int PublishCallCount;
         public int LastPublishLength;
         public int LastSampleRate;
         public float[] LastSamples = Array.Empty<float>();
-        public SpyAuditionSink(bool enabledInitial) { IsEnabled = enabledInitial; }
+        public SpyPreviewSink(bool enabledInitial) { IsEnabled = enabledInitial; }
         public bool IsEnabled { get; private set; }
         public void SetEnabled(bool enabled) { IsEnabled = enabled; }
-        public void PublishAudition(ReadOnlySpan<float> monoSamples, int sampleRate)
+        public void PublishPreview(ReadOnlySpan<float> monoSamples, int sampleRate)
         {
             PublishCallCount++;
             LastPublishLength = monoSamples.Length;

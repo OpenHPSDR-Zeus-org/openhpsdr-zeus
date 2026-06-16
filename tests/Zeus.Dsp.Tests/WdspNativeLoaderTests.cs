@@ -20,7 +20,9 @@ public sealed class WdspNativeLoaderTests
         bool nr5 = WdspDspEngine.Nr5SpnrAvailable;
         bool nr5Advanced = WdspDspEngine.Nr5SpnrAdvancedDiagnosticsAvailable;
         bool nr5Deep = WdspDspEngine.Nr5SpnrDeepDiagnosticsAvailable;
+        bool nr5Peak = WdspDspEngine.Nr5SpnrPeakDiagnosticsAvailable;
         bool nr5Agc = WdspDspEngine.Nr5SpnrAgcDiagnosticsAvailable;
+        bool nr5Memory = WdspDspEngine.Nr5SpnrMemoryDiagnosticsAvailable;
 
         if (!loadable)
         {
@@ -29,7 +31,9 @@ public sealed class WdspNativeLoaderTests
             Assert.False(nr5);
             Assert.False(nr5Advanced);
             Assert.False(nr5Deep);
+            Assert.False(nr5Peak);
             Assert.False(nr5Agc);
+            Assert.False(nr5Memory);
         }
     }
 
@@ -46,6 +50,8 @@ public sealed class WdspNativeLoaderTests
         Assert.True(WdspDspEngine.Nr5SpnrAvailable, "win-x64 wdsp.dll should export NR5/SPNR symbols.");
         Assert.True(WdspDspEngine.Nr5SpnrAdvancedDiagnosticsAvailable, "win-x64 wdsp.dll should export NR5 advanced diagnostics.");
         Assert.True(WdspDspEngine.Nr5SpnrDeepDiagnosticsAvailable, "win-x64 wdsp.dll should export NR5 deep diagnostics.");
+        Assert.True(WdspDspEngine.Nr5SpnrPeakDiagnosticsAvailable, "win-x64 wdsp.dll should export NR5 peak diagnostics.");
         Assert.True(WdspDspEngine.Nr5SpnrAgcDiagnosticsAvailable, "win-x64 wdsp.dll should export NR5 AGC recovery diagnostics.");
+        Assert.True(WdspDspEngine.Nr5SpnrMemoryDiagnosticsAvailable, "win-x64 wdsp.dll should export NR5 weak-signal memory diagnostics.");
     }
 }

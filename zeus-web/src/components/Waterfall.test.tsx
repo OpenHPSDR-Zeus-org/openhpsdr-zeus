@@ -88,6 +88,7 @@ describe('Waterfall', () => {
       draw: vi.fn(),
       setColormap: vi.fn(),
       setPopMode: vi.fn(),
+      setScrollSpeed: vi.fn(),
       setTransparent: vi.fn(),
       debugState: vi.fn(() => ({
         texWidth: 0,
@@ -135,10 +136,12 @@ describe('Waterfall', () => {
 
     expect(loseContext).not.toHaveBeenCalled();
 
-    unmount();
+    act(() => {
+      unmount();
+    });
 
     act(() => {
-      vi.advanceTimersByTime(250);
+      vi.advanceTimersByTime(251);
     });
 
     expect(loseContext).toHaveBeenCalledTimes(1);
@@ -152,6 +155,7 @@ describe('Waterfall', () => {
       draw: vi.fn(),
       setColormap: vi.fn(),
       setPopMode: vi.fn(),
+      setScrollSpeed: vi.fn(),
       setTransparent: vi.fn(),
       debugState: vi.fn(() => ({
         texWidth: 1024,

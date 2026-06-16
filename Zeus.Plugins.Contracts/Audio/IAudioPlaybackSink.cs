@@ -20,7 +20,7 @@ public interface IAudioPlaybackSink
     /// <summary>
     /// Begin a local-monitor playback session: ensures subsequent
     /// <see cref="PlayLocal"/> samples are actually audible by enabling the
-    /// host's local-monitor (audition) path for the duration. Returns a token
+    /// host's local-monitor (preview) path for the duration. Returns a token
     /// whose <see cref="IDisposable.Dispose"/> restores the prior state. Always
     /// wrap a local-playback run in <c>using (sink.BeginLocalMonitor())</c>;
     /// the token is a harmless no-op when local monitoring is unavailable.

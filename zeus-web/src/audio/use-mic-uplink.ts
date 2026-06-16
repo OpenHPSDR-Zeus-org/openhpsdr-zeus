@@ -55,7 +55,7 @@ import { useCapabilitiesStore } from '../state/capabilities-store';
  * is live. Peak dBFS of every 20 ms block is pushed to tx-store so the
  * MicMeter renders even on RX — the operator needs to know the mic is
  * being picked up *before* keying. Uplink samples are forwarded to the
- * server only for local TX or TX Monitor / Audio Suite audition; during
+ * server only for local TX or TX Monitor / Audio Suite preview; during
  * normal RX the worklet still runs but the wire path is a no-op.
  *
  * getUserMedia requires a user gesture on first grant, but Chrome remembers

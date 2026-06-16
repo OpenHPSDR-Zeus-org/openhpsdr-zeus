@@ -291,19 +291,28 @@ Next steps:
    powershell -NoProfile -ExecutionPolicy Bypass -File tools\audit-wdsp-native-symbols.ps1 -ReportPath "$bundleDir\artifacts\wdsp-native-symbol-audit.json" -RequireBinaryExports
 3. Audit packaged WDSP runtime artifacts and side-by-side native dependencies:
    powershell -NoProfile -ExecutionPolicy Bypass -File tools\audit-wdsp-runtime-artifacts.ps1 -ReportPath "$bundleDir\artifacts\wdsp-runtime-artifact-audit.json" -FailOnMissingWinX64Nr5
-4. Capture optional live runtime trends during scenario windows:
+4. Summarize opt-in external DSP/ML candidates before any external-engine bakeoff:
+   powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-external-engine-candidates.ps1 -BundleDir "$bundleDir" -CandidatePath "$bundleDir\external-engine-candidates.json" -SnapshotPath "$bundleDir\modernization-snapshot.json" -ReportPath "$bundleDir\artifacts\external-engine-bakeoff-report.json" -FailOnUnsafe
+5. Generate WDSP-backed offline fixture evidence and compare the offline-ready scenario matrix:
+   powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-wdsp-fixture-evidence.ps1 -BundleDir "$bundleDir" -Force
+   powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-fixture-metrics.ps1 -BundleDir "$bundleDir" -FailOnRegression
+6. Capture optional live runtime trends during scenario windows:
    powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl $base$certArg -Samples 60 -IntervalMs 1000 -JsonlPath "$bundleDir\artifacts\live-diagnostics-trace.jsonl" -ReportPath "$bundleDir\artifacts\live-diagnostics-watch.json"
-5. Or capture repeatable baseline and candidate multi-scenario live diagnostics matrices:
+7. Or capture repeatable baseline and candidate multi-scenario live diagnostics matrices:
    powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BaseUrl $base$certArg -BundleDir "$bundleDir" -ComparisonId current-zeus -IndexPath "$bundleDir\artifacts\live-diagnostics-trace-index.baseline.json" -ReportPath "$bundleDir\artifacts\live-diagnostics-matrix-report.baseline.json" -Samples 60 -IntervalMs 1000
    powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BaseUrl $base$certArg -BundleDir "$bundleDir" -ComparisonId nr5-spnr -IndexPath "$bundleDir\artifacts\live-diagnostics-trace-index.candidate.json" -ReportPath "$bundleDir\artifacts\live-diagnostics-matrix-report.candidate.json" -Samples 60 -IntervalMs 1000
-6. Compare a candidate live trace against a baseline trace before accepting the window:
-   powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-traces.ps1 -BaselinePath "$bundleDir\artifacts\live-diagnostics-baseline.jsonl" -CandidatePath "$bundleDir\artifacts\live-diagnostics-trace.jsonl" -ReportPath "$bundleDir\artifacts\live-diagnostics-trace-comparison.json" -FailOnRegression
-7. Compare candidate matrix windows against baseline matrix windows before accepting the scenario set:
+8. Summarize live tuning history after several NR5/NR2 attempts; rerun this after the watcher summaries and JSONL traces are finalized because schema v9 records per-trace SHA-256 provenance:
+   powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-live-diagnostics-history.ps1 -BundleDir "$bundleDir" -ReportPath "$bundleDir\artifacts\live-diagnostics-history.json"
+9. Compare a candidate live trace against a baseline trace before accepting the window:
+   powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-traces.ps1 -BundleDir "$bundleDir" -BaselinePath "$bundleDir\artifacts\live-diagnostics-baseline.jsonl" -CandidatePath "$bundleDir\artifacts\live-diagnostics-trace.jsonl" -ReportPath "$bundleDir\artifacts\live-diagnostics-trace-comparison.json" -FailOnRegression
+10. Compare candidate matrix windows against baseline matrix windows before accepting the scenario set:
    powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir "$bundleDir" -BaselineIndexPath "$bundleDir\artifacts\live-diagnostics-trace-index.baseline.json" -CandidateIndexPath "$bundleDir\artifacts\live-diagnostics-trace-index.candidate.json" -BaselineComparisonId current-zeus -CandidateComparisonId nr5-spnr -ReportPath "$bundleDir\artifacts\live-diagnostics-trace-comparison.json" -FailOnRegression
-8. For acceptance review, mark live-diagnostics-trace-comparison required=true in artifact-manifest.json after the comparison report is captured.
-9. Fill the required files listed in artifact-manifest.template.json.
-10. Copy or regenerate the scaffold as artifact-manifest.json, then validate with:
+11. For acceptance review, mark live-diagnostics-trace-comparison required=true in artifact-manifest.json after the comparison report is captured.
+12. Fill the required files listed in artifact-manifest.template.json.
+13. Copy or regenerate the scaffold as artifact-manifest.json, then validate with:
    powershell -NoProfile -ExecutionPolicy Bypass -File tools\validate-dsp-modernization-bundle.ps1 -BundleDir "$bundleDir" -RequireArtifactFiles
+14. Summarize validation/provenance failures, evidence-gate readiness, acceptance stage readiness, and the next evidence actions for review or CI triage:
+   powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-modernization-validation-report.ps1 -BundleDir "$bundleDir" -FailOnIssues
 "@
 Set-Content -LiteralPath (Join-Path $bundleDir "README.md") -Value $readme -Encoding UTF8
 

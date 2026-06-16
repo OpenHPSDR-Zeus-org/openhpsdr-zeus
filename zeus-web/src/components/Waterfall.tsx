@@ -49,7 +49,12 @@ import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { useConnectionStore } from '../state/connection-store';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
-import { enhanceInto, useSignalEnhanceStore } from '../dsp/signal-estimator';
+import {
+  enhanceInto,
+  enhanceWaterfallTextureInto,
+  registerEstimatorConsumer,
+  useSignalEnhanceStore,
+} from '../dsp/signal-estimator';
 import * as viewCenter from '../state/view-center';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
@@ -109,6 +114,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     // registered (all spectrum surfaces closed). Context-independent: stays a
     // single mount/unmount pair, NEVER re-invoked on context-restore (#629).
     const releaseFrameConsumer = registerFrameConsumer();
+    const releaseEstimatorConsumer = registerEstimatorConsumer();
 
     // Mutable GL bindings so the renderer can be rebuilt after a WebGL context
     // loss (#629). On Windows/ANGLE the waterfall's float-texture context can
@@ -138,6 +144,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       const reliefDepth = active ? Math.max(0, Math.min(1, signalEnhance.waterfallReliefDepth / 100)) : 0;
       const smoothness = active ? Math.max(0, Math.min(1, signalEnhance.waterfallSmoothness / 100)) : 0;
       const colormap: RenderColormapId = active ? 'pop' : useDisplaySettingsStore.getState().colormap;
+      renderer.setScrollSpeed(useDisplaySettingsStore.getState().waterfallScrollSpeed);
       renderer.setPopMode(active, intensity, reliefDepth, smoothness);
       renderer.setColormap(colormap);
     };
@@ -181,12 +188,12 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     if (!buildRenderer()) {
       return () => {
         releaseFrameConsumer();
+        releaseEstimatorConsumer();
         rendererRef.current = null;
       };
     }
 
     let lastSeqDrawn = -1;
-    let tickCounter = 0;
     // Count context-restore cycles — a one-off eviction logs once; a steady
     // leak would climb, which is the signal to dig further (#629).
     let restoreCount = 0;
@@ -211,13 +218,14 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       const { moxOn, tunOn } = useTxStore.getState();
       const keyed = moxOn || tunOn;
       const pop = useSignalEnhanceStore.getState();
-      // Signal Pop (RX only): history rows hold gated/compressed 0..1 display
-      // values (enhanceInto), so the colormap maps [0,1] directly. Keyed/TX
-      // keeps the absolute dB window.
+      // POP history rows are normalized 0..1. Normal RX rows stay in dB space
+      // with topographic signal relief, so the waterfall dB slider still owns
+      // the range. Keyed/TX keeps the absolute TX dB window.
       const popOn = pop.popEnabled && !keyed;
       const popIntensity = popOn ? Math.max(0, Math.min(1, pop.popRenderIntensity / 100)) : 0;
       const reliefDepth = popOn ? Math.max(0, Math.min(1, pop.waterfallReliefDepth / 100)) : 0;
       const smoothness = popOn ? Math.max(0, Math.min(1, pop.waterfallSmoothness / 100)) : 0;
+      renderer.setScrollSpeed(useDisplaySettingsStore.getState().waterfallScrollSpeed);
       // Mirror DbScale.tsx — keyed (MOX/TUN) renders the TX waterfall
       // window so the operator's RX noise-floor view stays put.
       const dbMin = popOn ? 0 : keyed ? wfTxDbMin : wfDbMin;
@@ -340,32 +348,27 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       const wfDb = state.wfValid && state.wfDb ? state.wfDb : null;
       wfFrames++;
       if (wfDb) wfValidFrames++;
-      let skipRowUpload = false;
       if (wfDb) {
-        tickCounter++;
-        const cadence = useDisplaySettingsStore.getState().waterfallRowCadence;
-        skipRowUpload = tickCounter % cadence !== 0;
         // No refill hold here any more (issue #597 Phase 2): rows are
         // stamped with the LO their data was captured at, so the shared
         // shift planner places them correctly even mid-retune.
         // Feed the auto-range tracker — it's a no-op when AUTO is off.
         useDisplaySettingsStore.getState().updateAutoRange(wfDb);
       }
-      // Signal Pop (RX only): substitute the per-bin floor-subtracted row so
-      // weak carriers leap off a flattened baseline. Gated off while keyed —
-      // TX pixels are a different dB domain.
+      // RX only: substitute the per-bin floor-subtracted texture row so weak
+      // coherent carriers get shape before the colormap. Gated off while keyed
+      // because TX pixels are a different dB domain.
       let wfForPush = wfDb;
       if (wfDb) {
         const { moxOn, tunOn } = useTxStore.getState();
-        if (useSignalEnhanceStore.getState().popEnabled && !moxOn && !tunOn) {
+        if (!moxOn && !tunOn) {
           if (!enhBuf || enhBuf.length !== wfDb.length) enhBuf = new Float32Array(wfDb.length);
-          enhanceInto(wfDb, enhBuf);
+          if (useSignalEnhanceStore.getState().popEnabled) enhanceInto(wfDb, enhBuf);
+          else enhanceWaterfallTextureInto(wfDb, enhBuf);
           wfForPush = enhBuf;
         }
       }
-      renderer.pushFrame(decision, wfForPush, state.centerHz, state.hzPerPixel, {
-        skipRowUpload,
-      });
+      renderer.pushFrame(decision, wfForPush, state.centerHz, state.hzPerPixel);
       requestRedraw();
     });
 
@@ -391,8 +394,12 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
         state.wfDbMin !== prev.wfDbMin ||
         state.wfDbMax !== prev.wfDbMax ||
         state.wfTxDbMin !== prev.wfTxDbMin ||
-        state.wfTxDbMax !== prev.wfTxDbMax
+        state.wfTxDbMax !== prev.wfTxDbMax ||
+        state.waterfallScrollSpeed !== prev.waterfallScrollSpeed
       ) {
+        if (state.waterfallScrollSpeed !== prev.waterfallScrollSpeed) {
+          renderer.setScrollSpeed(state.waterfallScrollSpeed);
+        }
         requestRedraw();
       }
     });
@@ -411,9 +418,9 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       }
     });
 
-    // Signal Pop toggle: the value scale flips wholesale (absolute dB ↔
-    // dB-above-floor). Re-seed the history so pre-toggle rows don't render as a
-    // clipped band against the new range. New rows fill in from the top.
+    // Signal enhancement / TX toggles: POP is normalized 0..1, normal RX and
+    // TX are dB domains. Re-seed history so rows from one domain don't render
+    // as clipped bands in another.
     const unsubEnhance = useSignalEnhanceStore.subscribe((state, prev) => {
       if (state.popEnabled !== prev.popEnabled) {
         clearIfValueDomainChanged();
@@ -456,6 +463,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       canvas.removeEventListener('webglcontextrestored', onContextRestored);
       cancelDrawBusFrame(redraw);
       releaseFrameConsumer();
+      releaseEstimatorConsumer();
       renderer?.dispose();
       // Free the ANGLE context slot on real unmounts, but give React
       // StrictMode's development-only effect remount a chance to cancel it.

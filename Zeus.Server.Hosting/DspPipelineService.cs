@@ -97,7 +97,7 @@ public class DspPipelineService : BackgroundService,
     /// Raised when TX-monitor audio is available — the processed transmit audio
     /// demodulated back from the TX IQ (post EQ / compressor / leveler / CFC),
     /// i.e. what actually goes on the air. Only fires while the TX monitor /
-    /// audition path is running. 48 kHz mono float32; args (receiver,
+    /// preview path is running. 48 kHz mono float32; args (receiver,
     /// sampleRateHz, samples). Memory valid only for the synchronous handler.
     /// </summary>
     public event Action<int, int, ReadOnlyMemory<float>>? TxMonitorAudioAvailable;
@@ -127,6 +127,22 @@ public class DspPipelineService : BackgroundService,
     internal struct RxAudioLevelerState
     {
         public double GainDb;
+        public bool DiagnosticsValid;
+        public double InputRmsDbfs;
+        public double InputPeakDbfs;
+        public double OutputRmsDbfs;
+        public double OutputPeakDbfs;
+        public double DesiredGainDb;
+        public double AppliedGainDb;
+        public double GainDeltaDb;
+        public double PeakHeadroomDb;
+        public double PreLimitPeakDbfs;
+        public double OutputLimitReductionDb;
+        public int OutputLimitSampleCount;
+        public int PauseHoldBlocks;
+        public bool BoostSlewLimited;
+        public bool PeakLimited;
+        public bool OutputLimited;
     }
 
     private RxAudioLevelerState _rxAudioLeveler;
@@ -151,8 +167,26 @@ public class DspPipelineService : BackgroundService,
     private const double RxLevelerMaxBoostDb = 36.0;
     private const double RxLevelerMaxCutDb = -24.0;
     private const double RxLevelerBoostSlewDbPerBlock = 2.0;
+    private const double RxLevelerFastBoostSlewDbPerBlock = 3.5;
+    private const double RxLevelerFastBoostHeadroomDb = 6.0;
+    private const double RxLevelerVeryFastBoostSlewDbPerBlock = 5.5;
+    private const double RxLevelerVeryFastBoostHeadroomDb = 10.0;
+    private const double RxLevelerVeryFastBoostGateRmsDb = -45.0;
+    private const double RxLevelerCrestCatchupBoostSlewDbPerBlock = 7.5;
+    private const double RxLevelerCrestCatchupHeadroomDb = 16.0;
+    private const double RxLevelerCrestCatchupMinCrestDb = 8.0;
+    private const double RxLevelerCrestCatchupMaxRmsDb = -28.0;
+    private const double RxLevelerCrestCatchupMinPeakDb = -52.0;
+    private const double RxLevelerCrestCatchupMinGainGapDb = 6.0;
+    private const double RxLevelerMemoryCatchupGateRmsDb = -66.0;
+    private const double RxLevelerMemoryCatchupGatePeakDb = -56.0;
+    private const double RxLevelerMemoryCatchupMinGainDb = 3.0;
     private const double RxLevelerSmoothCutDb = 6.0;
-    private const double RxLevelerPeakCeiling = 0.92;
+    private const int RxLevelerPauseHoldBlocks = 18;
+    private const double RxLevelerPauseMemoryDecayDbPerBlock = 4.5;
+    private const int RxLevelerGainRampMaxSamples = 256;
+    private const double RxLevelerOutputSoftKnee = 0.74;
+    private const double RxLevelerOutputPeakCeiling = 0.84;
     private const int AdaptiveSquelchWindowSamples = 12;
     private const int AdaptiveSquelchMinSamples = 2;
     private const double AdaptiveSquelchFloorPercentile = 0.20;
@@ -235,8 +269,11 @@ public class DspPipelineService : BackgroundService,
         }
 
         double rms = Math.Sqrt(sumSq / samples.Length);
+        double inputRmsDbfs = AudioLinearToDbfsRaw(rms);
+        double inputPeakDbfs = AudioLinearToDbfsRaw(peak);
+        bool belowGate = rms <= 0.0 || inputRmsDbfs < RxLevelerGateRmsDb;
         double desiredDb;
-        if (rms <= 0.0)
+        if (belowGate)
         {
             desiredDb = 0.0;
         }
@@ -249,38 +286,103 @@ public class DspPipelineService : BackgroundService,
         }
 
         desiredDb = Math.Clamp(desiredDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+        double rmsDesiredDb = desiredDb;
+        double peakHeadroomDb = double.NaN;
+        bool peakLimited = false;
         if (peak > 1e-9)
         {
-            double peakHeadroomDb = 20.0 * Math.Log10(RxLevelerPeakCeiling / peak);
+            peakHeadroomDb = 20.0 * Math.Log10(RxLevelerOutputSoftKnee / peak);
+            peakLimited = peakHeadroomDb < rmsDesiredDb - 1.0e-6;
             desiredDb = Math.Min(desiredDb, peakHeadroomDb);
         }
         desiredDb = Math.Clamp(desiredDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
 
         double currentDb = double.IsFinite(state.GainDb) ? state.GainDb : 0.0;
         double nextDb;
-        if (desiredDb < currentDb)
+        double memoryDb = currentDb;
+        bool boostSlewLimited = false;
+        if (belowGate)
+        {
+            // Do not amplify NR-muted/squelched gaps, but keep gain memory
+            // through normal SSB word spacing so the next weak syllable does
+            // not audibly fade upward from 0 dB again.
+            nextDb = 0.0;
+            if (currentDb > 0.0 && state.PauseHoldBlocks > 0)
+            {
+                memoryDb = currentDb;
+                state.PauseHoldBlocks--;
+            }
+            else
+            {
+                memoryDb = Math.Max(0.0, currentDb - RxLevelerPauseMemoryDecayDbPerBlock);
+                state.PauseHoldBlocks = 0;
+            }
+        }
+        else if (desiredDb < currentDb)
         {
             // Immediate attack against loud arrivals: the current block is
             // inspected before gain is applied, so big signals cut gain before
             // broadcast instead of riding the previous weak-signal boost.
             nextDb = desiredDb;
+            memoryDb = nextDb;
         }
         else
         {
-            // Slower weak-signal lift keeps noise from pumping while still
-            // bringing cleaned NR audio up over a few ticks.
-            nextDb = Math.Min(desiredDb, currentDb + RxLevelerBoostSlewDbPerBlock);
+            // Slower weak-signal lift keeps noise from pumping. When the block
+            // has real peak headroom, release faster so weak cleaned speech
+            // reaches the target before the operator hears it fade upward.
+            double boostSlewDb = RxLevelerBoostSlewDbPerBlock;
+            if (double.IsFinite(peakHeadroomDb) && peakHeadroomDb >= RxLevelerFastBoostHeadroomDb)
+            {
+                boostSlewDb = inputRmsDbfs >= RxLevelerVeryFastBoostGateRmsDb &&
+                    peakHeadroomDb >= RxLevelerVeryFastBoostHeadroomDb
+                        ? RxLevelerVeryFastBoostSlewDbPerBlock
+                        : RxLevelerFastBoostSlewDbPerBlock;
+                if (currentDb >= RxLevelerMemoryCatchupMinGainDb &&
+                    inputRmsDbfs >= RxLevelerMemoryCatchupGateRmsDb &&
+                    inputPeakDbfs >= RxLevelerMemoryCatchupGatePeakDb &&
+                    peakHeadroomDb >= RxLevelerVeryFastBoostHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(boostSlewDb, RxLevelerVeryFastBoostSlewDbPerBlock);
+                }
+                double crestDb = inputPeakDbfs - inputRmsDbfs;
+                double gainGapDb = desiredDb - currentDb;
+                if (currentDb >= RxLevelerMemoryCatchupMinGainDb &&
+                    inputRmsDbfs >= RxLevelerMemoryCatchupGateRmsDb &&
+                    inputRmsDbfs <= RxLevelerCrestCatchupMaxRmsDb &&
+                    inputPeakDbfs >= RxLevelerCrestCatchupMinPeakDb &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb &&
+                    crestDb >= RxLevelerCrestCatchupMinCrestDb &&
+                    gainGapDb >= RxLevelerCrestCatchupMinGainGapDb)
+                {
+                    boostSlewDb = Math.Max(boostSlewDb, RxLevelerCrestCatchupBoostSlewDbPerBlock);
+                }
+            }
+            double boostedDb = currentDb + boostSlewDb;
+            boostSlewLimited = desiredDb > boostedDb + 1.0e-6;
+            nextDb = Math.Min(desiredDb, boostedDb);
+            memoryDb = nextDb;
         }
 
-        state.GainDb = nextDb;
+        if (!belowGate)
+            state.PauseHoldBlocks = nextDb > 0.0 ? RxLevelerPauseHoldBlocks : 0;
+
         double cutDb = currentDb - nextDb;
-        bool smoothCut = cutDb > 0.0 && cutDb <= RxLevelerSmoothCutDb;
+        bool peakSafetyCut = cutDb > 0.0 && double.IsFinite(peakHeadroomDb) &&
+            currentDb > peakHeadroomDb + 1.0e-6;
+        bool smoothCut = !belowGate && cutDb > 0.0 && cutDb <= RxLevelerSmoothCutDb && !peakSafetyCut;
         double startDb = nextDb > currentDb || smoothCut ? currentDb : nextDb;
         double deltaDb = nextDb - startDb;
+        int rampSamples = deltaDb != 0.0
+            ? Math.Min(samples.Length, RxLevelerGainRampMaxSamples)
+            : 0;
+        double targetGain = Math.Pow(10.0, nextDb / 20.0);
         double gain = Math.Pow(10.0, startDb / 20.0);
-        double gainStep = deltaDb != 0.0
-            ? Math.Pow(10.0, deltaDb / (20.0 * samples.Length))
+        double gainStep = rampSamples > 0
+            ? Math.Pow(10.0, deltaDb / (20.0 * rampSamples))
             : 1.0;
+        double preLimitPeak = 0.0;
+        int outputLimitSampleCount = 0;
         for (int i = 0; i < samples.Length; i++)
         {
             float s = samples[i];
@@ -290,9 +392,44 @@ public class DspPipelineService : BackgroundService,
                 continue;
             }
 
-            gain *= gainStep;
-            samples[i] = SoftLimitRxAudioSample((float)(s * gain));
+            if (i < rampSamples)
+            {
+                gain *= gainStep;
+            }
+            else
+            {
+                gain = targetGain;
+            }
+            float scaled = (float)(s * gain);
+            double scaledAbs = Math.Abs(scaled);
+            if (double.IsFinite(scaledAbs) && scaledAbs > preLimitPeak) preLimitPeak = scaledAbs;
+            float limited = SoftLimitRxAudioSample(scaled);
+            if (Math.Abs(limited) + 1.0e-7f < scaledAbs) outputLimitSampleCount++;
+            samples[i] = limited;
         }
+
+        double outputRms = Rms(samples);
+        double outputPeak = PeakAbs(samples);
+        double preLimitPeakDbfs = AudioLinearToDbfsRaw(preLimitPeak);
+        double outputLimitReductionDb = preLimitPeak > outputPeak && outputPeak > 0.0
+            ? 20.0 * Math.Log10(preLimitPeak / outputPeak)
+            : 0.0;
+        state.GainDb = memoryDb;
+        state.DiagnosticsValid = true;
+        state.InputRmsDbfs = inputRmsDbfs;
+        state.InputPeakDbfs = inputPeakDbfs;
+        state.OutputRmsDbfs = AudioLinearToDbfsRaw(outputRms);
+        state.OutputPeakDbfs = AudioLinearToDbfsRaw(outputPeak);
+        state.DesiredGainDb = desiredDb;
+        state.AppliedGainDb = nextDb;
+        state.GainDeltaDb = nextDb - currentDb;
+        state.PeakHeadroomDb = peakHeadroomDb;
+        state.PreLimitPeakDbfs = preLimitPeakDbfs;
+        state.OutputLimitReductionDb = outputLimitReductionDb;
+        state.OutputLimitSampleCount = outputLimitSampleCount;
+        state.BoostSlewLimited = boostSlewLimited;
+        state.PeakLimited = peakLimited;
+        state.OutputLimited = outputLimitSampleCount > 0;
     }
 
     internal static double AudioRmsToFallbackDbm(double rms)
@@ -417,11 +554,11 @@ public class DspPipelineService : BackgroundService,
     private static float SoftLimitRxAudioSample(float sample)
     {
         float a = Math.Abs(sample);
-        if (a <= RxLevelerPeakCeiling) return sample;
+        if (a <= RxLevelerOutputSoftKnee) return sample;
 
-        double over = (a - RxLevelerPeakCeiling) / (1.0 - RxLevelerPeakCeiling);
-        double limited = RxLevelerPeakCeiling + (1.0 - RxLevelerPeakCeiling) * Math.Tanh(over);
-        limited = Math.Min(1.0, limited);
+        double kneeWidth = Math.Max(1.0e-6, RxLevelerOutputPeakCeiling - RxLevelerOutputSoftKnee);
+        double over = (a - RxLevelerOutputSoftKnee) / kneeWidth;
+        double limited = RxLevelerOutputSoftKnee + kneeWidth * Math.Tanh(over);
         return MathF.CopySign((float)limited, sample);
     }
 
@@ -429,7 +566,7 @@ public class DspPipelineService : BackgroundService,
     // back locally). SPSC ring: producer = plugin playback thread via
     // EnqueueMonitorAudio, consumer = Tick. Mixed into the RX audio block so a
     // clip is audible on EVERY sink (browser WS + native) in any host mode —
-    // unlike the desktop-only audition path. Power-of-two capacity for masking.
+    // unlike the desktop-only preview path. Power-of-two capacity for masking.
     private const int MonitorInjectCapacity = 1 << 14; // 16384 floats (~340 ms @ 48 kHz)
     private const int MonitorInjectMask = MonitorInjectCapacity - 1;
     private readonly float[] _monitorInject = new float[MonitorInjectCapacity];
@@ -752,6 +889,22 @@ public class DspPipelineService : BackgroundService,
     private int _diagAudioSampleCount;
     private double _diagAudioRms = double.NaN;
     private double _diagAudioPeak = double.NaN;
+    private bool _diagAudioLevelerValid;
+    private double _diagAudioLevelerInputRmsDbfs = double.NaN;
+    private double _diagAudioLevelerOutputRmsDbfs = double.NaN;
+    private double _diagAudioLevelerInputPeakDbfs = double.NaN;
+    private double _diagAudioLevelerOutputPeakDbfs = double.NaN;
+    private double _diagAudioLevelerDesiredGainDb = double.NaN;
+    private double _diagAudioLevelerAppliedGainDb = double.NaN;
+    private double _diagAudioLevelerGainDeltaDb = double.NaN;
+    private double _diagAudioLevelerPeakHeadroomDb = double.NaN;
+    private double _diagAudioLevelerPreLimitPeakDbfs = double.NaN;
+    private double _diagAudioLevelerOutputLimitReductionDb = double.NaN;
+    private int _diagAudioLevelerOutputLimitSampleCount;
+    private int _diagAudioLevelerPauseHoldBlocks;
+    private bool _diagAudioLevelerBoostSlewLimited;
+    private bool _diagAudioLevelerPeakLimited;
+    private bool _diagAudioLevelerOutputLimited;
     private bool _diagAudioTxMonitorRequested;
     private bool _diagAudioSquelchEnabled;
     private bool _diagAudioSquelchOpen;
@@ -954,7 +1107,7 @@ public class DspPipelineService : BackgroundService,
         string status = LiveRuntimeEvidenceStatus(rxMeters, audio);
 
         return new DspLiveRuntimeEvidenceDto(
-            SchemaVersion: 1,
+            SchemaVersion: 4,
             GeneratedUtc: DateTimeOffset.UtcNow,
             Status: status,
             RxMetersFresh: rxMeters.Fresh,
@@ -968,6 +1121,10 @@ public class DspPipelineService : BackgroundService,
             AudioAgeMs: audio.AgeMs,
             AudioStatus: audio.Status,
             AudioSource: audio.Source,
+            AudioFramesBroadcast: audio.FramesBroadcast,
+            AudioLastSeq: audio.LastSeq,
+            AudioSampleRateHz: audio.SampleRateHz,
+            AudioSampleCount: audio.SampleCount,
             AudioRmsDbfs: audio.RmsDbfs,
             AudioPeakDbfs: audio.PeakDbfs,
             TxMonitorRequested: audio.TxMonitorRequested,
@@ -975,6 +1132,21 @@ public class DspPipelineService : BackgroundService,
             SquelchOpen: audio.SquelchOpen,
             SquelchTailActive: audio.SquelchTailActive,
             SquelchGateGain: audio.SquelchGateGain,
+            RxAudioLevelerInputRmsDbfs: audio.RxAudioLevelerInputRmsDbfs,
+            RxAudioLevelerOutputRmsDbfs: audio.RxAudioLevelerOutputRmsDbfs,
+            RxAudioLevelerInputPeakDbfs: audio.RxAudioLevelerInputPeakDbfs,
+            RxAudioLevelerOutputPeakDbfs: audio.RxAudioLevelerOutputPeakDbfs,
+            RxAudioLevelerDesiredGainDb: audio.RxAudioLevelerDesiredGainDb,
+            RxAudioLevelerAppliedGainDb: audio.RxAudioLevelerAppliedGainDb,
+            RxAudioLevelerGainDeltaDb: audio.RxAudioLevelerGainDeltaDb,
+            RxAudioLevelerPeakHeadroomDb: audio.RxAudioLevelerPeakHeadroomDb,
+            RxAudioLevelerPreLimitPeakDbfs: audio.RxAudioLevelerPreLimitPeakDbfs,
+            RxAudioLevelerOutputLimitReductionDb: audio.RxAudioLevelerOutputLimitReductionDb,
+            RxAudioLevelerOutputLimitSampleCount: audio.RxAudioLevelerOutputLimitSampleCount,
+            RxAudioLevelerPauseHoldBlocks: audio.RxAudioLevelerPauseHoldBlocks,
+            RxAudioLevelerBoostSlewLimited: audio.RxAudioLevelerBoostSlewLimited,
+            RxAudioLevelerPeakLimited: audio.RxAudioLevelerPeakLimited,
+            RxAudioLevelerOutputLimited: audio.RxAudioLevelerOutputLimited,
             MonitorBacklogSamples: audio.MonitorBacklogSamples,
             AudioSinkCount: audio.AudioSinkCount,
             DiagnosticRecommendation: LiveRuntimeEvidenceRecommendation(status, rxMeters, audio));
@@ -1081,6 +1253,22 @@ public class DspPipelineService : BackgroundService,
         bool squelchOpen;
         bool squelchTailActive;
         double squelchGain;
+        bool levelerValid;
+        double levelerInputRmsDbfs;
+        double levelerOutputRmsDbfs;
+        double levelerInputPeakDbfs;
+        double levelerOutputPeakDbfs;
+        double levelerDesiredGainDb;
+        double levelerAppliedGainDb;
+        double levelerGainDeltaDb;
+        double levelerPeakHeadroomDb;
+        double levelerPreLimitPeakDbfs;
+        double levelerOutputLimitReductionDb;
+        int levelerOutputLimitSampleCount;
+        int levelerPauseHoldBlocks;
+        bool levelerBoostSlewLimited;
+        bool levelerPeakLimited;
+        bool levelerOutputLimited;
         long monitorBacklogSamples;
         int audioSinkCount;
 
@@ -1100,6 +1288,22 @@ public class DspPipelineService : BackgroundService,
             squelchOpen = _diagAudioSquelchOpen;
             squelchTailActive = _diagAudioSquelchTailActive;
             squelchGain = _diagAudioSquelchGain;
+            levelerValid = _diagAudioLevelerValid;
+            levelerInputRmsDbfs = _diagAudioLevelerInputRmsDbfs;
+            levelerOutputRmsDbfs = _diagAudioLevelerOutputRmsDbfs;
+            levelerInputPeakDbfs = _diagAudioLevelerInputPeakDbfs;
+            levelerOutputPeakDbfs = _diagAudioLevelerOutputPeakDbfs;
+            levelerDesiredGainDb = _diagAudioLevelerDesiredGainDb;
+            levelerAppliedGainDb = _diagAudioLevelerAppliedGainDb;
+            levelerGainDeltaDb = _diagAudioLevelerGainDeltaDb;
+            levelerPeakHeadroomDb = _diagAudioLevelerPeakHeadroomDb;
+            levelerPreLimitPeakDbfs = _diagAudioLevelerPreLimitPeakDbfs;
+            levelerOutputLimitReductionDb = _diagAudioLevelerOutputLimitReductionDb;
+            levelerOutputLimitSampleCount = _diagAudioLevelerOutputLimitSampleCount;
+            levelerPauseHoldBlocks = _diagAudioLevelerPauseHoldBlocks;
+            levelerBoostSlewLimited = _diagAudioLevelerBoostSlewLimited;
+            levelerPeakLimited = _diagAudioLevelerPeakLimited;
+            levelerOutputLimited = _diagAudioLevelerOutputLimited;
             monitorBacklogSamples = _diagAudioMonitorBacklogSamples;
             audioSinkCount = _diagAudioSinkCount;
         }
@@ -1121,7 +1325,23 @@ public class DspPipelineService : BackgroundService,
             squelchTailActive,
             squelchGain,
             monitorBacklogSamples,
-            audioSinkCount);
+            audioSinkCount,
+            levelerValid,
+            levelerInputRmsDbfs,
+            levelerOutputRmsDbfs,
+            levelerInputPeakDbfs,
+            levelerOutputPeakDbfs,
+            levelerDesiredGainDb,
+            levelerAppliedGainDb,
+            levelerGainDeltaDb,
+            levelerPeakHeadroomDb,
+            levelerPreLimitPeakDbfs,
+            levelerOutputLimitReductionDb,
+            levelerOutputLimitSampleCount,
+            levelerPauseHoldBlocks,
+            levelerBoostSlewLimited,
+            levelerPeakLimited,
+            levelerOutputLimited);
     }
 
     internal static AudioPathDiagnosticsDto BuildAudioPathDiagnostics(
@@ -1140,7 +1360,23 @@ public class DspPipelineService : BackgroundService,
         bool squelchTailActive,
         double squelchGain,
         long monitorBacklogSamples,
-        int audioSinkCount)
+        int audioSinkCount,
+        bool levelerValid = false,
+        double levelerInputRmsDbfs = double.NaN,
+        double levelerOutputRmsDbfs = double.NaN,
+        double levelerInputPeakDbfs = double.NaN,
+        double levelerOutputPeakDbfs = double.NaN,
+        double levelerDesiredGainDb = double.NaN,
+        double levelerAppliedGainDb = double.NaN,
+        double levelerGainDeltaDb = double.NaN,
+        double levelerPeakHeadroomDb = double.NaN,
+        double levelerPreLimitPeakDbfs = double.NaN,
+        double levelerOutputLimitReductionDb = double.NaN,
+        int levelerOutputLimitSampleCount = 0,
+        int levelerPauseHoldBlocks = 0,
+        bool levelerBoostSlewLimited = false,
+        bool levelerPeakLimited = false,
+        bool levelerOutputLimited = false)
     {
         source = string.IsNullOrWhiteSpace(source) ? "none" : source;
         bool fresh = valid && ageMs is <= AudioFreshMs;
@@ -1216,14 +1452,37 @@ public class DspPipelineService : BackgroundService,
             SquelchOpen: squelchOpen,
             SquelchTailActive: squelchTailActive,
             SquelchGateGain: double.IsFinite(squelchGain) ? Math.Round(Math.Clamp(squelchGain, 0.0, 1.0), 3) : null,
+            RxAudioLevelerInputRmsDbfs: RoundLevelerDb(levelerValid, levelerInputRmsDbfs),
+            RxAudioLevelerOutputRmsDbfs: RoundLevelerDb(levelerValid, levelerOutputRmsDbfs),
+            RxAudioLevelerInputPeakDbfs: RoundLevelerDb(levelerValid, levelerInputPeakDbfs),
+            RxAudioLevelerOutputPeakDbfs: RoundLevelerDb(levelerValid, levelerOutputPeakDbfs),
+            RxAudioLevelerDesiredGainDb: RoundLevelerDb(levelerValid, levelerDesiredGainDb),
+            RxAudioLevelerAppliedGainDb: RoundLevelerDb(levelerValid, levelerAppliedGainDb),
+            RxAudioLevelerGainDeltaDb: RoundLevelerDb(levelerValid, levelerGainDeltaDb),
+            RxAudioLevelerPeakHeadroomDb: RoundLevelerDb(levelerValid, levelerPeakHeadroomDb),
+            RxAudioLevelerPreLimitPeakDbfs: RoundLevelerDb(levelerValid, levelerPreLimitPeakDbfs),
+            RxAudioLevelerOutputLimitReductionDb: RoundLevelerDb(levelerValid, levelerOutputLimitReductionDb),
+            RxAudioLevelerOutputLimitSampleCount: levelerValid ? Math.Max(0, levelerOutputLimitSampleCount) : null,
+            RxAudioLevelerPauseHoldBlocks: levelerValid ? Math.Max(0, levelerPauseHoldBlocks) : null,
+            RxAudioLevelerBoostSlewLimited: levelerValid ? levelerBoostSlewLimited : null,
+            RxAudioLevelerPeakLimited: levelerValid ? levelerPeakLimited : null,
+            RxAudioLevelerOutputLimited: levelerValid ? levelerOutputLimited : null,
             MonitorBacklogSamples: monitorBacklogSamples,
             AudioSinkCount: audioSinkCount,
             DiagnosticRecommendation: recommendation);
     }
 
+    private static double? RoundLevelerDb(bool valid, double value) =>
+        valid && double.IsFinite(value) ? Math.Round(value, 1) : null;
+
+    private static double AudioLinearToDbfsRaw(double value) =>
+        double.IsFinite(value) && value > 0.0
+            ? 20.0 * Math.Log10(Math.Max(value, 1e-12))
+            : double.NaN;
+
     private static double? AudioLinearToDbfs(double value) =>
         double.IsFinite(value) && value > 0.0
-            ? Math.Round(20.0 * Math.Log10(Math.Max(value, 1e-12)), 1)
+            ? Math.Round(AudioLinearToDbfsRaw(value), 1)
             : null;
 
     private void CaptureAudioDiagnostics(
@@ -1238,6 +1497,9 @@ public class DspPipelineService : BackgroundService,
         bool squelchTailActive = IsAdaptiveSquelchTailActive(squelch, _adaptiveSquelch);
         double squelchGain = squelch.Enabled && squelch.Adaptive ? _adaptiveSquelch.Gain : 1.0;
         long monitorBacklogSamples = MonitorBacklog;
+        var leveler = _rxAudioLeveler;
+        bool levelerValid = string.Equals(source, "rx", StringComparison.OrdinalIgnoreCase)
+            && leveler.DiagnosticsValid;
 
         lock (_audioDiagLock)
         {
@@ -1255,6 +1517,22 @@ public class DspPipelineService : BackgroundService,
             _diagAudioSquelchOpen = squelchOpen;
             _diagAudioSquelchTailActive = squelchTailActive;
             _diagAudioSquelchGain = squelchGain;
+            _diagAudioLevelerValid = levelerValid;
+            _diagAudioLevelerInputRmsDbfs = levelerValid ? leveler.InputRmsDbfs : double.NaN;
+            _diagAudioLevelerOutputRmsDbfs = levelerValid ? leveler.OutputRmsDbfs : double.NaN;
+            _diagAudioLevelerInputPeakDbfs = levelerValid ? leveler.InputPeakDbfs : double.NaN;
+            _diagAudioLevelerOutputPeakDbfs = levelerValid ? leveler.OutputPeakDbfs : double.NaN;
+            _diagAudioLevelerDesiredGainDb = levelerValid ? leveler.DesiredGainDb : double.NaN;
+            _diagAudioLevelerAppliedGainDb = levelerValid ? leveler.AppliedGainDb : double.NaN;
+            _diagAudioLevelerGainDeltaDb = levelerValid ? leveler.GainDeltaDb : double.NaN;
+            _diagAudioLevelerPeakHeadroomDb = levelerValid ? leveler.PeakHeadroomDb : double.NaN;
+            _diagAudioLevelerPreLimitPeakDbfs = levelerValid ? leveler.PreLimitPeakDbfs : double.NaN;
+            _diagAudioLevelerOutputLimitReductionDb = levelerValid ? leveler.OutputLimitReductionDb : double.NaN;
+            _diagAudioLevelerOutputLimitSampleCount = levelerValid ? leveler.OutputLimitSampleCount : 0;
+            _diagAudioLevelerPauseHoldBlocks = levelerValid ? leveler.PauseHoldBlocks : 0;
+            _diagAudioLevelerBoostSlewLimited = levelerValid && leveler.BoostSlewLimited;
+            _diagAudioLevelerPeakLimited = levelerValid && leveler.PeakLimited;
+            _diagAudioLevelerOutputLimited = levelerValid && leveler.OutputLimited;
             _diagAudioMonitorBacklogSamples = monitorBacklogSamples;
             _diagAudioSinkCount = _audioSinks.Length;
         }
@@ -3190,7 +3468,7 @@ public class DspPipelineService : BackgroundService,
         // monitor channel's demodulated TX audio so the operator hears the
         // chain output (post-bandpass / post-CFIR, demodulated back to mono)
         // instead of band RX. This unifies "monitor while keyed" (Thetis MON
-        // semantics) and "audition without keying" (audio passes through the
+        // semantics) and "preview without keying" (audio passes through the
         // chain so VST plugins receive samples and their meters animate). RX
         // is drained anyway so the WDSP audio ring doesn't back up — we just
         // don't broadcast it. The VST RX seam still fires on the drained RX
@@ -3303,7 +3581,7 @@ public class DspPipelineService : BackgroundService,
             // shape matches the RX path (mono float32 @ 48 kHz) so it slots
             // into the same AudioFrame format with no front-end change. When
             // the chain is idle (no MOX, no mic) the monitor channel produces
-            // silence, which is the correct behaviour for "audition mode but
+            // silence, which is the correct behaviour for "preview mode but
             // operator isn't talking".
             int monCount = engine.ReadTxMonitorAudio(audioBuf.AsSpan());
             if (monCount > 0)
@@ -3511,6 +3789,21 @@ internal sealed record AudioPathDiagnosticsDto(
     bool SquelchOpen,
     bool SquelchTailActive,
     double? SquelchGateGain,
+    double? RxAudioLevelerInputRmsDbfs,
+    double? RxAudioLevelerOutputRmsDbfs,
+    double? RxAudioLevelerInputPeakDbfs,
+    double? RxAudioLevelerOutputPeakDbfs,
+    double? RxAudioLevelerDesiredGainDb,
+    double? RxAudioLevelerAppliedGainDb,
+    double? RxAudioLevelerGainDeltaDb,
+    double? RxAudioLevelerPeakHeadroomDb,
+    double? RxAudioLevelerPreLimitPeakDbfs,
+    double? RxAudioLevelerOutputLimitReductionDb,
+    int? RxAudioLevelerOutputLimitSampleCount,
+    int? RxAudioLevelerPauseHoldBlocks,
+    bool? RxAudioLevelerBoostSlewLimited,
+    bool? RxAudioLevelerPeakLimited,
+    bool? RxAudioLevelerOutputLimited,
     long MonitorBacklogSamples,
     int AudioSinkCount,
     string DiagnosticRecommendation);

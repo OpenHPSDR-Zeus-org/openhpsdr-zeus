@@ -150,15 +150,58 @@ describe('auto notch detector', () => {
     expect(verified[0]!.centerHz).toBeLessThan(CENTER_HZ + 120);
   });
 
+  it('locks a verified notch center after stable dynamic sampling', () => {
+    const tracker = createAutoNotchTracker({ verifySamples: 3 });
+    const candidate: AutoNotchCandidate = {
+      centerHz: CENTER_HZ + 100,
+      widthHz: 220,
+      snrDb: 30,
+      confidence: 0.86,
+    };
+
+    tracker.update([candidate]);
+    tracker.update([{ ...candidate, centerHz: CENTER_HZ + 110 }]);
+    const locked = tracker.update([{ ...candidate, centerHz: CENTER_HZ + 95 }]);
+    expect(locked).toHaveLength(1);
+    const lockedCenter = locked[0]!.centerHz;
+
+    const afterRefine = tracker.update([{ ...candidate, centerHz: CENTER_HZ + 145 }]);
+
+    expect(afterRefine).toHaveLength(1);
+    expect(afterRefine[0]!.locked).toBe(true);
+    expect(afterRefine[0]!.centerHz).toBe(lockedCenter);
+  });
+
+  it('rejects voice-like candidates that wander before validation', () => {
+    const tracker = createAutoNotchTracker({ verifySamples: 3 });
+    const candidate: AutoNotchCandidate = {
+      centerHz: CENTER_HZ,
+      widthHz: 600,
+      snrDb: 30,
+      confidence: 0.82,
+    };
+
+    expect(tracker.update([candidate])).toEqual([]);
+    expect(tracker.update([{ ...candidate, centerHz: CENTER_HZ + 350 }])).toEqual([]);
+    expect(tracker.update([{ ...candidate, centerHz: CENTER_HZ - 300 }])).toEqual([]);
+    expect(tracker.update([{ ...candidate, centerHz: CENTER_HZ + 450 }])).toEqual([]);
+    expect(tracker.update([{ ...candidate, centerHz: CENTER_HZ - 420 }])).toEqual([]);
+  });
+
   it('keeps verified wide blocker widths instead of clamping them narrow', () => {
     const tracker = createAutoNotchTracker({ verifySamples: 1 });
-    const verified = tracker.update([{
+    const candidate: AutoNotchCandidate = {
       centerHz: CENTER_HZ + 2_000,
       widthHz: 3_200,
       snrDb: 34,
       confidence: 0.86,
-    }]);
+    };
 
+    expect(tracker.update([candidate])).toEqual([]);
+    expect(tracker.update([candidate])).toEqual([]);
+    expect(tracker.update([candidate])).toEqual([]);
+    expect(tracker.update([candidate])).toEqual([]);
+    const verified = tracker.update([candidate]);
     expect(verified).toHaveLength(1);
     expect(verified[0]!.widthHz).toBe(3_200);
   });

@@ -59,7 +59,7 @@ namespace Zeus.Server;
 /// the silence count + resets it; persistent underruns mean either ring
 /// sizing is too small or the DSP thread is starved.</para>
 /// </summary>
-internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHostedService, IDisposable
+internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHostedService, IDisposable
 {
     private const int FrameRateHz = 48_000;
 
@@ -75,13 +75,13 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
     private const int PlaybackPrebufferSamples = 960;
 
     // ~250 ms @ 48 kHz mono = 12000 samples ≈ 48 KB. Power of two for the
-    // mask wrap. The audition path is sourced from mic capture (one block
+    // mask wrap. The preview path is sourced from mic capture (one block
     // every 20 ms — 960 samples) so the buffer never needs to hold more
     // than a few hundred ms of slack. A small ring is preferred: on a MOX
     // rising edge, AudioPluginBridge stops pushing into this ring and the
     // tail drains in <300 ms so the operator doesn't keep hearing the
     // pre-MOX tail of their own voice after keying.
-    private const int AuditionRingCapacity = 16_384;
+    private const int PreviewRingCapacity = 16_384;
 
     private readonly ILogger<NativeAudioSink> _log;
     // Service-provider-based lookup for TxService, used to subscribe to
@@ -93,7 +93,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
     // service start phase fires, all singletons in the cycle exist.
     private readonly IServiceProvider? _services;
     private readonly FloatSpscRing _ring = new(RingCapacity);
-    private readonly FloatSpscRing _auditionRing = new(AuditionRingCapacity);
+    private readonly FloatSpscRing _previewRing = new(PreviewRingCapacity);
 
     // Resolved on Start, kept so Stop can detach the handler cleanly.
     // Null when no TxService was available (legacy test ctor or
@@ -113,16 +113,16 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
 
     private volatile bool _rebuffering = true;
 
-    // Local side-channel enable flag. Audio Suite audition now uses the full
+    // Local side-channel enable flag. Audio Suite preview now uses the full
     // TX Monitor path; this ring remains available for desktop-only local
     // playback sources such as WAV monitor playback. Read on the miniaudio
-    // capture worker thread inside PublishAudition and on the playback worker
+    // capture worker thread inside PublishPreview and on the playback worker
     // thread inside OnPlaybackData. Volatile is sufficient: a stale read
     // across a toggle just means one extra (or one missing) block, inaudible.
-    private volatile bool _auditionEnabled;
+    private volatile bool _previewEnabled;
 
     public bool IsMuted => _muted;
-    public bool IsEnabled => _auditionEnabled;
+    public bool IsEnabled => _previewEnabled;
 
     public void SetMuted(bool muted)
     {
@@ -136,26 +136,26 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
 
     public void SetEnabled(bool enabled)
     {
-        _auditionEnabled = enabled;
-        // Drain the audition ring on disable so re-enabling doesn't
-        // replay the tail of the prior audition session.
-        if (!enabled) _auditionRing.Clear();
-        _log.LogInformation("audio.native.rx audition {State}", enabled ? "enabled" : "disabled");
+        _previewEnabled = enabled;
+        // Drain the preview ring on disable so re-enabling doesn't
+        // replay the tail of the prior preview session.
+        if (!enabled) _previewRing.Clear();
+        _log.LogInformation("audio.native.rx preview {State}", enabled ? "enabled" : "disabled");
     }
 
-    public void PublishAudition(ReadOnlySpan<float> monoSamples, int sampleRate)
+    public void PublishPreview(ReadOnlySpan<float> monoSamples, int sampleRate)
     {
-        // No-op when audition is off — keeps the realtime path on the
+        // No-op when preview is off — keeps the realtime path on the
         // mic capture thread cheap (one volatile read + return) when the
         // operator hasn't engaged the feature.
-        if (!_auditionEnabled) return;
+        if (!_previewEnabled) return;
         if (sampleRate != FrameRateHz) return;   // defence in depth — mic is always 48 kHz
-        if (_muted) return;                       // RX mute also silences audition
+        if (_muted) return;                       // RX mute also silences preview
 
-        _auditionRing.Write(monoSamples);
-        // Audition overruns are not interesting enough to track — the
+        _previewRing.Write(monoSamples);
+        // Preview overruns are not interesting enough to track — the
         // mic-capture cadence (960 samples / 20 ms) means the worst case
-        // is ~250 ms of stale audition dropped if the playback thread
+        // is ~250 ms of stale preview dropped if the playback thread
         // stalls, which is inaudible.
     }
 
@@ -351,21 +351,21 @@ internal sealed class NativeAudioSink : IRxAudioSink, IAuditionAudioSink, IHoste
         // ring on the common disabled path. Underrun is benign — the operator
         // just hears silence for that gap, which is what they expect when the
         // publisher isn't producing.
-        bool mixedAudition = false;
-        if (_auditionEnabled)
+        bool mixedPreview = false;
+        if (_previewEnabled)
         {
             Span<float> aud = totalFrames <= 4096
                 ? stackalloc float[totalFrames]
                 : new float[totalFrames];
-            int audRead = _auditionRing.Read(aud);
-            // Sum the audition slice into mono. If the audition ring
+            int audRead = _previewRing.Read(aud);
+            // Sum the preview slice into mono. If the preview ring
             // underran we still sum the bytes we got and leave the
             // rest of mono unchanged (RX continues underneath).
             for (int i = 0; i < audRead; i++) mono[i] += aud[i];
-            mixedAudition = audRead > 0;
+            mixedPreview = audRead > 0;
         }
 
-        if (mixedAudition)
+        if (mixedPreview)
             DspPipelineService.LimitRxAudioBuffer(mono);
 
         // Expand mono → output channels. channels==1 is the trivial path.

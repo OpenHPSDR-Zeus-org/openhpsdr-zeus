@@ -15,7 +15,7 @@ namespace Zeus.Plugins.Contracts.Extensions;
 /// <item><see cref="OnTxAirAudio"/> — the PROCESSED transmit audio (post
 /// EQ / compressor / leveler / CFC), demodulated back from the TX IQ — i.e.
 /// what actually goes on the air. Only flows while the host TX monitor /
-/// audition path is running.</item>
+/// preview path is running.</item>
 /// </list>
 ///
 /// Both callbacks run on the audio thread and carry mono float32 at the host

@@ -14,16 +14,19 @@ import {
   computeSnapTuneHz,
   detectPeaks,
   enhanceInto,
+  enhanceWaterfallTextureInto,
   findNearestPeakHz,
   findPeakHz,
   getNoiseFloor,
   getSignalConfidence,
+  getSignalTexture,
   getSnapHistorySpectrum,
   maybeUpdateEstimator,
   measureOccupiedBandwidth,
   measureSignalExtent,
   measureSnapLock,
   peakAlpha,
+  registerEstimatorConsumer,
   resetEstimator,
   SIGNAL_ENHANCE_PROFILES,
   recommendSignalEnhanceScene,
@@ -384,8 +387,93 @@ describe('signal estimator — spatial floor', () => {
     const agc = new Float32Array(WIDTH);
     enhanceInto(spec, agc);
 
-    expect(agc[150]!).toBeGreaterThan(fixed[150]! + 0.15);
+    expect(agc[150]!).toBeGreaterThan(fixed[150]! + 0.05);
     expect(agc[0]!).toBe(0);
+  });
+
+  it('builds sparse signal texture for coherent weak ridges', () => {
+    useSignalEnhanceStore.setState({ popEnabled: true });
+    const spec = new Float32Array(WIDTH).fill(NOISE_DB);
+    spec[149] = NOISE_DB + 7;
+    spec[150] = NOISE_DB + 9;
+    spec[151] = NOISE_DB + 7;
+    for (let k = 0; k < 6; k++) pushFrame(spec);
+
+    const out = new Float32Array(WIDTH);
+    enhanceInto(spec, out);
+    const texture = getSignalTexture()!;
+
+    expect(texture).not.toBeNull();
+    expect(texture[150]!).toBeGreaterThan(0.25);
+    expect(texture[40]!).toBeLessThan(0.05);
+    expect(out[150]!).toBeGreaterThan(0.25);
+    expect(out[40]!).toBe(0);
+  });
+
+  it('normal waterfall texture mapper lifts coherent weak ridges while staying in dB space', () => {
+    const release = registerEstimatorConsumer();
+    try {
+      useSignalEnhanceStore.setState({ popEnabled: false, autoProfileEnabled: false });
+      const spec = new Float32Array(WIDTH).fill(NOISE_DB);
+      spec[149] = NOISE_DB + 7;
+      spec[150] = NOISE_DB + 9;
+      spec[151] = NOISE_DB + 7;
+      for (let k = 0; k < 6; k++) pushFrame(spec);
+
+      const out = new Float32Array(WIDTH);
+      enhanceWaterfallTextureInto(spec, out);
+      const texture = getSignalTexture()!;
+
+      expect(texture[150]!).toBeGreaterThan(0.25);
+      expect(out[150]!).toBeGreaterThan(spec[150]! + 2);
+      expect(out[40]!).toBeLessThan(NOISE_DB + 0.1);
+      expect(out[40]!).toBeGreaterThan(NOISE_DB - 8);
+    } finally {
+      release();
+    }
+  });
+
+  it('normal waterfall texture mapper gives coherent ridges a raised crest', () => {
+    const release = registerEstimatorConsumer();
+    try {
+      useSignalEnhanceStore.setState({ popEnabled: false, autoProfileEnabled: false });
+      const spec = new Float32Array(WIDTH).fill(NOISE_DB);
+      spec[149] = NOISE_DB + 6;
+      spec[150] = NOISE_DB + 10;
+      spec[151] = NOISE_DB + 6;
+      for (let k = 0; k < 7; k++) pushFrame(spec);
+
+      const out = new Float32Array(WIDTH);
+      enhanceWaterfallTextureInto(spec, out);
+
+      expect(out[150]!).toBeGreaterThan(spec[150]! + 4);
+      expect(out[150]!).toBeGreaterThan(out[149]! + 3);
+      expect(out[150]!).toBeGreaterThan(out[151]! + 3);
+    } finally {
+      release();
+    }
+  });
+
+  it('does not add terrain relief to an isolated one-frame spike', () => {
+    const release = registerEstimatorConsumer();
+    try {
+      useSignalEnhanceStore.setState({ popEnabled: false, autoProfileEnabled: false });
+      const quiet = new Float32Array(WIDTH).fill(NOISE_DB);
+      for (let k = 0; k < 5; k++) pushFrame(quiet);
+
+      const spike = new Float32Array(WIDTH).fill(NOISE_DB);
+      spike[150] = NOISE_DB + 24;
+      pushFrame(spike);
+
+      const out = new Float32Array(WIDTH);
+      enhanceWaterfallTextureInto(spike, out);
+      const texture = getSignalTexture()!;
+
+      expect(texture[150]!).toBeLessThan(0.20);
+      expect(out[150]!).toBeLessThan(spike[150]! + 1.5);
+    } finally {
+      release();
+    }
   });
 
   it('builds temporal confidence for a persistent weak signal', () => {

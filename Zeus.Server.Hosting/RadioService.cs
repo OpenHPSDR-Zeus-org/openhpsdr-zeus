@@ -2242,11 +2242,11 @@ public sealed class RadioService : IDisposable
         return Snapshot();
     }
 
-    /// <summary>TX-monitor toggle (audition path). Mutates StateDto so the
+    /// <summary>TX-monitor toggle (preview path). Mutates StateDto so the
     /// next DspPipelineService.UpdateState tick latches the value into
     /// engine.SetTxMonitorEnabled. Mirrors PsMonitor's lifecycle — operator
     /// preference, not persisted across sessions; resets to off on each new
-    /// connect so the radio doesn't come up auditioning unintentionally.</summary>
+    /// connect so the radio doesn't come up previewing unintentionally.</summary>
     public StateDto SetTxMonitor(TxMonitorSetRequest req)
     {
         ArgumentNullException.ThrowIfNull(req);

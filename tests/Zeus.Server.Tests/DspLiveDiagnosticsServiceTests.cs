@@ -55,6 +55,10 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.True(diag.RuntimeAligned);
         Assert.Equal("Nr5", diag.EffectiveNrMode);
         Assert.Equal(0.72, diag.Nr5SignalConfidence);
+        Assert.Equal(0.66, diag.Nr5SignalProbability);
+        Assert.Equal(0.12, diag.Nr5TextureFill);
+        Assert.Equal(0.18, diag.Nr5MaskSmoothing);
+        Assert.Equal(0.41, diag.Nr5WeakSignalMemory);
         Assert.Contains("nr5-spnr-diagnostics", diag.CandidateTools);
         Assert.Contains("weak-cw-carrier", diag.NextBenchmarkScenarios);
         Assert.Contains("agc-level-step", diag.NextBenchmarkScenarios);
@@ -112,6 +116,8 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("Reduce RX leveler boost", string.Join(" ", diag.RecommendedActions));
         Assert.NotNull(diag.RuntimeEvidence);
         Assert.Equal(-0.1, diag.RuntimeEvidence.AudioPeakDbfs);
+        Assert.Equal(42, diag.RuntimeEvidence.AudioFramesBroadcast);
+        Assert.Equal(1664, diag.RuntimeEvidence.AudioSampleCount);
     }
 
     [Fact]
@@ -268,6 +274,10 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.False(traceIndexArtifact.Required);
         Assert.Equal("trace", traceIndexArtifact.Kind);
         Assert.Contains("run-dsp-live-diagnostics-matrix.ps1", traceIndexArtifact.Source);
+        var traceHistoryArtifact = Assert.Single(manifest.RequiredArtifacts, artifact => artifact.Id == "live-diagnostics-history");
+        Assert.False(traceHistoryArtifact.Required);
+        Assert.Equal("diagnostics-history-json", traceHistoryArtifact.Kind);
+        Assert.Contains("summarize-dsp-live-diagnostics-history.ps1", traceHistoryArtifact.Source);
         var nativeAuditArtifact = Assert.Single(manifest.RequiredArtifacts, artifact => artifact.Id == "wdsp-native-symbol-audit");
         Assert.True(nativeAuditArtifact.Required);
         Assert.Equal("native-audit-json", nativeAuditArtifact.Kind);
@@ -304,6 +314,7 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("live-diagnostics-json", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-native-symbol-audit", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-runtime-artifact-audit", snapshot.IncludedArtifacts);
+        Assert.DoesNotContain("live-diagnostics-history", snapshot.IncludedArtifacts);
         Assert.Contains("frontend-dsp-scene", snapshot.MissingEvidence);
         Assert.Same(condition, snapshot.SmartNrCondition);
         Assert.Same(live, snapshot.LiveDiagnostics);
@@ -339,6 +350,7 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("offline-fixture-metrics", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-native-symbol-audit", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-runtime-artifact-audit", snapshot.IncludedArtifacts);
+        Assert.DoesNotContain("live-diagnostics-history", snapshot.IncludedArtifacts);
         Assert.Contains(snapshot.NextActions, action => action.Contains("Save this modernization snapshot", StringComparison.Ordinal));
         Assert.Contains(snapshot.ExternalEngineCandidates, candidate => candidate.Id == "rnnoise");
     }
@@ -449,7 +461,7 @@ public sealed class DspLiveDiagnosticsServiceTests
 
     private static Nr5SpnrDiagnosticsDto Nr5(int learnedFrames, double confidence, double agcGate) =>
         new(
-            SchemaVersion: 4,
+            SchemaVersion: 7,
             ChannelId: 0,
             Run: true,
             Position: 1,
@@ -470,16 +482,26 @@ public sealed class DspLiveDiagnosticsServiceTests
             NoiseFloorDb: -58.0,
             FloorReductionDb: 7.3,
             DynamicRangeDb: 18.4,
+            SignalProbability: 0.66,
+            TextureFill: 0.12,
+            MaskSmoothing: 0.18,
             SignalConfidence: confidence,
             AgcGate: agcGate,
             LevelDrive: 0.82,
             RecoveryDrive: 0.64,
+            WeakSignalMemory: 0.41,
             MakeupGain: 1.35,
             MakeupGainDb: 2.6,
             InputRms: 0.031,
             InputDbfs: -30.2,
             OutputRms: 0.068,
-            OutputDbfs: -23.4);
+            OutputDbfs: -23.4,
+            OutputPeak: 0.12,
+            OutputPeakDbfs: -18.4,
+            PeakEvidence: 0.72,
+            PeakLimit: 0.69,
+            PeakLimitDbfs: -3.2,
+            PeakReductionDb: 1.4);
 
     private static DspLiveRuntimeEvidenceDto RuntimeEvidence(
         string status = "fresh",
@@ -487,7 +509,7 @@ public sealed class DspLiveDiagnosticsServiceTests
         double? audioPeakDbfs = -12.0,
         double? adcHeadroomDb = 24.0) =>
         new(
-            SchemaVersion: 1,
+            SchemaVersion: 4,
             GeneratedUtc: DateTimeOffset.UtcNow,
             Status: status,
             RxMetersFresh: true,
@@ -501,6 +523,10 @@ public sealed class DspLiveDiagnosticsServiceTests
             AudioAgeMs: 12,
             AudioStatus: audioStatus,
             AudioSource: "rx",
+            AudioFramesBroadcast: 42,
+            AudioLastSeq: 42,
+            AudioSampleRateHz: 48000,
+            AudioSampleCount: 1664,
             AudioRmsDbfs: -28.5,
             AudioPeakDbfs: audioPeakDbfs,
             TxMonitorRequested: false,
@@ -508,6 +534,21 @@ public sealed class DspLiveDiagnosticsServiceTests
             SquelchOpen: true,
             SquelchTailActive: false,
             SquelchGateGain: 1.0,
+            RxAudioLevelerInputRmsDbfs: -24.5,
+            RxAudioLevelerOutputRmsDbfs: -18.5,
+            RxAudioLevelerInputPeakDbfs: -11.2,
+            RxAudioLevelerOutputPeakDbfs: audioPeakDbfs,
+            RxAudioLevelerDesiredGainDb: 6.5,
+            RxAudioLevelerAppliedGainDb: 6.0,
+            RxAudioLevelerGainDeltaDb: 0.0,
+            RxAudioLevelerPeakHeadroomDb: 9.0,
+            RxAudioLevelerPreLimitPeakDbfs: -10.8,
+            RxAudioLevelerOutputLimitReductionDb: 0.0,
+            RxAudioLevelerOutputLimitSampleCount: 0,
+            RxAudioLevelerPauseHoldBlocks: 0,
+            RxAudioLevelerBoostSlewLimited: false,
+            RxAudioLevelerPeakLimited: false,
+            RxAudioLevelerOutputLimited: false,
             MonitorBacklogSamples: 0,
             AudioSinkCount: 1,
             DiagnosticRecommendation: "test evidence");

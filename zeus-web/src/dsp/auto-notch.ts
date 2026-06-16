@@ -15,6 +15,11 @@ export type AutoNotchTrack = AutoNotchCandidate & {
   hits: number;
   misses: number;
   verified: boolean;
+  locked: boolean;
+  lockedCenterHz: number;
+  lockedWidthHz: number;
+  centerJitterHz: number;
+  widthJitterHz: number;
 };
 
 export type AutoNotchInput = {
@@ -54,11 +59,20 @@ const EDGE_PAD_HZ = 40;
 const MERGE_HZ = 120;
 const MAX_AUTO_NOTCHES = 16;
 const VERIFY_SAMPLES = 3;
+const WIDE_VERIFY_SAMPLES = 5;
 const PROVISIONAL_MISSES = 2;
 const VERIFIED_HOLD_MISSES = 8;
 const TRACK_MATCH_HZ = 180;
 const REFINE_ALPHA = 0.22;
 const OUTPUT_QUANTUM_HZ = 10;
+const TRACK_JITTER_ALPHA = 0.28;
+const CENTER_JITTER_MIN_HZ = 90;
+const CENTER_JITTER_MAX_HZ = 900;
+const CENTER_JITTER_WIDTH_FRACTION = 0.22;
+const WIDTH_JITTER_MIN_HZ = 120;
+const WIDTH_JITTER_MAX_HZ = 1_500;
+const WIDTH_JITTER_WIDTH_FRACTION = 0.35;
+const LOCK_DRIFT_WIDTH_FRACTION = 0.45;
 
 function finite(v: number): boolean {
   return Number.isFinite(v);
@@ -118,10 +132,12 @@ function cloneTrack(t: AutoNotchTrack): AutoNotchTrack {
 }
 
 function outputTrack(t: AutoNotchTrack): AutoNotchTrack {
+  const centerHz = t.locked ? t.lockedCenterHz : t.centerHz;
+  const widthHz = t.locked ? t.lockedWidthHz : t.widthHz;
   return {
     ...t,
-    centerHz: quantizeHz(t.centerHz),
-    widthHz: clampWidth(quantizeHz(t.widthHz)),
+    centerHz: quantizeHz(centerHz),
+    widthHz: clampWidth(quantizeHz(widthHz)),
   };
 }
 
@@ -136,6 +152,30 @@ export function createAutoNotchTracker(options: AutoNotchTrackerOptions = {}): A
   const matchHz = Math.max(20, options.matchHz ?? TRACK_MATCH_HZ);
   const refineAlpha = Math.max(0.02, Math.min(1, options.refineAlpha ?? REFINE_ALPHA));
   let tracks: AutoNotchTrack[] = [];
+
+  const requiredHits = (track: AutoNotchTrack): number =>
+    track.widthHz > NARROW_MAX_WIDTH_HZ ? Math.max(verifySamples, WIDE_VERIFY_SAMPLES) : verifySamples;
+
+  const stableEnough = (track: AutoNotchTrack): boolean => {
+    const centerLimit = Math.max(
+      CENTER_JITTER_MIN_HZ,
+      Math.min(CENTER_JITTER_MAX_HZ, track.widthHz * CENTER_JITTER_WIDTH_FRACTION),
+    );
+    const widthLimit = Math.max(
+      WIDTH_JITTER_MIN_HZ,
+      Math.min(WIDTH_JITTER_MAX_HZ, track.widthHz * WIDTH_JITTER_WIDTH_FRACTION),
+    );
+    return track.centerJitterHz <= centerLimit && track.widthJitterHz <= widthLimit;
+  };
+
+  const lockIfReady = (track: AutoNotchTrack): void => {
+    if (track.verified || track.hits < requiredHits(track) || !stableEnough(track)) return;
+    const out = outputTrack(track);
+    track.verified = true;
+    track.locked = true;
+    track.lockedCenterHz = out.centerHz;
+    track.lockedWidthHz = out.widthHz;
+  };
 
   const clear = () => {
     tracks = [];
@@ -158,6 +198,13 @@ export function createAutoNotchTracker(options: AutoNotchTrackerOptions = {}): A
         const candidate = ordered[i]!;
         const distance = Math.abs(candidate.centerHz - track.centerHz);
         const gate = Math.max(matchHz, (candidate.widthHz + track.widthHz) / 2);
+        if (
+          track.locked &&
+          Math.abs(candidate.centerHz - track.lockedCenterHz) >
+            Math.max(matchHz, track.lockedWidthHz * LOCK_DRIFT_WIDTH_FRACTION)
+        ) {
+          continue;
+        }
         if (distance <= gate && distance < bestDistance) {
           bestDistance = distance;
           bestIdx = i;
@@ -167,13 +214,17 @@ export function createAutoNotchTracker(options: AutoNotchTrackerOptions = {}): A
       if (bestIdx >= 0) {
         const candidate = ordered[bestIdx]!;
         used.add(bestIdx);
+        const centerDelta = Math.abs(candidate.centerHz - track.centerHz);
+        const widthDelta = Math.abs(candidate.widthHz - track.widthHz);
+        track.centerJitterHz += (centerDelta - track.centerJitterHz) * TRACK_JITTER_ALPHA;
+        track.widthJitterHz += (widthDelta - track.widthJitterHz) * TRACK_JITTER_ALPHA;
         track.centerHz += (candidate.centerHz - track.centerHz) * refineAlpha;
         track.widthHz = clampWidth(track.widthHz + (candidate.widthHz - track.widthHz) * refineAlpha);
         track.snrDb += (candidate.snrDb - track.snrDb) * refineAlpha;
         track.confidence += (candidate.confidence - track.confidence) * refineAlpha;
         track.hits += 1;
         track.misses = 0;
-        if (track.hits >= verifySamples) track.verified = true;
+        lockIfReady(track);
       } else {
         track.misses += 1;
       }
@@ -182,15 +233,22 @@ export function createAutoNotchTracker(options: AutoNotchTrackerOptions = {}): A
     for (let i = 0; i < ordered.length; i++) {
       if (used.has(i)) continue;
       const candidate = ordered[i]!;
-      tracks.push({
+      const track: AutoNotchTrack = {
         centerHz: candidate.centerHz,
         widthHz: clampWidth(candidate.widthHz),
         snrDb: candidate.snrDb,
         confidence: candidate.confidence,
         hits: 1,
         misses: 0,
-        verified: verifySamples <= 1,
-      });
+        verified: false,
+        locked: false,
+        lockedCenterHz: candidate.centerHz,
+        lockedWidthHz: clampWidth(candidate.widthHz),
+        centerJitterHz: 0,
+        widthJitterHz: 0,
+      };
+      lockIfReady(track);
+      tracks.push(track);
     }
 
     tracks = tracks

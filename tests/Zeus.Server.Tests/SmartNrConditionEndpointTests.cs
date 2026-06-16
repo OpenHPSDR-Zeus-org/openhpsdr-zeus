@@ -339,6 +339,7 @@ public sealed class SmartNrConditionEndpointTests
         var artifacts = root.GetProperty("requiredArtifacts").EnumerateArray().ToArray();
         Assert.Contains(artifacts, item => item.GetProperty("id").GetString() == "live-diagnostics-json");
         Assert.Contains(artifacts, item => item.GetProperty("id").GetString() == "live-diagnostics-trace-index");
+        Assert.Contains(artifacts, item => item.GetProperty("id").GetString() == "live-diagnostics-history");
         Assert.Contains(artifacts, item => item.GetProperty("id").GetString() == "wdsp-runtime-artifact-audit");
         Assert.Contains(artifacts, item => item.GetProperty("source").GetString() == "/api/radio/diagnostics/dsp-scene");
         Assert.Contains(artifacts, item => item.GetProperty("id").GetString() == "offline-fixture-metrics");

@@ -27,7 +27,7 @@ import { useAudioSuiteStore } from '../state/audio-suite-store';
 // Audio Suite floating window (Phase 2 of issue #332). The chain
 // flow strip here is a read-only one-glance view; the "Audio Suite"
 // button opens the floating window where plugins can be reordered
-// (drag-and-drop tiles), auditioned through the operator's headphones,
+// (drag-and-drop tiles), previewed through the operator's headphones,
 // and tuned via their per-plugin panels stacked vertically.
 //
 // CFC stays below — it's WDSP-driven, ships in Zeus core (not as a
@@ -288,7 +288,7 @@ function AudioSuiteOpenButton() {
         textTransform: 'uppercase',
         fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
       }}
-      title="Open the Audio Suite window to reorder, audition, and tune chain plugins"
+      title="Open the Audio Suite window to reorder, preview, and tune chain plugins"
     >
       Audio Suite
     </button>

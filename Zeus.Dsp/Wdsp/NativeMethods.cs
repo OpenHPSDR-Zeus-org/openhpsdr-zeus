@@ -504,11 +504,34 @@ internal static partial class NativeMethods
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int GetRXASPNRProbabilityDiagnostics(
+        int channel,
+        out double signalProbability,
+        out double textureFill,
+        out double maskSmoothing);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int GetRXASPNRPeakDiagnostics(
+        int channel,
+        out double outputPeak,
+        out double peakEvidence,
+        out double peakLimit,
+        out double peakReductionDb);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int GetRXASPNRAgcDiagnostics(
         int channel,
         out double levelDrive,
         out double recoveryDrive,
         out double makeupGain);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int GetRXASPNRMemoryDiagnostics(
+        int channel,
+        out double weakSignalMemory);
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

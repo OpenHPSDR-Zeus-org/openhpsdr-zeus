@@ -306,7 +306,7 @@ public sealed class TxAudioIngest : IDisposable
         MicPcmTapped?.Invoke(f32lePayload);
 
         // Gate: process mic samples when MOX is on (normal TX) OR when the TX
-        // monitor is on (audition without keying so the operator can hear
+        // monitor is on (preview without keying so the operator can hear
         // their VST chain / EQ / leveler before going on the air). When both
         // are off the chain doesn't run — pre-monitor behaviour, plus the
         // mic-leak protection that motivated the original gate.
@@ -337,7 +337,7 @@ public sealed class TxAudioIngest : IDisposable
         {
             // MOX fell while monitor is on. Drain the IQ ring so the next
             // key-down isn't tailed by stale RF samples, but keep the
-            // accumulator + chain feed running for the audition.
+            // accumulator + chain feed running for the preview.
             lock (_sync)
             {
                 _ring.Clear();
@@ -407,7 +407,7 @@ public sealed class TxAudioIngest : IDisposable
                     var iqSpan = new ReadOnlySpan<float>(_scratchIq, 0, 2 * produced);
                     // Only push the modulated IQ to the radio while MOX is
                     // asserted. When the chain is running for monitor-only
-                    // (audition without keying) the IQ has been generated for
+                    // (preview without keying) the IQ has been generated for
                     // the engine's monitor RXA channel to demod inside
                     // ProcessTxBlock — but it must NOT hit the wire, otherwise
                     // a monitor toggle would put the radio on the air.

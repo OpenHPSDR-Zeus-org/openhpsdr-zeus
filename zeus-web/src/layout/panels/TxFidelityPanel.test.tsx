@@ -16,7 +16,9 @@ import {
   DX_PROFILE,
   STUDIO_SSB_PROFILE,
 } from '../../audio/tx-station-profile';
+import { useAudioSuiteStore } from '../../state/audio-suite-store';
 import { useConnectionStore } from '../../state/connection-store';
+import { useTxStore } from '../../state/tx-store';
 import { TxFidelityPanel } from './TxFidelityPanel';
 
 vi.mock('../../api/client', async () => {
@@ -37,8 +39,18 @@ describe('TxFidelityPanel', () => {
   beforeEach(() => {
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
+        if (url === '/api/audio-suite/preview') {
+          let enabled = false;
+          if (init?.method === 'PUT' && typeof init.body === 'string') {
+            enabled = JSON.parse(init.body).enabled === true;
+          }
+          return new Response(JSON.stringify({ supported: true, enabled }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
         if (url === '/api/audio-suite/profiles') {
           return new Response(
             JSON.stringify({
@@ -108,6 +120,51 @@ describe('TxFidelityPanel', () => {
       status: 'Disconnected',
       mode: 'USB',
     });
+    useTxStore.getState().setTxMonitorEnabled(false);
+    useAudioSuiteStore.setState({
+      previewSupported: false,
+      previewEnabled: false,
+      profiles: [],
+      profilesLoaded: false,
+      selectedProfile: '',
+      processingMode: 'native',
+      masterBypassed: true,
+    });
+  });
+
+  it('syncs the Preview toggle with Audio Suite preview mode', async () => {
+    const { container, unmount } = render(createElement(TxFidelityPanel));
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Preview off"]',
+    );
+    expect(toggle).not.toBeNull();
+    expect(toggle!.disabled).toBe(false);
+    expect(toggle!.textContent).toBe('OFF');
+
+    await act(async () => {
+      toggle!.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(useAudioSuiteStore.getState().previewEnabled).toBe(true);
+    expect(useTxStore.getState().txMonitorEnabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>('button[aria-label="Preview on"]')?.textContent).toBe('ON');
+    expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      '/api/audio-suite/preview',
+      expect.objectContaining({
+        method: 'PUT',
+        body: JSON.stringify({ enabled: true }),
+      }),
+    );
+
+    unmount();
   });
 
   it('loads saved station profile labels into the selector', async () => {

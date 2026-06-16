@@ -97,7 +97,7 @@ static void spnr_calc(SPNR a) {
     a->noise[i] = 1.0e-9;
     a->smooth[i] = 1.0e-9;
     a->signal_prob[i] = 0.0;
-    a->signal_prob_smooth[i] = 0.5;
+    a->signal_prob_smooth[i] = 0.0;
     a->floor_bias[i] = 1.0;
     a->gain[i] = 1.0;
     a->prev_gain[i] = 1.0;
@@ -114,6 +114,8 @@ static void spnr_calc(SPNR a) {
   a->agc_level_drive = 0.0;
   a->agc_makeup_gain = 1.0;
   a->agc_recovery_hold = 0.0;
+  a->agc_continuity_hold = 0.0;
+  a->agc_weak_signal_memory = 0.0;
   a->diag_input_rms = 0.0;
   a->diag_output_rms = 0.0;
   a->diag_presence_peak = 0.0;
@@ -126,11 +128,17 @@ static void spnr_calc(SPNR a) {
   a->diag_floor_reduction_db = 0.0;
   a->diag_dynamic_range_db = 0.0;
   a->diag_signal_probability = 0.0;
+  a->diag_texture_fill = 0.0;
+  a->diag_mask_smoothing = 0.0;
   a->diag_signal_confidence = 0.0;
   a->diag_agc_gate = 0.0;
   a->diag_level_drive = 0.0;
   a->diag_recovery_drive = 0.0;
   a->diag_makeup_gain = 1.0;
+  a->diag_output_peak = 0.0;
+  a->diag_peak_evidence = 0.0;
+  a->diag_peak_limit = 0.0;
+  a->diag_peak_reduction_db = 0.0;
   a->Rfor = fftw_plan_dft_r2c_1d(a->fsize, a->forfftin, (fftw_complex*)a->forfftout, FFTW_ESTIMATE);
   a->Rrev = fftw_plan_dft_c2r_1d(a->fsize, (fftw_complex*)a->revfftin, a->revfftout, FFTW_ESTIMATE);
   spnr_calc_window(a);
@@ -217,7 +225,7 @@ void flush_spnr(SPNR a) {
     a->smooth[i] = 1.0e-9;
     a->presence[i] = 0.0;
     a->signal_prob[i] = 0.0;
-    a->signal_prob_smooth[i] = 0.5;
+    a->signal_prob_smooth[i] = 0.0;
     a->salience[i] = 0.0;
     a->prev_phase[i] = 0.0;
     a->prev_phase_delta[i] = 0.0;
@@ -243,6 +251,8 @@ void flush_spnr(SPNR a) {
   a->agc_level_drive = 0.0;
   a->agc_makeup_gain = 1.0;
   a->agc_recovery_hold = 0.0;
+  a->agc_continuity_hold = 0.0;
+  a->agc_weak_signal_memory = 0.0;
   a->diag_input_rms = 0.0;
   a->diag_output_rms = 0.0;
   a->diag_presence_peak = 0.0;
@@ -255,11 +265,17 @@ void flush_spnr(SPNR a) {
   a->diag_floor_reduction_db = 0.0;
   a->diag_dynamic_range_db = 0.0;
   a->diag_signal_probability = 0.0;
+  a->diag_texture_fill = 0.0;
+  a->diag_mask_smoothing = 0.0;
   a->diag_signal_confidence = 0.0;
   a->diag_agc_gate = 0.0;
   a->diag_level_drive = 0.0;
   a->diag_recovery_drive = 0.0;
   a->diag_makeup_gain = 1.0;
+  a->diag_output_peak = 0.0;
+  a->diag_peak_evidence = 0.0;
+  a->diag_peak_limit = 0.0;
+  a->diag_peak_reduction_db = 0.0;
 }
 
 static void spnr_calc_gain(SPNR a) {
@@ -331,7 +347,7 @@ static void spnr_calc_gain(SPNR a) {
       a->smooth[k] = init_alpha * a->smooth[k] + (1.0 - init_alpha) * p;
       a->presence[k] = max(a->presence[k], 0.18 * seed_guard);
       a->signal_prob[k] = max(a->signal_prob[k], seed_guard);
-      a->signal_prob_smooth[k] = max(a->signal_prob_smooth[k], 0.50 + 0.12 * seed_guard);
+      a->signal_prob_smooth[k] = max(a->signal_prob_smooth[k], 0.20 * seed_guard);
       a->salience[k] = max(a->salience[k], 0.24 * peak);
       a->coherence[k] = 0.0;
       a->ridge[k] = 0.0;
@@ -352,12 +368,12 @@ static void spnr_calc_gain(SPNR a) {
     double signal_probability = spnr_clip(
       0.72 * ph1 + 0.28 * a->signal_prob_smooth[k],
       0.0, 1.0);
-    double probability_presence = spnr_clip((signal_probability - 0.12) / 0.78, 0.0, 1.0);
+    double probability_presence = spnr_clip((signal_probability - 0.28) / 0.62, 0.0, 1.0);
     double posterior_excess = max(snr - 1.0, 0.0);
     double prev_frame_gain = a->prev_gain[k];
     double snr_presence = spnr_clip((snr_db + 6.0) / 20.0, 0.0, 1.0);
     double inst_presence = spnr_clip(
-      0.50 * snr_presence + 0.30 * peak + 0.20 * probability_presence,
+      0.54 * snr_presence + 0.34 * peak + 0.12 * probability_presence,
       0.0, 1.0);
 
     if (inst_presence > a->presence[k]) {
@@ -370,7 +386,7 @@ static void spnr_calc_gain(SPNR a) {
     double phase_stability = 1.0 - spnr_clip(fabs(phase_accel) / PI, 0.0, 1.0);
     double phase_lock = spnr_clip((phase_stability - 0.74) / 0.26, 0.0, 1.0);
     double weak_evidence = spnr_clip(
-      0.50 * snr_presence + 0.30 * peak + 0.20 * probability_presence,
+      0.54 * snr_presence + 0.34 * peak + 0.12 * probability_presence,
       0.0, 1.0);
     double evidence_gate = spnr_clip((max(snr_presence, peak) - 0.22) / 0.44, 0.0, 1.0);
     double coherent_candidate = spnr_clip(
@@ -400,8 +416,8 @@ static void spnr_calc_gain(SPNR a) {
     double spectral_evidence = spnr_clip(
       0.45 * a->presence[k]
         + 0.24 * a->salience[k]
-        + 0.17 * peak
-        + 0.14 * probability_presence,
+        + 0.19 * peak
+        + 0.07 * probability_presence,
       0.0, 1.0);
     double island_support = spnr_clip(
       0.50 * neighbor_presence + 0.35 * neighbor_guard + 0.15 * a->salience[k],
@@ -442,10 +458,15 @@ static void spnr_calc_gain(SPNR a) {
       0.0, 1.0));
     protect = max(protect, narrow_tone_guard);
     weak_island_guard = max(weak_island_guard, narrow_tone_guard);
-    double probability_guard = probability_presence
-      * spnr_clip(0.32 + 0.48 * island_gate + 0.20 * max(coherent_guard, peak), 0.0, 1.0);
-    protect = max(protect, 0.46 * probability_guard);
-    weak_island_guard = max(weak_island_guard, 0.54 * probability_guard);
+    double probability_context = spnr_clip(
+      (max(island_gate, coherent_guard) - 0.20) / 0.55,
+      0.0, 1.0);
+    double probability_shape = spnr_clip(
+      (max(a->salience[k], peak) - 0.16) / 0.42,
+      0.0, 1.0);
+    double probability_guard = probability_presence * probability_context * probability_shape;
+    protect = max(protect, 0.34 * probability_guard);
+    weak_island_guard = max(weak_island_guard, 0.42 * probability_guard);
 
     double prior_gate = spnr_clip(
       0.46 * max(coherent_signal, coherent_guard)
@@ -460,10 +481,20 @@ static void spnr_calc_gain(SPNR a) {
     double gated_prior = prior_gate * dd_candidate;
     a->prior_snr[k] = spnr_clip(max(a->prior_snr[k] * prior_decay, gated_prior), 0.0, 80.0);
     double prior_lift = prior_gate * spnr_clip((a->prior_snr[k] - 0.25) / 6.0, 0.0, 1.0);
-    double learn_protect = max(protect, max(0.42 * prior_lift, 0.50 * probability_guard));
+    double learned_weak_guard = sqrt(spnr_clip(
+      max(prior_lift, 0.46 * probability_guard)
+        * max(weak_island_guard, max(coherent_guard, island_gate)),
+      0.0, 1.0));
+    learned_weak_guard *= spnr_clip(
+      (0.62 * a->presence[k] + 0.38 * max(a->salience[k], peak) - 0.10) / 0.62,
+      0.0, 1.0);
+    protect = max(protect, 0.46 * learned_weak_guard);
+    weak_island_guard = max(weak_island_guard, learned_weak_guard);
+    double learn_protect = max(protect, max(0.42 * prior_lift, 0.38 * probability_guard));
 
     double noise_alpha = learn_protect > 0.65 ? 0.9994 : learn_protect > 0.35 ? 0.996 : snr < 1.4 ? 0.88 : 0.965;
-    double expected_noise = (1.0 - signal_probability) * p + signal_probability * a->noise[k];
+    double noise_hold_probability = max(0.25 * signal_probability, probability_guard);
+    double expected_noise = (1.0 - noise_hold_probability) * p + noise_hold_probability * a->noise[k];
     double noise_candidate = min(expected_noise, a->smooth[k]);
     a->noise[k] = noise_alpha * a->noise[k] + (1.0 - noise_alpha) * noise_candidate;
     if (a->noise[k] > a->smooth[k] * 1.8 && learn_protect < 0.25) {
@@ -477,23 +508,25 @@ static void spnr_calc_gain(SPNR a) {
     double deep_floor = pow(noise_like, 1.20) * (1.0 - 0.40 * locked_peak);
     deep_floor = spnr_clip(deep_floor, 0.0, 1.0);
     double floor_pressure = 1.0 + a->aggressiveness * (
-      0.85 * (1.0 - protect) + 2.95 * deep_floor + 0.85 * sparse_floor);
-    floor_pressure = spnr_clip(floor_pressure, 1.0, 5.15);
+      0.88 * (1.0 - protect) + 3.12 * deep_floor + 0.95 * sparse_floor);
+    floor_pressure = spnr_clip(floor_pressure, 1.0, 5.45);
     floor_pressure *= 1.0 - 0.34 * weak_island_guard;
     floor_pressure *= 1.0 - 0.40 * narrow_tone_guard;
+    floor_pressure *= 1.0 - 0.30 * learned_weak_guard;
     floor_pressure *= 1.0 - 0.12 * prior_lift;
-    floor_pressure = spnr_clip(floor_pressure, 1.0, 5.15);
+    floor_pressure = spnr_clip(floor_pressure, 1.0, 5.45);
     double effective_noise = a->noise[k] * floor_pressure;
     double over = 0.92
       + 1.95 * a->aggressiveness * (1.0 - 0.80 * protect)
-      + 0.72 * a->aggressiveness * deep_floor
-      + 0.38 * a->aggressiveness * sparse_floor;
+      + 0.78 * a->aggressiveness * deep_floor
+      + 0.44 * a->aggressiveness * sparse_floor;
     over *= 1.0 - 0.22 * weak_island_guard;
     over *= 1.0 - 0.30 * narrow_tone_guard;
+    over *= 1.0 - 0.20 * learned_weak_guard;
     over *= 1.0 - 0.10 * prior_lift;
     double clean_power = max(p - over * effective_noise, 0.0);
     double wiener = sqrt(clean_power / p);
-    double floor_gain = 0.006
+    double floor_gain = 0.005
       + 0.22 * protect
       + 0.10 * a->coherence[k]
       + 0.05 * a->ridge[k]
@@ -501,20 +534,48 @@ static void spnr_calc_gain(SPNR a) {
       + 0.06 * locked_peak
       + 0.16 * weak_island_guard
       + 0.42 * narrow_tone_guard
+      + 0.13 * learned_weak_guard
       + 0.075 * prior_lift;
-    floor_gain = spnr_clip(floor_gain, 0.006, 0.78);
+    floor_gain = spnr_clip(floor_gain, 0.005, 0.80);
     double target = max(wiener, floor_gain);
-    target = spnr_clip(target, 0.006, 1.0);
+    double dd_snr = max(
+      a->prior_snr[k],
+      posterior_excess * (0.32 + 0.68 * max(protect, probability_guard)));
+    double dd_gain = sqrt(dd_snr / (1.0 + dd_snr + eps));
+    double speech_bridge = max(
+      max(weak_island_guard, learned_weak_guard),
+      max(0.62 * probability_guard, 0.58 * narrow_tone_guard));
+    double texture_bridge = sqrt(spnr_clip(
+      a->presence[k] * max(a->salience[k], 0.28 * neighbor_presence),
+      0.0, 1.0));
+    texture_bridge *= spnr_clip((max(snr_presence, peak) - 0.10) / 0.52, 0.0, 1.0)
+      * (0.28 + 0.72 * spnr_clip((island_support - 0.030) / 0.450, 0.0, 1.0));
+    speech_bridge = max(speech_bridge, 0.58 * texture_bridge);
+    speech_bridge *= max(
+      spnr_clip((island_support - 0.055) / 0.360, 0.0, 1.0),
+      max(
+        0.70 * spnr_clip((coherent_guard - 0.125) / 0.420, 0.0, 1.0),
+        0.50 * texture_bridge));
+    double speech_floor = dd_gain * (0.25 + 0.64 * speech_bridge)
+      + 0.052 * speech_bridge;
+    speech_floor *= 1.0 - 0.68 * orphan_noise * (1.0 - speech_bridge);
+    target = max(target, speech_floor);
+    target = spnr_clip(target, 0.005, 1.0);
     a->floor_bias[k] = 1.0 / floor_pressure;
 
-    double drop_hold = spnr_clip(1.0 - 0.70 * weak_island_guard - 0.22 * prior_lift, 0.04, 1.0);
+    double drop_hold = spnr_clip(
+      1.0 - 0.70 * weak_island_guard - 0.22 * prior_lift
+        - 0.26 * learned_weak_guard - 0.18 * speech_bridge,
+      0.035, 1.0);
     double temporal = target > a->prev_gain[k]
       ? 0.30 + 0.18 * protect
-      : 0.07 + 0.17 * noise_like * drop_hold;
+      : 0.052 + 0.155 * noise_like * drop_hold;
     a->gain[k] = (1.0 - temporal) * a->prev_gain[k] + temporal * target;
     a->prev_gain[k] = a->gain[k];
   }
 
+  a->diag_texture_fill = 0.0;
+  a->diag_mask_smoothing = 0.0;
   if (a->learned_frames >= 18) {
     double pre_sum = 0.0;
     double post_sum = 0.0;
@@ -525,6 +586,10 @@ static void spnr_calc_gain(SPNR a) {
 
     double post_pre_ratio = post_sum / max(pre_sum, eps);
     double artifact_mix = spnr_clip((0.62 - post_pre_ratio) / 0.42, 0.0, 1.0);
+    double enhancement_mix = spnr_clip((0.76 - post_pre_ratio) / 0.56, 0.0, 1.0);
+    artifact_mix = max(artifact_mix, 0.55 * enhancement_mix);
+    double texture_fill_peak = 0.0;
+    double mask_smoothing_peak = 0.0;
     if (artifact_mix > 0.0) {
       int radius = 1 + (int)(3.0 * artifact_mix + 0.5);
       if (radius > 4) { radius = 4; }
@@ -552,17 +617,39 @@ static void spnr_calc_gain(SPNR a) {
           a->presence[k] * max(a->salience[k], 0.35 * neighbor_presence),
           0.0, 1.0));
         double local_guard = max(coherent_guard, paired_guard);
+        double signal_probability = spnr_clip(
+          0.72 * a->signal_prob[k] + 0.28 * a->signal_prob_smooth[k],
+          0.0, 1.0);
+        double probability_shape = spnr_clip((signal_probability - 0.10) / 0.55, 0.0, 1.0)
+          * spnr_clip((local_guard - 0.12) / 0.50, 0.0, 1.0);
+        double signal_guard = max(local_guard, 0.55 * probability_shape);
         double isolated_excess = spnr_clip(
           (a->gain[k] - a->gain_smooth[k]) / max(a->gain[k], 0.001),
           0.0, 1.0);
-        double smooth_mix = artifact_mix * isolated_excess * (1.0 - 0.85 * local_guard);
+        double smooth_mix = artifact_mix * isolated_excess * (1.0 - 0.90 * signal_guard);
+        if (smooth_mix > mask_smoothing_peak) { mask_smoothing_peak = smooth_mix; }
 
         if (smooth_mix > 0.0 && a->gain_smooth[k] < a->gain[k]) {
           a->gain[k] = (1.0 - smooth_mix) * a->gain[k] + smooth_mix * a->gain_smooth[k];
           a->prev_gain[k] = a->gain[k];
         }
+
+        double coherent_shape = spnr_clip((local_guard - 0.24) / 0.42, 0.0, 1.0);
+        double hole_depth = spnr_clip(
+          (a->gain_smooth[k] - a->gain[k]) / max(a->gain_smooth[k], 0.001),
+          0.0, 1.0);
+        double fill_shape = max(coherent_shape, 0.60 * probability_shape);
+        double fill_mix = enhancement_mix * fill_shape * hole_depth * (0.42 + 0.10 * probability_shape);
+        if (fill_mix > texture_fill_peak) { texture_fill_peak = fill_mix; }
+        if (fill_mix > 0.0 && a->gain_smooth[k] > a->gain[k]) {
+          double lift_cap = min(a->gain_smooth[k], a->gain[k] + 0.20 + 0.16 * fill_shape);
+          a->gain[k] = (1.0 - fill_mix) * a->gain[k] + fill_mix * lift_cap;
+          a->prev_gain[k] = a->gain[k];
+        }
       }
     }
+    a->diag_texture_fill = texture_fill_peak;
+    a->diag_mask_smoothing = mask_smoothing_peak;
   }
 
   double presence_peak = 0.0;
@@ -579,9 +666,12 @@ static void spnr_calc_gain(SPNR a) {
   double prior_peak = 0.0;
   double probability_peak = 0.0;
   double probability_sum = 0.0;
+  double probability_memory_peak = 0.0;
+  double probability_memory_sum = 0.0;
   int strong_confidence_bins = 0;
   int coherent_bins = 0;
   int probability_bins = 0;
+  int probability_memory_bins = 0;
   int diag_bins = 0;
 
   for (int k = 1; k < a->msize - 1; k++) {
@@ -602,11 +692,17 @@ static void spnr_calc_gain(SPNR a) {
     double signal_probability = spnr_clip(
       0.72 * a->signal_prob[k] + 0.28 * a->signal_prob_smooth[k],
       0.0, 1.0);
-    double probability_support = signal_probability * max(
-      island_confidence,
-      spnr_clip(
-        0.42 * coherent_guard + 0.30 * a->salience[k] + 0.28 * a->presence[k],
-        0.0, 1.0));
+    double probability_presence = spnr_clip((signal_probability - 0.28) / 0.62, 0.0, 1.0);
+    double probability_context = spnr_clip(
+      (max(island_confidence, coherent_guard) - 0.22) / 0.52,
+      0.0, 1.0);
+    double probability_shape = spnr_clip(
+      (0.56 * a->salience[k] + 0.44 * a->presence[k] - 0.42) / 0.44,
+      0.0, 1.0);
+    double probability_support = probability_presence * probability_context * probability_shape;
+    double probability_memory = signal_probability * spnr_clip(
+      (max(island_confidence, coherent_guard) - 0.10) / 0.60,
+      0.0, 1.0);
     if (a->presence[k] > presence_peak) { presence_peak = a->presence[k]; }
     if (a->salience[k] > salience_peak) { salience_peak = a->salience[k]; }
     if (a->coherence[k] > coherence_peak) { coherence_peak = a->coherence[k]; }
@@ -614,6 +710,7 @@ static void spnr_calc_gain(SPNR a) {
     if (island_confidence > island_peak) { island_peak = island_confidence; }
     if (prior_confidence > prior_peak) { prior_peak = prior_confidence; }
     if (probability_support > probability_peak) { probability_peak = probability_support; }
+    if (probability_memory > probability_memory_peak) { probability_memory_peak = probability_memory; }
     if (a->gain[k] < min_gain) { min_gain = a->gain[k]; }
     if (a->power[k] > power_peak) { power_peak = a->power[k]; }
     gain_sum += a->gain[k];
@@ -621,9 +718,11 @@ static void spnr_calc_gain(SPNR a) {
     floor_pressure_sum += 1.0 / max(a->floor_bias[k], eps);
     confidence_sum += bin_confidence;
     probability_sum += probability_support;
+    probability_memory_sum += probability_memory;
     if (bin_confidence > 0.68) { strong_confidence_bins++; }
     if (a->ridge[k] > 0.56 || (a->coherence[k] > 0.62 && a->salience[k] > 0.12)) { coherent_bins++; }
     if (probability_support > 0.62) { probability_bins++; }
+    if (probability_memory > 0.30) { probability_memory_bins++; }
     diag_bins++;
   }
 
@@ -632,9 +731,11 @@ static void spnr_calc_gain(SPNR a) {
     double mean_floor_pressure = floor_pressure_sum / (double)diag_bins;
     double mean_confidence = confidence_sum / (double)diag_bins;
     double mean_probability = probability_sum / (double)diag_bins;
+    double mean_probability_memory = probability_memory_sum / (double)diag_bins;
     double confidence_occupancy = (double)strong_confidence_bins / (double)diag_bins;
     double coherent_occupancy = (double)coherent_bins / (double)diag_bins;
     double probability_occupancy = (double)probability_bins / (double)diag_bins;
+    double probability_memory_occupancy = (double)probability_memory_bins / (double)diag_bins;
     double localized = spnr_clip((0.28 - confidence_occupancy) / 0.18, 0.0, 1.0);
     double coherent_peak = max(coherence_peak, ridge_peak);
     double paired_peak = min(presence_peak, max(salience_peak + 0.08, coherent_peak));
@@ -645,6 +746,12 @@ static void spnr_calc_gain(SPNR a) {
         + 0.14 * mean_probability * localized
         + 0.10 * sqrt(probability_occupancy) * localized,
       0.0, 1.0);
+    double probability_memory_signal = spnr_clip(
+      0.74 * probability_memory_peak * localized
+        + 0.16 * mean_probability_memory * localized
+        + 0.10 * sqrt(probability_memory_occupancy) * localized,
+      0.0, 1.0);
+    probability_signal = max(probability_signal, 0.42 * probability_memory_signal);
     peak_signal = max(peak_signal, 0.58 * probability_signal);
     a->diag_presence_peak = presence_peak;
     a->diag_salience_peak = salience_peak;
@@ -688,12 +795,12 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
   double gate_confidence = spnr_clip(
     a->diag_signal_confidence + 0.18 * coherent_lift + 0.10 * probability_drive,
     0.0, 1.0);
-  double signal_drive = spnr_clip((gate_confidence - 0.24) / 0.28, 0.0, 1.0);
+  double signal_drive = spnr_clip((gate_confidence - 0.18) / 0.30, 0.0, 1.0);
   double spectral_drive = max(
     spnr_clip((a->diag_mean_gain - 0.10) / 0.30, 0.0, 1.0),
     0.70 * coherent_drive);
   double weak_recovery_drive = signal_drive * (0.25 + 0.75 * max(spectral_drive, coherent_lift));
-  double gate_inst = spnr_clip((gate_confidence - 0.22) / 0.34, 0.0, 1.0);
+  double gate_inst = spnr_clip((gate_confidence - 0.18) / 0.34, 0.0, 1.0);
   double weak_input_drive = a->target_rms > 1.0e-9
     ? spnr_clip((0.85 * a->target_rms - a->diag_input_rms) / (0.65 * a->target_rms), 0.0, 1.0)
     : 0.0;
@@ -708,10 +815,61 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
   if (faint_recovery_drive > 0.035) {
     weak_recovery_drive = max(weak_recovery_drive, 0.14 + 0.48 * faint_recovery_drive);
   }
+  double weak_memory_relief = spnr_clip(
+    (a->agc_weak_signal_memory - 0.16) / 0.42,
+    0.0, 1.0)
+    * max(
+      spnr_clip((gate_confidence - 0.255) / 0.145, 0.0, 1.0),
+      0.58 * spnr_clip((a->diag_mask_smoothing - 0.300) / 0.160, 0.0, 1.0));
+  double low_confidence_noise = spnr_clip((0.36 - a->diag_signal_confidence) / 0.22, 0.0, 1.0);
+  double low_probability_noise = spnr_clip((0.24 - a->diag_signal_probability) / 0.24, 0.0, 1.0);
+  double low_gate_noise = spnr_clip((0.54 - gate_inst) / 0.36, 0.0, 1.0);
+  double low_evidence_noise_drive = weak_input_drive * spnr_clip(
+    0.46 * low_confidence_noise
+      + 0.34 * low_probability_noise
+      + 0.20 * low_gate_noise
+      - 0.10 * coherent_lift,
+    0.0, 1.0);
+  low_evidence_noise_drive *= 1.0 - 0.38 * weak_memory_relief;
+  if (low_evidence_noise_drive > 0.0) {
+    double low_evidence_hold = 1.0 - 0.70 * low_evidence_noise_drive;
+    gate_inst *= 1.0 - 0.45 * low_evidence_noise_drive;
+    weak_recovery_drive *= low_evidence_hold;
+  }
+  double learned_weak_speech_inst = weak_input_drive
+    * spnr_clip((gate_confidence - 0.270) / 0.130, 0.0, 1.0)
+    * max(
+      spnr_clip((gate_inst - 0.42) / 0.34, 0.0, 1.0),
+      0.56 * spnr_clip((a->diag_recovery_drive - 0.120) / 0.220, 0.0, 1.0))
+    * max(
+      spnr_clip((a->diag_mask_smoothing - 0.300) / 0.160, 0.0, 1.0),
+      0.62 * spnr_clip((a->diag_signal_probability - 0.105) / 0.110, 0.0, 1.0));
+  learned_weak_speech_inst *= 1.0 - 0.86 * spnr_clip(
+    (low_evidence_noise_drive - 0.18) / 0.42,
+    0.0, 1.0);
+  double learned_weak_alpha = learned_weak_speech_inst > a->agc_weak_signal_memory
+    ? spnr_time_alpha((double)n, a->rate, 0.055)
+    : spnr_time_alpha((double)n, a->rate, 0.780 + 0.640 * low_evidence_noise_drive);
+  a->agc_weak_signal_memory = learned_weak_alpha * a->agc_weak_signal_memory
+    + (1.0 - learned_weak_alpha) * learned_weak_speech_inst;
+  if (low_evidence_noise_drive > 0.48) {
+    a->agc_weak_signal_memory *= 1.0 - 0.62 * spnr_clip(
+      (low_evidence_noise_drive - 0.48) / 0.34,
+      0.0, 1.0);
+  }
+  if (a->agc_weak_signal_memory > 0.006) {
+    weak_recovery_drive = max(
+      weak_recovery_drive,
+      0.15 + 0.62 * a->agc_weak_signal_memory);
+    gate_inst = max(gate_inst, 0.22 + 0.58 * a->agc_weak_signal_memory);
+  }
   if (a->learned_frames < 24) { gate_inst = 0.0; }
 
+  double gate_release_tau = low_evidence_noise_drive > 0.0
+    ? 0.240 + 1.260 * (1.0 - low_evidence_noise_drive)
+    : 3.000;
   double gate_alpha = gate_inst < a->agc_gate
-    ? spnr_time_alpha((double)n, a->rate, 3.000)
+    ? spnr_time_alpha((double)n, a->rate, gate_release_tau)
     : spnr_time_alpha((double)n, a->rate, 0.420);
   a->agc_gate = gate_alpha * a->agc_gate + (1.0 - gate_alpha) * gate_inst;
   a->diag_agc_gate = a->agc_gate;
@@ -734,8 +892,12 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
   double desired = 1.0;
   double gate_drive = spnr_clip((a->agc_gate - 0.08) / 0.44, 0.0, 1.0);
   double level_inst = pow(max(gate_drive, 0.85 * weak_recovery_drive), 0.70);
+  level_inst *= 1.0 - 0.58 * low_evidence_noise_drive;
+  double level_release_tau = low_evidence_noise_drive > 0.0
+    ? 0.420 + 1.200 * (1.0 - low_evidence_noise_drive)
+    : 3.200;
   double level_alpha = level_inst < a->agc_level_drive
-    ? spnr_time_alpha((double)n, a->rate, 3.200)
+    ? spnr_time_alpha((double)n, a->rate, level_release_tau)
     : spnr_time_alpha((double)n, a->rate, 0.180);
   a->agc_level_drive = level_alpha * a->agc_level_drive + (1.0 - level_alpha) * level_inst;
   double level_drive = spnr_clip(a->agc_level_drive, 0.0, 1.0);
@@ -783,20 +945,24 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
     ? spnr_clip((makeup_rms / out_rms - 1.0) / 5.0, 0.0, 1.0)
     : 0.0;
   double recovery_inst = weak_recovery_drive
-    * spnr_clip((a->agc_gate - 0.34) / 0.34, 0.0, 1.0)
+    * spnr_clip((a->agc_gate - 0.30) / 0.36, 0.0, 1.0)
     * weak_level_gap;
   double recovery_alpha = recovery_inst > a->agc_recovery_hold
     ? spnr_time_alpha((double)n, a->rate, 0.090)
     : spnr_time_alpha((double)n, a->rate, 1.200);
   a->agc_recovery_hold = recovery_alpha * a->agc_recovery_hold
     + (1.0 - recovery_alpha) * recovery_inst;
+  if (low_evidence_noise_drive > 0.0) {
+    a->agc_recovery_hold *= 1.0 - 0.40 * low_evidence_noise_drive;
+  }
   double makeup_drive = max(
     weak_recovery_drive * spnr_clip((level_drive - 0.18) / 0.62, 0.0, 1.0),
     a->agc_recovery_hold * (0.72 + 0.28 * level_drive));
+  makeup_drive *= 1.0 - 0.70 * low_evidence_noise_drive;
   a->diag_recovery_drive = spnr_clip(max(weak_recovery_drive, a->agc_recovery_hold), 0.0, 1.0);
   double makeup_target = 1.0;
   if (a->agc_run && out_rms > 1.0e-9 && makeup_drive > 0.0) {
-    double persistent_cap = 3.20 + 0.70 * weak_input_drive
+    double persistent_cap = 2.06 + 0.24 * weak_input_drive
       * spnr_clip((gate_confidence - 0.32) / 0.30, 0.0, 1.0);
     double deficit = spnr_clip(makeup_rms / out_rms, 1.0, persistent_cap);
     makeup_target = 1.0 + makeup_drive * (deficit - 1.0);
@@ -804,19 +970,20 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
   double makeup_release_drive = max(
     1.0 - weak_input_drive,
     spnr_clip((out_rms - a->target_rms * 0.34) / (a->target_rms * 0.44), 0.0, 1.0));
+  makeup_release_drive = max(makeup_release_drive, low_evidence_noise_drive);
   makeup_release_drive = max(
     makeup_release_drive,
     spnr_clip((a->diag_input_rms - a->target_rms * 0.78) / (a->target_rms * 0.42), 0.0, 1.0));
-  double makeup_release_tau = 0.320 + 0.930 * (1.0 - makeup_release_drive);
+  double makeup_release_tau = 0.420 + 1.100 * (1.0 - makeup_release_drive);
   double makeup_alpha = makeup_target < a->agc_makeup_gain
     ? spnr_time_alpha((double)n, a->rate, makeup_release_tau)
-    : spnr_time_alpha((double)n, a->rate, 0.080 + 0.240 * (1.0 - makeup_drive));
+    : spnr_time_alpha((double)n, a->rate, 0.260 + 0.520 * (1.0 - makeup_drive));
   double next_makeup_gain = makeup_alpha * a->agc_makeup_gain
     + (1.0 - makeup_alpha) * makeup_target;
   double makeup_seconds = a->rate > 0.0 ? (double)n / a->rate : 0.0;
-  double makeup_max_up = pow(10.0, ((7.0 + 9.0 * makeup_drive) * makeup_seconds) / 20.0);
-  double makeup_max_down = pow(10.0, ((5.0 + 16.0 * makeup_release_drive
-    + 5.0 * (1.0 - makeup_drive)) * makeup_seconds) / 20.0);
+  double makeup_max_up = pow(10.0, ((2.6 + 3.8 * makeup_drive) * makeup_seconds) / 20.0);
+  double makeup_max_down = pow(10.0, ((3.2 + 7.0 * makeup_release_drive
+    + 3.5 * (1.0 - makeup_drive)) * makeup_seconds) / 20.0);
   if (makeup_max_up > 1.0 && next_makeup_gain > a->agc_makeup_gain * makeup_max_up) {
     next_makeup_gain = a->agc_makeup_gain * makeup_max_up;
   }
@@ -833,34 +1000,125 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
     out_rms *= a->agc_makeup_gain;
   }
 
+  double rescue_gate_drive = max(
+    spnr_clip((a->agc_gate - 0.22) / 0.36, 0.0, 1.0),
+    0.70 * probability_drive);
+  double rescue_confidence_drive = spnr_clip((gate_confidence - 0.06) / 0.30, 0.0, 1.0);
+  double rescue_level_drive = spnr_clip(
+    (max(level_drive, weak_recovery_drive) - 0.24) / 0.50,
+    0.0, 1.0);
+  rescue_level_drive = max(
+    rescue_level_drive,
+    0.55 * spnr_clip((a->agc_gate - 0.45) / 0.35, 0.0, 1.0));
   double faint_rescue_drive = weak_input_drive
-    * max(
-      spnr_clip((a->agc_gate - 0.38) / 0.34, 0.0, 1.0),
-      0.70 * probability_drive)
-    * spnr_clip((gate_confidence - 0.13) / 0.28, 0.0, 1.0)
-    * spnr_clip((level_drive - 0.70) / 0.30, 0.0, 1.0);
+    * rescue_gate_drive
+    * rescue_confidence_drive
+    * rescue_level_drive;
+  faint_rescue_drive *= 1.0 - 0.75 * low_evidence_noise_drive;
   double output_below_input = (a->diag_input_rms > 1.0e-9 && out_rms > 1.0e-9)
     ? spnr_clip((0.98 * a->diag_input_rms / out_rms - 1.0) / 1.70, 0.0, 1.0)
     : 0.0;
+  double weak_fragment_floor_drive = weak_input_drive
+    * spnr_clip((a->agc_gate - 0.34) / 0.36, 0.0, 1.0)
+    * spnr_clip((gate_confidence - 0.13) / 0.26, 0.0, 1.0);
+  weak_fragment_floor_drive *= 1.0 - 0.75 * low_evidence_noise_drive;
   double faint_floor_rms = a->target_rms * (
-    0.34 + 0.22 * faint_rescue_drive + 0.12 * probability_drive);
+    0.64 + 0.10 * weak_fragment_floor_drive
+    + 0.28 * faint_rescue_drive + 0.10 * probability_drive);
   double output_below_floor = out_rms > 1.0e-9
     ? spnr_clip((faint_floor_rms / out_rms - 1.0) / 3.30, 0.0, 1.0)
     : 0.0;
   double rescue_need = max(output_below_floor, 0.65 * output_below_input);
   if (a->agc_run && faint_rescue_drive > 0.010 && rescue_need > 0.0 && out_rms > 1.0e-9) {
-    double rescue_target_rms = max(1.12 * a->diag_input_rms, faint_floor_rms);
-    rescue_target_rms = min(rescue_target_rms, a->target_rms * (0.78 + 0.06 * probability_drive));
-    double direct_rescue = spnr_clip(rescue_target_rms / out_rms, 1.0, 4.80);
+    double rescue_target_rms = max(1.24 * a->diag_input_rms, faint_floor_rms);
+    rescue_target_rms = min(rescue_target_rms, a->target_rms * (0.98 + 0.04 * probability_drive));
+    double direct_rescue = spnr_clip(rescue_target_rms / out_rms, 1.0, 5.60);
     double rescue_blend = spnr_clip(
-      0.30 + 0.62 * faint_rescue_drive * (0.45 + 0.55 * rescue_need),
-      0.0, 0.95);
+      0.46 + 0.52 * faint_rescue_drive * (0.45 + 0.55 * rescue_need),
+      0.0, 0.96);
     double rescue_gain = 1.0 + rescue_blend * (direct_rescue - 1.0);
     if (rescue_gain > 1.001) {
       for (int i = 0; i < n; i++) {
         out[2 * i + 0] *= rescue_gain;
       }
       out_rms *= rescue_gain;
+    }
+  }
+
+  double probability_onset_gate =
+    spnr_clip((a->diag_signal_probability - 0.16) / 0.06, 0.0, 1.0);
+  double weak_dropout_gate_open = spnr_clip(
+    (a->agc_gate - (0.30 - 0.04 * probability_onset_gate)) / 0.34,
+    0.0, 1.0);
+  double weak_dropout_drive = weak_input_drive
+    * weak_dropout_gate_open
+    * spnr_clip((gate_confidence - 0.14) / 0.22, 0.0, 1.0)
+    * spnr_clip((a->target_rms * 0.52 - out_rms) / (a->target_rms * 0.34), 0.0, 1.0);
+  weak_dropout_drive *= 1.0 - 0.75 * low_evidence_noise_drive;
+  double mixed_fragment_drive = weak_input_drive
+    * spnr_clip((a->agc_gate - 0.34) / 0.32, 0.0, 1.0)
+    * spnr_clip((gate_confidence - 0.16) / 0.24, 0.0, 1.0)
+    * spnr_clip((a->target_rms * 0.70 - out_rms) / (a->target_rms * 0.48), 0.0, 1.0);
+  mixed_fragment_drive *= 1.0 - 0.75 * low_evidence_noise_drive;
+  weak_dropout_drive = max(weak_dropout_drive, 0.38 * mixed_fragment_drive);
+  if (a->agc_run && weak_dropout_drive > 0.008 && out_rms > 1.0e-9) {
+    double weak_dropout_floor_rms = a->target_rms * (0.72 + 0.08 * weak_dropout_drive);
+    double weak_dropout_lift = spnr_clip(weak_dropout_floor_rms / out_rms, 1.0, 6.20);
+    double dropout_blend = spnr_clip(0.70 + 0.20 * weak_dropout_drive, 0.0, 0.92);
+    double dropout_gain = 1.0 + dropout_blend * (weak_dropout_lift - 1.0);
+    if (dropout_gain > 1.001) {
+      for (int i = 0; i < n; i++) {
+        out[2 * i + 0] *= dropout_gain;
+      }
+      out_rms *= dropout_gain;
+    }
+  }
+
+  double signal_valley_drive = spnr_clip(
+    (a->diag_input_rms - a->target_rms * 0.46) / (a->target_rms * 0.80),
+    0.0, 1.0)
+    * spnr_clip((a->agc_gate - 0.52) / 0.30, 0.0, 1.0)
+    * spnr_clip((gate_confidence - 0.24) / 0.26, 0.0, 1.0)
+    * spnr_clip((a->target_rms * 0.70 - out_rms) / (a->target_rms * 0.40), 0.0, 1.0);
+  if (a->diag_input_rms > 1.0e-9 && out_rms > 1.0e-9) {
+    signal_valley_drive *= spnr_clip(
+      (0.88 * a->diag_input_rms / out_rms - 1.0) / 2.20,
+      0.0, 1.0);
+  }
+  if (a->agc_run && signal_valley_drive > 0.010 && out_rms > 1.0e-9) {
+    double signal_valley_floor_rms = a->target_rms * (0.70 + 0.10 * signal_valley_drive);
+    double signal_valley_lift = spnr_clip(signal_valley_floor_rms / out_rms, 1.0, 3.80);
+    double signal_valley_blend = spnr_clip(0.38 + 0.34 * signal_valley_drive, 0.0, 0.72);
+    double signal_valley_gain = 1.0 + signal_valley_blend * (signal_valley_lift - 1.0);
+    if (signal_valley_gain > 1.001) {
+      for (int i = 0; i < n; i++) {
+        out[2 * i + 0] *= signal_valley_gain;
+      }
+      out_rms *= signal_valley_gain;
+    }
+  }
+
+  double strong_valley_drive = spnr_clip(
+    (a->diag_input_rms - a->target_rms * 0.72) / (a->target_rms * 0.64),
+    0.0, 1.0)
+    * spnr_clip((a->agc_gate - 0.52) / 0.30, 0.0, 1.0)
+    * spnr_clip((gate_confidence - 0.24) / 0.24, 0.0, 1.0)
+    * spnr_clip((a->target_rms * 0.68 - out_rms) / (a->target_rms * 0.34), 0.0, 1.0);
+  if (a->diag_input_rms > 1.0e-9 && out_rms > 1.0e-9) {
+    strong_valley_drive *= spnr_clip(
+      (0.74 * a->diag_input_rms / out_rms - 1.0) / 2.00,
+      0.0, 1.0);
+  }
+  if (a->agc_run && strong_valley_drive > 0.012 && out_rms > 1.0e-9) {
+    double strong_valley_floor_rms = a->target_rms * (0.68 + 0.08 * strong_valley_drive);
+    double strong_valley_lift = spnr_clip(strong_valley_floor_rms / out_rms, 1.0, 3.20);
+    double strong_valley_blend = spnr_clip(0.36 + 0.30 * strong_valley_drive, 0.0, 0.68);
+    double strong_valley_gain = 1.0 + strong_valley_blend * (strong_valley_lift - 1.0);
+    if (strong_valley_gain > 1.001) {
+      for (int i = 0; i < n; i++) {
+        out[2 * i + 0] *= strong_valley_gain;
+      }
+      out_rms *= strong_valley_gain;
     }
   }
 
@@ -871,6 +1129,262 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
       out[2 * i + 0] *= limiter;
     }
     out_rms *= limiter;
+  }
+  if (a->agc_run && low_evidence_noise_drive > 0.10 && out_rms > 1.0e-9) {
+    double low_evidence_ceiling_rms = a->target_rms *
+      (0.00035 + 0.0030 * (1.0 - low_evidence_noise_drive));
+    double low_evidence_mix = spnr_clip((low_evidence_noise_drive - 0.04) / 0.10, 0.0, 1.0);
+    if (out_rms > low_evidence_ceiling_rms && low_evidence_mix > 0.0) {
+      double trim = low_evidence_ceiling_rms / out_rms;
+      double low_evidence_gain = 1.0 + low_evidence_mix * (trim - 1.0);
+      for (int i = 0; i < n; i++) {
+        out[2 * i + 0] *= low_evidence_gain;
+      }
+      out_rms *= low_evidence_gain;
+    }
+  }
+  double learned_weak_floor_drive = weak_input_drive
+    * a->agc_weak_signal_memory
+    * max(
+      spnr_clip((a->agc_gate - 0.42) / 0.34, 0.0, 1.0),
+      0.52 * spnr_clip((a->diag_recovery_drive - 0.135) / 0.200, 0.0, 1.0))
+    * spnr_clip((a->target_rms * 0.58 - out_rms) / (a->target_rms * 0.46), 0.0, 1.0);
+  learned_weak_floor_drive *= 1.0 - 0.80 * spnr_clip(
+    (low_evidence_noise_drive - 0.24) / 0.42,
+    0.0, 1.0);
+  if (a->agc_run && learned_weak_floor_drive > 0.006 && out_rms > 1.0e-9) {
+    double learned_floor_rms = a->target_rms * (0.36 + 0.14 * learned_weak_floor_drive);
+    double learned_floor_lift = spnr_clip(learned_floor_rms / out_rms, 1.0, 10.00);
+    double learned_floor_blend = spnr_clip(
+      0.46 + 0.30 * learned_weak_floor_drive,
+      0.0, 0.76);
+    double learned_floor_gain = 1.0 + learned_floor_blend * (learned_floor_lift - 1.0);
+    if (learned_floor_gain > 1.001) {
+      for (int i = 0; i < n; i++) {
+        out[2 * i + 0] *= learned_floor_gain;
+      }
+      out_rms *= learned_floor_gain;
+    }
+  }
+  double memory_floor_drive = weak_input_drive
+    * spnr_clip((a->agc_weak_signal_memory - 0.24) / 0.40, 0.0, 1.0)
+    * max(
+      spnr_clip((a->agc_gate - 0.38) / 0.34, 0.0, 1.0),
+      0.66 * spnr_clip((a->diag_recovery_drive - 0.200) / 0.300, 0.0, 1.0))
+    * spnr_clip((gate_confidence - 0.260) / 0.150, 0.0, 1.0)
+    * spnr_clip((a->target_rms * 0.66 - out_rms) / (a->target_rms * 0.54), 0.0, 1.0);
+  memory_floor_drive *= 1.0 - 0.66 * spnr_clip(
+    (low_evidence_noise_drive - 0.32) / 0.46,
+    0.0, 1.0);
+  if (a->agc_run && memory_floor_drive > 0.006 && out_rms > 1.0e-9) {
+    double memory_floor_rms = a->target_rms * (0.42 + 0.18 * memory_floor_drive);
+    double memory_floor_lift = spnr_clip(memory_floor_rms / out_rms, 1.0, 13.00);
+    double memory_floor_blend = spnr_clip(
+      0.48 + 0.34 * memory_floor_drive,
+      0.0, 0.82);
+    double memory_floor_gain = 1.0 + memory_floor_blend * (memory_floor_lift - 1.0);
+    if (memory_floor_gain > 1.001) {
+      for (int i = 0; i < n; i++) {
+        out[2 * i + 0] *= memory_floor_gain;
+      }
+      out_rms *= memory_floor_gain;
+    }
+  }
+  double weak_recovery_floor_drive = weak_input_drive
+    * spnr_clip((gate_confidence - 0.310) / 0.065, 0.0, 1.0)
+    * max(
+      spnr_clip((a->diag_recovery_drive - 0.220) / 0.085, 0.0, 1.0),
+      0.68 * spnr_clip((a->agc_gate - 0.560) / 0.250, 0.0, 1.0))
+    * spnr_clip((a->diag_signal_probability - 0.165) / 0.075, 0.0, 1.0)
+    * spnr_clip((a->target_rms * 0.44 - out_rms) / (a->target_rms * 0.38), 0.0, 1.0);
+  weak_recovery_floor_drive *= 1.0 - 0.82 * spnr_clip(
+    (low_evidence_noise_drive - 0.24) / 0.36,
+    0.0, 1.0);
+  if (a->agc_run && weak_recovery_floor_drive > 0.006 && out_rms > 1.0e-9) {
+    double recovery_floor_rms = a->target_rms * (0.16 + 0.08 * weak_recovery_floor_drive);
+    double recovery_floor_lift = spnr_clip(recovery_floor_rms / out_rms, 1.0, 20.00);
+    double recovery_floor_blend = spnr_clip(
+      0.22 + 0.30 * weak_recovery_floor_drive,
+      0.0, 0.52);
+    double recovery_floor_gain = 1.0 + recovery_floor_blend * (recovery_floor_lift - 1.0);
+    if (recovery_floor_gain > 1.001) {
+      for (int i = 0; i < n; i++) {
+        out[2 * i + 0] *= recovery_floor_gain;
+      }
+      out_rms *= recovery_floor_gain;
+    }
+  }
+  double gate_stable_whisper_drive = weak_input_drive
+    * spnr_clip((a->agc_gate - 0.460) / 0.240, 0.0, 1.0)
+    * spnr_clip((gate_confidence - 0.275) / 0.085, 0.0, 1.0)
+    * max(
+      spnr_clip((a->diag_signal_probability - 0.132) / 0.070, 0.0, 1.0),
+      0.70 * spnr_clip((a->diag_recovery_drive - 0.148) / 0.120, 0.0, 1.0))
+    * spnr_clip((a->diag_mask_smoothing - 0.300) / 0.145, 0.0, 1.0)
+    * spnr_clip((a->target_rms * 0.40 - out_rms) / (a->target_rms * 0.34), 0.0, 1.0);
+  gate_stable_whisper_drive *= 1.0 - 0.84 * spnr_clip(
+    (low_evidence_noise_drive - 0.28) / 0.42,
+    0.0, 1.0);
+  if (a->agc_run && gate_stable_whisper_drive > 0.006 && out_rms > 1.0e-9) {
+    double whisper_floor_rms = a->target_rms * (0.14 + 0.06 * gate_stable_whisper_drive);
+    double whisper_floor_lift = spnr_clip(whisper_floor_rms / out_rms, 1.0, 18.00);
+    double whisper_floor_blend = spnr_clip(
+      0.16 + 0.28 * gate_stable_whisper_drive,
+      0.0, 0.46);
+    double whisper_floor_gain = 1.0 + whisper_floor_blend * (whisper_floor_lift - 1.0);
+    if (whisper_floor_gain > 1.001) {
+      for (int i = 0; i < n; i++) {
+        out[2 * i + 0] *= whisper_floor_gain;
+      }
+      out_rms *= whisper_floor_gain;
+    }
+  }
+  double gate_anchor_fragment_drive = weak_input_drive
+    * spnr_clip((a->agc_gate - 0.620) / 0.180, 0.0, 1.0)
+    * spnr_clip((gate_confidence - 0.292) / 0.095, 0.0, 1.0)
+    * spnr_clip((a->diag_mask_smoothing - 0.165) / 0.185, 0.0, 1.0)
+    * max(
+      spnr_clip((a->diag_signal_probability - 0.145) / 0.070, 0.0, 1.0),
+      0.66 * spnr_clip((a->diag_recovery_drive - 0.168) / 0.115, 0.0, 1.0))
+    * spnr_clip((a->target_rms * 0.34 - out_rms) / (a->target_rms * 0.30), 0.0, 1.0);
+  gate_anchor_fragment_drive *= 1.0 - 0.88 * spnr_clip(
+    (low_evidence_noise_drive - 0.18) / 0.34,
+    0.0, 1.0);
+  if (a->agc_run && gate_anchor_fragment_drive > 0.006 && out_rms > 1.0e-9) {
+    double anchor_floor_rms = a->target_rms * (0.13 + 0.07 * gate_anchor_fragment_drive);
+    double anchor_floor_lift = spnr_clip(anchor_floor_rms / out_rms, 1.0, 14.00);
+    double anchor_floor_blend = spnr_clip(
+      0.16 + 0.24 * gate_anchor_fragment_drive,
+      0.0, 0.42);
+    double anchor_floor_gain = 1.0 + anchor_floor_blend * (anchor_floor_lift - 1.0);
+    if (anchor_floor_gain > 1.001) {
+      for (int i = 0; i < n; i++) {
+        out[2 * i + 0] *= anchor_floor_gain;
+      }
+      out_rms *= anchor_floor_gain;
+    }
+  }
+  double continuity_gate_support = max(
+    spnr_clip((a->agc_gate - 0.28) / 0.26, 0.0, 1.0),
+    0.46 * spnr_clip((a->diag_recovery_drive - 0.135) / 0.16, 0.0, 1.0));
+  double continuity_conf_support = spnr_clip(
+    (gate_confidence - 0.245) / 0.125,
+    0.0, 1.0);
+  double continuity_probability_support = max(
+    spnr_clip((a->diag_signal_probability - 0.125) / 0.090, 0.0, 1.0),
+    0.70 * spnr_clip((a->diag_recovery_drive - 0.135) / 0.17, 0.0, 1.0));
+  double continuity_inst = weak_input_drive
+    * continuity_gate_support
+    * continuity_conf_support
+    * continuity_probability_support
+    * spnr_clip((a->target_rms * 0.58 - out_rms) / (a->target_rms * 0.48), 0.0, 1.0);
+  continuity_inst *= 1.0 - 0.74 * spnr_clip(
+    (low_evidence_noise_drive - 0.32) / 0.48,
+    0.0, 1.0);
+  double continuity_alpha = continuity_inst > a->agc_continuity_hold
+    ? spnr_time_alpha((double)n, a->rate, 0.070)
+    : spnr_time_alpha((double)n, a->rate,
+      0.230 + 0.250 * (1.0 - low_evidence_noise_drive));
+  a->agc_continuity_hold = continuity_alpha * a->agc_continuity_hold
+    + (1.0 - continuity_alpha) * continuity_inst;
+  if (low_evidence_noise_drive > 0.58) {
+    a->agc_continuity_hold *= 1.0 - 0.68 * spnr_clip(
+      (low_evidence_noise_drive - 0.58) / 0.32,
+      0.0, 1.0);
+  }
+  double continuity_current_gate = spnr_clip((a->agc_gate - 0.34) / 0.24, 0.0, 1.0)
+    * max(
+      spnr_clip((a->diag_signal_probability - 0.145) / 0.080, 0.0, 1.0),
+      max(
+        0.72 * spnr_clip((a->diag_recovery_drive - 0.160) / 0.140, 0.0, 1.0),
+        0.60 * spnr_clip((gate_confidence - 0.292) / 0.090, 0.0, 1.0)));
+  double continuity_memory_drive = a->agc_continuity_hold *
+    continuity_current_gate *
+    (1.0 - 0.70 * spnr_clip((low_evidence_noise_drive - 0.34) / 0.46, 0.0, 1.0));
+  double gate_continuity_drive = weak_input_drive
+    * max(
+      spnr_clip((a->agc_gate - 0.32) / 0.26, 0.0, 1.0),
+      0.35 * spnr_clip((a->diag_recovery_drive - 0.18) / 0.16, 0.0, 1.0))
+    * spnr_clip((gate_confidence - 0.255) / 0.145, 0.0, 1.0)
+    * max(
+      spnr_clip((a->diag_signal_probability - 0.130) / 0.095, 0.0, 1.0),
+      0.72 * spnr_clip((a->diag_recovery_drive - 0.145) / 0.18, 0.0, 1.0))
+    * spnr_clip((a->target_rms * 0.48 - out_rms) / (a->target_rms * 0.38), 0.0, 1.0);
+  gate_continuity_drive *= 1.0 - 0.62 * spnr_clip(
+    (low_evidence_noise_drive - 0.30) / 0.50,
+    0.0, 1.0);
+  gate_continuity_drive = max(gate_continuity_drive, 0.58 * continuity_memory_drive);
+  if (a->agc_run && gate_continuity_drive > 0.006 && out_rms > 1.0e-9) {
+    double continuity_floor_rms = a->target_rms * (0.22 + 0.12 * gate_continuity_drive);
+    double continuity_lift = spnr_clip(continuity_floor_rms / out_rms, 1.0, 15.00);
+    double continuity_blend = spnr_clip(0.44 + 0.30 * gate_continuity_drive, 0.0, 0.74);
+    double continuity_gain = 1.0 + continuity_blend * (continuity_lift - 1.0);
+    if (continuity_gain > 1.001) {
+      for (int i = 0; i < n; i++) {
+        out[2 * i + 0] *= continuity_gain;
+      }
+      out_rms *= continuity_gain;
+    }
+  }
+  double probability_floor_drive = weak_input_drive
+    * spnr_clip((a->diag_signal_probability - 0.17) / 0.09, 0.0, 1.0)
+    * spnr_clip((gate_confidence - 0.26) / 0.14, 0.0, 1.0)
+    * max(
+      spnr_clip((a->agc_gate - 0.22) / 0.22, 0.0, 1.0),
+      0.35 * probability_drive)
+    * spnr_clip((a->target_rms * 0.56 - out_rms) / (a->target_rms * 0.42), 0.0, 1.0);
+  if (a->diag_signal_confidence < 0.28) {
+    probability_floor_drive *= spnr_clip(
+      (a->diag_signal_confidence - 0.24) / 0.04,
+      0.0, 1.0);
+  }
+  probability_floor_drive *= 1.0 - 0.45 * spnr_clip(
+    (low_evidence_noise_drive - 0.22) / 0.48,
+    0.0, 1.0);
+  if (a->agc_run && probability_floor_drive > 0.006 && out_rms > 1.0e-9) {
+    double probability_floor_rms = a->target_rms * (0.34 + 0.12 * probability_floor_drive);
+    double probability_floor_lift = spnr_clip(probability_floor_rms / out_rms, 1.0, 12.00);
+    double probability_floor_blend = spnr_clip(
+      0.46 + 0.34 * probability_floor_drive,
+      0.0, 0.80);
+    double probability_floor_gain = 1.0 + probability_floor_blend * (probability_floor_lift - 1.0);
+    if (probability_floor_gain > 1.001) {
+      for (int i = 0; i < n; i++) {
+        out[2 * i + 0] *= probability_floor_gain;
+      }
+      out_rms *= probability_floor_gain;
+    }
+  }
+
+  double out_peak = 0.0;
+  for (int i = 0; i < n; i++) {
+    double v = fabs(out[2 * i + 0]);
+    if (v > out_peak) { out_peak = v; }
+  }
+  double peak_evidence = max(
+    probability_drive,
+    spnr_clip((gate_confidence - 0.32) / 0.34, 0.0, 1.0));
+  double peak_limit = 0.58 + 0.16 * peak_evidence + 0.04 * (1.0 - level_drive);
+  a->diag_output_peak = out_peak;
+  a->diag_peak_evidence = peak_evidence;
+  a->diag_peak_limit = peak_limit;
+  a->diag_peak_reduction_db = 0.0;
+  if (a->agc_run && out_peak > peak_limit && peak_limit > 1.0e-7) {
+    double peak_knee = peak_limit * (0.94 - 0.04 * level_drive);
+    double peak_span = max(peak_limit - peak_knee, 1.0e-7);
+    out_e = 0.0;
+    for (int i = 0; i < n; i++) {
+      double v = out[2 * i + 0];
+      double av = fabs(v);
+      if (av > peak_knee) {
+        double shaped = peak_knee + peak_span * tanh((av - peak_knee) / peak_span);
+        v = v < 0.0 ? -shaped : shaped;
+        out[2 * i + 0] = v;
+      }
+      out_e += v * v;
+    }
+    out_rms = sqrt(out_e / (double)max(n, 1));
+    a->diag_peak_reduction_db = 20.0 * log10(max(out_peak, 1.0e-12) / max(peak_limit, 1.0e-12));
   }
 
   a->diag_output_rms = out_rms;
@@ -940,13 +1454,15 @@ void xspnr(SPNR a, int pos) {
     }
 
     double dry_guard = spnr_clip(
-      (0.50 * a->diag_presence_peak
-        + 0.35 * a->diag_salience_peak
-        + 0.25 * max(a->diag_coherence_peak, a->diag_ridge_peak)
-        - 0.24) / 0.42,
+      (0.48 * a->diag_presence_peak
+        + 0.30 * a->diag_salience_peak
+        + 0.24 * max(a->diag_coherence_peak, a->diag_ridge_peak)
+        + 0.14 * a->diag_signal_probability
+        + 0.12 * a->agc_weak_signal_memory
+        - 0.25) / 0.43,
       0.0, 1.0);
     if (a->learned_frames < 24) { dry_guard = 0.0; }
-    double dry_mix = 0.70 * dry_guard;
+    double dry_mix = 0.56 * dry_guard;
     if (dry_mix > 0.0) {
       for (i = 0; i < a->bsize; i++) {
         double wet = a->out[2 * i + 0];
@@ -1102,6 +1618,45 @@ int GetRXASPNRDeepDiagnostics(int channel, double* signal_confidence, double* ag
 }
 
 PORT
+int GetRXASPNRProbabilityDiagnostics(int channel, double* signal_probability,
+                                     double* texture_fill, double* mask_smoothing) {
+  if (channel < 0 || channel >= MAX_CHANNELS) { return 0; }
+
+  EnterCriticalSection(&ch[channel].csDSP);
+  SPNR a = rxa[channel].spnr.p;
+  if (!a) {
+    LeaveCriticalSection(&ch[channel].csDSP);
+    return 0;
+  }
+  if (signal_probability) { *signal_probability = a->diag_signal_probability; }
+  if (texture_fill) { *texture_fill = a->diag_texture_fill; }
+  if (mask_smoothing) { *mask_smoothing = a->diag_mask_smoothing; }
+  LeaveCriticalSection(&ch[channel].csDSP);
+
+  return 1;
+}
+
+PORT
+int GetRXASPNRPeakDiagnostics(int channel, double* output_peak, double* peak_evidence,
+                              double* peak_limit, double* peak_reduction_db) {
+  if (channel < 0 || channel >= MAX_CHANNELS) { return 0; }
+
+  EnterCriticalSection(&ch[channel].csDSP);
+  SPNR a = rxa[channel].spnr.p;
+  if (!a) {
+    LeaveCriticalSection(&ch[channel].csDSP);
+    return 0;
+  }
+  if (output_peak) { *output_peak = a->diag_output_peak; }
+  if (peak_evidence) { *peak_evidence = a->diag_peak_evidence; }
+  if (peak_limit) { *peak_limit = a->diag_peak_limit; }
+  if (peak_reduction_db) { *peak_reduction_db = a->diag_peak_reduction_db; }
+  LeaveCriticalSection(&ch[channel].csDSP);
+
+  return 1;
+}
+
+PORT
 int GetRXASPNRAgcDiagnostics(int channel, double* level_drive, double* recovery_drive,
                              double* makeup_gain) {
   if (channel < 0 || channel >= MAX_CHANNELS) { return 0; }
@@ -1115,6 +1670,22 @@ int GetRXASPNRAgcDiagnostics(int channel, double* level_drive, double* recovery_
   if (level_drive) { *level_drive = a->diag_level_drive; }
   if (recovery_drive) { *recovery_drive = a->diag_recovery_drive; }
   if (makeup_gain) { *makeup_gain = a->diag_makeup_gain; }
+  LeaveCriticalSection(&ch[channel].csDSP);
+
+  return 1;
+}
+
+PORT
+int GetRXASPNRMemoryDiagnostics(int channel, double* weak_signal_memory) {
+  if (channel < 0 || channel >= MAX_CHANNELS) { return 0; }
+
+  EnterCriticalSection(&ch[channel].csDSP);
+  SPNR a = rxa[channel].spnr.p;
+  if (!a) {
+    LeaveCriticalSection(&ch[channel].csDSP);
+    return 0;
+  }
+  if (weak_signal_memory) { *weak_signal_memory = a->agc_weak_signal_memory; }
   LeaveCriticalSection(&ch[channel].csDSP);
 
   return 1;

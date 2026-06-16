@@ -39,7 +39,7 @@ public enum WavRecorderState
 /// of a ring another consumer depends on.</para>
 ///
 /// <para><b>Playback</b> streams a WAV to the local monitor via
-/// <see cref="IAuditionAudioSink"/> (mixed into the operator's RX output), or
+/// <see cref="IPreviewAudioSink"/> (mixed into the operator's RX output), or
 /// to the air via <see cref="TxAudioIngest"/> so the recording is processed by
 /// the normal TX chain like live speech.</para>
 ///
@@ -49,11 +49,11 @@ public enum WavRecorderState
 public sealed class WavRecorderService : IDisposable
 {
     // Playback cadence: 20 ms blocks @ 48 kHz, matching the mic worklet,
-    // TxAudioIngest, and the audition ring's expectations.
+    // TxAudioIngest, and the preview ring's expectations.
     private const int PlaybackBlockMs = 20;
 
     private readonly DspPipelineService _pipeline;
-    private readonly IAuditionAudioSink _audition;
+    private readonly IPreviewAudioSink _preview;
     private readonly TxAudioIngest _txIngest;
     private readonly TxService _tx;
     private readonly ILogger<WavRecorderService> _log;
@@ -73,18 +73,18 @@ public sealed class WavRecorderService : IDisposable
     private Thread? _playThread;
     private CancellationTokenSource? _playCts;
     private string? _playingFile;
-    private bool _restoreAuditionOff;
+    private bool _restorePreviewOff;
     private bool _playingOnAir;
 
     public WavRecorderService(
         DspPipelineService pipeline,
-        IAuditionAudioSink audition,
+        IPreviewAudioSink preview,
         TxAudioIngest txIngest,
         TxService tx,
         ILogger<WavRecorderService> log)
     {
         _pipeline = pipeline;
-        _audition = audition;
+        _preview = preview;
         _txIngest = txIngest;
         _tx = tx;
         _log = log;
@@ -230,15 +230,15 @@ public sealed class WavRecorderService : IDisposable
             _state = WavRecorderState.Playing;
             _playCts = new CancellationTokenSource();
 
-            // Local playback mixes into the speaker via the audition path; force
+            // Local playback mixes into the speaker via the preview path; force
             // it on for the clip and restore after. Over-air playback does NOT
-            // touch the audition sink (the operator hears their own TX monitor /
+            // touch the preview sink (the operator hears their own TX monitor /
             // sidetone as usual, not a local copy).
-            _restoreAuditionOff = false;
+            _restorePreviewOff = false;
             if (!onAir)
             {
-                _restoreAuditionOff = !_audition.IsEnabled;
-                if (_restoreAuditionOff) _audition.SetEnabled(true);
+                _restorePreviewOff = !_preview.IsEnabled;
+                if (_restorePreviewOff) _preview.SetEnabled(true);
             }
 
             var ct = _playCts.Token;
@@ -270,7 +270,7 @@ public sealed class WavRecorderService : IDisposable
     private void PlaybackPump(float[] samples, int rate, bool onAir, CancellationToken ct)
     {
         // Playback is paced by the 48 kHz mic-block clock. Non-48 kHz files
-        // are converted once here so both desktop audition and over-air TX see
+        // are converted once here so both desktop preview and over-air TX see
         // the canonical 960-sample block shape.
         byte[]? airBlock = null;
         try
@@ -318,7 +318,7 @@ public sealed class WavRecorderService : IDisposable
                 }
                 else
                 {
-                    _audition.PublishAudition(block, TxMicBlockResampler.OutputSampleRate);
+                    _preview.PublishPreview(block, TxMicBlockResampler.OutputSampleRate);
                 }
 
                 Pace();
@@ -355,7 +355,7 @@ public sealed class WavRecorderService : IDisposable
         lock (_sync)
         {
             if (_state != WavRecorderState.Playing) return;
-            if (_restoreAuditionOff) { _audition.SetEnabled(false); _restoreAuditionOff = false; }
+            if (_restorePreviewOff) { _preview.SetEnabled(false); _restorePreviewOff = false; }
             _playCts?.Dispose();
             _playCts = null;
             _playThread = null;

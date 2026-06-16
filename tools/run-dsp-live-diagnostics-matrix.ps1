@@ -266,6 +266,16 @@ function ConvertTo-PortablePath {
     return $Path -replace "\\", "/"
 }
 
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $null
+    }
+
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
 function Invoke-JsonGet {
     param(
         [Parameter(Mandatory = $true)][string]$Uri,
@@ -361,6 +371,8 @@ function Invoke-Watch {
         "-IntervalMs", ([string]$DelayMs),
         "-TimeoutSec", ([string]$RequestTimeoutSec),
         "-Label", $watchLabel,
+        "-ScenarioId", $ScenarioId,
+        "-ComparisonId", $Comparison,
         "-ReportPath", $SummaryPath,
         "-JsonlPath", $JsonlPath,
         "-JsonOnly"
@@ -563,6 +575,8 @@ foreach ($scenarioId in $scenarios) {
             sampleCount = $Samples
             intervalMs = $IntervalMs
             summaryPath = $summaryRelative
+            sha256 = Get-FileSha256 $jsonlPath
+            summarySha256 = Get-FileSha256 $summaryPath
             nr5WeakInputSampleCount = $nr5WeakInputs
             nr5WeakRecoveredSampleCount = $nr5WeakRecovered
             nr5WeakDropoutSampleCount = $nr5WeakDropouts
@@ -667,6 +681,7 @@ $reportObject = [ordered]@{
     collectionReady = ($failedRunCount -eq 0)
     acceptanceReady = ($failedRunCount -eq 0 -and $notReadyTraceCount -eq 0 -and $hardBlockerRunCount -eq 0)
     indexPath = if (-not [string]::IsNullOrWhiteSpace($bundlePath)) { Resolve-RelativePath -Root $bundlePath -Path $IndexPath } else { $IndexPath }
+    indexSha256 = Get-FileSha256 $IndexPath
     runs = @($runArray)
     recommendations = @($recommendations.ToArray())
 }

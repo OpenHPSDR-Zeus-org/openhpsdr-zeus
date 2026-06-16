@@ -72,18 +72,18 @@ public class NativeAudioSinkRegistrationTests
         Assert.Contains(hosted, h => h.GetType().Name == "NativeAudioSink");
         Assert.Contains(hosted, h => h.GetType().Name == "NativeMicCapture");
 
-        // Local side-channel playback: desktop mode binds IAuditionAudioSink
+        // Local side-channel playback: desktop mode binds IPreviewAudioSink
         // to the same NativeAudioSink instance so published mono monitor
         // samples share the RX playback path.
-        var audition = app.Services.GetRequiredService<IAuditionAudioSink>();
+        var preview = app.Services.GetRequiredService<IPreviewAudioSink>();
         var nativeSink = app.Services.GetRequiredService<NativeAudioSink>();
-        Assert.Same(nativeSink, audition);
+        Assert.Same(nativeSink, preview);
 
         await app.DisposeAsync();
     }
 
     [Fact]
-    public async Task ServerMode_RegistersNoOpAuditionAudioSink()
+    public async Task ServerMode_RegistersNoOpPreviewAudioSink()
     {
         var opts = new ZeusHostOptions
         {
@@ -95,10 +95,10 @@ public class NativeAudioSinkRegistrationTests
         };
         var app = ZeusHost.Build(Array.Empty<string>(), opts);
 
-        var audition = app.Services.GetRequiredService<IAuditionAudioSink>();
+        var preview = app.Services.GetRequiredService<IPreviewAudioSink>();
         // Browser mode gets the no-op local side-channel implementation.
-        Assert.IsType<NoOpAuditionAudioSink>(audition);
-        Assert.False(audition.IsEnabled);
+        Assert.IsType<NoOpPreviewAudioSink>(preview);
+        Assert.False(preview.IsEnabled);
 
         await app.DisposeAsync();
     }

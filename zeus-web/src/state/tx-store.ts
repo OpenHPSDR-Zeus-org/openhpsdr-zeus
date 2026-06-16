@@ -270,7 +270,7 @@ export type TxState = {
   // UI on boards with no PS feedback path (e.g. HermesLite2).
   psMonitorEnabled: boolean;
   setPsMonitorEnabled: (on: boolean) => void;
-  // TX Monitor (issue #106 follow-up) — audition toggle that engages a
+  // TX Monitor (issue #106 follow-up) — preview toggle that engages a
   // parallel demod of the post-CFIR TX IQ. Substitutes for RX audio in the
   // AudioFrame stream while on. Operator preference, default off, not
   // persisted across sessions. UI lives in the VST Host submenu, not the

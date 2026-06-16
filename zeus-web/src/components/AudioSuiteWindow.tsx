@@ -4,7 +4,7 @@
 // plugin chain. Replaces the inline rendering that used to live in
 // TxAudioToolsPanel (per Phase 2 of issue #332). Operators open it
 // via the "Audio Suite" button on TX Audio Tools, drag tiles at the
-// top to reorder the chain, toggle audition to hear the chain output
+// top to reorder the chain, toggle Preview to hear the chain output
 // in their RX playback path, and adjust per-plugin settings in the
 // stacked panels below.
 //
@@ -890,10 +890,10 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   const loadChainOrderFromServer = useAudioSuiteStore(
     (s) => s.loadChainOrderFromServer,
   );
-  const auditionSupported = useAudioSuiteStore((s) => s.auditionSupported);
-  const auditionEnabled = useAudioSuiteStore((s) => s.auditionEnabled);
-  const setAuditionEnabled = useAudioSuiteStore((s) => s.setAuditionEnabled);
-  const loadAuditionState = useAudioSuiteStore((s) => s.loadAuditionState);
+  const previewSupported = useAudioSuiteStore((s) => s.previewSupported);
+  const previewEnabled = useAudioSuiteStore((s) => s.previewEnabled);
+  const setPreviewEnabled = useAudioSuiteStore((s) => s.setPreviewEnabled);
+  const loadPreviewState = useAudioSuiteStore((s) => s.loadPreviewState);
   const loadMasterBypassFromServer = useAudioSuiteStore(
     (s) => s.loadMasterBypassFromServer,
   );
@@ -944,7 +944,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     if (!embedded && !isOpen) return;
     loadChainOrderFromServer();
     loadProcessingModeFromServer();
-    loadAuditionState();
+    loadPreviewState();
     loadMasterBypassFromServer();
     loadProfiles();
   }, [
@@ -952,7 +952,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     isOpen,
     loadChainOrderFromServer,
     loadProcessingModeFromServer,
-    loadAuditionState,
+    loadPreviewState,
     loadMasterBypassFromServer,
     loadProfiles,
   ]);
@@ -1429,29 +1429,29 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
           Audio Suite
         </span>
 
-        {/* Audition toggle. Drives the full TX-monitor path so the operator
+        {/* Preview toggle. Drives the full TX-monitor path so the operator
             hears the same processed signal that would reach the radio. */}
         <button
           type="button"
           data-no-drag
-          disabled={!auditionSupported}
-          onClick={() => setAuditionEnabled(!auditionEnabled)}
+          disabled={!previewSupported}
+          onClick={() => setPreviewEnabled(!previewEnabled)}
           title={
-            auditionSupported
-              ? auditionEnabled
-                ? 'Audition is ON — full TX chain monitor is mixed into your RX playback'
-                : 'Audition is OFF — click to hear the full TX chain on your headphones'
-              : 'Audition is unavailable in this host mode'
+            previewSupported
+              ? previewEnabled
+                ? 'Preview is ON - processed TX audio is mixed into your RX playback'
+                : 'Preview is OFF - click to hear the full TX chain in your headphones'
+              : 'Preview is unavailable in this host mode'
           }
           style={{
             marginLeft: 'auto',
             padding: '4px 12px',
             borderRadius: 4,
-            border: '1px solid ' + (auditionEnabled ? 'var(--tx)' : 'var(--line)'),
-            background: auditionEnabled ? 'var(--tx)' : 'var(--bg-2)',
-            color: auditionEnabled ? 'var(--fg-0)' : 'var(--fg-2)',
-            cursor: auditionSupported ? 'pointer' : 'not-allowed',
-            opacity: auditionSupported ? 1 : 0.5,
+            border: '1px solid ' + (previewEnabled ? 'var(--tx)' : 'var(--line)'),
+            background: previewEnabled ? 'var(--tx)' : 'var(--bg-2)',
+            color: previewEnabled ? 'var(--fg-0)' : 'var(--fg-2)',
+            cursor: previewSupported ? 'pointer' : 'not-allowed',
+            opacity: previewSupported ? 1 : 0.5,
             fontSize: 11,
             fontWeight: 600,
             letterSpacing: 1,
@@ -1459,7 +1459,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
             fontFamily: 'inherit',
           }}
         >
-          Audition {auditionEnabled ? 'ON' : 'OFF'}
+          Preview {previewEnabled ? 'ON' : 'OFF'}
         </button>
 
         {!embedded && (

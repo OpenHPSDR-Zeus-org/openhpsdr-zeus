@@ -310,6 +310,8 @@ describe('SignalIntelligenceController display-intelligence sync', () => {
       useDisplayStore.getState().pushFrame(frameWithEmfBar(2));
       vi.advanceTimersByTime(1000);
       useDisplayStore.getState().pushFrame(frameWithEmfBar(3));
+      vi.advanceTimersByTime(1000);
+      useDisplayStore.getState().pushFrame(frameWithEmfBar(4));
       await flushPromises();
     });
 

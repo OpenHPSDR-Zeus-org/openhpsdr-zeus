@@ -15,6 +15,8 @@ param(
 
     [switch]$FailOnRegression,
 
+    [switch]$IncludeNonFixtureScenarios,
+
     [switch]$NoMarkdown,
 
     [switch]$JsonOnly
@@ -41,6 +43,12 @@ function Write-JsonFile {
 
     $json = $Value | ConvertTo-Json -Depth 32
     Set-Content -LiteralPath $Path -Value $json -Encoding UTF8
+}
+
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
 function Get-JsonValue {
@@ -397,6 +405,23 @@ function Get-MetricEvidenceEntries {
     return @($entries.ToArray())
 }
 
+function Get-FixtureEvidenceEngine {
+    param($MetricsJson)
+
+    $engine = [string](Get-JsonValue $MetricsJson "evidenceEngine")
+    if (-not [string]::IsNullOrWhiteSpace($engine)) {
+        return ($engine.Trim().ToLowerInvariant() -replace "[^a-z0-9]+", "-").Trim("-")
+    }
+
+    $tool = [string](Get-JsonValue $MetricsJson "tool")
+    switch ($tool) {
+        "dsp-fixture-evidence" { return "wdsp" }
+        "run-dsp-wdsp-fixture-evidence" { return "wdsp" }
+        "run-dsp-offline-fixture-evidence" { return "deterministic-synthetic" }
+        default { return "unknown" }
+    }
+}
+
 function Get-MetricDirection {
     param(
         [string]$MetricId,
@@ -506,13 +531,33 @@ function Build-MarkdownReport {
     $lines.Add("# DSP Fixture Metric Comparison") | Out-Null
     $lines.Add("") | Out-Null
     $lines.Add("- Ready for review: $($Report.readyForReview)") | Out-Null
+    $lines.Add("- Evidence engine: $($Report.evidenceEngine)") | Out-Null
+    $lines.Add("- WDSP-backed evidence: $($Report.wdspBackedEvidence)") | Out-Null
+    $lines.Add("- WDSP runtime RID: $($Report.wdspRuntimeRid)") | Out-Null
+    $lines.Add("- WDSP runtime SHA-256: $($Report.wdspRuntimeSha256)") | Out-Null
+    $lines.Add("- WDSP runtime status: $($Report.wdspRuntimeStatus)") | Out-Null
+    $lines.Add("- Scenario scope: $($Report.fixtureScenarioScope)") | Out-Null
+    $lines.Add("- Skipped non-fixture scenarios: $($Report.skippedNonFixtureScenarioCount)") | Out-Null
     $lines.Add("- Candidate comparisons: $($Report.candidateComparisonCount)") | Out-Null
     $lines.Add("- Improvements: $($Report.improvementCount)") | Out-Null
     $lines.Add("- Regressions: $($Report.regressionCount)") | Out-Null
     $lines.Add("- Gate failures: $($Report.gateFailureCount)") | Out-Null
+    $lines.Add("- Missing scenarios: $($Report.missingScenarioCount)") | Out-Null
+    $lines.Add("- Missing current-Zeus baselines: $($Report.missingCurrentBaselineCount)") | Out-Null
+    $lines.Add("- Missing Thetis-parity baselines: $($Report.missingThetisBaselineCount)") | Out-Null
+    $lines.Add("- Missing candidate coverage: $($Report.missingCandidateCount)") | Out-Null
     $lines.Add("- Missing values: $($Report.missingMetricValueCount)") | Out-Null
     $lines.Add("- Informational metrics: $($Report.informationalMetricCount)") | Out-Null
     $lines.Add("") | Out-Null
+
+    if ($Report.missingScenarios.Count -gt 0) {
+        $lines.Add("## Missing Scenarios") | Out-Null
+        $lines.Add("") | Out-Null
+        foreach ($scenario in @($Report.missingScenarios)) {
+            $lines.Add("- $scenario") | Out-Null
+        }
+        $lines.Add("") | Out-Null
+    }
 
     $regressions = @($Report.comparisons | ForEach-Object {
         $comparison = $_
@@ -601,6 +646,18 @@ if (-not $NoMarkdown -and [string]::IsNullOrWhiteSpace($MarkdownPath)) {
 
 $metricsJson = Read-JsonFile $metricsResolvedPath
 $benchmarkPlan = Read-JsonFile $planResolvedPath
+$metricsSha256 = Get-FileSha256 $metricsResolvedPath
+$evidenceEngine = Get-FixtureEvidenceEngine $metricsJson
+$evidenceTool = [string](Get-JsonValue $metricsJson "tool")
+$wdspBackedEvidence = [string]::Equals($evidenceEngine, "wdsp", [StringComparison]::OrdinalIgnoreCase)
+$syntheticFallbackEvidence = [string]::Equals($evidenceEngine, "deterministic-synthetic", [StringComparison]::OrdinalIgnoreCase)
+$wdspRuntimeRid = [string](Get-JsonValue $metricsJson "wdspRuntimeRid")
+$wdspRuntimePath = [string](Get-JsonValue $metricsJson "wdspRuntimePath")
+$wdspRuntimePathKind = [string](Get-JsonValue $metricsJson "wdspRuntimePathKind")
+$wdspRuntimeFileName = [string](Get-JsonValue $metricsJson "wdspRuntimeFileName")
+$wdspRuntimeLength = [long](Get-NumericValue (Get-JsonValue $metricsJson "wdspRuntimeLength"))
+$wdspRuntimeSha256 = ([string](Get-JsonValue $metricsJson "wdspRuntimeSha256")).Trim().ToLowerInvariant()
+$wdspRuntimeStatus = [string](Get-JsonValue $metricsJson "wdspRuntimeStatus")
 $metricDirectionCatalog = @{}
 
 if (-not [string]::IsNullOrWhiteSpace($MetricCatalogPath)) {
@@ -622,9 +679,17 @@ if (-not [string]::IsNullOrWhiteSpace($MetricCatalogPath)) {
 }
 
 $scenarioPlan = @{}
+$skippedScenarioIds = New-Object System.Collections.Generic.List[string]
 foreach ($scenario in (Get-JsonArray $benchmarkPlan "scenarios")) {
     $scenarioId = [string](Get-JsonValue $scenario "id")
     if ([string]::IsNullOrWhiteSpace($scenarioId)) {
+        continue
+    }
+
+    $fixtureStatus = [string](Get-JsonValue $scenario "fixtureStatus")
+    if (-not $IncludeNonFixtureScenarios -and
+        -not [string]::Equals($fixtureStatus, "offline-fixture-ready", [StringComparison]::OrdinalIgnoreCase)) {
+        $skippedScenarioIds.Add($scenarioId) | Out-Null
         continue
     }
 
@@ -639,6 +704,7 @@ foreach ($scenario in (Get-JsonArray $benchmarkPlan "scenarios")) {
     $scenarioPlan[$scenarioId] = [ordered]@{
         id = $scenarioId
         name = [string](Get-JsonValue $scenario "name")
+        fixtureStatus = $fixtureStatus
         requiredMetricIds = @($requiredMetricIds.ToArray() | Select-Object -Unique)
     }
 }
@@ -811,11 +877,17 @@ foreach ($scenarioId in ($scenarioPlan.Keys | Sort-Object)) {
     }
 }
 
-$readyForReview = ($regressionCount -eq 0 -and
+$metricCoverageReadyForReview = ($regressionCount -eq 0 -and
     $gateFailureCount -eq 0 -and
+    $missingScenarios.Count -eq 0 -and
     $missingCurrentBaselineCount -eq 0 -and
+    $missingThetisBaselineCount -eq 0 -and
     $missingCandidateCount -eq 0 -and
     $missingMetricValueCount -eq 0)
+$runtimeIdentityReadyForReview = ((-not $wdspBackedEvidence) -or
+    (-not [string]::IsNullOrWhiteSpace($wdspRuntimeSha256) -and
+        [string]::Equals($wdspRuntimeStatus, "found", [StringComparison]::OrdinalIgnoreCase)))
+$readyForReview = ($metricCoverageReadyForReview -and $wdspBackedEvidence -and $runtimeIdentityReadyForReview)
 
 $report = [ordered]@{
     schemaVersion = 1
@@ -826,11 +898,28 @@ $report = [ordered]@{
     metricCatalogPath = $metricCatalogResolvedPath
     metricCatalogMetricCount = $metricDirectionCatalog.Count
     metricsPath = $metricsResolvedPath
+    metricsSha256 = $metricsSha256
     reportPath = $ReportPath
     markdownPath = if ($NoMarkdown) { $null } else { $MarkdownPath }
     tolerance = $Tolerance
     readyForReview = $readyForReview
+    metricCoverageReadyForReview = $metricCoverageReadyForReview
+    evidenceEngine = $evidenceEngine
+    evidenceTool = $evidenceTool
+    wdspBackedEvidence = $wdspBackedEvidence
+    syntheticFallbackEvidence = $syntheticFallbackEvidence
+    wdspRuntimeRid = $wdspRuntimeRid
+    wdspRuntimePath = $wdspRuntimePath
+    wdspRuntimePathKind = $wdspRuntimePathKind
+    wdspRuntimeFileName = $wdspRuntimeFileName
+    wdspRuntimeLength = $wdspRuntimeLength
+    wdspRuntimeSha256 = $wdspRuntimeSha256
+    wdspRuntimeStatus = $wdspRuntimeStatus
+    wdspRuntimeIdentityReadyForReview = $runtimeIdentityReadyForReview
+    fixtureScenarioScope = if ($IncludeNonFixtureScenarios) { "all-plan-scenarios" } else { "offline-fixture-ready" }
     scenarioPlanCount = $scenarioPlan.Count
+    skippedNonFixtureScenarioCount = $skippedScenarioIds.Count
+    skippedNonFixtureScenarioIds = @($skippedScenarioIds.ToArray())
     metricEntryCount = $metricEntries.Count
     candidateComparisonCount = $candidateComparisonCount
     improvementCount = $improvementCount
@@ -868,7 +957,7 @@ else {
     if (-not $NoMarkdown) {
         Write-Host "Markdown: $MarkdownPath"
     }
-    Write-Host "Regressions: $regressionCount, Gate failures: $gateFailureCount, Missing values: $missingMetricValueCount"
+    Write-Host "Regressions: $regressionCount, Gate failures: $gateFailureCount, Missing scenarios: $($missingScenarios.Count), Missing values: $missingMetricValueCount"
 }
 
 if ($FailOnRegression -and -not $readyForReview) {

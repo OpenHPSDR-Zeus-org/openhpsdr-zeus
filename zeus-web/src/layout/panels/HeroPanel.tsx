@@ -48,6 +48,7 @@ import { GripVertical, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
 import { Waterfall } from '../../components/Waterfall';
 import { ZoomControl } from '../../components/ZoomControl';
+import { WaterfallSpeedControl } from '../../components/WaterfallSpeedControl';
 import { SpectrumControls } from '../../components/SpectrumControls';
 import { LeafletWorldMap } from '../../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../../components/design/LeafletMapErrorBoundary';
@@ -64,7 +65,7 @@ import type { WorkspaceTile } from '../workspace';
 const SPLIT_STORAGE_KEY = 'zeus.layout.spectrumSplit';
 const SPLIT_CONFIG_KEY = 'spectrumSplit';
 const DEFAULT_SPLIT = 0.4;
-const MIN_SPLIT = 0.15;
+const MIN_SPLIT = 0.08;
 const MAX_SPLIT = 0.85;
 
 function clampSplit(v: number): number {
@@ -280,6 +281,7 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
           onMouseDown={stopDrag}
         >
           <ZoomControl />
+          <WaterfallSpeedControl />
           <SpectrumControls />
           {terminatorActive && contact && mapAvailable && (
             <>

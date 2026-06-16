@@ -35,6 +35,13 @@ function Test-BinaryContainsAscii {
     return $text.Contains($Needle)
 }
 
+function Get-FileSha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return "" }
+    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+}
+
 function Get-ExpectedNativeName {
     param([string]$Rid)
     if ($Rid.StartsWith("win-", [StringComparison]::OrdinalIgnoreCase)) { return "wdsp.dll" }
@@ -72,7 +79,10 @@ $nr5Symbols = @(
     "GetRXASPNRDiagnostics",
     "GetRXASPNRAdvancedDiagnostics",
     "GetRXASPNRDeepDiagnostics",
-    "GetRXASPNRAgcDiagnostics"
+    "GetRXASPNRProbabilityDiagnostics",
+    "GetRXASPNRPeakDiagnostics",
+    "GetRXASPNRAgcDiagnostics",
+    "GetRXASPNRMemoryDiagnostics"
 )
 
 $artifacts = New-Object System.Collections.Generic.List[object]
@@ -82,6 +92,8 @@ foreach ($ridDir in (Get-ChildItem -LiteralPath $runtimeRootPath -Directory | So
     $nativeName = Get-ExpectedNativeName $rid
     $nativePath = Join-Path $nativeDir $nativeName
     $nativePresent = Test-Path -LiteralPath $nativePath -PathType Leaf
+    $nativeLength = if ($nativePresent) { (Get-Item -LiteralPath $nativePath).Length } else { 0 }
+    $nativeSha256 = if ($nativePresent) { Get-FileSha256 $nativePath } else { "" }
 
     $nr4Present = @{}
     foreach ($symbol in $nr4Symbols) {
@@ -100,10 +112,14 @@ foreach ($ridDir in (Get-ChildItem -LiteralPath $runtimeRootPath -Directory | So
         $depPath = Join-Path $nativeDir $dep
         $present = Test-Path -LiteralPath $depPath -PathType Leaf
         if (-not $present) { $missingDeps.Add($dep) | Out-Null }
+        $depLength = if ($present) { (Get-Item -LiteralPath $depPath).Length } else { 0 }
+        $depSha256 = if ($present) { Get-FileSha256 $depPath } else { "" }
         $dependencyFiles.Add([ordered]@{
             name = $dep
             present = $present
             path = if ($present) { ConvertTo-RelativePath $depPath } else { $null }
+            length = $depLength
+            sha256 = $depSha256
         }) | Out-Null
     }
 
@@ -126,7 +142,8 @@ foreach ($ridDir in (Get-ChildItem -LiteralPath $runtimeRootPath -Directory | So
         rid = $rid
         nativePath = if ($nativePresent) { ConvertTo-RelativePath $nativePath } else { ConvertTo-RelativePath $nativePath }
         nativePresent = $nativePresent
-        nativeLength = if ($nativePresent) { (Get-Item -LiteralPath $nativePath).Length } else { 0 }
+        nativeLength = $nativeLength
+        nativeSha256 = $nativeSha256
         nr4Ready = $nr4Ready
         nr5Ready = $nr5Ready
         sideBySideDependenciesReady = $depsReady
@@ -148,6 +165,9 @@ $report = [ordered]@{
     requiredNr4Symbols = $nr4Symbols
     requiredNr5Symbols = $nr5Symbols
     readyForWinX64Package = ($winX64.Count -gt 0 -and [bool]$winX64[0].nativePresent -and [bool]$winX64[0].nr4Ready -and [bool]$winX64[0].nr5Ready -and [bool]$winX64[0].sideBySideDependenciesReady)
+    winX64NativePath = if ($winX64.Count -gt 0) { [string]$winX64[0].nativePath } else { "" }
+    winX64NativeLength = if ($winX64.Count -gt 0) { [long]$winX64[0].nativeLength } else { 0 }
+    winX64NativeSha256 = if ($winX64.Count -gt 0) { [string]$winX64[0].nativeSha256 } else { "" }
     pendingRidCount = $pending.Count
     pendingRids = $pending
     artifacts = @($artifacts.ToArray())

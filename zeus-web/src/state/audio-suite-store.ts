@@ -14,7 +14,7 @@
 //     persisted to localStorage — on reload we fetch fresh from the
 //     server to avoid drift if the operator reorders on a second
 //     client (or a backend restart loaded a different order).
-//   - Audition state: whether the Audio Suite is mixing the full TX-monitor
+//   - Preview state: whether the Audio Suite is mixing the full TX-monitor
 //     output into the operator's RX playback path. Server state
 //     (StateDto.TxMonitorEnabled); store mirrors. Not persisted — defaults
 //     off on every fresh boot.
@@ -97,10 +97,10 @@ interface AudioSuiteState {
   //   (3) reorderChain() local optimistic update before PUT
   chainOrder: string[];
 
-  // Audition (full TX-monitor path; server reports whether this host can
+  // Preview (full TX-monitor path; server reports whether this host can
   // expose it).
-  auditionSupported: boolean;
-  auditionEnabled: boolean;
+  previewSupported: boolean;
+  previewEnabled: boolean;
 
   // Master bypass — single operator-facing toggle that disengages the
   // entire plugin chain. true = chain inert, mic passes bit-identical
@@ -191,9 +191,9 @@ interface AudioSuiteState {
   reorderChain(fromIndex: number, toIndex: number): Promise<void>;
   loadChainOrderFromServer(): Promise<void>;
 
-  // Audition plumbing.
-  loadAuditionState(): Promise<void>;
-  setAuditionEnabled(enabled: boolean): Promise<void>;
+  // Preview plumbing.
+  loadPreviewState(): Promise<void>;
+  setPreviewEnabled(enabled: boolean): Promise<void>;
 
   // Master bypass plumbing.
   setMasterBypassedFromServer(bypassed: boolean): void;
@@ -236,8 +236,8 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       width: DEFAULT_WIDTH,
       height: DEFAULT_HEIGHT,
       chainOrder: [],
-      auditionSupported: false,
-      auditionEnabled: useTxStore.getState().txMonitorEnabled,
+      previewSupported: false,
+      previewEnabled: useTxStore.getState().txMonitorEnabled,
       // Default to true (bypassed) so the UI starts in the inert state
       // that matches the server's first-run default. The server load
       // on Audio Suite window mount overrides this with the persisted
@@ -578,11 +578,11 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         }
       },
 
-      loadAuditionState: async () => {
+      loadPreviewState: async () => {
         try {
-          const res = await fetch('/api/audio-suite/audition');
+          const res = await fetch('/api/audio-suite/preview');
           if (!res.ok) {
-            set({ auditionSupported: false, auditionEnabled: false });
+            set({ previewSupported: false, previewEnabled: false });
             return;
           }
           const body = (await res.json()) as {
@@ -590,45 +590,45 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             enabled?: boolean;
           };
           set({
-            auditionSupported: body.supported ?? false,
-            auditionEnabled: body.enabled ?? false,
+            previewSupported: body.supported ?? false,
+            previewEnabled: body.enabled ?? false,
           });
           useTxStore.getState().setTxMonitorEnabled(body.enabled ?? false);
         } catch {
-          set({ auditionSupported: false, auditionEnabled: false });
+          set({ previewSupported: false, previewEnabled: false });
           useTxStore.getState().setTxMonitorEnabled(false);
         }
       },
 
-      setAuditionEnabled: async (enabled) => {
-        const prev = get().auditionEnabled;
+      setPreviewEnabled: async (enabled) => {
+        const prev = get().previewEnabled;
         // Optimistic update so the toggle feels instant.
-        set({ auditionEnabled: enabled });
+        set({ previewEnabled: enabled });
         useTxStore.getState().setTxMonitorEnabled(enabled);
         try {
-          const res = await fetch('/api/audio-suite/audition', {
+          const res = await fetch('/api/audio-suite/preview', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ enabled }),
           });
           if (!res.ok) {
-            set({ auditionEnabled: prev });
+            set({ previewEnabled: prev });
             useTxStore.getState().setTxMonitorEnabled(prev);
             // eslint-disable-next-line no-console
             console.warn(
-              `audio-suite audition PUT rejected: ${res.status} ${res.statusText}`,
+              `audio-suite preview PUT rejected: ${res.status} ${res.statusText}`,
             );
             return;
           }
           const body = (await res.json()) as { enabled?: boolean };
           const serverEnabled = body.enabled ?? enabled;
-          set({ auditionEnabled: serverEnabled });
+          set({ previewEnabled: serverEnabled });
           useTxStore.getState().setTxMonitorEnabled(serverEnabled);
         } catch (err) {
-          set({ auditionEnabled: prev });
+          set({ previewEnabled: prev });
           useTxStore.getState().setTxMonitorEnabled(prev);
           // eslint-disable-next-line no-console
-          console.warn('audio-suite audition PUT threw', err);
+          console.warn('audio-suite preview PUT threw', err);
         }
       },
 
@@ -734,7 +734,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
     {
       name: 'zeus-audio-suite',
       // Persist only window placement + open flag. Chain order and
-      // audition state come from the server on every mount.
+      // preview state come from the server on every mount.
       partialize: (s) => ({
         isOpen: s.isOpen,
         x: s.x,
@@ -752,5 +752,5 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
 
 useTxStore.subscribe((state, prev) => {
   if (state.txMonitorEnabled === prev.txMonitorEnabled) return;
-  useAudioSuiteStore.setState({ auditionEnabled: state.txMonitorEnabled });
+  useAudioSuiteStore.setState({ previewEnabled: state.txMonitorEnabled });
 });

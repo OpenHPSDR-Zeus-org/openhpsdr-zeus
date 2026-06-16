@@ -1324,10 +1324,18 @@ describe('POST helpers', () => {
       rxChainLabel: 'RX chain optimized',
       nr5SignalConfidence: 0.73,
       nr5AgcGate: 0.66,
+      nr5SignalProbability: 0.69,
+      nr5TextureFill: 0.11,
+      nr5MaskSmoothing: 0.19,
+      nr5WeakSignalMemory: 0.41,
       nr5MeanGain: 0.58,
       nr5FloorReductionDb: 7.3,
+      nr5OutputPeakDbfs: -18.4,
+      nr5PeakEvidence: 0.72,
+      nr5PeakLimitDbfs: -3.2,
+      nr5PeakReductionDb: 1.4,
       nr5SpnrDiagnostics: {
-        schemaVersion: 3,
+        schemaVersion: 7,
         channelId: 0,
         run: true,
         position: 1,
@@ -1348,12 +1356,26 @@ describe('POST helpers', () => {
         noiseFloorDb: -58,
         floorReductionDb: 7.3,
         dynamicRangeDb: 18.4,
+        signalProbability: 0.69,
+        textureFill: 0.11,
+        maskSmoothing: 0.19,
         signalConfidence: 0.73,
         agcGate: 0.66,
+        levelDrive: 0.82,
+        recoveryDrive: 0.64,
+        weakSignalMemory: 0.41,
+        makeupGain: 1.35,
+        makeupGainDb: 2.6,
         inputRms: 0.031,
         inputDbfs: -30.2,
         outputRms: 0.068,
         outputDbfs: -23.4,
+        outputPeak: 0.12,
+        outputPeakDbfs: -18.4,
+        peakEvidence: 0.72,
+        peakLimit: 0.69,
+        peakLimitDbfs: -3.2,
+        peakReductionDb: 1.4,
       },
       evidence: ['wdsp-active', 'ready-for-g2-live-benchmark'],
       constraints: [],
@@ -1403,6 +1425,14 @@ describe('POST helpers', () => {
     expect(diag.runtimeAligned).toBe(true);
     expect(diag.nr5SpnrDiagnostics?.learnedFrames).toBe(80);
     expect(diag.nr5SignalConfidence).toBe(0.73);
+    expect(diag.nr5SignalProbability).toBe(0.69);
+    expect(diag.nr5TextureFill).toBe(0.11);
+    expect(diag.nr5MaskSmoothing).toBe(0.19);
+    expect(diag.nr5WeakSignalMemory).toBe(0.41);
+    expect(diag.nr5SpnrDiagnostics?.levelDrive).toBe(0.82);
+    expect(diag.nr5SpnrDiagnostics?.weakSignalMemory).toBe(0.41);
+    expect(diag.nr5SpnrDiagnostics?.makeupGainDb).toBe(2.6);
+    expect(diag.nr5SpnrDiagnostics?.peakReductionDb).toBe(1.4);
     expect(diag.evidence).toContain('ready-for-g2-live-benchmark');
     expect(diag.candidateTools).toContain('nr5-spnr-diagnostics');
     expect(diag.benchmarkPlanEndpoint).toBe('/api/dsp/benchmark-plan');

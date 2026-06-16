@@ -154,7 +154,7 @@ function classifyCrest(
 
 export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
   const keyed = s.moxOn || s.tunOn;
-  const auditioning = s.txMonitorEnabled && !keyed;
+  const previewing = s.txMonitorEnabled && !keyed;
   const micDbfs = validDbfs(s.wdspMicPk)
     ? s.wdspMicPk
     : validDbfs(s.micDbfs)
@@ -180,7 +180,7 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
       ? s.targetSpectralDensity ?? DEFAULT_SPECTRAL_DENSITY_TARGET
       : DEFAULT_SPECTRAL_DENSITY_TARGET,
   );
-  const activeVoiceChain = !s.tunOn && (keyed || auditioning);
+  const activeVoiceChain = !s.tunOn && (keyed || previewing);
   const liveSpectralDensity = activeVoiceChain
     ? estimateLiveSpectralDensity(
         micDbfs,
@@ -231,24 +231,24 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     return {
       state: 'tune',
       label: 'Tune carrier',
-      detail: 'Voice-chain fidelity is evaluated during MOX or TX monitor.',
-      recommendation: 'Use MOX or TX monitor for voice-chain metering',
+      detail: 'Voice-chain fidelity is evaluated during MOX or Preview.',
+      recommendation: 'Use MOX or Preview for voice-chain metering',
       actionTone: 'neutral',
       score: 0,
       ...baseMetrics,
     };
   }
 
-  if (!keyed && !auditioning) {
+  if (!keyed && !previewing) {
     return {
       state: 'idle',
       label: 'Off-air ready',
       detail: s.txMonitorEnabled
-        ? 'TX monitor is armed; speak to meter the chain without RF.'
-        : 'Enable TX monitor or key MOX to meter station fidelity.',
+        ? 'Preview is armed; speak to meter the chain without RF.'
+        : 'Enable Preview or key MOX to meter station fidelity.',
       recommendation: s.txMonitorEnabled
         ? 'Speak into the mic to meter the TX chain'
-        : 'Enable TX monitor before adjusting speech processing',
+        : 'Enable Preview before adjusting speech processing',
       actionTone: 'neutral',
       score: 0,
       ...baseMetrics,
@@ -257,7 +257,7 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
 
   let score = 100;
   const reasons: string[] = [];
-  const stateBase: TxFidelityState = auditioning ? 'monitor' : 'sweet';
+  const stateBase: TxFidelityState = previewing ? 'monitor' : 'sweet';
 
   if (micDbfs === null) {
     score -= 30;
@@ -427,7 +427,7 @@ export function analyzeTxFidelity(s: TxFidelitySnapshot): TxFidelityAnalysis {
     : 'PureSignal off';
   return {
     state: stateBase,
-    label: auditioning ? 'Monitor sweet spot' : 'Broadcast sweet spot',
+    label: previewing ? 'Preview sweet spot' : 'Broadcast sweet spot',
     detail: `Mic/ALC dynamics are in range; ${ps}.`,
     recommendation: s.psEnabled && s.psCorrecting
       ? 'Hold levels; PureSignal is correcting the PA'

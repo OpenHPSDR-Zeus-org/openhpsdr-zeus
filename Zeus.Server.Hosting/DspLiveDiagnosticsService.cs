@@ -187,6 +187,7 @@ public static class DspLiveDiagnosticsService
             {
                 evidence.Add($"nr5-learned-frames-{nr5.LearnedFrames}");
                 evidence.Add($"nr5-signal-confidence-{nr5.SignalConfidence:0.000}");
+                evidence.Add($"nr5-weak-signal-memory-{nr5.WeakSignalMemory:0.000}");
                 if (nr5.LearnedFrames < 20)
                 {
                     score -= 10;
@@ -337,8 +338,16 @@ public static class DspLiveDiagnosticsService
             Nr5SpnrDiagnostics: nr5,
             Nr5SignalConfidence: nr5?.SignalConfidence,
             Nr5AgcGate: nr5?.AgcGate,
+            Nr5SignalProbability: nr5?.SignalProbability,
+            Nr5TextureFill: nr5?.TextureFill,
+            Nr5MaskSmoothing: nr5?.MaskSmoothing,
+            Nr5WeakSignalMemory: nr5?.WeakSignalMemory,
             Nr5MeanGain: nr5?.MeanGain,
             Nr5FloorReductionDb: nr5?.FloorReductionDb,
+            Nr5OutputPeakDbfs: nr5?.OutputPeakDbfs,
+            Nr5PeakEvidence: nr5?.PeakEvidence,
+            Nr5PeakLimitDbfs: nr5?.PeakLimitDbfs,
+            Nr5PeakReductionDb: nr5?.PeakReductionDb,
             RuntimeEvidence: runtimeEvidence,
             Evidence: Unique(evidence),
             Constraints: Unique(constraints),

@@ -167,11 +167,11 @@ We're also keeping an eye on operator reports for any remaining Windows-only qui
 
 ## [0.8.0] — 2026-05-19
 
-> **🎉 Headline:** in-process **Audio Suite** with live pre-MOX meters and audition, **dual desktop icons** on every platform (Zeus + Zeus Server with a Photino status window), single-binary Zeus that hosts both modes, and Ramon's smoothed-SWR meter improvements.
+> **🎉 Headline:** in-process **Audio Suite** with live pre-MOX meters and preview, **dual desktop icons** on every platform (Zeus + Zeus Server with a Photino status window), single-binary Zeus that hosts both modes, and Ramon's smoothed-SWR meter improvements.
 
 ### Added — Audio Suite (issue #332)
 
-- **Live pre-MOX meter tap + audition** (#390). Every audio-chain plugin's IN / OUT / GR meters animate continuously with MOX off so you can dial dynamics, gates, and gain staging without going on the air. Toggle **Audition** in the suite-window header to hear the processed chain through your RX playback sink — share-with-receive convention means muting RX mutes audition.
+- **Live pre-MOX meter tap + preview** (#390). Every audio-chain plugin's IN / OUT / GR meters animate continuously with MOX off so you can dial dynamics, gates, and gain staging without going on the air. Toggle **Preview** in the suite-window header to hear the processed chain through your RX playback sink — share-with-receive convention means muting RX mutes preview.
 - **Audio Suite floating window + reorderable chain** (#391). Open it from the new button on TX Audio Tools. Drag tiles at the top to reorder the chain — signal flow really changes when you reorder, not just metadata. `ChainOrderService` with canonical-vs-runtime separation so uninstalled plugins keep their slot for reinstall.
 - **Render tx-audio-tools.chain plugins above CFC** (#373). Audio Suite plugins surface in their own region above the WDSP CFC strip on the TX Audio Tools panel.
 - **One-click Download Audio Suite installer button** (#376). Drops EQ + Compressor + Exciter + Bass + Reverb in a single click via the official Kb2uka plugin registry.
@@ -226,7 +226,7 @@ We're also keeping an eye on operator reports for any remaining Windows-only qui
 
 ### Wiki
 
-- New **[Audio Suite](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Audio-Suite)** page — full workflow, audition rules, per-plugin reference (Gate / EQ / Comp / Exciter / Bass / Reverb), gain-staging guide. Linked in the Transmit sidebar.
+- New **[Audio Suite](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Audio-Suite)** page — full workflow, preview rules, per-plugin reference (Gate / EQ / Comp / Exciter / Bass / Reverb), gain-staging guide. Linked in the Transmit sidebar.
 
 ### Contributors
 

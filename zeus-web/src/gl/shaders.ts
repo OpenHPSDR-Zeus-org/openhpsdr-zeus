@@ -159,6 +159,8 @@ uniform float uDbMin;
 uniform float uDbMax;
 uniform float uWriteRow;
 uniform float uH;
+uniform float uVisibleRows;
+uniform float uScrollSpeed;
 uniform float uBgAlpha;
 uniform float uViewOffsetUv;
 uniform float uSeedDb;
@@ -171,8 +173,9 @@ out vec4 fragColor;
 
 float sampleDb(vec2 uv) {
   vec2 clampedUv = vec2(uv.x, clamp(uv.y, 0.0, 1.0));
-  float agePx = (1.0 - clampedUv.y) * uH;
-  float row = mod(uWriteRow - agePx + uH, uH);
+  float ageRows = (1.0 - clampedUv.y) * max(1.0, uVisibleRows) / max(0.05, uScrollSpeed);
+  if (ageRows > uH - 2.0) return uSeedDb;
+  float row = mod(uWriteRow - ageRows + uH, uH);
   float srcX = clampedUv.x - uViewOffsetUv;
   return (srcX < 0.0 || srcX > 1.0)
     ? uSeedDb
@@ -187,6 +190,10 @@ float sampleLevel(vec2 uv) {
   return toLevel(sampleDb(uv));
 }
 
+float closeWeight(float center, float value, float width) {
+  return 1.0 - smoothstep(width * 0.34, width, abs(center - value));
+}
+
 float popLift(float n, float popI) {
   float lifted = pow(n, mix(1.0, 0.62, popI));
   float micro = smoothstep(0.015, 0.20, n) * 0.10 * popI;
@@ -196,6 +203,9 @@ float popLift(float n, float popI) {
 void main() {
   float n = sampleLevel(vUv);
   float popI = clamp(uPopIntensity, 0.0, 1.0) * step(0.5, uPopActive);
+  float normalI = 1.0 - step(0.5, uPopActive);
+  float normalHdrI = normalI * 0.54;
+  float normalReliefI = normalI * 0.46;
   float reliefI = clamp(uReliefDepth, 0.0, 1.0) * popI;
   float smoothI = clamp(uSmoothness, 0.0, 1.0) * popI;
   float shade = 1.0;
@@ -205,31 +215,76 @@ void main() {
   float specular = 0.0;
   float warmHalo = 0.0;
   float coolHalo = 0.0;
-  if (popI > 0.001) {
+  float offsetGlow = 0.0;
+  float castGlow = 0.0;
+  float contour = 0.0;
+  float heightContour = 0.0;
+  float crest = 0.0;
+  if (popI > 0.001 || normalHdrI > 0.001) {
     vec2 texel = vec2(1.0 / max(1.0, uTexW), 1.0 / max(1.0, uH));
     float left = sampleLevel(vUv - vec2(texel.x, 0.0));
     float right = sampleLevel(vUv + vec2(texel.x, 0.0));
     float older = sampleLevel(vUv - vec2(0.0, texel.y));
     float newer = sampleLevel(vUv + vec2(0.0, texel.y));
+    float left2 = sampleLevel(vUv - vec2(texel.x * 2.0, 0.0));
+    float right2 = sampleLevel(vUv + vec2(texel.x * 2.0, 0.0));
+    float older2 = sampleLevel(vUv - vec2(0.0, texel.y * 2.0));
+    float newer2 = sampleLevel(vUv + vec2(0.0, texel.y * 2.0));
+    float diagA = sampleLevel(vUv + vec2(-texel.x, texel.y));
+    float diagB = sampleLevel(vUv + vec2(texel.x, texel.y));
+    float diagC = sampleLevel(vUv + vec2(-texel.x, -texel.y));
+    float diagD = sampleLevel(vUv + vec2(texel.x, -texel.y));
     float cross = (left + right + older + newer) * 0.25;
-    float reliefCurve = smoothstep(0.02, 0.62, clamp(uReliefDepth, 0.0, 1.0)) * popI;
+    float popReliefCurve = smoothstep(0.01, 0.52, clamp(uReliefDepth, 0.0, 1.0)) * popI;
     float edgeEnergy = abs(right - left) + abs(newer - older);
-    n = mix(n, n * 0.54 + cross * 0.46, smoothI);
+    float reliefSignal = max(0.0, n - cross) + edgeEnergy * 0.55;
+    float reliefCurve = max(popReliefCurve, normalReliefI * smoothstep(0.010, 0.25, reliefSignal));
+    float closeWidth = mix(0.16, 0.28, smoothI);
+    float wL = closeWeight(n, left, closeWidth);
+    float wR = closeWeight(n, right, closeWidth);
+    float wO = closeWeight(n, older, closeWidth);
+    float wN = closeWeight(n, newer, closeWidth);
+    float wL2 = closeWeight(n, left2, closeWidth) * 0.45;
+    float wR2 = closeWeight(n, right2, closeWidth) * 0.45;
+    float wO2 = closeWeight(n, older2, closeWidth) * 0.35;
+    float wN2 = closeWeight(n, newer2, closeWidth) * 0.35;
+    float wD = 0.18;
+    float weighted =
+      n * 1.85 + left * wL + right * wR + older * wO + newer * wN +
+      left2 * wL2 + right2 * wR2 + older2 * wO2 + newer2 * wN2 +
+      (diagA + diagB + diagC + diagD) * wD;
+    float weights = 1.85 + wL + wR + wO + wN + wL2 + wR2 + wO2 + wN2 + 4.0 * wD;
+    float smoothLevel = weighted / max(0.0001, weights);
+    float edgeGuard = smoothstep(0.030, 0.24, edgeEnergy);
+    float lowMid = smoothstep(0.015, 0.58, n) * (1.0 - smoothstep(0.72, 1.0, n));
+    n = clamp(mix(n, pow(n, 0.78), normalHdrI) + lowMid * 0.10 * normalHdrI, 0.0, 1.0);
+    float smoothAmount = max(
+      normalI * 0.24,
+      smoothI * mix(0.84, 0.30, edgeGuard) * (1.0 - smoothstep(0.86, 1.0, n) * 0.45));
+    n = mix(n, smoothLevel, clamp(smoothAmount, 0.0, 0.92));
+    crest = max(0.0, n - smoothLevel);
 
     if (reliefCurve > 0.001) {
       float upLeft = sampleLevel(vUv + vec2(-texel.x * 1.35, texel.y * 1.35));
       float downRight = sampleLevel(vUv + vec2(texel.x * 1.65, -texel.y * 1.65));
+      float reliefPx = mix(1.2, 6.2, reliefCurve);
+      float raisedA = max(
+        sampleLevel(vUv + vec2(-texel.x * reliefPx, texel.y * reliefPx)),
+        sampleLevel(vUv + vec2(-texel.x * reliefPx * 0.55, texel.y * reliefPx * 0.55)));
+      float raisedB = max(
+        sampleLevel(vUv + vec2(texel.x * reliefPx, -texel.y * reliefPx)),
+        sampleLevel(vUv + vec2(texel.x * reliefPx * 0.55, -texel.y * reliefPx * 0.55)));
       float nearMax = max(max(left, right), max(older, newer));
       float bevel = n - cross;
       n = clamp(
-        n + bevel * mix(0.34, 1.05, reliefCurve) + max(bevel, 0.0) * 0.08 * reliefCurve,
+        n + bevel * mix(0.50, 1.58, reliefCurve) + max(bevel, 0.0) * 0.16 * reliefCurve,
         0.0,
         1.0);
-      float slope = mix(18.0, 56.0, reliefCurve);
+      float slope = mix(24.0, 78.0, reliefCurve);
       vec3 normal = normalize(vec3((left - right) * slope, (older - newer) * slope, 1.0));
-      vec3 lightDir = normalize(vec3(-0.52, 0.74, 0.82));
+      vec3 lightDir = normalize(vec3(-0.62, 0.76, 0.78));
       float lambert = clamp(dot(normal, lightDir) * 0.5 + 0.5, 0.0, 1.0);
-      shade = 0.34 + 1.26 * pow(lambert, 1.45);
+      shade = 0.22 + 1.62 * pow(lambert, 1.55);
       ridge = smoothstep(0.006, 0.082, edgeEnergy) *
         smoothstep(0.014, 0.24, n) * reliefCurve;
       rim = smoothstep(0.020, 0.42, n) * smoothstep(0.004, 0.16, max(0.0, n - downRight)) *
@@ -240,23 +295,42 @@ void main() {
         reliefCurve;
       coolHalo = smoothstep(0.045, 0.40, nearMax) * (1.0 - smoothstep(0.020, 0.30, n)) *
         reliefCurve;
+      castGlow = smoothstep(0.028, 0.40, raisedA) * (1.0 - smoothstep(0.020, 0.30, n)) *
+        reliefCurve;
+      offsetGlow = smoothstep(0.028, 0.38, raisedB) * (1.0 - smoothstep(0.018, 0.28, n)) *
+        reliefCurve;
+      contour = smoothstep(0.035, 0.42, n) * smoothstep(0.004, 0.10, edgeEnergy) *
+        reliefCurve;
+      float contourPhase = abs(fract(n * 9.5) - 0.5);
+      heightContour = (1.0 - smoothstep(0.030, 0.095, contourPhase)) *
+        smoothstep(0.10, 0.96, n) * reliefCurve;
       vec3 viewDir = vec3(0.0, 0.0, 1.0);
-      specular = pow(max(dot(reflect(-lightDir, normal), viewDir), 0.0), 16.0) *
-        reliefCurve * smoothstep(0.18, 0.86, n);
+      specular = pow(max(dot(reflect(-lightDir, normal), viewDir), 0.0), 13.0) *
+        reliefCurve * smoothstep(0.10, 0.82, n);
+      specular += crest * reliefCurve * 0.86;
       reliefI = reliefCurve;
     }
   }
   n = popLift(n, popI);
   vec4 c = texture(uLut, vec2(n, 0.5));
   c.rgb *= mix(1.0, shade, reliefI);
-  c.rgb = mix(c.rgb, vec3(0.00, 0.040, 0.075) + c.rgb * 0.32, 0.72 * shadow);
-  c.rgb += vec3(0.55, 0.36, 0.08) * warmHalo;
-  c.rgb += vec3(0.00, 0.18, 0.30) * coolHalo;
-  c.rgb += vec3(0.04, 0.42, 0.46) * ridge;
-  c.rgb += vec3(0.26, 0.74, 0.78) * rim;
-  c.rgb += vec3(1.00, 0.90, 0.50) * specular;
+  c.rgb = mix(c.rgb, vec3(0.00, 0.030, 0.055) + c.rgb * 0.24, min(0.84, 0.82 * shadow));
+  c.rgb = mix(c.rgb, vec3(0.00, 0.070, 0.16), min(0.78, castGlow * 0.82));
+  c.rgb += vec3(0.00, 0.78, 1.00) * offsetGlow * 0.58;
+  c.rgb += vec3(0.70, 0.42, 0.10) * warmHalo * 0.86;
+  c.rgb += vec3(0.00, 0.18, 0.32) * coolHalo * 0.72;
+  c.rgb += vec3(0.04, 0.54, 0.60) * ridge * 1.18;
+  c.rgb += vec3(0.36, 0.88, 0.90) * rim * 1.25;
+  c.rgb += vec3(0.98, 1.00, 0.68) * contour * 0.66;
+  c.rgb += vec3(1.00, 0.82, 0.34) * heightContour * 0.34;
+  c.rgb += vec3(0.28, 0.96, 1.00) * crest * reliefI * 0.62;
+  c.rgb += vec3(1.00, 0.92, 0.48) * specular * 1.18;
   c.rgb = min(c.rgb, vec3(1.0));
+  float reliefMask = max(
+    max(castGlow, offsetGlow),
+    max(max(warmHalo, coolHalo), max(max(ridge, rim), heightContour)));
   float a = mix(smoothstep(0.05, 0.9, n), 1.0, uBgAlpha);
+  a = max(a, reliefMask * mix(0.45, 0.98, reliefI));
   fragColor = vec4(c.rgb * a, a);
 }`;
 

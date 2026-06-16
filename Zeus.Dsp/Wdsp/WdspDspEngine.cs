@@ -163,9 +163,21 @@ public sealed class WdspDspEngine : IDspEngine
         WdspNativeLoader.TryProbe() &&
         WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRDeepDiagnostics));
 
+    internal static bool Nr5SpnrProbabilityDiagnosticsAvailable =>
+        WdspNativeLoader.TryProbe() &&
+        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRProbabilityDiagnostics));
+
+    internal static bool Nr5SpnrPeakDiagnosticsAvailable =>
+        WdspNativeLoader.TryProbe() &&
+        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRPeakDiagnostics));
+
     internal static bool Nr5SpnrAgcDiagnosticsAvailable =>
         WdspNativeLoader.TryProbe() &&
         WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRAgcDiagnostics));
+
+    internal static bool Nr5SpnrMemoryDiagnosticsAvailable =>
+        WdspNativeLoader.TryProbe() &&
+        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRMemoryDiagnostics));
 
     private static bool AllNativeExportsAvailable(string[] symbolNames)
     {
@@ -386,7 +398,7 @@ public sealed class WdspDspEngine : IDspEngine
 
     // TX Monitor — private RXA channel that demodulates the post-CFIR / post-
     // RSMPOUT TX IQ (the wire signal about to hit the radio) back to mono
-    // baseband audio at 48 kHz, so the operator can audition the full TX chain
+    // baseband audio at 48 kHz, so the operator can preview the full TX chain
     // (mic → EQ → Leveler → VST → CFC → ALC → bandpass) at the actual TX
     // bandwidth profile, with or without keying. Equivalent to Thetis MON,
     // implemented as a parallel demod rather than a tap inside TXA so the
@@ -396,7 +408,7 @@ public sealed class WdspDspEngine : IDspEngine
     // OpenTxChannel has chosen the IQ rate (48 kHz P1 / 192 kHz P2). It stays
     // open for the engine lifetime; toggling monitor off just stops feeding
     // and stops draining. Mode + filter are synced from SetTxMode/SetTxFilter
-    // so the audition matches the on-air bandwidth.
+    // so the preview matches the on-air bandwidth.
     //
     // _monitorRequested is the operator's intent (REST toggle); _monitorChannelId
     // becomes non-null once the channel is actually open. ProcessTxBlock feeds
@@ -1112,11 +1124,19 @@ public sealed class WdspDspEngine : IDspEngine
             double ridgePeak = 0.0;
             double floorReductionDb = 0.0;
             double dynamicRangeDb = 0.0;
+            double signalProbability = 0.0;
+            double textureFill = 0.0;
+            double maskSmoothing = 0.0;
             double signalConfidence = 0.0;
             double agcGate = 0.0;
             double levelDrive = 0.0;
             double recoveryDrive = 0.0;
+            double weakSignalMemory = 0.0;
             double makeupGain = 1.0;
+            double outputPeak = 0.0;
+            double peakEvidence = 0.0;
+            double peakLimit = 0.0;
+            double peakReductionDb = 0.0;
             if (Nr5SpnrAdvancedDiagnosticsAvailable)
             {
                 try
@@ -1163,6 +1183,55 @@ public sealed class WdspDspEngine : IDspEngine
                     agcGate = 0.0;
                 }
             }
+            if (Nr5SpnrProbabilityDiagnosticsAvailable)
+            {
+                try
+                {
+                    int probabilityOk = NativeMethods.GetRXASPNRProbabilityDiagnostics(
+                        channelId,
+                        out signalProbability,
+                        out textureFill,
+                        out maskSmoothing);
+                    if (probabilityOk == 0)
+                    {
+                        signalProbability = 0.0;
+                        textureFill = 0.0;
+                        maskSmoothing = 0.0;
+                    }
+                }
+                catch (EntryPointNotFoundException)
+                {
+                    signalProbability = 0.0;
+                    textureFill = 0.0;
+                    maskSmoothing = 0.0;
+                }
+            }
+            if (Nr5SpnrPeakDiagnosticsAvailable)
+            {
+                try
+                {
+                    int peakOk = NativeMethods.GetRXASPNRPeakDiagnostics(
+                        channelId,
+                        out outputPeak,
+                        out peakEvidence,
+                        out peakLimit,
+                        out peakReductionDb);
+                    if (peakOk == 0)
+                    {
+                        outputPeak = 0.0;
+                        peakEvidence = 0.0;
+                        peakLimit = 0.0;
+                        peakReductionDb = 0.0;
+                    }
+                }
+                catch (EntryPointNotFoundException)
+                {
+                    outputPeak = 0.0;
+                    peakEvidence = 0.0;
+                    peakLimit = 0.0;
+                    peakReductionDb = 0.0;
+                }
+            }
             if (Nr5SpnrAgcDiagnosticsAvailable)
             {
                 try
@@ -1186,9 +1255,26 @@ public sealed class WdspDspEngine : IDspEngine
                     makeupGain = 1.0;
                 }
             }
+            if (Nr5SpnrMemoryDiagnosticsAvailable)
+            {
+                try
+                {
+                    int memoryOk = NativeMethods.GetRXASPNRMemoryDiagnostics(
+                        channelId,
+                        out weakSignalMemory);
+                    if (memoryOk == 0)
+                    {
+                        weakSignalMemory = 0.0;
+                    }
+                }
+                catch (EntryPointNotFoundException)
+                {
+                    weakSignalMemory = 0.0;
+                }
+            }
 
             return new Nr5SpnrDiagnosticsDto(
-                SchemaVersion: 4,
+                SchemaVersion: 7,
                 ChannelId: channelId,
                 Run: run != 0,
                 Position: position,
@@ -1209,16 +1295,26 @@ public sealed class WdspDspEngine : IDspEngine
                 NoiseFloorDb: RoundDiag(noiseFloorDb, 1),
                 FloorReductionDb: RoundDiag(floorReductionDb, 1),
                 DynamicRangeDb: RoundDiag(dynamicRangeDb, 1),
+                SignalProbability: RoundDiag(signalProbability, 3),
+                TextureFill: RoundDiag(textureFill, 3),
+                MaskSmoothing: RoundDiag(maskSmoothing, 3),
                 SignalConfidence: RoundDiag(signalConfidence, 3),
                 AgcGate: RoundDiag(agcGate, 3),
                 LevelDrive: RoundDiag(levelDrive, 3),
                 RecoveryDrive: RoundDiag(recoveryDrive, 3),
+                WeakSignalMemory: RoundDiag(weakSignalMemory, 3),
                 MakeupGain: RoundDiag(makeupGain, 3),
                 MakeupGainDb: RoundDiag(LinearToDb(makeupGain), 1),
                 InputRms: RoundDiag(inputRms, 6),
                 InputDbfs: RoundDiag(LinearToDb(inputRms), 1),
                 OutputRms: RoundDiag(outputRms, 6),
-                OutputDbfs: RoundDiag(LinearToDb(outputRms), 1));
+                OutputDbfs: RoundDiag(LinearToDb(outputRms), 1),
+                OutputPeak: RoundDiag(outputPeak, 6),
+                OutputPeakDbfs: RoundDiag(LinearToDb(outputPeak), 1),
+                PeakEvidence: RoundDiag(peakEvidence, 3),
+                PeakLimit: RoundDiag(peakLimit, 6),
+                PeakLimitDbfs: RoundDiag(LinearToDb(peakLimit), 1),
+                PeakReductionDb: RoundDiag(Math.Max(0.0, peakReductionDb), 1));
         }
         catch (EntryPointNotFoundException)
         {
@@ -1850,7 +1946,7 @@ public sealed class WdspDspEngine : IDspEngine
             // stage sees "no longer transmitting" while the chain is still
             // alive — same ordering pihpsdr uses (transmitter.c:2422-2444).
             NativeMethods.SetPSMox(txaId, 0);
-            // Only damp TXA if the audition path doesn't need it. When
+            // Only damp TXA if the preview path doesn't need it. When
             // monitor is on, TXA stays at state=1 so the chain keeps
             // producing IQ to be demodulated by the monitor RXA channel.
             if (_txaRunning && !wantTxa)
@@ -2064,7 +2160,7 @@ public sealed class WdspDspEngine : IDspEngine
                     _twoToneF1Hz, _twoToneF2Hz, signedF1, signedF2, mapped);
             }
         }
-        // Mirror the mode onto the monitor channel so the audition demodulates
+        // Mirror the mode onto the monitor channel so the preview demodulates
         // with the same sideband / modulation as the on-air signal.
         lock (_monitorLock)
         {
@@ -2085,7 +2181,7 @@ public sealed class WdspDspEngine : IDspEngine
             if (_txaChannelId is not int txa) return;
             NativeMethods.SetTXABandpassFreqs(txa, lowHz, highHz);
         }
-        // Mirror the filter onto the monitor channel so the audition stays at
+        // Mirror the filter onto the monitor channel so the preview stays at
         // the same bandwidth as the on-air signal. Stash the values regardless
         // of whether the monitor channel is open yet — EnsureMonitorChannelOpen
         // reads them at lazy-open time.
@@ -2120,7 +2216,7 @@ public sealed class WdspDspEngine : IDspEngine
         }
         ClearMonitorAudioRing();
 
-        // Flip TXA's run state if the audition path's requirement diverges
+        // Flip TXA's run state if the preview path's requirement diverges
         // from MOX's. Without this the chain stays quiescent (state=0) when
         // the operator hits monitor with MOX off, fexchange2 returns without
         // filling iout/qout, and the monitor RXA gets silence (or stack
@@ -2179,7 +2275,7 @@ public sealed class WdspDspEngine : IDspEngine
     // channel uses the standard OpenChannel lifecycle (state=0 → configure →
     // worker → SetChannelState(id,1,0)) so the wdsp-init-gotchas.md ordering
     // is honoured. Mode + filter are synced from the latched TX values so the
-    // audition starts at the right bandwidth profile from the first sample.
+    // preview starts at the right bandwidth profile from the first sample.
     //
     // No-op if the monitor channel is already open. No-op (with a deferred
     // open) if TXA isn't open yet — first OpenTxChannel will retry.
@@ -2210,7 +2306,7 @@ public sealed class WdspDspEngine : IDspEngine
                 return;
             }
             // Sync mode + filter to current TX state. SetMode also clears the
-            // audio ring so the first audition block starts from silence.
+            // audio ring so the first preview block starts from silence.
             SetMode(id, MapRxaToRxMode(_txCurrentMode));
             SetFilter(id, _monitorFilterLow, _monitorFilterHigh);
             _monitorMode = _txCurrentMode;

@@ -10,7 +10,7 @@
 // cancel an in-flight drag). All chrome uses Zeus tokens.
 //
 // Note: the chain only processes audio during MOX/TX or desktop-mode
-// audition, so both bars sit at the floor when idle — that's expected,
+// preview, so both bars sit at the floor when idle — that's expected,
 // not a bug.
 
 import { useEffect, useRef, useState } from 'react';

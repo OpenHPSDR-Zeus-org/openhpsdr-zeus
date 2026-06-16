@@ -204,6 +204,6 @@ describe('analyzeTxFidelity', () => {
     expect(a.score).toBe(0);
     expect(a.liveSpectralDensity).toBeNull();
     expect(a.densityFit).toBeNull();
-    expect(a.recommendation).toBe('Use MOX or TX monitor for voice-chain metering');
+    expect(a.recommendation).toBe('Use MOX or Preview for voice-chain metering');
   });
 });

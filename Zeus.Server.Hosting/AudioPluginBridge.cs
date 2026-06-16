@@ -96,7 +96,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         PluginManager manager,
         DspPipelineService pipeline,
         TxService tx,
-        IAuditionAudioSink audition,
+        IPreviewAudioSink preview,
         ChainOrderService chainOrder,
         ILogger<AudioPluginBridge> log,
         TxAudioIngest txAudioIngest,
@@ -104,7 +104,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         : this(manager, pipeline, new VstBridgeNative(),
                isMoxOn: () => tx.IsMoxOn,
                isMonitorOn: () => pipeline.CurrentEngine?.IsTxMonitorOn ?? false,
-               audition: audition,
+               preview: preview,
                chainOrder: chainOrder,
                log,
                isTciTxAudioActive: () => txAudioIngest.IsTciTxAudioActive,
@@ -119,7 +119,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         IVstBridgeNative vstBridge,
         Func<bool> isMoxOn,
         Func<bool> isMonitorOn,
-        IAuditionAudioSink audition,
+        IPreviewAudioSink preview,
         ChainOrderService? chainOrder,
         ILogger<AudioPluginBridge> log,
         Func<bool>? isTciTxAudioActive = null,
@@ -147,7 +147,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         Func<bool> isMoxOn,
         Func<bool> isMonitorOn,
         ILogger<AudioPluginBridge> log,
-        IAuditionAudioSink? audition = null,
+        IPreviewAudioSink? preview = null,
         bool previewEnabled = true,
         bool engineIsWdsp = true,
         Func<bool>? isTciTxAudioActive = null,
@@ -191,7 +191,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     /// Chain-level signal meters (linear peak) for the Audio Suite IN /
     /// OUT bars: the level entering the TX insert chain and the level
     /// leaving it. Both read 0 until the chain processes audio — which
-    /// only happens during MOX/TX or desktop-mode audition (mic
+    /// only happens during MOX/TX or desktop-mode preview (mic
     /// preview). Surfaced via GET /api/audio-suite/chain/meters.
     /// </summary>
     public (float In, float Out) ChainMeters =>
@@ -451,14 +451,14 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     /// or no plugins attached), when MOX is on (the WDSP TX path is the
     /// canonical chain runner during MOX), or when the engine's TX
     /// monitor is on (the TX path runs the chain via ProcessTxBlock
-    /// for the audition feed). The two paths are mutually exclusive in
+    /// for the preview feed). The two paths are mutually exclusive in
     /// time except for the microsecond-scale overlap window at a MOX
     /// edge; the caller-supplied scratch span on
     /// <see cref="AudioChain.Process(ReadOnlySpan{float}, Span{float},
     /// Span{float}, AudioBlockContext)"/> ensures the two paths never
     /// collide on the chain's <c>_scratch</c> buffer in that window.</para>
     ///
-    /// <para>Output samples are discarded — audible Audio Suite audition is
+    /// <para>Output samples are discarded — audible Audio Suite preview is
     /// handled by the WDSP TX-monitor path so it includes the full TXA chain
     /// (leveler, compressor, CFC, ALC, bandpass/CFIR), not just the plugin
     /// insert output. This preview path only updates each plugin's last-input
@@ -497,7 +497,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
 
         // VST mode: route the live mic block through the out-of-process engine so
         // the operator can meter the VST chain OFF-AIR, exactly as the native
-        // chain animates its meters here on-bench. Audible audition is owned by
+        // chain animates its meters here on-bench. Audible preview is owned by
         // TX Monitor, not this preview output. When the engine isn't the active
         // route, fall through to the native in-process chain unchanged.
         if (!TryProcessThroughEngine(
@@ -511,7 +511,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         }
         DspPipelineService.SanitizeAudioBuffer(previewOut);
 
-        // Do not publish previewOut to any local sink. Audio Suite audition is
+        // Do not publish previewOut to any local sink. Audio Suite preview is
         // the TX Monitor path, which runs this same mic block through
         // ProcessTxBlock and demodulates the post-output IQ for a full-chain
         // comparison with on-air TX audio.

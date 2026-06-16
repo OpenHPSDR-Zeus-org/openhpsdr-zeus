@@ -40,6 +40,7 @@ export function NotchOverlay({ interactive = false, resizable = false, container
   const width = useDisplayStore((s) => s.panDb?.length ?? 0);
   const notches = useNotchStore((s) => s.notches);
   const pending = useNotchStore((s) => s.pending);
+  const armed = useNotchStore((s) => s.armed);
   const removeNotch = useNotchStore((s) => s.removeNotch);
   const updateNotch = useNotchStore((s) => s.updateNotch);
   const drag = useRef<ResizeDrag | null>(null);
@@ -89,7 +90,9 @@ export function NotchOverlay({ interactive = false, resizable = false, container
     try { (e.target as Element).releasePointerCapture(e.pointerId); } catch { /* ok */ }
   };
 
-  const showHandles = resizable && !!containerRef;
+  const editEnabled = armed;
+  const showHandles = editEnabled && resizable && !!containerRef;
+  const showDelete = editEnabled && interactive;
 
   return (
     <>
@@ -133,7 +136,7 @@ export function NotchOverlay({ interactive = false, resizable = false, container
                 />
               </>
             )}
-            {interactive && (
+            {showDelete && (
               <button
                 type="button"
                 title={`Remove notch @ ${(n.centerHz / 1e6).toFixed(4)} MHz`}

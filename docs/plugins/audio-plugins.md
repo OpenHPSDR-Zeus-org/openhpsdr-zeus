@@ -157,7 +157,7 @@ installs a delegate on `WdspDspEngine` via
 thread, post-Leveler and **pre-CFC** — CFC stays last, downstream in
 WDSP and unaffected by the chain. The same bridge also drives a
 pre-MOX live mic preview (`ProcessLivePreview`) so the per-plugin
-IN/OUT/GR meters and the Audio Suite "Audition" feed animate from
+IN/OUT/GR meters and the Audio Suite "Preview" feed animate from
 live mic input even when nothing is being transmitted.
 
 Both routes feed this chain: `IAudioPlugin` plugins (custom C# DSP)

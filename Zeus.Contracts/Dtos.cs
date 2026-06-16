@@ -311,6 +311,10 @@ public sealed record DspLiveRuntimeEvidenceDto(
     long? AudioAgeMs,
     string AudioStatus,
     string AudioSource,
+    long AudioFramesBroadcast,
+    uint AudioLastSeq,
+    int AudioSampleRateHz,
+    int AudioSampleCount,
     double? AudioRmsDbfs,
     double? AudioPeakDbfs,
     bool TxMonitorRequested,
@@ -318,6 +322,21 @@ public sealed record DspLiveRuntimeEvidenceDto(
     bool SquelchOpen,
     bool SquelchTailActive,
     double? SquelchGateGain,
+    double? RxAudioLevelerInputRmsDbfs,
+    double? RxAudioLevelerOutputRmsDbfs,
+    double? RxAudioLevelerInputPeakDbfs,
+    double? RxAudioLevelerOutputPeakDbfs,
+    double? RxAudioLevelerDesiredGainDb,
+    double? RxAudioLevelerAppliedGainDb,
+    double? RxAudioLevelerGainDeltaDb,
+    double? RxAudioLevelerPeakHeadroomDb,
+    double? RxAudioLevelerPreLimitPeakDbfs,
+    double? RxAudioLevelerOutputLimitReductionDb,
+    int? RxAudioLevelerOutputLimitSampleCount,
+    int? RxAudioLevelerPauseHoldBlocks,
+    bool? RxAudioLevelerBoostSlewLimited,
+    bool? RxAudioLevelerPeakLimited,
+    bool? RxAudioLevelerOutputLimited,
     long MonitorBacklogSamples,
     int AudioSinkCount,
     string DiagnosticRecommendation);
@@ -363,8 +382,16 @@ public sealed record DspLiveDiagnosticsDto(
     Nr5SpnrDiagnosticsDto? Nr5SpnrDiagnostics,
     double? Nr5SignalConfidence,
     double? Nr5AgcGate,
+    double? Nr5SignalProbability,
+    double? Nr5TextureFill,
+    double? Nr5MaskSmoothing,
+    double? Nr5WeakSignalMemory,
     double? Nr5MeanGain,
     double? Nr5FloorReductionDb,
+    double? Nr5OutputPeakDbfs,
+    double? Nr5PeakEvidence,
+    double? Nr5PeakLimitDbfs,
+    double? Nr5PeakReductionDb,
     DspLiveRuntimeEvidenceDto? RuntimeEvidence,
     string[] Evidence,
     string[] Constraints,
@@ -443,16 +470,26 @@ public sealed record Nr5SpnrDiagnosticsDto(
     double NoiseFloorDb,
     double FloorReductionDb,
     double DynamicRangeDb,
+    double SignalProbability,
+    double TextureFill,
+    double MaskSmoothing,
     double SignalConfidence,
     double AgcGate,
     double LevelDrive,
     double RecoveryDrive,
+    double WeakSignalMemory,
     double MakeupGain,
     double MakeupGainDb,
     double InputRms,
     double InputDbfs,
     double OutputRms,
-    double OutputDbfs);
+    double OutputDbfs,
+    double OutputPeak,
+    double OutputPeakDbfs,
+    double PeakEvidence,
+    double PeakLimit,
+    double PeakLimitDbfs,
+    double PeakReductionDb);
 
 public sealed record SmartNrRxChainRuntimeDto(
     int SchemaVersion,
@@ -820,14 +857,14 @@ public sealed record StateDto(
     // persisted server-side: this is an operator viewing preference,
     // resets to off each session.
     bool PsMonitorEnabled = false,
-    // TX Monitor — operator-facing audition toggle (issue #106 follow-up).
+    // TX Monitor — operator-facing preview toggle (issue #106 follow-up).
     // When true, the engine demodulates the post-CFIR TX IQ back to mono
     // baseband audio so the operator hears the chain output (mic → EQ →
     // Leveler → VST → CFC → ALC → bandpass) at the actual TX bandwidth
     // profile. Equivalent to Thetis MON, but also runs the chain when MOX
     // is OFF so VST plugins receive samples and meters animate continuously.
     // RX audio is suppressed in the broadcast while monitor is on so the
-    // operator hears only the TX audition. NOT persisted across sessions —
+    // operator hears only the TX preview. NOT persisted across sessions —
     // resets to off each connect, matching MOX/TUN discipline.
     bool TxMonitorEnabled = false,
     bool PsAuto = true,             // continuous adapt by default once armed

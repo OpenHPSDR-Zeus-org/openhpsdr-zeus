@@ -31,7 +31,8 @@
 // per-bin tracker would instead converge up to a steady carrier and suppress
 // it. It runs on the existing display pixels (panDb), so there is NO backend,
 // native, or protocol change — and it is gated entirely off (zero per-frame
-// cost) unless the operator turns Pop or Snap on.
+// cost) unless the operator turns Pop/Snap on or a mounted surface registers
+// as a signal-estimator consumer.
 //
 // All of this is OPT-IN and OFF BY DEFAULT: first-connect behaviour is byte-for
 // -byte the current panadapter/waterfall. The Pop dB window and snap tuning are
@@ -472,6 +473,17 @@ function finiteConfidenceValue(conf: Float32Array | null, n: number, index: numb
   return Number.isFinite(c) ? Math.max(0, Math.min(1, c)) : 0;
 }
 
+function clamp01(v: number): number {
+  return v <= 0 ? 0 : v >= 1 ? 1 : v;
+}
+
+function smooth01(edge0: number, edge1: number, value: number): number {
+  const span = edge1 - edge0;
+  if (!Number.isFinite(span) || span <= 0) return value >= edge1 ? 1 : 0;
+  const t = clamp01((value - edge0) / span);
+  return t * t * (3 - 2 * t);
+}
+
 function finiteLinearPowerWeight(snrDb: number): number {
   return Math.pow(10, Math.min(120, Math.max(0, snrDb)) / 10);
 }
@@ -877,6 +889,7 @@ let signalHold: Float32Array | null = null; // display-only SNR peak hold
 let signalConfidence: Float32Array | null = null; // 0..1 temporal/neighbour confidence
 let previousSnr: Float32Array | null = null; // previous-frame SNR for coherence
 let ridgeMean: Float32Array | null = null; // display-only local positive-SNR mean
+let signalTexture: Float32Array | null = null; // 0..1 signal-evidence texture
 let visualAgcHist: Int32Array | null = null; // SNR histogram for display-domain visual AGC
 let snapHistorySnr: Float32Array | null = null; // slow-decay SNR max-hold for snap history
 let snapHistorySpec: Float32Array | null = null; // reusable floor+history reconstruction
@@ -1027,7 +1040,8 @@ function updateSignalState(spec: Float32Array): void {
   const prev = previousSnr;
   const gate = st.popFloorDb;
   const coherenceHoldGate = st.coherenceHoldGate;
-  if (!st.popEnabled) signalHold = null;
+  const needsDisplayHold = st.popEnabled || estimatorConsumers > 0;
+  if (!needsDisplayHold) signalHold = null;
   else if (signalHold === null || signalHold.length !== n) signalHold = new Float32Array(n);
   const hold = signalHold;
   for (let i = 0; i < n; i++) {
@@ -1042,7 +1056,7 @@ function updateSignalState(spec: Float32Array): void {
     const targetConfidence = snr >= gate
       ? Math.min(
         1,
-        0.10 + 0.30 * snrNorm +
+        (previousSupported ? 0.10 + 0.30 * snrNorm : 0.04 + 0.18 * snrNorm) +
         (neighbourSupported ? 0.24 : 0) +
         (previousSupported ? 0.20 : 0) +
         (stable ? 0.10 : 0),
@@ -1071,6 +1085,8 @@ function resetSignalState(): void {
   signalHold = null;
   signalConfidence = null;
   previousSnr = null;
+  ridgeMean = null;
+  signalTexture = null;
 }
 
 function resetSignalHold(): void {
@@ -1143,6 +1159,13 @@ export function getSignalConfidence(): Float32Array | null {
   return signalConfidence;
 }
 
+/** Current 0..1 display signal-evidence texture, or null before an enhanced
+ *  display row has been mapped. This is derived display state: it is sparse,
+ *  confidence/ridge/support aware, and never feeds tuning or snap decisions. */
+export function getSignalTexture(): Float32Array | null {
+  return signalTexture;
+}
+
 /** Reset the estimator (e.g. on disconnect). Next frame re-seeds. */
 export function resetEstimator(): void {
   floor = null;
@@ -1151,6 +1174,7 @@ export function resetEstimator(): void {
   signalConfidence = null;
   previousSnr = null;
   ridgeMean = null;
+  signalTexture = null;
   visualAgcHist = null;
   snapHistorySnr = null;
   snapHistorySpec = null;
@@ -1158,16 +1182,34 @@ export function resetEstimator(): void {
   lastHzPerPixel = 0;
 }
 
-function computeLocalMeanPositiveSnr(raw: Float32Array, f: Float32Array, hold: Float32Array | null, out: Float32Array): void {
+function heldSnrAt(hold: Float32Array | null, index: number): number {
+  if (hold === null) return 0;
+  const held = hold[index]!;
+  return Number.isFinite(held) && held > 0 ? held : 0;
+}
+
+function positiveSnrAt(raw: Float32Array, f: Float32Array, hold: Float32Array | null, n: number, index: number): number {
+  const live = optionalSnr(raw, f, n, index) ?? 0;
+  const held = heldSnrAt(hold, index);
+  const snr = live > held ? live : held;
+  return snr > 0 ? snr : 0;
+}
+
+function computeLocalMeanPositiveSnr(
+  raw: Float32Array,
+  f: Float32Array,
+  hold: Float32Array | null,
+  out: Float32Array,
+  windowHz = POP_RIDGE_WINDOW_HZ,
+  minRadiusBins = POP_RIDGE_MIN_RADIUS_BINS,
+  maxRadiusBins = POP_RIDGE_MAX_RADIUS_BINS,
+): void {
   const n = raw.length;
-  let radius = validHzPerPixel(lastHzPerPixel) ? Math.round(POP_RIDGE_WINDOW_HZ / lastHzPerPixel / 2) : POP_RIDGE_MIN_RADIUS_BINS;
-  radius = Math.max(POP_RIDGE_MIN_RADIUS_BINS, Math.min(POP_RIDGE_MAX_RADIUS_BINS, radius));
+  let radius = validHzPerPixel(lastHzPerPixel) ? Math.round(windowHz / lastHzPerPixel / 2) : minRadiusBins;
+  radius = Math.max(minRadiusBins, Math.min(maxRadiusBins, radius));
 
   const snrAt = (i: number): number => {
-    const live = optionalSnr(raw, f, n, i) ?? 0;
-    const held = hold && Number.isFinite(hold[i]!) ? hold[i]! : 0;
-    const snr = live > held ? live : held;
-    return snr > 0 ? snr : 0;
+    return positiveSnrAt(raw, f, hold, n, i);
   };
 
   let lo = 0;
@@ -1179,6 +1221,66 @@ function computeLocalMeanPositiveSnr(raw: Float32Array, f: Float32Array, hold: F
     while (hi < nextHi) sum += snrAt(++hi);
     while (lo < nextLo) sum -= snrAt(lo++);
     out[i] = sum / (hi - lo + 1);
+  }
+}
+
+function computeSignalTexture(
+  raw: Float32Array,
+  f: Float32Array,
+  hold: Float32Array | null,
+  conf: Float32Array | null,
+  mean: Float32Array,
+  st: SignalEnhanceState,
+  out: Float32Array,
+): void {
+  const n = raw.length;
+  const weakGate = Math.max(0.5, st.popFloorDb - 1.5);
+  const fullGate = st.popFloorDb + 6.5;
+  for (let i = 0; i < n; i++) {
+    if (finiteSample(raw, i) === null) {
+      out[i] = 0;
+      continue;
+    }
+
+    const snr = positiveSnrAt(raw, f, hold, n, i);
+    if (snr <= 0) {
+      out[i] = 0;
+      continue;
+    }
+
+    const confidence = finiteConfidenceValue(conf, n, i);
+    const localMean = Number.isFinite(mean[i]!) ? mean[i]! : 0;
+    const left1 = i > 0 ? positiveSnrAt(raw, f, hold, n, i - 1) : 0;
+    const right1 = i + 1 < n ? positiveSnrAt(raw, f, hold, n, i + 1) : 0;
+    const left2 = i > 1 ? positiveSnrAt(raw, f, hold, n, i - 2) * 0.72 : 0;
+    const right2 = i + 2 < n ? positiveSnrAt(raw, f, hold, n, i + 2) * 0.72 : 0;
+    const neighbourSupport = Math.max(left1, right1, left2, right2, 0);
+    const supportSnr = neighbourSupport;
+    const contrast = snr - localMean;
+
+    const snrEvidence = smooth01(weakGate, fullGate, snr);
+    const ridgeEvidence = smooth01(0.30, 7.5, contrast);
+    const supportEvidence = smooth01(Math.max(0.25, st.popFloorDb - 1.25), st.popFloorDb + 4.5, supportSnr);
+    const coherentEvidence = smooth01(0.18, 0.62, confidence);
+    const edgeTexture = smooth01(0.04, 0.48, Math.max(Math.abs(snr - left1), Math.abs(snr - right1)) / 18);
+    const structureEvidence = Math.max(coherentEvidence, supportEvidence);
+
+    let texture = Math.max(
+      snrEvidence * (0.06 + 0.36 * structureEvidence),
+      ridgeEvidence * (0.08 + 0.58 * structureEvidence),
+      supportEvidence * 0.58,
+    );
+    texture += Math.min(
+      0.30,
+      coherentEvidence * supportEvidence * 0.20 +
+        ridgeEvidence * coherentEvidence * 0.20 +
+        edgeTexture * ridgeEvidence * 0.08,
+    );
+
+    if (snr < weakGate && confidence < 0.22) texture = 0;
+    if (structureEvidence < 0.25) texture = Math.min(texture, 0.15 + structureEvidence * 0.22);
+    if (snr < st.popFloorDb && supportEvidence < 0.35 && confidence < 0.30) texture *= 0.30;
+    out[i] = clamp01(texture);
   }
 }
 
@@ -1217,6 +1319,7 @@ function displaySnrForBin(
   hold: Float32Array | null,
   conf: Float32Array | null,
   mean: Float32Array,
+  texture: Float32Array | null,
   st: SignalEnhanceState,
   i: number,
   clampImpulse: boolean,
@@ -1235,7 +1338,36 @@ function displaySnrForBin(
     const ridgeWeight = contrast <= 0 ? 0.15 : Math.min(1, contrast / 12);
     snr += confidence * st.coherenceBoostDb * ridgeWeight;
   }
+  const textureValue = texture && texture.length === raw.length && Number.isFinite(texture[i]!)
+    ? texture[i]!
+    : 0;
+  if (textureValue > 0.01) {
+    snr += textureValue * (2.0 + st.coherenceBoostDb * 0.55);
+    if (snr < st.popFloorDb && textureValue > 0.28) {
+      snr = Math.max(snr, st.popFloorDb + (textureValue - 0.28) * 5.5);
+    }
+  }
   return clampImpulse ? maybeClampImpulseSnr(raw, f, st, i, liveSnr, confidence, snr) : snr;
+}
+
+function signalTextureAt(texture: Float32Array, n: number, i: number): number {
+  if (i < 0 || i >= n) return 0;
+  const v = texture[i]!;
+  return Number.isFinite(v) ? v : 0;
+}
+
+function terrainLift01(texture: Float32Array, n: number, i: number): number {
+  const center = signalTextureAt(texture, n, i);
+  if (center <= 0) return 0;
+  const shoulder = Math.max(
+    signalTextureAt(texture, n, i - 1),
+    signalTextureAt(texture, n, i + 1),
+    signalTextureAt(texture, n, i - 2) * 0.74,
+    signalTextureAt(texture, n, i + 2) * 0.74,
+  );
+  const plateau = Math.max(center, shoulder * 0.46);
+  const crest = Math.max(0, center - shoulder * 0.72);
+  return clamp01(Math.pow(smooth01(0.14, 0.88, plateau), 0.72) + crest * 0.55);
 }
 
 function estimateVisualAgcSpan(
@@ -1244,6 +1376,7 @@ function estimateVisualAgcSpan(
   hold: Float32Array | null,
   conf: Float32Array | null,
   mean: Float32Array,
+  texture: Float32Array | null,
   st: SignalEnhanceState,
   baseSpan: number,
 ): number {
@@ -1254,7 +1387,7 @@ function estimateVisualAgcSpan(
 
   let active = 0;
   for (let i = 0; i < raw.length; i++) {
-    const snr = displaySnrForBin(raw, f, hold, conf, mean, st, i, false);
+    const snr = displaySnrForBin(raw, f, hold, conf, mean, texture, st, i, false);
     if (snr < st.popFloorDb) continue;
     const idx = visualAgcHistIndex(snr);
     histAgc[idx] = histAgc[idx]! + 1;
@@ -1281,17 +1414,30 @@ function estimateVisualAgcSpan(
   return baseSpan * (1 - strength) + targetSpan * strength;
 }
 
+function updateDisplayTexture(
+  raw: Float32Array,
+  f: Float32Array,
+  hold: Float32Array | null,
+  conf: Float32Array | null,
+  st: SignalEnhanceState,
+): { mean: Float32Array; texture: Float32Array } {
+  const n = raw.length;
+  if (ridgeMean === null || ridgeMean.length !== n) ridgeMean = new Float32Array(n);
+  computeLocalMeanPositiveSnr(raw, f, hold, ridgeMean);
+  if (signalTexture === null || signalTexture.length !== n) signalTexture = new Float32Array(n);
+  computeSignalTexture(raw, f, hold, conf, ridgeMean, st, signalTexture);
+  return { mean: ridgeMean, texture: signalTexture };
+}
+
 /** Map the spectrum to a 0..1 Pop display value per bin: subtract the floor,
- *  gate the noise, then compress so weak and strong signals are both visible
- *  (see the "Pop display mapping" notes above). The renderers pass dbMin=0,
- *  dbMax=1 while Pop is on, so the colormap consumes this directly. Outputs 0
- *  (dark) when no floor exists yet — only the first frame after a reset, which
- *  the estimator seeds before subscribers run. `out` must match `raw`'s length. */
+ *  derive a sparse signal texture, then compress so weak and strong signals can
+ *  coexist in the colormap. Outputs 0 (dark) when no floor exists yet. */
 export function enhanceInto(raw: Float32Array, out: Float32Array): void {
   const n = raw.length;
   const f = floor;
   if (f === null || f.length !== n) {
     out.fill(0);
+    signalTexture = null;
     return;
   }
   const st = useSignalEnhanceStore.getState();
@@ -1300,15 +1446,73 @@ export function enhanceInto(raw: Float32Array, out: Float32Array): void {
   const gamma = st.popGamma;
   const hold = signalHold && signalHold.length === n ? signalHold : null;
   const conf = signalConfidence && signalConfidence.length === n ? signalConfidence : null;
-  if (ridgeMean === null || ridgeMean.length !== n) ridgeMean = new Float32Array(n);
-  computeLocalMeanPositiveSnr(raw, f, hold, ridgeMean);
-  const mean = ridgeMean;
-  const span = estimateVisualAgcSpan(raw, f, hold, conf, mean, st, baseSpan);
+  const { mean, texture } = updateDisplayTexture(raw, f, hold, conf, st);
+  const span = estimateVisualAgcSpan(raw, f, hold, conf, mean, texture, st, baseSpan);
   for (let i = 0; i < n; i++) {
-    const snr = displaySnrForBin(raw, f, hold, conf, mean, st, i, true);
-    let v = (snr - gate) / span;
-    v = v < 0 ? 0 : v > 1 ? 1 : v;
+    const snr = displaySnrForBin(raw, f, hold, conf, mean, texture, st, i, true);
+    const rawV = (snr - gate) / span;
+    let v = rawV <= 0 ? 0 : 1 - Math.exp(-rawV * 1.35);
+    const textureValue = Number.isFinite(texture[i]!) ? texture[i]! : 0;
+    const confidence = finiteConfidenceValue(conf, n, i);
+    const terrain = terrainLift01(texture, n, i);
+    const leftSnr = i > 0 ? optionalSnr(raw, f, n, i - 1) ?? 0 : 0;
+    const rightSnr = i + 1 < n ? optionalSnr(raw, f, n, i + 1) ?? 0 : 0;
+    const structured = Math.max(
+      smooth01(0.24, 0.62, confidence),
+      smooth01(st.popFloorDb - 1, st.popFloorDb + 4, Math.max(leftSnr, rightSnr)),
+    );
+    const textureLift = smooth01(0.12, 0.78, textureValue) * 0.42 * structured;
+    const baseSnr = positiveSnrAt(raw, f, hold, n, i);
+    const localMean = Number.isFinite(mean[i]!) ? mean[i]! : 0;
+    const ridgeCrest = smooth01(0.75, 8.0, baseSnr - localMean);
+    const terrainLift = terrain * (0.22 + 0.44 * structured);
+    v = Math.max(clamp01(v), textureLift, terrainLift);
+    v = clamp01(v + ridgeCrest * (0.10 + 0.08 * structured) + terrain * ridgeCrest * 0.08);
     out[i] = gamma === 1 ? v : Math.pow(v, gamma);
+  }
+}
+
+/** Normal RX waterfall HDR mapper: preserves the user's colormap while feeding
+ *  the renderer dB-space rows with coherent signals lifted like topography.
+ *  Because output remains in dB, the normal waterfall range slider keeps full
+ *  authority; POP remains the only hard-gated normalized mode. */
+export function enhanceWaterfallTextureInto(raw: Float32Array, out: Float32Array): void {
+  const n = raw.length;
+  const f = floor;
+  if (f === null || f.length !== n) {
+    for (let i = 0; i < n; i++) out[i] = finiteSample(raw, i) ?? FALLBACK_FLOOR_DB;
+    signalTexture = null;
+    return;
+  }
+  const st = useSignalEnhanceStore.getState();
+  const hold = signalHold && signalHold.length === n ? signalHold : null;
+  const conf = signalConfidence && signalConfidence.length === n ? signalConfidence : null;
+  const { mean, texture } = updateDisplayTexture(raw, f, hold, conf, st);
+  for (let i = 0; i < n; i++) {
+    const sample = finiteSample(raw, i);
+    if (sample === null) {
+      out[i] = FALLBACK_FLOOR_DB;
+      continue;
+    }
+    const liveSnr = optionalSnr(raw, f, n, i) ?? 0;
+    const texturedSnr = displaySnrForBin(raw, f, hold, conf, mean, texture, st, i, true);
+    const textureValue = Number.isFinite(texture[i]!) ? texture[i]! : 0;
+    const structure = smooth01(0.18, 0.76, textureValue);
+    const terrain = terrainLift01(texture, n, i);
+    const localMean = Number.isFinite(mean[i]!) ? mean[i]! : 0;
+    const ridgeCrest = smooth01(0.65, 8.0, positiveSnrAt(raw, f, hold, n, i) - localMean);
+    const reliefDb = structure <= 0
+      ? 0
+      : Math.min(
+        18,
+        Math.max(0, texturedSnr - Math.max(0, liveSnr)) * 0.42 +
+          terrain * (5.8 + st.coherenceBoostDb * 1.20) +
+          ridgeCrest * (2.8 + terrain * 4.0) +
+          structure * 2.2,
+      );
+    const floorTuckDb = smooth01(0, st.popFloorDb + 6, Math.max(0, st.popFloorDb + 4 - liveSnr)) *
+      (textureValue < 0.08 ? 5.8 : (1 - structure) * 1.2);
+    out[i] = sample + reliefDb - floorTuckDb;
   }
 }
 

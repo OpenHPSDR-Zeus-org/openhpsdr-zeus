@@ -180,11 +180,10 @@ export const PANELS: Record<string, PanelDef> = {
     // ⌥ map-mode hint, and HZ/PX readout — instead of stacking those on
     // top of the default TileChrome (the old "double header").
     headerless: true,
-    // The panadapter/waterfall needs real estate to be useful — a sliver of
-    // spectrum reads as noise. Floor it at a third of the width and a
-    // comfortable height.
+    // Keep enough room for the header, splitter, and both canvases while
+    // still letting operators dock the spectrum stack into a short strip.
     minW: 8,
-    minH: 12,
+    minH: 8,
   },
   vfo: {
     id: 'vfo',

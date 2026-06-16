@@ -537,12 +537,26 @@ export type Nr5SpnrDiagnosticsDto = {
   noiseFloorDb: number;
   floorReductionDb: number;
   dynamicRangeDb: number;
+  signalProbability: number;
+  textureFill: number;
+  maskSmoothing: number;
   signalConfidence: number;
   agcGate: number;
+  levelDrive: number;
+  recoveryDrive: number;
+  weakSignalMemory: number;
+  makeupGain: number;
+  makeupGainDb: number;
   inputRms: number;
   inputDbfs: number;
   outputRms: number;
   outputDbfs: number;
+  outputPeak: number;
+  outputPeakDbfs: number;
+  peakEvidence: number;
+  peakLimit: number;
+  peakLimitDbfs: number;
+  peakReductionDb: number;
 };
 
 export type HardwareRxDspDiagnosticsDto = {
@@ -862,8 +876,16 @@ export type DspLiveDiagnosticsDto = {
   nr5SpnrDiagnostics: Nr5SpnrDiagnosticsDto | null;
   nr5SignalConfidence: number | null;
   nr5AgcGate: number | null;
+  nr5SignalProbability: number | null;
+  nr5TextureFill: number | null;
+  nr5MaskSmoothing: number | null;
+  nr5WeakSignalMemory: number | null;
   nr5MeanGain: number | null;
   nr5FloorReductionDb: number | null;
+  nr5OutputPeakDbfs: number | null;
+  nr5PeakEvidence: number | null;
+  nr5PeakLimitDbfs: number | null;
+  nr5PeakReductionDb: number | null;
   evidence: string[];
   constraints: string[];
   recommendedActions: string[];
@@ -2070,12 +2092,26 @@ function normalizeNr5SpnrDiagnostics(raw: unknown): Nr5SpnrDiagnosticsDto | null
     noiseFloorDb: diagNumber(r.noiseFloorDb) ?? 0,
     floorReductionDb: diagNumber(r.floorReductionDb) ?? 0,
     dynamicRangeDb: diagNumber(r.dynamicRangeDb) ?? 0,
+    signalProbability: diagNumber(r.signalProbability) ?? 0,
+    textureFill: diagNumber(r.textureFill) ?? 0,
+    maskSmoothing: diagNumber(r.maskSmoothing) ?? 0,
     signalConfidence: diagNumber(r.signalConfidence) ?? 0,
     agcGate: diagNumber(r.agcGate) ?? 0,
+    levelDrive: diagNumber(r.levelDrive) ?? 0,
+    recoveryDrive: diagNumber(r.recoveryDrive) ?? 0,
+    weakSignalMemory: diagNumber(r.weakSignalMemory) ?? 0,
+    makeupGain: diagNumber(r.makeupGain) ?? 1,
+    makeupGainDb: diagNumber(r.makeupGainDb) ?? 0,
     inputRms: diagNumber(r.inputRms) ?? 0,
     inputDbfs: diagNumber(r.inputDbfs) ?? -240,
     outputRms: diagNumber(r.outputRms) ?? 0,
     outputDbfs: diagNumber(r.outputDbfs) ?? -240,
+    outputPeak: diagNumber(r.outputPeak) ?? 0,
+    outputPeakDbfs: diagNumber(r.outputPeakDbfs) ?? -240,
+    peakEvidence: diagNumber(r.peakEvidence) ?? 0,
+    peakLimit: diagNumber(r.peakLimit) ?? 0,
+    peakLimitDbfs: diagNumber(r.peakLimitDbfs) ?? -240,
+    peakReductionDb: diagNumber(r.peakReductionDb) ?? 0,
   };
 }
 
@@ -2556,8 +2592,16 @@ function normalizeDspLiveDiagnostics(raw: unknown): DspLiveDiagnosticsDto {
     nr5SpnrDiagnostics: normalizeNr5SpnrDiagnostics(r.nr5SpnrDiagnostics),
     nr5SignalConfidence: diagNumber(r.nr5SignalConfidence),
     nr5AgcGate: diagNumber(r.nr5AgcGate),
+    nr5SignalProbability: diagNumber(r.nr5SignalProbability),
+    nr5TextureFill: diagNumber(r.nr5TextureFill),
+    nr5MaskSmoothing: diagNumber(r.nr5MaskSmoothing),
+    nr5WeakSignalMemory: diagNumber(r.nr5WeakSignalMemory),
     nr5MeanGain: diagNumber(r.nr5MeanGain),
     nr5FloorReductionDb: diagNumber(r.nr5FloorReductionDb),
+    nr5OutputPeakDbfs: diagNumber(r.nr5OutputPeakDbfs),
+    nr5PeakEvidence: diagNumber(r.nr5PeakEvidence),
+    nr5PeakLimitDbfs: diagNumber(r.nr5PeakLimitDbfs),
+    nr5PeakReductionDb: diagNumber(r.nr5PeakReductionDb),
     evidence: diagStringArray(r.evidence),
     constraints: diagStringArray(r.constraints),
     recommendedActions: diagStringArray(r.recommendedActions),
@@ -4932,7 +4976,7 @@ export async function setPsMonitor(
   );
 }
 
-// TX Monitor toggle — engages the engine's audition path. The server
+// TX Monitor toggle — engages the engine's preview path. The server
 // demodulates the post-CFIR TX IQ back to mono baseband audio at the actual
 // TX bandwidth profile and substitutes it for RX audio in the AudioFrame
 // stream while monitor is on. Operator preference, not persisted across

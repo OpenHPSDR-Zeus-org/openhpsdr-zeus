@@ -93,6 +93,78 @@ function miniMenuOptionStyle(active: boolean): CSSProperties {
   };
 }
 
+function AudioSuitePreviewToggle() {
+  const previewSupported = useAudioSuiteStore((s) => s.previewSupported);
+  const previewEnabled = useAudioSuiteStore((s) => s.previewEnabled);
+  const setPreviewEnabled = useAudioSuiteStore((s) => s.setPreviewEnabled);
+  const loadPreviewState = useAudioSuiteStore((s) => s.loadPreviewState);
+
+  useEffect(() => {
+    void loadPreviewState();
+  }, [loadPreviewState]);
+
+  return (
+    <section
+      aria-label="Audio Suite preview"
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'minmax(0, 1fr) auto',
+        alignItems: 'center',
+        gap: 8,
+        minWidth: 0,
+        padding: '6px 8px',
+        border: '1px solid var(--line)',
+        borderRadius: 5,
+        background: 'var(--bg-2)',
+      }}
+    >
+      <span
+        className="label-xs"
+        style={{
+          minWidth: 0,
+          color: previewEnabled ? 'var(--tx)' : 'var(--fg-2)',
+          fontWeight: 900,
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        Preview
+      </span>
+      <button
+        type="button"
+        aria-pressed={previewEnabled}
+        aria-label={previewEnabled ? 'Preview on' : 'Preview off'}
+        disabled={!previewSupported}
+        title={
+          previewSupported
+            ? previewEnabled
+              ? 'Preview is ON - processed TX audio is mixed into your RX playback'
+              : 'Preview is OFF - click to hear the full TX chain in your headphones'
+            : 'Preview is unavailable in this host mode'
+        }
+        onClick={() => void setPreviewEnabled(!previewEnabled)}
+        style={{
+          minWidth: 46,
+          height: 24,
+          border: '1px solid ' + (previewEnabled ? 'var(--tx)' : 'var(--line)'),
+          borderRadius: 4,
+          background: previewEnabled ? 'var(--tx)' : 'var(--bg-1)',
+          color: previewEnabled ? '#fff' : 'var(--fg-0)',
+          cursor: previewSupported ? 'pointer' : 'not-allowed',
+          fontSize: 10,
+          fontWeight: 900,
+          opacity: previewSupported ? 1 : 0.5,
+          padding: '0 9px',
+          textTransform: 'uppercase',
+        }}
+      >
+        {previewEnabled ? 'ON' : 'OFF'}
+      </button>
+    </section>
+  );
+}
+
 function profileDefaults(): TxStationProfile[] {
   return mergeTxStationProfileOverrides([]);
 }
@@ -929,6 +1001,7 @@ export function TxFidelityPanel() {
       }}
     >
       <TxFidelityAdvisor targetSpectralDensity={targetSpectralDensity} />
+      <AudioSuitePreviewToggle />
       <AudioChainMeters compact title="Audio Suite Chain" />
       <TxStationProfiles
         selectedProfileId={selectedProfileId}

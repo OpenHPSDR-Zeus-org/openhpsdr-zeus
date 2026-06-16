@@ -287,11 +287,18 @@ public class NoiseReductionTests
             Assert.True(diag.LearnedFrames > 55, $"expected learned NR5 frames, got {diag.LearnedFrames}");
             Assert.True(diag.InputRms > 0.0, $"expected input RMS, got {diag.InputRms}");
             Assert.True(diag.OutputRms > 0.0, $"expected output RMS, got {diag.OutputRms}");
-            Assert.Equal(4, diag.SchemaVersion);
+            Assert.Equal(7, diag.SchemaVersion);
             Assert.InRange(diag.CoherencePeak, 0.0, 1.0);
             Assert.InRange(diag.RidgePeak, 0.0, 1.0);
+            Assert.InRange(diag.SignalProbability, 0.0, 1.0);
+            Assert.InRange(diag.TextureFill, 0.0, 1.0);
+            Assert.InRange(diag.MaskSmoothing, 0.0, 1.0);
             Assert.InRange(diag.SignalConfidence, 0.0, 1.0);
             Assert.InRange(diag.AgcGate, 0.0, 1.0);
+            Assert.InRange(diag.OutputPeak, 0.0, 1.0);
+            Assert.InRange(diag.PeakEvidence, 0.0, 1.0);
+            Assert.InRange(diag.PeakLimit, 0.0, 1.0);
+            Assert.True(diag.PeakReductionDb >= 0.0, $"expected non-negative NR5 peak reduction pressure, got {diag.PeakReductionDb}");
             Assert.InRange(diag.MeanGain, 0.0, 1.0);
             Assert.InRange(diag.MinGain, 0.0, 1.0);
             Assert.True(diag.FloorReductionDb >= 0.0, $"expected non-negative floor push, got {diag.FloorReductionDb}");
@@ -308,11 +315,19 @@ public class NoiseReductionTests
                 Assert.True(diag.SignalConfidence > 0.0, $"expected NR5 signal confidence, got {diag.SignalConfidence}");
                 Assert.True(diag.AgcGate > 0.0, $"expected NR5 AGC signal gate, got {DescribeNr5(diag)}");
             }
+            if (WdspDspEngine.Nr5SpnrProbabilityDiagnosticsAvailable)
+            {
+                Assert.True(diag.SignalProbability > 0.0, $"expected NR5 signal probability, got {DescribeNr5(diag)}");
+            }
             if (WdspDspEngine.Nr5SpnrAgcDiagnosticsAvailable)
             {
                 Assert.InRange(diag.LevelDrive, 0.0, 1.0);
                 Assert.InRange(diag.RecoveryDrive, 0.0, 1.0);
                 Assert.True(diag.MakeupGain > 0.0, $"expected NR5 makeup gain, got {DescribeNr5(diag)}");
+            }
+            if (WdspDspEngine.Nr5SpnrMemoryDiagnosticsAvailable)
+            {
+                Assert.InRange(diag.WeakSignalMemory, 0.0, 1.0);
             }
             Assert.True(diag.AgcGain > 0.0, $"expected AGC gain, got {diag.AgcGain}");
         }
@@ -476,8 +491,9 @@ public class NoiseReductionTests
         $"learned={diag.LearnedFrames} conf={diag.SignalConfidence:F3} gate={diag.AgcGate:F3} " +
         $"presence={diag.PresencePeak:F3} salience={diag.SaliencePeak:F3} " +
         $"coherence={diag.CoherencePeak:F3} ridge={diag.RidgePeak:F3} " +
+        $"prob={diag.SignalProbability:F3} texture={diag.TextureFill:F3} maskSmooth={diag.MaskSmoothing:F3} " +
         $"meanGain={diag.MeanGain:F3} minGain={diag.MinGain:F3} " +
-        $"levelDrive={diag.LevelDrive:F3} recovery={diag.RecoveryDrive:F3} makeup={diag.MakeupGainDb:F1}dB " +
+        $"levelDrive={diag.LevelDrive:F3} recovery={diag.RecoveryDrive:F3} memory={diag.WeakSignalMemory:F3} makeup={diag.MakeupGainDb:F1}dB " +
         $"floor={diag.FloorReductionDb:F1}dB dr={diag.DynamicRangeDb:F1}dB";
 
     private static void AssertFinite(double value, string label)
