@@ -285,7 +285,13 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             if (!await EnsureNodeAsync().ConfigureAwait(false))
                 throw new InvalidOperationException("Node.js is unavailable — reinstall HamClock from Settings.");
 
-            var port = FreeTcpPort();
+            // Reuse the previously-chosen port (persisted in .env) when it's
+            // still free, so HamClock keeps the SAME loopback origin across
+            // restarts. Its settings (callsign, location, map prefs) live in
+            // localStorage, which is per-origin — a changing port silently
+            // wipes them every launch. Falls back to a fresh free port only on
+            // first run or if the saved one is taken.
+            var port = ResolveStablePort();
             Append($"Starting HamClock server on port {port}…");
 
             // HamClock's own server/config loads .env with precedence over
@@ -774,6 +780,46 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         var port = ((IPEndPoint)l.LocalEndpoint).Port;
         l.Stop();
         return port;
+    }
+
+    /// <summary>
+    /// Prefer the port persisted in <c>.env</c> when it's still free, so the
+    /// HamClock loopback origin is stable across restarts (its UI settings live
+    /// in per-origin localStorage). Falls back to a fresh free port on first
+    /// run or if the saved one is in use.
+    /// </summary>
+    private static int ResolveStablePort()
+    {
+        var envPath = Path.Combine(InstallDir, ".env");
+        if (File.Exists(envPath))
+        {
+            foreach (var raw in File.ReadLines(envPath))
+            {
+                var line = raw.AsSpan().Trim();
+                if (line.StartsWith("PORT=", StringComparison.OrdinalIgnoreCase) &&
+                    int.TryParse(line[5..].Trim(), out var saved) &&
+                    saved is > 0 and <= 65535 && IsPortFree(saved))
+                {
+                    return saved;
+                }
+            }
+        }
+        return FreeTcpPort();
+    }
+
+    private static bool IsPortFree(int port)
+    {
+        try
+        {
+            var l = new TcpListener(IPAddress.Loopback, port);
+            l.Start();
+            l.Stop();
+            return true;
+        }
+        catch (SocketException)
+        {
+            return false;
+        }
     }
 
     private void Append(string line)

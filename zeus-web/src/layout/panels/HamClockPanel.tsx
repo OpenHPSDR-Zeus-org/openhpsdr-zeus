@@ -60,6 +60,9 @@ export function HamClockPanel() {
         // sandbox blocks them otherwise (they work standalone, where there's no
         // sandbox).
         sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+        // Delegate Geolocation into the embed so HamClock's "Use my current
+        // location" works (Permissions-Policy is deny-by-default for iframes).
+        allow="geolocation"
       />
     );
   }
