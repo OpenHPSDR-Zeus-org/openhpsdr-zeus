@@ -71,7 +71,7 @@ const SNAP_RADIUS_PX = 80;
 // deltas to one discrete tick per this many pixels of deltaY.
 const WHEEL_NOTCH_PX = 40;
 
-function snapHz(hz: number): number {
+export function snapHz(hz: number): number {
   if (!Number.isFinite(hz)) return 0;
   const snapped = Math.round(hz / PAN_STEP_HZ) * PAN_STEP_HZ;
   return Math.min(MAX_HZ, Math.max(0, snapped));
