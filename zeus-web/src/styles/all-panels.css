@@ -111,6 +111,37 @@
   opacity: 1;
 }
 
+/* HamClock (and any other iframe-bodied tile) resize fix.
+ *
+ * An <iframe> is its own hit-test root: a pointerdown anywhere over its
+ * rectangle is consumed by the embedded document before the parent-document
+ * RGL resize handle (z-index:2, above) can see it — z-index orders elements
+ * within a document but cannot pull a host handle in front of an iframe's
+ * internal hit-testing. Two pieces fix it:
+ *
+ * 1. `.hamclock-resize-catch` — a transparent host-document layer over the
+ *    tile's SE corner, sitting ABOVE the iframe (z-index:1) but BELOW the RGL
+ *    handle (z-index:2). It gives the host document a real hit surface in the
+ *    corner so the iframe can't swallow corner presses, while the handle
+ *    itself still wins on its own pixels and starts the resize.
+ * 2. Once a drag/resize gesture is live, RGL stamps `.resizing` /
+ *    `.react-draggable-dragging` on the grid item; we drop the iframe's
+ *    pointer-events for the duration so tracking continues over the whole
+ *    iframe surface and settles on release. */
+.hamclock-resize-catch {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 22px;
+  height: 22px;
+  z-index: 1;
+  cursor: se-resize;
+}
+.all-panels-grid .react-grid-item.resizing iframe,
+.all-panels-grid .react-grid-item.react-draggable-dragging iframe {
+  pointer-events: none;
+}
+
 /* Workspace tile — beveled chrome wrapping the panel body. Mirrors the
  * .panel recipe from layout.css so RGL tiles read the same as the legacy
  * fixed-grid panels. */
