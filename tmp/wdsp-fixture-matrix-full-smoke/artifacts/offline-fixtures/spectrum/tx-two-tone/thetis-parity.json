@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "tool": "dsp-fixture-evidence",
+  "evidenceKind": "wdsp-spectrum-summary",
+  "scenarioId": "tx-two-tone",
+  "comparisonId": "thetis-parity",
+  "profile": "wdsp-txa-thetis-defaults",
+  "fixtureStatus": "offline-fixture-ready",
+  "signalPath": "offline",
+  "sampleRateHz": 48000,
+  "wdspRuntimeRid": "win-x64",
+  "wdspRuntimeSha256": "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+  "wdspRuntimeStatus": "found",
+  "tonePowerDb": {
+    "low": -74.40085402512004,
+    "high": -83.53524532279005
+  },
+  "wantedSnrDb": -70.290964,
+  "wantedAdjacentRatioDb": 9.134391,
+  "intermodulationProxy": 15.029127,
+  "summary": "TX two-tone linearity probe.",
+  "notes": [
+    "Portable JSON spectral evidence from actual WdspDspEngine output.",
+    "Rendered FFT/audio artifacts may be attached separately for human review."
+  ]
+}

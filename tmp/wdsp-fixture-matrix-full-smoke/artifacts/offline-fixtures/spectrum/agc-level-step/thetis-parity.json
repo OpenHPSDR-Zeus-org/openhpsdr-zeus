@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "tool": "dsp-fixture-evidence",
+  "evidenceKind": "wdsp-spectrum-summary",
+  "scenarioId": "agc-level-step",
+  "comparisonId": "thetis-parity",
+  "profile": "wdsp-emnr-nr2-thetis-parity",
+  "fixtureStatus": "offline-fixture-ready",
+  "signalPath": "offline",
+  "sampleRateHz": 48000,
+  "wdspRuntimeRid": "win-x64",
+  "wdspRuntimeSha256": "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+  "wdspRuntimeStatus": "found",
+  "tonePowerDb": {
+    "wanted": -55.86908475005824
+  },
+  "wantedSnrDb": -25.580395,
+  "wantedAdjacentRatioDb": 64.130915,
+  "intermodulationProxy": 0,
+  "summary": "Three-level wanted carrier step for AGC pumping checks.",
+  "notes": [
+    "Portable JSON spectral evidence from actual WdspDspEngine output.",
+    "Rendered FFT/audio artifacts may be attached separately for human review."
+  ]
+}

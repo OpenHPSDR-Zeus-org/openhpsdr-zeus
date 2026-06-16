@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "tool": "dsp-fixture-evidence",
+  "evidenceKind": "wdsp-spectrum-summary",
+  "scenarioId": "impulse-noise",
+  "comparisonId": "thetis-parity",
+  "profile": "wdsp-emnr-nr2-thetis-parity",
+  "fixtureStatus": "offline-fixture-ready",
+  "signalPath": "offline",
+  "sampleRateHz": 48000,
+  "wdspRuntimeRid": "win-x64",
+  "wdspRuntimeSha256": "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+  "wdspRuntimeStatus": "found",
+  "tonePowerDb": {
+    "wanted": -67.25880950910978
+  },
+  "wantedSnrDb": -37.662323,
+  "wantedAdjacentRatioDb": 52.74119,
+  "intermodulationProxy": 0,
+  "summary": "Wanted carrier plus periodic impulse noise.",
+  "notes": [
+    "Portable JSON spectral evidence from actual WdspDspEngine output.",
+    "Rendered FFT/audio artifacts may be attached separately for human review."
+  ]
+}

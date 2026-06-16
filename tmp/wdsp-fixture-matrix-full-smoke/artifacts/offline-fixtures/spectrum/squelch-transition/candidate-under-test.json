@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "tool": "dsp-fixture-evidence",
+  "evidenceKind": "wdsp-spectrum-summary",
+  "scenarioId": "squelch-transition",
+  "comparisonId": "candidate-under-test",
+  "profile": "wdsp-nr5-spnr-candidate",
+  "fixtureStatus": "offline-fixture-ready",
+  "signalPath": "offline",
+  "sampleRateHz": 48000,
+  "wdspRuntimeRid": "win-x64",
+  "wdspRuntimeSha256": "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+  "wdspRuntimeStatus": "found",
+  "tonePowerDb": {
+    "wanted": -63.29752411514288
+  },
+  "wantedSnrDb": -34.229257,
+  "wantedAdjacentRatioDb": 56.702476,
+  "intermodulationProxy": 0,
+  "summary": "Noise-signal-noise transition for squelch open/close behavior.",
+  "notes": [
+    "Portable JSON spectral evidence from actual WdspDspEngine output.",
+    "Rendered FFT/audio artifacts may be attached separately for human review."
+  ]
+}

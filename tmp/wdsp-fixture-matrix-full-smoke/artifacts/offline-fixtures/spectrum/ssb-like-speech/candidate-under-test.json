@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "tool": "dsp-fixture-evidence",
+  "evidenceKind": "wdsp-spectrum-summary",
+  "scenarioId": "ssb-like-speech",
+  "comparisonId": "candidate-under-test",
+  "profile": "wdsp-nr5-spnr-candidate",
+  "fixtureStatus": "offline-fixture-ready",
+  "signalPath": "offline",
+  "sampleRateHz": 48000,
+  "wdspRuntimeRid": "win-x64",
+  "wdspRuntimeSha256": "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+  "wdspRuntimeStatus": "found",
+  "tonePowerDb": {
+    "f1": -57.67659817160415,
+    "f2": -57.26874060763808,
+    "f3": -51.64177750743799
+  },
+  "wantedSnrDb": -28.330488,
+  "wantedAdjacentRatioDb": -0.407858,
+  "intermodulationProxy": 0,
+  "summary": "SSB-like formant content with slow speech envelope.",
+  "notes": [
+    "Portable JSON spectral evidence from actual WdspDspEngine output.",
+    "Rendered FFT/audio artifacts may be attached separately for human review."
+  ]
+}

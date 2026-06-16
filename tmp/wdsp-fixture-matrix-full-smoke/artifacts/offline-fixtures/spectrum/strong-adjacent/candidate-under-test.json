@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "tool": "dsp-fixture-evidence",
+  "evidenceKind": "wdsp-spectrum-summary",
+  "scenarioId": "strong-adjacent",
+  "comparisonId": "candidate-under-test",
+  "profile": "wdsp-nr5-spnr-candidate",
+  "fixtureStatus": "offline-fixture-ready",
+  "signalPath": "offline",
+  "sampleRateHz": 48000,
+  "wdspRuntimeRid": "win-x64",
+  "wdspRuntimeSha256": "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+  "wdspRuntimeStatus": "found",
+  "tonePowerDb": {
+    "wanted": -56.53110628970501,
+    "adjacent": -101.6493756449429
+  },
+  "wantedSnrDb": -30.323489,
+  "wantedAdjacentRatioDb": 45.118269,
+  "intermodulationProxy": 0,
+  "summary": "Weak wanted signal beside a strong adjacent blocker.",
+  "notes": [
+    "Portable JSON spectral evidence from actual WdspDspEngine output.",
+    "Rendered FFT/audio artifacts may be attached separately for human review."
+  ]
+}
