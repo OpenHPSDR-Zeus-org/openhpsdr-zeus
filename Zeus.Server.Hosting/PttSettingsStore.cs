@@ -48,14 +48,14 @@ public sealed class PttSettingsStore : IDisposable
     }
 
     /// <summary>Whether hardware PTT-IN is promoted to MOX. Missing row (fresh
-    /// install / pre-feature DB) defaults to ON — the footswitch stays live,
-    /// byte-identical to prior behaviour.</summary>
+    /// install / pre-feature DB) defaults to OFF — hardware PTT-IN keying is
+    /// opt-in; the operator enables the footswitch gate in Radio Settings.</summary>
     public bool Get()
     {
         lock (_sync)
         {
             var e = _rows.FindAll().FirstOrDefault();
-            return e is null ? true : e.Enabled;
+            return e is null ? false : e.Enabled;
         }
     }
 

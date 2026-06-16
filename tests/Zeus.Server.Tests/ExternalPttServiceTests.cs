@@ -64,7 +64,9 @@ public class ExternalPttServiceTests : IDisposable
             var pipeline = new DspPipelineService(Radio, Hub, Array.Empty<IRxAudioSink>(), loggerFactory);
             Tx = new TxService(Radio, pipeline, Hub, NullBandPlanService.Instance, new NullLogger<TxService>());
             Settings = new PttSettingsStore(NullLogger<PttSettingsStore>.Instance, pttDbPath);
-            if (!enabled) Settings.Set(false);
+            // Set explicitly (PTT-IN now defaults OFF / opt-in) so the harness is
+            // deterministic regardless of the store's power-on default.
+            Settings.Set(enabled);
             Service = new ExternalPttService(Radio, Tx, Hub, Settings, new NullLogger<ExternalPttService>());
         }
 
@@ -215,13 +217,13 @@ public class ExternalPttServiceTests : IDisposable
     }
 
     [Fact]
-    public void EnableGate_DefaultsOn()
+    public void EnableGate_DefaultsOff()
     {
         using var store = new PttSettingsStore(NullLogger<PttSettingsStore>.Instance, _pttDbPath);
-        Assert.True(store.Get());
-        store.Set(false);
         Assert.False(store.Get());
         store.Set(true);
         Assert.True(store.Get());
+        store.Set(false);
+        Assert.False(store.Get());
     }
 }

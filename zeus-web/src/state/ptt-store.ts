@@ -15,7 +15,7 @@ import { create } from 'zustand';
 export interface PttStatus {
   /** Live PTT-IN level — true while the hardware footswitch/mic-PTT is held. */
   keyed: boolean;
-  /** Whether hardware PTT is promoted to MOX. Defaults ON server-side. */
+  /** Whether hardware PTT is promoted to MOX. Defaults OFF server-side (opt-in). */
   enabled: boolean;
   /** Fixed release hang in ms (250). Read-only label; knob is out of scope. */
   hangMs: number;
@@ -25,7 +25,7 @@ function parse(raw: unknown): PttStatus {
   const r = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
   return {
     keyed: typeof r.keyed === 'boolean' ? r.keyed : false,
-    enabled: typeof r.enabled === 'boolean' ? r.enabled : true,
+    enabled: typeof r.enabled === 'boolean' ? r.enabled : false,
     hangMs: typeof r.hangMs === 'number' ? r.hangMs : 250,
   };
 }
@@ -62,7 +62,7 @@ interface PttState extends PttStatus {
 
 export const usePttStore = create<PttState>((set, get) => ({
   keyed: false,
-  enabled: true,
+  enabled: false,
   hangMs: 250,
   loaded: false,
   inflight: false,
