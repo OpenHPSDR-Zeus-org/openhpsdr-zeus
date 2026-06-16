@@ -258,6 +258,16 @@ public partial class Program
             .SetSize(InitialWidth, InitialHeight)
             .Center()
             .SetIconFile(iconPath)
+            // Desktop downloads: the embedded webview (macOS WKWebView via Photino,
+            // WebView2 on Windows) has no download delegate Photino exposes, so an
+            // attachment navigation from the HamClock iframe (e.g. its Rig Bridge
+            // installer scripts) is silently dropped. The HamClock HTML is patched
+            // (ZEUS_DL_BRIDGE) to forward such download URLs to the SPA shell, which
+            // relays them here as "download:<url>". We fetch the bytes server-side
+            // (the URL is a loopback sidecar endpoint, reachable by HttpClient) and
+            // save them to the OS Downloads folder, then notify. Coexists with the
+            // existing "stop" message path.
+            .RegisterWebMessageReceivedHandler((sender, msg) => HandleDesktopWebMessage(sender, msg))
             .Load(new Uri(startUrl));
 
         // Translate Ctrl-C into a window close so `dotnet run` (and the installer's
@@ -281,6 +291,84 @@ public partial class Program
         Console.WriteLine("Window closed; stopping backend.");
         app.StopAsync().GetAwaiter().GetResult();
         return 0;
+    }
+
+    // Shared HttpClient for desktop downloads — loopback fetches of attachment
+    // URLs the embedded webview won't download on its own. One instance for the
+    // process lifetime (the standard guidance).
+    private static readonly System.Net.Http.HttpClient DownloadHttp = new();
+
+    /// <summary>
+    /// Handle web messages from the Photino desktop shell. Two shapes:
+    ///   "stop"            — close the window (mirrors RunServerWithStatus).
+    ///   "download:<url>"  — fetch the URL and save it to the Downloads folder.
+    /// The download path exists because the embedded webview drops attachment
+    /// downloads (no Photino download delegate); the HamClock HTML is patched to
+    /// forward such URLs here. Fire-and-forget so the message loop isn't blocked.
+    /// </summary>
+    private static void HandleDesktopWebMessage(object? sender, string msg)
+    {
+        if (sender is not PhotinoWindow w) return;
+        if (msg == "stop") { w.Close(); return; }
+        if (!msg.StartsWith("download:", StringComparison.Ordinal)) return;
+
+        var url = msg["download:".Length..];
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var resp = await DownloadHttp.GetAsync(url).ConfigureAwait(false);
+                resp.EnsureSuccessStatusCode();
+                var bytes = await resp.Content.ReadAsByteArrayAsync().ConfigureAwait(false);
+
+                // Prefer the server-advertised filename; fall back to the URL tail.
+                var cd = resp.Content.Headers.ContentDisposition;
+                var name = cd?.FileNameStar ?? cd?.FileName?.Trim('"');
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    try { name = Path.GetFileName(new Uri(url).AbsolutePath); } catch { name = null; }
+                }
+                if (string.IsNullOrWhiteSpace(name)) name = "download";
+                // Strip any path components a header might smuggle in.
+                name = Path.GetFileName(name);
+
+                // .NET has no SpecialFolder.Downloads — UserProfile/Downloads works
+                // on macOS / Windows / Linux.
+                var dir = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+                Directory.CreateDirectory(dir);
+
+                var path = Path.Combine(dir, name);
+                // Avoid clobbering an existing file — append " (n)".
+                path = UniquePath(path);
+
+                await File.WriteAllBytesAsync(path, bytes).ConfigureAwait(false);
+                // Do NOT call any Photino native UI here (SendNotification etc.):
+                // it must run on the Cocoa main thread and throws an uncaught
+                // NSException off it, which a managed try/catch CANNOT catch — it
+                // terminates the whole process. The file is in ~/Downloads; just log.
+                Console.WriteLine($"[download] saved to {path}");
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[download] failed for {url}: {ex.Message}");
+            }
+        });
+    }
+
+    /// <summary>Return <paramref name="path"/>, or "name (n).ext" if it exists.</summary>
+    private static string UniquePath(string path)
+    {
+        if (!File.Exists(path)) return path;
+        var dir = Path.GetDirectoryName(path) ?? string.Empty;
+        var stem = Path.GetFileNameWithoutExtension(path);
+        var ext = Path.GetExtension(path);
+        for (var i = 1; i < 1000; i++)
+        {
+            var candidate = Path.Combine(dir, $"{stem} ({i}){ext}");
+            if (!File.Exists(candidate)) return candidate;
+        }
+        return path;
     }
 
     private static int RunServerWithStatus(string[] args)

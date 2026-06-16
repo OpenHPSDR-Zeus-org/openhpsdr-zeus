@@ -1620,6 +1620,40 @@ public static class ZeusEndpoints
             await hub.AttachClientAsync(ws, ctx.RequestAborted);
         });
 
+        // -- HamClock embed (optional Node sidecar; see HamClockService) -----
+        // Inert until the operator installs it from Settings → HamClock. The
+        // <iframe> in HamClockWindow points at the sidecar's own port (status
+        // reports it), so HamClock serves its own /api proxy + /assets at the
+        // root of that port with no path rewriting.
+        app.MapGet("/api/hamclock/status", (HamClockService hc) => Results.Ok(hc.Snapshot()));
+
+        app.MapPost("/api/hamclock/install", (HamClockService hc) =>
+        {
+            bool started = hc.BeginInstall();
+            return started
+                ? Results.Accepted("/api/hamclock/status", hc.Snapshot())
+                : Results.Conflict(new { error = "HamClock is already installing or starting." });
+        });
+
+        app.MapPost("/api/hamclock/start", async (HamClockService hc) =>
+        {
+            try
+            {
+                var port = await hc.StartAsync();
+                return Results.Ok(new { port, status = hc.Snapshot() });
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new { error = ex.Message, status = hc.Snapshot() });
+            }
+        });
+
+        app.MapPost("/api/hamclock/stop", (HamClockService hc) =>
+        {
+            hc.Stop();
+            return Results.Ok(hc.Snapshot());
+        });
+
         return app;
     }
 

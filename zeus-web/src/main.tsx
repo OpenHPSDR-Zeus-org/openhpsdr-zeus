@@ -98,6 +98,22 @@ installFetchInterceptor();
 // and re-renders when entries land.
 void loadInstalledPluginUis();
 
+// Desktop download bridge. The embedded HamClock iframe is patched (server-side,
+// ZEUS_DL_BRIDGE) to postMessage attachment-download URLs up to this top frame
+// instead of navigating — the Photino desktop webview otherwise silently drops
+// them. Relay the URL to the C# host (window.external.sendMessage), which fetches
+// + saves it to the Downloads folder. No-op in a plain browser (window.external
+// has no sendMessage), where native downloads already work.
+window.addEventListener('message', (e: MessageEvent) => {
+  const data = e.data as { zeusDownload?: unknown } | null | undefined;
+  const url = data && typeof data === 'object' ? data.zeusDownload : undefined;
+  if (typeof url !== 'string' || !url) return;
+  // Only forward same-origin-shaped http(s) loopback URLs the host can fetch.
+  if (!/^https?:\/\//i.test(url)) return;
+  const ext = (window as unknown as { external?: { sendMessage?: (m: string) => void } }).external;
+  ext?.sendMessage?.('download:' + url);
+});
+
 // Seed the operator's chosen theme on <html> BEFORE React paints. The
 // ThemeApplier component reapplies on store changes; this just prevents
 // a flash of dark-chrome on first render when the operator's saved
