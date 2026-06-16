@@ -358,7 +358,7 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             // by RigBridgeService, talking to Zeus's TCI server on :40001). Both
             // are best-effort — a failure here never blocks HamClock itself.
             try { SeedRigControl(port); } catch (Exception ex) { Append($"  (rigControl seed skipped: {ex.Message})"); }
-            try { await _rigBridge.StartAsync().ConfigureAwait(false); }
+            try { await _rigBridge.StartAsync(port).ConfigureAwait(false); }
             catch (Exception ex) { Append($"  (rig-bridge start skipped: {ex.Message})"); }
 
             return port;

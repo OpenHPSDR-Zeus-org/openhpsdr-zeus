@@ -161,7 +161,7 @@ public sealed class RigBridgeService : IHostedService, IAsyncDisposable
     /// that make Zeus auto-linking work. configVersion 8 matches the agent's
     /// current schema (core/config.js CONFIG_VERSION) so it doesn't run a migration.
     /// </summary>
-    private void WriteConfig(string token)
+    private void WriteConfig(string token, int hamclockPort)
     {
         var path = ConfigPath();
         try
@@ -187,6 +187,11 @@ public sealed class RigBridgeService : IHostedService, IAsyncDisposable
             // rather than flashing a first-run "copy this token" banner.
             root["tokenDisplayed"] = true;
             root["logging"] = true;
+            // The HamClock iframe (served on its own sidecar port) POSTs /freq
+            // cross-origin to this bridge. The agent does EXACT-origin CORS
+            // matching, so HamClock's port MUST be on the allowlist or the
+            // browser silently blocks every spot-click tune (cluster, POTA, map).
+            root["corsOrigins"] = $"http://localhost:{hamclockPort},http://127.0.0.1:{hamclockPort}";
 
             var radio = root["radio"] as JsonObject ?? new JsonObject();
             radio["type"] = "tci";
@@ -265,7 +270,7 @@ public sealed class RigBridgeService : IHostedService, IAsyncDisposable
         }
     }
 
-    public async Task StartAsync()
+    public async Task StartAsync(int hamclockPort)
     {
         lock (_gate) { if (_proc is { HasExited: false }) return; }
 
@@ -276,7 +281,7 @@ public sealed class RigBridgeService : IHostedService, IAsyncDisposable
         }
 
         var token = GetOrCreateApiToken();
-        WriteConfig(token);
+        WriteConfig(token, hamclockPort);
 
         // The rig-bridge is a SEPARATE npm package (its own package.json:
         // node-forge, ws, express, serialport, xmlrpc) — HamClock's root install
