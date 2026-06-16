@@ -153,6 +153,102 @@
   padding-top: 2px;
 }
 
+/* Mini-pan canvas + overlay wrapper. The canvas fills the wrapper; the width
+   pill floats centred over it. touch-action:none keeps pointer drags from
+   being stolen by the browser's scroll/zoom gestures. A faint vignette +
+   scanline (mix-blend:screen) reads the surface as a small scope. */
+.filter-minipan-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  isolation: isolate;
+}
+.filter-minipan-wrap::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background:
+    linear-gradient(90deg, rgba(0, 0, 0, 0.30) 0%, transparent 12%, transparent 88%, rgba(0, 0, 0, 0.30) 100%),
+    repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.025) 0 1px, transparent 1px 4px);
+  mix-blend-mode: screen;
+  opacity: 0.36;
+}
+.filter-minipan-canvas {
+  position: relative;
+  z-index: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+  background: transparent;
+}
+
+/* Live passband-width readout, click-to-edit. Floats at the vertical middle of
+   the mini-pan, horizontally centred over the passband (left set inline) — the
+   focal BW number. Compact mono pill, neutral chip family (no new palette). */
+.filter-minipan-width-pill,
+.filter-minipan-width-input {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  padding: 4px 9px;
+  border-radius: var(--r-sm);
+  color: var(--fg-0);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.13) 0%, rgba(255, 255, 255, 0.02) 48%, rgba(0, 0, 0, 0.18) 100%),
+    rgba(7, 9, 13, 0.78);
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, rgba(255, 255, 255, 0.22));
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.52),
+    0 0 16px color-mix(in srgb, var(--accent) 34%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  text-shadow: 0 0 8px rgba(255, 255, 255, 0.18);
+  z-index: 2;
+  backdrop-filter: blur(7px);
+}
+.filter-minipan-width-pill {
+  cursor: text;
+  appearance: none;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
+.filter-minipan-width-pill:hover {
+  border-color: color-mix(in srgb, var(--accent-bright) 62%, rgba(255, 255, 255, 0.36));
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.17) 0%, rgba(255, 255, 255, 0.04) 48%, rgba(0, 0, 0, 0.16) 100%),
+    rgba(10, 13, 18, 0.82);
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.55),
+    0 0 22px color-mix(in srgb, var(--accent-bright) 48%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.20);
+  transform: translate(-50%, -50%) scale(1.02);
+}
+.filter-minipan-width-input {
+  width: 78px;
+  text-align: center;
+  outline: none;
+  border-color: var(--accent);
+}
+/* Strip number-spinner chrome so the pill stays compact. */
+.filter-minipan-width-input::-webkit-outer-spin-button,
+.filter-minipan-width-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.filter-minipan-width-input { -moz-appearance: textfield; appearance: textfield; }
+
 /* ===== Preset panel (right column) — its own framed card ===== */
 .filter-ribbon__presets {
   background: #2a2d33;
@@ -442,6 +538,15 @@
   color: var(--fg-1);
 }
 :root[data-theme="light"] .filter-ribbon__section-label { color: var(--fg-2); }
+
+/* Mini-pan width pill stays legible against the lighter scope surface. */
+:root[data-theme="light"] .filter-minipan-width-pill,
+:root[data-theme="light"] .filter-minipan-width-input {
+  color: var(--fg-0);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.16) 0%, rgba(255, 255, 255, 0.03) 48%, rgba(0, 0, 0, 0.22) 100%),
+    rgba(8, 10, 14, 0.78);
+}
 
 /* Preset chips — match light-theme button surfaces. Keep active
    blue accent intact; just re-skin the rest state. */
