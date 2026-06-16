@@ -242,11 +242,21 @@ export type PanTuneGestureOptions = {
 };
 
 function readView(receiver: SpectrumReceiver = 'A'): { centerHz: number; spanHz: number } | null {
-  const s = selectDisplaySlice(useDisplayStore.getState(), receiver);
-  if (!s.panDb || s.hzPerPixel <= 0) return null;
+  const state = useDisplayStore.getState();
+  const s = selectDisplaySlice(state, receiver);
+  const fallback = selectDisplaySlice(state, 'A');
+  const width = s.width > 0 ? s.width : fallback.width;
+  const hzPerPixel = s.hzPerPixel > 0 ? s.hzPerPixel : fallback.hzPerPixel;
+  if (width <= 0 || hzPerPixel <= 0) return null;
+  const centerHz =
+    s.width > 0 && s.hzPerPixel > 0
+      ? Number(s.centerHz)
+      : receiver === 'B'
+      ? useConnectionStore.getState().vfoBHz
+      : Number(fallback.centerHz);
   return {
-    centerHz: Number(s.centerHz),
-    spanHz: s.panDb.length * s.hzPerPixel,
+    centerHz,
+    spanHz: width * hzPerPixel,
   };
 }
 

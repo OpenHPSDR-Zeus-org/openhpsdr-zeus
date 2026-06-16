@@ -90,138 +90,126 @@ export function VfoPanel() {
     setVfo(vfoBHz).then(applyState).catch(() => {});
   };
 
-  const laneHeader = (receiver: TxVfo, freqHz: number, enabled = true) => {
+  const toggleRx2 = () => {
+    const enabled = !rx2Enabled;
+    if (enabled) setRxFocus('B');
+    else setRxFocus('A');
+    patchRx2({ enabled });
+  };
+
+  const receiverRow = (receiver: TxVfo, freqHz: number, enabled = true) => {
     const focused = rxFocus === receiver;
     const txSelected = txVfo === receiver;
-    const label = receiver === 'A' ? 'RX1 / VFO A' : 'RX2 / VFO B';
+    const title = receiver === 'A' ? 'RX1 / VFO A' : 'RX2 / VFO B';
+    const label = receiver === 'A' ? 'VFO A' : 'VFO B';
     return (
       <div
         style={{
-          display: 'flex',
+          display: 'grid',
+          gridTemplateColumns: '34px minmax(0, 1fr) auto',
           alignItems: 'center',
           gap: 8,
-          justifyContent: 'space-between',
-          marginBottom: 6,
+          minWidth: 0,
+          padding: 6,
+          border: `1px solid ${focused ? 'var(--accent)' : 'var(--line)'}`,
+          borderRadius: 6,
+          background: focused ? 'rgba(35,126,255,0.08)' : 'rgba(255,255,255,0.018)',
+          opacity: enabled ? 1 : 0.55,
         }}
       >
-        <div style={{ display: 'grid', gap: 2, minWidth: 0 }}>
-          <span className="label-xs" style={{ color: enabled ? 'var(--fg-0)' : 'var(--fg-3)' }}>
-            {label}
-          </span>
-          <span className="label-xs mono">{bandOf(freqHz)} · {(freqHz / 1e6).toFixed(3)} MHz</span>
+        <button
+          type="button"
+          className={`btn sm ${focused ? 'active' : ''}`}
+          disabled={!enabled}
+          onClick={() => setRxFocus(receiver)}
+          title={`Focus ${title}`}
+          aria-label={`Focus ${title}`}
+          style={{ width: 30, minWidth: 30, padding: 0, justifyContent: 'center' }}
+        >
+          {receiver}
+        </button>
+        <div style={{ display: 'grid', gap: 4, minWidth: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, minWidth: 0 }}>
+            <span className="label-xs" style={{ color: enabled ? 'var(--fg-0)' : 'var(--fg-3)' }}>
+              {title}
+            </span>
+            <span className="label-xs mono">{bandOf(freqHz)}</span>
+          </div>
+          <VfoDisplay receiver={receiver} label={label} compact />
         </div>
-        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <button
-            type="button"
-            className={`btn sm ${focused ? 'active' : ''}`}
-            disabled={!enabled}
-            onClick={() => setRxFocus(receiver)}
-            title={`Focus ${label} for CTUN and snap tuning`}
-            aria-label={`Focus ${label}`}
-          >
-            <Headphones size={13} />
-          </button>
-          <button
-            type="button"
-            className={`btn sm ${txSelected ? 'tx' : ''}`}
-            onClick={() => chooseTxVfo(receiver)}
-            title={`Transmit on VFO ${receiver}`}
-            aria-label={`Transmit on VFO ${receiver}`}
-          >
-            <Send size={13} />
-            <span>TX</span>
-          </button>
-        </div>
+        <button
+          type="button"
+          className={`btn sm ${txSelected ? 'tx' : ''}`}
+          disabled={!enabled}
+          onClick={() => chooseTxVfo(receiver)}
+          title={`Transmit on VFO ${receiver}`}
+          aria-label={`Transmit on VFO ${receiver}`}
+          style={{ minWidth: 46, padding: '0 7px', justifyContent: 'center' }}
+        >
+          <Send size={13} />
+          <span>TX</span>
+        </button>
       </div>
     );
   };
 
   return (
-    <div className="freq-panel" style={{ flex: 1, overflow: 'auto', display: 'grid', gap: 10 }}>
-      <section
-        style={{
-          border: `1px solid ${rxFocus === 'A' ? 'var(--accent)' : 'var(--line)'}`,
-          borderRadius: 6,
-          padding: 10,
-          background: rxFocus === 'A' ? 'rgba(35, 126, 255, 0.08)' : 'rgba(255,255,255,0.02)',
-        }}
-      >
-        {laneHeader('A', vfoHz)}
-        <VfoDisplay receiver="A" label="VFO A" />
-      </section>
-
-      <section
-        style={{
-          border: `1px solid ${rxFocus === 'B' ? 'var(--accent)' : 'var(--line)'}`,
-          borderRadius: 6,
-          padding: 10,
-          background: rx2Enabled
-            ? rxFocus === 'B'
-              ? 'rgba(35, 126, 255, 0.08)'
-              : 'rgba(255,255,255,0.02)'
-            : 'rgba(255,255,255,0.01)',
-          opacity: rx2Enabled ? 1 : 0.72,
-        }}
-      >
+    <div className="freq-panel" style={{ flex: 1, overflow: 'auto', display: 'grid', gap: 8 }}>
       <div
         style={{
           display: 'flex',
-          gap: 8,
           alignItems: 'center',
           justifyContent: 'space-between',
-          marginBottom: 8,
+          gap: 6,
+          flexWrap: 'wrap',
         }}
       >
-        <label className="chip" style={{ justifyContent: 'space-between', minWidth: 94 }}>
-          <span className="k">RX2</span>
-          <input
-            type="checkbox"
-            checked={rx2Enabled}
-            onChange={(e) => {
-              const enabled = e.currentTarget.checked;
-              if (enabled) setRxFocus('B');
-              else setRxFocus('A');
-              patchRx2({ enabled });
-            }}
-            aria-label="Enable RX2"
-          />
-        </label>
-        {laneHeader('B', vfoBHz, rx2Enabled)}
+        <button
+          type="button"
+          className={`btn sm ${rx2Enabled ? 'active' : ''}`}
+          onClick={toggleRx2}
+          aria-pressed={rx2Enabled}
+          title={rx2Enabled ? 'Disable RX2' : 'Enable RX2'}
+          style={{ minWidth: 64, justifyContent: 'center' }}
+        >
+          <Headphones size={13} />
+          <span>RX2</span>
+        </button>
+        <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => patchRx2({ vfoBHz: vfoHz })}
+            title="Copy VFO A to VFO B"
+          >
+            <Copy size={13} />
+            <span>A to B</span>
+          </button>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={copyBToA}
+            disabled={!rx2Enabled}
+            title="Copy VFO B to VFO A"
+          >
+            <Copy size={13} />
+            <span>B to A</span>
+          </button>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => swapVfos().then(applyState).catch(() => {})}
+            title="Swap VFO A and VFO B"
+            aria-label="Swap VFO A and VFO B"
+          >
+            <Repeat2 size={14} />
+            <span>Swap</span>
+          </button>
+        </div>
       </div>
-      <VfoDisplay receiver="B" label="VFO B" compact />
-      </section>
 
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        <button
-          type="button"
-          className="btn sm"
-          onClick={() => patchRx2({ vfoBHz: vfoHz })}
-          title="Copy VFO A to VFO B"
-        >
-          <Copy size={13} />
-          <span>A to B</span>
-        </button>
-        <button
-          type="button"
-          className="btn sm"
-          onClick={copyBToA}
-          disabled={!rx2Enabled}
-          title="Copy VFO B to VFO A"
-        >
-          <Copy size={13} />
-          <span>B to A</span>
-        </button>
-        <button
-          type="button"
-          className="btn sm"
-          onClick={() => swapVfos().then(applyState).catch(() => {})}
-          title="Swap VFO A and VFO B"
-          aria-label="Swap VFO A and VFO B"
-        >
-          <Repeat2 size={14} />
-          <span>Swap</span>
-        </button>
-      </div>
+      {receiverRow('A', vfoHz)}
+      {receiverRow('B', vfoBHz, rx2Enabled)}
 
       <div style={{ display: 'grid', gap: 8 }}>
         <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
