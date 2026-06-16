@@ -131,6 +131,26 @@ public static class ZeusHost
             tciBindAddress = persistedTci.BindAddress;
             tciPort = persistedTci.Port;
         }
+
+        // HamClock click-to-tune auto-link: in desktop mode, ensure Zeus's TCI
+        // server is listening on :40001 so the bundled rig-bridge agent (which
+        // HamClockService spawns when HamClock starts) can connect the instant
+        // HamClock comes up — no operator toggle, no restart. Kestrel's listener
+        // is wired at host build (there is no runtime TCI toggle), so we force it
+        // on here. This only changes LISTENER PRESENCE: an idle TCI listener with
+        // no client is inert and never touches the radio / DSP / TX path. Skipped
+        // when the operator has deliberately persisted a TCI config (persistedTci
+        // not null) — their explicit choice (incl. a different port or disabled)
+        // wins. The matching in-process TciOptions.Enabled is forced below so
+        // TciServer.StartAsync doesn't early-return on !Enabled.
+        var desktopAutoTci = persistedTci is null && options.HostMode == ZeusHostMode.Desktop;
+        if (desktopAutoTci)
+        {
+            tciEnabled = true;
+            tciBindAddress = "localhost";
+            tciPort = 40001;
+        }
+
         // PERF_PASS_3_DEBUG: force-disable TCI bind when running a second
         // instance on the same box (Brian's main session keeps :40001).
         // Uncommitted local edit.
@@ -476,6 +496,18 @@ public static class ZeusHost
                 o.Port = pendingTci.Port;
             });
         }
+        else if (desktopAutoTci)
+        {
+            // Mirror the desktop click-to-tune auto-bind into the in-process
+            // TciOptions so TciServer.StartAsync runs (it early-returns on
+            // !Enabled). Same Enabled/Bind/Port the Kestrel listener bound to above.
+            builder.Services.PostConfigure<TciOptions>(o =>
+            {
+                o.Enabled = true;
+                o.BindAddress = "localhost";
+                o.Port = 40001;
+            });
+        }
         builder.Services.AddSingleton<TciConfigStore>();
         builder.Services.AddSingleton<SpotManager>();
         builder.Services.AddSingleton<TciServer>();
@@ -489,6 +521,12 @@ public static class ZeusHost
         // the operator clicks Install in Settings → HamClock; nothing here
         // touches the radio / DSP / TX path. Registered as a hosted service
         // only so its sidecar Node process is killed on Zeus shutdown.
+        // RigBridgeService — the second supervised Node sidecar that auto-links
+        // HamClock click-to-tune to Zeus's TCI server (spawns the bundled
+        // rig-bridge agent in TCI mode). Inert until HamClock starts; killed on
+        // shutdown via its IHostedService. Touches nothing on the radio/DSP/TX path.
+        builder.Services.AddSingleton<RigBridgeService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<RigBridgeService>());
         builder.Services.AddSingleton<HamClockService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<HamClockService>());
 

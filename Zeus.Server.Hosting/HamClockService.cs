@@ -88,6 +88,7 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     private static readonly HttpClient Http = new() { Timeout = TimeSpan.FromMinutes(10) };
 
     private readonly ILogger<HamClockService> _log;
+    private readonly RigBridgeService _rigBridge;
     private readonly object _gate = new();
     private readonly LinkedList<string> _logLines = new();
 
@@ -113,9 +114,10 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     // preinstalled. Override the version only by editing this constant.
     private const string PortableNodeVersion = "v22.11.0";
 
-    public HamClockService(ILogger<HamClockService> log)
+    public HamClockService(ILogger<HamClockService> log, RigBridgeService rigBridge)
     {
         _log = log;
+        _rigBridge = rigBridge;
         // Reflect a prior install on boot so the panel comes up "Installed"
         // without the operator re-downloading every launch.
         if (IsBuilt(InstallDir))
@@ -254,6 +256,7 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             // Geolocation API) via a native-first shim with a coarse IP fallback.
             PatchGeolocationFallback();
             PatchSettingsPersistence();
+            PatchDownloadBridge();
 
             lock (_gate) { _phase = HamClockPhase.Installed; _busy = false; }
             Append("HamClock installed. Click Start to launch the panel.");
@@ -310,6 +313,7 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             // regenerated index.html without the marker (idempotent).
             PatchGeolocationFallback();
             PatchSettingsPersistence();
+            PatchDownloadBridge();
 
             var psi = MakePsi("node", "server.js", InstallDir);
             // Belt-and-suspenders env (overridden by .env, but harmless).
@@ -347,6 +351,16 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
 
             lock (_gate) { _phase = HamClockPhase.Running; }
             Append($"HamClock running on port {port}.");
+
+            // Auto-link click-to-tune (zero operator setup): seed HamClock's
+            // Rig Control setting to point at the bundled rig-bridge agent with a
+            // matching API token, then spawn that agent in TCI mode (config written
+            // by RigBridgeService, talking to Zeus's TCI server on :40001). Both
+            // are best-effort — a failure here never blocks HamClock itself.
+            try { SeedRigControl(port); } catch (Exception ex) { Append($"  (rigControl seed skipped: {ex.Message})"); }
+            try { await _rigBridge.StartAsync().ConfigureAwait(false); }
+            catch (Exception ex) { Append($"  (rig-bridge start skipped: {ex.Message})"); }
+
             return port;
         }
         catch (Exception ex)
@@ -376,6 +390,8 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             try { proc.Kill(entireProcessTree: true); } catch { /* best effort */ }
         }
         proc?.Dispose();
+        // Stopping HamClock also stops its rig-bridge sidecar (lives/dies with it).
+        try { _rigBridge.Stop(); } catch { /* best effort */ }
         Append("HamClock server stopped.");
     }
 
@@ -619,6 +635,18 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             return doc.RootElement.TryGetProperty("version", out var v) ? v.GetString() : null;
         }
         catch { return null; }
+    }
+
+    /// <summary>
+    /// Build a ProcessStartInfo for `node`/`npm` using the SAME resolved Node
+    /// runtime HamClock uses (system PATH, or the private copy via _nodeDir).
+    /// Exposed for the rig-bridge sidecar (RigBridgeService) so both Node
+    /// children share one runtime resolution. Ensures Node is resolved first.
+    /// </summary>
+    internal async Task<ProcessStartInfo?> MakeNodePsiAsync(string tool, string args, string cwd)
+    {
+        if (!await EnsureNodeAsync().ConfigureAwait(false)) return null;
+        return MakePsi(tool, args, cwd);
     }
 
     /// <summary>
@@ -993,6 +1021,141 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             {
                 Append($"  (settings-persistence patch skipped for {rel}: {ex.Message})");
             }
+        }
+    }
+
+    /// <summary>
+    /// Inject a download-forwarding shim into HamClock's served HTML so the
+    /// desktop webview (Photino → WKWebView/WebView2) actually handles attachment
+    /// downloads (e.g. HamClock's Rig Bridge installer scripts). The embed iframe
+    /// has allow-downloads, but the macOS WKWebView Photino wraps has no download
+    /// delegate, so an attachment navigation is silently dropped ("nothing
+    /// happens"). This shim intercepts clicks on download links / the rig-bridge
+    /// download endpoint and posts the absolute URL up to the Zeus SPA shell, which
+    /// hands it to C# (window.external.sendMessage('download:'+url)) to fetch + save
+    /// to disk. Same mechanism as the geo / settings patches; idempotent via the
+    /// ZEUS_DL_BRIDGE marker; re-injected after any rebuild. No-op in a plain
+    /// browser where native downloads already work AND there's no Zeus shell parent.
+    /// </summary>
+    private void PatchDownloadBridge()
+    {
+        const string shim =
+@"<!-- ZEUS_DL_BRIDGE: forward attachment downloads to the Zeus desktop shell so the webview saves them (KB2UKA) -->
+<script>
+(function () {
+  document.addEventListener('click', function (e) {
+    try {
+      var a = e.target && e.target.closest ? e.target.closest('a') : null;
+      if (!a) return;
+      var href = a.getAttribute('href') || a.href || '';
+      if (!href) return;
+      var isDownload = a.hasAttribute('download') || /\/api\/rig-bridge\/download\//.test(href);
+      if (!isDownload) return;
+      // Only intercept when running inside the Zeus desktop shell (a parent
+      // window we can postMessage to). In a standalone browser, let the native
+      // download proceed untouched.
+      if (window.parent === window) return;
+      e.preventDefault();
+      var abs = new URL(href, location.href).href;
+      window.parent.postMessage({ zeusDownload: abs }, '*');
+    } catch (err) {}
+  }, true);
+})();
+</script>
+";
+
+        foreach (var rel in new[] { "dist", "public" })
+        {
+            try
+            {
+                var file = Path.Combine(InstallDir, rel, "index.html");
+                if (!File.Exists(file)) continue;
+                var src = File.ReadAllText(file);
+                if (src.Contains("ZEUS_DL_BRIDGE", StringComparison.Ordinal)) continue; // already patched
+                const string anchor = "</head>";
+                var idx = src.IndexOf(anchor, StringComparison.Ordinal);
+                if (idx < 0)
+                {
+                    Append($"  (note: couldn't inject download bridge into {rel}/index.html — </head> not found)");
+                    continue;
+                }
+                src = src.Insert(idx, shim);
+                File.WriteAllText(file, src);
+                Append($"Patched HamClock download bridge into {rel}/index.html.");
+            }
+            catch (Exception ex)
+            {
+                Append($"  (download bridge patch skipped for {rel}: {ex.Message})");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Seed HamClock's Rig Control setting so clicking a spot tunes the Zeus
+    /// radio with no operator setup. HamClock stores all UI prefs in a single
+    /// JSON blob under the localStorage key <c>openhamclock_config</c>, mirrored
+    /// server-side by its <c>/api/settings</c> store (SETTINGS_SYNC, already
+    /// enabled by EnsureEnvPort). Inside that blob, <c>rigControl</c> is
+    /// <c>{ enabled, host, port, tuneEnabled, autoMode, apiToken }</c>. We GET the
+    /// current blob, merge our rigControl (pointing at the rig-bridge agent on
+    /// :5555 with the SAME api token RigBridgeService writes into the agent
+    /// config), and POST it back. The ZEUS_SETTINGS_PERSIST shim then seeds this
+    /// into localStorage at HamClock boot, so it reads the rigControl on first paint.
+    /// Merge-safe — never overwrites the blob's other keys (callsign, map prefs).
+    /// </summary>
+    private void SeedRigControl(int port)
+    {
+        var token = _rigBridge.GetOrCreateApiToken();
+        var baseUrl = $"http://127.0.0.1:{port}";
+
+        // 1. Read the existing settings store, extract the current config blob.
+        var settings = new System.Text.Json.Nodes.JsonObject();
+        try
+        {
+            var raw = Http.GetStringAsync($"{baseUrl}/api/settings").GetAwaiter().GetResult();
+            if (System.Text.Json.Nodes.JsonNode.Parse(raw) is System.Text.Json.Nodes.JsonObject obj)
+                settings = obj;
+        }
+        catch { /* store may be empty / not yet written — start fresh */ }
+
+        System.Text.Json.Nodes.JsonObject config;
+        try
+        {
+            // Stored as a JSON *string* (the only value shape /api/settings accepts).
+            var inner = settings["openhamclock_config"]?.GetValue<string>();
+            config = (inner is not null
+                ? System.Text.Json.Nodes.JsonNode.Parse(inner) as System.Text.Json.Nodes.JsonObject
+                : null) ?? new System.Text.Json.Nodes.JsonObject();
+        }
+        catch { config = new System.Text.Json.Nodes.JsonObject(); }
+
+        // 2. Merge our rigControl.
+        config["rigControl"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["enabled"] = true,
+            ["host"] = "http://localhost",
+            ["port"] = RigBridgeService.BridgePort,
+            ["tuneEnabled"] = true,
+            ["autoMode"] = false,
+            ["apiToken"] = token,
+        };
+
+        // 3. Re-stringify the blob and POST the full settings set back (the store
+        //    replaces wholesale, so we send every key we read plus our update).
+        settings["openhamclock_config"] = config.ToJsonString();
+        try
+        {
+            var body = settings.ToJsonString();
+            using var content = new StringContent(body, System.Text.Encoding.UTF8, "application/json");
+            using var resp = Http.PostAsync($"{baseUrl}/api/settings", content).GetAwaiter().GetResult();
+            if (resp.IsSuccessStatusCode)
+                Append("Seeded HamClock Rig Control (click-to-tune → rig-bridge :5555 → TCI).");
+            else
+                Append($"  (rigControl seed POST returned {(int)resp.StatusCode})");
+        }
+        catch (Exception ex)
+        {
+            Append($"  (rigControl seed POST failed: {ex.Message})");
         }
     }
 
