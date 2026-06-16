@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "metrics": [
+    {
+      "id": "outputRms",
+      "direction": "informational"
+    },
+    {
+      "id": "clippingCount",
+      "direction": "lower"
+    }
+  ]
+}

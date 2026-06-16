@@ -616,7 +616,7 @@ if (-not [string]::IsNullOrWhiteSpace($BundleDir)) {
     }
 
     if ([string]::IsNullOrWhiteSpace($ReportPath)) {
-        $ReportPath = Join-Path $bundlePath "dsp-fixture-metric-comparison.json"
+        $ReportPath = Join-Path $bundlePath "artifacts\dsp-fixture-metric-comparison.json"
     }
 }
 

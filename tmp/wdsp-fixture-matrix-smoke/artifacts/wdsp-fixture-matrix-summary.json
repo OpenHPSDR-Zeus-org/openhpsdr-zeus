@@ -1,0 +1,52 @@
+﻿{
+    "schemaVersion":  1,
+    "tool":  "run-dsp-wdsp-fixture-matrix",
+    "generatedUtc":  "\/Date(1781619280696)\/",
+    "startedUtc":  "\/Date(1781619261055)\/",
+    "completedUtc":  "\/Date(1781619280696)\/",
+    "bundleDir":  "C:\\Users\\Admin\\Desktop\\openhpsdr-zeus\\tmp\\wdsp-fixture-matrix-smoke",
+    "benchmarkPlanPath":  "C:\\Users\\Admin\\Desktop\\openhpsdr-zeus\\tmp\\wdsp-fixture-matrix-smoke\\benchmark-plan.json",
+    "metricCatalogPath":  "C:\\Users\\Admin\\Desktop\\openhpsdr-zeus\\tmp\\wdsp-fixture-matrix-smoke\\benchmark-metric-catalog.json",
+    "metricsPath":  "C:\\Users\\Admin\\Desktop\\openhpsdr-zeus\\tmp\\wdsp-fixture-matrix-smoke\\artifacts\\offline-fixture-metrics.json",
+    "audioIndexPath":  "C:\\Users\\Admin\\Desktop\\openhpsdr-zeus\\tmp\\wdsp-fixture-matrix-smoke\\artifacts\\audio-render-before-after.json",
+    "spectrumIndexPath":  "C:\\Users\\Admin\\Desktop\\openhpsdr-zeus\\tmp\\wdsp-fixture-matrix-smoke\\artifacts\\spectrum-before-after.json",
+    "runtimeAuditPath":  "C:\\Users\\Admin\\Desktop\\openhpsdr-zeus\\tmp\\wdsp-fixture-matrix-smoke\\artifacts\\wdsp-runtime-artifact-audit.json",
+    "comparisonReportPath":  "C:\\Users\\Admin\\Desktop\\openhpsdr-zeus\\tmp\\wdsp-fixture-matrix-smoke\\artifacts\\dsp-fixture-metric-comparison.json",
+    "comparisonMarkdownPath":  "C:\\Users\\Admin\\Desktop\\openhpsdr-zeus\\tmp\\wdsp-fixture-matrix-smoke\\artifacts\\dsp-fixture-metric-comparison.md",
+    "summaryPath":  "C:\\Users\\Admin\\Desktop\\openhpsdr-zeus\\tmp\\wdsp-fixture-matrix-smoke\\artifacts\\wdsp-fixture-matrix-summary.json",
+    "fixtureScenarioScope":  "offline-fixture-ready",
+    "scenarioCount":  1,
+    "comparisonIds":  [
+                          "current-zeus",
+                          "thetis-parity",
+                          "candidate-under-test"
+                      ],
+    "skippedNonFixtureScenarioIds":  [
+
+                                     ],
+    "evidenceEngine":  "wdsp",
+    "wdspRuntimeRid":  "win-x64",
+    "wdspRuntimeStatus":  "found",
+    "wdspRuntimeSha256":  "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+    "runtimeAuditReadyForWinX64Package":  true,
+    "runtimeAuditWinX64NativeSha256":  "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+    "runtimeHashStatus":  "match",
+    "metricComparisonReady":  true,
+    "metricCoverageReadyForReview":  true,
+    "metricComparisonWdspBackedEvidence":  true,
+    "metricComparisonSourceMetricsHash":  "e0d76feacda779c0452fdd4ea0a4b5f6500d13d2e7daaacc7e12d9936b476489",
+    "metricComparisonRuntimeSha256":  "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+    "regressionCount":  0,
+    "gateFailureCount":  0,
+    "missingScenarioCount":  0,
+    "missingCurrentBaselineCount":  0,
+    "missingThetisBaselineCount":  0,
+    "missingCandidateCount":  0,
+    "missingMetricValueCount":  0,
+    "readyForOfflineReview":  true,
+    "acceptanceLimitations":  [
+                                  "Offline WDSP fixture evidence does not prove G2, on-air, TX/PureSignal, or cross-radio acceptance.",
+                                  "No default DSP behavior should change until strict bundle validation, G2 evidence, and cross-radio evidence pass.",
+                                  "External DSP/ML engines remain opt-in post-demod candidates unless benchmark evidence proves raw WDSP IQ safety."
+                              ]
+}

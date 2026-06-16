@@ -24,6 +24,57 @@ public sealed class DspPipelineAudioSanitizerTests
         return peak;
     }
 
+    private static float DbToLinear(double db) => (float)Math.Pow(10.0, db / 20.0);
+
+    private static Nr5SpnrDiagnosticsDto Nr5Diagnostics(
+        double signalConfidence,
+        double signalProbability,
+        double agcGate,
+        double recoveryDrive,
+        double weakSignalMemory) =>
+        new(
+            SchemaVersion: 7,
+            ChannelId: 0,
+            Run: true,
+            Position: 1,
+            LearnedFrames: 100,
+            Aggressiveness: 0.62,
+            AgcRun: true,
+            TargetRms: 0.075,
+            MaxGain: 48.0,
+            AgcGain: 1.0,
+            AgcGainDb: 0.0,
+            PresencePeak: 0.5,
+            SaliencePeak: 0.3,
+            CoherencePeak: 0.2,
+            RidgePeak: 0.2,
+            MeanGain: 0.2,
+            MinGain: 0.01,
+            SuppressionDb: -14.0,
+            NoiseFloorDb: -20.0,
+            FloorReductionDb: 4.5,
+            DynamicRangeDb: 30.0,
+            SignalProbability: signalProbability,
+            TextureFill: 0.03,
+            MaskSmoothing: 0.32,
+            SignalConfidence: signalConfidence,
+            AgcGate: agcGate,
+            LevelDrive: 0.8,
+            RecoveryDrive: recoveryDrive,
+            WeakSignalMemory: weakSignalMemory,
+            MakeupGain: 1.0,
+            MakeupGainDb: 0.0,
+            InputRms: 0.01,
+            InputDbfs: -40.0,
+            OutputRms: 0.006,
+            OutputDbfs: -44.0,
+            OutputPeak: 0.02,
+            OutputPeakDbfs: -34.0,
+            PeakEvidence: 0.0,
+            PeakLimit: 0.6,
+            PeakLimitDbfs: -4.5,
+            PeakReductionDb: 0.0);
+
     [Fact]
     public void SanitizeAudioBuffer_ClampsOverrangeAndZerosNonFiniteSamples()
     {
@@ -351,6 +402,28 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.Equal(3.5, state.GainDeltaDb, precision: 6);
         Assert.InRange(state.InputRmsDbfs, -60.1, -59.9);
         Assert.InRange(block[^1], 0.00149f, 0.00151f);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_DoesNotRestoreNr5MutedNoiseFloor()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState { GainDb = 24.0 };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-47.4));
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.276,
+            signalProbability: 0.121,
+            agcGate: 0.458,
+            recoveryDrive: 0.244,
+            weakSignalMemory: 0.152);
+
+        DspPipelineService.ApplyRxAudioLeveler(block, ref state, nr5);
+
+        Assert.InRange(state.DesiredGainDb, 9.5, 13.5);
+        Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
+        Assert.True(state.GainDeltaDb < 0.0);
+        Assert.InRange(state.OutputRmsDbfs, -38.5, -33.0);
         Assert.False(state.OutputLimited);
     }
 

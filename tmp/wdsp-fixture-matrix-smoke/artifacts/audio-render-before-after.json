@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "tool": "dsp-fixture-evidence",
+  "generatedUtc": "2026-06-16T14:14:34.7247537+00:00",
+  "artifactId": "audio-render-before-after",
+  "fixtureScenarioScope": "offline-fixture-ready",
+  "evidenceEngine": "wdsp",
+  "wdspRuntimeRid": "win-x64",
+  "wdspRuntimeSha256": "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+  "wdspRuntimeStatus": "found",
+  "scenarioCount": 1,
+  "fileCount": 3,
+  "files": [
+    {
+      "path": "artifacts/offline-fixtures/audio/weak-cw-carrier/current-zeus.json",
+      "scenarioId": "weak-cw-carrier",
+      "comparisonId": "current-zeus",
+      "kind": "wdsp-rx-audio-render-summary",
+      "sampleRateHz": 48000,
+      "sampleCount": 16384,
+      "sha256": "F02F6C3BFA61FB731AD6CDA357194921FC0A68BB22402098CE31C991A7D4834C"
+    },
+    {
+      "path": "artifacts/offline-fixtures/audio/weak-cw-carrier/thetis-parity.json",
+      "scenarioId": "weak-cw-carrier",
+      "comparisonId": "thetis-parity",
+      "kind": "wdsp-rx-audio-render-summary",
+      "sampleRateHz": 48000,
+      "sampleCount": 16384,
+      "sha256": "5C90A390A9792C9ACF4C096A100AF50B4335FC547A7B965650D05F5DE9FD6381"
+    },
+    {
+      "path": "artifacts/offline-fixtures/audio/weak-cw-carrier/candidate-under-test.json",
+      "scenarioId": "weak-cw-carrier",
+      "comparisonId": "candidate-under-test",
+      "kind": "wdsp-rx-audio-render-summary",
+      "sampleRateHz": 48000,
+      "sampleCount": 16384,
+      "sha256": "525926D153D4888689FAB2E5D4EC76AF77C5842B24A4D87B814AB5F61D2ADD8C"
+    }
+  ]
+}

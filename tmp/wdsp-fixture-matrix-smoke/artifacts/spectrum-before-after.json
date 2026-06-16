@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "tool": "dsp-fixture-evidence",
+  "generatedUtc": "2026-06-16T14:14:34.7247537+00:00",
+  "artifactId": "spectrum-before-after",
+  "fixtureScenarioScope": "offline-fixture-ready",
+  "evidenceEngine": "wdsp",
+  "wdspRuntimeRid": "win-x64",
+  "wdspRuntimeSha256": "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+  "wdspRuntimeStatus": "found",
+  "scenarioCount": 1,
+  "fileCount": 3,
+  "files": [
+    {
+      "path": "artifacts/offline-fixtures/spectrum/weak-cw-carrier/current-zeus.json",
+      "scenarioId": "weak-cw-carrier",
+      "comparisonId": "current-zeus",
+      "kind": "wdsp-spectrum-summary",
+      "sampleRateHz": 48000,
+      "sha256": "6512478ED3A7733FB171B043E2FB248CE4460C69CCA31162C461584787FB8F12"
+    },
+    {
+      "path": "artifacts/offline-fixtures/spectrum/weak-cw-carrier/thetis-parity.json",
+      "scenarioId": "weak-cw-carrier",
+      "comparisonId": "thetis-parity",
+      "kind": "wdsp-spectrum-summary",
+      "sampleRateHz": 48000,
+      "sha256": "D51206ED6B1CCDD4449759EB71D812E80CCB8E01CBDBD39A2FB91617AE358FAE"
+    },
+    {
+      "path": "artifacts/offline-fixtures/spectrum/weak-cw-carrier/candidate-under-test.json",
+      "scenarioId": "weak-cw-carrier",
+      "comparisonId": "candidate-under-test",
+      "kind": "wdsp-spectrum-summary",
+      "sampleRateHz": 48000,
+      "sha256": "73203C3E149F9D1A7D3D2B692298DFA7486718AEEDAFFE3F35996E6133A0DB68"
+    }
+  ]
+}

@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "tool": "dsp-fixture-evidence",
+  "generatedUtc": "2026-06-16T14:14:34.7247537+00:00",
+  "benchmarkPlanPath": "benchmark-plan.json",
+  "metricCatalogPath": "benchmark-metric-catalog.json",
+  "fixtureScenarioScope": "offline-fixture-ready",
+  "evidenceEngine": "wdsp",
+  "wdspRuntimeRid": "win-x64",
+  "wdspRuntimePath": "runtimes/win-x64/native/wdsp.dll",
+  "wdspRuntimePathKind": "app-output-relative",
+  "wdspRuntimeFileName": "wdsp.dll",
+  "wdspRuntimeLength": 5598208,
+  "wdspRuntimeSha256": "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+  "wdspRuntimeStatus": "found",
+  "scenarioCount": 1,
+  "comparisonIds": [
+    "current-zeus",
+    "thetis-parity",
+    "candidate-under-test"
+  ],
+  "generatedScenarioIds": [
+    "weak-cw-carrier"
+  ],
+  "skippedNonFixtureScenarioIds": [],
+  "acceptanceLimitations": [
+    "WDSP-backed offline fixture evidence exercises WdspDspEngine RXA/TXA but does not prove on-air or hardware acceptance.",
+    "Thetis parity still requires source parity review plus G2 live/bench evidence.",
+    "PureSignal-safe bypass and cross-radio evidence remain separate default-graduation gates."
+  ],
+  "scenarios": [
+    {
+      "scenarioId": "weak-cw-carrier",
+      "scenarioName": "Weak CW carrier",
+      "fixtureStatus": "offline-fixture-ready",
+      "signalPath": "RXA",
+      "fixtureSummary": "Weak coherent carrier in broadband noise.",
+      "comparisons": [
+        {
+          "comparisonId": "current-zeus",
+          "source": "wdsp-fixture-runner",
+          "profile": "wdsp-current-nr-off",
+          "metrics": {
+            "outputRms": 0.215208,
+            "clippingCount": 0
+          },
+          "gates": [
+            {
+              "id": "weaksignalpreserved",
+              "passed": true,
+              "status": "pass",
+              "note": "WDSP offline fixture executed; reviewer must still judge hardware/on-air evidence for this acceptance gate."
+            }
+          ],
+          "evidence": {
+            "audioPath": "artifacts/offline-fixtures/audio/weak-cw-carrier/current-zeus.json",
+            "spectrumPath": "artifacts/offline-fixtures/spectrum/weak-cw-carrier/current-zeus.json"
+          }
+        },
+        {
+          "comparisonId": "thetis-parity",
+          "source": "wdsp-fixture-runner",
+          "profile": "wdsp-emnr-nr2-thetis-parity",
+          "metrics": {
+            "outputRms": 0.044105,
+            "clippingCount": 0
+          },
+          "gates": [
+            {
+              "id": "weaksignalpreserved",
+              "passed": true,
+              "status": "pass",
+              "note": "WDSP offline fixture executed; reviewer must still judge hardware/on-air evidence for this acceptance gate."
+            }
+          ],
+          "evidence": {
+            "audioPath": "artifacts/offline-fixtures/audio/weak-cw-carrier/thetis-parity.json",
+            "spectrumPath": "artifacts/offline-fixtures/spectrum/weak-cw-carrier/thetis-parity.json"
+          }
+        },
+        {
+          "comparisonId": "candidate-under-test",
+          "source": "wdsp-fixture-runner",
+          "profile": "wdsp-nr5-spnr-candidate",
+          "metrics": {
+            "outputRms": 0.035999,
+            "clippingCount": 0
+          },
+          "gates": [
+            {
+              "id": "weaksignalpreserved",
+              "passed": true,
+              "status": "pass",
+              "note": "WDSP offline fixture executed; reviewer must still judge hardware/on-air evidence for this acceptance gate."
+            }
+          ],
+          "evidence": {
+            "audioPath": "artifacts/offline-fixtures/audio/weak-cw-carrier/candidate-under-test.json",
+            "spectrumPath": "artifacts/offline-fixtures/spectrum/weak-cw-carrier/candidate-under-test.json"
+          }
+        }
+      ]
+    }
+  ]
+}

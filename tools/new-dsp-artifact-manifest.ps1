@@ -317,10 +317,10 @@ if (-not $seenArtifactIds.ContainsKey("fixture-metric-comparison-report")) {
         -SeenArtifactIds $seenArtifactIds `
         -Id "fixture-metric-comparison-report" `
         -Kind "comparison-json" `
-        -Source "tools/compare-dsp-fixture-metrics.ps1" `
-        -Purpose "Summarize candidate-vs-current-Zeus and candidate-vs-Thetis metric deltas, regressions, missing baselines, and gate failures before strict bundle acceptance." `
-        -Cadence "once-after-offline-fixture-metrics" `
-        -Path "dsp-fixture-metric-comparison.json" `
+        -Source "tools/run-dsp-wdsp-fixture-matrix.ps1" `
+        -Purpose "Summarize candidate-vs-current-Zeus and candidate-vs-Thetis metric deltas, regressions, missing baselines, gate failures, and WDSP runtime hash alignment before strict bundle acceptance." `
+        -Cadence "once-after-wdsp-offline-fixture-matrix" `
+        -Path "artifacts/dsp-fixture-metric-comparison.json" `
         -Required $true `
         -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds")
 }
@@ -388,8 +388,8 @@ $output = [ordered]@{
         "Run audit-wdsp-native-symbols.ps1 with -RequireBinaryExports for the required wdsp-native-symbol-audit.json before accepting native or P/Invoke changes.",
         "Run audit-wdsp-runtime-artifacts.ps1 for the required wdsp-runtime-artifact-audit.json before claiming packaged NR4/NR5 support for any RID.",
         "For plural audio, spectrum, and trace evidence, store an index JSON at the generated path with a files array of bundle-relative evidence file paths plus scenario/candidate metadata.",
-        "Use run-dsp-wdsp-fixture-evidence.ps1 with -BundleDir to generate WDSP-backed offline fixture metrics plus portable audio/spectrum evidence indexes before running fixture comparison; run-dsp-offline-fixture-evidence.ps1 is only a deterministic schema fallback.",
-        "Run compare-dsp-fixture-metrics.ps1 after offline-fixture-metrics.json is filled; strict validation requires dsp-fixture-metric-comparison.json.",
+        "Use run-dsp-wdsp-fixture-matrix.ps1 with -BundleDir to generate WDSP-backed offline fixture metrics, portable audio/spectrum evidence indexes, runtime audit, and dsp-fixture-metric-comparison.json in one repeatable step.",
+        "run-dsp-offline-fixture-evidence.ps1 is only a deterministic schema fallback; strict validation requires WDSP-backed fixture comparison evidence.",
         "Run validate-dsp-modernization-bundle.ps1 with -RequireArtifactFiles only after every required path exists and is non-empty."
     )
     artifacts = @($artifacts.ToArray())

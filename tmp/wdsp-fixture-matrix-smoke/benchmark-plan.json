@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "firstHardwareTarget": "G2",
+  "globalAcceptanceGates": [
+    "No weak-signal loss",
+    "No TX clipping",
+    "G2 first-pass validation",
+    "non-G2 cross-radio validation"
+  ],
+  "scenarios": [
+    {
+      "id": "weak-cw-carrier",
+      "name": "Weak CW carrier",
+      "fixtureStatus": "offline-fixture-ready",
+      "signalPath": "RXA",
+      "requiredComparisons": [
+        "current-zeus",
+        "thetis-parity",
+        "candidate-under-test"
+      ],
+      "requiredMetrics": [
+        "outputRms",
+        "clippingCount"
+      ],
+      "acceptanceGates": [
+        "weak-signal-preserved"
+      ]
+    }
+  ]
+}

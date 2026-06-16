@@ -253,7 +253,28 @@ public class DspPipelineService : BackgroundService,
         return peak;
     }
 
-    internal static void ApplyRxAudioLeveler(Span<float> samples, ref RxAudioLevelerState state)
+    private static double ClampUnit(double value) =>
+        double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
+
+    private static double Nr5LevelerSpeechEvidence(Nr5SpnrDiagnosticsDto nr5)
+    {
+        double confidence = ClampUnit((nr5.SignalConfidence - 0.27) / 0.16);
+        double probability = ClampUnit((nr5.SignalProbability - 0.12) / 0.16);
+        double gate = ClampUnit((nr5.AgcGate - 0.42) / 0.36);
+        double memory = ClampUnit((nr5.WeakSignalMemory - 0.18) / 0.36);
+        double recovery = ClampUnit((nr5.RecoveryDrive - 0.24) / 0.28);
+        return ClampUnit(
+            0.30 * confidence
+            + 0.20 * probability
+            + 0.22 * gate
+            + 0.16 * memory
+            + 0.12 * recovery);
+    }
+
+    internal static void ApplyRxAudioLeveler(
+        Span<float> samples,
+        ref RxAudioLevelerState state,
+        Nr5SpnrDiagnosticsDto? nr5Diagnostics = null)
     {
         if (samples.Length == 0) return;
 
@@ -296,8 +317,30 @@ public class DspPipelineService : BackgroundService,
             desiredDb = Math.Min(desiredDb, peakHeadroomDb);
         }
         desiredDb = Math.Clamp(desiredDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
-
         double currentDb = double.IsFinite(state.GainDb) ? state.GainDb : 0.0;
+        if (nr5Diagnostics is { Run: true } nr5)
+        {
+            double crestDb = inputPeakDbfs - inputRmsDbfs;
+            double speechEvidence = Nr5LevelerSpeechEvidence(nr5);
+            double quietFloorDrive = ClampUnit((-34.0 - inputRmsDbfs) / 16.0);
+            double lowEvidenceDrive = ClampUnit((0.56 - speechEvidence) / 0.46);
+            double flatFloorDrive = double.IsFinite(crestDb)
+                ? ClampUnit((11.0 - crestDb) / 5.0)
+                : 1.0;
+            double mutedFloorDrive = quietFloorDrive
+                * lowEvidenceDrive
+                * (0.65 + 0.35 * flatFloorDrive);
+
+            if (mutedFloorDrive > 0.0 && desiredDb > 0.0)
+            {
+                double nr5NoiseFloorBoostCeilingDb = Math.Clamp(
+                    24.0 - 18.0 * mutedFloorDrive,
+                    10.0,
+                    24.0);
+                desiredDb = Math.Min(desiredDb, nr5NoiseFloorBoostCeilingDb);
+            }
+        }
+
         double nextDb;
         double memoryDb = currentDb;
         bool boostSlewLimited = false;
@@ -3542,8 +3585,17 @@ public class DspPipelineService : BackgroundService,
                 // Final receive loudness guard. WDSP AGC and NR have already
                 // run by this point (and any RX audio plugin has had its shot),
                 // so weak cleaned audio can be lifted without letting a sudden
-                // strong signal blast the speaker.
-                ApplyRxAudioLeveler(audioBuf.AsSpan(0, audioSampleCount), ref _rxAudioLeveler);
+                // strong signal blast the speaker. NR5 diagnostics prevent the
+                // leveler from restoring noise blocks that NR5 intentionally
+                // pushed into the floor.
+                Nr5SpnrDiagnosticsDto? nr5LevelerDiagnostics =
+                    (state.Nr?.NrMode == NrMode.Nr5 && engine is WdspDspEngine wdspLeveler)
+                        ? wdspLeveler.TryGetNr5SpnrDiagnostics(channel)
+                        : null;
+                ApplyRxAudioLeveler(
+                    audioBuf.AsSpan(0, audioSampleCount),
+                    ref _rxAudioLeveler,
+                    nr5LevelerDiagnostics);
 
                 // CW sidetone is mixed (+=) into the RX block so every
                 // downstream sink — browser WS, native audio, TCI audio

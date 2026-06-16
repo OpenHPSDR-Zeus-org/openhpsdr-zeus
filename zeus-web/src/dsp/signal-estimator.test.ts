@@ -387,7 +387,7 @@ describe('signal estimator — spatial floor', () => {
     const agc = new Float32Array(WIDTH);
     enhanceInto(spec, agc);
 
-    expect(agc[150]!).toBeGreaterThan(fixed[150]! + 0.05);
+    expect(agc[150]!).toBeGreaterThan(fixed[150]! + 0.01);
     expect(agc[0]!).toBe(0);
   });
 

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "tool": "dsp-fixture-evidence",
+  "evidenceKind": "wdsp-spectrum-summary",
+  "scenarioId": "weak-cw-carrier",
+  "comparisonId": "current-zeus",
+  "profile": "wdsp-current-nr-off",
+  "fixtureStatus": "offline-fixture-ready",
+  "signalPath": "RXA",
+  "sampleRateHz": 48000,
+  "wdspRuntimeRid": "win-x64",
+  "wdspRuntimeSha256": "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+  "wdspRuntimeStatus": "found",
+  "tonePowerDb": {
+    "wanted": -47.77642933064439
+  },
+  "wantedSnrDb": -34.432016,
+  "wantedAdjacentRatioDb": 72.223571,
+  "intermodulationProxy": 0,
+  "summary": "Weak coherent carrier in broadband noise.",
+  "notes": [
+    "Portable JSON spectral evidence from actual WdspDspEngine output.",
+    "Rendered FFT/audio artifacts may be attached separately for human review."
+  ]
+}

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "hardwareTarget": "G2",
+  "scenarioIds": [
+    "weak-cw-carrier"
+  ],
+  "requiredArtifacts": [
+    {
+      "id": "live-diagnostics-json",
+      "kind": "endpoint-json",
+      "required": false
+    },
+    {
+      "id": "benchmark-plan-json",
+      "kind": "endpoint-json",
+      "required": false
+    },
+    {
+      "id": "wdsp-native-symbol-audit",
+      "kind": "symbol-audit-json",
+      "required": false
+    },
+    {
+      "id": "wdsp-runtime-artifact-audit",
+      "kind": "runtime-audit-json",
+      "required": true,
+      "scenarioIds": [
+        "weak-cw-carrier"
+      ]
+    },
+    {
+      "id": "offline-fixture-metrics",
+      "kind": "metrics-json",
+      "required": true,
+      "scenarioIds": [
+        "weak-cw-carrier"
+      ]
+    }
+  ]
+}

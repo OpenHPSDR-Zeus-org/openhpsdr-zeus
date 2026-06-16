@@ -455,7 +455,7 @@ function Get-EvidenceGateRecords {
                 -Ready:$metricComparisonReady `
                 -Status $metricComparisonStatus `
                 -Detail "present=$(Get-JsonValue $Validation "metricComparisonPresent"); sourceEngine=$(Get-JsonValue $Validation "offlineFixtureMetricsEvidenceEngine"); comparisonEngine=$(Get-JsonValue $Validation "metricComparisonEvidenceEngine"); wdspBacked=$(Get-JsonValue $Validation "metricComparisonWdspBackedEvidence"); sourceHash=$(Get-JsonValue $Validation "metricComparisonSourceMetricsHashStatus"); runtimeHash=$(Get-JsonValue $Validation "metricComparisonWdspRuntimeHashStatus"); runtimeArtifactHash=$(Get-JsonValue $Validation "offlineFixtureMetricsRuntimeArtifactHashStatus"); scope=$(Get-JsonValue $Validation "metricComparisonFixtureScenarioScope"); skippedNonFixture=$(Get-JsonValue $Validation "metricComparisonSkippedNonFixtureScenarioCount"); regressions=$(Get-JsonValue $Validation "metricComparisonRegressionCount"); gateFailures=$(Get-JsonValue $Validation "metricComparisonGateFailureCount"); missingScenarios=$(Get-JsonValue $Validation "metricComparisonMissingScenarioCount"); missingCurrent=$(Get-JsonValue $Validation "metricComparisonMissingCurrentBaselineCount"); missingThetis=$(Get-JsonValue $Validation "metricComparisonMissingThetisBaselineCount"); missingCandidates=$(Get-JsonValue $Validation "metricComparisonMissingCandidateCount"); missingValues=$(Get-JsonValue $Validation "metricComparisonMissingMetricValueCount")" `
-                -Remediation "Run run-dsp-wdsp-fixture-evidence.ps1, then compare-dsp-fixture-metrics.ps1, and resolve regressions before acceptance review.")) | Out-Null
+                -Remediation "Run run-dsp-wdsp-fixture-matrix.ps1 and resolve fixture, runtime, or metric regressions before acceptance review.")) | Out-Null
 
     $liveTraceComparisonReady = Test-Truthy (Get-JsonValue $Validation "liveTraceComparisonReady")
     $liveTraceComparisonStatus = if ($liveTraceComparisonReady) { "ready" } else { "not-ready" }
@@ -801,8 +801,7 @@ function Add-AcceptanceActionForGate {
         }
         "fixture-metric-comparison" {
             $fixtureComparisonCommandSteps = @(
-                'powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-wdsp-fixture-evidence.ps1 -BundleDir "$bundleDir" -Force',
-                'powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-fixture-metrics.ps1 -BundleDir "$bundleDir" -FailOnRegression'
+                'powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-wdsp-fixture-matrix.ps1 -BundleDir "$bundleDir" -Force'
             )
             $Actions.Add((New-AcceptanceActionRecord `
                         -ActionId "run-offline-fixture-comparison" `
@@ -814,7 +813,7 @@ function Add-AcceptanceActionForGate {
                         -BlocksDefaultChange:$true `
                         -Reason $reason `
                         -CommandSteps $fixtureComparisonCommandSteps `
-                        -ExpectedArtifact 'dsp-fixture-metric-comparison.json' `
+                        -ExpectedArtifact 'artifacts/dsp-fixture-metric-comparison.json' `
                         -FollowUp "Resolve weak-signal, pumping, clipping, latency, or artifact regressions before live review; deterministic fixture evidence is only a schema fallback, not default-graduation proof.")) | Out-Null
         }
         "live-trace-comparison" {
@@ -1256,7 +1255,7 @@ if ((Test-Truthy (Get-JsonValue $validation "metricComparisonPresent")) -and
     if ([string]::IsNullOrWhiteSpace($engineText)) {
         $engineText = "missing"
     }
-    $recommendations.Add("Regenerate offline fixture evidence with run-dsp-wdsp-fixture-evidence.ps1; current fixture comparison evidenceEngine='$engineText' is not acceptable for DSP graduation.") | Out-Null
+    $recommendations.Add("Regenerate offline fixture evidence with run-dsp-wdsp-fixture-matrix.ps1; current fixture comparison evidenceEngine='$engineText' is not acceptable for DSP graduation.") | Out-Null
 }
 if ((Test-Truthy (Get-JsonValue $validation "offlineFixtureMetricsPresent")) -and
     -not (Test-Truthy (Get-JsonValue $validation "offlineFixtureMetricsWdspBackedEvidence"))) {
@@ -1264,20 +1263,20 @@ if ((Test-Truthy (Get-JsonValue $validation "offlineFixtureMetricsPresent")) -an
     if ([string]::IsNullOrWhiteSpace($engineText)) {
         $engineText = "missing"
     }
-    $recommendations.Add("Regenerate artifacts/offline-fixture-metrics.json with run-dsp-wdsp-fixture-evidence.ps1; current source metrics evidenceEngine='$engineText' is not WDSP-backed.") | Out-Null
+    $recommendations.Add("Regenerate artifacts/offline-fixture-metrics.json with run-dsp-wdsp-fixture-matrix.ps1; current source metrics evidenceEngine='$engineText' is not WDSP-backed.") | Out-Null
 }
 $sourceHashStatus = [string](Get-JsonValue $validation "metricComparisonSourceMetricsHashStatus")
 if ((Test-Truthy (Get-JsonValue $validation "metricComparisonPresent")) -and
     -not [string]::IsNullOrWhiteSpace($sourceHashStatus) -and
     -not [string]::Equals($sourceHashStatus, "match", [StringComparison]::OrdinalIgnoreCase)) {
-    $recommendations.Add("Rerun compare-dsp-fixture-metrics.ps1 after regenerating or finalizing offline fixture metrics; source metrics hash status is '$sourceHashStatus'.") | Out-Null
+    $recommendations.Add("Rerun run-dsp-wdsp-fixture-matrix.ps1 after regenerating or finalizing offline fixture metrics; source metrics hash status is '$sourceHashStatus'.") | Out-Null
 }
 $runtimeHashStatus = [string](Get-JsonValue $validation "metricComparisonWdspRuntimeHashStatus")
 if ((Test-Truthy (Get-JsonValue $validation "metricComparisonPresent")) -and
     -not [string]::IsNullOrWhiteSpace($runtimeHashStatus) -and
     -not [string]::Equals($runtimeHashStatus, "match", [StringComparison]::OrdinalIgnoreCase) -and
     -not [string]::Equals($runtimeHashStatus, "not-wdsp-backed", [StringComparison]::OrdinalIgnoreCase)) {
-    $recommendations.Add("Regenerate the fixture comparison from the current offline fixture metrics; WDSP runtime hash status is '$runtimeHashStatus'.") | Out-Null
+    $recommendations.Add("Regenerate the WDSP fixture matrix from the current offline fixture metrics; WDSP runtime hash status is '$runtimeHashStatus'.") | Out-Null
 }
 $runtimeArtifactHashStatus = [string](Get-JsonValue $validation "offlineFixtureMetricsRuntimeArtifactHashStatus")
 if ((Test-Truthy (Get-JsonValue $validation "offlineFixtureMetricsPresent")) -and

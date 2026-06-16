@@ -127,8 +127,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnosti
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-live-diagnostics-history.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-history.json
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.json -FailOnRegression
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-traces.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselinePath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-baseline.jsonl -CandidatePath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace.jsonl -FailOnRegression
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-wdsp-fixture-evidence.ps1 -BundleDir captures\dsp-modernization\<timestamp> -Force
-powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-fixture-metrics.ps1 -BundleDir captures\dsp-modernization\<timestamp> -FailOnRegression
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-wdsp-fixture-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -Force
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\validate-dsp-modernization-bundle.ps1 -BundleDir captures\dsp-modernization\<timestamp>
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\validate-dsp-modernization-bundle.ps1 -BundleDir captures\dsp-modernization\<timestamp> -RequireArtifactFiles
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-modernization-validation-report.ps1 -BundleDir captures\dsp-modernization\<timestamp> -FailOnIssues
@@ -515,15 +514,19 @@ and that at least one gate outcome is recorded. Metric names are normalized for 
 }
 ```
 
-Use `tools/run-dsp-wdsp-fixture-evidence.ps1` to create the offline WDSP fixture artifact set for a
-capture bundle. It reads `benchmark-plan.json` and `benchmark-metric-catalog.json`, selects scenarios
-whose `fixtureStatus` is `offline-fixture-ready`, feeds the deterministic RX IQ and TX audio
-fixtures through `WdspDspEngine`, and writes `artifacts/offline-fixture-metrics.json`,
+Use `tools/run-dsp-wdsp-fixture-matrix.ps1` to create the offline WDSP fixture artifact set for a
+capture bundle in one repeatable command. It runs the WDSP-backed fixture producer, packaged runtime
+artifact audit, and fixture comparator, then writes `artifacts/wdsp-fixture-matrix-summary.json`.
+The underlying fixture producer reads `benchmark-plan.json` and `benchmark-metric-catalog.json`,
+selects scenarios whose `fixtureStatus` is `offline-fixture-ready`, feeds the deterministic RX IQ and
+TX audio fixtures through `WdspDspEngine`, and writes `artifacts/offline-fixture-metrics.json`,
 `artifacts/audio-render-before-after.json`, and `artifacts/spectrum-before-after.json` with
-bundle-relative evidence file paths. This producer proves offline RXA/TXA behavior through the same
-native WDSP engine Zeus ships, but it still does not prove G2, on-air, PureSignal, or cross-radio
-acceptance. `tools/run-dsp-offline-fixture-evidence.ps1` remains available as a deterministic schema
-fallback only; it should not be used as default-graduation proof.
+bundle-relative evidence file paths. The matrix wrapper also writes
+`artifacts/wdsp-runtime-artifact-audit.json` and `artifacts/dsp-fixture-metric-comparison.json` so
+strict validation sees the same artifact paths every time. This producer proves offline RXA/TXA
+behavior through the same native WDSP engine Zeus ships, but it still does not prove G2, on-air,
+PureSignal, or cross-radio acceptance. `tools/run-dsp-offline-fixture-evidence.ps1` remains
+available as a deterministic schema fallback only; it should not be used as default-graduation proof.
 
 WDSP-backed fixture metrics also carry native runtime identity fields:
 `wdspRuntimeRid`, `wdspRuntimePath`, `wdspRuntimeLength`, `wdspRuntimeSha256`, and
@@ -532,10 +535,11 @@ WDSP-backed fixture metrics also carry native runtime identity fields:
 `wdspRuntimeSha256` before setting `readyForReview=true`. This prevents a benchmark win from being
 detached from the exact `wdsp.dll`/`libwdsp` binary that produced it.
 
-Run `tools/compare-dsp-fixture-metrics.ps1` after filling `offline-fixture-metrics.json`. It reads
-the captured benchmark plan, metric catalog, and metrics artifact, compares every candidate against
-`current-zeus` and `thetis-parity`, writes `dsp-fixture-metric-comparison.json` plus a Markdown
-summary, and can fail a quality gate with `-FailOnRegression`. Metric directions come from
+`tools/run-dsp-wdsp-fixture-matrix.ps1` runs `tools/compare-dsp-fixture-metrics.ps1` after filling
+`offline-fixture-metrics.json`. The comparator reads the captured benchmark plan, metric catalog,
+and metrics artifact, compares every candidate against `current-zeus` and `thetis-parity`, writes
+`artifacts/dsp-fixture-metric-comparison.json` plus a Markdown summary, and can fail a quality gate
+with `-FailOnRegression`. Metric directions come from
 `benchmark-metric-catalog.json` when present; the script only falls back to built-in conservative
 directions for older bundles. By default it compares only `offline-fixture-ready` benchmark-plan
 scenarios, and `-IncludeNonFixtureScenarios` expands the scope for special audits. The strict bundle

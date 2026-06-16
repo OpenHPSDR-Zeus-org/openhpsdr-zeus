@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "endpoints": [
+    {
+      "id": "benchmark-plan",
+      "file": "benchmark-plan.json",
+      "required": true,
+      "ok": true
+    },
+    {
+      "id": "benchmark-metric-catalog",
+      "file": "benchmark-metric-catalog.json",
+      "required": false,
+      "ok": true
+    },
+    {
+      "id": "benchmark-capture-manifest",
+      "file": "benchmark-capture-manifest.json",
+      "required": true,
+      "ok": true
+    }
+  ],
+  "requiredFailures": []
+}

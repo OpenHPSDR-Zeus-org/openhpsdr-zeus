@@ -1451,7 +1451,7 @@ export function enhanceInto(raw: Float32Array, out: Float32Array): void {
   for (let i = 0; i < n; i++) {
     const snr = displaySnrForBin(raw, f, hold, conf, mean, texture, st, i, true);
     const rawV = (snr - gate) / span;
-    let v = rawV <= 0 ? 0 : 1 - Math.exp(-rawV * 1.35);
+    let v = rawV <= 0 ? 0 : 0.94 * (1 - Math.exp(-rawV * 1.02));
     const textureValue = Number.isFinite(texture[i]!) ? texture[i]! : 0;
     const confidence = finiteConfidenceValue(conf, n, i);
     const terrain = terrainLift01(texture, n, i);

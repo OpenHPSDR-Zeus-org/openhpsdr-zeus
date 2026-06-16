@@ -1,0 +1,264 @@
+﻿{
+    "schemaVersion":  1,
+    "tool":  "audit-wdsp-runtime-artifacts",
+    "generatedUtc":  "2026-06-16T14:14:38.6925381Z",
+    "runtimeRoot":  "Zeus.Dsp\\runtimes",
+    "requiredNr4Symbols":  [
+                               "SetRXASBNRRun"
+                           ],
+    "requiredNr5Symbols":  [
+                               "SetRXASPNRRun",
+                               "SetRXASPNRPosition",
+                               "SetRXASPNRAggressiveness",
+                               "SetRXASPNRAgcRun",
+                               "SetRXASPNRAgcTarget",
+                               "GetRXASPNRDiagnostics",
+                               "GetRXASPNRAdvancedDiagnostics",
+                               "GetRXASPNRDeepDiagnostics",
+                               "GetRXASPNRProbabilityDiagnostics",
+                               "GetRXASPNRPeakDiagnostics",
+                               "GetRXASPNRAgcDiagnostics",
+                               "GetRXASPNRMemoryDiagnostics"
+                           ],
+    "readyForWinX64Package":  true,
+    "winX64NativePath":  "Zeus.Dsp\\runtimes\\win-x64\\native\\wdsp.dll",
+    "winX64NativeLength":  5598208,
+    "winX64NativeSha256":  "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+    "pendingRidCount":  4,
+    "pendingRids":  [
+                        "linux-arm64",
+                        "linux-x64",
+                        "osx-arm64",
+                        "win-arm64"
+                    ],
+    "artifacts":  [
+                      {
+                          "rid":  "linux-arm64",
+                          "nativePath":  "Zeus.Dsp\\runtimes\\linux-arm64\\native\\libwdsp.so",
+                          "nativePresent":  true,
+                          "nativeLength":  5694552,
+                          "nativeSha256":  "1770a07e763f3a1c72c5878fb4c3f90a3e88087c04a93442d682756187cbee85",
+                          "nr4Ready":  false,
+                          "nr5Ready":  false,
+                          "sideBySideDependenciesReady":  true,
+                          "status":  "missing-nr4-symbols",
+                          "nr4Symbols":  {
+                                             "SetRXASBNRRun":  false
+                                         },
+                          "nr5Symbols":  {
+                                             "SetRXASPNRPosition":  false,
+                                             "SetRXASPNRAggressiveness":  false,
+                                             "SetRXASPNRAgcTarget":  false,
+                                             "GetRXASPNRDiagnostics":  false,
+                                             "GetRXASPNRDeepDiagnostics":  false,
+                                             "GetRXASPNRMemoryDiagnostics":  false,
+                                             "SetRXASPNRRun":  false,
+                                             "GetRXASPNRAdvancedDiagnostics":  false,
+                                             "SetRXASPNRAgcRun":  false,
+                                             "GetRXASPNRAgcDiagnostics":  false,
+                                             "GetRXASPNRProbabilityDiagnostics":  false,
+                                             "GetRXASPNRPeakDiagnostics":  false
+                                         },
+                          "sideBySideDependencies":  [
+
+                                                     ],
+                          "missingSideBySideDependencies":  [
+
+                                                            ]
+                      },
+                      {
+                          "rid":  "linux-x64",
+                          "nativePath":  "Zeus.Dsp\\runtimes\\linux-x64\\native\\libwdsp.so",
+                          "nativePresent":  true,
+                          "nativeLength":  5734976,
+                          "nativeSha256":  "62ac8f58be84f0472d397fd41bd14240f95bc5bb0033d120124f3e5d0d8adcb2",
+                          "nr4Ready":  true,
+                          "nr5Ready":  false,
+                          "sideBySideDependenciesReady":  true,
+                          "status":  "pending-nr5-rebuild",
+                          "nr4Symbols":  {
+                                             "SetRXASBNRRun":  true
+                                         },
+                          "nr5Symbols":  {
+                                             "SetRXASPNRPosition":  false,
+                                             "SetRXASPNRAggressiveness":  false,
+                                             "SetRXASPNRAgcTarget":  false,
+                                             "GetRXASPNRDiagnostics":  false,
+                                             "GetRXASPNRDeepDiagnostics":  false,
+                                             "GetRXASPNRMemoryDiagnostics":  false,
+                                             "SetRXASPNRRun":  false,
+                                             "GetRXASPNRAdvancedDiagnostics":  false,
+                                             "SetRXASPNRAgcRun":  false,
+                                             "GetRXASPNRAgcDiagnostics":  false,
+                                             "GetRXASPNRProbabilityDiagnostics":  false,
+                                             "GetRXASPNRPeakDiagnostics":  false
+                                         },
+                          "sideBySideDependencies":  [
+                                                         {
+                                                             "name":  "libfftw3.so.3",
+                                                             "present":  true,
+                                                             "path":  "Zeus.Dsp\\runtimes\\linux-x64\\native\\libfftw3.so.3",
+                                                             "length":  2234448,
+                                                             "sha256":  "b5cc02c4d360b5b20111cb0a251f8368af8c9ce3145357f5ba54c51ac4ca9b35"
+                                                         },
+                                                         {
+                                                             "name":  "libfftw3f.so.3",
+                                                             "present":  true,
+                                                             "path":  "Zeus.Dsp\\runtimes\\linux-x64\\native\\libfftw3f.so.3",
+                                                             "length":  2324560,
+                                                             "sha256":  "d75f423f19dc4b8fc86c5f4bdf9e3202494dea7f0d01060c4b546e7e28d59436"
+                                                         }
+                                                     ],
+                          "missingSideBySideDependencies":  [
+
+                                                            ]
+                      },
+                      {
+                          "rid":  "osx-arm64",
+                          "nativePath":  "Zeus.Dsp\\runtimes\\osx-arm64\\native\\libwdsp.dylib",
+                          "nativePresent":  true,
+                          "nativeLength":  5677520,
+                          "nativeSha256":  "852c159d966e152f95a67c3a6ef1644e32230143cf4da24ba65587cb4d1ea071",
+                          "nr4Ready":  true,
+                          "nr5Ready":  false,
+                          "sideBySideDependenciesReady":  true,
+                          "status":  "pending-nr5-rebuild",
+                          "nr4Symbols":  {
+                                             "SetRXASBNRRun":  true
+                                         },
+                          "nr5Symbols":  {
+                                             "SetRXASPNRPosition":  false,
+                                             "SetRXASPNRAggressiveness":  false,
+                                             "SetRXASPNRAgcTarget":  false,
+                                             "GetRXASPNRDiagnostics":  false,
+                                             "GetRXASPNRDeepDiagnostics":  false,
+                                             "GetRXASPNRMemoryDiagnostics":  false,
+                                             "SetRXASPNRRun":  false,
+                                             "GetRXASPNRAdvancedDiagnostics":  false,
+                                             "SetRXASPNRAgcRun":  false,
+                                             "GetRXASPNRAgcDiagnostics":  false,
+                                             "GetRXASPNRProbabilityDiagnostics":  false,
+                                             "GetRXASPNRPeakDiagnostics":  false
+                                         },
+                          "sideBySideDependencies":  [
+                                                         {
+                                                             "name":  "libfftw3.3.dylib",
+                                                             "present":  true,
+                                                             "path":  "Zeus.Dsp\\runtimes\\osx-arm64\\native\\libfftw3.3.dylib",
+                                                             "length":  690512,
+                                                             "sha256":  "2eda1ef2b5bd9707a63d38f8d4994513b40e1b0ae475fd8c57cfecf5abb88c2d"
+                                                         },
+                                                         {
+                                                             "name":  "libfftw3f.3.dylib",
+                                                             "present":  true,
+                                                             "path":  "Zeus.Dsp\\runtimes\\osx-arm64\\native\\libfftw3f.3.dylib",
+                                                             "length":  691072,
+                                                             "sha256":  "376a4eec5682a34fa332a389cb80306eabcbc33b49528941d7c10b0062bff9de"
+                                                         }
+                                                     ],
+                          "missingSideBySideDependencies":  [
+
+                                                            ]
+                      },
+                      {
+                          "rid":  "win-arm64",
+                          "nativePath":  "Zeus.Dsp\\runtimes\\win-arm64\\native\\wdsp.dll",
+                          "nativePresent":  true,
+                          "nativeLength":  7880192,
+                          "nativeSha256":  "4392c8d750ba8ff1bd083eb193a9b42935b54a554ab1fb963e9a603f6422acbb",
+                          "nr4Ready":  true,
+                          "nr5Ready":  false,
+                          "sideBySideDependenciesReady":  false,
+                          "status":  "pending-nr5-rebuild",
+                          "nr4Symbols":  {
+                                             "SetRXASBNRRun":  true
+                                         },
+                          "nr5Symbols":  {
+                                             "SetRXASPNRPosition":  false,
+                                             "SetRXASPNRAggressiveness":  false,
+                                             "SetRXASPNRAgcTarget":  false,
+                                             "GetRXASPNRDiagnostics":  false,
+                                             "GetRXASPNRDeepDiagnostics":  false,
+                                             "GetRXASPNRMemoryDiagnostics":  false,
+                                             "SetRXASPNRRun":  false,
+                                             "GetRXASPNRAdvancedDiagnostics":  false,
+                                             "SetRXASPNRAgcRun":  false,
+                                             "GetRXASPNRAgcDiagnostics":  false,
+                                             "GetRXASPNRProbabilityDiagnostics":  false,
+                                             "GetRXASPNRPeakDiagnostics":  false
+                                         },
+                          "sideBySideDependencies":  [
+                                                         {
+                                                             "name":  "libfftw3-3.dll",
+                                                             "present":  false,
+                                                             "path":  null,
+                                                             "length":  0,
+                                                             "sha256":  ""
+                                                         },
+                                                         {
+                                                             "name":  "libfftw3f-3.dll",
+                                                             "present":  false,
+                                                             "path":  null,
+                                                             "length":  0,
+                                                             "sha256":  ""
+                                                         }
+                                                     ],
+                          "missingSideBySideDependencies":  [
+                                                                "libfftw3-3.dll",
+                                                                "libfftw3f-3.dll"
+                                                            ]
+                      },
+                      {
+                          "rid":  "win-x64",
+                          "nativePath":  "Zeus.Dsp\\runtimes\\win-x64\\native\\wdsp.dll",
+                          "nativePresent":  true,
+                          "nativeLength":  5598208,
+                          "nativeSha256":  "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+                          "nr4Ready":  true,
+                          "nr5Ready":  true,
+                          "sideBySideDependenciesReady":  true,
+                          "status":  "ready",
+                          "nr4Symbols":  {
+                                             "SetRXASBNRRun":  true
+                                         },
+                          "nr5Symbols":  {
+                                             "SetRXASPNRPosition":  true,
+                                             "SetRXASPNRAggressiveness":  true,
+                                             "SetRXASPNRAgcTarget":  true,
+                                             "GetRXASPNRDiagnostics":  true,
+                                             "GetRXASPNRDeepDiagnostics":  true,
+                                             "GetRXASPNRMemoryDiagnostics":  true,
+                                             "SetRXASPNRRun":  true,
+                                             "GetRXASPNRAdvancedDiagnostics":  true,
+                                             "SetRXASPNRAgcRun":  true,
+                                             "GetRXASPNRAgcDiagnostics":  true,
+                                             "GetRXASPNRProbabilityDiagnostics":  true,
+                                             "GetRXASPNRPeakDiagnostics":  true
+                                         },
+                          "sideBySideDependencies":  [
+                                                         {
+                                                             "name":  "libfftw3-3.dll",
+                                                             "present":  true,
+                                                             "path":  "Zeus.Dsp\\runtimes\\win-x64\\native\\libfftw3-3.dll",
+                                                             "length":  2625304,
+                                                             "sha256":  "a1355362bcc9aa5cc35da66f62522dbb34f6c721b873246ff95151a370cbcb9a"
+                                                         },
+                                                         {
+                                                             "name":  "libfftw3f-3.dll",
+                                                             "present":  true,
+                                                             "path":  "Zeus.Dsp\\runtimes\\win-x64\\native\\libfftw3f-3.dll",
+                                                             "length":  2692396,
+                                                             "sha256":  "1a87baafee0cfe0ee9fa9d5e2d748df6ffa0c18a0fb46e6884c925cf620c8b3d"
+                                                         }
+                                                     ],
+                          "missingSideBySideDependencies":  [
+
+                                                            ]
+                      }
+                  ],
+    "recommendations":  [
+                            "Run tools/audit-wdsp-native-symbols.ps1 -BinaryPath Zeus.Dsp/runtimes/win-x64/native/wdsp.dll -RequireBinaryExports for PE export-table verification.",
+                            "Rebuild pending RIDs through the normal native artifact workflow before advertising NR5/SPNR support on those platforms.",
+                            "Keep FFTW side-by-side runtime libraries in each packaged native directory when WDSP is dynamically linked."
+                        ]
+}

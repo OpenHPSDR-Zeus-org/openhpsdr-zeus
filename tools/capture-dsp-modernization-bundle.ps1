@@ -293,9 +293,8 @@ Next steps:
    powershell -NoProfile -ExecutionPolicy Bypass -File tools\audit-wdsp-runtime-artifacts.ps1 -ReportPath "$bundleDir\artifacts\wdsp-runtime-artifact-audit.json" -FailOnMissingWinX64Nr5
 4. Summarize opt-in external DSP/ML candidates before any external-engine bakeoff:
    powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-external-engine-candidates.ps1 -BundleDir "$bundleDir" -CandidatePath "$bundleDir\external-engine-candidates.json" -SnapshotPath "$bundleDir\modernization-snapshot.json" -ReportPath "$bundleDir\artifacts\external-engine-bakeoff-report.json" -FailOnUnsafe
-5. Generate WDSP-backed offline fixture evidence and compare the offline-ready scenario matrix:
-   powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-wdsp-fixture-evidence.ps1 -BundleDir "$bundleDir" -Force
-   powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-fixture-metrics.ps1 -BundleDir "$bundleDir" -FailOnRegression
+5. Generate WDSP-backed offline fixture evidence, runtime audit, and fixture comparison for the offline-ready scenario matrix:
+   powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-wdsp-fixture-matrix.ps1 -BundleDir "$bundleDir" -Force
 6. Capture optional live runtime trends during scenario windows:
    powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl $base$certArg -Samples 60 -IntervalMs 1000 -JsonlPath "$bundleDir\artifacts\live-diagnostics-trace.jsonl" -ReportPath "$bundleDir\artifacts\live-diagnostics-watch.json"
 7. Or capture repeatable baseline and candidate multi-scenario live diagnostics matrices:

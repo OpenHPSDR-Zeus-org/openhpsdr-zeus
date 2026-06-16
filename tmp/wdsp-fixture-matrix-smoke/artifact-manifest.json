@@ -1,0 +1,76 @@
+﻿{
+    "schemaVersion":  1,
+    "tool":  "new-dsp-artifact-manifest",
+    "generatedUtc":  "\/Date(1781619300525)\/",
+    "bundleDir":  "C:\\Users\\Admin\\Desktop\\openhpsdr-zeus\\tmp\\wdsp-fixture-matrix-smoke",
+    "sourceCaptureManifest":  "benchmark-capture-manifest.json",
+    "acceptanceManifest":  false,
+    "notes":  [
+                  "This scaffold is derived from benchmark-capture-manifest.json.",
+                  "Endpoint JSON is validated through bundle-index.json unless -IncludeEndpointJson is used.",
+                  "Use watch-dsp-live-diagnostics.ps1 for optional diagnostics-jsonl traces across live scenario windows.",
+                  "Use run-dsp-live-diagnostics-matrix.ps1 for optional multi-scenario trace indexes; pass separate -IndexPath and -ReportPath values for baseline and candidate runs. With -IncludeOptionalArtifacts, this scaffold emits separate baseline/candidate live-diagnostics-trace-index and live-diagnostics-matrix-report entries.",
+                  "Use compare-dsp-live-diagnostics-traces.ps1 with -BundleDir to compare baseline and candidate live traces before accepting a candidate window while keeping report paths portable.",
+                  "Use compare-dsp-live-diagnostics-matrix.ps1 with -BundleDir to compare baseline and candidate trace indexes across all captured live scenarios while keeping report paths portable.",
+                  "Use summarize-dsp-live-diagnostics-history.ps1 with -BundleDir after several NR5/NR2 live attempts so best weak-signal, lowest-pumping, latest tuning directions, and per-trace watcher-summary/JSONL hashes are preserved as portable review evidence.",
+                  "Use summarize-dsp-external-engine-candidates.ps1 with -BundleDir before any external DSP/ML bakeoff so RNNoise/DeepFilterNet/SpeexDSP/WebRTC blockers, risk, and required evidence stay explicit.",
+                  "For acceptance review, set the live-diagnostics-trace-comparison artifact required=true after the comparison report is captured so regressions fail strict validation.",
+                  "For single-comparison artifact indexes, add comparisonIds to the artifact entry so validation checks only the captured comparison scope.",
+                  "Run audit-wdsp-native-symbols.ps1 with -RequireBinaryExports for the required wdsp-native-symbol-audit.json before accepting native or P/Invoke changes.",
+                  "Run audit-wdsp-runtime-artifacts.ps1 for the required wdsp-runtime-artifact-audit.json before claiming packaged NR4/NR5 support for any RID.",
+                  "For plural audio, spectrum, and trace evidence, store an index JSON at the generated path with a files array of bundle-relative evidence file paths plus scenario/candidate metadata.",
+                  "Use run-dsp-wdsp-fixture-matrix.ps1 with -BundleDir to generate WDSP-backed offline fixture metrics, portable audio/spectrum evidence indexes, runtime audit, and dsp-fixture-metric-comparison.json in one repeatable step.",
+                  "run-dsp-offline-fixture-evidence.ps1 is only a deterministic schema fallback; strict validation requires WDSP-backed fixture comparison evidence.",
+                  "Run validate-dsp-modernization-bundle.ps1 with -RequireArtifactFiles only after every required path exists and is non-empty."
+              ],
+    "artifacts":  [
+                      {
+                          "id":  "wdsp-runtime-artifact-audit",
+                          "kind":  "runtime-audit-json",
+                          "source":  "",
+                          "purpose":  "",
+                          "cadence":  "",
+                          "path":  "artifacts/wdsp-runtime-artifact-audit.json",
+                          "required":  true,
+                          "scenarioIds":  [
+                                              "weak-cw-carrier"
+                                          ]
+                      },
+                      {
+                          "id":  "offline-fixture-metrics",
+                          "kind":  "metrics-json",
+                          "source":  "",
+                          "purpose":  "",
+                          "cadence":  "",
+                          "path":  "artifacts/offline-fixture-metrics.json",
+                          "required":  true,
+                          "scenarioIds":  [
+                                              "weak-cw-carrier"
+                                          ]
+                      },
+                      {
+                          "id":  "fixture-metric-comparison-report",
+                          "kind":  "comparison-json",
+                          "source":  "tools/run-dsp-wdsp-fixture-matrix.ps1",
+                          "purpose":  "Summarize candidate-vs-current-Zeus and candidate-vs-Thetis metric deltas, regressions, missing baselines, gate failures, and WDSP runtime hash alignment before strict bundle acceptance.",
+                          "cadence":  "once-after-wdsp-offline-fixture-matrix",
+                          "path":  "artifacts/dsp-fixture-metric-comparison.json",
+                          "required":  true,
+                          "scenarioIds":  [
+                                              "weak-cw-carrier"
+                                          ]
+                      },
+                      {
+                          "id":  "operator-notes",
+                          "kind":  "notes",
+                          "source":  "operator-session-notes",
+                          "purpose":  "Record mode, band, filter width, sample rate, AGC mode/top, attenuator state, squelch state, NR mode, listening impressions, and on-air observations.",
+                          "cadence":  "once-per-capture-bundle",
+                          "path":  "artifacts/operator-notes.md",
+                          "required":  true,
+                          "scenarioIds":  [
+                                              "weak-cw-carrier"
+                                          ]
+                      }
+                  ]
+}

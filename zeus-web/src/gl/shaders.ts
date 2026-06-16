@@ -195,8 +195,8 @@ float closeWeight(float center, float value, float width) {
 }
 
 float popLift(float n, float popI) {
-  float lifted = pow(n, mix(1.0, 0.62, popI));
-  float micro = smoothstep(0.015, 0.20, n) * 0.10 * popI;
+  float lifted = pow(n, mix(1.0, 0.76, popI));
+  float micro = smoothstep(0.015, 0.20, n) * 0.06 * popI;
   return clamp(max(lifted, n + micro), 0.0, 1.0);
 }
 
@@ -219,6 +219,8 @@ void main() {
   float castGlow = 0.0;
   float contour = 0.0;
   float heightContour = 0.0;
+  float dropShadow = 0.0;
+  float goldRim = 0.0;
   float crest = 0.0;
   if (popI > 0.001 || normalHdrI > 0.001) {
     vec2 texel = vec2(1.0 / max(1.0, uTexW), 1.0 / max(1.0, uH));
@@ -299,6 +301,10 @@ void main() {
         reliefCurve;
       offsetGlow = smoothstep(0.028, 0.38, raisedB) * (1.0 - smoothstep(0.018, 0.28, n)) *
         reliefCurve;
+      dropShadow = smoothstep(0.035, 0.55, raisedA) * (1.0 - smoothstep(0.030, 0.34, n)) *
+        reliefCurve;
+      goldRim = smoothstep(0.045, 0.74, n) * smoothstep(0.006, 0.18, max(0.0, n - upLeft)) *
+        reliefCurve;
       contour = smoothstep(0.035, 0.42, n) * smoothstep(0.004, 0.10, edgeEnergy) *
         reliefCurve;
       float contourPhase = abs(fract(n * 9.5) - 0.5);
@@ -314,6 +320,7 @@ void main() {
   n = popLift(n, popI);
   vec4 c = texture(uLut, vec2(n, 0.5));
   c.rgb *= mix(1.0, shade, reliefI);
+  c.rgb = mix(c.rgb, vec3(0.0, 0.005, 0.012), min(0.88, dropShadow * 0.86));
   c.rgb = mix(c.rgb, vec3(0.00, 0.030, 0.055) + c.rgb * 0.24, min(0.84, 0.82 * shadow));
   c.rgb = mix(c.rgb, vec3(0.00, 0.070, 0.16), min(0.78, castGlow * 0.82));
   c.rgb += vec3(0.00, 0.78, 1.00) * offsetGlow * 0.58;
@@ -323,12 +330,13 @@ void main() {
   c.rgb += vec3(0.36, 0.88, 0.90) * rim * 1.25;
   c.rgb += vec3(0.98, 1.00, 0.68) * contour * 0.66;
   c.rgb += vec3(1.00, 0.82, 0.34) * heightContour * 0.34;
+  c.rgb += vec3(1.00, 0.66, 0.16) * goldRim * 0.94;
   c.rgb += vec3(0.28, 0.96, 1.00) * crest * reliefI * 0.62;
   c.rgb += vec3(1.00, 0.92, 0.48) * specular * 1.18;
   c.rgb = min(c.rgb, vec3(1.0));
   float reliefMask = max(
     max(castGlow, offsetGlow),
-    max(max(warmHalo, coolHalo), max(max(ridge, rim), heightContour)));
+    max(max(warmHalo, coolHalo), max(max(max(ridge, rim), heightContour), max(dropShadow, goldRim))));
   float a = mix(smoothstep(0.05, 0.9, n), 1.0, uBgAlpha);
   a = max(a, reliefMask * mix(0.45, 0.98, reliefI));
   fragColor = vec4(c.rgb * a, a);

@@ -1,0 +1,480 @@
+﻿{
+    "schemaVersion":  1,
+    "tool":  "summarize-dsp-modernization-validation-report",
+    "generatedUtc":  "\/Date(1781619304708)\/",
+    "validationReportPath":  "validation-report.json",
+    "bundleDir":  "C:\\Users\\Admin\\Desktop\\openhpsdr-zeus\\tmp\\wdsp-fixture-matrix-smoke",
+    "validationOk":  false,
+    "status":  "validation-needs-attention",
+    "errorCount":  5,
+    "warningCount":  1,
+    "artifactReferencedFileCount":  0,
+    "artifactReferencedFileProblemCount":  0,
+    "liveDiagnosticsHistoryTraceSourceStatus":  "not-evaluated",
+    "liveDiagnosticsHistoryTraceSourceCheckedCount":  0,
+    "liveDiagnosticsHistoryTraceSourceMissingCount":  0,
+    "liveDiagnosticsHistoryTraceSourceInvalidCount":  0,
+    "liveDiagnosticsHistoryTraceSourceJsonlMissingCount":  0,
+    "liveDiagnosticsHistoryTraceSourceSummaryHashPresentCount":  0,
+    "liveDiagnosticsHistoryTraceSourceSummaryHashMissingCount":  0,
+    "liveDiagnosticsHistoryTraceSourceSummaryHashMismatchCount":  0,
+    "liveDiagnosticsHistoryTraceSourceJsonlHashPresentCount":  0,
+    "liveDiagnosticsHistoryTraceSourceJsonlHashMissingCount":  0,
+    "liveDiagnosticsHistoryTraceSourceJsonlHashMismatchCount":  0,
+    "liveHistoryTraceSourceCount":  0,
+    "liveHistoryTraceSourceProblemCount":  0,
+    "sourceTypeCounts":  [
+
+                         ],
+    "liveHistoryTraceSourceStatusCounts":  [
+
+                                           ],
+    "liveHistoryTraceSummaryHashStatusCounts":  [
+
+                                                ],
+    "liveHistoryTraceJsonlHashStatusCounts":  [
+
+                                              ],
+    "evidenceGateCount":  11,
+    "evidenceGateProblemCount":  6,
+    "requiredEvidenceGateProblemCount":  4,
+    "evidenceGates":  [
+                          {
+                              "gateId":  "validation-report",
+                              "name":  "Strict bundle validation",
+                              "ready":  false,
+                              "status":  "failed",
+                              "requiredForAcceptance":  true,
+                              "detail":  "errors=5; warnings=1",
+                              "remediation":  "Resolve validation errors before using this bundle as DSP modernization evidence."
+                          },
+                          {
+                              "gateId":  "g2-hardware",
+                              "name":  "G2 hardware evidence",
+                              "ready":  false,
+                              "status":  "diagnostics-missing",
+                              "requiredForAcceptance":  true,
+                              "detail":  "target=G2; captureTarget=G2; diagnosticsPresent=False",
+                              "remediation":  "Capture connected G2 hardware diagnostics and keep benchmark-plan/capture-manifest targets aligned."
+                          },
+                          {
+                              "gateId":  "wdsp-native-symbol-audit",
+                              "name":  "WDSP native symbol audit",
+                              "ready":  false,
+                              "status":  "not-ready",
+                              "requiredForAcceptance":  true,
+                              "detail":  "present=False; imports=0; sourceMissing=0; signatureMismatches=0; binaryMissing=0",
+                              "remediation":  "Run audit-wdsp-native-symbols.ps1 with -RequireBinaryExports and resolve missing exports/signature drift."
+                          },
+                          {
+                              "gateId":  "wdsp-runtime-artifact-audit",
+                              "name":  "WDSP runtime artifact audit",
+                              "ready":  true,
+                              "status":  "ready",
+                              "requiredForAcceptance":  true,
+                              "detail":  "present=True; artifacts=5; pendingRids=4; winX64Sha=d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+                              "remediation":  "Run audit-wdsp-runtime-artifacts.ps1 and package the required win-x64 WDSP runtime artifact."
+                          },
+                          {
+                              "gateId":  "benchmark-metric-catalog",
+                              "name":  "Benchmark metric catalog",
+                              "ready":  true,
+                              "status":  "ready",
+                              "requiredForAcceptance":  true,
+                              "detail":  "metrics=2; missingRequired=0",
+                              "remediation":  "Capture or update benchmark-metric-catalog.json so required metrics and directions are explicit."
+                          },
+                          {
+                              "gateId":  "external-engine-candidates",
+                              "name":  "External DSP/ML candidate catalog",
+                              "ready":  false,
+                              "status":  "missing",
+                              "requiredForAcceptance":  false,
+                              "detail":  "candidates=0; missing=0; unsafe=0; snapshotMismatch=0",
+                              "remediation":  "Keep RNNoise/DeepFilterNet/SpeexDSP/WebRTC entries opt-in, licensed, packaged, and safety-gated before any bakeoff."
+                          },
+                          {
+                              "gateId":  "external-engine-bakeoff",
+                              "name":  "External DSP/ML bakeoff report",
+                              "ready":  true,
+                              "status":  "not-required",
+                              "requiredForAcceptance":  false,
+                              "detail":  "requiredByScope=False; present=False; safe=0; blocked=0",
+                              "remediation":  "Generate external-engine-bakeoff-report only for scoped opt-in comparisons, then resolve unsafe/missing candidate evidence."
+                          },
+                          {
+                              "gateId":  "fixture-metric-comparison",
+                              "name":  "Offline fixture metric comparison",
+                              "ready":  true,
+                              "status":  "ready",
+                              "requiredForAcceptance":  true,
+                              "detail":  "present=True; sourceEngine=wdsp; comparisonEngine=wdsp; wdspBacked=True; sourceHash=match; runtimeHash=match; runtimeArtifactHash=match; scope=offline-fixture-ready; skippedNonFixture=0; regressions=0; gateFailures=0; missingScenarios=0; missingCurrent=0; missingThetis=0; missingCandidates=0; missingValues=0",
+                              "remediation":  "Run run-dsp-wdsp-fixture-matrix.ps1 and resolve fixture, runtime, or metric regressions before acceptance review."
+                          },
+                          {
+                              "gateId":  "live-trace-comparison",
+                              "name":  "Live trace comparison",
+                              "ready":  false,
+                              "status":  "not-ready",
+                              "requiredForAcceptance":  true,
+                              "detail":  "present=False; regressions=0; gateFailures=0; missingMetrics=0",
+                              "remediation":  "Compare baseline/current-Zeus and candidate live traces or matrices, then resolve regressions and gate failures."
+                          },
+                          {
+                              "gateId":  "live-history-provenance",
+                              "name":  "Live diagnostics history provenance",
+                              "ready":  false,
+                              "status":  "not-evaluated",
+                              "requiredForAcceptance":  false,
+                              "detail":  "present=False; ready=False; traceSources=0; sourceProblems=0",
+                              "remediation":  "Regenerate live diagnostics history after watcher summaries and JSONL traces are finalized; fix source/hash mismatches before using history for tuning decisions."
+                          },
+                          {
+                              "gateId":  "referenced-file-provenance",
+                              "name":  "Referenced artifact file provenance",
+                              "ready":  true,
+                              "status":  "ready",
+                              "requiredForAcceptance":  false,
+                              "detail":  "problemCount=0",
+                              "remediation":  "Inspect failedReferencedFiles for stale hashes, missing traces, or summary path mismatches."
+                          }
+                      ],
+    "offlineFixtureMetricsPresent":  true,
+    "offlineFixtureMetricsEvidenceEngine":  "wdsp",
+    "offlineFixtureMetricsEvidenceTool":  "dsp-fixture-evidence",
+    "offlineFixtureMetricsWdspBackedEvidence":  true,
+    "offlineFixtureMetricsSyntheticFallbackEvidence":  false,
+    "offlineFixtureMetricsScenarioCount":  1,
+    "offlineFixtureMetricsComparisonCount":  3,
+    "offlineFixtureMetricsPath":  "artifacts/offline-fixture-metrics.json",
+    "offlineFixtureMetricsSha256":  "e0d76feacda779c0452fdd4ea0a4b5f6500d13d2e7daaacc7e12d9936b476489",
+    "offlineFixtureMetricsWdspRuntimeRid":  "win-x64",
+    "offlineFixtureMetricsWdspRuntimePath":  "runtimes/win-x64/native/wdsp.dll",
+    "offlineFixtureMetricsWdspRuntimePathKind":  "app-output-relative",
+    "offlineFixtureMetricsWdspRuntimeFileName":  "wdsp.dll",
+    "offlineFixtureMetricsWdspRuntimeLength":  5598208,
+    "offlineFixtureMetricsWdspRuntimeSha256":  "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+    "offlineFixtureMetricsWdspRuntimeStatus":  "found",
+    "offlineFixtureMetricsRuntimeArtifactHashStatus":  "match",
+    "metricComparisonPresent":  true,
+    "metricComparisonReady":  true,
+    "metricComparisonReportReadyForReview":  true,
+    "metricComparisonMetricCoverageReadyForReview":  true,
+    "metricComparisonEvidenceEngine":  "wdsp",
+    "metricComparisonEvidenceTool":  "dsp-fixture-evidence",
+    "metricComparisonWdspBackedEvidence":  true,
+    "metricComparisonSyntheticFallbackEvidence":  false,
+    "metricComparisonSourceMetricsPath":  "C:\\Users\\Admin\\Desktop\\openhpsdr-zeus\\tmp\\wdsp-fixture-matrix-smoke\\artifacts\\offline-fixture-metrics.json",
+    "metricComparisonSourceMetricsSha256":  "e0d76feacda779c0452fdd4ea0a4b5f6500d13d2e7daaacc7e12d9936b476489",
+    "metricComparisonSourceMetricsHashStatus":  "match",
+    "metricComparisonWdspRuntimeRid":  "win-x64",
+    "metricComparisonWdspRuntimePath":  "runtimes/win-x64/native/wdsp.dll",
+    "metricComparisonWdspRuntimePathKind":  "app-output-relative",
+    "metricComparisonWdspRuntimeFileName":  "wdsp.dll",
+    "metricComparisonWdspRuntimeLength":  5598208,
+    "metricComparisonWdspRuntimeSha256":  "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+    "metricComparisonWdspRuntimeStatus":  "found",
+    "metricComparisonWdspRuntimeIdentityReadyForReview":  true,
+    "metricComparisonWdspRuntimeHashStatus":  "match",
+    "metricComparisonFixtureScenarioScope":  "offline-fixture-ready",
+    "metricComparisonSkippedNonFixtureScenarioCount":  0,
+    "metricComparisonSkippedNonFixtureScenarioIds":  [
+
+                                                     ],
+    "metricComparisonRegressionCount":  0,
+    "metricComparisonGateFailureCount":  0,
+    "metricComparisonMissingScenarioCount":  0,
+    "metricComparisonMissingScenarios":  [
+
+                                         ],
+    "metricComparisonMissingCurrentBaselineCount":  0,
+    "metricComparisonMissingThetisBaselineCount":  0,
+    "metricComparisonMissingCandidateCount":  0,
+    "metricComparisonMissingMetricValueCount":  0,
+    "metricComparisonCandidateComparisonCount":  1,
+    "nativeRuntimeArtifactAuditPresent":  true,
+    "nativeRuntimeArtifactAuditReadyForWinX64Package":  true,
+    "nativeRuntimeArtifactAuditPendingRidCount":  4,
+    "nativeRuntimeArtifactAuditArtifactCount":  5,
+    "nativeRuntimeArtifactAuditWinX64NativePath":  "Zeus.Dsp\\runtimes\\win-x64\\native\\wdsp.dll",
+    "nativeRuntimeArtifactAuditWinX64NativeLength":  5598208,
+    "nativeRuntimeArtifactAuditWinX64NativeSha256":  "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+    "acceptanceReadinessStageCount":  5,
+    "acceptanceReadinessReadyStageCount":  1,
+    "g2FirstPassAcceptanceReady":  false,
+    "candidateComparisonReady":  false,
+    "defaultBehaviorChangeReady":  false,
+    "defaultGraduationReady":  false,
+    "crossRadioValidationRequired":  true,
+    "crossRadioValidationEvidenceStatus":  "not-captured",
+    "acceptanceReadiness":  [
+                                {
+                                    "stageId":  "validation-triage-clean",
+                                    "name":  "Validation triage clean",
+                                    "ready":  false,
+                                    "status":  "validation-needs-attention",
+                                    "blocksDefaultBehaviorChange":  true,
+                                    "detail":  "requiredGateProblems=4; referencedFileProblems=0; liveHistoryProvenanceNeedsAttention=False",
+                                    "nextAction":  "Resolve the triage status and rerun validation before treating the bundle as acceptance evidence.",
+                                    "blockingGateIds":  [
+                                                            "validation-report",
+                                                            "g2-hardware",
+                                                            "wdsp-native-symbol-audit",
+                                                            "live-trace-comparison"
+                                                        ]
+                                },
+                                {
+                                    "stageId":  "g2-first-pass-evidence",
+                                    "name":  "G2 first-pass evidence",
+                                    "ready":  false,
+                                    "status":  "blocked-prerequisites",
+                                    "blocksDefaultBehaviorChange":  true,
+                                    "detail":  "hardware=diagnostics-missing; fixtureReady=True; liveTraceReady=False",
+                                    "nextAction":  "Complete G2 hardware, WDSP audit, fixture, and live-trace gates before first-pass review.",
+                                    "blockingGateIds":  [
+                                                            "validation-report",
+                                                            "g2-hardware",
+                                                            "wdsp-native-symbol-audit",
+                                                            "live-trace-comparison"
+                                                        ]
+                                },
+                                {
+                                    "stageId":  "opt-in-candidate-comparison",
+                                    "name":  "Opt-in candidate comparison",
+                                    "ready":  false,
+                                    "status":  "blocked-benchmark-evidence",
+                                    "blocksDefaultBehaviorChange":  true,
+                                    "detail":  "metricRegressions=0; liveRegressions=0; liveGateFailures=0; historyCandidatePromotionReady=False",
+                                    "nextAction":  "Generate fixture and live trace comparisons that beat current Zeus/Thetis evidence before opt-in review.",
+                                    "blockingGateIds":  [
+                                                            "validation-report",
+                                                            "g2-hardware",
+                                                            "wdsp-native-symbol-audit",
+                                                            "live-trace-comparison"
+                                                        ]
+                                },
+                                {
+                                    "stageId":  "external-dsp-ml-bakeoff",
+                                    "name":  "External DSP/ML bakeoff",
+                                    "ready":  true,
+                                    "status":  "not-in-scope",
+                                    "blocksDefaultBehaviorChange":  false,
+                                    "detail":  "requiredByScope=False; present=False; ready=False; defaultBehaviorChangeReady=False; rawIqReplacementAllowed=False",
+                                    "nextAction":  "No external-engine action is required unless an opt-in comparison is in scope.",
+                                    "blockingGateIds":  [
+
+                                                        ]
+                                },
+                                {
+                                    "stageId":  "default-dsp-graduation",
+                                    "name":  "Default DSP behavior graduation",
+                                    "ready":  false,
+                                    "status":  "blocked-g2-prerequisites",
+                                    "blocksDefaultBehaviorChange":  true,
+                                    "detail":  "defaultBehaviorChangeReady=False; crossRadioValidationRequired=True; crossRadioValidationEvidenceStatus=not-captured; blockingGateCount=6",
+                                    "nextAction":  "Finish G2 first-pass evidence before planning cross-radio/default-graduation review.",
+                                    "blockingGateIds":  [
+                                                            "validation-report",
+                                                            "g2-hardware",
+                                                            "wdsp-native-symbol-audit",
+                                                            "external-engine-candidates",
+                                                            "live-trace-comparison",
+                                                            "live-history-provenance"
+                                                        ]
+                                }
+                            ],
+    "acceptanceActionPlanCount":  6,
+    "acceptanceRequiredActionCount":  4,
+    "acceptanceManualActionCount":  0,
+    "acceptanceActionCategoryCounts":  [
+                                           {
+                                               "category":  "external-dsp-ml",
+                                               "count":  1
+                                           },
+                                           {
+                                               "category":  "hardware-evidence",
+                                               "count":  1
+                                           },
+                                           {
+                                               "category":  "live-diagnostics",
+                                               "count":  2
+                                           },
+                                           {
+                                               "category":  "validation",
+                                               "count":  1
+                                           },
+                                           {
+                                               "category":  "wdsp-audit",
+                                               "count":  1
+                                           }
+                                       ],
+    "primaryAcceptanceActionId":  "rerun-strict-validation",
+    "primaryAcceptanceActionPriority":  10,
+    "primaryAcceptanceActionStageId":  "validation-triage-clean",
+    "primaryAcceptanceActionGateId":  "validation-report",
+    "primaryAcceptanceActionCategory":  "validation",
+    "primaryAcceptanceActionRequired":  true,
+    "primaryAcceptanceActionManual":  false,
+    "primaryAcceptanceCommandTemplate":  "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\validate-dsp-modernization-bundle.ps1 -BundleDir \"$bundleDir\" -RequireArtifactFiles",
+    "primaryAcceptanceCommandStepCount":  1,
+    "primaryAcceptanceCommandSteps":  [
+                                          "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\validate-dsp-modernization-bundle.ps1 -BundleDir \"$bundleDir\" -RequireArtifactFiles"
+                                      ],
+    "primaryAcceptanceManualAction":  "",
+    "primaryAcceptanceExpectedArtifact":  "validation-report.json",
+    "primaryAcceptanceFollowUp":  "Rerun summarize-dsp-modernization-validation-report.ps1 with -FailOnIssues after validation passes.",
+    "acceptanceActionPlan":  [
+                                 {
+                                     "actionId":  "rerun-strict-validation",
+                                     "priority":  10,
+                                     "stageId":  "validation-triage-clean",
+                                     "gateId":  "validation-report",
+                                     "category":  "validation",
+                                     "requiredForAcceptance":  true,
+                                     "blocksDefaultBehaviorChange":  true,
+                                     "reason":  "Resolve validation errors before using this bundle as DSP modernization evidence.",
+                                     "commandTemplate":  "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\validate-dsp-modernization-bundle.ps1 -BundleDir \"$bundleDir\" -RequireArtifactFiles",
+                                     "commandStepCount":  1,
+                                     "commandSteps":  [
+                                                          "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\validate-dsp-modernization-bundle.ps1 -BundleDir \"$bundleDir\" -RequireArtifactFiles"
+                                                      ],
+                                     "manualAction":  "",
+                                     "expectedArtifact":  "validation-report.json",
+                                     "followUp":  "Rerun summarize-dsp-modernization-validation-report.ps1 with -FailOnIssues after validation passes."
+                                 },
+                                 {
+                                     "actionId":  "capture-g2-hardware-evidence",
+                                     "priority":  20,
+                                     "stageId":  "g2-first-pass-evidence",
+                                     "gateId":  "g2-hardware",
+                                     "category":  "hardware-evidence",
+                                     "requiredForAcceptance":  true,
+                                     "blocksDefaultBehaviorChange":  true,
+                                     "reason":  "Capture connected G2 hardware diagnostics and keep benchmark-plan/capture-manifest targets aligned.",
+                                     "commandTemplate":  "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\capture-dsp-modernization-bundle.ps1 -BaseUrl http://localhost:6060 -OutputRoot captures\\dsp-modernization -Label g2-dsp-evidence",
+                                     "commandStepCount":  1,
+                                     "commandSteps":  [
+                                                          "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\capture-dsp-modernization-bundle.ps1 -BaseUrl http://localhost:6060 -OutputRoot captures\\dsp-modernization -Label g2-dsp-evidence"
+                                                      ],
+                                     "manualAction":  "",
+                                     "expectedArtifact":  "hardware-diagnostics.json",
+                                     "followUp":  "Confirm benchmark-plan firstHardwareTarget and capture manifest hardwareTarget both remain G2."
+                                 },
+                                 {
+                                     "actionId":  "run-wdsp-native-symbol-audit",
+                                     "priority":  30,
+                                     "stageId":  "g2-first-pass-evidence",
+                                     "gateId":  "wdsp-native-symbol-audit",
+                                     "category":  "wdsp-audit",
+                                     "requiredForAcceptance":  true,
+                                     "blocksDefaultBehaviorChange":  true,
+                                     "reason":  "Run audit-wdsp-native-symbols.ps1 with -RequireBinaryExports and resolve missing exports/signature drift.",
+                                     "commandTemplate":  "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\audit-wdsp-native-symbols.ps1 -ReportPath \"$bundleDir\\artifacts\\wdsp-native-symbol-audit.json\" -RequireBinaryExports",
+                                     "commandStepCount":  1,
+                                     "commandSteps":  [
+                                                          "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\audit-wdsp-native-symbols.ps1 -ReportPath \"$bundleDir\\artifacts\\wdsp-native-symbol-audit.json\" -RequireBinaryExports"
+                                                      ],
+                                     "manualAction":  "",
+                                     "expectedArtifact":  "artifacts/wdsp-native-symbol-audit.json",
+                                     "followUp":  "Resolve missing exports or signature drift before reviewing DSP parity."
+                                 },
+                                 {
+                                     "actionId":  "capture-and-compare-live-matrix",
+                                     "priority":  60,
+                                     "stageId":  "opt-in-candidate-comparison",
+                                     "gateId":  "live-trace-comparison",
+                                     "category":  "live-diagnostics",
+                                     "requiredForAcceptance":  true,
+                                     "blocksDefaultBehaviorChange":  true,
+                                     "reason":  "Compare baseline/current-Zeus and candidate live traces or matrices, then resolve regressions and gate failures.",
+                                     "commandTemplate":  "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId current-zeus -IndexPath \"$bundleDir\\artifacts\\live-diagnostics-trace-index.baseline.json\" -ReportPath \"$bundleDir\\artifacts\\live-diagnostics-matrix-report.baseline.json\" -Samples 60 -IntervalMs 1000; powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId nr5-spnr -IndexPath \"$bundleDir\\artifacts\\live-diagnostics-trace-index.candidate.json\" -ReportPath \"$bundleDir\\artifacts\\live-diagnostics-matrix-report.candidate.json\" -Samples 60 -IntervalMs 1000; powershell -NoProfile -ExecutionPolicy Bypass -File tools\\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -BaselineIndexPath \"$bundleDir\\artifacts\\live-diagnostics-trace-index.baseline.json\" -CandidateIndexPath \"$bundleDir\\artifacts\\live-diagnostics-trace-index.candidate.json\" -ReportPath \"$bundleDir\\artifacts\\live-diagnostics-trace-comparison.json\" -FailOnRegression",
+                                     "commandStepCount":  3,
+                                     "commandSteps":  [
+                                                          "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId current-zeus -IndexPath \"$bundleDir\\artifacts\\live-diagnostics-trace-index.baseline.json\" -ReportPath \"$bundleDir\\artifacts\\live-diagnostics-matrix-report.baseline.json\" -Samples 60 -IntervalMs 1000",
+                                                          "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\run-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -ComparisonId nr5-spnr -IndexPath \"$bundleDir\\artifacts\\live-diagnostics-trace-index.candidate.json\" -ReportPath \"$bundleDir\\artifacts\\live-diagnostics-matrix-report.candidate.json\" -Samples 60 -IntervalMs 1000",
+                                                          "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir \"$bundleDir\" -BaselineIndexPath \"$bundleDir\\artifacts\\live-diagnostics-trace-index.baseline.json\" -CandidateIndexPath \"$bundleDir\\artifacts\\live-diagnostics-trace-index.candidate.json\" -ReportPath \"$bundleDir\\artifacts\\live-diagnostics-trace-comparison.json\" -FailOnRegression"
+                                                      ],
+                                     "manualAction":  "",
+                                     "expectedArtifact":  "artifacts/live-diagnostics-trace-comparison.json",
+                                     "followUp":  "Mark live-diagnostics-trace-comparison required=true in artifact-manifest.json for acceptance review."
+                                 },
+                                 {
+                                     "actionId":  "refresh-external-engine-catalog",
+                                     "priority":  70,
+                                     "stageId":  "external-dsp-ml-bakeoff",
+                                     "gateId":  "external-engine-candidates",
+                                     "category":  "external-dsp-ml",
+                                     "requiredForAcceptance":  false,
+                                     "blocksDefaultBehaviorChange":  false,
+                                     "reason":  "Keep RNNoise/DeepFilterNet/SpeexDSP/WebRTC entries opt-in, licensed, packaged, and safety-gated before any bakeoff.",
+                                     "commandTemplate":  "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\capture-dsp-modernization-bundle.ps1 -BaseUrl http://localhost:6060 -OutputRoot captures\\dsp-modernization -Label external-candidate-refresh",
+                                     "commandStepCount":  1,
+                                     "commandSteps":  [
+                                                          "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\capture-dsp-modernization-bundle.ps1 -BaseUrl http://localhost:6060 -OutputRoot captures\\dsp-modernization -Label external-candidate-refresh"
+                                                      ],
+                                     "manualAction":  "",
+                                     "expectedArtifact":  "external-engine-candidates.json",
+                                     "followUp":  "Keep every external engine post-demod, opt-in, packaged, licensed, and off by default."
+                                 },
+                                 {
+                                     "actionId":  "regenerate-live-diagnostics-history",
+                                     "priority":  80,
+                                     "stageId":  "opt-in-candidate-comparison",
+                                     "gateId":  "live-history-provenance",
+                                     "category":  "live-diagnostics",
+                                     "requiredForAcceptance":  false,
+                                     "blocksDefaultBehaviorChange":  false,
+                                     "reason":  "Regenerate live diagnostics history after watcher summaries and JSONL traces are finalized; fix source/hash mismatches before using history for tuning decisions.",
+                                     "commandTemplate":  "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\summarize-dsp-live-diagnostics-history.ps1 -BundleDir \"$bundleDir\" -ReportPath \"$bundleDir\\artifacts\\live-diagnostics-history.json\"",
+                                     "commandStepCount":  1,
+                                     "commandSteps":  [
+                                                          "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\summarize-dsp-live-diagnostics-history.ps1 -BundleDir \"$bundleDir\" -ReportPath \"$bundleDir\\artifacts\\live-diagnostics-history.json\""
+                                                      ],
+                                     "manualAction":  "",
+                                     "expectedArtifact":  "artifacts/live-diagnostics-history.json",
+                                     "followUp":  "Use history only to choose candidate comparison windows; it does not approve defaults."
+                                 }
+                             ],
+    "issueCodeCounts":  [
+                            {
+                                "severity":  "error",
+                                "code":  "artifact-file-missing",
+                                "count":  1
+                            },
+                            {
+                                "severity":  "error",
+                                "code":  "benchmark-hardware-graduation-gates-incomplete",
+                                "count":  1
+                            },
+                            {
+                                "severity":  "error",
+                                "code":  "hardware-diagnostics-missing",
+                                "count":  1
+                            },
+                            {
+                                "severity":  "error",
+                                "code":  "live-diagnostics-missing",
+                                "count":  1
+                            },
+                            {
+                                "severity":  "error",
+                                "code":  "snapshot-missing",
+                                "count":  1
+                            },
+                            {
+                                "severity":  "warning",
+                                "code":  "external-engine-candidates-missing",
+                                "count":  1
+                            }
+                        ],
+    "failedLiveHistoryTraceSources":  [
+
+                                      ],
+    "failedReferencedFiles":  [
+
+                              ],
+    "recommendations":  [
+                            "Resolve validation errors before treating this bundle as DSP modernization evidence.",
+                            "Resolve required evidence gates before acceptance review: Strict bundle validation, G2 hardware evidence, WDSP native symbol audit, Live trace comparison."
+                        ]
+}
