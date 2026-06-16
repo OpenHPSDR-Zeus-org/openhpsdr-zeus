@@ -42,24 +42,18 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef, useState } from 'react';
-import { COLORMAPS } from '../gl/colormap';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { COLORMAPS, type RenderColormapId } from '../gl/colormap';
 import { createWfRenderer, type WfGlCaps } from '../gl/waterfall';
 import { planForFrame, resetFramePlan } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
+import { enhanceInto, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import * as viewCenter from '../state/view-center';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
 import { WfDbScale } from './WfDbScale';
-
-// Throttle row uploads so the waterfall scrolls at ~(server tick / N).
-// With a 30 Hz server tick N=2 gives ~15 Hz, which is a comfortable scroll
-// speed without costing much CPU. Shift/reset still run every frame so VFO
-// retunes stay synchronised with the panadapter's offset.
-// TODO(phase-3.1): expose as a UI setting.
-const WF_PUSH_EVERY_N = 2;
 
 type WaterfallProps = {
   /** When true, noise floor fades to transparent so the QRZ-mode map shows through. */
@@ -70,6 +64,12 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<ReturnType<typeof createWfRenderer> | null>(null);
+  const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
+  const popRenderIntensity = useSignalEnhanceStore((s) => s.popRenderIntensity);
+  const moxOn = useTxStore((s) => s.moxOn);
+  const tunOn = useTxStore((s) => s.tunOn);
+  const popActive = popEnabled && !moxOn && !tunOn;
+  const popIntensityCss = Math.max(0, Math.min(1, popRenderIntensity / 100)).toFixed(2);
   // Live transparency, read by buildRenderer() on context-restore so a rebuild
   // mid-QRZ-mode comes back transparent rather than occluding the map (#629).
   const transparentRef = useRef(transparent);
@@ -77,6 +77,10 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   // (WebView2) app has no reachable DevTools. Only shown when something the
   // waterfall needs is missing (#629).
   const [glCaps, setGlCaps] = useState<WfGlCaps | null>(null);
+  // Last renderer-build failure message, surfaced on-screen (desktop has no
+  // DevTools). When set, the waterfall degrades to a notice instead of a frozen
+  // black surface — e.g. an ANGLE shader-compile failure after context loss.
+  const [glError, setGlError] = useState<string | null>(null);
   const autoRange = useDisplaySettingsStore((s) => s.autoRange);
   const setAutoRange = useDisplaySettingsStore((s) => s.setAutoRange);
   const colormap = useDisplaySettingsStore((s) => s.colormap);
@@ -99,31 +103,69 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     let gl: WebGL2RenderingContext | null = null;
     let renderer: ReturnType<typeof createWfRenderer> | null = null;
     let contextLost = false;
+    const isPopRenderActive = () => {
+      const { popEnabled } = useSignalEnhanceStore.getState();
+      const { moxOn, tunOn } = useTxStore.getState();
+      return popEnabled && !moxOn && !tunOn;
+    };
+    // Apply the active value-scale look: the synthetic 'pop' LUT + pop blend
+    // intensity while Signal Pop is engaged (RX only), otherwise the operator's
+    // chosen colormap with pop blend off.
+    const applyRenderLook = () => {
+      if (!renderer) return;
+      const signalEnhance = useSignalEnhanceStore.getState();
+      const active = isPopRenderActive();
+      const intensity = active ? Math.max(0, Math.min(1, signalEnhance.popRenderIntensity / 100)) : 0;
+      const colormap: RenderColormapId = active ? 'pop' : useDisplaySettingsStore.getState().colormap;
+      renderer.setPopMode(active, intensity);
+      renderer.setColormap(colormap);
+    };
 
     // (Re)acquire the context and build a fresh renderer with every GL
     // resource. Returns false if WebGL2 is unavailable. Does NOT touch the
     // frame-consumer registration. Reads colormap/transparency LIVE so a
     // rebuild lands on the operator's current state, not a stale closure.
     const buildRenderer = (): boolean => {
-      const ctx = canvas.getContext('webgl2', {
-        antialias: false,
-        alpha: true,
-        premultipliedAlpha: true,
-      });
-      if (!ctx) {
-        console.error('WebGL2 not available');
+      try {
+        const ctx = canvas.getContext('webgl2', {
+          antialias: false,
+          alpha: true,
+          premultipliedAlpha: true,
+        });
+        if (!ctx) {
+          console.error('WebGL2 not available');
+          setGlCaps(null);
+          setGlError('WebGL2 not available');
+          return false;
+        }
+        gl = ctx;
+        renderer = createWfRenderer(ctx);
+        rendererRef.current = renderer;
+        renderer.setTransparent(transparentRef.current);
+        applyRenderLook();
+        setGlCaps(renderer.caps);
+        setGlError(null);
+        return true;
+      } catch (err) {
+        // createWfRenderer can throw on an ANGLE shader-compile failure after a
+        // context-loss/restore race. Degrade to a notice instead of crashing
+        // the whole workspace tree (#629).
+        const message = err instanceof Error ? err.message : String(err);
+        console.error('[waterfall] renderer unavailable', err);
+        renderer = null;
+        rendererRef.current = null;
+        setGlCaps(null);
+        setGlError(message);
         return false;
       }
-      gl = ctx;
-      renderer = createWfRenderer(ctx);
-      rendererRef.current = renderer;
-      renderer.setColormap(useDisplaySettingsStore.getState().colormap);
-      renderer.setTransparent(transparentRef.current);
-      setGlCaps(renderer.caps);
-      return true;
     };
 
-    if (!buildRenderer()) return;
+    if (!buildRenderer()) {
+      return () => {
+        releaseFrameConsumer();
+        rendererRef.current = null;
+      };
+    }
 
     let lastSeqDrawn = -1;
     let tickCounter = 0;
@@ -133,6 +175,10 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     // Waterfall frame tallies for the one-shot backend diagnostic below (#629).
     let wfFrames = 0;
     let wfValidFrames = 0;
+    // Scratch buffer for Signal Pop. uploadRow() copies immediately
+    // (texSubImage2D), so unlike the panadapter texture a single reused buffer
+    // is safe — there's no deferred reference-identity dirty check here.
+    let enhBuf: Float32Array | null = null;
     // Visibility gating: skip the rAF redraw when the waterfall tile is
     // scrolled offscreen or the tab is hidden. We still push frames into
     // the history texture so when visibility resumes the operator sees a
@@ -146,10 +192,17 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       const { wfDbMin, wfDbMax, wfTxDbMin, wfTxDbMax } = useDisplaySettingsStore.getState();
       const { moxOn, tunOn } = useTxStore.getState();
       const keyed = moxOn || tunOn;
+      const pop = useSignalEnhanceStore.getState();
+      // Signal Pop (RX only): history rows hold gated/compressed 0..1 display
+      // values (enhanceInto), so the colormap maps [0,1] directly. Keyed/TX
+      // keeps the absolute dB window.
+      const popOn = pop.popEnabled && !keyed;
+      const popIntensity = popOn ? Math.max(0, Math.min(1, pop.popRenderIntensity / 100)) : 0;
       // Mirror DbScale.tsx — keyed (MOX/TUN) renders the TX waterfall
       // window so the operator's RX noise-floor view stays put.
-      const dbMin = keyed ? wfTxDbMin : wfDbMin;
-      const dbMax = keyed ? wfTxDbMax : wfDbMax;
+      const dbMin = popOn ? 0 : keyed ? wfTxDbMin : wfDbMin;
+      const dbMax = popOn ? 1 : keyed ? wfTxDbMax : wfDbMax;
+      renderer.setPopMode(popOn, popIntensity);
       renderer.draw(
         dbMin,
         dbMax,
@@ -270,14 +323,30 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       let skipRowUpload = false;
       if (wfDb) {
         tickCounter++;
-        skipRowUpload = tickCounter % WF_PUSH_EVERY_N !== 0;
+        // Operator-selectable scroll cadence (1/2/3 server frames per row).
+        // Shift/reset still run every frame so VFO retunes stay synchronised
+        // with the panadapter's offset.
+        const cadence = useDisplaySettingsStore.getState().waterfallRowCadence;
+        skipRowUpload = tickCounter % cadence !== 0;
         // No refill hold here any more (issue #597 Phase 2): rows are
         // stamped with the LO their data was captured at, so the shared
         // shift planner places them correctly even mid-retune.
         // Feed the auto-range tracker — it's a no-op when AUTO is off.
         useDisplaySettingsStore.getState().updateAutoRange(wfDb);
       }
-      renderer.pushFrame(decision, wfDb, state.centerHz, state.hzPerPixel, {
+      // Signal Pop (RX only): substitute the per-bin floor-subtracted row so
+      // weak carriers leap off a flattened baseline. Gated off while keyed —
+      // TX pixels are a different dB domain.
+      let wfForPush = wfDb;
+      if (wfDb) {
+        const { moxOn, tunOn } = useTxStore.getState();
+        if (useSignalEnhanceStore.getState().popEnabled && !moxOn && !tunOn) {
+          if (!enhBuf || enhBuf.length !== wfDb.length) enhBuf = new Float32Array(wfDb.length);
+          enhanceInto(wfDb, enhBuf);
+          wfForPush = enhBuf;
+        }
+      }
+      renderer.pushFrame(decision, wfForPush, state.centerHz, state.hzPerPixel, {
         skipRowUpload,
       });
       requestRedraw();
@@ -297,7 +366,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     const unsubSettings = useDisplaySettingsStore.subscribe((state, prev) => {
       if (contextLost || !renderer) return;
       if (state.colormap !== prev.colormap) {
-        renderer.setColormap(state.colormap);
+        applyRenderLook();
         requestRedraw();
         return;
       }
@@ -319,6 +388,34 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     // spectrum-tick rate.
     const unsubTx = useTxStore.subscribe((state, prev) => {
       if (state.moxOn !== prev.moxOn || state.tunOn !== prev.tunOn) {
+        applyRenderLook();
+        requestRedraw();
+      }
+    });
+
+    // Signal Pop toggle: the value scale flips wholesale (absolute dB ↔
+    // dB-above-floor). Re-seed the history so pre-toggle rows don't render as a
+    // clipped band against the new range. New rows fill in from the top.
+    const unsubEnhance = useSignalEnhanceStore.subscribe((state, prev) => {
+      if (contextLost || !renderer) return;
+      if (state.popEnabled !== prev.popEnabled) {
+        applyRenderLook();
+        renderer.clearHistory();
+        requestRedraw();
+      } else if (
+        state.popFloorDb !== prev.popFloorDb ||
+        state.popSpanDb !== prev.popSpanDb ||
+        state.popGamma !== prev.popGamma ||
+        state.popRenderIntensity !== prev.popRenderIntensity ||
+        state.coherenceHoldGate !== prev.coherenceHoldGate ||
+        state.coherenceBoostDb !== prev.coherenceBoostDb ||
+        state.ridgeBoost !== prev.ridgeBoost ||
+        state.ridgeMaxBoostDb !== prev.ridgeMaxBoostDb ||
+        state.visualAgcEnabled !== prev.visualAgcEnabled ||
+        state.visualAgcStrength !== prev.visualAgcStrength ||
+        state.impulseRejectEnabled !== prev.impulseRejectEnabled ||
+        state.impulseRejectDb !== prev.impulseRejectDb
+      ) {
         requestRedraw();
       }
     });
@@ -328,6 +425,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       unsubViewCenter();
       unsubSettings();
       unsubTx();
+      unsubEnhance();
       ro.disconnect();
       io.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -361,13 +459,16 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   return (
     <div
       ref={containerRef}
-      className="waterfall-canvas"
+      className={`waterfall-canvas${popActive ? ' pop-enhanced' : ''}`}
       style={{
         position: 'relative',
         minHeight: 0,
         width: '100%',
         height: '100%',
-        background: 'var(--wf-0)',
+        background: popActive ? 'var(--pop-surface-bg)' : 'var(--wf-0)',
+        ...(popActive
+          ? ({ ['--pop-intensity' as string]: popIntensityCss } as CSSProperties)
+          : undefined),
       }}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
@@ -394,6 +495,29 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
           title={`GPU: ${glCaps.gpu}`}
         >
           wf: float_linear unsupported → NEAREST fallback
+        </div>
+      )}
+      {glError && (
+        <div
+          role="status"
+          style={{
+            position: 'absolute',
+            top: 6,
+            left: 6,
+            right: 6,
+            padding: '4px 6px',
+            fontSize: 10,
+            fontFamily: 'monospace',
+            color: 'var(--fg-0)',
+            background: 'rgba(0,0,0,0.62)',
+            border: '1px solid rgba(255,255,255,0.22)',
+            borderRadius: 3,
+            pointerEvents: 'none',
+            zIndex: 3,
+          }}
+          title={glError}
+        >
+          Waterfall renderer unavailable
         </div>
       )}
       <WfDbScale />

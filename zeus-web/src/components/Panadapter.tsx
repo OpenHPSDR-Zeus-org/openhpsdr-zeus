@@ -42,12 +42,13 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, type CSSProperties } from 'react';
 import { createPanRenderer, hexToRgbFloats } from '../gl/panadapter';
 import { planForFrame } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
+import { enhanceInto, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import * as viewCenter from '../state/view-center';
 import { useTxStore } from '../state/tx-store';
 import { usePanTuneGesture } from '../util/use-pan-tune-gesture';
@@ -56,10 +57,17 @@ import { PassbandOverlay } from './PassbandOverlay';
 import { ImdReadings } from './ImdReadings';
 import { DbScale } from './DbScale';
 import { SpotOverlay } from './SpotOverlay';
+import { PeakMarkerOverlay } from './PeakMarkerOverlay';
 
 export function Panadapter() {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
+  const popRenderIntensity = useSignalEnhanceStore((s) => s.popRenderIntensity);
+  const moxOn = useTxStore((s) => s.moxOn);
+  const tunOn = useTxStore((s) => s.tunOn);
+  const popActive = popEnabled && !moxOn && !tunOn;
+  const popIntensityCss = Math.max(0, Math.min(1, popRenderIntensity / 100)).toFixed(2);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -88,6 +96,31 @@ export function Panadapter() {
     let anchorPan: Float32Array | null = null;
     let anchorCenterHz = 0;
     let anchorHzPerPixel = 0;
+    // Signal Pop. The adopted anchor is the raw server trace UNLESS Pop is on,
+    // in which case it's the per-bin floor-subtracted trace. We keep the last
+    // RAW trace around so a Pop toggle (or a parameter change) can rebuild the
+    // anchor without waiting for the next frame. Enhanced output is
+    // double-buffered so each adoption presents a NEW Float32Array reference —
+    // the renderer's dataDirty check (issue #597) keys on reference identity,
+    // so mutating one buffer in place would be silently dropped during a glide.
+    let lastRawPan: Float32Array | null = null;
+    const enhScratch: Array<Float32Array | null> = [null, null];
+    let enhSlot = 0;
+    const buildAnchor = (raw: Float32Array): Float32Array => {
+      const { popEnabled } = useSignalEnhanceStore.getState();
+      const { moxOn, tunOn } = useTxStore.getState();
+      // Pop is an RX weak-signal aid; the TX trace lives in a different dB
+      // domain (speech against a calibrated scale), so leave it raw while keyed.
+      if (!popEnabled || moxOn || tunOn) return raw;
+      let buf = enhScratch[enhSlot];
+      if (!buf || buf.length !== raw.length) {
+        buf = new Float32Array(raw.length);
+        enhScratch[enhSlot] = buf;
+      }
+      enhanceInto(raw, buf);
+      enhSlot ^= 1;
+      return buf;
+    };
     // Visibility gating: don't burn rAF cycles when the tile is scrolled
     // off-screen, the tab is hidden, or the operator switched to a layout
     // where the panadapter isn't mounted-but-visible. Both signals are
@@ -105,10 +138,17 @@ export function Panadapter() {
       // TX_FIXED_DB_MIN/MAX in display-settings-store.
       const { moxOn, tunOn } = useTxStore.getState();
       const keyed = moxOn || tunOn;
-      const dbMin = keyed ? s.txDbMin : s.dbMin;
-      const dbMax = keyed ? s.txDbMax : s.dbMax;
+      const pop = useSignalEnhanceStore.getState();
+      // Signal Pop (RX only): the anchor now holds gated/compressed 0..1 display
+      // values (enhanceInto), so the colormap maps [0,1] directly. Keyed/TX
+      // keeps the absolute dB window.
+      const popOn = pop.popEnabled && !keyed;
+      const popIntensity = popOn ? Math.max(0, Math.min(1, pop.popRenderIntensity / 100)) : 0;
+      const dbMin = popOn ? 0 : keyed ? s.txDbMin : s.dbMin;
+      const dbMax = popOn ? 1 : keyed ? s.txDbMax : s.dbMax;
       const { r, g, b } = hexToRgbFloats(s.rxTraceColor);
       renderer.setTraceColor(r, g, b);
+      renderer.setPopMode(popOn, popIntensity);
       // Fractional offset — the shaders take a float uOffsetPx, so the
       // glide is sub-pixel-smooth for free (issue #597).
       const offsetPx =
@@ -189,7 +229,8 @@ export function Panadapter() {
         // immediately; the refill hold doesn't apply across a reset.
         viewCenter.snapTo(frameCenter, state.hzPerPixel);
         if (state.panValid && state.panDb) {
-          anchorPan = state.panDb;
+          lastRawPan = state.panDb;
+          anchorPan = buildAnchor(state.panDb);
           anchorCenterHz = frameCenter;
           anchorHzPerPixel = state.hzPerPixel;
         }
@@ -205,13 +246,37 @@ export function Panadapter() {
         // self-describing — the anchor model draws them where their data
         // belongs and the old refill-hold heuristic is unnecessary.
         if (state.panValid && state.panDb) {
-          anchorPan = state.panDb;
+          lastRawPan = state.panDb;
+          anchorPan = buildAnchor(state.panDb);
           anchorCenterHz = frameCenter;
           anchorHzPerPixel = state.hzPerPixel;
         }
       }
 
       requestRedraw();
+    });
+
+    // Signal Pop toggle / tuning change: rebuild the anchor from the last raw
+    // trace and repaint now, instead of waiting for the next server frame.
+    const unsubEnhance = useSignalEnhanceStore.subscribe((state, prev) => {
+      if (
+        state.popEnabled !== prev.popEnabled ||
+        state.popFloorDb !== prev.popFloorDb ||
+        state.popSpanDb !== prev.popSpanDb ||
+        state.popGamma !== prev.popGamma ||
+        state.popRenderIntensity !== prev.popRenderIntensity ||
+        state.coherenceHoldGate !== prev.coherenceHoldGate ||
+        state.coherenceBoostDb !== prev.coherenceBoostDb ||
+        state.ridgeBoost !== prev.ridgeBoost ||
+        state.ridgeMaxBoostDb !== prev.ridgeMaxBoostDb ||
+        state.visualAgcEnabled !== prev.visualAgcEnabled ||
+        state.visualAgcStrength !== prev.visualAgcStrength ||
+        state.impulseRejectEnabled !== prev.impulseRejectEnabled ||
+        state.impulseRejectDb !== prev.impulseRejectDb
+      ) {
+        if (lastRawPan) anchorPan = buildAnchor(lastRawPan);
+        requestRedraw();
+      }
     });
 
     // View-center motion → redraw at display rate while gliding. The
@@ -243,6 +308,10 @@ export function Panadapter() {
     // raises the floor on the redraw rate above the spectrum-tick rate.
     const unsubTx = useTxStore.subscribe((state, prev) => {
       if (state.moxOn !== prev.moxOn || state.tunOn !== prev.tunOn) {
+        // buildAnchor gates Pop off while keyed, so rebuild from the last raw
+        // trace on the MOX/TUN edge to avoid a one-frame enhanced-vs-TX-range
+        // mismap before the first TX frame adopts.
+        if (lastRawPan) anchorPan = buildAnchor(lastRawPan);
         requestRedraw();
       }
     });
@@ -252,6 +321,7 @@ export function Panadapter() {
       unsubViewCenter();
       unsubSettings();
       unsubTx();
+      unsubEnhance();
       ro.disconnect();
       io.disconnect();
       document.removeEventListener('visibilitychange', onVisibilityChange);
@@ -266,18 +336,22 @@ export function Panadapter() {
   return (
     <div
       ref={containerRef}
-      className="spectrum-canvas"
+      className={`spectrum-canvas${popActive ? ' pop-enhanced' : ''}`}
       style={{
         position: 'relative',
         minHeight: 0,
         width: '100%',
         height: '100%',
-        background: 'var(--spec-bg)',
+        background: popActive ? 'var(--pop-surface-bg)' : 'var(--spec-bg)',
+        ...(popActive
+          ? ({ ['--pop-intensity' as string]: popIntensityCss } as CSSProperties)
+          : undefined),
       }}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
       <PassbandOverlay />
       <SpotOverlay />
+      <PeakMarkerOverlay />
       <ImdReadings />
       <FreqAxis />
       <DbScale />

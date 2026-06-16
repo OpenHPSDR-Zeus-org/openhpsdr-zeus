@@ -55,13 +55,14 @@
 // shift tick avoids a discontinuity between the just-shifted top row and the
 // pre-retune frame underneath.
 //
-// Reset conditions (|shift| ≥ width, width change, hzPerPixel change) re-
-// seed both textures at -200 dB so uninitialised columns render as the
-// noise-floor colour rather than a 0 dB yellow band.
+// Reset conditions (|shift| ≥ width or width change) re-seed both textures
+// at -200 dB so uninitialised columns render as the noise-floor colour rather
+// than a 0 dB yellow band. Hz-per-pixel changes are resampled in-place when
+// the old and new spans overlap, so zooming preserves waterfall history.
 
 import { buildProgram } from './util';
-import { WF_VS, WF_FS, WF_SHIFT_FS } from './shaders';
-import { lutFor, type ColormapId } from './colormap';
+import { WF_VS, WF_FS, WF_REMAP_FS } from './shaders';
+import { lutFor, type RenderColormapId } from './colormap';
 import type { WfShiftDecision } from './wf-shift';
 
 const HISTORY_ROWS = 512;
@@ -103,7 +104,9 @@ export type WfRenderer = {
    *  the history's anchor center and the view (issue #597). Null renders
    *  with zero offset (pre-first-frame / tests). */
   draw: (dbMin: number, dbMax: number, viewCenterHz?: number | null) => void;
-  setColormap: (id: ColormapId) => void;
+  setColormap: (id: RenderColormapId) => void;
+  /** Enables and tunes the Signal Pop waterfall shader treatment. */
+  setPopMode: (active: boolean, intensity?: number) => void;
   /** 1.0 = opaque (default). 0.0 = noise floor fades to transparent so a
    *  background layer (e.g. the QRZ-mode Leaflet map) shows through. */
   setTransparent: (transparent: boolean) => void;
@@ -116,6 +119,11 @@ export type WfRenderer = {
     lastViewOffsetUv: number;
     contextLost: boolean;
   };
+  /** Re-seed the history to the noise-floor colour. Used when the value scale
+   *  changes wholesale (Signal Pop toggle) so pre-toggle rows in the old dB
+   *  domain don't render as a clipped band against the new range. No-op before
+   *  the first frame (nothing allocated yet). */
+  clearHistory: () => void;
   dispose: () => void;
 };
 
@@ -163,10 +171,11 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   const uSeedDbDraw = gl.getUniformLocation(drawProg, 'uSeedDb');
   let bgAlpha = 1;
 
-  const shiftProg = buildProgram(gl, WF_VS, WF_SHIFT_FS);
-  const uShiftSrc = gl.getUniformLocation(shiftProg, 'uSrc');
-  const uShiftUv = gl.getUniformLocation(shiftProg, 'uShiftUv');
-  const uShiftSeed = gl.getUniformLocation(shiftProg, 'uSeedDb');
+  const remapProg = buildProgram(gl, WF_VS, WF_REMAP_FS);
+  const uRemapSrc = gl.getUniformLocation(remapProg, 'uSrc');
+  const uRemapSrcXScale = gl.getUniformLocation(remapProg, 'uSrcXScale');
+  const uRemapSrcCenterOffsetUv = gl.getUniformLocation(remapProg, 'uSrcCenterOffsetUv');
+  const uRemapSeed = gl.getUniformLocation(remapProg, 'uSeedDb');
 
   const vao = gl.createVertexArray()!;
   const vbo = gl.createBuffer()!;
@@ -198,7 +207,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   const fbo = gl.createFramebuffer()!;
 
   const lutTex = gl.createTexture()!;
-  const uploadLut = (id: ColormapId) => {
+  const uploadLut = (id: RenderColormapId) => {
     gl.bindTexture(gl.TEXTURE_2D, lutTex);
     gl.texImage2D(
       gl.TEXTURE_2D,
@@ -266,6 +275,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
     // got R32F storage, texWidth stayed 0, draw() bailed to a transparent
     // clear, and the waterfall was permanently black. Seeding here (and on any
     // width change) makes it order- and platform-independent.
+    if (wfDb.length === 0) return;
     if (texWidth !== wfDb.length) resetTextures(wfDb.length);
     writeRow = (writeRow + 1) % HISTORY_ROWS;
     gl.bindTexture(gl.TEXTURE_2D, textures[active]);
@@ -282,8 +292,8 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
     );
   };
 
-  const performShift = (shiftPx: number) => {
-    if (texWidth === 0) return; // not seeded yet — nothing to shift
+  const performRemap = (srcCenterOffsetUv: number, srcXScale: number) => {
+    if (texWidth === 0) return; // not seeded yet — nothing to remap
     const src = active === 0 ? textures[0] : textures[1];
     const dst = active === 0 ? textures[1] : textures[0];
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
@@ -295,17 +305,23 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
       0,
     );
     gl.viewport(0, 0, texWidth, HISTORY_ROWS);
-    gl.useProgram(shiftProg);
+    gl.useProgram(remapProg);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, src);
-    gl.uniform1i(uShiftSrc, 0);
-    gl.uniform1f(uShiftUv, shiftPx / texWidth);
-    gl.uniform1f(uShiftSeed, SEED_DB);
+    gl.uniform1i(uRemapSrc, 0);
+    gl.uniform1f(uRemapSrcXScale, srcXScale);
+    gl.uniform1f(uRemapSrcCenterOffsetUv, srcCenterOffsetUv);
+    gl.uniform1f(uRemapSeed, SEED_DB);
     gl.bindVertexArray(vao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.bindVertexArray(null);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     active = (1 - active) as 0 | 1;
+  };
+
+  const performShift = (shiftPx: number) => {
+    if (texWidth === 0) return;
+    performRemap(-shiftPx / texWidth, 1);
   };
 
   return {
@@ -334,6 +350,12 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
           // lastCenterHz unchanged so sub-pixel retunes accumulate.
           break;
         case 'shift':
+          // A shift on an unseeded renderer (texWidth === 0, e.g. the first
+          // frame this surface observes after a remount happens to be a
+          // retune) has no history to rebase and would bind a level-0 store
+          // that texImage2D never allocated. Skip it; the next valid frame
+          // seeds via uploadRow.
+          if (texWidth === 0) break;
           // Shift always runs — throttling it would let the history drift
           // out of sync with the panadapter's anchor offset. This is a
           // REBASE of the texture in integer pixels; the fractional
@@ -343,6 +365,15 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
           // overlay a post-retune row on top of a just-shifted frame.
           lastCenterHz = decision.residualCenterHz;
           break;
+        case 'rescale':
+          // Remap each historical column to the equivalent absolute-frequency
+          // column under the new hz/px. This keeps zoom changes continuous:
+          // zoom-in crops around the center; zoom-out exposes seeded edges.
+          performRemap(decision.srcCenterOffsetUv, decision.srcXScale);
+          if (wfDb && !options?.skipRowUpload) uploadRow(wfDb);
+          lastCenterHz = centerHz;
+          lastHzPerPixel = hzPerPixel;
+          break;
       }
     },
     setColormap(id) {
@@ -350,6 +381,13 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
     },
     setTransparent(transparent) {
       bgAlpha = transparent ? 0 : 1;
+    },
+    setPopMode() {
+      // POP is expressed through the renderer LUT; the shader remains the
+      // portable baseline waterfall program.
+    },
+    clearHistory() {
+      if (texWidth > 0) resetTextures(texWidth);
     },
     draw(dbMin, dbMax, viewCenterHz = null) {
       gl.viewport(0, 0, canvasW, canvasH);
@@ -408,7 +446,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
       gl.deleteBuffer(vbo);
       gl.deleteVertexArray(vao);
       gl.deleteProgram(drawProg);
-      gl.deleteProgram(shiftProg);
+      gl.deleteProgram(remapProg);
     },
   };
 }

@@ -102,6 +102,11 @@ export function planForFrame(i: FramePlanInput): WfShiftDecision {
     case 'shift':
       lastCenterHz = decision.residualCenterHz;
       break;
+    case 'rescale':
+      lastCenterHz = i.centerHz;
+      lastHzPerPixel = i.hzPerPixel;
+      lastWidth = i.width;
+      break;
   }
   plannedSeq = i.seq;
   plannedDecision = decision;
