@@ -708,8 +708,8 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     /// <summary>
     /// Ensure <c>.env</c> in the install dir pins HamClock's PORT to the one we
     /// chose (its config gives .env precedence over process.env). Seeds from
-    /// .env.example if .env doesn't exist yet, then upserts the PORT and
-    /// AUTO_UPDATE_ENABLED keys, preserving every other line.
+    /// .env.example if .env doesn't exist yet, then upserts the PORT,
+    /// AUTO_UPDATE_ENABLED and SETTINGS_SYNC keys, preserving every other line.
     /// </summary>
     private static void EnsureEnvPort(int port)
     {
@@ -724,6 +724,14 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
         }
         content = UpsertEnvKey(content, "PORT", port.ToString());
         content = UpsertEnvKey(content, "AUTO_UPDATE_ENABLED", "false");
+        // Persist HamClock's UI settings (callsign, location, map prefs) on the
+        // server side, in the install dir. The embed's localStorage does NOT
+        // survive — the cross-origin iframe gets partitioned/ephemeral storage
+        // in the desktop webview (WebKit third-party storage), so settings reset
+        // (and the first-visit popup reappears) every launch otherwise. Server
+        // sync mirrors the openhamclock_* keys to disk and reloads them on boot.
+        // requireWriteAuth is open with no API_WRITE_KEY set (our local install).
+        content = UpsertEnvKey(content, "SETTINGS_SYNC", "true");
         File.WriteAllText(envPath, content);
     }
 
