@@ -896,13 +896,18 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
 <script>
 (function () {
   function ok(k) {
-    return !!k && (k.indexOf('openhamclock_') === 0 || k.indexOf('ohc_') === 0)
+    return typeof k === 'string'
+      && (k.indexOf('openhamclock_') === 0 || k.indexOf('ohc_') === 0)
       && k !== 'openhamclock_profiles' && k !== 'openhamclock_activeProfile';
   }
-  // 1) PULL — synchronously restore persisted settings into localStorage BEFORE
-  //    HamClock's deferred module bundle reads them, so the app boots as a
-  //    returning visitor (settings present, no first-visit popup). Same-origin
-  //    request to the sidecar's own /api/settings (SETTINGS_SYNC persists to disk).
+  // WebKit partitions/blocks the cross-origin HamClock iframe's NATIVE
+  // localStorage, so HamClock can't persist anything (first-visit every launch,
+  // no save). Replace localStorage with a server-backed store: seed it
+  // synchronously from /api/settings (so the app boots as a returning visitor)
+  // and mirror writes back to the server (debounced). Runs before HamClock's
+  // deferred module bundle, so it transparently uses this instead of the blocked
+  // native one. /api/settings persists to disk via SETTINGS_SYNC.
+  var store = {};
   try {
     var xhr = new XMLHttpRequest();
     xhr.open('GET', '/api/settings', false);
@@ -910,34 +915,50 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     if (xhr.status >= 200 && xhr.status < 300) {
       var data = JSON.parse(xhr.responseText || '{}');
       for (var k in data) {
-        if (Object.prototype.hasOwnProperty.call(data, k) && ok(k) && typeof data[k] === 'string') {
-          try { localStorage.setItem(k, data[k]); } catch (e) {}
-        }
+        if (Object.prototype.hasOwnProperty.call(data, k) && typeof data[k] === 'string') store[k] = data[k];
       }
     }
   } catch (e) {}
-  // 2) MIRROR — persist openhamclock_*/ohc_* writes back to the server (debounced).
   var timer = null;
-  function push() {
-    timer = null;
-    try {
-      var out = {};
-      for (var i = 0; i < localStorage.length; i++) {
-        var key = localStorage.key(i);
-        if (ok(key)) out[key] = localStorage.getItem(key);
-      }
-      fetch('/api/settings', { method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(out) }).catch(function () {});
-    } catch (e) {}
+  function schedule() {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(function () {
+      timer = null;
+      try {
+        var out = {};
+        for (var k in store) { if (Object.prototype.hasOwnProperty.call(store, k) && ok(k)) out[k] = store[k]; }
+        fetch('/api/settings', { method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(out) }).catch(function () {});
+      } catch (e) {}
+    }, 600);
   }
-  try {
-    var origSet = localStorage.setItem.bind(localStorage);
-    localStorage.setItem = function (k, v) {
-      origSet(k, v);
-      if (ok(k)) { if (timer) clearTimeout(timer); timer = setTimeout(push, 800); }
-    };
-  } catch (e) {}
+  var methods = {
+    getItem: function (k) { k = String(k); return Object.prototype.hasOwnProperty.call(store, k) ? store[k] : null; },
+    setItem: function (k, v) { k = String(k); store[k] = String(v); if (ok(k)) schedule(); },
+    removeItem: function (k) { k = String(k); delete store[k]; if (ok(k)) schedule(); },
+    clear: function () { for (var k in store) delete store[k]; schedule(); },
+    key: function (i) { return Object.keys(store)[i] || null; }
+  };
+  var backed = new Proxy(methods, {
+    get: function (t, p) {
+      if (p === 'length') return Object.keys(store).length;
+      if (p in t) return t[p];
+      return (typeof p === 'string' && Object.prototype.hasOwnProperty.call(store, p)) ? store[p] : undefined;
+    },
+    set: function (t, p, v) {
+      if (p in t) { t[p] = v; return true; }
+      var k = String(p); store[k] = String(v); if (ok(k)) schedule(); return true;
+    },
+    deleteProperty: function (t, p) { var k = String(p); delete store[k]; if (ok(k)) schedule(); return true; },
+    has: function (t, p) { return (p in t) || Object.prototype.hasOwnProperty.call(store, p); },
+    ownKeys: function () { return Object.keys(store); },
+    getOwnPropertyDescriptor: function (t, p) {
+      if (Object.prototype.hasOwnProperty.call(store, p)) return { configurable: true, enumerable: true, writable: true, value: store[p] };
+      return undefined;
+    }
+  });
+  try { Object.defineProperty(window, 'localStorage', { value: backed, configurable: true }); } catch (e) {}
 })();
 </script>
 ";
@@ -949,7 +970,14 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
                 var file = Path.Combine(InstallDir, rel, "index.html");
                 if (!File.Exists(file)) continue;
                 var src = File.ReadAllText(file);
-                if (src.Contains("ZEUS_SETTINGS_PERSIST", StringComparison.Ordinal)) continue; // already patched
+                // Self-updating: strip any prior version of our block, then inject
+                // the current shim — so installs carrying an older shim get the fix.
+                var ms = src.IndexOf("<!-- ZEUS_SETTINGS_PERSIST", StringComparison.Ordinal);
+                if (ms >= 0)
+                {
+                    var es = src.IndexOf("</script>", ms, StringComparison.Ordinal);
+                    if (es >= 0) src = src.Remove(ms, (es + "</script>".Length) - ms);
+                }
                 const string anchor = "</head>";
                 var idx = src.IndexOf(anchor, StringComparison.Ordinal);
                 if (idx < 0)
