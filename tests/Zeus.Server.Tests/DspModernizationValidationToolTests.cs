@@ -1964,11 +1964,15 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains("cannot satisfy mixed weak+strong acceptance", reason, StringComparison.Ordinal);
 
             var manualAction = action.GetProperty("manualAction").GetString() ?? "";
+            Assert.Contains("watch-dsp-manual-tune-observer", manualAction, StringComparison.Ordinal);
+            Assert.Contains("no VFO/LO writes", manualAction, StringComparison.Ordinal);
             Assert.Contains("weak-only/missing strong input", manualAction, StringComparison.Ordinal);
             Assert.Contains("both weak and strong speech", manualAction, StringComparison.Ordinal);
 
             var steps = ReadStringArray(action, "commandSteps");
+            Assert.Contains(steps, step => step.Contains("watch-dsp-manual-tune-observer.ps1", StringComparison.Ordinal));
             Assert.Contains(steps, step => step.Contains("run-dsp-g2-rx-peak-hunt.ps1", StringComparison.Ordinal));
+            Assert.Contains("artifacts/manual-tune-observer-report.json", ReadStringArray(action, "expectedArtifacts"));
             Assert.Contains("artifacts/g2-rx-peak-hunt-report.json", ReadStringArray(action, "expectedArtifacts"));
         }
         finally
@@ -6102,6 +6106,54 @@ public sealed class DspModernizationValidationToolTests
                 Directory.Delete(bundleDir, recursive: true);
             }
         }
+    }
+
+    [SkippableFact]
+    public async Task ManualTuneObserverPlanOnlyDeclaresReadOnlySafety()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell manual-tune observer plan smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var plan = await RunPowerShellAsync(
+            powerShell,
+            repoRoot,
+            Path.Combine(repoRoot, "tools", "watch-dsp-manual-tune-observer.ps1"),
+            "-BaseUrl", "http://127.0.0.1:1",
+            "-PlanOnly",
+            "-PollCount", "12",
+            "-StablePolls", "3",
+            "-MaxCaptures", "2");
+
+        Assert.Equal(0, plan.ExitCode);
+
+        using var planDoc = JsonDocument.Parse(plan.StandardOutput);
+        var root = planDoc.RootElement;
+        Assert.Equal("watch-dsp-manual-tune-observer", root.GetProperty("tool").GetString());
+        Assert.Equal("plan-only", root.GetProperty("mode").GetString());
+        Assert.Equal(12, root.GetProperty("pollCount").GetInt32());
+        Assert.Equal(3, root.GetProperty("stablePolls").GetInt32());
+        Assert.Equal(2, root.GetProperty("maxCaptures").GetInt32());
+
+        var safety = root.GetProperty("safety");
+        Assert.True(safety.GetProperty("rxOnly").GetBoolean());
+        Assert.True(safety.GetProperty("readOnly").GetBoolean());
+        Assert.False(safety.GetProperty("apiWrites").GetBoolean());
+        Assert.False(safety.GetProperty("retune").GetBoolean());
+        Assert.False(safety.GetProperty("txEndpointsTouched").GetBoolean());
+        Assert.Equal("watch-dsp-live-diagnostics.ps1", safety.GetProperty("delegatedCapture").GetString());
+
+        var endpoints = safety.GetProperty("observedEndpoints")
+            .EnumerateArray()
+            .Select(value => value.GetString())
+            .ToArray();
+        Assert.Contains("/api/state", endpoints);
+        Assert.Contains("/api/radio/diagnostics/dsp-scene", endpoints);
+        Assert.Contains("/api/dsp/live-diagnostics", endpoints);
+
+        Assert.Contains("watch-dsp-manual-tune-observer.ps1", root.GetProperty("example").GetString(), StringComparison.Ordinal);
     }
 
     [SkippableFact]

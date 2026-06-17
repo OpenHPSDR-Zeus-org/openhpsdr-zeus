@@ -1928,6 +1928,7 @@ function Add-AcceptanceActionForGate {
                     }
                 }
                 $peakHuntCommandSteps = @(
+                    'powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl http://127.0.0.1:6060 -OutputRoot "$bundleDir\artifacts\manual-tune-observer" -ReportPath "$bundleDir\artifacts\manual-tune-observer-report.json" -PollCount 60 -StablePolls 3 -MaxCaptures 4 -CaptureSamples 24 -CaptureIntervalMs 250 -ContinueOnError',
                     'powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-g2-rx-peak-hunt.ps1 -BaseUrl http://127.0.0.1:6060 -OutputRoot "$bundleDir\artifacts\g2-rx-peak-hunt" -ReportPath "$bundleDir\artifacts\g2-rx-peak-hunt-report.json" -AllowRetune -StopOnReady -SamplesPerWindow 24 -IntervalMs 250 -MaxPeaks 6',
                     'powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir "$bundleDir" -ComparisonId nr5-spnr -IndexPath "$bundleDir\artifacts\live-diagnostics-trace-index.mixed-weak-strong-followup.json" -ReportPath "$bundleDir\artifacts\live-diagnostics-matrix-report.mixed-weak-strong-followup.json" -Samples 90 -IntervalMs 1000 -ContinueOnError',
                     'powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-live-diagnostics-history.ps1 -BundleDir "$bundleDir" -ReportPath "$bundleDir\artifacts\live-diagnostics-history.json"',
@@ -1944,9 +1945,10 @@ function Add-AcceptanceActionForGate {
                             -BlocksDefaultChange:$true `
                             -Reason "$reason$peakHuntReason" `
                             -CommandSteps $peakHuntCommandSteps `
-                            -ManualAction "Use G2 on an active SSB/CW-adjacent window with both weak and strong speech samples. Start with run-dsp-g2-rx-peak-hunt to scan current frontend peaks; omit -AllowRetune for a current-VFO-only dry run.$peakHuntManualContext Then capture NR5/SPNR live diagnostics, regenerate artifacts/live-diagnostics-history.json, and rerun strict validation. The v14 history must report mixedWeakStrongEvidenceStatus=ready." `
+                            -ManualAction "Use G2 on an active SSB/CW-adjacent window with both weak and strong speech samples. If the operator is tuning manually, start with watch-dsp-manual-tune-observer so no VFO/LO writes occur; otherwise use run-dsp-g2-rx-peak-hunt to scan current frontend peaks and omit -AllowRetune for a current-VFO-only dry run.$peakHuntManualContext Then capture NR5/SPNR live diagnostics, regenerate artifacts/live-diagnostics-history.json, and rerun strict validation. The v14 history must report mixedWeakStrongEvidenceStatus=ready." `
                             -ExpectedArtifact 'artifacts/live-diagnostics-history.json' `
                             -ExpectedArtifacts @(
+                                'artifacts/manual-tune-observer-report.json',
                                 'artifacts/g2-rx-peak-hunt-report.json',
                                 'artifacts/live-diagnostics-trace-index.mixed-weak-strong-followup.json',
                                 'artifacts/live-diagnostics-matrix-report.mixed-weak-strong-followup.json',
