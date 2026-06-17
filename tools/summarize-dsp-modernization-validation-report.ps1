@@ -889,13 +889,28 @@ function Get-EvidenceGateRecords {
     $manualTuneObserverReferencedCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverReferencedCaptureCount")
     $manualTuneObserverReferencedCaptureReadyCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverReferencedCaptureReadyCount")
     $manualTuneObserverReferencedCaptureProblemCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverReferencedCaptureProblemCount")
+    $manualTuneObserverMixedStatusCounts = @(Get-JsonArray $Validation "manualTuneObserverMixedWeakStrongEvidenceStatusCounts")
+    $manualTuneObserverMixedStatusText = if ($manualTuneObserverMixedStatusCounts.Count -le 0) {
+        "none"
+    }
+    else {
+        ($manualTuneObserverMixedStatusCounts | ForEach-Object {
+                "$([string](Get-JsonValue $_ "status"))=$(Get-JsonValue $_ "count")"
+            }) -join ","
+    }
+    $manualTuneObserverWeakOnlyCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverWeakOnlyCaptureCount")
+    $manualTuneObserverReadyWeakOnlyCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverReadyWeakOnlyCaptureCount")
+    $manualTuneObserverNearStrongCandidateCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverNearStrongPromotionCandidateCaptureCount")
+    $manualTuneObserverBestNearStrongCandidateVfoHz = Get-JsonValue $Validation "manualTuneObserverBestNearStrongPromotionCandidateVfoHz"
+    $manualTuneObserverBestNearStrongCandidateDistanceDb = Get-JsonValue $Validation "manualTuneObserverBestNearStrongPromotionCandidateDistanceToStrongThresholdDb"
+    $manualTuneObserverBestNearStrongCandidateReportPath = [string](Get-JsonValue $Validation "manualTuneObserverBestNearStrongPromotionCandidateReportPath")
     $gates.Add((New-EvidenceGateRecord `
                 -GateId "manual-tune-observer" `
                 -Name "Manual tune observer evidence" `
                 -Ready:$manualTuneObserverReady `
                 -Status $manualTuneObserverStatus `
                 -RequiredForAcceptance:$false `
-                -Detail "present=$manualTuneObserverPresent; ok=$(Get-JsonValue $Validation "manualTuneObserverOk"); scanError=$(Get-JsonValue $Validation "manualTuneObserverScanError"); baseUrl=$(Get-JsonValue $Validation "manualTuneObserverBaseUrl"); bundleRelativePaths=$(Get-JsonValue $Validation "manualTuneObserverBundleRelativePaths"); scenario=$(Get-JsonValue $Validation "manualTuneObserverScenarioId"); comparison=$(Get-JsonValue $Validation "manualTuneObserverComparisonId"); readOnly=$(Get-JsonValue $Validation "manualTuneObserverSafetyReadOnly"); apiWrites=$(Get-JsonValue $Validation "manualTuneObserverSafetyApiWrites"); retune=$(Get-JsonValue $Validation "manualTuneObserverSafetyRetune"); vfoWrites=$(Get-JsonValue $Validation "manualTuneObserverSafetyVfoWriteAttemptCount"); radioLoWrites=$(Get-JsonValue $Validation "manualTuneObserverSafetyRadioLoWriteAttemptCount"); txTouched=$(Get-JsonValue $Validation "manualTuneObserverSafetyTxEndpointsTouched"); polls=$(Get-JsonValue $Validation "manualTuneObserverPollSampleCount")/$(Get-JsonValue $Validation "manualTuneObserverPollCount"); observedVfos=$manualTuneObserverObservedVfoCount bestObserved=$manualTuneObserverBestObservedVfoHz/$manualTuneObserverBestObservedVfoStatus score=$manualTuneObserverBestObservedVfoScore; captures=$(Get-JsonValue $Validation "manualTuneObserverReadyCaptureCount")/$(Get-JsonValue $Validation "manualTuneObserverCaptureCount"); uniqueVfos=$(Get-JsonValue $Validation "manualTuneObserverUniqueCapturedVfoCount"); recapturedVfos=$(Get-JsonValue $Validation "manualTuneObserverRecapturedVfoCount"); maxPerVfo=$(Get-JsonValue $Validation "manualTuneObserverMaxCapturesPerVfo"); allowStaleScene=$(Get-JsonValue $Validation "manualTuneObserverAllowStaleSceneCapture"); staleScenePolls=$(Get-JsonValue $Validation "manualTuneObserverStaleScenePollCount"); staleSceneCaptures=$(Get-JsonValue $Validation "manualTuneObserverStaleSceneCaptureCount"); frontendNear/filter/off/mismatch=$(Get-JsonValue $Validation "manualTuneObserverFrontendNearPassbandPollCount")/$(Get-JsonValue $Validation "manualTuneObserverFrontendFilterPassbandPollCount")/$(Get-JsonValue $Validation "manualTuneObserverFrontendFilterOffPassbandPollCount")/$(Get-JsonValue $Validation "manualTuneObserverFrontendOffsetMismatchPollCount"); tuningHint=$manualTuneObserverHintText; captureQualifiedPolls=$(Get-JsonValue $Validation "manualTuneObserverCaptureQualifiedPollCount"); referencedCaptures=$manualTuneObserverReferencedCaptureReadyCount/$manualTuneObserverReferencedCaptureCount; referencedProblems=$manualTuneObserverReferencedCaptureProblemCount; mixedReady=$(Get-JsonValue $Validation "manualTuneObserverMixedWeakStrongReady"); weakSamples=$(Get-JsonValue $Validation "manualTuneObserverWeakInputSampleCount"); strongSamples=$(Get-JsonValue $Validation "manualTuneObserverStrongInputSampleCount"); nearStrongSamples=$(Get-JsonValue $Validation "manualTuneObserverNearStrongInputSampleCount"); speechWeakStrong=$(Get-JsonValue $Validation "manualTuneObserverSpeechQualifiedWeakInputSampleCount")/$(Get-JsonValue $Validation "manualTuneObserverSpeechQualifiedStrongInputSampleCount"); passbandWeakStrong=$(Get-JsonValue $Validation "manualTuneObserverPassbandQualifiedWeakInputSampleCount")/$(Get-JsonValue $Validation "manualTuneObserverPassbandQualifiedStrongInputSampleCount"); agcPumpingCaptures=$(Get-JsonValue $Validation "manualTuneObserverAgcPumpingRiskCaptureCount"); best=$manualTuneObserverBestText" `
+                -Detail "present=$manualTuneObserverPresent; ok=$(Get-JsonValue $Validation "manualTuneObserverOk"); scanError=$(Get-JsonValue $Validation "manualTuneObserverScanError"); baseUrl=$(Get-JsonValue $Validation "manualTuneObserverBaseUrl"); bundleRelativePaths=$(Get-JsonValue $Validation "manualTuneObserverBundleRelativePaths"); scenario=$(Get-JsonValue $Validation "manualTuneObserverScenarioId"); comparison=$(Get-JsonValue $Validation "manualTuneObserverComparisonId"); readOnly=$(Get-JsonValue $Validation "manualTuneObserverSafetyReadOnly"); apiWrites=$(Get-JsonValue $Validation "manualTuneObserverSafetyApiWrites"); retune=$(Get-JsonValue $Validation "manualTuneObserverSafetyRetune"); vfoWrites=$(Get-JsonValue $Validation "manualTuneObserverSafetyVfoWriteAttemptCount"); radioLoWrites=$(Get-JsonValue $Validation "manualTuneObserverSafetyRadioLoWriteAttemptCount"); txTouched=$(Get-JsonValue $Validation "manualTuneObserverSafetyTxEndpointsTouched"); polls=$(Get-JsonValue $Validation "manualTuneObserverPollSampleCount")/$(Get-JsonValue $Validation "manualTuneObserverPollCount"); observedVfos=$manualTuneObserverObservedVfoCount bestObserved=$manualTuneObserverBestObservedVfoHz/$manualTuneObserverBestObservedVfoStatus score=$manualTuneObserverBestObservedVfoScore; captures=$(Get-JsonValue $Validation "manualTuneObserverReadyCaptureCount")/$(Get-JsonValue $Validation "manualTuneObserverCaptureCount"); uniqueVfos=$(Get-JsonValue $Validation "manualTuneObserverUniqueCapturedVfoCount"); recapturedVfos=$(Get-JsonValue $Validation "manualTuneObserverRecapturedVfoCount"); maxPerVfo=$(Get-JsonValue $Validation "manualTuneObserverMaxCapturesPerVfo"); allowStaleScene=$(Get-JsonValue $Validation "manualTuneObserverAllowStaleSceneCapture"); staleScenePolls=$(Get-JsonValue $Validation "manualTuneObserverStaleScenePollCount"); staleSceneCaptures=$(Get-JsonValue $Validation "manualTuneObserverStaleSceneCaptureCount"); frontendNear/filter/off/mismatch=$(Get-JsonValue $Validation "manualTuneObserverFrontendNearPassbandPollCount")/$(Get-JsonValue $Validation "manualTuneObserverFrontendFilterPassbandPollCount")/$(Get-JsonValue $Validation "manualTuneObserverFrontendFilterOffPassbandPollCount")/$(Get-JsonValue $Validation "manualTuneObserverFrontendOffsetMismatchPollCount"); tuningHint=$manualTuneObserverHintText; captureQualifiedPolls=$(Get-JsonValue $Validation "manualTuneObserverCaptureQualifiedPollCount"); referencedCaptures=$manualTuneObserverReferencedCaptureReadyCount/$manualTuneObserverReferencedCaptureCount; referencedProblems=$manualTuneObserverReferencedCaptureProblemCount; mixedReady=$(Get-JsonValue $Validation "manualTuneObserverMixedWeakStrongReady"); weakSamples=$(Get-JsonValue $Validation "manualTuneObserverWeakInputSampleCount"); strongSamples=$(Get-JsonValue $Validation "manualTuneObserverStrongInputSampleCount"); nearStrongSamples=$(Get-JsonValue $Validation "manualTuneObserverNearStrongInputSampleCount"); weakOnly=$manualTuneObserverReadyWeakOnlyCount/$manualTuneObserverWeakOnlyCount; nearStrongCandidates=$manualTuneObserverNearStrongCandidateCount bestNearStrong=$manualTuneObserverBestNearStrongCandidateVfoHz distanceToStrongDb=$manualTuneObserverBestNearStrongCandidateDistanceDb report=$manualTuneObserverBestNearStrongCandidateReportPath; statusCounts=$manualTuneObserverMixedStatusText; speechWeakStrong=$(Get-JsonValue $Validation "manualTuneObserverSpeechQualifiedWeakInputSampleCount")/$(Get-JsonValue $Validation "manualTuneObserverSpeechQualifiedStrongInputSampleCount"); passbandWeakStrong=$(Get-JsonValue $Validation "manualTuneObserverPassbandQualifiedWeakInputSampleCount")/$(Get-JsonValue $Validation "manualTuneObserverPassbandQualifiedStrongInputSampleCount"); agcPumpingCaptures=$(Get-JsonValue $Validation "manualTuneObserverAgcPumpingRiskCaptureCount"); best=$manualTuneObserverBestText" `
                 -Remediation "Use watch-dsp-manual-tune-observer.ps1 when the operator is tuning manually; if present evidence is invalid, resolve read-only/no-retune safety, missing portable watcher files, missing ready captures, or AGC pumping before promoting a window.")) | Out-Null
 
     $g2RxPeakHuntPresent = Test-Truthy (Get-JsonValue $Validation "g2RxPeakHuntReportPresent")
@@ -1973,6 +1988,26 @@ function Add-AcceptanceActionForGate {
                 $manualObserverAgcPumpingRiskCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverAgcPumpingRiskCaptureCount")
                 $manualBestReportPath = [string](Get-JsonValue $Validation "manualTuneObserverBestReportPath")
                 $manualBestJsonlPath = [string](Get-JsonValue $Validation "manualTuneObserverBestJsonlPath")
+                $manualNearStrongCandidateCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverNearStrongPromotionCandidateCaptureCount")
+                $manualNearStrongReportPath = [string](Get-JsonValue $Validation "manualTuneObserverBestNearStrongPromotionCandidateReportPath")
+                $manualNearStrongVfoHz = Get-JsonValue $Validation "manualTuneObserverBestNearStrongPromotionCandidateVfoHz"
+                $manualNearStrongVfoMhz = Get-JsonValue $Validation "manualTuneObserverBestNearStrongPromotionCandidateVfoMhz"
+                $manualNearStrongDistance = Get-JsonValue $Validation "manualTuneObserverBestNearStrongPromotionCandidateDistanceToStrongThresholdDb"
+                $manualNearStrongSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverBestNearStrongPromotionCandidateNearStrongInputSampleCount")
+                $manualNearStrongSpeechSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverBestNearStrongPromotionCandidateSpeechQualifiedNearStrongInputSampleCount")
+                $manualNearStrongPassbandSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverBestNearStrongPromotionCandidatePassbandQualifiedNearStrongInputSampleCount")
+                $manualNearStrongReadyWeakOnlyCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverReadyWeakOnlyCaptureCount")
+                $manualNearStrongWeakOnlyCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverWeakOnlyCaptureCount")
+                $manualNearStrongMissingStrongCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverMissingStrongInputCaptureCount")
+                $manualNearStrongStatusCounts = @(Get-JsonArray $Validation "manualTuneObserverMixedWeakStrongEvidenceStatusCounts")
+                $manualNearStrongStatusCountsText = if ($manualNearStrongStatusCounts.Count -le 0) {
+                    "none"
+                }
+                else {
+                    ($manualNearStrongStatusCounts | ForEach-Object {
+                            "$([string](Get-JsonValue $_ "status"))=$(Get-JsonValue $_ "count")"
+                        }) -join ","
+                }
                 $manualObserverPromotionReady =
                     $manualObserverPresent -and
                     $manualObserverReady -and
@@ -1989,6 +2024,23 @@ function Add-AcceptanceActionForGate {
                     $manualObserverReferencedCaptureProblemCount -eq 0 -and
                     $manualObserverAgcPumpingRiskCaptureCount -eq 0 -and
                     -not [string]::IsNullOrWhiteSpace($manualBestReportPath)
+                $manualObserverNearStrongCandidateReady =
+                    $manualObserverPresent -and
+                    $manualObserverReady -and
+                    $manualObserverValid -and
+                    (-not $manualObserverMixedReady) -and
+                    $manualObserverBundleRelativePaths -and
+                    $manualObserverSafetyReadOnly -and
+                    (-not $manualObserverSafetyApiWrites) -and
+                    (-not $manualObserverSafetyRetune) -and
+                    (-not $manualObserverSafetyTxTouched) -and
+                    $manualObserverVfoWrites -eq 0 -and
+                    $manualObserverRadioLoWrites -eq 0 -and
+                    $manualObserverReferencedCaptureReadyCount -gt 0 -and
+                    $manualObserverReferencedCaptureProblemCount -eq 0 -and
+                    $manualObserverAgcPumpingRiskCaptureCount -eq 0 -and
+                    $manualNearStrongCandidateCount -gt 0 -and
+                    -not [string]::IsNullOrWhiteSpace($manualNearStrongReportPath)
 
                 if ($manualObserverPromotionReady) {
                     $manualObserverStatus = [string](Get-JsonValue $Validation "manualTuneObserverReportStatus")
@@ -2031,6 +2083,38 @@ function Add-AcceptanceActionForGate {
                                 -ExpectedArtifact 'artifacts/live-diagnostics-history.json' `
                                 -ExpectedArtifacts $manualExpectedArtifacts `
                                 -FollowUp "Acceptance remains blocked until strict validation reports liveDiagnosticsHistoryMixedWeakStrongEvidenceReady=true and the G2/Thetis/current-Zeus comparisons still pass.")) | Out-Null
+                }
+                elseif ($manualObserverNearStrongCandidateReady) {
+                    $manualNearStrongReason = "Live history mixed weak/strong evidence is not ready, but the read-only manual-tune observer captured a near-strong weak-only G2 window: candidateCount=$manualNearStrongCandidateCount, bestCandidateVfoHz=$manualNearStrongVfoHz, bestCandidateVfoMhz=$manualNearStrongVfoMhz, distanceToStrongThresholdDb=$manualNearStrongDistance, nearStrongSamples=$manualNearStrongSampleCount, speechNearStrongSamples=$manualNearStrongSpeechSampleCount, passbandNearStrongSamples=$manualNearStrongPassbandSampleCount, weakOnlyCaptures=$manualNearStrongReadyWeakOnlyCount/$manualNearStrongWeakOnlyCount, missingStrongCaptures=$manualNearStrongMissingStrongCount, statusCounts=$manualNearStrongStatusCountsText, reportPath='$manualNearStrongReportPath'. Recapture this exact manual window with longer dwell until strict strongInputSampleCount becomes non-zero before tuning DSP behavior."
+                    $manualNearStrongExpectedArtifacts = @(
+                        'artifacts/manual-tune-observer-report.json',
+                        $manualNearStrongReportPath,
+                        'artifacts/live-diagnostics-history.json',
+                        'validation-report.json',
+                        'validation-triage-report.json',
+                        'validation-triage-report.md'
+                    ) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) }
+                    $manualNearStrongCommandSteps = @(
+                        'powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl http://127.0.0.1:6060 -BundleDir "$bundleDir" -OutputRoot "$bundleDir\artifacts\manual-tune-observer" -ReportPath "$bundleDir\artifacts\manual-tune-observer-report.json" -PollCount 120 -StablePolls 2 -MaxCaptures 4 -MaxCapturesPerVfo 2 -RequireFrontendNearPassband -AllowStaleSceneCapture -CaptureSamples 32 -CaptureIntervalMs 250 -ContinueOnError',
+                        'powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-live-diagnostics-history.ps1 -BundleDir "$bundleDir" -ReportPath "$bundleDir\artifacts\live-diagnostics-history.json"',
+                        'powershell -NoProfile -ExecutionPolicy Bypass -File tools\validate-dsp-modernization-bundle.ps1 -BundleDir "$bundleDir" -RequireArtifactFiles -ReportPath "$bundleDir\validation-report.json"',
+                        'powershell -NoProfile -ExecutionPolicy Bypass -File tools\summarize-dsp-modernization-validation-report.ps1 -BundleDir "$bundleDir" -ReportPath "$bundleDir\validation-triage-report.json" -MarkdownPath "$bundleDir\validation-triage-report.md" -FailOnIssues'
+                    )
+
+                    $Actions.Add((New-AcceptanceActionRecord `
+                                -ActionId "recapture-manual-observer-near-strong-window" `
+                                -Priority 78 `
+                                -StageId "opt-in-candidate-comparison" `
+                                -GateId $gateId `
+                                -Category "live-diagnostics" `
+                                -RequiredForAcceptance:$gateRequired `
+                                -BlocksDefaultChange:$true `
+                                -Reason $manualNearStrongReason `
+                                -CommandSteps $manualNearStrongCommandSteps `
+                                -ManualAction "Stay manually tuned near $manualNearStrongVfoMhz MHz; extend dwell/recapture until strict strongInputSampleCount becomes non-zero. Keep this path read-only: no retune/VFO-writing tools." `
+                                -ExpectedArtifact 'artifacts/manual-tune-observer-report.json' `
+                                -ExpectedArtifacts $manualNearStrongExpectedArtifacts `
+                                -FollowUp "If the recapture becomes mixed-ready, promote it through live history and rerun strict validation. If it stays weak-only/near-strong, preserve it as scouting evidence and continue collecting active windows.")) | Out-Null
                 }
                 else {
                     $manualObservedVfoCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "manualTuneObserverObservedVfoCount")
@@ -2646,6 +2730,27 @@ function Build-MarkdownReport {
         $lines.Add("- Speech-qualified weak/strong samples: $(Get-JsonValue $Report "manualTuneObserverSpeechQualifiedWeakInputSampleCount") / $(Get-JsonValue $Report "manualTuneObserverSpeechQualifiedStrongInputSampleCount")") | Out-Null
         $lines.Add("- Passband-qualified weak/strong samples: $(Get-JsonValue $Report "manualTuneObserverPassbandQualifiedWeakInputSampleCount") / $(Get-JsonValue $Report "manualTuneObserverPassbandQualifiedStrongInputSampleCount")") | Out-Null
         $lines.Add("- AGC pumping captures: $(Get-JsonValue $Report "manualTuneObserverAgcPumpingRiskCaptureCount")") | Out-Null
+        $lines.Add("- Weak-only/ready weak-only/strong-only captures: $(Get-JsonValue $Report "manualTuneObserverWeakOnlyCaptureCount") / $(Get-JsonValue $Report "manualTuneObserverReadyWeakOnlyCaptureCount") / $(Get-JsonValue $Report "manualTuneObserverStrongOnlyCaptureCount")") | Out-Null
+        $lines.Add("- Missing strong/weak/both/output-gap/gap-watch captures: $(Get-JsonValue $Report "manualTuneObserverMissingStrongInputCaptureCount") / $(Get-JsonValue $Report "manualTuneObserverMissingWeakInputCaptureCount") / $(Get-JsonValue $Report "manualTuneObserverMissingWeakAndStrongInputCaptureCount") / $(Get-JsonValue $Report "manualTuneObserverMissingOutputGapCaptureCount") / $(Get-JsonValue $Report "manualTuneObserverWeakStrongOutputGapWatchCaptureCount")") | Out-Null
+        $lines.Add("- Near-strong promotion candidates: $(Get-JsonValue $Report "manualTuneObserverNearStrongPromotionCandidateCaptureCount")") | Out-Null
+        $bestNearStrongReportPath = [string](Get-JsonValue $Report "manualTuneObserverBestNearStrongPromotionCandidateReportPath")
+        if (-not [string]::IsNullOrWhiteSpace($bestNearStrongReportPath)) {
+            $lines.Add("- Best near-strong candidate: $(Format-MarkdownCell (Get-JsonValue $Report "manualTuneObserverBestNearStrongPromotionCandidateVfoHz")) Hz / $(Format-MarkdownCell (Get-JsonValue $Report "manualTuneObserverBestNearStrongPromotionCandidateVfoMhz")) MHz distance $(Format-MarkdownCell (Get-JsonValue $Report "manualTuneObserverBestNearStrongPromotionCandidateDistanceToStrongThresholdDb")) dB near/speech/passband $(Get-JsonValue $Report "manualTuneObserverBestNearStrongPromotionCandidateNearStrongInputSampleCount")/$(Get-JsonValue $Report "manualTuneObserverBestNearStrongPromotionCandidateSpeechQualifiedNearStrongInputSampleCount")/$(Get-JsonValue $Report "manualTuneObserverBestNearStrongPromotionCandidatePassbandQualifiedNearStrongInputSampleCount")") | Out-Null
+            $lines.Add("- Best near-strong candidate report: $(Format-MarkdownCell $bestNearStrongReportPath)") | Out-Null
+        }
+        $manualStatusCounts = @(Get-JsonArray $Report "manualTuneObserverMixedWeakStrongEvidenceStatusCounts")
+        if ($manualStatusCounts.Count -gt 0) {
+            $lines.Add("") | Out-Null
+            $lines.Add("| Manual mixed weak/strong status | Count |") | Out-Null
+            $lines.Add("|---|---:|") | Out-Null
+            foreach ($status in $manualStatusCounts) {
+                $statusName = [string](Get-JsonValue $status "status")
+                if ([string]::IsNullOrWhiteSpace($statusName)) {
+                    $statusName = [string](Get-JsonValue $status "name")
+                }
+                $lines.Add("| $(Format-MarkdownCell $statusName) | $(Get-JsonValue $status "count") |") | Out-Null
+            }
+        }
         $bestManualObserverReportPath = [string](Get-JsonValue $Report "manualTuneObserverBestReportPath")
         if (-not [string]::IsNullOrWhiteSpace($bestManualObserverReportPath)) {
             $lines.Add("- Best capture: $(Format-MarkdownCell (Get-JsonValue $Report "manualTuneObserverBestFrequencyHz")) Hz status $(Format-MarkdownCell (Get-JsonValue $Report "manualTuneObserverBestStatus"))") | Out-Null
@@ -3412,6 +3517,34 @@ $report = [ordered]@{
     manualTuneObserverPassbandQualifiedWeakInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverPassbandQualifiedWeakInputSampleCount")
     manualTuneObserverPassbandQualifiedStrongInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverPassbandQualifiedStrongInputSampleCount")
     manualTuneObserverAgcPumpingRiskCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverAgcPumpingRiskCaptureCount")
+    manualTuneObserverMixedWeakStrongEvidenceStatusCounts = @(Get-JsonArray $validation "manualTuneObserverMixedWeakStrongEvidenceStatusCounts")
+    manualTuneObserverMissingStrongInputCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverMissingStrongInputCaptureCount")
+    manualTuneObserverMissingWeakInputCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverMissingWeakInputCaptureCount")
+    manualTuneObserverMissingWeakAndStrongInputCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverMissingWeakAndStrongInputCaptureCount")
+    manualTuneObserverMissingOutputGapCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverMissingOutputGapCaptureCount")
+    manualTuneObserverWeakStrongOutputGapWatchCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverWeakStrongOutputGapWatchCaptureCount")
+    manualTuneObserverWeakOnlyCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverWeakOnlyCaptureCount")
+    manualTuneObserverReadyWeakOnlyCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverReadyWeakOnlyCaptureCount")
+    manualTuneObserverStrongOnlyCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverStrongOnlyCaptureCount")
+    manualTuneObserverBestWeakOnlyCapture = Get-JsonValue $validation "manualTuneObserverBestWeakOnlyCapture"
+    manualTuneObserverBestWeakOnlyCaptureScore = Get-JsonValue $validation "manualTuneObserverBestWeakOnlyCaptureScore"
+    manualTuneObserverBestWeakOnlyCaptureVfoHz = Get-JsonValue $validation "manualTuneObserverBestWeakOnlyCaptureVfoHz"
+    manualTuneObserverBestWeakOnlyCaptureVfoMhz = Get-JsonValue $validation "manualTuneObserverBestWeakOnlyCaptureVfoMhz"
+    manualTuneObserverBestWeakOnlyCaptureReportPath = [string](Get-JsonValue $validation "manualTuneObserverBestWeakOnlyCaptureReportPath")
+    manualTuneObserverBestWeakOnlyCaptureWeakInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverBestWeakOnlyCaptureWeakInputSampleCount")
+    manualTuneObserverBestWeakOnlyCaptureNearStrongInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverBestWeakOnlyCaptureNearStrongInputSampleCount")
+    manualTuneObserverBestWeakOnlyCapturePassbandQualifiedWeakInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverBestWeakOnlyCapturePassbandQualifiedWeakInputSampleCount")
+    manualTuneObserverBestWeakOnlyCaptureAgcStabilityStatus = [string](Get-JsonValue $validation "manualTuneObserverBestWeakOnlyCaptureAgcStabilityStatus")
+    manualTuneObserverNearStrongPromotionCandidateCaptureCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverNearStrongPromotionCandidateCaptureCount")
+    manualTuneObserverBestNearStrongPromotionCandidateCapture = Get-JsonValue $validation "manualTuneObserverBestNearStrongPromotionCandidateCapture"
+    manualTuneObserverBestNearStrongPromotionCandidateScore = Get-JsonValue $validation "manualTuneObserverBestNearStrongPromotionCandidateScore"
+    manualTuneObserverBestNearStrongPromotionCandidateReportPath = [string](Get-JsonValue $validation "manualTuneObserverBestNearStrongPromotionCandidateReportPath")
+    manualTuneObserverBestNearStrongPromotionCandidateVfoHz = Get-JsonValue $validation "manualTuneObserverBestNearStrongPromotionCandidateVfoHz"
+    manualTuneObserverBestNearStrongPromotionCandidateVfoMhz = Get-JsonValue $validation "manualTuneObserverBestNearStrongPromotionCandidateVfoMhz"
+    manualTuneObserverBestNearStrongPromotionCandidateDistanceToStrongThresholdDb = Get-JsonValue $validation "manualTuneObserverBestNearStrongPromotionCandidateDistanceToStrongThresholdDb"
+    manualTuneObserverBestNearStrongPromotionCandidateNearStrongInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverBestNearStrongPromotionCandidateNearStrongInputSampleCount")
+    manualTuneObserverBestNearStrongPromotionCandidateSpeechQualifiedNearStrongInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverBestNearStrongPromotionCandidateSpeechQualifiedNearStrongInputSampleCount")
+    manualTuneObserverBestNearStrongPromotionCandidatePassbandQualifiedNearStrongInputSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "manualTuneObserverBestNearStrongPromotionCandidatePassbandQualifiedNearStrongInputSampleCount")
     manualTuneObserverSafetyRxOnly = Test-Truthy (Get-JsonValue $validation "manualTuneObserverSafetyRxOnly")
     manualTuneObserverSafetyReadOnly = Test-Truthy (Get-JsonValue $validation "manualTuneObserverSafetyReadOnly")
     manualTuneObserverSafetyApiWrites = Test-Truthy (Get-JsonValue $validation "manualTuneObserverSafetyApiWrites")

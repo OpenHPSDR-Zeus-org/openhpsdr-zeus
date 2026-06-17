@@ -385,6 +385,191 @@ public sealed class DspManualTuneObserverValidationToolTests
     }
 
     [SkippableFact]
+    public async Task ManualTuneObserverNearStrongTriagePlansTargetedRecapture()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell manual-tune observer validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-manual-tune-observer-near-strong-action-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteManualTuneObserverArtifactManifest(bundleDir);
+            WriteManualTuneObserverReportWithTuningHints(bundleDir, nearStrongCandidate: true);
+
+            var validationReport = Path.Combine(bundleDir, "validation-manual-tune-observer-near-strong-action.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("manualTuneObserverReportValid").GetBoolean());
+            Assert.Equal("near-strong-weak-only", validationRoot.GetProperty("manualTuneObserverReportStatus").GetString());
+            Assert.False(validationRoot.GetProperty("manualTuneObserverMixedWeakStrongReady").GetBoolean());
+            Assert.Equal(1, validationRoot.GetProperty("manualTuneObserverNearStrongPromotionCandidateCaptureCount").GetInt32());
+            Assert.Equal(14_365_124L, validationRoot.GetProperty("manualTuneObserverBestNearStrongPromotionCandidateVfoHz").GetInt64());
+            Assert.Equal(2.5, validationRoot.GetProperty("manualTuneObserverBestNearStrongPromotionCandidateDistanceToStrongThresholdDb").GetDouble(), precision: 3);
+            Assert.Equal(3, validationRoot.GetProperty("manualTuneObserverBestNearStrongPromotionCandidateNearStrongInputSampleCount").GetInt32());
+            Assert.Equal("artifacts/manual-tune-observer/14365124/live-diagnostics-watch.json", validationRoot.GetProperty("manualTuneObserverBestNearStrongPromotionCandidateReportPath").GetString());
+
+            var summaryReport = Path.Combine(bundleDir, "summary-manual-tune-observer-near-strong-action.json");
+            var summaryMarkdown = Path.Combine(bundleDir, "summary-manual-tune-observer-near-strong-action.md");
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-modernization-validation-report.ps1"),
+                "-ValidationReportPath", validationReport,
+                "-ReportPath", summaryReport,
+                "-MarkdownPath", summaryMarkdown,
+                "-JsonOnly");
+
+            Assert.Equal(0, summary.ExitCode);
+            Assert.True(File.Exists(summaryReport), summary.CombinedOutput);
+            Assert.True(File.Exists(summaryMarkdown), summary.CombinedOutput);
+
+            using var summaryDoc = JsonDocument.Parse(await File.ReadAllTextAsync(summaryReport));
+            var summaryRoot = summaryDoc.RootElement;
+            Assert.Equal("near-strong-weak-only", summaryRoot.GetProperty("manualTuneObserverReportStatus").GetString());
+            Assert.Equal(1, summaryRoot.GetProperty("manualTuneObserverNearStrongPromotionCandidateCaptureCount").GetInt32());
+
+            var actions = summaryRoot.GetProperty("acceptanceActionPlan")
+                .EnumerateArray()
+                .ToArray();
+            var actionIds = actions
+                .Select(item => item.GetProperty("actionId").GetString() ?? "")
+                .ToArray();
+            Assert.DoesNotContain("capture-manual-observer-best-observed-vfo", actionIds);
+
+            var action = actions.Single(item => item.GetProperty("actionId").GetString() == "recapture-manual-observer-near-strong-window");
+            Assert.Equal("live-history-mixed-weak-strong", action.GetProperty("gateId").GetString());
+            Assert.Equal("live-diagnostics", action.GetProperty("category").GetString());
+            Assert.True(action.GetProperty("requiredForAcceptance").GetBoolean());
+            Assert.True(action.GetProperty("blocksDefaultBehaviorChange").GetBoolean());
+            Assert.Contains("bestCandidateVfoHz=14365124", action.GetProperty("reason").GetString() ?? "", StringComparison.Ordinal);
+            Assert.Contains("distanceToStrongThresholdDb=2.5", action.GetProperty("reason").GetString() ?? "", StringComparison.Ordinal);
+            Assert.Contains("nearStrongSamples=3", action.GetProperty("reason").GetString() ?? "", StringComparison.Ordinal);
+            Assert.Contains("Stay manually tuned near 14.365124 MHz", action.GetProperty("manualAction").GetString() ?? "", StringComparison.Ordinal);
+            Assert.Contains("no retune/VFO-writing tools", action.GetProperty("manualAction").GetString() ?? "", StringComparison.Ordinal);
+
+            var commandSteps = action.GetProperty("commandSteps")
+                .EnumerateArray()
+                .Select(item => item.GetString() ?? "")
+                .ToArray();
+            Assert.Contains(commandSteps, step => step.Contains("watch-dsp-manual-tune-observer.ps1", StringComparison.Ordinal));
+            Assert.Contains(commandSteps, step => step.Contains("-CaptureSamples 32", StringComparison.Ordinal));
+            Assert.Contains(commandSteps, step => step.Contains("-MaxCapturesPerVfo 2", StringComparison.Ordinal));
+
+            var expectedArtifacts = action.GetProperty("expectedArtifacts")
+                .EnumerateArray()
+                .Select(item => item.GetString() ?? "")
+                .ToArray();
+            Assert.Contains("artifacts/manual-tune-observer/14365124/live-diagnostics-watch.json", expectedArtifacts);
+
+            var markdown = await File.ReadAllTextAsync(summaryMarkdown);
+            Assert.Contains("recapture-manual-observer-near-strong-window", markdown, StringComparison.Ordinal);
+            Assert.Contains("Best near-strong candidate: 14365124 Hz / 14.365124 MHz", markdown, StringComparison.Ordinal);
+            Assert.Contains("artifacts/manual-tune-observer/14365124/live-diagnostics-watch.json", markdown, StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ManualTuneObserverNearStrongValidationRejectsMalformedCandidate()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell manual-tune observer validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-manual-tune-observer-near-strong-invalid-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteManualTuneObserverArtifactManifest(bundleDir);
+            WriteManualTuneObserverReportWithTuningHints(bundleDir, nearStrongCandidate: true, invalidNearStrongCandidate: true);
+
+            var validationReport = Path.Combine(bundleDir, "validation-manual-tune-observer-near-strong-invalid.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.False(validationRoot.GetProperty("manualTuneObserverReportValid").GetBoolean());
+            Assert.Equal("invalid", validationRoot.GetProperty("manualTuneObserverReportStatus").GetString());
+
+            var issueCodes = validationRoot.GetProperty("warnings")
+                .EnumerateArray()
+                .Concat(validationRoot.GetProperty("errors").EnumerateArray())
+                .Select(issue => issue.GetProperty("code").GetString() ?? "")
+                .ToArray();
+            Assert.Contains("manual-tune-observer-near-strong-candidate-strong-present", issueCodes);
+            Assert.Contains("manual-tune-observer-near-strong-candidate-samples-missing", issueCodes);
+            Assert.Contains("manual-tune-observer-near-strong-candidate-report-path-mismatch", issueCodes);
+
+            var summaryReport = Path.Combine(bundleDir, "summary-manual-tune-observer-near-strong-invalid.json");
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-modernization-validation-report.ps1"),
+                "-ValidationReportPath", validationReport,
+                "-ReportPath", summaryReport,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.Equal(0, summary.ExitCode);
+            Assert.True(File.Exists(summaryReport), summary.CombinedOutput);
+
+            using var summaryDoc = JsonDocument.Parse(await File.ReadAllTextAsync(summaryReport));
+            var actionIds = summaryDoc.RootElement.GetProperty("acceptanceActionPlan")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("actionId").GetString() ?? "")
+                .ToArray();
+            Assert.DoesNotContain("recapture-manual-observer-near-strong-window", actionIds);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task ManualTuneObserverObservedVfoTriageFallsBackToObservedVfoWithoutHint()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell manual-tune observer validator smoke runs on Windows.");
@@ -590,6 +775,8 @@ public sealed class DspManualTuneObserverValidationToolTests
         bool includeObservedVfos = true,
         bool staleFlattenedBestObservedVfo = false,
         bool includeCapture = true,
+        bool nearStrongCandidate = false,
+        bool invalidNearStrongCandidate = false,
         long observedVfoHz = 14_331_500L)
     {
         const string captureReportPath = "artifacts/manual-tune-observer/14365124/live-diagnostics-watch.json";
@@ -734,6 +921,79 @@ public sealed class DspManualTuneObserverValidationToolTests
         };
 
         var reportJson = JsonSerializer.SerializeToNode(report, CamelCaseJson)!.AsObject();
+        if (nearStrongCandidate && includeCapture)
+        {
+            var capture = reportJson["captures"]!.AsArray()[0]!.AsObject();
+            capture["strongInputThresholdDbfs"] = -22.0;
+            capture["nearStrongInputThresholdDbfs"] = -26.0;
+            capture["strongInputSampleCount"] = 0;
+            capture["nearStrongInputSampleCount"] = 3;
+            capture["mixedWeakStrongEvidenceStatus"] = "missing-strong-input";
+            capture["mixedWeakStrongEvidenceReady"] = false;
+            capture["weakStrongOutputGapDb"] = null;
+            capture["speechQualifiedStrongInputSampleCount"] = 0;
+            capture["speechQualifiedNearStrongInputSampleCount"] = 2;
+            capture["passbandQualifiedStrongInputSampleCount"] = 0;
+            capture["passbandQualifiedNearStrongInputSampleCount"] = 1;
+            capture["topNearStrongInputs"] = JsonSerializer.SerializeToNode(new object[]
+            {
+                new
+                {
+                    sampleIndex = 2,
+                    inputDbfs = -24.5,
+                    distanceToStrongThresholdDb = 2.5,
+                    speechQualified = true,
+                    passbandQualified = true
+                }
+            }, CamelCaseJson);
+
+            reportJson["mixedWeakStrongReady"] = false;
+            reportJson["mixedWeakStrongReadyCaptureCount"] = 0;
+            reportJson["strongInputSampleCount"] = 0;
+            reportJson["nearStrongInputSampleCount"] = 3;
+            reportJson["speechQualifiedStrongInputSampleCount"] = 0;
+            reportJson["passbandQualifiedStrongInputSampleCount"] = 0;
+            reportJson["mixedWeakStrongEvidenceStatusCounts"] = JsonSerializer.SerializeToNode(new object[]
+            {
+                new { status = "missing-strong-input", count = 1 }
+            }, CamelCaseJson);
+            reportJson["missingStrongInputCaptureCount"] = 1;
+            reportJson["missingWeakInputCaptureCount"] = 0;
+            reportJson["missingWeakAndStrongInputCaptureCount"] = 0;
+            reportJson["missingOutputGapCaptureCount"] = 0;
+            reportJson["weakStrongOutputGapWatchCaptureCount"] = 0;
+            reportJson["weakOnlyCaptureCount"] = 1;
+            reportJson["readyWeakOnlyCaptureCount"] = 1;
+            reportJson["strongOnlyCaptureCount"] = 0;
+            reportJson["bestWeakOnlyCapture"] = capture.DeepClone();
+            reportJson["bestWeakOnlyCaptureScore"] = 211.4;
+            reportJson["bestWeakOnlyCaptureVfoHz"] = 14_365_124L;
+            reportJson["bestWeakOnlyCaptureVfoMhz"] = 14.365124;
+            reportJson["bestWeakOnlyCaptureReportPath"] = captureReportPath;
+            reportJson["bestWeakOnlyCaptureWeakInputSampleCount"] = 8;
+            reportJson["bestWeakOnlyCaptureNearStrongInputSampleCount"] = 3;
+            reportJson["bestWeakOnlyCapturePassbandQualifiedWeakInputSampleCount"] = 5;
+            reportJson["bestWeakOnlyCaptureAgcStabilityStatus"] = "stable";
+            reportJson["nearStrongPromotionCandidateCaptureCount"] = 1;
+            reportJson["bestNearStrongPromotionCandidateCapture"] = capture.DeepClone();
+            reportJson["bestNearStrongPromotionCandidateScore"] = 198.2;
+            reportJson["bestNearStrongPromotionCandidateReportPath"] = captureReportPath;
+            reportJson["bestNearStrongPromotionCandidateVfoHz"] = 14_365_124L;
+            reportJson["bestNearStrongPromotionCandidateVfoMhz"] = 14.365124;
+            reportJson["bestNearStrongPromotionCandidateDistanceToStrongThresholdDb"] = 2.5;
+            reportJson["bestNearStrongPromotionCandidateNearStrongInputSampleCount"] = 3;
+            reportJson["bestNearStrongPromotionCandidateSpeechQualifiedNearStrongInputSampleCount"] = 2;
+            reportJson["bestNearStrongPromotionCandidatePassbandQualifiedNearStrongInputSampleCount"] = 1;
+
+            if (invalidNearStrongCandidate)
+            {
+                var invalidCandidate = reportJson["bestNearStrongPromotionCandidateCapture"]!.AsObject();
+                invalidCandidate["strongInputSampleCount"] = 4;
+                invalidCandidate["nearStrongInputSampleCount"] = 0;
+                invalidCandidate["topNearStrongInputs"] = new JsonArray();
+                invalidCandidate["reportPath"] = "artifacts/manual-tune-observer/14365124/not-the-candidate.json";
+            }
+        }
         if (!includeTuningHints)
         {
             reportJson.Remove("frontendTuningHintPollCount");
@@ -758,7 +1018,7 @@ public sealed class DspManualTuneObserverValidationToolTests
             Path.Combine(bundleDir, "artifacts", "manual-tune-observer-report.json"),
             reportJson.ToJsonString(CamelCaseJson));
 
-        WriteSyntheticWatcherFiles(bundleDir, captureReportPath, captureJsonlPath);
+        WriteSyntheticWatcherFiles(bundleDir, captureReportPath, captureJsonlPath, nearStrongCandidate && includeCapture);
     }
 
     private static string GetBooleanDebug(JsonElement root, string propertyName)
@@ -849,7 +1109,7 @@ public sealed class DspManualTuneObserverValidationToolTests
         return pollJson;
     }
 
-    private static void WriteSyntheticWatcherFiles(string bundleDir, string reportPath, string jsonlPath)
+    private static void WriteSyntheticWatcherFiles(string bundleDir, string reportPath, string jsonlPath, bool nearStrongCandidate = false)
     {
         var resolvedReportPath = Path.Combine(bundleDir, reportPath.Replace('/', Path.DirectorySeparatorChar));
         var resolvedJsonlPath = Path.Combine(bundleDir, jsonlPath.Replace('/', Path.DirectorySeparatorChar));
@@ -867,13 +1127,16 @@ public sealed class DspManualTuneObserverValidationToolTests
             nr5WeakSignalWatch = new
             {
                 weakInputSampleCount = 8,
-                strongInputSampleCount = 9,
-                mixedWeakStrongEvidenceReady = true,
-                mixedWeakStrongEvidenceStatus = "ready",
+                strongInputSampleCount = nearStrongCandidate ? 0 : 9,
+                nearStrongInputSampleCount = nearStrongCandidate ? 3 : 2,
+                mixedWeakStrongEvidenceReady = !nearStrongCandidate,
+                mixedWeakStrongEvidenceStatus = nearStrongCandidate ? "missing-strong-input" : "ready",
                 speechQualifiedWeakInputSampleCount = 6,
-                speechQualifiedStrongInputSampleCount = 7,
+                speechQualifiedStrongInputSampleCount = nearStrongCandidate ? 0 : 7,
+                speechQualifiedNearStrongInputSampleCount = nearStrongCandidate ? 2 : 0,
                 passbandQualifiedWeakInputSampleCount = 5,
-                passbandQualifiedStrongInputSampleCount = 5
+                passbandQualifiedStrongInputSampleCount = nearStrongCandidate ? 0 : 5,
+                passbandQualifiedNearStrongInputSampleCount = nearStrongCandidate ? 1 : 0
             },
             frontendTopPeakWatch = new
             {

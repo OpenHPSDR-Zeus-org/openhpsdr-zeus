@@ -6204,6 +6204,34 @@ $manualTuneObserverEvidence = [ordered]@{
     passbandQualifiedWeakInputSampleCount = 0
     passbandQualifiedStrongInputSampleCount = 0
     agcPumpingRiskCaptureCount = 0
+    mixedWeakStrongEvidenceStatusCounts = @()
+    missingStrongInputCaptureCount = 0
+    missingWeakInputCaptureCount = 0
+    missingWeakAndStrongInputCaptureCount = 0
+    missingOutputGapCaptureCount = 0
+    weakStrongOutputGapWatchCaptureCount = 0
+    weakOnlyCaptureCount = 0
+    readyWeakOnlyCaptureCount = 0
+    strongOnlyCaptureCount = 0
+    bestWeakOnlyCapture = $null
+    bestWeakOnlyCaptureScore = $null
+    bestWeakOnlyCaptureVfoHz = $null
+    bestWeakOnlyCaptureVfoMhz = $null
+    bestWeakOnlyCaptureReportPath = ""
+    bestWeakOnlyCaptureWeakInputSampleCount = 0
+    bestWeakOnlyCaptureNearStrongInputSampleCount = 0
+    bestWeakOnlyCapturePassbandQualifiedWeakInputSampleCount = 0
+    bestWeakOnlyCaptureAgcStabilityStatus = ""
+    nearStrongPromotionCandidateCaptureCount = 0
+    bestNearStrongPromotionCandidateCapture = $null
+    bestNearStrongPromotionCandidateScore = $null
+    bestNearStrongPromotionCandidateReportPath = ""
+    bestNearStrongPromotionCandidateVfoHz = $null
+    bestNearStrongPromotionCandidateVfoMhz = $null
+    bestNearStrongPromotionCandidateDistanceToStrongThresholdDb = $null
+    bestNearStrongPromotionCandidateNearStrongInputSampleCount = 0
+    bestNearStrongPromotionCandidateSpeechQualifiedNearStrongInputSampleCount = 0
+    bestNearStrongPromotionCandidatePassbandQualifiedNearStrongInputSampleCount = 0
     safetyRxOnly = $false
     safetyReadOnly = $false
     safetyApiWrites = $true
@@ -13062,6 +13090,36 @@ else {
                 $passbandQualifiedWeakInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "passbandQualifiedWeakInputSampleCount"))
                 $passbandQualifiedStrongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "passbandQualifiedStrongInputSampleCount"))
                 $agcPumpingRiskCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "agcPumpingRiskCaptureCount"))
+                $mixedWeakStrongEvidenceStatusCounts = @(Get-JsonArray $artifactJson "mixedWeakStrongEvidenceStatusCounts")
+                $missingStrongInputCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "missingStrongInputCaptureCount"))
+                $missingWeakInputCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "missingWeakInputCaptureCount"))
+                $missingWeakAndStrongInputCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "missingWeakAndStrongInputCaptureCount"))
+                $missingOutputGapCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "missingOutputGapCaptureCount"))
+                $weakStrongOutputGapWatchCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "weakStrongOutputGapWatchCaptureCount"))
+                $weakOnlyCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "weakOnlyCaptureCount"))
+                $readyWeakOnlyCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "readyWeakOnlyCaptureCount"))
+                $strongOnlyCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "strongOnlyCaptureCount"))
+                $bestWeakOnlyCapture = Get-JsonValue $artifactJson "bestWeakOnlyCapture"
+                $bestWeakOnlyCaptureScore = Get-NumericValue (Get-JsonValue $artifactJson "bestWeakOnlyCaptureScore")
+                $bestWeakOnlyCaptureVfoHzValue = Get-NumericValue (Get-JsonValue $artifactJson "bestWeakOnlyCaptureVfoHz")
+                $bestWeakOnlyCaptureVfoHz = if ($null -eq $bestWeakOnlyCaptureVfoHzValue) { $null } else { [long]$bestWeakOnlyCaptureVfoHzValue }
+                $bestWeakOnlyCaptureVfoMhz = Get-NumericValue (Get-JsonValue $artifactJson "bestWeakOnlyCaptureVfoMhz")
+                $bestWeakOnlyCaptureReportPath = [string](Get-JsonValue $artifactJson "bestWeakOnlyCaptureReportPath")
+                $bestWeakOnlyCaptureWeakInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "bestWeakOnlyCaptureWeakInputSampleCount"))
+                $bestWeakOnlyCaptureNearStrongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "bestWeakOnlyCaptureNearStrongInputSampleCount"))
+                $bestWeakOnlyCapturePassbandQualifiedWeakInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "bestWeakOnlyCapturePassbandQualifiedWeakInputSampleCount"))
+                $bestWeakOnlyCaptureAgcStabilityStatus = [string](Get-JsonValue $artifactJson "bestWeakOnlyCaptureAgcStabilityStatus")
+                $nearStrongPromotionCandidateCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "nearStrongPromotionCandidateCaptureCount"))
+                $bestNearStrongPromotionCandidateCapture = Get-JsonValue $artifactJson "bestNearStrongPromotionCandidateCapture"
+                $bestNearStrongPromotionCandidateScore = Get-NumericValue (Get-JsonValue $artifactJson "bestNearStrongPromotionCandidateScore")
+                $bestNearStrongPromotionCandidateReportPath = [string](Get-JsonValue $artifactJson "bestNearStrongPromotionCandidateReportPath")
+                $bestNearStrongPromotionCandidateVfoHzValue = Get-NumericValue (Get-JsonValue $artifactJson "bestNearStrongPromotionCandidateVfoHz")
+                $bestNearStrongPromotionCandidateVfoHz = if ($null -eq $bestNearStrongPromotionCandidateVfoHzValue) { $null } else { [long]$bestNearStrongPromotionCandidateVfoHzValue }
+                $bestNearStrongPromotionCandidateVfoMhz = Get-NumericValue (Get-JsonValue $artifactJson "bestNearStrongPromotionCandidateVfoMhz")
+                $bestNearStrongPromotionCandidateDistanceToStrongThresholdDb = Get-NumericValue (Get-JsonValue $artifactJson "bestNearStrongPromotionCandidateDistanceToStrongThresholdDb")
+                $bestNearStrongPromotionCandidateNearStrongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "bestNearStrongPromotionCandidateNearStrongInputSampleCount"))
+                $bestNearStrongPromotionCandidateSpeechQualifiedNearStrongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "bestNearStrongPromotionCandidateSpeechQualifiedNearStrongInputSampleCount"))
+                $bestNearStrongPromotionCandidatePassbandQualifiedNearStrongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "bestNearStrongPromotionCandidatePassbandQualifiedNearStrongInputSampleCount"))
                 $safety = Get-JsonValue $artifactJson "safety"
                 $safetyRxOnly = Test-Truthy (Get-JsonValue $safety "rxOnly")
                 $safetyReadOnly = Test-Truthy (Get-JsonValue $safety "readOnly")
@@ -13157,6 +13215,34 @@ else {
                 $manualTuneObserverEvidence["passbandQualifiedWeakInputSampleCount"] = $passbandQualifiedWeakInputSampleCount
                 $manualTuneObserverEvidence["passbandQualifiedStrongInputSampleCount"] = $passbandQualifiedStrongInputSampleCount
                 $manualTuneObserverEvidence["agcPumpingRiskCaptureCount"] = $agcPumpingRiskCaptureCount
+                $manualTuneObserverEvidence["mixedWeakStrongEvidenceStatusCounts"] = @($mixedWeakStrongEvidenceStatusCounts)
+                $manualTuneObserverEvidence["missingStrongInputCaptureCount"] = $missingStrongInputCaptureCount
+                $manualTuneObserverEvidence["missingWeakInputCaptureCount"] = $missingWeakInputCaptureCount
+                $manualTuneObserverEvidence["missingWeakAndStrongInputCaptureCount"] = $missingWeakAndStrongInputCaptureCount
+                $manualTuneObserverEvidence["missingOutputGapCaptureCount"] = $missingOutputGapCaptureCount
+                $manualTuneObserverEvidence["weakStrongOutputGapWatchCaptureCount"] = $weakStrongOutputGapWatchCaptureCount
+                $manualTuneObserverEvidence["weakOnlyCaptureCount"] = $weakOnlyCaptureCount
+                $manualTuneObserverEvidence["readyWeakOnlyCaptureCount"] = $readyWeakOnlyCaptureCount
+                $manualTuneObserverEvidence["strongOnlyCaptureCount"] = $strongOnlyCaptureCount
+                $manualTuneObserverEvidence["bestWeakOnlyCapture"] = $bestWeakOnlyCapture
+                $manualTuneObserverEvidence["bestWeakOnlyCaptureScore"] = $bestWeakOnlyCaptureScore
+                $manualTuneObserverEvidence["bestWeakOnlyCaptureVfoHz"] = $bestWeakOnlyCaptureVfoHz
+                $manualTuneObserverEvidence["bestWeakOnlyCaptureVfoMhz"] = $bestWeakOnlyCaptureVfoMhz
+                $manualTuneObserverEvidence["bestWeakOnlyCaptureReportPath"] = $bestWeakOnlyCaptureReportPath
+                $manualTuneObserverEvidence["bestWeakOnlyCaptureWeakInputSampleCount"] = $bestWeakOnlyCaptureWeakInputSampleCount
+                $manualTuneObserverEvidence["bestWeakOnlyCaptureNearStrongInputSampleCount"] = $bestWeakOnlyCaptureNearStrongInputSampleCount
+                $manualTuneObserverEvidence["bestWeakOnlyCapturePassbandQualifiedWeakInputSampleCount"] = $bestWeakOnlyCapturePassbandQualifiedWeakInputSampleCount
+                $manualTuneObserverEvidence["bestWeakOnlyCaptureAgcStabilityStatus"] = $bestWeakOnlyCaptureAgcStabilityStatus
+                $manualTuneObserverEvidence["nearStrongPromotionCandidateCaptureCount"] = $nearStrongPromotionCandidateCaptureCount
+                $manualTuneObserverEvidence["bestNearStrongPromotionCandidateCapture"] = $bestNearStrongPromotionCandidateCapture
+                $manualTuneObserverEvidence["bestNearStrongPromotionCandidateScore"] = $bestNearStrongPromotionCandidateScore
+                $manualTuneObserverEvidence["bestNearStrongPromotionCandidateReportPath"] = $bestNearStrongPromotionCandidateReportPath
+                $manualTuneObserverEvidence["bestNearStrongPromotionCandidateVfoHz"] = $bestNearStrongPromotionCandidateVfoHz
+                $manualTuneObserverEvidence["bestNearStrongPromotionCandidateVfoMhz"] = $bestNearStrongPromotionCandidateVfoMhz
+                $manualTuneObserverEvidence["bestNearStrongPromotionCandidateDistanceToStrongThresholdDb"] = $bestNearStrongPromotionCandidateDistanceToStrongThresholdDb
+                $manualTuneObserverEvidence["bestNearStrongPromotionCandidateNearStrongInputSampleCount"] = $bestNearStrongPromotionCandidateNearStrongInputSampleCount
+                $manualTuneObserverEvidence["bestNearStrongPromotionCandidateSpeechQualifiedNearStrongInputSampleCount"] = $bestNearStrongPromotionCandidateSpeechQualifiedNearStrongInputSampleCount
+                $manualTuneObserverEvidence["bestNearStrongPromotionCandidatePassbandQualifiedNearStrongInputSampleCount"] = $bestNearStrongPromotionCandidatePassbandQualifiedNearStrongInputSampleCount
                 $manualTuneObserverEvidence["safetyRxOnly"] = $safetyRxOnly
                 $manualTuneObserverEvidence["safetyReadOnly"] = $safetyReadOnly
                 $manualTuneObserverEvidence["safetyApiWrites"] = $safetyApiWrites
@@ -13469,6 +13555,73 @@ else {
                         $artifactValidationOk = $false
                     }
                 }
+                if ($nearStrongPromotionCandidateCaptureCount -gt 0) {
+                    if ($null -eq $bestNearStrongPromotionCandidateCapture) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-near-strong-candidate-missing" "Artifact '$artifactId' reports nearStrongPromotionCandidateCaptureCount=$nearStrongPromotionCandidateCaptureCount but bestNearStrongPromotionCandidateCapture is missing."
+                        $artifactValidationOk = $false
+                    }
+                    else {
+                        $candidateStatus = [string](Get-JsonValue $bestNearStrongPromotionCandidateCapture "mixedWeakStrongEvidenceStatus")
+                        $candidateReady = Test-Truthy (Get-JsonValue $bestNearStrongPromotionCandidateCapture "mixedWeakStrongEvidenceReady")
+                        $candidateWeakInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $bestNearStrongPromotionCandidateCapture "weakInputSampleCount"))
+                        $candidateStrongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $bestNearStrongPromotionCandidateCapture "strongInputSampleCount"))
+                        $candidateNearStrongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $bestNearStrongPromotionCandidateCapture "nearStrongInputSampleCount"))
+                        $candidateReportPath = [string](Get-JsonValue $bestNearStrongPromotionCandidateCapture "reportPath")
+                        $candidateTopNearStrongInputs = @(Get-JsonArray $bestNearStrongPromotionCandidateCapture "topNearStrongInputs")
+
+                        if (-not [string]::Equals($candidateStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-near-strong-candidate-status-invalid" "Artifact '$artifactId' best near-strong candidate status='$candidateStatus' must be 'missing-strong-input'."
+                            $artifactValidationOk = $false
+                        }
+                        if ($candidateReady) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-near-strong-candidate-ready-invalid" "Artifact '$artifactId' best near-strong candidate must not be mixedWeakStrongEvidenceReady=true; promotable mixed-ready captures use the mixed-ready path."
+                            $artifactValidationOk = $false
+                        }
+                        if ($candidateWeakInputSampleCount -le 0) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-near-strong-candidate-weak-missing" "Artifact '$artifactId' best near-strong candidate must contain weak input samples."
+                            $artifactValidationOk = $false
+                        }
+                        if ($candidateStrongInputSampleCount -gt 0) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-near-strong-candidate-strong-present" "Artifact '$artifactId' best near-strong candidate has strongInputSampleCount=$candidateStrongInputSampleCount; use the mixed-ready promotion path instead of near-strong recapture."
+                            $artifactValidationOk = $false
+                        }
+                        if ($candidateNearStrongInputSampleCount -le 0) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-near-strong-candidate-samples-missing" "Artifact '$artifactId' best near-strong candidate must contain nearStrongInputSampleCount > 0."
+                            $artifactValidationOk = $false
+                        }
+                        if ($candidateTopNearStrongInputs.Count -le 0) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-near-strong-candidate-top-inputs-missing" "Artifact '$artifactId' best near-strong candidate must include topNearStrongInputs so the distance to the strict strong threshold can be audited."
+                            $artifactValidationOk = $false
+                        }
+                        if ($bestNearStrongPromotionCandidateNearStrongInputSampleCount -ne $candidateNearStrongInputSampleCount) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-near-strong-candidate-sample-count-mismatch" "Artifact '$artifactId' bestNearStrongPromotionCandidateNearStrongInputSampleCount=$bestNearStrongPromotionCandidateNearStrongInputSampleCount but embedded candidate nearStrongInputSampleCount=$candidateNearStrongInputSampleCount."
+                            $artifactValidationOk = $false
+                        }
+                        if ([string]::IsNullOrWhiteSpace($candidateReportPath)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-near-strong-candidate-capture-report-path-missing" "Artifact '$artifactId' best near-strong candidate is missing embedded reportPath."
+                            $artifactValidationOk = $false
+                        }
+                        elseif (-not [string]::IsNullOrWhiteSpace($bestNearStrongPromotionCandidateReportPath)) {
+                            $candidateComparableReportPath = ConvertTo-ComparableEvidencePath -BundlePath $bundlePath -Path $candidateReportPath
+                            $topLevelComparableReportPath = ConvertTo-ComparableEvidencePath -BundlePath $bundlePath -Path $bestNearStrongPromotionCandidateReportPath
+                            if (-not [string]::Equals($candidateComparableReportPath, $topLevelComparableReportPath, [StringComparison]::OrdinalIgnoreCase)) {
+                                Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-near-strong-candidate-report-path-mismatch" "Artifact '$artifactId' embedded best near-strong candidate reportPath='$candidateReportPath' does not match bestNearStrongPromotionCandidateReportPath='$bestNearStrongPromotionCandidateReportPath'."
+                                $artifactValidationOk = $false
+                            }
+                        }
+                    }
+                    if ([string]::IsNullOrWhiteSpace($bestNearStrongPromotionCandidateReportPath)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-near-strong-candidate-report-path-missing" "Artifact '$artifactId' reports near-strong promotion candidates but bestNearStrongPromotionCandidateReportPath is missing."
+                        $artifactValidationOk = $false
+                    }
+                    else {
+                        $nearStrongComparableReportPath = ConvertTo-ComparableEvidencePath -BundlePath $bundlePath -Path $bestNearStrongPromotionCandidateReportPath
+                        if (-not $manualReferencedReportPaths.ContainsKey($nearStrongComparableReportPath)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-near-strong-candidate-report-path-untracked" "Artifact '$artifactId' best near-strong candidate reportPath='$bestNearStrongPromotionCandidateReportPath' does not match any validated captures[].reportPath entry."
+                            $artifactValidationOk = $false
+                        }
+                    }
+                }
 
                 $manualTuneObserverEvidence["referencedCaptureCount"] = $manualReferencedCaptureCount
                 $manualTuneObserverEvidence["referencedCaptureReadyCount"] = $manualReferencedCaptureReadyCount
@@ -13486,6 +13639,9 @@ else {
                 }
                 elseif ($captureCount -le 0) {
                     "no-captures"
+                }
+                elseif ($nearStrongPromotionCandidateCaptureCount -gt 0) {
+                    "near-strong-weak-only"
                 }
                 elseif ($weakInputSampleCount -gt 0 -and $strongInputSampleCount -le 0) {
                     "weak-only"
@@ -15358,6 +15514,34 @@ $report = [ordered]@{
     manualTuneObserverPassbandQualifiedWeakInputSampleCount = $manualTuneObserverEvidence.passbandQualifiedWeakInputSampleCount
     manualTuneObserverPassbandQualifiedStrongInputSampleCount = $manualTuneObserverEvidence.passbandQualifiedStrongInputSampleCount
     manualTuneObserverAgcPumpingRiskCaptureCount = $manualTuneObserverEvidence.agcPumpingRiskCaptureCount
+    manualTuneObserverMixedWeakStrongEvidenceStatusCounts = @($manualTuneObserverEvidence.mixedWeakStrongEvidenceStatusCounts)
+    manualTuneObserverMissingStrongInputCaptureCount = $manualTuneObserverEvidence.missingStrongInputCaptureCount
+    manualTuneObserverMissingWeakInputCaptureCount = $manualTuneObserverEvidence.missingWeakInputCaptureCount
+    manualTuneObserverMissingWeakAndStrongInputCaptureCount = $manualTuneObserverEvidence.missingWeakAndStrongInputCaptureCount
+    manualTuneObserverMissingOutputGapCaptureCount = $manualTuneObserverEvidence.missingOutputGapCaptureCount
+    manualTuneObserverWeakStrongOutputGapWatchCaptureCount = $manualTuneObserverEvidence.weakStrongOutputGapWatchCaptureCount
+    manualTuneObserverWeakOnlyCaptureCount = $manualTuneObserverEvidence.weakOnlyCaptureCount
+    manualTuneObserverReadyWeakOnlyCaptureCount = $manualTuneObserverEvidence.readyWeakOnlyCaptureCount
+    manualTuneObserverStrongOnlyCaptureCount = $manualTuneObserverEvidence.strongOnlyCaptureCount
+    manualTuneObserverBestWeakOnlyCapture = $manualTuneObserverEvidence.bestWeakOnlyCapture
+    manualTuneObserverBestWeakOnlyCaptureScore = $manualTuneObserverEvidence.bestWeakOnlyCaptureScore
+    manualTuneObserverBestWeakOnlyCaptureVfoHz = $manualTuneObserverEvidence.bestWeakOnlyCaptureVfoHz
+    manualTuneObserverBestWeakOnlyCaptureVfoMhz = $manualTuneObserverEvidence.bestWeakOnlyCaptureVfoMhz
+    manualTuneObserverBestWeakOnlyCaptureReportPath = $manualTuneObserverEvidence.bestWeakOnlyCaptureReportPath
+    manualTuneObserverBestWeakOnlyCaptureWeakInputSampleCount = $manualTuneObserverEvidence.bestWeakOnlyCaptureWeakInputSampleCount
+    manualTuneObserverBestWeakOnlyCaptureNearStrongInputSampleCount = $manualTuneObserverEvidence.bestWeakOnlyCaptureNearStrongInputSampleCount
+    manualTuneObserverBestWeakOnlyCapturePassbandQualifiedWeakInputSampleCount = $manualTuneObserverEvidence.bestWeakOnlyCapturePassbandQualifiedWeakInputSampleCount
+    manualTuneObserverBestWeakOnlyCaptureAgcStabilityStatus = $manualTuneObserverEvidence.bestWeakOnlyCaptureAgcStabilityStatus
+    manualTuneObserverNearStrongPromotionCandidateCaptureCount = $manualTuneObserverEvidence.nearStrongPromotionCandidateCaptureCount
+    manualTuneObserverBestNearStrongPromotionCandidateCapture = $manualTuneObserverEvidence.bestNearStrongPromotionCandidateCapture
+    manualTuneObserverBestNearStrongPromotionCandidateScore = $manualTuneObserverEvidence.bestNearStrongPromotionCandidateScore
+    manualTuneObserverBestNearStrongPromotionCandidateReportPath = $manualTuneObserverEvidence.bestNearStrongPromotionCandidateReportPath
+    manualTuneObserverBestNearStrongPromotionCandidateVfoHz = $manualTuneObserverEvidence.bestNearStrongPromotionCandidateVfoHz
+    manualTuneObserverBestNearStrongPromotionCandidateVfoMhz = $manualTuneObserverEvidence.bestNearStrongPromotionCandidateVfoMhz
+    manualTuneObserverBestNearStrongPromotionCandidateDistanceToStrongThresholdDb = $manualTuneObserverEvidence.bestNearStrongPromotionCandidateDistanceToStrongThresholdDb
+    manualTuneObserverBestNearStrongPromotionCandidateNearStrongInputSampleCount = $manualTuneObserverEvidence.bestNearStrongPromotionCandidateNearStrongInputSampleCount
+    manualTuneObserverBestNearStrongPromotionCandidateSpeechQualifiedNearStrongInputSampleCount = $manualTuneObserverEvidence.bestNearStrongPromotionCandidateSpeechQualifiedNearStrongInputSampleCount
+    manualTuneObserverBestNearStrongPromotionCandidatePassbandQualifiedNearStrongInputSampleCount = $manualTuneObserverEvidence.bestNearStrongPromotionCandidatePassbandQualifiedNearStrongInputSampleCount
     manualTuneObserverSafetyRxOnly = $manualTuneObserverEvidence.safetyRxOnly
     manualTuneObserverSafetyReadOnly = $manualTuneObserverEvidence.safetyReadOnly
     manualTuneObserverSafetyApiWrites = $manualTuneObserverEvidence.safetyApiWrites
