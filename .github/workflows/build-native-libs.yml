@@ -57,7 +57,18 @@ jobs:
           } else {
             "x64-windows-static-md"
           }
-          vcpkg install fftw3:$triplet
+          # Retry the fftw3 install: vcpkg fetches fftw-3.3.11.tar.gz from
+          # www.fftw.org, which occasionally throws a transient SSL/connect error
+          # (curl 35) with no retry of its own. 3x with backoff so a momentary
+          # blip can't fail the native build. See the matching note in release.yml.
+          $ok = $false
+          for ($i = 1; $i -le 3; $i++) {
+            vcpkg install fftw3:$triplet
+            if ($LASTEXITCODE -eq 0) { $ok = $true; break }
+            Write-Host "::warning::vcpkg install fftw3 attempt $i failed (likely a transient fftw.org download error) — retrying..."
+            Start-Sleep -Seconds (15 * $i)
+          }
+          if (-not $ok) { Write-Error "vcpkg install fftw3 failed after 3 attempts."; exit 1 }
           echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
 
       - name: Configure CMake
