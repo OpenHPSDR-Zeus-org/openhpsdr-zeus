@@ -2532,6 +2532,131 @@ public class DspPipelineService : BackgroundService,
                     nr5StrongFrameParityCap = true;
                 }
             }
+            bool nr5StrongSpeechHotOutputProof =
+                nr5.PeakEvidence >= 0.200 ||
+                nr5.OutputDbfs >= -38.0 ||
+                nr5.OutputPeakDbfs >= -28.0;
+            if (desiredDb > 0.0 &&
+                inputRmsDbfs >= -58.0 &&
+                inputRmsDbfs <= -42.0 &&
+                desiredDb >= 23.0 &&
+                nr5.SignalConfidence >= 0.290 &&
+                nr5.AgcGate >= 0.380 &&
+                ((inputRmsDbfs >= -53.0 &&
+                    nr5StrongSpeechHotOutputProof &&
+                    (nr5.SignalProbability >= 0.115 ||
+                        nr5.RecoveryDrive >= 0.260 ||
+                        nr5.PeakEvidence >= 0.200)) ||
+                    (nr5.OutputDbfs >= -33.0 &&
+                        nr5.OutputPeakDbfs >= -27.0)))
+            {
+                double strongSpeechProof = Math.Max(
+                    ClampUnit((nr5.SignalProbability - 0.115) / 0.345),
+                    Math.Max(
+                        ClampUnit((nr5.RecoveryDrive - 0.260) / 0.480),
+                        Math.Max(
+                            ClampUnit((nr5.PeakEvidence - 0.120) / 0.520),
+                            Math.Max(
+                                ClampUnit((nr5.OutputDbfs + 38.0) / 12.0),
+                                0.72 * ClampUnit((nr5.OutputPeakDbfs + 28.0) / 12.0)))));
+                double strongSpeechTargetDbfs =
+                    -38.0 + 8.0 * strongSpeechProof;
+                strongSpeechTargetDbfs = Math.Clamp(strongSpeechTargetDbfs, -38.0, -30.0);
+                double strongSpeechDesiredDb = Math.Max(0.0, strongSpeechTargetDbfs - inputRmsDbfs);
+                if (strongSpeechDesiredDb < desiredDb - 1.0e-6)
+                {
+                    desiredDb = strongSpeechDesiredDb;
+                    nr5StrongFrameParityCap = true;
+                }
+            }
+            if (desiredDb > 0.0 &&
+                inputRmsDbfs >= -58.0 &&
+                inputRmsDbfs <= -52.0 &&
+                desiredDb >= 28.0 &&
+                nr5.OutputDbfs >= -36.0 &&
+                nr5.OutputPeakDbfs >= -25.0 &&
+                nr5.SignalConfidence >= 0.260 &&
+                nr5.AgcGate >= 0.600 &&
+                (nr5.SignalProbability >= 0.130 ||
+                    nr5.RecoveryDrive >= 0.350 ||
+                    nr5.WeakSignalMemory >= 0.300))
+            {
+                double weakPeakProof = Math.Max(
+                    ClampUnit((nr5.OutputPeakDbfs + 25.0) / 9.0),
+                    Math.Max(
+                        ClampUnit((nr5.RecoveryDrive - 0.350) / 0.300),
+                        ClampUnit((nr5.WeakSignalMemory - 0.300) / 0.250)));
+                double weakPeakTargetDbfs =
+                    -32.0 + 4.0 * weakPeakProof;
+                weakPeakTargetDbfs = Math.Clamp(weakPeakTargetDbfs, -32.0, -28.0);
+                double weakPeakDesiredDb = Math.Max(0.0, weakPeakTargetDbfs - inputRmsDbfs);
+                if (weakPeakDesiredDb < desiredDb - 1.0e-6)
+                {
+                    desiredDb = weakPeakDesiredDb;
+                    nr5StrongFrameParityCap = true;
+                }
+            }
+            if (desiredDb > 0.0 &&
+                inputRmsDbfs >= -66.0 &&
+                inputRmsDbfs < -58.0 &&
+                desiredDb >= 32.0 &&
+                nr5.OutputDbfs >= -38.5 &&
+                nr5.OutputPeakDbfs >= -30.0 &&
+                nr5.SignalConfidence >= 0.285 &&
+                (nr5.AgcGate >= 0.480 ||
+                    (nr5.AdjacentNoiseUsable &&
+                        nr5.AdjacentNoiseTrust >= 0.780 &&
+                        nr5.AdjacentNoiseDrive >= 0.700)) &&
+                (nr5.SignalProbability >= 0.145 ||
+                    nr5.RecoveryDrive >= 0.250 ||
+                    nr5.WeakSignalMemory >= 0.180 ||
+                    (nr5.AdjacentNoiseUsable &&
+                        nr5.AdjacentNoiseTrust >= 0.780 &&
+                        nr5.AdjacentNoiseDrive >= 0.700)))
+            {
+                double adjacentProfileProof = Math.Sqrt(ClampUnit(
+                    ClampUnit((nr5.AdjacentNoiseTrust - 0.780) / 0.180) *
+                    ClampUnit((nr5.AdjacentNoiseDrive - 0.700) / 0.220)));
+                double peakProvenSpeechProof = ClampUnit((nr5.OutputDbfs + 38.0) / 8.0);
+                peakProvenSpeechProof = Math.Max(
+                    peakProvenSpeechProof,
+                    ClampUnit((nr5.OutputPeakDbfs + 30.0) / 8.0));
+                peakProvenSpeechProof = Math.Max(
+                    peakProvenSpeechProof,
+                    ClampUnit((nr5.SignalProbability - 0.145) / 0.220));
+                peakProvenSpeechProof = Math.Max(
+                    peakProvenSpeechProof,
+                    ClampUnit((nr5.RecoveryDrive - 0.250) / 0.300));
+                peakProvenSpeechProof = Math.Max(
+                    peakProvenSpeechProof,
+                    0.82 * adjacentProfileProof);
+                double peakProvenTargetDbfs =
+                    -33.0 + 5.0 * peakProvenSpeechProof;
+                peakProvenTargetDbfs = Math.Clamp(peakProvenTargetDbfs, -33.0, -28.0);
+                double peakProvenDesiredDb = Math.Max(0.0, peakProvenTargetDbfs - inputRmsDbfs);
+                if (peakProvenDesiredDb < desiredDb - 1.0e-6)
+                {
+                    desiredDb = peakProvenDesiredDb;
+                    nr5StrongFrameParityCap = true;
+                }
+            }
+            if (desiredDb > 0.0 &&
+                inputRmsDbfs <= -96.0 &&
+                nr5.OutputDbfs <= -72.0 &&
+                nr5.OutputPeakDbfs <= -62.0 &&
+                nr5FrontendTopPeakProof <= 0.0 &&
+                nr5FrontendHeldTailPeakProof <= 0.0 &&
+                nr5.PeakEvidence <= 0.005 &&
+                nr5.RecoveryDrive <= 0.120 &&
+                nr5.WeakSignalMemory <= 0.050 &&
+                (!nr5.AdjacentNoiseUsable ||
+                    nr5.AdjacentNoiseTrust < 0.45 ||
+                    nr5.AdjacentNoiseDrive < 0.36))
+            {
+                desiredDb = 0.0;
+                belowGate = true;
+                nr5StrongFrameParityCap = true;
+            }
         }
 
         double nextDb;
@@ -3395,6 +3520,12 @@ public class DspPipelineService : BackgroundService,
     private readonly float[] _wfBuf = new float[Width];
     private readonly float[] _rx2PanBuf = new float[Width];
     private readonly float[] _rx2WfBuf = new float[Width];
+    // RX2 frozen-panadapter probe: 1 Hz tally of how often each receiver's
+    // pan/wf pixout reports fresh data. If rx2wf advances but rx2pan stays ~0,
+    // the freeze is backend (pan pixout never goes fresh); if both advance like
+    // RX1, the freeze is frontend rendering.
+    private long _dispFlagLogMs;
+    private int _dispTicks, _rx1PanCnt, _rx1WfCnt, _rx2PanCnt, _rx2WfCnt;
     private readonly float[] _audioBuf = new float[AudioDrainCapacity];
     private readonly float[] _rx2AudioBuf = new float[AudioDrainCapacity];
 
@@ -6585,6 +6716,7 @@ public class DspPipelineService : BackgroundService,
                 // waterfalls identical. Display/TX cadence is paced by the RX1
                 // frames below, so this path takes no tick.
                 int rx2Channel = Volatile.Read(ref _rx2ChannelId);
+                LogRxIqRms(1, frame.InterleavedSamples.Span, ref _rx2IqRmsLogMs);
                 if (rx2Channel >= 0)
                 {
                     engine.FeedIq(rx2Channel, frame.InterleavedSamples.Span);
@@ -6592,6 +6724,7 @@ public class DspPipelineService : BackgroundService,
                 return;
             }
             int channel = Volatile.Read(ref _channelId);
+            LogRxIqRms(0, frame.InterleavedSamples.Span, ref _rx1IqRmsLogMs);
             engine.FeedIq(channel, frame.InterleavedSamples.Span);
             RxIqAvailable?.Invoke(0, frame.SampleRateHz, frame.InterleavedSamples);
         }
@@ -6603,6 +6736,29 @@ public class DspPipelineService : BackgroundService,
         DrainDspCommands();
         var engine = Volatile.Read(ref _engine);
         engine?.FeedPsFeedbackBlock(frame.TxI, frame.TxQ, frame.RxI, frame.RxQ);
+    }
+
+    // RX2 bring-up probe: 1 Hz log of incoming IQ RMS/peak per receiver. A live
+    // DDC reads grainy noise (rms ~1e-4+); a dead/unconnected ADC reads ~0 even
+    // while packets stream at full rate — distinguishing "radio not streaming"
+    // from "streaming silence" (wrong ADC source) for RX2.
+    private long _rx1IqRmsLogMs;
+    private long _rx2IqRmsLogMs;
+    private void LogRxIqRms(int rx, ReadOnlySpan<double> iq, ref long lastMs)
+    {
+        long now = Environment.TickCount64;
+        if (now - lastMs < 1000) return;
+        lastMs = now;
+        double sumSq = 0; double peak = 0;
+        for (int i = 0; i < iq.Length; i++)
+        {
+            double v = iq[i];
+            sumSq += v * v;
+            double a = v < 0 ? -v : v;
+            if (a > peak) peak = a;
+        }
+        double rms = iq.Length > 0 ? Math.Sqrt(sumSq / iq.Length) : 0;
+        _log.LogInformation("p2.rx.iqrms rx={Rx} n={N} rms={Rms:E3} peak={Peak:E3}", rx, iq.Length, rms, peak);
     }
 
     /// <summary>
@@ -7103,6 +7259,21 @@ public class DspPipelineService : BackgroundService,
                 var rx2Flags = DisplayBodyFlags.None;
                 if (rx2Pan) rx2Flags |= DisplayBodyFlags.PanValid;
                 if (rx2Wf) rx2Flags |= DisplayBodyFlags.WfValid;
+
+                _dispTicks++;
+                if (pan) _rx1PanCnt++;
+                if (wf) _rx1WfCnt++;
+                if (rx2Pan) _rx2PanCnt++;
+                if (rx2Wf) _rx2WfCnt++;
+                long dispNowMs = Environment.TickCount64;
+                if (dispNowMs - _dispFlagLogMs >= 1000)
+                {
+                    _dispFlagLogMs = dispNowMs;
+                    _log.LogInformation(
+                        "p2.display.flags ticks={T} rx1pan={A} rx1wf={B} rx2pan={C} rx2wf={D}",
+                        _dispTicks, _rx1PanCnt, _rx1WfCnt, _rx2PanCnt, _rx2WfCnt);
+                    _dispTicks = _rx1PanCnt = _rx1WfCnt = _rx2PanCnt = _rx2WfCnt = 0;
+                }
 
                 // Stamp the RX2 frame with its DDC centre (CTUN-frozen under
                 // CTUN), so the panel holds still and the dial roams — matching
