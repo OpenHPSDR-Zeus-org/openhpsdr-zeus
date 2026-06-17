@@ -91,6 +91,31 @@ mkdir -p "${APP_PAYLOAD}"
 echo "Copying published files into Contents/Resources/app ..."
 cp -r "${PUBLISH_DIR}"/* "${APP_PAYLOAD}/"
 
+# Bundle a pinned Node runtime inside the app so the embedded HamClock works on
+# ANY Mac — including ones with no system Node — and never depends on the
+# stripped GUI-launch PATH. HamClockService.FindBundledNodeBinDir() looks for
+# <BaseDirectory>/node (= Contents/Resources/app/node here), which is sealed as
+# an ordinary signed resource (Node's own Developer-ID signature is preserved).
+# Keep NODE_BUNDLE_VERSION in sync with HamClockService.PortableNodeVersion. (#657)
+NODE_BUNDLE_VERSION="v22.11.0"
+NODE_DIST="node-${NODE_BUNDLE_VERSION}-darwin-${ARCH}"   # ARCH is arm64 | x64
+NODE_URL="https://nodejs.org/dist/${NODE_BUNDLE_VERSION}/${NODE_DIST}.tar.gz"
+echo "Bundling Node ${NODE_BUNDLE_VERSION} (darwin-${ARCH}) into the app payload..."
+NODE_TMP="$(mktemp -d)"
+if curl -fsSL "${NODE_URL}" -o "${NODE_TMP}/node.tar.gz"; then
+    mkdir -p "${APP_PAYLOAD}/node"
+    tar -xzf "${NODE_TMP}/node.tar.gz" -C "${APP_PAYLOAD}/node"
+    # Result: Contents/Resources/app/node/${NODE_DIST}/bin/node (+ npm).
+    if [ -x "${APP_PAYLOAD}/node/${NODE_DIST}/bin/node" ]; then
+        echo "  bundled node: $("${APP_PAYLOAD}/node/${NODE_DIST}/bin/node" --version 2>/dev/null || echo '?')"
+    else
+        echo "::warning::Bundled Node binary missing after extract — HamClock will fall back to download."
+    fi
+else
+    echo "::warning::Could not download Node ${NODE_BUNDLE_VERSION} for bundling — HamClock will fall back to system/download node."
+fi
+rm -rf "${NODE_TMP}"
+
 # Generate Zeus.icns from docs/pics/zeus.png so Finder, Dock, and Cmd-Tab
 # show the Zeus artwork. iconutil + sips ship with Xcode CLT (present on
 # every GitHub macos-latest runner and any dev box that has built native

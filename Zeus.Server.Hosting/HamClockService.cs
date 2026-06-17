@@ -422,7 +422,14 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     private (bool ok, string? version) GetNodeInfoCached()
     {
         lock (_nodeGate) { if (_nodeProbed) return _nodeInfo; }
+        // Adopt the app-bundled Node first (always present in packaged builds).
+        if (_nodeDir is null)
+        {
+            var bundled = FindBundledNodeBinDir();
+            if (bundled is not null) { _nodeDir = bundled; _nodeBundled = true; }
+        }
         var info = DetectNode();
+        if (!info.ok && _nodeBundled) { _nodeDir = null; _nodeBundled = false; info = DetectNode(); }
         if (!info.ok && _nodeDir is null)
         {
             var portable = FindPortableNodeBinDir();
@@ -444,12 +451,35 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
 
     /// <summary>
     /// Ensure a usable Node is resolved into <see cref="_nodeDir"/>. Order:
-    /// (1) system Node on PATH, (2) a private copy from a prior install,
-    /// (3) download a pinned portable Node from nodejs.org (checksum-verified).
-    /// Returns false (and calls Fail) only if the download/extract fails.
+    /// (0) a Node bundled inside the app payload, (1) system Node on PATH,
+    /// (2) a private copy from a prior install, (3) download a pinned portable
+    /// Node from nodejs.org (checksum-verified). Returns false (and calls Fail)
+    /// only if the download/extract fails.
     /// </summary>
     private async Task<bool> EnsureNodeAsync()
     {
+        // (0) Node bundled inside the app payload — deterministic, always present
+        // in packaged builds (sealed as a signed resource), needs no system Node
+        // and no runtime download. Preferred so HamClock "just works" on any Mac,
+        // including ones with no Node installed at all. (#657)
+        if (_nodeDir is null)
+        {
+            var bundled = FindBundledNodeBinDir();
+            if (bundled is not null)
+            {
+                _nodeDir = bundled;
+                var b = DetectNode();
+                if (b.ok)
+                {
+                    _nodeBundled = true;
+                    Append($"Using app-bundled Node {b.version}.");
+                    SetNodeInfo((true, b.version));
+                    return true;
+                }
+                _nodeDir = null; // bundled didn't run; fall through to system/download
+            }
+        }
+
         // (1) Whatever's already resolved (system, or a _nodeDir set earlier).
         var (ok, ver) = DetectNode();
         if (ok)
@@ -496,6 +526,30 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
     /// <summary>The PATH-prependable bin dir of a previously downloaded private
     /// Node, or null. Windows: the extracted folder (node.exe + npm.cmd at root);
     /// Unix: its <c>bin/</c> subdir.</summary>
+    /// <summary>Locate a Node runtime bundled inside the app payload (shipped at
+    /// build time under &lt;BaseDirectory&gt;/node — on macOS that is
+    /// Contents/Resources/app/node, sealed as a signed resource). Accepts either
+    /// node/bin/node or node/&lt;dist&gt;/bin/node. Returns the PATH-prependable bin
+    /// dir, or null when no bundled Node is present.</summary>
+    private static string? FindBundledNodeBinDir()
+    {
+        try
+        {
+            var root = Path.Combine(AppContext.BaseDirectory, "node");
+            if (!Directory.Exists(root)) return null;
+            var exeName = OperatingSystem.IsWindows() ? "node.exe" : "node";
+            var direct = OperatingSystem.IsWindows() ? root : Path.Combine(root, "bin");
+            if (File.Exists(Path.Combine(direct, exeName))) return direct;
+            foreach (var dir in Directory.GetDirectories(root))
+            {
+                var binDir = OperatingSystem.IsWindows() ? dir : Path.Combine(dir, "bin");
+                if (File.Exists(Path.Combine(binDir, exeName))) return binDir;
+            }
+        }
+        catch { /* best effort */ }
+        return null;
+    }
+
     private static string? FindPortableNodeBinDir()
     {
         try
