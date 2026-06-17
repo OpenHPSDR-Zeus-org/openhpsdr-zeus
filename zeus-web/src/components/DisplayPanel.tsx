@@ -15,6 +15,7 @@
 
 import { BackgroundSettingsPanel } from './BackgroundSettingsPanel';
 import { SignalEnhancePanel } from './SignalEnhancePanel';
+import { SpectrumScaleSettingsPanel } from './SpectrumScaleSettingsPanel';
 import { ThemeSettingsPanel } from './ThemeSettingsPanel';
 import { TraceColorPanel } from './TraceColorPanel';
 import { WaterfallColormapPanel } from './WaterfallColormapPanel';
@@ -25,6 +26,7 @@ export function DisplayPanel() {
       <ThemeSettingsPanel />
       <BackgroundSettingsPanel />
       <TraceColorPanel />
+      <SpectrumScaleSettingsPanel />
       <SignalEnhancePanel />
       <WaterfallColormapPanel />
     </div>

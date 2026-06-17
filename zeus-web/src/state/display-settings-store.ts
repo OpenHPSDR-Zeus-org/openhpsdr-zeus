@@ -347,6 +347,14 @@ export type DisplaySettingsState = {
   shiftWfDbRange: (deltaDb: number) => void;
   // Same as shiftWfDbRange but for the TX-specific waterfall range.
   shiftWfTxDbRange: (deltaDb: number) => void;
+  // Absolute (min, max) setters used by the Spectrum Scale settings panel.
+  // Distinct from the delta-based shift* family above: these set the window
+  // directly from typed numeric inputs and sanitize/persist like a drag edit.
+  setDbRange: (dbMin: number, dbMax: number) => void;
+  setTxDbRange: (txDbMin: number, txDbMax: number) => void;
+  setWfDbRange: (wfDbMin: number, wfDbMax: number) => void;
+  setWfTxDbRange: (wfTxDbMin: number, wfTxDbMax: number) => void;
+  resetDbRanges: () => void;
 };
 
 const DB_ABS_LIMIT = 200;
@@ -535,6 +543,50 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
     const { min: nextMin, max: nextMax } = clampShift(wfTxDbMin, wfTxDbMax, deltaDb);
     set({ wfTxDbMin: nextMin, wfTxDbMax: nextMax });
     writeSavedWfTxRange(nextMin, nextMax);
+    scheduleDbRangeSave();
+  },
+  setDbRange: (dbMin, dbMax) => {
+    const next = sanitizeRange(dbMin, dbMax, FIXED_DB_MIN, FIXED_DB_MAX);
+    // A manual range edit returns the RX panadapter to fixed mode (mirrors
+    // shiftDbRange) — AUTO is a temporary override the operator just left.
+    set({ autoRange: false, dbMin: next.min, dbMax: next.max });
+    writeSavedRange(next.min, next.max);
+    scheduleDbRangeSave();
+  },
+  setTxDbRange: (txDbMin, txDbMax) => {
+    const next = sanitizeRange(txDbMin, txDbMax, TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
+    set({ txDbMin: next.min, txDbMax: next.max });
+    writeSavedTxRange(next.min, next.max);
+    scheduleDbRangeSave();
+  },
+  setWfDbRange: (wfDbMin, wfDbMax) => {
+    const next = sanitizeRange(wfDbMin, wfDbMax, FIXED_DB_MIN, FIXED_DB_MAX);
+    set({ wfDbMin: next.min, wfDbMax: next.max });
+    writeSavedWfRange(next.min, next.max);
+    scheduleDbRangeSave();
+  },
+  setWfTxDbRange: (wfTxDbMin, wfTxDbMax) => {
+    const next = sanitizeRange(wfTxDbMin, wfTxDbMax, TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
+    set({ wfTxDbMin: next.min, wfTxDbMax: next.max });
+    writeSavedWfTxRange(next.min, next.max);
+    scheduleDbRangeSave();
+  },
+  resetDbRanges: () => {
+    set({
+      autoRange: false,
+      dbMin: FIXED_DB_MIN,
+      dbMax: FIXED_DB_MAX,
+      txDbMin: TX_FIXED_DB_MIN,
+      txDbMax: TX_FIXED_DB_MAX,
+      wfDbMin: FIXED_DB_MIN,
+      wfDbMax: FIXED_DB_MAX,
+      wfTxDbMin: TX_FIXED_DB_MIN,
+      wfTxDbMax: TX_FIXED_DB_MAX,
+    });
+    writeSavedRange(FIXED_DB_MIN, FIXED_DB_MAX);
+    writeSavedTxRange(TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
+    writeSavedWfRange(FIXED_DB_MIN, FIXED_DB_MAX);
+    writeSavedWfTxRange(TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
     scheduleDbRangeSave();
   },
   updateAutoRange: (wfDb) => {
