@@ -22,6 +22,11 @@ Zeus.Server.Hosting/wwwroot/
 **/*.lscache
 *.nupkg
 
+# Custom MSBuild output path used by ad-hoc `dotnet build` runs
+# (BaseOutputPath=tmp/build-openhpsdrzeus). Per-project, so not covered by
+# the root-level /tmp/ rule below.
+**/tmp/build-openhpsdrzeus/
+
 # IDE
 .vs/
 .vscode/
@@ -52,6 +57,8 @@ zeus.db*
 # don't need to run CMake before executing.
 native/build/
 native/build-miniaudio/
+native/build-nr5-live/
+native/build-nr5-live-ninja/
 
 # Playwright-MCP accessibility snapshots and console logs — regenerated
 # on every browser-automation run; do not track.
