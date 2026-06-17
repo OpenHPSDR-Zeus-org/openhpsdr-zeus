@@ -6130,6 +6130,16 @@ $g2RxPeakHuntEvidence = [ordered]@{
     tool = ""
     status = "not-captured"
     comparisonId = ""
+    autoPhoneCluster = $false
+    autoPhoneClusterCandidateFrequencyHzCount = 0
+    autoPhoneClusterCandidateCount = 0
+    autoPhoneClusterExactCandidateCount = 0
+    autoPhoneClusterNeighborCandidateCount = 0
+    autoPhoneClusterMaxCandidates = 0
+    autoPhoneClusterLookbackHours = 0
+    autoPhoneClusterMinSpeechSamples = 0
+    autoPhoneClusterBandLowHz = $null
+    autoPhoneClusterBandHighHz = $null
     allowRetune = $false
     skipCurrentVfo = $false
     stopOnReady = $false
@@ -6152,6 +6162,8 @@ $g2RxPeakHuntEvidence = [ordered]@{
     safetyTxEndpointsTouched = $false
     safetyOriginalVfoRestoreAttempted = $false
     safetyOriginalVfoRestored = $false
+    safetyOriginalRadioLoRestoreAttempted = $false
+    safetyOriginalRadioLoRestored = $false
     safetyRestoreError = ""
     hardwareConnectionStatus = ""
     hardwareEndpoint = ""
@@ -6159,6 +6171,8 @@ $g2RxPeakHuntEvidence = [ordered]@{
     hardwareVariant = ""
     hardwareOriginalVfoHz = $null
     hardwareRestoredVfoHz = $null
+    hardwareOriginalRadioLoHz = $null
+    hardwareRestoredRadioLoHz = $null
     hardwareSampleRate = 0
     liveDiagnosticsStatus = ""
     liveDiagnosticsReadyForLiveBenchmark = $false
@@ -12894,6 +12908,14 @@ else {
                 $autoPhoneClusterCandidateFrequencyHz = @(Get-JsonArray $artifactJson "autoPhoneClusterCandidateFrequencyHz")
                 $autoPhoneClusterCandidates = @(Get-JsonArray $artifactJson "autoPhoneClusterCandidates")
                 $autoPhoneClusterCandidateCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "autoPhoneClusterCandidateCount"))
+                $reportedAutoPhoneClusterExactCandidateCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "autoPhoneClusterExactCandidateCount"))
+                $reportedAutoPhoneClusterNeighborCandidateCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "autoPhoneClusterNeighborCandidateCount"))
+                $autoPhoneClusterExactCandidateCount = @($autoPhoneClusterCandidates | Where-Object { [string](Get-JsonValue $_ "source") -eq "recent-phone-cluster" }).Count
+                $autoPhoneClusterNeighborCandidateCount = @($autoPhoneClusterCandidates | Where-Object { [string](Get-JsonValue $_ "source") -eq "recent-phone-cluster-neighbor" }).Count
+                if ($autoPhoneClusterCandidates.Count -eq 0) {
+                    $autoPhoneClusterExactCandidateCount = $reportedAutoPhoneClusterExactCandidateCount
+                    $autoPhoneClusterNeighborCandidateCount = $reportedAutoPhoneClusterNeighborCandidateCount
+                }
                 $autoPhoneClusterMaxCandidates = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "autoPhoneClusterMaxCandidates"))
                 $autoPhoneClusterLookbackHours = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "autoPhoneClusterLookbackHours"))
                 $autoPhoneClusterMinSpeechSamples = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "autoPhoneClusterMinSpeechSamples"))
@@ -12934,6 +12956,8 @@ else {
                 $safetyTxEndpointsTouched = Test-Truthy (Get-JsonValue $safety "txEndpointsTouched")
                 $safetyOriginalVfoRestoreAttempted = Test-Truthy (Get-JsonValue $safety "originalVfoRestoreAttempted")
                 $safetyOriginalVfoRestored = Test-Truthy (Get-JsonValue $safety "originalVfoRestored")
+                $safetyOriginalRadioLoRestoreAttempted = Test-Truthy (Get-JsonValue $safety "originalRadioLoRestoreAttempted")
+                $safetyOriginalRadioLoRestored = Test-Truthy (Get-JsonValue $safety "originalRadioLoRestored")
                 $safetyRestoreError = [string](Get-JsonValue $safety "restoreError")
                 $bestFrequencyHz = $null
                 if ($null -ne $bestRun) {
@@ -12967,6 +12991,8 @@ else {
                 $g2RxPeakHuntEvidence["autoPhoneCluster"] = $autoPhoneCluster
                 $g2RxPeakHuntEvidence["autoPhoneClusterCandidateFrequencyHzCount"] = $autoPhoneClusterCandidateFrequencyHz.Count
                 $g2RxPeakHuntEvidence["autoPhoneClusterCandidateCount"] = if ($autoPhoneClusterCandidateCount -gt 0) { $autoPhoneClusterCandidateCount } else { $autoPhoneClusterCandidates.Count }
+                $g2RxPeakHuntEvidence["autoPhoneClusterExactCandidateCount"] = $autoPhoneClusterExactCandidateCount
+                $g2RxPeakHuntEvidence["autoPhoneClusterNeighborCandidateCount"] = $autoPhoneClusterNeighborCandidateCount
                 $g2RxPeakHuntEvidence["autoPhoneClusterMaxCandidates"] = $autoPhoneClusterMaxCandidates
                 $g2RxPeakHuntEvidence["autoPhoneClusterLookbackHours"] = $autoPhoneClusterLookbackHours
                 $g2RxPeakHuntEvidence["autoPhoneClusterMinSpeechSamples"] = $autoPhoneClusterMinSpeechSamples
@@ -12995,6 +13021,8 @@ else {
                 $g2RxPeakHuntEvidence["safetyTxEndpointsTouched"] = $safetyTxEndpointsTouched
                 $g2RxPeakHuntEvidence["safetyOriginalVfoRestoreAttempted"] = $safetyOriginalVfoRestoreAttempted
                 $g2RxPeakHuntEvidence["safetyOriginalVfoRestored"] = $safetyOriginalVfoRestored
+                $g2RxPeakHuntEvidence["safetyOriginalRadioLoRestoreAttempted"] = $safetyOriginalRadioLoRestoreAttempted
+                $g2RxPeakHuntEvidence["safetyOriginalRadioLoRestored"] = $safetyOriginalRadioLoRestored
                 $g2RxPeakHuntEvidence["safetyRestoreError"] = $safetyRestoreError
                 $g2RxPeakHuntEvidence["hardwareConnectionStatus"] = [string](Get-JsonValue $hardware "connectionStatus")
                 $g2RxPeakHuntEvidence["hardwareEndpoint"] = [string](Get-JsonValue $hardware "endpoint")
@@ -13002,6 +13030,8 @@ else {
                 $g2RxPeakHuntEvidence["hardwareVariant"] = [string](Get-JsonValue $hardware "orionMkIIVariant")
                 $g2RxPeakHuntEvidence["hardwareOriginalVfoHz"] = Get-JsonValue $hardware "originalVfoHz"
                 $g2RxPeakHuntEvidence["hardwareRestoredVfoHz"] = Get-JsonValue $hardware "restoredVfoHz"
+                $g2RxPeakHuntEvidence["hardwareOriginalRadioLoHz"] = Get-JsonValue $hardware "originalRadioLoHz"
+                $g2RxPeakHuntEvidence["hardwareRestoredRadioLoHz"] = Get-JsonValue $hardware "restoredRadioLoHz"
                 $g2RxPeakHuntEvidence["hardwareSampleRate"] = [int](Get-NumericValueOrDefault (Get-JsonValue $hardware "sampleRate"))
                 $g2RxPeakHuntEvidence["liveDiagnosticsStatus"] = [string](Get-JsonValue $liveDiagnostics "status")
                 $g2RxPeakHuntEvidence["liveDiagnosticsReadyForLiveBenchmark"] = Test-Truthy (Get-JsonValue $liveDiagnostics "readyForLiveBenchmark")
@@ -13048,6 +13078,10 @@ else {
                 }
                 if (($allowRetune -or $retuneAttempts.Count -gt 0) -and -not $safetyOriginalVfoRestored) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-vfo-not-restored" "Artifact '$artifactId' retuned or allowed retune but did not prove safety.originalVfoRestored=true. restoreError='$safetyRestoreError'."
+                    $artifactValidationOk = $false
+                }
+                if (($allowRetune -or $retuneAttempts.Count -gt 0) -and $safetyOriginalRadioLoRestoreAttempted -and -not $safetyOriginalRadioLoRestored) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "g2-rx-peak-hunt-radio-lo-not-restored" "Artifact '$artifactId' retuned or allowed retune but did not prove safety.originalRadioLoRestored=true. restoreError='$safetyRestoreError'."
                     $artifactValidationOk = $false
                 }
                 if ($retuneAttempts.Count -gt 0 -and -not $allowRetune) {
@@ -14659,6 +14693,8 @@ $report = [ordered]@{
     g2RxPeakHuntAutoPhoneCluster = $g2RxPeakHuntEvidence.autoPhoneCluster
     g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHzCount = $g2RxPeakHuntEvidence.autoPhoneClusterCandidateFrequencyHzCount
     g2RxPeakHuntAutoPhoneClusterCandidateCount = $g2RxPeakHuntEvidence.autoPhoneClusterCandidateCount
+    g2RxPeakHuntAutoPhoneClusterExactCandidateCount = $g2RxPeakHuntEvidence.autoPhoneClusterExactCandidateCount
+    g2RxPeakHuntAutoPhoneClusterNeighborCandidateCount = $g2RxPeakHuntEvidence.autoPhoneClusterNeighborCandidateCount
     g2RxPeakHuntAutoPhoneClusterMaxCandidates = $g2RxPeakHuntEvidence.autoPhoneClusterMaxCandidates
     g2RxPeakHuntAutoPhoneClusterLookbackHours = $g2RxPeakHuntEvidence.autoPhoneClusterLookbackHours
     g2RxPeakHuntAutoPhoneClusterMinSpeechSamples = $g2RxPeakHuntEvidence.autoPhoneClusterMinSpeechSamples
@@ -14687,6 +14723,8 @@ $report = [ordered]@{
     g2RxPeakHuntSafetyTxEndpointsTouched = $g2RxPeakHuntEvidence.safetyTxEndpointsTouched
     g2RxPeakHuntSafetyOriginalVfoRestoreAttempted = $g2RxPeakHuntEvidence.safetyOriginalVfoRestoreAttempted
     g2RxPeakHuntSafetyOriginalVfoRestored = $g2RxPeakHuntEvidence.safetyOriginalVfoRestored
+    g2RxPeakHuntSafetyOriginalRadioLoRestoreAttempted = $g2RxPeakHuntEvidence.safetyOriginalRadioLoRestoreAttempted
+    g2RxPeakHuntSafetyOriginalRadioLoRestored = $g2RxPeakHuntEvidence.safetyOriginalRadioLoRestored
     g2RxPeakHuntSafetyRestoreError = $g2RxPeakHuntEvidence.safetyRestoreError
     g2RxPeakHuntHardwareConnectionStatus = $g2RxPeakHuntEvidence.hardwareConnectionStatus
     g2RxPeakHuntHardwareEndpoint = $g2RxPeakHuntEvidence.hardwareEndpoint
@@ -14694,6 +14732,8 @@ $report = [ordered]@{
     g2RxPeakHuntHardwareVariant = $g2RxPeakHuntEvidence.hardwareVariant
     g2RxPeakHuntHardwareOriginalVfoHz = $g2RxPeakHuntEvidence.hardwareOriginalVfoHz
     g2RxPeakHuntHardwareRestoredVfoHz = $g2RxPeakHuntEvidence.hardwareRestoredVfoHz
+    g2RxPeakHuntHardwareOriginalRadioLoHz = $g2RxPeakHuntEvidence.hardwareOriginalRadioLoHz
+    g2RxPeakHuntHardwareRestoredRadioLoHz = $g2RxPeakHuntEvidence.hardwareRestoredRadioLoHz
     g2RxPeakHuntHardwareSampleRate = $g2RxPeakHuntEvidence.hardwareSampleRate
     g2RxPeakHuntLiveDiagnosticsStatus = $g2RxPeakHuntEvidence.liveDiagnosticsStatus
     g2RxPeakHuntLiveDiagnosticsReadyForLiveBenchmark = $g2RxPeakHuntEvidence.liveDiagnosticsReadyForLiveBenchmark

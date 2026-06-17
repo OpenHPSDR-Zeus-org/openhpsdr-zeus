@@ -356,6 +356,58 @@ function Invoke-JsonPost {
     return $response.Content | ConvertFrom-Json
 }
 
+function Restore-OriginalTuning {
+    param(
+        [Parameter(Mandatory = $true)][string]$BaseUrl,
+        [Parameter(Mandatory = $true)][long]$OriginalVfo,
+        $OriginalRadioLo = $null,
+        [int]$RequestTimeoutSec = 5,
+        [int]$SettleMs = 1000,
+        [int]$MaxAttempts = 2,
+        [switch]$SkipCertificate
+    )
+
+    $lastState = $null
+    $lastError = $null
+    $loRequired = ($null -ne $OriginalRadioLo -and [long]$OriginalRadioLo -gt 0)
+    $sleepMs = [Math]::Max(0, $SettleMs)
+
+    for ($attempt = 1; $attempt -le [Math]::Max(1, $MaxAttempts); $attempt++) {
+        try {
+            if ($loRequired) {
+                Invoke-JsonPost -Url "$BaseUrl/api/radio/lo" -Body @{ hz = [long]$OriginalRadioLo } -RequestTimeoutSec $RequestTimeoutSec -SkipCertificate:$SkipCertificate | Out-Null
+            }
+            Invoke-JsonPost -Url "$BaseUrl/api/vfo" -Body @{ hz = $OriginalVfo } -RequestTimeoutSec $RequestTimeoutSec -SkipCertificate:$SkipCertificate | Out-Null
+            Start-Sleep -Milliseconds $sleepMs
+
+            $lastState = Invoke-JsonGet -Url "$BaseUrl/api/state" -RequestTimeoutSec $RequestTimeoutSec -SkipCertificate:$SkipCertificate
+            $restoredVfoHz = Get-NullableLongValue (Get-JsonValue $lastState "vfoHz")
+            $restoredRadioLoHz = Get-NullableLongValue (Get-JsonValue $lastState "radioLoHz")
+            $vfoRestored = ($null -ne $restoredVfoHz -and [long]$restoredVfoHz -eq $OriginalVfo)
+            $radioLoRestored = (-not $loRequired) -or ($null -ne $restoredRadioLoHz -and [long]$restoredRadioLoHz -eq [long]$OriginalRadioLo)
+
+            if ($vfoRestored -and $radioLoRestored) {
+                return [pscustomobject][ordered]@{
+                    ok = $true
+                    attempts = $attempt
+                    state = $lastState
+                    error = $null
+                }
+            }
+        }
+        catch {
+            $lastError = $_.Exception.Message
+        }
+    }
+
+    return [pscustomobject][ordered]@{
+        ok = $false
+        attempts = [Math]::Max(1, $MaxAttempts)
+        state = $lastState
+        error = $lastError
+    }
+}
+
 function Add-UniqueCandidateUrl {
     param(
         [System.Collections.Generic.List[string]]$Urls,
@@ -718,10 +770,18 @@ function Get-AutoPhoneClusterCandidates {
         }
     }
 
+    $neighborReserve = 0
+    if ($MaxCandidates -ge 8 -and $seedMap.Count -gt 0) {
+        $neighborReserve = [Math]::Min(4, [Math]::Max(1, [int][Math]::Floor([double]$MaxCandidates * 0.25)))
+    }
+    $exactCandidateLimit = [Math]::Max(0, $MaxCandidates - $neighborReserve)
+
     $rank = 0
+    $selectedFrequencyMap = @{}
     $candidates = New-Object System.Collections.Generic.List[object]
-    foreach ($seed in @($seedMap.Values | Sort-Object @{ Expression = { [double]$_.score }; Descending = $true }, @{ Expression = { [long]$_.frequencyHz }; Ascending = $true } | Select-Object -First ([Math]::Max(0, $MaxCandidates)))) {
+    foreach ($seed in @($seedMap.Values | Sort-Object @{ Expression = { [double]$_.score }; Descending = $true }, @{ Expression = { [long]$_.frequencyHz }; Ascending = $true } | Select-Object -First $exactCandidateLimit)) {
         $rank++
+        $selectedFrequencyMap[[string]([long]$seed.frequencyHz)] = $true
         $candidates.Add([pscustomobject][ordered]@{
             rank = $rank
             source = "recent-phone-cluster"
@@ -741,6 +801,101 @@ function Get-AutoPhoneClusterCandidates {
             evidenceStatus = [string]$seed.status
             evidenceReportPath = [string]$seed.reportPath
         }) | Out-Null
+    }
+
+    if ($candidates.Count -lt $MaxCandidates -and $seedMap.Count -gt 0) {
+        $neighborOffsetsHz = @(-10000, -7000, -5000, -3000, 3000, 5000, 7000, 10000)
+        $neighborMap = @{}
+        foreach ($seed in @($seedMap.Values | Sort-Object @{ Expression = { [double]$_.score }; Descending = $true }, @{ Expression = { [long]$_.frequencyHz }; Ascending = $true })) {
+            foreach ($offsetHz in $neighborOffsetsHz) {
+                $candidateHz = [long]([Math]::Round(([double]([long]$seed.frequencyHz + [long]$offsetHz)) / 1000.0) * 1000.0)
+                if ($candidateHz -lt $BandLowHz -or $candidateHz -gt $BandHighHz) {
+                    continue
+                }
+
+                $key = [string]$candidateHz
+                if ($seedMap.ContainsKey($key) -or $selectedFrequencyMap.ContainsKey($key)) {
+                    continue
+                }
+
+                $score = [Math]::Round(([double]$seed.score * 0.62) - ([Math]::Abs([double]$offsetHz) / 1000.0), 3)
+                if ($score -le 0.0) {
+                    continue
+                }
+
+                if (-not $neighborMap.ContainsKey($key) -or [double]$neighborMap[$key].score -lt $score) {
+                    $neighborMap[$key] = [pscustomobject][ordered]@{
+                        frequencyHz = $candidateHz
+                        sourceFrequencyHz = [long]$seed.frequencyHz
+                        score = $score
+                        speechWeak = [int]$seed.speechWeak
+                        speechStrong = [int]$seed.speechStrong
+                        passbandWeak = [int]$seed.passbandWeak
+                        passbandStrong = [int]$seed.passbandStrong
+                        nearPassband = [int]$seed.nearPassband
+                        candidateSource = [string]$seed.candidateSource
+                        status = [string]$seed.status
+                        reportPath = [string]$seed.reportPath
+                        neighborOffsetHz = [long]$offsetHz
+                    }
+                }
+            }
+        }
+
+        $sortedNeighbors = @($neighborMap.Values | Sort-Object @{ Expression = { [double]$_.score }; Descending = $true }, @{ Expression = { [long]$_.frequencyHz }; Ascending = $true })
+        $selectedNeighborMap = @{}
+        $selectedNeighborSourceCounts = @{}
+        foreach ($perSourceLimit in @(1, 2, 9999)) {
+            if ($candidates.Count -ge $MaxCandidates) {
+                break
+            }
+
+            foreach ($seed in $sortedNeighbors) {
+                if ($candidates.Count -ge $MaxCandidates) {
+                    break
+                }
+
+                $neighborKey = [string]([long]$seed.frequencyHz)
+                if ($selectedNeighborMap.ContainsKey($neighborKey)) {
+                    continue
+                }
+
+                $sourceKey = [string]([long]$seed.sourceFrequencyHz)
+                $sourceCount = 0
+                if ($selectedNeighborSourceCounts.ContainsKey($sourceKey)) {
+                    $sourceCount = [int]$selectedNeighborSourceCounts[$sourceKey]
+                }
+                if ($sourceCount -ge $perSourceLimit) {
+                    continue
+                }
+
+                $rank++
+                $selectedFrequencyMap[$neighborKey] = $true
+                $selectedNeighborMap[$neighborKey] = $true
+                $selectedNeighborSourceCounts[$sourceKey] = $sourceCount + 1
+                $candidates.Add([pscustomobject][ordered]@{
+                    rank = $rank
+                    source = "recent-phone-cluster-neighbor"
+                    frequencyHz = [long]$seed.frequencyHz
+                    offsetHz = ([long]$seed.frequencyHz - [long]$OriginalVfo)
+                    snrDb = $null
+                    dbfs = $null
+                    confidence = $null
+                    coherent = $null
+                    evidenceScore = [double]$seed.score
+                    evidenceSpeechWeak = [int]$seed.speechWeak
+                    evidenceSpeechStrong = [int]$seed.speechStrong
+                    evidencePassbandWeak = [int]$seed.passbandWeak
+                    evidencePassbandStrong = [int]$seed.passbandStrong
+                    evidenceNearPassband = [int]$seed.nearPassband
+                    evidenceCandidateSource = [string]$seed.candidateSource
+                    evidenceStatus = [string]$seed.status
+                    evidenceReportPath = [string]$seed.reportPath
+                    evidenceNeighborOfFrequencyHz = [long]$seed.sourceFrequencyHz
+                    evidenceNeighborOffsetHz = [long]$seed.neighborOffsetHz
+                }) | Out-Null
+            }
+        }
     }
 
     return @($candidates.ToArray())
@@ -954,6 +1109,7 @@ if ($PlanOnly) {
         autoPhoneClusterSearchRoot = $AutoPhoneClusterSearchRoot
         autoPhoneClusterMaxCandidates = $AutoPhoneClusterMaxCandidates
         autoPhoneClusterLookbackHours = $AutoPhoneClusterLookbackHours
+        autoPhoneClusterMinSpeechSamples = $AutoPhoneClusterMinSpeechSamples
         autoPhoneClusterBandLowHz = $AutoPhoneClusterBandLowHz
         autoPhoneClusterBandHighHz = $AutoPhoneClusterBandHighHz
         maxPeaks = $MaxPeaks
@@ -974,7 +1130,7 @@ if ($PlanOnly) {
             restoreOriginalVfo = $true
             notes = @(
                 "Without -AllowRetune the tool only captures the current VFO and lists candidate frontend peaks/operator frequencies.",
-                "With -AllowRetune the tool posts only /api/vfo, waits for RX settling, delegates evidence capture to watch-dsp-live-diagnostics, then restores the original VFO in a finally block.",
+                "With -AllowRetune the tool posts only RX tuning endpoints, waits for RX settling, delegates evidence capture to watch-dsp-live-diagnostics, then restores the original VFO and radio LO in a verified finally block.",
                 "The tool does not approve DSP default changes; it only hunts for the missing G2 mixed weak+strong NR5/SPNR evidence window."
             )
         }
@@ -1056,10 +1212,13 @@ catch {
         autoPhoneClusterSearchRoot = $AutoPhoneClusterSearchRoot
         autoPhoneClusterMaxCandidates = $AutoPhoneClusterMaxCandidates
         autoPhoneClusterLookbackHours = $AutoPhoneClusterLookbackHours
+        autoPhoneClusterMinSpeechSamples = $AutoPhoneClusterMinSpeechSamples
         autoPhoneClusterBandLowHz = $AutoPhoneClusterBandLowHz
         autoPhoneClusterBandHighHz = $AutoPhoneClusterBandHighHz
         autoPhoneClusterCandidateFrequencyHz = @()
         autoPhoneClusterCandidateCount = 0
+        autoPhoneClusterExactCandidateCount = 0
+        autoPhoneClusterNeighborCandidateCount = 0
         operatorCandidateCount = $operatorCandidatesForPlan.Count
         maxPeaks = $MaxPeaks
         peakMergeHz = $PeakMergeHz
@@ -1161,6 +1320,8 @@ if ($AutoPhoneCluster) {
             -MinSpeechSamples $AutoPhoneClusterMinSpeechSamples)
 }
 $autoPhoneClusterCandidateFrequencyHz = @($autoPhoneClusterCandidates | ForEach-Object { [long]$_.frequencyHz })
+$autoPhoneClusterExactCandidateCount = @($autoPhoneClusterCandidates | Where-Object { [string](Get-JsonValue $_ "source") -eq "recent-phone-cluster" }).Count
+$autoPhoneClusterNeighborCandidateCount = @($autoPhoneClusterCandidates | Where-Object { [string](Get-JsonValue $_ "source") -eq "recent-phone-cluster-neighbor" }).Count
 $latestScene = $null
 $latestLive = $null
 $allPeakCandidates = New-Object System.Collections.Generic.List[object]
@@ -1184,11 +1345,17 @@ try {
 
         if ($AllowRetune -and $pass -gt 1) {
             try {
-                Invoke-JsonPost -Url "$base/api/vfo" -Body @{ hz = $originalVfo } -RequestTimeoutSec $TimeoutSec -SkipCertificate:$SkipCertificateCheck | Out-Null
-                if ($null -ne $originalRadioLo -and $originalRadioLo -gt 0) {
-                    Invoke-JsonPost -Url "$base/api/radio/lo" -Body @{ hz = $originalRadioLo } -RequestTimeoutSec $TimeoutSec -SkipCertificate:$SkipCertificateCheck | Out-Null
+                $passRestore = Restore-OriginalTuning `
+                    -BaseUrl $base `
+                    -OriginalVfo $originalVfo `
+                    -OriginalRadioLo $originalRadioLo `
+                    -RequestTimeoutSec $TimeoutSec `
+                    -SettleMs ([Math]::Min(1000, [Math]::Max(0, $SettleMs))) `
+                    -MaxAttempts 2 `
+                    -SkipCertificate:$SkipCertificateCheck
+                if (-not (Test-Truthy $passRestore.ok)) {
+                    throw "state did not return to original VFO/LO before pass refresh"
                 }
-                Start-Sleep -Milliseconds ([Math]::Min(1000, [Math]::Max(0, $SettleMs)))
                 $passRestoredOriginalBeforeRefresh = $true
             }
             catch {
@@ -1481,14 +1648,20 @@ catch {
 }
 finally {
     try {
-        Invoke-JsonPost -Url "$base/api/vfo" -Body @{ hz = $originalVfo } -RequestTimeoutSec $TimeoutSec -SkipCertificate:$SkipCertificateCheck | Out-Null
-        if ($null -ne $originalRadioLo -and $originalRadioLo -gt 0) {
-            Invoke-JsonPost -Url "$base/api/radio/lo" -Body @{ hz = $originalRadioLo } -RequestTimeoutSec $TimeoutSec -SkipCertificate:$SkipCertificateCheck | Out-Null
-        }
-        Start-Sleep -Milliseconds ([Math]::Min(1000, [Math]::Max(0, $SettleMs)))
-        $afterRestore = Invoke-JsonGet -Url "$base/api/state" -RequestTimeoutSec $TimeoutSec -SkipCertificate:$SkipCertificateCheck
+        $restoreResult = Restore-OriginalTuning `
+            -BaseUrl $base `
+            -OriginalVfo $originalVfo `
+            -OriginalRadioLo $originalRadioLo `
+            -RequestTimeoutSec $TimeoutSec `
+            -SettleMs ([Math]::Min(1000, [Math]::Max(0, $SettleMs))) `
+            -MaxAttempts 3 `
+            -SkipCertificate:$SkipCertificateCheck
+        $afterRestore = $restoreResult.state
         $restoredVfo = Get-NullableLongValue (Get-JsonValue $afterRestore "vfoHz")
         $restoredRadioLo = Get-NullableLongValue (Get-JsonValue $afterRestore "radioLoHz")
+        if (-not (Test-Truthy $restoreResult.ok)) {
+            throw "state did not return to original VFO/LO after restore attempts"
+        }
     }
     catch {
         $restoreError = $_.Exception.Message
@@ -1621,10 +1794,13 @@ $reportObject = [ordered]@{
     autoPhoneClusterSearchRoot = $AutoPhoneClusterSearchRoot
     autoPhoneClusterMaxCandidates = $AutoPhoneClusterMaxCandidates
     autoPhoneClusterLookbackHours = $AutoPhoneClusterLookbackHours
+    autoPhoneClusterMinSpeechSamples = $AutoPhoneClusterMinSpeechSamples
     autoPhoneClusterBandLowHz = $AutoPhoneClusterBandLowHz
     autoPhoneClusterBandHighHz = $AutoPhoneClusterBandHighHz
     autoPhoneClusterCandidateFrequencyHz = @($autoPhoneClusterCandidateFrequencyHz)
     autoPhoneClusterCandidateCount = $autoPhoneClusterCandidates.Count
+    autoPhoneClusterExactCandidateCount = $autoPhoneClusterExactCandidateCount
+    autoPhoneClusterNeighborCandidateCount = $autoPhoneClusterNeighborCandidateCount
     operatorCandidateCount = $operatorCandidates.Count
     maxPeaks = $MaxPeaks
     peakMergeHz = $PeakMergeHz

@@ -6079,6 +6079,9 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(validationRoot.GetProperty("g2RxPeakHuntSafetyRxOnly").GetBoolean());
             Assert.False(validationRoot.GetProperty("g2RxPeakHuntSafetyTxEndpointsTouched").GetBoolean());
             Assert.True(validationRoot.GetProperty("g2RxPeakHuntSafetyOriginalVfoRestored").GetBoolean());
+            Assert.True(validationRoot.GetProperty("g2RxPeakHuntSafetyOriginalRadioLoRestored").GetBoolean());
+            Assert.Equal(14255000L, validationRoot.GetProperty("g2RxPeakHuntHardwareOriginalRadioLoHz").GetInt64());
+            Assert.Equal(14255000L, validationRoot.GetProperty("g2RxPeakHuntHardwareRestoredRadioLoHz").GetInt64());
             Assert.True(validationRoot.GetProperty("g2RxPeakHuntMixedWeakStrongReady").GetBoolean());
             Assert.Equal(2, validationRoot.GetProperty("g2RxPeakHuntPassCount").GetInt32());
             Assert.Equal(5, validationRoot.GetProperty("g2RxPeakHuntPassDelaySec").GetInt32());
@@ -6088,6 +6091,8 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(validationRoot.GetProperty("g2RxPeakHuntAutoPhoneCluster").GetBoolean());
             Assert.Equal(4, validationRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHzCount").GetInt32());
             Assert.Equal(4, validationRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterCandidateCount").GetInt32());
+            Assert.Equal(3, validationRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterExactCandidateCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterNeighborCandidateCount").GetInt32());
             Assert.Equal(12, validationRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterMaxCandidates").GetInt32());
             Assert.Equal(12, validationRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterLookbackHours").GetInt32());
             Assert.Equal(1, validationRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterMinSpeechSamples").GetInt32());
@@ -6156,8 +6161,13 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(summaryRoot.GetProperty("g2RxPeakHuntBaseUrlAutoDiscovered").GetBoolean());
             Assert.Equal(2, summaryRoot.GetProperty("g2RxPeakHuntCompletedPassCount").GetInt32());
             Assert.Equal(2, summaryRoot.GetProperty("g2RxPeakHuntOperatorCandidateCount").GetInt32());
+            Assert.True(summaryRoot.GetProperty("g2RxPeakHuntSafetyOriginalRadioLoRestored").GetBoolean());
+            Assert.Equal(14255000L, summaryRoot.GetProperty("g2RxPeakHuntHardwareOriginalRadioLoHz").GetInt64());
+            Assert.Equal(14255000L, summaryRoot.GetProperty("g2RxPeakHuntHardwareRestoredRadioLoHz").GetInt64());
             Assert.True(summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneCluster").GetBoolean());
             Assert.Equal(4, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterCandidateCount").GetInt32());
+            Assert.Equal(3, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterExactCandidateCount").GetInt32());
+            Assert.Equal(1, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterNeighborCandidateCount").GetInt32());
             Assert.Equal(14150000L, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterBandLowHz").GetInt64());
             Assert.Equal(14350000L, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterBandHighHz").GetInt64());
             Assert.Equal(13, summaryRoot.GetProperty("g2RxPeakHuntSpeechQualifiedWeakInputSampleCount").GetInt32());
@@ -6180,7 +6190,8 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains("Base URL requested/resolved/auto-discovered", markdown, StringComparison.Ordinal);
             Assert.Contains("Scan passes completed/planned/delay", markdown, StringComparison.Ordinal);
             Assert.Contains("Operator candidate frequencies/count", markdown, StringComparison.Ordinal);
-            Assert.Contains("Auto phone cluster enabled/candidates/lookback/band", markdown, StringComparison.Ordinal);
+            Assert.Contains("Auto phone cluster enabled/candidates/exact/neighbor/lookback/band", markdown, StringComparison.Ordinal);
+            Assert.Contains("radio LO restored", markdown, StringComparison.Ordinal);
             Assert.Contains("14150000-14350000", markdown, StringComparison.Ordinal);
             Assert.Contains("Speech-qualified weak/strong samples", markdown, StringComparison.Ordinal);
             Assert.Contains("Passband-qualified weak/strong samples", markdown, StringComparison.Ordinal);
@@ -6343,8 +6354,10 @@ public sealed class DspModernizationValidationToolTests
             autoPhoneClusterMinSpeechSamples = 1,
             autoPhoneClusterBandLowHz = 14150000L,
             autoPhoneClusterBandHighHz = 14350000L,
-            autoPhoneClusterCandidateFrequencyHz = new[] { 14240000L, 14270000L, 14277000L, 14300000L },
+            autoPhoneClusterCandidateFrequencyHz = new[] { 14240000L, 14270000L, 14277000L, 14280000L },
             autoPhoneClusterCandidateCount = 4,
+            autoPhoneClusterExactCandidateCount = 3,
+            autoPhoneClusterNeighborCandidateCount = 1,
             operatorCandidateCount = 2,
             maxPeaks = 6,
             peakMergeHz = 1000,
@@ -6357,6 +6370,8 @@ public sealed class DspModernizationValidationToolTests
                 vfoRetuneRequiresAllowRetune = true,
                 originalVfoRestoreAttempted = true,
                 originalVfoRestored = true,
+                originalRadioLoRestoreAttempted = true,
+                originalRadioLoRestored = true,
                 restoreError = (string?)null
             },
             hardware = new
@@ -6367,6 +6382,8 @@ public sealed class DspModernizationValidationToolTests
                 orionMkIIVariant = "G2",
                 originalVfoHz = 14290000,
                 restoredVfoHz = 14290000,
+                originalRadioLoHz = 14255000,
+                restoredRadioLoHz = 14255000,
                 mode = "USB",
                 sampleRate = 384000
             },
@@ -6539,6 +6556,40 @@ public sealed class DspModernizationValidationToolTests
                     evidenceCandidateSource = "operator-frequency",
                     evidenceStatus = "missing-strong-input",
                     evidenceReportPath = "artifacts/g2-rx-peak-hunt-report.previous.json"
+                },
+                new
+                {
+                    rank = 3,
+                    source = "recent-phone-cluster",
+                    frequencyHz = 14277000,
+                    offsetHz = -13000,
+                    evidenceScore = 119.0,
+                    evidenceSpeechWeak = 4,
+                    evidenceSpeechStrong = 0,
+                    evidencePassbandWeak = 2,
+                    evidencePassbandStrong = 0,
+                    evidenceNearPassband = 2,
+                    evidenceCandidateSource = "operator-frequency",
+                    evidenceStatus = "missing-strong-input",
+                    evidenceReportPath = "artifacts/g2-rx-peak-hunt-report.previous.json"
+                },
+                new
+                {
+                    rank = 4,
+                    source = "recent-phone-cluster-neighbor",
+                    frequencyHz = 14280000,
+                    offsetHz = -10000,
+                    evidenceScore = 70.0,
+                    evidenceSpeechWeak = 4,
+                    evidenceSpeechStrong = 0,
+                    evidencePassbandWeak = 2,
+                    evidencePassbandStrong = 0,
+                    evidenceNearPassband = 2,
+                    evidenceCandidateSource = "operator-frequency",
+                    evidenceStatus = "missing-strong-input",
+                    evidenceReportPath = "artifacts/g2-rx-peak-hunt-report.previous.json",
+                    evidenceNeighborOfFrequencyHz = 14277000,
+                    evidenceNeighborOffsetHz = 3000
                 }
             },
             scanPasses = new object[]
