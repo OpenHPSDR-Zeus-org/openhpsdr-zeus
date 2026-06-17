@@ -203,7 +203,9 @@ float popLift(float n, float popI) {
 void main() {
   float n = sampleLevel(vUv);
   float popI = clamp(uPopIntensity, 0.0, 1.0) * step(0.5, uPopActive);
-  float normalI = 1.0 - step(0.5, uPopActive);
+  // Pop-OFF renders the flat develop LUT (no HDR/relief/smoothing). The 3D
+  // shaded-relief engine is opt-in via Signal Pop only. (Was: 1.0 - step(...).)
+  float normalI = 0.0;
   float normalHdrI = normalI * 0.54;
   float normalReliefI = normalI * 0.46;
   float reliefI = clamp(uReliefDepth, 0.0, 1.0) * popI;
