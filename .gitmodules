@@ -1,3 +1,6 @@
 [submodule "native/zeus-vst-bridge/third_party/vst3sdk"]
 	path = native/zeus-vst-bridge/third_party/vst3sdk
 	url = https://github.com/steinbergmedia/vst3sdk.git
+[submodule "zeus-web/external/deepcw-engine"]
+	path = zeus-web/external/deepcw-engine
+	url = https://github.com/e04/deepcw-engine
