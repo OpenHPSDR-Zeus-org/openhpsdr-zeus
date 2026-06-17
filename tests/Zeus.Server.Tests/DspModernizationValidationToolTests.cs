@@ -1971,6 +1971,8 @@ public sealed class DspModernizationValidationToolTests
 
             var steps = ReadStringArray(action, "commandSteps");
             Assert.Contains(steps, step => step.Contains("watch-dsp-manual-tune-observer.ps1", StringComparison.Ordinal));
+            Assert.Contains(steps, step => step.Contains("-MaxCapturesPerVfo 2", StringComparison.Ordinal));
+            Assert.Contains(steps, step => step.Contains("-AllowStaleSceneCapture", StringComparison.Ordinal));
             Assert.Contains(steps, step => step.Contains("run-dsp-g2-rx-peak-hunt.ps1", StringComparison.Ordinal));
             Assert.Contains("artifacts/manual-tune-observer-report.json", ReadStringArray(action, "expectedArtifacts"));
             Assert.Contains("artifacts/g2-rx-peak-hunt-report.json", ReadStringArray(action, "expectedArtifacts"));
@@ -6135,7 +6137,9 @@ public sealed class DspModernizationValidationToolTests
             "-PlanOnly",
             "-PollCount", "12",
             "-StablePolls", "3",
-            "-MaxCaptures", "2");
+            "-MaxCaptures", "2",
+            "-MaxCapturesPerVfo", "2",
+            "-AllowStaleSceneCapture");
 
         Assert.Equal(0, plan.ExitCode);
 
@@ -6146,6 +6150,8 @@ public sealed class DspModernizationValidationToolTests
         Assert.Equal(12, root.GetProperty("pollCount").GetInt32());
         Assert.Equal(3, root.GetProperty("stablePolls").GetInt32());
         Assert.Equal(2, root.GetProperty("maxCaptures").GetInt32());
+        Assert.Equal(2, root.GetProperty("maxCapturesPerVfo").GetInt32());
+        Assert.True(root.GetProperty("allowStaleSceneCapture").GetBoolean());
         Assert.Equal(Path.GetFullPath(bundleDir), root.GetProperty("bundleDir").GetString());
         Assert.True(root.GetProperty("bundleRelativePaths").GetBoolean());
 
@@ -6167,6 +6173,8 @@ public sealed class DspModernizationValidationToolTests
 
         Assert.Contains("watch-dsp-manual-tune-observer.ps1", root.GetProperty("example").GetString(), StringComparison.Ordinal);
         Assert.Contains("-BundleDir", root.GetProperty("example").GetString(), StringComparison.Ordinal);
+        Assert.Contains("-MaxCapturesPerVfo 2", root.GetProperty("example").GetString(), StringComparison.Ordinal);
+        Assert.Contains("-AllowStaleSceneCapture", root.GetProperty("example").GetString(), StringComparison.Ordinal);
     }
 
     [SkippableFact]
@@ -6216,6 +6224,12 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(8, validationRoot.GetProperty("manualTuneObserverPollCount").GetInt32());
             Assert.Equal(8, validationRoot.GetProperty("manualTuneObserverPollSampleCount").GetInt32());
             Assert.Equal(2, validationRoot.GetProperty("manualTuneObserverCaptureCount").GetInt32());
+            Assert.Equal(2, validationRoot.GetProperty("manualTuneObserverMaxCapturesPerVfo").GetInt32());
+            Assert.Equal(2, validationRoot.GetProperty("manualTuneObserverUniqueCapturedVfoCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("manualTuneObserverRecapturedVfoCount").GetInt32());
+            Assert.False(validationRoot.GetProperty("manualTuneObserverAllowStaleSceneCapture").GetBoolean());
+            Assert.Equal(0, validationRoot.GetProperty("manualTuneObserverStaleScenePollCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("manualTuneObserverStaleSceneCaptureCount").GetInt32());
             Assert.Equal(2, validationRoot.GetProperty("manualTuneObserverReadyCaptureCount").GetInt32());
             Assert.True(validationRoot.GetProperty("manualTuneObserverMixedWeakStrongReady").GetBoolean());
             Assert.Equal(1, validationRoot.GetProperty("manualTuneObserverMixedWeakStrongReadyCaptureCount").GetInt32());
@@ -6287,6 +6301,12 @@ public sealed class DspModernizationValidationToolTests
             Assert.False(summaryRoot.GetProperty("manualTuneObserverSafetyApiWrites").GetBoolean());
             Assert.False(summaryRoot.GetProperty("manualTuneObserverSafetyRetune").GetBoolean());
             Assert.Equal(2, summaryRoot.GetProperty("manualTuneObserverCaptureCount").GetInt32());
+            Assert.Equal(2, summaryRoot.GetProperty("manualTuneObserverMaxCapturesPerVfo").GetInt32());
+            Assert.Equal(2, summaryRoot.GetProperty("manualTuneObserverUniqueCapturedVfoCount").GetInt32());
+            Assert.Equal(0, summaryRoot.GetProperty("manualTuneObserverRecapturedVfoCount").GetInt32());
+            Assert.False(summaryRoot.GetProperty("manualTuneObserverAllowStaleSceneCapture").GetBoolean());
+            Assert.Equal(0, summaryRoot.GetProperty("manualTuneObserverStaleScenePollCount").GetInt32());
+            Assert.Equal(0, summaryRoot.GetProperty("manualTuneObserverStaleSceneCaptureCount").GetInt32());
             Assert.Equal(14277000L, summaryRoot.GetProperty("manualTuneObserverBestFrequencyHz").GetInt64());
             Assert.Equal(2, summaryRoot.GetProperty("manualTuneObserverReferencedCaptureReadyCount").GetInt32());
 
@@ -6300,6 +6320,8 @@ public sealed class DspModernizationValidationToolTests
             var markdown = await File.ReadAllTextAsync(summaryMarkdown);
             Assert.Contains("Manual Tune Observer Evidence", markdown, StringComparison.Ordinal);
             Assert.Contains("Bundle-relative paths: True", markdown, StringComparison.Ordinal);
+            Assert.Contains("Unique VFOs/recaptured VFOs/max captures per VFO: 2 / 0 / 2", markdown, StringComparison.Ordinal);
+            Assert.Contains("Stale scene allowed/polls/captures: False / 0 / 0", markdown, StringComparison.Ordinal);
             Assert.Contains("read-only", markdown, StringComparison.Ordinal);
             Assert.Contains("VFO/radio LO write attempts", markdown, StringComparison.Ordinal);
             Assert.Contains("Weak/strong/near-strong samples", markdown, StringComparison.Ordinal);
@@ -6735,6 +6757,8 @@ public sealed class DspModernizationValidationToolTests
             minCoherentSnrDb = 6.0,
             sceneProfilePattern = "voice|speech|active",
             maxCaptures = 2,
+            maxCapturesPerVfo = 2,
+            allowStaleSceneCapture = false,
             captureSamples = 24,
             captureIntervalMs = 250,
             safety = new
@@ -6750,6 +6774,10 @@ public sealed class DspModernizationValidationToolTests
             },
             pollSampleCount = 8,
             captureCount = 2,
+            uniqueCapturedVfoCount = 2,
+            recapturedVfoCount = 0,
+            staleScenePollCount = 0,
+            staleSceneCaptureCount = 0,
             readyCaptureCount = 2,
             mixedWeakStrongReady = true,
             mixedWeakStrongReadyCaptureCount = 1,
@@ -6769,8 +6797,13 @@ public sealed class DspModernizationValidationToolTests
                     exitCode = 0,
                     error = "",
                     vfoHz = 14240000L,
+                    vfoCaptureIndex = 1,
+                    maxCapturesPerVfo = 2,
+                    recaptureReason = "first-vfo-capture",
                     radioLoHz = 14240000L,
                     mode = "USB",
+                    sceneFresh = true,
+                    staleSceneCapture = false,
                     signalProfile = "voice-like",
                     coherentMaxSnrDb = 10.0,
                     reportPath = weakCaptureReportPath,
@@ -6796,8 +6829,13 @@ public sealed class DspModernizationValidationToolTests
                     exitCode = 0,
                     error = "",
                     vfoHz = 14277000L,
+                    vfoCaptureIndex = 1,
+                    maxCapturesPerVfo = 2,
+                    recaptureReason = "first-vfo-capture",
                     radioLoHz = 14277000L,
                     mode = "USB",
+                    sceneFresh = true,
+                    staleSceneCapture = false,
                     signalProfile = "speech-with-adjacent-strong",
                     coherentMaxSnrDb = 18.0,
                     reportPath = bestCaptureReportPath,

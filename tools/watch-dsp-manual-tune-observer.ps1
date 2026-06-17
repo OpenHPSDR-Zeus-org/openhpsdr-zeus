@@ -13,6 +13,8 @@ param(
 
     [int]$MaxCaptures = 4,
 
+    [int]$MaxCapturesPerVfo = 1,
+
     [int]$CaptureSamples = 16,
 
     [int]$CaptureIntervalMs = 250,
@@ -34,6 +36,8 @@ param(
     [string]$ComparisonId = "nr5-spnr",
 
     [switch]$SkipCertificateCheck,
+
+    [switch]$AllowStaleSceneCapture,
 
     [switch]$PlanOnly,
 
@@ -303,6 +307,9 @@ if ($StablePolls -lt 1) {
 if ($MaxCaptures -lt 0) {
     $MaxCaptures = 0
 }
+if ($MaxCapturesPerVfo -lt 1) {
+    $MaxCapturesPerVfo = 1
+}
 if ($CaptureSamples -lt 1) {
     $CaptureSamples = 1
 }
@@ -339,6 +346,8 @@ if ($PlanOnly) {
         minCoherentSnrDb = $MinCoherentSnrDb
         sceneProfilePattern = $SceneProfilePattern
         maxCaptures = $MaxCaptures
+        maxCapturesPerVfo = $MaxCapturesPerVfo
+        allowStaleSceneCapture = [bool]$AllowStaleSceneCapture
         captureSamples = $CaptureSamples
         captureIntervalMs = $CaptureIntervalMs
         scenarioId = $ScenarioId
@@ -365,10 +374,10 @@ if ($PlanOnly) {
             )
         }
         example = if ([string]::IsNullOrWhiteSpace($bundlePath)) {
-            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -PollCount 60 -StablePolls 3 -MaxCaptures 4"
+            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -AllowStaleSceneCapture"
         }
         else {
-            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -BundleDir `"$bundlePath`" -OutputRoot `"$bundlePath\artifacts\manual-tune-observer`" -ReportPath `"$bundlePath\artifacts\manual-tune-observer-report.json`" -PollCount 60 -StablePolls 3 -MaxCaptures 4"
+            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -BundleDir `"$bundlePath`" -OutputRoot `"$bundlePath\artifacts\manual-tune-observer`" -ReportPath `"$bundlePath\artifacts\manual-tune-observer-report.json`" -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -AllowStaleSceneCapture"
         }
     } | ConvertTo-Json -Depth 16
     exit 0
@@ -427,7 +436,8 @@ try {
         $profileMatches = (-not [string]::IsNullOrWhiteSpace($profile)) -and ($profile -match $SceneProfilePattern)
         $snrQualified = ($null -ne $coherentSnr -and [double]$coherentSnr -ge [double]$MinCoherentSnrDb)
         $stableQualified = ($null -ne $vfo -and $stableCount -ge $StablePolls)
-        $captureQualified = ($stableQualified -and $sceneFresh -and $snrQualified -and $profileMatches)
+        $staleSceneCaptureAllowed = (-not $sceneFresh) -and [bool]$AllowStaleSceneCapture
+        $captureQualified = ($stableQualified -and ($sceneFresh -or $staleSceneCaptureAllowed) -and $snrQualified -and $profileMatches)
 
         $pollRecord = [ordered]@{
             poll = $poll
@@ -446,6 +456,7 @@ try {
             requestedNrMode = [string](Get-JsonValue $live "requestedNrMode")
             effectiveNrMode = [string](Get-JsonValue $live "effectiveNrMode")
             readyForNr5Tuning = Test-Truthy (Get-JsonValue $live "readyForNr5Tuning")
+            staleSceneCaptureAllowed = $staleSceneCaptureAllowed
             captureQualified = $captureQualified
         }
         $polls.Add([pscustomobject]$pollRecord) | Out-Null
@@ -453,12 +464,29 @@ try {
         if ($captureQualified -and $captures.Count -lt $MaxCaptures) {
             $vfoKey = [string]$vfo
             if (-not $capturedVfoMap.ContainsKey($vfoKey)) {
-                $capturedVfoMap[$vfoKey] = $true
-                $captureDir = Join-Path $captureRoot $vfoKey
+                $capturedVfoMap[$vfoKey] = [ordered]@{
+                    count = 0
+                    ready = $false
+                    mixedReady = $false
+                    lastStatus = ""
+                }
+            }
+
+            $vfoRecord = $capturedVfoMap[$vfoKey]
+            $vfoCaptureCount = Get-IntValue $vfoRecord["count"]
+            $vfoMixedReady = Test-Truthy $vfoRecord["mixedReady"]
+            if ($vfoCaptureCount -lt $MaxCapturesPerVfo -and -not $vfoMixedReady) {
+                $vfoCaptureIndex = $vfoCaptureCount + 1
+                $captureDir = if ($vfoCaptureIndex -le 1) {
+                    Join-Path $captureRoot $vfoKey
+                }
+                else {
+                    Join-Path $captureRoot ("{0}-capture-{1:D2}" -f $vfoKey, $vfoCaptureIndex)
+                }
                 New-Item -ItemType Directory -Force -Path $captureDir | Out-Null
                 $summaryPath = Join-Path $captureDir "live-diagnostics-watch.json"
                 $jsonlPath = Join-Path $captureDir "live-diagnostics-watch.jsonl"
-                $captureLabel = ConvertTo-SafeName ("{0}-{1}" -f $safeLabel, $vfoKey)
+                $captureLabel = ConvertTo-SafeName ("{0}-{1}-{2:D2}" -f $safeLabel, $vfoKey, $vfoCaptureIndex)
                 $watch = Invoke-WatchCapture `
                     -ScriptPath $resolvedWatchScript `
                     -Base $base `
@@ -477,24 +505,32 @@ try {
                 $agc = Get-JsonValue $watchReport "agcStabilityWatch"
                 $serializedSummaryPath = ConvertTo-BundleRelativeEvidencePath -Path $summaryPath -BundlePath $bundlePath
                 $serializedJsonlPath = ConvertTo-BundleRelativeEvidencePath -Path $jsonlPath -BundlePath $bundlePath
+                $captureReady = Test-Truthy (Get-JsonValue $watchReport "readyForBenchmarkTrace")
+                $captureMixedReady = Test-Truthy (Get-JsonValue $weak "mixedWeakStrongEvidenceReady")
+                $captureStatus = [string](Get-JsonValue $weak "mixedWeakStrongEvidenceStatus")
                 $captures.Add([pscustomobject][ordered]@{
                     ok = Test-Truthy $watch.ok
                     exitCode = Get-IntValue (Get-JsonValue $watch "exitCode")
                     error = [string](Get-JsonValue $watch "error")
                     vfoHz = $vfo
+                    vfoCaptureIndex = $vfoCaptureIndex
+                    maxCapturesPerVfo = $MaxCapturesPerVfo
+                    recaptureReason = if ($vfoCaptureIndex -le 1) { "first-vfo-capture" } else { "retry-until-mixed-ready" }
                     radioLoHz = Get-NullableLongValue (Get-JsonValue $state "radioLoHz")
                     mode = [string](Get-JsonValue $state "mode")
+                    sceneFresh = $sceneFresh
+                    staleSceneCapture = $staleSceneCaptureAllowed
                     signalProfile = $profile
                     coherentMaxSnrDb = $coherentSnr
                     reportPath = $serializedSummaryPath
                     jsonlPath = $serializedJsonlPath
-                    readyForBenchmarkTrace = Test-Truthy (Get-JsonValue $watchReport "readyForBenchmarkTrace")
+                    readyForBenchmarkTrace = $captureReady
                     trendStatus = [string](Get-JsonValue $watchReport "trendStatus")
                     weakInputSampleCount = Get-IntValue (Get-JsonValue $weak "weakInputSampleCount")
                     strongInputSampleCount = Get-IntValue (Get-JsonValue $weak "strongInputSampleCount")
                     nearStrongInputSampleCount = Get-IntValue (Get-JsonValue $weak "nearStrongInputSampleCount")
-                    mixedWeakStrongEvidenceStatus = [string](Get-JsonValue $weak "mixedWeakStrongEvidenceStatus")
-                    mixedWeakStrongEvidenceReady = Test-Truthy (Get-JsonValue $weak "mixedWeakStrongEvidenceReady")
+                    mixedWeakStrongEvidenceStatus = $captureStatus
+                    mixedWeakStrongEvidenceReady = $captureMixedReady
                     weakStrongOutputGapDb = Get-NullableDoubleValue (Get-JsonValue $weak "weakStrongOutputGapDb")
                     speechQualifiedWeakInputSampleCount = Get-IntValue (Get-JsonValue $weak "speechQualifiedWeakInputSampleCount")
                     speechQualifiedStrongInputSampleCount = Get-IntValue (Get-JsonValue $weak "speechQualifiedStrongInputSampleCount")
@@ -503,6 +539,11 @@ try {
                     agcStabilityStatus = [string](Get-JsonValue $agc "status")
                     agcPumpingRisk = Test-Truthy (Get-JsonValue $agc "agcPumpingRisk")
                 }) | Out-Null
+
+                $vfoRecord["count"] = $vfoCaptureIndex
+                $vfoRecord["ready"] = (Test-Truthy $vfoRecord["ready"]) -or $captureReady
+                $vfoRecord["mixedReady"] = (Test-Truthy $vfoRecord["mixedReady"]) -or $captureMixedReady
+                $vfoRecord["lastStatus"] = $captureStatus
             }
         }
 
@@ -535,7 +576,16 @@ $passbandStrongTotal = 0
 $readyCaptureCount = 0
 $mixedReadyCount = 0
 $pumpingRiskCount = 0
+$staleSceneCaptureCount = 0
+$vfoCaptureCounts = @{}
 foreach ($capture in $captureArray) {
+    $captureVfoKey = [string]$capture.vfoHz
+    if (-not [string]::IsNullOrWhiteSpace($captureVfoKey)) {
+        if (-not $vfoCaptureCounts.ContainsKey($captureVfoKey)) {
+            $vfoCaptureCounts[$captureVfoKey] = 0
+        }
+        $vfoCaptureCounts[$captureVfoKey] = [int]$vfoCaptureCounts[$captureVfoKey] + 1
+    }
     $weakTotal += Get-IntValue $capture.weakInputSampleCount
     $strongTotal += Get-IntValue $capture.strongInputSampleCount
     $nearStrongTotal += Get-IntValue $capture.nearStrongInputSampleCount
@@ -552,17 +602,47 @@ foreach ($capture in $captureArray) {
     if (Test-Truthy $capture.agcPumpingRisk) {
         $pumpingRiskCount++
     }
+    if (Test-Truthy $capture.staleSceneCapture) {
+        $staleSceneCaptureCount++
+    }
+}
+$staleScenePollCount = 0
+foreach ($pollRecord in $pollArray) {
+    if (-not (Test-Truthy $pollRecord.sceneFresh)) {
+        $staleScenePollCount++
+    }
+}
+$uniqueCapturedVfoCount = $vfoCaptureCounts.Count
+$recapturedVfoCount = 0
+foreach ($entry in $vfoCaptureCounts.GetEnumerator()) {
+    if ([int]$entry.Value -gt 1) {
+        $recapturedVfoCount++
+    }
 }
 
 $recommendations = New-Object System.Collections.Generic.List[string]
 if ($captureArray.Count -le 0) {
     $recommendations.Add("No stable voice-like manual-tune VFO met the capture threshold; keep tuning manually or lower MinCoherentSnrDb for scouting only.") | Out-Null
+    if ($staleScenePollCount -gt 0 -and -not $AllowStaleSceneCapture) {
+        $recommendations.Add("Frontend DSP scene evidence was stale during $staleScenePollCount poll(s); open the frontend scene publisher or rerun with -AllowStaleSceneCapture for scouting-only child diagnostics.") | Out-Null
+    }
 }
 elseif ($mixedReadyCount -gt 0) {
     $recommendations.Add("At least one manual-tune capture has mixed weak+strong evidence; promote that window through live history and strict validation before tuning DSP behavior.") | Out-Null
 }
 elseif ($weakTotal -gt 0 -and $strongTotal -le 0) {
-    $recommendations.Add("Manual-tune captures are weak-only by the strict NR5 input threshold; keep collecting active windows until strongInputSampleCount is non-zero.") | Out-Null
+    if ($MaxCapturesPerVfo -le 1) {
+        $recommendations.Add("Manual-tune captures are weak-only by the strict NR5 input threshold; rerun with -MaxCapturesPerVfo 2 or keep collecting active windows until strongInputSampleCount is non-zero.") | Out-Null
+    }
+    else {
+        $recommendations.Add("Manual-tune captures are weak-only by the strict NR5 input threshold after bounded same-VFO recapture; keep collecting active windows until strongInputSampleCount is non-zero.") | Out-Null
+    }
+}
+if ($recapturedVfoCount -gt 0) {
+    $recommendations.Add("Same-VFO recapture was used for $recapturedVfoCount VFO(s); prefer the latest ready or mixed-ready capture for promotion.") | Out-Null
+}
+if ($staleSceneCaptureCount -gt 0) {
+    $recommendations.Add("Stale-scene fallback captured $staleSceneCaptureCount window(s); treat them as scouting evidence until refreshed scene data or live-history validation confirms the window.") | Out-Null
 }
 if ($nearStrongTotal -gt 0 -and $strongTotal -le 0) {
     $recommendations.Add("Near-strong samples appeared without strict strong input; inspect per-capture topNearStrongInputs before changing thresholds.") | Out-Null
@@ -602,6 +682,8 @@ $report = [ordered]@{
     minCoherentSnrDb = $MinCoherentSnrDb
     sceneProfilePattern = $SceneProfilePattern
     maxCaptures = $MaxCaptures
+    maxCapturesPerVfo = $MaxCapturesPerVfo
+    allowStaleSceneCapture = [bool]$AllowStaleSceneCapture
     captureSamples = $CaptureSamples
     captureIntervalMs = $CaptureIntervalMs
     safety = [ordered]@{
@@ -616,6 +698,10 @@ $report = [ordered]@{
     }
     pollSampleCount = $pollArray.Count
     captureCount = $captureArray.Count
+    uniqueCapturedVfoCount = $uniqueCapturedVfoCount
+    recapturedVfoCount = $recapturedVfoCount
+    staleScenePollCount = $staleScenePollCount
+    staleSceneCaptureCount = $staleSceneCaptureCount
     readyCaptureCount = $readyCaptureCount
     mixedWeakStrongReady = ($mixedReadyCount -gt 0)
     mixedWeakStrongReadyCaptureCount = $mixedReadyCount
