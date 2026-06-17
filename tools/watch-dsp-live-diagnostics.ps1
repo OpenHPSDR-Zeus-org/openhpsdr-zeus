@@ -376,6 +376,94 @@ function Get-FrontendPeakFilterDistanceHz {
     return 0.0
 }
 
+function Get-FrontendTuneCandidates {
+    param(
+        [object[]]$Samples,
+        [int]$MaxCount = 6
+    )
+
+    $byBucket = @{}
+    foreach ($sample in @($Samples)) {
+        $low = Get-NumericValue (Get-JsonValue $sample "filterLowHz")
+        $high = Get-NumericValue (Get-JsonValue $sample "filterHighHz")
+        if ($null -eq $low -or $null -eq $high) {
+            continue
+        }
+
+        $passLow = [Math]::Min([double]$low, [double]$high)
+        $passHigh = [Math]::Max([double]$low, [double]$high)
+        if ($passHigh -le $passLow) {
+            continue
+        }
+
+        $passbandCenterHz = ($passLow + $passHigh) / 2.0
+        foreach ($sourceName in @("strongest", "nearestFilterPassbandPeak", "nearest")) {
+            $peak = Get-JsonValue $sample $sourceName
+            if ($null -eq $peak) {
+                continue
+            }
+
+            $frequency = Get-NumericValue (Get-JsonValue $peak "frequencyHz")
+            if ($null -eq $frequency) {
+                continue
+            }
+
+            $offset = Get-NumericValue (Get-JsonValue $peak "offsetHz")
+            $snr = Get-NumericValue (Get-JsonValue $peak "snrDb")
+            $dbfs = Get-NumericValue (Get-JsonValue $peak "dbfs")
+            $confidence = Get-NumericValue (Get-JsonValue $peak "confidence")
+            $distance = Get-FrontendPeakFilterDistanceHz -Peak $peak -FilterLowHz $low -FilterHighHz $high
+            if ($null -eq $distance) {
+                continue
+            }
+
+            $distanceForScore = [double]$distance
+            $suggestedVfoHz = [long][Math]::Round([double]$frequency - $passbandCenterHz)
+            if ($suggestedVfoHz -le 0) {
+                continue
+            }
+
+            $bucketHz = [long]([Math]::Round($suggestedVfoHz / 100.0) * 100.0)
+            $snrForScore = if ($null -eq $snr) { 0.0 } else { [double]$snr }
+            $sourceBonus = if ([string]::Equals($sourceName, "strongest", [StringComparison]::OrdinalIgnoreCase)) { 1.0 } else { 0.0 }
+            $retuneBonus = [Math]::Min(8.0, $distanceForScore / 1000.0) * 0.75
+            $score = [Math]::Round($snrForScore + $sourceBonus + $retuneBonus, 3)
+            if ($byBucket.ContainsKey($bucketHz) -and [double](Get-JsonValue $byBucket[$bucketHz] "score") -ge $score) {
+                continue
+            }
+
+            $byBucket[$bucketHz] = [ordered]@{
+                rank = 0
+                suggestedVfoHz = $suggestedVfoHz
+                suggestedVfoMhz = [Math]::Round($suggestedVfoHz / 1000000.0, 6)
+                peakFrequencyHz = [long][Math]::Round([double]$frequency)
+                peakFrequencyMhz = [Math]::Round([double]$frequency / 1000000.0, 6)
+                peakOffsetHz = if ($null -eq $offset) { $null } else { [long][Math]::Round([double]$offset) }
+                filterDistanceHz = if ($null -eq $distance) { $null } else { [long][Math]::Round([double]$distance) }
+                snrDb = if ($null -eq $snr) { $null } else { [Math]::Round([double]$snr, 1) }
+                dbfs = if ($null -eq $dbfs) { $null } else { [Math]::Round([double]$dbfs, 1) }
+                confidence = if ($null -eq $confidence) { $null } else { [Math]::Round([double]$confidence, 3) }
+                source = $sourceName
+                sampleIndex = Get-JsonValue $sample "sampleIndex"
+                passbandCenterHz = [Math]::Round($passbandCenterHz, 1)
+                reason = if ($distanceForScore -le 0.0) { "peak-already-in-passband" } else { "retune-to-center-frontend-peak" }
+                score = $score
+            }
+        }
+    }
+
+    $rank = 0
+    return @($byBucket.Values |
+        Sort-Object @{Expression = { [double](Get-JsonValue $_ "score") }; Descending = $true },
+            @{Expression = { [double](Get-JsonValue $_ "snrDb") }; Descending = $true } |
+        Select-Object -First $MaxCount |
+        ForEach-Object {
+            $rank++
+            $_["rank"] = $rank
+            $_
+        })
+}
+
 function Test-Truthy {
     param($Value)
 
@@ -2328,6 +2416,9 @@ function Build-Report {
         Sort-Object @{Expression = { [double](Get-JsonValue $_ "nearestFilterPassbandDistanceHz") }; Ascending = $true },
             @{Expression = { [double](Get-JsonValue (Get-JsonValue $_ "strongest") "snrDb") }; Descending = $true } |
         Select-Object -First 8)
+    $frontendTuneCandidates = @(Get-FrontendTuneCandidates `
+        -Samples @($frontendTopPeakSamples.ToArray()) `
+        -MaxCount 6)
     $nr5NormalizationCompressionDb = $null
     $nr5WeakStrongOutputGapDb = $null
     $nr5WeakStrongFinalAudioGapDb = $null
@@ -3204,7 +3295,9 @@ function Build-Report {
             topSamples = @($frontendTopPeakTopSamples)
             topNearPassbandSamples = @($frontendNearPassbandPeakTopSamples)
             topFilterPassbandSamples = @($frontendFilterPassbandPeakTopSamples)
+            tuneCandidates = @($frontendTuneCandidates)
         }
+        frontendTuneCandidates = @($frontendTuneCandidates)
         frontendAdjacentNoiseProfile = [ordered]@{
             usableSampleCount = $frontendAdjacentNoiseUsableCount
             bins = $frontendAdjacentNoiseBinStats
@@ -3532,6 +3625,13 @@ else {
     Write-Host "Samples: $($report["okSampleCount"]) ok, $($report["failedSampleCount"]) failed, $($report["hardBlockerSampleCount"]) with hard blockers"
     Write-Host "AGC movement dB: $($report["agcGainDb"]["movement"]) ($($report["agcStabilityWatch"]["status"])), audio RMS movement dB: $($report["audioRmsDbfs"]["movement"]), min ADC headroom dB: $($report["adcHeadroomDb"]["min"])"
     Write-Host "NR5 normalization: input movement dB $($report["nr5InputDbfs"]["movement"]), output movement dB $($report["nr5OutputDbfs"]["movement"]), weak/strong output gap dB $($report["nr5WeakSignalWatch"]["weakStrongOutputGapDb"]), weak/strong final-audio gap dB $($report["nr5WeakSignalWatch"]["weakStrongFinalAudioGapDb"]), mixed weak/strong status $($report["nr5WeakSignalWatch"]["mixedWeakStrongEvidenceStatus"])"
+    $tuneCandidates = @($report["frontendTuneCandidates"])
+    if ($tuneCandidates.Count -gt 0) {
+        $candidateText = @($tuneCandidates | Select-Object -First 5 | ForEach-Object {
+            "$($_["suggestedVfoMhz"]) MHz (peak $($_["peakFrequencyMhz"]) MHz, off $($_["peakOffsetHz"]) Hz, snr $($_["snrDb"]) dB)"
+        }) -join "; "
+        Write-Host "Frontend tune candidates: $candidateText"
+    }
     $weakWatch = $report["nr5WeakSignalWatch"]
     if ($null -ne $weakWatch) {
         Write-Host "NR5 weak outcome: weak=$($weakWatch["weakInputSampleCount"]), recovered=$($weakWatch["weakRecoveredSampleCount"]), dropouts=$($weakWatch["weakDropoutSampleCount"]), finalAudible=$($weakWatch["weakDropoutFinalAudibleSampleCount"]), candidateLoss=$($weakWatch["weakDropoutCandidateLossSampleCount"]), hotMakeup=$($weakWatch["hotMakeupSampleCount"])"
