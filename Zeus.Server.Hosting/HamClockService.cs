@@ -241,6 +241,9 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
                 if (rc != 0) { Fail("npm install failed — see log."); return; }
             }
 
+            // 3.5 Pin a CommonJS-compatible axios-cookiejar-support (see method).
+            await PinAxiosCookiejarCjsAsync().ConfigureAwait(false);
+
             // 4. Build the Vite frontend into dist/.
             Append("Building frontend (npm run build)…");
             rc = await RunToolAsync("npm", "run build", InstallDir).ConfigureAwait(false);
@@ -314,6 +317,8 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             PatchGeolocationFallback();
             PatchSettingsPersistence();
             PatchDownloadBridge();
+            // Auto-heal installs made before the dep pin shipped (no-op once v4).
+            await PinAxiosCookiejarCjsAsync().ConfigureAwait(false);
 
             var psi = MakePsi("node", "server.js", InstallDir);
             // Belt-and-suspenders env (overridden by .env, but harmless).
@@ -703,6 +708,28 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             return doc.RootElement.TryGetProperty("version", out var v) ? v.GetString() : null;
         }
         catch { return null; }
+    }
+
+    /// <summary>Pin axios-cookiejar-support to its last CommonJS release (v4).
+    /// OpenHamClock declares "^6.0.5" but require()s it from CommonJS code
+    /// (server/routes/satellites.js), and v5+ is ESM-only — a bare require()
+    /// throws ERR_REQUIRE_ESM and crashes the server on fatal-uncaught, so it
+    /// never becomes healthy. v4 is CommonJS and axios-1.x compatible, so the
+    /// require() works. Idempotent: no-op when v4 is already installed; needs
+    /// the network only when it must downgrade. Best-effort. (#657)</summary>
+    private async Task PinAxiosCookiejarCjsAsync()
+    {
+        try
+        {
+            var pkg = Path.Combine(InstallDir, "node_modules", "axios-cookiejar-support", "package.json");
+            if (!File.Exists(pkg)) return;
+            using var doc = System.Text.Json.JsonDocument.Parse(await File.ReadAllTextAsync(pkg).ConfigureAwait(false));
+            var ver = doc.RootElement.TryGetProperty("version", out var v) ? v.GetString() : null;
+            if (ver is null || ver.StartsWith("4.", StringComparison.Ordinal)) return; // already CJS
+            Append($"Pinning axios-cookiejar-support {ver} → 4.x (CommonJS) so HamClock's server can require() it…");
+            await RunToolAsync("npm", "install axios-cookiejar-support@4 --no-audit --no-fund", InstallDir).ConfigureAwait(false);
+        }
+        catch (Exception ex) { Append($"  (axios-cookiejar pin skipped: {ex.Message})"); }
     }
 
     /// <summary>
