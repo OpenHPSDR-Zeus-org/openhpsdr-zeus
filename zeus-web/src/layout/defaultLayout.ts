@@ -7,15 +7,13 @@
 // grid. The right column is a stack of fixed-width tiles (vfo/smeter/tx/
 // txmeters/dsp); width caps live in panels.ts via maxW so the operator can
 // only resize them vertically. The left column is BANDWIDTH FILTER on top
-// and the panadapter hero filling the remaining vertical space — both grow
-// horizontally with the window. Combined with the responsive rowHeight in
-// FlexWorkspace.tsx, the whole layout scales to fill the viewport without
-// the operator having to re-tune sizes.
+// and the panadapter hero filling the remaining vertical space. FlexWorkspace
+// shrinks rows when needed for short viewports, but does not stretch panel
+// heights just because the window is taller.
 //
 // Coordinates are in the 24-column × 48-row (schema-v8) grid. Total height =
-// WORKSPACE_TARGET_ROWS (48) so the default fills the viewport exactly with
-// the responsive rowHeight calculation. The top-left row pairs the Bandwidth
-// Filter (mini-pan only) with the split-out Filter Presets panel; the
+// WORKSPACE_TARGET_ROWS (48). The top-left row pairs the Bandwidth Filter
+// (mini-pan only) with the split-out Filter Presets panel; the
 // panadapter hero fills the rest of the left column, and the right column
 // stacks vfo / smeter / tx / txmeters / dsp.
 //

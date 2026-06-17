@@ -78,8 +78,8 @@ function formatMHz(hz: number, strideHz: number): string {
 // repositions the dial marker against the animated view-center
 // (state/view-center.ts), so motion runs at display rate with ZERO React
 // commits per display frame (issue #597; ticks are rigid under a pure pan).
-// The amber dial-marker line tracks VfoHz, which equals centerHz outside CW
-// and sits ±cw_pitch from centre in CWU/CWL.
+// The dial-marker line tracks VfoHz, which equals centerHz outside CW and sits
+// ±cw_pitch from centre in CWU/CWL.
 type FreqAxisProps = {
   receiver?: 'A' | 'B';
   stitched?: boolean;
@@ -202,15 +202,14 @@ export function FreqAxis({ receiver = 'A', stitched = false }: FreqAxisProps = {
       </div>
       {/*
         Dial-position marker — sits at VfoHz, which equals centerHz outside
-        CW and is offset by ±cw_pitch from centre in CWU/CWL. In CW the
-        marker lives inside the (amber) passband overlay, so it uses the
-        accent blue + a 2px width to read clearly against the amber fill.
+        CW and is offset by ±cw_pitch from centre in CWU/CWL. The marker uses
+        the same receiver colour as the passband overlay.
        */}
       {!stitched && (
         <div
           ref={markerRef}
           className="pointer-events-none absolute inset-y-0 z-[15] -translate-x-1/2"
-          style={{ left: `${dialPct}%`, width: 2, background: 'var(--accent)' }}
+          style={{ left: `${dialPct}%`, width: 2, background: 'var(--vfo-filter-color, var(--accent))' }}
         />
       )}
     </>

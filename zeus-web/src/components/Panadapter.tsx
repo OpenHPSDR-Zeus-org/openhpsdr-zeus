@@ -63,6 +63,7 @@ import { DbScale } from './DbScale';
 import { SpotOverlay } from './SpotOverlay';
 import { PeakMarkerOverlay } from './PeakMarkerOverlay';
 import { NotchOverlay } from './NotchOverlay';
+import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
 
 type PanadapterProps = {
   receiver?: 'A' | 'B';
@@ -90,6 +91,7 @@ export function Panadapter({
   const tunOn = useTxStore((s) => s.tunOn);
   const popActive = popEnabled && !moxOn && !tunOn;
   const popIntensityCss = Math.max(0, Math.min(1, popRenderIntensity / 100)).toFixed(2);
+  const receiverFilterColor = spectrumReceiverFilterColor(receiver);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -128,7 +130,13 @@ export function Panadapter({
     // silently dropped during a glide.
     let lastRawPan: Float32Array | null = null;
     const enhScratch: Array<Float32Array | null> = [null, null];
-    let stitchScratch: Float32Array | null = null;
+    // Double-buffered like enhScratch: normalizeStitchedBins reuses the scratch
+    // it's handed and returns the SAME reference, but the pan renderer's
+    // dataDirty check keys on reference identity — a single reused buffer would
+    // be silently dropped and freeze the trace (RX2 stitched half). Alternating
+    // two buffers presents a fresh reference each adoption.
+    const stitchScratch: Array<Float32Array | null> = [null, null];
+    let stitchSlot = 0;
     let enhSlot = 0;
     const buildAnchor = (raw: Float32Array): Float32Array => {
       const { popEnabled } = useSignalEnhanceStore.getState();
@@ -137,10 +145,17 @@ export function Panadapter({
       if (stitched && !moxOn && !tunOn) {
         source = normalizeStitchedBins(
           raw,
-          stitchScratch,
+          stitchScratch[stitchSlot] ?? null,
           stitchFloorShiftDb(receiver, 'pan'),
         );
-        if (source !== raw) stitchScratch = source;
+        // Only retain/alternate when a shift was actually applied (source is the
+        // scratch). When no shift is applied normalizeStitchedBins returns raw
+        // — caching raw as scratch would let the next frame overwrite the live
+        // store buffer in place.
+        if (source !== raw) {
+          stitchScratch[stitchSlot] = source;
+          stitchSlot ^= 1;
+        }
       }
       // Pop is an RX weak-signal aid; the TX trace lives in a different dB
       // domain (speech against a calibrated scale), so leave it raw while keyed.
@@ -410,10 +425,11 @@ export function Panadapter({
         height: '100%',
         background: popActive ? 'var(--pop-surface-bg)' : 'var(--spec-bg)',
         opacity: 1,
+        ['--vfo-filter-color' as string]: receiverFilterColor,
         ...(popActive
           ? ({ ['--pop-intensity' as string]: popIntensityCss } as CSSProperties)
           : undefined),
-      }}
+      } as CSSProperties}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
       <div
@@ -422,7 +438,7 @@ export function Panadapter({
           top: 24,
           left: 8,
           background: 'rgba(8, 10, 14, 0.78)',
-          color: receiver === 'B' ? 'var(--signal)' : 'var(--accent)',
+          color: receiverFilterColor,
           border: '1px solid rgba(255,255,255,0.16)',
         }}
       >

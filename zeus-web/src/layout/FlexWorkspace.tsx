@@ -226,10 +226,9 @@ function WorkspaceCanvas({
   // plugin modules load at startup (getPanelDef inside the useMemo would
   // otherwise return undefined and never re-resolve).
   const pluginPanels = usePluginPanels();
-  // Track container height so rowHeight can scale with the viewport — this
-  // is what gives panels their "anchor: bottom" feel: hero (h=18) fills the
-  // available vertical space, right-column tiles distribute proportionally,
-  // window resize re-flows automatically.
+  // Track container height so rowHeight can shrink when the workspace is
+  // tight. Rows do not grow past the authored design density; extra viewport
+  // height stays on the workspace ground instead of stretching every panel.
   const [containerHeight, setContainerHeight] = useState(0);
   const [gridInteraction, setGridInteraction] =
     useState<GridInteraction>(null);
@@ -262,11 +261,13 @@ function WorkspaceCanvas({
   // shell for a scrollbar.
   const targetRows = Math.max(layoutRows, WORKSPACE_TARGET_ROWS);
 
-  // Responsive rowHeight: solve containerHeight ≈ rowHeight*N + margin*(N-1)
-  // + 2*containerPadding. Margin and containerPadding here mirror the props
-  // passed to ResponsiveGridLayout below — keep them in sync if those change.
-  // The row gap shrinks with very dense layouts so gaps alone can never make
-  // the grid taller than the viewport.
+  // Shrink-to-fit rowHeight: solve containerHeight ≈ rowHeight*N + margin*(N-1)
+  // + 2*containerPadding, but cap at WORKSPACE_ROW_HEIGHT_PX so resizing a
+  // window taller doesn't inject empty vertical space inside fixed-control
+  // panels. Margin and containerPadding here mirror the props passed to
+  // ResponsiveGridLayout below — keep them in sync if those change. The row
+  // gap shrinks with very dense layouts so gaps alone can never make the grid
+  // taller than the viewport.
   const rowMargin = useMemo(() => {
     if (containerHeight <= 0 || targetRows <= 1) return WORKSPACE_GRID_MARGIN_PX;
     return Math.min(
@@ -280,7 +281,10 @@ function WorkspaceCanvas({
     const containerPadding = 0;
     const inner =
       containerHeight - 2 * containerPadding - rowMargin * Math.max(0, targetRows - 1);
-    return Math.max(0.1, inner / Math.max(1, targetRows));
+    return Math.min(
+      WORKSPACE_ROW_HEIGHT_PX,
+      Math.max(0.1, inner / Math.max(1, targetRows)),
+    );
   }, [containerHeight, rowMargin, targetRows]);
 
   const workspaceCompactor =
@@ -315,8 +319,7 @@ function WorkspaceCanvas({
   // RGL needs a stable per-render layouts.lg array. Memoise against the
   // tile list identity so we don't push a new prop on every parent render.
   // Per-panel maxW/maxH (when defined in panels.ts) is propagated here so
-  // RGL clamps user resize drags — that's what gives right-column panels
-  // (vfo/smeter/dsp/txmeters/tx) their "grow in height only" feel.
+  // RGL clamps user resize drags.
   const rglLayouts = useMemo(
     () => ({
       lg: tiles.map((t) => {
@@ -444,13 +447,16 @@ const PanelTile = memo(function PanelTile({
   // `.workspace-tile-close` button bound to the injected onRemove.
   if (def.headerless) {
     return (
-      <div className="workspace-tile workspace-tile--headerless">
+      <div
+        className="workspace-tile workspace-tile--headerless"
+        data-panel-id={tile.panelId}
+      >
         <PanelBody tile={tile} layoutId={layoutId} onRemove={handleRemove} />
       </div>
     );
   }
   return (
-    <div className="workspace-tile">
+    <div className="workspace-tile" data-panel-id={tile.panelId}>
       <TileChrome title={def.name} onRemove={handleRemove} />
       <div className="workspace-tile-body">
         <PanelBody tile={tile} layoutId={layoutId} />

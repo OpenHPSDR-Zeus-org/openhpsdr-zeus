@@ -42,9 +42,11 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+import type { CSSProperties } from 'react';
 import { Copy, Headphones, Repeat2, Send } from 'lucide-react';
 import { setRx2, setTxVfo, setVfo, swapVfos, type Rx2AudioMode, type TxVfo } from '../../api/client';
 import { bandOf } from '../../components/design/data';
+import { spectrumReceiverFilterColor } from '../../components/spectrumReceiverColor';
 import { VfoDisplay } from '../../components/VfoDisplay';
 import { useConnectionStore } from '../../state/connection-store';
 
@@ -102,11 +104,15 @@ export function VfoPanel() {
     const txSelected = txVfo === receiver;
     const title = receiver === 'A' ? 'RX1 / VFO A' : 'RX2 / VFO B';
     const label = receiver === 'A' ? 'VFO A' : 'VFO B';
+    const receiverFilterColor = spectrumReceiverFilterColor(receiver);
+    const mutedByListenMode = enabled && rx2Enabled && rx2AudioMode !== 'both'
+      && ((rx2AudioMode === 'rx1' && receiver === 'B') || (rx2AudioMode === 'rx2' && receiver === 'A'));
     return (
       <div
         className={`vfo-lane ${focused ? 'is-focused' : ''} ${txSelected ? 'is-tx' : ''} ${
-          enabled ? '' : 'is-disabled'
-        }`}
+          mutedByListenMode ? 'is-listen-muted' : ''
+        } ${enabled ? '' : 'is-disabled'}`}
+        style={{ '--vfo-filter-color': receiverFilterColor } as CSSProperties}
         onClick={() => {
           if (enabled) setRxFocus(receiver);
         }}

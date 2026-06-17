@@ -46,7 +46,7 @@ import { SMeterLive } from '../../components/SMeterLive';
 
 export function SMeterPanel() {
   return (
-    <div style={{ flex: 1, overflow: 'auto' }}>
+    <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
       <SMeterLive />
     </div>
   );

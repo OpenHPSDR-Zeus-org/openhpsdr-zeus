@@ -1173,11 +1173,16 @@ public sealed class RadioService : IDisposable
     private FamilyFilter _fmTxFilter = new(0, 3000);
     private FamilyFilter _cwTxFilter = new(475, 725);
 
-    public StateDto SetMode(RxMode mode)
+    public StateDto SetMode(RxMode mode) => SetMode(mode, TxVfo.A);
+
+    public StateDto SetMode(RxMode mode, TxVfo receiver)
     {
+        if (!Enum.IsDefined(receiver))
+            throw new ArgumentOutOfRangeException(nameof(receiver), receiver, "Unknown VFO receiver");
+
         RxMode departingMode = default;
         string? departingPreset = null;
-        long newVfoHz = 0;
+        long newVfoAHz = 0;
         Mutate(s =>
         {
             departingMode = s.Mode;
@@ -1213,12 +1218,16 @@ public sealed class RadioService : IDisposable
             //    Non-CW↔non-CW transitions return 0, so SSB/AM/FM/DIG
             //    behaviour is unchanged.
             long bump = CwOffset.DialBumpForModeTransition(s.Mode, mode);
-            newVfoHz = Math.Clamp(s.VfoHz + bump, 0L, 60_000_000L);
+            bool targetB = receiver == TxVfo.B && s.Rx2Enabled;
+            long nextVfoA = targetB ? s.VfoHz : Math.Clamp(s.VfoHz + bump, 0L, 60_000_000L);
+            long nextVfoB = targetB ? Math.Clamp(s.VfoBHz + bump, 0L, 60_000_000L) : s.VfoBHz;
+            newVfoAHz = nextVfoA;
 
             return s with
             {
                 Mode = mode,
-                VfoHz = newVfoHz,
+                VfoHz = nextVfoA,
+                VfoBHz = nextVfoB,
                 FilterLowHz = lo, FilterHighHz = hi,
                 TxFilterLowHz = txLo, TxFilterHighHz = txHi,
                 FilterPresetName = restoredPreset,
@@ -1233,7 +1242,7 @@ public sealed class RadioService : IDisposable
         // into/out of CW changes EffectiveLoHz by ±cw_pitch and the radio
         // needs the new tuning before the next IQ block arrives. P2 is
         // pushed via DspPipelineService.OnRadioStateChanged.
-        ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(mode, newVfoHz));
+        ActiveClient?.SetVfoAHz(CwOffset.EffectiveLoHz(mode, newVfoAHz));
 
         return Snapshot();
     }

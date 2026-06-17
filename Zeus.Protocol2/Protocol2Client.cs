@@ -138,6 +138,14 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
     // accessed ints/uints. _rx2Enabled: 0 = off, 1 = on.
     private int _rx2Enabled;
     private uint _rx2FreqHz = 7_100_000;
+    // Per-source-port IQ packet rate (packets in the last completed ~1 s
+    // window) for UDP ports 1035..1041 → index 0..6 → DDC 0..6. Written by the
+    // single RX thread on each window roll; read by the diagnostics thread
+    // under _rxPortRateLock. Surfaces multi-DDC RX streaming health (e.g. a
+    // second receiver whose DDC the radio isn't actually sending).
+    private readonly object _rxPortRateLock = new();
+    private readonly long[] _rxPortRateSnapshot = new long[7];
+    private long _rxPortRateWindowMs;
     // Frequency-correction factor (issue #325) — dimensionless multiplier
     // near 1.0 applied to the incoming dial Hz before _rxFreqHz is updated,
     // matching piHPSDR / Thetis. Stored as int64 bits for atomic
@@ -528,6 +536,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         if (!rx2Enabled) return 0;
         if (streamIndex == 1) return 1;
         return streamIndex == Rx2Ddc(board) ? 1 : 0;
+    }
+
+    /// <summary>
+    /// IQ packet rate (packets in the last completed ~1 s window) per UDP
+    /// source port 1035..1041 → index 0..6 → DDC 0..6. The RX2 DDC is
+    /// <see cref="Rx2Ddc"/>. A zero at the RX2 DDC index while RX2 is enabled
+    /// means the radio isn't streaming the second receiver at all. Returns a
+    /// fresh copy; safe to call from any thread.
+    /// </summary>
+    public long[] SnapshotRxPortPacketRates()
+    {
+        lock (_rxPortRateLock)
+        {
+            return (long[])_rxPortRateSnapshot.Clone();
+        }
     }
 
     /// <summary>
@@ -1261,10 +1284,21 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
     internal static byte Rx2AdcSource(byte numAdc, HpsdrBoardKind boardKind)
     {
-        if (numAdc < 2) return 0x00;
-        return boardKind is HpsdrBoardKind.Hermes or HpsdrBoardKind.HermesII or HpsdrBoardKind.HermesC10
-            ? (byte)0x00
-            : (byte)0x01;
+        // RX2 shares RX1's ADC (ADC0 = the main receive antenna). RX1's DDC is
+        // always configured on ADC0, so a second receiver listening on a
+        // different band must read the same ADC to hear the same antenna.
+        //
+        // The earlier code sourced ADC1 on dual-ADC Orion/Saturn/G2 boards on
+        // the theory that ADC1 is "the RX2 input". On a G2 that is the separate
+        // RX2/EXT antenna jack — empty on a normal single-antenna station, so
+        // DDC3 clocked out at full rate but carried silence (verified on a live
+        // G2: RX2 IQ RMS 9.6e-6 vs RX1 6.2e-4, a flat panadapter). Defaulting to
+        // ADC0 makes RX2 work for the common same-antenna case. A future RX2
+        // antenna/ADC selector can opt back into ADC1 for true diversity / a
+        // second feedline; until that UX exists, ADC0 is the only correct default.
+        _ = numAdc;
+        _ = boardKind;
+        return 0x00;
     }
 
     // Static byte composer — pure function over (seq, numAdc, sampleRateKhz,
@@ -1333,9 +1367,10 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
 
         if (rx2Active)
         {
-            // RX2 DDC config block: on dual-ADC Orion/Saturn/G2-class boards,
-            // source ADC1 (the RX2 input/filter bank), not ADC0. Hermes-class
-            // P2 boards remain ADC0 because they expose only one receive ADC.
+            // RX2 DDC config block: source the same ADC as RX1 (ADC0, the main
+            // receive antenna) so a second receiver on another band hears the
+            // same feedline — see Rx2AdcSource. Sourcing ADC1 fed the empty
+            // RX2/EXT jack and produced a silent DDC on a normal station.
             int off2 = 17 + rx2Ddc * 6;
             p[off2 + 0] = Rx2AdcSource(numAdc, boardKind);
             WriteBeU16(p, off2 + 1, sampleRateKhz);
@@ -1804,13 +1839,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
         var sock = _sock!;
         sock.ReceiveTimeout = 500;
 
-        // Wire-truth diagnostic (RX2 bring-up): count IQ packets per source
-        // UDP port (1035..1041 → index 0..6) and emit a 1 Hz summary. When RX2
-        // is enabled this shows definitively which DDC ports the radio is
-        // actually streaming, settling the "DDC-slot vs logical-stream-index"
-        // ambiguity without guessing. Single-threaded loop, so plain locals.
+        // Per-source-port IQ packet tally, rolled into _rxPortRateSnapshot once
+        // per ~1 s for diagnostics (SnapshotRxPortPacketRates). Shows which DDC
+        // ports the radio is actually streaming — the ground truth for RX2/
+        // multi-receiver health. Single-threaded loop, so plain locals here.
         var portPkts = new long[7];
-        long lastPortLogMs = Environment.TickCount64;
+        long lastPortRollMs = Environment.TickCount64;
 
         try
         {
@@ -1845,15 +1879,15 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 {
                     portPkts[srcPort - 1035]++;
                     long nowMs = Environment.TickCount64;
-                    if (nowMs - lastPortLogMs >= 1000)
+                    if (nowMs - lastPortRollMs >= 1000)
                     {
-                        _log.LogInformation(
-                            "p2.rx.ports rx2={Rx2} rx2ddc={Rx2Ddc} p1035={P0} p1036={P1} p1037={P2} p1038={P3} p1039={P4} p1040={P5} p1041={P6}",
-                            Volatile.Read(ref _rx2Enabled) != 0, Rx2Ddc(_boardKind),
-                            portPkts[0], portPkts[1], portPkts[2], portPkts[3],
-                            portPkts[4], portPkts[5], portPkts[6]);
+                        lock (_rxPortRateLock)
+                        {
+                            Array.Copy(portPkts, _rxPortRateSnapshot, 7);
+                            _rxPortRateWindowMs = nowMs;
+                        }
                         Array.Clear(portPkts);
-                        lastPortLogMs = nowMs;
+                        lastPortRollMs = nowMs;
                     }
                 }
                 if (srcPort >= 1035 && srcPort <= 1041 && n == BufLen)

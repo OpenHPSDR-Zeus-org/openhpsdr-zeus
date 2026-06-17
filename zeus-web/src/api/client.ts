@@ -5503,6 +5503,7 @@ export function setTxVfo(
 export function setMode(
   mode: RxMode,
   signal?: AbortSignal,
+  receiver: TxVfo = 'A',
 ): Promise<RadioStateDto> {
   // Server's System.Text.Json has no JsonStringEnumConverter — it expects
   // enum values as numeric ordinals on the write path. Normalizer handles
@@ -5513,7 +5514,7 @@ export function setMode(
     {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ mode: modeIndex }),
+      body: JSON.stringify({ mode: modeIndex, receiver: receiver === 'B' ? 1 : 0 }),
       signal,
     },
     normalizeState,

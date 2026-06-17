@@ -167,6 +167,50 @@ public sealed class G2TopologyDiagnosticsEndpointTests
         Assert.Equal(0, receiverBandwidth.GetProperty("unexposedReceiverCount").GetInt32());
     }
 
+    [Fact]
+    public async Task HardwareDiagnostics_SurfacesSecondReceiverHealth()
+    {
+        using var factory = new Factory();
+
+        using (var scope = factory.Services.CreateScope())
+        {
+            var radio = scope.ServiceProvider.GetRequiredService<RadioService>();
+            radio.MarkProtocol2Connected(
+                "192.168.1.23:1024",
+                384_000,
+                boardKind: HpsdrBoardKind.OrionMkII);
+        }
+
+        using var client = factory.CreateClient();
+        var resp = await client.GetAsync("/api/radio/diagnostics");
+
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
+        var health = body.RootElement.GetProperty("dsp").GetProperty("secondReceiverHealth");
+
+        // RX2 defaults off, so the verdict is the disabled rung — but the full
+        // data shape is always present so the panel can bind without null
+        // guards. (The "rx2-streaming-silence" / "rx2-healthy" rungs require a
+        // live DDC and are exercised by the on-radio harness.)
+        Assert.Equal(1, health.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("rx2-disabled", health.GetProperty("status").GetString());
+        Assert.False(health.GetProperty("rx2Enabled").GetBoolean());
+
+        var frames = health.GetProperty("displayFramesPerWindow");
+        Assert.True(frames.TryGetProperty("rx1Panadapter", out _));
+        Assert.True(frames.TryGetProperty("rx2Panadapter", out _));
+        Assert.True(frames.TryGetProperty("rx2Waterfall", out _));
+
+        var iq = health.GetProperty("iqSignal");
+        Assert.True(iq.GetProperty("rx1").TryGetProperty("rms", out _));
+        Assert.True(iq.GetProperty("rx2").TryGetProperty("rms", out _));
+
+        // Per-DDC packet-rate map keyed by UDP source port (1035 + ddc).
+        var ports = health.GetProperty("ddcPacketRatePerSec");
+        Assert.True(ports.TryGetProperty("ddc2_port1037", out _));
+        Assert.True(ports.TryGetProperty("ddc3_port1038", out _));
+    }
+
     private sealed class Factory : WebApplicationFactory<Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)

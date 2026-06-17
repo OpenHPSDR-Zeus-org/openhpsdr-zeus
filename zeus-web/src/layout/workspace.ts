@@ -17,17 +17,16 @@
  *  migration in parseWorkspaceLayout scales legacy layouts up by GRID_SCALE,
  *  so the doubling is invisible to existing saved layouts. */
 export const WORKSPACE_GRID_COLS = 24;
-/** Fallback row height in CSS pixels, used before the workspace container's
- *  ResizeObserver fires. The live rowHeight is computed responsively in
- *  FlexWorkspace (= viewport / WORKSPACE_TARGET_ROWS) so the default layout
- *  fills the available height. Halved alongside the row doubling so the
- *  fallback paints at the same density. */
+/** Authored row height in CSS pixels. FlexWorkspace uses this as the maximum
+ *  live rowHeight, shrinking below it only when a dense layout must fit a
+ *  shorter viewport. Halved alongside the row doubling so panels keep the
+ *  same visual density as the legacy 12×24 grid. */
 export const WORKSPACE_ROW_HEIGHT_PX = 15;
 /** Target row count the responsive rowHeight calc divides into the
- *  measured container height. Matches the total y+h of the default layout
- *  so a fresh radio fills the viewport exactly. Custom layouts taller than
- *  this shrink proportionally into the same viewport; shorter layouts leave
- *  empty space at the bottom. */
+ *  measured container height when shrink-to-fit is needed. Matches the total
+ *  y+h of the default layout. Custom layouts taller than this shrink
+ *  proportionally into the same viewport; shorter layouts leave empty space at
+ *  the bottom. */
 export const WORKSPACE_TARGET_ROWS = 48;
 /** Default minW/minH for every tile. minW=2 (≈ 1/12 of the workspace
  *  width at 24 cols) lets short-control tiles like Mode / Tuning Step / Band

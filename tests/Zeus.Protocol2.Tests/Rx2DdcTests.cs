@@ -54,11 +54,14 @@ public class Rx2DdcTests
     }
 
     [Fact]
-    public void Rx2AdcSource_DualAdcBoards_UseAdc1()
+    public void Rx2AdcSource_AllBoards_ShareRx1Adc0()
     {
-        Assert.Equal((byte)0x01, Protocol2Client.Rx2AdcSource(2, HpsdrBoardKind.OrionMkII));
-        Assert.Equal((byte)0x01, Protocol2Client.Rx2AdcSource(2, HpsdrBoardKind.Angelia));
-        Assert.Equal((byte)0x01, Protocol2Client.Rx2AdcSource(2, HpsdrBoardKind.Unknown));
+        // RX2 shares RX1's ADC0 (main antenna). Sourcing ADC1 on dual-ADC
+        // boards fed the empty RX2/EXT jack — a silent DDC and a flat
+        // panadapter on a normal single-antenna station (verified on a live G2).
+        Assert.Equal((byte)0x00, Protocol2Client.Rx2AdcSource(2, HpsdrBoardKind.OrionMkII));
+        Assert.Equal((byte)0x00, Protocol2Client.Rx2AdcSource(2, HpsdrBoardKind.Angelia));
+        Assert.Equal((byte)0x00, Protocol2Client.Rx2AdcSource(2, HpsdrBoardKind.Unknown));
     }
 
     [Fact]
@@ -94,8 +97,9 @@ public class Rx2DdcTests
 
         // DDC2 (RX1) + DDC3 (RX2) both enabled.
         Assert.Equal((byte)(0x04 | 0x08), p[7]);
-        // RX2 DDC3 config block at 17 + 3*6 = 35: ADC1/RX2, sample-rate BE, 24-bit.
-        Assert.Equal((byte)0x01, p[35]);  // ADC1 / RX2
+        // RX2 DDC3 config block at 17 + 3*6 = 35: ADC0 (shares RX1's main
+        // antenna), sample-rate BE, 24-bit.
+        Assert.Equal((byte)0x00, p[35]);  // ADC0 / shared with RX1
         Assert.Equal((byte)0x00, p[36]);  // 48 kHz BE high
         Assert.Equal((byte)48,   p[37]);  // 48 kHz BE low
         Assert.Equal((byte)24,   p[40]);  // 24-bit

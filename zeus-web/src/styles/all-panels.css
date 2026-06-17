@@ -17,8 +17,8 @@
 }
 
 /* Inner workspace shell — measured by useContainerWidth and hosts the RGL
- * grid. FlexWorkspace scales row height/gaps to fit the viewport, so the
- * shell clips instead of exposing workspace-level scrollbars. */
+ * grid. FlexWorkspace keeps panel rows at their authored density and only
+ * shrinks them when needed to fit a dense layout into the viewport. */
 .all-panels-workspace {
   position: relative;
   width: 100%;
@@ -253,9 +253,43 @@
   flex: 1;
   min-height: 0;
   position: relative;
-  /* Panel-local overflow remains inside the tile. The workspace shell itself
-   * does not scroll; dense layouts shrink through FlexWorkspace row sizing. */
-  overflow: auto;
+  /* Let each panel own its scrolling. Compact readout/control panels should
+   * not acquire generic tile scrollbars just because the viewport changed. */
+  overflow: hidden;
+}
+
+.workspace-tile[data-panel-id='vfo'] .freq-panel.vfo-dual-panel {
+  overflow: hidden;
+}
+
+/* Panels with internal scrolling or fixed-height roots need a resolved flex
+ * height from the tile body. That keeps their internals from expanding past
+ * the panel bounds when the window is resized. */
+.workspace-tile[data-panel-id='smeter'] > .workspace-tile-body,
+.workspace-tile[data-panel-id='tx'] > .workspace-tile-body,
+.workspace-tile[data-panel-id='txfidelity'] > .workspace-tile-body,
+.workspace-tile[data-panel-id='txmeters'] > .workspace-tile-body,
+.workspace-tile[data-panel-id='spots'] > .workspace-tile-body,
+.workspace-tile[data-panel-id='logbook'] > .workspace-tile-body,
+.workspace-tile[data-panel-id='qrz'] > .workspace-tile-body,
+.workspace-tile[data-panel-id='dsp'] > .workspace-tile-body,
+.workspace-tile[data-panel-id='filterpresets'] > .workspace-tile-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.workspace-tile[data-panel-id='smeter'] > .workspace-tile-body > *,
+.workspace-tile[data-panel-id='tx'] > .workspace-tile-body > *,
+.workspace-tile[data-panel-id='txfidelity'] > .workspace-tile-body > *,
+.workspace-tile[data-panel-id='txmeters'] > .workspace-tile-body > *,
+.workspace-tile[data-panel-id='spots'] > .workspace-tile-body > *,
+.workspace-tile[data-panel-id='logbook'] > .workspace-tile-body > *,
+.workspace-tile[data-panel-id='qrz'] > .workspace-tile-body > *,
+.workspace-tile[data-panel-id='dsp'] > .workspace-tile-body > *,
+.workspace-tile[data-panel-id='filterpresets'] > .workspace-tile-body > * {
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: 100%;
 }
 
 /* URL Embed panel — headerless tile that frames an arbitrary page. The

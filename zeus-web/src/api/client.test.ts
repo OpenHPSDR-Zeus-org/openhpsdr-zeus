@@ -381,11 +381,15 @@ describe('POST helpers', () => {
 
     await setMode('LSB');
     expect(JSON.parse((fetchMock.mock.calls[0]![1]?.body ?? '') as string))
-      .toEqual({ mode: 0 });
+      .toEqual({ mode: 0, receiver: 0 });
 
     await setMode('DIGU');
     expect(JSON.parse((fetchMock.mock.calls[1]![1]?.body ?? '') as string))
-      .toEqual({ mode: 9 });
+      .toEqual({ mode: 9, receiver: 0 });
+
+    await setMode('CWU', undefined, 'B');
+    expect(JSON.parse((fetchMock.mock.calls[2]![1]?.body ?? '') as string))
+      .toEqual({ mode: 3, receiver: 1 });
   });
 
   it('setPreamp posts { on } to /api/preamp', async () => {

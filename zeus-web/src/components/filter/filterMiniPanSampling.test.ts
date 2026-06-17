@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { frameBinRangeForHz, sampleSpectrumAtHz } from './FilterMiniPan';
+import {
+  filterMiniPanReceivers,
+  frameBinRangeForHz,
+  miniPanSignalLevel,
+  sampleSpectrumAtHz,
+} from './FilterMiniPan';
 
 describe('FilterMiniPan frequency sampling', () => {
   it('keeps partial frame overlap at its true frequency position', () => {
@@ -23,5 +28,23 @@ describe('FilterMiniPan frequency sampling', () => {
     expect(sampleSpectrumAtHz(bins, 14_260_050, frameStartHz, binsPerHz)).toBeCloseTo(-90);
     expect(sampleSpectrumAtHz(bins, 14_260_200, frameStartHz, binsPerHz)).toBeCloseTo(-60);
     expect(sampleSpectrumAtHz(bins, 14_260_201, frameStartHz, binsPerHz)).toBeNull();
+  });
+
+  it('selects one receiver by focus and splits in RX2 Both mode', () => {
+    expect(filterMiniPanReceivers(false, 'both', 'B')).toEqual(['A']);
+    expect(filterMiniPanReceivers(true, 'rx1', 'B')).toEqual(['B']);
+    expect(filterMiniPanReceivers(true, 'rx2', 'A')).toEqual(['A']);
+    expect(filterMiniPanReceivers(true, 'both', 'A')).toEqual(['A', 'B']);
+  });
+
+  it('keeps floor noise visually quiet while lifting signals above it', () => {
+    const floorDb = -110;
+    const quietNoise = miniPanSignalLevel(-106, floorDb, 4.5, 34);
+    const weakSignal = miniPanSignalLevel(-96, floorDb, 4.5, 34);
+    const strongSignal = miniPanSignalLevel(-78, floorDb, 4.5, 34);
+
+    expect(quietNoise).toBe(0);
+    expect(weakSignal).toBeGreaterThan(0.2);
+    expect(strongSignal).toBeGreaterThan(0.65);
   });
 });

@@ -1301,7 +1301,7 @@ public sealed record RadioLoSetRequest(long Hz);
 /// frozen so the operator can tune off-centre; see <see cref="StateDto.CtunEnabled"/>.</summary>
 public sealed record CtunSetRequest(bool Enabled);
 
-public sealed record ModeSetRequest(RxMode Mode);
+public sealed record ModeSetRequest(RxMode Mode, int Receiver = 0);
 
 public sealed record BandwidthSetRequest(int Low, int High);
 

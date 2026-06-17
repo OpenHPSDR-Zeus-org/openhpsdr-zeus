@@ -65,6 +65,7 @@ import { FilterCursorOverlay } from './FilterCursorOverlay';
 import { NotchOverlay } from './NotchOverlay';
 import { PassbandOverlay } from './PassbandOverlay';
 import { WfDbScale } from './WfDbScale';
+import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
 
 type WaterfallProps = {
   /** When true, noise floor fades to transparent so the QRZ-mode map shows through. */
@@ -103,6 +104,7 @@ export function Waterfall({
   const popIntensityCss = Math.max(0, Math.min(1, popRenderIntensity / 100)).toFixed(2);
   const reliefDepthCss = Math.max(0, Math.min(1, waterfallReliefDepth / 100)).toFixed(2);
   const smoothnessCss = Math.max(0, Math.min(1, waterfallSmoothness / 100)).toFixed(2);
+  const receiverFilterColor = spectrumReceiverFilterColor(receiver);
   // Live transparency, read by buildRenderer() on context-restore so a rebuild
   // mid-QRZ-mode comes back transparent rather than occluding the map (#629).
   const transparentRef = useRef(transparent);
@@ -604,6 +606,7 @@ export function Waterfall({
         height: '100%',
         background: popActive ? 'var(--pop-surface-bg)' : 'var(--wf-0)',
         opacity: 1,
+        ['--vfo-filter-color' as string]: receiverFilterColor,
         ...(popActive
           ? ({
               ['--pop-intensity' as string]: popIntensityCss,
@@ -611,7 +614,7 @@ export function Waterfall({
               ['--pop-smoothness' as string]: smoothnessCss,
             } as CSSProperties)
           : undefined),
-      }}
+      } as CSSProperties}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
       {glCaps && !glCaps.floatLinear && (

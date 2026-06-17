@@ -116,6 +116,8 @@ export type SMeterProps =
       mode: 'rx';
       /** Current RX signal strength in dBm. */
       dbm: number;
+      /** Current signal-to-noise estimate in dB from the display floor. */
+      noiseDeltaDb?: number | null;
     }
   | {
       mode: 'tx';
@@ -217,6 +219,14 @@ export function SMeter(props: SMeterProps) {
   const mainValue = isTx ? props.watts.toFixed(1) : props.dbm.toFixed(0);
   const unit = isTx ? 'W' : 'dBm';
   const subLabel = isTx ? null : sUnitLabel(props.dbm);
+  const noiseDeltaLabel =
+    !isTx &&
+    props.noiseDeltaDb !== null &&
+    props.noiseDeltaDb !== undefined &&
+    Number.isFinite(props.noiseDeltaDb) &&
+    props.noiseDeltaDb > 0
+      ? `SNR ${props.noiseDeltaDb.toFixed(0)} dB`
+      : null;
   // RX-only: light the sub-label when the signal is at/over S9. Hoisted to a
   // boolean because the `subLabel &&` block below can't narrow `props` back to
   // the rx variant from subLabel's truthiness alone.
@@ -249,6 +259,11 @@ export function SMeter(props: SMeterProps) {
       aria-valuemin={0}
       aria-valuemax={isTx ? maxWatts : Math.round(RX_MAX_DBM)}
       aria-valuenow={isTx ? Math.round(props.watts) : Math.round(props.dbm)}
+      aria-valuetext={
+        !isTx && noiseDeltaLabel
+          ? `${mainValue} ${unit}, ${subLabel}, ${noiseDeltaLabel}`
+          : undefined
+      }
       className="relative flex select-none items-stretch gap-3"
       style={{
         padding: '10px 12px',
@@ -384,18 +399,35 @@ export function SMeter(props: SMeterProps) {
           </span>
           <span style={{ fontSize: 10, color: 'var(--fg-2)', marginLeft: 3 }}>{unit}</span>
         </span>
-        {subLabel && (
-          <span
-            style={{
-              marginTop: 3,
-              fontSize: 10,
-              fontWeight: 600,
-              letterSpacing: '0.04em',
-              color: subLabelHot ? 'var(--power)' : 'var(--fg-2)',
-            }}
-          >
-            {subLabel}
-          </span>
+        {(subLabel || noiseDeltaLabel) && (
+          <div className="flex flex-col items-end" style={{ marginTop: 3, gap: 1 }}>
+            {subLabel && (
+              <span
+                style={{
+                  fontSize: 10,
+                  fontWeight: 600,
+                  letterSpacing: '0.04em',
+                  color: subLabelHot ? 'var(--power)' : 'var(--fg-2)',
+                }}
+              >
+                {subLabel}
+              </span>
+            )}
+            {noiseDeltaLabel && (
+              <span
+                title="Signal-to-noise estimate from the display noise floor"
+                style={{
+                  fontSize: 9,
+                  fontWeight: 700,
+                  letterSpacing: '0.04em',
+                  color: 'var(--cyan)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {noiseDeltaLabel}
+              </span>
+            )}
+          </div>
         )}
       </div>
     </div>

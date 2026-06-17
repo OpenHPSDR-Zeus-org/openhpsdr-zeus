@@ -300,16 +300,12 @@ export function ImmersiveMetersPanel() {
     flexDirection: 'column',
     gap: 12,
     background: 'var(--immersive-panel)',
-    // The surrounding `.workspace-tile-body` is `display: block` with an
-    // explicit pixel height (set by RGL via the tile chrome). Take the
-    // full height of that container so the dark grey background extends
-    // edge-to-edge regardless of how short the content is. `min-height:
-    // 100%` on a block parent only works if the parent itself has a
-    // resolved height — which `.workspace-tile-body` does (block height
-    // from flex sizing of `.workspace-tile`), so this resolves correctly
-    // without an intervening flex chain.
+    // The workspace tile body provides the resolved panel height. Use a
+    // bounded height so this long meter cluster scrolls inside the tile
+    // instead of expanding past it during window resizes.
     boxSizing: 'border-box',
-    minHeight: '100%',
+    height: '100%',
+    minHeight: 0,
     overflow: 'auto',
   };
   const arcsStyle: CSSProperties = {

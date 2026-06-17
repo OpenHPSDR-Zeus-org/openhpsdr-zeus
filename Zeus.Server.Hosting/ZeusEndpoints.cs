@@ -719,8 +719,11 @@ public static class ZeusEndpoints
 
         app.MapPost("/api/mode", (ModeSetRequest req, RadioService r) =>
         {
-            log.LogInformation("api.mode mode={Mode}", req.Mode);
-            return r.SetMode(req.Mode);
+            if (req.Receiver is not (0 or 1))
+                return Results.BadRequest(new { error = $"unknown receiver {req.Receiver}" });
+            var receiver = req.Receiver == 1 ? TxVfo.B : TxVfo.A;
+            log.LogInformation("api.mode mode={Mode} receiver={Receiver}", req.Mode, receiver);
+            return Results.Ok(r.SetMode(req.Mode, receiver));
         });
 
         app.MapPost("/api/bandwidth", (BandwidthSetRequest req, RadioService r) =>

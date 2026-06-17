@@ -44,6 +44,7 @@
 
 import {
   Fragment,
+  type CSSProperties,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -53,6 +54,7 @@ import {
 } from 'react';
 import { fetchState, setVfo, setVfoB } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { spectrumReceiverFilterColor, type SpectrumReceiverId } from './spectrumReceiverColor';
 
 const MAX_HZ = 60_000_000;
 const STATE_POLL_MS = 2000;
@@ -102,7 +104,7 @@ function formatKhz(hz: number): string {
 // feedback, but only POST the last resting value to avoid flooding /api/vfo.
 const WHEEL_DEBOUNCE_MS = 80;
 
-type ReceiverId = 'A' | 'B';
+type ReceiverId = SpectrumReceiverId;
 
 type VfoDisplayProps = {
   receiver?: ReceiverId;
@@ -129,6 +131,7 @@ export function VfoDisplay({
   );
   const applyState = useConnectionStore((s) => s.applyState);
   const postVfo = receiver === 'B' ? setVfoB : setVfo;
+  const receiverFilterColor = spectrumReceiverFilterColor(receiver);
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -272,7 +275,10 @@ export function VfoDisplay({
 
   const digits = useMemo(() => DIGIT_PLACES, []);
   return (
-    <div className={`freq-display${compact ? ' compact' : ''}`}>
+    <div
+      className={`freq-display${compact ? ' compact' : ''}`}
+      style={{ '--vfo-filter-color': receiverFilterColor } as CSSProperties}
+    >
       {editing ? (
         <div className="freq-digits mono" style={{ gap: compact ? 3 : 6 }}>
           <input
@@ -289,7 +295,7 @@ export function VfoDisplay({
               minWidth: 0,
               background: 'transparent',
               border: 'none',
-              borderBottom: '1px solid var(--accent)',
+              borderBottom: '1px solid var(--vfo-filter-color, var(--accent))',
               outline: 'none',
               color: 'var(--fg-0)',
               fontFamily: 'inherit',

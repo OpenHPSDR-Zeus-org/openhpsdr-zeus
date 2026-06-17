@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createElement, type ComponentType } from 'react';
 
 import { render } from './meters/__tests__/harness';
+import { useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useRxMetersStore } from '../state/rx-meters-store';
 import { useTxStore } from '../state/tx-store';
 import { SMeterLive } from './SMeterLive';
@@ -50,6 +51,24 @@ function resetStores() {
     agcEnvPk: -Infinity,
     agcEnvAv: -Infinity,
   });
+  useSignalEnhanceStore.getState().setSignalEnhanceSceneStatus(null);
+}
+
+function setSceneSnr(maxSnrDb: number) {
+  useSignalEnhanceStore.getState().setSignalEnhanceSceneStatus({
+    atUtc: '2026-06-17T19:30:00Z',
+    profileId: 'balanced',
+    baseProfileId: 'voice',
+    reason: 'test signal',
+    peakCount: 1,
+    coherentPeakCount: 1,
+    peaksPer10Khz: 0.4,
+    occupiedPct: 1.2,
+    coherentOccupiedPct: 0.8,
+    impulsivePct: 0,
+    maxSnrDb,
+    coherentMaxSnrDb: maxSnrDb,
+  });
 }
 
 describe('SMeterLive', () => {
@@ -84,6 +103,22 @@ describe('SMeterLive', () => {
 
     expect(container.textContent).toContain('-91');
     expect(container.textContent).not.toContain('RX signal only');
+
+    unmount();
+  });
+
+  it('renders the RX signal difference above the noise floor', () => {
+    useTxStore.setState({ rxDbm: -130 });
+    useRxMetersStore.setState({
+      signalPk: -88,
+      signalAv: -91,
+    });
+    setSceneSnr(18.4);
+
+    const { container, unmount } = render(createElement(SMeterLiveComponent));
+
+    expect(container.textContent).toContain('-88');
+    expect(container.textContent).toContain('SNR 18 dB');
 
     unmount();
   });

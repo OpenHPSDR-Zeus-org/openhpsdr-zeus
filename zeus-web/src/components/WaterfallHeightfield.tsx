@@ -24,7 +24,7 @@
 // driven by the still-mounted Panadapter — here we only consume them. Draws are
 // coalesced onto the shared draw bus (one paint per frame).
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { probeWebGpu, resetWebGpuProbe } from '../gl/webgpu/caps';
 import { createHeightfieldRenderer, type HeightfieldRenderer } from '../gl/webgpu/heightfield';
 import { registerFrameConsumer, selectDisplaySlice, useDisplayStore } from '../state/display-store';
@@ -41,6 +41,7 @@ import { FilterCursorOverlay } from './FilterCursorOverlay';
 import { NotchOverlay } from './NotchOverlay';
 import { PassbandOverlay } from './PassbandOverlay';
 import { WfDbScale } from './WfDbScale';
+import { spectrumReceiverFilterColor } from './spectrumReceiverColor';
 
 type Props = {
   receiver?: 'A' | 'B';
@@ -81,6 +82,7 @@ export function WaterfallHeightfield({
   const [status, setStatus] = useState<Status>('probing');
   const [reason, setReason] = useState<string>('');
   const [stats, setStats] = useState<{ fps: number; ms: number } | null>(null);
+  const receiverFilterColor = spectrumReceiverFilterColor(receiver);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -414,7 +416,14 @@ export function WaterfallHeightfield({
   return (
     <div
       ref={containerRef}
-      style={{ position: 'relative', width: '100%', height: '100%', minHeight: 0, background: 'var(--wf-0)' }}
+      style={{
+        position: 'relative',
+        width: '100%',
+        height: '100%',
+        minHeight: 0,
+        background: 'var(--wf-0)',
+        ['--vfo-filter-color' as string]: receiverFilterColor,
+      } as CSSProperties}
     >
       <canvas ref={canvasRef} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} />
       {status === 'ready' && (!stitched || receiver === 'A') && <WfDbScale />}

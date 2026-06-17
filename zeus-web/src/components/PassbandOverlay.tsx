@@ -273,13 +273,10 @@ export function PassbandOverlay({
     <div
       ref={rectRef}
       aria-hidden
-      className="pointer-events-none absolute inset-y-0 z-[5]"
+      className="passband-overlay pointer-events-none absolute inset-y-0 z-[5]"
       style={{
         left: `${leftPct}%`,
         width: `${widthPct}%`,
-        background: 'rgba(255, 160, 40, 0.18)',
-        borderLeft: '1px solid rgba(255, 160, 40, 0.6)',
-        borderRight: '1px solid rgba(255, 160, 40, 0.6)',
       }}
     >
       {showHandles && (

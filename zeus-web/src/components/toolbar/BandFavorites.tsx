@@ -11,10 +11,13 @@ import {
   saveBandMemory,
   setMode,
   setVfo,
+  setVfoB,
   type BandMemoryEntry,
   type RxMode,
+  type TxVfo,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
+import { viewCenterFor } from '../../state/view-center';
 import { BANDS, bandOf } from '../design/data';
 import { ToolbarFavorites, type ToolbarOption } from './ToolbarFavorites';
 
@@ -37,10 +40,15 @@ const SAVE_DEBOUNCE_MS = 500;
 
 export function BandFavorites() {
   const vfoHz = useConnectionStore((s) => s.vfoHz);
+  const vfoBHz = useConnectionStore((s) => s.vfoBHz);
+  const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
+  const rxFocus = useConnectionStore((s) => s.rxFocus);
   const mode = useConnectionStore((s) => s.mode);
   const applyState = useConnectionStore((s) => s.applyState);
+  const activeReceiver: TxVfo = rxFocus === 'B' && rx2Enabled ? 'B' : 'A';
+  const activeVfoHz = activeReceiver === 'B' ? vfoBHz : vfoHz;
 
-  const [currentBand, setCurrentBand] = useState<string>(() => bandOf(vfoHz));
+  const [currentBand, setCurrentBand] = useState<string>(() => bandOf(activeVfoHz));
   const memoryRef = useRef<Map<string, BandMemoryEntry>>(new Map());
   const saveTimerRef = useRef<number | null>(null);
 
@@ -59,14 +67,14 @@ export function BandFavorites() {
   }, []);
 
   useEffect(() => {
-    const band = bandOf(vfoHz);
+    const band = bandOf(activeVfoHz);
     setCurrentBand(band);
     if (band === '—') return;
     if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
-      memoryRef.current.set(band, { band, hz: vfoHz, mode });
-      saveBandMemory(band, vfoHz, mode).catch(() => { /* next tune retries */ });
+      memoryRef.current.set(band, { band, hz: activeVfoHz, mode });
+      saveBandMemory(band, activeVfoHz, mode).catch(() => { /* next tune retries */ });
     }, SAVE_DEBOUNCE_MS);
     return () => {
       if (saveTimerRef.current !== null) {
@@ -74,7 +82,7 @@ export function BandFavorites() {
         saveTimerRef.current = null;
       }
     };
-  }, [vfoHz, mode]);
+  }, [activeVfoHz, mode]);
 
   const onSelect = useCallback(
     (key: string) => {
@@ -84,15 +92,29 @@ export function BandFavorites() {
       const targetHz = stored?.hz ?? band.centerHz;
       const targetMode: RxMode | null = stored?.mode ?? null;
 
-      useConnectionStore.setState({ vfoHz: targetHz });
-      setVfo(targetHz).then(applyState).catch(() => { /* next state poll reconciles */ });
+      viewCenterFor(activeReceiver).markOptimisticTune();
+      useConnectionStore.setState(
+        activeReceiver === 'B' ? { vfoBHz: targetHz } : { vfoHz: targetHz },
+      );
+      const postVfo = activeReceiver === 'B' ? setVfoB : setVfo;
 
-      if (targetMode && targetMode !== mode) {
-        useConnectionStore.setState({ mode: targetMode });
-        setMode(targetMode).then(applyState).catch(() => { /* next state poll reconciles */ });
-      }
+      void (async () => {
+        if (targetMode && targetMode !== mode) {
+          useConnectionStore.setState({ mode: targetMode });
+          try {
+            applyState(await setMode(targetMode, undefined, activeReceiver));
+          } catch {
+            /* next state poll reconciles */
+          }
+        }
+        try {
+          applyState(await postVfo(targetHz));
+        } catch {
+          /* next state poll reconciles */
+        }
+      })();
     },
-    [applyState, mode],
+    [activeReceiver, applyState, mode],
   );
 
   return (

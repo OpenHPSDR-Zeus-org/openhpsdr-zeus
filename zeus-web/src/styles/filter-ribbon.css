@@ -146,12 +146,29 @@
 /* Mini-pan canvas + overlay wrapper. The canvas fills the wrapper; the width
    pill floats bottom-centre over it. touch-action:none keeps pointer drags
    from being stolen by the browser's scroll/zoom gestures. */
+.filter-minipan-stack {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+.filter-minipan-stack--split {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 1px;
+  background: rgba(255, 255, 255, 0.075);
+}
 .filter-minipan-wrap {
   position: relative;
   width: 100%;
   height: 100%;
   min-height: 0;
   isolation: isolate;
+  background: rgba(2, 4, 7, 0.48);
+}
+.filter-minipan-wrap--split {
+  overflow: hidden;
 }
 .filter-minipan-wrap::after {
   content: '';
@@ -173,6 +190,33 @@
   height: 100%;
   touch-action: none;
   background: transparent;
+}
+.filter-minipan-vfo-tag {
+  position: absolute;
+  z-index: 3;
+  top: 3px;
+  left: 5px;
+  max-width: 86px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 2px 5px;
+  border-radius: var(--r-sm, 3px);
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0;
+  color: var(--fg-1, #d9dce2);
+  background: rgba(4, 7, 11, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.42);
+  pointer-events: none;
+}
+.filter-minipan-vfo-tag.is-rx1 {
+  color: var(--accent-bright, #7dbbff);
+}
+.filter-minipan-vfo-tag.is-rx2 {
+  color: var(--signal, #25d366);
 }
 
 /* Live passband-width readout, click-to-edit. Sits in the mini-pan's reserved
