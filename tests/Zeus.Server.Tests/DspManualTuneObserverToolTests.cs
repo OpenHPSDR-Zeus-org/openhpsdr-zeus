@@ -80,6 +80,14 @@ public sealed class DspManualTuneObserverToolTests
             var root = doc.RootElement;
             Assert.Equal(3, root.GetProperty("pollSampleCount").GetInt32());
             Assert.Equal(0, root.GetProperty("maxCaptures").GetInt32());
+            Assert.Equal(1, root.GetProperty("observedVfoCount").GetInt32());
+            Assert.Equal(14_331_500, root.GetProperty("bestObservedVfoHz").GetInt64());
+            Assert.Equal("tuning-hint", root.GetProperty("bestObservedVfoStatus").GetString());
+            Assert.True(root.GetProperty("bestObservedVfoScore").GetDouble() > 0.0);
+            Assert.Equal(14_365_124, root.GetProperty("bestObservedVfoSuggestedVfoHz").GetInt64());
+            Assert.Equal(14.365124, root.GetProperty("bestObservedVfoSuggestedVfoMhz").GetDouble(), precision: 6);
+            Assert.Equal(33_624.0, root.GetProperty("bestObservedVfoSuggestedDialShiftHz").GetDouble(), precision: 3);
+            Assert.Equal("above-filter", root.GetProperty("bestObservedVfoSuggestedTuneReason").GetString());
             Assert.Equal(3, root.GetProperty("frontendTuningHintPollCount").GetInt32());
             Assert.Equal(0, root.GetProperty("captureQualifiedPollCount").GetInt32());
             Assert.Equal(0, root.GetProperty("frontendFilterPassbandPollCount").GetInt32());
@@ -99,6 +107,12 @@ public sealed class DspManualTuneObserverToolTests
             Assert.Equal(33_624.0, poll.GetProperty("frontendSuggestedDialShiftHz").GetDouble(), precision: 3);
             Assert.Equal(14_365_124, poll.GetProperty("frontendSuggestedVfoHz").GetInt64());
             Assert.Equal("above-filter", poll.GetProperty("frontendSuggestedTuneReason").GetString());
+
+            var observedVfo = root.GetProperty("observedVfos").EnumerateArray().Single();
+            Assert.Equal(3, observedVfo.GetProperty("pollCount").GetInt32());
+            Assert.Equal(3, observedVfo.GetProperty("frontendTuningHintPollCount").GetInt32());
+            Assert.Equal(0, observedVfo.GetProperty("captureQualifiedPollCount").GetInt32());
+            Assert.Equal("tuning-hint", observedVfo.GetProperty("status").GetString());
 
             var recommendations = root.GetProperty("recommendations")
                 .EnumerateArray()
@@ -176,6 +190,9 @@ public sealed class DspManualTuneObserverToolTests
             using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
             var root = doc.RootElement;
             Assert.Equal(3, root.GetProperty("pollSampleCount").GetInt32());
+            Assert.Equal(1, root.GetProperty("observedVfoCount").GetInt32());
+            Assert.Equal(14_213_000, root.GetProperty("bestObservedVfoHz").GetInt64());
+            Assert.Equal("capture-qualified", root.GetProperty("bestObservedVfoStatus").GetString());
             Assert.Equal(0, root.GetProperty("captureCount").GetInt32());
             Assert.Equal(3, root.GetProperty("captureQualifiedPollCount").GetInt32());
             Assert.Equal(3, root.GetProperty("frontendFilterPassbandPollCount").GetInt32());

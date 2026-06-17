@@ -53,6 +53,15 @@ public sealed class DspManualTuneObserverValidationToolTests
             Assert.True(validationRoot.GetProperty("manualTuneObserverReportPresent").GetBoolean());
             Assert.True(validationRoot.GetProperty("manualTuneObserverReportReady").GetBoolean());
             Assert.True(validationRoot.GetProperty("manualTuneObserverReportValid").GetBoolean());
+            Assert.Equal(1, validationRoot.GetProperty("manualTuneObserverObservedVfoCount").GetInt32());
+            Assert.Equal(14_331_500L, validationRoot.GetProperty("manualTuneObserverBestObservedVfoHz").GetInt64());
+            Assert.Equal(14.3315, validationRoot.GetProperty("manualTuneObserverBestObservedVfoMhz").GetDouble(), precision: 6);
+            Assert.Equal("capture-qualified", validationRoot.GetProperty("manualTuneObserverBestObservedVfoStatus").GetString());
+            Assert.True(validationRoot.GetProperty("manualTuneObserverBestObservedVfoScore").GetDouble() > 0.0);
+            Assert.Equal(14_365_124L, validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedVfoHz").GetInt64());
+            Assert.Equal(14.365124, validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedVfoMhz").GetDouble(), precision: 6);
+            Assert.Equal(33_624.0, validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedDialShiftHz").GetDouble(), precision: 3);
+            Assert.Equal("above-filter", validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedTuneReason").GetString());
             Assert.Equal(3, validationRoot.GetProperty("manualTuneObserverFrontendTuningHintPollCount").GetInt32());
             Assert.Equal(33_624.0, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedDialShiftHz").GetDouble(), precision: 3);
             Assert.Equal(14_365_124L, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedVfoHz").GetInt64());
@@ -71,7 +80,10 @@ public sealed class DspManualTuneObserverValidationToolTests
                 .EnumerateArray()
                 .Concat(validationRoot.GetProperty("errors").EnumerateArray())
                 .Select(issue => issue.GetProperty("code").GetString() ?? "")
-                .Where(code => code.StartsWith("manual-tune-observer-tuning-hint", StringComparison.Ordinal))
+                .Where(code =>
+                    code.StartsWith("manual-tune-observer-tuning-hint", StringComparison.Ordinal) ||
+                    code.StartsWith("manual-tune-observer-observed-vfo", StringComparison.Ordinal) ||
+                    code.StartsWith("manual-tune-observer-best-observed-vfo", StringComparison.Ordinal))
                 .ToArray();
             Assert.Empty(observerIssueCodes);
 
@@ -92,6 +104,10 @@ public sealed class DspManualTuneObserverValidationToolTests
 
             using var summaryDoc = JsonDocument.Parse(await File.ReadAllTextAsync(summaryReport));
             var summaryRoot = summaryDoc.RootElement;
+            Assert.Equal(1, summaryRoot.GetProperty("manualTuneObserverObservedVfoCount").GetInt32());
+            Assert.Equal(14_331_500L, summaryRoot.GetProperty("manualTuneObserverBestObservedVfoHz").GetInt64());
+            Assert.Equal("capture-qualified", summaryRoot.GetProperty("manualTuneObserverBestObservedVfoStatus").GetString());
+            Assert.Equal(14_365_124L, summaryRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedVfoHz").GetInt64());
             Assert.Equal(3, summaryRoot.GetProperty("manualTuneObserverFrontendTuningHintPollCount").GetInt32());
             Assert.Equal(33_624.0, summaryRoot.GetProperty("manualTuneObserverFrontendSuggestedDialShiftHz").GetDouble(), precision: 3);
             Assert.Equal(14_365_124L, summaryRoot.GetProperty("manualTuneObserverFrontendSuggestedVfoHz").GetInt64());
@@ -105,12 +121,15 @@ public sealed class DspManualTuneObserverValidationToolTests
                 .EnumerateArray()
                 .Single(gate => gate.GetProperty("gateId").GetString() == "manual-tune-observer");
             var gateDetail = observerGate.GetProperty("detail").GetString() ?? "";
+            Assert.Contains("observedVfos=1", gateDetail, StringComparison.Ordinal);
+            Assert.Contains("bestObserved=14331500/capture-qualified", gateDetail, StringComparison.Ordinal);
             Assert.Contains("tuningHint=polls=3", gateDetail, StringComparison.Ordinal);
             Assert.Contains("shiftHz=33624", gateDetail, StringComparison.Ordinal);
             Assert.Contains("vfoMhz=14.365124", gateDetail, StringComparison.Ordinal);
             Assert.Contains("reason=above-filter", gateDetail, StringComparison.Ordinal);
 
             var markdown = await File.ReadAllTextAsync(summaryMarkdown);
+            Assert.Contains("Observed VFOs/best/status/score: 1 / 14331500 Hz / capture-qualified", markdown, StringComparison.Ordinal);
             Assert.Contains("Frontend tuning hint polls/shift/VFO/reason/distance: 3 / 33624 Hz / 14.365124 MHz / above-filter / 32098 Hz", markdown, StringComparison.Ordinal);
         }
         finally
@@ -138,7 +157,7 @@ public sealed class DspManualTuneObserverValidationToolTests
         {
             WriteSourcePlanScopeBundle(bundleDir);
             WriteManualTuneObserverArtifactManifest(bundleDir);
-            WriteManualTuneObserverReportWithTuningHints(bundleDir, includeTuningHints: false);
+            WriteManualTuneObserverReportWithTuningHints(bundleDir, includeTuningHints: false, includeObservedVfos: false);
 
             var validationReport = Path.Combine(bundleDir, "validation-manual-tune-observer-legacy.json");
             var validation = await RunPowerShellAsync(
@@ -157,6 +176,8 @@ public sealed class DspManualTuneObserverValidationToolTests
             using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
             var validationRoot = validationDoc.RootElement;
             Assert.True(validationRoot.GetProperty("manualTuneObserverReportValid").GetBoolean());
+            Assert.Equal(0, validationRoot.GetProperty("manualTuneObserverObservedVfoCount").GetInt32());
+            Assert.Equal(JsonValueKind.Null, validationRoot.GetProperty("manualTuneObserverBestObservedVfo").ValueKind);
             Assert.Equal(0, validationRoot.GetProperty("manualTuneObserverFrontendTuningHintPollCount").GetInt32());
             Assert.Equal(JsonValueKind.Null, validationRoot.GetProperty("manualTuneObserverFrontendBestTuningHint").ValueKind);
             Assert.Equal("", validationRoot.GetProperty("manualTuneObserverFrontendSuggestedTuneReason").GetString());
@@ -165,7 +186,10 @@ public sealed class DspManualTuneObserverValidationToolTests
                 .EnumerateArray()
                 .Concat(validationRoot.GetProperty("errors").EnumerateArray())
                 .Select(issue => issue.GetProperty("code").GetString() ?? "")
-                .Where(code => code.StartsWith("manual-tune-observer-tuning-hint", StringComparison.Ordinal))
+                .Where(code =>
+                    code.StartsWith("manual-tune-observer-tuning-hint", StringComparison.Ordinal) ||
+                    code.StartsWith("manual-tune-observer-observed-vfo", StringComparison.Ordinal) ||
+                    code.StartsWith("manual-tune-observer-best-observed-vfo", StringComparison.Ordinal))
                 .ToArray();
             Assert.Empty(validationIssueCodes);
 
@@ -184,6 +208,8 @@ public sealed class DspManualTuneObserverValidationToolTests
 
             using var summaryDoc = JsonDocument.Parse(await File.ReadAllTextAsync(summaryReport));
             var summaryRoot = summaryDoc.RootElement;
+            Assert.Equal(0, summaryRoot.GetProperty("manualTuneObserverObservedVfoCount").GetInt32());
+            Assert.Equal(JsonValueKind.Null, summaryRoot.GetProperty("manualTuneObserverBestObservedVfo").ValueKind);
             Assert.Equal(0, summaryRoot.GetProperty("manualTuneObserverFrontendTuningHintPollCount").GetInt32());
             Assert.Equal(JsonValueKind.Null, summaryRoot.GetProperty("manualTuneObserverFrontendBestTuningHint").ValueKind);
 
@@ -191,6 +217,56 @@ public sealed class DspManualTuneObserverValidationToolTests
                 .EnumerateArray()
                 .Single(gate => gate.GetProperty("gateId").GetString() == "manual-tune-observer");
             Assert.Contains("tuningHint=none", observerGate.GetProperty("detail").GetString() ?? "", StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ManualTuneObserverValidationDerivesBestObservedVfoFromObject()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell manual-tune observer validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-manual-tune-observer-derived-best-vfo-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteManualTuneObserverArtifactManifest(bundleDir);
+            WriteManualTuneObserverReportWithTuningHints(bundleDir, staleFlattenedBestObservedVfo: true);
+
+            var validationReport = Path.Combine(bundleDir, "validation-manual-tune-observer-derived-best-vfo.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("manualTuneObserverReportValid").GetBoolean());
+            Assert.Equal(14_331_500L, validationRoot.GetProperty("manualTuneObserverBestObservedVfoHz").GetInt64());
+            Assert.Equal("capture-qualified", validationRoot.GetProperty("manualTuneObserverBestObservedVfoStatus").GetString());
+            Assert.Equal(14_365_124L, validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedVfoHz").GetInt64());
+            Assert.NotEqual(14_000_000L, validationRoot.GetProperty("manualTuneObserverBestObservedVfoHz").GetInt64());
+            Assert.NotEqual("stale-flattened", validationRoot.GetProperty("manualTuneObserverBestObservedVfoStatus").GetString());
         }
         finally
         {
@@ -269,7 +345,11 @@ public sealed class DspManualTuneObserverValidationToolTests
             JsonSerializer.Serialize(captureManifest, CamelCaseJson));
     }
 
-    private static void WriteManualTuneObserverReportWithTuningHints(string bundleDir, bool includeTuningHints = true)
+    private static void WriteManualTuneObserverReportWithTuningHints(
+        string bundleDir,
+        bool includeTuningHints = true,
+        bool includeObservedVfos = true,
+        bool staleFlattenedBestObservedVfo = false)
     {
         const string captureReportPath = "artifacts/manual-tune-observer/14365124/live-diagnostics-watch.json";
         const string captureJsonlPath = "artifacts/manual-tune-observer/14365124/live-diagnostics-watch.jsonl";
@@ -330,6 +410,17 @@ public sealed class DspManualTuneObserverValidationToolTests
                 delegatedCapture = "watch-dsp-live-diagnostics.ps1"
             },
             pollSampleCount = 3,
+            observedVfoCount = includeObservedVfos ? 1 : 0,
+            observedVfos = includeObservedVfos ? new object[] { ManualObservedVfo(hint, includeTuningHints) } : Array.Empty<object>(),
+            bestObservedVfo = includeObservedVfos ? ManualObservedVfo(hint, includeTuningHints) : null,
+            bestObservedVfoHz = includeObservedVfos ? (staleFlattenedBestObservedVfo ? 14_000_000L : 14_331_500L) : 0L,
+            bestObservedVfoMhz = includeObservedVfos ? 14.3315 : 0.0,
+            bestObservedVfoStatus = includeObservedVfos ? (staleFlattenedBestObservedVfo ? "stale-flattened" : "capture-qualified") : "",
+            bestObservedVfoScore = includeObservedVfos ? 256.8 : 0.0,
+            bestObservedVfoSuggestedVfoHz = includeObservedVfos && includeTuningHints ? (staleFlattenedBestObservedVfo ? 14_000_100L : 14_365_124L) : 0L,
+            bestObservedVfoSuggestedVfoMhz = includeObservedVfos && includeTuningHints ? 14.365124 : 0.0,
+            bestObservedVfoSuggestedDialShiftHz = includeObservedVfos && includeTuningHints ? 33_624.0 : 0.0,
+            bestObservedVfoSuggestedTuneReason = includeObservedVfos && includeTuningHints ? "above-filter" : "",
             captureCount = 1,
             uniqueCapturedVfoCount = 1,
             recapturedVfoCount = 0,
@@ -407,6 +498,20 @@ public sealed class DspManualTuneObserverValidationToolTests
             reportJson.Remove("frontendTuningHintPollCount");
             reportJson.Remove("frontendBestTuningHint");
         }
+        if (!includeObservedVfos)
+        {
+            reportJson.Remove("observedVfoCount");
+            reportJson.Remove("observedVfos");
+            reportJson.Remove("bestObservedVfo");
+            reportJson.Remove("bestObservedVfoHz");
+            reportJson.Remove("bestObservedVfoMhz");
+            reportJson.Remove("bestObservedVfoStatus");
+            reportJson.Remove("bestObservedVfoScore");
+            reportJson.Remove("bestObservedVfoSuggestedVfoHz");
+            reportJson.Remove("bestObservedVfoSuggestedVfoMhz");
+            reportJson.Remove("bestObservedVfoSuggestedDialShiftHz");
+            reportJson.Remove("bestObservedVfoSuggestedTuneReason");
+        }
 
         File.WriteAllText(
             Path.Combine(bundleDir, "artifacts", "manual-tune-observer-report.json"),
@@ -414,6 +519,36 @@ public sealed class DspManualTuneObserverValidationToolTests
 
         WriteSyntheticWatcherFiles(bundleDir, captureReportPath, captureJsonlPath);
     }
+
+    private static object ManualObservedVfo(object hint, bool includeTuningHints) => new
+    {
+        vfoHz = 14_331_500L,
+        vfoMhz = 14.3315,
+        firstPoll = 1,
+        lastPoll = 3,
+        pollCount = 3,
+        maxStablePollCount = 3,
+        sceneFreshPollCount = 3,
+        staleScenePollCount = 0,
+        topPeakPollCount = 3,
+        frontendNearPassbandPollCount = 0,
+        frontendFilterPassbandPollCount = 0,
+        frontendFilterOffPassbandPollCount = 3,
+        frontendOffsetMismatchPollCount = 0,
+        frontendTuningHintPollCount = includeTuningHints ? 3 : 0,
+        captureQualifiedPollCount = 1,
+        maxCoherentSnrDb = 18.0,
+        maxAudioRmsDbfs = -34.0,
+        maxNr5OutputDbfs = -31.0,
+        bestTuningHint = includeTuningHints ? hint : null,
+        frontendSuggestedDialShiftHz = includeTuningHints ? 33_624.0 : 0.0,
+        frontendSuggestedVfoHz = includeTuningHints ? 14_365_124L : 0L,
+        frontendSuggestedVfoMhz = includeTuningHints ? 14.365124 : 0.0,
+        frontendSuggestedTuneReason = includeTuningHints ? "above-filter" : "",
+        frontendSuggestedFilterDistanceHz = includeTuningHints ? 32_098.0 : 0.0,
+        status = "capture-qualified",
+        score = 256.8
+    };
 
     private static JsonObject ManualTunePoll(int poll, object hint, bool includeTuningHints)
     {

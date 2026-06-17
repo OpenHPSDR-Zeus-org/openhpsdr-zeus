@@ -6159,6 +6159,17 @@ $manualTuneObserverEvidence = [ordered]@{
     comparisonId = ""
     pollCount = 0
     pollSampleCount = 0
+    observedVfoCount = 0
+    observedVfos = @()
+    bestObservedVfo = $null
+    bestObservedVfoHz = $null
+    bestObservedVfoMhz = $null
+    bestObservedVfoStatus = ""
+    bestObservedVfoScore = $null
+    bestObservedVfoSuggestedVfoHz = $null
+    bestObservedVfoSuggestedVfoMhz = $null
+    bestObservedVfoSuggestedDialShiftHz = $null
+    bestObservedVfoSuggestedTuneReason = ""
     captureCount = 0
     maxCapturesPerVfo = 0
     uniqueCapturedVfoCount = 0
@@ -13002,6 +13013,19 @@ else {
                 $comparisonId = [string](Get-JsonValue $artifactJson "comparisonId")
                 $pollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "pollCount"))
                 $pollSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "pollSampleCount"))
+                $observedVfoCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "observedVfoCount"))
+                $observedVfos = @(Get-JsonArray $artifactJson "observedVfos")
+                $bestObservedVfo = Get-JsonValue $artifactJson "bestObservedVfo"
+                $bestObservedVfoHzValue = Get-NumericValue (Get-JsonValue $bestObservedVfo "vfoHz")
+                $bestObservedVfoHz = if ($null -eq $bestObservedVfoHzValue) { $null } else { [long]$bestObservedVfoHzValue }
+                $bestObservedVfoMhz = Get-NumericValue (Get-JsonValue $bestObservedVfo "vfoMhz")
+                $bestObservedVfoStatus = [string](Get-JsonValue $bestObservedVfo "status")
+                $bestObservedVfoScore = Get-NumericValue (Get-JsonValue $bestObservedVfo "score")
+                $bestObservedVfoSuggestedVfoHzValue = Get-NumericValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoHz")
+                $bestObservedVfoSuggestedVfoHz = if ($null -eq $bestObservedVfoSuggestedVfoHzValue) { $null } else { [long]$bestObservedVfoSuggestedVfoHzValue }
+                $bestObservedVfoSuggestedVfoMhz = Get-NumericValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoMhz")
+                $bestObservedVfoSuggestedDialShiftHz = Get-NumericValue (Get-JsonValue $bestObservedVfo "frontendSuggestedDialShiftHz")
+                $bestObservedVfoSuggestedTuneReason = [string](Get-JsonValue $bestObservedVfo "frontendSuggestedTuneReason")
                 $captureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "captureCount"))
                 $maxCapturesPerVfo = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "maxCapturesPerVfo"))
                 $uniqueCapturedVfoCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "uniqueCapturedVfoCount"))
@@ -13088,6 +13112,17 @@ else {
                 $manualTuneObserverEvidence["comparisonId"] = $comparisonId
                 $manualTuneObserverEvidence["pollCount"] = $pollCount
                 $manualTuneObserverEvidence["pollSampleCount"] = $pollSampleCount
+                $manualTuneObserverEvidence["observedVfoCount"] = $observedVfoCount
+                $manualTuneObserverEvidence["observedVfos"] = @($observedVfos)
+                $manualTuneObserverEvidence["bestObservedVfo"] = $bestObservedVfo
+                $manualTuneObserverEvidence["bestObservedVfoHz"] = $bestObservedVfoHz
+                $manualTuneObserverEvidence["bestObservedVfoMhz"] = $bestObservedVfoMhz
+                $manualTuneObserverEvidence["bestObservedVfoStatus"] = $bestObservedVfoStatus
+                $manualTuneObserverEvidence["bestObservedVfoScore"] = $bestObservedVfoScore
+                $manualTuneObserverEvidence["bestObservedVfoSuggestedVfoHz"] = $bestObservedVfoSuggestedVfoHz
+                $manualTuneObserverEvidence["bestObservedVfoSuggestedVfoMhz"] = $bestObservedVfoSuggestedVfoMhz
+                $manualTuneObserverEvidence["bestObservedVfoSuggestedDialShiftHz"] = $bestObservedVfoSuggestedDialShiftHz
+                $manualTuneObserverEvidence["bestObservedVfoSuggestedTuneReason"] = $bestObservedVfoSuggestedTuneReason
                 $manualTuneObserverEvidence["captureCount"] = $captureCount
                 $manualTuneObserverEvidence["maxCapturesPerVfo"] = $maxCapturesPerVfo
                 $manualTuneObserverEvidence["uniqueCapturedVfoCount"] = $uniqueCapturedVfoCount
@@ -13273,6 +13308,14 @@ else {
                 }
                 if ($staleScenePollCount -ne $computedStaleScenePollCount) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-stale-scene-poll-count-mismatch" "Artifact '$artifactId' staleScenePollCount=$staleScenePollCount but polls imply $computedStaleScenePollCount stale-scene poll(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($observedVfoCount -ne $observedVfos.Count) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-observed-vfo-count-mismatch" "Artifact '$artifactId' observedVfoCount=$observedVfoCount but observedVfos contains $($observedVfos.Count) record(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($observedVfoCount -gt 0 -and $null -eq $bestObservedVfo) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-best-observed-vfo-missing" "Artifact '$artifactId' reports $observedVfoCount observed VFO(s) but bestObservedVfo is missing."
                     $artifactValidationOk = $false
                 }
                 if ($frontendTuningHintPollCount -ne $computedFrontendTuningHintPollCount) {
@@ -15270,6 +15313,17 @@ $report = [ordered]@{
     manualTuneObserverComparisonId = $manualTuneObserverEvidence.comparisonId
     manualTuneObserverPollCount = $manualTuneObserverEvidence.pollCount
     manualTuneObserverPollSampleCount = $manualTuneObserverEvidence.pollSampleCount
+    manualTuneObserverObservedVfoCount = $manualTuneObserverEvidence.observedVfoCount
+    manualTuneObserverObservedVfos = @($manualTuneObserverEvidence.observedVfos)
+    manualTuneObserverBestObservedVfo = $manualTuneObserverEvidence.bestObservedVfo
+    manualTuneObserverBestObservedVfoHz = $manualTuneObserverEvidence.bestObservedVfoHz
+    manualTuneObserverBestObservedVfoMhz = $manualTuneObserverEvidence.bestObservedVfoMhz
+    manualTuneObserverBestObservedVfoStatus = $manualTuneObserverEvidence.bestObservedVfoStatus
+    manualTuneObserverBestObservedVfoScore = $manualTuneObserverEvidence.bestObservedVfoScore
+    manualTuneObserverBestObservedVfoSuggestedVfoHz = $manualTuneObserverEvidence.bestObservedVfoSuggestedVfoHz
+    manualTuneObserverBestObservedVfoSuggestedVfoMhz = $manualTuneObserverEvidence.bestObservedVfoSuggestedVfoMhz
+    manualTuneObserverBestObservedVfoSuggestedDialShiftHz = $manualTuneObserverEvidence.bestObservedVfoSuggestedDialShiftHz
+    manualTuneObserverBestObservedVfoSuggestedTuneReason = $manualTuneObserverEvidence.bestObservedVfoSuggestedTuneReason
     manualTuneObserverCaptureCount = $manualTuneObserverEvidence.captureCount
     manualTuneObserverMaxCapturesPerVfo = $manualTuneObserverEvidence.maxCapturesPerVfo
     manualTuneObserverUniqueCapturedVfoCount = $manualTuneObserverEvidence.uniqueCapturedVfoCount

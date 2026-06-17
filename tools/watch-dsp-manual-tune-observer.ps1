@@ -1024,6 +1024,8 @@ $triggerAudioActivePollCount = 0
 $triggerMaxAudioRmsDbfs = $null
 $triggerMaxNr5OutputDbfs = $null
 $bestTriggerPoll = $null
+$observedVfoMap = @{}
+$observedVfoOrder = New-Object System.Collections.Generic.List[string]
 foreach ($pollRecord in $pollArray) {
     if (-not (Test-Truthy $pollRecord.sceneFresh)) {
         $staleScenePollCount++
@@ -1064,6 +1066,105 @@ foreach ($pollRecord in $pollArray) {
         }
     }
 
+    $observedVfoHz = Get-NullableLongValue $pollRecord.vfoHz
+    if ($null -ne $observedVfoHz) {
+        $observedVfoKey = [string]$observedVfoHz
+        if (-not $observedVfoMap.ContainsKey($observedVfoKey)) {
+            $observedVfoMap[$observedVfoKey] = [ordered]@{
+                vfoHz = $observedVfoHz
+                vfoMhz = [Math]::Round([double]$observedVfoHz / 1000000.0, 6)
+                firstPoll = Get-IntValue $pollRecord.poll
+                lastPoll = Get-IntValue $pollRecord.poll
+                pollCount = 0
+                maxStablePollCount = 0
+                sceneFreshPollCount = 0
+                staleScenePollCount = 0
+                topPeakPollCount = 0
+                frontendNearPassbandPollCount = 0
+                frontendFilterPassbandPollCount = 0
+                frontendFilterOffPassbandPollCount = 0
+                frontendOffsetMismatchPollCount = 0
+                frontendTuningHintPollCount = 0
+                captureQualifiedPollCount = 0
+                maxCoherentSnrDb = $null
+                maxAudioRmsDbfs = $null
+                maxNr5OutputDbfs = $null
+                bestTuningHint = $null
+                frontendSuggestedDialShiftHz = $null
+                frontendSuggestedVfoHz = $null
+                frontendSuggestedVfoMhz = $null
+                frontendSuggestedTuneReason = ""
+                frontendSuggestedFilterDistanceHz = $null
+                status = "observed"
+                score = 0.0
+            }
+            $observedVfoOrder.Add($observedVfoKey) | Out-Null
+        }
+
+        $observed = $observedVfoMap[$observedVfoKey]
+        $observed["lastPoll"] = Get-IntValue $pollRecord.poll
+        $observed["pollCount"] = (Get-IntValue $observed["pollCount"]) + 1
+        $observed["maxStablePollCount"] = [Math]::Max((Get-IntValue $observed["maxStablePollCount"]), (Get-IntValue $pollRecord.stablePollCount))
+        if (Test-Truthy $pollRecord.sceneFresh) {
+            $observed["sceneFreshPollCount"] = (Get-IntValue $observed["sceneFreshPollCount"]) + 1
+        }
+        else {
+            $observed["staleScenePollCount"] = (Get-IntValue $observed["staleScenePollCount"]) + 1
+        }
+        if ((Get-IntValue $pollRecord.topPeakCount) -gt 0) {
+            $observed["topPeakPollCount"] = (Get-IntValue $observed["topPeakPollCount"]) + 1
+        }
+        if ((Get-IntValue $pollRecord.frontendNearPassbandTopPeakCount) -gt 0) {
+            $observed["frontendNearPassbandPollCount"] = (Get-IntValue $observed["frontendNearPassbandPollCount"]) + 1
+        }
+        if ((Get-IntValue $pollRecord.frontendFilterPassbandTopPeakCount) -gt 0) {
+            $observed["frontendFilterPassbandPollCount"] = (Get-IntValue $observed["frontendFilterPassbandPollCount"]) + 1
+        }
+        elseif ((Get-IntValue $pollRecord.topPeakCount) -gt 0 -and (Test-Truthy $pollRecord.frontendFilterPassbandKnown)) {
+            $observed["frontendFilterOffPassbandPollCount"] = (Get-IntValue $observed["frontendFilterOffPassbandPollCount"]) + 1
+        }
+        if ((Get-IntValue $pollRecord.frontendOffsetMismatchTopPeakCount) -gt 0) {
+            $observed["frontendOffsetMismatchPollCount"] = (Get-IntValue $observed["frontendOffsetMismatchPollCount"]) + 1
+        }
+        if (Test-Truthy $pollRecord.captureQualified) {
+            $observed["captureQualifiedPollCount"] = (Get-IntValue $observed["captureQualifiedPollCount"]) + 1
+        }
+
+        $observedCoherentSnr = Get-NullableDoubleValue $pollRecord.coherentMaxSnrDb
+        if ($null -ne $observedCoherentSnr -and ($null -eq $observed["maxCoherentSnrDb"] -or [double]$observedCoherentSnr -gt [double]$observed["maxCoherentSnrDb"])) {
+            $observed["maxCoherentSnrDb"] = $observedCoherentSnr
+        }
+        $observedAudio = Get-NullableDoubleValue $pollRecord.audioRmsDbfs
+        if ($null -ne $observedAudio -and ($null -eq $observed["maxAudioRmsDbfs"] -or [double]$observedAudio -gt [double]$observed["maxAudioRmsDbfs"])) {
+            $observed["maxAudioRmsDbfs"] = $observedAudio
+        }
+        $observedNr5Output = Get-NullableDoubleValue $pollRecord.nr5OutputDbfs
+        if ($null -ne $observedNr5Output -and ($null -eq $observed["maxNr5OutputDbfs"] -or [double]$observedNr5Output -gt [double]$observed["maxNr5OutputDbfs"])) {
+            $observed["maxNr5OutputDbfs"] = $observedNr5Output
+        }
+
+        if ($null -ne $pollTuningHint) {
+            $observed["frontendTuningHintPollCount"] = (Get-IntValue $observed["frontendTuningHintPollCount"]) + 1
+            $hintDistance = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "filterDistanceHz")
+            $bestHintDistance = Get-NullableDoubleValue (Get-JsonValue $observed["bestTuningHint"] "filterDistanceHz")
+            $hintShift = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "suggestedDialShiftHz")
+            $bestHintShift = Get-NullableDoubleValue (Get-JsonValue $observed["bestTuningHint"] "suggestedDialShiftHz")
+            $hintSnr = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "peakSnrDb")
+            $bestHintSnr = Get-NullableDoubleValue (Get-JsonValue $observed["bestTuningHint"] "peakSnrDb")
+            if ($null -eq $observed["bestTuningHint"] -or
+                ($null -ne $hintDistance -and ($null -eq $bestHintDistance -or [double]$hintDistance -lt [double]$bestHintDistance)) -or
+                ($null -ne $hintDistance -and $null -ne $bestHintDistance -and [double]$hintDistance -eq [double]$bestHintDistance -and $null -ne $hintShift -and $null -ne $bestHintShift -and [Math]::Abs([double]$hintShift) -lt [Math]::Abs([double]$bestHintShift)) -or
+                ($null -ne $hintDistance -and $null -ne $bestHintDistance -and [double]$hintDistance -eq [double]$bestHintDistance -and $null -ne $hintSnr -and ($null -eq $bestHintSnr -or [double]$hintSnr -gt [double]$bestHintSnr))) {
+                $observed["bestTuningHint"] = $pollTuningHint
+                $observed["frontendSuggestedDialShiftHz"] = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "suggestedDialShiftHz")
+                $observed["frontendSuggestedVfoHz"] = Get-NullableLongValue (Get-JsonValue $pollTuningHint "suggestedVfoHz")
+                $observed["frontendSuggestedVfoMhz"] = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "suggestedVfoMhz")
+                $observed["frontendSuggestedTuneReason"] = [string](Get-JsonValue $pollTuningHint "reason")
+                $observed["frontendSuggestedFilterDistanceHz"] = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "filterDistanceHz")
+            }
+        }
+    }
+
     $pollAudio = Get-NullableDoubleValue $pollRecord.audioRmsDbfs
     if ($null -ne $pollAudio) {
         if ([double]$pollAudio -ge -60.0) {
@@ -1087,6 +1188,66 @@ foreach ($entry in $vfoCaptureCounts.GetEnumerator()) {
         $recapturedVfoCount++
     }
 }
+
+$observedVfoRecords = New-Object System.Collections.Generic.List[object]
+$bestObservedVfo = $null
+foreach ($observedVfoKey in $observedVfoOrder) {
+    $observed = $observedVfoMap[$observedVfoKey]
+    $pollCountForScore = Get-IntValue $observed["pollCount"]
+    $stableForScore = Get-IntValue $observed["maxStablePollCount"]
+    $topPeakForScore = Get-IntValue $observed["topPeakPollCount"]
+    $nearForScore = Get-IntValue $observed["frontendNearPassbandPollCount"]
+    $filterForScore = Get-IntValue $observed["frontendFilterPassbandPollCount"]
+    $hintForScore = Get-IntValue $observed["frontendTuningHintPollCount"]
+    $captureForScore = Get-IntValue $observed["captureQualifiedPollCount"]
+    $snrForScore = Get-NullableDoubleValue $observed["maxCoherentSnrDb"]
+    $audioForScore = Get-NullableDoubleValue $observed["maxAudioRmsDbfs"]
+    $hintDistanceForScore = Get-NullableDoubleValue $observed["frontendSuggestedFilterDistanceHz"]
+
+    $score = [double]$pollCountForScore + ([double]$stableForScore * 2.0) + ([double]$topPeakForScore * 5.0) + ([double]$nearForScore * 20.0) + ([double]$filterForScore * 80.0) + ([double]$hintForScore * 10.0) + ([double]$captureForScore * 200.0)
+    if ($null -ne $snrForScore) {
+        $score += [Math]::Min(60.0, [Math]::Max(0.0, [double]$snrForScore))
+    }
+    if ($null -ne $audioForScore) {
+        $score += [Math]::Max(0.0, ([double]$audioForScore + 90.0) / 4.0)
+    }
+    if ($null -ne $hintDistanceForScore) {
+        $score += [Math]::Max(0.0, (3000.0 - [Math]::Min(3000.0, [double]$hintDistanceForScore)) / 30.0)
+    }
+
+    $status = if ($captureForScore -gt 0) {
+        "capture-qualified"
+    }
+    elseif ($filterForScore -gt 0) {
+        "filter-passband"
+    }
+    elseif ($nearForScore -gt 0) {
+        "near-dial"
+    }
+    elseif ($hintForScore -gt 0) {
+        "tuning-hint"
+    }
+    elseif ($topPeakForScore -gt 0) {
+        "active-off-filter"
+    }
+    else {
+        "observed"
+    }
+
+    $observed["status"] = $status
+    $observed["score"] = [Math]::Round($score, 3)
+    $observedRecord = [pscustomobject]$observed
+    $observedVfoRecords.Add($observedRecord) | Out-Null
+
+    $observedScore = Get-NullableDoubleValue $observed["score"]
+    $bestScore = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "score")
+    if ($null -eq $bestObservedVfo -or
+        [double]$observedScore -gt [double]$bestScore -or
+        ([double]$observedScore -eq [double]$bestScore -and (Get-IntValue $observed["lastPoll"]) -gt (Get-IntValue (Get-JsonValue $bestObservedVfo "lastPoll")))) {
+        $bestObservedVfo = $observedRecord
+    }
+}
+$observedVfoArray = @($observedVfoRecords.ToArray())
 
 $recommendations = New-Object System.Collections.Generic.List[string]
 if ($captureArray.Count -le 0) {
@@ -1193,6 +1354,17 @@ $report = [ordered]@{
         delegatedCapture = "watch-dsp-live-diagnostics.ps1"
     }
     pollSampleCount = $pollArray.Count
+    observedVfoCount = $observedVfoArray.Count
+    observedVfos = @($observedVfoArray)
+    bestObservedVfo = $bestObservedVfo
+    bestObservedVfoHz = Get-NullableLongValue (Get-JsonValue $bestObservedVfo "vfoHz")
+    bestObservedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "vfoMhz")
+    bestObservedVfoStatus = [string](Get-JsonValue $bestObservedVfo "status")
+    bestObservedVfoScore = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "score")
+    bestObservedVfoSuggestedVfoHz = Get-NullableLongValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoHz")
+    bestObservedVfoSuggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoMhz")
+    bestObservedVfoSuggestedDialShiftHz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "frontendSuggestedDialShiftHz")
+    bestObservedVfoSuggestedTuneReason = [string](Get-JsonValue $bestObservedVfo "frontendSuggestedTuneReason")
     captureCount = $captureArray.Count
     uniqueCapturedVfoCount = $uniqueCapturedVfoCount
     recapturedVfoCount = $recapturedVfoCount
