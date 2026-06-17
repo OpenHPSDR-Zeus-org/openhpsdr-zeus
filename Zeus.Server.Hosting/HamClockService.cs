@@ -577,6 +577,20 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             var binDir = OperatingSystem.IsWindows() ? dest : Path.Combine(dest, "bin");
             var exe = Path.Combine(binDir, OperatingSystem.IsWindows() ? "node.exe" : "node");
             if (!File.Exists(exe)) { Fail("Node archive did not contain the expected binary."); return null; }
+            // Defensively ensure the extracted node is executable. tar normally
+            // preserves the mode, but a stray umask / extractor quirk that drops
+            // the +x bit would leave node un-runnable → HamClock "won't start".
+            if (!OperatingSystem.IsWindows())
+            {
+                try
+                {
+                    File.SetUnixFileMode(exe,
+                        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute |
+                        UnixFileMode.GroupRead | UnixFileMode.GroupExecute |
+                        UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+                }
+                catch { /* best-effort; tar usually set it already */ }
+            }
             return binDir;
         }
         catch (Exception ex)
@@ -674,13 +688,29 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             psi.FileName = tool;
             psi.Arguments = args;
         }
-        // When using a private Node, prepend its bin dir to the child's PATH so
-        // `node`, `npm`, and `npm.cmd` resolve to it (npm lives beside node in
-        // the portable archive, not on the system PATH).
-        if (_nodeDir is not null)
+        // Build the dirs to prepend to the child's PATH, highest priority first.
+        //  - _nodeDir: the private portable copy (npm lives beside node there,
+        //    not on the system PATH).
+        //  - On macOS, the common system-node install dirs. A GUI-launched .app
+        //    inherits a minimal launchd PATH (/usr/bin:/bin:/usr/sbin:/sbin) and
+        //    never runs the login-shell path_helper, so an already-installed
+        //    node (Homebrew/official .pkg/MacPorts) is invisible — `node` then
+        //    fails to resolve and HamClock reports "Node missing" even though it
+        //    is right there. Prepending these makes the app resolve node exactly
+        //    as a terminal does. (#657)
+        var prepend = new List<string>();
+        if (_nodeDir is not null) prepend.Add(_nodeDir);
+        if (OperatingSystem.IsMacOS())
+        {
+            prepend.Add("/opt/homebrew/bin"); // Apple-silicon Homebrew
+            prepend.Add("/usr/local/bin");    // Intel Homebrew + official node .pkg
+            prepend.Add("/opt/local/bin");    // MacPorts
+        }
+        if (prepend.Count > 0)
         {
             var existing = psi.Environment.TryGetValue("PATH", out var p) ? p : Environment.GetEnvironmentVariable("PATH");
-            psi.Environment["PATH"] = _nodeDir + Path.PathSeparator + (existing ?? string.Empty);
+            psi.Environment["PATH"] = string.Join(Path.PathSeparator, prepend)
+                + Path.PathSeparator + (existing ?? string.Empty);
         }
         return psi;
     }
