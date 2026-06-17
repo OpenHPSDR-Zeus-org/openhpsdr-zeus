@@ -44,9 +44,11 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  DEFAULT_WF_ROW_CADENCE,
+  DEFAULT_WF_SCROLL_SPEED,
   FIXED_DB_MAX,
   FIXED_DB_MIN,
+  WATERFALL_SCROLL_SPEED_MAX,
+  WATERFALL_SCROLL_SPEED_MIN,
   useDisplaySettingsStore,
 } from './display-settings-store';
 
@@ -55,7 +57,7 @@ function resetStore() {
     autoRange: false,
     dbMin: FIXED_DB_MIN,
     dbMax: FIXED_DB_MAX,
-    waterfallRowCadence: DEFAULT_WF_ROW_CADENCE,
+    waterfallScrollSpeed: DEFAULT_WF_SCROLL_SPEED,
   });
 }
 
@@ -127,21 +129,31 @@ describe('display-settings-store', () => {
     expect(Number.isFinite(dbMax)).toBe(true);
   });
 
-  it('keeps balanced waterfall row cadence by default', () => {
-    const { waterfallRowCadence } = useDisplaySettingsStore.getState();
-    expect(waterfallRowCadence).toBe(DEFAULT_WF_ROW_CADENCE);
+  it('keeps default waterfall scroll speed by default', () => {
+    const { waterfallScrollSpeed } = useDisplaySettingsStore.getState();
+    expect(waterfallScrollSpeed).toBe(DEFAULT_WF_SCROLL_SPEED);
   });
 
-  it('updates waterfall row cadence to valid operator choices only', () => {
+  it('updates waterfall scroll speed continuously within operator limits', () => {
     const s = useDisplaySettingsStore.getState();
 
-    s.setWaterfallRowCadence(1);
-    expect(useDisplaySettingsStore.getState().waterfallRowCadence).toBe(1);
+    s.setWaterfallScrollSpeed(0.55);
+    expect(useDisplaySettingsStore.getState().waterfallScrollSpeed).toBe(0.55);
 
-    s.setWaterfallRowCadence(3);
-    expect(useDisplaySettingsStore.getState().waterfallRowCadence).toBe(3);
+    // Snaps to the 0.05 step grid.
+    s.setWaterfallScrollSpeed(1.37);
+    expect(useDisplaySettingsStore.getState().waterfallScrollSpeed).toBe(1.35);
 
-    s.setWaterfallRowCadence(99 as never);
-    expect(useDisplaySettingsStore.getState().waterfallRowCadence).toBe(DEFAULT_WF_ROW_CADENCE);
+    // Clamps below the minimum.
+    s.setWaterfallScrollSpeed(-5);
+    expect(useDisplaySettingsStore.getState().waterfallScrollSpeed).toBe(WATERFALL_SCROLL_SPEED_MIN);
+
+    // Clamps above the maximum.
+    s.setWaterfallScrollSpeed(99);
+    expect(useDisplaySettingsStore.getState().waterfallScrollSpeed).toBe(WATERFALL_SCROLL_SPEED_MAX);
+
+    // Non-finite falls back to the default.
+    s.setWaterfallScrollSpeed(Number.NaN);
+    expect(useDisplaySettingsStore.getState().waterfallScrollSpeed).toBe(DEFAULT_WF_SCROLL_SPEED);
   });
 });

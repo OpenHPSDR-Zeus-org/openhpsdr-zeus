@@ -16,15 +16,12 @@
 import { useMemo } from 'react';
 import { COLORMAPS, lutFor, type ColormapId } from '../gl/colormap';
 import {
+  DEFAULT_WF_SCROLL_SPEED,
+  WATERFALL_SCROLL_SPEED_MAX,
+  WATERFALL_SCROLL_SPEED_MIN,
+  WATERFALL_SCROLL_SPEED_STEP,
   useDisplaySettingsStore,
-  type WaterfallRowCadence,
 } from '../state/display-settings-store';
-
-const CADENCE_OPTIONS: Array<{ value: WaterfallRowCadence; label: string; detail: string }> = [
-  { value: 1, label: 'Smooth', detail: '30 Hz' },
-  { value: 2, label: 'Balanced', detail: '15 Hz' },
-  { value: 3, label: 'Economy', detail: '10 Hz' },
-];
 
 // Build a horizontal CSS gradient that mirrors the actual 256-entry LUT the
 // WebGL waterfall samples, so the swatch the operator picks is exactly the
@@ -48,8 +45,8 @@ function gradientCss(id: ColormapId): string {
 export function WaterfallColormapPanel() {
   const colormap = useDisplaySettingsStore((s) => s.colormap);
   const setColormap = useDisplaySettingsStore((s) => s.setColormap);
-  const waterfallRowCadence = useDisplaySettingsStore((s) => s.waterfallRowCadence);
-  const setWaterfallRowCadence = useDisplaySettingsStore((s) => s.setWaterfallRowCadence);
+  const waterfallScrollSpeed = useDisplaySettingsStore((s) => s.waterfallScrollSpeed);
+  const setWaterfallScrollSpeed = useDisplaySettingsStore((s) => s.setWaterfallScrollSpeed);
   const gradients = useMemo(
     () => Object.fromEntries(COLORMAPS.map((cm) => [cm.id, gradientCss(cm.id)])) as Record<ColormapId, string>,
     [],
@@ -84,24 +81,20 @@ export function WaterfallColormapPanel() {
       </div>
 
       <div style={cadenceBlock}>
-        <span style={cadenceLabel}>Row Cadence</span>
-        <div role="radiogroup" aria-label="Waterfall row cadence" style={cadenceRow}>
-          {CADENCE_OPTIONS.map((opt) => {
-            const active = waterfallRowCadence === opt.value;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                role="radio"
-                aria-checked={active}
-                onClick={() => setWaterfallRowCadence(opt.value)}
-                style={cadenceButton(active)}
-              >
-                <span style={cadenceButtonLabel(active)}>{opt.label}</span>
-                <span style={cadenceButtonDetail}>{opt.detail}</span>
-              </button>
-            );
-          })}
+        <span style={cadenceLabel}>Scroll Speed</span>
+        <div style={speedControl}>
+          <input
+            type="range"
+            min={WATERFALL_SCROLL_SPEED_MIN}
+            max={WATERFALL_SCROLL_SPEED_MAX}
+            step={WATERFALL_SCROLL_SPEED_STEP}
+            value={waterfallScrollSpeed}
+            onDoubleClick={() => setWaterfallScrollSpeed(DEFAULT_WF_SCROLL_SPEED)}
+            onChange={(e) => setWaterfallScrollSpeed(Number(e.currentTarget.value))}
+            aria-label="Waterfall scroll speed"
+            style={speedInput}
+          />
+          <span style={speedValue}>{waterfallScrollSpeed.toFixed(2)}x</span>
         </div>
       </div>
     </section>
@@ -153,46 +146,27 @@ const cadenceLabel: React.CSSProperties = {
   color: 'var(--fg-1)',
 };
 
-const cadenceRow: React.CSSProperties = {
-  display: 'inline-grid',
-  gridTemplateColumns: 'repeat(3, minmax(84px, 1fr))',
-  border: '1px solid var(--line)',
-  borderRadius: 'var(--r-sm)',
-  overflow: 'hidden',
-  minWidth: 276,
+const speedControl: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 10,
+  minWidth: 260,
 };
 
-function cadenceButton(active: boolean): React.CSSProperties {
-  return {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 2,
-    minHeight: 42,
-    padding: '6px 10px',
-    border: 0,
-    borderRight: '1px solid var(--line)',
-    background: active ? 'var(--accent)' : 'var(--bg-1)',
-    color: active ? 'var(--bg-0)' : 'var(--fg-1)',
-    cursor: 'pointer',
-  };
-}
+const speedInput: React.CSSProperties = {
+  flex: '1 1 auto',
+  minWidth: 180,
+  cursor: 'pointer',
+  accentColor: 'var(--accent)',
+};
 
-function cadenceButtonLabel(active: boolean): React.CSSProperties {
-  return {
-    fontSize: 11,
-    fontWeight: 800,
-    letterSpacing: 0,
-    color: active ? 'var(--bg-0)' : 'var(--fg-0)',
-  };
-}
-
-const cadenceButtonDetail: React.CSSProperties = {
-  fontSize: 10,
-  letterSpacing: 0,
-  color: 'inherit',
-  opacity: 0.72,
+const speedValue: React.CSSProperties = {
+  minWidth: 44,
+  fontSize: 12,
+  fontWeight: 800,
+  fontVariantNumeric: 'tabular-nums',
+  color: 'var(--fg-0)',
+  textAlign: 'right',
 };
 
 function swatchCard(active: boolean): React.CSSProperties {

@@ -64,12 +64,19 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<ReturnType<typeof createWfRenderer> | null>(null);
+  // Pending deferred WEBGL_lose_context handle (see the GL effect cleanup). A
+  // ref so it survives across the StrictMode mount→cleanup→mount cycle.
+  const pendingLoseRef = useRef<number | null>(null);
   const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
   const popRenderIntensity = useSignalEnhanceStore((s) => s.popRenderIntensity);
+  const waterfallReliefDepth = useSignalEnhanceStore((s) => s.waterfallReliefDepth);
+  const waterfallSmoothness = useSignalEnhanceStore((s) => s.waterfallSmoothness);
   const moxOn = useTxStore((s) => s.moxOn);
   const tunOn = useTxStore((s) => s.tunOn);
   const popActive = popEnabled && !moxOn && !tunOn;
   const popIntensityCss = Math.max(0, Math.min(1, popRenderIntensity / 100)).toFixed(2);
+  const reliefDepthCss = Math.max(0, Math.min(1, waterfallReliefDepth / 100)).toFixed(2);
+  const smoothnessCss = Math.max(0, Math.min(1, waterfallSmoothness / 100)).toFixed(2);
   // Live transparency, read by buildRenderer() on context-restore so a rebuild
   // mid-QRZ-mode comes back transparent rather than occluding the map (#629).
   const transparentRef = useRef(transparent);
@@ -90,6 +97,17 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
+
+    // If a previous cleanup deferred a loseContext() (see below), this is an
+    // immediate remount — cancel it so we keep the still-healthy context on the
+    // reused canvas. Without this, StrictMode's dev mount→cleanup→mount (and any
+    // canvas-reuse remount) lands on a context we just killed: getContext()
+    // returns the dead one (float_linear=false, NEAREST fallback) and the
+    // engine's shader fails to compile → blank waterfall.
+    if (pendingLoseRef.current !== null) {
+      clearTimeout(pendingLoseRef.current);
+      pendingLoseRef.current = null;
+    }
 
     // Tell the realtime client that decoded spectrum frames are needed —
     // ws-client.ts skips decodeDisplayFrame entirely when no consumer is
@@ -117,7 +135,10 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       const active = isPopRenderActive();
       const intensity = active ? Math.max(0, Math.min(1, signalEnhance.popRenderIntensity / 100)) : 0;
       const colormap: RenderColormapId = active ? 'pop' : useDisplaySettingsStore.getState().colormap;
-      renderer.setPopMode(active, intensity);
+      const reliefDepth = active ? Math.max(0, Math.min(1, signalEnhance.waterfallReliefDepth / 100)) : 0;
+      const smoothness = active ? Math.max(0, Math.min(1, signalEnhance.waterfallSmoothness / 100)) : 0;
+      renderer.setPopMode(active, intensity, reliefDepth, smoothness);
+      renderer.setScrollSpeed(useDisplaySettingsStore.getState().waterfallScrollSpeed);
       renderer.setColormap(colormap);
     };
 
@@ -202,7 +223,10 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       // window so the operator's RX noise-floor view stays put.
       const dbMin = popOn ? 0 : keyed ? wfTxDbMin : wfDbMin;
       const dbMax = popOn ? 1 : keyed ? wfTxDbMax : wfDbMax;
-      renderer.setPopMode(popOn, popIntensity);
+      const reliefDepth = popOn ? Math.max(0, Math.min(1, pop.waterfallReliefDepth / 100)) : 0;
+      const smoothness = popOn ? Math.max(0, Math.min(1, pop.waterfallSmoothness / 100)) : 0;
+      renderer.setPopMode(popOn, popIntensity, reliefDepth, smoothness);
+      renderer.setScrollSpeed(useDisplaySettingsStore.getState().waterfallScrollSpeed);
       renderer.draw(
         dbMin,
         dbMax,
@@ -320,14 +344,12 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       const wfDb = state.wfValid && state.wfDb ? state.wfDb : null;
       wfFrames++;
       if (wfDb) wfValidFrames++;
-      let skipRowUpload = false;
+      const skipRowUpload = false;
       if (wfDb) {
         tickCounter++;
-        // Operator-selectable scroll cadence (1/2/3 server frames per row).
-        // Shift/reset still run every frame so VFO retunes stay synchronised
-        // with the panadapter's offset.
-        const cadence = useDisplaySettingsStore.getState().waterfallRowCadence;
-        skipRowUpload = tickCounter % cadence !== 0;
+        // Every server frame uploads a row; the continuous scroll rate is
+        // applied shader-side via the per-fragment row-age divide by
+        // uScrollSpeed (see WfRenderer.setScrollSpeed / shaders.ts ageRows).
         // No refill hold here any more (issue #597 Phase 2): rows are
         // stamped with the LO their data was captured at, so the shared
         // shift planner places them correctly even mid-retune.
@@ -370,6 +392,11 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
         requestRedraw();
         return;
       }
+      if (state.waterfallScrollSpeed !== prev.waterfallScrollSpeed) {
+        renderer.setScrollSpeed(state.waterfallScrollSpeed);
+        requestRedraw();
+        return;
+      }
       if (
         state.wfDbMin !== prev.wfDbMin ||
         state.wfDbMax !== prev.wfDbMax ||
@@ -407,6 +434,8 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
         state.popSpanDb !== prev.popSpanDb ||
         state.popGamma !== prev.popGamma ||
         state.popRenderIntensity !== prev.popRenderIntensity ||
+        state.waterfallReliefDepth !== prev.waterfallReliefDepth ||
+        state.waterfallSmoothness !== prev.waterfallSmoothness ||
         state.coherenceHoldGate !== prev.coherenceHoldGate ||
         state.coherenceBoostDb !== prev.coherenceBoostDb ||
         state.ridgeBoost !== prev.ridgeBoost ||
@@ -438,10 +467,19 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       cancelDrawBusFrame(redraw);
       releaseFrameConsumer();
       renderer?.dispose();
-      // Free the ANGLE context slot now rather than waiting for GC — on a
+      // Free the ANGLE context slot rather than waiting for GC — on a
       // disconnect/reconnect cycle the Waterfall remounts, and ANGLE caps the
-      // number of live WebGL contexts (#629).
-      gl?.getExtension('WEBGL_lose_context')?.loseContext();
+      // number of live WebGL contexts (#629). But loseContext() is DESTRUCTIVE
+      // to the canvas element: a subsequent getContext() on the same canvas
+      // returns the dead context. So defer it — an immediate remount (StrictMode
+      // in dev, or any canvas reuse) cancels this at the top of the effect and
+      // keeps the live context; a real unmount has nothing to cancel it, so the
+      // slot is freed on the next tick.
+      const ctx = gl;
+      pendingLoseRef.current = window.setTimeout(() => {
+        ctx?.getExtension('WEBGL_lose_context')?.loseContext();
+        pendingLoseRef.current = null;
+      }, 0);
       rendererRef.current = null;
     };
   }, []);
@@ -467,7 +505,11 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
         height: '100%',
         background: popActive ? 'var(--pop-surface-bg)' : 'var(--wf-0)',
         ...(popActive
-          ? ({ ['--pop-intensity' as string]: popIntensityCss } as CSSProperties)
+          ? ({
+              ['--pop-intensity' as string]: popIntensityCss,
+              ['--pop-relief' as string]: reliefDepthCss,
+              ['--pop-smoothness' as string]: smoothnessCss,
+            } as CSSProperties)
           : undefined),
       }}
     >
