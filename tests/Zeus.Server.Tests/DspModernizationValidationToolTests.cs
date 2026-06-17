@@ -2342,6 +2342,79 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task WatchLiveDiagnosticsReportsNearStrongMixedWeakStrongMiss()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-near-strong-watch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "nr5-near-strong.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    Nr5LevelerAlignmentWatchSample(8, nr5InputDbfs: -54.0, nr5OutputDbfs: -35.0, levelerInputRmsDbfs: -52.0, levelerOutputRmsDbfs: -18.8),
+                    Nr5LevelerAlignmentWatchSample(
+                        9,
+                        nr5InputDbfs: -22.2,
+                        nr5OutputDbfs: -27.2,
+                        levelerInputRmsDbfs: -45.0,
+                        levelerOutputRmsDbfs: -33.0,
+                        frontendTopPeaks: new[] { FrontendTopPeak(14_240_264, 264, 29.0, -66.8, confidence: 0.94) })
+                });
+
+            var reportPath = Path.Combine(bundleDir, "nr5-near-strong.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            var weakWatch = root.GetProperty("nr5WeakSignalWatch");
+            Assert.Equal("missing-strong-input", weakWatch.GetProperty("mixedWeakStrongEvidenceStatus").GetString());
+            Assert.False(weakWatch.GetProperty("mixedWeakStrongEvidenceReady").GetBoolean());
+            Assert.Equal(-22.0, weakWatch.GetProperty("strongInputThresholdDbfs").GetDouble(), precision: 3);
+            Assert.Equal(-26.0, weakWatch.GetProperty("nearStrongInputThresholdDbfs").GetDouble(), precision: 3);
+            Assert.Equal(0, weakWatch.GetProperty("strongInputSampleCount").GetInt32());
+            Assert.Equal(1, weakWatch.GetProperty("nearStrongInputSampleCount").GetInt32());
+            Assert.Equal(1, weakWatch.GetProperty("speechQualifiedNearStrongInputSampleCount").GetInt32());
+            Assert.Equal(1, weakWatch.GetProperty("passbandQualifiedNearStrongInputSampleCount").GetInt32());
+
+            var topNearStrong = weakWatch.GetProperty("topNearStrongInputs").EnumerateArray().ToArray();
+            Assert.Single(topNearStrong);
+            Assert.Equal(9, topNearStrong[0].GetProperty("sampleIndex").GetInt32());
+            Assert.Equal(0.2, topNearStrong[0].GetProperty("distanceToStrongThresholdDb").GetDouble(), precision: 3);
+            Assert.True(topNearStrong[0].GetProperty("speechQualified").GetBoolean());
+            Assert.True(topNearStrong[0].GetProperty("passbandQualified").GetBoolean());
+
+            Assert.Contains(
+                root.GetProperty("recommendations").EnumerateArray(),
+                recommendation => (recommendation.GetString() ?? "").Contains("near-strong samples", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task WatchLiveDiagnosticsTreatsNr5TargetLevelerNormalizationAsResolved()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
@@ -6102,10 +6175,13 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(2, validationRoot.GetProperty("g2RxPeakHuntActualRunCount").GetInt32());
             Assert.Equal(18, validationRoot.GetProperty("g2RxPeakHuntWeakInputSampleCount").GetInt32());
             Assert.Equal(14, validationRoot.GetProperty("g2RxPeakHuntStrongInputSampleCount").GetInt32());
+            Assert.Equal(3, validationRoot.GetProperty("g2RxPeakHuntNearStrongInputSampleCount").GetInt32());
             Assert.Equal(13, validationRoot.GetProperty("g2RxPeakHuntSpeechQualifiedWeakInputSampleCount").GetInt32());
             Assert.Equal(11, validationRoot.GetProperty("g2RxPeakHuntSpeechQualifiedStrongInputSampleCount").GetInt32());
+            Assert.Equal(2, validationRoot.GetProperty("g2RxPeakHuntSpeechQualifiedNearStrongInputSampleCount").GetInt32());
             Assert.Equal(9, validationRoot.GetProperty("g2RxPeakHuntPassbandQualifiedWeakInputSampleCount").GetInt32());
             Assert.Equal(8, validationRoot.GetProperty("g2RxPeakHuntPassbandQualifiedStrongInputSampleCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("g2RxPeakHuntPassbandQualifiedNearStrongInputSampleCount").GetInt32());
             Assert.Equal(20, validationRoot.GetProperty("g2RxPeakHuntFrontendNearPassbandSampleCount").GetInt32());
             Assert.Equal(1, validationRoot.GetProperty("g2RxPeakHuntRetuneAttemptCount").GetInt32());
             Assert.Equal(14250000L, validationRoot.GetProperty("g2RxPeakHuntBestFrequencyHz").GetInt64());
@@ -6170,10 +6246,13 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(1, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterNeighborCandidateCount").GetInt32());
             Assert.Equal(14150000L, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterBandLowHz").GetInt64());
             Assert.Equal(14350000L, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterBandHighHz").GetInt64());
+            Assert.Equal(3, summaryRoot.GetProperty("g2RxPeakHuntNearStrongInputSampleCount").GetInt32());
             Assert.Equal(13, summaryRoot.GetProperty("g2RxPeakHuntSpeechQualifiedWeakInputSampleCount").GetInt32());
             Assert.Equal(11, summaryRoot.GetProperty("g2RxPeakHuntSpeechQualifiedStrongInputSampleCount").GetInt32());
+            Assert.Equal(2, summaryRoot.GetProperty("g2RxPeakHuntSpeechQualifiedNearStrongInputSampleCount").GetInt32());
             Assert.Equal(9, summaryRoot.GetProperty("g2RxPeakHuntPassbandQualifiedWeakInputSampleCount").GetInt32());
             Assert.Equal(8, summaryRoot.GetProperty("g2RxPeakHuntPassbandQualifiedStrongInputSampleCount").GetInt32());
+            Assert.Equal(1, summaryRoot.GetProperty("g2RxPeakHuntPassbandQualifiedNearStrongInputSampleCount").GetInt32());
             Assert.Equal(20, summaryRoot.GetProperty("g2RxPeakHuntFrontendNearPassbandSampleCount").GetInt32());
             Assert.Equal(14250000L, summaryRoot.GetProperty("g2RxPeakHuntBestFrequencyHz").GetInt64());
             Assert.Equal(2, summaryRoot.GetProperty("g2RxPeakHuntReferencedWindowReadyCount").GetInt32());
@@ -6193,8 +6272,9 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains("Auto phone cluster enabled/candidates/exact/neighbor/lookback/band", markdown, StringComparison.Ordinal);
             Assert.Contains("radio LO restored", markdown, StringComparison.Ordinal);
             Assert.Contains("14150000-14350000", markdown, StringComparison.Ordinal);
-            Assert.Contains("Speech-qualified weak/strong samples", markdown, StringComparison.Ordinal);
-            Assert.Contains("Passband-qualified weak/strong samples", markdown, StringComparison.Ordinal);
+            Assert.Contains("Weak/strong/near-strong samples", markdown, StringComparison.Ordinal);
+            Assert.Contains("Speech-qualified weak/strong/near-strong samples", markdown, StringComparison.Ordinal);
+            Assert.Contains("Passband-qualified weak/strong/near-strong samples", markdown, StringComparison.Ordinal);
             Assert.Contains("Frontend near-passband samples", markdown, StringComparison.Ordinal);
             Assert.Contains("14250000", markdown, StringComparison.Ordinal);
         }
@@ -6426,10 +6506,13 @@ public sealed class DspModernizationValidationToolTests
             mixedWeakStrongReadyRunCount = 1,
             weakInputSampleCount = 18,
             strongInputSampleCount = 14,
+            nearStrongInputSampleCount = 3,
             speechQualifiedWeakInputSampleCount = 13,
             speechQualifiedStrongInputSampleCount = 11,
+            speechQualifiedNearStrongInputSampleCount = 2,
             passbandQualifiedWeakInputSampleCount = 9,
             passbandQualifiedStrongInputSampleCount = 8,
+            passbandQualifiedNearStrongInputSampleCount = 1,
             frontendNearPassbandSampleCount = 20,
             candidateWeakLossSampleCount = 0,
             hotMakeupSampleCount = 0,

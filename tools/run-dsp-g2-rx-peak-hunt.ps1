@@ -956,6 +956,7 @@ function Get-HuntScore {
     param(
         [int]$WeakInputSampleCount,
         [int]$StrongInputSampleCount,
+        [int]$NearStrongInputSampleCount,
         $WeakStrongOutputGapDb,
         $WeakStrongFinalAudioGapDb,
         [bool]$MixedWeakStrongEvidenceReady,
@@ -967,6 +968,9 @@ function Get-HuntScore {
     $denominator = [Math]::Max(1, $ExpectedSampleCount)
     $score = ([Math]::Min(1.0, [double]$WeakInputSampleCount / [double]$denominator) * 30.0) +
         ([Math]::Min(1.0, [double]$StrongInputSampleCount / [double]$denominator) * 35.0)
+    if ($StrongInputSampleCount -le 0 -and $NearStrongInputSampleCount -gt 0) {
+        $score += [Math]::Min(1.0, [double]$NearStrongInputSampleCount / [double]$denominator) * 14.0
+    }
 
     $gap = $WeakStrongFinalAudioGapDb
     if ($null -eq $gap) {
@@ -1527,12 +1531,15 @@ try {
                 $weak = Get-JsonValue $report "nr5WeakSignalWatch"
                 $weakInput = Get-IntValue (Get-JsonValue $weak "weakInputSampleCount")
                 $strongInput = Get-IntValue (Get-JsonValue $weak "strongInputSampleCount")
+                $nearStrongInput = Get-IntValue (Get-JsonValue $weak "nearStrongInputSampleCount")
                 $weakOutputGap = Get-NullableDoubleValue (Get-JsonValue $weak "weakStrongOutputGapDb")
                 $weakFinalGap = Get-NullableDoubleValue (Get-JsonValue $weak "weakStrongFinalAudioGapDb")
                 $speechQualifiedWeakInput = Get-IntValue (Get-JsonValue $weak "speechQualifiedWeakInputSampleCount")
                 $speechQualifiedStrongInput = Get-IntValue (Get-JsonValue $weak "speechQualifiedStrongInputSampleCount")
+                $speechQualifiedNearStrongInput = Get-IntValue (Get-JsonValue $weak "speechQualifiedNearStrongInputSampleCount")
                 $passbandQualifiedWeakInput = Get-IntValue (Get-JsonValue $weak "passbandQualifiedWeakInputSampleCount")
                 $passbandQualifiedStrongInput = Get-IntValue (Get-JsonValue $weak "passbandQualifiedStrongInputSampleCount")
+                $passbandQualifiedNearStrongInput = Get-IntValue (Get-JsonValue $weak "passbandQualifiedNearStrongInputSampleCount")
                 $frontendTopPeakWatch = Get-JsonValue $report "frontendTopPeakWatch"
                 $frontendTopPeakSampleCount = Get-IntValue (Get-JsonValue $frontendTopPeakWatch "sampleCount")
                 $frontendNearPassbandSampleCount = Get-IntValue (Get-JsonValue $frontendTopPeakWatch "nearPassbandSampleCount")
@@ -1541,6 +1548,7 @@ try {
                 $score = Get-HuntScore `
                     -WeakInputSampleCount $weakInput `
                     -StrongInputSampleCount $strongInput `
+                    -NearStrongInputSampleCount $nearStrongInput `
                     -WeakStrongOutputGapDb $weakOutputGap `
                     -WeakStrongFinalAudioGapDb $weakFinalGap `
                     -MixedWeakStrongEvidenceReady $mixedReady `
@@ -1576,6 +1584,7 @@ try {
                     adcHeadroomMinDb = Get-NullableDoubleValue (Get-JsonValue (Get-JsonValue $report "adcHeadroomDb") "min")
                     weakInputSampleCount = $weakInput
                     strongInputSampleCount = $strongInput
+                    nearStrongInputSampleCount = $nearStrongInput
                     weakRecoveredSampleCount = Get-IntValue (Get-JsonValue $weak "weakRecoveredSampleCount")
                     weakDropoutSampleCount = Get-IntValue (Get-JsonValue $weak "weakDropoutSampleCount")
                     weakDropoutCandidateLossSampleCount = Get-IntValue (Get-JsonValue $weak "weakDropoutCandidateLossSampleCount")
@@ -1584,6 +1593,7 @@ try {
                     weakStrongFinalAudioGapDb = $weakFinalGap
                     speechQualifiedWeakInputSampleCount = $speechQualifiedWeakInput
                     speechQualifiedStrongInputSampleCount = $speechQualifiedStrongInput
+                    speechQualifiedNearStrongInputSampleCount = $speechQualifiedNearStrongInput
                     speechQualifiedWeakStrongOutputGapDb = Get-NullableDoubleValue (Get-JsonValue $weak "speechQualifiedWeakStrongOutputGapDb")
                     speechQualifiedWeakStrongFinalAudioGapDb = Get-NullableDoubleValue (Get-JsonValue $weak "speechQualifiedWeakStrongFinalAudioGapDb")
                     speechQualifiedMixedWeakStrongEvidenceReady = Test-Truthy (Get-JsonValue $weak "speechQualifiedMixedWeakStrongEvidenceReady")
@@ -1592,6 +1602,7 @@ try {
                     speechQualifiedMixedWeakStrongEvidenceStatus = [string](Get-JsonValue $weak "speechQualifiedMixedWeakStrongEvidenceStatus")
                     passbandQualifiedWeakInputSampleCount = $passbandQualifiedWeakInput
                     passbandQualifiedStrongInputSampleCount = $passbandQualifiedStrongInput
+                    passbandQualifiedNearStrongInputSampleCount = $passbandQualifiedNearStrongInput
                     passbandQualifiedWeakStrongOutputGapDb = Get-NullableDoubleValue (Get-JsonValue $weak "passbandQualifiedWeakStrongOutputGapDb")
                     passbandQualifiedWeakStrongFinalAudioGapDb = Get-NullableDoubleValue (Get-JsonValue $weak "passbandQualifiedWeakStrongFinalAudioGapDb")
                     passbandQualifiedMixedWeakStrongEvidenceReady = Test-Truthy (Get-JsonValue $weak "passbandQualifiedMixedWeakStrongEvidenceReady")
@@ -1680,6 +1691,7 @@ if ($runArray.Count -gt 0) {
 
 $weakTotal = 0
 $strongTotal = 0
+$nearStrongTotal = 0
 $candidateWeakLossTotal = 0
 $hotMakeupTotal = 0
 $hardBlockerTotal = 0
@@ -1687,19 +1699,24 @@ $pumpingRiskRunCount = 0
 $mixedReadyRunCount = 0
 $speechQualifiedWeakTotal = 0
 $speechQualifiedStrongTotal = 0
+$speechQualifiedNearStrongTotal = 0
 $passbandQualifiedWeakTotal = 0
 $passbandQualifiedStrongTotal = 0
+$passbandQualifiedNearStrongTotal = 0
 $frontendNearPassbandTotal = 0
 foreach ($run in $runArray) {
     $weakTotal += Get-IntValue $run.weakInputSampleCount
     $strongTotal += Get-IntValue $run.strongInputSampleCount
+    $nearStrongTotal += Get-IntValue $run.nearStrongInputSampleCount
     $candidateWeakLossTotal += Get-IntValue $run.weakDropoutCandidateLossSampleCount
     $hotMakeupTotal += Get-IntValue $run.hotMakeupSampleCount
     $hardBlockerTotal += Get-IntValue $run.hardBlockerSampleCount
     $speechQualifiedWeakTotal += Get-IntValue $run.speechQualifiedWeakInputSampleCount
     $speechQualifiedStrongTotal += Get-IntValue $run.speechQualifiedStrongInputSampleCount
+    $speechQualifiedNearStrongTotal += Get-IntValue $run.speechQualifiedNearStrongInputSampleCount
     $passbandQualifiedWeakTotal += Get-IntValue $run.passbandQualifiedWeakInputSampleCount
     $passbandQualifiedStrongTotal += Get-IntValue $run.passbandQualifiedStrongInputSampleCount
+    $passbandQualifiedNearStrongTotal += Get-IntValue $run.passbandQualifiedNearStrongInputSampleCount
     $frontendNearPassbandTotal += Get-IntValue $run.frontendNearPassbandSampleCount
     if (Test-Truthy $run.agcPumpingRisk) {
         $pumpingRiskRunCount++
@@ -1731,6 +1748,9 @@ if (-not $AllowRetune -and $peakCandidateArray.Count -gt 0) {
 if ($mixedReadyRunCount -gt 0 -and $null -ne $bestRun) {
     $recommendations.Add("A mixed weak+strong NR5/SPNR run was found; promote '$($bestRun.reportPath)' into live history and compare it against current-Zeus/Thetis-parity windows before tuning defaults.") | Out-Null
 }
+elseif ($weakTotal -gt 0 -and $strongTotal -le 0 -and $nearStrongTotal -gt 0) {
+    $recommendations.Add("The hunt found weak NR5/SPNR input plus near-strong samples but no strict strong-input speech; extend dwell or retune around the best near-strong run before calling the frequency neighborhood exhausted.") | Out-Null
+}
 elseif ($weakTotal -gt 0 -and $strongTotal -le 0) {
     $recommendations.Add("The hunt found weak NR5/SPNR input but no strong-input speech; continue scanning active SSB windows or retune manually before calling mixed weak+strong acceptance ready.") | Out-Null
 }
@@ -1742,6 +1762,9 @@ elseif ($weakTotal -le 0 -and $strongTotal -le 0) {
 }
 if ($weakTotal -gt 0 -and $strongTotal -gt 0 -and $speechQualifiedStrongTotal -le 0) {
     $recommendations.Add("The hunt found raw strong-input samples but none were speech-qualified; inspect frontend/passband evidence before treating this as mixed weak+strong speech.") | Out-Null
+}
+if ($strongTotal -le 0 -and $speechQualifiedNearStrongTotal -gt 0) {
+    $recommendations.Add("One or more near-strong samples were speech-qualified; inspect per-window nr5WeakSignalWatch.topNearStrongInputs and rerun with longer dwell before changing NR5 thresholds.") | Out-Null
 }
 if ($frontendNearPassbandTotal -le 0) {
     $recommendations.Add("No near-passband frontend peak samples were captured; this scan may be off-signal even if raw weak-input counters moved.") | Out-Null
@@ -1856,10 +1879,13 @@ $reportObject = [ordered]@{
     mixedWeakStrongReadyRunCount = $mixedReadyRunCount
     weakInputSampleCount = $weakTotal
     strongInputSampleCount = $strongTotal
+    nearStrongInputSampleCount = $nearStrongTotal
     speechQualifiedWeakInputSampleCount = $speechQualifiedWeakTotal
     speechQualifiedStrongInputSampleCount = $speechQualifiedStrongTotal
+    speechQualifiedNearStrongInputSampleCount = $speechQualifiedNearStrongTotal
     passbandQualifiedWeakInputSampleCount = $passbandQualifiedWeakTotal
     passbandQualifiedStrongInputSampleCount = $passbandQualifiedStrongTotal
+    passbandQualifiedNearStrongInputSampleCount = $passbandQualifiedNearStrongTotal
     frontendNearPassbandSampleCount = $frontendNearPassbandTotal
     candidateWeakLossSampleCount = $candidateWeakLossTotal
     hotMakeupSampleCount = $hotMakeupTotal
@@ -1882,7 +1908,7 @@ else {
     Write-Host "G2 RX peak hunt report: $ReportPath"
     Write-Host "Original VFO: $originalVfo Hz; restored VFO: $restoredVfo Hz"
     Write-Host "Original radio LO: $originalRadioLo Hz; restored radio LO: $restoredRadioLo Hz"
-    Write-Host "Runs: $($reportObject.actualRunCount), mixed weak+strong ready: $($reportObject.mixedWeakStrongReady), weak samples: $weakTotal, strong samples: $strongTotal"
+    Write-Host "Runs: $($reportObject.actualRunCount), mixed weak+strong ready: $($reportObject.mixedWeakStrongReady), weak samples: $weakTotal, strong samples: $strongTotal, near-strong samples: $nearStrongTotal"
     if ($null -ne $bestRun) {
         Write-Host "Best run: $($bestRun.frequencyHz) Hz score=$($bestRun.score) status=$($bestRun.mixedWeakStrongEvidenceStatus) report=$($bestRun.reportPath)"
     }

@@ -1234,12 +1234,18 @@ function Build-Report {
     $nr5StrongOutputValues = New-Object System.Collections.Generic.List[double]
     $nr5WeakFinalAudioValues = New-Object System.Collections.Generic.List[double]
     $nr5StrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
+    $nr5NearStrongOutputValues = New-Object System.Collections.Generic.List[double]
+    $nr5NearStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
     $nr5SpeechQualifiedWeakOutputValues = New-Object System.Collections.Generic.List[double]
     $nr5SpeechQualifiedStrongOutputValues = New-Object System.Collections.Generic.List[double]
+    $nr5SpeechQualifiedNearStrongOutputValues = New-Object System.Collections.Generic.List[double]
+    $nr5SpeechQualifiedNearStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
     $nr5SpeechQualifiedWeakFinalAudioValues = New-Object System.Collections.Generic.List[double]
     $nr5SpeechQualifiedStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
     $nr5PassbandQualifiedWeakOutputValues = New-Object System.Collections.Generic.List[double]
     $nr5PassbandQualifiedStrongOutputValues = New-Object System.Collections.Generic.List[double]
+    $nr5PassbandQualifiedNearStrongOutputValues = New-Object System.Collections.Generic.List[double]
+    $nr5PassbandQualifiedNearStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
     $nr5PassbandQualifiedWeakFinalAudioValues = New-Object System.Collections.Generic.List[double]
     $nr5PassbandQualifiedStrongFinalAudioValues = New-Object System.Collections.Generic.List[double]
     $nr5MeanGainValues = New-Object System.Collections.Generic.List[double]
@@ -1272,6 +1278,7 @@ function Build-Report {
     $nr5WeakDropoutFinalAudibleSamples = New-Object System.Collections.Generic.List[object]
     $nr5WeakDropoutCandidateLossSamples = New-Object System.Collections.Generic.List[object]
     $nr5HotMakeupSamples = New-Object System.Collections.Generic.List[object]
+    $nr5NearStrongInputSamples = New-Object System.Collections.Generic.List[object]
     $nr5LowEvidenceLiftSamples = New-Object System.Collections.Generic.List[object]
     $nr5LowEvidenceSuppressedSamples = New-Object System.Collections.Generic.List[object]
     $nr5AudioAlignmentMismatchSamples = New-Object System.Collections.Generic.List[object]
@@ -1301,6 +1308,8 @@ function Build-Report {
     $signalEvidenceConfidenceThreshold = 0.30
     $signalEvidenceProbabilityThreshold = 0.16
     $signalEvidenceAgcGateThreshold = 0.30
+    $nr5StrongInputThresholdDbfs = -22.0
+    $nr5NearStrongInputThresholdDbfs = -26.0
     $nr5WeakDropoutFinalAudibleThresholdDbfs = $signalActiveAudioThresholdDbfs
     $nr5WeakDropoutNativeLiftThresholdDb = 6.0
     $nr5WeakDropoutBelowInputThresholdDb = 1.0
@@ -1339,6 +1348,7 @@ function Build-Report {
     $nr5WeakBelowInputCount = 0
     $nr5WeakNearTargetCount = 0
     $nr5StrongInputCount = 0
+    $nr5NearStrongInputCount = 0
     $nr5HotMakeupCount = 0
     $nr5RequestedSampleCount = 0
     $nr5EffectiveSampleCount = 0
@@ -1823,7 +1833,7 @@ function Build-Report {
                     }
                 }
             }
-            elseif ($null -ne $nr5InputDbfs -and $nr5InputDbfs -ge -22.0) {
+            elseif ($null -ne $nr5InputDbfs -and $nr5InputDbfs -ge $nr5StrongInputThresholdDbfs) {
                 $nr5StrongInputCount++
                 if ($null -ne $nr5OutputDbfs) {
                     $nr5StrongOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
@@ -1850,6 +1860,53 @@ function Build-Report {
                     $nr5PassbandQualifiedStrongOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
                     Add-Number $nr5PassbandQualifiedStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
                 }
+            }
+            elseif ($null -ne $nr5InputDbfs -and $nr5InputDbfs -ge $nr5NearStrongInputThresholdDbfs) {
+                $nr5NearStrongInputCount++
+                if ($null -ne $nr5OutputDbfs) {
+                    $nr5NearStrongOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
+                }
+                Add-Number $nr5NearStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
+                $nr5SpeechQualifiedNearStrongInput = (
+                    -not $nr5AudioAlignmentMismatch -and
+                    $null -ne $nr5OutputDbfs -and
+                    $nr5OutputDbfs -ge -28.0 -and
+                    $null -ne $runtimeFinalAudioRmsDbfsNumber -and
+                    $runtimeFinalAudioRmsDbfsNumber -ge -35.0 -and
+                    ($sampleHasNearPassbandPeak -or
+                        ($null -ne $nr5PeakEvidenceNumber -and $nr5PeakEvidenceNumber -ge 0.08) -or
+                        ($null -ne $nr5ConfidenceNumber -and $nr5ConfidenceNumber -ge 0.30 -and
+                            $null -ne $nr5SignalProbabilityNumber -and $nr5SignalProbabilityNumber -ge 0.14)))
+                if ($nr5SpeechQualifiedNearStrongInput) {
+                    $nr5SpeechQualifiedNearStrongOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
+                    Add-Number $nr5SpeechQualifiedNearStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
+                }
+                $nr5PassbandQualifiedNearStrongInput = (
+                    $nr5SpeechQualifiedNearStrongInput -and
+                    $sampleHasNearPassbandPeak)
+                if ($nr5PassbandQualifiedNearStrongInput) {
+                    $nr5PassbandQualifiedNearStrongOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
+                    Add-Number $nr5PassbandQualifiedNearStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
+                }
+
+                $nr5NearStrongInputSamples.Add([ordered]@{
+                    sampleIndex = [int](Get-JsonValue $sample "sampleIndex")
+                    inputDbfs = $nr5InputDbfs
+                    outputDbfs = $nr5OutputDbfs
+                    finalAudioRmsDbfs = $runtimeFinalAudioRmsDbfsNumber
+                    rxAudioLevelerInputRmsDbfs = $runtimeLevelerInputRmsDbfsNumber
+                    rxAudioLevelerOutputRmsDbfs = $runtimeLevelerOutputRmsDbfsNumber
+                    distanceToStrongThresholdDb = [Math]::Round([Math]::Max(0.0, [double]$nr5StrongInputThresholdDbfs - [double]$nr5InputDbfs), 3)
+                    signalConfidence = $nr5ConfidenceNumber
+                    agcGate = $nr5AgcGateNumber
+                    signalProbability = $nr5SignalProbabilityNumber
+                    peakEvidence = $nr5PeakEvidenceNumber
+                    nearPassbandPeak = $sampleHasNearPassbandPeak
+                    nearest = Convert-FrontendTopPeak $nearestFrontendPeak
+                    strongest = Convert-FrontendTopPeak $strongestFrontendPeak
+                    speechQualified = $nr5SpeechQualifiedNearStrongInput
+                    passbandQualified = $nr5PassbandQualifiedNearStrongInput
+                }) | Out-Null
             }
             if ($null -ne $nr5MakeupGainDbNumber -and $nr5MakeupGainDbNumber -ge 12.0) {
                 $nr5HotMakeupCount++
@@ -2091,14 +2148,20 @@ function Build-Report {
     $nr5StrongOutputStats = Get-NumberStats $nr5StrongOutputValues
     $nr5WeakFinalAudioStats = Get-NumberStats $nr5WeakFinalAudioValues
     $nr5StrongFinalAudioStats = Get-NumberStats $nr5StrongFinalAudioValues
+    $nr5NearStrongOutputStats = Get-NumberStats $nr5NearStrongOutputValues
+    $nr5NearStrongFinalAudioStats = Get-NumberStats $nr5NearStrongFinalAudioValues
     $nr5SpeechQualifiedWeakOutputStats = Get-NumberStats $nr5SpeechQualifiedWeakOutputValues
     $nr5SpeechQualifiedStrongOutputStats = Get-NumberStats $nr5SpeechQualifiedStrongOutputValues
     $nr5SpeechQualifiedWeakFinalAudioStats = Get-NumberStats $nr5SpeechQualifiedWeakFinalAudioValues
     $nr5SpeechQualifiedStrongFinalAudioStats = Get-NumberStats $nr5SpeechQualifiedStrongFinalAudioValues
+    $nr5SpeechQualifiedNearStrongOutputStats = Get-NumberStats $nr5SpeechQualifiedNearStrongOutputValues
+    $nr5SpeechQualifiedNearStrongFinalAudioStats = Get-NumberStats $nr5SpeechQualifiedNearStrongFinalAudioValues
     $nr5PassbandQualifiedWeakOutputStats = Get-NumberStats $nr5PassbandQualifiedWeakOutputValues
     $nr5PassbandQualifiedStrongOutputStats = Get-NumberStats $nr5PassbandQualifiedStrongOutputValues
     $nr5PassbandQualifiedWeakFinalAudioStats = Get-NumberStats $nr5PassbandQualifiedWeakFinalAudioValues
     $nr5PassbandQualifiedStrongFinalAudioStats = Get-NumberStats $nr5PassbandQualifiedStrongFinalAudioValues
+    $nr5PassbandQualifiedNearStrongOutputStats = Get-NumberStats $nr5PassbandQualifiedNearStrongOutputValues
+    $nr5PassbandQualifiedNearStrongFinalAudioStats = Get-NumberStats $nr5PassbandQualifiedNearStrongFinalAudioValues
     $nr5MeanGainStats = Get-NumberStats $nr5MeanGainValues
     $nr5FloorReductionStats = Get-NumberStats $nr5FloorReductionValues
     $nr5DynamicRangeStats = Get-NumberStats $nr5DynamicRangeValues
@@ -2131,6 +2194,9 @@ function Build-Report {
         Sort-Object outputDbfs |
         Select-Object -First 8)
     $nr5HotMakeupTopSamples = @($nr5HotMakeupSamples.ToArray() | Sort-Object makeupGainDb -Descending | Select-Object -First 8)
+    $nr5NearStrongInputTopSamples = @($nr5NearStrongInputSamples.ToArray() |
+        Sort-Object @{Expression = "distanceToStrongThresholdDb"; Descending = $false }, @{Expression = "inputDbfs"; Descending = $true } |
+        Select-Object -First 8)
     $nr5AudioAlignmentMismatchTopSamples = @($nr5AudioAlignmentMismatchSamples.ToArray() |
         Sort-Object @{Expression = { [Math]::Abs([double]$_.deltaDb) }; Descending = $true } |
         Select-Object -First 8)
@@ -2593,7 +2659,11 @@ function Build-Report {
         ($nr5WeakStrongFinalAudioParityReady -or $nr5PassbandQualifiedWeakStrongEvidenceReady)) {
         $summaryRecommendations.Add("Native NR5 weak/strong output differs, but post-leveler speech audio is within parity; judge volume from nr5WeakSignalWatch weak/strong final-audio fields before changing NR5 makeup.") | Out-Null
     }
-    if ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase)) {
+    if ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase) -and
+        $nr5NearStrongInputCount -gt 0) {
+        $summaryRecommendations.Add("NR5 trace has near-strong samples between $nr5NearStrongInputThresholdDbfs and $nr5StrongInputThresholdDbfs dBFS but no strict strong-input samples; inspect nr5WeakSignalWatch.topNearStrongInputs and retune/extend dwell around those peaks before rejecting this frequency neighborhood.") | Out-Null
+    }
+    elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-strong-input", [StringComparison]::OrdinalIgnoreCase)) {
         $summaryRecommendations.Add("NR5 trace has weak-input samples but no strong-input samples; capture an active mixed weak+strong speech window before using this trace as volume-parity acceptance evidence.") | Out-Null
     }
     elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "missing-weak-input", [StringComparison]::OrdinalIgnoreCase)) {
@@ -3125,23 +3195,30 @@ function Build-Report {
             weakDropoutCandidateLossSampleCount = $nr5WeakDropoutCandidateLossCount
             weakDropoutCandidateLossPct = $nr5WeakDropoutCandidateLossPct
             weakBelowInputSampleCount = $nr5WeakBelowInputCount
-            strongInputThresholdDbfs = -22.0
+            strongInputThresholdDbfs = $nr5StrongInputThresholdDbfs
             strongInputSampleCount = $nr5StrongInputCount
+            nearStrongInputThresholdDbfs = $nr5NearStrongInputThresholdDbfs
+            nearStrongInputSampleCount = $nr5NearStrongInputCount
             weakOutputDbfs = $nr5WeakOutputStats
             strongOutputDbfs = $nr5StrongOutputStats
+            nearStrongOutputDbfs = $nr5NearStrongOutputStats
             weakStrongOutputGapDb = $nr5WeakStrongOutputGapDb
             weakStrongOutputGapThresholdDb = $nr5MixedWeakStrongGapThresholdDb
             weakFinalAudioDbfs = $nr5WeakFinalAudioStats
             strongFinalAudioDbfs = $nr5StrongFinalAudioStats
+            nearStrongFinalAudioDbfs = $nr5NearStrongFinalAudioStats
             weakStrongFinalAudioGapDb = $nr5WeakStrongFinalAudioGapDb
             weakStrongFinalAudioGapThresholdDb = $nr5MixedWeakStrongFinalAudioGapThresholdDb
             speechQualifiedWeakInputSampleCount = $nr5SpeechQualifiedWeakOutputValues.Count
             speechQualifiedStrongInputSampleCount = $nr5SpeechQualifiedStrongOutputValues.Count
+            speechQualifiedNearStrongInputSampleCount = $nr5SpeechQualifiedNearStrongOutputValues.Count
             speechQualifiedWeakOutputDbfs = $nr5SpeechQualifiedWeakOutputStats
             speechQualifiedStrongOutputDbfs = $nr5SpeechQualifiedStrongOutputStats
+            speechQualifiedNearStrongOutputDbfs = $nr5SpeechQualifiedNearStrongOutputStats
             speechQualifiedWeakStrongOutputGapDb = $nr5SpeechQualifiedWeakStrongOutputGapDb
             speechQualifiedWeakFinalAudioDbfs = $nr5SpeechQualifiedWeakFinalAudioStats
             speechQualifiedStrongFinalAudioDbfs = $nr5SpeechQualifiedStrongFinalAudioStats
+            speechQualifiedNearStrongFinalAudioDbfs = $nr5SpeechQualifiedNearStrongFinalAudioStats
             speechQualifiedWeakStrongFinalAudioGapDb = $nr5SpeechQualifiedWeakStrongFinalAudioGapDb
             speechQualifiedMixedWeakStrongEvidenceReady = $nr5SpeechQualifiedWeakStrongEvidenceReady
             speechQualifiedWeakStrongOutputParityReady = $nr5SpeechQualifiedWeakStrongOutputParityReady
@@ -3149,11 +3226,14 @@ function Build-Report {
             speechQualifiedMixedWeakStrongEvidenceStatus = $nr5SpeechQualifiedWeakStrongEvidenceStatus
             passbandQualifiedWeakInputSampleCount = $nr5PassbandQualifiedWeakOutputValues.Count
             passbandQualifiedStrongInputSampleCount = $nr5PassbandQualifiedStrongOutputValues.Count
+            passbandQualifiedNearStrongInputSampleCount = $nr5PassbandQualifiedNearStrongOutputValues.Count
             passbandQualifiedWeakOutputDbfs = $nr5PassbandQualifiedWeakOutputStats
             passbandQualifiedStrongOutputDbfs = $nr5PassbandQualifiedStrongOutputStats
+            passbandQualifiedNearStrongOutputDbfs = $nr5PassbandQualifiedNearStrongOutputStats
             passbandQualifiedWeakStrongOutputGapDb = $nr5PassbandQualifiedWeakStrongOutputGapDb
             passbandQualifiedWeakFinalAudioDbfs = $nr5PassbandQualifiedWeakFinalAudioStats
             passbandQualifiedStrongFinalAudioDbfs = $nr5PassbandQualifiedStrongFinalAudioStats
+            passbandQualifiedNearStrongFinalAudioDbfs = $nr5PassbandQualifiedNearStrongFinalAudioStats
             passbandQualifiedWeakStrongFinalAudioGapDb = $nr5PassbandQualifiedWeakStrongFinalAudioGapDb
             passbandQualifiedMixedWeakStrongEvidenceReady = $nr5PassbandQualifiedWeakStrongEvidenceReady
             passbandQualifiedWeakStrongOutputParityReady = $nr5PassbandQualifiedWeakStrongOutputParityReady
@@ -3171,6 +3251,7 @@ function Build-Report {
             topFinalAudibleWeakDropouts = @($nr5WeakDropoutFinalAudibleTopSamples)
             topCandidateWeakLosses = @($nr5WeakDropoutCandidateLossTopSamples)
             topHotMakeup = @($nr5HotMakeupTopSamples)
+            topNearStrongInputs = @($nr5NearStrongInputTopSamples)
         }
         nr5LowEvidenceLiftWatch = [ordered]@{
             weakInputThresholdDbfs = $nr5LowEvidenceInputThresholdDbfs
