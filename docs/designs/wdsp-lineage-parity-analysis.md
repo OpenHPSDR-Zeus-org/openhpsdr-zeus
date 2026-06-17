@@ -696,6 +696,20 @@ watcher window: best-run action, output/final-audio gap direction and excess, we
 and top weak/strong row counts. These fields decide whether the next live pass should retune/extend
 dwell or inspect bounded weak-speech lift rows; they do not approve NR5/SPNR defaults without the
 required live-history, comparison, and cross-radio evidence gates.
+For operator-driven tuning, `tools/watch-dsp-manual-tune-observer.ps1` schema v2 now emits a
+`primaryManualTuneAction` object and prints concise per-poll status in non-JSON mode. The action
+collapses the observer result into one read-only next step such as `manual-tune-to-frontend-suggestion`,
+`wait-for-nr5-capture-readiness`, `recapture-manual-observer-near-strong-vfo`,
+`recapture-manual-observer-weak-only-vfo`, or
+`promote-manual-observer-mixed-weak-strong-capture`. The optional `-RequireNr5CaptureReady` gate
+keeps child watcher captures from being spent while requested/effective NR5 state, NR5 diagnostics,
+or fresh runtime audio evidence are not ready. Manual captures also preserve the delegated watcher's
+capture-readiness, comparison-state, NR5 tuning status, mixed-focus action, and AGC pumping-risk
+fields so manual-tune evidence has the same steering vocabulary as peak-hunt evidence.
+Frontend tune candidates and manual observer suggestions are dial-step aware: the operator-facing
+`suggested*` fields are snapped to the configured step (`-TuneStepHz` or `-SuggestedVfoStepHz`,
+1 kHz by default for G2 phone evidence), while `rawSuggested*`/`exactSuggested*` fields preserve
+the FFT-bin-derived target for later audit.
 The optional artifact-manifest entry is `kind=g2-rx-peak-hunt-report-json`; using a trace/index kind
 is incorrect because the peak-hunt report is a summary JSON, not a `files[]` trace index.
 If the same matrix window also carries `liveMatrixArtifactControlStatus=artifact-review`, triage

@@ -35,7 +35,9 @@ param(
 
     [switch]$FailOnHardGate,
 
-    [switch]$ContinueOnError
+    [switch]$ContinueOnError,
+
+    [int]$TuneStepHz = 1000
 )
 
 $ErrorActionPreference = "Stop"
@@ -99,7 +101,8 @@ function Invoke-PwshRelaunchIfNeeded {
         "-BaseUrl", $BaseUrl,
         "-Samples", ([string]$Samples),
         "-IntervalMs", ([string]$IntervalMs),
-        "-TimeoutSec", ([string]$TimeoutSec)
+        "-TimeoutSec", ([string]$TimeoutSec),
+        "-TuneStepHz", ([string]$TuneStepHz)
     )) {
         $args.Add($item) | Out-Null
     }
@@ -379,9 +382,11 @@ function Get-FrontendPeakFilterDistanceHz {
 function Get-FrontendTuneCandidates {
     param(
         [object[]]$Samples,
-        [int]$MaxCount = 6
+        [int]$MaxCount = 6,
+        [int]$TuneStepHz = 1000
     )
 
+    $effectiveTuneStepHz = Normalize-TuneStepHz $TuneStepHz
     $byBucket = @{}
     foreach ($sample in @($Samples)) {
         $low = Get-NumericValue (Get-JsonValue $sample "filterLowHz")
@@ -418,12 +423,17 @@ function Get-FrontendTuneCandidates {
             }
 
             $distanceForScore = [double]$distance
-            $suggestedVfoHz = [long][Math]::Round([double]$frequency - $passbandCenterHz)
+            $rawSuggestedVfoHz = [long][Math]::Round([double]$frequency - $passbandCenterHz)
+            if ($rawSuggestedVfoHz -le 0) {
+                continue
+            }
+
+            $suggestedVfoHz = Quantize-HzToStep -Hz ([double]$rawSuggestedVfoHz) -StepHz $effectiveTuneStepHz
             if ($suggestedVfoHz -le 0) {
                 continue
             }
 
-            $bucketHz = [long]([Math]::Round($suggestedVfoHz / 100.0) * 100.0)
+            $bucketHz = $suggestedVfoHz
             $snrForScore = if ($null -eq $snr) { 0.0 } else { [double]$snr }
             $sourceBonus = if ([string]::Equals($sourceName, "strongest", [StringComparison]::OrdinalIgnoreCase)) { 1.0 } else { 0.0 }
             $retuneBonus = [Math]::Min(8.0, $distanceForScore / 1000.0) * 0.75
@@ -436,6 +446,13 @@ function Get-FrontendTuneCandidates {
                 rank = 0
                 suggestedVfoHz = $suggestedVfoHz
                 suggestedVfoMhz = [Math]::Round($suggestedVfoHz / 1000000.0, 6)
+                suggestedVfoStepHz = $effectiveTuneStepHz
+                exactSuggestedVfoHz = $rawSuggestedVfoHz
+                exactSuggestedVfoMhz = [Math]::Round($rawSuggestedVfoHz / 1000000.0, 6)
+                rawSuggestedVfoHz = $rawSuggestedVfoHz
+                rawSuggestedVfoMhz = [Math]::Round($rawSuggestedVfoHz / 1000000.0, 6)
+                tuningStepHz = $effectiveTuneStepHz
+                tuneSnapDeltaHz = [long]($suggestedVfoHz - $rawSuggestedVfoHz)
                 peakFrequencyHz = [long][Math]::Round([double]$frequency)
                 peakFrequencyMhz = [Math]::Round([double]$frequency / 1000000.0, 6)
                 peakOffsetHz = if ($null -eq $offset) { $null } else { [long][Math]::Round([double]$offset) }
@@ -616,6 +633,57 @@ function Get-NumericValue {
     }
 
     return $null
+}
+
+function Normalize-TuneStepHz {
+    param($Value)
+
+    $numeric = Get-NumericValue $Value
+    if ($null -eq $numeric -or -not [double]::IsFinite([double]$numeric)) {
+        return 1000
+    }
+
+    $step = [int][Math]::Round([double]$numeric)
+    if ($step -le 0) {
+        return 1000
+    }
+
+    return $step
+}
+
+function Resolve-TuneStepHz {
+    param(
+        [string]$BaseUrl,
+        [int]$RequestedTuneStepHz,
+        [bool]$AllowServerLookup
+    )
+
+    if ($RequestedTuneStepHz -gt 0) {
+        return Normalize-TuneStepHz $RequestedTuneStepHz
+    }
+
+    if ($AllowServerLookup) {
+        try {
+            $settingsEndpoint = "$(Normalize-BaseUrl $BaseUrl)/api/toolbar-settings"
+            $settings = Invoke-RestMethod -Uri $settingsEndpoint -TimeoutSec 2
+            return Normalize-TuneStepHz (Get-JsonValue $settings "stepHz")
+        }
+        catch {
+            return 1000
+        }
+    }
+
+    return 1000
+}
+
+function Quantize-HzToStep {
+    param(
+        [double]$Hz,
+        [int]$StepHz
+    )
+
+    $step = Normalize-TuneStepHz $StepHz
+    return [long]([Math]::Floor(($Hz / [double]$step) + 0.5) * [double]$step)
 }
 
 function Add-Count {
@@ -1406,7 +1474,8 @@ function Build-Report {
         [string]$ScenarioId = "",
         [string]$ComparisonId = "",
         [DateTimeOffset]$StartedUtc,
-        [DateTimeOffset]$CompletedUtc
+        [DateTimeOffset]$CompletedUtc,
+        [int]$TuneStepHz = 1000
     )
 
     $statusCounts = @{}
@@ -2635,7 +2704,8 @@ function Build-Report {
         Select-Object -First 8)
     $frontendTuneCandidates = @(Get-FrontendTuneCandidates `
         -Samples @($frontendTopPeakSamples.ToArray()) `
-        -MaxCount 6)
+        -MaxCount 6 `
+        -TuneStepHz $TuneStepHz)
     $nr5NormalizationCompressionDb = $null
     $nr5WeakStrongOutputGapDb = $null
     $nr5WeakStrongFinalAudioGapDb = $null
@@ -3459,6 +3529,7 @@ function Build-Report {
         comparisonId = if ([string]::IsNullOrWhiteSpace($ComparisonId)) { $null } else { $ComparisonId }
         inputPath = if ([string]::IsNullOrWhiteSpace($SourcePath)) { $null } else { $SourcePath }
         jsonlPath = if ([string]::IsNullOrWhiteSpace($LinePath)) { $null } else { $LinePath }
+        tuneStepHz = $TuneStepHz
         rxChainFilterLowHz = $rxChainFilterLowHz
         rxChainFilterHighHz = $rxChainFilterHighHz
         rxChainFilterWidthHz = $rxChainFilterWidthHz
@@ -3846,6 +3917,11 @@ if ($SkipCertificateCheck) {
     Enable-CertificateBypass
 }
 
+$effectiveTuneStepHz = Resolve-TuneStepHz `
+    -BaseUrl $base `
+    -RequestedTuneStepHz $TuneStepHz `
+    -AllowServerLookup ([string]::IsNullOrWhiteSpace($InputPath) -and -not $PlanOnly)
+
 if ($PlanOnly) {
     [ordered]@{
         schemaVersion = 1
@@ -3854,6 +3930,7 @@ if ($PlanOnly) {
         endpoint = $endpoint
         samples = $Samples
         intervalMs = $IntervalMs
+        tuneStepHz = $effectiveTuneStepHz
         label = if ([string]::IsNullOrWhiteSpace($Label)) { $null } else { $Label }
         scenarioId = if ([string]::IsNullOrWhiteSpace($ScenarioId)) { $null } else { $ScenarioId }
         comparisonId = if ([string]::IsNullOrWhiteSpace($ComparisonId)) { $null } else { $ComparisonId }
@@ -3864,15 +3941,16 @@ if ($PlanOnly) {
             "Optional -Preflight and -FailOnHardGate exit codes for CI/operator capture gating",
             "NR5-specific input/output, confidence, gate, level-drive, recovery-drive, makeup-gain, audio-alignment mismatch, weak/strong normalization, and live tuning-readiness trends when NR5 diagnostics are present"
         )
-        example = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl $base -Samples 60 -IntervalMs 1000 -Label g2-nr5-weak-cw"
-        preflightExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl $base -Samples 15 -IntervalMs 500 -Preflight -Label g2-preflight"
-        desktopExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl https://localhost:6443 -SkipCertificateCheck -Samples 60 -IntervalMs 500 -Label nr5-live"
-        realtimeExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl https://localhost:6443 -SkipCertificateCheck -Samples 120 -IntervalMs 250 -Realtime -RealtimeEvery 4 -Label nr5-live-tune"
+        example = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl $base -Samples 60 -IntervalMs 1000 -TuneStepHz $effectiveTuneStepHz -Label g2-nr5-weak-cw"
+        preflightExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl $base -Samples 15 -IntervalMs 500 -TuneStepHz $effectiveTuneStepHz -Preflight -Label g2-preflight"
+        desktopExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl https://localhost:6443 -SkipCertificateCheck -Samples 60 -IntervalMs 500 -TuneStepHz $effectiveTuneStepHz -Label nr5-live"
+        realtimeExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -BaseUrl https://localhost:6443 -SkipCertificateCheck -Samples 120 -IntervalMs 250 -TuneStepHz $effectiveTuneStepHz -Realtime -RealtimeEvery 4 -Label nr5-live-tune"
         offlineExample = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-live-diagnostics.ps1 -InputPath captures\dsp-live-diagnostics\trace.jsonl -JsonOnly"
         notes = @(
             "Read-only: the tool only calls GET /api/dsp/live-diagnostics.",
             "Use traces as runtime context beside offline fixture metrics, audio renders, spectrum captures, and operator notes.",
             "Use nr5AudioAlignmentWatch to reject mixed-frame rows before treating low-evidence lift/dropout rows as DSP behavior.",
+            "Frontend tune candidates are snapped to -TuneStepHz; raw/exact FFT-bin-derived targets remain in rawSuggested* and exactSuggested* fields.",
             "-Preflight exits nonzero when samples fail, hard blockers appear, or readyForBenchmarkTrace is false.",
             "-FailOnHardGate exits nonzero only for failed samples or hard blockers.",
             "A ready trace does not approve changing DSP defaults by itself."
@@ -3918,7 +3996,8 @@ if ([string]::IsNullOrWhiteSpace($InputPath)) {
         -ScenarioId $ScenarioId `
         -ComparisonId $ComparisonId `
         -StartedUtc $startedUtc `
-        -CompletedUtc $completedUtc
+        -CompletedUtc $completedUtc `
+        -TuneStepHz $effectiveTuneStepHz
 }
 else {
     $resolvedInputPath = (Resolve-Path -LiteralPath $InputPath).Path
@@ -3940,7 +4019,8 @@ else {
         -ScenarioId $ScenarioId `
         -ComparisonId $ComparisonId `
         -StartedUtc $startedUtc `
-        -CompletedUtc $completedUtc
+        -CompletedUtc $completedUtc `
+        -TuneStepHz $effectiveTuneStepHz
 }
 
 Write-JsonFile -Path $ReportPath -Value $report
@@ -3962,7 +4042,9 @@ else {
     $tuneCandidates = @($report["frontendTuneCandidates"])
     if ($tuneCandidates.Count -gt 0) {
         $candidateText = @($tuneCandidates | Select-Object -First 5 | ForEach-Object {
-            "$($_["suggestedVfoMhz"]) MHz (peak $($_["peakFrequencyMhz"]) MHz, off $($_["peakOffsetHz"]) Hz, snr $($_["snrDb"]) dB)"
+            $snap = Get-JsonValue $_ "tuneSnapDeltaHz"
+            $snapText = if ($null -eq $snap -or [long]$snap -eq 0) { "step" } else { "step, snap $snap Hz" }
+            "$($_["suggestedVfoMhz"]) MHz ($snapText; peak $($_["peakFrequencyMhz"]) MHz, off $($_["peakOffsetHz"]) Hz, snr $($_["snrDb"]) dB)"
         }) -join "; "
         Write-Host "Frontend tune candidates: $candidateText"
     }

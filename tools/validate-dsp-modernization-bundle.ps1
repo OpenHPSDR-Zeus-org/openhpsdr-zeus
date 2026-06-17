@@ -6221,6 +6221,10 @@ $manualTuneObserverEvidence = [ordered]@{
     bestObservedVfoSuggestedVfoHz = $null
     bestObservedVfoSuggestedVfoMhz = $null
     bestObservedVfoSuggestedDialShiftHz = $null
+    bestObservedVfoSuggestedVfoStepHz = $null
+    bestObservedVfoExactSuggestedVfoHz = $null
+    bestObservedVfoExactSuggestedVfoMhz = $null
+    bestObservedVfoExactSuggestedDialShiftHz = $null
     bestObservedVfoSuggestedTuneReason = ""
     captureCount = 0
     maxCapturesPerVfo = 0
@@ -6239,11 +6243,20 @@ $manualTuneObserverEvidence = [ordered]@{
     frontendSuggestedDialShiftHz = $null
     frontendSuggestedVfoHz = $null
     frontendSuggestedVfoMhz = $null
+    frontendSuggestedVfoStepHz = $null
+    frontendExactSuggestedDialShiftHz = $null
+    frontendExactSuggestedVfoHz = $null
+    frontendExactSuggestedVfoMhz = $null
     frontendSuggestedPeakOffsetHz = $null
     frontendSuggestedPeakFrequencyHz = $null
     frontendSuggestedFilterCenterOffsetHz = $null
     frontendSuggestedFilterDistanceHz = $null
     frontendSuggestedTuneReason = ""
+    requireNr5CaptureReady = $false
+    baseCaptureQualifiedPollCount = 0
+    nr5CaptureReadyPollCount = 0
+    nr5CaptureBlockedPollCount = 0
+    nr5CaptureAdvisoryPollCount = 0
     captureQualifiedPollCount = 0
     readyCaptureCount = 0
     mixedWeakStrongReady = $false
@@ -6303,6 +6316,13 @@ $manualTuneObserverEvidence = [ordered]@{
     referencedCaptureNonPortableCount = 0
     referencedCaptureInvalidCount = 0
     referencedJsonlMissingCount = 0
+    primaryManualTuneAction = $null
+    primaryManualTuneActionId = ""
+    primaryManualTuneActionStatus = ""
+    primaryManualTuneActionSummary = ""
+    primaryManualTuneActionManualAction = ""
+    primaryManualTuneActionCommandTemplate = ""
+    primaryManualTuneActionExpectedEvidence = ""
 }
 $g2RxPeakHuntArtifactId = "g2-rx-peak-hunt-report"
 $g2RxPeakHuntEvidence = [ordered]@{
@@ -13130,6 +13150,12 @@ else {
                 $bestObservedVfoSuggestedVfoHz = if ($null -eq $bestObservedVfoSuggestedVfoHzValue) { $null } else { [long]$bestObservedVfoSuggestedVfoHzValue }
                 $bestObservedVfoSuggestedVfoMhz = Get-NumericValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoMhz")
                 $bestObservedVfoSuggestedDialShiftHz = Get-NumericValue (Get-JsonValue $bestObservedVfo "frontendSuggestedDialShiftHz")
+                $bestObservedVfoSuggestedVfoStepHzValue = Get-NumericValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoStepHz")
+                $bestObservedVfoSuggestedVfoStepHz = if ($null -eq $bestObservedVfoSuggestedVfoStepHzValue) { $null } else { [long]$bestObservedVfoSuggestedVfoStepHzValue }
+                $bestObservedVfoExactSuggestedVfoHzValue = Get-NumericValue (Get-JsonValue $bestObservedVfo "frontendExactSuggestedVfoHz")
+                $bestObservedVfoExactSuggestedVfoHz = if ($null -eq $bestObservedVfoExactSuggestedVfoHzValue) { $null } else { [long]$bestObservedVfoExactSuggestedVfoHzValue }
+                $bestObservedVfoExactSuggestedVfoMhz = Get-NumericValue (Get-JsonValue $bestObservedVfo "frontendExactSuggestedVfoMhz")
+                $bestObservedVfoExactSuggestedDialShiftHz = Get-NumericValue (Get-JsonValue $bestObservedVfo "frontendExactSuggestedDialShiftHz")
                 $bestObservedVfoSuggestedTuneReason = [string](Get-JsonValue $bestObservedVfo "frontendSuggestedTuneReason")
                 $captureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "captureCount"))
                 $maxCapturesPerVfo = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "maxCapturesPerVfo"))
@@ -13149,12 +13175,23 @@ else {
                 $frontendSuggestedVfoHzValue = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoHz")
                 $frontendSuggestedVfoHz = if ($null -eq $frontendSuggestedVfoHzValue) { $null } else { [long]$frontendSuggestedVfoHzValue }
                 $frontendSuggestedVfoMhz = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoMhz")
+                $frontendSuggestedVfoStepHzValue = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoStepHz")
+                $frontendSuggestedVfoStepHz = if ($null -eq $frontendSuggestedVfoStepHzValue) { $null } else { [long]$frontendSuggestedVfoStepHzValue }
+                $frontendExactSuggestedDialShiftHz = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "exactSuggestedDialShiftHz")
+                $frontendExactSuggestedVfoHzValue = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "exactSuggestedVfoHz")
+                $frontendExactSuggestedVfoHz = if ($null -eq $frontendExactSuggestedVfoHzValue) { $null } else { [long]$frontendExactSuggestedVfoHzValue }
+                $frontendExactSuggestedVfoMhz = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "exactSuggestedVfoMhz")
                 $frontendSuggestedPeakOffsetHz = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "peakOffsetHz")
                 $frontendSuggestedPeakFrequencyHzValue = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "peakFrequencyHz")
                 $frontendSuggestedPeakFrequencyHz = if ($null -eq $frontendSuggestedPeakFrequencyHzValue) { $null } else { [long]$frontendSuggestedPeakFrequencyHzValue }
                 $frontendSuggestedFilterCenterOffsetHz = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "filterCenterOffsetHz")
                 $frontendSuggestedFilterDistanceHz = Get-NumericValue (Get-JsonValue $frontendBestTuningHint "filterDistanceHz")
                 $frontendSuggestedTuneReason = [string](Get-JsonValue $frontendBestTuningHint "reason")
+                $requireNr5CaptureReady = Test-Truthy (Get-JsonValue $artifactJson "requireNr5CaptureReady")
+                $baseCaptureQualifiedPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "baseCaptureQualifiedPollCount"))
+                $nr5CaptureReadyPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "nr5CaptureReadyPollCount"))
+                $nr5CaptureBlockedPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "nr5CaptureBlockedPollCount"))
+                $nr5CaptureAdvisoryPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "nr5CaptureAdvisoryPollCount"))
                 $captureQualifiedPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "captureQualifiedPollCount"))
                 $readyCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "readyCaptureCount"))
                 $mixedWeakStrongReady = Test-Truthy (Get-JsonValue $artifactJson "mixedWeakStrongReady")
@@ -13207,6 +13244,31 @@ else {
                 $safetyTxEndpointsTouched = Test-Truthy (Get-JsonValue $safety "txEndpointsTouched")
                 $captures = @(Get-JsonArray $artifactJson "captures")
                 $polls = @(Get-JsonArray $artifactJson "polls")
+                $primaryManualTuneAction = Get-JsonValue $artifactJson "primaryManualTuneAction"
+                $primaryManualTuneActionId = [string](Get-JsonValue $artifactJson "primaryManualTuneActionId")
+                if ([string]::IsNullOrWhiteSpace($primaryManualTuneActionId)) {
+                    $primaryManualTuneActionId = [string](Get-JsonValue $primaryManualTuneAction "actionId")
+                }
+                $primaryManualTuneActionStatus = [string](Get-JsonValue $artifactJson "primaryManualTuneActionStatus")
+                if ([string]::IsNullOrWhiteSpace($primaryManualTuneActionStatus)) {
+                    $primaryManualTuneActionStatus = [string](Get-JsonValue $primaryManualTuneAction "status")
+                }
+                $primaryManualTuneActionSummary = [string](Get-JsonValue $artifactJson "primaryManualTuneActionSummary")
+                if ([string]::IsNullOrWhiteSpace($primaryManualTuneActionSummary)) {
+                    $primaryManualTuneActionSummary = [string](Get-JsonValue $primaryManualTuneAction "summary")
+                }
+                $primaryManualTuneActionManualAction = [string](Get-JsonValue $artifactJson "primaryManualTuneActionManualAction")
+                if ([string]::IsNullOrWhiteSpace($primaryManualTuneActionManualAction)) {
+                    $primaryManualTuneActionManualAction = [string](Get-JsonValue $primaryManualTuneAction "manualAction")
+                }
+                $primaryManualTuneActionCommandTemplate = [string](Get-JsonValue $artifactJson "primaryManualTuneActionCommandTemplate")
+                if ([string]::IsNullOrWhiteSpace($primaryManualTuneActionCommandTemplate)) {
+                    $primaryManualTuneActionCommandTemplate = [string](Get-JsonValue $primaryManualTuneAction "commandTemplate")
+                }
+                $primaryManualTuneActionExpectedEvidence = [string](Get-JsonValue $artifactJson "primaryManualTuneActionExpectedEvidence")
+                if ([string]::IsNullOrWhiteSpace($primaryManualTuneActionExpectedEvidence)) {
+                    $primaryManualTuneActionExpectedEvidence = [string](Get-JsonValue $primaryManualTuneAction "expectedEvidence")
+                }
 
                 $bestCapture = $null
                 foreach ($capture in $captures) {
@@ -13257,6 +13319,10 @@ else {
                 $manualTuneObserverEvidence["bestObservedVfoSuggestedVfoHz"] = $bestObservedVfoSuggestedVfoHz
                 $manualTuneObserverEvidence["bestObservedVfoSuggestedVfoMhz"] = $bestObservedVfoSuggestedVfoMhz
                 $manualTuneObserverEvidence["bestObservedVfoSuggestedDialShiftHz"] = $bestObservedVfoSuggestedDialShiftHz
+                $manualTuneObserverEvidence["bestObservedVfoSuggestedVfoStepHz"] = $bestObservedVfoSuggestedVfoStepHz
+                $manualTuneObserverEvidence["bestObservedVfoExactSuggestedVfoHz"] = $bestObservedVfoExactSuggestedVfoHz
+                $manualTuneObserverEvidence["bestObservedVfoExactSuggestedVfoMhz"] = $bestObservedVfoExactSuggestedVfoMhz
+                $manualTuneObserverEvidence["bestObservedVfoExactSuggestedDialShiftHz"] = $bestObservedVfoExactSuggestedDialShiftHz
                 $manualTuneObserverEvidence["bestObservedVfoSuggestedTuneReason"] = $bestObservedVfoSuggestedTuneReason
                 $manualTuneObserverEvidence["captureCount"] = $captureCount
                 $manualTuneObserverEvidence["maxCapturesPerVfo"] = $maxCapturesPerVfo
@@ -13275,11 +13341,20 @@ else {
                 $manualTuneObserverEvidence["frontendSuggestedDialShiftHz"] = $frontendSuggestedDialShiftHz
                 $manualTuneObserverEvidence["frontendSuggestedVfoHz"] = $frontendSuggestedVfoHz
                 $manualTuneObserverEvidence["frontendSuggestedVfoMhz"] = $frontendSuggestedVfoMhz
+                $manualTuneObserverEvidence["frontendSuggestedVfoStepHz"] = $frontendSuggestedVfoStepHz
+                $manualTuneObserverEvidence["frontendExactSuggestedDialShiftHz"] = $frontendExactSuggestedDialShiftHz
+                $manualTuneObserverEvidence["frontendExactSuggestedVfoHz"] = $frontendExactSuggestedVfoHz
+                $manualTuneObserverEvidence["frontendExactSuggestedVfoMhz"] = $frontendExactSuggestedVfoMhz
                 $manualTuneObserverEvidence["frontendSuggestedPeakOffsetHz"] = $frontendSuggestedPeakOffsetHz
                 $manualTuneObserverEvidence["frontendSuggestedPeakFrequencyHz"] = $frontendSuggestedPeakFrequencyHz
                 $manualTuneObserverEvidence["frontendSuggestedFilterCenterOffsetHz"] = $frontendSuggestedFilterCenterOffsetHz
                 $manualTuneObserverEvidence["frontendSuggestedFilterDistanceHz"] = $frontendSuggestedFilterDistanceHz
                 $manualTuneObserverEvidence["frontendSuggestedTuneReason"] = $frontendSuggestedTuneReason
+                $manualTuneObserverEvidence["requireNr5CaptureReady"] = $requireNr5CaptureReady
+                $manualTuneObserverEvidence["baseCaptureQualifiedPollCount"] = $baseCaptureQualifiedPollCount
+                $manualTuneObserverEvidence["nr5CaptureReadyPollCount"] = $nr5CaptureReadyPollCount
+                $manualTuneObserverEvidence["nr5CaptureBlockedPollCount"] = $nr5CaptureBlockedPollCount
+                $manualTuneObserverEvidence["nr5CaptureAdvisoryPollCount"] = $nr5CaptureAdvisoryPollCount
                 $manualTuneObserverEvidence["captureQualifiedPollCount"] = $captureQualifiedPollCount
                 $manualTuneObserverEvidence["readyCaptureCount"] = $readyCaptureCount
                 $manualTuneObserverEvidence["mixedWeakStrongReady"] = $mixedWeakStrongReady
@@ -13332,6 +13407,13 @@ else {
                 $manualTuneObserverEvidence["bestStatus"] = [string](Get-JsonValue $bestCapture "mixedWeakStrongEvidenceStatus")
                 $manualTuneObserverEvidence["bestReportPath"] = [string](Get-JsonValue $bestCapture "reportPath")
                 $manualTuneObserverEvidence["bestJsonlPath"] = [string](Get-JsonValue $bestCapture "jsonlPath")
+                $manualTuneObserverEvidence["primaryManualTuneAction"] = $primaryManualTuneAction
+                $manualTuneObserverEvidence["primaryManualTuneActionId"] = $primaryManualTuneActionId
+                $manualTuneObserverEvidence["primaryManualTuneActionStatus"] = $primaryManualTuneActionStatus
+                $manualTuneObserverEvidence["primaryManualTuneActionSummary"] = $primaryManualTuneActionSummary
+                $manualTuneObserverEvidence["primaryManualTuneActionManualAction"] = $primaryManualTuneActionManualAction
+                $manualTuneObserverEvidence["primaryManualTuneActionCommandTemplate"] = $primaryManualTuneActionCommandTemplate
+                $manualTuneObserverEvidence["primaryManualTuneActionExpectedEvidence"] = $primaryManualTuneActionExpectedEvidence
 
                 if ($schemaVersion -lt 1) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-schema-version-missing" "Artifact '$artifactId' must declare schemaVersion >= 1."
@@ -15667,6 +15749,10 @@ $report = [ordered]@{
     manualTuneObserverBestObservedVfoSuggestedVfoHz = $manualTuneObserverEvidence.bestObservedVfoSuggestedVfoHz
     manualTuneObserverBestObservedVfoSuggestedVfoMhz = $manualTuneObserverEvidence.bestObservedVfoSuggestedVfoMhz
     manualTuneObserverBestObservedVfoSuggestedDialShiftHz = $manualTuneObserverEvidence.bestObservedVfoSuggestedDialShiftHz
+    manualTuneObserverBestObservedVfoSuggestedVfoStepHz = $manualTuneObserverEvidence.bestObservedVfoSuggestedVfoStepHz
+    manualTuneObserverBestObservedVfoExactSuggestedVfoHz = $manualTuneObserverEvidence.bestObservedVfoExactSuggestedVfoHz
+    manualTuneObserverBestObservedVfoExactSuggestedVfoMhz = $manualTuneObserverEvidence.bestObservedVfoExactSuggestedVfoMhz
+    manualTuneObserverBestObservedVfoExactSuggestedDialShiftHz = $manualTuneObserverEvidence.bestObservedVfoExactSuggestedDialShiftHz
     manualTuneObserverBestObservedVfoSuggestedTuneReason = $manualTuneObserverEvidence.bestObservedVfoSuggestedTuneReason
     manualTuneObserverCaptureCount = $manualTuneObserverEvidence.captureCount
     manualTuneObserverMaxCapturesPerVfo = $manualTuneObserverEvidence.maxCapturesPerVfo
@@ -15685,11 +15771,20 @@ $report = [ordered]@{
     manualTuneObserverFrontendSuggestedDialShiftHz = $manualTuneObserverEvidence.frontendSuggestedDialShiftHz
     manualTuneObserverFrontendSuggestedVfoHz = $manualTuneObserverEvidence.frontendSuggestedVfoHz
     manualTuneObserverFrontendSuggestedVfoMhz = $manualTuneObserverEvidence.frontendSuggestedVfoMhz
+    manualTuneObserverFrontendSuggestedVfoStepHz = $manualTuneObserverEvidence.frontendSuggestedVfoStepHz
+    manualTuneObserverFrontendExactSuggestedDialShiftHz = $manualTuneObserverEvidence.frontendExactSuggestedDialShiftHz
+    manualTuneObserverFrontendExactSuggestedVfoHz = $manualTuneObserverEvidence.frontendExactSuggestedVfoHz
+    manualTuneObserverFrontendExactSuggestedVfoMhz = $manualTuneObserverEvidence.frontendExactSuggestedVfoMhz
     manualTuneObserverFrontendSuggestedPeakOffsetHz = $manualTuneObserverEvidence.frontendSuggestedPeakOffsetHz
     manualTuneObserverFrontendSuggestedPeakFrequencyHz = $manualTuneObserverEvidence.frontendSuggestedPeakFrequencyHz
     manualTuneObserverFrontendSuggestedFilterCenterOffsetHz = $manualTuneObserverEvidence.frontendSuggestedFilterCenterOffsetHz
     manualTuneObserverFrontendSuggestedFilterDistanceHz = $manualTuneObserverEvidence.frontendSuggestedFilterDistanceHz
     manualTuneObserverFrontendSuggestedTuneReason = $manualTuneObserverEvidence.frontendSuggestedTuneReason
+    manualTuneObserverRequireNr5CaptureReady = $manualTuneObserverEvidence.requireNr5CaptureReady
+    manualTuneObserverBaseCaptureQualifiedPollCount = $manualTuneObserverEvidence.baseCaptureQualifiedPollCount
+    manualTuneObserverNr5CaptureReadyPollCount = $manualTuneObserverEvidence.nr5CaptureReadyPollCount
+    manualTuneObserverNr5CaptureBlockedPollCount = $manualTuneObserverEvidence.nr5CaptureBlockedPollCount
+    manualTuneObserverNr5CaptureAdvisoryPollCount = $manualTuneObserverEvidence.nr5CaptureAdvisoryPollCount
     manualTuneObserverCaptureQualifiedPollCount = $manualTuneObserverEvidence.captureQualifiedPollCount
     manualTuneObserverReadyCaptureCount = $manualTuneObserverEvidence.readyCaptureCount
     manualTuneObserverMixedWeakStrongReady = $manualTuneObserverEvidence.mixedWeakStrongReady
@@ -15742,6 +15837,13 @@ $report = [ordered]@{
     manualTuneObserverBestStatus = $manualTuneObserverEvidence.bestStatus
     manualTuneObserverBestReportPath = $manualTuneObserverEvidence.bestReportPath
     manualTuneObserverBestJsonlPath = $manualTuneObserverEvidence.bestJsonlPath
+    manualTuneObserverPrimaryManualTuneAction = $manualTuneObserverEvidence.primaryManualTuneAction
+    manualTuneObserverPrimaryManualTuneActionId = $manualTuneObserverEvidence.primaryManualTuneActionId
+    manualTuneObserverPrimaryManualTuneActionStatus = $manualTuneObserverEvidence.primaryManualTuneActionStatus
+    manualTuneObserverPrimaryManualTuneActionSummary = $manualTuneObserverEvidence.primaryManualTuneActionSummary
+    manualTuneObserverPrimaryManualTuneActionManualAction = $manualTuneObserverEvidence.primaryManualTuneActionManualAction
+    manualTuneObserverPrimaryManualTuneActionCommandTemplate = $manualTuneObserverEvidence.primaryManualTuneActionCommandTemplate
+    manualTuneObserverPrimaryManualTuneActionExpectedEvidence = $manualTuneObserverEvidence.primaryManualTuneActionExpectedEvidence
     manualTuneObserverReferencedCaptureCount = $manualTuneObserverEvidence.referencedCaptureCount
     manualTuneObserverReferencedCaptureReadyCount = $manualTuneObserverEvidence.referencedCaptureReadyCount
     manualTuneObserverReferencedCaptureProblemCount = $manualTuneObserverEvidence.referencedCaptureProblemCount

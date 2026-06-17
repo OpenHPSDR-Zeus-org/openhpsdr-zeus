@@ -13,9 +13,13 @@ param(
 
     [switch]$RequireFrontendNearPassband,
 
+    [switch]$RequireNr5CaptureReady,
+
     [int]$FrontendNearPassbandThresholdHz = 3000,
 
     [int]$FrontendOffsetMismatchToleranceHz = 25,
+
+    [int]$SuggestedVfoStepHz = 1000,
 
     [int]$MaxCaptures = 4,
 
@@ -253,6 +257,24 @@ function Get-FrontendPeakFilterDistanceHz {
     return 0.0
 }
 
+function Get-SteppedFrequencyHz {
+    param(
+        $FrequencyHz,
+        [int]$StepHz
+    )
+
+    $frequency = Get-NullableDoubleValue $FrequencyHz
+    if ($null -eq $frequency) {
+        return $null
+    }
+
+    if ($StepHz -le 0) {
+        return [long][Math]::Round([double]$frequency)
+    }
+
+    return [long]([Math]::Floor(([double]$frequency / [double]$StepHz) + 0.5) * [double]$StepHz)
+}
+
 function Get-FrontendTuningHint {
     param(
         $Peak,
@@ -260,7 +282,8 @@ function Get-FrontendTuningHint {
         $FilterDistanceHz,
         $StateVfoHz,
         $FilterLowHz,
-        $FilterHighHz
+        $FilterHighHz,
+        [int]$StepHz
     )
 
     $offset = Get-NullableDoubleValue $OffsetHz
@@ -279,8 +302,10 @@ function Get-FrontendTuningHint {
     }
 
     $targetOffset = [Math]::Round(($passLow + $passHigh) / 2.0, 3)
-    $shiftHz = [Math]::Round([double]$offset - $targetOffset, 3)
-    $suggestedVfoHz = [long][Math]::Round([double]$vfo + $shiftHz)
+    $exactShiftHz = [Math]::Round([double]$offset - $targetOffset, 3)
+    $exactSuggestedVfoHz = [long][Math]::Round([double]$vfo + $exactShiftHz)
+    $suggestedVfoHz = Get-SteppedFrequencyHz -FrequencyHz $exactSuggestedVfoHz -StepHz $StepHz
+    $suggestedShiftHz = [Math]::Round([double]$suggestedVfoHz - [double]$vfo, 3)
     $reason = if ([double]$distance -le 0.0) {
         "already-in-filter"
     }
@@ -303,9 +328,13 @@ function Get-FrontendTuningHint {
         filterCenterOffsetHz = $targetOffset
         filterDistanceHz = $distance
         currentVfoHz = $vfo
-        suggestedDialShiftHz = $shiftHz
+        suggestedDialShiftHz = $suggestedShiftHz
         suggestedVfoHz = $suggestedVfoHz
         suggestedVfoMhz = [Math]::Round([double]$suggestedVfoHz / 1000000.0, 6)
+        suggestedVfoStepHz = $StepHz
+        exactSuggestedDialShiftHz = $exactShiftHz
+        exactSuggestedVfoHz = $exactSuggestedVfoHz
+        exactSuggestedVfoMhz = [Math]::Round([double]$exactSuggestedVfoHz / 1000000.0, 6)
     }
 }
 
@@ -348,6 +377,111 @@ function Write-JsonFile {
     }
 
     $Value | ConvertTo-Json -Depth 64 | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
+function Format-MhzText {
+    param($Hz, $Mhz)
+
+    $mhzValue = Get-NullableDoubleValue $Mhz
+    if ($null -eq $mhzValue) {
+        $hzValue = Get-NullableLongValue $Hz
+        if ($null -ne $hzValue) {
+            $mhzValue = [Math]::Round([double]$hzValue / 1000000.0, 6)
+        }
+    }
+
+    if ($null -eq $mhzValue) {
+        return ""
+    }
+
+    return "{0:N6} MHz" -f [double]$mhzValue
+}
+
+function New-ManualTuneObserverCommandTemplate {
+    param(
+        [int]$Samples,
+        [int]$MaxPerVfo
+    )
+
+    $parts = New-Object System.Collections.Generic.List[string]
+    $parts.Add("powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1") | Out-Null
+    $parts.Add("-BaseUrl `"$base`"") | Out-Null
+    if (-not [string]::IsNullOrWhiteSpace($bundlePath)) {
+        $parts.Add("-BundleDir `"$bundlePath`"") | Out-Null
+    }
+    elseif (-not [string]::IsNullOrWhiteSpace($OutputRoot)) {
+        $parts.Add("-OutputRoot `"$OutputRoot`"") | Out-Null
+    }
+    $parts.Add("-Label `"$Label`"") | Out-Null
+    $parts.Add("-ScenarioId `"$ScenarioId`"") | Out-Null
+    $parts.Add("-ComparisonId `"$ComparisonId`"") | Out-Null
+    $parts.Add("-RequireFrontendNearPassband") | Out-Null
+    $parts.Add("-RequireNr5CaptureReady") | Out-Null
+    $parts.Add("-SuggestedVfoStepHz $SuggestedVfoStepHz") | Out-Null
+    $parts.Add("-MaxCapturesPerVfo $MaxPerVfo") | Out-Null
+    $parts.Add("-CaptureSamples $Samples") | Out-Null
+    $parts.Add("-CaptureIntervalMs $CaptureIntervalMs") | Out-Null
+    if ($SkipCertificateCheck) {
+        $parts.Add("-SkipCertificateCheck") | Out-Null
+    }
+
+    return ($parts.ToArray() -join " ")
+}
+
+function New-ManualTuneAction {
+    param(
+        [Parameter(Mandatory = $true)][string]$ActionId,
+        [Parameter(Mandatory = $true)][string]$Status,
+        [int]$Priority,
+        [Parameter(Mandatory = $true)][string]$Summary,
+        [string]$ManualAction = "",
+        [string]$CommandTemplate = "",
+        [string]$FollowUp = "",
+        $VfoHz = $null,
+        $VfoMhz = $null,
+        $SuggestedVfoHz = $null,
+        $SuggestedVfoMhz = $null,
+        $SuggestedDialShiftHz = $null,
+        $ExactSuggestedVfoHz = $null,
+        $ExactSuggestedVfoMhz = $null,
+        $ExactSuggestedDialShiftHz = $null,
+        $SuggestedVfoStepHzValue = $null,
+        [string]$SuggestedTuneReason = "",
+        [string]$ReportPathValue = "",
+        [string]$JsonlPathValue = "",
+        $DistanceToStrongThresholdDb = $null,
+        [int]$WeakInputSampleCount = 0,
+        [int]$StrongInputSampleCount = 0,
+        [int]$NearStrongInputSampleCount = 0,
+        [string]$ExpectedEvidence = ""
+    )
+
+    return [ordered]@{
+        actionId = $ActionId
+        status = $Status
+        priority = $Priority
+        summary = $Summary
+        manualAction = $ManualAction
+        commandTemplate = $CommandTemplate
+        followUp = $FollowUp
+        vfoHz = Get-NullableLongValue $VfoHz
+        vfoMhz = Get-NullableDoubleValue $VfoMhz
+        suggestedVfoHz = Get-NullableLongValue $SuggestedVfoHz
+        suggestedVfoMhz = Get-NullableDoubleValue $SuggestedVfoMhz
+        suggestedDialShiftHz = Get-NullableDoubleValue $SuggestedDialShiftHz
+        exactSuggestedVfoHz = Get-NullableLongValue $ExactSuggestedVfoHz
+        exactSuggestedVfoMhz = Get-NullableDoubleValue $ExactSuggestedVfoMhz
+        exactSuggestedDialShiftHz = Get-NullableDoubleValue $ExactSuggestedDialShiftHz
+        suggestedVfoStepHz = Get-NullableLongValue $SuggestedVfoStepHzValue
+        suggestedTuneReason = $SuggestedTuneReason
+        reportPath = $ReportPathValue
+        jsonlPath = $JsonlPathValue
+        distanceToStrongThresholdDb = Get-NullableDoubleValue $DistanceToStrongThresholdDb
+        weakInputSampleCount = $WeakInputSampleCount
+        strongInputSampleCount = $StrongInputSampleCount
+        nearStrongInputSampleCount = $NearStrongInputSampleCount
+        expectedEvidence = $ExpectedEvidence
+    }
 }
 
 function ConvertTo-BundleRelativeEvidencePath {
@@ -455,6 +589,9 @@ if ($FrontendNearPassbandThresholdHz -lt 0) {
 if ($FrontendOffsetMismatchToleranceHz -lt 0) {
     $FrontendOffsetMismatchToleranceHz = 0
 }
+if ($SuggestedVfoStepHz -lt 0) {
+    $SuggestedVfoStepHz = 0
+}
 if ($MaxCaptures -lt 0) {
     $MaxCaptures = 0
 }
@@ -497,8 +634,10 @@ if ($PlanOnly) {
         minCoherentSnrDb = $MinCoherentSnrDb
         sceneProfilePattern = $SceneProfilePattern
         requireFrontendNearPassband = [bool]$RequireFrontendNearPassband
+        requireNr5CaptureReady = [bool]$RequireNr5CaptureReady
         frontendNearPassbandThresholdHz = $FrontendNearPassbandThresholdHz
         frontendOffsetMismatchToleranceHz = $FrontendOffsetMismatchToleranceHz
+        suggestedVfoStepHz = $SuggestedVfoStepHz
         maxCaptures = $MaxCaptures
         maxCapturesPerVfo = $MaxCapturesPerVfo
         allowStaleSceneCapture = [bool]$AllowStaleSceneCapture
@@ -525,14 +664,16 @@ if ($PlanOnly) {
                 "This tool is for operator/manual tuning; it never posts VFO, LO, TX, or DSP settings.",
                 "It captures a watch-dsp-live-diagnostics window only after the current VFO is stable and the scene looks active.",
                 "Use -RequireFrontendNearPassband for acceptance-oriented runs so off-passband frontend peaks do not consume capture slots; strict runs use the signed RX filter window from /api/state when available.",
+                "Use -RequireNr5CaptureReady for NR5/SPNR acceptance-oriented runs so child captures are not spent while requested/effective NR mode or diagnostics are not ready.",
+                "Operator tune suggestions are snapped to -SuggestedVfoStepHz; exact FFT-bin-derived targets remain in exactSuggested* fields for diagnostics.",
                 "Traces captured while the operator continues tuning are scouting evidence, not final acceptance proof."
             )
         }
         example = if ([string]::IsNullOrWhiteSpace($bundlePath)) {
-            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -RequireFrontendNearPassband -AllowStaleSceneCapture"
+            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -RequireFrontendNearPassband -RequireNr5CaptureReady -SuggestedVfoStepHz $SuggestedVfoStepHz -AllowStaleSceneCapture"
         }
         else {
-            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -BundleDir `"$bundlePath`" -OutputRoot `"$bundlePath\artifacts\manual-tune-observer`" -ReportPath `"$bundlePath\artifacts\manual-tune-observer-report.json`" -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -RequireFrontendNearPassband -AllowStaleSceneCapture"
+            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -BundleDir `"$bundlePath`" -OutputRoot `"$bundlePath\artifacts\manual-tune-observer`" -ReportPath `"$bundlePath\artifacts\manual-tune-observer-report.json`" -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -RequireFrontendNearPassband -RequireNr5CaptureReady -SuggestedVfoStepHz $SuggestedVfoStepHz -AllowStaleSceneCapture"
         }
     } | ConvertTo-Json -Depth 16
     exit 0
@@ -671,7 +812,8 @@ try {
                         -FilterDistanceHz $filterDistance `
                         -StateVfoHz $vfo `
                         -FilterLowHz $filterLowHz `
-                        -FilterHighHz $filterHighHz
+                        -FilterHighHz $filterHighHz `
+                        -StepHz $SuggestedVfoStepHz
                     if ($null -ne $hint) {
                         $hintDistance = Get-NullableDoubleValue (Get-JsonValue $hint "filterDistanceHz")
                         $bestHintDistance = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "filterDistanceHz")
@@ -694,10 +836,50 @@ try {
         else {
             $false
         }
-        $capturePassbandQualified = (-not [bool]$RequireFrontendNearPassband) -or $frontendPassbandEvidenceQualified
-        $captureQualified = ($stableQualified -and ($sceneFresh -or $staleSceneCaptureAllowed) -and $snrQualified -and $profileMatches -and $capturePassbandQualified)
         $runtime = Get-JsonValue $live "runtimeEvidence"
         $nr5 = Get-JsonValue $live "nr5SpnrDiagnostics"
+        $requestedNrMode = [string](Get-JsonValue $live "requestedNrMode")
+        $effectiveNrMode = [string](Get-JsonValue $live "effectiveNrMode")
+        $readyForNr5Tuning = Test-Truthy (Get-JsonValue $live "readyForNr5Tuning")
+        $runtimeFresh = (
+            [string]::Equals([string](Get-JsonValue $runtime "status"), "fresh", [StringComparison]::OrdinalIgnoreCase) -or
+            [string]::Equals([string](Get-JsonValue $runtime "audioStatus"), "fresh", [StringComparison]::OrdinalIgnoreCase) -or
+            (Test-Truthy (Get-JsonValue $runtime "audioFresh")))
+        $nr5DiagnosticsPresent = ($null -ne $nr5)
+        $nr5DiagnosticRun = Test-Truthy (Get-JsonValue $nr5 "run")
+        $nr5CaptureReadinessConstraints = New-Object System.Collections.Generic.List[string]
+        if (-not [string]::Equals($requestedNrMode, "Nr5", [StringComparison]::OrdinalIgnoreCase)) {
+            $nr5CaptureReadinessConstraints.Add("requested-nr-mode-not-nr5") | Out-Null
+        }
+        if (-not [string]::Equals($effectiveNrMode, "Nr5", [StringComparison]::OrdinalIgnoreCase)) {
+            $nr5CaptureReadinessConstraints.Add("effective-nr-mode-not-nr5") | Out-Null
+        }
+        if (-not $readyForNr5Tuning) {
+            $nr5CaptureReadinessConstraints.Add("nr5-tuning-not-ready") | Out-Null
+        }
+        if (-not $nr5DiagnosticsPresent) {
+            $nr5CaptureReadinessConstraints.Add("nr5-diagnostics-missing") | Out-Null
+        }
+        elseif (-not $nr5DiagnosticRun) {
+            $nr5CaptureReadinessConstraints.Add("nr5-diagnostics-not-running") | Out-Null
+        }
+        if (-not $runtimeFresh) {
+            $nr5CaptureReadinessConstraints.Add("runtime-audio-not-fresh") | Out-Null
+        }
+        $nr5CaptureReady = ($nr5CaptureReadinessConstraints.Count -eq 0)
+        $nr5CaptureReadinessStatus = if ($nr5CaptureReady) {
+            "ready"
+        }
+        elseif ($RequireNr5CaptureReady) {
+            "blocked"
+        }
+        else {
+            "advisory"
+        }
+
+        $capturePassbandQualified = (-not [bool]$RequireFrontendNearPassband) -or $frontendPassbandEvidenceQualified
+        $baseCaptureQualified = ($stableQualified -and ($sceneFresh -or $staleSceneCaptureAllowed) -and $snrQualified -and $profileMatches -and $capturePassbandQualified)
+        $captureQualified = ($baseCaptureQualified -and ((-not [bool]$RequireNr5CaptureReady) -or $nr5CaptureReady))
 
         $pollRecord = [ordered]@{
             poll = $poll
@@ -738,6 +920,10 @@ try {
             frontendSuggestedDialShiftHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedDialShiftHz")
             frontendSuggestedVfoHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoHz")
             frontendSuggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoMhz")
+            frontendSuggestedVfoStepHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoStepHz")
+            frontendExactSuggestedDialShiftHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "exactSuggestedDialShiftHz")
+            frontendExactSuggestedVfoHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "exactSuggestedVfoHz")
+            frontendExactSuggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "exactSuggestedVfoMhz")
             frontendSuggestedPeakOffsetHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "peakOffsetHz")
             frontendSuggestedPeakFrequencyHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "peakFrequencyHz")
             frontendSuggestedFilterCenterOffsetHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "filterCenterOffsetHz")
@@ -747,9 +933,13 @@ try {
             frontendFilterPassbandQualified = $frontendFilterPassbandQualified
             frontendPassbandEvidenceQualified = $frontendPassbandEvidenceQualified
             liveStatus = [string](Get-JsonValue $live "status")
-            requestedNrMode = [string](Get-JsonValue $live "requestedNrMode")
-            effectiveNrMode = [string](Get-JsonValue $live "effectiveNrMode")
-            readyForNr5Tuning = Test-Truthy (Get-JsonValue $live "readyForNr5Tuning")
+            requestedNrMode = $requestedNrMode
+            effectiveNrMode = $effectiveNrMode
+            readyForNr5Tuning = $readyForNr5Tuning
+            requireNr5CaptureReady = [bool]$RequireNr5CaptureReady
+            nr5CaptureReady = $nr5CaptureReady
+            nr5CaptureReadinessStatus = $nr5CaptureReadinessStatus
+            nr5CaptureReadinessConstraints = @($nr5CaptureReadinessConstraints.ToArray())
             audioStatus = [string](Get-JsonValue $runtime "audioStatus")
             audioRmsDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "audioRmsDbfs")
             audioPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "audioPeakDbfs")
@@ -771,9 +961,19 @@ try {
             nr5OutputDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "outputDbfs")
             nr5OutputPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "outputPeakDbfs")
             staleSceneCaptureAllowed = $staleSceneCaptureAllowed
+            baseCaptureQualified = $baseCaptureQualified
             captureQualified = $captureQualified
         }
         $polls.Add([pscustomobject]$pollRecord) | Out-Null
+
+        if (-not $JsonOnly) {
+            $pollVfoText = Format-MhzText -Hz $vfo -Mhz $null
+            $passbandText = if ($frontendPassbandEvidenceQualified) { "in-filter" } elseif ($frontendNearPassbandQualified) { "near" } else { "off" }
+            $nr5Text = if ($nr5CaptureReady) { "ready" } elseif ($nr5CaptureReadinessConstraints.Count -gt 0) { ($nr5CaptureReadinessConstraints.ToArray() -join ",") } else { $nr5CaptureReadinessStatus }
+            $captureText = if ($captureQualified) { "capture" } elseif ($baseCaptureQualified) { "wait-nr5" } else { "hold/scan" }
+            Write-Host ("Poll {0}/{1}: vfo={2}, stable={3}, snr={4}, profile={5}, passband={6}, nr5={7}, action={8}" -f `
+                    $poll, $PollCount, $pollVfoText, $stableCount, $coherentSnr, $profile, $passbandText, $nr5Text, $captureText)
+        }
 
         if ($captureQualified -and $captures.Count -lt $MaxCaptures) {
             $vfoKey = [string]$vfo
@@ -817,6 +1017,9 @@ try {
                 $watchReport = $watch.report
                 $weak = Get-JsonValue $watchReport "nr5WeakSignalWatch"
                 $agc = Get-JsonValue $watchReport "agcStabilityWatch"
+                $captureReadiness = Get-JsonValue $watchReport "captureReadinessWatch"
+                $comparisonState = Get-JsonValue $watchReport "comparisonStateReadiness"
+                $mixedFocus = Get-JsonValue $weak "mixedWeakStrongTuningFocus"
                 $serializedSummaryPath = ConvertTo-BundleRelativeEvidencePath -Path $summaryPath -BundlePath $bundlePath
                 $serializedJsonlPath = ConvertTo-BundleRelativeEvidencePath -Path $jsonlPath -BundlePath $bundlePath
                 $captureReady = Test-Truthy (Get-JsonValue $watchReport "readyForBenchmarkTrace")
@@ -863,6 +1066,10 @@ try {
                     frontendSuggestedDialShiftHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedDialShiftHz")
                     frontendSuggestedVfoHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoHz")
                     frontendSuggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoMhz")
+                    frontendSuggestedVfoStepHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoStepHz")
+                    frontendExactSuggestedDialShiftHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "exactSuggestedDialShiftHz")
+                    frontendExactSuggestedVfoHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "exactSuggestedVfoHz")
+                    frontendExactSuggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "exactSuggestedVfoMhz")
                     frontendSuggestedPeakOffsetHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "peakOffsetHz")
                     frontendSuggestedPeakFrequencyHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "peakFrequencyHz")
                     frontendSuggestedFilterCenterOffsetHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "filterCenterOffsetHz")
@@ -875,9 +1082,13 @@ try {
                         poll = $poll
                         generatedUtc = $pollUtc.ToString("o")
                         liveStatus = [string](Get-JsonValue $live "status")
-                        requestedNrMode = [string](Get-JsonValue $live "requestedNrMode")
-                        effectiveNrMode = [string](Get-JsonValue $live "effectiveNrMode")
-                        readyForNr5Tuning = Test-Truthy (Get-JsonValue $live "readyForNr5Tuning")
+                        requestedNrMode = $requestedNrMode
+                        effectiveNrMode = $effectiveNrMode
+                        readyForNr5Tuning = $readyForNr5Tuning
+                        requireNr5CaptureReady = [bool]$RequireNr5CaptureReady
+                        nr5CaptureReady = $nr5CaptureReady
+                        nr5CaptureReadinessStatus = $nr5CaptureReadinessStatus
+                        nr5CaptureReadinessConstraints = @($nr5CaptureReadinessConstraints.ToArray())
                         signalProfile = $profile
                         coherentMaxSnrDb = $coherentSnr
                         frontendNearPassbandTopPeakCount = $frontendNearPassbandTopPeakCount
@@ -901,6 +1112,10 @@ try {
                         frontendSuggestedDialShiftHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedDialShiftHz")
                         frontendSuggestedVfoHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoHz")
                         frontendSuggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoMhz")
+                        frontendSuggestedVfoStepHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "suggestedVfoStepHz")
+                        frontendExactSuggestedDialShiftHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "exactSuggestedDialShiftHz")
+                        frontendExactSuggestedVfoHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "exactSuggestedVfoHz")
+                        frontendExactSuggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "exactSuggestedVfoMhz")
                         frontendSuggestedPeakOffsetHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "peakOffsetHz")
                         frontendSuggestedPeakFrequencyHz = Get-NullableLongValue (Get-JsonValue $frontendBestTuningHint "peakFrequencyHz")
                         frontendSuggestedFilterCenterOffsetHz = Get-NullableDoubleValue (Get-JsonValue $frontendBestTuningHint "filterCenterOffsetHz")
@@ -931,6 +1146,18 @@ try {
                     jsonlPath = $serializedJsonlPath
                     readyForBenchmarkTrace = $captureReady
                     trendStatus = [string](Get-JsonValue $watchReport "trendStatus")
+                    nr5TuningTraceStatus = [string](Get-JsonValue $watchReport "nr5TuningTraceStatus")
+                    nr5TuningReadySampleCount = Get-IntValue (Get-JsonValue $watchReport "nr5TuningReadySampleCount")
+                    captureReadinessStatus = [string](Get-JsonValue $captureReadiness "status")
+                    captureReadinessHardGatePass = Test-Truthy (Get-JsonValue $captureReadiness "hardGatePass")
+                    captureReadinessStrictPreflightPass = Test-Truthy (Get-JsonValue $captureReadiness "strictPreflightPass")
+                    captureReadinessTopConstraint = Get-JsonValue $captureReadiness "topConstraint"
+                    captureReadinessTopHardConstraint = Get-JsonValue $captureReadiness "topHardConstraint"
+                    captureReadinessWatch = $captureReadiness
+                    comparisonStateReady = Test-Truthy (Get-JsonValue $comparisonState "ready")
+                    comparisonStateStatus = [string](Get-JsonValue $comparisonState "status")
+                    comparisonStateNextAction = [string](Get-JsonValue $comparisonState "nextAction")
+                    comparisonStateReadiness = $comparisonState
                     weakInputSampleCount = Get-IntValue (Get-JsonValue $weak "weakInputSampleCount")
                     strongInputThresholdDbfs = Get-NullableDoubleValue (Get-JsonValue $weak "strongInputThresholdDbfs")
                     strongInputSampleCount = Get-IntValue (Get-JsonValue $weak "strongInputSampleCount")
@@ -946,8 +1173,15 @@ try {
                     passbandQualifiedStrongInputSampleCount = Get-IntValue (Get-JsonValue $weak "passbandQualifiedStrongInputSampleCount")
                     passbandQualifiedNearStrongInputSampleCount = Get-IntValue (Get-JsonValue $weak "passbandQualifiedNearStrongInputSampleCount")
                     topNearStrongInputs = @(Get-JsonArray $weak "topNearStrongInputs")
+                    mixedWeakStrongTuningFocus = $mixedFocus
+                    mixedWeakStrongTuningStatus = [string](Get-JsonValue $mixedFocus "status")
+                    mixedWeakStrongTuningAction = [string](Get-JsonValue $mixedFocus "preferredAction")
+                    mixedWeakStrongOutputGapDirection = [string](Get-JsonValue $mixedFocus "outputGapDirection")
+                    mixedWeakStrongOutputGapExcessDb = Get-NullableDoubleValue (Get-JsonValue $mixedFocus "outputGapExcessDb")
+                    mixedWeakStrongFinalAudioGapDirection = [string](Get-JsonValue $mixedFocus "finalAudioGapDirection")
+                    mixedWeakStrongFinalAudioGapExcessDb = Get-NullableDoubleValue (Get-JsonValue $mixedFocus "finalAudioGapExcessDb")
                     agcStabilityStatus = [string](Get-JsonValue $agc "status")
-                    agcPumpingRisk = Test-Truthy (Get-JsonValue $agc "agcPumpingRisk")
+                    agcPumpingRisk = (Test-Truthy (Get-JsonValue $agc "pumpingRisk")) -or (Test-Truthy (Get-JsonValue $agc "agcPumpingRisk"))
                 }) | Out-Null
 
                 $vfoRecord["count"] = $vfoCaptureIndex
@@ -987,6 +1221,10 @@ $readyCaptureCount = 0
 $mixedReadyCount = 0
 $pumpingRiskCount = 0
 $staleSceneCaptureCount = 0
+$baseCaptureQualifiedPollCount = 0
+$nr5CaptureReadyPollCount = 0
+$nr5CaptureBlockedPollCount = 0
+$nr5CaptureAdvisoryPollCount = 0
 $mixedWeakStrongStatusCounts = @{}
 $missingStrongInputCaptureCount = 0
 $missingWeakInputCaptureCount = 0
@@ -1154,6 +1392,18 @@ foreach ($pollRecord in $pollArray) {
     if (Test-Truthy $pollRecord.captureQualified) {
         $captureQualifiedPollCount++
     }
+    if (Test-Truthy $pollRecord.baseCaptureQualified) {
+        $baseCaptureQualifiedPollCount++
+    }
+    if (Test-Truthy $pollRecord.nr5CaptureReady) {
+        $nr5CaptureReadyPollCount++
+    }
+    elseif ([string]::Equals([string]$pollRecord.nr5CaptureReadinessStatus, "blocked", [StringComparison]::OrdinalIgnoreCase)) {
+        $nr5CaptureBlockedPollCount++
+    }
+    elseif ([string]::Equals([string]$pollRecord.nr5CaptureReadinessStatus, "advisory", [StringComparison]::OrdinalIgnoreCase)) {
+        $nr5CaptureAdvisoryPollCount++
+    }
 
     $pollTuningHint = Get-JsonValue $pollRecord "frontendTuningHint"
     if ($null -ne $pollTuningHint) {
@@ -1199,6 +1449,10 @@ foreach ($pollRecord in $pollArray) {
                 frontendSuggestedDialShiftHz = $null
                 frontendSuggestedVfoHz = $null
                 frontendSuggestedVfoMhz = $null
+                frontendSuggestedVfoStepHz = $null
+                frontendExactSuggestedDialShiftHz = $null
+                frontendExactSuggestedVfoHz = $null
+                frontendExactSuggestedVfoMhz = $null
                 frontendSuggestedTuneReason = ""
                 frontendSuggestedFilterDistanceHz = $null
                 status = "observed"
@@ -1265,6 +1519,10 @@ foreach ($pollRecord in $pollArray) {
                 $observed["frontendSuggestedDialShiftHz"] = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "suggestedDialShiftHz")
                 $observed["frontendSuggestedVfoHz"] = Get-NullableLongValue (Get-JsonValue $pollTuningHint "suggestedVfoHz")
                 $observed["frontendSuggestedVfoMhz"] = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "suggestedVfoMhz")
+                $observed["frontendSuggestedVfoStepHz"] = Get-NullableLongValue (Get-JsonValue $pollTuningHint "suggestedVfoStepHz")
+                $observed["frontendExactSuggestedDialShiftHz"] = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "exactSuggestedDialShiftHz")
+                $observed["frontendExactSuggestedVfoHz"] = Get-NullableLongValue (Get-JsonValue $pollTuningHint "exactSuggestedVfoHz")
+                $observed["frontendExactSuggestedVfoMhz"] = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "exactSuggestedVfoMhz")
                 $observed["frontendSuggestedTuneReason"] = [string](Get-JsonValue $pollTuningHint "reason")
                 $observed["frontendSuggestedFilterDistanceHz"] = Get-NullableDoubleValue (Get-JsonValue $pollTuningHint "filterDistanceHz")
             }
@@ -1380,6 +1638,9 @@ if ($captureArray.Count -le 0) {
     if ($RequireFrontendNearPassband -and $frontendOffsetMismatchPollCount -gt 0) {
         $recommendations.Add("Some frontend peak offsets disagreed with frequencyHz minus VFO beyond $FrontendOffsetMismatchToleranceHz Hz; strict passband capture ignored those inconsistent peaks.") | Out-Null
     }
+    if ($RequireNr5CaptureReady -and $baseCaptureQualifiedPollCount -gt 0 -and $captureQualifiedPollCount -le 0) {
+        $recommendations.Add("Stable voice-like passband polls were present but NR5 capture readiness was blocked; wait for requested/effective NR5 alignment and complete NR5 diagnostics before spending child capture slots.") | Out-Null
+    }
     if ($staleScenePollCount -gt 0 -and -not $AllowStaleSceneCapture) {
         $recommendations.Add("Frontend DSP scene evidence was stale during $staleScenePollCount poll(s); open the frontend scene publisher or rerun with -AllowStaleSceneCapture for scouting-only child diagnostics.") | Out-Null
     }
@@ -1462,8 +1723,172 @@ else {
     $null
 }
 
+$bestMixedReadyCapture = @($captureArray | Where-Object {
+        Test-Truthy (Get-JsonValue $_ "mixedWeakStrongEvidenceReady")
+    } | Select-Object -First 1)
+$observerCommandTemplate = New-ManualTuneObserverCommandTemplate -Samples ([Math]::Max(32, $CaptureSamples)) -MaxPerVfo ([Math]::Max(2, $MaxCapturesPerVfo))
+$primaryManualTuneAction = $null
+if ($bestMixedReadyCapture.Count -gt 0) {
+    $mixedVfoHz = Get-NullableLongValue (Get-JsonValue $bestMixedReadyCapture[0] "vfoHz")
+    $mixedVfoMhz = if ($null -ne $mixedVfoHz) { [Math]::Round([double]$mixedVfoHz / 1000000.0, 6) } else { $null }
+    $mixedVfoText = Format-MhzText -Hz $mixedVfoHz -Mhz $mixedVfoMhz
+    $primaryManualTuneAction = New-ManualTuneAction `
+        -ActionId "promote-manual-observer-mixed-weak-strong-capture" `
+        -Status "mixed-ready" `
+        -Priority 1 `
+        -Summary "Mixed weak+strong evidence was captured at $mixedVfoText; promote this watcher window into live history before tuning DSP behavior." `
+        -ManualAction "Keep DSP defaults unchanged; promote the captured watcher report into live history and compare current-Zeus/Thetis windows before any opt-in NR5/SPNR tuning." `
+        -FollowUp "Run summarize-dsp-live-diagnostics-history.ps1, strict validation, and live trace comparisons against current-Zeus/Thetis evidence." `
+        -VfoHz $mixedVfoHz `
+        -VfoMhz $mixedVfoMhz `
+        -ReportPathValue ([string](Get-JsonValue $bestMixedReadyCapture[0] "reportPath")) `
+        -JsonlPathValue ([string](Get-JsonValue $bestMixedReadyCapture[0] "jsonlPath")) `
+        -WeakInputSampleCount (Get-IntValue (Get-JsonValue $bestMixedReadyCapture[0] "weakInputSampleCount")) `
+        -StrongInputSampleCount (Get-IntValue (Get-JsonValue $bestMixedReadyCapture[0] "strongInputSampleCount")) `
+        -NearStrongInputSampleCount (Get-IntValue (Get-JsonValue $bestMixedReadyCapture[0] "nearStrongInputSampleCount")) `
+        -ExpectedEvidence "liveDiagnosticsHistoryMixedWeakStrongEvidenceReady=true plus current-Zeus/Thetis comparison evidence"
+}
+elseif ($null -ne $bestNearStrongPromotionCandidateCapture) {
+    $candidateVfoText = Format-MhzText -Hz $bestNearStrongPromotionCandidateVfoHz -Mhz $bestNearStrongPromotionCandidateVfoMhz
+    $distanceText = if ($null -ne $bestNearStrongPromotionCandidateDistanceToStrongThresholdDb) {
+        "{0:N1} dB below strong threshold" -f [double]$bestNearStrongPromotionCandidateDistanceToStrongThresholdDb
+    }
+    else {
+        "near the strong threshold"
+    }
+    $primaryManualTuneAction = New-ManualTuneAction `
+        -ActionId "recapture-manual-observer-near-strong-vfo" `
+        -Status "near-strong-weak-only" `
+        -Priority 2 `
+        -Summary "Hold or return to $candidateVfoText and recapture; the best weak-only window already had near-strong speech ($distanceText)." `
+        -ManualAction "Stay manually tuned near $candidateVfoText and wait for the next active speech burst; do not use retune/VFO-writing tools for this observer pass." `
+        -CommandTemplate $observerCommandTemplate `
+        -FollowUp "Promote only if strongInputSampleCount becomes non-zero and AGC pumping remains false." `
+        -VfoHz $bestNearStrongPromotionCandidateVfoHz `
+        -VfoMhz $bestNearStrongPromotionCandidateVfoMhz `
+        -ReportPathValue ([string](Get-JsonValue $bestNearStrongPromotionCandidateCapture "reportPath")) `
+        -JsonlPathValue ([string](Get-JsonValue $bestNearStrongPromotionCandidateCapture "jsonlPath")) `
+        -DistanceToStrongThresholdDb $bestNearStrongPromotionCandidateDistanceToStrongThresholdDb `
+        -WeakInputSampleCount (Get-IntValue (Get-JsonValue $bestNearStrongPromotionCandidateCapture "weakInputSampleCount")) `
+        -StrongInputSampleCount (Get-IntValue (Get-JsonValue $bestNearStrongPromotionCandidateCapture "strongInputSampleCount")) `
+        -NearStrongInputSampleCount (Get-IntValue (Get-JsonValue $bestNearStrongPromotionCandidateCapture "nearStrongInputSampleCount")) `
+        -ExpectedEvidence "same-VFO recapture with weakInputSampleCount>0 and strongInputSampleCount>0"
+}
+elseif ($null -ne $bestWeakOnlyCapture) {
+    $bestWeakVfoText = Format-MhzText -Hz $bestWeakOnlyCaptureVfoHz -Mhz $bestWeakOnlyCaptureVfoMhz
+    $primaryManualTuneAction = New-ManualTuneAction `
+        -ActionId "recapture-manual-observer-weak-only-vfo" `
+        -Status "weak-only" `
+        -Priority 3 `
+        -Summary "Best capture at $bestWeakVfoText is weak-only; keep collecting that VFO until a strict strong-input speech sample appears." `
+        -ManualAction "Stay manually tuned near $bestWeakVfoText during active speech and recapture with bounded same-VFO retries." `
+        -CommandTemplate $observerCommandTemplate `
+        -FollowUp "If the window remains weak-only after recapture, continue manual scanning instead of treating it as mixed evidence." `
+        -VfoHz $bestWeakOnlyCaptureVfoHz `
+        -VfoMhz $bestWeakOnlyCaptureVfoMhz `
+        -ReportPathValue ([string](Get-JsonValue $bestWeakOnlyCapture "reportPath")) `
+        -JsonlPathValue ([string](Get-JsonValue $bestWeakOnlyCapture "jsonlPath")) `
+        -WeakInputSampleCount (Get-IntValue (Get-JsonValue $bestWeakOnlyCapture "weakInputSampleCount")) `
+        -StrongInputSampleCount (Get-IntValue (Get-JsonValue $bestWeakOnlyCapture "strongInputSampleCount")) `
+        -NearStrongInputSampleCount (Get-IntValue (Get-JsonValue $bestWeakOnlyCapture "nearStrongInputSampleCount")) `
+        -ExpectedEvidence "strongInputSampleCount>0 in a ready watcher capture"
+}
+elseif ($MaxCaptures -le 0 -and $captureQualifiedPollCount -gt 0 -and $null -ne $bestObservedVfo) {
+    $observedVfoHz = Get-NullableLongValue (Get-JsonValue $bestObservedVfo "vfoHz")
+    $observedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "vfoMhz")
+    $observedText = Format-MhzText -Hz $observedVfoHz -Mhz $observedVfoMhz
+    $primaryManualTuneAction = New-ManualTuneAction `
+        -ActionId "enable-manual-observer-capture" `
+        -Status "capture-disabled" `
+        -Priority 4 `
+        -Summary "The current manual-tune VFO at $observedText is capture-qualified, but child diagnostics are disabled by -MaxCaptures 0." `
+        -ManualAction "Keep the G2 tuned near $observedText and rerun the observer with capture enabled." `
+        -CommandTemplate $observerCommandTemplate `
+        -FollowUp "Promote only after the child watcher produces ready mixed weak+strong NR5/SPNR evidence." `
+        -VfoHz $observedVfoHz `
+        -VfoMhz $observedVfoMhz `
+        -WeakInputSampleCount 0 `
+        -StrongInputSampleCount 0 `
+        -NearStrongInputSampleCount 0 `
+        -ExpectedEvidence "captureCount>0 and mixedWeakStrongEvidenceReady=true"
+}
+elseif ([bool]$RequireNr5CaptureReady -and $baseCaptureQualifiedPollCount -gt 0 -and $captureQualifiedPollCount -le 0) {
+    $observedVfoHz = Get-NullableLongValue (Get-JsonValue $bestObservedVfo "vfoHz")
+    $observedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "vfoMhz")
+    $observedText = Format-MhzText -Hz $observedVfoHz -Mhz $observedVfoMhz
+    $primaryManualTuneAction = New-ManualTuneAction `
+        -ActionId "wait-for-nr5-capture-readiness" `
+        -Status "nr5-capture-readiness-blocked" `
+        -Priority 4 `
+        -Summary "The manual-tune window at $observedText was otherwise capture-qualified, but NR5/SPNR readiness blocked child capture." `
+        -ManualAction "Hold the signal if it is still active, reassert NR5/SPNR if needed, and wait until requested/effective NR mode and NR5 diagnostics are ready before recapturing." `
+        -CommandTemplate $observerCommandTemplate `
+        -FollowUp "Rerun the observer with -RequireNr5CaptureReady; child captures should start only after nr5CaptureReady=true." `
+        -VfoHz $observedVfoHz `
+        -VfoMhz $observedVfoMhz `
+        -WeakInputSampleCount 0 `
+        -StrongInputSampleCount 0 `
+        -NearStrongInputSampleCount 0 `
+        -ExpectedEvidence "nr5CaptureReady=true and ready watcher capture with mixed weak+strong evidence"
+}
+elseif ($null -ne $bestObservedVfo -and $null -ne (Get-NullableLongValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoHz"))) {
+    $observedVfoHz = Get-NullableLongValue (Get-JsonValue $bestObservedVfo "vfoHz")
+    $observedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "vfoMhz")
+    $suggestedVfoHz = Get-NullableLongValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoHz")
+    $suggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoMhz")
+    $exactSuggestedVfoHz = Get-NullableLongValue (Get-JsonValue $bestObservedVfo "frontendExactSuggestedVfoHz")
+    $exactSuggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "frontendExactSuggestedVfoMhz")
+    $suggestedText = Format-MhzText -Hz $suggestedVfoHz -Mhz $suggestedVfoMhz
+    $primaryManualTuneAction = New-ManualTuneAction `
+        -ActionId "manual-tune-to-frontend-suggestion" `
+        -Status "tuning-hint" `
+        -Priority 4 `
+        -Summary "Manually tune toward $suggestedText so the strongest frontend peak lands inside the active RX filter." `
+        -ManualAction "Tune G2 near $suggestedText, then rerun the observer with capture enabled and frontend passband required." `
+        -CommandTemplate $observerCommandTemplate `
+        -FollowUp "Capture is still scouting evidence until a ready watcher window has weak and strong NR5/SPNR samples." `
+        -VfoHz $observedVfoHz `
+        -VfoMhz $observedVfoMhz `
+        -SuggestedVfoHz $suggestedVfoHz `
+        -SuggestedVfoMhz $suggestedVfoMhz `
+        -SuggestedDialShiftHz (Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "frontendSuggestedDialShiftHz")) `
+        -ExactSuggestedVfoHz $exactSuggestedVfoHz `
+        -ExactSuggestedVfoMhz $exactSuggestedVfoMhz `
+        -ExactSuggestedDialShiftHz (Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "frontendExactSuggestedDialShiftHz")) `
+        -SuggestedVfoStepHzValue (Get-NullableLongValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoStepHz")) `
+        -SuggestedTuneReason ([string](Get-JsonValue $bestObservedVfo "frontendSuggestedTuneReason")) `
+        -ExpectedEvidence "captureQualifiedPollCount>0 followed by a ready mixed weak+strong watcher capture"
+}
+elseif ($null -ne $bestObservedVfo) {
+    $observedVfoHz = Get-NullableLongValue (Get-JsonValue $bestObservedVfo "vfoHz")
+    $observedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "vfoMhz")
+    $observedText = Format-MhzText -Hz $observedVfoHz -Mhz $observedVfoMhz
+    $primaryManualTuneAction = New-ManualTuneAction `
+        -ActionId "hold-manual-observed-vfo" `
+        -Status ([string](Get-JsonValue $bestObservedVfo "status")) `
+        -Priority 5 `
+        -Summary "Hold $observedText and keep collecting; this was the best observed manual-tune VFO but no mixed capture was produced." `
+        -ManualAction "Stay near $observedText while the signal is active, then rerun the observer with capture enabled." `
+        -CommandTemplate $observerCommandTemplate `
+        -FollowUp "Do not promote this scouting state until watcher captures are ready and mixed weak+strong evidence is present." `
+        -VfoHz $observedVfoHz `
+        -VfoMhz $observedVfoMhz `
+        -ExpectedEvidence "ready watcher capture with mixedWeakStrongEvidenceReady=true"
+}
+else {
+    $primaryManualTuneAction = New-ManualTuneAction `
+        -ActionId "continue-manual-scan" `
+        -Status "no-stable-window" `
+        -Priority 6 `
+        -Summary "No stable manual-tune VFO produced a useful capture or tuning hint; keep scanning active SSB windows." `
+        -ManualAction "Continue manual tuning across active 20m phone windows and rerun the observer when speech-like peaks are visible in the passband." `
+        -CommandTemplate $observerCommandTemplate `
+        -FollowUp "Lower MinCoherentSnrDb only for scouting; acceptance captures still need ready mixed weak+strong evidence." `
+        -ExpectedEvidence "captureQualifiedPollCount>0 and mixedWeakStrongEvidenceReady=true"
+}
+
 $report = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     tool = "watch-dsp-manual-tune-observer"
     generatedUtc = $completedUtc.ToString("o")
     startedUtc = $startedUtc.ToString("o")
@@ -1512,6 +1937,10 @@ $report = [ordered]@{
     bestObservedVfoSuggestedVfoHz = Get-NullableLongValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoHz")
     bestObservedVfoSuggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoMhz")
     bestObservedVfoSuggestedDialShiftHz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "frontendSuggestedDialShiftHz")
+    bestObservedVfoSuggestedVfoStepHz = Get-NullableLongValue (Get-JsonValue $bestObservedVfo "frontendSuggestedVfoStepHz")
+    bestObservedVfoExactSuggestedVfoHz = Get-NullableLongValue (Get-JsonValue $bestObservedVfo "frontendExactSuggestedVfoHz")
+    bestObservedVfoExactSuggestedVfoMhz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "frontendExactSuggestedVfoMhz")
+    bestObservedVfoExactSuggestedDialShiftHz = Get-NullableDoubleValue (Get-JsonValue $bestObservedVfo "frontendExactSuggestedDialShiftHz")
     bestObservedVfoSuggestedTuneReason = [string](Get-JsonValue $bestObservedVfo "frontendSuggestedTuneReason")
     captureCount = $captureArray.Count
     uniqueCapturedVfoCount = $uniqueCapturedVfoCount
@@ -1525,6 +1954,12 @@ $report = [ordered]@{
     frontendOffsetMismatchPollCount = $frontendOffsetMismatchPollCount
     frontendTuningHintPollCount = $frontendTuningHintPollCount
     frontendBestTuningHint = $frontendBestTuningHint
+    suggestedVfoStepHz = $SuggestedVfoStepHz
+    requireNr5CaptureReady = [bool]$RequireNr5CaptureReady
+    baseCaptureQualifiedPollCount = $baseCaptureQualifiedPollCount
+    nr5CaptureReadyPollCount = $nr5CaptureReadyPollCount
+    nr5CaptureBlockedPollCount = $nr5CaptureBlockedPollCount
+    nr5CaptureAdvisoryPollCount = $nr5CaptureAdvisoryPollCount
     captureQualifiedPollCount = $captureQualifiedPollCount
     triggerAudioActivePollCount = $triggerAudioActivePollCount
     triggerMaxAudioRmsDbfs = $triggerMaxAudioRmsDbfs
@@ -1569,6 +2004,13 @@ $report = [ordered]@{
     passbandQualifiedWeakInputSampleCount = $passbandWeakTotal
     passbandQualifiedStrongInputSampleCount = $passbandStrongTotal
     agcPumpingRiskCaptureCount = $pumpingRiskCount
+    primaryManualTuneAction = $primaryManualTuneAction
+    primaryManualTuneActionId = [string](Get-JsonValue $primaryManualTuneAction "actionId")
+    primaryManualTuneActionStatus = [string](Get-JsonValue $primaryManualTuneAction "status")
+    primaryManualTuneActionSummary = [string](Get-JsonValue $primaryManualTuneAction "summary")
+    primaryManualTuneActionManualAction = [string](Get-JsonValue $primaryManualTuneAction "manualAction")
+    primaryManualTuneActionCommandTemplate = [string](Get-JsonValue $primaryManualTuneAction "commandTemplate")
+    primaryManualTuneActionExpectedEvidence = [string](Get-JsonValue $primaryManualTuneAction "expectedEvidence")
     captures = @($captureArray)
     polls = @($pollArray)
     recommendations = @($recommendations.ToArray())
@@ -1582,6 +2024,13 @@ if ($JsonOnly) {
 else {
     Write-Host "Manual-tune observer report: $ReportPath"
     Write-Host "Captures: $($captureArray.Count), mixed weak+strong ready: $($report.mixedWeakStrongReady), weak samples: $weakTotal, strong samples: $strongTotal, near-strong samples: $nearStrongTotal"
+    Write-Host "Primary action: $($report.primaryManualTuneActionId) - $($report.primaryManualTuneActionSummary)"
+    if (-not [string]::IsNullOrWhiteSpace($report.primaryManualTuneActionManualAction)) {
+        Write-Host "Manual action: $($report.primaryManualTuneActionManualAction)"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($report.primaryManualTuneActionCommandTemplate)) {
+        Write-Host "Next observer command: $($report.primaryManualTuneActionCommandTemplate)"
+    }
 }
 
 if (-not [string]::IsNullOrWhiteSpace($scanError) -and -not $ContinueOnError) {

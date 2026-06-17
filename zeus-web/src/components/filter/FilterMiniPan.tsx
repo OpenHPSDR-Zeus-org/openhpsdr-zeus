@@ -38,12 +38,7 @@
 // main panadapter's GL context.
 
 import { useEffect, useRef, useState } from 'react';
-import {
-  registerFrameConsumer,
-  selectDisplaySlice,
-  useDisplayStore,
-  type SpectrumReceiver,
-} from '../../state/display-store';
+import { registerFrameConsumer, useDisplayStore } from '../../state/display-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { useThemeStore } from '../../state/theme-store';
 import { useDisplaySettingsStore } from '../../state/display-settings-store';
@@ -57,7 +52,7 @@ import {
 } from '../../dsp/signal-estimator';
 import { setFilter } from '../../api/client';
 import { formatCutOffset, formatFilterWidth, nudgeStepHz } from './filterPresets';
-import type { Rx2AudioMode, RxMode, TxVfo } from '../../api/client';
+import type { RxMode } from '../../api/client';
 
 const DEFAULT_SPAN_HZ = 12_000;       // initial visible window around VFO
 const MIN_SPAN_HZ = 3_000;            // Ctrl+wheel zoom-in floor
@@ -88,8 +83,8 @@ const PEAK_PIN_MIN_CONFIDENCE = 0.42;
 const MEASUREMENT_PEAK_HOLD_MS = 1000; // hold prominent-frequency readouts for operator readability
 const EQ_METER_BANDS = 32;             // max bottom parametric-EQ blocks inside the passband
 const EQ_METER_AVG_MS = 5000;          // each EQ band shows a 5-second level average
-const MINI_TRACE_RANGE_DB = 34;        // visual SNR span: keeps quiet noise from filling the mini-pan
-const MINI_NOISE_GATE_DB = 4.5;        // dB above local floor before energy starts rising visibly
+const MINI_TRACE_RANGE_DB = 20;        // visual SNR span above the noise knee
+const MINI_NOISE_GATE_DB = 3.5;        // soft knee above local floor; keeps noise faint, not invisible
 const PEAKHOLD_DECAY_PX = 0.45;       // peak-hold envelope fall rate (px/frame ≈ 13 px/s)
 const FIT_HIT_PX = 26;                // click-to-fit grab radius around a carrier
 const FIT_MARGIN_HZ = 120;            // breathing room added each side when fitting
@@ -234,9 +229,9 @@ function visibleSpectrumStats(
   if (sample.length === 0) return null;
   sample.sort((a, b) => a - b);
   return {
-    floorDb: quantileSorted(sample, 0.22),
-    noiseTopDb: quantileSorted(sample, 0.82),
-    peakDb: quantileSorted(sample, 0.985),
+    floorDb: quantileSorted(sample, 0.28),
+    noiseTopDb: quantileSorted(sample, 0.62),
+    peakDb: quantileSorted(sample, 0.995),
   };
 }
 
@@ -246,9 +241,14 @@ export function miniPanSignalLevel(
   noiseGateDb = MINI_NOISE_GATE_DB,
   rangeDb = MINI_TRACE_RANGE_DB,
 ): number {
-  const snr = Math.max(0, db - floorDb - Math.max(0, noiseGateDb));
-  const norm = Math.max(0, Math.min(1, snr / Math.max(1, rangeDb)));
-  return norm ** 0.82;
+  const snr = db - floorDb;
+  if (snr <= 0) return 0;
+  const gate = Math.max(0.5, noiseGateDb);
+  if (snr < gate) {
+    return 0.055 * (snr / gate) ** 1.8;
+  }
+  const raw = (snr - Math.max(0, noiseGateDb)) / Math.max(1, rangeDb);
+  return Math.min(1, raw) ** 0.70;
 }
 
 function passbandCenterOffsetHz(lowHz: number, highHz: number): number {
@@ -439,32 +439,7 @@ function formatEqPeakOffset(hz: number): string {
   return `${sign}${abs}`;
 }
 
-function receiverVfoHz(
-  c: { vfoHz: number; vfoBHz: number },
-  receiver: SpectrumReceiver,
-): number {
-  return receiver === 'B' ? Number(c.vfoBHz) : Number(c.vfoHz);
-}
-
-export function filterMiniPanReceivers(
-  rx2Enabled: boolean,
-  rx2AudioMode: Rx2AudioMode,
-  rxFocus: TxVfo,
-): SpectrumReceiver[] {
-  if (!rx2Enabled) return ['A'];
-  if (rx2AudioMode === 'both') return ['A', 'B'];
-  return [rxFocus];
-}
-
-function FilterMiniPanSurface({
-  receiver = 'A',
-  split = false,
-  showReceiverLabel = false,
-}: {
-  receiver?: SpectrumReceiver;
-  split?: boolean;
-  showReceiverLabel?: boolean;
-}) {
+export function FilterMiniPan() {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // Visible span lives in a ref (read by the imperative draw loop) plus a state
   // mirror so the width pill / React tree re-render on zoom.
@@ -513,9 +488,7 @@ function FilterMiniPanSurface({
     // Keep the floor estimator live while this panel is open so the signal-aware
     // features (heat trace, bandwidth brackets, fit-to-signal) work without the
     // operator first toggling global Pop/Snap.
-    const releaseEstimator = receiver === 'A'
-      ? registerEstimatorConsumer()
-      : () => {};
+    const releaseEstimator = registerEstimatorConsumer();
 
     let rafHandle = 0;
     let lastSeq: number | null = null;
@@ -542,7 +515,7 @@ function FilterMiniPanSurface({
     const draw = () => {
       rafHandle = 0;
       const now = performance.now();
-      const d = selectDisplaySlice(useDisplayStore.getState(), receiver);
+      const d = useDisplayStore.getState();
       const c = useConnectionStore.getState();
       if (lastSeq !== null && d.lastSeq === lastSeq) return;
       lastSeq = d.lastSeq;
@@ -582,10 +555,7 @@ function FilterMiniPanSurface({
       const ink1 = (a: number) => `rgba(${fg1r}, ${fg1g}, ${fg1b}, ${a})`;
       const ink3 = (a: number) => `rgba(${fg3r}, ${fg3g}, ${fg3b}, ${a})`;
       // Accent drives the active-filter passband (focus/state token, CLAUDE.md).
-      const accentToken = receiver === 'B'
-        ? cs.getPropertyValue('--signal') || '#25d366'
-        : cs.getPropertyValue('--accent') || '#4a9eff';
-      const [ar, ag, ab] = parseRgb(accentToken);
+      const [ar, ag, ab] = parseRgb(cs.getPropertyValue('--accent') || '#4a9eff');
       const accent = (a: number) => `rgba(${ar}, ${ag}, ${ab}, ${a})`;
       const eqBlue = (a: number) => `rgba(34, 204, 255, ${Math.max(0, Math.min(1, a))})`;
 
@@ -593,7 +563,7 @@ function FilterMiniPanSurface({
       // is maintained whenever the panel is open (not only when global Pop/Snap
       // are on) — the heat trace, brackets and fit-to-signal all read it.
       const enh = useSignalEnhanceStore.getState();
-      const floor = receiver === 'A' ? getNoiseFloor() : null;
+      const floor = getNoiseFloor();
       const signalColor = useDisplaySettingsStore.getState().rxTraceColor;
       const [sr, sg, sb] = parseRgb(signalColor || '#FFA028');
       const signal = (a: number) => `rgba(${sr}, ${sg}, ${sb}, ${a})`;
@@ -645,7 +615,7 @@ function FilterMiniPanSurface({
       }
       ctx.restore();
 
-      const vfo = receiverVfoHz(c, receiver);
+      const vfo = Number(c.vfoHz);
       if (d.panDb && d.hzPerPixel > 0) {
         heldPanDb = d.panDb;
         heldCenterHz = Number(d.centerHz);
@@ -709,16 +679,14 @@ function FilterMiniPanSurface({
       };
       const visibleStats = panDb && bins > 0 ? visibleSpectrumStats(panDb, binStart, binEnd) : null;
 
-      // Dynamic visual floor (non-Pop): use robust visible-window quantiles so
-      // random no-signal peaks do not become the top of the display. The trace
-      // below is rendered as gated SNR above this local floor, which keeps the
-      // baseline calm while real carriers still lift clearly.
+      // Dynamic visual floor (non-Pop): derive the floor from robust quantiles,
+      // not raw min/max. Raw auto-range made a quiet band look busy because the
+      // highest random noise ridges became "full scale".
       if (visibleStats && !popOn) {
+        const noiseSpanDb = Math.max(0, visibleStats.noiseTopDb - visibleStats.floorDb);
+        const gateDb = Math.max(MINI_NOISE_GATE_DB, Math.min(7, noiseSpanDb + 1.5));
         const targetLo = visibleStats.floorDb;
-        const targetHi = Math.max(
-          visibleStats.peakDb + 6,
-          visibleStats.floorDb + MINI_TRACE_RANGE_DB,
-        );
+        const targetHi = Math.max(visibleStats.peakDb + 3, visibleStats.floorDb + gateDb + MINI_TRACE_RANGE_DB);
         autoLoDb = Number.isNaN(autoLoDb) ? targetLo : autoLoDb + 0.15 * (targetLo - autoLoDb);
         autoHiDb = Number.isNaN(autoHiDb) ? targetHi : autoHiDb + 0.15 * (targetHi - autoHiDb);
       }
@@ -726,8 +694,7 @@ function FilterMiniPanSurface({
       const hiDb = Number.isNaN(autoHiDb) ? DB_CEIL : autoHiDb;
       const dbSpan = hiDb - loDb > 1 ? hiDb - loDb : 1;
       const noiseSpanDb = visibleStats ? Math.max(0, visibleStats.noiseTopDb - visibleStats.floorDb) : 0;
-      const noiseGateDb = Math.max(MINI_NOISE_GATE_DB, Math.min(10, noiseSpanDb + 1.5));
-      const signalRangeDb = Math.max(MINI_TRACE_RANGE_DB, dbSpan);
+      const noiseGateDb = Math.max(MINI_NOISE_GATE_DB, Math.min(7, noiseSpanDb + 1.5));
 
       // Map a dB (auto-ranged) or, in Pop mode, an SNR value to a plot Y.
       const dbToY = (v: number) => {
@@ -735,7 +702,7 @@ function FilterMiniPanSurface({
         return plotTop + plotH - Math.max(0, Math.min(1, norm)) * plotH;
       };
       const signalLevel = (v: number, floorDb = loDb) =>
-        miniPanSignalLevel(v, floorDb, noiseGateDb, signalRangeDb);
+        miniPanSignalLevel(v, floorDb, noiseGateDb, MINI_TRACE_RANGE_DB);
       const signalDbToY = (v: number, floorDb = loDb) =>
         plotTop + plotH - signalLevel(v, floorDb) * plotH;
       const snrToY = (snr: number) => {
@@ -808,7 +775,7 @@ function FilterMiniPanSurface({
                 peakBin = i;
               }
             }
-            live = Math.max(0, Math.min(1, peakSnr / POP_RANGE_DB));
+            live = miniPanSignalLevel(loDb + peakSnr, loDb, noiseGateDb, MINI_TRACE_RANGE_DB);
             peakOffHz = fullStartHz + peakBin * frameHzPerPixel - vfo;
           } else if (range) {
             const [b0, b1] = range;
@@ -824,7 +791,7 @@ function FilterMiniPanSurface({
             live = peakDb === -Infinity ? 0 : signalLevel(peakDb);
             peakOffHz = fullStartHz + peakBin * frameHzPerPixel - vfo;
           }
-          live = live ** 0.82;
+          live = Math.max(0, Math.min(1, live));
           avg[band] = avg[band]! + avgAlpha * (live - avg[band]!);
           peakOffAvg[band] = peakOffAvg[band]! + avgAlpha * (peakOffHz - peakOffAvg[band]!);
           const level = avg[band]!;
@@ -920,7 +887,7 @@ function FilterMiniPanSurface({
           // keeps the curve smooth (granular) when zoomed in past one bin/pixel.
           const interpDb = sampleArrayAtHz(panDb, absHz);
           const floorAtHz = floor !== null && floor.length === panDb.length
-            ? sampleArrayAtHz(floor, absHz) ?? loDb
+            ? Math.max(sampleArrayAtHz(floor, absHz) ?? loDb, loDb)
             : loDb;
           let y: number;
           if (popOn) {
@@ -976,7 +943,9 @@ function FilterMiniPanSurface({
         for (let x = 0; x < w; x++) {
           const top = sm[x]!;
           const normH = (baseY - top) / plotH; // 0 at floor, 1 at panel top
-          const a = 0.10 + 0.78 * Math.max(0, Math.min(1, normH)) ** 1.35;
+          const level = Math.max(0, Math.min(1, normH));
+          if (level <= 0.002) continue;
+          const a = 0.035 + 0.74 * level ** 1.45;
           ctx.fillStyle = signal(a);
           ctx.fillRect(x, top, 1, baseY - top);
         }
@@ -986,7 +955,7 @@ function FilterMiniPanSurface({
         // the frequency window changes (held peaks would otherwise smear).
         if (peakHoldY === null || peakHoldY.length !== w) peakHoldY = new Float32Array(w);
         const ph = peakHoldY;
-        const phKey = `${receiver}:${vfo}:${spanHz}:${winLoOffHz}:${w}`;
+        const phKey = `${c.vfoHz}:${spanHz}:${winLoOffHz}:${w}`;
         const decay = PEAKHOLD_DECAY_PX * dpr;
         if (phKey !== peakHoldKey) {
           peakHoldKey = phKey;
@@ -1248,17 +1217,17 @@ function FilterMiniPanSurface({
           ctx.rect(fillL, pbTop, Math.max(1, fillR - fillL), pbBottom - pbTop);
           ctx.clip();
           const traceGrad = ctx.createLinearGradient(0, pbTop, 0, pbBottom);
-          traceGrad.addColorStop(0, signal(0.28));
-          traceGrad.addColorStop(1, signal(0.06));
+          traceGrad.addColorStop(0, signal(0.46));
+          traceGrad.addColorStop(1, signal(0.12));
           ctx.fillStyle = traceGrad;
           for (let x = Math.max(0, Math.floor(fillL)); x <= Math.min(w - 1, Math.ceil(fillR)); x++) {
             const top = traceSm[x] ?? pbBottom;
             if (top < pbBottom) ctx.fillRect(x, top, 1, pbBottom - top);
           }
-          ctx.shadowColor = signal(0.72);
-          ctx.shadowBlur = Math.round(4 * dpr);
+          ctx.shadowColor = signal(0.88);
+          ctx.shadowBlur = Math.round(6 * dpr);
           ctx.strokeStyle = signal(1);
-          ctx.lineWidth = Math.max(1.4, 1.4 * dpr);
+          ctx.lineWidth = Math.max(1.8, 1.8 * dpr);
           ctx.beginPath();
           let started = false;
           for (let x = Math.max(0, Math.floor(fillL)); x <= Math.min(w - 1, Math.ceil(fillR)); x++) {
@@ -1466,16 +1435,14 @@ function FilterMiniPanSurface({
     };
     redrawRef.current = requestRedraw;
 
-    const unsubDisplay = useDisplayStore.subscribe((s, p) => {
-      if (selectDisplaySlice(s, receiver).lastSeq !== selectDisplaySlice(p, receiver).lastSeq) {
-        if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
-      }
+    const unsubDisplay = useDisplayStore.subscribe(() => {
+      if (rafHandle === 0) rafHandle = requestAnimationFrame(draw);
     });
     const unsubConn = useConnectionStore.subscribe((s, p) => {
       if (
         s.filterLowHz !== p.filterLowHz ||
         s.filterHighHz !== p.filterHighHz ||
-        (receiver === 'B' ? s.vfoBHz !== p.vfoBHz : s.vfoHz !== p.vfoHz)
+        s.vfoHz !== p.vfoHz
       ) {
         requestRedraw();
       }
@@ -1565,7 +1532,7 @@ function FilterMiniPanSurface({
       releaseFrameConsumer();
       releaseEstimator();
     };
-  }, [receiver]);
+  }, []);
 
   const flushPending = () => {
     const d = dragRef.current;
@@ -1592,11 +1559,10 @@ function FilterMiniPanSurface({
   // the same edge walk snap uses) plus a little margin. Returns true if it
   // fitted, so the caller skips starting a drag.
   const tryFitToSignal = (relX: number, rectW: number, spanHz: number): boolean => {
-    const d = selectDisplaySlice(useDisplayStore.getState(), receiver);
-    const floor = receiver === 'A' ? getNoiseFloor() : null;
-    if (!d.panDb || d.hzPerPixel <= 0 || floor === null) return false;
+    const d = useDisplayStore.getState();
+    if (!d.panDb || d.hzPerPixel <= 0 || getNoiseFloor() === null) return false;
     const c = useConnectionStore.getState();
-    const vfo = receiverVfoHz(c, receiver);
+    const vfo = Number(c.vfoHz);
     const winLoHz = vfo + filterWindowLoOffsetHz(c.filterLowHz, c.filterHighHz, spanHz);
     const dCenter = Number(d.centerHz);
     const peaks = detectPeaks(d.panDb, dCenter, d.hzPerPixel).filter((p) => p.snrDb >= BRACKET_MIN_SNR_DB);
@@ -1660,9 +1626,8 @@ function FilterMiniPanSurface({
     // available here without the operator toggling global Snap.
     let peaks: DetectedPeak[] = [];
     {
-      const d = selectDisplaySlice(useDisplayStore.getState(), receiver);
-      const floor = receiver === 'A' ? getNoiseFloor() : null;
-      if (d.panDb && d.hzPerPixel > 0 && floor !== null) {
+      const d = useDisplayStore.getState();
+      if (d.panDb && d.hzPerPixel > 0 && getNoiseFloor() !== null) {
         peaks = detectPeaks(d.panDb, Number(d.centerHz), d.hzPerPixel);
       }
     }
@@ -1694,7 +1659,7 @@ function FilterMiniPanSurface({
     if (!d || e.pointerId !== d.pointerId) return;
     e.stopPropagation();
 
-    const vfo = receiverVfoHz(useConnectionStore.getState(), receiver);
+    const vfo = Number(useConnectionStore.getState().vfoHz);
     const hzPerPx = d.spanHz / d.rect.width;
     // Magnetic snap is active for edge drags unless Alt is held (free placement)
     // and unless there are no detected carriers.
@@ -1851,12 +1816,7 @@ function FilterMiniPanSurface({
   };
 
   return (
-    <div className={`filter-minipan-wrap ${split ? 'filter-minipan-wrap--split' : ''}`}>
-      {showReceiverLabel && (
-        <div className={`filter-minipan-vfo-tag mono ${receiver === 'B' ? 'is-rx2' : 'is-rx1'}`}>
-          {receiver === 'B' ? 'RX2 · VFO B' : 'RX1 · VFO A'}
-        </div>
-      )}
+    <div className="filter-minipan-wrap">
       <canvas
         ref={canvasRef}
         className="filter-minipan-canvas"
@@ -1894,27 +1854,6 @@ function FilterMiniPanSurface({
           {formatFilterWidth(filterLowHz, filterHighHz)}
         </button>
       )}
-    </div>
-  );
-}
-
-export function FilterMiniPan() {
-  const rx2Enabled = useConnectionStore((s) => s.rx2Enabled);
-  const rx2AudioMode = useConnectionStore((s) => s.rx2AudioMode);
-  const rxFocus = useConnectionStore((s) => s.rxFocus);
-  const receivers = filterMiniPanReceivers(rx2Enabled, rx2AudioMode, rxFocus);
-  const split = receivers.length > 1;
-
-  return (
-    <div className={`filter-minipan-stack ${split ? 'filter-minipan-stack--split' : ''}`}>
-      {receivers.map((receiver) => (
-        <FilterMiniPanSurface
-          key={receiver}
-          receiver={receiver}
-          split={split}
-          showReceiverLabel={rx2Enabled}
-        />
-      ))}
     </div>
   );
 }

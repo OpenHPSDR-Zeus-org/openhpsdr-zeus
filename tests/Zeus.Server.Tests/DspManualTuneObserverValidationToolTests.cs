@@ -58,23 +58,38 @@ public sealed class DspManualTuneObserverValidationToolTests
             Assert.Equal(14.3315, validationRoot.GetProperty("manualTuneObserverBestObservedVfoMhz").GetDouble(), precision: 6);
             Assert.Equal("capture-qualified", validationRoot.GetProperty("manualTuneObserverBestObservedVfoStatus").GetString());
             Assert.True(validationRoot.GetProperty("manualTuneObserverBestObservedVfoScore").GetDouble() > 0.0);
-            Assert.Equal(14_365_124L, validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedVfoHz").GetInt64());
-            Assert.Equal(14.365124, validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedVfoMhz").GetDouble(), precision: 6);
-            Assert.Equal(33_624.0, validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedDialShiftHz").GetDouble(), precision: 3);
+            Assert.Equal(14_365_000L, validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedVfoHz").GetInt64());
+            Assert.Equal(14.365, validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedVfoMhz").GetDouble(), precision: 6);
+            Assert.Equal(33_500.0, validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedDialShiftHz").GetDouble(), precision: 3);
+            Assert.Equal(1_000L, validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedVfoStepHz").GetInt64());
+            Assert.Equal(14_365_124L, validationRoot.GetProperty("manualTuneObserverBestObservedVfoExactSuggestedVfoHz").GetInt64());
+            Assert.Equal(14.365124, validationRoot.GetProperty("manualTuneObserverBestObservedVfoExactSuggestedVfoMhz").GetDouble(), precision: 6);
+            Assert.Equal(33_624.0, validationRoot.GetProperty("manualTuneObserverBestObservedVfoExactSuggestedDialShiftHz").GetDouble(), precision: 3);
             Assert.Equal("above-filter", validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedTuneReason").GetString());
             Assert.Equal(3, validationRoot.GetProperty("manualTuneObserverFrontendTuningHintPollCount").GetInt32());
-            Assert.Equal(33_624.0, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedDialShiftHz").GetDouble(), precision: 3);
-            Assert.Equal(14_365_124L, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedVfoHz").GetInt64());
-            Assert.Equal(14.365124, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedVfoMhz").GetDouble(), precision: 6);
+            Assert.Equal(33_500.0, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedDialShiftHz").GetDouble(), precision: 3);
+            Assert.Equal(14_365_000L, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedVfoHz").GetInt64());
+            Assert.Equal(14.365, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedVfoMhz").GetDouble(), precision: 6);
+            Assert.Equal(1_000L, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedVfoStepHz").GetInt64());
+            Assert.Equal(33_624.0, validationRoot.GetProperty("manualTuneObserverFrontendExactSuggestedDialShiftHz").GetDouble(), precision: 3);
+            Assert.Equal(14_365_124L, validationRoot.GetProperty("manualTuneObserverFrontendExactSuggestedVfoHz").GetInt64());
+            Assert.Equal(14.365124, validationRoot.GetProperty("manualTuneObserverFrontendExactSuggestedVfoMhz").GetDouble(), precision: 6);
             Assert.Equal(35_250.0, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedPeakOffsetHz").GetDouble(), precision: 3);
             Assert.Equal(14_366_750L, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedPeakFrequencyHz").GetInt64());
             Assert.Equal(1_626.0, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedFilterCenterOffsetHz").GetDouble(), precision: 3);
             Assert.Equal(32_098.0, validationRoot.GetProperty("manualTuneObserverFrontendSuggestedFilterDistanceHz").GetDouble(), precision: 3);
             Assert.Equal("above-filter", validationRoot.GetProperty("manualTuneObserverFrontendSuggestedTuneReason").GetString());
+            Assert.True(validationRoot.GetProperty("manualTuneObserverRequireNr5CaptureReady").GetBoolean());
+            Assert.Equal(1, validationRoot.GetProperty("manualTuneObserverBaseCaptureQualifiedPollCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("manualTuneObserverNr5CaptureReadyPollCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("manualTuneObserverNr5CaptureBlockedPollCount").GetInt32());
+            Assert.Equal("promote-manual-observer-mixed-weak-strong-capture", validationRoot.GetProperty("manualTuneObserverPrimaryManualTuneActionId").GetString());
+            Assert.Equal("mixed-ready", validationRoot.GetProperty("manualTuneObserverPrimaryManualTuneActionStatus").GetString());
 
             var validationBestHint = validationRoot.GetProperty("manualTuneObserverFrontendBestTuningHint");
             Assert.Equal("above-filter", validationBestHint.GetProperty("reason").GetString());
-            Assert.Equal(14_365_124L, validationBestHint.GetProperty("suggestedVfoHz").GetInt64());
+            Assert.Equal(14_365_000L, validationBestHint.GetProperty("suggestedVfoHz").GetInt64());
+            Assert.Equal(14_365_124L, validationBestHint.GetProperty("exactSuggestedVfoHz").GetInt64());
 
             var observerIssueCodes = validationRoot.GetProperty("warnings")
                 .EnumerateArray()
@@ -107,12 +122,17 @@ public sealed class DspManualTuneObserverValidationToolTests
             Assert.Equal(1, summaryRoot.GetProperty("manualTuneObserverObservedVfoCount").GetInt32());
             Assert.Equal(14_331_500L, summaryRoot.GetProperty("manualTuneObserverBestObservedVfoHz").GetInt64());
             Assert.Equal("capture-qualified", summaryRoot.GetProperty("manualTuneObserverBestObservedVfoStatus").GetString());
-            Assert.Equal(14_365_124L, summaryRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedVfoHz").GetInt64());
+            Assert.Equal(14_365_000L, summaryRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedVfoHz").GetInt64());
             Assert.Equal(3, summaryRoot.GetProperty("manualTuneObserverFrontendTuningHintPollCount").GetInt32());
-            Assert.Equal(33_624.0, summaryRoot.GetProperty("manualTuneObserverFrontendSuggestedDialShiftHz").GetDouble(), precision: 3);
-            Assert.Equal(14_365_124L, summaryRoot.GetProperty("manualTuneObserverFrontendSuggestedVfoHz").GetInt64());
-            Assert.Equal(14.365124, summaryRoot.GetProperty("manualTuneObserverFrontendSuggestedVfoMhz").GetDouble(), precision: 6);
+            Assert.Equal(33_500.0, summaryRoot.GetProperty("manualTuneObserverFrontendSuggestedDialShiftHz").GetDouble(), precision: 3);
+            Assert.Equal(14_365_000L, summaryRoot.GetProperty("manualTuneObserverFrontendSuggestedVfoHz").GetInt64());
+            Assert.Equal(14.365, summaryRoot.GetProperty("manualTuneObserverFrontendSuggestedVfoMhz").GetDouble(), precision: 6);
+            Assert.Equal(14_365_124L, summaryRoot.GetProperty("manualTuneObserverFrontendExactSuggestedVfoHz").GetInt64());
             Assert.Equal("above-filter", summaryRoot.GetProperty("manualTuneObserverFrontendSuggestedTuneReason").GetString());
+            Assert.True(summaryRoot.GetProperty("manualTuneObserverRequireNr5CaptureReady").GetBoolean());
+            Assert.Equal(1, summaryRoot.GetProperty("manualTuneObserverBaseCaptureQualifiedPollCount").GetInt32());
+            Assert.Equal(1, summaryRoot.GetProperty("manualTuneObserverNr5CaptureReadyPollCount").GetInt32());
+            Assert.Equal("promote-manual-observer-mixed-weak-strong-capture", summaryRoot.GetProperty("manualTuneObserverPrimaryManualTuneActionId").GetString());
 
             var summaryBestHint = summaryRoot.GetProperty("manualTuneObserverFrontendBestTuningHint");
             Assert.Equal(32_098.0, summaryBestHint.GetProperty("filterDistanceHz").GetDouble(), precision: 3);
@@ -124,13 +144,19 @@ public sealed class DspManualTuneObserverValidationToolTests
             Assert.Contains("observedVfos=1", gateDetail, StringComparison.Ordinal);
             Assert.Contains("bestObserved=14331500/capture-qualified", gateDetail, StringComparison.Ordinal);
             Assert.Contains("tuningHint=polls=3", gateDetail, StringComparison.Ordinal);
-            Assert.Contains("shiftHz=33624", gateDetail, StringComparison.Ordinal);
-            Assert.Contains("vfoMhz=14.365124", gateDetail, StringComparison.Ordinal);
+            Assert.Contains("shiftHz=33500", gateDetail, StringComparison.Ordinal);
+            Assert.Contains("vfoMhz=14.365", gateDetail, StringComparison.Ordinal);
+            Assert.Contains("exactVfoMhz=14.365124", gateDetail, StringComparison.Ordinal);
             Assert.Contains("reason=above-filter", gateDetail, StringComparison.Ordinal);
+            Assert.Contains("requireNr5CaptureReady=True", gateDetail, StringComparison.Ordinal);
+            Assert.Contains("nr5CaptureReady/blocked/advisory=1/0/0", gateDetail, StringComparison.Ordinal);
+            Assert.Contains("primaryAction=promote-manual-observer-mixed-weak-strong-capture/mixed-ready", gateDetail, StringComparison.Ordinal);
 
             var markdown = await File.ReadAllTextAsync(summaryMarkdown);
             Assert.Contains("Observed VFOs/best/status/score: 1 / 14331500 Hz / capture-qualified", markdown, StringComparison.Ordinal);
-            Assert.Contains("Frontend tuning hint polls/shift/VFO/reason/distance: 3 / 33624 Hz / 14.365124 MHz / above-filter / 32098 Hz", markdown, StringComparison.Ordinal);
+            Assert.Contains("Frontend tuning hint polls/shift/VFO/step/exact/reason/distance: 3 / 33500 Hz / 14.365 MHz / 1000 Hz / 14.365124 MHz / above-filter / 32098 Hz", markdown, StringComparison.Ordinal);
+            Assert.Contains("NR5 capture gate required/base-qualified/ready/blocked/advisory polls: True / 1 / 1 / 0 / 0", markdown, StringComparison.Ordinal);
+            Assert.Contains("Primary manual action: promote-manual-observer-mixed-weak-strong-capture / mixed-ready", markdown, StringComparison.Ordinal);
         }
         finally
         {
@@ -264,7 +290,7 @@ public sealed class DspManualTuneObserverValidationToolTests
             Assert.True(validationRoot.GetProperty("manualTuneObserverReportValid").GetBoolean());
             Assert.Equal(14_331_500L, validationRoot.GetProperty("manualTuneObserverBestObservedVfoHz").GetInt64());
             Assert.Equal("capture-qualified", validationRoot.GetProperty("manualTuneObserverBestObservedVfoStatus").GetString());
-            Assert.Equal(14_365_124L, validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedVfoHz").GetInt64());
+            Assert.Equal(14_365_000L, validationRoot.GetProperty("manualTuneObserverBestObservedVfoSuggestedVfoHz").GetInt64());
             Assert.NotEqual(14_000_000L, validationRoot.GetProperty("manualTuneObserverBestObservedVfoHz").GetInt64());
             Assert.NotEqual("stale-flattened", validationRoot.GetProperty("manualTuneObserverBestObservedVfoStatus").GetString());
         }
@@ -352,8 +378,9 @@ public sealed class DspManualTuneObserverValidationToolTests
             Assert.True(action.GetProperty("requiredForAcceptance").GetBoolean());
             Assert.True(action.GetProperty("blocksDefaultBehaviorChange").GetBoolean());
             Assert.Contains("bestObservedVfoHz=14331500", action.GetProperty("reason").GetString() ?? "", StringComparison.Ordinal);
-            Assert.Contains("suggestedVfoMhz=14.365124", action.GetProperty("reason").GetString() ?? "", StringComparison.Ordinal);
-            Assert.Contains("Manually tune G2 near 14.365124 MHz", action.GetProperty("manualAction").GetString() ?? "", StringComparison.Ordinal);
+            Assert.Contains("suggestedVfoMhz=14.365", action.GetProperty("reason").GetString() ?? "", StringComparison.Ordinal);
+            Assert.Contains("exactSuggestedVfoMhz=14.365124", action.GetProperty("reason").GetString() ?? "", StringComparison.Ordinal);
+            Assert.Contains("Manually tune G2 near 14.365 MHz", action.GetProperty("manualAction").GetString() ?? "", StringComparison.Ordinal);
             Assert.Contains("Do not use retune/VFO-writing tools", action.GetProperty("manualAction").GetString() ?? "", StringComparison.Ordinal);
 
             var commandSteps = action.GetProperty("commandSteps")
@@ -870,7 +897,7 @@ public sealed class DspManualTuneObserverValidationToolTests
 
         var manifest = new
         {
-            schemaVersion = 1,
+            schemaVersion = 2,
             artifacts = new object[]
             {
                 new
@@ -961,9 +988,13 @@ public sealed class DspManualTuneObserverValidationToolTests
             filterCenterOffsetHz = 1_626.0,
             filterDistanceHz = 32_098.0,
             currentVfoHz = observedVfoHz,
-            suggestedDialShiftHz = 33_624.0,
-            suggestedVfoHz = 14_365_124L,
-            suggestedVfoMhz = 14.365124
+            suggestedDialShiftHz = 33_500.0,
+            suggestedVfoHz = 14_365_000L,
+            suggestedVfoMhz = 14.365,
+            suggestedVfoStepHz = 1_000,
+            exactSuggestedDialShiftHz = 33_624.0,
+            exactSuggestedVfoHz = 14_365_124L,
+            exactSuggestedVfoMhz = 14.365124
         };
 
         var report = new
@@ -1011,9 +1042,13 @@ public sealed class DspManualTuneObserverValidationToolTests
             bestObservedVfoMhz = includeObservedVfos ? observedVfoHz / 1_000_000.0 : 0.0,
             bestObservedVfoStatus = includeObservedVfos ? (staleFlattenedBestObservedVfo ? "stale-flattened" : (includeCapture ? "capture-qualified" : "tuning-hint")) : "",
             bestObservedVfoScore = includeObservedVfos ? (includeCapture ? 256.8 : 85.6) : 0.0,
-            bestObservedVfoSuggestedVfoHz = includeObservedVfos && includeTuningHints ? (staleFlattenedBestObservedVfo ? 14_000_100L : 14_365_124L) : 0L,
-            bestObservedVfoSuggestedVfoMhz = includeObservedVfos && includeTuningHints ? 14.365124 : 0.0,
-            bestObservedVfoSuggestedDialShiftHz = includeObservedVfos && includeTuningHints ? 33_624.0 : 0.0,
+            bestObservedVfoSuggestedVfoHz = includeObservedVfos && includeTuningHints ? (staleFlattenedBestObservedVfo ? 14_000_000L : 14_365_000L) : 0L,
+            bestObservedVfoSuggestedVfoMhz = includeObservedVfos && includeTuningHints ? 14.365 : 0.0,
+            bestObservedVfoSuggestedDialShiftHz = includeObservedVfos && includeTuningHints ? 33_500.0 : 0.0,
+            bestObservedVfoSuggestedVfoStepHz = includeObservedVfos && includeTuningHints ? 1_000L : 0L,
+            bestObservedVfoExactSuggestedVfoHz = includeObservedVfos && includeTuningHints ? 14_365_124L : 0L,
+            bestObservedVfoExactSuggestedVfoMhz = includeObservedVfos && includeTuningHints ? 14.365124 : 0.0,
+            bestObservedVfoExactSuggestedDialShiftHz = includeObservedVfos && includeTuningHints ? 33_624.0 : 0.0,
             bestObservedVfoSuggestedTuneReason = includeObservedVfos && includeTuningHints ? "above-filter" : "",
             captureCount = includeCapture ? 1 : 0,
             uniqueCapturedVfoCount = includeCapture ? 1 : 0,
@@ -1027,6 +1062,11 @@ public sealed class DspManualTuneObserverValidationToolTests
             frontendOffsetMismatchPollCount = 0,
             frontendTuningHintPollCount = includeTuningHints ? 3 : 0,
             frontendBestTuningHint = includeTuningHints ? hint : null,
+            requireNr5CaptureReady = true,
+            baseCaptureQualifiedPollCount = includeCapture ? 1 : 0,
+            nr5CaptureReadyPollCount = includeCapture ? 1 : 0,
+            nr5CaptureBlockedPollCount = 0,
+            nr5CaptureAdvisoryPollCount = 0,
             captureQualifiedPollCount = includeCapture ? 1 : 0,
             readyCaptureCount = includeCapture ? 1 : 0,
             mixedWeakStrongReady = includeCapture,
@@ -1039,6 +1079,34 @@ public sealed class DspManualTuneObserverValidationToolTests
             passbandQualifiedWeakInputSampleCount = includeCapture ? 5 : 0,
             passbandQualifiedStrongInputSampleCount = includeCapture ? 5 : 0,
             agcPumpingRiskCaptureCount = 0,
+            primaryManualTuneAction = new
+            {
+                actionId = includeCapture
+                    ? "promote-manual-observer-mixed-weak-strong-capture"
+                    : "manual-tune-to-frontend-suggestion",
+                status = includeCapture ? "mixed-ready" : "tuning-hint",
+                priority = includeCapture ? 1 : 4,
+                summary = includeCapture
+                    ? "Mixed weak+strong evidence was captured; promote this watcher window into live history before tuning DSP behavior."
+                    : "Manually tune toward 14.365000 MHz so the strongest frontend peak lands inside the active RX filter.",
+                manualAction = includeCapture
+                    ? "Keep DSP defaults unchanged; promote the captured watcher report into live history and compare current-Zeus/Thetis windows before any opt-in NR5/SPNR tuning."
+                    : "Tune G2 near 14.365000 MHz, then rerun the observer with capture enabled and frontend passband required.",
+                commandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\watch-dsp-manual-tune-observer.ps1 -BaseUrl http://127.0.0.1:6060 -RequireFrontendNearPassband -RequireNr5CaptureReady -MaxCapturesPerVfo 2 -CaptureSamples 32",
+                expectedEvidence = "liveDiagnosticsHistoryMixedWeakStrongEvidenceReady=true plus current-Zeus/Thetis comparison evidence"
+            },
+            primaryManualTuneActionId = includeCapture
+                ? "promote-manual-observer-mixed-weak-strong-capture"
+                : "manual-tune-to-frontend-suggestion",
+            primaryManualTuneActionStatus = includeCapture ? "mixed-ready" : "tuning-hint",
+            primaryManualTuneActionSummary = includeCapture
+                ? "Mixed weak+strong evidence was captured; promote this watcher window into live history before tuning DSP behavior."
+                : "Manually tune toward 14.365000 MHz so the strongest frontend peak lands inside the active RX filter.",
+            primaryManualTuneActionManualAction = includeCapture
+                ? "Keep DSP defaults unchanged; promote the captured watcher report into live history and compare current-Zeus/Thetis windows before any opt-in NR5/SPNR tuning."
+                : "Tune G2 near 14.365000 MHz, then rerun the observer with capture enabled and frontend passband required.",
+            primaryManualTuneActionCommandTemplate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\\watch-dsp-manual-tune-observer.ps1 -BaseUrl http://127.0.0.1:6060 -RequireFrontendNearPassband -RequireNr5CaptureReady -MaxCapturesPerVfo 2 -CaptureSamples 32",
+            primaryManualTuneActionExpectedEvidence = "liveDiagnosticsHistoryMixedWeakStrongEvidenceReady=true plus current-Zeus/Thetis comparison evidence",
             captures = includeCapture ? new object[]
             {
                 new
@@ -1082,7 +1150,7 @@ public sealed class DspManualTuneObserverValidationToolTests
             },
             recommendations = new[]
             {
-                "Read-only manual tuning hint: strongest frontend peak is above the RX filter; manually tune near 14.365124 MHz before capture."
+                "Read-only manual tuning hint: strongest frontend peak is above the RX filter; manually tune near 14.365000 MHz before capture."
             }
         };
 
@@ -1127,6 +1195,8 @@ public sealed class DspManualTuneObserverValidationToolTests
             reportJson["bestWeakOnlyCaptureNearStrongInputSampleCount"] = 0;
             reportJson["bestWeakOnlyCapturePassbandQualifiedWeakInputSampleCount"] = 5;
             reportJson["bestWeakOnlyCaptureAgcStabilityStatus"] = "stable";
+            reportJson["primaryManualTuneActionId"] = "recapture-manual-observer-weak-only-vfo";
+            reportJson["primaryManualTuneActionStatus"] = "weak-only";
         }
         if (nearStrongCandidate && includeCapture)
         {
@@ -1191,6 +1261,9 @@ public sealed class DspManualTuneObserverValidationToolTests
             reportJson["bestNearStrongPromotionCandidateNearStrongInputSampleCount"] = 3;
             reportJson["bestNearStrongPromotionCandidateSpeechQualifiedNearStrongInputSampleCount"] = 2;
             reportJson["bestNearStrongPromotionCandidatePassbandQualifiedNearStrongInputSampleCount"] = 1;
+            reportJson["primaryManualTuneActionId"] = "recapture-manual-observer-near-strong-vfo";
+            reportJson["primaryManualTuneActionStatus"] = "near-strong-weak-only";
+            reportJson["primaryManualTuneActionSummary"] = "Hold or return to 14.365124 MHz and recapture; the best weak-only window already had near-strong speech.";
 
             if (invalidNearStrongCandidate)
             {
@@ -1279,9 +1352,13 @@ public sealed class DspManualTuneObserverValidationToolTests
         maxAudioRmsDbfs = -34.0,
         maxNr5OutputDbfs = -31.0,
         bestTuningHint = includeTuningHints ? hint : null,
-        frontendSuggestedDialShiftHz = includeTuningHints ? 33_624.0 : 0.0,
-        frontendSuggestedVfoHz = includeTuningHints ? 14_365_124L : 0L,
-        frontendSuggestedVfoMhz = includeTuningHints ? 14.365124 : 0.0,
+        frontendSuggestedDialShiftHz = includeTuningHints ? 33_500.0 : 0.0,
+        frontendSuggestedVfoHz = includeTuningHints ? 14_365_000L : 0L,
+        frontendSuggestedVfoMhz = includeTuningHints ? 14.365 : 0.0,
+        frontendSuggestedVfoStepHz = includeTuningHints ? 1_000L : 0L,
+        frontendExactSuggestedDialShiftHz = includeTuningHints ? 33_624.0 : 0.0,
+        frontendExactSuggestedVfoHz = includeTuningHints ? 14_365_124L : 0L,
+        frontendExactSuggestedVfoMhz = includeTuningHints ? 14.365124 : 0.0,
         frontendSuggestedTuneReason = includeTuningHints ? "above-filter" : "",
         frontendSuggestedFilterDistanceHz = includeTuningHints ? 32_098.0 : 0.0,
         status = includeCapture ? "capture-qualified" : "tuning-hint",
@@ -1304,9 +1381,13 @@ public sealed class DspManualTuneObserverValidationToolTests
             frontendFilterPassband = false,
             frontendFilterOffPassband = true,
             frontendTuningHint = includeTuningHints ? hint : null,
-            frontendSuggestedDialShiftHz = includeTuningHints ? 33_624.0 : 0.0,
-            frontendSuggestedVfoHz = includeTuningHints ? 14_365_124L : 0L,
-            frontendSuggestedVfoMhz = includeTuningHints ? 14.365124 : 0.0,
+            frontendSuggestedDialShiftHz = includeTuningHints ? 33_500.0 : 0.0,
+            frontendSuggestedVfoHz = includeTuningHints ? 14_365_000L : 0L,
+            frontendSuggestedVfoMhz = includeTuningHints ? 14.365 : 0.0,
+            frontendSuggestedVfoStepHz = includeTuningHints ? 1_000L : 0L,
+            frontendExactSuggestedDialShiftHz = includeTuningHints ? 33_624.0 : 0.0,
+            frontendExactSuggestedVfoHz = includeTuningHints ? 14_365_124L : 0L,
+            frontendExactSuggestedVfoMhz = includeTuningHints ? 14.365124 : 0.0,
             frontendSuggestedTuneReason = includeTuningHints ? "above-filter" : ""
         }, CamelCaseJson)!.AsObject();
 
@@ -1316,6 +1397,10 @@ public sealed class DspManualTuneObserverValidationToolTests
             pollJson.Remove("frontendSuggestedDialShiftHz");
             pollJson.Remove("frontendSuggestedVfoHz");
             pollJson.Remove("frontendSuggestedVfoMhz");
+            pollJson.Remove("frontendSuggestedVfoStepHz");
+            pollJson.Remove("frontendExactSuggestedDialShiftHz");
+            pollJson.Remove("frontendExactSuggestedVfoHz");
+            pollJson.Remove("frontendExactSuggestedVfoMhz");
             pollJson.Remove("frontendSuggestedTuneReason");
         }
 

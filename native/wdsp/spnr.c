@@ -1216,6 +1216,22 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
   recent_speech_inst *= 1.0 - 0.78 * spnr_clip(
     (low_evidence_noise_drive - 0.28) / 0.48,
     0.0, 1.0);
+  double recent_output_speech_inst = weak_input_drive
+    * spnr_clip((out_rms - a->target_rms * 0.135) / (a->target_rms * 0.360), 0.0, 1.0)
+    * max(
+      spnr_clip((a->diag_signal_confidence - 0.230) / 0.190, 0.0, 1.0),
+      0.66 * spnr_clip((a->diag_signal_probability - 0.090) / 0.185, 0.0, 1.0))
+    * max(
+      spnr_clip((level_drive - 0.300) / 0.430, 0.0, 1.0),
+      0.58 * spnr_clip((a->agc_gate - 0.220) / 0.360, 0.0, 1.0));
+  recent_output_speech_inst *= 1.0 - 0.46 * spnr_clip(
+    (low_evidence_noise_drive - 0.64) / 0.30,
+    0.0, 1.0);
+  if (recent_output_speech_inst > 0.0) {
+    recent_speech_inst = max(
+      recent_speech_inst,
+      0.024 + 0.180 * recent_output_speech_inst);
+  }
   if (weak_tail_continuity_relief > 0.0) {
     recent_speech_inst = max(
       recent_speech_inst,
@@ -1429,6 +1445,38 @@ static void spnr_apply_output_agc(SPNR a, double* out, int n) {
         out[2 * i + 0] *= low_evidence_gain;
       }
       out_rms *= low_evidence_gain;
+    }
+  }
+
+  double recent_tail_preserve_drive = weak_input_drive
+    * max(prior_recent_speech_hold, 0.56 * prior_weak_signal_memory)
+    * max(
+      spnr_clip((level_drive - 0.240) / 0.500, 0.0, 1.0),
+      0.56 * spnr_clip((a->agc_gate - 0.160) / 0.420, 0.0, 1.0))
+    * max(
+      spnr_clip((a->diag_mask_smoothing - 0.215) / 0.235, 0.0, 1.0),
+      max(
+        0.62 * spnr_clip((a->diag_signal_probability - 0.055) / 0.150, 0.0, 1.0),
+        0.46 * spnr_clip((gate_confidence - 0.195) / 0.170, 0.0, 1.0)))
+    * spnr_clip((a->target_rms * 0.205 - out_rms) / (a->target_rms * 0.190), 0.0, 1.0);
+  recent_tail_preserve_drive *= 1.0 - 0.38 * spnr_clip(
+    (low_evidence_noise_drive - 0.82) / 0.18,
+    0.0, 1.0);
+  if (a->agc_run && recent_tail_preserve_drive > 0.004 && out_rms > 1.0e-9) {
+    double recent_tail_floor_rms = max(
+      0.62 * a->diag_input_rms,
+      a->target_rms * (0.034 + 0.090 * recent_tail_preserve_drive));
+    recent_tail_floor_rms = min(recent_tail_floor_rms, a->target_rms * 0.180);
+    double recent_tail_lift = spnr_clip(recent_tail_floor_rms / out_rms, 1.0, 22.00);
+    double recent_tail_blend = spnr_clip(
+      0.30 + 0.28 * recent_tail_preserve_drive,
+      0.0, 0.64);
+    double recent_tail_gain = 1.0 + recent_tail_blend * (recent_tail_lift - 1.0);
+    if (recent_tail_gain > 1.001) {
+      for (int i = 0; i < n; i++) {
+        out[2 * i + 0] *= recent_tail_gain;
+      }
+      out_rms *= recent_tail_gain;
     }
   }
 
