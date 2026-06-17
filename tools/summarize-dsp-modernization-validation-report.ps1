@@ -100,6 +100,82 @@ function Get-JsonArray {
     return @($value)
 }
 
+function Join-JsonValues {
+    param(
+        $Items,
+        [int]$MaxItems = 8
+    )
+
+    $values = @($Items |
+        ForEach-Object { [string]$_ } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+        Select-Object -First $MaxItems)
+    if ($values.Count -le 0) {
+        return "none"
+    }
+
+    $suffix = ""
+    $totalCount = @($Items).Count
+    if ($totalCount -gt $values.Count) {
+        $suffix = ", +$($totalCount - $values.Count) more"
+    }
+
+    return (($values -join ", ") + $suffix)
+}
+
+function Format-G2PeakHuntCandidateList {
+    param(
+        $Candidates,
+        [int]$MaxItems = 5
+    )
+
+    $items = New-Object System.Collections.Generic.List[string]
+    foreach ($candidate in @($Candidates | Select-Object -First $MaxItems)) {
+        $frequency = Get-JsonValue $candidate "frequencyHz"
+        if ($null -eq $frequency -or [string]::IsNullOrWhiteSpace([string]$frequency)) {
+            continue
+        }
+
+        $parts = New-Object System.Collections.Generic.List[string]
+        $source = [string](Get-JsonValue $candidate "source")
+        $offset = Get-JsonValue $candidate "offsetHz"
+        $snr = Get-JsonValue $candidate "snrDb"
+        $dbfs = Get-JsonValue $candidate "dbfs"
+        $score = Get-JsonValue $candidate "evidenceScore"
+        if (-not [string]::IsNullOrWhiteSpace($source)) {
+            $parts.Add($source) | Out-Null
+        }
+        if ($null -ne $offset -and -not [string]::IsNullOrWhiteSpace([string]$offset)) {
+            $parts.Add("offset=$offset") | Out-Null
+        }
+        if ($null -ne $snr -and -not [string]::IsNullOrWhiteSpace([string]$snr)) {
+            $parts.Add("snr=$snr") | Out-Null
+        }
+        if ($null -ne $dbfs -and -not [string]::IsNullOrWhiteSpace([string]$dbfs)) {
+            $parts.Add("dbfs=$dbfs") | Out-Null
+        }
+        if ($null -ne $score -and -not [string]::IsNullOrWhiteSpace([string]$score)) {
+            $parts.Add("score=$score") | Out-Null
+        }
+
+        $detail = ($parts.ToArray() -join "; ")
+        if ([string]::IsNullOrWhiteSpace($detail)) {
+            $items.Add("$frequency Hz") | Out-Null
+        }
+        else {
+            $items.Add("$frequency Hz ($detail)") | Out-Null
+        }
+    }
+
+    if ($items.Count -le 0) {
+        return "none"
+    }
+
+    $totalCount = @($Candidates).Count
+    $suffix = if ($totalCount -gt $items.Count) { ", +$($totalCount - $items.Count) more" } else { "" }
+    return (($items.ToArray() -join "; ") + $suffix)
+}
+
 function Test-Truthy {
     param($Value)
 
@@ -943,13 +1019,18 @@ function Get-EvidenceGateRecords {
     $g2RxPeakHuntAutoPhoneClusterNeighborCandidateCount = Get-IntegerValueOrDefault (Get-JsonValue $Validation "g2RxPeakHuntAutoPhoneClusterNeighborCandidateCount")
     $g2RxPeakHuntAutoPhoneClusterBandLowHz = Get-JsonValue $Validation "g2RxPeakHuntAutoPhoneClusterBandLowHz"
     $g2RxPeakHuntAutoPhoneClusterBandHighHz = Get-JsonValue $Validation "g2RxPeakHuntAutoPhoneClusterBandHighHz"
+    $g2RxPeakHuntCandidateFrequencyText = Join-JsonValues @(Get-JsonArray $Validation "g2RxPeakHuntCandidateFrequencyHz")
+    $g2RxPeakHuntOperatorTrendFrequencyText = Join-JsonValues @(Get-JsonArray $Validation "g2RxPeakHuntOperatorTrendCandidateFrequencyHz")
+    $g2RxPeakHuntAutoPhoneClusterFrequencyText = Join-JsonValues @(Get-JsonArray $Validation "g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHz")
+    $g2RxPeakHuntPeakCandidateText = Format-G2PeakHuntCandidateList @(Get-JsonArray $Validation "g2RxPeakHuntPeakCandidates")
+    $g2RxPeakHuntOperatorTrendCandidateText = Format-G2PeakHuntCandidateList @(Get-JsonArray $Validation "g2RxPeakHuntOperatorTrendCandidates")
     $gates.Add((New-EvidenceGateRecord `
                 -GateId "g2-rx-peak-hunt" `
                 -Name "G2 RX peak-hunt evidence" `
                 -Ready:$g2RxPeakHuntReady `
                 -Status $g2RxPeakHuntStatus `
                 -RequiredForAcceptance:$false `
-                -Detail "present=$g2RxPeakHuntPresent; ok=$(Get-JsonValue $Validation "g2RxPeakHuntOk"); scanError=$(Get-JsonValue $Validation "g2RxPeakHuntScanError"); requestedBaseUrl=$g2RxPeakHuntRequestedBaseUrl; baseUrl=$g2RxPeakHuntBaseUrl; autoBaseDiscovered=$(Get-JsonValue $Validation "g2RxPeakHuntBaseUrlAutoDiscovered"); autoPhoneCluster=$g2RxPeakHuntAutoPhoneCluster; autoPhoneClusterCandidates=$g2RxPeakHuntAutoPhoneClusterCandidateCount; autoPhoneClusterExactCandidates=$g2RxPeakHuntAutoPhoneClusterExactCandidateCount; autoPhoneClusterNeighborCandidates=$g2RxPeakHuntAutoPhoneClusterNeighborCandidateCount; autoPhoneClusterBandHz=$g2RxPeakHuntAutoPhoneClusterBandLowHz-$g2RxPeakHuntAutoPhoneClusterBandHighHz; allowRetune=$(Get-JsonValue $Validation "g2RxPeakHuntAllowRetune"); passes=$(Get-JsonValue $Validation "g2RxPeakHuntCompletedPassCount")/$(Get-JsonValue $Validation "g2RxPeakHuntPassCount"); operatorCandidates=$(Get-JsonValue $Validation "g2RxPeakHuntOperatorCandidateCount"); runs=$(Get-JsonValue $Validation "g2RxPeakHuntActualRunCount"); failedRuns=$(Get-JsonValue $Validation "g2RxPeakHuntFailedRunCount"); referencedWindows=$g2RxPeakHuntReferencedWindowReadyCount/$g2RxPeakHuntReferencedWindowCount; referencedProblems=$g2RxPeakHuntReferencedWindowProblemCount; mixedReady=$(Get-JsonValue $Validation "g2RxPeakHuntMixedWeakStrongReady"); weakSamples=$(Get-JsonValue $Validation "g2RxPeakHuntWeakInputSampleCount"); strongSamples=$(Get-JsonValue $Validation "g2RxPeakHuntStrongInputSampleCount"); nearStrongSamples=$(Get-JsonValue $Validation "g2RxPeakHuntNearStrongInputSampleCount"); speechWeakStrongNear=$(Get-JsonValue $Validation "g2RxPeakHuntSpeechQualifiedWeakInputSampleCount")/$(Get-JsonValue $Validation "g2RxPeakHuntSpeechQualifiedStrongInputSampleCount")/$(Get-JsonValue $Validation "g2RxPeakHuntSpeechQualifiedNearStrongInputSampleCount"); passbandWeakStrongNear=$(Get-JsonValue $Validation "g2RxPeakHuntPassbandQualifiedWeakInputSampleCount")/$(Get-JsonValue $Validation "g2RxPeakHuntPassbandQualifiedStrongInputSampleCount")/$(Get-JsonValue $Validation "g2RxPeakHuntPassbandQualifiedNearStrongInputSampleCount"); nearPassband=$(Get-JsonValue $Validation "g2RxPeakHuntFrontendNearPassbandSampleCount"); candidateWeakLoss=$(Get-JsonValue $Validation "g2RxPeakHuntCandidateWeakLossSampleCount"); hotMakeup=$(Get-JsonValue $Validation "g2RxPeakHuntHotMakeupSampleCount"); hardBlockers=$(Get-JsonValue $Validation "g2RxPeakHuntHardBlockerSampleCount"); agcPumpingRuns=$(Get-JsonValue $Validation "g2RxPeakHuntAgcPumpingRiskRunCount"); vfoRestored=$(Get-JsonValue $Validation "g2RxPeakHuntSafetyOriginalVfoRestored"); radioLoRestored=$(Get-JsonValue $Validation "g2RxPeakHuntSafetyOriginalRadioLoRestored"); best=$g2RxPeakHuntBestText" `
+                -Detail "present=$g2RxPeakHuntPresent; ok=$(Get-JsonValue $Validation "g2RxPeakHuntOk"); scanError=$(Get-JsonValue $Validation "g2RxPeakHuntScanError"); requestedBaseUrl=$g2RxPeakHuntRequestedBaseUrl; baseUrl=$g2RxPeakHuntBaseUrl; autoBaseDiscovered=$(Get-JsonValue $Validation "g2RxPeakHuntBaseUrlAutoDiscovered"); autoPhoneCluster=$g2RxPeakHuntAutoPhoneCluster; autoPhoneClusterCandidates=$g2RxPeakHuntAutoPhoneClusterCandidateCount; autoPhoneClusterExactCandidates=$g2RxPeakHuntAutoPhoneClusterExactCandidateCount; autoPhoneClusterNeighborCandidates=$g2RxPeakHuntAutoPhoneClusterNeighborCandidateCount; autoPhoneClusterBandHz=$g2RxPeakHuntAutoPhoneClusterBandLowHz-$g2RxPeakHuntAutoPhoneClusterBandHighHz; allowRetune=$(Get-JsonValue $Validation "g2RxPeakHuntAllowRetune"); passes=$(Get-JsonValue $Validation "g2RxPeakHuntCompletedPassCount")/$(Get-JsonValue $Validation "g2RxPeakHuntPassCount"); operatorCandidates=$(Get-JsonValue $Validation "g2RxPeakHuntOperatorCandidateCount"); operatorTrendCandidates=$(Get-JsonValue $Validation "g2RxPeakHuntOperatorTrendCandidateCount"); runs=$(Get-JsonValue $Validation "g2RxPeakHuntActualRunCount"); failedRuns=$(Get-JsonValue $Validation "g2RxPeakHuntFailedRunCount"); referencedWindows=$g2RxPeakHuntReferencedWindowReadyCount/$g2RxPeakHuntReferencedWindowCount; referencedProblems=$g2RxPeakHuntReferencedWindowProblemCount; candidateFrequencies=$g2RxPeakHuntCandidateFrequencyText; operatorTrendFrequencies=$g2RxPeakHuntOperatorTrendFrequencyText; autoPhoneClusterFrequencies=$g2RxPeakHuntAutoPhoneClusterFrequencyText; peakCandidates=$g2RxPeakHuntPeakCandidateText; operatorTrendCandidatesTop=$g2RxPeakHuntOperatorTrendCandidateText; mixedReady=$(Get-JsonValue $Validation "g2RxPeakHuntMixedWeakStrongReady"); weakSamples=$(Get-JsonValue $Validation "g2RxPeakHuntWeakInputSampleCount"); strongSamples=$(Get-JsonValue $Validation "g2RxPeakHuntStrongInputSampleCount"); nearStrongSamples=$(Get-JsonValue $Validation "g2RxPeakHuntNearStrongInputSampleCount"); speechWeakStrongNear=$(Get-JsonValue $Validation "g2RxPeakHuntSpeechQualifiedWeakInputSampleCount")/$(Get-JsonValue $Validation "g2RxPeakHuntSpeechQualifiedStrongInputSampleCount")/$(Get-JsonValue $Validation "g2RxPeakHuntSpeechQualifiedNearStrongInputSampleCount"); passbandWeakStrongNear=$(Get-JsonValue $Validation "g2RxPeakHuntPassbandQualifiedWeakInputSampleCount")/$(Get-JsonValue $Validation "g2RxPeakHuntPassbandQualifiedStrongInputSampleCount")/$(Get-JsonValue $Validation "g2RxPeakHuntPassbandQualifiedNearStrongInputSampleCount"); nearPassband=$(Get-JsonValue $Validation "g2RxPeakHuntFrontendNearPassbandSampleCount"); candidateWeakLoss=$(Get-JsonValue $Validation "g2RxPeakHuntCandidateWeakLossSampleCount"); hotMakeup=$(Get-JsonValue $Validation "g2RxPeakHuntHotMakeupSampleCount"); hardBlockers=$(Get-JsonValue $Validation "g2RxPeakHuntHardBlockerSampleCount"); agcPumpingRuns=$(Get-JsonValue $Validation "g2RxPeakHuntAgcPumpingRiskRunCount"); vfoRestored=$(Get-JsonValue $Validation "g2RxPeakHuntSafetyOriginalVfoRestored"); radioLoRestored=$(Get-JsonValue $Validation "g2RxPeakHuntSafetyOriginalRadioLoRestored"); best=$g2RxPeakHuntBestText" `
                 -Remediation "Use run-dsp-g2-rx-peak-hunt.ps1 as RX-only scouting evidence before mixed weak+strong live-history recapture; if present evidence is invalid, resolve RX-only safety, VFO restore, hard blockers, or AGC pumping before promoting a window.")) | Out-Null
 
     $liveMatrixArtifactControlStatus = [string](Get-JsonValue $Validation "liveMatrixArtifactControlStatus")
@@ -2774,7 +2855,12 @@ function Build-MarkdownReport {
         $lines.Add("- RX-only/VFO restored/radio LO restored/retune attempts: $(Get-JsonValue $Report "g2RxPeakHuntSafetyRxOnly") / $(Get-JsonValue $Report "g2RxPeakHuntSafetyOriginalVfoRestored") / $(Get-JsonValue $Report "g2RxPeakHuntSafetyOriginalRadioLoRestored") / $(Get-JsonValue $Report "g2RxPeakHuntRetuneAttemptCount")") | Out-Null
         $lines.Add("- Scan passes completed/planned/delay: $(Get-JsonValue $Report "g2RxPeakHuntCompletedPassCount") / $(Get-JsonValue $Report "g2RxPeakHuntPassCount") / $(Get-JsonValue $Report "g2RxPeakHuntPassDelaySec") sec") | Out-Null
         $lines.Add("- Operator candidate frequencies/count: $(Get-JsonValue $Report "g2RxPeakHuntCandidateFrequencyHzCount") / $(Get-JsonValue $Report "g2RxPeakHuntOperatorCandidateCount")") | Out-Null
+        $lines.Add("- Operator candidate frequencies: $(Format-MarkdownCell (Join-JsonValues @(Get-JsonArray $Report "g2RxPeakHuntCandidateFrequencyHz")))") | Out-Null
+        $lines.Add("- Operator-trend candidate frequencies/count: $(Format-MarkdownCell (Join-JsonValues @(Get-JsonArray $Report "g2RxPeakHuntOperatorTrendCandidateFrequencyHz"))) / $(Get-JsonValue $Report "g2RxPeakHuntOperatorTrendCandidateCount")") | Out-Null
+        $lines.Add("- Operator-trend top candidates: $(Format-MarkdownCell (Format-G2PeakHuntCandidateList @(Get-JsonArray $Report "g2RxPeakHuntOperatorTrendCandidates")))") | Out-Null
+        $lines.Add("- Frontend top peak candidates: $(Format-MarkdownCell (Format-G2PeakHuntCandidateList @(Get-JsonArray $Report "g2RxPeakHuntPeakCandidates")))") | Out-Null
         $lines.Add("- Auto phone cluster enabled/candidates/exact/neighbor/lookback/band: $(Get-JsonValue $Report "g2RxPeakHuntAutoPhoneCluster") / $(Get-JsonValue $Report "g2RxPeakHuntAutoPhoneClusterCandidateCount") / $(Get-JsonValue $Report "g2RxPeakHuntAutoPhoneClusterExactCandidateCount") / $(Get-JsonValue $Report "g2RxPeakHuntAutoPhoneClusterNeighborCandidateCount") / $(Get-JsonValue $Report "g2RxPeakHuntAutoPhoneClusterLookbackHours") h / $(Get-JsonValue $Report "g2RxPeakHuntAutoPhoneClusterBandLowHz")-$(Get-JsonValue $Report "g2RxPeakHuntAutoPhoneClusterBandHighHz") Hz") | Out-Null
+        $lines.Add("- Auto phone cluster candidate frequencies: $(Format-MarkdownCell (Join-JsonValues @(Get-JsonArray $Report "g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHz")))") | Out-Null
         $lines.Add("- Runs/failed/planned: $(Get-JsonValue $Report "g2RxPeakHuntActualRunCount") / $(Get-JsonValue $Report "g2RxPeakHuntFailedRunCount") / $(Get-JsonValue $Report "g2RxPeakHuntPlannedRunCount")") | Out-Null
         $lines.Add("- Referenced windows ready/total/problems: $(Get-JsonValue $Report "g2RxPeakHuntReferencedWindowReadyCount") / $(Get-JsonValue $Report "g2RxPeakHuntReferencedWindowCount") / $(Get-JsonValue $Report "g2RxPeakHuntReferencedWindowProblemCount")") | Out-Null
         $lines.Add("- Referenced window missing/non-portable/invalid/JSONL missing: $(Get-JsonValue $Report "g2RxPeakHuntReferencedWindowMissingCount") / $(Get-JsonValue $Report "g2RxPeakHuntReferencedWindowNonPortableCount") / $(Get-JsonValue $Report "g2RxPeakHuntReferencedWindowInvalidCount") / $(Get-JsonValue $Report "g2RxPeakHuntReferencedJsonlMissingCount")") | Out-Null
@@ -3594,7 +3680,13 @@ $report = [ordered]@{
     g2RxPeakHuntCompletedPassCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntCompletedPassCount")
     g2RxPeakHuntScanPassCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntScanPassCount")
     g2RxPeakHuntCandidateFrequencyHzCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntCandidateFrequencyHzCount")
+    g2RxPeakHuntCandidateFrequencyHz = @(Get-JsonArray $validation "g2RxPeakHuntCandidateFrequencyHz")
+    g2RxPeakHuntOperatorTrendCandidateFrequencyHz = @(Get-JsonArray $validation "g2RxPeakHuntOperatorTrendCandidateFrequencyHz")
+    g2RxPeakHuntOperatorTrendCandidateCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntOperatorTrendCandidateCount")
+    g2RxPeakHuntOperatorTrendCandidates = @(Get-JsonArray $validation "g2RxPeakHuntOperatorTrendCandidates")
     g2RxPeakHuntAutoPhoneCluster = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntAutoPhoneCluster")
+    g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHz = @(Get-JsonArray $validation "g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHz")
+    g2RxPeakHuntAutoPhoneClusterCandidates = @(Get-JsonArray $validation "g2RxPeakHuntAutoPhoneClusterCandidates")
     g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHzCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHzCount")
     g2RxPeakHuntAutoPhoneClusterCandidateCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntAutoPhoneClusterCandidateCount")
     g2RxPeakHuntAutoPhoneClusterExactCandidateCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntAutoPhoneClusterExactCandidateCount")
@@ -3625,6 +3717,7 @@ $report = [ordered]@{
     g2RxPeakHuntHardBlockerSampleCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntHardBlockerSampleCount")
     g2RxPeakHuntAgcPumpingRiskRunCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntAgcPumpingRiskRunCount")
     g2RxPeakHuntPeakCandidateCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntPeakCandidateCount")
+    g2RxPeakHuntPeakCandidates = @(Get-JsonArray $validation "g2RxPeakHuntPeakCandidates")
     g2RxPeakHuntRetuneAttemptCount = Get-IntegerValueOrDefault (Get-JsonValue $validation "g2RxPeakHuntRetuneAttemptCount")
     g2RxPeakHuntSafetyRxOnly = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntSafetyRxOnly")
     g2RxPeakHuntSafetyTxEndpointsTouched = Test-Truthy (Get-JsonValue $validation "g2RxPeakHuntSafetyTxEndpointsTouched")

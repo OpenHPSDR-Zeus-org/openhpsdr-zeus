@@ -211,6 +211,52 @@ function Get-NumericValueOrDefault {
     return $numeric
 }
 
+function ConvertTo-LongArray {
+    param($Items)
+
+    $values = New-Object System.Collections.Generic.List[object]
+    foreach ($item in @($Items)) {
+        $numeric = Get-NumericValue $item
+        if ($null -ne $numeric) {
+            $values.Add([long][Math]::Round($numeric)) | Out-Null
+        }
+    }
+
+    return @($values.ToArray())
+}
+
+function ConvertTo-G2PeakHuntCandidateSummary {
+    param($Candidate)
+
+    if ($null -eq $Candidate) {
+        return $null
+    }
+
+    $frequency = Get-NumericValue (Get-JsonValue $Candidate "frequencyHz")
+    if ($null -eq $frequency) {
+        return $null
+    }
+
+    $rank = Get-NumericValue (Get-JsonValue $Candidate "rank")
+    $offset = Get-NumericValue (Get-JsonValue $Candidate "offsetHz")
+    $snr = Get-NumericValue (Get-JsonValue $Candidate "snrDb")
+    $dbfs = Get-NumericValue (Get-JsonValue $Candidate "dbfs")
+    $confidence = Get-NumericValue (Get-JsonValue $Candidate "confidence")
+    $evidenceScore = Get-NumericValue (Get-JsonValue $Candidate "evidenceScore")
+
+    return [ordered]@{
+        rank = if ($null -eq $rank) { $null } else { [int][Math]::Round($rank) }
+        source = [string](Get-JsonValue $Candidate "source")
+        frequencyHz = [long][Math]::Round($frequency)
+        offsetHz = if ($null -eq $offset) { $null } else { [long][Math]::Round($offset) }
+        snrDb = $snr
+        dbfs = $dbfs
+        confidence = $confidence
+        coherent = Get-JsonValue $Candidate "coherent"
+        evidenceScore = $evidenceScore
+    }
+}
+
 function Get-DateTimeOffsetValue {
     param($Value)
 
@@ -6263,7 +6309,13 @@ $g2RxPeakHuntEvidence = [ordered]@{
     tool = ""
     status = "not-captured"
     comparisonId = ""
+    candidateFrequencyHz = @()
+    operatorTrendCandidateFrequencyHz = @()
+    operatorTrendCandidateCount = 0
+    operatorTrendCandidates = @()
     autoPhoneCluster = $false
+    autoPhoneClusterCandidateFrequencyHz = @()
+    autoPhoneClusterCandidates = @()
     autoPhoneClusterCandidateFrequencyHzCount = 0
     autoPhoneClusterCandidateCount = 0
     autoPhoneClusterExactCandidateCount = 0
@@ -6291,6 +6343,7 @@ $g2RxPeakHuntEvidence = [ordered]@{
     hardBlockerSampleCount = 0
     agcPumpingRiskRunCount = 0
     peakCandidateCount = 0
+    peakCandidates = @()
     retuneAttemptCount = 0
     safetyRxOnly = $false
     safetyTxEndpointsTouched = $false
@@ -13760,6 +13813,9 @@ else {
                 $completedPassCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "completedPassCount"))
                 $scanPasses = @(Get-JsonArray $artifactJson "scanPasses")
                 $candidateFrequencyHz = @(Get-JsonArray $artifactJson "candidateFrequencyHz")
+                $operatorTrendCandidateFrequencyHz = @(Get-JsonArray $artifactJson "operatorTrendCandidateFrequencyHz")
+                $operatorTrendCandidates = @(Get-JsonArray $artifactJson "operatorTrendCandidates")
+                $operatorTrendCandidateCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "operatorTrendCandidateCount"))
                 $autoPhoneCluster = Test-Truthy (Get-JsonValue $artifactJson "autoPhoneCluster")
                 $autoPhoneClusterCandidateFrequencyHz = @(Get-JsonArray $artifactJson "autoPhoneClusterCandidateFrequencyHz")
                 $autoPhoneClusterCandidates = @(Get-JsonArray $artifactJson "autoPhoneClusterCandidates")
@@ -13847,7 +13903,19 @@ else {
                 $g2RxPeakHuntEvidence["completedPassCount"] = $completedPassCount
                 $g2RxPeakHuntEvidence["scanPassCount"] = $scanPasses.Count
                 $g2RxPeakHuntEvidence["candidateFrequencyHzCount"] = $candidateFrequencyHz.Count
+                $g2RxPeakHuntEvidence["candidateFrequencyHz"] = @(ConvertTo-LongArray $candidateFrequencyHz)
+                $g2RxPeakHuntEvidence["operatorTrendCandidateFrequencyHz"] = @(ConvertTo-LongArray $operatorTrendCandidateFrequencyHz)
+                $g2RxPeakHuntEvidence["operatorTrendCandidateCount"] = if ($operatorTrendCandidateCount -gt 0) { $operatorTrendCandidateCount } else { $operatorTrendCandidates.Count }
+                $g2RxPeakHuntEvidence["operatorTrendCandidates"] = @($operatorTrendCandidates |
+                    Select-Object -First 8 |
+                    ForEach-Object { ConvertTo-G2PeakHuntCandidateSummary $_ } |
+                    Where-Object { $null -ne $_ })
                 $g2RxPeakHuntEvidence["autoPhoneCluster"] = $autoPhoneCluster
+                $g2RxPeakHuntEvidence["autoPhoneClusterCandidateFrequencyHz"] = @(ConvertTo-LongArray $autoPhoneClusterCandidateFrequencyHz)
+                $g2RxPeakHuntEvidence["autoPhoneClusterCandidates"] = @($autoPhoneClusterCandidates |
+                    Select-Object -First 8 |
+                    ForEach-Object { ConvertTo-G2PeakHuntCandidateSummary $_ } |
+                    Where-Object { $null -ne $_ })
                 $g2RxPeakHuntEvidence["autoPhoneClusterCandidateFrequencyHzCount"] = $autoPhoneClusterCandidateFrequencyHz.Count
                 $g2RxPeakHuntEvidence["autoPhoneClusterCandidateCount"] = if ($autoPhoneClusterCandidateCount -gt 0) { $autoPhoneClusterCandidateCount } else { $autoPhoneClusterCandidates.Count }
                 $g2RxPeakHuntEvidence["autoPhoneClusterExactCandidateCount"] = $autoPhoneClusterExactCandidateCount
@@ -13878,6 +13946,10 @@ else {
                 $g2RxPeakHuntEvidence["hardBlockerSampleCount"] = $hardBlockerSampleCount
                 $g2RxPeakHuntEvidence["agcPumpingRiskRunCount"] = $agcPumpingRiskRunCount
                 $g2RxPeakHuntEvidence["peakCandidateCount"] = $peakCandidates.Count
+                $g2RxPeakHuntEvidence["peakCandidates"] = @($peakCandidates |
+                    Select-Object -First 8 |
+                    ForEach-Object { ConvertTo-G2PeakHuntCandidateSummary $_ } |
+                    Where-Object { $null -ne $_ })
                 $g2RxPeakHuntEvidence["retuneAttemptCount"] = $retuneAttempts.Count
                 $g2RxPeakHuntEvidence["safetyRxOnly"] = $safetyRxOnly
                 $g2RxPeakHuntEvidence["safetyTxEndpointsTouched"] = $safetyTxEndpointsTouched
@@ -15660,7 +15732,13 @@ $report = [ordered]@{
     g2RxPeakHuntCompletedPassCount = $g2RxPeakHuntEvidence.completedPassCount
     g2RxPeakHuntScanPassCount = $g2RxPeakHuntEvidence.scanPassCount
     g2RxPeakHuntCandidateFrequencyHzCount = $g2RxPeakHuntEvidence.candidateFrequencyHzCount
+    g2RxPeakHuntCandidateFrequencyHz = @($g2RxPeakHuntEvidence.candidateFrequencyHz)
+    g2RxPeakHuntOperatorTrendCandidateFrequencyHz = @($g2RxPeakHuntEvidence.operatorTrendCandidateFrequencyHz)
+    g2RxPeakHuntOperatorTrendCandidateCount = $g2RxPeakHuntEvidence.operatorTrendCandidateCount
+    g2RxPeakHuntOperatorTrendCandidates = @($g2RxPeakHuntEvidence.operatorTrendCandidates)
     g2RxPeakHuntAutoPhoneCluster = $g2RxPeakHuntEvidence.autoPhoneCluster
+    g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHz = @($g2RxPeakHuntEvidence.autoPhoneClusterCandidateFrequencyHz)
+    g2RxPeakHuntAutoPhoneClusterCandidates = @($g2RxPeakHuntEvidence.autoPhoneClusterCandidates)
     g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHzCount = $g2RxPeakHuntEvidence.autoPhoneClusterCandidateFrequencyHzCount
     g2RxPeakHuntAutoPhoneClusterCandidateCount = $g2RxPeakHuntEvidence.autoPhoneClusterCandidateCount
     g2RxPeakHuntAutoPhoneClusterExactCandidateCount = $g2RxPeakHuntEvidence.autoPhoneClusterExactCandidateCount
@@ -15691,6 +15769,7 @@ $report = [ordered]@{
     g2RxPeakHuntHardBlockerSampleCount = $g2RxPeakHuntEvidence.hardBlockerSampleCount
     g2RxPeakHuntAgcPumpingRiskRunCount = $g2RxPeakHuntEvidence.agcPumpingRiskRunCount
     g2RxPeakHuntPeakCandidateCount = $g2RxPeakHuntEvidence.peakCandidateCount
+    g2RxPeakHuntPeakCandidates = @($g2RxPeakHuntEvidence.peakCandidates)
     g2RxPeakHuntRetuneAttemptCount = $g2RxPeakHuntEvidence.retuneAttemptCount
     g2RxPeakHuntSafetyRxOnly = $g2RxPeakHuntEvidence.safetyRxOnly
     g2RxPeakHuntSafetyTxEndpointsTouched = $g2RxPeakHuntEvidence.safetyTxEndpointsTouched

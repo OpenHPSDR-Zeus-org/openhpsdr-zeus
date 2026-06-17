@@ -6793,7 +6793,16 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(2, validationRoot.GetProperty("g2RxPeakHuntCompletedPassCount").GetInt32());
             Assert.Equal(2, validationRoot.GetProperty("g2RxPeakHuntScanPassCount").GetInt32());
             Assert.Equal(2, validationRoot.GetProperty("g2RxPeakHuntCandidateFrequencyHzCount").GetInt32());
+            Assert.Equal(new[] { 14260000L, 14243000L }, validationRoot.GetProperty("g2RxPeakHuntCandidateFrequencyHz").EnumerateArray().Select(item => item.GetInt64()).ToArray());
+            Assert.Equal(new[] { 14267000L, 14280000L }, validationRoot.GetProperty("g2RxPeakHuntOperatorTrendCandidateFrequencyHz").EnumerateArray().Select(item => item.GetInt64()).ToArray());
+            Assert.Equal(2, validationRoot.GetProperty("g2RxPeakHuntOperatorTrendCandidateCount").GetInt32());
+            var validationTrendCandidates = validationRoot.GetProperty("g2RxPeakHuntOperatorTrendCandidates").EnumerateArray().ToArray();
+            Assert.Equal(2, validationTrendCandidates.Length);
+            Assert.Equal(14267000L, validationTrendCandidates[0].GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(56.45, validationTrendCandidates[0].GetProperty("evidenceScore").GetDouble(), precision: 3);
             Assert.True(validationRoot.GetProperty("g2RxPeakHuntAutoPhoneCluster").GetBoolean());
+            Assert.Equal(new[] { 14240000L, 14270000L, 14277000L, 14280000L }, validationRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHz").EnumerateArray().Select(item => item.GetInt64()).ToArray());
+            Assert.Equal(4, validationRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterCandidates").GetArrayLength());
             Assert.Equal(4, validationRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHzCount").GetInt32());
             Assert.Equal(4, validationRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterCandidateCount").GetInt32());
             Assert.Equal(3, validationRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterExactCandidateCount").GetInt32());
@@ -6816,6 +6825,9 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(1, validationRoot.GetProperty("g2RxPeakHuntPassbandQualifiedNearStrongInputSampleCount").GetInt32());
             Assert.Equal(20, validationRoot.GetProperty("g2RxPeakHuntFrontendNearPassbandSampleCount").GetInt32());
             Assert.Equal(1, validationRoot.GetProperty("g2RxPeakHuntRetuneAttemptCount").GetInt32());
+            var validationPeakCandidates = validationRoot.GetProperty("g2RxPeakHuntPeakCandidates").EnumerateArray().ToArray();
+            Assert.Single(validationPeakCandidates);
+            Assert.Equal(14250000L, validationPeakCandidates[0].GetProperty("frequencyHz").GetInt64());
             Assert.Equal(14250000L, validationRoot.GetProperty("g2RxPeakHuntBestFrequencyHz").GetInt64());
             Assert.Equal(2, validationRoot.GetProperty("g2RxPeakHuntReferencedWindowCount").GetInt32());
             Assert.Equal(2, validationRoot.GetProperty("g2RxPeakHuntReferencedWindowReadyCount").GetInt32());
@@ -6869,10 +6881,16 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(summaryRoot.GetProperty("g2RxPeakHuntBaseUrlAutoDiscovered").GetBoolean());
             Assert.Equal(2, summaryRoot.GetProperty("g2RxPeakHuntCompletedPassCount").GetInt32());
             Assert.Equal(2, summaryRoot.GetProperty("g2RxPeakHuntOperatorCandidateCount").GetInt32());
+            Assert.Equal(new[] { 14260000L, 14243000L }, summaryRoot.GetProperty("g2RxPeakHuntCandidateFrequencyHz").EnumerateArray().Select(item => item.GetInt64()).ToArray());
+            Assert.Equal(new[] { 14267000L, 14280000L }, summaryRoot.GetProperty("g2RxPeakHuntOperatorTrendCandidateFrequencyHz").EnumerateArray().Select(item => item.GetInt64()).ToArray());
+            Assert.Equal(2, summaryRoot.GetProperty("g2RxPeakHuntOperatorTrendCandidateCount").GetInt32());
+            Assert.Equal(2, summaryRoot.GetProperty("g2RxPeakHuntOperatorTrendCandidates").GetArrayLength());
             Assert.True(summaryRoot.GetProperty("g2RxPeakHuntSafetyOriginalRadioLoRestored").GetBoolean());
             Assert.Equal(14255000L, summaryRoot.GetProperty("g2RxPeakHuntHardwareOriginalRadioLoHz").GetInt64());
             Assert.Equal(14255000L, summaryRoot.GetProperty("g2RxPeakHuntHardwareRestoredRadioLoHz").GetInt64());
             Assert.True(summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneCluster").GetBoolean());
+            Assert.Equal(new[] { 14240000L, 14270000L, 14277000L, 14280000L }, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterCandidateFrequencyHz").EnumerateArray().Select(item => item.GetInt64()).ToArray());
+            Assert.Equal(4, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterCandidates").GetArrayLength());
             Assert.Equal(4, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterCandidateCount").GetInt32());
             Assert.Equal(3, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterExactCandidateCount").GetInt32());
             Assert.Equal(1, summaryRoot.GetProperty("g2RxPeakHuntAutoPhoneClusterNeighborCandidateCount").GetInt32());
@@ -6886,6 +6904,7 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(8, summaryRoot.GetProperty("g2RxPeakHuntPassbandQualifiedStrongInputSampleCount").GetInt32());
             Assert.Equal(1, summaryRoot.GetProperty("g2RxPeakHuntPassbandQualifiedNearStrongInputSampleCount").GetInt32());
             Assert.Equal(20, summaryRoot.GetProperty("g2RxPeakHuntFrontendNearPassbandSampleCount").GetInt32());
+            Assert.Single(summaryRoot.GetProperty("g2RxPeakHuntPeakCandidates").EnumerateArray());
             Assert.Equal(14250000L, summaryRoot.GetProperty("g2RxPeakHuntBestFrequencyHz").GetInt64());
             Assert.Equal(2, summaryRoot.GetProperty("g2RxPeakHuntReferencedWindowReadyCount").GetInt32());
 
@@ -6901,7 +6920,12 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains("Base URL requested/resolved/auto-discovered", markdown, StringComparison.Ordinal);
             Assert.Contains("Scan passes completed/planned/delay", markdown, StringComparison.Ordinal);
             Assert.Contains("Operator candidate frequencies/count", markdown, StringComparison.Ordinal);
+            Assert.Contains("Operator candidate frequencies: 14260000, 14243000", markdown, StringComparison.Ordinal);
+            Assert.Contains("Operator-trend candidate frequencies/count: 14267000, 14280000 / 2", markdown, StringComparison.Ordinal);
+            Assert.Contains("Frontend top peak candidates", markdown, StringComparison.Ordinal);
+            Assert.Contains("14250000 Hz", markdown, StringComparison.Ordinal);
             Assert.Contains("Auto phone cluster enabled/candidates/exact/neighbor/lookback/band", markdown, StringComparison.Ordinal);
+            Assert.Contains("Auto phone cluster candidate frequencies: 14240000, 14270000, 14277000, 14280000", markdown, StringComparison.Ordinal);
             Assert.Contains("radio LO restored", markdown, StringComparison.Ordinal);
             Assert.Contains("14150000-14350000", markdown, StringComparison.Ordinal);
             Assert.Contains("Weak/strong/near-strong samples", markdown, StringComparison.Ordinal);
@@ -7398,6 +7422,8 @@ public sealed class DspModernizationValidationToolTests
             completedPassCount = 2,
             scanPassCount = 2,
             candidateFrequencyHz = new[] { 14260000L, 14243000L },
+            operatorTrendCandidateFrequencyHz = new[] { 14267000L, 14280000L },
+            operatorTrendCandidateCount = 2,
             autoPhoneCluster = true,
             autoPhoneClusterMaxCandidates = 12,
             autoPhoneClusterLookbackHours = 12,
@@ -7574,6 +7600,25 @@ public sealed class DspModernizationValidationToolTests
                     source = "operator-frequency",
                     frequencyHz = 14243000,
                     offsetHz = -47000
+                }
+            },
+            operatorTrendCandidates = new object[]
+            {
+                new
+                {
+                    rank = 1,
+                    source = "operator-trend-neighbor",
+                    frequencyHz = 14267000,
+                    offsetHz = -23000,
+                    evidenceScore = 56.45
+                },
+                new
+                {
+                    rank = 2,
+                    source = "operator-trend-neighbor",
+                    frequencyHz = 14280000,
+                    offsetHz = -10000,
+                    evidenceScore = 55.25
                 }
             },
             autoPhoneClusterCandidates = new object[]
