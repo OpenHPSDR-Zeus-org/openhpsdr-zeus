@@ -732,41 +732,73 @@ public sealed class HamClockService : IHostedService, IAsyncDisposable
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        // Dirs to search for the tool and to prepend to the child PATH, highest
+        // priority first:
+        //  - _nodeDir: the bundled/private Node (npm lives beside node there).
+        //  - macOS system-node dirs: a GUI-launched .app inherits a minimal
+        //    launchd PATH (/usr/bin:/bin:/usr/sbin:/sbin) and never runs the
+        //    login-shell path_helper, so Homebrew/.pkg/MacPorts node is otherwise
+        //    invisible. (#657)
+        var dirs = new List<string>();
+        if (_nodeDir is not null) dirs.Add(_nodeDir);
+        if (OperatingSystem.IsMacOS())
+        {
+            dirs.Add("/opt/homebrew/bin"); // Apple-silicon Homebrew
+            dirs.Add("/usr/local/bin");    // Intel Homebrew + official node .pkg
+            dirs.Add("/opt/local/bin");    // MacPorts
+        }
+
         if (OperatingSystem.IsWindows() && (tool is "npm" or "npx"))
         {
+            // npm/npx are .cmd shims on Windows — must go through cmd.exe.
             psi.FileName = "cmd.exe";
             psi.Arguments = $"/c {tool} {args}";
         }
         else
         {
-            psi.FileName = tool;
+            // CRITICAL: .NET's Process.Start resolves a BARE program name against
+            // the PARENT process PATH, not psi.Environment["PATH"]. In a
+            // GUI-launched macOS .app the parent PATH is stripped, so a bare
+            // "node" never resolves even though we point the child PATH at it —
+            // which is why a bundled/installed Node "did not run". Resolve the
+            // absolute path ourselves. (#657)
+            psi.FileName = ResolveExecutable(tool, dirs) ?? tool;
             psi.Arguments = args;
         }
-        // Build the dirs to prepend to the child's PATH, highest priority first.
-        //  - _nodeDir: the private portable copy (npm lives beside node there,
-        //    not on the system PATH).
-        //  - On macOS, the common system-node install dirs. A GUI-launched .app
-        //    inherits a minimal launchd PATH (/usr/bin:/bin:/usr/sbin:/sbin) and
-        //    never runs the login-shell path_helper, so an already-installed
-        //    node (Homebrew/official .pkg/MacPorts) is invisible — `node` then
-        //    fails to resolve and HamClock reports "Node missing" even though it
-        //    is right there. Prepending these makes the app resolve node exactly
-        //    as a terminal does. (#657)
-        var prepend = new List<string>();
-        if (_nodeDir is not null) prepend.Add(_nodeDir);
-        if (OperatingSystem.IsMacOS())
-        {
-            prepend.Add("/opt/homebrew/bin"); // Apple-silicon Homebrew
-            prepend.Add("/usr/local/bin");    // Intel Homebrew + official node .pkg
-            prepend.Add("/opt/local/bin");    // MacPorts
-        }
-        if (prepend.Count > 0)
+
+        // Prepend the dirs to the child's PATH too, so tools the child itself
+        // spawns (e.g. npm's `#!/usr/bin/env node` shim) resolve the same runtime.
+        if (dirs.Count > 0)
         {
             var existing = psi.Environment.TryGetValue("PATH", out var p) ? p : Environment.GetEnvironmentVariable("PATH");
-            psi.Environment["PATH"] = string.Join(Path.PathSeparator, prepend)
+            psi.Environment["PATH"] = string.Join(Path.PathSeparator, dirs)
                 + Path.PathSeparator + (existing ?? string.Empty);
         }
         return psi;
+    }
+
+    /// <summary>Resolve a tool to an ABSOLUTE path: search <paramref name="dirs"/>
+    /// first, then the inherited PATH. Returns null if not found (caller falls
+    /// back to the bare name). Needed because .NET resolves bare program names
+    /// against the parent process PATH, not ProcessStartInfo.Environment["PATH"].</summary>
+    private static string? ResolveExecutable(string tool, List<string> dirs)
+    {
+        var candidates = new List<string>(dirs);
+        var path = Environment.GetEnvironmentVariable("PATH");
+        if (!string.IsNullOrEmpty(path)) candidates.AddRange(path.Split(Path.PathSeparator));
+        var names = OperatingSystem.IsWindows()
+            ? new[] { tool + ".exe", tool + ".cmd", tool }
+            : new[] { tool };
+        foreach (var dir in candidates)
+        {
+            if (string.IsNullOrWhiteSpace(dir)) continue;
+            foreach (var name in names)
+            {
+                try { var full = Path.Combine(dir, name); if (File.Exists(full)) return full; }
+                catch { /* skip malformed PATH entries */ }
+            }
+        }
+        return null;
     }
 
     /// <summary>Run a tool to completion, streaming its output into the log. Returns the exit code (or -1 on spawn failure).</summary>
