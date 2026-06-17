@@ -13505,6 +13505,68 @@ else {
                                 }
                                 else {
                                     $captureRecord["sourceStatus"] = "matched"
+                                    $watchOkRaw = Get-JsonValue $watchSummary "ok"
+                                    $watchOk = if ($null -eq $watchOkRaw) { $true } else { Test-Truthy $watchOkRaw }
+                                    $watchReadyForBenchmark = Test-Truthy (Get-JsonValue $watchSummary "readyForBenchmarkTrace")
+                                    $watchWeak = Get-JsonValue $watchSummary "nr5WeakSignalWatch"
+                                    $watchWeakInputValue = Get-NumericValue (Get-JsonValue $watchWeak "weakInputSampleCount")
+                                    $watchStrongInputValue = Get-NumericValue (Get-JsonValue $watchWeak "strongInputSampleCount")
+                                    $watchNearStrongInputValue = Get-NumericValue (Get-JsonValue $watchWeak "nearStrongInputSampleCount")
+                                    $watchStatus = [string](Get-JsonValue $watchWeak "mixedWeakStrongEvidenceStatus")
+                                    $watchMixedReady = Test-Truthy (Get-JsonValue $watchWeak "mixedWeakStrongEvidenceReady")
+                                    $captureReadyForBenchmark = Test-Truthy (Get-JsonValue $capture "readyForBenchmarkTrace")
+                                    $captureWeakInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $capture "weakInputSampleCount"))
+                                    $captureStrongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $capture "strongInputSampleCount"))
+                                    $captureNearStrongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $capture "nearStrongInputSampleCount"))
+                                    $captureMixedReady = Test-Truthy (Get-JsonValue $capture "mixedWeakStrongEvidenceReady")
+
+                                    if (-not $watchOk) {
+                                        $captureRecord["sourceStatus"] = "watch-not-ok"
+                                        $captureOk = $false
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-capture-report-not-ok" "Artifact '$artifactId' capture vfoHz='$captureVfoHz' watcher summary '$captureReportPath' reports ok=false."
+                                        $artifactValidationOk = $false
+                                    }
+                                    if (-not $captureReadyForBenchmark -or -not $watchReadyForBenchmark) {
+                                        $captureRecord["sourceStatus"] = "not-ready"
+                                        $captureOk = $false
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-capture-report-not-ready" "Artifact '$artifactId' capture vfoHz='$captureVfoHz' readyForBenchmarkTrace=$captureReadyForBenchmark but watcher summary '$captureReportPath' readyForBenchmarkTrace=$watchReadyForBenchmark."
+                                        $artifactValidationOk = $false
+                                    }
+                                    if ($null -eq $watchWeakInputValue -or $null -eq $watchStrongInputValue -or $null -eq $watchNearStrongInputValue -or [string]::IsNullOrWhiteSpace($watchStatus)) {
+                                        $captureRecord["sourceStatus"] = "watch-fields-missing"
+                                        $captureOk = $false
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-capture-report-weak-watch-missing" "Artifact '$artifactId' capture vfoHz='$captureVfoHz' watcher summary '$captureReportPath' is missing nr5WeakSignalWatch weak/strong/near-strong counters or status."
+                                        $artifactValidationOk = $false
+                                    }
+                                    else {
+                                        $watchWeakInputSampleCount = [int][Math]::Round($watchWeakInputValue)
+                                        $watchStrongInputSampleCount = [int][Math]::Round($watchStrongInputValue)
+                                        $watchNearStrongInputSampleCount = [int][Math]::Round($watchNearStrongInputValue)
+                                        if ($watchWeakInputSampleCount -ne $captureWeakInputSampleCount -or
+                                            $watchStrongInputSampleCount -ne $captureStrongInputSampleCount -or
+                                            $watchNearStrongInputSampleCount -ne $captureNearStrongInputSampleCount) {
+                                            $captureRecord["sourceStatus"] = "weak-watch-count-mismatch"
+                                            $captureOk = $false
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-capture-report-count-mismatch" "Artifact '$artifactId' capture vfoHz='$captureVfoHz' counters weak/strong/nearStrong=$captureWeakInputSampleCount/$captureStrongInputSampleCount/$captureNearStrongInputSampleCount but watcher summary '$captureReportPath' reports $watchWeakInputSampleCount/$watchStrongInputSampleCount/$watchNearStrongInputSampleCount."
+                                            $artifactValidationOk = $false
+                                        }
+                                        if (-not [string]::Equals($watchStatus, $captureStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                                            $captureRecord["sourceStatus"] = "weak-watch-status-mismatch"
+                                            $captureOk = $false
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-capture-report-status-mismatch" "Artifact '$artifactId' capture vfoHz='$captureVfoHz' status='$captureStatus' but watcher summary '$captureReportPath' reports status='$watchStatus'."
+                                            $artifactValidationOk = $false
+                                        }
+                                        if ($watchMixedReady -ne $captureMixedReady) {
+                                            $captureRecord["sourceStatus"] = "weak-watch-ready-mismatch"
+                                            $captureOk = $false
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "manual-tune-observer-capture-report-ready-mismatch" "Artifact '$artifactId' capture vfoHz='$captureVfoHz' mixedWeakStrongEvidenceReady=$captureMixedReady but watcher summary '$captureReportPath' reports mixedWeakStrongEvidenceReady=$watchMixedReady."
+                                            $artifactValidationOk = $false
+                                        }
+                                    }
+
+                                    if ($captureOk) {
+                                        $captureRecord["sourceStatus"] = "matched-ready"
+                                    }
                                 }
                             }
                         }

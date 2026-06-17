@@ -651,6 +651,88 @@ public sealed class DspManualTuneObserverValidationToolTests
     }
 
     [SkippableFact]
+    public async Task ManualTuneObserverPartialScanErrorWithUnreadyReferencedCaptureStaysBlocked()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell manual-tune observer validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-manual-tune-observer-partial-scan-unready-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteManualTuneObserverArtifactManifest(bundleDir);
+            WriteManualTuneObserverReportWithTuningHints(
+                bundleDir,
+                weakOnlyCapture: true,
+                partialScanError: true,
+                watcherReportNotReady: true);
+
+            var validationReport = Path.Combine(bundleDir, "validation-manual-tune-observer-partial-scan-unready.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.False(validationRoot.GetProperty("manualTuneObserverReportValid").GetBoolean());
+            Assert.False(validationRoot.GetProperty("manualTuneObserverReportReady").GetBoolean());
+            Assert.Equal(0, validationRoot.GetProperty("manualTuneObserverReferencedCaptureReadyCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("manualTuneObserverReferencedCaptureProblemCount").GetInt32());
+
+            var issueCodes = validationRoot.GetProperty("warnings")
+                .EnumerateArray()
+                .Concat(validationRoot.GetProperty("errors").EnumerateArray())
+                .Select(issue => issue.GetProperty("code").GetString() ?? "")
+                .ToArray();
+            Assert.Contains("manual-tune-observer-capture-report-not-ok", issueCodes);
+            Assert.Contains("manual-tune-observer-capture-report-not-ready", issueCodes);
+            Assert.Contains("manual-tune-observer-scan-error", issueCodes);
+            Assert.DoesNotContain("manual-tune-observer-partial-scan-error", issueCodes);
+
+            var summaryReport = Path.Combine(bundleDir, "summary-manual-tune-observer-partial-scan-unready.json");
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-modernization-validation-report.ps1"),
+                "-ValidationReportPath", validationReport,
+                "-ReportPath", summaryReport,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.Equal(0, summary.ExitCode);
+            Assert.True(File.Exists(summaryReport), summary.CombinedOutput);
+
+            using var summaryDoc = JsonDocument.Parse(await File.ReadAllTextAsync(summaryReport));
+            var actionIds = summaryDoc.RootElement.GetProperty("acceptanceActionPlan")
+                .EnumerateArray()
+                .Select(item => item.GetProperty("actionId").GetString() ?? "")
+                .ToArray();
+            Assert.DoesNotContain("capture-manual-observer-best-observed-vfo", actionIds);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task ManualTuneObserverObservedVfoTriageFallsBackToObservedVfoWithoutHint()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell manual-tune observer validator smoke runs on Windows.");
@@ -860,6 +942,7 @@ public sealed class DspManualTuneObserverValidationToolTests
         bool invalidNearStrongCandidate = false,
         bool weakOnlyCapture = false,
         bool partialScanError = false,
+        bool watcherReportNotReady = false,
         long observedVfoHz = 14_331_500L)
     {
         const string captureReportPath = "artifacts/manual-tune-observer/14365124/live-diagnostics-watch.json";
@@ -1142,7 +1225,13 @@ public sealed class DspManualTuneObserverValidationToolTests
             Path.Combine(bundleDir, "artifacts", "manual-tune-observer-report.json"),
             reportJson.ToJsonString(CamelCaseJson));
 
-        WriteSyntheticWatcherFiles(bundleDir, captureReportPath, captureJsonlPath, nearStrongCandidate && includeCapture, weakOnlyCapture && includeCapture);
+        WriteSyntheticWatcherFiles(
+            bundleDir,
+            captureReportPath,
+            captureJsonlPath,
+            nearStrongCandidate && includeCapture,
+            weakOnlyCapture && includeCapture,
+            watcherReportNotReady && includeCapture);
     }
 
     private static string GetBooleanDebug(JsonElement root, string propertyName)
@@ -1233,7 +1322,13 @@ public sealed class DspManualTuneObserverValidationToolTests
         return pollJson;
     }
 
-    private static void WriteSyntheticWatcherFiles(string bundleDir, string reportPath, string jsonlPath, bool nearStrongCandidate = false, bool weakOnlyCapture = false)
+    private static void WriteSyntheticWatcherFiles(
+        string bundleDir,
+        string reportPath,
+        string jsonlPath,
+        bool nearStrongCandidate = false,
+        bool weakOnlyCapture = false,
+        bool watcherReportNotReady = false)
     {
         var resolvedReportPath = Path.Combine(bundleDir, reportPath.Replace('/', Path.DirectorySeparatorChar));
         var resolvedJsonlPath = Path.Combine(bundleDir, jsonlPath.Replace('/', Path.DirectorySeparatorChar));
@@ -1244,15 +1339,15 @@ public sealed class DspManualTuneObserverValidationToolTests
         {
             schemaVersion = 1,
             tool = "watch-dsp-live-diagnostics",
-            ok = true,
-            readyForBenchmarkTrace = true,
+            ok = !watcherReportNotReady,
+            readyForBenchmarkTrace = !watcherReportNotReady,
             sampleCount = 24,
             jsonlPath,
             nr5WeakSignalWatch = new
             {
                 weakInputSampleCount = 8,
                 strongInputSampleCount = nearStrongCandidate || weakOnlyCapture ? 0 : 9,
-                nearStrongInputSampleCount = nearStrongCandidate ? 3 : 2,
+                nearStrongInputSampleCount = nearStrongCandidate ? 3 : (weakOnlyCapture ? 0 : 2),
                 mixedWeakStrongEvidenceReady = !nearStrongCandidate && !weakOnlyCapture,
                 mixedWeakStrongEvidenceStatus = nearStrongCandidate || weakOnlyCapture ? "missing-strong-input" : "ready",
                 speechQualifiedWeakInputSampleCount = 6,
