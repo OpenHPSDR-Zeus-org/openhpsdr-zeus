@@ -66,7 +66,7 @@ public sealed class DspManualTuneObserverToolTests
                 "-BaseUrl", server.BaseUrl,
                 "-ReportPath", reportPath,
                 "-OutputRoot", Path.Combine(bundleDir, "captures"),
-                "-PollCount", "1",
+                "-PollCount", "3",
                 "-PollIntervalSec", "0",
                 "-StablePolls", "1",
                 "-MinCoherentSnrDb", "6",
@@ -78,10 +78,12 @@ public sealed class DspManualTuneObserverToolTests
             Assert.True(run.ExitCode == 0, run.CombinedOutput);
             using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
             var root = doc.RootElement;
-            Assert.Equal(1, root.GetProperty("frontendTuningHintPollCount").GetInt32());
+            Assert.Equal(3, root.GetProperty("pollSampleCount").GetInt32());
+            Assert.Equal(0, root.GetProperty("maxCaptures").GetInt32());
+            Assert.Equal(3, root.GetProperty("frontendTuningHintPollCount").GetInt32());
             Assert.Equal(0, root.GetProperty("captureQualifiedPollCount").GetInt32());
             Assert.Equal(0, root.GetProperty("frontendFilterPassbandPollCount").GetInt32());
-            Assert.Equal(1, root.GetProperty("frontendFilterOffPassbandPollCount").GetInt32());
+            Assert.Equal(3, root.GetProperty("frontendFilterOffPassbandPollCount").GetInt32());
 
             var hint = root.GetProperty("frontendBestTuningHint");
             Assert.Equal("above-filter", hint.GetProperty("reason").GetString());
@@ -93,7 +95,7 @@ public sealed class DspManualTuneObserverToolTests
             Assert.Equal(14_365_124, hint.GetProperty("suggestedVfoHz").GetInt64());
             Assert.Equal(14.365124, hint.GetProperty("suggestedVfoMhz").GetDouble(), precision: 6);
 
-            var poll = root.GetProperty("polls").EnumerateArray().Single();
+            var poll = root.GetProperty("polls").EnumerateArray().First();
             Assert.Equal(33_624.0, poll.GetProperty("frontendSuggestedDialShiftHz").GetDouble(), precision: 3);
             Assert.Equal(14_365_124, poll.GetProperty("frontendSuggestedVfoHz").GetInt64());
             Assert.Equal("above-filter", poll.GetProperty("frontendSuggestedTuneReason").GetString());
@@ -103,6 +105,87 @@ public sealed class DspManualTuneObserverToolTests
                 .Select(item => item.GetString() ?? "")
                 .ToArray();
             Assert.Contains(recommendations, value => value.Contains("Read-only manual tuning hint", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ManualTuneObserverReportsCaptureDisabledWhenMaxCapturesZero()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell manual-tune observer smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-manual-tune-observer-no-capture-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            using var server = JsonRouteServer.Start(new Dictionary<string, string>
+            {
+                ["/api/state"] = Json(new
+                {
+                    status = "Connected",
+                    vfoHz = 14_213_000,
+                    radioLoHz = 14_208_500,
+                    mode = "USB",
+                    filterLowHz = 100,
+                    filterHighHz = 3_152
+                }),
+                ["/api/radio/diagnostics/dsp-scene"] = Json(new
+                {
+                    status = "fresh",
+                    fresh = true,
+                    signalProfile = "voice-like",
+                    coherentMaxSnrDb = 28.0,
+                    maxSnrDb = 28.0,
+                    topPeaks = new object[]
+                    {
+                        FrontendTopPeak(14_214_441, 1_441, 28.8, -75.6)
+                    }
+                }),
+                ["/api/dsp/live-diagnostics"] = Json(ManualTuneObserverLiveDiagnostics())
+            });
+
+            var reportPath = Path.Combine(bundleDir, "manual-observer-no-capture.json");
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-manual-tune-observer.ps1"),
+                "-BaseUrl", server.BaseUrl,
+                "-ReportPath", reportPath,
+                "-OutputRoot", Path.Combine(bundleDir, "captures"),
+                "-PollCount", "3",
+                "-PollIntervalSec", "0",
+                "-StablePolls", "1",
+                "-MinCoherentSnrDb", "6",
+                "-SceneProfilePattern", "voice",
+                "-MaxCaptures", "0",
+                "-RequireFrontendNearPassband",
+                "-JsonOnly");
+
+            Assert.True(run.ExitCode == 0, run.CombinedOutput);
+            using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = doc.RootElement;
+            Assert.Equal(3, root.GetProperty("pollSampleCount").GetInt32());
+            Assert.Equal(0, root.GetProperty("captureCount").GetInt32());
+            Assert.Equal(3, root.GetProperty("captureQualifiedPollCount").GetInt32());
+            Assert.Equal(3, root.GetProperty("frontendFilterPassbandPollCount").GetInt32());
+
+            var recommendations = root.GetProperty("recommendations")
+                .EnumerateArray()
+                .Select(item => item.GetString() ?? "")
+                .ToArray();
+            Assert.Contains(recommendations, value => value.Contains("Capture is disabled by -MaxCaptures 0", StringComparison.Ordinal));
+            Assert.DoesNotContain(recommendations, value => value.Contains("No stable voice-like manual-tune VFO met the capture threshold", StringComparison.Ordinal));
         }
         finally
         {

@@ -952,7 +952,7 @@ try {
             }
         }
 
-        if ($captures.Count -ge $MaxCaptures) {
+        if ($MaxCaptures -gt 0 -and $captures.Count -ge $MaxCaptures) {
             break
         }
 
@@ -1090,7 +1090,12 @@ foreach ($entry in $vfoCaptureCounts.GetEnumerator()) {
 
 $recommendations = New-Object System.Collections.Generic.List[string]
 if ($captureArray.Count -le 0) {
-    $recommendations.Add("No stable voice-like manual-tune VFO met the capture threshold; keep tuning manually or lower MinCoherentSnrDb for scouting only.") | Out-Null
+    if ($MaxCaptures -le 0 -and $captureQualifiedPollCount -gt 0) {
+        $recommendations.Add("Capture is disabled by -MaxCaptures 0; observed $captureQualifiedPollCount capture-qualified poll(s) for scouting without launching child diagnostics.") | Out-Null
+    }
+    else {
+        $recommendations.Add("No stable voice-like manual-tune VFO met the capture threshold; keep tuning manually or lower MinCoherentSnrDb for scouting only.") | Out-Null
+    }
     if ($RequireFrontendNearPassband -and $frontendNearPassbandPollCount -le 0 -and $frontendOffPassbandPollCount -gt 0) {
         $recommendations.Add("Frontend peaks were present but none were within $FrontendNearPassbandThresholdHz Hz of the dial/passband; keep manually tuning toward the visible peak before capturing acceptance evidence.") | Out-Null
     }
