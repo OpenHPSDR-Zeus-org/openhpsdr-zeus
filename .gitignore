@@ -82,3 +82,8 @@ installers/dmg_temp/
 .zeus-apply.txt.err
 .zeus-ep.diff
 .zeus-ep-mine.diff
+
+# DSP live-diagnostics scratch runs — transient capture output, never commit.
+# (The tracked tmp/wdsp-fixture-matrix-smoke/ fixtures predate this rule and
+# stay tracked; git keeps tracking already-tracked paths even when ignored.)
+/tmp/
