@@ -64,6 +64,9 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<ReturnType<typeof createWfRenderer> | null>(null);
+  // Pending deferred WEBGL_lose_context handle (see the GL effect cleanup). A
+  // ref so it survives across the StrictMode mount→cleanup→mount cycle.
+  const pendingLoseRef = useRef<number | null>(null);
   const popEnabled = useSignalEnhanceStore((s) => s.popEnabled);
   const popRenderIntensity = useSignalEnhanceStore((s) => s.popRenderIntensity);
   const waterfallReliefDepth = useSignalEnhanceStore((s) => s.waterfallReliefDepth);
@@ -94,6 +97,17 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
+
+    // If a previous cleanup deferred a loseContext() (see below), this is an
+    // immediate remount — cancel it so we keep the still-healthy context on the
+    // reused canvas. Without this, StrictMode's dev mount→cleanup→mount (and any
+    // canvas-reuse remount) lands on a context we just killed: getContext()
+    // returns the dead one (float_linear=false, NEAREST fallback) and the
+    // engine's shader fails to compile → blank waterfall.
+    if (pendingLoseRef.current !== null) {
+      clearTimeout(pendingLoseRef.current);
+      pendingLoseRef.current = null;
+    }
 
     // Tell the realtime client that decoded spectrum frames are needed —
     // ws-client.ts skips decodeDisplayFrame entirely when no consumer is
@@ -453,10 +467,19 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       cancelDrawBusFrame(redraw);
       releaseFrameConsumer();
       renderer?.dispose();
-      // Free the ANGLE context slot now rather than waiting for GC — on a
+      // Free the ANGLE context slot rather than waiting for GC — on a
       // disconnect/reconnect cycle the Waterfall remounts, and ANGLE caps the
-      // number of live WebGL contexts (#629).
-      gl?.getExtension('WEBGL_lose_context')?.loseContext();
+      // number of live WebGL contexts (#629). But loseContext() is DESTRUCTIVE
+      // to the canvas element: a subsequent getContext() on the same canvas
+      // returns the dead context. So defer it — an immediate remount (StrictMode
+      // in dev, or any canvas reuse) cancels this at the top of the effect and
+      // keeps the live context; a real unmount has nothing to cancel it, so the
+      // slot is freed on the next tick.
+      const ctx = gl;
+      pendingLoseRef.current = window.setTimeout(() => {
+        ctx?.getExtension('WEBGL_lose_context')?.loseContext();
+        pendingLoseRef.current = null;
+      }, 0);
       rendererRef.current = null;
     };
   }, []);
