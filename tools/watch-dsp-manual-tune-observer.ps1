@@ -11,6 +11,10 @@ param(
 
     [string]$SceneProfilePattern = "voice|speech|phone",
 
+    [switch]$RequireFrontendNearPassband,
+
+    [int]$FrontendNearPassbandThresholdHz = 3000,
+
     [int]$MaxCaptures = 4,
 
     [int]$MaxCapturesPerVfo = 1,
@@ -120,6 +124,20 @@ function Get-JsonValue {
     }
 
     return $property.Value
+}
+
+function Get-JsonArray {
+    param($Object, [string]$Name)
+    $value = Get-JsonValue $Object $Name
+    if ($null -eq $value) {
+        return @()
+    }
+
+    if ($value -is [System.Array]) {
+        return @($value)
+    }
+
+    return @($value)
 }
 
 function Get-NullableLongValue {
@@ -304,6 +322,9 @@ if ($PollIntervalSec -lt 0) {
 if ($StablePolls -lt 1) {
     $StablePolls = 1
 }
+if ($FrontendNearPassbandThresholdHz -lt 0) {
+    $FrontendNearPassbandThresholdHz = 0
+}
 if ($MaxCaptures -lt 0) {
     $MaxCaptures = 0
 }
@@ -345,6 +366,8 @@ if ($PlanOnly) {
         stablePolls = $StablePolls
         minCoherentSnrDb = $MinCoherentSnrDb
         sceneProfilePattern = $SceneProfilePattern
+        requireFrontendNearPassband = [bool]$RequireFrontendNearPassband
+        frontendNearPassbandThresholdHz = $FrontendNearPassbandThresholdHz
         maxCaptures = $MaxCaptures
         maxCapturesPerVfo = $MaxCapturesPerVfo
         allowStaleSceneCapture = [bool]$AllowStaleSceneCapture
@@ -370,14 +393,15 @@ if ($PlanOnly) {
             notes = @(
                 "This tool is for operator/manual tuning; it never posts VFO, LO, TX, or DSP settings.",
                 "It captures a watch-dsp-live-diagnostics window only after the current VFO is stable and the scene looks active.",
+                "Use -RequireFrontendNearPassband for acceptance-oriented runs so off-passband frontend peaks do not consume capture slots.",
                 "Traces captured while the operator continues tuning are scouting evidence, not final acceptance proof."
             )
         }
         example = if ([string]::IsNullOrWhiteSpace($bundlePath)) {
-            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -AllowStaleSceneCapture"
+            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -RequireFrontendNearPassband -AllowStaleSceneCapture"
         }
         else {
-            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -BundleDir `"$bundlePath`" -OutputRoot `"$bundlePath\artifacts\manual-tune-observer`" -ReportPath `"$bundlePath\artifacts\manual-tune-observer-report.json`" -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -AllowStaleSceneCapture"
+            "powershell -NoProfile -ExecutionPolicy Bypass -File tools\watch-dsp-manual-tune-observer.ps1 -BaseUrl $base -BundleDir `"$bundlePath`" -OutputRoot `"$bundlePath\artifacts\manual-tune-observer`" -ReportPath `"$bundlePath\artifacts\manual-tune-observer-report.json`" -PollCount 60 -StablePolls 3 -MaxCaptures 4 -MaxCapturesPerVfo 2 -RequireFrontendNearPassband -AllowStaleSceneCapture"
         }
     } | ConvertTo-Json -Depth 16
     exit 0
@@ -437,7 +461,50 @@ try {
         $snrQualified = ($null -ne $coherentSnr -and [double]$coherentSnr -ge [double]$MinCoherentSnrDb)
         $stableQualified = ($null -ne $vfo -and $stableCount -ge $StablePolls)
         $staleSceneCaptureAllowed = (-not $sceneFresh) -and [bool]$AllowStaleSceneCapture
-        $captureQualified = ($stableQualified -and ($sceneFresh -or $staleSceneCaptureAllowed) -and $snrQualified -and $profileMatches)
+        $topPeaks = @(Get-JsonArray $scene "topPeaks")
+        $frontendNearPassbandTopPeakCount = 0
+        $frontendNearestTopPeakOffsetHz = $null
+        $frontendNearestTopPeakFrequencyHz = $null
+        $frontendNearestTopPeakSnrDb = $null
+        $frontendNearestTopPeakDbfs = $null
+        $frontendNearestTopPeakConfidence = $null
+        $frontendBestTopPeakOffsetHz = $null
+        $frontendBestTopPeakFrequencyHz = $null
+        $frontendBestTopPeakSnrDb = $null
+        $frontendBestTopPeakDbfs = $null
+        $frontendBestTopPeakConfidence = $null
+        foreach ($peak in $topPeaks) {
+            $offset = Get-NullableDoubleValue (Get-JsonValue $peak "offsetHz")
+            if ($null -eq $offset) {
+                continue
+            }
+
+            $absOffset = [Math]::Abs([double]$offset)
+            if ($null -eq $frontendNearestTopPeakOffsetHz -or $absOffset -lt [Math]::Abs([double]$frontendNearestTopPeakOffsetHz)) {
+                $frontendNearestTopPeakOffsetHz = $offset
+                $frontendNearestTopPeakFrequencyHz = Get-NullableLongValue (Get-JsonValue $peak "frequencyHz")
+                $frontendNearestTopPeakSnrDb = Get-NullableDoubleValue (Get-JsonValue $peak "snrDb")
+                $frontendNearestTopPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $peak "dbfs")
+                $frontendNearestTopPeakConfidence = Get-NullableDoubleValue (Get-JsonValue $peak "confidence")
+            }
+
+            $snr = Get-NullableDoubleValue (Get-JsonValue $peak "snrDb")
+            if ($null -ne $snr -and ($null -eq $frontendBestTopPeakSnrDb -or [double]$snr -gt [double]$frontendBestTopPeakSnrDb)) {
+                $frontendBestTopPeakOffsetHz = $offset
+                $frontendBestTopPeakFrequencyHz = Get-NullableLongValue (Get-JsonValue $peak "frequencyHz")
+                $frontendBestTopPeakSnrDb = $snr
+                $frontendBestTopPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $peak "dbfs")
+                $frontendBestTopPeakConfidence = Get-NullableDoubleValue (Get-JsonValue $peak "confidence")
+            }
+            if ($absOffset -le [double]$FrontendNearPassbandThresholdHz) {
+                $frontendNearPassbandTopPeakCount++
+            }
+        }
+        $frontendNearPassbandQualified = ($frontendNearPassbandTopPeakCount -gt 0)
+        $capturePassbandQualified = (-not [bool]$RequireFrontendNearPassband) -or $frontendNearPassbandQualified
+        $captureQualified = ($stableQualified -and ($sceneFresh -or $staleSceneCaptureAllowed) -and $snrQualified -and $profileMatches -and $capturePassbandQualified)
+        $runtime = Get-JsonValue $live "runtimeEvidence"
+        $nr5 = Get-JsonValue $live "nr5SpnrDiagnostics"
 
         $pollRecord = [ordered]@{
             poll = $poll
@@ -451,11 +518,45 @@ try {
             signalProfile = $profile
             coherentMaxSnrDb = $coherentSnr
             maxSnrDb = Get-NullableDoubleValue (Get-JsonValue $scene "maxSnrDb")
-            topPeakCount = @(Get-JsonValue $scene "topPeaks").Count
+            topPeakCount = $topPeaks.Count
+            requireFrontendNearPassband = [bool]$RequireFrontendNearPassband
+            frontendNearPassbandThresholdHz = $FrontendNearPassbandThresholdHz
+            frontendNearPassbandTopPeakCount = $frontendNearPassbandTopPeakCount
+            frontendNearestTopPeakOffsetHz = $frontendNearestTopPeakOffsetHz
+            frontendNearestTopPeakFrequencyHz = $frontendNearestTopPeakFrequencyHz
+            frontendNearestTopPeakSnrDb = $frontendNearestTopPeakSnrDb
+            frontendNearestTopPeakDbfs = $frontendNearestTopPeakDbfs
+            frontendNearestTopPeakConfidence = $frontendNearestTopPeakConfidence
+            frontendBestTopPeakOffsetHz = $frontendBestTopPeakOffsetHz
+            frontendBestTopPeakFrequencyHz = $frontendBestTopPeakFrequencyHz
+            frontendBestTopPeakSnrDb = $frontendBestTopPeakSnrDb
+            frontendBestTopPeakDbfs = $frontendBestTopPeakDbfs
+            frontendBestTopPeakConfidence = $frontendBestTopPeakConfidence
+            frontendNearPassbandQualified = $frontendNearPassbandQualified
             liveStatus = [string](Get-JsonValue $live "status")
             requestedNrMode = [string](Get-JsonValue $live "requestedNrMode")
             effectiveNrMode = [string](Get-JsonValue $live "effectiveNrMode")
             readyForNr5Tuning = Test-Truthy (Get-JsonValue $live "readyForNr5Tuning")
+            audioStatus = [string](Get-JsonValue $runtime "audioStatus")
+            audioRmsDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "audioRmsDbfs")
+            audioPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "audioPeakDbfs")
+            rxAudioLevelerInputRmsDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerInputRmsDbfs")
+            rxAudioLevelerOutputRmsDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerOutputRmsDbfs")
+            rxAudioLevelerDesiredGainDb = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerDesiredGainDb")
+            rxAudioLevelerAppliedGainDb = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerAppliedGainDb")
+            rxAudioLevelerGainDeltaDb = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerGainDeltaDb")
+            rxAudioLevelerNr5SpeechHoldBlocks = Get-IntValue (Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHoldBlocks")
+            rxAudioLevelerBoostSlewLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerBoostSlewLimited")
+            rxAudioLevelerOutputLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerOutputLimited")
+            nr5SignalConfidence = Get-NullableDoubleValue (Get-JsonValue $nr5 "signalConfidence")
+            nr5SignalProbability = Get-NullableDoubleValue (Get-JsonValue $nr5 "signalProbability")
+            nr5AgcGate = Get-NullableDoubleValue (Get-JsonValue $nr5 "agcGate")
+            nr5RecoveryDrive = Get-NullableDoubleValue (Get-JsonValue $nr5 "recoveryDrive")
+            nr5WeakSignalMemory = Get-NullableDoubleValue (Get-JsonValue $nr5 "weakSignalMemory")
+            nr5MaskSmoothing = Get-NullableDoubleValue (Get-JsonValue $nr5 "maskSmoothing")
+            nr5InputDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "inputDbfs")
+            nr5OutputDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "outputDbfs")
+            nr5OutputPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "outputPeakDbfs")
             staleSceneCaptureAllowed = $staleSceneCaptureAllowed
             captureQualified = $captureQualified
         }
@@ -522,6 +623,62 @@ try {
                     staleSceneCapture = $staleSceneCaptureAllowed
                     signalProfile = $profile
                     coherentMaxSnrDb = $coherentSnr
+                    topPeakCount = $topPeaks.Count
+                    requireFrontendNearPassband = [bool]$RequireFrontendNearPassband
+                    frontendNearPassbandThresholdHz = $FrontendNearPassbandThresholdHz
+                    frontendNearPassbandTopPeakCount = $frontendNearPassbandTopPeakCount
+                    frontendNearestTopPeakOffsetHz = $frontendNearestTopPeakOffsetHz
+                    frontendNearestTopPeakFrequencyHz = $frontendNearestTopPeakFrequencyHz
+                    frontendNearestTopPeakSnrDb = $frontendNearestTopPeakSnrDb
+                    frontendNearestTopPeakDbfs = $frontendNearestTopPeakDbfs
+                    frontendNearestTopPeakConfidence = $frontendNearestTopPeakConfidence
+                    frontendBestTopPeakOffsetHz = $frontendBestTopPeakOffsetHz
+                    frontendBestTopPeakFrequencyHz = $frontendBestTopPeakFrequencyHz
+                    frontendBestTopPeakSnrDb = $frontendBestTopPeakSnrDb
+                    frontendBestTopPeakDbfs = $frontendBestTopPeakDbfs
+                    frontendBestTopPeakConfidence = $frontendBestTopPeakConfidence
+                    frontendNearPassbandQualified = $frontendNearPassbandQualified
+                    trigger = [ordered]@{
+                        poll = $poll
+                        generatedUtc = $pollUtc.ToString("o")
+                        liveStatus = [string](Get-JsonValue $live "status")
+                        requestedNrMode = [string](Get-JsonValue $live "requestedNrMode")
+                        effectiveNrMode = [string](Get-JsonValue $live "effectiveNrMode")
+                        readyForNr5Tuning = Test-Truthy (Get-JsonValue $live "readyForNr5Tuning")
+                        signalProfile = $profile
+                        coherentMaxSnrDb = $coherentSnr
+                        frontendNearPassbandTopPeakCount = $frontendNearPassbandTopPeakCount
+                        frontendNearestTopPeakOffsetHz = $frontendNearestTopPeakOffsetHz
+                        frontendNearestTopPeakFrequencyHz = $frontendNearestTopPeakFrequencyHz
+                        frontendNearestTopPeakSnrDb = $frontendNearestTopPeakSnrDb
+                        frontendNearestTopPeakDbfs = $frontendNearestTopPeakDbfs
+                        frontendNearestTopPeakConfidence = $frontendNearestTopPeakConfidence
+                        frontendBestTopPeakOffsetHz = $frontendBestTopPeakOffsetHz
+                        frontendBestTopPeakFrequencyHz = $frontendBestTopPeakFrequencyHz
+                        frontendBestTopPeakSnrDb = $frontendBestTopPeakSnrDb
+                        frontendBestTopPeakDbfs = $frontendBestTopPeakDbfs
+                        frontendBestTopPeakConfidence = $frontendBestTopPeakConfidence
+                        audioStatus = [string](Get-JsonValue $runtime "audioStatus")
+                        audioRmsDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "audioRmsDbfs")
+                        audioPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "audioPeakDbfs")
+                        rxAudioLevelerInputRmsDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerInputRmsDbfs")
+                        rxAudioLevelerOutputRmsDbfs = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerOutputRmsDbfs")
+                        rxAudioLevelerDesiredGainDb = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerDesiredGainDb")
+                        rxAudioLevelerAppliedGainDb = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerAppliedGainDb")
+                        rxAudioLevelerGainDeltaDb = Get-NullableDoubleValue (Get-JsonValue $runtime "rxAudioLevelerGainDeltaDb")
+                        rxAudioLevelerNr5SpeechHoldBlocks = Get-IntValue (Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHoldBlocks")
+                        rxAudioLevelerBoostSlewLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerBoostSlewLimited")
+                        rxAudioLevelerOutputLimited = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerOutputLimited")
+                        nr5SignalConfidence = Get-NullableDoubleValue (Get-JsonValue $nr5 "signalConfidence")
+                        nr5SignalProbability = Get-NullableDoubleValue (Get-JsonValue $nr5 "signalProbability")
+                        nr5AgcGate = Get-NullableDoubleValue (Get-JsonValue $nr5 "agcGate")
+                        nr5RecoveryDrive = Get-NullableDoubleValue (Get-JsonValue $nr5 "recoveryDrive")
+                        nr5WeakSignalMemory = Get-NullableDoubleValue (Get-JsonValue $nr5 "weakSignalMemory")
+                        nr5MaskSmoothing = Get-NullableDoubleValue (Get-JsonValue $nr5 "maskSmoothing")
+                        nr5InputDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "inputDbfs")
+                        nr5OutputDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "outputDbfs")
+                        nr5OutputPeakDbfs = Get-NullableDoubleValue (Get-JsonValue $nr5 "outputPeakDbfs")
+                    }
                     reportPath = $serializedSummaryPath
                     jsonlPath = $serializedJsonlPath
                     readyForBenchmarkTrace = $captureReady
@@ -607,9 +764,41 @@ foreach ($capture in $captureArray) {
     }
 }
 $staleScenePollCount = 0
+$frontendNearPassbandPollCount = 0
+$frontendOffPassbandPollCount = 0
+$captureQualifiedPollCount = 0
+$triggerAudioActivePollCount = 0
+$triggerMaxAudioRmsDbfs = $null
+$triggerMaxNr5OutputDbfs = $null
+$bestTriggerPoll = $null
 foreach ($pollRecord in $pollArray) {
     if (-not (Test-Truthy $pollRecord.sceneFresh)) {
         $staleScenePollCount++
+    }
+    if ((Get-IntValue $pollRecord.frontendNearPassbandTopPeakCount) -gt 0) {
+        $frontendNearPassbandPollCount++
+    }
+    elseif ((Get-IntValue $pollRecord.topPeakCount) -gt 0) {
+        $frontendOffPassbandPollCount++
+    }
+    if (Test-Truthy $pollRecord.captureQualified) {
+        $captureQualifiedPollCount++
+    }
+
+    $pollAudio = Get-NullableDoubleValue $pollRecord.audioRmsDbfs
+    if ($null -ne $pollAudio) {
+        if ([double]$pollAudio -ge -60.0) {
+            $triggerAudioActivePollCount++
+        }
+        if ($null -eq $triggerMaxAudioRmsDbfs -or [double]$pollAudio -gt [double]$triggerMaxAudioRmsDbfs) {
+            $triggerMaxAudioRmsDbfs = $pollAudio
+            $bestTriggerPoll = $pollRecord
+        }
+    }
+
+    $pollNr5Output = Get-NullableDoubleValue $pollRecord.nr5OutputDbfs
+    if ($null -ne $pollNr5Output -and ($null -eq $triggerMaxNr5OutputDbfs -or [double]$pollNr5Output -gt [double]$triggerMaxNr5OutputDbfs)) {
+        $triggerMaxNr5OutputDbfs = $pollNr5Output
     }
 }
 $uniqueCapturedVfoCount = $vfoCaptureCounts.Count
@@ -623,6 +812,9 @@ foreach ($entry in $vfoCaptureCounts.GetEnumerator()) {
 $recommendations = New-Object System.Collections.Generic.List[string]
 if ($captureArray.Count -le 0) {
     $recommendations.Add("No stable voice-like manual-tune VFO met the capture threshold; keep tuning manually or lower MinCoherentSnrDb for scouting only.") | Out-Null
+    if ($RequireFrontendNearPassband -and $frontendNearPassbandPollCount -le 0 -and $frontendOffPassbandPollCount -gt 0) {
+        $recommendations.Add("Frontend peaks were present but none were within $FrontendNearPassbandThresholdHz Hz of the dial/passband; keep manually tuning toward the visible peak before capturing acceptance evidence.") | Out-Null
+    }
     if ($staleScenePollCount -gt 0 -and -not $AllowStaleSceneCapture) {
         $recommendations.Add("Frontend DSP scene evidence was stale during $staleScenePollCount poll(s); open the frontend scene publisher or rerun with -AllowStaleSceneCapture for scouting-only child diagnostics.") | Out-Null
     }
@@ -640,6 +832,9 @@ elseif ($weakTotal -gt 0 -and $strongTotal -le 0) {
 }
 if ($recapturedVfoCount -gt 0) {
     $recommendations.Add("Same-VFO recapture was used for $recapturedVfoCount VFO(s); prefer the latest ready or mixed-ready capture for promotion.") | Out-Null
+}
+if (-not $RequireFrontendNearPassband -and $captureArray.Count -gt 0 -and $passbandWeakTotal -le 0 -and $passbandStrongTotal -le 0) {
+    $recommendations.Add("Captured windows had no passband-qualified NR5 samples; rerun with -RequireFrontendNearPassband for acceptance-oriented manual-tune capture.") | Out-Null
 }
 if ($staleSceneCaptureCount -gt 0) {
     $recommendations.Add("Stale-scene fallback captured $staleSceneCaptureCount window(s); treat them as scouting evidence until refreshed scene data or live-history validation confirms the window.") | Out-Null
@@ -681,6 +876,8 @@ $report = [ordered]@{
     stablePolls = $StablePolls
     minCoherentSnrDb = $MinCoherentSnrDb
     sceneProfilePattern = $SceneProfilePattern
+    requireFrontendNearPassband = [bool]$RequireFrontendNearPassband
+    frontendNearPassbandThresholdHz = $FrontendNearPassbandThresholdHz
     maxCaptures = $MaxCaptures
     maxCapturesPerVfo = $MaxCapturesPerVfo
     allowStaleSceneCapture = [bool]$AllowStaleSceneCapture
@@ -702,6 +899,13 @@ $report = [ordered]@{
     recapturedVfoCount = $recapturedVfoCount
     staleScenePollCount = $staleScenePollCount
     staleSceneCaptureCount = $staleSceneCaptureCount
+    frontendNearPassbandPollCount = $frontendNearPassbandPollCount
+    frontendOffPassbandPollCount = $frontendOffPassbandPollCount
+    captureQualifiedPollCount = $captureQualifiedPollCount
+    triggerAudioActivePollCount = $triggerAudioActivePollCount
+    triggerMaxAudioRmsDbfs = $triggerMaxAudioRmsDbfs
+    triggerMaxNr5OutputDbfs = $triggerMaxNr5OutputDbfs
+    bestTriggerPoll = $bestTriggerPoll
     readyCaptureCount = $readyCaptureCount
     mixedWeakStrongReady = ($mixedReadyCount -gt 0)
     mixedWeakStrongReadyCaptureCount = $mixedReadyCount

@@ -2144,6 +2144,7 @@ public sealed class DspModernizationValidationToolTests
             var steps = ReadStringArray(action, "commandSteps");
             Assert.Contains(steps, step => step.Contains("watch-dsp-manual-tune-observer.ps1", StringComparison.Ordinal));
             Assert.Contains(steps, step => step.Contains("-MaxCapturesPerVfo 2", StringComparison.Ordinal));
+            Assert.Contains(steps, step => step.Contains("-RequireFrontendNearPassband", StringComparison.Ordinal));
             Assert.Contains(steps, step => step.Contains("-AllowStaleSceneCapture", StringComparison.Ordinal));
             Assert.Contains(steps, step => step.Contains("run-dsp-g2-rx-peak-hunt.ps1", StringComparison.Ordinal));
             Assert.Contains("artifacts/manual-tune-observer-report.json", ReadStringArray(action, "expectedArtifacts"));
@@ -6311,6 +6312,8 @@ public sealed class DspModernizationValidationToolTests
             "-StablePolls", "3",
             "-MaxCaptures", "2",
             "-MaxCapturesPerVfo", "2",
+            "-RequireFrontendNearPassband",
+            "-FrontendNearPassbandThresholdHz", "2500",
             "-AllowStaleSceneCapture");
 
         Assert.Equal(0, plan.ExitCode);
@@ -6323,6 +6326,8 @@ public sealed class DspModernizationValidationToolTests
         Assert.Equal(3, root.GetProperty("stablePolls").GetInt32());
         Assert.Equal(2, root.GetProperty("maxCaptures").GetInt32());
         Assert.Equal(2, root.GetProperty("maxCapturesPerVfo").GetInt32());
+        Assert.True(root.GetProperty("requireFrontendNearPassband").GetBoolean());
+        Assert.Equal(2500, root.GetProperty("frontendNearPassbandThresholdHz").GetInt32());
         Assert.True(root.GetProperty("allowStaleSceneCapture").GetBoolean());
         Assert.Equal(Path.GetFullPath(bundleDir), root.GetProperty("bundleDir").GetString());
         Assert.True(root.GetProperty("bundleRelativePaths").GetBoolean());
@@ -6346,6 +6351,7 @@ public sealed class DspModernizationValidationToolTests
         Assert.Contains("watch-dsp-manual-tune-observer.ps1", root.GetProperty("example").GetString(), StringComparison.Ordinal);
         Assert.Contains("-BundleDir", root.GetProperty("example").GetString(), StringComparison.Ordinal);
         Assert.Contains("-MaxCapturesPerVfo 2", root.GetProperty("example").GetString(), StringComparison.Ordinal);
+        Assert.Contains("-RequireFrontendNearPassband", root.GetProperty("example").GetString(), StringComparison.Ordinal);
         Assert.Contains("-AllowStaleSceneCapture", root.GetProperty("example").GetString(), StringComparison.Ordinal);
     }
 
