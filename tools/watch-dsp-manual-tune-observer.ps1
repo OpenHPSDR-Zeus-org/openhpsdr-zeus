@@ -15,6 +15,8 @@ param(
 
     [int]$FrontendNearPassbandThresholdHz = 3000,
 
+    [int]$FrontendOffsetMismatchToleranceHz = 25,
+
     [int]$MaxCaptures = 4,
 
     [int]$MaxCapturesPerVfo = 1,
@@ -182,6 +184,75 @@ function Get-IntValue {
     }
 }
 
+function Get-FrontendPeakOffsetEvidence {
+    param(
+        $Peak,
+        $StateVfoHz,
+        [int]$MismatchToleranceHz
+    )
+
+    $offset = Get-NullableDoubleValue (Get-JsonValue $Peak "offsetHz")
+    $frequencyHz = Get-NullableLongValue (Get-JsonValue $Peak "frequencyHz")
+    $vfoHz = Get-NullableLongValue $StateVfoHz
+    $computedOffset = $null
+    $mismatchHz = $null
+    $consistent = $false
+
+    if ($null -ne $frequencyHz -and $null -ne $vfoHz) {
+        $computedOffset = [double]$frequencyHz - [double]$vfoHz
+    }
+
+    if ($null -ne $offset -and $null -ne $computedOffset) {
+        $mismatchHz = [Math]::Abs([double]$offset - [double]$computedOffset)
+        $consistent = ([double]$mismatchHz -le [double]$MismatchToleranceHz)
+    }
+    elseif ($null -ne $offset) {
+        $consistent = $true
+    }
+    elseif ($null -ne $computedOffset) {
+        $offset = $computedOffset
+        $consistent = $true
+    }
+
+    return [ordered]@{
+        offsetHz = $offset
+        computedOffsetHz = $computedOffset
+        offsetMismatchHz = $mismatchHz
+        offsetConsistent = $consistent
+    }
+}
+
+function Get-FrontendPeakFilterDistanceHz {
+    param(
+        $OffsetHz,
+        $FilterLowHz,
+        $FilterHighHz
+    )
+
+    $offset = Get-NullableDoubleValue $OffsetHz
+    $low = Get-NullableDoubleValue $FilterLowHz
+    $high = Get-NullableDoubleValue $FilterHighHz
+    if ($null -eq $offset -or $null -eq $low -or $null -eq $high) {
+        return $null
+    }
+
+    $passLow = [Math]::Min([double]$low, [double]$high)
+    $passHigh = [Math]::Max([double]$low, [double]$high)
+    if ($passHigh -le $passLow) {
+        return $null
+    }
+
+    if ([double]$offset -lt $passLow) {
+        return [Math]::Round($passLow - [double]$offset, 3)
+    }
+
+    if ([double]$offset -gt $passHigh) {
+        return [Math]::Round([double]$offset - $passHigh, 3)
+    }
+
+    return 0.0
+}
+
 function Test-Truthy {
     param($Value)
     if ($null -eq $Value) {
@@ -325,6 +396,9 @@ if ($StablePolls -lt 1) {
 if ($FrontendNearPassbandThresholdHz -lt 0) {
     $FrontendNearPassbandThresholdHz = 0
 }
+if ($FrontendOffsetMismatchToleranceHz -lt 0) {
+    $FrontendOffsetMismatchToleranceHz = 0
+}
 if ($MaxCaptures -lt 0) {
     $MaxCaptures = 0
 }
@@ -368,6 +442,7 @@ if ($PlanOnly) {
         sceneProfilePattern = $SceneProfilePattern
         requireFrontendNearPassband = [bool]$RequireFrontendNearPassband
         frontendNearPassbandThresholdHz = $FrontendNearPassbandThresholdHz
+        frontendOffsetMismatchToleranceHz = $FrontendOffsetMismatchToleranceHz
         maxCaptures = $MaxCaptures
         maxCapturesPerVfo = $MaxCapturesPerVfo
         allowStaleSceneCapture = [bool]$AllowStaleSceneCapture
@@ -393,7 +468,7 @@ if ($PlanOnly) {
             notes = @(
                 "This tool is for operator/manual tuning; it never posts VFO, LO, TX, or DSP settings.",
                 "It captures a watch-dsp-live-diagnostics window only after the current VFO is stable and the scene looks active.",
-                "Use -RequireFrontendNearPassband for acceptance-oriented runs so off-passband frontend peaks do not consume capture slots.",
+                "Use -RequireFrontendNearPassband for acceptance-oriented runs so off-passband frontend peaks do not consume capture slots; strict runs use the signed RX filter window from /api/state when available.",
                 "Traces captured while the operator continues tuning are scouting evidence, not final acceptance proof."
             )
         }
@@ -463,20 +538,36 @@ try {
         $staleSceneCaptureAllowed = (-not $sceneFresh) -and [bool]$AllowStaleSceneCapture
         $topPeaks = @(Get-JsonArray $scene "topPeaks")
         $frontendNearPassbandTopPeakCount = 0
+        $frontendFilterPassbandTopPeakCount = 0
+        $frontendOffsetMismatchTopPeakCount = 0
         $frontendNearestTopPeakOffsetHz = $null
         $frontendNearestTopPeakFrequencyHz = $null
         $frontendNearestTopPeakSnrDb = $null
         $frontendNearestTopPeakDbfs = $null
         $frontendNearestTopPeakConfidence = $null
+        $frontendNearestFilterPassbandDistanceHz = $null
+        $frontendNearestFilterPassbandPeakOffsetHz = $null
+        $frontendNearestFilterPassbandPeakFrequencyHz = $null
         $frontendBestTopPeakOffsetHz = $null
         $frontendBestTopPeakFrequencyHz = $null
         $frontendBestTopPeakSnrDb = $null
         $frontendBestTopPeakDbfs = $null
         $frontendBestTopPeakConfidence = $null
+        $filterLowHz = Get-NullableDoubleValue (Get-JsonValue $state "filterLowHz")
+        $filterHighHz = Get-NullableDoubleValue (Get-JsonValue $state "filterHighHz")
+        $frontendFilterPassbandKnown = ($null -ne $filterLowHz -and $null -ne $filterHighHz)
         foreach ($peak in $topPeaks) {
-            $offset = Get-NullableDoubleValue (Get-JsonValue $peak "offsetHz")
+            $offsetEvidence = Get-FrontendPeakOffsetEvidence `
+                -Peak $peak `
+                -StateVfoHz $vfo `
+                -MismatchToleranceHz $FrontendOffsetMismatchToleranceHz
+            $offset = Get-NullableDoubleValue $offsetEvidence["offsetHz"]
             if ($null -eq $offset) {
                 continue
+            }
+            $offsetConsistent = Test-Truthy $offsetEvidence["offsetConsistent"]
+            if (-not $offsetConsistent) {
+                $frontendOffsetMismatchTopPeakCount++
             }
 
             $absOffset = [Math]::Abs([double]$offset)
@@ -499,9 +590,33 @@ try {
             if ($absOffset -le [double]$FrontendNearPassbandThresholdHz) {
                 $frontendNearPassbandTopPeakCount++
             }
+
+            $filterDistance = Get-FrontendPeakFilterDistanceHz `
+                -OffsetHz $offset `
+                -FilterLowHz $filterLowHz `
+                -FilterHighHz $filterHighHz
+            if ($null -ne $filterDistance) {
+                if ($null -eq $frontendNearestFilterPassbandDistanceHz -or
+                    [double]$filterDistance -lt [double]$frontendNearestFilterPassbandDistanceHz) {
+                    $frontendNearestFilterPassbandDistanceHz = $filterDistance
+                    $frontendNearestFilterPassbandPeakOffsetHz = $offset
+                    $frontendNearestFilterPassbandPeakFrequencyHz = Get-NullableLongValue (Get-JsonValue $peak "frequencyHz")
+                }
+
+                if ($offsetConsistent -and [double]$filterDistance -le 0.0) {
+                    $frontendFilterPassbandTopPeakCount++
+                }
+            }
         }
         $frontendNearPassbandQualified = ($frontendNearPassbandTopPeakCount -gt 0)
-        $capturePassbandQualified = (-not [bool]$RequireFrontendNearPassband) -or $frontendNearPassbandQualified
+        $frontendFilterPassbandQualified = ($frontendFilterPassbandKnown -and $frontendFilterPassbandTopPeakCount -gt 0)
+        $frontendPassbandEvidenceQualified = if ($frontendFilterPassbandKnown) {
+            $frontendFilterPassbandQualified
+        }
+        else {
+            $false
+        }
+        $capturePassbandQualified = (-not [bool]$RequireFrontendNearPassband) -or $frontendPassbandEvidenceQualified
         $captureQualified = ($stableQualified -and ($sceneFresh -or $staleSceneCaptureAllowed) -and $snrQualified -and $profileMatches -and $capturePassbandQualified)
         $runtime = Get-JsonValue $live "runtimeEvidence"
         $nr5 = Get-JsonValue $live "nr5SpnrDiagnostics"
@@ -521,18 +636,29 @@ try {
             topPeakCount = $topPeaks.Count
             requireFrontendNearPassband = [bool]$RequireFrontendNearPassband
             frontendNearPassbandThresholdHz = $FrontendNearPassbandThresholdHz
+            frontendOffsetMismatchToleranceHz = $FrontendOffsetMismatchToleranceHz
+            frontendFilterPassbandKnown = $frontendFilterPassbandKnown
+            filterLowHz = $filterLowHz
+            filterHighHz = $filterHighHz
             frontendNearPassbandTopPeakCount = $frontendNearPassbandTopPeakCount
+            frontendFilterPassbandTopPeakCount = $frontendFilterPassbandTopPeakCount
+            frontendOffsetMismatchTopPeakCount = $frontendOffsetMismatchTopPeakCount
             frontendNearestTopPeakOffsetHz = $frontendNearestTopPeakOffsetHz
             frontendNearestTopPeakFrequencyHz = $frontendNearestTopPeakFrequencyHz
             frontendNearestTopPeakSnrDb = $frontendNearestTopPeakSnrDb
             frontendNearestTopPeakDbfs = $frontendNearestTopPeakDbfs
             frontendNearestTopPeakConfidence = $frontendNearestTopPeakConfidence
+            frontendNearestFilterPassbandDistanceHz = $frontendNearestFilterPassbandDistanceHz
+            frontendNearestFilterPassbandPeakOffsetHz = $frontendNearestFilterPassbandPeakOffsetHz
+            frontendNearestFilterPassbandPeakFrequencyHz = $frontendNearestFilterPassbandPeakFrequencyHz
             frontendBestTopPeakOffsetHz = $frontendBestTopPeakOffsetHz
             frontendBestTopPeakFrequencyHz = $frontendBestTopPeakFrequencyHz
             frontendBestTopPeakSnrDb = $frontendBestTopPeakSnrDb
             frontendBestTopPeakDbfs = $frontendBestTopPeakDbfs
             frontendBestTopPeakConfidence = $frontendBestTopPeakConfidence
             frontendNearPassbandQualified = $frontendNearPassbandQualified
+            frontendFilterPassbandQualified = $frontendFilterPassbandQualified
+            frontendPassbandEvidenceQualified = $frontendPassbandEvidenceQualified
             liveStatus = [string](Get-JsonValue $live "status")
             requestedNrMode = [string](Get-JsonValue $live "requestedNrMode")
             effectiveNrMode = [string](Get-JsonValue $live "effectiveNrMode")
@@ -626,18 +752,29 @@ try {
                     topPeakCount = $topPeaks.Count
                     requireFrontendNearPassband = [bool]$RequireFrontendNearPassband
                     frontendNearPassbandThresholdHz = $FrontendNearPassbandThresholdHz
+                    frontendOffsetMismatchToleranceHz = $FrontendOffsetMismatchToleranceHz
+                    frontendFilterPassbandKnown = $frontendFilterPassbandKnown
+                    filterLowHz = $filterLowHz
+                    filterHighHz = $filterHighHz
                     frontendNearPassbandTopPeakCount = $frontendNearPassbandTopPeakCount
+                    frontendFilterPassbandTopPeakCount = $frontendFilterPassbandTopPeakCount
+                    frontendOffsetMismatchTopPeakCount = $frontendOffsetMismatchTopPeakCount
                     frontendNearestTopPeakOffsetHz = $frontendNearestTopPeakOffsetHz
                     frontendNearestTopPeakFrequencyHz = $frontendNearestTopPeakFrequencyHz
                     frontendNearestTopPeakSnrDb = $frontendNearestTopPeakSnrDb
                     frontendNearestTopPeakDbfs = $frontendNearestTopPeakDbfs
                     frontendNearestTopPeakConfidence = $frontendNearestTopPeakConfidence
+                    frontendNearestFilterPassbandDistanceHz = $frontendNearestFilterPassbandDistanceHz
+                    frontendNearestFilterPassbandPeakOffsetHz = $frontendNearestFilterPassbandPeakOffsetHz
+                    frontendNearestFilterPassbandPeakFrequencyHz = $frontendNearestFilterPassbandPeakFrequencyHz
                     frontendBestTopPeakOffsetHz = $frontendBestTopPeakOffsetHz
                     frontendBestTopPeakFrequencyHz = $frontendBestTopPeakFrequencyHz
                     frontendBestTopPeakSnrDb = $frontendBestTopPeakSnrDb
                     frontendBestTopPeakDbfs = $frontendBestTopPeakDbfs
                     frontendBestTopPeakConfidence = $frontendBestTopPeakConfidence
                     frontendNearPassbandQualified = $frontendNearPassbandQualified
+                    frontendFilterPassbandQualified = $frontendFilterPassbandQualified
+                    frontendPassbandEvidenceQualified = $frontendPassbandEvidenceQualified
                     trigger = [ordered]@{
                         poll = $poll
                         generatedUtc = $pollUtc.ToString("o")
@@ -648,11 +785,17 @@ try {
                         signalProfile = $profile
                         coherentMaxSnrDb = $coherentSnr
                         frontendNearPassbandTopPeakCount = $frontendNearPassbandTopPeakCount
+                        frontendFilterPassbandTopPeakCount = $frontendFilterPassbandTopPeakCount
+                        frontendOffsetMismatchTopPeakCount = $frontendOffsetMismatchTopPeakCount
+                        frontendPassbandEvidenceQualified = $frontendPassbandEvidenceQualified
                         frontendNearestTopPeakOffsetHz = $frontendNearestTopPeakOffsetHz
                         frontendNearestTopPeakFrequencyHz = $frontendNearestTopPeakFrequencyHz
                         frontendNearestTopPeakSnrDb = $frontendNearestTopPeakSnrDb
                         frontendNearestTopPeakDbfs = $frontendNearestTopPeakDbfs
                         frontendNearestTopPeakConfidence = $frontendNearestTopPeakConfidence
+                        frontendNearestFilterPassbandDistanceHz = $frontendNearestFilterPassbandDistanceHz
+                        frontendNearestFilterPassbandPeakOffsetHz = $frontendNearestFilterPassbandPeakOffsetHz
+                        frontendNearestFilterPassbandPeakFrequencyHz = $frontendNearestFilterPassbandPeakFrequencyHz
                         frontendBestTopPeakOffsetHz = $frontendBestTopPeakOffsetHz
                         frontendBestTopPeakFrequencyHz = $frontendBestTopPeakFrequencyHz
                         frontendBestTopPeakSnrDb = $frontendBestTopPeakSnrDb
@@ -766,6 +909,9 @@ foreach ($capture in $captureArray) {
 $staleScenePollCount = 0
 $frontendNearPassbandPollCount = 0
 $frontendOffPassbandPollCount = 0
+$frontendFilterPassbandPollCount = 0
+$frontendFilterOffPassbandPollCount = 0
+$frontendOffsetMismatchPollCount = 0
 $captureQualifiedPollCount = 0
 $triggerAudioActivePollCount = 0
 $triggerMaxAudioRmsDbfs = $null
@@ -780,6 +926,15 @@ foreach ($pollRecord in $pollArray) {
     }
     elseif ((Get-IntValue $pollRecord.topPeakCount) -gt 0) {
         $frontendOffPassbandPollCount++
+    }
+    if ((Get-IntValue $pollRecord.frontendFilterPassbandTopPeakCount) -gt 0) {
+        $frontendFilterPassbandPollCount++
+    }
+    elseif ((Get-IntValue $pollRecord.topPeakCount) -gt 0 -and (Test-Truthy $pollRecord.frontendFilterPassbandKnown)) {
+        $frontendFilterOffPassbandPollCount++
+    }
+    if ((Get-IntValue $pollRecord.frontendOffsetMismatchTopPeakCount) -gt 0) {
+        $frontendOffsetMismatchPollCount++
     }
     if (Test-Truthy $pollRecord.captureQualified) {
         $captureQualifiedPollCount++
@@ -814,6 +969,12 @@ if ($captureArray.Count -le 0) {
     $recommendations.Add("No stable voice-like manual-tune VFO met the capture threshold; keep tuning manually or lower MinCoherentSnrDb for scouting only.") | Out-Null
     if ($RequireFrontendNearPassband -and $frontendNearPassbandPollCount -le 0 -and $frontendOffPassbandPollCount -gt 0) {
         $recommendations.Add("Frontend peaks were present but none were within $FrontendNearPassbandThresholdHz Hz of the dial/passband; keep manually tuning toward the visible peak before capturing acceptance evidence.") | Out-Null
+    }
+    if ($RequireFrontendNearPassband -and $frontendFilterPassbandPollCount -le 0 -and $frontendFilterOffPassbandPollCount -gt 0) {
+        $recommendations.Add("Frontend peaks were present but none were inside the signed RX filter passband; tune the signal into the active filter window before capturing acceptance evidence.") | Out-Null
+    }
+    if ($RequireFrontendNearPassband -and $frontendOffsetMismatchPollCount -gt 0) {
+        $recommendations.Add("Some frontend peak offsets disagreed with frequencyHz minus VFO beyond $FrontendOffsetMismatchToleranceHz Hz; strict passband capture ignored those inconsistent peaks.") | Out-Null
     }
     if ($staleScenePollCount -gt 0 -and -not $AllowStaleSceneCapture) {
         $recommendations.Add("Frontend DSP scene evidence was stale during $staleScenePollCount poll(s); open the frontend scene publisher or rerun with -AllowStaleSceneCapture for scouting-only child diagnostics.") | Out-Null
@@ -878,6 +1039,7 @@ $report = [ordered]@{
     sceneProfilePattern = $SceneProfilePattern
     requireFrontendNearPassband = [bool]$RequireFrontendNearPassband
     frontendNearPassbandThresholdHz = $FrontendNearPassbandThresholdHz
+    frontendOffsetMismatchToleranceHz = $FrontendOffsetMismatchToleranceHz
     maxCaptures = $MaxCaptures
     maxCapturesPerVfo = $MaxCapturesPerVfo
     allowStaleSceneCapture = [bool]$AllowStaleSceneCapture
@@ -901,6 +1063,9 @@ $report = [ordered]@{
     staleSceneCaptureCount = $staleSceneCaptureCount
     frontendNearPassbandPollCount = $frontendNearPassbandPollCount
     frontendOffPassbandPollCount = $frontendOffPassbandPollCount
+    frontendFilterPassbandPollCount = $frontendFilterPassbandPollCount
+    frontendFilterOffPassbandPollCount = $frontendFilterOffPassbandPollCount
+    frontendOffsetMismatchPollCount = $frontendOffsetMismatchPollCount
     captureQualifiedPollCount = $captureQualifiedPollCount
     triggerAudioActivePollCount = $triggerAudioActivePollCount
     triggerMaxAudioRmsDbfs = $triggerMaxAudioRmsDbfs

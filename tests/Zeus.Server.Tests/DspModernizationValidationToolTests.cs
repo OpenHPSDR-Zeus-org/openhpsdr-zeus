@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Zeus.Server;
@@ -2427,23 +2430,34 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(3, topPeakWatch.GetProperty("sampleCount").GetInt32());
             Assert.Equal(2, topPeakWatch.GetProperty("nearPassbandSampleCount").GetInt32());
             Assert.Equal(3000, topPeakWatch.GetProperty("nearPassbandThresholdHz").GetInt32());
+            Assert.Equal(1, topPeakWatch.GetProperty("filterPassbandSampleCount").GetInt32());
+            Assert.Equal(0, topPeakWatch.GetProperty("filterPassbandEdgeToleranceHz").GetInt32());
+            Assert.Equal(300, topPeakWatch.GetProperty("filterLowHz").GetInt32());
+            Assert.Equal(2600, topPeakWatch.GetProperty("filterHighHz").GetInt32());
             Assert.Equal(3, topPeakWatch.GetProperty("topPeakCount").GetProperty("count").GetInt32());
             Assert.Equal(24.2, topPeakWatch.GetProperty("strongestSnrDb").GetProperty("max").GetDouble());
             Assert.Equal(11_000, topPeakWatch.GetProperty("nearestAbsOffsetHz").GetProperty("max").GetDouble());
+            Assert.Equal(0, topPeakWatch.GetProperty("nearestFilterPassbandDistanceHz").GetProperty("min").GetDouble());
+            Assert.Equal(11_300, topPeakWatch.GetProperty("nearestFilterPassbandDistanceHz").GetProperty("max").GetDouble());
 
             var nearSamples = topPeakWatch.GetProperty("topNearPassbandSamples").EnumerateArray().ToArray();
             Assert.NotEmpty(nearSamples);
             Assert.True(Math.Abs(nearSamples[0].GetProperty("nearest").GetProperty("offsetHz").GetInt32()) <= 3000);
+            var filterSamples = topPeakWatch.GetProperty("topFilterPassbandSamples").EnumerateArray().ToArray();
+            Assert.Single(filterSamples);
+            Assert.Equal(1_700, filterSamples[0].GetProperty("nearestFilterPassbandPeak").GetProperty("offsetHz").GetInt32());
 
             var passbandAudioWatch = root.GetProperty("passbandAudioWatch");
             Assert.Equal("passband-active-audio", passbandAudioWatch.GetProperty("status").GetString());
             Assert.Equal(3, passbandAudioWatch.GetProperty("frontendTopPeakSampleCount").GetInt32());
-            Assert.Equal(2, passbandAudioWatch.GetProperty("passbandPeakSampleCount").GetInt32());
-            Assert.Equal(1, passbandAudioWatch.GetProperty("offPassbandPeakSampleCount").GetInt32());
-            Assert.Equal(2, passbandAudioWatch.GetProperty("passbandActiveAudioSampleCount").GetInt32());
+            Assert.Equal(2, passbandAudioWatch.GetProperty("legacyNearPassbandPeakSampleCount").GetInt32());
+            Assert.Equal(1, passbandAudioWatch.GetProperty("filterPassbandPeakSampleCount").GetInt32());
+            Assert.Equal(1, passbandAudioWatch.GetProperty("passbandPeakSampleCount").GetInt32());
+            Assert.Equal(2, passbandAudioWatch.GetProperty("offPassbandPeakSampleCount").GetInt32());
+            Assert.Equal(1, passbandAudioWatch.GetProperty("passbandActiveAudioSampleCount").GetInt32());
             Assert.Equal(100.0, passbandAudioWatch.GetProperty("passbandActiveAudioPct").GetDouble(), precision: 3);
-            Assert.Equal(-31.5, passbandAudioWatch.GetProperty("passbandAudioRmsDbfs").GetProperty("average").GetDouble(), precision: 3);
-            Assert.Equal(-30.0, passbandAudioWatch.GetProperty("offPassbandAudioRmsDbfs").GetProperty("average").GetDouble(), precision: 3);
+            Assert.Equal(-32.0, passbandAudioWatch.GetProperty("passbandAudioRmsDbfs").GetProperty("average").GetDouble(), precision: 3);
+            Assert.Equal(-30.5, passbandAudioWatch.GetProperty("offPassbandAudioRmsDbfs").GetProperty("average").GetDouble(), precision: 3);
         }
         finally
         {
@@ -6356,6 +6370,152 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task ManualTuneObserverStrictGateUsesSignedRxFilterPassband()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell manual-tune observer smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-manual-tune-observer-filter-passband-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            using var passbandServer = JsonRouteServer.Start(new Dictionary<string, string>
+            {
+                ["/api/state"] = Json(new
+                {
+                    status = "Connected",
+                    vfoHz = 14_080_000,
+                    radioLoHz = 14_074_000,
+                    mode = "USB",
+                    filterLowHz = 100,
+                    filterHighHz = 3000
+                }),
+                ["/api/radio/diagnostics/dsp-scene"] = Json(new
+                {
+                    status = "fresh",
+                    fresh = true,
+                    signalProfile = "voice-like",
+                    coherentMaxSnrDb = 16.0,
+                    maxSnrDb = 16.0,
+                    topPeaks = new object[]
+                    {
+                        FrontendTopPeak(14_081_500, 1_500, 24.0, -80.0),
+                        FrontendTopPeak(14_078_500, -1_500, 22.0, -82.0),
+                        FrontendTopPeak(14_078_500, 1_500, 21.0, -83.0)
+                    }
+                }),
+                ["/api/dsp/live-diagnostics"] = Json(ManualTuneObserverLiveDiagnostics())
+            });
+
+            var passbandReport = Path.Combine(bundleDir, "manual-observer-passband.json");
+            var passband = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-manual-tune-observer.ps1"),
+                "-BaseUrl", passbandServer.BaseUrl,
+                "-ReportPath", passbandReport,
+                "-OutputRoot", Path.Combine(bundleDir, "captures-passband"),
+                "-PollCount", "1",
+                "-PollIntervalSec", "0",
+                "-StablePolls", "1",
+                "-MinCoherentSnrDb", "6",
+                "-SceneProfilePattern", "voice",
+                "-MaxCaptures", "0",
+                "-RequireFrontendNearPassband",
+                "-JsonOnly");
+
+            Assert.Equal(0, passband.ExitCode);
+            using (var doc = JsonDocument.Parse(await File.ReadAllTextAsync(passbandReport)))
+            {
+                var root = doc.RootElement;
+                Assert.Equal(1, root.GetProperty("frontendNearPassbandPollCount").GetInt32());
+                Assert.Equal(1, root.GetProperty("frontendFilterPassbandPollCount").GetInt32());
+                Assert.Equal(1, root.GetProperty("frontendOffsetMismatchPollCount").GetInt32());
+                Assert.Equal(1, root.GetProperty("captureQualifiedPollCount").GetInt32());
+
+                var poll = root.GetProperty("polls").EnumerateArray().Single();
+                Assert.True(poll.GetProperty("frontendFilterPassbandKnown").GetBoolean());
+                Assert.Equal(100.0, poll.GetProperty("filterLowHz").GetDouble(), precision: 3);
+                Assert.Equal(3000.0, poll.GetProperty("filterHighHz").GetDouble(), precision: 3);
+                Assert.Equal(3, poll.GetProperty("frontendNearPassbandTopPeakCount").GetInt32());
+                Assert.Equal(1, poll.GetProperty("frontendFilterPassbandTopPeakCount").GetInt32());
+                Assert.Equal(1, poll.GetProperty("frontendOffsetMismatchTopPeakCount").GetInt32());
+                Assert.True(poll.GetProperty("frontendPassbandEvidenceQualified").GetBoolean());
+            }
+
+            using var mismatchServer = JsonRouteServer.Start(new Dictionary<string, string>
+            {
+                ["/api/state"] = Json(new
+                {
+                    status = "Connected",
+                    vfoHz = 14_080_000,
+                    radioLoHz = 14_074_000,
+                    mode = "USB",
+                    filterLowHz = 100,
+                    filterHighHz = 3000
+                }),
+                ["/api/radio/diagnostics/dsp-scene"] = Json(new
+                {
+                    status = "fresh",
+                    fresh = true,
+                    signalProfile = "voice-like",
+                    coherentMaxSnrDb = 16.0,
+                    maxSnrDb = 16.0,
+                    topPeaks = new object[]
+                    {
+                        FrontendTopPeak(14_078_500, 1_500, 21.0, -83.0)
+                    }
+                }),
+                ["/api/dsp/live-diagnostics"] = Json(ManualTuneObserverLiveDiagnostics())
+            });
+
+            var mismatchReport = Path.Combine(bundleDir, "manual-observer-mismatch.json");
+            var mismatch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-manual-tune-observer.ps1"),
+                "-BaseUrl", mismatchServer.BaseUrl,
+                "-ReportPath", mismatchReport,
+                "-OutputRoot", Path.Combine(bundleDir, "captures-mismatch"),
+                "-PollCount", "1",
+                "-PollIntervalSec", "0",
+                "-StablePolls", "1",
+                "-MinCoherentSnrDb", "6",
+                "-SceneProfilePattern", "voice",
+                "-MaxCaptures", "0",
+                "-RequireFrontendNearPassband",
+                "-JsonOnly");
+
+            Assert.Equal(0, mismatch.ExitCode);
+            using (var doc = JsonDocument.Parse(await File.ReadAllTextAsync(mismatchReport)))
+            {
+                var root = doc.RootElement;
+                Assert.Equal(0, root.GetProperty("frontendFilterPassbandPollCount").GetInt32());
+                Assert.Equal(1, root.GetProperty("frontendOffsetMismatchPollCount").GetInt32());
+                Assert.Equal(0, root.GetProperty("captureQualifiedPollCount").GetInt32());
+
+                var poll = root.GetProperty("polls").EnumerateArray().Single();
+                Assert.Equal(1, poll.GetProperty("frontendNearPassbandTopPeakCount").GetInt32());
+                Assert.Equal(0, poll.GetProperty("frontendFilterPassbandTopPeakCount").GetInt32());
+                Assert.Equal(1, poll.GetProperty("frontendOffsetMismatchTopPeakCount").GetInt32());
+                Assert.False(poll.GetProperty("frontendPassbandEvidenceQualified").GetBoolean());
+                Assert.False(poll.GetProperty("captureQualified").GetBoolean());
+            }
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task ManualTuneObserverReportValidatesAndSummarizesReadOnlyEvidence()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell manual-tune observer validator smoke runs on Windows.");
@@ -6408,6 +6568,12 @@ public sealed class DspModernizationValidationToolTests
             Assert.False(validationRoot.GetProperty("manualTuneObserverAllowStaleSceneCapture").GetBoolean());
             Assert.Equal(0, validationRoot.GetProperty("manualTuneObserverStaleScenePollCount").GetInt32());
             Assert.Equal(0, validationRoot.GetProperty("manualTuneObserverStaleSceneCaptureCount").GetInt32());
+            Assert.Equal(6, validationRoot.GetProperty("manualTuneObserverFrontendNearPassbandPollCount").GetInt32());
+            Assert.Equal(2, validationRoot.GetProperty("manualTuneObserverFrontendOffPassbandPollCount").GetInt32());
+            Assert.Equal(5, validationRoot.GetProperty("manualTuneObserverFrontendFilterPassbandPollCount").GetInt32());
+            Assert.Equal(3, validationRoot.GetProperty("manualTuneObserverFrontendFilterOffPassbandPollCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("manualTuneObserverFrontendOffsetMismatchPollCount").GetInt32());
+            Assert.Equal(2, validationRoot.GetProperty("manualTuneObserverCaptureQualifiedPollCount").GetInt32());
             Assert.Equal(2, validationRoot.GetProperty("manualTuneObserverReadyCaptureCount").GetInt32());
             Assert.True(validationRoot.GetProperty("manualTuneObserverMixedWeakStrongReady").GetBoolean());
             Assert.Equal(1, validationRoot.GetProperty("manualTuneObserverMixedWeakStrongReadyCaptureCount").GetInt32());
@@ -6485,6 +6651,11 @@ public sealed class DspModernizationValidationToolTests
             Assert.False(summaryRoot.GetProperty("manualTuneObserverAllowStaleSceneCapture").GetBoolean());
             Assert.Equal(0, summaryRoot.GetProperty("manualTuneObserverStaleScenePollCount").GetInt32());
             Assert.Equal(0, summaryRoot.GetProperty("manualTuneObserverStaleSceneCaptureCount").GetInt32());
+            Assert.Equal(6, summaryRoot.GetProperty("manualTuneObserverFrontendNearPassbandPollCount").GetInt32());
+            Assert.Equal(5, summaryRoot.GetProperty("manualTuneObserverFrontendFilterPassbandPollCount").GetInt32());
+            Assert.Equal(3, summaryRoot.GetProperty("manualTuneObserverFrontendFilterOffPassbandPollCount").GetInt32());
+            Assert.Equal(1, summaryRoot.GetProperty("manualTuneObserverFrontendOffsetMismatchPollCount").GetInt32());
+            Assert.Equal(2, summaryRoot.GetProperty("manualTuneObserverCaptureQualifiedPollCount").GetInt32());
             Assert.Equal(14277000L, summaryRoot.GetProperty("manualTuneObserverBestFrequencyHz").GetInt64());
             Assert.Equal(2, summaryRoot.GetProperty("manualTuneObserverReferencedCaptureReadyCount").GetInt32());
 
@@ -6500,6 +6671,8 @@ public sealed class DspModernizationValidationToolTests
             Assert.Contains("Bundle-relative paths: True", markdown, StringComparison.Ordinal);
             Assert.Contains("Unique VFOs/recaptured VFOs/max captures per VFO: 2 / 0 / 2", markdown, StringComparison.Ordinal);
             Assert.Contains("Stale scene allowed/polls/captures: False / 0 / 0", markdown, StringComparison.Ordinal);
+            Assert.Contains("Frontend near/filter/off/mismatch polls: 6 / 5 / 3 / 1", markdown, StringComparison.Ordinal);
+            Assert.Contains("Capture-qualified polls: 2", markdown, StringComparison.Ordinal);
             Assert.Contains("read-only", markdown, StringComparison.Ordinal);
             Assert.Contains("VFO/radio LO write attempts", markdown, StringComparison.Ordinal);
             Assert.Contains("Weak/strong/near-strong samples", markdown, StringComparison.Ordinal);
@@ -7018,6 +7191,12 @@ public sealed class DspModernizationValidationToolTests
             recapturedVfoCount = inconsistentCaptureMetadata ? 1 : 0,
             staleScenePollCount = inconsistentCaptureMetadata ? 1 : 0,
             staleSceneCaptureCount = 0,
+            frontendNearPassbandPollCount = 6,
+            frontendOffPassbandPollCount = 2,
+            frontendFilterPassbandPollCount = 5,
+            frontendFilterOffPassbandPollCount = 3,
+            frontendOffsetMismatchPollCount = 1,
+            captureQualifiedPollCount = 2,
             readyCaptureCount = 2,
             mixedWeakStrongReady = true,
             mixedWeakStrongReadyCaptureCount = 1,
@@ -8331,7 +8510,9 @@ public sealed class DspModernizationValidationToolTests
         double signalProbability = 0.68,
         double textureFill = 0.04,
         double? nr5OutputDbfs = null,
-        object[]? frontendTopPeaks = null)
+        object[]? frontendTopPeaks = null,
+        int rxChainFilterLowHz = 300,
+        int rxChainFilterHighHz = 2600)
     {
         return new
         {
@@ -8349,6 +8530,10 @@ public sealed class DspModernizationValidationToolTests
                 nr5TuningStatus = includeNr5 ? "ready-for-nr5-live-tuning" : "nr5-diagnostics-missing",
                 nr5TuningConstraints = Array.Empty<string>(),
                 frontendTopPeaks = frontendTopPeaks ?? Array.Empty<object>(),
+                rxChainFilterLowHz,
+                rxChainFilterHighHz,
+                rxChainFilterWidthHz = Math.Abs(rxChainFilterHighHz - rxChainFilterLowHz),
+                rxChainFilterPresetName = "TEST",
                 requestedNrMode = includeNr5 ? "Nr5" : "Off",
                 effectiveNrMode = includeNr5 ? "Nr5" : "Off",
                 constraints = Array.Empty<string>(),
@@ -8425,7 +8610,9 @@ public sealed class DspModernizationValidationToolTests
         double nr5OutputDbfs,
         double levelerInputRmsDbfs,
         double levelerOutputRmsDbfs,
-        object[]? frontendTopPeaks = null)
+        object[]? frontendTopPeaks = null,
+        int rxChainFilterLowHz = 100,
+        int rxChainFilterHighHz = 2600)
     {
         return new
         {
@@ -8443,6 +8630,10 @@ public sealed class DspModernizationValidationToolTests
                 nr5TuningStatus = "ready-for-nr5-live-tuning",
                 nr5TuningConstraints = Array.Empty<string>(),
                 frontendTopPeaks = frontendTopPeaks ?? Array.Empty<object>(),
+                rxChainFilterLowHz,
+                rxChainFilterHighHz,
+                rxChainFilterWidthHz = Math.Abs(rxChainFilterHighHz - rxChainFilterLowHz),
+                rxChainFilterPresetName = "TEST",
                 requestedNrMode = "Nr5",
                 effectiveNrMode = "Nr5",
                 constraints = Array.Empty<string>(),
@@ -8556,6 +8747,43 @@ public sealed class DspModernizationValidationToolTests
         using var sha256 = SHA256.Create();
         return Convert.ToHexString(sha256.ComputeHash(stream)).ToLowerInvariant();
     }
+
+    private static string Json(object value) => JsonSerializer.Serialize(value, CamelCaseJson);
+
+    private static object ManualTuneObserverLiveDiagnostics() => new
+    {
+        status = "ready-for-live-benchmark",
+        requestedNrMode = "Nr5",
+        effectiveNrMode = "Nr5",
+        readyForNr5Tuning = true,
+        runtimeEvidence = new
+        {
+            status = "ready",
+            audioStatus = "ready",
+            audioRmsDbfs = -34.0,
+            audioPeakDbfs = -12.0,
+            rxAudioLevelerInputRmsDbfs = -34.0,
+            rxAudioLevelerOutputRmsDbfs = -34.0,
+            rxAudioLevelerDesiredGainDb = 0.0,
+            rxAudioLevelerAppliedGainDb = 0.0,
+            rxAudioLevelerGainDeltaDb = 0.0,
+            rxAudioLevelerNr5SpeechHoldBlocks = 0,
+            rxAudioLevelerBoostSlewLimited = false,
+            rxAudioLevelerOutputLimited = false
+        },
+        nr5SpnrDiagnostics = new
+        {
+            signalConfidence = 0.7,
+            signalProbability = 0.6,
+            agcGate = 0.6,
+            recoveryDrive = 0.2,
+            weakSignalMemory = 0.5,
+            maskSmoothing = 0.3,
+            inputDbfs = -34.0,
+            outputDbfs = -31.0,
+            outputPeakDbfs = -9.0
+        }
+    };
 
     private static async Task<ToolResult> RunPowerShellAsync(
         string powerShell,
@@ -8686,6 +8914,97 @@ public sealed class DspModernizationValidationToolTests
             .Where(value => value is not null)
             .Cast<string>()
             .ToArray();
+    }
+
+    private sealed class JsonRouteServer : IDisposable
+    {
+        private readonly TcpListener _listener;
+        private readonly IReadOnlyDictionary<string, string> _routes;
+        private readonly CancellationTokenSource _cts = new();
+        private readonly Task _loop;
+
+        private JsonRouteServer(TcpListener listener, IReadOnlyDictionary<string, string> routes)
+        {
+            _listener = listener;
+            _routes = routes;
+            var port = ((IPEndPoint)_listener.LocalEndpoint).Port;
+            BaseUrl = $"http://127.0.0.1:{port}";
+            _loop = Task.Run(AcceptLoopAsync);
+        }
+
+        public string BaseUrl { get; }
+
+        public static JsonRouteServer Start(IReadOnlyDictionary<string, string> routes)
+        {
+            var listener = new TcpListener(IPAddress.Loopback, 0);
+            listener.Start();
+            return new JsonRouteServer(listener, routes);
+        }
+
+        public void Dispose()
+        {
+            _cts.Cancel();
+            _listener.Stop();
+            try
+            {
+                _loop.Wait(TimeSpan.FromSeconds(2));
+            }
+            catch
+            {
+            }
+
+            _cts.Dispose();
+        }
+
+        private async Task AcceptLoopAsync()
+        {
+            while (!_cts.IsCancellationRequested)
+            {
+                TcpClient client;
+                try
+                {
+                    client = await _listener.AcceptTcpClientAsync(_cts.Token);
+                }
+                catch
+                {
+                    if (_cts.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                _ = Task.Run(() => HandleClientAsync(client), _cts.Token);
+            }
+        }
+
+        private async Task HandleClientAsync(TcpClient client)
+        {
+            using var clientRef = client;
+            using var stream = client.GetStream();
+            using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
+            var requestLine = await reader.ReadLineAsync();
+            while (!string.IsNullOrEmpty(await reader.ReadLineAsync()))
+            {
+            }
+
+            var path = "/";
+            var parts = (requestLine ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2 && Uri.TryCreate(parts[1], UriKind.RelativeOrAbsolute, out var uri))
+            {
+                path = uri.IsAbsoluteUri ? uri.AbsolutePath : uri.OriginalString.Split('?', 2)[0];
+            }
+
+            var found = _routes.TryGetValue(path, out var json);
+            var body = found ? json! : "{\"error\":\"not found\"}";
+            var status = found ? "200 OK" : "404 Not Found";
+            var bytes = Encoding.UTF8.GetBytes(body);
+            var header = Encoding.ASCII.GetBytes(
+                $"HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {bytes.Length}\r\nConnection: close\r\n\r\n");
+            await stream.WriteAsync(header);
+            await stream.WriteAsync(bytes);
+        }
     }
 
     private sealed record ToolResult(int ExitCode, string StandardOutput, string StandardError)

@@ -345,6 +345,37 @@ function Get-StrongestFrontendTopPeak {
     return $strongest
 }
 
+function Get-FrontendPeakFilterDistanceHz {
+    param(
+        $Peak,
+        $FilterLowHz,
+        $FilterHighHz
+    )
+
+    $offset = Get-NumericValue (Get-JsonValue $Peak "offsetHz")
+    $low = Get-NumericValue $FilterLowHz
+    $high = Get-NumericValue $FilterHighHz
+    if ($null -eq $offset -or $null -eq $low -or $null -eq $high) {
+        return $null
+    }
+
+    $passLow = [Math]::Min([double]$low, [double]$high)
+    $passHigh = [Math]::Max([double]$low, [double]$high)
+    if ($passHigh -le $passLow) {
+        return $null
+    }
+
+    if ([double]$offset -lt $passLow) {
+        return [Math]::Round($passLow - [double]$offset, 3)
+    }
+
+    if ([double]$offset -gt $passHigh) {
+        return [Math]::Round([double]$offset - $passHigh, 3)
+    }
+
+    return 0.0
+}
+
 function Test-Truthy {
     param($Value)
 
@@ -1218,6 +1249,7 @@ function Build-Report {
     $frontendNearestTopPeakOffsetValues = New-Object System.Collections.Generic.List[double]
     $frontendNearestTopPeakAbsOffsetValues = New-Object System.Collections.Generic.List[double]
     $frontendStrongestTopPeakSnrValues = New-Object System.Collections.Generic.List[double]
+    $frontendNearestFilterPassbandDistanceValues = New-Object System.Collections.Generic.List[double]
     $frontendAdjacentNoiseBinValues = New-Object System.Collections.Generic.List[double]
     $frontendAdjacentNoiseFloorValues = New-Object System.Collections.Generic.List[double]
     $frontendAdjacentNoiseP50Values = New-Object System.Collections.Generic.List[double]
@@ -1289,10 +1321,12 @@ function Build-Report {
     $rxAudioLevelerConstrainedSamples = New-Object System.Collections.Generic.List[object]
     $frontendTopPeakSamples = New-Object System.Collections.Generic.List[object]
     $frontendNearPassbandPeakSamples = New-Object System.Collections.Generic.List[object]
+    $frontendFilterPassbandPeakSamples = New-Object System.Collections.Generic.List[object]
     $passbandAudioSamples = New-Object System.Collections.Generic.List[object]
     $offPassbandAudioSamples = New-Object System.Collections.Generic.List[object]
     $frontendTopPeakSampleCount = 0
     $frontendNearPassbandPeakSampleCount = 0
+    $frontendFilterPassbandPeakSampleCount = 0
     $frontendAdjacentNoiseUsableCount = 0
     $nr5AdjacentNoiseUsableCount = 0
     $nr5AdjacentNoiseDriveCount = 0
@@ -1308,6 +1342,8 @@ function Build-Report {
     $signalEvidenceConfidenceThreshold = 0.30
     $signalEvidenceProbabilityThreshold = 0.16
     $signalEvidenceAgcGateThreshold = 0.30
+    $frontendNearPassbandThresholdHz = 3000.0
+    $frontendFilterPassbandEdgeToleranceHz = 0.0
     $nr5StrongInputThresholdDbfs = -22.0
     $nr5NearStrongInputThresholdDbfs = -26.0
     $nr5WeakDropoutFinalAudibleThresholdDbfs = $signalActiveAudioThresholdDbfs
@@ -1429,6 +1465,14 @@ function Build-Report {
         $nearestFrontendPeak = $null
         $strongestFrontendPeak = $null
         $sampleHasNearPassbandPeak = $false
+        $sampleHasFilterPassbandPeak = $false
+        $sampleHasPassbandEvidencePeak = $false
+        $sampleFilterLowHz = Get-NumericValue (Get-JsonValue $diagnostics "rxChainFilterLowHz")
+        $sampleFilterHighHz = Get-NumericValue (Get-JsonValue $diagnostics "rxChainFilterHighHz")
+        $sampleFilterPassbandKnown = ($null -ne $sampleFilterLowHz -and $null -ne $sampleFilterHighHz)
+        $frontendFilterPassbandTopPeakCount = 0
+        $frontendNearestFilterPassbandDistanceHz = $null
+        $frontendNearestFilterPassbandPeak = $null
         Add-Number $frontendTopPeakCountValues $frontendTopPeaks.Count
         if ($frontendTopPeaks.Count -gt 0) {
             $frontendTopPeakSampleCount++
@@ -1441,18 +1485,64 @@ function Build-Report {
             }
             Add-Number $frontendStrongestTopPeakSnrValues (Get-JsonValue $strongestFrontendPeak "snrDb")
 
+            foreach ($peak in $frontendTopPeaks) {
+                $offset = Get-NumericValue (Get-JsonValue $peak "offsetHz")
+                if ($null -ne $offset -and [Math]::Abs([double]$offset) -le $frontendNearPassbandThresholdHz) {
+                    $sampleHasNearPassbandPeak = $true
+                }
+
+                $filterDistance = Get-FrontendPeakFilterDistanceHz `
+                    -Peak $peak `
+                    -FilterLowHz $sampleFilterLowHz `
+                    -FilterHighHz $sampleFilterHighHz
+                if ($null -eq $filterDistance) {
+                    continue
+                }
+
+                if ($null -eq $frontendNearestFilterPassbandDistanceHz -or
+                    [double]$filterDistance -lt [double]$frontendNearestFilterPassbandDistanceHz) {
+                    $frontendNearestFilterPassbandDistanceHz = $filterDistance
+                    $frontendNearestFilterPassbandPeak = $peak
+                }
+
+                if ([double]$filterDistance -le $frontendFilterPassbandEdgeToleranceHz) {
+                    $frontendFilterPassbandTopPeakCount++
+                    $sampleHasFilterPassbandPeak = $true
+                }
+            }
+            Add-Number $frontendNearestFilterPassbandDistanceValues $frontendNearestFilterPassbandDistanceHz
+
+            $sampleHasPassbandEvidencePeak = if ($sampleFilterPassbandKnown) {
+                $sampleHasFilterPassbandPeak
+            }
+            else {
+                $sampleHasNearPassbandPeak
+            }
+
             $peakRecord = [ordered]@{
                 sampleIndex = Get-JsonValue $sample "sampleIndex"
                 sampledUtc = Get-JsonValue $sample "sampledUtc"
                 peakCount = $frontendTopPeaks.Count
                 nearest = Convert-FrontendTopPeak $nearestFrontendPeak
                 strongest = Convert-FrontendTopPeak $strongestFrontendPeak
+                nearPassbandPeak = $sampleHasNearPassbandPeak
+                filterPassbandKnown = $sampleFilterPassbandKnown
+                filterLowHz = $sampleFilterLowHz
+                filterHighHz = $sampleFilterHighHz
+                filterPassbandEdgeToleranceHz = $frontendFilterPassbandEdgeToleranceHz
+                filterPassbandPeakCount = $frontendFilterPassbandTopPeakCount
+                nearestFilterPassbandDistanceHz = $frontendNearestFilterPassbandDistanceHz
+                nearestFilterPassbandPeak = Convert-FrontendTopPeak $frontendNearestFilterPassbandPeak
+                passbandEvidencePeak = $sampleHasPassbandEvidencePeak
             }
             $frontendTopPeakSamples.Add($peakRecord) | Out-Null
-            if ($null -ne $nearestOffset -and [Math]::Abs([double]$nearestOffset) -le 3000.0) {
-                $sampleHasNearPassbandPeak = $true
+            if ($sampleHasNearPassbandPeak) {
                 $frontendNearPassbandPeakSampleCount++
                 $frontendNearPassbandPeakSamples.Add($peakRecord) | Out-Null
+            }
+            if ($sampleHasFilterPassbandPeak) {
+                $frontendFilterPassbandPeakSampleCount++
+                $frontendFilterPassbandPeakSamples.Add($peakRecord) | Out-Null
             }
         }
         if (Test-Truthy (Get-JsonValue $diagnostics "frontendAdjacentNoiseUsable")) {
@@ -1742,7 +1832,7 @@ function Build-Report {
                     -not $nr5AudioAlignmentMismatch -and
                     $null -ne $nr5OutputDbfs -and
                     $nr5OutputDbfs -ge -40.0 -and
-                    ($sampleHasNearPassbandPeak -or
+                    ($sampleHasPassbandEvidencePeak -or
                         ($null -ne $nr5PeakEvidenceNumber -and $nr5PeakEvidenceNumber -ge 0.08) -or
                         ($null -ne $nr5ConfidenceNumber -and $nr5ConfidenceNumber -ge 0.30 -and
                             $null -ne $nr5SignalProbabilityNumber -and $nr5SignalProbabilityNumber -ge 0.14)))
@@ -1883,7 +1973,7 @@ function Build-Report {
                 }
                 $nr5PassbandQualifiedNearStrongInput = (
                     $nr5SpeechQualifiedNearStrongInput -and
-                    $sampleHasNearPassbandPeak)
+                    $sampleHasPassbandEvidencePeak)
                 if ($nr5PassbandQualifiedNearStrongInput) {
                     $nr5PassbandQualifiedNearStrongOutputValues.Add([double]$nr5OutputDbfs) | Out-Null
                     Add-Number $nr5PassbandQualifiedNearStrongFinalAudioValues $runtimeFinalAudioRmsDbfsNumber
@@ -1902,6 +1992,9 @@ function Build-Report {
                     signalProbability = $nr5SignalProbabilityNumber
                     peakEvidence = $nr5PeakEvidenceNumber
                     nearPassbandPeak = $sampleHasNearPassbandPeak
+                    filterPassbandPeak = $sampleHasFilterPassbandPeak
+                    passbandEvidencePeak = $sampleHasPassbandEvidencePeak
+                    nearestFilterPassbandDistanceHz = $frontendNearestFilterPassbandDistanceHz
                     nearest = Convert-FrontendTopPeak $nearestFrontendPeak
                     strongest = Convert-FrontendTopPeak $strongestFrontendPeak
                     speechQualified = $nr5SpeechQualifiedNearStrongInput
@@ -1985,7 +2078,7 @@ function Build-Report {
                     nearest = Convert-FrontendTopPeak $nearestFrontendPeak
                     strongest = Convert-FrontendTopPeak $strongestFrontendPeak
                 }
-                if ($sampleHasNearPassbandPeak) {
+                if ($sampleHasPassbandEvidencePeak) {
                     Add-Number $passbandAudioRmsValues $runtimePassbandAudioRmsDbfsNumber
                     $passbandAudioSamples.Add($passbandAudioRecord) | Out-Null
                     if ($runtimePassbandAudioRmsDbfsNumber -ge $signalActiveAudioThresholdDbfs) {
@@ -2133,6 +2226,7 @@ function Build-Report {
     $frontendNearestTopPeakOffsetStats = Get-NumberStats $frontendNearestTopPeakOffsetValues
     $frontendNearestTopPeakAbsOffsetStats = Get-NumberStats $frontendNearestTopPeakAbsOffsetValues
     $frontendStrongestTopPeakSnrStats = Get-NumberStats $frontendStrongestTopPeakSnrValues
+    $frontendNearestFilterPassbandDistanceStats = Get-NumberStats $frontendNearestFilterPassbandDistanceValues
     $frontendAdjacentNoiseBinStats = Get-NumberStats $frontendAdjacentNoiseBinValues
     $frontendAdjacentNoiseFloorStats = Get-NumberStats $frontendAdjacentNoiseFloorValues
     $frontendAdjacentNoiseP50Stats = Get-NumberStats $frontendAdjacentNoiseP50Values
@@ -2229,6 +2323,10 @@ function Build-Report {
         Select-Object -First 8)
     $frontendNearPassbandPeakTopSamples = @($frontendNearPassbandPeakSamples.ToArray() |
         Sort-Object @{Expression = { [Math]::Abs([double](Get-JsonValue (Get-JsonValue $_ "nearest") "offsetHz")) }; Ascending = $true } |
+        Select-Object -First 8)
+    $frontendFilterPassbandPeakTopSamples = @($frontendFilterPassbandPeakSamples.ToArray() |
+        Sort-Object @{Expression = { [double](Get-JsonValue $_ "nearestFilterPassbandDistanceHz") }; Ascending = $true },
+            @{Expression = { [double](Get-JsonValue (Get-JsonValue $_ "strongest") "snrDb") }; Descending = $true } |
         Select-Object -First 8)
     $nr5NormalizationCompressionDb = $null
     $nr5WeakStrongOutputGapDb = $null
@@ -2608,6 +2706,9 @@ function Build-Report {
     }
     if ($frontendTopPeakSampleCount -eq 0) {
         $summaryRecommendations.Add("Frontend top-peak evidence is missing; refresh the web frontend so NR5 traces record actual band peak locations before choosing a tuning window.") | Out-Null
+    }
+    elseif ($frontendFilterPassbandPeakSampleCount -eq 0 -and $frontendNearPassbandPeakSampleCount -gt 0) {
+        $summaryRecommendations.Add("Frontend saw peaks near the dial, but none inside the RX filter passband; tune the signal into the active filter window before using this trace as on-signal NR5 evidence.") | Out-Null
     }
     elseif ($frontendNearPassbandPeakSampleCount -eq 0) {
         $summaryRecommendations.Add("Frontend saw band peaks, but none were within 3 kHz of the dial; retune toward frontendTopPeakWatch.topSamples before using this trace as on-signal NR5 evidence.") | Out-Null
@@ -3029,10 +3130,15 @@ function Build-Report {
         }
         passbandAudioWatch = [ordered]@{
             status = $passbandAudioStatus
-            nearPassbandThresholdHz = 3000
+            nearPassbandThresholdHz = [int]$frontendNearPassbandThresholdHz
+            filterPassbandEdgeToleranceHz = [int]$frontendFilterPassbandEdgeToleranceHz
+            filterLowHz = $rxChainFilterLowHz
+            filterHighHz = $rxChainFilterHighHz
             activeAudioThresholdDbfs = $signalActiveAudioThresholdDbfs
             floorAudioThresholdDbfs = $signalFloorAudioThresholdDbfs
             frontendTopPeakSampleCount = $frontendTopPeakSampleCount
+            legacyNearPassbandPeakSampleCount = $frontendNearPassbandPeakSampleCount
+            filterPassbandPeakSampleCount = $frontendFilterPassbandPeakSampleCount
             passbandPeakSampleCount = $passbandAudioRmsValues.Count
             offPassbandPeakSampleCount = $offPassbandAudioRmsValues.Count
             passbandActiveAudioSampleCount = $passbandActiveAudioRmsValues.Count
@@ -3085,13 +3191,19 @@ function Build-Report {
         frontendTopPeakWatch = [ordered]@{
             sampleCount = $frontendTopPeakSampleCount
             nearPassbandSampleCount = $frontendNearPassbandPeakSampleCount
-            nearPassbandThresholdHz = 3000
+            nearPassbandThresholdHz = [int]$frontendNearPassbandThresholdHz
+            filterPassbandSampleCount = $frontendFilterPassbandPeakSampleCount
+            filterPassbandEdgeToleranceHz = [int]$frontendFilterPassbandEdgeToleranceHz
+            filterLowHz = $rxChainFilterLowHz
+            filterHighHz = $rxChainFilterHighHz
             topPeakCount = $frontendTopPeakCountStats
             nearestOffsetHz = $frontendNearestTopPeakOffsetStats
             nearestAbsOffsetHz = $frontendNearestTopPeakAbsOffsetStats
+            nearestFilterPassbandDistanceHz = $frontendNearestFilterPassbandDistanceStats
             strongestSnrDb = $frontendStrongestTopPeakSnrStats
             topSamples = @($frontendTopPeakTopSamples)
             topNearPassbandSamples = @($frontendNearPassbandPeakTopSamples)
+            topFilterPassbandSamples = @($frontendFilterPassbandPeakTopSamples)
         }
         frontendAdjacentNoiseProfile = [ordered]@{
             usableSampleCount = $frontendAdjacentNoiseUsableCount

@@ -4630,7 +4630,7 @@ function Get-ArtifactIndexFileComparisonIds {
             $derived.Add("candidate-under-test") | Out-Null
         }
 
-        if ($comparison -eq "rnnoise" -or $comparison -eq "deepfilternet" -or $comparison -eq "speexdsp" -or $comparison -eq "webrtc-apm") {
+        if ($comparison -eq "rnnoise" -or $comparison -eq "rmnoise" -or $comparison -eq "deepfilternet" -or $comparison -eq "speexdsp" -or $comparison -eq "webrtc-apm") {
             $derived.Add("candidate-external-engine-opt-in") | Out-Null
         }
     }
@@ -4688,7 +4688,7 @@ function Get-ComparisonIdsFromReport {
         }
 
         $expanded.Add($comparison) | Out-Null
-        if ($comparison -eq "rnnoise" -or $comparison -eq "deepfilternet" -or $comparison -eq "speexdsp" -or $comparison -eq "webrtc-apm") {
+        if ($comparison -eq "rnnoise" -or $comparison -eq "rmnoise" -or $comparison -eq "deepfilternet" -or $comparison -eq "speexdsp" -or $comparison -eq "webrtc-apm") {
             $expanded.Add("candidate-external-engine-opt-in") | Out-Null
         }
     }
@@ -5210,6 +5210,25 @@ function Get-ExternalBakeoffExpectedScenariosForCandidateId {
                 }
             )
         }
+        "rmnoise" {
+            return @(
+                [ordered]@{
+                    scenarioId = "ssb-like-speech-post-demod"
+                    purpose = "Measure offline RM Noise speech-denoise benefit after WDSP demodulation."
+                    acceptanceGates = @("Improves speech artifact score without weak-signal loss.", "No added clipping or audio RMS pumping.", "Offline fixture provenance is reproducible.")
+                },
+                [ordered]@{
+                    scenarioId = "weak-cw-carrier-bypass"
+                    purpose = "Prove weak CW/carrier and non-speech HF content bypass the service candidate safely."
+                    acceptanceGates = @("Weak-carrier SNR/SINAD does not regress.", "Bypass/fallback is deterministic.", "No service-trained speech artifacts are introduced on CW.")
+                },
+                [ordered]@{
+                    scenarioId = "service-unavailable-bypass"
+                    purpose = "Verify network/service failure keeps current NR5 audio intact."
+                    acceptanceGates = @("Service unavailable falls back immediately.", "No live cloud stream is required for RX.", "Operator consent and privacy gates are documented.")
+                }
+            )
+        }
         "deepfilternet" {
             return @(
                 [ordered]@{
@@ -5330,9 +5349,12 @@ function New-ExternalBakeoffCandidateSummary {
     if ($id -eq "speexdsp" -and -not (Test-TextHas $evidenceText @("pumping"))) {
         $issues.Add("speex-no-pumping-gate-missing") | Out-Null
     }
-    if (($id -eq "rnnoise" -or $id -eq "deepfilternet") -and
+    if (($id -eq "rnnoise" -or $id -eq "rmnoise" -or $id -eq "deepfilternet") -and
         -not ($evidenceText -like "*weak*" -and ($evidenceText -like "*CW*" -or $evidenceText -like "*carrier*" -or $evidenceText -like "*bypass*"))) {
         $issues.Add("neural-weak-signal-bypass-gate-missing") | Out-Null
+    }
+    if ($id -eq "rmnoise" -and -not (Test-TextHas $evidenceText @("consent", "privacy", "service", "fallback"))) {
+        $issues.Add("rmnoise-consent-privacy-service-fallback-gate-missing") | Out-Null
     }
 
     $runtimeTier = Get-ExternalCandidateRiskTier $runtimeRisk
@@ -6144,6 +6166,12 @@ $manualTuneObserverEvidence = [ordered]@{
     allowStaleSceneCapture = $false
     staleScenePollCount = 0
     staleSceneCaptureCount = 0
+    frontendNearPassbandPollCount = 0
+    frontendOffPassbandPollCount = 0
+    frontendFilterPassbandPollCount = 0
+    frontendFilterOffPassbandPollCount = 0
+    frontendOffsetMismatchPollCount = 0
+    captureQualifiedPollCount = 0
     readyCaptureCount = 0
     mixedWeakStrongReady = $false
     mixedWeakStrongReadyCaptureCount = 0
@@ -6431,7 +6459,7 @@ $benchmarkPlanEvidence = [ordered]@{
     scenarioMissingAcceptanceGateIds = @()
     status = "not-evaluated"
 }
-$requiredExternalCandidateIds = @("rnnoise", "deepfilternet", "speexdsp", "webrtc-apm")
+$requiredExternalCandidateIds = @("rnnoise", "rmnoise", "deepfilternet", "speexdsp", "webrtc-apm")
 $externalEngineOptInComparisonId = "candidate-external-engine-opt-in"
 $externalEngineBakeoffRequiredByScope = $false
 $externalEngineBakeoffScopeTriggers = New-Object System.Collections.Generic.List[string]
@@ -6877,6 +6905,18 @@ else {
             if ($webrtcSafetyText -notlike "*AGC*" -or $webrtcSafetyText -notlike "*AEC*" -or $webrtcSafetyText -notlike "*disabled*") {
                 Add-ValidationIssue $errors "error" "external-candidate-webrtc-safety-gate-missing" "WebRTC APM candidate must explicitly keep AEC/AGC disabled unless separately approved."
                 Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-webrtc-safety-gate-missing"
+                $candidateUnsafe = $true
+            }
+        }
+
+        if ($id -eq "rmnoise") {
+            $rmnoiseSafetyText = "$((Get-JsonArray $candidate "requiredEvidence") -join ' ') $((Get-JsonArray $candidate "requiredControls") -join ' ') $((Get-JsonValue $candidate "fallbackPolicy")) $((Get-JsonValue $candidate "radioSafetyRisk"))"
+            if ($rmnoiseSafetyText -notlike "*consent*" -or
+                $rmnoiseSafetyText -notlike "*privacy*" -or
+                $rmnoiseSafetyText -notlike "*service*" -or
+                $rmnoiseSafetyText -notlike "*fallback*") {
+                Add-ValidationIssue $errors "error" "external-candidate-rmnoise-safety-gate-missing" "RM Noise candidate must explicitly gate recording consent, privacy review, service availability, and fallback behavior."
+                Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-rmnoise-safety-gate-missing"
                 $candidateUnsafe = $true
             }
         }
@@ -12959,6 +12999,12 @@ else {
                 $allowStaleSceneCapture = Test-Truthy (Get-JsonValue $artifactJson "allowStaleSceneCapture")
                 $staleScenePollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "staleScenePollCount"))
                 $staleSceneCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "staleSceneCaptureCount"))
+                $frontendNearPassbandPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "frontendNearPassbandPollCount"))
+                $frontendOffPassbandPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "frontendOffPassbandPollCount"))
+                $frontendFilterPassbandPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "frontendFilterPassbandPollCount"))
+                $frontendFilterOffPassbandPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "frontendFilterOffPassbandPollCount"))
+                $frontendOffsetMismatchPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "frontendOffsetMismatchPollCount"))
+                $captureQualifiedPollCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "captureQualifiedPollCount"))
                 $readyCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "readyCaptureCount"))
                 $mixedWeakStrongReady = Test-Truthy (Get-JsonValue $artifactJson "mixedWeakStrongReady")
                 $mixedWeakStrongReadyCaptureCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "mixedWeakStrongReadyCaptureCount"))
@@ -13027,6 +13073,12 @@ else {
                 $manualTuneObserverEvidence["allowStaleSceneCapture"] = $allowStaleSceneCapture
                 $manualTuneObserverEvidence["staleScenePollCount"] = $staleScenePollCount
                 $manualTuneObserverEvidence["staleSceneCaptureCount"] = $staleSceneCaptureCount
+                $manualTuneObserverEvidence["frontendNearPassbandPollCount"] = $frontendNearPassbandPollCount
+                $manualTuneObserverEvidence["frontendOffPassbandPollCount"] = $frontendOffPassbandPollCount
+                $manualTuneObserverEvidence["frontendFilterPassbandPollCount"] = $frontendFilterPassbandPollCount
+                $manualTuneObserverEvidence["frontendFilterOffPassbandPollCount"] = $frontendFilterOffPassbandPollCount
+                $manualTuneObserverEvidence["frontendOffsetMismatchPollCount"] = $frontendOffsetMismatchPollCount
+                $manualTuneObserverEvidence["captureQualifiedPollCount"] = $captureQualifiedPollCount
                 $manualTuneObserverEvidence["readyCaptureCount"] = $readyCaptureCount
                 $manualTuneObserverEvidence["mixedWeakStrongReady"] = $mixedWeakStrongReady
                 $manualTuneObserverEvidence["mixedWeakStrongReadyCaptureCount"] = $mixedWeakStrongReadyCaptureCount
@@ -15181,6 +15233,12 @@ $report = [ordered]@{
     manualTuneObserverAllowStaleSceneCapture = $manualTuneObserverEvidence.allowStaleSceneCapture
     manualTuneObserverStaleScenePollCount = $manualTuneObserverEvidence.staleScenePollCount
     manualTuneObserverStaleSceneCaptureCount = $manualTuneObserverEvidence.staleSceneCaptureCount
+    manualTuneObserverFrontendNearPassbandPollCount = $manualTuneObserverEvidence.frontendNearPassbandPollCount
+    manualTuneObserverFrontendOffPassbandPollCount = $manualTuneObserverEvidence.frontendOffPassbandPollCount
+    manualTuneObserverFrontendFilterPassbandPollCount = $manualTuneObserverEvidence.frontendFilterPassbandPollCount
+    manualTuneObserverFrontendFilterOffPassbandPollCount = $manualTuneObserverEvidence.frontendFilterOffPassbandPollCount
+    manualTuneObserverFrontendOffsetMismatchPollCount = $manualTuneObserverEvidence.frontendOffsetMismatchPollCount
+    manualTuneObserverCaptureQualifiedPollCount = $manualTuneObserverEvidence.captureQualifiedPollCount
     manualTuneObserverReadyCaptureCount = $manualTuneObserverEvidence.readyCaptureCount
     manualTuneObserverMixedWeakStrongReady = $manualTuneObserverEvidence.mixedWeakStrongReady
     manualTuneObserverMixedWeakStrongReadyCaptureCount = $manualTuneObserverEvidence.mixedWeakStrongReadyCaptureCount
