@@ -644,7 +644,7 @@ function readPersisted(): SignalEnhancePersisted {
   try {
     if (typeof localStorage === 'undefined') {
       return {
-        popEnabled: true,
+        popEnabled: false,
         snapEnabled: false,
         autoProfileEnabled: false,
         visualAgcEnabled: true,
@@ -655,7 +655,7 @@ function readPersisted(): SignalEnhancePersisted {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) {
       return {
-        popEnabled: true,
+        popEnabled: false,
         snapEnabled: false,
         autoProfileEnabled: false,
         visualAgcEnabled: true,
@@ -665,10 +665,7 @@ function readPersisted(): SignalEnhancePersisted {
     }
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     return {
-      // Signal Pop now defaults ON (PR #655) so the 3D shaded-relief engine is
-      // the out-of-box waterfall look. Missing key => on; only an explicit
-      // stored `false` (operator turned it off) keeps it off.
-      popEnabled: parsed.popEnabled !== false,
+      popEnabled: parsed.popEnabled === true,
       snapEnabled: parsed.snapEnabled === true,
       autoProfileEnabled: parsed.autoProfileEnabled === true,
       visualAgcEnabled: parsed.visualAgcEnabled !== false,
