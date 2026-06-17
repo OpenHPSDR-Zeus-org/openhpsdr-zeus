@@ -189,7 +189,6 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     }
 
     let lastSeqDrawn = -1;
-    let tickCounter = 0;
     // Count context-restore cycles — a one-off eviction logs once; a steady
     // leak would climb, which is the signal to dig further (#629).
     let restoreCount = 0;
@@ -346,7 +345,6 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       if (wfDb) wfValidFrames++;
       const skipRowUpload = false;
       if (wfDb) {
-        tickCounter++;
         // Every server frame uploads a row; the continuous scroll rate is
         // applied shader-side via the per-fragment row-age divide by
         // uScrollSpeed (see WfRenderer.setScrollSpeed / shaders.ts ageRows).
