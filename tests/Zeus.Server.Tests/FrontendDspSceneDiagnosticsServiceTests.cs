@@ -39,12 +39,28 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
             PeakCount: 3,
             CoherentPeakCount: 2,
             CoherentSubthresholdSignal: true,
-            SourceAtUtc: sourceAt));
+            SourceAtUtc: sourceAt,
+            AdjacentNoiseUsable: true,
+            AdjacentNoiseBins: 84,
+            AdjacentNoiseLeftBins: 40,
+            AdjacentNoiseRightBins: 44,
+            AdjacentNoiseFloorDb: -111.24,
+            AdjacentNoiseP10Db: -113.18,
+            AdjacentNoiseP50Db: -111.24,
+            AdjacentNoiseP90Db: -108.73,
+            AdjacentNoiseLeftFloorDb: -112.04,
+            AdjacentNoiseRightFloorDb: -110.58,
+            AdjacentNoiseSlopeDbPerKhz: 0.23,
+            AdjacentNoiseRejectedPct: 4.84));
 
         Assert.Equal("client one", stored.SourceClientId);
         Assert.Equal(sourceAt, stored.SourceAtUtc);
         Assert.Equal(18.2, stored.MaxSnrDb);
         Assert.Equal(17.9, stored.CoherentMaxSnrDb);
+        Assert.True(stored.AdjacentNoiseUsable);
+        Assert.Equal(84, stored.AdjacentNoiseBins);
+        Assert.Equal(-111.2, stored.AdjacentNoiseFloorDb);
+        Assert.Equal(4.8, stored.AdjacentNoiseRejectedPct);
 
         using var doc = JsonDocument.Parse(JsonSerializer.Serialize(service.Snapshot()));
         var root = doc.RootElement;
@@ -61,9 +77,98 @@ public sealed class FrontendDspSceneDiagnosticsServiceTests
         Assert.Equal(91, root.GetProperty("smartNrRxChainScore").GetInt32());
         Assert.Equal(3, root.GetProperty("peakCount").GetInt32());
         Assert.True(root.GetProperty("coherentSubthresholdSignal").GetBoolean());
+        Assert.True(root.GetProperty("adjacentNoiseUsable").GetBoolean());
+        Assert.Equal(84, root.GetProperty("adjacentNoiseBins").GetInt32());
+        Assert.Equal(40, root.GetProperty("adjacentNoiseLeftBins").GetInt32());
+        Assert.Equal(44, root.GetProperty("adjacentNoiseRightBins").GetInt32());
+        Assert.Equal(-111.2, root.GetProperty("adjacentNoiseFloorDb").GetDouble());
+        Assert.Equal(-113.2, root.GetProperty("adjacentNoiseP10Db").GetDouble());
+        Assert.Equal(-108.7, root.GetProperty("adjacentNoiseP90Db").GetDouble());
+        Assert.Equal(-112.0, root.GetProperty("adjacentNoiseLeftFloorDb").GetDouble());
+        Assert.Equal(-110.6, root.GetProperty("adjacentNoiseRightFloorDb").GetDouble());
+        Assert.Equal(0.2, root.GetProperty("adjacentNoiseSlopeDbPerKhz").GetDouble());
+        Assert.Equal(4.8, root.GetProperty("adjacentNoiseRejectedPct").GetDouble());
         Assert.True(root.GetProperty("ageMs").GetInt64() >= 0);
         Assert.True(root.GetProperty("sourceAgeMs").GetInt64() >= 0);
         Assert.Equal(sourceAt, root.GetProperty("sourceAtUtc").GetDateTimeOffset());
+    }
+
+    [Fact]
+    public void TryGetFreshAdjacentNoiseProfile_KeepsLatestUsableProfileAcrossRejectedFrames()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+
+        service.Update(new FrontendDspSceneDiagnosticsRequest(
+            SourceClientId: "client",
+            Mode: null,
+            SignalProfile: null,
+            SignalReason: null,
+            SmartNrProfile: null,
+            SmartNrReason: null,
+            SmartNrRecommendation: null,
+            SmartNrHeldByRxChain: null,
+            SmartNrRxChainLabel: null,
+            SmartNrRxChainRecommendation: null,
+            SmartNrRxChainTone: null,
+            SmartNrRxChainScore: null,
+            MaxSnrDb: null,
+            CoherentMaxSnrDb: null,
+            OccupiedPct: null,
+            CoherentOccupiedPct: null,
+            ImpulsivePct: null,
+            PeakCount: null,
+            CoherentPeakCount: null,
+            CoherentSubthresholdSignal: null,
+            SourceAtUtc: DateTimeOffset.UtcNow,
+            AdjacentNoiseUsable: true,
+            AdjacentNoiseBins: 88,
+            AdjacentNoiseLeftBins: 42,
+            AdjacentNoiseRightBins: 46,
+            AdjacentNoiseFloorDb: -105.2,
+            AdjacentNoiseP10Db: -105.8,
+            AdjacentNoiseP50Db: -105.2,
+            AdjacentNoiseP90Db: -104.1,
+            AdjacentNoiseLeftFloorDb: -105.4,
+            AdjacentNoiseRightFloorDb: -105.1,
+            AdjacentNoiseSlopeDbPerKhz: 0.1,
+            AdjacentNoiseRejectedPct: 7.3));
+
+        service.Update(new FrontendDspSceneDiagnosticsRequest(
+            SourceClientId: "client",
+            Mode: null,
+            SignalProfile: null,
+            SignalReason: null,
+            SmartNrProfile: null,
+            SmartNrReason: null,
+            SmartNrRecommendation: null,
+            SmartNrHeldByRxChain: null,
+            SmartNrRxChainLabel: null,
+            SmartNrRxChainRecommendation: null,
+            SmartNrRxChainTone: null,
+            SmartNrRxChainScore: null,
+            MaxSnrDb: null,
+            CoherentMaxSnrDb: null,
+            OccupiedPct: null,
+            CoherentOccupiedPct: null,
+            ImpulsivePct: null,
+            PeakCount: null,
+            CoherentPeakCount: null,
+            CoherentSubthresholdSignal: null,
+            SourceAtUtc: DateTimeOffset.UtcNow,
+            AdjacentNoiseUsable: false,
+            AdjacentNoiseBins: 6,
+            AdjacentNoiseRejectedPct: 96.0));
+
+        var profile = service.TryGetFreshAdjacentNoiseProfile();
+
+        Assert.NotNull(profile);
+        Assert.Equal(88, profile.Bins);
+        Assert.Equal(42, profile.LeftBins);
+        Assert.Equal(46, profile.RightBins);
+        Assert.Equal(-105.2, profile.FloorDb);
+        Assert.Equal(-105.4, profile.LeftFloorDb);
+        Assert.Equal(-105.1, profile.RightFloorDb);
+        Assert.Equal(7.3, profile.RejectedPct);
     }
 
     [Fact]

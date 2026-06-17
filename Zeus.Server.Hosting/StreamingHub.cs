@@ -58,6 +58,10 @@ public sealed class StreamingHub
     // Matches MsgType.MicPcm; the client→server uplink type-byte.
     private const byte MsgTypeMicPcm = 0x20;
 
+    // Matches MsgType.AudioStreamRequest; client asks to (start|stop) the RX
+    // audio stream. Used by GatedWebSocketAudioSink in desktop mode.
+    private const byte MsgTypeAudioStreamRequest = 0x21;
+
     // Largest client→server payload we'll reassemble. A mic PCM frame is
     // 1 + 960*4 = 3841 bytes; 16 KB leaves comfortable headroom if the
     // contract ever adds a control frame. Receives larger than this are
@@ -109,6 +113,19 @@ public sealed class StreamingHub
     private long _lastLoggedMeter;
     private long _lastLoggedOther;
     private readonly System.Threading.Timer _dropLogTimer;
+
+    // Aggregate count of connected clients that have asked for the RX audio
+    // stream (MsgType.AudioStreamRequest). GatedWebSocketAudioSink reads this
+    // once per DSP tick (Volatile) to decide whether to broadcast 0x02 in
+    // desktop mode. Per-client state lives on ClientSession.WantsAudio so a
+    // disconnect/reload can't leak a pinned stream.
+    private int _audioStreamRequests;
+
+    /// <summary>
+    /// True when at least one connected client has requested the RX audio
+    /// stream. Cheap (one volatile read) — safe to call on the DSP tick.
+    /// </summary>
+    internal bool AudioStreamRequested => Volatile.Read(ref _audioStreamRequests) > 0;
 
     public StreamingHub(ILogger<StreamingHub> log)
     {
@@ -201,6 +218,9 @@ public sealed class StreamingHub
         }
         finally
         {
+            // Release any RX-audio-stream request this client held so a
+            // disconnect/reload can't pin the desktop on-demand stream on.
+            session.SetWantsAudio(false);
             _clients.TryRemove(id, out _);
             _log.LogInformation("ws.client.disconnected id={Id} total={Count}", id, _clients.Count);
         }
@@ -578,6 +598,33 @@ public sealed class StreamingHub
         // the hub-level counters for the #299 Step 1 probe.
         public bool TryEnqueue(byte[] payload) => _queue.Writer.TryWrite(payload);
 
+        // Whether this client has asked for the RX audio stream (0x21).
+        // Mutated only on the receive loop and on disconnect cleanup, which
+        // never run concurrently for one session (the finally runs after both
+        // loops complete), so no per-session lock is needed; the hub aggregate
+        // uses Interlocked for cross-session safety.
+        private bool _wantsAudio;
+        public bool WantsAudio => _wantsAudio;
+
+        public void SetWantsAudio(bool want)
+        {
+            if (want == _wantsAudio) return;
+            _wantsAudio = want;
+            Interlocked.Add(ref _hub._audioStreamRequests, want ? 1 : -1);
+        }
+
+        // Intercept the client→server control frame here (we have the session
+        // context); everything else goes to the hub's shared dispatcher.
+        private void Dispatch(ReadOnlyMemory<byte> frame)
+        {
+            if (frame.Length >= 1 && frame.Span[0] == MsgTypeAudioStreamRequest)
+            {
+                SetWantsAudio(frame.Length > 1 && frame.Span[1] != 0);
+                return;
+            }
+            _hub.DispatchInbound(frame);
+        }
+
         public async Task RunAsync(CancellationToken ct)
         {
             var sendTask = SendLoopAsync(ct);
@@ -649,7 +696,7 @@ public sealed class StreamingHub
                     // dispatch the buffer view directly, no allocation.
                     if (result.EndOfMessage && accum is null)
                     {
-                        _hub.DispatchInbound(new ReadOnlyMemory<byte>(buf, 0, chunkLen));
+                        Dispatch(new ReadOnlyMemory<byte>(buf, 0, chunkLen));
                         continue;
                     }
 
@@ -680,7 +727,7 @@ public sealed class StreamingHub
 
                     if (result.EndOfMessage)
                     {
-                        _hub.DispatchInbound(new ReadOnlyMemory<byte>(accum, 0, accumLen));
+                        Dispatch(new ReadOnlyMemory<byte>(accum, 0, accumLen));
                         ArrayPool<byte>.Shared.Return(accum);
                         accum = null;
                         accumLen = 0;

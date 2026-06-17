@@ -111,6 +111,14 @@ function Get-NumericValue {
         return $null
     }
 
+    if ($Value -is [bool]) {
+        if ([bool]$Value) {
+            return 1.0
+        }
+
+        return 0.0
+    }
+
     if ($Value -is [byte] -or $Value -is [int] -or $Value -is [long] -or
         $Value -is [float] -or $Value -is [double] -or $Value -is [decimal]) {
         return [double]$Value
@@ -158,6 +166,101 @@ function Get-StatValue {
     return Get-NumericOrNull (Get-JsonValue $Report $Group) $Name
 }
 
+function Get-RxAudioLevelerWatchValue {
+    param(
+        $Report,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $watch = Get-JsonValue $Report "rxAudioLevelerWatch"
+    if ($null -ne $watch) {
+        $value = Get-NumericValue (Get-JsonValue $watch $Name)
+        if ($null -ne $value) {
+            return $value
+        }
+    }
+
+    switch ($Name) {
+        "diagnosticSampleCount" { return Get-NumericValue (Get-JsonValue $Report "rxAudioLevelerDiagnosticSampleCount") }
+        "boostSlewLimitedSampleCount" { return Get-NumericValue (Get-JsonValue $Report "rxAudioLevelerBoostSlewLimitedSampleCount") }
+        "peakLimitedSampleCount" { return Get-NumericValue (Get-JsonValue $Report "rxAudioLevelerPeakLimitedSampleCount") }
+        "outputLimitedSampleCount" { return Get-NumericValue (Get-JsonValue $Report "rxAudioLevelerOutputLimitedSampleCount") }
+        "constrainedSampleCount" {
+            $boost = Get-RxAudioLevelerWatchValue $Report "boostSlewLimitedSampleCount"
+            $peak = Get-RxAudioLevelerWatchValue $Report "peakLimitedSampleCount"
+            $output = Get-RxAudioLevelerWatchValue $Report "outputLimitedSampleCount"
+            if ($null -eq $boost -and $null -eq $peak -and $null -eq $output) {
+                return $null
+            }
+
+            $boostCount = if ($null -eq $boost) { 0.0 } else { [Math]::Max(0.0, [double]$boost) }
+            $peakCount = if ($null -eq $peak) { 0.0 } else { [Math]::Max(0.0, [double]$peak) }
+            $outputCount = if ($null -eq $output) { 0.0 } else { [Math]::Max(0.0, [double]$output) }
+            return [double]($boostCount + $peakCount + $outputCount)
+        }
+        "constrainedPct" {
+            return Get-Percent (Get-RxAudioLevelerWatchValue $Report "constrainedSampleCount") (Get-RxAudioLevelerWatchValue $Report "diagnosticSampleCount")
+        }
+        default { return $null }
+    }
+}
+
+function Test-Truthy {
+    param($Value)
+
+    if ($null -eq $Value) {
+        return $false
+    }
+
+    if ($Value -is [bool]) {
+        return [bool]$Value
+    }
+
+    $numeric = Get-NumericValue $Value
+    if ($null -ne $numeric) {
+        return ([double]$numeric -ne 0.0)
+    }
+
+    $text = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return $false
+    }
+
+    return @("1", "true", "yes", "y", "on") -contains $text.ToLowerInvariant()
+}
+
+function Get-AgcStabilityWatchValue {
+    param(
+        $Report,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $watch = Get-JsonValue $Report "agcStabilityWatch"
+    if ($null -eq $watch) {
+        return $null
+    }
+
+    switch ($Name) {
+        "pumpingRisk" {
+            $value = Get-JsonValue $watch "pumpingRisk"
+            if ($null -eq $value) {
+                return $null
+            }
+
+            if (Test-Truthy $value) {
+                return 1.0
+            }
+
+            return 0.0
+        }
+        "activeAgcMovementDb" { return Get-StatValue $watch "activeAgcGainDb" "movement" }
+        "voiceLikeAgcMovementDb" { return Get-StatValue $watch "voiceLikeAgcGainDb" "movement" }
+        "quietNoEvidenceAgcMovementDb" { return Get-StatValue $watch "quietNoEvidenceAgcGainDb" "movement" }
+        "levelerConstrainedAgcMovementDb" { return Get-StatValue $watch "levelerConstrainedAgcGainDb" "movement" }
+        default { return Get-NumericValue (Get-JsonValue $watch $Name) }
+    }
+}
+
 function Get-Percent {
     param(
         $Numerator,
@@ -171,6 +274,53 @@ function Get-Percent {
     }
 
     return [Math]::Round(100.0 * $num / $den, 3)
+}
+
+function ConvertTo-NamedCountArray {
+    param($Items)
+
+    $counts = @{}
+    foreach ($item in @($Items)) {
+        $name = [string](Get-JsonValue $item "name")
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            continue
+        }
+
+        $count = Get-NumericValue (Get-JsonValue $item "count")
+        if ($null -eq $count) {
+            $count = 0.0
+        }
+
+        if (-not $counts.ContainsKey($name)) {
+            $counts[$name] = 0
+        }
+        $counts[$name] = [int]$counts[$name] + [int][Math]::Round([Math]::Max(0.0, [double]$count))
+    }
+
+    $result = New-Object System.Collections.Generic.List[object]
+    foreach ($name in @($counts.Keys | Sort-Object)) {
+        $result.Add([ordered]@{
+            name = [string]$name
+            count = [int]$counts[$name]
+        }) | Out-Null
+    }
+
+    return @($result.ToArray())
+}
+
+function Get-TopNamedCount {
+    param($Counts)
+
+    $items = @($Counts | Where-Object {
+        -not [string]::IsNullOrWhiteSpace([string](Get-JsonValue $_ "name"))
+    })
+    if ($items.Count -eq 0) {
+        return $null
+    }
+
+    return @($items | Sort-Object `
+        @{ Expression = { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "count")) }; Descending = $true },
+        @{ Expression = { [string](Get-JsonValue $_ "name") }; Ascending = $true })[0]
 }
 
 function Resolve-OptionalFilePath {
@@ -208,7 +358,24 @@ function Get-FileSha256IfPresent {
         return ""
     }
 
-    return (Get-FileHash -LiteralPath $resolvedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+        return (Get-FileHash -LiteralPath $resolvedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+
+    $stream = [System.IO.File]::OpenRead($resolvedPath)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $hash = $sha256.ComputeHash($stream)
+            return ([System.BitConverter]::ToString($hash) -replace "-", "").ToLowerInvariant()
+        }
+        finally {
+            $sha256.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
 }
 
 function Get-DateSortKey {
@@ -664,6 +831,7 @@ function Get-SafetyRiskScore {
     return ((Get-SafetyClassCount -Counts $Counts -SafetyClass "hard-gate") * 1000) +
         ((Get-SafetyClassCount -Counts $Counts -SafetyClass "weak-signal") * 120) +
         ((Get-SafetyClassCount -Counts $Counts -SafetyClass "pumping") * 80) +
+        ((Get-SafetyClassCount -Counts $Counts -SafetyClass "artifact-control") * 30) +
         ((Get-SafetyClassCount -Counts $Counts -SafetyClass "clipping") * 120) +
         ((Get-SafetyClassCount -Counts $Counts -SafetyClass "freshness") * 80) +
         ((Get-SafetyClassCount -Counts $Counts -SafetyClass "front-end") * 40) +
@@ -686,6 +854,18 @@ function Get-CandidateBlockingSafetyClassCounts {
     }
 
     return @($result.ToArray())
+}
+
+function Test-CandidateBlockingSafetyClass {
+    param([string]$SafetyClass)
+
+    foreach ($blockingClass in @("hard-gate", "weak-signal", "pumping", "clipping", "freshness", "front-end", "audio-path", "tooling")) {
+        if ([string]::Equals($SafetyClass, $blockingClass, [StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    return $false
 }
 
 function Get-TotalSafetyClassCount {
@@ -1252,10 +1432,41 @@ function New-TraceRecord {
     $weakInput = Get-NumericOrNull $weak "weakInputSampleCount"
     $weakRecovered = Get-NumericOrNull $weak "weakRecoveredSampleCount"
     $weakDropout = Get-NumericOrNull $weak "weakDropoutSampleCount"
+    $strongInput = Get-NumericOrNull $weak "strongInputSampleCount"
     $hotMakeup = Get-NumericOrNull $weak "hotMakeupSampleCount"
     $weakRecoveryPct = Get-NumericOrNull $weak "weakRecoveryPct"
+    $weakStrongOutputGap = Get-NumericOrNull $weak "weakStrongOutputGapDb"
+    $nr5SampleCountForMixedStatus = Get-NumericOrNull $Report "nr5SampleCount"
     if ($null -eq $weakRecoveryPct) {
         $weakRecoveryPct = Get-Percent $weakRecovered $weakInput
+    }
+    $mixedWeakStrongEvidenceReady = ($null -ne $weakInput -and
+        $weakInput -gt 0 -and
+        $null -ne $strongInput -and
+        $strongInput -gt 0)
+    $weakStrongOutputParityReady = ($mixedWeakStrongEvidenceReady -and
+        $null -ne $weakStrongOutputGap -and
+        [Math]::Abs([double]$weakStrongOutputGap) -le 6.0)
+    $mixedWeakStrongTraceStatus = [string](Get-JsonValue $weak "mixedWeakStrongEvidenceStatus")
+    if ([string]::IsNullOrWhiteSpace($mixedWeakStrongTraceStatus)) {
+        $mixedWeakStrongTraceStatus = if ($null -eq $nr5SampleCountForMixedStatus -or $nr5SampleCountForMixedStatus -le 0) {
+            "no-nr5-samples"
+        }
+        elseif ($null -eq $weakInput -or $weakInput -le 0) {
+            if ($null -eq $strongInput -or $strongInput -le 0) { "missing-weak-and-strong-input" } else { "missing-weak-input" }
+        }
+        elseif ($null -eq $strongInput -or $strongInput -le 0) {
+            "missing-strong-input"
+        }
+        elseif ($null -eq $weakStrongOutputGap) {
+            "missing-output-gap"
+        }
+        elseif (-not $weakStrongOutputParityReady) {
+            "weak-strong-output-gap-watch"
+        }
+        else {
+            "ready"
+        }
     }
 
     $okSampleCount = Get-NumericOrNull $Report "okSampleCount"
@@ -1267,6 +1478,10 @@ function New-TraceRecord {
     $rxMetersFreshPct = Get-Percent (Get-JsonValue $Report "rxMetersFreshSampleCount") $runtimeEvidenceSampleCount
 
     $nr5SampleCount = Get-NumericOrNull $Report "nr5SampleCount"
+    $constraintCounts = @(ConvertTo-NamedCountArray (Get-JsonArray $Report "constraintCounts"))
+    $hardConstraintCounts = @(ConvertTo-NamedCountArray (Get-JsonArray $Report "hardConstraintCounts"))
+    $statusCounts = @(ConvertTo-NamedCountArray (Get-JsonArray $Report "statusCounts"))
+    $topHardConstraint = Get-TopNamedCount $hardConstraintCounts
     $readyForBenchmark = [bool](Get-JsonValue $Report "readyForBenchmarkTrace")
     $signals = New-Object System.Collections.Generic.List[object]
 
@@ -1278,6 +1493,7 @@ function New-TraceRecord {
         Add-SignalIf -Signals $signals -Condition ($null -ne $weakDropout -and $weakDropout -gt 0) -SafetyClass "weak-signal" -Name "weak-dropouts" -Value $weakDropout -Threshold 0 -Message "Weak-input samples dropped below input level."
         Add-SignalIf -Signals $signals -Condition ($null -ne $weakRecoveryPct -and $weakRecoveryPct -lt 95.0) -SafetyClass "weak-signal" -Name "weak-recovery-pct" -Value $weakRecoveryPct -Threshold 95.0 -Message "Weak-input recovery is below the live tuning target."
     }
+    Add-SignalIf -Signals $signals -Condition ($mixedWeakStrongEvidenceReady -and -not $weakStrongOutputParityReady) -SafetyClass "pumping" -Name "weak-strong-output-gap-db" -Value $weakStrongOutputGap -Threshold 6.0 -Message "Mixed weak/strong samples did not normalize to the live output parity target."
 
     $nr5OutputMovement = Get-StatValue $Report "nr5OutputDbfs" "movement"
     $audioRmsMovement = Get-StatValue $Report "audioRmsDbfs" "movement"
@@ -1288,6 +1504,52 @@ function New-TraceRecord {
     $adcHeadroomMin = Get-StatValue $Report "adcHeadroomDb" "min"
     $monitorBacklogMax = Get-StatValue $Report "monitorBacklogSamples" "max"
     $latencyAverage = Get-StatValue $Report "latencyMs" "average"
+    $rxAudioLevelerConstrainedSamples = Get-RxAudioLevelerWatchValue $Report "constrainedSampleCount"
+    $rxAudioLevelerConstrainedPct = Get-RxAudioLevelerWatchValue $Report "constrainedPct"
+    $rxAudioLevelerBoostSlewSamples = Get-RxAudioLevelerWatchValue $Report "boostSlewLimitedSampleCount"
+    $rxAudioLevelerPeakLimitedSamples = Get-RxAudioLevelerWatchValue $Report "peakLimitedSampleCount"
+    $rxAudioLevelerOutputLimitedSamples = Get-RxAudioLevelerWatchValue $Report "outputLimitedSampleCount"
+    $rxAudioLevelerOutputRmsMovement = Get-StatValue $Report "rxAudioLevelerOutputRmsDbfs" "movement"
+    $rxAudioLevelerAppliedGainMovement = Get-StatValue $Report "rxAudioLevelerAppliedGainDb" "movement"
+    $agcStabilityWatch = Get-JsonValue $Report "agcStabilityWatch"
+    $agcStabilityStatus = [string](Get-JsonValue $agcStabilityWatch "status")
+    $agcPumpingRisk = Get-AgcStabilityWatchValue $Report "pumpingRisk"
+    $agcActiveMovement = Get-AgcStabilityWatchValue $Report "activeAgcMovementDb"
+    $agcVoiceLikeMovement = Get-AgcStabilityWatchValue $Report "voiceLikeAgcMovementDb"
+    $agcQuietNoEvidenceMovement = Get-AgcStabilityWatchValue $Report "quietNoEvidenceAgcMovementDb"
+    $agcLevelerConstrainedMovement = Get-AgcStabilityWatchValue $Report "levelerConstrainedAgcMovementDb"
+    $nr5TextureFillAverage = Get-StatValue $Report "nr5TextureFill" "average"
+    $nr5SignalProbabilityAverage = Get-StatValue $Report "nr5SignalProbability" "average"
+    $nr5LowEvidenceLiftWatch = Get-JsonValue $Report "nr5LowEvidenceLiftWatch"
+    $nr5LowEvidenceLiftedSamples = Get-NumericOrNull $nr5LowEvidenceLiftWatch "liftedSampleCount"
+    $nr5LowEvidenceLiftedPct = Get-NumericOrNull $nr5LowEvidenceLiftWatch "liftedPct"
+    $nr5LowEvidenceAlignmentMismatchPct = Get-NumericOrNull $nr5LowEvidenceLiftWatch "alignmentMismatchPct"
+    $nr5AudioAlignmentWatch = Get-JsonValue $Report "nr5AudioAlignmentWatch"
+    $nr5AudioAlignmentMismatchPct = Get-NumericOrNull $nr5AudioAlignmentWatch "mismatchPct"
+    $nr5ArtifactRiskScore = 0.0
+    if ($null -ne $nr5LowEvidenceLiftedSamples -and $nr5LowEvidenceLiftedSamples -gt 0) {
+        $nr5ArtifactRiskScore += 1.0
+    }
+    if ($null -ne $nr5LowEvidenceLiftedPct -and $nr5LowEvidenceLiftedPct -gt 5.0) {
+        $nr5ArtifactRiskScore += 1.0
+    }
+    if ($null -ne $nr5AudioAlignmentMismatchPct -and $nr5AudioAlignmentMismatchPct -gt 10.0) {
+        $nr5ArtifactRiskScore += 1.0
+    }
+    if ($null -ne $nr5TextureFillAverage -and $nr5TextureFillAverage -gt 0.65 -and
+        ($null -eq $nr5SignalProbabilityAverage -or $nr5SignalProbabilityAverage -lt 0.30)) {
+        $nr5ArtifactRiskScore += 1.0
+    }
+    $nr5ArtifactRiskScore = [Math]::Round($nr5ArtifactRiskScore, 3)
+    $nr5ArtifactRiskStatus = if ($null -eq $nr5SampleCount -or $nr5SampleCount -le 0) {
+        "no-nr5-samples"
+    }
+    elseif ($nr5ArtifactRiskScore -gt 0.0) {
+        "artifact-review"
+    }
+    else {
+        "artifact-clear"
+    }
 
     Add-SignalIf -Signals $signals -Condition ($null -ne $nr5OutputMovement -and $nr5OutputMovement -gt 6.0) -SafetyClass "pumping" -Name "nr5-output-movement-db" -Value $nr5OutputMovement -Threshold 6.0 -Message "NR5 output movement is high enough to need pumping review."
     Add-SignalIf -Signals $signals -Condition ($null -ne $audioRmsMovement -and $audioRmsMovement -gt 6.0) -SafetyClass "pumping" -Name "audio-rms-movement-db" -Value $audioRmsMovement -Threshold 6.0 -Message "Final-audio RMS movement is high enough to need listening review."
@@ -1295,6 +1557,16 @@ function New-TraceRecord {
     Add-SignalIf -Signals $signals -Condition ($null -ne $recoveryMovement -and $recoveryMovement -gt 0.5) -SafetyClass "pumping" -Name "nr5-recovery-drive-movement" -Value $recoveryMovement -Threshold 0.5 -Message "Recovery-drive movement is high."
     Add-SignalIf -Signals $signals -Condition ($null -ne $makeupMax -and $makeupMax -gt 12.0) -SafetyClass "pumping" -Name "nr5-makeup-max-db" -Value $makeupMax -Threshold 12.0 -Message "NR5 makeup peak exceeded the hot-makeup threshold."
     Add-SignalIf -Signals $signals -Condition ($null -ne $hotMakeup -and $hotMakeup -gt 0) -SafetyClass "pumping" -Name "hot-makeup-samples" -Value $hotMakeup -Threshold 0 -Message "Hot-makeup samples appeared in the trace."
+    Add-SignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerBoostSlewSamples -and $rxAudioLevelerBoostSlewSamples -gt 0) -SafetyClass "pumping" -Name "rx-leveler-boost-slew-samples" -Value $rxAudioLevelerBoostSlewSamples -Threshold 0 -Message "RX audio leveler boost slew limited one or more samples."
+    Add-SignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerConstrainedPct -and $rxAudioLevelerConstrainedPct -gt 1.0) -SafetyClass "pumping" -Name "rx-leveler-constrained-pct" -Value $rxAudioLevelerConstrainedPct -Threshold 1.0 -Message "RX audio leveler constrained more than 1 percent of diagnostic samples."
+    Add-SignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerOutputRmsMovement -and $rxAudioLevelerOutputRmsMovement -gt 6.0) -SafetyClass "pumping" -Name "rx-leveler-output-rms-movement-db" -Value $rxAudioLevelerOutputRmsMovement -Threshold 6.0 -Message "RX audio leveler output RMS movement is high enough to need pumping review."
+    Add-SignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerAppliedGainMovement -and $rxAudioLevelerAppliedGainMovement -gt 6.0) -SafetyClass "pumping" -Name "rx-leveler-applied-gain-movement-db" -Value $rxAudioLevelerAppliedGainMovement -Threshold 6.0 -Message "RX audio leveler applied gain movement is high."
+    Add-SignalIf -Signals $signals -Condition ($null -ne $agcActiveMovement -and $agcActiveMovement -gt 6.0) -SafetyClass "pumping" -Name "agc-active-gain-movement-db" -Value $agcActiveMovement -Threshold 6.0 -Message "AGC gain moved during active audio; inspect AGC stability before tuning NR or AGC."
+    Add-SignalIf -Signals $signals -Condition ($null -ne $agcVoiceLikeMovement -and $agcVoiceLikeMovement -gt 6.0) -SafetyClass "pumping" -Name "agc-voice-like-gain-movement-db" -Value $agcVoiceLikeMovement -Threshold 6.0 -Message "AGC gain moved during voice-like evidence; inspect AGC stability before tuning speech recovery."
+    Add-SignalIf -Signals $signals -Condition ($null -ne $agcPumpingRisk -and $agcPumpingRisk -gt 0.0) -SafetyClass "pumping" -Name "agc-pumping-risk" -Value $agcPumpingRisk -Threshold 0 -Message "Watcher classified active or voice-like AGC pumping risk."
+    Add-SignalIf -Signals $signals -Condition ($nr5ArtifactRiskScore -gt 0.0) -SafetyClass "artifact-control" -Name "nr5-speech-artifact-risk-score" -Value $nr5ArtifactRiskScore -Threshold 0.0 -Message "NR5 low-evidence lift, audio-alignment mismatch, or unsupported texture fill needs speech-artifact listening review."
+    Add-SignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerPeakLimitedSamples -and $rxAudioLevelerPeakLimitedSamples -gt 0) -SafetyClass "clipping" -Name "rx-leveler-peak-limited-samples" -Value $rxAudioLevelerPeakLimitedSamples -Threshold 0 -Message "RX audio leveler peak headroom limited one or more samples."
+    Add-SignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerOutputLimitedSamples -and $rxAudioLevelerOutputLimitedSamples -gt 0) -SafetyClass "clipping" -Name "rx-leveler-output-limited-samples" -Value $rxAudioLevelerOutputLimitedSamples -Threshold 0 -Message "RX audio leveler output cap shaped one or more samples."
     Add-SignalIf -Signals $signals -Condition ($null -ne $audioPeakMax -and $audioPeakMax -gt -1.0) -SafetyClass "clipping" -Name "audio-peak-max-dbfs" -Value $audioPeakMax -Threshold -1.0 -Message "Audio peak is close to clipping."
     Add-SignalIf -Signals $signals -Condition ($null -ne $adcHeadroomMin -and $adcHeadroomMin -lt 6.0) -SafetyClass "front-end" -Name "adc-headroom-min-db" -Value $adcHeadroomMin -Threshold 6.0 -Message "ADC headroom is low."
     Add-SignalIf -Signals $signals -Condition ($null -ne $monitorBacklogMax -and $monitorBacklogMax -gt 0) -SafetyClass "audio-path" -Name "monitor-backlog-max-samples" -Value $monitorBacklogMax -Threshold 0 -Message "Monitor backlog invalidates live audio evidence."
@@ -1365,6 +1637,11 @@ function New-TraceRecord {
         okSampleCount = if ($null -eq $okSampleCount) { 0 } else { [int][Math]::Round($okSampleCount) }
         failedSampleCount = if ($null -eq $failedSampleCount) { 0 } else { [int][Math]::Round($failedSampleCount) }
         hardBlockerSampleCount = if ($null -eq $hardBlockerSampleCount) { 0 } else { [int][Math]::Round($hardBlockerSampleCount) }
+        constraintCounts = @($constraintCounts)
+        hardConstraintCounts = @($hardConstraintCounts)
+        statusCounts = @($statusCounts)
+        topHardConstraintName = if ($null -eq $topHardConstraint) { "" } else { [string](Get-JsonValue $topHardConstraint "name") }
+        topHardConstraintCount = if ($null -eq $topHardConstraint) { 0 } else { [int](Get-NumericValueOrDefault (Get-JsonValue $topHardConstraint "count")) }
         readyForBenchmarkTrace = $readyForBenchmark
         trendStatus = [string](Get-JsonValue $Report "trendStatus")
         nr5TuningReadyTrace = [bool](Get-JsonValue $Report "nr5TuningReadyTrace")
@@ -1375,16 +1652,39 @@ function New-TraceRecord {
         weakInputSampleCount = if ($null -eq $weakInput) { 0 } else { [int][Math]::Round($weakInput) }
         weakRecoveredSampleCount = if ($null -eq $weakRecovered) { 0 } else { [int][Math]::Round($weakRecovered) }
         weakDropoutSampleCount = if ($null -eq $weakDropout) { 0 } else { [int][Math]::Round($weakDropout) }
+        strongInputSampleCount = if ($null -eq $strongInput) { 0 } else { [int][Math]::Round($strongInput) }
         hotMakeupSampleCount = if ($null -eq $hotMakeup) { 0 } else { [int][Math]::Round($hotMakeup) }
         weakRecoveryPct = if ($null -eq $weakRecoveryPct) { $null } else { [Math]::Round([double]$weakRecoveryPct, 3) }
-        weakStrongOutputGapDb = Get-NumericOrNull $weak "weakStrongOutputGapDb"
+        weakStrongOutputGapDb = $weakStrongOutputGap
+        mixedWeakStrongEvidenceReady = $mixedWeakStrongEvidenceReady
+        weakStrongOutputParityReady = $weakStrongOutputParityReady
+        mixedWeakStrongEvidenceStatus = $mixedWeakStrongTraceStatus
         nr5OutputMovementDb = $nr5OutputMovement
         audioRmsMovementDb = $audioRmsMovement
+        rxAudioLevelerConstrainedSampleCount = if ($null -eq $rxAudioLevelerConstrainedSamples) { 0 } else { [int][Math]::Round($rxAudioLevelerConstrainedSamples) }
+        rxAudioLevelerConstrainedPct = if ($null -eq $rxAudioLevelerConstrainedPct) { $null } else { [Math]::Round([double]$rxAudioLevelerConstrainedPct, 3) }
+        rxAudioLevelerBoostSlewLimitedSampleCount = if ($null -eq $rxAudioLevelerBoostSlewSamples) { 0 } else { [int][Math]::Round($rxAudioLevelerBoostSlewSamples) }
+        rxAudioLevelerPeakLimitedSampleCount = if ($null -eq $rxAudioLevelerPeakLimitedSamples) { 0 } else { [int][Math]::Round($rxAudioLevelerPeakLimitedSamples) }
+        rxAudioLevelerOutputLimitedSampleCount = if ($null -eq $rxAudioLevelerOutputLimitedSamples) { 0 } else { [int][Math]::Round($rxAudioLevelerOutputLimitedSamples) }
+        rxAudioLevelerOutputRmsMovementDb = $rxAudioLevelerOutputRmsMovement
+        rxAudioLevelerAppliedGainMovementDb = $rxAudioLevelerAppliedGainMovement
+        agcStabilityStatus = $agcStabilityStatus
+        agcPumpingRisk = if ($null -eq $agcPumpingRisk) { $null } else { [bool]([double]$agcPumpingRisk -gt 0.0) }
+        agcActiveGainMovementDb = $agcActiveMovement
+        agcVoiceLikeGainMovementDb = $agcVoiceLikeMovement
+        agcQuietNoEvidenceGainMovementDb = $agcQuietNoEvidenceMovement
+        agcLevelerConstrainedGainMovementDb = $agcLevelerConstrainedMovement
         nr5MakeupMovementDb = $makeupMovement
         nr5MakeupMaxDb = $makeupMax
         nr5RecoveryDriveMovement = $recoveryMovement
-        nr5TextureFillAverage = Get-StatValue $Report "nr5TextureFill" "average"
-        nr5SignalProbabilityAverage = Get-StatValue $Report "nr5SignalProbability" "average"
+        nr5TextureFillAverage = $nr5TextureFillAverage
+        nr5SignalProbabilityAverage = $nr5SignalProbabilityAverage
+        nr5LowEvidenceLiftedSampleCount = if ($null -eq $nr5LowEvidenceLiftedSamples) { 0 } else { [int][Math]::Round($nr5LowEvidenceLiftedSamples) }
+        nr5LowEvidenceLiftedPct = if ($null -eq $nr5LowEvidenceLiftedPct) { $null } else { [Math]::Round([double]$nr5LowEvidenceLiftedPct, 3) }
+        nr5LowEvidenceAlignmentMismatchPct = if ($null -eq $nr5LowEvidenceAlignmentMismatchPct) { $null } else { [Math]::Round([double]$nr5LowEvidenceAlignmentMismatchPct, 3) }
+        nr5AudioAlignmentMismatchPct = if ($null -eq $nr5AudioAlignmentMismatchPct) { $null } else { [Math]::Round([double]$nr5AudioAlignmentMismatchPct, 3) }
+        nr5ArtifactRiskScore = $nr5ArtifactRiskScore
+        nr5ArtifactRiskStatus = $nr5ArtifactRiskStatus
         audioPeakMaxDbfs = $audioPeakMax
         adcHeadroomMinDb = $adcHeadroomMin
         monitorBacklogMaxSamples = $monitorBacklogMax
@@ -1480,6 +1780,10 @@ function Select-TraceForSummary {
         "lowest-pumping" {
             return @($items | Sort-Object `
                 @{ Expression = { Get-SafetyClassCount -Counts (Get-JsonValue $_ "safetyClassCounts") -SafetyClass "pumping" }; Ascending = $true },
+                @{ Expression = { if ([bool](Get-JsonValue $_ "agcPumpingRisk")) { 1 } else { 0 } }; Ascending = $true },
+                @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "agcActiveGainMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
+                @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "agcVoiceLikeGainMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
+                @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "rxAudioLevelerConstrainedSampleCount"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
                 @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "nr5OutputMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
                 @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "audioRmsMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true })[0]
         }
@@ -1510,21 +1814,52 @@ function Get-CompactTrace {
         safetyRiskScore = $Trace.safetyRiskScore
         readyForBenchmarkTrace = $Trace.readyForBenchmarkTrace
         trendStatus = $Trace.trendStatus
+        hardBlockerSampleCount = $Trace.hardBlockerSampleCount
+        hardConstraintCounts = @($Trace.hardConstraintCounts)
+        topHardConstraintName = $Trace.topHardConstraintName
+        topHardConstraintCount = $Trace.topHardConstraintCount
         weakInputSampleCount = $Trace.weakInputSampleCount
         weakRecoveredSampleCount = $Trace.weakRecoveredSampleCount
         weakDropoutSampleCount = $Trace.weakDropoutSampleCount
+        strongInputSampleCount = $Trace.strongInputSampleCount
         weakRecoveryPct = $Trace.weakRecoveryPct
+        weakStrongOutputGapDb = $Trace.weakStrongOutputGapDb
+        mixedWeakStrongEvidenceReady = $Trace.mixedWeakStrongEvidenceReady
+        weakStrongOutputParityReady = $Trace.weakStrongOutputParityReady
+        mixedWeakStrongEvidenceStatus = $Trace.mixedWeakStrongEvidenceStatus
         nr5OutputMovementDb = $Trace.nr5OutputMovementDb
         audioRmsMovementDb = $Trace.audioRmsMovementDb
+        rxAudioLevelerConstrainedSampleCount = $Trace.rxAudioLevelerConstrainedSampleCount
+        rxAudioLevelerConstrainedPct = $Trace.rxAudioLevelerConstrainedPct
+        rxAudioLevelerBoostSlewLimitedSampleCount = $Trace.rxAudioLevelerBoostSlewLimitedSampleCount
+        rxAudioLevelerPeakLimitedSampleCount = $Trace.rxAudioLevelerPeakLimitedSampleCount
+        rxAudioLevelerOutputLimitedSampleCount = $Trace.rxAudioLevelerOutputLimitedSampleCount
+        rxAudioLevelerOutputRmsMovementDb = $Trace.rxAudioLevelerOutputRmsMovementDb
+        rxAudioLevelerAppliedGainMovementDb = $Trace.rxAudioLevelerAppliedGainMovementDb
+        agcStabilityStatus = $Trace.agcStabilityStatus
+        agcPumpingRisk = $Trace.agcPumpingRisk
+        agcActiveGainMovementDb = $Trace.agcActiveGainMovementDb
+        agcVoiceLikeGainMovementDb = $Trace.agcVoiceLikeGainMovementDb
+        agcQuietNoEvidenceGainMovementDb = $Trace.agcQuietNoEvidenceGainMovementDb
+        agcLevelerConstrainedGainMovementDb = $Trace.agcLevelerConstrainedGainMovementDb
         nr5MakeupMovementDb = $Trace.nr5MakeupMovementDb
         nr5MakeupMaxDb = $Trace.nr5MakeupMaxDb
         nr5RecoveryDriveMovement = $Trace.nr5RecoveryDriveMovement
+        nr5TextureFillAverage = $Trace.nr5TextureFillAverage
+        nr5SignalProbabilityAverage = $Trace.nr5SignalProbabilityAverage
+        nr5LowEvidenceLiftedSampleCount = $Trace.nr5LowEvidenceLiftedSampleCount
+        nr5LowEvidenceLiftedPct = $Trace.nr5LowEvidenceLiftedPct
+        nr5LowEvidenceAlignmentMismatchPct = $Trace.nr5LowEvidenceAlignmentMismatchPct
+        nr5AudioAlignmentMismatchPct = $Trace.nr5AudioAlignmentMismatchPct
+        nr5ArtifactRiskScore = $Trace.nr5ArtifactRiskScore
+        nr5ArtifactRiskStatus = $Trace.nr5ArtifactRiskStatus
         audioPeakMaxDbfs = $Trace.audioPeakMaxDbfs
         audioFreshPct = $Trace.audioFreshPct
         rxMetersFreshPct = $Trace.rxMetersFreshPct
         hardGateSignalCount = Get-SafetyClassCount -Counts $Trace.safetyClassCounts -SafetyClass "hard-gate"
         weakSignalSignalCount = Get-SafetyClassCount -Counts $Trace.safetyClassCounts -SafetyClass "weak-signal"
         pumpingSignalCount = Get-SafetyClassCount -Counts $Trace.safetyClassCounts -SafetyClass "pumping"
+        artifactControlSignalCount = Get-SafetyClassCount -Counts $Trace.safetyClassCounts -SafetyClass "artifact-control"
         clippingSignalCount = Get-SafetyClassCount -Counts $Trace.safetyClassCounts -SafetyClass "clipping"
         freshnessSignalCount = Get-SafetyClassCount -Counts $Trace.safetyClassCounts -SafetyClass "freshness"
         frontEndSignalCount = Get-SafetyClassCount -Counts $Trace.safetyClassCounts -SafetyClass "front-end"
@@ -1580,14 +1915,29 @@ function New-Recommendations {
 
     $latestPumping = Get-SafetyClassCount -Counts $Latest.safetyClassCounts -SafetyClass "pumping"
     $latestWeak = Get-SafetyClassCount -Counts $Latest.safetyClassCounts -SafetyClass "weak-signal"
+    $latestArtifact = Get-SafetyClassCount -Counts $Latest.safetyClassCounts -SafetyClass "artifact-control"
+    $latestHardGate = Get-SafetyClassCount -Counts $Latest.safetyClassCounts -SafetyClass "hard-gate"
+    if ($latestHardGate -gt 0) {
+        $topHardConstraintName = [string](Get-JsonValue $Latest "topHardConstraintName")
+        $topHardConstraintCount = [int](Get-NumericValueOrDefault (Get-JsonValue $Latest "topHardConstraintCount"))
+        if (-not [string]::IsNullOrWhiteSpace($topHardConstraintName) -and $topHardConstraintCount -gt 0) {
+            $items.Add("Latest NR5 trace is hard-gated by '$topHardConstraintName' in $topHardConstraintCount sample(s); clear that capture-readiness blocker before interpreting NR5 or RX leveler movement.") | Out-Null
+        }
+        else {
+            $items.Add("Latest NR5 trace is hard-gated; inspect hardConstraintCounts before interpreting NR5 or RX leveler movement.") | Out-Null
+        }
+    }
     if ($latestPumping -gt 0 -and $latestWeak -gt 0) {
         $items.Add("Latest NR5 trace has both pumping and weak-signal safety signals; tune recovery/makeup coupling before raising global makeup or mask fill.") | Out-Null
     }
     elseif ($latestPumping -gt 0) {
-        $items.Add("Latest NR5 trace is primarily pumping-limited; inspect output movement, makeup movement, and recovery-drive movement before changing weak-fill thresholds.") | Out-Null
+        $items.Add("Latest NR5 trace is primarily pumping-limited; inspect output movement, makeup movement, recovery-drive movement, and RX leveler constraints before changing weak-fill thresholds.") | Out-Null
     }
     elseif ($latestWeak -gt 0) {
         $items.Add("Latest NR5 trace is primarily weak-signal-limited; inspect top weak dropouts before increasing broad makeup.") | Out-Null
+    }
+    elseif ($latestArtifact -gt 0) {
+        $items.Add("Latest NR5 trace has artifact-control review signals; inspect low-evidence lift, audio-alignment mismatch, and texture-fill evidence before tuning mask fill or recovery.") | Out-Null
     }
 
     if ($null -ne $BestBalanced -and $BestBalanced.traceId -ne $Latest.traceId) {
@@ -1614,6 +1964,8 @@ function Get-ControlFamilyForSignal {
     )
 
     switch -Regex ($SignalName) {
+        "agc-" { return "wdsp-agc-stability" }
+        "artifact|texture|low-evidence" { return "nr5-speech-artifact-control" }
         "recovery-drive" { return "nr5-recovery-drive-damping" }
         "makeup" { return "nr5-makeup-gain-cap-and-slew" }
         "output-movement|audio-rms" { return "nr5-output-level-stability" }
@@ -1626,6 +1978,7 @@ function Get-ControlFamilyForSignal {
 
     switch ($SafetyClass) {
         "pumping" { return "nr5-level-stability" }
+        "artifact-control" { return "nr5-speech-artifact-control" }
         "weak-signal" { return "weak-signal-preservation" }
         "clipping" { return "level-headroom" }
         "freshness" { return "diagnostic-freshness" }
@@ -1641,6 +1994,7 @@ function Get-GuardrailForSafetyClass {
 
     switch ($SafetyClass) {
         "pumping" { return "Do not improve weak-signal recovery by increasing output movement, makeup movement, recovery-drive movement, hot makeup, or audible pumping." }
+        "artifact-control" { return "Do not improve floor suppression by creating metallic, burbling, speech-like, or low-evidence lifted artifacts." }
         "weak-signal" { return "Do not reduce weak-input recovery, increase weak dropouts, or bury faint speech/CW while lowering noise." }
         "clipping" { return "Do not allow final audio peaks or TX/monitor paths to approach clipping." }
         "freshness" { return "Do not tune from traces with stale diagnostics; recapture before accepting evidence." }
@@ -1658,7 +2012,8 @@ function Get-TuningRationaleForSafetyClass {
     )
 
     switch ($SafetyClass) {
-        "pumping" { return "Latest NR5 evidence is level-stability limited; inspect output movement, makeup movement, and recovery-drive movement before changing weak-fill thresholds." }
+        "pumping" { return "Latest NR5 evidence is level-stability limited; inspect output movement, makeup movement, recovery-drive movement, and RX leveler constraints before changing weak-fill thresholds." }
+        "artifact-control" { return "Latest NR5 evidence needs speech-artifact review; inspect texture fill, low-evidence lift, and audio-alignment rows before changing mask fill or recovery." }
         "weak-signal" { return "Latest NR5 evidence is weak-signal limited; preserve recovery and reduce dropouts before tightening noise suppression." }
         "clipping" { return "Latest NR5 evidence is level-headroom limited; reduce peak or makeup risk before candidate comparison." }
         "freshness" { return "Diagnostics were not fresh enough to support tuning; fix capture fidelity before interpreting NR behavior." }
@@ -1956,6 +2311,14 @@ function Get-ExperimentGatesForControlFamily {
                 "Output and makeup movement do not regress."
             )
         }
+        "nr5-speech-artifact-control" {
+            return @(
+                "No increase in low-evidence lifted samples.",
+                "No NR5/audio alignment mismatch growth on speech-like windows.",
+                "Texture fill remains supported by signal probability or coherent weak evidence.",
+                "Operator listening notes report no metallic, burbling, or speech-like artifacts."
+            )
+        }
         "audio-headroom" {
             return @(
                 "Audio peak max remains at or below -1 dBFS.",
@@ -1980,6 +2343,29 @@ function Get-ExperimentGatesForControlFamily {
             )
         }
     }
+}
+
+function Get-LiveExperimentTuningComparisons {
+    return @("current-zeus", "nr5-spnr")
+}
+
+function Get-LiveExperimentAcceptanceComparisons {
+    return @("off-baseline", "thetis-parity", "current-zeus", "nr5-spnr")
+}
+
+function Get-LiveExperimentRequiredComparisons {
+    return @(Get-LiveExperimentAcceptanceComparisons)
+}
+
+function Get-LiveExperimentRequiredEvidence {
+    return @(
+        "off-baseline live diagnostics trace index",
+        "Thetis-parity live diagnostics trace index",
+        "current-Zeus baseline live diagnostics trace index",
+        "NR5/SPNR opt-in candidate live diagnostics trace index",
+        "current-vs-NR5 matrix comparison report with no regressions",
+        "operator notes for speech texture and pumping"
+    )
 }
 
 function Add-LiveExperimentScenario {
@@ -2020,7 +2406,7 @@ function Add-LiveExperimentScenario {
         signalName = [string](Get-JsonValue $Action "signalName")
         sampleCount = $SampleCount
         intervalMs = $IntervalMs
-        requiredComparisons = @("current-zeus", "nr5-spnr")
+        requiredComparisons = @(Get-LiveExperimentRequiredComparisons)
         acceptanceGates = @(Get-ExperimentGatesForControlFamily -ControlFamily $controlFamily -SafetyClass $safetyClass)
         operatorSetup = $OperatorSetup
     }) | Out-Null
@@ -2097,7 +2483,7 @@ function New-LiveExperimentPlan {
 
     $topAction = if ($actions.Count -gt 0) { $actions[0] } else { $null }
     return [ordered]@{
-        planScope = "candidate-comparison-only"
+        planScope = "g2-rx-acceptance-evidence"
         status = [string](Get-JsonValue $ActionPlan "status")
         sourceActionPlanStatus = [string](Get-JsonValue $ActionPlan "status")
         sourceDirectionStatus = [string](Get-JsonValue $ActionPlan "directionStatus")
@@ -2107,7 +2493,9 @@ function New-LiveExperimentPlan {
         referenceTraceId = [string](Get-JsonValue $ActionPlan "referenceTraceId")
         referenceTraceRole = [string](Get-JsonValue $ActionPlan "referenceTraceRole")
         topActionId = if ($null -eq $topAction) { "" } else { [string](Get-JsonValue $topAction "actionId") }
-        recommendedComparisons = @("current-zeus", "nr5-spnr")
+        tuningComparisons = @(Get-LiveExperimentTuningComparisons)
+        acceptanceComparisons = @(Get-LiveExperimentAcceptanceComparisons)
+        recommendedComparisons = @(Get-LiveExperimentRequiredComparisons)
         recommendedSampleCount = $recommendedSampleCount
         recommendedIntervalMs = $recommendedIntervalMs
         minimumScenarioCount = [Math]::Min(3, $scenarios.Count)
@@ -2115,17 +2503,14 @@ function New-LiveExperimentPlan {
         scenarioIds = @($scenarioIds)
         scenarios = @($scenarios.ToArray())
         matrixCommandTemplates = [ordered]@{
+            offBaseline = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ScenarioIds $scenarioArgument -ComparisonId off-baseline -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.off-baseline.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.off-baseline.json -Samples $recommendedSampleCount -IntervalMs $recommendedIntervalMs"
+            thetis = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ScenarioIds $scenarioArgument -ComparisonId thetis-parity -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.thetis-parity.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.thetis-parity.json -Samples $recommendedSampleCount -IntervalMs $recommendedIntervalMs"
             baseline = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ScenarioIds $scenarioArgument -ComparisonId current-zeus -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.baseline.json -Samples $recommendedSampleCount -IntervalMs $recommendedIntervalMs"
             candidate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ScenarioIds $scenarioArgument -ComparisonId nr5-spnr -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.candidate.json -Samples $recommendedSampleCount -IntervalMs $recommendedIntervalMs"
-            compare = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.json -FailOnRegression"
+            compare = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId current-zeus -CandidateComparisonId nr5-spnr -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.json -FailOnRegression"
         }
         defaultBehaviorChangeReady = $false
-        requiredEvidence = @(
-            "current-Zeus baseline live diagnostics trace index",
-            "NR5/SPNR opt-in candidate live diagnostics trace index",
-            "matrix comparison report with no regressions",
-            "operator notes for speech texture and pumping"
-        )
+        requiredEvidence = @(Get-LiveExperimentRequiredEvidence)
     }
 }
 
@@ -2307,6 +2692,9 @@ function New-PromotionDecision {
         if ([string]::IsNullOrWhiteSpace($name)) {
             $name = "safety-signal"
         }
+        if (-not (Test-CandidateBlockingSafetyClass $safetyClass)) {
+            continue
+        }
 
         $blockers.Add([ordered]@{
             code = $name
@@ -2433,10 +2821,13 @@ function Build-MarkdownReport {
     $lines.Add("- Ready trace count: $($Report.readyTraceCount)") | Out-Null
     $lines.Add("- Ready NR5 trace count: $($Report.readyNr5TraceCount)") | Out-Null
     $lines.Add("- Candidate-ready NR5 trace count: $($Report.candidateReadyNr5TraceCount)") | Out-Null
+    $lines.Add("- Mixed weak/strong evidence: $($Report.mixedWeakStrongEvidenceReady) / $($Report.mixedWeakStrongEvidenceStatus)") | Out-Null
+    $lines.Add("- Mixed weak/strong traces ready/total/missing/gap-watch: $($Report.mixedWeakStrongReadyTraceCount) / $($Report.mixedWeakStrongTraceCount) / $($Report.mixedWeakStrongMissingTraceCount) / $($Report.mixedWeakStrongGapWatchTraceCount)") | Out-Null
     $lines.Add("- Latest trace: $($Report.latestTrace.traceId)") | Out-Null
     $lines.Add("- Best balanced trace: $($Report.bestBalancedTrace.traceId)") | Out-Null
     $lines.Add("- Best weak-signal trace: $($Report.bestWeakSignalTrace.traceId)") | Out-Null
     $lines.Add("- Lowest-pumping trace: $($Report.lowestPumpingTrace.traceId)") | Out-Null
+    $lines.Add("- Best mixed weak/strong trace: $($Report.mixedWeakStrongBestTrace.traceId)") | Out-Null
     $lines.Add("") | Out-Null
 
     $lines.Add("## Promotion Decision") | Out-Null
@@ -2571,6 +2962,8 @@ function Build-MarkdownReport {
         $lines.Add("- Status: $($experimentPlan.status)") | Out-Null
         $lines.Add("- Direction: $($experimentPlan.sourceDirectionStatus)") | Out-Null
         $lines.Add("- Primary control family: $($experimentPlan.primaryControlFamily)") | Out-Null
+        $lines.Add("- Tuning comparisons: $((@($experimentPlan.tuningComparisons) -join ', '))") | Out-Null
+        $lines.Add("- Acceptance comparisons: $((@($experimentPlan.acceptanceComparisons) -join ', '))") | Out-Null
         $lines.Add("- Recommended comparisons: $((@($experimentPlan.recommendedComparisons) -join ', '))") | Out-Null
         $lines.Add("- Recommended samples: $($experimentPlan.recommendedSampleCount) at $($experimentPlan.recommendedIntervalMs) ms") | Out-Null
         $lines.Add("") | Out-Null
@@ -2585,6 +2978,8 @@ function Build-MarkdownReport {
         }
 
         if ($null -ne $experimentPlan.matrixCommandTemplates) {
+            $lines.Add("- Off-baseline matrix: ``$($experimentPlan.matrixCommandTemplates.offBaseline)``") | Out-Null
+            $lines.Add("- Thetis matrix: ``$($experimentPlan.matrixCommandTemplates.thetis)``") | Out-Null
             $lines.Add("- Baseline matrix: ``$($experimentPlan.matrixCommandTemplates.baseline)``") | Out-Null
             $lines.Add("- Candidate matrix: ``$($experimentPlan.matrixCommandTemplates.candidate)``") | Out-Null
             $lines.Add("- Compare matrix: ``$($experimentPlan.matrixCommandTemplates.compare)``") | Out-Null
@@ -2620,10 +3015,11 @@ function Build-MarkdownReport {
 
     $lines.Add("## Trace Summary") | Out-Null
     $lines.Add("") | Out-Null
-    $lines.Add("| Trace | Status | Risk | Ready | Weak recovered | Dropouts | Output move dB | Makeup move dB | Recovery move |") | Out-Null
-    $lines.Add("|---|---|---:|---:|---:|---:|---:|---:|---:|") | Out-Null
+    $lines.Add("| Trace | Status | Risk | Ready | Top hard gate | Weak recovered | Strong input | Weak/strong gap dB | Output move dB | Leveler constraints | Leveler out move dB | Makeup move dB | Recovery move |") | Out-Null
+    $lines.Add("|---|---|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|") | Out-Null
     foreach ($trace in @($Report.traces)) {
-        $lines.Add("| $($trace.traceId) | $($trace.reviewStatus) | $($trace.safetyRiskScore) | $($trace.readyForBenchmarkTrace) | $($trace.weakRecoveryPct) | $($trace.weakDropoutSampleCount) | $($trace.nr5OutputMovementDb) | $($trace.nr5MakeupMovementDb) | $($trace.nr5RecoveryDriveMovement) |") | Out-Null
+        $topHardGate = if ([string]::IsNullOrWhiteSpace([string]$trace.topHardConstraintName)) { "" } else { "$($trace.topHardConstraintName) ($($trace.topHardConstraintCount))" }
+        $lines.Add("| $($trace.traceId) | $($trace.reviewStatus) | $($trace.safetyRiskScore) | $($trace.readyForBenchmarkTrace) | $topHardGate | $($trace.weakRecoveryPct) | $($trace.strongInputSampleCount) | $($trace.weakStrongOutputGapDb) | $($trace.nr5OutputMovementDb) | $($trace.rxAudioLevelerConstrainedSampleCount) | $($trace.rxAudioLevelerOutputRmsMovementDb) | $($trace.nr5MakeupMovementDb) | $($trace.nr5RecoveryDriveMovement) |") | Out-Null
     }
 
     return @($lines.ToArray())
@@ -2665,6 +3061,41 @@ $nr5Records = @($orderedRecords | Where-Object { [int](Get-NumericValue (Get-Jso
 $readyRecords = @($orderedRecords | Where-Object { [bool](Get-JsonValue $_ "readyForBenchmarkTrace") })
 $readyNr5Records = @($nr5Records | Where-Object { [bool](Get-JsonValue $_ "readyForBenchmarkTrace") })
 $candidateReadyNr5Records = @($nr5Records | Where-Object { [bool](Get-JsonValue $_ "candidateComparisonReady") })
+$mixedWeakStrongRecords = @($nr5Records | Where-Object {
+        [int](Get-NumericValueOrDefault (Get-JsonValue $_ "weakInputSampleCount")) -gt 0 -and
+        [int](Get-NumericValueOrDefault (Get-JsonValue $_ "strongInputSampleCount")) -gt 0
+    })
+$mixedWeakStrongReadyRecords = @($mixedWeakStrongRecords | Where-Object {
+        (Test-Truthy (Get-JsonValue $_ "mixedWeakStrongEvidenceReady")) -and
+        (Test-Truthy (Get-JsonValue $_ "weakStrongOutputParityReady"))
+    })
+$mixedWeakStrongGapWatchRecords = @($mixedWeakStrongRecords | Where-Object {
+        -not (Test-Truthy (Get-JsonValue $_ "weakStrongOutputParityReady"))
+    })
+$mixedWeakStrongMissingTraceCount = [Math]::Max(0, $nr5Records.Count - $mixedWeakStrongRecords.Count)
+$mixedWeakStrongEvidenceStatus = if ($nr5Records.Count -le 0) {
+    "no-nr5-history"
+}
+elseif ($mixedWeakStrongRecords.Count -eq 0) {
+    "missing-mixed-weak-strong"
+}
+elseif ($mixedWeakStrongReadyRecords.Count -gt 0) {
+    "ready"
+}
+elseif ($mixedWeakStrongGapWatchRecords.Count -gt 0) {
+    "weak-strong-output-gap-watch"
+}
+else {
+    "not-ready"
+}
+$mixedWeakStrongBestTrace = $null
+if ($mixedWeakStrongRecords.Count -gt 0) {
+    $mixedWeakStrongBestTrace = @($mixedWeakStrongRecords | Sort-Object `
+            @{ Expression = { if (Test-Truthy (Get-JsonValue $_ "weakStrongOutputParityReady")) { 0 } else { 1 } } }, `
+            @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "weakStrongOutputGapDb"); if ($null -eq $value) { 999.0 } else { [Math]::Abs([double]$value) } } }, `
+            @{ Expression = { if (Test-Truthy (Get-JsonValue $_ "candidateComparisonReady")) { 0 } else { 1 } } }, `
+            @{ Expression = { Get-NumericValue (Get-JsonValue $_ "safetyRiskScore") } })[0]
+}
 $latestTrace = Select-TraceForSummary -Records $orderedRecords -Mode "latest"
 $bestBalancedTrace = Select-TraceForSummary -Records $orderedRecords -Mode "balanced"
 $bestWeakSignalTrace = Select-TraceForSummary -Records $orderedRecords -Mode "best-weak"
@@ -2745,7 +3176,7 @@ $latestLiveExperimentPlan = New-LiveExperimentPlan -ActionPlan $latestTuningActi
 $latestLiveExperimentCoverage = New-LiveExperimentCoverage -Plan $latestLiveExperimentPlan -Records $orderedRecords
 
 $report = [ordered]@{
-    schemaVersion = 9
+    schemaVersion = 15
     tool = "summarize-dsp-live-diagnostics-history"
     generatedUtc = [DateTimeOffset]::UtcNow.ToString("o")
     scanRoot = ConvertTo-PortablePath -Root $portableRoot -Path $scanRoot
@@ -2758,6 +3189,13 @@ $report = [ordered]@{
     readyTraceCount = $readyRecords.Count
     readyNr5TraceCount = $readyNr5Records.Count
     candidateReadyNr5TraceCount = $candidateReadyNr5Records.Count
+    mixedWeakStrongEvidenceReady = [string]::Equals($mixedWeakStrongEvidenceStatus, "ready", [StringComparison]::OrdinalIgnoreCase)
+    mixedWeakStrongEvidenceStatus = $mixedWeakStrongEvidenceStatus
+    mixedWeakStrongTraceCount = $mixedWeakStrongRecords.Count
+    mixedWeakStrongReadyTraceCount = $mixedWeakStrongReadyRecords.Count
+    mixedWeakStrongMissingTraceCount = $mixedWeakStrongMissingTraceCount
+    mixedWeakStrongGapWatchTraceCount = $mixedWeakStrongGapWatchRecords.Count
+    artifactControlSignalCount = Get-SafetyClassCount -Counts $aggregateSafetyClassCounts -SafetyClass "artifact-control"
     aggregateSafetyClassCounts = @($aggregateSafetyClassCounts)
     aggregateSafetyClassReadiness = @($aggregateReadinessGaps)
     aggregateReadinessGaps = @($aggregateReadinessGaps)
@@ -2766,9 +3204,21 @@ $report = [ordered]@{
         weakRecoveryPctMinimum = 95.0
         nr5OutputMovementDbMaximum = 6.0
         audioRmsMovementDbMaximum = 6.0
+        rxAudioLevelerConstrainedPctMaximum = 1.0
+        rxAudioLevelerOutputRmsMovementDbMaximum = 6.0
+        rxAudioLevelerAppliedGainMovementDbMaximum = 6.0
+        agcActiveGainMovementDbMaximum = 6.0
+        agcVoiceLikeGainMovementDbMaximum = 6.0
+        mixedWeakStrongMinimumWeakSamples = 1
+        mixedWeakStrongMinimumStrongSamples = 1
+        weakStrongOutputGapDbMaximum = 6.0
         nr5MakeupMovementDbMaximum = 6.0
         nr5RecoveryDriveMovementMaximum = 0.5
         nr5MakeupMaxDbMaximum = 12.0
+        nr5ArtifactRiskScoreMaximum = 0.0
+        nr5LowEvidenceLiftedSampleCountMaximum = 0
+        nr5LowEvidenceLiftedPctMaximum = 5.0
+        nr5AudioAlignmentMismatchPctMaximum = 10.0
         audioPeakMaxDbfsMaximum = -1.0
         adcHeadroomMinDbMinimum = 6.0
     }
@@ -2783,14 +3233,33 @@ $report = [ordered]@{
     latestVsPreviousNr5Delta = [ordered]@{
         weakRecoveryPct = Get-Delta $latestTrace $previousTrace "weakRecoveryPct"
         weakDropoutSampleCount = Get-Delta $latestTrace $previousTrace "weakDropoutSampleCount"
+        strongInputSampleCount = Get-Delta $latestTrace $previousTrace "strongInputSampleCount"
+        weakStrongOutputGapDb = Get-Delta $latestTrace $previousTrace "weakStrongOutputGapDb"
         nr5OutputMovementDb = Get-Delta $latestTrace $previousTrace "nr5OutputMovementDb"
+        rxAudioLevelerConstrainedSampleCount = Get-Delta $latestTrace $previousTrace "rxAudioLevelerConstrainedSampleCount"
+        rxAudioLevelerConstrainedPct = Get-Delta $latestTrace $previousTrace "rxAudioLevelerConstrainedPct"
+        rxAudioLevelerBoostSlewLimitedSampleCount = Get-Delta $latestTrace $previousTrace "rxAudioLevelerBoostSlewLimitedSampleCount"
+        rxAudioLevelerPeakLimitedSampleCount = Get-Delta $latestTrace $previousTrace "rxAudioLevelerPeakLimitedSampleCount"
+        rxAudioLevelerOutputLimitedSampleCount = Get-Delta $latestTrace $previousTrace "rxAudioLevelerOutputLimitedSampleCount"
+        rxAudioLevelerOutputRmsMovementDb = Get-Delta $latestTrace $previousTrace "rxAudioLevelerOutputRmsMovementDb"
+        rxAudioLevelerAppliedGainMovementDb = Get-Delta $latestTrace $previousTrace "rxAudioLevelerAppliedGainMovementDb"
+        agcPumpingRisk = Get-Delta $latestTrace $previousTrace "agcPumpingRisk"
+        agcActiveGainMovementDb = Get-Delta $latestTrace $previousTrace "agcActiveGainMovementDb"
+        agcVoiceLikeGainMovementDb = Get-Delta $latestTrace $previousTrace "agcVoiceLikeGainMovementDb"
+        agcQuietNoEvidenceGainMovementDb = Get-Delta $latestTrace $previousTrace "agcQuietNoEvidenceGainMovementDb"
+        agcLevelerConstrainedGainMovementDb = Get-Delta $latestTrace $previousTrace "agcLevelerConstrainedGainMovementDb"
         nr5MakeupMovementDb = Get-Delta $latestTrace $previousTrace "nr5MakeupMovementDb"
         nr5RecoveryDriveMovement = Get-Delta $latestTrace $previousTrace "nr5RecoveryDriveMovement"
+        nr5ArtifactRiskScore = Get-Delta $latestTrace $previousTrace "nr5ArtifactRiskScore"
+        nr5LowEvidenceLiftedSampleCount = Get-Delta $latestTrace $previousTrace "nr5LowEvidenceLiftedSampleCount"
+        nr5LowEvidenceLiftedPct = Get-Delta $latestTrace $previousTrace "nr5LowEvidenceLiftedPct"
+        nr5AudioAlignmentMismatchPct = Get-Delta $latestTrace $previousTrace "nr5AudioAlignmentMismatchPct"
         safetyRiskScore = Get-Delta $latestTrace $previousTrace "safetyRiskScore"
     }
     bestBalancedTrace = Get-CompactTrace $bestBalancedTrace
     bestWeakSignalTrace = Get-CompactTrace $bestWeakSignalTrace
     lowestPumpingTrace = Get-CompactTrace $lowestPumpingTrace
+    mixedWeakStrongBestTrace = Get-CompactTrace $mixedWeakStrongBestTrace
     latestNr5Decision = $promotionDecision
     promotionDecision = $promotionDecision
     recommendations = @(New-Recommendations -Latest $latestTrace -BestBalanced $bestBalancedTrace -BestWeak $bestWeakSignalTrace -LowestPumping $lowestPumpingTrace)

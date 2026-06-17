@@ -160,6 +160,14 @@ function Get-NumericValue {
         return $null
     }
 
+    if ($Value -is [bool]) {
+        if ([bool]$Value) {
+            return 1.0
+        }
+
+        return 0.0
+    }
+
     if ($Value -is [byte] -or $Value -is [int] -or $Value -is [long] -or
         $Value -is [float] -or $Value -is [double] -or $Value -is [decimal]) {
         return [double]$Value
@@ -333,6 +341,197 @@ function Get-TotalSafetyClassCount {
     }
 
     return $total
+}
+
+function Add-LiveTraceCountMapValue {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Map,
+        [string]$Name,
+        [int]$Count = 1
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Name) -or $Count -le 0) {
+        return
+    }
+
+    if (-not $Map.ContainsKey($Name)) {
+        $Map[$Name] = 0
+    }
+    $Map[$Name] = [int]$Map[$Name] + $Count
+}
+
+function ConvertTo-LiveTraceCaptureCountArray {
+    param(
+        $Items,
+        [Parameter(Mandatory = $true)][string]$NameField
+    )
+
+    $counts = @{}
+    foreach ($item in @($Items)) {
+        $name = [string](Get-JsonValue $item $NameField)
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            $name = [string](Get-JsonValue $item "name")
+        }
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            continue
+        }
+
+        $count = [int][Math]::Round([Math]::Max(0.0, [double](Get-NumericValueOrDefault (Get-JsonValue $item "count"))))
+        Add-LiveTraceCountMapValue -Map $counts -Name $name -Count $count
+    }
+
+    $result = New-Object System.Collections.Generic.List[object]
+    foreach ($name in @($counts.Keys | Sort-Object)) {
+        $record = [ordered]@{}
+        $record[$NameField] = [string]$name
+        $record["count"] = [int]$counts[$name]
+        $result.Add($record) | Out-Null
+    }
+
+    return @($result.ToArray())
+}
+
+function Test-LiveTraceCaptureCountsMatch {
+    param(
+        $Actual,
+        $Expected,
+        [Parameter(Mandatory = $true)][string]$NameField
+    )
+
+    $actualItems = @(ConvertTo-LiveTraceCaptureCountArray -Items $Actual -NameField $NameField)
+    $expectedItems = @(ConvertTo-LiveTraceCaptureCountArray -Items $Expected -NameField $NameField)
+    if ($actualItems.Count -ne $expectedItems.Count) {
+        return $false
+    }
+
+    for ($i = 0; $i -lt $expectedItems.Count; $i++) {
+        if (-not [string]::Equals([string](Get-JsonValue $actualItems[$i] $NameField), [string](Get-JsonValue $expectedItems[$i] $NameField), [StringComparison]::Ordinal)) {
+            return $false
+        }
+        if ([int](Get-NumericValueOrDefault (Get-JsonValue $actualItems[$i] "count") -1) -ne [int](Get-NumericValueOrDefault (Get-JsonValue $expectedItems[$i] "count") -1)) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Add-LiveTraceCaptureComparisonToSummaryMaps {
+    param(
+        $Comparison,
+        [Parameter(Mandatory = $true)][hashtable]$StatusCounts,
+        [Parameter(Mandatory = $true)][hashtable]$ConstraintCounts,
+        [Parameter(Mandatory = $true)][hashtable]$HardConstraintCounts,
+        [ref]$HardGatePassCount,
+        [ref]$HardGateFailCount,
+        [ref]$StrictPreflightPassCount,
+        [ref]$StrictPreflightFailCount
+    )
+
+    if ($null -eq $Comparison) {
+        return
+    }
+
+    Add-LiveTraceCountMapValue `
+        -Map $StatusCounts `
+        -Name ([string](Get-JsonValue $Comparison "candidateStatus")) `
+        -Count 1
+
+    if (Test-Truthy (Get-JsonValue $Comparison "candidateHardGatePass")) {
+        $HardGatePassCount.Value = [int]$HardGatePassCount.Value + 1
+    }
+    else {
+        $HardGateFailCount.Value = [int]$HardGateFailCount.Value + 1
+    }
+
+    if (Test-Truthy (Get-JsonValue $Comparison "candidateStrictPreflightPass")) {
+        $StrictPreflightPassCount.Value = [int]$StrictPreflightPassCount.Value + 1
+    }
+    else {
+        $StrictPreflightFailCount.Value = [int]$StrictPreflightFailCount.Value + 1
+    }
+
+    Add-LiveTraceCountMapValue `
+        -Map $ConstraintCounts `
+        -Name ([string](Get-JsonValue $Comparison "candidateTopConstraintName")) `
+        -Count ([int][Math]::Round([Math]::Max(0.0, [double](Get-NumericValueOrDefault (Get-JsonValue $Comparison "candidateTopConstraintCount")))))
+    Add-LiveTraceCountMapValue `
+        -Map $HardConstraintCounts `
+        -Name ([string](Get-JsonValue $Comparison "candidateTopHardConstraintName")) `
+        -Count ([int][Math]::Round([Math]::Max(0.0, [double](Get-NumericValueOrDefault (Get-JsonValue $Comparison "candidateTopHardConstraintCount")))))
+}
+
+function Convert-LiveTraceCountMapToRecords {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Map,
+        [Parameter(Mandatory = $true)][string]$NameField
+    )
+
+    $result = New-Object System.Collections.Generic.List[object]
+    foreach ($name in @($Map.Keys | Sort-Object)) {
+        $record = [ordered]@{}
+        $record[$NameField] = [string]$name
+        $record["count"] = [int]$Map[$name]
+        $result.Add($record) | Out-Null
+    }
+
+    return @($result.ToArray())
+}
+
+function New-LiveTraceCaptureReadinessSummary {
+    param($Comparisons)
+
+    $statusCounts = @{}
+    $constraintCounts = @{}
+    $hardConstraintCounts = @{}
+    $hardGatePassCount = 0
+    $hardGateFailCount = 0
+    $strictPreflightPassCount = 0
+    $strictPreflightFailCount = 0
+    $comparisonCount = 0
+
+    foreach ($comparison in @($Comparisons)) {
+        if ($null -eq $comparison) {
+            continue
+        }
+        $comparisonCount++
+        Add-LiveTraceCaptureComparisonToSummaryMaps `
+            -Comparison $comparison `
+            -StatusCounts $statusCounts `
+            -ConstraintCounts $constraintCounts `
+            -HardConstraintCounts $hardConstraintCounts `
+            -HardGatePassCount ([ref]$hardGatePassCount) `
+            -HardGateFailCount ([ref]$hardGateFailCount) `
+            -StrictPreflightPassCount ([ref]$strictPreflightPassCount) `
+            -StrictPreflightFailCount ([ref]$strictPreflightFailCount)
+    }
+
+    return [ordered]@{
+        scenarioComparisonCount = $comparisonCount
+        candidateHardGatePassCount = $hardGatePassCount
+        candidateHardGateFailCount = $hardGateFailCount
+        candidateStrictPreflightPassCount = $strictPreflightPassCount
+        candidateStrictPreflightFailCount = $strictPreflightFailCount
+        candidateStatusCounts = @(Convert-LiveTraceCountMapToRecords -Map $statusCounts -NameField "status")
+        candidateTopConstraintCounts = @(Convert-LiveTraceCountMapToRecords -Map $constraintCounts -NameField "constraint")
+        candidateTopHardConstraintCounts = @(Convert-LiveTraceCountMapToRecords -Map $hardConstraintCounts -NameField "constraint")
+    }
+}
+
+function Get-LiveTraceCaptureReadinessSummary {
+    param($ArtifactJson)
+
+    $summary = Get-JsonValue $ArtifactJson "captureReadinessComparisonSummary"
+    if ($null -ne $summary) {
+        return $summary
+    }
+
+    $comparison = Get-JsonValue $ArtifactJson "captureReadinessComparison"
+    if ($null -eq $comparison) {
+        return $null
+    }
+
+    return New-LiveTraceCaptureReadinessSummary -Comparisons @($comparison)
 }
 
 function Get-LiveHistorySignalUnit {
@@ -1101,6 +1300,10 @@ function Select-LiveHistoryTraceForSummary {
         "lowest-pumping" {
             return @($items | Sort-Object `
                 @{ Expression = { Get-SafetyClassCount -Counts (Get-JsonArray $_ "safetyClassCounts") -SafetyClass "pumping" }; Ascending = $true },
+                @{ Expression = { if (Test-Truthy (Get-JsonValue $_ "agcPumpingRisk")) { 1 } else { 0 } }; Ascending = $true },
+                @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "agcActiveGainMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
+                @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "agcVoiceLikeGainMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
+                @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "rxAudioLevelerConstrainedSampleCount"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
                 @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "nr5OutputMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true },
                 @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "audioRmsMovementDb"); if ($null -eq $value) { 999.0 } else { $value } }; Ascending = $true })[0]
         }
@@ -1161,9 +1364,27 @@ function New-LiveHistoryExpectedLatestDelta {
     return [ordered]@{
         weakRecoveryPct = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "weakRecoveryPct"
         weakDropoutSampleCount = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "weakDropoutSampleCount"
+        strongInputSampleCount = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "strongInputSampleCount"
+        weakStrongOutputGapDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "weakStrongOutputGapDb"
         nr5OutputMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5OutputMovementDb"
+        rxAudioLevelerConstrainedSampleCount = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "rxAudioLevelerConstrainedSampleCount"
+        rxAudioLevelerConstrainedPct = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "rxAudioLevelerConstrainedPct"
+        rxAudioLevelerBoostSlewLimitedSampleCount = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "rxAudioLevelerBoostSlewLimitedSampleCount"
+        rxAudioLevelerPeakLimitedSampleCount = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "rxAudioLevelerPeakLimitedSampleCount"
+        rxAudioLevelerOutputLimitedSampleCount = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "rxAudioLevelerOutputLimitedSampleCount"
+        rxAudioLevelerOutputRmsMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "rxAudioLevelerOutputRmsMovementDb"
+        rxAudioLevelerAppliedGainMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "rxAudioLevelerAppliedGainMovementDb"
+        agcPumpingRisk = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "agcPumpingRisk"
+        agcActiveGainMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "agcActiveGainMovementDb"
+        agcVoiceLikeGainMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "agcVoiceLikeGainMovementDb"
+        agcQuietNoEvidenceGainMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "agcQuietNoEvidenceGainMovementDb"
+        agcLevelerConstrainedGainMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "agcLevelerConstrainedGainMovementDb"
         nr5MakeupMovementDb = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5MakeupMovementDb"
         nr5RecoveryDriveMovement = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5RecoveryDriveMovement"
+        nr5ArtifactRiskScore = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5ArtifactRiskScore"
+        nr5LowEvidenceLiftedSampleCount = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5LowEvidenceLiftedSampleCount"
+        nr5LowEvidenceLiftedPct = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5LowEvidenceLiftedPct"
+        nr5AudioAlignmentMismatchPct = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "nr5AudioAlignmentMismatchPct"
         safetyRiskScore = Get-LiveHistoryTraceDelta -Current $Latest -Previous $Previous -Name "safetyRiskScore"
     }
 }
@@ -1173,9 +1394,21 @@ function New-LiveHistoryExpectedThresholds {
         weakRecoveryPctMinimum = 95.0
         nr5OutputMovementDbMaximum = 6.0
         audioRmsMovementDbMaximum = 6.0
+        rxAudioLevelerConstrainedPctMaximum = 1.0
+        rxAudioLevelerOutputRmsMovementDbMaximum = 6.0
+        rxAudioLevelerAppliedGainMovementDbMaximum = 6.0
+        agcActiveGainMovementDbMaximum = 6.0
+        agcVoiceLikeGainMovementDbMaximum = 6.0
+        mixedWeakStrongMinimumWeakSamples = 1
+        mixedWeakStrongMinimumStrongSamples = 1
+        weakStrongOutputGapDbMaximum = 6.0
         nr5MakeupMovementDbMaximum = 6.0
         nr5RecoveryDriveMovementMaximum = 0.5
         nr5MakeupMaxDbMaximum = 12.0
+        nr5ArtifactRiskScoreMaximum = 0.0
+        nr5LowEvidenceLiftedSampleCountMaximum = 0
+        nr5LowEvidenceLiftedPctMaximum = 5.0
+        nr5AudioAlignmentMismatchPctMaximum = 10.0
         audioPeakMaxDbfsMaximum = -1.0
         adcHeadroomMinDbMinimum = 6.0
     }
@@ -1266,11 +1499,22 @@ function New-LiveHistoryExpectedRecommendations {
 
     $latestPumping = Get-SafetyClassCount -Counts (Get-JsonArray $Latest "safetyClassCounts") -SafetyClass "pumping"
     $latestWeak = Get-SafetyClassCount -Counts (Get-JsonArray $Latest "safetyClassCounts") -SafetyClass "weak-signal"
+    $latestHardGate = Get-SafetyClassCount -Counts (Get-JsonArray $Latest "safetyClassCounts") -SafetyClass "hard-gate"
+    if ($latestHardGate -gt 0) {
+        $topHardConstraintName = [string](Get-JsonValue $Latest "topHardConstraintName")
+        $topHardConstraintCount = [int](Get-NumericValueOrDefault (Get-JsonValue $Latest "topHardConstraintCount"))
+        if (-not [string]::IsNullOrWhiteSpace($topHardConstraintName) -and $topHardConstraintCount -gt 0) {
+            $items.Add("Latest NR5 trace is hard-gated by '$topHardConstraintName' in $topHardConstraintCount sample(s); clear that capture-readiness blocker before interpreting NR5 or RX leveler movement.") | Out-Null
+        }
+        else {
+            $items.Add("Latest NR5 trace is hard-gated; inspect hardConstraintCounts before interpreting NR5 or RX leveler movement.") | Out-Null
+        }
+    }
     if ($latestPumping -gt 0 -and $latestWeak -gt 0) {
         $items.Add("Latest NR5 trace has both pumping and weak-signal safety signals; tune recovery/makeup coupling before raising global makeup or mask fill.") | Out-Null
     }
     elseif ($latestPumping -gt 0) {
-        $items.Add("Latest NR5 trace is primarily pumping-limited; inspect output movement, makeup movement, and recovery-drive movement before changing weak-fill thresholds.") | Out-Null
+        $items.Add("Latest NR5 trace is primarily pumping-limited; inspect output movement, makeup movement, recovery-drive movement, and RX leveler constraints before changing weak-fill thresholds.") | Out-Null
     }
     elseif ($latestWeak -gt 0) {
         $items.Add("Latest NR5 trace is primarily weak-signal-limited; inspect top weak dropouts before increasing broad makeup.") | Out-Null
@@ -1355,6 +1599,9 @@ function New-LiveHistoryExpectedPromotionDecision {
         }
         if ([string]::IsNullOrWhiteSpace($name)) {
             $name = "safety-signal"
+        }
+        if (-not (Test-LiveHistoryCandidateBlockingSafetyClass $safetyClass)) {
+            continue
         }
 
         $blockers.Add([ordered]@{
@@ -1564,6 +1811,208 @@ function Get-LiveHistoryPercent {
     return [Math]::Round(100.0 * $num / $den, 3)
 }
 
+function ConvertTo-LiveHistoryNamedCountArray {
+    param($Items)
+
+    $counts = @{}
+    foreach ($item in @($Items)) {
+        $name = [string](Get-JsonValue $item "name")
+        if ([string]::IsNullOrWhiteSpace($name)) {
+            continue
+        }
+
+        $count = Get-NumericValue (Get-JsonValue $item "count")
+        if ($null -eq $count) {
+            $count = 0.0
+        }
+
+        if (-not $counts.ContainsKey($name)) {
+            $counts[$name] = 0
+        }
+        $counts[$name] = [int]$counts[$name] + [int][Math]::Round([Math]::Max(0.0, [double]$count))
+    }
+
+    $result = New-Object System.Collections.Generic.List[object]
+    foreach ($name in @($counts.Keys | Sort-Object)) {
+        $result.Add([ordered]@{
+            name = [string]$name
+            count = [int]$counts[$name]
+        }) | Out-Null
+    }
+
+    return @($result.ToArray())
+}
+
+function Get-LiveHistoryTopNamedCount {
+    param($Counts)
+
+    $items = @($Counts | Where-Object {
+        -not [string]::IsNullOrWhiteSpace([string](Get-JsonValue $_ "name"))
+    })
+    if ($items.Count -eq 0) {
+        return $null
+    }
+
+    return @($items | Sort-Object `
+        @{ Expression = { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "count")) }; Descending = $true },
+        @{ Expression = { [string](Get-JsonValue $_ "name") }; Ascending = $true })[0]
+}
+
+function Test-LiveHistoryNamedCountsMatch {
+    param(
+        $Actual,
+        $Expected
+    )
+
+    $actualItems = @(ConvertTo-LiveHistoryNamedCountArray $Actual)
+    $expectedItems = @(ConvertTo-LiveHistoryNamedCountArray $Expected)
+    if ($actualItems.Count -ne $expectedItems.Count) {
+        return $false
+    }
+
+    for ($i = 0; $i -lt $expectedItems.Count; $i++) {
+        if (-not [string]::Equals([string](Get-JsonValue $actualItems[$i] "name"), [string](Get-JsonValue $expectedItems[$i] "name"), [StringComparison]::Ordinal)) {
+            return $false
+        }
+        if ([int](Get-NumericValueOrDefault (Get-JsonValue $actualItems[$i] "count") -1) -ne [int](Get-NumericValueOrDefault (Get-JsonValue $expectedItems[$i] "count") -1)) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Test-StringArraysMatch {
+    param(
+        $Actual,
+        $Expected
+    )
+
+    $actualItems = @($Actual | ForEach-Object { [string]$_ })
+    $expectedItems = @($Expected | ForEach-Object { [string]$_ })
+    if ($actualItems.Count -ne $expectedItems.Count) {
+        return $false
+    }
+
+    for ($i = 0; $i -lt $expectedItems.Count; $i++) {
+        if (-not [string]::Equals($actualItems[$i], $expectedItems[$i], [StringComparison]::Ordinal)) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Test-NamedCountsMatchByField {
+    param(
+        $Actual,
+        $Expected,
+        [Parameter(Mandatory = $true)][string]$NameField
+    )
+
+    $actualCounts = @{}
+    foreach ($item in @($Actual)) {
+        $name = [string](Get-JsonValue $item $NameField)
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $actualCounts[$name] = [int](Get-NumericValueOrDefault (Get-JsonValue $item "count"))
+    }
+
+    $expectedCounts = @{}
+    foreach ($item in @($Expected)) {
+        $name = [string](Get-JsonValue $item $NameField)
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $expectedCounts[$name] = [int](Get-NumericValueOrDefault (Get-JsonValue $item "count"))
+    }
+
+    if ($actualCounts.Count -ne $expectedCounts.Count) {
+        return $false
+    }
+
+    foreach ($key in @($expectedCounts.Keys)) {
+        if (-not $actualCounts.ContainsKey($key)) {
+            return $false
+        }
+        if ([int]$actualCounts[$key] -ne [int]$expectedCounts[$key]) {
+            return $false
+        }
+    }
+
+    return $true
+}
+
+function Get-LiveHistoryRxAudioLevelerWatchValue {
+    param(
+        $Report,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $watch = Get-JsonValue $Report "rxAudioLevelerWatch"
+    if ($null -ne $watch) {
+        $value = Get-NumericValue (Get-JsonValue $watch $Name)
+        if ($null -ne $value) {
+            return $value
+        }
+    }
+
+    switch ($Name) {
+        "diagnosticSampleCount" { return Get-NumericValue (Get-JsonValue $Report "rxAudioLevelerDiagnosticSampleCount") }
+        "boostSlewLimitedSampleCount" { return Get-NumericValue (Get-JsonValue $Report "rxAudioLevelerBoostSlewLimitedSampleCount") }
+        "peakLimitedSampleCount" { return Get-NumericValue (Get-JsonValue $Report "rxAudioLevelerPeakLimitedSampleCount") }
+        "outputLimitedSampleCount" { return Get-NumericValue (Get-JsonValue $Report "rxAudioLevelerOutputLimitedSampleCount") }
+        "constrainedSampleCount" {
+            $boost = Get-LiveHistoryRxAudioLevelerWatchValue $Report "boostSlewLimitedSampleCount"
+            $peak = Get-LiveHistoryRxAudioLevelerWatchValue $Report "peakLimitedSampleCount"
+            $output = Get-LiveHistoryRxAudioLevelerWatchValue $Report "outputLimitedSampleCount"
+            if ($null -eq $boost -and $null -eq $peak -and $null -eq $output) {
+                return $null
+            }
+
+            $boostCount = if ($null -eq $boost) { 0.0 } else { [Math]::Max(0.0, [double]$boost) }
+            $peakCount = if ($null -eq $peak) { 0.0 } else { [Math]::Max(0.0, [double]$peak) }
+            $outputCount = if ($null -eq $output) { 0.0 } else { [Math]::Max(0.0, [double]$output) }
+            return [double]($boostCount + $peakCount + $outputCount)
+        }
+        "constrainedPct" {
+            return Get-LiveHistoryPercent `
+                -Numerator (Get-LiveHistoryRxAudioLevelerWatchValue $Report "constrainedSampleCount") `
+                -Denominator (Get-LiveHistoryRxAudioLevelerWatchValue $Report "diagnosticSampleCount")
+        }
+        default { return $null }
+    }
+}
+
+function Get-LiveHistoryAgcStabilityWatchValue {
+    param(
+        $Report,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $watch = Get-JsonValue $Report "agcStabilityWatch"
+    if ($null -eq $watch) {
+        return $null
+    }
+
+    switch ($Name) {
+        "pumpingRisk" {
+            $value = Get-JsonValue $watch "pumpingRisk"
+            if ($null -eq $value) {
+                return $null
+            }
+
+            if (Test-Truthy $value) {
+                return 1.0
+            }
+
+            return 0.0
+        }
+        "activeAgcMovementDb" { return Get-LiveHistoryStatValue $watch "activeAgcGainDb" "movement" }
+        "voiceLikeAgcMovementDb" { return Get-LiveHistoryStatValue $watch "voiceLikeAgcGainDb" "movement" }
+        "quietNoEvidenceAgcMovementDb" { return Get-LiveHistoryStatValue $watch "quietNoEvidenceAgcGainDb" "movement" }
+        "levelerConstrainedAgcMovementDb" { return Get-LiveHistoryStatValue $watch "levelerConstrainedAgcGainDb" "movement" }
+        default { return Get-NumericValue (Get-JsonValue $watch $Name) }
+    }
+}
+
 function Resolve-LiveHistoryOptionalFilePath {
     param(
         [string]$Path,
@@ -1599,7 +2048,7 @@ function Get-LiveHistoryFileSha256IfPresent {
         return ""
     }
 
-    return (Get-FileHash -LiteralPath $resolvedPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    return Get-FileSha256 $resolvedPath
 }
 
 function Get-LiveHistoryDateSortKey {
@@ -1911,11 +2360,24 @@ function Get-LiveHistorySafetyRiskScore {
     return ((Get-SafetyClassCount -Counts $Counts -SafetyClass "hard-gate") * 1000) +
         ((Get-SafetyClassCount -Counts $Counts -SafetyClass "weak-signal") * 120) +
         ((Get-SafetyClassCount -Counts $Counts -SafetyClass "pumping") * 80) +
+        ((Get-SafetyClassCount -Counts $Counts -SafetyClass "artifact-control") * 30) +
         ((Get-SafetyClassCount -Counts $Counts -SafetyClass "clipping") * 120) +
         ((Get-SafetyClassCount -Counts $Counts -SafetyClass "freshness") * 80) +
         ((Get-SafetyClassCount -Counts $Counts -SafetyClass "front-end") * 40) +
         ((Get-SafetyClassCount -Counts $Counts -SafetyClass "audio-path") * 80) +
         ((Get-SafetyClassCount -Counts $Counts -SafetyClass "tooling") * 20)
+}
+
+function Test-LiveHistoryCandidateBlockingSafetyClass {
+    param([string]$SafetyClass)
+
+    foreach ($blockingClass in @("hard-gate", "weak-signal", "pumping", "clipping", "freshness", "front-end", "audio-path", "tooling")) {
+        if ([string]::Equals($SafetyClass, $blockingClass, [StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+
+    return $false
 }
 
 function Get-LiveHistoryCandidateBlockingSafetyClassCounts {
@@ -1975,10 +2437,41 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
     $weakInput = Get-LiveHistoryNumericOrNull $weak "weakInputSampleCount"
     $weakRecovered = Get-LiveHistoryNumericOrNull $weak "weakRecoveredSampleCount"
     $weakDropout = Get-LiveHistoryNumericOrNull $weak "weakDropoutSampleCount"
+    $strongInput = Get-LiveHistoryNumericOrNull $weak "strongInputSampleCount"
     $hotMakeup = Get-LiveHistoryNumericOrNull $weak "hotMakeupSampleCount"
     $weakRecoveryPct = Get-LiveHistoryNumericOrNull $weak "weakRecoveryPct"
+    $weakStrongOutputGap = Get-LiveHistoryNumericOrNull $weak "weakStrongOutputGapDb"
+    $nr5SampleCountForMixedStatus = Get-LiveHistoryNumericOrNull $Report "nr5SampleCount"
     if ($null -eq $weakRecoveryPct) {
         $weakRecoveryPct = Get-LiveHistoryPercent $weakRecovered $weakInput
+    }
+    $mixedWeakStrongEvidenceReady = ($null -ne $weakInput -and
+        $weakInput -gt 0 -and
+        $null -ne $strongInput -and
+        $strongInput -gt 0)
+    $weakStrongOutputParityReady = ($mixedWeakStrongEvidenceReady -and
+        $null -ne $weakStrongOutputGap -and
+        [Math]::Abs([double]$weakStrongOutputGap) -le 6.0)
+    $mixedWeakStrongTraceStatus = [string](Get-JsonValue $weak "mixedWeakStrongEvidenceStatus")
+    if ([string]::IsNullOrWhiteSpace($mixedWeakStrongTraceStatus)) {
+        $mixedWeakStrongTraceStatus = if ($null -eq $nr5SampleCountForMixedStatus -or $nr5SampleCountForMixedStatus -le 0) {
+            "no-nr5-samples"
+        }
+        elseif ($null -eq $weakInput -or $weakInput -le 0) {
+            if ($null -eq $strongInput -or $strongInput -le 0) { "missing-weak-and-strong-input" } else { "missing-weak-input" }
+        }
+        elseif ($null -eq $strongInput -or $strongInput -le 0) {
+            "missing-strong-input"
+        }
+        elseif ($null -eq $weakStrongOutputGap) {
+            "missing-output-gap"
+        }
+        elseif (-not $weakStrongOutputParityReady) {
+            "weak-strong-output-gap-watch"
+        }
+        else {
+            "ready"
+        }
     }
 
     $okSampleCount = Get-LiveHistoryNumericOrNull $Report "okSampleCount"
@@ -1989,6 +2482,10 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
     $audioFreshPct = Get-LiveHistoryPercent (Get-JsonValue $Report "audioFreshSampleCount") $runtimeEvidenceSampleCount
     $rxMetersFreshPct = Get-LiveHistoryPercent (Get-JsonValue $Report "rxMetersFreshSampleCount") $runtimeEvidenceSampleCount
     $nr5SampleCount = Get-LiveHistoryNumericOrNull $Report "nr5SampleCount"
+    $constraintCounts = @(ConvertTo-LiveHistoryNamedCountArray (Get-JsonArray $Report "constraintCounts"))
+    $hardConstraintCounts = @(ConvertTo-LiveHistoryNamedCountArray (Get-JsonArray $Report "hardConstraintCounts"))
+    $statusCounts = @(ConvertTo-LiveHistoryNamedCountArray (Get-JsonArray $Report "statusCounts"))
+    $topHardConstraint = Get-LiveHistoryTopNamedCount $hardConstraintCounts
     $readyForBenchmark = Test-Truthy (Get-JsonValue $Report "readyForBenchmarkTrace")
     $signals = New-Object System.Collections.Generic.List[object]
 
@@ -2000,6 +2497,7 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
         Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $weakDropout -and $weakDropout -gt 0) -SafetyClass "weak-signal" -Name "weak-dropouts" -Value $weakDropout -Threshold 0 -Message "Weak-input samples dropped below input level."
         Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $weakRecoveryPct -and $weakRecoveryPct -lt 95.0) -SafetyClass "weak-signal" -Name "weak-recovery-pct" -Value $weakRecoveryPct -Threshold 95.0 -Message "Weak-input recovery is below the live tuning target."
     }
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($mixedWeakStrongEvidenceReady -and -not $weakStrongOutputParityReady) -SafetyClass "pumping" -Name "weak-strong-output-gap-db" -Value $weakStrongOutputGap -Threshold 6.0 -Message "Mixed weak/strong samples did not normalize to the live output parity target."
 
     $nr5OutputMovement = Get-LiveHistoryStatValue $Report "nr5OutputDbfs" "movement"
     $audioRmsMovement = Get-LiveHistoryStatValue $Report "audioRmsDbfs" "movement"
@@ -2010,6 +2508,52 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
     $adcHeadroomMin = Get-LiveHistoryStatValue $Report "adcHeadroomDb" "min"
     $monitorBacklogMax = Get-LiveHistoryStatValue $Report "monitorBacklogSamples" "max"
     $latencyAverage = Get-LiveHistoryStatValue $Report "latencyMs" "average"
+    $rxAudioLevelerConstrainedSamples = Get-LiveHistoryRxAudioLevelerWatchValue $Report "constrainedSampleCount"
+    $rxAudioLevelerConstrainedPct = Get-LiveHistoryRxAudioLevelerWatchValue $Report "constrainedPct"
+    $rxAudioLevelerBoostSlewSamples = Get-LiveHistoryRxAudioLevelerWatchValue $Report "boostSlewLimitedSampleCount"
+    $rxAudioLevelerPeakLimitedSamples = Get-LiveHistoryRxAudioLevelerWatchValue $Report "peakLimitedSampleCount"
+    $rxAudioLevelerOutputLimitedSamples = Get-LiveHistoryRxAudioLevelerWatchValue $Report "outputLimitedSampleCount"
+    $rxAudioLevelerOutputRmsMovement = Get-LiveHistoryStatValue $Report "rxAudioLevelerOutputRmsDbfs" "movement"
+    $rxAudioLevelerAppliedGainMovement = Get-LiveHistoryStatValue $Report "rxAudioLevelerAppliedGainDb" "movement"
+    $agcStabilityWatch = Get-JsonValue $Report "agcStabilityWatch"
+    $agcStabilityStatus = [string](Get-JsonValue $agcStabilityWatch "status")
+    $agcPumpingRisk = Get-LiveHistoryAgcStabilityWatchValue $Report "pumpingRisk"
+    $agcActiveMovement = Get-LiveHistoryAgcStabilityWatchValue $Report "activeAgcMovementDb"
+    $agcVoiceLikeMovement = Get-LiveHistoryAgcStabilityWatchValue $Report "voiceLikeAgcMovementDb"
+    $agcQuietNoEvidenceMovement = Get-LiveHistoryAgcStabilityWatchValue $Report "quietNoEvidenceAgcMovementDb"
+    $agcLevelerConstrainedMovement = Get-LiveHistoryAgcStabilityWatchValue $Report "levelerConstrainedAgcMovementDb"
+    $nr5TextureFillAverage = Get-LiveHistoryStatValue $Report "nr5TextureFill" "average"
+    $nr5SignalProbabilityAverage = Get-LiveHistoryStatValue $Report "nr5SignalProbability" "average"
+    $nr5LowEvidenceLiftWatch = Get-JsonValue $Report "nr5LowEvidenceLiftWatch"
+    $nr5LowEvidenceLiftedSamples = Get-LiveHistoryNumericOrNull $nr5LowEvidenceLiftWatch "liftedSampleCount"
+    $nr5LowEvidenceLiftedPct = Get-LiveHistoryNumericOrNull $nr5LowEvidenceLiftWatch "liftedPct"
+    $nr5LowEvidenceAlignmentMismatchPct = Get-LiveHistoryNumericOrNull $nr5LowEvidenceLiftWatch "alignmentMismatchPct"
+    $nr5AudioAlignmentWatch = Get-JsonValue $Report "nr5AudioAlignmentWatch"
+    $nr5AudioAlignmentMismatchPct = Get-LiveHistoryNumericOrNull $nr5AudioAlignmentWatch "mismatchPct"
+    $nr5ArtifactRiskScore = 0.0
+    if ($null -ne $nr5LowEvidenceLiftedSamples -and $nr5LowEvidenceLiftedSamples -gt 0) {
+        $nr5ArtifactRiskScore += 1.0
+    }
+    if ($null -ne $nr5LowEvidenceLiftedPct -and $nr5LowEvidenceLiftedPct -gt 5.0) {
+        $nr5ArtifactRiskScore += 1.0
+    }
+    if ($null -ne $nr5AudioAlignmentMismatchPct -and $nr5AudioAlignmentMismatchPct -gt 10.0) {
+        $nr5ArtifactRiskScore += 1.0
+    }
+    if ($null -ne $nr5TextureFillAverage -and $nr5TextureFillAverage -gt 0.65 -and
+        ($null -eq $nr5SignalProbabilityAverage -or $nr5SignalProbabilityAverage -lt 0.30)) {
+        $nr5ArtifactRiskScore += 1.0
+    }
+    $nr5ArtifactRiskScore = [Math]::Round($nr5ArtifactRiskScore, 3)
+    $nr5ArtifactRiskStatus = if ($null -eq $nr5SampleCount -or $nr5SampleCount -le 0) {
+        "no-nr5-samples"
+    }
+    elseif ($nr5ArtifactRiskScore -gt 0.0) {
+        "artifact-review"
+    }
+    else {
+        "artifact-clear"
+    }
 
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $nr5OutputMovement -and $nr5OutputMovement -gt 6.0) -SafetyClass "pumping" -Name "nr5-output-movement-db" -Value $nr5OutputMovement -Threshold 6.0 -Message "NR5 output movement is high enough to need pumping review."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $audioRmsMovement -and $audioRmsMovement -gt 6.0) -SafetyClass "pumping" -Name "audio-rms-movement-db" -Value $audioRmsMovement -Threshold 6.0 -Message "Final-audio RMS movement is high enough to need listening review."
@@ -2017,6 +2561,16 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $recoveryMovement -and $recoveryMovement -gt 0.5) -SafetyClass "pumping" -Name "nr5-recovery-drive-movement" -Value $recoveryMovement -Threshold 0.5 -Message "Recovery-drive movement is high."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $makeupMax -and $makeupMax -gt 12.0) -SafetyClass "pumping" -Name "nr5-makeup-max-db" -Value $makeupMax -Threshold 12.0 -Message "NR5 makeup peak exceeded the hot-makeup threshold."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $hotMakeup -and $hotMakeup -gt 0) -SafetyClass "pumping" -Name "hot-makeup-samples" -Value $hotMakeup -Threshold 0 -Message "Hot-makeup samples appeared in the trace."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerBoostSlewSamples -and $rxAudioLevelerBoostSlewSamples -gt 0) -SafetyClass "pumping" -Name "rx-leveler-boost-slew-samples" -Value $rxAudioLevelerBoostSlewSamples -Threshold 0 -Message "RX audio leveler boost slew limited one or more samples."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerConstrainedPct -and $rxAudioLevelerConstrainedPct -gt 1.0) -SafetyClass "pumping" -Name "rx-leveler-constrained-pct" -Value $rxAudioLevelerConstrainedPct -Threshold 1.0 -Message "RX audio leveler constrained more than 1 percent of diagnostic samples."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerOutputRmsMovement -and $rxAudioLevelerOutputRmsMovement -gt 6.0) -SafetyClass "pumping" -Name "rx-leveler-output-rms-movement-db" -Value $rxAudioLevelerOutputRmsMovement -Threshold 6.0 -Message "RX audio leveler output RMS movement is high enough to need pumping review."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerAppliedGainMovement -and $rxAudioLevelerAppliedGainMovement -gt 6.0) -SafetyClass "pumping" -Name "rx-leveler-applied-gain-movement-db" -Value $rxAudioLevelerAppliedGainMovement -Threshold 6.0 -Message "RX audio leveler applied gain movement is high."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $agcActiveMovement -and $agcActiveMovement -gt 6.0) -SafetyClass "pumping" -Name "agc-active-gain-movement-db" -Value $agcActiveMovement -Threshold 6.0 -Message "AGC gain moved during active audio; inspect AGC stability before tuning NR or AGC."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $agcVoiceLikeMovement -and $agcVoiceLikeMovement -gt 6.0) -SafetyClass "pumping" -Name "agc-voice-like-gain-movement-db" -Value $agcVoiceLikeMovement -Threshold 6.0 -Message "AGC gain moved during voice-like evidence; inspect AGC stability before tuning speech recovery."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $agcPumpingRisk -and $agcPumpingRisk -gt 0.0) -SafetyClass "pumping" -Name "agc-pumping-risk" -Value $agcPumpingRisk -Threshold 0 -Message "Watcher classified active or voice-like AGC pumping risk."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($nr5ArtifactRiskScore -gt 0.0) -SafetyClass "artifact-control" -Name "nr5-speech-artifact-risk-score" -Value $nr5ArtifactRiskScore -Threshold 0.0 -Message "NR5 low-evidence lift, audio-alignment mismatch, or unsupported texture fill needs speech-artifact listening review."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerPeakLimitedSamples -and $rxAudioLevelerPeakLimitedSamples -gt 0) -SafetyClass "clipping" -Name "rx-leveler-peak-limited-samples" -Value $rxAudioLevelerPeakLimitedSamples -Threshold 0 -Message "RX audio leveler peak headroom limited one or more samples."
+    Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $rxAudioLevelerOutputLimitedSamples -and $rxAudioLevelerOutputLimitedSamples -gt 0) -SafetyClass "clipping" -Name "rx-leveler-output-limited-samples" -Value $rxAudioLevelerOutputLimitedSamples -Threshold 0 -Message "RX audio leveler output cap shaped one or more samples."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $audioPeakMax -and $audioPeakMax -gt -1.0) -SafetyClass "clipping" -Name "audio-peak-max-dbfs" -Value $audioPeakMax -Threshold -1.0 -Message "Audio peak is close to clipping."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $adcHeadroomMin -and $adcHeadroomMin -lt 6.0) -SafetyClass "front-end" -Name "adc-headroom-min-db" -Value $adcHeadroomMin -Threshold 6.0 -Message "ADC headroom is low."
     Add-LiveHistorySafetySignalIf -Signals $signals -Condition ($null -ne $monitorBacklogMax -and $monitorBacklogMax -gt 0) -SafetyClass "audio-path" -Name "monitor-backlog-max-samples" -Value $monitorBacklogMax -Threshold 0 -Message "Monitor backlog invalidates live audio evidence."
@@ -2086,6 +2640,11 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
         okSampleCount = if ($null -eq $okSampleCount) { 0 } else { [int][Math]::Round($okSampleCount) }
         failedSampleCount = if ($null -eq $failedSampleCount) { 0 } else { [int][Math]::Round($failedSampleCount) }
         hardBlockerSampleCount = if ($null -eq $hardBlockerSampleCount) { 0 } else { [int][Math]::Round($hardBlockerSampleCount) }
+        constraintCounts = @($constraintCounts)
+        hardConstraintCounts = @($hardConstraintCounts)
+        statusCounts = @($statusCounts)
+        topHardConstraintName = if ($null -eq $topHardConstraint) { "" } else { [string](Get-JsonValue $topHardConstraint "name") }
+        topHardConstraintCount = if ($null -eq $topHardConstraint) { 0 } else { [int](Get-NumericValueOrDefault (Get-JsonValue $topHardConstraint "count")) }
         readyForBenchmarkTrace = $readyForBenchmark
         trendStatus = [string](Get-JsonValue $Report "trendStatus")
         nr5TuningReadyTrace = Test-Truthy (Get-JsonValue $Report "nr5TuningReadyTrace")
@@ -2096,16 +2655,39 @@ function New-LiveHistoryExpectedTraceRecordFromSummary {
         weakInputSampleCount = if ($null -eq $weakInput) { 0 } else { [int][Math]::Round($weakInput) }
         weakRecoveredSampleCount = if ($null -eq $weakRecovered) { 0 } else { [int][Math]::Round($weakRecovered) }
         weakDropoutSampleCount = if ($null -eq $weakDropout) { 0 } else { [int][Math]::Round($weakDropout) }
+        strongInputSampleCount = if ($null -eq $strongInput) { 0 } else { [int][Math]::Round($strongInput) }
         hotMakeupSampleCount = if ($null -eq $hotMakeup) { 0 } else { [int][Math]::Round($hotMakeup) }
         weakRecoveryPct = if ($null -eq $weakRecoveryPct) { $null } else { [Math]::Round([double]$weakRecoveryPct, 3) }
-        weakStrongOutputGapDb = Get-LiveHistoryNumericOrNull $weak "weakStrongOutputGapDb"
+        weakStrongOutputGapDb = $weakStrongOutputGap
+        mixedWeakStrongEvidenceReady = $mixedWeakStrongEvidenceReady
+        weakStrongOutputParityReady = $weakStrongOutputParityReady
+        mixedWeakStrongEvidenceStatus = $mixedWeakStrongTraceStatus
         nr5OutputMovementDb = $nr5OutputMovement
         audioRmsMovementDb = $audioRmsMovement
+        rxAudioLevelerConstrainedSampleCount = if ($null -eq $rxAudioLevelerConstrainedSamples) { 0 } else { [int][Math]::Round($rxAudioLevelerConstrainedSamples) }
+        rxAudioLevelerConstrainedPct = if ($null -eq $rxAudioLevelerConstrainedPct) { $null } else { [Math]::Round([double]$rxAudioLevelerConstrainedPct, 3) }
+        rxAudioLevelerBoostSlewLimitedSampleCount = if ($null -eq $rxAudioLevelerBoostSlewSamples) { 0 } else { [int][Math]::Round($rxAudioLevelerBoostSlewSamples) }
+        rxAudioLevelerPeakLimitedSampleCount = if ($null -eq $rxAudioLevelerPeakLimitedSamples) { 0 } else { [int][Math]::Round($rxAudioLevelerPeakLimitedSamples) }
+        rxAudioLevelerOutputLimitedSampleCount = if ($null -eq $rxAudioLevelerOutputLimitedSamples) { 0 } else { [int][Math]::Round($rxAudioLevelerOutputLimitedSamples) }
+        rxAudioLevelerOutputRmsMovementDb = $rxAudioLevelerOutputRmsMovement
+        rxAudioLevelerAppliedGainMovementDb = $rxAudioLevelerAppliedGainMovement
+        agcStabilityStatus = $agcStabilityStatus
+        agcPumpingRisk = if ($null -eq $agcPumpingRisk) { $null } else { [bool]([double]$agcPumpingRisk -gt 0.0) }
+        agcActiveGainMovementDb = $agcActiveMovement
+        agcVoiceLikeGainMovementDb = $agcVoiceLikeMovement
+        agcQuietNoEvidenceGainMovementDb = $agcQuietNoEvidenceMovement
+        agcLevelerConstrainedGainMovementDb = $agcLevelerConstrainedMovement
         nr5MakeupMovementDb = $makeupMovement
         nr5MakeupMaxDb = $makeupMax
         nr5RecoveryDriveMovement = $recoveryMovement
-        nr5TextureFillAverage = Get-LiveHistoryStatValue $Report "nr5TextureFill" "average"
-        nr5SignalProbabilityAverage = Get-LiveHistoryStatValue $Report "nr5SignalProbability" "average"
+        nr5TextureFillAverage = $nr5TextureFillAverage
+        nr5SignalProbabilityAverage = $nr5SignalProbabilityAverage
+        nr5LowEvidenceLiftedSampleCount = if ($null -eq $nr5LowEvidenceLiftedSamples) { 0 } else { [int][Math]::Round($nr5LowEvidenceLiftedSamples) }
+        nr5LowEvidenceLiftedPct = if ($null -eq $nr5LowEvidenceLiftedPct) { $null } else { [Math]::Round([double]$nr5LowEvidenceLiftedPct, 3) }
+        nr5LowEvidenceAlignmentMismatchPct = if ($null -eq $nr5LowEvidenceAlignmentMismatchPct) { $null } else { [Math]::Round([double]$nr5LowEvidenceAlignmentMismatchPct, 3) }
+        nr5AudioAlignmentMismatchPct = if ($null -eq $nr5AudioAlignmentMismatchPct) { $null } else { [Math]::Round([double]$nr5AudioAlignmentMismatchPct, 3) }
+        nr5ArtifactRiskScore = $nr5ArtifactRiskScore
+        nr5ArtifactRiskStatus = $nr5ArtifactRiskStatus
         audioPeakMaxDbfs = $audioPeakMax
         adcHeadroomMinDb = $adcHeadroomMin
         monitorBacklogMaxSamples = $monitorBacklogMax
@@ -2234,6 +2816,191 @@ function ConvertTo-LiveHistoryScenarioId {
     }
 
     return (($Value.Trim().ToLowerInvariant() -replace "[^a-z0-9]+", "-").Trim("-"))
+}
+
+function Get-BenchmarkPlanScenarioId {
+    param($Scenario)
+
+    $scenarioId = ConvertTo-LiveHistoryScenarioId ([string](Get-JsonValue $Scenario "id"))
+    if ([string]::IsNullOrWhiteSpace($scenarioId)) {
+        $scenarioId = ConvertTo-LiveHistoryScenarioId ([string](Get-JsonValue $Scenario "scenarioId"))
+    }
+
+    return $scenarioId
+}
+
+function Get-RequiredBenchmarkScenarioFamilies {
+    return @(
+        [ordered]@{
+            familyId = "weak-cw-carrier"
+            name = "Weak CW/carrier"
+            acceptedScenarioIds = @("weak-cw-carrier", "weak-carrier", "weak-cw", "weak-signal-carrier", "cw-carrier")
+        },
+        [ordered]@{
+            familyId = "ssb-like-speech"
+            name = "SSB-like speech"
+            acceptedScenarioIds = @("ssb-like-speech", "ssb-speech", "voice-like-speech", "speech-post-demod")
+        },
+        [ordered]@{
+            familyId = "fading"
+            name = "Fading/QSB"
+            acceptedScenarioIds = @("fading-carrier", "fading", "qsb", "fading-weak-signal", "weak-fading-carrier")
+        },
+        [ordered]@{
+            familyId = "impulse-noise"
+            name = "Impulse noise"
+            acceptedScenarioIds = @("impulse-noise", "impulse-noise-burst", "periodic-impulse-noise", "nb-impulse-noise")
+        },
+        [ordered]@{
+            familyId = "strong-adjacent"
+            name = "Adjacent strong signal"
+            acceptedScenarioIds = @("strong-adjacent", "adjacent-strong-signal", "adjacent-signal", "strong-adjacent-signal")
+        },
+        [ordered]@{
+            familyId = "noise-only-gating"
+            name = "Noise-only gating"
+            acceptedScenarioIds = @("noise-only-gating", "noise-only", "squelch-noise-only", "false-open-noise")
+        },
+        [ordered]@{
+            familyId = "agc-pumping"
+            name = "AGC pumping/level step"
+            acceptedScenarioIds = @("agc-level-step", "agc-pumping", "agc-pump", "agc-step", "level-step")
+        },
+        [ordered]@{
+            familyId = "squelch-transition"
+            name = "Squelch transition"
+            acceptedScenarioIds = @("squelch-transition", "squelch-open-close", "squelch-threshold-transition", "ssql-transition")
+        },
+        [ordered]@{
+            familyId = "tx-two-tone"
+            name = "TX two-tone"
+            acceptedScenarioIds = @("tx-two-tone", "two-tone-tx", "tx-linearity-two-tone")
+        },
+        [ordered]@{
+            familyId = "tx-voice-like"
+            name = "TX voice-like audio"
+            acceptedScenarioIds = @("tx-voice-like", "tx-voice", "tx-speech", "tx-ssb-voice")
+        },
+        [ordered]@{
+            familyId = "puresignal-safe-bypass"
+            name = "PureSignal-safe bypass"
+            acceptedScenarioIds = @("puresignal-safe-bypass", "puresignal-bypass", "pure-signal-safe-bypass", "pure-signal-bypass", "tx-puresignal-bypass")
+        },
+        [ordered]@{
+            familyId = "channel-lifecycle"
+            name = "OpenChannel/SetChannelState lifecycle"
+            acceptedScenarioIds = @("channel-lifecycle", "openchannel-setchannelstate-lifecycle", "open-channel-set-channel-state", "open-channel-set-channel-state-lifecycle", "wdsp-channel-lifecycle")
+        }
+    )
+}
+
+function New-BenchmarkPlanCoverageEvidence {
+    param($Plan)
+
+    $requiredFamilies = @(Get-RequiredBenchmarkScenarioFamilies)
+    $evidence = [ordered]@{
+        present = ($null -ne $Plan)
+        scenarioCount = 0
+        scenarioIds = @()
+        requiredAcceptanceScenarioFamilyCount = $requiredFamilies.Count
+        coveredAcceptanceScenarioFamilyCount = 0
+        missingAcceptanceScenarioFamilyCount = $requiredFamilies.Count
+        missingAcceptanceScenarioFamilyIds = @()
+        scenarioFamilyCoverage = @()
+        scenarioMissingRequiredComparisonCount = 0
+        scenarioMissingRequiredComparisonIds = @()
+        scenarioMissingRequiredMetricCount = 0
+        scenarioMissingRequiredMetricIds = @()
+        scenarioMissingAcceptanceGateCount = 0
+        scenarioMissingAcceptanceGateIds = @()
+        status = "missing"
+    }
+
+    if ($null -eq $Plan) {
+        return $evidence
+    }
+
+    $scenarioIds = New-Object System.Collections.Generic.List[string]
+    $scenarioIdSet = @{}
+    $missingComparisonIds = New-Object System.Collections.Generic.List[string]
+    $missingMetricIds = New-Object System.Collections.Generic.List[string]
+    $missingGateIds = New-Object System.Collections.Generic.List[string]
+
+    foreach ($scenario in @(Get-JsonArray $Plan "scenarios")) {
+        $scenarioId = Get-BenchmarkPlanScenarioId $scenario
+        if ([string]::IsNullOrWhiteSpace($scenarioId)) {
+            continue
+        }
+
+        $scenarioIds.Add($scenarioId) | Out-Null
+        $scenarioIdSet[$scenarioId] = $true
+
+        if (@(Get-JsonArray $scenario "requiredComparisons").Count -eq 0) {
+            $missingComparisonIds.Add($scenarioId) | Out-Null
+        }
+        if (@(Get-JsonArray $scenario "requiredMetrics").Count -eq 0) {
+            $missingMetricIds.Add($scenarioId) | Out-Null
+        }
+        if (@(Get-JsonArray $scenario "acceptanceGates").Count -eq 0) {
+            $missingGateIds.Add($scenarioId) | Out-Null
+        }
+    }
+
+    $familyCoverage = New-Object System.Collections.Generic.List[object]
+    $missingFamilyIds = New-Object System.Collections.Generic.List[string]
+    foreach ($family in $requiredFamilies) {
+        $acceptedIds = @(Get-JsonArray $family "acceptedScenarioIds" | ForEach-Object {
+                ConvertTo-LiveHistoryScenarioId ([string]$_)
+            } | Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_)
+            } | Select-Object -Unique)
+        $matchedIds = New-Object System.Collections.Generic.List[string]
+        foreach ($acceptedId in $acceptedIds) {
+            if ($scenarioIdSet.ContainsKey($acceptedId)) {
+                $matchedIds.Add($acceptedId) | Out-Null
+            }
+        }
+
+        $covered = ($matchedIds.Count -gt 0)
+        if (-not $covered) {
+            $missingFamilyIds.Add([string](Get-JsonValue $family "familyId")) | Out-Null
+        }
+
+        $familyCoverage.Add([ordered]@{
+            familyId = [string](Get-JsonValue $family "familyId")
+            name = [string](Get-JsonValue $family "name")
+            covered = $covered
+            matchedScenarioIds = @($matchedIds.ToArray() | Sort-Object -Unique)
+            acceptedScenarioIds = @($acceptedIds)
+        }) | Out-Null
+    }
+
+    $evidence["scenarioCount"] = $scenarioIdSet.Count
+    $evidence["scenarioIds"] = @($scenarioIds.ToArray() | Sort-Object -Unique)
+    $evidence["coveredAcceptanceScenarioFamilyCount"] = $requiredFamilies.Count - $missingFamilyIds.Count
+    $evidence["missingAcceptanceScenarioFamilyCount"] = $missingFamilyIds.Count
+    $evidence["missingAcceptanceScenarioFamilyIds"] = @($missingFamilyIds.ToArray() | Sort-Object -Unique)
+    $evidence["scenarioFamilyCoverage"] = @($familyCoverage.ToArray())
+    $evidence["scenarioMissingRequiredComparisonCount"] = @($missingComparisonIds.ToArray() | Select-Object -Unique).Count
+    $evidence["scenarioMissingRequiredComparisonIds"] = @($missingComparisonIds.ToArray() | Sort-Object -Unique)
+    $evidence["scenarioMissingRequiredMetricCount"] = @($missingMetricIds.ToArray() | Select-Object -Unique).Count
+    $evidence["scenarioMissingRequiredMetricIds"] = @($missingMetricIds.ToArray() | Sort-Object -Unique)
+    $evidence["scenarioMissingAcceptanceGateCount"] = @($missingGateIds.ToArray() | Select-Object -Unique).Count
+    $evidence["scenarioMissingAcceptanceGateIds"] = @($missingGateIds.ToArray() | Sort-Object -Unique)
+    $evidence["status"] = if ($scenarioIdSet.Count -eq 0) {
+        "empty"
+    }
+    elseif ($missingFamilyIds.Count -eq 0 -and $missingComparisonIds.Count -eq 0 -and $missingMetricIds.Count -eq 0 -and $missingGateIds.Count -eq 0) {
+        "ready"
+    }
+    elseif ($missingFamilyIds.Count -gt 0) {
+        "missing-required-scenarios"
+    }
+    else {
+        "scenario-contract-incomplete"
+    }
+
+    return $evidence
 }
 
 function Get-NormalizedStringArray {
@@ -2479,6 +3246,7 @@ function Get-LiveHistoryTuningControlFamilyForSignal {
     )
 
     switch -Regex ($SignalName) {
+        "artifact|texture|low-evidence" { return "nr5-speech-artifact-control" }
         "recovery-drive" { return "nr5-recovery-drive-damping" }
         "makeup" { return "nr5-makeup-gain-cap-and-slew" }
         "output-movement|audio-rms" { return "nr5-output-level-stability" }
@@ -2491,6 +3259,7 @@ function Get-LiveHistoryTuningControlFamilyForSignal {
 
     switch ($SafetyClass) {
         "pumping" { return "nr5-level-stability" }
+        "artifact-control" { return "nr5-speech-artifact-control" }
         "weak-signal" { return "weak-signal-preservation" }
         "clipping" { return "level-headroom" }
         "freshness" { return "diagnostic-freshness" }
@@ -2506,6 +3275,7 @@ function Get-LiveHistoryTuningGuardrailForSafetyClass {
 
     switch ($SafetyClass) {
         "pumping" { return "Do not improve weak-signal recovery by increasing output movement, makeup movement, recovery-drive movement, hot makeup, or audible pumping." }
+        "artifact-control" { return "Do not improve floor suppression by creating metallic, burbling, speech-like, or low-evidence lifted artifacts." }
         "weak-signal" { return "Do not reduce weak-input recovery, increase weak dropouts, or bury faint speech/CW while lowering noise." }
         "clipping" { return "Do not allow final audio peaks or TX/monitor paths to approach clipping." }
         "freshness" { return "Do not tune from traces with stale diagnostics; recapture before accepting evidence." }
@@ -2523,7 +3293,8 @@ function Get-LiveHistoryTuningRationaleForSafetyClass {
     )
 
     switch ($SafetyClass) {
-        "pumping" { return "Latest NR5 evidence is level-stability limited; inspect output movement, makeup movement, and recovery-drive movement before changing weak-fill thresholds." }
+        "pumping" { return "Latest NR5 evidence is level-stability limited; inspect output movement, makeup movement, recovery-drive movement, and RX leveler constraints before changing weak-fill thresholds." }
+        "artifact-control" { return "Latest NR5 evidence needs speech-artifact review; inspect texture fill, low-evidence lift, and audio-alignment rows before changing mask fill or recovery." }
         "weak-signal" { return "Latest NR5 evidence is weak-signal limited; preserve recovery and reduce dropouts before tightening noise suppression." }
         "clipping" { return "Latest NR5 evidence is level-headroom limited; reduce peak or makeup risk before candidate comparison." }
         "freshness" { return "Diagnostics were not fresh enough to support tuning; fix capture fidelity before interpreting NR behavior." }
@@ -2782,15 +3553,25 @@ function New-LiveHistoryExpectedTuningActionPlan {
     }
 }
 
-function Get-LiveHistoryExperimentRequiredComparisons {
+function Get-LiveHistoryExperimentTuningComparisons {
     return @("current-zeus", "nr5-spnr")
+}
+
+function Get-LiveHistoryExperimentAcceptanceComparisons {
+    return @("off-baseline", "thetis-parity", "current-zeus", "nr5-spnr")
+}
+
+function Get-LiveHistoryExperimentRequiredComparisons {
+    return @(Get-LiveHistoryExperimentAcceptanceComparisons)
 }
 
 function Get-LiveHistoryExperimentRequiredEvidence {
     return @(
+        "off-baseline live diagnostics trace index",
+        "Thetis-parity live diagnostics trace index",
         "current-Zeus baseline live diagnostics trace index",
         "NR5/SPNR opt-in candidate live diagnostics trace index",
-        "matrix comparison report with no regressions",
+        "current-vs-NR5 matrix comparison report with no regressions",
         "operator notes for speech texture and pumping"
     )
 }
@@ -2832,6 +3613,14 @@ function Get-LiveHistoryExperimentGatesForControlFamily {
                 "Noise-only windows remain closed.",
                 "Weak recovery stays neutral or improves.",
                 "Output and makeup movement do not regress."
+            )
+        }
+        "nr5-speech-artifact-control" {
+            return @(
+                "No increase in low-evidence lifted samples.",
+                "No NR5/audio alignment mismatch growth on speech-like windows.",
+                "Texture fill remains supported by signal probability or coherent weak evidence.",
+                "Operator listening notes report no metallic, burbling, or speech-like artifacts."
             )
         }
         "audio-headroom" {
@@ -2975,7 +3764,7 @@ function New-LiveHistoryExpectedExperimentPlan {
     $topAction = if ($actions.Count -gt 0) { $actions[0] } else { $null }
 
     return [ordered]@{
-        planScope = "candidate-comparison-only"
+        planScope = "g2-rx-acceptance-evidence"
         status = [string](Get-JsonValue $ActionPlan "status")
         sourceActionPlanStatus = [string](Get-JsonValue $ActionPlan "status")
         sourceDirectionStatus = [string](Get-JsonValue $ActionPlan "directionStatus")
@@ -2985,6 +3774,8 @@ function New-LiveHistoryExpectedExperimentPlan {
         referenceTraceId = [string](Get-JsonValue $ActionPlan "referenceTraceId")
         referenceTraceRole = [string](Get-JsonValue $ActionPlan "referenceTraceRole")
         topActionId = if ($null -eq $topAction) { "" } else { [string](Get-JsonValue $topAction "actionId") }
+        tuningComparisons = @(Get-LiveHistoryExperimentTuningComparisons)
+        acceptanceComparisons = @(Get-LiveHistoryExperimentAcceptanceComparisons)
         recommendedComparisons = @(Get-LiveHistoryExperimentRequiredComparisons)
         recommendedSampleCount = $recommendedSampleCount
         recommendedIntervalMs = $recommendedIntervalMs
@@ -2993,9 +3784,12 @@ function New-LiveHistoryExpectedExperimentPlan {
         scenarioIds = @($scenarioIds)
         scenarios = @($scenarios.ToArray())
         matrixCommandTemplates = [ordered]@{
+            offBaseline = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ScenarioIds $scenarioArgument -ComparisonId off-baseline -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.off-baseline.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.off-baseline.json -Samples $recommendedSampleCount -IntervalMs $recommendedIntervalMs"
+            thetis = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ScenarioIds $scenarioArgument -ComparisonId thetis-parity -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.thetis-parity.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.thetis-parity.json -Samples $recommendedSampleCount -IntervalMs $recommendedIntervalMs"
             baseline = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ScenarioIds $scenarioArgument -ComparisonId current-zeus -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.baseline.json -Samples $recommendedSampleCount -IntervalMs $recommendedIntervalMs"
             candidate = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\run-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -ScenarioIds $scenarioArgument -ComparisonId nr5-spnr -IndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-matrix-report.candidate.json -Samples $recommendedSampleCount -IntervalMs $recommendedIntervalMs"
-            compare = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.json -FailOnRegression"
+            compare = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.baseline.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId current-zeus -CandidateComparisonId nr5-spnr -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.json -FailOnRegression"
+            compareThetis = "powershell -NoProfile -ExecutionPolicy Bypass -File tools\compare-dsp-live-diagnostics-matrix.ps1 -BundleDir captures\dsp-modernization\<timestamp> -BaselineIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.thetis-parity.json -CandidateIndexPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-index.candidate.json -BaselineComparisonId thetis-parity -CandidateComparisonId nr5-spnr -ReportPath captures\dsp-modernization\<timestamp>\artifacts\live-diagnostics-trace-comparison.thetis-parity.json -FailOnRegression"
         }
         defaultBehaviorChangeReady = $false
         requiredEvidence = @(Get-LiveHistoryExperimentRequiredEvidence)
@@ -3298,7 +4092,21 @@ function Test-ComparableEvidencePathSame {
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    $resolvedPath = (Resolve-Path -LiteralPath $Path).ProviderPath
+    $stream = [System.IO.File]::OpenRead($resolvedPath)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $hash = $sha256.ComputeHash($stream)
+            return ([System.BitConverter]::ToString($hash) -replace "-", "").ToLowerInvariant()
+        }
+        finally {
+            $sha256.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
 }
 
 function Get-ArtifactIndexFileSha256 {
@@ -3619,6 +4427,13 @@ function ConvertTo-ComparisonId {
     }
 }
 
+function Test-StrictComparisonStateId {
+    param([string]$ComparisonId)
+
+    $id = ConvertTo-ComparisonId $ComparisonId
+    return ($id -eq "nr5-spnr" -or $id -eq "off-baseline")
+}
+
 function Get-FixtureEvidenceEngine {
     param($ArtifactJson)
 
@@ -3775,6 +4590,142 @@ function ConvertTo-MetricId {
     }
 
     return ($Value.Trim().ToLowerInvariant() -replace "[^a-z0-9]+", "")
+}
+
+function Get-MetricCatalogFieldValue {
+    param(
+        $Metric,
+        [string[]]$Names
+    )
+
+    foreach ($name in @($Names)) {
+        $value = Get-JsonValue $Metric $name
+        if ($null -ne $value) {
+            return $value
+        }
+    }
+
+    return $null
+}
+
+function Test-MetricCatalogFieldPresent {
+    param($Value)
+
+    if ($null -eq $Value) {
+        return $false
+    }
+
+    if ($Value -is [System.Array]) {
+        foreach ($item in @($Value)) {
+            if (Test-MetricCatalogFieldPresent $item) {
+                return $true
+            }
+        }
+
+        return $false
+    }
+
+    if ($Value -is [string]) {
+        return -not [string]::IsNullOrWhiteSpace($Value)
+    }
+
+    return $true
+}
+
+function Get-MetricCatalogFieldText {
+    param(
+        $Metric,
+        [string[]]$Names
+    )
+
+    $value = Get-MetricCatalogFieldValue -Metric $Metric -Names $Names
+    if ($null -eq $value) {
+        return ""
+    }
+
+    if ($value -is [System.Array]) {
+        $items = New-Object System.Collections.Generic.List[string]
+        foreach ($item in @($value)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$item)) {
+                $items.Add(([string]$item).Trim()) | Out-Null
+            }
+        }
+
+        return ($items.ToArray() -join ",")
+    }
+
+    return ([string]$value).Trim()
+}
+
+function ConvertTo-MetricCatalogToken {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ""
+    }
+
+    return $Value.Trim().ToLowerInvariant()
+}
+
+function Add-MetricCatalogFieldTokens {
+    param(
+        [System.Collections.Generic.List[string]]$Tokens,
+        $Value
+    )
+
+    if ($null -eq $Value) {
+        return
+    }
+
+    if ($Value -is [System.Array]) {
+        foreach ($item in @($Value)) {
+            Add-MetricCatalogFieldTokens -Tokens $Tokens -Value $item
+        }
+
+        return
+    }
+
+    foreach ($item in ([string]$Value -split ",")) {
+        $token = ConvertTo-MetricCatalogToken $item
+        if (-not [string]::IsNullOrWhiteSpace($token)) {
+            $Tokens.Add($token) | Out-Null
+        }
+    }
+}
+
+function Get-MetricCatalogFieldTokens {
+    param(
+        $Metric,
+        [string[]]$Names
+    )
+
+    $tokens = New-Object System.Collections.Generic.List[string]
+    Add-MetricCatalogFieldTokens -Tokens $tokens -Value (Get-MetricCatalogFieldValue -Metric $Metric -Names $Names)
+    return @($tokens.ToArray() | Select-Object -Unique)
+}
+
+function ConvertTo-MetricCatalogComparator {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ""
+    }
+
+    $normalized = (($Value.Trim().ToLowerInvariant() -replace "[^a-z0-9]+", "-").Trim("-"))
+    switch ($normalized) {
+        { $_ -in @("at-or-above", "at-or-above-threshold", "minimum", "min", "gte", "greater-than-or-equal", "greater-or-equal", "not-less-than") } { return "at-or-above" }
+        { $_ -in @("at-or-below", "at-or-below-threshold", "maximum", "max", "lte", "less-than-or-equal", "less-or-equal", "not-greater-than") } { return "at-or-below" }
+        { $_ -in @("equals", "equal", "exact", "match") } { return "equals" }
+        { $_ -in @("no-regression", "not-regressed", "no-worse-than-baseline", "not-worse-than-baseline", "baseline-or-better") } { return "no-regression" }
+        { $_ -in @("informational", "info") } { return "informational" }
+        default { return $normalized }
+    }
+}
+
+function Test-MetricCatalogComparatorValid {
+    param([string]$Comparator)
+
+    return $Comparator -in @("at-or-above", "at-or-below", "equals", "no-regression", "informational")
 }
 
 function ConvertTo-CandidateId {
@@ -4202,6 +5153,92 @@ function New-ExternalBakeoffCandidateSummary {
     }
 }
 
+function Add-ExternalCandidateIssueCount {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Counts,
+        [string]$Issue
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Issue)) {
+        $Issue = "unknown"
+    }
+
+    if (-not $Counts.ContainsKey($Issue)) {
+        $Counts[$Issue] = 0
+    }
+
+    $Counts[$Issue] = [int]$Counts[$Issue] + 1
+}
+
+function Convert-ExternalCandidateIssueCountsToRecords {
+    param([Parameter(Mandatory = $true)][hashtable]$Counts)
+
+    $records = New-Object System.Collections.Generic.List[object]
+    foreach ($issue in @($Counts.Keys | Sort-Object)) {
+        $records.Add([ordered]@{
+            issue = [string]$issue
+            count = [int]$Counts[$issue]
+        }) | Out-Null
+    }
+
+    return @($records.ToArray())
+}
+
+function Add-ExternalCandidateIssue {
+    param(
+        [Parameter(Mandatory = $true)]$Issues,
+        [Parameter(Mandatory = $true)][hashtable]$IssueCounts,
+        [Parameter(Mandatory = $true)][string]$Issue
+    )
+
+    $Issues.Add($Issue) | Out-Null
+    Add-ExternalCandidateIssueCount -Counts $IssueCounts -Issue $Issue
+}
+
+function New-ExternalCandidateDetailRecord {
+    param(
+        [string]$Id,
+        [string[]]$Issues = @(),
+        [string[]]$Blockers = @(),
+        $Summary = $null
+    )
+
+    $normalizedId = ConvertTo-CandidateId $Id
+    if ([string]::IsNullOrWhiteSpace($normalizedId)) {
+        $normalizedId = "unknown"
+    }
+    $normalizedIssues = @($Issues | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $normalizedBlockers = @($Blockers | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+
+    return [ordered]@{
+        id = $normalizedId
+        integrationStatus = [string](Get-JsonValue $Summary "integrationStatus")
+        safeForBakeoff = Test-Truthy (Get-JsonValue $Summary "safeForBakeoff")
+        integrationBlocked = Test-Truthy (Get-JsonValue $Summary "integrationBlocked")
+        inSnapshot = Test-Truthy (Get-JsonValue $Summary "inSnapshot")
+        issueCount = $normalizedIssues.Count
+        issues = @($normalizedIssues)
+        blockerCount = $normalizedBlockers.Count
+        blockers = @($normalizedBlockers)
+        combinedRiskScore = [int](Get-NumericValueOrDefault (Get-JsonValue $Summary "combinedRiskScore"))
+        runtimeRiskTier = [string](Get-JsonValue $Summary "runtimeRiskTier")
+        latencyRiskTier = [string](Get-JsonValue $Summary "latencyRiskTier")
+        radioSafetyRiskTier = [string](Get-JsonValue $Summary "radioSafetyRiskTier")
+        requiredBenchmarkCount = [int](Get-NumericValueOrDefault (Get-JsonValue $Summary "requiredBenchmarkCount"))
+        requiredEvidenceCount = [int](Get-NumericValueOrDefault (Get-JsonValue $Summary "requiredEvidenceCount"))
+    }
+}
+
+function New-ExternalCandidateDetailFromSummary {
+    param($Summary)
+
+    return New-ExternalCandidateDetailRecord `
+        -Id ([string](Get-JsonValue $Summary "id")) `
+        -Issues @(Get-JsonArray $Summary "issues") `
+        -Blockers @(Get-JsonArray $Summary "blockers") `
+        -Summary $Summary
+}
+
 function Get-MetricIdsFromValue {
     param($Value)
 
@@ -4459,9 +5496,14 @@ $metricComparisonEvidence = [ordered]@{
     missingCandidateCount = 0
     missingMetricValueCount = 0
     candidateComparisonCount = 0
+    metricCatalogRequiredMetricCount = 0
+    metricCatalogAcceptanceContractReady = $false
+    metricCatalogContractProblemMetricCount = 0
+    metricCatalogContractProblemMetricIds = @()
     status = "not-evaluated"
 }
 $liveTraceComparisonArtifactId = "live-diagnostics-trace-comparison"
+$liveTraceThetisComparisonArtifactId = "live-diagnostics-trace-comparison-thetis-parity"
 $liveTraceComparisonEvidence = [ordered]@{
     present = $false
     readyForReview = $false
@@ -4484,6 +5526,28 @@ $liveTraceComparisonEvidence = [ordered]@{
     frontEndRegressionCount = 0
     audioPathRegressionCount = 0
     toolingRegressionCount = 0
+    captureReadinessComparisonSummary = $null
+    captureReadinessScenarioComparisonCount = 0
+    captureReadinessCandidateHardGatePassCount = 0
+    captureReadinessCandidateHardGateFailCount = 0
+    captureReadinessCandidateStrictPreflightPassCount = 0
+    captureReadinessCandidateStrictPreflightFailCount = 0
+    captureReadinessCandidateStatusCounts = @()
+    captureReadinessCandidateTopConstraintCounts = @()
+    captureReadinessCandidateTopHardConstraintCounts = @()
+    rxAudioLevelerComparisonSummary = $null
+    rxAudioLevelerConstrainedSampleDelta = 0
+    rxAudioLevelerConstrainedPctDelta = 0.0
+    rxAudioLevelerBoostSlewLimitedSampleDelta = 0
+    rxAudioLevelerPeakLimitedSampleDelta = 0
+    rxAudioLevelerOutputLimitedSampleDelta = 0
+    rxAudioLevelerOutputRmsMovementDbDelta = 0.0
+    rxAudioLevelerAppliedGainMovementDbDelta = 0.0
+    rxAudioLevelerConstrainedRegressionCount = 0
+    rxAudioLevelerConstrainedPctRegressionCount = 0
+    rxAudioLevelerBoostSlewRegressionCount = 0
+    rxAudioLevelerPeakLimitedRegressionCount = 0
+    rxAudioLevelerOutputLimitedRegressionCount = 0
     bundleRelativePaths = $false
     absolutePathCount = 0
     nr5WeakSignalComparisonSummary = $null
@@ -4501,7 +5565,27 @@ $liveTraceComparisonEvidence = [ordered]@{
     nr5MakeupMovementRegressionCount = 0
     nr5MakeupMaxRegressionCount = 0
     nr5RecoveryDriveMovementRegressionCount = 0
+    metricDefinitionCount = 0
+    metricCatalogAlignedMetricCount = 0
+    metricCatalogMissingMetricCount = 0
+    metricCatalogMissingMetricIds = @()
+    metricCatalogDirectionMismatchCount = 0
+    metricCatalogDirectionMismatchMetricIds = @()
+    metricCatalogThresholdMismatchCount = 0
+    metricCatalogThresholdMismatchMetricIds = @()
+    metricCatalogComparatorMismatchCount = 0
+    metricCatalogComparatorMismatchMetricIds = @()
+    metricCatalogSafetyClassMismatchCount = 0
+    metricCatalogSafetyClassMismatchMetricIds = @()
+    metricCatalogScopeMismatchCount = 0
+    metricCatalogScopeMismatchMetricIds = @()
+    metricCatalogAlignmentReady = $false
+    metricCatalogAlignmentStatus = "not-evaluated"
     status = "not-evaluated"
+}
+$liveTraceThetisComparisonEvidence = [ordered]@{}
+foreach ($key in $liveTraceComparisonEvidence.Keys) {
+    $liveTraceThetisComparisonEvidence[$key] = $liveTraceComparisonEvidence[$key]
 }
 $liveDiagnosticsHistoryArtifactId = "live-diagnostics-history"
 $liveDiagnosticsHistoryEvidence = [ordered]@{
@@ -4517,6 +5601,8 @@ $liveDiagnosticsHistoryEvidence = [ordered]@{
     latestSafetyRiskScore = 0
     latestTraceSequenceUtc = ""
     latestTraceSortKeySource = ""
+    latestTopHardConstraintName = ""
+    latestTopHardConstraintCount = 0
     traceOrderingStatus = ""
     traceOrderingViolationCount = 0
     bestBalancedTraceId = ""
@@ -4570,8 +5656,21 @@ $liveDiagnosticsHistoryEvidence = [ordered]@{
     liveExperimentCoverageRequiredComparisonCount = 0
     liveExperimentCoverageCoveredComparisonCount = 0
     liveExperimentCoverageMissingComparisonCount = 0
+    liveExperimentCoverageMissingComparisonIds = @()
     pumpingSignalCount = 0
     weakSignalCount = 0
+    agcStabilityStatus = "not-evaluated"
+    agcStabilityTraceCount = 0
+    agcStabilityMissingTraceCount = 0
+    agcPumpingRiskTraceCount = 0
+    agcActivePumpingSignalCount = 0
+    agcVoiceLikePumpingSignalCount = 0
+    mixedWeakStrongEvidenceReady = $false
+    mixedWeakStrongEvidenceStatus = "not-evaluated"
+    mixedWeakStrongTraceCount = 0
+    mixedWeakStrongReadyTraceCount = 0
+    mixedWeakStrongMissingTraceCount = 0
+    mixedWeakStrongGapWatchTraceCount = 0
     recommendationCount = 0
     traceSourceStatus = "not-evaluated"
     traceSourceCheckedCount = 0
@@ -4588,6 +5687,132 @@ $liveDiagnosticsHistoryEvidence = [ordered]@{
     absolutePathCount = 0
     status = "not-evaluated"
 }
+$liveAcceptanceCycleEvidence = [ordered]@{
+    present = $false
+    summaryValid = $false
+    liveAcceptanceEvidenceReady = $false
+    liveAcceptanceEvidenceStatus = "not-evaluated"
+    blockerCount = 0
+    blockers = @()
+    matrixAcceptanceReady = $false
+    matrixAcceptanceReadyCount = 0
+    matrixNonZeroExitCount = 0
+    comparisonReadyForReview = $false
+    comparisonRegressionCount = 0
+    comparisonGateFailureCount = 0
+    comparisonMetricCatalogAlignmentReady = $false
+    comparisonMetricCatalogAlignmentStatus = "not-evaluated"
+    comparisonMetricDefinitionCount = 0
+    comparisonMetricCatalogMissingMetricCount = 0
+    comparisonMetricCatalogMismatchCount = 0
+    thetisComparisonReadyForReview = $false
+    thetisComparisonRegressionCount = 0
+    thetisComparisonGateFailureCount = 0
+    thetisComparisonMetricCatalogAlignmentReady = $false
+    thetisComparisonMetricCatalogAlignmentStatus = "not-evaluated"
+    thetisComparisonMetricDefinitionCount = 0
+    thetisComparisonMetricCatalogMissingMetricCount = 0
+    thetisComparisonMetricCatalogMismatchCount = 0
+    validationExitCode = $null
+    validationOk = $false
+    validationErrorCount = 0
+    validationWarningCount = 0
+    hardwareEvidenceReady = $false
+    hardwareEvidenceStatus = "not-evaluated"
+    hardwareTarget = ""
+    captureHardwareTarget = ""
+    hardwareDiagnosticsPresent = $false
+    liveDiagnosticsHistoryAgcStabilityReady = $false
+    liveDiagnosticsHistoryAgcStabilityStatus = "not-evaluated"
+    liveDiagnosticsHistoryAgcStabilityTraceCount = 0
+    liveDiagnosticsHistoryAgcStabilityMissingTraceCount = 0
+    liveDiagnosticsHistoryAgcPumpingRiskTraceCount = 0
+    liveDiagnosticsHistoryAgcActivePumpingSignalCount = 0
+    liveDiagnosticsHistoryAgcVoiceLikePumpingSignalCount = 0
+    liveDiagnosticsHistoryMixedWeakStrongEvidenceReady = $false
+    liveDiagnosticsHistoryMixedWeakStrongEvidenceStatus = "not-evaluated"
+    liveDiagnosticsHistoryMixedWeakStrongTraceCount = 0
+    liveDiagnosticsHistoryMixedWeakStrongReadyTraceCount = 0
+    liveDiagnosticsHistoryMixedWeakStrongMissingTraceCount = 0
+    liveDiagnosticsHistoryMixedWeakStrongGapWatchTraceCount = 0
+    liveMatrixMixedWeakStrongHuntReady = $false
+    liveMatrixMixedWeakStrongStatus = "not-evaluated"
+    liveMatrixMixedWeakStrongReportCount = 0
+    liveMatrixMixedWeakStrongSchemaV2ReportCount = 0
+    liveMatrixMixedWeakStrongReadyReportCount = 0
+    liveMatrixMixedWeakStrongTraceCount = 0
+    liveMatrixMixedWeakStrongReadyTraceCount = 0
+    liveMatrixMixedWeakStrongMissingRunCount = 0
+    liveMatrixMixedWeakStrongGapWatchRunCount = 0
+    liveMatrixMixedWeakStrongWeakInputSampleCount = 0
+    liveMatrixMixedWeakStrongStrongInputSampleCount = 0
+    liveMatrixMixedWeakStrongStatusCounts = @()
+    liveMatrixMixedWeakStrongBestRun = $null
+    liveMatrixArtifactControlStatus = "not-evaluated"
+    liveMatrixArtifactControlReportCount = 0
+    liveMatrixArtifactControlSchemaV3ReportCount = 0
+    liveMatrixArtifactControlReviewRunCount = 0
+    liveMatrixArtifactControlRiskScoreMax = 0.0
+    liveMatrixArtifactControlLowEvidenceLiftedSampleCount = 0
+    liveMatrixArtifactControlLowEvidenceLiftedPctMax = $null
+    liveMatrixArtifactControlAudioAlignmentMismatchPctMax = $null
+    liveMatrixArtifactControlStatusCounts = @()
+    triageExitCode = $null
+    triageAcceptanceActionPlanCount = 0
+    triageAcceptanceRequiredActionCount = 0
+    triageAcceptanceManualActionCount = 0
+    triageAcceptanceActionCategoryCounts = @()
+    triagePrimaryAcceptanceActionId = ""
+    triagePrimaryAcceptanceActionPriority = $null
+    triagePrimaryAcceptanceActionStageId = ""
+    triagePrimaryAcceptanceActionGateId = ""
+    triagePrimaryAcceptanceActionCategory = ""
+    triagePrimaryAcceptanceActionRequired = $false
+    triagePrimaryAcceptanceActionManual = $false
+    triagePrimaryAcceptanceCommandTemplate = ""
+    triagePrimaryAcceptanceCommandStepCount = 0
+    triagePrimaryAcceptanceCommandSteps = @()
+    triagePrimaryAcceptanceManualAction = ""
+    triagePrimaryAcceptanceExpectedArtifact = ""
+    triagePrimaryAcceptanceExpectedArtifactCount = 0
+    triagePrimaryAcceptanceExpectedArtifacts = @()
+    triagePrimaryAcceptanceFollowUp = ""
+    requiredLiveAcceptanceArtifactProblemCount = 0
+    path = ""
+    sha256 = ""
+    status = "not-evaluated"
+}
+$liveMatrixMixedWeakStrongEvidence = [ordered]@{
+    present = $false
+    reportCount = 0
+    schemaV2ReportCount = 0
+    huntReady = $false
+    readyReportCount = 0
+    traceCount = 0
+    readyTraceCount = 0
+    missingRunCount = 0
+    gapWatchRunCount = 0
+    weakInputSampleCount = 0
+    strongInputSampleCount = 0
+    bestRun = $null
+    statusCounts = @()
+    status = "not-evaluated"
+}
+$liveMatrixMixedWeakStrongStatusCountMap = @{}
+$liveMatrixMixedWeakStrongBestScore = $null
+$liveMatrixArtifactControlEvidence = [ordered]@{
+    present = $false
+    reportCount = 0
+    schemaV3ReportCount = 0
+    artifactReviewRunCount = 0
+    artifactRiskScoreMax = 0.0
+    lowEvidenceLiftedSampleCount = 0
+    lowEvidenceLiftedPctMax = $null
+    audioAlignmentMismatchPctMax = $null
+    statusCounts = @()
+    status = "not-evaluated"
+}
+$liveMatrixArtifactControlStatusCountMap = @{}
 $externalEngineBakeoffArtifactId = "external-engine-bakeoff-report"
 $externalEngineBakeoffEvidence = [ordered]@{
     present = $false
@@ -4597,8 +5822,18 @@ $externalEngineBakeoffEvidence = [ordered]@{
     blockedCandidateCount = 0
     integrationReadyCandidateCount = 0
     missingCandidateCount = 0
+    missingCandidateIds = @()
     unsafeCandidateCount = 0
+    unsafeCandidateIds = @()
+    unsafeCandidateDetails = @()
+    blockedCandidateIds = @()
+    blockedCandidateDetails = @()
+    integrationReadyCandidateIds = @()
+    integrationReadyCandidateDetails = @()
     snapshotMismatchCount = 0
+    snapshotMismatchCandidateIds = @()
+    snapshotMismatchCandidateDetails = @()
+    candidateIssueCounts = @()
     candidateSha256 = ""
     snapshotSha256 = ""
     bakeoffPlanCandidateCount = 0
@@ -4636,13 +5871,49 @@ $metricCatalogEvidence = [ordered]@{
     present = $false
     metricCount = 0
     requiredMetricCount = 0
+    acceptanceContractReady = $false
     missingRequiredMetricCount = 0
+    missingRequiredMetricIds = @()
     invalidDirectionCount = 0
+    invalidDirectionMetricIds = @()
+    missingThresholdCount = 0
+    missingThresholdMetricIds = @()
+    missingComparatorCount = 0
+    missingComparatorMetricIds = @()
+    invalidComparatorCount = 0
+    invalidComparatorMetricIds = @()
+    missingUnitCount = 0
+    missingUnitMetricIds = @()
+    missingSafetyClassCount = 0
+    missingSafetyClassMetricIds = @()
+    missingAcceptanceScopeCount = 0
+    missingAcceptanceScopeMetricIds = @()
+    contractProblemMetricCount = 0
+    contractProblemMetricIds = @()
+    status = "not-evaluated"
+}
+$metricCatalogEntriesById = @{}
+$benchmarkPlanEvidence = [ordered]@{
+    present = $false
+    scenarioCount = 0
+    scenarioIds = @()
+    requiredAcceptanceScenarioFamilyCount = 0
+    coveredAcceptanceScenarioFamilyCount = 0
+    missingAcceptanceScenarioFamilyCount = 0
+    missingAcceptanceScenarioFamilyIds = @()
+    scenarioFamilyCoverage = @()
+    scenarioMissingRequiredComparisonCount = 0
+    scenarioMissingRequiredComparisonIds = @()
+    scenarioMissingRequiredMetricCount = 0
+    scenarioMissingRequiredMetricIds = @()
+    scenarioMissingAcceptanceGateCount = 0
+    scenarioMissingAcceptanceGateIds = @()
     status = "not-evaluated"
 }
 $requiredExternalCandidateIds = @("rnnoise", "deepfilternet", "speexdsp", "webrtc-apm")
 $externalEngineOptInComparisonId = "candidate-external-engine-opt-in"
 $externalEngineBakeoffRequiredByScope = $false
+$externalEngineBakeoffScopeTriggers = New-Object System.Collections.Generic.List[string]
 $externalEngineCandidateEvidence = [ordered]@{
     present = $false
     snapshotPresent = $false
@@ -4651,7 +5922,12 @@ $externalEngineCandidateEvidence = [ordered]@{
     candidateIds = @()
     missingCandidateIds = @()
     unsafeCandidateCount = 0
+    unsafeCandidateIds = @()
+    unsafeCandidateDetails = @()
+    candidateIssueCounts = @()
     snapshotMismatchCount = 0
+    snapshotMissingCandidateIds = @()
+    snapshotExtraCandidateIds = @()
     status = "not-evaluated"
 }
 
@@ -4732,8 +6008,32 @@ $hardwareTargetOk = $true
 $hardwareDiagnosticsOk = $false
 
 if ($null -ne $plan) {
+    $benchmarkPlanEvidence = New-BenchmarkPlanCoverageEvidence -Plan $plan
+    foreach ($value in (Get-JsonArray $plan "requiredComparisons")) {
+        $comparison = ConvertTo-ComparisonId ([string]$value)
+        if ($comparison -eq $externalEngineOptInComparisonId) {
+            $externalEngineBakeoffRequiredByScope = $true
+            if (-not $externalEngineBakeoffScopeTriggers.Contains("benchmark-plan.requiredComparisons")) {
+                $externalEngineBakeoffScopeTriggers.Add("benchmark-plan.requiredComparisons") | Out-Null
+            }
+        }
+    }
+
+    if ([int]$benchmarkPlanEvidence.missingAcceptanceScenarioFamilyCount -gt 0) {
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "benchmark-plan-required-scenarios-missing" "Benchmark plan is missing required acceptance scenario families: $($benchmarkPlanEvidence.missingAcceptanceScenarioFamilyIds -join ', ')."
+    }
+    if ([int]$benchmarkPlanEvidence.scenarioMissingRequiredComparisonCount -gt 0) {
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "benchmark-plan-scenario-comparisons-missing" "Benchmark plan scenario(s) are missing requiredComparisons: $($benchmarkPlanEvidence.scenarioMissingRequiredComparisonIds -join ', ')."
+    }
+    if ([int]$benchmarkPlanEvidence.scenarioMissingRequiredMetricCount -gt 0) {
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "benchmark-plan-scenario-metrics-missing" "Benchmark plan scenario(s) are missing requiredMetrics: $($benchmarkPlanEvidence.scenarioMissingRequiredMetricIds -join ', ')."
+    }
+    if ([int]$benchmarkPlanEvidence.scenarioMissingAcceptanceGateCount -gt 0) {
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "benchmark-plan-scenario-gates-missing" "Benchmark plan scenario(s) are missing acceptanceGates: $($benchmarkPlanEvidence.scenarioMissingAcceptanceGateIds -join ', ')."
+    }
+
     foreach ($scenario in (Get-JsonArray $plan "scenarios")) {
-        $scenarioId = [string](Get-JsonValue $scenario "id")
+        $scenarioId = Get-BenchmarkPlanScenarioId $scenario
         if (-not [string]::IsNullOrWhiteSpace($scenarioId)) {
             $comparisons = New-Object System.Collections.Generic.List[string]
             foreach ($value in (Get-JsonArray $scenario "requiredComparisons")) {
@@ -4742,6 +6042,10 @@ if ($null -ne $plan) {
                     $comparisons.Add($comparison) | Out-Null
                     if ($comparison -eq $externalEngineOptInComparisonId) {
                         $externalEngineBakeoffRequiredByScope = $true
+                        $trigger = "benchmark-plan.scenario:$scenarioId.requiredComparisons"
+                        if (-not $externalEngineBakeoffScopeTriggers.Contains($trigger)) {
+                            $externalEngineBakeoffScopeTriggers.Add($trigger) | Out-Null
+                        }
                     }
                 }
             }
@@ -4758,6 +6062,9 @@ if ($null -ne $plan) {
         }
     }
 }
+else {
+    $benchmarkPlanEvidence = New-BenchmarkPlanCoverageEvidence -Plan $null
+}
 
 if ($null -eq $metricCatalog) {
     $metricCatalogEvidence["status"] = "missing"
@@ -4766,7 +6073,14 @@ if ($null -eq $metricCatalog) {
 else {
     $metricCatalogEvidence["present"] = $true
     $catalogMetricIds = @{}
-    $invalidDirectionCount = 0
+    $invalidDirectionMetricIds = New-Object System.Collections.Generic.List[string]
+    $missingThresholdMetricIds = New-Object System.Collections.Generic.List[string]
+    $missingComparatorMetricIds = New-Object System.Collections.Generic.List[string]
+    $invalidComparatorMetricIds = New-Object System.Collections.Generic.List[string]
+    $missingUnitMetricIds = New-Object System.Collections.Generic.List[string]
+    $missingSafetyClassMetricIds = New-Object System.Collections.Generic.List[string]
+    $missingAcceptanceScopeMetricIds = New-Object System.Collections.Generic.List[string]
+    $contractProblemMetricIds = New-Object System.Collections.Generic.List[string]
 
     foreach ($metric in (Get-JsonArray $metricCatalog "metrics")) {
         $metricId = ConvertTo-MetricId ([string](Get-JsonValue $metric "id"))
@@ -4779,10 +6093,52 @@ else {
         }
 
         $catalogMetricIds[$metricId] = $true
-        $direction = [string](Get-JsonValue $metric "direction")
+        $metricCatalogEntriesById[$metricId] = $metric
+        $metricContractProblem = $false
+        $direction = ([string](Get-JsonValue $metric "direction")).Trim().ToLowerInvariant()
         if ($direction -ne "higher" -and $direction -ne "lower" -and $direction -ne "informational") {
-            $invalidDirectionCount++
+            $invalidDirectionMetricIds.Add($metricId) | Out-Null
+            $metricContractProblem = $true
             Add-ValidationIssue $errors "error" "benchmark-metric-direction-invalid" "Benchmark metric catalog entry '$metricId' has invalid direction '$direction'."
+        }
+
+        $thresholdValue = Get-MetricCatalogFieldValue -Metric $metric -Names @("acceptanceThreshold", "threshold", "targetThreshold", "minimumThreshold", "maximumThreshold")
+        if (-not (Test-MetricCatalogFieldPresent $thresholdValue)) {
+            $missingThresholdMetricIds.Add($metricId) | Out-Null
+            $metricContractProblem = $true
+        }
+
+        $comparatorText = Get-MetricCatalogFieldText -Metric $metric -Names @("acceptanceComparator", "thresholdComparator", "comparator", "thresholdDirection")
+        $comparator = ConvertTo-MetricCatalogComparator $comparatorText
+        if ([string]::IsNullOrWhiteSpace($comparator)) {
+            $missingComparatorMetricIds.Add($metricId) | Out-Null
+            $metricContractProblem = $true
+        }
+        elseif (-not (Test-MetricCatalogComparatorValid $comparator)) {
+            $invalidComparatorMetricIds.Add($metricId) | Out-Null
+            $metricContractProblem = $true
+        }
+
+        $unitValue = Get-MetricCatalogFieldValue -Metric $metric -Names @("unit", "unitHint", "units")
+        if (-not (Test-MetricCatalogFieldPresent $unitValue)) {
+            $missingUnitMetricIds.Add($metricId) | Out-Null
+            $metricContractProblem = $true
+        }
+
+        $safetyClassValue = Get-MetricCatalogFieldValue -Metric $metric -Names @("safetyClass", "safetyClasses")
+        if (-not (Test-MetricCatalogFieldPresent $safetyClassValue)) {
+            $missingSafetyClassMetricIds.Add($metricId) | Out-Null
+            $metricContractProblem = $true
+        }
+
+        $scopeValue = Get-MetricCatalogFieldValue -Metric $metric -Names @("acceptanceScope", "acceptanceScopes", "scope", "scopes", "scenarioIds", "relatedScenarioIds", "relatedScenarios", "scenarios")
+        if (-not (Test-MetricCatalogFieldPresent $scopeValue)) {
+            $missingAcceptanceScopeMetricIds.Add($metricId) | Out-Null
+            $metricContractProblem = $true
+        }
+
+        if ($metricContractProblem) {
+            $contractProblemMetricIds.Add($metricId) | Out-Null
         }
     }
 
@@ -4807,11 +6163,59 @@ else {
         Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "benchmark-metric-catalog-incomplete" "Benchmark metric catalog is missing required metrics: $($missingCatalogMetricIds.ToArray() -join ', ')."
     }
 
+    $missingContractFieldCount = $missingThresholdMetricIds.Count +
+        $missingComparatorMetricIds.Count +
+        $missingUnitMetricIds.Count +
+        $missingSafetyClassMetricIds.Count +
+        $missingAcceptanceScopeMetricIds.Count
+    if ($missingContractFieldCount -gt 0) {
+        $contractSummary = @(
+            "threshold=$($missingThresholdMetricIds.Count)",
+            "comparator=$($missingComparatorMetricIds.Count)",
+            "unit=$($missingUnitMetricIds.Count)",
+            "safetyClass=$($missingSafetyClassMetricIds.Count)",
+            "acceptanceScope=$($missingAcceptanceScopeMetricIds.Count)"
+        ) -join "; "
+        $problemIds = @($contractProblemMetricIds.ToArray() | Select-Object -Unique | Sort-Object)
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "benchmark-metric-catalog-contract-incomplete" "Benchmark metric catalog is missing acceptance contract fields ($contractSummary). Problem metric IDs: $($problemIds -join ', ')."
+    }
+
+    if ($invalidComparatorMetricIds.Count -gt 0) {
+        Add-AcceptanceIssue $errors $warnings -AllowPreflight:$AllowPreflight "benchmark-metric-catalog-comparator-invalid" "Benchmark metric catalog has unsupported acceptance comparator(s) for metrics: $($invalidComparatorMetricIds.ToArray() -join ', ')."
+    }
+
+    $contractProblemIds = @($contractProblemMetricIds.ToArray() | Select-Object -Unique | Sort-Object)
+    $contractReady = ($missingCatalogMetricIds.Count -eq 0 -and
+        $invalidDirectionMetricIds.Count -eq 0 -and
+        $missingThresholdMetricIds.Count -eq 0 -and
+        $missingComparatorMetricIds.Count -eq 0 -and
+        $invalidComparatorMetricIds.Count -eq 0 -and
+        $missingUnitMetricIds.Count -eq 0 -and
+        $missingSafetyClassMetricIds.Count -eq 0 -and
+        $missingAcceptanceScopeMetricIds.Count -eq 0)
+
     $metricCatalogEvidence["metricCount"] = $catalogMetricIds.Count
     $metricCatalogEvidence["requiredMetricCount"] = $requiredMetricIds.Count
+    $metricCatalogEvidence["acceptanceContractReady"] = $contractReady
     $metricCatalogEvidence["missingRequiredMetricCount"] = $missingCatalogMetricIds.Count
-    $metricCatalogEvidence["invalidDirectionCount"] = $invalidDirectionCount
-    $metricCatalogEvidence["status"] = if ($missingCatalogMetricIds.Count -eq 0 -and $invalidDirectionCount -eq 0) { "ready" } else { "not-ready" }
+    $metricCatalogEvidence["missingRequiredMetricIds"] = @($missingCatalogMetricIds.ToArray())
+    $metricCatalogEvidence["invalidDirectionCount"] = $invalidDirectionMetricIds.Count
+    $metricCatalogEvidence["invalidDirectionMetricIds"] = @($invalidDirectionMetricIds.ToArray())
+    $metricCatalogEvidence["missingThresholdCount"] = $missingThresholdMetricIds.Count
+    $metricCatalogEvidence["missingThresholdMetricIds"] = @($missingThresholdMetricIds.ToArray())
+    $metricCatalogEvidence["missingComparatorCount"] = $missingComparatorMetricIds.Count
+    $metricCatalogEvidence["missingComparatorMetricIds"] = @($missingComparatorMetricIds.ToArray())
+    $metricCatalogEvidence["invalidComparatorCount"] = $invalidComparatorMetricIds.Count
+    $metricCatalogEvidence["invalidComparatorMetricIds"] = @($invalidComparatorMetricIds.ToArray())
+    $metricCatalogEvidence["missingUnitCount"] = $missingUnitMetricIds.Count
+    $metricCatalogEvidence["missingUnitMetricIds"] = @($missingUnitMetricIds.ToArray())
+    $metricCatalogEvidence["missingSafetyClassCount"] = $missingSafetyClassMetricIds.Count
+    $metricCatalogEvidence["missingSafetyClassMetricIds"] = @($missingSafetyClassMetricIds.ToArray())
+    $metricCatalogEvidence["missingAcceptanceScopeCount"] = $missingAcceptanceScopeMetricIds.Count
+    $metricCatalogEvidence["missingAcceptanceScopeMetricIds"] = @($missingAcceptanceScopeMetricIds.ToArray())
+    $metricCatalogEvidence["contractProblemMetricCount"] = $contractProblemIds.Count
+    $metricCatalogEvidence["contractProblemMetricIds"] = @($contractProblemIds)
+    $metricCatalogEvidence["status"] = if ($contractReady) { "ready" } else { "not-ready" }
 }
 
 if ($null -eq $externalCandidates) {
@@ -4823,13 +6227,17 @@ else {
     $candidateEntries = @(Get-ExternalEngineCandidateEntries $externalCandidates)
     $candidateIds = New-Object System.Collections.Generic.List[string]
     $seenCandidateIds = @{}
+    $unsafeCandidateDetails = New-Object System.Collections.Generic.List[object]
+    $externalCandidateIssueCounts = @{}
     $unsafeCandidateCount = 0
 
     foreach ($candidate in $candidateEntries) {
         $candidateUnsafe = $false
+        $candidateIssues = New-Object System.Collections.Generic.List[string]
         $id = ConvertTo-CandidateId ([string](Get-JsonValue $candidate "id"))
         if ([string]::IsNullOrWhiteSpace($id)) {
             Add-ValidationIssue $errors "error" "external-candidate-id-missing" "External DSP candidate entry is missing an id."
+            Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-id-missing"
             $candidateUnsafe = $true
         }
         else {
@@ -4840,24 +6248,28 @@ else {
         $schemaVersion = [int](Get-JsonValue $candidate "schemaVersion")
         if ($schemaVersion -ne 1) {
             Add-ValidationIssue $errors "error" "external-candidate-schema-unsupported" "External DSP candidate '$id' must use schemaVersion=1."
+            Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-schema-unsupported"
             $candidateUnsafe = $true
         }
 
         $defaultState = [string](Get-JsonValue $candidate "defaultState")
         if ($defaultState -ine "off") {
             Add-ValidationIssue $errors "error" "external-candidate-default-not-off" "External DSP candidate '$id' must default to off; found '$defaultState'."
+            Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-default-not-off"
             $candidateUnsafe = $true
         }
 
         $rolloutPolicy = [string](Get-JsonValue $candidate "rolloutPolicy")
         if ($rolloutPolicy -notlike "*opt-in*" -or $rolloutPolicy -notlike "*bakeoff*") {
             Add-ValidationIssue $errors "error" "external-candidate-rollout-not-gated" "External DSP candidate '$id' must remain opt-in bakeoff only; rolloutPolicy='$rolloutPolicy'."
+            Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-rollout-not-gated"
             $candidateUnsafe = $true
         }
 
         $integrationPoint = [string](Get-JsonValue $candidate "integrationPoint")
         if ($integrationPoint -notlike "*post-demod*") {
             Add-ValidationIssue $errors "error" "external-candidate-integration-not-post-demod" "External DSP candidate '$id' must stay post-demod until benchmark proof exists; integrationPoint='$integrationPoint'."
+            Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-integration-not-post-demod"
             $candidateUnsafe = $true
         }
 
@@ -4865,8 +6277,52 @@ else {
             $value = [string](Get-JsonValue $candidate $field)
             if ([string]::IsNullOrWhiteSpace($value)) {
                 Add-ValidationIssue $errors "error" "external-candidate-required-field-missing" "External DSP candidate '$id' must declare '$field'."
+                Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-required-field-missing:$field"
                 $candidateUnsafe = $true
             }
+        }
+
+        $evaluationStage = [string](Get-JsonValue $candidate "evaluationStage")
+        if ([string]::IsNullOrWhiteSpace($evaluationStage)) {
+            Add-ValidationIssue $errors "error" "external-candidate-evaluation-stage-missing" "External DSP candidate '$id' must declare evaluationStage."
+            Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-evaluation-stage-missing"
+            $candidateUnsafe = $true
+        }
+
+        $allowedSignalPaths = @(Get-JsonArray $candidate "allowedSignalPaths")
+        $allowedSignalPathText = ($allowedSignalPaths -join " ")
+        if ($allowedSignalPaths.Count -le 0 -or $allowedSignalPathText -notlike "*post-demod*") {
+            Add-ValidationIssue $errors "error" "external-candidate-allowed-paths-invalid" "External DSP candidate '$id' must declare post-demod allowedSignalPaths."
+            Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-allowed-paths-invalid"
+            $candidateUnsafe = $true
+        }
+
+        $forbiddenSignalPaths = @(Get-JsonArray $candidate "forbiddenSignalPaths")
+        $forbiddenSignalPathText = ($forbiddenSignalPaths -join " ")
+        if ($forbiddenSignalPaths.Count -le 0 -or
+            $forbiddenSignalPathText -notlike "*raw-wdsp-iq*" -or
+            $forbiddenSignalPathText -notlike "*puresignal*") {
+            Add-ValidationIssue $errors "error" "external-candidate-forbidden-paths-invalid" "External DSP candidate '$id' must explicitly forbid raw WDSP IQ replacement and PureSignal coupling."
+            Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-forbidden-paths-invalid"
+            $candidateUnsafe = $true
+        }
+
+        $requiredControls = @(Get-JsonArray $candidate "requiredControls")
+        $requiredControlText = ($requiredControls -join " ")
+        foreach ($requiredControlToken in @("operator-visible-opt-in", "clean-bypass-fallback", "no-raw-wdsp-iq-replacement", "no-tx-or-puresignal-coupling")) {
+            if ($requiredControlText -notlike "*$requiredControlToken*") {
+                Add-ValidationIssue $errors "error" "external-candidate-required-control-missing" "External DSP candidate '$id' must declare required control '$requiredControlToken'."
+                Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-required-control-missing:$requiredControlToken"
+                $candidateUnsafe = $true
+            }
+        }
+
+        $fallbackPolicy = [string](Get-JsonValue $candidate "fallbackPolicy")
+        if ([string]::IsNullOrWhiteSpace($fallbackPolicy) -or
+            ($fallbackPolicy -notlike "*fallback*" -and $fallbackPolicy -notlike "*fall back*" -and $fallbackPolicy -notlike "*bypass*")) {
+            Add-ValidationIssue $errors "error" "external-candidate-fallback-policy-missing" "External DSP candidate '$id' must declare a clean fallback or bypass policy."
+            Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-fallback-policy-missing"
+            $candidateUnsafe = $true
         }
 
         $requiredBenchmarks = @(Get-JsonArray $candidate "requiredBenchmarks")
@@ -4876,18 +6332,22 @@ else {
 
         if ($requiredBenchmarks.Count -lt 3) {
             Add-ValidationIssue $errors "error" "external-candidate-benchmarks-incomplete" "External DSP candidate '$id' must list at least three required benchmark scenarios."
+            Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-benchmarks-incomplete"
             $candidateUnsafe = $true
         }
         if ($requiredEvidence.Count -lt 3) {
             Add-ValidationIssue $errors "error" "external-candidate-evidence-incomplete" "External DSP candidate '$id' must list licensing/package/runtime/fallback evidence requirements before integration."
+            Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-evidence-incomplete"
             $candidateUnsafe = $true
         }
         if ($blockers.Count -le 0) {
             Add-ValidationIssue $errors "error" "external-candidate-blockers-missing" "External DSP candidate '$id' must keep explicit blockers until evidence clears them."
+            Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-blockers-missing"
             $candidateUnsafe = $true
         }
         if ($referenceUrls.Count -le 0) {
             Add-ValidationIssue $errors "error" "external-candidate-references-missing" "External DSP candidate '$id' must include reference URLs for review."
+            Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-references-missing"
             $candidateUnsafe = $true
         }
 
@@ -4895,12 +6355,17 @@ else {
             $webrtcSafetyText = "$((Get-JsonArray $candidate "requiredEvidence") -join ' ') $((Get-JsonValue $candidate "radioSafetyRisk"))"
             if ($webrtcSafetyText -notlike "*AGC*" -or $webrtcSafetyText -notlike "*AEC*" -or $webrtcSafetyText -notlike "*disabled*") {
                 Add-ValidationIssue $errors "error" "external-candidate-webrtc-safety-gate-missing" "WebRTC APM candidate must explicitly keep AEC/AGC disabled unless separately approved."
+                Add-ExternalCandidateIssue -Issues $candidateIssues -IssueCounts $externalCandidateIssueCounts -Issue "external-candidate-webrtc-safety-gate-missing"
                 $candidateUnsafe = $true
             }
         }
 
         if ($candidateUnsafe) {
             $unsafeCandidateCount++
+            $unsafeCandidateDetails.Add((New-ExternalCandidateDetailRecord `
+                        -Id $id `
+                        -Issues @($candidateIssues.ToArray()) `
+                        -Blockers @($blockers))) | Out-Null
         }
     }
 
@@ -4918,6 +6383,9 @@ else {
     $externalEngineCandidateEvidence["candidateIds"] = @($candidateIds.ToArray() | Select-Object -Unique)
     $externalEngineCandidateEvidence["missingCandidateIds"] = @($missingCandidateIds.ToArray())
     $externalEngineCandidateEvidence["unsafeCandidateCount"] = $unsafeCandidateCount
+    $externalEngineCandidateEvidence["unsafeCandidateIds"] = @($unsafeCandidateDetails.ToArray() | ForEach-Object { [string](Get-JsonValue $_ "id") } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+    $externalEngineCandidateEvidence["unsafeCandidateDetails"] = @($unsafeCandidateDetails.ToArray())
+    $externalEngineCandidateEvidence["candidateIssueCounts"] = @(Convert-ExternalCandidateIssueCountsToRecords -Counts $externalCandidateIssueCounts)
 
     if ($null -ne $snapshot) {
         $snapshotCandidateEntries = @(Get-ExternalEngineCandidateEntries (Get-JsonValue $snapshot "externalEngineCandidates"))
@@ -4933,19 +6401,25 @@ else {
         }
 
         $snapshotMismatchCount = 0
+        $snapshotMissingCandidateIds = New-Object System.Collections.Generic.List[string]
+        $snapshotExtraCandidateIds = New-Object System.Collections.Generic.List[string]
         foreach ($id in @($seenCandidateIds.Keys)) {
             if (-not $snapshotIds.ContainsKey($id)) {
                 $snapshotMismatchCount++
+                $snapshotMissingCandidateIds.Add($id) | Out-Null
                 Add-ValidationIssue $errors "error" "external-candidate-snapshot-mismatch" "Modernization snapshot is missing external DSP candidate '$id' captured by /api/dsp/external-engine-candidates."
             }
         }
         foreach ($id in @($snapshotIds.Keys)) {
             if (-not $seenCandidateIds.ContainsKey($id)) {
                 $snapshotMismatchCount++
+                $snapshotExtraCandidateIds.Add($id) | Out-Null
                 Add-ValidationIssue $errors "error" "external-candidate-snapshot-mismatch" "Modernization snapshot includes external DSP candidate '$id' not present in /api/dsp/external-engine-candidates."
             }
         }
         $externalEngineCandidateEvidence["snapshotMismatchCount"] = $snapshotMismatchCount
+        $externalEngineCandidateEvidence["snapshotMissingCandidateIds"] = @($snapshotMissingCandidateIds.ToArray() | Sort-Object -Unique)
+        $externalEngineCandidateEvidence["snapshotExtraCandidateIds"] = @($snapshotExtraCandidateIds.ToArray() | Sort-Object -Unique)
     }
 
     if ($candidateEntries.Count -eq 0) {
@@ -5097,6 +6571,16 @@ else {
         Add-ValidationIssue $errors "error" "manifest-artifacts-missing" "Capture manifest does not list required artifacts."
     }
 
+    foreach ($value in (Get-JsonArray $manifest "requiredComparisons")) {
+        $comparison = ConvertTo-ComparisonId ([string]$value)
+        if ($comparison -eq $externalEngineOptInComparisonId) {
+            $externalEngineBakeoffRequiredByScope = $true
+            if (-not $externalEngineBakeoffScopeTriggers.Contains("benchmark-capture-manifest.requiredComparisons")) {
+                $externalEngineBakeoffScopeTriggers.Add("benchmark-capture-manifest.requiredComparisons") | Out-Null
+            }
+        }
+    }
+
     $artifactIds = @{}
     foreach ($artifact in $requiredArtifacts) {
         $artifactId = [string](Get-JsonValue $artifact "id")
@@ -5116,9 +6600,21 @@ else {
     $captureAllArtifactIds[$metricComparisonArtifactId] = $true
     $captureRequiredPhysicalArtifactIds[$metricComparisonArtifactId] = $true
     $captureArtifactScenarioIds[$metricComparisonArtifactId] = @(Get-JsonArray $manifest "scenarioIds")
+    $captureAllArtifactIds[$liveTraceComparisonArtifactId] = $true
+    $captureArtifactScenarioIds[$liveTraceComparisonArtifactId] = @(Get-JsonArray $manifest "scenarioIds")
+    $captureAllArtifactIds[$liveTraceThetisComparisonArtifactId] = $true
+    $captureArtifactScenarioIds[$liveTraceThetisComparisonArtifactId] = @(Get-JsonArray $manifest "scenarioIds")
+    $captureAllArtifactIds["live-diagnostics-trace-index"] = $true
+    $captureArtifactScenarioIds["live-diagnostics-trace-index"] = @(Get-JsonArray $manifest "scenarioIds")
     $captureAllArtifactIds[$liveDiagnosticsHistoryArtifactId] = $true
     $captureArtifactScenarioIds[$liveDiagnosticsHistoryArtifactId] = @(Get-JsonArray $manifest "scenarioIds")
-    foreach ($matrixReportArtifactId in @("live-diagnostics-matrix-report-baseline", "live-diagnostics-matrix-report-candidate")) {
+    $captureAllArtifactIds["live-acceptance-cycle-summary"] = $true
+    $captureArtifactScenarioIds["live-acceptance-cycle-summary"] = @(Get-JsonArray $manifest "scenarioIds")
+    foreach ($matrixReportArtifactId in @(
+            "live-diagnostics-matrix-report-off-baseline",
+            "live-diagnostics-matrix-report-thetis-parity",
+            "live-diagnostics-matrix-report-baseline",
+            "live-diagnostics-matrix-report-candidate")) {
         $captureAllArtifactIds[$matrixReportArtifactId] = $true
         $captureArtifactScenarioIds[$matrixReportArtifactId] = @(Get-JsonArray $manifest "scenarioIds")
     }
@@ -5197,6 +6693,10 @@ else {
             $expectedComparisonIds = @($expectedComparisonIds.ToArray() | Select-Object -Unique)
             if ($artifactId -ne $externalEngineBakeoffArtifactId -and $expectedComparisonIds -contains $externalEngineOptInComparisonId) {
                 $externalEngineBakeoffRequiredByScope = $true
+                $trigger = "artifact-manifest:$artifactId.comparisonIds"
+                if (-not $externalEngineBakeoffScopeTriggers.Contains($trigger)) {
+                    $externalEngineBakeoffScopeTriggers.Add($trigger) | Out-Null
+                }
             }
 
             if (-not [string]::IsNullOrWhiteSpace($artifactId) -and $captureRequiredPhysicalArtifactIds.ContainsKey($artifactId)) {
@@ -5285,6 +6785,836 @@ else {
                 $artifactContentComparisonIds = @(Get-ComparisonIdsFromReport $artifactJson)
                 if ($artifactContentComparisonIds -contains $externalEngineOptInComparisonId) {
                     $externalEngineBakeoffRequiredByScope = $true
+                    $trigger = "artifact-content:$artifactId.comparisonIds"
+                    if (-not $externalEngineBakeoffScopeTriggers.Contains($trigger)) {
+                        $externalEngineBakeoffScopeTriggers.Add($trigger) | Out-Null
+                    }
+                }
+            }
+
+            if ($artifactKind -ieq "live-acceptance-cycle-summary-json" -or $artifactId -eq "live-acceptance-cycle-summary") {
+                $liveAcceptanceCycleEvidence["present"] = $true
+                $liveAcceptanceCycleEvidence["path"] = $artifactPath
+                $liveAcceptanceCycleEvidence["sha256"] = Get-FileSha256 $resolvedArtifactPath
+                $liveAcceptanceCycleEvidence["liveAcceptanceEvidenceReady"] = Test-Truthy (Get-JsonValue $artifactJson "liveAcceptanceEvidenceReady")
+                $liveAcceptanceCycleEvidence["liveAcceptanceEvidenceStatus"] = [string](Get-JsonValue $artifactJson "liveAcceptanceEvidenceStatus")
+                $liveAcceptanceCycleEvidence["blockerCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "liveAcceptanceEvidenceBlockerCount"))
+                $liveAcceptanceCycleEvidence["blockers"] = @(Get-JsonArray $artifactJson "liveAcceptanceEvidenceBlockers")
+                $liveAcceptanceCycleEvidence["matrixAcceptanceReady"] = Test-Truthy (Get-JsonValue $artifactJson "matrixAcceptanceReady")
+                $liveAcceptanceCycleEvidence["matrixAcceptanceReadyCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "matrixAcceptanceReadyCount"))
+                $liveAcceptanceCycleEvidence["matrixNonZeroExitCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "matrixNonZeroExitCount"))
+                $liveAcceptanceCycleEvidence["comparisonReadyForReview"] = Test-Truthy (Get-JsonValue $artifactJson "comparisonReadyForReview")
+                $liveAcceptanceCycleEvidence["comparisonRegressionCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "comparisonRegressionCount"))
+                $liveAcceptanceCycleEvidence["comparisonGateFailureCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "comparisonGateFailureCount"))
+                $summaryMetricCatalogAlignmentReadyValue = Get-JsonValue $artifactJson "comparisonMetricCatalogAlignmentReady"
+                $summaryMetricCatalogAlignmentReady = Test-Truthy $summaryMetricCatalogAlignmentReadyValue
+                $summaryMetricCatalogAlignmentStatus = [string](Get-JsonValue $artifactJson "comparisonMetricCatalogAlignmentStatus")
+                $summaryMetricDefinitionCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "comparisonMetricDefinitionCount"))
+                $summaryMetricCatalogMissingMetricCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "comparisonMetricCatalogMissingMetricCount"))
+                $summaryMetricCatalogMismatchCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "comparisonMetricCatalogMismatchCount"))
+                $liveAcceptanceCycleEvidence["comparisonMetricCatalogAlignmentReady"] = $summaryMetricCatalogAlignmentReady
+                $liveAcceptanceCycleEvidence["comparisonMetricCatalogAlignmentStatus"] = $summaryMetricCatalogAlignmentStatus
+                $liveAcceptanceCycleEvidence["comparisonMetricDefinitionCount"] = $summaryMetricDefinitionCount
+                $liveAcceptanceCycleEvidence["comparisonMetricCatalogMissingMetricCount"] = $summaryMetricCatalogMissingMetricCount
+                $liveAcceptanceCycleEvidence["comparisonMetricCatalogMismatchCount"] = $summaryMetricCatalogMismatchCount
+                $summaryThetisComparisonReadyValue = Get-JsonValue $artifactJson "thetisComparisonReadyForReview"
+                $summaryThetisComparisonReady = Test-Truthy $summaryThetisComparisonReadyValue
+                $liveAcceptanceCycleEvidence["thetisComparisonReadyForReview"] = $summaryThetisComparisonReady
+                $liveAcceptanceCycleEvidence["thetisComparisonRegressionCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "thetisComparisonRegressionCount"))
+                $liveAcceptanceCycleEvidence["thetisComparisonGateFailureCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "thetisComparisonGateFailureCount"))
+                $summaryThetisMetricCatalogAlignmentReadyValue = Get-JsonValue $artifactJson "thetisComparisonMetricCatalogAlignmentReady"
+                $summaryThetisMetricCatalogAlignmentReady = Test-Truthy $summaryThetisMetricCatalogAlignmentReadyValue
+                $summaryThetisMetricCatalogAlignmentStatus = [string](Get-JsonValue $artifactJson "thetisComparisonMetricCatalogAlignmentStatus")
+                $summaryThetisMetricDefinitionCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "thetisComparisonMetricDefinitionCount"))
+                $summaryThetisMetricCatalogMissingMetricCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "thetisComparisonMetricCatalogMissingMetricCount"))
+                $summaryThetisMetricCatalogMismatchCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "thetisComparisonMetricCatalogMismatchCount"))
+                $liveAcceptanceCycleEvidence["thetisComparisonMetricCatalogAlignmentReady"] = $summaryThetisMetricCatalogAlignmentReady
+                $liveAcceptanceCycleEvidence["thetisComparisonMetricCatalogAlignmentStatus"] = $summaryThetisMetricCatalogAlignmentStatus
+                $liveAcceptanceCycleEvidence["thetisComparisonMetricDefinitionCount"] = $summaryThetisMetricDefinitionCount
+                $liveAcceptanceCycleEvidence["thetisComparisonMetricCatalogMissingMetricCount"] = $summaryThetisMetricCatalogMissingMetricCount
+                $liveAcceptanceCycleEvidence["thetisComparisonMetricCatalogMismatchCount"] = $summaryThetisMetricCatalogMismatchCount
+                $liveAcceptanceCycleEvidence["validationExitCode"] = Get-JsonValue $artifactJson "validationExitCode"
+                $liveAcceptanceCycleEvidence["validationOk"] = Test-Truthy (Get-JsonValue $artifactJson "validationOk")
+                $liveAcceptanceCycleEvidence["validationErrorCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "validationErrorCount"))
+                $liveAcceptanceCycleEvidence["validationWarningCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "validationWarningCount"))
+                $summaryHardwareReadyValue = Get-JsonValue $artifactJson "hardwareEvidenceReady"
+                $summaryHardwareReady = Test-Truthy $summaryHardwareReadyValue
+                $summaryHardwareStatus = [string](Get-JsonValue $artifactJson "hardwareEvidenceStatus")
+                $summaryHardwareTarget = [string](Get-JsonValue $artifactJson "hardwareTarget")
+                $summaryCaptureHardwareTarget = [string](Get-JsonValue $artifactJson "captureHardwareTarget")
+                $summaryHardwareDiagnosticsPresentValue = Get-JsonValue $artifactJson "hardwareDiagnosticsPresent"
+                $summaryHardwareDiagnosticsPresent = Test-Truthy $summaryHardwareDiagnosticsPresentValue
+                $liveAcceptanceCycleEvidence["hardwareEvidenceReady"] = $summaryHardwareReady
+                $liveAcceptanceCycleEvidence["hardwareEvidenceStatus"] = $summaryHardwareStatus
+                $liveAcceptanceCycleEvidence["hardwareTarget"] = $summaryHardwareTarget
+                $liveAcceptanceCycleEvidence["captureHardwareTarget"] = $summaryCaptureHardwareTarget
+                $liveAcceptanceCycleEvidence["hardwareDiagnosticsPresent"] = $summaryHardwareDiagnosticsPresent
+                $summaryAgcStabilityReadyValue = Get-JsonValue $artifactJson "liveDiagnosticsHistoryAgcStabilityReady"
+                $summaryAgcStabilityReady = Test-Truthy $summaryAgcStabilityReadyValue
+                $summaryAgcStabilityStatus = [string](Get-JsonValue $artifactJson "liveDiagnosticsHistoryAgcStabilityStatus")
+                $summaryAgcStabilityTraceCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "liveDiagnosticsHistoryAgcStabilityTraceCount"))
+                $summaryAgcStabilityMissingTraceCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "liveDiagnosticsHistoryAgcStabilityMissingTraceCount"))
+                $summaryAgcPumpingRiskTraceCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "liveDiagnosticsHistoryAgcPumpingRiskTraceCount"))
+                $summaryAgcActivePumpingSignalCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "liveDiagnosticsHistoryAgcActivePumpingSignalCount"))
+                $summaryAgcVoiceLikePumpingSignalCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "liveDiagnosticsHistoryAgcVoiceLikePumpingSignalCount"))
+                $summaryArtifactControlSignalCountValue = Get-JsonValue $artifactJson "liveDiagnosticsHistoryArtifactControlSignalCount"
+                $summaryArtifactControlSignalCount = [int](Get-NumericValueOrDefault $summaryArtifactControlSignalCountValue)
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryAgcStabilityReady"] = $summaryAgcStabilityReady
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryAgcStabilityStatus"] = $summaryAgcStabilityStatus
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryAgcStabilityTraceCount"] = $summaryAgcStabilityTraceCount
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryAgcStabilityMissingTraceCount"] = $summaryAgcStabilityMissingTraceCount
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryAgcPumpingRiskTraceCount"] = $summaryAgcPumpingRiskTraceCount
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryAgcActivePumpingSignalCount"] = $summaryAgcActivePumpingSignalCount
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryAgcVoiceLikePumpingSignalCount"] = $summaryAgcVoiceLikePumpingSignalCount
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryArtifactControlSignalCount"] = $summaryArtifactControlSignalCount
+                $summaryMixedWeakStrongReadyValue = Get-JsonValue $artifactJson "liveDiagnosticsHistoryMixedWeakStrongEvidenceReady"
+                $summaryMixedWeakStrongReady = Test-Truthy $summaryMixedWeakStrongReadyValue
+                $summaryMixedWeakStrongStatus = [string](Get-JsonValue $artifactJson "liveDiagnosticsHistoryMixedWeakStrongEvidenceStatus")
+                $summaryMixedWeakStrongTraceCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "liveDiagnosticsHistoryMixedWeakStrongTraceCount"))
+                $summaryMixedWeakStrongReadyTraceCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "liveDiagnosticsHistoryMixedWeakStrongReadyTraceCount"))
+                $summaryMixedWeakStrongMissingTraceCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "liveDiagnosticsHistoryMixedWeakStrongMissingTraceCount"))
+                $summaryMixedWeakStrongGapWatchTraceCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "liveDiagnosticsHistoryMixedWeakStrongGapWatchTraceCount"))
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryMixedWeakStrongEvidenceReady"] = $summaryMixedWeakStrongReady
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryMixedWeakStrongEvidenceStatus"] = $summaryMixedWeakStrongStatus
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryMixedWeakStrongTraceCount"] = $summaryMixedWeakStrongTraceCount
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryMixedWeakStrongReadyTraceCount"] = $summaryMixedWeakStrongReadyTraceCount
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryMixedWeakStrongMissingTraceCount"] = $summaryMixedWeakStrongMissingTraceCount
+                $liveAcceptanceCycleEvidence["liveDiagnosticsHistoryMixedWeakStrongGapWatchTraceCount"] = $summaryMixedWeakStrongGapWatchTraceCount
+                $summaryLiveMatrixMixedWeakStrongHuntReadyValue = Get-JsonValue $artifactJson "liveMatrixMixedWeakStrongHuntReady"
+                $summaryLiveMatrixMixedWeakStrongHuntReady = Test-Truthy $summaryLiveMatrixMixedWeakStrongHuntReadyValue
+                $summaryLiveMatrixMixedWeakStrongStatus = [string](Get-JsonValue $artifactJson "liveMatrixMixedWeakStrongStatus")
+                $summaryLiveMatrixMixedWeakStrongReportCountValue = Get-JsonValue $artifactJson "liveMatrixMixedWeakStrongReportCount"
+                $summaryLiveMatrixMixedWeakStrongSchemaV2ReportCountValue = Get-JsonValue $artifactJson "liveMatrixMixedWeakStrongSchemaV2ReportCount"
+                $summaryLiveMatrixMixedWeakStrongReadyReportCountValue = Get-JsonValue $artifactJson "liveMatrixMixedWeakStrongReadyReportCount"
+                $summaryLiveMatrixMixedWeakStrongTraceCountValue = Get-JsonValue $artifactJson "liveMatrixMixedWeakStrongTraceCount"
+                $summaryLiveMatrixMixedWeakStrongReadyTraceCountValue = Get-JsonValue $artifactJson "liveMatrixMixedWeakStrongReadyTraceCount"
+                $summaryLiveMatrixMixedWeakStrongMissingRunCountValue = Get-JsonValue $artifactJson "liveMatrixMixedWeakStrongMissingRunCount"
+                $summaryLiveMatrixMixedWeakStrongGapWatchRunCountValue = Get-JsonValue $artifactJson "liveMatrixMixedWeakStrongGapWatchRunCount"
+                $summaryLiveMatrixMixedWeakStrongWeakInputSampleCountValue = Get-JsonValue $artifactJson "liveMatrixMixedWeakStrongWeakInputSampleCount"
+                $summaryLiveMatrixMixedWeakStrongStrongInputSampleCountValue = Get-JsonValue $artifactJson "liveMatrixMixedWeakStrongStrongInputSampleCount"
+                $summaryLiveMatrixMixedWeakStrongReportCount = [int](Get-NumericValueOrDefault $summaryLiveMatrixMixedWeakStrongReportCountValue)
+                $summaryLiveMatrixMixedWeakStrongSchemaV2ReportCount = [int](Get-NumericValueOrDefault $summaryLiveMatrixMixedWeakStrongSchemaV2ReportCountValue)
+                $summaryLiveMatrixMixedWeakStrongReadyReportCount = [int](Get-NumericValueOrDefault $summaryLiveMatrixMixedWeakStrongReadyReportCountValue)
+                $summaryLiveMatrixMixedWeakStrongTraceCount = [int](Get-NumericValueOrDefault $summaryLiveMatrixMixedWeakStrongTraceCountValue)
+                $summaryLiveMatrixMixedWeakStrongReadyTraceCount = [int](Get-NumericValueOrDefault $summaryLiveMatrixMixedWeakStrongReadyTraceCountValue)
+                $summaryLiveMatrixMixedWeakStrongMissingRunCount = [int](Get-NumericValueOrDefault $summaryLiveMatrixMixedWeakStrongMissingRunCountValue)
+                $summaryLiveMatrixMixedWeakStrongGapWatchRunCount = [int](Get-NumericValueOrDefault $summaryLiveMatrixMixedWeakStrongGapWatchRunCountValue)
+                $summaryLiveMatrixMixedWeakStrongWeakInputSampleCount = [int](Get-NumericValueOrDefault $summaryLiveMatrixMixedWeakStrongWeakInputSampleCountValue)
+                $summaryLiveMatrixMixedWeakStrongStrongInputSampleCount = [int](Get-NumericValueOrDefault $summaryLiveMatrixMixedWeakStrongStrongInputSampleCountValue)
+                $summaryLiveMatrixMixedWeakStrongStatusCountsValue = Get-JsonValue $artifactJson "liveMatrixMixedWeakStrongStatusCounts"
+                $summaryLiveMatrixMixedWeakStrongStatusCounts = @(Get-JsonArray $artifactJson "liveMatrixMixedWeakStrongStatusCounts")
+                $summaryLiveMatrixMixedWeakStrongBestRun = Get-JsonValue $artifactJson "liveMatrixMixedWeakStrongBestRun"
+                $summaryLiveMatrixArtifactControlStatus = [string](Get-JsonValue $artifactJson "liveMatrixArtifactControlStatus")
+                $summaryLiveMatrixArtifactControlReportCountValue = Get-JsonValue $artifactJson "liveMatrixArtifactControlReportCount"
+                $summaryLiveMatrixArtifactControlSchemaV3ReportCountValue = Get-JsonValue $artifactJson "liveMatrixArtifactControlSchemaV3ReportCount"
+                $summaryLiveMatrixArtifactControlReviewRunCountValue = Get-JsonValue $artifactJson "liveMatrixArtifactControlReviewRunCount"
+                $summaryLiveMatrixArtifactControlRiskScoreMaxValue = Get-JsonValue $artifactJson "liveMatrixArtifactControlRiskScoreMax"
+                $summaryLiveMatrixArtifactControlLowEvidenceLiftedSampleCountValue = Get-JsonValue $artifactJson "liveMatrixArtifactControlLowEvidenceLiftedSampleCount"
+                $summaryLiveMatrixArtifactControlLowEvidenceLiftedPctMaxValue = Get-JsonValue $artifactJson "liveMatrixArtifactControlLowEvidenceLiftedPctMax"
+                $summaryLiveMatrixArtifactControlAudioAlignmentMismatchPctMaxValue = Get-JsonValue $artifactJson "liveMatrixArtifactControlAudioAlignmentMismatchPctMax"
+                $summaryLiveMatrixArtifactControlStatusCountsValue = Get-JsonValue $artifactJson "liveMatrixArtifactControlStatusCounts"
+                $summaryLiveMatrixArtifactControlReportCount = [int](Get-NumericValueOrDefault $summaryLiveMatrixArtifactControlReportCountValue)
+                $summaryLiveMatrixArtifactControlSchemaV3ReportCount = [int](Get-NumericValueOrDefault $summaryLiveMatrixArtifactControlSchemaV3ReportCountValue)
+                $summaryLiveMatrixArtifactControlReviewRunCount = [int](Get-NumericValueOrDefault $summaryLiveMatrixArtifactControlReviewRunCountValue)
+                $summaryLiveMatrixArtifactControlRiskScoreMax = Get-NumericValue $summaryLiveMatrixArtifactControlRiskScoreMaxValue
+                $summaryLiveMatrixArtifactControlLowEvidenceLiftedSampleCount = [int](Get-NumericValueOrDefault $summaryLiveMatrixArtifactControlLowEvidenceLiftedSampleCountValue)
+                $summaryLiveMatrixArtifactControlLowEvidenceLiftedPctMax = Get-NumericValue $summaryLiveMatrixArtifactControlLowEvidenceLiftedPctMaxValue
+                $summaryLiveMatrixArtifactControlAudioAlignmentMismatchPctMax = Get-NumericValue $summaryLiveMatrixArtifactControlAudioAlignmentMismatchPctMaxValue
+                $summaryLiveMatrixArtifactControlStatusCounts = @(Get-JsonArray $artifactJson "liveMatrixArtifactControlStatusCounts")
+                $liveAcceptanceCycleEvidence["liveMatrixMixedWeakStrongHuntReady"] = $summaryLiveMatrixMixedWeakStrongHuntReady
+                $liveAcceptanceCycleEvidence["liveMatrixMixedWeakStrongStatus"] = $summaryLiveMatrixMixedWeakStrongStatus
+                $liveAcceptanceCycleEvidence["liveMatrixMixedWeakStrongReportCount"] = $summaryLiveMatrixMixedWeakStrongReportCount
+                $liveAcceptanceCycleEvidence["liveMatrixMixedWeakStrongSchemaV2ReportCount"] = $summaryLiveMatrixMixedWeakStrongSchemaV2ReportCount
+                $liveAcceptanceCycleEvidence["liveMatrixMixedWeakStrongReadyReportCount"] = $summaryLiveMatrixMixedWeakStrongReadyReportCount
+                $liveAcceptanceCycleEvidence["liveMatrixMixedWeakStrongTraceCount"] = $summaryLiveMatrixMixedWeakStrongTraceCount
+                $liveAcceptanceCycleEvidence["liveMatrixMixedWeakStrongReadyTraceCount"] = $summaryLiveMatrixMixedWeakStrongReadyTraceCount
+                $liveAcceptanceCycleEvidence["liveMatrixMixedWeakStrongMissingRunCount"] = $summaryLiveMatrixMixedWeakStrongMissingRunCount
+                $liveAcceptanceCycleEvidence["liveMatrixMixedWeakStrongGapWatchRunCount"] = $summaryLiveMatrixMixedWeakStrongGapWatchRunCount
+                $liveAcceptanceCycleEvidence["liveMatrixMixedWeakStrongWeakInputSampleCount"] = $summaryLiveMatrixMixedWeakStrongWeakInputSampleCount
+                $liveAcceptanceCycleEvidence["liveMatrixMixedWeakStrongStrongInputSampleCount"] = $summaryLiveMatrixMixedWeakStrongStrongInputSampleCount
+                $liveAcceptanceCycleEvidence["liveMatrixMixedWeakStrongStatusCounts"] = @($summaryLiveMatrixMixedWeakStrongStatusCounts)
+                $liveAcceptanceCycleEvidence["liveMatrixMixedWeakStrongBestRun"] = $summaryLiveMatrixMixedWeakStrongBestRun
+                $liveAcceptanceCycleEvidence["liveMatrixArtifactControlStatus"] = $summaryLiveMatrixArtifactControlStatus
+                $liveAcceptanceCycleEvidence["liveMatrixArtifactControlReportCount"] = $summaryLiveMatrixArtifactControlReportCount
+                $liveAcceptanceCycleEvidence["liveMatrixArtifactControlSchemaV3ReportCount"] = $summaryLiveMatrixArtifactControlSchemaV3ReportCount
+                $liveAcceptanceCycleEvidence["liveMatrixArtifactControlReviewRunCount"] = $summaryLiveMatrixArtifactControlReviewRunCount
+                $liveAcceptanceCycleEvidence["liveMatrixArtifactControlRiskScoreMax"] = $summaryLiveMatrixArtifactControlRiskScoreMax
+                $liveAcceptanceCycleEvidence["liveMatrixArtifactControlLowEvidenceLiftedSampleCount"] = $summaryLiveMatrixArtifactControlLowEvidenceLiftedSampleCount
+                $liveAcceptanceCycleEvidence["liveMatrixArtifactControlLowEvidenceLiftedPctMax"] = $summaryLiveMatrixArtifactControlLowEvidenceLiftedPctMax
+                $liveAcceptanceCycleEvidence["liveMatrixArtifactControlAudioAlignmentMismatchPctMax"] = $summaryLiveMatrixArtifactControlAudioAlignmentMismatchPctMax
+                $liveAcceptanceCycleEvidence["liveMatrixArtifactControlStatusCounts"] = @($summaryLiveMatrixArtifactControlStatusCounts)
+                $liveAcceptanceCycleEvidence["triageExitCode"] = Get-JsonValue $artifactJson "triageExitCode"
+                $liveAcceptanceCycleEvidence["triageAcceptanceActionPlanCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "triageAcceptanceActionPlanCount"))
+                $summaryTriageRequiredActionCountValue = Get-JsonValue $artifactJson "triageAcceptanceRequiredActionCount"
+                $summaryTriageManualActionCountValue = Get-JsonValue $artifactJson "triageAcceptanceManualActionCount"
+                $summaryTriageActionCategoryCountsValue = Get-JsonValue $artifactJson "triageAcceptanceActionCategoryCounts"
+                $summaryTriagePrimaryActionIdValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceActionId"
+                $summaryTriagePrimaryActionPriorityValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceActionPriority"
+                $summaryTriagePrimaryActionStageIdValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceActionStageId"
+                $summaryTriagePrimaryActionGateIdValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceActionGateId"
+                $summaryTriagePrimaryActionCategoryValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceActionCategory"
+                $summaryTriagePrimaryActionRequiredValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceActionRequired"
+                $summaryTriagePrimaryActionManualValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceActionManual"
+                $summaryTriagePrimaryCommandTemplateValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceCommandTemplate"
+                $summaryTriagePrimaryCommandStepCountValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceCommandStepCount"
+                $summaryTriagePrimaryCommandStepsValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceCommandSteps"
+                $summaryTriagePrimaryManualActionValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceManualAction"
+                $summaryTriagePrimaryExpectedArtifactValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceExpectedArtifact"
+                $summaryTriagePrimaryExpectedArtifactCountValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceExpectedArtifactCount"
+                $summaryTriagePrimaryExpectedArtifactsValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceExpectedArtifacts"
+                $summaryTriagePrimaryFollowUpValue = Get-JsonValue $artifactJson "triagePrimaryAcceptanceFollowUp"
+                $summaryTriageRequiredActionCount = [int](Get-NumericValueOrDefault $summaryTriageRequiredActionCountValue)
+                $summaryTriageManualActionCount = [int](Get-NumericValueOrDefault $summaryTriageManualActionCountValue)
+                $summaryTriageActionCategoryCounts = @(Get-JsonArray $artifactJson "triageAcceptanceActionCategoryCounts")
+                $summaryTriagePrimaryActionId = [string]$summaryTriagePrimaryActionIdValue
+                $summaryTriagePrimaryActionPriority = Get-NumericValue $summaryTriagePrimaryActionPriorityValue
+                $summaryTriagePrimaryActionStageId = [string]$summaryTriagePrimaryActionStageIdValue
+                $summaryTriagePrimaryActionGateId = [string]$summaryTriagePrimaryActionGateIdValue
+                $summaryTriagePrimaryActionCategory = [string]$summaryTriagePrimaryActionCategoryValue
+                $summaryTriagePrimaryActionRequired = Test-Truthy $summaryTriagePrimaryActionRequiredValue
+                $summaryTriagePrimaryActionManual = Test-Truthy $summaryTriagePrimaryActionManualValue
+                $summaryTriagePrimaryCommandTemplate = [string]$summaryTriagePrimaryCommandTemplateValue
+                $summaryTriagePrimaryCommandStepCount = [int](Get-NumericValueOrDefault $summaryTriagePrimaryCommandStepCountValue)
+                $summaryTriagePrimaryCommandSteps = @(Get-JsonArray $artifactJson "triagePrimaryAcceptanceCommandSteps")
+                $summaryTriagePrimaryManualAction = [string]$summaryTriagePrimaryManualActionValue
+                $summaryTriagePrimaryExpectedArtifact = [string]$summaryTriagePrimaryExpectedArtifactValue
+                $summaryTriagePrimaryExpectedArtifactCount = [int](Get-NumericValueOrDefault $summaryTriagePrimaryExpectedArtifactCountValue)
+                $summaryTriagePrimaryExpectedArtifacts = @(Get-JsonArray $artifactJson "triagePrimaryAcceptanceExpectedArtifacts")
+                $summaryTriagePrimaryFollowUp = [string]$summaryTriagePrimaryFollowUpValue
+                $liveAcceptanceCycleEvidence["triageAcceptanceRequiredActionCount"] = $summaryTriageRequiredActionCount
+                $liveAcceptanceCycleEvidence["triageAcceptanceManualActionCount"] = $summaryTriageManualActionCount
+                $liveAcceptanceCycleEvidence["triageAcceptanceActionCategoryCounts"] = @($summaryTriageActionCategoryCounts)
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceActionId"] = $summaryTriagePrimaryActionId
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceActionPriority"] = $summaryTriagePrimaryActionPriority
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceActionStageId"] = $summaryTriagePrimaryActionStageId
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceActionGateId"] = $summaryTriagePrimaryActionGateId
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceActionCategory"] = $summaryTriagePrimaryActionCategory
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceActionRequired"] = $summaryTriagePrimaryActionRequired
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceActionManual"] = $summaryTriagePrimaryActionManual
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceCommandTemplate"] = $summaryTriagePrimaryCommandTemplate
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceCommandStepCount"] = $summaryTriagePrimaryCommandStepCount
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceCommandSteps"] = @($summaryTriagePrimaryCommandSteps)
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceManualAction"] = $summaryTriagePrimaryManualAction
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceExpectedArtifact"] = $summaryTriagePrimaryExpectedArtifact
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceExpectedArtifactCount"] = $summaryTriagePrimaryExpectedArtifactCount
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceExpectedArtifacts"] = @($summaryTriagePrimaryExpectedArtifacts)
+                $liveAcceptanceCycleEvidence["triagePrimaryAcceptanceFollowUp"] = $summaryTriagePrimaryFollowUp
+                $liveAcceptanceCycleEvidence["requiredLiveAcceptanceArtifactProblemCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "requiredLiveAcceptanceArtifactProblemCount"))
+
+                $tool = [string](Get-JsonValue $artifactJson "tool")
+                if ($tool -ne "run-dsp-live-acceptance-cycle") {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-tool-invalid" "Artifact '$artifactId' must be generated by run-dsp-live-acceptance-cycle.ps1."
+                    $artifactValidationOk = $false
+                }
+
+                $schemaVersion = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "schemaVersion"))
+                if ($schemaVersion -ne 7) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-schema-version-mismatch" "Artifact '$artifactId' schemaVersion=$schemaVersion but run-dsp-live-acceptance-cycle.ps1 currently emits schemaVersion=7."
+                    $artifactValidationOk = $false
+                }
+
+                if ($null -eq $summaryMetricCatalogAlignmentReadyValue) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-metric-catalog-alignment-missing" "Artifact '$artifactId' must declare comparisonMetricCatalogAlignmentReady so live acceptance summaries cannot omit metric catalog contract proof."
+                    $artifactValidationOk = $false
+                }
+                if ([string]::IsNullOrWhiteSpace($summaryMetricCatalogAlignmentStatus)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-metric-catalog-status-missing" "Artifact '$artifactId' must declare comparisonMetricCatalogAlignmentStatus."
+                    $artifactValidationOk = $false
+                }
+                if ($null -eq $summaryThetisComparisonReadyValue) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-thetis-comparison-ready-missing" "Artifact '$artifactId' must declare thetisComparisonReadyForReview so Thetis-parity live comparison proof cannot be omitted."
+                    $artifactValidationOk = $false
+                }
+                if ($null -eq $summaryThetisMetricCatalogAlignmentReadyValue) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-thetis-metric-catalog-alignment-missing" "Artifact '$artifactId' must declare thetisComparisonMetricCatalogAlignmentReady so Thetis-parity live comparison metric catalog proof cannot be omitted."
+                    $artifactValidationOk = $false
+                }
+                if ([string]::IsNullOrWhiteSpace($summaryThetisMetricCatalogAlignmentStatus)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-thetis-metric-catalog-status-missing" "Artifact '$artifactId' must declare thetisComparisonMetricCatalogAlignmentStatus."
+                    $artifactValidationOk = $false
+                }
+
+                $expectedHardwareStatus = [string]$hardwareEvidence.status
+                $expectedHardwareReady = [string]::Equals($expectedHardwareStatus, "g2-hardware-evidence-ready", [StringComparison]::OrdinalIgnoreCase)
+                if ($null -eq $summaryHardwareReadyValue) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-hardware-ready-missing" "Artifact '$artifactId' must declare hardwareEvidenceReady so G2 preflight captures cannot be mistaken for acceptance evidence."
+                    $artifactValidationOk = $false
+                }
+                elseif ($summaryHardwareReady -ne $expectedHardwareReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-hardware-ready-mismatch" "Artifact '$artifactId' hardwareEvidenceReady='$summaryHardwareReady' but current validation hardwareEvidenceStatus='$expectedHardwareStatus' implies '$expectedHardwareReady'."
+                    $artifactValidationOk = $false
+                }
+
+                if ([string]::IsNullOrWhiteSpace($summaryHardwareStatus)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-hardware-status-missing" "Artifact '$artifactId' must declare hardwareEvidenceStatus."
+                    $artifactValidationOk = $false
+                }
+                elseif (-not [string]::Equals($summaryHardwareStatus, $expectedHardwareStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-hardware-status-mismatch" "Artifact '$artifactId' hardwareEvidenceStatus='$summaryHardwareStatus' but current validation reports '$expectedHardwareStatus'."
+                    $artifactValidationOk = $false
+                }
+
+                $expectedHardwareTarget = [string]$hardwareEvidence.planTarget
+                if ([string]::IsNullOrWhiteSpace($summaryHardwareTarget)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-hardware-target-missing" "Artifact '$artifactId' must declare hardwareTarget."
+                    $artifactValidationOk = $false
+                }
+                elseif (-not [string]::Equals($summaryHardwareTarget, $expectedHardwareTarget, [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-hardware-target-mismatch" "Artifact '$artifactId' hardwareTarget='$summaryHardwareTarget' but benchmark plan target is '$expectedHardwareTarget'."
+                    $artifactValidationOk = $false
+                }
+
+                $expectedCaptureHardwareTarget = [string]$hardwareEvidence.manifestTarget
+                if ([string]::IsNullOrWhiteSpace($summaryCaptureHardwareTarget)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-capture-hardware-target-missing" "Artifact '$artifactId' must declare captureHardwareTarget."
+                    $artifactValidationOk = $false
+                }
+                elseif (-not [string]::Equals($summaryCaptureHardwareTarget, $expectedCaptureHardwareTarget, [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-capture-hardware-target-mismatch" "Artifact '$artifactId' captureHardwareTarget='$summaryCaptureHardwareTarget' but capture manifest target is '$expectedCaptureHardwareTarget'."
+                    $artifactValidationOk = $false
+                }
+
+                if ($null -eq $summaryHardwareDiagnosticsPresentValue) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-hardware-diagnostics-present-missing" "Artifact '$artifactId' must declare hardwareDiagnosticsPresent."
+                    $artifactValidationOk = $false
+                }
+                elseif ($summaryHardwareDiagnosticsPresent -ne (Test-Truthy $hardwareEvidence.diagnosticsPresent)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-hardware-diagnostics-present-mismatch" "Artifact '$artifactId' hardwareDiagnosticsPresent='$summaryHardwareDiagnosticsPresent' but current validation reports '$($hardwareEvidence.diagnosticsPresent)'."
+                    $artifactValidationOk = $false
+                }
+
+                $expectedAgcStabilityStatus = [string]$liveDiagnosticsHistoryEvidence.agcStabilityStatus
+                $expectedAgcStabilityReady = [string]::Equals($expectedAgcStabilityStatus, "agc-stability-ready", [StringComparison]::OrdinalIgnoreCase)
+                if ($null -eq $summaryAgcStabilityReadyValue) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-agc-stability-ready-missing" "Artifact '$artifactId' must declare liveDiagnosticsHistoryAgcStabilityReady so live acceptance summaries cannot omit AGC pumping evidence."
+                    $artifactValidationOk = $false
+                }
+                elseif ($summaryAgcStabilityReady -ne $expectedAgcStabilityReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-agc-stability-ready-mismatch" "Artifact '$artifactId' liveDiagnosticsHistoryAgcStabilityReady='$summaryAgcStabilityReady' but current validation liveDiagnosticsHistoryAgcStabilityStatus='$expectedAgcStabilityStatus' implies '$expectedAgcStabilityReady'."
+                    $artifactValidationOk = $false
+                }
+
+                if ([string]::IsNullOrWhiteSpace($summaryAgcStabilityStatus)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-agc-stability-status-missing" "Artifact '$artifactId' must declare liveDiagnosticsHistoryAgcStabilityStatus."
+                    $artifactValidationOk = $false
+                }
+                elseif (-not [string]::Equals($summaryAgcStabilityStatus, $expectedAgcStabilityStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-agc-stability-status-mismatch" "Artifact '$artifactId' liveDiagnosticsHistoryAgcStabilityStatus='$summaryAgcStabilityStatus' but current validation reports '$expectedAgcStabilityStatus'."
+                    $artifactValidationOk = $false
+                }
+
+                foreach ($agcCountSpec in @(
+                        @{ Name = "liveDiagnosticsHistoryAgcStabilityTraceCount"; Expected = $liveDiagnosticsHistoryEvidence.agcStabilityTraceCount },
+                        @{ Name = "liveDiagnosticsHistoryAgcStabilityMissingTraceCount"; Expected = $liveDiagnosticsHistoryEvidence.agcStabilityMissingTraceCount },
+                        @{ Name = "liveDiagnosticsHistoryAgcPumpingRiskTraceCount"; Expected = $liveDiagnosticsHistoryEvidence.agcPumpingRiskTraceCount },
+                        @{ Name = "liveDiagnosticsHistoryAgcActivePumpingSignalCount"; Expected = $liveDiagnosticsHistoryEvidence.agcActivePumpingSignalCount },
+                        @{ Name = "liveDiagnosticsHistoryAgcVoiceLikePumpingSignalCount"; Expected = $liveDiagnosticsHistoryEvidence.agcVoiceLikePumpingSignalCount }
+                    )) {
+                    $countName = [string]$agcCountSpec["Name"]
+                    $summaryCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson $countName))
+                    $expectedCount = [int](Get-NumericValueOrDefault $agcCountSpec["Expected"])
+                    if ($summaryCount -ne $expectedCount) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-agc-stability-count-mismatch" "Artifact '$artifactId' $countName='$summaryCount' but current validation reports '$expectedCount'."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                if ($schemaVersion -ge 6 -and $null -eq $summaryArtifactControlSignalCountValue) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-artifact-control-count-missing" "Artifact '$artifactId' must declare liveDiagnosticsHistoryArtifactControlSignalCount so wrapper summaries expose NR5 speech-artifact review advisories."
+                    $artifactValidationOk = $false
+                }
+                elseif ($schemaVersion -ge 6) {
+                    $expectedArtifactControlSignalCount = [int](Get-NumericValueOrDefault $liveDiagnosticsHistoryEvidence.artifactControlSignalCount)
+                    if ($summaryArtifactControlSignalCount -ne $expectedArtifactControlSignalCount) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-artifact-control-count-mismatch" "Artifact '$artifactId' liveDiagnosticsHistoryArtifactControlSignalCount='$summaryArtifactControlSignalCount' but current validation reports '$expectedArtifactControlSignalCount'."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                $expectedMixedWeakStrongStatus = [string]$liveDiagnosticsHistoryEvidence.mixedWeakStrongEvidenceStatus
+                $expectedMixedWeakStrongReady = [string]::Equals($expectedMixedWeakStrongStatus, "ready", [StringComparison]::OrdinalIgnoreCase)
+                if ($null -eq $summaryMixedWeakStrongReadyValue) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-mixed-weak-strong-ready-missing" "Artifact '$artifactId' must declare liveDiagnosticsHistoryMixedWeakStrongEvidenceReady so live acceptance summaries cannot omit weak/strong volume parity evidence."
+                    $artifactValidationOk = $false
+                }
+                elseif ($summaryMixedWeakStrongReady -ne $expectedMixedWeakStrongReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-mixed-weak-strong-ready-mismatch" "Artifact '$artifactId' liveDiagnosticsHistoryMixedWeakStrongEvidenceReady='$summaryMixedWeakStrongReady' but current validation liveDiagnosticsHistoryMixedWeakStrongEvidenceStatus='$expectedMixedWeakStrongStatus' implies '$expectedMixedWeakStrongReady'."
+                    $artifactValidationOk = $false
+                }
+
+                if ([string]::IsNullOrWhiteSpace($summaryMixedWeakStrongStatus)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-mixed-weak-strong-status-missing" "Artifact '$artifactId' must declare liveDiagnosticsHistoryMixedWeakStrongEvidenceStatus."
+                    $artifactValidationOk = $false
+                }
+                elseif (-not [string]::Equals($summaryMixedWeakStrongStatus, $expectedMixedWeakStrongStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-mixed-weak-strong-status-mismatch" "Artifact '$artifactId' liveDiagnosticsHistoryMixedWeakStrongEvidenceStatus='$summaryMixedWeakStrongStatus' but current validation reports '$expectedMixedWeakStrongStatus'."
+                    $artifactValidationOk = $false
+                }
+
+                foreach ($mixedCountSpec in @(
+                        @{ Name = "liveDiagnosticsHistoryMixedWeakStrongTraceCount"; Expected = $liveDiagnosticsHistoryEvidence.mixedWeakStrongTraceCount },
+                        @{ Name = "liveDiagnosticsHistoryMixedWeakStrongReadyTraceCount"; Expected = $liveDiagnosticsHistoryEvidence.mixedWeakStrongReadyTraceCount },
+                        @{ Name = "liveDiagnosticsHistoryMixedWeakStrongMissingTraceCount"; Expected = $liveDiagnosticsHistoryEvidence.mixedWeakStrongMissingTraceCount },
+                        @{ Name = "liveDiagnosticsHistoryMixedWeakStrongGapWatchTraceCount"; Expected = $liveDiagnosticsHistoryEvidence.mixedWeakStrongGapWatchTraceCount }
+                    )) {
+                    $countName = [string]$mixedCountSpec["Name"]
+                    $summaryCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson $countName))
+                    $expectedCount = [int](Get-NumericValueOrDefault $mixedCountSpec["Expected"])
+                    if ($summaryCount -ne $expectedCount) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-mixed-weak-strong-count-mismatch" "Artifact '$artifactId' $countName='$summaryCount' but current validation reports '$expectedCount'."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                $expectedLiveMatrixMixedWeakStrongHuntReady = Test-Truthy $liveMatrixMixedWeakStrongEvidence.huntReady
+                $expectedLiveMatrixMixedWeakStrongStatus = [string]$liveMatrixMixedWeakStrongEvidence.status
+                if ($null -eq $summaryLiveMatrixMixedWeakStrongHuntReadyValue) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-mixed-weak-strong-ready-missing" "Artifact '$artifactId' must declare liveMatrixMixedWeakStrongHuntReady so wrapper summaries expose the matrix hunt advisory."
+                    $artifactValidationOk = $false
+                }
+                elseif ($summaryLiveMatrixMixedWeakStrongHuntReady -ne $expectedLiveMatrixMixedWeakStrongHuntReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-mixed-weak-strong-ready-mismatch" "Artifact '$artifactId' liveMatrixMixedWeakStrongHuntReady='$summaryLiveMatrixMixedWeakStrongHuntReady' but current validation reports '$expectedLiveMatrixMixedWeakStrongHuntReady'."
+                    $artifactValidationOk = $false
+                }
+
+                if ([string]::IsNullOrWhiteSpace($summaryLiveMatrixMixedWeakStrongStatus)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-mixed-weak-strong-status-missing" "Artifact '$artifactId' must declare liveMatrixMixedWeakStrongStatus."
+                    $artifactValidationOk = $false
+                }
+                elseif (-not [string]::Equals($summaryLiveMatrixMixedWeakStrongStatus, $expectedLiveMatrixMixedWeakStrongStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-mixed-weak-strong-status-mismatch" "Artifact '$artifactId' liveMatrixMixedWeakStrongStatus='$summaryLiveMatrixMixedWeakStrongStatus' but current validation reports '$expectedLiveMatrixMixedWeakStrongStatus'."
+                    $artifactValidationOk = $false
+                }
+
+                foreach ($matrixMixedCountSpec in @(
+                        @{ Name = "liveMatrixMixedWeakStrongReportCount"; Value = $summaryLiveMatrixMixedWeakStrongReportCountValue; Summary = $summaryLiveMatrixMixedWeakStrongReportCount; Expected = $liveMatrixMixedWeakStrongEvidence.reportCount },
+                        @{ Name = "liveMatrixMixedWeakStrongSchemaV2ReportCount"; Value = $summaryLiveMatrixMixedWeakStrongSchemaV2ReportCountValue; Summary = $summaryLiveMatrixMixedWeakStrongSchemaV2ReportCount; Expected = $liveMatrixMixedWeakStrongEvidence.schemaV2ReportCount },
+                        @{ Name = "liveMatrixMixedWeakStrongReadyReportCount"; Value = $summaryLiveMatrixMixedWeakStrongReadyReportCountValue; Summary = $summaryLiveMatrixMixedWeakStrongReadyReportCount; Expected = $liveMatrixMixedWeakStrongEvidence.readyReportCount },
+                        @{ Name = "liveMatrixMixedWeakStrongTraceCount"; Value = $summaryLiveMatrixMixedWeakStrongTraceCountValue; Summary = $summaryLiveMatrixMixedWeakStrongTraceCount; Expected = $liveMatrixMixedWeakStrongEvidence.traceCount },
+                        @{ Name = "liveMatrixMixedWeakStrongReadyTraceCount"; Value = $summaryLiveMatrixMixedWeakStrongReadyTraceCountValue; Summary = $summaryLiveMatrixMixedWeakStrongReadyTraceCount; Expected = $liveMatrixMixedWeakStrongEvidence.readyTraceCount },
+                        @{ Name = "liveMatrixMixedWeakStrongMissingRunCount"; Value = $summaryLiveMatrixMixedWeakStrongMissingRunCountValue; Summary = $summaryLiveMatrixMixedWeakStrongMissingRunCount; Expected = $liveMatrixMixedWeakStrongEvidence.missingRunCount },
+                        @{ Name = "liveMatrixMixedWeakStrongGapWatchRunCount"; Value = $summaryLiveMatrixMixedWeakStrongGapWatchRunCountValue; Summary = $summaryLiveMatrixMixedWeakStrongGapWatchRunCount; Expected = $liveMatrixMixedWeakStrongEvidence.gapWatchRunCount },
+                        @{ Name = "liveMatrixMixedWeakStrongWeakInputSampleCount"; Value = $summaryLiveMatrixMixedWeakStrongWeakInputSampleCountValue; Summary = $summaryLiveMatrixMixedWeakStrongWeakInputSampleCount; Expected = $liveMatrixMixedWeakStrongEvidence.weakInputSampleCount },
+                        @{ Name = "liveMatrixMixedWeakStrongStrongInputSampleCount"; Value = $summaryLiveMatrixMixedWeakStrongStrongInputSampleCountValue; Summary = $summaryLiveMatrixMixedWeakStrongStrongInputSampleCount; Expected = $liveMatrixMixedWeakStrongEvidence.strongInputSampleCount }
+                    )) {
+                    $countName = [string]$matrixMixedCountSpec["Name"]
+                    if ($null -eq $matrixMixedCountSpec["Value"]) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-mixed-weak-strong-count-missing" "Artifact '$artifactId' must declare $countName."
+                        $artifactValidationOk = $false
+                        continue
+                    }
+
+                    $summaryCount = [int]$matrixMixedCountSpec["Summary"]
+                    $expectedCount = [int](Get-NumericValueOrDefault $matrixMixedCountSpec["Expected"])
+                    if ($summaryCount -ne $expectedCount) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-mixed-weak-strong-count-mismatch" "Artifact '$artifactId' $countName='$summaryCount' but current validation reports '$expectedCount'."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                if ($null -eq $summaryLiveMatrixMixedWeakStrongStatusCountsValue) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-mixed-weak-strong-status-counts-missing" "Artifact '$artifactId' must declare liveMatrixMixedWeakStrongStatusCounts."
+                    $artifactValidationOk = $false
+                }
+                elseif (-not (Test-LiveHistoryNamedCountsMatch -Actual $summaryLiveMatrixMixedWeakStrongStatusCounts -Expected $liveMatrixMixedWeakStrongEvidence.statusCounts)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-mixed-weak-strong-status-counts-mismatch" "Artifact '$artifactId' liveMatrixMixedWeakStrongStatusCounts does not match strict validation."
+                    $artifactValidationOk = $false
+                }
+
+                $expectedLiveMatrixBestRun = $liveMatrixMixedWeakStrongEvidence.bestRun
+                if ($null -ne $expectedLiveMatrixBestRun -and $null -eq $summaryLiveMatrixMixedWeakStrongBestRun) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-mixed-weak-strong-best-run-missing" "Artifact '$artifactId' must copy liveMatrixMixedWeakStrongBestRun when strict validation selected a best mixed weak/strong matrix run."
+                    $artifactValidationOk = $false
+                }
+                elseif ($null -ne $expectedLiveMatrixBestRun -and $null -ne $summaryLiveMatrixMixedWeakStrongBestRun) {
+                    foreach ($bestRunStringSpec in @(
+                            @{ Name = "scenarioId" },
+                            @{ Name = "comparisonId" },
+                            @{ Name = "mixedWeakStrongEvidenceStatus" }
+                        )) {
+                        $bestRunName = [string]$bestRunStringSpec["Name"]
+                        $summaryBestRunValue = [string](Get-JsonValue $summaryLiveMatrixMixedWeakStrongBestRun $bestRunName)
+                        $expectedBestRunValue = [string](Get-JsonValue $expectedLiveMatrixBestRun $bestRunName)
+                        if (-not [string]::Equals($summaryBestRunValue, $expectedBestRunValue, [StringComparison]::OrdinalIgnoreCase)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-mixed-weak-strong-best-run-mismatch" "Artifact '$artifactId' liveMatrixMixedWeakStrongBestRun.$bestRunName='$summaryBestRunValue' but strict validation reports '$expectedBestRunValue'."
+                            $artifactValidationOk = $false
+                        }
+                    }
+
+                    foreach ($bestRunNumericSpec in @(
+                            @{ Name = "mixedWeakStrongHuntScore" },
+                            @{ Name = "weakStrongOutputGapDb" }
+                        )) {
+                        $bestRunName = [string]$bestRunNumericSpec["Name"]
+                        $summaryBestRunValue = Get-NumericValue (Get-JsonValue $summaryLiveMatrixMixedWeakStrongBestRun $bestRunName)
+                        $expectedBestRunValue = Get-NumericValue (Get-JsonValue $expectedLiveMatrixBestRun $bestRunName)
+                        if (($null -eq $summaryBestRunValue -and $null -ne $expectedBestRunValue) -or
+                            ($null -ne $summaryBestRunValue -and $null -eq $expectedBestRunValue) -or
+                            ($null -ne $summaryBestRunValue -and $null -ne $expectedBestRunValue -and [Math]::Abs([double]$summaryBestRunValue - [double]$expectedBestRunValue) -gt 0.000001)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-mixed-weak-strong-best-run-mismatch" "Artifact '$artifactId' liveMatrixMixedWeakStrongBestRun.$bestRunName='$summaryBestRunValue' but strict validation reports '$expectedBestRunValue'."
+                            $artifactValidationOk = $false
+                        }
+                    }
+                }
+
+                $expectedLiveMatrixArtifactControlStatus = [string]$liveMatrixArtifactControlEvidence.status
+                if ($schemaVersion -ge 7 -and [string]::IsNullOrWhiteSpace($summaryLiveMatrixArtifactControlStatus)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-artifact-control-status-missing" "Artifact '$artifactId' must declare liveMatrixArtifactControlStatus so wrapper summaries expose the matrix artifact-control advisory."
+                    $artifactValidationOk = $false
+                }
+                elseif ($schemaVersion -ge 7 -and -not [string]::Equals($summaryLiveMatrixArtifactControlStatus, $expectedLiveMatrixArtifactControlStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-artifact-control-status-mismatch" "Artifact '$artifactId' liveMatrixArtifactControlStatus='$summaryLiveMatrixArtifactControlStatus' but current validation reports '$expectedLiveMatrixArtifactControlStatus'."
+                    $artifactValidationOk = $false
+                }
+
+                if ($schemaVersion -ge 7) {
+                    foreach ($matrixArtifactCountSpec in @(
+                            @{ Name = "liveMatrixArtifactControlReportCount"; Value = $summaryLiveMatrixArtifactControlReportCountValue; Summary = $summaryLiveMatrixArtifactControlReportCount; Expected = $liveMatrixArtifactControlEvidence.reportCount },
+                            @{ Name = "liveMatrixArtifactControlSchemaV3ReportCount"; Value = $summaryLiveMatrixArtifactControlSchemaV3ReportCountValue; Summary = $summaryLiveMatrixArtifactControlSchemaV3ReportCount; Expected = $liveMatrixArtifactControlEvidence.schemaV3ReportCount },
+                            @{ Name = "liveMatrixArtifactControlReviewRunCount"; Value = $summaryLiveMatrixArtifactControlReviewRunCountValue; Summary = $summaryLiveMatrixArtifactControlReviewRunCount; Expected = $liveMatrixArtifactControlEvidence.artifactReviewRunCount },
+                            @{ Name = "liveMatrixArtifactControlLowEvidenceLiftedSampleCount"; Value = $summaryLiveMatrixArtifactControlLowEvidenceLiftedSampleCountValue; Summary = $summaryLiveMatrixArtifactControlLowEvidenceLiftedSampleCount; Expected = $liveMatrixArtifactControlEvidence.lowEvidenceLiftedSampleCount }
+                        )) {
+                        $countName = [string]$matrixArtifactCountSpec["Name"]
+                        if ($null -eq $matrixArtifactCountSpec["Value"]) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-artifact-control-count-missing" "Artifact '$artifactId' must declare $countName."
+                            $artifactValidationOk = $false
+                            continue
+                        }
+
+                        $summaryCount = [int]$matrixArtifactCountSpec["Summary"]
+                        $expectedCount = [int](Get-NumericValueOrDefault $matrixArtifactCountSpec["Expected"])
+                        if ($summaryCount -ne $expectedCount) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-artifact-control-count-mismatch" "Artifact '$artifactId' $countName='$summaryCount' but current validation reports '$expectedCount'."
+                            $artifactValidationOk = $false
+                        }
+                    }
+
+                    foreach ($matrixArtifactNumericSpec in @(
+                            @{ Name = "liveMatrixArtifactControlRiskScoreMax"; Value = $summaryLiveMatrixArtifactControlRiskScoreMaxValue; Summary = $summaryLiveMatrixArtifactControlRiskScoreMax; Expected = $liveMatrixArtifactControlEvidence.artifactRiskScoreMax },
+                            @{ Name = "liveMatrixArtifactControlLowEvidenceLiftedPctMax"; Value = $summaryLiveMatrixArtifactControlLowEvidenceLiftedPctMaxValue; Summary = $summaryLiveMatrixArtifactControlLowEvidenceLiftedPctMax; Expected = $liveMatrixArtifactControlEvidence.lowEvidenceLiftedPctMax },
+                            @{ Name = "liveMatrixArtifactControlAudioAlignmentMismatchPctMax"; Value = $summaryLiveMatrixArtifactControlAudioAlignmentMismatchPctMaxValue; Summary = $summaryLiveMatrixArtifactControlAudioAlignmentMismatchPctMax; Expected = $liveMatrixArtifactControlEvidence.audioAlignmentMismatchPctMax }
+                        )) {
+                        $numericName = [string]$matrixArtifactNumericSpec["Name"]
+                        $numericValue = $matrixArtifactNumericSpec["Value"]
+                        $summaryNumeric = $matrixArtifactNumericSpec["Summary"]
+                        $expectedNumeric = $matrixArtifactNumericSpec["Expected"]
+                        if ($numericName -eq "liveMatrixArtifactControlRiskScoreMax" -and $null -eq $numericValue) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-artifact-control-numeric-missing" "Artifact '$artifactId' must declare $numericName."
+                            $artifactValidationOk = $false
+                            continue
+                        }
+
+                        if (-not (Test-NumericClose -Actual $summaryNumeric -Expected $expectedNumeric)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-artifact-control-numeric-mismatch" "Artifact '$artifactId' $numericName='$summaryNumeric' but current validation reports '$expectedNumeric'."
+                            $artifactValidationOk = $false
+                        }
+                    }
+
+                    if ($null -eq $summaryLiveMatrixArtifactControlStatusCountsValue) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-artifact-control-status-counts-missing" "Artifact '$artifactId' must declare liveMatrixArtifactControlStatusCounts."
+                        $artifactValidationOk = $false
+                    }
+                    elseif (-not (Test-LiveHistoryNamedCountsMatch -Actual $summaryLiveMatrixArtifactControlStatusCounts -Expected $liveMatrixArtifactControlEvidence.statusCounts)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-artifact-control-status-counts-mismatch" "Artifact '$artifactId' liveMatrixArtifactControlStatusCounts does not match strict validation."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                $commandStepCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "acceptanceCommandStepCount"))
+                if ($commandStepCount -ne 10) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-command-step-count-mismatch" "Artifact '$artifactId' acceptanceCommandStepCount=$commandStepCount but the live acceptance wrapper requires 10 steps."
+                    $artifactValidationOk = $false
+                }
+
+                $expectedArtifactPaths = @(Get-JsonArray $artifactJson "acceptanceExpectedArtifacts" | ForEach-Object { [string]$_ })
+                foreach ($expectedPath in @(
+                        "artifacts/live-diagnostics-trace-index.off-baseline.json",
+                        "artifacts/live-diagnostics-matrix-report.thetis-parity.json",
+                        "artifacts/live-diagnostics-history.json",
+                        "artifacts/live-diagnostics-trace-comparison.json",
+                        "artifacts/live-diagnostics-trace-comparison.thetis-parity.json",
+                        "artifact-manifest.json",
+                        "validation-report.json",
+                        "validation-triage-report.md",
+                        "artifacts/live-acceptance-cycle-summary.json"
+                    )) {
+                    if (-not ($expectedArtifactPaths -contains $expectedPath)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-expected-artifact-missing" "Artifact '$artifactId' acceptanceExpectedArtifacts is missing '$expectedPath'."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                foreach ($summaryPathSpec in @(
+                        @{ Name = "historyReportPath" },
+                        @{ Name = "comparisonReportPath" },
+                        @{ Name = "thetisComparisonReportPath" },
+                        @{ Name = "artifactManifestPath" },
+                        @{ Name = "validationReportPath" },
+                        @{ Name = "triageReportPath" },
+                        @{ Name = "triageMarkdownPath" }
+                    )) {
+                    $pathName = [string]$summaryPathSpec["Name"]
+                    $summaryPathValue = [string](Get-JsonValue $artifactJson $pathName)
+                    if ([string]::IsNullOrWhiteSpace($summaryPathValue)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-path-missing" "Artifact '$artifactId' does not declare $pathName."
+                        $artifactValidationOk = $false
+                        continue
+                    }
+                    if ([System.IO.Path]::IsPathRooted($summaryPathValue)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-path-absolute" "Artifact '$artifactId' $pathName='$summaryPathValue' is absolute; rerun run-dsp-live-acceptance-cycle.ps1 so summary paths are bundle-relative."
+                        $artifactValidationOk = $false
+                        continue
+                    }
+                    $resolvedSummaryPath = Get-BundlePath $bundlePath $summaryPathValue
+                    if (-not (Test-Path -LiteralPath $resolvedSummaryPath -PathType Leaf)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-referenced-file-missing" "Artifact '$artifactId' references a missing $pathName file: $summaryPathValue"
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                $matrixReportPaths = @(Get-JsonArray $artifactJson "matrixReportPaths" | ForEach-Object { [string]$_ })
+                if ($matrixReportPaths.Count -ne 4) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-report-count-mismatch" "Artifact '$artifactId' matrixReportPaths contains $($matrixReportPaths.Count) path(s); expected 4."
+                    $artifactValidationOk = $false
+                }
+                foreach ($matrixReportPath in $matrixReportPaths) {
+                    if ([string]::IsNullOrWhiteSpace($matrixReportPath)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-matrix-report-path-missing" "Artifact '$artifactId' contains an empty matrixReportPaths entry."
+                        $artifactValidationOk = $false
+                        continue
+                    }
+                    if ([System.IO.Path]::IsPathRooted($matrixReportPath)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-path-absolute" "Artifact '$artifactId' matrixReportPaths entry '$matrixReportPath' is absolute; rerun run-dsp-live-acceptance-cycle.ps1 so summary paths are bundle-relative."
+                        $artifactValidationOk = $false
+                        continue
+                    }
+                    $resolvedMatrixReportPath = Get-BundlePath $bundlePath $matrixReportPath
+                    if (-not (Test-Path -LiteralPath $resolvedMatrixReportPath -PathType Leaf)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-referenced-file-missing" "Artifact '$artifactId' references a missing matrix report: $matrixReportPath"
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                $summaryMatrixReady = Test-Truthy (Get-JsonValue $artifactJson "matrixAcceptanceReady")
+                $summaryComparisonReady = Test-Truthy (Get-JsonValue $artifactJson "comparisonReadyForReview")
+                $summaryValidationOk = Test-Truthy (Get-JsonValue $artifactJson "validationOk")
+                $summaryRequiredLiveProblemCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "requiredLiveAcceptanceArtifactProblemCount"))
+                $summaryEvidenceReady = Test-Truthy (Get-JsonValue $artifactJson "liveAcceptanceEvidenceReady")
+                $expectedEvidenceReady = ($summaryMatrixReady -and $summaryComparisonReady -and $summaryThetisComparisonReady -and $summaryMetricCatalogAlignmentReady -and $summaryThetisMetricCatalogAlignmentReady -and $summaryValidationOk -and $summaryRequiredLiveProblemCount -eq 0 -and $summaryHardwareReady -and $summaryAgcStabilityReady -and $summaryMixedWeakStrongReady)
+                if ($summaryEvidenceReady -ne $expectedEvidenceReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-readiness-mismatch" "Artifact '$artifactId' liveAcceptanceEvidenceReady='$summaryEvidenceReady' but matrix/Zeus-comparison/Thetis-comparison/metric-catalog/validation/hardware/AGC-stability/mixed-weak-strong/live-artifact problem fields imply '$expectedEvidenceReady'."
+                    $artifactValidationOk = $false
+                }
+
+                if ($summaryMetricCatalogAlignmentReady -ne (Test-Truthy $liveTraceComparisonEvidence.metricCatalogAlignmentReady)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-metric-catalog-ready-mismatch" "Artifact '$artifactId' comparisonMetricCatalogAlignmentReady='$summaryMetricCatalogAlignmentReady' but current validation liveTraceComparisonMetricCatalogAlignmentReady='$($liveTraceComparisonEvidence.metricCatalogAlignmentReady)'."
+                    $artifactValidationOk = $false
+                }
+                if (-not [string]::Equals($summaryMetricCatalogAlignmentStatus, [string]$liveTraceComparisonEvidence.metricCatalogAlignmentStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-metric-catalog-status-mismatch" "Artifact '$artifactId' comparisonMetricCatalogAlignmentStatus='$summaryMetricCatalogAlignmentStatus' but current validation reports '$($liveTraceComparisonEvidence.metricCatalogAlignmentStatus)'."
+                    $artifactValidationOk = $false
+                }
+                if ($summaryMetricDefinitionCount -ne [int](Get-NumericValueOrDefault $liveTraceComparisonEvidence.metricDefinitionCount)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-metric-definition-count-mismatch" "Artifact '$artifactId' comparisonMetricDefinitionCount='$summaryMetricDefinitionCount' but current validation reports '$($liveTraceComparisonEvidence.metricDefinitionCount)'."
+                    $artifactValidationOk = $false
+                }
+                $expectedMetricCatalogMismatchCount = [int](Get-NumericValueOrDefault $liveTraceComparisonEvidence.metricCatalogDirectionMismatchCount) +
+                    [int](Get-NumericValueOrDefault $liveTraceComparisonEvidence.metricCatalogThresholdMismatchCount) +
+                    [int](Get-NumericValueOrDefault $liveTraceComparisonEvidence.metricCatalogComparatorMismatchCount) +
+                    [int](Get-NumericValueOrDefault $liveTraceComparisonEvidence.metricCatalogSafetyClassMismatchCount) +
+                    [int](Get-NumericValueOrDefault $liveTraceComparisonEvidence.metricCatalogScopeMismatchCount)
+                if ($summaryMetricCatalogMissingMetricCount -ne [int](Get-NumericValueOrDefault $liveTraceComparisonEvidence.metricCatalogMissingMetricCount)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-metric-catalog-missing-count-mismatch" "Artifact '$artifactId' comparisonMetricCatalogMissingMetricCount='$summaryMetricCatalogMissingMetricCount' but current validation reports '$($liveTraceComparisonEvidence.metricCatalogMissingMetricCount)'."
+                    $artifactValidationOk = $false
+                }
+                if ($summaryMetricCatalogMismatchCount -ne $expectedMetricCatalogMismatchCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-metric-catalog-mismatch-count-mismatch" "Artifact '$artifactId' comparisonMetricCatalogMismatchCount='$summaryMetricCatalogMismatchCount' but current validation reports '$expectedMetricCatalogMismatchCount'."
+                    $artifactValidationOk = $false
+                }
+
+                if ($summaryThetisMetricCatalogAlignmentReady -ne (Test-Truthy $liveTraceThetisComparisonEvidence.metricCatalogAlignmentReady)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-thetis-metric-catalog-ready-mismatch" "Artifact '$artifactId' thetisComparisonMetricCatalogAlignmentReady='$summaryThetisMetricCatalogAlignmentReady' but current validation liveTraceThetisComparisonMetricCatalogAlignmentReady='$($liveTraceThetisComparisonEvidence.metricCatalogAlignmentReady)'."
+                    $artifactValidationOk = $false
+                }
+                if (-not [string]::Equals($summaryThetisMetricCatalogAlignmentStatus, [string]$liveTraceThetisComparisonEvidence.metricCatalogAlignmentStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-thetis-metric-catalog-status-mismatch" "Artifact '$artifactId' thetisComparisonMetricCatalogAlignmentStatus='$summaryThetisMetricCatalogAlignmentStatus' but current validation reports '$($liveTraceThetisComparisonEvidence.metricCatalogAlignmentStatus)'."
+                    $artifactValidationOk = $false
+                }
+                if ($summaryThetisMetricDefinitionCount -ne [int](Get-NumericValueOrDefault $liveTraceThetisComparisonEvidence.metricDefinitionCount)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-thetis-metric-definition-count-mismatch" "Artifact '$artifactId' thetisComparisonMetricDefinitionCount='$summaryThetisMetricDefinitionCount' but current validation reports '$($liveTraceThetisComparisonEvidence.metricDefinitionCount)'."
+                    $artifactValidationOk = $false
+                }
+                $expectedThetisMetricCatalogMismatchCount = [int](Get-NumericValueOrDefault $liveTraceThetisComparisonEvidence.metricCatalogDirectionMismatchCount) +
+                    [int](Get-NumericValueOrDefault $liveTraceThetisComparisonEvidence.metricCatalogThresholdMismatchCount) +
+                    [int](Get-NumericValueOrDefault $liveTraceThetisComparisonEvidence.metricCatalogComparatorMismatchCount) +
+                    [int](Get-NumericValueOrDefault $liveTraceThetisComparisonEvidence.metricCatalogSafetyClassMismatchCount) +
+                    [int](Get-NumericValueOrDefault $liveTraceThetisComparisonEvidence.metricCatalogScopeMismatchCount)
+                if ($summaryThetisMetricCatalogMissingMetricCount -ne [int](Get-NumericValueOrDefault $liveTraceThetisComparisonEvidence.metricCatalogMissingMetricCount)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-thetis-metric-catalog-missing-count-mismatch" "Artifact '$artifactId' thetisComparisonMetricCatalogMissingMetricCount='$summaryThetisMetricCatalogMissingMetricCount' but current validation reports '$($liveTraceThetisComparisonEvidence.metricCatalogMissingMetricCount)'."
+                    $artifactValidationOk = $false
+                }
+                if ($summaryThetisMetricCatalogMismatchCount -ne $expectedThetisMetricCatalogMismatchCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-thetis-metric-catalog-mismatch-count-mismatch" "Artifact '$artifactId' thetisComparisonMetricCatalogMismatchCount='$summaryThetisMetricCatalogMismatchCount' but current validation reports '$expectedThetisMetricCatalogMismatchCount'."
+                    $artifactValidationOk = $false
+                }
+
+                $summaryComparisonPath = [string](Get-JsonValue $artifactJson "comparisonReportPath")
+                if (-not [string]::IsNullOrWhiteSpace($summaryComparisonPath) -and -not [System.IO.Path]::IsPathRooted($summaryComparisonPath)) {
+                    $resolvedSummaryComparisonPath = Get-BundlePath $bundlePath $summaryComparisonPath
+                    if (Test-Path -LiteralPath $resolvedSummaryComparisonPath -PathType Leaf) {
+                        try {
+                            $summaryComparisonJson = Read-JsonFile $resolvedSummaryComparisonPath
+                            $comparisonReadyForReview = Test-Truthy (Get-JsonValue $summaryComparisonJson "readyForReview")
+                            if ($summaryComparisonReady -ne $comparisonReadyForReview) {
+                                Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-comparison-ready-mismatch" "Artifact '$artifactId' comparisonReadyForReview='$summaryComparisonReady' but '$summaryComparisonPath' reports readyForReview='$comparisonReadyForReview'."
+                                $artifactValidationOk = $false
+                            }
+                            foreach ($countSpec in @(
+                                    @{ Name = "comparisonRegressionCount"; ReportName = "regressionCount" },
+                                    @{ Name = "comparisonGateFailureCount"; ReportName = "gateFailureCount" }
+                                )) {
+                                $summaryCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson ([string]$countSpec["Name"])))
+                                $reportCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryComparisonJson ([string]$countSpec["ReportName"])))
+                                if ($summaryCount -ne $reportCount) {
+                                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-comparison-count-mismatch" "Artifact '$artifactId' $([string]$countSpec["Name"])=$summaryCount but '$summaryComparisonPath' reports $([string]$countSpec["ReportName"])=$reportCount."
+                                    $artifactValidationOk = $false
+                                }
+                            }
+                        }
+                        catch {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-comparison-json-invalid" "Artifact '$artifactId' could not read comparisonReportPath '$summaryComparisonPath': $($_.Exception.Message)"
+                            $artifactValidationOk = $false
+                        }
+                    }
+                }
+
+                $summaryThetisComparisonPath = [string](Get-JsonValue $artifactJson "thetisComparisonReportPath")
+                if (-not [string]::IsNullOrWhiteSpace($summaryThetisComparisonPath) -and -not [System.IO.Path]::IsPathRooted($summaryThetisComparisonPath)) {
+                    $resolvedSummaryThetisComparisonPath = Get-BundlePath $bundlePath $summaryThetisComparisonPath
+                    if (Test-Path -LiteralPath $resolvedSummaryThetisComparisonPath -PathType Leaf) {
+                        try {
+                            $summaryThetisComparisonJson = Read-JsonFile $resolvedSummaryThetisComparisonPath
+                            $thetisComparisonReadyForReview = Test-Truthy (Get-JsonValue $summaryThetisComparisonJson "readyForReview")
+                            if ($summaryThetisComparisonReady -ne $thetisComparisonReadyForReview) {
+                                Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-thetis-comparison-ready-mismatch" "Artifact '$artifactId' thetisComparisonReadyForReview='$summaryThetisComparisonReady' but '$summaryThetisComparisonPath' reports readyForReview='$thetisComparisonReadyForReview'."
+                                $artifactValidationOk = $false
+                            }
+                            foreach ($countSpec in @(
+                                    @{ Name = "thetisComparisonRegressionCount"; ReportName = "regressionCount" },
+                                    @{ Name = "thetisComparisonGateFailureCount"; ReportName = "gateFailureCount" }
+                                )) {
+                                $summaryCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson ([string]$countSpec["Name"])))
+                                $reportCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryThetisComparisonJson ([string]$countSpec["ReportName"])))
+                                if ($summaryCount -ne $reportCount) {
+                                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-thetis-comparison-count-mismatch" "Artifact '$artifactId' $([string]$countSpec["Name"])=$summaryCount but '$summaryThetisComparisonPath' reports $([string]$countSpec["ReportName"])=$reportCount."
+                                    $artifactValidationOk = $false
+                                }
+                            }
+                        }
+                        catch {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-thetis-comparison-json-invalid" "Artifact '$artifactId' could not read thetisComparisonReportPath '$summaryThetisComparisonPath': $($_.Exception.Message)"
+                            $artifactValidationOk = $false
+                        }
+                    }
+                }
+
+                $summaryTriagePath = [string](Get-JsonValue $artifactJson "triageReportPath")
+                if (-not [string]::IsNullOrWhiteSpace($summaryTriagePath) -and -not [System.IO.Path]::IsPathRooted($summaryTriagePath)) {
+                    $resolvedSummaryTriagePath = Get-BundlePath $bundlePath $summaryTriagePath
+                    if (Test-Path -LiteralPath $resolvedSummaryTriagePath -PathType Leaf) {
+                        try {
+                            $summaryTriageJson = Read-JsonFile $resolvedSummaryTriagePath
+                            foreach ($triageCountSpec in @(
+                                    @{ Name = "requiredLiveAcceptanceArtifactProblemCount"; ReportName = "requiredLiveAcceptanceArtifactProblemCount" },
+                                    @{ Name = "triageAcceptanceActionPlanCount"; ReportName = "acceptanceActionPlanCount" },
+                                    @{ Name = "triageAcceptanceRequiredActionCount"; ReportName = "acceptanceRequiredActionCount" },
+                                    @{ Name = "triageAcceptanceManualActionCount"; ReportName = "acceptanceManualActionCount" },
+                                    @{ Name = "triagePrimaryAcceptanceCommandStepCount"; ReportName = "primaryAcceptanceCommandStepCount" },
+                                    @{ Name = "triagePrimaryAcceptanceExpectedArtifactCount"; ReportName = "primaryAcceptanceExpectedArtifactCount" }
+                                )) {
+                                $summaryCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson ([string]$triageCountSpec["Name"])))
+                                $reportCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryTriageJson ([string]$triageCountSpec["ReportName"])))
+                                if ($summaryCount -ne $reportCount) {
+                                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-count-mismatch" "Artifact '$artifactId' $([string]$triageCountSpec["Name"])=$summaryCount but '$summaryTriagePath' reports $([string]$triageCountSpec["ReportName"])=$reportCount."
+                                    $artifactValidationOk = $false
+                                }
+                            }
+
+                            foreach ($triageStringSpec in @(
+                                    @{ Name = "triagePrimaryAcceptanceActionId"; ReportName = "primaryAcceptanceActionId" },
+                                    @{ Name = "triagePrimaryAcceptanceActionStageId"; ReportName = "primaryAcceptanceActionStageId" },
+                                    @{ Name = "triagePrimaryAcceptanceActionGateId"; ReportName = "primaryAcceptanceActionGateId" },
+                                    @{ Name = "triagePrimaryAcceptanceActionCategory"; ReportName = "primaryAcceptanceActionCategory" },
+                                    @{ Name = "triagePrimaryAcceptanceCommandTemplate"; ReportName = "primaryAcceptanceCommandTemplate" },
+                                    @{ Name = "triagePrimaryAcceptanceManualAction"; ReportName = "primaryAcceptanceManualAction" },
+                                    @{ Name = "triagePrimaryAcceptanceExpectedArtifact"; ReportName = "primaryAcceptanceExpectedArtifact" },
+                                    @{ Name = "triagePrimaryAcceptanceFollowUp"; ReportName = "primaryAcceptanceFollowUp" }
+                                )) {
+                                $summaryText = [string](Get-JsonValue $artifactJson ([string]$triageStringSpec["Name"]))
+                                $reportText = [string](Get-JsonValue $summaryTriageJson ([string]$triageStringSpec["ReportName"]))
+                                if (-not [string]::Equals($summaryText, $reportText, [StringComparison]::Ordinal)) {
+                                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-primary-action-mismatch" "Artifact '$artifactId' $([string]$triageStringSpec["Name"]) does not match '$summaryTriagePath' $([string]$triageStringSpec["ReportName"])."
+                                    $artifactValidationOk = $false
+                                }
+                            }
+
+                            foreach ($triageBoolSpec in @(
+                                    @{ Name = "triagePrimaryAcceptanceActionRequired"; ReportName = "primaryAcceptanceActionRequired" },
+                                    @{ Name = "triagePrimaryAcceptanceActionManual"; ReportName = "primaryAcceptanceActionManual" }
+                                )) {
+                                $summaryBool = Test-Truthy (Get-JsonValue $artifactJson ([string]$triageBoolSpec["Name"]))
+                                $reportBool = Test-Truthy (Get-JsonValue $summaryTriageJson ([string]$triageBoolSpec["ReportName"]))
+                                if ($summaryBool -ne $reportBool) {
+                                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-primary-action-mismatch" "Artifact '$artifactId' $([string]$triageBoolSpec["Name"])=$summaryBool but '$summaryTriagePath' reports $([string]$triageBoolSpec["ReportName"])=$reportBool."
+                                    $artifactValidationOk = $false
+                                }
+                            }
+
+                            $summaryPriority = Get-NumericValue (Get-JsonValue $artifactJson "triagePrimaryAcceptanceActionPriority")
+                            $reportPriority = Get-NumericValue (Get-JsonValue $summaryTriageJson "primaryAcceptanceActionPriority")
+                            if (($null -eq $summaryPriority -and $null -ne $reportPriority) -or
+                                ($null -ne $summaryPriority -and $null -eq $reportPriority) -or
+                                ($null -ne $summaryPriority -and $null -ne $reportPriority -and [Math]::Abs([double]$summaryPriority - [double]$reportPriority) -gt 0.000001)) {
+                                Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-primary-action-mismatch" "Artifact '$artifactId' triagePrimaryAcceptanceActionPriority='$summaryPriority' but '$summaryTriagePath' reports primaryAcceptanceActionPriority='$reportPriority'."
+                                $artifactValidationOk = $false
+                            }
+
+                            foreach ($triageArraySpec in @(
+                                    @{ Name = "triagePrimaryAcceptanceCommandSteps"; ReportName = "primaryAcceptanceCommandSteps" },
+                                    @{ Name = "triagePrimaryAcceptanceExpectedArtifacts"; ReportName = "primaryAcceptanceExpectedArtifacts" }
+                                )) {
+                                $summaryItems = @(Get-JsonArray $artifactJson ([string]$triageArraySpec["Name"]))
+                                $reportItems = @(Get-JsonArray $summaryTriageJson ([string]$triageArraySpec["ReportName"]))
+                                if (-not (Test-StringArraysMatch -Actual $summaryItems -Expected $reportItems)) {
+                                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-primary-action-mismatch" "Artifact '$artifactId' $([string]$triageArraySpec["Name"]) does not match '$summaryTriagePath' $([string]$triageArraySpec["ReportName"])."
+                                    $artifactValidationOk = $false
+                                }
+                            }
+
+                            if (-not (Test-NamedCountsMatchByField `
+                                        -Actual @(Get-JsonArray $artifactJson "triageAcceptanceActionCategoryCounts") `
+                                        -Expected @(Get-JsonArray $summaryTriageJson "acceptanceActionCategoryCounts") `
+                                        -NameField "category")) {
+                                Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-category-count-mismatch" "Artifact '$artifactId' triageAcceptanceActionCategoryCounts does not match '$summaryTriagePath' acceptanceActionCategoryCounts."
+                                $artifactValidationOk = $false
+                            }
+                        }
+                        catch {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-acceptance-cycle-summary-triage-json-invalid" "Artifact '$artifactId' could not read triageReportPath '$summaryTriagePath': $($_.Exception.Message)"
+                            $artifactValidationOk = $false
+                        }
+                    }
+                }
+
+                $liveAcceptanceCycleEvidence["summaryValid"] = $artifactValidationOk
+                if (-not $artifactValidationOk) {
+                    $liveAcceptanceCycleEvidence["status"] = "invalid"
+                }
+                elseif (Test-Truthy $liveAcceptanceCycleEvidence.liveAcceptanceEvidenceReady) {
+                    $liveAcceptanceCycleEvidence["status"] = "ready"
+                }
+                else {
+                    $liveAcceptanceCycleEvidence["status"] = "blocked"
                 }
             }
 
@@ -5522,6 +7852,13 @@ else {
                 $missingCandidate = [int](Get-JsonValue $artifactJson "missingCandidateCount")
                 $missingMetrics = [int](Get-JsonValue $artifactJson "missingMetricValueCount")
                 $candidateComparisons = [int](Get-JsonValue $artifactJson "candidateComparisonCount")
+                $comparisonCatalogRequiredMetrics = [int](Get-JsonValue $artifactJson "metricCatalogRequiredMetricCount")
+                $comparisonCatalogContractReady = Test-Truthy (Get-JsonValue $artifactJson "metricCatalogAcceptanceContractReady")
+                $comparisonCatalogContractProblemIds = @(Get-JsonArray $artifactJson "metricCatalogContractProblemMetricIds")
+                $comparisonCatalogContractProblemCount = [int](Get-JsonValue $artifactJson "metricCatalogContractProblemMetricCount")
+                if ($comparisonCatalogContractProblemCount -eq 0 -and $comparisonCatalogContractProblemIds.Count -gt 0) {
+                    $comparisonCatalogContractProblemCount = $comparisonCatalogContractProblemIds.Count
+                }
 
                 $metricComparisonEvidence["reportReadyForReview"] = $readyForReview
                 $metricComparisonEvidence["metricCoverageReadyForReview"] = $metricCoverageReadyForReview
@@ -5552,9 +7889,17 @@ else {
                 $metricComparisonEvidence["missingCandidateCount"] = $missingCandidate
                 $metricComparisonEvidence["missingMetricValueCount"] = $missingMetrics
                 $metricComparisonEvidence["candidateComparisonCount"] = $candidateComparisons
+                $metricComparisonEvidence["metricCatalogRequiredMetricCount"] = $comparisonCatalogRequiredMetrics
+                $metricComparisonEvidence["metricCatalogAcceptanceContractReady"] = $comparisonCatalogContractReady
+                $metricComparisonEvidence["metricCatalogContractProblemMetricCount"] = $comparisonCatalogContractProblemCount
+                $metricComparisonEvidence["metricCatalogContractProblemMetricIds"] = @($comparisonCatalogContractProblemIds)
 
                 if (-not $readyForReview) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "metric-comparison-not-ready" "Artifact '$artifactId' reports readyForReview=false."
+                    $artifactValidationOk = $false
+                }
+                if (-not $comparisonCatalogContractReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "metric-comparison-catalog-contract-not-ready" "Artifact '$artifactId' metric catalog contract is not ready for required metrics: $($comparisonCatalogContractProblemIds -join ', ')."
                     $artifactValidationOk = $false
                 }
                 if (-not $wdspBackedEvidence) {
@@ -5621,11 +7966,36 @@ else {
                 $matrixFailedRunCount = 0
                 $matrixNotReadyTraceCount = 0
                 $matrixHardBlockerRunCount = 0
+                $matrixHardGatePassRunCount = 0
+                $matrixStrictPreflightPassRunCount = 0
+                $matrixCaptureReadinessStatusCounts = @{}
+                $matrixTopCaptureConstraintRunCounts = @{}
+                $matrixTopCaptureHardConstraintRunCounts = @{}
+                $matrixTopCaptureStatusRunCounts = @{}
+                $matrixTopCaptureConstraintSampleCounts = @{}
+                $matrixTopCaptureHardConstraintSampleCounts = @{}
+                $matrixComparisonStateStatusCounts = @{}
+                $matrixComparisonStateStrictRunCount = 0
+                $matrixComparisonStateReadyRunCount = 0
+                $matrixComparisonStateStrictFailureCount = 0
                 $matrixWeakInputSampleCount = 0
                 $matrixWeakRecoveredSampleCount = 0
                 $matrixWeakDropoutSampleCount = 0
                 $matrixHotMakeupSampleCount = 0
+                $matrixStrongInputSampleCount = 0
+                $matrixMixedWeakStrongTraceCount = 0
+                $matrixMixedWeakStrongReadyTraceCount = 0
+                $matrixMixedWeakStrongGapWatchRunCount = 0
+                $matrixMixedWeakStrongMissingRunCount = 0
+                $matrixMixedWeakStrongStatusCounts = @{}
+                $matrixArtifactReviewRunCount = 0
+                $matrixArtifactRiskScoreMax = 0.0
+                $matrixLowEvidenceLiftedSampleCount = 0
+                $matrixLowEvidenceLiftedPctMax = $null
+                $matrixAudioAlignmentMismatchPctMax = $null
+                $matrixArtifactRiskStatusCounts = @{}
                 $matrixExpectedSamples = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "samples"))
+                $matrixSchemaVersion = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "schemaVersion"))
 
                 foreach ($matrixRun in $matrixRuns) {
                     $runScenarioId = [string](Get-JsonValue $matrixRun "scenarioId")
@@ -5642,6 +8012,44 @@ else {
                     if ([int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "hardBlockerSampleCount")) -gt 0) {
                         $matrixHardBlockerRunCount++
                     }
+                    if (Test-Truthy (Get-JsonValue $matrixRun "hardGatePass")) {
+                        $matrixHardGatePassRunCount++
+                    }
+                    if (Test-Truthy (Get-JsonValue $matrixRun "strictPreflightPass")) {
+                        $matrixStrictPreflightPassRunCount++
+                    }
+                    $runComparisonStateStrict = Test-Truthy (Get-JsonValue $matrixRun "comparisonStateStrict")
+                    $runComparisonStateReady = Test-Truthy (Get-JsonValue $matrixRun "comparisonStateReady")
+                    if ($runComparisonStateStrict) {
+                        $matrixComparisonStateStrictRunCount++
+                        if (-not $runComparisonStateReady) {
+                            $matrixComparisonStateStrictFailureCount++
+                        }
+                    }
+                    if ($runComparisonStateReady) {
+                        $matrixComparisonStateReadyRunCount++
+                    }
+                    foreach ($countSpec in @(
+                            @{ Map = $matrixCaptureReadinessStatusCounts; Name = [string](Get-JsonValue $matrixRun "captureReadinessStatus"); Increment = 1 },
+                            @{ Map = $matrixComparisonStateStatusCounts; Name = [string](Get-JsonValue $matrixRun "comparisonStateStatus"); Increment = 1 },
+                            @{ Map = $matrixTopCaptureConstraintRunCounts; Name = [string](Get-JsonValue $matrixRun "topCaptureConstraintName"); Increment = 1 },
+                            @{ Map = $matrixTopCaptureHardConstraintRunCounts; Name = [string](Get-JsonValue $matrixRun "topCaptureHardConstraintName"); Increment = 1 },
+                            @{ Map = $matrixTopCaptureStatusRunCounts; Name = [string](Get-JsonValue $matrixRun "topCaptureStatusName"); Increment = 1 },
+                            @{ Map = $matrixTopCaptureConstraintSampleCounts; Name = [string](Get-JsonValue $matrixRun "topCaptureConstraintName"); Increment = [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "topCaptureConstraintCount")) },
+                            @{ Map = $matrixTopCaptureHardConstraintSampleCounts; Name = [string](Get-JsonValue $matrixRun "topCaptureHardConstraintName"); Increment = [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "topCaptureHardConstraintCount")) }
+                        )) {
+                        $countName = [string]$countSpec["Name"]
+                        $increment = [int]$countSpec["Increment"]
+                        if ([string]::IsNullOrWhiteSpace($countName) -or $increment -le 0) {
+                            continue
+                        }
+
+                        $map = $countSpec["Map"]
+                        if (-not $map.ContainsKey($countName)) {
+                            $map[$countName] = 0
+                        }
+                        $map[$countName] = [int]$map[$countName] + $increment
+                    }
 
                     $runOkSamples = [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "okSampleCount"))
                     $runFailedSamples = [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "failedSampleCount"))
@@ -5654,6 +8062,64 @@ else {
                     $matrixWeakRecoveredSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "nr5WeakRecoveredSampleCount"))
                     $matrixWeakDropoutSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "nr5WeakDropoutSampleCount"))
                     $matrixHotMakeupSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "nr5HotMakeupSampleCount"))
+                    $runWeakInput = [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "nr5WeakInputSampleCount"))
+                    $runStrongInput = [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "nr5StrongInputSampleCount"))
+                    $matrixStrongInputSampleCount += $runStrongInput
+                    if ($runWeakInput -gt 0 -and $runStrongInput -gt 0) {
+                        $matrixMixedWeakStrongTraceCount++
+                    }
+                    else {
+                        $matrixMixedWeakStrongMissingRunCount++
+                    }
+                    if (Test-Truthy (Get-JsonValue $matrixRun "nr5WeakStrongOutputParityReady")) {
+                        $matrixMixedWeakStrongReadyTraceCount++
+                    }
+                    $runMixedStatus = [string](Get-JsonValue $matrixRun "nr5MixedWeakStrongEvidenceStatus")
+                    if ([string]::IsNullOrWhiteSpace($runMixedStatus)) {
+                        $runMixedStatus = "not-evaluated"
+                    }
+                    if ([string]::Equals($runMixedStatus, "weak-strong-output-gap-watch", [StringComparison]::OrdinalIgnoreCase)) {
+                        $matrixMixedWeakStrongGapWatchRunCount++
+                    }
+                    if (-not $matrixMixedWeakStrongStatusCounts.ContainsKey($runMixedStatus)) {
+                        $matrixMixedWeakStrongStatusCounts[$runMixedStatus] = 0
+                    }
+                    $matrixMixedWeakStrongStatusCounts[$runMixedStatus] = [int]$matrixMixedWeakStrongStatusCounts[$runMixedStatus] + 1
+
+                    $runArtifactStatus = [string](Get-JsonValue $matrixRun "nr5ArtifactRiskStatus")
+                    if ([string]::IsNullOrWhiteSpace($runArtifactStatus)) {
+                        $runArtifactStatus = "not-evaluated"
+                    }
+                    if (-not $matrixArtifactRiskStatusCounts.ContainsKey($runArtifactStatus)) {
+                        $matrixArtifactRiskStatusCounts[$runArtifactStatus] = 0
+                    }
+                    $matrixArtifactRiskStatusCounts[$runArtifactStatus] = [int]$matrixArtifactRiskStatusCounts[$runArtifactStatus] + 1
+                    if ([string]::Equals($runArtifactStatus, "artifact-review", [StringComparison]::OrdinalIgnoreCase)) {
+                        $matrixArtifactReviewRunCount++
+                    }
+                    $runArtifactRiskScore = Get-NumericValue (Get-JsonValue $matrixRun "nr5ArtifactRiskScore")
+                    if ($null -ne $runArtifactRiskScore) {
+                        $matrixArtifactRiskScoreMax = [Math]::Max([double]$matrixArtifactRiskScoreMax, [double]$runArtifactRiskScore)
+                    }
+                    $matrixLowEvidenceLiftedSampleCount += [int](Get-NumericValueOrDefault (Get-JsonValue $matrixRun "nr5LowEvidenceLiftedSampleCount"))
+                    $runLowEvidenceLiftedPct = Get-NumericValue (Get-JsonValue $matrixRun "nr5LowEvidenceLiftedPct")
+                    if ($null -ne $runLowEvidenceLiftedPct) {
+                        if ($null -eq $matrixLowEvidenceLiftedPctMax) {
+                            $matrixLowEvidenceLiftedPctMax = [double]$runLowEvidenceLiftedPct
+                        }
+                        else {
+                            $matrixLowEvidenceLiftedPctMax = [Math]::Max([double]$matrixLowEvidenceLiftedPctMax, [double]$runLowEvidenceLiftedPct)
+                        }
+                    }
+                    $runAudioAlignmentMismatchPct = Get-NumericValue (Get-JsonValue $matrixRun "nr5AudioAlignmentMismatchPct")
+                    if ($null -ne $runAudioAlignmentMismatchPct) {
+                        if ($null -eq $matrixAudioAlignmentMismatchPctMax) {
+                            $matrixAudioAlignmentMismatchPctMax = [double]$runAudioAlignmentMismatchPct
+                        }
+                        else {
+                            $matrixAudioAlignmentMismatchPctMax = [Math]::Max([double]$matrixAudioAlignmentMismatchPctMax, [double]$runAudioAlignmentMismatchPct)
+                        }
+                    }
                 }
 
                 $matrixScenarioCount = @($matrixScenarioIds.ToArray() | Select-Object -Unique).Count
@@ -5661,6 +8127,98 @@ else {
                 $reportedMatrixFailedRunCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "failedRunCount"))
                 $reportedMatrixNotReadyTraceCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "notReadyTraceCount"))
                 $reportedMatrixHardBlockerRunCount = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "hardBlockerRunCount"))
+                $reportedMatrixHardGatePassRunCount = Get-NumericValue (Get-JsonValue $artifactJson "hardGatePassRunCount")
+                $reportedMatrixStrictPreflightPassRunCount = Get-NumericValue (Get-JsonValue $artifactJson "strictPreflightPassRunCount")
+                $expectedMatrixCaptureReadinessStatusCounts = @(foreach ($entry in @($matrixCaptureReadinessStatusCounts.GetEnumerator() | Sort-Object Name)) { [ordered]@{ name = [string]$entry.Key; count = [int]$entry.Value } })
+                $expectedMatrixTopCaptureConstraintRunCounts = @(foreach ($entry in @($matrixTopCaptureConstraintRunCounts.GetEnumerator() | Sort-Object Name)) { [ordered]@{ name = [string]$entry.Key; count = [int]$entry.Value } })
+                $expectedMatrixTopCaptureHardConstraintRunCounts = @(foreach ($entry in @($matrixTopCaptureHardConstraintRunCounts.GetEnumerator() | Sort-Object Name)) { [ordered]@{ name = [string]$entry.Key; count = [int]$entry.Value } })
+                $expectedMatrixTopCaptureStatusRunCounts = @(foreach ($entry in @($matrixTopCaptureStatusRunCounts.GetEnumerator() | Sort-Object Name)) { [ordered]@{ name = [string]$entry.Key; count = [int]$entry.Value } })
+                $expectedMatrixTopCaptureConstraintSampleCounts = @(foreach ($entry in @($matrixTopCaptureConstraintSampleCounts.GetEnumerator() | Sort-Object Name)) { [ordered]@{ name = [string]$entry.Key; count = [int]$entry.Value } })
+                $expectedMatrixTopCaptureHardConstraintSampleCounts = @(foreach ($entry in @($matrixTopCaptureHardConstraintSampleCounts.GetEnumerator() | Sort-Object Name)) { [ordered]@{ name = [string]$entry.Key; count = [int]$entry.Value } })
+                $expectedMatrixComparisonStateStatusCounts = @(foreach ($entry in @($matrixComparisonStateStatusCounts.GetEnumerator() | Sort-Object Name)) { [ordered]@{ name = [string]$entry.Key; count = [int]$entry.Value } })
+                $expectedMatrixMixedWeakStrongStatusCounts = @(foreach ($entry in @($matrixMixedWeakStrongStatusCounts.GetEnumerator() | Sort-Object Name)) { [ordered]@{ name = [string]$entry.Key; count = [int]$entry.Value } })
+                $expectedMatrixArtifactRiskStatusCounts = @(foreach ($entry in @($matrixArtifactRiskStatusCounts.GetEnumerator() | Sort-Object Name)) { [ordered]@{ name = [string]$entry.Key; count = [int]$entry.Value } })
+                $liveMatrixMixedWeakStrongEvidence["present"] = $true
+                $liveMatrixMixedWeakStrongEvidence["reportCount"] = [int]$liveMatrixMixedWeakStrongEvidence["reportCount"] + 1
+                $liveMatrixArtifactControlEvidence["present"] = $true
+                $liveMatrixArtifactControlEvidence["reportCount"] = [int]$liveMatrixArtifactControlEvidence["reportCount"] + 1
+                if ($matrixSchemaVersion -ge 2) {
+                    $liveMatrixMixedWeakStrongEvidence["schemaV2ReportCount"] = [int]$liveMatrixMixedWeakStrongEvidence["schemaV2ReportCount"] + 1
+                    $liveMatrixMixedWeakStrongEvidence["traceCount"] = [int]$liveMatrixMixedWeakStrongEvidence["traceCount"] + $matrixMixedWeakStrongTraceCount
+                    $liveMatrixMixedWeakStrongEvidence["readyTraceCount"] = [int]$liveMatrixMixedWeakStrongEvidence["readyTraceCount"] + $matrixMixedWeakStrongReadyTraceCount
+                    $liveMatrixMixedWeakStrongEvidence["missingRunCount"] = [int]$liveMatrixMixedWeakStrongEvidence["missingRunCount"] + $matrixMixedWeakStrongMissingRunCount
+                    $liveMatrixMixedWeakStrongEvidence["gapWatchRunCount"] = [int]$liveMatrixMixedWeakStrongEvidence["gapWatchRunCount"] + $matrixMixedWeakStrongGapWatchRunCount
+                    $liveMatrixMixedWeakStrongEvidence["weakInputSampleCount"] = [int]$liveMatrixMixedWeakStrongEvidence["weakInputSampleCount"] + $matrixWeakInputSampleCount
+                    $liveMatrixMixedWeakStrongEvidence["strongInputSampleCount"] = [int]$liveMatrixMixedWeakStrongEvidence["strongInputSampleCount"] + $matrixStrongInputSampleCount
+                    if ($matrixMixedWeakStrongReadyTraceCount -gt 0) {
+                        $liveMatrixMixedWeakStrongEvidence["huntReady"] = $true
+                        $liveMatrixMixedWeakStrongEvidence["readyReportCount"] = [int]$liveMatrixMixedWeakStrongEvidence["readyReportCount"] + 1
+                    }
+                    foreach ($statusEntry in @($expectedMatrixMixedWeakStrongStatusCounts)) {
+                        $statusName = [string](Get-JsonValue $statusEntry "name")
+                        $statusCount = [int](Get-NumericValueOrDefault (Get-JsonValue $statusEntry "count"))
+                        if ([string]::IsNullOrWhiteSpace($statusName) -or $statusCount -le 0) {
+                            continue
+                        }
+                        if (-not $liveMatrixMixedWeakStrongStatusCountMap.ContainsKey($statusName)) {
+                            $liveMatrixMixedWeakStrongStatusCountMap[$statusName] = 0
+                        }
+                        $liveMatrixMixedWeakStrongStatusCountMap[$statusName] = [int]$liveMatrixMixedWeakStrongStatusCountMap[$statusName] + $statusCount
+                    }
+
+                    $reportedBestRun = Get-JsonValue $artifactJson "bestMixedWeakStrongRun"
+                    $reportedBestScore = Get-NumericValue (Get-JsonValue $reportedBestRun "nr5MixedWeakStrongHuntScore")
+                    if ($null -ne $reportedBestRun -and $null -ne $reportedBestScore -and
+                        ($null -eq $liveMatrixMixedWeakStrongBestScore -or [double]$reportedBestScore -gt [double]$liveMatrixMixedWeakStrongBestScore)) {
+                        $liveMatrixMixedWeakStrongBestScore = [double]$reportedBestScore
+                        $liveMatrixMixedWeakStrongEvidence["bestRun"] = [ordered]@{
+                            artifactId = $artifactId
+                            artifactPath = $artifactPath
+                            scenarioId = [string](Get-JsonValue $reportedBestRun "scenarioId")
+                            comparisonId = [string](Get-JsonValue $reportedBestRun "comparisonId")
+                            reportPath = [string](Get-JsonValue $reportedBestRun "reportPath")
+                            readyForBenchmarkTrace = Test-Truthy (Get-JsonValue $reportedBestRun "readyForBenchmarkTrace")
+                            weakInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $reportedBestRun "nr5WeakInputSampleCount"))
+                            strongInputSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $reportedBestRun "nr5StrongInputSampleCount"))
+                            weakStrongOutputGapDb = Get-NumericValue (Get-JsonValue $reportedBestRun "nr5WeakStrongOutputGapDb")
+                            mixedWeakStrongEvidenceStatus = [string](Get-JsonValue $reportedBestRun "nr5MixedWeakStrongEvidenceStatus")
+                            mixedWeakStrongHuntScore = [double]$reportedBestScore
+                        }
+                    }
+                }
+                if ($matrixSchemaVersion -ge 3) {
+                    $liveMatrixArtifactControlEvidence["schemaV3ReportCount"] = [int]$liveMatrixArtifactControlEvidence["schemaV3ReportCount"] + 1
+                    $liveMatrixArtifactControlEvidence["artifactReviewRunCount"] = [int]$liveMatrixArtifactControlEvidence["artifactReviewRunCount"] + $matrixArtifactReviewRunCount
+                    $liveMatrixArtifactControlEvidence["artifactRiskScoreMax"] = [Math]::Max([double]$liveMatrixArtifactControlEvidence["artifactRiskScoreMax"], [double]$matrixArtifactRiskScoreMax)
+                    $liveMatrixArtifactControlEvidence["lowEvidenceLiftedSampleCount"] = [int]$liveMatrixArtifactControlEvidence["lowEvidenceLiftedSampleCount"] + $matrixLowEvidenceLiftedSampleCount
+                    if ($null -ne $matrixLowEvidenceLiftedPctMax) {
+                        if ($null -eq $liveMatrixArtifactControlEvidence["lowEvidenceLiftedPctMax"]) {
+                            $liveMatrixArtifactControlEvidence["lowEvidenceLiftedPctMax"] = [double]$matrixLowEvidenceLiftedPctMax
+                        }
+                        else {
+                            $liveMatrixArtifactControlEvidence["lowEvidenceLiftedPctMax"] = [Math]::Max([double]$liveMatrixArtifactControlEvidence["lowEvidenceLiftedPctMax"], [double]$matrixLowEvidenceLiftedPctMax)
+                        }
+                    }
+                    if ($null -ne $matrixAudioAlignmentMismatchPctMax) {
+                        if ($null -eq $liveMatrixArtifactControlEvidence["audioAlignmentMismatchPctMax"]) {
+                            $liveMatrixArtifactControlEvidence["audioAlignmentMismatchPctMax"] = [double]$matrixAudioAlignmentMismatchPctMax
+                        }
+                        else {
+                            $liveMatrixArtifactControlEvidence["audioAlignmentMismatchPctMax"] = [Math]::Max([double]$liveMatrixArtifactControlEvidence["audioAlignmentMismatchPctMax"], [double]$matrixAudioAlignmentMismatchPctMax)
+                        }
+                    }
+                    foreach ($statusEntry in @($expectedMatrixArtifactRiskStatusCounts)) {
+                        $statusName = [string](Get-JsonValue $statusEntry "name")
+                        $statusCount = [int](Get-NumericValueOrDefault (Get-JsonValue $statusEntry "count"))
+                        if ([string]::IsNullOrWhiteSpace($statusName) -or $statusCount -le 0) {
+                            continue
+                        }
+                        if (-not $liveMatrixArtifactControlStatusCountMap.ContainsKey($statusName)) {
+                            $liveMatrixArtifactControlStatusCountMap[$statusName] = 0
+                        }
+                        $liveMatrixArtifactControlStatusCountMap[$statusName] = [int]$liveMatrixArtifactControlStatusCountMap[$statusName] + $statusCount
+                    }
+                }
 
                 if ($reportedMatrixScenarioCount -ne $matrixScenarioCount) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-scenario-count-mismatch" "Artifact '$artifactId' reports scenarioCount=$reportedMatrixScenarioCount but runs cover $matrixScenarioCount scenario(s)."
@@ -5678,15 +8236,61 @@ else {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-hard-blocker-count-mismatch" "Artifact '$artifactId' reports hardBlockerRunCount=$reportedMatrixHardBlockerRunCount but runs contain $matrixHardBlockerRunCount hard-blocker run(s)."
                     $artifactValidationOk = $false
                 }
+                if ($null -ne $reportedMatrixHardGatePassRunCount -and [int]$reportedMatrixHardGatePassRunCount -ne $matrixHardGatePassRunCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-capture-readiness-count-mismatch" "Artifact '$artifactId' reports hardGatePassRunCount=$([int]$reportedMatrixHardGatePassRunCount) but runs contain $matrixHardGatePassRunCount hard-gate pass run(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($null -ne $reportedMatrixStrictPreflightPassRunCount -and [int]$reportedMatrixStrictPreflightPassRunCount -ne $matrixStrictPreflightPassRunCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-capture-readiness-count-mismatch" "Artifact '$artifactId' reports strictPreflightPassRunCount=$([int]$reportedMatrixStrictPreflightPassRunCount) but runs contain $matrixStrictPreflightPassRunCount strict-preflight pass run(s)."
+                    $artifactValidationOk = $false
+                }
+                $reportedMatrixComparisonStateStrictRunCount = Get-NumericValue (Get-JsonValue $artifactJson "comparisonStateStrictRunCount")
+                $reportedMatrixComparisonStateReadyRunCount = Get-NumericValue (Get-JsonValue $artifactJson "comparisonStateReadyRunCount")
+                $reportedMatrixComparisonStateStrictFailureCount = Get-NumericValue (Get-JsonValue $artifactJson "comparisonStateStrictFailureCount")
+                if ($null -ne $reportedMatrixComparisonStateStrictRunCount -and [int]$reportedMatrixComparisonStateStrictRunCount -ne $matrixComparisonStateStrictRunCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-comparison-state-count-mismatch" "Artifact '$artifactId' reports comparisonStateStrictRunCount=$([int]$reportedMatrixComparisonStateStrictRunCount) but runs contain $matrixComparisonStateStrictRunCount strict state run(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($null -ne $reportedMatrixComparisonStateReadyRunCount -and [int]$reportedMatrixComparisonStateReadyRunCount -ne $matrixComparisonStateReadyRunCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-comparison-state-count-mismatch" "Artifact '$artifactId' reports comparisonStateReadyRunCount=$([int]$reportedMatrixComparisonStateReadyRunCount) but runs contain $matrixComparisonStateReadyRunCount state-ready run(s)."
+                    $artifactValidationOk = $false
+                }
+                if ($null -ne $reportedMatrixComparisonStateStrictFailureCount -and [int]$reportedMatrixComparisonStateStrictFailureCount -ne $matrixComparisonStateStrictFailureCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-comparison-state-count-mismatch" "Artifact '$artifactId' reports comparisonStateStrictFailureCount=$([int]$reportedMatrixComparisonStateStrictFailureCount) but runs contain $matrixComparisonStateStrictFailureCount strict state failure(s)."
+                    $artifactValidationOk = $false
+                }
+                foreach ($captureCountSpec in @(
+                        @{ Name = "captureReadinessStatusCounts"; Expected = $expectedMatrixCaptureReadinessStatusCounts },
+                        @{ Name = "comparisonStateStatusCounts"; Expected = $expectedMatrixComparisonStateStatusCounts },
+                        @{ Name = "topCaptureConstraintRunCounts"; Expected = $expectedMatrixTopCaptureConstraintRunCounts },
+                        @{ Name = "topCaptureHardConstraintRunCounts"; Expected = $expectedMatrixTopCaptureHardConstraintRunCounts },
+                        @{ Name = "topCaptureStatusRunCounts"; Expected = $expectedMatrixTopCaptureStatusRunCounts },
+                        @{ Name = "topCaptureConstraintSampleCounts"; Expected = $expectedMatrixTopCaptureConstraintSampleCounts },
+                        @{ Name = "topCaptureHardConstraintSampleCounts"; Expected = $expectedMatrixTopCaptureHardConstraintSampleCounts }
+                    )) {
+                    $countName = [string]$captureCountSpec["Name"]
+                    $actualCounts = @(Get-JsonArray $artifactJson $countName)
+                    if ($actualCounts.Count -eq 0) {
+                        continue
+                    }
+                    if (-not (Test-LiveHistoryNamedCountsMatch -Actual $actualCounts -Expected @($captureCountSpec["Expected"]))) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-capture-readiness-count-mismatch" "Artifact '$artifactId' $countName does not match the runs[] capture-readiness rollup."
+                        $artifactValidationOk = $false
+                    }
+                }
 
                 $expectedMatrixCollectionReady = ($matrixFailedRunCount -eq 0)
-                $expectedMatrixAcceptanceReady = ($matrixFailedRunCount -eq 0 -and $matrixNotReadyTraceCount -eq 0 -and $matrixHardBlockerRunCount -eq 0)
+                $expectedMatrixAcceptanceReady = ($matrixFailedRunCount -eq 0 -and $matrixNotReadyTraceCount -eq 0 -and $matrixHardBlockerRunCount -eq 0 -and $matrixComparisonStateStrictFailureCount -eq 0)
                 if ((Test-Truthy (Get-JsonValue $artifactJson "collectionReady")) -ne $expectedMatrixCollectionReady) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-collection-ready-mismatch" "Artifact '$artifactId' collectionReady does not match failedRunCount."
                     $artifactValidationOk = $false
                 }
                 if ((Test-Truthy (Get-JsonValue $artifactJson "acceptanceReady")) -ne $expectedMatrixAcceptanceReady) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-acceptance-ready-mismatch" "Artifact '$artifactId' acceptanceReady does not match failed/not-ready/hard-blocker counts."
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-acceptance-ready-mismatch" "Artifact '$artifactId' acceptanceReady does not match failed/not-ready/hard-blocker/comparison-state counts."
+                    $artifactValidationOk = $false
+                }
+                if ($matrixComparisonStateStrictFailureCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-comparison-state-not-ready" "Artifact '$artifactId' has $matrixComparisonStateStrictFailureCount strict comparison-state failure run(s)."
                     $artifactValidationOk = $false
                 }
 
@@ -5701,6 +8305,75 @@ else {
                     $expectedCounter = [int]$counterSpec["Expected"]
                     if ($reportedCounter -ne $expectedCounter) {
                         Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-weak-counter-mismatch" "Artifact '$artifactId' reports $counterName=$reportedCounter but runs sum to $expectedCounter."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                if ($matrixSchemaVersion -ge 2) {
+                    foreach ($mixedCounterSpec in @(
+                            @{ Name = "nr5StrongInputSampleCount"; Expected = $matrixStrongInputSampleCount },
+                            @{ Name = "nr5MixedWeakStrongTraceCount"; Expected = $matrixMixedWeakStrongTraceCount },
+                            @{ Name = "nr5MixedWeakStrongReadyTraceCount"; Expected = $matrixMixedWeakStrongReadyTraceCount },
+                            @{ Name = "nr5MixedWeakStrongMissingRunCount"; Expected = $matrixMixedWeakStrongMissingRunCount },
+                            @{ Name = "nr5MixedWeakStrongGapWatchRunCount"; Expected = $matrixMixedWeakStrongGapWatchRunCount }
+                        )) {
+                        $counterName = [string]$mixedCounterSpec["Name"]
+                        $reportedCounterValue = Get-NumericValue (Get-JsonValue $artifactJson $counterName)
+                        $expectedCounterValue = [int]$mixedCounterSpec["Expected"]
+                        if ($null -eq $reportedCounterValue -or [int]$reportedCounterValue -ne $expectedCounterValue) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-mixed-weak-strong-count-mismatch" "Artifact '$artifactId' reports $counterName='$reportedCounterValue' but runs imply $expectedCounterValue."
+                            $artifactValidationOk = $false
+                        }
+                    }
+
+                    $reportedMixedHuntReady = Test-Truthy (Get-JsonValue $artifactJson "nr5MixedWeakStrongHuntReady")
+                    $expectedMixedHuntReady = ($matrixMixedWeakStrongReadyTraceCount -gt 0)
+                    if ($reportedMixedHuntReady -ne $expectedMixedHuntReady) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-mixed-weak-strong-ready-mismatch" "Artifact '$artifactId' nr5MixedWeakStrongHuntReady=$reportedMixedHuntReady but runs imply $expectedMixedHuntReady."
+                        $artifactValidationOk = $false
+                    }
+
+                    $reportedMixedStatusCounts = @(Get-JsonArray $artifactJson "nr5MixedWeakStrongStatusCounts")
+                    if (-not (Test-LiveHistoryNamedCountsMatch -Actual $reportedMixedStatusCounts -Expected $expectedMatrixMixedWeakStrongStatusCounts)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-mixed-weak-strong-status-count-mismatch" "Artifact '$artifactId' nr5MixedWeakStrongStatusCounts does not match runs[]."
+                        $artifactValidationOk = $false
+                    }
+                }
+
+                if ($matrixSchemaVersion -ge 3) {
+                    foreach ($artifactCounterSpec in @(
+                            @{ Name = "nr5ArtifactReviewRunCount"; Expected = $matrixArtifactReviewRunCount },
+                            @{ Name = "nr5LowEvidenceLiftedSampleCount"; Expected = $matrixLowEvidenceLiftedSampleCount }
+                        )) {
+                        $counterName = [string]$artifactCounterSpec["Name"]
+                        $reportedCounterValue = Get-NumericValue (Get-JsonValue $artifactJson $counterName)
+                        $expectedCounterValue = [int]$artifactCounterSpec["Expected"]
+                        if ($null -eq $reportedCounterValue -or [int]$reportedCounterValue -ne $expectedCounterValue) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-artifact-control-count-mismatch" "Artifact '$artifactId' reports $counterName='$reportedCounterValue' but runs imply $expectedCounterValue."
+                            $artifactValidationOk = $false
+                        }
+                    }
+
+                    foreach ($artifactScalarSpec in @(
+                            @{ Name = "nr5ArtifactRiskScoreMax"; Expected = $matrixArtifactRiskScoreMax },
+                            @{ Name = "nr5LowEvidenceLiftedPctMax"; Expected = $matrixLowEvidenceLiftedPctMax },
+                            @{ Name = "nr5AudioAlignmentMismatchPctMax"; Expected = $matrixAudioAlignmentMismatchPctMax }
+                        )) {
+                        $fieldName = [string]$artifactScalarSpec["Name"]
+                        $reportedScalar = Get-NumericValue (Get-JsonValue $artifactJson $fieldName)
+                        $expectedScalar = $artifactScalarSpec["Expected"]
+                        if ($null -eq $reportedScalar -and $null -eq $expectedScalar) {
+                            continue
+                        }
+                        if ($null -eq $reportedScalar -or -not (Test-NumericClose -Actual $reportedScalar -Expected $expectedScalar)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-artifact-control-scalar-mismatch" "Artifact '$artifactId' reports $fieldName='$reportedScalar' but runs imply '$expectedScalar'."
+                            $artifactValidationOk = $false
+                        }
+                    }
+
+                    $reportedArtifactStatusCounts = @(Get-JsonArray $artifactJson "nr5ArtifactRiskStatusCounts")
+                    if (-not (Test-LiveHistoryNamedCountsMatch -Actual $reportedArtifactStatusCounts -Expected $expectedMatrixArtifactRiskStatusCounts)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-artifact-control-status-count-mismatch" "Artifact '$artifactId' nr5ArtifactRiskStatusCounts does not match runs[]."
                         $artifactValidationOk = $false
                     }
                 }
@@ -5740,6 +8413,7 @@ else {
                         }
 
                         if ($null -ne $matrixIndexJson) {
+                            $matrixIndexSchemaVersion = [int](Get-NumericValueOrDefault (Get-JsonValue $matrixIndexJson "schemaVersion"))
                             $matrixIndexEntries = @(Get-JsonArray $matrixIndexJson "files")
                             foreach ($matrixRun in $matrixRuns) {
                                 $runScenarioId = ConvertTo-LiveHistoryScenarioId ([string](Get-JsonValue $matrixRun "scenarioId"))
@@ -5792,6 +8466,54 @@ else {
                                     }
                                 }
 
+                                $runCaptureReadinessStatus = [string](Get-JsonValue $matrixRun "captureReadinessStatus")
+                                $indexCaptureReadinessStatus = [string](Get-JsonValue $matchingIndexEntry "captureReadinessStatus")
+                                if (-not [string]::IsNullOrWhiteSpace($runCaptureReadinessStatus) -and
+                                    -not [string]::IsNullOrWhiteSpace($indexCaptureReadinessStatus) -and
+                                    -not [string]::Equals($runCaptureReadinessStatus, $indexCaptureReadinessStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-capture-readiness-mismatch" "Artifact '$artifactId' run '$runLabel' captureReadinessStatus='$runCaptureReadinessStatus' but trace-index entry reports '$indexCaptureReadinessStatus'."
+                                    $artifactValidationOk = $false
+                                }
+
+                                foreach ($readinessBoolSpec in @("hardGatePass", "strictPreflightPass")) {
+                                    $runValue = Get-JsonValue $matrixRun $readinessBoolSpec
+                                    $indexValue = Get-JsonValue $matchingIndexEntry $readinessBoolSpec
+                                    if ($null -ne $runValue -and $null -ne $indexValue -and (Test-Truthy $runValue) -ne (Test-Truthy $indexValue)) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-capture-readiness-mismatch" "Artifact '$artifactId' run '$runLabel' $readinessBoolSpec='$runValue' but trace-index entry reports '$indexValue'."
+                                        $artifactValidationOk = $false
+                                    }
+                                }
+
+                                foreach ($readinessFieldSpec in @(
+                                        @{ Name = "topCaptureConstraintName"; Kind = "text" },
+                                        @{ Name = "topCaptureHardConstraintName"; Kind = "text" },
+                                        @{ Name = "topCaptureStatusName"; Kind = "text" },
+                                        @{ Name = "topCaptureConstraintCount"; Kind = "number" },
+                                        @{ Name = "topCaptureHardConstraintCount"; Kind = "number" },
+                                        @{ Name = "topCaptureStatusCount"; Kind = "number" }
+                                    )) {
+                                    $fieldName = [string]$readinessFieldSpec["Name"]
+                                    $kind = [string]$readinessFieldSpec["Kind"]
+                                    if ($kind -eq "text") {
+                                        $runValue = [string](Get-JsonValue $matrixRun $fieldName)
+                                        $indexValue = [string](Get-JsonValue $matchingIndexEntry $fieldName)
+                                        if (-not [string]::IsNullOrWhiteSpace($runValue) -and
+                                            -not [string]::IsNullOrWhiteSpace($indexValue) -and
+                                            -not [string]::Equals($runValue, $indexValue, [StringComparison]::OrdinalIgnoreCase)) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-capture-readiness-mismatch" "Artifact '$artifactId' run '$runLabel' $fieldName='$runValue' but trace-index entry reports '$indexValue'."
+                                            $artifactValidationOk = $false
+                                        }
+                                    }
+                                    else {
+                                        $runValue = Get-NumericValue (Get-JsonValue $matrixRun $fieldName)
+                                        $indexValue = Get-NumericValue (Get-JsonValue $matchingIndexEntry $fieldName)
+                                        if ($null -ne $runValue -and $null -ne $indexValue -and [int]$runValue -ne [int]$indexValue) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-capture-readiness-mismatch" "Artifact '$artifactId' run '$runLabel' $fieldName=$([int]$runValue) but trace-index entry reports $([int]$indexValue)."
+                                            $artifactValidationOk = $false
+                                        }
+                                    }
+                                }
+
                                 foreach ($counterSpec in @(
                                         @{ Name = "nr5WeakInputSampleCount" },
                                         @{ Name = "nr5WeakRecoveredSampleCount" },
@@ -5812,13 +8534,109 @@ else {
                                         $artifactValidationOk = $false
                                     }
                                 }
+
+                                if ($matrixSchemaVersion -ge 2 -or $matrixIndexSchemaVersion -ge 2) {
+                                    foreach ($mixedNumberSpec in @(
+                                            "nr5StrongInputSampleCount",
+                                            "nr5WeakStrongOutputGapDb",
+                                            "nr5MixedWeakStrongHuntScore"
+                                        )) {
+                                        $fieldName = [string]$mixedNumberSpec
+                                        $runValue = Get-NumericValue (Get-JsonValue $matrixRun $fieldName)
+                                        $indexValue = Get-NumericValue (Get-JsonValue $matchingIndexEntry $fieldName)
+                                        if ($null -eq $runValue -and $null -eq $indexValue) {
+                                            continue
+                                        }
+                                        if ($null -eq $indexValue) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-mixed-weak-strong-missing" "Artifact '$artifactId' run '$runLabel' matched a trace-index entry without $fieldName."
+                                            $artifactValidationOk = $false
+                                            continue
+                                        }
+                                        if (-not (Test-NumericClose -Actual $indexValue -Expected $runValue)) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-mixed-weak-strong-mismatch" "Artifact '$artifactId' run '$runLabel' reports $fieldName='$runValue' but trace-index entry reports '$indexValue'."
+                                            $artifactValidationOk = $false
+                                        }
+                                    }
+
+                                    foreach ($mixedBoolSpec in @(
+                                            "nr5MixedWeakStrongEvidenceReady",
+                                            "nr5WeakStrongOutputParityReady"
+                                        )) {
+                                        $fieldName = [string]$mixedBoolSpec
+                                        $runValue = Get-JsonValue $matrixRun $fieldName
+                                        $indexValue = Get-JsonValue $matchingIndexEntry $fieldName
+                                        if ($null -eq $indexValue) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-mixed-weak-strong-missing" "Artifact '$artifactId' run '$runLabel' matched a trace-index entry without $fieldName."
+                                            $artifactValidationOk = $false
+                                            continue
+                                        }
+                                        if ((Test-Truthy $runValue) -ne (Test-Truthy $indexValue)) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-mixed-weak-strong-mismatch" "Artifact '$artifactId' run '$runLabel' reports $fieldName='$runValue' but trace-index entry reports '$indexValue'."
+                                            $artifactValidationOk = $false
+                                        }
+                                    }
+
+                                    $runMixedStatus = [string](Get-JsonValue $matrixRun "nr5MixedWeakStrongEvidenceStatus")
+                                    $indexMixedStatus = [string](Get-JsonValue $matchingIndexEntry "nr5MixedWeakStrongEvidenceStatus")
+                                    if ([string]::IsNullOrWhiteSpace($indexMixedStatus)) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-mixed-weak-strong-missing" "Artifact '$artifactId' run '$runLabel' matched a trace-index entry without nr5MixedWeakStrongEvidenceStatus."
+                                        $artifactValidationOk = $false
+                                    }
+                                    elseif (-not [string]::Equals($runMixedStatus, $indexMixedStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-mixed-weak-strong-mismatch" "Artifact '$artifactId' run '$runLabel' reports nr5MixedWeakStrongEvidenceStatus='$runMixedStatus' but trace-index entry reports '$indexMixedStatus'."
+                                        $artifactValidationOk = $false
+                                    }
+                                }
+
+                                if ($matrixSchemaVersion -ge 3 -or $matrixIndexSchemaVersion -ge 3) {
+                                    foreach ($artifactNumberSpec in @(
+                                            "nr5TextureFillAverage",
+                                            "nr5SignalProbabilityAverage",
+                                            "nr5LowEvidenceLiftedSampleCount",
+                                            "nr5LowEvidenceLiftedPct",
+                                            "nr5LowEvidenceAlignmentMismatchPct",
+                                            "nr5AudioAlignmentMismatchPct",
+                                            "nr5ArtifactRiskScore"
+                                        )) {
+                                        $fieldName = [string]$artifactNumberSpec
+                                        $runValue = Get-NumericValue (Get-JsonValue $matrixRun $fieldName)
+                                        $indexValue = Get-NumericValue (Get-JsonValue $matchingIndexEntry $fieldName)
+                                        if ($null -eq $runValue -and $null -eq $indexValue) {
+                                            continue
+                                        }
+                                        if ($null -eq $indexValue) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-artifact-control-missing" "Artifact '$artifactId' run '$runLabel' matched a trace-index entry without $fieldName."
+                                            $artifactValidationOk = $false
+                                            continue
+                                        }
+                                        if (-not (Test-NumericClose -Actual $indexValue -Expected $runValue)) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-artifact-control-mismatch" "Artifact '$artifactId' run '$runLabel' reports $fieldName='$runValue' but trace-index entry reports '$indexValue'."
+                                            $artifactValidationOk = $false
+                                        }
+                                    }
+
+                                    $runArtifactStatus = [string](Get-JsonValue $matrixRun "nr5ArtifactRiskStatus")
+                                    $indexArtifactStatus = [string](Get-JsonValue $matchingIndexEntry "nr5ArtifactRiskStatus")
+                                    if ([string]::IsNullOrWhiteSpace($indexArtifactStatus)) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-artifact-control-missing" "Artifact '$artifactId' run '$runLabel' matched a trace-index entry without nr5ArtifactRiskStatus."
+                                        $artifactValidationOk = $false
+                                    }
+                                    elseif (-not [string]::Equals($runArtifactStatus, $indexArtifactStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-matrix-report-run-index-artifact-control-mismatch" "Artifact '$artifactId' run '$runLabel' reports nr5ArtifactRiskStatus='$runArtifactStatus' but trace-index entry reports '$indexArtifactStatus'."
+                                        $artifactValidationOk = $false
+                                    }
+                                }
                             }
                         }
                     }
                 }
             }
 
-            if ($artifactKind -ieq "diagnostics-comparison-json" -or $artifactId -eq $liveTraceComparisonArtifactId) {
+            if ($artifactKind -ieq "diagnostics-comparison-json" -or $artifactId -eq $liveTraceComparisonArtifactId -or $artifactId -eq $liveTraceThetisComparisonArtifactId) {
+                $previousLiveTraceComparisonEvidence = $liveTraceComparisonEvidence
+                if ($artifactId -eq $liveTraceThetisComparisonArtifactId) {
+                    $liveTraceComparisonEvidence = $liveTraceThetisComparisonEvidence
+                }
                 $liveTraceComparisonEvidence["present"] = $true
 
                 $tool = [string](Get-JsonValue $artifactJson "tool")
@@ -5894,6 +8712,161 @@ else {
                 if ($null -eq $nr5WeakSignalSummary) {
                     $nr5WeakSignalSummary = Get-JsonValue $artifactJson "nr5WeakSignalComparison"
                 }
+                $captureReadinessSummary = Get-LiveTraceCaptureReadinessSummary $artifactJson
+                if ($null -eq $captureReadinessSummary) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-capture-readiness-summary-missing" "Artifact '$artifactId' must include captureReadinessComparison or captureReadinessComparisonSummary so strict validation can check setup hard gates separately from DSP regressions."
+                    $artifactValidationOk = $false
+                }
+                $rxAudioLevelerSummary = Get-JsonValue $artifactJson "rxAudioLevelerComparisonSummary"
+                if ($null -eq $rxAudioLevelerSummary) {
+                    $rxAudioLevelerSummary = Get-JsonValue $artifactJson "rxAudioLevelerComparison"
+                }
+                if ($null -eq $rxAudioLevelerSummary) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-rx-audio-leveler-summary-missing" "Artifact '$artifactId' must include rxAudioLevelerComparison or rxAudioLevelerComparisonSummary so strict validation can check downstream leveler constraints."
+                    $artifactValidationOk = $false
+                }
+
+                $metricDefinitions = @(Get-JsonArray $artifactJson "metricDefinitions")
+                $reportedMetricDefinitionCountValue = Get-JsonValue $artifactJson "metricDefinitionCount"
+                if ($null -ne $reportedMetricDefinitionCountValue -and [int](Get-NumericValueOrDefault $reportedMetricDefinitionCountValue) -ne $metricDefinitions.Count) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-metric-definition-count-mismatch" "Artifact '$artifactId' reports metricDefinitionCount=$([int](Get-NumericValueOrDefault $reportedMetricDefinitionCountValue)) but includes $($metricDefinitions.Count) metricDefinitions entries."
+                    $artifactValidationOk = $false
+                }
+
+                $alignedMetricIds = New-Object System.Collections.Generic.List[string]
+                $missingCatalogMetricIds = New-Object System.Collections.Generic.List[string]
+                $directionMismatchMetricIds = New-Object System.Collections.Generic.List[string]
+                $thresholdMismatchMetricIds = New-Object System.Collections.Generic.List[string]
+                $comparatorMismatchMetricIds = New-Object System.Collections.Generic.List[string]
+                $safetyClassMismatchMetricIds = New-Object System.Collections.Generic.List[string]
+                $scopeMismatchMetricIds = New-Object System.Collections.Generic.List[string]
+                $seenMetricDefinitionIds = @{}
+
+                if ($metricDefinitions.Count -eq 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-metric-definitions-missing" "Artifact '$artifactId' must include metricDefinitions so live trace thresholds, directions, and safety classes can be checked against benchmark-metric-catalog.json."
+                    $artifactValidationOk = $false
+                }
+                elseif ($null -eq $metricCatalog -or $metricCatalogEntriesById.Count -eq 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-metric-catalog-missing" "Artifact '$artifactId' includes metricDefinitions but benchmark-metric-catalog.json is missing or empty."
+                    $artifactValidationOk = $false
+                }
+                else {
+                    foreach ($definition in $metricDefinitions) {
+                        $metricId = ConvertTo-MetricId ([string](Get-JsonValue $definition "id"))
+                        if ([string]::IsNullOrWhiteSpace($metricId)) {
+                            $metricId = ConvertTo-MetricId ([string](Get-JsonValue $definition "metricId"))
+                        }
+                        if ([string]::IsNullOrWhiteSpace($metricId) -or $seenMetricDefinitionIds.ContainsKey($metricId)) {
+                            continue
+                        }
+
+                        $seenMetricDefinitionIds[$metricId] = $true
+                        $metricAlignmentOk = $true
+                        if (-not $metricCatalogEntriesById.ContainsKey($metricId)) {
+                            $missingCatalogMetricIds.Add($metricId) | Out-Null
+                            continue
+                        }
+
+                        $catalogMetric = $metricCatalogEntriesById[$metricId]
+                        $definitionDirection = ([string](Get-JsonValue $definition "direction")).Trim().ToLowerInvariant()
+                        $catalogDirection = ([string](Get-JsonValue $catalogMetric "direction")).Trim().ToLowerInvariant()
+                        if ([string]::IsNullOrWhiteSpace($definitionDirection) -or -not [string]::Equals($definitionDirection, $catalogDirection, [StringComparison]::OrdinalIgnoreCase)) {
+                            $directionMismatchMetricIds.Add($metricId) | Out-Null
+                            $metricAlignmentOk = $false
+                        }
+
+                        $definitionThresholdValue = Get-JsonValue $definition "definitionThreshold"
+                        if ($null -eq $definitionThresholdValue) {
+                            $definitionThresholdValue = Get-JsonValue $definition "threshold"
+                        }
+                        $definitionThreshold = Get-NumericValue $definitionThresholdValue
+                        $catalogThreshold = Get-NumericValue (Get-MetricCatalogFieldValue -Metric $catalogMetric -Names @("acceptanceThreshold", "threshold", "targetThreshold", "minimumThreshold", "maximumThreshold"))
+                        if ($null -eq $definitionThreshold -or $null -eq $catalogThreshold -or [Math]::Abs([double]$definitionThreshold - [double]$catalogThreshold) -gt 0.000001) {
+                            $thresholdMismatchMetricIds.Add($metricId) | Out-Null
+                            $metricAlignmentOk = $false
+                        }
+
+                        $expectedComparator = if ($definitionDirection -eq "informational") { "informational" } else { "no-regression" }
+                        $catalogComparator = ConvertTo-MetricCatalogComparator (Get-MetricCatalogFieldText -Metric $catalogMetric -Names @("acceptanceComparator", "thresholdComparator", "comparator", "thresholdDirection"))
+                        if ([string]::IsNullOrWhiteSpace($catalogComparator) -or -not [string]::Equals($expectedComparator, $catalogComparator, [StringComparison]::OrdinalIgnoreCase)) {
+                            $comparatorMismatchMetricIds.Add($metricId) | Out-Null
+                            $metricAlignmentOk = $false
+                        }
+
+                        $definitionSafetyClass = ConvertTo-MetricCatalogToken ([string](Get-JsonValue $definition "safetyClass"))
+                        $catalogSafetyClasses = @(Get-MetricCatalogFieldTokens -Metric $catalogMetric -Names @("safetyClass", "safetyClasses"))
+                        if ([string]::IsNullOrWhiteSpace($definitionSafetyClass) -or @($catalogSafetyClasses | Where-Object { [string]::Equals([string]$_, $definitionSafetyClass, [StringComparison]::OrdinalIgnoreCase) }).Count -eq 0) {
+                            $safetyClassMismatchMetricIds.Add($metricId) | Out-Null
+                            $metricAlignmentOk = $false
+                        }
+
+                        $definitionScope = ConvertTo-MetricCatalogToken ([string](Get-JsonValue $definition "acceptanceScope"))
+                        $catalogScopes = @(Get-MetricCatalogFieldTokens -Metric $catalogMetric -Names @("acceptanceScope", "acceptanceScopes", "scope", "scopes", "scenarioIds", "relatedScenarioIds", "relatedScenarios", "scenarios"))
+                        if ([string]::IsNullOrWhiteSpace($definitionScope) -or @($catalogScopes | Where-Object { [string]::Equals([string]$_, $definitionScope, [StringComparison]::OrdinalIgnoreCase) }).Count -eq 0) {
+                            $scopeMismatchMetricIds.Add($metricId) | Out-Null
+                            $metricAlignmentOk = $false
+                        }
+
+                        if ($metricAlignmentOk) {
+                            $alignedMetricIds.Add($metricId) | Out-Null
+                        }
+                    }
+                }
+
+                $missingCatalogMetricIds = @($missingCatalogMetricIds.ToArray() | Select-Object -Unique | Sort-Object)
+                $directionMismatchMetricIds = @($directionMismatchMetricIds.ToArray() | Select-Object -Unique | Sort-Object)
+                $thresholdMismatchMetricIds = @($thresholdMismatchMetricIds.ToArray() | Select-Object -Unique | Sort-Object)
+                $comparatorMismatchMetricIds = @($comparatorMismatchMetricIds.ToArray() | Select-Object -Unique | Sort-Object)
+                $safetyClassMismatchMetricIds = @($safetyClassMismatchMetricIds.ToArray() | Select-Object -Unique | Sort-Object)
+                $scopeMismatchMetricIds = @($scopeMismatchMetricIds.ToArray() | Select-Object -Unique | Sort-Object)
+                $alignedMetricIds = @($alignedMetricIds.ToArray() | Select-Object -Unique | Sort-Object)
+
+                if ($missingCatalogMetricIds.Count -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-metric-catalog-metric-missing" "Artifact '$artifactId' includes metricDefinitions missing from benchmark-metric-catalog.json: $($missingCatalogMetricIds -join ', ')."
+                    $artifactValidationOk = $false
+                }
+                if ($directionMismatchMetricIds.Count -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-metric-catalog-direction-mismatch" "Artifact '$artifactId' metricDefinitions disagree with benchmark-metric-catalog.json direction values: $($directionMismatchMetricIds -join ', ')."
+                    $artifactValidationOk = $false
+                }
+                if ($thresholdMismatchMetricIds.Count -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-metric-catalog-threshold-mismatch" "Artifact '$artifactId' metricDefinitions disagree with benchmark-metric-catalog.json acceptance thresholds: $($thresholdMismatchMetricIds -join ', ')."
+                    $artifactValidationOk = $false
+                }
+                if ($comparatorMismatchMetricIds.Count -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-metric-catalog-comparator-mismatch" "Artifact '$artifactId' metricDefinitions disagree with benchmark-metric-catalog.json acceptance comparators: $($comparatorMismatchMetricIds -join ', ')."
+                    $artifactValidationOk = $false
+                }
+                if ($safetyClassMismatchMetricIds.Count -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-metric-catalog-safety-class-mismatch" "Artifact '$artifactId' metricDefinitions disagree with benchmark-metric-catalog.json safety classes: $($safetyClassMismatchMetricIds -join ', ')."
+                    $artifactValidationOk = $false
+                }
+                if ($scopeMismatchMetricIds.Count -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-metric-catalog-scope-mismatch" "Artifact '$artifactId' metricDefinitions are not scoped to the same benchmark-metric-catalog.json acceptance surface: $($scopeMismatchMetricIds -join ', ')."
+                    $artifactValidationOk = $false
+                }
+
+                $metricCatalogAlignmentReady = ($metricDefinitions.Count -gt 0 -and
+                    $null -ne $metricCatalog -and
+                    $metricCatalogEntriesById.Count -gt 0 -and
+                    $missingCatalogMetricIds.Count -eq 0 -and
+                    $directionMismatchMetricIds.Count -eq 0 -and
+                    $thresholdMismatchMetricIds.Count -eq 0 -and
+                    $comparatorMismatchMetricIds.Count -eq 0 -and
+                    $safetyClassMismatchMetricIds.Count -eq 0 -and
+                    $scopeMismatchMetricIds.Count -eq 0)
+                $metricCatalogAlignmentStatus = if ($metricCatalogAlignmentReady) {
+                    "ready"
+                }
+                elseif ($metricDefinitions.Count -eq 0) {
+                    "metric-definitions-missing"
+                }
+                elseif ($null -eq $metricCatalog -or $metricCatalogEntriesById.Count -eq 0) {
+                    "metric-catalog-missing"
+                }
+                else {
+                    "metric-catalog-mismatch"
+                }
 
                 if ($tool -eq "compare-dsp-live-diagnostics-matrix") {
                     $matrixScenarioComparisons = @(Get-JsonArray $artifactJson "scenarioComparisons")
@@ -5917,6 +8890,39 @@ else {
                         $expectedMatrixHardConstraintRegressions += [int](Get-NumericValueOrDefault (Get-JsonValue $scenarioComparison "hardConstraintRegressionCount"))
                         $expectedMatrixGateFailures += [int](Get-NumericValueOrDefault (Get-JsonValue $scenarioComparison "gateFailureCount"))
                         $expectedMatrixMissingMetrics += [int](Get-NumericValueOrDefault (Get-JsonValue $scenarioComparison "missingMetricValueCount"))
+                    }
+
+                    $scenarioCaptureComparisons = @($matrixScenarioComparisons | ForEach-Object { Get-JsonValue $_ "captureReadinessComparison" } | Where-Object { $null -ne $_ })
+                    $expectedCaptureReadinessSummary = New-LiveTraceCaptureReadinessSummary -Comparisons $scenarioCaptureComparisons
+                    if ($null -ne $captureReadinessSummary) {
+                        foreach ($captureSummaryCountSpec in @(
+                                @{ Name = "scenarioComparisonCount"; Reported = [int](Get-NumericValueOrDefault (Get-JsonValue $captureReadinessSummary "scenarioComparisonCount")); Expected = [int](Get-NumericValueOrDefault (Get-JsonValue $expectedCaptureReadinessSummary "scenarioComparisonCount")) },
+                                @{ Name = "candidateHardGatePassCount"; Reported = [int](Get-NumericValueOrDefault (Get-JsonValue $captureReadinessSummary "candidateHardGatePassCount")); Expected = [int](Get-NumericValueOrDefault (Get-JsonValue $expectedCaptureReadinessSummary "candidateHardGatePassCount")) },
+                                @{ Name = "candidateHardGateFailCount"; Reported = [int](Get-NumericValueOrDefault (Get-JsonValue $captureReadinessSummary "candidateHardGateFailCount")); Expected = [int](Get-NumericValueOrDefault (Get-JsonValue $expectedCaptureReadinessSummary "candidateHardGateFailCount")) },
+                                @{ Name = "candidateStrictPreflightPassCount"; Reported = [int](Get-NumericValueOrDefault (Get-JsonValue $captureReadinessSummary "candidateStrictPreflightPassCount")); Expected = [int](Get-NumericValueOrDefault (Get-JsonValue $expectedCaptureReadinessSummary "candidateStrictPreflightPassCount")) },
+                                @{ Name = "candidateStrictPreflightFailCount"; Reported = [int](Get-NumericValueOrDefault (Get-JsonValue $captureReadinessSummary "candidateStrictPreflightFailCount")); Expected = [int](Get-NumericValueOrDefault (Get-JsonValue $expectedCaptureReadinessSummary "candidateStrictPreflightFailCount")) }
+                            )) {
+                            if ([int]$captureSummaryCountSpec["Reported"] -ne [int]$captureSummaryCountSpec["Expected"]) {
+                                Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-capture-readiness-summary-mismatch" "Artifact '$artifactId' captureReadinessComparisonSummary.$([string]$captureSummaryCountSpec["Name"])=$([int]$captureSummaryCountSpec["Reported"]) but scenario rows produce $([int]$captureSummaryCountSpec["Expected"])."
+                                $artifactValidationOk = $false
+                            }
+                        }
+
+                        foreach ($captureSummaryArraySpec in @(
+                                @{ Name = "candidateStatusCounts"; Field = "status" },
+                                @{ Name = "candidateTopConstraintCounts"; Field = "constraint" },
+                                @{ Name = "candidateTopHardConstraintCounts"; Field = "constraint" }
+                            )) {
+                            $arrayName = [string]$captureSummaryArraySpec["Name"]
+                            $nameField = [string]$captureSummaryArraySpec["Field"]
+                            if (-not (Test-LiveTraceCaptureCountsMatch `
+                                    -Actual (Get-JsonArray $captureReadinessSummary $arrayName) `
+                                    -Expected (Get-JsonArray $expectedCaptureReadinessSummary $arrayName) `
+                                    -NameField $nameField)) {
+                                Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-capture-readiness-summary-mismatch" "Artifact '$artifactId' captureReadinessComparisonSummary.$arrayName does not match scenario rows."
+                                $artifactValidationOk = $false
+                            }
+                        }
                     }
 
                     if ($matrixScenarioComparisons.Count -eq 0) {
@@ -6177,6 +9183,49 @@ else {
                                 }
                             }
 
+                            $recordCaptureReadinessComparison = Get-JsonValue $scenarioComparison "captureReadinessComparison"
+                            $reportCaptureReadinessComparison = Get-JsonValue $scenarioReportJson "captureReadinessComparison"
+                            if ($null -eq $recordCaptureReadinessComparison -or $null -eq $reportCaptureReadinessComparison) {
+                                Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-scenario-report-capture-readiness-missing" "Artifact '$artifactId' scenario '$scenarioLabel' must carry captureReadinessComparison in both the matrix row and '$scenarioReportPath'."
+                                $artifactValidationOk = $false
+                            }
+                            else {
+                                foreach ($captureFieldSpec in @(
+                                        @{ Name = "candidateStatus"; Kind = "text" },
+                                        @{ Name = "candidateHardGatePass"; Kind = "bool" },
+                                        @{ Name = "candidateStrictPreflightPass"; Kind = "bool" },
+                                        @{ Name = "candidateTopConstraintName"; Kind = "text" },
+                                        @{ Name = "candidateTopConstraintCount"; Kind = "number" },
+                                        @{ Name = "candidateTopHardConstraintName"; Kind = "text" },
+                                        @{ Name = "candidateTopHardConstraintCount"; Kind = "number" }
+                                    )) {
+                                    $captureFieldName = [string]$captureFieldSpec["Name"]
+                                    $captureKind = [string]$captureFieldSpec["Kind"]
+                                    if ($captureKind -eq "bool") {
+                                        if ((Test-Truthy (Get-JsonValue $recordCaptureReadinessComparison $captureFieldName)) -ne (Test-Truthy (Get-JsonValue $reportCaptureReadinessComparison $captureFieldName))) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-scenario-report-capture-readiness-mismatch" "Artifact '$artifactId' scenario '$scenarioLabel' captureReadinessComparison.$captureFieldName does not match '$scenarioReportPath'."
+                                            $artifactValidationOk = $false
+                                        }
+                                    }
+                                    elseif ($captureKind -eq "number") {
+                                        $recordValue = [int](Get-NumericValueOrDefault (Get-JsonValue $recordCaptureReadinessComparison $captureFieldName))
+                                        $reportValue = [int](Get-NumericValueOrDefault (Get-JsonValue $reportCaptureReadinessComparison $captureFieldName))
+                                        if ($recordValue -ne $reportValue) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-scenario-report-capture-readiness-mismatch" "Artifact '$artifactId' scenario '$scenarioLabel' captureReadinessComparison.$captureFieldName=$recordValue but '$scenarioReportPath' reports $reportValue."
+                                            $artifactValidationOk = $false
+                                        }
+                                    }
+                                    else {
+                                        $recordValue = [string](Get-JsonValue $recordCaptureReadinessComparison $captureFieldName)
+                                        $reportValue = [string](Get-JsonValue $reportCaptureReadinessComparison $captureFieldName)
+                                        if (-not [string]::Equals($recordValue, $reportValue, [StringComparison]::OrdinalIgnoreCase)) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-comparison-scenario-report-capture-readiness-mismatch" "Artifact '$artifactId' scenario '$scenarioLabel' captureReadinessComparison.$captureFieldName='$recordValue' but '$scenarioReportPath' reports '$reportValue'."
+                                            $artifactValidationOk = $false
+                                        }
+                                    }
+                                }
+                            }
+
                             $recordBaselinePath = [string](Get-JsonValue $scenarioComparison "baselineInputPath")
                             $reportBaselinePath = [string](Get-JsonValue $scenarioReportJson "baselinePath")
                             if ([string]::IsNullOrWhiteSpace($recordBaselinePath) -or [string]::IsNullOrWhiteSpace($reportBaselinePath) -or -not (Test-ComparableEvidencePathSame -BundlePath $bundlePath -ExpectedPath $recordBaselinePath -ActualPath $reportBaselinePath)) {
@@ -6220,7 +9269,35 @@ else {
                 $liveTraceComparisonEvidence["toolingRegressionCount"] = Get-SafetyClassCount $metricRegressionSafetyClassCounts "tooling"
                 $liveTraceComparisonEvidence["bundleRelativePaths"] = $bundleRelativePaths
                 $liveTraceComparisonEvidence["absolutePathCount"] = $absolutePaths.Count
+                $liveTraceComparisonEvidence["metricDefinitionCount"] = $metricDefinitions.Count
+                $liveTraceComparisonEvidence["metricCatalogAlignedMetricCount"] = $alignedMetricIds.Count
+                $liveTraceComparisonEvidence["metricCatalogMissingMetricCount"] = $missingCatalogMetricIds.Count
+                $liveTraceComparisonEvidence["metricCatalogMissingMetricIds"] = @($missingCatalogMetricIds)
+                $liveTraceComparisonEvidence["metricCatalogDirectionMismatchCount"] = $directionMismatchMetricIds.Count
+                $liveTraceComparisonEvidence["metricCatalogDirectionMismatchMetricIds"] = @($directionMismatchMetricIds)
+                $liveTraceComparisonEvidence["metricCatalogThresholdMismatchCount"] = $thresholdMismatchMetricIds.Count
+                $liveTraceComparisonEvidence["metricCatalogThresholdMismatchMetricIds"] = @($thresholdMismatchMetricIds)
+                $liveTraceComparisonEvidence["metricCatalogComparatorMismatchCount"] = $comparatorMismatchMetricIds.Count
+                $liveTraceComparisonEvidence["metricCatalogComparatorMismatchMetricIds"] = @($comparatorMismatchMetricIds)
+                $liveTraceComparisonEvidence["metricCatalogSafetyClassMismatchCount"] = $safetyClassMismatchMetricIds.Count
+                $liveTraceComparisonEvidence["metricCatalogSafetyClassMismatchMetricIds"] = @($safetyClassMismatchMetricIds)
+                $liveTraceComparisonEvidence["metricCatalogScopeMismatchCount"] = $scopeMismatchMetricIds.Count
+                $liveTraceComparisonEvidence["metricCatalogScopeMismatchMetricIds"] = @($scopeMismatchMetricIds)
+                $liveTraceComparisonEvidence["metricCatalogAlignmentReady"] = $metricCatalogAlignmentReady
+                $liveTraceComparisonEvidence["metricCatalogAlignmentStatus"] = $metricCatalogAlignmentStatus
                 $liveTraceComparisonEvidence["nr5WeakSignalComparisonSummary"] = $nr5WeakSignalSummary
+                $liveTraceComparisonEvidence["captureReadinessComparisonSummary"] = $captureReadinessSummary
+                $liveTraceComparisonEvidence["rxAudioLevelerComparisonSummary"] = $rxAudioLevelerSummary
+                if ($null -ne $captureReadinessSummary) {
+                    $liveTraceComparisonEvidence["captureReadinessScenarioComparisonCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $captureReadinessSummary "scenarioComparisonCount"))
+                    $liveTraceComparisonEvidence["captureReadinessCandidateHardGatePassCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $captureReadinessSummary "candidateHardGatePassCount"))
+                    $liveTraceComparisonEvidence["captureReadinessCandidateHardGateFailCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $captureReadinessSummary "candidateHardGateFailCount"))
+                    $liveTraceComparisonEvidence["captureReadinessCandidateStrictPreflightPassCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $captureReadinessSummary "candidateStrictPreflightPassCount"))
+                    $liveTraceComparisonEvidence["captureReadinessCandidateStrictPreflightFailCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $captureReadinessSummary "candidateStrictPreflightFailCount"))
+                    $liveTraceComparisonEvidence["captureReadinessCandidateStatusCounts"] = @(Get-JsonArray $captureReadinessSummary "candidateStatusCounts")
+                    $liveTraceComparisonEvidence["captureReadinessCandidateTopConstraintCounts"] = @(Get-JsonArray $captureReadinessSummary "candidateTopConstraintCounts")
+                    $liveTraceComparisonEvidence["captureReadinessCandidateTopHardConstraintCounts"] = @(Get-JsonArray $captureReadinessSummary "candidateTopHardConstraintCounts")
+                }
                 if ($null -ne $nr5WeakSignalSummary) {
                     $liveTraceComparisonEvidence["nr5WeakInputSampleDelta"] = [int](Get-NumericValue (Get-JsonValue $nr5WeakSignalSummary "weakInputSampleDelta"))
                     $liveTraceComparisonEvidence["nr5WeakRecoveredSampleDelta"] = [int](Get-NumericValue (Get-JsonValue $nr5WeakSignalSummary "weakRecoveredSampleDelta"))
@@ -6236,6 +9313,20 @@ else {
                     $liveTraceComparisonEvidence["nr5MakeupMovementRegressionCount"] = Get-RegressionCountFromSummary $nr5WeakSignalSummary "makeupMovementRegressionCount" "makeupMovementRegression"
                     $liveTraceComparisonEvidence["nr5MakeupMaxRegressionCount"] = Get-RegressionCountFromSummary $nr5WeakSignalSummary "makeupMaxRegressionCount" "makeupMaxRegression"
                     $liveTraceComparisonEvidence["nr5RecoveryDriveMovementRegressionCount"] = Get-RegressionCountFromSummary $nr5WeakSignalSummary "recoveryDriveMovementRegressionCount" "recoveryDriveMovementRegression"
+                }
+                if ($null -ne $rxAudioLevelerSummary) {
+                    $liveTraceComparisonEvidence["rxAudioLevelerConstrainedSampleDelta"] = [int](Get-NumericValueOrDefault (Get-JsonValue $rxAudioLevelerSummary "constrainedSampleDelta"))
+                    $liveTraceComparisonEvidence["rxAudioLevelerConstrainedPctDelta"] = [Math]::Round([double](Get-NumericValueOrDefault (Get-JsonValue $rxAudioLevelerSummary "constrainedPctDelta")), 3)
+                    $liveTraceComparisonEvidence["rxAudioLevelerBoostSlewLimitedSampleDelta"] = [int](Get-NumericValueOrDefault (Get-JsonValue $rxAudioLevelerSummary "boostSlewLimitedSampleDelta"))
+                    $liveTraceComparisonEvidence["rxAudioLevelerPeakLimitedSampleDelta"] = [int](Get-NumericValueOrDefault (Get-JsonValue $rxAudioLevelerSummary "peakLimitedSampleDelta"))
+                    $liveTraceComparisonEvidence["rxAudioLevelerOutputLimitedSampleDelta"] = [int](Get-NumericValueOrDefault (Get-JsonValue $rxAudioLevelerSummary "outputLimitedSampleDelta"))
+                    $liveTraceComparisonEvidence["rxAudioLevelerOutputRmsMovementDbDelta"] = [Math]::Round([double](Get-NumericValueOrDefault (Get-JsonValue $rxAudioLevelerSummary "outputRmsMovementDbDelta")), 3)
+                    $liveTraceComparisonEvidence["rxAudioLevelerAppliedGainMovementDbDelta"] = [Math]::Round([double](Get-NumericValueOrDefault (Get-JsonValue $rxAudioLevelerSummary "appliedGainMovementDbDelta")), 3)
+                    $liveTraceComparisonEvidence["rxAudioLevelerConstrainedRegressionCount"] = Get-RegressionCountFromSummary $rxAudioLevelerSummary "constrainedRegressionCount" "constrainedRegression"
+                    $liveTraceComparisonEvidence["rxAudioLevelerConstrainedPctRegressionCount"] = Get-RegressionCountFromSummary $rxAudioLevelerSummary "constrainedPctRegressionCount" "constrainedPctRegression"
+                    $liveTraceComparisonEvidence["rxAudioLevelerBoostSlewRegressionCount"] = Get-RegressionCountFromSummary $rxAudioLevelerSummary "boostSlewRegressionCount" "boostSlewRegression"
+                    $liveTraceComparisonEvidence["rxAudioLevelerPeakLimitedRegressionCount"] = Get-RegressionCountFromSummary $rxAudioLevelerSummary "peakLimitedRegressionCount" "peakLimitedRegression"
+                    $liveTraceComparisonEvidence["rxAudioLevelerOutputLimitedRegressionCount"] = Get-RegressionCountFromSummary $rxAudioLevelerSummary "outputLimitedRegressionCount" "outputLimitedRegression"
                 }
 
                 if ($candidateComparisons -le 0) {
@@ -6289,7 +9380,12 @@ else {
                     $liveTraceComparisonEvidence["status"] = "ready"
                 }
                 else {
+                    $liveTraceComparisonEvidence["readyForReview"] = $false
                     $liveTraceComparisonEvidence["status"] = "not-ready"
+                }
+
+                if ($artifactId -eq $liveTraceThetisComparisonArtifactId) {
+                    $liveTraceComparisonEvidence = $previousLiveTraceComparisonEvidence
                 }
             }
 
@@ -6303,8 +9399,8 @@ else {
                 }
 
                 $schemaVersion = [int](Get-NumericValueOrDefault (Get-JsonValue $artifactJson "schemaVersion") 1)
-                if ($tool -eq "summarize-dsp-live-diagnostics-history" -and $schemaVersion -ne 9) {
-                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-schema-version-mismatch" "Artifact '$artifactId' schemaVersion=$schemaVersion but summarize-dsp-live-diagnostics-history.ps1 currently emits schemaVersion=9."
+                if ($tool -eq "summarize-dsp-live-diagnostics-history" -and $schemaVersion -ne 15) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-schema-version-mismatch" "Artifact '$artifactId' schemaVersion=$schemaVersion but summarize-dsp-live-diagnostics-history.ps1 currently emits schemaVersion=15."
                     $artifactValidationOk = $false
                 }
                 $traceCount = [int](Get-JsonValue $artifactJson "traceCount")
@@ -6317,6 +9413,7 @@ else {
                 $bestBalancedTrace = Get-JsonValue $artifactJson "bestBalancedTrace"
                 $bestWeakSignalTrace = Get-JsonValue $artifactJson "bestWeakSignalTrace"
                 $lowestPumpingTrace = Get-JsonValue $artifactJson "lowestPumpingTrace"
+                $mixedWeakStrongBestTrace = Get-JsonValue $artifactJson "mixedWeakStrongBestTrace"
                 $promotionDecision = Get-JsonValue $artifactJson "latestNr5Decision"
                 $legacyPromotionDecision = Get-JsonValue $artifactJson "promotionDecision"
                 if ($null -eq $promotionDecision) {
@@ -6375,6 +9472,88 @@ else {
                 $actualReadyTraceCount = @($traceRecords | Where-Object { Test-Truthy (Get-JsonValue $_ "readyForBenchmarkTrace") }).Count
                 $actualReadyNr5TraceCount = @($traceRecords | Where-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "nr5SampleCount")) -gt 0 -and (Test-Truthy (Get-JsonValue $_ "readyForBenchmarkTrace")) }).Count
                 $actualCandidateReadyNr5TraceCount = @($traceRecords | Where-Object { [int](Get-NumericValueOrDefault (Get-JsonValue $_ "nr5SampleCount")) -gt 0 -and (Test-Truthy (Get-JsonValue $_ "candidateComparisonReady")) }).Count
+                $mixedWeakStrongTraceRecords = @($traceRecords | Where-Object {
+                        [int](Get-NumericValueOrDefault (Get-JsonValue $_ "nr5SampleCount")) -gt 0 -and
+                        [int](Get-NumericValueOrDefault (Get-JsonValue $_ "weakInputSampleCount")) -gt 0 -and
+                        [int](Get-NumericValueOrDefault (Get-JsonValue $_ "strongInputSampleCount")) -gt 0
+                    })
+                $mixedWeakStrongReadyTraceRecords = @($mixedWeakStrongTraceRecords | Where-Object {
+                        (Test-Truthy (Get-JsonValue $_ "mixedWeakStrongEvidenceReady")) -and
+                        (Test-Truthy (Get-JsonValue $_ "weakStrongOutputParityReady"))
+                    })
+                $mixedWeakStrongGapWatchTraceRecords = @($mixedWeakStrongTraceRecords | Where-Object {
+                        -not (Test-Truthy (Get-JsonValue $_ "weakStrongOutputParityReady"))
+                    })
+                $mixedWeakStrongFieldMissingTraceCount = @($traceRecords | Where-Object {
+                        [int](Get-NumericValueOrDefault (Get-JsonValue $_ "nr5SampleCount")) -gt 0 -and
+                        ($null -eq (Get-JsonValue $_ "strongInputSampleCount") -or
+                            $null -eq (Get-JsonValue $_ "mixedWeakStrongEvidenceReady") -or
+                            $null -eq (Get-JsonValue $_ "weakStrongOutputParityReady") -or
+                            [string]::IsNullOrWhiteSpace([string](Get-JsonValue $_ "mixedWeakStrongEvidenceStatus")))
+                    }).Count
+                $mixedWeakStrongMissingTraceCount = [Math]::Max(0, $actualNr5TraceCount - $mixedWeakStrongTraceRecords.Count)
+                $mixedWeakStrongEvidenceStatus = if ($actualNr5TraceCount -le 0) {
+                    "no-nr5-history"
+                }
+                elseif ($mixedWeakStrongTraceRecords.Count -eq 0) {
+                    "missing-mixed-weak-strong"
+                }
+                elseif ($mixedWeakStrongReadyTraceRecords.Count -gt 0) {
+                    "ready"
+                }
+                elseif ($mixedWeakStrongGapWatchTraceRecords.Count -gt 0) {
+                    "weak-strong-output-gap-watch"
+                }
+                else {
+                    "not-ready"
+                }
+                $agcStabilityTraceCount = 0
+                $agcStabilityMissingTraceCount = 0
+                $agcPumpingRiskTraceCount = 0
+                $agcActivePumpingSignalCount = 0
+                $agcVoiceLikePumpingSignalCount = 0
+                $artifactControlFieldMissingTraceCount = 0
+                $artifactControlSignalCount = 0
+                foreach ($trace in @($traceRecords)) {
+                    $agcStatus = [string](Get-JsonValue $trace "agcStabilityStatus")
+                    $agcRiskValue = Get-JsonValue $trace "agcPumpingRisk"
+                    if ([string]::IsNullOrWhiteSpace($agcStatus) -or $null -eq $agcRiskValue) {
+                        $agcStabilityMissingTraceCount++
+                    }
+                    else {
+                        $agcStabilityTraceCount++
+                    }
+                    if (Test-Truthy $agcRiskValue) {
+                        $agcPumpingRiskTraceCount++
+                    }
+                    if ([int](Get-NumericValueOrDefault (Get-JsonValue $trace "nr5SampleCount")) -gt 0 -and
+                        ($null -eq (Get-JsonValue $trace "nr5ArtifactRiskScore") -or
+                            [string]::IsNullOrWhiteSpace([string](Get-JsonValue $trace "nr5ArtifactRiskStatus")) -or
+                            $null -eq (Get-JsonValue $trace "nr5LowEvidenceLiftedSampleCount"))) {
+                        $artifactControlFieldMissingTraceCount++
+                    }
+                    foreach ($signal in @(Get-JsonArray $trace "safetySignals")) {
+                        $signalName = [string](Get-JsonValue $signal "name")
+                        if ([string]::Equals($signalName, "agc-active-gain-movement-db", [StringComparison]::OrdinalIgnoreCase)) {
+                            $agcActivePumpingSignalCount++
+                        }
+                        elseif ([string]::Equals($signalName, "agc-voice-like-gain-movement-db", [StringComparison]::OrdinalIgnoreCase)) {
+                            $agcVoiceLikePumpingSignalCount++
+                        }
+                        elseif ([string]::Equals([string](Get-JsonValue $signal "safetyClass"), "artifact-control", [StringComparison]::OrdinalIgnoreCase)) {
+                            $artifactControlSignalCount++
+                        }
+                    }
+                }
+                $agcStabilityStatus = if ($actualTraceCount -le 0) {
+                    "no-traces"
+                }
+                elseif ($agcStabilityMissingTraceCount -eq 0) {
+                    "agc-stability-ready"
+                }
+                else {
+                    "agc-stability-missing"
+                }
                 $traceSourceCheckedCount = 0
                 $traceSourceMissingCount = 0
                 $traceSourceInvalidCount = 0
@@ -6441,6 +9620,14 @@ else {
                 $expectedBestBalancedTrace = Select-LiveHistoryTraceForSummary -Records $traceRecords -Mode "best-balanced"
                 $expectedBestWeakSignalTrace = Select-LiveHistoryTraceForSummary -Records $traceRecords -Mode "best-weak"
                 $expectedLowestPumpingTrace = Select-LiveHistoryTraceForSummary -Records $traceRecords -Mode "lowest-pumping"
+                $expectedMixedWeakStrongBestTrace = $null
+                if ($mixedWeakStrongTraceRecords.Count -gt 0) {
+                    $expectedMixedWeakStrongBestTrace = @($mixedWeakStrongTraceRecords | Sort-Object `
+                            @{ Expression = { if (Test-Truthy (Get-JsonValue $_ "weakStrongOutputParityReady")) { 0 } else { 1 } } }, `
+                            @{ Expression = { $value = Get-NumericValue (Get-JsonValue $_ "weakStrongOutputGapDb"); if ($null -eq $value) { 999.0 } else { [Math]::Abs([double]$value) } } }, `
+                            @{ Expression = { if (Test-Truthy (Get-JsonValue $_ "candidateComparisonReady")) { 0 } else { 1 } } }, `
+                            @{ Expression = { Get-NumericValue (Get-JsonValue $_ "safetyRiskScore") } })[0]
+                }
                 $bestBalancedFullTrace = $expectedBestBalancedTrace
                 $bestWeakSignalFullTrace = $expectedBestWeakSignalTrace
                 $lowestPumpingFullTrace = $expectedLowestPumpingTrace
@@ -6491,6 +9678,8 @@ else {
                 $liveDiagnosticsHistoryEvidence["latestSafetyRiskScore"] = [int](Get-NumericValueOrDefault (Get-JsonValue $latestTrace "safetyRiskScore"))
                 $liveDiagnosticsHistoryEvidence["latestTraceSequenceUtc"] = Format-DateTimeOffsetUtcString (Get-JsonValue $latestTrace "traceSequenceUtc")
                 $liveDiagnosticsHistoryEvidence["latestTraceSortKeySource"] = [string](Get-JsonValue $latestTrace "sortKeySource")
+                $liveDiagnosticsHistoryEvidence["latestTopHardConstraintName"] = [string](Get-JsonValue $latestTrace "topHardConstraintName")
+                $liveDiagnosticsHistoryEvidence["latestTopHardConstraintCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $latestTrace "topHardConstraintCount"))
                 $liveDiagnosticsHistoryEvidence["bestBalancedTraceId"] = [string](Get-JsonValue $bestBalancedTrace "traceId")
                 $liveDiagnosticsHistoryEvidence["bestWeakSignalTraceId"] = [string](Get-JsonValue $bestWeakSignalTrace "traceId")
                 $liveDiagnosticsHistoryEvidence["lowestPumpingTraceId"] = [string](Get-JsonValue $lowestPumpingTrace "traceId")
@@ -6544,8 +9733,31 @@ else {
                 $liveDiagnosticsHistoryEvidence["liveExperimentCoverageRequiredComparisonCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $liveExperimentCoverage "requiredComparisonCount"))
                 $liveDiagnosticsHistoryEvidence["liveExperimentCoverageCoveredComparisonCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $liveExperimentCoverage "coveredComparisonCount"))
                 $liveDiagnosticsHistoryEvidence["liveExperimentCoverageMissingComparisonCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $liveExperimentCoverage "missingComparisonCount"))
+                $liveExperimentCoverageMissingComparisonIds = @(Get-JsonArray $liveExperimentCoverage "missingComparisons" |
+                    ForEach-Object {
+                        $missingScenarioId = [string](Get-JsonValue $_ "scenarioId")
+                        $missingComparisonId = [string](Get-JsonValue $_ "comparisonId")
+                        if (-not [string]::IsNullOrWhiteSpace($missingScenarioId) -and -not [string]::IsNullOrWhiteSpace($missingComparisonId)) {
+                            "$missingScenarioId/$missingComparisonId"
+                        }
+                    } |
+                    Sort-Object -Unique)
+                $liveDiagnosticsHistoryEvidence["liveExperimentCoverageMissingComparisonIds"] = @($liveExperimentCoverageMissingComparisonIds)
                 $liveDiagnosticsHistoryEvidence["pumpingSignalCount"] = Get-SafetyClassCount $aggregateSafetyClassCounts "pumping"
                 $liveDiagnosticsHistoryEvidence["weakSignalCount"] = Get-SafetyClassCount $aggregateSafetyClassCounts "weak-signal"
+                $liveDiagnosticsHistoryEvidence["artifactControlSignalCount"] = Get-SafetyClassCount $aggregateSafetyClassCounts "artifact-control"
+                $liveDiagnosticsHistoryEvidence["agcStabilityStatus"] = $agcStabilityStatus
+                $liveDiagnosticsHistoryEvidence["agcStabilityTraceCount"] = $agcStabilityTraceCount
+                $liveDiagnosticsHistoryEvidence["agcStabilityMissingTraceCount"] = $agcStabilityMissingTraceCount
+                $liveDiagnosticsHistoryEvidence["agcPumpingRiskTraceCount"] = $agcPumpingRiskTraceCount
+                $liveDiagnosticsHistoryEvidence["agcActivePumpingSignalCount"] = $agcActivePumpingSignalCount
+                $liveDiagnosticsHistoryEvidence["agcVoiceLikePumpingSignalCount"] = $agcVoiceLikePumpingSignalCount
+                $liveDiagnosticsHistoryEvidence["mixedWeakStrongEvidenceReady"] = [string]::Equals($mixedWeakStrongEvidenceStatus, "ready", [StringComparison]::OrdinalIgnoreCase)
+                $liveDiagnosticsHistoryEvidence["mixedWeakStrongEvidenceStatus"] = $mixedWeakStrongEvidenceStatus
+                $liveDiagnosticsHistoryEvidence["mixedWeakStrongTraceCount"] = $mixedWeakStrongTraceRecords.Count
+                $liveDiagnosticsHistoryEvidence["mixedWeakStrongReadyTraceCount"] = $mixedWeakStrongReadyTraceRecords.Count
+                $liveDiagnosticsHistoryEvidence["mixedWeakStrongMissingTraceCount"] = $mixedWeakStrongMissingTraceCount
+                $liveDiagnosticsHistoryEvidence["mixedWeakStrongGapWatchTraceCount"] = $mixedWeakStrongGapWatchTraceRecords.Count
                 $liveDiagnosticsHistoryEvidence["recommendationCount"] = $recommendations.Count
                 $liveDiagnosticsHistoryEvidence["bundleRelativePaths"] = $bundleRelativePaths
                 $liveDiagnosticsHistoryEvidence["absolutePathCount"] = $absolutePaths.Count
@@ -6583,7 +9795,8 @@ else {
                         [ordered]@{ name = "previousNr5Trace"; trace = $previousNr5Trace },
                         [ordered]@{ name = "bestBalancedTrace"; trace = $bestBalancedTrace },
                         [ordered]@{ name = "bestWeakSignalTrace"; trace = $bestWeakSignalTrace },
-                        [ordered]@{ name = "lowestPumpingTrace"; trace = $lowestPumpingTrace }
+                        [ordered]@{ name = "lowestPumpingTrace"; trace = $lowestPumpingTrace },
+                        [ordered]@{ name = "mixedWeakStrongBestTrace"; trace = $mixedWeakStrongBestTrace }
                     )) {
                         $compactName = [string]$entry["name"]
                         $compactTrace = $entry["trace"]
@@ -6626,11 +9839,31 @@ else {
                                 $artifactValidationOk = $false
                             }
                         }
-                        foreach ($fieldName in @("weakDropoutSampleCount", "weakRecoveryPct", "nr5OutputMovementDb", "audioRmsMovementDb", "safetyRiskScore", "promotionBlockerCount")) {
+                        foreach ($fieldName in @("hardBlockerSampleCount", "topHardConstraintCount", "weakDropoutSampleCount", "strongInputSampleCount", "weakRecoveryPct", "weakStrongOutputGapDb", "mixedWeakStrongEvidenceReady", "weakStrongOutputParityReady", "nr5OutputMovementDb", "audioRmsMovementDb", "rxAudioLevelerConstrainedSampleCount", "rxAudioLevelerConstrainedPct", "rxAudioLevelerBoostSlewLimitedSampleCount", "rxAudioLevelerPeakLimitedSampleCount", "rxAudioLevelerOutputLimitedSampleCount", "rxAudioLevelerOutputRmsMovementDb", "rxAudioLevelerAppliedGainMovementDb", "agcPumpingRisk", "agcActiveGainMovementDb", "agcVoiceLikeGainMovementDb", "agcQuietNoEvidenceGainMovementDb", "agcLevelerConstrainedGainMovementDb", "nr5TextureFillAverage", "nr5SignalProbabilityAverage", "nr5LowEvidenceLiftedSampleCount", "nr5LowEvidenceLiftedPct", "nr5LowEvidenceAlignmentMismatchPct", "nr5AudioAlignmentMismatchPct", "nr5ArtifactRiskScore", "safetyRiskScore", "promotionBlockerCount")) {
                             if (-not (Test-LiveHistoryScalarEquivalent -Actual (Get-JsonValue $compactTrace $fieldName) -Expected (Get-JsonValue $fullTrace $fieldName))) {
                                 Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-compact-trace-decision-field-mismatch" "Artifact '$artifactId' $compactName.$fieldName does not match the full trace record for '$compactTraceId'."
                                 $artifactValidationOk = $false
                             }
+                        }
+                        if (-not [string]::Equals([string](Get-JsonValue $compactTrace "agcStabilityStatus"), [string](Get-JsonValue $fullTrace "agcStabilityStatus"), [StringComparison]::Ordinal)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-compact-trace-decision-field-mismatch" "Artifact '$artifactId' $compactName.agcStabilityStatus does not match the full trace record for '$compactTraceId'."
+                            $artifactValidationOk = $false
+                        }
+                        if (-not [string]::Equals([string](Get-JsonValue $compactTrace "mixedWeakStrongEvidenceStatus"), [string](Get-JsonValue $fullTrace "mixedWeakStrongEvidenceStatus"), [StringComparison]::Ordinal)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-compact-trace-decision-field-mismatch" "Artifact '$artifactId' $compactName.mixedWeakStrongEvidenceStatus does not match the full trace record for '$compactTraceId'."
+                            $artifactValidationOk = $false
+                        }
+                        if (-not [string]::Equals([string](Get-JsonValue $compactTrace "nr5ArtifactRiskStatus"), [string](Get-JsonValue $fullTrace "nr5ArtifactRiskStatus"), [StringComparison]::Ordinal)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-compact-trace-decision-field-mismatch" "Artifact '$artifactId' $compactName.nr5ArtifactRiskStatus does not match the full trace record for '$compactTraceId'."
+                            $artifactValidationOk = $false
+                        }
+                        if (-not [string]::Equals([string](Get-JsonValue $compactTrace "topHardConstraintName"), [string](Get-JsonValue $fullTrace "topHardConstraintName"), [StringComparison]::Ordinal)) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-compact-trace-decision-field-mismatch" "Artifact '$artifactId' $compactName.topHardConstraintName does not match the full trace record for '$compactTraceId'."
+                            $artifactValidationOk = $false
+                        }
+                        if (-not (Test-LiveHistoryNamedCountsMatch -Actual (Get-JsonArray $compactTrace "hardConstraintCounts") -Expected (Get-JsonArray $fullTrace "hardConstraintCounts"))) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-compact-trace-hard-constraint-count-mismatch" "Artifact '$artifactId' $compactName.hardConstraintCounts does not match the full trace record for '$compactTraceId'."
+                            $artifactValidationOk = $false
                         }
                         if (-not (Test-StringArraySame -Actual (Get-JsonArray $compactTrace "promotionBlockerClasses") -Expected (Get-JsonArray $fullTrace "promotionBlockerClasses"))) {
                             Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-compact-trace-decision-rollup-mismatch" "Artifact '$artifactId' $compactName.promotionBlockerClasses does not match the full trace record for '$compactTraceId'."
@@ -6681,7 +9914,8 @@ else {
                 foreach ($entry in @(
                     [ordered]@{ name = "bestBalancedTrace"; actual = $bestBalancedTrace; expected = $expectedBestBalancedTrace; code = "live-history-best-balanced-selection-mismatch"; mode = "best-balanced" },
                     [ordered]@{ name = "bestWeakSignalTrace"; actual = $bestWeakSignalTrace; expected = $expectedBestWeakSignalTrace; code = "live-history-best-weak-selection-mismatch"; mode = "best-weak" },
-                    [ordered]@{ name = "lowestPumpingTrace"; actual = $lowestPumpingTrace; expected = $expectedLowestPumpingTrace; code = "live-history-lowest-pumping-selection-mismatch"; mode = "lowest-pumping" }
+                    [ordered]@{ name = "lowestPumpingTrace"; actual = $lowestPumpingTrace; expected = $expectedLowestPumpingTrace; code = "live-history-lowest-pumping-selection-mismatch"; mode = "lowest-pumping" },
+                    [ordered]@{ name = "mixedWeakStrongBestTrace"; actual = $mixedWeakStrongBestTrace; expected = $expectedMixedWeakStrongBestTrace; code = "live-history-mixed-weak-strong-selection-mismatch"; mode = "mixed-weak-strong" }
                 )) {
                     $expectedTrace = $entry["expected"]
                     if ($null -eq $expectedTrace) {
@@ -6724,17 +9958,78 @@ else {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-candidate-ready-nr5-count-mismatch" "Artifact '$artifactId' reports candidateReadyNr5TraceCount=$candidateReadyNr5TraceCount but contains $actualCandidateReadyNr5TraceCount candidate-ready NR5 trace record(s)."
                     $artifactValidationOk = $false
                 }
+                if ($schemaVersion -ge 13 -and $agcStabilityMissingTraceCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-agc-stability-missing" "Artifact '$artifactId' schemaVersion=$schemaVersion is missing agcStabilityStatus/agcPumpingRisk on $agcStabilityMissingTraceCount trace record(s); rerun watch-dsp-live-diagnostics.ps1 and summarize-dsp-live-diagnostics-history.ps1 with AGC stability support before using live history as DSP build-out evidence."
+                    $artifactValidationOk = $false
+                }
+                if ($schemaVersion -ge 14 -and $mixedWeakStrongFieldMissingTraceCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-mixed-weak-strong-fields-missing" "Artifact '$artifactId' schemaVersion=$schemaVersion is missing strongInputSampleCount/mixedWeakStrongEvidenceReady/weakStrongOutputParityReady/mixedWeakStrongEvidenceStatus on $mixedWeakStrongFieldMissingTraceCount NR5 trace record(s); rerun watch-dsp-live-diagnostics.ps1 and summarize-dsp-live-diagnostics-history.ps1 with mixed weak/strong evidence support."
+                    $artifactValidationOk = $false
+                }
+                if ($schemaVersion -ge 15 -and $artifactControlFieldMissingTraceCount -gt 0) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-artifact-control-fields-missing" "Artifact '$artifactId' schemaVersion=$schemaVersion is missing NR5 artifact-control fields on $artifactControlFieldMissingTraceCount NR5 trace record(s); rerun summarize-dsp-live-diagnostics-history.ps1 with artifact-risk support."
+                    $artifactValidationOk = $false
+                }
+                $summaryArtifactControlSignalCountValue = Get-JsonValue $artifactJson "artifactControlSignalCount"
+                $summaryArtifactControlSignalCount = [int](Get-NumericValueOrDefault $summaryArtifactControlSignalCountValue)
+                if ($schemaVersion -ge 15 -and $null -eq $summaryArtifactControlSignalCountValue) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-artifact-control-count-missing" "Artifact '$artifactId' must declare artifactControlSignalCount so speech-artifact review signals are visible in strict validation."
+                    $artifactValidationOk = $false
+                }
+                elseif ($schemaVersion -ge 15 -and $summaryArtifactControlSignalCount -ne $artifactControlSignalCount) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-artifact-control-count-mismatch" "Artifact '$artifactId' artifactControlSignalCount='$summaryArtifactControlSignalCount' but trace-derived artifact-control signal count is '$artifactControlSignalCount'."
+                    $artifactValidationOk = $false
+                }
+                $summaryMixedWeakStrongReadyValue = Get-JsonValue $artifactJson "mixedWeakStrongEvidenceReady"
+                $summaryMixedWeakStrongReady = Test-Truthy $summaryMixedWeakStrongReadyValue
+                $summaryMixedWeakStrongStatus = [string](Get-JsonValue $artifactJson "mixedWeakStrongEvidenceStatus")
+                $expectedMixedWeakStrongReady = [string]::Equals($mixedWeakStrongEvidenceStatus, "ready", [StringComparison]::OrdinalIgnoreCase)
+                if ($schemaVersion -ge 14 -and $null -eq $summaryMixedWeakStrongReadyValue) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-mixed-weak-strong-ready-missing" "Artifact '$artifactId' must declare mixedWeakStrongEvidenceReady so live histories cannot omit weak/strong volume parity evidence."
+                    $artifactValidationOk = $false
+                }
+                elseif ($schemaVersion -ge 14 -and $summaryMixedWeakStrongReady -ne $expectedMixedWeakStrongReady) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-mixed-weak-strong-ready-mismatch" "Artifact '$artifactId' mixedWeakStrongEvidenceReady='$summaryMixedWeakStrongReady' but trace-derived status '$mixedWeakStrongEvidenceStatus' implies '$expectedMixedWeakStrongReady'."
+                    $artifactValidationOk = $false
+                }
+                if ($schemaVersion -ge 14 -and [string]::IsNullOrWhiteSpace($summaryMixedWeakStrongStatus)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-mixed-weak-strong-status-missing" "Artifact '$artifactId' must declare mixedWeakStrongEvidenceStatus."
+                    $artifactValidationOk = $false
+                }
+                elseif ($schemaVersion -ge 14 -and -not [string]::Equals($summaryMixedWeakStrongStatus, $mixedWeakStrongEvidenceStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-mixed-weak-strong-status-mismatch" "Artifact '$artifactId' mixedWeakStrongEvidenceStatus='$summaryMixedWeakStrongStatus' but trace-derived status is '$mixedWeakStrongEvidenceStatus'."
+                    $artifactValidationOk = $false
+                }
+                foreach ($mixedCountSpec in @(
+                        @{ Name = "mixedWeakStrongTraceCount"; Expected = $mixedWeakStrongTraceRecords.Count },
+                        @{ Name = "mixedWeakStrongReadyTraceCount"; Expected = $mixedWeakStrongReadyTraceRecords.Count },
+                        @{ Name = "mixedWeakStrongMissingTraceCount"; Expected = $mixedWeakStrongMissingTraceCount },
+                        @{ Name = "mixedWeakStrongGapWatchTraceCount"; Expected = $mixedWeakStrongGapWatchTraceRecords.Count }
+                    )) {
+                    $countName = [string]$mixedCountSpec["Name"]
+                    $summaryCountValue = Get-JsonValue $artifactJson $countName
+                    $summaryCount = [int](Get-NumericValueOrDefault $summaryCountValue)
+                    $expectedCount = [int](Get-NumericValueOrDefault $mixedCountSpec["Expected"])
+                    if ($schemaVersion -ge 14 -and $null -eq $summaryCountValue) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-mixed-weak-strong-count-missing" "Artifact '$artifactId' must declare $countName."
+                        $artifactValidationOk = $false
+                    }
+                    elseif ($schemaVersion -ge 14 -and $summaryCount -ne $expectedCount) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-mixed-weak-strong-count-mismatch" "Artifact '$artifactId' $countName='$summaryCount' but trace-derived value is '$expectedCount'."
+                        $artifactValidationOk = $false
+                    }
+                }
                 if (-not (Test-LiveHistoryReviewStatusCountsMatch -Actual $reviewStatusCounts -Expected $expectedReviewStatusCounts)) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-review-status-count-mismatch" "Artifact '$artifactId' reviewStatusCounts does not match the trace reviewStatus rollup."
                     $artifactValidationOk = $false
                 }
-                foreach ($fieldName in @("weakRecoveryPctMinimum", "nr5OutputMovementDbMaximum", "audioRmsMovementDbMaximum", "nr5MakeupMovementDbMaximum", "nr5RecoveryDriveMovementMaximum", "nr5MakeupMaxDbMaximum", "audioPeakMaxDbfsMaximum", "adcHeadroomMinDbMinimum")) {
+                foreach ($fieldName in @("weakRecoveryPctMinimum", "nr5OutputMovementDbMaximum", "audioRmsMovementDbMaximum", "rxAudioLevelerConstrainedPctMaximum", "rxAudioLevelerOutputRmsMovementDbMaximum", "rxAudioLevelerAppliedGainMovementDbMaximum", "agcActiveGainMovementDbMaximum", "agcVoiceLikeGainMovementDbMaximum", "mixedWeakStrongMinimumWeakSamples", "mixedWeakStrongMinimumStrongSamples", "weakStrongOutputGapDbMaximum", "nr5ArtifactRiskScoreMaximum", "nr5LowEvidenceLiftedSampleCountMaximum", "nr5LowEvidenceLiftedPctMaximum", "nr5AudioAlignmentMismatchPctMaximum", "nr5MakeupMovementDbMaximum", "nr5RecoveryDriveMovementMaximum", "nr5MakeupMaxDbMaximum", "audioPeakMaxDbfsMaximum", "adcHeadroomMinDbMinimum")) {
                     if (-not (Test-LiveHistoryScalarEquivalent -Actual (Get-JsonValue $thresholds $fieldName) -Expected (Get-JsonValue $expectedThresholds $fieldName))) {
                         Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-thresholds-mismatch" "Artifact '$artifactId' thresholds.$fieldName does not match the summarizer tuning threshold."
                         $artifactValidationOk = $false
                     }
                 }
-                foreach ($fieldName in @("weakRecoveryPct", "weakDropoutSampleCount", "nr5OutputMovementDb", "nr5MakeupMovementDb", "nr5RecoveryDriveMovement", "safetyRiskScore")) {
+                foreach ($fieldName in @("weakRecoveryPct", "weakDropoutSampleCount", "strongInputSampleCount", "weakStrongOutputGapDb", "nr5OutputMovementDb", "rxAudioLevelerConstrainedSampleCount", "rxAudioLevelerConstrainedPct", "rxAudioLevelerBoostSlewLimitedSampleCount", "rxAudioLevelerPeakLimitedSampleCount", "rxAudioLevelerOutputLimitedSampleCount", "rxAudioLevelerOutputRmsMovementDb", "rxAudioLevelerAppliedGainMovementDb", "agcPumpingRisk", "agcActiveGainMovementDb", "agcVoiceLikeGainMovementDb", "agcQuietNoEvidenceGainMovementDb", "agcLevelerConstrainedGainMovementDb", "nr5ArtifactRiskScore", "nr5LowEvidenceLiftedSampleCount", "nr5LowEvidenceLiftedPct", "nr5AudioAlignmentMismatchPct", "nr5MakeupMovementDb", "nr5RecoveryDriveMovement", "safetyRiskScore")) {
                     if (-not (Test-LiveHistoryScalarEquivalent -Actual (Get-JsonValue $latestVsPreviousNr5Delta $fieldName) -Expected (Get-JsonValue $expectedLatestVsPreviousNr5Delta $fieldName))) {
                         Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-latest-delta-mismatch" "Artifact '$artifactId' latestVsPreviousNr5Delta.$fieldName does not match latest and previous NR5 trace records."
                         $artifactValidationOk = $false
@@ -6892,6 +10187,8 @@ else {
                     $experimentScenarioCount = [int](Get-NumericValueOrDefault (Get-JsonValue $liveExperimentPlan "scenarioCount"))
                     $experimentSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $liveExperimentPlan "recommendedSampleCount"))
                     $experimentIntervalMs = [int](Get-NumericValueOrDefault (Get-JsonValue $liveExperimentPlan "recommendedIntervalMs"))
+                    $experimentTuningComparisons = @(Get-JsonArray $liveExperimentPlan "tuningComparisons" | ForEach-Object { [string]$_ })
+                    $experimentAcceptanceComparisons = @(Get-JsonArray $liveExperimentPlan "acceptanceComparisons" | ForEach-Object { [string]$_ })
                     $experimentComparisons = @(Get-JsonArray $liveExperimentPlan "recommendedComparisons" | ForEach-Object { [string]$_ })
                     $experimentCommandTemplates = Get-JsonValue $liveExperimentPlan "matrixCommandTemplates"
                     $expectedExperimentScenarios = @(Get-JsonArray $expectedLiveExperimentPlan "scenarios")
@@ -6948,6 +10245,14 @@ else {
                             Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-live-experiment-plan-scenario-ids-mismatch" "Artifact '$artifactId' latestLiveExperimentPlan.scenarioIds does not match latestTuningActionPlan-derived scenarios."
                             $artifactValidationOk = $false
                         }
+                        if (-not (Test-OrderedStringArraysEqual -Actual $experimentTuningComparisons -Expected (Get-JsonArray $expectedLiveExperimentPlan "tuningComparisons"))) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-live-experiment-plan-tuning-comparisons-mismatch" "Artifact '$artifactId' latestLiveExperimentPlan.tuningComparisons does not match the generated live experiment plan."
+                            $artifactValidationOk = $false
+                        }
+                        if (-not (Test-OrderedStringArraysEqual -Actual $experimentAcceptanceComparisons -Expected (Get-JsonArray $expectedLiveExperimentPlan "acceptanceComparisons"))) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-live-experiment-plan-acceptance-comparisons-mismatch" "Artifact '$artifactId' latestLiveExperimentPlan.acceptanceComparisons does not match the generated live experiment plan."
+                            $artifactValidationOk = $false
+                        }
                         if (-not (Test-OrderedStringArraysEqual -Actual $experimentComparisons -Expected (Get-JsonArray $expectedLiveExperimentPlan "recommendedComparisons"))) {
                             Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-live-experiment-plan-comparisons-mismatch" "Artifact '$artifactId' latestLiveExperimentPlan.recommendedComparisons does not match the generated live experiment plan."
                             $artifactValidationOk = $false
@@ -6967,7 +10272,7 @@ else {
                         Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-live-experiment-plan-default-change-ready" "Artifact '$artifactId' latestLiveExperimentPlan must not authorize default DSP behavior changes."
                         $artifactValidationOk = $false
                     }
-                    foreach ($templateName in @("baseline", "candidate", "compare")) {
+                    foreach ($templateName in @("offBaseline", "thetis", "baseline", "candidate", "compare")) {
                         $template = [string](Get-JsonValue $experimentCommandTemplates $templateName)
                         if ([string]::IsNullOrWhiteSpace($template)) {
                             Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-live-experiment-plan-command-missing" "Artifact '$artifactId' latestLiveExperimentPlan.matrixCommandTemplates.$templateName is missing."
@@ -7057,6 +10362,18 @@ else {
                 elseif ($liveExperimentCoverageFieldsRequired -and -not (Test-LiveHistoryExperimentCoverageMatches -Actual $liveExperimentCoverage -Expected $expectedLiveExperimentCoverage)) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-live-experiment-coverage-mismatch" "Artifact '$artifactId' latestLiveExperimentCoverage does not match the generated live experiment plan and trace scenario/comparison records."
                     $artifactValidationOk = $false
+                }
+                elseif ($liveExperimentCoverageFieldsRequired) {
+                    $coverageStatus = [string](Get-JsonValue $liveExperimentCoverage "status")
+                    $coverageMissingComparisonCount = [int](Get-NumericValueOrDefault (Get-JsonValue $liveExperimentCoverage "missingComparisonCount"))
+                    if ($coverageMissingComparisonCount -gt 0 -or -not [string]::Equals($coverageStatus, "complete", [StringComparison]::OrdinalIgnoreCase)) {
+                        $missingComparisonSummary = (@($liveDiagnosticsHistoryEvidence["liveExperimentCoverageMissingComparisonIds"]) | Select-Object -First 8) -join ", "
+                        if ([string]::IsNullOrWhiteSpace($missingComparisonSummary)) {
+                            $missingComparisonSummary = "none-listed"
+                        }
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-live-experiment-coverage-incomplete" "Artifact '$artifactId' latestLiveExperimentCoverage status='$coverageStatus' is missing $coverageMissingComparisonCount required live comparison(s): $missingComparisonSummary. Capture off-baseline, thetis-parity, current-zeus, and nr5-spnr windows before using live history as acceptance evidence."
+                        $artifactValidationOk = $false
+                    }
                 }
                 if ($readyTraceCount -le 0) {
                     Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-ready-traces-missing" "Artifact '$artifactId' does not include any benchmark-ready live diagnostics traces."
@@ -7387,6 +10704,9 @@ else {
                                     "sourceMode",
                                     "trendStatus",
                                     "nr5TuningTraceStatus",
+                                    "agcStabilityStatus",
+                                    "nr5ArtifactRiskStatus",
+                                    "topHardConstraintName",
                                     "reviewStatus"
                             ))
                             if ($textMismatches.Count -gt 0) {
@@ -7471,6 +10791,7 @@ else {
                                     "okSampleCount",
                                     "failedSampleCount",
                                     "hardBlockerSampleCount",
+                                    "topHardConstraintCount",
                                     "readyForBenchmarkTrace",
                                     "nr5TuningReadyTrace",
                                     "nr5SampleCount",
@@ -7479,16 +10800,37 @@ else {
                                     "weakInputSampleCount",
                                     "weakRecoveredSampleCount",
                                     "weakDropoutSampleCount",
+                                    "strongInputSampleCount",
                                     "hotMakeupSampleCount",
                                     "weakRecoveryPct",
                                     "weakStrongOutputGapDb",
+                                    "mixedWeakStrongEvidenceReady",
+                                    "weakStrongOutputParityReady",
+                                    "mixedWeakStrongEvidenceStatus",
                                     "nr5OutputMovementDb",
                                     "audioRmsMovementDb",
+                                    "rxAudioLevelerConstrainedSampleCount",
+                                    "rxAudioLevelerConstrainedPct",
+                                    "rxAudioLevelerBoostSlewLimitedSampleCount",
+                                    "rxAudioLevelerPeakLimitedSampleCount",
+                                    "rxAudioLevelerOutputLimitedSampleCount",
+                                    "rxAudioLevelerOutputRmsMovementDb",
+                                    "rxAudioLevelerAppliedGainMovementDb",
+                                    "agcPumpingRisk",
+                                    "agcActiveGainMovementDb",
+                                    "agcVoiceLikeGainMovementDb",
+                                    "agcQuietNoEvidenceGainMovementDb",
+                                    "agcLevelerConstrainedGainMovementDb",
                                     "nr5MakeupMovementDb",
                                     "nr5MakeupMaxDb",
                                     "nr5RecoveryDriveMovement",
                                     "nr5TextureFillAverage",
                                     "nr5SignalProbabilityAverage",
+                                    "nr5LowEvidenceLiftedSampleCount",
+                                    "nr5LowEvidenceLiftedPct",
+                                    "nr5LowEvidenceAlignmentMismatchPct",
+                                    "nr5AudioAlignmentMismatchPct",
+                                    "nr5ArtifactRiskScore",
                                     "audioPeakMaxDbfs",
                                     "adcHeadroomMinDb",
                                     "monitorBacklogMaxSamples",
@@ -7515,6 +10857,19 @@ else {
                                 $sourceRecordOk = $false
                                 Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-history-trace-source-safety-signals-mismatch" "Artifact '$artifactId' trace '$traceId' safetySignals do not match watcher summary '$sourcePath'."
                                 $artifactValidationOk = $false
+                            }
+                            foreach ($countSpec in @(
+                                    @{ Name = "constraintCounts"; Code = "live-history-trace-source-constraint-count-mismatch" },
+                                    @{ Name = "hardConstraintCounts"; Code = "live-history-trace-source-hard-constraint-count-mismatch" },
+                                    @{ Name = "statusCounts"; Code = "live-history-trace-source-status-count-mismatch" }
+                                )) {
+                                $countName = [string]$countSpec["Name"]
+                                if (-not (Test-LiveHistoryNamedCountsMatch -Actual (Get-JsonArray $trace $countName) -Expected (Get-JsonArray $expectedSourceTrace $countName))) {
+                                    $sourceRecord["sourceStatus"] = "content-mismatch"
+                                    $sourceRecordOk = $false
+                                    Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired ([string]$countSpec["Code"]) "Artifact '$artifactId' trace '$traceId' $countName do not match watcher summary '$sourcePath'."
+                                    $artifactValidationOk = $false
+                                }
                             }
                             if (-not (Test-LiveHistorySafetyClassCountsMatch -Actual $traceSafetyClassCounts -Expected (Get-JsonArray $expectedSourceTrace "safetyClassCounts"))) {
                                 $sourceRecord["sourceStatus"] = "content-mismatch"
@@ -7707,6 +11062,38 @@ else {
                 $candidateSummaries = @(Get-JsonArray $artifactJson "candidateSummaries")
                 $externalBakeoffPlan = Get-JsonValue $artifactJson "externalBakeoffPlan"
                 $externalBakeoffPlanRequired = ($schemaVersion -ge 2 -or $null -ne $externalBakeoffPlan)
+                $reportedMissingCandidateIds = @(Get-JsonArray $artifactJson "missingCandidateIds" | ForEach-Object {
+                        ConvertTo-CandidateId ([string]$_)
+                    } | Where-Object {
+                        -not [string]::IsNullOrWhiteSpace($_)
+                    } | Sort-Object -Unique)
+                $bakeoffUnsafeCandidateDetails = New-Object System.Collections.Generic.List[object]
+                $bakeoffBlockedCandidateDetails = New-Object System.Collections.Generic.List[object]
+                $bakeoffIntegrationReadyCandidateDetails = New-Object System.Collections.Generic.List[object]
+                $bakeoffSnapshotMismatchCandidateDetails = New-Object System.Collections.Generic.List[object]
+                $bakeoffCandidateIssueCounts = @{}
+                foreach ($summary in @($candidateSummaries)) {
+                    $detail = New-ExternalCandidateDetailFromSummary $summary
+                    foreach ($issue in @(Get-JsonArray $detail "issues")) {
+                        Add-ExternalCandidateIssueCount -Counts $bakeoffCandidateIssueCounts -Issue ([string]$issue)
+                    }
+
+                    $safe = Test-Truthy (Get-JsonValue $summary "safeForBakeoff")
+                    $blocked = Test-Truthy (Get-JsonValue $summary "integrationBlocked")
+                    $inSnapshot = Test-Truthy (Get-JsonValue $summary "inSnapshot")
+                    if (-not $safe) {
+                        $bakeoffUnsafeCandidateDetails.Add($detail) | Out-Null
+                    }
+                    if ($blocked) {
+                        $bakeoffBlockedCandidateDetails.Add($detail) | Out-Null
+                    }
+                    elseif ($safe) {
+                        $bakeoffIntegrationReadyCandidateDetails.Add($detail) | Out-Null
+                    }
+                    if (-not $inSnapshot) {
+                        $bakeoffSnapshotMismatchCandidateDetails.Add($detail) | Out-Null
+                    }
+                }
 
                 $externalEngineBakeoffEvidence["readyForReview"] = $readyForReview
                 $externalEngineBakeoffEvidence["candidateCount"] = $candidateCount
@@ -7714,8 +11101,18 @@ else {
                 $externalEngineBakeoffEvidence["blockedCandidateCount"] = $blockedCandidateCount
                 $externalEngineBakeoffEvidence["integrationReadyCandidateCount"] = $integrationReadyCandidateCount
                 $externalEngineBakeoffEvidence["missingCandidateCount"] = $missingCandidateCount
+                $externalEngineBakeoffEvidence["missingCandidateIds"] = @($reportedMissingCandidateIds)
                 $externalEngineBakeoffEvidence["unsafeCandidateCount"] = $unsafeCandidateCount
+                $externalEngineBakeoffEvidence["unsafeCandidateIds"] = @($bakeoffUnsafeCandidateDetails.ToArray() | ForEach-Object { [string](Get-JsonValue $_ "id") } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+                $externalEngineBakeoffEvidence["unsafeCandidateDetails"] = @($bakeoffUnsafeCandidateDetails.ToArray())
+                $externalEngineBakeoffEvidence["blockedCandidateIds"] = @($bakeoffBlockedCandidateDetails.ToArray() | ForEach-Object { [string](Get-JsonValue $_ "id") } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+                $externalEngineBakeoffEvidence["blockedCandidateDetails"] = @($bakeoffBlockedCandidateDetails.ToArray())
+                $externalEngineBakeoffEvidence["integrationReadyCandidateIds"] = @($bakeoffIntegrationReadyCandidateDetails.ToArray() | ForEach-Object { [string](Get-JsonValue $_ "id") } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+                $externalEngineBakeoffEvidence["integrationReadyCandidateDetails"] = @($bakeoffIntegrationReadyCandidateDetails.ToArray())
                 $externalEngineBakeoffEvidence["snapshotMismatchCount"] = $snapshotMismatchCount
+                $externalEngineBakeoffEvidence["snapshotMismatchCandidateIds"] = @($bakeoffSnapshotMismatchCandidateDetails.ToArray() | ForEach-Object { [string](Get-JsonValue $_ "id") } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Sort-Object -Unique)
+                $externalEngineBakeoffEvidence["snapshotMismatchCandidateDetails"] = @($bakeoffSnapshotMismatchCandidateDetails.ToArray())
+                $externalEngineBakeoffEvidence["candidateIssueCounts"] = @(Convert-ExternalCandidateIssueCountsToRecords -Counts $bakeoffCandidateIssueCounts)
                 $externalEngineBakeoffEvidence["candidateSha256"] = $candidateSha256
                 $externalEngineBakeoffEvidence["snapshotSha256"] = $snapshotSha256
                 $externalEngineBakeoffEvidence["bakeoffPlanCandidateCount"] = [int](Get-NumericValueOrDefault (Get-JsonValue $externalBakeoffPlan "candidatePlanCount"))
@@ -8376,8 +11773,41 @@ else {
                         summaryTracePathStatus = $null
                         summaryTrendStatus = $null
                         readyForBenchmarkTrace = $null
+                        indexCaptureReadinessStatus = $null
+                        captureReadinessStatus = $null
+                        captureReadinessStatusMatch = $null
+                        indexHardGatePass = $null
+                        hardGatePass = $null
+                        hardGatePassMatch = $null
+                        indexStrictPreflightPass = $null
+                        strictPreflightPass = $null
+                        strictPreflightPassMatch = $null
+                        indexTopCaptureConstraintName = $null
+                        topCaptureConstraintName = $null
+                        indexTopCaptureConstraintCount = $null
+                        topCaptureConstraintCount = $null
+                        indexTopCaptureHardConstraintName = $null
+                        topCaptureHardConstraintName = $null
+                        indexTopCaptureHardConstraintCount = $null
+                        topCaptureHardConstraintCount = $null
+                        captureReadinessFieldMismatchCount = 0
+                        indexComparisonStateStrict = $null
+                        comparisonStateStrict = $null
+                        indexComparisonStateReady = $null
+                        comparisonStateReady = $null
+                        indexComparisonStateStatus = $null
+                        comparisonStateStatus = $null
+                        comparisonStateFieldMismatchCount = 0
+                        nrModeMismatchSampleCount = $null
+                        nrOffRequestedSampleCount = $null
+                        nrOffEffectiveSampleCount = $null
+                        nr5RequestedSampleCount = $null
+                        nr5EffectiveSampleCount = $null
                         nr5SampleCount = $null
+                        nr5AlignedSampleCount = $null
                         nr5AgcDiagnosticSampleCount = $null
+                        nr5ProbabilityDiagnosticSampleCount = $null
+                        nr5PeakDiagnosticSampleCount = $null
                         indexNr5WeakInputSampleCount = $null
                         indexNr5WeakRecoveredSampleCount = $null
                         indexNr5WeakDropoutSampleCount = $null
@@ -8534,8 +11964,42 @@ else {
                                     }
                                     $readyTrace = Test-Truthy (Get-JsonValue $summaryJson "readyForBenchmarkTrace")
                                     $trendStatus = [string](Get-JsonValue $summaryJson "trendStatus")
+                                    $captureReadiness = Get-JsonValue $summaryJson "captureReadinessWatch"
+                                    $captureReadinessStatus = [string](Get-JsonValue $captureReadiness "status")
+                                    $captureHardGatePassValue = Get-JsonValue $captureReadiness "hardGatePass"
+                                    $captureStrictPreflightPassValue = Get-JsonValue $captureReadiness "strictPreflightPass"
+                                    $captureHardGatePass = Test-Truthy $captureHardGatePassValue
+                                    $captureStrictPreflightPass = Test-Truthy $captureStrictPreflightPassValue
+                                    $topCaptureConstraint = Get-JsonValue $captureReadiness "topConstraint"
+                                    $topCaptureHardConstraint = Get-JsonValue $captureReadiness "topHardConstraint"
+                                    $topCaptureConstraintName = [string](Get-JsonValue $topCaptureConstraint "name")
+                                    $topCaptureHardConstraintName = [string](Get-JsonValue $topCaptureHardConstraint "name")
+                                    $topCaptureConstraintCount = Get-NumericValue (Get-JsonValue $topCaptureConstraint "count")
+                                    $topCaptureHardConstraintCount = Get-NumericValue (Get-JsonValue $topCaptureHardConstraint "count")
+                                    $indexCaptureReadinessStatus = [string](Get-JsonValue $indexedFile "captureReadinessStatus")
+                                    $indexHardGatePassValue = Get-JsonValue $indexedFile "hardGatePass"
+                                    $indexStrictPreflightPassValue = Get-JsonValue $indexedFile "strictPreflightPass"
+                                    $indexTopCaptureConstraintName = [string](Get-JsonValue $indexedFile "topCaptureConstraintName")
+                                    $indexTopCaptureConstraintCount = Get-NumericValue (Get-JsonValue $indexedFile "topCaptureConstraintCount")
+                                    $indexTopCaptureHardConstraintName = [string](Get-JsonValue $indexedFile "topCaptureHardConstraintName")
+                                    $indexTopCaptureHardConstraintCount = Get-NumericValue (Get-JsonValue $indexedFile "topCaptureHardConstraintCount")
                                     $nr5SampleCount = [int](Get-JsonValue $summaryJson "nr5SampleCount")
+                                    $nr5AlignedSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nr5AlignedSampleCount"))
                                     $nr5AgcDiagnosticSampleCount = [int](Get-JsonValue $summaryJson "nr5AgcDiagnosticSampleCount")
+                                    $nr5ProbabilityDiagnosticSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nr5ProbabilityDiagnosticSampleCount"))
+                                    $nr5PeakDiagnosticSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nr5PeakDiagnosticSampleCount"))
+                                    $nr5RequestedSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nr5RequestedSampleCount"))
+                                    $nr5EffectiveSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nr5EffectiveSampleCount"))
+                                    $nrOffRequestedSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nrOffRequestedSampleCount"))
+                                    $nrOffEffectiveSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nrOffEffectiveSampleCount"))
+                                    $nrModeMismatchSampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $summaryJson "nrModeMismatchSampleCount"))
+                                    $comparisonState = Get-JsonValue $summaryJson "comparisonStateReadiness"
+                                    $summaryComparisonStateStrict = if ($null -eq $comparisonState) { $false } else { Test-Truthy (Get-JsonValue $comparisonState "strict") }
+                                    $summaryComparisonStateReady = if ($null -eq $comparisonState) { $false } else { Test-Truthy (Get-JsonValue $comparisonState "ready") }
+                                    $summaryComparisonStateStatus = if ($null -eq $comparisonState) { "legacy-missing" } else { [string](Get-JsonValue $comparisonState "status") }
+                                    $indexComparisonStateStrictValue = Get-JsonValue $indexedFile "comparisonStateStrict"
+                                    $indexComparisonStateReadyValue = Get-JsonValue $indexedFile "comparisonStateReady"
+                                    $indexComparisonStateStatus = [string](Get-JsonValue $indexedFile "comparisonStateStatus")
                                     $nr5Weak = Get-JsonValue $summaryJson "nr5WeakSignalWatch"
                                     $nr5WeakInputSampleValue = Get-NumericValue (Get-JsonValue $nr5Weak "weakInputSampleCount")
                                     $nr5WeakRecoveredSampleValue = Get-NumericValue (Get-JsonValue $nr5Weak "weakRecoveredSampleCount")
@@ -8556,12 +12020,167 @@ else {
                                     }
                                     $indexedRecord["summaryTrendStatus"] = $trendStatus
                                     $indexedRecord["readyForBenchmarkTrace"] = $readyTrace
+                                    $indexedRecord["indexComparisonStateStrict"] = $indexComparisonStateStrictValue
+                                    $indexedRecord["comparisonStateStrict"] = $summaryComparisonStateStrict
+                                    $indexedRecord["indexComparisonStateReady"] = $indexComparisonStateReadyValue
+                                    $indexedRecord["comparisonStateReady"] = $summaryComparisonStateReady
+                                    $indexedRecord["indexComparisonStateStatus"] = $indexComparisonStateStatus
+                                    $indexedRecord["comparisonStateStatus"] = $summaryComparisonStateStatus
+                                    $indexedRecord["nrModeMismatchSampleCount"] = $nrModeMismatchSampleCount
+                                    $indexedRecord["nrOffRequestedSampleCount"] = $nrOffRequestedSampleCount
+                                    $indexedRecord["nrOffEffectiveSampleCount"] = $nrOffEffectiveSampleCount
+                                    $indexedRecord["nr5RequestedSampleCount"] = $nr5RequestedSampleCount
+                                    $indexedRecord["nr5EffectiveSampleCount"] = $nr5EffectiveSampleCount
+                                    $indexedRecord["indexCaptureReadinessStatus"] = $indexCaptureReadinessStatus
+                                    $indexedRecord["captureReadinessStatus"] = $captureReadinessStatus
+                                    $indexedRecord["indexHardGatePass"] = $indexHardGatePassValue
+                                    $indexedRecord["hardGatePass"] = $captureHardGatePass
+                                    $indexedRecord["indexStrictPreflightPass"] = $indexStrictPreflightPassValue
+                                    $indexedRecord["strictPreflightPass"] = $captureStrictPreflightPass
+                                    $indexedRecord["indexTopCaptureConstraintName"] = $indexTopCaptureConstraintName
+                                    $indexedRecord["topCaptureConstraintName"] = $topCaptureConstraintName
+                                    if ($null -ne $indexTopCaptureConstraintCount) {
+                                        $indexedRecord["indexTopCaptureConstraintCount"] = [int]$indexTopCaptureConstraintCount
+                                    }
+                                    if ($null -ne $topCaptureConstraintCount) {
+                                        $indexedRecord["topCaptureConstraintCount"] = [int]$topCaptureConstraintCount
+                                    }
+                                    $indexedRecord["indexTopCaptureHardConstraintName"] = $indexTopCaptureHardConstraintName
+                                    $indexedRecord["topCaptureHardConstraintName"] = $topCaptureHardConstraintName
+                                    if ($null -ne $indexTopCaptureHardConstraintCount) {
+                                        $indexedRecord["indexTopCaptureHardConstraintCount"] = [int]$indexTopCaptureHardConstraintCount
+                                    }
+                                    if ($null -ne $topCaptureHardConstraintCount) {
+                                        $indexedRecord["topCaptureHardConstraintCount"] = [int]$topCaptureHardConstraintCount
+                                    }
                                     $indexedRecord["nr5SampleCount"] = $nr5SampleCount
+                                    $indexedRecord["nr5AlignedSampleCount"] = $nr5AlignedSampleCount
                                     $indexedRecord["nr5AgcDiagnosticSampleCount"] = $nr5AgcDiagnosticSampleCount
+                                    $indexedRecord["nr5ProbabilityDiagnosticSampleCount"] = $nr5ProbabilityDiagnosticSampleCount
+                                    $indexedRecord["nr5PeakDiagnosticSampleCount"] = $nr5PeakDiagnosticSampleCount
                                     $indexedRecord["nr5WeakInputSampleCount"] = $nr5WeakInputSampleCount
                                     $indexedRecord["nr5WeakRecoveredSampleCount"] = $nr5WeakRecoveredSampleCount
                                     $indexedRecord["nr5WeakDropoutSampleCount"] = $nr5WeakDropoutSampleCount
                                     $indexedRecord["nr5HotMakeupSampleCount"] = $nr5HotMakeupSampleCount
+
+                                    $captureReadinessMismatchCount = 0
+                                    if ($null -ne $captureReadiness) {
+                                        if (-not [string]::IsNullOrWhiteSpace($indexCaptureReadinessStatus) -and
+                                            -not [string]::Equals($indexCaptureReadinessStatus, $captureReadinessStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-capture-readiness-status-mismatch" "Artifact '$artifactId' index entry '$indexedPath' declares captureReadinessStatus='$indexCaptureReadinessStatus' but summary '$indexedSummaryPath' reports '$captureReadinessStatus'."
+                                            $artifactValidationOk = $false
+                                            $indexedRecord["ok"] = $false
+                                            $captureReadinessMismatchCount++
+                                        }
+                                        elseif (-not [string]::IsNullOrWhiteSpace($indexCaptureReadinessStatus)) {
+                                            $indexedRecord["captureReadinessStatusMatch"] = $true
+                                        }
+
+                                        if ($null -ne $indexHardGatePassValue -and (Test-Truthy $indexHardGatePassValue) -ne $captureHardGatePass) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-capture-readiness-field-mismatch" "Artifact '$artifactId' index entry '$indexedPath' declares hardGatePass='$indexHardGatePassValue' but summary '$indexedSummaryPath' reports '$captureHardGatePass'."
+                                            $artifactValidationOk = $false
+                                            $indexedRecord["ok"] = $false
+                                            $captureReadinessMismatchCount++
+                                        }
+                                        elseif ($null -ne $indexHardGatePassValue) {
+                                            $indexedRecord["hardGatePassMatch"] = $true
+                                        }
+
+                                        if ($null -ne $indexStrictPreflightPassValue -and (Test-Truthy $indexStrictPreflightPassValue) -ne $captureStrictPreflightPass) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-capture-readiness-field-mismatch" "Artifact '$artifactId' index entry '$indexedPath' declares strictPreflightPass='$indexStrictPreflightPassValue' but summary '$indexedSummaryPath' reports '$captureStrictPreflightPass'."
+                                            $artifactValidationOk = $false
+                                            $indexedRecord["ok"] = $false
+                                            $captureReadinessMismatchCount++
+                                        }
+                                        elseif ($null -ne $indexStrictPreflightPassValue) {
+                                            $indexedRecord["strictPreflightPassMatch"] = $true
+                                        }
+
+                                        if (-not [string]::IsNullOrWhiteSpace($indexTopCaptureConstraintName) -and
+                                            -not [string]::Equals($indexTopCaptureConstraintName, $topCaptureConstraintName, [StringComparison]::OrdinalIgnoreCase)) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-capture-readiness-field-mismatch" "Artifact '$artifactId' index entry '$indexedPath' declares topCaptureConstraintName='$indexTopCaptureConstraintName' but summary '$indexedSummaryPath' reports '$topCaptureConstraintName'."
+                                            $artifactValidationOk = $false
+                                            $indexedRecord["ok"] = $false
+                                            $captureReadinessMismatchCount++
+                                        }
+
+                                        if ($null -ne $indexTopCaptureConstraintCount -and $null -ne $topCaptureConstraintCount -and [int]$indexTopCaptureConstraintCount -ne [int]$topCaptureConstraintCount) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-capture-readiness-field-mismatch" "Artifact '$artifactId' index entry '$indexedPath' declares topCaptureConstraintCount=$([int]$indexTopCaptureConstraintCount) but summary '$indexedSummaryPath' reports $([int]$topCaptureConstraintCount)."
+                                            $artifactValidationOk = $false
+                                            $indexedRecord["ok"] = $false
+                                            $captureReadinessMismatchCount++
+                                        }
+
+                                        if (-not [string]::IsNullOrWhiteSpace($indexTopCaptureHardConstraintName) -and
+                                            -not [string]::Equals($indexTopCaptureHardConstraintName, $topCaptureHardConstraintName, [StringComparison]::OrdinalIgnoreCase)) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-capture-readiness-field-mismatch" "Artifact '$artifactId' index entry '$indexedPath' declares topCaptureHardConstraintName='$indexTopCaptureHardConstraintName' but summary '$indexedSummaryPath' reports '$topCaptureHardConstraintName'."
+                                            $artifactValidationOk = $false
+                                            $indexedRecord["ok"] = $false
+                                            $captureReadinessMismatchCount++
+                                        }
+
+                                        if ($null -ne $indexTopCaptureHardConstraintCount -and $null -ne $topCaptureHardConstraintCount -and [int]$indexTopCaptureHardConstraintCount -ne [int]$topCaptureHardConstraintCount) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-capture-readiness-field-mismatch" "Artifact '$artifactId' index entry '$indexedPath' declares topCaptureHardConstraintCount=$([int]$indexTopCaptureHardConstraintCount) but summary '$indexedSummaryPath' reports $([int]$topCaptureHardConstraintCount)."
+                                            $artifactValidationOk = $false
+                                            $indexedRecord["ok"] = $false
+                                            $captureReadinessMismatchCount++
+                                        }
+                                    }
+                                    $indexedRecord["captureReadinessFieldMismatchCount"] = $captureReadinessMismatchCount
+
+                                    $comparisonStateMismatchCount = 0
+                                    $strictComparisonStateRequired = $false
+                                    foreach ($comparisonIdForState in @($indexedExplicitComparisonIdsNormalized)) {
+                                        if (Test-StrictComparisonStateId $comparisonIdForState) {
+                                            $strictComparisonStateRequired = $true
+                                            break
+                                        }
+                                    }
+                                    if (-not $strictComparisonStateRequired -and (Test-StrictComparisonStateId $summaryComparisonId)) {
+                                        $strictComparisonStateRequired = $true
+                                    }
+
+                                    if ($strictComparisonStateRequired) {
+                                        if ($null -eq $comparisonState) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-comparison-state-missing" "Artifact '$artifactId' summary '$indexedSummaryPath' is for strict comparison '$summaryComparisonId' but does not include comparisonStateReadiness."
+                                            $artifactValidationOk = $false
+                                            $indexedRecord["ok"] = $false
+                                            $comparisonStateMismatchCount++
+                                        }
+                                        elseif (-not $summaryComparisonStateReady) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-comparison-state-not-ready" "Artifact '$artifactId' summary '$indexedSummaryPath' reports comparisonStateReadiness.status='$summaryComparisonStateStatus' for strict comparison '$summaryComparisonId'."
+                                            $artifactValidationOk = $false
+                                            $indexedRecord["ok"] = $false
+                                            $comparisonStateMismatchCount++
+                                        }
+                                        elseif (-not $summaryComparisonStateStrict) {
+                                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-comparison-state-not-strict" "Artifact '$artifactId' summary '$indexedSummaryPath' reports comparisonStateReadiness.ready=true but strict=false for strict comparison '$summaryComparisonId'."
+                                            $artifactValidationOk = $false
+                                            $indexedRecord["ok"] = $false
+                                            $comparisonStateMismatchCount++
+                                        }
+                                    }
+
+                                    if ($null -ne $indexComparisonStateStrictValue -and (Test-Truthy $indexComparisonStateStrictValue) -ne $summaryComparisonStateStrict) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-comparison-state-field-mismatch" "Artifact '$artifactId' index entry '$indexedPath' declares comparisonStateStrict='$indexComparisonStateStrictValue' but summary '$indexedSummaryPath' reports '$summaryComparisonStateStrict'."
+                                        $artifactValidationOk = $false
+                                        $indexedRecord["ok"] = $false
+                                        $comparisonStateMismatchCount++
+                                    }
+                                    if ($null -ne $indexComparisonStateReadyValue -and (Test-Truthy $indexComparisonStateReadyValue) -ne $summaryComparisonStateReady) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-comparison-state-field-mismatch" "Artifact '$artifactId' index entry '$indexedPath' declares comparisonStateReady='$indexComparisonStateReadyValue' but summary '$indexedSummaryPath' reports '$summaryComparisonStateReady'."
+                                        $artifactValidationOk = $false
+                                        $indexedRecord["ok"] = $false
+                                        $comparisonStateMismatchCount++
+                                    }
+                                    if (-not [string]::IsNullOrWhiteSpace($indexComparisonStateStatus) -and
+                                        -not [string]::Equals($indexComparisonStateStatus, $summaryComparisonStateStatus, [StringComparison]::OrdinalIgnoreCase)) {
+                                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "live-trace-index-comparison-state-field-mismatch" "Artifact '$artifactId' index entry '$indexedPath' declares comparisonStateStatus='$indexComparisonStateStatus' but summary '$indexedSummaryPath' reports '$summaryComparisonStateStatus'."
+                                        $artifactValidationOk = $false
+                                        $indexedRecord["ok"] = $false
+                                        $comparisonStateMismatchCount++
+                                    }
+                                    $indexedRecord["comparisonStateFieldMismatchCount"] = $comparisonStateMismatchCount
 
                                     if ($indexedScenarioIdsNormalized.Count -gt 0 -and -not [string]::IsNullOrWhiteSpace($summaryScenarioId)) {
                                         $summaryMetadataCheckCount++
@@ -8957,6 +12576,54 @@ else {
     }
 }
 
+$liveMatrixMixedWeakStrongStatusCounts = New-Object System.Collections.Generic.List[object]
+foreach ($statusKey in @($liveMatrixMixedWeakStrongStatusCountMap.Keys | Sort-Object)) {
+    $liveMatrixMixedWeakStrongStatusCounts.Add([ordered]@{
+        name = [string]$statusKey
+        count = [int]$liveMatrixMixedWeakStrongStatusCountMap[$statusKey]
+    }) | Out-Null
+}
+$liveMatrixMixedWeakStrongEvidence["statusCounts"] = @($liveMatrixMixedWeakStrongStatusCounts.ToArray())
+$liveMatrixMixedWeakStrongEvidence["status"] = if (-not (Test-Truthy $liveMatrixMixedWeakStrongEvidence.present)) {
+    "not-present"
+}
+elseif ([int]$liveMatrixMixedWeakStrongEvidence.schemaV2ReportCount -le 0) {
+    "schema-v2-missing"
+}
+elseif (Test-Truthy $liveMatrixMixedWeakStrongEvidence.huntReady) {
+    "ready"
+}
+elseif ([int]$liveMatrixMixedWeakStrongEvidence.traceCount -le 0) {
+    "missing-mixed-weak-strong"
+}
+elseif ([int]$liveMatrixMixedWeakStrongEvidence.gapWatchRunCount -gt 0) {
+    "weak-strong-output-gap-watch"
+}
+else {
+    "not-ready"
+}
+
+$liveMatrixArtifactControlStatusCounts = New-Object System.Collections.Generic.List[object]
+foreach ($statusKey in @($liveMatrixArtifactControlStatusCountMap.Keys | Sort-Object)) {
+    $liveMatrixArtifactControlStatusCounts.Add([ordered]@{
+        name = [string]$statusKey
+        count = [int]$liveMatrixArtifactControlStatusCountMap[$statusKey]
+    }) | Out-Null
+}
+$liveMatrixArtifactControlEvidence["statusCounts"] = @($liveMatrixArtifactControlStatusCounts.ToArray())
+$liveMatrixArtifactControlEvidence["status"] = if (-not (Test-Truthy $liveMatrixArtifactControlEvidence.present)) {
+    "not-present"
+}
+elseif ([int]$liveMatrixArtifactControlEvidence.schemaV3ReportCount -le 0) {
+    "schema-v3-missing"
+}
+elseif ([int]$liveMatrixArtifactControlEvidence.artifactReviewRunCount -gt 0) {
+    "artifact-review"
+}
+else {
+    "clear"
+}
+
 $ok = ($errors.Count -eq 0)
 $report = [ordered]@{
     schemaVersion = 1
@@ -8984,6 +12651,28 @@ $report = [ordered]@{
     captureHardwareTarget = $hardwareEvidence.manifestTarget
     hardwareDiagnosticsPresent = $hardwareEvidence.diagnosticsPresent
     hardwareEvidenceStatus = $hardwareEvidence.status
+    liveMatrixMixedWeakStrongHuntReady = $liveMatrixMixedWeakStrongEvidence.huntReady
+    liveMatrixMixedWeakStrongStatus = $liveMatrixMixedWeakStrongEvidence.status
+    liveMatrixMixedWeakStrongReportCount = $liveMatrixMixedWeakStrongEvidence.reportCount
+    liveMatrixMixedWeakStrongSchemaV2ReportCount = $liveMatrixMixedWeakStrongEvidence.schemaV2ReportCount
+    liveMatrixMixedWeakStrongReadyReportCount = $liveMatrixMixedWeakStrongEvidence.readyReportCount
+    liveMatrixMixedWeakStrongTraceCount = $liveMatrixMixedWeakStrongEvidence.traceCount
+    liveMatrixMixedWeakStrongReadyTraceCount = $liveMatrixMixedWeakStrongEvidence.readyTraceCount
+    liveMatrixMixedWeakStrongMissingRunCount = $liveMatrixMixedWeakStrongEvidence.missingRunCount
+    liveMatrixMixedWeakStrongGapWatchRunCount = $liveMatrixMixedWeakStrongEvidence.gapWatchRunCount
+    liveMatrixMixedWeakStrongWeakInputSampleCount = $liveMatrixMixedWeakStrongEvidence.weakInputSampleCount
+    liveMatrixMixedWeakStrongStrongInputSampleCount = $liveMatrixMixedWeakStrongEvidence.strongInputSampleCount
+    liveMatrixMixedWeakStrongStatusCounts = @($liveMatrixMixedWeakStrongEvidence.statusCounts)
+    liveMatrixMixedWeakStrongBestRun = $liveMatrixMixedWeakStrongEvidence.bestRun
+    liveMatrixArtifactControlStatus = $liveMatrixArtifactControlEvidence.status
+    liveMatrixArtifactControlReportCount = $liveMatrixArtifactControlEvidence.reportCount
+    liveMatrixArtifactControlSchemaV3ReportCount = $liveMatrixArtifactControlEvidence.schemaV3ReportCount
+    liveMatrixArtifactControlReviewRunCount = $liveMatrixArtifactControlEvidence.artifactReviewRunCount
+    liveMatrixArtifactControlRiskScoreMax = $liveMatrixArtifactControlEvidence.artifactRiskScoreMax
+    liveMatrixArtifactControlLowEvidenceLiftedSampleCount = $liveMatrixArtifactControlEvidence.lowEvidenceLiftedSampleCount
+    liveMatrixArtifactControlLowEvidenceLiftedPctMax = $liveMatrixArtifactControlEvidence.lowEvidenceLiftedPctMax
+    liveMatrixArtifactControlAudioAlignmentMismatchPctMax = $liveMatrixArtifactControlEvidence.audioAlignmentMismatchPctMax
+    liveMatrixArtifactControlStatusCounts = @($liveMatrixArtifactControlEvidence.statusCounts)
     offlineFixtureMetricsPresent = $offlineFixtureMetricsEvidence.present
     offlineFixtureMetricsEvidenceEngine = $offlineFixtureMetricsEvidence.evidenceEngine
     offlineFixtureMetricsEvidenceTool = $offlineFixtureMetricsEvidence.evidenceTool
@@ -9033,6 +12722,10 @@ $report = [ordered]@{
     metricComparisonMissingCandidateCount = $metricComparisonEvidence.missingCandidateCount
     metricComparisonMissingMetricValueCount = $metricComparisonEvidence.missingMetricValueCount
     metricComparisonCandidateComparisonCount = $metricComparisonEvidence.candidateComparisonCount
+    metricComparisonCatalogRequiredMetricCount = $metricComparisonEvidence.metricCatalogRequiredMetricCount
+    metricComparisonCatalogAcceptanceContractReady = $metricComparisonEvidence.metricCatalogAcceptanceContractReady
+    metricComparisonCatalogContractProblemMetricCount = $metricComparisonEvidence.metricCatalogContractProblemMetricCount
+    metricComparisonCatalogContractProblemMetricIds = @($metricComparisonEvidence.metricCatalogContractProblemMetricIds)
     liveTraceComparisonPresent = $liveTraceComparisonEvidence.present
     liveTraceComparisonReady = $liveTraceComparisonEvidence.readyForReview
     liveTraceComparisonCandidateComparisonCount = $liveTraceComparisonEvidence.candidateComparisonCount
@@ -9059,6 +12752,30 @@ $report = [ordered]@{
     liveTraceComparisonToolingRegressionCount = $liveTraceComparisonEvidence.toolingRegressionCount
     liveTraceComparisonBundleRelativePaths = $liveTraceComparisonEvidence.bundleRelativePaths
     liveTraceComparisonAbsolutePathCount = $liveTraceComparisonEvidence.absolutePathCount
+    liveTraceComparisonMetricDefinitionCount = $liveTraceComparisonEvidence.metricDefinitionCount
+    liveTraceComparisonMetricCatalogAlignedMetricCount = $liveTraceComparisonEvidence.metricCatalogAlignedMetricCount
+    liveTraceComparisonMetricCatalogMissingMetricCount = $liveTraceComparisonEvidence.metricCatalogMissingMetricCount
+    liveTraceComparisonMetricCatalogMissingMetricIds = @($liveTraceComparisonEvidence.metricCatalogMissingMetricIds)
+    liveTraceComparisonMetricCatalogDirectionMismatchCount = $liveTraceComparisonEvidence.metricCatalogDirectionMismatchCount
+    liveTraceComparisonMetricCatalogDirectionMismatchMetricIds = @($liveTraceComparisonEvidence.metricCatalogDirectionMismatchMetricIds)
+    liveTraceComparisonMetricCatalogThresholdMismatchCount = $liveTraceComparisonEvidence.metricCatalogThresholdMismatchCount
+    liveTraceComparisonMetricCatalogThresholdMismatchMetricIds = @($liveTraceComparisonEvidence.metricCatalogThresholdMismatchMetricIds)
+    liveTraceComparisonMetricCatalogComparatorMismatchCount = $liveTraceComparisonEvidence.metricCatalogComparatorMismatchCount
+    liveTraceComparisonMetricCatalogComparatorMismatchMetricIds = @($liveTraceComparisonEvidence.metricCatalogComparatorMismatchMetricIds)
+    liveTraceComparisonMetricCatalogSafetyClassMismatchCount = $liveTraceComparisonEvidence.metricCatalogSafetyClassMismatchCount
+    liveTraceComparisonMetricCatalogSafetyClassMismatchMetricIds = @($liveTraceComparisonEvidence.metricCatalogSafetyClassMismatchMetricIds)
+    liveTraceComparisonMetricCatalogScopeMismatchCount = $liveTraceComparisonEvidence.metricCatalogScopeMismatchCount
+    liveTraceComparisonMetricCatalogScopeMismatchMetricIds = @($liveTraceComparisonEvidence.metricCatalogScopeMismatchMetricIds)
+    liveTraceComparisonMetricCatalogAlignmentReady = $liveTraceComparisonEvidence.metricCatalogAlignmentReady
+    liveTraceComparisonMetricCatalogAlignmentStatus = $liveTraceComparisonEvidence.metricCatalogAlignmentStatus
+    liveTraceComparisonCaptureReadinessScenarioComparisonCount = $liveTraceComparisonEvidence.captureReadinessScenarioComparisonCount
+    liveTraceComparisonCaptureReadinessCandidateHardGatePassCount = $liveTraceComparisonEvidence.captureReadinessCandidateHardGatePassCount
+    liveTraceComparisonCaptureReadinessCandidateHardGateFailCount = $liveTraceComparisonEvidence.captureReadinessCandidateHardGateFailCount
+    liveTraceComparisonCaptureReadinessCandidateStrictPreflightPassCount = $liveTraceComparisonEvidence.captureReadinessCandidateStrictPreflightPassCount
+    liveTraceComparisonCaptureReadinessCandidateStrictPreflightFailCount = $liveTraceComparisonEvidence.captureReadinessCandidateStrictPreflightFailCount
+    liveTraceComparisonCaptureReadinessCandidateStatusCounts = @($liveTraceComparisonEvidence.captureReadinessCandidateStatusCounts)
+    liveTraceComparisonCaptureReadinessCandidateTopConstraintCounts = @($liveTraceComparisonEvidence.captureReadinessCandidateTopConstraintCounts)
+    liveTraceComparisonCaptureReadinessCandidateTopHardConstraintCounts = @($liveTraceComparisonEvidence.captureReadinessCandidateTopHardConstraintCounts)
     liveTraceComparisonNr5WeakInputSampleDelta = $liveTraceComparisonEvidence.nr5WeakInputSampleDelta
     liveTraceComparisonNr5WeakRecoveredSampleDelta = $liveTraceComparisonEvidence.nr5WeakRecoveredSampleDelta
     liveTraceComparisonNr5WeakDropoutSampleDelta = $liveTraceComparisonEvidence.nr5WeakDropoutSampleDelta
@@ -9073,6 +12790,48 @@ $report = [ordered]@{
     liveTraceComparisonNr5MakeupMovementRegressionCount = $liveTraceComparisonEvidence.nr5MakeupMovementRegressionCount
     liveTraceComparisonNr5MakeupMaxRegressionCount = $liveTraceComparisonEvidence.nr5MakeupMaxRegressionCount
     liveTraceComparisonNr5RecoveryDriveMovementRegressionCount = $liveTraceComparisonEvidence.nr5RecoveryDriveMovementRegressionCount
+    liveTraceComparisonRxAudioLevelerConstrainedSampleDelta = $liveTraceComparisonEvidence.rxAudioLevelerConstrainedSampleDelta
+    liveTraceComparisonRxAudioLevelerConstrainedPctDelta = $liveTraceComparisonEvidence.rxAudioLevelerConstrainedPctDelta
+    liveTraceComparisonRxAudioLevelerBoostSlewLimitedSampleDelta = $liveTraceComparisonEvidence.rxAudioLevelerBoostSlewLimitedSampleDelta
+    liveTraceComparisonRxAudioLevelerPeakLimitedSampleDelta = $liveTraceComparisonEvidence.rxAudioLevelerPeakLimitedSampleDelta
+    liveTraceComparisonRxAudioLevelerOutputLimitedSampleDelta = $liveTraceComparisonEvidence.rxAudioLevelerOutputLimitedSampleDelta
+    liveTraceComparisonRxAudioLevelerOutputRmsMovementDbDelta = $liveTraceComparisonEvidence.rxAudioLevelerOutputRmsMovementDbDelta
+    liveTraceComparisonRxAudioLevelerAppliedGainMovementDbDelta = $liveTraceComparisonEvidence.rxAudioLevelerAppliedGainMovementDbDelta
+    liveTraceComparisonRxAudioLevelerConstrainedRegressionCount = $liveTraceComparisonEvidence.rxAudioLevelerConstrainedRegressionCount
+    liveTraceComparisonRxAudioLevelerConstrainedPctRegressionCount = $liveTraceComparisonEvidence.rxAudioLevelerConstrainedPctRegressionCount
+    liveTraceComparisonRxAudioLevelerBoostSlewRegressionCount = $liveTraceComparisonEvidence.rxAudioLevelerBoostSlewRegressionCount
+    liveTraceComparisonRxAudioLevelerPeakLimitedRegressionCount = $liveTraceComparisonEvidence.rxAudioLevelerPeakLimitedRegressionCount
+    liveTraceComparisonRxAudioLevelerOutputLimitedRegressionCount = $liveTraceComparisonEvidence.rxAudioLevelerOutputLimitedRegressionCount
+    liveTraceThetisComparisonPresent = $liveTraceThetisComparisonEvidence.present
+    liveTraceThetisComparisonReady = $liveTraceThetisComparisonEvidence.readyForReview
+    liveTraceThetisComparisonCandidateComparisonCount = $liveTraceThetisComparisonEvidence.candidateComparisonCount
+    liveTraceThetisComparisonFailedComparisonCount = $liveTraceThetisComparisonEvidence.failedComparisonCount
+    liveTraceThetisComparisonMissingBaselineCount = $liveTraceThetisComparisonEvidence.missingBaselineCount
+    liveTraceThetisComparisonMissingCandidateCount = $liveTraceThetisComparisonEvidence.missingCandidateCount
+    liveTraceThetisComparisonRegressionCount = $liveTraceThetisComparisonEvidence.regressionCount
+    liveTraceThetisComparisonHardConstraintRegressionCount = $liveTraceThetisComparisonEvidence.hardConstraintRegressionCount
+    liveTraceThetisComparisonGateFailureCount = $liveTraceThetisComparisonEvidence.gateFailureCount
+    liveTraceThetisComparisonMetricDefinitionCount = $liveTraceThetisComparisonEvidence.metricDefinitionCount
+    liveTraceThetisComparisonMetricCatalogAlignedMetricCount = $liveTraceThetisComparisonEvidence.metricCatalogAlignedMetricCount
+    liveTraceThetisComparisonMetricCatalogMissingMetricCount = $liveTraceThetisComparisonEvidence.metricCatalogMissingMetricCount
+    liveTraceThetisComparisonMetricCatalogMissingMetricIds = @($liveTraceThetisComparisonEvidence.metricCatalogMissingMetricIds)
+    liveTraceThetisComparisonMetricCatalogDirectionMismatchCount = $liveTraceThetisComparisonEvidence.metricCatalogDirectionMismatchCount
+    liveTraceThetisComparisonMetricCatalogDirectionMismatchMetricIds = @($liveTraceThetisComparisonEvidence.metricCatalogDirectionMismatchMetricIds)
+    liveTraceThetisComparisonMetricCatalogThresholdMismatchCount = $liveTraceThetisComparisonEvidence.metricCatalogThresholdMismatchCount
+    liveTraceThetisComparisonMetricCatalogThresholdMismatchMetricIds = @($liveTraceThetisComparisonEvidence.metricCatalogThresholdMismatchMetricIds)
+    liveTraceThetisComparisonMetricCatalogComparatorMismatchCount = $liveTraceThetisComparisonEvidence.metricCatalogComparatorMismatchCount
+    liveTraceThetisComparisonMetricCatalogComparatorMismatchMetricIds = @($liveTraceThetisComparisonEvidence.metricCatalogComparatorMismatchMetricIds)
+    liveTraceThetisComparisonMetricCatalogSafetyClassMismatchCount = $liveTraceThetisComparisonEvidence.metricCatalogSafetyClassMismatchCount
+    liveTraceThetisComparisonMetricCatalogSafetyClassMismatchMetricIds = @($liveTraceThetisComparisonEvidence.metricCatalogSafetyClassMismatchMetricIds)
+    liveTraceThetisComparisonMetricCatalogScopeMismatchCount = $liveTraceThetisComparisonEvidence.metricCatalogScopeMismatchCount
+    liveTraceThetisComparisonMetricCatalogScopeMismatchMetricIds = @($liveTraceThetisComparisonEvidence.metricCatalogScopeMismatchMetricIds)
+    liveTraceThetisComparisonMetricCatalogAlignmentReady = $liveTraceThetisComparisonEvidence.metricCatalogAlignmentReady
+    liveTraceThetisComparisonMetricCatalogAlignmentStatus = $liveTraceThetisComparisonEvidence.metricCatalogAlignmentStatus
+    liveTraceThetisComparisonCaptureReadinessScenarioComparisonCount = $liveTraceThetisComparisonEvidence.captureReadinessScenarioComparisonCount
+    liveTraceThetisComparisonCaptureReadinessCandidateHardGatePassCount = $liveTraceThetisComparisonEvidence.captureReadinessCandidateHardGatePassCount
+    liveTraceThetisComparisonCaptureReadinessCandidateHardGateFailCount = $liveTraceThetisComparisonEvidence.captureReadinessCandidateHardGateFailCount
+    liveTraceThetisComparisonCaptureReadinessCandidateStrictPreflightPassCount = $liveTraceThetisComparisonEvidence.captureReadinessCandidateStrictPreflightPassCount
+    liveTraceThetisComparisonCaptureReadinessCandidateStrictPreflightFailCount = $liveTraceThetisComparisonEvidence.captureReadinessCandidateStrictPreflightFailCount
     liveDiagnosticsHistoryPresent = $liveDiagnosticsHistoryEvidence.present
     liveDiagnosticsHistoryReady = $liveDiagnosticsHistoryEvidence.readyForReview
     liveDiagnosticsHistoryTraceCount = $liveDiagnosticsHistoryEvidence.traceCount
@@ -9085,6 +12844,8 @@ $report = [ordered]@{
     liveDiagnosticsHistoryLatestSafetyRiskScore = $liveDiagnosticsHistoryEvidence.latestSafetyRiskScore
     liveDiagnosticsHistoryLatestTraceSequenceUtc = $liveDiagnosticsHistoryEvidence.latestTraceSequenceUtc
     liveDiagnosticsHistoryLatestTraceSortKeySource = $liveDiagnosticsHistoryEvidence.latestTraceSortKeySource
+    liveDiagnosticsHistoryLatestTopHardConstraintName = $liveDiagnosticsHistoryEvidence.latestTopHardConstraintName
+    liveDiagnosticsHistoryLatestTopHardConstraintCount = $liveDiagnosticsHistoryEvidence.latestTopHardConstraintCount
     liveDiagnosticsHistoryTraceOrderingStatus = $liveDiagnosticsHistoryEvidence.traceOrderingStatus
     liveDiagnosticsHistoryTraceOrderingViolationCount = $liveDiagnosticsHistoryEvidence.traceOrderingViolationCount
     liveDiagnosticsHistoryBestBalancedTraceId = $liveDiagnosticsHistoryEvidence.bestBalancedTraceId
@@ -9138,8 +12899,22 @@ $report = [ordered]@{
     liveDiagnosticsHistoryLiveExperimentCoverageRequiredComparisonCount = $liveDiagnosticsHistoryEvidence.liveExperimentCoverageRequiredComparisonCount
     liveDiagnosticsHistoryLiveExperimentCoverageCoveredComparisonCount = $liveDiagnosticsHistoryEvidence.liveExperimentCoverageCoveredComparisonCount
     liveDiagnosticsHistoryLiveExperimentCoverageMissingComparisonCount = $liveDiagnosticsHistoryEvidence.liveExperimentCoverageMissingComparisonCount
+    liveDiagnosticsHistoryLiveExperimentCoverageMissingComparisonIds = @($liveDiagnosticsHistoryEvidence.liveExperimentCoverageMissingComparisonIds)
     liveDiagnosticsHistoryPumpingSignalCount = $liveDiagnosticsHistoryEvidence.pumpingSignalCount
     liveDiagnosticsHistoryWeakSignalCount = $liveDiagnosticsHistoryEvidence.weakSignalCount
+    liveDiagnosticsHistoryArtifactControlSignalCount = $liveDiagnosticsHistoryEvidence.artifactControlSignalCount
+    liveDiagnosticsHistoryAgcStabilityStatus = $liveDiagnosticsHistoryEvidence.agcStabilityStatus
+    liveDiagnosticsHistoryAgcStabilityTraceCount = $liveDiagnosticsHistoryEvidence.agcStabilityTraceCount
+    liveDiagnosticsHistoryAgcStabilityMissingTraceCount = $liveDiagnosticsHistoryEvidence.agcStabilityMissingTraceCount
+    liveDiagnosticsHistoryAgcPumpingRiskTraceCount = $liveDiagnosticsHistoryEvidence.agcPumpingRiskTraceCount
+    liveDiagnosticsHistoryAgcActivePumpingSignalCount = $liveDiagnosticsHistoryEvidence.agcActivePumpingSignalCount
+    liveDiagnosticsHistoryAgcVoiceLikePumpingSignalCount = $liveDiagnosticsHistoryEvidence.agcVoiceLikePumpingSignalCount
+    liveDiagnosticsHistoryMixedWeakStrongEvidenceReady = $liveDiagnosticsHistoryEvidence.mixedWeakStrongEvidenceReady
+    liveDiagnosticsHistoryMixedWeakStrongEvidenceStatus = $liveDiagnosticsHistoryEvidence.mixedWeakStrongEvidenceStatus
+    liveDiagnosticsHistoryMixedWeakStrongTraceCount = $liveDiagnosticsHistoryEvidence.mixedWeakStrongTraceCount
+    liveDiagnosticsHistoryMixedWeakStrongReadyTraceCount = $liveDiagnosticsHistoryEvidence.mixedWeakStrongReadyTraceCount
+    liveDiagnosticsHistoryMixedWeakStrongMissingTraceCount = $liveDiagnosticsHistoryEvidence.mixedWeakStrongMissingTraceCount
+    liveDiagnosticsHistoryMixedWeakStrongGapWatchTraceCount = $liveDiagnosticsHistoryEvidence.mixedWeakStrongGapWatchTraceCount
     liveDiagnosticsHistoryRecommendationCount = $liveDiagnosticsHistoryEvidence.recommendationCount
     liveDiagnosticsHistoryTraceSourceStatus = $liveDiagnosticsHistoryEvidence.traceSourceStatus
     liveDiagnosticsHistoryTraceSourceCheckedCount = $liveDiagnosticsHistoryEvidence.traceSourceCheckedCount
@@ -9154,6 +12929,100 @@ $report = [ordered]@{
     liveDiagnosticsHistoryTraceSourceJsonlHashMismatchCount = $liveDiagnosticsHistoryEvidence.traceSourceJsonlHashMismatchCount
     liveDiagnosticsHistoryBundleRelativePaths = $liveDiagnosticsHistoryEvidence.bundleRelativePaths
     liveDiagnosticsHistoryAbsolutePathCount = $liveDiagnosticsHistoryEvidence.absolutePathCount
+    liveAcceptanceCycleSummaryPresent = $liveAcceptanceCycleEvidence.present
+    liveAcceptanceCycleSummaryValid = $liveAcceptanceCycleEvidence.summaryValid
+    liveAcceptanceCycleSummaryStatus = $liveAcceptanceCycleEvidence.status
+    liveAcceptanceCycleEvidenceReady = $liveAcceptanceCycleEvidence.liveAcceptanceEvidenceReady
+    liveAcceptanceCycleEvidenceStatus = $liveAcceptanceCycleEvidence.liveAcceptanceEvidenceStatus
+    liveAcceptanceCycleEvidenceBlockerCount = $liveAcceptanceCycleEvidence.blockerCount
+    liveAcceptanceCycleEvidenceBlockers = @($liveAcceptanceCycleEvidence.blockers)
+    liveAcceptanceCycleMatrixAcceptanceReady = $liveAcceptanceCycleEvidence.matrixAcceptanceReady
+    liveAcceptanceCycleMatrixAcceptanceReadyCount = $liveAcceptanceCycleEvidence.matrixAcceptanceReadyCount
+    liveAcceptanceCycleMatrixNonZeroExitCount = $liveAcceptanceCycleEvidence.matrixNonZeroExitCount
+    liveAcceptanceCycleComparisonReadyForReview = $liveAcceptanceCycleEvidence.comparisonReadyForReview
+    liveAcceptanceCycleComparisonRegressionCount = $liveAcceptanceCycleEvidence.comparisonRegressionCount
+    liveAcceptanceCycleComparisonGateFailureCount = $liveAcceptanceCycleEvidence.comparisonGateFailureCount
+    liveAcceptanceCycleComparisonMetricCatalogAlignmentReady = $liveAcceptanceCycleEvidence.comparisonMetricCatalogAlignmentReady
+    liveAcceptanceCycleComparisonMetricCatalogAlignmentStatus = $liveAcceptanceCycleEvidence.comparisonMetricCatalogAlignmentStatus
+    liveAcceptanceCycleComparisonMetricDefinitionCount = $liveAcceptanceCycleEvidence.comparisonMetricDefinitionCount
+    liveAcceptanceCycleComparisonMetricCatalogMissingMetricCount = $liveAcceptanceCycleEvidence.comparisonMetricCatalogMissingMetricCount
+    liveAcceptanceCycleComparisonMetricCatalogMismatchCount = $liveAcceptanceCycleEvidence.comparisonMetricCatalogMismatchCount
+    liveAcceptanceCycleThetisComparisonReadyForReview = $liveAcceptanceCycleEvidence.thetisComparisonReadyForReview
+    liveAcceptanceCycleThetisComparisonRegressionCount = $liveAcceptanceCycleEvidence.thetisComparisonRegressionCount
+    liveAcceptanceCycleThetisComparisonGateFailureCount = $liveAcceptanceCycleEvidence.thetisComparisonGateFailureCount
+    liveAcceptanceCycleThetisComparisonMetricCatalogAlignmentReady = $liveAcceptanceCycleEvidence.thetisComparisonMetricCatalogAlignmentReady
+    liveAcceptanceCycleThetisComparisonMetricCatalogAlignmentStatus = $liveAcceptanceCycleEvidence.thetisComparisonMetricCatalogAlignmentStatus
+    liveAcceptanceCycleThetisComparisonMetricDefinitionCount = $liveAcceptanceCycleEvidence.thetisComparisonMetricDefinitionCount
+    liveAcceptanceCycleThetisComparisonMetricCatalogMissingMetricCount = $liveAcceptanceCycleEvidence.thetisComparisonMetricCatalogMissingMetricCount
+    liveAcceptanceCycleThetisComparisonMetricCatalogMismatchCount = $liveAcceptanceCycleEvidence.thetisComparisonMetricCatalogMismatchCount
+    liveAcceptanceCycleValidationExitCode = $liveAcceptanceCycleEvidence.validationExitCode
+    liveAcceptanceCycleValidationOk = $liveAcceptanceCycleEvidence.validationOk
+    liveAcceptanceCycleValidationErrorCount = $liveAcceptanceCycleEvidence.validationErrorCount
+    liveAcceptanceCycleValidationWarningCount = $liveAcceptanceCycleEvidence.validationWarningCount
+    liveAcceptanceCycleHardwareEvidenceReady = $liveAcceptanceCycleEvidence.hardwareEvidenceReady
+    liveAcceptanceCycleHardwareEvidenceStatus = $liveAcceptanceCycleEvidence.hardwareEvidenceStatus
+    liveAcceptanceCycleHardwareTarget = $liveAcceptanceCycleEvidence.hardwareTarget
+    liveAcceptanceCycleCaptureHardwareTarget = $liveAcceptanceCycleEvidence.captureHardwareTarget
+    liveAcceptanceCycleHardwareDiagnosticsPresent = $liveAcceptanceCycleEvidence.hardwareDiagnosticsPresent
+    liveAcceptanceCycleLiveDiagnosticsHistoryAgcStabilityReady = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryAgcStabilityReady
+    liveAcceptanceCycleLiveDiagnosticsHistoryAgcStabilityStatus = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryAgcStabilityStatus
+    liveAcceptanceCycleLiveDiagnosticsHistoryAgcStabilityTraceCount = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryAgcStabilityTraceCount
+    liveAcceptanceCycleLiveDiagnosticsHistoryAgcStabilityMissingTraceCount = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryAgcStabilityMissingTraceCount
+    liveAcceptanceCycleLiveDiagnosticsHistoryAgcPumpingRiskTraceCount = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryAgcPumpingRiskTraceCount
+    liveAcceptanceCycleLiveDiagnosticsHistoryAgcActivePumpingSignalCount = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryAgcActivePumpingSignalCount
+    liveAcceptanceCycleLiveDiagnosticsHistoryAgcVoiceLikePumpingSignalCount = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryAgcVoiceLikePumpingSignalCount
+    liveAcceptanceCycleLiveDiagnosticsHistoryArtifactControlSignalCount = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryArtifactControlSignalCount
+    liveAcceptanceCycleLiveDiagnosticsHistoryMixedWeakStrongEvidenceReady = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryMixedWeakStrongEvidenceReady
+    liveAcceptanceCycleLiveDiagnosticsHistoryMixedWeakStrongEvidenceStatus = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryMixedWeakStrongEvidenceStatus
+    liveAcceptanceCycleLiveDiagnosticsHistoryMixedWeakStrongTraceCount = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryMixedWeakStrongTraceCount
+    liveAcceptanceCycleLiveDiagnosticsHistoryMixedWeakStrongReadyTraceCount = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryMixedWeakStrongReadyTraceCount
+    liveAcceptanceCycleLiveDiagnosticsHistoryMixedWeakStrongMissingTraceCount = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryMixedWeakStrongMissingTraceCount
+    liveAcceptanceCycleLiveDiagnosticsHistoryMixedWeakStrongGapWatchTraceCount = $liveAcceptanceCycleEvidence.liveDiagnosticsHistoryMixedWeakStrongGapWatchTraceCount
+    liveAcceptanceCycleLiveMatrixMixedWeakStrongHuntReady = $liveAcceptanceCycleEvidence.liveMatrixMixedWeakStrongHuntReady
+    liveAcceptanceCycleLiveMatrixMixedWeakStrongStatus = $liveAcceptanceCycleEvidence.liveMatrixMixedWeakStrongStatus
+    liveAcceptanceCycleLiveMatrixMixedWeakStrongReportCount = $liveAcceptanceCycleEvidence.liveMatrixMixedWeakStrongReportCount
+    liveAcceptanceCycleLiveMatrixMixedWeakStrongSchemaV2ReportCount = $liveAcceptanceCycleEvidence.liveMatrixMixedWeakStrongSchemaV2ReportCount
+    liveAcceptanceCycleLiveMatrixMixedWeakStrongReadyReportCount = $liveAcceptanceCycleEvidence.liveMatrixMixedWeakStrongReadyReportCount
+    liveAcceptanceCycleLiveMatrixMixedWeakStrongTraceCount = $liveAcceptanceCycleEvidence.liveMatrixMixedWeakStrongTraceCount
+    liveAcceptanceCycleLiveMatrixMixedWeakStrongReadyTraceCount = $liveAcceptanceCycleEvidence.liveMatrixMixedWeakStrongReadyTraceCount
+    liveAcceptanceCycleLiveMatrixMixedWeakStrongMissingRunCount = $liveAcceptanceCycleEvidence.liveMatrixMixedWeakStrongMissingRunCount
+    liveAcceptanceCycleLiveMatrixMixedWeakStrongGapWatchRunCount = $liveAcceptanceCycleEvidence.liveMatrixMixedWeakStrongGapWatchRunCount
+    liveAcceptanceCycleLiveMatrixMixedWeakStrongWeakInputSampleCount = $liveAcceptanceCycleEvidence.liveMatrixMixedWeakStrongWeakInputSampleCount
+    liveAcceptanceCycleLiveMatrixMixedWeakStrongStrongInputSampleCount = $liveAcceptanceCycleEvidence.liveMatrixMixedWeakStrongStrongInputSampleCount
+    liveAcceptanceCycleLiveMatrixMixedWeakStrongStatusCounts = @($liveAcceptanceCycleEvidence.liveMatrixMixedWeakStrongStatusCounts)
+    liveAcceptanceCycleLiveMatrixMixedWeakStrongBestRun = $liveAcceptanceCycleEvidence.liveMatrixMixedWeakStrongBestRun
+    liveAcceptanceCycleLiveMatrixArtifactControlStatus = $liveAcceptanceCycleEvidence.liveMatrixArtifactControlStatus
+    liveAcceptanceCycleLiveMatrixArtifactControlReportCount = $liveAcceptanceCycleEvidence.liveMatrixArtifactControlReportCount
+    liveAcceptanceCycleLiveMatrixArtifactControlSchemaV3ReportCount = $liveAcceptanceCycleEvidence.liveMatrixArtifactControlSchemaV3ReportCount
+    liveAcceptanceCycleLiveMatrixArtifactControlReviewRunCount = $liveAcceptanceCycleEvidence.liveMatrixArtifactControlReviewRunCount
+    liveAcceptanceCycleLiveMatrixArtifactControlRiskScoreMax = $liveAcceptanceCycleEvidence.liveMatrixArtifactControlRiskScoreMax
+    liveAcceptanceCycleLiveMatrixArtifactControlLowEvidenceLiftedSampleCount = $liveAcceptanceCycleEvidence.liveMatrixArtifactControlLowEvidenceLiftedSampleCount
+    liveAcceptanceCycleLiveMatrixArtifactControlLowEvidenceLiftedPctMax = $liveAcceptanceCycleEvidence.liveMatrixArtifactControlLowEvidenceLiftedPctMax
+    liveAcceptanceCycleLiveMatrixArtifactControlAudioAlignmentMismatchPctMax = $liveAcceptanceCycleEvidence.liveMatrixArtifactControlAudioAlignmentMismatchPctMax
+    liveAcceptanceCycleLiveMatrixArtifactControlStatusCounts = @($liveAcceptanceCycleEvidence.liveMatrixArtifactControlStatusCounts)
+    liveAcceptanceCycleTriageExitCode = $liveAcceptanceCycleEvidence.triageExitCode
+    liveAcceptanceCycleTriageAcceptanceActionPlanCount = $liveAcceptanceCycleEvidence.triageAcceptanceActionPlanCount
+    liveAcceptanceCycleTriageAcceptanceRequiredActionCount = $liveAcceptanceCycleEvidence.triageAcceptanceRequiredActionCount
+    liveAcceptanceCycleTriageAcceptanceManualActionCount = $liveAcceptanceCycleEvidence.triageAcceptanceManualActionCount
+    liveAcceptanceCycleTriageAcceptanceActionCategoryCounts = @($liveAcceptanceCycleEvidence.triageAcceptanceActionCategoryCounts)
+    liveAcceptanceCycleTriagePrimaryAcceptanceActionId = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceActionId
+    liveAcceptanceCycleTriagePrimaryAcceptanceActionPriority = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceActionPriority
+    liveAcceptanceCycleTriagePrimaryAcceptanceActionStageId = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceActionStageId
+    liveAcceptanceCycleTriagePrimaryAcceptanceActionGateId = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceActionGateId
+    liveAcceptanceCycleTriagePrimaryAcceptanceActionCategory = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceActionCategory
+    liveAcceptanceCycleTriagePrimaryAcceptanceActionRequired = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceActionRequired
+    liveAcceptanceCycleTriagePrimaryAcceptanceActionManual = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceActionManual
+    liveAcceptanceCycleTriagePrimaryAcceptanceCommandTemplate = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceCommandTemplate
+    liveAcceptanceCycleTriagePrimaryAcceptanceCommandStepCount = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceCommandStepCount
+    liveAcceptanceCycleTriagePrimaryAcceptanceCommandSteps = @($liveAcceptanceCycleEvidence.triagePrimaryAcceptanceCommandSteps)
+    liveAcceptanceCycleTriagePrimaryAcceptanceManualAction = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceManualAction
+    liveAcceptanceCycleTriagePrimaryAcceptanceExpectedArtifact = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceExpectedArtifact
+    liveAcceptanceCycleTriagePrimaryAcceptanceExpectedArtifactCount = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceExpectedArtifactCount
+    liveAcceptanceCycleTriagePrimaryAcceptanceExpectedArtifacts = @($liveAcceptanceCycleEvidence.triagePrimaryAcceptanceExpectedArtifacts)
+    liveAcceptanceCycleTriagePrimaryAcceptanceFollowUp = $liveAcceptanceCycleEvidence.triagePrimaryAcceptanceFollowUp
+    liveAcceptanceCycleRequiredLiveAcceptanceArtifactProblemCount = $liveAcceptanceCycleEvidence.requiredLiveAcceptanceArtifactProblemCount
+    liveAcceptanceCycleSummaryPath = $liveAcceptanceCycleEvidence.path
+    liveAcceptanceCycleSummarySha256 = $liveAcceptanceCycleEvidence.sha256
     nativeSymbolAuditPresent = $nativeSymbolAuditEvidence.present
     nativeSymbolAuditReady = $nativeSymbolAuditEvidence.readyForReview
     nativeSymbolAuditImportedSymbolCount = $nativeSymbolAuditEvidence.importedSymbolCount
@@ -9169,26 +13038,78 @@ $report = [ordered]@{
     nativeRuntimeArtifactAuditWinX64NativePath = $nativeRuntimeArtifactAuditEvidence.winX64NativePath
     nativeRuntimeArtifactAuditWinX64NativeLength = $nativeRuntimeArtifactAuditEvidence.winX64NativeLength
     nativeRuntimeArtifactAuditWinX64NativeSha256 = $nativeRuntimeArtifactAuditEvidence.winX64NativeSha256
+    benchmarkPlanStatus = $benchmarkPlanEvidence.status
+    benchmarkPlanScenarioCount = $benchmarkPlanEvidence.scenarioCount
+    benchmarkPlanScenarioIds = @($benchmarkPlanEvidence.scenarioIds)
+    benchmarkPlanRequiredAcceptanceScenarioFamilyCount = $benchmarkPlanEvidence.requiredAcceptanceScenarioFamilyCount
+    benchmarkPlanCoveredAcceptanceScenarioFamilyCount = $benchmarkPlanEvidence.coveredAcceptanceScenarioFamilyCount
+    benchmarkPlanMissingAcceptanceScenarioFamilyCount = $benchmarkPlanEvidence.missingAcceptanceScenarioFamilyCount
+    benchmarkPlanMissingAcceptanceScenarioFamilyIds = @($benchmarkPlanEvidence.missingAcceptanceScenarioFamilyIds)
+    benchmarkPlanScenarioFamilyCoverage = @($benchmarkPlanEvidence.scenarioFamilyCoverage)
+    benchmarkPlanScenarioMissingRequiredComparisonCount = $benchmarkPlanEvidence.scenarioMissingRequiredComparisonCount
+    benchmarkPlanScenarioMissingRequiredComparisonIds = @($benchmarkPlanEvidence.scenarioMissingRequiredComparisonIds)
+    benchmarkPlanScenarioMissingRequiredMetricCount = $benchmarkPlanEvidence.scenarioMissingRequiredMetricCount
+    benchmarkPlanScenarioMissingRequiredMetricIds = @($benchmarkPlanEvidence.scenarioMissingRequiredMetricIds)
+    benchmarkPlanScenarioMissingAcceptanceGateCount = $benchmarkPlanEvidence.scenarioMissingAcceptanceGateCount
+    benchmarkPlanScenarioMissingAcceptanceGateIds = @($benchmarkPlanEvidence.scenarioMissingAcceptanceGateIds)
     metricCatalogPresent = $metricCatalogEvidence.present
     metricCatalogStatus = $metricCatalogEvidence.status
     metricCatalogMetricCount = $metricCatalogEvidence.metricCount
+    metricCatalogRequiredMetricCount = $metricCatalogEvidence.requiredMetricCount
+    metricCatalogAcceptanceContractReady = $metricCatalogEvidence.acceptanceContractReady
     metricCatalogMissingRequiredMetricCount = $metricCatalogEvidence.missingRequiredMetricCount
+    metricCatalogMissingRequiredMetricIds = @($metricCatalogEvidence.missingRequiredMetricIds)
+    metricCatalogInvalidDirectionCount = $metricCatalogEvidence.invalidDirectionCount
+    metricCatalogInvalidDirectionMetricIds = @($metricCatalogEvidence.invalidDirectionMetricIds)
+    metricCatalogMissingThresholdCount = $metricCatalogEvidence.missingThresholdCount
+    metricCatalogMissingThresholdMetricIds = @($metricCatalogEvidence.missingThresholdMetricIds)
+    metricCatalogMissingComparatorCount = $metricCatalogEvidence.missingComparatorCount
+    metricCatalogMissingComparatorMetricIds = @($metricCatalogEvidence.missingComparatorMetricIds)
+    metricCatalogInvalidComparatorCount = $metricCatalogEvidence.invalidComparatorCount
+    metricCatalogInvalidComparatorMetricIds = @($metricCatalogEvidence.invalidComparatorMetricIds)
+    metricCatalogMissingUnitCount = $metricCatalogEvidence.missingUnitCount
+    metricCatalogMissingUnitMetricIds = @($metricCatalogEvidence.missingUnitMetricIds)
+    metricCatalogMissingSafetyClassCount = $metricCatalogEvidence.missingSafetyClassCount
+    metricCatalogMissingSafetyClassMetricIds = @($metricCatalogEvidence.missingSafetyClassMetricIds)
+    metricCatalogMissingAcceptanceScopeCount = $metricCatalogEvidence.missingAcceptanceScopeCount
+    metricCatalogMissingAcceptanceScopeMetricIds = @($metricCatalogEvidence.missingAcceptanceScopeMetricIds)
+    metricCatalogContractProblemMetricCount = $metricCatalogEvidence.contractProblemMetricCount
+    metricCatalogContractProblemMetricIds = @($metricCatalogEvidence.contractProblemMetricIds)
     externalEngineCandidatesPresent = $externalEngineCandidateEvidence.present
     externalEngineCandidateStatus = $externalEngineCandidateEvidence.status
     externalEngineCandidateCount = $externalEngineCandidateEvidence.candidateCount
+    externalEngineCandidateIds = @($externalEngineCandidateEvidence.candidateIds)
     externalEngineCandidateMissingCount = $externalEngineCandidateEvidence.missingCandidateIds.Count
+    externalEngineCandidateMissingIds = @($externalEngineCandidateEvidence.missingCandidateIds)
     externalEngineCandidateUnsafeCount = $externalEngineCandidateEvidence.unsafeCandidateCount
+    externalEngineCandidateUnsafeIds = @($externalEngineCandidateEvidence.unsafeCandidateIds)
+    externalEngineCandidateUnsafeDetails = @($externalEngineCandidateEvidence.unsafeCandidateDetails)
+    externalEngineCandidateIssueCounts = @($externalEngineCandidateEvidence.candidateIssueCounts)
     externalEngineCandidateSnapshotMismatchCount = $externalEngineCandidateEvidence.snapshotMismatchCount
+    externalEngineCandidateSnapshotMissingIds = @($externalEngineCandidateEvidence.snapshotMissingCandidateIds)
+    externalEngineCandidateSnapshotExtraIds = @($externalEngineCandidateEvidence.snapshotExtraCandidateIds)
     externalEngineBakeoffReportPresent = $externalEngineBakeoffEvidence.present
     externalEngineBakeoffReady = $externalEngineBakeoffEvidence.readyForReview
     externalEngineBakeoffRequiredByScope = $externalEngineBakeoffRequiredByScope
+    externalEngineBakeoffScopeTriggerCount = $externalEngineBakeoffScopeTriggers.Count
+    externalEngineBakeoffScopeTriggers = @($externalEngineBakeoffScopeTriggers.ToArray())
     externalEngineBakeoffCandidateCount = $externalEngineBakeoffEvidence.candidateCount
     externalEngineBakeoffSafeForBakeoffCount = $externalEngineBakeoffEvidence.safeForBakeoffCount
     externalEngineBakeoffBlockedCandidateCount = $externalEngineBakeoffEvidence.blockedCandidateCount
+    externalEngineBakeoffBlockedCandidateIds = @($externalEngineBakeoffEvidence.blockedCandidateIds)
+    externalEngineBakeoffBlockedCandidateDetails = @($externalEngineBakeoffEvidence.blockedCandidateDetails)
     externalEngineBakeoffIntegrationReadyCandidateCount = $externalEngineBakeoffEvidence.integrationReadyCandidateCount
+    externalEngineBakeoffIntegrationReadyCandidateIds = @($externalEngineBakeoffEvidence.integrationReadyCandidateIds)
+    externalEngineBakeoffIntegrationReadyCandidateDetails = @($externalEngineBakeoffEvidence.integrationReadyCandidateDetails)
     externalEngineBakeoffMissingCandidateCount = $externalEngineBakeoffEvidence.missingCandidateCount
+    externalEngineBakeoffMissingCandidateIds = @($externalEngineBakeoffEvidence.missingCandidateIds)
     externalEngineBakeoffUnsafeCandidateCount = $externalEngineBakeoffEvidence.unsafeCandidateCount
+    externalEngineBakeoffUnsafeCandidateIds = @($externalEngineBakeoffEvidence.unsafeCandidateIds)
+    externalEngineBakeoffUnsafeCandidateDetails = @($externalEngineBakeoffEvidence.unsafeCandidateDetails)
     externalEngineBakeoffSnapshotMismatchCount = $externalEngineBakeoffEvidence.snapshotMismatchCount
+    externalEngineBakeoffSnapshotMismatchCandidateIds = @($externalEngineBakeoffEvidence.snapshotMismatchCandidateIds)
+    externalEngineBakeoffSnapshotMismatchCandidateDetails = @($externalEngineBakeoffEvidence.snapshotMismatchCandidateDetails)
+    externalEngineBakeoffCandidateIssueCounts = @($externalEngineBakeoffEvidence.candidateIssueCounts)
     externalEngineBakeoffCandidateSha256 = $externalEngineBakeoffEvidence.candidateSha256
     externalEngineBakeoffSnapshotSha256 = $externalEngineBakeoffEvidence.snapshotSha256
     externalEngineBakeoffPlanCandidateCount = $externalEngineBakeoffEvidence.bakeoffPlanCandidateCount
@@ -9198,13 +13119,16 @@ $report = [ordered]@{
     errorCount = $errors.Count
     warningCount = $warnings.Count
     hardwareEvidence = $hardwareEvidence
+    benchmarkPlanEvidence = $benchmarkPlanEvidence
     metricCatalogEvidence = $metricCatalogEvidence
     offlineFixtureMetricsEvidence = $offlineFixtureMetricsEvidence
     externalEngineCandidateEvidence = $externalEngineCandidateEvidence
     externalEngineBakeoffEvidence = $externalEngineBakeoffEvidence
     metricComparisonEvidence = $metricComparisonEvidence
     liveTraceComparisonEvidence = $liveTraceComparisonEvidence
+    liveTraceThetisComparisonEvidence = $liveTraceThetisComparisonEvidence
     liveDiagnosticsHistoryEvidence = $liveDiagnosticsHistoryEvidence
+    liveAcceptanceCycleEvidence = $liveAcceptanceCycleEvidence
     nativeSymbolAuditEvidence = $nativeSymbolAuditEvidence
     nativeRuntimeArtifactAuditEvidence = $nativeRuntimeArtifactAuditEvidence
     artifactFiles = @($artifactFiles.ToArray())

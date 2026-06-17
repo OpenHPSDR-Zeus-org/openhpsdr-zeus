@@ -59,6 +59,16 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Equal(0.12, diag.Nr5TextureFill);
         Assert.Equal(0.18, diag.Nr5MaskSmoothing);
         Assert.Equal(0.41, diag.Nr5WeakSignalMemory);
+        Assert.True(diag.FrontendAdjacentNoiseUsable);
+        Assert.Equal(72, diag.FrontendAdjacentNoiseBins);
+        Assert.Equal(-111.4, diag.FrontendAdjacentNoiseFloorDb);
+        Assert.Equal(5.3, diag.FrontendAdjacentNoiseRejectedPct);
+        Assert.Contains("adjacent-noise-profile-usable", diag.Evidence);
+        Assert.Contains("nr5-adjacent-noise-trust-0.680", diag.Evidence);
+        Assert.Contains("nr5-adjacent-noise-side-balance-0.895", diag.Evidence);
+        Assert.Contains("nr5-adjacent-noise-asymmetry-1.4db", diag.Evidence);
+        Assert.Contains("nr5-adjacent-noise-drive-0.210", diag.Evidence);
+        Assert.Contains("nr5-adjacent-noise-profile", diag.CandidateTools);
         Assert.Contains("nr5-spnr-diagnostics", diag.CandidateTools);
         Assert.Contains("weak-cw-carrier", diag.NextBenchmarkScenarios);
         Assert.Contains("agc-level-step", diag.NextBenchmarkScenarios);
@@ -167,6 +177,8 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Equal("G2", plan.FirstHardwareTarget);
         Assert.Contains("off-baseline", plan.RequiredComparisons);
         Assert.Contains("thetis-parity", plan.RequiredComparisons);
+        Assert.Contains("nr5-spnr", plan.RequiredComparisons);
+        Assert.DoesNotContain("candidate-external-engine-opt-in", plan.RequiredComparisons);
         Assert.Contains(plan.GlobalAcceptanceGates, gate => gate.Contains("No weak-signal loss", StringComparison.Ordinal));
         Assert.Contains(plan.GlobalAcceptanceGates, gate => gate.Contains("PureSignal", StringComparison.Ordinal));
 
@@ -187,6 +199,81 @@ public sealed class DspLiveDiagnosticsServiceTests
     }
 
     [Fact]
+    public void BenchmarkPlanCatalog_CoversRequiredAcceptanceScenarioFamilies()
+    {
+        var plan = DspBenchmarkPlanCatalog.Build();
+        var scenarios = plan.Scenarios;
+        (string Family, string[] AcceptedIds)[] requiredFamilies =
+        [
+            ("weak-cw-carrier", ["weak-cw-carrier", "weak-carrier", "weak-cw", "weak-signal-carrier", "cw-carrier"]),
+            ("ssb-like-speech", ["ssb-like-speech", "ssb-speech", "voice-like-speech", "speech-post-demod"]),
+            ("fading", ["fading-carrier", "fading", "qsb", "fading-weak-signal", "weak-fading-carrier"]),
+            ("impulse-noise", ["impulse-noise", "impulse-noise-burst", "periodic-impulse-noise", "nb-impulse-noise"]),
+            ("strong-adjacent", ["strong-adjacent", "adjacent-strong-signal", "adjacent-signal", "strong-adjacent-signal"]),
+            ("noise-only-gating", ["noise-only-gating", "noise-only", "squelch-noise-only", "false-open-noise"]),
+            ("agc-pumping", ["agc-level-step", "agc-pumping", "agc-pump", "agc-step", "level-step"]),
+            ("squelch-transition", ["squelch-transition", "squelch-open-close", "squelch-threshold-transition", "ssql-transition"]),
+            ("tx-two-tone", ["tx-two-tone", "two-tone-tx", "tx-linearity-two-tone"]),
+            ("tx-voice-like", ["tx-voice-like", "tx-voice", "tx-speech", "tx-ssb-voice"]),
+            ("puresignal-safe-bypass", ["puresignal-safe-bypass", "puresignal-bypass", "pure-signal-safe-bypass", "pure-signal-bypass", "tx-puresignal-safe-bypass"]),
+            ("channel-lifecycle", ["channel-lifecycle", "openchannel-setchannelstate-lifecycle", "open-channel-set-channel-state", "open-channel-set-channel-state-lifecycle", "wdsp-channel-lifecycle"]),
+        ];
+
+        foreach (var (family, acceptedIds) in requiredFamilies)
+        {
+            Assert.True(
+                scenarios.Any(scenario => acceptedIds.Contains(scenario.Id, StringComparer.Ordinal)),
+                $"Missing required benchmark scenario family: {family}");
+        }
+
+        foreach (var scenario in scenarios)
+        {
+            Assert.NotEmpty(scenario.RequiredComparisons);
+            Assert.NotEmpty(scenario.RequiredMetrics);
+            Assert.NotEmpty(scenario.AcceptanceGates);
+        }
+    }
+
+    [Fact]
+    public void BenchmarkPlanCatalog_RequiresNr5ComparisonForRxAcceptanceScenariosOnly()
+    {
+        var plan = DspBenchmarkPlanCatalog.Build();
+
+        string[] rxScenarioIds =
+        [
+            "weak-cw-carrier",
+            "ssb-like-speech",
+            "fading-carrier",
+            "impulse-noise",
+            "strong-adjacent",
+            "noise-only-gating",
+            "agc-level-step",
+            "squelch-transition",
+        ];
+
+        foreach (var scenarioId in rxScenarioIds)
+        {
+            var scenario = Assert.Single(plan.Scenarios, s => s.Id == scenarioId);
+            Assert.Contains("nr5-spnr", scenario.RequiredComparisons);
+        }
+
+        string[] nonRxNrScenarioIds =
+        [
+            "frontend-scene-freshness",
+            "tx-two-tone",
+            "tx-voice-like",
+            "tx-puresignal-safe-bypass",
+            "wdsp-channel-lifecycle",
+        ];
+
+        foreach (var scenarioId in nonRxNrScenarioIds)
+        {
+            var scenario = Assert.Single(plan.Scenarios, s => s.Id == scenarioId);
+            Assert.DoesNotContain("nr5-spnr", scenario.RequiredComparisons);
+        }
+    }
+
+    [Fact]
     public void BenchmarkMetricCatalog_CoversEveryRequiredPlanMetric()
     {
         var plan = DspBenchmarkPlanCatalog.Build();
@@ -196,6 +283,8 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("higher", catalog.DirectionValues);
         Assert.Contains("lower", catalog.DirectionValues);
         Assert.Contains("informational", catalog.DirectionValues);
+        Assert.Contains("no-regression", catalog.ComparatorValues);
+        Assert.Contains("at-or-below", catalog.ComparatorValues);
 
         var catalogById = catalog.Metrics.ToDictionary(m => m.Id, StringComparer.Ordinal);
         var requiredMetricIds = plan.Scenarios
@@ -205,14 +294,41 @@ public sealed class DspLiveDiagnosticsServiceTests
             .ToArray();
 
         foreach (var metricId in requiredMetricIds)
-            Assert.True(catalogById.ContainsKey(metricId), $"Missing benchmark metric catalog entry: {metricId}");
+        {
+            Assert.True(catalogById.TryGetValue(metricId, out var metric), $"Missing benchmark metric catalog entry: {metricId}");
+            Assert.False(string.IsNullOrWhiteSpace(metric.AcceptanceThreshold), $"Missing acceptance threshold: {metricId}");
+            Assert.False(string.IsNullOrWhiteSpace(metric.AcceptanceComparator), $"Missing acceptance comparator: {metricId}");
+            Assert.False(string.IsNullOrWhiteSpace(metric.Unit), $"Missing unit: {metricId}");
+            Assert.False(string.IsNullOrWhiteSpace(metric.SafetyClass), $"Missing safety class: {metricId}");
+            Assert.NotEmpty(metric.AcceptanceScopes);
+        }
 
         Assert.Equal("higher", catalogById["wantedsnr"].Direction);
+        Assert.Equal("no-regression", catalogById["wantedsnr"].AcceptanceComparator);
         Assert.Equal("lower", catalogById["latency"].Direction);
         Assert.Equal("lower", catalogById["agcgainmovement"].Direction);
         Assert.Equal("informational", catalogById["outputrms"].Direction);
+        Assert.Equal("informational", catalogById["outputrms"].AcceptanceComparator);
+        Assert.Equal("0", catalogById["clippingcount"].AcceptanceThreshold);
+        Assert.Equal("at-or-below", catalogById["clippingcount"].AcceptanceComparator);
+        Assert.Equal("lower", catalogById["failedsamplecount"].Direction);
+        Assert.Equal("0.0", catalogById["failedsamplecount"].AcceptanceThreshold);
+        Assert.Equal("no-regression", catalogById["failedsamplecount"].AcceptanceComparator);
+        Assert.Equal("hard-gate", catalogById["failedsamplecount"].SafetyClass);
+        Assert.Contains("live-diagnostics-trace-comparison", catalogById["failedsamplecount"].AcceptanceScopes);
+        Assert.Equal("higher", catalogById["readysamplepct"].Direction);
+        Assert.Equal("1.0", catalogById["readysamplepct"].AcceptanceThreshold);
+        Assert.Equal("readiness", catalogById["readysamplepct"].SafetyClass);
+        Assert.Equal("lower", catalogById["nr5outputmovementdb"].Direction);
+        Assert.Equal("1.0", catalogById["nr5outputmovementdb"].AcceptanceThreshold);
+        Assert.Equal("pumping", catalogById["nr5outputmovementdb"].SafetyClass);
+        Assert.Equal("lower", catalogById["nr5artifactriskscore"].Direction);
+        Assert.Equal("0.0", catalogById["nr5artifactriskscore"].AcceptanceThreshold);
+        Assert.Equal("artifact-control", catalogById["nr5artifactriskscore"].SafetyClass);
+        Assert.Contains("live-diagnostics-trace-comparison", catalogById["nr5artifactriskscore"].AcceptanceScopes);
         Assert.Contains("weak-cw-carrier", catalogById["wantedsnr"].RelatedScenarios);
         Assert.Contains("agc-level-step", catalogById["agcgainmovement"].RelatedScenarios);
+        Assert.Contains("weak-cw-carrier", catalogById["wantedsnr"].AcceptanceScopes);
     }
 
     [Fact]
@@ -237,6 +353,7 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "wdsp-native-symbol-audit" && artifact.Required);
         Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "wdsp-runtime-artifact-audit" && artifact.Required);
         Assert.Contains(manifest.RequiredArtifacts, artifact => artifact.Id == "offline-fixture-metrics" && artifact.Required);
+        Assert.DoesNotContain(manifest.RequiredArtifacts, artifact => artifact.Id == "external-engine-bakeoff-report");
         Assert.Contains(manifest.StopConditions, item => item.Contains("weak-signal loss", StringComparison.Ordinal));
     }
 
@@ -278,6 +395,7 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.False(traceHistoryArtifact.Required);
         Assert.Equal("diagnostics-history-json", traceHistoryArtifact.Kind);
         Assert.Contains("summarize-dsp-live-diagnostics-history.ps1", traceHistoryArtifact.Source);
+        Assert.DoesNotContain(manifest.RequiredArtifacts, artifact => artifact.Id == "external-engine-bakeoff-report");
         var nativeAuditArtifact = Assert.Single(manifest.RequiredArtifacts, artifact => artifact.Id == "wdsp-native-symbol-audit");
         Assert.True(nativeAuditArtifact.Required);
         Assert.Equal("native-audit-json", nativeAuditArtifact.Kind);
@@ -314,6 +432,7 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("live-diagnostics-json", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-native-symbol-audit", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-runtime-artifact-audit", snapshot.IncludedArtifacts);
+        Assert.DoesNotContain("external-engine-bakeoff-report", snapshot.IncludedArtifacts);
         Assert.DoesNotContain("live-diagnostics-history", snapshot.IncludedArtifacts);
         Assert.Contains("frontend-dsp-scene", snapshot.MissingEvidence);
         Assert.Same(condition, snapshot.SmartNrCondition);
@@ -350,9 +469,40 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("offline-fixture-metrics", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-native-symbol-audit", snapshot.IncludedArtifacts);
         Assert.Contains("wdsp-runtime-artifact-audit", snapshot.IncludedArtifacts);
+        Assert.DoesNotContain("external-engine-bakeoff-report", snapshot.IncludedArtifacts);
         Assert.DoesNotContain("live-diagnostics-history", snapshot.IncludedArtifacts);
         Assert.Contains(snapshot.NextActions, action => action.Contains("Save this modernization snapshot", StringComparison.Ordinal));
         Assert.Contains(snapshot.ExternalEngineCandidates, candidate => candidate.Id == "rnnoise");
+    }
+
+    [Fact]
+    public void CaptureManifest_RequiresExternalBakeoffOnlyWhenExternalComparisonIsScoped()
+    {
+        var service = new FrontendDspSceneDiagnosticsService();
+        PublishScene(service, profile: "NR5", held: false, rxScore: 94, rxTone: "neutral", coherent: true);
+        var condition = service.SmartNrCondition(
+            Runtime("Nr5", "Nr5", nr5Available: true, nr5: Nr5(learnedFrames: 80, confidence: 0.72, agcGate: 0.66)),
+            RxChain(score: 94));
+        var live = DspLiveDiagnosticsService.Build(condition);
+        var plan = DspBenchmarkPlanCatalog.Build() with
+        {
+            RequiredComparisons =
+            [
+                "off-baseline",
+                "thetis-parity",
+                "current-zeus",
+                "nr5-spnr",
+                "candidate-external-engine-opt-in",
+            ],
+        };
+
+        var manifest = DspBenchmarkCaptureManifestService.Build(live, plan);
+
+        var externalBakeoffArtifact = Assert.Single(manifest.RequiredArtifacts, artifact => artifact.Id == "external-engine-bakeoff-report");
+        Assert.True(externalBakeoffArtifact.Required);
+        Assert.Equal("external-candidate-report-json", externalBakeoffArtifact.Kind);
+        Assert.Contains("summarize-dsp-external-engine-candidates.ps1", externalBakeoffArtifact.Source);
+        Assert.Contains("candidate readiness", externalBakeoffArtifact.Purpose, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -367,6 +517,19 @@ public sealed class DspLiveDiagnosticsServiceTests
             Assert.Equal("off", c.DefaultState);
             Assert.Equal("candidate-only-opt-in-bakeoff", c.RolloutPolicy);
             Assert.Contains("post-demod", c.IntegrationPoint);
+            Assert.Equal("catalog-only-not-integrated", c.EvaluationStage);
+            Assert.Contains(c.AllowedSignalPaths, path => path.Contains("post-demod", StringComparison.Ordinal));
+            Assert.Contains("raw-wdsp-iq", c.ForbiddenSignalPaths);
+            Assert.Contains(c.ForbiddenSignalPaths, path => path.Contains("puresignal", StringComparison.Ordinal));
+            Assert.Contains("operator-visible-opt-in", c.RequiredControls);
+            Assert.Contains("clean-bypass-fallback", c.RequiredControls);
+            Assert.Contains("no-raw-wdsp-iq-replacement", c.RequiredControls);
+            Assert.Contains("no-tx-or-puresignal-coupling", c.RequiredControls);
+            Assert.True(
+                c.FallbackPolicy.Contains("fallback", StringComparison.OrdinalIgnoreCase)
+                || c.FallbackPolicy.Contains("fall back", StringComparison.OrdinalIgnoreCase)
+                || c.FallbackPolicy.Contains("bypass", StringComparison.OrdinalIgnoreCase),
+                $"Missing fallback or bypass policy for {c.Id}");
             Assert.NotEmpty(c.RequiredBenchmarks);
             Assert.NotEmpty(c.RequiredEvidence);
             Assert.NotEmpty(c.Blockers);
@@ -376,10 +539,13 @@ public sealed class DspLiveDiagnosticsServiceTests
         var webrtc = Assert.Single(candidates, c => c.Id == "webrtc-apm");
         Assert.Contains("AGC", webrtc.RadioSafetyRisk);
         Assert.Contains("AGC", string.Join(" ", webrtc.RequiredEvidence));
+        Assert.Contains("webrtc-aec-disabled", webrtc.RequiredControls);
+        Assert.Contains("webrtc-agc-disabled", webrtc.RequiredControls);
 
         var speex = Assert.Single(candidates, c => c.Id == "speexdsp");
         Assert.Contains("baseline", speex.IntegrationPoint);
         Assert.Contains("no pumping", string.Join(" ", speex.RequiredEvidence));
+        Assert.Contains("speex-agc-disabled", speex.RequiredControls);
     }
 
     private static void PublishScene(
@@ -410,7 +576,19 @@ public sealed class DspLiveDiagnosticsServiceTests
             PeakCount: 1,
             CoherentPeakCount: 1,
             CoherentSubthresholdSignal: coherent,
-            SourceAtUtc: DateTimeOffset.UtcNow.AddMilliseconds(-250)));
+            SourceAtUtc: DateTimeOffset.UtcNow.AddMilliseconds(-250),
+            AdjacentNoiseUsable: true,
+            AdjacentNoiseBins: 72,
+            AdjacentNoiseLeftBins: 34,
+            AdjacentNoiseRightBins: 38,
+            AdjacentNoiseFloorDb: -111.4,
+            AdjacentNoiseP10Db: -113.2,
+            AdjacentNoiseP50Db: -111.4,
+            AdjacentNoiseP90Db: -108.7,
+            AdjacentNoiseLeftFloorDb: -112.0,
+            AdjacentNoiseRightFloorDb: -110.6,
+            AdjacentNoiseSlopeDbPerKhz: 0.2,
+            AdjacentNoiseRejectedPct: 5.3));
 
     private static DspNrRuntimeSnapshot Runtime(
         string requested,
@@ -434,8 +612,12 @@ public sealed class DspLiveDiagnosticsServiceTests
 
     private static SmartNrRxChainRuntimeDto RxChain(int score, bool adcOverload = false) =>
         new(
-            SchemaVersion: 1,
+            SchemaVersion: 2,
             Source: "test",
+            FilterLowHz: 300,
+            FilterHighHz: 2600,
+            FilterWidthHz: 2300,
+            FilterPresetName: "NR5-WEAK",
             AutoAgcEnabled: true,
             AgcMode: "Med",
             AgcTopDb: 80,
@@ -461,7 +643,7 @@ public sealed class DspLiveDiagnosticsServiceTests
 
     private static Nr5SpnrDiagnosticsDto Nr5(int learnedFrames, double confidence, double agcGate) =>
         new(
-            SchemaVersion: 7,
+            SchemaVersion: 9,
             ChannelId: 0,
             Run: true,
             Position: 1,
@@ -501,7 +683,19 @@ public sealed class DspLiveDiagnosticsServiceTests
             PeakEvidence: 0.72,
             PeakLimit: 0.69,
             PeakLimitDbfs: -3.2,
-            PeakReductionDb: 1.4);
+            PeakReductionDb: 1.4,
+            AdjacentNoiseUsable: true,
+            AdjacentNoiseBins: 72,
+            AdjacentNoiseFloorDb: -111.4,
+            AdjacentNoiseTrust: 0.68,
+            AdjacentNoiseDrive: 0.21,
+            AdjacentNoiseRejectedPct: 5.3,
+            AdjacentNoiseLeftBins: 34,
+            AdjacentNoiseRightBins: 38,
+            AdjacentNoiseLeftFloorDb: -112.0,
+            AdjacentNoiseRightFloorDb: -110.6,
+            AdjacentNoiseSideBalance: 0.895,
+            AdjacentNoiseAsymmetryDb: 1.4);
 
     private static DspLiveRuntimeEvidenceDto RuntimeEvidence(
         string status = "fresh",
@@ -546,6 +740,7 @@ public sealed class DspLiveDiagnosticsServiceTests
             RxAudioLevelerOutputLimitReductionDb: 0.0,
             RxAudioLevelerOutputLimitSampleCount: 0,
             RxAudioLevelerPauseHoldBlocks: 0,
+            RxAudioLevelerNr5SpeechHoldBlocks: 0,
             RxAudioLevelerBoostSlewLimited: false,
             RxAudioLevelerPeakLimited: false,
             RxAudioLevelerOutputLimited: false,

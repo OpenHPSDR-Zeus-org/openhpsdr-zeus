@@ -49,7 +49,7 @@ public static class DspBenchmarkCaptureManifestService
         }
 
         var status = Status(live);
-        var artifacts = Artifacts(scenarioIds);
+        var artifacts = Artifacts(scenarioIds, plan.RequiredComparisons);
 
         return new DspBenchmarkCaptureManifestDto(
             SchemaVersion: 1,
@@ -97,14 +97,17 @@ public static class DspBenchmarkCaptureManifestService
         return live.ReadyForLiveBenchmark ? "ready-for-g2-capture" : "capture-preflight-required";
     }
 
-    private static DspBenchmarkCaptureArtifactDto[] Artifacts(string[] scenarioIds)
+    private static DspBenchmarkCaptureArtifactDto[] Artifacts(string[] scenarioIds, string[] requiredComparisons)
     {
         var all = scenarioIds;
         var pureSignal = scenarioIds.Contains("tx-puresignal-safe-bypass", StringComparer.Ordinal)
             ? new[] { "tx-puresignal-safe-bypass" }
             : Array.Empty<string>();
+        var externalBakeoff = requiredComparisons.Contains("candidate-external-engine-opt-in", StringComparer.Ordinal)
+            ? all
+            : Array.Empty<string>();
 
-        return
+        List<DspBenchmarkCaptureArtifactDto> artifacts =
         [
             Artifact(
                 "live-diagnostics-json",
@@ -186,6 +189,22 @@ public static class DspBenchmarkCaptureManifestService
                 "once-per-capture-bundle",
                 true,
                 all),
+        ];
+
+        if (externalBakeoff.Length > 0)
+        {
+            artifacts.Add(Artifact(
+                "external-engine-bakeoff-report",
+                "external-candidate-report-json",
+                "tools/summarize-dsp-external-engine-candidates.ps1",
+                "Summarize opt-in external DSP/ML candidate readiness, blockers, required benchmark coverage, and snapshot sync before any post-demod bakeoff review.",
+                "once-per-capture-bundle-when-external-opt-in-comparison-is-in-scope",
+                true,
+                externalBakeoff));
+        }
+
+        artifacts.AddRange(
+        [
             Artifact(
                 "wdsp-native-symbol-audit",
                 "native-audit-json",
@@ -234,7 +253,9 @@ public static class DspBenchmarkCaptureManifestService
                 "before-and-after-tx-scenario",
                 pureSignal.Length > 0,
                 pureSignal),
-        ];
+        ]);
+
+        return artifacts.ToArray();
     }
 
     private static DspBenchmarkCaptureArtifactDto Artifact(

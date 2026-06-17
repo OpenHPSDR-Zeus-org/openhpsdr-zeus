@@ -241,6 +241,16 @@ public static class ZeusHost
             {
                 builder.Services.AddSingleton<IRxAudioSink, WebSocketAudioSink>();
             }
+            else
+            {
+                // No LAN sharing, so no ungated WS sink — but the browser-side
+                // DeepCW decoder (running in this host's own webview) still
+                // needs RX PCM. GatedWebSocketAudioSink streams 0x02 to WS
+                // clients only while one has requested it (MsgType
+                // .AudioStreamRequest), so it's inert until the decoder panel
+                // is open and never duplicates the native playback path.
+                builder.Services.AddSingleton<IRxAudioSink, GatedWebSocketAudioSink>();
+            }
 
             // Mic capture: replaces the browser → WS MicPcm uplink in
             // desktop mode. TxAudioIngest still subscribes to
@@ -301,12 +311,11 @@ public static class ZeusHost
         });
         builder.Services.AddSingleton<CwEngine>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<CwEngine>());
-        // Server-side CW receive decoder: taps demodulated RX audio
-        // (DspPipelineService.RxAudioAvailable) and streams decoded text over
-        // the hub. Lives server-side so it works in the desktop/native-audio
-        // host and headless — see CwDecoderService.
-        builder.Services.AddSingleton<CwDecoderService>();
-        builder.Services.AddHostedService(sp => sp.GetRequiredService<CwDecoderService>());
+        // The classic server-side CW receive decoder (CwDecoderService) was
+        // retired in favour of the browser-side DeepCW neural decoder
+        // (zeus-web/src/plugins/deepcw), which taps the RX audio bus client-
+        // side. Desktop/native-audio mode feeds it via the on-demand
+        // GatedWebSocketAudioSink (see the audio-sink registration above).
         // Voyeur Mode (zeus-la5) was extracted into the installable plugin
         // com.kb2uka.voyeur (openhpsdr-zeus-plugins/monitors/Voyeur). Its host
         // seams remain in core: AudioTapBridge (RX tap), RadioStateReader,
@@ -562,7 +571,16 @@ public static class ZeusHost
         }
 
         app.UseDefaultFiles();
-        app.UseStaticFiles();
+        // Map the asset types the Vite build emits for the DeepCW decoder.
+        // ASP.NET's default provider refuses to serve unknown extensions, so
+        // without these the bundled ONNX model and onnxruntime-web wasm/loader
+        // would 404. (.wasm/.mjs are known to modern ASP.NET, but we map them
+        // explicitly so this doesn't depend on the host's defaults.)
+        var staticContentTypes = new Microsoft.AspNetCore.StaticFiles.FileExtensionContentTypeProvider();
+        staticContentTypes.Mappings[".onnx"] = "application/octet-stream";
+        staticContentTypes.Mappings[".wasm"] = "application/wasm";
+        staticContentTypes.Mappings[".mjs"] = "text/javascript";
+        app.UseStaticFiles(new Microsoft.AspNetCore.Builder.StaticFileOptions { ContentTypeProvider = staticContentTypes });
 
         // WDSP NR2 EMNR fopen()s "zetaHat.bin" and "calculus" by bare relative name
         // (native/wdsp/emnr.c:215,397). Anchor cwd to the assembly dir so those files

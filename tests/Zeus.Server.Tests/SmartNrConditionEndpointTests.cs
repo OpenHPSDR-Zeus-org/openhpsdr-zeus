@@ -35,6 +35,7 @@ public sealed class SmartNrConditionEndpointTests
             AutoAttEnabled: true,
             AttOffsetDb: 2,
             AdcOverloadWarning: true,
+            FilterPresetName: "F4",
             AutoAgcEnabled: true,
             AgcOffsetDb: -31,
             PreampOn: true);
@@ -54,7 +55,12 @@ public sealed class SmartNrConditionEndpointTests
 
         var runtime = ZeusEndpoints.BuildSmartNrRxChainRuntime(state, adc);
 
+        Assert.Equal(2, runtime.SchemaVersion);
         Assert.Equal("backend-radio-state", runtime.Source);
+        Assert.Equal(-3500, runtime.FilterLowHz);
+        Assert.Equal(-100, runtime.FilterHighHz);
+        Assert.Equal(3400, runtime.FilterWidthHz);
+        Assert.Equal("F4", runtime.FilterPresetName);
         Assert.True(runtime.AutoAgcEnabled);
         Assert.Equal("Fast", runtime.AgcMode);
         Assert.Equal(52, runtime.EffectiveAgcTopDb);
@@ -95,6 +101,7 @@ public sealed class SmartNrConditionEndpointTests
             new[] { "available", "missing-spnr-exports", "wdsp-native-unloadable" });
         var rxChain = root.GetProperty("rxChain");
         Assert.Equal("backend-radio-state", rxChain.GetProperty("source").GetString());
+        Assert.True(rxChain.GetProperty("filterWidthHz").GetInt32() >= 0);
         Assert.True(double.IsFinite(rxChain.GetProperty("agcTopDb").GetDouble()));
         Assert.True(double.IsFinite(rxChain.GetProperty("effectiveAgcTopDb").GetDouble()));
         Assert.True(rxChain.GetProperty("autoAttEnabled").GetBoolean());
@@ -296,17 +303,27 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Contains(
             root.GetProperty("directionValues").EnumerateArray().Select(item => item.GetString()),
             item => item == "lower");
+        Assert.Contains(
+            root.GetProperty("comparatorValues").EnumerateArray().Select(item => item.GetString()),
+            item => item == "no-regression");
 
         var metrics = root.GetProperty("metrics").EnumerateArray().ToArray();
         Assert.Contains(metrics, item =>
             item.GetProperty("id").GetString() == "wantedsnr"
-            && item.GetProperty("direction").GetString() == "higher");
+            && item.GetProperty("direction").GetString() == "higher"
+            && item.GetProperty("acceptanceComparator").GetString() == "no-regression"
+            && item.GetProperty("acceptanceScopes").EnumerateArray().Any(scope => scope.GetString() == "weak-cw-carrier"));
         Assert.Contains(metrics, item =>
             item.GetProperty("id").GetString() == "agcgainmovement"
             && item.GetProperty("direction").GetString() == "lower");
         Assert.Contains(metrics, item =>
             item.GetProperty("id").GetString() == "outputrms"
-            && item.GetProperty("direction").GetString() == "informational");
+            && item.GetProperty("direction").GetString() == "informational"
+            && item.GetProperty("acceptanceComparator").GetString() == "informational");
+        Assert.Contains(metrics, item =>
+            item.GetProperty("id").GetString() == "clippingcount"
+            && item.GetProperty("acceptanceThreshold").GetString() == "0"
+            && item.GetProperty("acceptanceComparator").GetString() == "at-or-below");
     }
 
     [Fact]
@@ -397,11 +414,38 @@ public sealed class SmartNrConditionEndpointTests
             Assert.Equal("off", item.GetProperty("defaultState").GetString());
             Assert.Equal("candidate-only-opt-in-bakeoff", item.GetProperty("rolloutPolicy").GetString());
             Assert.Contains("post-demod", item.GetProperty("integrationPoint").GetString());
+            Assert.Equal("catalog-only-not-integrated", item.GetProperty("evaluationStage").GetString());
+            Assert.Contains(
+                item.GetProperty("allowedSignalPaths").EnumerateArray().Select(path => path.GetString()),
+                path => path is not null && path.Contains("post-demod", StringComparison.Ordinal));
+            Assert.Contains(
+                item.GetProperty("forbiddenSignalPaths").EnumerateArray().Select(path => path.GetString()),
+                path => path == "raw-wdsp-iq");
+            Assert.Contains(
+                item.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
+                control => control == "operator-visible-opt-in");
+            Assert.Contains(
+                item.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
+                control => control == "clean-bypass-fallback");
+            var fallbackPolicy = item.GetProperty("fallbackPolicy").GetString() ?? "";
+            Assert.True(
+                fallbackPolicy.Contains("fallback", StringComparison.OrdinalIgnoreCase)
+                || fallbackPolicy.Contains("fall back", StringComparison.OrdinalIgnoreCase)
+                || fallbackPolicy.Contains("bypass", StringComparison.OrdinalIgnoreCase),
+                $"Missing fallback or bypass policy for {item.GetProperty("id").GetString()}");
             Assert.NotEmpty(item.GetProperty("requiredBenchmarks").EnumerateArray());
             Assert.NotEmpty(item.GetProperty("requiredEvidence").EnumerateArray());
             Assert.NotEmpty(item.GetProperty("blockers").EnumerateArray());
             Assert.NotEmpty(item.GetProperty("referenceUrls").EnumerateArray());
         });
+
+        var webrtc = Assert.Single(candidates, item => item.GetProperty("id").GetString() == "webrtc-apm");
+        Assert.Contains(
+            webrtc.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
+            control => control == "webrtc-aec-disabled");
+        Assert.Contains(
+            webrtc.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
+            control => control == "webrtc-agc-disabled");
     }
 
     [Fact]
@@ -488,8 +532,13 @@ public sealed class SmartNrConditionEndpointTests
             .ToArray();
         Assert.Contains("/api/dsp/live-diagnostics.externalEngineCandidates", telemetry);
         Assert.Contains("/api/dsp/external-engine-candidates[].requiredBenchmarks", telemetry);
+        Assert.Contains("/api/dsp/external-engine-candidates[].requiredControls", telemetry);
+        Assert.Contains("/api/dsp/external-engine-candidates[].forbiddenSignalPaths", telemetry);
+        Assert.Contains("/api/dsp/external-engine-candidates[].fallbackPolicy", telemetry);
         Assert.Contains("/api/dsp/benchmark-plan.globalAcceptanceGates", telemetry);
         Assert.Contains("/api/dsp/benchmark-plan.scenarios[].acceptanceGates", telemetry);
+        Assert.Contains("/api/dsp/benchmark-metric-catalog.metrics[].acceptanceComparator", telemetry);
+        Assert.Contains("/api/dsp/benchmark-metric-catalog.metrics[].acceptanceScopes", telemetry);
         Assert.Contains("/api/dsp/benchmark-capture-manifest.requiredArtifacts", telemetry);
         Assert.Contains("/api/dsp/benchmark-capture-manifest.stopConditions", telemetry);
         Assert.Contains("/api/dsp/modernization-snapshot.evidenceCompletenessScore", telemetry);

@@ -19,6 +19,8 @@ param(
 
     [string]$SummaryPath = "",
 
+    [string]$ValidationReportPath = "",
+
     [string[]]$ScenarioIds = @(),
 
     [string[]]$ComparisonIds = @("off-baseline", "thetis-parity", "current-zeus", "candidate-under-test", "nr5-spnr"),
@@ -28,6 +30,12 @@ param(
     [switch]$AllowRegression,
 
     [switch]$AllowRuntimeAuditPreflight,
+
+    [switch]$ValidateBundle,
+
+    [switch]$AllowValidationPreflight,
+
+    [switch]$RequireArtifactFiles,
 
     [switch]$NoMarkdown,
 
@@ -112,6 +120,42 @@ function Test-Truthy {
     return [bool]$Value
 }
 
+function Add-ReadinessBlocker {
+    param(
+        [Parameter(Mandatory = $true)]$Blockers,
+        [Parameter(Mandatory = $true)][string]$Code,
+        [Parameter(Mandatory = $true)][string]$Message
+    )
+
+    $Blockers.Add([ordered]@{
+            code = $Code
+            message = $Message
+        }) | Out-Null
+}
+
+function Test-ReferencedFileProblem {
+    param($Record)
+
+    if ($null -eq $Record) {
+        return $false
+    }
+    if (-not (Test-Truthy (Get-JsonValue $Record "ok"))) {
+        return $true
+    }
+
+    foreach ($field in @("hashStatus", "summaryHashStatus", "summaryTracePathStatus", "sourceStatus", "jsonlHashStatus", "captureReadinessStatus")) {
+        $value = [string](Get-JsonValue $Record $field)
+        if ([string]::IsNullOrWhiteSpace($value)) {
+            continue
+        }
+        if ($value -in @("mismatch", "missing", "file-missing", "path-missing", "json-invalid", "tool-invalid", "conversion-invalid", "content-mismatch")) {
+            return $true
+        }
+    }
+
+    return $false
+}
+
 function Add-CliArg {
     param(
         [System.Collections.Generic.List[string]]$Arguments,
@@ -145,7 +189,8 @@ function Invoke-ToolScript {
     param(
         [Parameter(Mandatory = $true)][string]$ScriptPath,
         [Parameter(Mandatory = $true)][string[]]$Arguments,
-        [switch]$Quiet
+        [switch]$Quiet,
+        [switch]$AllowNonZeroExit
     )
 
     if ($Quiet) {
@@ -154,7 +199,7 @@ function Invoke-ToolScript {
     else {
         & powershell -NoProfile -ExecutionPolicy Bypass -File $ScriptPath @Arguments
     }
-    if ($LASTEXITCODE -ne 0) {
+    if ($LASTEXITCODE -ne 0 -and -not $AllowNonZeroExit) {
         throw "Tool failed with exit code ${LASTEXITCODE}: $ScriptPath"
     }
 }
@@ -239,6 +284,13 @@ else {
     $SummaryPath = Resolve-BundlePath $bundlePath $SummaryPath
 }
 
+if ([string]::IsNullOrWhiteSpace($ValidationReportPath)) {
+    $ValidationReportPath = Join-Path $bundlePath "validation-report.json"
+}
+else {
+    $ValidationReportPath = Resolve-BundlePath $bundlePath $ValidationReportPath
+}
+
 if (-not (Test-Path -LiteralPath $BenchmarkPlanPath -PathType Leaf)) {
     throw "Benchmark plan not found: $BenchmarkPlanPath"
 }
@@ -247,7 +299,12 @@ $scriptRoot = $PSScriptRoot
 $fixtureScript = Join-Path $scriptRoot "run-dsp-wdsp-fixture-evidence.ps1"
 $runtimeAuditScript = Join-Path $scriptRoot "audit-wdsp-runtime-artifacts.ps1"
 $comparisonScript = Join-Path $scriptRoot "compare-dsp-fixture-metrics.ps1"
-foreach ($script in @($fixtureScript, $runtimeAuditScript, $comparisonScript)) {
+$validationScript = Join-Path $scriptRoot "validate-dsp-modernization-bundle.ps1"
+$requiredScripts = @($fixtureScript, $runtimeAuditScript, $comparisonScript)
+if ($ValidateBundle) {
+    $requiredScripts += $validationScript
+}
+foreach ($script in $requiredScripts) {
     if (-not (Test-Path -LiteralPath $script -PathType Leaf)) {
         throw "Required tool script not found: $script"
     }
@@ -302,6 +359,23 @@ $metrics = Read-JsonFile $MetricsPath
 $runtimeAudit = Read-JsonFile $RuntimeAuditPath
 $comparison = Read-JsonFile $ComparisonReportPath
 
+$validation = $null
+if ($ValidateBundle) {
+    $validationArgs = New-Object System.Collections.Generic.List[string]
+    Add-CliArg $validationArgs "-BundleDir" $bundlePath
+    Add-CliArg $validationArgs "-ReportPath" $ValidationReportPath
+    if ($AllowValidationPreflight) { Add-CliArg $validationArgs "-AllowPreflight" }
+    if ($RequireArtifactFiles) { Add-CliArg $validationArgs "-RequireArtifactFiles" }
+    if ($JsonOnly) { Add-CliArg $validationArgs "-JsonOnly" }
+    Invoke-ToolScript -ScriptPath $validationScript -Arguments @($validationArgs.ToArray()) -Quiet:$JsonOnly -AllowNonZeroExit:$AllowValidationPreflight
+    if (Test-Path -LiteralPath $ValidationReportPath -PathType Leaf) {
+        $validation = Read-JsonFile $ValidationReportPath
+    }
+    else {
+        throw "Validation report was not written: $ValidationReportPath"
+    }
+}
+
 $sourceRuntimeSha = Normalize-Hash (Get-JsonValue $metrics "wdspRuntimeSha256")
 $comparisonRuntimeSha = Normalize-Hash (Get-JsonValue $comparison "wdspRuntimeSha256")
 $auditRuntimeSha = Normalize-Hash (Get-JsonValue $runtimeAudit "winX64NativeSha256")
@@ -320,8 +394,82 @@ else {
 }
 
 $completedUtc = [DateTimeOffset]::UtcNow
+$readyForOfflineReview = ((Test-Truthy (Get-JsonValue $comparison "readyForReview")) -and
+    (Test-Truthy (Get-JsonValue $runtimeAudit "readyForWinX64Package")) -and
+    [string]::Equals($runtimeHashStatus, "match", [StringComparison]::OrdinalIgnoreCase))
+$validationOk = if ($null -ne $validation) { Test-Truthy (Get-JsonValue $validation "ok") } else { $null }
+$validationMetricComparisonReady = if ($null -ne $validation) { Test-Truthy (Get-JsonValue $validation "metricComparisonReady") } else { $null }
+$validationSourceHashStatus = if ($null -ne $validation) { [string](Get-JsonValue $validation "metricComparisonSourceMetricsHashStatus") } else { $null }
+$validationRuntimeHashStatus = if ($null -ne $validation) { [string](Get-JsonValue $validation "metricComparisonWdspRuntimeHashStatus") } else { $null }
+$validationRuntimeArtifactHashStatus = if ($null -ne $validation) { [string](Get-JsonValue $validation "offlineFixtureMetricsRuntimeArtifactHashStatus") } else { $null }
+$validationRequireArtifactFiles = if ($null -ne $validation) { Test-Truthy (Get-JsonValue $validation "requireArtifactFiles") } else { $false }
+$validationReferencedFileRecords = if ($null -ne $validation) { @(Get-JsonArray $validation "artifactReferencedFiles") } else { @() }
+$validationReferencedFileProblemCount = @($validationReferencedFileRecords | Where-Object { Test-ReferencedFileProblem $_ }).Count
+$strictBundleValidationReady = if ($null -ne $validation) {
+    ($validationOk -and $validationMetricComparisonReady)
+} else {
+    $null
+}
+$acceptanceEvidenceBlockers = New-Object System.Collections.Generic.List[object]
+if (-not $readyForOfflineReview) {
+    Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code "offline-review-not-ready" -Message "Fixture comparison, runtime audit, and runtime hashes are not all ready for offline review."
+}
+if (-not $ValidateBundle) {
+    Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code "strict-validation-not-run" -Message "Run with -ValidateBundle before treating fixture output as acceptance evidence."
+}
+elseif ($null -eq $validation) {
+    Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code "strict-validation-report-missing" -Message "Validation was requested but no validation report was loaded."
+}
+else {
+    if (-not $validationOk) {
+        Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code "strict-validation-failed" -Message "Strict bundle validation did not pass."
+    }
+    if (-not $validationMetricComparisonReady) {
+        Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code "metric-comparison-validation-not-ready" -Message "Strict validation did not accept the fixture metric comparison evidence."
+    }
+    if (-not $validationRequireArtifactFiles -or -not $RequireArtifactFiles) {
+        Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code "artifact-file-validation-not-required" -Message "Run with -RequireArtifactFiles so artifact paths, hashes, and referenced evidence are checked."
+    }
+    if ($validationReferencedFileProblemCount -gt 0) {
+        Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code "artifact-referenced-file-problems" -Message "Strict validation found $validationReferencedFileProblemCount referenced artifact provenance problem(s)."
+    }
+    foreach ($hashSpec in @(
+            @{ Code = "source-metrics-hash-not-matched"; Name = "source metrics"; Status = $validationSourceHashStatus },
+            @{ Code = "comparison-runtime-hash-not-matched"; Name = "comparison WDSP runtime"; Status = $validationRuntimeHashStatus },
+            @{ Code = "runtime-artifact-hash-not-matched"; Name = "runtime artifact"; Status = $validationRuntimeArtifactHashStatus }
+        )) {
+        $statusValue = [string]$hashSpec.Status
+        if (-not [string]::IsNullOrWhiteSpace($statusValue) -and
+            -not [string]::Equals($statusValue, "match", [StringComparison]::OrdinalIgnoreCase)) {
+            Add-ReadinessBlocker -Blockers $acceptanceEvidenceBlockers -Code ([string]$hashSpec.Code) -Message "$($hashSpec.Name) hash status is '$statusValue', not 'match'."
+        }
+    }
+}
+$acceptanceEvidenceReady = ($readyForOfflineReview -and $acceptanceEvidenceBlockers.Count -eq 0)
+$acceptanceEvidenceStatus = if ($acceptanceEvidenceReady) {
+    "acceptance-evidence-ready"
+}
+elseif (-not $readyForOfflineReview) {
+    "blocked-offline-review"
+}
+elseif (-not $ValidateBundle) {
+    "review-only-validation-not-run"
+}
+elseif (-not $RequireArtifactFiles -or -not $validationRequireArtifactFiles) {
+    "review-only-artifact-files-not-required"
+}
+elseif ($validationReferencedFileProblemCount -gt 0) {
+    "blocked-artifact-provenance"
+}
+elseif ($null -ne $validation -and -not $validationOk) {
+    "blocked-strict-validation"
+}
+else {
+    "not-acceptance-ready"
+}
+
 $summary = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     tool = "run-dsp-wdsp-fixture-matrix"
     generatedUtc = $completedUtc
     startedUtc = $startedUtc
@@ -336,6 +484,19 @@ $summary = [ordered]@{
     comparisonReportPath = $ComparisonReportPath
     comparisonMarkdownPath = if ($NoMarkdown) { $null } else { $ComparisonMarkdownPath }
     summaryPath = $SummaryPath
+    validationRan = [bool]$ValidateBundle
+    validationReportPath = if ($ValidateBundle) { $ValidationReportPath } else { $null }
+    validationOk = $validationOk
+    validationErrorCount = if ($null -ne $validation) { [int](Get-JsonValue $validation "errorCount") } else { $null }
+    validationWarningCount = if ($null -ne $validation) { [int](Get-JsonValue $validation "warningCount") } else { $null }
+    validationRequireArtifactFiles = $validationRequireArtifactFiles
+    validationMetricComparisonReady = $validationMetricComparisonReady
+    validationMetricComparisonSourceHashStatus = $validationSourceHashStatus
+    validationMetricComparisonRuntimeHashStatus = $validationRuntimeHashStatus
+    validationRuntimeArtifactHashStatus = $validationRuntimeArtifactHashStatus
+    validationReferencedFileCount = $validationReferencedFileRecords.Count
+    validationReferencedFileProblemCount = $validationReferencedFileProblemCount
+    strictBundleValidationReady = $strictBundleValidationReady
     fixtureScenarioScope = [string](Get-JsonValue $metrics "fixtureScenarioScope")
     scenarioCount = [int](Get-JsonValue $metrics "scenarioCount")
     comparisonIds = @(Get-JsonArray $metrics "comparisonIds")
@@ -359,9 +520,11 @@ $summary = [ordered]@{
     missingThetisBaselineCount = [int](Get-JsonValue $comparison "missingThetisBaselineCount")
     missingCandidateCount = [int](Get-JsonValue $comparison "missingCandidateCount")
     missingMetricValueCount = [int](Get-JsonValue $comparison "missingMetricValueCount")
-    readyForOfflineReview = ((Test-Truthy (Get-JsonValue $comparison "readyForReview")) -and
-        (Test-Truthy (Get-JsonValue $runtimeAudit "readyForWinX64Package")) -and
-        [string]::Equals($runtimeHashStatus, "match", [StringComparison]::OrdinalIgnoreCase))
+    readyForOfflineReview = $readyForOfflineReview
+    acceptanceEvidenceReady = $acceptanceEvidenceReady
+    acceptanceEvidenceStatus = $acceptanceEvidenceStatus
+    acceptanceEvidenceBlockerCount = $acceptanceEvidenceBlockers.Count
+    acceptanceEvidenceBlockers = @($acceptanceEvidenceBlockers.ToArray())
     acceptanceLimitations = @(
         "Offline WDSP fixture evidence does not prove G2, on-air, TX/PureSignal, or cross-radio acceptance.",
         "No default DSP behavior should change until strict bundle validation, G2 evidence, and cross-radio evidence pass.",
@@ -380,7 +543,11 @@ else {
     Write-Host "Comparison: $ComparisonReportPath"
     Write-Host "Runtime audit: $RuntimeAuditPath"
     Write-Host "Summary: $SummaryPath"
+    if ($ValidateBundle) {
+        Write-Host "Validation: $ValidationReportPath"
+    }
     Write-Host "Ready for offline review: $($summary.readyForOfflineReview)"
+    Write-Host "Acceptance evidence ready: $($summary.acceptanceEvidenceReady) ($($summary.acceptanceEvidenceStatus))"
     Write-Host "Runtime hash status: $runtimeHashStatus"
 }
 

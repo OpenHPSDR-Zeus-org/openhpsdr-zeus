@@ -31,7 +31,6 @@ public static class DspBenchmarkPlanCatalog
                 "thetis-parity",
                 "current-zeus",
                 "nr5-spnr",
-                "candidate-external-engine-opt-in",
             ],
             GlobalAcceptanceGates:
             [
@@ -53,6 +52,7 @@ public static class DspBenchmarkPlanCatalog
             Status: "ready-for-offline-comparison-tooling",
             RolloutPolicy: "metric-semantics-only-no-runtime-dsp-behavior-change",
             DirectionValues: ["higher", "lower", "informational"],
+            ComparatorValues: ["no-regression", "at-or-above", "at-or-below", "equals", "informational"],
             Metrics: AllMetrics(scenarios));
     }
 
@@ -310,13 +310,7 @@ public static class DspBenchmarkPlanCatalog
             SignalPath: signalPath,
             FixtureStatus: fixtureStatus,
             AppliesTo: appliesTo,
-            RequiredComparisons:
-            [
-                "off-baseline",
-                "thetis-parity",
-                "current-zeus",
-                "candidate-under-test",
-            ],
+            RequiredComparisons: ScenarioRequiredComparisons(signalPath),
             RequiredMetrics: metrics,
             AcceptanceGates: gates,
             RequiredArtifacts: artifacts,
@@ -334,6 +328,29 @@ public static class DspBenchmarkPlanCatalog
                 "g2-live-capture",
                 "dsp-live-diagnostics",
             ]);
+
+    private static string[] ScenarioRequiredComparisons(string signalPath)
+    {
+        var comparisons = new List<string>
+        {
+            "off-baseline",
+            "thetis-parity",
+            "current-zeus",
+            "candidate-under-test",
+        };
+
+        if (IsRxSignalPath(signalPath))
+        {
+            comparisons.Add("nr5-spnr");
+        }
+
+        return comparisons.ToArray();
+    }
+
+    private static bool IsRxSignalPath(string signalPath) =>
+        signalPath.Contains("RX", StringComparison.OrdinalIgnoreCase)
+        && !signalPath.Contains("TX", StringComparison.OrdinalIgnoreCase)
+        && !signalPath.Contains("lifecycle", StringComparison.OrdinalIgnoreCase);
 
     private static DspBenchmarkMetricDto[] AllMetrics(DspBenchmarkScenarioDto[] scenarios) =>
     [
@@ -429,6 +446,81 @@ public static class DspBenchmarkPlanCatalog
             "Residual audio should drain promptly across state changes."),
         Metric(scenarios, "native exception count", "lower", "count", "native-lifecycle",
             "Native lifecycle work must not introduce WDSP exceptions."),
+
+        TraceMetric("failedSampleCount", "Failed samples", "lower", "0.0", "samples", "hard-gate",
+            "Endpoint failures make trace evidence incomplete."),
+        TraceMetric("hardBlockerSampleCount", "Hard blocker samples", "lower", "0.0", "samples", "hard-gate",
+            "Hard live diagnostics blockers must not increase under candidate DSP settings."),
+        TraceMetric("readySamplePct", "Ready sample percent", "higher", "1.0", "percent", "readiness",
+            "Candidate traces should not reduce readiness for G2 live benchmark capture."),
+        TraceMetric("readinessScoreAverage", "Average readiness score", "higher", "1.0", "score", "readiness",
+            "Readiness score combines WDSP lifecycle, runtime alignment, live scene, and runtime evidence constraints."),
+        TraceMetric("agcGainMovementDb", "AGC gain movement dB", "lower", "1.0", "dB", "pumping",
+            "Lower movement reduces the risk of audible AGC pumping during NR/AGC tuning."),
+        TraceMetric("nr5WeakDropoutSampleCount", "NR5 weak-input dropout samples", "lower", "0.0", "samples", "weak-signal",
+            "Candidate NR5 live traces must not increase weak-input dropouts against the baseline window."),
+        TraceMetric("nr5WeakRecoveryPct", "NR5 weak-input recovery percent", "higher", "5.0", "percent", "weak-signal",
+            "Weak-signal preservation should improve or stay within 5 percentage points of the baseline recovery rate."),
+        TraceMetric("nr5HotMakeupSampleCount", "NR5 hot makeup samples", "lower", "0.0", "samples", "pumping",
+            "Candidate NR5 live traces must not add samples with makeup gain above the watcher hot-makeup threshold."),
+        TraceMetric("nr5LowEvidenceLiftSampleCount", "NR5 low-evidence lifted samples", "lower", "0.0", "samples", "noise-gate",
+            "Candidate NR5 live traces must not increase low-confidence weak-input samples that are lifted into audible output."),
+        TraceMetric("nr5LowEvidenceLiftedPct", "NR5 low-evidence lifted percent", "lower", "5.0", "percent", "artifact-control",
+            "Low-evidence lift must stay bounded so speech-artifact review rows cannot hide inside weak-signal recovery gains."),
+        TraceMetric("nr5AudioAlignmentMismatchPct", "NR5 audio-alignment mismatch percent", "lower", "10.0", "percent", "artifact-control",
+            "NR5 artifact-control evidence is unsafe when candidate output rows diverge from the aligned final-audio window."),
+        TraceMetric("nr5ArtifactRiskScore", "NR5 artifact-risk score", "lower", "0.0", "score", "artifact-control",
+            "Candidate traces must not introduce the matrix artifact-review score from low-evidence lift, alignment mismatch, or unsupported texture fill."),
+        TraceMetric("nr5OutputMovementDb", "NR5 output movement dB", "lower", "1.0", "dB", "pumping",
+            "Candidate NR5 output level should not swing more than the baseline trace; larger movement risks audible level pumping."),
+        TraceMetric("nr5MakeupMovementDb", "NR5 makeup movement dB", "lower", "1.0", "dB", "pumping",
+            "Large makeup-gain movement is a direct review signal for NR5 output-level watch traces."),
+        TraceMetric("nr5MakeupMaxDb", "NR5 maximum makeup dB", "lower", "1.0", "dB", "pumping",
+            "Candidate NR5 tuning should not require a higher maximum makeup boost to recover weak content."),
+        TraceMetric("nr5RecoveryDriveMovement", "NR5 recovery-drive movement", "lower", "0.1", "score", "pumping",
+            "Recovery-drive movement is the fast control surface behind many NR5 output-level watch traces."),
+        TraceMetric("nr5TextureFillAverage", "NR5 texture-fill average", "informational", "0.01", "score", "weak-signal",
+            "Texture fill helps distinguish weak-signal hole-fill from persistent makeup; direction is scenario-dependent."),
+        TraceMetric("nr5PeakReductionMaxDb", "NR5 maximum peak reduction dB", "lower", "1.0", "dB", "clipping",
+            "Higher NR5 peak-shaper pressure means the candidate is creating or passing larger crests before final audio."),
+        TraceMetric("nr5OutputPeakMaxDbfs", "NR5 maximum output peak dBFS", "lower", "1.0", "dBFS", "clipping",
+            "NR5 output peaks should not move closer to clipping before downstream audio processing."),
+        TraceMetric("audioRmsMovementDb", "Audio RMS movement dB", "lower", "1.0", "dB", "pumping",
+            "Large final-audio RMS swings need fixture/audio review before tuning is accepted."),
+        TraceMetric("audioPeakMaxDbfs", "Maximum audio peak dBFS", "lower", "1.0", "dBFS", "clipping",
+            "Higher dBFS peak values are closer to clipping and should not regress."),
+        TraceMetric("rxAudioLevelerOutputRmsMovementDb", "RX audio leveler output RMS movement dB", "lower", "1.0", "dB", "pumping",
+            "The final RX leveler should reduce loudness movement without adding audible pumping."),
+        TraceMetric("rxAudioLevelerAppliedGainMovementDb", "RX audio leveler applied gain movement dB", "lower", "1.0", "dB", "pumping",
+            "Large final leveler gain swings indicate downstream loudness pumping even when NR5 output is stable."),
+        TraceMetric("rxAudioLevelerConstrainedSampleCount", "RX audio leveler constrained samples", "lower", "0.0", "samples", "pumping",
+            "Any increase in constrained final-leveler samples means loudness normalization is still fighting slew or peak limits."),
+        TraceMetric("rxAudioLevelerConstrainedPct", "RX audio leveler constrained percent", "lower", "1.0", "percent", "pumping",
+            "Constrained-sample percentage normalizes leveler warnings across unequal trace lengths."),
+        TraceMetric("rxAudioLevelerBoostSlewLimitedSampleCount", "RX audio leveler boost-slew limited samples", "lower", "0.0", "samples", "pumping",
+            "More boost-slew limited samples means weak-signal loudness is still settling rather than fully normalized."),
+        TraceMetric("rxAudioLevelerPeakLimitedSampleCount", "RX audio leveler peak-limited samples", "lower", "0.0", "samples", "clipping",
+            "More peak-limited samples means final audio headroom is constraining normalization."),
+        TraceMetric("rxAudioLevelerOutputLimitedSampleCount", "RX audio leveler output-limited blocks", "lower", "0.0", "blocks", "clipping",
+            "More final crest-cap blocks means loudness normalization is relying on peak shaping."),
+        TraceMetric("rxAudioLevelerOutputLimitReductionMaxDb", "RX audio leveler max crest-cap reduction dB", "lower", "0.5", "dB", "clipping",
+            "Higher final crest-cap reduction can indicate audible peak shaping after NR."),
+        TraceMetric("rxAudioLevelerOutputLimitSampleCountMax", "RX audio leveler max shaped samples per block", "lower", "8.0", "samples", "clipping",
+            "More shaped samples per block means the final limiter is affecting more of the waveform."),
+        TraceMetric("adcHeadroomMinDb", "Minimum ADC headroom dB", "higher", "1.0", "dB", "front-end",
+            "Candidate evaluation should not consume ADC headroom."),
+        TraceMetric("monitorBacklogMaxSamples", "Maximum monitor backlog samples", "lower", "0.0", "samples", "audio-path",
+            "Backlog invalidates live audio fidelity evidence."),
+        TraceMetric("audioFreshPct", "Audio fresh percent", "higher", "1.0", "percent", "freshness",
+            "Fresh final audio is required before judging NR/AGC or external engines."),
+        TraceMetric("rxMetersFreshPct", "RX meters fresh percent", "higher", "1.0", "percent", "freshness",
+            "Fresh RX meters are needed for AGC/headroom evidence."),
+        TraceMetric("squelchClosedPct", "Squelch closed percent", "informational", "1.0", "percent", "scenario-dependent",
+            "Higher closed time is good for noise-only gating but unsafe for weak-signal preservation; review per scenario."),
+        TraceMetric("latencyAverageMs", "Average endpoint latency ms", "lower", "5.0", "ms", "tooling",
+            "Diagnostics overhead should stay bounded during evidence capture."),
+        TraceMetric("traceStatusSeverity", "Trace status severity", "lower", "0.0", "severity", "hard-gate",
+            "Candidate trace status should not move to a more severe watch or blocked state."),
     ];
 
     private static DspBenchmarkMetricDto Metric(
@@ -445,17 +537,58 @@ public static class DspBenchmarkPlanCatalog
             .Select(s => s.Id)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
+        var contract = MetricContract(id, direction);
 
         return new DspBenchmarkMetricDto(
             SchemaVersion: 1,
             Id: id,
             Name: name,
             Direction: direction,
+            AcceptanceThreshold: contract.threshold,
+            AcceptanceComparator: contract.comparator,
             Unit: unit,
             SafetyClass: safetyClass,
+            AcceptanceScopes: related,
             Rationale: rationale,
             RelatedScenarios: related);
     }
+
+    private static DspBenchmarkMetricDto TraceMetric(
+        string id,
+        string name,
+        string direction,
+        string threshold,
+        string unit,
+        string safetyClass,
+        string rationale) =>
+        new(
+            SchemaVersion: 1,
+            Id: NormalizeMetricId(id),
+            Name: name,
+            Direction: direction,
+            AcceptanceThreshold: threshold,
+            AcceptanceComparator: string.Equals(direction, "informational", StringComparison.OrdinalIgnoreCase)
+                ? "informational"
+                : "no-regression",
+            Unit: unit,
+            SafetyClass: safetyClass,
+            AcceptanceScopes: ["live-diagnostics-trace-comparison"],
+            Rationale: rationale,
+            RelatedScenarios: []);
+
+    private static (string threshold, string comparator) MetricContract(string id, string direction) =>
+        id switch
+        {
+            "clippingcount" => ("0", "at-or-below"),
+            "nativeexceptioncount" => ("0", "at-or-below"),
+            "meterescape" => ("0", "at-or-below"),
+            "statetransitionsuccess" => ("1.0", "at-or-above"),
+            "bypassstate" => ("pure-signal-default-bypass-preserved", "equals"),
+            "feedbackstability" => ("1.0", "at-or-above"),
+            _ when string.Equals(direction, "informational", StringComparison.OrdinalIgnoreCase) =>
+                ("review-only-context", "informational"),
+            _ => ("current-zeus-and-thetis-parity-baseline", "no-regression"),
+        };
 
     private static string NormalizeMetricId(string value) =>
         new(value

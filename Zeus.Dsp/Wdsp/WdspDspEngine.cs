@@ -179,6 +179,11 @@ public sealed class WdspDspEngine : IDspEngine
         WdspNativeLoader.TryProbe() &&
         WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRMemoryDiagnostics));
 
+    internal static bool Nr5SpnrAdjacentNoiseAvailable =>
+        WdspNativeLoader.TryProbe() &&
+        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.SetRXASPNRAdjacentNoiseProfile)) &&
+        WdspNativeLoader.TryProbeExport(nameof(NativeMethods.GetRXASPNRAdjacentNoiseDiagnostics));
+
     private static bool AllNativeExportsAvailable(string[] symbolNames)
     {
         if (!WdspNativeLoader.TryProbe()) return false;
@@ -192,6 +197,9 @@ public sealed class WdspDspEngine : IDspEngine
 
     private static double FiniteOrZero(double value) =>
         double.IsFinite(value) ? value : 0.0;
+
+    private static double FiniteOrFallback(double value, double fallback) =>
+        double.IsFinite(value) ? value : FiniteOrZero(fallback);
 
     private static double RoundDiag(double value, int digits = 3) =>
         Math.Round(FiniteOrZero(value), digits);
@@ -252,6 +260,9 @@ public sealed class WdspDspEngine : IDspEngine
         // Single-writer on the pipeline thread + word-sized read on the worker = safe
         // without a lock (worst case: one extra frame at the old setting on toggle).
         public volatile NbMode CurrentNbMode = NbMode.Off;
+        // Re-applies passband-aware NR5 tuning when the operator changes the
+        // filter while NR5 is already running.
+        public volatile NrMode CurrentNrMode = NrMode.Off;
         // Zoom level (1..32). Changing it re-calls SetAnalyzer with shifted
         // fscLin/fscHin; the worker's Spectrum0 and the pixel drain's GetPixels
         // take this lock so they never interleave with an in-flight reconfig.
@@ -651,6 +662,10 @@ public sealed class WdspDspEngine : IDspEngine
         state.FilterLowAbsHz = lo;
         state.FilterHighAbsHz = hi;
         ApplyBandpassForMode(state);
+        if (state.CurrentNrMode == NrMode.Nr5)
+        {
+            ApplyNr5Spnr(state);
+        }
     }
 
     public void SetVfoHz(int channelId, long vfoHz)
@@ -832,7 +847,7 @@ public sealed class WdspDspEngine : IDspEngine
                 TrySetEmnrPost2Run(channelId, 0);
                 NativeMethods.SetRXAEMNRRun(channelId, 0);
                 TrySetSbnrRun(channelId, 0);
-                ApplyNr5Spnr(channelId);
+                ApplyNr5Spnr(state);
                 break;
             default:
                 NativeMethods.SetRXAANRRun(channelId, 0);
@@ -842,6 +857,7 @@ public sealed class WdspDspEngine : IDspEngine
                 TrySetSpnrRun(channelId, 0);
                 break;
         }
+        state.CurrentNrMode = cfg.NrMode;
 
         if (cfg.AnfEnabled)
         {
@@ -1060,13 +1076,15 @@ public sealed class WdspDspEngine : IDspEngine
     // NR5 (SPNR) parameter push + Run=1. Defaults are conservative while the
     // mode is experimental: moderate suppression, post-NR audio normalization
     // on, and a target below full scale so WDSP AGC still has headroom.
-    private void ApplyNr5Spnr(int channelId)
+    private void ApplyNr5Spnr(ChannelState state)
     {
+        int channelId = state.Id;
         try
         {
+            var policy = ComputeNr5PassbandPolicy(state.FilterLowAbsHz, state.FilterHighAbsHz);
             NativeMethods.SetRXASPNRPosition(channelId, NrDefaults.Nr5Position);
-            NativeMethods.SetRXASPNRAggressiveness(channelId, NrDefaults.Nr5Aggressiveness);
-            NativeMethods.SetRXASPNRAgcTarget(channelId, NrDefaults.Nr5AgcTargetRms);
+            NativeMethods.SetRXASPNRAggressiveness(channelId, policy.Aggressiveness);
+            NativeMethods.SetRXASPNRAgcTarget(channelId, policy.AgcTargetRms);
             NativeMethods.SetRXASPNRAgcRun(channelId, 1);
             NativeMethods.SetRXASPNRRun(channelId, 1);
         }
@@ -1077,6 +1095,34 @@ public sealed class WdspDspEngine : IDspEngine
                 channelId, ex.Message);
         }
     }
+
+    internal readonly record struct Nr5PassbandPolicy(double Aggressiveness, double AgcTargetRms);
+
+    internal static Nr5PassbandPolicy ComputeNr5PassbandPolicy(int lowAbsHz, int highAbsHz)
+    {
+        int lo = Math.Abs(lowAbsHz);
+        int hi = Math.Abs(highAbsHz);
+        if (hi < lo) (lo, hi) = (hi, lo);
+
+        double widthHz = Math.Max(300.0, hi - lo);
+        double narrowDrive = Clamp01((2600.0 - widthHz) / 1200.0);
+        double wideDrive = Clamp01((widthHz - 3000.0) / 2200.0);
+
+        double aggressiveness =
+            NrDefaults.Nr5Aggressiveness
+            - 0.08 * narrowDrive
+            + 0.07 * wideDrive;
+        double agcTarget =
+            NrDefaults.Nr5AgcTargetRms
+            - 0.005 * narrowDrive
+            + 0.005 * wideDrive;
+
+        return new Nr5PassbandPolicy(
+            Math.Clamp(aggressiveness, 0.52, 0.70),
+            Math.Clamp(agcTarget, 0.068, 0.083));
+    }
+
+    private static double Clamp01(double value) => Math.Clamp(value, 0.0, 1.0);
 
     // Pre-Phase-1-binary safe Run=0 — the only SBNR call we make outside the
     // Sbnr arm. EntryPointNotFoundException here just means "the library
@@ -1091,6 +1137,47 @@ public sealed class WdspDspEngine : IDspEngine
     {
         try { NativeMethods.SetRXASPNRRun(channelId, run); }
         catch (EntryPointNotFoundException) { /* libwdsp lacks NR5; nothing to turn off */ }
+    }
+
+    public void SetNr5AdjacentNoiseProfile(
+        int channelId,
+        bool usable,
+        int bins,
+        double floorDb,
+        double p10Db,
+        double p50Db,
+        double p90Db,
+        double slopeDbPerKhz,
+        double rejectedPct,
+        int leftBins = 0,
+        int rightBins = 0,
+        double leftFloorDb = 0.0,
+        double rightFloorDb = 0.0)
+    {
+        if (channelId < 0 || !IsRxChannelOpen(channelId) || !Nr5SpnrAdjacentNoiseAvailable)
+            return;
+
+        try
+        {
+            NativeMethods.SetRXASPNRAdjacentNoiseProfile(
+                channelId,
+                usable ? 1 : 0,
+                Math.Max(0, bins),
+                Math.Max(0, leftBins),
+                Math.Max(0, rightBins),
+                FiniteOrZero(floorDb),
+                FiniteOrZero(p10Db),
+                FiniteOrZero(p50Db),
+                FiniteOrZero(p90Db),
+                FiniteOrFallback(leftFloorDb, floorDb),
+                FiniteOrFallback(rightFloorDb, floorDb),
+                FiniteOrZero(slopeDbPerKhz),
+                Math.Clamp(FiniteOrZero(rejectedPct), 0.0, 100.0));
+        }
+        catch (EntryPointNotFoundException)
+        {
+            // Optional NR5 enhancement; older native builds keep the self-learned path.
+        }
     }
 
     public Nr5SpnrDiagnosticsDto? TryGetNr5SpnrDiagnostics(int channelId)
@@ -1137,6 +1224,18 @@ public sealed class WdspDspEngine : IDspEngine
             double peakEvidence = 0.0;
             double peakLimit = 0.0;
             double peakReductionDb = 0.0;
+            bool adjacentNoiseUsable = false;
+            int adjacentNoiseBins = 0;
+            int adjacentNoiseLeftBins = 0;
+            int adjacentNoiseRightBins = 0;
+            double adjacentNoiseFloorDb = 0.0;
+            double adjacentNoiseLeftFloorDb = 0.0;
+            double adjacentNoiseRightFloorDb = 0.0;
+            double adjacentNoiseTrust = 0.0;
+            double adjacentNoiseDrive = 0.0;
+            double adjacentNoiseRejectedPct = 0.0;
+            double adjacentNoiseSideBalance = 0.0;
+            double adjacentNoiseAsymmetryDb = 0.0;
             if (Nr5SpnrAdvancedDiagnosticsAvailable)
             {
                 try
@@ -1272,9 +1371,63 @@ public sealed class WdspDspEngine : IDspEngine
                     weakSignalMemory = 0.0;
                 }
             }
+            if (Nr5SpnrAdjacentNoiseAvailable)
+            {
+                try
+                {
+                    int adjacentOk = NativeMethods.GetRXASPNRAdjacentNoiseDiagnostics(
+                        channelId,
+                        out int adjacentUsable,
+                        out adjacentNoiseBins,
+                        out adjacentNoiseLeftBins,
+                        out adjacentNoiseRightBins,
+                        out adjacentNoiseFloorDb,
+                        out adjacentNoiseLeftFloorDb,
+                        out adjacentNoiseRightFloorDb,
+                        out adjacentNoiseTrust,
+                        out adjacentNoiseDrive,
+                        out adjacentNoiseRejectedPct,
+                        out adjacentNoiseSideBalance,
+                        out adjacentNoiseAsymmetryDb);
+                    if (adjacentOk == 0)
+                    {
+                        adjacentNoiseUsable = false;
+                        adjacentNoiseBins = 0;
+                        adjacentNoiseLeftBins = 0;
+                        adjacentNoiseRightBins = 0;
+                        adjacentNoiseFloorDb = 0.0;
+                        adjacentNoiseLeftFloorDb = 0.0;
+                        adjacentNoiseRightFloorDb = 0.0;
+                        adjacentNoiseTrust = 0.0;
+                        adjacentNoiseDrive = 0.0;
+                        adjacentNoiseRejectedPct = 0.0;
+                        adjacentNoiseSideBalance = 0.0;
+                        adjacentNoiseAsymmetryDb = 0.0;
+                    }
+                    else
+                    {
+                        adjacentNoiseUsable = adjacentUsable != 0;
+                    }
+                }
+                catch (EntryPointNotFoundException)
+                {
+                    adjacentNoiseUsable = false;
+                    adjacentNoiseBins = 0;
+                    adjacentNoiseLeftBins = 0;
+                    adjacentNoiseRightBins = 0;
+                    adjacentNoiseFloorDb = 0.0;
+                    adjacentNoiseLeftFloorDb = 0.0;
+                    adjacentNoiseRightFloorDb = 0.0;
+                    adjacentNoiseTrust = 0.0;
+                    adjacentNoiseDrive = 0.0;
+                    adjacentNoiseRejectedPct = 0.0;
+                    adjacentNoiseSideBalance = 0.0;
+                    adjacentNoiseAsymmetryDb = 0.0;
+                }
+            }
 
             return new Nr5SpnrDiagnosticsDto(
-                SchemaVersion: 7,
+                SchemaVersion: 9,
                 ChannelId: channelId,
                 Run: run != 0,
                 Position: position,
@@ -1314,7 +1467,19 @@ public sealed class WdspDspEngine : IDspEngine
                 PeakEvidence: RoundDiag(peakEvidence, 3),
                 PeakLimit: RoundDiag(peakLimit, 6),
                 PeakLimitDbfs: RoundDiag(LinearToDb(peakLimit), 1),
-                PeakReductionDb: RoundDiag(Math.Max(0.0, peakReductionDb), 1));
+                PeakReductionDb: RoundDiag(Math.Max(0.0, peakReductionDb), 1),
+                AdjacentNoiseUsable: adjacentNoiseUsable,
+                AdjacentNoiseBins: Math.Max(0, adjacentNoiseBins),
+                AdjacentNoiseFloorDb: RoundDiag(adjacentNoiseFloorDb, 1),
+                AdjacentNoiseTrust: RoundDiag(adjacentNoiseTrust, 3),
+                AdjacentNoiseDrive: RoundDiag(adjacentNoiseDrive, 3),
+                AdjacentNoiseRejectedPct: RoundDiag(Math.Clamp(adjacentNoiseRejectedPct, 0.0, 100.0), 1),
+                AdjacentNoiseLeftBins: Math.Max(0, adjacentNoiseLeftBins),
+                AdjacentNoiseRightBins: Math.Max(0, adjacentNoiseRightBins),
+                AdjacentNoiseLeftFloorDb: RoundDiag(adjacentNoiseLeftFloorDb, 1),
+                AdjacentNoiseRightFloorDb: RoundDiag(adjacentNoiseRightFloorDb, 1),
+                AdjacentNoiseSideBalance: RoundDiag(Math.Clamp(adjacentNoiseSideBalance, 0.0, 1.0), 3),
+                AdjacentNoiseAsymmetryDb: RoundDiag(Math.Max(0.0, adjacentNoiseAsymmetryDb), 1));
         }
         catch (EntryPointNotFoundException)
         {

@@ -232,11 +232,16 @@ function New-CandidateSummary {
     $integrationPoint = [string](Get-JsonValue $Candidate "integrationPoint")
     $defaultState = [string](Get-JsonValue $Candidate "defaultState")
     $rolloutPolicy = [string](Get-JsonValue $Candidate "rolloutPolicy")
+    $evaluationStage = [string](Get-JsonValue $Candidate "evaluationStage")
     $license = [string](Get-JsonValue $Candidate "license")
     $packagingStatus = [string](Get-JsonValue $Candidate "packagingStatus")
     $runtimeRisk = [string](Get-JsonValue $Candidate "runtimeRisk")
     $latencyRisk = [string](Get-JsonValue $Candidate "latencyRisk")
     $radioSafetyRisk = [string](Get-JsonValue $Candidate "radioSafetyRisk")
+    $allowedSignalPaths = @(Get-JsonArray $Candidate "allowedSignalPaths")
+    $forbiddenSignalPaths = @(Get-JsonArray $Candidate "forbiddenSignalPaths")
+    $requiredControls = @(Get-JsonArray $Candidate "requiredControls")
+    $fallbackPolicy = [string](Get-JsonValue $Candidate "fallbackPolicy")
     $benchmarks = @(Get-JsonArray $Candidate "requiredBenchmarks")
     $evidence = @(Get-JsonArray $Candidate "requiredEvidence")
     $blockers = @(Get-JsonArray $Candidate "blockers")
@@ -254,6 +259,18 @@ function New-CandidateSummary {
     if ([string]::IsNullOrWhiteSpace($runtimeRisk)) { $issues.Add("runtime-risk-missing") | Out-Null }
     if ([string]::IsNullOrWhiteSpace($latencyRisk)) { $issues.Add("latency-risk-missing") | Out-Null }
     if ([string]::IsNullOrWhiteSpace($radioSafetyRisk)) { $issues.Add("radio-safety-risk-missing") | Out-Null }
+    if ([string]::IsNullOrWhiteSpace($evaluationStage)) { $issues.Add("evaluation-stage-missing") | Out-Null }
+    if ($allowedSignalPaths.Count -le 0 -or ($allowedSignalPaths -join " ") -notlike "*post-demod*") { $issues.Add("allowed-paths-invalid") | Out-Null }
+    if ($forbiddenSignalPaths.Count -le 0 -or
+        ($forbiddenSignalPaths -join " ") -notlike "*raw-wdsp-iq*" -or
+        ($forbiddenSignalPaths -join " ") -notlike "*puresignal*") { $issues.Add("forbidden-paths-invalid") | Out-Null }
+    $requiredControlText = $requiredControls -join " "
+    foreach ($requiredControlToken in @("operator-visible-opt-in", "clean-bypass-fallback", "no-raw-wdsp-iq-replacement", "no-tx-or-puresignal-coupling")) {
+        if ($requiredControlText -notlike "*$requiredControlToken*") {
+            $issues.Add("required-control-missing:$requiredControlToken") | Out-Null
+        }
+    }
+    if ([string]::IsNullOrWhiteSpace($fallbackPolicy) -or ($fallbackPolicy -notlike "*fallback*" -and $fallbackPolicy -notlike "*fall back*" -and $fallbackPolicy -notlike "*bypass*")) { $issues.Add("fallback-policy-missing") | Out-Null }
     if ($benchmarks.Count -lt 3) { $issues.Add("benchmark-coverage-incomplete") | Out-Null }
     if ($evidence.Count -lt 3) { $issues.Add("evidence-coverage-incomplete") | Out-Null }
     if ($blockers.Count -le 0) { $issues.Add("blockers-missing") | Out-Null }
@@ -285,7 +302,12 @@ function New-CandidateSummary {
         inSnapshot = $InSnapshot
         defaultState = $defaultState
         rolloutPolicy = $rolloutPolicy
+        evaluationStage = $evaluationStage
         integrationPoint = $integrationPoint
+        allowedSignalPaths = @($allowedSignalPaths)
+        forbiddenSignalPaths = @($forbiddenSignalPaths)
+        requiredControls = @($requiredControls)
+        fallbackPolicy = $fallbackPolicy
         license = $license
         packagingStatus = $packagingStatus
         runtimeRisk = $runtimeRisk
@@ -297,6 +319,9 @@ function New-CandidateSummary {
         combinedRiskScore = $combinedRiskScore
         requiredBenchmarkCount = $benchmarks.Count
         requiredEvidenceCount = $evidence.Count
+        allowedSignalPathCount = $allowedSignalPaths.Count
+        forbiddenSignalPathCount = $forbiddenSignalPaths.Count
+        requiredControlCount = $requiredControls.Count
         blockerCount = $blockers.Count
         referenceUrlCount = $references.Count
         safeForBakeoff = $safeForBakeoff
@@ -427,6 +452,12 @@ function New-CandidateBakeoffPlan {
         }) | Out-Null
         $priority++
     }
+    $planRequiredControls = @((@(
+            "off-by-default",
+            "post-demod-only",
+            "clean-bypass-fallback",
+            "operator-visible-opt-in"
+        ) + @(Get-JsonArray $CandidateSummary "requiredControls")) | Select-Object -Unique)
 
     return [ordered]@{
         candidateId = $id
@@ -434,14 +465,13 @@ function New-CandidateBakeoffPlan {
         blockedForIntegration = $integrationBlocked
         integrationPoint = [string](Get-JsonValue $CandidateSummary "integrationPoint")
         defaultState = [string](Get-JsonValue $CandidateSummary "defaultState")
+        evaluationStage = [string](Get-JsonValue $CandidateSummary "evaluationStage")
+        allowedSignalPaths = @(Get-JsonArray $CandidateSummary "allowedSignalPaths")
+        forbiddenSignalPaths = @(Get-JsonArray $CandidateSummary "forbiddenSignalPaths")
+        fallbackPolicy = [string](Get-JsonValue $CandidateSummary "fallbackPolicy")
         scenarioCount = $scenarioRecords.Count
         scenarios = @($scenarioRecords.ToArray())
-        requiredControls = @(
-            "off-by-default",
-            "post-demod-only",
-            "clean-bypass-fallback",
-            "operator-visible-opt-in"
-        )
+        requiredControls = @($planRequiredControls)
         packageAndRuntimeGates = @(
             "license-review-complete",
             "runtime-package-reviewed",
@@ -488,6 +518,17 @@ function New-ExternalBakeoffPlan {
     }
 }
 
+function Format-MarkdownCell {
+    param($Value)
+
+    $text = [string]$Value
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return ""
+    }
+
+    return (($text -replace "\r?\n", " ") -replace "\|", "\\|")
+}
+
 function Build-MarkdownReport {
     param($Report)
 
@@ -503,15 +544,20 @@ function Build-MarkdownReport {
     $lines.Add("- Safe for bakeoff: $(Get-JsonValue $Report "safeForBakeoffCount")") | Out-Null
     $lines.Add("- Unsafe catalog entries: $(Get-JsonValue $Report "unsafeCandidateCount")") | Out-Null
     $lines.Add("- Missing required candidates: $(Get-JsonValue $Report "missingCandidateCount")") | Out-Null
+    $missingCandidateIds = @(Get-JsonArray $Report "missingCandidateIds")
+    if ($missingCandidateIds.Count -gt 0) {
+        $lines.Add("- Missing required candidate IDs: $(Format-MarkdownCell ($missingCandidateIds -join ', '))") | Out-Null
+    }
     $lines.Add("- Integration-ready candidates: $(Get-JsonValue $Report "integrationReadyCandidateCount")") | Out-Null
     $lines.Add("") | Out-Null
     $lines.Add("## Candidate Matrix") | Out-Null
     $lines.Add("") | Out-Null
-    $lines.Add("| Candidate | Status | Risk | Benchmarks | Evidence | Blockers | Issues |") | Out-Null
-    $lines.Add("|---|---|---:|---:|---:|---:|---|") | Out-Null
+    $lines.Add("| Candidate | Status | Risk | Benchmarks | Evidence | Controls | Forbidden Paths | Blockers | Fallback | Issues |") | Out-Null
+    $lines.Add("|---|---|---:|---:|---:|---:|---:|---:|---|---|") | Out-Null
     foreach ($candidate in $candidateSummaries) {
         $issueText = if (@(Get-JsonArray $candidate "issues").Count -eq 0) { "" } else { @(Get-JsonArray $candidate "issues") -join ", " }
-        $lines.Add("| $(Get-JsonValue $candidate "id") | $(Get-JsonValue $candidate "integrationStatus") | $(Get-JsonValue $candidate "combinedRiskScore") | $(Get-JsonValue $candidate "requiredBenchmarkCount") | $(Get-JsonValue $candidate "requiredEvidenceCount") | $(Get-JsonValue $candidate "blockerCount") | $issueText |") | Out-Null
+        $fallbackText = [string](Get-JsonValue $candidate "fallbackPolicy")
+        $lines.Add("| $(Format-MarkdownCell (Get-JsonValue $candidate "id")) | $(Format-MarkdownCell (Get-JsonValue $candidate "integrationStatus")) | $(Get-JsonValue $candidate "combinedRiskScore") | $(Get-JsonValue $candidate "requiredBenchmarkCount") | $(Get-JsonValue $candidate "requiredEvidenceCount") | $(Get-JsonValue $candidate "requiredControlCount") | $(Get-JsonValue $candidate "forbiddenSignalPathCount") | $(Get-JsonValue $candidate "blockerCount") | $(Format-MarkdownCell $fallbackText) | $(Format-MarkdownCell $issueText) |") | Out-Null
     }
     $lines.Add("") | Out-Null
     $lines.Add("## Required External Candidates") | Out-Null

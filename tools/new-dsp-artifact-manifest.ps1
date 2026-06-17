@@ -10,6 +10,8 @@ param(
 
     [switch]$IncludeOptionalArtifacts,
 
+    [switch]$RequireLiveAcceptanceArtifacts,
+
     [switch]$Force
 )
 
@@ -111,6 +113,41 @@ function ConvertTo-ArtifactFileName {
     return $safe
 }
 
+function ConvertTo-ComparisonId {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ""
+    }
+
+    $normalized = $Value.Trim().ToLowerInvariant() -replace "[^a-z0-9]+", "-"
+    $normalized = $normalized.Trim("-")
+
+    switch ($normalized) {
+        "external" { return "candidate-external-engine-opt-in" }
+        "external-engine" { return "candidate-external-engine-opt-in" }
+        "candidate-external-engine-opt-in" { return "candidate-external-engine-opt-in" }
+        default { return $normalized }
+    }
+}
+
+function Add-ExternalEngineBakeoffScopeTrigger {
+    param(
+        [System.Collections.Generic.List[string]]$Triggers,
+        [Parameter(Mandatory = $true)][string]$SourceName,
+        $Object
+    )
+
+    foreach ($value in (Get-JsonArray $Object "requiredComparisons")) {
+        $comparison = ConvertTo-ComparisonId ([string]$value)
+        if ($comparison -eq "candidate-external-engine-opt-in") {
+            if (-not $Triggers.Contains($SourceName)) {
+                $Triggers.Add($SourceName) | Out-Null
+            }
+        }
+    }
+}
+
 function Get-DefaultArtifactPath {
     param(
         [Parameter(Mandatory = $true)][string]$Id,
@@ -209,6 +246,26 @@ if (-not [string]::IsNullOrWhiteSpace($outputParent)) {
 }
 
 $captureManifest = Read-JsonFile $captureManifestPath
+$benchmarkPlanPath = Join-Path $bundlePath "benchmark-plan.json"
+$benchmarkPlan = if (Test-Path -LiteralPath $benchmarkPlanPath -PathType Leaf) {
+    Read-JsonFile $benchmarkPlanPath
+}
+else {
+    $null
+}
+
+$externalEngineBakeoffScopeTriggers = New-Object System.Collections.Generic.List[string]
+if ($null -ne $benchmarkPlan) {
+    Add-ExternalEngineBakeoffScopeTrigger `
+        -Triggers $externalEngineBakeoffScopeTriggers `
+        -SourceName "benchmark-plan.requiredComparisons" `
+        -Object $benchmarkPlan
+}
+Add-ExternalEngineBakeoffScopeTrigger `
+    -Triggers $externalEngineBakeoffScopeTriggers `
+    -SourceName "benchmark-capture-manifest.requiredComparisons" `
+    -Object $captureManifest
+$externalEngineBakeoffInScope = $externalEngineBakeoffScopeTriggers.Count -gt 0
 $endpointFilesByPath = @{}
 if ($null -ne $bundleIndex) {
     $endpointFilesByPath = Get-EndpointFilesByPath $bundleIndex
@@ -230,7 +287,13 @@ foreach ($artifact in (Get-JsonArray $captureManifest "requiredArtifacts")) {
     }
 
     $required = Test-Truthy (Get-JsonValue $artifact "required")
-    if (-not $required -and -not $IncludeOptionalArtifacts) {
+    $forceLiveAcceptanceArtifact = ($RequireLiveAcceptanceArtifacts -and @(
+            "live-diagnostics-trace-comparison",
+            "live-diagnostics-trace-index",
+            "live-diagnostics-history"
+        ) -contains $id)
+    $effectiveRequired = ($required -or $forceLiveAcceptanceArtifact)
+    if (-not $required -and -not $IncludeOptionalArtifacts -and -not $forceLiveAcceptanceArtifact) {
         continue
     }
 
@@ -240,6 +303,10 @@ foreach ($artifact in (Get-JsonArray $captureManifest "requiredArtifacts")) {
     }
 
     $scenarioIds = @(Get-JsonArray $artifact "scenarioIds")
+    $comparisonIds = @(Get-JsonArray $artifact "comparisonIds")
+    if ($id -eq "external-engine-bakeoff-report" -and $comparisonIds.Count -eq 0 -and $externalEngineBakeoffInScope) {
+        $comparisonIds = @("candidate-external-engine-opt-in")
+    }
     $purpose = [string](Get-JsonValue $artifact "purpose")
     $cadence = [string](Get-JsonValue $artifact "cadence")
 
@@ -250,10 +317,62 @@ foreach ($artifact in (Get-JsonArray $captureManifest "requiredArtifacts")) {
             -Id $id `
             -Kind $kind `
             -Source $source `
+            -Purpose "$purpose Off-baseline matrix index." `
+            -Cadence $cadence `
+            -Path "artifacts/live-diagnostics-trace-index.off-baseline.json" `
+            -Required $effectiveRequired `
+            -ScenarioIds $scenarioIds `
+            -ComparisonIds @("off-baseline")
+
+        Add-ArtifactRecord `
+            -Artifacts $artifacts `
+            -SeenArtifactIds $seenArtifactIds `
+            -Id "live-diagnostics-matrix-report-off-baseline" `
+            -Kind "diagnostics-matrix-json" `
+            -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
+            -Purpose "$purpose Off-baseline matrix report with self-consistency and trace-index hash evidence." `
+            -Cadence $cadence `
+            -Path "artifacts/live-diagnostics-matrix-report.off-baseline.json" `
+            -Required $effectiveRequired `
+            -ScenarioIds $scenarioIds `
+            -ComparisonIds @("off-baseline")
+
+        Add-ArtifactRecord `
+            -Artifacts $artifacts `
+            -SeenArtifactIds $seenArtifactIds `
+            -Id $id `
+            -Kind $kind `
+            -Source $source `
+            -Purpose "$purpose Thetis-parity matrix index." `
+            -Cadence $cadence `
+            -Path "artifacts/live-diagnostics-trace-index.thetis-parity.json" `
+            -Required $effectiveRequired `
+            -ScenarioIds $scenarioIds `
+            -ComparisonIds @("thetis-parity")
+
+        Add-ArtifactRecord `
+            -Artifacts $artifacts `
+            -SeenArtifactIds $seenArtifactIds `
+            -Id "live-diagnostics-matrix-report-thetis-parity" `
+            -Kind "diagnostics-matrix-json" `
+            -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
+            -Purpose "$purpose Thetis-parity matrix report with self-consistency and trace-index hash evidence." `
+            -Cadence $cadence `
+            -Path "artifacts/live-diagnostics-matrix-report.thetis-parity.json" `
+            -Required $effectiveRequired `
+            -ScenarioIds $scenarioIds `
+            -ComparisonIds @("thetis-parity")
+
+        Add-ArtifactRecord `
+            -Artifacts $artifacts `
+            -SeenArtifactIds $seenArtifactIds `
+            -Id $id `
+            -Kind $kind `
+            -Source $source `
             -Purpose "$purpose Baseline matrix index." `
             -Cadence $cadence `
             -Path "artifacts/live-diagnostics-trace-index.baseline.json" `
-            -Required $required `
+            -Required $effectiveRequired `
             -ScenarioIds $scenarioIds `
             -ComparisonIds @("current-zeus")
 
@@ -266,7 +385,7 @@ foreach ($artifact in (Get-JsonArray $captureManifest "requiredArtifacts")) {
             -Purpose "$purpose Baseline matrix report with self-consistency and trace-index hash evidence." `
             -Cadence $cadence `
             -Path "artifacts/live-diagnostics-matrix-report.baseline.json" `
-            -Required $required `
+            -Required $effectiveRequired `
             -ScenarioIds $scenarioIds `
             -ComparisonIds @("current-zeus")
 
@@ -279,7 +398,7 @@ foreach ($artifact in (Get-JsonArray $captureManifest "requiredArtifacts")) {
             -Purpose "$purpose Candidate matrix index." `
             -Cadence $cadence `
             -Path "artifacts/live-diagnostics-trace-index.candidate.json" `
-            -Required $required `
+            -Required $effectiveRequired `
             -ScenarioIds $scenarioIds `
             -ComparisonIds @("nr5-spnr")
 
@@ -292,7 +411,7 @@ foreach ($artifact in (Get-JsonArray $captureManifest "requiredArtifacts")) {
             -Purpose "$purpose Candidate matrix report with self-consistency and trace-index hash evidence." `
             -Cadence $cadence `
             -Path "artifacts/live-diagnostics-matrix-report.candidate.json" `
-            -Required $required `
+            -Required $effectiveRequired `
             -ScenarioIds $scenarioIds `
             -ComparisonIds @("nr5-spnr")
         continue
@@ -307,8 +426,147 @@ foreach ($artifact in (Get-JsonArray $captureManifest "requiredArtifacts")) {
         -Purpose $purpose `
         -Cadence $cadence `
         -Path $path `
-        -Required $required `
-        -ScenarioIds $scenarioIds
+        -Required $effectiveRequired `
+        -ScenarioIds $scenarioIds `
+        -ComparisonIds $comparisonIds
+}
+
+if ($RequireLiveAcceptanceArtifacts -and -not $seenArtifactIds.ContainsKey("live-diagnostics-trace-comparison")) {
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "live-diagnostics-trace-comparison" `
+        -Kind "diagnostics-comparison-json" `
+        -Source "tools/compare-dsp-live-diagnostics-matrix.ps1" `
+        -Purpose "Compare current-Zeus baseline and NR5/SPNR candidate live matrix windows across the G2 scenario set before accepting live DSP evidence." `
+        -Cadence "once-per-candidate-live-matrix" `
+        -Path "artifacts/live-diagnostics-trace-comparison.json" `
+        -Required $true `
+        -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
+        -ComparisonIds @("current-zeus", "nr5-spnr")
+}
+
+if ($RequireLiveAcceptanceArtifacts -and -not $seenArtifactIds.ContainsKey("live-diagnostics-trace-comparison-thetis-parity")) {
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "live-diagnostics-trace-comparison-thetis-parity" `
+        -Kind "diagnostics-comparison-json" `
+        -Source "tools/compare-dsp-live-diagnostics-matrix.ps1" `
+        -Purpose "Compare Thetis-parity baseline and NR5/SPNR candidate live matrix windows across the G2 scenario set so candidate evidence cannot drift from the WDSP behavior authority." `
+        -Cadence "once-per-candidate-live-matrix" `
+        -Path "artifacts/live-diagnostics-trace-comparison.thetis-parity.json" `
+        -Required $true `
+        -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
+        -ComparisonIds @("thetis-parity", "nr5-spnr")
+}
+
+if ($RequireLiveAcceptanceArtifacts -and -not $seenArtifactIds.ContainsKey("live-diagnostics-trace-index")) {
+    $scenarioIds = @(Get-JsonArray $captureManifest "scenarioIds")
+
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "live-diagnostics-trace-index" `
+        -Kind "trace" `
+        -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
+        -Purpose "Required off-baseline live diagnostics matrix index for G2 acceptance coverage." `
+        -Cadence "once-per-g2-live-acceptance-matrix" `
+        -Path "artifacts/live-diagnostics-trace-index.off-baseline.json" `
+        -Required $true `
+        -ScenarioIds $scenarioIds `
+        -ComparisonIds @("off-baseline")
+
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "live-diagnostics-matrix-report-off-baseline" `
+        -Kind "diagnostics-matrix-json" `
+        -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
+        -Purpose "Required off-baseline matrix report with trace-index hash evidence for G2 acceptance coverage." `
+        -Cadence "once-per-g2-live-acceptance-matrix" `
+        -Path "artifacts/live-diagnostics-matrix-report.off-baseline.json" `
+        -Required $true `
+        -ScenarioIds $scenarioIds `
+        -ComparisonIds @("off-baseline")
+
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "live-diagnostics-trace-index" `
+        -Kind "trace" `
+        -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
+        -Purpose "Required Thetis-parity live diagnostics matrix index for G2 acceptance coverage." `
+        -Cadence "once-per-g2-live-acceptance-matrix" `
+        -Path "artifacts/live-diagnostics-trace-index.thetis-parity.json" `
+        -Required $true `
+        -ScenarioIds $scenarioIds `
+        -ComparisonIds @("thetis-parity")
+
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "live-diagnostics-matrix-report-thetis-parity" `
+        -Kind "diagnostics-matrix-json" `
+        -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
+        -Purpose "Required Thetis-parity matrix report with trace-index hash evidence for G2 acceptance coverage." `
+        -Cadence "once-per-g2-live-acceptance-matrix" `
+        -Path "artifacts/live-diagnostics-matrix-report.thetis-parity.json" `
+        -Required $true `
+        -ScenarioIds $scenarioIds `
+        -ComparisonIds @("thetis-parity")
+
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "live-diagnostics-trace-index" `
+        -Kind "trace" `
+        -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
+        -Purpose "Required current-Zeus live diagnostics matrix index for G2 acceptance coverage." `
+        -Cadence "once-per-g2-live-acceptance-matrix" `
+        -Path "artifacts/live-diagnostics-trace-index.baseline.json" `
+        -Required $true `
+        -ScenarioIds $scenarioIds `
+        -ComparisonIds @("current-zeus")
+
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "live-diagnostics-matrix-report-baseline" `
+        -Kind "diagnostics-matrix-json" `
+        -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
+        -Purpose "Required current-Zeus matrix report with trace-index hash evidence for G2 acceptance coverage." `
+        -Cadence "once-per-g2-live-acceptance-matrix" `
+        -Path "artifacts/live-diagnostics-matrix-report.baseline.json" `
+        -Required $true `
+        -ScenarioIds $scenarioIds `
+        -ComparisonIds @("current-zeus")
+
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "live-diagnostics-trace-index" `
+        -Kind "trace" `
+        -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
+        -Purpose "Required NR5/SPNR live diagnostics matrix index for G2 acceptance coverage." `
+        -Cadence "once-per-g2-live-acceptance-matrix" `
+        -Path "artifacts/live-diagnostics-trace-index.candidate.json" `
+        -Required $true `
+        -ScenarioIds $scenarioIds `
+        -ComparisonIds @("nr5-spnr")
+
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "live-diagnostics-matrix-report-candidate" `
+        -Kind "diagnostics-matrix-json" `
+        -Source "tools/run-dsp-live-diagnostics-matrix.ps1" `
+        -Purpose "Required NR5/SPNR matrix report with trace-index hash evidence for G2 acceptance coverage." `
+        -Cadence "once-per-g2-live-acceptance-matrix" `
+        -Path "artifacts/live-diagnostics-matrix-report.candidate.json" `
+        -Required $true `
+        -ScenarioIds $scenarioIds `
+        -ComparisonIds @("nr5-spnr")
 }
 
 if (-not $seenArtifactIds.ContainsKey("fixture-metric-comparison-report")) {
@@ -325,21 +583,29 @@ if (-not $seenArtifactIds.ContainsKey("fixture-metric-comparison-report")) {
         -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds")
 }
 
-if ($IncludeOptionalArtifacts -and -not $seenArtifactIds.ContainsKey("external-engine-bakeoff-report")) {
+if (($IncludeOptionalArtifacts -or $externalEngineBakeoffInScope) -and -not $seenArtifactIds.ContainsKey("external-engine-bakeoff-report")) {
+    $externalBakeoffCadence = if ($externalEngineBakeoffInScope) {
+        "once-per-capture-bundle-when-external-opt-in-comparison-is-in-scope"
+    }
+    else {
+        "once-per-capture-bundle-when-external-engines-are-reviewed"
+    }
+
     Add-ArtifactRecord `
         -Artifacts $artifacts `
         -SeenArtifactIds $seenArtifactIds `
         -Id "external-engine-bakeoff-report" `
         -Kind "external-candidate-report-json" `
         -Source "tools/summarize-dsp-external-engine-candidates.ps1" `
-        -Purpose "Summarize opt-in external DSP/ML candidate readiness, blockers, risk tiers, required benchmark coverage, and snapshot sync before any post-demod bakeoff." `
-        -Cadence "once-per-capture-bundle-when-external-engines-are-reviewed" `
+        -Purpose "Summarize opt-in external DSP/ML candidate readiness, blockers, risk tiers, required benchmark coverage, and snapshot sync before any post-demod bakeoff; required when candidate-external-engine-opt-in is in capture scope." `
+        -Cadence $externalBakeoffCadence `
         -Path "artifacts/external-engine-bakeoff-report.json" `
-        -Required $false `
-        -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds")
+        -Required $externalEngineBakeoffInScope `
+        -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
+        -ComparisonIds @("candidate-external-engine-opt-in")
 }
 
-if ($IncludeOptionalArtifacts -and -not $seenArtifactIds.ContainsKey("live-diagnostics-history")) {
+if (($IncludeOptionalArtifacts -or $RequireLiveAcceptanceArtifacts) -and -not $seenArtifactIds.ContainsKey("live-diagnostics-history")) {
     Add-ArtifactRecord `
         -Artifacts $artifacts `
         -SeenArtifactIds $seenArtifactIds `
@@ -349,8 +615,23 @@ if ($IncludeOptionalArtifacts -and -not $seenArtifactIds.ContainsKey("live-diagn
         -Purpose "Summarize captured NR5/NR2 live diagnostics attempts, rank best weak-signal and lowest-pumping traces, preserve safety-class rollups, and bind each history trace to watcher-summary/JSONL SHA-256 provenance before choosing the next candidate comparison." `
         -Cadence "once-after-several-live-diagnostics-attempts" `
         -Path "artifacts/live-diagnostics-history.json" `
-        -Required $false `
+        -Required ([bool]$RequireLiveAcceptanceArtifacts) `
         -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds")
+}
+
+if (($IncludeOptionalArtifacts -or $RequireLiveAcceptanceArtifacts) -and -not $seenArtifactIds.ContainsKey("live-acceptance-cycle-summary")) {
+    Add-ArtifactRecord `
+        -Artifacts $artifacts `
+        -SeenArtifactIds $seenArtifactIds `
+        -Id "live-acceptance-cycle-summary" `
+        -Kind "live-acceptance-cycle-summary-json" `
+        -Source "tools/run-dsp-live-acceptance-cycle.ps1" `
+        -Purpose "Summarize the live acceptance wrapper outcome, child tool exit codes, strict validation result, triage result, blockers, and remaining limitations after a G2 live acceptance cycle." `
+        -Cadence "once-after-g2-live-acceptance-cycle-wrapper" `
+        -Path "artifacts/live-acceptance-cycle-summary.json" `
+        -Required $false `
+        -ScenarioIds @(Get-JsonArray $captureManifest "scenarioIds") `
+        -ComparisonIds @("off-baseline", "thetis-parity", "current-zeus", "nr5-spnr")
 }
 
 if (-not $seenArtifactIds.ContainsKey("operator-notes")) {
@@ -374,21 +655,28 @@ $output = [ordered]@{
     bundleDir = $bundlePath
     sourceCaptureManifest = "benchmark-capture-manifest.json"
     acceptanceManifest = [bool]$AcceptanceManifest
+    requireLiveAcceptanceArtifacts = [bool]$RequireLiveAcceptanceArtifacts
+    externalEngineBakeoffInScope = [bool]$externalEngineBakeoffInScope
+    externalEngineBakeoffScopeTriggers = @($externalEngineBakeoffScopeTriggers.ToArray())
     notes = @(
         "This scaffold is derived from benchmark-capture-manifest.json.",
         "Endpoint JSON is validated through bundle-index.json unless -IncludeEndpointJson is used.",
         "Use watch-dsp-live-diagnostics.ps1 for optional diagnostics-jsonl traces across live scenario windows.",
-        "Use run-dsp-live-diagnostics-matrix.ps1 for optional multi-scenario trace indexes; pass separate -IndexPath and -ReportPath values for baseline and candidate runs. With -IncludeOptionalArtifacts, this scaffold emits separate baseline/candidate live-diagnostics-trace-index and live-diagnostics-matrix-report entries.",
+        "Use run-dsp-live-diagnostics-matrix.ps1 for optional multi-scenario trace indexes; pass separate -IndexPath and -ReportPath values for off-baseline, Thetis-parity, current-Zeus baseline, and NR5/SPNR candidate runs. With -IncludeOptionalArtifacts, this scaffold emits separate off-baseline, Thetis-parity, baseline, and candidate live-diagnostics-trace-index and live-diagnostics-matrix-report entries.",
+        "Use -RequireLiveAcceptanceArtifacts for G2 live acceptance review manifests after capture; it marks current-Zeus and Thetis-parity live-diagnostics-trace-comparison reports, the four live matrix trace-index/report pairs, and live-diagnostics-history required without pulling external-engine bakeoff into scope.",
+        "The live-acceptance-cycle-summary artifact is optional because run-dsp-live-acceptance-cycle.ps1 writes it after strict validation; when present, strict validation verifies its wrapper identity and child report references.",
         "Use compare-dsp-live-diagnostics-traces.ps1 with -BundleDir to compare baseline and candidate live traces before accepting a candidate window while keeping report paths portable.",
-        "Use compare-dsp-live-diagnostics-matrix.ps1 with -BundleDir to compare baseline and candidate trace indexes across all captured live scenarios while keeping report paths portable.",
+        "Use compare-dsp-live-diagnostics-matrix.ps1 with -BundleDir to compare baseline and candidate trace indexes across all captured live scenarios while keeping report paths portable; pass -BaselineComparisonId current-zeus and -CandidateComparisonId nr5-spnr for the required Zeus live acceptance comparison, then repeat with -BaselineComparisonId thetis-parity for the required WDSP authority comparison.",
+        "live-diagnostics-trace-comparison reports carry capture-readiness comparison evidence into strict validation and validation triage, including hard-gate pass/fail, strict-preflight pass/fail, top soft constraints, and top hard gates.",
         "Use summarize-dsp-live-diagnostics-history.ps1 with -BundleDir after several NR5/NR2 live attempts so best weak-signal, lowest-pumping, latest tuning directions, and per-trace watcher-summary/JSONL hashes are preserved as portable review evidence.",
         "Use summarize-dsp-external-engine-candidates.ps1 with -BundleDir before any external DSP/ML bakeoff so RNNoise/DeepFilterNet/SpeexDSP/WebRTC blockers, risk, and required evidence stay explicit.",
-        "For acceptance review, set the live-diagnostics-trace-comparison artifact required=true after the comparison report is captured so regressions fail strict validation.",
+        "If benchmark-plan.requiredComparisons or benchmark-capture-manifest.requiredComparisons includes candidate-external-engine-opt-in, this scaffold emits external-engine-bakeoff-report as required even without -IncludeOptionalArtifacts because strict validation requires that report by scope.",
+        "For acceptance review, regenerate with -AcceptanceManifest -RequireLiveAcceptanceArtifacts after the comparison report is captured so live trace regressions and incomplete history coverage fail strict validation.",
         "For single-comparison artifact indexes, add comparisonIds to the artifact entry so validation checks only the captured comparison scope.",
         "Run audit-wdsp-native-symbols.ps1 with -RequireBinaryExports for the required wdsp-native-symbol-audit.json before accepting native or P/Invoke changes.",
         "Run audit-wdsp-runtime-artifacts.ps1 for the required wdsp-runtime-artifact-audit.json before claiming packaged NR4/NR5 support for any RID.",
         "For plural audio, spectrum, and trace evidence, store an index JSON at the generated path with a files array of bundle-relative evidence file paths plus scenario/candidate metadata.",
-        "Use run-dsp-wdsp-fixture-matrix.ps1 with -BundleDir to generate WDSP-backed offline fixture metrics, portable audio/spectrum evidence indexes, runtime audit, and dsp-fixture-metric-comparison.json in one repeatable step.",
+        "Use run-dsp-wdsp-fixture-matrix.ps1 with -BundleDir to generate WDSP-backed offline fixture metrics, portable audio/spectrum evidence indexes, runtime audit, and dsp-fixture-metric-comparison.json in one repeatable step; add -ValidateBundle -RequireArtifactFiles before treating acceptanceEvidenceReady as possible.",
         "run-dsp-offline-fixture-evidence.ps1 is only a deterministic schema fallback; strict validation requires WDSP-backed fixture comparison evidence.",
         "Run validate-dsp-modernization-bundle.ps1 with -RequireArtifactFiles only after every required path exists and is non-empty."
     )
@@ -403,4 +691,7 @@ Write-JsonFile -Path $resolvedOutputPath -Value $output
     acceptanceManifest = [bool]$AcceptanceManifest
     includeEndpointJson = [bool]$IncludeEndpointJson
     includeOptionalArtifacts = [bool]$IncludeOptionalArtifacts
+    requireLiveAcceptanceArtifacts = [bool]$RequireLiveAcceptanceArtifacts
+    externalEngineBakeoffInScope = [bool]$externalEngineBakeoffInScope
+    externalEngineBakeoffScopeTriggers = @($externalEngineBakeoffScopeTriggers.ToArray())
 } | ConvertTo-Json -Depth 8

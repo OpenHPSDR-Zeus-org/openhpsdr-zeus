@@ -23,6 +23,7 @@ public sealed class WdspNativeLoaderTests
         bool nr5Peak = WdspDspEngine.Nr5SpnrPeakDiagnosticsAvailable;
         bool nr5Agc = WdspDspEngine.Nr5SpnrAgcDiagnosticsAvailable;
         bool nr5Memory = WdspDspEngine.Nr5SpnrMemoryDiagnosticsAvailable;
+        bool nr5Adjacent = WdspDspEngine.Nr5SpnrAdjacentNoiseAvailable;
 
         if (!loadable)
         {
@@ -34,6 +35,7 @@ public sealed class WdspNativeLoaderTests
             Assert.False(nr5Peak);
             Assert.False(nr5Agc);
             Assert.False(nr5Memory);
+            Assert.False(nr5Adjacent);
         }
     }
 
@@ -53,5 +55,6 @@ public sealed class WdspNativeLoaderTests
         Assert.True(WdspDspEngine.Nr5SpnrPeakDiagnosticsAvailable, "win-x64 wdsp.dll should export NR5 peak diagnostics.");
         Assert.True(WdspDspEngine.Nr5SpnrAgcDiagnosticsAvailable, "win-x64 wdsp.dll should export NR5 AGC recovery diagnostics.");
         Assert.True(WdspDspEngine.Nr5SpnrMemoryDiagnosticsAvailable, "win-x64 wdsp.dll should export NR5 weak-signal memory diagnostics.");
+        Assert.True(WdspDspEngine.Nr5SpnrAdjacentNoiseAvailable, "win-x64 wdsp.dll should export NR5 adjacent-noise profile diagnostics.");
     }
 }

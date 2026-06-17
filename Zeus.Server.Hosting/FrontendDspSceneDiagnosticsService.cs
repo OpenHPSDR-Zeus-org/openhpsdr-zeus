@@ -19,6 +19,7 @@ public sealed class FrontendDspSceneDiagnosticsService
     private const long FutureSourceToleranceMs = 5_000;
     private readonly object _sync = new();
     private FrontendDspSceneSnapshot? _latest;
+    private FrontendDspSceneSnapshot? _latestAdjacentNoise;
 
     public FrontendDspSceneSnapshot Update(FrontendDspSceneDiagnosticsRequest request)
     {
@@ -46,11 +47,25 @@ public sealed class FrontendDspSceneDiagnosticsService
             ImpulsivePct: Percent(request.ImpulsivePct),
             PeakCount: NonNegative(request.PeakCount),
             CoherentPeakCount: NonNegative(request.CoherentPeakCount),
-            CoherentSubthresholdSignal: request.CoherentSubthresholdSignal);
+            CoherentSubthresholdSignal: request.CoherentSubthresholdSignal,
+            AdjacentNoiseUsable: request.AdjacentNoiseUsable,
+            AdjacentNoiseBins: NonNegative(request.AdjacentNoiseBins),
+            AdjacentNoiseLeftBins: NonNegative(request.AdjacentNoiseLeftBins),
+            AdjacentNoiseRightBins: NonNegative(request.AdjacentNoiseRightBins),
+            AdjacentNoiseFloorDb: Finite(request.AdjacentNoiseFloorDb),
+            AdjacentNoiseP10Db: Finite(request.AdjacentNoiseP10Db),
+            AdjacentNoiseP50Db: Finite(request.AdjacentNoiseP50Db),
+            AdjacentNoiseP90Db: Finite(request.AdjacentNoiseP90Db),
+            AdjacentNoiseLeftFloorDb: Finite(request.AdjacentNoiseLeftFloorDb),
+            AdjacentNoiseRightFloorDb: Finite(request.AdjacentNoiseRightFloorDb),
+            AdjacentNoiseSlopeDbPerKhz: Finite(request.AdjacentNoiseSlopeDbPerKhz),
+            AdjacentNoiseRejectedPct: Percent(request.AdjacentNoiseRejectedPct));
 
         lock (_sync)
         {
             _latest = snapshot;
+            if (HasUsableAdjacentNoiseProfile(snapshot))
+                _latestAdjacentNoise = snapshot;
             return snapshot;
         }
     }
@@ -111,7 +126,63 @@ public sealed class FrontendDspSceneDiagnosticsService
                 peakCount = _latest.PeakCount,
                 coherentPeakCount = _latest.CoherentPeakCount,
                 coherentSubthresholdSignal = _latest.CoherentSubthresholdSignal,
+                adjacentNoiseUsable = _latest.AdjacentNoiseUsable,
+                adjacentNoiseBins = _latest.AdjacentNoiseBins,
+                adjacentNoiseLeftBins = _latest.AdjacentNoiseLeftBins,
+                adjacentNoiseRightBins = _latest.AdjacentNoiseRightBins,
+                adjacentNoiseFloorDb = _latest.AdjacentNoiseFloorDb,
+                adjacentNoiseP10Db = _latest.AdjacentNoiseP10Db,
+                adjacentNoiseP50Db = _latest.AdjacentNoiseP50Db,
+                adjacentNoiseP90Db = _latest.AdjacentNoiseP90Db,
+                adjacentNoiseLeftFloorDb = _latest.AdjacentNoiseLeftFloorDb,
+                adjacentNoiseRightFloorDb = _latest.AdjacentNoiseRightFloorDb,
+                adjacentNoiseSlopeDbPerKhz = _latest.AdjacentNoiseSlopeDbPerKhz,
+                adjacentNoiseRejectedPct = _latest.AdjacentNoiseRejectedPct,
             };
+        }
+    }
+
+    public FrontendAdjacentNoiseProfileSnapshot? TryGetFreshAdjacentNoiseProfile()
+    {
+        lock (_sync)
+        {
+            if (_latestAdjacentNoise is null)
+                return null;
+
+            var timing = Timing(_latestAdjacentNoise, DateTimeOffset.UtcNow);
+            if (!timing.Health.Fresh ||
+                _latestAdjacentNoise.AdjacentNoiseUsable != true ||
+                _latestAdjacentNoise.AdjacentNoiseBins is not { } bins ||
+                bins < 24 ||
+                _latestAdjacentNoise.AdjacentNoiseFloorDb is not { } floorDb)
+            {
+                return null;
+            }
+
+            double p10 = _latestAdjacentNoise.AdjacentNoiseP10Db ?? floorDb;
+            double p50 = _latestAdjacentNoise.AdjacentNoiseP50Db ?? floorDb;
+            double p90 = _latestAdjacentNoise.AdjacentNoiseP90Db ?? floorDb;
+            int leftBins = _latestAdjacentNoise.AdjacentNoiseLeftBins ?? 0;
+            int rightBins = _latestAdjacentNoise.AdjacentNoiseRightBins ?? 0;
+            double leftFloor = _latestAdjacentNoise.AdjacentNoiseLeftFloorDb ?? floorDb;
+            double rightFloor = _latestAdjacentNoise.AdjacentNoiseRightFloorDb ?? floorDb;
+            double slope = _latestAdjacentNoise.AdjacentNoiseSlopeDbPerKhz ?? 0.0;
+            double rejected = _latestAdjacentNoise.AdjacentNoiseRejectedPct ?? 100.0;
+
+            return new(
+                AgeMs: timing.AgeMs,
+                SourceAgeMs: timing.SourceAgeMs,
+                Bins: bins,
+                LeftBins: leftBins,
+                RightBins: rightBins,
+                FloorDb: floorDb,
+                P10Db: p10,
+                P50Db: p50,
+                P90Db: p90,
+                LeftFloorDb: leftFloor,
+                RightFloorDb: rightFloor,
+                SlopeDbPerKhz: slope,
+                RejectedPct: rejected);
         }
     }
 
@@ -157,6 +228,18 @@ public sealed class FrontendDspSceneDiagnosticsService
                     PeakCount: null,
                     CoherentPeakCount: null,
                     CoherentSubthresholdSignal: null,
+                    AdjacentNoiseUsable: null,
+                    AdjacentNoiseBins: null,
+                    AdjacentNoiseLeftBins: null,
+                    AdjacentNoiseRightBins: null,
+                    AdjacentNoiseFloorDb: null,
+                    AdjacentNoiseP10Db: null,
+                    AdjacentNoiseP50Db: null,
+                    AdjacentNoiseP90Db: null,
+                    AdjacentNoiseLeftFloorDb: null,
+                    AdjacentNoiseRightFloorDb: null,
+                    AdjacentNoiseSlopeDbPerKhz: null,
+                    AdjacentNoiseRejectedPct: null,
                     WdspActive: nrRuntime.WdspActive,
                     WdspNativeLoadable: nrRuntime.WdspNativeLoadable,
                     WdspEmnrPost2Available: nrRuntime.WdspEmnrPost2Available,
@@ -207,6 +290,18 @@ public sealed class FrontendDspSceneDiagnosticsService
                 PeakCount: _latest.PeakCount,
                 CoherentPeakCount: _latest.CoherentPeakCount,
                 CoherentSubthresholdSignal: _latest.CoherentSubthresholdSignal,
+                AdjacentNoiseUsable: _latest.AdjacentNoiseUsable,
+                AdjacentNoiseBins: _latest.AdjacentNoiseBins,
+                AdjacentNoiseLeftBins: _latest.AdjacentNoiseLeftBins,
+                AdjacentNoiseRightBins: _latest.AdjacentNoiseRightBins,
+                AdjacentNoiseFloorDb: _latest.AdjacentNoiseFloorDb,
+                AdjacentNoiseP10Db: _latest.AdjacentNoiseP10Db,
+                AdjacentNoiseP50Db: _latest.AdjacentNoiseP50Db,
+                AdjacentNoiseP90Db: _latest.AdjacentNoiseP90Db,
+                AdjacentNoiseLeftFloorDb: _latest.AdjacentNoiseLeftFloorDb,
+                AdjacentNoiseRightFloorDb: _latest.AdjacentNoiseRightFloorDb,
+                AdjacentNoiseSlopeDbPerKhz: _latest.AdjacentNoiseSlopeDbPerKhz,
+                AdjacentNoiseRejectedPct: _latest.AdjacentNoiseRejectedPct,
                 WdspActive: nrRuntime.WdspActive,
                 WdspNativeLoadable: nrRuntime.WdspNativeLoadable,
                 WdspEmnrPost2Available: nrRuntime.WdspEmnrPost2Available,
@@ -402,7 +497,16 @@ public sealed class FrontendDspSceneDiagnosticsService
             || latest.ImpulsivePct is not null
             || latest.PeakCount is not null
             || latest.CoherentPeakCount is not null
-            || latest.CoherentSubthresholdSignal is not null);
+            || latest.CoherentSubthresholdSignal is not null
+            || latest.AdjacentNoiseUsable is not null
+            || latest.AdjacentNoiseBins is not null
+            || latest.AdjacentNoiseFloorDb is not null
+            || latest.AdjacentNoiseRejectedPct is not null);
+
+    private static bool HasUsableAdjacentNoiseProfile(FrontendDspSceneSnapshot latest) =>
+        latest.AdjacentNoiseUsable == true &&
+        latest.AdjacentNoiseBins is >= 24 &&
+        latest.AdjacentNoiseFloorDb is not null;
 
     private static SmartNrRuntimeAlignment NrRuntimeAlignment(
         FrontendDspSceneSnapshot? latest,
@@ -532,7 +636,19 @@ public sealed record FrontendDspSceneDiagnosticsRequest(
     int? PeakCount,
     int? CoherentPeakCount,
     bool? CoherentSubthresholdSignal,
-    DateTimeOffset? SourceAtUtc = null);
+    DateTimeOffset? SourceAtUtc = null,
+    bool? AdjacentNoiseUsable = null,
+    int? AdjacentNoiseBins = null,
+    int? AdjacentNoiseLeftBins = null,
+    int? AdjacentNoiseRightBins = null,
+    double? AdjacentNoiseFloorDb = null,
+    double? AdjacentNoiseP10Db = null,
+    double? AdjacentNoiseP50Db = null,
+    double? AdjacentNoiseP90Db = null,
+    double? AdjacentNoiseLeftFloorDb = null,
+    double? AdjacentNoiseRightFloorDb = null,
+    double? AdjacentNoiseSlopeDbPerKhz = null,
+    double? AdjacentNoiseRejectedPct = null);
 
 public sealed record FrontendDspSceneSnapshot(
     int SchemaVersion,
@@ -557,4 +673,31 @@ public sealed record FrontendDspSceneSnapshot(
     double? ImpulsivePct,
     int? PeakCount,
     int? CoherentPeakCount,
-    bool? CoherentSubthresholdSignal);
+    bool? CoherentSubthresholdSignal,
+    bool? AdjacentNoiseUsable,
+    int? AdjacentNoiseBins,
+    int? AdjacentNoiseLeftBins,
+    int? AdjacentNoiseRightBins,
+    double? AdjacentNoiseFloorDb,
+    double? AdjacentNoiseP10Db,
+    double? AdjacentNoiseP50Db,
+    double? AdjacentNoiseP90Db,
+    double? AdjacentNoiseLeftFloorDb,
+    double? AdjacentNoiseRightFloorDb,
+    double? AdjacentNoiseSlopeDbPerKhz,
+    double? AdjacentNoiseRejectedPct);
+
+public sealed record FrontendAdjacentNoiseProfileSnapshot(
+    long AgeMs,
+    long? SourceAgeMs,
+    int Bins,
+    int LeftBins,
+    int RightBins,
+    double FloorDb,
+    double P10Db,
+    double P50Db,
+    double P90Db,
+    double LeftFloorDb,
+    double RightFloorDb,
+    double SlopeDbPerKhz,
+    double RejectedPct);

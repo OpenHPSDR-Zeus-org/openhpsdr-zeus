@@ -61,6 +61,20 @@ function Get-JsonValue {
         return $null
     }
 
+    if ($Object -is [System.Collections.IDictionary]) {
+        if ($Object.Contains($Name)) {
+            return $Object[$Name]
+        }
+
+        foreach ($key in @($Object.Keys)) {
+            if ([string]::Equals([string]$key, $Name, [StringComparison]::OrdinalIgnoreCase)) {
+                return $Object[$key]
+            }
+        }
+
+        return $null
+    }
+
     $property = $Object.PSObject.Properties[$Name]
     if ($null -eq $property) {
         return $null
@@ -470,6 +484,127 @@ function Get-MetricDirection {
     }
 }
 
+function Get-MetricCatalogFieldValue {
+    param(
+        $Metric,
+        [string[]]$Names
+    )
+
+    foreach ($name in @($Names)) {
+        $value = Get-JsonValue $Metric $name
+        if ($null -ne $value) {
+            return $value
+        }
+    }
+
+    return $null
+}
+
+function Test-MetricCatalogFieldPresent {
+    param($Value)
+
+    if ($null -eq $Value) {
+        return $false
+    }
+
+    if ($Value -is [System.Array]) {
+        foreach ($item in @($Value)) {
+            if (Test-MetricCatalogFieldPresent $item) {
+                return $true
+            }
+        }
+
+        return $false
+    }
+
+    if ($Value -is [string]) {
+        return -not [string]::IsNullOrWhiteSpace($Value)
+    }
+
+    return $true
+}
+
+function Get-MetricCatalogFieldText {
+    param(
+        $Metric,
+        [string[]]$Names
+    )
+
+    $value = Get-MetricCatalogFieldValue -Metric $Metric -Names $Names
+    if ($null -eq $value) {
+        return ""
+    }
+
+    if ($value -is [System.Array]) {
+        $items = New-Object System.Collections.Generic.List[string]
+        foreach ($item in @($value)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$item)) {
+                $items.Add(([string]$item).Trim()) | Out-Null
+            }
+        }
+
+        return ($items.ToArray() -join ",")
+    }
+
+    return ([string]$value).Trim()
+}
+
+function ConvertTo-MetricCatalogComparator {
+    param([string]$Value)
+
+    if ([string]::IsNullOrWhiteSpace($Value)) {
+        return ""
+    }
+
+    $normalized = (($Value.Trim().ToLowerInvariant() -replace "[^a-z0-9]+", "-").Trim("-"))
+    switch ($normalized) {
+        { $_ -in @("at-or-above", "at-or-above-threshold", "minimum", "min", "gte", "greater-than-or-equal", "greater-or-equal", "not-less-than") } { return "at-or-above" }
+        { $_ -in @("at-or-below", "at-or-below-threshold", "maximum", "max", "lte", "less-than-or-equal", "less-or-equal", "not-greater-than") } { return "at-or-below" }
+        { $_ -in @("equals", "equal", "exact", "match") } { return "equals" }
+        { $_ -in @("no-regression", "not-regressed", "no-worse-than-baseline", "not-worse-than-baseline", "baseline-or-better") } { return "no-regression" }
+        { $_ -in @("informational", "info") } { return "informational" }
+        default { return $normalized }
+    }
+}
+
+function Test-MetricCatalogComparatorValid {
+    param([string]$Comparator)
+
+    return $Comparator -in @("at-or-above", "at-or-below", "equals", "no-regression", "informational")
+}
+
+function New-MetricCatalogContractRecord {
+    param(
+        [Parameter(Mandatory = $true)][string]$MetricId,
+        $Metric,
+        [string]$Direction
+    )
+
+    $threshold = Get-MetricCatalogFieldValue -Metric $Metric -Names @("acceptanceThreshold", "threshold", "targetThreshold", "minimumThreshold", "maximumThreshold")
+    $comparatorText = Get-MetricCatalogFieldText -Metric $Metric -Names @("acceptanceComparator", "thresholdComparator", "comparator", "thresholdDirection")
+    $comparator = ConvertTo-MetricCatalogComparator $comparatorText
+    $unit = Get-MetricCatalogFieldText -Metric $Metric -Names @("unit", "unitHint", "units")
+    $safetyClass = Get-MetricCatalogFieldText -Metric $Metric -Names @("safetyClass", "safetyClasses")
+    $acceptanceScope = Get-MetricCatalogFieldText -Metric $Metric -Names @("acceptanceScope", "acceptanceScopes", "scope", "scopes", "scenarioIds", "relatedScenarioIds", "relatedScenarios", "scenarios")
+    $contractReady = ((Test-MetricCatalogFieldPresent $threshold) -and
+        (-not [string]::IsNullOrWhiteSpace($comparator)) -and
+        (Test-MetricCatalogComparatorValid $comparator) -and
+        (-not [string]::IsNullOrWhiteSpace($unit)) -and
+        (-not [string]::IsNullOrWhiteSpace($safetyClass)) -and
+        (-not [string]::IsNullOrWhiteSpace($acceptanceScope)))
+
+    return [ordered]@{
+        metricId = $MetricId
+        direction = $Direction
+        acceptanceThreshold = $threshold
+        acceptanceComparator = $comparator
+        unit = $unit
+        safetyClass = $safetyClass
+        acceptanceScope = $acceptanceScope
+        contractReady = $contractReady
+    }
+}
+
 function Test-BaselineComparison {
     param([string]$ComparisonId)
 
@@ -537,6 +672,8 @@ function Build-MarkdownReport {
     $lines.Add("- WDSP runtime SHA-256: $($Report.wdspRuntimeSha256)") | Out-Null
     $lines.Add("- WDSP runtime status: $($Report.wdspRuntimeStatus)") | Out-Null
     $lines.Add("- Scenario scope: $($Report.fixtureScenarioScope)") | Out-Null
+    $lines.Add("- Metric catalog contract ready: $($Report.metricCatalogAcceptanceContractReady)") | Out-Null
+    $lines.Add("- Metric catalog contract problems: $($Report.metricCatalogContractProblemMetricCount)") | Out-Null
     $lines.Add("- Skipped non-fixture scenarios: $($Report.skippedNonFixtureScenarioCount)") | Out-Null
     $lines.Add("- Candidate comparisons: $($Report.candidateComparisonCount)") | Out-Null
     $lines.Add("- Improvements: $($Report.improvementCount)") | Out-Null
@@ -555,6 +692,15 @@ function Build-MarkdownReport {
         $lines.Add("") | Out-Null
         foreach ($scenario in @($Report.missingScenarios)) {
             $lines.Add("- $scenario") | Out-Null
+        }
+        $lines.Add("") | Out-Null
+    }
+
+    if ($Report.metricCatalogContractProblemMetricIds.Count -gt 0) {
+        $lines.Add("## Metric Catalog Contract Problems") | Out-Null
+        $lines.Add("") | Out-Null
+        foreach ($metricId in @($Report.metricCatalogContractProblemMetricIds)) {
+            $lines.Add("- $metricId") | Out-Null
         }
         $lines.Add("") | Out-Null
     }
@@ -659,6 +805,7 @@ $wdspRuntimeLength = [long](Get-NumericValue (Get-JsonValue $metricsJson "wdspRu
 $wdspRuntimeSha256 = ([string](Get-JsonValue $metricsJson "wdspRuntimeSha256")).Trim().ToLowerInvariant()
 $wdspRuntimeStatus = [string](Get-JsonValue $metricsJson "wdspRuntimeStatus")
 $metricDirectionCatalog = @{}
+$metricContractCatalog = @{}
 
 if (-not [string]::IsNullOrWhiteSpace($MetricCatalogPath)) {
     $metricCatalogResolvedPath = (Resolve-Path -LiteralPath $MetricCatalogPath).Path
@@ -674,6 +821,7 @@ if (-not [string]::IsNullOrWhiteSpace($MetricCatalogPath)) {
         if ((-not [string]::IsNullOrWhiteSpace($metricId)) -and
             ($direction -eq "higher" -or $direction -eq "lower" -or $direction -eq "informational")) {
             $metricDirectionCatalog[$metricId] = $direction
+            $metricContractCatalog[$metricId] = New-MetricCatalogContractRecord -MetricId $metricId -Metric $metric -Direction $direction
         }
     }
 }
@@ -708,6 +856,31 @@ foreach ($scenario in (Get-JsonArray $benchmarkPlan "scenarios")) {
         requiredMetricIds = @($requiredMetricIds.ToArray() | Select-Object -Unique)
     }
 }
+
+$requiredMetricCatalogIds = New-Object System.Collections.Generic.List[string]
+foreach ($scenarioId in ($scenarioPlan.Keys | Sort-Object)) {
+    foreach ($metricId in @($scenarioPlan[$scenarioId].requiredMetricIds)) {
+        $metric = ConvertTo-MetricId ([string]$metricId)
+        if (-not [string]::IsNullOrWhiteSpace($metric)) {
+            $requiredMetricCatalogIds.Add($metric) | Out-Null
+        }
+    }
+}
+$requiredMetricCatalogIds = @($requiredMetricCatalogIds.ToArray() | Select-Object -Unique | Sort-Object)
+$metricCatalogContractProblemMetricIds = New-Object System.Collections.Generic.List[string]
+foreach ($metricId in @($requiredMetricCatalogIds)) {
+    if (-not $metricContractCatalog.ContainsKey($metricId)) {
+        $metricCatalogContractProblemMetricIds.Add($metricId) | Out-Null
+        continue
+    }
+
+    if (-not (Test-Truthy (Get-JsonValue $metricContractCatalog[$metricId] "contractReady"))) {
+        $metricCatalogContractProblemMetricIds.Add($metricId) | Out-Null
+    }
+}
+$metricCatalogAcceptanceContractReady = (-not [string]::IsNullOrWhiteSpace($metricCatalogResolvedPath) -and
+    $requiredMetricCatalogIds.Count -gt 0 -and
+    $metricCatalogContractProblemMetricIds.Count -eq 0)
 
 $metricEntries = @(Get-MetricEvidenceEntries $metricsJson)
 $metricIndex = @{}
@@ -804,6 +977,10 @@ foreach ($scenarioId in ($scenarioPlan.Keys | Sort-Object)) {
 
             foreach ($metricId in @($plan.requiredMetricIds)) {
                 $direction = Get-MetricDirection $metricId $metricDirectionCatalog
+                $contract = $null
+                if ($metricContractCatalog.ContainsKey($metricId)) {
+                    $contract = $metricContractCatalog[$metricId]
+                }
                 $baselineHasMetric = $baseline.metricValues.ContainsKey($metricId)
                 $candidateHasMetric = $candidate.metricValues.ContainsKey($metricId)
                 $baselineValue = $null
@@ -852,6 +1029,12 @@ foreach ($scenarioId in ($scenarioPlan.Keys | Sort-Object)) {
                 $metricComparisons.Add([ordered]@{
                     metricId = $metricId
                     direction = $direction
+                    acceptanceThreshold = if ($null -eq $contract) { $null } else { Get-JsonValue $contract "acceptanceThreshold" }
+                    acceptanceComparator = if ($null -eq $contract) { "" } else { [string](Get-JsonValue $contract "acceptanceComparator") }
+                    unit = if ($null -eq $contract) { "" } else { [string](Get-JsonValue $contract "unit") }
+                    safetyClass = if ($null -eq $contract) { "" } else { [string](Get-JsonValue $contract "safetyClass") }
+                    acceptanceScope = if ($null -eq $contract) { "" } else { [string](Get-JsonValue $contract "acceptanceScope") }
+                    contractReady = if ($null -eq $contract) { $false } else { Test-Truthy (Get-JsonValue $contract "contractReady") }
                     baselineValue = $baselineValue
                     candidateValue = $candidateValue
                     improvementValue = $improvementValue
@@ -887,7 +1070,10 @@ $metricCoverageReadyForReview = ($regressionCount -eq 0 -and
 $runtimeIdentityReadyForReview = ((-not $wdspBackedEvidence) -or
     (-not [string]::IsNullOrWhiteSpace($wdspRuntimeSha256) -and
         [string]::Equals($wdspRuntimeStatus, "found", [StringComparison]::OrdinalIgnoreCase)))
-$readyForReview = ($metricCoverageReadyForReview -and $wdspBackedEvidence -and $runtimeIdentityReadyForReview)
+$readyForReview = ($metricCoverageReadyForReview -and
+    $metricCatalogAcceptanceContractReady -and
+    $wdspBackedEvidence -and
+    $runtimeIdentityReadyForReview)
 
 $report = [ordered]@{
     schemaVersion = 1
@@ -897,6 +1083,10 @@ $report = [ordered]@{
     benchmarkPlanPath = $planResolvedPath
     metricCatalogPath = $metricCatalogResolvedPath
     metricCatalogMetricCount = $metricDirectionCatalog.Count
+    metricCatalogRequiredMetricCount = $requiredMetricCatalogIds.Count
+    metricCatalogAcceptanceContractReady = $metricCatalogAcceptanceContractReady
+    metricCatalogContractProblemMetricCount = $metricCatalogContractProblemMetricIds.Count
+    metricCatalogContractProblemMetricIds = @($metricCatalogContractProblemMetricIds.ToArray())
     metricsPath = $metricsResolvedPath
     metricsSha256 = $metricsSha256
     reportPath = $ReportPath

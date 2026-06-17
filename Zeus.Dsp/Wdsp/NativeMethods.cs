@@ -468,6 +468,23 @@ internal static partial class NativeMethods
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXASPNRAdjacentNoiseProfile(
+        int channel,
+        int usable,
+        int bins,
+        int leftBins,
+        int rightBins,
+        double floorDb,
+        double p10Db,
+        double p50Db,
+        double p90Db,
+        double leftFloorDb,
+        double rightFloorDb,
+        double slopeDbPerKhz,
+        double rejectedPct);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial int GetRXASPNRDiagnostics(
         int channel,
         out int run,
@@ -532,6 +549,23 @@ internal static partial class NativeMethods
     internal static partial int GetRXASPNRMemoryDiagnostics(
         int channel,
         out double weakSignalMemory);
+
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial int GetRXASPNRAdjacentNoiseDiagnostics(
+        int channel,
+        out int usable,
+        out int bins,
+        out int leftBins,
+        out int rightBins,
+        out double floorDb,
+        out double leftFloorDb,
+        out double rightFloorDb,
+        out double trust,
+        out double drive,
+        out double rejectedPct,
+        out double sideBalance,
+        out double asymmetryDb);
 
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]

@@ -168,6 +168,16 @@ public static class DspLiveDiagnosticsService
 
         if (condition.CoherentSubthresholdSignal == true)
             evidence.Add("coherent-subthreshold-signal");
+        if (condition.AdjacentNoiseUsable == true)
+        {
+            evidence.Add("adjacent-noise-profile-usable");
+            tools.Add("nr5-adjacent-noise-profile");
+        }
+        else if (condition.AdjacentNoiseBins is > 0)
+        {
+            evidence.Add("adjacent-noise-profile-sampled");
+            tools.Add("nr5-adjacent-noise-profile");
+        }
         if (condition.CoherentMaxSnrDb is { } coherentSnr)
             evidence.Add($"coherent-snr-{coherentSnr:0.0}db");
         if (condition.ImpulsivePct is > 10.0)
@@ -188,6 +198,14 @@ public static class DspLiveDiagnosticsService
                 evidence.Add($"nr5-learned-frames-{nr5.LearnedFrames}");
                 evidence.Add($"nr5-signal-confidence-{nr5.SignalConfidence:0.000}");
                 evidence.Add($"nr5-weak-signal-memory-{nr5.WeakSignalMemory:0.000}");
+                if (nr5.AdjacentNoiseUsable)
+                {
+                    evidence.Add($"nr5-adjacent-noise-trust-{nr5.AdjacentNoiseTrust:0.000}");
+                    evidence.Add($"nr5-adjacent-noise-side-balance-{nr5.AdjacentNoiseSideBalance:0.000}");
+                    evidence.Add($"nr5-adjacent-noise-asymmetry-{nr5.AdjacentNoiseAsymmetryDb:0.0}db");
+                }
+                if (nr5.AdjacentNoiseDrive > 0.0)
+                    evidence.Add($"nr5-adjacent-noise-drive-{nr5.AdjacentNoiseDrive:0.000}");
                 if (nr5.LearnedFrames < 20)
                 {
                     score -= 10;
@@ -325,6 +343,18 @@ public static class DspLiveDiagnosticsService
             FrontendSceneFresh: condition.Fresh,
             FrontendSceneStale: condition.Stale,
             FrontendSceneAgeMs: condition.AgeMs,
+            FrontendAdjacentNoiseUsable: condition.AdjacentNoiseUsable,
+            FrontendAdjacentNoiseBins: condition.AdjacentNoiseBins,
+            FrontendAdjacentNoiseLeftBins: condition.AdjacentNoiseLeftBins,
+            FrontendAdjacentNoiseRightBins: condition.AdjacentNoiseRightBins,
+            FrontendAdjacentNoiseFloorDb: condition.AdjacentNoiseFloorDb,
+            FrontendAdjacentNoiseP10Db: condition.AdjacentNoiseP10Db,
+            FrontendAdjacentNoiseP50Db: condition.AdjacentNoiseP50Db,
+            FrontendAdjacentNoiseP90Db: condition.AdjacentNoiseP90Db,
+            FrontendAdjacentNoiseLeftFloorDb: condition.AdjacentNoiseLeftFloorDb,
+            FrontendAdjacentNoiseRightFloorDb: condition.AdjacentNoiseRightFloorDb,
+            FrontendAdjacentNoiseSlopeDbPerKhz: condition.AdjacentNoiseSlopeDbPerKhz,
+            FrontendAdjacentNoiseRejectedPct: condition.AdjacentNoiseRejectedPct,
             SmartNrProfile: condition.Profile,
             ExpectedNrMode: condition.ExpectedNrMode,
             RuntimeAligned: condition.RuntimeAligned,
@@ -335,6 +365,10 @@ public static class DspLiveDiagnosticsService
             RxChainScore: condition.RxChainScore,
             RxChainTone: condition.RxChainTone,
             RxChainLabel: condition.RxChainLabel,
+            RxChainFilterLowHz: condition.RxChain.FilterLowHz,
+            RxChainFilterHighHz: condition.RxChain.FilterHighHz,
+            RxChainFilterWidthHz: condition.RxChain.FilterWidthHz,
+            RxChainFilterPresetName: condition.RxChain.FilterPresetName,
             Nr5SpnrDiagnostics: nr5,
             Nr5SignalConfidence: nr5?.SignalConfidence,
             Nr5AgcGate: nr5?.AgcGate,

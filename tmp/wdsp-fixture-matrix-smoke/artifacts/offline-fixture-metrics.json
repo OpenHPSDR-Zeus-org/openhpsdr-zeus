@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "tool": "dsp-fixture-evidence",
-  "generatedUtc": "2026-06-16T14:14:34.7247537+00:00",
+  "generatedUtc": "2026-06-16T16:25:22.9126522+00:00",
   "benchmarkPlanPath": "benchmark-plan.json",
   "metricCatalogPath": "benchmark-metric-catalog.json",
   "fixtureScenarioScope": "offline-fixture-ready",
@@ -10,8 +10,8 @@
   "wdspRuntimePath": "runtimes/win-x64/native/wdsp.dll",
   "wdspRuntimePathKind": "app-output-relative",
   "wdspRuntimeFileName": "wdsp.dll",
-  "wdspRuntimeLength": 5598208,
-  "wdspRuntimeSha256": "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+  "wdspRuntimeLength": 5605376,
+  "wdspRuntimeSha256": "422860677d7aeb6dd797f71d5768a86e3949a06dd93c014cc8f516a24bfc62da",
   "wdspRuntimeStatus": "found",
   "scenarioCount": 1,
   "comparisonIds": [

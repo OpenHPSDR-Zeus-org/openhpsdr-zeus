@@ -1,7 +1,7 @@
 ﻿{
     "schemaVersion":  1,
     "tool":  "audit-wdsp-runtime-artifacts",
-    "generatedUtc":  "2026-06-16T14:14:38.6925381Z",
+    "generatedUtc":  "2026-06-16T16:25:26.7290944Z",
     "runtimeRoot":  "Zeus.Dsp\\runtimes",
     "requiredNr4Symbols":  [
                                "SetRXASBNRRun"
@@ -22,8 +22,8 @@
                            ],
     "readyForWinX64Package":  true,
     "winX64NativePath":  "Zeus.Dsp\\runtimes\\win-x64\\native\\wdsp.dll",
-    "winX64NativeLength":  5598208,
-    "winX64NativeSha256":  "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+    "winX64NativeLength":  5605376,
+    "winX64NativeSha256":  "422860677d7aeb6dd797f71d5768a86e3949a06dd93c014cc8f516a24bfc62da",
     "pendingRidCount":  4,
     "pendingRids":  [
                         "linux-arm64",
@@ -212,8 +212,8 @@
                           "rid":  "win-x64",
                           "nativePath":  "Zeus.Dsp\\runtimes\\win-x64\\native\\wdsp.dll",
                           "nativePresent":  true,
-                          "nativeLength":  5598208,
-                          "nativeSha256":  "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+                          "nativeLength":  5605376,
+                          "nativeSha256":  "422860677d7aeb6dd797f71d5768a86e3949a06dd93c014cc8f516a24bfc62da",
                           "nr4Ready":  true,
                           "nr5Ready":  true,
                           "sideBySideDependenciesReady":  true,

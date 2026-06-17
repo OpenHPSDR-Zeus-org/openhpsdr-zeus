@@ -89,6 +89,132 @@ public class NoiseReductionTests
         catch { return false; }
     }
 
+    [Fact]
+    public void Nr5PassbandPolicy_AdaptsToFilterWidth()
+    {
+        var standard = WdspDspEngine.ComputeNr5PassbandPolicy(150, 2850);
+        var lsbStandard = WdspDspEngine.ComputeNr5PassbandPolicy(-2850, -150);
+        var narrow = WdspDspEngine.ComputeNr5PassbandPolicy(300, 2100);
+        var wide = WdspDspEngine.ComputeNr5PassbandPolicy(50, 5000);
+
+        Assert.Equal(0.62, standard.Aggressiveness, 6);
+        Assert.Equal(0.075, standard.AgcTargetRms, 6);
+        Assert.Equal(standard, lsbStandard);
+        Assert.InRange(narrow.Aggressiveness, 0.56, 0.58);
+        Assert.InRange(narrow.AgcTargetRms, 0.071, 0.073);
+        Assert.True(narrow.Aggressiveness < standard.Aggressiveness);
+        Assert.True(narrow.AgcTargetRms < standard.AgcTargetRms);
+        Assert.InRange(wide.Aggressiveness, 0.68, 0.69);
+        Assert.InRange(wide.AgcTargetRms, 0.079, 0.080);
+        Assert.True(wide.Aggressiveness > standard.Aggressiveness);
+        Assert.True(wide.AgcTargetRms > standard.AgcTargetRms);
+    }
+
+    [SkippableFact]
+    public void Wdsp_Nr5PassbandPolicy_ReappliesWhenFilterChanges()
+    {
+        Skip.IfNot(WdspAvailable(), "libwdsp not available");
+        Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
+
+        using var engine = new WdspDspEngine();
+        int channel = engine.OpenChannel(192_000, 1024);
+        try
+        {
+            engine.SetMode(channel, RxMode.USB);
+            engine.SetFilter(channel, 150, 2850);
+            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
+
+            var standard = engine.TryGetNr5SpnrDiagnostics(channel);
+            Assert.NotNull(standard);
+            Assert.Equal(0.62, standard.Aggressiveness, 6);
+            Assert.Equal(0.075, standard.TargetRms, 6);
+
+            engine.SetFilter(channel, 300, 2100);
+
+            var narrow = engine.TryGetNr5SpnrDiagnostics(channel);
+            Assert.NotNull(narrow);
+            Assert.InRange(narrow.Aggressiveness, 0.56, 0.58);
+            Assert.InRange(narrow.TargetRms, 0.071, 0.073);
+            Assert.True(narrow.Aggressiveness < standard.Aggressiveness);
+            Assert.True(narrow.TargetRms < standard.TargetRms);
+        }
+        finally
+        {
+            engine.CloseChannel(channel);
+        }
+    }
+
+    [SkippableFact]
+    public void Wdsp_Nr5AdjacentNoiseProfile_RoundTripsThroughNativeDiagnostics()
+    {
+        Skip.IfNot(WdspAvailable(), "libwdsp not available");
+        Skip.IfNot(SpnrAvailable(), "Requires libwdsp rebuild with NR5/SPNR exports.");
+        Skip.IfNot(WdspDspEngine.Nr5SpnrAdjacentNoiseAvailable, "Requires libwdsp rebuild with NR5 adjacent-noise exports.");
+
+        using var engine = new WdspDspEngine();
+        int channel = engine.OpenChannel(192_000, 1024);
+        try
+        {
+            engine.SetMode(channel, RxMode.USB);
+            engine.SetFilter(channel, 300, 2600);
+            engine.SetNoiseReduction(channel, new NrConfig(NrMode.Nr5));
+
+            engine.SetNr5AdjacentNoiseProfile(
+                channel,
+                usable: true,
+                bins: 90,
+                floorDb: -105.2,
+                p10Db: -105.9,
+                p50Db: -105.2,
+                p90Db: -104.1,
+                slopeDbPerKhz: 0.1,
+                rejectedPct: 7.3,
+                leftBins: 42,
+                rightBins: 48,
+                leftFloorDb: -105.5,
+                rightFloorDb: -105.1);
+
+            var enabled = engine.TryGetNr5SpnrDiagnostics(channel);
+            Assert.NotNull(enabled);
+            Assert.True(enabled.AdjacentNoiseUsable);
+            Assert.Equal(90, enabled.AdjacentNoiseBins);
+            Assert.Equal(-105.2, enabled.AdjacentNoiseFloorDb, precision: 1);
+            Assert.InRange(enabled.AdjacentNoiseTrust, 0.10, 0.92);
+            Assert.Equal(7.3, enabled.AdjacentNoiseRejectedPct, precision: 1);
+            Assert.Equal(42, enabled.AdjacentNoiseLeftBins);
+            Assert.Equal(48, enabled.AdjacentNoiseRightBins);
+            Assert.Equal(-105.5, enabled.AdjacentNoiseLeftFloorDb, precision: 1);
+            Assert.Equal(-105.1, enabled.AdjacentNoiseRightFloorDb, precision: 1);
+            Assert.InRange(enabled.AdjacentNoiseSideBalance, 0.80, 0.90);
+            Assert.Equal(0.4, enabled.AdjacentNoiseAsymmetryDb, precision: 1);
+
+            engine.SetNr5AdjacentNoiseProfile(
+                channel,
+                usable: false,
+                bins: 0,
+                floorDb: 0.0,
+                p10Db: 0.0,
+                p50Db: 0.0,
+                p90Db: 0.0,
+                slopeDbPerKhz: 0.0,
+                rejectedPct: 100.0,
+                leftBins: 0,
+                rightBins: 0,
+                leftFloorDb: 0.0,
+                rightFloorDb: 0.0);
+
+            var disabled = engine.TryGetNr5SpnrDiagnostics(channel);
+            Assert.NotNull(disabled);
+            Assert.False(disabled.AdjacentNoiseUsable);
+            Assert.Equal(0.0, disabled.AdjacentNoiseTrust, precision: 3);
+            Assert.Equal(0.0, disabled.AdjacentNoiseSideBalance, precision: 3);
+        }
+        finally
+        {
+            engine.CloseChannel(channel);
+        }
+    }
+
     public static IEnumerable<object[]> AllCombos()
     {
         foreach (var nr in new[] { NrMode.Off, NrMode.Anr, NrMode.Emnr, NrMode.Sbnr, NrMode.Nr5 })
@@ -287,7 +413,7 @@ public class NoiseReductionTests
             Assert.True(diag.LearnedFrames > 55, $"expected learned NR5 frames, got {diag.LearnedFrames}");
             Assert.True(diag.InputRms > 0.0, $"expected input RMS, got {diag.InputRms}");
             Assert.True(diag.OutputRms > 0.0, $"expected output RMS, got {diag.OutputRms}");
-            Assert.Equal(7, diag.SchemaVersion);
+            Assert.Equal(9, diag.SchemaVersion);
             Assert.InRange(diag.CoherencePeak, 0.0, 1.0);
             Assert.InRange(diag.RidgePeak, 0.0, 1.0);
             Assert.InRange(diag.SignalProbability, 0.0, 1.0);
@@ -299,6 +425,8 @@ public class NoiseReductionTests
             Assert.InRange(diag.PeakEvidence, 0.0, 1.0);
             Assert.InRange(diag.PeakLimit, 0.0, 1.0);
             Assert.True(diag.PeakReductionDb >= 0.0, $"expected non-negative NR5 peak reduction pressure, got {diag.PeakReductionDb}");
+            Assert.InRange(diag.AdjacentNoiseTrust, 0.0, 1.0);
+            Assert.InRange(diag.AdjacentNoiseDrive, 0.0, 1.0);
             Assert.InRange(diag.MeanGain, 0.0, 1.0);
             Assert.InRange(diag.MinGain, 0.0, 1.0);
             Assert.True(diag.FloorReductionDb >= 0.0, $"expected non-negative floor push, got {diag.FloorReductionDb}");

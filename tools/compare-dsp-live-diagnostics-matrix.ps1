@@ -69,7 +69,25 @@ function Write-JsonFile {
 function Get-FileSha256 {
     param([Parameter(Mandatory = $true)][string]$Path)
 
-    return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+        return (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash.ToLowerInvariant()
+    }
+
+    $resolvedPath = (Resolve-Path -LiteralPath $Path).ProviderPath
+    $stream = [System.IO.File]::OpenRead($resolvedPath)
+    try {
+        $sha256 = [System.Security.Cryptography.SHA256]::Create()
+        try {
+            $hash = $sha256.ComputeHash($stream)
+            return ([System.BitConverter]::ToString($hash) -replace "-", "").ToLowerInvariant()
+        }
+        finally {
+            $sha256.Dispose()
+        }
+    }
+    finally {
+        $stream.Dispose()
+    }
 }
 
 function Get-JsonValue {
@@ -362,6 +380,15 @@ function Get-TraceIndexEntries {
                     inputPath = $inputPath
                     indexPath = $resolvedIndexPath
                     root = $root
+                    captureReadinessStatus = [string](Get-JsonValue $file "captureReadinessStatus")
+                    hardGatePass = Get-JsonValue $file "hardGatePass"
+                    strictPreflightPass = Get-JsonValue $file "strictPreflightPass"
+                    topCaptureConstraintName = [string](Get-JsonValue $file "topCaptureConstraintName")
+                    topCaptureConstraintCount = Get-JsonValue $file "topCaptureConstraintCount"
+                    topCaptureHardConstraintName = [string](Get-JsonValue $file "topCaptureHardConstraintName")
+                    topCaptureHardConstraintCount = Get-JsonValue $file "topCaptureHardConstraintCount"
+                    topCaptureStatusName = [string](Get-JsonValue $file "topCaptureStatusName")
+                    topCaptureStatusCount = Get-JsonValue $file "topCaptureStatusCount"
                 }) | Out-Null
             }
         }
@@ -408,10 +435,51 @@ function New-Nr5WeakSignalAccumulator {
         baselineTextureFillAverageTotal = 0.0
         candidateTextureFillAverageTotal = 0.0
         textureFillComparisonCount = 0.0
+        baselineLowEvidenceLiftedSampleCount = 0.0
+        candidateLowEvidenceLiftedSampleCount = 0.0
+        baselineLowEvidenceLiftedPctMax = $null
+        candidateLowEvidenceLiftedPctMax = $null
+        lowEvidenceLiftedPctComparisonCount = 0.0
+        baselineAudioAlignmentMismatchPctMax = $null
+        candidateAudioAlignmentMismatchPctMax = $null
+        audioAlignmentMismatchComparisonCount = 0.0
+        baselineArtifactRiskScoreMax = $null
+        candidateArtifactRiskScoreMax = $null
+        artifactRiskScoreComparisonCount = 0.0
         outputMovementRegressionCount = 0
         makeupMovementRegressionCount = 0
         makeupMaxRegressionCount = 0
         recoveryDriveMovementRegressionCount = 0
+        lowEvidenceLiftedRegressionCount = 0
+        lowEvidenceLiftedPctRegressionCount = 0
+        audioAlignmentMismatchRegressionCount = 0
+        artifactRiskRegressionCount = 0
+    }
+}
+
+function New-RxAudioLevelerAccumulator {
+    return [ordered]@{
+        baselineDiagnosticSampleCount = 0.0
+        candidateDiagnosticSampleCount = 0.0
+        baselineConstrainedSampleCount = 0.0
+        candidateConstrainedSampleCount = 0.0
+        baselineBoostSlewLimitedSampleCount = 0.0
+        candidateBoostSlewLimitedSampleCount = 0.0
+        baselinePeakLimitedSampleCount = 0.0
+        candidatePeakLimitedSampleCount = 0.0
+        baselineOutputLimitedSampleCount = 0.0
+        candidateOutputLimitedSampleCount = 0.0
+        baselineOutputRmsMovementDbTotal = 0.0
+        candidateOutputRmsMovementDbTotal = 0.0
+        outputRmsMovementComparisonCount = 0.0
+        baselineAppliedGainMovementDbTotal = 0.0
+        candidateAppliedGainMovementDbTotal = 0.0
+        appliedGainMovementComparisonCount = 0.0
+        constrainedRegressionCount = 0
+        constrainedPctRegressionCount = 0
+        boostSlewRegressionCount = 0
+        peakLimitedRegressionCount = 0
+        outputLimitedRegressionCount = 0
     }
 }
 
@@ -502,7 +570,9 @@ function Add-Nr5WeakSignalComparison {
         "baselineWeakDropoutSampleCount",
         "candidateWeakDropoutSampleCount",
         "baselineHotMakeupSampleCount",
-        "candidateHotMakeupSampleCount"
+        "candidateHotMakeupSampleCount",
+        "baselineLowEvidenceLiftedSampleCount",
+        "candidateLowEvidenceLiftedSampleCount"
     )) {
         $value = Get-NumericValue (Get-JsonValue $Comparison $name)
         if ($null -ne $value) {
@@ -550,11 +620,91 @@ function Add-Nr5WeakSignalComparison {
         -BaselineTotalName "baselineTextureFillAverageTotal" `
         -CandidateTotalName "candidateTextureFillAverageTotal" `
         -CountName "textureFillComparisonCount"
+    Add-Nr5NumericMaxPairToAccumulator `
+        -Accumulator $Accumulator `
+        -Comparison $Comparison `
+        -BaselineName "baselineLowEvidenceLiftedPct" `
+        -CandidateName "candidateLowEvidenceLiftedPct" `
+        -BaselineMaxName "baselineLowEvidenceLiftedPctMax" `
+        -CandidateMaxName "candidateLowEvidenceLiftedPctMax" `
+        -CountName "lowEvidenceLiftedPctComparisonCount"
+    Add-Nr5NumericMaxPairToAccumulator `
+        -Accumulator $Accumulator `
+        -Comparison $Comparison `
+        -BaselineName "baselineAudioAlignmentMismatchPct" `
+        -CandidateName "candidateAudioAlignmentMismatchPct" `
+        -BaselineMaxName "baselineAudioAlignmentMismatchPctMax" `
+        -CandidateMaxName "candidateAudioAlignmentMismatchPctMax" `
+        -CountName "audioAlignmentMismatchComparisonCount"
+    Add-Nr5NumericMaxPairToAccumulator `
+        -Accumulator $Accumulator `
+        -Comparison $Comparison `
+        -BaselineName "baselineArtifactRiskScore" `
+        -CandidateName "candidateArtifactRiskScore" `
+        -BaselineMaxName "baselineArtifactRiskScoreMax" `
+        -CandidateMaxName "candidateArtifactRiskScoreMax" `
+        -CountName "artifactRiskScoreComparisonCount"
 
     Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "outputMovementRegression" -CountName "outputMovementRegressionCount"
     Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "makeupMovementRegression" -CountName "makeupMovementRegressionCount"
     Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "makeupMaxRegression" -CountName "makeupMaxRegressionCount"
     Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "recoveryDriveMovementRegression" -CountName "recoveryDriveMovementRegressionCount"
+    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "lowEvidenceLiftedRegression" -CountName "lowEvidenceLiftedRegressionCount"
+    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "lowEvidenceLiftedPctRegression" -CountName "lowEvidenceLiftedPctRegressionCount"
+    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "audioAlignmentMismatchRegression" -CountName "audioAlignmentMismatchRegressionCount"
+    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "artifactRiskRegression" -CountName "artifactRiskRegressionCount"
+}
+
+function Add-RxAudioLevelerComparison {
+    param(
+        [System.Collections.Specialized.OrderedDictionary]$Accumulator,
+        $Comparison
+    )
+
+    if ($null -eq $Comparison) {
+        return
+    }
+
+    foreach ($name in @(
+            "baselineDiagnosticSampleCount",
+            "candidateDiagnosticSampleCount",
+            "baselineConstrainedSampleCount",
+            "candidateConstrainedSampleCount",
+            "baselineBoostSlewLimitedSampleCount",
+            "candidateBoostSlewLimitedSampleCount",
+            "baselinePeakLimitedSampleCount",
+            "candidatePeakLimitedSampleCount",
+            "baselineOutputLimitedSampleCount",
+            "candidateOutputLimitedSampleCount"
+        )) {
+        $value = Get-NumericValue (Get-JsonValue $Comparison $name)
+        if ($null -ne $value) {
+            $Accumulator[$name] = [double]$Accumulator[$name] + $value
+        }
+    }
+
+    Add-Nr5NumericPairToAccumulator `
+        -Accumulator $Accumulator `
+        -Comparison $Comparison `
+        -BaselineName "baselineOutputRmsMovementDb" `
+        -CandidateName "candidateOutputRmsMovementDb" `
+        -BaselineTotalName "baselineOutputRmsMovementDbTotal" `
+        -CandidateTotalName "candidateOutputRmsMovementDbTotal" `
+        -CountName "outputRmsMovementComparisonCount"
+    Add-Nr5NumericPairToAccumulator `
+        -Accumulator $Accumulator `
+        -Comparison $Comparison `
+        -BaselineName "baselineAppliedGainMovementDb" `
+        -CandidateName "candidateAppliedGainMovementDb" `
+        -BaselineTotalName "baselineAppliedGainMovementDbTotal" `
+        -CandidateTotalName "candidateAppliedGainMovementDbTotal" `
+        -CountName "appliedGainMovementComparisonCount"
+
+    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "constrainedRegression" -CountName "constrainedRegressionCount"
+    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "constrainedPctRegression" -CountName "constrainedPctRegressionCount"
+    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "boostSlewRegression" -CountName "boostSlewRegressionCount"
+    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "peakLimitedRegression" -CountName "peakLimitedRegressionCount"
+    Add-Nr5RegressionFlagToAccumulator -Accumulator $Accumulator -Comparison $Comparison -FlagName "outputLimitedRegression" -CountName "outputLimitedRegressionCount"
 }
 
 function Get-Nr5AccumulatorAverage {
@@ -608,6 +758,14 @@ function Complete-Nr5WeakSignalSummary {
     $candidateRecoveryMovement = Get-Nr5AccumulatorAverage $Accumulator "candidateRecoveryDriveMovementTotal" "recoveryDriveMovementComparisonCount"
     $baselineTextureAverage = Get-Nr5AccumulatorAverage $Accumulator "baselineTextureFillAverageTotal" "textureFillComparisonCount"
     $candidateTextureAverage = Get-Nr5AccumulatorAverage $Accumulator "candidateTextureFillAverageTotal" "textureFillComparisonCount"
+    $baselineLowEvidenceLifted = [double]$Accumulator["baselineLowEvidenceLiftedSampleCount"]
+    $candidateLowEvidenceLifted = [double]$Accumulator["candidateLowEvidenceLiftedSampleCount"]
+    $baselineLowEvidenceLiftedPct = Get-Nr5AccumulatorValueOrZero $Accumulator "baselineLowEvidenceLiftedPctMax"
+    $candidateLowEvidenceLiftedPct = Get-Nr5AccumulatorValueOrZero $Accumulator "candidateLowEvidenceLiftedPctMax"
+    $baselineAudioAlignmentMismatchPct = Get-Nr5AccumulatorValueOrZero $Accumulator "baselineAudioAlignmentMismatchPctMax"
+    $candidateAudioAlignmentMismatchPct = Get-Nr5AccumulatorValueOrZero $Accumulator "candidateAudioAlignmentMismatchPctMax"
+    $baselineArtifactRiskScore = Get-Nr5AccumulatorValueOrZero $Accumulator "baselineArtifactRiskScoreMax"
+    $candidateArtifactRiskScore = Get-Nr5AccumulatorValueOrZero $Accumulator "candidateArtifactRiskScoreMax"
 
     return [ordered]@{
         baselineWeakInputSampleCount = [int][Math]::Round($baselineWeakInput)
@@ -640,6 +798,18 @@ function Complete-Nr5WeakSignalSummary {
         baselineTextureFillAverage = $baselineTextureAverage
         candidateTextureFillAverage = $candidateTextureAverage
         textureFillAverageDelta = [Math]::Round($candidateTextureAverage - $baselineTextureAverage, 3)
+        baselineLowEvidenceLiftedSampleCount = [int][Math]::Round($baselineLowEvidenceLifted)
+        candidateLowEvidenceLiftedSampleCount = [int][Math]::Round($candidateLowEvidenceLifted)
+        lowEvidenceLiftedSampleDelta = [int][Math]::Round($candidateLowEvidenceLifted - $baselineLowEvidenceLifted)
+        baselineLowEvidenceLiftedPctMax = $baselineLowEvidenceLiftedPct
+        candidateLowEvidenceLiftedPctMax = $candidateLowEvidenceLiftedPct
+        lowEvidenceLiftedPctDelta = [Math]::Round($candidateLowEvidenceLiftedPct - $baselineLowEvidenceLiftedPct, 3)
+        baselineAudioAlignmentMismatchPctMax = $baselineAudioAlignmentMismatchPct
+        candidateAudioAlignmentMismatchPctMax = $candidateAudioAlignmentMismatchPct
+        audioAlignmentMismatchPctDelta = [Math]::Round($candidateAudioAlignmentMismatchPct - $baselineAudioAlignmentMismatchPct, 3)
+        baselineArtifactRiskScoreMax = $baselineArtifactRiskScore
+        candidateArtifactRiskScoreMax = $candidateArtifactRiskScore
+        artifactRiskScoreDelta = [Math]::Round($candidateArtifactRiskScore - $baselineArtifactRiskScore, 3)
         dropoutRegression = ($candidateWeakDropout -gt $baselineWeakDropout)
         hotMakeupRegression = ($candidateHotMakeup -gt $baselineHotMakeup)
         recoveryRegression = ($candidateRecoveryPct -lt ($baselineRecoveryPct - 5.0))
@@ -647,10 +817,69 @@ function Complete-Nr5WeakSignalSummary {
         makeupMovementRegressionCount = [int]$Accumulator["makeupMovementRegressionCount"]
         makeupMaxRegressionCount = [int]$Accumulator["makeupMaxRegressionCount"]
         recoveryDriveMovementRegressionCount = [int]$Accumulator["recoveryDriveMovementRegressionCount"]
+        lowEvidenceLiftedRegressionCount = [int]$Accumulator["lowEvidenceLiftedRegressionCount"]
+        lowEvidenceLiftedPctRegressionCount = [int]$Accumulator["lowEvidenceLiftedPctRegressionCount"]
+        audioAlignmentMismatchRegressionCount = [int]$Accumulator["audioAlignmentMismatchRegressionCount"]
+        artifactRiskRegressionCount = [int]$Accumulator["artifactRiskRegressionCount"]
         outputMovementRegression = ([int]$Accumulator["outputMovementRegressionCount"] -gt 0)
         makeupMovementRegression = ([int]$Accumulator["makeupMovementRegressionCount"] -gt 0)
         makeupMaxRegression = ([int]$Accumulator["makeupMaxRegressionCount"] -gt 0)
         recoveryDriveMovementRegression = ([int]$Accumulator["recoveryDriveMovementRegressionCount"] -gt 0)
+        lowEvidenceLiftedRegression = ([int]$Accumulator["lowEvidenceLiftedRegressionCount"] -gt 0)
+        lowEvidenceLiftedPctRegression = ([int]$Accumulator["lowEvidenceLiftedPctRegressionCount"] -gt 0)
+        audioAlignmentMismatchRegression = ([int]$Accumulator["audioAlignmentMismatchRegressionCount"] -gt 0)
+        artifactRiskRegression = ([int]$Accumulator["artifactRiskRegressionCount"] -gt 0)
+    }
+}
+
+function Complete-RxAudioLevelerSummary {
+    param([System.Collections.Specialized.OrderedDictionary]$Accumulator)
+
+    $baselineDiagnostics = [double]$Accumulator["baselineDiagnosticSampleCount"]
+    $candidateDiagnostics = [double]$Accumulator["candidateDiagnosticSampleCount"]
+    $baselineConstrained = [double]$Accumulator["baselineConstrainedSampleCount"]
+    $candidateConstrained = [double]$Accumulator["candidateConstrainedSampleCount"]
+    $baselineConstrainedPct = if ($baselineDiagnostics -le 0.0) { 0.0 } else { [Math]::Round(100.0 * $baselineConstrained / $baselineDiagnostics, 3) }
+    $candidateConstrainedPct = if ($candidateDiagnostics -le 0.0) { 0.0 } else { [Math]::Round(100.0 * $candidateConstrained / $candidateDiagnostics, 3) }
+    $baselineOutputMovement = Get-Nr5AccumulatorAverage $Accumulator "baselineOutputRmsMovementDbTotal" "outputRmsMovementComparisonCount"
+    $candidateOutputMovement = Get-Nr5AccumulatorAverage $Accumulator "candidateOutputRmsMovementDbTotal" "outputRmsMovementComparisonCount"
+    $baselineGainMovement = Get-Nr5AccumulatorAverage $Accumulator "baselineAppliedGainMovementDbTotal" "appliedGainMovementComparisonCount"
+    $candidateGainMovement = Get-Nr5AccumulatorAverage $Accumulator "candidateAppliedGainMovementDbTotal" "appliedGainMovementComparisonCount"
+
+    return [ordered]@{
+        baselineDiagnosticSampleCount = [int][Math]::Round($baselineDiagnostics)
+        candidateDiagnosticSampleCount = [int][Math]::Round($candidateDiagnostics)
+        baselineConstrainedSampleCount = [int][Math]::Round($baselineConstrained)
+        candidateConstrainedSampleCount = [int][Math]::Round($candidateConstrained)
+        constrainedSampleDelta = [int][Math]::Round($candidateConstrained - $baselineConstrained)
+        baselineConstrainedPct = $baselineConstrainedPct
+        candidateConstrainedPct = $candidateConstrainedPct
+        constrainedPctDelta = [Math]::Round($candidateConstrainedPct - $baselineConstrainedPct, 3)
+        baselineBoostSlewLimitedSampleCount = [int][Math]::Round([double]$Accumulator["baselineBoostSlewLimitedSampleCount"])
+        candidateBoostSlewLimitedSampleCount = [int][Math]::Round([double]$Accumulator["candidateBoostSlewLimitedSampleCount"])
+        boostSlewLimitedSampleDelta = [int][Math]::Round([double]$Accumulator["candidateBoostSlewLimitedSampleCount"] - [double]$Accumulator["baselineBoostSlewLimitedSampleCount"])
+        baselinePeakLimitedSampleCount = [int][Math]::Round([double]$Accumulator["baselinePeakLimitedSampleCount"])
+        candidatePeakLimitedSampleCount = [int][Math]::Round([double]$Accumulator["candidatePeakLimitedSampleCount"])
+        peakLimitedSampleDelta = [int][Math]::Round([double]$Accumulator["candidatePeakLimitedSampleCount"] - [double]$Accumulator["baselinePeakLimitedSampleCount"])
+        baselineOutputLimitedSampleCount = [int][Math]::Round([double]$Accumulator["baselineOutputLimitedSampleCount"])
+        candidateOutputLimitedSampleCount = [int][Math]::Round([double]$Accumulator["candidateOutputLimitedSampleCount"])
+        outputLimitedSampleDelta = [int][Math]::Round([double]$Accumulator["candidateOutputLimitedSampleCount"] - [double]$Accumulator["baselineOutputLimitedSampleCount"])
+        baselineOutputRmsMovementDbAverage = $baselineOutputMovement
+        candidateOutputRmsMovementDbAverage = $candidateOutputMovement
+        outputRmsMovementDbDelta = [Math]::Round($candidateOutputMovement - $baselineOutputMovement, 3)
+        baselineAppliedGainMovementDbAverage = $baselineGainMovement
+        candidateAppliedGainMovementDbAverage = $candidateGainMovement
+        appliedGainMovementDbDelta = [Math]::Round($candidateGainMovement - $baselineGainMovement, 3)
+        constrainedRegressionCount = [int]$Accumulator["constrainedRegressionCount"]
+        constrainedPctRegressionCount = [int]$Accumulator["constrainedPctRegressionCount"]
+        boostSlewRegressionCount = [int]$Accumulator["boostSlewRegressionCount"]
+        peakLimitedRegressionCount = [int]$Accumulator["peakLimitedRegressionCount"]
+        outputLimitedRegressionCount = [int]$Accumulator["outputLimitedRegressionCount"]
+        constrainedRegression = ([int]$Accumulator["constrainedRegressionCount"] -gt 0)
+        constrainedPctRegression = ([int]$Accumulator["constrainedPctRegressionCount"] -gt 0)
+        boostSlewRegression = ([int]$Accumulator["boostSlewRegressionCount"] -gt 0)
+        peakLimitedRegression = ([int]$Accumulator["peakLimitedRegressionCount"] -gt 0)
+        outputLimitedRegression = ([int]$Accumulator["outputLimitedRegressionCount"] -gt 0)
     }
 }
 
@@ -679,6 +908,217 @@ function New-DetailSafetyClassCounts {
     }
 
     return @($result.ToArray())
+}
+
+function Add-CountMapValue {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Map,
+        [string]$Name,
+        [double]$Count = 1.0
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return
+    }
+
+    if (-not $Map.ContainsKey($Name)) {
+        $Map[$Name] = 0.0
+    }
+    $Map[$Name] = [double]$Map[$Name] + $Count
+}
+
+function Convert-CountMapToRecords {
+    param(
+        [Parameter(Mandatory = $true)][hashtable]$Map,
+        [string]$NameField = "name"
+    )
+
+    $result = New-Object System.Collections.Generic.List[object]
+    foreach ($key in @($Map.Keys | Sort-Object)) {
+        $record = [ordered]@{}
+        $record[$NameField] = [string]$key
+        $record["count"] = [double]$Map[$key]
+        $result.Add($record) | Out-Null
+    }
+
+    return @($result.ToArray())
+}
+
+function Get-NullableTruthyField {
+    param(
+        $Object,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $value = Get-JsonValue $Object $Name
+    if ($null -eq $value) {
+        return $null
+    }
+
+    return Test-Truthy $value
+}
+
+function Get-NullableIntField {
+    param(
+        $Object,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $value = Get-NumericValue (Get-JsonValue $Object $Name)
+    if ($null -eq $value) {
+        return $null
+    }
+
+    return [int][Math]::Round($value)
+}
+
+function Format-ReadinessItem {
+    param(
+        [string]$Name,
+        $Count
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Name)) {
+        return "-"
+    }
+
+    $numericCount = Get-NumericValue $Count
+    if ($null -eq $numericCount) {
+        return $Name
+    }
+
+    return "$Name ($([int][Math]::Round($numericCount)))"
+}
+
+function Get-StringFallback {
+    param(
+        [string]$Primary,
+        [string]$Fallback
+    )
+
+    if (-not [string]::IsNullOrWhiteSpace($Primary)) {
+        return $Primary
+    }
+
+    return $Fallback
+}
+
+function Get-IntFallback {
+    param(
+        $Primary,
+        $Fallback
+    )
+
+    $primaryValue = Get-NumericValue $Primary
+    if ($null -ne $primaryValue -and $primaryValue -gt 0.0) {
+        return [int][Math]::Round($primaryValue)
+    }
+
+    $fallbackValue = Get-NumericValue $Fallback
+    if ($null -ne $fallbackValue) {
+        return [int][Math]::Round($fallbackValue)
+    }
+
+    return 0
+}
+
+function Get-BoolFallback {
+    param(
+        $Primary,
+        $Fallback
+    )
+
+    if ($null -ne $Primary) {
+        return Test-Truthy $Primary
+    }
+    if ($null -ne $Fallback) {
+        return Test-Truthy $Fallback
+    }
+
+    return $false
+}
+
+function Add-IndexFallbackToCaptureReadinessComparison {
+    param(
+        $Comparison,
+        $BaselineEntry,
+        $CandidateEntry
+    )
+
+    if ($null -eq $Comparison) {
+        return $null
+    }
+
+    $baselineHardGatePass = Get-BoolFallback `
+        -Primary (Get-JsonValue $Comparison "baselineHardGatePass") `
+        -Fallback (Get-JsonValue $BaselineEntry "hardGatePass")
+    $candidateHardGatePass = Get-BoolFallback `
+        -Primary (Get-JsonValue $Comparison "candidateHardGatePass") `
+        -Fallback (Get-JsonValue $CandidateEntry "hardGatePass")
+    $baselineStrictPreflightPass = Get-BoolFallback `
+        -Primary (Get-JsonValue $Comparison "baselineStrictPreflightPass") `
+        -Fallback (Get-JsonValue $BaselineEntry "strictPreflightPass")
+    $candidateStrictPreflightPass = Get-BoolFallback `
+        -Primary (Get-JsonValue $Comparison "candidateStrictPreflightPass") `
+        -Fallback (Get-JsonValue $CandidateEntry "strictPreflightPass")
+
+    $baselineTopConstraintCount = Get-IntFallback `
+        -Primary (Get-JsonValue $Comparison "baselineTopConstraintCount") `
+        -Fallback (Get-JsonValue $BaselineEntry "topCaptureConstraintCount")
+    $candidateTopConstraintCount = Get-IntFallback `
+        -Primary (Get-JsonValue $Comparison "candidateTopConstraintCount") `
+        -Fallback (Get-JsonValue $CandidateEntry "topCaptureConstraintCount")
+    $baselineTopHardCount = Get-IntFallback `
+        -Primary (Get-JsonValue $Comparison "baselineTopHardConstraintCount") `
+        -Fallback (Get-JsonValue $BaselineEntry "topCaptureHardConstraintCount")
+    $candidateTopHardCount = Get-IntFallback `
+        -Primary (Get-JsonValue $Comparison "candidateTopHardConstraintCount") `
+        -Fallback (Get-JsonValue $CandidateEntry "topCaptureHardConstraintCount")
+
+    return [ordered]@{
+        baselineStatus = Get-StringFallback `
+            -Primary ([string](Get-JsonValue $Comparison "baselineStatus")) `
+            -Fallback ([string](Get-JsonValue $BaselineEntry "captureReadinessStatus"))
+        candidateStatus = Get-StringFallback `
+            -Primary ([string](Get-JsonValue $Comparison "candidateStatus")) `
+            -Fallback ([string](Get-JsonValue $CandidateEntry "captureReadinessStatus"))
+        baselineHardGatePass = $baselineHardGatePass
+        candidateHardGatePass = $candidateHardGatePass
+        hardGatePassDelta = ([int]$candidateHardGatePass - [int]$baselineHardGatePass)
+        baselineStrictPreflightPass = $baselineStrictPreflightPass
+        candidateStrictPreflightPass = $candidateStrictPreflightPass
+        strictPreflightPassDelta = ([int]$candidateStrictPreflightPass - [int]$baselineStrictPreflightPass)
+        baselineTopConstraintName = Get-StringFallback `
+            -Primary ([string](Get-JsonValue $Comparison "baselineTopConstraintName")) `
+            -Fallback ([string](Get-JsonValue $BaselineEntry "topCaptureConstraintName"))
+        candidateTopConstraintName = Get-StringFallback `
+            -Primary ([string](Get-JsonValue $Comparison "candidateTopConstraintName")) `
+            -Fallback ([string](Get-JsonValue $CandidateEntry "topCaptureConstraintName"))
+        baselineTopConstraintCount = $baselineTopConstraintCount
+        candidateTopConstraintCount = $candidateTopConstraintCount
+        topConstraintCountDelta = $candidateTopConstraintCount - $baselineTopConstraintCount
+        baselineTopHardConstraintName = Get-StringFallback `
+            -Primary ([string](Get-JsonValue $Comparison "baselineTopHardConstraintName")) `
+            -Fallback ([string](Get-JsonValue $BaselineEntry "topCaptureHardConstraintName"))
+        candidateTopHardConstraintName = Get-StringFallback `
+            -Primary ([string](Get-JsonValue $Comparison "candidateTopHardConstraintName")) `
+            -Fallback ([string](Get-JsonValue $CandidateEntry "topCaptureHardConstraintName"))
+        baselineTopHardConstraintCount = $baselineTopHardCount
+        candidateTopHardConstraintCount = $candidateTopHardCount
+        topHardConstraintCountDelta = $candidateTopHardCount - $baselineTopHardCount
+        baselineTopStatusName = Get-StringFallback `
+            -Primary ([string](Get-JsonValue $Comparison "baselineTopStatusName")) `
+            -Fallback ([string](Get-JsonValue $BaselineEntry "topCaptureStatusName"))
+        candidateTopStatusName = Get-StringFallback `
+            -Primary ([string](Get-JsonValue $Comparison "candidateTopStatusName")) `
+            -Fallback ([string](Get-JsonValue $CandidateEntry "topCaptureStatusName"))
+        baselineTopStatusCount = Get-IntFallback `
+            -Primary (Get-JsonValue $Comparison "baselineTopStatusCount") `
+            -Fallback (Get-JsonValue $BaselineEntry "topCaptureStatusCount")
+        candidateTopStatusCount = Get-IntFallback `
+            -Primary (Get-JsonValue $Comparison "candidateTopStatusCount") `
+            -Fallback (Get-JsonValue $CandidateEntry "topCaptureStatusCount")
+    }
 }
 
 function Invoke-TraceComparison {
@@ -749,10 +1189,53 @@ function Build-MarkdownReport {
     $lines.Add("- Missing candidate scenarios: $($Report.missingCandidateCount)") | Out-Null
     $lines.Add("") | Out-Null
 
+    $captureSummary = Get-JsonValue $Report "captureReadinessComparisonSummary"
+    if ($null -ne $captureSummary -and [int](Get-JsonValue $captureSummary "scenarioComparisonCount") -gt 0) {
+        $lines.Add("## Capture Readiness Aggregate") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("| Gate | Pass | Fail |") | Out-Null
+        $lines.Add("|---|---:|---:|") | Out-Null
+        $lines.Add("| Hard gate | $($captureSummary.candidateHardGatePassCount) | $($captureSummary.candidateHardGateFailCount) |") | Out-Null
+        $lines.Add("| Strict preflight | $($captureSummary.candidateStrictPreflightPassCount) | $($captureSummary.candidateStrictPreflightFailCount) |") | Out-Null
+        $lines.Add("") | Out-Null
+
+        $statusCounts = @(Get-JsonArray $captureSummary "candidateStatusCounts")
+        if ($statusCounts.Count -gt 0) {
+            $lines.Add("| Candidate status | Count |") | Out-Null
+            $lines.Add("|---|---:|") | Out-Null
+            foreach ($item in $statusCounts) {
+                $lines.Add("| $($item.status) | $($item.count) |") | Out-Null
+            }
+            $lines.Add("") | Out-Null
+        }
+
+        $topConstraints = @(Get-JsonArray $captureSummary "candidateTopConstraintCounts")
+        if ($topConstraints.Count -gt 0) {
+            $lines.Add("| Top capture constraint | Samples |") | Out-Null
+            $lines.Add("|---|---:|") | Out-Null
+            foreach ($item in $topConstraints) {
+                $lines.Add("| $($item.constraint) | $($item.count) |") | Out-Null
+            }
+            $lines.Add("") | Out-Null
+        }
+
+        $topHardConstraints = @(Get-JsonArray $captureSummary "candidateTopHardConstraintCounts")
+        if ($topHardConstraints.Count -gt 0) {
+            $lines.Add("| Top capture hard gate | Samples |") | Out-Null
+            $lines.Add("|---|---:|") | Out-Null
+            foreach ($item in $topHardConstraints) {
+                $lines.Add("| $($item.constraint) | $($item.count) |") | Out-Null
+            }
+            $lines.Add("") | Out-Null
+        }
+    }
+
     $weakSignal = Get-JsonValue $Report "nr5WeakSignalComparisonSummary"
     if ($null -ne $weakSignal -and
         ([int](Get-JsonValue $weakSignal "baselineWeakInputSampleCount") -gt 0 -or
-            [int](Get-JsonValue $weakSignal "candidateWeakInputSampleCount") -gt 0)) {
+            [int](Get-JsonValue $weakSignal "candidateWeakInputSampleCount") -gt 0 -or
+            [double](Get-NumericValue (Get-JsonValue $weakSignal "baselineArtifactRiskScoreMax")) -gt 0.0 -or
+            [double](Get-NumericValue (Get-JsonValue $weakSignal "candidateArtifactRiskScoreMax")) -gt 0.0)) {
         $lines.Add("## NR5 Weak-Signal Aggregate") | Out-Null
         $lines.Add("") | Out-Null
         $lines.Add("| Metric | Baseline | Candidate | Delta |") | Out-Null
@@ -767,6 +1250,29 @@ function Build-MarkdownReport {
         $lines.Add("| Makeup max dB maximum | $($weakSignal.baselineMakeupMaxDbMax) | $($weakSignal.candidateMakeupMaxDbMax) | $($weakSignal.makeupMaxDbDelta) |") | Out-Null
         $lines.Add("| Recovery-drive movement average | $($weakSignal.baselineRecoveryDriveMovementAverage) | $($weakSignal.candidateRecoveryDriveMovementAverage) | $($weakSignal.recoveryDriveMovementDelta) |") | Out-Null
         $lines.Add("| Texture-fill average | $($weakSignal.baselineTextureFillAverage) | $($weakSignal.candidateTextureFillAverage) | $($weakSignal.textureFillAverageDelta) |") | Out-Null
+        $lines.Add("| Low-evidence lifted samples | $($weakSignal.baselineLowEvidenceLiftedSampleCount) | $($weakSignal.candidateLowEvidenceLiftedSampleCount) | $($weakSignal.lowEvidenceLiftedSampleDelta) |") | Out-Null
+        $lines.Add("| Low-evidence lifted percent max | $($weakSignal.baselineLowEvidenceLiftedPctMax) | $($weakSignal.candidateLowEvidenceLiftedPctMax) | $($weakSignal.lowEvidenceLiftedPctDelta) |") | Out-Null
+        $lines.Add("| Audio-alignment mismatch percent max | $($weakSignal.baselineAudioAlignmentMismatchPctMax) | $($weakSignal.candidateAudioAlignmentMismatchPctMax) | $($weakSignal.audioAlignmentMismatchPctDelta) |") | Out-Null
+        $lines.Add("| Artifact-risk score max | $($weakSignal.baselineArtifactRiskScoreMax) | $($weakSignal.candidateArtifactRiskScoreMax) | $($weakSignal.artifactRiskScoreDelta) |") | Out-Null
+        $lines.Add("") | Out-Null
+    }
+
+    $leveler = Get-JsonValue $Report "rxAudioLevelerComparisonSummary"
+    if ($null -ne $leveler -and
+        ([int](Get-JsonValue $leveler "baselineDiagnosticSampleCount") -gt 0 -or
+            [int](Get-JsonValue $leveler "candidateDiagnosticSampleCount") -gt 0)) {
+        $lines.Add("## RX Audio Leveler Aggregate") | Out-Null
+        $lines.Add("") | Out-Null
+        $lines.Add("| Metric | Baseline | Candidate | Delta |") | Out-Null
+        $lines.Add("|---|---:|---:|---:|") | Out-Null
+        $lines.Add("| Diagnostic samples | $($leveler.baselineDiagnosticSampleCount) | $($leveler.candidateDiagnosticSampleCount) | |") | Out-Null
+        $lines.Add("| Constrained samples | $($leveler.baselineConstrainedSampleCount) | $($leveler.candidateConstrainedSampleCount) | $($leveler.constrainedSampleDelta) |") | Out-Null
+        $lines.Add("| Constrained percent | $($leveler.baselineConstrainedPct) | $($leveler.candidateConstrainedPct) | $($leveler.constrainedPctDelta) |") | Out-Null
+        $lines.Add("| Boost-slew limited samples | $($leveler.baselineBoostSlewLimitedSampleCount) | $($leveler.candidateBoostSlewLimitedSampleCount) | $($leveler.boostSlewLimitedSampleDelta) |") | Out-Null
+        $lines.Add("| Peak-limited samples | $($leveler.baselinePeakLimitedSampleCount) | $($leveler.candidatePeakLimitedSampleCount) | $($leveler.peakLimitedSampleDelta) |") | Out-Null
+        $lines.Add("| Output-limited samples | $($leveler.baselineOutputLimitedSampleCount) | $($leveler.candidateOutputLimitedSampleCount) | $($leveler.outputLimitedSampleDelta) |") | Out-Null
+        $lines.Add("| Output RMS movement dB average | $($leveler.baselineOutputRmsMovementDbAverage) | $($leveler.candidateOutputRmsMovementDbAverage) | $($leveler.outputRmsMovementDbDelta) |") | Out-Null
+        $lines.Add("| Applied gain movement dB average | $($leveler.baselineAppliedGainMovementDbAverage) | $($leveler.candidateAppliedGainMovementDbAverage) | $($leveler.appliedGainMovementDbDelta) |") | Out-Null
         $lines.Add("") | Out-Null
     }
 
@@ -807,20 +1313,28 @@ function Build-MarkdownReport {
     if (@($Report.gateFailureDetails).Count -gt 0) {
         $lines.Add("## Gate Failures") | Out-Null
         $lines.Add("") | Out-Null
-        $lines.Add("| Scenario | Ready | OK Samples | Failed Samples | Hard Blockers |") | Out-Null
-        $lines.Add("|---|---:|---:|---:|---:|") | Out-Null
+        $lines.Add("| Scenario | Ready | Capture | Hard Gate | Strict Preflight | OK Samples | Failed Samples | Hard Blockers | Top Constraint | Top Hard Gate |") | Out-Null
+        $lines.Add("|---|---:|---|---:|---:|---:|---:|---:|---|---|") | Out-Null
         foreach ($item in @($Report.gateFailureDetails)) {
-            $lines.Add("| $($item.scenarioId) | $($item.candidateReadyForBenchmarkTrace) | $($item.candidateOkSampleCount) | $($item.candidateFailedSampleCount) | $($item.candidateHardBlockerSampleCount) |") | Out-Null
+            $topConstraint = Format-ReadinessItem `
+                -Name ([string](Get-JsonValue $item "candidateTopCaptureConstraintName")) `
+                -Count (Get-JsonValue $item "candidateTopCaptureConstraintCount")
+            $topHardConstraint = Format-ReadinessItem `
+                -Name ([string](Get-JsonValue $item "candidateTopCaptureHardConstraintName")) `
+                -Count (Get-JsonValue $item "candidateTopCaptureHardConstraintCount")
+            $lines.Add("| $($item.scenarioId) | $($item.candidateReadyForBenchmarkTrace) | $($item.candidateCaptureReadinessStatus) | $($item.candidateHardGatePass) | $($item.candidateStrictPreflightPass) | $($item.candidateOkSampleCount) | $($item.candidateFailedSampleCount) | $($item.candidateHardBlockerSampleCount) | $topConstraint | $topHardConstraint |") | Out-Null
         }
         $lines.Add("") | Out-Null
     }
 
     $lines.Add("## Scenario Summary") | Out-Null
     $lines.Add("") | Out-Null
-    $lines.Add("| Scenario | Baseline | Candidate | Ready | Regressions | Gates | Missing | Report |") | Out-Null
-    $lines.Add("|---|---|---|---:|---:|---:|---:|---|") | Out-Null
+    $lines.Add("| Scenario | Baseline | Candidate | Capture | Ready | Regressions | Gates | Missing | Report |") | Out-Null
+    $lines.Add("|---|---|---|---|---:|---:|---:|---:|---|") | Out-Null
     foreach ($item in @($Report.scenarioComparisons)) {
-        $lines.Add("| $($item.scenarioId) | $($item.baselineComparisonId) | $($item.candidateComparisonId) | $($item.readyForReview) | $($item.regressionCount) | $($item.gateFailureCount) | $($item.missingMetricValueCount) | $($item.reportPath) |") | Out-Null
+        $captureComparison = Get-JsonValue $item "captureReadinessComparison"
+        $captureStatus = [string](Get-JsonValue $captureComparison "candidateStatus")
+        $lines.Add("| $($item.scenarioId) | $($item.baselineComparisonId) | $($item.candidateComparisonId) | $captureStatus | $($item.readyForReview) | $($item.regressionCount) | $($item.gateFailureCount) | $($item.missingMetricValueCount) | $($item.reportPath) |") | Out-Null
     }
 
     return @($lines.ToArray())
@@ -887,7 +1401,19 @@ $metricRegressionDetails = New-Object System.Collections.Generic.List[object]
 $hardConstraintRegressionDetails = New-Object System.Collections.Generic.List[object]
 $missingMetricDetails = New-Object System.Collections.Generic.List[object]
 $gateFailureDetails = New-Object System.Collections.Generic.List[object]
+$metricDefinitions = New-Object System.Collections.Generic.List[object]
+$metricDefinitionIds = @{}
+$metricDefinitionSource = ""
 $nr5WeakSignalAccumulator = New-Nr5WeakSignalAccumulator
+$rxAudioLevelerAccumulator = New-RxAudioLevelerAccumulator
+$captureReadinessComparisonCount = 0
+$candidateHardGatePassCount = 0
+$candidateHardGateFailCount = 0
+$candidateStrictPreflightPassCount = 0
+$candidateStrictPreflightFailCount = 0
+$candidateCaptureReadinessStatusCounts = @{}
+$candidateTopCaptureConstraintCounts = @{}
+$candidateTopCaptureHardConstraintCounts = @{}
 
 foreach ($scenarioId in $scenarioIds) {
     $baselineForScenario = @()
@@ -943,7 +1469,9 @@ foreach ($scenarioId in $scenarioIds) {
             hardConstraintRegressionCount = 0
             gateFailureCount = 0
             missingMetricValueCount = 0
+            captureReadinessComparison = $null
             nr5WeakSignalComparison = $null
+            rxAudioLevelerComparison = $null
             error = $null
         }
 
@@ -968,8 +1496,67 @@ foreach ($scenarioId in $scenarioIds) {
             $scenarioRecord["hardConstraintRegressionCount"] = [int](Get-JsonValue $scenarioReport "hardConstraintRegressionCount")
             $scenarioRecord["gateFailureCount"] = [int](Get-JsonValue $scenarioReport "gateFailureCount")
             $scenarioRecord["missingMetricValueCount"] = [int](Get-JsonValue $scenarioReport "missingMetricValueCount")
+            $scenarioRecord["captureReadinessComparison"] = Add-IndexFallbackToCaptureReadinessComparison `
+                -Comparison (Get-JsonValue $scenarioReport "captureReadinessComparison") `
+                -BaselineEntry $baselineEntry `
+                -CandidateEntry $candidateEntry
             $scenarioRecord["nr5WeakSignalComparison"] = Get-JsonValue $scenarioReport "nr5WeakSignalComparison"
+            $scenarioRecord["rxAudioLevelerComparison"] = Get-JsonValue $scenarioReport "rxAudioLevelerComparison"
+            foreach ($metricDefinition in @(Get-JsonArray $scenarioReport "metricDefinitions")) {
+                $definitionId = [string](Get-JsonValue $metricDefinition "id")
+                if ([string]::IsNullOrWhiteSpace($definitionId)) {
+                    continue
+                }
+
+                $definitionKey = $definitionId.Trim().ToLowerInvariant()
+                if (-not $metricDefinitionIds.ContainsKey($definitionKey)) {
+                    $metricDefinitionIds[$definitionKey] = $true
+                    $metricDefinitions.Add($metricDefinition) | Out-Null
+                }
+            }
+            if ([string]::IsNullOrWhiteSpace($metricDefinitionSource)) {
+                $metricDefinitionSource = [string](Get-JsonValue $scenarioReport "metricDefinitionSource")
+            }
+            $captureReadinessComparison = $scenarioRecord["captureReadinessComparison"]
+            if ($null -ne $captureReadinessComparison) {
+                $captureReadinessComparisonCount++
+
+                Add-CountMapValue `
+                    -Map $candidateCaptureReadinessStatusCounts `
+                    -Name ([string](Get-JsonValue $captureReadinessComparison "candidateStatus"))
+
+                $candidateHardGatePass = Get-NullableTruthyField $captureReadinessComparison "candidateHardGatePass"
+                if ($candidateHardGatePass -eq $true) {
+                    $candidateHardGatePassCount++
+                }
+                elseif ($candidateHardGatePass -eq $false) {
+                    $candidateHardGateFailCount++
+                }
+
+                $candidateStrictPreflightPass = Get-NullableTruthyField $captureReadinessComparison "candidateStrictPreflightPass"
+                if ($candidateStrictPreflightPass -eq $true) {
+                    $candidateStrictPreflightPassCount++
+                }
+                elseif ($candidateStrictPreflightPass -eq $false) {
+                    $candidateStrictPreflightFailCount++
+                }
+
+                $topConstraintName = [string](Get-JsonValue $captureReadinessComparison "candidateTopConstraintName")
+                $topConstraintCount = Get-NumericValue (Get-JsonValue $captureReadinessComparison "candidateTopConstraintCount")
+                if ($null -eq $topConstraintCount -or $topConstraintCount -le 0.0) {
+                    $topConstraintCount = 1.0
+                }
+                Add-CountMapValue -Map $candidateTopCaptureConstraintCounts -Name $topConstraintName -Count $topConstraintCount
+
+                $topHardConstraintName = [string](Get-JsonValue $captureReadinessComparison "candidateTopHardConstraintName")
+                $topHardConstraintCount = Get-NumericValue (Get-JsonValue $captureReadinessComparison "candidateTopHardConstraintCount")
+                if ($null -eq $topHardConstraintCount -or $topHardConstraintCount -le 0.0) {
+                    $topHardConstraintCount = 1.0
+                }
+                Add-CountMapValue -Map $candidateTopCaptureHardConstraintCounts -Name $topHardConstraintName -Count $topHardConstraintCount
+            }
             Add-Nr5WeakSignalComparison -Accumulator $nr5WeakSignalAccumulator -Comparison $scenarioRecord["nr5WeakSignalComparison"]
+            Add-RxAudioLevelerComparison -Accumulator $rxAudioLevelerAccumulator -Comparison $scenarioRecord["rxAudioLevelerComparison"]
 
             foreach ($metric in (Get-JsonArray $scenarioReport "metricComparisons")) {
                 $verdict = [string](Get-JsonValue $metric "verdict")
@@ -1026,6 +1613,13 @@ foreach ($scenarioId in $scenarioIds) {
                     candidateOkSampleCount = Get-JsonValue $scenarioReport "candidateOkSampleCount"
                     candidateFailedSampleCount = Get-JsonValue $scenarioReport "candidateFailedSampleCount"
                     candidateHardBlockerSampleCount = Get-JsonValue $scenarioReport "candidateHardBlockerSampleCount"
+                    candidateCaptureReadinessStatus = [string](Get-JsonValue $captureReadinessComparison "candidateStatus")
+                    candidateHardGatePass = Get-NullableTruthyField $captureReadinessComparison "candidateHardGatePass"
+                    candidateStrictPreflightPass = Get-NullableTruthyField $captureReadinessComparison "candidateStrictPreflightPass"
+                    candidateTopCaptureConstraintName = [string](Get-JsonValue $captureReadinessComparison "candidateTopConstraintName")
+                    candidateTopCaptureConstraintCount = Get-NullableIntField $captureReadinessComparison "candidateTopConstraintCount"
+                    candidateTopCaptureHardConstraintName = [string](Get-JsonValue $captureReadinessComparison "candidateTopHardConstraintName")
+                    candidateTopCaptureHardConstraintCount = Get-NullableIntField $captureReadinessComparison "candidateTopHardConstraintCount"
                     reportPath = $scenarioReportDisplayPath
                 }) | Out-Null
             }
@@ -1054,6 +1648,17 @@ $readyForReview = ($comparisonCount -gt 0 -and
     $missingMetricValueCount -eq 0)
 
 $nr5WeakSignalComparisonSummary = Complete-Nr5WeakSignalSummary $nr5WeakSignalAccumulator
+$rxAudioLevelerComparisonSummary = Complete-RxAudioLevelerSummary $rxAudioLevelerAccumulator
+$captureReadinessComparisonSummary = [ordered]@{
+    scenarioComparisonCount = $captureReadinessComparisonCount
+    candidateHardGatePassCount = $candidateHardGatePassCount
+    candidateHardGateFailCount = $candidateHardGateFailCount
+    candidateStrictPreflightPassCount = $candidateStrictPreflightPassCount
+    candidateStrictPreflightFailCount = $candidateStrictPreflightFailCount
+    candidateStatusCounts = @(Convert-CountMapToRecords -Map $candidateCaptureReadinessStatusCounts -NameField "status")
+    candidateTopConstraintCounts = @(Convert-CountMapToRecords -Map $candidateTopCaptureConstraintCounts -NameField "constraint")
+    candidateTopHardConstraintCounts = @(Convert-CountMapToRecords -Map $candidateTopCaptureHardConstraintCounts -NameField "constraint")
+}
 $metricRegressionSafetyClassCounts = New-DetailSafetyClassCounts -Items @($metricRegressionDetails.ToArray())
 $metricMissingSafetyClassCounts = New-DetailSafetyClassCounts -Items @($missingMetricDetails.ToArray())
 
@@ -1097,7 +1702,12 @@ $report = [ordered]@{
     hardConstraintRegressionCount = $hardConstraintRegressionCount
     gateFailureCount = $gateFailureCount
     missingMetricValueCount = $missingMetricValueCount
+    metricDefinitionSource = if ([string]::IsNullOrWhiteSpace($metricDefinitionSource)) { "compare-dsp-live-diagnostics-traces" } else { $metricDefinitionSource }
+    metricDefinitionCount = @($metricDefinitions.ToArray()).Count
+    metricDefinitions = @($metricDefinitions.ToArray())
+    captureReadinessComparisonSummary = $captureReadinessComparisonSummary
     nr5WeakSignalComparisonSummary = $nr5WeakSignalComparisonSummary
+    rxAudioLevelerComparisonSummary = $rxAudioLevelerComparisonSummary
     metricRegressionSafetyClassCounts = @($metricRegressionSafetyClassCounts)
     metricMissingSafetyClassCounts = @($metricMissingSafetyClassCounts)
     metricRegressionDetails = @($metricRegressionDetails.ToArray())

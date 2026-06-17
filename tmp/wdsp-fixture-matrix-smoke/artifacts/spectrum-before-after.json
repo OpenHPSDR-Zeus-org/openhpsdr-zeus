@@ -1,12 +1,12 @@
 {
   "schemaVersion": 1,
   "tool": "dsp-fixture-evidence",
-  "generatedUtc": "2026-06-16T14:14:34.7247537+00:00",
+  "generatedUtc": "2026-06-16T16:25:22.9126522+00:00",
   "artifactId": "spectrum-before-after",
   "fixtureScenarioScope": "offline-fixture-ready",
   "evidenceEngine": "wdsp",
   "wdspRuntimeRid": "win-x64",
-  "wdspRuntimeSha256": "d684676acdb803fa9912c64fe707317eadbf03a0ccde2f068119378507465ede",
+  "wdspRuntimeSha256": "422860677d7aeb6dd797f71d5768a86e3949a06dd93c014cc8f516a24bfc62da",
   "wdspRuntimeStatus": "found",
   "scenarioCount": 1,
   "fileCount": 3,
@@ -17,7 +17,7 @@
       "comparisonId": "current-zeus",
       "kind": "wdsp-spectrum-summary",
       "sampleRateHz": 48000,
-      "sha256": "6512478ED3A7733FB171B043E2FB248CE4460C69CCA31162C461584787FB8F12"
+      "sha256": "1D56F1AE9F28C1ADCC5508EA12DBBCBBD96C540A3F32FE6D26109C64802AA518"
     },
     {
       "path": "artifacts/offline-fixtures/spectrum/weak-cw-carrier/thetis-parity.json",
@@ -25,7 +25,7 @@
       "comparisonId": "thetis-parity",
       "kind": "wdsp-spectrum-summary",
       "sampleRateHz": 48000,
-      "sha256": "D51206ED6B1CCDD4449759EB71D812E80CCB8E01CBDBD39A2FB91617AE358FAE"
+      "sha256": "53DE60D29E99ED84DF28AE8D2ABC0C62CE299E9E6E73B4CE04FD401C2F656B45"
     },
     {
       "path": "artifacts/offline-fixtures/spectrum/weak-cw-carrier/candidate-under-test.json",
@@ -33,7 +33,7 @@
       "comparisonId": "candidate-under-test",
       "kind": "wdsp-spectrum-summary",
       "sampleRateHz": 48000,
-      "sha256": "73203C3E149F9D1A7D3D2B692298DFA7486718AEEDAFFE3F35996E6133A0DB68"
+      "sha256": "66C2B9495CCE8E30A4BE67736D18BA1FB1018263528ED9BFCD73A491433E91AB"
     }
   ]
 }

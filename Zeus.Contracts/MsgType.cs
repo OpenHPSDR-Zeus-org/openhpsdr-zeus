@@ -57,6 +57,14 @@ public enum MsgType : byte
     // and stay visually distinct from the 0x1x server→client telemetry.
     MicPcm = 0x20,
 
+    // Client → server (control). Asks the server to start/stop streaming RX
+    // audio (0x02) over the websocket to this client. Payload: [enable:u8].
+    // In server/browser mode 0x02 already flows for playback so this is a
+    // hint; in desktop/native-audio mode the server withholds 0x02 until a
+    // client requests it (refcounted) so the browser-side DeepCW decoder can
+    // be fed without duplicating the audio stream.
+    AudioStreamRequest = 0x21,
+
     // Server → client (TX telemetry + protection)
     TxMeters = 0x11,
     TxStatus = 0x12,

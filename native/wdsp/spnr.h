@@ -74,7 +74,23 @@ typedef struct _spnr {
   double agc_makeup_gain;
   double agc_recovery_hold;
   double agc_continuity_hold;
+  double agc_recent_speech_hold;
   double agc_weak_signal_memory;
+  int adjacent_noise_usable;
+  int adjacent_noise_bins;
+  int adjacent_noise_left_bins;
+  int adjacent_noise_right_bins;
+  double adjacent_noise_floor_db;
+  double adjacent_noise_p10_db;
+  double adjacent_noise_p50_db;
+  double adjacent_noise_p90_db;
+  double adjacent_noise_left_floor_db;
+  double adjacent_noise_right_floor_db;
+  double adjacent_noise_slope_db_per_khz;
+  double adjacent_noise_rejected_pct;
+  double adjacent_noise_trust;
+  double adjacent_noise_side_balance;
+  double adjacent_noise_asymmetry_db;
   double agc_attack;
   double agc_release;
   double diag_input_rms;
@@ -100,6 +116,8 @@ typedef struct _spnr {
   double diag_peak_evidence;
   double diag_peak_limit;
   double diag_peak_reduction_db;
+  double diag_adjacent_noise_trust;
+  double diag_adjacent_noise_drive;
 } spnr, *SPNR;
 
 extern SPNR create_spnr(int run, int position, int size, double* in, double* out,
