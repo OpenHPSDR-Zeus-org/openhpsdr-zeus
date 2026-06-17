@@ -85,6 +85,10 @@ const DEFAULT_POP_FLOOR_DB = 3;
 const DEFAULT_POP_SPAN_DB = 30;
 const DEFAULT_POP_GAMMA = 0.5;
 const DEFAULT_POP_RENDER_INTENSITY = 72;
+const LEGACY_WATERFALL_RELIEF_DEPTH = 48;
+const LEGACY_WATERFALL_SMOOTHNESS = 42;
+const DEFAULT_WATERFALL_RELIEF_DEPTH = 92;
+const DEFAULT_WATERFALL_SMOOTHNESS = 64;
 // Display-only persistence for weak ridges. The WDSP display frame rate can
 // miss short CW/digital bursts or make weak voice traces flicker; a fast peak
 // hold lets real signal energy leave a short visual afterimage while the gate
@@ -192,6 +196,10 @@ export type SignalEnhanceTuning = {
   popGamma: number;
   /** 0..100 strength for the Signal Pop shader glow and active surface chrome. */
   popRenderIntensity: number;
+  /** 0..100 height-field lighting depth for the Pop waterfall relief renderer. */
+  waterfallReliefDepth: number;
+  /** 0..100 shader-side neighbour smoothing for faint Pop waterfall traces. */
+  waterfallSmoothness: number;
   /** Confidence threshold required before signal energy can persist/glow. */
   coherenceHoldGate: number;
   /** Display-only dB lift for repeated/neighbour-supported signal energy. */
@@ -267,6 +275,8 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     popSpanDb: DEFAULT_POP_SPAN_DB,
     popGamma: DEFAULT_POP_GAMMA,
     popRenderIntensity: DEFAULT_POP_RENDER_INTENSITY,
+    waterfallReliefDepth: DEFAULT_WATERFALL_RELIEF_DEPTH,
+    waterfallSmoothness: DEFAULT_WATERFALL_SMOOTHNESS,
     coherenceHoldGate: COHERENCE_HOLD_GATE,
     coherenceBoostDb: COHERENCE_VISUAL_BOOST_DB,
     ridgeBoost: POP_RIDGE_BOOST,
@@ -282,6 +292,8 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     popSpanDb: 24,
     popGamma: 0.42,
     popRenderIntensity: 92,
+    waterfallReliefDepth: 100,
+    waterfallSmoothness: 70,
     coherenceHoldGate: 0.38,
     coherenceBoostDb: 5.5,
     ridgeBoost: 0.5,
@@ -297,6 +309,8 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     popSpanDb: 22,
     popGamma: 0.46,
     popRenderIntensity: 88,
+    waterfallReliefDepth: 96,
+    waterfallSmoothness: 62,
     coherenceHoldGate: 0.4,
     coherenceBoostDb: 5,
     ridgeBoost: 0.65,
@@ -312,6 +326,8 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     popSpanDb: 26,
     popGamma: 0.48,
     popRenderIntensity: 84,
+    waterfallReliefDepth: 94,
+    waterfallSmoothness: 66,
     coherenceHoldGate: 0.42,
     coherenceBoostDb: 4.5,
     ridgeBoost: 0.55,
@@ -327,6 +343,8 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     popSpanDb: 34,
     popGamma: 0.55,
     popRenderIntensity: 62,
+    waterfallReliefDepth: 84,
+    waterfallSmoothness: 58,
     coherenceHoldGate: 0.48,
     coherenceBoostDb: 3.5,
     ridgeBoost: 0.32,
@@ -342,6 +360,8 @@ export const SIGNAL_ENHANCE_PROFILES: Record<SignalEnhancePresetId, SignalEnhanc
     popSpanDb: 28,
     popGamma: 0.5,
     popRenderIntensity: 78,
+    waterfallReliefDepth: 88,
+    waterfallSmoothness: 48,
     coherenceHoldGate: 0.55,
     coherenceBoostDb: 3,
     ridgeBoost: 0.45,
@@ -591,12 +611,23 @@ function isProfileId(v: unknown): v is SignalEnhanceProfileId {
 function normalizeTuning(raw: SignalEnhanceTuningPatch = {}, fallback: SignalEnhanceTuning = DEFAULT_TUNING): SignalEnhanceTuning {
   const profileId = isProfileId(raw.profileId) ? raw.profileId : fallback.profileId;
   const base = profileId === 'custom' ? fallback : { profileId, ...SIGNAL_ENHANCE_PROFILES[profileId] };
+  let waterfallReliefDepth = clampFinite(raw.waterfallReliefDepth, 0, 100, base.waterfallReliefDepth);
+  let waterfallSmoothness = clampFinite(raw.waterfallSmoothness, 0, 100, base.waterfallSmoothness);
+  if (
+    waterfallReliefDepth === LEGACY_WATERFALL_RELIEF_DEPTH &&
+    waterfallSmoothness === LEGACY_WATERFALL_SMOOTHNESS
+  ) {
+    waterfallReliefDepth = DEFAULT_WATERFALL_RELIEF_DEPTH;
+    waterfallSmoothness = DEFAULT_WATERFALL_SMOOTHNESS;
+  }
   return {
     profileId,
     popFloorDb: clampFinite(raw.popFloorDb, 0, 12, base.popFloorDb),
     popSpanDb: clampFinite(raw.popSpanDb, 12, 60, base.popSpanDb),
     popGamma: clampFinite(raw.popGamma, 0.3, 1.2, base.popGamma),
     popRenderIntensity: clampFinite(raw.popRenderIntensity, 0, 100, base.popRenderIntensity),
+    waterfallReliefDepth,
+    waterfallSmoothness,
     coherenceHoldGate: clampFinite(raw.coherenceHoldGate, 0.2, 0.8, base.coherenceHoldGate),
     coherenceBoostDb: clampFinite(raw.coherenceBoostDb, 0, 8, base.coherenceBoostDb),
     ridgeBoost: clampFinite(raw.ridgeBoost, 0, 0.8, base.ridgeBoost),
@@ -667,6 +698,8 @@ function persist(s: SignalEnhancePersisted): void {
       popSpanDb: s.popSpanDb,
       popGamma: s.popGamma,
       popRenderIntensity: s.popRenderIntensity,
+      waterfallReliefDepth: s.waterfallReliefDepth,
+      waterfallSmoothness: s.waterfallSmoothness,
       coherenceHoldGate: s.coherenceHoldGate,
       coherenceBoostDb: s.coherenceBoostDb,
       ridgeBoost: s.ridgeBoost,
@@ -694,6 +727,8 @@ export function signalEnhanceSettingsFromState(s: SignalEnhanceState): SignalEnh
     popSpanDb: s.popSpanDb,
     popGamma: s.popGamma,
     popRenderIntensity: s.popRenderIntensity,
+    waterfallReliefDepth: s.waterfallReliefDepth,
+    waterfallSmoothness: s.waterfallSmoothness,
     coherenceHoldGate: s.coherenceHoldGate,
     coherenceBoostDb: s.coherenceBoostDb,
     ridgeBoost: s.ridgeBoost,
@@ -720,6 +755,8 @@ export const useSignalEnhanceStore = create<SignalEnhanceState>((set, get) => ({
   popSpanDb: persisted.popSpanDb,
   popGamma: persisted.popGamma,
   popRenderIntensity: persisted.popRenderIntensity,
+  waterfallReliefDepth: persisted.waterfallReliefDepth,
+  waterfallSmoothness: persisted.waterfallSmoothness,
   coherenceHoldGate: persisted.coherenceHoldGate,
   coherenceBoostDb: persisted.coherenceBoostDb,
   ridgeBoost: persisted.ridgeBoost,

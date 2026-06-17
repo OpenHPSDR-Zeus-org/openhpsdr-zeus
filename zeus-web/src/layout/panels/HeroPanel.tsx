@@ -48,6 +48,7 @@ import { GripVertical, X } from 'lucide-react';
 import { Panadapter } from '../../components/Panadapter';
 import { Waterfall } from '../../components/Waterfall';
 import { ZoomControl } from '../../components/ZoomControl';
+import { WaterfallSpeedControl } from '../../components/WaterfallSpeedControl';
 import { LeafletWorldMap } from '../../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../../components/design/LeafletMapErrorBoundary';
 import { useConnectionStore } from '../../state/connection-store';
@@ -268,6 +269,7 @@ export function HeroPanel({ onRemove, tile }: HeroPanelProps = {}) {
           onMouseDown={stopDrag}
         >
           <ZoomControl />
+          <WaterfallSpeedControl />
           {terminatorActive && contact && mapAvailable && (
             <>
               <button
