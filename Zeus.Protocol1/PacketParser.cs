@@ -419,6 +419,100 @@ internal static class PacketParser
         return true;
     }
 
+    // ---- Standard HPSDR dual-receiver layout (2 DDCs) ---------------------
+    // When the host requests NumReceiversMinusOne=1, the radio interleaves two
+    // receivers in the EP6 stream. This is the canonical Protocol-1 N-receiver
+    // layout (Thetis networkproto1.c:358 — `spr = 504 / (6*nddc + 2)`,
+    // `k = 8 + isample*(6*nddc+2) + iddc*6`): each sample time-slot is
+    // (6*nddc + 2) bytes, here 6*2 + 2 = 14:
+    //   3I+3Q DDC0 (RX1, operator's main receiver) — slot offset 0
+    //   3I+3Q DDC1 (RX2, second receiver at its own NCO) — slot offset 6
+    //   2 bytes mic (mic/line in; ignored for RX)
+    // 504 / 14 = 36 sample slots per USB-frame; 72 paired samples per packet
+    // per DDC. Used by ANAN/Orion-class dual-ADC boards (and Hermes) for a
+    // basic non-diversity two-receiver session. NOTE: Orion diversity / 5-DDC
+    // and PureSignal (4-DDC) configs remap DDC→RX differently — those are NOT
+    // handled here (see TryParseHl2Ps4DdcPacket for the PS path).
+    public const int TwoDdcBytesPerSlot = 14;        // 2 × (3I+3Q) + 2 mic
+    public const int TwoDdcSamplesPerUsbFrame = UsbPayloadLength / TwoDdcBytesPerSlot; // 36
+    public const int TwoDdcSamplesPerPacket = TwoDdcSamplesPerUsbFrame * 2;            // 72
+
+    /// <summary>
+    /// Decode the two interleaved DDC streams from a standard dual-receiver EP6
+    /// packet (NumReceiversMinusOne=1). Each output buffer must have room for at
+    /// least <c>2 × <see cref="TwoDdcSamplesPerPacket"/></c> doubles (interleaved
+    /// I/Q). Returns false on bad framing. Telemetry + ADC-overload extraction
+    /// mirrors the single-DDC parser (identical <c>usb[3..8]</c> wire format);
+    /// only the per-sample payload layout differs.
+    /// </summary>
+    public static bool TryParse2DdcPacket(
+        ReadOnlySpan<byte> packet,
+        Span<double> ddc0Out, Span<double> ddc1Out,
+        out uint sequence,
+        out int complexSamples,
+        out TelemetryReading telemetry0,
+        out TelemetryReading telemetry1,
+        out byte adcOverloadBits)
+    {
+        sequence = 0;
+        complexSamples = 0;
+        telemetry0 = default;
+        telemetry1 = default;
+        adcOverloadBits = 0;
+
+        if (packet.Length != PacketLength) return false;
+        if (packet[0] != MetisMagic0 || packet[1] != MetisMagic1) return false;
+        if (packet[2] != MetisTypeDataFrame) return false;
+        if (packet[3] != MetisEp6) return false;
+
+        sequence = BinaryPrimitives.ReadUInt32BigEndian(packet[4..8]);
+
+        int needed = 2 * TwoDdcSamplesPerPacket;
+        if (ddc0Out.Length < needed || ddc1Out.Length < needed) return false;
+
+        int wrote = 0;
+        for (int frame = 0; frame < 2; frame++)
+        {
+            int frameStart = MetisHeaderLength + frame * UsbFrameLength;
+            ReadOnlySpan<byte> usb = packet.Slice(frameStart, UsbFrameLength);
+            if (usb[0] != Sync || usb[1] != Sync || usb[2] != Sync) return false;
+
+            // Same C&C echo extraction as the single-DDC parser (TryParsePacket).
+            byte c0 = usb[3];
+            int addr = (c0 >> 3) & 0x1F;
+            if (addr is 1 or 2 or 3)
+            {
+                var reading = new TelemetryReading(
+                    C0Address: c0,
+                    Ain0: BinaryPrimitives.ReadUInt16BigEndian(usb.Slice(4, 2)),
+                    Ain1: BinaryPrimitives.ReadUInt16BigEndian(usb.Slice(6, 2)));
+                if (frame == 0) telemetry0 = reading;
+                else telemetry1 = reading;
+            }
+            adcOverloadBits |= (byte)(usb[4] & 0x01);
+            adcOverloadBits |= (byte)((usb[5] & 0x01) << 1);
+
+            ReadOnlySpan<byte> payload = usb[UsbHeaderLength..];
+            for (int g = 0; g < TwoDdcSamplesPerUsbFrame; g++)
+            {
+                int off = g * TwoDdcBytesPerSlot;
+                int i0 = ReadInt24BigEndian(payload.Slice(off,     3));
+                int q0 = ReadInt24BigEndian(payload.Slice(off + 3, 3));
+                int i1 = ReadInt24BigEndian(payload.Slice(off + 6, 3));
+                int q1 = ReadInt24BigEndian(payload.Slice(off + 9, 3));
+                // off+12, off+13 = mic (ignored).
+                ddc0Out[wrote]     = ScaleInt24(i0);
+                ddc0Out[wrote + 1] = ScaleInt24(q0);
+                ddc1Out[wrote]     = ScaleInt24(i1);
+                ddc1Out[wrote + 1] = ScaleInt24(q1);
+                wrote += 2;
+            }
+        }
+
+        complexSamples = TwoDdcSamplesPerPacket;
+        return true;
+    }
+
     /// <summary>
     /// Sequence gap counter state; zero-initialized.
     /// </summary>

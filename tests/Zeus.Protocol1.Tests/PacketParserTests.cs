@@ -377,6 +377,103 @@ public class PacketParserTests
         Assert.Equal(0x03, bits);
     }
 
+    // ---- Standard dual-receiver 2-DDC layout (RX2) ------------------------
+    //
+    // NumReceiversMinusOne=1 interleaves DDC0 (RX1) and DDC1 (RX2) in 14-byte
+    // sample slots (6 bytes I/Q each + 2 mic), 36 samples per USB frame, 72 per
+    // packet per DDC. TryParse2DdcPacket must split the two streams into their
+    // own buffers so RX2 demodulates its own NCO instead of a CTUN-shifted copy
+    // of RX1 (the "duplicate waterfall" bug). Layout mirrors Thetis
+    // networkproto1.c:358 (`spr = 504/(6*nddc+2)`, slot offset `iddc*6`).
+
+    private static void WriteInt24(Span<byte> dst, int value)
+    {
+        dst[0] = (byte)((value >> 16) & 0xFF);
+        dst[1] = (byte)((value >> 8) & 0xFF);
+        dst[2] = (byte)(value & 0xFF);
+    }
+
+    private static byte[] BuildValid2DdcPacket(
+        uint seq,
+        Func<int, int> ddc0I, Func<int, int> ddc0Q,
+        Func<int, int> ddc1I, Func<int, int> ddc1Q)
+    {
+        var packet = new byte[PacketParser.PacketLength];
+        packet[0] = 0xEF;
+        packet[1] = 0xFE;
+        packet[2] = 0x01;
+        packet[3] = 0x06;
+        BinaryPrimitives.WriteUInt32BigEndian(packet.AsSpan(4, 4), seq);
+        int idx = 0;
+        for (int f = 0; f < 2; f++)
+        {
+            int frameStart = 8 + f * 512;
+            packet[frameStart + 0] = 0x7F;
+            packet[frameStart + 1] = 0x7F;
+            packet[frameStart + 2] = 0x7F;
+            int payloadStart = frameStart + 8;
+            for (int s = 0; s < PacketParser.TwoDdcSamplesPerUsbFrame; s++)
+            {
+                int off = payloadStart + s * PacketParser.TwoDdcBytesPerSlot;
+                WriteInt24(packet.AsSpan(off, 3), ddc0I(idx));
+                WriteInt24(packet.AsSpan(off + 3, 3), ddc0Q(idx));
+                WriteInt24(packet.AsSpan(off + 6, 3), ddc1I(idx));
+                WriteInt24(packet.AsSpan(off + 9, 3), ddc1Q(idx));
+                // off+12, off+13 = mic (left zero).
+                idx++;
+            }
+        }
+        return packet;
+    }
+
+    [Fact]
+    public void TryParse2DdcPacket_SplitsTheTwoReceivers()
+    {
+        // DDC0 = positive ramp; DDC1 = distinct negative ramp. A parser that
+        // mixed up slot offsets (or duplicated DDC0 into DDC1 — the live bug)
+        // would fail loudly.
+        byte[] packet = BuildValid2DdcPacket(
+            99,
+            ddc0I: n => 0x010000 + n,
+            ddc0Q: n => 0x020000 + n,
+            ddc1I: n => -(0x030000 + n),
+            ddc1Q: n => -(0x040000 + n));
+
+        int cap = 2 * PacketParser.TwoDdcSamplesPerPacket;
+        var d0 = new double[cap];
+        var d1 = new double[cap];
+        bool ok = PacketParser.TryParse2DdcPacket(
+            packet, d0, d1, out uint seq, out int samples, out _, out _, out _);
+
+        Assert.True(ok);
+        Assert.Equal(99u, seq);
+        Assert.Equal(PacketParser.TwoDdcSamplesPerPacket, samples);
+
+        // First sample of each stream matches its own wire value...
+        Assert.Equal(PacketParser.ScaleInt24(0x010000), d0[0], 12);
+        Assert.Equal(PacketParser.ScaleInt24(0x020000), d0[1], 12);
+        Assert.Equal(PacketParser.ScaleInt24(-0x030000), d1[0], 12);
+        Assert.Equal(PacketParser.ScaleInt24(-0x040000), d1[1], 12);
+
+        // ...and the last sample too (verifies the full 72-slot walk).
+        int last = samples - 1;
+        Assert.Equal(PacketParser.ScaleInt24(0x010000 + last), d0[2 * last], 12);
+        Assert.Equal(PacketParser.ScaleInt24(-(0x040000 + last)), d1[2 * last + 1], 12);
+
+        // The two receivers must be distinct — the whole point of the fix.
+        Assert.NotEqual(d0[0], d1[0]);
+    }
+
+    [Fact]
+    public void TryParse2DdcPacket_RejectsShortBuffers()
+    {
+        byte[] packet = BuildValid2DdcPacket(1, _ => 0, _ => 0, _ => 0, _ => 0);
+        var tooSmall = new double[2 * PacketParser.TwoDdcSamplesPerPacket - 1];
+        var ok = new double[2 * PacketParser.TwoDdcSamplesPerPacket];
+        Assert.False(PacketParser.TryParse2DdcPacket(packet, tooSmall, ok, out _, out _, out _, out _, out _));
+        Assert.False(PacketParser.TryParse2DdcPacket(packet, ok, tooSmall, out _, out _, out _, out _, out _));
+    }
+
     // ---- ExtractHardwarePtt -------------------------------------------------
     // C0[0] is the PTT/MOX echo set by the HL2 gateware whenever the radio is
     // keying — host-driven MOX, rear KEY tip grounded, or external PTT line
