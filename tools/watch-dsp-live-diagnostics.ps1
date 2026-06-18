@@ -3000,6 +3000,10 @@ function Build-Report {
     $nr5PassbandQualifiedWeakStrongFinalAudioGapDb = $null
     $nr5MixedWeakStrongGapThresholdDb = 6.0
     $nr5MixedWeakStrongFinalAudioGapThresholdDb = 4.0
+    $nr5MinimumMixedWeakInputSampleCount = 3
+    $nr5MinimumMixedStrongInputSampleCount = 3
+    $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount = 3
+    $nr5MinimumQualifiedWeakStrongInputSampleCount = 2
     $nr5SpeechQualifiedWeakStrongEvidenceReady = $false
     $nr5SpeechQualifiedWeakStrongOutputParityReady = $false
     $nr5SpeechQualifiedWeakStrongFinalAudioParityReady = $false
@@ -3056,6 +3060,16 @@ function Build-Report {
     elseif ($nr5SpeechQualifiedStrongOutputValues.Count -le 0) {
         $nr5SpeechQualifiedWeakStrongEvidenceStatus = "missing-strong-speech"
     }
+    elseif ($nr5SpeechQualifiedWeakOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount -and
+        $nr5SpeechQualifiedStrongOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount) {
+        $nr5SpeechQualifiedWeakStrongEvidenceStatus = "insufficient-weak-and-strong-speech-evidence"
+    }
+    elseif ($nr5SpeechQualifiedWeakOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount) {
+        $nr5SpeechQualifiedWeakStrongEvidenceStatus = "insufficient-weak-speech-evidence"
+    }
+    elseif ($nr5SpeechQualifiedStrongOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount) {
+        $nr5SpeechQualifiedWeakStrongEvidenceStatus = "insufficient-strong-speech-evidence"
+    }
     elseif ($null -ne $nr5SpeechQualifiedWeakStrongFinalAudioGapDb -and
         [Math]::Abs([double]$nr5SpeechQualifiedWeakStrongFinalAudioGapDb) -le $nr5MixedWeakStrongFinalAudioGapThresholdDb) {
         $nr5SpeechQualifiedWeakStrongEvidenceStatus = "ready-final-audio"
@@ -3067,12 +3081,16 @@ function Build-Report {
     else {
         $nr5SpeechQualifiedWeakStrongEvidenceStatus = "weak-strong-speech-gap-watch"
     }
-    $nr5SpeechQualifiedWeakStrongEvidenceReady =
+    $nr5SpeechQualifiedWeakStrongSampleCountReady = ($nr5SpeechQualifiedWeakOutputValues.Count -ge $nr5MinimumQualifiedWeakStrongInputSampleCount -and
+        $nr5SpeechQualifiedStrongOutputValues.Count -ge $nr5MinimumQualifiedWeakStrongInputSampleCount)
+    $nr5SpeechQualifiedWeakStrongEvidenceReady = ($nr5SpeechQualifiedWeakStrongSampleCountReady -and (
         [string]::Equals($nr5SpeechQualifiedWeakStrongEvidenceStatus, "ready-final-audio", [StringComparison]::OrdinalIgnoreCase) -or
-        [string]::Equals($nr5SpeechQualifiedWeakStrongEvidenceStatus, "ready-output", [StringComparison]::OrdinalIgnoreCase)
-    $nr5SpeechQualifiedWeakStrongOutputParityReady = ($null -ne $nr5SpeechQualifiedWeakStrongOutputGapDb -and
+        [string]::Equals($nr5SpeechQualifiedWeakStrongEvidenceStatus, "ready-output", [StringComparison]::OrdinalIgnoreCase)))
+    $nr5SpeechQualifiedWeakStrongOutputParityReady = ($nr5SpeechQualifiedWeakStrongSampleCountReady -and
+        $null -ne $nr5SpeechQualifiedWeakStrongOutputGapDb -and
         [Math]::Abs([double]$nr5SpeechQualifiedWeakStrongOutputGapDb) -le $nr5MixedWeakStrongGapThresholdDb)
-    $nr5SpeechQualifiedWeakStrongFinalAudioParityReady = ($null -ne $nr5SpeechQualifiedWeakStrongFinalAudioGapDb -and
+    $nr5SpeechQualifiedWeakStrongFinalAudioParityReady = ($nr5SpeechQualifiedWeakStrongSampleCountReady -and
+        $null -ne $nr5SpeechQualifiedWeakStrongFinalAudioGapDb -and
         [Math]::Abs([double]$nr5SpeechQualifiedWeakStrongFinalAudioGapDb) -le $nr5MixedWeakStrongFinalAudioGapThresholdDb)
     if ($nr5SampleCount -le 0) {
         $nr5PassbandQualifiedWeakStrongEvidenceStatus = "no-nr5-samples"
@@ -3086,6 +3104,16 @@ function Build-Report {
     elseif ($nr5PassbandQualifiedStrongOutputValues.Count -le 0) {
         $nr5PassbandQualifiedWeakStrongEvidenceStatus = "missing-strong-passband-speech"
     }
+    elseif ($nr5PassbandQualifiedWeakOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount -and
+        $nr5PassbandQualifiedStrongOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount) {
+        $nr5PassbandQualifiedWeakStrongEvidenceStatus = "insufficient-weak-and-strong-passband-speech-evidence"
+    }
+    elseif ($nr5PassbandQualifiedWeakOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount) {
+        $nr5PassbandQualifiedWeakStrongEvidenceStatus = "insufficient-weak-passband-speech-evidence"
+    }
+    elseif ($nr5PassbandQualifiedStrongOutputValues.Count -lt $nr5MinimumQualifiedWeakStrongInputSampleCount) {
+        $nr5PassbandQualifiedWeakStrongEvidenceStatus = "insufficient-strong-passband-speech-evidence"
+    }
     elseif ($null -ne $nr5PassbandQualifiedWeakStrongFinalAudioGapDb -and
         [Math]::Abs([double]$nr5PassbandQualifiedWeakStrongFinalAudioGapDb) -le $nr5MixedWeakStrongFinalAudioGapThresholdDb) {
         $nr5PassbandQualifiedWeakStrongEvidenceStatus = "ready-final-audio"
@@ -3097,12 +3125,16 @@ function Build-Report {
     else {
         $nr5PassbandQualifiedWeakStrongEvidenceStatus = "weak-strong-passband-speech-gap-watch"
     }
-    $nr5PassbandQualifiedWeakStrongEvidenceReady =
+    $nr5PassbandQualifiedWeakStrongSampleCountReady = ($nr5PassbandQualifiedWeakOutputValues.Count -ge $nr5MinimumQualifiedWeakStrongInputSampleCount -and
+        $nr5PassbandQualifiedStrongOutputValues.Count -ge $nr5MinimumQualifiedWeakStrongInputSampleCount)
+    $nr5PassbandQualifiedWeakStrongEvidenceReady = ($nr5PassbandQualifiedWeakStrongSampleCountReady -and (
         [string]::Equals($nr5PassbandQualifiedWeakStrongEvidenceStatus, "ready-final-audio", [StringComparison]::OrdinalIgnoreCase) -or
-        [string]::Equals($nr5PassbandQualifiedWeakStrongEvidenceStatus, "ready-output", [StringComparison]::OrdinalIgnoreCase)
-    $nr5PassbandQualifiedWeakStrongOutputParityReady = ($null -ne $nr5PassbandQualifiedWeakStrongOutputGapDb -and
+        [string]::Equals($nr5PassbandQualifiedWeakStrongEvidenceStatus, "ready-output", [StringComparison]::OrdinalIgnoreCase)))
+    $nr5PassbandQualifiedWeakStrongOutputParityReady = ($nr5PassbandQualifiedWeakStrongSampleCountReady -and
+        $null -ne $nr5PassbandQualifiedWeakStrongOutputGapDb -and
         [Math]::Abs([double]$nr5PassbandQualifiedWeakStrongOutputGapDb) -le $nr5MixedWeakStrongGapThresholdDb)
-    $nr5PassbandQualifiedWeakStrongFinalAudioParityReady = ($null -ne $nr5PassbandQualifiedWeakStrongFinalAudioGapDb -and
+    $nr5PassbandQualifiedWeakStrongFinalAudioParityReady = ($nr5PassbandQualifiedWeakStrongSampleCountReady -and
+        $null -ne $nr5PassbandQualifiedWeakStrongFinalAudioGapDb -and
         [Math]::Abs([double]$nr5PassbandQualifiedWeakStrongFinalAudioGapDb) -le $nr5MixedWeakStrongFinalAudioGapThresholdDb)
     if ($nr5SampleCount -le 0) {
         $nr5MixedWeakStrongEvidenceStatus = "no-nr5-samples"
@@ -3118,6 +3150,13 @@ function Build-Report {
     }
     elseif ($nr5EvidenceQualifiedWeakInputCount -le 0) {
         $nr5MixedWeakStrongEvidenceStatus = "low-evidence-weak-input"
+    }
+    elseif ($nr5WeakInputCount -lt $nr5MinimumMixedWeakInputSampleCount -or
+        $nr5EvidenceQualifiedWeakInputCount -lt $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount) {
+        $nr5MixedWeakStrongEvidenceStatus = "insufficient-weak-input-evidence"
+    }
+    elseif ($nr5StrongInputCount -lt $nr5MinimumMixedStrongInputSampleCount) {
+        $nr5MixedWeakStrongEvidenceStatus = "insufficient-strong-input-evidence"
     }
     elseif ($null -eq $nr5WeakStrongOutputGapDb -and $null -eq $nr5WeakStrongFinalAudioGapDb) {
         $nr5MixedWeakStrongEvidenceStatus = "missing-output-gap"
@@ -3147,6 +3186,9 @@ function Build-Report {
     $nr5MixedWeakStrongEvidenceReady =
         [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "ready", [StringComparison]::OrdinalIgnoreCase) -or
         [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "ready-final-audio", [StringComparison]::OrdinalIgnoreCase)
+    $nr5MixedWeakStrongInputEvidenceInsufficient =
+        [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "insufficient-weak-input-evidence", [StringComparison]::OrdinalIgnoreCase) -or
+        [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "insufficient-strong-input-evidence", [StringComparison]::OrdinalIgnoreCase)
     $nr5WeakStrongOutputParityReady = ($null -ne $nr5WeakStrongOutputGapDb -and
         [Math]::Abs([double]$nr5WeakStrongOutputGapDb) -le $nr5MixedWeakStrongGapThresholdDb)
     $nr5WeakStrongFinalAudioParityReady = ($null -ne $nr5WeakStrongFinalAudioGapDb -and
@@ -3212,6 +3254,8 @@ function Build-Report {
         "missing-weak-and-strong-input" { "retune-or-extend-capture-before-using-trace-for-mixed-evidence"; break }
         "missing-output-gap" { "inspect-nr5-output-diagnostics-before-parity-tuning"; break }
         "low-evidence-weak-input" { "capture-speech-qualified-weak-input-before-accepting-final-audio-parity"; break }
+        "insufficient-weak-input-evidence" { "extend-dwell-or-capture-more-qualified-weak-input-before-tuning"; break }
+        "insufficient-strong-input-evidence" { "extend-dwell-or-capture-more-strong-input-before-tuning"; break }
         "ready-final-audio" { "post-leveler-final-audio-parity-ready"; break }
         "ready" {
             if ([string]::Equals($nr5MixedWeakStrongFinalAudioGapDirection, "within-parity", [StringComparison]::OrdinalIgnoreCase)) {
@@ -3238,6 +3282,17 @@ function Build-Report {
         evidenceQualifiedWeakInputSampleCount = $nr5EvidenceQualifiedWeakInputCount
         strongInputSampleCount = $nr5StrongInputCount
         nearStrongInputSampleCount = $nr5NearStrongInputCount
+        minimumWeakInputSampleCount = $nr5MinimumMixedWeakInputSampleCount
+        minimumEvidenceQualifiedWeakInputSampleCount = $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount
+        minimumStrongInputSampleCount = $nr5MinimumMixedStrongInputSampleCount
+        minimumQualifiedWeakStrongInputSampleCount = $nr5MinimumQualifiedWeakStrongInputSampleCount
+        weakInputSampleDeficit = [Math]::Max(0, $nr5MinimumMixedWeakInputSampleCount - $nr5WeakInputCount)
+        evidenceQualifiedWeakInputSampleDeficit = [Math]::Max(0, $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount - $nr5EvidenceQualifiedWeakInputCount)
+        strongInputSampleDeficit = [Math]::Max(0, $nr5MinimumMixedStrongInputSampleCount - $nr5StrongInputCount)
+        speechQualifiedWeakInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5SpeechQualifiedWeakOutputValues.Count)
+        speechQualifiedStrongInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5SpeechQualifiedStrongOutputValues.Count)
+        passbandQualifiedWeakInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5PassbandQualifiedWeakOutputValues.Count)
+        passbandQualifiedStrongInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5PassbandQualifiedStrongOutputValues.Count)
         outputGapDb = $nr5WeakStrongOutputGapDb
         outputGapDirection = $nr5MixedWeakStrongOutputGapDirection
         outputGapExcessDb = $nr5MixedWeakStrongOutputGapExcessDb
@@ -3601,8 +3656,13 @@ function Build-Report {
     }
     if ($null -ne $nr5WeakStrongOutputGapDb -and [Math]::Abs([double]$nr5WeakStrongOutputGapDb) -gt 6.0 -and
         -not $nr5WeakStrongFinalAudioParityReady -and
-        -not $nr5PassbandQualifiedWeakStrongEvidenceReady) {
+        -not $nr5PassbandQualifiedWeakStrongEvidenceReady -and
+        [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "weak-strong-output-gap-watch", [StringComparison]::OrdinalIgnoreCase)) {
         $summaryRecommendations.Add("NR5 weak and strong outputs differ by more than 6 dB on average; tune normalization before judging faint-signal fidelity.") | Out-Null
+    }
+    elseif ($null -ne $nr5WeakStrongOutputGapDb -and [Math]::Abs([double]$nr5WeakStrongOutputGapDb) -gt 6.0 -and
+        $nr5MixedWeakStrongInputEvidenceInsufficient) {
+        $summaryRecommendations.Add("NR5 weak/strong output gap is visible, but the mixed trace has too few repeated weak or strong rows for tuning; extend dwell or recapture before changing NR5 makeup/leveler logic.") | Out-Null
     }
     elseif ($null -ne $nr5WeakStrongOutputGapDb -and [Math]::Abs([double]$nr5WeakStrongOutputGapDb) -gt 6.0 -and
         ($nr5WeakStrongFinalAudioParityReady -or $nr5PassbandQualifiedWeakStrongEvidenceReady)) {
@@ -3626,6 +3686,12 @@ function Build-Report {
     }
     elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "low-evidence-weak-input", [StringComparison]::OrdinalIgnoreCase)) {
         $summaryRecommendations.Add("NR5 mixed weak/strong final-audio parity only used low-evidence weak rows; capture speech-qualified weak input before accepting this as weak-signal parity evidence.") | Out-Null
+    }
+    elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "insufficient-weak-input-evidence", [StringComparison]::OrdinalIgnoreCase)) {
+        $summaryRecommendations.Add("NR5 trace has mixed weak/strong samples, but fewer than $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount qualified weak rows; extend dwell through a weak-signal fade before using this trace for parity tuning or acceptance.") | Out-Null
+    }
+    elseif ($nr5SampleCount -gt 0 -and [string]::Equals($nr5MixedWeakStrongEvidenceStatus, "insufficient-strong-input-evidence", [StringComparison]::OrdinalIgnoreCase)) {
+        $summaryRecommendations.Add("NR5 trace has weak samples, but fewer than $nr5MinimumMixedStrongInputSampleCount strong rows; extend dwell through a stronger speech burst before using this trace for mixed weak/strong parity.") | Out-Null
     }
     if ($nr5WeakDropoutCount -gt 0 -and
         $nr5WeakDropoutCandidateLossCount -eq 0 -and
@@ -3730,6 +3796,9 @@ function Build-Report {
     }
     elseif ($passbandEvidenceMissing) {
         $trendStatus = "passband-evidence-missing"
+    }
+    elseif ($nr5MixedWeakStrongInputEvidenceInsufficient) {
+        $trendStatus = "mixed-evidence-insufficient"
     }
     elseif ($nr5OutputMotionNeedsReview) {
         $trendStatus = "nr5-output-level-watch"
@@ -4218,6 +4287,12 @@ function Build-Report {
             weakInputSampleCount = $nr5WeakInputCount
             lowEvidenceWeakInputSampleCount = $nr5LowEvidenceWeakInputCount
             evidenceQualifiedWeakInputSampleCount = $nr5EvidenceQualifiedWeakInputCount
+            minimumMixedWeakInputSampleCount = $nr5MinimumMixedWeakInputSampleCount
+            minimumMixedStrongInputSampleCount = $nr5MinimumMixedStrongInputSampleCount
+            minimumMixedEvidenceQualifiedWeakInputSampleCount = $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount
+            minimumQualifiedWeakStrongInputSampleCount = $nr5MinimumQualifiedWeakStrongInputSampleCount
+            weakInputSampleDeficit = [Math]::Max(0, $nr5MinimumMixedWeakInputSampleCount - $nr5WeakInputCount)
+            evidenceQualifiedWeakInputSampleDeficit = [Math]::Max(0, $nr5MinimumMixedEvidenceQualifiedWeakInputSampleCount - $nr5EvidenceQualifiedWeakInputCount)
             weakRecoveredSampleCount = $nr5WeakRecoveredCount
             weakNearTargetSampleCount = $nr5WeakNearTargetCount
             weakDropoutSampleCount = $nr5WeakDropoutCount
@@ -4233,6 +4308,7 @@ function Build-Report {
             weakBelowInputSampleCount = $nr5WeakBelowInputCount
             strongInputThresholdDbfs = $nr5StrongInputThresholdDbfs
             strongInputSampleCount = $nr5StrongInputCount
+            strongInputSampleDeficit = [Math]::Max(0, $nr5MinimumMixedStrongInputSampleCount - $nr5StrongInputCount)
             nearStrongInputThresholdDbfs = $nr5NearStrongInputThresholdDbfs
             nearStrongInputSampleCount = $nr5NearStrongInputCount
             weakOutputDbfs = $nr5WeakOutputStats
@@ -4248,6 +4324,8 @@ function Build-Report {
             speechQualifiedWeakInputSampleCount = $nr5SpeechQualifiedWeakOutputValues.Count
             speechQualifiedStrongInputSampleCount = $nr5SpeechQualifiedStrongOutputValues.Count
             speechQualifiedNearStrongInputSampleCount = $nr5SpeechQualifiedNearStrongOutputValues.Count
+            speechQualifiedWeakInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5SpeechQualifiedWeakOutputValues.Count)
+            speechQualifiedStrongInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5SpeechQualifiedStrongOutputValues.Count)
             speechQualifiedWeakOutputDbfs = $nr5SpeechQualifiedWeakOutputStats
             speechQualifiedStrongOutputDbfs = $nr5SpeechQualifiedStrongOutputStats
             speechQualifiedNearStrongOutputDbfs = $nr5SpeechQualifiedNearStrongOutputStats
@@ -4263,6 +4341,8 @@ function Build-Report {
             passbandQualifiedWeakInputSampleCount = $nr5PassbandQualifiedWeakOutputValues.Count
             passbandQualifiedStrongInputSampleCount = $nr5PassbandQualifiedStrongOutputValues.Count
             passbandQualifiedNearStrongInputSampleCount = $nr5PassbandQualifiedNearStrongOutputValues.Count
+            passbandQualifiedWeakInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5PassbandQualifiedWeakOutputValues.Count)
+            passbandQualifiedStrongInputSampleDeficit = [Math]::Max(0, $nr5MinimumQualifiedWeakStrongInputSampleCount - $nr5PassbandQualifiedStrongOutputValues.Count)
             passbandQualifiedWeakOutputDbfs = $nr5PassbandQualifiedWeakOutputStats
             passbandQualifiedStrongOutputDbfs = $nr5PassbandQualifiedStrongOutputStats
             passbandQualifiedNearStrongOutputDbfs = $nr5PassbandQualifiedNearStrongOutputStats

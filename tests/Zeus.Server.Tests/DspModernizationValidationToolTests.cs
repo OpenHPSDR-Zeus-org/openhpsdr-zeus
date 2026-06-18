@@ -3329,7 +3329,11 @@ public sealed class DspModernizationValidationToolTests
                 new[]
                 {
                     Nr5LevelerAlignmentWatchSample(21, nr5InputDbfs: -54.0, nr5OutputDbfs: -35.0, levelerInputRmsDbfs: -52.0, levelerOutputRmsDbfs: -18.8),
-                    Nr5LevelerAlignmentWatchSample(22, nr5InputDbfs: -20.0, nr5OutputDbfs: -23.0, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -18.0)
+                    Nr5LevelerAlignmentWatchSample(22, nr5InputDbfs: -55.0, nr5OutputDbfs: -35.5, levelerInputRmsDbfs: -52.0, levelerOutputRmsDbfs: -19.0),
+                    Nr5LevelerAlignmentWatchSample(23, nr5InputDbfs: -53.0, nr5OutputDbfs: -34.5, levelerInputRmsDbfs: -52.0, levelerOutputRmsDbfs: -18.6),
+                    Nr5LevelerAlignmentWatchSample(24, nr5InputDbfs: -20.0, nr5OutputDbfs: -23.0, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -18.0),
+                    Nr5LevelerAlignmentWatchSample(25, nr5InputDbfs: -19.0, nr5OutputDbfs: -22.8, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -18.2),
+                    Nr5LevelerAlignmentWatchSample(26, nr5InputDbfs: -18.0, nr5OutputDbfs: -23.2, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -17.8)
                 });
 
             var reportPath = Path.Combine(bundleDir, "nr5-final-audio-parity.summary.json");
@@ -3361,6 +3365,145 @@ public sealed class DspModernizationValidationToolTests
             Assert.DoesNotContain(
                 root.GetProperty("recommendations").EnumerateArray(),
                 recommendation => (recommendation.GetString() ?? "").Contains("tune normalization before judging", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WatchLiveDiagnosticsRequiresRepeatedWeakRowsBeforeMixedGapTuning()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-insufficient-weak-evidence-watch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "nr5-insufficient-weak-evidence.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    Nr5LevelerAlignmentWatchSample(21, nr5InputDbfs: -34.1, nr5OutputDbfs: -33.1, levelerInputRmsDbfs: -48.1, levelerOutputRmsDbfs: -22.1),
+                    Nr5LevelerAlignmentWatchSample(22, nr5InputDbfs: -19.8, nr5OutputDbfs: -26.0, levelerInputRmsDbfs: -40.8, levelerOutputRmsDbfs: -18.0),
+                    Nr5LevelerAlignmentWatchSample(23, nr5InputDbfs: -11.2, nr5OutputDbfs: -20.4, levelerInputRmsDbfs: -35.3, levelerOutputRmsDbfs: -28.9),
+                    Nr5LevelerAlignmentWatchSample(24, nr5InputDbfs: -9.0, nr5OutputDbfs: -20.4, levelerInputRmsDbfs: -35.4, levelerOutputRmsDbfs: -29.0)
+                });
+
+            var reportPath = Path.Combine(bundleDir, "nr5-insufficient-weak-evidence.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            var weakWatch = root.GetProperty("nr5WeakSignalWatch");
+            Assert.Equal("insufficient-weak-input-evidence", weakWatch.GetProperty("mixedWeakStrongEvidenceStatus").GetString());
+            Assert.False(weakWatch.GetProperty("mixedWeakStrongEvidenceReady").GetBoolean());
+            Assert.Equal(1, weakWatch.GetProperty("weakInputSampleCount").GetInt32());
+            Assert.Equal(1, weakWatch.GetProperty("evidenceQualifiedWeakInputSampleCount").GetInt32());
+            Assert.Equal(2, weakWatch.GetProperty("weakInputSampleDeficit").GetInt32());
+            Assert.Equal(2, weakWatch.GetProperty("evidenceQualifiedWeakInputSampleDeficit").GetInt32());
+            Assert.Equal(0, weakWatch.GetProperty("strongInputSampleDeficit").GetInt32());
+            Assert.True(Math.Abs(weakWatch.GetProperty("weakStrongOutputGapDb").GetDouble()) > 6.0);
+
+            var focus = weakWatch.GetProperty("mixedWeakStrongTuningFocus");
+            Assert.Equal(
+                "extend-dwell-or-capture-more-qualified-weak-input-before-tuning",
+                focus.GetProperty("preferredAction").GetString());
+            Assert.Equal(2, focus.GetProperty("weakInputSampleDeficit").GetInt32());
+            Assert.Equal(2, focus.GetProperty("evidenceQualifiedWeakInputSampleDeficit").GetInt32());
+
+            Assert.Contains(
+                root.GetProperty("recommendations").EnumerateArray(),
+                recommendation => (recommendation.GetString() ?? "").Contains("too few repeated weak or strong rows for tuning", StringComparison.Ordinal));
+            Assert.DoesNotContain(
+                root.GetProperty("recommendations").EnumerateArray(),
+                recommendation => (recommendation.GetString() ?? "").Contains("tune normalization before judging", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WatchLiveDiagnosticsDoesNotPromoteSingleQualifiedRowParity()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-single-qualified-parity-watch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "nr5-single-qualified-parity.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    Nr5LevelerAlignmentWatchSample(31, nr5InputDbfs: -54.0, nr5OutputDbfs: -55.0, levelerInputRmsDbfs: -85.0, levelerOutputRmsDbfs: -85.0),
+                    Nr5LevelerAlignmentWatchSample(32, nr5InputDbfs: -54.0, nr5OutputDbfs: -35.0, levelerInputRmsDbfs: -52.0, levelerOutputRmsDbfs: -18.8),
+                    Nr5LevelerAlignmentWatchSample(33, nr5InputDbfs: -53.0, nr5OutputDbfs: -55.0, levelerInputRmsDbfs: -85.0, levelerOutputRmsDbfs: -85.0),
+                    Nr5LevelerAlignmentWatchSample(34, nr5InputDbfs: -21.0, nr5OutputDbfs: -24.0, levelerInputRmsDbfs: -60.0, levelerOutputRmsDbfs: -48.4),
+                    Nr5LevelerAlignmentWatchSample(35, nr5InputDbfs: -20.0, nr5OutputDbfs: -23.0, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -18.0),
+                    Nr5LevelerAlignmentWatchSample(36, nr5InputDbfs: -19.0, nr5OutputDbfs: -24.5, levelerInputRmsDbfs: -60.0, levelerOutputRmsDbfs: -48.4)
+                });
+
+            var reportPath = Path.Combine(bundleDir, "nr5-single-qualified-parity.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var weakWatch = reportDoc.RootElement.GetProperty("nr5WeakSignalWatch");
+            Assert.Equal("weak-strong-output-gap-watch", weakWatch.GetProperty("mixedWeakStrongEvidenceStatus").GetString());
+            Assert.False(weakWatch.GetProperty("mixedWeakStrongEvidenceReady").GetBoolean());
+            Assert.Equal(3, weakWatch.GetProperty("weakInputSampleCount").GetInt32());
+            Assert.Equal(3, weakWatch.GetProperty("evidenceQualifiedWeakInputSampleCount").GetInt32());
+            Assert.Equal(3, weakWatch.GetProperty("strongInputSampleCount").GetInt32());
+            Assert.Equal("insufficient-weak-and-strong-speech-evidence", weakWatch.GetProperty("speechQualifiedMixedWeakStrongEvidenceStatus").GetString());
+            Assert.False(weakWatch.GetProperty("speechQualifiedMixedWeakStrongEvidenceReady").GetBoolean());
+            Assert.False(weakWatch.GetProperty("speechQualifiedWeakStrongFinalAudioParityReady").GetBoolean());
+            Assert.Equal(1, weakWatch.GetProperty("speechQualifiedWeakInputSampleCount").GetInt32());
+            Assert.Equal(1, weakWatch.GetProperty("speechQualifiedStrongInputSampleCount").GetInt32());
+            Assert.Equal(0.8, weakWatch.GetProperty("speechQualifiedWeakStrongFinalAudioGapDb").GetDouble(), precision: 3);
+
+            var focus = weakWatch.GetProperty("mixedWeakStrongTuningFocus");
+            Assert.Equal(1, focus.GetProperty("speechQualifiedWeakInputSampleDeficit").GetInt32());
+            Assert.Equal(1, focus.GetProperty("speechQualifiedStrongInputSampleDeficit").GetInt32());
+            Assert.Equal("insufficient-weak-and-strong-speech-evidence", focus.GetProperty("speechQualifiedStatus").GetString());
         }
         finally
         {
@@ -3557,8 +3700,10 @@ public sealed class DspModernizationValidationToolTests
                 {
                     Nr5LevelerAlignmentWatchSample(31, nr5InputDbfs: -54.0, nr5OutputDbfs: -55.0, levelerInputRmsDbfs: -85.0, levelerOutputRmsDbfs: -85.0),
                     Nr5LevelerAlignmentWatchSample(32, nr5InputDbfs: -54.0, nr5OutputDbfs: -35.0, levelerInputRmsDbfs: -52.0, levelerOutputRmsDbfs: -18.8),
+                    Nr5LevelerAlignmentWatchSample(35, nr5InputDbfs: -53.0, nr5OutputDbfs: -34.8, levelerInputRmsDbfs: -52.0, levelerOutputRmsDbfs: -18.8),
                     Nr5LevelerAlignmentWatchSample(33, nr5InputDbfs: -21.0, nr5OutputDbfs: -24.0, levelerInputRmsDbfs: -60.0, levelerOutputRmsDbfs: -48.4),
-                    Nr5LevelerAlignmentWatchSample(34, nr5InputDbfs: -20.0, nr5OutputDbfs: -23.0, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -18.0)
+                    Nr5LevelerAlignmentWatchSample(34, nr5InputDbfs: -20.0, nr5OutputDbfs: -23.0, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -18.0),
+                    Nr5LevelerAlignmentWatchSample(36, nr5InputDbfs: -19.0, nr5OutputDbfs: -23.2, levelerInputRmsDbfs: -50.0, levelerOutputRmsDbfs: -18.0)
                 });
 
             var reportPath = Path.Combine(bundleDir, "nr5-speech-qualified-parity.summary.json");
@@ -3583,8 +3728,8 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal("ready-final-audio", weakWatch.GetProperty("speechQualifiedMixedWeakStrongEvidenceStatus").GetString());
             Assert.True(weakWatch.GetProperty("speechQualifiedMixedWeakStrongEvidenceReady").GetBoolean());
             Assert.True(weakWatch.GetProperty("speechQualifiedWeakStrongFinalAudioParityReady").GetBoolean());
-            Assert.Equal(1, weakWatch.GetProperty("speechQualifiedWeakInputSampleCount").GetInt32());
-            Assert.Equal(1, weakWatch.GetProperty("speechQualifiedStrongInputSampleCount").GetInt32());
+            Assert.Equal(2, weakWatch.GetProperty("speechQualifiedWeakInputSampleCount").GetInt32());
+            Assert.Equal(2, weakWatch.GetProperty("speechQualifiedStrongInputSampleCount").GetInt32());
             Assert.Equal(0.8, weakWatch.GetProperty("speechQualifiedWeakStrongFinalAudioGapDb").GetDouble(), precision: 3);
             var focus = weakWatch.GetProperty("mixedWeakStrongTuningFocus");
             Assert.Equal("ready-final-audio", focus.GetProperty("speechQualifiedStatus").GetString());
@@ -3636,12 +3781,33 @@ public sealed class DspModernizationValidationToolTests
                         levelerOutputRmsDbfs: -18.8,
                         frontendTopPeaks: new[] { FrontendTopPeak(14_240_264, 264, 27.3, -73.7, confidence: 0.94) }),
                     Nr5LevelerAlignmentWatchSample(
+                        44,
+                        nr5InputDbfs: -53.0,
+                        nr5OutputDbfs: -34.6,
+                        levelerInputRmsDbfs: -52.0,
+                        levelerOutputRmsDbfs: -18.8,
+                        frontendTopPeaks: new[] { FrontendTopPeak(14_240_364, 364, 27.2, -73.0, confidence: 0.94) }),
+                    Nr5LevelerAlignmentWatchSample(
                         43,
                         nr5InputDbfs: -20.0,
                         nr5OutputDbfs: -23.0,
                         levelerInputRmsDbfs: -50.0,
                         levelerOutputRmsDbfs: -18.0,
-                        frontendTopPeaks: new[] { FrontendTopPeak(14_240_264, 264, 29.0, -66.8, confidence: 0.94) })
+                        frontendTopPeaks: new[] { FrontendTopPeak(14_240_264, 264, 29.0, -66.8, confidence: 0.94) }),
+                    Nr5LevelerAlignmentWatchSample(
+                        45,
+                        nr5InputDbfs: -19.5,
+                        nr5OutputDbfs: -23.1,
+                        levelerInputRmsDbfs: -50.0,
+                        levelerOutputRmsDbfs: -18.0,
+                        frontendTopPeaks: new[] { FrontendTopPeak(14_240_364, 364, 29.0, -66.8, confidence: 0.94) }),
+                    Nr5LevelerAlignmentWatchSample(
+                        46,
+                        nr5InputDbfs: -18.5,
+                        nr5OutputDbfs: -22.9,
+                        levelerInputRmsDbfs: -50.0,
+                        levelerOutputRmsDbfs: -18.0,
+                        frontendTopPeaks: new[] { FrontendTopPeak(14_240_464, 464, 29.0, -66.8, confidence: 0.94) })
                 });
 
             var reportPath = Path.Combine(bundleDir, "nr5-passband-qualified-parity.summary.json");
@@ -3660,8 +3826,8 @@ public sealed class DspModernizationValidationToolTests
             var weakWatch = reportDoc.RootElement.GetProperty("nr5WeakSignalWatch");
             Assert.Equal("weak-strong-speech-gap-watch", weakWatch.GetProperty("speechQualifiedMixedWeakStrongEvidenceStatus").GetString());
             Assert.False(weakWatch.GetProperty("speechQualifiedMixedWeakStrongEvidenceReady").GetBoolean());
-            Assert.Equal(2, weakWatch.GetProperty("speechQualifiedWeakInputSampleCount").GetInt32());
-            Assert.Equal(1, weakWatch.GetProperty("speechQualifiedStrongInputSampleCount").GetInt32());
+            Assert.Equal(3, weakWatch.GetProperty("speechQualifiedWeakInputSampleCount").GetInt32());
+            Assert.Equal(3, weakWatch.GetProperty("speechQualifiedStrongInputSampleCount").GetInt32());
 
             Assert.Equal("ready-final-audio", weakWatch.GetProperty("passbandQualifiedMixedWeakStrongEvidenceStatus").GetString());
             Assert.True(weakWatch.GetProperty("passbandQualifiedMixedWeakStrongEvidenceReady").GetBoolean());
@@ -3671,8 +3837,8 @@ public sealed class DspModernizationValidationToolTests
             var focus = weakWatch.GetProperty("mixedWeakStrongTuningFocus");
             Assert.Equal("ready-final-audio", focus.GetProperty("passbandQualifiedStatus").GetString());
             Assert.Equal(0.8, focus.GetProperty("passbandQualifiedFinalAudioGapDb").GetDouble(), precision: 3);
-            Assert.Equal(1, weakWatch.GetProperty("passbandQualifiedWeakInputSampleCount").GetInt32());
-            Assert.Equal(1, weakWatch.GetProperty("passbandQualifiedStrongInputSampleCount").GetInt32());
+            Assert.Equal(2, weakWatch.GetProperty("passbandQualifiedWeakInputSampleCount").GetInt32());
+            Assert.Equal(3, weakWatch.GetProperty("passbandQualifiedStrongInputSampleCount").GetInt32());
             Assert.Equal(0.8, weakWatch.GetProperty("passbandQualifiedWeakStrongFinalAudioGapDb").GetDouble(), precision: 3);
         }
         finally
