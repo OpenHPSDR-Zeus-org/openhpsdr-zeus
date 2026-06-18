@@ -1000,6 +1000,12 @@ public sealed class Protocol2Client : IDisposable, IAsyncDisposable
                 catch (ChannelClosedException) { break; }
                 if (!reader.TryRead(out var packet)) continue;
                 DecrementTxIqQueuedPacketsIfPositive();
+                if (packet is null)
+                {
+                    Interlocked.Increment(ref _txIqSendFailures);
+                    _log.LogWarning("p2.txiq dropped null packet");
+                    continue;
+                }
 
                 // Drain by wall-clock since the previous send.
                 long now = Stopwatch.GetTimestamp();

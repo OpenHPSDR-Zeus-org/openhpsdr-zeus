@@ -2571,6 +2571,83 @@ public class DspPipelineService : BackgroundService,
                 }
             }
             if (desiredDb > 0.0 &&
+                inputRmsDbfs > -42.0 &&
+                inputRmsDbfs <= -34.0 &&
+                nr5.OutputDbfs >= -28.5 &&
+                nr5.OutputPeakDbfs >= -18.5 &&
+                (nr5.SignalConfidence >= 0.330 ||
+                    (nr5FrontendTopPeakProof > 0.0 &&
+                        nr5.SignalConfidence >= 0.300 &&
+                        nr5.OutputPeakDbfs >= -11.5)) &&
+                (nr5.SignalProbability >= 0.140 ||
+                    (nr5FrontendTopPeakProof > 0.0 &&
+                        nr5.SignalProbability >= 0.130 &&
+                        nr5.OutputPeakDbfs >= -11.5)) &&
+                (nr5.AgcGate >= 0.580 ||
+                    (nr5.AgcGate >= 0.520 &&
+                        nr5.PeakEvidence >= 0.200 &&
+                        nr5.OutputPeakDbfs >= -15.0)) &&
+                nr5.LevelDrive >= 0.760 &&
+                (nr5.PeakEvidence >= 0.120 ||
+                    nr5.RecoveryDrive >= 0.360 ||
+                    nr5.WeakSignalMemory >= 0.180 ||
+                    nr5.OutputDbfs >= -23.5))
+            {
+                double nearFieldStrongProof = Math.Max(
+                    ClampUnit((nr5.OutputDbfs + 27.0) / 8.0),
+                    Math.Max(
+                        ClampUnit((nr5.OutputPeakDbfs + 18.5) / 12.0),
+                        Math.Max(
+                            ClampUnit((nr5.SignalProbability - 0.140) / 0.260),
+                            Math.Max(
+                                ClampUnit((nr5.PeakEvidence - 0.120) / 0.520),
+                                ClampUnit((nr5.AgcGate - 0.580) / 0.340)))));
+                double nearFieldStrongTargetDbfs =
+                    -31.0 + 2.0 * nearFieldStrongProof;
+                nearFieldStrongTargetDbfs = Math.Clamp(nearFieldStrongTargetDbfs, -31.0, -29.0);
+                double nearFieldStrongDesiredDb = Math.Max(0.0, nearFieldStrongTargetDbfs - inputRmsDbfs);
+                if (nearFieldStrongDesiredDb < desiredDb - 1.0e-6)
+                {
+                    desiredDb = nearFieldStrongDesiredDb;
+                    nr5StrongFrameParityCap = true;
+                }
+            }
+            if (desiredDb > 0.0 &&
+                inputRmsDbfs > -42.0 &&
+                inputRmsDbfs <= -34.0 &&
+                nr5FrontendTopPeakProof >= 0.10 &&
+                nr5.OutputDbfs >= -32.0 &&
+                nr5.OutputPeakDbfs >= -21.0 &&
+                nr5.SignalConfidence >= 0.340 &&
+                nr5.SignalProbability >= 0.125 &&
+                nr5.AgcGate >= 0.800 &&
+                nr5.LevelDrive >= 0.760 &&
+                (nr5.PeakEvidence >= 0.100 ||
+                    nr5.RecoveryDrive >= 0.360 ||
+                    nr5.WeakSignalMemory >= 0.320))
+            {
+                double passbandStrongProof = Math.Max(
+                    nr5FrontendTopPeakProof,
+                    Math.Max(
+                        ClampUnit((nr5.OutputDbfs + 32.0) / 8.0),
+                        Math.Max(
+                            ClampUnit((nr5.OutputPeakDbfs + 21.0) / 12.0),
+                            Math.Max(
+                                ClampUnit((nr5.RecoveryDrive - 0.360) / 0.320),
+                                Math.Max(
+                                    ClampUnit((nr5.WeakSignalMemory - 0.320) / 0.320),
+                                    ClampUnit((nr5.AgcGate - 0.800) / 0.180))))));
+                double passbandStrongTargetDbfs =
+                    -31.0 + 2.0 * passbandStrongProof;
+                passbandStrongTargetDbfs = Math.Clamp(passbandStrongTargetDbfs, -31.0, -29.0);
+                double passbandStrongDesiredDb = Math.Max(0.0, passbandStrongTargetDbfs - inputRmsDbfs);
+                if (passbandStrongDesiredDb < desiredDb - 1.0e-6)
+                {
+                    desiredDb = passbandStrongDesiredDb;
+                    nr5StrongFrameParityCap = true;
+                }
+            }
+            if (desiredDb > 0.0 &&
                 inputRmsDbfs >= -58.0 &&
                 inputRmsDbfs <= -52.0 &&
                 desiredDb >= 28.0 &&
