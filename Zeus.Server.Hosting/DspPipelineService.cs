@@ -321,7 +321,7 @@ public class DspPipelineService : BackgroundService,
         string? value = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE")
             ?? Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
         if (string.IsNullOrWhiteSpace(value))
-            return true;
+            return false;
         return !(string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(value, "off", StringComparison.OrdinalIgnoreCase) ||
