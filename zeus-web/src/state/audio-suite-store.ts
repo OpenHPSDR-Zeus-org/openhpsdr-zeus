@@ -216,7 +216,12 @@ interface AudioSuiteState {
   processingMode: 'native' | 'vst';
   vstEngineAvailable: boolean;
   vstEngineActive: boolean;
+  rxVstEngineAvailable: boolean;
+  rxVstEngineActive: boolean;
+  rxVstActivePlugins: number;
+  rxVstDegradedBlocks: number;
   loadProcessingModeFromServer(): Promise<void>;
+  loadRxProcessingModeFromServer(): Promise<void>;
   setProcessingMode(mode: 'native' | 'vst'): Promise<void>;
 }
 
@@ -256,6 +261,10 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       processingMode: 'native',
       vstEngineAvailable: false,
       vstEngineActive: false,
+      rxVstEngineAvailable: false,
+      rxVstEngineActive: false,
+      rxVstActivePlugins: 0,
+      rxVstDegradedBlocks: 0,
       isDragging: false,
       collapsed: {},
       selectedChainId: null,
@@ -514,6 +523,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           await reloadInstalledPluginUis();
           await get().loadChainOrderFromServer();
           await get().loadRxChainOrderFromServer();
+          await get().loadRxProcessingModeFromServer();
           return {
             ok: true,
             directory: body.directory,
@@ -779,6 +789,30 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         } catch (err) {
           // eslint-disable-next-line no-console
           console.warn('audio-suite processing-mode GET threw', err);
+        }
+      },
+
+      loadRxProcessingModeFromServer: async () => {
+        try {
+          const res = await fetch('/api/rx-audio-suite/processing-mode');
+          if (!res.ok) return;
+          const body = (await res.json()) as {
+            engineAvailable?: boolean;
+            engineActive?: boolean;
+            activePlugins?: number;
+            degradedBlocks?: number;
+          };
+          set({
+            rxVstEngineAvailable: body.engineAvailable === true,
+            rxVstEngineActive: body.engineActive === true,
+            rxVstActivePlugins:
+              typeof body.activePlugins === 'number' ? body.activePlugins : 0,
+            rxVstDegradedBlocks:
+              typeof body.degradedBlocks === 'number' ? body.degradedBlocks : 0,
+          });
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('rx-audio-suite processing-mode GET threw', err);
         }
       },
 

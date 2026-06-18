@@ -31,7 +31,8 @@ internal sealed unsafe class VstEngineBridge : IDisposable
 
     private ulong _inSeq;
     private long _degraded;
-    private bool _disposed;
+    private int _disposed;
+    private int _engineReady;
 
     /// <summary>
     /// Bounded wait ceiling per block (ms). A wedged plugin costs at most one
@@ -46,7 +47,11 @@ internal sealed unsafe class VstEngineBridge : IDisposable
     /// false, <see cref="Process"/> is pure passthrough — the realtime path
     /// never touches the engine.
     /// </summary>
-    public bool EngineReady { get; set; }
+    public bool EngineReady
+    {
+        get => Volatile.Read(ref _engineReady) != 0;
+        set => Volatile.Write(ref _engineReady, value ? 1 : 0);
+    }
 
     /// <summary>Count of blocks that fell through to passthrough (timeout / stale).</summary>
     public long DegradedBlocks => Interlocked.Read(ref _degraded);
@@ -128,7 +133,7 @@ internal sealed unsafe class VstEngineBridge : IDisposable
         int n = ctx.Frames, ch = ctx.Channels;
         int count = n * ch;
 
-        if (_disposed || !EngineReady
+        if (Volatile.Read(ref _disposed) != 0 || !EngineReady
             || n <= 0 || n > _maxFrames || ch != _channels
             || input.Length < count || output.Length < count)
         {
@@ -192,8 +197,7 @@ internal sealed unsafe class VstEngineBridge : IDisposable
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         EngineReady = false;
 
         if (_base != null)

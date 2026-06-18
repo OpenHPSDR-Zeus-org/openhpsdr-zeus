@@ -65,6 +65,7 @@ public sealed class VstEngineController : IAsyncDisposable
     private VstEngineBridge? _bridge;
     private VstEngineProcess? _proc;
     private volatile bool _active;
+    private bool _activationInProgress;
     private bool _disposed;
 
     /// <summary>Forwarded engine stderr lines (diagnostics) — control thread.</summary>
@@ -120,13 +121,21 @@ public sealed class VstEngineController : IAsyncDisposable
         if (!OperatingSystem.IsWindows()) return VstEngineStartResult.PlatformUnsupported;
 
         VstEngineProcess proc;
+        var ownsActivation = false;
         lock (_lifecycleLock)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_active) return VstEngineStartResult.Started;
+            if (_activationInProgress) return VstEngineStartResult.NotReady;
+            _activationInProgress = true;
+            ownsActivation = true;
 
             var path = VstEngineProcess.FindEngineExe();
-            if (path is null) return VstEngineStartResult.EngineNotFound;
+            if (path is null)
+            {
+                _activationInProgress = false;
+                return VstEngineStartResult.EngineNotFound;
+            }
             ResolvedEnginePath = path;
 
             // Create the shared-memory plane once and keep it for our lifetime.
@@ -139,10 +148,12 @@ public sealed class VstEngineController : IAsyncDisposable
             }
             catch
             {
+                _activationInProgress = false;
                 return VstEngineStartResult.LaunchFailed;
             }
             proc.StdErrLine += OnStdErr;
             proc.EngineEvent += OnEngineEvent;
+            proc.Exited += OnProcessExited;
             _proc = proc;
         }
 
@@ -153,22 +164,27 @@ public sealed class VstEngineController : IAsyncDisposable
         catch (Exception)
         {
             // Engine never handshook — tear the process back down, stay passthrough.
-            Deactivate();
+            StopProcess(proc);
             return VstEngineStartResult.NotReady;
         }
 
         // Engine's audio thread is now blocked on .in; arm the realtime tap.
+        var armed = false;
         lock (_lifecycleLock)
         {
-            if (_disposed || _proc != proc)
+            if (!_disposed && ReferenceEquals(_proc, proc))
             {
-                // Disposed or superseded while we waited — don't arm a dead engine.
-                return VstEngineStartResult.NotReady;
+                if (_bridge is { } b) b.EngineReady = true;
+                _active = true;
+                armed = true;
             }
-            if (_bridge is { } b) b.EngineReady = true;
-            _active = true;
+            if (ownsActivation) _activationInProgress = false;
         }
-        return VstEngineStartResult.Started;
+        if (armed) return VstEngineStartResult.Started;
+
+        // Disposed or superseded while we waited — don't leave the old process alive.
+        StopProcess(proc);
+        return VstEngineStartResult.NotReady;
     }
 
     /// <summary>
@@ -184,16 +200,51 @@ public sealed class VstEngineController : IAsyncDisposable
             // Order matters: stop the realtime path FIRST so no block enters the
             // engine round-trip after this point, THEN drop the process.
             _active = false;
+            _activationInProgress = false;
             if (_bridge is { } b) b.EngineReady = false;
             proc = _proc;
             _proc = null;
         }
-        if (proc is not null)
+        if (proc is not null) DisposeProcess(proc);
+    }
+
+    private void OnProcessExited(VstEngineProcess proc)
+    {
+        var current = false;
+        lock (_lifecycleLock)
         {
-            proc.StdErrLine -= OnStdErr;
-            proc.EngineEvent -= OnEngineEvent;
-            proc.Dispose();
+            if (!ReferenceEquals(_proc, proc)) return;
+            _active = false;
+            _activationInProgress = false;
+            if (_bridge is { } b) b.EngineReady = false;
+            _proc = null;
+            current = true;
         }
+
+        if (current) DisposeProcess(proc);
+    }
+
+    private void StopProcess(VstEngineProcess proc)
+    {
+        lock (_lifecycleLock)
+        {
+            if (ReferenceEquals(_proc, proc))
+            {
+                _active = false;
+                _activationInProgress = false;
+                if (_bridge is { } b) b.EngineReady = false;
+                _proc = null;
+            }
+        }
+        DisposeProcess(proc);
+    }
+
+    private void DisposeProcess(VstEngineProcess proc)
+    {
+        proc.StdErrLine -= OnStdErr;
+        proc.EngineEvent -= OnEngineEvent;
+        proc.Exited -= OnProcessExited;
+        proc.Dispose();
     }
 
     /// <summary>

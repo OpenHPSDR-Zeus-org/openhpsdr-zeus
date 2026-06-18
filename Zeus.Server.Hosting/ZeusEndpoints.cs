@@ -243,6 +243,18 @@ public static class ZeusEndpoints
             return Results.BadRequest(new { error = err });
         });
 
+        app.MapGet("/api/rx-audio-suite/processing-mode", (RxVstEngineService rxVst) =>
+        {
+            return Results.Ok(new
+            {
+                mode = "vst",
+                engineActive = rxVst.EngineActive,
+                engineAvailable = rxVst.EngineAvailable,
+                activePlugins = rxVst.ActivePluginCount,
+                degradedBlocks = rxVst.DegradedBlocks,
+            });
+        });
+
         // Audio Suite profiles — named snapshots of the processing route
         // (Native/VST), active plugin order, parked set, master bypass, and
         // VST plugin state blobs. Lets the operator save a whole rack layout
@@ -398,16 +410,36 @@ public static class ZeusEndpoints
         // is processing audio — so we drive it via open_editor/close_editor.
         // Otherwise we fall back to the in-process zeus-vst-bridge editor.
         app.MapGet("/api/audio-suite/plugins/{id}/editor",
-            (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
-            Results.Ok(new { open = mode.EngineActive ? mode.IsEditorOpen(id) : bridge.IsEditorOpen(id) }));
+            (string id, AudioPluginBridge bridge, AudioProcessingModeService mode, RxVstEngineService rxVst) =>
+            {
+                if (rxVst.HasEngineSlot(id))
+                    return Results.Ok(new { open = rxVst.IsEditorOpen(id) });
+                if (mode.EngineActive && mode.HasEngineSlot(id))
+                    return Results.Ok(new { open = mode.IsEditorOpen(id) });
+                return Results.Ok(new { open = bridge.IsEditorOpen(id) });
+            });
 
         app.MapPost("/api/audio-suite/plugins/{id}/editor",
-            (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
-            MapEditorResult(mode.EngineActive ? mode.OpenEditor(id) : bridge.OpenEditor(id), open: true));
+            (string id, AudioPluginBridge bridge, AudioProcessingModeService mode, RxVstEngineService rxVst) =>
+            {
+                var result = rxVst.HasEngineSlot(id)
+                    ? rxVst.OpenEditor(id)
+                    : mode.EngineActive && mode.HasEngineSlot(id)
+                        ? mode.OpenEditor(id)
+                        : bridge.OpenEditor(id);
+                return MapEditorResult(result, open: true);
+            });
 
         app.MapDelete("/api/audio-suite/plugins/{id}/editor",
-            (string id, AudioPluginBridge bridge, AudioProcessingModeService mode) =>
-            MapEditorResult(mode.EngineActive ? mode.CloseEditor(id) : bridge.CloseEditor(id), open: false));
+            (string id, AudioPluginBridge bridge, AudioProcessingModeService mode, RxVstEngineService rxVst) =>
+            {
+                var result = rxVst.HasEngineSlot(id)
+                    ? rxVst.CloseEditor(id)
+                    : mode.EngineActive && mode.HasEngineSlot(id)
+                        ? mode.CloseEditor(id)
+                        : bridge.CloseEditor(id);
+                return MapEditorResult(result, open: false);
+            });
 
         // WAV recorder / player. Records RX or processed-TX audio to float32
         // WAVs in the Downloads folder, and plays recordings back to the local
@@ -461,7 +493,7 @@ public static class ZeusEndpoints
         // (Protocol1Client via ITxIqSource) stats. Useful for "is the mic reaching
         // TXA, and is the EP2 packer actually reading the ring" questions without
         // hunting through logs. Free to call, exposes no secrets.
-        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, DspPipelineService dsp, TxService tx, RadioService radio, StreamingHub hub, HardwareDiagnosticsService hardware, ExternalPttService externalPtt, AudioPluginBridge? pluginBridge, Zeus.Plugins.Host.Audio.VstEngineController? vstEngine) =>
+        app.MapGet("/api/tx/diag", (Zeus.Protocol1.TxIqRing ring, Zeus.Protocol1.ITxIqSource src, TxAudioIngest ingest, DspPipelineService dsp, TxService tx, RadioService radio, StreamingHub hub, HardwareDiagnosticsService hardware, ExternalPttService externalPtt, AudioPluginBridge? pluginBridge, Zeus.Plugins.Host.Audio.VstEngineController? vstEngine, RxVstEngineService? rxVstEngine) =>
         {
             var generatedUtc = DateTimeOffset.UtcNow;
             var p2Tx = dsp.ActiveP2Client?.TxIqDiagnosticsSnapshot();
@@ -524,6 +556,13 @@ public static class ZeusEndpoints
                 {
                     active = vstEngine.IsActive,
                     degradedBlocks = vstEngine.DegradedBlocks,
+                },
+                rxVstEngine = rxVstEngine is null ? null : new
+                {
+                    active = rxVstEngine.EngineActive,
+                    available = rxVstEngine.EngineAvailable,
+                    activePlugins = rxVstEngine.ActivePluginCount,
+                    degradedBlocks = rxVstEngine.DegradedBlocks,
                 },
             });
         });

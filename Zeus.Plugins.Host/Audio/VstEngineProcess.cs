@@ -20,13 +20,16 @@ internal sealed class VstEngineProcess : IDisposable
     private readonly object _writeLock = new();
     private readonly TaskCompletionSource<JsonElement> _ready =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
-    private bool _disposed;
+    private int _disposed;
 
     /// <summary>Raised on the reader thread for every parsed engine event.</summary>
     public event Action<JsonElement>? EngineEvent;
 
     /// <summary>Raised on the reader thread for every stderr line (diagnostics).</summary>
     public event Action<string>? StdErrLine;
+
+    /// <summary>Raised when the supervised engine process exits.</summary>
+    public event Action<VstEngineProcess>? Exited;
 
     /// <summary>Completes when the engine emits its <c>ready</c> handshake.</summary>
     public Task<JsonElement> Ready => _ready.Task;
@@ -115,8 +118,11 @@ internal sealed class VstEngineProcess : IDisposable
         process.OutputDataReceived += (_, e) => self.OnStdOut(e.Data);
         process.ErrorDataReceived  += (_, e) => { if (e.Data != null) self.StdErrLine?.Invoke(e.Data); };
         process.Exited += (_, _) =>
+        {
             self._ready.TrySetException(new InvalidOperationException(
                 $"VST engine exited (code {SafeExitCode(process)}) before ready."));
+            self.Exited?.Invoke(self);
+        };
 
         if (!process.Start())
             throw new InvalidOperationException("Failed to start VST engine process.");
@@ -157,15 +163,21 @@ internal sealed class VstEngineProcess : IDisposable
         var json = JsonSerializer.Serialize(command);
         lock (_writeLock)
         {
-            if (!_process.HasExited)
-                _process.StandardInput.WriteLine(json);
+            if (Volatile.Read(ref _disposed) != 0) return;
+            try
+            {
+                if (!_process.HasExited)
+                    _process.StandardInput.WriteLine(json);
+            }
+            catch (ObjectDisposedException) { }
+            catch (InvalidOperationException) { }
+            catch (IOException) { }
         }
     }
 
     public void Dispose()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         try
         {
             // Graceful: close stdin → the engine's IPC sees EOF and quits.

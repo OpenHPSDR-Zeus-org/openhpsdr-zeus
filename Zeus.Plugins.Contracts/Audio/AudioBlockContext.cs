@@ -48,10 +48,11 @@ public readonly ref struct AudioBlockContext
 
 /// <summary>
 /// Sample-rate / channel / block-size negotiation values. <c>BlockSize</c>
-/// is a sizing hint — the host may call <c>Process</c> with any block
-/// length up to and including the declared value. Plugins should
-/// iterate <c>input.Length</c> rather than caching the declared
-/// <c>BlockSize</c> as a fixed-array dimension.
+/// is a compatibility hint from the plugin; the host reports the actual
+/// route ceiling through <see cref="IAudioHost.CurrentBlockSize"/> during
+/// <c>InitializeAudioAsync</c>. Plugins should preallocate from the host
+/// ceiling and iterate <c>input.Length</c> / <c>ctx.Frames</c> rather than
+/// caching <c>BlockSize</c> as a fixed-array dimension.
 /// </summary>
 public sealed record AudioPluginRequirements(
     int SampleRate,

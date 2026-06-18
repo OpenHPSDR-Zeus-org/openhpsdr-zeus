@@ -432,6 +432,12 @@ public static class ZeusHost
         // launched while VST mode is active. Inert until opted into.
         builder.Services.AddSingleton<Zeus.Plugins.Host.Audio.VstEngineController>();
 
+        // RX VST engine owns a second, independent out-of-process VST host for
+        // receive-side rx.post-demod plugins. TX and RX can therefore run two
+        // separate instances of the same VST without sharing engine state.
+        builder.Services.AddSingleton<RxVstEngineService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<RxVstEngineService>());
+
         // AudioPluginBridge wires PluginManager's audio-bearing plugins
         // into WdspDspEngine's realtime TX seam. No-op when no plugins
         // declare an audio component; subscribes to engine swaps so it

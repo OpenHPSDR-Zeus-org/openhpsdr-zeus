@@ -3054,10 +3054,12 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "pureSignal.rfBypassSelected",
                 "/api/tx/diag",
                 "/api/audio-suite/chain/meters",
+                "/api/rx-audio-suite/processing-mode",
             },
             candidateControls = new[]
             {
                 "/api/audio-suite/processing-mode",
+                "/api/rx-audio-suite/processing-mode",
                 "/api/audio-suite/chain/meters",
                 "/api/tx/fidelity-policy",
                 "/api/tx/station-profiles",

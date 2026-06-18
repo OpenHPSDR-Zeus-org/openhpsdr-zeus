@@ -32,8 +32,11 @@ public interface IAudioPlugin
 
     /// <summary>
     /// Realtime audio processing. <paramref name="input"/> and
-    /// <paramref name="output"/> are non-overlapping spans of the same
-    /// length (= Requirements.BlockSize * Requirements.Channels, planar).
+    /// <paramref name="output"/> are non-overlapping spans of the current
+    /// block length (= <c>ctx.Frames * ctx.Channels</c>, planar). The frame
+    /// count can vary by route; allocate for <see
+    /// cref="IAudioHost.CurrentBlockSize"/> during initialization and
+    /// iterate the span length here.
     /// In-place processing (input.CopyTo(output) then mutate output)
     /// is acceptable. Bypassed slots SHOULD <c>input.CopyTo(output)</c>
     /// rather than skipping the call — the host handles

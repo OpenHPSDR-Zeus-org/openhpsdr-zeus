@@ -226,6 +226,14 @@ describe('audio-suite-store profile selection', () => {
       if (url === '/api/rx-audio-suite/chain/order') {
         return response({ pluginIds: ['com.openhpsdr.zeus.rxvst.supertoneclear'] });
       }
+      if (url === '/api/rx-audio-suite/processing-mode') {
+        return response({
+          engineAvailable: true,
+          engineActive: true,
+          activePlugins: 1,
+          degradedBlocks: 0,
+        });
+      }
       return response({});
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -247,6 +255,32 @@ describe('audio-suite-store profile selection', () => {
     expect(useAudioSuiteStore.getState().rxChainOrder).toEqual([
       'com.openhpsdr.zeus.rxvst.supertoneclear',
     ]);
+    expect(useAudioSuiteStore.getState().rxVstEngineActive).toBe(true);
+    expect(useAudioSuiteStore.getState().rxVstActivePlugins).toBe(1);
+  });
+
+  it('loads RX VST engine diagnostics separately from TX mode', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      if (String(input) === '/api/rx-audio-suite/processing-mode') {
+        return response({
+          engineAvailable: true,
+          engineActive: false,
+          activePlugins: 0,
+          degradedBlocks: 3,
+        });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { useAudioSuiteStore } = await import('./audio-suite-store');
+    await useAudioSuiteStore.getState().loadRxProcessingModeFromServer();
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/rx-audio-suite/processing-mode');
+    expect(useAudioSuiteStore.getState().rxVstEngineAvailable).toBe(true);
+    expect(useAudioSuiteStore.getState().rxVstEngineActive).toBe(false);
+    expect(useAudioSuiteStore.getState().rxVstActivePlugins).toBe(0);
+    expect(useAudioSuiteStore.getState().rxVstDegradedBlocks).toBe(3);
   });
 
   it('uses RX endpoints for RX chain membership and ordering', async () => {

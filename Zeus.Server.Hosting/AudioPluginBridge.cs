@@ -75,6 +75,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private readonly Dictionary<string, IAudioPlugin> _rxIdToPlugin = new();
     private readonly Dictionary<string, string> _rxIdToSlotName = new();
     private readonly HashSet<string> _rxInitializedIds = new(StringComparer.Ordinal);
+    private readonly RxVstEngineService? _rxVstEngine;
     private readonly object _lock = new();
     private Action<IReadOnlyList<string>>? _orderChangedHandler;
     private Action<IReadOnlyList<string>>? _rxOrderChangedHandler;
@@ -109,6 +110,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         RxChainOrderService rxChainOrder,
         ILogger<AudioPluginBridge> log,
         TxAudioIngest txAudioIngest,
+        RxVstEngineService rxVstEngine,
         VstEngineController vstEngine)
         : this(manager, pipeline, new VstBridgeNative(),
                isMoxOn: () => tx.IsMoxOn,
@@ -118,6 +120,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
                rxChainOrder: rxChainOrder,
                log,
                isTciTxAudioActive: () => txAudioIngest.IsTciTxAudioActive,
+               rxVstEngine: rxVstEngine,
                vstEngine: vstEngine) { }
 
     // Testable ctor — lets unit tests inject a fake IVstBridgeNative and
@@ -134,6 +137,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         RxChainOrderService? rxChainOrder,
         ILogger<AudioPluginBridge> log,
         Func<bool>? isTciTxAudioActive = null,
+        RxVstEngineService? rxVstEngine = null,
         VstEngineController? vstEngine = null)
     {
         _manager = manager;
@@ -144,6 +148,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         _isTciTxAudioActive = isTciTxAudioActive ?? (() => false);
         _chainOrder = chainOrder;
         _rxChainOrder = rxChainOrder;
+        _rxVstEngine = rxVstEngine;
         _vstEngine = vstEngine;
         _log = log;
     }
@@ -163,6 +168,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         bool previewEnabled = true,
         bool engineIsWdsp = true,
         Func<bool>? isTciTxAudioActive = null,
+        RxVstEngineService? rxVstEngine = null,
         VstEngineController? vstEngine = null)
     {
         _manager = null!;
@@ -172,6 +178,7 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
         _isMonitorOn = isMonitorOn;
         _isTciTxAudioActive = isTciTxAudioActive ?? (() => false);
         _chainOrder = null;
+        _rxVstEngine = rxVstEngine;
         _vstEngine = vstEngine;
         _log = log;
         _engineIsWdsp = engineIsWdsp;
@@ -892,6 +899,18 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
             if (_rxInitializedIds.Contains(id)) return true;
         }
 
+        if (audioPlugin is VstHostAudioPlugin && _rxVstEngine is { EngineAvailable: true })
+        {
+            lock (_lock)
+            {
+                _rxInitializedIds.Add(id);
+            }
+            _log.LogInformation(
+                "RX VST plugin {Id} reserved for the out-of-process RX VST engine; in-process VST bridge not loaded",
+                id);
+            return true;
+        }
+
         try
         {
             audioPlugin.InitializeAudioAsync(
@@ -937,7 +956,9 @@ public sealed class AudioPluginBridge : IHostedService, IAsyncDisposable
     private void ProcessRxBlock(Span<float> audio, int frames, int sampleRate)
     {
         var ctx = new AudioBlockContext(sampleRate, channels: 1, frames: frames, sampleTime: 0, mox: false);
+        _rxVstEngine?.ProcessIfActive(audio, audio, ctx);
         _rxChain.Process(audio, audio, ctx);
+        DspPipelineService.SanitizeAudioBuffer(audio[..frames]);
     }
 
     /// <summary>Returns the plugin's IAudioPlugin, or synthesises a

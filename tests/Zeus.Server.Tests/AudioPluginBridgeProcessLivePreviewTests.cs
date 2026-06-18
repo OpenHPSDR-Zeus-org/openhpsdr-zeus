@@ -229,6 +229,57 @@ public class AudioPluginBridgeProcessLivePreviewTests
     }
 
     [Fact]
+    public void TxPath_MasterBypass_Sanitizes_Input_Before_Wdsp()
+    {
+        var spy = new SpyPlugin();
+        var bridge = new AudioPluginBridge(
+            isMoxOn: () => true,
+            isMonitorOn: () => false,
+            log: NullLogger<AudioPluginBridge>.Instance);
+        bridge.Chain.SetSlot(0, spy);
+        bridge.Chain.MasterBypassed = true;
+
+        var output = RunDirtyTxProcess(bridge);
+
+        Assert.Equal<float>(new float[] { 0f, 0f, 0f, 1f, -1f, 0.25f }, output);
+        Assert.Equal(0, spy.ProcessCallCount);
+    }
+
+    [Fact]
+    public void TxPath_TciBypass_Sanitizes_Input_Before_Wdsp()
+    {
+        var spy = new SpyPlugin();
+        var bridge = new AudioPluginBridge(
+            isMoxOn: () => true,
+            isMonitorOn: () => false,
+            log: NullLogger<AudioPluginBridge>.Instance,
+            isTciTxAudioActive: () => true);
+        bridge.Chain.SetSlot(0, spy);
+        bridge.Chain.MasterBypassed = false;
+
+        var output = RunDirtyTxProcess(bridge);
+
+        Assert.Equal<float>(new float[] { 0f, 0f, 0f, 1f, -1f, 0.25f }, output);
+        Assert.Equal(0, spy.ProcessCallCount);
+    }
+
+    [Fact]
+    public void TxPath_VstMasterBypass_Sanitizes_Input_Before_Wdsp()
+    {
+        var controller = ActiveControllerWithoutBridge();
+        var bridge = new AudioPluginBridge(
+            isMoxOn: () => true,
+            isMonitorOn: () => false,
+            log: NullLogger<AudioPluginBridge>.Instance,
+            vstEngine: controller);
+        bridge.Chain.MasterBypassed = true;
+
+        var output = RunDirtyTxProcess(bridge);
+
+        Assert.Equal<float>(new float[] { 0f, 0f, 0f, 1f, -1f, 0.25f }, output);
+    }
+
+    [Fact]
     public void TciRemoteTxInactive_Runs_InsertChain_In_TxPath()
     {
         var spy = new SpyPlugin();
@@ -316,6 +367,14 @@ public class AudioPluginBridgeProcessLivePreviewTests
         Span<float> output = stackalloc float[frames];
         for (int i = 0; i < frames; i++) input[i] = 0.5f;
         bridge.ProcessTxForTest(input, output, frames);
+    }
+
+    private static float[] RunDirtyTxProcess(AudioPluginBridge bridge)
+    {
+        var input = new[] { float.NaN, float.PositiveInfinity, float.NegativeInfinity, 1.5f, -2f, 0.25f };
+        var output = new float[input.Length];
+        bridge.ProcessTxForTest(input, output, frames: input.Length);
+        return output;
     }
 
     private static VstEngineController ActiveControllerWithoutBridge()

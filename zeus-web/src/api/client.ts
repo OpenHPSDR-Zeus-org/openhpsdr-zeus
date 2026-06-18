@@ -1579,6 +1579,13 @@ export type VstEngineDiagnosticsDto = {
   degradedBlocks: number;
 };
 
+export type RxVstEngineDiagnosticsDto = {
+  active: boolean;
+  available: boolean;
+  activePlugins: number;
+  degradedBlocks: number;
+};
+
 export type TxStageDiagnosticsDto = {
   schemaVersion: number;
   source: string;
@@ -1622,6 +1629,7 @@ export type TxDiagnosticsDto = {
   egress: TxEgressHealthDto;
   txPlugins: TxPluginDiagnosticsDto | null;
   vstEngine: VstEngineDiagnosticsDto | null;
+  rxVstEngine: RxVstEngineDiagnosticsDto | null;
 };
 
 export type HardwareP1DiagnosticsDto = {
@@ -3880,6 +3888,9 @@ function normalizeTxDiagnostics(raw: unknown): TxDiagnosticsDto {
   const vstRaw = r.vstEngine === null || r.vstEngine === undefined
     ? null
     : asDiagRecord(r.vstEngine);
+  const rxVstRaw = r.rxVstEngine === null || r.rxVstEngine === undefined
+    ? null
+    : asDiagRecord(r.rxVstEngine);
   const ring = normalizeTxRingDiagnostics(r.ring);
   const ingest = normalizeTxIngestDiagnostics(r.ingest);
   const protocol2 = normalizeProtocol2TxIqDiagnostics(r.protocol2);
@@ -3908,6 +3919,14 @@ function normalizeTxDiagnostics(raw: unknown): TxDiagnosticsDto {
       : {
           active: Boolean(vstRaw.active),
           degradedBlocks: diagNumber(vstRaw.degradedBlocks) ?? 0,
+        },
+    rxVstEngine: rxVstRaw === null
+      ? null
+      : {
+          active: Boolean(rxVstRaw.active),
+          available: Boolean(rxVstRaw.available),
+          activePlugins: diagNumber(rxVstRaw.activePlugins) ?? 0,
+          degradedBlocks: diagNumber(rxVstRaw.degradedBlocks) ?? 0,
         },
   };
 }

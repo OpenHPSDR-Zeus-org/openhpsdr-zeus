@@ -32,10 +32,20 @@ public sealed record AudioPluginRequirements(
     int BlockSize);
 ```
 
-The host honours these and refuses to load the plugin if they can't
-be satisfied by the current TX/RX path. For v1, `SampleRate` is
-48 kHz and `BlockSize` is 256 frames; future hardware-dependent rates
-will negotiate via `IAudioHost`.
+`SampleRate` and `Channels` describe the route the plugin expects.
+`BlockSize` is a compatibility hint from the plugin; allocate realtime
+buffers from `IAudioHost.CurrentBlockSize` during `InitializeAudioAsync`.
+For v1, TX hosts advertise a 1024-frame ceiling at 48 kHz mono. Actual
+TX callbacks vary by route (`512`, `960`, or `1024` frames), so
+`Process()` must iterate `input.Length` / `ctx.Frames` rather than
+assuming one fixed block length. RX hosts advertise a 2048-frame ceiling.
+
+TX and RX Audio Suite racks are separate routes. TX plugins use
+`tx.post-leveler` and are governed by the TX Native/VST processing mode.
+Receive cleanup plugins use `rx.post-demod`; scanned RX VSTs are loaded
+into a dedicated receive-side VST engine when that engine is available, so
+the same VST can run as independent TX and RX instances without sharing
+state.
 
 ### Realtime contract for `Process()`
 
@@ -83,8 +93,8 @@ Drop a `.vst3` bundle into your plugin zip and reference it:
 
 The host synthesises a `VstHostAudioPlugin` that:
 
-1. Calls `zvst_load_vst3(absPath, channels, sampleRate, 256, &handle)`
-   on the native bridge.
+1. Calls `zvst_load_vst3(absPath, channels, sampleRate,
+   host.CurrentBlockSize, &handle)` on the native bridge.
 2. Maps `Process(input, output, ctx)` to `zvst_process(handle, ...)`
    with channel-major planar layout.
 3. Calls `zvst_unload(handle)` on shutdown.
@@ -112,7 +122,7 @@ public sealed class GainPlugin : IZeusPlugin, IAudioPlugin
 
     // IAudioPlugin
     public string DisplayName => "Gain";
-    public AudioPluginRequirements Requirements => new(48000, 1, 256);
+    public AudioPluginRequirements Requirements => new(48000, 1, 1024);
 
     public Task InitializeAudioAsync(IAudioHost host, CancellationToken ct)
         => Task.CompletedTask;

@@ -227,6 +227,11 @@ public sealed class AudioProcessingModeService : IHostedService
         lock (_editorLock) return _openEditors.Contains(pluginId);
     }
 
+    public bool HasEngineSlot(string pluginId)
+    {
+        lock (_editorLock) return _idToEngineSlot.ContainsKey(pluginId);
+    }
+
     public Task StartAsync(CancellationToken ct)
     {
         var persisted = _store.GetMode();

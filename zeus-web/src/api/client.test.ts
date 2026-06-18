@@ -2222,6 +2222,12 @@ describe('POST helpers', () => {
         active: false,
         degradedBlocks: 2,
       },
+      rxVstEngine: {
+        active: true,
+        available: true,
+        activePlugins: 1,
+        degradedBlocks: 4,
+      },
     }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -2291,6 +2297,10 @@ describe('POST helpers', () => {
     expect(diag.egress.diagnosticRecommendation).toBe('P2 DUC egress and RF forward-power evidence are live.');
     expect(diag.txPlugins?.masterBypassed).toBe(false);
     expect(diag.vstEngine?.degradedBlocks).toBe(2);
+    expect(diag.rxVstEngine?.available).toBe(true);
+    expect(diag.rxVstEngine?.active).toBe(true);
+    expect(diag.rxVstEngine?.activePlugins).toBe(1);
+    expect(diag.rxVstEngine?.degradedBlocks).toBe(4);
   });
 
   it('fetchExternalPttStatus reads read-only external PTT ownership state', async () => {

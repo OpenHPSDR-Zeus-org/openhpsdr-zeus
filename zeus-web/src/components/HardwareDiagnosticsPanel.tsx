@@ -986,6 +986,10 @@ function TxEgressDiagnostics({ diag }: { diag: TxDiagnosticsDto | null }) {
           { label: 'Remote TX Bypass', value: boolLabel(diag.txPlugins?.bypassedForRemoteTx) },
           { label: 'VST Active', value: boolLabel(diag.vstEngine?.active) },
           { label: 'VST Degraded', value: count(diag.vstEngine?.degradedBlocks) },
+          { label: 'RX VST Available', value: boolLabel(diag.rxVstEngine?.available) },
+          { label: 'RX VST Active', value: boolLabel(diag.rxVstEngine?.active) },
+          { label: 'RX VST Plugins', value: count(diag.rxVstEngine?.activePlugins) },
+          { label: 'RX VST Degraded', value: count(diag.rxVstEngine?.degradedBlocks) },
         ]}
       />
       <DiagnosticRecommendation text={micUplink.diagnosticRecommendation} />

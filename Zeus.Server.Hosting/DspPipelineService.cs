@@ -708,6 +708,7 @@ public class DspPipelineService : BackgroundService,
         bool nr5PassbandSuppressedValleyCandidate = false;
         bool nr5SuppressedWeakOnsetCandidate = false;
         bool nr5PassbandWeakAcquisitionCandidate = false;
+        bool nr5PassbandWarmupBlankedSpeechCandidate = false;
         bool nr5AdjacentHeldSuppressedOnsetBridge = false;
         bool nr5ProfiledValleyCandidate = false;
         bool nr5WeakSpeechCrestCandidate = false;
@@ -805,6 +806,17 @@ public class DspPipelineService : BackgroundService,
                     Math.Max(nr5HybridContinuity, 0.12) *
                     Math.Max(nr5HybridAgc, 0.12) *
                     Math.Max(nr5HybridOutput, 0.12))));
+            nr5PassbandWarmupBlankedSpeechCandidate =
+                nr5HybridPassbandProof >= 0.32 &&
+                inputRmsDbfs >= -40.0 &&
+                inputPeakDbfs >= -34.0 &&
+                nr5.OutputDbfs <= -58.0 &&
+                nr5.OutputPeakDbfs <= -48.0 &&
+                nr5.SignalConfidence <= 0.250 &&
+                nr5.SignalProbability <= 0.090 &&
+                nr5.AgcGate <= 0.180 &&
+                nr5.PeakEvidence <= 0.020 &&
+                nr5.WeakSignalMemory <= 0.060;
             double nr5NoPassbandProof = 1.0 - ClampUnit(nr5HybridPassbandProof / 0.18);
             double nr5LowVadNoise = Math.Max(
                 ClampUnit((0.185 - nr5.SignalProbability) / 0.155),
@@ -1997,6 +2009,10 @@ public class DspPipelineService : BackgroundService,
             {
                 mutedFloorDrive *= 0.20;
             }
+            if (nr5PassbandWarmupBlankedSpeechCandidate)
+            {
+                mutedFloorDrive *= 0.08;
+            }
 
             if (mutedFloorDrive > 0.0 && desiredDb > 0.0)
             {
@@ -2107,7 +2123,10 @@ public class DspPipelineService : BackgroundService,
                 nr5.SignalConfidence <= 0.32 &&
                 nr5.SignalProbability <= 0.18 &&
                 nr5.AgcGate <= 0.54;
-            if (lowEvidenceFloor && nr5.OutputDbfs <= -30.0 && desiredDb > 0.0)
+            if (lowEvidenceFloor &&
+                !nr5PassbandWarmupBlankedSpeechCandidate &&
+                nr5.OutputDbfs <= -30.0 &&
+                desiredDb > 0.0)
             {
                 double lowEvidenceOutputCeilingDbfs = -22.0;
                 desiredDb = Math.Min(
@@ -2217,6 +2236,10 @@ public class DspPipelineService : BackgroundService,
             if (nr5DeepWeakSpeechCandidate)
             {
                 lowSpectralProofDrive *= 0.25;
+            }
+            if (nr5PassbandWarmupBlankedSpeechCandidate)
+            {
+                lowSpectralProofDrive *= 0.05;
             }
             if (lowSpectralProofDrive > 0.0 && desiredDb > 0.0)
             {
@@ -3891,6 +3914,14 @@ public class DspPipelineService : BackgroundService,
                     boostSlewDb = Math.Max(
                         boostSlewDb,
                         RxLevelerNr5SuppressedOnsetCatchupBoostSlewDbPerBlock);
+                }
+                if (nr5PassbandWarmupBlankedSpeechCandidate &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(
+                        boostSlewDb,
+                        RxLevelerNr5RecoveredOnsetCatchupBoostSlewDbPerBlock);
                 }
                 if (nr5PassbandSuppressedValleyCandidate &&
                     gainGapDb >= 4.0 &&

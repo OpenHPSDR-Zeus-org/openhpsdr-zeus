@@ -892,6 +892,13 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
   const loadProcessingModeFromServer = useAudioSuiteStore(
     (s) => s.loadProcessingModeFromServer,
   );
+  const loadRxProcessingModeFromServer = useAudioSuiteStore(
+    (s) => s.loadRxProcessingModeFromServer,
+  );
+  const rxVstEngineAvailable = useAudioSuiteStore((s) => s.rxVstEngineAvailable);
+  const rxVstEngineActive = useAudioSuiteStore((s) => s.rxVstEngineActive);
+  const rxVstActivePlugins = useAudioSuiteStore((s) => s.rxVstActivePlugins);
+  const rxVstDegradedBlocks = useAudioSuiteStore((s) => s.rxVstDegradedBlocks);
   const loadChainOrderFromServer = useAudioSuiteStore(
     (s) => s.loadChainOrderFromServer,
   );
@@ -965,6 +972,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     loadChainOrderFromServer();
     loadRxChainOrderFromServer();
     loadProcessingModeFromServer();
+    loadRxProcessingModeFromServer();
     loadPreviewState();
     loadMasterBypassFromServer();
     loadProfiles();
@@ -974,6 +982,7 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
     loadChainOrderFromServer,
     loadRxChainOrderFromServer,
     loadProcessingModeFromServer,
+    loadRxProcessingModeFromServer,
     loadPreviewState,
     loadMasterBypassFromServer,
     loadProfiles,
@@ -1549,6 +1558,38 @@ export function AudioSuiteWindow({ embedded = false }: { embedded?: boolean } = 
             </button>
           );
         })}
+        {isRxSuite && (
+          <span
+            title={
+              rxVstEngineActive
+                ? `RX VST engine active (${rxVstActivePlugins} plugin${rxVstActivePlugins === 1 ? '' : 's'}, ${rxVstDegradedBlocks} degraded blocks)`
+                : rxVstEngineAvailable
+                  ? 'RX VST engine idle'
+                  : 'RX VST engine not installed'
+            }
+            style={{
+              marginLeft: 'auto',
+              alignSelf: 'center',
+              padding: '3px 8px',
+              borderRadius: 4,
+              border: '1px solid var(--line)',
+              background: rxVstEngineActive ? 'var(--accent-soft)' : 'var(--bg-2)',
+              color: rxVstEngineActive
+                ? 'var(--fg-0)'
+                : rxVstEngineAvailable
+                  ? 'var(--fg-2)'
+                  : 'var(--power)',
+              fontSize: 10,
+              fontWeight: 700,
+              letterSpacing: 1,
+              textTransform: 'uppercase',
+              fontFamily: 'inherit',
+              whiteSpace: 'nowrap',
+            }}
+          >
+            RX VST {rxVstEngineActive ? 'ON' : rxVstEngineAvailable ? 'IDLE' : 'OFF'}
+          </span>
+        )}
       </div>
 
       {/* Profiles bar — named snapshots of the chain config. Choosing
