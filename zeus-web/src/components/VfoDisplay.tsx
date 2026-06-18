@@ -114,9 +114,6 @@ function parseKhzInput(raw: string): number | null {
   return clampHz(Math.round(khz * 1000));
 }
 
-function formatKhz(hz: number): string {
-  return (hz / 1000).toFixed(3);
-}
 
 // Per-digit wheel tuning debounce. Wheel events fire at ~60 Hz during a spin;
 // we update the store (and therefore the display) on every tick for instant
