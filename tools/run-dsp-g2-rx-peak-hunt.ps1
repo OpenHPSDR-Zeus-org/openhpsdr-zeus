@@ -1215,7 +1215,13 @@ function Get-AutoPhoneClusterCandidates {
                 continue
             }
 
-            $frequencyHz = Get-NullableLongValue (Get-JsonValue $run "frequencyHz")
+            $retuneFrequencyHz = Get-NullableLongValue (Get-JsonValue $run "frequencyHz")
+            $exactCandidateFrequencyHz = Get-NullableLongValue (Get-JsonValue $run "exactCandidateFrequencyHz")
+            $frequencyHz = $exactCandidateFrequencyHz
+            if ($null -eq $frequencyHz -or $frequencyHz -le 0) {
+                $frequencyHz = $retuneFrequencyHz
+            }
+
             if ($null -eq $frequencyHz -or $frequencyHz -lt $BandLowHz -or $frequencyHz -gt $BandHighHz) {
                 continue
             }
@@ -1253,6 +1259,7 @@ function Get-AutoPhoneClusterCandidates {
                 $seedMap[$key] = [pscustomobject][ordered]@{
                     frequencyHz = $roundedHz
                     sourceFrequencyHz = $frequencyHz
+                    sourceRetuneVfoHz = $retuneFrequencyHz
                     score = [Math]::Round($score, 3)
                     speechWeak = $speechWeak
                     speechStrong = $speechStrong
@@ -1302,6 +1309,7 @@ function Get-AutoPhoneClusterCandidates {
             evidenceTuningAction = $seed.tuningAction
             evidenceOutputGapExcessDb = $seed.outputGapExcessDb
             evidenceFinalAudioGapExcessDb = $seed.finalAudioGapExcessDb
+            evidenceRetuneVfoHz = Get-NullableLongValue $seed.sourceRetuneVfoHz
             evidenceReportPath = [string]$seed.reportPath
         }) | Out-Null
     }
@@ -1330,6 +1338,7 @@ function Get-AutoPhoneClusterCandidates {
                     $neighborMap[$key] = [pscustomobject][ordered]@{
                         frequencyHz = $candidateHz
                         sourceFrequencyHz = [long]$seed.frequencyHz
+                        sourceRetuneVfoHz = Get-NullableLongValue $seed.sourceRetuneVfoHz
                         score = $score
                         speechWeak = [int]$seed.speechWeak
                         speechStrong = [int]$seed.speechStrong
@@ -1402,6 +1411,7 @@ function Get-AutoPhoneClusterCandidates {
                     evidenceReportPath = [string]$seed.reportPath
                     evidenceNeighborOfFrequencyHz = [long]$seed.sourceFrequencyHz
                     evidenceNeighborOffsetHz = [long]$seed.neighborOffsetHz
+                    evidenceRetuneVfoHz = Get-NullableLongValue $seed.sourceRetuneVfoHz
                 }) | Out-Null
             }
         }
@@ -1451,6 +1461,91 @@ function Set-CandidateProperty {
     }
 
     $Candidate.$Name = $Value
+}
+
+function ConvertTo-RetuneGeometryCandidate {
+    param(
+        $Candidate,
+        [long]$OriginalVfo = 0,
+        [int]$StepHz = 1000,
+        [double]$RetuneTargetOffsetHz = 0.0,
+        [string]$CenteredRetuneReason = "retune-to-center-candidate"
+    )
+
+    if ($null -eq $Candidate) {
+        return $null
+    }
+
+    $frequencyHz = Get-NullableLongValue (Get-JsonValue $Candidate "frequencyHz")
+    if ($null -eq $frequencyHz -or $frequencyHz -le 0) {
+        return $null
+    }
+
+    $exactFrequencyHz = Get-NullableLongValue (Get-JsonValue $Candidate "exactFrequencyHz")
+    if ($null -eq $exactFrequencyHz -or $exactFrequencyHz -le 0) {
+        $exactFrequencyHz = [long]$frequencyHz
+    }
+
+    $effectiveStepHz = Normalize-TuneStepHz $StepHz
+    $exactRetuneVfoHz = [long][Math]::Round([double]$exactFrequencyHz - [double]$RetuneTargetOffsetHz)
+    if ($exactRetuneVfoHz -le 0) {
+        $exactRetuneVfoHz = [long]$exactFrequencyHz
+    }
+
+    $retuneFrequencyHz = Quantize-HzToStep -Hz ([double]$exactRetuneVfoHz) -StepHz $effectiveStepHz
+    if ($retuneFrequencyHz -le 0) {
+        $retuneFrequencyHz = [long]$exactRetuneVfoHz
+    }
+
+    $exactOffsetHz = Get-NullableLongValue (Get-JsonValue $Candidate "exactOffsetHz")
+    if ($OriginalVfo -gt 0) {
+        $exactOffsetHz = [long]$exactFrequencyHz - [long]$OriginalVfo
+    }
+
+    $offsetHz = $null
+    if ($OriginalVfo -gt 0) {
+        $offsetHz = [long]$retuneFrequencyHz - [long]$OriginalVfo
+    }
+
+    $retuneReason = Get-TrimmedStringValue (Get-JsonValue $Candidate "retuneReason")
+    if ([Math]::Abs([double]$RetuneTargetOffsetHz) -gt 0.1) {
+        $retuneReason = $CenteredRetuneReason
+    }
+    elseif ($null -eq $retuneReason) {
+        $retuneReason = if ([long]$retuneFrequencyHz -ne [long]$exactRetuneVfoHz) { "retune-to-stepped-candidate" } else { "retune-to-exact-candidate" }
+    }
+
+    $geometryKeys = @(
+        "frequencyHz",
+        "exactFrequencyHz",
+        "offsetHz",
+        "exactOffsetHz",
+        "tuningStepHz",
+        "tuneSnapDeltaHz",
+        "retuneTargetOffsetHz",
+        "exactRetuneVfoHz",
+        "peakToRetunedVfoOffsetHz",
+        "retuneReason"
+    )
+    $copy = [ordered]@{}
+    foreach ($property in $Candidate.PSObject.Properties) {
+        if ($geometryKeys -notcontains $property.Name) {
+            $copy[$property.Name] = $property.Value
+        }
+    }
+
+    $copy["frequencyHz"] = [long]$retuneFrequencyHz
+    $copy["exactFrequencyHz"] = [long]$exactFrequencyHz
+    $copy["offsetHz"] = $offsetHz
+    $copy["exactOffsetHz"] = $exactOffsetHz
+    $copy["tuningStepHz"] = $effectiveStepHz
+    $copy["tuneSnapDeltaHz"] = [long]$retuneFrequencyHz - [long]$exactRetuneVfoHz
+    $copy["retuneTargetOffsetHz"] = [Math]::Round([double]$RetuneTargetOffsetHz, 1)
+    $copy["exactRetuneVfoHz"] = [long]$exactRetuneVfoHz
+    $copy["peakToRetunedVfoOffsetHz"] = [long]$exactFrequencyHz - [long]$retuneFrequencyHz
+    $copy["retuneReason"] = $retuneReason
+
+    return [pscustomobject]$copy
 }
 
 function Normalize-RetuneCandidate {
@@ -1923,7 +2018,7 @@ if ($PlanOnly) {
             notes = @(
                 "Without -AllowRetune the tool only captures the current VFO and lists candidate frontend peaks/operator frequencies.",
                 "With -AllowRetune the tool posts only RX tuning endpoints, waits for RX settling, delegates evidence capture to watch-dsp-live-diagnostics, then restores the original VFO and radio LO in a verified finally block.",
-                "Frontend peak retunes are passband-centered for LSB/USB when mode/filter data is available, then snapped to -TuneStepHz; exact FFT-bin targets remain in exactFrequencyHz, exactRetuneVfoHz, peakToRetunedVfoOffsetHz, and tuneSnapDeltaHz fields.",
+                "Frontend peak and operator-style retunes are passband-centered for LSB/USB when mode/filter data is available, then snapped to -TuneStepHz; exact signal targets remain in exactFrequencyHz, exactRetuneVfoHz, peakToRetunedVfoOffsetHz, and tuneSnapDeltaHz fields.",
                 "Frontend peak retunes are bounded by -PeakRetuneLowHz/-PeakRetuneHighHz when supplied, otherwise by the candidate-frequency span plus -PeakRetunePaddingHz when operator/cluster candidates exist.",
                 "The tool does not approve DSP default changes; it only hunts for the missing G2 mixed weak+strong NR5/SPNR evidence window."
             )
@@ -2282,13 +2377,16 @@ try {
 
         if ($AllowRetune) {
             foreach ($candidate in $operatorCandidates) {
-                Add-RetuneCandidateIfAdmitted -Candidates $candidates -Candidate $candidate -MergeHz $PeakMergeHz -StepHz $effectiveTuneStepHz -OriginalVfo $originalVfo -RetuneLowHz $peakRetuneSpan.lowHz -RetuneHighHz $peakRetuneSpan.highHz -RetuneSpanSource $peakRetuneSpan.source -RejectedCandidates $passRejectedRetuneCandidates | Out-Null
+                $retuneCandidate = ConvertTo-RetuneGeometryCandidate -Candidate $candidate -OriginalVfo $originalVfo -StepHz $effectiveTuneStepHz -RetuneTargetOffsetHz $frontendPeakRetuneTargetOffsetHz -CenteredRetuneReason "retune-to-center-operator-frequency"
+                Add-RetuneCandidateIfAdmitted -Candidates $candidates -Candidate $retuneCandidate -MergeHz $PeakMergeHz -StepHz $effectiveTuneStepHz -OriginalVfo $originalVfo -RetuneLowHz $peakRetuneSpan.lowHz -RetuneHighHz $peakRetuneSpan.highHz -RetuneSpanSource $peakRetuneSpan.source -RejectedCandidates $passRejectedRetuneCandidates | Out-Null
             }
             foreach ($candidate in $autoPhoneClusterCandidates) {
-                Add-RetuneCandidateIfAdmitted -Candidates $candidates -Candidate $candidate -MergeHz $PeakMergeHz -StepHz $effectiveTuneStepHz -OriginalVfo $originalVfo -RetuneLowHz $peakRetuneSpan.lowHz -RetuneHighHz $peakRetuneSpan.highHz -RetuneSpanSource $peakRetuneSpan.source -RejectedCandidates $passRejectedRetuneCandidates | Out-Null
+                $retuneCandidate = ConvertTo-RetuneGeometryCandidate -Candidate $candidate -OriginalVfo $originalVfo -StepHz $effectiveTuneStepHz -RetuneTargetOffsetHz $frontendPeakRetuneTargetOffsetHz -CenteredRetuneReason "retune-to-center-phone-cluster"
+                Add-RetuneCandidateIfAdmitted -Candidates $candidates -Candidate $retuneCandidate -MergeHz $PeakMergeHz -StepHz $effectiveTuneStepHz -OriginalVfo $originalVfo -RetuneLowHz $peakRetuneSpan.lowHz -RetuneHighHz $peakRetuneSpan.highHz -RetuneSpanSource $peakRetuneSpan.source -RejectedCandidates $passRejectedRetuneCandidates | Out-Null
             }
             foreach ($candidate in $operatorTrendCandidates) {
-                Add-RetuneCandidateIfAdmitted -Candidates $candidates -Candidate $candidate -MergeHz $PeakMergeHz -StepHz $effectiveTuneStepHz -OriginalVfo $originalVfo -RetuneLowHz $peakRetuneSpan.lowHz -RetuneHighHz $peakRetuneSpan.highHz -RetuneSpanSource $peakRetuneSpan.source -RejectedCandidates $passRejectedRetuneCandidates | Out-Null
+                $retuneCandidate = ConvertTo-RetuneGeometryCandidate -Candidate $candidate -OriginalVfo $originalVfo -StepHz $effectiveTuneStepHz -RetuneTargetOffsetHz $frontendPeakRetuneTargetOffsetHz -CenteredRetuneReason "retune-to-center-operator-trend"
+                Add-RetuneCandidateIfAdmitted -Candidates $candidates -Candidate $retuneCandidate -MergeHz $PeakMergeHz -StepHz $effectiveTuneStepHz -OriginalVfo $originalVfo -RetuneLowHz $peakRetuneSpan.lowHz -RetuneHighHz $peakRetuneSpan.highHz -RetuneSpanSource $peakRetuneSpan.source -RejectedCandidates $passRejectedRetuneCandidates | Out-Null
             }
             foreach ($candidate in $passPeakCandidates) {
                 Add-RetuneCandidateIfAdmitted -Candidates $candidates -Candidate $candidate -MergeHz $PeakMergeHz -StepHz $effectiveTuneStepHz -OriginalVfo $originalVfo -RetuneLowHz $peakRetuneSpan.lowHz -RetuneHighHz $peakRetuneSpan.highHz -RetuneSpanSource $peakRetuneSpan.source -RejectedCandidates $passRejectedRetuneCandidates | Out-Null
