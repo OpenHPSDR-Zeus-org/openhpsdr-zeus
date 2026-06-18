@@ -473,18 +473,6 @@ function withNr4(current: NrConfigDto, c: SmartNrCondition, mode: RxMode): NrCon
   };
 }
 
-function withNr5(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
-  return {
-    ...current,
-    nrMode: 'Nr5',
-    anfEnabled: c.tonalInterference,
-    snbEnabled: c.denseNoise || c.impulsiveNoise,
-    nbpNotchesEnabled: c.tonalInterference,
-    nbMode: c.impulsiveNoise ? 'Nb2' : 'Off',
-    nbThreshold: c.impulsiveNoise ? impulsiveBlankerThreshold(current) : current.nbThreshold,
-  };
-}
-
 function withNr2(current: NrConfigDto, c: SmartNrCondition): NrConfigDto {
   const rxWeak = c.rxAssistedWeakSignal;
   const copyAssist = c.coherentCopySignal && !c.weakSparse && !c.denseNoise;
@@ -527,32 +515,26 @@ export function recommendSmartNr(input: SmartNrInput): SmartNrRecommendation | n
   let nr: NrConfigDto;
   let reason: string;
   if (isCwOrDigital(input.mode)) {
-    const nr5WeakSignal = condition.rxAssistedWeakSignal || condition.coherentSubthresholdSignal;
     nr = condition.hasSignal || condition.denseNoise
-      ? nr5WeakSignal
-        ? withNr5(input.current, condition)
-        : withNr4(input.current, condition, input.mode)
+      ? withNr4(input.current, condition, input.mode)
       : quietProfile(input.current, condition);
     reason = condition.rxAssistedWeakSignal
-      ? 'Weak-signal assist: AGC/RX telemetry confirms a marginal copy; use NR5/SPNR for signal-preserving noise reduction.'
+      ? 'Weak-signal assist: AGC/RX telemetry confirms a marginal copy; use NR4/SBNR and keep NR5 out of the operator path.'
       : condition.coherentSubthresholdSignal
-      ? 'Coherent subthreshold profile: temporal confidence sees a buried ridge; use NR5/SPNR before broader spectral whitening.'
+      ? 'Coherent subthreshold profile: temporal confidence sees a buried ridge; use conservative NR4/SBNR instead of legacy NR5.'
       : condition.weakSparse
       ? 'Weak narrow-signal profile: NR4/SBNR with mild whitening.'
       : condition.impulsiveNoise
         ? 'Impulsive-noise profile: engage NB2/SNB while keeping spectral NR conservative.'
       : 'CW/digital profile: spectral NR with conservative blanking.';
   } else if (isVoiceSsb(input.mode)) {
-    const nr5WeakSignal = condition.rxAssistedWeakSignal || condition.coherentSubthresholdSignal;
     nr = condition.weakSparse || condition.denseNoise || condition.coherentCopySignal
-      ? nr5WeakSignal
-        ? withNr5(input.current, condition)
-        : withNr2(input.current, condition)
+      ? withNr2(input.current, condition)
       : quietProfile(input.current, condition);
     reason = condition.rxAssistedWeakSignal
-      ? 'Weak-signal assist: AGC/RX telemetry confirms marginal SSB copy; use NR5/SPNR with output normalization.'
+      ? 'Weak-signal assist: AGC/RX telemetry confirms marginal SSB copy; use NR2/EMNR and RX Suite VST cleanup.'
       : condition.coherentSubthresholdSignal
-      ? 'SSB coherent weak-signal profile: temporal confidence confirms a subthreshold ridge; use NR5/SPNR.'
+      ? 'SSB coherent weak-signal profile: temporal confidence confirms a subthreshold ridge; use NR2/EMNR plus RX Suite VST cleanup.'
       : condition.weakSparse
       ? 'SSB weak-signal profile: sparse coherent energy above the floor; use low-artifact NR2/EMNR.'
       : condition.coherentCopySignal

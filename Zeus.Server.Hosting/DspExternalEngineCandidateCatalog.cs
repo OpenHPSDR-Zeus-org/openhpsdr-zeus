@@ -18,11 +18,11 @@ public static class DspExternalEngineCandidateCatalog
             Id: "rnnoise",
             Name: "RNNoise",
             Family: "neural-speech-denoiser",
-            IntegrationPoint: "post-demod-rx-audio-speech-only after NR5/SPNR as NR5-AI Assist",
+            IntegrationPoint: "post-demod-rx-audio-speech-only through RX Audio Suite receive VST insert",
             DefaultState: "off",
             RolloutPolicy: OptInGate,
             EvaluationStage: "rx-vst-plugin-path-supported-not-bundled",
-            AllowedSignalPaths: ["post-demod-rx-audio-speech", "nr5-ai-assist-post-demod-rx-audio-speech"],
+            AllowedSignalPaths: ["post-demod-rx-audio-speech", "rx-audio-suite-post-demod-rx-audio-speech"],
             ForbiddenSignalPaths: ["raw-wdsp-iq", "cw-or-digital-non-speech", "tx-audio", "tx-monitor", "puresignal-feedback"],
             RequiredControls:
             [
@@ -30,7 +30,7 @@ public static class DspExternalEngineCandidateCatalog
                 "clean-bypass-fallback",
                 "speech-content-gate",
                 "rnnoise-vad-confidence-gate",
-                "nr5-ai-assist-mode",
+                "rx-audio-suite-route",
                 "original-filtered-blend-control",
                 "48khz-frame-adapter-or-rx-vst-plugin-host",
                 "official-xiph-runtime-only",
@@ -40,7 +40,7 @@ public static class DspExternalEngineCandidateCatalog
                 "no-raw-wdsp-iq-replacement",
                 "no-tx-or-puresignal-coupling",
             ],
-            FallbackPolicy: "disabled/unavailable/model-load-failure path must fall back to current Zeus NR5 post-WDSP audio; non-speech/CW/digital/TX/PureSignal paths must bypass the engine",
+            FallbackPolicy: "disabled/unavailable/model-load-failure path must fall back to current Zeus post-WDSP RX audio; non-speech/CW/digital/TX/PureSignal paths must bypass the engine",
             License: "BSD-3-Clause for official Xiph RNNoise runtime; le9endary/RNNoise has no repo license and is training-reference-only until provenance is cleared; werman/noise-suppression-for-voice is GPL-3.0 plugin reference only, not core-vendored runtime",
             PackagingStatus: "official-xiph-native-c-library-not-vendored; known RNNoise/noise-suppression VSTs can be operator-scanned into rx.post-demod; le9endary fork not vendorable until license/model provenance is cleared; werman plugin not vendored into core; model packaging and direct 48 kHz frame adapter required for a bundled runtime",
             RuntimeRisk: "medium",
@@ -49,7 +49,7 @@ public static class DspExternalEngineCandidateCatalog
             Strengths:
             [
                 "Small C runtime with established realtime speech-noise suppression use.",
-                "Official Xiph runtime exposes a small frame API suitable for an opt-in NR5-AI Assist post-demod adapter.",
+                "Official Xiph runtime exposes a small frame API suitable for an opt-in RX Audio Suite post-demod adapter.",
                 "Useful as a low-footprint post-demod speech benchmark candidate.",
                 "The le9endary fork provides useful training workflow notes, but must not be treated as a shippable runtime or model source until licensing is cleared.",
                 "The werman plugin is useful as a practical RNNoise behavior baseline on Windows, but its GPL plugin package remains reference-only for Zeus core.",
@@ -62,13 +62,13 @@ public static class DspExternalEngineCandidateCatalog
                 "weak-cw-carrier",
                 "fading-carrier",
                 "agc-level-step",
-                "nr5-ai-assist-bypass",
+                "rx-audio-suite-bypass",
             ],
             RequiredEvidence:
             [
                 "Must preserve weak carrier/CW fixtures when bypassed or speech-gated.",
                 "Must beat current Zeus post-demod audio on speech fixtures without pumping.",
-                "Must show NR5+RNNoise weak-speech level parity against NR2 and NR5 without lifting noise-only floor.",
+                "Must show RX Suite RNNoise weak-speech level parity against no NR and NR2 without lifting noise-only floor.",
                 "Must prove CPU, allocation, and latency bounds on G2-class hardware.",
                 "Must document official Xiph source revision, BSD-3-Clause license text, model artifact origin, and model hash before packaging.",
                 "Must prove le9endary/RNNoise remains a training-reference-only input unless repo license and model provenance are explicitly approved.",
@@ -93,11 +93,11 @@ public static class DspExternalEngineCandidateCatalog
             Id: "rmnoise",
             Name: "RM Noise",
             Family: "remote-ai-speech-noise-filter-and-training-service",
-            IntegrationPoint: "post-demod-rx-audio-speech-only training/reference service for NR5-AI Assist",
+            IntegrationPoint: "post-demod-rx-audio-speech-only training/reference service for RX Audio Suite receive VST/AI cleanup",
             DefaultState: "off",
             RolloutPolicy: OptInGate,
             EvaluationStage: "catalog-only-not-integrated",
-            AllowedSignalPaths: ["offline-recorded-post-demod-rx-audio-speech", "nr5-ai-assist-post-demod-rx-audio-speech-bakeoff"],
+            AllowedSignalPaths: ["offline-recorded-post-demod-rx-audio-speech", "rx-audio-suite-post-demod-rx-audio-speech-bakeoff"],
             ForbiddenSignalPaths: ["raw-wdsp-iq", "live-cloud-stream-by-default", "cw-or-digital-non-speech", "tx-audio", "tx-monitor", "puresignal-feedback"],
             RequiredControls:
             [
@@ -110,12 +110,12 @@ public static class DspExternalEngineCandidateCatalog
                 "service-availability-fallback",
                 "network-latency-budget-gate",
                 "offline-training-only-until-runtime-approved",
-                "nr5-ai-assist-mode",
+                "rx-audio-suite-route",
                 "no-live-cloud-stream-by-default",
                 "no-raw-wdsp-iq-replacement",
                 "no-tx-or-puresignal-coupling",
             ],
-            FallbackPolicy: "disabled/unavailable/network-failure/training-unapproved path must bypass to current Zeus NR5 post-WDSP audio; non-speech/CW/digital/TX/PureSignal paths must bypass the service",
+            FallbackPolicy: "disabled/unavailable/network-failure/training-unapproved path must bypass to current Zeus post-WDSP RX audio; non-speech/CW/digital/TX/PureSignal paths must bypass the service",
             License: "service terms, recording rights, trained-model ownership, and redistribution rights not reviewed; no RM Noise code, service API, recordings, or model artifacts are vendored",
             PackagingStatus: "service/model-training reference only; no local runtime, offline fixture export/import contract, consent workflow, or approved model package exists",
             RuntimeRisk: "high",
@@ -124,7 +124,7 @@ public static class DspExternalEngineCandidateCatalog
             Strengths:
             [
                 "Useful reference for collecting noisy/clean ham-radio speech recordings and scoring AI denoise results.",
-                "Could help train or evaluate a future local NR5-AI Assist model if recording consent, model provenance, and redistribution are approved.",
+                "Could help train or evaluate a future local RX Audio Suite model if recording consent, model provenance, and redistribution are approved.",
                 "Service-style experiments can be kept offline and artifact-scored before any runtime path exists.",
             ],
             RequiredBenchmarks:
@@ -135,15 +135,15 @@ public static class DspExternalEngineCandidateCatalog
                 "weak-cw-carrier",
                 "fading-carrier",
                 "agc-level-step",
-                "nr5-ai-assist-bypass",
+                "rx-audio-suite-bypass",
                 "service-unavailable-bypass",
             ],
             RequiredEvidence:
             [
                 "Must prove operator consent, privacy handling, recording retention, service terms, and trained-model rights before any upload or model use.",
                 "Must preserve weak carrier/CW fixtures by deterministic bypass and must not touch raw WDSP IQ.",
-                "Must beat NR5/NR2 speech fixtures without pumping, false-open noise, or weak-speech deletion.",
-                "Must prove service/network fallback behavior falls back instantly to current Zeus NR5 audio.",
+                "Must beat no-NR/NR2 speech fixtures without pumping, false-open noise, or weak-speech deletion.",
+                "Must prove service/network fallback behavior falls back instantly to current Zeus RX audio.",
                 "Must produce reproducible offline fixture inputs/outputs, model hashes if any, and no live cloud-stream default.",
             ],
             Blockers:
@@ -163,11 +163,11 @@ public static class DspExternalEngineCandidateCatalog
             Id: "dpdfnet",
             Name: "DPDFNet",
             Family: "causal-neural-speech-enhancement",
-            IntegrationPoint: "post-demod-rx-audio-speech-only after NR5/SPNR as NR5-AI Assist",
+            IntegrationPoint: "post-demod-rx-audio-speech-only through RX Audio Suite receive VST/AI insert",
             DefaultState: "off",
             RolloutPolicy: OptInGate,
             EvaluationStage: "catalog-only-not-integrated",
-            AllowedSignalPaths: ["post-demod-rx-audio-speech", "nr5-ai-assist-post-demod-rx-audio-speech", "offline-audio-bakeoff"],
+            AllowedSignalPaths: ["post-demod-rx-audio-speech", "rx-audio-suite-post-demod-rx-audio-speech", "offline-audio-bakeoff"],
             ForbiddenSignalPaths: ["raw-wdsp-iq", "cw-or-digital-non-speech", "tx-audio", "tx-monitor", "puresignal-feedback"],
             RequiredControls:
             [
@@ -182,17 +182,17 @@ public static class DspExternalEngineCandidateCatalog
                 "no-raw-wdsp-iq-replacement",
                 "no-tx-or-puresignal-coupling",
             ],
-            FallbackPolicy: "disabled/unavailable/model-load-failure/latency-overrun path must fall back to current Zeus NR5 post-WDSP audio; non-speech/CW/digital/TX/PureSignal paths must bypass the model",
+            FallbackPolicy: "disabled/unavailable/model-load-failure/latency-overrun path must fall back to current Zeus post-WDSP RX audio; non-speech/CW/digital/TX/PureSignal paths must bypass the model",
             License: "Apache-2.0 for repository code; ONNX/TFLite/pretrained model artifact provenance and redistribution rights must be reviewed before packaging",
-            PackagingStatus: "python/onnx/tflite runtime not vendored; model package, 48 kHz streaming frame adapter, and latency guard required before any NR5-AI Assist runtime path",
+            PackagingStatus: "python/onnx/tflite runtime not vendored; model package, 48 kHz streaming frame adapter, and latency guard required before any RX Audio Suite runtime path",
             RuntimeRisk: "medium-high",
             LatencyRisk: "medium",
-            RadioSafetyRisk: "medium-high: speech enhancer may erase weak non-speech HF content or pull noise into speech unless gated by NR5/frontend signal evidence",
+            RadioSafetyRisk: "medium-high: speech enhancer may erase weak non-speech HF content or pull noise into speech unless gated by frontend signal evidence and explicit speech detection",
             Strengths:
             [
                 "Modern causal DeepFilterNet-style speech enhancement with released 16 kHz and 48 kHz models.",
-                "ONNX/TFLite paths and a streaming API make it the strongest live NR5-AI Assist candidate for high-quality speech-only experiments.",
-                "Dual-path temporal/cross-band modeling is promising for faint SSB speech when blended behind NR5 passband evidence.",
+                "ONNX/TFLite paths and a streaming API make it a strong live RX Audio Suite candidate for high-quality speech-only experiments.",
+                "Dual-path temporal/cross-band modeling is promising for faint SSB speech when blended behind frontend passband evidence.",
             ],
             RequiredBenchmarks:
             [
@@ -202,13 +202,13 @@ public static class DspExternalEngineCandidateCatalog
                 "weak-cw-carrier-bypass",
                 "fading-carrier",
                 "agc-level-step",
-                "nr5-ai-assist-bypass",
+                "rx-audio-suite-bypass",
                 "realtime-latency-g2",
             ],
             RequiredEvidence:
             [
                 "Must preserve weak CW/carrier/non-speech fixtures by deterministic bypass and must not touch raw WDSP IQ.",
-                "Must beat NR5/NR2 speech fixtures without pumping, false-open noise, clipped peaks, or weak-speech deletion.",
+                "Must beat no-NR/NR2 speech fixtures without pumping, false-open noise, clipped peaks, or weak-speech deletion.",
                 "Must prove 48 kHz streaming latency, CPU, allocations, underrun behavior, and fallback on ANAN G2-class hardware.",
                 "Must document ONNX/TFLite runtime package, code license, model artifact origin, model hash, and redistribution rights before packaging.",
             ],
@@ -286,7 +286,7 @@ public static class DspExternalEngineCandidateCatalog
             Id: "clearervoice-studio",
             Name: "ClearerVoice-Studio",
             Family: "offline-ai-speech-processing-suite",
-            IntegrationPoint: "offline-recorded-post-demod-rx-audio-speech evidence and NR5-AI Assist training/reference",
+            IntegrationPoint: "offline-recorded-post-demod-rx-audio-speech evidence and RX Audio Suite training/reference",
             DefaultState: "off",
             RolloutPolicy: OptInGate,
             EvaluationStage: "catalog-only-not-integrated",
@@ -305,7 +305,7 @@ public static class DspExternalEngineCandidateCatalog
                 "no-raw-wdsp-iq-replacement",
                 "no-tx-or-puresignal-coupling",
             ],
-            FallbackPolicy: "offline-only/unavailable/model-load-failure path must leave current Zeus NR5 audio unchanged; live RX, non-speech/CW/digital/TX/PureSignal paths must bypass the suite",
+            FallbackPolicy: "offline-only/unavailable/model-load-failure path must leave current Zeus RX audio unchanged; live RX, non-speech/CW/digital/TX/PureSignal paths must bypass the suite",
             License: "Apache-2.0 for repository code; pretrained model artifact provenance and redistribution rights must be reviewed before packaging or fixture publication",
             PackagingStatus: "offline research/reference suite not vendored; no approved live runtime, model package, or operator recording workflow exists",
             RuntimeRisk: "high",
@@ -314,8 +314,8 @@ public static class DspExternalEngineCandidateCatalog
             Strengths:
             [
                 "Broad AI speech toolkit covering enhancement, separation, super-resolution, and target-speaker extraction.",
-                "Useful for offline fixture restoration experiments and objective speech-quality scoring against NR5/NR2.",
-                "Can help train or compare future local NR5-AI Assist ideas without becoming a live default path.",
+                "Useful for offline fixture restoration experiments and objective speech-quality scoring against no NR/NR2.",
+                "Can help train or compare future local RX Audio Suite ideas without becoming a live default path.",
             ],
             RequiredBenchmarks:
             [
@@ -329,7 +329,7 @@ public static class DspExternalEngineCandidateCatalog
             RequiredEvidence:
             [
                 "Must preserve weak carrier/CW fixtures by deterministic bypass and must not touch raw WDSP IQ.",
-                "Must beat NR5/NR2 offline speech fixtures without pumping, over-smoothing, or weak-speech deletion.",
+                "Must beat no-NR/NR2 offline speech fixtures without pumping, over-smoothing, or weak-speech deletion.",
                 "Must prove operator recording consent, dataset retention, model provenance, package size, and reproducible offline outputs.",
                 "Must remain offline/reference-only until live latency, CPU, and cross-radio safety are separately approved.",
             ],

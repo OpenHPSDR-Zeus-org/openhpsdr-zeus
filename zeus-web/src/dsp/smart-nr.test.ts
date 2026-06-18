@@ -59,7 +59,7 @@ describe('smart NR supervisor', () => {
     expect(rec.nr.nrMode).toBe('Sbnr');
   });
 
-  it('promotes sustained coherent subthreshold ridges for weak-signal NR', () => {
+  it('promotes sustained coherent subthreshold ridges for conservative weak-signal NR', () => {
     const spec = noise();
     const conf = confidence();
     spec[119] = NOISE_DB + 9.4;
@@ -81,7 +81,7 @@ describe('smart NR supervisor', () => {
     expect(rec.condition.coherentSubthresholdSignal).toBe(true);
     expect(rec.condition.hasSignal).toBe(true);
     expect(rec.condition.weakSparse).toBe(true);
-    expect(rec.nr.nrMode).toBe('Nr5');
+    expect(rec.nr.nrMode).toBe('Sbnr');
   });
 
   it('uses RX chain telemetry to preserve faint sparse weak-signal NR decisions', () => {
@@ -103,7 +103,7 @@ describe('smart NR supervisor', () => {
     expect(rec.condition.rxAssistedWeakSignal).toBe(true);
     expect(rec.condition.hasSignal).toBe(true);
     expect(rec.condition.weakSparse).toBe(true);
-    expect(rec.nr.nrMode).toBe('Nr5');
+    expect(rec.nr.nrMode).toBe('Sbnr');
   });
 
   it('does not promote low-confidence subthreshold energy as a signal', () => {
@@ -146,12 +146,12 @@ describe('smart NR supervisor', () => {
     expect(rec.condition.maxSnrDb).toBeLessThan(6);
     expect(rec.condition.rxAssistedWeakSignal).toBe(true);
     expect(rec.condition.weakSparse).toBe(true);
-    expect(rec.nr.nrMode).toBe('Nr5');
+    expect(rec.nr.nrMode).toBe('Sbnr');
     expect(rec.nr.nbMode).toBe('Off');
     expect(rec.reason).toContain('Weak-signal assist');
   });
 
-  it('uses NR5 for RX-assisted weak SSB copy', () => {
+  it('uses NR2 plus RX Suite path for RX-assisted weak SSB copy', () => {
     const spec = noise();
     spec[120] = NOISE_DB + 8;
 
@@ -168,11 +168,11 @@ describe('smart NR supervisor', () => {
     })!;
 
     expect(rec.condition.rxAssistedWeakSignal).toBe(true);
-    expect(rec.nr.nrMode).toBe('Nr5');
+    expect(rec.nr.nrMode).toBe('Emnr');
     expect(rec.nr.nbMode).toBe('Off');
   });
 
-  it('reports coherent subthreshold SSB as a weak-signal NR5 profile', () => {
+  it('reports coherent subthreshold SSB as a weak-signal NR2 profile', () => {
     const spec = noise();
     const conf = confidence();
     spec[119] = NOISE_DB + 9.4;
@@ -193,7 +193,7 @@ describe('smart NR supervisor', () => {
     expect(rec.condition.maxSnrDb).toBeLessThan(8);
     expect(rec.condition.coherentSubthresholdSignal).toBe(true);
     expect(rec.condition.weakSparse).toBe(true);
-    expect(rec.nr.nrMode).toBe('Nr5');
+    expect(rec.nr.nrMode).toBe('Emnr');
     expect(rec.reason).toContain('coherent weak-signal');
     expect(rec.reason).toContain('subthreshold ridge');
   });

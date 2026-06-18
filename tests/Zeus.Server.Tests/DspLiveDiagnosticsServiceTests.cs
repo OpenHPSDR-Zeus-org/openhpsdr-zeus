@@ -654,8 +654,8 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("speex-agc-disabled", speex.RequiredControls);
 
         var rnnoise = Assert.Single(candidates, c => c.Id == "rnnoise");
-        Assert.Contains("NR5-AI Assist", rnnoise.IntegrationPoint);
-        Assert.Contains("nr5-ai-assist-mode", rnnoise.RequiredControls);
+        Assert.Contains("RX Audio Suite", rnnoise.IntegrationPoint);
+        Assert.Contains("rx-audio-suite-route", rnnoise.RequiredControls);
         Assert.Contains("official-xiph-runtime-only", rnnoise.RequiredControls);
         Assert.Contains("le9endary-training-reference-only", rnnoise.RequiredControls);
         Assert.Contains("werman-plugin-reference-only", rnnoise.RequiredControls);
@@ -670,7 +670,7 @@ public sealed class DspLiveDiagnosticsServiceTests
             blocker => blocker.Contains("do not vendor", StringComparison.OrdinalIgnoreCase));
 
         var rmnoise = Assert.Single(candidates, c => c.Id == "rmnoise");
-        Assert.Contains("NR5-AI Assist", rmnoise.IntegrationPoint);
+        Assert.Contains("RX Audio Suite", rmnoise.IntegrationPoint);
         Assert.Contains("recording-consent-gate", rmnoise.RequiredControls);
         Assert.Contains("service-availability-fallback", rmnoise.RequiredControls);
         Assert.Contains("no-live-cloud-stream-by-default", rmnoise.RequiredControls);
@@ -682,7 +682,7 @@ public sealed class DspLiveDiagnosticsServiceTests
             blocker => blocker.Contains("consent/privacy", StringComparison.OrdinalIgnoreCase));
 
         var dpdfnet = Assert.Single(candidates, c => c.Id == "dpdfnet");
-        Assert.Contains("NR5-AI Assist", dpdfnet.IntegrationPoint);
+        Assert.Contains("RX Audio Suite", dpdfnet.IntegrationPoint);
         Assert.Contains("onnx-or-tflite-runtime-package-review", dpdfnet.RequiredControls);
         Assert.Contains("48khz-frame-adapter", dpdfnet.RequiredControls);
         Assert.Contains("weak-ssb-volume-parity", dpdfnet.RequiredBenchmarks);

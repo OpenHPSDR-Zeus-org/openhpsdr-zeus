@@ -476,7 +476,7 @@ public sealed class SmartNrConditionEndpointTests
             control => control == "webrtc-agc-disabled");
 
         var rnnoise = Assert.Single(candidates, item => item.GetProperty("id").GetString() == "rnnoise");
-        Assert.Contains("NR5-AI Assist", rnnoise.GetProperty("integrationPoint").GetString());
+        Assert.Contains("RX Audio Suite", rnnoise.GetProperty("integrationPoint").GetString());
         Assert.Contains(
             rnnoise.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
             control => control == "official-xiph-runtime-only");
@@ -499,7 +499,7 @@ public sealed class SmartNrConditionEndpointTests
             url => url == "https://github.com/werman/noise-suppression-for-voice");
 
         var rmnoise = Assert.Single(candidates, item => item.GetProperty("id").GetString() == "rmnoise");
-        Assert.Contains("NR5-AI Assist", rmnoise.GetProperty("integrationPoint").GetString());
+        Assert.Contains("RX Audio Suite", rmnoise.GetProperty("integrationPoint").GetString());
         Assert.Contains(
             rmnoise.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
             control => control == "recording-consent-gate");
@@ -515,7 +515,7 @@ public sealed class SmartNrConditionEndpointTests
             url => url == "https://ournetplace.com/rm-noise/");
 
         var dpdfnet = Assert.Single(candidates, item => item.GetProperty("id").GetString() == "dpdfnet");
-        Assert.Contains("NR5-AI Assist", dpdfnet.GetProperty("integrationPoint").GetString());
+        Assert.Contains("RX Audio Suite", dpdfnet.GetProperty("integrationPoint").GetString());
         Assert.Contains(
             dpdfnet.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
             control => control == "onnx-or-tflite-runtime-package-review");

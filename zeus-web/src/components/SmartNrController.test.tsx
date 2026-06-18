@@ -337,7 +337,7 @@ describe('SmartNrController', () => {
     for (let i = 0; i < 6; i++) feed(extremelyWeakSignal());
 
     expect(setNrMock).toHaveBeenCalledTimes(1);
-    expect(setNrMock.mock.calls[0]?.[0].nrMode).toBe('Nr5');
+    expect(setNrMock.mock.calls[0]?.[0].nrMode).toBe('Sbnr');
     expect(useSmartNrStore.getState().status?.reason).toContain('Weak-signal assist');
   });
 

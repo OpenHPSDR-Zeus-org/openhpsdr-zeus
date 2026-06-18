@@ -51,16 +51,18 @@ import {
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useSmartNrStore } from '../state/smart-nr-store';
+import { useAudioSuiteStore } from '../state/audio-suite-store';
 import { Slider } from './design/Slider';
 import { NrSettingsSection, type NrSettingsMode } from './nr/NrSettingsSection';
 
 // Leveler max-gain moved to TxFilterPanel (alongside DRV/TUN/MIC) — it's
 // a TX-only stage and lives with the other TX controls now.
 
-// Mirrors NrControls.tsx — cycle order matches Thetis WDSP semantics. NR3
-// (RNNR) is intentionally skipped — see issue #79. The modes are mutually
-// exclusive in WDSP so they all ride the single nrMode.
-const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr', 'Nr5'];
+// Mirrors NrControls.tsx. NR3 (RNNR) is intentionally skipped; NR5/SPNR is
+// retained in the DTO/backend for saved-profile compatibility, but no longer
+// appears in the normal operator cycle now that RX Suite VST denoise is the
+// preferred receive cleanup path.
+const NR_CYCLE: readonly NrMode[] = ['Off', 'Anr', 'Emnr', 'Sbnr'];
 const NR_LABEL: Record<NrMode, string> = {
   Off: 'NR',
   Anr: 'NR',
@@ -79,8 +81,7 @@ function nrButtonTitle(mode: NrMode): string {
   }
 }
 
-// NR1 / NR2 / NR4 each have a tunables panel. NR5 uses fixed experimental
-// defaults until its bench/on-air behavior is proven. NR4 panel was suppressed
+// NR1 / NR2 / NR4 each have a tunables panel. NR4 panel was suppressed
 // pre-#162 (libwdsp didn't export SetRXASBNR*); now that Phase 1 binaries
 // ship the symbols on linux-x64 + win-x64, the panel is reachable again.
 // Mirrors NrControls.tsx.
@@ -109,6 +110,8 @@ export function DspPanel() {
   const smartNrStatus = useSmartNrStore((s) => s.status);
   const setSmartNrMode = useSmartNrStore((s) => s.setAutomationMode);
   const setSmartNrStatus = useSmartNrStore((s) => s.setStatus);
+  const openRxSuite = useAudioSuiteStore((s) => s.openRx);
+  const rxSuiteOpen = useAudioSuiteStore((s) => s.rxOpen);
 
   const inflightAbort = useRef<AbortController | null>(null);
 
@@ -166,7 +169,6 @@ export function DspPanel() {
     () => send({ ...nr, nbpNotchesEnabled: !nr.nbpNotchesEnabled }),
     [nr, send],
   );
-
   const applySmartNr = useCallback(() => {
     if (!connected) return;
     if (smartNrMode !== 'manual') {
@@ -251,6 +253,15 @@ export function DspPanel() {
           title={nrButtonTitle(nr.nrMode)}
         >
           {NR_LABEL[nr.nrMode]}
+        </button>
+        <button
+          type="button"
+          onClick={openRxSuite}
+          aria-pressed={rxSuiteOpen}
+          className={`btn sm ${rxSuiteOpen ? 'active' : ''}`}
+          title="Open RX Audio Suite for receive VST inserts"
+        >
+          RX Suite
         </button>
         <button
           type="button"

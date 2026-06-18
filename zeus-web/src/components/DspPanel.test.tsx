@@ -9,6 +9,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 
 import { NR_CONFIG_DEFAULT } from '../api/client';
+import { useAudioSuiteStore } from '../state/audio-suite-store';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
 import { useSmartNrStore } from '../state/smart-nr-store';
@@ -24,6 +25,12 @@ describe('DspPanel SMART control', () => {
       status: 'Connected',
       mode: 'USB',
       nr: { ...NR_CONFIG_DEFAULT },
+    });
+    useAudioSuiteStore.setState({
+      rxOpen: false,
+      txOpen: false,
+      isOpen: false,
+      suiteRoute: 'tx',
     });
     useDisplayStore.setState({
       panDb: null,
@@ -44,6 +51,12 @@ describe('DspPanel SMART control', () => {
     useConnectionStore.setState({
       status: 'Disconnected',
       nr: { ...NR_CONFIG_DEFAULT },
+    });
+    useAudioSuiteStore.setState({
+      rxOpen: false,
+      txOpen: false,
+      isOpen: false,
+      suiteRoute: 'tx',
     });
   });
 
@@ -112,5 +125,26 @@ describe('DspPanel SMART control', () => {
     expect(useConnectionStore.getState().nr.nrMode).toBe('Emnr');
     expect(useSmartNrStore.getState().status?.applied).toBe(true);
     expect(container.textContent).toContain('APPLIED');
+  });
+
+  it('opens the RX Audio Suite from the DSP panel', () => {
+    act(() => {
+      root.render(<DspPanel />);
+    });
+
+    const rxSuite = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((b) => b.textContent?.trim() === 'RX Suite');
+
+    expect(rxSuite).toBeDefined();
+    expect(rxSuite!.getAttribute('aria-pressed')).toBe('false');
+    expect(useAudioSuiteStore.getState().rxOpen).toBe(false);
+
+    act(() => {
+      rxSuite!.click();
+    });
+
+    expect(useAudioSuiteStore.getState().rxOpen).toBe(true);
+    expect(useAudioSuiteStore.getState().suiteRoute).toBe('rx');
+    expect(rxSuite!.getAttribute('aria-pressed')).toBe('true');
   });
 });
