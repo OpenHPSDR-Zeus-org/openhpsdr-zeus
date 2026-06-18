@@ -9,7 +9,7 @@ expected_handle="iamexemplar <christiantsuarez@gmail.com>"
 
 reject_old_identity() {
   case "$1" in
-    *"Ramon"*|*"ramon"*|*"RAMON"*|*"rampa"*|*"Rampa"*|*"RAMPA"*)
+    *[Rr][Aa][Mm][Oo][Nn]*|*[Rr][Aa][Mm][Pp][Aa]*)
       return 0
       ;;
     *)
@@ -51,42 +51,30 @@ contains_ai_identity() {
   esac
 }
 
-is_old_identity_trailer() {
-  case "$1" in
-    [Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:*|[Ss][Ii][Gg][Nn][Ee][Dd]-[Oo][Ff][Ff]-[Bb][Yy]:*|[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:*|[Cc][Oo][Mm][Mm][Ii][Tt][Tt][Ee][Dd]-[Bb][Yy]:*)
-      contains_old_identity "$1"
-      return $?
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-is_ai_trailer() {
-  case "$1" in
-    [Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:*|[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ee][Dd]-[Bb][Yy]:*|[Ss][Ii][Gg][Nn][Ee][Dd]-[Oo][Ff][Ff]-[Bb][Yy]:*)
-      contains_ai_identity "$1"
-      return $?
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-commit_has_forbidden_trailer() {
+commit_has_forbidden_message() {
   message_commit=$1
   while IFS= read -r line || [ -n "$line" ]
   do
-    if is_old_identity_trailer "$line" || is_ai_trailer "$line"; then
+    if contains_old_identity "$line" || contains_ai_identity "$line"; then
       return 0
     fi
   done <<EOF
 $(git show -s --format=%B "$message_commit")
 EOF
 
+
   return 1
+}
+
+list_pushed_commits() {
+  local_sha=$1
+  remote_sha=$2
+
+  if [ "$remote_sha" = "$zero" ]; then
+    git rev-list "$local_sha" --not --remotes 2>/dev/null || true
+  else
+    git rev-list "$local_sha" "^$remote_sha" 2>/dev/null || true
+  fi
 }
 
 while read -r local_ref local_sha remote_ref remote_sha
@@ -98,23 +86,17 @@ do
 
   [ "$local_sha" = "$zero" ] && continue
 
-  if [ "$remote_sha" = "$zero" ]; then
-    range="$local_sha"
-  else
-    range="$remote_sha..$local_sha"
-  fi
-
-  idents="$(git log --format='%H%x09%an <%ae>%x09%cn <%ce>' "$range" 2>/dev/null || true)"
-  if reject_old_identity "$idents"; then
-    echo "Refusing push: commits contain old Ramon/rampa identity." >&2
-    echo "$idents" >&2
-    failed=1
-  fi
-
-  for commit in $(git rev-list "$range" 2>/dev/null || true)
+  for commit in $(list_pushed_commits "$local_sha" "$remote_sha")
   do
     author_ident="$(git show -s --format='%an <%ae>' "$commit")"
     committer_ident="$(git show -s --format='%cn <%ce>' "$commit")"
+
+    if reject_old_identity "$author_ident" || reject_old_identity "$committer_ident"; then
+      echo "Refusing push: commit $commit contains old attribution metadata:" >&2
+      echo "  author: $author_ident" >&2
+      echo "  committer: $committer_ident" >&2
+      failed=1
+    fi
 
     if ! is_expected_identity "$author_ident"; then
       echo "Refusing push: commit $commit has unexpected author identity:" >&2
@@ -134,8 +116,8 @@ do
       failed=1
     fi
 
-    if commit_has_forbidden_trailer "$commit"; then
-      echo "Refusing push: commit $commit contains a forbidden attribution trailer." >&2
+    if commit_has_forbidden_message "$commit"; then
+      echo "Refusing push: commit $commit contains forbidden attribution text." >&2
       failed=1
     fi
   done

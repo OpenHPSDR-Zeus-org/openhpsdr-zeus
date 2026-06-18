@@ -17,7 +17,7 @@ is_expected_identity() {
 
 reject_old_identity() {
   case "$1" in
-    *"Ramon"*|*"ramon"*|*"RAMON"*|*"rampa"*|*"Rampa"*|*"RAMPA"*)
+    *[Rr][Aa][Mm][Oo][Nn]*|*[Rr][Aa][Mm][Pp][Aa]*)
       return 0
       ;;
     *)

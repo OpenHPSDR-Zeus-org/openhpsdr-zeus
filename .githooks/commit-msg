@@ -25,39 +25,15 @@ contains_ai_identity() {
   esac
 }
 
-is_old_identity_trailer() {
-  case "$1" in
-    [Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:*|[Ss][Ii][Gg][Nn][Ee][Dd]-[Oo][Ff][Ff]-[Bb][Yy]:*|[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:*|[Cc][Oo][Mm][Mm][Ii][Tt][Tt][Ee][Dd]-[Bb][Yy]:*)
-      contains_old_identity "$1"
-      return $?
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-is_ai_trailer() {
-  case "$1" in
-    [Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:*|[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ee][Dd]-[Bb][Yy]:*|[Ss][Ii][Gg][Nn][Ee][Dd]-[Oo][Ff][Ff]-[Bb][Yy]:*)
-      contains_ai_identity "$1"
-      return $?
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
 while IFS= read -r line || [ -n "$line" ]
 do
-  if is_old_identity_trailer "$line"; then
-    echo "Refusing commit: Ramon/rampa attribution trailers are not allowed in this workspace." >&2
+  if contains_old_identity "$line"; then
+    echo "Refusing commit: old attribution names are not allowed in commit messages." >&2
     exit 1
   fi
 
-  if is_ai_trailer "$line"; then
-    echo "Refusing commit: Claude/Anthropic attribution trailers are not allowed in this workspace." >&2
+  if contains_ai_identity "$line"; then
+    echo "Refusing commit: AI assistant attribution is not allowed in commit messages." >&2
     exit 1
   fi
 done < "$msg_file"
