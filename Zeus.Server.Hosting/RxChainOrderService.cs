@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+using Zeus.Contracts;
 
 namespace Zeus.Server;
 
@@ -12,6 +13,7 @@ public sealed class RxChainOrderService
 {
     private readonly RxChainOrderStore _store;
     private readonly ILogger<RxChainOrderService> _log;
+    private readonly StreamingHub? _hub;
     private readonly object _sync = new();
     private readonly List<string> _canonical;
     private readonly HashSet<string> _attached = new(StringComparer.Ordinal);
@@ -19,10 +21,14 @@ public sealed class RxChainOrderService
 
     public event Action<IReadOnlyList<string>>? OrderChanged;
 
-    public RxChainOrderService(RxChainOrderStore store, ILogger<RxChainOrderService> log)
+    public RxChainOrderService(
+        RxChainOrderStore store,
+        ILogger<RxChainOrderService> log,
+        StreamingHub? hub = null)
     {
         _store = store;
         _log = log;
+        _hub = hub;
         _canonical = (_store.GetOrder() ?? Array.Empty<string>()).ToList();
         foreach (var id in _store.GetParked()) _parked.Add(id);
         _log.LogInformation(
@@ -71,7 +77,7 @@ public sealed class RxChainOrderService
                 if (!before.SequenceEqual(after)) snapshot = after;
             }
         }
-        if (snapshot is not null) OrderChanged?.Invoke(snapshot);
+        if (snapshot is not null) PublishOrder(snapshot);
     }
 
     public void OnPluginDetached(string pluginId)
@@ -86,7 +92,7 @@ public sealed class RxChainOrderService
                 if (!before.SequenceEqual(after)) snapshot = after;
             }
         }
-        if (snapshot is not null) OrderChanged?.Invoke(snapshot);
+        if (snapshot is not null) PublishOrder(snapshot);
     }
 
     public bool TrySetOrder(IReadOnlyList<string> newRuntimeOrder, out string? error)
@@ -118,7 +124,7 @@ public sealed class RxChainOrderService
             PersistUnderLock();
             snapshot = RuntimeOrderUnderLock();
         }
-        OrderChanged?.Invoke(snapshot);
+        PublishOrder(snapshot);
         error = null;
         return true;
     }
@@ -145,7 +151,7 @@ public sealed class RxChainOrderService
             PersistUnderLock();
             snapshot = RuntimeOrderUnderLock();
         }
-        OrderChanged?.Invoke(snapshot);
+        PublishOrder(snapshot);
         error = null;
         return true;
     }
@@ -164,7 +170,7 @@ public sealed class RxChainOrderService
             PersistUnderLock();
             snapshot = RuntimeOrderUnderLock();
         }
-        OrderChanged?.Invoke(snapshot);
+        PublishOrder(snapshot);
     }
 
     private bool IsActiveUnderLock(string id) => _attached.Contains(id) && !_parked.Contains(id);
@@ -179,4 +185,19 @@ public sealed class RxChainOrderService
     }
 
     private void PersistUnderLock() => _store.SetState(_canonical, _parked.ToList());
+
+    private void PublishOrder(IReadOnlyList<string> runtimeOrder)
+    {
+        OrderChanged?.Invoke(runtimeOrder);
+        if (_hub is null) return;
+
+        try
+        {
+            _hub.Broadcast(new RxAudioChainOrderFrame(runtimeOrder));
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "RxChainOrderService broadcast threw");
+        }
+    }
 }

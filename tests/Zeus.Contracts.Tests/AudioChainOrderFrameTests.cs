@@ -71,4 +71,21 @@ public class AudioChainOrderFrameTests
 
         Assert.Throws<InvalidOperationException>(() => frame.Serialize(writer));
     }
+
+    [Fact]
+    public void RxRoundTrip_UsesRxMsgTypeAndPreservesOrder()
+    {
+        var input = new RxAudioChainOrderFrame(new[]
+        {
+            "com.openhpsdr.zeus.rxvst.clear",
+            "com.openhpsdr.zeus.rxvst.rnnoise",
+        });
+
+        var writer = new ArrayBufferWriter<byte>(RxAudioChainOrderFrame.MaxByteLength);
+        input.Serialize(writer);
+
+        Assert.Equal((byte)MsgType.RxAudioChainOrder, writer.WrittenSpan[0]);
+        var decoded = RxAudioChainOrderFrame.Deserialize(writer.WrittenSpan);
+        Assert.Equal(input.PluginIds, decoded.PluginIds);
+    }
 }

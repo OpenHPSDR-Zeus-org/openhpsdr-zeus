@@ -190,4 +190,11 @@ public enum MsgType : byte
     // argb:u32 LE, callsignLen:u8, callsign:UTF-8, modeLen:u8, mode:UTF-8,
     // commentLen:u16 LE, comment:UTF-8.
     SpotList = 0x32,
+
+    // Server → client (RX audio plugin chain order). Same wire shape as
+    // AudioChainOrder, but dedicated to the receive-side Audio Suite rack
+    // so TX and RX order/membership state remain independent across every
+    // connected browser.
+    // Payload: [type:1][csvUtf8…]. See RxAudioChainOrderFrame.cs.
+    RxAudioChainOrder = 0x33,
 }

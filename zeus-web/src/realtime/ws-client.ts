@@ -168,6 +168,11 @@ const MIC_PEAK_BYTES = 1 + 4 + 8;
 // Contract: Zeus.Contracts/AudioChainOrderFrame.cs.
 export const MSG_TYPE_AUDIO_CHAIN_ORDER = 0x1e;
 
+// RX Audio Suite chain-order broadcast. Same payload as TX chain-order,
+// but updates the receive-side rack.
+// Contract: Zeus.Contracts/RxAudioChainOrderFrame.cs.
+export const MSG_TYPE_RX_AUDIO_CHAIN_ORDER = 0x33;
+
 // Audio Suite master-bypass broadcast. Server pushes this on every
 // operator toggle of the master bypass — disengages the WHOLE plugin
 // chain (NoiseGate / EQ / Comp / Exciter / Bass / Reverb) in a single
@@ -473,6 +478,13 @@ export function startRealtime(path = '/ws'): () => void {
           const csv = new TextDecoder('utf-8').decode(bytes);
           const ids = csv.length === 0 ? [] : csv.split(',');
           useAudioSuiteStore.getState().setChainOrderFromServer(ids);
+          return;
+        }
+        if (peekType === MSG_TYPE_RX_AUDIO_CHAIN_ORDER) {
+          const bytes = new Uint8Array(ev.data, 1);
+          const csv = new TextDecoder('utf-8').decode(bytes);
+          const ids = csv.length === 0 ? [] : csv.split(',');
+          useAudioSuiteStore.getState().setRxChainOrderFromServer(ids);
           return;
         }
         if (peekType === MSG_TYPE_CW_ENGINE_STATUS) {

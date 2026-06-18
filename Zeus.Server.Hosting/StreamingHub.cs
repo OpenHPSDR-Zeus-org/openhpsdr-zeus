@@ -650,6 +650,31 @@ public sealed class StreamingHub
         }
     }
 
+    public void Broadcast(in RxAudioChainOrderFrame frame)
+    {
+        if (_clients.IsEmpty) return;
+
+        int csvLen = 0;
+        for (int i = 0; i < frame.PluginIds.Count; i++)
+        {
+            if (i > 0) csvLen += 1; // comma
+            csvLen += System.Text.Encoding.UTF8.GetByteCount(frame.PluginIds[i]);
+        }
+        int total = 1 + csvLen;
+        if (total > RxAudioChainOrderFrame.MaxByteLength)
+        {
+            System.Threading.Interlocked.Increment(ref _dropsOther);
+            return;
+        }
+        var payload = new byte[total];
+        var writer = new FixedBufferWriter(payload, total);
+        frame.Serialize(writer);
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
     /// <summary>
     /// Broadcasts a BandPlanChanged (0x1B) notification. Payload: type byte +
     /// UTF-8 region ID. Clients refetch /api/bands/current on receipt.

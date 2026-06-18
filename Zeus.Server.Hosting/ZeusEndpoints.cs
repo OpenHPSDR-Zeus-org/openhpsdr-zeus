@@ -381,7 +381,7 @@ public static class ZeusEndpoints
         static IResult MapEditorResult(EditorActionResult r, bool open) => r switch
         {
             EditorActionResult.Ok        => Results.Ok(new { open }),
-            EditorActionResult.NotFound  => Results.NotFound(new { error = "No such plugin in the TX chain." }),
+            EditorActionResult.NotFound  => Results.NotFound(new { error = "No such plugin in the Audio Suite chain." }),
             EditorActionResult.NotAVst   => Results.BadRequest(new { error = "This plugin has no native VST editor." }),
             EditorActionResult.NotLoaded => Results.Json(
                 new { error = "This VST didn't load, so it has no editor to show. It may not be a valid VST3 audio-effect (check the server log), or native VST hosting is off (headless/server mode keeps it gated — run the desktop app, or set ZEUS_ENABLE_VST_LOAD=1)." },
