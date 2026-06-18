@@ -424,6 +424,8 @@ public static class ZeusHost
         // a whole rack layout ("Contest" / "Ragchew") in one click.
         builder.Services.AddSingleton<AudioProfileStore>();
         builder.Services.AddSingleton<AudioProfileService>();
+        builder.Services.AddSingleton<RxAudioProfileStore>();
+        builder.Services.AddSingleton<RxAudioProfileService>();
 
         // VstEngineController owns the out-of-process VST engine (the opt-in
         // "VST" processing mode). Singleton so AudioPluginBridge (realtime tap)

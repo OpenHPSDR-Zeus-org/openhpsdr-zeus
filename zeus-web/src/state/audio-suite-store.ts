@@ -158,11 +158,14 @@ interface AudioSuiteState {
   // to localStorage.
   profiles: AudioProfileSummary[];
   profilesLoaded: boolean;
+  rxProfiles: AudioProfileSummary[];
+  rxProfilesLoaded: boolean;
 
   // The operator's selected profile in the Audio Suite toolbar. This is
   // presentation state, but persisted so the dropdown stays on the profile
   // the operator chose until they pick another one.
   selectedProfile: string;
+  rxSelectedProfile: string;
 
   // Actions
   open(route?: AudioSuiteRoute): void;
@@ -191,6 +194,7 @@ interface AudioSuiteState {
 
   // Profile selection.
   setSelectedProfile(name: string): void;
+  setSelectedProfileForRoute(route: AudioSuiteRoute, name: string): void;
 
   // Chain membership — park (active=false) / un-park (active=true) an
   // installed plugin. Parking pulls it out of the active chain (stops
@@ -201,10 +205,10 @@ interface AudioSuiteState {
   setRxChainMembership(pluginId: string, active: boolean): Promise<void>;
 
   // Profile plumbing.
-  loadProfiles(): Promise<void>;
-  saveProfile(name: string): Promise<AudioProfileMutationResult>;
-  applyProfile(name: string): Promise<AudioProfileMutationResult>;
-  deleteProfile(name: string): Promise<AudioProfileMutationResult>;
+  loadProfiles(route?: AudioSuiteRoute): Promise<void>;
+  saveProfile(name: string, route?: AudioSuiteRoute): Promise<AudioProfileMutationResult>;
+  applyProfile(name: string, route?: AudioSuiteRoute): Promise<AudioProfileMutationResult>;
+  deleteProfile(name: string, route?: AudioSuiteRoute): Promise<AudioProfileMutationResult>;
 
   // Scan a directory for VST3 plugins, register each, and refresh the
   // rack. Returns a summary (or an error string on failure).
@@ -280,6 +284,7 @@ type AudioSuitePersistedState = Pick<
   | 'sidebarCollapsed'
   | 'rxSidebarCollapsed'
   | 'selectedProfile'
+  | 'rxSelectedProfile'
 >;
 
 // Default window placement — top-left quadrant, room for plugin panels.
@@ -344,7 +349,10 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
       rxSidebarCollapsed: false,
       profiles: [],
       profilesLoaded: false,
+      rxProfiles: [],
+      rxProfilesLoaded: false,
       selectedProfile: '',
+      rxSelectedProfile: '',
 
       open: (route = 'tx') => {
         if (route === 'rx') get().openRx();
@@ -483,6 +491,8 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         set(route === 'rx' ? { rxSelectedChainId: id } : { selectedChainId: id }),
 
       setSelectedProfile: (name) => set({ selectedProfile: name.trim() }),
+      setSelectedProfileForRoute: (route, name) =>
+        set(route === 'rx' ? { rxSelectedProfile: name.trim() } : { selectedProfile: name.trim() }),
 
       setChainMembership: async (pluginId, active) => {
         const prev = get().chainOrder;
@@ -554,125 +564,159 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         }
       },
 
-      loadProfiles: async () => {
+      loadProfiles: async (route = 'tx') => {
         try {
-          const res = await fetch('/api/tx-audio-suite/profiles');
+          const res = await fetch(`/api/${route}-audio-suite/profiles`);
           if (!res.ok) return;
           const body = (await res.json()) as { profiles?: AudioProfileSummaryResponse[] };
           if (Array.isArray(body.profiles)) {
             const nextProfiles = body.profiles.map(normalizeAudioProfileSummary);
-            set((s) => ({
-              profiles: nextProfiles,
-              profilesLoaded: true,
-              selectedProfile:
-                s.selectedProfile &&
-                !nextProfiles.some((p) => p.name === s.selectedProfile)
-                  ? ''
-                  : s.selectedProfile,
-            }));
+            set((s) =>
+              route === 'rx'
+                ? {
+                    rxProfiles: nextProfiles,
+                    rxProfilesLoaded: true,
+                    rxSelectedProfile:
+                      s.rxSelectedProfile &&
+                      !nextProfiles.some((p) => p.name === s.rxSelectedProfile)
+                        ? ''
+                        : s.rxSelectedProfile,
+                  }
+                : {
+                    profiles: nextProfiles,
+                    profilesLoaded: true,
+                    selectedProfile:
+                      s.selectedProfile &&
+                      !nextProfiles.some((p) => p.name === s.selectedProfile)
+                        ? ''
+                        : s.selectedProfile,
+                  },
+            );
           }
         } catch (err) {
           // eslint-disable-next-line no-console
-          console.warn('audio-suite profiles GET threw', err);
+          console.warn(`${route}-audio-suite profiles GET threw`, err);
         }
       },
 
-      saveProfile: async (name) => {
+      saveProfile: async (name, route = 'tx') => {
         const trimmed = name.trim();
         if (!trimmed) return { ok: false, error: 'Profile name is required.' };
         try {
           const res = await fetch(
-            `/api/tx-audio-suite/profiles/${encodeURIComponent(trimmed)}`,
+            `/api/${route}-audio-suite/profiles/${encodeURIComponent(trimmed)}`,
             { method: 'PUT' },
           );
           if (!res.ok) {
             const error = await profileErrorMessage(res);
             // eslint-disable-next-line no-console
-            console.warn(`audio-suite profile save rejected: ${error}`);
+            console.warn(`${route}-audio-suite profile save rejected: ${error}`);
             return { ok: false, error };
           }
         } catch (err) {
           // eslint-disable-next-line no-console
-          console.warn('audio-suite profile save threw', err);
+          console.warn(`${route}-audio-suite profile save threw`, err);
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
-        await get().loadProfiles();
+        await get().loadProfiles(route);
         return { ok: true };
       },
 
-      applyProfile: async (name) => {
+      applyProfile: async (name, route = 'tx') => {
         const trimmed = name.trim();
         if (!trimmed) return { ok: false, error: 'Profile name is required.' };
         try {
           const res = await fetch(
-            `/api/tx-audio-suite/profiles/${encodeURIComponent(trimmed)}/apply`,
+            `/api/${route}-audio-suite/profiles/${encodeURIComponent(trimmed)}/apply`,
             { method: 'POST' },
           );
           if (!res.ok) {
             const error = await profileErrorMessage(res);
             // eslint-disable-next-line no-console
-            console.warn(`audio-suite profile apply rejected: ${error}`);
+            console.warn(`${route}-audio-suite profile apply rejected: ${error}`);
             return { ok: false, error };
           }
-          // Server returns the new active order, processing route, and
-          // master-bypass state; order + bypass also arrive via WS broadcast,
-          // but adopt the response so the rack updates instantly.
           const body = (await res.json()) as {
             pluginIds?: string[];
             processingMode?: string;
             engineAvailable?: boolean;
             engineActive?: boolean;
+            activePlugins?: number;
+            degradedBlocks?: number;
             masterBypass?: boolean;
           };
-          if (Array.isArray(body.pluginIds)) set({ chainOrder: body.pluginIds });
-          if (body.processingMode === 'vst' || body.processingMode === 'native') {
+
+          if (route === 'rx') {
+            if (Array.isArray(body.pluginIds)) set({ rxChainOrder: body.pluginIds });
             set({
-              processingMode: body.processingMode,
-              vstEngineAvailable: body.engineAvailable === true,
-              vstEngineActive: body.engineActive === true,
+              rxSelectedProfile: trimmed,
+              rxVstEngineAvailable: body.engineAvailable === true,
+              rxVstEngineActive: body.engineActive === true,
+              rxVstActivePlugins:
+                typeof body.activePlugins === 'number' ? body.activePlugins : 0,
+              rxVstDegradedBlocks:
+                typeof body.degradedBlocks === 'number' ? body.degradedBlocks : 0,
             });
-          }
-          if (typeof body.masterBypass === 'boolean') {
-            set({ masterBypassed: body.masterBypass });
-          }
-          set({ selectedProfile: trimmed });
-          if (
-            body.processingMode !== 'vst' &&
-            body.processingMode !== 'native'
-          ) {
-            await get().loadProcessingModeFromServer();
-          }
-          if (typeof body.masterBypass !== 'boolean') {
-            await get().loadMasterBypassFromServer();
+            if (typeof body.masterBypass === 'boolean') {
+              set({ rxMasterBypassed: body.masterBypass });
+            } else {
+              await get().loadRxMasterBypassFromServer();
+            }
+          } else {
+            if (Array.isArray(body.pluginIds)) set({ chainOrder: body.pluginIds });
+            if (body.processingMode === 'vst' || body.processingMode === 'native') {
+              set({
+                processingMode: body.processingMode,
+                vstEngineAvailable: body.engineAvailable === true,
+                vstEngineActive: body.engineActive === true,
+              });
+            }
+            if (typeof body.masterBypass === 'boolean') {
+              set({ masterBypassed: body.masterBypass });
+            }
+            set({ selectedProfile: trimmed });
+            if (
+              body.processingMode !== 'vst' &&
+              body.processingMode !== 'native'
+            ) {
+              await get().loadProcessingModeFromServer();
+            }
+            if (typeof body.masterBypass !== 'boolean') {
+              await get().loadMasterBypassFromServer();
+            }
           }
           return { ok: true };
         } catch (err) {
           // eslint-disable-next-line no-console
-          console.warn('audio-suite profile apply threw', err);
+          console.warn(`${route}-audio-suite profile apply threw`, err);
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
       },
 
-      deleteProfile: async (name) => {
+      deleteProfile: async (name, route = 'tx') => {
         try {
-          const res = await fetch(`/api/tx-audio-suite/profiles/${encodeURIComponent(name)}`, {
+          const res = await fetch(`/api/${route}-audio-suite/profiles/${encodeURIComponent(name)}`, {
             method: 'DELETE',
           });
           if (!res.ok) {
             const error = await profileErrorMessage(res);
             // eslint-disable-next-line no-console
-            console.warn(`audio-suite profile delete rejected: ${error}`);
+            console.warn(`${route}-audio-suite profile delete rejected: ${error}`);
             return { ok: false, error };
           }
         } catch (err) {
           // eslint-disable-next-line no-console
-          console.warn('audio-suite profile delete threw', err);
+          console.warn(`${route}-audio-suite profile delete threw`, err);
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
-        if (get().selectedProfile === name) {
+        if (route === 'rx') {
+          if (get().rxSelectedProfile === name) {
+            set({ rxSelectedProfile: '' });
+          }
+        } else if (get().selectedProfile === name) {
           set({ selectedProfile: '' });
         }
-        await get().loadProfiles();
+        await get().loadProfiles(route);
         return { ok: true };
       },
 
@@ -1168,6 +1212,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           sidebarCollapsed: state.sidebarCollapsed === true,
           rxSidebarCollapsed: state.rxSidebarCollapsed === true,
           selectedProfile: state.selectedProfile ?? '',
+          rxSelectedProfile: state.rxSelectedProfile ?? '',
         } satisfies AudioSuitePersistedState;
       },
       // Persist only window placement + open flag. Chain order and
@@ -1195,6 +1240,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         sidebarCollapsed: s.sidebarCollapsed,
         rxSidebarCollapsed: s.rxSidebarCollapsed,
         selectedProfile: s.selectedProfile,
+        rxSelectedProfile: s.rxSelectedProfile,
       }),
     },
   ),

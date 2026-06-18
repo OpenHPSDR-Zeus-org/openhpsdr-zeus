@@ -441,6 +441,66 @@ public static class ZeusEndpoints
                 : Results.NotFound(new { error = $"no audio profile named '{name}'" });
         });
 
+        app.MapGet("/api/rx-audio-suite/profiles", (RxAudioProfileService profiles) =>
+        {
+            var list = profiles.List().Select(p => new
+            {
+                name = p.Name,
+                processingMode = "vst",
+                order = p.Order,
+                parked = p.Parked,
+                masterBypass = p.MasterBypass,
+                createdUtc = p.CreatedUtc,
+                updatedUtc = p.UpdatedUtc,
+            });
+            return Results.Ok(new { profiles = list });
+        });
+        app.MapPut("/api/rx-audio-suite/profiles/{name}", async (string name, RxAudioProfileService profiles) =>
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return Results.BadRequest(new { error = "profile name is required" });
+            var entry = await profiles.SaveCurrentAsync(name.Trim());
+            return Results.Ok(new
+            {
+                name = entry.Name,
+                processingMode = "vst",
+                order = entry.Order,
+                parked = entry.Parked,
+                masterBypass = entry.MasterBypass,
+                vstStates = entry.PluginStates.Count,
+                createdUtc = entry.CreatedUtc,
+                updatedUtc = entry.UpdatedUtc,
+            });
+        });
+        app.MapPost("/api/rx-audio-suite/profiles/{name}/apply", async (
+            string name,
+            RxAudioProfileService profiles,
+            RxChainOrderService rxChainOrder,
+            RxVstEngineService rxVst,
+            AudioChainMasterBypassService masterBypass,
+            CancellationToken ct) =>
+        {
+            var profile = await profiles.ApplyAsync(name, ct);
+            if (profile is not null)
+                return Results.Ok(new
+                {
+                    pluginIds = rxChainOrder.CurrentOrder,
+                    processingMode = "vst",
+                    engineActive = rxVst.EngineActive,
+                    engineAvailable = rxVst.EngineAvailable,
+                    activePlugins = rxVst.ActivePluginCount,
+                    degradedBlocks = rxVst.DegradedBlocks,
+                    masterBypass = masterBypass.IsRxBypassed,
+                });
+            return Results.NotFound(new { error = $"no RX audio profile named '{name}'" });
+        });
+        app.MapDelete("/api/rx-audio-suite/profiles/{name}", (string name, RxAudioProfileService profiles) =>
+        {
+            return profiles.Delete(name)
+                ? Results.Ok(new { deleted = name })
+                : Results.NotFound(new { error = $"no RX audio profile named '{name}'" });
+        });
+
         // Scan a directory for VST3 plugins and register each as an
         // installed Zeus plugin so it flows into the Audio Suite chain.
         // Each .vst3 becomes a generated plugin package (stub assembly +

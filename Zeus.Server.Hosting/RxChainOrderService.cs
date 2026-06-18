@@ -173,6 +173,57 @@ public sealed class RxChainOrderService
         PublishOrder(snapshot);
     }
 
+    /// <summary>
+    /// Apply a saved RX profile's membership and active order in one operation.
+    /// Plugins named by the profile but not currently attached are ignored; any
+    /// attached plugin omitted by the profile is parked.
+    /// </summary>
+    public void ApplyMembershipAndOrder(
+        IReadOnlyList<string> desiredOrder,
+        IReadOnlyCollection<string> desiredParked)
+    {
+        List<string> snapshot;
+        lock (_sync)
+        {
+            var profileIds = new HashSet<string>(
+                desiredOrder.Concat(desiredParked),
+                StringComparer.Ordinal);
+            var parkSet = new HashSet<string>(desiredParked, StringComparer.Ordinal);
+
+            _parked.Clear();
+            foreach (var id in _attached)
+            {
+                if (parkSet.Contains(id) || !profileIds.Contains(id))
+                    _parked.Add(id);
+            }
+
+            var active = new HashSet<string>(
+                _canonical.Where(IsActiveUnderLock),
+                StringComparer.Ordinal);
+            var ordered = new List<string>(active.Count);
+            var placed = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var id in desiredOrder)
+                if (active.Contains(id) && placed.Add(id))
+                    ordered.Add(id);
+
+            foreach (var id in _canonical)
+                if (active.Contains(id) && placed.Add(id))
+                    ordered.Add(id);
+
+            int j = 0;
+            for (int i = 0; i < _canonical.Count && j < ordered.Count; i++)
+            {
+                if (IsActiveUnderLock(_canonical[i]))
+                    _canonical[i] = ordered[j++];
+            }
+
+            PersistUnderLock();
+            snapshot = RuntimeOrderUnderLock();
+        }
+        PublishOrder(snapshot);
+    }
+
     private bool IsActiveUnderLock(string id) => _attached.Contains(id) && !_parked.Contains(id);
 
     private List<string> RuntimeOrderUnderLock()

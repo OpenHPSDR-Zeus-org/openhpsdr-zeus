@@ -227,6 +227,53 @@ describe('audio-suite-store profile selection', () => {
     ]);
   });
 
+  it('applies RX profiles through the RX suite endpoint only', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === '/api/rx-audio-suite/profiles/Clear%20RX/apply') {
+        return response({
+          pluginIds: ['com.openhpsdr.zeus.rxvst.supertone-clear'],
+          processingMode: 'vst',
+          engineAvailable: true,
+          engineActive: true,
+          activePlugins: 1,
+          degradedBlocks: 3,
+          masterBypass: false,
+        });
+      }
+      return response({});
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { useAudioSuiteStore } = await import('./audio-suite-store');
+    useAudioSuiteStore.setState({
+      chainOrder: ['com.openhpsdr.zeus.samples.eq'],
+      rxChainOrder: ['com.openhpsdr.zeus.rxvst.old'],
+      masterBypassed: true,
+      rxMasterBypassed: true,
+    });
+
+    const result = await useAudioSuiteStore.getState().applyProfile('Clear RX', 'rx');
+
+    expect(result).toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/rx-audio-suite/profiles/Clear%20RX/apply',
+      { method: 'POST' },
+    );
+    expect(useAudioSuiteStore.getState().chainOrder).toEqual([
+      'com.openhpsdr.zeus.samples.eq',
+    ]);
+    expect(useAudioSuiteStore.getState().masterBypassed).toBe(true);
+    expect(useAudioSuiteStore.getState().rxChainOrder).toEqual([
+      'com.openhpsdr.zeus.rxvst.supertone-clear',
+    ]);
+    expect(useAudioSuiteStore.getState().rxMasterBypassed).toBe(false);
+    expect(useAudioSuiteStore.getState().rxSelectedProfile).toBe('Clear RX');
+    expect(useAudioSuiteStore.getState().rxVstEngineActive).toBe(true);
+    expect(useAudioSuiteStore.getState().rxVstActivePlugins).toBe(1);
+    expect(useAudioSuiteStore.getState().rxVstDegradedBlocks).toBe(3);
+  });
+
   it('reports profile apply failures', async () => {
     const fetchMock = vi
       .fn<typeof fetch>()

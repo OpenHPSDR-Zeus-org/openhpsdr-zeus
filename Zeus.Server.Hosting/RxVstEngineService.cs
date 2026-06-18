@@ -138,6 +138,83 @@ public sealed class RxVstEngineService : IHostedService, IAsyncDisposable
         lock (_editorLock) return _openEditors.Contains(pluginId);
     }
 
+    public async Task<IReadOnlyDictionary<string, string>> CaptureChainStatesAsync(
+        TimeSpan timeout,
+        CancellationToken ct = default)
+    {
+        if (!_engine.IsActive) return new Dictionary<string, string>();
+
+        var tcs = new TaskCompletionSource<IReadOnlyDictionary<string, string>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void Handler(JsonElement e)
+        {
+            try
+            {
+                if (!e.TryGetProperty("event", out var evt)
+                    || evt.ValueKind != JsonValueKind.String
+                    || evt.GetString() != "chain") return;
+                if (!e.TryGetProperty("plugins", out var plugins)
+                    || plugins.ValueKind != JsonValueKind.Array) return;
+
+                Dictionary<string, string> fileToId;
+                Dictionary<string, string> uidToId;
+                lock (_editorLock)
+                {
+                    fileToId = _fileToId;
+                    uidToId = _uidToId;
+                }
+
+                var states = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (var plugin in plugins.EnumerateArray())
+                {
+                    var identifier = StrProp(plugin, "identifier");
+                    string? zeusId = null;
+                    if (identifier.Length > 0 && uidToId.TryGetValue(identifier, out var byUid))
+                    {
+                        zeusId = byUid;
+                    }
+                    else
+                    {
+                        var key = NormalizePath(StrProp(plugin, "file"));
+                        if (key is not null && fileToId.TryGetValue(key, out var byFile))
+                            zeusId = byFile;
+                    }
+
+                    var state = StrProp(plugin, "state");
+                    if (zeusId is not null && state.Length > 0)
+                        states[zeusId] = state;
+                }
+                tcs.TrySetResult(states);
+            }
+            catch
+            {
+                tcs.TrySetResult(new Dictionary<string, string>());
+            }
+        }
+
+        _engine.EngineEvent += Handler;
+        try
+        {
+            _engine.SendCommand(new { cmd = "get_chain" });
+            return await tcs.Task.WaitAsync(timeout, ct).ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return new Dictionary<string, string>();
+        }
+        finally
+        {
+            _engine.EngineEvent -= Handler;
+        }
+    }
+
+    public void SetPluginStates(IReadOnlyDictionary<string, string> states)
+    {
+        lock (_editorLock)
+            _pluginStates = new Dictionary<string, string>(states, StringComparer.Ordinal);
+    }
+
     private async Task SyncEngineAsync(IReadOnlyList<string> activeOrder, CancellationToken ct)
     {
         try

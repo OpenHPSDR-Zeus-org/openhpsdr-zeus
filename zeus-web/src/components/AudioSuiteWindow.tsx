@@ -904,10 +904,16 @@ export function AudioSuiteWindow({
   );
   const setChainMembership = useAudioSuiteStore((s) => s.setChainMembership);
   const setRxChainMembership = useAudioSuiteStore((s) => s.setRxChainMembership);
-  const profiles = useAudioSuiteStore((s) => s.profiles);
-  const profilesLoaded = useAudioSuiteStore((s) => s.profilesLoaded);
-  const selectedProfile = useAudioSuiteStore((s) => s.selectedProfile);
-  const setSelectedProfile = useAudioSuiteStore((s) => s.setSelectedProfile);
+  const profiles = useAudioSuiteStore((s) => (isRxSuite ? s.rxProfiles : s.profiles));
+  const profilesLoaded = useAudioSuiteStore((s) =>
+    isRxSuite ? s.rxProfilesLoaded : s.profilesLoaded,
+  );
+  const selectedProfile = useAudioSuiteStore((s) =>
+    isRxSuite ? s.rxSelectedProfile : s.selectedProfile,
+  );
+  const setSelectedProfileForRoute = useAudioSuiteStore(
+    (s) => s.setSelectedProfileForRoute,
+  );
   const loadProfiles = useAudioSuiteStore((s) => s.loadProfiles);
   const saveProfile = useAudioSuiteStore((s) => s.saveProfile);
   const applyProfile = useAudioSuiteStore((s) => s.applyProfile);
@@ -950,6 +956,10 @@ export function AudioSuiteWindow({
   const setSelectedChainId = useCallback(
     (id: string | null) => setSelectedChainIdForRoute(route, id),
     [route, setSelectedChainIdForRoute],
+  );
+  const setSelectedProfile = useCallback(
+    (name: string) => setSelectedProfileForRoute(route, name),
+    [route, setSelectedProfileForRoute],
   );
   const toggleSidebar = useCallback(
     () => toggleSidebarForRoute(route),
@@ -1013,13 +1023,14 @@ export function AudioSuiteWindow({
       loadRxChainOrderFromServer();
       loadRxProcessingModeFromServer();
       loadRxMasterBypassFromServer();
+      loadProfiles('rx');
       return;
     }
     loadChainOrderFromServer();
     loadProcessingModeFromServer();
     loadPreviewState();
     loadMasterBypassFromServer();
-    loadProfiles();
+    loadProfiles('tx');
   }, [
     embedded,
     isOpen,
@@ -1238,7 +1249,7 @@ export function AudioSuiteWindow({
     const previous = selectedProfile;
     setSelectedProfile(trimmed);
     setVstNotice(null);
-    const result = await applyProfile(trimmed);
+    const result = await applyProfile(trimmed, route);
     if (!result.ok) {
       setSelectedProfile(previous);
       setVstNotice({
@@ -1650,17 +1661,16 @@ export function AudioSuiteWindow({
 
       {/* Profiles bar — named snapshots of the chain config. Choosing
           one applies it; Save snapshots the current chain. */}
-      {!isRxSuite && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 6,
-            padding: '6px 12px',
-            background: 'var(--bg-1)',
-            borderBottom: '1px solid var(--line)',
-          }}
-        >
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          padding: '6px 12px',
+          background: 'var(--bg-1)',
+          borderBottom: '1px solid var(--line)',
+        }}
+      >
         <span
           style={{
             color: 'var(--fg-3)',
@@ -1670,7 +1680,7 @@ export function AudioSuiteWindow({
             textTransform: 'uppercase',
           }}
         >
-          Profile
+          {isRxSuite ? 'RX Profile' : 'Profile'}
         </span>
         <select
           value={selectedProfile}
@@ -1716,8 +1726,7 @@ export function AudioSuiteWindow({
         >
           Delete
         </button>
-        </div>
-      )}
+      </div>
 
       {vstNotice && (
         <div
@@ -1904,7 +1913,7 @@ export function AudioSuiteWindow({
             setProfileDeletePending(null);
           }}
           onConfirm={async () => {
-            const result = await deleteProfile(profileDeletePending);
+            const result = await deleteProfile(profileDeletePending, route);
             if (!result.ok) {
               setProfileDialogError(result.error ?? 'Profile delete failed.');
               return;
@@ -1933,7 +1942,7 @@ export function AudioSuiteWindow({
             setProfileSaveOpen(false);
           }}
           onSubmit={async (name) => {
-            const result = await saveProfile(name);
+            const result = await saveProfile(name, route);
             if (!result.ok) {
               setProfileDialogError(result.error ?? 'Profile save failed.');
               return;
