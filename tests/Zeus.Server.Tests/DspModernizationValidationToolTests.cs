@@ -3575,6 +3575,96 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task WatchLiveDiagnosticsReportsNr5NoSignalNoiseCapPriors()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-no-signal-cap-watch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var jsonlPath = Path.Combine(bundleDir, "nr5-no-signal-cap-watch.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                jsonlPath,
+                new[]
+                {
+                    Nr5LevelerAlignmentWatchSample(
+                        0,
+                        nr5InputDbfs: -39.0,
+                        nr5OutputDbfs: -30.0,
+                        levelerInputRmsDbfs: -39.0,
+                        levelerOutputRmsDbfs: -38.0,
+                        rxAudioLevelerNr5HybridSpeechPrior: 0.060,
+                        rxAudioLevelerNr5NoSignalNoisePrior: 0.310,
+                        rxAudioLevelerNr5NoiseProfilePrior: 0.170,
+                        rxAudioLevelerNr5NoSignalNoiseCap: true,
+                        rxAudioLevelerNr5NoProofNoiseCap: true),
+                    Nr5LevelerAlignmentWatchSample(
+                        1,
+                        nr5InputDbfs: -41.0,
+                        nr5OutputDbfs: -31.0,
+                        levelerInputRmsDbfs: -41.0,
+                        levelerOutputRmsDbfs: -39.5,
+                        rxAudioLevelerNr5HybridSpeechPrior: 0.040,
+                        rxAudioLevelerNr5NoSignalNoisePrior: 0.380,
+                        rxAudioLevelerNr5NoiseProfilePrior: 0.240,
+                        rxAudioLevelerNr5NoSignalNoiseCap: true,
+                        rxAudioLevelerNr5FarPeakNoiseCap: true,
+                        rxAudioLevelerNr5NoProofNoiseCap: true),
+                    Nr5LevelerAlignmentWatchSample(
+                        2,
+                        nr5InputDbfs: -44.0,
+                        nr5OutputDbfs: -28.0,
+                        levelerInputRmsDbfs: -44.0,
+                        levelerOutputRmsDbfs: -31.0,
+                        rxAudioLevelerNr5HybridSpeechPrior: 0.520,
+                        rxAudioLevelerNr5NoSignalNoisePrior: 0.060,
+                        rxAudioLevelerNr5NoiseProfilePrior: 0.080)
+                });
+
+            var reportPath = Path.Combine(bundleDir, "nr5-no-signal-cap-watch.summary.json");
+            var watch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", jsonlPath,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, watch.ExitCode);
+            Assert.True(File.Exists(reportPath), watch.CombinedOutput);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            var levelerWatch = root.GetProperty("rxAudioLevelerWatch");
+
+            Assert.Equal(3, levelerWatch.GetProperty("diagnosticSampleCount").GetInt32());
+            Assert.Equal(2, levelerWatch.GetProperty("nr5NoSignalNoiseCapSampleCount").GetInt32());
+            Assert.Equal(1, levelerWatch.GetProperty("nr5FarPeakNoiseCapSampleCount").GetInt32());
+            Assert.Equal(2, levelerWatch.GetProperty("nr5NoProofNoiseCapSampleCount").GetInt32());
+            Assert.Equal(3, levelerWatch.GetProperty("nr5HybridSpeechPrior").GetProperty("count").GetInt32());
+            Assert.Equal(3, levelerWatch.GetProperty("nr5NoSignalNoisePrior").GetProperty("count").GetInt32());
+            Assert.Equal(3, levelerWatch.GetProperty("nr5NoiseProfilePrior").GetProperty("count").GetInt32());
+            Assert.Equal(2, levelerWatch.GetProperty("topNr5NoSignalNoiseCapSamples").GetArrayLength());
+            Assert.Contains(
+                root.GetProperty("recommendations").EnumerateArray(),
+                recommendation => (recommendation.GetString() ?? "").Contains("NR5 no-signal noise cap", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task WatchLiveDiagnosticsRequiresRepeatedWeakRowsBeforeMixedGapTuning()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
@@ -9872,7 +9962,13 @@ public sealed class DspModernizationValidationToolTests
         double? rxAudioLevelerAppliedGainDb = null,
         double? rxAudioLevelerGainDeltaDb = null,
         double? rxAudioLevelerPeakHeadroomDb = null,
-        double? rxAudioLevelerPreLimitPeakDbfs = null)
+        double? rxAudioLevelerPreLimitPeakDbfs = null,
+        double? rxAudioLevelerNr5HybridSpeechPrior = null,
+        double? rxAudioLevelerNr5NoSignalNoisePrior = null,
+        double? rxAudioLevelerNr5NoiseProfilePrior = null,
+        bool rxAudioLevelerNr5NoSignalNoiseCap = false,
+        bool rxAudioLevelerNr5FarPeakNoiseCap = false,
+        bool rxAudioLevelerNr5NoProofNoiseCap = false)
     {
         var runtimeStatus = txMonitorRequested ? "audio-tx-monitor" : "ready";
         var audioStatus = txMonitorRequested ? "tx-monitor" : "ready";
@@ -9942,6 +10038,12 @@ public sealed class DspModernizationValidationToolTests
                     rxAudioLevelerPreLimitPeakDbfs = runtimeLevelerPreLimitPeakDbfs,
                     rxAudioLevelerOutputLimitReductionDb = runtimeLevelerOutputLimitReductionDb,
                     rxAudioLevelerOutputLimitSampleCount = runtimeLevelerOutputLimitSampleCount,
+                    rxAudioLevelerNr5HybridSpeechPrior = txMonitorRequested ? null : rxAudioLevelerNr5HybridSpeechPrior,
+                    rxAudioLevelerNr5NoSignalNoisePrior = txMonitorRequested ? null : rxAudioLevelerNr5NoSignalNoisePrior,
+                    rxAudioLevelerNr5NoiseProfilePrior = txMonitorRequested ? null : rxAudioLevelerNr5NoiseProfilePrior,
+                    rxAudioLevelerNr5NoSignalNoiseCap = txMonitorRequested ? (bool?)null : rxAudioLevelerNr5NoSignalNoiseCap,
+                    rxAudioLevelerNr5FarPeakNoiseCap = txMonitorRequested ? (bool?)null : rxAudioLevelerNr5FarPeakNoiseCap,
+                    rxAudioLevelerNr5NoProofNoiseCap = txMonitorRequested ? (bool?)null : rxAudioLevelerNr5NoProofNoiseCap,
                     rxAudioLevelerBoostSlewLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerBoostSlewLimited,
                     rxAudioLevelerPeakLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerPeakLimited,
                     rxAudioLevelerOutputLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerOutputLimited

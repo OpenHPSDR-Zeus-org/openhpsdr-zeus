@@ -4288,7 +4288,128 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.InRange(state.DesiredGainDb, 1.0, 3.0);
         Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
         Assert.InRange(state.OutputRmsDbfs, -38.5, -36.5);
+        Assert.True(state.Nr5NoSignalNoiseCap);
+        Assert.True(state.Nr5FarPeakNoiseCap);
+        Assert.True(state.Nr5NoProofNoiseCap);
+        Assert.InRange(state.Nr5NoSignalNoisePrior, 0.220, 1.0);
+        Assert.InRange(state.Nr5NoiseProfilePrior, 0.030, 0.145);
         Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_RequiresStableAdjacentNoSignalProfileBeforeNoProofCap()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 16.0,
+            PauseHoldBlocks = 18
+        };
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.255,
+            signalProbability: 0.140,
+            agcGate: 0.500,
+            recoveryDrive: 0.060,
+            weakSignalMemory: 0.050,
+            outputDbfs: -24.0,
+            inputDbfs: -39.1,
+            maskSmoothing: 0.020,
+            peakEvidence: 0.0,
+            outputPeakDbfs: -13.0,
+            adjacentNoiseTrust: 0.850,
+            adjacentNoiseDrive: 0.820,
+            levelDrive: 0.900);
+
+        float[] first = new float[1024];
+        Array.Fill(first, DbToLinear(-39.1));
+        first[0] = DbToLinear(-27.8);
+
+        DspPipelineService.ApplyRxAudioLeveler(first, ref state, nr5);
+
+        double firstDesiredDb = state.DesiredGainDb;
+        Assert.False(state.Nr5NoSignalNoiseCap);
+        Assert.True(state.Nr5NoiseProfilePrior > 0.145);
+
+        for (int i = 0; i < 3; i++)
+        {
+            float[] next = new float[1024];
+            Array.Fill(next, DbToLinear(-39.1));
+            next[0] = DbToLinear(-27.8);
+            DspPipelineService.ApplyRxAudioLeveler(next, ref state, nr5);
+        }
+
+        Assert.True(state.Nr5NoSignalNoiseCap);
+        Assert.False(state.Nr5FarPeakNoiseCap);
+        Assert.True(state.Nr5NoProofNoiseCap);
+        Assert.InRange(state.Nr5NoiseProfilePrior, 0.145, 1.0);
+        Assert.True(state.DesiredGainDb < firstDesiredDb - 8.0);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_PassbandSpeechClearsNoSignalProfileCap()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 16.0,
+            PauseHoldBlocks = 18,
+            Nr5NoiseProfilePrior = 0.620
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-45.0));
+        block[0] = DbToLinear(-34.0);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.360,
+            signalProbability: 0.240,
+            agcGate: 0.720,
+            recoveryDrive: 0.420,
+            weakSignalMemory: 0.480,
+            outputDbfs: -32.0,
+            inputDbfs: -45.0,
+            maskSmoothing: 0.340,
+            peakEvidence: 0.180,
+            outputPeakDbfs: -22.0,
+            adjacentNoiseTrust: 0.820,
+            adjacentNoiseDrive: 0.800,
+            levelDrive: 0.900);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: 160, snrDb: 31.0, dbfs: -74.0, confidence: 0.920),
+            filterLowHz: 100,
+            filterHighHz: 3_100);
+
+        Assert.False(state.Nr5NoSignalNoiseCap);
+        Assert.False(state.Nr5FarPeakNoiseCap);
+        Assert.False(state.Nr5NoProofNoiseCap);
+        Assert.True(state.Nr5HybridSpeechPrior > state.Nr5NoSignalNoisePrior);
+        Assert.InRange(state.Nr5NoiseProfilePrior, 0.250, 0.360);
+        Assert.InRange(state.OutputRmsDbfs, -37.0, -28.0);
+
+        float[] noProofBlock = new float[1024];
+        Array.Fill(noProofBlock, DbToLinear(-39.1));
+        noProofBlock[0] = DbToLinear(-27.8);
+        var noProofNr5 = Nr5Diagnostics(
+            signalConfidence: 0.255,
+            signalProbability: 0.140,
+            agcGate: 0.500,
+            recoveryDrive: 0.060,
+            weakSignalMemory: 0.050,
+            outputDbfs: -24.0,
+            inputDbfs: -39.1,
+            maskSmoothing: 0.020,
+            peakEvidence: 0.0,
+            outputPeakDbfs: -13.0,
+            adjacentNoiseTrust: 0.850,
+            adjacentNoiseDrive: 0.820,
+            levelDrive: 0.900);
+
+        DspPipelineService.ApplyRxAudioLeveler(noProofBlock, ref state, noProofNr5);
+
+        Assert.True(state.Nr5SpeechHoldBlocks > 0);
+        Assert.False(state.Nr5NoSignalNoiseCap);
+        Assert.False(state.Nr5FarPeakNoiseCap);
+        Assert.False(state.Nr5NoProofNoiseCap);
     }
 
     [Fact]
