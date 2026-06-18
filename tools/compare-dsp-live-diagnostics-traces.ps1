@@ -1361,6 +1361,56 @@ function Get-ComparisonVerdict {
     return "tie"
 }
 
+function Get-ReportScenarioId {
+    param($Report)
+
+    $scenarioId = [string](Get-JsonValue $Report "scenarioId")
+    if ([string]::IsNullOrWhiteSpace($scenarioId)) {
+        return ""
+    }
+
+    return $scenarioId.Trim()
+}
+
+function Get-ComparisonScenarioId {
+    param(
+        $BaselineReport,
+        $CandidateReport
+    )
+
+    $baselineScenarioId = Get-ReportScenarioId $BaselineReport
+    $candidateScenarioId = Get-ReportScenarioId $CandidateReport
+    if ([string]::IsNullOrWhiteSpace($baselineScenarioId) -or
+        [string]::IsNullOrWhiteSpace($candidateScenarioId) -or
+        $baselineScenarioId -ne $candidateScenarioId) {
+        return ""
+    }
+
+    return $candidateScenarioId
+}
+
+function Test-MetricNotApplicableForScenario {
+    param(
+        [Parameter(Mandatory = $true)][string]$MetricId,
+        [Parameter(Mandatory = $true)][string]$ScenarioId
+    )
+
+    if ($ScenarioId -ne "noise-only-gating") {
+        return $false
+    }
+
+    switch ($MetricId) {
+        "agcActiveGainMovementDb" { return $true }
+        "agcVoiceLikeGainMovementDb" { return $true }
+        "passbandActiveAudioPct" { return $true }
+        "passbandFloorAudioPct" { return $true }
+        "passbandAudioAverageDbfs" { return $true }
+        "passbandAudioMovementDb" { return $true }
+        "passbandNoiseSeparationDb" { return $true }
+        default { return $false }
+    }
+}
+
 function Test-SafeCandidateAudioHeadroom {
     param($CandidateReport)
 
@@ -1571,7 +1621,8 @@ function Compare-Metrics {
         $BaselineReport,
         $CandidateReport,
         [double]$GlobalTolerance,
-        $MetricDefinitions = $null
+        $MetricDefinitions = $null,
+        [string]$ScenarioId = ""
     )
 
     $definitions = if ($null -eq $MetricDefinitions) { @(Get-TraceMetricDefinitions) } else { @($MetricDefinitions) }
@@ -1606,6 +1657,11 @@ function Compare-Metrics {
             }
             $improvementValue = [Math]::Round($improvementValue, 3)
         }
+        elseif (-not [string]::IsNullOrWhiteSpace($ScenarioId) -and
+            (Test-MetricNotApplicableForScenario -MetricId $metricId -ScenarioId $ScenarioId)) {
+            $verdict = "not-applicable"
+            $verdictNote = "$ScenarioId-no-active-passband-metric"
+        }
 
         $comparisons.Add([ordered]@{
             metricId = $metricId
@@ -1620,6 +1676,7 @@ function Compare-Metrics {
             improvementValue = $improvementValue
             verdict = $verdict
             verdictNote = $verdictNote
+            ignoredForReadiness = ($verdict -eq "not-applicable")
             rationale = [string]$metric.rationale
         }) | Out-Null
     }
@@ -1806,6 +1863,7 @@ function Build-MarkdownReport {
     $lines.Add("- Regressions: $($Report.regressionCount)") | Out-Null
     $lines.Add("- Gate failures: $($Report.gateFailureCount)") | Out-Null
     $lines.Add("- Missing values: $($Report.missingMetricValueCount)") | Out-Null
+    $lines.Add("- Not applicable values: $($Report.notApplicableMetricValueCount)") | Out-Null
     $lines.Add("") | Out-Null
 
     $captureReadiness = Get-JsonValue $Report "captureReadinessComparison"
@@ -1948,7 +2006,10 @@ $captureReadinessComparison = New-CaptureReadinessComparison $baselineReport $ca
 $nr5WeakSignalComparison = New-Nr5WeakSignalComparison $baselineReport $candidateReport
 $rxAudioLevelerComparison = New-RxAudioLevelerComparison $baselineReport $candidateReport
 $traceMetricDefinitions = @(Get-TraceMetricDefinitions)
-$metricComparisons = Compare-Metrics $baselineReport $candidateReport $Tolerance $traceMetricDefinitions
+$baselineScenarioId = Get-ReportScenarioId $baselineReport
+$candidateScenarioId = Get-ReportScenarioId $candidateReport
+$comparisonScenarioId = Get-ComparisonScenarioId $baselineReport $candidateReport
+$metricComparisons = Compare-Metrics $baselineReport $candidateReport $Tolerance $traceMetricDefinitions $comparisonScenarioId
 $hardConstraintComparisons = Compare-HardConstraints $baselineReport $candidateReport
 
 $regressionCount = @($metricComparisons | Where-Object { $_.verdict -eq "regression" }).Count
@@ -1956,9 +2017,11 @@ $improvementCount = @($metricComparisons | Where-Object { $_.verdict -eq "improv
 $tieCount = @($metricComparisons | Where-Object { $_.verdict -eq "tie" }).Count
 $informationalCount = @($metricComparisons | Where-Object { $_.verdict -eq "informational" }).Count
 $missingCount = @($metricComparisons | Where-Object { $_.verdict -eq "missing" }).Count
+$notApplicableCount = @($metricComparisons | Where-Object { $_.verdict -eq "not-applicable" }).Count
 $hardConstraintRegressionCount = @($hardConstraintComparisons | Where-Object { $_.verdict -eq "regression" }).Count
 $metricRegressionSafetyClassCounts = New-MetricSafetyClassCounts -Items $metricComparisons -Verdict "regression"
 $metricMissingSafetyClassCounts = New-MetricSafetyClassCounts -Items $metricComparisons -Verdict "missing"
+$metricNotApplicableSafetyClassCounts = New-MetricSafetyClassCounts -Items $metricComparisons -Verdict "not-applicable"
 
 $candidateOkSamples = [int](Get-NumericValue (Get-JsonValue $candidateReport "okSampleCount"))
 $candidateFailedSamples = [int](Get-NumericValue (Get-JsonValue $candidateReport "failedSampleCount"))
@@ -1995,7 +2058,13 @@ if (-not [string]::IsNullOrWhiteSpace($BundleDir)) {
     $bundlePath = (Resolve-Path -LiteralPath $BundleDir).Path
 }
 
-$recommendations = if ($readyForReview) {
+$recommendations = if ($readyForReview -and $notApplicableCount -gt 0) {
+    @(
+        "Store this comparison as scenario-specific noise-only gating evidence; not-applicable active/passband metrics still require separate weak/strong passband traces before any DSP default change.",
+        "Pair this report with passband speech, adjacent-signal, AGC-pumping, and operator/on-air evidence before graduating the candidate beyond opt-in use."
+    )
+}
+elseif ($readyForReview) {
     @("Store this comparison with the candidate trace, offline fixture metrics, audio renders, spectrum captures, and operator notes before considering any DSP default change.")
 }
 elseif ($regressionCount -gt 0 -or $hardConstraintRegressionCount -gt 0 -or $gateFailureCount -gt 0) {
@@ -2043,6 +2112,9 @@ $report = [ordered]@{
     markdownPath = if ($NoMarkdown) { $null } else { ConvertTo-PortablePath -Root $bundlePath -Path $MarkdownPath }
     tolerance = $Tolerance
     readyForReview = $readyForReview
+    baselineScenarioId = $baselineScenarioId
+    candidateScenarioId = $candidateScenarioId
+    comparisonScenarioId = $comparisonScenarioId
     baselineTrendStatus = [string](Get-JsonValue $baselineReport "trendStatus")
     candidateTrendStatus = [string](Get-JsonValue $candidateReport "trendStatus")
     candidateReadyForBenchmarkTrace = $candidateReadyTrace
@@ -2060,11 +2132,13 @@ $report = [ordered]@{
     tieCount = $tieCount
     informationalMetricCount = $informationalCount
     missingMetricValueCount = $missingCount
+    notApplicableMetricValueCount = $notApplicableCount
     captureReadinessComparison = $captureReadinessComparison
     nr5WeakSignalComparison = $nr5WeakSignalComparison
     rxAudioLevelerComparison = $rxAudioLevelerComparison
     metricRegressionSafetyClassCounts = @($metricRegressionSafetyClassCounts)
     metricMissingSafetyClassCounts = @($metricMissingSafetyClassCounts)
+    metricNotApplicableSafetyClassCounts = @($metricNotApplicableSafetyClassCounts)
     metricComparisons = @($metricComparisons)
     hardConstraintComparisons = @($hardConstraintComparisons)
     recommendations = @($recommendations)

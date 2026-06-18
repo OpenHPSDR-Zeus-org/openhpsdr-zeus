@@ -4362,6 +4362,101 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task CompareLiveDiagnosticsTraceTreatsNoiseOnlyPassbandMetricsAsNotApplicable()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics comparator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-noise-only-compare-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var baselineReport = Path.Combine(bundleDir, "noise-only-baseline.summary.json");
+            await File.WriteAllTextAsync(
+                baselineReport,
+                JsonSerializer.Serialize(NoiseOnlyGatingSummary("noise-only-gating", -83.0), CamelCaseJson));
+
+            var candidateReport = Path.Combine(bundleDir, "noise-only-candidate.summary.json");
+            await File.WriteAllTextAsync(
+                candidateReport,
+                JsonSerializer.Serialize(NoiseOnlyGatingSummary("noise-only-gating", -87.2), CamelCaseJson));
+
+            var comparisonReport = Path.Combine(bundleDir, "noise-only-comparison.json");
+            var comparison = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "compare-dsp-live-diagnostics-traces.ps1"),
+                "-BaselinePath", baselineReport,
+                "-CandidatePath", candidateReport,
+                "-ReportPath", comparisonReport,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.True(comparison.ExitCode == 0, comparison.CombinedOutput);
+            Assert.True(File.Exists(comparisonReport), comparison.CombinedOutput);
+
+            using var comparisonDoc = JsonDocument.Parse(await File.ReadAllTextAsync(comparisonReport));
+            var root = comparisonDoc.RootElement;
+            Assert.True(root.GetProperty("readyForReview").GetBoolean());
+            Assert.Equal("noise-only-gating", root.GetProperty("comparisonScenarioId").GetString());
+            Assert.Equal(0, root.GetProperty("missingMetricValueCount").GetInt32());
+            Assert.Equal(7, root.GetProperty("notApplicableMetricValueCount").GetInt32());
+
+            var metrics = root.GetProperty("metricComparisons").EnumerateArray().ToArray();
+            AssertMetricVerdict(metrics, "agcActiveGainMovementDb", "not-applicable", "pumping");
+            AssertMetricVerdict(metrics, "agcVoiceLikeGainMovementDb", "not-applicable", "pumping");
+            AssertMetricVerdict(metrics, "passbandActiveAudioPct", "not-applicable", "weak-signal");
+            AssertMetricVerdict(metrics, "passbandFloorAudioPct", "not-applicable", "weak-signal");
+            AssertMetricVerdict(metrics, "passbandAudioAverageDbfs", "not-applicable", "weak-signal");
+            AssertMetricVerdict(metrics, "passbandAudioMovementDb", "not-applicable", "pumping");
+            AssertMetricVerdict(metrics, "passbandNoiseSeparationDb", "not-applicable", "noise-gate");
+            AssertMetricImprovement(metrics, "offPassbandAudioAverageDbfs", "noise-gate");
+            Assert.True(metrics.Single(item => item.GetProperty("metricId").GetString() == "passbandAudioMovementDb")
+                .GetProperty("ignoredForReadiness").GetBoolean());
+
+            var strictBaseline = Path.Combine(bundleDir, "weak-baseline.summary.json");
+            await File.WriteAllTextAsync(
+                strictBaseline,
+                JsonSerializer.Serialize(NoiseOnlyGatingSummary("weak-cw-carrier", -83.0), CamelCaseJson));
+
+            var strictCandidate = Path.Combine(bundleDir, "weak-candidate.summary.json");
+            await File.WriteAllTextAsync(
+                strictCandidate,
+                JsonSerializer.Serialize(NoiseOnlyGatingSummary("weak-cw-carrier", -87.2), CamelCaseJson));
+
+            var strictComparisonReport = Path.Combine(bundleDir, "weak-comparison.json");
+            var strictComparison = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "compare-dsp-live-diagnostics-traces.ps1"),
+                "-BaselinePath", strictBaseline,
+                "-CandidatePath", strictCandidate,
+                "-ReportPath", strictComparisonReport,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.True(strictComparison.ExitCode == 0, strictComparison.CombinedOutput);
+            using var strictComparisonDoc = JsonDocument.Parse(await File.ReadAllTextAsync(strictComparisonReport));
+            var strictRoot = strictComparisonDoc.RootElement;
+            Assert.False(strictRoot.GetProperty("readyForReview").GetBoolean());
+            Assert.Equal("weak-cw-carrier", strictRoot.GetProperty("comparisonScenarioId").GetString());
+            Assert.Equal(7, strictRoot.GetProperty("missingMetricValueCount").GetInt32());
+            Assert.Equal(0, strictRoot.GetProperty("notApplicableMetricValueCount").GetInt32());
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task CompareLiveDiagnosticsTraceFlagsNr5ArtifactControlRegression()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics comparator smoke runs on Windows.");
@@ -10947,6 +11042,89 @@ public sealed class DspModernizationValidationToolTests
             rxAudioLevelerOutputLimitSampleCount = new { max = 0.0 },
             adcHeadroomDb = new { min = 22.0 },
             monitorBacklogSamples = new { max = 0.0 },
+            latencyMs = new { average = 1.0 }
+        };
+    }
+
+    private static object NoiseOnlyGatingSummary(string scenarioId, double offPassbandAudioAverageDbfs)
+    {
+        return new
+        {
+            schemaVersion = 1,
+            tool = "watch-dsp-live-diagnostics",
+            scenarioId,
+            readyForBenchmarkTrace = true,
+            trendStatus = "ready-trace",
+            okSampleCount = 3,
+            readySampleCount = 3,
+            failedSampleCount = 0,
+            hardBlockerSampleCount = 0,
+            runtimeEvidenceSampleCount = 3,
+            audioFreshSampleCount = 3,
+            rxMetersFreshSampleCount = 3,
+            nr5SampleCount = 3,
+            squelchClosedPct = 0.0,
+            readinessScore = new { average = 92.0 },
+            agcGainDb = new { movement = 0.0 },
+            agcStabilityWatch = new
+            {
+                pumpingRisk = false,
+                quietNoEvidenceAgcGainDb = new { movement = 0.0 }
+            },
+            passbandAudioWatch = new
+            {
+                status = "no-passband-peaks",
+                passbandEvidenceMissing = false,
+                passbandPeakSampleCount = 0,
+                offPassbandPeakSampleCount = 3,
+                offPassbandAudioRmsDbfs = new { average = offPassbandAudioAverageDbfs, movement = 0.2 }
+            },
+            nr5WeakSignalWatch = new
+            {
+                weakInputSampleCount = 0,
+                weakRecoveredSampleCount = 0,
+                weakDropoutSampleCount = 0,
+                weakDropoutCandidateLossSampleCount = 0,
+                weakDropoutFinalAudibleSampleCount = 0,
+                weakDropoutFinalAudiblePct = 100.0,
+                hotMakeupSampleCount = 0
+            },
+            nr5LowEvidenceLiftWatch = new
+            {
+                liftedSampleCount = 0,
+                liftedPct = 0.0,
+                suppressedPct = 100.0,
+                alignmentMismatchPct = 0.0
+            },
+            nr5AudioAlignmentWatch = new
+            {
+                mismatchPct = 0.0
+            },
+            nr5SignalProbability = new { average = 0.04 },
+            nr5TextureFill = new { average = 0.02 },
+            nr5OutputDbfs = new { average = -58.0, movement = 0.1 },
+            nr5MakeupGainDb = new { movement = 0.1, max = 1.0 },
+            nr5RecoveryDrive = new { movement = 0.01 },
+            nr5PeakReductionDb = new { max = 0.0 },
+            nr5OutputPeakDbfs = new { max = -10.0 },
+            audioRmsDbfs = new { average = offPassbandAudioAverageDbfs, movement = 0.2 },
+            audioPeakDbfs = new { max = -9.0 },
+            rxAudioLevelerOutputRmsDbfs = new { movement = 0.2 },
+            rxAudioLevelerAppliedGainDb = new { movement = 0.0 },
+            rxAudioLevelerWatch = new
+            {
+                diagnosticSampleCount = 3,
+                constrainedSampleCount = 0,
+                constrainedPct = 0.0,
+                boostSlewLimitedSampleCount = 0,
+                peakLimitedSampleCount = 0,
+                outputLimitedSampleCount = 0
+            },
+            rxAudioLevelerOutputLimitReductionDb = new { max = 0.0 },
+            rxAudioLevelerOutputLimitSampleCount = new { max = 0.0 },
+            adcHeadroomDb = new { min = 22.0 },
+            monitorBacklogSamples = new { max = 0.0 },
+            hardConstraintCounts = Array.Empty<object>(),
             latencyMs = new { average = 1.0 }
         };
     }
