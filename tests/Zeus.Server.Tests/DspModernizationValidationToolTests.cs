@@ -7996,6 +7996,7 @@ public sealed class DspModernizationValidationToolTests
         using var planDoc = JsonDocument.Parse(plan.StandardOutput);
         var root = planDoc.RootElement;
         Assert.Equal("USB", root.GetProperty("targetMode").GetString());
+        Assert.Equal(1000, root.GetProperty("tuneStepHz").GetInt32());
         Assert.Equal(12, root.GetProperty("operatorTrendMaxCandidates").GetInt32());
         Assert.Equal(12, root.GetProperty("operatorTrendCandidateCount").GetInt32());
 
@@ -8020,6 +8021,232 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(candidate.GetProperty("evidenceOperatorAnchorCount").GetInt32() >= 1);
             Assert.NotEqual(0, candidate.GetProperty("evidenceNeighborOffsetHz").GetInt64());
         });
+    }
+
+    [SkippableFact]
+    public async Task G2RxPeakHuntSnapsFrontendPeakRetunesToConfiguredStep()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell G2 peak-hunt retune smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var tempRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-rx-peak-hunt-snap-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var reportPath = Path.Combine(tempRoot, "g2-rx-peak-hunt-report.json");
+            var watcherPath = Path.Combine(tempRoot, "fake-watch-dsp-live-diagnostics.ps1");
+            await File.WriteAllTextAsync(
+                watcherPath,
+                string.Join(
+                    Environment.NewLine,
+                    "param(",
+                    "    [string]$BaseUrl,",
+                    "    [int]$Samples = 1,",
+                    "    [int]$IntervalMs = 1,",
+                    "    [int]$TimeoutSec = 5,",
+                    "    [string]$Label,",
+                    "    [string]$ScenarioId,",
+                    "    [string]$ComparisonId,",
+                    "    [string]$ReportPath,",
+                    "    [string]$JsonlPath,",
+                    "    [switch]$JsonOnly",
+                    ")",
+                    "$report = [ordered]@{",
+                    "    readyForBenchmarkTrace = $true",
+                    "    trendStatus = 'ready-trace'",
+                    "    okSampleCount = $Samples",
+                    "    failedSampleCount = 0",
+                    "    readySampleCount = $Samples",
+                    "    hardBlockerSampleCount = 0",
+                    "    nr5TuningTraceStatus = 'ready'",
+                    "    nr5TuningReadySampleCount = $Samples",
+                    "    agcGainDb = @{ movement = 0.0 }",
+                    "    audioRmsDbfs = @{ movement = 0.0 }",
+                    "    adcHeadroomDb = @{ min = 30.0 }",
+                    "    agcStabilityWatch = @{ status = 'stable'; pumpingRisk = $false }",
+                    "    rxAudioLevelerWatch = @{ constrainedSampleCount = 0 }",
+                    "    rxAudioLevelerBoostSlewLimitedSampleCount = 0",
+                    "    rxAudioLevelerPeakLimitedSampleCount = 0",
+                    "    rxAudioLevelerOutputLimitedSampleCount = 0",
+                    "    frontendTopPeakWatch = @{ sampleCount = $Samples; nearPassbandSampleCount = $Samples; nearPassbandThresholdHz = 3000; topNearPassbandSamples = @() }",
+                    "    nr5WeakSignalWatch = @{",
+                    "        weakInputSampleCount = 1",
+                    "        strongInputSampleCount = 1",
+                    "        nearStrongInputSampleCount = 0",
+                    "        weakRecoveredSampleCount = 1",
+                    "        weakDropoutSampleCount = 0",
+                    "        weakDropoutCandidateLossSampleCount = 0",
+                    "        hotMakeupSampleCount = 0",
+                    "        weakStrongOutputGapDb = 0.0",
+                    "        weakStrongFinalAudioGapDb = 0.0",
+                    "        speechQualifiedWeakInputSampleCount = 1",
+                    "        speechQualifiedStrongInputSampleCount = 1",
+                    "        speechQualifiedNearStrongInputSampleCount = 0",
+                    "        speechQualifiedWeakStrongOutputGapDb = 0.0",
+                    "        speechQualifiedWeakStrongFinalAudioGapDb = 0.0",
+                    "        speechQualifiedMixedWeakStrongEvidenceReady = $true",
+                    "        speechQualifiedWeakStrongOutputParityReady = $true",
+                    "        speechQualifiedWeakStrongFinalAudioParityReady = $true",
+                    "        speechQualifiedMixedWeakStrongEvidenceStatus = 'ready-final-audio'",
+                    "        passbandQualifiedWeakInputSampleCount = 1",
+                    "        passbandQualifiedStrongInputSampleCount = 1",
+                    "        passbandQualifiedNearStrongInputSampleCount = 0",
+                    "        passbandQualifiedWeakStrongOutputGapDb = 0.0",
+                    "        passbandQualifiedWeakStrongFinalAudioGapDb = 0.0",
+                    "        passbandQualifiedMixedWeakStrongEvidenceReady = $true",
+                    "        passbandQualifiedWeakStrongOutputParityReady = $true",
+                    "        passbandQualifiedWeakStrongFinalAudioParityReady = $true",
+                    "        passbandQualifiedMixedWeakStrongEvidenceStatus = 'ready-final-audio'",
+                    "        mixedWeakStrongEvidenceReady = $true",
+                    "        weakStrongOutputParityReady = $true",
+                    "        weakStrongFinalAudioParityReady = $true",
+                    "        mixedWeakStrongEvidenceStatus = 'ready-final-audio'",
+                    "        mixedWeakStrongTuningFocus = @{",
+                    "            status = 'ready-final-audio'",
+                    "            preferredAction = 'post-leveler-final-audio-parity-ready'",
+                    "            outputGapDirection = 'balanced'",
+                    "            finalAudioGapDirection = 'balanced'",
+                    "            outputGapExcessDb = 0.0",
+                    "            finalAudioGapExcessDb = 0.0",
+                    "            weakOutputLiftNeededDb = 0.0",
+                    "            weakOutputTrimNeededDb = 0.0",
+                    "            weakFinalAudioLiftNeededDb = 0.0",
+                    "            weakFinalAudioTrimNeededDb = 0.0",
+                    "            topWeakInputs = @()",
+                    "            topStrongInputs = @()",
+                    "            topSpeechQualifiedWeakInputs = @()",
+                    "            topSpeechQualifiedStrongInputs = @()",
+                    "            topPassbandQualifiedWeakInputs = @()",
+                    "            topPassbandQualifiedStrongInputs = @()",
+                    "        }",
+                    "    }",
+                    "}",
+                    "$json = $report | ConvertTo-Json -Depth 16",
+                    "Set-Content -LiteralPath $ReportPath -Value $json -Encoding UTF8",
+                    "Set-Content -LiteralPath $JsonlPath -Value '{\"ok\":true}' -Encoding UTF8",
+                    "if ($JsonOnly) { $json }"));
+
+            using var server = JsonRouteServer.Start(new Dictionary<string, string>
+            {
+                ["/api/radio/diagnostics"] = JsonSerializer.Serialize(new
+                {
+                    connectionStatus = "Connected",
+                    endpoint = "192.168.1.25:1024",
+                    effectiveBoard = "OrionMkII",
+                    orionMkIIVariant = "G2",
+                    vfoHz = 7_335_000L,
+                    mode = "LSB",
+                    sampleRate = 384_000
+                }, CamelCaseJson),
+                ["/api/state"] = JsonSerializer.Serialize(new
+                {
+                    vfoHz = 7_335_000L,
+                    radioLoHz = 7_335_000L,
+                    mode = "LSB"
+                }, CamelCaseJson),
+                ["/api/radio/diagnostics/dsp-scene"] = JsonSerializer.Serialize(new
+                {
+                    status = "fresh",
+                    fresh = true,
+                    signalProfile = "mixed",
+                    maxSnrDb = 24.0,
+                    coherentMaxSnrDb = 24.0,
+                    topPeaks = new object[]
+                    {
+                        new
+                        {
+                            frequencyHz = 7_339_125L,
+                            offsetHz = 4_125L,
+                            snrDb = 24.0,
+                            dbfs = -72.5,
+                            confidence = 0.91,
+                            coherent = true
+                        }
+                    }
+                }, CamelCaseJson),
+                ["/api/dsp/live-diagnostics"] = JsonSerializer.Serialize(new
+                {
+                    status = "ready",
+                    readyForLiveBenchmark = true,
+                    wdspActive = true,
+                    wdspNativeLoadable = true,
+                    requestedNrMode = "Nr5",
+                    effectiveNrMode = "Nr5",
+                    readyForNr5Tuning = true,
+                    frontendSceneFresh = true
+                }, CamelCaseJson),
+                ["/api/vfo"] = "{}",
+                ["/api/radio/lo"] = "{}",
+                ["/api/mode"] = "{}"
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "run-dsp-g2-rx-peak-hunt.ps1"),
+                "-BaseUrl", server.BaseUrl,
+                "-AllowRetune",
+                "-SkipCurrentVfo",
+                "-StopOnReady",
+                "-SamplesPerWindow", "1",
+                "-IntervalMs", "1",
+                "-WindowsPerPeak", "1",
+                "-PassCount", "1",
+                "-SettleMs", "0",
+                "-MaxPeaks", "1",
+                "-MinPeakSnrDb", "1",
+                "-TuneStepHz", "1000",
+                "-WatchScriptPath", watcherPath,
+                "-OutputRoot", tempRoot,
+                "-ReportPath", reportPath,
+                "-JsonOnly");
+
+            var failureDetail = run.CombinedOutput;
+            if (File.Exists(reportPath))
+            {
+                failureDetail = $"{failureDetail}{Environment.NewLine}{await File.ReadAllTextAsync(reportPath)}";
+            }
+
+            Assert.True(run.ExitCode == 0, failureDetail);
+
+            using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = reportDoc.RootElement;
+            Assert.True(root.GetProperty("ok").GetBoolean());
+            Assert.Equal(1000, root.GetProperty("tuneStepHz").GetInt32());
+
+            var peakCandidate = Assert.Single(root.GetProperty("peakCandidates").EnumerateArray());
+            Assert.Equal(7_339_000L, peakCandidate.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_339_125L, peakCandidate.GetProperty("exactFrequencyHz").GetInt64());
+            Assert.Equal(4_000L, peakCandidate.GetProperty("offsetHz").GetInt64());
+            Assert.Equal(4_125L, peakCandidate.GetProperty("exactOffsetHz").GetInt64());
+            Assert.Equal(1000, peakCandidate.GetProperty("tuningStepHz").GetInt32());
+            Assert.Equal(-125L, peakCandidate.GetProperty("tuneSnapDeltaHz").GetInt64());
+
+            var retune = Assert.Single(root.GetProperty("retuneAttempts").EnumerateArray());
+            Assert.True(retune.GetProperty("ok").GetBoolean());
+            Assert.Equal(7_339_000L, retune.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_339_125L, retune.GetProperty("exactFrequencyHz").GetInt64());
+            Assert.Equal(1000, retune.GetProperty("tuneStepHz").GetInt32());
+            Assert.Equal(-125L, retune.GetProperty("tuneSnapDeltaHz").GetInt64());
+
+            var runRecord = Assert.Single(root.GetProperty("runs").EnumerateArray());
+            Assert.Equal(7_339_000L, runRecord.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_339_125L, runRecord.GetProperty("exactCandidateFrequencyHz").GetInt64());
+            Assert.Equal(4_125L, runRecord.GetProperty("exactCandidateOffsetHz").GetInt64());
+            Assert.Equal(1000, runRecord.GetProperty("candidateTuneStepHz").GetInt32());
+            Assert.Equal(-125L, runRecord.GetProperty("candidateTuneSnapDeltaHz").GetInt64());
+        }
+        finally
+        {
+            if (Directory.Exists(tempRoot))
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+        }
     }
 
     [SkippableFact]
@@ -10488,8 +10715,31 @@ public sealed class DspModernizationValidationToolTests
             using var stream = client.GetStream();
             using var reader = new StreamReader(stream, Encoding.ASCII, leaveOpen: true);
             var requestLine = await reader.ReadLineAsync();
-            while (!string.IsNullOrEmpty(await reader.ReadLineAsync()))
+            var contentLength = 0;
+            string? headerLine;
+            while (!string.IsNullOrEmpty(headerLine = await reader.ReadLineAsync()))
             {
+                const string contentLengthPrefix = "Content-Length:";
+                if (headerLine.StartsWith(contentLengthPrefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    _ = int.TryParse(headerLine[contentLengthPrefix.Length..].Trim(), out contentLength);
+                }
+            }
+
+            if (contentLength > 0)
+            {
+                var buffer = new char[contentLength];
+                var read = 0;
+                while (read < contentLength)
+                {
+                    var count = await reader.ReadAsync(buffer, read, contentLength - read);
+                    if (count <= 0)
+                    {
+                        break;
+                    }
+
+                    read += count;
+                }
             }
 
             var path = "/";
