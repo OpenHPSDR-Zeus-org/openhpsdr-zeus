@@ -25,6 +25,7 @@ import type { CSSProperties } from 'react';
 import type { MeterReadingDef, MeterUnit } from '../meterCatalog';
 import { immersiveZoneTickColor, type ZoneTick } from '../meterCatalog';
 import type { WidgetSettings } from '../widgetSettings';
+import { BloomFill, BloomFilter, PeakTick, prefixDefs } from '../render/svgChrome';
 
 interface HBarMeterProps {
   value: number;
@@ -188,10 +189,10 @@ export function HBarMeter({
 
   const scaleTicks = generateScaleTicks(def.unit, min, max);
 
-  const fillId = `hb-${def.id.replace(/\W/g, '_')}-fill`;
-  const bloomId = `hb-${def.id.replace(/\W/g, '_')}-bloom`;
-  const blurId = `hb-${def.id.replace(/\W/g, '_')}-blur`;
-  const maskId = `hb-${def.id.replace(/\W/g, '_')}-mask`;
+  const fillId = prefixDefs(`hb-${def.id}`, 'fill');
+  const bloomId = prefixDefs(`hb-${def.id}`, 'bloom');
+  const blurId = prefixDefs(`hb-${def.id}`, 'blur');
+  const maskId = prefixDefs(`hb-${def.id}`, 'mask');
 
   const fillW = VB_W * liveFrac;
   const peakX = peakFrac !== null ? VB_W * peakFrac : 0;
@@ -385,9 +386,7 @@ export function HBarMeter({
                 </>
               )}
             </linearGradient>
-            <filter id={blurId} x="-10%" y="-50%" width="120%" height="200%">
-              <feGaussianBlur stdDeviation="3" />
-            </filter>
+            <BloomFilter id={blurId} region={['-10%', '-50%', '120%', '200%']} />
             <mask id={maskId}>
               <rect x={0} y={BAR_Y} width={VB_W} height={BAR_H} fill="white" />
             </mask>
@@ -432,8 +431,8 @@ export function HBarMeter({
             width={VB_W}
             height={BAR_H}
             rx={2}
-            fill="#080a10"
-            stroke="rgba(255,255,255,0.08)"
+            fill="var(--immersive-vu-track)"
+            stroke="var(--immersive-rim)"
             strokeWidth={1}
             vectorEffect="non-scaling-stroke"
           />
@@ -446,26 +445,13 @@ export function HBarMeter({
             fill="rgba(0,0,0,0.6)"
           />
 
-          {/* bloom (blurred) layer behind crisp fill */}
+          {/* bloom-behind-crisp fill — shared kit */}
           {!silent && fillW > 0 && (
-            <rect
-              x={0}
-              y={BAR_Y}
-              width={fillW}
-              height={BAR_H}
-              fill={`url(#${bloomId})`}
-              filter={`url(#${blurId})`}
-              opacity={0.85}
-            />
-          )}
-          {/* crisp fill */}
-          {!silent && fillW > 0 && (
-            <rect
-              x={0}
-              y={BAR_Y}
-              width={fillW}
-              height={BAR_H}
+            <BloomFill
+              shape={{ kind: 'rect', x: 0, y: BAR_Y, width: fillW, height: BAR_H }}
               fill={`url(#${fillId})`}
+              bloomFill={`url(#${bloomId})`}
+              filterId={blurId}
             />
           )}
 
@@ -496,16 +482,12 @@ export function HBarMeter({
               2 px past each edge of the bar (same overhang VuColumn
               uses on its peak tick relative to the column edge). */}
           {showPeak && (
-            <line
+            <PeakTick
               x1={peakX.toFixed(2)}
               y1={BAR_Y - 2}
               x2={peakX.toFixed(2)}
               y2={BAR_Y + BAR_H + 2}
-              stroke="#fff"
-              strokeWidth={1.4}
-              opacity={0.9}
-              vectorEffect="non-scaling-stroke"
-              style={{ filter: 'drop-shadow(0 0 4px #fff)' }}
+              nonScaling
             />
           )}
 

@@ -43,6 +43,11 @@
 // License for details.
 
 import { useEffect, useRef, useState } from 'react';
+import { BloomFill, BloomFilter, PeakTick } from './meters/render/svgChrome';
+import { GaugeBezel } from './meters/render/GaugeBezel';
+import { GlassDome } from './meters/render/GlassDome';
+import { recessedWell } from './meters/render/recessedWell';
+import { useGlidedFraction } from './meters/render/useGlidedDraw';
 
 // RX scale: amateur-radio S-units. S9 = -73 dBm on HF. Each S-unit = 6 dB.
 // Above S9 labelled in dB over S9 (+10, +20, +40, +60).
@@ -139,6 +144,20 @@ export function SMeter(props: SMeterProps) {
     };
   }, [fraction, peak]);
 
+  // 60 Hz display-side glide for the amber bar — the DRAWN width springs
+  // toward the live fraction on the shared draw-bus, written imperatively as a
+  // scaleX on the fill <g> (no setState in the hot path). The peak marker is
+  // NEVER glided — it stays on its own instant rAF latch above (#FFA028
+  // signal-amber semantics + alpha ramp are untouched).
+  const fillGroupRef = useRef<SVGGElement | null>(null);
+  const glide = useGlidedFraction(fraction, {
+    onDraw: (drawn) => {
+      const g = fillGroupRef.current;
+      if (g) g.setAttribute('transform', `scale(${Math.max(0, Math.min(1, drawn)).toFixed(4)} 1)`);
+    },
+  });
+  const initialScale = Math.max(0, Math.min(1, glide.read())).toFixed(4);
+
   const valueLabel = isTx
     ? `${props.watts.toFixed(1)} W`
     : formatRxLabel(props.dbm);
@@ -165,37 +184,97 @@ export function SMeter(props: SMeterProps) {
       </div>
 
       <div className="relative flex-1">
-        {/* Track */}
-        <div className="relative h-6 overflow-hidden rounded-sm bg-neutral-900 ring-1 ring-inset ring-neutral-800">
-          {/* Subtle grid backdrop evoking the reference mockup */}
-          <div
-            aria-hidden
-            className="absolute inset-0 opacity-40"
-            style={{
-              backgroundImage:
-                'linear-gradient(to right, rgba(255,255,255,0.04) 1px, transparent 1px)',
-              backgroundSize: '10% 100%',
-            }}
-          />
+        {/* Track — recessed machined well + warm amber halo, matching the
+            immersive gauges and the TX-stage rows. */}
+        <div
+          className="relative h-6 overflow-hidden"
+          style={recessedWell({ radius: 3, warmHalo: true, glow: true })}
+        >
           {/* Fill — single-hue amber ramp matching the panadapter trace
-              (#FFA028, see src/gl/panadapter.ts TRACE_R/G/B). Alpha rises
-              with signal: dim at S0, full-bright past S9. No hue shift. */}
-          <div
-            className="absolute inset-0 overflow-hidden transition-[clip-path] duration-75 ease-out"
-            style={{
-              clipPath: `inset(0 ${(1 - fraction) * 100}% 0 0)`,
-              boxShadow: 'inset 0 0 8px rgba(0,0,0,0.35)',
-            }}
+              (#FFA028, see src/gl/panadapter.ts TRACE_R/G/B; the sanctioned
+              signal amber). Rendered bloom-behind-crisp under a domed glass +
+              drifting sheen, framed by a machined bezel ring. Alpha rises with
+              signal: dim at S0, full-bright past S9 — no hue shift. The fill
+              width is driven at 60 Hz by an imperative scaleX on the fill <g>;
+              the PEAK tick latches instantly from `peak`. */}
+          <svg
+            aria-hidden
+            viewBox="0 0 100 24"
+            preserveAspectRatio="none"
+            className="absolute inset-0"
+            style={{ width: '100%', height: '100%', display: 'block' }}
           >
-            <div
-              aria-hidden
-              className="absolute inset-0"
-              style={{
-                background:
-                  'linear-gradient(90deg, rgba(255,160,40,0.18) 0%, rgba(255,160,40,0.55) 50%, rgba(255,160,40,1) 100%)',
-              }}
+            <defs>
+              <BloomFilter id="smeter-blur" region={['-2%', '-40%', '104%', '180%']} />
+              <linearGradient id="smeter-fill" x1="0" y1="0" x2="100" y2="0" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stopColor="#FFA028" stopOpacity="0.18" />
+                <stop offset="0.5" stopColor="#FFA028" stopOpacity="0.55" />
+                <stop offset="1" stopColor="#FFA028" stopOpacity="1" />
+              </linearGradient>
+              {/* vertical volume gradient — cylindrical shading over the bar */}
+              <linearGradient id="smeter-vol" x1="0" y1="0" x2="0" y2="24" gradientUnits="userSpaceOnUse">
+                <stop offset="0" stopColor="var(--meter-fill-hot)" />
+                <stop offset="0.18" stopColor="rgba(255,255,255,0.10)" />
+                <stop offset="0.5" stopColor="rgba(0,0,0,0)" />
+                <stop offset="0.82" stopColor="rgba(0,0,0,0.18)" />
+                <stop offset="1" stopColor="var(--meter-fill-base)" />
+              </linearGradient>
+            </defs>
+
+            {/* LED-ladder ground behind the fill */}
+            <g opacity={0.45}>
+              {Array.from({ length: 9 }).map((_, i) => (
+                <line
+                  key={`smled-${i}`}
+                  x1={(i + 1) * 10}
+                  y1={0}
+                  x2={(i + 1) * 10}
+                  y2={24}
+                  stroke="rgba(255,255,255,0.05)"
+                  strokeWidth={0.6}
+                  vectorEffect="non-scaling-stroke"
+                />
+              ))}
+            </g>
+
+            {/* Live amber fill — unit-width, scaled in X by the glided draw. */}
+            <g ref={fillGroupRef} transform={`scale(${initialScale} 1)`}>
+              <BloomFill
+                shape={{ kind: 'rect', x: 0, y: 0, width: 100, height: 24 }}
+                fill="url(#smeter-fill)"
+                filterId="smeter-blur"
+              />
+              <rect x={0} y={0} width={100} height={24} fill="url(#smeter-vol)" />
+              {/* bright amber leading edge */}
+              <rect
+                x={97}
+                y={0}
+                width={3}
+                height={24}
+                fill="#FFA028"
+                opacity={0.9}
+                style={{ filter: 'drop-shadow(0 0 3px #FFA028)' }}
+              />
+            </g>
+
+            {/* domed glass + drifting sheen */}
+            <GlassDome defsId="smeter" x={0} y={0} width={100} height={24} rx={2} />
+
+            {/* Peak-hold marker — glowing tick, latched instantly. */}
+            <PeakTick
+              x1={peak * 100}
+              y1={-1}
+              x2={peak * 100}
+              y2={25}
+              stroke="#fff"
+              strokeWidth={2.2}
+              opacity={0.9}
+              nonScaling
             />
-          </div>
+
+            {/* machined bezel ring */}
+            <GaugeBezel variant="rect" defsId="smeter" x={0} y={0} width={100} height={24} rx={2} thickness={2.4} nonScaling />
+          </svg>
           {/* S9 reference marker for RX — thin amber line, not red. */}
           {!isTx && (
             <div
@@ -204,12 +283,6 @@ export function SMeter(props: SMeterProps) {
               style={{ left: `${rxFraction(S9_DBM) * 100}%` }}
             />
           )}
-          {/* Peak-hold marker */}
-          <div
-            aria-hidden
-            className="absolute inset-y-0 w-0.5 bg-white/80 mix-blend-screen"
-            style={{ left: `calc(${peak * 100}% - 1px)` }}
-          />
           {/* TX badge inside the track, top-right */}
           {badge && (
             <span className="absolute right-1 top-0.5 rounded-sm bg-red-500/20 px-1 text-[10px] font-bold tracking-wider text-red-300 ring-1 ring-red-400/40">

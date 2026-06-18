@@ -89,6 +89,12 @@
   align-items: stretch;
   justify-content: center;
   overflow: hidden;
+  /* Machined recess — a hard top-edge inset + soft inner vignette so the dial
+     reads as pressed into the chassis, plus a faint warm gauge bloom. */
+  box-shadow:
+    inset 0 3px 8px rgba(0,0,0,0.7),
+    inset 0 0 24px rgba(0,0,0,0.45),
+    0 0 26px var(--gauge-glow);
 }
 .am-tile .analog-meter-face {
   display: block;

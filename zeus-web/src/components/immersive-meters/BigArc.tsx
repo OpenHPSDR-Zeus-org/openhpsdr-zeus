@@ -23,10 +23,15 @@
 // in viewBox units via SVG `transform="rotate(angle cx cy)"` — a CSS
 // transform-origin would mismatch once the SVG scales to the tile.
 
-import type { CSSProperties } from 'react';
+import { useRef, type CSSProperties } from 'react';
 import { dbToFrac, fmtDb, isSilent } from './dbScale';
 import { usePeakHoldFrac } from './usePeakHold';
 import { immersiveZoneTickColor, type ZoneTick } from '../meters/meterCatalog';
+import { BloomFilter, PeakPip, prefixDefs } from '../meters/render/svgChrome';
+import { GaugeBezel } from '../meters/render/GaugeBezel';
+import { GlassDome } from '../meters/render/GlassDome';
+import { lampCardStyle } from '../meters/render/lampCard';
+import { useGlidedFraction } from '../meters/render/useGlidedDraw';
 
 interface CommonProps {
   /** Section/label text — top-left chip. */
@@ -210,36 +215,68 @@ function resolveAxis(props: BigArcProps): ResolvedAxis {
   };
 }
 
+// Build the dash string for a given 0..1 fraction of the arc.
+function dashFor(frac: number): string {
+  const len = ARC_LEN * Math.max(0, Math.min(1, frac));
+  return `${len.toFixed(1)} ${(ARC_LEN + 5).toFixed(1)}`;
+}
+
 export function BigArc(props: BigArcProps) {
   const axis = resolveAxis(props);
   const peakFrac = usePeakHoldFrac(axis.rawValue, axis.toFrac);
 
-  const fillLen = ARC_LEN * axis.liveFrac;
-  const fillDash = `${fillLen.toFixed(1)} ${(ARC_LEN + 5).toFixed(1)}`;
-  const needleAngle = -90 + 180 * axis.liveFrac;
-  const peakPoint = pointAt(peakFrac, R);
+  // 60 Hz display-side glide for the live arc + needle. We glide liveFrac on
+  // the shared draw-bus and write the fill dash + needle rotation imperatively
+  // to element refs each frame, so the arc/needle move at up to 60 Hz between
+  // the ~30 Hz panel re-render cadence — without a setState in the hot path.
+  // Peak (peakFrac / peakPoint) is NEVER glided; it stays instant.
+  const fillCrispRef = useRef<SVGPathElement | null>(null);
+  const fillBloomRef = useRef<SVGPathElement | null>(null);
+  const needleRef = useRef<SVGGElement | null>(null);
+  const headRef = useRef<SVGCircleElement | null>(null);
+  const headGlowRef = useRef<SVGCircleElement | null>(null);
+  const glide = useGlidedFraction(axis.silent ? 0 : axis.liveFrac, {
+    onDraw: (drawn) => {
+      const dash = dashFor(drawn);
+      fillCrispRef.current?.setAttribute('stroke-dasharray', dash);
+      fillBloomRef.current?.setAttribute('stroke-dasharray', dash);
+      const ang = (-90 + 180 * Math.max(0, Math.min(1, drawn))).toFixed(2);
+      needleRef.current?.setAttribute('transform', `rotate(${ang} ${CX} ${CY})`);
+      // Glowing head pip rides the live arc tip.
+      const hp = pointAt(Math.max(0, Math.min(1, drawn)), R);
+      headRef.current?.setAttribute('cx', hp.x.toFixed(1));
+      headRef.current?.setAttribute('cy', hp.y.toFixed(1));
+      headGlowRef.current?.setAttribute('cx', hp.x.toFixed(1));
+      headGlowRef.current?.setAttribute('cy', hp.y.toFixed(1));
+    },
+  });
 
-  const fillGradId = `${props.defsId}-fill`;
-  const glowGradId = `${props.defsId}-glow`;
-  const blurFilterId = `${props.defsId}-blur`;
+  const drawn0 = axis.silent ? 0 : glide.read();
+  const fillDash = dashFor(drawn0);
+  const needleAngle = -90 + 180 * Math.max(0, Math.min(1, drawn0));
+  const headPoint0 = pointAt(Math.max(0, Math.min(1, drawn0)), R);
+  const peakPoint = pointAt(peakFrac, R);
+  const isSwr = props.mode === 'swr';
+
+  const fillGradId = prefixDefs(props.defsId, 'fill');
+  const glowGradId = prefixDefs(props.defsId, 'glow');
+  const blurFilterId = prefixDefs(props.defsId, 'blur');
+  const glassClipId = prefixDefs(props.defsId, 'glassclip');
   const units = props.units ?? axis.readoutUnit;
 
+  // Shared arc geometry path used by the track / bezel / channel strokes.
+  const arcPath = `M 28 ${CY} A ${R} ${R} 0 0 1 212 ${CY}`;
+
+  // Warm-cream "lamp glow" rising from the bottom of the gauge face —
+  // simulates an incandescent bulb illuminating the instrument from below.
+  // The illuminated-surface recipe (cream radials over a dark well + inset
+  // rim/vignette) now lives in the shared lampCard factory; this card just
+  // adds its own layout (aspect / position / overflow). The decorative
+  // bloom blob is painted via cardBloomStyle below the SVG.
   const cardStyle: CSSProperties = {
+    ...lampCardStyle('arc'),
     position: 'relative',
     aspectRatio: '1.55 / 1',
-    borderRadius: 7,
-    // Warm-cream "lamp glow" rising from the bottom of the gauge face —
-    // simulates an incandescent bulb illuminating the instrument from
-    // below. Layered: bottom-anchored cream radial → mid pale-yellow
-    // radial → dark linear panel base. The decorative bloom blob is
-    // painted via cardBloomStyle below the SVG.
-    background:
-      'radial-gradient(80% 95% at 50% 95%, var(--immersive-lamp-bloom-1), var(--immersive-lamp-bloom-2) 45%, transparent 72%),' +
-      ' radial-gradient(60% 60% at 50% 70%, var(--immersive-lamp-bloom-3), transparent 65%),' +
-      ' linear-gradient(180deg, var(--immersive-lamp-well-top) 0%, var(--immersive-lamp-well-bot) 100%)',
-    border: '1px solid var(--immersive-lamp-border)',
-    boxShadow:
-      'inset 0 1px 0 var(--immersive-lamp-rim), inset 0 -22px 40px rgba(255,240,180,0.05), inset 0 0 50px rgba(0,0,0,0.55)',
     overflow: 'hidden',
   };
   // Decorative bottom-blob bloom — sits behind the SVG and softens the
@@ -339,33 +376,65 @@ export function BigArc(props: BigArcProps) {
             <stop offset="0" stopColor="#ffffff" stopOpacity="0.10" />
             <stop offset="1" stopColor="#ffffff" stopOpacity="0" />
           </radialGradient>
-          <filter id={blurFilterId} x="-40%" y="-40%" width="180%" height="180%">
-            <feGaussianBlur stdDeviation="3" />
-          </filter>
+          <BloomFilter id={blurFilterId} />
+          {/* clip the glass dome to the dial bounding box so the specular
+              cover only sits over the instrument face, not the readout. */}
+          <clipPath id={glassClipId}>
+            <rect x={20} y={24} width={200} height={104} rx={10} />
+          </clipPath>
         </defs>
 
         {/* ambient ground glow — pale white over the warm-cream lamp wash */}
         <ellipse cx={CX} cy={135} rx={110} ry={40} fill={`url(#${glowGradId})`} />
 
-        {/* background arc — soft track. Rim + inset shadow are tokenised
-            so the light theme can flip both to a steel-grey inset on the
-            silver chassis (white@6% on silver disappears at idle). */}
+        {/* machined bezel ring framing the arc — the chrome edge that makes the
+            gauge sit IN the panel. Drawn first (widest) so the track + channel
+            nest inside it. */}
+        <GaugeBezel variant="arc" defsId={props.defsId} d={arcPath} thickness={16} />
+
+        {/* recessed track channel — a dark inset core stroked inside the bezel
+            so the arc reads as a machined groove, not a flat soft track. */}
         <path
-          d={`M 28 ${CY} A ${R} ${R} 0 0 1 212 ${CY}`}
+          d={arcPath}
           fill="none"
           stroke="var(--immersive-arc-track-rim)"
-          strokeWidth={14}
+          strokeWidth={11}
           strokeLinecap="round"
         />
         <path
-          d={`M 28 ${CY} A ${R} ${R} 0 0 1 212 ${CY}`}
+          d={arcPath}
+          fill="none"
+          stroke="var(--arc-channel-core)"
+          strokeWidth={9}
+          strokeLinecap="round"
+        />
+        <path
+          d={arcPath}
           fill="none"
           stroke="var(--immersive-arc-track-shadow)"
-          strokeWidth={10}
+          strokeWidth={7}
         />
 
-        {/* active fill — bloomed copy + crisp copy on top */}
+        {/* SWR danger-zone band — a low-alpha red arc painted UNDER the fill
+            from 2.0:1 → 3.0+ so a climbing SWR reads as entering an alarm
+            region even before the needle gets there. SWR mode only. */}
+        {isSwr && (
+          <path
+            d={arcPath}
+            fill="none"
+            stroke="var(--arc-danger-band)"
+            strokeWidth={9}
+            strokeLinecap="butt"
+            strokeDasharray={`${(ARC_LEN * 0.5).toFixed(1)} ${(ARC_LEN + 5).toFixed(1)}`}
+            strokeDashoffset={`-${(ARC_LEN * 0.5).toFixed(1)}`}
+          />
+        )}
+
+        {/* active fill — bloomed copy + crisp copy on top. Inlined (rather
+            than via the BloomFill kit) so the two paths can carry refs the
+            60 Hz glide writes stroke-dasharray to imperatively. */}
         <path
+          ref={fillBloomRef}
           d={`M 28 ${CY} A ${R} ${R} 0 0 1 212 ${CY}`}
           fill="none"
           stroke={`url(#${fillGradId})`}
@@ -376,6 +445,7 @@ export function BigArc(props: BigArcProps) {
           opacity={0.85}
         />
         <path
+          ref={fillCrispRef}
           d={`M 28 ${CY} A ${R} ${R} 0 0 1 212 ${CY}`}
           fill="none"
           stroke={`url(#${fillGradId})`}
@@ -383,6 +453,41 @@ export function BigArc(props: BigArcProps) {
           strokeLinecap="round"
           strokeDasharray={fillDash}
         />
+
+        {/* glowing leading-edge head pip — a bright lit bead riding the live
+            arc tip, hotter on SWR-over. Latches with the glide, not the peak. */}
+        {!axis.silent && (
+          <>
+            <circle
+              ref={headGlowRef}
+              cx={headPoint0.x.toFixed(1)}
+              cy={headPoint0.y.toFixed(1)}
+              r={6}
+              fill={axis.over ? 'var(--immersive-tx)' : 'var(--meter-fill-glow)'}
+              opacity={0.55}
+              style={{ filter: 'blur(2.5px)' }}
+            />
+            <circle
+              ref={headRef}
+              cx={headPoint0.x.toFixed(1)}
+              cy={headPoint0.y.toFixed(1)}
+              r={2.6}
+              fill="#fff"
+              opacity={0.95}
+              style={{
+                filter: `drop-shadow(0 0 4px ${axis.over ? 'var(--immersive-tx-glow)' : 'var(--meter-fill-glow)'})`,
+              }}
+            />
+          </>
+        )}
+
+        {/* specular glass cover over the dial face — wet-glass highlight +
+            drifting sheen, clipped to the dial bounding box. Sits over the
+            fill + ticks but below the needle/hub so the operator reads the
+            needle THROUGH the glass. */}
+        <g clipPath={`url(#${glassClipId})`}>
+          <GlassDome defsId={props.defsId} x={20} y={24} width={200} height={104} rx={10} sheenWidthFrac={0.14} />
+        </g>
 
         {/* zone-transition ticks — coloured perpendicular lines at the
             inner-rim band (R-12..R-6). Rendered before axis ticks so the
@@ -456,21 +561,13 @@ export function BigArc(props: BigArcProps) {
 
         {/* peak-hold pip on the rim — warm-cream pearl with cream halo */}
         {!axis.silent && peakFrac > 0 && (
-          <circle
-            cx={peakPoint.x.toFixed(1)}
-            cy={peakPoint.y.toFixed(1)}
-            r={3}
-            fill="#fff"
-            stroke="var(--immersive-lamp-pin)"
-            strokeWidth={1}
-            style={{ filter: 'drop-shadow(0 0 6px var(--immersive-lamp-pin))' }}
-          />
+          <PeakPip cx={peakPoint.x.toFixed(1)} cy={peakPoint.y.toFixed(1)} r={3} />
         )}
 
         {/* needle — warm-cream tapered ribbon over a pale-yellow centerline.
             Pivots around the hub centre (CX, CY) in viewBox units. */}
         {!axis.silent && (
-          <g transform={`rotate(${needleAngle.toFixed(2)} ${CX} ${CY})`}>
+          <g ref={needleRef} transform={`rotate(${needleAngle.toFixed(2)} ${CX} ${CY})`}>
             <line
               x1={CX}
               y1={CY}

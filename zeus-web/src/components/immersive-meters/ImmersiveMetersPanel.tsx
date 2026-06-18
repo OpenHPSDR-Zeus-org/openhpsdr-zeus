@@ -32,6 +32,7 @@ import { useTxStore } from '../../state/tx-store';
 import { useConnectionStore } from '../../state/connection-store';
 import { useRadioStore } from '../../state/radio-store';
 import { usePaStore } from '../../state/pa-store';
+import { subscribe } from '../meters/render/drawBus';
 
 /**
  * Track the per-keydown peak watts (PEP) and a 1-second exponential moving
@@ -72,22 +73,26 @@ function useFwdWattsStats(transmitting: boolean): { pep: number; avg: number } {
   return { pep: peakRef.current, avg: avgRef.current };
 }
 
-function useRafTick(targetHz: number = 30) {
+// Re-render tick that keeps the wall-clock peak-hold decay (usePeakHoldFrac,
+// recomputed on render) advancing between the 10 Hz wire frames. Now driven
+// by the SHARED draw-bus instead of a dedicated rAF — one module-level rAF for
+// the whole meter cluster — throttled to ~30 Hz so the panel reconcile stays
+// off the system frame rate while each widget's live fill/needle glides at up
+// to 60 Hz via useGlidedFraction's imperative writes (no setState in the hot
+// path). `hostRef` opts this subscriber into the bus's off-screen gate.
+function useBusTick(hostRef: React.RefObject<Element | null>, throttleMs = 33) {
   const [, setTick] = useState(0);
   useEffect(() => {
-    let raf = 0;
-    let last = 0;
-    const minMs = 1000 / targetHz;
-    const loop = (ts: number) => {
-      if (ts - last >= minMs) {
-        last = ts;
+    let acc = 0;
+    const step = (dt: number) => {
+      acc += dt * 1000;
+      if (acc >= throttleMs) {
+        acc = 0;
         setTick((n) => (n + 1) & 0xff);
       }
-      raf = requestAnimationFrame(loop);
     };
-    raf = requestAnimationFrame(loop);
-    return () => cancelAnimationFrame(raf);
-  }, [targetHz]);
+    return subscribe(step, hostRef.current ?? null);
+  }, [hostRef, throttleMs]);
 }
 
 interface SectionProps {
@@ -263,9 +268,11 @@ function StatusFooter({ pepWatts, ratedWatts }: { pepWatts: number; ratedWatts: 
 
 /* ─── Main panel ───────────────────────────────────────────────────── */
 export function ImmersiveMetersPanel() {
-  // ~30 Hz tick to drive peak-hold decay smoothly between the 10 Hz wire
-  // frames. Same recipe the legacy TxStageMeters used.
-  useRafTick(30);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  // ~30 Hz re-render tick (shared draw-bus) to advance peak-hold decay
+  // between the 10 Hz wire frames; the live fills/needles inside each widget
+  // glide at up to 60 Hz on the same bus via useGlidedFraction.
+  useBusTick(bodyRef, 33);
 
   const micPk = useTxStore((s) => s.wdspMicPk);
   const micAv = useTxStore((s) => s.micAv);
@@ -317,10 +324,30 @@ export function ImmersiveMetersPanel() {
     gridTemplateColumns: '1fr 1fr',
     gap: 10,
   };
+  // Three stage groups (MIC / LEV / ALC) side by side, each holding its own
+  // PK + AVG pair under a shared brass-plate header. Grouping (instead of a
+  // flat 6-up grid) is what de-busies the row — the eye reads three labelled
+  // instruments showing peak + average, not six identical strips.
   const vuClusterStyle: CSSProperties = {
     display: 'grid',
-    gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
-    gap: 6,
+    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+    gap: 10,
+  };
+  const vuStageStyle: CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: '1fr 1fr',
+    gap: 4,
+  };
+  const vuStageHeaderStyle: CSSProperties = {
+    fontSize: 9,
+    letterSpacing: '0.18em',
+    textTransform: 'uppercase',
+    color: 'var(--immersive-lamp-label)',
+    fontWeight: 700,
+    textAlign: 'center',
+    marginBottom: 4,
+    paddingBottom: 3,
+    borderBottom: '1px solid var(--immersive-line)',
   };
   const grRowStyle: CSSProperties = {
     display: 'grid',
@@ -329,7 +356,7 @@ export function ImmersiveMetersPanel() {
   };
 
   return (
-    <div style={bodyStyle} aria-label="Immersive TX meters — final output, signal chain, gain reduction">
+    <div ref={bodyRef} style={bodyStyle} aria-label="Immersive TX meters — final output, signal chain, gain reduction">
       <Section
         title="Final Output"
         led="on"
@@ -359,12 +386,27 @@ export function ImmersiveMetersPanel() {
         meta={['PK / AVG', 'HOLD 1.2s', '−60 → +6 dBFS']}
       >
         <div style={vuClusterStyle}>
-          <VuColumn valueDb={micPk} name="MIC" sub="PK" defsId="immersive-vu-micpk" />
-          <VuColumn valueDb={micAv} name="MIC" sub="AVG" defsId="immersive-vu-micav" />
-          <VuColumn valueDb={lvlrPk} name="LEV" sub="PK" defsId="immersive-vu-lvlrpk" />
-          <VuColumn valueDb={lvlrAv} name="LEV" sub="AVG" defsId="immersive-vu-lvlrav" />
-          <VuColumn valueDb={alcPk} name="ALC" sub="PK" defsId="immersive-vu-alcpk" />
-          <VuColumn valueDb={alcAv} name="ALC" sub="AVG" defsId="immersive-vu-alcav" />
+          <div>
+            <div style={vuStageHeaderStyle}>Mic</div>
+            <div style={vuStageStyle}>
+              <VuColumn valueDb={micPk} name="" sub="PK" variant="pk" hostRef={bodyRef} defsId="immersive-vu-micpk" />
+              <VuColumn valueDb={micAv} name="" sub="AVG" variant="avg" hostRef={bodyRef} defsId="immersive-vu-micav" />
+            </div>
+          </div>
+          <div>
+            <div style={vuStageHeaderStyle}>Leveler</div>
+            <div style={vuStageStyle}>
+              <VuColumn valueDb={lvlrPk} name="" sub="PK" variant="pk" hostRef={bodyRef} defsId="immersive-vu-lvlrpk" />
+              <VuColumn valueDb={lvlrAv} name="" sub="AVG" variant="avg" hostRef={bodyRef} defsId="immersive-vu-lvlrav" />
+            </div>
+          </div>
+          <div>
+            <div style={vuStageHeaderStyle}>ALC</div>
+            <div style={vuStageStyle}>
+              <VuColumn valueDb={alcPk} name="" sub="PK" variant="pk" hostRef={bodyRef} defsId="immersive-vu-alcpk" />
+              <VuColumn valueDb={alcAv} name="" sub="AVG" variant="avg" hostRef={bodyRef} defsId="immersive-vu-alcav" />
+            </div>
+          </div>
         </div>
       </Section>
 

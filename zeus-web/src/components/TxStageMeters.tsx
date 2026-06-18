@@ -25,6 +25,12 @@ import { useConnectionStore } from '../state/connection-store';
 import { usePaStore } from '../state/pa-store';
 import { useRadioStore } from '../state/radio-store';
 import { useBallisticReading } from './meters/useBallisticReading';
+import { BloomFill, BloomFilter, PeakTick, prefixDefs } from './meters/render/svgChrome';
+import { GaugeBezel } from './meters/render/GaugeBezel';
+import { GlassDome } from './meters/render/GlassDome';
+import { recessedWell } from './meters/render/recessedWell';
+import { volumeStops } from './meters/render/fillGradient';
+import { useGlidedFraction } from './meters/render/useGlidedDraw';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Overdrive indicator (re-exported so App.tsx can keep wiring it as the
@@ -267,6 +273,8 @@ type MeterRowProps = {
   hot?: boolean;
   /** Hover-tooltip explaining what this meter shows. */
   hint: string;
+  /** Panel root for the shared draw-bus off-screen gate. */
+  hostRef?: React.RefObject<Element | null>;
 };
 
 function MeterRow({
@@ -278,6 +286,7 @@ function MeterRow({
   color,
   gradient,
   zones,
+  hostRef,
   readNow,
   readUnit,
   pkLabel,
@@ -286,6 +295,33 @@ function MeterRow({
   hint,
 }: MeterRowProps) {
   const heldVisible = peakPct > pct + 0.5;
+  // Per-row defs ids — namespaced so the four rows' blur/gradient filters
+  // never collide on a shared page.
+  const blurId = prefixDefs(`txrow-${id}`, 'blur');
+  const volId = prefixDefs(`txrow-${id}`, 'vol');
+  // PWR / SWR carry the healthy→hot gradient as an SVG paint; MIC / ALC fill
+  // with their flat token colour. `gradient` (the CSS string) only signals
+  // which rows want the SVG gradient — the SVG redefines the same stops.
+  const svgGradientId = gradient ? prefixDefs(`txrow-${id}`, 'grad') : null;
+
+  // 60 Hz display-side glide — the bar's DRAWN width springs toward the
+  // already-calibrated pct on the shared draw-bus. We write the width
+  // imperatively to a <g> scaleX transform (transform-origin at x=0) so no
+  // React setState runs in the 60 Hz path; reconciliation stays at the 30 Hz
+  // value cadence. The PEAK marker is NEVER glided — it latches off the raw
+  // peakPct below. Position math (micPctOf/…) is unchanged.
+  const fillGroupRef = useRef<SVGGElement | null>(null);
+  const glow = useGlidedFraction(pct / 100, {
+    hostRef,
+    onDraw: (drawn) => {
+      const g = fillGroupRef.current;
+      if (g) g.setAttribute('transform', `scale(${Math.max(0, Math.min(1, drawn)).toFixed(4)} 1)`);
+    },
+  });
+  // Seed the drawn width on first paint so a freshly-mounted row isn't blank
+  // for a frame before the bus ticks.
+  const initialScale = Math.max(0, Math.min(1, glow.read())).toFixed(4);
+  const TRACK_H = 24;
   return (
     <div
       data-id={id}
@@ -311,36 +347,17 @@ function MeterRow({
       </div>
       <div style={{ position: 'relative' }}>
         <TickLabels labels={ticks} />
+        {/* Recessed machined well — the concave pocket the lit fill sits
+            inside (layer 1). The warm amber halo + gauge bloom give the
+            "lit instrument on a black bench" glow. */}
         <div
           style={{
             position: 'relative',
-            height: 14,
-            background: 'var(--meter-bg)',
-            border: '1px solid var(--line)',
-            borderRadius: 2,
-            // v3 Lifted Dark: warm amber halo around the meter well — the
-            // "lit instruments on a black bench" look. Inner inset stays
-            // for depth; outer halos give the column a soft glow.
-            boxShadow:
-              'inset 0 1px 3px rgba(0,0,0,0.8),' +
-              ' inset 0 0 0 1px rgba(255,255,255,0.03),' +
-              ' 0 0 18px rgba(255,140,40,0.18),' +
-              ' 0 0 6px rgba(255,170,80,0.12)',
+            height: TRACK_H,
+            ...recessedWell({ radius: 3, warmHalo: true, glow: true }),
             overflow: 'hidden',
           }}
         >
-          {/* Subtle 10 % tick grid on the track itself — same trick as the
-              design HTML, gives the bar a "ruled" feel without adding hue. */}
-          <div
-            aria-hidden="true"
-            style={{
-              position: 'absolute',
-              inset: 0,
-              backgroundImage:
-                'repeating-linear-gradient(90deg, transparent 0 calc(10% - 1px), rgba(255,255,255,0.05) calc(10% - 1px) 10%)',
-              pointerEvents: 'none',
-            }}
-          />
           {/* Warning / danger zone bands behind the live fill. */}
           {zones?.map((z, i) => (
             <div
@@ -353,42 +370,108 @@ function MeterRow({
                 left: `${z.from}%`,
                 width: `${Math.max(0, z.to - z.from)}%`,
                 background: z.color,
-                opacity: 0.14,
+                opacity: 0.16,
                 pointerEvents: 'none',
               }}
             />
           ))}
-          {/* Live fill — flat color or gradient depending on the meter. */}
-          <div
+          {/* The full five-layer instrument stack drawn as one inline SVG so
+              the fill, LED ladder, volumetric shading, specular glass dome +
+              drifting sheen, and the machined bezel ring all share one
+              coordinate space. preserveAspectRatio="none" stretches the fixed
+              viewBox to the row width. The live fill width is driven at 60 Hz
+              by an imperative scaleX on the fill <g>; the PEAK tick latches
+              instantly from the raw peakPct. */}
+          <svg
             aria-hidden="true"
-            style={{
-              position: 'absolute',
-              left: 0,
-              top: 0,
-              bottom: 0,
-              width: `${pct}%`,
-              background: gradient ?? color,
-              transition: 'width 120ms linear, background 150ms',
-              pointerEvents: 'none',
-            }}
-          />
-          {/* Peak-hold tick. PWR/SWR use a neutral tick (the bar colour is
-              already a healthy→hot gradient); MIC/ALC use the meter colour. */}
-          {heldVisible && (
-            <div
-              aria-hidden="true"
-              style={{
-                position: 'absolute',
-                top: -1,
-                bottom: -1,
-                width: 2,
-                left: `calc(${peakPct}% - 1px)`,
-                background: gradient ? 'var(--fg-1)' : color,
-                transition: 'left 250ms cubic-bezier(.2,.7,.3,1)',
-                pointerEvents: 'none',
-              }}
-            />
-          )}
+            viewBox={`0 0 100 ${TRACK_H}`}
+            preserveAspectRatio="none"
+            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block', pointerEvents: 'none' }}
+          >
+            <defs>
+              <BloomFilter id={blurId} region={['-2%', '-50%', '104%', '200%']} />
+              {svgGradientId && (
+                <linearGradient id={svgGradientId} x1="0" y1="0" x2="100" y2="0" gradientUnits="userSpaceOnUse">
+                  {/* good floor brightened to --immersive-good so the lit
+                      fill GLOWS instead of sitting dark. */}
+                  <stop offset="0" stopColor="var(--immersive-good)" />
+                  <stop offset="0.55" stopColor="var(--immersive-good)" />
+                  <stop offset="0.70" stopColor="#7cd1a8" />
+                  <stop offset="0.82" stopColor="var(--power)" />
+                  <stop offset="1" stopColor="var(--tx)" />
+                </linearGradient>
+              )}
+              {/* (2) vertical volume gradient — makes the bar read cylindrical
+                  UNDER the horizontal hue ramp. */}
+              <linearGradient id={volId} x1="0" y1="0" x2="0" y2={TRACK_H} gradientUnits="userSpaceOnUse">
+                {volumeStops()}
+              </linearGradient>
+            </defs>
+
+            {/* LED-ladder ground — lit segment grid behind the fill so the
+                bar reads as a row of illuminated cells. */}
+            <g opacity={0.5}>
+              {Array.from({ length: 9 }).map((_, i) => (
+                <line
+                  key={`led-${i}`}
+                  x1={(i + 1) * 10}
+                  y1={0}
+                  x2={(i + 1) * 10}
+                  y2={TRACK_H}
+                  stroke="rgba(255,255,255,0.06)"
+                  strokeWidth={0.6}
+                  vectorEffect="non-scaling-stroke"
+                />
+              ))}
+            </g>
+
+            {/* Live fill — a unit-width (x=0..100) stack scaled in X by the
+                glided draw value. (a) bloom-behind-crisp hue fill via the
+                shared kit, then (b) the vertical volume gradient over it, then
+                (c) a bright leading-edge color-glow streak that lights up as
+                the bar rises. */}
+            <g ref={fillGroupRef} transform={`scale(${initialScale} 1)`}>
+              <BloomFill
+                shape={{ kind: 'rect', x: 0, y: 0, width: 100, height: TRACK_H }}
+                fill={svgGradientId ? `url(#${svgGradientId})` : color}
+                filterId={blurId}
+              />
+              {/* volumetric cylinder shading */}
+              <rect x={0} y={0} width={100} height={TRACK_H} fill={`url(#${volId})`} />
+              {/* leading-edge color-glow — a bright sliver at the fill tip */}
+              <rect
+                x={97}
+                y={0}
+                width={3}
+                height={TRACK_H}
+                fill={gradient ? 'var(--meter-fill-glow)' : color}
+                opacity={0.85}
+                style={{ filter: `drop-shadow(0 0 3px ${gradient ? 'var(--meter-fill-glow)' : color})` }}
+              />
+            </g>
+
+            {/* (3) specular glass dome + drifting sheen over the whole track */}
+            <GlassDome defsId={`txrow-${id}`} x={0} y={0} width={100} height={TRACK_H} rx={2} />
+
+            {/* (5) glowing peak marker — taller + brighter, latched INSTANTLY
+                from the raw peakPct (never the glided draw value). */}
+            {heldVisible && (
+              <PeakTick
+                x1={peakPct}
+                y1={-1}
+                x2={peakPct}
+                y2={TRACK_H + 1}
+                stroke={gradient ? 'var(--fg-0)' : color}
+                strokeWidth={2.6}
+                opacity={1}
+                nonScaling
+              />
+            )}
+
+            {/* (4) machined bezel ring — drawn LAST so the chrome frames the
+                whole instrument and it sits IN the panel. */}
+            <GaugeBezel variant="rect" defsId={`txrow-${id}`} x={0} y={0} width={100} height={TRACK_H} rx={2} thickness={2.4} nonScaling />
+          </svg>
         </div>
       </div>
       <div
@@ -658,6 +741,7 @@ export function TxStageMeters() {
         }}
       >
         <MeterRow
+          hostRef={panelRef}
           id="mic"
           label="MIC"
           ticks={MIC_TICKS}
@@ -671,6 +755,7 @@ export function TxStageMeters() {
           hint="Mic peak entering WDSP TXA, post-panel-gain (TXA_MIC_PK)"
         />
         <MeterRow
+          hostRef={panelRef}
           id="alc"
           label="ALC"
           ticks={ALC_TICKS}
@@ -685,6 +770,7 @@ export function TxStageMeters() {
           hint="ALC gain reduction. Healthy SSB compression sits in the 3–10 dB band; sustained > 10 dB means the input is over-driving the limiter."
         />
         <MeterRow
+          hostRef={panelRef}
           id="pwr"
           label="PWR"
           ticks={pwrTicks(ratedW)}
@@ -700,6 +786,7 @@ export function TxStageMeters() {
           hint={`Forward power. Axis 0..${ratedW} W (PA panel override → board default → 100 W fallback).`}
         />
         <MeterRow
+          hostRef={panelRef}
           id="swr"
           label="SWR"
           ticks={SWR_TICKS}

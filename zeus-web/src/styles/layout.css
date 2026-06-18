@@ -1362,6 +1362,41 @@
 .meter-tick.danger { background: rgba(0,0,0,0.7); }
 .meter-peak { position: absolute; top: -1px; bottom: -1px; width: 2px; background: #fff; transform: translateX(-50%); opacity: 0.9; }
 
+/* High-end "lit instrument" variant of the meter track — recessed well with
+   a warm amber halo so the moving bar reads as the same lit channel as the
+   immersive gauges. The fill / sheen / glowing peak are drawn by an inline
+   SVG (bloom-behind-crisp via the shared render kit), so this only restyles
+   the surrounding well. Scoped to the modifier class to leave other
+   .meter-bar consumers untouched. */
+.meter-bar--lit {
+  background: var(--meter-bg);
+  border: 1px solid var(--line);
+  box-shadow:
+    inset 0 1px 3px rgba(0,0,0,0.8),
+    inset 0 0 0 1px rgba(255,255,255,0.03),
+    0 0 18px rgba(255,140,40,0.18),
+    0 0 6px rgba(255,170,80,0.12);
+}
+
+/* Moving-sheen drift for GlassDome — a slow compositor-only translateX loop
+   that reads as light sweeping across curved glass. The travel distance is
+   supplied per-gauge via the --sheen-travel custom property (SVG user units).
+   GPU-cheap: only `transform` animates. Dropped entirely under reduced
+   motion (the sheen rect is hidden). */
+@keyframes meter-sheen-drift-kf {
+  0%   { transform: translateX(0); opacity: 0; }
+  12%  { opacity: 1; }
+  88%  { opacity: 1; }
+  100% { transform: translateX(var(--sheen-travel, 100px)); opacity: 0; }
+}
+.meter-sheen-drift {
+  animation: meter-sheen-drift-kf 7s linear infinite;
+  will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+  .meter-sheen-drift { animation: none; opacity: 0; }
+}
+
 .power-panel { display: flex; flex-direction: column; gap: 4px; padding: 4px 0; }
 
 /* ===== S-Meter — horizontal bars with S-unit labels ===== */
