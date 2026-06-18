@@ -15,6 +15,7 @@ import { setVfo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { useDisplayStore } from '../state/display-store';
 import { useSpotStore } from '../state/spot-store';
+import { useVfoLockStore } from '../state/vfo-lock-store';
 
 // Convert a packed ARGB uint32 to a CSS rgba() string.
 // TCI clients commonly send A=0 meaning "default/opaque" rather than
@@ -40,6 +41,11 @@ export function SpotOverlay() {
 
   const handleSpotClick = useCallback(
     (freqHz: number) => {
+      // VFO locked — a spot click must not jump the dial. setVfo is the
+      // authoritative backstop, but bailing here avoids the optimistic vfoHz
+      // write + the rollback-fetch round-trip that would otherwise flash the
+      // readout to the spot for one poll cycle.
+      if (useVfoLockStore.getState().locked) return;
       useConnectionStore.setState({ vfoHz: freqHz });
       setVfo(freqHz)
         .then((s) => useConnectionStore.getState().applyState(s))

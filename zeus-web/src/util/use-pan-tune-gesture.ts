@@ -50,6 +50,7 @@ import { computeSnapToLineHz, getSnapHistorySpectrum, useSignalEnhanceStore } fr
 import { armSnapLock } from './snap-lock';
 import * as viewCenter from '../state/view-center';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
+import { useVfoLockStore } from '../state/vfo-lock-store';
 
 const MAX_HZ = 60_000_000;
 const CLICK_SLOP_PX = 3;
@@ -176,6 +177,9 @@ export function usePanTuneGesture(
       const hz = pendingHz;
       pendingHz = null;
       if (hz == null) return;
+      // VFO locked — drop the queued drag-pan tune. setVfo is the backstop,
+      // but bailing here avoids the optimistic vfoHz write + the rollback twitch.
+      if (useVfoLockStore.getState().locked) return;
       viewCenter.markOptimisticTune();
       useConnectionStore.setState({ vfoHz: hz });
       pendingAbort?.abort();
@@ -191,6 +195,8 @@ export function usePanTuneGesture(
     // `exact` skips the PAN_STEP_HZ grid — used by snap-to-signal so the dial
     // lands on the measured carrier, not the nearest round 500 Hz.
     const commitFinal = (hz: number, exact = false) => {
+      // VFO locked — click-to-tune / snap-to-signal commit no-ops.
+      if (useVfoLockStore.getState().locked) return;
       const snapped = exact ? clampHz(hz) : snapHz(hz);
       // Delta against the commanded chain — NOT an absolute write into the
       // view-center (frame centers are dial ∓ cw-pitch in CW; absolutes
@@ -212,6 +218,8 @@ export function usePanTuneGesture(
     // Wheel-driven VFO nudge: fine-tune step, no snap to PAN_STEP_HZ. Coalesces
     // to one POST per rAF via the same pending pipeline as drag-to-pan.
     const nudgeVfo = (deltaHz: number) => {
+      // VFO locked — wheel-nudge tuning no-ops.
+      if (useVfoLockStore.getState().locked) return;
       const cur = commandedHz();
       const next = clampHz(cur + deltaHz);
       // Effective delta (post-clamp) so the display target can never run
@@ -332,6 +340,11 @@ export function usePanTuneGesture(
         return;
       }
       if (!drag) return;
+      // VFO locked — drag-to-tune (and the view-follow it drives) no-ops, the
+      // same backstop as the wheel-nudge (nudgeVfo), click-to-tune commit, and
+      // ruler/LO pan. Without this the live optimistic vfoHz write below moves
+      // the readout on every drag frame until the next state poll snaps it back.
+      if (useVfoLockStore.getState().locked) return;
       const dx = e.clientX - drag.startX;
       if (!drag.moved && Math.abs(dx) <= CLICK_SLOP_PX) return;
       drag.moved = true;

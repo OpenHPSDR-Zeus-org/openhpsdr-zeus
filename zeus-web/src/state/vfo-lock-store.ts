@@ -10,6 +10,7 @@
 // the gate without introducing a circular import.
 
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
 export type VfoLockState = {
   locked: boolean;
@@ -17,8 +18,23 @@ export type VfoLockState = {
   setLocked: (locked: boolean) => void;
 };
 
-export const useVfoLockStore = create<VfoLockState>((set) => ({
-  locked: false,
-  toggle: () => set((s) => ({ locked: !s.locked })),
-  setLocked: (locked) => set({ locked }),
-}));
+// Persisted to localStorage so the lock survives reloads — an operator who
+// pins the dial expects it to stay pinned until they deliberately unlock,
+// not silently re-arm on a refresh. The public API (locked / toggle /
+// setLocked) is byte-identical to the previous in-memory store, so every
+// reader (api/client.setVfo + setRadioLo, DbScale, WfDbScale, MobileApp,
+// the new desktop VfoLockButton) is untouched. partialize keeps only the
+// boolean — the action closures are recreated on each boot.
+export const useVfoLockStore = create<VfoLockState>()(
+  persist(
+    (set) => ({
+      locked: false,
+      toggle: () => set((s) => ({ locked: !s.locked })),
+      setLocked: (locked) => set({ locked }),
+    }),
+    {
+      name: 'zeus.vfoLock',
+      partialize: (s) => ({ locked: s.locked }),
+    },
+  ),
+);

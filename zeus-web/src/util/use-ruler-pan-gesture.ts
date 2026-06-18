@@ -13,6 +13,7 @@
 import { useEffect, type RefObject } from 'react';
 import { setRadioLo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useVfoLockStore } from '../state/vfo-lock-store';
 import { useDisplayStore } from '../state/display-store';
 import * as viewCenter from '../state/view-center';
 
@@ -119,6 +120,10 @@ export function useRulerPanGesture(
 
     const onPointerDown = (e: PointerEvent) => {
       if (e.button !== 0) return;
+      // VFO locked — never begin a ruler/LO pan. setRadioLo is the authoritative
+      // backstop, but bailing here avoids the optimistic radioLoHz writes that
+      // would otherwise flash the dial for one frame before the rollback fetch.
+      if (useVfoLockStore.getState().locked) return;
       const view = readViewport();
       if (!view) return;
       e.preventDefault();

@@ -1275,9 +1275,9 @@
   height: 100%;
   min-height: 0;
 }
-/* v3 Lifted Dark — VFO card with pronounced blue aurora behind the digits.
-   Three radial gradients layered over the panel base + a blurred ::before
-   ellipse give the digits a soft bloom of electric blue. */
+/* ── VFO readout — the original blue-aurora glow card (big thin digits, soft
+   electric-blue bloom) with a little extra rendering polish, plus the VFO
+   LOCK state layered on. DISPLAY-ONLY. */
 .freq-display {
   padding: 28px 20px 20px;
   background:
@@ -1297,6 +1297,7 @@
   position: relative;
   overflow: hidden;
 }
+.freq-display.compact { padding: 14px 14px 12px; }
 .freq-display::before {
   content: "";
   position: absolute;
@@ -1309,11 +1310,13 @@
 }
 .freq-display > * { position: relative; z-index: 1; }
 .freq-top, .freq-bot { display: flex; align-items: center; font-size: 10px; }
+.freq-bot { justify-content: space-between; gap: 10px; margin-top: 6px; }
+
 .freq-digits {
   display: flex;
   align-items: baseline;
   font-family: var(--font-sans);
-  /* v3: thin 200-weight Inter, white digits, subtle blue text-shadow */
+  /* original: thin 200-weight white digits with a soft electric-blue bloom */
   font-weight: 200;
   font-size: clamp(38px, 9cqw, 140px);
   letter-spacing: -0.025em;
@@ -1322,20 +1325,103 @@
   line-height: 1.05;
   margin: 4px 0;
   justify-content: center;
-  text-shadow: 0 0 12px rgba(78,166,255,0.25);
+  /* polish — crisper bloom + a hair of bottom grounding, antialiased edges */
+  text-shadow: 0 0 12px rgba(78,166,255,0.28), 0 1px 0 rgba(0,0,0,0.35);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.freq-display.compact .freq-digits { font-size: clamp(24px, 8cqw, 84px); }
+.freq-digits-btn {
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  cursor: text;
+  width: 100%;
+  padding: 0;
 }
 .freq-digits .digit {
   background: none; border: none; color: inherit; font: inherit;
   padding: 0 1px;
-  cursor: pointer;
+  cursor: ns-resize;
   transition: color var(--dur-fast), text-shadow var(--dur-fast);
 }
 .freq-digits .digit:hover {
   color: var(--accent);
   text-shadow: 0 0 10px var(--accent);
 }
-.freq-digits .digit.leading { color: var(--fg-4); }
+.freq-digits .digit.leading { color: var(--fg-4); text-shadow: none; }
 .freq-digits .sep { color: var(--fg-1); padding: 0 1px; font-weight: 200; }
+
+/* typed-entry field — inherits the digit look. */
+.freq-edit-input {
+  width: 220px;
+  max-width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--accent);
+  outline: none;
+  color: var(--fg-0);
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 400;
+  text-shadow: 0 0 12px rgba(78,166,255,0.28);
+}
+.freq-display.compact .freq-edit-input { width: 100%; }
+.freq-edit-unit { align-self: center; }
+
+/* ── LOCKED state — the card tints red, the digit bloom goes red, and the
+   digits stop responding to clicks / wheel. */
+.freq-display.locked { border-color: var(--vfo-lock); }
+.freq-display.locked .freq-digits {
+  color: var(--vfo-lock);
+  text-shadow: 0 0 12px var(--vfo-lock-glow), 0 1px 0 rgba(0,0,0,0.35);
+}
+.freq-display.locked .freq-digits .digit {
+  color: var(--vfo-lock);
+  cursor: not-allowed;
+}
+.freq-display.locked .freq-digits .digit:hover {
+  color: var(--vfo-lock);
+  text-shadow: 0 0 8px var(--vfo-lock-glow);
+}
+.freq-display.locked .freq-digits .digit.leading {
+  color: var(--vfo-digit-dim);
+  text-shadow: none;
+}
+.freq-display.locked .freq-digits-btn { cursor: not-allowed; }
+
+/* ── lock toggle button ───────────────────────────────────────────────────
+   Reuses the bezel language (machined-chrome edge) + the --vfo-lock accent
+   when engaged. */
+.vfo-lock-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 8px 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--vfo-bezel-ring);
+  background:
+    linear-gradient(135deg, var(--vfo-bezel-hi) 0%, transparent 32%, rgba(0,0,0,0.18) 70%, var(--vfo-bezel-lo) 100%),
+    var(--bg-2);
+  color: var(--fg-2);
+  font-family: 'Archivo Narrow', var(--font-sans);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--dur-fast), border-color var(--dur-fast), box-shadow var(--dur-fast);
+}
+.vfo-lock-btn:hover { color: var(--fg-0); border-color: var(--vfo-bezel-hi); }
+.vfo-lock-btn.on {
+  color: var(--vfo-lock);
+  border-color: var(--vfo-lock);
+  box-shadow: 0 0 10px var(--vfo-lock-glow), inset 0 0 6px var(--vfo-lock-glow);
+}
+.vfo-lock-btn.on:hover { color: var(--vfo-lock); }
+.vfo-lock-btn svg { display: block; }
+
 .vfo-swap { display: flex; align-items: center; gap: 6px; }
 
 /* ===== Meter ===== */

@@ -55,6 +55,7 @@ import { useConnectionStore } from '../state/connection-store';
 import * as viewCenter from '../state/view-center';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import { useTxStore } from '../state/tx-store';
+import { useVfoLockStore } from '../state/vfo-lock-store';
 import { ACTIVE_MAP_REF } from '../state/active-map-ref';
 
 // The arrow-key tune step follows the operator's TuningStepWidget choice
@@ -115,6 +116,11 @@ export function useKeyboardShortcuts() {
     };
 
     const bumpTune = (direction: -1 | 1) => {
+      // VFO locked — freq arrow tuning no-ops. setVfo is the backstop, but
+      // bailing here avoids the optimistic vfoHz write + view-center nudge.
+      // NOTE: this gates ONLY frequency tuning; ZOOM (bumpZoom) and Space-MOX
+      // (driveMox) are deliberately untouched.
+      if (useVfoLockStore.getState().locked) return;
       // Accumulate from the queued value so held-down arrows step cleanly
       // rather than re-reading the (potentially stale) store each frame.
       const base = pendingHz ?? useConnectionStore.getState().vfoHz;

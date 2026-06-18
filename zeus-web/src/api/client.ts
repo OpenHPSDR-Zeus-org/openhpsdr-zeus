@@ -693,6 +693,16 @@ export function setRadioLo(
   hz: number,
   signal?: AbortSignal,
 ): Promise<RadioStateDto> {
+  // VFO-lock gate — same backstop as setVfo. The ruler / LO pan
+  // (use-ruler-pan-gesture.ts, the ONLY caller of setRadioLo) shifts the
+  // hardware NCO center; with the dial pinned that must no-op too, or the
+  // operator could drag the radio off frequency via the ruler even though
+  // the digits are locked. Re-fetch canonical state so the caller's
+  // applyState rolls back its optimistic radioLoHz write. This is an RX
+  // tuning endpoint with no internal/TX caller — it cannot affect TX/PS.
+  if (vfoLockStore.getState().locked) {
+    return fetchState(signal);
+  }
   return jsonFetch(
     '/api/radio/lo',
     {

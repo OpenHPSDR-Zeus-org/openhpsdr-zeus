@@ -41,6 +41,14 @@
 //
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
+//
+// ── VFO readout ──────────────────────────────────────────────────────────
+// The original blue-aurora glow card (big thin digits, soft electric-blue
+// bloom) with a little extra rendering polish, plus the VFO LOCK: a toggle
+// that pins the dial so NO path — digit click/type/scroll, keyboard, pan /
+// ruler drag, panadapter click-to-tune, band retune, TCI spot — can change
+// the frequency until unlocked. DISPLAY + freq-set-gate only; no TX / IQ /
+// DSP / PureSignal path is touched here.
 
 import {
   Fragment,
@@ -53,6 +61,7 @@ import {
 } from 'react';
 import { fetchState, setVfo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useVfoLockStore } from '../state/vfo-lock-store';
 
 const MAX_HZ = 60_000_000;
 const STATE_POLL_MS = 2000;
@@ -93,18 +102,75 @@ function parseKhzInput(raw: string): number | null {
   return clampHz(Math.round(khz * 1000));
 }
 
-function formatKhz(hz: number): string {
-  return (hz / 1000).toFixed(3);
-}
-
 // Per-digit wheel tuning debounce. Wheel events fire at ~60 Hz during a spin;
 // we update the store (and therefore the display) on every tick for instant
 // feedback, but only POST the last resting value to avoid flooding /api/vfo.
 const WHEEL_DEBOUNCE_MS = 80;
 
-export function VfoDisplay() {
+// ── lock padlock glyph ───────────────────────────────────────────────────
+// Identical open/closed inline-SVG padlock to the mobile shell's
+// VfoLockButton (mobile/MobileApp.tsx) so mobile + desktop read the same. Both
+// drive the one shared vfo-lock-store, so the lock state is unified.
+function LockGlyph({ locked }: { locked: boolean }) {
+  return locked ? (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
+      <rect x="5" y="11" width="14" height="9" rx="1.5" fill="currentColor" />
+      <path
+        d="M8 11V8a4 4 0 0 1 8 0v3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  ) : (
+    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden>
+      <rect x="5" y="11" width="14" height="9" rx="1.5" fill="currentColor" />
+      <path
+        d="M8 11V8a4 4 0 0 1 7.5-2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+// Desktop VFO-lock toggle — pins the dial so no path (digit click/type/scroll,
+// keyboard, pan/ruler, panadapter click-to-tune, band retune) can change the
+// frequency until unlocked. Bound to the same shared store as the mobile
+// padlock; the gate itself lives in api/client.setVfo + setRadioLo and the
+// per-path guards.
+function VfoLockButton() {
+  const locked = useVfoLockStore((s) => s.locked);
+  const toggle = useVfoLockStore((s) => s.toggle);
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-pressed={locked}
+      aria-label={locked ? 'VFO locked — click to unlock' : 'VFO unlocked — click to lock'}
+      title={locked ? 'VFO locked — click to unlock' : 'Lock VFO (no path can retune while locked)'}
+      className={`vfo-lock-btn ${locked ? 'on' : ''}`}
+    >
+      <LockGlyph locked={locked} />
+      <span className="vfo-lock-lbl">{locked ? 'LOCKED' : 'LOCK'}</span>
+    </button>
+  );
+}
+
+type VfoDisplayProps = {
+  /** ARIA label for the readout. Defaults to "VFO A". */
+  label?: string;
+  /** Compact variant — scales the digits down for a dense / narrow placement. */
+  compact?: boolean;
+};
+
+export function VfoDisplay({ label = 'VFO A', compact = false }: VfoDisplayProps = {}) {
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const applyState = useConnectionStore((s) => s.applyState);
+  const locked = useVfoLockStore((s) => s.locked);
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -142,9 +208,13 @@ export function VfoDisplay() {
   }, [applyState, editing]);
 
   const beginEdit = useCallback(() => {
-    setDraft(formatKhz(vfoHz));
+    // VFO locked — block edit entry entirely; the typed-entry field never opens.
+    if (useVfoLockStore.getState().locked) return;
+    // Start EMPTY so the operator types the whole frequency fresh (no pre-filled
+    // value or decimals to edit around) — matches the old VFO entry feel.
+    setDraft('');
     setEditing(true);
-  }, [vfoHz]);
+  }, []);
 
   const cancelEdit = useCallback(() => {
     setEditing(false);
@@ -152,6 +222,13 @@ export function VfoDisplay() {
   }, []);
 
   const commitEdit = useCallback(() => {
+    // VFO locked — discard the typed entry (defensive; beginEdit already
+    // refuses to open the field while locked).
+    if (useVfoLockStore.getState().locked) {
+      setEditing(false);
+      setDraft('');
+      return;
+    }
     const next = parseKhzInput(draft);
     setEditing(false);
     setDraft('');
@@ -193,16 +270,18 @@ export function VfoDisplay() {
   // rather than a React `onWheel` JSX prop. React 17+ delegates wheel events
   // through a root-level passive listener, which means `e.preventDefault()`
   // inside a synthetic onWheel handler is silently ignored — letting the
-  // ancestor `.freq-panel` (overflow:auto, see layout/panels/VfoPanel.tsx) and
-  // any other scrollable parent perform their default scroll. Compare the
-  // canonical pattern at `util/use-pan-tune-gesture.ts:307` (panadapter zoom).
-  // Event-delegated on the digits container: wheel over a `[data-decade]`
-  // span is consumed; wheel over a separator or padding is left alone so the
-  // outer page can still scroll naturally.
+  // ancestor `.freq-panel` (overflow:auto) and any other scrollable parent
+  // perform their default scroll. Event-delegated on the digits container:
+  // wheel over a `[data-decade]` span is consumed; wheel over a separator or
+  // padding is left alone so the outer page can still scroll naturally.
   useEffect(() => {
     const el = digitsContainerRef.current;
     if (!el || editing) return;
     const handler = (e: WheelEvent) => {
+      // VFO locked — wheel-step tuning no-ops. We still preventDefault on a
+      // digit so the page doesn't scroll under a locked digit, matching the
+      // unlocked feel; we just don't move the dial.
+      const lockedNow = useVfoLockStore.getState().locked;
       const target = e.target as Element | null;
       const digit = target?.closest<HTMLElement>('[data-decade]');
       if (!digit || !el.contains(digit)) return;
@@ -211,6 +290,7 @@ export function VfoDisplay() {
       const decade = Number.parseInt(decadeAttr, 10);
       if (!Number.isFinite(decade) || decade <= 0) return;
       e.preventDefault();
+      if (lockedNow) return;
 
       const direction = e.deltaY < 0 ? 1 : -1;
       const current = useConnectionStore.getState().vfoHz;
@@ -248,9 +328,9 @@ export function VfoDisplay() {
   const digits = useMemo(() => DIGIT_PLACES, []);
 
   return (
-    <div className="freq-display">
+    <div className={`freq-display${compact ? ' compact' : ''}${locked ? ' locked' : ''}`}>
       {editing ? (
-        <div className="freq-digits mono" style={{ gap: 6 }}>
+        <div className="freq-digits mono" style={{ gap: compact ? 3 : 6 }}>
           <input
             ref={inputRef}
             type="text"
@@ -259,33 +339,24 @@ export function VfoDisplay() {
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={onKeyDown}
             onBlur={cancelEdit}
-            aria-label="Frequency in kHz"
-            style={{
-              width: 220,
-              background: 'transparent',
-              border: 'none',
-              borderBottom: '1px solid var(--accent)',
-              outline: 'none',
-              color: 'var(--fg-0)',
-              fontFamily: 'inherit',
-              fontSize: 'inherit',
-              fontWeight: 700,
-            }}
+            aria-label={`${label} frequency in kHz`}
+            className="freq-edit-input"
             placeholder="kHz"
           />
-          <span className="label-xs" style={{ alignSelf: 'center' }}>
-            kHz
-          </span>
+          <span className="label-xs freq-edit-unit">kHz</span>
         </div>
       ) : (
         <button
           ref={digitsContainerRef}
           type="button"
           onClick={beginEdit}
-          aria-label="Edit frequency"
-          title="Click to enter frequency in kHz — scroll the wheel over a digit to tune it"
-          className="freq-digits mono"
-          style={{ background: 'none', border: 'none', cursor: 'text', width: '100%' }}
+          aria-label={`Edit ${label} frequency`}
+          title={
+            locked
+              ? 'VFO locked — unlock to tune'
+              : 'Click to enter frequency in kHz — scroll the wheel over a digit to tune it'
+          }
+          className="freq-digits mono freq-digits-btn"
         >
           {digits.map((place) => {
             const d = digitAt(vfoHz, place.decade);
@@ -295,7 +366,6 @@ export function VfoDisplay() {
                 <span
                   className={`digit ${isLeading ? 'leading' : ''}`}
                   data-decade={place.decade}
-                  style={{ cursor: 'ns-resize' }}
                 >
                   {d}
                 </span>
@@ -309,8 +379,14 @@ export function VfoDisplay() {
           })}
         </button>
       )}
-      <div className="freq-bot" style={{ justifyContent: 'flex-end', gap: 6, marginTop: 4 }}>
-        <span className="label-xs">MHz · click to type · wheel on a digit to step</span>
+
+      <div className="freq-bot">
+        <VfoLockButton />
+        <span className="label-xs">
+          {locked
+            ? 'LOCKED — unlock to tune'
+            : 'MHz · click to type · wheel on a digit to step'}
+        </span>
       </div>
     </div>
   );

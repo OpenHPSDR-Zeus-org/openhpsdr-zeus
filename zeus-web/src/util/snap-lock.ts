@@ -37,6 +37,7 @@ import { useConnectionStore } from '../state/connection-store';
 import { type DisplayState, registerFrameConsumer, subscribeFrames } from '../state/display-store';
 import { measureSnapLock, type SnapLockMeasure, useSignalEnhanceStore } from '../dsp/signal-estimator';
 import { useTxStore } from '../state/tx-store';
+import { useVfoLockStore } from '../state/vfo-lock-store';
 import * as viewCenter from '../state/view-center';
 
 // Capture window for re-finding the locked signal each frame. Must stay well
@@ -209,6 +210,10 @@ function onFrame(s: DisplayState): void {
   if (!active) return;
   if (!useSignalEnhanceStore.getState().snapEnabled) {
     releaseSnapLock();
+    return;
+  }
+  if (useVfoLockStore.getState().locked) {
+    releaseSnapLock(); // VFO locked — disarm signal-follow; it must not nudge the dial
     return;
   }
   const tx = useTxStore.getState();
