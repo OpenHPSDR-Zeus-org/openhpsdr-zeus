@@ -24,6 +24,7 @@ public sealed class RxVstEngineService : IHostedService, IAsyncDisposable
     private readonly object _editorLock = new();
     private readonly bool _ownsEngine;
     private readonly Action<string> _stderrHandler;
+    private readonly Action<string> _faultHandler;
 
     private Dictionary<string, int> _idToEngineSlot = new(StringComparer.Ordinal);
     private Dictionary<string, string> _fileToId = new(StringComparer.OrdinalIgnoreCase);
@@ -58,8 +59,19 @@ public sealed class RxVstEngineService : IHostedService, IAsyncDisposable
         _log = log;
         _ownsEngine = ownsEngine;
         _stderrHandler = line => _log.LogDebug("rx-vst-engine: {Line}", line);
+        _faultHandler = reason => _log.LogWarning("RX VST engine fault: {Reason}", reason);
         _engine.StdErr += _stderrHandler;
         _engine.EngineEvent += OnEngineEvent;
+        // Self-heal: replay the RX chain when the supervisor relaunches a crashed
+        // or hung engine, so recovered RX inserts come back loaded, not empty.
+        _engine.Reconnected += OnEngineReconnected;
+        _engine.Faulted += _faultHandler;
+    }
+
+    private void OnEngineReconnected()
+    {
+        _log.LogInformation("RX VST engine reconnected (restart #{Count}); replaying chain.", _engine.RestartCount);
+        _ = SyncEngineAsync(_chainOrder.CurrentOrder, CancellationToken.None);
     }
 
     public bool EngineAvailable => VstEngineController.FindEngineExe() is not null;
@@ -402,6 +414,8 @@ public sealed class RxVstEngineService : IHostedService, IAsyncDisposable
         await StopAsync(CancellationToken.None).ConfigureAwait(false);
         _engine.StdErr -= _stderrHandler;
         _engine.EngineEvent -= OnEngineEvent;
+        _engine.Reconnected -= OnEngineReconnected;
+        _engine.Faulted -= _faultHandler;
         if (_ownsEngine)
             await _engine.DisposeAsync().ConfigureAwait(false);
     }

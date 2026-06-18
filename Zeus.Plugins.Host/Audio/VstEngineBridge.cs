@@ -17,7 +17,7 @@ namespace Zeus.Plugins.Host.Audio;
 /// The view pointer + event handles are acquired once and held for the bridge's
 /// lifetime. Windows-only (named shared memory + events).</para>
 /// </summary>
-internal sealed unsafe class VstEngineBridge : IDisposable
+internal sealed unsafe class VstEngineBridge : IVstEngineBridge
 {
     private readonly MemoryMappedFile _mmf;
     private readonly MemoryMappedViewAccessor _view;
@@ -188,6 +188,22 @@ internal sealed unsafe class VstEngineBridge : IDisposable
         var outRegion = new Span<float>(_base + VstEngineProtocol.HeaderBytes + _regionBytes, count);
         outRegion.CopyTo(output.Slice(0, count));
         return true;
+    }
+
+    /// <summary>
+    /// Disarm the gate and drain any stale <c>.in</c>/<c>.out</c> signals left by
+    /// a crashed engine so the relaunched engine starts from a clean sequence.
+    /// The realtime tap must already be disarmed (engine down) when this runs —
+    /// the controller only calls it between process exit and re-arm.
+    /// </summary>
+    public void ResetForRelaunch()
+    {
+        EngineReady = false;
+        if (Volatile.Read(ref _disposed) != 0) return;
+        // Discard any signals the dead engine (or our last unanswered Set) left
+        // pending, so the first block after relaunch waits on ITS own response.
+        while (_outEvent.WaitOne(0)) { }
+        while (_inEvent.WaitOne(0)) { }
     }
 
     private void WriteU32(int off, uint v) => *(uint*)(_base + off) = v;

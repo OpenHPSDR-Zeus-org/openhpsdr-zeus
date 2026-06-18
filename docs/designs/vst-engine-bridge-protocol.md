@@ -61,6 +61,20 @@ through (§3.4).
 - Relaunch is rate-limited (e.g. exponential backoff, cap N attempts/minute);
   after the cap Zeus stays in passthrough and surfaces a `warning`.
 
+> **Implementation status (Zeus side):** the supervisor lives in
+> `Zeus.Plugins.Host/Audio/VstEngineController.cs`. `OnProcessExited` →
+> `ScheduleRelaunch` → `SuperviseAsync` does the rate-limited relaunch
+> (exponential backoff, rolling crash-loop cap with a cooldown rather than a hard
+> stop). A successful relaunch raises `Reconnected`, which the chain owners
+> (`AudioProcessingModeService`, `RxVstEngineService`) handle by replaying
+> `load_chain` with each plugin's saved state — so a recovered engine comes back
+> loaded, not empty. A *hung* (alive-but-unresponsive) engine never exits, so a
+> degraded-block watchdog force-recycles it through the same exit→relaunch path.
+> The `ready` handshake is validated (protocol + echoed frames/rate/channels)
+> before the audio plane is trusted. The plugin-side dead-man's-pedal blacklist
+> is the engine's responsibility (upstream KlayaR/VSTHost). Covered by
+> `tests/Zeus.Plugins.Host.Tests/VstEngineSupervisorTests.cs`.
+
 ---
 
 ## 2. Control plane (stdio newline-JSON)

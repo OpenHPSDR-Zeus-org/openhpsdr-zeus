@@ -14,7 +14,7 @@ namespace Zeus.Plugins.Host.Audio;
 /// externally-installed upstream binary (KlayaR/VSTHost); Zeus never bundles
 /// it.</para>
 /// </summary>
-internal sealed class VstEngineProcess : IDisposable
+internal sealed class VstEngineProcess : IVstEngineProcess
 {
     private readonly Process _process;
     private readonly object _writeLock = new();
@@ -29,7 +29,7 @@ internal sealed class VstEngineProcess : IDisposable
     public event Action<string>? StdErrLine;
 
     /// <summary>Raised when the supervised engine process exits.</summary>
-    public event Action<VstEngineProcess>? Exited;
+    public event Action<IVstEngineProcess>? Exited;
 
     /// <summary>Completes when the engine emits its <c>ready</c> handshake.</summary>
     public Task<JsonElement> Ready => _ready.Task;
@@ -173,6 +173,21 @@ internal sealed class VstEngineProcess : IDisposable
             catch (InvalidOperationException) { }
             catch (IOException) { }
         }
+    }
+
+    /// <summary>
+    /// Force-kill the engine (and its tree) without disposing our wrapper, so the
+    /// underlying <see cref="Process.Exited"/> fires and the controller's
+    /// supervisor sees the exit and relaunches. Best-effort.
+    /// </summary>
+    public void Kill()
+    {
+        try
+        {
+            if (!_process.HasExited)
+                _process.Kill(entireProcessTree: true);
+        }
+        catch { /* already gone / racing teardown — the Exited path handles it */ }
     }
 
     public void Dispose()

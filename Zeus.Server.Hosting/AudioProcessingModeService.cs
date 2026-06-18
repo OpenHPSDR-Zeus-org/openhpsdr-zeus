@@ -78,6 +78,12 @@ public sealed class AudioProcessingModeService : IHostedService
         _log = log;
         _engine.StdErr += line => _log.LogDebug("vst-engine: {Line}", line);
         _engine.EngineEvent += OnEngineEvent;
+        // Self-heal: when the supervisor relaunches a crashed/hung engine it comes
+        // back EMPTY. Replay the operator's chain (with saved per-plugin state) so
+        // VST mode recovers transparently — same path as a live chain edit.
+        _engine.Reconnected += OnEngineReconnected;
+        _engine.Faulted += reason =>
+            _log.LogWarning("VST engine fault: {Reason}", reason);
         // Keep the live engine's loaded chain in sync with operator edits made
         // AFTER activation. LoadChainIntoEngine() runs once on activation; without
         // this subscription a VST added/removed/reordered later never reaches the
@@ -95,6 +101,17 @@ public sealed class AudioProcessingModeService : IHostedService
     /// </summary>
     private void OnChainOrderChanged(IReadOnlyList<string> _)
     {
+        if (_engine.IsActive) LoadChainIntoEngine();
+    }
+
+    /// <summary>
+    /// The supervisor relaunched the engine after a crash/hang. Re-push the chain
+    /// so the recovered engine reloads the operator's plugins and last-known state
+    /// rather than running empty. Runs on the supervisor (control) thread.
+    /// </summary>
+    private void OnEngineReconnected()
+    {
+        _log.LogInformation("VST engine reconnected (restart #{Count}); replaying chain.", _engine.RestartCount);
         if (_engine.IsActive) LoadChainIntoEngine();
     }
 
