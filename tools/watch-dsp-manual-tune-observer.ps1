@@ -43,7 +43,7 @@ param(
 
     [string]$ScenarioId = "g2-manual-tune-observer",
 
-    [string]$ComparisonId = "nr5-spnr",
+    [string]$ComparisonId = "candidate-external-engine-opt-in",
 
     [switch]$SkipCertificateCheck,
 

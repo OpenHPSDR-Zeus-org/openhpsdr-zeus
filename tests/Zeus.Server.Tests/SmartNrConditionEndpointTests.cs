@@ -215,6 +215,13 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Equal("opt-in-only-until-benchmark-and-g2-on-air-acceptance", root.GetProperty("rolloutGate").GetString());
         Assert.True(root.GetProperty("frontendSceneAvailable").GetBoolean());
         Assert.Equal("NR2", root.GetProperty("smartNrProfile").GetString());
+        Assert.False(root.GetProperty("readyForExternalEngineBakeoff").GetBoolean());
+        Assert.Equal(
+            "external-engine-bakeoff-preflight-required",
+            root.GetProperty("externalEngineBakeoffStatus").GetString());
+        Assert.Contains(
+            root.GetProperty("externalEngineBakeoffConstraints").EnumerateArray().Select(item => item.GetString()),
+            item => item == "final-audio-not-fresh");
         Assert.Contains(root.GetProperty("status").GetString(), new[]
         {
             "dsp-engine-unavailable",
@@ -230,6 +237,7 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Contains("dsp-benchmark-acceptance-plan", tools);
         Assert.Contains("dsp-live-runtime-evidence", tools);
         Assert.Contains("g2-live-capture", tools);
+        Assert.Contains("external-engine-live-bakeoff-watch", tools);
         Assert.Contains("external-post-demod-bakeoff:rnnoise", tools);
         Assert.Contains("external-post-demod-bakeoff:deepfilternet", tools);
         Assert.Equal("/api/dsp/benchmark-plan", root.GetProperty("benchmarkPlanEndpoint").GetString());

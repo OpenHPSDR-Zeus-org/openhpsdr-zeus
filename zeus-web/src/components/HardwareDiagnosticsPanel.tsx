@@ -1461,6 +1461,9 @@ function DspLiveDiagnosticsPanel({ diag }: { diag: DspLiveDiagnosticsDto | null 
   const candidates = diag.externalEngineCandidates.slice(0, 4);
   const constraints = diag.constraints.length > 0 ? diag.constraints.join(', ') : 'none';
   const nr5TuningConstraints = diag.nr5TuningConstraints.length > 0 ? diag.nr5TuningConstraints.join(', ') : 'none';
+  const externalBakeoffConstraints = diag.externalEngineBakeoffConstraints.length > 0
+    ? diag.externalEngineBakeoffConstraints.join(', ')
+    : 'none';
   const actions = diag.recommendedActions.length > 0 ? diag.recommendedActions.join(' / ') : 'none';
   const evidence = diag.evidence.length > 0 ? diag.evidence.join(', ') : 'none';
 
@@ -1472,7 +1475,8 @@ function DspLiveDiagnosticsPanel({ diag }: { diag: DspLiveDiagnosticsDto | null 
           { label: 'Tone', value: diag.qualityTone },
           { label: 'Score', value: `${diag.readinessScore}/100` },
           { label: 'Live Benchmark', value: boolLabel(diag.readyForLiveBenchmark) },
-          { label: 'NR5 Tuning', value: `${boolLabel(diag.readyForNr5Tuning)} / ${diag.nr5TuningStatus}` },
+          { label: 'NR5 Legacy', value: `${boolLabel(diag.readyForNr5Tuning)} / ${diag.nr5TuningStatus}` },
+          { label: 'RX Suite Bakeoff', value: `${boolLabel(diag.readyForExternalEngineBakeoff)} / ${diag.externalEngineBakeoffStatus}` },
           { label: 'Rollout Gate', value: diag.rolloutGate },
           { label: 'Scene', value: `${diag.frontendSceneStatus} / ${age(diag.frontendSceneAgeMs)}` },
           { label: 'Runtime', value: `${diag.requestedNrMode} -> ${diag.effectiveNrMode}` },
@@ -1497,7 +1501,10 @@ function DspLiveDiagnosticsPanel({ diag }: { diag: DspLiveDiagnosticsDto | null 
         constraints: {constraints}
       </div>
       <div className="mono" style={{ fontSize: 10, color: diag.readyForNr5Tuning ? 'var(--fg-3)' : 'var(--tx)', overflowWrap: 'anywhere' }}>
-        nr5 tuning: {nr5TuningConstraints}
+        nr5 legacy: {nr5TuningConstraints}
+      </div>
+      <div className="mono" style={{ fontSize: 10, color: diag.readyForExternalEngineBakeoff ? 'var(--fg-3)' : 'var(--tx)', overflowWrap: 'anywhere' }}>
+        rx suite bakeoff: {externalBakeoffConstraints}
       </div>
       <div style={{ fontSize: 11, lineHeight: 1.35, color: 'var(--fg-2)' }}>
         actions: {actions}

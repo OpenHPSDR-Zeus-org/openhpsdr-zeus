@@ -4,8 +4,8 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 //
-// Persistence coverage for the issue #79 Phase 2 NR4 / NR2 popover work
-// plus the NR5 RMNoise operator override. Nullable scalar fields must round-trip through
+// Persistence coverage for the issue #79 Phase 2 NR4 / NR2 popover work.
+// Nullable scalar fields must round-trip through
 // LiteDB so the operator's per-popover tunings survive a backend restart.
 // Lazy-default behaviour: a null in the DB stays null in NrConfig (the
 // engine layer falls back to NrDefaults at apply time, so clearing a field
@@ -91,46 +91,6 @@ public class Nr4SettingsPersistenceTests : IDisposable
         Assert.Null(back.Nr4PostFilterThreshold);
         Assert.Null(back.Nr4NoiseScalingType);
         Assert.Null(back.Nr4Position);
-    }
-
-    [Fact]
-    public void SetNr5RmNoiseGateOverride_PersistsExplicitValues()
-    {
-        using (var store = BuildStore())
-        {
-            store.Upsert(new NrConfig(NrMode: NrMode.Nr5, Nr5RmNoiseGateEnabled: true));
-        }
-
-        using (var firstRead = BuildStore())
-        {
-            var back = firstRead.Get();
-            Assert.NotNull(back);
-            Assert.True(back!.Nr5RmNoiseGateEnabled);
-        }
-
-        using (var update = BuildStore())
-        {
-            update.Upsert(new NrConfig(NrMode: NrMode.Nr5, Nr5RmNoiseGateEnabled: false));
-        }
-
-        using var secondRead = BuildStore();
-        var updated = secondRead.Get();
-        Assert.NotNull(updated);
-        Assert.False(updated!.Nr5RmNoiseGateEnabled);
-    }
-
-    [Fact]
-    public void GetNr5RmNoiseGateOverride_NullField_ReturnsNullForPolicyFallback()
-    {
-        using (var store = BuildStore())
-        {
-            store.Upsert(new NrConfig(NrMode: NrMode.Nr5));
-        }
-
-        using var fresh = BuildStore();
-        var back = fresh.Get();
-        Assert.NotNull(back);
-        Assert.Null(back!.Nr5RmNoiseGateEnabled);
     }
 
     [Fact]

@@ -153,7 +153,7 @@ public static class DspBenchmarkCaptureManifestService
                 "live-diagnostics-history",
                 "diagnostics-history-json",
                 "tools/summarize-dsp-live-diagnostics-history.ps1",
-                "Summarize captured NR5/NR2 live diagnostics attempts, rank best weak-signal and lowest-pumping traces, and preserve safety-class rollups before selecting the next candidate comparison.",
+                "Summarize captured non-NR5 and legacy live diagnostics attempts, rank best weak-signal and lowest-pumping traces, and preserve safety-class rollups before selecting the next candidate comparison.",
                 "once-after-several-live-diagnostics-attempts",
                 false,
                 all),

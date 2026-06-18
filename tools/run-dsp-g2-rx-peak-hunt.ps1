@@ -57,7 +57,7 @@ param(
 
     [string]$Label = "",
 
-    [string]$ComparisonId = "nr5-spnr",
+    [string]$ComparisonId = "candidate-external-engine-opt-in",
 
     [string]$WatchScriptPath = "",
 

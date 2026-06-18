@@ -30,7 +30,7 @@ public static class DspBenchmarkPlanCatalog
                 "off-baseline",
                 "thetis-parity",
                 "current-zeus",
-                "nr5-spnr",
+                "candidate-external-engine-opt-in",
             ],
             GlobalAcceptanceGates:
             [
@@ -81,6 +81,13 @@ public static class DspBenchmarkPlanCatalog
             scenarios.Add("ssb-like-speech");
             scenarios.Add("weak-cw-carrier");
             scenarios.Add("noise-only-gating");
+        }
+        else if (ModeEquals(condition.ExpectedNrMode, "Off") || ModeEquals(condition.EffectiveNrMode, "Off"))
+        {
+            scenarios.Add("ssb-like-speech");
+            scenarios.Add("weak-cw-carrier");
+            scenarios.Add("noise-only-gating");
+            scenarios.Add("agc-level-step");
         }
 
         if (condition.HeldByRxChain == true || string.Equals(condition.RxChainTone, "protect", StringComparison.OrdinalIgnoreCase))
@@ -370,7 +377,7 @@ public static class DspBenchmarkPlanCatalog
 
         if (IsRxSignalPath(signalPath))
         {
-            comparisons.Add("nr5-spnr");
+            comparisons.Add("candidate-external-engine-opt-in");
         }
 
         return comparisons.ToArray();

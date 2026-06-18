@@ -4466,7 +4466,6 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.InRange(state.DesiredGainDb, 18.5, 22.0);
         Assert.InRange(state.AppliedGainDb, 18.5, 22.0);
         Assert.InRange(state.OutputRmsDbfs, -20.5, -17.0);
-        Assert.False(state.Nr5RmNoiseGate);
         Assert.False(state.Nr5NoSignalNoiseCap);
         Assert.False(state.Nr5FarPeakNoiseCap);
         Assert.False(state.Nr5NoProofNoiseCap);
@@ -4510,7 +4509,6 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.InRange(state.DesiredGainDb, 11.0, 15.5);
         Assert.InRange(state.AppliedGainDb, 11.0, 15.5);
         Assert.InRange(state.OutputRmsDbfs, -23.5, -19.5);
-        Assert.False(state.Nr5RmNoiseGate);
         Assert.False(state.Nr5NoSignalNoiseCap);
         Assert.False(state.Nr5FarPeakNoiseCap);
         Assert.False(state.Nr5NoProofNoiseCap);
@@ -4609,618 +4607,6 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.True(state.DesiredGainDb < firstDesiredDb - 8.0);
     }
 
-    [Theory]
-    [InlineData("1")]
-    [InlineData("true")]
-    [InlineData("on")]
-    public void ApplyRxAudioLeveler_RmNoiseGateAcceptsExplicitOnValues(string optInValue)
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", null);
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", optInValue);
-        try
-        {
-            var state = StableNoSignalRmNoiseState();
-            float[] block = StableNoSignalRmNoiseBlock();
-            var nr5 = StableNoSignalRmNoiseDiagnostics();
-
-            DspPipelineService.ApplyRxAudioLeveler(block, ref state, nr5);
-
-            Assert.True(
-                state.Nr5RmNoiseGate,
-                $"prior={state.Nr5NoSignalNoisePrior:F3} profile={state.Nr5NoiseProfilePrior:F3} " +
-                $"cap={state.Nr5NoSignalNoiseCap} noProof={state.Nr5NoProofNoiseCap} " +
-                $"desired={state.DesiredGainDb:F1} output={state.OutputRmsDbfs:F1}");
-            Assert.True(state.Nr5NoSignalNoiseCap);
-            Assert.True(state.Nr5NoProofNoiseCap);
-            Assert.InRange(state.Nr5RmNoiseSuppressionDb, 12.0, 80.0);
-            Assert.True(state.DesiredGainDb <= -14.0);
-            Assert.True(state.OutputRmsDbfs <= -50.0);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseGateIsDefaultOff()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", null);
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
-        try
-        {
-            var state = StableNoSignalRmNoiseState();
-            float[] block = StableNoSignalRmNoiseBlock();
-
-            DspPipelineService.ApplyRxAudioLeveler(block, ref state, StableNoSignalRmNoiseDiagnostics());
-
-            Assert.False(state.Nr5RmNoiseGate);
-            Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
-            Assert.True(state.Nr5NoSignalNoiseCap);
-            Assert.True(state.Nr5NoProofNoiseCap);
-            Assert.True(state.OutputRmsDbfs > -50.0);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Fact]
-    public void Nr5RmNoiseGatePolicyReportsDefaultOffSource()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", null);
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
-        try
-        {
-            var policy = DspPipelineService.GetNr5RmNoiseGatePolicy();
-
-            Assert.False(policy.Enabled);
-            Assert.Equal("default", policy.Source);
-            Assert.Equal("default-off", policy.Reason);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Theory]
-    [InlineData(true, "operator-on")]
-    [InlineData(false, "operator-off")]
-    public void Nr5RmNoiseGatePolicyReportsRuntimeOperatorSource(bool enabled, string reason)
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", null);
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
-        try
-        {
-            var policy = DspPipelineService.GetNr5RmNoiseGatePolicy(enabled);
-
-            Assert.Equal(enabled, policy.Enabled);
-            Assert.Equal("runtime", policy.Source);
-            Assert.Equal(reason, policy.Reason);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Fact]
-    public void Nr5RmNoiseGatePolicyReportsExplicitOffSource()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", "off");
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", "1");
-        try
-        {
-            var policy = DspPipelineService.GetNr5RmNoiseGatePolicy();
-
-            Assert.False(policy.Enabled);
-            Assert.Equal("ZEUS_NR5_RMNOISE_GATE", policy.Source);
-            Assert.Equal("explicit-off", policy.Reason);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Fact]
-    public void Nr5RmNoiseGatePolicyExplicitEnvOffOverridesRuntimeOn()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", "off");
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
-        try
-        {
-            var policy = DspPipelineService.GetNr5RmNoiseGatePolicy(runtimeOverride: true);
-
-            Assert.False(policy.Enabled);
-            Assert.Equal("ZEUS_NR5_RMNOISE_GATE", policy.Source);
-            Assert.Equal("explicit-off", policy.Reason);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseGateAcceptsRuntimeOperatorOn()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", null);
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
-        try
-        {
-            var state = StableNoSignalRmNoiseState();
-            float[] block = StableNoSignalRmNoiseBlock();
-
-            DspPipelineService.ApplyRxAudioLeveler(
-                block,
-                ref state,
-                StableNoSignalRmNoiseDiagnostics(),
-                nr5RmNoiseGateEnabledOverride: true);
-
-            Assert.True(
-                state.Nr5RmNoiseGate,
-                $"prior={state.Nr5NoSignalNoisePrior:F3} profile={state.Nr5NoiseProfilePrior:F3} " +
-                $"desired={state.DesiredGainDb:F1} output={state.OutputRmsDbfs:F1}");
-            Assert.True(state.Nr5NoSignalNoiseCap);
-            Assert.True(state.Nr5NoProofNoiseCap);
-            Assert.InRange(state.Nr5RmNoiseSuppressionDb, 12.0, 80.0);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseGatePreservesNativeWeakSpeechOnset()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", "1");
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
-        try
-        {
-            var state = new DspPipelineService.RxAudioLevelerState
-            {
-                GainDb = 0.0,
-                PauseHoldBlocks = 18,
-                Nr5NoiseProfilePrior = 0.620
-            };
-            float[] block = new float[1024];
-            Array.Fill(block, DbToLinear(-43.0));
-            block[0] = DbToLinear(-32.4);
-            var nr5 = Nr5Diagnostics(
-                signalConfidence: 0.246,
-                signalProbability: 0.108,
-                agcGate: 0.312,
-                recoveryDrive: 0.116,
-                weakSignalMemory: 0.205,
-                outputDbfs: -30.8,
-                inputDbfs: -43.0,
-                maskSmoothing: 0.284,
-                peakEvidence: 0.0,
-                outputPeakDbfs: -24.6,
-                adjacentNoiseTrust: 0.840,
-                adjacentNoiseDrive: 0.800,
-                adjacentNoiseUsable: true,
-                levelDrive: 0.420);
-
-            DspPipelineService.ApplyRxAudioLeveler(block, ref state, nr5);
-
-            Assert.False(
-                state.Nr5RmNoiseGate,
-                $"hybrid={state.Nr5HybridSpeechPrior:F3} prior={state.Nr5NoSignalNoisePrior:F3} " +
-                $"profile={state.Nr5NoiseProfilePrior:F3} desired={state.DesiredGainDb:F1} " +
-                $"output={state.OutputRmsDbfs:F1}");
-            Assert.False(state.Nr5NoSignalNoiseCap);
-            Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
-            Assert.True(state.DesiredGainDb > 0.0);
-            Assert.True(state.OutputRmsDbfs > -43.0);
-            Assert.False(state.OutputLimited);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseGateHoldsThroughNoSignalProofFlutter()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", "1");
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
-        try
-        {
-            var state = StableNoSignalRmNoiseState();
-            DspPipelineService.ApplyRxAudioLeveler(
-                StableNoSignalRmNoiseBlock(),
-                ref state,
-                StableNoSignalRmNoiseDiagnostics());
-
-            Assert.True(state.Nr5RmNoiseGate);
-            int initialHold = state.Nr5RmNoiseGateHoldBlocks;
-            Assert.True(initialHold > 0);
-
-            float[] flutterBlock = new float[1024];
-            Array.Fill(flutterBlock, DbToLinear(-35.4));
-            flutterBlock[0] = DbToLinear(-28.2);
-            var flutterNr5 = Nr5Diagnostics(
-                signalConfidence: 0.246,
-                signalProbability: 0.132,
-                agcGate: 0.410,
-                recoveryDrive: 0.050,
-                weakSignalMemory: 0.040,
-                outputDbfs: -25.5,
-                inputDbfs: -35.4,
-                maskSmoothing: 0.018,
-                peakEvidence: 0.0,
-                outputPeakDbfs: -14.0,
-                adjacentNoiseTrust: 0.490,
-                adjacentNoiseDrive: 0.470,
-                levelDrive: 0.820);
-
-            DspPipelineService.ApplyRxAudioLeveler(flutterBlock, ref state, flutterNr5);
-
-            Assert.True(
-                state.Nr5RmNoiseGate,
-                $"hold={state.Nr5RmNoiseGateHoldBlocks} desired={state.DesiredGainDb:F1} " +
-                $"output={state.OutputRmsDbfs:F1} profile={state.Nr5NoiseProfilePrior:F3} " +
-                $"prior={state.Nr5NoSignalNoisePrior:F3}");
-            Assert.Equal(initialHold - 1, state.Nr5RmNoiseGateHoldBlocks);
-            Assert.True(state.Nr5NoProofNoiseCap);
-            Assert.True(state.Nr5RmNoiseSuppressionDb > 10.0);
-            Assert.True(state.OutputRmsDbfs <= -55.0);
-            Assert.False(state.OutputLimited);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseGateHoldClearsOnPassbandSpeechProof()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", "1");
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
-        try
-        {
-            var state = StableNoSignalRmNoiseState();
-            DspPipelineService.ApplyRxAudioLeveler(
-                StableNoSignalRmNoiseBlock(),
-                ref state,
-                StableNoSignalRmNoiseDiagnostics());
-
-            Assert.True(state.Nr5RmNoiseGate);
-            Assert.True(state.Nr5RmNoiseGateHoldBlocks > 0);
-
-            float[] speechBlock = new float[1024];
-            Array.Fill(speechBlock, DbToLinear(-45.0));
-            speechBlock[0] = DbToLinear(-34.0);
-            var speechNr5 = Nr5Diagnostics(
-                signalConfidence: 0.360,
-                signalProbability: 0.240,
-                agcGate: 0.720,
-                recoveryDrive: 0.420,
-                weakSignalMemory: 0.480,
-                outputDbfs: -32.0,
-                inputDbfs: -45.0,
-                maskSmoothing: 0.340,
-                peakEvidence: 0.180,
-                outputPeakDbfs: -22.0,
-                adjacentNoiseTrust: 0.820,
-                adjacentNoiseDrive: 0.800,
-                levelDrive: 0.900);
-
-            DspPipelineService.ApplyRxAudioLeveler(
-                speechBlock,
-                ref state,
-                speechNr5,
-                FrontendTopPeak(offsetHz: 160, snrDb: 31.0, dbfs: -74.0, confidence: 0.920),
-                filterLowHz: 100,
-                filterHighHz: 3_100);
-
-            Assert.False(state.Nr5RmNoiseGate);
-            Assert.Equal(0, state.Nr5RmNoiseGateHoldBlocks);
-            Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
-            Assert.True(state.OutputRmsDbfs > -50.0);
-            Assert.True(state.Nr5SpeechHoldBlocks > 0);
-            Assert.True(state.Nr5SpeechHangoverBlocks > 0);
-            Assert.False(state.OutputLimited);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseGateSuppressesQuietResidualNoSignalFloor()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", "1");
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
-        try
-        {
-            var state = new DspPipelineService.RxAudioLevelerState
-            {
-                Nr5NoiseProfilePrior = 0.350
-            };
-            float[] block = new float[1024];
-            Array.Fill(block, DbToLinear(-79.9));
-            block[0] = DbToLinear(-67.0);
-            var nr5 = Nr5Diagnostics(
-                signalConfidence: 0.227,
-                signalProbability: 0.082,
-                agcGate: 0.144,
-                recoveryDrive: 0.020,
-                weakSignalMemory: 0.0,
-                outputDbfs: -80.6,
-                inputDbfs: -57.1,
-                maskSmoothing: 0.372,
-                peakEvidence: 0.0,
-                outputPeakDbfs: -67.0,
-                adjacentNoiseTrust: 0.547,
-                adjacentNoiseDrive: 0.514,
-                adjacentNoiseUsable: true,
-                levelDrive: 0.230);
-
-            DspPipelineService.ApplyRxAudioLeveler(block, ref state, nr5);
-
-            Assert.True(
-                state.Nr5RmNoiseGate,
-                $"prior={state.Nr5NoSignalNoisePrior:F3} profile={state.Nr5NoiseProfilePrior:F3} " +
-                $"desired={state.DesiredGainDb:F1} applied={state.AppliedGainDb:F1} " +
-                $"input={state.InputRmsDbfs:F1} output={state.OutputRmsDbfs:F1}");
-            Assert.True(state.Nr5NoSignalNoiseCap);
-            Assert.True(state.Nr5NoProofNoiseCap);
-            Assert.InRange(state.Nr5RmNoiseSuppressionDb, 10.0, 30.0);
-            Assert.True(state.DesiredGainDb <= -10.0);
-            Assert.True(state.AppliedGainDb <= -10.0);
-            Assert.True(state.OutputRmsDbfs <= -91.0);
-            Assert.Equal(0, state.Nr5SpeechHoldBlocks);
-            Assert.False(state.OutputLimited);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseQuietGatePreservesPassbandSpeechProof()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", "1");
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
-        try
-        {
-            var state = new DspPipelineService.RxAudioLevelerState
-            {
-                Nr5NoiseProfilePrior = 0.350
-            };
-            float[] block = new float[1024];
-            Array.Fill(block, DbToLinear(-79.9));
-            block[0] = DbToLinear(-67.0);
-            var nr5 = Nr5Diagnostics(
-                signalConfidence: 0.227,
-                signalProbability: 0.082,
-                agcGate: 0.144,
-                recoveryDrive: 0.020,
-                weakSignalMemory: 0.0,
-                outputDbfs: -80.6,
-                inputDbfs: -57.1,
-                maskSmoothing: 0.372,
-                peakEvidence: 0.0,
-                outputPeakDbfs: -67.0,
-                adjacentNoiseTrust: 0.547,
-                adjacentNoiseDrive: 0.514,
-                adjacentNoiseUsable: true,
-                levelDrive: 0.230);
-
-            DspPipelineService.ApplyRxAudioLeveler(
-                block,
-                ref state,
-                nr5,
-                FrontendTopPeak(offsetHz: 1_050, snrDb: 18.4, dbfs: -90.0, confidence: 0.850),
-                filterLowHz: 100,
-                filterHighHz: 3_100);
-
-            Assert.False(state.Nr5RmNoiseGate);
-            Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
-            Assert.True(state.OutputRmsDbfs > -82.0);
-            Assert.False(state.OutputLimited);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseGateSuppressesHeldQuietResidualTail()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", "1");
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
-        try
-        {
-            var state = new DspPipelineService.RxAudioLevelerState
-            {
-                PauseHoldBlocks = 17,
-                Nr5SpeechHoldBlocks = 25,
-                Nr5NoiseProfilePrior = 0.022
-            };
-            float[] block = new float[1024];
-            Array.Fill(block, DbToLinear(-85.8));
-            block[0] = DbToLinear(-73.2);
-            var nr5 = Nr5Diagnostics(
-                signalConfidence: 0.240,
-                signalProbability: 0.082,
-                agcGate: 0.153,
-                recoveryDrive: 0.085,
-                weakSignalMemory: 0.0,
-                outputDbfs: -80.0,
-                inputDbfs: -54.4,
-                maskSmoothing: 0.374,
-                peakEvidence: 0.0,
-                outputPeakDbfs: -67.8,
-                adjacentNoiseTrust: 0.546,
-                adjacentNoiseDrive: 0.507,
-                adjacentNoiseUsable: true,
-                levelDrive: 0.239);
-
-            DspPipelineService.ApplyRxAudioLeveler(
-                block,
-                ref state,
-                nr5,
-                FrontendTopPeak(offsetHz: -187, snrDb: 10.8, dbfs: -93.8, confidence: 0.747),
-                filterLowHz: -3_106,
-                filterHighHz: 0);
-
-            Assert.True(
-                state.Nr5RmNoiseGate,
-                $"hybrid={state.Nr5HybridSpeechPrior:F3} prior={state.Nr5NoSignalNoisePrior:F3} " +
-                $"profile={state.Nr5NoiseProfilePrior:F3} desired={state.DesiredGainDb:F1} " +
-                $"output={state.OutputRmsDbfs:F1}");
-            Assert.True(state.Nr5NoProofNoiseCap);
-            Assert.InRange(state.Nr5RmNoiseSuppressionDb, 5.0, 14.0);
-            Assert.True(state.DesiredGainDb <= -5.0);
-            Assert.True(state.OutputRmsDbfs <= -90.0);
-            Assert.Equal(0, state.PauseHoldBlocks);
-            Assert.InRange(state.Nr5SpeechHoldBlocks, 1, 24);
-            Assert.False(state.OutputLimited);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseHeldQuietTailPreservesPassbandProof()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", "1");
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
-        try
-        {
-            var state = new DspPipelineService.RxAudioLevelerState
-            {
-                PauseHoldBlocks = 17,
-                Nr5SpeechHoldBlocks = 25,
-                Nr5NoiseProfilePrior = 0.022
-            };
-            float[] block = new float[1024];
-            Array.Fill(block, DbToLinear(-85.8));
-            block[0] = DbToLinear(-73.2);
-            var nr5 = Nr5Diagnostics(
-                signalConfidence: 0.240,
-                signalProbability: 0.082,
-                agcGate: 0.153,
-                recoveryDrive: 0.085,
-                weakSignalMemory: 0.0,
-                outputDbfs: -80.0,
-                inputDbfs: -54.4,
-                maskSmoothing: 0.374,
-                peakEvidence: 0.0,
-                outputPeakDbfs: -67.8,
-                adjacentNoiseTrust: 0.546,
-                adjacentNoiseDrive: 0.507,
-                adjacentNoiseUsable: true,
-                levelDrive: 0.239);
-
-            DspPipelineService.ApplyRxAudioLeveler(
-                block,
-                ref state,
-                nr5,
-                FrontendTopPeak(offsetHz: -187, snrDb: 18.4, dbfs: -93.8, confidence: 0.850),
-                filterLowHz: -3_106,
-                filterHighHz: 0);
-
-            Assert.False(state.Nr5RmNoiseGate);
-            Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
-            Assert.True(state.OutputRmsDbfs > -88.0);
-            Assert.True(state.Nr5SpeechHoldBlocks > 0);
-            Assert.False(state.OutputLimited);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseGateDefersDuringRecentSpeechHangover()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", "1");
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
-        try
-        {
-            var state = StableNoSignalRmNoiseState();
-            state.Nr5SpeechHangoverBlocks = 48;
-            float[] block = StableNoSignalRmNoiseBlock();
-
-            DspPipelineService.ApplyRxAudioLeveler(block, ref state, StableNoSignalRmNoiseDiagnostics());
-
-            Assert.False(
-                state.Nr5RmNoiseGate,
-                $"hangover={state.Nr5SpeechHangoverBlocks} hold={state.Nr5SpeechHoldBlocks} " +
-                $"prior={state.Nr5NoSignalNoisePrior:F3} profile={state.Nr5NoiseProfilePrior:F3} " +
-                $"desired={state.DesiredGainDb:F1} output={state.OutputRmsDbfs:F1}");
-            Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
-            Assert.Equal(0, state.Nr5SpeechHoldBlocks);
-            Assert.InRange(state.Nr5SpeechHangoverBlocks, 1, 47);
-            Assert.True(state.OutputRmsDbfs > -50.0);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
     [Fact]
     public void ApplyRxAudioLeveler_ProtectsRecentNr5SpeechHangoverFromComfortFade()
     {
@@ -5256,8 +4642,6 @@ public sealed class DspPipelineAudioSanitizerTests
             filterLowHz: -3_106,
             filterHighHz: 0);
 
-        Assert.False(state.Nr5RmNoiseGate);
-        Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
         Assert.True(
             state.OutputRmsDbfs is >= -38.5 and <= -34.0,
             $"desired={state.DesiredGainDb:F1} applied={state.AppliedGainDb:F1} output={state.OutputRmsDbfs:F1} " +
@@ -5309,8 +4693,6 @@ public sealed class DspPipelineAudioSanitizerTests
             filterLowHz: -3_106,
             filterHighHz: 0);
 
-        Assert.False(state.Nr5RmNoiseGate);
-        Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
         Assert.True(
             state.OutputRmsDbfs >= -36.5,
             $"desired={state.DesiredGainDb:F1} applied={state.AppliedGainDb:F1} output={state.OutputRmsDbfs:F1} " +
@@ -5326,55 +4708,53 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.False(state.OutputLimited);
     }
 
-    [Theory]
-    [InlineData("0")]
-    [InlineData("false")]
-    [InlineData("off")]
-    [InlineData("no")]
-    public void ApplyRxAudioLeveler_RmNoiseGateAcceptsExplicitOffValues(string offValue)
+    [Fact]
+    public void ApplyRxAudioLeveler_PassbandSpeechClearsNoSignalProfileCap()
     {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
-        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", offValue);
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", "1");
-        try
+        var state = new DspPipelineService.RxAudioLevelerState
         {
-            var state = StableNoSignalRmNoiseState();
-            float[] block = StableNoSignalRmNoiseBlock();
-
-            DspPipelineService.ApplyRxAudioLeveler(block, ref state, StableNoSignalRmNoiseDiagnostics());
-
-            Assert.False(state.Nr5RmNoiseGate);
-            Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
-            Assert.True(state.Nr5NoSignalNoiseCap);
-            Assert.True(state.Nr5NoProofNoiseCap);
-            Assert.True(state.OutputRmsDbfs > -50.0);
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
-        }
-    }
-
-    private static DspPipelineService.RxAudioLevelerState StableNoSignalRmNoiseState() =>
-        new()
-        {
-            GainDb = 0.0,
+            GainDb = 16.0,
             PauseHoldBlocks = 18,
             Nr5NoiseProfilePrior = 0.620
         };
-
-    private static float[] StableNoSignalRmNoiseBlock()
-    {
         float[] block = new float[1024];
-        Array.Fill(block, DbToLinear(-39.1));
-        block[0] = DbToLinear(-27.8);
-        return block;
-    }
+        Array.Fill(block, DbToLinear(-45.0));
+        block[0] = DbToLinear(-34.0);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.360,
+            signalProbability: 0.240,
+            agcGate: 0.720,
+            recoveryDrive: 0.420,
+            weakSignalMemory: 0.480,
+            outputDbfs: -32.0,
+            inputDbfs: -45.0,
+            maskSmoothing: 0.340,
+            peakEvidence: 0.180,
+            outputPeakDbfs: -22.0,
+            adjacentNoiseTrust: 0.820,
+            adjacentNoiseDrive: 0.800,
+            levelDrive: 0.900);
 
-    private static Nr5SpnrDiagnosticsDto StableNoSignalRmNoiseDiagnostics() =>
-        Nr5Diagnostics(
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: 160, snrDb: 31.0, dbfs: -74.0, confidence: 0.920),
+            filterLowHz: 100,
+            filterHighHz: 3_100);
+
+        Assert.False(state.Nr5NoSignalNoiseCap);
+        Assert.False(state.Nr5FarPeakNoiseCap);
+        Assert.False(state.Nr5NoProofNoiseCap);
+        Assert.True(state.Nr5HybridSpeechPrior > state.Nr5NoSignalNoisePrior);
+        Assert.InRange(state.Nr5NoiseProfilePrior, 0.250, 0.360);
+        Assert.InRange(state.OutputRmsDbfs, -37.0, -28.0);
+        Assert.True(state.Nr5SpeechHangoverBlocks > state.Nr5SpeechHoldBlocks);
+
+        float[] noProofBlock = new float[1024];
+        Array.Fill(noProofBlock, DbToLinear(-39.1));
+        noProofBlock[0] = DbToLinear(-27.8);
+        var noProofNr5 = Nr5Diagnostics(
             signalConfidence: 0.255,
             signalProbability: 0.140,
             agcGate: 0.500,
@@ -5389,87 +4769,13 @@ public sealed class DspPipelineAudioSanitizerTests
             adjacentNoiseDrive: 0.820,
             levelDrive: 0.900);
 
-    [Fact]
-    public void ApplyRxAudioLeveler_PassbandSpeechClearsNoSignalProfileCap()
-    {
-        string? previous = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
-        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", "1");
-        try
-        {
-            var state = new DspPipelineService.RxAudioLevelerState
-            {
-                GainDb = 16.0,
-                PauseHoldBlocks = 18,
-                Nr5NoiseProfilePrior = 0.620
-            };
-            float[] block = new float[1024];
-            Array.Fill(block, DbToLinear(-45.0));
-            block[0] = DbToLinear(-34.0);
-            var nr5 = Nr5Diagnostics(
-                signalConfidence: 0.360,
-                signalProbability: 0.240,
-                agcGate: 0.720,
-                recoveryDrive: 0.420,
-                weakSignalMemory: 0.480,
-                outputDbfs: -32.0,
-                inputDbfs: -45.0,
-                maskSmoothing: 0.340,
-                peakEvidence: 0.180,
-                outputPeakDbfs: -22.0,
-                adjacentNoiseTrust: 0.820,
-                adjacentNoiseDrive: 0.800,
-                levelDrive: 0.900);
+        DspPipelineService.ApplyRxAudioLeveler(noProofBlock, ref state, noProofNr5);
 
-            DspPipelineService.ApplyRxAudioLeveler(
-                block,
-                ref state,
-                nr5,
-                FrontendTopPeak(offsetHz: 160, snrDb: 31.0, dbfs: -74.0, confidence: 0.920),
-                filterLowHz: 100,
-                filterHighHz: 3_100);
-
-            Assert.False(state.Nr5NoSignalNoiseCap);
-            Assert.False(state.Nr5FarPeakNoiseCap);
-            Assert.False(state.Nr5NoProofNoiseCap);
-            Assert.False(state.Nr5RmNoiseGate);
-            Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
-            Assert.True(state.Nr5HybridSpeechPrior > state.Nr5NoSignalNoisePrior);
-            Assert.InRange(state.Nr5NoiseProfilePrior, 0.250, 0.360);
-            Assert.InRange(state.OutputRmsDbfs, -37.0, -28.0);
-            Assert.True(state.Nr5SpeechHangoverBlocks > state.Nr5SpeechHoldBlocks);
-
-            float[] noProofBlock = new float[1024];
-            Array.Fill(noProofBlock, DbToLinear(-39.1));
-            noProofBlock[0] = DbToLinear(-27.8);
-            var noProofNr5 = Nr5Diagnostics(
-                signalConfidence: 0.255,
-                signalProbability: 0.140,
-                agcGate: 0.500,
-                recoveryDrive: 0.060,
-                weakSignalMemory: 0.050,
-                outputDbfs: -24.0,
-                inputDbfs: -39.1,
-                maskSmoothing: 0.020,
-                peakEvidence: 0.0,
-                outputPeakDbfs: -13.0,
-                adjacentNoiseTrust: 0.850,
-                adjacentNoiseDrive: 0.820,
-                levelDrive: 0.900);
-
-            DspPipelineService.ApplyRxAudioLeveler(noProofBlock, ref state, noProofNr5);
-
-            Assert.True(state.Nr5SpeechHoldBlocks > 0);
-            Assert.True(state.Nr5SpeechHangoverBlocks > state.Nr5SpeechHoldBlocks);
-            Assert.False(state.Nr5NoSignalNoiseCap);
-            Assert.False(state.Nr5FarPeakNoiseCap);
-            Assert.False(state.Nr5NoProofNoiseCap);
-            Assert.False(state.Nr5RmNoiseGate);
-            Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
-        }
-        finally
-        {
-            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previous);
-        }
+        Assert.True(state.Nr5SpeechHoldBlocks > 0);
+        Assert.True(state.Nr5SpeechHangoverBlocks > state.Nr5SpeechHoldBlocks);
+        Assert.False(state.Nr5NoSignalNoiseCap);
+        Assert.False(state.Nr5FarPeakNoiseCap);
+        Assert.False(state.Nr5NoProofNoiseCap);
     }
 
     [Fact]
@@ -5676,7 +4982,6 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.InRange(state.OutputRmsDbfs, -21.5, -17.0);
         Assert.True(state.Nr5HybridSpeechPrior > 0.20);
         Assert.False(state.Nr5NoSignalNoiseCap);
-        Assert.False(state.Nr5RmNoiseGate);
         Assert.False(state.OutputLimited);
     }
 
@@ -5713,7 +5018,6 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
         Assert.True(state.OutputRmsDbfs <= -25.0);
         Assert.False(state.Nr5NoSignalNoiseCap);
-        Assert.False(state.Nr5RmNoiseGate);
         Assert.False(state.OutputLimited);
     }
 
@@ -5756,7 +5060,6 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
         Assert.InRange(state.OutputRmsDbfs, -21.5, -17.0);
         Assert.False(state.Nr5NoSignalNoiseCap);
-        Assert.False(state.Nr5RmNoiseGate);
         Assert.False(state.OutputLimited);
     }
 
@@ -5793,7 +5096,6 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
         Assert.True(state.OutputRmsDbfs <= -28.0);
         Assert.False(state.Nr5NoSignalNoiseCap);
-        Assert.False(state.Nr5RmNoiseGate);
         Assert.False(state.OutputLimited);
     }
 
@@ -5836,7 +5138,6 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
         Assert.InRange(state.OutputRmsDbfs, -23.5, -18.5);
         Assert.False(state.Nr5NoSignalNoiseCap);
-        Assert.False(state.Nr5RmNoiseGate);
         Assert.False(state.OutputLimited);
     }
 

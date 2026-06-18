@@ -33,6 +33,9 @@ public static class DspLiveDiagnosticsService
         };
 
         int score = 100;
+        bool nr5RequestedOrEffective = ModeEquals(condition.ExpectedNrMode, "Nr5")
+            || ModeEquals(condition.RequestedNrMode, "Nr5")
+            || ModeEquals(condition.EffectiveNrMode, "Nr5");
 
         if (condition.WdspNativeLoadable)
             evidence.Add("wdsp-native-loadable");
@@ -71,12 +74,13 @@ public static class DspLiveDiagnosticsService
         }
 
         if (condition.WdspNr5SpnrAvailable)
-            evidence.Add("nr5-spnr-available");
-        else if (ModeEquals(condition.ExpectedNrMode, "Nr5") || ModeEquals(condition.RequestedNrMode, "Nr5"))
+            evidence.Add("legacy-nr5-spnr-available");
+
+        if (nr5RequestedOrEffective)
         {
-            score -= 25;
-            constraints.Add("nr5-spnr-exports-missing");
-            actions.Add("Rebuild or install WDSP with NR5/SPNR exports before evaluating NR5 weak-signal behavior.");
+            score -= 30;
+            constraints.Add("nr5-retired-for-wdsp-v2");
+            actions.Add("Turn NR5 off before collecting WDSP v2 evidence; compare NR-off/current-Zeus against the opt-in non-NR5 candidate path.");
         }
 
         if (!condition.Available)
@@ -173,12 +177,12 @@ public static class DspLiveDiagnosticsService
         if (condition.AdjacentNoiseUsable == true)
         {
             evidence.Add("adjacent-noise-profile-usable");
-            tools.Add("nr5-adjacent-noise-profile");
+            tools.Add("adjacent-noise-profile");
         }
         else if (condition.AdjacentNoiseBins is > 0)
         {
             evidence.Add("adjacent-noise-profile-sampled");
-            tools.Add("nr5-adjacent-noise-profile");
+            tools.Add("adjacent-noise-profile");
         }
         if (condition.CoherentMaxSnrDb is { } coherentSnr)
             evidence.Add($"coherent-snr-{coherentSnr:0.0}db");
@@ -188,12 +192,10 @@ public static class DspLiveDiagnosticsService
         var nr5 = condition.Nr5SpnrDiagnostics;
         if (ModeEquals(condition.EffectiveNrMode, "Nr5") || nr5 is not null)
         {
-            tools.Add("nr5-spnr-diagnostics");
+            tools.Add("legacy-nr5-spnr-diagnostics");
             if (nr5 is null)
             {
-                score -= 10;
                 constraints.Add("nr5-diagnostics-missing");
-                actions.Add("Collect NR5/SPNR diagnostics before tuning NR5 constants.");
             }
             else
             {
@@ -209,27 +211,13 @@ public static class DspLiveDiagnosticsService
                 if (nr5.AdjacentNoiseDrive > 0.0)
                     evidence.Add($"nr5-adjacent-noise-drive-{nr5.AdjacentNoiseDrive:0.000}");
                 if (nr5.LearnedFrames < 20)
-                {
-                    score -= 10;
                     constraints.Add("nr5-learning");
-                    actions.Add("Let NR5 learn more frames before evaluating weak-signal preservation.");
-                }
                 if (nr5.SignalConfidence < 0.10 && condition.CoherentSubthresholdSignal == true)
-                {
-                    score -= 10;
                     constraints.Add("nr5-low-confidence-on-coherent-scene");
-                    actions.Add("Tune NR5 coherence/ridge protection against the benchmark fixture before raising aggressiveness.");
-                }
                 if (nr5.AgcGate < 0.10 && condition.CoherentSubthresholdSignal == true)
-                {
-                    score -= 8;
                     constraints.Add("nr5-agc-gate-closed-on-coherent-scene");
-                }
                 if (nr5.FloorReductionDb > 20.0 && nr5.SignalConfidence < 0.20)
-                {
-                    score -= 8;
                     constraints.Add("nr5-floor-pressure-high");
-                }
             }
         }
 
@@ -251,10 +239,6 @@ public static class DspLiveDiagnosticsService
                 evidence.Add($"audio-rms-{rms:0.0}dbfs");
             if (runtimeEvidence.AudioPeakDbfs is { } peak)
                 evidence.Add($"audio-peak-{peak:0.0}dbfs");
-            if (runtimeEvidence.RxAudioLevelerNr5RmNoiseGateEnabled is true)
-                evidence.Add("nr5-rmnoise-gate-enabled");
-            else if (runtimeEvidence.RxAudioLevelerNr5RmNoiseGateEnabled is false)
-                evidence.Add("nr5-rmnoise-gate-disabled");
 
             if (!runtimeEvidence.AudioFresh)
             {
@@ -303,11 +287,14 @@ public static class DspLiveDiagnosticsService
         string status = Status(condition, constraints, score);
         string tone = QualityTone(status, condition, score);
         var nextBenchmarkScenarios = DspBenchmarkPlanCatalog.NextScenarioIds(condition);
-        var nr5Tuning = Nr5TuningReadiness(condition, runtimeEvidence);
-        if (nr5Tuning.Status != "nr5-not-active")
-            tools.Add("nr5-live-tuning-watch");
-        if (nr5Tuning.Ready)
-            evidence.Add("ready-for-nr5-live-tuning");
+        var nr5Tuning = Nr5TuningReadiness(condition);
+        var externalBakeoff = ExternalEngineBakeoffReadiness(condition, runtimeEvidence, externalCandidates);
+        tools.Add("external-engine-live-bakeoff-watch");
+        if (externalBakeoff.Ready)
+        {
+            evidence.Add("ready-for-external-engine-bakeoff");
+            actions.Add("Capture a manually tuned G2 NR-off/current-Zeus baseline and an opt-in RX Audio Suite candidate trace before promoting any non-NR5 DSP path.");
+        }
 
         bool ready = score >= 85
             && condition.WdspActive
@@ -336,6 +323,9 @@ public static class DspLiveDiagnosticsService
             ReadyForNr5Tuning: nr5Tuning.Ready,
             Nr5TuningStatus: nr5Tuning.Status,
             Nr5TuningConstraints: nr5Tuning.Constraints,
+            ReadyForExternalEngineBakeoff: externalBakeoff.Ready,
+            ExternalEngineBakeoffStatus: externalBakeoff.Status,
+            ExternalEngineBakeoffConstraints: externalBakeoff.Constraints,
             RolloutGate: "opt-in-only-until-benchmark-and-g2-on-air-acceptance",
             WdspActive: condition.WdspActive,
             WdspNativeLoadable: condition.WdspNativeLoadable,
@@ -415,6 +405,7 @@ public static class DspLiveDiagnosticsService
         if (condition.Stale || constraints.Contains("frontend-dsp-scene-stale")) return "frontend-scene-stale";
         if (!condition.Available) return "frontend-scene-missing";
         if (constraints.Any(c => c is "nr4-sbnr-exports-missing" or "nr5-spnr-exports-missing")) return "nr-capability-limited";
+        if (constraints.Contains("nr5-retired-for-wdsp-v2")) return "nr5-retired-for-wdsp-v2";
         if (constraints.Contains("smart-nr-apply-pending")) return "smart-nr-apply-pending";
         if (constraints.Contains("smart-nr-runtime-misaligned")) return "smart-nr-runtime-misaligned";
         if (constraints.Contains("rx-chain-protect")) return "rx-chain-protect";
@@ -432,7 +423,7 @@ public static class DspLiveDiagnosticsService
     {
         if (status is "wdsp-native-unloadable" or "dsp-engine-unavailable" or "nr-capability-limited"
             or "rx-chain-protect" or "final-audio-clipping-risk" or "final-audio-not-fresh"
-            or "adc-headroom-low" or "diagnostics-not-ready")
+            or "adc-headroom-low" or "nr5-retired-for-wdsp-v2" or "diagnostics-not-ready")
             return "protect";
         if (!condition.Available || status is "frontend-scene-missing")
             return "standby";
@@ -451,6 +442,7 @@ public static class DspLiveDiagnosticsService
             "frontend-scene-stale" => "Frontend scene evidence is stale; refresh the client before using Smart NR recommendations.",
             "frontend-scene-missing" => "No frontend DSP scene is available; open Signal Intelligence/Smart NR so backend diagnostics can correlate scene evidence with WDSP state.",
             "nr-capability-limited" => "The requested Smart NR path needs native WDSP exports that are not available; rebuild/update WDSP before evaluating that mode.",
+            "nr5-retired-for-wdsp-v2" => "NR5 is retired for WDSP v2; turn it off and capture NR-off/current-Zeus plus opt-in non-NR5 candidate evidence instead.",
             "smart-nr-apply-pending" => condition.RuntimeAlignmentRecommendation,
             "smart-nr-runtime-misaligned" => condition.RuntimeAlignmentRecommendation,
             "rx-chain-protect" => condition.RxChainRecommendation ?? "RX-chain health is in protect mode; resolve ADC/AGC/attenuator posture before increasing DSP aggressiveness.",
@@ -472,50 +464,60 @@ public static class DspLiveDiagnosticsService
             or "frontend-clock-skew"
             or "nr4-sbnr-exports-missing"
             or "nr5-spnr-exports-missing"
+            or "nr5-retired-for-wdsp-v2"
+            or "nr5-active-retired-for-wdsp-v2"
             or "smart-nr-runtime-misaligned"
             or "rx-chain-protect"
             or "final-audio-not-fresh"
             or "final-audio-clipping-risk"
             or "adc-headroom-low";
 
-    private static Nr5LiveTuningReadiness Nr5TuningReadiness(
+    private static ExternalEngineBakeoffReadinessResult ExternalEngineBakeoffReadiness(
         SmartNrConditionDto condition,
-        DspLiveRuntimeEvidenceDto? runtimeEvidence)
+        DspLiveRuntimeEvidenceDto? runtimeEvidence,
+        DspExternalEngineCandidateDto[] externalCandidates)
     {
-        bool nr5Relevant = ModeEquals(condition.RequestedNrMode, "Nr5")
-            || ModeEquals(condition.EffectiveNrMode, "Nr5")
-            || condition.Nr5SpnrDiagnostics is not null;
-        if (!nr5Relevant)
-            return new(false, "nr5-not-active", ["nr5-not-active"]);
-
         var constraints = new List<string>();
         if (!condition.WdspNativeLoadable)
             constraints.Add("wdsp-native-unloadable");
         if (!condition.WdspActive)
             constraints.Add("wdsp-inactive");
-        if (!condition.WdspNr5SpnrAvailable)
-            constraints.Add("nr5-spnr-exports-missing");
-        if (!ModeEquals(condition.RequestedNrMode, "Nr5"))
-            constraints.Add("nr5-not-requested");
-        if (!ModeEquals(condition.EffectiveNrMode, "Nr5"))
-            constraints.Add("nr5-not-effective");
+
+        if (ModeEquals(condition.EffectiveNrMode, "Nr5") || ModeEquals(condition.RequestedNrMode, "Nr5"))
+            constraints.Add("nr5-active-retired-for-wdsp-v2");
+
+        if (!condition.Available)
+            constraints.Add("frontend-dsp-scene-missing");
+        else if (condition.Stale || !condition.Fresh)
+            constraints.Add("frontend-dsp-scene-not-fresh");
+
         if (condition.RuntimeAligned == false
             && !string.Equals(condition.RuntimeAlignmentStatus, "apply-pending", StringComparison.OrdinalIgnoreCase))
             constraints.Add("smart-nr-runtime-misaligned");
 
-        var nr5 = condition.Nr5SpnrDiagnostics;
-        if (nr5 is null)
+        if (condition.HeldByRxChain == true)
+            constraints.Add("smart-nr-held-by-rx-chain");
+        if (condition.RxChainScore is < 60)
+            constraints.Add("rx-chain-health-poor");
+        if (string.Equals(condition.RxChainTone, "protect", StringComparison.OrdinalIgnoreCase))
+            constraints.Add("rx-chain-protect");
+
+        if (externalCandidates.Length == 0)
         {
-            constraints.Add("nr5-diagnostics-missing");
+            constraints.Add("external-engine-catalog-missing");
         }
         else
         {
-            if (!nr5.Run)
-                constraints.Add("nr5-not-running");
-            if (nr5.LearnedFrames < 20)
-                constraints.Add("nr5-learning");
-            if (!nr5.AgcRun)
-                constraints.Add("nr5-agc-disabled");
+            if (externalCandidates.Any(static candidate =>
+                    !string.Equals(candidate.DefaultState, "off", StringComparison.OrdinalIgnoreCase)))
+                constraints.Add("external-engine-default-not-off");
+
+            bool hasPostDemodRxCandidate = externalCandidates.Any(static candidate =>
+                candidate.AllowedSignalPaths.Any(static path =>
+                    path.Contains("post-demod-rx-audio", StringComparison.OrdinalIgnoreCase)
+                    || path.Contains("rx-audio-suite", StringComparison.OrdinalIgnoreCase)));
+            if (!hasPostDemodRxCandidate)
+                constraints.Add("external-engine-post-demod-route-missing");
         }
 
         if (runtimeEvidence is null)
@@ -528,6 +530,8 @@ public static class DspLiveDiagnosticsService
                 constraints.Add("rx-meters-not-fresh");
             if (!runtimeEvidence.AudioFresh)
                 constraints.Add("final-audio-not-fresh");
+            if (runtimeEvidence.TxMonitorRequested)
+                constraints.Add("tx-monitor-audio-active");
 
             switch (runtimeEvidence.Status)
             {
@@ -551,8 +555,18 @@ public static class DspLiveDiagnosticsService
 
         var unique = Unique(constraints);
         return unique.Length == 0
-            ? new(true, "ready-for-nr5-live-tuning", [])
-            : new(false, "nr5-tuning-preflight-required", unique);
+            ? new(true, "ready-for-external-engine-bakeoff", [])
+            : new(false, "external-engine-bakeoff-preflight-required", unique);
+    }
+
+    private static Nr5LiveTuningReadiness Nr5TuningReadiness(SmartNrConditionDto condition)
+    {
+        bool nr5Relevant = ModeEquals(condition.RequestedNrMode, "Nr5")
+            || ModeEquals(condition.EffectiveNrMode, "Nr5")
+            || condition.Nr5SpnrDiagnostics is not null;
+        if (!nr5Relevant)
+            return new(false, "nr5-not-active", ["nr5-not-active"]);
+        return new(false, "nr5-retired-for-wdsp-v2", ["nr5-retired-for-wdsp-v2"]);
     }
 
     private static bool ModeEquals(string? left, string right) =>
@@ -565,6 +579,11 @@ public static class DspLiveDiagnosticsService
             .ToArray();
 
     private sealed record Nr5LiveTuningReadiness(
+        bool Ready,
+        string Status,
+        string[] Constraints);
+
+    private sealed record ExternalEngineBakeoffReadinessResult(
         bool Ready,
         string Status,
         string[] Constraints);

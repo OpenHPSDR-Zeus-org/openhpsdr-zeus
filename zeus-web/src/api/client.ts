@@ -1161,6 +1161,9 @@ export type DspLiveDiagnosticsDto = {
   readyForNr5Tuning: boolean;
   nr5TuningStatus: string;
   nr5TuningConstraints: string[];
+  readyForExternalEngineBakeoff: boolean;
+  externalEngineBakeoffStatus: string;
+  externalEngineBakeoffConstraints: string[];
   rolloutGate: string;
   wdspActive: boolean;
   wdspNativeLoadable: boolean;
@@ -3520,6 +3523,9 @@ function normalizeDspLiveDiagnostics(raw: unknown): DspLiveDiagnosticsDto {
     readyForNr5Tuning: Boolean(r.readyForNr5Tuning),
     nr5TuningStatus: diagString(r.nr5TuningStatus) ?? 'nr5-not-active',
     nr5TuningConstraints: diagStringArray(r.nr5TuningConstraints),
+    readyForExternalEngineBakeoff: Boolean(r.readyForExternalEngineBakeoff),
+    externalEngineBakeoffStatus: diagString(r.externalEngineBakeoffStatus) ?? 'external-engine-bakeoff-preflight-required',
+    externalEngineBakeoffConstraints: diagStringArray(r.externalEngineBakeoffConstraints),
     rolloutGate: diagString(r.rolloutGate) ?? 'opt-in-only',
     wdspActive: Boolean(r.wdspActive),
     wdspNativeLoadable: Boolean(r.wdspNativeLoadable),

@@ -13,7 +13,7 @@ param(
 
     [string[]]$ScenarioIds = @(),
 
-    [string[]]$ComparisonIds = @("off-baseline", "thetis-parity", "current-zeus", "candidate-under-test", "nr5-spnr"),
+    [string[]]$ComparisonIds = @("off-baseline", "thetis-parity", "current-zeus", "candidate-under-test", "candidate-external-engine-opt-in"),
 
     [switch]$IncludeNonFixtureScenarios,
 

@@ -90,8 +90,7 @@ public sealed class DspSettingsStore : IDisposable
             EmnrNpeMethod: e.EmnrNpeMethod,
             EmnrAeRun: e.EmnrAeRun,
             EmnrTrainT1: e.EmnrTrainT1,
-            EmnrTrainT2: e.EmnrTrainT2,
-            Nr5RmNoiseGateEnabled: e.Nr5RmNoiseGateEnabled);
+            EmnrTrainT2: e.EmnrTrainT2);
     }
 
     // CFC (Continuous Frequency Compressor) — issue #123. Persisted globally
@@ -375,7 +374,6 @@ public sealed class DspSettingsStore : IDisposable
                 Nr4PostFilterThreshold = config.Nr4PostFilterThreshold,
                 Nr4NoiseScalingType = config.Nr4NoiseScalingType,
                 Nr4Position = config.Nr4Position,
-                Nr5RmNoiseGateEnabled = config.Nr5RmNoiseGateEnabled,
                 UpdatedUtc = DateTime.UtcNow,
             });
         }
@@ -404,7 +402,6 @@ public sealed class DspSettingsStore : IDisposable
             existing.Nr4PostFilterThreshold = config.Nr4PostFilterThreshold;
             existing.Nr4NoiseScalingType = config.Nr4NoiseScalingType;
             existing.Nr4Position = config.Nr4Position;
-            existing.Nr5RmNoiseGateEnabled = config.Nr5RmNoiseGateEnabled;
             existing.UpdatedUtc = DateTime.UtcNow;
             _entries.Update(existing);
         }
@@ -412,7 +409,7 @@ public sealed class DspSettingsStore : IDisposable
 
     // CFC upsert — extends the same row used for NR. Insert path needs all the
     // NR fields too because the row may not exist yet (a fresh install where
-    // the operator opens TX Audio Tools before touching NR). NR fields are
+    // the operator opens Audio Tools before touching NR). NR fields are
     // seeded from a default NrConfig in that case so the legacy NR path
     // continues to round-trip on subsequent NR-only Upserts.
     public void Upsert(CfcConfig config, string profileId = "default")
@@ -501,8 +498,6 @@ public sealed class DspSettingsEntry
     public double? Nr4PostFilterThreshold { get; set; }
     public int? Nr4NoiseScalingType { get; set; }
     public int? Nr4Position { get; set; }
-    // NR5 RMNoise-style post-demod assist. Null means "no operator override".
-    public bool? Nr5RmNoiseGateEnabled { get; set; }
     // CFC (Continuous Frequency Compressor) — issue #123. Master flags are
     // nullable so legacy rows (pre-CFC) load with CfcEnabled=null and
     // GetCfc() returns null → operator gets CfcConfig.Default. Per-band

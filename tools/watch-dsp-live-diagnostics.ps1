@@ -1295,10 +1295,6 @@ function New-SampleSummary {
         rxAudioLevelerNr5NoSignalNoiseCap = Get-JsonValue $runtime "rxAudioLevelerNr5NoSignalNoiseCap"
         rxAudioLevelerNr5FarPeakNoiseCap = Get-JsonValue $runtime "rxAudioLevelerNr5FarPeakNoiseCap"
         rxAudioLevelerNr5NoProofNoiseCap = Get-JsonValue $runtime "rxAudioLevelerNr5NoProofNoiseCap"
-        rxAudioLevelerNr5RmNoiseGateEnabled = Get-JsonValue $runtime "rxAudioLevelerNr5RmNoiseGateEnabled"
-        rxAudioLevelerNr5RmNoiseGate = Get-JsonValue $runtime "rxAudioLevelerNr5RmNoiseGate"
-        rxAudioLevelerNr5RmNoiseGateHoldBlocks = Get-JsonValue $runtime "rxAudioLevelerNr5RmNoiseGateHoldBlocks"
-        rxAudioLevelerNr5RmNoiseSuppressionDb = Get-JsonValue $runtime "rxAudioLevelerNr5RmNoiseSuppressionDb"
         rxAudioLevelerBoostSlewLimited = Get-JsonValue $runtime "rxAudioLevelerBoostSlewLimited"
         rxAudioLevelerPeakLimited = Get-JsonValue $runtime "rxAudioLevelerPeakLimited"
         rxAudioLevelerOutputLimited = Get-JsonValue $runtime "rxAudioLevelerOutputLimited"
@@ -1572,8 +1568,6 @@ function Build-Report {
     $rxAudioLevelerNr5HybridSpeechPriorValues = New-Object System.Collections.Generic.List[double]
     $rxAudioLevelerNr5NoSignalNoisePriorValues = New-Object System.Collections.Generic.List[double]
     $rxAudioLevelerNr5NoiseProfilePriorValues = New-Object System.Collections.Generic.List[double]
-    $rxAudioLevelerNr5RmNoiseGateHoldBlockValues = New-Object System.Collections.Generic.List[double]
-    $rxAudioLevelerNr5RmNoiseSuppressionValues = New-Object System.Collections.Generic.List[double]
     $backlogValues = New-Object System.Collections.Generic.List[double]
     $frontendSceneAgeValues = New-Object System.Collections.Generic.List[double]
     $frontendTopPeakCountValues = New-Object System.Collections.Generic.List[double]
@@ -1667,7 +1661,6 @@ function Build-Report {
     $rxAudioLevelerOutputLimitedSamples = New-Object System.Collections.Generic.List[object]
     $rxAudioLevelerConstrainedSamples = New-Object System.Collections.Generic.List[object]
     $rxAudioLevelerNr5NoSignalNoiseCapSamples = New-Object System.Collections.Generic.List[object]
-    $rxAudioLevelerNr5RmNoiseGateSamples = New-Object System.Collections.Generic.List[object]
     $nr5SpeechContinuitySamples = New-Object System.Collections.Generic.List[object]
     $nr5SpeechContinuityOutputValues = New-Object System.Collections.Generic.List[double]
     $nr5SpeechContinuityGainValues = New-Object System.Collections.Generic.List[double]
@@ -1726,15 +1719,9 @@ function Build-Report {
     $rxAudioLevelerNr5NoSignalNoiseCapCount = 0
     $rxAudioLevelerNr5FarPeakNoiseCapCount = 0
     $rxAudioLevelerNr5NoProofNoiseCapCount = 0
-    $rxAudioLevelerNr5RmNoiseGateKnownCount = 0
-    $rxAudioLevelerNr5RmNoiseGateEnabledCount = 0
-    $rxAudioLevelerNr5RmNoiseGateDisabledCount = 0
-    $rxAudioLevelerNr5RmNoiseGateCount = 0
-    $rxAudioLevelerNr5RmNoiseGateHoldCount = 0
     $nr5SpeechContinuitySampleCount = 0
     $nr5SpeechContinuityFadeCount = 0
     $nr5SpeechContinuityDropoutCount = 0
-    $nr5SpeechContinuityRmNoiseGateCount = 0
     $rxAudioLevelerBoostSlewLimitedCount = 0
     $rxAudioLevelerPeakLimitedCount = 0
     $rxAudioLevelerOutputLimitedCount = 0
@@ -2783,8 +2770,6 @@ function Build-Report {
             $rxAudioLevelerNr5HybridSpeechPrior = Get-JsonValue $runtime "rxAudioLevelerNr5HybridSpeechPrior"
             $rxAudioLevelerNr5NoSignalNoisePrior = Get-JsonValue $runtime "rxAudioLevelerNr5NoSignalNoisePrior"
             $rxAudioLevelerNr5NoiseProfilePrior = Get-JsonValue $runtime "rxAudioLevelerNr5NoiseProfilePrior"
-            $rxAudioLevelerNr5RmNoiseGateHoldBlocks = Get-JsonValue $runtime "rxAudioLevelerNr5RmNoiseGateHoldBlocks"
-            $rxAudioLevelerNr5RmNoiseSuppressionDb = Get-JsonValue $runtime "rxAudioLevelerNr5RmNoiseSuppressionDb"
             $rxAudioLevelerOutputRmsDbfsNumber = Get-NumericValue $rxAudioLevelerOutputRmsDbfs
             $rxAudioLevelerAppliedGainDbNumber = Get-NumericValue $rxAudioLevelerAppliedGainDb
             $rxAudioLevelerNr5SpeechHoldBlocksNumber = Get-NumericValue $rxAudioLevelerNr5SpeechHoldBlocks
@@ -2809,8 +2794,6 @@ function Build-Report {
             Add-Number $rxAudioLevelerNr5HybridSpeechPriorValues $rxAudioLevelerNr5HybridSpeechPrior
             Add-Number $rxAudioLevelerNr5NoSignalNoisePriorValues $rxAudioLevelerNr5NoSignalNoisePrior
             Add-Number $rxAudioLevelerNr5NoiseProfilePriorValues $rxAudioLevelerNr5NoiseProfilePrior
-            Add-Number $rxAudioLevelerNr5RmNoiseGateHoldBlockValues $rxAudioLevelerNr5RmNoiseGateHoldBlocks
-            Add-Number $rxAudioLevelerNr5RmNoiseSuppressionValues $rxAudioLevelerNr5RmNoiseSuppressionDb
             if ($null -ne $rxAudioLevelerInputRmsDbfs -and $null -ne $rxAudioLevelerOutputRmsDbfs -and
                 $null -ne $rxAudioLevelerDesiredGainDb -and $null -ne $rxAudioLevelerAppliedGainDb) {
                 $rxAudioLevelerDiagnosticCount++
@@ -2818,23 +2801,6 @@ function Build-Report {
             $rxAudioLevelerNr5NoSignalNoiseCap = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerNr5NoSignalNoiseCap")
             $rxAudioLevelerNr5FarPeakNoiseCap = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerNr5FarPeakNoiseCap")
             $rxAudioLevelerNr5NoProofNoiseCap = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerNr5NoProofNoiseCap")
-            $rxAudioLevelerNr5RmNoiseGateEnabledRaw = Get-JsonValue $runtime "rxAudioLevelerNr5RmNoiseGateEnabled"
-            $rxAudioLevelerNr5RmNoiseGateEnabledKnown = $null -ne $rxAudioLevelerNr5RmNoiseGateEnabledRaw
-            $rxAudioLevelerNr5RmNoiseGateEnabled = Test-Truthy $rxAudioLevelerNr5RmNoiseGateEnabledRaw
-            if ($rxAudioLevelerNr5RmNoiseGateEnabledKnown) {
-                $rxAudioLevelerNr5RmNoiseGateKnownCount++
-                if ($rxAudioLevelerNr5RmNoiseGateEnabled) {
-                    $rxAudioLevelerNr5RmNoiseGateEnabledCount++
-                }
-                else {
-                    $rxAudioLevelerNr5RmNoiseGateDisabledCount++
-                }
-            }
-            $rxAudioLevelerNr5RmNoiseGate = Test-Truthy (Get-JsonValue $runtime "rxAudioLevelerNr5RmNoiseGate")
-            $rxAudioLevelerNr5RmNoiseGateHoldBlockValue = Get-NumericValue $rxAudioLevelerNr5RmNoiseGateHoldBlocks
-            if ($null -ne $rxAudioLevelerNr5RmNoiseGateHoldBlockValue -and $rxAudioLevelerNr5RmNoiseGateHoldBlockValue -gt 0) {
-                $rxAudioLevelerNr5RmNoiseGateHoldCount++
-            }
             $nr5SpeechContinuityHeld =
                 ($null -ne $rxAudioLevelerNr5SpeechHoldBlocksNumber -and $rxAudioLevelerNr5SpeechHoldBlocksNumber -ge 8.0) -or
                 ($null -ne $rxAudioLevelerNr5SpeechHangoverBlocksNumber -and $rxAudioLevelerNr5SpeechHangoverBlocksNumber -ge 16.0)
@@ -2860,9 +2826,6 @@ function Build-Report {
                 if ($rxAudioLevelerOutputRmsDbfsNumber -le $nr5SpeechContinuityDropoutThresholdDbfs) {
                     $nr5SpeechContinuityDropoutCount++
                 }
-                if ($rxAudioLevelerNr5RmNoiseGate) {
-                    $nr5SpeechContinuityRmNoiseGateCount++
-                }
                 $nr5SpeechContinuitySamples.Add([ordered]@{
                     sampleIndex = Get-JsonValue $sample "sampleIndex"
                     sampledUtc = Get-JsonValue $sample "sampledUtc"
@@ -2880,9 +2843,6 @@ function Build-Report {
                     nr5HybridSpeechPrior = $rxAudioLevelerNr5HybridSpeechPriorNumber
                     nr5NoSignalNoisePrior = $rxAudioLevelerNr5NoSignalNoisePriorNumber
                     nr5NoiseProfilePrior = $rxAudioLevelerNr5NoiseProfilePriorNumber
-                    nr5RmNoiseGateEnabled = $rxAudioLevelerNr5RmNoiseGateEnabled
-                    nr5RmNoiseGate = $rxAudioLevelerNr5RmNoiseGate
-                    nr5RmNoiseGateHoldBlocks = $rxAudioLevelerNr5RmNoiseGateHoldBlockValue
                     belowFadeThreshold = ($rxAudioLevelerOutputRmsDbfsNumber -le $nr5SpeechContinuityFadeThresholdDbfs)
                     belowDropoutThreshold = ($rxAudioLevelerOutputRmsDbfsNumber -le $nr5SpeechContinuityDropoutThresholdDbfs)
                     nearest = Convert-FrontendTopPeak $nearestFrontendPeak
@@ -2922,10 +2882,6 @@ function Build-Report {
                     nr5NoSignalNoiseCap = $rxAudioLevelerNr5NoSignalNoiseCap
                     nr5FarPeakNoiseCap = $rxAudioLevelerNr5FarPeakNoiseCap
                     nr5NoProofNoiseCap = $rxAudioLevelerNr5NoProofNoiseCap
-                    nr5RmNoiseGateEnabled = $rxAudioLevelerNr5RmNoiseGateEnabled
-                    nr5RmNoiseGate = $rxAudioLevelerNr5RmNoiseGate
-                    nr5RmNoiseGateHoldBlocks = $rxAudioLevelerNr5RmNoiseGateHoldBlockValue
-                    nr5RmNoiseSuppressionDb = Get-NumericValue $rxAudioLevelerNr5RmNoiseSuppressionDb
                     boostSlewLimited = $rxAudioLevelerBoostSlewLimited
                     peakLimited = $rxAudioLevelerPeakLimited
                     outputLimited = $rxAudioLevelerOutputLimited
@@ -2949,34 +2905,6 @@ function Build-Report {
                     nr5HybridSpeechPrior = Get-NumericValue $rxAudioLevelerNr5HybridSpeechPrior
                     nr5NoSignalNoisePrior = Get-NumericValue $rxAudioLevelerNr5NoSignalNoisePrior
                     nr5NoiseProfilePrior = Get-NumericValue $rxAudioLevelerNr5NoiseProfilePrior
-                    nr5FarPeakNoiseCap = $rxAudioLevelerNr5FarPeakNoiseCap
-                    nr5NoProofNoiseCap = $rxAudioLevelerNr5NoProofNoiseCap
-                    nr5RmNoiseGateEnabled = $rxAudioLevelerNr5RmNoiseGateEnabled
-                    nr5RmNoiseGate = $rxAudioLevelerNr5RmNoiseGate
-                    nr5RmNoiseGateHoldBlocks = $rxAudioLevelerNr5RmNoiseGateHoldBlockValue
-                    nr5RmNoiseSuppressionDb = Get-NumericValue $rxAudioLevelerNr5RmNoiseSuppressionDb
-                }) | Out-Null
-            }
-            if ($rxAudioLevelerNr5RmNoiseGate) {
-                $rxAudioLevelerNr5RmNoiseGateCount++
-                $rxAudioLevelerNr5RmNoiseGateSamples.Add([ordered]@{
-                    sampleIndex = Get-JsonValue $sample "sampleIndex"
-                    sampledUtc = Get-JsonValue $sample "sampledUtc"
-                    audioRmsDbfs = Get-NumericValue (Get-JsonValue $runtime "audioRmsDbfs")
-                    nr5InputDbfs = Get-NumericValue (Get-JsonValue $nr5 "inputDbfs")
-                    nr5OutputDbfs = Get-NumericValue (Get-JsonValue $nr5 "outputDbfs")
-                    inputRmsDbfs = Get-NumericValue $rxAudioLevelerInputRmsDbfs
-                    outputRmsDbfs = Get-NumericValue $rxAudioLevelerOutputRmsDbfs
-                    desiredGainDb = Get-NumericValue $rxAudioLevelerDesiredGainDb
-                    appliedGainDb = Get-NumericValue $rxAudioLevelerAppliedGainDb
-                    nr5SpeechHoldBlocks = Get-NumericValue $rxAudioLevelerNr5SpeechHoldBlocks
-                    nr5SpeechHangoverBlocks = Get-NumericValue $rxAudioLevelerNr5SpeechHangoverBlocks
-                    nr5HybridSpeechPrior = Get-NumericValue $rxAudioLevelerNr5HybridSpeechPrior
-                    nr5NoSignalNoisePrior = Get-NumericValue $rxAudioLevelerNr5NoSignalNoisePrior
-                    nr5NoiseProfilePrior = Get-NumericValue $rxAudioLevelerNr5NoiseProfilePrior
-                    nr5RmNoiseGateEnabled = $rxAudioLevelerNr5RmNoiseGateEnabled
-                    nr5RmNoiseGateHoldBlocks = $rxAudioLevelerNr5RmNoiseGateHoldBlockValue
-                    nr5RmNoiseSuppressionDb = Get-NumericValue $rxAudioLevelerNr5RmNoiseSuppressionDb
                     nr5FarPeakNoiseCap = $rxAudioLevelerNr5FarPeakNoiseCap
                     nr5NoProofNoiseCap = $rxAudioLevelerNr5NoProofNoiseCap
                 }) | Out-Null
@@ -3059,8 +2987,6 @@ function Build-Report {
     $rxAudioLevelerNr5HybridSpeechPriorStats = Get-NumberStats $rxAudioLevelerNr5HybridSpeechPriorValues
     $rxAudioLevelerNr5NoSignalNoisePriorStats = Get-NumberStats $rxAudioLevelerNr5NoSignalNoisePriorValues
     $rxAudioLevelerNr5NoiseProfilePriorStats = Get-NumberStats $rxAudioLevelerNr5NoiseProfilePriorValues
-    $rxAudioLevelerNr5RmNoiseGateHoldBlockStats = Get-NumberStats $rxAudioLevelerNr5RmNoiseGateHoldBlockValues
-    $rxAudioLevelerNr5RmNoiseSuppressionStats = Get-NumberStats $rxAudioLevelerNr5RmNoiseSuppressionValues
     $nr5SpeechContinuityOutputStats = Get-NumberStats $nr5SpeechContinuityOutputValues
     $nr5SpeechContinuityGainStats = Get-NumberStats $nr5SpeechContinuityGainValues
     $backlogStats = Get-NumberStats $backlogValues
@@ -3245,9 +3171,6 @@ function Build-Report {
         Select-Object -First 8)
     $rxAudioLevelerNr5NoSignalNoiseCapTopSamples = @($rxAudioLevelerNr5NoSignalNoiseCapSamples.ToArray() |
         Sort-Object @{Expression = "nr5NoiseProfilePrior"; Descending = $true }, @{Expression = "nr5NoSignalNoisePrior"; Descending = $true } |
-        Select-Object -First 8)
-    $rxAudioLevelerNr5RmNoiseGateTopSamples = @($rxAudioLevelerNr5RmNoiseGateSamples.ToArray() |
-        Sort-Object @{Expression = "nr5RmNoiseSuppressionDb"; Descending = $true }, @{Expression = "nr5NoiseProfilePrior"; Descending = $true } |
         Select-Object -First 8)
     $passbandAudioTopSamples = @($passbandAudioSamples.ToArray() |
         Sort-Object @{Expression = "finalAudioRmsDbfs"; Descending = $true } |
@@ -3753,16 +3676,12 @@ function Build-Report {
 
     $nr5SpeechContinuityFadePct = Get-CountPercent -Count $nr5SpeechContinuityFadeCount -SampleCount $nr5SpeechContinuitySampleCount
     $nr5SpeechContinuityDropoutPct = Get-CountPercent -Count $nr5SpeechContinuityDropoutCount -SampleCount $nr5SpeechContinuitySampleCount
-    $nr5SpeechContinuityRmNoiseGatePct = Get-CountPercent -Count $nr5SpeechContinuityRmNoiseGateCount -SampleCount $nr5SpeechContinuitySampleCount
     $nr5SpeechContinuityOutputMovementDb = if ([int]$nr5SpeechContinuityOutputStats["count"] -gt 1) { [double]$nr5SpeechContinuityOutputStats["movement"] } else { $null }
     $nr5SpeechContinuityGainMovementDb = if ([int]$nr5SpeechContinuityGainStats["count"] -gt 1) { [double]$nr5SpeechContinuityGainStats["movement"] } else { $null }
     $nr5SpeechContinuityStatus = if ($nr5SampleCount -eq 0 -or $nr5SpeechContinuitySampleCount -eq 0) {
         "not-observed"
     }
-    elseif ($nr5SpeechContinuityRmNoiseGateCount -gt 0) {
-        "rmnoise-speech-gate-risk"
-    }
-    elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
+elseif ($nr5SpeechContinuityDropoutCount -gt 0) {
         "speech-dropout-risk"
     }
     elseif ($nr5SpeechContinuityFadeCount -gt 0) {
@@ -3847,19 +3766,7 @@ function Build-Report {
     if ($rxAudioLevelerNr5NoSignalNoiseCapCount -gt 0) {
         $summaryRecommendations.Add("NR5 no-signal noise cap fired in this trace; inspect rxAudioLevelerWatch.nr5HybridSpeechPrior, nr5NoSignalNoisePrior, nr5NoiseProfilePrior, and topNr5NoSignalNoiseCapSamples before judging weak-signal muting.") | Out-Null
     }
-    if ($rxAudioLevelerNr5RmNoiseGateKnownCount -gt 0 -and $rxAudioLevelerNr5RmNoiseGateEnabledCount -eq 0) {
-        $summaryRecommendations.Add("NR5 RMNoise-style silence gate was disabled for every diagnostic sample in this trace; enable ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE to test the strict silence-gate path.") | Out-Null
-    }
-    elseif ($rxAudioLevelerNr5RmNoiseGateEnabledCount -gt 0 -and $rxAudioLevelerNr5RmNoiseGateCount -eq 0) {
-        $summaryRecommendations.Add("NR5 RMNoise-style silence gate was enabled but did not fire in this trace; inspect priors and top no-signal samples before making the gate less conservative.") | Out-Null
-    }
-    if ($rxAudioLevelerNr5RmNoiseGateCount -gt 0) {
-        $summaryRecommendations.Add("NR5 RMNoise-style silence gate fired in this trace; inspect topNr5RmNoiseGateSamples and confirm passband speech priors stayed low before increasing suppression.") | Out-Null
-    }
     switch ($nr5SpeechContinuityStatus) {
-        "rmnoise-speech-gate-risk" {
-            $summaryRecommendations.Add("RMNoise-style gate closed during NR5 speech continuity; inspect nr5SpeechContinuityWatch.topSamples before increasing suppression.") | Out-Null
-        }
         "speech-dropout-risk" {
             $summaryRecommendations.Add("NR5 speech-continuity samples dropped below audible final audio; tune held weak-speech rescue or leveler release before tightening noise gates.") | Out-Null
         }
@@ -3868,11 +3775,6 @@ function Build-Report {
         }
         "speech-pumping-risk" {
             $summaryRecommendations.Add("NR5 speech-continuity output or applied gain movement is high; tune leveler release/hold before raising makeup or suppression.") | Out-Null
-        }
-        "stable" {
-            if ($rxAudioLevelerNr5RmNoiseGateEnabledCount -gt 0 -and $nr5SpeechContinuityRmNoiseGateCount -eq 0) {
-                $summaryRecommendations.Add("NR5 speech continuity is stable and RMNoise stayed open on speech; use no-signal/no-proof samples before making RMNoise less conservative.") | Out-Null
-            }
         }
     }
     if ($audioFreshCount -lt $runtimeCount) {
@@ -4540,7 +4442,6 @@ function Build-Report {
         rxAudioLevelerNr5HybridSpeechPrior = $rxAudioLevelerNr5HybridSpeechPriorStats
         rxAudioLevelerNr5NoSignalNoisePrior = $rxAudioLevelerNr5NoSignalNoisePriorStats
         rxAudioLevelerNr5NoiseProfilePrior = $rxAudioLevelerNr5NoiseProfilePriorStats
-        rxAudioLevelerNr5RmNoiseSuppressionDb = $rxAudioLevelerNr5RmNoiseSuppressionStats
         rxAudioLevelerWatch = [ordered]@{
             diagnosticSampleCount = $rxAudioLevelerDiagnosticCount
             constrainedSampleCount = $rxAudioLevelerConstrainedCount
@@ -4548,17 +4449,10 @@ function Build-Report {
             nr5NoSignalNoiseCapSampleCount = $rxAudioLevelerNr5NoSignalNoiseCapCount
             nr5FarPeakNoiseCapSampleCount = $rxAudioLevelerNr5FarPeakNoiseCapCount
             nr5NoProofNoiseCapSampleCount = $rxAudioLevelerNr5NoProofNoiseCapCount
-            nr5RmNoiseGateKnownSampleCount = $rxAudioLevelerNr5RmNoiseGateKnownCount
-            nr5RmNoiseGateEnabledSampleCount = $rxAudioLevelerNr5RmNoiseGateEnabledCount
-            nr5RmNoiseGateDisabledSampleCount = $rxAudioLevelerNr5RmNoiseGateDisabledCount
-            nr5RmNoiseGateSampleCount = $rxAudioLevelerNr5RmNoiseGateCount
-            nr5RmNoiseGateHoldSampleCount = $rxAudioLevelerNr5RmNoiseGateHoldCount
             nr5HybridSpeechPrior = $rxAudioLevelerNr5HybridSpeechPriorStats
             nr5SpeechHangoverBlocks = $rxAudioLevelerNr5SpeechHangoverBlockStats
             nr5NoSignalNoisePrior = $rxAudioLevelerNr5NoSignalNoisePriorStats
             nr5NoiseProfilePrior = $rxAudioLevelerNr5NoiseProfilePriorStats
-            nr5RmNoiseGateHoldBlocks = $rxAudioLevelerNr5RmNoiseGateHoldBlockStats
-            nr5RmNoiseSuppressionDb = $rxAudioLevelerNr5RmNoiseSuppressionStats
             boostSlewLimitedSampleCount = $rxAudioLevelerBoostSlewLimitedCount
             boostSlewLimitedPct = $rxAudioLevelerBoostSlewLimitedPct
             peakLimitedSampleCount = $rxAudioLevelerPeakLimitedCount
@@ -4590,7 +4484,6 @@ function Build-Report {
             topPeakLimitedSamples = @($rxAudioLevelerPeakLimitedTopSamples)
             topOutputLimitedSamples = @($rxAudioLevelerOutputLimitedTopSamples)
             topNr5NoSignalNoiseCapSamples = @($rxAudioLevelerNr5NoSignalNoiseCapTopSamples)
-            topNr5RmNoiseGateSamples = @($rxAudioLevelerNr5RmNoiseGateTopSamples)
         }
         nr5SpeechContinuityWatch = [ordered]@{
             status = $nr5SpeechContinuityStatus
@@ -4600,8 +4493,6 @@ function Build-Report {
             fadePct = $nr5SpeechContinuityFadePct
             dropoutSampleCount = $nr5SpeechContinuityDropoutCount
             dropoutPct = $nr5SpeechContinuityDropoutPct
-            rmNoiseGateOnSpeechSampleCount = $nr5SpeechContinuityRmNoiseGateCount
-            rmNoiseGateOnSpeechPct = $nr5SpeechContinuityRmNoiseGatePct
             hybridSpeechPriorThreshold = $nr5SpeechContinuityHybridThreshold
             noSignalNoisePriorMax = $nr5SpeechContinuityNoSignalMax
             fadeThresholdDbfs = $nr5SpeechContinuityFadeThresholdDbfs

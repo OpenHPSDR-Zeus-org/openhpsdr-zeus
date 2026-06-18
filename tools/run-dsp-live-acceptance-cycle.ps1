@@ -17,7 +17,7 @@ param(
 
     [string]$BaselineComparisonId = "current-zeus",
 
-    [string]$CandidateComparisonId = "nr5-spnr",
+    [string]$CandidateComparisonId = "candidate-external-engine-opt-in",
 
     [string]$SummaryPath = "",
 

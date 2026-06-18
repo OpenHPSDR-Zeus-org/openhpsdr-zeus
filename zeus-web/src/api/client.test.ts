@@ -314,6 +314,7 @@ describe('normalizeNr', () => {
     expect(normalizeNr(null)).toEqual(NR_CONFIG_DEFAULT);
     expect(normalizeNr(undefined)).toEqual(NR_CONFIG_DEFAULT);
   });
+
 });
 
 describe('POST helpers', () => {
@@ -1894,13 +1895,16 @@ describe('POST helpers', () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(jsonResponse({
       schemaVersion: 1,
       generatedUtc: '2026-06-15T18:22:00Z',
-      status: 'ready-for-live-benchmark',
-      qualityTone: 'ready',
-      readinessScore: 91,
-      readyForLiveBenchmark: true,
-      readyForNr5Tuning: true,
-      nr5TuningStatus: 'ready-for-nr5-live-tuning',
-      nr5TuningConstraints: [],
+      status: 'nr5-retired-for-wdsp-v2',
+      qualityTone: 'protect',
+      readinessScore: 70,
+      readyForLiveBenchmark: false,
+      readyForNr5Tuning: false,
+      nr5TuningStatus: 'nr5-retired-for-wdsp-v2',
+      nr5TuningConstraints: ['nr5-retired-for-wdsp-v2'],
+      readyForExternalEngineBakeoff: false,
+      externalEngineBakeoffStatus: 'external-engine-bakeoff-preflight-required',
+      externalEngineBakeoffConstraints: ['nr5-active-retired-for-wdsp-v2'],
       rolloutGate: 'opt-in-only-until-benchmark-and-g2-on-air-acceptance',
       wdspActive: true,
       wdspNativeLoadable: true,
@@ -1995,10 +1999,10 @@ describe('POST helpers', () => {
         adjacentNoiseSideBalance: 0.875,
         adjacentNoiseAsymmetryDb: 0.4,
       },
-      evidence: ['wdsp-active', 'ready-for-g2-live-benchmark'],
-      constraints: [],
-      recommendedActions: ['Capture a G2 live benchmark run.'],
-      candidateTools: ['nr5-spnr-diagnostics', 'external-post-demod-bakeoff:rnnoise'],
+      evidence: ['wdsp-active', 'legacy-nr5-spnr-available'],
+      constraints: ['nr5-retired-for-wdsp-v2'],
+      recommendedActions: ['Turn NR5 off before collecting WDSP v2 evidence.'],
+      candidateTools: ['legacy-nr5-spnr-diagnostics', 'external-post-demod-bakeoff:rnnoise'],
       benchmarkPlanEndpoint: '/api/dsp/benchmark-plan',
       benchmarkScenarioCount: 12,
       nextBenchmarkScenarios: ['weak-cw-carrier', 'agc-level-step'],
@@ -2024,7 +2028,7 @@ describe('POST helpers', () => {
           referenceUrls: ['https://github.com/xiph/rnnoise'],
         },
       ],
-      diagnosticRecommendation: 'Live diagnostics are aligned enough for a G2 benchmark capture.',
+      diagnosticRecommendation: 'NR5 is retired for WDSP v2; turn it off and capture NR-off/current-Zeus plus opt-in non-NR5 candidate evidence instead.',
     }));
     vi.stubGlobal('fetch', fetchMock);
 
@@ -2033,11 +2037,15 @@ describe('POST helpers', () => {
     const [url, init] = fetchMock.mock.calls[0]!;
     expect(url).toBe('/api/dsp/live-diagnostics');
     expect(init?.method).toBeUndefined();
-    expect(diag.status).toBe('ready-for-live-benchmark');
-    expect(diag.readinessScore).toBe(91);
-    expect(diag.readyForLiveBenchmark).toBe(true);
-    expect(diag.readyForNr5Tuning).toBe(true);
-    expect(diag.nr5TuningStatus).toBe('ready-for-nr5-live-tuning');
+    expect(diag.status).toBe('nr5-retired-for-wdsp-v2');
+    expect(diag.readinessScore).toBe(70);
+    expect(diag.readyForLiveBenchmark).toBe(false);
+    expect(diag.readyForNr5Tuning).toBe(false);
+    expect(diag.nr5TuningStatus).toBe('nr5-retired-for-wdsp-v2');
+    expect(diag.nr5TuningConstraints).toContain('nr5-retired-for-wdsp-v2');
+    expect(diag.readyForExternalEngineBakeoff).toBe(false);
+    expect(diag.externalEngineBakeoffStatus).toBe('external-engine-bakeoff-preflight-required');
+    expect(diag.externalEngineBakeoffConstraints).toContain('nr5-active-retired-for-wdsp-v2');
     expect(diag.wdspNr5SpnrAvailable).toBe(true);
     expect(diag.frontendSceneFresh).toBe(true);
     expect(diag.runtimeAligned).toBe(true);
@@ -2059,8 +2067,8 @@ describe('POST helpers', () => {
     expect(diag.nr5SpnrDiagnostics?.adjacentNoiseDrive).toBe(0.21);
     expect(diag.nr5SpnrDiagnostics?.adjacentNoiseSideBalance).toBe(0.875);
     expect(diag.nr5SpnrDiagnostics?.adjacentNoiseAsymmetryDb).toBe(0.4);
-    expect(diag.evidence).toContain('ready-for-g2-live-benchmark');
-    expect(diag.candidateTools).toContain('nr5-spnr-diagnostics');
+    expect(diag.evidence).toContain('legacy-nr5-spnr-available');
+    expect(diag.candidateTools).toContain('legacy-nr5-spnr-diagnostics');
     expect(diag.benchmarkPlanEndpoint).toBe('/api/dsp/benchmark-plan');
     expect(diag.benchmarkScenarioCount).toBe(12);
     expect(diag.nextBenchmarkScenarios).toEqual(['weak-cw-carrier', 'agc-level-step']);
