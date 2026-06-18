@@ -123,7 +123,12 @@ public sealed record NrConfig(
     int? EmnrNpeMethod = null,
     bool? EmnrAeRun = null,
     double? EmnrTrainT1 = null,
-    double? EmnrTrainT2 = null);
+    double? EmnrTrainT2 = null,
+    // ---- NR5 RMNoise-style post-demod assist ----
+    // Null = no operator override, so rollout policy/env gates decide. True
+    // enables the strict speech-protected silence gate for NR5; false disables
+    // it from the UI without clearing other NR5 state.
+    bool? Nr5RmNoiseGateEnabled = null);
 
 // Direct Smart NR diagnostic surface. The Smart NR analyzer still lives in
 // the frontend DSP-scene path; this DTO exposes that live condition together
@@ -379,6 +384,8 @@ public sealed record DspLiveRuntimeEvidenceDto(
     bool? RxAudioLevelerNr5NoProofNoiseCap = null,
     int? RxAudioLevelerNr5SpeechHangoverBlocks = null,
     bool? RxAudioLevelerNr5RmNoiseGateEnabled = null,
+    string? RxAudioLevelerNr5RmNoiseGatePolicySource = null,
+    string? RxAudioLevelerNr5RmNoiseGatePolicyReason = null,
     bool? RxAudioLevelerNr5RmNoiseGate = null,
     int? RxAudioLevelerNr5RmNoiseGateHoldBlocks = null,
     double? RxAudioLevelerNr5RmNoiseSuppressionDb = null);

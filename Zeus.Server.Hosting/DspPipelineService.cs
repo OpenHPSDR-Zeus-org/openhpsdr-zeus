@@ -321,7 +321,7 @@ public class DspPipelineService : BackgroundService,
     private static double ClampUnit(double value) =>
         double.IsFinite(value) ? Math.Clamp(value, 0.0, 1.0) : 0.0;
 
-    internal static Nr5RmNoiseGatePolicy GetNr5RmNoiseGatePolicy()
+    internal static Nr5RmNoiseGatePolicy GetNr5RmNoiseGatePolicy(bool? runtimeOverride = null)
     {
         const string primary = "ZEUS_NR5_RMNOISE_GATE";
         const string legacy = "ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE";
@@ -333,6 +333,14 @@ public class DspPipelineService : BackgroundService,
                 enabled,
                 primary,
                 enabled ? "explicit-on" : "explicit-off");
+        }
+
+        if (runtimeOverride is bool runtimeEnabled)
+        {
+            return new Nr5RmNoiseGatePolicy(
+                runtimeEnabled,
+                "runtime",
+                runtimeEnabled ? "operator-on" : "operator-off");
         }
 
         string? legacyValue = Environment.GetEnvironmentVariable(legacy);
@@ -351,7 +359,8 @@ public class DspPipelineService : BackgroundService,
             Reason: "default-off");
     }
 
-    private static bool IsNr5RmNoiseGateEnabled() => GetNr5RmNoiseGatePolicy().Enabled;
+    private static bool IsNr5RmNoiseGateEnabled(bool? runtimeOverride = null) =>
+        GetNr5RmNoiseGatePolicy(runtimeOverride).Enabled;
 
     private static bool IsExplicitFalseSwitch(string value) =>
         string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) ||
@@ -654,7 +663,8 @@ public class DspPipelineService : BackgroundService,
         Nr5SpnrDiagnosticsDto? nr5Diagnostics = null,
         FrontendDspSceneTopPeakDto? frontendTopPeak = null,
         int? filterLowHz = null,
-        int? filterHighHz = null)
+        int? filterHighHz = null,
+        bool? nr5RmNoiseGateEnabledOverride = null)
     {
         if (samples.Length == 0) return;
 
@@ -2942,7 +2952,7 @@ public class DspPipelineService : BackgroundService,
                 ? nr5NoSignalNoisePrior >= 0.220
                 : nr5NoSignalNoisePrior >= RxLevelerNr5RmNoiseNoSignalGate;
             bool nr5RmNoiseGateEligible =
-                IsNr5RmNoiseGateEnabled() &&
+                IsNr5RmNoiseGateEnabled(nr5RmNoiseGateEnabledOverride) &&
                 desiredDb > RxLevelerMaxCutDb + 1.0e-6 &&
                 inputRmsDbfs >= (nr5RmNoiseQuietResidualCandidate ? -108.0 : -72.0) &&
                 inputRmsDbfs <= -34.0 &&
@@ -2978,7 +2988,7 @@ public class DspPipelineService : BackgroundService,
                         nr5.AdjacentNoiseTrust >= 0.520 &&
                         nr5.AdjacentNoiseDrive >= 0.520));
             bool nr5RmNoiseGateHoldEligible =
-                IsNr5RmNoiseGateEnabled() &&
+                IsNr5RmNoiseGateEnabled(nr5RmNoiseGateEnabledOverride) &&
                 !nr5RmNoiseGateEligible &&
                 (state.Nr5RmNoiseGate || nr5RmNoiseGateHoldBlocks > 0) &&
                 desiredDb > RxLevelerMaxCutDb + 1.0e-6 &&
@@ -5279,6 +5289,7 @@ public class DspPipelineService : BackgroundService,
         var rxMeters = SnapshotRxMetersDiagnostics();
         var audio = SnapshotAudioDiagnostics();
         string status = LiveRuntimeEvidenceStatus(rxMeters, audio);
+        var nr5RmNoisePolicy = GetNr5RmNoiseGatePolicy(_radio.Snapshot().Nr?.Nr5RmNoiseGateEnabled);
 
         return new DspLiveRuntimeEvidenceDto(
             SchemaVersion: 4,
@@ -5326,7 +5337,9 @@ public class DspPipelineService : BackgroundService,
             RxAudioLevelerNr5NoSignalNoiseCap: audio.RxAudioLevelerNr5NoSignalNoiseCap,
             RxAudioLevelerNr5FarPeakNoiseCap: audio.RxAudioLevelerNr5FarPeakNoiseCap,
             RxAudioLevelerNr5NoProofNoiseCap: audio.RxAudioLevelerNr5NoProofNoiseCap,
-            RxAudioLevelerNr5RmNoiseGateEnabled: IsNr5RmNoiseGateEnabled(),
+            RxAudioLevelerNr5RmNoiseGateEnabled: nr5RmNoisePolicy.Enabled,
+            RxAudioLevelerNr5RmNoiseGatePolicySource: nr5RmNoisePolicy.Source,
+            RxAudioLevelerNr5RmNoiseGatePolicyReason: nr5RmNoisePolicy.Reason,
             RxAudioLevelerNr5RmNoiseGate: audio.RxAudioLevelerNr5RmNoiseGate,
             RxAudioLevelerNr5RmNoiseGateHoldBlocks: audio.RxAudioLevelerNr5RmNoiseGateHoldBlocks,
             RxAudioLevelerNr5RmNoiseSuppressionDb: audio.RxAudioLevelerNr5RmNoiseSuppressionDb,
@@ -5878,7 +5891,8 @@ public class DspPipelineService : BackgroundService,
             levelerOutputLimited,
             squelchMode,
             squelchGateSource,
-            squelchOpenKnown);
+            squelchOpenKnown,
+            _radio.Snapshot().Nr?.Nr5RmNoiseGateEnabled);
     }
 
     private Nr5SpnrDiagnosticsDto? SnapshotAlignedLevelerNr5Diagnostics()
@@ -5956,7 +5970,8 @@ public class DspPipelineService : BackgroundService,
         bool levelerOutputLimited = false,
         string? squelchMode = null,
         string? squelchGateSource = null,
-        bool? squelchOpenKnown = null)
+        bool? squelchOpenKnown = null,
+        bool? nr5RmNoiseGateEnabledOverride = null)
     {
         source = string.IsNullOrWhiteSpace(source) ? "none" : source;
         squelchMode = NormalizeSquelchMode(squelchMode, squelchEnabled);
@@ -6017,7 +6032,7 @@ public class DspPipelineService : BackgroundService,
             recommendation = "RX audio frames are fresh; use RMS/peak dBFS with RXA meters, squelch state, and display SNR to tune weak-signal fidelity.";
         }
 
-        var nr5RmNoisePolicy = GetNr5RmNoiseGatePolicy();
+        var nr5RmNoisePolicy = GetNr5RmNoiseGatePolicy(nr5RmNoiseGateEnabledOverride);
         return new AudioPathDiagnosticsDto(
             SchemaVersion: 1,
             Status: status,
@@ -8948,7 +8963,8 @@ public class DspPipelineService : BackgroundService,
                     nr5LevelerDiagnostics,
                     nr5LevelerTopPeak,
                     state.FilterLowHz,
-                    state.FilterHighHz);
+                    state.FilterHighHz,
+                    state.Nr?.Nr5RmNoiseGateEnabled);
 
                 // CW sidetone is mixed (+=) into the RX block so every
                 // downstream sink — browser WS, native audio, TCI audio
