@@ -4,6 +4,8 @@ set -eu
 zero="0000000000000000000000000000000000000000"
 failed=0
 cr=$(printf '\r')
+expected_primary="Christian Suarez (N9WAR) <christiantsuarez@gmail.com>"
+expected_handle="iamexemplar <christiantsuarez@gmail.com>"
 
 reject_old_identity() {
   case "$1" in
@@ -14,6 +16,77 @@ reject_old_identity() {
       return 1
       ;;
   esac
+}
+
+is_expected_identity() {
+  case "$1" in
+    *"$expected_primary"*|*"$expected_handle"*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+contains_old_identity() {
+  case "$1" in
+    *[Rr][Aa][Mm][Oo][Nn]*|*[Rr][Aa][Mm][Pp][Aa]*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+contains_ai_identity() {
+  case "$1" in
+    *[Cc][Ll][Aa][Uu][Dd][Ee]*|*[Aa][Nn][Tt][Hh][Rr][Oo][Pp][Ii][Cc]*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_old_identity_trailer() {
+  case "$1" in
+    [Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:*|[Ss][Ii][Gg][Nn][Ee][Dd]-[Oo][Ff][Ff]-[Bb][Yy]:*|[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:*|[Cc][Oo][Mm][Mm][Ii][Tt][Tt][Ee][Dd]-[Bb][Yy]:*)
+      contains_old_identity "$1"
+      return $?
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_ai_trailer() {
+  case "$1" in
+    [Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:*|[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ee][Dd]-[Bb][Yy]:*|[Ss][Ii][Gg][Nn][Ee][Dd]-[Oo][Ff][Ff]-[Bb][Yy]:*)
+      contains_ai_identity "$1"
+      return $?
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+commit_has_forbidden_trailer() {
+  message_commit=$1
+  while IFS= read -r line || [ -n "$line" ]
+  do
+    if is_old_identity_trailer "$line" || is_ai_trailer "$line"; then
+      return 0
+    fi
+  done <<EOF
+$(git show -s --format=%B "$message_commit")
+EOF
+
+  return 1
 }
 
 while read -r local_ref local_sha remote_ref remote_sha
@@ -37,6 +110,35 @@ do
     echo "$idents" >&2
     failed=1
   fi
+
+  for commit in $(git rev-list "$range" 2>/dev/null || true)
+  do
+    author_ident="$(git show -s --format='%an <%ae>' "$commit")"
+    committer_ident="$(git show -s --format='%cn <%ce>' "$commit")"
+
+    if ! is_expected_identity "$author_ident"; then
+      echo "Refusing push: commit $commit has unexpected author identity:" >&2
+      echo "  $author_ident" >&2
+      echo "Expected one of:" >&2
+      echo "  $expected_primary" >&2
+      echo "  $expected_handle" >&2
+      failed=1
+    fi
+
+    if ! is_expected_identity "$committer_ident"; then
+      echo "Refusing push: commit $commit has unexpected committer identity:" >&2
+      echo "  $committer_ident" >&2
+      echo "Expected one of:" >&2
+      echo "  $expected_primary" >&2
+      echo "  $expected_handle" >&2
+      failed=1
+    fi
+
+    if commit_has_forbidden_trailer "$commit"; then
+      echo "Refusing push: commit $commit contains a forbidden attribution trailer." >&2
+      failed=1
+    fi
+  done
 done
 
 if [ "$failed" -ne 0 ]; then

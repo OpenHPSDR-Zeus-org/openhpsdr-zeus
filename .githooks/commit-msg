@@ -1,0 +1,63 @@
+#!/bin/sh
+set -eu
+
+msg_file=$1
+
+contains_old_identity() {
+  case "$1" in
+    *[Rr][Aa][Mm][Oo][Nn]*|*[Rr][Aa][Mm][Pp][Aa]*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+contains_ai_identity() {
+  case "$1" in
+    *[Cc][Ll][Aa][Uu][Dd][Ee]*|*[Aa][Nn][Tt][Hh][Rr][Oo][Pp][Ii][Cc]*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_old_identity_trailer() {
+  case "$1" in
+    [Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:*|[Ss][Ii][Gg][Nn][Ee][Dd]-[Oo][Ff][Ff]-[Bb][Yy]:*|[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:*|[Cc][Oo][Mm][Mm][Ii][Tt][Tt][Ee][Dd]-[Bb][Yy]:*)
+      contains_old_identity "$1"
+      return $?
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+is_ai_trailer() {
+  case "$1" in
+    [Cc][Oo]-[Aa][Uu][Tt][Hh][Oo][Rr][Ee][Dd]-[Bb][Yy]:*|[Gg][Ee][Nn][Ee][Rr][Aa][Tt][Ee][Dd]-[Bb][Yy]:*|[Ss][Ii][Gg][Nn][Ee][Dd]-[Oo][Ff][Ff]-[Bb][Yy]:*)
+      contains_ai_identity "$1"
+      return $?
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+while IFS= read -r line || [ -n "$line" ]
+do
+  if is_old_identity_trailer "$line"; then
+    echo "Refusing commit: Ramon/rampa attribution trailers are not allowed in this workspace." >&2
+    exit 1
+  fi
+
+  if is_ai_trailer "$line"; then
+    echo "Refusing commit: Claude/Anthropic attribution trailers are not allowed in this workspace." >&2
+    exit 1
+  fi
+done < "$msg_file"

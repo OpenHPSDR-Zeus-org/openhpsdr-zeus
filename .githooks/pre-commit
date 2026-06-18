@@ -1,11 +1,12 @@
 #!/bin/sh
 set -eu
 
-expected="Christian Suarez (N9WAR) <christiantsuarez@gmail.com>"
+expected_primary="Christian Suarez (N9WAR) <christiantsuarez@gmail.com>"
+expected_handle="iamexemplar <christiantsuarez@gmail.com>"
 
 is_expected_identity() {
   case "$1" in
-    *"christiantsuarez@gmail.com"*|*"iamexemplar"*)
+    *"$expected_primary"*|*"$expected_handle"*)
       return 0
       ;;
     *)
@@ -33,7 +34,7 @@ do
   if reject_old_identity "$ident"; then
     echo "Refusing commit with old Ramon/rampa identity:" >&2
     echo "  $ident" >&2
-    echo "Use: $expected" >&2
+    echo "Use: $expected_primary" >&2
     exit 1
   fi
 done
@@ -41,13 +42,17 @@ done
 if ! is_expected_identity "$author_ident"; then
   echo "Refusing commit with unexpected author identity:" >&2
   echo "  $author_ident" >&2
-  echo "Expected $expected or iamexemplar." >&2
+  echo "Expected one of:" >&2
+  echo "  $expected_primary" >&2
+  echo "  $expected_handle" >&2
   exit 1
 fi
 
 if ! is_expected_identity "$committer_ident"; then
   echo "Refusing commit with unexpected committer identity:" >&2
   echo "  $committer_ident" >&2
-  echo "Expected $expected or iamexemplar." >&2
+  echo "Expected one of:" >&2
+  echo "  $expected_primary" >&2
+  echo "  $expected_handle" >&2
   exit 1
 fi
