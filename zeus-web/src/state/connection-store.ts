@@ -96,6 +96,11 @@ export type ConnectionState = {
   // Hardware NCO / panadapter centre. The frequency-axis ruler drag moves this
   // without touching vfoHz so the operator can pan to off-screen spectrum.
   radioLoHz: number;
+  // CTUN (click-tune / centred tuning). When true, a panadapter click tunes
+  // the dial off-centre with the hardware NCO frozen; the pan-tune gesture
+  // reads this to skip the view-centre nudge so the dial marker roams instead
+  // of recentring. Server-authoritative; toggled via the CTUN transport button.
+  ctunEnabled: boolean;
   nr: NrConfigDto;
   zoomLevel: ZoomLevel;
   inflight: boolean;
@@ -151,6 +156,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   connectedProtocol: null,
   preampOn: false,
   radioLoHz: 14_200_000,
+  ctunEnabled: false,
   nr: { ...NR_CONFIG_DEFAULT },
   zoomLevel: 1,
   inflight: false,
@@ -184,6 +190,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
       attOffsetDb: s.attOffsetDb,
       adcOverloadWarning: s.adcOverloadWarning,
       radioLoHz: s.radioLoHz > 0 ? s.radioLoHz : prev.radioLoHz,
+      ctunEnabled: s.ctunEnabled,
       nr: s.nr,
       zoomLevel: s.zoomLevel,
     })),

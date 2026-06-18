@@ -172,10 +172,13 @@ public sealed class RadioStateEntry
     // to the same physical centre the operator was last looking at. Zero on
     // legacy rows (pre-CTUN, or rows written by the old CTUN-off branch);
     // RadioService snaps it to VfoHz on hydration in that case. The
-    // <c>CtunEnabled</c> field was removed when the CTUN toggle was retired —
-    // see <c>docs/prd/panfall_behavior.md</c>. Any stale <c>CtunEnabled</c>
-    // value left in older rows by LiteDB is silently ignored.
+    // <c>CtunEnabled</c> field below was reintroduced when the click-tune
+    // toggle returned (operator request, 2026-06-13). Older rows missing it
+    // hydrate to false (classic "radio follows the dial").
     public long RadioLoHz { get; set; }
+    // CTUN (click-tune / centred-tuning) toggle. See StateDto.CtunEnabled.
+    // Persisted so the operator's preference survives a restart.
+    public bool CtunEnabled { get; set; }
     // Per-mode-family RX filter memory (abs values, always positive)
     public int SsbFilterLoAbs { get; set; } = 150;
     public int SsbFilterHiAbs { get; set; } = 2850;

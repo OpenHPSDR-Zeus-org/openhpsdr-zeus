@@ -198,10 +198,19 @@ export function usePanTuneGesture(
       // VFO locked — click-to-tune / snap-to-signal commit no-ops.
       if (useVfoLockStore.getState().locked) return;
       const snapped = exact ? clampHz(hz) : snapHz(hz);
-      // Delta against the commanded chain — NOT an absolute write into the
-      // view-center (frame centers are dial ∓ cw-pitch in CW; absolutes
-      // would oscillate the display by ±pitch on every CW commit).
-      viewCenter.nudgeTargetHz(snapped - commandedHz());
+      // CTUN: tune the dial off-centre without moving the view. The hardware
+      // NCO stays frozen on the backend, so the frame center doesn't move and
+      // the dial marker (vfo − targetCenter) roams off the zero line. We stamp
+      // the optimistic-tune clock (poll-guard) but deliberately skip the
+      // view-center nudge that would recentre the display.
+      if (useConnectionStore.getState().ctunEnabled) {
+        viewCenter.markOptimisticTune();
+      } else {
+        // Delta against the commanded chain — NOT an absolute write into the
+        // view-center (frame centers are dial ∓ cw-pitch in CW; absolutes
+        // would oscillate the display by ±pitch on every CW commit).
+        viewCenter.nudgeTargetHz(snapped - commandedHz());
+      }
       useConnectionStore.setState({ vfoHz: snapped });
       pendingAbort?.abort();
       pendingAbort = null;
@@ -222,12 +231,17 @@ export function usePanTuneGesture(
       if (useVfoLockStore.getState().locked) return;
       const cur = commandedHz();
       const next = clampHz(cur + deltaHz);
-      // Effective delta (post-clamp) so the display target can never run
-      // past a band edge the command was clamped at. The optimistic store
-      // write happens in the SAME synchronous block as the target nudge so
-      // the dial marker's (vfo − target) offset is never transiently stale
-      // (it is pinned to the center line during glides).
-      viewCenter.nudgeTargetHz(next - cur);
+      // CTUN: wheel-tune the dial off-centre with the view frozen (same model
+      // as commitFinal). Outside CTUN, nudge the view target by the effective
+      // delta (post-clamp) so the display can never run past a clamped band
+      // edge; the optimistic store write happens in the SAME synchronous block
+      // as the target nudge so the dial marker's (vfo − target) offset is never
+      // transiently stale (it is pinned to the center line during glides).
+      if (useConnectionStore.getState().ctunEnabled) {
+        viewCenter.markOptimisticTune();
+      } else {
+        viewCenter.nudgeTargetHz(next - cur);
+      }
       useConnectionStore.setState({ vfoHz: next });
       pendingHz = next;
       scheduleFlush();
@@ -350,6 +364,21 @@ export function usePanTuneGesture(
       drag.moved = true;
       const rect = canvas.getBoundingClientRect();
       if (rect.width <= 0) return;
+      // CTUN: drag sweeps the dial across the frozen spectrum. The frame center
+      // doesn't move (NCO frozen on the backend), so drag.startHz — the view
+      // center captured at grab — is stationary; resolve the live pointer X to
+      // a frequency against it and tune there, leaving the view put.
+      if (useConnectionStore.getState().ctunEnabled) {
+        const frac = (e.clientX - rect.left) / rect.width;
+        const cursorHz = snapHz(drag.startHz + (frac - 0.5) * drag.spanHz);
+        if (cursorHz !== pendingHz) {
+          viewCenter.markOptimisticTune();
+          useConnectionStore.setState({ vfoHz: cursorHz });
+          pendingHz = cursorHz;
+          scheduleFlush();
+        }
+        return;
+      }
       const newHz = snapHz(drag.startHz - (dx / rect.width) * drag.spanHz);
       // Pixel→Hz mapping stays display-relative (drag.startHz is the frame
       // center at grab — unchanged semantics); the view-center moves by the
@@ -398,8 +427,16 @@ export function usePanTuneGesture(
       const rect = canvas.getBoundingClientRect();
       if (rect.width <= 0) return;
       if (d.moved) {
-        const dx = e.clientX - d.startX;
-        commitFinal(d.startHz - (dx / rect.width) * d.spanHz);
+        if (useConnectionStore.getState().ctunEnabled) {
+          // CTUN: commit the dial at the release-point frequency (cursor-
+          // relative against the frozen view center), matching the drag-move
+          // sweep above.
+          const frac = (e.clientX - rect.left) / rect.width;
+          commitFinal(d.startHz + (frac - 0.5) * d.spanHz);
+        } else {
+          const dx = e.clientX - d.startX;
+          commitFinal(d.startHz - (dx / rect.width) * d.spanHz);
+        }
       } else {
         // click-to-tune: resolve the clicked frequency against the live view.
         const view = readView();

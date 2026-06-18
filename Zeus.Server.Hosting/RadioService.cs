@@ -368,7 +368,8 @@ public sealed class RadioService : IDisposable
             RadioLoHz: (rsSnap?.RadioLoHz ?? 0L) != 0L
                 ? rsSnap!.RadioLoHz
                 : (rsSnap?.VfoHz ?? 14_200_000),
-            CwPitchHz: CwOffset.CwPitchHz);
+            CwPitchHz: CwOffset.CwPitchHz,
+            CtunEnabled: rsSnap?.CtunEnabled ?? false);
 
         // Kick off the debounce flush timer. Fires every 1 s; only writes to
         // LiteDB when _stateDirty is set (i.e., at least one Mutate() has fired
@@ -711,43 +712,73 @@ public sealed class RadioService : IDisposable
     public StateDto SetVfo(long hz) => SetVfo(hz, fromExternal: false);
 
     /// <summary>
-    /// Set the VFO (dial) frequency. The frozen-NCO model prefers to leave the
-    /// hardware alone — DspPipelineService recomputes the WDSP shift stage so
-    /// the tuned signal still lands at baseband. Two cases force a hardware
-    /// auto-retune anyway so the radio doesn't get "stuck": (a) the resulting
-    /// shift would push the filter edge outside the visible panadapter span
-    /// (Thetis dispMargin = 5% inset), or (b) the shift exceeds the IF
-    /// capacity (sample_rate * 0.46). External sources (CAT/TCI/calibration,
-    /// <paramref name="fromExternal"/>=true) bypass the heuristics and always
-    /// retune — mirrors Thetis <c>CATChangesCenterFreq=true</c> (console.cs:
-    /// 32082, CATCommands.cs:2690). Without this, a 5–10 kHz FT8 → FT4 hop
-    /// via TCI would stay inside the IF and the radio would TX on the wrong
-    /// frequency. Issues #461 and zeus-nnc — see docs/prd/panfall_behavior.md.
-    /// Operator-driven "pure pan" movements (panadapter drag release past
-    /// the IQ window edge) take the explicit POST /api/radio/lo path
-    /// instead, leaving VfoHz untouched.
+    /// Set the VFO (dial) frequency.
+    ///
+    /// <para><b>CTUN on</b> (<see cref="StateDto.CtunEnabled"/>): the operator
+    /// click-tunes off the panadapter centre. We move only the dial and leave
+    /// the hardware NCO (<c>RadioLoHz</c>) frozen — DspPipelineService
+    /// recomputes the WDSP shift stage (= EffectiveLoHz(mode, vfo) − RadioLoHz)
+    /// off the StateChanged event so the tuned signal still lands at baseband
+    /// for RX. TX retunes the shared VFO register to the dial on key-down
+    /// (<see cref="SetMox"/> → <see cref="AlignLoForTx"/>) and restores the
+    /// frozen centre on un-key, so the radio transmits on the dial — the fix
+    /// for the #470 revert. The frozen NCO is kept only while the dial stays
+    /// inside the captured IQ window; once the requested shift would exceed the
+    /// IF capacity (≈ ±0.45×sample_rate) the signal is no longer in the
+    /// sampled spectrum, so we fall through to a classic recenter.</para>
+    ///
+    /// <para><b>CTUN off</b>: classic "radio follows the dial" — every tune
+    /// retunes the hardware NCO so the clicked frequency becomes the new
+    /// centre (RadioLoHz = dial's effective LO, WDSP shift = 0).</para>
+    ///
+    /// External sources (CAT/TCI/calibration, <paramref name="fromExternal"/>
+    /// =true) always recenter regardless of CTUN — they expect "radio follows
+    /// the dial" (Thetis <c>CATChangesCenterFreq=true</c>). Mirrors Thetis
+    /// <c>ClickTuneDisplay</c> (console.cs:43143).
     /// </summary>
     public StateDto SetVfo(long hz, bool fromExternal)
     {
         long clamped = Math.Clamp(hz, 0L, 60_000_000L);
         long previous;
         RxMode currentMode;
+        bool ctun;
+        long currentLo;
+        int sampleRate;
         lock (_sync)
         {
             previous = _state.VfoHz;
             currentMode = _state.Mode;
+            ctun = _state.CtunEnabled;
+            currentLo = _state.RadioLoHz;
+            sampleRate = _state.SampleRate;
         }
-        // Classic "radio follows the dial" tuning. The CTUN frozen-NCO model
-        // (#470) was reverted: it pinned the hardware NCO at the panadapter
-        // centre and offset RX in WDSP, but neither protocol client has a
-        // separate TX VFO (ControlFrame writes one VfoAHz to every freq
-        // register), so TX transmitted on the frozen centre instead of the
-        // dial. Every tune now retunes the radio so RX *and* TX track the dial;
-        // RadioLoHz follows the dial's effective LO (CW: dial ∓ pitch), which
-        // leaves the WDSP CTUN-shift stage at zero. The fromExternal flag is
-        // kept for API compatibility but no longer changes behaviour — all
-        // tunes retune now.
-        _ = fromExternal;
+
+        // CTUN: dial roams, NCO frozen — as long as the tuned signal stays
+        // inside the captured IQ window (±IF capacity). A panadapter click
+        // always resolves to an on-screen frequency, and the visible span is
+        // ⊆ the sample window, so clicks never trip the guard; only wheel /
+        // keyboard / typed tuning can push the dial out, and that recenters.
+        if (ctun && !fromExternal)
+        {
+            long shiftHz = CwOffset.EffectiveLoHz(currentMode, clamped) - currentLo;
+            long ifCapHz = (long)(sampleRate * 0.45);
+            if (Math.Abs(shiftHz) <= ifCapHz)
+            {
+                Mutate(s => s with { VfoHz = clamped });
+                if (BandUtils.FreqToBand(previous) != BandUtils.FreqToBand(clamped))
+                {
+                    RecomputePaAndPush();
+                }
+                return Snapshot();
+            }
+            // Dial left the IQ window — fall through to recenter so the radio
+            // keeps demodulating (Thetis snaps the display when the click
+            // leaves the span). RadioLoHz follows the dial below.
+        }
+
+        // Classic recenter (CTUN off, CTUN out-of-window, or external source):
+        // retune the hardware NCO to the dial's effective LO (CW: dial ∓
+        // pitch), which leaves the WDSP CTUN-shift stage at zero.
         long radioLoNew = CwOffset.EffectiveLoHz(currentMode, clamped);
         Mutate(s => s with { VfoHz = clamped, RadioLoHz = radioLoNew });
         ActiveClient?.SetVfoAHz(radioLoNew);
@@ -805,6 +836,21 @@ public sealed class RadioService : IDisposable
     /// Returns true when the LO was actually moved (caller may want to
     /// log it for diagnostics), false on no-op.
     /// </summary>
+    // Remembered RX centre while keyed under CTUN, so RestoreLoAfterTx() can
+    // put the frozen NCO back on un-key. long.MinValue == "not in a TX cycle"
+    // (or CTUN off — only CTUN records). Guarded by _sync.
+    private long _ctunPreTxLoHz = long.MinValue;
+
+    // Capture the frozen RX centre exactly once per key-down, but only under
+    // CTUN — when CTUN is off the LO already tracks the dial so there is
+    // nothing to restore and recording would change the classic post-TX
+    // behaviour. Caller must hold _sync.
+    private void RememberFrozenLoUnderLock()
+    {
+        if (_state.CtunEnabled && _ctunPreTxLoHz == long.MinValue)
+            _ctunPreTxLoHz = _state.RadioLoHz;
+    }
+
     public bool AlignLoForCwTx()
     {
         long vfo;
@@ -815,12 +861,101 @@ public sealed class RadioService : IDisposable
             vfo = _state.VfoHz;
             mode = _state.Mode;
             currentLo = _state.RadioLoHz;
+            // Under CTUN the NCO is frozen off the dial; remember it so we can
+            // restore the operator's RX view after the over.
+            RememberFrozenLoUnderLock();
         }
         if (mode != RxMode.CWU && mode != RxMode.CWL) return false;
         long targetLo = CwOffset.EffectiveLoHz(mode, vfo);
         if (targetLo == currentLo) return false;
         SetRadioLo(targetLo);
         return true;
+    }
+
+    /// <summary>
+    /// CTUN TX alignment for all modes (the phone/digi analogue of
+    /// <see cref="AlignLoForCwTx"/>). When CTUN froze the hardware NCO off the
+    /// dial for RX, the shared P1/P2 VFO register would otherwise transmit on
+    /// the frozen centre — the #470 bug. Called from <see cref="SetMox"/> on
+    /// the key-down edge: snap the hardware LO to the dial's effective LO so
+    /// the carrier lands on frequency, remembering the frozen centre for
+    /// <see cref="RestoreLoAfterTx"/> to put back on un-key. No-op when CTUN is
+    /// off (classic tuning already keeps LO == dial). Mirrors Thetis, which
+    /// writes VFOAFreq to the NCO on MOX and restores CentreFrequency on RX
+    /// (console.cs UpdateTXDDSFreq / HdwMOXChanged). Returns true if the LO
+    /// moved.
+    /// </summary>
+    public bool AlignLoForTx()
+    {
+        long vfo;
+        RxMode mode;
+        long currentLo;
+        lock (_sync)
+        {
+            if (!_state.CtunEnabled) return false;
+            vfo = _state.VfoHz;
+            mode = _state.Mode;
+            currentLo = _state.RadioLoHz;
+            RememberFrozenLoUnderLock();
+        }
+        long targetLo = CwOffset.EffectiveLoHz(mode, vfo);
+        if (targetLo == currentLo) return false;
+        SetRadioLo(targetLo);
+        return true;
+    }
+
+    /// <summary>
+    /// Restore the frozen RX centre remembered by <see cref="AlignLoForTx"/> /
+    /// <see cref="AlignLoForCwTx"/>. Called from <see cref="SetMox"/> on the
+    /// un-key edge so the panadapter returns to the same off-centre CTUN view
+    /// the operator had before transmitting. No-op when nothing was recorded
+    /// (CTUN off, or the LO was already on the dial). Returns true if the LO
+    /// moved.
+    /// </summary>
+    public bool RestoreLoAfterTx()
+    {
+        long restore;
+        lock (_sync)
+        {
+            if (_ctunPreTxLoHz == long.MinValue) return false;
+            restore = _ctunPreTxLoHz;
+            _ctunPreTxLoHz = long.MinValue;
+        }
+        SetRadioLo(restore);
+        return true;
+    }
+
+    /// <summary>
+    /// Enable or disable CTUN (click-tune / centred tuning). Enabling simply
+    /// freezes the hardware NCO at its current value (which already equals the
+    /// dial's effective LO, so nothing moves) — subsequent <see cref="SetVfo"/>
+    /// calls leave it put. Disabling snaps the NCO back to the dial so the
+    /// panadapter recentres and classic "radio follows the dial" resumes.
+    /// Persisted via FlushState.
+    /// </summary>
+    public StateDto SetCtunEnabled(bool enabled)
+    {
+        long vfo;
+        RxMode mode;
+        bool changed;
+        lock (_sync)
+        {
+            changed = _state.CtunEnabled != enabled;
+            vfo = _state.VfoHz;
+            mode = _state.Mode;
+        }
+        if (!changed) return Snapshot();
+        // Mutate marks the state dirty (so FlushState persists the toggle) and
+        // fires StateChanged.
+        Mutate(s => s with { CtunEnabled = enabled });
+        if (!enabled)
+        {
+            // Turning CTUN off: recentre the NCO on the dial (mirrors a classic
+            // SetVfo). SetRadioLo fires StateChanged so the WDSP shift drops to
+            // zero and the frontend frames recentre.
+            SetRadioLo(CwOffset.EffectiveLoHz(mode, vfo));
+        }
+        return Snapshot();
     }
 
     // Per-mode-family remembered filter magnitudes. Mode switching snapshots
@@ -1242,9 +1377,19 @@ public sealed class RadioService : IDisposable
     // console.cs:22188 — TX uses its own TxAttenData path, not the RX ramp).
     public void SetMox(bool on)
     {
+        // CTUN: the hardware NCO is frozen off the dial for RX. Snap it to the
+        // dial before the wire MOX bit flips so TX lands on frequency, and
+        // restore the frozen centre after un-key so the RX view returns. This
+        // is the universal keying chokepoint — MOX, TUN, CW, and two-tone all
+        // route through here — so every TX path is covered. Both helpers are
+        // no-ops when CTUN is off. (CW pre-aligns in CwEngine for its baseband
+        // calc; AlignLoForTx then finds the LO already on the dial and is a
+        // no-op, but the frozen centre it recorded is still restored below.)
+        if (on) AlignLoForTx();
         lock (_sync) _mox = on;
         ActiveClient?.SetMox(on);
         MoxChanged?.Invoke(on);
+        if (!on) RestoreLoAfterTx();
     }
 
     // Drive is transient like MOX — latched on the Protocol1Client so the
@@ -2147,6 +2292,7 @@ public sealed class RadioService : IDisposable
                 TunePct = snap.TunePct,
                 TxMoxPreKeyDelayMs = snap.TxMoxPreKeyDelayMs,
                 RadioLoHz = snap.RadioLoHz,
+                CtunEnabled = snap.CtunEnabled,
                 UpdatedUtc = DateTime.UtcNow,
             });
         }

@@ -47,6 +47,7 @@ import { COLORMAPS, type RenderColormapId } from '../gl/colormap';
 import { createWfRenderer, type WfGlCaps } from '../gl/waterfall';
 import { planForFrame, resetFramePlan } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
+import { useConnectionStore } from '../state/connection-store';
 import { registerFrameConsumer, useDisplayStore } from '../state/display-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import { enhanceInto, useSignalEnhanceStore } from '../dsp/signal-estimator';
@@ -63,6 +64,7 @@ type WaterfallProps = {
 export function Waterfall({ transparent = false }: WaterfallProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const cursorRef = useRef<HTMLDivElement | null>(null);
   const rendererRef = useRef<ReturnType<typeof createWfRenderer> | null>(null);
   // Pending deferred WEBGL_lose_context handle (see the GL effect cleanup). A
   // ref so it survives across the StrictMode mount→cleanup→mount cycle.
@@ -490,6 +492,44 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
     rendererRef.current?.setTransparent(transparent);
   }, [transparent]);
 
+  // Dial-position cursor. Outside CTUN the dial sits on the view centre so the
+  // cursor stays at 50%; under CTUN the dial roams off-centre, so we slide it
+  // to (vfo − targetCenter) — the same offset the panadapter FreqAxis marker
+  // uses — so both surfaces agree on where the dial is. Positioned imperatively
+  // off the draw-bus to avoid a React commit per input/display frame.
+  useEffect(() => {
+    const update = () => {
+      const cur = cursorRef.current;
+      if (!cur) return;
+      const s = useDisplayStore.getState();
+      if (!s.width || s.hzPerPixel <= 0) {
+        cur.style.left = '50%';
+        return;
+      }
+      const spanHz = s.width * s.hzPerPixel;
+      const vfoHz = useConnectionStore.getState().vfoHz;
+      const dialOffsetHz = viewCenter.isInitialized()
+        ? vfoHz - viewCenter.getTargetCenterHz()
+        : 0;
+      cur.style.left = `${((spanHz / 2 + dialOffsetHz) / spanHz) * 100}%`;
+    };
+    const schedule = () => requestDrawBusFrame(update);
+    const unsubVc = viewCenter.subscribe(schedule);
+    const unsubConn = useConnectionStore.subscribe((s, prev) => {
+      if (s.vfoHz !== prev.vfoHz) schedule();
+    });
+    const unsubFrame = useDisplayStore.subscribe((s, prev) => {
+      if (s.lastSeq !== prev.lastSeq) schedule();
+    });
+    schedule();
+    return () => {
+      unsubVc();
+      unsubConn();
+      unsubFrame();
+      cancelDrawBusFrame(update);
+    };
+  }, []);
+
   usePanTuneGesture(canvasRef);
 
   return (
@@ -562,6 +602,7 @@ export function Waterfall({ transparent = false }: WaterfallProps = {}) {
       )}
       <WfDbScale />
       <div
+        ref={cursorRef}
         className="tuning-cursor"
         style={{ left: '50%', pointerEvents: 'none' }}
       />
