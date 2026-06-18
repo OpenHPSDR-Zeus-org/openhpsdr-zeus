@@ -4514,7 +4514,7 @@ public sealed class DspPipelineAudioSanitizerTests
     }
 
     [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseGateIsDefaultOn()
+    public void ApplyRxAudioLeveler_RmNoiseGateIsDefaultOff()
     {
         string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
         string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
@@ -4527,12 +4527,11 @@ public sealed class DspPipelineAudioSanitizerTests
 
             DspPipelineService.ApplyRxAudioLeveler(block, ref state, StableNoSignalRmNoiseDiagnostics());
 
-            Assert.True(state.Nr5RmNoiseGate);
-            Assert.InRange(state.Nr5RmNoiseSuppressionDb, 12.0, 80.0);
+            Assert.False(state.Nr5RmNoiseGate);
+            Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
             Assert.True(state.Nr5NoSignalNoiseCap);
             Assert.True(state.Nr5NoProofNoiseCap);
-            Assert.True(state.DesiredGainDb <= -14.0);
-            Assert.True(state.OutputRmsDbfs <= -50.0);
+            Assert.True(state.OutputRmsDbfs > -50.0);
         }
         finally
         {
@@ -4542,7 +4541,7 @@ public sealed class DspPipelineAudioSanitizerTests
     }
 
     [Fact]
-    public void Nr5RmNoiseGatePolicyReportsDefaultOnSource()
+    public void Nr5RmNoiseGatePolicyReportsDefaultOffSource()
     {
         string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
         string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
@@ -4552,9 +4551,9 @@ public sealed class DspPipelineAudioSanitizerTests
         {
             var policy = DspPipelineService.GetNr5RmNoiseGatePolicy();
 
-            Assert.True(policy.Enabled);
+            Assert.False(policy.Enabled);
             Assert.Equal("default", policy.Source);
-            Assert.Equal("default-on", policy.Reason);
+            Assert.Equal("default-off", policy.Reason);
         }
         finally
         {

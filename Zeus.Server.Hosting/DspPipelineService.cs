@@ -346,9 +346,9 @@ public class DspPipelineService : BackgroundService,
         }
 
         return new Nr5RmNoiseGatePolicy(
-            Enabled: true,
+            Enabled: false,
             Source: "default",
-            Reason: "default-on");
+            Reason: "default-off");
     }
 
     private static bool IsNr5RmNoiseGateEnabled() => GetNr5RmNoiseGatePolicy().Enabled;
