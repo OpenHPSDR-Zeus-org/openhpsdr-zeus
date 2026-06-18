@@ -728,6 +728,8 @@ public class DspPipelineService : BackgroundService,
         bool nr5RmNoiseGate = false;
         bool nr5RmNoiseHeldQuietTailCandidate = false;
         double nr5RmNoiseSuppressionDb = 0.0;
+        bool nr5RecentSpeechHangoverFloorCandidate = false;
+        double nr5RecentSpeechHangoverFloorDbfs = double.NaN;
         bool nr5FrontendFarPeakDisagreement = false;
         double nr5HybridSpeechPrior = 0.0;
         double nr5NoSignalNoisePrior = 0.0;
@@ -844,6 +846,37 @@ public class DspPipelineService : BackgroundService,
                 Math.Max(nr5LowVadNoise, 0.55 * nr5AdjacentNoiseOpen) *
                 (1.0 - ClampUnit(nr5HybridSpeechPrior / 0.55)) *
                 Math.Max(nr5ActiveNativeFloor, 0.35));
+            nr5RecentSpeechHangoverFloorCandidate =
+                nr5SpeechHangoverWasActive &&
+                state.Nr5SpeechHangoverBlocks >= 16 &&
+                inputRmsDbfs >= -62.0 &&
+                inputRmsDbfs <= -42.0 &&
+                nr5.InputDbfs >= -58.0 &&
+                nr5.OutputDbfs >= -53.5 &&
+                nr5.OutputPeakDbfs >= -43.0 &&
+                nr5.SignalConfidence >= 0.235 &&
+                nr5.AgcGate >= 0.280 &&
+                (nr5.MaskSmoothing >= 0.120 ||
+                    nr5.OutputPeakDbfs >= -40.0 ||
+                    nr5.SignalProbability >= 0.115) &&
+                nr5.AdjacentNoiseUsable &&
+                nr5.AdjacentNoiseTrust >= 0.420 &&
+                nr5.AdjacentNoiseDrive >= 0.380;
+            if (nr5RecentSpeechHangoverFloorCandidate)
+            {
+                double hangoverProof = ClampUnit(
+                    state.Nr5SpeechHangoverBlocks / (double)RxLevelerNr5SpeechHangoverBlocks);
+                double weakResidueProof = Math.Max(
+                    ClampUnit((nr5.SignalConfidence - 0.235) / 0.095),
+                    Math.Max(
+                        0.72 * ClampUnit((nr5.AgcGate - 0.280) / 0.260),
+                        0.62 * ClampUnit((nr5.MaskSmoothing - 0.280) / 0.180)));
+                double hangoverFloorMaxDbfs = state.Nr5SpeechHoldBlocks > 0 ? -34.0 : -36.0;
+                nr5RecentSpeechHangoverFloorDbfs = Math.Clamp(
+                    -39.5 + 8.0 * hangoverProof + 4.0 * weakResidueProof,
+                    -40.0,
+                    hangoverFloorMaxDbfs);
+            }
             bool nr5FrontendPeakNativeLiftCandidate =
                 nr5.OutputDbfs >= -38.5 &&
                 nr5NativeLiftDb >= 10.0;
@@ -2432,6 +2465,11 @@ public class DspPipelineService : BackgroundService,
                 {
                     lowProofCeilingDbfs = Math.Max(lowProofCeilingDbfs, -30.0);
                 }
+                if (nr5RecentSpeechHangoverFloorCandidate &&
+                    double.IsFinite(nr5RecentSpeechHangoverFloorDbfs))
+                {
+                    lowProofCeilingDbfs = Math.Max(lowProofCeilingDbfs, nr5RecentSpeechHangoverFloorDbfs);
+                }
                 double lowProofDesiredDb = Math.Max(0.0, lowProofCeilingDbfs - inputRmsDbfs);
                 desiredDb = Math.Min(
                     desiredDb,
@@ -2702,6 +2740,11 @@ public class DspPipelineService : BackgroundService,
                     + 7.0 * ClampUnit((nr5HybridSpeechPrior - 0.045) / 0.180)
                     + 3.0 * ClampUnit((nr5.OutputDbfs + 32.0) / 12.0);
                 noSignalTargetDbfs = Math.Clamp(noSignalTargetDbfs, -46.0, -36.0);
+                if (nr5RecentSpeechHangoverFloorCandidate &&
+                    double.IsFinite(nr5RecentSpeechHangoverFloorDbfs))
+                {
+                    noSignalTargetDbfs = Math.Max(noSignalTargetDbfs, nr5RecentSpeechHangoverFloorDbfs);
+                }
                 double noSignalDesiredDb = Math.Clamp(
                     noSignalTargetDbfs - inputRmsDbfs,
                     RxLevelerMaxCutDb,
@@ -2849,6 +2892,11 @@ public class DspPipelineService : BackgroundService,
                     comfortTargetDbfs,
                     RxLevelerNr5FrontendDisagreementComfortCeilingDbfs,
                     RxLevelerNr5FrontendDisagreementComfortMaxDbfs);
+                if (nr5RecentSpeechHangoverFloorCandidate &&
+                    double.IsFinite(nr5RecentSpeechHangoverFloorDbfs))
+                {
+                    comfortTargetDbfs = Math.Max(comfortTargetDbfs, nr5RecentSpeechHangoverFloorDbfs);
+                }
                 bool weakPreservationFloor =
                     nr5.InputDbfs >= -55.0 &&
                     nr5.AgcGate >= 0.48 &&
@@ -2951,6 +2999,11 @@ public class DspPipelineService : BackgroundService,
                     farPeakTargetDbfs,
                     RxLevelerNr5FarPeakNoiseCeilingDbfs,
                     RxLevelerNr5FarPeakNoiseMaxDbfs);
+                if (nr5RecentSpeechHangoverFloorCandidate &&
+                    double.IsFinite(nr5RecentSpeechHangoverFloorDbfs))
+                {
+                    farPeakTargetDbfs = Math.Max(farPeakTargetDbfs, nr5RecentSpeechHangoverFloorDbfs);
+                }
                 double farPeakDesiredDb = Math.Max(0.0, farPeakTargetDbfs - inputRmsDbfs);
                 if (farPeakDesiredDb < desiredDb - 1.0e-6)
                 {
@@ -3703,6 +3756,19 @@ public class DspPipelineService : BackgroundService,
                     nr5StrongFrameParityCap = true;
                 }
             }
+            if (nr5RecentSpeechHangoverFloorCandidate &&
+                double.IsFinite(nr5RecentSpeechHangoverFloorDbfs) &&
+                double.IsFinite(peakHeadroomDb) &&
+                peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+            {
+                double hangoverFloorDesiredDb = Math.Min(
+                    Math.Max(0.0, nr5RecentSpeechHangoverFloorDbfs - inputRmsDbfs),
+                    peakHeadroomDb);
+                if (hangoverFloorDesiredDb > desiredDb + 1.0e-6)
+                {
+                    desiredDb = hangoverFloorDesiredDb;
+                }
+            }
             if (desiredDb > 0.0 &&
                 desiredDb >= 16.0 &&
                 inputRmsDbfs >= -42.5 &&
@@ -4059,6 +4125,14 @@ public class DspPipelineService : BackgroundService,
                         RxLevelerNr5SuppressedOnsetCatchupBoostSlewDbPerBlock);
                 }
                 if (nr5FrontendDisagreementComfortCap &&
+                    gainGapDb >= 4.0 &&
+                    peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
+                {
+                    boostSlewDb = Math.Max(
+                        boostSlewDb,
+                        RxLevelerNr5HeldSuppressedTailCatchupBoostSlewDbPerBlock);
+                }
+                if (nr5RecentSpeechHangoverFloorCandidate &&
                     gainGapDb >= 4.0 &&
                     peakHeadroomDb >= RxLevelerCrestCatchupHeadroomDb)
                 {

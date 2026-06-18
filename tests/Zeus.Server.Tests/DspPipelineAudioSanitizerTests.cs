@@ -4748,6 +4748,111 @@ public sealed class DspPipelineAudioSanitizerTests
         }
     }
 
+    [Fact]
+    public void ApplyRxAudioLeveler_ProtectsRecentNr5SpeechHangoverFromComfortFade()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 11.0,
+            PauseHoldBlocks = 18,
+            Nr5SpeechHangoverBlocks = 34,
+            Nr5NoiseProfilePrior = 0.350
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-56.6));
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.252,
+            signalProbability: 0.102,
+            agcGate: 0.338,
+            recoveryDrive: 0.174,
+            weakSignalMemory: 0.039,
+            outputDbfs: -50.6,
+            inputDbfs: -54.7,
+            maskSmoothing: 0.390,
+            peakEvidence: 0.0,
+            outputPeakDbfs: -40.5,
+            adjacentNoiseTrust: 0.542,
+            adjacentNoiseDrive: 0.508,
+            levelDrive: 0.620);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: 55_500, snrDb: 16.1, dbfs: -86.0, confidence: 0.819),
+            filterLowHz: -3_106,
+            filterHighHz: 0);
+
+        Assert.False(state.Nr5RmNoiseGate);
+        Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
+        Assert.True(
+            state.OutputRmsDbfs is >= -38.5 and <= -34.0,
+            $"desired={state.DesiredGainDb:F1} applied={state.AppliedGainDb:F1} output={state.OutputRmsDbfs:F1} " +
+            $"input={state.InputRmsDbfs:F1} hold={state.Nr5SpeechHoldBlocks} hang={state.Nr5SpeechHangoverBlocks} " +
+            $"hybrid={state.Nr5HybridSpeechPrior:F3} noSignal={state.Nr5NoSignalNoisePrior:F3} " +
+            $"profile={state.Nr5NoiseProfilePrior:F3} noCap={state.Nr5NoSignalNoiseCap} " +
+            $"farCap={state.Nr5FarPeakNoiseCap} proofCap={state.Nr5NoProofNoiseCap}");
+        Assert.True(
+            state.AppliedGainDb >= 18.0,
+            $"desired={state.DesiredGainDb:F1} applied={state.AppliedGainDb:F1} output={state.OutputRmsDbfs:F1}");
+        Assert.Equal(0, state.Nr5SpeechHoldBlocks);
+        Assert.InRange(state.Nr5SpeechHangoverBlocks, 1, 33);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_ProtectsLowSmoothingNr5SpeechHangoverFromComfortFade()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 0.0,
+            PauseHoldBlocks = 18,
+            Nr5SpeechHoldBlocks = 12,
+            Nr5SpeechHangoverBlocks = 58,
+            Nr5NoiseProfilePrior = 0.338
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-46.8));
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.263,
+            signalProbability: 0.120,
+            agcGate: 0.432,
+            recoveryDrive: 0.185,
+            weakSignalMemory: 0.056,
+            outputDbfs: -49.3,
+            inputDbfs: -52.3,
+            maskSmoothing: 0.135,
+            peakEvidence: 0.0,
+            outputPeakDbfs: -39.6,
+            adjacentNoiseTrust: 0.519,
+            adjacentNoiseDrive: 0.464,
+            levelDrive: 0.620);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: -56_437, snrDb: 20.4, dbfs: -86.0, confidence: 0.877),
+            filterLowHz: -3_106,
+            filterHighHz: 0);
+
+        Assert.False(state.Nr5RmNoiseGate);
+        Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
+        Assert.True(
+            state.OutputRmsDbfs >= -36.5,
+            $"desired={state.DesiredGainDb:F1} applied={state.AppliedGainDb:F1} output={state.OutputRmsDbfs:F1} " +
+            $"input={state.InputRmsDbfs:F1} hold={state.Nr5SpeechHoldBlocks} hang={state.Nr5SpeechHangoverBlocks} " +
+            $"hybrid={state.Nr5HybridSpeechPrior:F3} noSignal={state.Nr5NoSignalNoisePrior:F3} " +
+            $"profile={state.Nr5NoiseProfilePrior:F3} noCap={state.Nr5NoSignalNoiseCap} " +
+            $"farCap={state.Nr5FarPeakNoiseCap} proofCap={state.Nr5NoProofNoiseCap}");
+        Assert.True(
+            state.AppliedGainDb >= 10.0,
+            $"desired={state.DesiredGainDb:F1} applied={state.AppliedGainDb:F1} output={state.OutputRmsDbfs:F1}");
+        Assert.True(state.Nr5SpeechHoldBlocks > 0);
+        Assert.True(state.Nr5SpeechHangoverBlocks > 0);
+        Assert.False(state.OutputLimited);
+    }
+
     [Theory]
     [InlineData("0")]
     [InlineData("false")]
