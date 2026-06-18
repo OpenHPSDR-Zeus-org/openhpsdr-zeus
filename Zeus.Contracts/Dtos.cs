@@ -377,6 +377,7 @@ public sealed record DspLiveRuntimeEvidenceDto(
     bool? RxAudioLevelerNr5NoSignalNoiseCap = null,
     bool? RxAudioLevelerNr5FarPeakNoiseCap = null,
     bool? RxAudioLevelerNr5NoProofNoiseCap = null,
+    int? RxAudioLevelerNr5SpeechHangoverBlocks = null,
     bool? RxAudioLevelerNr5RmNoiseGateEnabled = null,
     bool? RxAudioLevelerNr5RmNoiseGate = null,
     double? RxAudioLevelerNr5RmNoiseSuppressionDb = null);

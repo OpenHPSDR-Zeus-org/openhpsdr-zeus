@@ -4716,6 +4716,38 @@ public sealed class DspPipelineAudioSanitizerTests
         }
     }
 
+    [Fact]
+    public void ApplyRxAudioLeveler_RmNoiseGateDefersDuringRecentSpeechHangover()
+    {
+        string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
+        string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
+        Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", null);
+        Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", null);
+        try
+        {
+            var state = StableNoSignalRmNoiseState();
+            state.Nr5SpeechHangoverBlocks = 48;
+            float[] block = StableNoSignalRmNoiseBlock();
+
+            DspPipelineService.ApplyRxAudioLeveler(block, ref state, StableNoSignalRmNoiseDiagnostics());
+
+            Assert.False(
+                state.Nr5RmNoiseGate,
+                $"hangover={state.Nr5SpeechHangoverBlocks} hold={state.Nr5SpeechHoldBlocks} " +
+                $"prior={state.Nr5NoSignalNoisePrior:F3} profile={state.Nr5NoiseProfilePrior:F3} " +
+                $"desired={state.DesiredGainDb:F1} output={state.OutputRmsDbfs:F1}");
+            Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
+            Assert.Equal(0, state.Nr5SpeechHoldBlocks);
+            Assert.InRange(state.Nr5SpeechHangoverBlocks, 1, 47);
+            Assert.True(state.OutputRmsDbfs > -50.0);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE", previous);
+            Environment.SetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE", previousExperimental);
+        }
+    }
+
     [Theory]
     [InlineData("0")]
     [InlineData("false")]
@@ -4826,6 +4858,7 @@ public sealed class DspPipelineAudioSanitizerTests
             Assert.True(state.Nr5HybridSpeechPrior > state.Nr5NoSignalNoisePrior);
             Assert.InRange(state.Nr5NoiseProfilePrior, 0.250, 0.360);
             Assert.InRange(state.OutputRmsDbfs, -37.0, -28.0);
+            Assert.True(state.Nr5SpeechHangoverBlocks > state.Nr5SpeechHoldBlocks);
 
             float[] noProofBlock = new float[1024];
             Array.Fill(noProofBlock, DbToLinear(-39.1));
@@ -4848,6 +4881,7 @@ public sealed class DspPipelineAudioSanitizerTests
             DspPipelineService.ApplyRxAudioLeveler(noProofBlock, ref state, noProofNr5);
 
             Assert.True(state.Nr5SpeechHoldBlocks > 0);
+            Assert.True(state.Nr5SpeechHangoverBlocks > state.Nr5SpeechHoldBlocks);
             Assert.False(state.Nr5NoSignalNoiseCap);
             Assert.False(state.Nr5FarPeakNoiseCap);
             Assert.False(state.Nr5NoProofNoiseCap);

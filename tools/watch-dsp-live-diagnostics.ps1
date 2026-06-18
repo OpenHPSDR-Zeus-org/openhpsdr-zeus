@@ -1288,6 +1288,7 @@ function New-SampleSummary {
         rxAudioLevelerOutputLimitSampleCount = Get-JsonValue $runtime "rxAudioLevelerOutputLimitSampleCount"
         rxAudioLevelerPauseHoldBlocks = Get-JsonValue $runtime "rxAudioLevelerPauseHoldBlocks"
         rxAudioLevelerNr5SpeechHoldBlocks = Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHoldBlocks"
+        rxAudioLevelerNr5SpeechHangoverBlocks = Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHangoverBlocks"
         rxAudioLevelerNr5HybridSpeechPrior = Get-JsonValue $runtime "rxAudioLevelerNr5HybridSpeechPrior"
         rxAudioLevelerNr5NoSignalNoisePrior = Get-JsonValue $runtime "rxAudioLevelerNr5NoSignalNoisePrior"
         rxAudioLevelerNr5NoiseProfilePrior = Get-JsonValue $runtime "rxAudioLevelerNr5NoiseProfilePrior"
@@ -1566,6 +1567,7 @@ function Build-Report {
     $rxAudioLevelerOutputLimitSampleCountValues = New-Object System.Collections.Generic.List[double]
     $rxAudioLevelerPauseHoldBlockValues = New-Object System.Collections.Generic.List[double]
     $rxAudioLevelerNr5SpeechHoldBlockValues = New-Object System.Collections.Generic.List[double]
+    $rxAudioLevelerNr5SpeechHangoverBlockValues = New-Object System.Collections.Generic.List[double]
     $rxAudioLevelerNr5HybridSpeechPriorValues = New-Object System.Collections.Generic.List[double]
     $rxAudioLevelerNr5NoSignalNoisePriorValues = New-Object System.Collections.Generic.List[double]
     $rxAudioLevelerNr5NoiseProfilePriorValues = New-Object System.Collections.Generic.List[double]
@@ -2201,6 +2203,7 @@ function Build-Report {
             $runtimeLevelerAppliedGainDbNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerAppliedGainDb")
             $runtimeLevelerPauseHoldBlocksNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerPauseHoldBlocks")
             $runtimeLevelerNr5SpeechHoldBlocksNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHoldBlocks")
+            $runtimeLevelerNr5SpeechHangoverBlocksNumber = Get-NumericValue (Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHangoverBlocks")
             $runtimeFinalAudioRmsDbfsNumber = if (-not $runtimeIsRxAudio) {
                 $null
             }
@@ -2320,6 +2323,7 @@ function Build-Report {
                         rxAudioLevelerAppliedGainDb = $runtimeLevelerAppliedGainDbNumber
                         rxAudioLevelerPauseHoldBlocks = $runtimeLevelerPauseHoldBlocksNumber
                         rxAudioLevelerNr5SpeechHoldBlocks = $runtimeLevelerNr5SpeechHoldBlocksNumber
+                        rxAudioLevelerNr5SpeechHangoverBlocks = $runtimeLevelerNr5SpeechHangoverBlocksNumber
                         nr5AudioInputDeltaDb = $nr5AudioInputDeltaDb
                         nr5AudioAlignmentMismatch = $nr5AudioAlignmentMismatch
                     }) | Out-Null
@@ -2344,6 +2348,7 @@ function Build-Report {
                         rxAudioLevelerAppliedGainDb = $runtimeLevelerAppliedGainDbNumber
                         rxAudioLevelerPauseHoldBlocks = $runtimeLevelerPauseHoldBlocksNumber
                         rxAudioLevelerNr5SpeechHoldBlocks = $runtimeLevelerNr5SpeechHoldBlocksNumber
+                        rxAudioLevelerNr5SpeechHangoverBlocks = $runtimeLevelerNr5SpeechHangoverBlocksNumber
                         nr5AudioInputDeltaDb = $nr5AudioInputDeltaDb
                         nr5AudioAlignmentMismatch = $nr5AudioAlignmentMismatch
                     }) | Out-Null
@@ -2705,6 +2710,7 @@ function Build-Report {
             $rxAudioLevelerOutputLimitSampleCount = Get-JsonValue $runtime "rxAudioLevelerOutputLimitSampleCount"
             $rxAudioLevelerPauseHoldBlocks = Get-JsonValue $runtime "rxAudioLevelerPauseHoldBlocks"
             $rxAudioLevelerNr5SpeechHoldBlocks = Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHoldBlocks"
+            $rxAudioLevelerNr5SpeechHangoverBlocks = Get-JsonValue $runtime "rxAudioLevelerNr5SpeechHangoverBlocks"
             $rxAudioLevelerNr5HybridSpeechPrior = Get-JsonValue $runtime "rxAudioLevelerNr5HybridSpeechPrior"
             $rxAudioLevelerNr5NoSignalNoisePrior = Get-JsonValue $runtime "rxAudioLevelerNr5NoSignalNoisePrior"
             $rxAudioLevelerNr5NoiseProfilePrior = Get-JsonValue $runtime "rxAudioLevelerNr5NoiseProfilePrior"
@@ -2722,6 +2728,7 @@ function Build-Report {
             Add-Number $rxAudioLevelerOutputLimitSampleCountValues $rxAudioLevelerOutputLimitSampleCount
             Add-Number $rxAudioLevelerPauseHoldBlockValues $rxAudioLevelerPauseHoldBlocks
             Add-Number $rxAudioLevelerNr5SpeechHoldBlockValues $rxAudioLevelerNr5SpeechHoldBlocks
+            Add-Number $rxAudioLevelerNr5SpeechHangoverBlockValues $rxAudioLevelerNr5SpeechHangoverBlocks
             Add-Number $rxAudioLevelerNr5HybridSpeechPriorValues $rxAudioLevelerNr5HybridSpeechPrior
             Add-Number $rxAudioLevelerNr5NoSignalNoisePriorValues $rxAudioLevelerNr5NoSignalNoisePrior
             Add-Number $rxAudioLevelerNr5NoiseProfilePriorValues $rxAudioLevelerNr5NoiseProfilePrior
@@ -2773,6 +2780,7 @@ function Build-Report {
                     outputLimitSampleCount = Get-NumericValue $rxAudioLevelerOutputLimitSampleCount
                     pauseHoldBlocks = Get-NumericValue $rxAudioLevelerPauseHoldBlocks
                     nr5SpeechHoldBlocks = Get-NumericValue $rxAudioLevelerNr5SpeechHoldBlocks
+                    nr5SpeechHangoverBlocks = Get-NumericValue $rxAudioLevelerNr5SpeechHangoverBlocks
                     nr5HybridSpeechPrior = Get-NumericValue $rxAudioLevelerNr5HybridSpeechPrior
                     nr5NoSignalNoisePrior = Get-NumericValue $rxAudioLevelerNr5NoSignalNoisePrior
                     nr5NoiseProfilePrior = Get-NumericValue $rxAudioLevelerNr5NoiseProfilePrior
@@ -2800,6 +2808,8 @@ function Build-Report {
                     outputRmsDbfs = Get-NumericValue $rxAudioLevelerOutputRmsDbfs
                     desiredGainDb = Get-NumericValue $rxAudioLevelerDesiredGainDb
                     appliedGainDb = Get-NumericValue $rxAudioLevelerAppliedGainDb
+                    nr5SpeechHoldBlocks = Get-NumericValue $rxAudioLevelerNr5SpeechHoldBlocks
+                    nr5SpeechHangoverBlocks = Get-NumericValue $rxAudioLevelerNr5SpeechHangoverBlocks
                     nr5HybridSpeechPrior = Get-NumericValue $rxAudioLevelerNr5HybridSpeechPrior
                     nr5NoSignalNoisePrior = Get-NumericValue $rxAudioLevelerNr5NoSignalNoisePrior
                     nr5NoiseProfilePrior = Get-NumericValue $rxAudioLevelerNr5NoiseProfilePrior
@@ -2822,6 +2832,8 @@ function Build-Report {
                     outputRmsDbfs = Get-NumericValue $rxAudioLevelerOutputRmsDbfs
                     desiredGainDb = Get-NumericValue $rxAudioLevelerDesiredGainDb
                     appliedGainDb = Get-NumericValue $rxAudioLevelerAppliedGainDb
+                    nr5SpeechHoldBlocks = Get-NumericValue $rxAudioLevelerNr5SpeechHoldBlocks
+                    nr5SpeechHangoverBlocks = Get-NumericValue $rxAudioLevelerNr5SpeechHangoverBlocks
                     nr5HybridSpeechPrior = Get-NumericValue $rxAudioLevelerNr5HybridSpeechPrior
                     nr5NoSignalNoisePrior = Get-NumericValue $rxAudioLevelerNr5NoSignalNoisePrior
                     nr5NoiseProfilePrior = Get-NumericValue $rxAudioLevelerNr5NoiseProfilePrior
@@ -2905,6 +2917,7 @@ function Build-Report {
     $rxAudioLevelerOutputLimitSampleCountStats = Get-NumberStats $rxAudioLevelerOutputLimitSampleCountValues
     $rxAudioLevelerPauseHoldBlockStats = Get-NumberStats $rxAudioLevelerPauseHoldBlockValues
     $rxAudioLevelerNr5SpeechHoldBlockStats = Get-NumberStats $rxAudioLevelerNr5SpeechHoldBlockValues
+    $rxAudioLevelerNr5SpeechHangoverBlockStats = Get-NumberStats $rxAudioLevelerNr5SpeechHangoverBlockValues
     $rxAudioLevelerNr5HybridSpeechPriorStats = Get-NumberStats $rxAudioLevelerNr5HybridSpeechPriorValues
     $rxAudioLevelerNr5NoSignalNoisePriorStats = Get-NumberStats $rxAudioLevelerNr5NoSignalNoisePriorValues
     $rxAudioLevelerNr5NoiseProfilePriorStats = Get-NumberStats $rxAudioLevelerNr5NoiseProfilePriorValues
@@ -4315,6 +4328,7 @@ function Build-Report {
         rxAudioLevelerOutputLimitSampleCount = $rxAudioLevelerOutputLimitSampleCountStats
         rxAudioLevelerPauseHoldBlocks = $rxAudioLevelerPauseHoldBlockStats
         rxAudioLevelerNr5SpeechHoldBlocks = $rxAudioLevelerNr5SpeechHoldBlockStats
+        rxAudioLevelerNr5SpeechHangoverBlocks = $rxAudioLevelerNr5SpeechHangoverBlockStats
         rxAudioLevelerNr5HybridSpeechPrior = $rxAudioLevelerNr5HybridSpeechPriorStats
         rxAudioLevelerNr5NoSignalNoisePrior = $rxAudioLevelerNr5NoSignalNoisePriorStats
         rxAudioLevelerNr5NoiseProfilePrior = $rxAudioLevelerNr5NoiseProfilePriorStats
@@ -4331,6 +4345,7 @@ function Build-Report {
             nr5RmNoiseGateDisabledSampleCount = $rxAudioLevelerNr5RmNoiseGateDisabledCount
             nr5RmNoiseGateSampleCount = $rxAudioLevelerNr5RmNoiseGateCount
             nr5HybridSpeechPrior = $rxAudioLevelerNr5HybridSpeechPriorStats
+            nr5SpeechHangoverBlocks = $rxAudioLevelerNr5SpeechHangoverBlockStats
             nr5NoSignalNoisePrior = $rxAudioLevelerNr5NoSignalNoisePriorStats
             nr5NoiseProfilePrior = $rxAudioLevelerNr5NoiseProfilePriorStats
             nr5RmNoiseSuppressionDb = $rxAudioLevelerNr5RmNoiseSuppressionStats
