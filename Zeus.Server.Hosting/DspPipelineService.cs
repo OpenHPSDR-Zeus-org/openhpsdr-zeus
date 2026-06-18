@@ -321,7 +321,7 @@ public class DspPipelineService : BackgroundService,
         string? value = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE")
             ?? Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
         if (string.IsNullOrWhiteSpace(value))
-            return false;
+            return true;
         return !(string.Equals(value, "0", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) ||
             string.Equals(value, "off", StringComparison.OrdinalIgnoreCase) ||
@@ -6002,6 +6002,7 @@ public class DspPipelineService : BackgroundService,
             RxAudioLevelerNr5NoSignalNoiseCap: levelerValid ? levelerNr5NoSignalNoiseCap : null,
             RxAudioLevelerNr5FarPeakNoiseCap: levelerValid ? levelerNr5FarPeakNoiseCap : null,
             RxAudioLevelerNr5NoProofNoiseCap: levelerValid ? levelerNr5NoProofNoiseCap : null,
+            RxAudioLevelerNr5RmNoiseGateEnabled: levelerValid ? IsNr5RmNoiseGateEnabled() : null,
             RxAudioLevelerNr5RmNoiseGate: levelerValid ? levelerNr5RmNoiseGate : null,
             RxAudioLevelerNr5RmNoiseGateHoldBlocks: levelerValid ? Math.Max(0, levelerNr5RmNoiseGateHoldBlocks) : null,
             RxAudioLevelerNr5RmNoiseSuppressionDb: RoundLevelerDb(levelerValid, levelerNr5RmNoiseSuppressionDb),
@@ -9202,6 +9203,7 @@ internal sealed record AudioPathDiagnosticsDto(
     bool? RxAudioLevelerNr5NoSignalNoiseCap,
     bool? RxAudioLevelerNr5FarPeakNoiseCap,
     bool? RxAudioLevelerNr5NoProofNoiseCap,
+    bool? RxAudioLevelerNr5RmNoiseGateEnabled,
     bool? RxAudioLevelerNr5RmNoiseGate,
     int? RxAudioLevelerNr5RmNoiseGateHoldBlocks,
     double? RxAudioLevelerNr5RmNoiseSuppressionDb,

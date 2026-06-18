@@ -4514,7 +4514,7 @@ public sealed class DspPipelineAudioSanitizerTests
     }
 
     [Fact]
-    public void ApplyRxAudioLeveler_RmNoiseGateIsDefaultOff()
+    public void ApplyRxAudioLeveler_RmNoiseGateIsDefaultOn()
     {
         string? previous = Environment.GetEnvironmentVariable("ZEUS_NR5_RMNOISE_GATE");
         string? previousExperimental = Environment.GetEnvironmentVariable("ZEUS_EXPERIMENTAL_NR5_RMNOISE_GATE");
@@ -4527,11 +4527,12 @@ public sealed class DspPipelineAudioSanitizerTests
 
             DspPipelineService.ApplyRxAudioLeveler(block, ref state, StableNoSignalRmNoiseDiagnostics());
 
-            Assert.False(state.Nr5RmNoiseGate);
-            Assert.True(double.IsNaN(state.Nr5RmNoiseSuppressionDb));
+            Assert.True(state.Nr5RmNoiseGate);
+            Assert.InRange(state.Nr5RmNoiseSuppressionDb, 12.0, 80.0);
             Assert.True(state.Nr5NoSignalNoiseCap);
             Assert.True(state.Nr5NoProofNoiseCap);
-            Assert.True(state.OutputRmsDbfs > -50.0);
+            Assert.True(state.DesiredGainDb <= -14.0);
+            Assert.True(state.OutputRmsDbfs <= -50.0);
         }
         finally
         {
