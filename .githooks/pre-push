@@ -53,9 +53,14 @@ contains_ai_identity() {
 
 commit_has_forbidden_message() {
   message_commit=$1
+  message_scope=${2:-all}
   while IFS= read -r line || [ -n "$line" ]
   do
-    if contains_old_identity "$line" || contains_ai_identity "$line"; then
+    if contains_old_identity "$line"; then
+      return 0
+    fi
+
+    if [ "$message_scope" = "expected" ] && contains_ai_identity "$line"; then
       return 0
     fi
   done <<EOF
@@ -98,25 +103,12 @@ do
       failed=1
     fi
 
-    if ! is_expected_identity "$author_ident"; then
-      echo "Refusing push: commit $commit has unexpected author identity:" >&2
-      echo "  $author_ident" >&2
-      echo "Expected one of:" >&2
-      echo "  $expected_primary" >&2
-      echo "  $expected_handle" >&2
-      failed=1
+    message_scope=all
+    if is_expected_identity "$author_ident" && is_expected_identity "$committer_ident"; then
+      message_scope=expected
     fi
 
-    if ! is_expected_identity "$committer_ident"; then
-      echo "Refusing push: commit $commit has unexpected committer identity:" >&2
-      echo "  $committer_ident" >&2
-      echo "Expected one of:" >&2
-      echo "  $expected_primary" >&2
-      echo "  $expected_handle" >&2
-      failed=1
-    fi
-
-    if commit_has_forbidden_message "$commit"; then
+    if commit_has_forbidden_message "$commit" "$message_scope"; then
       echo "Refusing push: commit $commit contains forbidden attribution text." >&2
       failed=1
     fi
@@ -124,6 +116,6 @@ do
 done
 
 if [ "$failed" -ne 0 ]; then
-  echo "Rewrite those commits to Christian Suarez (N9WAR) <christiantsuarez@gmail.com> before pushing." >&2
+  echo "Rewrite commits with old attribution to Christian Suarez (N9WAR) <christiantsuarez@gmail.com> before pushing." >&2
   exit 1
 fi
