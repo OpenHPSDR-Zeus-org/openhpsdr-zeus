@@ -1,21 +1,9 @@
 #!/bin/sh
 set -eu
 
-expected="Christian Suarez (N9WAR) <christiantsuarez@gmail.com>"
 zero="0000000000000000000000000000000000000000"
 failed=0
 cr=$(printf '\r')
-
-is_expected_identity() {
-  case "$1" in
-    *"christiantsuarez@gmail.com"*|*"iamexemplar"*)
-      return 0
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
 
 reject_old_identity() {
   case "$1" in
@@ -49,30 +37,9 @@ do
     echo "$idents" >&2
     failed=1
   fi
-
-  while IFS="$(printf '\t')" read -r commit author committer
-  do
-    [ -z "$commit" ] && continue
-
-    if ! is_expected_identity "$author"; then
-      echo "Refusing push: commit has unexpected author identity." >&2
-      echo "  $commit $author" >&2
-      echo "Expected $expected or iamexemplar." >&2
-      failed=1
-    fi
-
-    if ! is_expected_identity "$committer"; then
-      echo "Refusing push: commit has unexpected committer identity." >&2
-      echo "  $commit $committer" >&2
-      echo "Expected $expected or iamexemplar." >&2
-      failed=1
-    fi
-  done <<EOF
-$idents
-EOF
 done
 
 if [ "$failed" -ne 0 ]; then
-  echo "Rewrite those commits to $expected before pushing." >&2
+  echo "Rewrite those commits to Christian Suarez (N9WAR) <christiantsuarez@gmail.com> before pushing." >&2
   exit 1
 fi
