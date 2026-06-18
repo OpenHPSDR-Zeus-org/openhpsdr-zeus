@@ -2281,6 +2281,54 @@ public sealed class DspPipelineAudioSanitizerTests
     }
 
     [Fact]
+    public void ApplyRxAudioLeveler_CarriesNoNrSpeechIntoNr5WarmupBlackout()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState();
+        float[] block = new float[1024];
+
+        Array.Fill(block, DbToLinear(-8.0));
+        DspPipelineService.ApplyRxAudioLeveler(block, ref state);
+
+        Assert.InRange(state.OutputRmsDbfs, -19.0, -17.0);
+        Assert.True(state.GainDb < -6.0);
+        Assert.True(state.RecentNonNrSpeechBlocks > 0);
+
+        Array.Fill(block, DbToLinear(-43.2));
+        block[0] = DbToLinear(-39.0);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.181,
+            signalProbability: 0.052,
+            agcGate: 0.0,
+            recoveryDrive: 0.0,
+            weakSignalMemory: 0.0,
+            outputDbfs: -68.0,
+            inputDbfs: -28.4,
+            maskSmoothing: 0.0,
+            peakEvidence: 0.0,
+            outputPeakDbfs: -55.0,
+            adjacentNoiseTrust: 0.0,
+            adjacentNoiseDrive: 0.0,
+            adjacentNoiseUsable: true,
+            levelDrive: 0.0);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: -187, snrDb: 42.7, dbfs: -33.6, confidence: 0.940),
+            filterLowHz: -3_106,
+            filterHighHz: 0);
+
+        Assert.True(
+            state.AppliedGainDb >= 20.0,
+            $"desired={state.DesiredGainDb:F2}, applied={state.AppliedGainDb:F2}, output={state.OutputRmsDbfs:F1}, carry={state.RecentNonNrSpeechBlocks}");
+        Assert.InRange(state.OutputRmsDbfs, -23.5, -17.0);
+        Assert.True(state.Nr5SpeechHoldBlocks > 0);
+        Assert.True(state.Nr5SpeechHangoverBlocks > 0);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
     public void ApplyRxAudioLeveler_DoesNotLiftNr5WarmupBlackoutWithoutPassbandProof()
     {
         var state = new DspPipelineService.RxAudioLevelerState
