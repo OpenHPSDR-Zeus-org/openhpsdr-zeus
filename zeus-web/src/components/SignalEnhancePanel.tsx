@@ -13,7 +13,7 @@
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
 //
-// Display-tab surface for the signal-enhance engine (Christian Suarez N9WAR's
+// Display-tab surface for the signal-enhance engine (Christian Suarez (N9WAR)'s
 // pop / snap / peak-marker work, commit 8d949e2e). Only **Signal Pop** is
 // exposed: it toggles `popEnabled` on the same store the GL pop-remap reads.
 //

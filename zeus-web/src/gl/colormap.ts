@@ -110,7 +110,7 @@ const VIRIDIS_ANCHORS: Anchor[] = [
   [1.0, [253, 231, 37]],
 ];
 
-// Signal Pop palette — N9WAR's (Christiano) retune from his rx2 engine: the
+// Signal Pop palette — Christian Suarez (N9WAR)'s retune from his rx2 engine: the
 // four lower anchors sit lower than develop's, so weak signals and floor
 // structure light up earlier, giving the 3D relief more to shade. Adopted with
 // the new waterfall engine (PR #655); this intentionally diverges from
