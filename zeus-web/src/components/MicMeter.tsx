@@ -47,6 +47,7 @@ import { useTxStore } from '../state/tx-store';
 import { useMicPeakStore } from '../audio/mic-peak-store';
 import { useCapabilitiesStore } from '../state/capabilities-store';
 import { useBallisticReading } from './meters/useBallisticReading';
+import { BloomFill, BloomFilter, PeakTick } from './meters/render/svgChrome';
 
 // Pre-TX mic level indicator. The worklet measures peak dBFS on the raw
 // browser capture *before* any gain; the server then applies
@@ -152,7 +153,7 @@ export function MicMeter() {
       title={hint}
     >
       <span className="label-xs">MIC</span>
-      <div className="meter-bar" style={{ flex: 1, height: 8 }}>
+      <div className="meter-bar meter-bar--lit" style={{ flex: 1, height: 8 }}>
         {/* Permanent red zone on the last 3 dB — always visible so peaks
             have a "target just below" reference, same as Thetis. */}
         <div
@@ -163,24 +164,62 @@ export function MicMeter() {
             bottom: 0,
             left: `${RED_ZONE_START * 100}%`,
             right: 0,
-            background: 'rgba(255,64,64,0.14)',
+            background: 'var(--tx-soft)',
           }}
         />
-        <div
-          className="meter-fill"
-          style={{
-            width: `${fraction * 100}%`,
-            background: clipping
-              ? 'linear-gradient(90deg, var(--power), var(--tx))'
-              : 'linear-gradient(90deg, #2e7a2e, var(--accent))',
-          }}
-        />
-        {/* Peak-hold marker, matches .meter-peak style */}
-        <div
+        {/* Bloom-behind-crisp fill — a blurred copy of the colored bar under
+            the crisp clip, giving the lit-trace halo that matches the
+            immersive gauges. preserveAspectRatio="none" stretches the SVG to
+            the bar; the bloom filter region is widened vertically to bleed. */}
+        <svg
           aria-hidden
-          className="meter-peak"
-          style={{ left: `${peak * 100}%` }}
-        />
+          viewBox="0 0 100 10"
+          preserveAspectRatio="none"
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', display: 'block' }}
+        >
+          <defs>
+            <BloomFilter id="micmeter-blur" region={['-2%', '-60%', '104%', '220%']} />
+            <linearGradient id="micmeter-fill" x1="0" y1="0" x2="100" y2="0" gradientUnits="userSpaceOnUse">
+              {clipping ? (
+                <>
+                  <stop offset="0" stopColor="var(--power)" />
+                  <stop offset="1" stopColor="var(--tx)" />
+                </>
+              ) : (
+                <>
+                  <stop offset="0" stopColor="var(--ok)" />
+                  <stop offset="1" stopColor="var(--accent)" />
+                </>
+              )}
+            </linearGradient>
+            <linearGradient id="micmeter-glass" x1="0" y1="0" x2="0" y2="10" gradientUnits="userSpaceOnUse">
+              <stop offset="0" stopColor="var(--meter-glass-top)" />
+              <stop offset="1" stopColor="var(--meter-glass-bot)" />
+            </linearGradient>
+          </defs>
+          {fraction > 0 && (
+            <BloomFill
+              shape={{ kind: 'rect', x: 0, y: 0, width: fraction * 100, height: 10 }}
+              fill="url(#micmeter-fill)"
+              filterId="micmeter-blur"
+            />
+          )}
+          {/* faint top-to-bottom glass sheen over the fill */}
+          {fraction > 0 && (
+            <rect x={0} y={0} width={fraction * 100} height={4} fill="url(#micmeter-glass)" />
+          )}
+          {/* Peak-hold marker — glowing tick. */}
+          <PeakTick
+            x1={peak * 100}
+            y1={-1}
+            x2={peak * 100}
+            y2={11}
+            stroke="#fff"
+            strokeWidth={1.5}
+            opacity={0.85}
+            nonScaling
+          />
+        </svg>
       </div>
       <span
         className="mono"

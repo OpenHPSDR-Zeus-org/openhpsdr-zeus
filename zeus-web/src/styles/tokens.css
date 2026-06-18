@@ -127,6 +127,79 @@
   --immersive-tx:        #ef6b54;
   --immersive-tx-glow:   rgba(239,107,84,0.45);
 
+  /* ----- High-end meter render surfaces (presentation-only) -----
+     Glow / glass / specular surfaces for the shared SVG meter render kit
+     (components/meters/render). These encode the "bloom-behind-crisp +
+     warm-lamp + glowing-peak" idiom so the flat DOM meters (SMeter,
+     MicMeter, TxStageMeters) and the analog dial read as the same lit
+     instrument cluster as BigArc / VuColumn. No existing token VALUE is
+     changed — palette meaning is preserved; these are new names so no raw
+     hex leaks into the components. Each has a light-theme counterpart in
+     the :root[data-theme="light"] block (the warm blooms must go
+     transparent on the silver chassis, the needle highlight must flip). */
+  /* Faint top-to-bottom glass sheen laid over a bar fill — a domed-glass
+     highlight that fades to nothing across the bar height. */
+  --meter-glass-top: rgba(255,255,255,0.16);
+  --meter-glass-bot: rgba(255,255,255,0.00);
+  /* Soft bloom alpha applied to the blurred under-copy of DOM bar fills,
+     mirroring the SVG BloomFill opacity used by the immersive gauges. */
+  --meter-fill-bloom: 0.85;
+  /* Analog-needle Lambert/specular vocabulary faked in SVG: a thin bright
+     hairline along one blade edge, a shadow on the other. */
+  --needle-spec:    rgba(255,250,220,0.85);
+  --needle-bevel-hi: rgba(255,252,236,0.55);
+  --needle-bevel-lo: rgba(0,0,0,0.42);
+
+  /* ----- DRAMATIC instrument stack (presentation-only) -----
+     The five-layer "lit instrument behind curved glass, machined into a
+     metal chassis" recipe — the SVG/CSS analogue of the WebGL waterfall's
+     upper-left light + Lambert + specular + rim + glow. New names only; NO
+     existing token VALUE changed and palette MEANING is preserved (amber
+     #FFA028 = signal-strength only, --accent = S-meter arc, --tx = needle,
+     --power = output/tip). Each has a light-theme counterpart below. */
+  /* (1) RECESSED METALLIC WELL — concave machined pocket floor → rim. */
+  --meter-well-floor: #07080a;
+  --meter-well-edge:  #1b1d22;
+  /* (2) VOLUMETRIC FILL — vertical cylinder gradient under the hue ramp. */
+  --meter-fill-base:  rgba(0,0,0,0.55);
+  --meter-fill-hot:   rgba(255,255,255,0.42);
+  --meter-fill-glow:  rgba(255,196,96,0.55);
+  /* (3) SPECULAR GLASS — domed highlight ellipse + drifting sheen band. */
+  --meter-glass-dome: rgba(255,255,255,0.28);
+  --meter-sheen:      rgba(255,255,255,0.30);
+  --meter-sheen-soft: rgba(255,255,255,0.10);
+  /* (4) BEVELED METALLIC BEZEL RING — chrome frame, TL light / BR dark. */
+  --meter-bezel-hi:   rgba(255,252,244,0.55);
+  --meter-bezel-lo:   rgba(0,0,0,0.72);
+  --meter-bezel-ring: rgba(255,255,255,0.10);
+  /* whole-gauge additive bloom tint. */
+  --gauge-glow:       rgba(255,176,72,0.16);
+
+  /* ----- COMPACT-BAR instrument variants (presentation-only) -----
+     The five-layer stack tuned for the small/dense TX-stage VU columns and
+     the SWR/PWR arcs. At ~16px column width + 6-up packing the default
+     --meter-* depth cues compress to subtlety, so these *-sm/* arc variants
+     push the glass specular, bezel highlight and fill glow brighter so the
+     instrument tells survive at small size. NEW names only — no existing
+     token VALUE is changed; light-theme counterparts live in the light block
+     below. */
+  /* Brighter domed-glass specular for the thin VU columns. */
+  --meter-glass-dome-sm: rgba(255,255,255,0.40);
+  --meter-sheen-sm:      rgba(255,255,255,0.42);
+  /* Stronger machined-chrome highlight for the small bezel ring. */
+  --meter-bezel-hi-sm:   rgba(255,253,247,0.78);
+  /* Vivid leading-edge glow on the live fill tip of a VU column. */
+  --vu-edge-good:        #6cf0b8;
+  --vu-edge-warn:        #ffd277;
+  --vu-edge-hot:         #ff7d63;
+  /* Soft white-screen lift over the green floor so a quiet bar still glows. */
+  --vu-floor-lift:       rgba(255,255,255,0.10);
+  /* SWR danger-zone band painted under the fill past 2.0:1. */
+  --arc-danger-band:     rgba(239,107,84,0.16);
+  --arc-danger-band-hot: rgba(239,107,84,0.34);
+  /* Recessed arc channel — a deeper inset core inside the track stroke. */
+  --arc-channel-core:    rgba(0,0,0,0.55);
+
   /* Warm "lamp glow" palette — pale-cream / soft-yellow tones used to
      light gauge faces, ticks, labels, needles, and active state pills
      on the immersive meters and the RF2K-S amplifier panel. The signal
@@ -333,6 +406,50 @@ html[data-fonts="geist"] { --font-sans: 'Inter', sans-serif; --font-mono: 'JetBr
      dark-theme white rim vanishes here — see comment in :root). */
   --immersive-arc-track-rim:    rgba(40, 45, 52, 0.18);
   --immersive-arc-track-shadow: rgba(40, 45, 52, 0.42);
+
+  /* High-end meter render surfaces — light-theme counterparts. The warm
+     blooms wash to muddy grey on silver, so the glass sheen stays subtle
+     and the needle highlight flips to a cool steel hairline + darker bevel
+     so it reads on the bright chassis. */
+  --meter-glass-top: rgba(255,255,255,0.45);
+  --meter-glass-bot: rgba(255,255,255,0.00);
+  --meter-fill-bloom: 0.55;
+  --needle-spec:    rgba(255,255,255,0.85);
+  --needle-bevel-hi: rgba(255,255,255,0.65);
+  --needle-bevel-lo: rgba(20, 24, 30, 0.30);
+
+  /* DRAMATIC instrument stack — light-theme counterparts. The wells stay
+     dark (display surfaces are dark even on the silver chassis), but the
+     bezel flips to a brushed-silver edge pair, the glass dome / sheen go
+     brighter white, and the gauge bloom washes nearly transparent so the
+     warm dark-tuned values don't read muddy on silver. */
+  --meter-well-floor: #14171c;
+  --meter-well-edge:  #2c3138;
+  --meter-fill-base:  rgba(0,0,0,0.45);
+  --meter-fill-hot:   rgba(255,255,255,0.55);
+  --meter-fill-glow:  rgba(255,196,96,0.40);
+  --meter-glass-dome: rgba(255,255,255,0.42);
+  --meter-sheen:      rgba(255,255,255,0.45);
+  --meter-sheen-soft: rgba(255,255,255,0.16);
+  --meter-bezel-hi:   rgba(255,255,255,0.85);
+  --meter-bezel-lo:   rgba(60, 66, 74, 0.55);
+  --meter-bezel-ring: rgba(40, 45, 52, 0.22);
+  --gauge-glow:       rgba(255,176,72,0.06);
+
+  /* COMPACT-BAR instrument variants — light-theme counterparts. The VU
+     wells stay dark (display surfaces), so the brighter specular/edge cues
+     carry over; only the bezel highlight cools to a brushed-silver edge and
+     the danger band softens slightly on the bright chassis. */
+  --meter-glass-dome-sm: rgba(255,255,255,0.50);
+  --meter-sheen-sm:      rgba(255,255,255,0.52);
+  --meter-bezel-hi-sm:   rgba(255,255,255,0.92);
+  --vu-edge-good:        #6cf0b8;
+  --vu-edge-warn:        #ffd277;
+  --vu-edge-hot:         #ff7d63;
+  --vu-floor-lift:       rgba(255,255,255,0.12);
+  --arc-danger-band:     rgba(239,107,84,0.14);
+  --arc-danger-band-hot: rgba(239,107,84,0.30);
+  --arc-channel-core:    rgba(0,0,0,0.45);
 }
 
 /* ===========================================================
