@@ -8228,28 +8228,42 @@ public sealed class DspModernizationValidationToolTests
             Assert.True(root.GetProperty("ok").GetBoolean());
             Assert.Equal(JsonValueKind.Null, root.GetProperty("scanError").ValueKind);
             Assert.Equal(1000, root.GetProperty("tuneStepHz").GetInt32());
+            Assert.Equal("LSB", root.GetProperty("frontendPeakRetuneMode").GetString());
+            Assert.Equal(-1500.0, root.GetProperty("frontendPeakRetuneTargetOffsetHz").GetDouble(), precision: 1);
 
             var peakCandidate = Assert.Single(root.GetProperty("peakCandidates").EnumerateArray());
-            Assert.Equal(7_339_000L, peakCandidate.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_341_000L, peakCandidate.GetProperty("frequencyHz").GetInt64());
             Assert.Equal(7_339_125L, peakCandidate.GetProperty("exactFrequencyHz").GetInt64());
-            Assert.Equal(4_000L, peakCandidate.GetProperty("offsetHz").GetInt64());
+            Assert.Equal(6_000L, peakCandidate.GetProperty("offsetHz").GetInt64());
             Assert.Equal(4_125L, peakCandidate.GetProperty("exactOffsetHz").GetInt64());
             Assert.Equal(1000, peakCandidate.GetProperty("tuningStepHz").GetInt32());
-            Assert.Equal(-125L, peakCandidate.GetProperty("tuneSnapDeltaHz").GetInt64());
+            Assert.Equal(375L, peakCandidate.GetProperty("tuneSnapDeltaHz").GetInt64());
+            Assert.Equal(-1500.0, peakCandidate.GetProperty("retuneTargetOffsetHz").GetDouble(), precision: 1);
+            Assert.Equal(7_340_625L, peakCandidate.GetProperty("exactRetuneVfoHz").GetInt64());
+            Assert.Equal(-1_875L, peakCandidate.GetProperty("peakToRetunedVfoOffsetHz").GetInt64());
+            Assert.Equal("retune-to-center-frontend-peak", peakCandidate.GetProperty("retuneReason").GetString());
 
             var retune = Assert.Single(root.GetProperty("retuneAttempts").EnumerateArray());
             Assert.True(retune.GetProperty("ok").GetBoolean());
-            Assert.Equal(7_339_000L, retune.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_341_000L, retune.GetProperty("frequencyHz").GetInt64());
             Assert.Equal(7_339_125L, retune.GetProperty("exactFrequencyHz").GetInt64());
             Assert.Equal(1000, retune.GetProperty("tuneStepHz").GetInt32());
-            Assert.Equal(-125L, retune.GetProperty("tuneSnapDeltaHz").GetInt64());
+            Assert.Equal(375L, retune.GetProperty("tuneSnapDeltaHz").GetInt64());
+            Assert.Equal(-1500.0, retune.GetProperty("retuneTargetOffsetHz").GetDouble(), precision: 1);
+            Assert.Equal(7_340_625L, retune.GetProperty("exactRetuneVfoHz").GetInt64());
+            Assert.Equal(-1_875L, retune.GetProperty("peakToRetunedVfoOffsetHz").GetInt64());
+            Assert.Equal("retune-to-center-frontend-peak", retune.GetProperty("retuneReason").GetString());
 
             var runRecord = Assert.Single(root.GetProperty("runs").EnumerateArray());
-            Assert.Equal(7_339_000L, runRecord.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_341_000L, runRecord.GetProperty("frequencyHz").GetInt64());
             Assert.Equal(7_339_125L, runRecord.GetProperty("exactCandidateFrequencyHz").GetInt64());
             Assert.Equal(4_125L, runRecord.GetProperty("exactCandidateOffsetHz").GetInt64());
             Assert.Equal(1000, runRecord.GetProperty("candidateTuneStepHz").GetInt32());
-            Assert.Equal(-125L, runRecord.GetProperty("candidateTuneSnapDeltaHz").GetInt64());
+            Assert.Equal(375L, runRecord.GetProperty("candidateTuneSnapDeltaHz").GetInt64());
+            Assert.Equal(-1500.0, runRecord.GetProperty("candidateRetuneTargetOffsetHz").GetDouble(), precision: 1);
+            Assert.Equal(7_340_625L, runRecord.GetProperty("candidateExactRetuneVfoHz").GetInt64());
+            Assert.Equal(-1_875L, runRecord.GetProperty("candidatePeakToRetunedVfoOffsetHz").GetInt64());
+            Assert.Equal("retune-to-center-frontend-peak", runRecord.GetProperty("candidateRetuneReason").GetString());
         }
         finally
         {
@@ -8473,11 +8487,15 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(3_000, span.GetProperty("paddingHz").GetInt32());
 
             var peakCandidate = Assert.Single(root.GetProperty("peakCandidates").EnumerateArray());
-            Assert.Equal(7_176_000L, peakCandidate.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_177_000L, peakCandidate.GetProperty("frequencyHz").GetInt64());
             Assert.Equal(7_175_813L, peakCandidate.GetProperty("exactFrequencyHz").GetInt64());
-            Assert.Equal(-159_000L, peakCandidate.GetProperty("offsetHz").GetInt64());
+            Assert.Equal(-158_000L, peakCandidate.GetProperty("offsetHz").GetInt64());
             Assert.Equal(-159_187L, peakCandidate.GetProperty("exactOffsetHz").GetInt64());
-            Assert.Equal(187L, peakCandidate.GetProperty("tuneSnapDeltaHz").GetInt64());
+            Assert.Equal(-313L, peakCandidate.GetProperty("tuneSnapDeltaHz").GetInt64());
+            Assert.Equal(-1500.0, peakCandidate.GetProperty("retuneTargetOffsetHz").GetDouble(), precision: 1);
+            Assert.Equal(7_177_313L, peakCandidate.GetProperty("exactRetuneVfoHz").GetInt64());
+            Assert.Equal(-1_187L, peakCandidate.GetProperty("peakToRetunedVfoOffsetHz").GetInt64());
+            Assert.Equal("retune-to-center-frontend-peak", peakCandidate.GetProperty("retuneReason").GetString());
 
             Assert.Equal(3, root.GetProperty("rejectedPeakCandidateCount").GetInt32());
             var reasonCounts = root.GetProperty("rejectedPeakCandidateReasonCounts");
@@ -8489,7 +8507,7 @@ public sealed class DspModernizationValidationToolTests
             var outOfSpanPeak = Assert.Single(
                 rejectedPeaks,
                 peak => peak.GetProperty("rejectionReason").GetString() == "outside-retune-span-high");
-            Assert.Equal(7_505_000L, outOfSpanPeak.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_506_000L, outOfSpanPeak.GetProperty("frequencyHz").GetInt64());
             Assert.Equal(7_504_875L, outOfSpanPeak.GetProperty("exactFrequencyHz").GetInt64());
             Assert.Equal(7_167_000L, outOfSpanPeak.GetProperty("retuneLowHz").GetInt64());
             Assert.Equal(7_185_000L, outOfSpanPeak.GetProperty("retuneHighHz").GetInt64());
@@ -8498,39 +8516,45 @@ public sealed class DspModernizationValidationToolTests
             var mergedPeak = Assert.Single(
                 rejectedPeaks,
                 peak => peak.GetProperty("rejectionReason").GetString() == "merged-with-selected-peak");
-            Assert.Equal(7_176_000L, mergedPeak.GetProperty("frequencyHz").GetInt64());
-            Assert.Equal(7_176_000L, mergedPeak.GetProperty("mergedWithFrequencyHz").GetInt64());
+            Assert.Equal(7_177_000L, mergedPeak.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_177_000L, mergedPeak.GetProperty("mergedWithFrequencyHz").GetInt64());
             Assert.Equal(0L, mergedPeak.GetProperty("mergeDeltaHz").GetInt64());
             Assert.Equal(1000, mergedPeak.GetProperty("peakMergeHz").GetInt32());
 
             var lowSnrPeak = Assert.Single(
                 rejectedPeaks,
                 peak => peak.GetProperty("rejectionReason").GetString() == "below-min-snr");
-            Assert.Equal(7_180_000L, lowSnrPeak.GetProperty("frequencyHz").GetInt64());
+            Assert.Equal(7_182_000L, lowSnrPeak.GetProperty("frequencyHz").GetInt64());
             Assert.Equal(7_180_125L, lowSnrPeak.GetProperty("exactFrequencyHz").GetInt64());
             Assert.Equal(1.0, lowSnrPeak.GetProperty("minimumSnrDb").GetDouble());
 
             var retunes = root.GetProperty("retuneAttempts").EnumerateArray().ToArray();
-            Assert.DoesNotContain(retunes, retune => retune.GetProperty("frequencyHz").GetInt64() == 7_505_000L);
+            Assert.DoesNotContain(retunes, retune => retune.GetProperty("frequencyHz").GetInt64() == 7_506_000L);
             var frontendRetune = Assert.Single(
                 retunes,
                 retune =>
-                    retune.GetProperty("frequencyHz").GetInt64() == 7_176_000L &&
+                    retune.GetProperty("frequencyHz").GetInt64() == 7_177_000L &&
                     retune.GetProperty("source").GetString() == "frontend-top-peak");
             Assert.True(frontendRetune.GetProperty("ok").GetBoolean());
             Assert.Equal(7_175_813L, frontendRetune.GetProperty("exactFrequencyHz").GetInt64());
-            Assert.Equal(187L, frontendRetune.GetProperty("tuneSnapDeltaHz").GetInt64());
+            Assert.Equal(-313L, frontendRetune.GetProperty("tuneSnapDeltaHz").GetInt64());
+            Assert.Equal(-1500.0, frontendRetune.GetProperty("retuneTargetOffsetHz").GetDouble(), precision: 1);
+            Assert.Equal(7_177_313L, frontendRetune.GetProperty("exactRetuneVfoHz").GetInt64());
+            Assert.Equal(-1_187L, frontendRetune.GetProperty("peakToRetunedVfoOffsetHz").GetInt64());
 
             var runs = root.GetProperty("runs").EnumerateArray().ToArray();
-            Assert.DoesNotContain(runs, run => run.GetProperty("frequencyHz").GetInt64() == 7_505_000L);
+            Assert.DoesNotContain(runs, run => run.GetProperty("frequencyHz").GetInt64() == 7_506_000L);
             var frontendRun = Assert.Single(
                 runs,
                 run =>
-                    run.GetProperty("frequencyHz").GetInt64() == 7_176_000L &&
+                    run.GetProperty("frequencyHz").GetInt64() == 7_177_000L &&
                     run.GetProperty("candidateSource").GetString() == "frontend-top-peak");
             Assert.Equal(7_175_813L, frontendRun.GetProperty("exactCandidateFrequencyHz").GetInt64());
             Assert.Equal(-159_187L, frontendRun.GetProperty("exactCandidateOffsetHz").GetInt64());
-            Assert.Equal(187L, frontendRun.GetProperty("candidateTuneSnapDeltaHz").GetInt64());
+            Assert.Equal(-313L, frontendRun.GetProperty("candidateTuneSnapDeltaHz").GetInt64());
+            Assert.Equal(-1500.0, frontendRun.GetProperty("candidateRetuneTargetOffsetHz").GetDouble(), precision: 1);
+            Assert.Equal(7_177_313L, frontendRun.GetProperty("candidateExactRetuneVfoHz").GetInt64());
+            Assert.Equal(-1_187L, frontendRun.GetProperty("candidatePeakToRetunedVfoOffsetHz").GetInt64());
         }
         finally
         {

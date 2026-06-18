@@ -347,6 +347,27 @@ function Quantize-HzToStep {
     return [long]([Math]::Round($Hz / [double]$step) * [double]$step)
 }
 
+function Get-FrontendPeakRetuneTargetOffsetHz {
+    param(
+        [string]$Mode = "",
+        $FilterLowHz = $null,
+        $FilterHighHz = $null
+    )
+
+    $low = Get-NullableDoubleValue $FilterLowHz
+    $high = Get-NullableDoubleValue $FilterHighHz
+    if ($null -ne $low -and $null -ne $high -and [Math]::Abs([double]$high - [double]$low) -gt 1.0) {
+        return [Math]::Round(([double]$low + [double]$high) / 2.0, 1)
+    }
+
+    $normalizedMode = ([string]$Mode).Trim().ToUpperInvariant()
+    switch ($normalizedMode) {
+        { $_ -in @("LSB", "DIGL") } { return -1500.0 }
+        { $_ -in @("USB", "DIGU") } { return 1500.0 }
+        default { return 0.0 }
+    }
+}
+
 function Normalize-PeakRetunePaddingHz {
     param($Value)
 
@@ -713,7 +734,8 @@ function ConvertTo-PeakCandidate {
         [int]$Rank,
         [string]$Source,
         [long]$OriginalVfo = 0,
-        [int]$StepHz = 1000
+        [int]$StepHz = 1000,
+        [double]$RetuneTargetOffsetHz = 0.0
     )
 
     $exactFrequencyHz = Get-NullableLongValue (Get-JsonValue $Peak "frequencyHz")
@@ -722,9 +744,14 @@ function ConvertTo-PeakCandidate {
     }
 
     $effectiveStepHz = Normalize-TuneStepHz $StepHz
-    $frequencyHz = Quantize-HzToStep -Hz ([double]$exactFrequencyHz) -StepHz $effectiveStepHz
+    $exactRetuneVfoHz = [long][Math]::Round([double]$exactFrequencyHz - [double]$RetuneTargetOffsetHz)
+    if ($exactRetuneVfoHz -le 0) {
+        $exactRetuneVfoHz = [long]$exactFrequencyHz
+    }
+
+    $frequencyHz = Quantize-HzToStep -Hz ([double]$exactRetuneVfoHz) -StepHz $effectiveStepHz
     if ($frequencyHz -le 0) {
-        $frequencyHz = [long]$exactFrequencyHz
+        $frequencyHz = [long]$exactRetuneVfoHz
     }
 
     $exactOffsetHz = Get-NullableLongValue (Get-JsonValue $Peak "offsetHz")
@@ -748,7 +775,11 @@ function ConvertTo-PeakCandidate {
         offsetHz = $offsetHz
         exactOffsetHz = $exactOffsetHz
         tuningStepHz = $effectiveStepHz
-        tuneSnapDeltaHz = [long]$frequencyHz - [long]$exactFrequencyHz
+        tuneSnapDeltaHz = [long]$frequencyHz - [long]$exactRetuneVfoHz
+        retuneTargetOffsetHz = [Math]::Round([double]$RetuneTargetOffsetHz, 1)
+        exactRetuneVfoHz = [long]$exactRetuneVfoHz
+        peakToRetunedVfoOffsetHz = [long]$exactFrequencyHz - [long]$frequencyHz
+        retuneReason = if ([Math]::Abs([double]$RetuneTargetOffsetHz) -gt 0.1) { "retune-to-center-frontend-peak" } else { "retune-to-exact-frontend-peak" }
         snrDb = Get-NullableDoubleValue (Get-JsonValue $Peak "snrDb")
         dbfs = Get-NullableDoubleValue (Get-JsonValue $Peak "dbfs")
         confidence = Get-NullableDoubleValue (Get-JsonValue $Peak "confidence")
@@ -782,6 +813,10 @@ function Copy-RejectedPeakCandidate {
         exactOffsetHz = Get-NullableLongValue (Get-JsonValue $Candidate "exactOffsetHz")
         tuningStepHz = Get-IntValue (Get-JsonValue $Candidate "tuningStepHz")
         tuneSnapDeltaHz = Get-NullableLongValue (Get-JsonValue $Candidate "tuneSnapDeltaHz")
+        retuneTargetOffsetHz = Get-NullableDoubleValue (Get-JsonValue $Candidate "retuneTargetOffsetHz")
+        exactRetuneVfoHz = Get-NullableLongValue (Get-JsonValue $Candidate "exactRetuneVfoHz")
+        peakToRetunedVfoOffsetHz = Get-NullableLongValue (Get-JsonValue $Candidate "peakToRetunedVfoOffsetHz")
+        retuneReason = [string](Get-JsonValue $Candidate "retuneReason")
         snrDb = Get-NullableDoubleValue (Get-JsonValue $Candidate "snrDb")
         dbfs = Get-NullableDoubleValue (Get-JsonValue $Candidate "dbfs")
         confidence = Get-NullableDoubleValue (Get-JsonValue $Candidate "confidence")
@@ -809,6 +844,7 @@ function Select-PeakCandidates {
         $RetuneLowHz = $null,
         $RetuneHighHz = $null,
         [string]$RetuneSpanSource = "",
+        [double]$RetuneTargetOffsetHz = 0.0,
         [System.Collections.Generic.List[object]]$RejectedCandidates = $null
     )
 
@@ -820,7 +856,7 @@ function Select-PeakCandidates {
     $rank = 0
     foreach ($peak in @($Peaks | Sort-Object @{ Expression = { Get-NullableDoubleValue (Get-JsonValue $_ "snrDb") }; Descending = $true })) {
         $rank++
-        $candidate = ConvertTo-PeakCandidate -Peak $peak -Rank $rank -Source "frontend-top-peak" -OriginalVfo $OriginalVfo -StepHz $StepHz
+        $candidate = ConvertTo-PeakCandidate -Peak $peak -Rank $rank -Source "frontend-top-peak" -OriginalVfo $OriginalVfo -StepHz $StepHz -RetuneTargetOffsetHz $RetuneTargetOffsetHz
         if ($null -eq $candidate) {
             continue
         }
@@ -1363,6 +1399,10 @@ function Copy-PeakCandidateForPass {
         exactOffsetHz = Get-NullableLongValue (Get-JsonValue $Candidate "exactOffsetHz")
         tuningStepHz = Get-IntValue (Get-JsonValue $Candidate "tuningStepHz")
         tuneSnapDeltaHz = Get-NullableLongValue (Get-JsonValue $Candidate "tuneSnapDeltaHz")
+        retuneTargetOffsetHz = Get-NullableDoubleValue (Get-JsonValue $Candidate "retuneTargetOffsetHz")
+        exactRetuneVfoHz = Get-NullableLongValue (Get-JsonValue $Candidate "exactRetuneVfoHz")
+        peakToRetunedVfoOffsetHz = Get-NullableLongValue (Get-JsonValue $Candidate "peakToRetunedVfoOffsetHz")
+        retuneReason = [string](Get-JsonValue $Candidate "retuneReason")
         snrDb = Get-NullableDoubleValue (Get-JsonValue $Candidate "snrDb")
         dbfs = Get-NullableDoubleValue (Get-JsonValue $Candidate "dbfs")
         confidence = Get-NullableDoubleValue (Get-JsonValue $Candidate "confidence")
@@ -1390,6 +1430,10 @@ function Copy-RejectedPeakCandidateForPass {
         exactOffsetHz = Get-NullableLongValue (Get-JsonValue $Candidate "exactOffsetHz")
         tuningStepHz = Get-IntValue (Get-JsonValue $Candidate "tuningStepHz")
         tuneSnapDeltaHz = Get-NullableLongValue (Get-JsonValue $Candidate "tuneSnapDeltaHz")
+        retuneTargetOffsetHz = Get-NullableDoubleValue (Get-JsonValue $Candidate "retuneTargetOffsetHz")
+        exactRetuneVfoHz = Get-NullableLongValue (Get-JsonValue $Candidate "exactRetuneVfoHz")
+        peakToRetunedVfoOffsetHz = Get-NullableLongValue (Get-JsonValue $Candidate "peakToRetunedVfoOffsetHz")
+        retuneReason = [string](Get-JsonValue $Candidate "retuneReason")
         snrDb = Get-NullableDoubleValue (Get-JsonValue $Candidate "snrDb")
         dbfs = Get-NullableDoubleValue (Get-JsonValue $Candidate "dbfs")
         confidence = Get-NullableDoubleValue (Get-JsonValue $Candidate "confidence")
@@ -1515,6 +1559,10 @@ $baseUrlAutoDiscovered = [bool]$baseResolution.autoDiscovered
 $baseUrlAutoDiscoverError = [string]$baseResolution.autoDiscoverError
 $baseUrlProbeResults = @($baseResolution.probeResults)
 $targetMode = $Mode.Trim().ToUpperInvariant()
+$frontendPeakRetuneMode = if ([string]::IsNullOrWhiteSpace($targetMode)) { "" } else { $targetMode }
+$frontendPeakRetuneFilterLowHz = $null
+$frontendPeakRetuneFilterHighHz = $null
+$frontendPeakRetuneTargetOffsetHz = Get-FrontendPeakRetuneTargetOffsetHz -Mode $frontendPeakRetuneMode
 $effectiveTuneStepHz = Normalize-TuneStepHz $TuneStepHz
 $effectivePeakRetunePaddingHz = Normalize-PeakRetunePaddingHz $PeakRetunePaddingHz
 if ([string]::IsNullOrWhiteSpace($AutoPhoneClusterSearchRoot)) {
@@ -1585,6 +1633,8 @@ if ($PlanOnly) {
         passCount = $PassCount
         passDelaySec = $PassDelaySec
         tuneStepHz = $effectiveTuneStepHz
+        frontendPeakRetuneMode = if ([string]::IsNullOrWhiteSpace($frontendPeakRetuneMode)) { $null } else { $frontendPeakRetuneMode }
+        frontendPeakRetuneTargetOffsetHz = $frontendPeakRetuneTargetOffsetHz
         peakRetuneSpan = $peakRetuneSpanForPlan
         candidateFrequencyHz = @($operatorCandidateFrequencyHzForPlan)
         operatorTrendMaxCandidates = $OperatorTrendMaxCandidates
@@ -1617,7 +1667,7 @@ if ($PlanOnly) {
             notes = @(
                 "Without -AllowRetune the tool only captures the current VFO and lists candidate frontend peaks/operator frequencies.",
                 "With -AllowRetune the tool posts only RX tuning endpoints, waits for RX settling, delegates evidence capture to watch-dsp-live-diagnostics, then restores the original VFO and radio LO in a verified finally block.",
-                "Frontend peak retunes are snapped to -TuneStepHz; exact FFT-bin targets remain in exactFrequencyHz and tuneSnapDeltaHz fields.",
+                "Frontend peak retunes are passband-centered for LSB/USB when mode/filter data is available, then snapped to -TuneStepHz; exact FFT-bin targets remain in exactFrequencyHz, exactRetuneVfoHz, peakToRetunedVfoOffsetHz, and tuneSnapDeltaHz fields.",
                 "Frontend peak retunes are bounded by -PeakRetuneLowHz/-PeakRetuneHighHz when supplied, otherwise by the candidate-frequency span plus -PeakRetunePaddingHz when operator/cluster candidates exist.",
                 "The tool does not approve DSP default changes; it only hunts for the missing G2 mixed weak+strong NR5/SPNR evidence window."
             )
@@ -1668,6 +1718,22 @@ try {
         Invoke-JsonPost -Url "$base/api/mode" -Body @{ mode = $targetMode; receiver = 0 } -RequestTimeoutSec $TimeoutSec -SkipCertificate:$SkipCertificateCheck | Out-Null
         Start-Sleep -Milliseconds ([Math]::Min(1000, [Math]::Max(0, $SettleMs)))
     }
+
+    $retuneReferenceState = $initialState
+    try {
+        $retuneReferenceState = Invoke-JsonGet -Url "$base/api/state" -RequestTimeoutSec $TimeoutSec -SkipCertificate:$SkipCertificateCheck
+    }
+    catch {
+        $retuneReferenceState = $initialState
+    }
+
+    $frontendPeakRetuneMode = if ([string]::IsNullOrWhiteSpace($targetMode)) { $originalMode } else { $targetMode }
+    $frontendPeakRetuneFilterLowHz = Get-NullableLongValue (Get-JsonValue $retuneReferenceState "filterLowHz")
+    $frontendPeakRetuneFilterHighHz = Get-NullableLongValue (Get-JsonValue $retuneReferenceState "filterHighHz")
+    $frontendPeakRetuneTargetOffsetHz = Get-FrontendPeakRetuneTargetOffsetHz `
+        -Mode $frontendPeakRetuneMode `
+        -FilterLowHz $frontendPeakRetuneFilterLowHz `
+        -FilterHighHz $frontendPeakRetuneFilterHighHz
 }
 catch {
     $initializationError = $_.Exception.Message
@@ -1701,6 +1767,10 @@ catch {
         passCount = $PassCount
         passDelaySec = $PassDelaySec
         tuneStepHz = $effectiveTuneStepHz
+        frontendPeakRetuneMode = if ([string]::IsNullOrWhiteSpace($frontendPeakRetuneMode)) { $null } else { $frontendPeakRetuneMode }
+        frontendPeakRetuneFilterLowHz = $frontendPeakRetuneFilterLowHz
+        frontendPeakRetuneFilterHighHz = $frontendPeakRetuneFilterHighHz
+        frontendPeakRetuneTargetOffsetHz = $frontendPeakRetuneTargetOffsetHz
         peakRetuneSpan = $peakRetuneSpanForPlan
         completedPassCount = 0
         scanPassCount = 0
@@ -1901,7 +1971,7 @@ try {
 
         $scenePeaks = @(Get-JsonArray $scene "topPeaks")
         $passRejectedPeakCandidates = New-Object System.Collections.Generic.List[object]
-        $passPeakCandidates = @(Select-PeakCandidates -Peaks $scenePeaks -Limit $MaxPeaks -MergeHz $PeakMergeHz -MinimumSnrDb $MinPeakSnrDb -OriginalVfo $originalVfo -StepHz $effectiveTuneStepHz -RetuneLowHz $peakRetuneSpan.lowHz -RetuneHighHz $peakRetuneSpan.highHz -RetuneSpanSource $peakRetuneSpan.source -RejectedCandidates $passRejectedPeakCandidates)
+        $passPeakCandidates = @(Select-PeakCandidates -Peaks $scenePeaks -Limit $MaxPeaks -MergeHz $PeakMergeHz -MinimumSnrDb $MinPeakSnrDb -OriginalVfo $originalVfo -StepHz $effectiveTuneStepHz -RetuneLowHz $peakRetuneSpan.lowHz -RetuneHighHz $peakRetuneSpan.highHz -RetuneSpanSource $peakRetuneSpan.source -RetuneTargetOffsetHz $frontendPeakRetuneTargetOffsetHz -RejectedCandidates $passRejectedPeakCandidates)
         $passPeakCandidatesForReport = New-Object System.Collections.Generic.List[object]
         foreach ($candidate in $passPeakCandidates) {
             $candidateForReport = Copy-PeakCandidateForPass -Candidate $candidate -Pass $pass
@@ -2008,6 +2078,10 @@ try {
                     exactFrequencyHz = Get-NullableLongValue (Get-JsonValue $candidate "exactFrequencyHz")
                     tuneStepHz = Get-IntValue (Get-JsonValue $candidate "tuningStepHz")
                     tuneSnapDeltaHz = Get-NullableLongValue (Get-JsonValue $candidate "tuneSnapDeltaHz")
+                    retuneTargetOffsetHz = Get-NullableDoubleValue (Get-JsonValue $candidate "retuneTargetOffsetHz")
+                    exactRetuneVfoHz = Get-NullableLongValue (Get-JsonValue $candidate "exactRetuneVfoHz")
+                    peakToRetunedVfoOffsetHz = Get-NullableLongValue (Get-JsonValue $candidate "peakToRetunedVfoOffsetHz")
+                    retuneReason = [string](Get-JsonValue $candidate "retuneReason")
                     source = [string]$candidate.source
                     startedUtc = $retuneUtc.ToString("o")
                     ok = $false
@@ -2077,6 +2151,10 @@ try {
                         candidateSource = [string]$candidate.source
                         candidateTuneStepHz = Get-IntValue (Get-JsonValue $candidate "tuningStepHz")
                         candidateTuneSnapDeltaHz = Get-NullableLongValue (Get-JsonValue $candidate "tuneSnapDeltaHz")
+                        candidateRetuneTargetOffsetHz = Get-NullableDoubleValue (Get-JsonValue $candidate "retuneTargetOffsetHz")
+                        candidateExactRetuneVfoHz = Get-NullableLongValue (Get-JsonValue $candidate "exactRetuneVfoHz")
+                        candidatePeakToRetunedVfoOffsetHz = Get-NullableLongValue (Get-JsonValue $candidate "peakToRetunedVfoOffsetHz")
+                        candidateRetuneReason = [string](Get-JsonValue $candidate "retuneReason")
                         window = $window
                         reportPath = $portableWatchReport
                         jsonlPath = $portableWatchJsonl
@@ -2153,6 +2231,10 @@ try {
                     exactCandidateOffsetHz = Get-NullableLongValue (Get-JsonValue $candidate "exactOffsetHz")
                     candidateTuneStepHz = Get-IntValue (Get-JsonValue $candidate "tuningStepHz")
                     candidateTuneSnapDeltaHz = Get-NullableLongValue (Get-JsonValue $candidate "tuneSnapDeltaHz")
+                    candidateRetuneTargetOffsetHz = Get-NullableDoubleValue (Get-JsonValue $candidate "retuneTargetOffsetHz")
+                    candidateExactRetuneVfoHz = Get-NullableLongValue (Get-JsonValue $candidate "exactRetuneVfoHz")
+                    candidatePeakToRetunedVfoOffsetHz = Get-NullableLongValue (Get-JsonValue $candidate "peakToRetunedVfoOffsetHz")
+                    candidateRetuneReason = [string](Get-JsonValue $candidate "retuneReason")
                     window = $window
                     reportPath = $portableWatchReport
                     jsonlPath = $portableWatchJsonl
@@ -2456,6 +2538,10 @@ $reportObject = [ordered]@{
     passCount = $PassCount
     passDelaySec = $PassDelaySec
     tuneStepHz = $effectiveTuneStepHz
+    frontendPeakRetuneMode = if ([string]::IsNullOrWhiteSpace($frontendPeakRetuneMode)) { $null } else { $frontendPeakRetuneMode }
+    frontendPeakRetuneFilterLowHz = $frontendPeakRetuneFilterLowHz
+    frontendPeakRetuneFilterHighHz = $frontendPeakRetuneFilterHighHz
+    frontendPeakRetuneTargetOffsetHz = $frontendPeakRetuneTargetOffsetHz
     peakRetuneSpan = $peakRetuneSpan
     completedPassCount = $completedPassCount
     scanPassCount = $scanPassArray.Count
