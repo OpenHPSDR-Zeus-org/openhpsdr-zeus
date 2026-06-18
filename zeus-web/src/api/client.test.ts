@@ -162,6 +162,16 @@ describe('normalizeState', () => {
     expect(s.attOffsetDb).toBe(0);
     expect(s.adcOverloadWarning).toBe(false);
   });
+  it('defaults ctunEnabled to false on a legacy server (no field)', () => {
+    // CTUN re-introduced (Christiano fork) — a server that predates the field
+    // must hydrate CTUN OFF so the behaviour stays byte-identical to develop.
+    expect(normalizeState({}).ctunEnabled).toBe(false);
+    expect(normalizeState({ ctunEnabled: 'on' }).ctunEnabled).toBe(false);
+  });
+  it('reads ctunEnabled from the server (now authoritative, not ignored)', () => {
+    expect(normalizeState({ ctunEnabled: true }).ctunEnabled).toBe(true);
+    expect(normalizeState({ ctunEnabled: false }).ctunEnabled).toBe(false);
+  });
   it('reads auto-ATT fields from the server', () => {
     const s = normalizeState({
       autoAttEnabled: false,

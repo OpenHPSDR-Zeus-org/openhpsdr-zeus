@@ -86,8 +86,16 @@ export function PassbandOverlay() {
       // spectrum slides underneath it; anchoring to the commanded target
       // instead made it lead off the line and ease back (operator feedback,
       // 2026-06-12).
-      const passCenter = view;
       const conn = useConnectionStore.getState();
+      // Hang the passband off the dial, expressed as the dial's settled offset
+      // from the display center — the same (vfo − targetCenter) the FreqAxis
+      // marker uses. Outside CTUN the dial sits on the view center so this is
+      // ~0 and the filter stays pinned to the zero line during a glide; under
+      // CTUN the dial roams off-centre and the passband tracks it.
+      const dialOffsetHz = viewCenter.isInitialized()
+        ? conn.vfoHz - viewCenter.getTargetCenterHz()
+        : 0;
+      const passCenter = view + dialOffsetHz;
       const startHz = view - spanHz / 2;
       const leftPct = ((passCenter + conn.filterLowHz - startHz) / spanHz) * 100;
       const rightPct = ((passCenter + conn.filterHighHz - startHz) / spanHz) * 100;
