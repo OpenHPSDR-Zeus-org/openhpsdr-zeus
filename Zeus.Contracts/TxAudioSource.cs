@@ -47,9 +47,10 @@ public enum TxAudioSource : byte
     RadioMic = 1,
 
     /// <summary>The radio's analog 3.5 mm line-in jack. Honours the per-source
-    /// 0..31 <c>LineInGain</c>. Offered on ANAN-200D and the 0x0A Saturn family
-    /// only (Zeus has no P1 radio-mic receive path in v1, so pure-P1 codec
-    /// boards do not expose it — §6 deviation note).</summary>
+    /// 0..31 <c>LineInGain</c>. Offered on ANAN-200D, the 0x0A Saturn family, and
+    /// the ANAN-10E (HermesII, issue #667) — the 10E's TLV320 codec carries
+    /// line-in on P1 via the 0x12 select bit + 0x14 gain frame (board-gated in
+    /// ControlFrame / ExternalPortEncoder).</summary>
     RadioLineIn = 2,
 
     /// <summary>The radio's balanced XLR microphone input. Switchable on the

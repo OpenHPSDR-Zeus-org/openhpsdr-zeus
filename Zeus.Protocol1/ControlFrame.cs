@@ -440,6 +440,21 @@ internal static class ControlFrame
             c14[1] |= (byte)(s.LineInGain & 0x1F);
         }
 
+        // ANAN-10E line-in (HermesII, issue #667). The 10E TLV320 codec carries
+        // its line-in gain on this SAME register-0x0a / wire-0x14 frame at
+        // C2[4:0] — identical wire layout to HL2 (Thetis networkproto1.c). Unlike
+        // HL2, the 10E does NOT carry puresignal_run here (C2[6] is HL2-only
+        // below; ANAN-class PS lives on a different wire path), so C2 is otherwise
+        // zero — but we OR the low 5 bits so the high bits (incl. any future
+        // C2[6]) are preserved. RadioService gates s.LineInGain to non-zero ONLY
+        // when line-in is the active source, so default Host emits 0 here →
+        // byte-identical to today on the 10E. Board-gated to HermesII so no other
+        // Hermes/ANAN board's 0x14 frame changes.
+        if (s.Board == HpsdrBoardKind.HermesII)
+        {
+            c14[1] |= (byte)(s.LineInGain & 0x1F);
+        }
+
         // HL2 PureSignal: register 0x0a bit 22 = puresignal_run. Bit 22 lives
         // in C2 bit 6 (22 - 16 = 6) of this same C0=0x14 frame. mi0bot
         // networkproto1.c:1102 — `C2 = (line_in_gain & 0b00011111) |

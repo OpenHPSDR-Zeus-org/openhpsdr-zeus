@@ -367,16 +367,18 @@ public class BoardCapabilitiesTableTests
     }
 
     [Fact]
-    public void HasRadioLineIn_On_200D_And_All_0x0A_Not_HermesClass_Or_HL2()
+    public void HasRadioLineIn_On_200D_All_0x0A_And_Anan10E_Not_OtherHermesClass_Or_HL2()
     {
-        // §6: line-in on ANAN-200D + every 0x0A variant. NOT on pure Hermes-class
-        // P1 (no P1 radio-mic RX path in v1), ANAN-G2E, Metis, HL2.
+        // §6 + issue #667: line-in on ANAN-200D, every 0x0A variant, and the
+        // ANAN-10E (HermesII — its TLV320 codec exposes a line-in jack). NOT on
+        // the remaining pure Hermes-class P1, ANAN-G2E, Metis, 100D, HL2.
         Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.Orion).HasRadioLineIn); // 200D
+        Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.HermesII).HasRadioLineIn); // ANAN-10E
         foreach (var v in Enum.GetValues<OrionMkIIVariant>())
             Assert.True(BoardCapabilitiesTable.For(HpsdrBoardKind.OrionMkII, v).HasRadioLineIn);
 
         foreach (var board in new[] {
-            HpsdrBoardKind.Metis, HpsdrBoardKind.Hermes, HpsdrBoardKind.HermesII,
+            HpsdrBoardKind.Metis, HpsdrBoardKind.Hermes,
             HpsdrBoardKind.Angelia /* 100D */, HpsdrBoardKind.HermesC10 /* G2E */,
             HpsdrBoardKind.HermesLite2 })
             Assert.False(BoardCapabilitiesTable.For(board).HasRadioLineIn);

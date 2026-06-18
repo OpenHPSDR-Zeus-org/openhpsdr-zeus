@@ -54,9 +54,10 @@ export interface BoardCapabilities {
    *  HL2 only. Gates the HL2 audio front-end controls. */
   hermesLite2MicFrontEnd: boolean;
   /** Board has an analog line-in jack selectable as the TX-audio source
-   *  (TxAudioSource.RadioLineIn). True for ANAN-200D + the whole 0x0A Saturn
-   *  family; false for pure Hermes-class P1, ANAN-G2E, Metis, HL2. Gates the
-   *  Line-In source option + its gain slider. */
+   *  (TxAudioSource.RadioLineIn). True for ANAN-200D, the whole 0x0A Saturn
+   *  family, and the ANAN-10E (HermesII, issue #667); false for the remaining
+   *  Hermes-class P1, ANAN-G2E, Metis, HL2. Gates the Line-In source option +
+   *  its gain slider. */
   hasRadioLineIn: boolean;
   /** Board has a switchable balanced XLR mic input (TxAudioSource.RadioBalancedXlr).
    *  Saturn-FPGA ANAN-G2 / G2-1K only. Gates the Balanced-XLR source option. */

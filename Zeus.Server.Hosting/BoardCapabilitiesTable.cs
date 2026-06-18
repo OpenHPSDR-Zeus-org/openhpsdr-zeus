@@ -142,6 +142,11 @@ internal static class BoardCapabilitiesTable
         MaxPowerWatts: 30,
         HasRxAntennaRelays: true,
         HasOnboardCodec: true,
+        // ANAN-10E (issue #667): the TLV320 codec exposes an analog line-in jack.
+        // Line-in select rides the 0x12 frame C2[1] and gain the 0x14 frame
+        // C2[4:0] (board-gated to HermesII in ControlFrame). No Orion mic-bias
+        // and no balanced XLR on the 10E, so only line-in is offered.
+        HasRadioLineIn: true,
         RxAuxInputs: RxAuxInputs.All);
 
     // ANAN-100D — 100 W class. Meter axis 120 W gives some headroom past

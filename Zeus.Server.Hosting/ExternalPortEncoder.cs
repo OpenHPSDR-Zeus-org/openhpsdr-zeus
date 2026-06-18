@@ -200,10 +200,19 @@ public sealed class Protocol1PortEncoder : IExternalPortEncoder
         => 0;
 
     public (bool MicBoost, bool MicLineIn) EncodeP1CodecAudioBits(in ExternalPortState state)
+    {
+        // ANAN-10E (HermesII, issue #667): the TLV320 codec line-in IS reachable
+        // on P1 — mic_linein select rides the 0x12 frame C2[1] and the 0..31 gain
+        // rides the 0x14 frame (board-gated in ControlFrame). Gated to HermesII
+        // here so NO other P1 codec board (e.g. ANAN-200D) changes its wire
+        // output: RadioLineIn stays a no-op select for them, exactly as before.
+        if (_board == HpsdrBoardKind.HermesII && state.Source == TxAudioSource.RadioLineIn)
+            return (MicBoost: false, MicLineIn: true);
+
         // Pure function of Source: RadioMic → mic_boost; Host / everything else
-        // → all clear (no param leak). RadioLineIn is intentionally unreachable
-        // on pure-P1 codec boards in v1.
-        => ExternalPortAudio.P1CodecAudioBits(state.Source, state.MicBoost);
+        // → all clear (no param leak).
+        return ExternalPortAudio.P1CodecAudioBits(state.Source, state.MicBoost);
+    }
 }
 
 /// <summary>
