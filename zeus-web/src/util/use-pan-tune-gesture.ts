@@ -340,6 +340,11 @@ export function usePanTuneGesture(
         return;
       }
       if (!drag) return;
+      // VFO locked — drag-to-tune (and the view-follow it drives) no-ops, the
+      // same backstop as the wheel-nudge (nudgeVfo), click-to-tune commit, and
+      // ruler/LO pan. Without this the live optimistic vfoHz write below moves
+      // the readout on every drag frame until the next state poll snaps it back.
+      if (useVfoLockStore.getState().locked) return;
       const dx = e.clientX - drag.startX;
       if (!drag.moved && Math.abs(dx) <= CLICK_SLOP_PX) return;
       drag.moved = true;
