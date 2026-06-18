@@ -8327,6 +8327,11 @@ public sealed class DspModernizationValidationToolTests
             using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
             var root = reportDoc.RootElement;
             Assert.True(root.GetProperty("ok").GetBoolean());
+            Assert.Equal("mixed-ready", root.GetProperty("evidenceAcceptanceStatus").GetString());
+            Assert.True(root.GetProperty("evidenceAcceptanceReady").GetBoolean());
+            Assert.Equal("g2-rx-peak-hunt", root.GetProperty("evidenceAcceptanceScope").GetString());
+            Assert.False(root.GetProperty("wdspV2GraduationReady").GetBoolean());
+            Assert.Contains("matrix comparisons", root.GetProperty("wdspV2GraduationReason").GetString(), StringComparison.Ordinal);
             Assert.Equal(JsonValueKind.Null, root.GetProperty("scanError").ValueKind);
             Assert.Equal(1000, root.GetProperty("tuneStepHz").GetInt32());
             Assert.Equal("LSB", root.GetProperty("frontendPeakRetuneMode").GetString());
@@ -8953,6 +8958,12 @@ public sealed class DspModernizationValidationToolTests
 
             using var reportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
             var root = reportDoc.RootElement;
+            Assert.True(root.GetProperty("ok").GetBoolean());
+            Assert.Equal("weak-only-passband-incomplete", root.GetProperty("evidenceAcceptanceStatus").GetString());
+            Assert.False(root.GetProperty("evidenceAcceptanceReady").GetBoolean());
+            Assert.Contains("passband qualification is incomplete", root.GetProperty("evidenceAcceptanceReason").GetString(), StringComparison.Ordinal);
+            Assert.Equal("g2-rx-peak-hunt", root.GetProperty("evidenceAcceptanceScope").GetString());
+            Assert.False(root.GetProperty("wdspV2GraduationReady").GetBoolean());
 
             var runRecords = root.GetProperty("runs").EnumerateArray().ToArray();
             Assert.True(runRecords.Length == 1, root.GetRawText());

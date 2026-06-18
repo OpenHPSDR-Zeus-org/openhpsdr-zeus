@@ -248,7 +248,11 @@ diagnostics each pass, and restores the original VFO in cleanup. Its report rank
 by weak/strong NR5 sample coverage, weak/strong output or final-audio gap, AGC pumping risk, candidate
 weak-loss rows, and hot makeup. This is an RX evidence-hunting tool, not a DSP behavior change and not
 an acceptance shortcut: promote a found window into live history and baseline/candidate comparisons
-before using it for tuning.
+before using it for tuning. The report's `ok=true` means the scan ran and restored state; use
+`evidenceAcceptanceStatus`, `evidenceAcceptanceReady`, and `evidenceAcceptanceReason` for the
+peak-hunt verdict. Peak-hunt reports always keep `wdspV2GraduationReady=false` because even a
+`mixed-ready` scout still needs matrix comparisons, fixture parity, on-air approval, and cross-radio
+validation before WDSP v2 can graduate.
 When `artifact-manifest.json` includes the optional `g2-rx-peak-hunt-report` artifact, strict
 validation exposes the report as `g2RxPeakHunt*` fields, including pass counts and operator candidate
 counts, and validation triage adds the advisory `g2-rx-peak-hunt` gate plus a Markdown evidence

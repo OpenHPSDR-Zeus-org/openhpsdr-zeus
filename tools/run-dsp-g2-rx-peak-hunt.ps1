@@ -1943,6 +1943,12 @@ catch {
         completedUtc = $completedUtc.ToString("o")
         durationMs = [int]($completedUtc - $startedUtc).TotalMilliseconds
         ok = $false
+        evidenceAcceptanceStatus = "scan-not-ready"
+        evidenceAcceptanceReady = $false
+        evidenceAcceptanceReason = "The scan could not start because /api/radio/diagnostics was unavailable or missing VFO data: $initializationError."
+        evidenceAcceptanceScope = "g2-rx-peak-hunt"
+        wdspV2GraduationReady = $false
+        wdspV2GraduationReason = "A G2 peak-hunt report is scouting evidence only; WDSP v2 graduation still requires matrix comparisons, offline fixture coverage, Thetis/current-Zeus parity review, on-air approval, and cross-radio validation."
         scanError = $initializationError
         requestedBaseUrl = $requestedBaseUrl
         baseUrl = $base
@@ -2597,6 +2603,7 @@ $hotMakeupTotal = 0
 $hardBlockerTotal = 0
 $pumpingRiskRunCount = 0
 $mixedReadyRunCount = 0
+$rxStateDriftRunCount = 0
 $speechQualifiedWeakTotal = 0
 $speechQualifiedStrongTotal = 0
 $speechQualifiedNearStrongTotal = 0
@@ -2621,6 +2628,9 @@ foreach ($run in $runArray) {
     $frontendNearPassbandTotal += Get-IntValue $run.frontendNearPassbandSampleCount
     if (Test-Truthy $run.agcPumpingRisk) {
         $pumpingRiskRunCount++
+    }
+    if ([string]::Equals([string]$run.trendStatus, "rx-state-drift", [StringComparison]::OrdinalIgnoreCase)) {
+        $rxStateDriftRunCount++
     }
     if (Test-Truthy $run.mixedWeakStrongEvidenceReady) {
         $mixedReadyRunCount++
@@ -2735,6 +2745,68 @@ if ($runArray | Where-Object { [string]::Equals([string]$_.mixedWeakStrongTuning
     $recommendations.Add("At least one window requests bounded weak-speech lift; inspect that window's nr5WeakSignalWatch.mixedWeakStrongTuningFocus top weak/strong rows before changing NR5 or RX leveler thresholds.") | Out-Null
 }
 
+$scanOk = ([string]::IsNullOrWhiteSpace($scanError) -and $null -eq $restoreError -and $runArray.Count -gt 0)
+$evidenceAcceptanceStatus = "scan-not-ready"
+$evidenceAcceptanceReady = $false
+$evidenceAcceptanceReason = "The scan did not produce auditable RX windows."
+if (-not $scanOk) {
+    if (-not [string]::IsNullOrWhiteSpace($scanError)) {
+        $evidenceAcceptanceReason = "The scan failed before producing acceptance evidence: $scanError"
+    }
+    elseif ($null -ne $restoreError) {
+        $evidenceAcceptanceReason = "The scan could not prove safe VFO/mode restoration: $restoreError"
+    }
+}
+elseif ($mixedReadyRunCount -gt 0) {
+    if ($pumpingRiskRunCount -gt 0) {
+        $evidenceAcceptanceStatus = "mixed-ready-with-agc-pumping-risk"
+        $evidenceAcceptanceReason = "At least one mixed weak+strong window was found, but one or more windows reported AGC pumping risk."
+    }
+    elseif ($hardBlockerTotal -gt 0) {
+        $evidenceAcceptanceStatus = "mixed-ready-with-blockers"
+        $evidenceAcceptanceReason = "At least one mixed weak+strong window was found, but the scan also included hard-blocked samples that must be reviewed."
+    }
+    else {
+        $evidenceAcceptanceStatus = "mixed-ready"
+        $evidenceAcceptanceReady = $true
+        $evidenceAcceptanceReason = "At least one mixed weak+strong NR5/SPNR window is ready for promotion into live comparison history."
+    }
+}
+elseif ($weakTotal -gt 0 -and $strongTotal -le 0) {
+    if ($passbandQualifiedWeakTotal -gt 0 -and $frontendNearPassbandTotal -gt 0) {
+        if ($rxStateDriftRunCount -gt 0) {
+            $evidenceAcceptanceStatus = "weak-only-passband-with-drift"
+            $evidenceAcceptanceReason = "Weak passband-qualified evidence exists, but no strong-input samples were captured and at least one run drifted RX state."
+        }
+        elseif ($hardBlockerTotal -gt 0) {
+            $evidenceAcceptanceStatus = "weak-only-passband-with-blockers"
+            $evidenceAcceptanceReason = "Weak passband-qualified evidence exists, but no strong-input samples were captured and hard-blocked samples were present."
+        }
+        else {
+            $evidenceAcceptanceStatus = "weak-only-passband"
+            $evidenceAcceptanceReason = "Weak passband-qualified evidence exists, but no strong-input samples were captured."
+        }
+    }
+    elseif ($passbandQualifiedWeakTotal -gt 0 -or $frontendNearPassbandTotal -gt 0) {
+        $evidenceAcceptanceStatus = "weak-only-passband-incomplete"
+        $evidenceAcceptanceReason = "Weak evidence exists, but passband qualification is incomplete and no strong-input samples were captured."
+    }
+    else {
+        $evidenceAcceptanceStatus = "weak-only-off-passband"
+        $evidenceAcceptanceReason = "Weak NR5/SPNR input was observed, but no strong-input or passband-qualified evidence was captured."
+    }
+}
+elseif ($strongTotal -gt 0 -and $weakTotal -le 0) {
+    $evidenceAcceptanceStatus = "strong-only"
+    $evidenceAcceptanceReason = "Strong-input evidence exists, but no weak-input samples were captured for weak-signal preservation."
+}
+else {
+    $evidenceAcceptanceStatus = "no-weak-or-strong-evidence"
+    $evidenceAcceptanceReason = "No weak or strong NR5/SPNR input was captured."
+}
+
+$wdspV2GraduationReason = "A G2 peak-hunt report is scouting evidence only; WDSP v2 graduation still requires matrix comparisons, offline fixture coverage, Thetis/current-Zeus parity review, on-air approval, and cross-radio validation."
+
 $completedUtc = [DateTimeOffset]::UtcNow
 $reportObject = [ordered]@{
     schemaVersion = 1
@@ -2743,7 +2815,13 @@ $reportObject = [ordered]@{
     startedUtc = $startedUtc.ToString("o")
     completedUtc = $completedUtc.ToString("o")
     durationMs = [int]($completedUtc - $startedUtc).TotalMilliseconds
-    ok = ([string]::IsNullOrWhiteSpace($scanError) -and $null -eq $restoreError -and $runArray.Count -gt 0)
+    ok = $scanOk
+    evidenceAcceptanceStatus = $evidenceAcceptanceStatus
+    evidenceAcceptanceReady = $evidenceAcceptanceReady
+    evidenceAcceptanceReason = $evidenceAcceptanceReason
+    evidenceAcceptanceScope = "g2-rx-peak-hunt"
+    wdspV2GraduationReady = $false
+    wdspV2GraduationReason = $wdspV2GraduationReason
     scanError = $scanError
     requestedBaseUrl = $requestedBaseUrl
     baseUrl = $base
@@ -2867,6 +2945,7 @@ $reportObject = [ordered]@{
     hotMakeupSampleCount = $hotMakeupTotal
     hardBlockerSampleCount = $hardBlockerTotal
     agcPumpingRiskRunCount = $pumpingRiskRunCount
+    rxStateDriftRunCount = $rxStateDriftRunCount
     mixedWeakStrongTuningActionCounts = [ordered]@{}
     bestRun = $bestRun
     retuneAttempts = @($retuneAttempts.ToArray())
@@ -2893,6 +2972,8 @@ else {
         Write-Host "Temporary mode: $targetMode; original mode: $originalMode; restored mode: $restoredMode"
     }
     Write-Host "Runs: $($reportObject.actualRunCount), mixed weak+strong ready: $($reportObject.mixedWeakStrongReady), weak samples: $weakTotal, strong samples: $strongTotal, near-strong samples: $nearStrongTotal"
+    Write-Host "Evidence acceptance: $($reportObject.evidenceAcceptanceStatus), ready=$($reportObject.evidenceAcceptanceReady), reason=$($reportObject.evidenceAcceptanceReason)"
+    Write-Host "WDSP v2 graduation ready: $($reportObject.wdspV2GraduationReady) ($($reportObject.evidenceAcceptanceScope) evidence only)"
     if ($null -ne $bestRun) {
         Write-Host "Best run: $($bestRun.frequencyHz) Hz score=$($bestRun.score) status=$($bestRun.mixedWeakStrongEvidenceStatus) report=$($bestRun.reportPath)"
         if (-not [string]::IsNullOrWhiteSpace($bestRun.mixedWeakStrongTuningAction)) {
