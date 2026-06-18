@@ -699,6 +699,7 @@ public class DspPipelineService : BackgroundService,
         bool nr5NativeRecoveredSpeechCandidate = false;
         bool nr5FrontendPeakRecoveredSpeechCandidate = false;
         bool nr5FrontendPeakContinuitySpeechCandidate = false;
+        bool nr5FrontendPeakContinuityLowNativeProofCap = false;
         bool nr5HeldRecoveredSpeechTailCandidate = false;
         bool nr5HeldContinuityWeakSpeechCandidate = false;
         bool nr5HeldSuppressedSpeechDropoutCandidate = false;
@@ -934,6 +935,14 @@ public class DspPipelineService : BackgroundService,
                     nr5FrontendPeakContinuitySpeechProof >= 0.14 &&
                     continuityOutput >= 0.16 &&
                     (continuitySpectral >= 0.10 || nr5SpeechHoldWasActive);
+                nr5FrontendPeakContinuityLowNativeProofCap =
+                    nr5FrontendPeakContinuitySpeechCandidate &&
+                    nr5.SignalProbability <= 0.160 &&
+                    nr5.PeakEvidence <= 0.020 &&
+                    nr5.WeakSignalMemory <= 0.120 &&
+                    nr5.AgcGate <= 0.380 &&
+                    nr5.RecoveryDrive <= 0.260 &&
+                    nr5.OutputDbfs >= -48.0;
             }
             if (!belowGate &&
                 nr5SpeechHoldWasActive &&
@@ -2651,6 +2660,21 @@ public class DspPipelineService : BackgroundService,
             {
                 desiredDb = Math.Min(desiredDb, nr5HeldContinuityWeakSpeechDesiredDb);
             }
+            if (nr5FrontendPeakContinuityLowNativeProofCap && desiredDb > 0.0)
+            {
+                double lowNativeProofContinuityCapDbfs =
+                    -42.5
+                    + 4.0 * ClampUnit((nr5.SignalConfidence - 0.280) / 0.080)
+                    + 1.5 * ClampUnit((nr5.AgcGate - 0.280) / 0.100);
+                lowNativeProofContinuityCapDbfs = Math.Clamp(
+                    lowNativeProofContinuityCapDbfs,
+                    -42.5,
+                    -39.0);
+                double lowNativeProofContinuityDesiredDb = Math.Max(
+                    0.0,
+                    lowNativeProofContinuityCapDbfs - inputRmsDbfs);
+                desiredDb = Math.Min(desiredDb, lowNativeProofContinuityDesiredDb);
+            }
             bool nr5SpeechLikeFrame =
                 nr5HybridSpeechPrior >= 0.275 ||
                 nr5FrontendTopPeakProof >= 0.18 ||
@@ -3896,6 +3920,7 @@ public class DspPipelineService : BackgroundService,
             bool nr5SpeechRelease =
                 nr5LevelerRun &&
                 !nr5HeldLowProofFloorRelease &&
+                !nr5FrontendPeakContinuityLowNativeProofCap &&
                 !nr5StrongFrameParityCap &&
                 !nr5FrontendDisagreementComfortCap &&
                 !nr5FrontendFarPeakNoiseCap &&
