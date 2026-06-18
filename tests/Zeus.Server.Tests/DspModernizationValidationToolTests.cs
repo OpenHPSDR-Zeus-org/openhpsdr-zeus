@@ -3615,6 +3615,7 @@ public sealed class DspModernizationValidationToolTests
                         rxAudioLevelerNr5NoProofNoiseCap: true,
                         rxAudioLevelerNr5RmNoiseGateEnabled: true,
                         rxAudioLevelerNr5RmNoiseGate: true,
+                        rxAudioLevelerNr5RmNoiseGateHoldBlocks: 14,
                         rxAudioLevelerNr5RmNoiseSuppressionDb: 18.5),
                     Nr5LevelerAlignmentWatchSample(
                         1,
@@ -3628,7 +3629,8 @@ public sealed class DspModernizationValidationToolTests
                         rxAudioLevelerNr5NoSignalNoiseCap: true,
                         rxAudioLevelerNr5FarPeakNoiseCap: true,
                         rxAudioLevelerNr5NoProofNoiseCap: true,
-                        rxAudioLevelerNr5RmNoiseGateEnabled: true),
+                        rxAudioLevelerNr5RmNoiseGateEnabled: true,
+                        rxAudioLevelerNr5RmNoiseGateHoldBlocks: 9),
                     Nr5LevelerAlignmentWatchSample(
                         2,
                         nr5InputDbfs: -44.0,
@@ -3638,7 +3640,8 @@ public sealed class DspModernizationValidationToolTests
                         rxAudioLevelerNr5HybridSpeechPrior: 0.520,
                         rxAudioLevelerNr5NoSignalNoisePrior: 0.060,
                         rxAudioLevelerNr5NoiseProfilePrior: 0.080,
-                        rxAudioLevelerNr5RmNoiseGateEnabled: false)
+                        rxAudioLevelerNr5RmNoiseGateEnabled: false,
+                        rxAudioLevelerNr5RmNoiseGateHoldBlocks: 0)
                 });
 
             var reportPath = Path.Combine(bundleDir, "nr5-no-signal-cap-watch.summary.json");
@@ -3664,10 +3667,13 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal(3, levelerWatch.GetProperty("nr5RmNoiseGateKnownSampleCount").GetInt32());
             Assert.Equal(2, levelerWatch.GetProperty("nr5RmNoiseGateEnabledSampleCount").GetInt32());
             Assert.Equal(1, levelerWatch.GetProperty("nr5RmNoiseGateDisabledSampleCount").GetInt32());
+            Assert.Equal(2, levelerWatch.GetProperty("nr5RmNoiseGateHoldSampleCount").GetInt32());
             Assert.Equal(3, levelerWatch.GetProperty("nr5HybridSpeechPrior").GetProperty("count").GetInt32());
             Assert.Equal(3, levelerWatch.GetProperty("nr5NoSignalNoisePrior").GetProperty("count").GetInt32());
             Assert.Equal(3, levelerWatch.GetProperty("nr5NoiseProfilePrior").GetProperty("count").GetInt32());
             Assert.Equal(1, levelerWatch.GetProperty("nr5RmNoiseGateSampleCount").GetInt32());
+            Assert.Equal(3, levelerWatch.GetProperty("nr5RmNoiseGateHoldBlocks").GetProperty("count").GetInt32());
+            Assert.Equal(14, levelerWatch.GetProperty("nr5RmNoiseGateHoldBlocks").GetProperty("max").GetDouble());
             Assert.Equal(1, levelerWatch.GetProperty("nr5RmNoiseSuppressionDb").GetProperty("count").GetInt32());
             Assert.Equal(2, levelerWatch.GetProperty("topNr5NoSignalNoiseCapSamples").GetArrayLength());
             Assert.Equal(1, levelerWatch.GetProperty("topNr5RmNoiseGateSamples").GetArrayLength());
@@ -11115,6 +11121,7 @@ public sealed class DspModernizationValidationToolTests
         bool rxAudioLevelerNr5NoProofNoiseCap = false,
         bool? rxAudioLevelerNr5RmNoiseGateEnabled = null,
         bool rxAudioLevelerNr5RmNoiseGate = false,
+        int? rxAudioLevelerNr5RmNoiseGateHoldBlocks = null,
         double? rxAudioLevelerNr5RmNoiseSuppressionDb = null)
     {
         var runtimeStatus = txMonitorRequested ? "audio-tx-monitor" : "ready";
@@ -11193,6 +11200,7 @@ public sealed class DspModernizationValidationToolTests
                     rxAudioLevelerNr5NoProofNoiseCap = txMonitorRequested ? (bool?)null : rxAudioLevelerNr5NoProofNoiseCap,
                     rxAudioLevelerNr5RmNoiseGateEnabled = txMonitorRequested ? (bool?)null : rxAudioLevelerNr5RmNoiseGateEnabled,
                     rxAudioLevelerNr5RmNoiseGate = txMonitorRequested ? (bool?)null : rxAudioLevelerNr5RmNoiseGate,
+                    rxAudioLevelerNr5RmNoiseGateHoldBlocks = txMonitorRequested ? null : rxAudioLevelerNr5RmNoiseGateHoldBlocks,
                     rxAudioLevelerNr5RmNoiseSuppressionDb = txMonitorRequested ? null : rxAudioLevelerNr5RmNoiseSuppressionDb,
                     rxAudioLevelerBoostSlewLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerBoostSlewLimited,
                     rxAudioLevelerPeakLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerPeakLimited,

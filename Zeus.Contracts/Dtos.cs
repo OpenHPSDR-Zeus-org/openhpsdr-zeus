@@ -380,6 +380,7 @@ public sealed record DspLiveRuntimeEvidenceDto(
     int? RxAudioLevelerNr5SpeechHangoverBlocks = null,
     bool? RxAudioLevelerNr5RmNoiseGateEnabled = null,
     bool? RxAudioLevelerNr5RmNoiseGate = null,
+    int? RxAudioLevelerNr5RmNoiseGateHoldBlocks = null,
     double? RxAudioLevelerNr5RmNoiseSuppressionDb = null);
 
 // Tool-facing live DSP modernization summary. This fuses the Smart NR scene,
