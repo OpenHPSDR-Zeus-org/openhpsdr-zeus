@@ -15,6 +15,7 @@ import {
   type RxMode,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
+import { useVfoLockStore } from '../../state/vfo-lock-store';
 import { BANDS, bandOf } from '../design/data';
 import { ToolbarFavorites, type ToolbarOption } from './ToolbarFavorites';
 
@@ -80,6 +81,9 @@ export function BandFavorites() {
     (key: string) => {
       const band = HF_BANDS.find((b) => b.name === key);
       if (!band) return;
+      // VFO locked — a favourite-band tap must not retune. Mirrors the
+      // BandButtons / setVfo backstop; bailing avoids the optimistic write.
+      if (useVfoLockStore.getState().locked) return;
       const stored = memoryRef.current.get(band.name);
       const targetHz = stored?.hz ?? band.centerHz;
       const targetMode: RxMode | null = stored?.mode ?? null;

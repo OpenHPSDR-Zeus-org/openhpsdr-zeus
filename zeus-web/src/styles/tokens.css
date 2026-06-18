@@ -175,6 +175,25 @@
   /* whole-gauge additive bloom tint. */
   --gauge-glow:       rgba(255,176,72,0.16);
 
+  /* ----- VFO instrument tokens (presentation-only) -----
+     The machined-instrument VFO readout reuses the SAME five-layer kit as
+     the loved S-meter. These NEW names ALIAS existing meter / immersive-lamp
+     / fg / tx values so the VFO inherits the meter family's depth, glass,
+     bezel and lit-lamp language — and the light-theme flip is free (the light
+     block re-aliases the already-light meter/lamp values). NO existing token
+     VALUE is changed here. */
+  --vfo-readout:      var(--immersive-lamp-readout);       /* lit active digits */
+  --vfo-readout-glow: var(--immersive-lamp-readout-glow);  /* lamp bloom */
+  --vfo-digit-dim:    var(--fg-4);                         /* unlit leading zeros */
+  --vfo-sep:          var(--fg-2);                         /* muted separators */
+  --vfo-bezel-hi:     var(--meter-bezel-hi);
+  --vfo-bezel-lo:     var(--meter-bezel-lo);
+  --vfo-bezel-ring:   var(--meter-bezel-ring);
+  --vfo-well-floor:   var(--meter-well-floor);
+  --vfo-well-edge:    var(--meter-well-edge);
+  --vfo-lock:         var(--tx);                            /* locked accent (red) */
+  --vfo-lock-glow:    rgba(230,58,43,0.35);                 /* lit-glyph bloom */
+
   /* ----- COMPACT-BAR instrument variants (presentation-only) -----
      The five-layer stack tuned for the small/dense TX-stage VU columns and
      the SWR/PWR arcs. At ~16px column width + 6-up packing the default
@@ -435,6 +454,22 @@ html[data-fonts="geist"] { --font-sans: 'Inter', sans-serif; --font-mono: 'JetBr
   --meter-bezel-lo:   rgba(60, 66, 74, 0.55);
   --meter-bezel-ring: rgba(40, 45, 52, 0.22);
   --gauge-glow:       rgba(255,176,72,0.06);
+
+  /* ----- VFO instrument tokens — light theme counterparts -----
+     Same aliases as the dark block; they resolve to the already-light
+     meter / immersive-lamp / fg / tx values, so the light flip is
+     automatic. --vfo-lock-glow is muted for the light workspace. */
+  --vfo-readout:      var(--immersive-lamp-readout);
+  --vfo-readout-glow: var(--immersive-lamp-readout-glow);
+  --vfo-digit-dim:    var(--fg-4);
+  --vfo-sep:          var(--fg-2);
+  --vfo-bezel-hi:     var(--meter-bezel-hi);
+  --vfo-bezel-lo:     var(--meter-bezel-lo);
+  --vfo-bezel-ring:   var(--meter-bezel-ring);
+  --vfo-well-floor:   var(--meter-well-floor);
+  --vfo-well-edge:    var(--meter-well-edge);
+  --vfo-lock:         var(--tx);
+  --vfo-lock-glow:    rgba(230,58,43,0.18);
 
   /* COMPACT-BAR instrument variants — light-theme counterparts. The VU
      wells stay dark (display surfaces), so the brighter specular/edge cues

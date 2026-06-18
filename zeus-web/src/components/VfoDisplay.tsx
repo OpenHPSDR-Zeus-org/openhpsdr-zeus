@@ -41,6 +41,23 @@
 //
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
+//
+// ── PREMIUM MACHINED-INSTRUMENT VFO ──────────────────────────────────────
+// The frequency readout is rendered as a real machined instrument using the
+// SAME five-layer render kit as the loved S-meter (components/meters/render/),
+// not a flat glow card:
+//   (1) recessed well behind the digits (recessedWell)         — the pocket,
+//   (2) a top-sheen band over the well (CSS pseudo-element)     — cylindrical depth,
+//   (3) GlassDome SVG over the readout                          — wet-glass specular,
+//   (4) GaugeBezel rect ring around the readout                — machined chrome frame,
+//   (5) lit/dim per-decade digits (two-tone lamp)              — the hero.
+// All token-driven (--vfo-* aliases of the --meter-*/--immersive-lamp-* kit)
+// and GPU-cheap: only the existing compositor-only .meter-sheen-drift sheen
+// animates (reduced-motion already drops it). DISPLAY-ONLY — no value pipeline
+// is touched here.
+//
+// The two SVG overlays are pointer-events:none so they never block the digit
+// click / wheel handlers underneath.
 
 import {
   Fragment,
@@ -53,6 +70,10 @@ import {
 } from 'react';
 import { fetchState, setVfo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useVfoLockStore } from '../state/vfo-lock-store';
+import { GlassDome } from './meters/render/GlassDome';
+import { GaugeBezel } from './meters/render/GaugeBezel';
+import { recessedWell } from './meters/render/recessedWell';
 
 const MAX_HZ = 60_000_000;
 const STATE_POLL_MS = 2000;
@@ -102,9 +123,73 @@ function formatKhz(hz: number): string {
 // feedback, but only POST the last resting value to avoid flooding /api/vfo.
 const WHEEL_DEBOUNCE_MS = 80;
 
-export function VfoDisplay() {
+// ── lock padlock glyph ───────────────────────────────────────────────────
+// Identical open/closed inline-SVG padlock to the mobile shell's
+// VfoLockButton (mobile/MobileApp.tsx) so mobile + desktop read the same. Both
+// drive the one shared vfo-lock-store, so the lock state is unified.
+function LockGlyph({ locked }: { locked: boolean }) {
+  return locked ? (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+      <rect x="5" y="11" width="14" height="9" rx="1.5" fill="currentColor" />
+      <path
+        d="M8 11V8a4 4 0 0 1 8 0v3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  ) : (
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden>
+      <rect x="5" y="11" width="14" height="9" rx="1.5" fill="currentColor" />
+      <path
+        d="M8 11V8a4 4 0 0 1 7.5-2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+// Desktop VFO-lock toggle — pins the dial so no path (digit click/type/scroll,
+// keyboard, pan/ruler, panadapter click-to-tune, band retune) can change the
+// frequency until unlocked. Bound to the same shared store as the mobile
+// padlock; the gate itself lives in api/client.setVfo + setRadioLo and the
+// per-path guards.
+function VfoLockButton() {
+  const locked = useVfoLockStore((s) => s.locked);
+  const toggle = useVfoLockStore((s) => s.toggle);
+  return (
+    <button
+      type="button"
+      onClick={toggle}
+      aria-pressed={locked}
+      aria-label={locked ? 'VFO locked — click to unlock' : 'VFO unlocked — click to lock'}
+      title={locked ? 'VFO locked — click to unlock' : 'Lock VFO (no path can retune while locked)'}
+      className={`vfo-lock-btn ${locked ? 'on' : ''}`}
+    >
+      <LockGlyph locked={locked} />
+      <span className="vfo-lock-lbl">{locked ? 'LOCKED' : 'LOCK'}</span>
+    </button>
+  );
+}
+
+type VfoDisplayProps = {
+  /** Header label. Defaults to "VFO A". (Prop preserved from Christiano's
+   *  fork superset so a future RX2 readout inherits the premium look for
+   *  free; VFO-B store plumbing is not present in this tree yet.) */
+  label?: string;
+  /** Compact variant — scales the bezel / well / digit gap down for a dense
+   *  RX2 / narrow placement while keeping the full machined-instrument stack. */
+  compact?: boolean;
+};
+
+export function VfoDisplay({ label = 'VFO A', compact = false }: VfoDisplayProps = {}) {
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const applyState = useConnectionStore((s) => s.applyState);
+  const locked = useVfoLockStore((s) => s.locked);
 
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
@@ -142,9 +227,13 @@ export function VfoDisplay() {
   }, [applyState, editing]);
 
   const beginEdit = useCallback(() => {
-    setDraft(formatKhz(vfoHz));
+    // VFO locked — block edit entry entirely; the typed-entry field never opens.
+    if (useVfoLockStore.getState().locked) return;
+    // Start EMPTY so the operator types the whole frequency fresh (no pre-filled
+    // value or decimals to edit around) — matches the old VFO entry feel.
+    setDraft('');
     setEditing(true);
-  }, [vfoHz]);
+  }, []);
 
   const cancelEdit = useCallback(() => {
     setEditing(false);
@@ -152,6 +241,13 @@ export function VfoDisplay() {
   }, []);
 
   const commitEdit = useCallback(() => {
+    // VFO locked — discard the typed entry (defensive; beginEdit already
+    // refuses to open the field while locked).
+    if (useVfoLockStore.getState().locked) {
+      setEditing(false);
+      setDraft('');
+      return;
+    }
     const next = parseKhzInput(draft);
     setEditing(false);
     setDraft('');
@@ -203,6 +299,10 @@ export function VfoDisplay() {
     const el = digitsContainerRef.current;
     if (!el || editing) return;
     const handler = (e: WheelEvent) => {
+      // VFO locked — wheel-step tuning no-ops. We still preventDefault on a
+      // digit so the page doesn't scroll under a locked digit, matching the
+      // unlocked feel; we just don't move the dial.
+      const lockedNow = useVfoLockStore.getState().locked;
       const target = e.target as Element | null;
       const digit = target?.closest<HTMLElement>('[data-decade]');
       if (!digit || !el.contains(digit)) return;
@@ -211,6 +311,7 @@ export function VfoDisplay() {
       const decade = Number.parseInt(decadeAttr, 10);
       if (!Number.isFinite(decade) || decade <= 0) return;
       e.preventDefault();
+      if (lockedNow) return;
 
       const direction = e.deltaY < 0 ? 1 : -1;
       const current = useConnectionStore.getState().vfoHz;
@@ -247,70 +348,131 @@ export function VfoDisplay() {
 
   const digits = useMemo(() => DIGIT_PLACES, []);
 
+  // Track the rendered readout-face size so the SVG overlays (GlassDome +
+  // GaugeBezel) use a viewBox matched to the pixel rect — keeps the bezel rx /
+  // thickness proportional and the dome ellipse centred regardless of the
+  // container-query font clamp. nonScaling strokes keep the chrome crisp under
+  // the preserveAspectRatio="none" stretch.
+  const readoutRef = useRef<HTMLDivElement | null>(null);
+  const [readoutSize, setReadoutSize] = useState({ w: 320, h: 96 });
+  useEffect(() => {
+    const el = readoutRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const r = entries[0]?.contentRect;
+      if (!r) return;
+      const w = Math.max(8, Math.round(r.width));
+      const h = Math.max(8, Math.round(r.height));
+      setReadoutSize((prev) => (prev.w === w && prev.h === h ? prev : { w, h }));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const { w: vbW, h: vbH } = readoutSize;
+  const bezelRx = compact ? 5 : 7;
+  const bezelThick = compact ? 2.4 : 3.2;
+
   return (
-    <div className="freq-display">
-      {editing ? (
-        <div className="freq-digits mono" style={{ gap: 6 }}>
-          <input
-            ref={inputRef}
-            type="text"
-            inputMode="decimal"
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKeyDown}
-            onBlur={cancelEdit}
-            aria-label="Frequency in kHz"
-            style={{
-              width: 220,
-              background: 'transparent',
-              border: 'none',
-              borderBottom: '1px solid var(--accent)',
-              outline: 'none',
-              color: 'var(--fg-0)',
-              fontFamily: 'inherit',
-              fontSize: 'inherit',
-              fontWeight: 700,
-            }}
-            placeholder="kHz"
-          />
-          <span className="label-xs" style={{ alignSelf: 'center' }}>
-            kHz
-          </span>
-        </div>
-      ) : (
-        <button
-          ref={digitsContainerRef}
-          type="button"
-          onClick={beginEdit}
-          aria-label="Edit frequency"
-          title="Click to enter frequency in kHz — scroll the wheel over a digit to tune it"
-          className="freq-digits mono"
-          style={{ background: 'none', border: 'none', cursor: 'text', width: '100%' }}
+    <div
+      className={`freq-display${compact ? ' compact' : ''}${locked ? ' locked' : ''}`}
+    >
+      <div className="freq-head">
+        <span className="label-xs freq-head-lbl">{label}</span>
+        <VfoLockButton />
+      </div>
+
+      {/* The machined readout face — recessed well (layer 1) + CSS top-sheen
+          (layer 2, ::before) carry the pocket + cylindrical depth. The two SVG
+          overlays (layers 3+4) sit on top, pointer-events:none. The digits
+          (layer 5) render LAST in DOM so they receive the click / wheel. */}
+      <div className="freq-readout" ref={readoutRef} style={recessedWell({ radius: bezelRx })}>
+        <svg
+          className="freq-instrument"
+          viewBox={`0 0 ${vbW} ${vbH}`}
+          preserveAspectRatio="none"
+          aria-hidden
         >
-          {digits.map((place) => {
-            const d = digitAt(vfoHz, place.decade);
-            const isLeading = vfoHz < place.decade;
-            return (
-              <Fragment key={place.decade}>
-                <span
-                  className={`digit ${isLeading ? 'leading' : ''}`}
-                  data-decade={place.decade}
-                  style={{ cursor: 'ns-resize' }}
-                >
-                  {d}
-                </span>
-                {place.separatorAfter && (
-                  <span aria-hidden className="sep">
-                    {place.separatorAfter}
+          {/* (3) wet-glass specular dome + drifting sheen over the readout */}
+          <GlassDome defsId="vfo" x={0} y={0} width={vbW} height={vbH} rx={bezelRx} />
+          {/* (4) machined chrome bezel ring framing the readout */}
+          <GaugeBezel
+            variant="rect"
+            defsId="vfo"
+            x={0}
+            y={0}
+            width={vbW}
+            height={vbH}
+            rx={bezelRx}
+            thickness={bezelThick}
+            nonScaling
+          />
+        </svg>
+
+        {locked && (
+          <span className="freq-lock-mark" aria-hidden title="VFO locked">
+            <LockGlyph locked />
+          </span>
+        )}
+
+        {editing ? (
+          <div className="freq-digits mono" style={{ gap: compact ? 3 : 6 }}>
+            <input
+              ref={inputRef}
+              type="text"
+              inputMode="decimal"
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={onKeyDown}
+              onBlur={cancelEdit}
+              aria-label={`${label} frequency in kHz`}
+              className="freq-edit-input"
+              placeholder="kHz"
+            />
+            <span className="label-xs freq-edit-unit">kHz</span>
+          </div>
+        ) : (
+          <button
+            ref={digitsContainerRef}
+            type="button"
+            onClick={beginEdit}
+            aria-label="Edit frequency"
+            title={
+              locked
+                ? 'VFO locked — unlock to tune'
+                : 'Click to enter frequency in kHz — scroll the wheel over a digit to tune it'
+            }
+            className="freq-digits mono freq-digits-btn"
+          >
+            {digits.map((place) => {
+              const d = digitAt(vfoHz, place.decade);
+              const isLeading = vfoHz < place.decade;
+              return (
+                <Fragment key={place.decade}>
+                  <span
+                    className={`digit ${isLeading ? 'leading' : ''}`}
+                    data-decade={place.decade}
+                  >
+                    {d}
                   </span>
-                )}
-              </Fragment>
-            );
-          })}
-        </button>
-      )}
-      <div className="freq-bot" style={{ justifyContent: 'flex-end', gap: 6, marginTop: 4 }}>
-        <span className="label-xs">MHz · click to type · wheel on a digit to step</span>
+                  {place.separatorAfter && (
+                    <span aria-hidden className="sep">
+                      {place.separatorAfter}
+                    </span>
+                  )}
+                </Fragment>
+              );
+            })}
+          </button>
+        )}
+      </div>
+
+      <div className="freq-bot">
+        <span className="label-xs">
+          {locked
+            ? 'LOCKED — unlock to tune'
+            : 'MHz · click to type · wheel on a digit to step'}
+        </span>
       </div>
     </div>
   );

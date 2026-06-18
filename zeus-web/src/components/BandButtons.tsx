@@ -52,6 +52,7 @@ import {
   type RxMode,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { useVfoLockStore } from '../state/vfo-lock-store';
 import { BANDS, bandOf } from './design/data';
 import { toolbarFavDragMime } from './toolbar/ToolbarFavorites';
 
@@ -129,6 +130,10 @@ export function BandButtons() {
 
   const selectBand = useCallback(
     (band: BandEntry) => {
+      // VFO locked — a band button must not retune. setVfo is the backstop,
+      // but bailing here keeps the active-band highlight + the optimistic
+      // vfoHz/mode writes from flashing for one reconcile cycle.
+      if (useVfoLockStore.getState().locked) return;
       const stored = memoryRef.current.get(band.name);
       const targetHz = stored?.hz ?? band.centerHz;
       const targetMode: RxMode | null = stored?.mode ?? null;
