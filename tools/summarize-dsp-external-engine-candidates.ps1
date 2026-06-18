@@ -333,7 +333,7 @@ function New-CandidateSummary {
     if ($id -eq "speexdsp" -and -not (Test-TextHas $evidenceText @("pumping"))) {
         $issues.Add("speex-no-pumping-gate-missing") | Out-Null
     }
-    if (($id -eq "rnnoise" -or $id -eq "rmnoise" -or $id -eq "deepfilternet") -and
+    if (($id -eq "rnnoise" -or $id -eq "rmnoise" -or $id -eq "dpdfnet" -or $id -eq "deepfilternet" -or $id -eq "clearervoice-studio") -and
         -not ($evidenceText -like "*weak*" -and ($evidenceText -like "*CW*" -or $evidenceText -like "*carrier*" -or $evidenceText -like "*bypass*"))) {
         $issues.Add("neural-weak-signal-bypass-gate-missing") | Out-Null
     }
@@ -431,6 +431,25 @@ function Get-BakeoffScenariosForCandidate {
                 }
             )
         }
+        "dpdfnet" {
+            return @(
+                [ordered]@{
+                    scenarioId = "ssb-like-speech-post-demod"
+                    purpose = "Measure causal neural speech enhancement after WDSP demodulation."
+                    acceptanceGates = @("Improves weak SSB speech artifact score beyond NR5/SPNR.", "No weak-signal deletion or clipped peaks.", "No added audio RMS pumping.")
+                },
+                [ordered]@{
+                    scenarioId = "weak-ssb-speech-latency"
+                    purpose = "Bound 48 kHz streaming CPU and latency on weak speech."
+                    acceptanceGates = @("Latency and allocations are measured on G2-class hardware.", "No realtime underrun or monitor backlog.", "Weak speech remains intelligible.")
+                },
+                [ordered]@{
+                    scenarioId = "weak-cw-carrier-bypass"
+                    purpose = "Prove the model bypasses non-speech HF content deterministically."
+                    acceptanceGates = @("Weak-carrier SNR/SINAD does not regress.", "Bypass/fallback is deterministic.", "No raw IQ path replacement is used.")
+                }
+            )
+        }
         "deepfilternet" {
             return @(
                 [ordered]@{
@@ -447,6 +466,25 @@ function Get-BakeoffScenariosForCandidate {
                     scenarioId = "weak-cw-carrier-bypass"
                     purpose = "Prove the model is bypassed for non-speech HF content."
                     acceptanceGates = @("Carrier preservation is neutral or better.", "Bypass selection is deterministic.", "No raw IQ path replacement is used.")
+                }
+            )
+        }
+        "clearervoice-studio" {
+            return @(
+                [ordered]@{
+                    scenarioId = "offline-ssb-like-speech"
+                    purpose = "Measure offline restoration on recorded demodulated SSB speech."
+                    acceptanceGates = @("Improves speech artifact score without weak-signal deletion.", "No over-smoothing or pumping.", "Fixture provenance is reproducible.")
+                },
+                [ordered]@{
+                    scenarioId = "weak-cw-carrier-bypass"
+                    purpose = "Prove weak CW/carrier and non-speech HF content bypass the offline suite safely."
+                    acceptanceGates = @("Weak-carrier SNR/SINAD does not regress.", "Bypass/fallback is deterministic.", "No speech-restoration artifacts are introduced on CW.")
+                },
+                [ordered]@{
+                    scenarioId = "offline-recording-consent-provenance"
+                    purpose = "Verify recording consent, model provenance, and offline-only constraints."
+                    acceptanceGates = @("Operator recording consent is documented.", "Model provenance and hashes are recorded.", "No live realtime default path is required.")
                 }
             )
         }
@@ -794,7 +832,7 @@ if (-not [string]::IsNullOrWhiteSpace($SnapshotPath) -and (Test-Path -LiteralPat
     }
 }
 
-$requiredCandidateIds = @("rnnoise", "rmnoise", "deepfilternet", "speexdsp", "webrtc-apm")
+$requiredCandidateIds = @("rnnoise", "rmnoise", "dpdfnet", "deepfilternet", "clearervoice-studio", "speexdsp", "webrtc-apm")
 $candidateSummaries = New-Object System.Collections.Generic.List[object]
 $seen = @{}
 foreach ($candidate in $candidateEntries) {

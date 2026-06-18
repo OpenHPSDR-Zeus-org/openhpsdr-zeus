@@ -430,9 +430,9 @@ public sealed class SmartNrConditionEndpointTests
         using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
         var candidates = body.RootElement.EnumerateArray().ToArray();
 
-        Assert.Equal(5, candidates.Length);
+        Assert.Equal(7, candidates.Length);
         var ids = candidates.Select(item => item.GetProperty("id").GetString()).ToArray();
-        Assert.Equal(new[] { "rnnoise", "rmnoise", "deepfilternet", "speexdsp", "webrtc-apm" }, ids);
+        Assert.Equal(new[] { "rnnoise", "rmnoise", "dpdfnet", "deepfilternet", "clearervoice-studio", "speexdsp", "webrtc-apm" }, ids);
         Assert.All(candidates, item =>
         {
             Assert.Equal("off", item.GetProperty("defaultState").GetString());
@@ -480,12 +480,19 @@ public sealed class SmartNrConditionEndpointTests
             rnnoise.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
             control => control == "le9endary-training-reference-only");
         Assert.Contains(
+            rnnoise.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
+            control => control == "werman-plugin-reference-only");
+        Assert.Contains(
             rnnoise.GetProperty("requiredBenchmarks").EnumerateArray().Select(benchmark => benchmark.GetString()),
             benchmark => benchmark == "weak-ssb-volume-parity");
         Assert.Contains("le9endary/RNNoise has no repo license", rnnoise.GetProperty("license").GetString());
+        Assert.Contains("werman/noise-suppression-for-voice is GPL-3.0", rnnoise.GetProperty("license").GetString());
         Assert.Contains(
             rnnoise.GetProperty("referenceUrls").EnumerateArray().Select(url => url.GetString()),
             url => url == "https://github.com/le9endary/RNNoise");
+        Assert.Contains(
+            rnnoise.GetProperty("referenceUrls").EnumerateArray().Select(url => url.GetString()),
+            url => url == "https://github.com/werman/noise-suppression-for-voice");
 
         var rmnoise = Assert.Single(candidates, item => item.GetProperty("id").GetString() == "rmnoise");
         Assert.Contains("NR5-AI Assist", rmnoise.GetProperty("integrationPoint").GetString());
@@ -502,6 +509,38 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Contains(
             rmnoise.GetProperty("referenceUrls").EnumerateArray().Select(url => url.GetString()),
             url => url == "https://ournetplace.com/rm-noise/");
+
+        var dpdfnet = Assert.Single(candidates, item => item.GetProperty("id").GetString() == "dpdfnet");
+        Assert.Contains("NR5-AI Assist", dpdfnet.GetProperty("integrationPoint").GetString());
+        Assert.Contains(
+            dpdfnet.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
+            control => control == "onnx-or-tflite-runtime-package-review");
+        Assert.Contains(
+            dpdfnet.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
+            control => control == "48khz-frame-adapter");
+        Assert.Contains(
+            dpdfnet.GetProperty("requiredBenchmarks").EnumerateArray().Select(benchmark => benchmark.GetString()),
+            benchmark => benchmark == "realtime-latency-g2");
+        Assert.Contains("Apache-2.0", dpdfnet.GetProperty("license").GetString());
+        Assert.Contains(
+            dpdfnet.GetProperty("referenceUrls").EnumerateArray().Select(url => url.GetString()),
+            url => url == "https://github.com/ceva-ip/DPDFNet");
+
+        var clearerVoice = Assert.Single(candidates, item => item.GetProperty("id").GetString() == "clearervoice-studio");
+        Assert.Contains("offline", clearerVoice.GetProperty("integrationPoint").GetString());
+        Assert.Contains(
+            clearerVoice.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
+            control => control == "offline-only-until-runtime-approved");
+        Assert.Contains(
+            clearerVoice.GetProperty("requiredControls").EnumerateArray().Select(control => control.GetString()),
+            control => control == "recording-consent-gate");
+        Assert.Contains(
+            clearerVoice.GetProperty("requiredBenchmarks").EnumerateArray().Select(benchmark => benchmark.GetString()),
+            benchmark => benchmark == "offline-bypass");
+        Assert.Contains("Apache-2.0", clearerVoice.GetProperty("license").GetString());
+        Assert.Contains(
+            clearerVoice.GetProperty("referenceUrls").EnumerateArray().Select(url => url.GetString()),
+            url => url == "https://github.com/modelscope/ClearerVoice-Studio");
     }
 
     [Fact]

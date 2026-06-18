@@ -218,7 +218,9 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal("speexdsp", reportRoot.GetProperty("firstSafeBakeoffCandidateId").GetString());
 
             var orderIds = ReadStringArray(reportRoot, "externalBakeoffEvaluationOrderCandidateIds");
-            Assert.Equal(new[] { "speexdsp", "rnnoise", "webrtc-apm", "deepfilternet", "rmnoise" }, orderIds);
+            Assert.Equal(
+                new[] { "speexdsp", "rnnoise", "dpdfnet", "webrtc-apm", "deepfilternet", "clearervoice-studio", "rmnoise" },
+                orderIds);
 
             var orderRecords = reportRoot.GetProperty("externalBakeoffEvaluationOrder").EnumerateArray().ToArray();
             Assert.Equal(orderIds.Length, orderRecords.Length);
@@ -3365,6 +3367,203 @@ public sealed class DspModernizationValidationToolTests
             Assert.DoesNotContain(
                 root.GetProperty("recommendations").EnumerateArray(),
                 recommendation => (recommendation.GetString() ?? "").Contains("tune normalization before judging", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task WatchLiveDiagnosticsTreatsSparseLevelerLimitsAsAdvisoryWithFinalAudioParity()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell live diagnostics watcher smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-dsp-nr5-sparse-leveler-advisory-watch-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            var sparseSamples = new List<object>
+            {
+                Nr5LevelerAlignmentWatchSample(51, nr5InputDbfs: -54.0, nr5OutputDbfs: -23.8, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -22.6, rxAudioLevelerBoostSlewLimited: true),
+                Nr5LevelerAlignmentWatchSample(52, nr5InputDbfs: -53.0, nr5OutputDbfs: -23.6, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -22.4),
+                Nr5LevelerAlignmentWatchSample(53, nr5InputDbfs: -52.0, nr5OutputDbfs: -23.4, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -22.2),
+                Nr5LevelerAlignmentWatchSample(54, nr5InputDbfs: -20.0, nr5OutputDbfs: -23.7, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -18.8, rxAudioLevelerPeakLimited: true),
+                Nr5LevelerAlignmentWatchSample(55, nr5InputDbfs: -19.0, nr5OutputDbfs: -23.5, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -18.6),
+                Nr5LevelerAlignmentWatchSample(56, nr5InputDbfs: -18.0, nr5OutputDbfs: -23.3, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -18.4)
+            };
+            sparseSamples.AddRange(Enumerable.Range(0, 34).Select(index =>
+                Nr5LevelerAlignmentWatchSample(
+                    100 + index,
+                    nr5InputDbfs: -28.0,
+                    nr5OutputDbfs: -23.6,
+                    levelerInputRmsDbfs: -43.6,
+                    levelerOutputRmsDbfs: -20.0)));
+
+            var sparseJsonlPath = Path.Combine(bundleDir, "nr5-sparse-leveler-advisory.jsonl");
+            await WriteAgcWatchJsonlAsync(sparseJsonlPath, sparseSamples);
+
+            var sparseReportPath = Path.Combine(bundleDir, "nr5-sparse-leveler-advisory.summary.json");
+            var sparseWatch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", sparseJsonlPath,
+                "-ReportPath", sparseReportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, sparseWatch.ExitCode);
+            Assert.True(File.Exists(sparseReportPath), sparseWatch.CombinedOutput);
+
+            using (var sparseReportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(sparseReportPath)))
+            {
+                var root = sparseReportDoc.RootElement;
+                Assert.Equal("ready-trace", root.GetProperty("trendStatus").GetString());
+
+                var weakWatch = root.GetProperty("nr5WeakSignalWatch");
+                Assert.Equal("ready-final-audio", weakWatch.GetProperty("mixedWeakStrongEvidenceStatus").GetString());
+                Assert.True(weakWatch.GetProperty("mixedWeakStrongEvidenceReady").GetBoolean());
+                Assert.True(weakWatch.GetProperty("weakStrongFinalAudioParityReady").GetBoolean());
+                Assert.Equal(3, weakWatch.GetProperty("weakInputSampleCount").GetInt32());
+                Assert.Equal(3, weakWatch.GetProperty("strongInputSampleCount").GetInt32());
+
+                var levelerWatch = root.GetProperty("rxAudioLevelerWatch");
+                Assert.Equal(40, levelerWatch.GetProperty("diagnosticSampleCount").GetInt32());
+                Assert.Equal(2, levelerWatch.GetProperty("constrainedSampleCount").GetInt32());
+                Assert.Equal(5.0, levelerWatch.GetProperty("constrainedPct").GetDouble(), precision: 3);
+                Assert.True(levelerWatch.GetProperty("settlingNeedsReview").GetBoolean());
+                Assert.True(levelerWatch.GetProperty("headroomNeedsReview").GetBoolean());
+                Assert.True(levelerWatch.GetProperty("severityWithinAdvisoryBounds").GetBoolean());
+                Assert.True(levelerWatch.GetProperty("safetyAdvisoryOnly").GetBoolean());
+                Assert.True(levelerWatch.GetProperty("settlingAdvisoryOnly").GetBoolean());
+                Assert.True(levelerWatch.GetProperty("headroomAdvisoryOnly").GetBoolean());
+
+                Assert.Contains(
+                    root.GetProperty("recommendations").EnumerateArray(),
+                    recommendation => (recommendation.GetString() ?? "").Contains("sparse", StringComparison.Ordinal));
+            }
+
+            var severeSparseSamples = new List<object>
+            {
+                Nr5LevelerAlignmentWatchSample(
+                    61,
+                    nr5InputDbfs: -54.0,
+                    nr5OutputDbfs: -23.8,
+                    levelerInputRmsDbfs: -42.0,
+                    levelerOutputRmsDbfs: -22.6,
+                    rxAudioLevelerBoostSlewLimited: true,
+                    rxAudioLevelerGainDeltaDb: 30.0),
+                Nr5LevelerAlignmentWatchSample(62, nr5InputDbfs: -53.0, nr5OutputDbfs: -23.6, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -22.4),
+                Nr5LevelerAlignmentWatchSample(63, nr5InputDbfs: -52.0, nr5OutputDbfs: -23.4, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -22.2),
+                Nr5LevelerAlignmentWatchSample(64, nr5InputDbfs: -20.0, nr5OutputDbfs: -23.7, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -18.8),
+                Nr5LevelerAlignmentWatchSample(65, nr5InputDbfs: -19.0, nr5OutputDbfs: -23.5, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -18.6),
+                Nr5LevelerAlignmentWatchSample(66, nr5InputDbfs: -18.0, nr5OutputDbfs: -23.3, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -18.4)
+            };
+            severeSparseSamples.AddRange(Enumerable.Range(0, 34).Select(index =>
+                Nr5LevelerAlignmentWatchSample(
+                    200 + index,
+                    nr5InputDbfs: -28.0,
+                    nr5OutputDbfs: -23.6,
+                    levelerInputRmsDbfs: -43.6,
+                    levelerOutputRmsDbfs: -20.0)));
+
+            var severeSparseJsonlPath = Path.Combine(bundleDir, "nr5-sparse-severe-leveler-watch.jsonl");
+            await WriteAgcWatchJsonlAsync(severeSparseJsonlPath, severeSparseSamples);
+
+            var severeSparseReportPath = Path.Combine(bundleDir, "nr5-sparse-severe-leveler-watch.summary.json");
+            var severeSparseWatch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", severeSparseJsonlPath,
+                "-ReportPath", severeSparseReportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, severeSparseWatch.ExitCode);
+            Assert.True(File.Exists(severeSparseReportPath), severeSparseWatch.CombinedOutput);
+
+            using (var severeSparseReportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(severeSparseReportPath)))
+            {
+                var root = severeSparseReportDoc.RootElement;
+                Assert.Equal("rx-leveler-settling-watch", root.GetProperty("trendStatus").GetString());
+
+                var levelerWatch = root.GetProperty("rxAudioLevelerWatch");
+                Assert.True(levelerWatch.GetProperty("sparseConstraintEvidence").GetBoolean());
+                Assert.False(levelerWatch.GetProperty("severityWithinAdvisoryBounds").GetBoolean());
+                Assert.False(levelerWatch.GetProperty("safetyAdvisoryOnly").GetBoolean());
+                Assert.Equal(30.0, levelerWatch.GetProperty("constrainedMaxAbsGainDeltaDb").GetDouble(), precision: 3);
+            }
+
+            var denseJsonlPath = Path.Combine(bundleDir, "nr5-dense-leveler-watch.jsonl");
+            await WriteAgcWatchJsonlAsync(denseJsonlPath, sparseSamples.Take(6));
+
+            var denseReportPath = Path.Combine(bundleDir, "nr5-dense-leveler-watch.summary.json");
+            var denseWatch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", denseJsonlPath,
+                "-ReportPath", denseReportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, denseWatch.ExitCode);
+            Assert.True(File.Exists(denseReportPath), denseWatch.CombinedOutput);
+
+            using (var denseReportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(denseReportPath)))
+            {
+                var root = denseReportDoc.RootElement;
+                Assert.Equal("rx-leveler-settling-watch", root.GetProperty("trendStatus").GetString());
+
+                var levelerWatch = root.GetProperty("rxAudioLevelerWatch");
+                Assert.False(levelerWatch.GetProperty("safetyAdvisoryOnly").GetBoolean());
+                Assert.False(levelerWatch.GetProperty("settlingAdvisoryOnly").GetBoolean());
+                Assert.False(levelerWatch.GetProperty("headroomAdvisoryOnly").GetBoolean());
+                Assert.True(levelerWatch.GetProperty("constrainedPct").GetDouble() > 5.0);
+            }
+
+            var denseHeadroomOnlyJsonlPath = Path.Combine(bundleDir, "nr5-dense-headroom-leveler-watch.jsonl");
+            await WriteAgcWatchJsonlAsync(
+                denseHeadroomOnlyJsonlPath,
+                new[]
+                {
+                    Nr5LevelerAlignmentWatchSample(71, nr5InputDbfs: -54.0, nr5OutputDbfs: -23.8, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -22.6),
+                    Nr5LevelerAlignmentWatchSample(72, nr5InputDbfs: -53.0, nr5OutputDbfs: -23.6, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -22.4),
+                    Nr5LevelerAlignmentWatchSample(73, nr5InputDbfs: -52.0, nr5OutputDbfs: -23.4, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -22.2),
+                    Nr5LevelerAlignmentWatchSample(74, nr5InputDbfs: -20.0, nr5OutputDbfs: -23.7, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -18.8, rxAudioLevelerPeakLimited: true),
+                    Nr5LevelerAlignmentWatchSample(75, nr5InputDbfs: -19.0, nr5OutputDbfs: -23.5, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -18.6),
+                    Nr5LevelerAlignmentWatchSample(76, nr5InputDbfs: -18.0, nr5OutputDbfs: -23.3, levelerInputRmsDbfs: -42.0, levelerOutputRmsDbfs: -18.4)
+                });
+
+            var denseHeadroomOnlyReportPath = Path.Combine(bundleDir, "nr5-dense-headroom-leveler-watch.summary.json");
+            var denseHeadroomOnlyWatch = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "watch-dsp-live-diagnostics.ps1"),
+                "-InputPath", denseHeadroomOnlyJsonlPath,
+                "-ReportPath", denseHeadroomOnlyReportPath,
+                "-JsonOnly");
+
+            Assert.Equal(0, denseHeadroomOnlyWatch.ExitCode);
+            Assert.True(File.Exists(denseHeadroomOnlyReportPath), denseHeadroomOnlyWatch.CombinedOutput);
+
+            using (var denseHeadroomOnlyReportDoc = JsonDocument.Parse(await File.ReadAllTextAsync(denseHeadroomOnlyReportPath)))
+            {
+                var root = denseHeadroomOnlyReportDoc.RootElement;
+                Assert.Equal("rx-leveler-headroom-watch", root.GetProperty("trendStatus").GetString());
+
+                var levelerWatch = root.GetProperty("rxAudioLevelerWatch");
+                Assert.False(levelerWatch.GetProperty("settlingNeedsReview").GetBoolean());
+                Assert.True(levelerWatch.GetProperty("headroomNeedsReview").GetBoolean());
+                Assert.False(levelerWatch.GetProperty("headroomAdvisoryOnly").GetBoolean());
+            }
         }
         finally
         {
@@ -9668,7 +9867,12 @@ public sealed class DspModernizationValidationToolTests
         double? txMonitorAudioRmsDbfs = null,
         bool rxAudioLevelerBoostSlewLimited = false,
         bool rxAudioLevelerPeakLimited = false,
-        bool rxAudioLevelerOutputLimited = false)
+        bool rxAudioLevelerOutputLimited = false,
+        double? rxAudioLevelerDesiredGainDb = null,
+        double? rxAudioLevelerAppliedGainDb = null,
+        double? rxAudioLevelerGainDeltaDb = null,
+        double? rxAudioLevelerPeakHeadroomDb = null,
+        double? rxAudioLevelerPreLimitPeakDbfs = null)
     {
         var runtimeStatus = txMonitorRequested ? "audio-tx-monitor" : "ready";
         var audioStatus = txMonitorRequested ? "tx-monitor" : "ready";
@@ -9676,7 +9880,16 @@ public sealed class DspModernizationValidationToolTests
         var audioRmsDbfs = txMonitorAudioRmsDbfs ?? levelerOutputRmsDbfs;
         double? runtimeLevelerInputRmsDbfs = txMonitorRequested ? null : levelerInputRmsDbfs;
         double? runtimeLevelerOutputRmsDbfs = txMonitorRequested ? null : levelerOutputRmsDbfs;
-        double? runtimeLevelerAppliedGainDb = txMonitorRequested ? null : Math.Round(levelerOutputRmsDbfs - levelerInputRmsDbfs, 1);
+        double? defaultLevelerAppliedGainDb = txMonitorRequested ? null : Math.Round(levelerOutputRmsDbfs - levelerInputRmsDbfs, 1);
+        double? runtimeLevelerAppliedGainDb = txMonitorRequested ? null : rxAudioLevelerAppliedGainDb ?? defaultLevelerAppliedGainDb;
+        double? runtimeLevelerInputPeakDbfs = txMonitorRequested ? null : Math.Round(levelerInputRmsDbfs + 12.0, 1);
+        double? runtimeLevelerOutputPeakDbfs = txMonitorRequested ? null : Math.Round(levelerOutputRmsDbfs + 4.0, 1);
+        double? runtimeLevelerDesiredGainDb = txMonitorRequested ? null : rxAudioLevelerDesiredGainDb ?? runtimeLevelerAppliedGainDb;
+        double? runtimeLevelerGainDeltaDb = txMonitorRequested ? null : rxAudioLevelerGainDeltaDb ?? 0.0;
+        double? runtimeLevelerPeakHeadroomDb = txMonitorRequested ? null : rxAudioLevelerPeakHeadroomDb ?? 24.0;
+        double? runtimeLevelerPreLimitPeakDbfs = txMonitorRequested ? null : rxAudioLevelerPreLimitPeakDbfs ?? runtimeLevelerOutputPeakDbfs;
+        double? runtimeLevelerOutputLimitReductionDb = txMonitorRequested ? null : 0.0;
+        double? runtimeLevelerOutputLimitSampleCount = txMonitorRequested ? null : 0.0;
 
         return new
         {
@@ -9720,7 +9933,15 @@ public sealed class DspModernizationValidationToolTests
                     squelchTailActive = false,
                     rxAudioLevelerInputRmsDbfs = runtimeLevelerInputRmsDbfs,
                     rxAudioLevelerOutputRmsDbfs = runtimeLevelerOutputRmsDbfs,
+                    rxAudioLevelerInputPeakDbfs = runtimeLevelerInputPeakDbfs,
+                    rxAudioLevelerOutputPeakDbfs = runtimeLevelerOutputPeakDbfs,
+                    rxAudioLevelerDesiredGainDb = runtimeLevelerDesiredGainDb,
                     rxAudioLevelerAppliedGainDb = runtimeLevelerAppliedGainDb,
+                    rxAudioLevelerGainDeltaDb = runtimeLevelerGainDeltaDb,
+                    rxAudioLevelerPeakHeadroomDb = runtimeLevelerPeakHeadroomDb,
+                    rxAudioLevelerPreLimitPeakDbfs = runtimeLevelerPreLimitPeakDbfs,
+                    rxAudioLevelerOutputLimitReductionDb = runtimeLevelerOutputLimitReductionDb,
+                    rxAudioLevelerOutputLimitSampleCount = runtimeLevelerOutputLimitSampleCount,
                     rxAudioLevelerBoostSlewLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerBoostSlewLimited,
                     rxAudioLevelerPeakLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerPeakLimited,
                     rxAudioLevelerOutputLimited = txMonitorRequested ? (bool?)null : rxAudioLevelerOutputLimited

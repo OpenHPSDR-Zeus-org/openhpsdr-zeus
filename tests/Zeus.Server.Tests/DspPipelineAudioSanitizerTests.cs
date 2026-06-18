@@ -4005,6 +4005,457 @@ public sealed class DspPipelineAudioSanitizerTests
     }
 
     [Fact]
+    public void ApplyRxAudioLeveler_CapsHotLowProofG2TailFromLive40mTrace()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 9.8,
+            PauseHoldBlocks = 18,
+            Nr5SpeechHoldBlocks = 26
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-40.5));
+        block[0] = DbToLinear(-23.6);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.329,
+            signalProbability: 0.169,
+            agcGate: 0.898,
+            recoveryDrive: 0.508,
+            weakSignalMemory: 0.578,
+            outputDbfs: -26.7,
+            inputDbfs: -40.0,
+            maskSmoothing: 0.281,
+            peakEvidence: 0.066,
+            outputPeakDbfs: -14.1,
+            adjacentNoiseTrust: 0.067,
+            adjacentNoiseDrive: 0.044,
+            levelDrive: 0.998);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: 49_875, snrDb: 55.1, dbfs: -35.4, confidence: 0.940),
+            filterLowHz: -4_189,
+            filterHighHz: -100);
+
+        Assert.InRange(state.DesiredGainDb, 7.0, 9.5);
+        Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
+        Assert.InRange(state.OutputRmsDbfs, -34.5, -31.5);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_KeepsPeakProvenG2SpeechAboveHotTailCap()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 9.8,
+            PauseHoldBlocks = 18,
+            Nr5SpeechHoldBlocks = 26
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-39.8));
+        block[0] = DbToLinear(-27.8);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.476,
+            signalProbability: 0.483,
+            agcGate: 0.720,
+            recoveryDrive: 1.000,
+            weakSignalMemory: 0.568,
+            outputDbfs: -23.7,
+            inputDbfs: -38.6,
+            maskSmoothing: 0.333,
+            peakEvidence: 1.000,
+            outputPeakDbfs: -13.2,
+            adjacentNoiseTrust: 0.405,
+            adjacentNoiseDrive: 0.359,
+            levelDrive: 0.974);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: 49_875, snrDb: 55.1, dbfs: -35.4, confidence: 0.940),
+            filterLowHz: -4_189,
+            filterHighHz: -100);
+
+        Assert.InRange(state.DesiredGainDb, 9.5, 12.0);
+        Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
+        Assert.InRange(state.OutputRmsDbfs, -30.0, -27.0);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_CapsModerateHotLowProofG2TailFromLive40mTrace()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 9.8,
+            PauseHoldBlocks = 18,
+            Nr5SpeechHoldBlocks = 26
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-40.1));
+        block[0] = DbToLinear(-27.6);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.327,
+            signalProbability: 0.254,
+            agcGate: 0.943,
+            recoveryDrive: 0.622,
+            weakSignalMemory: 0.616,
+            outputDbfs: -25.1,
+            inputDbfs: -42.4,
+            maskSmoothing: 0.380,
+            peakEvidence: 0.364,
+            outputPeakDbfs: -13.5,
+            adjacentNoiseTrust: 0.115,
+            adjacentNoiseDrive: 0.056,
+            levelDrive: 1.000);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: 82_875, snrDb: 50.1, dbfs: -40.4, confidence: 0.940),
+            filterLowHz: -3_960,
+            filterHighHz: -100);
+
+        Assert.InRange(state.DesiredGainDb, 9.0, 11.8);
+        Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
+        Assert.InRange(state.OutputRmsDbfs, -30.5, -28.5);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_CapsStrong7305HighBoostToSpeechParity()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 20.7,
+            PauseHoldBlocks = 18,
+            Nr5SpeechHoldBlocks = 26
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-38.7));
+        block[0] = DbToLinear(-29.7);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.370,
+            signalProbability: 0.200,
+            agcGate: 0.485,
+            recoveryDrive: 0.314,
+            weakSignalMemory: 0.050,
+            outputDbfs: -26.3,
+            inputDbfs: -25.7,
+            maskSmoothing: 0.0,
+            peakEvidence: 0.191,
+            outputPeakDbfs: -17.6,
+            adjacentNoiseTrust: 0.0,
+            adjacentNoiseDrive: 0.0,
+            levelDrive: 0.958);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: -45_125, snrDb: 57.2, dbfs: -40.4, confidence: 0.940),
+            filterLowHz: -4_655,
+            filterHighHz: -100);
+
+        Assert.InRange(state.DesiredGainDb, 8.0, 10.8);
+        Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
+        Assert.InRange(state.OutputRmsDbfs, -30.5, -28.5);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_CapsPassbandLowProof7305HighBoostToSpeechParity()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 19.2,
+            PauseHoldBlocks = 18,
+            Nr5SpeechHoldBlocks = 24
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-41.8));
+        block[0] = DbToLinear(-29.6);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.304,
+            signalProbability: 0.176,
+            agcGate: 0.874,
+            recoveryDrive: 0.226,
+            weakSignalMemory: 0.078,
+            outputDbfs: -27.5,
+            inputDbfs: -22.7,
+            maskSmoothing: 0.078,
+            peakEvidence: 0.038,
+            outputPeakDbfs: -17.3,
+            adjacentNoiseTrust: 0.0,
+            adjacentNoiseDrive: 0.0,
+            levelDrive: 0.999);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: -187, snrDb: 33.9, dbfs: -32.5, confidence: 0.940),
+            filterLowHz: -4_655,
+            filterHighHz: -100);
+
+        Assert.InRange(state.DesiredGainDb, 10.5, 13.5);
+        Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
+        Assert.InRange(state.OutputRmsDbfs, -30.5, -28.5);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_CapsStrongPassband7305HighBoostToSpeechParity()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 17.4,
+            PauseHoldBlocks = 18,
+            Nr5SpeechHoldBlocks = 26
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-35.4));
+        block[0] = DbToLinear(-26.4);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.361,
+            signalProbability: 0.214,
+            agcGate: 0.570,
+            recoveryDrive: 0.647,
+            weakSignalMemory: 0.011,
+            outputDbfs: -22.9,
+            inputDbfs: -17.4,
+            maskSmoothing: 0.0,
+            peakEvidence: 0.160,
+            outputPeakDbfs: -14.2,
+            adjacentNoiseTrust: 0.0,
+            adjacentNoiseDrive: 0.0,
+            levelDrive: 1.000);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: -187, snrDb: 36.7, dbfs: -32.0, confidence: 0.940),
+            filterLowHz: -4_655,
+            filterHighHz: -100);
+
+        Assert.InRange(state.DesiredGainDb, 5.5, 8.0);
+        Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
+        Assert.InRange(state.OutputRmsDbfs, -30.5, -28.5);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_CapsFarOnly7305NoiseOpenHotRow()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 10.3,
+            PauseHoldBlocks = 18,
+            Nr5SpeechHoldBlocks = 26
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-39.1));
+        block[0] = DbToLinear(-27.8);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.409,
+            signalProbability: 0.116,
+            agcGate: 0.978,
+            recoveryDrive: 0.915,
+            weakSignalMemory: 0.595,
+            outputDbfs: -24.2,
+            inputDbfs: -39.5,
+            maskSmoothing: 0.332,
+            peakEvidence: 0.743,
+            outputPeakDbfs: -13.7,
+            adjacentNoiseTrust: 0.544,
+            adjacentNoiseDrive: 0.500,
+            levelDrive: 0.999);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: 184_875, snrDb: 54.8, dbfs: -111.9, confidence: 0.940),
+            filterLowHz: -4_655,
+            filterHighHz: -100);
+
+        Assert.InRange(state.DesiredGainDb, 1.0, 3.0);
+        Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
+        Assert.InRange(state.OutputRmsDbfs, -38.5, -36.5);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_CapsFarOnly7305HeldTailNoiseOpenHotRow()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 10.8,
+            PauseHoldBlocks = 18,
+            Nr5SpeechHoldBlocks = 26
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-40.3));
+        block[0] = DbToLinear(-29.7);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.315,
+            signalProbability: 0.155,
+            agcGate: 0.867,
+            recoveryDrive: 0.464,
+            weakSignalMemory: 0.506,
+            outputDbfs: -31.3,
+            inputDbfs: -41.4,
+            maskSmoothing: 0.332,
+            peakEvidence: 0.0,
+            outputPeakDbfs: -18.8,
+            adjacentNoiseTrust: 0.533,
+            adjacentNoiseDrive: 0.482,
+            levelDrive: 0.992);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: 184_875, snrDb: 45.5, dbfs: -114.0, confidence: 0.940),
+            filterLowHz: -4_655,
+            filterHighHz: -100);
+
+        Assert.InRange(state.DesiredGainDb, 5.5, 8.0);
+        Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
+        Assert.InRange(state.OutputRmsDbfs, -35.0, -32.8);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_CapsStrong7337LowProbabilityBoostToSpeechParity()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 12.8,
+            PauseHoldBlocks = 18,
+            Nr5SpeechHoldBlocks = 26
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-38.3));
+        block[0] = DbToLinear(-34.4);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.313,
+            signalProbability: 0.153,
+            agcGate: 0.809,
+            recoveryDrive: 0.0,
+            weakSignalMemory: 0.0,
+            outputDbfs: -22.8,
+            inputDbfs: -9.6,
+            maskSmoothing: 0.0,
+            peakEvidence: 0.0,
+            outputPeakDbfs: -16.6,
+            adjacentNoiseTrust: 0.0,
+            adjacentNoiseDrive: 0.0,
+            levelDrive: 1.000);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: -2_062, snrDb: 54.0, dbfs: -38.0, confidence: 0.940),
+            filterLowHz: -4_655,
+            filterHighHz: -100);
+
+        Assert.InRange(state.DesiredGainDb, 8.5, 11.0);
+        Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
+        Assert.InRange(state.OutputRmsDbfs, -29.5, -27.5);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_CapsStrong7337HighProbabilityBoostToSpeechParity()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 9.0,
+            PauseHoldBlocks = 18,
+            Nr5SpeechHoldBlocks = 26
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-39.6));
+        block[0] = DbToLinear(-36.3);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.457,
+            signalProbability: 0.495,
+            agcGate: 1.000,
+            recoveryDrive: 0.0,
+            weakSignalMemory: 0.0,
+            outputDbfs: -25.5,
+            inputDbfs: -16.6,
+            maskSmoothing: 0.0,
+            peakEvidence: 1.000,
+            outputPeakDbfs: -22.2,
+            adjacentNoiseTrust: 0.0,
+            adjacentNoiseDrive: 0.0,
+            levelDrive: 1.000);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: -2_062, snrDb: 48.0, dbfs: -38.0, confidence: 0.940),
+            filterLowHz: -4_655,
+            filterHighHz: -100);
+
+        Assert.InRange(state.DesiredGainDb, 10.5, 12.5);
+        Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
+        Assert.InRange(state.OutputRmsDbfs, -28.5, -27.5);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
+    public void ApplyRxAudioLeveler_CapsStrong7337FadedInputBoostToSpeechParity()
+    {
+        var state = new DspPipelineService.RxAudioLevelerState
+        {
+            GainDb = 12.0,
+            PauseHoldBlocks = 18,
+            Nr5SpeechHoldBlocks = 26
+        };
+        float[] block = new float[1024];
+        Array.Fill(block, DbToLinear(-44.5));
+        block[0] = DbToLinear(-35.1);
+        var nr5 = Nr5Diagnostics(
+            signalConfidence: 0.283,
+            signalProbability: 0.134,
+            agcGate: 0.498,
+            recoveryDrive: 0.0,
+            weakSignalMemory: 0.0,
+            outputDbfs: -29.0,
+            inputDbfs: -17.4,
+            maskSmoothing: 0.0,
+            peakEvidence: 0.0,
+            outputPeakDbfs: -21.5,
+            adjacentNoiseTrust: 0.0,
+            adjacentNoiseDrive: 0.0,
+            levelDrive: 0.998);
+
+        DspPipelineService.ApplyRxAudioLeveler(
+            block,
+            ref state,
+            nr5,
+            FrontendTopPeak(offsetHz: -2_062, snrDb: 54.2, dbfs: -44.0, confidence: 0.940),
+            filterLowHz: -4_655,
+            filterHighHz: -100);
+
+        Assert.InRange(state.DesiredGainDb, 14.0, 17.0);
+        Assert.Equal(state.DesiredGainDb, state.AppliedGainDb, precision: 6);
+        Assert.InRange(state.OutputRmsDbfs, -30.5, -28.0);
+        Assert.False(state.OutputLimited);
+    }
+
+    [Fact]
     public void ApplyRxAudioLeveler_CapsPassbandLowProofWeakBoundaryFromLiveTrace()
     {
         var state = new DspPipelineService.RxAudioLevelerState

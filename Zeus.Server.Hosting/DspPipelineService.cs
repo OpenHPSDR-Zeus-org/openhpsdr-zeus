@@ -678,6 +678,8 @@ public class DspPipelineService : BackgroundService,
         bool nr5FrontendFarPeakNoiseCap = false;
         bool nr5FrontendNoProofNoiseCap = false;
         bool nr5FrontendFarPeakDisagreement = false;
+        double nr5HybridSpeechPrior = 0.0;
+        double nr5NoSignalNoisePrior = 0.0;
         if (nr5Diagnostics is { Run: true } nr5)
         {
             nr5LevelerRun = true;
@@ -720,6 +722,64 @@ public class DspPipelineService : BackgroundService,
                     (Math.Abs(farTopPeak.OffsetHz) >= 6_000.0 &&
                         farTopPeak.SnrDb >= 13.0 &&
                         (farTopPeak.Confidence ?? 0.0) >= 0.76));
+            double nr5HybridPassbandProof = Math.Max(
+                nr5FrontendTopPeakProof,
+                0.72 * nr5FrontendHeldTailPeakProof);
+            double nr5HybridVadPrior = Math.Max(
+                ClampUnit((nr5.SignalProbability - 0.105) / 0.220),
+                Math.Sqrt(ClampUnit(
+                    ClampUnit((nr5.SignalProbability - 0.120) / 0.180) *
+                    ClampUnit((nr5.PeakEvidence - 0.060) / 0.360))));
+            double nr5HybridPassbandSpectral = Math.Max(
+                nr5HybridVadPrior,
+                nr5HybridPassbandProof > 0.0
+                    ? 0.62 * ClampUnit((nr5.SignalConfidence - 0.250) / 0.135)
+                    : 0.0);
+            double nr5HybridContinuity = Math.Max(
+                ClampUnit((nr5.WeakSignalMemory - 0.180) / 0.420),
+                Math.Max(
+                    ClampUnit((nr5.RecoveryDrive - 0.220) / 0.380),
+                    0.58 * ClampUnit((nr5.MaskSmoothing - 0.240) / 0.220)));
+            double nr5HybridOutput = Math.Max(
+                ClampUnit((nr5.OutputDbfs + 44.0) / 20.0),
+                0.64 * ClampUnit((nr5.OutputPeakDbfs + 38.0) / 20.0));
+            double nr5HybridAgc = ClampUnit((nr5.AgcGate - 0.240) / 0.520);
+            double nr5HybridHeldSeed = nr5SpeechHoldWasActive
+                ? Math.Max(
+                    ClampUnit((nr5.WeakSignalMemory - 0.260) / 0.360),
+                    ClampUnit((nr5.RecoveryDrive - 0.300) / 0.340))
+                : 0.0;
+            nr5HybridSpeechPrior = Math.Max(
+                Math.Sqrt(ClampUnit(
+                    Math.Max(nr5HybridPassbandProof, 0.18 * nr5HybridHeldSeed) *
+                    Math.Max(nr5HybridPassbandSpectral, 0.08) *
+                    Math.Max(nr5HybridOutput, 0.12))),
+                Math.Sqrt(ClampUnit(
+                    nr5HybridVadPrior *
+                    Math.Max(nr5HybridContinuity, 0.12) *
+                    Math.Max(nr5HybridAgc, 0.12) *
+                    Math.Max(nr5HybridOutput, 0.12))));
+            double nr5NoPassbandProof = 1.0 - ClampUnit(nr5HybridPassbandProof / 0.18);
+            double nr5LowVadNoise = Math.Max(
+                ClampUnit((0.185 - nr5.SignalProbability) / 0.155),
+                ClampUnit((0.080 - nr5.PeakEvidence) / 0.080));
+            double nr5AdjacentNoiseOpen = nr5.AdjacentNoiseUsable
+                ? Math.Sqrt(ClampUnit(
+                    ClampUnit((nr5.AdjacentNoiseTrust - 0.400) / 0.360) *
+                    ClampUnit((nr5.AdjacentNoiseDrive - 0.320) / 0.380)))
+                : 0.0;
+            double nr5OffSignalContext = frontendTopPeak is null
+                ? 0.65
+                : nr5FrontendFarPeakDisagreement ? 1.0 : 0.0;
+            double nr5ActiveNativeFloor = Math.Max(
+                ClampUnit((nr5.OutputDbfs + 40.0) / 18.0),
+                0.62 * ClampUnit((nr5.OutputPeakDbfs + 30.0) / 18.0));
+            nr5NoSignalNoisePrior = ClampUnit(
+                nr5NoPassbandProof *
+                Math.Max(nr5OffSignalContext, 0.72 * nr5AdjacentNoiseOpen) *
+                Math.Max(nr5LowVadNoise, 0.55 * nr5AdjacentNoiseOpen) *
+                (1.0 - ClampUnit(nr5HybridSpeechPrior / 0.55)) *
+                Math.Max(nr5ActiveNativeFloor, 0.35));
             bool nr5FrontendPeakNativeLiftCandidate =
                 nr5.OutputDbfs >= -38.5 &&
                 nr5NativeLiftDb >= 10.0;
@@ -2432,6 +2492,50 @@ public class DspPipelineService : BackgroundService,
                 nr5.SignalProbability < 0.180 &&
                 nr5.SignalConfidence < 0.335;
             if (desiredDb > 0.0 &&
+                desiredDb >= 10.0 &&
+                nr5NoSignalNoisePrior >= 0.220 &&
+                nr5HybridSpeechPrior < 0.240 &&
+                (nr5.SignalProbability <= 0.145 ||
+                    (nr5.SignalProbability <= 0.175 &&
+                        nr5.PeakEvidence <= 0.040)) &&
+                nr5FrontendTopPeakProof <= 0.0 &&
+                nr5FrontendHeldTailPeakProof <= 0.120 &&
+                inputRmsDbfs >= -66.0 &&
+                inputRmsDbfs <= -37.0 &&
+                (nr5FrontendFarPeakDisagreement ||
+                    (nr5.AdjacentNoiseUsable &&
+                        nr5.AdjacentNoiseDrive >= 0.400)) &&
+                !nr5NativeHotWeakSpeechCandidate &&
+                !nr5FrontendPeakRecoveredSpeechCandidate &&
+                !nr5FrontendPeakContinuitySpeechCandidate &&
+                !nr5HeldContinuityWeakSpeechCandidate &&
+                !nr5SuppressedWeakOnsetCandidate &&
+                !nr5PassbandWeakAcquisitionCandidate &&
+                !nr5PassbandSuppressedValleyCandidate &&
+                !nr5HeldSuppressedSpeechTailCandidate &&
+                !nr5NativeSuppressedWeakFragmentCandidate)
+            {
+                double noSignalTargetDbfs =
+                    -46.0
+                    + 7.0 * ClampUnit((nr5HybridSpeechPrior - 0.045) / 0.180)
+                    + 3.0 * ClampUnit((nr5.OutputDbfs + 32.0) / 12.0);
+                noSignalTargetDbfs = Math.Clamp(noSignalTargetDbfs, -46.0, -36.0);
+                double noSignalDesiredDb = Math.Clamp(
+                    noSignalTargetDbfs - inputRmsDbfs,
+                    RxLevelerMaxCutDb,
+                    RxLevelerMaxBoostDb);
+                if (noSignalDesiredDb < desiredDb - 1.0e-6)
+                {
+                    desiredDb = noSignalDesiredDb;
+                    nr5FrontendNoProofNoiseCap = true;
+                    if (nr5FrontendFarPeakDisagreement)
+                    {
+                        nr5FrontendFarPeakNoiseCap = true;
+                    }
+                    nr5StrongFrameParityCap = true;
+                }
+            }
+            if (desiredDb > 0.0 &&
                 (nr5FrontendTopPeakProof <= 0.0 ||
                     nr5MarginalPassbandComfortCap) &&
                 (nr5FrontendDisagreementProof >= 0.12 ||
@@ -3116,6 +3220,244 @@ public class DspPipelineService : BackgroundService,
                 if (offPassbandHeldTailDesiredDb < desiredDb - 1.0e-6)
                 {
                     desiredDb = offPassbandHeldTailDesiredDb;
+                    nr5FrontendFarPeakNoiseCap = true;
+                    nr5StrongFrameParityCap = true;
+                }
+            }
+            if (desiredDb > 0.0 &&
+                desiredDb >= 16.0 &&
+                inputRmsDbfs >= -42.0 &&
+                inputRmsDbfs <= -38.0 &&
+                nr5FrontendTopPeakProof <= 0.0 &&
+                nr5FrontendHeldTailPeakProof <= 0.10 &&
+                nr5FrontendFarPeakDisagreement &&
+                nr5.AdjacentNoiseUsable &&
+                nr5.AdjacentNoiseTrust >= 0.480 &&
+                nr5.AdjacentNoiseDrive >= 0.420 &&
+                nr5.OutputDbfs >= -28.0 &&
+                nr5.OutputDbfs <= -22.0 &&
+                nr5.OutputPeakDbfs >= -15.5 &&
+                nr5.OutputPeakDbfs <= -10.0 &&
+                nr5.SignalConfidence >= 0.300 &&
+                nr5.SignalProbability <= 0.170 &&
+                nr5.AgcGate >= 0.750 &&
+                nr5.LevelDrive >= 0.940 &&
+                nr5.RecoveryDrive >= 0.450 &&
+                nr5.WeakSignalMemory >= 0.500 &&
+                !nr5NativeHotWeakSpeechCandidate &&
+                !nr5FrontendPeakRecoveredSpeechCandidate &&
+                !nr5FrontendPeakContinuitySpeechCandidate &&
+                !nr5PassbandSuppressedValleyCandidate)
+            {
+                double farOnlyNoiseOpenProof = Math.Max(
+                    ClampUnit((nr5.OutputPeakDbfs + 15.5) / 5.5),
+                    Math.Max(
+                        ClampUnit((nr5.SignalConfidence - 0.300) / 0.110),
+                        ClampUnit((nr5.RecoveryDrive - 0.450) / 0.450)));
+                double farOnlyNoiseOpenTargetDbfs =
+                    -33.5 + 2.0 * farOnlyNoiseOpenProof;
+                farOnlyNoiseOpenTargetDbfs = Math.Clamp(
+                    farOnlyNoiseOpenTargetDbfs,
+                    -33.5,
+                    -31.5);
+                double farOnlyNoiseOpenDesiredDb = Math.Max(
+                    0.0,
+                    farOnlyNoiseOpenTargetDbfs - inputRmsDbfs);
+                if (farOnlyNoiseOpenDesiredDb < desiredDb - 1.0e-6)
+                {
+                    desiredDb = farOnlyNoiseOpenDesiredDb;
+                    nr5FrontendFarPeakNoiseCap = true;
+                    nr5StrongFrameParityCap = true;
+                }
+            }
+            if (desiredDb > 0.0 &&
+                desiredDb >= 16.0 &&
+                inputRmsDbfs >= -42.0 &&
+                inputRmsDbfs <= -38.0 &&
+                nr5FrontendTopPeakProof <= 0.0 &&
+                nr5FrontendHeldTailPeakProof <= 0.10 &&
+                nr5FrontendFarPeakDisagreement &&
+                nr5.AdjacentNoiseUsable &&
+                nr5.AdjacentNoiseTrust >= 0.480 &&
+                nr5.AdjacentNoiseDrive >= 0.420 &&
+                nr5.OutputDbfs >= -34.0 &&
+                nr5.OutputDbfs <= -29.0 &&
+                nr5.OutputPeakDbfs >= -22.0 &&
+                nr5.OutputPeakDbfs <= -17.0 &&
+                nr5.SignalConfidence >= 0.295 &&
+                nr5.SignalConfidence <= 0.340 &&
+                nr5.SignalProbability <= 0.165 &&
+                nr5.PeakEvidence <= 0.030 &&
+                nr5.AgcGate >= 0.700 &&
+                nr5.LevelDrive >= 0.900 &&
+                nr5.RecoveryDrive >= 0.340 &&
+                nr5.WeakSignalMemory >= 0.400 &&
+                !nr5NativeHotWeakSpeechCandidate &&
+                !nr5FrontendPeakRecoveredSpeechCandidate &&
+                !nr5FrontendPeakContinuitySpeechCandidate &&
+                !nr5PassbandSuppressedValleyCandidate)
+            {
+                double farOnlyHeldNoiseProof = Math.Max(
+                    ClampUnit((nr5.OutputPeakDbfs + 22.0) / 5.0),
+                    Math.Max(
+                        ClampUnit((nr5.SignalConfidence - 0.295) / 0.045),
+                        ClampUnit((nr5.RecoveryDrive - 0.340) / 0.260)));
+                double farOnlyHeldNoiseTargetDbfs =
+                    -35.0 + 2.0 * farOnlyHeldNoiseProof;
+                farOnlyHeldNoiseTargetDbfs = Math.Clamp(
+                    farOnlyHeldNoiseTargetDbfs,
+                    -35.0,
+                    -33.0);
+                double farOnlyHeldNoiseDesiredDb = Math.Max(
+                    0.0,
+                    farOnlyHeldNoiseTargetDbfs - inputRmsDbfs);
+                if (farOnlyHeldNoiseDesiredDb < desiredDb - 1.0e-6)
+                {
+                    desiredDb = farOnlyHeldNoiseDesiredDb;
+                    nr5FrontendFarPeakNoiseCap = true;
+                    nr5StrongFrameParityCap = true;
+                }
+            }
+            if (desiredDb > 0.0 &&
+                desiredDb >= 14.0 &&
+                inputRmsDbfs >= -46.0 &&
+                inputRmsDbfs <= -36.0 &&
+                nr5.InputDbfs >= -22.5 &&
+                nr5.OutputDbfs >= -31.0 &&
+                nr5.OutputDbfs <= -21.5 &&
+                nr5.OutputPeakDbfs >= -23.5 &&
+                nr5.OutputPeakDbfs <= -11.0 &&
+                nr5.SignalConfidence >= 0.265 &&
+                nr5.AgcGate >= 0.450 &&
+                nr5.LevelDrive >= 0.940)
+            {
+                double strongInputLowProbProof = Math.Max(
+                    ClampUnit((nr5.SignalProbability - 0.120) / 0.140),
+                    Math.Max(
+                        ClampUnit((nr5.PeakEvidence - 0.020) / 0.560),
+                        ClampUnit((nr5.SignalConfidence - 0.290) / 0.120)));
+                double strongInputLowProbTargetDbfs =
+                    -29.0 + 1.2 * strongInputLowProbProof;
+                strongInputLowProbTargetDbfs = Math.Clamp(
+                    strongInputLowProbTargetDbfs,
+                    -29.0,
+                    -27.8);
+                double strongInputLowProbDesiredDb = Math.Max(
+                    0.0,
+                    strongInputLowProbTargetDbfs - inputRmsDbfs);
+                if (strongInputLowProbDesiredDb < desiredDb - 1.0e-6)
+                {
+                    desiredDb = strongInputLowProbDesiredDb;
+                    nr5StrongFrameParityCap = true;
+                }
+            }
+            bool nr5PassbandOrStrongFarHotParity =
+                nr5FrontendTopPeakProof > 0.0 ||
+                nr5.InputDbfs >= -39.0 ||
+                nr5.SignalProbability >= 0.180 ||
+                nr5.PeakEvidence >= 0.180;
+            if (desiredDb > 0.0 &&
+                desiredDb >= 15.0 &&
+                inputRmsDbfs >= -50.0 &&
+                inputRmsDbfs <= -34.0 &&
+                (nr5FrontendTopPeakProof > 0.0 ||
+                    (nr5FrontendFarPeakDisagreement &&
+                        nr5PassbandOrStrongFarHotParity)) &&
+                nr5.OutputDbfs >= -34.0 &&
+                nr5.OutputDbfs <= -20.0 &&
+                nr5.OutputPeakDbfs >= -24.5 &&
+                nr5.OutputPeakDbfs <= -8.5 &&
+                (nr5.PeakEvidence >= 0.100 ||
+                    nr5.SignalProbability >= 0.180 ||
+                    nr5.InputDbfs >= -39.0) &&
+                nr5.SignalConfidence >= 0.270 &&
+                nr5.SignalConfidence <= 0.385 &&
+                nr5.SignalProbability <= 0.320 &&
+                nr5.PeakEvidence <= 0.550 &&
+                nr5.AgcGate >= 0.380 &&
+                nr5.LevelDrive >= 0.840 &&
+                (nr5.RecoveryDrive >= 0.250 ||
+                    nr5.WeakSignalMemory >= 0.040 ||
+                    nr5.OutputPeakDbfs >= -12.0) &&
+                (!nr5.AdjacentNoiseUsable ||
+                    (nr5.AdjacentNoiseTrust < 0.240 &&
+                        nr5.AdjacentNoiseDrive < 0.180)) &&
+                !nr5NativeHotWeakSpeechCandidate &&
+                !nr5FrontendPeakRecoveredSpeechCandidate &&
+                !nr5FrontendPeakContinuitySpeechCandidate &&
+                !nr5PassbandSuppressedValleyCandidate)
+            {
+                double moderateHotTailProof = Math.Max(
+                    ClampUnit((nr5.OutputDbfs + 33.0) / 13.0),
+                    Math.Max(
+                        ClampUnit((nr5.OutputPeakDbfs + 18.0) / 9.5),
+                        Math.Max(
+                            ClampUnit((nr5.SignalConfidence - 0.270) / 0.115),
+                            Math.Max(
+                                ClampUnit((nr5.SignalProbability - 0.120) / 0.125),
+                                ClampUnit(nr5.PeakEvidence / 0.225)))));
+                double moderateHotTailTargetDbfs =
+                    -30.2 + 1.2 * moderateHotTailProof;
+                moderateHotTailTargetDbfs = Math.Clamp(
+                    moderateHotTailTargetDbfs,
+                    -30.2,
+                    -29.0);
+                double moderateHotTailDesiredDb = Math.Max(
+                    0.0,
+                    moderateHotTailTargetDbfs - inputRmsDbfs);
+                if (moderateHotTailDesiredDb < desiredDb - 1.0e-6)
+                {
+                    desiredDb = moderateHotTailDesiredDb;
+                    nr5FrontendFarPeakNoiseCap = true;
+                    nr5StrongFrameParityCap = true;
+                }
+            }
+            if (desiredDb > 0.0 &&
+                desiredDb >= 16.0 &&
+                inputRmsDbfs >= -42.5 &&
+                inputRmsDbfs <= -39.0 &&
+                nr5FrontendTopPeakProof <= 0.0 &&
+                nr5FrontendHeldTailPeakProof <= 0.10 &&
+                nr5FrontendFarPeakDisagreement &&
+                nr5.OutputDbfs >= -32.5 &&
+                nr5.OutputDbfs <= -26.0 &&
+                nr5.OutputPeakDbfs >= -18.5 &&
+                nr5.OutputPeakDbfs <= -13.0 &&
+                nr5.OutputDbfs - nr5.InputDbfs >= 8.0 &&
+                nr5.SignalConfidence < 0.335 &&
+                nr5.SignalProbability < 0.175 &&
+                nr5.PeakEvidence <= 0.080 &&
+                nr5.AgcGate >= 0.650 &&
+                nr5.LevelDrive >= 0.950 &&
+                nr5.RecoveryDrive >= 0.450 &&
+                nr5.WeakSignalMemory >= 0.520 &&
+                (!nr5.AdjacentNoiseUsable ||
+                    (nr5.AdjacentNoiseTrust < 0.200 &&
+                        nr5.AdjacentNoiseDrive < 0.130)) &&
+                !nr5NativeHotWeakSpeechCandidate &&
+                !nr5FrontendPeakRecoveredSpeechCandidate &&
+                !nr5FrontendPeakContinuitySpeechCandidate &&
+                !nr5PassbandSuppressedValleyCandidate)
+            {
+                double offPassbandHotTailProof = Math.Max(
+                    ClampUnit((nr5.SignalConfidence - 0.300) / 0.040),
+                    Math.Max(
+                        ClampUnit((nr5.SignalProbability - 0.145) / 0.035),
+                        Math.Max(
+                            ClampUnit((nr5.OutputPeakDbfs + 18.5) / 5.5),
+                            ClampUnit((nr5.OutputDbfs + 32.5) / 6.5))));
+                double offPassbandHotTailTargetDbfs =
+                    -34.0 + 1.5 * offPassbandHotTailProof;
+                offPassbandHotTailTargetDbfs = Math.Clamp(
+                    offPassbandHotTailTargetDbfs,
+                    -34.0,
+                    -32.5);
+                double offPassbandHotTailDesiredDb = Math.Max(
+                    0.0,
+                    offPassbandHotTailTargetDbfs - inputRmsDbfs);
+                if (offPassbandHotTailDesiredDb < desiredDb - 1.0e-6)
+                {
+                    desiredDb = offPassbandHotTailDesiredDb;
                     nr5FrontendFarPeakNoiseCap = true;
                     nr5StrongFrameParityCap = true;
                 }

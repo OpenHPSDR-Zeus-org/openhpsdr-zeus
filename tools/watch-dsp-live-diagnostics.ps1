@@ -3616,6 +3616,29 @@ function Build-Report {
     elseif ($frontendNearPassbandPeakSampleCount -eq 0) {
         $summaryRecommendations.Add("Frontend saw band peaks, but none were within 3 kHz of the dial; retune toward frontendTopPeakWatch.topSamples before using this trace as on-signal NR5 evidence.") | Out-Null
     }
+    $rxAudioLevelerConstrainedMaxAbsGainDeltaDb = $null
+    $rxAudioLevelerConstrainedDesiredGainValues = New-Object System.Collections.Generic.List[double]
+    $rxAudioLevelerConstrainedAppliedGainValues = New-Object System.Collections.Generic.List[double]
+    $rxAudioLevelerConstrainedPeakHeadroomValues = New-Object System.Collections.Generic.List[double]
+    $rxAudioLevelerConstrainedPreLimitPeakValues = New-Object System.Collections.Generic.List[double]
+    foreach ($sample in @($rxAudioLevelerConstrainedSamples.ToArray())) {
+        $gainDelta = Get-NumericValue $sample["gainDeltaDb"]
+        if ($null -ne $gainDelta) {
+            $absGainDelta = [Math]::Round([Math]::Abs([double]$gainDelta), 3)
+            if ($null -eq $rxAudioLevelerConstrainedMaxAbsGainDeltaDb -or
+                $absGainDelta -gt [double]$rxAudioLevelerConstrainedMaxAbsGainDeltaDb) {
+                $rxAudioLevelerConstrainedMaxAbsGainDeltaDb = $absGainDelta
+            }
+        }
+        Add-Number $rxAudioLevelerConstrainedDesiredGainValues $sample["desiredGainDb"]
+        Add-Number $rxAudioLevelerConstrainedAppliedGainValues $sample["appliedGainDb"]
+        Add-Number $rxAudioLevelerConstrainedPeakHeadroomValues $sample["peakHeadroomDb"]
+        Add-Number $rxAudioLevelerConstrainedPreLimitPeakValues $sample["preLimitPeakDbfs"]
+    }
+    $rxAudioLevelerConstrainedDesiredGainStats = Get-NumberStats $rxAudioLevelerConstrainedDesiredGainValues
+    $rxAudioLevelerConstrainedAppliedGainStats = Get-NumberStats $rxAudioLevelerConstrainedAppliedGainValues
+    $rxAudioLevelerConstrainedPeakHeadroomStats = Get-NumberStats $rxAudioLevelerConstrainedPeakHeadroomValues
+    $rxAudioLevelerConstrainedPreLimitPeakStats = Get-NumberStats $rxAudioLevelerConstrainedPreLimitPeakValues
     $rxAudioLevelerCapNeedsReview = ($rxAudioLevelerOutputLimitedCount -gt 0 -and (
         ([int]$rxAudioLevelerOutputLimitReductionStats["count"] -gt 0 -and [double]$rxAudioLevelerOutputLimitReductionStats["max"] -gt 1.0) -or
         ([int]$rxAudioLevelerOutputLimitSampleCountStats["count"] -gt 0 -and [double]$rxAudioLevelerOutputLimitSampleCountStats["max"] -gt 8.0)))
@@ -3623,6 +3646,39 @@ function Build-Report {
         [int]$rmsStats["count"] -gt 1 -and [double]$rmsStats["movement"] -gt 4.0)
     $rxAudioLevelerHeadroomNeedsReview = ($rxAudioLevelerPeakLimitedCount -gt 0 -and
         [int]$rmsStats["count"] -gt 1 -and [double]$rmsStats["movement"] -gt 4.0)
+    $rxAudioLevelerSparseConstraintPctThreshold = 5.0
+    $rxAudioLevelerFinalAudioParityReady = ($nr5MixedWeakStrongEvidenceReady -and (
+        $nr5WeakStrongFinalAudioParityReady -or
+        $nr5SpeechQualifiedWeakStrongFinalAudioParityReady -or
+        $nr5PassbandQualifiedWeakStrongFinalAudioParityReady))
+    $rxAudioLevelerSparseConstraintEvidence = ($rxAudioLevelerDiagnosticCount -gt 0 -and
+        $null -ne $rxAudioLevelerConstrainedPct -and [double]$rxAudioLevelerConstrainedPct -le $rxAudioLevelerSparseConstraintPctThreshold -and
+        ($null -eq $rxAudioLevelerBoostSlewLimitedPct -or [double]$rxAudioLevelerBoostSlewLimitedPct -le $rxAudioLevelerSparseConstraintPctThreshold) -and
+        ($null -eq $rxAudioLevelerPeakLimitedPct -or [double]$rxAudioLevelerPeakLimitedPct -le $rxAudioLevelerSparseConstraintPctThreshold) -and
+        ($null -eq $rxAudioLevelerOutputLimitedPct -or [double]$rxAudioLevelerOutputLimitedPct -le 0.0))
+    $rxAudioLevelerMaxAbsGainDeltaAdvisoryThresholdDb = 24.0
+    $rxAudioLevelerMaxGainAdvisoryThresholdDb = 36.0
+    $rxAudioLevelerMinPeakHeadroomAdvisoryThresholdDb = 20.0
+    $rxAudioLevelerMaxPreLimitPeakAdvisoryThresholdDbfs = -4.0
+    $rxAudioLevelerSeverityWithinAdvisoryBounds = (
+        ($null -eq $rxAudioLevelerConstrainedMaxAbsGainDeltaDb -or [double]$rxAudioLevelerConstrainedMaxAbsGainDeltaDb -le $rxAudioLevelerMaxAbsGainDeltaAdvisoryThresholdDb) -and
+        ([int]$rxAudioLevelerConstrainedDesiredGainStats["count"] -le 0 -or [double]$rxAudioLevelerConstrainedDesiredGainStats["max"] -le $rxAudioLevelerMaxGainAdvisoryThresholdDb) -and
+        ([int]$rxAudioLevelerConstrainedAppliedGainStats["count"] -le 0 -or [double]$rxAudioLevelerConstrainedAppliedGainStats["max"] -le $rxAudioLevelerMaxGainAdvisoryThresholdDb) -and
+        ([int]$rxAudioLevelerConstrainedPeakHeadroomStats["count"] -le 0 -or [double]$rxAudioLevelerConstrainedPeakHeadroomStats["min"] -ge $rxAudioLevelerMinPeakHeadroomAdvisoryThresholdDb) -and
+        ([int]$rxAudioLevelerConstrainedPreLimitPeakStats["count"] -le 0 -or [double]$rxAudioLevelerConstrainedPreLimitPeakStats["max"] -le $rxAudioLevelerMaxPreLimitPeakAdvisoryThresholdDbfs))
+    $rxAudioLevelerSafetyAdvisoryOnly = ($rxAudioLevelerFinalAudioParityReady -and
+        $rxAudioLevelerSparseConstraintEvidence -and
+        $rxAudioLevelerSeverityWithinAdvisoryBounds -and
+        $rxAudioLevelerOutputLimitedCount -eq 0 -and
+        $nr5WeakDropoutCandidateLossCount -eq 0 -and
+        $nr5HotMakeupCount -eq 0 -and
+        -not $agcActivePumpingRisk -and
+        -not $agcWideMovement)
+    $rxAudioLevelerSettlingAdvisoryOnly = ($rxAudioLevelerSettlingNeedsReview -and $rxAudioLevelerSafetyAdvisoryOnly)
+    $rxAudioLevelerHeadroomAdvisoryOnly = ($rxAudioLevelerHeadroomNeedsReview -and $rxAudioLevelerSafetyAdvisoryOnly)
+    if ($rxAudioLevelerSettlingAdvisoryOnly -or $rxAudioLevelerHeadroomAdvisoryOnly) {
+        $summaryRecommendations.Add("RX audio leveler constraints were sparse, output limiting was absent, and qualified NR5 final-audio parity is ready; store this as advisory evidence and avoid tuning leveler gain unless repeated traces or listening show pumping.") | Out-Null
+    }
     $nr5LowEvidenceLiftNeedsReview = ($nr5LowEvidenceLiftCount -ge 5 -or
         ($null -ne $nr5LowEvidenceLiftPct -and [double]$nr5LowEvidenceLiftPct -ge 20.0))
     $nr5OutputMotionNeedsReview = $false
@@ -3815,10 +3871,10 @@ function Build-Report {
     elseif ($rxAudioLevelerCapNeedsReview) {
         $trendStatus = "rx-leveler-cap-watch"
     }
-    elseif ($rxAudioLevelerSettlingNeedsReview) {
+    elseif ($rxAudioLevelerSettlingNeedsReview -and -not $rxAudioLevelerSettlingAdvisoryOnly) {
         $trendStatus = "rx-leveler-settling-watch"
     }
-    elseif ($rxAudioLevelerHeadroomNeedsReview) {
+    elseif ($rxAudioLevelerHeadroomNeedsReview -and -not $rxAudioLevelerHeadroomAdvisoryOnly) {
         $trendStatus = "rx-leveler-headroom-watch"
     }
     elseif ($readyCount -eq $okCount) {
@@ -4146,6 +4202,24 @@ function Build-Report {
             settlingMovementThresholdDb = 4.0
             capReductionThresholdDb = 1.0
             capSampleThreshold = 8.0
+            sparseConstraintAdvisoryPctThreshold = $rxAudioLevelerSparseConstraintPctThreshold
+            maxAbsGainDeltaAdvisoryThresholdDb = $rxAudioLevelerMaxAbsGainDeltaAdvisoryThresholdDb
+            maxGainAdvisoryThresholdDb = $rxAudioLevelerMaxGainAdvisoryThresholdDb
+            minPeakHeadroomAdvisoryThresholdDb = $rxAudioLevelerMinPeakHeadroomAdvisoryThresholdDb
+            maxPreLimitPeakAdvisoryThresholdDbfs = $rxAudioLevelerMaxPreLimitPeakAdvisoryThresholdDbfs
+            finalAudioParityReady = $rxAudioLevelerFinalAudioParityReady
+            sparseConstraintEvidence = $rxAudioLevelerSparseConstraintEvidence
+            severityWithinAdvisoryBounds = $rxAudioLevelerSeverityWithinAdvisoryBounds
+            constrainedMaxAbsGainDeltaDb = $rxAudioLevelerConstrainedMaxAbsGainDeltaDb
+            constrainedDesiredGainDb = $rxAudioLevelerConstrainedDesiredGainStats
+            constrainedAppliedGainDb = $rxAudioLevelerConstrainedAppliedGainStats
+            constrainedPeakHeadroomDb = $rxAudioLevelerConstrainedPeakHeadroomStats
+            constrainedPreLimitPeakDbfs = $rxAudioLevelerConstrainedPreLimitPeakStats
+            safetyAdvisoryOnly = $rxAudioLevelerSafetyAdvisoryOnly
+            settlingNeedsReview = $rxAudioLevelerSettlingNeedsReview
+            settlingAdvisoryOnly = $rxAudioLevelerSettlingAdvisoryOnly
+            headroomNeedsReview = $rxAudioLevelerHeadroomNeedsReview
+            headroomAdvisoryOnly = $rxAudioLevelerHeadroomAdvisoryOnly
             topBoostSlewLimitedSamples = @($rxAudioLevelerBoostSlewLimitedTopSamples)
             topPeakLimitedSamples = @($rxAudioLevelerPeakLimitedTopSamples)
             topOutputLimitedSamples = @($rxAudioLevelerOutputLimitedTopSamples)

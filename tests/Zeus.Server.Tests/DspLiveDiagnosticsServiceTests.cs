@@ -610,7 +610,9 @@ public sealed class DspLiveDiagnosticsServiceTests
     {
         var candidates = DspExternalEngineCandidateCatalog.All();
 
-        Assert.Equal(new[] { "rnnoise", "rmnoise", "deepfilternet", "speexdsp", "webrtc-apm" }, candidates.Select(c => c.Id).ToArray());
+        Assert.Equal(
+            new[] { "rnnoise", "rmnoise", "dpdfnet", "deepfilternet", "clearervoice-studio", "speexdsp", "webrtc-apm" },
+            candidates.Select(c => c.Id).ToArray());
         Assert.All(candidates, c =>
         {
             Assert.Equal(1, c.SchemaVersion);
@@ -652,10 +654,13 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("nr5-ai-assist-mode", rnnoise.RequiredControls);
         Assert.Contains("official-xiph-runtime-only", rnnoise.RequiredControls);
         Assert.Contains("le9endary-training-reference-only", rnnoise.RequiredControls);
+        Assert.Contains("werman-plugin-reference-only", rnnoise.RequiredControls);
         Assert.Contains("weak-ssb-volume-parity", rnnoise.RequiredBenchmarks);
         Assert.Contains("Xiph", rnnoise.License);
         Assert.Contains("le9endary/RNNoise has no repo license", rnnoise.License);
+        Assert.Contains("werman/noise-suppression-for-voice is GPL-3.0", rnnoise.License);
         Assert.Contains("https://github.com/le9endary/RNNoise", rnnoise.ReferenceUrls);
+        Assert.Contains("https://github.com/werman/noise-suppression-for-voice", rnnoise.ReferenceUrls);
         Assert.Contains(
             rnnoise.Blockers,
             blocker => blocker.Contains("do not vendor", StringComparison.OrdinalIgnoreCase));
@@ -671,6 +676,23 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains(
             rmnoise.Blockers,
             blocker => blocker.Contains("consent/privacy", StringComparison.OrdinalIgnoreCase));
+
+        var dpdfnet = Assert.Single(candidates, c => c.Id == "dpdfnet");
+        Assert.Contains("NR5-AI Assist", dpdfnet.IntegrationPoint);
+        Assert.Contains("onnx-or-tflite-runtime-package-review", dpdfnet.RequiredControls);
+        Assert.Contains("48khz-frame-adapter", dpdfnet.RequiredControls);
+        Assert.Contains("weak-ssb-volume-parity", dpdfnet.RequiredBenchmarks);
+        Assert.Contains("realtime-latency-g2", dpdfnet.RequiredBenchmarks);
+        Assert.Contains("Apache-2.0", dpdfnet.License);
+        Assert.Contains("https://github.com/ceva-ip/DPDFNet", dpdfnet.ReferenceUrls);
+
+        var clearerVoice = Assert.Single(candidates, c => c.Id == "clearervoice-studio");
+        Assert.Contains("offline", clearerVoice.IntegrationPoint);
+        Assert.Contains("offline-only-until-runtime-approved", clearerVoice.RequiredControls);
+        Assert.Contains("recording-consent-gate", clearerVoice.RequiredControls);
+        Assert.Contains("offline-bypass", clearerVoice.RequiredBenchmarks);
+        Assert.Contains("Apache-2.0", clearerVoice.License);
+        Assert.Contains("https://github.com/modelscope/ClearerVoice-Studio", clearerVoice.ReferenceUrls);
     }
 
     private static void PublishScene(

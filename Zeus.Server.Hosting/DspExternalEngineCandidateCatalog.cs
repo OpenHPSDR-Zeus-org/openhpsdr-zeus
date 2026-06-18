@@ -36,12 +36,13 @@ public static class DspExternalEngineCandidateCatalog
                 "official-xiph-runtime-only",
                 "model-license-provenance-gate",
                 "le9endary-training-reference-only",
+                "werman-plugin-reference-only",
                 "no-raw-wdsp-iq-replacement",
                 "no-tx-or-puresignal-coupling",
             ],
             FallbackPolicy: "disabled/unavailable/model-load-failure path must fall back to current Zeus NR5 post-WDSP audio; non-speech/CW/digital/TX/PureSignal paths must bypass the engine",
-            License: "BSD-3-Clause for official Xiph RNNoise runtime; le9endary/RNNoise has no repo license and is training-reference-only until provenance is cleared",
-            PackagingStatus: "official-xiph-native-c-library-not-vendored; le9endary fork not vendorable until license/model provenance is cleared; model packaging and 48 kHz frame adapter required",
+            License: "BSD-3-Clause for official Xiph RNNoise runtime; le9endary/RNNoise has no repo license and is training-reference-only until provenance is cleared; werman/noise-suppression-for-voice is GPL-3.0 plugin reference only, not core-vendored runtime",
+            PackagingStatus: "official-xiph-native-c-library-not-vendored; le9endary fork not vendorable until license/model provenance is cleared; werman plugin not vendored into core; model packaging and 48 kHz frame adapter required",
             RuntimeRisk: "medium",
             LatencyRisk: "low-medium",
             RadioSafetyRisk: "medium: speech-trained model may damage weak CW, digital, or non-speech HF content",
@@ -51,6 +52,7 @@ public static class DspExternalEngineCandidateCatalog
                 "Official Xiph runtime exposes a small frame API suitable for an opt-in NR5-AI Assist post-demod adapter.",
                 "Useful as a low-footprint post-demod speech benchmark candidate.",
                 "The le9endary fork provides useful training workflow notes, but must not be treated as a shippable runtime or model source until licensing is cleared.",
+                "The werman plugin is useful as a practical RNNoise behavior baseline on Windows, but its GPL plugin package remains reference-only for Zeus core.",
             ],
             RequiredBenchmarks:
             [
@@ -84,6 +86,7 @@ public static class DspExternalEngineCandidateCatalog
                 "https://github.com/xiph/rnnoise",
                 "https://gitlab.xiph.org/xiph/rnnoise",
                 "https://github.com/le9endary/RNNoise",
+                "https://github.com/werman/noise-suppression-for-voice",
             ]),
         new(
             SchemaVersion: 1,
@@ -157,6 +160,72 @@ public static class DspExternalEngineCandidateCatalog
             ]),
         new(
             SchemaVersion: 1,
+            Id: "dpdfnet",
+            Name: "DPDFNet",
+            Family: "causal-neural-speech-enhancement",
+            IntegrationPoint: "post-demod-rx-audio-speech-only after NR5/SPNR as NR5-AI Assist",
+            DefaultState: "off",
+            RolloutPolicy: OptInGate,
+            EvaluationStage: "catalog-only-not-integrated",
+            AllowedSignalPaths: ["post-demod-rx-audio-speech", "nr5-ai-assist-post-demod-rx-audio-speech", "offline-audio-bakeoff"],
+            ForbiddenSignalPaths: ["raw-wdsp-iq", "cw-or-digital-non-speech", "tx-audio", "tx-monitor", "puresignal-feedback"],
+            RequiredControls:
+            [
+                "operator-visible-opt-in",
+                "clean-bypass-fallback",
+                "speech-content-gate",
+                "cpu-latency-budget-gate",
+                "onnx-or-tflite-runtime-package-review",
+                "48khz-frame-adapter",
+                "original-filtered-blend-control",
+                "model-license-provenance-gate",
+                "no-raw-wdsp-iq-replacement",
+                "no-tx-or-puresignal-coupling",
+            ],
+            FallbackPolicy: "disabled/unavailable/model-load-failure/latency-overrun path must fall back to current Zeus NR5 post-WDSP audio; non-speech/CW/digital/TX/PureSignal paths must bypass the model",
+            License: "Apache-2.0 for repository code; ONNX/TFLite/pretrained model artifact provenance and redistribution rights must be reviewed before packaging",
+            PackagingStatus: "python/onnx/tflite runtime not vendored; model package, 48 kHz streaming frame adapter, and latency guard required before any NR5-AI Assist runtime path",
+            RuntimeRisk: "medium-high",
+            LatencyRisk: "medium",
+            RadioSafetyRisk: "medium-high: speech enhancer may erase weak non-speech HF content or pull noise into speech unless gated by NR5/frontend signal evidence",
+            Strengths:
+            [
+                "Modern causal DeepFilterNet-style speech enhancement with released 16 kHz and 48 kHz models.",
+                "ONNX/TFLite paths and a streaming API make it the strongest live NR5-AI Assist candidate for high-quality speech-only experiments.",
+                "Dual-path temporal/cross-band modeling is promising for faint SSB speech when blended behind NR5 passband evidence.",
+            ],
+            RequiredBenchmarks:
+            [
+                "ssb-like-speech",
+                "weak-ssb-volume-parity",
+                "noise-only",
+                "weak-cw-carrier-bypass",
+                "fading-carrier",
+                "agc-level-step",
+                "nr5-ai-assist-bypass",
+                "realtime-latency-g2",
+            ],
+            RequiredEvidence:
+            [
+                "Must preserve weak CW/carrier/non-speech fixtures by deterministic bypass and must not touch raw WDSP IQ.",
+                "Must beat NR5/NR2 speech fixtures without pumping, false-open noise, clipped peaks, or weak-speech deletion.",
+                "Must prove 48 kHz streaming latency, CPU, allocations, underrun behavior, and fallback on ANAN G2-class hardware.",
+                "Must document ONNX/TFLite runtime package, code license, model artifact origin, model hash, and redistribution rights before packaging.",
+            ],
+            Blockers:
+            [
+                "No reviewed ONNX/TFLite runtime package or model artifact in Zeus.",
+                "No managed streaming frame adapter, latency watchdog, or blend control in the live RX pipeline.",
+                "No G2 live evidence yet proving faint HF speech improves without damaging CW, digital, or no-signal audio.",
+            ],
+            ReferenceUrls:
+            [
+                "https://github.com/ceva-ip/DPDFNet",
+                "https://huggingface.co/Ceva-IP/DPDFNet",
+                "https://arxiv.org/abs/2512.16420",
+            ]),
+        new(
+            SchemaVersion: 1,
             Id: "deepfilternet",
             Name: "DeepFilterNet",
             Family: "neural-full-band-speech-enhancement",
@@ -211,6 +280,69 @@ public static class DspExternalEngineCandidateCatalog
             ReferenceUrls:
             [
                 "https://github.com/Rikorose/DeepFilterNet",
+            ]),
+        new(
+            SchemaVersion: 1,
+            Id: "clearervoice-studio",
+            Name: "ClearerVoice-Studio",
+            Family: "offline-ai-speech-processing-suite",
+            IntegrationPoint: "offline-recorded-post-demod-rx-audio-speech evidence and NR5-AI Assist training/reference",
+            DefaultState: "off",
+            RolloutPolicy: OptInGate,
+            EvaluationStage: "catalog-only-not-integrated",
+            AllowedSignalPaths: ["offline-recorded-post-demod-rx-audio-speech", "offline-audio-bakeoff"],
+            ForbiddenSignalPaths: ["raw-wdsp-iq", "live-realtime-default", "cw-or-digital-non-speech", "tx-audio", "tx-monitor", "puresignal-feedback"],
+            RequiredControls:
+            [
+                "operator-visible-opt-in",
+                "clean-bypass-fallback",
+                "speech-content-gate",
+                "recording-consent-gate",
+                "offline-only-until-runtime-approved",
+                "cpu-latency-budget-gate",
+                "model-license-provenance-gate",
+                "no-live-default",
+                "no-raw-wdsp-iq-replacement",
+                "no-tx-or-puresignal-coupling",
+            ],
+            FallbackPolicy: "offline-only/unavailable/model-load-failure path must leave current Zeus NR5 audio unchanged; live RX, non-speech/CW/digital/TX/PureSignal paths must bypass the suite",
+            License: "Apache-2.0 for repository code; pretrained model artifact provenance and redistribution rights must be reviewed before packaging or fixture publication",
+            PackagingStatus: "offline research/reference suite not vendored; no approved live runtime, model package, or operator recording workflow exists",
+            RuntimeRisk: "high",
+            LatencyRisk: "high",
+            RadioSafetyRisk: "high: broad speech enhancement/separation/super-resolution models can alter HF content and are not safe as live receiver defaults",
+            Strengths:
+            [
+                "Broad AI speech toolkit covering enhancement, separation, super-resolution, and target-speaker extraction.",
+                "Useful for offline fixture restoration experiments and objective speech-quality scoring against NR5/NR2.",
+                "Can help train or compare future local NR5-AI Assist ideas without becoming a live default path.",
+            ],
+            RequiredBenchmarks:
+            [
+                "offline-ssb-like-speech",
+                "weak-ssb-volume-parity",
+                "noise-only",
+                "weak-cw-carrier-bypass",
+                "artifact-scoring",
+                "offline-bypass",
+            ],
+            RequiredEvidence:
+            [
+                "Must preserve weak carrier/CW fixtures by deterministic bypass and must not touch raw WDSP IQ.",
+                "Must beat NR5/NR2 offline speech fixtures without pumping, over-smoothing, or weak-speech deletion.",
+                "Must prove operator recording consent, dataset retention, model provenance, package size, and reproducible offline outputs.",
+                "Must remain offline/reference-only until live latency, CPU, and cross-radio safety are separately approved.",
+            ],
+            Blockers:
+            [
+                "No reviewed pretrained model package or redistribution plan.",
+                "No live streaming adapter or G2 latency evidence.",
+                "No approved consent/privacy workflow for captured operator recordings.",
+                "Offline restoration behavior may not preserve realtime HF receiver semantics.",
+            ],
+            ReferenceUrls:
+            [
+                "https://github.com/modelscope/ClearerVoice-Studio",
             ]),
         new(
             SchemaVersion: 1,
