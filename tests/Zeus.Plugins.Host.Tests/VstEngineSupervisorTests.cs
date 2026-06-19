@@ -12,7 +12,13 @@ namespace Zeus.Plugins.Host.Tests;
 /// watchdog, handshake validation, and reconnect replay. These run on ANY
 /// platform: the controller's test/seam constructor injects fake process and
 /// bridge implementations, so no real engine or Windows shared memory is needed.
+///
+/// In the LoadSensitive collection (non-parallel): these assert on timing
+/// (watchdog intervals, relaunch backoff), so running them without sibling
+/// tests competing for the runner's cores removes the contention that made
+/// them flaky once the assembly grew.
 /// </summary>
+[Collection("LoadSensitive")]
 public class VstEngineSupervisorTests
 {
     static VstEngineSupervisorTests()
