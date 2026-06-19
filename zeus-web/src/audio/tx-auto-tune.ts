@@ -17,6 +17,7 @@ export type TxAutoTuneSample = {
   psFeedbackLevel: number | null;
   vstDegradedDelta: number | null;
   ingestDroppedFrameDelta: number | null;
+  txBlockDelta: number | null;
   p2QueuedPackets: number | null;
   p2TransportFailureDelta: number | null;
   p2QueueFailureDelta: number | null;
@@ -50,6 +51,7 @@ export type TxAutoTuneStats = {
   psFeedbackMedian: number | null;
   vstDegradedBlocks: number;
   ingestDroppedFrames: number;
+  txBlocksProcessed: number;
   p2QueuedPacketsMax: number;
   p2TransportFailures: number;
   p2QueueFailures: number;
@@ -224,6 +226,7 @@ export function summarizeTxAutoTuneSamples(samples: ReadonlyArray<TxAutoTuneSamp
     psFeedbackMedian: percentile(psFeedback, 0.5),
     vstDegradedBlocks: sumDeltas(samples, (s) => s.vstDegradedDelta),
     ingestDroppedFrames: sumDeltas(samples, (s) => s.ingestDroppedFrameDelta),
+    txBlocksProcessed: sumDeltas(samples, (s) => s.txBlockDelta),
     p2QueuedPacketsMax: maxCount(samples, (s) => s.p2QueuedPackets),
     p2TransportFailures: sumDeltas(samples, (s) => s.p2TransportFailureDelta),
     p2QueueFailures: sumDeltas(samples, (s) => s.p2QueueFailureDelta),
@@ -247,6 +250,17 @@ export function recommendTxAutoTune(
 
   if (stats.voicedSampleCount < MIN_VOICED_SAMPLES) {
     blockers.push('not enough voiced samples');
+  }
+  if (stats.txBlocksProcessed <= 0) {
+    blockers.push('TXA did not process fresh mic blocks during sampling');
+    return {
+      settings: current,
+      stats,
+      actions,
+      blockers,
+      changed: false,
+      summary: 'Auto tune needs fresh TX monitor samples',
+    };
   }
   if (stats.swrP95 >= 2.5) {
     blockers.push('SWR is too high for automatic power optimization');

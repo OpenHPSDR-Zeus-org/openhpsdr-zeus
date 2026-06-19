@@ -94,6 +94,28 @@ public class AudioSuitePreviewEndpointTests : IClassFixture<AudioSuitePreviewEnd
     }
 
     [Fact]
+    public async Task TxDiagTreatsPreviewAsStageActiveOnly()
+    {
+        using var client = _factory.CreateClient();
+
+        var on = await client.PutAsJsonAsync(
+            "/api/tx-audio-suite/preview", new { enabled = true, meterOnly = true });
+        Assert.Equal(HttpStatusCode.OK, on.StatusCode);
+
+        using var json = await client.GetFromJsonAsync<JsonDocument>("/api/tx/diag");
+        Assert.NotNull(json);
+        var root = json!.RootElement;
+
+        Assert.True(root.GetProperty("stage").GetProperty("hostTxActive").GetBoolean());
+        Assert.False(root.GetProperty("audioPath").GetProperty("hostTxActive").GetBoolean());
+        Assert.False(root.GetProperty("egress").GetProperty("hostTxActive").GetBoolean());
+
+        var off = await client.PutAsJsonAsync(
+            "/api/tx-audio-suite/preview", new { enabled = false, meterOnly = true });
+        Assert.Equal(HttpStatusCode.OK, off.StatusCode);
+    }
+
+    [Fact]
     public async Task TxSuiteAliasesExposeTxRouteSurfaces()
     {
         using var client = _factory.CreateClient();

@@ -46,6 +46,7 @@ function sample(overrides: Partial<TxAutoTuneSample> = {}): TxAutoTuneSample {
     psFeedbackLevel: 150,
     vstDegradedDelta: 0,
     ingestDroppedFrameDelta: 0,
+    txBlockDelta: 1,
     p2QueuedPackets: 0,
     p2TransportFailureDelta: 0,
     p2QueueFailureDelta: 0,
@@ -100,6 +101,27 @@ describe('recommendTxAutoTune', () => {
     expect(plan.blockers.join(' ')).toContain('audio engine');
     expect(plan.settings.micGainDb).toBe(-12);
     expect(plan.settings.levelerMaxGainDb).toBe(6);
+    expect(plan.changed).toBe(false);
+  });
+
+  it('holds settings when diagnostics do not show fresh TXA blocks', () => {
+    const plan = recommendTxAutoTune(
+      settings({ micGainDb: -12, levelerMaxGainDb: 4, targetSpectralDensity: 100 }),
+      samples({
+        micPkDbfs: -24,
+        outPkDbfs: -15,
+        outAvDbfs: -31,
+        alcGrDb: 0.5,
+        lvlrGrDb: 0.8,
+        cfcGrDb: 0.5,
+        txBlockDelta: 0,
+      }),
+    );
+
+    expect(plan.blockers.join(' ')).toContain('TXA did not process fresh mic blocks');
+    expect(plan.summary).toContain('fresh TX monitor samples');
+    expect(plan.settings.micGainDb).toBe(-12);
+    expect(plan.settings.levelerMaxGainDb).toBe(4);
     expect(plan.changed).toBe(false);
   });
 

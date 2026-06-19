@@ -69,6 +69,7 @@ type AutoTuneChainMeters = {
 type AutoTuneCounters = {
   vstDegradedBlocks: number | null;
   ingestDroppedFrames: number | null;
+  txBlocks: number | null;
   p2TransportFailures: number | null;
   p2QueueFailures: number | null;
 };
@@ -149,11 +150,13 @@ function autoTuneSampleFromDiagnostics(
   const tx = useTxStore.getState();
   const degradedBlocks = finiteCount(diag.vstEngine?.degradedBlocks);
   const droppedFrames = finiteCount(diag.ingest.droppedFrames);
+  const txBlocks = finiteCount(diag.ingest.totalTxBlocks);
   const p2TransportFailures = finiteCount(diag.protocol2?.sendFailures);
   const p2QueueFailures = finiteCount(diag.protocol2?.queueWriteFailures);
   const counters = {
     vstDegradedBlocks: degradedBlocks,
     ingestDroppedFrames: droppedFrames,
+    txBlocks,
     p2TransportFailures,
     p2QueueFailures,
   };
@@ -172,6 +175,7 @@ function autoTuneSampleFromDiagnostics(
       psFeedbackLevel: finitePositive(tx.psFeedbackLevel),
       vstDegradedDelta: counterDelta(prev.vstDegradedBlocks, degradedBlocks),
       ingestDroppedFrameDelta: counterDelta(prev.ingestDroppedFrames, droppedFrames),
+      txBlockDelta: counterDelta(prev.txBlocks, txBlocks),
       p2QueuedPackets: finiteCount(diag.protocol2?.queuedPackets),
       p2TransportFailureDelta: counterDelta(prev.p2TransportFailures, p2TransportFailures),
       p2QueueFailureDelta: counterDelta(prev.p2QueueFailures, p2QueueFailures),
@@ -188,6 +192,7 @@ async function collectTxAutoTuneSamples(
   let counters: AutoTuneCounters = {
     vstDegradedBlocks: null,
     ingestDroppedFrames: null,
+    txBlocks: null,
     p2TransportFailures: null,
     p2QueueFailures: null,
   };

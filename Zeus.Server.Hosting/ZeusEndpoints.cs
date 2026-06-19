@@ -832,6 +832,7 @@ public static class ZeusEndpoints
             var keying = hardware.KeyingSnapshot(externalPtt.Snapshot());
             var power = hardware.PowerCalibrationSnapshot();
             bool hostTxActive = tx.IsMoxOn || tx.IsTunOn || tx.IsTwoToneOn;
+            bool txStageActive = hostTxActive || radioState.TxMonitorEnabled;
             bool requiresMicUplink = tx.IsMoxOn && !tx.IsTunOn && !tx.IsTwoToneOn;
             var txStage = dsp.CurrentEngine?.GetTxStageMeters() ?? TxStageMeters.Silent;
             var activePower = string.Equals(power.ActiveProtocol, "P2", StringComparison.OrdinalIgnoreCase)
@@ -864,7 +865,7 @@ public static class ZeusEndpoints
                     hostTxActive,
                     micUplink,
                     requiresMicUplink),
-                stage = BuildTxStageDiagnostics(txStage, hostTxActive),
+                stage = BuildTxStageDiagnostics(txStage, txStageActive),
                 egress = BuildTxEgressHealth(
                     generatedUtc,
                     ring.TotalWritten,
