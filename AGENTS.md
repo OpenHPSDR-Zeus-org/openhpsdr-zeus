@@ -53,10 +53,10 @@ bd dolt push          # Push beads data to remote
   of feature-branch commits.
 - Add `-TakeNext` to `finish-work.ps1` when a session should push its PR and
   immediately allocate the next ready issue into a fresh worktree.
-- Add `-PromoteLocal -RemoveWorktree -TakeNext` after a successful finish when
-  the session should open/update the PR, merge the finished branch into
-  `local/develop` for immediate combined local testing, remove the completed
-  worktree, and allocate the next ready issue.
+- Finish agent lanes with `pwsh scripts/finish-work.ps1 -Message "<subject>"
+  -Issue <id> -Autopilot`. Autopilot requires a PR, merges the finished branch
+  into `local/develop` for immediate combined local testing, removes the
+  completed worktree, and allocates the next ready issue.
 - The workflow scripts configure `core.hooksPath=.githooks`; the hooks block
   direct commits on `main` and `develop`.
 - After the PR merges, run `pwsh scripts/cleanup-merged-worktrees.ps1` to

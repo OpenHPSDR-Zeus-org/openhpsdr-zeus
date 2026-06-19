@@ -389,6 +389,6 @@ foreach ($lane in $lanes) {
     Write-Host "    branch:   $($lane.Branch)"
     if ($lane.Worktree) {
         Write-Host "    worktree: $($lane.Worktree)"
-        Write-Host "    finish:   pwsh scripts/finish-work.ps1 -Message '<commit subject>' -Issue $($lane.Issue) -TakeNext"
     }
+    Write-Host "    finish:   pwsh scripts/finish-work.ps1 -Message '<commit subject>' -Issue $($lane.Issue) -Autopilot"
 }

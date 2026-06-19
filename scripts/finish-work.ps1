@@ -4,6 +4,7 @@
 #
 # Example:
 #   pwsh scripts/finish-work.ps1 -Message "fix: persist RX suite settings" -Issue zeus-123
+#   pwsh scripts/finish-work.ps1 -Message "fix: persist RX suite settings" -Issue zeus-123 -Autopilot
 
 [CmdletBinding()]
 param(
@@ -22,6 +23,7 @@ param(
     [switch]$SkipTests,
     [switch]$NoPr,
     [switch]$NoBdPush,
+    [switch]$Autopilot,
     [switch]$PromoteLocal,
     [switch]$RemoveWorktree,
     [switch]$TakeNext,
@@ -253,8 +255,14 @@ Assert-FeatureBranch $branch
 
 Write-Host "==> Finishing $branch" -ForegroundColor Cyan
 
+if ($Autopilot) {
+    $PromoteLocal = $true
+    $RemoveWorktree = $true
+    $TakeNext = $true
+}
+
 if ($NoPr -and ($TakeNext -or $PromoteLocal -or $RemoveWorktree)) {
-    throw "-TakeNext, -PromoteLocal, and -RemoveWorktree require PR creation; remove -NoPr or run the follow-up step separately."
+    throw "-Autopilot, -TakeNext, -PromoteLocal, and -RemoveWorktree require PR creation; remove -NoPr or run the follow-up step separately."
 }
 
 $status = @(Invoke-GitCapture @('status', '--porcelain'))
