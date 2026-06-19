@@ -13,18 +13,29 @@
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
 
-import { useEffect, useMemo, type CSSProperties, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties, type ReactNode } from 'react';
+import { RefreshCw } from 'lucide-react';
 import { CfcSettingsPanel } from './CfcSettingsPanel';
 import { DownloadAudioSuiteButton } from './DownloadAudioSuiteButton';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import type { RegisteredPluginPanel } from '../plugins/runtime/pluginRuntime';
+import {
+  fetchNativeAudioDevices,
+  setNativeAudioDevices,
+  type NativeAudioDevicesResponse,
+} from '../api/audio-devices';
+import { getAudioClient } from '../audio/audio-client';
+import { restartMicUplinkRunning } from '../audio/mic-uplink-session';
 import { useAudioSuiteStore } from '../state/audio-suite-store';
+import { useAudioDeviceStore } from '../state/audio-device-store';
+import { useCapabilitiesStore } from '../state/capabilities-store';
 
 const CHAIN_SLOT = 'tx-audio-tools.chain';
 const RX_CHAIN_SLOT = 'rx-audio-tools.chain';
 
 type AudioRoute = 'tx' | 'rx';
 type ChainFlowSlot = { id: string; title: string; installed: boolean };
+type DeviceOption = { id: string; name: string; isDefault?: boolean };
 
 function routeColor(route: AudioRoute) {
   return route === 'tx' ? 'var(--tx)' : 'var(--accent)';
@@ -154,6 +165,279 @@ function RouteStatusPill({
     >
       {label}
     </span>
+  );
+}
+
+function selectStyle(disabled: boolean): CSSProperties {
+  return {
+    minWidth: 180,
+    maxWidth: 280,
+    height: 26,
+    padding: '3px 8px',
+    borderRadius: 4,
+    border: '1px solid var(--line)',
+    background: disabled ? 'var(--bg-1)' : 'var(--bg-2)',
+    color: disabled ? 'var(--fg-3)' : 'var(--fg-1)',
+    fontFamily: 'var(--font-sans, Inter, system-ui, sans-serif)',
+    fontSize: 11,
+    fontWeight: 600,
+    letterSpacing: 0,
+  };
+}
+
+const refreshButtonStyle: CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 28,
+  height: 26,
+  borderRadius: 4,
+  border: '1px solid var(--line)',
+  background: 'var(--bg-2)',
+  color: 'var(--fg-1)',
+  cursor: 'pointer',
+};
+
+function DeviceSelect({
+  label,
+  value,
+  devices,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  devices: DeviceOption[];
+  disabled: boolean;
+  onChange(value: string): void;
+}) {
+  const selectedMissing = value && !devices.some((device) => device.id === value);
+  return (
+    <label
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        minWidth: 0,
+        color: 'var(--fg-2)',
+        fontSize: 10,
+        fontWeight: 800,
+        letterSpacing: 0,
+        textTransform: 'uppercase',
+      }}
+    >
+      <span style={{ flex: '0 0 auto' }}>{label}</span>
+      <select
+        aria-label={`Audio ${label.toLowerCase()} device`}
+        value={value}
+        disabled={disabled}
+        onChange={(ev) => onChange(ev.currentTarget.value)}
+        style={selectStyle(disabled)}
+      >
+        <option value="">System default</option>
+        {devices.map((device) => (
+          <option key={device.id} value={device.id}>
+            {device.name}{device.isDefault ? ' (default)' : ''}
+          </option>
+        ))}
+        {selectedMissing && <option value={value}>Missing device</option>}
+      </select>
+    </label>
+  );
+}
+
+function AudioDevicesRail() {
+  const hostMode = useCapabilitiesStore((s) => s.capabilities?.host ?? null);
+  if (hostMode === null) return null;
+  return hostMode === 'desktop' ? <NativeAudioDevicesRail /> : <BrowserAudioDevicesRail />;
+}
+
+function NativeAudioDevicesRail() {
+  const [devices, setDevices] = useState<NativeAudioDevicesResponse | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      setDevices(await fetchNativeAudioDevices());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const apply = useCallback(
+    async (next: { input?: string; output?: string }) => {
+      const input = next.input ?? devices?.inputDeviceId ?? '';
+      const output = next.output ?? devices?.outputDeviceId ?? '';
+      setBusy(true);
+      setError(null);
+      try {
+        setDevices(await setNativeAudioDevices(input || null, output || null));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [devices],
+  );
+
+  const supported = devices?.supported !== false;
+  const effectiveError = error ?? devices?.error ?? null;
+  const inputValue = devices?.inputDeviceId ?? '';
+  const outputValue = devices?.outputDeviceId ?? '';
+
+  return (
+    <RouteRail
+      route="rx"
+      title="Audio Devices"
+      status={
+        <RouteStatusPill
+          route="rx"
+          label={effectiveError ? 'NATIVE ERR' : 'HOST'}
+          title={effectiveError ?? 'Native desktop input and output devices'}
+          muted={!!effectiveError}
+        />
+      }
+      actions={
+        <button
+          type="button"
+          onClick={() => void load()}
+          disabled={busy}
+          style={refreshButtonStyle}
+          title="Refresh audio device list"
+          aria-label="Refresh audio device list"
+        >
+          <RefreshCw size={13} aria-hidden />
+        </button>
+      }
+    >
+      <DeviceSelect
+        label="Input"
+        value={inputValue}
+        devices={devices?.inputs ?? []}
+        disabled={busy || !supported}
+        onChange={(input) => void apply({ input })}
+      />
+      <DeviceSelect
+        label="Output"
+        value={outputValue}
+        devices={devices?.outputs ?? []}
+        disabled={busy || !supported}
+        onChange={(output) => void apply({ output })}
+      />
+    </RouteRail>
+  );
+}
+
+function BrowserAudioDevicesRail() {
+  const inputs = useAudioDeviceStore((s) => s.browserInputs);
+  const outputs = useAudioDeviceStore((s) => s.browserOutputs);
+  const inputDeviceId = useAudioDeviceStore((s) => s.browserInputDeviceId);
+  const outputDeviceId = useAudioDeviceStore((s) => s.browserOutputDeviceId);
+  const outputSupported = useAudioDeviceStore((s) => s.browserOutputSupported);
+  const deviceError = useAudioDeviceStore((s) => s.browserDeviceError);
+  const refresh = useAudioDeviceStore((s) => s.refreshBrowserDevices);
+  const setInputDeviceId = useAudioDeviceStore((s) => s.setBrowserInputDeviceId);
+  const setOutputDeviceId = useAudioDeviceStore((s) => s.setBrowserOutputDeviceId);
+  const [busy, setBusy] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+
+  const refreshDevices = useCallback(async () => {
+    setBusy(true);
+    setApplyError(null);
+    try {
+      await refresh();
+    } finally {
+      setBusy(false);
+    }
+  }, [refresh]);
+
+  useEffect(() => {
+    void refreshDevices();
+    const mediaDevices = typeof navigator !== 'undefined' ? navigator.mediaDevices : undefined;
+    if (!mediaDevices?.addEventListener) return;
+    const onChange = () => void refreshDevices();
+    mediaDevices.addEventListener('devicechange', onChange);
+    return () => mediaDevices.removeEventListener('devicechange', onChange);
+  }, [refreshDevices]);
+
+  const onInput = useCallback(
+    async (id: string) => {
+      setInputDeviceId(id);
+      setApplyError(null);
+      try {
+        await restartMicUplinkRunning();
+      } catch (err) {
+        setApplyError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [setInputDeviceId],
+  );
+
+  const onOutput = useCallback(
+    async (id: string) => {
+      setOutputDeviceId(id);
+      setApplyError(null);
+      try {
+        await getAudioClient().setOutputDevice(id);
+      } catch (err) {
+        setApplyError(err instanceof Error ? err.message : String(err));
+      }
+    },
+    [setOutputDeviceId],
+  );
+
+  const effectiveError = applyError ?? deviceError;
+
+  return (
+    <RouteRail
+      route="rx"
+      title="Audio Devices"
+      status={
+        <RouteStatusPill
+          route="rx"
+          label={effectiveError ? 'BROWSER ERR' : 'BROWSER'}
+          title={effectiveError ?? 'Browser input and output devices'}
+          muted={!!effectiveError}
+        />
+      }
+      actions={
+        <button
+          type="button"
+          onClick={() => void refreshDevices()}
+          disabled={busy}
+          style={refreshButtonStyle}
+          title="Refresh audio device list"
+          aria-label="Refresh audio device list"
+        >
+          <RefreshCw size={13} aria-hidden />
+        </button>
+      }
+    >
+      <DeviceSelect
+        label="Input"
+        value={inputDeviceId}
+        devices={inputs}
+        disabled={busy}
+        onChange={(id) => void onInput(id)}
+      />
+      <DeviceSelect
+        label="Output"
+        value={outputDeviceId}
+        devices={outputs}
+        disabled={busy || !outputSupported}
+        onChange={(id) => void onOutput(id)}
+      />
+    </RouteRail>
   );
 }
 
@@ -616,6 +900,7 @@ export function TxAudioToolsPanel() {
           alignItems: 'stretch',
         }}
       >
+        <AudioDevicesRail />
         <TxChainFlow chainPanels={chainPanels} />
         <RxChainFlow chainPanels={rxChainPanels} />
       </div>

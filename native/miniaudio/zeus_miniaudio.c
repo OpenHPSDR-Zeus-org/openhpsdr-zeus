@@ -59,6 +59,88 @@ typedef struct {
     uint32_t                 negotiated_channels;
 } zeus_ma_input;
 
+typedef struct {
+    char                     id_hex[(sizeof(ma_device_id) * 2) + 1];
+    char                     name[MA_MAX_DEVICE_NAME_LENGTH + 1];
+    int32_t                  is_default;
+} zeus_ma_device_snapshot_entry;
+
+typedef struct {
+    uint32_t                         playback_count;
+    uint32_t                         capture_count;
+    zeus_ma_device_snapshot_entry*   playback;
+    zeus_ma_device_snapshot_entry*   capture;
+} zeus_ma_device_snapshot;
+
+/* ------------------------------------------------------------------------ */
+/* Device id helpers                                                        */
+/* ------------------------------------------------------------------------ */
+
+static char zeus_ma_hex_digit(unsigned int v)
+{
+    return (char)(v < 10 ? ('0' + v) : ('a' + (v - 10)));
+}
+
+static int zeus_ma_hex_value(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return 10 + (c - 'a');
+    if (c >= 'A' && c <= 'F') return 10 + (c - 'A');
+    return -1;
+}
+
+static void zeus_ma_encode_device_id(const ma_device_id* id, char* out_hex)
+{
+    const unsigned char* bytes = (const unsigned char*)id;
+    size_t i;
+    for (i = 0; i < sizeof(ma_device_id); i += 1) {
+        out_hex[i * 2] = zeus_ma_hex_digit((bytes[i] >> 4) & 0x0F);
+        out_hex[(i * 2) + 1] = zeus_ma_hex_digit(bytes[i] & 0x0F);
+    }
+    out_hex[sizeof(ma_device_id) * 2] = '\0';
+}
+
+static ma_bool32 zeus_ma_decode_device_id(const char* hex, ma_device_id* out_id)
+{
+    size_t expected = sizeof(ma_device_id) * 2;
+    size_t i;
+    unsigned char* bytes;
+    if (hex == NULL || out_id == NULL) return MA_FALSE;
+    if (strlen(hex) != expected) return MA_FALSE;
+
+    memset(out_id, 0, sizeof(*out_id));
+    bytes = (unsigned char*)out_id;
+    for (i = 0; i < sizeof(ma_device_id); i += 1) {
+        int hi = zeus_ma_hex_value(hex[i * 2]);
+        int lo = zeus_ma_hex_value(hex[(i * 2) + 1]);
+        if (hi < 0 || lo < 0) return MA_FALSE;
+        bytes[i] = (unsigned char)((hi << 4) | lo);
+    }
+    return MA_TRUE;
+}
+
+static void zeus_ma_copy_device_entries(
+    zeus_ma_device_snapshot_entry* dst,
+    const ma_device_info* src,
+    uint32_t count)
+{
+    uint32_t i;
+    for (i = 0; i < count; i += 1) {
+        zeus_ma_encode_device_id(&src[i].id, dst[i].id_hex);
+        strncpy(dst[i].name, src[i].name, MA_MAX_DEVICE_NAME_LENGTH);
+        dst[i].name[MA_MAX_DEVICE_NAME_LENGTH] = '\0';
+        dst[i].is_default = src[i].isDefault ? 1 : 0;
+    }
+}
+
+static void zeus_ma_device_snapshot_free(zeus_ma_device_snapshot* s)
+{
+    if (s == NULL) return;
+    free(s->playback);
+    free(s->capture);
+    free(s);
+}
+
 /* ------------------------------------------------------------------------ */
 /* miniaudio callbacks (audio worker thread)                                */
 /* ------------------------------------------------------------------------ */
@@ -121,11 +203,12 @@ static void zeus_ma_input_notify_proc(const ma_device_notification* n)
 /* Playback                                                                 */
 /* ------------------------------------------------------------------------ */
 
-ZEUS_MA_EXPORT void* zeus_ma_output_create(
+static void* zeus_ma_output_create_internal(
     uint32_t prefer_sample_rate,
     uint32_t prefer_channels,
     uint32_t period_frames,
     uint32_t periods,
+    const char* device_id_hex,
     zeus_ma_playback_cb data_cb,
     zeus_ma_notify_cb notify_cb,
     void* user)
@@ -139,7 +222,18 @@ ZEUS_MA_EXPORT void* zeus_ma_output_create(
     h->notify_cb = notify_cb;
     h->user      = user;
 
+    ma_device_id requested_id;
+    ma_device_id* requested_id_ptr = NULL;
+    if (device_id_hex != NULL && device_id_hex[0] != '\0') {
+        if (!zeus_ma_decode_device_id(device_id_hex, &requested_id)) {
+            free(h);
+            return NULL;
+        }
+        requested_id_ptr = &requested_id;
+    }
+
     ma_device_config cfg = ma_device_config_init(ma_device_type_playback);
+    cfg.playback.pDeviceID = requested_id_ptr;
     cfg.playback.format    = ma_format_f32;
     cfg.playback.channels  = prefer_channels;        /* 0 = device native */
     cfg.sampleRate         = prefer_sample_rate;     /* 0 = device native */
@@ -171,6 +265,47 @@ ZEUS_MA_EXPORT void* zeus_ma_output_create(
     h->negotiated_rate     = h->device.sampleRate;
     h->negotiated_channels = h->device.playback.channels;
     return h;
+}
+
+ZEUS_MA_EXPORT void* zeus_ma_output_create(
+    uint32_t prefer_sample_rate,
+    uint32_t prefer_channels,
+    uint32_t period_frames,
+    uint32_t periods,
+    zeus_ma_playback_cb data_cb,
+    zeus_ma_notify_cb notify_cb,
+    void* user)
+{
+    return zeus_ma_output_create_internal(
+        prefer_sample_rate,
+        prefer_channels,
+        period_frames,
+        periods,
+        NULL,
+        data_cb,
+        notify_cb,
+        user);
+}
+
+ZEUS_MA_EXPORT void* zeus_ma_output_create_for_device(
+    uint32_t prefer_sample_rate,
+    uint32_t prefer_channels,
+    uint32_t period_frames,
+    uint32_t periods,
+    const char* device_id_hex,
+    zeus_ma_playback_cb data_cb,
+    zeus_ma_notify_cb notify_cb,
+    void* user)
+{
+    return zeus_ma_output_create_internal(
+        prefer_sample_rate,
+        prefer_channels,
+        period_frames,
+        periods,
+        device_id_hex,
+        data_cb,
+        notify_cb,
+        user);
 }
 
 ZEUS_MA_EXPORT int32_t zeus_ma_output_start(void* handle)
@@ -211,11 +346,12 @@ ZEUS_MA_EXPORT void zeus_ma_output_destroy(void* handle)
 /* Capture                                                                  */
 /* ------------------------------------------------------------------------ */
 
-ZEUS_MA_EXPORT void* zeus_ma_input_create(
+static void* zeus_ma_input_create_internal(
     uint32_t prefer_sample_rate,
     uint32_t prefer_channels,
     uint32_t period_frames,
     uint32_t periods,
+    const char* device_id_hex,
     zeus_ma_capture_cb data_cb,
     zeus_ma_notify_cb notify_cb,
     void* user)
@@ -229,7 +365,18 @@ ZEUS_MA_EXPORT void* zeus_ma_input_create(
     h->notify_cb = notify_cb;
     h->user      = user;
 
+    ma_device_id requested_id;
+    ma_device_id* requested_id_ptr = NULL;
+    if (device_id_hex != NULL && device_id_hex[0] != '\0') {
+        if (!zeus_ma_decode_device_id(device_id_hex, &requested_id)) {
+            free(h);
+            return NULL;
+        }
+        requested_id_ptr = &requested_id;
+    }
+
     ma_device_config cfg = ma_device_config_init(ma_device_type_capture);
+    cfg.capture.pDeviceID = requested_id_ptr;
     cfg.capture.format     = ma_format_f32;
     cfg.capture.channels   = prefer_channels;
     cfg.sampleRate         = prefer_sample_rate;
@@ -255,6 +402,47 @@ ZEUS_MA_EXPORT void* zeus_ma_input_create(
     h->negotiated_rate     = h->device.sampleRate;
     h->negotiated_channels = h->device.capture.channels;
     return h;
+}
+
+ZEUS_MA_EXPORT void* zeus_ma_input_create(
+    uint32_t prefer_sample_rate,
+    uint32_t prefer_channels,
+    uint32_t period_frames,
+    uint32_t periods,
+    zeus_ma_capture_cb data_cb,
+    zeus_ma_notify_cb notify_cb,
+    void* user)
+{
+    return zeus_ma_input_create_internal(
+        prefer_sample_rate,
+        prefer_channels,
+        period_frames,
+        periods,
+        NULL,
+        data_cb,
+        notify_cb,
+        user);
+}
+
+ZEUS_MA_EXPORT void* zeus_ma_input_create_for_device(
+    uint32_t prefer_sample_rate,
+    uint32_t prefer_channels,
+    uint32_t period_frames,
+    uint32_t periods,
+    const char* device_id_hex,
+    zeus_ma_capture_cb data_cb,
+    zeus_ma_notify_cb notify_cb,
+    void* user)
+{
+    return zeus_ma_input_create_internal(
+        prefer_sample_rate,
+        prefer_channels,
+        period_frames,
+        periods,
+        device_id_hex,
+        data_cb,
+        notify_cb,
+        user);
 }
 
 ZEUS_MA_EXPORT int32_t zeus_ma_input_start(void* handle)
@@ -289,6 +477,128 @@ ZEUS_MA_EXPORT void zeus_ma_input_destroy(void* handle)
     zeus_ma_input* h = (zeus_ma_input*)handle;
     ma_device_uninit(&h->device);
     free(h);
+}
+
+/* ------------------------------------------------------------------------ */
+/* Device enumeration                                                       */
+/* ------------------------------------------------------------------------ */
+
+ZEUS_MA_EXPORT void* zeus_ma_devices_create(void)
+{
+    ma_context ctx;
+    ma_device_info* playback_infos = NULL;
+    ma_device_info* capture_infos = NULL;
+    ma_uint32 playback_count = 0;
+    ma_uint32 capture_count = 0;
+    zeus_ma_device_snapshot* s = NULL;
+
+    if (ma_context_init(NULL, 0, NULL, &ctx) != MA_SUCCESS) {
+        return NULL;
+    }
+
+    if (ma_context_get_devices(&ctx, &playback_infos, &playback_count, &capture_infos, &capture_count) != MA_SUCCESS) {
+        ma_context_uninit(&ctx);
+        return NULL;
+    }
+
+    s = (zeus_ma_device_snapshot*)calloc(1, sizeof(*s));
+    if (s == NULL) {
+        ma_context_uninit(&ctx);
+        return NULL;
+    }
+
+    s->playback_count = (uint32_t)playback_count;
+    s->capture_count = (uint32_t)capture_count;
+
+    if (s->playback_count > 0) {
+        s->playback = (zeus_ma_device_snapshot_entry*)calloc(s->playback_count, sizeof(*s->playback));
+        if (s->playback == NULL) {
+            zeus_ma_device_snapshot_free(s);
+            ma_context_uninit(&ctx);
+            return NULL;
+        }
+        zeus_ma_copy_device_entries(s->playback, playback_infos, s->playback_count);
+    }
+
+    if (s->capture_count > 0) {
+        s->capture = (zeus_ma_device_snapshot_entry*)calloc(s->capture_count, sizeof(*s->capture));
+        if (s->capture == NULL) {
+            zeus_ma_device_snapshot_free(s);
+            ma_context_uninit(&ctx);
+            return NULL;
+        }
+        zeus_ma_copy_device_entries(s->capture, capture_infos, s->capture_count);
+    }
+
+    ma_context_uninit(&ctx);
+    return s;
+}
+
+ZEUS_MA_EXPORT uint32_t zeus_ma_devices_playback_count(void* snapshot)
+{
+    if (snapshot == NULL) return 0;
+    return ((zeus_ma_device_snapshot*)snapshot)->playback_count;
+}
+
+ZEUS_MA_EXPORT uint32_t zeus_ma_devices_capture_count(void* snapshot)
+{
+    if (snapshot == NULL) return 0;
+    return ((zeus_ma_device_snapshot*)snapshot)->capture_count;
+}
+
+static zeus_ma_device_snapshot_entry* zeus_ma_playback_entry(void* snapshot, uint32_t index)
+{
+    zeus_ma_device_snapshot* s = (zeus_ma_device_snapshot*)snapshot;
+    if (s == NULL || s->playback == NULL || index >= s->playback_count) return NULL;
+    return &s->playback[index];
+}
+
+static zeus_ma_device_snapshot_entry* zeus_ma_capture_entry(void* snapshot, uint32_t index)
+{
+    zeus_ma_device_snapshot* s = (zeus_ma_device_snapshot*)snapshot;
+    if (s == NULL || s->capture == NULL || index >= s->capture_count) return NULL;
+    return &s->capture[index];
+}
+
+ZEUS_MA_EXPORT const char* zeus_ma_devices_playback_id(void* snapshot, uint32_t index)
+{
+    zeus_ma_device_snapshot_entry* e = zeus_ma_playback_entry(snapshot, index);
+    return e == NULL ? "" : e->id_hex;
+}
+
+ZEUS_MA_EXPORT const char* zeus_ma_devices_capture_id(void* snapshot, uint32_t index)
+{
+    zeus_ma_device_snapshot_entry* e = zeus_ma_capture_entry(snapshot, index);
+    return e == NULL ? "" : e->id_hex;
+}
+
+ZEUS_MA_EXPORT const char* zeus_ma_devices_playback_name(void* snapshot, uint32_t index)
+{
+    zeus_ma_device_snapshot_entry* e = zeus_ma_playback_entry(snapshot, index);
+    return e == NULL ? "" : e->name;
+}
+
+ZEUS_MA_EXPORT const char* zeus_ma_devices_capture_name(void* snapshot, uint32_t index)
+{
+    zeus_ma_device_snapshot_entry* e = zeus_ma_capture_entry(snapshot, index);
+    return e == NULL ? "" : e->name;
+}
+
+ZEUS_MA_EXPORT int32_t zeus_ma_devices_playback_default(void* snapshot, uint32_t index)
+{
+    zeus_ma_device_snapshot_entry* e = zeus_ma_playback_entry(snapshot, index);
+    return e == NULL ? 0 : e->is_default;
+}
+
+ZEUS_MA_EXPORT int32_t zeus_ma_devices_capture_default(void* snapshot, uint32_t index)
+{
+    zeus_ma_device_snapshot_entry* e = zeus_ma_capture_entry(snapshot, index);
+    return e == NULL ? 0 : e->is_default;
+}
+
+ZEUS_MA_EXPORT void zeus_ma_devices_destroy(void* snapshot)
+{
+    zeus_ma_device_snapshot_free((zeus_ma_device_snapshot*)snapshot);
 }
 
 /* ------------------------------------------------------------------------ */

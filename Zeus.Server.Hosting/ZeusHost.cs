@@ -209,7 +209,7 @@ public static class ZeusHost
         //  - Server mode → WebSocketAudioSink (default): bit-for-bit
         //    equivalent of the pre-seam direct hub broadcast.
         //  - Desktop mode → NativeAudioSink (Phase 2b): pushes RX audio
-        //    straight to the OS default output device via miniaudio,
+        //    straight to the selected OS output device via miniaudio,
         //    bypassing the WS path entirely. The SPA's audio decoder is
         //    opted out by Phase 2c so the browser never tries to play
         //    audio it isn't being sent.
@@ -368,6 +368,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<DisplayIntelligenceSettingsStore>();
         builder.Services.AddSingleton<ToolbarSettingsStore>();
         builder.Services.AddSingleton<NrUiPrefsStore>();
+        builder.Services.AddSingleton<AudioDeviceSettingsStore>();
         builder.Services.AddSingleton<TxStationProfileStore>();
         builder.Services.AddSingleton<TxFidelityPolicyStore>();
         // Unified TX Audio Profile store — the single operator-named macro that

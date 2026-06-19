@@ -13,6 +13,7 @@ import { startMicUplink, type MicUplinkHandle } from './mic-uplink';
 import { useMicUplinkDiagnosticsStore } from './mic-uplink-diagnostics-store';
 import { createMicUplinkAutoGain } from './mic-uplink-gain';
 import { sendMicPcm } from '../realtime/ws-client';
+import { useAudioDeviceStore } from '../state/audio-device-store';
 import { useTxStore } from '../state/tx-store';
 import { warnOnce } from '../util/logger';
 
@@ -91,7 +92,8 @@ export async function ensureMicUplinkRunning(): Promise<boolean> {
   }
 
   if (!starting) {
-    starting = startMicUplink(onMicBlock)
+    const inputDeviceId = useAudioDeviceStore.getState().browserInputDeviceId || undefined;
+    starting = startMicUplink(onMicBlock, inputDeviceId)
       .then((h) => {
         handle = h;
         useTxStore.getState().setMicError(null);
@@ -113,6 +115,15 @@ export async function ensureMicUplinkRunning(): Promise<boolean> {
 
   await starting;
   return handle !== null;
+}
+
+export async function restartMicUplinkRunning(): Promise<void> {
+  const shouldRestart = consumers > 0;
+  if (starting) {
+    try { await starting; } catch { /* ensureMicUplinkRunning owns visible errors */ }
+  }
+  await stopMicUplinkRunning();
+  if (shouldRestart) await ensureMicUplinkRunning();
 }
 
 export async function stopMicUplinkRunning(): Promise<void> {

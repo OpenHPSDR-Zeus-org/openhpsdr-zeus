@@ -65,14 +65,12 @@ export type MicUplinkHandle = {
   stop: () => Promise<void>;
 };
 
-const MIC_CONSTRAINTS: MediaStreamConstraints = {
-  audio: {
-    echoCancellation: false,
-    noiseSuppression: false,
-    autoGainControl: false,
-    channelCount: 1,
-    sampleRate: 48000,
-  },
+const MIC_BASE_CONSTRAINTS: MediaTrackConstraints = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false,
+  channelCount: 1,
+  sampleRate: 48000,
 };
 
 const WORKLET_URL = '/mic-uplink-worklet.js';
@@ -84,6 +82,7 @@ function sanitizeMicPeak(value: unknown): number {
 
 export async function startMicUplink(
   onBlock: MicUplinkBlockHandler,
+  deviceId?: string,
 ): Promise<MicUplinkHandle> {
   // Phase 2c — desktop mode runs a native miniaudio capture in the host
   // process; calling getUserMedia in the webview would race the device
@@ -96,7 +95,9 @@ export async function startMicUplink(
   if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
     throw new Error('getUserMedia not available in this environment');
   }
-  const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+  const audio: MediaTrackConstraints = { ...MIC_BASE_CONSTRAINTS };
+  if (deviceId?.trim()) audio.deviceId = { exact: deviceId.trim() };
+  const stream = await navigator.mediaDevices.getUserMedia({ audio });
   const context = new AudioContext({ sampleRate: 48000, latencyHint: 0.04 });
 
   const cleanupStream = () => {

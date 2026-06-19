@@ -127,6 +127,18 @@ internal static partial class MiniAudioInterop
         IntPtr notifyCallback,
         IntPtr user);
 
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_output_create_for_device")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial IntPtr OutputCreateForDevice(
+        uint preferSampleRate,
+        uint preferChannels,
+        uint periodFrames,
+        uint periods,
+        IntPtr deviceIdHex,
+        IntPtr dataCallback,
+        IntPtr notifyCallback,
+        IntPtr user);
+
     [LibraryImport(LibraryName, EntryPoint = "zeus_ma_output_start")]
     [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
     internal static partial int OutputStart(IntPtr handle);
@@ -160,6 +172,18 @@ internal static partial class MiniAudioInterop
         IntPtr notifyCallback,
         IntPtr user);
 
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_input_create_for_device")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial IntPtr InputCreateForDevice(
+        uint preferSampleRate,
+        uint preferChannels,
+        uint periodFrames,
+        uint periods,
+        IntPtr deviceIdHex,
+        IntPtr dataCallback,
+        IntPtr notifyCallback,
+        IntPtr user);
+
     [LibraryImport(LibraryName, EntryPoint = "zeus_ma_input_start")]
     [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
     internal static partial int InputStart(IntPtr handle);
@@ -179,6 +203,48 @@ internal static partial class MiniAudioInterop
     [LibraryImport(LibraryName, EntryPoint = "zeus_ma_input_destroy")]
     [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
     internal static partial void InputDestroy(IntPtr handle);
+
+    // ---- Device enumeration ---------------------------------------------
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_devices_create")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial IntPtr DevicesCreate();
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_devices_playback_count")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial uint DevicesPlaybackCount(IntPtr snapshot);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_devices_capture_count")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial uint DevicesCaptureCount(IntPtr snapshot);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_devices_playback_id")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial IntPtr DevicesPlaybackId(IntPtr snapshot, uint index);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_devices_capture_id")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial IntPtr DevicesCaptureId(IntPtr snapshot, uint index);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_devices_playback_name")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial IntPtr DevicesPlaybackName(IntPtr snapshot, uint index);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_devices_capture_name")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial IntPtr DevicesCaptureName(IntPtr snapshot, uint index);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_devices_playback_default")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial int DevicesPlaybackDefault(IntPtr snapshot, uint index);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_devices_capture_default")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial int DevicesCaptureDefault(IntPtr snapshot, uint index);
+
+    [LibraryImport(LibraryName, EntryPoint = "zeus_ma_devices_destroy")]
+    [UnmanagedCallConv(CallConvs = [typeof(System.Runtime.CompilerServices.CallConvCdecl)])]
+    internal static partial void DevicesDestroy(IntPtr snapshot);
 
     // ---- Version probe ---------------------------------------------------
 

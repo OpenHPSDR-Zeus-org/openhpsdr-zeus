@@ -4,7 +4,7 @@
 // Copyright (C) 2026 Brian Keating (EI6LF) and contributors.
 //
 // Desktop-mode RX audio sink: drains demodulated audio (mono float32 48 kHz,
-// produced by DspPipelineService) directly into the OS default playback
+// produced by DspPipelineService) directly into the selected OS playback
 // device via miniaudio. The WebSocket fan-out is skipped entirely in this
 // mode — the SPA's audio-decoder is opted out by Phase 2c.
 //
@@ -21,7 +21,7 @@ namespace Zeus.Server;
 
 /// <summary>
 /// <see cref="IRxAudioSink"/> implementation that pushes RX audio straight
-/// to the OS default playback device via miniaudio. Used in desktop mode
+/// to the selected OS playback device via miniaudio. Used in desktop mode
 /// (<see cref="ZeusHostMode.Desktop"/>) in place of
 /// <see cref="WebSocketAudioSink"/>.
 ///
@@ -84,6 +84,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     private const int PreviewRingCapacity = 16_384;
 
     private readonly ILogger<NativeAudioSink> _log;
+    private readonly AudioDeviceSettingsStore? _deviceSettings;
     // Service-provider-based lookup for TxService, used to subscribe to
     // TxActiveChanged in StartAsync. NativeAudioSink can NOT take TxService
     // as a constructor dep directly: DspPipelineService depends on
@@ -94,6 +95,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     private readonly IServiceProvider? _services;
     private readonly FloatSpscRing _ring = new(RingCapacity);
     private readonly FloatSpscRing _previewRing = new(PreviewRingCapacity);
+    private readonly object _deviceSync = new();
 
     // Resolved on Start, kept so Stop can detach the handler cleanly.
     // Null when no TxService was available (legacy test ctor or
@@ -102,6 +104,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     private Action<bool>? _txActiveHandler;
 
     private MiniAudioOutput? _output;
+    private string? _activeOutputDeviceId;
     private bool _disposed;
 
     // Mute flag for the Photino-side Mute/Unmute button. Read on the DSP
@@ -123,6 +126,8 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
 
     public bool IsMuted => _muted;
     public bool IsEnabled => _previewEnabled;
+    public string? ConfiguredOutputDeviceId => _deviceSettings?.Get().OutputDeviceId;
+    public string? ActiveOutputDeviceId => _activeOutputDeviceId;
 
     public void SetMuted(bool muted)
     {
@@ -167,9 +172,13 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     private long _totalSamplesOut;
     private DateTime _lastLogUtc = DateTime.UtcNow;
 
-    public NativeAudioSink(ILogger<NativeAudioSink> log, IServiceProvider? services = null)
+    public NativeAudioSink(
+        ILogger<NativeAudioSink> log,
+        AudioDeviceSettingsStore? deviceSettings = null,
+        IServiceProvider? services = null)
     {
         _log = log;
+        _deviceSettings = deviceSettings;
         _services = services;
     }
 
@@ -182,26 +191,10 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     /// </summary>
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        if (_output != null) return Task.CompletedTask;
-        try
+        lock (_deviceSync)
         {
-            _output = new MiniAudioOutput(
-                onFrames: OnPlaybackData,
-                onNotify: OnDeviceNotification,
-                preferSampleRate: FrameRateHz,
-                preferChannels: 2,
-                periodFrames: 480,   // ≈10 ms @ 48 kHz
-                periods: 2);
-            _output.Start();
-            _log.LogInformation(
-                "audio.native.rx open rate={Rate}Hz channels={Channels} version={Version}",
-                _output.SampleRate, _output.Channels, MiniAudioInterop.Version());
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "audio.native.rx open failed; RX audio output disabled");
-            _output?.Dispose();
-            _output = null;
+            if (_output != null) return Task.CompletedTask;
+            OpenOutputLocked(ConfiguredOutputDeviceId);
         }
 
         // Subscribe to TX-active edges so we can drain the ring on TX-on.
@@ -232,9 +225,93 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
             _tx.TxActiveChanged -= _txActiveHandler;
             _txActiveHandler = null;
         }
+        lock (_deviceSync)
+        {
+            try { _output?.Stop(); }
+            catch (Exception ex) { _log.LogWarning(ex, "audio.native.rx stop threw"); }
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task SetOutputDeviceAsync(string? deviceId, CancellationToken cancellationToken = default)
+    {
+        string? normalized = NormalizeDeviceId(deviceId);
+        _deviceSettings?.SetOutputDeviceId(normalized);
+
+        lock (_deviceSync)
+        {
+            CloseOutputLocked(dispose: true);
+            _ring.Clear();
+            _previewRing.Clear();
+            _rebuffering = true;
+            OpenOutputLocked(normalized);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void OpenOutputLocked(string? requestedDeviceId)
+    {
+        try
+        {
+            _output = CreateOutput(requestedDeviceId);
+            _output.Start();
+            _activeOutputDeviceId = NormalizeDeviceId(requestedDeviceId);
+            _log.LogInformation(
+                "audio.native.rx open device={Device} rate={Rate}Hz channels={Channels} version={Version}",
+                _activeOutputDeviceId is null ? "default" : "selected",
+                _output.SampleRate, _output.Channels, MiniAudioInterop.Version());
+            return;
+        }
+        catch (Exception ex) when (!string.IsNullOrWhiteSpace(requestedDeviceId))
+        {
+            _log.LogWarning(ex, "audio.native.rx selected output open failed; falling back to default");
+            CloseOutputLocked(dispose: true);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "audio.native.rx open failed; RX audio output disabled");
+            CloseOutputLocked(dispose: true);
+            return;
+        }
+
+        try
+        {
+            _output = CreateOutput(null);
+            _output.Start();
+            _activeOutputDeviceId = null;
+            _log.LogInformation(
+                "audio.native.rx open device=default rate={Rate}Hz channels={Channels} version={Version}",
+                _output.SampleRate, _output.Channels, MiniAudioInterop.Version());
+        }
+        catch (Exception fallbackEx)
+        {
+            _log.LogWarning(fallbackEx, "audio.native.rx default fallback open failed; RX audio output disabled");
+            CloseOutputLocked(dispose: true);
+        }
+    }
+
+    private MiniAudioOutput CreateOutput(string? deviceId) =>
+        new(
+            onFrames: OnPlaybackData,
+            onNotify: OnDeviceNotification,
+            deviceIdHex: NormalizeDeviceId(deviceId),
+            preferSampleRate: FrameRateHz,
+            preferChannels: 2,
+            periodFrames: 480,
+            periods: 2);
+
+    private void CloseOutputLocked(bool dispose)
+    {
         try { _output?.Stop(); }
         catch (Exception ex) { _log.LogWarning(ex, "audio.native.rx stop threw"); }
-        return Task.CompletedTask;
+        if (dispose)
+        {
+            try { _output?.Dispose(); }
+            catch (Exception ex) { _log.LogWarning(ex, "audio.native.rx dispose threw"); }
+        }
+        _output = null;
+        _activeOutputDeviceId = null;
     }
 
     /// <summary>
@@ -429,12 +506,19 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
             inS, outS, under, over);
     }
 
+    private static string? NormalizeDeviceId(string? deviceId)
+    {
+        var trimmed = deviceId?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        try { _output?.Dispose(); }
-        catch (Exception ex) { _log.LogWarning(ex, "audio.native.rx dispose threw"); }
-        _output = null;
+        lock (_deviceSync)
+        {
+            CloseOutputLocked(dispose: true);
+        }
     }
 }

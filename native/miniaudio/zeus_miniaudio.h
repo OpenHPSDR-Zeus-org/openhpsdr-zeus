@@ -61,6 +61,16 @@ ZEUS_MA_EXPORT void* zeus_ma_output_create(
     zeus_ma_notify_cb notify_cb,    /* may be NULL */
     void* user);
 
+ZEUS_MA_EXPORT void* zeus_ma_output_create_for_device(
+    uint32_t prefer_sample_rate,
+    uint32_t prefer_channels,
+    uint32_t period_frames,
+    uint32_t periods,
+    const char* device_id_hex,      /* NULL / empty = default device */
+    zeus_ma_playback_cb data_cb,
+    zeus_ma_notify_cb notify_cb,
+    void* user);
+
 ZEUS_MA_EXPORT int32_t  zeus_ma_output_start(void* handle);
 ZEUS_MA_EXPORT int32_t  zeus_ma_output_stop(void* handle);
 ZEUS_MA_EXPORT uint32_t zeus_ma_output_sample_rate(void* handle);
@@ -78,11 +88,37 @@ ZEUS_MA_EXPORT void* zeus_ma_input_create(
     zeus_ma_notify_cb notify_cb,
     void* user);
 
+ZEUS_MA_EXPORT void* zeus_ma_input_create_for_device(
+    uint32_t prefer_sample_rate,
+    uint32_t prefer_channels,
+    uint32_t period_frames,
+    uint32_t periods,
+    const char* device_id_hex,      /* NULL / empty = default device */
+    zeus_ma_capture_cb data_cb,
+    zeus_ma_notify_cb notify_cb,
+    void* user);
+
 ZEUS_MA_EXPORT int32_t  zeus_ma_input_start(void* handle);
 ZEUS_MA_EXPORT int32_t  zeus_ma_input_stop(void* handle);
 ZEUS_MA_EXPORT uint32_t zeus_ma_input_sample_rate(void* handle);
 ZEUS_MA_EXPORT uint32_t zeus_ma_input_channels(void* handle);
 ZEUS_MA_EXPORT void     zeus_ma_input_destroy(void* handle);
+
+/* ---------------- Device enumeration ---------------------------------- */
+
+/* Returns an opaque snapshot handle. The *_id functions return a hex-encoded
+ * opaque ma_device_id blob suitable for passing back to *_create_for_device().
+ * The caller must copy returned strings before zeus_ma_devices_destroy(). */
+ZEUS_MA_EXPORT void*    zeus_ma_devices_create(void);
+ZEUS_MA_EXPORT uint32_t zeus_ma_devices_playback_count(void* snapshot);
+ZEUS_MA_EXPORT uint32_t zeus_ma_devices_capture_count(void* snapshot);
+ZEUS_MA_EXPORT const char* zeus_ma_devices_playback_id(void* snapshot, uint32_t index);
+ZEUS_MA_EXPORT const char* zeus_ma_devices_capture_id(void* snapshot, uint32_t index);
+ZEUS_MA_EXPORT const char* zeus_ma_devices_playback_name(void* snapshot, uint32_t index);
+ZEUS_MA_EXPORT const char* zeus_ma_devices_capture_name(void* snapshot, uint32_t index);
+ZEUS_MA_EXPORT int32_t zeus_ma_devices_playback_default(void* snapshot, uint32_t index);
+ZEUS_MA_EXPORT int32_t zeus_ma_devices_capture_default(void* snapshot, uint32_t index);
+ZEUS_MA_EXPORT void zeus_ma_devices_destroy(void* snapshot);
 
 /* ---------------- Library probe --------------------------------------- */
 
