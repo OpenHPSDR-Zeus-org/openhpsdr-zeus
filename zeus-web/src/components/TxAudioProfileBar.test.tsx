@@ -61,8 +61,8 @@ describe('TxAudioProfileBar', () => {
   it('renders the saved profiles and shows last-loaded as selected', async () => {
     const { container, unmount } = render(createElement(TxAudioProfileBar));
     await act(flush);
-    const select = container.querySelector('[aria-label="TX audio profile"]') as HTMLSelectElement;
-    expect(select.value).toBe('studio-ssb');
+    const trigger = container.querySelector('[aria-label="TX audio profile"]') as HTMLButtonElement;
+    expect(trigger.textContent).toContain('Studio SSB [Native]');
     unmount();
   });
 
@@ -71,10 +71,16 @@ describe('TxAudioProfileBar', () => {
     useTxAudioProfileStore.setState({ apply });
     const { container, unmount } = render(createElement(TxAudioProfileBar));
     await act(flush);
-    const select = container.querySelector('[aria-label="TX audio profile"]') as HTMLSelectElement;
+    const trigger = container.querySelector('[aria-label="TX audio profile"]') as HTMLButtonElement;
     await act(async () => {
-      select.value = 'studio-ssb';
-      select.dispatchEvent(new Event('change', { bubbles: true }));
+      trigger.click();
+      await flush();
+    });
+    const option = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('.tx-audio-profile-option:not(.tx-audio-profile-option--placeholder)'),
+    ).find((el) => el.textContent === 'Studio SSB [Native]')!;
+    await act(async () => {
+      option.click();
       await flush();
     });
     expect(apply).toHaveBeenCalledWith('studio-ssb');

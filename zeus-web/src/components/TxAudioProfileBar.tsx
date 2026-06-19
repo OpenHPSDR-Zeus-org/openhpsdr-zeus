@@ -16,7 +16,8 @@
 // Token-only styling (var(--*) — never raw hex). The Save body is captured
 // server-side from live state; this component never assembles a profile body.
 
-import { useEffect, useState, type CSSProperties } from 'react';
+import { useEffect, useId, useRef, useState, type CSSProperties } from 'react';
+import { ChevronDown } from 'lucide-react';
 
 import { ConfirmDialog } from '../layout/ConfirmDialog';
 import { TextInputDialog } from '../layout/TextInputDialog';
@@ -24,23 +25,8 @@ import { useTxAudioProfileStore } from '../state/tx-audio-profile-store';
 
 type Notice = { tone: 'ok' | 'error'; text: string } | null;
 
-function selectStyle(disabled: boolean): CSSProperties {
-  return {
-    flex: 1,
-    minWidth: 0,
-    height: 26,
-    boxSizing: 'border-box',
-    padding: '0 6px',
-    borderRadius: 4,
-    border: '1px solid var(--line)',
-    background: 'var(--bg-2)',
-    color: 'var(--fg-1)',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    fontSize: 11,
-    fontWeight: 800,
-    fontFamily: 'inherit',
-    opacity: disabled ? 0.6 : 1,
-  };
+function profileLabel(profile: { name: string; processingMode: string }): string {
+  return `${profile.name} [${profile.processingMode === 'vst' ? 'VST' : 'Native'}]`;
 }
 
 function buttonStyle(disabled: boolean, accent = false): CSSProperties {
@@ -82,6 +68,10 @@ export function TxAudioProfileBar({ compact = false }: TxAudioProfileBarProps) {
   const [saveOpen, setSaveOpen] = useState(false);
   const [deletePending, setDeletePending] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuId = useId();
 
   // Load the list + last-loaded pointer once. Mounting in two places is fine —
   // both share the store; the second mount sees the already-loaded list.
@@ -94,10 +84,27 @@ export function TxAudioProfileBar({ compact = false }: TxAudioProfileBarProps) {
   // operator drifts off it with live edits — re-selecting it re-applies.
   const selectedId = lastLoadedId && profiles.some((p) => p.id === lastLoadedId) ? lastLoadedId : '';
   const selectedProfile = profiles.find((p) => p.id === selectedId);
+  const triggerLabel = selectedProfile
+    ? profileLabel(selectedProfile)
+    : profiles.length ? 'Select profile...' : 'No profiles saved';
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      const root = pickerRef.current;
+      if (!root || !event.target || root.contains(event.target as Node)) return;
+      setMenuOpen(false);
+    };
+
+    window.addEventListener('pointerdown', onPointerDown);
+    return () => window.removeEventListener('pointerdown', onPointerDown);
+  }, [menuOpen]);
 
   const onSelect = async (id: string) => {
     setNotice(null);
     if (!id) return;
+    setMenuOpen(false);
     const result = await apply(id);
     if (!result.ok) {
       setNotice({ tone: 'error', text: result.error ?? `Could not apply profile.` });
@@ -169,23 +176,70 @@ export function TxAudioProfileBar({ compact = false }: TxAudioProfileBarProps) {
         </span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-        <select
-          aria-label="TX audio profile"
-          title="Select a saved TX audio profile to apply it"
-          value={selectedId}
-          disabled={busy}
-          onChange={(e) => void onSelect(e.target.value)}
-          style={selectStyle(busy)}
-        >
-          <option value="">
-            {profiles.length ? 'Select profile…' : 'No profiles saved'}
-          </option>
-          {profiles.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name} [{p.processingMode === 'vst' ? 'VST' : 'Native'}]
-            </option>
-          ))}
-        </select>
+        <div className="tx-audio-profile-picker" ref={pickerRef}>
+          <button
+            type="button"
+            ref={triggerRef}
+            className="tx-audio-profile-trigger"
+            aria-label="TX audio profile"
+            aria-haspopup="listbox"
+            aria-expanded={menuOpen}
+            aria-controls={menuId}
+            title="Select a saved TX audio profile to apply it"
+            disabled={busy}
+            onClick={() => setMenuOpen((open) => !open)}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                setMenuOpen(true);
+              } else if (event.key === 'Escape') {
+                setMenuOpen(false);
+              }
+            }}
+          >
+            <span className="tx-audio-profile-trigger-text">{triggerLabel}</span>
+            <ChevronDown className="tx-audio-profile-caret" size={14} aria-hidden />
+          </button>
+          {menuOpen && (
+            <div
+              id={menuId}
+              className="tx-audio-profile-menu"
+              role="listbox"
+              aria-label="TX audio profile options"
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setMenuOpen(false);
+                  triggerRef.current?.focus();
+                }
+              }}
+            >
+              <div
+                className={`tx-audio-profile-option tx-audio-profile-option--placeholder${selectedId ? '' : ' is-active'}`}
+                role="option"
+                aria-selected={!selectedId}
+                aria-disabled="true"
+              >
+                {profiles.length ? 'Select profile...' : 'No profiles saved'}
+              </div>
+              {profiles.map((p) => {
+                const active = p.id === selectedId;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    role="option"
+                    aria-selected={active}
+                    className={`tx-audio-profile-option${active ? ' is-active' : ''}`}
+                    onClick={() => void onSelect(p.id)}
+                  >
+                    {profileLabel(p)}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
         <button
           type="button"
           aria-label="Save TX audio profile"

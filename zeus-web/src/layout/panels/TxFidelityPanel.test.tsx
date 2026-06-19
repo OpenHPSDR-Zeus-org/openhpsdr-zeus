@@ -90,15 +90,19 @@ describe('TxFidelityPanel', () => {
     expect(container.querySelector('[aria-label="TX leveler max gain"]')).not.toBeNull();
     expect(container.querySelector('[aria-label="TX filter low cut"]')).not.toBeNull();
 
-    // The profile dropdown is populated from the unified store and shows the
+    // The profile picker is populated from the unified store and shows the
     // last-loaded id as selected.
-    const select = container.querySelector('[aria-label="TX audio profile"]') as HTMLSelectElement;
-    expect(select).not.toBeNull();
-    // The studio-ssb option is rendered from the unified store list and shown
-    // as selected (the last-loaded pointer).
-    const options = Array.from(select.querySelectorAll('option')).map((o) => o.value);
-    expect(options).toContain('studio-ssb');
-    expect(select.value).toBe('studio-ssb');
+    const trigger = container.querySelector('[aria-label="TX audio profile"]') as HTMLButtonElement;
+    expect(trigger).not.toBeNull();
+    expect(trigger.textContent).toContain('Studio SSB [Native]');
+    await act(async () => {
+      trigger.click();
+      for (let i = 0; i < 2; i++) await Promise.resolve();
+    });
+    const options = Array.from(container.querySelectorAll('[role="option"]')).map((o) =>
+      o.textContent?.trim(),
+    );
+    expect(options).toContain('Studio SSB [Native]');
 
     unmount();
   });
