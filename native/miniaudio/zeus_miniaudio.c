@@ -133,6 +133,14 @@ static void zeus_ma_copy_device_entries(
     }
 }
 
+static void zeus_ma_device_snapshot_free(zeus_ma_device_snapshot* s)
+{
+    if (s == NULL) return;
+    free(s->playback);
+    free(s->capture);
+    free(s);
+}
+
 /* ------------------------------------------------------------------------ */
 /* miniaudio callbacks (audio worker thread)                                */
 /* ------------------------------------------------------------------------ */
@@ -505,7 +513,7 @@ ZEUS_MA_EXPORT void* zeus_ma_devices_create(void)
     if (s->playback_count > 0) {
         s->playback = (zeus_ma_device_snapshot_entry*)calloc(s->playback_count, sizeof(*s->playback));
         if (s->playback == NULL) {
-            zeus_ma_devices_destroy(s);
+            zeus_ma_device_snapshot_free(s);
             ma_context_uninit(&ctx);
             return NULL;
         }
@@ -515,7 +523,7 @@ ZEUS_MA_EXPORT void* zeus_ma_devices_create(void)
     if (s->capture_count > 0) {
         s->capture = (zeus_ma_device_snapshot_entry*)calloc(s->capture_count, sizeof(*s->capture));
         if (s->capture == NULL) {
-            zeus_ma_devices_destroy(s);
+            zeus_ma_device_snapshot_free(s);
             ma_context_uninit(&ctx);
             return NULL;
         }
@@ -590,11 +598,7 @@ ZEUS_MA_EXPORT int32_t zeus_ma_devices_capture_default(void* snapshot, uint32_t 
 
 ZEUS_MA_EXPORT void zeus_ma_devices_destroy(void* snapshot)
 {
-    zeus_ma_device_snapshot* s = (zeus_ma_device_snapshot*)snapshot;
-    if (s == NULL) return;
-    free(s->playback);
-    free(s->capture);
-    free(s);
+    zeus_ma_device_snapshot_free((zeus_ma_device_snapshot*)snapshot);
 }
 
 /* ------------------------------------------------------------------------ */
