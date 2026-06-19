@@ -65,6 +65,19 @@
     height var(--dur-fast) var(--ease-out);
 }
 
+/* Premium reflow: while the operator is actively dragging or resizing, let the
+ * OTHER tiles glide to their new slots instead of snapping instantly. Scoped to
+ * the live interaction (the --interacting class is toggled by WorkspaceCanvas)
+ * and to non-dragged tiles, so idle tiles keep `transition: none` and are never
+ * promoted to a GPU compositor layer — preserving the WebGL-panadapter cost
+ * guard the base .react-grid-item rule above exists for. absoluteStrategy
+ * positions tiles via top/left, so those are the properties we ease. */
+.all-panels-grid--interacting
+  .react-grid-item:not(.react-draggable-dragging):not(.resizing) {
+  transition: top var(--dur-fast) var(--ease-out),
+    left var(--dur-fast) var(--ease-out);
+}
+
 /* Drop placeholder — accent-blue ghost where the dragged tile will land. */
 .all-panels-grid .react-grid-placeholder {
   background: var(--accent);

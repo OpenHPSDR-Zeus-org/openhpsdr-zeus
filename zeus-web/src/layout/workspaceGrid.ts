@@ -15,11 +15,32 @@ export const WORKSPACE_DRAG_COMPACTOR = createWorkspaceDragCompactor();
 export function createWorkspaceDragCompactor(
   getDragStart?: () => WorkspaceDragStartSnapshot | null,
 ): Compactor {
+  // Per-drag hysteresis state. `engaged` holds the ids of neighbours currently
+  // committed to a swap; it is rebuilt whenever the drag snapshot identity
+  // changes (a new gesture) and dropped when the drag ends (snapshot null).
+  // Carrying it across frames is what gives the swap a deadband — without it
+  // the swap re-derives from scratch every frame and flickers at the boundary.
+  let session: {
+    dragStart: WorkspaceDragStartSnapshot;
+    engaged: Set<string>;
+  } | null = null;
   return {
     type: null,
     allowOverlap: false,
-    compact: (layout, cols) =>
-      compactDragMagnetic(layout, cols, getDragStart?.() ?? null),
+    compact: (layout, cols) => {
+      const dragStart = getDragStart?.() ?? null;
+      if (!dragStart) {
+        session = null;
+      } else if (!session || session.dragStart !== dragStart) {
+        session = { dragStart, engaged: new Set() };
+      }
+      return compactDragMagnetic(
+        layout,
+        cols,
+        dragStart,
+        session?.engaged ?? null,
+      );
+    },
   };
 }
 
@@ -33,6 +54,7 @@ function compactDragMagnetic(
   layout: Layout,
   cols: number,
   dragStart: WorkspaceDragStartSnapshot | null,
+  engaged: Set<string> | null,
 ): Layout {
   const priorityId = layout.find((item) => item.moved)?.i;
   if (!priorityId || !dragStart) {
@@ -48,11 +70,19 @@ function compactDragMagnetic(
     cols,
     priorityId,
     dragStart,
+    engaged,
   );
+  // During a live drag keep the dragged tile pinned to the pointer cell, even
+  // on frames where no swap fires. Toggling preservePriority with the swap
+  // (the old behaviour) let compactMagnetUp yank the tile upward the instant
+  // its overlap dipped below a collision; RGL then dragged it back toward the
+  // pointer next frame — the preserve-toggle 2-cycle that read as a "quick
+  // back and forth" at the swap boundary. A live session pins unconditionally.
+  const preservePriority = engaged ? true : swapped.displaced;
   return compactMagnetUp(
     swapped.layout,
     priorityId,
-    swapped.displaced,
+    preservePriority,
   ).map((item) => ({
     ...item,
     moved: false,
@@ -79,6 +109,7 @@ export function autoFitDroppedPanel(
     cols,
     dropped.i,
     dragStart?.layout.length ? dragStart : null,
+    null,
   );
   const base = swapped.layout;
   const target = base.find((item) => item.i === dropped.i);
@@ -204,6 +235,7 @@ function swapDisplacedIntoPreviousSlot(
   cols: number,
   priorityId: string | undefined,
   dragStart: WorkspaceDragStartSnapshot | null,
+  engaged: Set<string> | null,
 ): { layout: Layout; displaced: boolean } {
   const next = cloneLayout(layout);
   if (!priorityId || !dragStart || dragStart.item.i !== priorityId) {
@@ -223,11 +255,26 @@ function swapDisplacedIntoPreviousSlot(
     .filter(
       (
         candidate,
-      ): candidate is { item: LayoutItem; previous: LayoutItem } =>
-        candidate.previous !== undefined &&
-        (placementChanged(candidate.item, candidate.previous) ||
+      ): candidate is { item: LayoutItem; previous: LayoutItem } => {
+        if (candidate.previous === undefined) return false;
+        // Live drag: gate engagement through the per-drag hysteresis set so a
+        // neighbour holds its swapped slot across the touch boundary instead of
+        // flickering. Drop / one-shot compaction (engaged === null) keeps the
+        // immediate collision test — there is no next frame to flicker into.
+        if (engaged) {
+          return updateSwapEngagement(
+            candidate.item.i,
+            candidate.previous,
+            anchor,
+            engaged,
+          );
+        }
+        return (
+          placementChanged(candidate.item, candidate.previous) ||
           collides(candidate.previous, anchor) ||
-          collides(candidate.item, anchor)),
+          collides(candidate.item, anchor)
+        );
+      },
     )
     .sort((a, b) =>
       compareDisplacedCandidates(a, b, anchor, originalOrder),
@@ -601,6 +648,47 @@ function collides(a: LayoutItem, b: LayoutItem) {
   if (a.y + a.h <= b.y) return false;
   if (a.y >= b.y + b.h) return false;
   return true;
+}
+
+// Hysteresis thresholds for the live magnetic swap (grid rows). A neighbour
+// engages once the dragged tile overlaps it by at least ENGAGE rows, and only
+// disengages once they are separated by more than RELEASE rows (a strict gap).
+// The band between them — the touch boundary, where RGL's grid-rounding jitters
+// the dragged tile by a single row — is a deadband: a neighbour that is already
+// committed stays committed across it, so the swap can't flicker on and off.
+const SWAP_ENGAGE_ROWS = 1;
+const SWAP_RELEASE_ROWS = 0;
+
+// Signed vertical overlap between the dragged anchor and a neighbour, in rows:
+// positive when they overlap, zero when edges touch, negative (a gap) when they
+// are apart. Returns -Infinity when their columns don't overlap at all, so a
+// neighbour off to the side never engages and any engaged one releases at once.
+function verticalOverlapRows(anchor: LayoutItem, neighbor: LayoutItem): number {
+  if (anchor.x + anchor.w <= neighbor.x || anchor.x >= neighbor.x + neighbor.w) {
+    return Number.NEGATIVE_INFINITY;
+  }
+  return (
+    Math.min(anchor.y + anchor.h, neighbor.y + neighbor.h) -
+    Math.max(anchor.y, neighbor.y)
+  );
+}
+
+// Advance the per-drag engagement set for one neighbour and report whether it
+// is currently committed to a swap. Engage on real overlap, release only on a
+// clear gap; the touch boundary in between is sticky.
+function updateSwapEngagement(
+  id: string,
+  previous: LayoutItem,
+  anchor: LayoutItem,
+  engaged: Set<string>,
+): boolean {
+  const overlap = verticalOverlapRows(anchor, previous);
+  if (engaged.has(id)) {
+    if (overlap < SWAP_RELEASE_ROWS) engaged.delete(id);
+  } else if (overlap >= SWAP_ENGAGE_ROWS) {
+    engaged.add(id);
+  }
+  return engaged.has(id);
 }
 
 function boundedMin(value: number | undefined, fallback: number, ceiling: number) {
