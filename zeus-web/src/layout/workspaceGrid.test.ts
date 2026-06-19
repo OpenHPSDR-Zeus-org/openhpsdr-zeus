@@ -30,6 +30,12 @@ function expectNoCollisions(layout: Layout) {
   }
 }
 
+function expectStableCompaction(layout: Layout) {
+  const once = WORKSPACE_DRAG_COMPACTOR.compact(layout, 24);
+  const twice = WORKSPACE_DRAG_COMPACTOR.compact(once, 24);
+  expect(twice).toEqual(once);
+}
+
 function fitMovedElement(
   layout: Layout,
   dragged: Layout[number],
@@ -238,6 +244,60 @@ describe('workspace grid collision policy', () => {
 
     expect(next.find((item) => item.i === 'dragged')?.y).toBe(2);
     expect(next.find((item) => item.i === 'below')?.y).toBe(0);
+  });
+
+  it('keeps large panadapter drag compaction stable', () => {
+    const layout: Layout = cloneLayout([
+      { i: 'filter', x: 0, y: 0, w: 12, h: 10 },
+      { i: 'filterpresets', x: 12, y: 0, w: 6, h: 10 },
+      { i: 'hero', x: 0, y: 10, w: 18, h: 38, minW: 8, minH: 8 },
+      { i: 'vfo', x: 18, y: 0, w: 6, h: 11 },
+      { i: 'smeter', x: 18, y: 11, w: 6, h: 5 },
+      { i: 'tx', x: 18, y: 16, w: 6, h: 10 },
+      { i: 'txmeters', x: 18, y: 26, w: 6, h: 12 },
+      { i: 'dsp', x: 18, y: 38, w: 6, h: 10 },
+    ]);
+    const dragged = layout.find((item) => item.i === 'hero')!;
+    const next = dragAndCompact(layout, dragged, 6, 16);
+
+    expect(next.find((item) => item.i === 'hero')).toMatchObject({
+      x: 6,
+      moved: false,
+    });
+    expectNoCollisions(next);
+    expectStableCompaction(next);
+  });
+
+  it('keeps large panadapter final drop stable through prop resync', () => {
+    const layout: Layout = cloneLayout([
+      { i: 'filter', x: 0, y: 0, w: 12, h: 10 },
+      { i: 'filterpresets', x: 12, y: 0, w: 6, h: 10 },
+      { i: 'hero', x: 0, y: 10, w: 18, h: 38, minW: 8, minH: 8 },
+      { i: 'vfo', x: 18, y: 0, w: 6, h: 11 },
+      { i: 'smeter', x: 18, y: 11, w: 6, h: 5 },
+      { i: 'tx', x: 18, y: 16, w: 6, h: 10 },
+      { i: 'txmeters', x: 18, y: 26, w: 6, h: 12 },
+      { i: 'dsp', x: 18, y: 38, w: 6, h: 10 },
+    ]);
+    const dragged = layout.find((item) => item.i === 'hero')!;
+    const dragStart = { item: { ...dragged }, layout: cloneLayout(layout) };
+    const moved = moveElement(
+      layout,
+      dragged,
+      6,
+      16,
+      true,
+      WORKSPACE_DRAG_COMPACTOR.preventCollision,
+      WORKSPACE_DRAG_COMPACTOR.type,
+      24,
+      WORKSPACE_DRAG_COMPACTOR.allowOverlap,
+    );
+
+    const dropped = autoFitDroppedPanel(moved, 24, dragStart);
+    const resynced = WORKSPACE_DRAG_COMPACTOR.compact(dropped, 24);
+
+    expect(resynced).toEqual(dropped);
+    expectNoCollisions(dropped);
   });
 
   it('pushes a lower panel down when resize grows into it', () => {
