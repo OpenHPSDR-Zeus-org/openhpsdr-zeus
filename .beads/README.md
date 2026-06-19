@@ -78,4 +78,40 @@ bd create "Try out Beads"
 
 ---
 
+## Zeus team sync (project-specific)
+
+> Moved here from `CLAUDE.md` to keep the agent context file lean. This is the
+> authoritative Zeus-specific bd setup; `CLAUDE.md` carries only a pointer.
+
+Zeus does **not** use the `refs/dolt/data`-on-git-remote sync path that bd's
+default integration block mentions. Zeus syncs its bd Dolt database to a
+dedicated public DoltHub repo:
+
+> **DoltHub:** https://www.dolthub.com/repositories/kb2uka/openhpsdr-zeus
+
+### One-time teammate setup
+
+```bash
+dolt login                                                                   # browser flow → associate a key
+bd dolt remote add origin https://doltremoteapi.dolthub.com/kb2uka/openhpsdr-zeus
+bd dolt pull origin main                                                     # fetch the team's issues
+```
+
+### Day-to-day
+
+```bash
+bd dolt pull origin main      # before starting work
+# ... bd create / bd update / bd close ...
+bd dolt push origin main      # after edits, before signing off
+```
+
+### What's tracked in git vs. DoltHub
+
+- **`.beads/config.yaml`** (in git) — team-wide bd config including `sync.remote`. Edit here for team-wide defaults.
+- **`.beads/issues.jsonl`** / **`interactions.jsonl`** (in git) — passive exports for human grep and zero-dependency reading. **Do not edit by hand** — bd regenerates them. **Do not commit them inside a feature-branch PR** — the merge-conflict tax is real once more than one person uses bd. Snapshot commits to `develop` are fine.
+- **`.beads/metadata.json`** (gitignored) — per-clone `project_id` + local `dolt_database` name. Local state, never committed.
+- **`.beads/embeddeddolt/`** (gitignored) — the actual Dolt DB. Never committed; this is what `bd dolt push` ships.
+
+---
+
 *Beads: Issue tracking that moves at the speed of thought* ⚡

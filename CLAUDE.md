@@ -148,29 +148,4 @@ bd close <id>         # Complete work
 
 ## Beads — Team Sync (Zeus-specific)
 
-The auto-generated block above mentions `refs/dolt/data` on the git remote as the default sync path. **Zeus does NOT use that.** Zeus syncs its bd Dolt database to a dedicated public DoltHub repo:
-
-> **DoltHub:** https://www.dolthub.com/repositories/kb2uka/openhpsdr-zeus
-
-### One-time teammate setup
-
-```bash
-dolt login                                                                   # browser flow → associate a key
-bd dolt remote add origin https://doltremoteapi.dolthub.com/kb2uka/openhpsdr-zeus
-bd dolt pull origin main                                                     # fetch the team's issues
-```
-
-### Day-to-day
-
-```bash
-bd dolt pull origin main      # before starting work
-# ... bd create / bd update / bd close ...
-bd dolt push origin main      # after edits, before signing off
-```
-
-### What's tracked in git vs. DoltHub
-
-- **`.beads/config.yaml`** (in git) — team-wide bd config including `sync.remote`. Edit here for team-wide defaults.
-- **`.beads/issues.jsonl`** / **`interactions.jsonl`** (in git) — passive exports for human grep and zero-dependency reading. **Do not edit by hand** — bd regenerates them. **Do not commit them inside a feature-branch PR** — the merge-conflict tax is real once more than one person uses bd. Snapshot commits to `develop` are fine.
-- **`.beads/metadata.json`** (gitignored) — per-clone `project_id` + local `dolt_database` name. Local state, never committed.
-- **`.beads/embeddeddolt/`** (gitignored) — the actual Dolt DB. Never committed; this is what `bd dolt push` ships.
+Zeus does **not** use the `refs/dolt/data`-on-git-remote sync path the auto-generated block above mentions — it syncs the bd Dolt DB to a dedicated public DoltHub repo (**https://www.dolthub.com/repositories/kb2uka/openhpsdr-zeus**). The one-time teammate setup, the `bd dolt pull/push origin main` day-to-day loop, and the git-vs-DoltHub tracking rules (what's committed vs. gitignored) live in **[`.beads/README.md`](.beads/README.md) → "Zeus team sync"**. Read it before your first `bd dolt push`.
