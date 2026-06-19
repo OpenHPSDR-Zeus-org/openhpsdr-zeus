@@ -59,6 +59,16 @@ describe('audio-suite-store profile selection', () => {
     expect(useAudioSuiteStore.getState().selectedProfile).toBe('Ragchew');
   });
 
+  it('persists the selected RX profile until the operator changes it', async () => {
+    useAudioSuiteStore.getState().setSelectedProfileForRoute('rx', 'Clear RX');
+
+    const stored = JSON.parse(localStorage.getItem('zeus-audio-suite') ?? '{}');
+    expect(stored.state.rxSelectedProfile).toBe('Clear RX');
+
+    await rehydrateAudioSuiteFromStorage();
+    expect(useAudioSuiteStore.getState().rxSelectedProfile).toBe('Clear RX');
+  });
+
   it('opens TX and RX suites as independent windows', async () => {
     expect(useAudioSuiteStore.getState().suiteRoute).toBe('tx');
 
@@ -149,6 +159,52 @@ describe('audio-suite-store profile selection', () => {
 
     expect(useAudioSuiteStore.getState().profilesLoaded).toBe(true);
     expect(useAudioSuiteStore.getState().selectedProfile).toBe('');
+  });
+
+  it('hydrates the selected RX profile from the server when profiles load', async () => {
+    localStorage.setItem(
+      'zeus-audio-suite',
+      JSON.stringify({
+        state: { rxSelectedProfile: 'Old RX' },
+        version: 0,
+      }),
+    );
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(response({
+        selectedProfile: 'Clear RX',
+        profiles: [{ name: 'Clear RX' }],
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await rehydrateAudioSuiteFromStorage();
+    await useAudioSuiteStore.getState().loadProfiles('rx');
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/rx-audio-suite/profiles');
+    expect(useAudioSuiteStore.getState().rxProfilesLoaded).toBe(true);
+    expect(useAudioSuiteStore.getState().rxSelectedProfile).toBe('Clear RX');
+  });
+
+  it('keeps a local RX profile selection when the server has no selected row yet', async () => {
+    localStorage.setItem(
+      'zeus-audio-suite',
+      JSON.stringify({
+        state: { rxSelectedProfile: 'Clear RX' },
+        version: 0,
+      }),
+    );
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(response({
+        selectedProfile: null,
+        profiles: [{ name: 'Clear RX' }],
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await rehydrateAudioSuiteFromStorage();
+    await useAudioSuiteStore.getState().loadProfiles('rx');
+
+    expect(useAudioSuiteStore.getState().rxSelectedProfile).toBe('Clear RX');
   });
 
   it('marks a profile selected after a successful apply', async () => {

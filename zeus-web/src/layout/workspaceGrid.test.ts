@@ -9,6 +9,7 @@ import {
   WORKSPACE_RESIZE_COMPACTOR,
   autoFitDroppedPanel,
   liftLayoutToTop,
+  createWorkspaceDragCompactor,
 } from './workspaceGrid';
 
 function cloneLayout(layout: Layout): Layout {
@@ -37,6 +38,7 @@ function fitMovedElement(
   y: number | undefined,
 ) {
   const previous = { ...dragged };
+  const previousLayout = cloneLayout(layout);
   return autoFitDroppedPanel(
     moveElement(
       layout,
@@ -50,7 +52,31 @@ function fitMovedElement(
       WORKSPACE_DRAG_COMPACTOR.allowOverlap,
     ),
     24,
-    previous,
+    { item: previous, layout: previousLayout },
+  );
+}
+
+function dragAndCompact(
+  layout: Layout,
+  dragged: Layout[number],
+  x: number | undefined,
+  y: number | undefined,
+) {
+  const dragStart = { item: { ...dragged }, layout: cloneLayout(layout) };
+  const compactor = createWorkspaceDragCompactor(() => dragStart);
+  return compactor.compact(
+    moveElement(
+      layout,
+      dragged,
+      x,
+      y,
+      true,
+      compactor.preventCollision,
+      compactor.type,
+      24,
+      compactor.allowOverlap,
+    ),
+    24,
   );
 }
 
@@ -71,7 +97,25 @@ describe('workspace grid collision policy', () => {
     ]);
   });
 
-  it('cascades drag displacement through the default right-column stack', () => {
+  it('swaps a lower panel into the dragged panel old slot during live drag', () => {
+    const layout = cloneLayout(baseLayout);
+    const dragged = layout[0]!;
+
+    const next = dragAndCompact(layout, dragged, undefined, 2);
+
+    expect(next.find((item) => item.i === 'dragged')).toMatchObject({
+      x: 0,
+      y: 2,
+      moved: false,
+    });
+    expect(next.find((item) => item.i === 'below')).toMatchObject({
+      x: 0,
+      y: 0,
+    });
+    expectNoCollisions(next);
+  });
+
+  it('swaps the covered panel into the old slot and keeps the stack tight', () => {
     const layout: Layout = cloneLayout([
       { i: 'filter', x: 0, y: 0, w: 12, h: 10 },
       { i: 'filterpresets', x: 12, y: 0, w: 6, h: 10 },
@@ -84,31 +128,23 @@ describe('workspace grid collision policy', () => {
     ]);
     const dragged = layout[1]!;
 
-    const moved = moveElement(
-      layout,
-      dragged,
-      18,
-      16,
-      true,
-      WORKSPACE_DRAG_COMPACTOR.preventCollision,
-      WORKSPACE_DRAG_COMPACTOR.type,
-      24,
-      WORKSPACE_DRAG_COMPACTOR.allowOverlap,
-    );
-    const next = WORKSPACE_DRAG_COMPACTOR.compact(moved, 24);
+    const next = dragAndCompact(layout, dragged, 18, 16);
 
     expect(next.find((item) => item.i === 'filterpresets')).toMatchObject({
       x: 18,
       y: 16,
       moved: false,
     });
-    expect(next.find((item) => item.i === 'tx')).toMatchObject({ y: 26 });
-    expect(next.find((item) => item.i === 'txmeters')).toMatchObject({ y: 36 });
-    expect(next.find((item) => item.i === 'dsp')).toMatchObject({ y: 48 });
+    expect(next.find((item) => item.i === 'tx')).toMatchObject({
+      x: 12,
+      y: 0,
+    });
+    expect(next.find((item) => item.i === 'txmeters')).toMatchObject({ y: 26 });
+    expect(next.find((item) => item.i === 'dsp')).toMatchObject({ y: 38 });
     expectNoCollisions(next);
   });
 
-  it('pushes a colliding panel out of the dragged panel target', () => {
+  it('swaps a colliding panel into the dragged panel old slot on drop', () => {
     const layout = cloneLayout(baseLayout);
     const dragged = layout[0]!;
 
@@ -127,6 +163,7 @@ describe('workspace grid collision policy', () => {
     expect(next.find((item) => item.i === 'below')).toMatchObject({
       x: 0,
       y: 2,
+      y: 0,
     });
     expectNoCollisions(next);
   });
@@ -147,7 +184,7 @@ describe('workspace grid collision policy', () => {
       h: 2,
     });
     expect(next.find((item) => item.i === 'right')).toMatchObject({
-      x: 14,
+      x: 0,
       y: 2,
       w: 10,
       h: 2,
@@ -203,6 +240,7 @@ describe('workspace grid collision policy', () => {
   });
 
   it('top-anchors a two-panel column after the dragged panel clears the slot', () => {
+  it('snaps the dragged panel up against the occupied slot once clear', () => {
     const layout = cloneLayout(baseLayout);
     const dragged = layout[0]!;
 
@@ -219,6 +257,8 @@ describe('workspace grid collision policy', () => {
     expect(Math.min(draggedY, belowY)).toBe(0);
     expect(draggedY).not.toBe(belowY);
     expectNoCollisions(next);
+    expect(next.find((item) => item.i === 'dragged')?.y).toBe(2);
+    expect(next.find((item) => item.i === 'below')?.y).toBe(0);
   });
 
   it('pushes a lower panel down when resize grows into it', () => {

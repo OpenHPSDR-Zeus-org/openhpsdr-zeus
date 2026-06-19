@@ -15,7 +15,7 @@ param(
     [string]$BaseRemote = 'OpenHPSDR-Zeus-org',
     [string]$BaseBranch = 'develop',
     [string]$PrRepo = 'OpenHPSDR-Zeus-org/openhpsdr-zeus',
-    [string]$BdRemote = 'kb2uka',
+    [string]$BdRemote = 'origin',
     [switch]$Draft,
     [switch]$SkipTests,
     [switch]$NoPr,

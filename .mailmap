@@ -1,0 +1,15 @@
+# .mailmap — canonical contributor identities for `git shortlog`, `git log`, and
+# GitHub contributor stats. Folds each person's alternate name/email combos into
+# one identity. Display-only: this does NOT rewrite history.
+#
+# Format: Canonical Name <canonical@email> [Alt Name] <alt@email>
+
+# Christian Suarez (N9WAR) — also authors via the GitHub web UI as iamexemplar
+Christian Suarez (N9WAR) <christiantsuarez@gmail.com> EXE <133596045+iamexemplar@users.noreply.github.com>
+
+# Brian Keating — Enverus work address + name-only variant folded into personal identity
+Brian Keating <b@briankeating.net> <brian.keating@enverus.com>
+Brian Keating <b@briankeating.net> Brian <b@briankeating.net>
+
+# Doug (KB2UKA) — GitHub web-merge noreply identity folded in; casing normalized
+KB2UKA <kb2uka80@gmail.com> Kb2UKA <95453216+Kb2uka@users.noreply.github.com>

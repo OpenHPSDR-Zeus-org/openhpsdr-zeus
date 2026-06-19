@@ -38,9 +38,10 @@ import { useWorkspace } from './WorkspaceContext';
 import { parseLayoutOrDefault, useLayoutStore } from '../state/layout-store';
 import { getPanelDef } from './panels';
 import {
-  WORKSPACE_DRAG_COMPACTOR,
   WORKSPACE_RESIZE_COMPACTOR,
   autoFitDroppedPanel,
+  createWorkspaceDragCompactor,
+  type WorkspaceDragStartSnapshot,
 } from './workspaceGrid';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import {
@@ -237,7 +238,8 @@ function WorkspaceCanvas({
   const [containerHeight, setContainerHeight] = useState(0);
   const [gridInteraction, setGridInteraction] =
     useState<GridInteraction>(null);
-  const autoFitDropRef = useRef<LayoutItem | null>(null);
+  const dragStartRef = useRef<WorkspaceDragStartSnapshot | null>(null);
+  const autoFitDropRef = useRef<WorkspaceDragStartSnapshot | null>(null);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -293,10 +295,14 @@ function WorkspaceCanvas({
     );
   }, [containerHeight, rowMargin, targetRows]);
 
+  const workspaceDragCompactor = useMemo(
+    () => createWorkspaceDragCompactor(() => dragStartRef.current),
+    [],
+  );
   const workspaceCompactor =
     gridInteraction === 'resize'
       ? WORKSPACE_RESIZE_COMPACTOR
-      : WORKSPACE_DRAG_COMPACTOR;
+      : workspaceDragCompactor;
 
   const onPointerDownCapture = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -325,6 +331,16 @@ function WorkspaceCanvas({
     // autoFitDropRef would then make the NEXT layout change auto-fit the wrong
     // panel against the wrong previous footprint. Defensive, but cheap.
     autoFitDropRef.current = null;
+  const onDragStart = useCallback((
+    layout: Layout,
+    oldItem: LayoutItem | null,
+  ) => {
+    dragStartRef.current = oldItem
+      ? {
+          item: { ...oldItem },
+          layout: layout.map((item) => ({ ...item })),
+        }
+      : null;
     setGridInteraction('drag');
   }, []);
   const onResizeStart = useCallback(() => setGridInteraction('resize'), []);
@@ -338,12 +354,14 @@ function WorkspaceCanvas({
       newItem &&
       (oldItem.x !== newItem.x || oldItem.y !== newItem.y)
     )
-      ? { ...oldItem }
+      ? dragStartRef.current ?? { item: { ...oldItem }, layout: [] }
       : null;
+    dragStartRef.current = null;
     setGridInteraction(null);
   }, []);
   const onResizeStop = useCallback(() => {
     autoFitDropRef.current = null;
+    dragStartRef.current = null;
     setGridInteraction(null);
   }, []);
   const handleLayoutChange = useCallback(

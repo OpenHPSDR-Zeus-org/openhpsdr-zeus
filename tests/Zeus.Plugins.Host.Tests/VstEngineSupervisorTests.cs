@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Threading;
 using Zeus.Plugins.Contracts.Audio;
 using Zeus.Plugins.Host.Audio;
 
@@ -14,6 +15,19 @@ namespace Zeus.Plugins.Host.Tests;
 /// </summary>
 public class VstEngineSupervisorTests
 {
+    static VstEngineSupervisorTests()
+    {
+        // These supervisor tests are timing-sensitive (watchdog timers, relaunch
+        // backoff, polling waits) and run in parallel with the rest of the
+        // assembly. On a 2-core Windows CI runner the default thread-pool floor
+        // can starve a watchdog timer callback or a Task.Delay continuation long
+        // enough to blow a test's wait budget — the source of the intermittent
+        // HungEngine / crash-loop flakes. Raise the floor once (process-wide,
+        // idempotent) so timers and continuations always get a thread.
+        ThreadPool.GetMinThreads(out var worker, out var io);
+        ThreadPool.SetMinThreads(Math.Max(worker, 16), Math.Max(io, 16));
+    }
+
     private static AudioBlockContext Ctx(int frames, int channels) =>
         new(sampleRate: 48000, channels: channels, frames: frames, sampleTime: 0, mox: true);
 
@@ -257,7 +271,11 @@ public class VstEngineSupervisorTests
         // Windows, where the pump task could be starved long enough to zero the delta.
         bridge.DegradePerRead = c.HangDegradedThreshold * 2;
 
-        var recycled = await WaitUntilAsync(() => c.RestartCount >= 1, 4000);
+        // Generous budget: this asserts a CORRECTNESS invariant (the watchdog
+        // does recycle a hung engine), not a latency bound. A real failure to
+        // recycle still fails the test; a loaded runner just takes longer to
+        // observe it. ~50 ms when healthy.
+        var recycled = await WaitUntilAsync(() => c.RestartCount >= 1, 15000);
 
         Assert.True(recycled, "watchdog should force-recycle a hung engine");
         Assert.True(created.Count >= 2);

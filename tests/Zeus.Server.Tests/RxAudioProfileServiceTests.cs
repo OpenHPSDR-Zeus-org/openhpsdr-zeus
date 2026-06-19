@@ -98,6 +98,54 @@ public sealed class RxAudioProfileServiceTests : IDisposable
         Assert.False(MasterBypass.IsBypassed);
     }
 
+    [Fact]
+    public async Task SaveApplyAndDelete_MaintainSelectedProfile()
+    {
+        await MasterBypass.StartAsync(CancellationToken.None);
+        RxChainOrder.OnPluginAttached(RxClear);
+        RxChainOrder.OnPluginAttached(RxNoise);
+        Assert.True(RxChainOrder.TrySetParked(RxClear, parked: false, out _));
+        Assert.True(RxChainOrder.TrySetParked(RxNoise, parked: false, out _));
+
+        await Service.SaveCurrentAsync("Clear receive");
+
+        Assert.Equal("Clear receive", Service.SelectedProfileName);
+
+        await Service.ApplyAsync("Clear receive");
+
+        Assert.Equal("Clear receive", Service.SelectedProfileName);
+
+        Assert.True(Service.Delete("Clear receive"));
+
+        Assert.Null(Service.SelectedProfileName);
+    }
+
+    [Fact]
+    public async Task StartupService_ReappliesSelectedRxProfile()
+    {
+        await MasterBypass.StartAsync(CancellationToken.None);
+        MasterBypass.SetRxMasterBypassed(false);
+        RxChainOrder.OnPluginAttached(RxClear);
+        RxChainOrder.OnPluginAttached(RxNoise);
+        Assert.True(RxChainOrder.TrySetParked(RxClear, parked: false, out _));
+        Assert.True(RxChainOrder.TrySetParked(RxNoise, parked: false, out _));
+        Assert.True(RxChainOrder.TrySetOrder([RxNoise, RxClear], out _));
+
+        await Service.SaveCurrentAsync("Clear receive");
+
+        Assert.True(RxChainOrder.TrySetParked(RxClear, parked: true, out _));
+        MasterBypass.SetRxMasterBypassed(true);
+
+        var startup = new RxAudioProfileStartupService(
+            Service,
+            NullLogger<RxAudioProfileStartupService>.Instance);
+        await startup.StartAsync(CancellationToken.None);
+
+        Assert.Equal("Clear receive", Service.SelectedProfileName);
+        Assert.Equal([RxNoise, RxClear], RxChainOrder.CurrentOrder);
+        Assert.False(MasterBypass.IsRxBypassed);
+    }
+
     public void Dispose()
     {
         _rxVst.DisposeAsync().AsTask().GetAwaiter().GetResult();

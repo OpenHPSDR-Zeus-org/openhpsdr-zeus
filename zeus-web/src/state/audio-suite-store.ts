@@ -62,6 +62,11 @@ type AudioProfileSummaryResponse = Omit<AudioProfileSummary, 'processingMode'> &
   processingMode?: string;
 };
 
+interface AudioProfilesResponse {
+  profiles?: AudioProfileSummaryResponse[];
+  selectedProfile?: string | null;
+}
+
 function normalizeAudioProfileSummary(profile: AudioProfileSummaryResponse): AudioProfileSummary {
   return {
     ...profile,
@@ -580,19 +585,29 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         try {
           const res = await fetch(`/api/${route}-audio-suite/profiles`);
           if (!res.ok) return;
-          const body = (await res.json()) as { profiles?: AudioProfileSummaryResponse[] };
+          const body = (await res.json()) as AudioProfilesResponse;
           if (Array.isArray(body.profiles)) {
             const nextProfiles = body.profiles.map(normalizeAudioProfileSummary);
+            const serverSelected =
+              typeof body.selectedProfile === 'string'
+                ? body.selectedProfile.trim()
+                : '';
+            const profileExists = (name: string) =>
+              nextProfiles.some((p) => p.name === name);
+            const selectedFromServer =
+              serverSelected && profileExists(serverSelected)
+                ? serverSelected
+                : '';
             set((s) =>
               route === 'rx'
                 ? {
                     rxProfiles: nextProfiles,
                     rxProfilesLoaded: true,
                     rxSelectedProfile:
-                      s.rxSelectedProfile &&
-                      !nextProfiles.some((p) => p.name === s.rxSelectedProfile)
-                        ? ''
-                        : s.rxSelectedProfile,
+                      selectedFromServer ||
+                      (s.rxSelectedProfile && profileExists(s.rxSelectedProfile)
+                        ? s.rxSelectedProfile
+                        : ''),
                   }
                 : {
                     profiles: nextProfiles,
