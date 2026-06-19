@@ -44,8 +44,17 @@ jobs:
       - name: Build .NET solution
         run: dotnet build Zeus.slnx --configuration Release --no-restore
 
+      # The "DspModernization" trait covers the WDSP-v2 evidence/validation
+      # tooling suites (bakeoff-report ranking, artifact-manifest scaffolds,
+      # validation triage, manual-tune observer, live-diagnostics scene). They
+      # exercise the experimental evaluation harness, not DSP/protocol
+      # correctness, and the lineage-parity design doc calls for running broad
+      # modernization combinatorics as opt-in diagnostics rather than PR gates.
+      # They run on a schedule via dsp-modernization-tests.yml instead. The
+      # DSP-correctness + channel-lifecycle gates (Zeus.Dsp.Tests, etc.) stay
+      # in the per-PR run below.
       - name: Run .NET tests
-        run: dotnet test Zeus.slnx --configuration Release --no-build --verbosity normal
+        run: dotnet test Zeus.slnx --configuration Release --no-build --verbosity normal --filter "Category!=DspModernization"
 
       - name: Install frontend dependencies
         run: npm ci

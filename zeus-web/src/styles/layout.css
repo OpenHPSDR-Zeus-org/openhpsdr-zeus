@@ -2992,6 +2992,7 @@
 }
 .log-sync-pill {
   flex-shrink: 0;
+  margin-left: auto;
   color: var(--accent);
   font-size: 9px;
   font-weight: 800;

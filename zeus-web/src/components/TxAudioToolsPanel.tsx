@@ -16,7 +16,6 @@
 import { useEffect, useMemo, type CSSProperties, type ReactNode } from 'react';
 import { CfcSettingsPanel } from './CfcSettingsPanel';
 import { DownloadAudioSuiteButton } from './DownloadAudioSuiteButton';
-import { TxFidelityPanel } from '../layout/panels/TxFidelityPanel';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import type { RegisteredPluginPanel } from '../plugins/runtime/pluginRuntime';
 import { useAudioSuiteStore } from '../state/audio-suite-store';
@@ -645,14 +644,6 @@ export function TxAudioToolsPanel() {
           TX
         </span>
         <span>Transmit tools</span>
-      </div>
-
-      <div className="ps-card">
-        <h4>
-          TX Fidelity Policy
-          <span className="ps-card-hint">station profile / target density / apply chain</span>
-        </h4>
-        <TxFidelityPanel />
       </div>
 
       <CfcSettingsPanel />

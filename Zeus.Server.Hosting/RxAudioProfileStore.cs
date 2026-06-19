@@ -10,6 +10,7 @@ public sealed class RxAudioProfileStore : IDisposable
 {
     private readonly LiteDatabase _db;
     private readonly ILiteCollection<RxAudioProfileEntry> _profiles;
+    private readonly ILiteCollection<RxAudioProfileSelectionEntry> _selection;
     private readonly ILogger<RxAudioProfileStore> _log;
     private readonly object _sync = new();
 
@@ -24,6 +25,7 @@ public sealed class RxAudioProfileStore : IDisposable
         _db = new LiteDatabase($"Filename={dbPath};Connection=shared");
         _profiles = _db.GetCollection<RxAudioProfileEntry>("rx_audio_profiles");
         _profiles.EnsureIndex(x => x.Name, unique: true);
+        _selection = _db.GetCollection<RxAudioProfileSelectionEntry>("rx_audio_profile_selection");
 
         _log.LogInformation("RxAudioProfileStore initialized at {Path}", dbPath);
     }
@@ -39,6 +41,40 @@ public sealed class RxAudioProfileStore : IDisposable
     public RxAudioProfileEntry? Get(string name)
     {
         lock (_sync) return _profiles.FindOne(p => p.Name == name);
+    }
+
+    public string? GetSelectedProfile()
+    {
+        lock (_sync) return GetSelectedProfileUnderLock();
+    }
+
+    public void SetSelectedProfile(string? name)
+    {
+        lock (_sync)
+        {
+            var trimmed = name?.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed))
+            {
+                ClearSelectedProfileUnderLock();
+                return;
+            }
+
+            var nowUtc = DateTime.UtcNow;
+            var existing = _selection.FindAll().FirstOrDefault();
+            if (existing is null)
+            {
+                _selection.Insert(new RxAudioProfileSelectionEntry
+                {
+                    Name = trimmed,
+                    UpdatedUtc = nowUtc,
+                });
+                return;
+            }
+
+            existing.Name = trimmed;
+            existing.UpdatedUtc = nowUtc;
+            _selection.Update(existing);
+        }
     }
 
     public RxAudioProfileEntry Save(
@@ -83,10 +119,24 @@ public sealed class RxAudioProfileStore : IDisposable
 
     public bool Delete(string name)
     {
-        lock (_sync) return _profiles.DeleteMany(p => p.Name == name) > 0;
+        lock (_sync)
+        {
+            var deleted = _profiles.DeleteMany(p => p.Name == name) > 0;
+            if (deleted && string.Equals(GetSelectedProfileUnderLock(), name, StringComparison.Ordinal))
+                ClearSelectedProfileUnderLock();
+            return deleted;
+        }
     }
 
     public void Dispose() => _db.Dispose();
+
+    private string? GetSelectedProfileUnderLock() =>
+        _selection.FindAll().FirstOrDefault()?.Name;
+
+    private void ClearSelectedProfileUnderLock()
+    {
+        _selection.DeleteMany(_ => true);
+    }
 }
 
 public sealed class RxAudioProfileEntry
@@ -98,5 +148,12 @@ public sealed class RxAudioProfileEntry
     public bool MasterBypass { get; set; }
     public Dictionary<string, string> PluginStates { get; set; } = new();
     public DateTime CreatedUtc { get; set; }
+    public DateTime UpdatedUtc { get; set; }
+}
+
+public sealed class RxAudioProfileSelectionEntry
+{
+    public int Id { get; set; }
+    public string Name { get; set; } = "";
     public DateTime UpdatedUtc { get; set; }
 }

@@ -2,14 +2,26 @@
 
 import type { Compactor, Layout, LayoutItem } from 'react-grid-layout';
 
-// Keep the workspace sparse (no automatic gap-filling), but let RGL displace
-// occupied tiles during the live drag. The final drag-stop layout is normalized
-// by autoFitDroppedPanel below before it is persisted.
-export const WORKSPACE_DRAG_COMPACTOR: Compactor = {
-  type: null,
-  allowOverlap: false,
-  compact: compactDragSparse,
-};
+export interface WorkspaceDragStartSnapshot {
+  item: LayoutItem;
+  layout: Layout;
+}
+
+// Keep horizontal placement operator-directed, but make vertical placement
+// magnetic: when a tile is dragged into an occupied slot, the displaced tile
+// should swap into the dragged tile's old slot and the stack should close up.
+export const WORKSPACE_DRAG_COMPACTOR = createWorkspaceDragCompactor();
+
+export function createWorkspaceDragCompactor(
+  getDragStart?: () => WorkspaceDragStartSnapshot | null,
+): Compactor {
+  return {
+    type: null,
+    allowOverlap: false,
+    compact: (layout, cols) =>
+      compactDragMagnetic(layout, cols, getDragStart?.() ?? null),
+  };
+}
 
 export const WORKSPACE_RESIZE_COMPACTOR: Compactor = {
   type: null,
@@ -17,9 +29,31 @@ export const WORKSPACE_RESIZE_COMPACTOR: Compactor = {
   compact: compactResizePushDown,
 };
 
-function compactDragSparse(layout: Layout): Layout {
+function compactDragMagnetic(
+  layout: Layout,
+  cols: number,
+  dragStart: WorkspaceDragStartSnapshot | null,
+): Layout {
   const priorityId = layout.find((item) => item.moved)?.i;
-  return compactPushDownWithPriority(layout, priorityId).map((item) => ({
+  if (!priorityId || !dragStart) {
+    return compactPushDownWithPriority(layout, priorityId).map((item) => ({
+      ...item,
+      moved: false,
+    }));
+  }
+
+  const dragLayout = layoutFromDragStart(layout, priorityId, dragStart);
+  const swapped = swapDisplacedIntoPreviousSlot(
+    dragLayout,
+    cols,
+    priorityId,
+    dragStart,
+  );
+  return compactMagnetUp(
+    swapped.layout,
+    priorityId,
+    swapped.displaced,
+  ).map((item) => ({
     ...item,
     moved: false,
   }));
@@ -28,16 +62,27 @@ function compactDragSparse(layout: Layout): Layout {
 export function autoFitDroppedPanel(
   layout: Layout,
   cols: number,
-  previousItem?: LayoutItem | null,
+  previous?: LayoutItem | WorkspaceDragStartSnapshot | null,
 ): Layout {
+  const dragStart = normalizeDragStart(previous);
+  const previousItem = dragStart?.item ?? null;
   const dropped = previousItem
     ? layout.find((item) => item.i === previousItem.i)
     : findDroppedItem(layout);
-  if (!dropped) return cloneLayout(layout);
+  if (!dropped) return clearMovedFlags(layout);
 
-  const base = cloneLayout(layout);
+  const dragLayout = dragStart?.layout.length
+    ? layoutFromDragStart(layout, dropped.i, dragStart)
+    : layout;
+  const swapped = swapDisplacedIntoPreviousSlot(
+    dragLayout,
+    cols,
+    dropped.i,
+    dragStart?.layout.length ? dragStart : null,
+  );
+  const base = swapped.layout;
   const target = base.find((item) => item.i === dropped.i);
-  if (!target) return base;
+  if (!target) return clearMovedFlags(base);
 
   const minW = boundedMin(target.minW, 1, cols);
   const maxW = boundedMax(target.maxW, minW, cols);
@@ -99,20 +144,193 @@ export function autoFitDroppedPanel(
     }
   }
 
-  if (best) return best.layout;
+  if (best) {
+    return clearMovedFlags(compactMagnetUp(best.layout, target.i, swapped.displaced));
+  }
 
   const fallback = cloneLayout(base);
   const fallbackTarget = fallback.find((item) => item.i === target.i);
-  if (!fallbackTarget) return fallback;
+  if (!fallbackTarget) return clearMovedFlags(fallback);
   fallbackTarget.w = minW;
   fallbackTarget.h = minH;
   fallbackTarget.x = clamp(fallbackTarget.x, 0, Math.max(0, cols - minW));
   fallbackTarget.y = Math.max(0, fallbackTarget.y);
-  return compactPushDownWithPriority(fallback, target.i);
+  return clearMovedFlags(compactMagnetUp(fallback, target.i, swapped.displaced));
 }
 
 function compactResizePushDown(layout: Layout): Layout {
   return compactPushDownWithPriority(layout);
+}
+
+function swapDisplacedIntoPreviousSlot(
+  layout: Layout,
+  cols: number,
+  priorityId: string | undefined,
+  dragStart: WorkspaceDragStartSnapshot | null,
+): { layout: Layout; displaced: boolean } {
+  const next = cloneLayout(layout);
+  if (!priorityId || !dragStart || dragStart.item.i !== priorityId) {
+    return { layout: next, displaced: false };
+  }
+
+  const anchor = next.find((item) => item.i === priorityId);
+  if (!anchor) return { layout: next, displaced: false };
+
+  const previousById = new Map(dragStart.layout.map((item) => [item.i, item]));
+  const originalOrder = new Map(
+    dragStart.layout.map((item, index) => [item.i, index]),
+  );
+  const candidates = next
+    .filter((item) => item.i !== priorityId)
+    .map((item) => ({ item, previous: previousById.get(item.i) }))
+    .filter(
+      (
+        candidate,
+      ): candidate is { item: LayoutItem; previous: LayoutItem } =>
+        candidate.previous !== undefined &&
+        (placementChanged(candidate.item, candidate.previous) ||
+          collides(candidate.previous, anchor) ||
+          collides(candidate.item, anchor)),
+    )
+    .sort((a, b) =>
+      compareDisplacedCandidates(a, b, anchor, originalOrder),
+    );
+
+  for (const { item, previous } of candidates) {
+    const slot = nearestOpenSlot(
+      next,
+      item,
+      anchor,
+      cols,
+      previous,
+      dragStart.item,
+    );
+    if (slot === null) continue;
+    item.x = slot.x;
+    item.y = slot.y;
+    return { layout: next, displaced: true };
+  }
+
+  return { layout: next, displaced: false };
+}
+
+function layoutFromDragStart(
+  layout: Layout,
+  priorityId: string,
+  dragStart: WorkspaceDragStartSnapshot,
+): Layout {
+  const current = new Map(layout.map((item) => [item.i, item]));
+  const anchor = current.get(priorityId);
+  const next: LayoutItem[] = dragStart.layout.map((item) => {
+    if (item.i !== priorityId) return { ...item, moved: false };
+    return { ...(anchor ?? item), moved: true };
+  });
+
+  for (const item of layout) {
+    if (!dragStart.layout.some((startItem) => startItem.i === item.i)) {
+      next.push({ ...item });
+    }
+  }
+
+  return next;
+}
+
+function compactMagnetUp(
+  layout: Layout,
+  priorityId?: string,
+  preservePriority = false,
+): Layout {
+  const next = cloneLayout(layout);
+  const originalOrder = new Map(next.map((item, index) => [item.i, index]));
+  const priority = preservePriority && priorityId
+    ? next.find((item) => item.i === priorityId)
+    : undefined;
+  const placed: LayoutItem[] = priority ? [priority] : [];
+  const ordered = next
+    .filter((item) => item.i !== priority?.i)
+    .sort((a, b) => compareItems(a, b, originalOrder));
+
+  for (const item of ordered) {
+    if (!item.static) {
+      item.y = Math.max(0, item.y);
+      moveBelowCollisions(item, placed);
+      while (item.y > 0) {
+        item.y -= 1;
+        const collision = firstCollision(placed, item);
+        if (collision) {
+          item.y = collision.y + collision.h;
+          break;
+        }
+      }
+      moveBelowCollisions(item, placed);
+    }
+    placed.push(item);
+  }
+
+  return next;
+}
+
+function moveBelowCollisions(item: LayoutItem, placed: LayoutItem[]) {
+  let collision = firstCollision(placed, item);
+  while (collision) {
+    item.y = collision.y + collision.h;
+    collision = firstCollision(placed, item);
+  }
+}
+
+function firstCollision(
+  layout: LayoutItem[],
+  item: LayoutItem,
+): LayoutItem | undefined {
+  return layout.find((other) => collides(other, item));
+}
+
+function normalizeDragStart(
+  previous: LayoutItem | WorkspaceDragStartSnapshot | null | undefined,
+): WorkspaceDragStartSnapshot | null {
+  if (!previous) return null;
+  if ('item' in previous && 'layout' in previous) {
+    return {
+      item: { ...previous.item },
+      layout: cloneLayout(previous.layout),
+    };
+  }
+  return { item: { ...previous }, layout: [] };
+}
+
+function placementChanged(item: LayoutItem, previous: LayoutItem): boolean {
+  return (
+    item.x !== previous.x ||
+    item.y !== previous.y ||
+    item.w !== previous.w ||
+    item.h !== previous.h
+  );
+}
+
+function compareDisplacedCandidates(
+  a: { item: LayoutItem; previous: LayoutItem },
+  b: { item: LayoutItem; previous: LayoutItem },
+  anchor: LayoutItem,
+  originalOrder: Map<string, number>,
+) {
+  const aOldSlotHit = collides(a.previous, anchor);
+  const bOldSlotHit = collides(b.previous, anchor);
+  if (aOldSlotHit !== bOldSlotHit) return aOldSlotHit ? -1 : 1;
+
+  const aCurrentHit = collides(a.item, anchor);
+  const bCurrentHit = collides(b.item, anchor);
+  if (aCurrentHit !== bCurrentHit) return aCurrentHit ? -1 : 1;
+
+  const aDistance = rectDistance(a.previous, anchor);
+  const bDistance = rectDistance(b.previous, anchor);
+  return (
+    aDistance - bDistance ||
+    (originalOrder.get(a.item.i) ?? 0) - (originalOrder.get(b.item.i) ?? 0)
+  );
+}
+
+function rectDistance(a: LayoutItem, b: LayoutItem): number {
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
 }
 
 function compactPushDownWithPriority(
@@ -303,6 +521,36 @@ function compareItems(
 
 function cloneLayout(layout: Layout): LayoutItem[] {
   return layout.map((item) => ({ ...item }));
+}
+
+function clearMovedFlags(layout: Layout): LayoutItem[] {
+  return layout.map((item) => ({ ...item, moved: false }));
+}
+
+export function layoutPlacementsEqual(a: Layout, b: Layout): boolean {
+  if (a.length !== b.length) return false;
+  const placements = new Map(
+    a.map((item) => [item.i, { x: item.x, y: item.y, w: item.w, h: item.h }]),
+  );
+  if (placements.size !== a.length) return false;
+
+  const seen = new Set<string>();
+  for (const item of b) {
+    if (seen.has(item.i)) return false;
+    seen.add(item.i);
+    const placement = placements.get(item.i);
+    if (!placement) return false;
+    if (
+      placement.x !== item.x ||
+      placement.y !== item.y ||
+      placement.w !== item.w ||
+      placement.h !== item.h
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function placementMovement(

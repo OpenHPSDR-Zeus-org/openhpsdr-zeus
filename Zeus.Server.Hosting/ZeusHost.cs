@@ -503,6 +503,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioChainSettingsStore>();
         builder.Services.AddSingleton<AudioChainMasterBypassService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioChainMasterBypassService>());
+        builder.Services.AddHostedService<RxAudioProfileStartupService>();
 
         // AudioProcessingModeService — operator's Native-vs-VST route selector.
         // Default is Native (Brian's in-process chain) so a fresh operator's TX

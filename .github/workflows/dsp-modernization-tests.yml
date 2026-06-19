@@ -1,0 +1,41 @@
+name: DSP Modernization Tests
+
+# Runs the WDSP-v2 "DSP modernization" evidence/validation tooling suites
+# (Category=DspModernization): bakeoff-report ranking, artifact-manifest
+# scaffolds, validation triage, manual-tune observer, live-diagnostics scene.
+#
+# These exercise the experimental evaluation harness around the WDSP-v2 effort,
+# not DSP/protocol correctness, so per docs/designs/wdsp-lineage-parity-analysis.md
+# they run as opt-in diagnostics on a schedule rather than gating every PR. The
+# per-PR Build and Test workflow excludes this trait (Category!=DspModernization).
+#
+# Triggers:
+#   1. schedule (04:00 UTC) — offset one hour from the nightly release build.
+#      GitHub only honours `schedule:` once the file reaches the default branch
+#      (main), so the cron is dormant until the next develop->main merge.
+#   2. workflow_dispatch    — run on demand from any branch.
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+
+jobs:
+  dsp-modernization-tests:
+    name: DSP modernization tests (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore .NET dependencies
+        run: dotnet restore Zeus.slnx
+
+      - name: Build .NET solution
+        run: dotnet build Zeus.slnx --configuration Release --no-restore
+
+      - name: Run DSP modernization tests
+        run: dotnet test Zeus.slnx --configuration Release --no-build --verbosity normal --filter "Category=DspModernization"

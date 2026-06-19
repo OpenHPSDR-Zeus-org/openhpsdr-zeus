@@ -38,9 +38,11 @@ import { useWorkspace } from './WorkspaceContext';
 import { parseLayoutOrDefault, useLayoutStore } from '../state/layout-store';
 import { getPanelDef } from './panels';
 import {
-  WORKSPACE_DRAG_COMPACTOR,
   WORKSPACE_RESIZE_COMPACTOR,
   autoFitDroppedPanel,
+  createWorkspaceDragCompactor,
+  layoutPlacementsEqual,
+  type WorkspaceDragStartSnapshot,
 } from './workspaceGrid';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import {
@@ -248,7 +250,9 @@ function WorkspaceCanvas({
   const [containerHeight, setContainerHeight] = useState(0);
   const [gridInteraction, setGridInteraction] =
     useState<GridInteraction>(null);
-  const autoFitDropRef = useRef<LayoutItem | null>(null);
+  const dragStartRef = useRef<WorkspaceDragStartSnapshot | null>(null);
+  const autoFitDropRef = useRef<WorkspaceDragStartSnapshot | null>(null);
+  const autoFitEchoRef = useRef<{ raw: Layout; fitted: Layout } | null>(null);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -304,10 +308,14 @@ function WorkspaceCanvas({
     );
   }, [containerHeight, rowMargin, targetRows]);
 
+  const workspaceDragCompactor = useMemo(
+    () => createWorkspaceDragCompactor(() => dragStartRef.current),
+    [],
+  );
   const workspaceCompactor =
     gridInteraction === 'resize'
       ? WORKSPACE_RESIZE_COMPACTOR
-      : WORKSPACE_DRAG_COMPACTOR;
+      : workspaceDragCompactor;
 
   const onPointerDownCapture = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -317,6 +325,7 @@ function WorkspaceCanvas({
       if (target.closest('[data-tile-locked="true"]')) return;
 
       if (target.closest('.react-resizable-handle')) {
+        autoFitEchoRef.current = null;
         setGridInteraction('resize');
         return;
       }
@@ -326,14 +335,30 @@ function WorkspaceCanvas({
         !target.closest('.workspace-tile-close') &&
         !target.closest('.workspace-tile-lock')
       ) {
+        autoFitEchoRef.current = null;
         setGridInteraction('drag');
       }
     },
     [workspaceLocked],
   );
 
-  const onDragStart = useCallback(() => setGridInteraction('drag'), []);
-  const onResizeStart = useCallback(() => setGridInteraction('resize'), []);
+  const onDragStart = useCallback((
+    layout: Layout,
+    oldItem: LayoutItem | null,
+  ) => {
+    autoFitEchoRef.current = null;
+    dragStartRef.current = oldItem
+      ? {
+          item: { ...oldItem },
+          layout: layout.map((item) => ({ ...item })),
+        }
+      : null;
+    setGridInteraction('drag');
+  }, []);
+  const onResizeStart = useCallback(() => {
+    autoFitEchoRef.current = null;
+    setGridInteraction('resize');
+  }, []);
   const onDragStop = useCallback((
     _layout: Layout,
     oldItem: LayoutItem | null,
@@ -344,23 +369,47 @@ function WorkspaceCanvas({
       newItem &&
       (oldItem.x !== newItem.x || oldItem.y !== newItem.y)
     )
-      ? { ...oldItem }
+      ? dragStartRef.current ?? { item: { ...oldItem }, layout: [] }
       : null;
+    dragStartRef.current = null;
     setGridInteraction(null);
   }, []);
   const onResizeStop = useCallback(() => {
+    autoFitEchoRef.current = null;
     autoFitDropRef.current = null;
+    dragStartRef.current = null;
     setGridInteraction(null);
   }, []);
   const handleLayoutChange = useCallback(
     (next: Layout) => {
       const previousDropItem = autoFitDropRef.current;
       autoFitDropRef.current = null;
-      onLayoutChange(
-        previousDropItem
-          ? autoFitDroppedPanel(next, WORKSPACE_GRID_COLS, previousDropItem)
-          : next,
-      );
+
+      if (previousDropItem) {
+        const fitted = autoFitDroppedPanel(
+          next,
+          WORKSPACE_GRID_COLS,
+          previousDropItem,
+        );
+        // RGL emits the final drag layout directly, then echoes it once more
+        // from its layout effect. Preserve the fitted drop instead.
+        autoFitEchoRef.current = layoutPlacementsEqual(next, fitted)
+          ? null
+          : {
+              raw: clonePlacementLayout(next),
+              fitted: clonePlacementLayout(fitted),
+            };
+        onLayoutChange(fitted);
+        return;
+      }
+
+      const autoFitEcho = autoFitEchoRef.current;
+      if (autoFitEcho) {
+        if (layoutPlacementsEqual(next, autoFitEcho.raw)) return;
+        autoFitEchoRef.current = null;
+      }
+
+      onLayoutChange(next);
     },
     [onLayoutChange],
   );
@@ -475,6 +524,10 @@ function WorkspaceCanvas({
       )}
     </div>
   );
+}
+
+function clonePlacementLayout(layout: Layout): Layout {
+  return layout.map(({ i, x, y, w, h }) => ({ i, x, y, w, h }));
 }
 
 interface PanelTileProps {

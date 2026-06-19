@@ -165,6 +165,19 @@ function overlapPairs(rects: TileRect[]) {
   return pairs;
 }
 
+function rectFor(rects: TileRect[], uid: string) {
+  const rect = rects.find((r) => r.uid === uid);
+  if (!rect) throw new Error(`Expected rect for ${uid}`);
+  return rect;
+}
+
+function expectRectNear(actual: TileRect, expected: TileRect) {
+  expect(Math.abs(actual.x - expected.x)).toBeLessThanOrEqual(4);
+  expect(Math.abs(actual.y - expected.y)).toBeLessThanOrEqual(4);
+  expect(Math.abs(actual.width - expected.width)).toBeLessThanOrEqual(4);
+  expect(Math.abs(actual.height - expected.height)).toBeLessThanOrEqual(4);
+}
+
 async function centerOf(locator: ReturnType<Page['locator']>) {
   const box = await locator.boundingBox();
   if (!box) throw new Error('Expected locator to have a bounding box');
@@ -189,6 +202,8 @@ test('dragging a panel into an occupied workspace slot displaces panels without 
 
   const before = await tileRects(page);
   expect(before).toHaveLength(8);
+  const draggedBefore = rectFor(before, 'tile-filterpresets');
+  const targetBefore = rectFor(before, 'tile-tx');
 
   const start = await centerOf(draggedHeader);
   const target = await centerOf(targetHeader);
@@ -200,6 +215,8 @@ test('dragging a panel into an occupied workspace slot displaces panels without 
   const duringDrag = await tileRects(page);
   expect(duringDrag).toHaveLength(8);
   expect(overlapPairs(duringDrag)).toEqual([]);
+  expectRectNear(rectFor(duringDrag, 'tile-filterpresets'), targetBefore);
+  expectRectNear(rectFor(duringDrag, 'tile-tx'), draggedBefore);
 
   await page.mouse.up();
   await page.waitForTimeout(500);
@@ -207,6 +224,8 @@ test('dragging a panel into an occupied workspace slot displaces panels without 
   const after = await tileRects(page);
   expect(after).toHaveLength(8);
   expect(overlapPairs(after)).toEqual([]);
+  expectRectNear(rectFor(after, 'tile-filterpresets'), targetBefore);
+  expectRectNear(rectFor(after, 'tile-tx'), draggedBefore);
   expect(pageErrors).not.toContainEqual(
     expect.stringContaining('Maximum update depth exceeded'),
   );
