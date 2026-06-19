@@ -46,6 +46,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
+import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
 import { currentDetachedWorkspaceLayoutId } from './layout/workspace-windows';
 import { ConfirmDialog } from './layout/ConfirmDialog';
 import { AfGainSlider } from './components/AfGainSlider';
@@ -183,6 +184,13 @@ export default function App() {
     void loadLayoutsForRadio(key);
   }, [loadLayoutsForRadio, radioConnected, radioLoaded]);
   const activeLayoutId = useLayoutStore((s) => s.activeLayoutId);
+
+  // Recover action for the workspace error boundary: reset the active layout to
+  // its default panel arrangement, which clears whatever layout/panel state
+  // drove a render to throw and blank the workspace.
+  const resetActiveWorkspaceLayout = useCallback(() => {
+    useLayoutStore.getState().resetActiveLayout();
+  }, []);
 
   useKeyboardShortcuts();
   useMicUplink();
@@ -797,10 +805,15 @@ export default function App() {
       >
         <div className="workspace-area detached-workspace-area">
           <AlertBanner />
-          <FlexWorkspace
+          <WorkspaceErrorBoundary
             key={detachedLayoutId}
-            layoutId={detachedLayoutId}
-          />
+            onReset={resetActiveWorkspaceLayout}
+          >
+            <FlexWorkspace
+              key={detachedLayoutId}
+              layoutId={detachedLayoutId}
+            />
+          </WorkspaceErrorBoundary>
         </div>
         {disconnectedOverlay}
       </div>
@@ -963,7 +976,12 @@ export default function App() {
             />
           </Suspense>
         ) : (
-          <FlexWorkspace key={activeLayoutId} />
+          <WorkspaceErrorBoundary
+            key={activeLayoutId}
+            onReset={resetActiveWorkspaceLayout}
+          >
+            <FlexWorkspace key={activeLayoutId} />
+          </WorkspaceErrorBoundary>
         )}
       </div>
 

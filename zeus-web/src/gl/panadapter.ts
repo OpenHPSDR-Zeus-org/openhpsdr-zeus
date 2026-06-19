@@ -70,6 +70,45 @@ export type PanRenderer = {
   dispose: () => void;
 };
 
+// Deferred WebGL context teardown — mirrors Waterfall.tsx (#629). Each WebGL2
+// canvas holds a scarce ANGLE/driver context slot; freeing GL objects in
+// dispose() does NOT release the context itself. On a workspace where the
+// operator keeps rearranging panels, React can mount/unmount the panadapter
+// repeatedly, and without an explicit WEBGL_lose_context call the orphaned
+// contexts accumulate until the browser force-loses the oldest ones (the GPU
+// context-loss spiral that contributes to the "blank workspace" symptom). We
+// release the slot on real unmounts, but defer it briefly so React StrictMode's
+// dev-only effect remount (and a quick drag-induced remount) can cancel the
+// teardown and reuse the same canvas instead of tearing down a live context.
+const CONTEXT_LOSS_TEARDOWN_DELAY_MS = 250;
+const pendingContextLossTimers = new WeakMap<HTMLCanvasElement, number>();
+
+// Cancel a pending deferred context loss for this canvas (call on (re)mount
+// before creating the context). Returns nothing.
+export function cancelPendingPanContextLoss(canvas: HTMLCanvasElement): void {
+  const timer = pendingContextLossTimers.get(canvas);
+  if (timer !== undefined) {
+    window.clearTimeout(timer);
+    pendingContextLossTimers.delete(canvas);
+  }
+}
+
+// Schedule a deferred WEBGL_lose_context for this canvas (call on unmount,
+// AFTER renderer.dispose()). Safe no-op if the extension is unavailable.
+export function schedulePanContextLoss(
+  canvas: HTMLCanvasElement,
+  gl: WebGL2RenderingContext,
+): void {
+  const loseContext = gl.getExtension('WEBGL_lose_context');
+  if (!loseContext) return;
+  const timer = window.setTimeout(() => {
+    if (pendingContextLossTimers.get(canvas) !== timer) return;
+    pendingContextLossTimers.delete(canvas);
+    loseContext.loseContext();
+  }, CONTEXT_LOSS_TEARDOWN_DELAY_MS);
+  pendingContextLossTimers.set(canvas, timer);
+}
+
 // Convert a #RRGGBB string into the 0..1 RGB triplet the renderer wants.
 // Malformed input falls back to amber so a typo can never crash GL.
 export function hexToRgbFloats(hex: string): { r: number; g: number; b: number } {
