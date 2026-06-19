@@ -2,7 +2,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { LogEntry } from '../../api/log';
-import { filterLogEntries, logEntrySearchText } from './logbook-search';
+import { filterLogEntries, isQrzPublished, logEntrySearchText } from './logbook-search';
 
 function entry(overrides: Partial<LogEntry>): LogEntry {
   return {
@@ -76,5 +76,15 @@ describe('logbook search', () => {
   it('includes UTC date and time in the searchable text', () => {
     expect(logEntrySearchText(entries[0]!)).toContain('14:22');
     expect(filterLogEntries(entries, '2026 14:22').map((qso) => qso.id)).toEqual(['a', 'b']);
+  });
+
+  it('can hide QRZ-published entries', () => {
+    expect(isQrzPublished(entries[0]!)).toBe(true);
+    expect(filterLogEntries(entries, ' ', { hideQrzPublished: true }).map((qso) => qso.id)).toEqual(['b']);
+  });
+
+  it('composes QRZ-published hiding with text search', () => {
+    expect(filterLogEntries(entries, '20m', { hideQrzPublished: true }).map((qso) => qso.id)).toEqual(['b']);
+    expect(filterLogEntries(entries, '40m', { hideQrzPublished: true })).toEqual([]);
   });
 });

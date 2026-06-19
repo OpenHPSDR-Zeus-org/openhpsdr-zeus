@@ -42,19 +42,70 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+import { useState } from 'react';
+import { Eye, EyeOff, Search, X } from 'lucide-react';
 import { LogbookLive } from '../../components/design/LogbookLive';
+import { useLoggerStore } from '../../state/logger-store';
 import { useWorkspace } from '../WorkspaceContext';
 
 export function LogbookPanel() {
   const { logbookActions } = useWorkspace();
+  const [searchText, setSearchText] = useState('');
+  const [hideQrzPublished, setHideQrzPublished] = useState(false);
+  const qrzPublishedCount = useLoggerStore((s) =>
+    s.entries.reduce((count, entry) => count + (entry.qrzLogId ? 1 : 0), 0),
+  );
+  const query = searchText.trim();
+  const qrzPublishedLabel = qrzPublishedCount === 1
+    ? '1 QRZ-published QSO'
+    : `${qrzPublishedCount} QRZ-published QSOs`;
+  const qrzToggleTitle = hideQrzPublished
+    ? `Show ${qrzPublishedLabel}`
+    : qrzPublishedCount > 0
+      ? `Hide ${qrzPublishedLabel}`
+      : 'No QRZ-published QSOs to hide';
+  const QrzVisibilityIcon = hideQrzPublished ? EyeOff : Eye;
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
-      <div style={{ padding: '4px 8px', borderBottom: '1px solid var(--panel-border)', display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
+    <div className="logbook-panel">
+      <div className="logbook-actions">
+        <div className="log-search">
+          <Search size={14} strokeWidth={2} aria-hidden="true" />
+          <input
+            type="search"
+            value={searchText}
+            onChange={(event) => setSearchText(event.target.value)}
+            placeholder="Search logbook"
+            aria-label="Search logbook"
+            spellCheck={false}
+          />
+          {query && (
+            <button
+              type="button"
+              className="log-search-clear"
+              onClick={() => setSearchText('')}
+              aria-label="Clear logbook search"
+              title="Clear search"
+            >
+              <X size={13} strokeWidth={2.2} aria-hidden="true" />
+            </button>
+          )}
+        </div>
+        <button
+          type="button"
+          className={`btn ghost sm logbook-visibility-toggle ${hideQrzPublished ? 'active' : ''}`}
+          onClick={() => setHideQrzPublished((value) => !value)}
+          disabled={qrzPublishedCount === 0 && !hideQrzPublished}
+          aria-label={qrzToggleTitle}
+          aria-pressed={hideQrzPublished}
+          title={qrzToggleTitle}
+        >
+          <QrzVisibilityIcon size={14} strokeWidth={2.2} aria-hidden="true" />
+        </button>
         {logbookActions}
       </div>
-      <div style={{ flex: 1, overflow: 'auto' }}>
-        <LogbookLive />
+      <div className="logbook-panel-body">
+        <LogbookLive searchText={searchText} hideQrzPublished={hideQrzPublished} />
       </div>
     </div>
   );
