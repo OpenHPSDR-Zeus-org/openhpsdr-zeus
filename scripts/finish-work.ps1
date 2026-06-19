@@ -100,12 +100,21 @@ function Invoke-TakeNextIfRequested {
     Invoke-Native 'Take next ready work' 'pwsh' @($takeWorkScript, '-Count', [string]$NextCount)
 }
 
-function Update-SubmodulesIfNeeded {
+function Update-RequiredSubmodulesIfNeeded {
     if (-not (Test-Path -LiteralPath (Join-Path $repoRoot '.gitmodules'))) {
         return
     }
 
-    Invoke-Native 'Update git submodules' 'git' @('submodule', 'update', '--init', '--recursive')
+    $deepCwModel = Join-Path $repoRoot 'zeus-web/external/deepcw-engine/model.onnx'
+    if (-not (Test-Path -LiteralPath $deepCwModel)) {
+        Invoke-Native 'Update DeepCW model submodule' 'git' @(
+            'submodule',
+            'update',
+            '--init',
+            '--',
+            'zeus-web/external/deepcw-engine'
+        )
+    }
 }
 
 $repoRoot = (Invoke-GitCapture @('rev-parse', '--show-toplevel') | Select-Object -First 1)
@@ -154,7 +163,7 @@ if ($ahead -eq 0) {
 }
 
 if (-not $SkipTests) {
-    Update-SubmodulesIfNeeded
+    Update-RequiredSubmodulesIfNeeded
     Invoke-Native 'Run dotnet tests' 'dotnet' @('test', 'Zeus.slnx')
 
     if (Test-Path -LiteralPath (Join-Path $repoRoot 'zeus-web/package.json')) {
