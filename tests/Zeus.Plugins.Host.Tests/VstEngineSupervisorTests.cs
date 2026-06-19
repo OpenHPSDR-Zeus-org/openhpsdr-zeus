@@ -73,7 +73,28 @@ public class VstEngineSupervisorTests
         public bool EngineReady { get; set; }
         public int WaitBudgetMs { get; set; }
         public int ResetCount { get; private set; }
-        public long DegradedBlocks => Interlocked.Read(ref _degraded);
+
+        /// <summary>
+        /// When > 0, every read of <see cref="DegradedBlocks"/> advances the counter
+        /// by this much — modelling an engine that keeps dropping blocks. This makes
+        /// the hang-watchdog deterministic: it sees a positive delta on every sampling
+        /// interval, so its consecutive-interval streak can't be reset by CI thread-pool
+        /// starvation (the source of a Windows-only flake when a background pump drove
+        /// the counter instead).
+        /// </summary>
+        public long DegradePerRead { get; set; }
+
+        public long DegradedBlocks
+        {
+            get
+            {
+                long step = DegradePerRead;
+                return step > 0
+                    ? Interlocked.Add(ref _degraded, step)
+                    : Interlocked.Read(ref _degraded);
+            }
+        }
+
         public void AddDegraded(long n) => Interlocked.Add(ref _degraded, n);
 
         public bool Process(ReadOnlySpan<float> input, Span<float> output, AudioBlockContext ctx)
@@ -197,16 +218,14 @@ public class VstEngineSupervisorTests
         Assert.Equal(VstEngineStartResult.Started, start);
         var bridge = getBridge()!;
 
-        // Simulate the engine no longer servicing blocks: degraded count climbs.
-        var stop = false;
-        var pump = Task.Run(async () =>
-        {
-            while (!stop) { bridge.AddDegraded(10); await Task.Delay(5); }
-        });
+        // Simulate the engine no longer servicing blocks: every watchdog sample of
+        // DegradedBlocks sees the count climb past the threshold. Driving it from the
+        // read (instead of a background pump) keeps the watchdog's consecutive-interval
+        // streak from being reset by CI thread-pool starvation — previously flaky on
+        // Windows, where the pump task could be starved long enough to zero the delta.
+        bridge.DegradePerRead = c.HangDegradedThreshold * 2;
 
         var recycled = await WaitUntilAsync(() => c.RestartCount >= 1, 4000);
-        stop = true;
-        await pump;
 
         Assert.True(recycled, "watchdog should force-recycle a hung engine");
         Assert.True(created.Count >= 2);
