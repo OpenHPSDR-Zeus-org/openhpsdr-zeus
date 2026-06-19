@@ -84,15 +84,7 @@ public sealed class RadioNetworkProfileEndpointTests
         Assert.DoesNotContain("planned:/api/radio/network-profile", controls);
     }
 
-    private sealed class Factory : WebApplicationFactory<Program>
+    private sealed class Factory : IsolatedPrefsFactory
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.UseEnvironment("Test");
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IHostedService>();
-            });
-        }
     }
 }

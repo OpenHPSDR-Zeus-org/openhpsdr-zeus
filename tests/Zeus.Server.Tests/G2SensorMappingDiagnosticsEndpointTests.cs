@@ -269,33 +269,7 @@ public sealed class G2SensorMappingDiagnosticsEndpointTests
         Assert.Contains("Settings > Hardware > G2 Sensor Mapping", controls);
     }
 
-    private sealed class Factory : WebApplicationFactory<Program>
+    private sealed class Factory : IsolatedPrefsFactory
     {
-        private readonly string _dbPath = Path.Combine(
-            Path.GetTempPath(),
-            $"zeus-prefs-g2-sensor-diag-{Guid.NewGuid():N}.db");
-        private readonly string? _previousPrefsPath;
-
-        public Factory()
-        {
-            _previousPrefsPath = Environment.GetEnvironmentVariable("ZEUS_PREFS_PATH");
-            Environment.SetEnvironmentVariable("ZEUS_PREFS_PATH", _dbPath);
-        }
-
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.UseEnvironment("Test");
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IHostedService>();
-            });
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            base.Dispose(disposing);
-            Environment.SetEnvironmentVariable("ZEUS_PREFS_PATH", _previousPrefsPath);
-            try { if (File.Exists(_dbPath)) File.Delete(_dbPath); } catch { }
-        }
     }
 }

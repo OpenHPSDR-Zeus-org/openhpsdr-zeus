@@ -51,14 +51,12 @@ public sealed class PsEndpointPersistenceTests : IDisposable
         }
     }
 
-    private sealed class Factory(string dbPath) : WebApplicationFactory<Program>
+    private sealed class Factory(string dbPath) : IsolatedPrefsFactory
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        protected override void ConfigureExtra(IWebHostBuilder builder)
         {
-            builder.UseEnvironment("Test");
             builder.ConfigureServices(services =>
             {
-                services.RemoveAll<IHostedService>();
                 services.RemoveAll<PsSettingsStore>();
                 services.AddSingleton(sp => new PsSettingsStore(
                     sp.GetRequiredService<ILogger<PsSettingsStore>>(),

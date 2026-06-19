@@ -85,15 +85,7 @@ public sealed class PureSignalDiagnosticsEndpointTests
         Assert.Contains("/api/tx/ps/monitor", controls);
     }
 
-    private sealed class Factory : WebApplicationFactory<Program>
+    private sealed class Factory : IsolatedPrefsFactory
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.UseEnvironment("Test");
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IHostedService>();
-            });
-        }
     }
 }

@@ -130,16 +130,14 @@ public class SquelchEndpointValidationTests : IClassFixture<SquelchEndpointValid
         Assert.Equal(before?.FixedSensitivity, after?.FixedSensitivity);
     }
 
-    public sealed class Factory : WebApplicationFactory<Program>
+    public sealed class Factory : IsolatedPrefsFactory
     {
         private readonly MicGainEndpointTests.StubEngine _engine = new();
 
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        protected override void ConfigureExtra(IWebHostBuilder builder)
         {
-            builder.UseEnvironment("Test");
             builder.ConfigureServices(services =>
             {
-                services.RemoveAll<IHostedService>();
                 services.RemoveAll<DspPipelineService>();
                 services.AddSingleton<DspPipelineService>(sp =>
                     new TestPipeline(

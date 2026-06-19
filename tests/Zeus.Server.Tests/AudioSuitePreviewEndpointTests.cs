@@ -113,15 +113,7 @@ public class AudioSuitePreviewEndpointTests : IClassFixture<AudioSuitePreviewEnd
         Assert.Equal(HttpStatusCode.BadRequest, rxScan.StatusCode);
     }
 
-    public sealed class Factory : WebApplicationFactory<Program>
+    public sealed class Factory : IsolatedPrefsFactory
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.UseEnvironment("Test");
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IHostedService>();
-            });
-        }
     }
 }

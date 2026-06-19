@@ -212,15 +212,7 @@ public sealed class G2TopologyDiagnosticsEndpointTests
         Assert.True(ports.TryGetProperty("ddc3_port1038", out _));
     }
 
-    private sealed class Factory : WebApplicationFactory<Program>
+    private sealed class Factory : IsolatedPrefsFactory
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.UseEnvironment("Test");
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IHostedService>();
-            });
-        }
     }
 }

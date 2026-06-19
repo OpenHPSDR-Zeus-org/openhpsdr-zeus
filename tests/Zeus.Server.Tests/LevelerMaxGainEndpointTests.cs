@@ -129,20 +129,14 @@ public class LevelerMaxGainEndpointTests : IClassFixture<LevelerMaxGainEndpointT
     }
 
 
-    public sealed class Factory : WebApplicationFactory<Program>
+    public sealed class Factory : IsolatedPrefsFactory
     {
         public MicGainEndpointTests.StubEngine TestEngine { get; } = new();
 
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        protected override void ConfigureExtra(IWebHostBuilder builder)
         {
-            builder.UseEnvironment("Test");
             builder.ConfigureServices(services =>
             {
-                // Strip every IHostedService so the real DspPipelineService /
-                // TxMetersService / TxAudioIngestStartup / TxTuneDriver never
-                // spin up — we're only testing the HTTP handler.
-                services.RemoveAll<IHostedService>();
-
                 // Swap the DspPipelineService singleton for a stubbed
                 // subclass whose CurrentEngine is our recording stub.
                 services.RemoveAll<DspPipelineService>();

@@ -130,21 +130,14 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         Assert.Equal(10, radio.Snapshot().MicGainDb);
     }
 
-    public sealed class Factory : WebApplicationFactory<Program>
+    public sealed class Factory : IsolatedPrefsFactory
     {
         public StubEngine TestEngine { get; } = new();
 
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        protected override void ConfigureExtra(IWebHostBuilder builder)
         {
-            builder.UseEnvironment("Test");
             builder.ConfigureServices(services =>
             {
-                // Replace every IHostedService registration so the real
-                // DspPipelineService, TxMetersService, TxAudioIngestStartup
-                // and TxTuneDriver do not spin up — we're only testing
-                // the HTTP handler.
-                services.RemoveAll<IHostedService>();
-
                 // Swap the DspPipelineService singleton for a stubbed
                 // subclass whose CurrentEngine is our recording stub.
                 services.RemoveAll<DspPipelineService>();
