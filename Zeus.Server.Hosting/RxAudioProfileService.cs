@@ -30,6 +30,8 @@ public sealed class RxAudioProfileService
 
     public IReadOnlyList<RxAudioProfileEntry> List() => _store.List();
 
+    public string? SelectedProfileName => _store.GetSelectedProfile();
+
     public async Task<RxAudioProfileEntry> SaveCurrentAsync(string name)
     {
         var states = await _rxVst.CaptureChainStatesAsync(CaptureTimeout).ConfigureAwait(false);
@@ -39,6 +41,7 @@ public sealed class RxAudioProfileService
             _chainOrder.ParkedIds,
             _masterBypass.IsRxBypassed,
             states);
+        _store.SetSelectedProfile(entry.Name);
         _log.LogInformation(
             "RX audio profile '{Name}' saved ({Active} active, {Parked} parked, {States} VST states, masterBypass={Bypass})",
             name,
@@ -57,12 +60,23 @@ public sealed class RxAudioProfileService
         _rxVst.SetPluginStates(profile.PluginStates);
         _chainOrder.ApplyMembershipAndOrder(profile.Order, profile.Parked);
         _masterBypass.SetRxMasterBypassed(profile.MasterBypass);
+        _store.SetSelectedProfile(profile.Name);
         _log.LogInformation(
             "RX audio profile '{Name}' applied ({States} VST states restored)",
             name,
             profile.PluginStates.Count);
         return Task.FromResult<RxAudioProfileEntry?>(profile);
     }
+
+    public Task<RxAudioProfileEntry?> ApplySelectedAsync(CancellationToken ct = default)
+    {
+        var selected = _store.GetSelectedProfile();
+        return string.IsNullOrWhiteSpace(selected)
+            ? Task.FromResult<RxAudioProfileEntry?>(null)
+            : ApplyAsync(selected, ct);
+    }
+
+    public void ClearSelectedProfile() => _store.SetSelectedProfile(null);
 
     public bool Delete(string name) => _store.Delete(name);
 }
