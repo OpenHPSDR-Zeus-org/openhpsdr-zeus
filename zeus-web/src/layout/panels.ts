@@ -70,6 +70,7 @@ import { HamClockPanel } from './panels/HamClockPanel';
 import { SpotsPanel } from './panels/SpotsPanel';
 import { SpaceWeatherPanel } from './panels/SpaceWeatherPanel';
 import { UrlEmbedPanel } from './panels/UrlEmbedPanel';
+import { ChatPanel } from './panels/ChatPanel';
 
 export type PanelCategory =
   | 'spectrum'
@@ -407,6 +408,15 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['spots', 'pota', 'sota', 'activation', 'dx', 'cluster', 'tune', 'park', 'summit'],
     component: SpotsPanel,
+    minW: 6,
+    minH: 8,
+  },
+  chat: {
+    id: 'chat',
+    name: 'Chat',
+    category: 'tools',
+    tags: ['chat', 'message', 'operator', 'qrz', 'dx'],
+    component: ChatPanel,
     minW: 6,
     minH: 8,
   },

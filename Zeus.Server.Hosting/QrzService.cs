@@ -180,6 +180,33 @@ public sealed class QrzService
         }
     }
 
+    /// <summary>
+    /// Returns the operator's chat identity for the ZeusChat relay handshake:
+    /// the home callsign plus a currently-valid QRZ session key (the relay
+    /// validates the session on the WS upgrade). Returns null when the operator
+    /// is not logged in or no session key can be acquired. Reuses the same gate
+    /// and session-acquisition path as lookups so a refresh here doesn't race a
+    /// concurrent lookup.
+    /// </summary>
+    public async Task<(string Callsign, string SessionKey)?> GetChatIdentityAsync(CancellationToken ct)
+    {
+        await _gate.WaitAsync(ct);
+        try
+        {
+            var callsign = _home?.Callsign;
+            if (string.IsNullOrWhiteSpace(callsign)) return null;
+
+            var key = await AcquireSessionKeyAsync(ct);
+            if (string.IsNullOrWhiteSpace(key)) return null;
+
+            return (callsign!, key!);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task LogoutAsync(CancellationToken ct = default)
     {
         _username = null;

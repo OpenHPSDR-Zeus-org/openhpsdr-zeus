@@ -61,6 +61,7 @@ import { useRxMetersStore } from '../state/rx-meters-store';
 import { useAudioSuiteStore } from '../state/audio-suite-store';
 import { CW_STATE_FROM_BYTE, useCwStore } from '../state/cw-store';
 import { useSpotStore } from '../state/spot-store';
+import { useChatStore, type ChatEnvelope } from '../state/chat-store';
 import { warnOnce } from '../util/logger';
 import { clampFinite } from '../util/number';
 import { wsUrl as buildWsUrl } from '../serverUrl';
@@ -187,6 +188,14 @@ const AUDIO_MASTER_BYPASS_BYTES = 2;
 // Contract: Zeus.Contracts/RxAudioMasterBypassFrame.cs.
 export const MSG_TYPE_RX_AUDIO_MASTER_BYPASS = 0x34;
 const RX_AUDIO_MASTER_BYPASS_BYTES = 2;
+
+// Operator chat event. Variable-length frame: 1 type byte + UTF-8 JSON
+// envelope (camelCase). The envelope is discriminated on `kind`
+// (status | roster | message | history) and dispatched into chat-store's
+// ingest(). Server pushes these whenever roster, status, or messages change
+// so the ChatPanel stays live without polling. Contract:
+// Zeus.Contracts/ChatEventFrame.cs.
+export const MSG_TYPE_CHAT_EVENT = 0x35;
 
 // CW engine status — broadcast on every state edge of the host-side CW
 // keyer so the macro pad can render in-flight text + queue depth without
@@ -491,6 +500,18 @@ export function startRealtime(path = '/ws'): () => void {
           const csv = new TextDecoder('utf-8').decode(bytes);
           const ids = csv.length === 0 ? [] : csv.split(',');
           useAudioSuiteStore.getState().setRxChainOrderFromServer(ids);
+          return;
+        }
+        if (peekType === MSG_TYPE_CHAT_EVENT) {
+          // Variable-length UTF-8 JSON payload after the type byte.
+          const bytes = new Uint8Array(ev.data, 1);
+          const json = new TextDecoder('utf-8').decode(bytes);
+          try {
+            const envelope = JSON.parse(json) as ChatEnvelope;
+            useChatStore.getState().ingest(envelope);
+          } catch (err) {
+            warnOnce('ws-chat-event-parse', 'chat event frame parse failed', err);
+          }
           return;
         }
         if (peekType === MSG_TYPE_CW_ENGINE_STATUS) {

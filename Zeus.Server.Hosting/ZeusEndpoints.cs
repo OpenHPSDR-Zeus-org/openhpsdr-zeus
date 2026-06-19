@@ -2501,6 +2501,40 @@ public static class ZeusEndpoints
             return Results.Ok(qrz.GetStatus());
         });
 
+        // ── ZeusChat — operator-to-operator chat over the Cloudflare relay ──
+        app.MapGet("/api/chat/status", (ChatService chat) => chat.GetStatus());
+
+        app.MapPost("/api/chat/enable", (ChatEnableRequest req, ChatService chat) =>
+        {
+            log.LogInformation("api.chat.enable enabled={Enabled}", req.Enabled);
+            return Results.Ok(chat.SetEnabled(req.Enabled));
+        });
+
+        app.MapPost("/api/chat/send", async (ChatSendRequest req, ChatService chat, HttpContext ctx) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.Text))
+                return Results.BadRequest(new { error = "message text required" });
+            try
+            {
+                await chat.SendMessageAsync(req.Text, ctx.RequestAborted);
+                return Results.Ok(new { ok = true });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status409Conflict);
+            }
+        });
+
+        app.MapGet("/api/chat/messages", (ChatService chat, int? limit) =>
+            Results.Ok(new { messages = chat.GetMessages(limit ?? 200) }));
+
+        app.MapGet("/api/chat/roster", (ChatService chat) =>
+            Results.Ok(new { operators = chat.GetRoster() }));
+
         // Point-to-point propagation (DE → DX). Proxies the HamClock sidecar's
         // ITU-R P.533-14 engine; always returns 200 with an {available:false}
         // payload when the engine is offline so the QRZ card can degrade quietly.

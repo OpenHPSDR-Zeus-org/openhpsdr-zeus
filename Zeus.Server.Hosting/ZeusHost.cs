@@ -557,6 +557,14 @@ public static class ZeusHost
         builder.Services.AddHostedService(sp => sp.GetRequiredService<SpotBroadcastService>());
         builder.Services.AddSingleton<TciManagementService>();
 
+        // ZeusChat — operator-to-operator chat over the Cloudflare relay.
+        // Singleton (API surface) + hosted service (relay connection lifecycle),
+        // same shape as SpotBroadcastService above. Opt-in persisted via
+        // ChatEnabledStore; default OFF.
+        builder.Services.AddSingleton<ChatEnabledStore>();
+        builder.Services.AddSingleton<ChatService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<ChatService>());
+
         var app = builder.Build();
 
         // Surface the listening endpoints up front so the operator can pick one

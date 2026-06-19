@@ -81,7 +81,7 @@ import { TunButton } from './components/TunButton';
 import { BOARD_LABELS } from './api/radio';
 import { useFilterRibbonOpenSync } from './components/filter/filterRibbonShared';
 import { CONTACTS, bandOf } from './components/design/data';
-import { bearingDeg, distanceKm, dayNightAt } from './components/design/geo';
+import { bearingDeg, distanceKm } from './components/design/geo';
 import { startRealtime } from './realtime/ws-client';
 import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
@@ -104,8 +104,8 @@ import { registerServiceWorker } from './service-worker/registerSW';
 import { UpdatePrompt } from './service-worker/UpdatePrompt';
 import { useDesktopViewportLock, useIsMobileViewport } from './mobile/use-mobile-viewport';
 import type L from 'leaflet';
-import type { QrzStation } from './api/qrz';
 import type { Contact } from './components/design/data';
+import { qrzStationToContact } from './components/design/qrz-contact';
 
 const SettingsView = lazy(async () => {
   const module = await import('./components/SettingsMenu');
@@ -1055,93 +1055,3 @@ export default function App() {
   );
 }
 
-// QRZ XML gives us a sparser record than the design-time Contact type; fill
-// the design-only fields ("local", "rig", "ant", "age"…) with em-dashes so
-// QrzCard still renders without needing a schema change.
-/** "2008-05-12" → 2008. Returns null for empty/unparseable values. */
-function licenseYear(efdate: string | null): number | null {
-  if (!efdate) return null;
-  const m = /(\d{4})/.exec(efdate);
-  if (!m) return null;
-  const y = Number(m[1]);
-  return y >= 1900 && y <= 2100 ? y : null;
-}
-
-/** Contact's wall-clock time from the QRZ GMT offset, e.g. "03:14". */
-function localTimeFromOffset(gmtOffset: number | null, tz: string | null): string {
-  if (gmtOffset == null) return '—';
-  const utcMs = Date.now() + new Date().getTimezoneOffset() * 60_000;
-  const d = new Date(utcMs + gmtOffset * 3_600_000);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return tz ? `${hh}:${mm} ${tz}` : `${hh}:${mm}`;
-}
-
-/** "LoTW · eQSL · Direct" summary, or "—" when nothing is known. */
-function qslSummary(s: QrzStation): string {
-  const parts: string[] = [];
-  if (s.acceptsLotw) parts.push('LoTW');
-  if (s.acceptsEqsl) parts.push('eQSL');
-  if (s.acceptsMailQsl) parts.push('Direct');
-  if (s.qslManager) parts.push(`via ${s.qslManager}`);
-  return parts.length ? parts.join(' · ') : '—';
-}
-
-function qrzStationToContact(s: QrzStation | null, home: QrzStation | null): Contact | null {
-  if (!s || s.lat == null || s.lon == null) return null;
-  const bearing = home?.lat != null && home?.lon != null
-    ? bearingDeg(home.lat, home.lon, s.lat, s.lon)
-    : 0;
-  const distance = home?.lat != null && home?.lon != null
-    ? distanceKm(home.lat, home.lon, s.lat, s.lon)
-    : 0;
-  const first = (s.firstName || s.name || '').trim().charAt(0).toUpperCase();
-  const last = (s.name || '').trim().split(/\s+/).pop()?.charAt(0).toUpperCase() ?? '';
-  const initials = (first + last) || s.callsign.slice(0, 2);
-  const location = [s.city, s.state, s.country].filter(Boolean).join(', ') || (s.country ?? '—');
-  const fullName = [s.firstName, s.name].filter(Boolean).join(' ') || '—';
-
-  const licYear = licenseYear(s.licenseEffectiveDate);
-  const licensedYears = licYear != null ? new Date().getFullYear() - licYear : null;
-  const distanceMi = distance * 0.621371;
-  const distanceLabel = distance > 0
-    ? `${Math.round(distance).toLocaleString()} km · ${Math.round(distanceMi).toLocaleString()} mi`
-    : null;
-
-  return {
-    callsign: s.callsign,
-    name: fullName,
-    location,
-    grid: s.grid ?? '—',
-    cq: s.cqZone != null ? String(s.cqZone).padStart(2, '0') : '—',
-    itu: s.ituZone != null ? String(s.ituZone).padStart(2, '0') : '—',
-    latlon: `${Math.abs(s.lat).toFixed(2)}°${s.lat >= 0 ? 'N' : 'S'} / ${Math.abs(s.lon).toFixed(2)}°${s.lon >= 0 ? 'E' : 'W'}`,
-    lat: s.lat,
-    lon: s.lon,
-    local: localTimeFromOffset(s.gmtOffset, s.timeZone),
-    qsl: qslSummary(s),
-    licensed: licYear != null ? String(licYear) : '—',
-    initials,
-    flag: '',
-    bearing,
-    distance,
-    age: 0,
-    class: s.licenseClass ?? '—',
-    rig: '—',
-    ant: '—',
-    power: '—',
-    qth: s.city ?? s.country ?? '—',
-    email: s.email ?? '—',
-    photoUrl: s.imageUrl ?? undefined,
-    qrzUrl: `https://www.qrz.com/db/${s.callsign}`,
-    // Enrichment
-    licenseCodes: s.licenseCodes,
-    licensedYears,
-    qslLotw: s.acceptsLotw,
-    qslEqsl: s.acceptsEqsl,
-    qslMail: s.acceptsMailQsl,
-    qslManager: s.qslManager,
-    dayNight: dayNightAt(s.lat, s.lon),
-    distanceLabel,
-  };
-}
