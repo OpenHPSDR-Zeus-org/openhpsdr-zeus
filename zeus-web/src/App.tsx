@@ -75,6 +75,7 @@ import { DspSceneDiagnosticsPublisher } from './components/DspSceneDiagnosticsPu
 import { AudioPlaybackDiagnosticsPublisher } from './components/AudioPlaybackDiagnosticsPublisher';
 import { ThemeApplier } from './components/ThemeApplier';
 import { TxStationProfileActivator } from './components/TxStationProfileActivator';
+import { StartupUpdatePrompt } from './components/StartupUpdatePrompt';
 import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
 import { BOARD_LABELS } from './api/radio';
@@ -86,7 +87,7 @@ import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
 import { setAudioHostMode } from './audio/host-mode';
 import { useMicUplink } from './audio/use-mic-uplink';
-import { fetchState } from './api/client';
+import { fetchState, fetchUpdateStatus, type RepoUpdateStatus } from './api/client';
 import { useConnectionStore } from './state/connection-store';
 import { useRadioStore } from './state/radio-store';
 import { useQrzStore } from './state/qrz-store';
@@ -131,6 +132,8 @@ export default function App() {
   );
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [installUpdate, setInstallUpdate] = useState<(() => Promise<void>) | null>(null);
+  const [startupUpdate, setStartupUpdate] = useState<RepoUpdateStatus | null>(null);
+  const [startupUpdateDismissed, setStartupUpdateDismissed] = useState(false);
   const [confirmResetLayout, setConfirmResetLayout] = useState<{
     id: string;
     name: string;
@@ -231,6 +234,22 @@ export default function App() {
     if (install) {
       setInstallUpdate(() => install);
     }
+  }, []);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchUpdateStatus(true, ctrl.signal)
+      .then((next) => {
+        const actionableRelease =
+          !next.isGitRepo
+          && next.updateAvailable
+          && (next.updateAction === 'download' || next.updateAction === 'openRelease');
+        if (actionableRelease) setStartupUpdate(next);
+      })
+      .catch(() => {
+        /* Settings -> Updates exposes manual retry and detailed errors. */
+      });
+    return () => ctrl.abort();
   }, []);
 
   useEffect(() => {
@@ -335,6 +354,7 @@ export default function App() {
         hash === 'rotator' ||
         hash === 'pa' ||
         hash === 'server' ||
+        hash === 'updates' ||
         hash === 'about'
       ) {
         setSettingsView(true, hash as SettingsTabId);
@@ -1022,6 +1042,11 @@ export default function App() {
           <p>This keeps the layout tab but replaces its current panel positions.</p>
         </ConfirmDialog>
       )}
+      <StartupUpdatePrompt
+        status={!startupUpdateDismissed ? startupUpdate : null}
+        onDismiss={() => setStartupUpdateDismissed(true)}
+        onOpenSettings={() => setSettingsView(true, 'updates')}
+      />
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
     </div>
     </SpectrumWheelActionsContext.Provider>

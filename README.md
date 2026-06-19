@@ -67,7 +67,7 @@ Wiki jump-off points for the most-asked things:
 
 ## Download
 
-Grab the latest installer from the **[Releases page](https://github.com/Kb2uka/openhpsdr-zeus/releases/latest)**
+Grab the latest installer from the **[Releases page](https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus/releases/latest)**
 — Windows x64 `.exe`, Windows on ARM (Snapdragon / Surface Pro X) `.exe`, macOS `.dmg`, Linux `.tar.gz`. Full install detail (PWA path,
 macOS Gatekeeper xattr step, first-run WDSP wisdom wait) is on the wiki's
 [Installation](https://github.com/Kb2uka/openhpsdr-zeus/wiki/Installation)
@@ -99,6 +99,11 @@ for prerequisites, the two-terminal dev loop, project layout, tests, and
 conventions.
 
 ## Updating
+
+Packaged installs check the OpenHPSDR-Zeus-org GitHub Releases feed on startup.
+When a newer tagged release is available, Zeus shows an update notice and
+**Settings → Updates** offers **Update now** for the matching installer, DMG, or
+AppImage for your platform.
 
 If you run Zeus from a git checkout, **Settings → Updates** shows how far behind
 the upstream repo you are and can fast-forward your checkout with one click.

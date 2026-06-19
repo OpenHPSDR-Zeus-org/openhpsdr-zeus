@@ -4908,7 +4908,9 @@ export function restartApp(
   );
 }
 
-/** Status of the local git checkout vs its configured upstream
+export type UpdateAction = 'none' | 'pull' | 'download' | 'openRelease';
+
+/** Status of the local install vs its configured update source
  *  (GET /api/system/update). Mirrors Zeus.Contracts.RepoUpdateStatus. */
 export interface RepoUpdateStatus {
   isGitRepo: boolean;
@@ -4926,6 +4928,20 @@ export interface RepoUpdateStatus {
   remoteUrl: string | null;
   checkedUtc: string | null;
   error: string | null;
+  installedVersion: string;
+  runtimePlatform: string;
+  runtimeArchitecture: string;
+  updateAvailable: boolean;
+  updateAction: UpdateAction;
+  latestVersion: string | null;
+  releaseTag: string | null;
+  releaseName: string | null;
+  releaseUrl: string | null;
+  releasePublishedUtc: string | null;
+  releaseAssetName: string | null;
+  releaseDownloadUrl: string | null;
+  releaseAssetSizeBytes: number | null;
+  releaseAssetDigest: string | null;
 }
 
 /** Result of POST /api/system/update/pull. Mirrors Zeus.Contracts.RepoUpdateResult. */

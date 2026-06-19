@@ -1920,16 +1920,19 @@ public sealed record TxFidelityPolicyDto(
     string ProfileId,
     int TargetSpectralDensity);
 
-/// <summary>Status of the local git checkout relative to its configured
-/// upstream, for the Settings -> Updates panel (GET /api/system/update).
+/// <summary>Status of the local install relative to the latest available Zeus
+/// update, for the Settings -> Updates panel (GET /api/system/update).
 /// <para>When <see cref="IsGitRepo"/> is false the app is running from a
-/// non-git build and the UI falls back to manual-update guidance. All SHAs are
-/// short form. <see cref="Behind"/>/<see cref="Ahead"/> count commits relative
-/// to <see cref="UpstreamRef"/> (e.g. "upstream/main"). <see cref="CanFastForward"/>
+/// packaged build; release fields describe the matching GitHub Release asset
+/// when a network check has completed. All SHAs are short form.
+/// <see cref="Behind"/>/<see cref="Ahead"/> count commits relative to
+/// <see cref="UpstreamRef"/> (e.g. "upstream/main"). <see cref="CanFastForward"/>
 /// is true only when behind &gt; 0, HEAD is an ancestor of the upstream tip, and
-/// the working tree is clean. <see cref="Error"/> carries a human message when a
-/// git call failed (e.g. offline fetch); the rest of the fields hold the last
-/// locally-known values in that case.</para></summary>
+/// the working tree is clean. <see cref="UpdateAction"/> is "pull" for git
+/// checkouts, "download" for packaged builds with a matching asset,
+/// "openRelease" when only the release page is available, or "none".
+/// <see cref="Error"/> carries a human message when a git or release check
+/// failed; the rest of the fields hold the last locally-known values.</para></summary>
 public sealed record RepoUpdateStatus(
     bool IsGitRepo,
     string? Branch,
@@ -1945,7 +1948,23 @@ public sealed record RepoUpdateStatus(
     string? LatestRemoteSubject,
     string? RemoteUrl,
     string? CheckedUtc,
-    string? Error);
+    string? Error)
+{
+    public string InstalledVersion { get; init; } = "unknown";
+    public string RuntimePlatform { get; init; } = "unknown";
+    public string RuntimeArchitecture { get; init; } = "unknown";
+    public bool UpdateAvailable { get; init; }
+    public string UpdateAction { get; init; } = "none";
+    public string? LatestVersion { get; init; }
+    public string? ReleaseTag { get; init; }
+    public string? ReleaseName { get; init; }
+    public string? ReleaseUrl { get; init; }
+    public string? ReleasePublishedUtc { get; init; }
+    public string? ReleaseAssetName { get; init; }
+    public string? ReleaseDownloadUrl { get; init; }
+    public long? ReleaseAssetSizeBytes { get; init; }
+    public string? ReleaseAssetDigest { get; init; }
+}
 
 /// <summary>Result of a fast-forward pull (POST /api/system/update/pull).
 /// <see cref="RequiresRebuild"/> is true whenever source actually changed —
