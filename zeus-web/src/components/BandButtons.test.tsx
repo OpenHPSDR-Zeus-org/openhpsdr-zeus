@@ -3,7 +3,13 @@
 import { createElement } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { saveBandMemory, setVfo, type RadioStateDto } from '../api/client';
+import {
+  fetchBandMemory,
+  saveBandMemory,
+  setMode,
+  setVfo,
+  type RadioStateDto,
+} from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { act, render } from './meters/__tests__/harness';
 import { BandButtons } from './BandButtons';
@@ -36,6 +42,7 @@ function resetStore() {
 describe('BandButtons', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(fetchBandMemory).mockResolvedValue([]);
     resetStore();
   });
 
@@ -66,6 +73,32 @@ describe('BandButtons', () => {
     expect(saveBandMemory).toHaveBeenCalledWith('20m', 14_200_000, 'LSB');
     expect(saveBandMemory).not.toHaveBeenCalledWith('20m', 14_200_000, 'USB');
     expect(setVfo).toHaveBeenCalledWith(7_074_000);
+
+    unmount();
+  });
+
+  it('restores the saved mode when selecting a remembered band', async () => {
+    vi.mocked(fetchBandMemory).mockResolvedValue([
+      { band: '40m', hz: 7_150_000, mode: 'AM' },
+    ]);
+    const { container, unmount } = render(createElement(BandButtons));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    vi.clearAllMocks();
+
+    const fortyMeters = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === '40m');
+
+    await act(async () => {
+      fortyMeters?.click();
+      await Promise.resolve();
+    });
+
+    expect(fortyMeters).toBeTruthy();
+    expect(setVfo).toHaveBeenCalledWith(7_150_000);
+    expect(setMode).toHaveBeenCalledWith('AM');
+    expect(useConnectionStore.getState().mode).toBe('AM');
 
     unmount();
   });

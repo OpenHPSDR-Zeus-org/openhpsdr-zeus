@@ -42,6 +42,7 @@ import { DriveSlider } from '../components/DriveSlider';
 import { MicGainSlider } from '../components/MicGainSlider';
 import { TunePowerSlider } from '../components/TunePowerSlider';
 import { useVfoLockStore } from '../state/vfo-lock-store';
+import { saveReceiverBandModeMemory } from '../util/band-memory';
 import { ConnectPanel } from '../components/ConnectPanel';
 import { LeafletWorldMap } from '../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../components/design/LeafletMapErrorBoundary';
@@ -106,6 +107,7 @@ export function MobileApp() {
   const lastEndpoint = useConnectionStore((s) => s.lastConnectedEndpoint);
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
+  const applyState = useConnectionStore((s) => s.applyState);
   const qrzHome = useQrzStore((s) => s.home);
   const qrzHasXml = useQrzStore((s) => s.hasXmlSubscription);
   const connected = status === 'Connected';
@@ -313,7 +315,17 @@ export function MobileApp() {
                       className="m-select"
                       value={mode}
                       disabled={!connected}
-                      onChange={(e) => setMode(e.target.value as RxMode).catch(() => undefined)}
+                      onChange={(e) => {
+                        const nextMode = e.target.value as RxMode;
+                        useConnectionStore.setState({ mode: nextMode });
+                        saveReceiverBandModeMemory('A', nextMode);
+                        setMode(nextMode)
+                          .then((state) => {
+                            applyState(state);
+                            saveReceiverBandModeMemory('A', undefined, state);
+                          })
+                          .catch(() => undefined);
+                      }}
                     >
                       {MODES.map((m) => (
                         <option key={m} value={m}>{m}</option>

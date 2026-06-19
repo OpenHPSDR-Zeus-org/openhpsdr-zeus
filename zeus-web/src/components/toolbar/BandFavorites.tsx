@@ -112,6 +112,7 @@ export function BandFavorites() {
     (key: string) => {
       const band = HF_BANDS.find((b) => b.name === key);
       if (!band) return;
+      if (band.name !== currentBand) flushPendingSave();
       const stored = memoryRef.current.get(band.name);
       const targetHz = stored?.hz ?? band.centerHz;
       const targetMode: RxMode | null = stored?.mode ?? null;
@@ -140,7 +141,7 @@ export function BandFavorites() {
         }
       })();
     },
-    [activeReceiver, activeMode, applyState],
+    [activeReceiver, activeMode, applyState, currentBand, flushPendingSave],
   );
 
   return (

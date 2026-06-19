@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { act, render } from '../meters/__tests__/harness';
-import { setMode, type RadioStateDto } from '../../api/client';
+import { saveBandMemory, setMode, type RadioStateDto } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import { useToolbarFavoritesStore } from '../../state/toolbar-favorites-store';
 import { ModeFavorites } from './ModeFavorites';
@@ -17,6 +17,7 @@ vi.mock('../../api/client', async () => {
   const actual = await vi.importActual<typeof import('../../api/client')>('../../api/client');
   return {
     ...actual,
+    saveBandMemory: vi.fn(() => Promise.resolve()),
     setMode: vi.fn(async () => currentStateDto()),
   };
 });
@@ -24,6 +25,8 @@ vi.mock('../../api/client', async () => {
 function resetStores() {
   useConnectionStore.setState({
     status: 'Connected',
+    vfoHz: 14_200_000,
+    vfoBHz: 7_200_000,
     rx2Enabled: true,
     rxFocus: 'B',
     mode: 'AM',
@@ -52,6 +55,7 @@ describe('ModeFavorites', () => {
 
     expect(lsb).toBeTruthy();
     expect(setMode).toHaveBeenCalledWith('LSB', undefined, 'B');
+    expect(saveBandMemory).toHaveBeenCalledWith('40m', 7_200_000, 'LSB');
     expect(useConnectionStore.getState().mode).toBe('AM');
     expect(useConnectionStore.getState().modeB).toBe('LSB');
 

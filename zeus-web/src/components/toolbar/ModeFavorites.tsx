@@ -7,6 +7,7 @@
 import { useCallback } from 'react';
 import { setMode, type RxMode, type TxVfo } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
+import { saveReceiverBandModeMemory } from '../../util/band-memory';
 import { ToolbarFavorites, type ToolbarOption } from './ToolbarFavorites';
 
 const MODE_OPTIONS: readonly ToolbarOption[] = [
@@ -36,9 +37,15 @@ export function ModeFavorites() {
       const m = key as RxMode;
       if (m === activeMode) return;
       useConnectionStore.setState(activeReceiver === 'B' ? { modeB: m } : { mode: m });
-      setMode(m, undefined, activeReceiver).then(applyState).catch(() => {
-        /* next state poll reconciles */
-      });
+      saveReceiverBandModeMemory(activeReceiver, m);
+      setMode(m, undefined, activeReceiver)
+        .then((state) => {
+          applyState(state);
+          saveReceiverBandModeMemory(activeReceiver, undefined, state);
+        })
+        .catch(() => {
+          /* next state poll reconciles */
+        });
     },
     [activeReceiver, activeMode, applyState],
   );

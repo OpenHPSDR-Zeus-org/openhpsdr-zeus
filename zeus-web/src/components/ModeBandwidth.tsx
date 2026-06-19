@@ -45,6 +45,7 @@
 import { useCallback } from 'react';
 import { setMode, type RxMode, type TxVfo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import { saveReceiverBandModeMemory } from '../util/band-memory';
 import { toolbarFavDragMime } from './toolbar/toolbarFavoriteDrag';
 
 type ModeEntry = { value: RxMode; label: string };
@@ -75,8 +76,12 @@ export function ModeBandwidth() {
     (m: RxMode) => {
       if (m === activeMode) return;
       useConnectionStore.setState(activeReceiver === 'B' ? { modeB: m } : { mode: m });
+      saveReceiverBandModeMemory(activeReceiver, m);
       setMode(m, undefined, activeReceiver)
-        .then(applyState)
+        .then((state) => {
+          applyState(state);
+          saveReceiverBandModeMemory(activeReceiver, undefined, state);
+        })
         .catch(() => {
           /* next state poll will reconcile */
         });

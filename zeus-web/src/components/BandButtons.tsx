@@ -149,6 +149,7 @@ export function BandButtons() {
 
   const selectBand = useCallback(
     (band: BandEntry) => {
+      if (band.name !== currentBand) flushPendingSave();
       const stored = memoryRef.current.get(band.name);
       const targetHz = stored?.hz ?? band.centerHz;
       const targetMode: RxMode | null = stored?.mode ?? null;
@@ -169,7 +170,7 @@ export function BandButtons() {
           });
       }
     },
-    [applyState, mode],
+    [applyState, currentBand, flushPendingSave, mode],
   );
 
   return (
