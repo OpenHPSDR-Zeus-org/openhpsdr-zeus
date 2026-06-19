@@ -1,8 +1,10 @@
 name: KB2UKA-Agent
 
-# KB2UKA's personal coding bot. Triggered by `@kb2uka-agent` mentions in
-# issues, issue comments, PR comments, and PR reviews. Runs as the
-# KB2UKA-Agent GitHub App identity (App ID 3702876) on KB2UKA's own
+# KB2UKA's personal coding bot. AUTO-fires on every newly-opened issue (no
+# mention needed) AND on `@kb2uka-agent` mentions in issues, issue/PR comments,
+# and PR reviews. Fixes are opened as **DRAFT** PRs to `develop` with a
+# "🚫 DO NOT MERGE" banner — the bot NEVER merges; KB2UKA tests and merges.
+# Runs as the KB2UKA-Agent GitHub App identity (App ID 3702876) on KB2UKA's own
 # Anthropic OAuth token — completely separate from Brian's Zeus-Agent
 # (zeus-agent.yml) and the upstream @claude bot (claude.yml).
 #
@@ -36,7 +38,7 @@ jobs:
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@kb2uka-agent')) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@kb2uka-agent')) ||
       (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@kb2uka-agent')) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@kb2uka-agent') || contains(github.event.issue.title, '@kb2uka-agent')))
+      (github.event_name == 'issues' && (github.event.action == 'opened' || contains(github.event.issue.body, '@kb2uka-agent') || contains(github.event.issue.title, '@kb2uka-agent')))
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -92,6 +94,23 @@ jobs:
 
             ## Your job
 
+            **Auto-triggered on a newly-opened issue (no @kb2uka-agent mention)?**
+            First DECIDE whether to act — you now fire on every new issue, so the
+            gate matters. Only attempt a fix when the issue is a CLEAR, self-
+            contained, green-light bug with an obvious root cause (per CLAUDE.md's
+            green-light list — null refs, missing guards, off-by-one, wiring /
+            persistence bugs, build / CI fixes, clear protocol / WDSP-compliance
+            divergences confirmed against Thetis). If it's a question, a feature
+            request, vague / needs-repro, a default / UX / visual / architecture
+            change, a red-light area (PureSignal especially), or anything needing
+            a human decision — do NOT open a PR. Post one short triage comment (or
+            nothing) and stop. Never guess-fix or junk-PR. When a human explicitly
+            @kb2uka-agent's you (e.g. on an existing / old issue), follow their
+            instruction directly — but ALWAYS via the same DRAFT-PR-to-`develop`
+            flow with the 🚫 DO NOT MERGE banner, and you still NEVER merge. The
+            draft + no-merge rules apply to EVERY code fix, auto-triggered or
+            explicitly invoked, new issue or old.
+
             1. Read the triggering comment / issue / PR carefully. Understand
                exactly what KB2UKA is asking you to do.
             2. If the ask is a question or a triage request — answer it. Read
@@ -108,8 +127,17 @@ jobs:
                  - Run tests (`dotnet test Zeus.slnx`) — no regressions.
                  - Commit with a conventional message (feat: / fix: / chore: / etc).
                  - Push the branch.
-                 - Open a PR against `develop` (NEVER `main`). Title + body should
-                   reference the originating issue/PR. Sign off "— KB2UKA-Agent 🛠".
+                 - Open a **DRAFT** PR against `develop` (NEVER `main`). Create it
+                   as a draft: `gh pr create --draft --base develop ...`. Prefix the
+                   **title** with `🚫 DO NOT MERGE — ` and make the **first line of
+                   the body** a bold `**🚫 DO NOT MERGE — KB2UKA will test this
+                   first; only KB2UKA merges.**` so neither KB2UKA nor Christian
+                   merges it by mistake. Then reference the originating issue/PR.
+                   Sign off "— KB2UKA-Agent 🛠".
+                 - **You must NEVER merge any PR** — not your own, not anyone's.
+                   Open the draft and STOP. You have no merge authority; KB2UKA
+                   tests and merges. Do not run `gh pr merge`, do not mark a PR
+                   "ready for review", do not push to `develop`/`main` directly.
                  - After each step, edit the status comment to tick the
                    matching checkbox and append a one-line result.
 
@@ -131,7 +159,7 @@ jobs:
             - [ ] Build (`dotnet build Zeus.slnx`)
             - [ ] Tests (`dotnet test Zeus.slnx`)
             - [ ] Frontend checks (lint / typecheck / `npm test`) — *omit row if no zeus-web changes*
-            - [ ] PR opened against `develop`
+            - [ ] DRAFT PR opened against `develop` (🚫 DO NOT MERGE)
 
             ---
 
@@ -170,7 +198,7 @@ jobs:
             - [x] Build — 0 warnings, 0 errors
             - [x] Tests — 492/492 passed
             - [x] Frontend checks — lint+typecheck clean
-            - [x] PR opened against `develop`
+            - [x] DRAFT PR opened against `develop` (🚫 DO NOT MERGE)
             ```
 
             **If you get blocked**, edit the comment to add a `> blocked: …`
