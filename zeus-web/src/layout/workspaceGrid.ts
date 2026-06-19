@@ -69,7 +69,7 @@ export function autoFitDroppedPanel(
   const dropped = previousItem
     ? layout.find((item) => item.i === previousItem.i)
     : findDroppedItem(layout);
-  if (!dropped) return cloneLayout(layout);
+  if (!dropped) return clearMovedFlags(layout);
 
   const dragLayout = dragStart?.layout.length
     ? layoutFromDragStart(layout, dropped.i, dragStart)
@@ -82,7 +82,7 @@ export function autoFitDroppedPanel(
   );
   const base = swapped.layout;
   const target = base.find((item) => item.i === dropped.i);
-  if (!target) return base;
+  if (!target) return clearMovedFlags(base);
 
   const minW = boundedMin(target.minW, 1, cols);
   const maxW = boundedMax(target.maxW, minW, cols);
@@ -144,16 +144,18 @@ export function autoFitDroppedPanel(
     }
   }
 
-  if (best) return compactMagnetUp(best.layout, target.i, swapped.displaced);
+  if (best) {
+    return clearMovedFlags(compactMagnetUp(best.layout, target.i, swapped.displaced));
+  }
 
   const fallback = cloneLayout(base);
   const fallbackTarget = fallback.find((item) => item.i === target.i);
-  if (!fallbackTarget) return fallback;
+  if (!fallbackTarget) return clearMovedFlags(fallback);
   fallbackTarget.w = minW;
   fallbackTarget.h = minH;
   fallbackTarget.x = clamp(fallbackTarget.x, 0, Math.max(0, cols - minW));
   fallbackTarget.y = Math.max(0, fallbackTarget.y);
-  return compactMagnetUp(fallback, target.i, swapped.displaced);
+  return clearMovedFlags(compactMagnetUp(fallback, target.i, swapped.displaced));
 }
 
 function compactResizePushDown(layout: Layout): Layout {
@@ -504,6 +506,36 @@ function compareItems(
 
 function cloneLayout(layout: Layout): LayoutItem[] {
   return layout.map((item) => ({ ...item }));
+}
+
+function clearMovedFlags(layout: Layout): LayoutItem[] {
+  return layout.map((item) => ({ ...item, moved: false }));
+}
+
+export function layoutPlacementsEqual(a: Layout, b: Layout): boolean {
+  if (a.length !== b.length) return false;
+  const placements = new Map(
+    a.map((item) => [item.i, { x: item.x, y: item.y, w: item.w, h: item.h }]),
+  );
+  if (placements.size !== a.length) return false;
+
+  const seen = new Set<string>();
+  for (const item of b) {
+    if (seen.has(item.i)) return false;
+    seen.add(item.i);
+    const placement = placements.get(item.i);
+    if (!placement) return false;
+    if (
+      placement.x !== item.x ||
+      placement.y !== item.y ||
+      placement.w !== item.w ||
+      placement.h !== item.h
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function placementMovement(

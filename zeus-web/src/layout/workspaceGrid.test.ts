@@ -9,6 +9,7 @@ import {
   WORKSPACE_RESIZE_COMPACTOR,
   autoFitDroppedPanel,
   createWorkspaceDragCompactor,
+  layoutPlacementsEqual,
 } from './workspaceGrid';
 
 function cloneLayout(layout: Layout): Layout {
@@ -238,6 +239,45 @@ describe('workspace grid collision policy', () => {
 
     expect(next.find((item) => item.i === 'dragged')?.y).toBe(2);
     expect(next.find((item) => item.i === 'below')?.y).toBe(0);
+  });
+
+  it('clears transient moved flags after auto-fitting a dropped panel', () => {
+    const layout = cloneLayout(baseLayout);
+    const dragged = layout[0]!;
+
+    const next = fitMovedElement(layout, dragged, undefined, 2);
+
+    expect(next.every((item) => item.moved === false)).toBe(true);
+    expect(WORKSPACE_DRAG_COMPACTOR.compact(next, 24)).toEqual(next);
+    expectNoCollisions(next);
+  });
+
+  it('compares persisted placements without transient grid fields', () => {
+    expect(
+      layoutPlacementsEqual(
+        [
+          { i: 'a', x: 0, y: 0, w: 6, h: 2, moved: true },
+          { i: 'b', x: 6, y: 0, w: 6, h: 2, minW: 2 },
+        ],
+        [
+          { i: 'b', x: 6, y: 0, w: 6, h: 2 },
+          { i: 'a', x: 0, y: 0, w: 6, h: 2, moved: false },
+        ],
+      ),
+    ).toBe(true);
+
+    expect(
+      layoutPlacementsEqual(
+        [
+          { i: 'a', x: 0, y: 0, w: 6, h: 2 },
+          { i: 'b', x: 6, y: 0, w: 6, h: 2 },
+        ],
+        [
+          { i: 'a', x: 0, y: 1, w: 6, h: 2 },
+          { i: 'a', x: 0, y: 0, w: 6, h: 2 },
+        ],
+      ),
+    ).toBe(false);
   });
 
   it('pushes a lower panel down when resize grows into it', () => {
