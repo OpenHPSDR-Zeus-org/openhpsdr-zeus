@@ -19,7 +19,10 @@ param(
     [switch]$Draft,
     [switch]$SkipTests,
     [switch]$NoPr,
-    [switch]$NoBdPush
+    [switch]$NoBdPush,
+    [switch]$TakeNext,
+    [ValidateRange(1, 32)]
+    [int]$NextCount = 1
 )
 
 Set-StrictMode -Version Latest
@@ -84,6 +87,19 @@ function Get-RemoteOwner {
     return $null
 }
 
+function Invoke-TakeNextIfRequested {
+    if (-not $TakeNext) {
+        return
+    }
+
+    $takeWorkScript = Join-Path $repoRoot 'scripts/take-work.ps1'
+    if (-not (Test-Path -LiteralPath $takeWorkScript)) {
+        throw "Cannot take next work; missing script: $takeWorkScript"
+    }
+
+    Invoke-Native 'Take next ready work' 'pwsh' @($takeWorkScript, '-Count', [string]$NextCount)
+}
+
 $repoRoot = (Invoke-GitCapture @('rev-parse', '--show-toplevel') | Select-Object -First 1)
 Set-Location $repoRoot
 Set-GitHooksPath
@@ -92,6 +108,10 @@ $branch = (Invoke-GitCapture @('branch', '--show-current') | Select-Object -Firs
 Assert-FeatureBranch $branch
 
 Write-Host "==> Finishing $branch" -ForegroundColor Cyan
+
+if ($NoPr -and $TakeNext) {
+    throw "-TakeNext requires PR creation; remove -NoPr or run scripts/take-work.ps1 separately."
+}
 
 $status = @(Invoke-GitCapture @('status', '--porcelain'))
 if ($status.Count -gt 0) {
@@ -149,10 +169,15 @@ if (-not $NoBdPush -and (Get-Command bd -ErrorAction SilentlyContinue)) {
 
 if ($NoPr) {
     Write-Host "==> PR creation skipped because -NoPr was supplied" -ForegroundColor Yellow
+    Invoke-TakeNextIfRequested
     exit 0
 }
 
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+    if ($TakeNext) {
+        throw "Cannot use -TakeNext because GitHub CLI 'gh' is not installed or not on PATH; PR was not created."
+    }
+
     Write-Warning "GitHub CLI 'gh' is not installed or not on PATH. Branch is pushed; create the PR manually into $BaseBranch."
     exit 0
 }
@@ -162,6 +187,7 @@ $head = if ($owner) { "$owner`:$branch" } else { $branch }
 $existingPr = & gh pr list --repo $PrRepo --head $branch --json url --jq '.[0].url' 2>$null
 if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingPr)) {
     Write-Host "==> PR already exists: $existingPr" -ForegroundColor Green
+    Invoke-TakeNextIfRequested
     exit 0
 }
 
@@ -189,3 +215,4 @@ if ($Draft) {
 }
 
 Invoke-Native 'Create PR' 'gh' $prArgs
+Invoke-TakeNextIfRequested

@@ -20,7 +20,8 @@ param(
     [string]$BaseBranch = 'develop',
     [string]$WorktreeRoot,
     [switch]$NoFetch,
-    [switch]$DryRun
+    [switch]$DryRun,
+    [switch]$NoClaim
 )
 
 Set-StrictMode -Version Latest
@@ -175,7 +176,7 @@ if ($DryRun) {
         Write-Host "DRY RUN: git worktree add -b '$branch' '$worktreePath' '$BaseRemote/$BaseBranch'"
     }
 
-    if ($Issue) {
+    if ($Issue -and -not $NoClaim) {
         Write-Host "DRY RUN: bd update $Issue --claim"
     }
 
@@ -200,7 +201,7 @@ else {
     Invoke-Native "Create worktree from $baseRef" 'git' @('worktree', 'add', '-b', $branch, $worktreePath, $baseRef)
 }
 
-if ($Issue -and (Get-Command bd -ErrorAction SilentlyContinue)) {
+if ($Issue -and -not $NoClaim -and (Get-Command bd -ErrorAction SilentlyContinue)) {
     try {
         Invoke-Native "Claim beads issue $Issue" 'bd' @('update', $Issue, '--claim')
     }
