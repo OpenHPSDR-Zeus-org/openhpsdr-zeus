@@ -522,6 +522,24 @@ export function ChatPanel() {
       </div>
 
       {/* Call-to-action banners */}
+      {!enabled ? (
+        <div
+          style={{
+            padding: '6px 10px',
+            borderBottom: '1px solid var(--panel-border)',
+            background: 'var(--bg-2)',
+            fontSize: 11.5,
+            color: 'var(--fg-2)',
+            lineHeight: 1.4,
+          }}
+        >
+          Enabling chat connects you to the public operator relay and{' '}
+          <strong style={{ color: 'var(--fg-1)' }}>
+            broadcasts your callsign and live VFO frequency
+          </strong>{' '}
+          to other logged-in operators.
+        </div>
+      ) : null}
       {enabled && !qrzConnected ? (
         <div
           style={{
