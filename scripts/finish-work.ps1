@@ -100,6 +100,14 @@ function Invoke-TakeNextIfRequested {
     Invoke-Native 'Take next ready work' 'pwsh' @($takeWorkScript, '-Count', [string]$NextCount)
 }
 
+function Update-SubmodulesIfNeeded {
+    if (-not (Test-Path -LiteralPath (Join-Path $repoRoot '.gitmodules'))) {
+        return
+    }
+
+    Invoke-Native 'Update git submodules' 'git' @('submodule', 'update', '--init', '--recursive')
+}
+
 $repoRoot = (Invoke-GitCapture @('rev-parse', '--show-toplevel') | Select-Object -First 1)
 Set-Location $repoRoot
 Set-GitHooksPath
@@ -146,6 +154,7 @@ if ($ahead -eq 0) {
 }
 
 if (-not $SkipTests) {
+    Update-SubmodulesIfNeeded
     Invoke-Native 'Run dotnet tests' 'dotnet' @('test', 'Zeus.slnx')
 
     if (Test-Path -LiteralPath (Join-Path $repoRoot 'zeus-web/package.json')) {

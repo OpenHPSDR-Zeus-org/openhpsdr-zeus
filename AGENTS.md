@@ -25,6 +25,13 @@ bd dolt push          # Push beads data to remote
 
 ## Automatic Development Workflow
 
+- Fast local-trunk mode is available when you want the speed of committing
+  locally and testing the combined latest code immediately:
+  `pwsh scripts/start-local-dev.ps1` creates or updates `local/develop` from
+  `OpenHPSDR-Zeus-org/develop`. Commit logical changes there, then export a
+  clean PR branch with
+  `pwsh scripts/export-pr.ps1 -Commit HEAD -Name "<short name>" -Issue <id>`.
+  Use `-Range "<base>..HEAD"` to export multiple local commits as one PR.
 - For each new feature, bug fix, or similarly scoped development task,
   automatically work in a dedicated worktree from `develop` unless you are
   already in a task-specific worktree/branch created for that task.
