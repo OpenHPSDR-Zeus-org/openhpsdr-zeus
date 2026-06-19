@@ -353,6 +353,17 @@ function compactPushDownWithPriority(
         const candidate = ordered[j]!;
         if (!collides(anchor, candidate)) continue;
 
+        if (candidate.static) {
+          if (!anchor.static) {
+            const y = candidate.y + candidate.h;
+            if (anchor.y < y) {
+              anchor.y = y;
+              moved = true;
+            }
+          }
+          continue;
+        }
+
         const y = anchor.y + anchor.h;
         if (candidate.y < y) {
           candidate.y = y;
@@ -384,15 +395,19 @@ function resolveAnchorCollisions(
     if (!anchor) return null;
 
     const collisions = next
-      .filter((item) => item.i !== anchorId && collides(anchor, item))
+      .filter((item) => item.i !== anchorId && collides(anchor, item));
+
+    if (collisions.some((item) => item.static)) return null;
+
+    const movableCollisions = collisions
       .sort((a, b) => Math.abs(a.x - anchor.x) - Math.abs(b.x - anchor.x));
 
-    if (collisions.length === 0) {
+    if (movableCollisions.length === 0) {
       return anyCollision(next) ? null : { layout: next };
     }
 
     let moved = false;
-    for (const item of collisions) {
+    for (const item of movableCollisions) {
       const slot = nearestOpenSlot(
         next,
         item,

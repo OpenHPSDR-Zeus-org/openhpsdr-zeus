@@ -64,4 +64,19 @@ describe('parseWorkspaceLayout', () => {
       { uid: 'tile-qrz', panelId: 'qrz', x: 13, y: 79, w: 7, h: 38 },
     ]);
   });
+
+  it('preserves workspace and tile lock flags', () => {
+    const layout = parseWorkspaceLayout({
+      schemaVersion: 8,
+      locked: true,
+      tiles: [
+        { uid: 'tile-hero', panelId: 'hero', x: 0, y: 0, w: 20, h: 24, locked: true },
+        { uid: 'tile-vfo', panelId: 'vfo', x: 20, y: 0, w: 4, h: 8, locked: false },
+      ],
+    });
+
+    expect(layout.locked).toBe(true);
+    expect(layout.tiles[0]).toMatchObject({ uid: 'tile-hero', locked: true });
+    expect(layout.tiles[1]).not.toHaveProperty('locked');
+  });
 });

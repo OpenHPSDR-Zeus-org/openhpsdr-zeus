@@ -228,6 +228,15 @@
   hyphens: auto;
   max-width: 100%;
 }
+.left-layout-bar .lb-lock-indicator {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  color: var(--power);
+  opacity: 0.82;
+  filter: drop-shadow(0 0 4px rgba(255, 201, 58, 0.25));
+  pointer-events: none;
+}
 .left-layout-bar .lb-gear {
   position: absolute;
   bottom: -4px;

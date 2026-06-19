@@ -152,6 +152,10 @@ interface LayoutState {
       Pick<WorkspaceTile, 'uid' | 'x' | 'y' | 'w' | 'h'>
     >,
   ) => void;
+  /** Toggle whether every tile in a layout is pinned in place. */
+  setWorkspaceLockedInLayout: (layoutId: string, locked: boolean) => void;
+  /** Toggle whether one tile is pinned to its current grid space. */
+  setTileLockedInLayout: (layoutId: string, uid: string, locked: boolean) => void;
   /** Replace a tile's instanceConfig blob. */
   updateTileInstanceConfig: (uid: string, instanceConfig: unknown) => void;
   /** Replace a tile's instanceConfig blob in a specific layout. */
@@ -460,9 +464,11 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     const workspace = layoutId === get().activeLayoutId
       ? get().workspace
       : parseLayoutOrDefault(target!.layoutJson);
+    if (workspace.locked) return;
     let changed = false;
     const tiles = workspace.tiles.map((t) => {
       if (t.uid !== uid) return t;
+      if (t.locked) return t;
       if (
         t.x === layout.x &&
         t.y === layout.y &&
@@ -485,6 +491,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     const workspace = layoutId === get().activeLayoutId
       ? get().workspace
       : parseLayoutOrDefault(target!.layoutJson);
+    if (workspace.locked) return;
     const nextPlacements = new Map(
       placements.map((p) => [
         p.uid,
@@ -495,6 +502,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     const tiles = workspace.tiles.map((t) => {
       const next = nextPlacements.get(t.uid);
       if (!next) return t;
+      if (t.locked) return t;
       if (
         t.x === next.x &&
         t.y === next.y &&
@@ -505,6 +513,33 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       }
       changed = true;
       return { ...t, ...next };
+    });
+    if (!changed) return;
+    applyWorkspaceMutationForLayout(set, get, layoutId, { ...workspace, tiles });
+  },
+
+  setWorkspaceLockedInLayout: (layoutId, locked) => {
+    const target = findActive(get().layouts, layoutId);
+    if (!target && layoutId !== get().activeLayoutId) return;
+    const workspace = layoutId === get().activeLayoutId
+      ? get().workspace
+      : parseLayoutOrDefault(target!.layoutJson);
+    if ((workspace.locked === true) === locked) return;
+    applyWorkspaceMutationForLayout(set, get, layoutId, withWorkspaceLocked(workspace, locked));
+  },
+
+  setTileLockedInLayout: (layoutId, uid, locked) => {
+    const target = findActive(get().layouts, layoutId);
+    if (!target && layoutId !== get().activeLayoutId) return;
+    const workspace = layoutId === get().activeLayoutId
+      ? get().workspace
+      : parseLayoutOrDefault(target!.layoutJson);
+    let changed = false;
+    const tiles = workspace.tiles.map((t) => {
+      if (t.uid !== uid) return t;
+      if ((t.locked === true) === locked) return t;
+      changed = true;
+      return withTileLocked(t, locked);
     });
     if (!changed) return;
     applyWorkspaceMutationForLayout(set, get, layoutId, { ...workspace, tiles });
@@ -553,6 +588,23 @@ function applyWorkspaceMutationForLayout(
     // Test / unhydrated state — just update workspace.
     set({ workspace: next });
   }
+}
+
+function withWorkspaceLocked(
+  workspace: WorkspaceLayout,
+  locked: boolean,
+): WorkspaceLayout {
+  if (locked) return { ...workspace, locked: true };
+  const next = { ...workspace };
+  delete next.locked;
+  return next;
+}
+
+function withTileLocked(tile: WorkspaceTile, locked: boolean): WorkspaceTile {
+  if (locked) return { ...tile, locked: true };
+  const next = { ...tile };
+  delete next.locked;
+  return next;
 }
 
 function saveKey(radioKey: string, layoutId: string): string {

@@ -66,6 +66,8 @@ export interface WorkspaceTile {
    *  uses this in v1 (carries MetersPanelConfig). Forward-compatible:
    *  unknown panels' instanceConfig is preserved verbatim across save/load. */
   instanceConfig?: unknown;
+  /** When true, the tile is pinned to its current grid space. */
+  locked?: boolean;
 }
 
 /** Top-level workspace blob persisted to /api/ui/layout.
@@ -74,6 +76,8 @@ export interface WorkspaceTile {
 export interface WorkspaceLayout {
   schemaVersion: 8;
   tiles: WorkspaceTile[];
+  /** When true, every tile in this workspace is pinned in place. */
+  locked?: boolean;
 }
 
 export const EMPTY_WORKSPACE_LAYOUT: WorkspaceLayout = {
@@ -154,7 +158,7 @@ export function parseWorkspaceLayout(raw: unknown): WorkspaceLayout {
   if (!raw || typeof raw !== 'object') return EMPTY_WORKSPACE_LAYOUT;
   // Read schemaVersion as a plain number (not the literal-8 type that
   // Partial<WorkspaceLayout> would impose) so the v7/v8 comparison typechecks.
-  const obj = raw as { schemaVersion?: unknown; tiles?: unknown };
+  const obj = raw as { schemaVersion?: unknown; tiles?: unknown; locked?: unknown };
   const version =
     typeof obj.schemaVersion === 'number' ? obj.schemaVersion : undefined;
   // v8 is the current 24×48 grid; v7 is the legacy 12×24 grid, migrated
@@ -188,9 +192,14 @@ export function parseWorkspaceLayout(raw: unknown): WorkspaceLayout {
       ...(tile.instanceConfig !== undefined
         ? { instanceConfig: tile.instanceConfig }
         : {}),
+      ...(tile.locked === true ? { locked: true } : {}),
     });
   }
-  return { schemaVersion: 8, tiles: normalizeOversizedRows(tiles) };
+  return {
+    schemaVersion: 8,
+    tiles: normalizeOversizedRows(tiles),
+    ...(obj.locked === true ? { locked: true } : {}),
+  };
 }
 
 function normalizeOversizedRows(tiles: WorkspaceTile[]): WorkspaceTile[] {

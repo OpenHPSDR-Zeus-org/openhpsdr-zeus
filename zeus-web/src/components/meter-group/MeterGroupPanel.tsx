@@ -41,6 +41,7 @@ import {
   MeterReadingId,
   type MeterDefaultKind,
 } from '../meters/meterCatalog';
+import { TileLockButton } from '../../layout/TileChrome';
 
 // Per-kind intrinsic main-axis size (px). The panel body sizes each
 // widget to its own natural footprint and `justify-content: flex-start`
@@ -62,12 +63,18 @@ interface MeterGroupPanelProps {
   setConfig?: (next: MeterGroupConfig) => void;
   /** Tile-removal hook. Headerless panels own their close X. */
   onRemove?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
 }
 
 export function MeterGroupPanel({
   config = EMPTY_METER_GROUP_CONFIG,
   setConfig,
   onRemove,
+  tileLocked = false,
+  workspaceLocked = false,
+  onToggleLock,
 }: MeterGroupPanelProps) {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
@@ -233,7 +240,11 @@ export function MeterGroupPanel({
         <span
           className="workspace-tile-drag-handle"
           aria-hidden="true"
-          title="Drag to reposition"
+          title={
+            tileLocked || workspaceLocked
+              ? 'Panel position is locked'
+              : 'Drag to reposition'
+          }
           style={{ opacity: panelHover ? 0.6 : 0.2, transition: 'opacity var(--dur-fast)' }}
         >
           <GripVertical size={12} />
@@ -351,6 +362,14 @@ export function MeterGroupPanel({
         >
           <Plus size={14} />
         </button>
+
+        {onToggleLock ? (
+          <TileLockButton
+            locked={tileLocked}
+            workspaceLocked={workspaceLocked}
+            onToggleLock={onToggleLock}
+          />
+        ) : null}
 
         {onRemove ? (
           <button

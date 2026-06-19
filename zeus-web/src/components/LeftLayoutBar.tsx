@@ -31,12 +31,14 @@ import {
   type CSSProperties,
   type DragEvent,
 } from 'react';
-import { useLayoutStore } from '../state/layout-store';
+import { LockKeyhole } from 'lucide-react';
+import { parseLayoutOrDefault, useLayoutStore } from '../state/layout-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
 import {
   LayoutSettingsModal,
   type LayoutSettingsValue,
 } from '../layout/LayoutSettingsModal';
+import { EMPTY_WORKSPACE_LAYOUT } from '../layout/workspace';
 import { ConfirmDialog } from '../layout/ConfirmDialog';
 import { openWorkspaceWindow } from '../layout/workspace-windows';
 
@@ -54,6 +56,9 @@ export function LeftLayoutBar() {
   const addLayout = useLayoutStore((s) => s.addLayout);
   const removeLayout = useLayoutStore((s) => s.removeLayout);
   const updateLayoutMeta = useLayoutStore((s) => s.updateLayoutMeta);
+  const setWorkspaceLockedInLayout = useLayoutStore(
+    (s) => s.setWorkspaceLockedInLayout,
+  );
   const isLoaded = useLayoutStore((s) => s.isLoaded);
   const settingsViewOpen = useLayoutStore((s) => s.settingsViewOpen);
   const setSettingsView = useLayoutStore((s) => s.setSettingsView);
@@ -85,6 +90,15 @@ export function LeftLayoutBar() {
 
   const [modal, setModal] = useState<ModalState>({ kind: 'closed' });
   const [draggingLayoutId, setDraggingLayoutId] = useState<string | null>(null);
+  const lockedLayoutIds = useMemo(
+    () =>
+      new Set(
+        layouts
+          .filter((layout) => parseLayoutOrDefault(layout.layoutJson).locked === true)
+          .map((layout) => layout.id),
+      ),
+    [layouts],
+  );
 
   const handleAdd = () => setModal({ kind: 'create' });
 
@@ -100,6 +114,9 @@ export function LeftLayoutBar() {
       addLayout(value.name, {
         icon: value.icon || undefined,
         description: value.description || undefined,
+        ...(value.locked
+          ? { workspace: { ...EMPTY_WORKSPACE_LAYOUT, locked: true } }
+          : {}),
       });
     } else if (modal.kind === 'edit') {
       updateLayoutMeta(modal.id, {
@@ -107,6 +124,7 @@ export function LeftLayoutBar() {
         icon: value.icon,
         description: value.description,
       });
+      setWorkspaceLockedInLayout(modal.id, value.locked);
     }
     setModal({ kind: 'closed' });
   };
@@ -155,6 +173,7 @@ export function LeftLayoutBar() {
               const tooltip = l.description?.trim()
                 ? `${l.name} — ${l.description}`
                 : `${l.name} (gear to edit)`;
+              const locked = lockedLayoutIds.has(l.id);
               return (
                 <div
                   key={l.id}
@@ -178,6 +197,14 @@ export function LeftLayoutBar() {
                       {l.icon || initialLetter(l.name)}
                     </span>
                     <span className="lb-tab-name">{l.name}</span>
+                    {locked ? (
+                      <LockKeyhole
+                        className="lb-lock-indicator"
+                        size={10}
+                        strokeWidth={2.2}
+                        aria-hidden
+                      />
+                    ) : null}
                   </button>
                   <button
                     type="button"
@@ -244,6 +271,7 @@ export function LeftLayoutBar() {
             name: `Layout ${layouts.length + 1}`,
             icon: '',
             description: '',
+            locked: false,
           }}
           onSave={handleModalSave}
           onClose={() => setModal({ kind: 'closed' })}
@@ -256,6 +284,7 @@ export function LeftLayoutBar() {
             name: editingLayout.name,
             icon: editingLayout.icon ?? '',
             description: editingLayout.description ?? '',
+            locked: parseLayoutOrDefault(editingLayout.layoutJson).locked === true,
           }}
           onSave={handleModalSave}
           onClose={() => setModal({ kind: 'closed' })}

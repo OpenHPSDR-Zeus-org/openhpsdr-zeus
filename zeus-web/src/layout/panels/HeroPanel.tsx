@@ -56,6 +56,7 @@ import { setRx2, type Rx2AudioMode } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import { useRotatorStore } from '../../state/rotator-store';
 import { useLayoutStore } from '../../state/layout-store';
+import { TileLockButton } from '../TileChrome';
 import {
   clampSplit,
   mergeInstanceSplit,
@@ -71,6 +72,9 @@ interface HeroPanelProps {
   onRemove?: () => void;
   tile?: WorkspaceTile;
   layoutId?: string;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
 }
 
 const RX_AUDIO_MODES: readonly { mode: Rx2AudioMode; label: string; title: string }[] = [
@@ -86,7 +90,14 @@ const RX_AUDIO_MODES: readonly { mode: Rx2AudioMode; label: string; title: strin
 // the ⌥ map-mode hint, the HZ/PX readout, and the close X. Interactive
 // controls inside stop mousedown propagation so a click on a chip / slider /
 // input doesn't initiate a tile drag (mirrors the MetersPanel pattern).
-export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
+export function HeroPanel({
+  onRemove,
+  tile,
+  layoutId,
+  tileLocked = false,
+  workspaceLocked = false,
+  onToggleLock,
+}: HeroPanelProps = {}) {
   const {
     terminatorActive,
     imageMode,
@@ -246,7 +257,11 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
         <span
           className="workspace-tile-drag-handle"
           aria-hidden="true"
-          title="Drag to reposition"
+          title={
+            tileLocked || workspaceLocked
+              ? 'Panel position is locked'
+              : 'Drag to reposition'
+          }
         >
           <GripVertical size={12} />
         </span>
@@ -351,6 +366,13 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
             </span>
           )}
         </div>
+        {onToggleLock ? (
+          <TileLockButton
+            locked={tileLocked}
+            workspaceLocked={workspaceLocked}
+            onToggleLock={onToggleLock}
+          />
+        ) : null}
         {onRemove ? (
           <button
             type="button"

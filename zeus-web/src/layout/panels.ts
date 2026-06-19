@@ -121,8 +121,14 @@ const VALID_PANEL_CATEGORIES = new Set<string>(PANEL_CATEGORIES);
  *  `<def.component />`. Multi-instance panels with per-instance config
  *  (just `meters` today) take a typed prop pair instead; `PanelTile` knows
  *  to switch on `def.id === 'meters'` for that wiring. Headerless panels
- *  receive `onRemove` so the close button they own can drop the tile. */
-export type PanelComponentProps = { onRemove?: () => void };
+ *  receive chrome actions so the close/lock buttons they own can mutate the
+ *  tile. */
+export type PanelComponentProps = {
+  onRemove?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
+};
 
 export interface PanelDef {
   id: string;

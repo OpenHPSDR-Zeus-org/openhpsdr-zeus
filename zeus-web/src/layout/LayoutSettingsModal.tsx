@@ -28,6 +28,7 @@ export interface LayoutSettingsValue {
   name: string;
   icon: string;
   description: string;
+  locked: boolean;
 }
 
 interface LayoutSettingsModalProps {
@@ -48,6 +49,7 @@ export function LayoutSettingsModal({
   const [name, setName] = useState(initial.name);
   const [icon, setIcon] = useState(initial.icon);
   const [description, setDescription] = useState(initial.description);
+  const [locked, setLocked] = useState(initial.locked);
   const dialogRef = useRef<HTMLDivElement | null>(null);
   const nameRef = useRef<HTMLInputElement | null>(null);
 
@@ -64,6 +66,7 @@ export function LayoutSettingsModal({
       name: trimmedName,
       icon: icon.trim(),
       description: description.trim(),
+      locked,
     });
   };
 
@@ -203,6 +206,23 @@ export function LayoutSettingsModal({
               placeholder="Shown on hover — e.g. Portable HF, 5 W, no rotator"
               aria-label="Layout description"
             />
+          </label>
+
+          <label className="layout-settings-lock-row">
+            <input
+              type="checkbox"
+              checked={locked}
+              aria-label="Lock panel positions"
+              onChange={(e) => setLocked(e.target.checked)}
+            />
+            <span className="layout-settings-lock-copy">
+              <span className="layout-settings-field-label">
+                Lock panel positions
+              </span>
+              <span className="layout-settings-field-hint">
+                Panels stay pinned in this workspace.
+              </span>
+            </span>
           </label>
         </div>
 

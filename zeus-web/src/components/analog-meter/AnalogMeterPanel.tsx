@@ -32,6 +32,7 @@ import { useRxMetersStore } from '../../state/rx-meters-store';
 import { AnalogMeterFace } from './AnalogMeterFace';
 import { AnalogMeterConfig } from './AnalogMeterConfig';
 import { AnalogMeterZeusOverlay } from './AnalogMeterZeusOverlay';
+import { TileLockButton } from '../../layout/TileChrome';
 import {
   S_SCALE,
   PO_SCALE,
@@ -51,16 +52,30 @@ interface TileHeaderProps {
   configOpen: boolean;
   onGearClick: () => void;
   onClose?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
 }
 
-function TileHeader({ configOpen, onGearClick, onClose }: TileHeaderProps) {
+function TileHeader({
+  configOpen,
+  onGearClick,
+  onClose,
+  tileLocked = false,
+  workspaceLocked = false,
+  onToggleLock,
+}: TileHeaderProps) {
   const stopDrag = (e: React.MouseEvent) => e.stopPropagation();
   return (
     <div className="am-header workspace-tile-header">
       <span
         className="workspace-tile-drag-handle"
         aria-hidden="true"
-        title="Drag to reposition"
+        title={
+          tileLocked || workspaceLocked
+            ? 'Panel position is locked'
+            : 'Drag to reposition'
+        }
       >
         <GripVertical size={12} />
       </span>
@@ -78,6 +93,14 @@ function TileHeader({ configOpen, onGearClick, onClose }: TileHeaderProps) {
       >
         <Settings size={14} />
       </button>
+
+      {onToggleLock ? (
+        <TileLockButton
+          locked={tileLocked}
+          workspaceLocked={workspaceLocked}
+          onToggleLock={onToggleLock}
+        />
+      ) : null}
 
       {onClose && (
         <button
@@ -172,9 +195,17 @@ export interface AnalogMeterPanelProps {
   /** When provided, a close button is rendered in the tile header. The
    *  layout system injects this for headerless panels. */
   onClose?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
 }
 
-export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
+export function AnalogMeterPanel({
+  onClose,
+  tileLocked,
+  workspaceLocked,
+  onToggleLock,
+}: AnalogMeterPanelProps = {}) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const cfg = useAnalogMeterStore();
   const moxOn = useTxStore((s) => s.moxOn);
@@ -410,6 +441,9 @@ export function AnalogMeterPanel({ onClose }: AnalogMeterPanelProps = {}) {
         configOpen={configOpen}
         onGearClick={() => setConfigOpen((o) => !o)}
         onClose={onClose}
+        tileLocked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={onToggleLock}
       />
 
       <AnalogMeterConfig open={configOpen} onClose={() => setConfigOpen(false)} />

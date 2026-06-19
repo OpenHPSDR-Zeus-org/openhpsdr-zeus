@@ -17,9 +17,20 @@ namespace Zeus.Plugins.Host.Tests;
 /// CI (observed on macOS: Expected 33, Actual 34). The thread-local
 /// allocation delta is unaffected by other threads and directly asserts the
 /// real no-alloc invariant.
+///
+/// We assert on the PER-BLOCK average rather than total bytes. Tiered JIT
+/// can promote Process() to tier-1 / perform on-stack replacement while the
+/// loop is already running, charging a fixed one-shot allocation to this
+/// thread that is independent of iteration count (observed on Windows CI:
+/// ~5760 bytes total, i.e. <1 byte/block). A genuine per-call leak — a stray
+/// array, boxing, or closure — allocates at least a byte every iteration, so
+/// it survives integer division and trips the assert; the JIT artifact does
+/// not.
 /// </summary>
 public class AudioChainProcessNoAllocTests
 {
+    private const int Iterations = 10_000;
+
     [Fact]
     public void Process_OverManyBlocks_DoesNotAllocate()
     {
@@ -37,12 +48,16 @@ public class AudioChainProcessNoAllocTests
         // same thread. Immune to GCs triggered by other threads.
         var startBytes = GC.GetAllocatedBytesForCurrentThread();
 
-        for (int i = 0; i < 10_000; i++)
+        for (int i = 0; i < Iterations; i++)
         {
             chain.Process(input, output, ctx);
         }
 
         var allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - startBytes;
-        Assert.Equal(0, allocatedBytes);
+
+        // Per-block average: 0 for the steady-state hot path; a real per-call
+        // leak rounds up to >= 1, a fixed tiered-JIT cost rounds down to 0.
+        var bytesPerBlock = allocatedBytes / Iterations;
+        Assert.Equal(0, bytesPerBlock);
     }
 }

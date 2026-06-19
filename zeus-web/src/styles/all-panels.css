@@ -112,6 +112,9 @@
   border-color: var(--accent);
   opacity: 1;
 }
+.all-panels-grid .react-grid-item[data-tile-locked='true'] .react-resizable-handle {
+  display: none;
+}
 
 /* Workspace tile — beveled chrome wrapping the panel body. Mirrors the
  * .panel recipe from layout.css so RGL tiles read the same as the legacy
@@ -171,6 +174,10 @@
 .workspace-tile-header:active {
   cursor: grabbing;
 }
+.workspace-tile--locked .workspace-tile-header,
+.workspace-tile--locked .workspace-tile-header:active {
+  cursor: default;
+}
 
 .workspace-tile-drag-handle {
   display: inline-flex;
@@ -190,6 +197,13 @@
 .workspace-tile-drag-handle:hover {
   color: var(--power);
 }
+.workspace-tile--locked .workspace-tile-drag-handle,
+.workspace-tile--locked .workspace-tile-header:hover .workspace-tile-drag-handle,
+.workspace-tile--locked .workspace-tile-drag-handle:hover {
+  color: var(--fg-3);
+  cursor: default;
+  opacity: 0.55;
+}
 
 .workspace-tile-title {
   flex: 1;
@@ -207,7 +221,8 @@
   user-select: none;
 }
 
-.workspace-tile-close {
+.workspace-tile-close,
+.workspace-tile-lock {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -221,11 +236,24 @@
   transition: background var(--dur-fast), color var(--dur-fast);
   flex-shrink: 0;
 }
+.workspace-tile-lock.is-locked {
+  color: var(--power);
+  background: color-mix(in srgb, var(--power) 10%, transparent);
+}
+.workspace-tile-lock.is-inherited {
+  color: var(--fg-2);
+  opacity: 0.78;
+}
 .workspace-tile-close:hover {
   color: var(--tx);
   background: var(--bg-2);
 }
-.workspace-tile-close:focus-visible {
+.workspace-tile-lock:hover {
+  color: var(--power);
+  background: var(--bg-2);
+}
+.workspace-tile-close:focus-visible,
+.workspace-tile-lock:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 1px;
 }
@@ -1061,6 +1089,27 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+.layout-settings-lock-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.layout-settings-lock-row input {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.layout-settings-lock-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 .layout-settings-field-label {
   font-size: 10px;

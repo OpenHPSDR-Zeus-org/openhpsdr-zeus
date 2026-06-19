@@ -187,6 +187,27 @@ describe('workspace grid collision policy', () => {
     expectNoCollisions(next);
   });
 
+  it('does not move static panels when another panel is dropped on them', () => {
+    const layout: Layout = cloneLayout([
+      { i: 'dragged', x: 0, y: 0, w: 6, h: 2 },
+      { i: 'locked', x: 0, y: 2, w: 6, h: 2, static: true },
+    ]);
+    const dragged = layout[0]!;
+
+    const next = fitMovedElement(layout, dragged, undefined, 2);
+
+    expect(next.find((item) => item.i === 'locked')).toMatchObject({
+      x: 0,
+      y: 2,
+      static: true,
+    });
+    expect(next.find((item) => item.i === 'dragged')).toMatchObject({
+      x: 0,
+      y: 4,
+    });
+    expectNoCollisions(next);
+  });
+
   it('displaces occupied panels when the dropped footprint is covered', () => {
     const layout: Layout = cloneLayout([
       { i: 'dragged', x: 0, y: 0, w: 12, h: 8, minW: 4, minH: 2 },

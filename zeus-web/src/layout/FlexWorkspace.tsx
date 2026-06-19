@@ -105,6 +105,7 @@ export function FlexWorkspace({
   const syncToServerBeforeUnload = useLayoutStore((s) => s.syncToServerBeforeUnload);
   const addTileToLayout = useLayoutStore((s) => s.addTileToLayout);
   const removeTileFromLayout = useLayoutStore((s) => s.removeTileFromLayout);
+  const setTileLockedInLayout = useLayoutStore((s) => s.setTileLockedInLayout);
   const updateTilePlacementsInLayout = useLayoutStore(
     (s) => s.updateTilePlacementsInLayout,
   );
@@ -129,9 +130,11 @@ export function FlexWorkspace({
     () => new Set(workspace.tiles.map((t) => t.panelId)),
     [workspace.tiles],
   );
+  const workspaceLocked = workspace.locked === true;
 
   const onLayoutChange = useCallback(
     (next: Layout) => {
+      if (workspaceLocked) return;
       // RGL fires onLayoutChange on every render with the current layout
       // (including the very first paint). Diff each item against the store
       // and only PUT through when something actually moved.
@@ -146,7 +149,7 @@ export function FlexWorkspace({
         })),
       );
     },
-    [targetLayoutId, updateTilePlacementsInLayout],
+    [targetLayoutId, updateTilePlacementsInLayout, workspaceLocked],
   );
 
   const onAddPanel = useCallback(
@@ -162,10 +165,14 @@ export function FlexWorkspace({
     <div className={`flex-workspace ${terminatorActive ? 'terminator' : ''}`}>
       <WorkspaceCanvas
         tiles={workspace.tiles}
+        workspaceLocked={workspaceLocked}
         isLoaded={isLoaded}
         layoutId={targetLayoutId}
         onLayoutChange={onLayoutChange}
         onRequestRemoveTile={(uid, title) => setPendingRemoveTile({ uid, title })}
+        onToggleTileLock={(uid, locked) =>
+          setTileLockedInLayout(targetLayoutId, uid, locked)
+        }
       />
       <TerminatorLines active={terminatorActive} />
       {showAddPanelModal && !addPanelOpen && (
@@ -211,18 +218,22 @@ export function FlexWorkspace({
 
 interface WorkspaceCanvasProps {
   tiles: WorkspaceTile[];
+  workspaceLocked: boolean;
   isLoaded: boolean;
   layoutId: string;
   onLayoutChange: (next: Layout) => void;
   onRequestRemoveTile: (uid: string, title: string) => void;
+  onToggleTileLock: (uid: string, locked: boolean) => void;
 }
 
 function WorkspaceCanvas({
   tiles,
+  workspaceLocked,
   isLoaded,
   layoutId,
   onLayoutChange,
   onRequestRemoveTile,
+  onToggleTileLock,
 }: WorkspaceCanvasProps) {
   // useContainerWidth from RGL's modern API: ResizeObserver-backed parent
   // measurement. mounted=false on first paint to avoid the 1280-px width
@@ -310,6 +321,8 @@ function WorkspaceCanvas({
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
+      if (workspaceLocked) return;
+      if (target.closest('[data-tile-locked="true"]')) return;
 
       if (target.closest('.react-resizable-handle')) {
         autoFitEchoRef.current = null;
@@ -319,13 +332,14 @@ function WorkspaceCanvas({
 
       if (
         target.closest('.workspace-tile-header') &&
-        !target.closest('.workspace-tile-close')
+        !target.closest('.workspace-tile-close') &&
+        !target.closest('.workspace-tile-lock')
       ) {
         autoFitEchoRef.current = null;
         setGridInteraction('drag');
       }
     },
-    [],
+    [workspaceLocked],
   );
 
   const onDragStart = useCallback((
@@ -408,6 +422,7 @@ function WorkspaceCanvas({
     () => ({
       lg: tiles.map((t) => {
         const def = getPanelDef(t.panelId, pluginPanelKey);
+        const tileLocked = workspaceLocked || t.locked === true;
         // Clamp persisted size to the panel's maxW/maxH. RGL only enforces
         // these caps during resize drags, so a tile saved wider than its cap
         // (e.g. a Filter Presets tile placed before it gained maxW) would
@@ -429,10 +444,13 @@ function WorkspaceCanvas({
           minH: def?.minH ?? WORKSPACE_TILE_MIN_H,
           ...(def?.maxW !== undefined ? { maxW: def.maxW } : {}),
           ...(def?.maxH !== undefined ? { maxH: def.maxH } : {}),
+          static: tileLocked,
+          isDraggable: !tileLocked,
+          isResizable: !tileLocked,
         };
       }),
     }),
-    [tiles, pluginPanelKey],
+    [tiles, pluginPanelKey, workspaceLocked],
   );
 
   return (
@@ -474,7 +492,7 @@ function WorkspaceCanvas({
           // excludes the X so close clicks still register.
           dragConfig={{
             handle: '.workspace-tile-header',
-            cancel: '.workspace-tile-close',
+            cancel: '.workspace-tile-close, .workspace-tile-lock',
             bounded: false,
           }}
           onDragStart={onDragStart}
@@ -484,15 +502,24 @@ function WorkspaceCanvas({
           onLayoutChange={handleLayoutChange}
           layouts={rglLayouts}
         >
-          {tiles.map((tile) => (
-            <div key={tile.uid} data-tile-uid={tile.uid}>
-              <PanelTile
-                tile={tile}
-                layoutId={layoutId}
-                onRequestRemoveTile={onRequestRemoveTile}
-              />
-            </div>
-          ))}
+          {tiles.map((tile) => {
+            const effectiveLocked = workspaceLocked || tile.locked === true;
+            return (
+              <div
+                key={tile.uid}
+                data-tile-uid={tile.uid}
+                data-tile-locked={effectiveLocked ? 'true' : undefined}
+              >
+                <PanelTile
+                  tile={tile}
+                  layoutId={layoutId}
+                  workspaceLocked={workspaceLocked}
+                  onRequestRemoveTile={onRequestRemoveTile}
+                  onToggleTileLock={onToggleTileLock}
+                />
+              </div>
+            );
+          })}
         </ResponsiveGridLayout>
       )}
     </div>
@@ -506,7 +533,9 @@ function clonePlacementLayout(layout: Layout): Layout {
 interface PanelTileProps {
   tile: WorkspaceTile;
   layoutId: string;
+  workspaceLocked: boolean;
   onRequestRemoveTile: (uid: string, title: string) => void;
+  onToggleTileLock: (uid: string, locked: boolean) => void;
 }
 
 // Memoised so a parent re-render (e.g. another tile's drag updating the
@@ -516,7 +545,9 @@ interface PanelTileProps {
 const PanelTile = memo(function PanelTile({
   tile,
   layoutId,
+  workspaceLocked,
   onRequestRemoveTile,
+  onToggleTileLock,
 }: PanelTileProps) {
   const def = getPanelDef(tile.panelId);
   if (!def) {
@@ -524,11 +555,16 @@ const PanelTile = memo(function PanelTile({
       <UnavailablePanelTile
         tile={tile}
         layoutId={layoutId}
+        workspaceLocked={workspaceLocked}
         onRequestRemoveTile={onRequestRemoveTile}
+        onToggleTileLock={onToggleTileLock}
       />
     );
   }
   const handleRemove = () => onRequestRemoveTile(tile.uid, def.name);
+  const handleToggleLock = () => onToggleTileLock(tile.uid, tile.locked !== true);
+  const tileLocked = tile.locked === true;
+  const effectiveLocked = workspaceLocked || tileLocked;
   // Headerless panels own their entire tile surface and draw their own
   // header (if any). They MUST include an element with class
   // `.workspace-tile-header` so RGL drag picks up, and a
@@ -536,16 +572,34 @@ const PanelTile = memo(function PanelTile({
   if (def.headerless) {
     return (
       <div
-        className="workspace-tile workspace-tile--headerless"
+        className={`workspace-tile workspace-tile--headerless${
+          effectiveLocked ? ' workspace-tile--locked' : ''
+        }`}
         data-panel-id={tile.panelId}
       >
-        <PanelBody tile={tile} layoutId={layoutId} onRemove={handleRemove} />
+        <PanelBody
+          tile={tile}
+          layoutId={layoutId}
+          onRemove={handleRemove}
+          tileLocked={tileLocked}
+          workspaceLocked={workspaceLocked}
+          onToggleLock={handleToggleLock}
+        />
       </div>
     );
   }
   return (
-    <div className="workspace-tile" data-panel-id={tile.panelId}>
-      <TileChrome title={def.name} onRemove={handleRemove} />
+    <div
+      className={`workspace-tile${effectiveLocked ? ' workspace-tile--locked' : ''}`}
+      data-panel-id={tile.panelId}
+    >
+      <TileChrome
+        title={def.name}
+        onRemove={handleRemove}
+        locked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={handleToggleLock}
+      />
       <div className="workspace-tile-body">
         <PanelBody tile={tile} layoutId={layoutId} />
       </div>
@@ -557,21 +611,54 @@ function PanelBody({
   tile,
   layoutId,
   onRemove,
+  tileLocked = false,
+  workspaceLocked = false,
+  onToggleLock,
 }: {
   tile: WorkspaceTile;
   layoutId: string;
   onRemove?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
 }) {
   // Per-tile config-bound rendering for multi-instance / configurable
   // panels. Single-instance panels just render their component as-is.
   if (tile.panelId === 'hero') {
-    return <HeroPanel tile={tile} layoutId={layoutId} onRemove={onRemove} />;
+    return (
+      <HeroPanel
+        tile={tile}
+        layoutId={layoutId}
+        onRemove={onRemove}
+        tileLocked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={onToggleLock}
+      />
+    );
   }
   if (tile.panelId === 'metergroup') {
-    return <MeterGroupTileBody tile={tile} layoutId={layoutId} onRemove={onRemove} />;
+    return (
+      <MeterGroupTileBody
+        tile={tile}
+        layoutId={layoutId}
+        onRemove={onRemove}
+        tileLocked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={onToggleLock}
+      />
+    );
   }
   if (tile.panelId === 'urlembed') {
-    return <UrlEmbedTileBody tile={tile} layoutId={layoutId} onRemove={onRemove} />;
+    return (
+      <UrlEmbedTileBody
+        tile={tile}
+        layoutId={layoutId}
+        onRemove={onRemove}
+        tileLocked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={onToggleLock}
+      />
+    );
   }
   const def = getPanelDef(tile.panelId);
   if (!def) return null;
@@ -580,26 +667,49 @@ function PanelBody({
   // onRemove so their close button can drop the tile (matches the meter
   // group special-case above without pulling in its per-tile config).
   if (def.headerless && onRemove) {
-    return <Component onRemove={onRemove} />;
+    return (
+      <Component
+        onRemove={onRemove}
+        tileLocked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={onToggleLock}
+      />
+    );
   }
   return <Component />;
 }
 
 function UnavailablePanelTile({
   tile,
+  workspaceLocked,
   onRequestRemoveTile,
+  onToggleTileLock,
 }: PanelTileProps) {
   const handleRemove = useCallback(
     () => onRequestRemoveTile(tile.uid, 'Unavailable panel'),
     [onRequestRemoveTile, tile.uid],
+  );
+  const handleToggleLock = useCallback(
+    () => onToggleTileLock(tile.uid, tile.locked !== true),
+    [onToggleTileLock, tile.locked, tile.uid],
   );
   const openPlugins = useCallback(() => {
     useLayoutStore.getState().setSettingsView(true, 'plugins');
   }, []);
 
   return (
-    <div className="workspace-tile workspace-tile--unavailable">
-      <TileChrome title="Unavailable panel" onRemove={handleRemove} />
+    <div
+      className={`workspace-tile workspace-tile--unavailable${
+        workspaceLocked || tile.locked ? ' workspace-tile--locked' : ''
+      }`}
+    >
+      <TileChrome
+        title="Unavailable panel"
+        onRemove={handleRemove}
+        locked={tile.locked === true}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={handleToggleLock}
+      />
       <div className="workspace-tile-body workspace-unavailable-panel">
         <div className="workspace-unavailable-panel-icon" aria-hidden>
           <Puzzle size={18} />
@@ -632,10 +742,16 @@ function MeterGroupTileBody({
   tile,
   layoutId,
   onRemove,
+  tileLocked,
+  workspaceLocked,
+  onToggleLock,
 }: {
   tile: WorkspaceTile;
   layoutId: string;
   onRemove?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
 }) {
   const updateTileInstanceConfig = useLayoutStore(
     (s) => s.updateTileInstanceConfigInLayout,
@@ -681,7 +797,14 @@ function MeterGroupTileBody({
   }, [config.widgets.length, config.direction, layoutId, updateTilePlacement]);
 
   return (
-    <MeterGroupPanel config={config} setConfig={setConfig} onRemove={onRemove} />
+    <MeterGroupPanel
+      config={config}
+      setConfig={setConfig}
+      onRemove={onRemove}
+      tileLocked={tileLocked}
+      workspaceLocked={workspaceLocked}
+      onToggleLock={onToggleLock}
+    />
   );
 }
 
@@ -689,10 +812,16 @@ function UrlEmbedTileBody({
   tile,
   layoutId,
   onRemove,
+  tileLocked,
+  workspaceLocked,
+  onToggleLock,
 }: {
   tile: WorkspaceTile;
   layoutId: string;
   onRemove?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
 }) {
   const updateTileInstanceConfig = useLayoutStore(
     (s) => s.updateTileInstanceConfigInLayout,
@@ -709,6 +838,13 @@ function UrlEmbedTileBody({
   );
 
   return (
-    <UrlEmbedPanel config={config} setConfig={setConfig} onRemove={onRemove} />
+    <UrlEmbedPanel
+      config={config}
+      setConfig={setConfig}
+      onRemove={onRemove}
+      tileLocked={tileLocked}
+      workspaceLocked={workspaceLocked}
+      onToggleLock={onToggleLock}
+    />
   );
 }
