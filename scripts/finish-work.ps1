@@ -138,13 +138,14 @@ else {
 
 Invoke-Native "Push $branch to $PushRemote" 'git' @('push', '-u', '--force-with-lease', $PushRemote, $branch)
 
-if (-not $NoBdPush -and (Get-Command bd -ErrorAction SilentlyContinue)) {
-    try {
-        Invoke-Native "Push beads data to $BdRemote" 'bd' @('dolt', 'push', '--remote', $BdRemote)
-    }
-    catch {
-        Write-Warning "bd dolt push failed: $($_.Exception.Message)"
-    }
+if ($NoBdPush) {
+    Write-Host "==> Skipping beads push because -NoBdPush was supplied" -ForegroundColor Yellow
+}
+elseif (Get-Command bd -ErrorAction SilentlyContinue) {
+    Invoke-Native "Push beads data to $BdRemote" 'bd' @('dolt', 'push', '--remote', $BdRemote)
+}
+else {
+    throw "bd CLI is not installed or not on PATH; use -NoBdPush to skip beads sync explicitly."
 }
 
 if ($NoPr) {

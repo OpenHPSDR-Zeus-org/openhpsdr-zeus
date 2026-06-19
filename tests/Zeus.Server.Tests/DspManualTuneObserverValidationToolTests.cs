@@ -8,6 +8,7 @@ using Zeus.Server;
 
 namespace Zeus.Server.Tests;
 
+[Trait("Category", "DspModernization")]
 public sealed class DspManualTuneObserverValidationToolTests
 {
     private static readonly JsonSerializerOptions CamelCaseJson = new()
