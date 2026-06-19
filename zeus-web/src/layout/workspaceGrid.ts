@@ -15,8 +15,14 @@ export const WORKSPACE_RESIZE_COMPACTOR: Compactor = {
   compact: compactResizePushDown,
 };
 
-export function autoFitDroppedPanel(layout: Layout, cols: number): Layout {
-  const dropped = findDroppedItem(layout);
+export function autoFitDroppedPanel(
+  layout: Layout,
+  cols: number,
+  previousItem?: LayoutItem | null,
+): Layout {
+  const dropped =
+    findDroppedItem(layout) ??
+    (previousItem ? layout.find((item) => item.i === previousItem.i) : undefined);
   if (!dropped) return cloneLayout(layout);
 
   const base = cloneLayout(layout);
@@ -56,17 +62,18 @@ export function autoFitDroppedPanel(layout: Layout, cols: number): Layout {
           trialTarget.w = w;
           trialTarget.h = h;
 
-          const resolved = resolveAnchorCollisionsHorizontally(
+          const resolved = resolveAnchorCollisions(
             trial,
             target.i,
             cols,
+            previousItem,
           );
           if (!resolved) continue;
 
           const area = w * h;
           const originDistance =
             Math.abs(x - footprintX) + Math.abs(y - footprintY);
-          const movement = horizontalMovement(base, resolved.layout, target.i);
+          const movement = placementMovement(base, resolved.layout, target.i);
           if (
             !best ||
             originDistance < best.originDistance ||
@@ -132,14 +139,17 @@ function compactPushDownWithPriority(
   return next;
 }
 
-function resolveAnchorCollisionsHorizontally(
+function resolveAnchorCollisions(
   layout: Layout,
   anchorId: string,
   cols: number,
+  preferredSlot?: LayoutItem | null,
 ): { layout: LayoutItem[] } | null {
   const next = cloneLayout(layout);
-  const originalX = new Map(next.map((item) => [item.i, item.x]));
-  const maxPasses = Math.max(1, next.length);
+  const originalPlacement = new Map(
+    next.map((item) => [item.i, { x: item.x, y: item.y }]),
+  );
+  const maxPasses = Math.max(1, next.length * next.length);
 
   for (let pass = 0; pass < maxPasses; pass += 1) {
     const anchor = next.find((item) => item.i === anchorId);
@@ -155,16 +165,18 @@ function resolveAnchorCollisionsHorizontally(
 
     let moved = false;
     for (const item of collisions) {
-      const x = nearestHorizontalSlot(
+      const slot = nearestOpenSlot(
         next,
         item,
         anchor,
         cols,
-        originalX.get(item.i) ?? item.x,
+        originalPlacement.get(item.i) ?? item,
+        preferredSlot,
       );
-      if (x === null) return null;
-      if (x !== item.x) {
-        item.x = x;
+      if (slot === null) return null;
+      if (slot.x !== item.x || slot.y !== item.y) {
+        item.x = slot.x;
+        item.y = slot.y;
         moved = true;
       }
     }
@@ -175,34 +187,71 @@ function resolveAnchorCollisionsHorizontally(
   return anyCollision(next) ? null : { layout: next };
 }
 
-function nearestHorizontalSlot(
+function nearestOpenSlot(
   layout: LayoutItem[],
   item: LayoutItem,
   anchor: LayoutItem,
   cols: number,
-  originalX: number,
-): number | null {
+  originalPlacement: Pick<LayoutItem, 'x' | 'y'>,
+  preferredSlot?: Pick<LayoutItem, 'x' | 'y'> | null,
+): Pick<LayoutItem, 'x' | 'y'> | null {
   const maxX = cols - item.w;
   if (maxX < 0) return null;
 
-  let best: { x: number; distance: number } | null = null;
-  for (let x = 0; x <= maxX; x += 1) {
-    const candidate = { ...item, x };
-    if (collides(candidate, anchor)) continue;
-    if (
-      layout.some((other) => {
-        if (other.i === item.i || other.i === anchor.i) return false;
-        return collides(candidate, other);
-      })
-    ) {
-      continue;
-    }
+  const layoutBottom = layout.reduce(
+    (bottom, candidate) => Math.max(bottom, candidate.y + candidate.h),
+    0,
+  );
+  const tallestItem = layout.reduce(
+    (height, candidate) => Math.max(height, candidate.h),
+    item.h,
+  );
+  const maxY = layoutBottom + tallestItem * Math.max(1, layout.length);
 
-    const distance = Math.abs(x - originalX);
-    if (!best || distance < best.distance) best = { x, distance };
+  let best: {
+    x: number;
+    y: number;
+    preferredDistance: number;
+    distance: number;
+  } | null = null;
+
+  for (let y = 0; y <= maxY; y += 1) {
+    for (let x = 0; x <= maxX; x += 1) {
+      const candidate = { ...item, x, y };
+      if (collides(candidate, anchor)) continue;
+      if (
+        layout.some((other) => {
+          if (other.i === item.i || other.i === anchor.i) return false;
+          return collides(candidate, other);
+        })
+      ) {
+        continue;
+      }
+
+      const preferredDistance = preferredSlot
+        ? Math.abs(x - preferredSlot.x) + Math.abs(y - preferredSlot.y)
+        : 0;
+      const distance =
+        Math.abs(x - originalPlacement.x) + Math.abs(y - originalPlacement.y);
+      if (
+        !best ||
+        preferredDistance < best.preferredDistance ||
+        (preferredDistance === best.preferredDistance &&
+          distance < best.distance) ||
+        (preferredDistance === best.preferredDistance &&
+          distance === best.distance &&
+          y < best.y) ||
+        (preferredDistance === best.preferredDistance &&
+          distance === best.distance &&
+          y === best.y &&
+          x < best.x)
+      ) {
+        best = { x, y, preferredDistance, distance };
+      }
+    }
   }
 
-  return best?.x ?? null;
+  return best ? { x: best.x, y: best.y } : null;
 }
 
 function findDroppedItem(layout: Layout): LayoutItem | undefined {
@@ -231,15 +280,23 @@ function cloneLayout(layout: Layout): LayoutItem[] {
   return layout.map((item) => ({ ...item }));
 }
 
-function horizontalMovement(
+function placementMovement(
   before: Layout,
   after: Layout,
   excludeId: string,
 ): number {
-  const beforeX = new Map(before.map((item) => [item.i, item.x]));
+  const beforePlacement = new Map(
+    before.map((item) => [item.i, { x: item.x, y: item.y }]),
+  );
   return after.reduce((sum, item) => {
     if (item.i === excludeId) return sum;
-    return sum + Math.abs(item.x - (beforeX.get(item.i) ?? item.x));
+    const previous = beforePlacement.get(item.i);
+    if (!previous) return sum;
+    return (
+      sum +
+      Math.abs(item.x - previous.x) +
+      Math.abs(item.y - previous.y)
+    );
   }, 0);
 }
 

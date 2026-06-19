@@ -235,7 +235,7 @@ function WorkspaceCanvas({
   const [containerHeight, setContainerHeight] = useState(0);
   const [gridInteraction, setGridInteraction] =
     useState<GridInteraction>(null);
-  const autoFitNextDropRef = useRef(false);
+  const autoFitDropRef = useRef<LayoutItem | null>(null);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -323,24 +323,26 @@ function WorkspaceCanvas({
     oldItem: LayoutItem | null,
     newItem: LayoutItem | null,
   ) => {
-    autoFitNextDropRef.current = !!(
+    autoFitDropRef.current = (
       oldItem &&
       newItem &&
       (oldItem.x !== newItem.x || oldItem.y !== newItem.y)
-    );
+    )
+      ? { ...oldItem }
+      : null;
     setGridInteraction(null);
   }, []);
   const onResizeStop = useCallback(() => {
-    autoFitNextDropRef.current = false;
+    autoFitDropRef.current = null;
     setGridInteraction(null);
   }, []);
   const handleLayoutChange = useCallback(
     (next: Layout) => {
-      const shouldAutoFit = autoFitNextDropRef.current;
-      autoFitNextDropRef.current = false;
+      const previousDropItem = autoFitDropRef.current;
+      autoFitDropRef.current = null;
       onLayoutChange(
-        shouldAutoFit
-          ? autoFitDroppedPanel(next, WORKSPACE_GRID_COLS)
+        previousDropItem
+          ? autoFitDroppedPanel(next, WORKSPACE_GRID_COLS, previousDropItem)
           : next,
       );
     },
