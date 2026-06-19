@@ -18,6 +18,38 @@ AI agents opening PRs against this repo may autonomously fix:
 - **Protocol / WDSP compliance fixes** — where the Zeus behavior diverges from Thetis and Thetis source confirms Zeus is wrong. *Exception:* if the fix changes a default that an operator will feel (TX power cap, filter bandwidth, AGC curve, meter scaling), that is red-light — see below.
 - **Docs and lessons updates** — additions to `docs/lessons/`, `docs/rca/`, `README.md`. Renames and restructuring are red-light. **README scope:** `README.md` stays tight — one-line radio status per board and a high-level feature list only. Extensive feature write-ups, per-panel guides, and step-by-step how-tos belong in the [GitHub wiki](https://github.com/Kb2uka/openhpsdr-zeus/wiki), not the README.
 
+## Hard Rules — PureSignal (KB2UKA standing orders)
+
+**PureSignal is a burn-zone subsystem. No change to PureSignal logic, persistence,
+arm/disarm behaviour, or calibration defaults is permitted without explicit approval
+from KB2UKA (Douglas J. Cerrato). This is a hard rule — not red-light, not a flag,
+a full stop.**
+
+What this covers — any modification (however small) to:
+- `PureSignal` arm state (`PsEnabled`) persistence or startup initialisation
+- `PsSettingsStore`, `PsSettingsEntry`, or any LiteDB field that feeds `PsEnabled`
+- `RadioService.PersistPsState`, `ApplyPsHwPeakForConnection`, or the PS startup
+  rehydration path in `RadioService` initial state
+- The PS-A master arm endpoints (`/api/tx/ps`) or their StateDto wiring
+- `HwPeakByBoard` / `TxAttnByBoard` default values or per-board resolution logic
+- Any change that causes PureSignal to arm automatically without an explicit
+  operator action
+
+**Why it matters:** Zeus runs against real HF power amplifiers. An inadvertently
+armed PureSignal on an external-tap feedback chain (e.g. G2 + RF2K-S) can
+saturate the feedback ADC before the operator has made any transmit decision.
+The no-persist rule on PsEnabled (established in PR #229, re-broken in d4247284)
+exists specifically to prevent silent auto-arm on restart.
+
+**Standing invariant:** `PsEnabled` MUST always initialise to `false` on server
+startup, regardless of what is stored on disk. The operator arms PS manually,
+every session, no exceptions. This is not a UX convenience trade-off — it is a
+safety rule.
+
+If you believe a PureSignal change is necessary, stop, open a GitHub issue
+describing the rationale, and wait for KB2UKA to approve the approach before
+writing a single line of code.
+
 **Red-light (flag for maintainer review, do NOT merge without approval):**
 - **Visual design** — colors, fonts, layout, spacing, typography. The Zeus aesthetic is faithful to the **Hermes Lite 2 hardware front panel**: near-black beveled panel chrome (`--panel-top`/`--panel-bot` gradient) on a blue-gray workspace (`--bg-app` `#657486`), Archivo Narrow type, and a restrained accent system — `--accent` blue `#4a9eff` for focus/state, `--tx` red `#e63a2b` for TX/gain-reduction, `--power` yellow `#ffc93a` for output power, `--orange` `#f28524` reserved for the QRZ button. The single-hue amber `#FFA028` is the **panadapter WebGL trace + meter peak-tick** color (signal-strength visualization, varying alpha — see `gl/panadapter.ts` and `docs/lessons/dev-conventions.md`); it is not a global UI accent and must not be applied to chrome, buttons, or controls. **Source of truth for the global palette is `zeus-web/src/styles/tokens.css`.** Use the existing token variables, never raw hex. Do not propose palette changes.
 - **UX behavior** — what a click/drag/scroll does, keyboard shortcuts, panadapter/waterfall axis direction, VFO tuning feel. "Wrong scroll direction" reports are almost always a missed waterfall horizontal-shift, not an axis bug — see `docs/lessons/`.
