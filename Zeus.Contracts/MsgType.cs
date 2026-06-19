@@ -204,4 +204,19 @@ public enum MsgType : byte
     // Payload: [type:1][bypassed:u8] = 2 bytes total. See
     // RxAudioMasterBypassFrame.cs.
     RxAudioMasterBypass = 0x34,
+
+    // Server → client (ZeusChat event). Broadcast by ChatService for every
+    // operator-to-operator chat update: connection status changes, roster
+    // updates, incoming messages, and the message history snapshot pushed
+    // once per client on WS attach (mirrors the SpotList push-on-attach).
+    // Payload: [type:1][UTF-8 JSON envelope]. The envelope is discriminated
+    // by a camelCase "kind" field:
+    //   {"kind":"status","status":ChatStatusDto}
+    //   {"kind":"roster","roster":ChatOperator[]}
+    //   {"kind":"message","message":ChatMessage}
+    //   {"kind":"history","messages":ChatMessage[]}
+    // JSON (not fixed binary) because the payload is small, low-rate, and the
+    // shapes are richer than the other control frames. UI ignores unknown
+    // kinds so older builds tolerate additions cleanly. See ChatEventFrame.cs.
+    ChatEvent = 0x35,
 }
