@@ -23,7 +23,12 @@
   position: relative;
   width: 100%;
   height: 100%;
-  overflow: hidden;
+  /* Panels keep a fixed cell size (see FlexWorkspace) rather than rescaling to
+   * fit, so a layout taller than the viewport scrolls vertically here instead
+   * of shrinking every panel. Horizontal extent is always the column grid, so
+   * x-overflow stays clipped. */
+  overflow-x: hidden;
+  overflow-y: auto;
   /* v3 Lifted Dark: workspace ground is the distinct mid-grey "table"
    * (--bg-workspace), so the chrome (--bg-0) and the panels (--bg-1) each
    * read as their own surface. */

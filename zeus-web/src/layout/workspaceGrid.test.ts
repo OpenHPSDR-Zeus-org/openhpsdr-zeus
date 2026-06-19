@@ -413,6 +413,30 @@ describe('workspace grid collision policy', () => {
     expectNoCollisions(next);
   });
 
+  it('never shrinks a repositioned panel to fit around a locked panel', () => {
+    // A dropped panel overlapping a locked (static) panel must keep its full
+    // size and relocate below it — repositioning must never resize the panel.
+    const layout: Layout = cloneLayout([
+      { i: 'locked', x: 0, y: 0, w: 24, h: 4, static: true },
+      { i: 'dragged', x: 0, y: 0, w: 10, h: 6, moved: true },
+    ]);
+    const previous = {
+      item: { i: 'dragged', x: 0, y: 10, w: 10, h: 6 },
+      layout: [] as Layout,
+    };
+
+    const next = autoFitDroppedPanel(layout, 24, previous);
+
+    // Full size preserved (not squeezed into the gap), and the lock is intact.
+    expect(next.find((i) => i.i === 'dragged')).toMatchObject({ w: 10, h: 6 });
+    expect(next.find((i) => i.i === 'locked')).toMatchObject({
+      x: 0,
+      y: 0,
+      static: true,
+    });
+    expectNoCollisions(next);
+  });
+
   it('pushes a lower panel down when resize grows into it', () => {
     const layout = cloneLayout(baseLayout);
     layout[0]!.h = 4;

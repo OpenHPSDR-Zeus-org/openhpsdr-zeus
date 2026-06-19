@@ -124,106 +124,63 @@ export function autoFitDroppedPanel(
 
   const footprintX = clamp(target.x, 0, Math.max(0, cols - startW));
   const footprintY = Math.max(0, Math.round(target.y));
-  const footprintRight = Math.min(cols, footprintX + startW);
-  const footprintBottom = footprintY + startH;
 
-  // Fast path — full size at the drop origin. The search below ranks
-  // candidates by originDistance FIRST (|x−footprintX|+|y−footprintY|), and
-  // only the origin cell scores 0, so no farther placement can ever beat an
-  // origin one. At the origin the largest area is the panel's full
-  // (startW × startH) — exactly what the nested loop tries first. So when full
-  // size fits at the origin (the overwhelmingly common drag case, since
-  // resolveAnchorCollisions pushes movable neighbours aside), it is the global
-  // optimum and the whole O(footprintArea × maxW × maxH) sweep is redundant.
-  // Skipping it here is what stops a large panel (e.g. the panadapter/hero
-  // tile, ~18×38) from freezing the main thread for seconds on drop.
-  const originTrial = cloneLayout(base);
-  const originTarget = originTrial.find((item) => item.i === target.i);
-  if (originTarget) {
-    originTarget.x = footprintX;
-    originTarget.y = footprintY;
-    originTarget.w = startW;
-    originTarget.h = startH;
-    const originResolved = resolveAnchorCollisions(
-      originTrial,
-      target.i,
-      cols,
-      previousItem,
+  // Repositioning must NEVER resize the panel — only the explicit corner-resize
+  // handle changes a panel's size. Every placement below therefore keeps the
+  // dragged panel at its full (startW × startH) footprint and moves *other*
+  // panels out of the way (resolveAnchorCollisions pushes movable neighbours
+  // down). The old code shrank the dropped panel to fit leftover space, which
+  // is what made panels change size on a plain reposition.
+  const placeFullSize = (x: number, y: number) => {
+    const trial = cloneLayout(base);
+    const trialTarget = trial.find((item) => item.i === target.i);
+    if (!trialTarget) return null;
+    trialTarget.x = x;
+    trialTarget.y = y;
+    trialTarget.w = startW;
+    trialTarget.h = startH;
+    return resolveAnchorCollisions(trial, target.i, cols, previousItem);
+  };
+
+  // Fast path — full size at the drop origin. The overwhelmingly common case:
+  // resolveAnchorCollisions shoves movable neighbours aside so the panel lands
+  // exactly where it was dropped. Keeping this O(1) (rather than sweeping a
+  // footprint) is also what stops a large tile such as the ~18×38 panadapter/
+  // hero from freezing the main thread for seconds on drop.
+  const originResolved = placeFullSize(footprintX, footprintY);
+  if (originResolved) {
+    return clearMovedFlags(
+      compactMagnetUp(originResolved.layout, target.i, swapped.displaced),
     );
-    if (originResolved) {
+  }
+
+  // Origin blocked (a static/locked panel sits in the drop cell). Keep the
+  // panel's size and search straight down the same column for the nearest
+  // full-size slot rather than shrinking it. Bounded by the layout height, so
+  // it stays cheap.
+  const layoutBottom = base.reduce(
+    (bottom, item) => Math.max(bottom, item.y + item.h),
+    0,
+  );
+  for (let y = footprintY + 1; y <= layoutBottom; y += 1) {
+    const resolved = placeFullSize(footprintX, y);
+    if (resolved) {
       return clearMovedFlags(
-        compactMagnetUp(originResolved.layout, target.i, swapped.displaced),
+        compactMagnetUp(resolved.layout, target.i, swapped.displaced),
       );
     }
   }
 
-  let best: {
-    layout: LayoutItem[];
-    area: number;
-    originDistance: number;
-    movement: number;
-  } | null = null;
-
-  for (let y = footprintY; y <= footprintBottom - minH; y += 1) {
-    // An origin candidate (originDistance 0) is unbeatable by anything farther
-    // out, so once one is found there is no need to keep sweeping the
-    // footprint — this caps the fallback search at the origin cell.
-    if (best && best.originDistance === 0) break;
-    const maxCandidateH = Math.min(maxH, footprintBottom - y);
-    for (let x = footprintX; x <= footprintRight - minW; x += 1) {
-      if (best && best.originDistance === 0) break;
-      const maxCandidateW = Math.min(maxW, footprintRight - x);
-      for (let w = maxCandidateW; w >= minW; w -= 1) {
-        for (let h = maxCandidateH; h >= minH; h -= 1) {
-          const trial = cloneLayout(base);
-          const trialTarget = trial.find((item) => item.i === target.i);
-          if (!trialTarget) continue;
-          trialTarget.x = x;
-          trialTarget.y = y;
-          trialTarget.w = w;
-          trialTarget.h = h;
-
-          const resolved = resolveAnchorCollisions(
-            trial,
-            target.i,
-            cols,
-            previousItem,
-          );
-          if (!resolved) continue;
-
-          const area = w * h;
-          const originDistance =
-            Math.abs(x - footprintX) + Math.abs(y - footprintY);
-          const movement = placementMovement(base, resolved.layout, target.i);
-          if (
-            !best ||
-            originDistance < best.originDistance ||
-            (originDistance === best.originDistance && area > best.area) ||
-            (originDistance === best.originDistance &&
-              area === best.area &&
-              movement < best.movement)
-          ) {
-            best = { layout: resolved.layout, area, originDistance, movement };
-          }
-        }
-      }
-    }
+  // Last resort: drop it full size below everything, which is always free.
+  const tail = cloneLayout(base);
+  const tailTarget = tail.find((item) => item.i === target.i);
+  if (tailTarget) {
+    tailTarget.x = footprintX;
+    tailTarget.y = layoutBottom;
+    tailTarget.w = startW;
+    tailTarget.h = startH;
   }
-
-  if (best) {
-    return clearMovedFlags(
-      compactMagnetUp(best.layout, target.i, swapped.displaced),
-    );
-  }
-
-  const fallback = cloneLayout(base);
-  const fallbackTarget = fallback.find((item) => item.i === target.i);
-  if (!fallbackTarget) return clearMovedFlags(fallback);
-  fallbackTarget.w = minW;
-  fallbackTarget.h = minH;
-  fallbackTarget.x = clamp(fallbackTarget.x, 0, Math.max(0, cols - minW));
-  fallbackTarget.y = Math.max(0, fallbackTarget.y);
-  return clearMovedFlags(compactMagnetUp(fallback, target.i, swapped.displaced));
+  return clearMovedFlags(compactMagnetUp(tail, target.i, swapped.displaced));
 }
 
 function compactResizePushDown(layout: Layout): Layout {
@@ -609,26 +566,6 @@ function cloneLayout(layout: Layout): LayoutItem[] {
 
 function clearMovedFlags(layout: Layout): LayoutItem[] {
   return layout.map((item) => ({ ...item, moved: false }));
-}
-
-function placementMovement(
-  before: Layout,
-  after: Layout,
-  excludeId: string,
-): number {
-  const beforePlacement = new Map(
-    before.map((item) => [item.i, { x: item.x, y: item.y }]),
-  );
-  return after.reduce((sum, item) => {
-    if (item.i === excludeId) return sum;
-    const previous = beforePlacement.get(item.i);
-    if (!previous) return sum;
-    return (
-      sum +
-      Math.abs(item.x - previous.x) +
-      Math.abs(item.y - previous.y)
-    );
-  }, 0);
 }
 
 function anyCollision(layout: Layout): boolean {
