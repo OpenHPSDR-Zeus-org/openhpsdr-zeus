@@ -106,6 +106,8 @@ public static class ZeusEndpoints
             sink.SetMuted(body.Muted);
             return Results.Ok(new { supported = true, muted = sink.IsMuted });
         });
+        app.MapGet("/api/audio/devices", GetNativeAudioDevices);
+        app.MapPut("/api/audio/devices", SetNativeAudioDevices);
 
         static IResult GetAudioSuitePreview(RadioService radio)
         {
@@ -2639,6 +2641,112 @@ public static class ZeusEndpoints
 
     // ---------- helpers (formerly local functions in Program.cs) -------------
 
+    private static IResult GetNativeAudioDevices(IServiceProvider sp)
+    {
+        var sink = sp.GetService<NativeAudioSink>();
+        var mic = sp.GetService<NativeMicCapture>();
+        if (sink is null && mic is null)
+        {
+            return Results.Ok(new NativeAudioDevicesResponse(
+                Supported: false,
+                InputDeviceId: null,
+                OutputDeviceId: null,
+                ActiveInputDeviceId: null,
+                ActiveOutputDeviceId: null,
+                Inputs: [],
+                Outputs: [],
+                Error: null));
+        }
+
+        try
+        {
+            var snapshot = MiniAudioDevices.Enumerate();
+            return Results.Ok(BuildNativeAudioDevicesResponse(
+                sink,
+                mic,
+                snapshot,
+                supported: true,
+                error: null));
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
+        {
+            return Results.Ok(BuildNativeAudioDevicesResponse(
+                sink,
+                mic,
+                MiniAudioDeviceSnapshot.Empty,
+                supported: false,
+                error: ex.Message));
+        }
+    }
+
+    private static async Task<IResult> SetNativeAudioDevices(
+        NativeAudioDevicesSetRequest body,
+        IServiceProvider sp,
+        CancellationToken ct)
+    {
+        var sink = sp.GetService<NativeAudioSink>();
+        var mic = sp.GetService<NativeMicCapture>();
+        if (sink is null && mic is null)
+            return Results.NotFound(new { error = "native audio not active in this host mode" });
+
+        string? inputDeviceId = NormalizeDeviceId(body?.InputDeviceId);
+        string? outputDeviceId = NormalizeDeviceId(body?.OutputDeviceId);
+
+        MiniAudioDeviceSnapshot snapshot;
+        try
+        {
+            snapshot = MiniAudioDevices.Enumerate();
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
+        {
+            return Results.BadRequest(new { error = $"native audio device enumeration unavailable: {ex.Message}" });
+        }
+
+        if (inputDeviceId is not null && snapshot.Inputs.All(d => d.Id != inputDeviceId))
+            return Results.BadRequest(new { error = "inputDeviceId is not in the current native input device list" });
+        if (outputDeviceId is not null && snapshot.Outputs.All(d => d.Id != outputDeviceId))
+            return Results.BadRequest(new { error = "outputDeviceId is not in the current native output device list" });
+
+        if (mic is not null)
+            await mic.SetInputDeviceAsync(inputDeviceId, ct);
+        if (sink is not null)
+            await sink.SetOutputDeviceAsync(outputDeviceId, ct);
+
+        return Results.Ok(BuildNativeAudioDevicesResponse(
+            sink,
+            mic,
+            snapshot,
+            supported: true,
+            error: null));
+    }
+
+    private static NativeAudioDevicesResponse BuildNativeAudioDevicesResponse(
+        NativeAudioSink? sink,
+        NativeMicCapture? mic,
+        MiniAudioDeviceSnapshot snapshot,
+        bool supported,
+        string? error)
+    {
+        return new NativeAudioDevicesResponse(
+            Supported: supported,
+            InputDeviceId: mic?.ConfiguredInputDeviceId,
+            OutputDeviceId: sink?.ConfiguredOutputDeviceId,
+            ActiveInputDeviceId: mic?.ActiveInputDeviceId,
+            ActiveOutputDeviceId: sink?.ActiveOutputDeviceId,
+            Inputs: snapshot.Inputs.Select(ToNativeAudioDeviceDto).ToArray(),
+            Outputs: snapshot.Outputs.Select(ToNativeAudioDeviceDto).ToArray(),
+            Error: error);
+    }
+
+    private static NativeAudioDeviceDto ToNativeAudioDeviceDto(MiniAudioDeviceInfo device) =>
+        new(device.Id, device.Name, device.IsDefault);
+
+    private static string? NormalizeDeviceId(string? deviceId)
+    {
+        var trimmed = deviceId?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
+
     static bool TryParseIpEndpoint(string raw, out IPEndPoint ep)
     {
         ep = null!;
@@ -3636,6 +3744,17 @@ public static class ZeusEndpoints
 }
 
 internal sealed record NativeMuteRequest(bool Muted);
+internal sealed record NativeAudioDevicesSetRequest(string? InputDeviceId, string? OutputDeviceId);
+internal sealed record NativeAudioDeviceDto(string Id, string Name, bool IsDefault);
+internal sealed record NativeAudioDevicesResponse(
+    bool Supported,
+    string? InputDeviceId,
+    string? OutputDeviceId,
+    string? ActiveInputDeviceId,
+    string? ActiveOutputDeviceId,
+    IReadOnlyList<NativeAudioDeviceDto> Inputs,
+    IReadOnlyList<NativeAudioDeviceDto> Outputs,
+    string? Error);
 internal sealed record PreviewSetRequest(bool Enabled, bool? MeterOnly = null);
 internal sealed record ChainOrderSetRequest(List<string> PluginIds);
 internal sealed record ChainMembershipSetRequest(bool Active);

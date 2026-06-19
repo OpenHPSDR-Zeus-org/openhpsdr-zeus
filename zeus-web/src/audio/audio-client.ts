@@ -44,6 +44,7 @@
 
 import type { DecodedAudioFrame } from './frame';
 import { isNativeAudio } from './host-mode';
+import { useAudioDeviceStore } from '../state/audio-device-store';
 
 // createBuffer + scheduled-playback model ported from ProjectLongBanana
 // commit 4acc255b, herpes-client audioPlayer.ts. Drops the AudioWorklet +
@@ -96,6 +97,10 @@ export type AudioPlaybackDiagnosticsSnapshot = {
 };
 
 type Listener = (state: AudioClientState, stats: AudioStats | null) => void;
+
+type SinkSelectableAudioContext = AudioContext & {
+  setSinkId?: (sinkId: string) => Promise<void>;
+};
 
 // Adaptive re-anchor target. A fixed 300 ms floor (the previous value) made the
 // waterfall lead the audio by ~0.3 s — perceptible as display/audio lag. Instead
@@ -198,6 +203,12 @@ class AudioClient {
     return this.starting;
   }
 
+  async setOutputDevice(deviceId = useAudioDeviceStore.getState().browserOutputDeviceId): Promise<void> {
+    const ctx = this.context;
+    if (!ctx) return;
+    await this.applyOutputDevice(ctx, deviceId, true);
+  }
+
   private async doStart() {
     this.setState({ kind: 'loading' });
     try {
@@ -209,6 +220,7 @@ class AudioClient {
       // streaming load). Costs a few extra ms of intrinsic latency, but the
       // operator-perceptible gap is dominated by BUFFER_TARGET_SECS anyway.
       const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' });
+      await this.applyOutputDevice(ctx, useAudioDeviceStore.getState().browserOutputDeviceId, false);
       const gain = ctx.createGain();
       gain.gain.value = 1.0;
       gain.connect(ctx.destination);
@@ -231,6 +243,30 @@ class AudioClient {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       this.setState({ kind: 'error', message });
+    }
+  }
+
+  private async applyOutputDevice(
+    ctx: AudioContext,
+    deviceId: string,
+    strict: boolean,
+  ): Promise<void> {
+    const normalized = deviceId.trim();
+    const selectable = ctx as SinkSelectableAudioContext;
+    if (typeof selectable.setSinkId !== 'function') {
+      if (strict && normalized) {
+        throw new Error('browser audio output selection is not supported');
+      }
+      if (normalized) {
+        console.warn('audio.output.setSinkId unsupported; using browser default output');
+      }
+      return;
+    }
+    try {
+      await selectable.setSinkId(normalized || '');
+    } catch (err) {
+      if (strict) throw err;
+      console.warn('audio.output.setSinkId failed; using browser default output', err);
     }
   }
 

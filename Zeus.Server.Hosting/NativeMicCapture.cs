@@ -12,7 +12,7 @@
 // Frame shape: f32le little-endian, 960 samples mono @ 48 kHz (20 ms
 // blocks), matching the browser worklet's MicPcm payload exactly. The
 // AudioWorklet on the SPA emits the same shape; this just produces it from
-// the OS default input device instead of getUserMedia.
+// the selected OS input device instead of getUserMedia.
 
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
@@ -22,7 +22,7 @@ using Zeus.Contracts;
 namespace Zeus.Server;
 
 /// <summary>
-/// Desktop-mode hosted service that opens the OS default input device via
+/// Desktop-mode hosted service that opens the selected OS input device via
 /// miniaudio and feeds 960-sample (20 ms @ 48 kHz mono) f32le blocks into
 /// <see cref="TxAudioIngest.OnMicPcmBytes"/>. Service mode never registers
 /// this service so the .dylib never loads from the server-only build.
@@ -58,8 +58,11 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
     private readonly StreamingHub _hub;
     private readonly AudioPluginBridge _bridge;
     private readonly ILogger<NativeMicCapture> _log;
+    private readonly AudioDeviceSettingsStore? _deviceSettings;
 
     private MiniAudioInput? _input;
+    private readonly object _deviceSync = new();
+    private string? _activeInputDeviceId;
     private readonly float[] _accum = new float[MicBlockSamples];
     private int _accumFill;
     // Pre-allocated payload buffer reused for every flush; OnMicPcmBytes
@@ -84,52 +87,133 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
         TxAudioIngest ingest,
         StreamingHub hub,
         AudioPluginBridge bridge,
-        ILogger<NativeMicCapture> log)
+        ILogger<NativeMicCapture> log,
+        AudioDeviceSettingsStore? deviceSettings = null)
     {
         _ingest = ingest;
         _hub = hub;
         _bridge = bridge;
         _log = log;
+        _deviceSettings = deviceSettings;
     }
+
+    public string? ConfiguredInputDeviceId => _deviceSettings?.Get().InputDeviceId;
+    public string? ActiveInputDeviceId => _activeInputDeviceId;
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        try
+        lock (_deviceSync)
         {
-            _input = new MiniAudioInput(
-                onFrames: OnCaptureData,
-                onNotify: OnDeviceNotification,
-                preferSampleRate: 48_000,
-                preferChannels: 1,
-                periodFrames: 480,
-                periods: 2);
-            _input.Start();
-            _log.LogInformation(
-                "audio.native.tx mic open rate={Rate}Hz channels={Channels}",
-                _input.SampleRate, _input.Channels);
-        }
-        catch (Exception ex)
-        {
-            // Don't kill the host — desktop mode without a working mic should
-            // still RX. The operator may not even have a mic plugged in.
-            _log.LogWarning(ex, "audio.native.tx mic open failed; TX uplink disabled");
-            _input = null;
+            if (_input != null) return Task.CompletedTask;
+            OpenInputLocked(ConfiguredInputDeviceId);
         }
         return Task.CompletedTask;
     }
 
     public Task StopAsync(CancellationToken cancellationToken)
     {
-        try { _input?.Stop(); }
-        catch (Exception ex) { _log.LogWarning(ex, "audio.native.tx stop threw"); }
+        lock (_deviceSync)
+        {
+            try { _input?.Stop(); }
+            catch (Exception ex) { _log.LogWarning(ex, "audio.native.tx stop threw"); }
+        }
         return Task.CompletedTask;
     }
 
     public void Dispose()
     {
-        try { _input?.Dispose(); }
-        catch (Exception ex) { _log.LogWarning(ex, "audio.native.tx dispose threw"); }
+        lock (_deviceSync)
+        {
+            CloseInputLocked(dispose: true);
+        }
+    }
+
+    public Task SetInputDeviceAsync(string? deviceId, CancellationToken cancellationToken = default)
+    {
+        string? normalized = NormalizeDeviceId(deviceId);
+        _deviceSettings?.SetInputDeviceId(normalized);
+
+        lock (_deviceSync)
+        {
+            CloseInputLocked(dispose: true);
+            ResetAccumulation();
+            OpenInputLocked(normalized);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void OpenInputLocked(string? requestedDeviceId)
+    {
+        try
+        {
+            _input = CreateInput(requestedDeviceId);
+            _input.Start();
+            _activeInputDeviceId = NormalizeDeviceId(requestedDeviceId);
+            _log.LogInformation(
+                "audio.native.tx mic open device={Device} rate={Rate}Hz channels={Channels}",
+                _activeInputDeviceId is null ? "default" : "selected",
+                _input.SampleRate, _input.Channels);
+            return;
+        }
+        catch (Exception ex) when (!string.IsNullOrWhiteSpace(requestedDeviceId))
+        {
+            _log.LogWarning(ex, "audio.native.tx selected mic open failed; falling back to default");
+            CloseInputLocked(dispose: true);
+        }
+        catch (Exception ex)
+        {
+            // Don't kill the host; desktop mode without a working mic should
+            // still RX. The operator may not even have a mic plugged in.
+            _log.LogWarning(ex, "audio.native.tx mic open failed; TX uplink disabled");
+            CloseInputLocked(dispose: true);
+            return;
+        }
+
+        try
+        {
+            _input = CreateInput(null);
+            _input.Start();
+            _activeInputDeviceId = null;
+            _log.LogInformation(
+                "audio.native.tx mic open device=default rate={Rate}Hz channels={Channels}",
+                _input.SampleRate, _input.Channels);
+        }
+        catch (Exception fallbackEx)
+        {
+            _log.LogWarning(fallbackEx, "audio.native.tx default mic fallback open failed; TX uplink disabled");
+            CloseInputLocked(dispose: true);
+        }
+    }
+
+    private MiniAudioInput CreateInput(string? deviceId) =>
+        new(
+            onFrames: OnCaptureData,
+            onNotify: OnDeviceNotification,
+            deviceIdHex: NormalizeDeviceId(deviceId),
+            preferSampleRate: 48_000,
+            preferChannels: 1,
+            periodFrames: 480,
+            periods: 2);
+
+    private void CloseInputLocked(bool dispose)
+    {
+        try { _input?.Stop(); }
+        catch (Exception ex) { _log.LogWarning(ex, "audio.native.tx stop threw"); }
+        if (dispose)
+        {
+            try { _input?.Dispose(); }
+            catch (Exception ex) { _log.LogWarning(ex, "audio.native.tx dispose threw"); }
+        }
         _input = null;
+        _activeInputDeviceId = null;
+    }
+
+    private void ResetAccumulation()
+    {
+        _accumFill = 0;
+        _peakWindow = 0f;
+        _peakWindowFill = 0;
     }
 
     private void OnCaptureData(ReadOnlySpan<float> input, uint frameCount, uint channels)
@@ -285,6 +369,12 @@ internal sealed class NativeMicCapture : IHostedService, IDisposable
 
     internal static float SanitizeCapturedSample(float sample)
         => DspPipelineService.SanitizeAudioSample(sample);
+
+    private static string? NormalizeDeviceId(string? deviceId)
+    {
+        var trimmed = deviceId?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
 
     internal static float DownmixCapturedFrame(
         ReadOnlySpan<float> interleavedSamples,

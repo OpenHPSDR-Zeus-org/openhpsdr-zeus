@@ -67,6 +67,7 @@ internal sealed class MiniAudioOutput : IDisposable
     public MiniAudioOutput(
         FramesCallback onFrames,
         Action<int>? onNotify = null,
+        string? deviceIdHex = null,
         uint preferSampleRate = 48_000,
         uint preferChannels = 2,
         uint periodFrames = 480,
@@ -83,11 +84,12 @@ internal sealed class MiniAudioOutput : IDisposable
         _nativeDataCb = NativeDataCallback;
         _nativeNotifyCb = NativeNotifyCallback;
 
-        _handle = MiniAudioInterop.OutputCreate(
+        _handle = CreateNativeHandle(
             preferSampleRate,
             preferChannels,
             periodFrames,
             periods,
+            deviceIdHex,
             Marshal.GetFunctionPointerForDelegate(_nativeDataCb),
             Marshal.GetFunctionPointerForDelegate(_nativeNotifyCb),
             IntPtr.Zero);
@@ -95,11 +97,54 @@ internal sealed class MiniAudioOutput : IDisposable
         if (_handle == IntPtr.Zero)
         {
             throw new InvalidOperationException(
-                "miniaudio: failed to open default playback device (zeus_ma_output_create returned NULL).");
+                deviceIdHex is null
+                    ? "miniaudio: failed to open default playback device (zeus_ma_output_create returned NULL)."
+                    : "miniaudio: failed to open selected playback device (zeus_ma_output_create_for_device returned NULL).");
         }
 
         SampleRate = MiniAudioInterop.OutputSampleRate(_handle);
         Channels = MiniAudioInterop.OutputChannels(_handle);
+    }
+
+    private static IntPtr CreateNativeHandle(
+        uint preferSampleRate,
+        uint preferChannels,
+        uint periodFrames,
+        uint periods,
+        string? deviceIdHex,
+        IntPtr dataCallback,
+        IntPtr notifyCallback,
+        IntPtr user)
+    {
+        if (string.IsNullOrWhiteSpace(deviceIdHex))
+        {
+            return MiniAudioInterop.OutputCreate(
+                preferSampleRate,
+                preferChannels,
+                periodFrames,
+                periods,
+                dataCallback,
+                notifyCallback,
+                user);
+        }
+
+        IntPtr deviceIdPtr = Marshal.StringToCoTaskMemUTF8(deviceIdHex);
+        try
+        {
+            return MiniAudioInterop.OutputCreateForDevice(
+                preferSampleRate,
+                preferChannels,
+                periodFrames,
+                periods,
+                deviceIdPtr,
+                dataCallback,
+                notifyCallback,
+                user);
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(deviceIdPtr);
+        }
     }
 
     /// <summary>Start the device. Idempotent.</summary>
