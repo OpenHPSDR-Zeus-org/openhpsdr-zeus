@@ -17,6 +17,12 @@ export const WORKSPACE_RESIZE_COMPACTOR: Compactor = {
   compact: compactResizePushDown,
 };
 
+// Open-slot search ceiling, in multiples of the tallest item past the current
+// layout bottom. Bounded so the displacement search can't run away on deep
+// layouts (see nearestOpenSlot). Two tall items' worth of rows is always
+// enough room to find a vacant slot below an obstruction.
+const MAX_OPEN_SLOT_SPAN = 2;
+
 function compactDragSparse(layout: Layout): Layout {
   const priorityId = layout.find((item) => item.moved)?.i;
   return compactPushDownWithPriority(layout, priorityId).map((item) => ({
@@ -99,7 +105,7 @@ export function autoFitDroppedPanel(
     }
   }
 
-  if (best) return best.layout;
+  if (best) return liftLayoutToTop(best.layout);
 
   const fallback = cloneLayout(base);
   const fallbackTarget = fallback.find((item) => item.i === target.i);
@@ -108,7 +114,30 @@ export function autoFitDroppedPanel(
   fallbackTarget.h = minH;
   fallbackTarget.x = clamp(fallbackTarget.x, 0, Math.max(0, cols - minW));
   fallbackTarget.y = Math.max(0, fallbackTarget.y);
-  return compactPushDownWithPriority(fallback, target.i);
+  return liftLayoutToTop(compactPushDownWithPriority(fallback, target.i));
+}
+
+// Re-anchor the whole layout to row 0. Drags only ever push neighbours DOWN —
+// there is no compaction that pulls them back up — so each persisted move can
+// leave the smallest top gap a little larger than before, and the layout's
+// overall height ratchets upward across many moves. FlexWorkspace divides the
+// container height by that growing row count, so rowHeight floors toward zero
+// and every tile renders sub-pixel and blank. Subtracting the minimum top
+// offset from every row (preserving all relative spacing and the panel count)
+// keeps the layout's true height bounded by its contents, which is the root
+// fix for the "screen goes blank after moving a bunch of panels" leak.
+//
+// Note (red-light flag for Brian/Doug): this snaps a deliberately-left gap at
+// the very top of the workspace up to row 0 on the next persisted drag. We only
+// lift at persisted drag exits (not during the live drag), so the operator
+// still sees their gap mid-gesture; it just normalizes away once they drop.
+export function liftLayoutToTop(layout: Layout): LayoutItem[] {
+  const next = cloneLayout(layout);
+  if (next.length === 0) return next;
+  const minY = next.reduce((min, item) => Math.min(min, item.y), Infinity);
+  if (!Number.isFinite(minY) || minY <= 0) return next;
+  for (const item of next) item.y -= minY;
+  return next;
 }
 
 function compactResizePushDown(layout: Layout): Layout {
@@ -216,7 +245,16 @@ function nearestOpenSlot(
     (height, candidate) => Math.max(height, candidate.h),
     item.h,
   );
-  const maxY = layoutBottom + tallestItem * Math.max(1, layout.length);
+  // Bound the open-slot search to a fixed multiple of the tallest item rather
+  // than scaling it with layout depth. The previous `layoutBottom + tallest *
+  // length` ceiling let the search wander arbitrarily far below the layout when
+  // many panels were stacked; combined with the no-upward-re-anchor mechanism
+  // that grew the layout each move (see liftLayoutToTop) it fed an ever-taller
+  // persisted layout into FlexWorkspace, whose fit-to-viewport divisor then
+  // floored rowHeight and blanked every tile (the "blank after many moves"
+  // leak). A small constant span past the current bottom is always enough to
+  // find a vacant row.
+  const maxY = layoutBottom + tallestItem * MAX_OPEN_SLOT_SPAN;
 
   let best: {
     x: number;

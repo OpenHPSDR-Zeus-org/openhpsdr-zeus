@@ -318,7 +318,15 @@ function WorkspaceCanvas({
     [],
   );
 
-  const onDragStart = useCallback(() => setGridInteraction('drag'), []);
+  const onDragStart = useCallback(() => {
+    // Clear any drop intent left over from a previous gesture. RGL can fire a
+    // fresh onDragStart without an intervening onLayoutChange (e.g. a click that
+    // doesn't move, or a drag cancelled by losing pointer capture), and a stale
+    // autoFitDropRef would then make the NEXT layout change auto-fit the wrong
+    // panel against the wrong previous footprint. Defensive, but cheap.
+    autoFitDropRef.current = null;
+    setGridInteraction('drag');
+  }, []);
   const onResizeStart = useCallback(() => setGridInteraction('resize'), []);
   const onDragStop = useCallback((
     _layout: Layout,
