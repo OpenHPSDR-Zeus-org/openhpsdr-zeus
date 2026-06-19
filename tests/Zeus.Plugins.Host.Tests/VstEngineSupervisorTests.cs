@@ -33,6 +33,34 @@ public class VstEngineSupervisorTests
         return cond();
     }
 
+    // Polls <read> until its value stops changing for <settleMs> consecutive ms
+    // (i.e. it has plateaued), returning true; or false at <timeoutMs> if it
+    // never settles (kept growing). Used to assert "no more work is scheduled"
+    // deterministically: a loaded CI runner can lag a single in-flight operation
+    // past a fixed wall-clock window, but a plateau is observable at any runner
+    // speed, so a stop-condition expressed this way is not timing-racy.
+    private static async Task<bool> WaitUntilStableAsync(Func<int> read, int settleMs, int timeoutMs)
+    {
+        var total = Stopwatch.StartNew();
+        var last = read();
+        var stableSince = Stopwatch.StartNew();
+        while (total.ElapsedMilliseconds < timeoutMs)
+        {
+            await Task.Delay(10);
+            var now = read();
+            if (now != last)
+            {
+                last = now;
+                stableSince.Restart();
+            }
+            else if (stableSince.ElapsedMilliseconds >= settleMs)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// <summary>A scriptable in-process stand-in for the engine process.</summary>
     private sealed class FakeProcess : IVstEngineProcess
     {
@@ -165,11 +193,15 @@ public class VstEngineSupervisorTests
         Assert.Equal(VstEngineState.Faulted, c.State);
         Assert.False(c.IsActive);
 
-        // After faulting it cools down — the attempt count must plateau.
-        int countAtFault = created;
-        await Task.Delay(300);
-        Assert.True(created <= countAtFault + 1,
-            $"should stop hot-looping after fault (was {countAtFault}, now {created})");
+        // After faulting it cools down (FaultCooldownMs = 5 s, far longer than a
+        // relaunch cycle). At most one relaunch may be in flight at the instant
+        // the cap trips; once that settles the spawn count must STOP GROWING.
+        // Assert that plateau directly — a stable count is observable at any
+        // runner speed, whereas the old fixed 300 ms / +1 window let a loaded
+        // Windows CI runner lag an in-flight launch past it and flake.
+        Assert.True(await WaitUntilStableAsync(() => created, settleMs: 150, timeoutMs: 3000),
+            $"spawn count should plateau (stop hot-looping) after fault; now {created}");
+        Assert.Equal(VstEngineState.Faulted, c.State); // stayed faulted, not relaunching
     }
 
     // ── Hang watchdog recycles an alive-but-unresponsive engine ───────────────
