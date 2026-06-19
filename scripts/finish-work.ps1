@@ -16,10 +16,14 @@ param(
     [string]$BaseBranch = 'develop',
     [string]$PrRepo = 'OpenHPSDR-Zeus-org/openhpsdr-zeus',
     [string]$BdRemote = 'kb2uka',
+    [string]$LocalBranch = 'local/develop',
+    [string]$WorktreeRoot,
     [switch]$Draft,
     [switch]$SkipTests,
     [switch]$NoPr,
     [switch]$NoBdPush,
+    [switch]$PromoteLocal,
+    [switch]$RemoveWorktree,
     [switch]$TakeNext,
     [ValidateRange(1, 32)]
     [int]$NextCount = 1
@@ -47,7 +51,7 @@ function Invoke-Native {
     )
 
     Write-Host "==> $Label" -ForegroundColor Cyan
-    & $File @Arguments
+    & $File @Arguments | ForEach-Object { Write-Host $_ }
     if ($LASTEXITCODE -ne 0) {
         throw "$Label failed with exit code $LASTEXITCODE"
     }
@@ -87,12 +91,71 @@ function Get-RemoteOwner {
     return $null
 }
 
+function Get-WorktreeRecords {
+    $records = @()
+    $current = $null
+    $lines = Invoke-GitCapture @('worktree', 'list', '--porcelain')
+
+    foreach ($line in $lines) {
+        if ($line.StartsWith('worktree ')) {
+            if ($current) {
+                $records += [pscustomobject]$current
+            }
+
+            $current = [ordered]@{
+                Path = $line.Substring('worktree '.Length)
+                Branch = $null
+            }
+            continue
+        }
+
+        if ($current -and $line.StartsWith('branch refs/heads/')) {
+            $current.Branch = $line.Substring('branch refs/heads/'.Length)
+        }
+    }
+
+    if ($current) {
+        $records += [pscustomobject]$current
+    }
+
+    return $records
+}
+
+function Get-PrimaryWorktree {
+    $records = Get-WorktreeRecords
+    if ($records.Count -eq 0) {
+        return (Invoke-GitCapture @('rev-parse', '--show-toplevel') | Select-Object -First 1)
+    }
+
+    return $records[0].Path
+}
+
+function Test-GitRef {
+    param([string]$Ref)
+
+    & git show-ref --verify --quiet $Ref
+    return $LASTEXITCODE -eq 0
+}
+
+function Test-PathInside {
+    param(
+        [string]$Path,
+        [string]$Parent
+    )
+
+    $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+    $resolvedParent = [System.IO.Path]::GetFullPath($Parent).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    return $resolvedPath.StartsWith($resolvedParent, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
 function Invoke-TakeNextIfRequested {
+    param([string]$Root = $repoRoot)
+
     if (-not $TakeNext) {
         return
     }
 
-    $takeWorkScript = Join-Path $repoRoot 'scripts/take-work.ps1'
+    $takeWorkScript = Join-Path $Root 'scripts/take-work.ps1'
     if (-not (Test-Path -LiteralPath $takeWorkScript)) {
         throw "Cannot take next work; missing script: $takeWorkScript"
     }
@@ -117,6 +180,70 @@ function Update-RequiredSubmodulesIfNeeded {
     }
 }
 
+function Invoke-PromoteLocalIfRequested {
+    if (-not $PromoteLocal) {
+        return $repoRoot
+    }
+
+    $primary = Resolve-Path -LiteralPath (Get-PrimaryWorktree)
+    $primaryPath = $primary.ProviderPath
+    $primaryStatus = @(git -C $primaryPath status --porcelain)
+    if ($LASTEXITCODE -ne 0) {
+        throw "git -C '$primaryPath' status failed with exit code $LASTEXITCODE"
+    }
+
+    if ($primaryStatus.Count -gt 0) {
+        throw "Primary checkout has uncommitted changes; cannot promote into $LocalBranch`: $primaryPath"
+    }
+
+    Invoke-Native "Fetch $BaseRemote/$BaseBranch for local trunk" 'git' @('-C', $primaryPath, 'fetch', $BaseRemote, $BaseBranch)
+    $baseRef = "$BaseRemote/$BaseBranch"
+
+    if (Test-GitRef "refs/heads/$LocalBranch") {
+        Invoke-Native "Switch primary checkout to $LocalBranch" 'git' @('-C', $primaryPath, 'switch', $LocalBranch)
+        Invoke-Native "Rebase $LocalBranch onto $baseRef" 'git' @('-C', $primaryPath, 'rebase', $baseRef)
+    }
+    else {
+        Invoke-Native "Create $LocalBranch from $baseRef" 'git' @('-C', $primaryPath, 'switch', '-c', $LocalBranch, $baseRef)
+    }
+
+    Invoke-Native "Merge $branch into $LocalBranch" 'git' @('-C', $primaryPath, 'merge', '--no-edit', $branch)
+    return $primaryPath
+}
+
+function Remove-CurrentWorktreeIfRequested {
+    param([string]$PostActionRoot)
+
+    if (-not $RemoveWorktree) {
+        return $PostActionRoot
+    }
+
+    $primary = Resolve-Path -LiteralPath (Get-PrimaryWorktree)
+    $primaryPath = $primary.ProviderPath
+    if ([System.IO.Path]::GetFullPath($primaryPath) -eq [System.IO.Path]::GetFullPath($repoRoot)) {
+        throw "Refusing to remove the primary checkout as a worktree."
+    }
+
+    $rootForWorktrees = $WorktreeRoot
+    if (-not $rootForWorktrees) {
+        $rootForWorktrees = Join-Path (Split-Path -Parent $primaryPath) "$(Split-Path -Leaf $primaryPath).Worktrees"
+    }
+
+    if (-not (Test-PathInside -Path $repoRoot -Parent $rootForWorktrees)) {
+        throw "Refusing to remove worktree outside expected root '$rootForWorktrees': $repoRoot"
+    }
+
+    Set-Location $primaryPath
+    Invoke-Native "Remove finished worktree $branch" 'git' @('worktree', 'remove', '--force', $repoRoot)
+    return $primaryPath
+}
+
+function Invoke-PostPrSuccess {
+    $postActionRoot = Invoke-PromoteLocalIfRequested
+    $postActionRoot = Remove-CurrentWorktreeIfRequested -PostActionRoot $postActionRoot
+    Invoke-TakeNextIfRequested -Root $postActionRoot
+}
+
 $repoRoot = (Invoke-GitCapture @('rev-parse', '--show-toplevel') | Select-Object -First 1)
 Set-Location $repoRoot
 Set-GitHooksPath
@@ -126,8 +253,8 @@ Assert-FeatureBranch $branch
 
 Write-Host "==> Finishing $branch" -ForegroundColor Cyan
 
-if ($NoPr -and $TakeNext) {
-    throw "-TakeNext requires PR creation; remove -NoPr or run scripts/take-work.ps1 separately."
+if ($NoPr -and ($TakeNext -or $PromoteLocal -or $RemoveWorktree)) {
+    throw "-TakeNext, -PromoteLocal, and -RemoveWorktree require PR creation; remove -NoPr or run the follow-up step separately."
 }
 
 $status = @(Invoke-GitCapture @('status', '--porcelain'))
@@ -192,8 +319,8 @@ if ($NoPr) {
 }
 
 if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-    if ($TakeNext) {
-        throw "Cannot use -TakeNext because GitHub CLI 'gh' is not installed or not on PATH; PR was not created."
+    if ($TakeNext -or $PromoteLocal -or $RemoveWorktree) {
+        throw "Cannot run post-PR actions because GitHub CLI 'gh' is not installed or not on PATH; PR was not created."
     }
 
     Write-Warning "GitHub CLI 'gh' is not installed or not on PATH. Branch is pushed; create the PR manually into $BaseBranch."
@@ -205,7 +332,7 @@ $head = if ($owner) { "$owner`:$branch" } else { $branch }
 $existingPr = & gh pr list --repo $PrRepo --head $branch --json url --jq '.[0].url' 2>$null
 if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($existingPr)) {
     Write-Host "==> PR already exists: $existingPr" -ForegroundColor Green
-    Invoke-TakeNextIfRequested
+    Invoke-PostPrSuccess
     exit 0
 }
 
@@ -233,4 +360,4 @@ if ($Draft) {
 }
 
 Invoke-Native 'Create PR' 'gh' $prArgs
-Invoke-TakeNextIfRequested
+Invoke-PostPrSuccess
