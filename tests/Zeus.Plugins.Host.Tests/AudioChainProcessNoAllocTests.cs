@@ -27,6 +27,7 @@ namespace Zeus.Plugins.Host.Tests;
 /// it survives integer division and trips the assert; the JIT artifact does
 /// not.
 /// </summary>
+[Collection("LoadSensitive")]
 public class AudioChainProcessNoAllocTests
 {
     private const int Iterations = 10_000;
@@ -40,12 +41,19 @@ public class AudioChainProcessNoAllocTests
         var ctx = new AudioBlockContext(48000, 1, 256, 0, false);
         for (int i = 0; i < input.Length; i++) input[i] = (float)i / 256f;
 
-        // Warm-up: prime any one-shot init that AudioChain does on
-        // first call.
-        for (int i = 0; i < 16; i++) chain.Process(input, output, ctx);
+        // Window 1 — warm up AND absorb tiered-JIT recompilation. Tiered
+        // compilation can promote Process() to tier-1 / perform on-stack
+        // replacement WHILE the loop is already running, charging a one-shot
+        // allocation to this thread that a short fixed warm-up races on a
+        // loaded runner (the intermittent macOS red, where the blip exceeded
+        // even a per-block threshold). Running a FULL window first drives the
+        // path fully into tier-1, so the measured window below is the true
+        // steady-state hot path. The [Collection("LoadSensitive")] isolation
+        // keeps sibling tests from perturbing this further.
+        for (int i = 0; i < Iterations; i++) chain.Process(input, output, ctx);
 
-        // Measure thread-local bytes allocated across the hot loop on this
-        // same thread. Immune to GCs triggered by other threads.
+        // Window 2 — fully warmed + tiered: measure thread-local bytes across
+        // the steady-state hot loop. Immune to GCs triggered by other threads.
         var startBytes = GC.GetAllocatedBytesForCurrentThread();
 
         for (int i = 0; i < Iterations; i++)
