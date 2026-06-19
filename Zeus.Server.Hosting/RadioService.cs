@@ -418,7 +418,7 @@ public sealed class RadioService : IDisposable
             AutoAgcEnabled: rsSnap?.AutoAgcEnabled ?? false,
             AgcOffsetDb: 0.0,       // always reset — control-loop accumulator
             // PS persisted fields (or DTO defaults when not persisted yet).
-            PsEnabled: ps?.Enabled ?? false,
+            PsEnabled: false, // master arm is never persisted — operator must re-arm each session
             PsAuto: ps?.Auto ?? true,
             PsPtol: ps?.Ptol ?? false,
             PsAutoAttenuate: ps?.AutoAttenuate ?? true,
@@ -479,7 +479,7 @@ public sealed class RadioService : IDisposable
     /// callers don't drop fields by writing only what they touched. Called
     /// from SetPs, SetPsAdvanced, SetPsFeedbackSource, and SetTwoTone.
     ///
-    /// PsEnabled is persisted as the operator's standing PS preference.
+    /// PsEnabled is NOT persisted — master arm resets to false each session.
     /// TwoToneEnabled remains session-only because it can key the transmitter.
     /// PsHwPeak IS persisted per-connected-board via the HwPeakByBoard dictionary;
     /// when no board is currently connected the HwPeak portion of the write
@@ -514,7 +514,6 @@ public sealed class RadioService : IDisposable
         }
         _psStore.Upsert(new PsSettingsEntry
         {
-            Enabled = snap.PsEnabled,
             Auto = snap.PsAuto,
             Ptol = snap.PsPtol,
             AutoAttenuate = snap.PsAutoAttenuate,

@@ -25,14 +25,14 @@ using Zeus.Contracts;
 namespace Zeus.Server;
 
 // PureSignal settings persistence. Stores the operator's calibration tuning
-// (master arm, timing delays, ints/spi preset, ptol mode, auto-attenuate,
-// per-board HW peak) so it survives server restarts. Shares zeus-prefs.db
-// with DspSettingsStore.
+// (timing delays, ints/spi preset, ptol mode, auto-attenuate, per-board HW
+// peak) so it survives server restarts. Shares zeus-prefs.db with
+// DspSettingsStore.
 //
-// Deliberately does NOT persist `PsSingle` (one-shot cal mode). It resets to
-// a safe default each session. The PS master arm does persist because it is a
-// standing operator preference; actual transmit/keying actions (MOX / TUN /
-// TwoToneEnabled) remain session-only.
+// Deliberately does NOT persist `PsEnabled` (the master arm) or `PsSingle`
+// (one-shot cal mode) -- these reset to safe defaults each session. Same
+// pattern as MOX / TUN: arming PS is an explicit operator action, never an
+// automatic "resume what we did last time" behaviour.
 //
 // `HwPeakByBoard` IS persisted as of 2026-05-16. The earlier "re-derive per
 // radio at connect time" assumption clobbered operator-calibrated values
@@ -91,7 +91,6 @@ public sealed class PsSettingsEntry
 {
     public int Id { get; set; }
     public string ProfileId { get; set; } = string.Empty;
-    public bool Enabled { get; set; }
     // Cal-mode default — Auto = continuous adapt. Persisted because operators
     // who prefer single-shot calibration (and run TwoTone manually) want that
     // selection to stick across sessions.
@@ -108,9 +107,9 @@ public sealed class PsSettingsEntry
     public PsFeedbackSource Source { get; set; } = PsFeedbackSource.Internal;
     // Two-tone test generator settings. Persisted so an operator who has
     // dialled in custom IMD test tones (e.g. for a specific filter response
-    // or PA test) doesn't have to re-enter them every session. TwoToneEnabled
-    // is intentionally NOT persisted — same operator-action discipline as
-    // MOX/TUN — but the dialled-in freqs/mag are.
+    // or PA test) doesn't have to re-enter them every session. PsEnabled and
+    // TwoToneEnabled are intentionally NOT persisted -- same operator-action
+    // discipline as MOX/TUN -- but the dialled-in freqs/mag are.
     // Defaults match tx-store.ts (700/1900/0.49) and pihpsdr.
     public double TwoToneFreq1 { get; set; } = 700.0;
     public double TwoToneFreq2 { get; set; } = 1900.0;
