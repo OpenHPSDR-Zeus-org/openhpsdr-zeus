@@ -24,6 +24,10 @@ interface TileRect {
   height: number;
 }
 
+interface StubbedZeusApi {
+  layoutWrites: { count: number };
+}
+
 async function fulfillJson(route: Route, body: unknown) {
   await route.fulfill({
     status: 200,
@@ -32,7 +36,9 @@ async function fulfillJson(route: Route, body: unknown) {
   });
 }
 
-async function stubZeusApi(page: Page) {
+async function stubZeusApi(page: Page): Promise<StubbedZeusApi> {
+  const layoutWrites = { count: 0 };
+
   await page.addInitScript(() => {
     class MockZeusWebSocket extends EventTarget {
       readonly url: string;
@@ -123,6 +129,7 @@ async function stubZeusApi(page: Page) {
     }
 
     if (url.pathname === '/api/ui/layouts') {
+      layoutWrites.count += 1;
       await route.fulfill({ status: 204, body: '' });
       return;
     }
@@ -134,6 +141,8 @@ async function stubZeusApi(page: Page) {
 
     await fulfillJson(route, {});
   });
+
+  return { layoutWrites };
 }
 
 async function tileRects(page: Page): Promise<TileRect[]> {
@@ -178,20 +187,61 @@ function expectRectNear(actual: TileRect, expected: TileRect) {
   expect(Math.abs(actual.height - expected.height)).toBeLessThanOrEqual(4);
 }
 
-async function centerOf(locator: ReturnType<Page['locator']>) {
-  const box = await locator.boundingBox();
-  if (!box) throw new Error('Expected locator to have a bounding box');
-  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+async function waitForRectNear(page: Page, uid: string, expected: TileRect) {
+  await expect
+    .poll(
+      async () => {
+        const actual = rectFor(await tileRects(page), uid);
+        return Math.max(
+          Math.abs(actual.x - expected.x),
+          Math.abs(actual.y - expected.y),
+          Math.abs(actual.width - expected.width),
+          Math.abs(actual.height - expected.height),
+        );
+      },
+      { timeout: 1000 },
+    )
+    .toBeLessThanOrEqual(4);
 }
 
-test('dragging a panel into an occupied workspace slot displaces panels without blanking the grid', async ({
-  page,
-}) => {
+async function centerOf(locator: ReturnType<Page['locator']>) {
+  await expect(locator).toBeVisible();
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const box = await locator.boundingBox();
+    if (box && box.width > 0 && box.height > 0) {
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    }
+
+    await locator.page().waitForTimeout(50);
+  }
+
+  throw new Error('Expected locator to have a stable bounding box');
+}
+
+async function openStubbedWorkspace(page: Page) {
   const pageErrors: string[] = [];
   page.on('pageerror', (err) => pageErrors.push(err.message));
-  await stubZeusApi(page);
+  const api = await stubZeusApi(page);
 
   await page.goto('/');
+
+  return { pageErrors, layoutWrites: api.layoutWrites };
+}
+
+function expectNoReactDragLoop(pageErrors: string[]) {
+  expect(pageErrors).not.toContainEqual(
+    expect.stringContaining('Maximum update depth exceeded'),
+  );
+  expect(pageErrors).not.toContainEqual(
+    expect.stringContaining('Minified React error #185'),
+  );
+}
+
+test('dragging a panel into an occupied workspace slot swaps without blanking the grid', async ({
+  page,
+}) => {
+  const { pageErrors, layoutWrites } = await openStubbedWorkspace(page);
 
   const draggedHeader = page.locator(
     '[data-tile-uid="tile-filterpresets"] .workspace-tile-header',
@@ -210,7 +260,10 @@ test('dragging a panel into an occupied workspace slot displaces panels without 
   await page.mouse.move(start.x, start.y);
   await page.mouse.down();
   await page.mouse.move(target.x, target.y, { steps: 12 });
-  await page.waitForTimeout(250);
+  await waitForRectNear(page, 'tile-filterpresets', targetBefore);
+  await waitForRectNear(page, 'tile-tx', draggedBefore);
+  await page.waitForTimeout(1100);
+  expect(layoutWrites.count).toBe(0);
 
   const duringDrag = await tileRects(page);
   expect(duringDrag).toHaveLength(8);
@@ -219,17 +272,48 @@ test('dragging a panel into an occupied workspace slot displaces panels without 
   expectRectNear(rectFor(duringDrag, 'tile-tx'), draggedBefore);
 
   await page.mouse.up();
-  await page.waitForTimeout(500);
+  await waitForRectNear(page, 'tile-filterpresets', targetBefore);
+  await waitForRectNear(page, 'tile-tx', draggedBefore);
+  await expect.poll(() => layoutWrites.count, { timeout: 3500 }).toBeGreaterThan(0);
 
   const after = await tileRects(page);
   expect(after).toHaveLength(8);
   expect(overlapPairs(after)).toEqual([]);
   expectRectNear(rectFor(after, 'tile-filterpresets'), targetBefore);
   expectRectNear(rectFor(after, 'tile-tx'), draggedBefore);
-  expect(pageErrors).not.toContainEqual(
-    expect.stringContaining('Maximum update depth exceeded'),
+  expectNoReactDragLoop(pageErrors);
+});
+
+test('dragging the large panadapter panel stays stable', async ({ page }) => {
+  const { pageErrors } = await openStubbedWorkspace(page);
+
+  const draggedHeader = page.locator(
+    '[data-tile-uid="tile-hero"] .workspace-tile-header',
   );
-  expect(pageErrors).not.toContainEqual(
-    expect.stringContaining('Minified React error #185'),
-  );
+  const targetHeader = page.locator('[data-tile-uid="tile-tx"] .workspace-tile-header');
+  await expect(draggedHeader).toBeVisible();
+  await expect(targetHeader).toBeVisible();
+
+  const before = await tileRects(page);
+  expect(before).toHaveLength(8);
+
+  const start = await centerOf(draggedHeader);
+  const target = await centerOf(targetHeader);
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(target.x, target.y, { steps: 16 });
+  await page.waitForTimeout(250);
+
+  const duringDrag = await tileRects(page);
+  expect(duringDrag).toHaveLength(8);
+  expect(overlapPairs(duringDrag)).toEqual([]);
+  expectNoReactDragLoop(pageErrors);
+
+  await page.mouse.up();
+  await page.waitForTimeout(500);
+
+  const after = await tileRects(page);
+  expect(after).toHaveLength(8);
+  expect(overlapPairs(after)).toEqual([]);
+  expectNoReactDragLoop(pageErrors);
 });

@@ -69,7 +69,7 @@ export function autoFitDroppedPanel(
   const dropped = previousItem
     ? layout.find((item) => item.i === previousItem.i)
     : findDroppedItem(layout);
-  if (!dropped) return clearMovedFlags(layout);
+  if (!dropped) return clearMovedFlags(cloneLayout(layout));
 
   const dragLayout = dragStart?.layout.length
     ? layoutFromDragStart(layout, dropped.i, dragStart)
@@ -145,7 +145,9 @@ export function autoFitDroppedPanel(
   }
 
   if (best) {
-    return clearMovedFlags(compactMagnetUp(best.layout, target.i, swapped.displaced));
+    return clearMovedFlags(
+      compactMagnetUp(best.layout, target.i, swapped.displaced),
+    );
   }
 
   const fallback = cloneLayout(base);
@@ -525,32 +527,6 @@ function cloneLayout(layout: Layout): LayoutItem[] {
 
 function clearMovedFlags(layout: Layout): LayoutItem[] {
   return layout.map((item) => ({ ...item, moved: false }));
-}
-
-export function layoutPlacementsEqual(a: Layout, b: Layout): boolean {
-  if (a.length !== b.length) return false;
-  const placements = new Map(
-    a.map((item) => [item.i, { x: item.x, y: item.y, w: item.w, h: item.h }]),
-  );
-  if (placements.size !== a.length) return false;
-
-  const seen = new Set<string>();
-  for (const item of b) {
-    if (seen.has(item.i)) return false;
-    seen.add(item.i);
-    const placement = placements.get(item.i);
-    if (!placement) return false;
-    if (
-      placement.x !== item.x ||
-      placement.y !== item.y ||
-      placement.w !== item.w ||
-      placement.h !== item.h
-    ) {
-      return false;
-    }
-  }
-
-  return true;
 }
 
 function placementMovement(
