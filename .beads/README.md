@@ -83,29 +83,36 @@ bd create "Try out Beads"
 > Moved here from `CLAUDE.md` to keep the agent context file lean. This is the
 > authoritative Zeus-specific bd setup; `CLAUDE.md` carries only a pointer.
 
-Zeus does **not** use the `refs/dolt/data`-on-git-remote sync path that bd's
-default integration block mentions. Zeus syncs its bd Dolt database to a
-dedicated public DoltHub repo:
+Zeus syncs its bd Dolt database through the GitHub repo remote, using bd's
+`refs/dolt/data` storage. Do not point `origin` at DoltHub for normal agent
+work; DoltHub API remotes require separate DoltHub credentials and return
+`PermissionDenied` on machines that only have GitHub auth.
 
-> **DoltHub:** https://www.dolthub.com/repositories/kb2uka/openhpsdr-zeus
+> **GitHub:** https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus.git
 
 ### One-time teammate setup
 
 ```bash
-dolt login                                                                   # browser flow → associate a key
-bd dolt remote add origin https://doltremoteapi.dolthub.com/kb2uka/openhpsdr-zeus
-bd dolt pull origin main                                                     # fetch the team's issues
+bd dolt remote add origin https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus.git
+bd dolt pull --remote origin
+```
+
+If `origin` already exists and points at a DoltHub URL, replace it:
+
+```bash
+bd dolt remote remove origin --force
+bd dolt remote add origin https://github.com/OpenHPSDR-Zeus-org/openhpsdr-zeus.git
 ```
 
 ### Day-to-day
 
 ```bash
-bd dolt pull origin main      # before starting work
+bd dolt pull --remote origin  # before starting work
 # ... bd create / bd update / bd close ...
-bd dolt push origin main      # after edits, before signing off
+bd dolt push --remote origin  # after edits, before signing off
 ```
 
-### What's tracked in git vs. DoltHub
+### What's tracked in git vs. GitHub-backed Dolt sync
 
 - **`.beads/config.yaml`** (in git) — team-wide bd config including `sync.remote`. Edit here for team-wide defaults.
 - **`.beads/issues.jsonl`** / **`interactions.jsonl`** (in git) — passive exports for human grep and zero-dependency reading. **Do not edit by hand** — bd regenerates them. **Do not commit them inside a feature-branch PR** — the merge-conflict tax is real once more than one person uses bd. Snapshot commits to `develop` are fine.

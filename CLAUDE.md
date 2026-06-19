@@ -150,4 +150,11 @@ bd close <id>         # Complete work
 
 ## Beads — Team Sync (Zeus-specific)
 
-Zeus does **not** use the `refs/dolt/data`-on-git-remote sync path the auto-generated block above mentions — it syncs the bd Dolt DB to a dedicated public DoltHub repo (**https://www.dolthub.com/repositories/kb2uka/openhpsdr-zeus**). The one-time teammate setup, the `bd dolt pull/push origin main` day-to-day loop, and the git-vs-DoltHub tracking rules (what's committed vs. gitignored) live in **[`.beads/README.md`](.beads/README.md) → "Zeus team sync"**. Read it before your first `bd dolt push`.
+Zeus syncs the bd Dolt DB through the GitHub repo remote using bd's
+`refs/dolt/data` storage. Do not re-point the bd `origin` remote at DoltHub
+for normal agent work; DoltHub API remotes require separate DoltHub
+credentials and fail with `PermissionDenied` on GitHub-authenticated machines.
+The one-time setup, repair command for stale DoltHub remotes, day-to-day
+`bd dolt pull/push --remote origin` loop, and git-vs-Dolt tracking rules live
+in **[`.beads/README.md`](.beads/README.md) → "Zeus team sync"**. Read it
+before your first `bd dolt push`.
