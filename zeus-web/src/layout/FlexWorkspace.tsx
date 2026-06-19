@@ -103,8 +103,8 @@ export function FlexWorkspace({
   const syncToServerBeforeUnload = useLayoutStore((s) => s.syncToServerBeforeUnload);
   const addTileToLayout = useLayoutStore((s) => s.addTileToLayout);
   const removeTileFromLayout = useLayoutStore((s) => s.removeTileFromLayout);
-  const updateTilePlacementInLayout = useLayoutStore(
-    (s) => s.updateTilePlacementInLayout,
+  const updateTilePlacementsInLayout = useLayoutStore(
+    (s) => s.updateTilePlacementsInLayout,
   );
   // Modal visibility lifted into the store so the trigger button can live
   // in the LeftLayoutBar — the workspace just renders the modal when the
@@ -133,16 +133,18 @@ export function FlexWorkspace({
       // RGL fires onLayoutChange on every render with the current layout
       // (including the very first paint). Diff each item against the store
       // and only PUT through when something actually moved.
-      for (const item of next) {
-        updateTilePlacementInLayout(targetLayoutId, item.i, {
+      updateTilePlacementsInLayout(
+        targetLayoutId,
+        next.map((item) => ({
+          uid: item.i,
           x: item.x,
           y: item.y,
           w: item.w,
           h: item.h,
-        });
-      }
+        })),
+      );
     },
-    [targetLayoutId, updateTilePlacementInLayout],
+    [targetLayoutId, updateTilePlacementsInLayout],
   );
 
   const onAddPanel = useCallback(
@@ -235,7 +237,7 @@ function WorkspaceCanvas({
   const [containerHeight, setContainerHeight] = useState(0);
   const [gridInteraction, setGridInteraction] =
     useState<GridInteraction>(null);
-  const autoFitNextDropRef = useRef(false);
+  const autoFitDropRef = useRef<LayoutItem | null>(null);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -323,24 +325,26 @@ function WorkspaceCanvas({
     oldItem: LayoutItem | null,
     newItem: LayoutItem | null,
   ) => {
-    autoFitNextDropRef.current = !!(
+    autoFitDropRef.current = (
       oldItem &&
       newItem &&
       (oldItem.x !== newItem.x || oldItem.y !== newItem.y)
-    );
+    )
+      ? { ...oldItem }
+      : null;
     setGridInteraction(null);
   }, []);
   const onResizeStop = useCallback(() => {
-    autoFitNextDropRef.current = false;
+    autoFitDropRef.current = null;
     setGridInteraction(null);
   }, []);
   const handleLayoutChange = useCallback(
     (next: Layout) => {
-      const shouldAutoFit = autoFitNextDropRef.current;
-      autoFitNextDropRef.current = false;
+      const previousDropItem = autoFitDropRef.current;
+      autoFitDropRef.current = null;
       onLayoutChange(
-        shouldAutoFit
-          ? autoFitDroppedPanel(next, WORKSPACE_GRID_COLS)
+        previousDropItem
+          ? autoFitDroppedPanel(next, WORKSPACE_GRID_COLS, previousDropItem)
           : next,
       );
     },

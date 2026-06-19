@@ -145,6 +145,13 @@ interface LayoutState {
     uid: string,
     layout: Pick<WorkspaceTile, 'x' | 'y' | 'w' | 'h'>,
   ) => void;
+  /** Replace multiple tile grid placements in a specific layout atomically. */
+  updateTilePlacementsInLayout: (
+    layoutId: string,
+    placements: Array<
+      Pick<WorkspaceTile, 'uid' | 'x' | 'y' | 'w' | 'h'>
+    >,
+  ) => void;
   /** Replace a tile's instanceConfig blob. */
   updateTileInstanceConfig: (uid: string, instanceConfig: unknown) => void;
   /** Replace a tile's instanceConfig blob in a specific layout. */
@@ -466,6 +473,38 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       }
       changed = true;
       return { ...t, ...layout };
+    });
+    if (!changed) return;
+    applyWorkspaceMutationForLayout(set, get, layoutId, { ...workspace, tiles });
+  },
+
+  updateTilePlacementsInLayout: (layoutId, placements) => {
+    const target = findActive(get().layouts, layoutId);
+    if (!target && layoutId !== get().activeLayoutId) return;
+    if (placements.length === 0) return;
+    const workspace = layoutId === get().activeLayoutId
+      ? get().workspace
+      : parseLayoutOrDefault(target!.layoutJson);
+    const nextPlacements = new Map(
+      placements.map((p) => [
+        p.uid,
+        { x: p.x, y: p.y, w: p.w, h: p.h },
+      ]),
+    );
+    let changed = false;
+    const tiles = workspace.tiles.map((t) => {
+      const next = nextPlacements.get(t.uid);
+      if (!next) return t;
+      if (
+        t.x === next.x &&
+        t.y === next.y &&
+        t.w === next.w &&
+        t.h === next.h
+      ) {
+        return t;
+      }
+      changed = true;
+      return { ...t, ...next };
     });
     if (!changed) return;
     applyWorkspaceMutationForLayout(set, get, layoutId, { ...workspace, tiles });

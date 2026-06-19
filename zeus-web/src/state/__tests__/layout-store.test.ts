@@ -107,6 +107,43 @@ describe('layout-store / workspace tile mutators', () => {
     expect(afterRef).toBe(beforeRef);
   });
 
+  it('updateTilePlacementsInLayout mutates changed tile placements in one pass', () => {
+    const before = useLayoutStore.getState().workspace;
+    const [first, second] = before.tiles;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+
+    useLayoutStore.getState().updateTilePlacementsInLayout('default', [
+      { uid: first!.uid, x: 3, y: 4, w: first!.w, h: first!.h },
+      { uid: second!.uid, x: 9, y: 10, w: second!.w, h: second!.h },
+    ]);
+
+    const after = useLayoutStore.getState().workspace;
+    expect(after.tiles.find((t) => t.uid === first!.uid)).toMatchObject({
+      x: 3,
+      y: 4,
+    });
+    expect(after.tiles.find((t) => t.uid === second!.uid)).toMatchObject({
+      x: 9,
+      y: 10,
+    });
+  });
+
+  it('updateTilePlacementsInLayout is a no-op when nothing changed', () => {
+    const before = useLayoutStore.getState().workspace;
+    useLayoutStore.getState().updateTilePlacementsInLayout(
+      'default',
+      before.tiles.map((t) => ({
+        uid: t.uid,
+        x: t.x,
+        y: t.y,
+        w: t.w,
+        h: t.h,
+      })),
+    );
+    expect(useLayoutStore.getState().workspace).toBe(before);
+  });
+
   it('updateTileInstanceConfig stores the opaque config blob', () => {
     const uid = useLayoutStore.getState().addTile('meters');
     const cfg = { schemaVersion: 1, widgets: [], title: 'My Meters' };
