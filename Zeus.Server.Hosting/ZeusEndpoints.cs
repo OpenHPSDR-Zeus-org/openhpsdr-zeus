@@ -69,11 +69,10 @@ public static class ZeusEndpoints
                 return Results.Ok(saved);
             });
 
-        // Self-update from the git checkout. GET reports how far behind the
-        // configured upstream the running source is (fetch=false skips the
-        // network and reports the last-known counts); POST fast-forwards. Neither
-        // rebuilds/restarts — the UI tells the operator to run scripts/update.*
-        // and restart. Backed by RepoUpdateService.
+        // Self-update status. Git checkouts report upstream fast-forward state;
+        // packaged builds report the latest GitHub Release asset for this
+        // platform. POST is git-checkout-only and fast-forwards source; packaged
+        // installs download their installer/DMG/AppImage from the GET response.
         app.MapGet("/api/system/update",
             async (RepoUpdateService updates, bool? fetch, CancellationToken ct) =>
                 Results.Ok(await updates.GetStatusAsync(fetch ?? true, ct)));

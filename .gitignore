@@ -61,6 +61,8 @@ native/build-miniaudio/
 # Playwright-MCP accessibility snapshots and console logs — regenerated
 # on every browser-automation run; do not track.
 .playwright-mcp/
+zeus-web/test-results/
+zeus-web/playwright-report/
 
 # Ad-hoc screenshot captures (debug PNGs) in the repo root. Real docs
 # imagery lives under docs/ when we need it.

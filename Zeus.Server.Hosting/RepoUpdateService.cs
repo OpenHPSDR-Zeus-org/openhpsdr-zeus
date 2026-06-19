@@ -8,34 +8,48 @@
 // statement and per-component attribution.
 //
 // RepoUpdateService — reports whether the running checkout is behind its
-// configured git upstream and performs a fast-forward pull on request. It is a
-// thin git-CLI wrapper (no new dependencies): every operation shells out to the
-// `git` already on PATH, scoped to the repo root with `git -C <root>`.
+// configured git upstream, or whether a packaged install is behind the latest
+// GitHub Release. The git path remains a thin CLI wrapper (no new dependencies):
+// every operation shells out to the `git` already on PATH, scoped to the repo
+// root with `git -C <root>`.
 //
-// This drives Settings -> Updates (/api/system/update). It deliberately does
-// NOT rebuild or restart — the running binaries are stale after a pull, so the
-// UI tells the operator to run scripts/update.* and restart. If the app is not
-// running from a git checkout (a packaged build) every call reports
-// IsGitRepo=false and the UI shows manual-update guidance instead.
+// This drives Settings -> Updates (/api/system/update). Git checkout updates
+// deliberately do NOT rebuild or restart — the running binaries are stale after
+// a pull, so the UI tells the operator to run scripts/update.* and restart.
+// Packaged builds surface the matching release asset download URL; replacing
+// the running executable is left to the installer / DMG / AppImage flow.
 
 using System.Diagnostics;
+using System.Net;
+using System.Reflection;
+using System.Runtime.InteropServices;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using Zeus.Contracts;
 
 namespace Zeus.Server;
 
 /// <summary>Git-checkout update helper backing the Settings -> Updates panel.
 /// Registered as a singleton in <c>ZeusHost</c>.</summary>
-public sealed class RepoUpdateService
+public sealed partial class RepoUpdateService
 {
+    internal const string LatestReleaseApi =
+        "https://api.github.com/repos/OpenHPSDR-Zeus-org/openhpsdr-zeus/releases/latest";
+
+    private static readonly JsonSerializerOptions GitHubJsonOptions = new(JsonSerializerDefaults.Web);
+
     private readonly ILogger<RepoUpdateService> _log;
+    private readonly IHttpClientFactory _httpClientFactory;
     private readonly string? _repoRoot;
 
-    public RepoUpdateService(ILogger<RepoUpdateService> log)
+    public RepoUpdateService(ILogger<RepoUpdateService> log, IHttpClientFactory httpClientFactory)
     {
         _log = log;
+        _httpClientFactory = httpClientFactory;
         _repoRoot = ResolveRepoRoot();
         if (_repoRoot is null)
-            _log.LogInformation("RepoUpdateService: not running from a git checkout; update checks disabled");
+            _log.LogInformation("RepoUpdateService: not running from a git checkout; release updates enabled");
         else
             _log.LogInformation("RepoUpdateService: repo root {Root}", _repoRoot);
     }
@@ -47,7 +61,7 @@ public sealed class RepoUpdateService
     public async Task<RepoUpdateStatus> GetStatusAsync(bool fetch, CancellationToken ct)
     {
         if (_repoRoot is null)
-            return NotAGitRepo();
+            return await AddReleaseStatusAsync(NotAGitRepo(), fetch, ct).ConfigureAwait(false);
 
         try
         {
@@ -113,7 +127,14 @@ public sealed class RepoUpdateService
                 LatestRemoteSubject: latestSubject,
                 RemoteUrl: remoteUrl,
                 CheckedUtc: DateTime.UtcNow.ToString("o"),
-                Error: note);
+                Error: note)
+            {
+                InstalledVersion = InstalledVersion(),
+                RuntimePlatform = RuntimePlatform(),
+                RuntimeArchitecture = RuntimeInformation.OSArchitecture.ToString(),
+                UpdateAvailable = behind > 0,
+                UpdateAction = canFf ? "pull" : "none",
+            };
         }
         catch (Exception ex)
         {
@@ -123,7 +144,12 @@ public sealed class RepoUpdateService
                 CurrentSubject: null, UpstreamRef: null, Behind: 0, Ahead: 0, Dirty: false,
                 CanFastForward: false, LatestRemoteSha: null, LatestRemoteSubject: null,
                 RemoteUrl: null, CheckedUtc: DateTime.UtcNow.ToString("o"),
-                Error: GitMissing(ex) ? "git is not installed or not on PATH" : ex.Message);
+                Error: GitMissing(ex) ? "git is not installed or not on PATH" : ex.Message)
+            {
+                InstalledVersion = InstalledVersion(),
+                RuntimePlatform = RuntimePlatform(),
+                RuntimeArchitecture = RuntimeInformation.OSArchitecture.ToString(),
+            };
         }
     }
 
@@ -133,7 +159,8 @@ public sealed class RepoUpdateService
     public async Task<RepoUpdateResult> PullAsync(CancellationToken ct)
     {
         if (_repoRoot is null)
-            return new RepoUpdateResult(false, null, false, "Not running from a git checkout — update manually.");
+            return new RepoUpdateResult(false, null, false,
+                "Not running from a git checkout — download the latest Zeus release.");
 
         try
         {
@@ -160,6 +187,86 @@ public sealed class RepoUpdateService
             _log.LogWarning(ex, "repo update pull failed");
             return new RepoUpdateResult(false, null, false,
                 GitMissing(ex) ? "git is not installed or not on PATH" : ex.Message);
+        }
+    }
+
+    private async Task<RepoUpdateStatus> AddReleaseStatusAsync(
+        RepoUpdateStatus status,
+        bool fetch,
+        CancellationToken ct)
+    {
+        if (!fetch)
+            return status;
+
+        try
+        {
+            using var response = await _httpClientFactory.CreateClient("ZeusUpdates")
+                .GetAsync(LatestReleaseApi, ct)
+                .ConfigureAwait(false);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                return status with
+                {
+                    CheckedUtc = DateTime.UtcNow.ToString("o"),
+                    Error = MergeNotes(status.Error, "No published Zeus release was found on GitHub."),
+                };
+            }
+
+            response.EnsureSuccessStatusCode();
+            var release = await response.Content
+                .ReadFromJsonAsync<GitHubRelease>(GitHubJsonOptions, ct)
+                .ConfigureAwait(false);
+            if (release is null || string.IsNullOrWhiteSpace(release.TagName))
+            {
+                return status with
+                {
+                    CheckedUtc = DateTime.UtcNow.ToString("o"),
+                    Error = MergeNotes(status.Error, "GitHub returned an empty release response."),
+                };
+            }
+
+            var asset = SelectReleaseAsset(
+                release.Assets,
+                RuntimePlatform(),
+                RuntimeInformation.OSArchitecture,
+                IsRunningFromAppImage(),
+                IsServerMode());
+            var latestVersion = NormalizeReleaseVersion(release.TagName);
+            var updateAvailable = IsReleaseNewer(latestVersion, status.InstalledVersion);
+            var updateAction = updateAvailable
+                ? asset?.BrowserDownloadUrl is { Length: > 0 }
+                    ? "download"
+                    : !string.IsNullOrWhiteSpace(release.HtmlUrl) ? "openRelease" : "none"
+                : "none";
+
+            return status with
+            {
+                CheckedUtc = DateTime.UtcNow.ToString("o"),
+                UpdateAvailable = updateAvailable,
+                UpdateAction = updateAction,
+                LatestVersion = latestVersion,
+                ReleaseTag = release.TagName,
+                ReleaseName = release.Name,
+                ReleaseUrl = release.HtmlUrl,
+                ReleasePublishedUtc = release.PublishedAt,
+                ReleaseAssetName = asset?.Name,
+                ReleaseDownloadUrl = asset?.BrowserDownloadUrl,
+                ReleaseAssetSizeBytes = asset?.Size,
+                ReleaseAssetDigest = asset?.Digest,
+            };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _log.LogDebug(ex, "release update check failed");
+            return status with
+            {
+                CheckedUtc = DateTime.UtcNow.ToString("o"),
+                Error = MergeNotes(status.Error, $"release check failed (offline?): {Trunc(ex.Message)}"),
+            };
         }
     }
 
@@ -218,7 +325,12 @@ public sealed class RepoUpdateService
         IsGitRepo: false, Branch: null, CurrentSha: null, CurrentShortSha: null,
         CurrentSubject: null, UpstreamRef: null, Behind: 0, Ahead: 0, Dirty: false,
         CanFastForward: false, LatestRemoteSha: null, LatestRemoteSubject: null,
-        RemoteUrl: null, CheckedUtc: null, Error: "Not running from a git checkout.");
+        RemoteUrl: null, CheckedUtc: null, Error: null)
+    {
+        InstalledVersion = InstalledVersion(),
+        RuntimePlatform = RuntimePlatform(),
+        RuntimeArchitecture = RuntimeInformation.OSArchitecture.ToString(),
+    };
 
     private static string PreferErr((bool Ok, string Out, string Err) r)
         => !string.IsNullOrWhiteSpace(r.Err) ? r.Err : r.Out;
@@ -235,6 +347,109 @@ public sealed class RepoUpdateService
     private static string Trunc(string s, int max = 300)
         => s.Length <= max ? s : s[..max] + "…";
 
+    private static string MergeNotes(string? first, string second)
+        => string.IsNullOrWhiteSpace(first) ? second : $"{first}; {second}";
+
+    private static string InstalledVersion()
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        var attr = assembly.GetCustomAttributes(typeof(AssemblyInformationalVersionAttribute), false)
+            .FirstOrDefault() as AssemblyInformationalVersionAttribute;
+        return string.IsNullOrWhiteSpace(attr?.InformationalVersion)
+            ? "unknown"
+            : attr.InformationalVersion;
+    }
+
+    internal static string NormalizeReleaseVersion(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
+        var m = VersionPattern().Match(value);
+        return m.Success ? m.Value.TrimStart('v', 'V') : value.Trim().TrimStart('v', 'V');
+    }
+
+    internal static bool IsReleaseNewer(string? latest, string? installed)
+    {
+        return TryParseReleaseVersion(latest, out var latestVersion)
+            && TryParseReleaseVersion(installed, out var installedVersion)
+            && latestVersion.CompareTo(installedVersion) > 0;
+    }
+
+    private static bool TryParseReleaseVersion(string? value, out Version version)
+    {
+        version = new Version(0, 0, 0);
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        var m = VersionPattern().Match(value);
+        if (!m.Success) return false;
+        version = new Version(
+            int.Parse(m.Groups["major"].Value),
+            int.Parse(m.Groups["minor"].Value),
+            int.Parse(m.Groups["patch"].Value));
+        return true;
+    }
+
+    [GeneratedRegex(@"[vV]?(?<major>\d+)\.(?<minor>\d+)\.(?<patch>\d+)")]
+    private static partial Regex VersionPattern();
+
+    internal static GitHubReleaseAsset? SelectReleaseAsset(
+        IReadOnlyList<GitHubReleaseAsset>? assets,
+        string platform,
+        Architecture architecture,
+        bool runningFromAppImage,
+        bool serverMode)
+    {
+        if (assets is null || assets.Count == 0) return null;
+
+        var isArm64 = architecture == Architecture.Arm64;
+        if (string.Equals(platform, "windows", StringComparison.OrdinalIgnoreCase))
+        {
+            return FindAsset(assets, isArm64 ? "-win-arm64-setup.exe" : "-win-x64-setup.exe");
+        }
+
+        if (string.Equals(platform, "macos", StringComparison.OrdinalIgnoreCase))
+        {
+            return FindAsset(assets, isArm64 ? "-macos-arm64.dmg" : "-macos-x64.dmg");
+        }
+
+        if (string.Equals(platform, "linux", StringComparison.OrdinalIgnoreCase))
+        {
+            if (runningFromAppImage)
+            {
+                var appImageArch = isArm64 ? "aarch64" : "x86_64";
+                var suffix = $"-linux-{appImageArch}.AppImage";
+                var appImage = assets.FirstOrDefault(a =>
+                    a.Name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)
+                    && (serverMode
+                        ? a.Name.StartsWith("OpenhpsdrZeus-Server-", StringComparison.OrdinalIgnoreCase)
+                        : !a.Name.StartsWith("OpenhpsdrZeus-Server-", StringComparison.OrdinalIgnoreCase)));
+                if (appImage is not null) return appImage;
+            }
+
+            return FindAsset(assets, isArm64 ? "-linux-arm64.tar.gz" : "-linux-x64.tar.gz");
+        }
+
+        return null;
+    }
+
+    private static GitHubReleaseAsset? FindAsset(
+        IReadOnlyList<GitHubReleaseAsset> assets,
+        string suffix)
+        => assets.FirstOrDefault(a => a.Name.EndsWith(suffix, StringComparison.OrdinalIgnoreCase));
+
+    private static string RuntimePlatform()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) return "windows";
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX)) return "macos";
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux)) return "linux";
+        return "unknown";
+    }
+
+    private static bool IsRunningFromAppImage()
+        => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("APPIMAGE"));
+
+    private static bool IsServerMode()
+        => Environment.GetCommandLineArgs()
+            .Any(a => string.Equals(a, "--server", StringComparison.OrdinalIgnoreCase));
+
     /// <summary>Walk up from the running binary's directory until a `.git` entry
     /// is found (directory for a normal clone, file for a worktree/submodule).</summary>
     private static string? ResolveRepoRoot()
@@ -249,4 +464,37 @@ public sealed class RepoUpdateService
         }
         return null;
     }
+}
+
+internal sealed class GitHubRelease
+{
+    [JsonPropertyName("tag_name")]
+    public string? TagName { get; set; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    [JsonPropertyName("html_url")]
+    public string? HtmlUrl { get; set; }
+
+    [JsonPropertyName("published_at")]
+    public string? PublishedAt { get; set; }
+
+    [JsonPropertyName("assets")]
+    public List<GitHubReleaseAsset> Assets { get; set; } = [];
+}
+
+internal sealed class GitHubReleaseAsset
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("browser_download_url")]
+    public string? BrowserDownloadUrl { get; set; }
+
+    [JsonPropertyName("size")]
+    public long Size { get; set; }
+
+    [JsonPropertyName("digest")]
+    public string? Digest { get; set; }
 }
