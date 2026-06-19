@@ -321,6 +321,39 @@ describe('workspace grid collision policy', () => {
     expectNoCollisions(dropped);
   });
 
+  it('auto-fits a large dropped panel without an exponential search blowup', () => {
+    // Regression guard: autoFitDroppedPanel used to sweep every (y,x,w,h) of
+    // the dropped panel's footprint, each running full collision resolution.
+    // For the ~18×38 panadapter/hero tile that is hundreds of thousands of
+    // resolves — a multi-second main-thread freeze on drop. The full-size /
+    // origin fast path collapses the common case to a single resolve. The
+    // threshold is deliberately generous (the bug took seconds; the fix is
+    // sub-millisecond) so it flags a complexity regression, not CI jitter.
+    const layout: Layout = cloneLayout([
+      { i: 'filter', x: 0, y: 0, w: 12, h: 10 },
+      { i: 'filterpresets', x: 12, y: 0, w: 6, h: 10 },
+      { i: 'hero', x: 0, y: 10, w: 18, h: 38, minW: 8, minH: 8 },
+      { i: 'vfo', x: 18, y: 0, w: 6, h: 11 },
+      { i: 'smeter', x: 18, y: 11, w: 6, h: 5 },
+      { i: 'tx', x: 18, y: 16, w: 6, h: 10 },
+      { i: 'txmeters', x: 18, y: 26, w: 6, h: 12 },
+      { i: 'dsp', x: 18, y: 38, w: 6, h: 10 },
+    ]);
+    const dragged = layout.find((item) => item.i === 'hero')!;
+
+    const start = performance.now();
+    const next = fitMovedElement(layout, dragged, 6, 4);
+    const elapsedMs = performance.now() - start;
+
+    expect(elapsedMs).toBeLessThan(250);
+    // Full size is preserved — the dropped panel is placed, not shrunk.
+    expect(next.find((item) => item.i === 'hero')).toMatchObject({
+      w: 18,
+      h: 38,
+    });
+    expectNoCollisions(next);
+  });
+
   it('pushes a lower panel down when resize grows into it', () => {
     const layout = cloneLayout(baseLayout);
     layout[0]!.h = 4;
