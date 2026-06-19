@@ -41,6 +41,42 @@ function fmtFreqMhz(hz: number | null | undefined): string {
   return `${whole}.${khz}.${hhz}`;
 }
 
+/** Ham-band edges (Hz) for grouping the roster. Order = display order. */
+const BANDS: ReadonlyArray<{ label: string; lo: number; hi: number }> = [
+  { label: '2200m', lo: 135_700, hi: 137_800 },
+  { label: '630m', lo: 472_000, hi: 479_000 },
+  { label: '160m', lo: 1_800_000, hi: 2_000_000 },
+  { label: '80m', lo: 3_500_000, hi: 4_000_000 },
+  { label: '60m', lo: 5_250_000, hi: 5_450_000 },
+  { label: '40m', lo: 7_000_000, hi: 7_300_000 },
+  { label: '30m', lo: 10_100_000, hi: 10_150_000 },
+  { label: '20m', lo: 14_000_000, hi: 14_350_000 },
+  { label: '17m', lo: 18_068_000, hi: 18_168_000 },
+  { label: '15m', lo: 21_000_000, hi: 21_450_000 },
+  { label: '12m', lo: 24_890_000, hi: 24_990_000 },
+  { label: '10m', lo: 28_000_000, hi: 29_700_000 },
+  { label: '6m', lo: 50_000_000, hi: 54_000_000 },
+  { label: '4m', lo: 70_000_000, hi: 70_500_000 },
+  { label: '2m', lo: 144_000_000, hi: 148_000_000 },
+  { label: '1.25m', lo: 222_000_000, hi: 225_000_000 },
+  { label: '70cm', lo: 420_000_000, hi: 450_000_000 },
+  { label: '33cm', lo: 902_000_000, hi: 928_000_000 },
+  { label: '23cm', lo: 1_240_000_000, hi: 1_300_000_000 },
+];
+
+/** Band label for a frequency, or "Other" when off-band/unknown. */
+function bandForHz(hz: number | null | undefined): string {
+  if (typeof hz !== 'number' || !Number.isFinite(hz) || hz <= 0) return 'Other';
+  for (const b of BANDS) if (hz >= b.lo && hz <= b.hi) return b.label;
+  return 'Other';
+}
+
+/** Sort key for band labels (display order; "Other" last). */
+function bandOrder(label: string): number {
+  const i = BANDS.findIndex((b) => b.label === label);
+  return i < 0 ? BANDS.length : i;
+}
+
 /** Clock time (HH:MM) from epoch ms, in the operator's local zone. */
 function fmtClock(ts: number): string {
   if (!Number.isFinite(ts) || ts <= 0) return '';
@@ -165,11 +201,12 @@ function RosterRow({
             fontSize: 10.5,
             color: 'var(--fg-2)',
             whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
           }}
         >
           <span style={{ color: 'var(--power)' }}>{fmtFreqMhz(op.freqHz)}</span>
           {op.mode ? <span style={{ color: 'var(--fg-2)' }}>{op.mode}</span> : null}
-          {op.grid ? <span style={{ color: 'var(--fg-3)' }}>{op.grid}</span> : null}
         </div>
       </div>
     </div>
@@ -364,6 +401,18 @@ export function ChatPanel() {
     });
   }, [roster]);
 
+  // Group the (already status/callsign-sorted) roster by band for display.
+  const rosterByBand = useMemo(() => {
+    const groups = new Map<string, ChatOperator[]>();
+    for (const op of sortedRoster) {
+      const band = bandForHz(op.freqHz);
+      const arr = groups.get(band);
+      if (arr) arr.push(op);
+      else groups.set(band, [op]);
+    }
+    return [...groups.entries()].sort((a, b) => bandOrder(a[0]) - bandOrder(b[0]));
+  }, [sortedRoster]);
+
   const canSend = enabled && connected && draft.trim().length > 0 && draft.length <= MAX_MESSAGE_CHARS;
 
   const doSend = useCallback(async () => {
@@ -529,14 +578,42 @@ export function ChatPanel() {
           >
             Online · {sortedRoster.length}
           </div>
-          <div style={{ flex: 1, overflow: 'auto', minHeight: 0, padding: '0 4px 6px' }}>
+          <div
+            style={{
+              flex: 1,
+              overflowY: 'auto',
+              overflowX: 'hidden',
+              minHeight: 0,
+              padding: '0 4px 6px',
+            }}
+          >
             {sortedRoster.length === 0 ? (
               <div style={{ padding: '10px 8px', fontSize: 11, color: 'var(--fg-3)' }}>
                 No one here yet
               </div>
             ) : (
-              sortedRoster.map((op) => (
-                <RosterRow key={op.callsign} op={op} onOpen={openProfile} />
+              rosterByBand.map(([band, ops]) => (
+                <div key={band} style={{ marginBottom: 2 }}>
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'baseline',
+                      justifyContent: 'space-between',
+                      padding: '5px 6px 2px',
+                      fontSize: 9.5,
+                      fontWeight: 700,
+                      letterSpacing: '0.1em',
+                      textTransform: 'uppercase',
+                      color: 'var(--accent-bright)',
+                    }}
+                  >
+                    <span>{band}</span>
+                    <span style={{ color: 'var(--fg-4)', fontWeight: 600 }}>{ops.length}</span>
+                  </div>
+                  {ops.map((op) => (
+                    <RosterRow key={op.callsign} op={op} onOpen={openProfile} />
+                  ))}
+                </div>
               ))
             )}
           </div>
