@@ -453,7 +453,9 @@ function WorkspaceCanvas({
         <div style={{ minHeight: 80 }} aria-hidden />
       ) : (
         <ResponsiveGridLayout
-          className="all-panels-grid"
+          className={`all-panels-grid${
+            gridInteraction ? ' all-panels-grid--interacting' : ''
+          }`}
           width={width}
           breakpoints={{ lg: 0 }}
           cols={{ lg: WORKSPACE_GRID_COLS }}

@@ -149,6 +149,65 @@ describe('workspace grid collision policy', () => {
     expectNoCollisions(next);
   });
 
+  it('keeps the dragged tile pinned to the pointer when no swap fires', () => {
+    // Root cause of the "quick back and forth" report: the compactor used to
+    // pack the dragged tile upward on any frame that did not fire a swap, then
+    // RGL dragged it back toward the pointer — a 2-cycle at the swap boundary.
+    // A live drag now pins the dragged tile to its pointer cell unconditionally,
+    // so dragging `below` into empty space leaves it where the pointer is rather
+    // than snapping it back up against `above`.
+    const layout: Layout = cloneLayout([
+      { i: 'above', x: 0, y: 0, w: 6, h: 2 },
+      { i: 'below', x: 0, y: 2, w: 6, h: 2 },
+    ]);
+    const below = layout[1]!;
+
+    const next = dragAndCompact(layout, below, 0, 6);
+
+    expect(next.find((i) => i.i === 'below')).toMatchObject({ x: 0, y: 6 });
+    expect(next.find((i) => i.i === 'above')).toMatchObject({ x: 0, y: 0 });
+    expectNoCollisions(next);
+  });
+
+  it('keeps a neighbour swap engaged across the touch boundary', () => {
+    // Reproduces the boundary jitter with one compactor instance (one live
+    // drag). Once `below` engages at full overlap it must stay displaced when
+    // the dragged tile jitters back to the touching row — engagement is sticky,
+    // so the neighbour never snaps home and back (the visible flicker).
+    const base: Layout = cloneLayout([
+      { i: 'dragged', x: 0, y: 0, w: 6, h: 2 },
+      { i: 'below', x: 0, y: 2, w: 6, h: 2 },
+    ]);
+    const dragStart = { item: { ...base[0]! }, layout: cloneLayout(base) };
+    const compactor = createWorkspaceDragCompactor(() => dragStart);
+
+    const step = (y: number) => {
+      const work = cloneLayout(base);
+      const item = work.find((i) => i.i === 'dragged')!;
+      return compactor.compact(
+        moveElement(
+          work,
+          item,
+          0,
+          y,
+          true,
+          compactor.preventCollision,
+          compactor.type,
+          24,
+          compactor.allowOverlap,
+        ),
+        24,
+      );
+    };
+
+    // Engage the swap (full overlap of `below`), then jitter up one row so the
+    // tiles only touch. `below` stays out of its original slot.
+    expect(step(2).find((i) => i.i === 'below')).toMatchObject({ x: 0, y: 0 });
+    const boundary = step(1);
+    expect(boundary.find((i) => i.i === 'below')?.y).not.toBe(2);
+    expectNoCollisions(boundary);
+  });
+
   it('swaps a colliding panel into the dragged panel old slot on drop', () => {
     const layout = cloneLayout(baseLayout);
     const dragged = layout[0]!;
