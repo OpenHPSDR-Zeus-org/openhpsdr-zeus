@@ -37,7 +37,7 @@ on:
   workflow_call:
     inputs:
       mode:
-        description: 'Build mode when invoked as a reusable workflow. Currently only `nightly` is consumed by the parse step; other values fall through to the dry-run path.'
+        description: 'Build mode when invoked as a reusable workflow. `nightly` builds develop for the rolling prerelease; `download-main` builds main for openhpsdrzeus.com downloads; other values fall through to the dry-run path.'
         type: string
         required: false
         default: dryrun
@@ -46,6 +46,16 @@ on:
         type: string
         required: false
         default: ''
+    outputs:
+      version:
+        description: 'Full SemVer string used in artifact filenames.'
+        value: ${{ jobs.determine-version.outputs.version }}
+      version-prefix:
+        description: 'Numeric MAJOR.MINOR.PATCH version prefix.'
+        value: ${{ jobs.determine-version.outputs.version-prefix }}
+      version-suffix:
+        description: 'Pre-release/build suffix, if any.'
+        value: ${{ jobs.determine-version.outputs.version-suffix }}
 
 jobs:
   determine-version:
@@ -63,6 +73,7 @@ jobs:
       is-release: ${{ steps.parse.outputs.is-release }}
       is-draft: ${{ steps.parse.outputs.is-draft }}
       is-nightly: ${{ steps.parse.outputs.is-nightly }}
+      sign-macos: ${{ steps.parse.outputs.sign-macos }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -81,6 +92,7 @@ jobs:
         run: |
           IS_DRAFT="false"
           IS_NIGHTLY="false"
+          SIGN_MACOS="false"
           if [[ "$INPUT_MODE" == "nightly" ]]; then
             # Nightly mode — caller (nightly.yml) has already pointed checkout
             # at develop via `inputs.ref`, so HEAD reflects develop tip rather
@@ -94,7 +106,22 @@ jobs:
             VERSION="${VERSION_PREFIX}-${VERSION_SUFFIX}"
             IS_RELEASE="false"
             IS_NIGHTLY="true"
+            SIGN_MACOS="true"
             echo "Nightly build (ref=$GITHUB_REF, head=$SHORT_SHA) → version $VERSION"
+          elif [[ "$INPUT_MODE" == "download-main" ]]; then
+            # Website download mode — build the current main branch and publish
+            # the artifacts to openhpsdrzeus.com via the caller workflow. Use a
+            # monotonic suffix so every main build can coexist in the download
+            # manifest, while the website marks only the newest one as latest.
+            VERSION_PREFIX=$(sed -n 's:.*<VersionPrefix[^>]*>\([^<]*\)</VersionPrefix>.*:\1:p' Directory.Build.props | head -1)
+            VERSION_PREFIX="${VERSION_PREFIX:-0.0.0}"
+            DATE_STAMP=$(date -u +%Y%m%d)
+            SHORT_SHA=$(git rev-parse --short=7 HEAD)
+            VERSION_SUFFIX="main.${DATE_STAMP}.${SHORT_SHA}"
+            VERSION="${VERSION_PREFIX}-${VERSION_SUFFIX}"
+            IS_RELEASE="false"
+            SIGN_MACOS="true"
+            echo "Download build (ref=$GITHUB_REF, head=$SHORT_SHA) → version $VERSION"
           elif [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
             # Tag push — strict release path.
             if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -111,6 +138,7 @@ jobs:
             VERSION_SUFFIX=""
             VERSION="$VERSION_PREFIX"
             IS_RELEASE="true"
+            SIGN_MACOS="true"
             echo "Tagged release $GITHUB_REF_NAME → version $VERSION"
           elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && "$DISPATCH_DRAFT" == "true" ]]; then
             # Manual dispatch with draft=true — produce a DRAFT GitHub Release
@@ -124,6 +152,7 @@ jobs:
             VERSION="$VERSION_PREFIX"
             IS_RELEASE="true"
             IS_DRAFT="true"
+            SIGN_MACOS="true"
             echo "Draft release dispatch (ref=$GITHUB_REF) → version $VERSION (draft=true)"
           else
             # Branch push or manual dispatch (draft=false) — dry-run path. Read
@@ -144,6 +173,7 @@ jobs:
           echo "is-release=${IS_RELEASE}" >> "$GITHUB_OUTPUT"
           echo "is-draft=${IS_DRAFT}" >> "$GITHUB_OUTPUT"
           echo "is-nightly=${IS_NIGHTLY}" >> "$GITHUB_OUTPUT"
+          echo "sign-macos=${SIGN_MACOS}" >> "$GITHUB_OUTPUT"
 
   # ---------- Native WDSP rebuild (always-fresh natives in releases) -------
   #
@@ -785,7 +815,7 @@ jobs:
 
       # ---------- macOS code-signing + notarization ------------------------
       #
-      # Five steps gated on (is-release || is-nightly): import the Developer
+      # Five steps gated on sign-macos=true: import the Developer
       # ID cert into an ephemeral keychain, run the existing builder with
       # CODESIGN_IDENTITY exported (the script signs apps + DMG inside-out
       # hardened-runtime, see installers/create-macos-app.sh), submit to
@@ -805,12 +835,12 @@ jobs:
       # concurrent dispatches (e.g. nightly cron racing with a maintainer's
       # manual run) never collide on /Users/runner/Library/Keychains.
       - name: macOS — dry-run notice (signing/notarization skipped)
-        if: ${{ startsWith(matrix.config.os, 'macos') && needs.determine-version.outputs.is-release != 'true' && needs.determine-version.outputs.is-nightly != 'true' }}
+        if: ${{ startsWith(matrix.config.os, 'macos') && needs.determine-version.outputs.sign-macos != 'true' }}
         run: |
           echo "::notice::macOS DMG will NOT be signed or notarized in dry-run mode. The artifact will require xattr -cr on first launch."
 
       - name: macOS — import Developer ID certificate
-        if: ${{ startsWith(matrix.config.os, 'macos') && (needs.determine-version.outputs.is-release == 'true' || needs.determine-version.outputs.is-nightly == 'true') }}
+        if: ${{ startsWith(matrix.config.os, 'macos') && needs.determine-version.outputs.sign-macos == 'true' }}
         env:
           MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
@@ -900,11 +930,11 @@ jobs:
       - name: Build macOS Package
         if: startsWith(matrix.config.os, 'macos')
         env:
-          # Ternary: signed only when is-release || is-nightly. In dry-run
+          # Ternary: signed only when sign-macos=true. In dry-run
           # the value is the empty string regardless of whether
           # MACOS_SIGNING_IDENTITY is configured — keeps an accidentally-set
           # secret from sneaking signing into a dry-run build.
-          CODESIGN_IDENTITY: ${{ (needs.determine-version.outputs.is-release == 'true' || needs.determine-version.outputs.is-nightly == 'true') && secrets.MACOS_SIGNING_IDENTITY || '' }}
+          CODESIGN_IDENTITY: ${{ needs.determine-version.outputs.sign-macos == 'true' && secrets.MACOS_SIGNING_IDENTITY || '' }}
           ENTITLEMENTS_PATH: ${{ github.workspace }}/installers/zeus-macos.entitlements
           # KEYCHAIN_PATH flows in via $GITHUB_ENV from the import step above.
         run: |
@@ -914,7 +944,7 @@ jobs:
           installers/create-macos-app.sh ${{ steps.version.outputs.version }} $ARCH
 
       - name: macOS — notarize DMG
-        if: ${{ startsWith(matrix.config.os, 'macos') && (needs.determine-version.outputs.is-release == 'true' || needs.determine-version.outputs.is-nightly == 'true') }}
+        if: ${{ startsWith(matrix.config.os, 'macos') && needs.determine-version.outputs.sign-macos == 'true' }}
         env:
           APPSTORE_KEY_ID: ${{ secrets.APPSTORE_KEY_ID }}
           APPSTORE_ISSUER_ID: ${{ secrets.APPSTORE_ISSUER_ID }}
@@ -971,7 +1001,7 @@ jobs:
           echo "Notarization accepted (id=$SUBMISSION_ID)"
 
       - name: macOS — staple notarization ticket
-        if: ${{ startsWith(matrix.config.os, 'macos') && (needs.determine-version.outputs.is-release == 'true' || needs.determine-version.outputs.is-nightly == 'true') }}
+        if: ${{ startsWith(matrix.config.os, 'macos') && needs.determine-version.outputs.sign-macos == 'true' }}
         run: |
           set -euo pipefail
           ARCH="${{ matrix.config.rid == 'osx-arm64' && 'arm64' || 'x64' }}"
@@ -984,7 +1014,7 @@ jobs:
           xcrun stapler validate "$DMG_PATH"
 
       - name: macOS — Gatekeeper assess
-        if: ${{ startsWith(matrix.config.os, 'macos') && (needs.determine-version.outputs.is-release == 'true' || needs.determine-version.outputs.is-nightly == 'true') }}
+        if: ${{ startsWith(matrix.config.os, 'macos') && needs.determine-version.outputs.sign-macos == 'true' }}
         run: |
           set -euo pipefail
           ARCH="${{ matrix.config.rid == 'osx-arm64' && 'arm64' || 'x64' }}"
@@ -1009,7 +1039,7 @@ jobs:
       # + any leftover .p8/.p12 means a `if: always()` run on a future
       # runner image that caches $RUNNER_TEMP between jobs won't leak.
       - name: macOS — clean up signing material
-        if: ${{ always() && startsWith(matrix.config.os, 'macos') && (needs.determine-version.outputs.is-release == 'true' || needs.determine-version.outputs.is-nightly == 'true') }}
+        if: ${{ always() && startsWith(matrix.config.os, 'macos') && needs.determine-version.outputs.sign-macos == 'true' }}
         run: |
           set +e
           if [ -n "${KEYCHAIN_PATH:-}" ] && [ -f "$KEYCHAIN_PATH" ]; then
@@ -1148,7 +1178,7 @@ jobs:
           EOF
 
       - name: Create or Update Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: Openhpsdr Zeus v${{ steps.version.outputs.version }}
