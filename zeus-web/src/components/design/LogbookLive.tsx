@@ -42,8 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, X } from 'lucide-react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useLoggerStore } from '../../state/logger-store';
 import type { LogEntry } from '../../api/log';
 import { formatQsoDateUtc, formatQsoTimeUtc } from './logbook-formatters';
@@ -79,7 +78,12 @@ function logRowTitle(entry: LogEntry): string {
   ]);
 }
 
-export function LogbookLive() {
+type LogbookLiveProps = {
+  searchText: string;
+  hideQrzPublished: boolean;
+};
+
+export function LogbookLive({ searchText, hideQrzPublished }: LogbookLiveProps) {
   const entries = useLoggerStore((s) => s.entries);
   const totalCount = useLoggerStore((s) => s.totalCount);
   const loading = useLoggerStore((s) => s.loading);
@@ -90,9 +94,12 @@ export function LogbookLive() {
   const toggleSelected = useLoggerStore((s) => s.toggleSelected);
   const setSelectedIds = useLoggerStore((s) => s.setSelectedIds);
   const selectAllRef = useRef<HTMLInputElement>(null);
-  const [searchText, setSearchText] = useState('');
   const query = searchText.trim();
-  const filteredEntries = useMemo(() => filterLogEntries(entries, searchText), [entries, searchText]);
+  const filteredEntries = useMemo(
+    () => filterLogEntries(entries, searchText, { hideQrzPublished }),
+    [entries, hideQrzPublished, searchText],
+  );
+  const filtersActive = query.length > 0 || hideQrzPublished;
   const visibleIds = useMemo(() => new Set(filteredEntries.map((entry) => entry.id)), [filteredEntries]);
   const selectedVisibleCount = filteredEntries.reduce(
     (count, entry) => count + (selectedIds.has(entry.id) ? 1 : 0),
@@ -139,28 +146,6 @@ export function LogbookLive() {
 
   return (
     <div className="logbook">
-      <div className="log-search">
-        <Search size={14} strokeWidth={2} aria-hidden="true" />
-        <input
-          type="search"
-          value={searchText}
-          onChange={(event) => setSearchText(event.target.value)}
-          placeholder="Search logbook"
-          aria-label="Search logbook"
-          spellCheck={false}
-        />
-        {query && (
-          <button
-            type="button"
-            className="log-search-clear"
-            onClick={() => setSearchText('')}
-            aria-label="Clear logbook search"
-            title="Clear search"
-          >
-            <X size={13} strokeWidth={2.2} aria-hidden="true" />
-          </button>
-        )}
-      </div>
       <div className="log-head mono">
         <span className="log-select-cell">
           <input
@@ -190,7 +175,9 @@ export function LogbookLive() {
       <div className="log-rows">
         {filteredEntries.length === 0 && (
           <div className="log-empty">
-            No log entries match "{query}".
+            {query
+              ? `No log entries match "${query}".`
+              : 'No unpublished log entries to show.'}
           </div>
         )}
         {filteredEntries.map((entry) => (
@@ -243,7 +230,7 @@ export function LogbookLive() {
       <div className="log-foot">
         <span style={{ flex: 1 }} />
         <span className="label-xs">
-          {query
+          {filtersActive
             ? `${filteredEntries.length} of ${entries.length} visible · ${totalCount} total`
             : `${entries.length} of ${totalCount}`}
         </span>

@@ -14,6 +14,14 @@ function compactSearchParts(parts: Array<string | number | null | undefined>): s
     .toLocaleLowerCase();
 }
 
+export type LogEntryFilterOptions = {
+  hideQrzPublished?: boolean;
+};
+
+export function isQrzPublished(entry: LogEntry): boolean {
+  return !!entry.qrzLogId;
+}
+
 export function logEntrySearchText(entry: LogEntry): string {
   return compactSearchParts([
     entry.callsign,
@@ -38,11 +46,18 @@ export function logEntrySearchText(entry: LogEntry): string {
   ]);
 }
 
-export function filterLogEntries(entries: LogEntry[], query: string): LogEntry[] {
+export function filterLogEntries(
+  entries: LogEntry[],
+  query: string,
+  options: LogEntryFilterOptions = {},
+): LogEntry[] {
+  const candidates = options.hideQrzPublished
+    ? entries.filter((entry) => !isQrzPublished(entry))
+    : entries;
   const terms = normalizeSearchText(query).split(/\s+/).filter(Boolean);
-  if (terms.length === 0) return entries;
+  if (terms.length === 0) return candidates;
 
-  return entries.filter((entry) => {
+  return candidates.filter((entry) => {
     const haystack = logEntrySearchText(entry);
     return terms.every((term) => haystack.includes(term));
   });
