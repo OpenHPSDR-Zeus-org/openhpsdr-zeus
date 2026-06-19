@@ -166,7 +166,7 @@ export function createWfRenderer(gl: WebGL2RenderingContext): WfRenderer {
   // One-time capability log — surfaces in any console; the Waterfall component
   // also renders an on-screen badge when floatLinear is false, because the
   // desktop (WebView2) app has no reachable DevTools (#629).
-  // eslint-disable-next-line no-console
+
   console.info(
     `[waterfall] gl caps: float_linear=${caps.floatLinear} ` +
       `color_buffer_float=${caps.colorBufferFloat} ` +

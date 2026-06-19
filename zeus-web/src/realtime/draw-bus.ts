@@ -48,7 +48,7 @@ const flush = () => {
       cb();
     } catch (err) {
       // One bad callback shouldn't abort the rest. Log and keep flushing.
-      // eslint-disable-next-line no-console
+
       console.error('draw-bus callback threw', err);
     }
   }

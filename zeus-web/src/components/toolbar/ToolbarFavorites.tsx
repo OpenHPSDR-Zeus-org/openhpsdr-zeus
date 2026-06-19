@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useToolbarFavoritesStore, type ToolbarFavKind } from '../../state/toolbar-favorites-store';
+import { toolbarFavDragMime } from './toolbarFavoriteDrag';
 
 export type ToolbarOption = {
   key: string;
@@ -25,15 +26,6 @@ export type ToolbarFavoritesProps = {
   onSelect: (key: string) => void;
   minWidth?: number;
 };
-
-const DRAG_MIME_PREFIX = 'application/x-zeus-toolbar-fav-';
-
-// MIME used by toolbar favorite drop targets. External components (e.g. the
-// flex-mode Mode/Band/Step panels) set this on their own buttons' dragstart
-// so the operator can drag any option onto a toolbar slot to pin it.
-export function toolbarFavDragMime(kind: ToolbarFavKind): string {
-  return DRAG_MIME_PREFIX + kind;
-}
 
 export function ToolbarFavorites({
   kind,
@@ -53,7 +45,7 @@ export function ToolbarFavorites({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const toggleRef = useRef<HTMLButtonElement | null>(null);
   const popoverRef = useRef<HTMLDivElement | null>(null);
-  const dragMime = DRAG_MIME_PREFIX + kind;
+  const dragMime = toolbarFavDragMime(kind);
 
   // Repair a stale slot list (legacy / corrupted persistence) by replacing
   // unknown keys with the first non-favorite option so the operator never

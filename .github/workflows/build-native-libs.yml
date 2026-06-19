@@ -23,7 +23,7 @@ jobs:
         # arm64 enabled: the _MM_SET_FLUSH_ZERO_MODE SSE-intrinsic block in
         # channel.c is now gated out for ARM64 alongside linux/APPLE, so the
         # rest of WDSP compiles cleanly under VS 2022's ARM64 toolset. CMake
-        # picks `-A ARM64` below, vcpkg uses the `arm64-windows-static-md`
+        # picks `-A ARM64` below, vcpkg uses the `arm64-windows-static`
         # triplet, and dumpbin (a host-arch tool) reads the ARM64 PE fine.
         arch: [x64, arm64]
     steps:
@@ -214,23 +214,28 @@ jobs:
         if: matrix.arch == 'arm64'
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu cmake pkg-config
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu cmake pkg-config wget make
 
-          # Cross-compile FFTW3 (double precision) for arm64. We deliberately
-          # do NOT cross-compile FFTW3f (single precision) here — the arm64
-          # job is configured with WDSP_WITH_NR4=OFF below, so libspecbleach
-          # isn't needed. Building FFTW twice would double the cross-compile
-          # time for a binary that doesn't currently ship NR4 anyway. NR4 on
-          # linux-arm64 is a Phase 1f follow-up under #162.
-          wget http://www.fftw.org/fftw-3.3.10.tar.gz
+          # Cross-compile both FFTW precisions for arm64. WDSP itself links
+          # against double-precision fftw3, while libspecbleach / NR4 links
+          # against single-precision fftw3f.
+          wget https://www.fftw.org/fftw-3.3.10.tar.gz
           tar xzf fftw-3.3.10.tar.gz
+          cp -a fftw-3.3.10 fftw-3.3.10-float
+
           cd fftw-3.3.10
-          ./configure --host=aarch64-linux-gnu --prefix=$HOME/fftw-arm64 \
+          ./configure --host=aarch64-linux-gnu --prefix="$HOME/fftw-arm64" \
             CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ \
             --enable-shared --disable-static
-          make -j$(nproc)
+          make -j"$(nproc)"
           make install
-          cd ..
+
+          cd ../fftw-3.3.10-float
+          ./configure --host=aarch64-linux-gnu --prefix="$HOME/fftw-arm64" \
+            CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ \
+            --enable-float --enable-shared --disable-static
+          make -j"$(nproc)"
+          make install
 
       - name: Configure CMake (x64)
         if: matrix.arch == 'x64'
@@ -246,12 +251,11 @@ jobs:
       - name: Configure CMake (arm64)
         if: matrix.arch == 'arm64'
         run: |
-          # WDSP_WITH_NR4=OFF on arm64 — see "Install cross-compilation tools"
-          # above. linux-arm64 NR4 is a Phase 1f follow-up under #162.
           cmake -S native/wdsp -B native/build \
             -DCMAKE_BUILD_TYPE=Release \
             -DWDSP_WITH_NR3=OFF \
-            -DWDSP_WITH_NR4=OFF \
+            -DWDSP_WITH_NR4=ON \
+            -DFFTW_ROOT=$HOME/fftw-arm64 \
             -DCMAKE_SYSTEM_NAME=Linux \
             -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
             -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
@@ -263,15 +267,18 @@ jobs:
         run: |
           cmake --build native/build --config Release --parallel
 
-      - name: Verify SBNR exports (x64)
-        if: matrix.arch == 'x64'
+      - name: Verify SBNR exports
         run: |
           # Phase 1 of issue #162: confirm the rebuild actually picks up the
           # libspecbleach-backed sbnr.c (8 SetRXASBNR* exports). If this fails
           # the build is silently stub-based and NR4 won't work at runtime.
-          count=$(nm -D native/build/libwdsp.so | grep -c "SetRXASBNR" || true)
+          nm_tool="nm"
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            nm_tool="aarch64-linux-gnu-nm"
+          fi
+          count=$($nm_tool -D native/build/libwdsp.so | grep -c "SetRXASBNR" || true)
           echo "Found $count SetRXASBNR* exports:"
-          nm -D native/build/libwdsp.so | grep "SetRXASBNR" || true
+          $nm_tool -D native/build/libwdsp.so | grep "SetRXASBNR" || true
           if [ "$count" -ne 8 ]; then
             echo "ERROR: Expected 8 SetRXASBNR* exports, got $count. NR4 did not link correctly."
             exit 1
@@ -284,24 +291,31 @@ jobs:
           mkdir -p "$destDir"
           cp native/build/libwdsp.so "$destDir/libwdsp.so"
 
-      - name: Bundle FFTW3 alongside libwdsp.so (x64)
-        if: matrix.arch == 'x64'
+      - name: Bundle FFTW3 alongside libwdsp.so
         run: |
           # Ship the FFTW3 dynamic libs in the tarball so the launcher's
-          # LD_LIBRARY_PATH (set in installers/create-linux-package.sh to
-          # runtimes/linux-x64/native/) finds them and the user does NOT need
-          # libfftw3 installed system-wide. readlink -f resolves the SONAME
-          # symlink so we copy the real .so file, then rename it back to the
-          # SONAME filename libwdsp.so was linked against.
+          # LD_LIBRARY_PATH finds them and the user does NOT need libfftw3
+          # installed system-wide. readlink -f resolves the SONAME symlink
+          # so we copy the real .so file, then rename it back to the SONAME
+          # filename libwdsp.so was linked against.
           set -eux
-          destDir="Zeus.Dsp/runtimes/linux-x64/native"
+          rid="linux-${{ matrix.arch }}"
+          destDir="Zeus.Dsp/runtimes/$rid/native"
           for soname in libfftw3.so.3 libfftw3f.so.3; do
-            src=$(readlink -f "/usr/lib/x86_64-linux-gnu/$soname")
+            if [ "${{ matrix.arch }}" = "arm64" ]; then
+              src=$(readlink -f "$HOME/fftw-arm64/lib/$soname")
+            else
+              src=$(readlink -f "/usr/lib/x86_64-linux-gnu/$soname")
+            fi
             test -f "$src"
             cp "$src" "$destDir/$soname"
           done
           ls -la "$destDir/"
-          ldd "$destDir/libwdsp.so"
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            aarch64-linux-gnu-objdump -p "$destDir/libwdsp.so" | grep NEEDED
+          else
+            ldd "$destDir/libwdsp.so"
+          fi
 
       # ---------- miniaudio (desktop-mode RX sink + TX mic capture) -------
       #
@@ -339,7 +353,7 @@ jobs:
         with:
           name: wdsp-linux-${{ matrix.arch }}
           # Directory upload (not a single file) so the bundled FFTW .so.3
-          # files in the x64 build land in the artifact alongside libwdsp.so.
+          # files land in the artifact alongside libwdsp.so.
           path: Zeus.Dsp/runtimes/linux-${{ matrix.arch }}/native/
 
   # ---------- zeus-vst-bridge (in-process VST3 host) ------------------

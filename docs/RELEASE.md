@@ -58,7 +58,9 @@ Once the workflow completes:
    - `openhpsdr-zeus-X.Y.Z-win-arm64-setup.exe`
    - `OpenhpsdrZeus-X.Y.Z-macos-arm64.dmg`
    - `openhpsdr-zeus-X.Y.Z-linux-x64.tar.gz`
+   - `openhpsdr-zeus-X.Y.Z-linux-arm64.tar.gz`
    - `OpenhpsdrZeus-X.Y.Z-linux-x86_64.AppImage`
+   - `OpenhpsdrZeus-X.Y.Z-linux-aarch64.AppImage`
 4. Check the release notes are correctly generated
 
 ### 5. (Optional) Edit Release Notes

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+/// <reference types="node" />
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';

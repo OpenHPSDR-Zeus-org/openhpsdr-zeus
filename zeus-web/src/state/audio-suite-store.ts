@@ -525,7 +525,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           );
           if (!res.ok) {
             set({ chainOrder: prev });
-            // eslint-disable-next-line no-console
+
             console.warn(
               `audio-suite chain-membership PUT rejected: ${res.status} ${res.statusText}`,
             );
@@ -537,7 +537,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           }
         } catch (err) {
           set({ chainOrder: prev });
-          // eslint-disable-next-line no-console
+
           console.warn('audio-suite chain-membership PUT threw', err);
         }
       },
@@ -558,7 +558,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           );
           if (!res.ok) {
             set({ rxChainOrder: prev });
-            // eslint-disable-next-line no-console
+
             console.warn(
               `rx-audio-suite chain-membership PUT rejected: ${res.status} ${res.statusText}`,
             );
@@ -571,7 +571,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           await get().loadRxProcessingModeFromServer();
         } catch (err) {
           set({ rxChainOrder: prev });
-          // eslint-disable-next-line no-console
+
           console.warn('rx-audio-suite chain-membership PUT threw', err);
         }
       },
@@ -606,7 +606,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             );
           }
         } catch (err) {
-          // eslint-disable-next-line no-console
+
           console.warn(`${route}-audio-suite profiles GET threw`, err);
         }
       },
@@ -621,12 +621,12 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           );
           if (!res.ok) {
             const error = await profileErrorMessage(res);
-            // eslint-disable-next-line no-console
+
             console.warn(`${route}-audio-suite profile save rejected: ${error}`);
             return { ok: false, error };
           }
         } catch (err) {
-          // eslint-disable-next-line no-console
+
           console.warn(`${route}-audio-suite profile save threw`, err);
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
@@ -644,7 +644,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           );
           if (!res.ok) {
             const error = await profileErrorMessage(res);
-            // eslint-disable-next-line no-console
+
             console.warn(`${route}-audio-suite profile apply rejected: ${error}`);
             return { ok: false, error };
           }
@@ -699,7 +699,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           }
           return { ok: true };
         } catch (err) {
-          // eslint-disable-next-line no-console
+
           console.warn(`${route}-audio-suite profile apply threw`, err);
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
@@ -712,12 +712,12 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           });
           if (!res.ok) {
             const error = await profileErrorMessage(res);
-            // eslint-disable-next-line no-console
+
             console.warn(`${route}-audio-suite profile delete rejected: ${error}`);
             return { ok: false, error };
           }
         } catch (err) {
-          // eslint-disable-next-line no-console
+
           console.warn(`${route}-audio-suite profile delete threw`, err);
           return { ok: false, error: err instanceof Error ? err.message : String(err) };
         }
@@ -769,7 +769,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             errors: body.errors ?? [],
           };
         } catch (err) {
-          // eslint-disable-next-line no-console
+
           console.warn('audio-suite scan-vst-directory threw', err);
           return { ...empty, error: String(err) };
         }
@@ -800,7 +800,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             message: result.message,
           };
         } catch (err) {
-          // eslint-disable-next-line no-console
+
           console.warn('audio-suite uninstall threw', err);
           return { ok: false, deferred: false, error: String(err) };
         }
@@ -840,14 +840,14 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             // Roll back on server-side validation failure (e.g. set
             // membership changed between our GET and PUT).
             set({ chainOrder: current });
-            // eslint-disable-next-line no-console
+
             console.warn(
               `audio-suite chain-order PUT rejected: ${res.status} ${res.statusText}`,
             );
           }
         } catch (err) {
           set({ chainOrder: current });
-          // eslint-disable-next-line no-console
+
           console.warn('audio-suite chain-order PUT threw', err);
         }
       },
@@ -861,7 +861,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             set({ chainOrder: body.pluginIds });
           }
         } catch (err) {
-          // eslint-disable-next-line no-console
+
           console.warn('audio-suite chain-order GET threw', err);
         }
       },
@@ -890,7 +890,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           });
           if (!res.ok) {
             set({ rxChainOrder: current });
-            // eslint-disable-next-line no-console
+
             console.warn(
               `rx-audio-suite chain-order PUT rejected: ${res.status} ${res.statusText}`,
             );
@@ -899,7 +899,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           await get().loadRxProcessingModeFromServer();
         } catch (err) {
           set({ rxChainOrder: current });
-          // eslint-disable-next-line no-console
+
           console.warn('rx-audio-suite chain-order PUT threw', err);
         }
       },
@@ -913,7 +913,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             set({ rxChainOrder: body.pluginIds });
           }
         } catch (err) {
-          // eslint-disable-next-line no-console
+
           console.warn('rx-audio-suite chain-order GET threw', err);
         }
       },
@@ -954,7 +954,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           if (!res.ok) {
             set({ previewEnabled: prev });
             useTxStore.getState().setTxMonitorEnabled(prev);
-            // eslint-disable-next-line no-console
+
             console.warn(
               `audio-suite preview PUT rejected: ${res.status} ${res.statusText}`,
             );
@@ -967,7 +967,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
         } catch (err) {
           set({ previewEnabled: prev });
           useTxStore.getState().setTxMonitorEnabled(prev);
-          // eslint-disable-next-line no-console
+
           console.warn('audio-suite preview PUT threw', err);
         }
       },
@@ -985,7 +985,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             set({ masterBypassed: body.bypassed });
           }
         } catch (err) {
-          // eslint-disable-next-line no-console
+
           console.warn('audio-suite master-bypass GET threw', err);
         }
       },
@@ -1003,14 +1003,14 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           });
           if (!res.ok) {
             set({ masterBypassed: prev });
-            // eslint-disable-next-line no-console
+
             console.warn(
               `audio-suite master-bypass PUT rejected: ${res.status} ${res.statusText}`,
             );
           }
         } catch (err) {
           set({ masterBypassed: prev });
-          // eslint-disable-next-line no-console
+
           console.warn('audio-suite master-bypass PUT threw', err);
         }
       },
@@ -1024,7 +1024,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             set({ rxMasterBypassed: body.bypassed });
           }
         } catch (err) {
-          // eslint-disable-next-line no-console
+
           console.warn('rx-audio-suite master-bypass GET threw', err);
         }
       },
@@ -1041,14 +1041,14 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           });
           if (!res.ok) {
             set({ rxMasterBypassed: prev });
-            // eslint-disable-next-line no-console
+
             console.warn(
               `rx-audio-suite master-bypass PUT rejected: ${res.status} ${res.statusText}`,
             );
           }
         } catch (err) {
           set({ rxMasterBypassed: prev });
-          // eslint-disable-next-line no-console
+
           console.warn('rx-audio-suite master-bypass PUT threw', err);
         }
       },
@@ -1070,7 +1070,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
             vstEngineActive: body.engineActive === true,
           });
         } catch (err) {
-          // eslint-disable-next-line no-console
+
           console.warn('audio-suite processing-mode GET threw', err);
         }
       },
@@ -1094,7 +1094,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
               typeof body.degradedBlocks === 'number' ? body.degradedBlocks : 0,
           });
         } catch (err) {
-          // eslint-disable-next-line no-console
+
           console.warn('rx-audio-suite processing-mode GET threw', err);
         }
       },
@@ -1112,7 +1112,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           });
           if (!res.ok) {
             set({ processingMode: prev });
-            // eslint-disable-next-line no-console
+
             console.warn(
               `audio-suite processing-mode PUT rejected: ${res.status} ${res.statusText}`,
             );
@@ -1130,7 +1130,7 @@ export const useAudioSuiteStore = create<AudioSuiteState>()(
           });
         } catch (err) {
           set({ processingMode: prev });
-          // eslint-disable-next-line no-console
+
           console.warn('audio-suite processing-mode PUT threw', err);
         }
       },

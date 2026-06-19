@@ -50,12 +50,8 @@ This takes a few minutes; subsequent starts are instant.
 
 - **64-bit OS mandatory** — `linux-arm64` does not run on 32-bit Raspberry
   Pi OS. Use Raspberry Pi OS 64-bit or Debian arm64 (trixie or later).
-- **`libfftw3-double3`** — the only runtime dependency not bundled.
-  On Debian 13 it is usually pre-installed; install it manually if missing.
-
-```bash
-sudo apt-get install -y libfftw3-double3
-```
+- **No system FFTW package required** — release tarballs bundle the arm64
+  `libfftw3.so.3` and `libfftw3f.so.3` files beside `libwdsp.so`.
 
 ---
 

@@ -43,7 +43,7 @@
 // License for details.
 
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
-import { toolbarFavDragMime } from './toolbar/ToolbarFavorites';
+import { toolbarFavDragMime } from './toolbar/toolbarFavoriteDrag';
 
 type TuningStep = {
   hz: number;

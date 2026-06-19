@@ -71,16 +71,23 @@ For local development:
 
 ```powershell
 # Install dependencies
-vcpkg install fftw3:x64-windows
-# or for ARM64: vcpkg install fftw3:arm64-windows
+vcpkg install fftw3:x64-windows-static-md
+# or for ARM64: vcpkg install fftw3:arm64-windows-static
 
 # Configure (x64)
 cmake -S native\wdsp -B native\build -G "Visual Studio 17 2022" -A x64 `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+  -DVCPKG_TARGET_TRIPLET=x64-windows-static-md `
+  -DWDSP_WITH_NR3=OFF `
+  -DWDSP_WITH_NR4=ON
 
 # Configure (ARM64)
 cmake -S native\wdsp -B native\build -G "Visual Studio 17 2022" -A ARM64 `
-  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake"
+  -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT\scripts\buildsystems\vcpkg.cmake" `
+  -DVCPKG_TARGET_TRIPLET=arm64-windows-static `
+  -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+  -DWDSP_WITH_NR3=OFF `
+  -DWDSP_WITH_NR4=ON
 
 # Build
 cmake --build native\build --config Release
@@ -92,15 +99,17 @@ copy native\build\Release\wdsp.dll Zeus.Dsp\runtimes\win-x64\native\
 
 ## Automated Builds via GitHub Actions
 
-Native libraries for Windows and Linux are automatically built by the
+Native libraries for Windows and Linux are built by the manual
 `.github/workflows/build-native-libs.yml` workflow. This workflow:
 
 - Builds for Windows (x64, arm64) using MSVC and vcpkg
-- Builds for Linux (x64, arm64) using GCC
+- Builds for Linux (x64, arm64) using GCC/aarch64 cross-compilation
+- Verifies NR4/SBNR exports on every WDSP artifact
+- Bundles the FFTW side-by-side libraries for dynamically linked RIDs
 - Stages the libraries in `Zeus.Dsp/runtimes/<rid>/native/`
-- Can be triggered manually via workflow_dispatch or automatically on changes to `native/`
+- Can be triggered manually via workflow_dispatch
 
-To trigger a manual build, go to Actions → "Build Native WDSP Libraries" → "Run workflow".
+To trigger a manual build, go to Actions → "Build Native Libraries" → "Run workflow".
 
 ## MVP API surface
 
@@ -130,14 +139,18 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\audit-wdsp-runtime-art
 powershell -NoProfile -ExecutionPolicy Bypass -File tools\audit-wdsp-native-symbols.ps1 -BinaryPath Zeus.Dsp\runtimes\win-x64\native\wdsp.dll -RequireBinaryExports
 ```
 
-Current checked-in runtime status:
+Release packaging status:
 
-- `win-x64` is current-NR ready when `wdsp.dll` exports NR4/SBNR symbols and the
-  required FFTW runtime DLLs are bundled side-by-side in
-  `Zeus.Dsp/runtimes/win-x64/native/`.
-- `win-arm64`, `linux-x64`, `linux-arm64`, and `osx-arm64` are present but do
-  still require the normal native artifact workflow before current
-  noise-reduction capability is advertised as packaged on those platforms.
+- Release builds rebuild WDSP for `win-x64`, `win-arm64`, `linux-x64`,
+  `linux-arm64`, and `osx-arm64`, then fail if the NR4/SBNR exports are
+  missing.
+- `win-x64`, Linux, and macOS package FFTW side-by-side with WDSP when the
+  native binary dynamically links it.
+- `win-arm64` is the exception: FFTW and the CRT are statically linked into
+  `wdsp.dll`, so no side-by-side FFTW DLLs are expected for that RID.
+- Checked-in runtime binaries are local-development conveniences. Refresh
+  them through the manual native workflow before committing native artifact
+  updates.
 
 ## Source modifications vs. upstream
 

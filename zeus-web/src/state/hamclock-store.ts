@@ -107,7 +107,7 @@ export const useHamClockStore = create<HamClockState>()((set) => ({
       if (!res.ok) return;
       set({ status: (await res.json()) as HamClockStatus });
     } catch (err) {
-      // eslint-disable-next-line no-console
+
       console.warn('hamclock status GET threw', err);
     }
   },
@@ -119,7 +119,7 @@ export const useHamClockStore = create<HamClockState>()((set) => ({
         set({ status: (await res.json()) as HamClockStatus });
       }
     } catch (err) {
-      // eslint-disable-next-line no-console
+
       console.warn('hamclock install POST threw', err);
     }
   },
@@ -130,7 +130,7 @@ export const useHamClockStore = create<HamClockState>()((set) => ({
       const body = await res.json();
       if (body?.status) set({ status: body.status as HamClockStatus });
     } catch (err) {
-      // eslint-disable-next-line no-console
+
       console.warn('hamclock start POST threw', err);
     }
   },
@@ -140,7 +140,7 @@ export const useHamClockStore = create<HamClockState>()((set) => ({
       const res = await fetch('/api/hamclock/stop', { method: 'POST' });
       if (res.ok) set({ status: (await res.json()) as HamClockStatus });
     } catch (err) {
-      // eslint-disable-next-line no-console
+
       console.warn('hamclock stop POST threw', err);
     }
   },

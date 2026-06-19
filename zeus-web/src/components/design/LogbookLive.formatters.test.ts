@@ -11,7 +11,7 @@
 // "21:30" on a 21:30-wall-clock summer evening.
 
 import { describe, expect, it } from 'vitest';
-import { formatQsoDateUtc, formatQsoTimeUtc } from './LogbookLive';
+import { formatQsoDateUtc, formatQsoTimeUtc } from './logbook-formatters';
 
 describe('LogbookLive formatters', () => {
   // Pick a timestamp where UTC and any plausible local timezone clearly

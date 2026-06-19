@@ -76,7 +76,6 @@ If you see **"Zeus.app can't be opened because it is from an unidentified develo
 
 ### Requirements
 - Linux x64 distribution (Ubuntu 20.04+, Debian 11+, Fedora 35+, or equivalent)
-- libfftw3 (usually pre-installed on most distributions)
 - 4 GB RAM minimum, 8 GB recommended
 - Desktop environment (for automatic browser launching)
 
@@ -102,22 +101,9 @@ If you see **"Zeus.app can't be opened because it is from an unidentified develo
 
 5. Your default browser will open to `http://localhost:6060`
 
-### Installing libfftw3 (if needed)
+The release archive bundles the FFTW runtime libraries used by WDSP. System
+FFTW packages are only needed when rebuilding native WDSP locally from source.
 
-**Ubuntu/Debian:**
-```bash
-sudo apt-get install libfftw3-3
-```
-
-**Fedora:**
-```bash
-sudo dnf install fftw3
-```
-
-**Arch:**
-```bash
-sudo pacman -S fftw
-```
 
 ### Creating a Desktop Launcher (Optional)
 

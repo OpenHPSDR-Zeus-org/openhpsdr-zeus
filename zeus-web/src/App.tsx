@@ -42,7 +42,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
@@ -68,7 +68,7 @@ import { PsToggleButton } from './components/PsToggleButton';
 import { PaTempChip } from './components/PaTempChip';
 import { QrzStatusPill } from './components/QrzStatusPill';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
-import { SettingsView, type SettingsTabId } from './components/SettingsMenu';
+import type { SettingsTabId } from './components/SettingsMenu';
 import { SignalIntelligenceController } from './components/SignalIntelligenceController';
 import { SmartNrController } from './components/SmartNrController';
 import { DspSceneDiagnosticsPublisher } from './components/DspSceneDiagnosticsPublisher';
@@ -78,7 +78,7 @@ import { TxStationProfileActivator } from './components/TxStationProfileActivato
 import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
 import { BOARD_LABELS } from './api/radio';
-import { useFilterRibbonOpenSync } from './components/filter/FilterRibbon';
+import { useFilterRibbonOpenSync } from './components/filter/filterRibbonShared';
 import { CONTACTS, bandOf } from './components/design/data';
 import { bearingDeg, distanceKm, dayNightAt } from './components/design/geo';
 import { startRealtime } from './realtime/ws-client';
@@ -101,11 +101,19 @@ import { SpectrumWheelActionsContext, type SpectrumWheelActions } from './util/u
 import { BandPlanProvider } from './context/BandPlanContext';
 import { registerServiceWorker } from './service-worker/registerSW';
 import { UpdatePrompt } from './service-worker/UpdatePrompt';
-import { MobileApp } from './mobile/MobileApp';
 import { useDesktopViewportLock, useIsMobileViewport } from './mobile/use-mobile-viewport';
 import type L from 'leaflet';
 import type { QrzStation } from './api/qrz';
 import type { Contact } from './components/design/data';
+
+const SettingsView = lazy(async () => {
+  const module = await import('./components/SettingsMenu');
+  return { default: module.SettingsView };
+});
+const MobileApp = lazy(async () => {
+  const module = await import('./mobile/MobileApp');
+  return { default: module.MobileApp };
+});
 
 // See ../state/connection-store.ts — StateDto is REST-poll only; WS is binary
 // frames. 1 s poll keeps slow state (atten offset, adc overload) fresh — the
@@ -416,7 +424,7 @@ export default function App() {
       ? 'Select one or more rows to publish'
       : 'Publish selected QSOs to QRZ logbook';
 
-  const logbookActions = (
+  const logbookActions = useMemo(() => (
     <>
       <button
         type="button"
@@ -436,7 +444,15 @@ export default function App() {
         Export
       </button>
     </>
-  );
+  ), [
+    logExportAdif,
+    logPublishInFlight,
+    logPublishSelected,
+    logSelectedCount,
+    logSelectedIds,
+    publishDisabled,
+    publishTitle,
+  ]);
 
   // Live rotator heading — drives the map's beam lines when rotctld is up so
   // the beam shows the actual antenna direction, not the great-circle bearing
@@ -589,30 +605,32 @@ export default function App() {
 
   const mapInteractive = terminatorActive && mapModifier && mapAvailable;
 
-  const onCallsignSubmit = (e: FormEvent<HTMLFormElement>) => {
+  const onCallsignSubmit = useCallback((e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     runQrzLookup();
-  };
+  }, [runQrzLookup]);
 
   const bandLabel = bandOf(vfoHz);
 
   // Effective home for the map + bearing math. Null until QRZ supplies a real
   // station — the map just omits the home marker and great-circle until then.
-  const effectiveHome = qrzHome && qrzHome.lat != null && qrzHome.lon != null
-    ? {
-        call: qrzHome.callsign,
-        lat: qrzHome.lat,
-        lon: qrzHome.lon,
-        grid: qrzHome.grid ?? '',
-        imageUrl: qrzHome.imageUrl ?? null,
-      }
-    : null;
+  const effectiveHome = useMemo(() => (
+    qrzHome && qrzHome.lat != null && qrzHome.lon != null
+      ? {
+          call: qrzHome.callsign,
+          lat: qrzHome.lat,
+          lon: qrzHome.lon,
+          grid: qrzHome.grid ?? '',
+          imageUrl: qrzHome.imageUrl ?? null,
+        }
+      : null
+  ), [qrzHome]);
 
   const sp = contact && effectiveHome ? bearingDeg(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
   const lp = (sp + 180) % 360;
   const dist = contact && effectiveHome ? distanceKm(effectiveHome.lat, effectiveHome.lon, contact.lat, contact.lon) : 0;
 
-  function rotateToBearing(brg: number) {
+  const rotateToBearing = useCallback((brg: number) => {
     const normalized = ((brg % 360) + 360) % 360;
     setBeamOverrideDeg(normalized);
     setBeamInputStr(normalized.toFixed(0));
@@ -620,9 +638,9 @@ export default function App() {
     if (rot.config.enabled && rot.status?.connected) {
       void rot.setAzimuth(normalized);
     }
-  }
+  }, []);
 
-  function submitBeam(e: FormEvent<HTMLFormElement>) {
+  const submitBeam = useCallback((e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const trimmed = beamInputStr.trim();
     if (!trimmed) {
@@ -632,20 +650,20 @@ export default function App() {
     const parsed = Number(trimmed);
     if (!Number.isFinite(parsed)) return;
     rotateToBearing(parsed);
-  }
+  }, [beamInputStr, rotateToBearing]);
 
   // --- Hero title
-  const heroTitle = terminatorActive && contact ? (() => {
-    return (
+  const heroTitle = useMemo(() => (
+    terminatorActive && contact ? (
       <>
         Panadapter · World Map ·{' '}
         <span style={{ color: 'var(--accent)' }}>{contact.callsign}</span> ·{' '}
         {Math.round(dist).toLocaleString()} km · brg {sp.toFixed(0)}°
       </>
-    );
-  })() : (
-    <>Panadapter · {(vfoHz / 1e6).toFixed(3)} MHz · {bandLabel}</>
-  );
+    ) : (
+      <>Panadapter · {(vfoHz / 1e6).toFixed(3)} MHz · {bandLabel}</>
+    )
+  ), [bandLabel, contact, dist, sp, terminatorActive, vfoHz]);
 
   // When no radio is connected, dim the workspace and centre the full
   // ConnectPanel on top so the eye lands on it. The backdrop is
@@ -686,7 +704,7 @@ export default function App() {
 
   // Bundle workspace state into a context so panel components can consume it
   // without prop-drilling through the FlexWorkspace factory.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+
   const workspaceCtx = useMemo(() => ({
     connected,
     moxOn,
@@ -737,10 +755,8 @@ export default function App() {
     enriching, lookupKey, contact, workedSummary, workedSummaryLoading,
     qrzLookupError, qrzActive, mapAvailable, mapInteractive, effectiveHome,
     beamOverrideDeg, beamInputStr, rotLiveAz, sp, lp, dist,
-    // heroTitle and logbookActions are ReactNodes (new objects each render);
-    // their underlying primitive deps are already above, so omit them here.
-    dspActive, logbookTitle,
-    handleLogQso, handleClearQrz, runQrzLookup,
+    heroTitle, dspActive, logbookTitle, logbookActions,
+    handleLogQso, handleClearQrz, onCallsignSubmit, runQrzLookup, submitBeam,
   ]);
 
   if (detachedLayoutId) {
@@ -787,7 +803,9 @@ export default function App() {
           <DspSceneDiagnosticsPublisher />
           <TxStationProfileActivator />
           <AudioPlaybackDiagnosticsPublisher />
-          <MobileApp />
+          <Suspense fallback={null}>
+            <MobileApp />
+          </Suspense>
         </SpectrumWheelActionsContext.Provider>
       </WorkspaceContext.Provider>
     );
@@ -918,10 +936,12 @@ export default function App() {
       <div className="workspace-area">
         <AlertBanner />
         {settingsViewOpen ? (
-          <SettingsView
-            initialTab={settingsInitialTab as SettingsTabId | undefined}
-            onClose={() => setSettingsView(false)}
-          />
+          <Suspense fallback={null}>
+            <SettingsView
+              initialTab={settingsInitialTab as SettingsTabId | undefined}
+              onClose={() => setSettingsView(false)}
+            />
+          </Suspense>
         ) : (
           <FlexWorkspace key={activeLayoutId} />
         )}

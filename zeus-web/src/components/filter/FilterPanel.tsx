@@ -19,7 +19,7 @@ import {
   type TxVfo,
 } from '../../api/client';
 import { useFilterFavoritesStore, useFavoritesForMode } from '../../state/filter-favorites-store';
-import { FILTER_DRAG_MIME } from './FilterRibbon';
+import { FILTER_DRAG_MIME } from './filterRibbonShared';
 import { getPresetsForMode } from './filterPresets';
 
 export function FilterPanel() {

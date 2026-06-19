@@ -125,35 +125,37 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
   const targetLayoutId = layoutId ?? activeLayoutId;
 
   const stackRef = useRef<HTMLDivElement | null>(null);
-  const [split, setSplit] = useState(() => readInitialSplit(tile?.instanceConfig));
+  const tileUid = tile?.uid;
+  const tileInstanceConfig = tile?.instanceConfig;
+  const [split, setSplit] = useState(() => readInitialSplit(tileInstanceConfig));
   const [splitDragging, setSplitDragging] = useState(false);
 
   useEffect(() => {
-    const persisted = readInstanceSplit(tile?.instanceConfig);
+    const persisted = readInstanceSplit(tileInstanceConfig);
     if (persisted === null) return;
     setSplit((current) => (Math.abs(current - persisted) < 0.001 ? current : persisted));
-  }, [tile?.uid, tile?.instanceConfig]);
+  }, [tileUid, tileInstanceConfig]);
 
   // One-time migration from the previous localStorage-only split into the
   // server-backed workspace layout config. The localStorage mirror remains as
   // an immediate fallback, but the tile config is the restart-safe source.
   useEffect(() => {
     if (!layoutLoaded) return;
-    if (!tile) return;
-    if (readInstanceSplit(tile.instanceConfig) !== null) return;
+    if (!tileUid) return;
+    if (readInstanceSplit(tileInstanceConfig) !== null) return;
     const legacy = readLegacySplit();
     if (legacy === null) return;
     updateTileInstanceConfig(
       targetLayoutId,
-      tile.uid,
-      mergeInstanceSplit(tile.instanceConfig, legacy),
+      tileUid,
+      mergeInstanceSplit(tileInstanceConfig, legacy),
     );
   }, [
     layoutLoaded,
     layoutRadioKey,
     targetLayoutId,
-    tile?.uid,
-    tile?.instanceConfig,
+    tileUid,
+    tileInstanceConfig,
     updateTileInstanceConfig,
   ]);
 

@@ -226,6 +226,7 @@ function WorkspaceCanvas({
   // plugin modules load at startup (getPanelDef inside the useMemo would
   // otherwise return undefined and never re-resolve).
   const pluginPanels = usePluginPanels();
+  const pluginPanelKey = pluginPanels.map((panel) => panel.panelId).join('\0');
   // Track container height so rowHeight can shrink when the workspace is
   // tight. Rows do not grow past the authored design density; extra viewport
   // height stays on the workspace ground instead of stretching every panel.
@@ -323,7 +324,7 @@ function WorkspaceCanvas({
   const rglLayouts = useMemo(
     () => ({
       lg: tiles.map((t) => {
-        const def = getPanelDef(t.panelId);
+        const def = getPanelDef(t.panelId, pluginPanelKey);
         // Clamp persisted size to the panel's maxW/maxH. RGL only enforces
         // these caps during resize drags, so a tile saved wider than its cap
         // (e.g. a Filter Presets tile placed before it gained maxW) would
@@ -348,7 +349,7 @@ function WorkspaceCanvas({
         };
       }),
     }),
-    [tiles, pluginPanels],
+    [tiles, pluginPanelKey],
   );
 
   return (

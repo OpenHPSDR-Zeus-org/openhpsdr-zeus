@@ -167,7 +167,7 @@ function schedulePush(state: { theme: ThemeId; overrides: Partial<Record<Tweakab
       .catch((err) => {
         // Server unreachable / 5xx — keep the local change, retry on next mutation.
         // Cast to keep this file lint-clean without pulling a logger.
-        // eslint-disable-next-line no-console
+
         console.warn('theme-store: PUT /api/theme-settings failed', err);
       });
   }, 300);
@@ -221,7 +221,7 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
       // Backend unreachable — stay on the localStorage cache. Mark hydrated
       // so we don't loop forever; the next mutation will attempt a PUT and
       // recover the link. Surface for debugging.
-      // eslint-disable-next-line no-console
+
       console.warn('theme-store: hydrate failed, using localStorage cache', err);
       set({ hydrated: true });
     }

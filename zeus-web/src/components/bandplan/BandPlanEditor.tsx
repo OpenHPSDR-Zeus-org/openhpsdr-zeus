@@ -94,7 +94,7 @@ export function BandPlanEditor() {
     setError(null);
     try {
       const sorted = [...rows].sort((a, b) => a.lowHz - b.lowHz);
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+
       const segs: BandSegment[] = sorted.map(({ _key, ...rest }) => rest);
       await store.saveOverride(selectedRegion, segs);
       setDirty(false);

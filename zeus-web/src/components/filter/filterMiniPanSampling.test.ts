@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatEqActualDb, frameBinRangeForHz, miniPanSignalLevel, sampleSpectrumAtHz } from './FilterMiniPan';
+import { formatEqActualDb, frameBinRangeForHz, miniPanSignalLevel, sampleSpectrumAtHz } from './miniPanMath';
 
 describe('FilterMiniPan frequency sampling', () => {
   it('keeps partial frame overlap at its true frequency position', () => {

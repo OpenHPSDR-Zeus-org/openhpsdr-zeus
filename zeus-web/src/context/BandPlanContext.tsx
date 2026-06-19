@@ -4,7 +4,7 @@
 // Copyright (C) 2025-2026 Brian Keating (EI6LF),
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 
-import { createContext, useContext, useEffect, type ReactNode } from 'react';
+import { createContext, useEffect, type ReactNode } from 'react';
 import { useBandPlanStore } from '../state/bandPlan';
 import type { BandRegion, BandSegment, RxMode } from '../api/bands';
 
@@ -39,10 +39,4 @@ export function BandPlanProvider({ children }: { children: ReactNode }) {
       {children}
     </BandPlanContext.Provider>
   );
-}
-
-export function useBandPlan(): BandPlanContextValue {
-  const ctx = useContext(BandPlanContext);
-  if (!ctx) throw new Error('useBandPlan must be used inside BandPlanProvider');
-  return ctx;
 }

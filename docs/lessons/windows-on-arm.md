@@ -12,9 +12,9 @@ is.
 - Native `wdsp.dll` cross-compiles cleanly under VS 2022's ARM64
   toolset once the SSE FTZ guard at `native/wdsp/channel.c:101` is
   widened to also exclude `_M_ARM64` / `__aarch64__`.
-- vcpkg triplet is `arm64-windows-static-md` — same shape as the x64
-  triplet (FFTW3 statically linked, dynamic CRT), just the ARM64
-  variant.
+- vcpkg triplet is `arm64-windows-static` — FFTW3 and the CRT are
+  statically linked into `wdsp.dll`, so a fresh Windows ARM64 install does
+  not need the ARM64 VC++ Redistributable or side-by-side FFTW DLLs.
 - Both native and managed builds run on `windows-latest` (x64 host,
   MSVC ARM64 cross-tools). We do **not** use the `windows-11-arm`
   runner.
@@ -62,28 +62,26 @@ anywhere else in the tree, no `_mm_*` calls, and no inline asm.
 re-grep before adding any new SSE code, or `windows-arm64` will silently
 break.
 
-## vcpkg triplet — `arm64-windows-static-md`
+## vcpkg triplet — `arm64-windows-static`
 
 The Windows native build uses vcpkg for FFTW3:
 
 ```yaml
-vcpkg install fftw3:${{ matrix.arch }}-windows-static-md
+vcpkg install fftw3:arm64-windows-static
 ```
 
-`static-md` = FFTW3 *statically linked* into `wdsp.dll`, but using the
-*dynamic* CRT (`/MD`). This produces a single self-contained
-`wdsp.dll` with no `fftw3.dll` runtime dependency — same shape as the
-x64 build. `arm64-windows-static-md` is a stock vcpkg triplet (no
-custom triplet file required) and builds all three precisions
-(`fftw3`, `fftw3f`, `fftw3l`) so libspecbleach (NR4) gets `fftw3f` from
-the same install.
+`static` = FFTW3 and the CRT are both linked into `wdsp.dll` (`/MT`).
+The workflow passes `CMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded` for the
+ARM64 CMake configure so WDSP and vcpkg agree on the CRT model. The
+resulting ARM64 PE imports only Windows-shipped DLLs (`KERNEL32.dll` and
+`AVRT.dll` in the current audit), which keeps the installer usable on a
+fresh Surface Pro X / Snapdragon system.
 
-Do **not** switch to `arm64-windows` (dynamic FFTW) — that ships an
-extra DLL that the installer would need to bundle. Do **not** switch
-to `arm64-windows-static` (static CRT) — that opts into `/MT` and
-silently changes the CRT for the whole DLL, producing a CRT mismatch
-against anything else in `Zeus.Dsp` that happens to link against the
-default dynamic CRT.
+Do **not** switch to `arm64-windows` (dynamic FFTW) — that ships extra
+FFTW DLLs that the installer would need to bundle. Do **not** switch to
+`arm64-windows-static-md` unless the installer also starts carrying the
+ARM64 VC++ Redistributable; otherwise `WdspNativeLoader` fails before it
+can open a channel on clean Windows ARM64 machines.
 
 ## Why `windows-latest` (x64 host), not `windows-11-arm`
 

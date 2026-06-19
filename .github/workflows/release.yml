@@ -277,9 +277,8 @@ jobs:
     needs: determine-version
     # Pinned to ubuntu-22.04 (glibc 2.35) to match release.yml's linux build
     # host — see the comment in build-release matrix's linux entry.
-    # linux-arm64 is intentionally not built here: no release artifact ships
-    # for that RID. Use build-native-libs.yml (workflow_dispatch) to refresh
-    # the committed linux-arm64 binary for local dev when needed.
+    # linux-arm64 is built in a separate cross-compile job below because it
+    # needs an aarch64 toolchain and arm64 FFTW build.
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -443,24 +442,83 @@ jobs:
           path: staged/osx-arm64/
 
   build-native-linux-arm64:
-    name: Build native miniaudio (linux-arm64, cross-compile)
+    name: Build native WDSP (linux-arm64, cross-compile)
     needs: determine-version
     # Cross-compile on the ubuntu-22.04 x64 runner using aarch64-linux-gnu-gcc
     # (glibc 2.35 build host → compatible with Debian 12+, RPi OS Bookworm+).
-    # Only libminiaudio.so is built here — libwdsp.so for arm64 is committed
-    # under Zeus.Dsp/runtimes/linux-arm64/native/ and ships as-is.
-    # miniaudio has no external deps (ALSA/PA/JACK loaded at runtime via
-    # dlopen), so the cross-compile is straightforward.
+    # Build fresh libwdsp.so with NR4/SBNR plus libminiaudio.so and bundle the
+    # arm64 FFTW SONAMEs side-by-side so release packages never ship stale
+    # committed linux-arm64 native blobs.
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.ref }}
 
-      - name: Install aarch64 cross-compiler
+      - name: Install aarch64 cross toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-aarch64-linux-gnu cmake build-essential
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu cmake build-essential pkg-config wget make
+
+      - name: Build arm64 FFTW double and float
+        run: |
+          set -eux
+          wget https://www.fftw.org/fftw-3.3.10.tar.gz
+          tar xzf fftw-3.3.10.tar.gz
+          cp -a fftw-3.3.10 fftw-3.3.10-float
+
+          cd fftw-3.3.10
+          ./configure --host=aarch64-linux-gnu --prefix="$HOME/fftw-arm64" \
+            CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ \
+            --enable-shared --disable-static
+          make -j"$(nproc)"
+          make install
+
+          cd ../fftw-3.3.10-float
+          ./configure --host=aarch64-linux-gnu --prefix="$HOME/fftw-arm64" \
+            CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++ \
+            --enable-float --enable-shared --disable-static
+          make -j"$(nproc)"
+          make install
+
+      - name: Configure WDSP
+        run: |
+          cmake -S native/wdsp -B native/build-wdsp-arm64 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWDSP_WITH_NR3=OFF \
+            -DWDSP_WITH_NR4=ON \
+            -DFFTW_ROOT="$HOME/fftw-arm64" \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_FIND_ROOT_PATH="$HOME/fftw-arm64" \
+            -DCMAKE_PREFIX_PATH="$HOME/fftw-arm64"
+
+      - name: Build WDSP
+        run: cmake --build native/build-wdsp-arm64 --config Release --parallel
+
+      - name: Verify SBNR exports
+        run: |
+          count=$(aarch64-linux-gnu-nm -D native/build-wdsp-arm64/libwdsp.so | grep -c "SetRXASBNR" || true)
+          echo "Found $count SetRXASBNR* exports"
+          if [ "$count" -ne 8 ]; then
+            echo "ERROR: Expected 8 SetRXASBNR* exports, got $count. NR4 did not link correctly."
+            exit 1
+          fi
+
+      - name: Stage WDSP + bundled FFTW
+        run: |
+          set -eux
+          mkdir -p staged/linux-arm64
+          cp native/build-wdsp-arm64/libwdsp.so staged/linux-arm64/libwdsp.so
+          for soname in libfftw3.so.3 libfftw3f.so.3; do
+            src=$(readlink -f "$HOME/fftw-arm64/lib/$soname")
+            test -f "$src"
+            cp "$src" "staged/linux-arm64/$soname"
+          done
+          file staged/linux-arm64/libwdsp.so
+          aarch64-linux-gnu-objdump -p staged/linux-arm64/libwdsp.so | grep NEEDED
 
       - name: Cross-compile libminiaudio for arm64
         run: |
@@ -471,15 +529,11 @@ jobs:
             -DCMAKE_SYSTEM_PROCESSOR=aarch64
           cmake --build native/build-miniaudio-arm64 --config Release --parallel
 
-      - name: Verify arm64 binary
+      - name: Stage miniaudio
         run: |
-          file native/build-miniaudio-arm64/libminiaudio.so
-          aarch64-linux-gnu-objdump -p native/build-miniaudio-arm64/libminiaudio.so | grep NEEDED
-
-      - name: Stage
-        run: |
-          mkdir -p staged/linux-arm64
           cp native/build-miniaudio-arm64/libminiaudio.so staged/linux-arm64/
+          file staged/linux-arm64/libminiaudio.so
+          aarch64-linux-gnu-objdump -p staged/linux-arm64/libminiaudio.so | grep NEEDED
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -530,11 +584,10 @@ jobs:
           - os: linux
             # arm64 (Raspberry Pi 4+, Pi 5, arm64 servers). Cross-published
             # from the ubuntu-22.04 x64 runner — dotnet publish -r linux-arm64
-            # works on any host arch. The committed libwdsp.so arm64 is used
-            # directly (no fresh native build job for arm64 yet; a dedicated
-            # ubuntu-24.04-arm runner can replace this when glibc requirements
-            # for arm64 targets are confirmed). AppImages are cross-built via
-            # ARCH=aarch64 — appimagetool downloads the aarch64 runtime.
+            # works on any host arch. Fresh arm64 WDSP/miniaudio artifacts are
+            # built above on ubuntu-22.04 with the aarch64 cross toolchain.
+            # AppImages are cross-built via ARCH=aarch64 — appimagetool
+            # downloads the aarch64 runtime.
             runner: ubuntu-22.04
             rid: linux-arm64
             artifact: linux-arm64-tarball
@@ -588,9 +641,6 @@ jobs:
       # committed at the tag SHA. This is what makes releases immune to
       # stale-committed-natives drift — the binaries that ship are always
       # built from the exact source the tag points at.
-      # Downloads libwdsp.so + libminiaudio.so for most RIDs. For linux-arm64
-      # the artifact only contains libminiaudio.so (cross-compiled); libwdsp.so
-      # is committed and stays in place alongside it.
       - name: Download fresh native WDSP for ${{ matrix.config.rid }}
         if: matrix.config.uses_committed_native != 'true'
         uses: actions/download-artifact@v4
@@ -1073,7 +1123,7 @@ jobs:
             in the application menu, or invoke any of the three launchers
             directly: `./openhpsdr-zeus` (headless service), `./openhpsdr-zeus-desktop`
             (Photino window), `./openhpsdr-zeus-server` (backend + status window).
-            Self-contained .NET runtime + statically-embedded FFTW3.
+            Self-contained .NET runtime + bundled side-by-side FFTW3.
           - **OpenhpsdrZeus-${{ steps.version.outputs.version }}-linux-x86_64.AppImage**
             — single-file Photino desktop launcher: `chmod +x` and run.
           - **OpenhpsdrZeus-Server-${{ steps.version.outputs.version }}-linux-x86_64.AppImage**
@@ -1087,8 +1137,8 @@ jobs:
             Extract and run `./OpenhpsdrZeus`; open `http://<pi-ip>:6060` in
             any browser. Self-contained — no .NET install needed on the Pi.
             Requires: 64-bit OS (Raspberry Pi OS 64-bit or Debian arm64).
-            No extra packages needed (`libfftw3-double3` is pre-installed on
-            Debian 13; statically linked on older distros).
+            No extra FFTW packages needed; `libfftw3.so.3` and `libfftw3f.so.3`
+            are bundled beside `libwdsp.so`.
             Desktop/Photino mode requires `libwebkit2gtk-4.1-0`.
             See `docs/lessons/raspberry-pi-deployment.md` for the full setup guide.
 

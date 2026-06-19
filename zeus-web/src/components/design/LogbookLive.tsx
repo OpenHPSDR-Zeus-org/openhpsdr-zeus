@@ -45,37 +45,7 @@
 import { useEffect, useRef } from 'react';
 import { useLoggerStore } from '../../state/logger-store';
 import type { LogEntry } from '../../api/log';
-
-// QSO timestamps are stored / exported / uploaded to QRZ in UTC throughout
-// the server stack (Zeus.Server.Hosting/LogService.cs writes DateTime.UtcNow
-// when the client omits a value; QrzService.cs and the ADIF export both
-// pull QsoDateTimeUtc directly). The renderer used to drop into
-// browser-local time via Date.toLocale*String() with no timezone option —
-// which silently shifted the displayed clock for any operator outside
-// UTC. Ham-radio convention is to log + display QSO times in UTC always,
-// so both formatters pin timeZone:'UTC' and the column label carries a
-// "UTC" tag so the operator never has to guess.
-//
-// Exported so the test (LogbookLive.formatters.test.ts) can assert the
-// timezone behaviour without rendering the whole component.
-export function formatQsoTimeUtc(isoString: string): string {
-  const date = new Date(isoString);
-  return date.toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-    timeZone: 'UTC',
-  });
-}
-
-export function formatQsoDateUtc(isoString: string): string {
-  const date = new Date(isoString);
-  return date.toLocaleDateString([], {
-    month: 'short',
-    day: 'numeric',
-    timeZone: 'UTC',
-  });
-}
+import { formatQsoDateUtc, formatQsoTimeUtc } from './logbook-formatters';
 
 function compactList(parts: Array<string | null | undefined>): string {
   return parts.filter((p): p is string => !!p).join(' · ');

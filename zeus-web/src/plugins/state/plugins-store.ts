@@ -85,7 +85,7 @@ async function refreshRuntimePanels() {
     ) {
       return;
     }
-    // eslint-disable-next-line no-console
+
     console.warn('plugin runtime refresh threw', err);
   }
 }

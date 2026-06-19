@@ -58,13 +58,22 @@ import {
 import { setFilter } from '../../api/client';
 import { formatCutOffset, formatFilterWidth, nudgeStepHz } from './filterPresets';
 import type { Rx2AudioMode, RxMode, TxVfo } from '../../api/client';
+import {
+  DB_FLOOR,
+  MINI_NOISE_GATE_DB,
+  MINI_TRACE_RANGE_DB,
+  fitPassbandForMode,
+  formatEqActualDb,
+  frameBinRangeForHz,
+  miniPanSignalLevel,
+  sampleSpectrumAtHz,
+} from './miniPanMath';
 
 const DEFAULT_SPAN_HZ = 12_000;       // initial visible window around VFO
 const MIN_SPAN_HZ = 3_000;            // Ctrl+wheel zoom-in floor
 const MAX_SPAN_HZ = 48_000;           // Ctrl+wheel zoom-out ceiling
 const FILTER_VIEW_MARGIN_HZ = 800;    // keep tight zoom from clipping SSB passbands off-screen
 const TICK_STEP_HZ = 2_000;           // base axis-label spacing (scaled by span)
-const DB_FLOOR = -130;
 const DB_CEIL = -30;
 const POP_RANGE_DB = 55;              // SNR (dB above floor) that reaches full height in Pop mode
 const DRAG_MIN_INTERVAL_MS = 50;
@@ -88,8 +97,6 @@ const PEAK_PIN_MIN_CONFIDENCE = 0.42;
 const MEASUREMENT_PEAK_HOLD_MS = 1000; // hold prominent-frequency readouts for operator readability
 const EQ_METER_BANDS = 32;             // max bottom parametric-EQ blocks inside the passband
 const EQ_METER_AVG_MS = 5000;          // each EQ band shows a 5-second level average
-const MINI_TRACE_RANGE_DB = 20;        // visual SNR span above the noise knee
-const MINI_NOISE_GATE_DB = 3.5;        // soft knee above local floor; keeps noise faint, not invisible
 const EQ_LEVEL_REF_MIN_DB = 6;         // min SNR before a block participates in EQ balance
 const EQ_ACTUAL_RANGE_DB = 40;         // actual dB scale for the EQ block fill
 const PEAKHOLD_DECAY_PX = 0.45;       // peak-hold envelope fall rate (px/frame ≈ 13 px/s)
@@ -132,45 +139,6 @@ function isSymmetricMode(mode: RxMode): boolean {
   return mode === 'AM' || mode === 'SAM' || mode === 'DSB' || mode === 'FM';
 }
 
-// Single-sideband modes demodulate one side of the carrier only: LSB/CWL below
-// it (negative offsets), USB/CWU above it (positive offsets). DIGL/DIGU and the
-// symmetric modes straddle 0 (see filterPresets.ts), so they carry no sideband
-// constraint here.
-function lowerSidebandMode(mode: RxMode): boolean {
-  return mode === 'LSB' || mode === 'CWL';
-}
-function upperSidebandMode(mode: RxMode): boolean {
-  return mode === 'USB' || mode === 'CWU';
-}
-
-const FIT_MIN_EDGE_HZ = 50; // keep at least this sliver of passband off the carrier
-
-// Map a clicked signal's VFO-relative energy extent (loOff..hiOff, plus a little
-// breathing room) to a passband that respects the active mode's sideband. For
-// SSB/CW the passband must stay on the demodulated side of the carrier — a
-// signal sitting entirely on the WRONG side is unreachable without retuning, so
-// we return null and leave the filter untouched rather than flipping it to the
-// opposite sideband (operator report 2026-06-14: a click in LSB threw the
-// passband onto the USB side). Symmetric / DIG modes pass through unchanged.
-export function fitPassbandForMode(
-  mode: RxMode,
-  loOff: number,
-  hiOff: number,
-  margin: number,
-): { low: number; high: number } | null {
-  let low = Math.round(loOff - margin);
-  let high = Math.round(hiOff + margin);
-  if (lowerSidebandMode(mode)) {
-    if (loOff >= 0) return null;            // signal entirely above the carrier — wrong side
-    high = Math.min(high, -FIT_MIN_EDGE_HZ); // clamp the passband below the carrier
-  } else if (upperSidebandMode(mode)) {
-    if (hiOff <= 0) return null;            // signal entirely below the carrier — wrong side
-    low = Math.max(low, FIT_MIN_EDGE_HZ);   // clamp the passband above the carrier
-  }
-  if (high <= low + FIT_MIN_EDGE_HZ) return null;
-  return { low, high };
-}
-
 // Format VFO-relative Hz offset as absolute-MHz with 3 decimals (e.g. 14.249).
 // Used for x-axis tick labels.
 function formatTickMhz(absHz: number): string {
@@ -183,34 +151,6 @@ function tickStepForSpan(spanHz: number): number {
   if (spanHz <= 14_000) return TICK_STEP_HZ;
   if (spanHz <= 28_000) return 5_000;
   return 10_000;
-}
-
-export function frameBinRangeForHz(
-  startHz: number,
-  endHz: number,
-  frameStartHz: number,
-  binsPerHz: number,
-  binsLength: number,
-): [number, number] | null {
-  if (binsLength <= 0 || binsPerHz <= 0 || endHz <= startHz) return null;
-  const start = Math.max(0, Math.min(binsLength, Math.floor((startHz - frameStartHz) * binsPerHz)));
-  const end = Math.max(0, Math.min(binsLength, Math.ceil((endHz - frameStartHz) * binsPerHz)));
-  return end > start ? [start, end] : null;
-}
-
-export function sampleSpectrumAtHz(
-  bins: Float32Array,
-  absHz: number,
-  frameStartHz: number,
-  binsPerHz: number,
-): number | null {
-  if (bins.length === 0 || binsPerHz <= 0) return null;
-  const fb = (absHz - frameStartHz) * binsPerHz;
-  if (fb < 0 || fb > bins.length - 1) return null;
-  const i0 = Math.max(0, Math.min(bins.length - 1, Math.floor(fb)));
-  const i1 = Math.min(bins.length - 1, i0 + 1);
-  const frac = fb - i0;
-  return (bins[i0] ?? DB_FLOOR) * (1 - frac) + (bins[i1] ?? DB_FLOOR) * frac;
 }
 
 function quantileSorted(values: number[], q: number): number {
@@ -240,28 +180,6 @@ function visibleSpectrumStats(
     noiseTopDb: quantileSorted(sample, 0.62),
     peakDb: quantileSorted(sample, 0.995),
   };
-}
-
-export function miniPanSignalLevel(
-  db: number,
-  floorDb: number,
-  noiseGateDb = MINI_NOISE_GATE_DB,
-  rangeDb = MINI_TRACE_RANGE_DB,
-): number {
-  const snr = db - floorDb;
-  if (snr <= 0) return 0;
-  const gate = Math.max(0.5, noiseGateDb);
-  if (snr < gate) {
-    return 0.055 * (snr / gate) ** 1.8;
-  }
-  const raw = (snr - Math.max(0, noiseGateDb)) / Math.max(1, rangeDb);
-  return Math.min(1, raw) ** 0.70;
-}
-
-export function formatEqActualDb(db: number): string {
-  if (!Number.isFinite(db)) return '--dB';
-  const rounded = Math.max(0, Math.round(db));
-  return `${rounded}dB`;
 }
 
 function passbandCenterOffsetHz(lowHz: number, highHz: number): number {

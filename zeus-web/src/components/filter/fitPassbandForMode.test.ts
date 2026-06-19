@@ -5,7 +5,7 @@
 //                         Douglas J. Cerrato (KB2UKA), and contributors.
 
 import { describe, expect, it } from 'vitest';
-import { fitPassbandForMode } from './FilterMiniPan';
+import { fitPassbandForMode } from './miniPanMath';
 
 const MARGIN = 120;
 

@@ -69,10 +69,10 @@ function Get-ExpectedNativeName {
 
 function Get-ExpectedSideBySideDependencies {
     param([string]$Rid)
-    if ($Rid.StartsWith("win-", [StringComparison]::OrdinalIgnoreCase)) {
+    if ($Rid.Equals("win-x64", [StringComparison]::OrdinalIgnoreCase)) {
         return @("libfftw3-3.dll", "libfftw3f-3.dll")
     }
-    if ($Rid.StartsWith("linux-x64", [StringComparison]::OrdinalIgnoreCase)) {
+    if ($Rid.StartsWith("linux-", [StringComparison]::OrdinalIgnoreCase)) {
         return @("libfftw3.so.3", "libfftw3f.so.3")
     }
     if ($Rid.StartsWith("osx-", [StringComparison]::OrdinalIgnoreCase)) {

@@ -53,7 +53,7 @@ import {
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
 import { BANDS, bandOf } from './design/data';
-import { toolbarFavDragMime } from './toolbar/ToolbarFavorites';
+import { toolbarFavDragMime } from './toolbar/toolbarFavoriteDrag';
 
 type BandEntry = {
   name: string;

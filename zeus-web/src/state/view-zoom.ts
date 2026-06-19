@@ -78,7 +78,7 @@ function notify(): void {
       cb();
     } catch (err) {
       // One bad listener must not stall the tween loop.
-      // eslint-disable-next-line no-console
+
       console.error('view-zoom listener threw', err);
     }
   }

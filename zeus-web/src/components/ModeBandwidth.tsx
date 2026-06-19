@@ -45,7 +45,7 @@
 import { useCallback } from 'react';
 import { setMode, type RxMode, type TxVfo } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
-import { toolbarFavDragMime } from './toolbar/ToolbarFavorites';
+import { toolbarFavDragMime } from './toolbar/toolbarFavoriteDrag';
 
 type ModeEntry = { value: RxMode; label: string };
 

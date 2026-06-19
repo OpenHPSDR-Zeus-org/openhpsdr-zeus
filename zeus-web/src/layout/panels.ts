@@ -465,7 +465,7 @@ function pluginPanelDef(p: import('../plugins/runtime/pluginRuntime').Registered
   };
 }
 
-export function getPanelDef(id: string): PanelDef | undefined {
+export function getPanelDef(id: string, _registryKey?: string): PanelDef | undefined {
   const builtIn = PANELS[id];
   if (builtIn) return builtIn;
   const plugin = listRegisteredPanels().find((p) => p.panelId === id);
