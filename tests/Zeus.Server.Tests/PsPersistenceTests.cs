@@ -30,8 +30,8 @@ namespace Zeus.Server.Tests;
 /// PureSignal settings persistence — guards the round-3 fix where SetPs and
 /// SetTwoTone silently failed to call _psStore.Upsert. After the fix, every
 /// Set* path that mutates a persisted PS field must drop a doc into the
-/// LiteDB-backed store. PsEnabled is a persisted standing preference;
-/// TwoToneEnabled remains session-only because it can key the transmitter.
+/// LiteDB-backed store. PsEnabled is NOT persisted (master arm resets to
+/// false each session). TwoToneEnabled also remains session-only.
 /// </summary>
 public class PsPersistenceTests : IDisposable
 {
@@ -61,17 +61,17 @@ public class PsPersistenceTests : IDisposable
     }
 
     [Fact]
-    public void SetPs_PersistsEnabledAndAutoFlag()
+    public void SetPs_PersistsAutoFlag_ButNotArmState()
     {
         var (radio, store) = BuildRadioWithStore();
 
-        // Operator arms PS and picks Single mode — persisted fields reflect
-        // both the standing arm preference and the cal-mode preference.
+        // Operator arms PS and picks Single mode — cal-mode (Auto) persists,
+        // but the master arm (Enabled) must NOT persist.
         radio.SetPs(new PsControlSetRequest(Enabled: true, Auto: false, Single: true));
 
         var entry = store.Get();
         Assert.NotNull(entry);
-        Assert.True(entry!.Enabled);
+        // Enabled is not on PsSettingsEntry — only Auto (cal-mode) survives
         Assert.False(entry!.Auto);
     }
 
@@ -164,7 +164,8 @@ public class PsPersistenceTests : IDisposable
         var (radio2, _) = BuildRadioWithStore();
         var snap = radio2.Snapshot();
 
-        Assert.True(snap.PsEnabled);
+        // Master arm must NOT survive restart — always boots false
+        Assert.False(snap.PsEnabled);
         Assert.False(snap.PsAuto);
         Assert.Equal(900.0, snap.TwoToneFreq1);
         Assert.Equal(2200.0, snap.TwoToneFreq2);
