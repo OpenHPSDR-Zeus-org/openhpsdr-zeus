@@ -96,6 +96,36 @@ export function autoFitDroppedPanel(
   const footprintRight = Math.min(cols, footprintX + startW);
   const footprintBottom = footprintY + startH;
 
+  // Fast path — full size at the drop origin. The search below ranks
+  // candidates by originDistance FIRST (|x−footprintX|+|y−footprintY|), and
+  // only the origin cell scores 0, so no farther placement can ever beat an
+  // origin one. At the origin the largest area is the panel's full
+  // (startW × startH) — exactly what the nested loop tries first. So when full
+  // size fits at the origin (the overwhelmingly common drag case, since
+  // resolveAnchorCollisions pushes movable neighbours aside), it is the global
+  // optimum and the whole O(footprintArea × maxW × maxH) sweep is redundant.
+  // Skipping it here is what stops a large panel (e.g. the panadapter/hero
+  // tile, ~18×38) from freezing the main thread for seconds on drop.
+  const originTrial = cloneLayout(base);
+  const originTarget = originTrial.find((item) => item.i === target.i);
+  if (originTarget) {
+    originTarget.x = footprintX;
+    originTarget.y = footprintY;
+    originTarget.w = startW;
+    originTarget.h = startH;
+    const originResolved = resolveAnchorCollisions(
+      originTrial,
+      target.i,
+      cols,
+      previousItem,
+    );
+    if (originResolved) {
+      return clearMovedFlags(
+        compactMagnetUp(originResolved.layout, target.i, swapped.displaced),
+      );
+    }
+  }
+
   let best: {
     layout: LayoutItem[];
     area: number;
@@ -104,8 +134,13 @@ export function autoFitDroppedPanel(
   } | null = null;
 
   for (let y = footprintY; y <= footprintBottom - minH; y += 1) {
+    // An origin candidate (originDistance 0) is unbeatable by anything farther
+    // out, so once one is found there is no need to keep sweeping the
+    // footprint — this caps the fallback search at the origin cell.
+    if (best && best.originDistance === 0) break;
     const maxCandidateH = Math.min(maxH, footprintBottom - y);
     for (let x = footprintX; x <= footprintRight - minW; x += 1) {
+      if (best && best.originDistance === 0) break;
       const maxCandidateW = Math.min(maxW, footprintRight - x);
       for (let w = maxCandidateW; w >= minW; w -= 1) {
         for (let h = maxCandidateH; h >= minH; h -= 1) {
