@@ -243,7 +243,7 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -285,6 +285,38 @@ public sealed class RadioService : IDisposable
         // TxLevelingConfig defaults so first-connect behaviour is unchanged
         // (Thetis §6.1-6.3). The Leveler max-gain stays on LevelerMaxGainDb.
         var persistedTxLeveling = _dspSettingsStore.GetTxLeveling() ?? new TxLevelingConfig();
+
+        // TX Audio Profile startup overlay. If the operator has a "last loaded"
+        // unified TX Audio Profile, its scalar/config values overlay the
+        // per-setting stores BEFORE _state is built, so the radio comes up on
+        // that profile rather than the last ad-hoc live values. The heavier
+        // chain/plugin-state replay runs later via TxAudioProfileService.
+        // StartAsync. When there is NO last-loaded id (fresh install / never
+        // used profiles) nothing is overlaid — byte-identical to current
+        // defaults. PureSignal and every excluded field are untouched.
+        int? overlayMicGain = null;
+        double? overlayLevelerMaxGain = null;
+        int? overlayTxFilterLow = null, overlayTxFilterHigh = null;
+        if (txAudioProfileStore is not null)
+        {
+            var lastId = txAudioProfileStore.GetLastLoadedId();
+            var lastProfile = string.IsNullOrWhiteSpace(lastId) ? null : txAudioProfileStore.Get(lastId);
+            if (lastProfile is not null)
+            {
+                persistedCfc = lastProfile.CfcConfig ?? persistedCfc;
+                persistedTxLeveling = lastProfile.TxLeveling ?? persistedTxLeveling;
+                overlayMicGain = Math.Clamp(lastProfile.MicGainDb, -40, 10);
+                overlayLevelerMaxGain = Math.Clamp(lastProfile.LevelerMaxGainDb, 0.0, 20.0);
+                // Re-sign the operator-typed positive magnitudes for the startup
+                // mode so the TX bandpass comes up correctly.
+                int loAbs = Math.Min(Math.Abs(lastProfile.LowCutHz), Math.Abs(lastProfile.HighCutHz));
+                int hiAbs = Math.Max(Math.Abs(lastProfile.LowCutHz), Math.Abs(lastProfile.HighCutHz));
+                var startupMode = radioStateStore?.Get()?.Mode ?? RxMode.USB;
+                var (sLo, sHi) = SignedFilterForMode(startupMode, loAbs, hiAbs);
+                overlayTxFilterLow = sLo;
+                overlayTxFilterHigh = sHi;
+            }
+        }
 
         // Seed the last-preset cache from persisted store for all modes so
         // the first mode-switch in a session recalls the correct slot.
@@ -373,15 +405,16 @@ public sealed class RadioService : IDisposable
             AdcOverloadWarning: false,
             FilterPresetName: rsSnap?.FilterPresetName ?? "VAR1",
             FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false,
-            TxFilterLowHz: rsSnap?.TxFilterLowHz ?? 150,
-            TxFilterHighHz: rsSnap?.TxFilterHighHz ?? 2850,
+            TxFilterLowHz: overlayTxFilterLow ?? rsSnap?.TxFilterLowHz ?? 150,
+            TxFilterHighHz: overlayTxFilterHigh ?? rsSnap?.TxFilterHighHz ?? 2850,
             RxAfGainDb: rsSnap?.RxAfGainDb ?? 0.0,
             // 0 dB unity matches the engine's TXA fresh-open default; legacy
-            // rows missing the field hydrate to that same default.
-            MicGainDb: Math.Clamp(rsSnap?.MicGainDb ?? 0, -40, 10),
+            // rows missing the field hydrate to that same default. A last-loaded
+            // TX Audio Profile overlays its mic gain ahead of the snapshot.
+            MicGainDb: overlayMicGain ?? Math.Clamp(rsSnap?.MicGainDb ?? 0, -40, 10),
             // 8.0 dB matches WdspDspEngine.DefaultLevelerMaxGainDb. Clamp range
             // widened to 0..20 for Thetis parity (radio.cs leveler top 0..20).
-            LevelerMaxGainDb: Math.Clamp(rsSnap?.LevelerMaxGainDb ?? 8.0, 0.0, 20.0),
+            LevelerMaxGainDb: overlayLevelerMaxGain ?? Math.Clamp(rsSnap?.LevelerMaxGainDb ?? 8.0, 0.0, 20.0),
             AutoAgcEnabled: rsSnap?.AutoAgcEnabled ?? false,
             AgcOffsetDb: 0.0,       // always reset — control-loop accumulator
             // PS persisted fields (or DTO defaults when not persisted yet).

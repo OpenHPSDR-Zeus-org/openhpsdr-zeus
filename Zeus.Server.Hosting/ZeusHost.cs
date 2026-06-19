@@ -370,6 +370,11 @@ public static class ZeusHost
         builder.Services.AddSingleton<NrUiPrefsStore>();
         builder.Services.AddSingleton<TxStationProfileStore>();
         builder.Services.AddSingleton<TxFidelityPolicyStore>();
+        // Unified TX Audio Profile store — the single operator-named macro that
+        // replaces both the named audio-suite TX profiles and the fixed 3-up TX
+        // station profiles. Registered before RadioService is resolved so the
+        // optional ctor param is injected and the startup scalar overlay runs.
+        builder.Services.AddSingleton<TxAudioProfileStore>();
         builder.Services.AddSingleton<RepoUpdateService>();
         builder.Services.AddSingleton<ThemeSettingsStore>();
         builder.Services.AddSingleton<BottomPinStore>();
@@ -509,6 +514,16 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioProcessingModeStore>();
         builder.Services.AddSingleton<AudioProcessingModeService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioProcessingModeService>());
+
+        // TxAudioProfileService — orchestrates the unified TX Audio Profile
+        // system: capture (mic/leveler/CFC/bandpass/processing-mode/chain shape/
+        // VST blobs + native plugin dumps/fidelity), apply (write-through the
+        // live Set* paths — PureSignal untouched), and the last-loaded pointer.
+        // Registered as a hosted service AFTER AudioProcessingModeService so its
+        // StartAsync (seed starters + background-replay last-loaded chain) runs
+        // once the engine route has begun replaying. Never blocks startup.
+        builder.Services.AddSingleton<TxAudioProfileService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<TxAudioProfileService>());
 
         // HamClockService — optional, on-demand embed of OpenHamClock (MIT,
         // github.com/accius/openhamclock) as a Zeus panel. Entirely inert until

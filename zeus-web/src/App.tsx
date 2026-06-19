@@ -73,8 +73,8 @@ import { SignalIntelligenceController } from './components/SignalIntelligenceCon
 import { SmartNrController } from './components/SmartNrController';
 import { DspSceneDiagnosticsPublisher } from './components/DspSceneDiagnosticsPublisher';
 import { AudioPlaybackDiagnosticsPublisher } from './components/AudioPlaybackDiagnosticsPublisher';
+import { useTxAudioProfileDirtyTracker } from './state/tx-audio-profile-tracker';
 import { ThemeApplier } from './components/ThemeApplier';
-import { TxStationProfileActivator } from './components/TxStationProfileActivator';
 import { StartupUpdatePrompt } from './components/StartupUpdatePrompt';
 import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
@@ -158,6 +158,9 @@ export default function App() {
   // Clicking Connect on a discovered radio doesn't refresh radio-store on
   // its own (only the manual-connect path does).
   useEffect(() => { radioLoad(); }, [radioLoad, connected]);
+  // Track unsaved TX Audio Profile edits (dirty flag) for the disconnect/close
+  // save prompt. Mounted once here so it spans the whole session.
+  useTxAudioProfileDirtyTracker();
   const brandSub = radioConnected !== 'Unknown'
     ? BOARD_LABELS[radioConnected]
     : 'Not Connected';
@@ -788,7 +791,6 @@ export default function App() {
       <SignalIntelligenceController />
       <SmartNrController />
       <DspSceneDiagnosticsPublisher />
-      <TxStationProfileActivator />
       <div
         className="detached-workspace-app"
         data-screen-label={`Detached Workspace · ${detachedLayoutName ?? detachedLayoutId}`}
@@ -821,8 +823,7 @@ export default function App() {
           <SignalIntelligenceController />
           <SmartNrController />
           <DspSceneDiagnosticsPublisher />
-          <TxStationProfileActivator />
-          <AudioPlaybackDiagnosticsPublisher />
+              <AudioPlaybackDiagnosticsPublisher />
           <Suspense fallback={null}>
             <MobileApp />
           </Suspense>
@@ -839,7 +840,6 @@ export default function App() {
     <SignalIntelligenceController />
     <SmartNrController />
     <DspSceneDiagnosticsPublisher />
-    <TxStationProfileActivator />
     <AudioPlaybackDiagnosticsPublisher />
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
       {/* Left layout bar — issue #241. Spans the full app height; lists named

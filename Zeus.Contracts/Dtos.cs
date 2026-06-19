@@ -1916,6 +1916,55 @@ public sealed record TxStationProfileDto(
 
 public sealed record TxStationProfilesResponse(IReadOnlyList<TxStationProfileDto> Profiles);
 
+// ---- TX Audio Profiles (unified) ----------------------------------------
+// A single operator-named macro that captures the ENTIRE TX-audio shaping
+// state in one recallable snapshot. This REPLACES both the named audio-suite
+// plugin profiles and the fixed 3-up TX station profiles — there is now one
+// profile concept. Captured fields are a superset of everything proven
+// reachable, reusing the existing nested records verbatim (TxLevelingConfig /
+// CfcConfig) so there is no parallel schema.
+//
+// EXCLUDED on purpose (not audio-shaping / global): drive %, tune drive,
+// pre-key delay, PureSignal, two-tone, TX monitor/preview, the named
+// CFC/filter preset libraries, installed VST3 registrations, CESSB(auto).
+//
+// ProcessingMode is "native" or "vst" (lower-case) to keep Zeus.Contracts free
+// of any dependency on the server-side AudioProcessingMode enum — matching how
+// the existing audio-suite endpoints already serialise that field.
+public sealed record TxAudioProfileDto(
+    string Id,                       // slug, lowercased; PK; seeds: studio-ssb / essb-wide / dx-punch
+    string Name,                     // operator display name (captured by the Save dialog)
+    // ---- mic / leveler scalars (reuse RadioService Set* clamps) ----
+    int MicGainDb,                   // [-40,10]
+    double LevelerMaxGainDb,         // [0,20]
+    // ---- whole-config reuse ----
+    TxLevelingConfig TxLeveling,     // leveler on/decay, ALC max-gain/decay, CPDR on/gain
+    CfcConfig CfcConfig,             // enabled/postEq/preComp/prePeq + 10 bands x2
+    // ---- TX bandpass + per-mode-family memory ----
+    int LowCutHz, int HighCutHz,     // operator-typed positive magnitudes; server re-signs per mode-family
+    // ---- audio processing mode + suite chain state ----
+    string ProcessingMode,           // "native" | "vst"
+    bool MasterBypass,
+    List<string> ChainOrder,         // active plugin ids, head-first
+    List<string> ChainParked,        // installed-but-out-of-chain ids
+    // ---- EVERY plugin's settings ----
+    Dictionary<string, string> VstPluginStates,                       // zeusId -> base64 getStateInformation
+    Dictionary<string, Dictionary<string, string>> NativePluginStates, // zeusId -> {settingKey -> jsonValue}
+    // ---- fidelity policy ----
+    int TargetSpectralDensity,       // [0,100]
+    DateTime CreatedUtc, DateTime UpdatedUtc);
+
+public sealed record TxAudioProfilesResponse(IReadOnlyList<TxAudioProfileDto> Profiles);
+
+// POST body for "save current live state as <Name>". The backend snapshots the
+// live state — the client never assembles the profile body (avoids the
+// frontend-clobbers-server pattern).
+public sealed record SaveTxAudioProfileRequest(string Name);
+
+// PUT body for the persisted "last loaded profile" pointer. Null/empty Id
+// clears it (nothing is applied at startup).
+public sealed record LastLoadedTxAudioProfileDto(string? Id);
+
 public sealed record TxFidelityPolicyDto(
     string ProfileId,
     int TargetSpectralDensity);

@@ -324,127 +324,71 @@ public static class ZeusEndpoints
             });
         });
 
-        // Audio Suite profiles — named snapshots of the processing route
-        // (Native/VST), active plugin order, parked set, master bypass, and
-        // VST plugin state blobs. Lets the operator save a whole rack layout
-        // and recall it in one click, including switching back to the route
-        // the profile was saved with.
-        app.MapGet("/api/audio-suite/profiles", (AudioProfileService profiles) =>
+        // NOTE: the legacy TX audio-suite profile endpoints
+        // (/api/audio-suite/profiles* and /api/tx-audio-suite/profiles*) and the
+        // TX station-profile endpoints (/api/tx/station-profiles*) are RETIRED —
+        // their capability is folded into the unified TX Audio Profile endpoints
+        // below. AudioProfileService is retained internally only as VST-capture
+        // machinery, reused by TxAudioProfileService.
+
+        // ---- Unified TX Audio Profiles ----------------------------------
+        // The single operator-named macro that captures the ENTIRE TX-audio
+        // shaping state. REPLACES /api/tx-audio-suite/profiles* and
+        // /api/tx/station-profiles*. The RX route (/api/rx-audio-suite/...) is
+        // a separate, untouched system.
+        app.MapGet("/api/tx-audio-profiles", (TxAudioProfileService svc) =>
+            Results.Ok(new TxAudioProfilesResponse(svc.List())));
+
+        // POST save-current-as-name. The body carries only the name; the backend
+        // snapshots the live state (single source of truth).
+        app.MapPost("/api/tx-audio-profiles", async (
+            SaveTxAudioProfileRequest req, TxAudioProfileService svc, CancellationToken ct) =>
         {
-            var list = profiles.List().Select(p => new
-            {
-                name = p.Name,
-                processingMode = p.ProcessingMode.ToString().ToLowerInvariant(),
-                order = p.Order,
-                parked = p.Parked,
-                masterBypass = p.MasterBypass,
-                createdUtc = p.CreatedUtc,
-                updatedUtc = p.UpdatedUtc,
-            });
-            return Results.Ok(new { profiles = list });
-        });
-        app.MapGet("/api/tx-audio-suite/profiles", (AudioProfileService profiles) =>
-        {
-            var list = profiles.List().Select(p => new
-            {
-                name = p.Name,
-                processingMode = p.ProcessingMode.ToString().ToLowerInvariant(),
-                order = p.Order,
-                parked = p.Parked,
-                masterBypass = p.MasterBypass,
-                createdUtc = p.CreatedUtc,
-                updatedUtc = p.UpdatedUtc,
-            });
-            return Results.Ok(new { profiles = list });
-        });
-        // PUT saves (or overwrites) the named profile from the CURRENT
-        // live chain config.
-        app.MapPut("/api/audio-suite/profiles/{name}", async (string name, AudioProfileService profiles) =>
-        {
-            if (string.IsNullOrWhiteSpace(name))
+            if (req is null || string.IsNullOrWhiteSpace(req.Name))
                 return Results.BadRequest(new { error = "profile name is required" });
-            var entry = await profiles.SaveCurrentAsync(name.Trim());
+            var saved = await svc.SaveCurrentAsync(req.Name, ct);
+            return Results.Ok(saved);
+        });
+
+        // POST apply by id — drives the live state and records last-loaded.
+        // Returns the applied profile plus the resulting StateDto so the frontend
+        // snaps the live UI to it without a second round-trip.
+        app.MapPost("/api/tx-audio-profiles/{id}/apply", async (
+            string id, TxAudioProfileService svc, RadioService radio,
+            ChainOrderService chainOrder, AudioProcessingModeService mode,
+            AudioChainMasterBypassService masterBypass, CancellationToken ct) =>
+        {
+            var applied = await svc.ApplyAsync(id, ct);
+            if (applied is null)
+                return Results.NotFound(new { error = $"no TX audio profile '{id}'" });
             return Results.Ok(new
             {
-                name = entry.Name,
-                processingMode = entry.ProcessingMode.ToString().ToLowerInvariant(),
-                order = entry.Order,
-                parked = entry.Parked,
-                masterBypass = entry.MasterBypass,
-                vstStates = entry.PluginStates.Count,
-                createdUtc = entry.CreatedUtc,
-                updatedUtc = entry.UpdatedUtc,
+                profile = applied,
+                state = radio.Snapshot(),
+                pluginIds = chainOrder.CurrentOrder,
+                parked = chainOrder.ParkedIds,
+                processingMode = mode.Mode.ToString().ToLowerInvariant(),
+                engineActive = mode.EngineActive,
+                engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
+                masterBypass = masterBypass.IsBypassed,
             });
         });
-        app.MapPut("/api/tx-audio-suite/profiles/{name}", async (string name, AudioProfileService profiles) =>
+
+        app.MapDelete("/api/tx-audio-profiles/{id}", (string id, TxAudioProfileService svc) =>
+            svc.Delete(id)
+                ? Results.Ok(new { deleted = TxAudioProfileStore.NormalizeId(id) })
+                : Results.NotFound(new { error = $"no TX audio profile '{id}'" }));
+
+        // GET/PUT the persisted "last loaded profile" pointer. The dropdown reads
+        // this to show the selected profile; the backend applies it at startup.
+        app.MapGet("/api/tx-audio-profiles/last-loaded", (TxAudioProfileService svc) =>
+            Results.Ok(new LastLoadedTxAudioProfileDto(svc.LastLoadedId)));
+
+        app.MapPut("/api/tx-audio-profiles/last-loaded", (
+            LastLoadedTxAudioProfileDto req, TxAudioProfileService svc) =>
         {
-            if (string.IsNullOrWhiteSpace(name))
-                return Results.BadRequest(new { error = "profile name is required" });
-            var entry = await profiles.SaveCurrentAsync(name.Trim());
-            return Results.Ok(new
-            {
-                name = entry.Name,
-                processingMode = entry.ProcessingMode.ToString().ToLowerInvariant(),
-                order = entry.Order,
-                parked = entry.Parked,
-                masterBypass = entry.MasterBypass,
-                vstStates = entry.PluginStates.Count,
-                createdUtc = entry.CreatedUtc,
-                updatedUtc = entry.UpdatedUtc,
-            });
-        });
-        // POST applies the named profile to the live chain.
-        app.MapPost("/api/audio-suite/profiles/{name}/apply", async (
-            string name,
-            AudioProfileService profiles,
-            ChainOrderService chainOrder,
-            AudioProcessingModeService mode,
-            AudioChainMasterBypassService masterBypass,
-            CancellationToken ct) =>
-        {
-            var profile = await profiles.ApplyAsync(name, ct);
-            if (profile is not null)
-                return Results.Ok(new
-                {
-                    pluginIds = chainOrder.CurrentOrder,
-                    processingMode = mode.Mode.ToString().ToLowerInvariant(),
-                    engineActive = mode.EngineActive,
-                    engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
-                    masterBypass = masterBypass.IsBypassed,
-                });
-            return Results.NotFound(new { error = $"no audio profile named '{name}'" });
-        });
-        app.MapPost("/api/tx-audio-suite/profiles/{name}/apply", async (
-            string name,
-            AudioProfileService profiles,
-            ChainOrderService chainOrder,
-            AudioProcessingModeService mode,
-            AudioChainMasterBypassService masterBypass,
-            CancellationToken ct) =>
-        {
-            var profile = await profiles.ApplyAsync(name, ct);
-            if (profile is not null)
-                return Results.Ok(new
-                {
-                    pluginIds = chainOrder.CurrentOrder,
-                    processingMode = mode.Mode.ToString().ToLowerInvariant(),
-                    engineActive = mode.EngineActive,
-                    engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
-                    masterBypass = masterBypass.IsBypassed,
-                });
-            return Results.NotFound(new { error = $"no audio profile named '{name}'" });
-        });
-        app.MapDelete("/api/audio-suite/profiles/{name}", (string name, AudioProfileService profiles) =>
-        {
-            return profiles.Delete(name)
-                ? Results.Ok(new { deleted = name })
-                : Results.NotFound(new { error = $"no audio profile named '{name}'" });
-        });
-        app.MapDelete("/api/tx-audio-suite/profiles/{name}", (string name, AudioProfileService profiles) =>
-        {
-            return profiles.Delete(name)
-                ? Results.Ok(new { deleted = name })
-                : Results.NotFound(new { error = $"no audio profile named '{name}'" });
+            svc.SetLastLoadedId(req?.Id);
+            return Results.Ok(new LastLoadedTxAudioProfileDto(svc.LastLoadedId));
         });
 
         app.MapGet("/api/rx-audio-suite/profiles", (RxAudioProfileService profiles) =>
@@ -1290,37 +1234,9 @@ public static class ZeusEndpoints
             return Results.Ok(saved);
         });
 
-        app.MapGet("/api/tx/station-profiles", (TxStationProfileStore store) =>
-            Results.Ok(new TxStationProfilesResponse(store.GetAll())));
-
-        app.MapPut("/api/tx/station-profiles/{id}", (string id, TxStationProfileDto req, TxStationProfileStore store) =>
-        {
-            var routeId = id.Trim().ToLowerInvariant();
-            if (!TryValidateTxStationProfileId(routeId, out var idErr))
-                return Results.BadRequest(new { error = idErr });
-            if (!string.Equals(req.Id, routeId, StringComparison.OrdinalIgnoreCase))
-                return Results.BadRequest(new { error = "profile id must match route id" });
-
-            var profile = req with { Id = routeId };
-            if (!TryValidateTxStationProfile(profile, out var err))
-                return Results.BadRequest(new { error = err });
-
-            var saved = store.Upsert(profile);
-            log.LogInformation(
-                "api.tx.stationProfile id={Id} mic={Mic:F1} leveler={Leveler:F1} low={Low} high={High} density={Density}",
-                saved.Id, saved.MicGainDb, saved.LevelerMaxGainDb, saved.LowCutHz, saved.HighCutHz, saved.SpectralDensity);
-            return Results.Ok(saved);
-        });
-
-        app.MapDelete("/api/tx/station-profiles/{id}", (string id, TxStationProfileStore store) =>
-        {
-            var routeId = id.Trim().ToLowerInvariant();
-            if (!TryValidateTxStationProfileId(routeId, out var idErr))
-                return Results.BadRequest(new { error = idErr });
-            var removed = store.Delete(routeId);
-            log.LogInformation("api.tx.stationProfile.reset id={Id} removed={Removed}", routeId, removed);
-            return Results.Ok(new { id = routeId, removed });
-        });
+        // /api/tx/station-profiles* RETIRED — the fixed 3-up TX station-profile
+        // system is folded into the unified TX Audio Profiles (the three are now
+        // seeded as named, editable profiles). See /api/tx-audio-profiles*.
 
         app.MapPost("/api/rx/afGain", (RxAfGainSetRequest req, RadioService r) =>
         {

@@ -56,7 +56,6 @@ import * as viewCenter from '../state/view-center';
 import { useToolbarFavoritesStore } from '../state/toolbar-favorites-store';
 import { useTxStore } from '../state/tx-store';
 import { ACTIVE_MAP_REF } from '../state/active-map-ref';
-import { ensureTxStationProfileActivated } from '../audio/tx-station-profile-activation';
 import { applyCtunZoomCenterAfterState, centerCtunForZoomIn } from './ctun-zoom-center';
 
 // The arrow-key tune step follows the operator's TuningStepWidget choice
@@ -165,14 +164,7 @@ export function useKeyboardShortcuts() {
         return;
       }
       void (async () => {
-        if (on) {
-          try {
-            await ensureTxStationProfileActivated();
-          } catch {
-            return;
-          }
-          if (seq !== moxSeq) return;
-        }
+        if (seq !== moxSeq) return;
         const current = useTxStore.getState();
         if (current.moxOn === on) return;
         current.setMoxOn(on);

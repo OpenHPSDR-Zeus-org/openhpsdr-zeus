@@ -168,7 +168,9 @@ describe('SettingsView — Audio Tools', () => {
     expect(container.textContent).toContain('TX Audio');
     expect(container.textContent).toContain('RX Audio');
     expect(container.textContent).toContain('TX Fidelity Policy');
-    expect(container.textContent).toContain('Station Profile');
+    // The legacy "Station Profile" macro was unified into the single named
+    // "TX Audio Profile" (one save/recall over the entire TX audio chain).
+    expect(container.textContent).toContain('TX Audio Profile');
     expect(container.textContent).toContain('Continuous Frequency Compressor');
   });
 });

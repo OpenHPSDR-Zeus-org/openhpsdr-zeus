@@ -27,6 +27,8 @@ import {
 } from '../state/audio-suite-store';
 import { ConfirmDialog } from '../layout/ConfirmDialog';
 import { TextInputDialog } from '../layout/TextInputDialog';
+import { TxAudioProfileBar } from './TxAudioProfileBar';
+import { useTxAudioProfileStore } from '../state/tx-audio-profile-store';
 
 const CHAIN_SLOT = 'tx-audio-tools.chain';
 const RX_CHAIN_SLOT = 'rx-audio-tools.chain';
@@ -1110,7 +1112,9 @@ export function AudioSuiteWindow({
     loadProcessingModeFromServer();
     loadPreviewState();
     loadMasterBypassFromServer();
-    loadProfiles('tx');
+    // TX named profiles now live in the unified TX Audio Profile system
+    // (TxAudioProfileBar / useTxAudioProfileStore); the old TX route is retired.
+    void useTxAudioProfileStore.getState().load();
   }, [
     embedded,
     isOpen,
@@ -1739,74 +1743,79 @@ export function AudioSuiteWindow({
         </div>
       )}
 
-      {/* Profiles bar — named snapshots of the chain config. Choosing
-          one applies it; Save snapshots the current chain. */}
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          padding: '6px 12px',
-          background: 'var(--bg-1)',
-          borderBottom: '1px solid var(--line)',
-        }}
-      >
-        <span
+      {/* Profiles bar. TX uses the unified TX Audio Profile system (mirrored in
+          the TX Fidelity panel, shared store); RX keeps its own chain-only
+          named-snapshot profiles. */}
+      {isRxSuite ? (
+        <div
           style={{
-            color: 'var(--fg-3)',
-            fontSize: 10,
-            fontWeight: 600,
-            letterSpacing: 1,
-            textTransform: 'uppercase',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '6px 12px',
+            background: 'var(--bg-1)',
+            borderBottom: '1px solid var(--line)',
           }}
         >
-          {isRxSuite ? 'RX Profile' : 'Profile'}
-        </span>
-        <select
-          value={selectedProfile}
-          onChange={(e) => {
-            void onSelectProfile(e.target.value);
-          }}
-          title="Apply a saved profile"
-          style={{
-            flex: 1,
-            minWidth: 0,
-            padding: '3px 6px',
-            borderRadius: 3,
-            border: '1px solid var(--line)',
-            background: 'var(--bg-2)',
-            color: 'var(--fg-1)',
-            fontSize: 11,
-            fontFamily: 'inherit',
-          }}
-        >
-          <option value="">
-            {profiles.length ? 'Select profile…' : 'No profiles saved'}
-          </option>
-          {profiles.map((p) => (
-            <option key={p.name} value={p.name}>
-              {p.name} [{p.processingMode === 'vst' ? 'VST' : 'Native'}]
+          <span
+            style={{
+              color: 'var(--fg-3)',
+              fontSize: 10,
+              fontWeight: 600,
+              letterSpacing: 1,
+              textTransform: 'uppercase',
+            }}
+          >
+            RX Profile
+          </span>
+          <select
+            value={selectedProfile}
+            onChange={(e) => {
+              void onSelectProfile(e.target.value);
+            }}
+            title="Apply a saved profile"
+            style={{
+              flex: 1,
+              minWidth: 0,
+              padding: '3px 6px',
+              borderRadius: 3,
+              border: '1px solid var(--line)',
+              background: 'var(--bg-2)',
+              color: 'var(--fg-1)',
+              fontSize: 11,
+              fontFamily: 'inherit',
+            }}
+          >
+            <option value="">
+              {profiles.length ? 'Select profile…' : 'No profiles saved'}
             </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={onSaveProfile}
-          title="Save the current chain as a profile"
-          style={profileBtnStyle(false)}
-        >
-          Save
-        </button>
-        <button
-          type="button"
-          onClick={onDeleteProfile}
-          disabled={!selectedProfile}
-          title="Delete the selected profile"
-          style={profileBtnStyle(!selectedProfile)}
-        >
-          Delete
-        </button>
-      </div>
+            {profiles.map((p) => (
+              <option key={p.name} value={p.name}>
+                {p.name} [{p.processingMode === 'vst' ? 'VST' : 'Native'}]
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={onSaveProfile}
+            title="Save the current chain as a profile"
+            style={profileBtnStyle(false)}
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            onClick={onDeleteProfile}
+            disabled={!selectedProfile}
+            title="Delete the selected profile"
+            style={profileBtnStyle(!selectedProfile)}
+          >
+            Delete
+          </button>
+        </div>
+      ) : (
+        <TxAudioProfileBar />
+      )}
 
       {vstNotice && (
         <div

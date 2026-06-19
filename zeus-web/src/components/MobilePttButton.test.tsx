@@ -9,7 +9,6 @@ import { render, act } from './meters/__tests__/harness';
 
 const setMoxMock = vi.hoisted(() => vi.fn());
 const ensureMicUplinkRunningMock = vi.hoisted(() => vi.fn());
-const ensureTxStationProfileActivatedMock = vi.hoisted(() => vi.fn());
 const setMicUplinkTxForcedMock = vi.hoisted(() => vi.fn());
 const waitForMicPcmTransportReadyMock = vi.hoisted(() => vi.fn());
 
@@ -24,10 +23,6 @@ vi.mock('../api/client', async (importOriginal) => {
 vi.mock('../audio/mic-uplink-session', () => ({
   ensureMicUplinkRunning: ensureMicUplinkRunningMock,
   setMicUplinkTxForced: setMicUplinkTxForcedMock,
-}));
-
-vi.mock('../audio/tx-station-profile-activation', () => ({
-  ensureTxStationProfileActivated: ensureTxStationProfileActivatedMock,
 }));
 
 vi.mock('../realtime/ws-client', () => ({
@@ -53,7 +48,6 @@ describe('MobilePttButton', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setMoxMock.mockResolvedValue({});
-    ensureTxStationProfileActivatedMock.mockResolvedValue(undefined);
     ensureMicUplinkRunningMock.mockResolvedValue(true);
     waitForMicPcmTransportReadyMock.mockResolvedValue(true);
     useConnectionStore.setState({ status: 'Connected' });
@@ -77,7 +71,7 @@ describe('MobilePttButton', () => {
     });
   });
 
-  it('applies the selected TX profile and starts the mobile mic before keying MOX', async () => {
+  it('starts the mobile mic before keying MOX', async () => {
     const { container, unmount } = render(createElement(MobilePttButton));
     const button = container.querySelector('button') as HTMLButtonElement;
 
@@ -86,41 +80,19 @@ describe('MobilePttButton', () => {
       await flush();
     });
 
-    expect(ensureTxStationProfileActivatedMock).toHaveBeenCalledTimes(1);
     expect(ensureMicUplinkRunningMock).toHaveBeenCalledTimes(1);
     expect(waitForMicPcmTransportReadyMock).toHaveBeenCalledTimes(1);
     expect(setMicUplinkTxForcedMock).toHaveBeenCalledWith(true);
     expect(setMoxMock).toHaveBeenCalledWith(true, expect.any(Object));
-    const profileCallOrder = ensureTxStationProfileActivatedMock.mock.invocationCallOrder[0]!;
     const micCallOrder = ensureMicUplinkRunningMock.mock.invocationCallOrder[0]!;
     const transportCallOrder = waitForMicPcmTransportReadyMock.mock.invocationCallOrder[0]!;
     const forceCallOrder = setMicUplinkTxForcedMock.mock.invocationCallOrder[0]!;
     const moxCallOrder = setMoxMock.mock.invocationCallOrder[0]!;
-    expect(profileCallOrder).toBeLessThan(micCallOrder);
     expect(micCallOrder).toBeLessThan(transportCallOrder);
     expect(transportCallOrder).toBeLessThan(forceCallOrder);
     expect(forceCallOrder).toBeLessThan(moxCallOrder);
     expect(useTxStore.getState().moxOn).toBe(true);
     expect(useTxStore.getState().localMicArmed).toBe(true);
-
-    unmount();
-  });
-
-  it('does not key TX when the selected profile cannot be applied', async () => {
-    ensureTxStationProfileActivatedMock.mockRejectedValueOnce(new Error('profile failed'));
-    const { container, unmount } = render(createElement(MobilePttButton));
-    const button = container.querySelector('button') as HTMLButtonElement;
-
-    await act(async () => {
-      pointer(button, 'pointerdown');
-      await flush();
-    });
-
-    expect(ensureMicUplinkRunningMock).not.toHaveBeenCalled();
-    expect(setMoxMock).not.toHaveBeenCalled();
-    expect(setMicUplinkTxForcedMock).toHaveBeenCalledWith(false);
-    expect(useTxStore.getState().moxOn).toBe(false);
-    expect(useTxStore.getState().localMicArmed).toBe(false);
 
     unmount();
   });

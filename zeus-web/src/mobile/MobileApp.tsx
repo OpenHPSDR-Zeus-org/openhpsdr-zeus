@@ -18,23 +18,11 @@ import {
   type ReactNode,
 } from 'react';
 import {
-  fetchTxFidelityPolicy,
-  fetchTxStationProfiles,
-  saveTxFidelityPolicy,
   setMode,
   type RxMode,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
-import { applyTxStationProfile } from '../audio/apply-tx-station-profile';
-import {
-  formatTxStationProfileSummary,
-  getTxStationProfile,
-  mergeTxStationProfileOverrides,
-  STUDIO_SSB_PROFILE,
-  type TxStationProfile,
-  type TxStationProfileId,
-} from '../audio/tx-station-profile';
-import { useAudioSuiteStore } from '../state/audio-suite-store';
+import { useTxAudioProfileStore } from '../state/tx-audio-profile-store';
 import { useQrzStore } from '../state/qrz-store';
 import { useTxStore } from '../state/tx-store';
 import { useDisplaySettingsStore } from '../state/display-settings-store';
@@ -462,73 +450,23 @@ function MobileSpectrumStack({
   );
 }
 
-type MobileTxProfilePhase = 'loading' | 'idle' | 'pending' | 'applying' | 'applied' | 'error';
-
-function mobileTxProfileActiveMessage(profile: TxStationProfile): string {
-  return `${profile.label} active / ${formatTxStationProfileSummary(profile)}`;
-}
-
+// Mobile TX audio profile picker. Uses the unified TX Audio Profile store
+// (shared with the desktop TxAudioProfileBar): loads the list + last-loaded
+// pointer for selection, applies on pick. Apply records last-loaded server-side.
 function MobileTxProfileSelect() {
-  const status = useConnectionStore((s) => s.status);
-  const mode = useConnectionStore((s) => s.mode);
-  const applyState = useConnectionStore((s) => s.applyState);
-  const hydrateTxFromState = useTxStore((s) => s.hydrateFromState);
-  const setMicGainDb = useTxStore((s) => s.setMicGainDb);
-  const setLevelerMaxGainDb = useTxStore((s) => s.setLevelerMaxGainDb);
-  const setCfcConfigLocal = useTxStore((s) => s.setCfcConfig);
-  const loadAudioProfiles = useAudioSuiteStore((s) => s.loadProfiles);
-  const applyAudioProfile = useAudioSuiteStore((s) => s.applyProfile);
-  const setAudioProcessingMode = useAudioSuiteStore((s) => s.setProcessingMode);
-  const setAudioMasterBypassed = useAudioSuiteStore((s) => s.setMasterBypassed);
-  const [profiles, setProfiles] = useState<TxStationProfile[]>(() =>
-    mergeTxStationProfileOverrides([]),
-  );
-  const [selectedProfileId, setSelectedProfileId] = useState<TxStationProfileId>(
-    STUDIO_SSB_PROFILE.id,
-  );
-  const [phase, setPhase] = useState<MobileTxProfilePhase>('loading');
-  const [message, setMessage] = useState(formatTxStationProfileSummary(STUDIO_SSB_PROFILE));
+  const profiles = useTxAudioProfileStore((s) => s.profiles);
+  const loaded = useTxAudioProfileStore((s) => s.loaded);
+  const lastLoadedId = useTxAudioProfileStore((s) => s.lastLoadedId);
+  const busy = useTxAudioProfileStore((s) => s.busy);
+  const load = useTxAudioProfileStore((s) => s.load);
+  const apply = useTxAudioProfileStore((s) => s.apply);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const profileMenuRef = useRef<HTMLDivElement | null>(null);
-  const pendingProfileRef = useRef<TxStationProfileId | null>(null);
-  const activationSeqRef = useRef(0);
-  const connected = status === 'Connected';
-  const selectedProfile = getTxStationProfile(selectedProfileId, profiles);
-  const busy = phase === 'loading' || phase === 'applying';
-  const displayedMessage = phase === 'idle'
-    ? formatTxStationProfileSummary(selectedProfile)
-    : message;
 
   useEffect(() => {
-    let active = true;
-    const ctrl = new AbortController();
-    setPhase('loading');
-    void loadAudioProfiles();
-
-    Promise.allSettled([
-      fetchTxStationProfiles(ctrl.signal),
-      fetchTxFidelityPolicy(ctrl.signal),
-    ]).then(([profileResult, policyResult]) => {
-      if (!active) return;
-      const nextProfiles =
-        profileResult.status === 'fulfilled'
-          ? mergeTxStationProfileOverrides(profileResult.value)
-          : mergeTxStationProfileOverrides([]);
-      const nextProfile =
-        policyResult.status === 'fulfilled'
-          ? getTxStationProfile(policyResult.value.profileId, nextProfiles)
-          : STUDIO_SSB_PROFILE;
-      setProfiles(nextProfiles);
-      setSelectedProfileId(nextProfile.id);
-      setPhase('idle');
-      setMessage(formatTxStationProfileSummary(nextProfile));
-    });
-
-    return () => {
-      active = false;
-      ctrl.abort();
-    };
-  }, [loadAudioProfiles]);
+    if (!loaded) void load();
+  }, [loaded, load]);
 
   useEffect(() => {
     if (busy) setProfileMenuOpen(false);
@@ -536,7 +474,6 @@ function MobileTxProfileSelect() {
 
   useEffect(() => {
     if (!profileMenuOpen) return;
-
     const onPointerDown = (event: PointerEvent) => {
       const root = profileMenuRef.current;
       const target = event.target;
@@ -547,7 +484,6 @@ function MobileTxProfileSelect() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setProfileMenuOpen(false);
     };
-
     document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
     return () => {
@@ -556,92 +492,21 @@ function MobileTxProfileSelect() {
     };
   }, [profileMenuOpen]);
 
-  const activateProfile = useCallback(
-    async (profile: TxStationProfile, persistPolicy: boolean) => {
-      const seq = ++activationSeqRef.current;
-      pendingProfileRef.current = null;
-      setSelectedProfileId(profile.id);
-
-      let policySaveFailed = false;
-      if (persistPolicy) {
-        try {
-          await saveTxFidelityPolicy({
-            profileId: profile.id,
-            targetSpectralDensity: profile.spectralDensity,
-          });
-        } catch {
-          policySaveFailed = true;
-        }
-      }
-
-      if (status !== 'Connected') {
-        pendingProfileRef.current = profile.id;
-        setPhase(policySaveFailed ? 'error' : 'pending');
-        setMessage(
-          policySaveFailed
-            ? `${profile.label} selected / preference save failed`
-            : `${profile.label} selected / connect to apply`,
-        );
-        return;
-      }
-
-      setPhase('applying');
-      setMessage(`Applying ${profile.label}...`);
-      try {
-        await applyTxStationProfile(profile, {
-          mode,
-          applyState,
-          hydrateTxFromState,
-          setMicGainDb,
-          setLevelerMaxGainDb,
-          setCfcConfigLocal,
-          setAudioProcessingMode,
-          setAudioMasterBypassed,
-          applyAudioProfile,
-        });
-        if (seq !== activationSeqRef.current) return;
-        setPhase(policySaveFailed ? 'error' : 'applied');
-        setMessage(
-          policySaveFailed
-            ? `${profile.label} active / preference save failed`
-            : mobileTxProfileActiveMessage(profile),
-        );
-      } catch (err) {
-        if (seq !== activationSeqRef.current) return;
-        setPhase('error');
-        setMessage(err instanceof Error ? err.message : 'TX profile apply failed');
-      }
-    },
-    [
-      applyAudioProfile,
-      applyState,
-      hydrateTxFromState,
-      mode,
-      setCfcConfigLocal,
-      setAudioMasterBypassed,
-      setAudioProcessingMode,
-      setLevelerMaxGainDb,
-      setMicGainDb,
-      status,
-    ],
-  );
+  const selectedId = lastLoadedId && profiles.some((p) => p.id === lastLoadedId) ? lastLoadedId : '';
+  const selectedProfile = profiles.find((p) => p.id === selectedId);
 
   const selectProfile = useCallback(
-    (profileId: string) => {
+    (id: string) => {
       setProfileMenuOpen(false);
-      const profile = getTxStationProfile(profileId, profiles);
-      void activateProfile(profile, true);
+      setError(null);
+      void apply(id).then((result) => {
+        if (!result.ok) setError(result.error ?? 'TX profile apply failed');
+      });
     },
-    [activateProfile, profiles],
+    [apply],
   );
 
-  useEffect(() => {
-    if (!connected) return;
-    const pendingProfileId = pendingProfileRef.current;
-    if (!pendingProfileId) return;
-    const profile = getTxStationProfile(pendingProfileId, profiles);
-    void activateProfile(profile, false);
-  }, [activateProfile, connected, profiles]);
+  const displayedMessage = error ?? (selectedProfile ? `${selectedProfile.name} active` : 'No profile');
 
   return (
     <div className="m-tx-profile" aria-label="TX audio profile selector">
@@ -656,7 +521,7 @@ function MobileTxProfileSelect() {
           disabled={busy}
           onClick={() => setProfileMenuOpen((open) => !open)}
         >
-          <span>{selectedProfile.label}</span>
+          <span>{selectedProfile?.name ?? 'Select profile'}</span>
           <span className="m-profile-caret" aria-hidden>
             {profileMenuOpen ? '^' : 'v'}
           </span>
@@ -667,8 +532,13 @@ function MobileTxProfileSelect() {
             role="listbox"
             aria-label="TX audio profile options"
           >
+            {profiles.length === 0 && (
+              <div className="m-profile-option" aria-disabled>
+                No profiles saved
+              </div>
+            )}
             {profiles.map((profile) => {
-              const active = profile.id === selectedProfile.id;
+              const active = profile.id === selectedId;
               return (
                 <button
                   key={profile.id}
@@ -678,7 +548,7 @@ function MobileTxProfileSelect() {
                   className={`m-profile-option${active ? ' is-active' : ''}`}
                   onClick={() => selectProfile(profile.id)}
                 >
-                  {profile.label}
+                  {profile.name}
                 </button>
               );
             })}
@@ -686,7 +556,7 @@ function MobileTxProfileSelect() {
         )}
       </div>
       <div
-        className={`m-tx-profile-status${phase === 'error' ? ' is-error' : ''}`}
+        className={`m-tx-profile-status${error ? ' is-error' : ''}`}
         title={displayedMessage}
       >
         {displayedMessage}

@@ -66,7 +66,9 @@ import {
 import { getAudioClient } from '../audio/audio-client';
 import { useConnectionStore } from '../state/connection-store';
 import { useRadioStore } from '../state/radio-store';
+import { useTxAudioProfileStore } from '../state/tx-audio-profile-store';
 import { useTxStore } from '../state/tx-store';
+import { TxAudioProfileSavePrompt } from './TxAudioProfileSavePrompt';
 import {
   useConnectStore,
   type ProtocolChoice,
@@ -402,6 +404,10 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
   const [failureCount, setFailureCount] = useState(0);
   const inflightRef = useRef(false);
   const [retryNonce, setRetryNonce] = useState(0);
+  // Pending "TX Audio Profile '{name}' changed — save?" prompt that gates the
+  // Disconnect when the loaded profile has unsaved live edits.
+  const [savePrompt, setSavePrompt] = useState<{ name: string } | null>(null);
+  const [savePromptBusy, setSavePromptBusy] = useState(false);
 
   const [manualIp, setManualIp] = useState(manualFormDefaults.ip);
   const [manualPort, setManualPort] = useState(manualFormDefaults.port);
@@ -590,7 +596,7 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
     ],
   );
 
-  const handleDisconnect = useCallback(async () => {
+  const doDisconnect = useCallback(async () => {
     if (inflightRef.current) return;
     setInflight(true);
     setError(null);
@@ -609,6 +615,43 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
       setInflight(false);
     }
   }, [applyState, hydrateTxFromState, setBoardId, setConnectedProtocol, setInflight]);
+
+  // Gate the Disconnect: if the loaded TX Audio Profile has unsaved live edits,
+  // prompt to save first (an async save still needs the live server connection).
+  const handleDisconnect = useCallback(() => {
+    if (inflightRef.current) return;
+    const ps = useTxAudioProfileStore.getState();
+    const profile = ps.lastLoadedId
+      ? ps.profiles.find((p) => p.id === ps.lastLoadedId)
+      : undefined;
+    if (ps.dirty && profile) {
+      setSavePrompt({ name: profile.name });
+      return;
+    }
+    void doDisconnect();
+  }, [doDisconnect]);
+
+  const onSavePromptSave = useCallback(async () => {
+    const name = savePrompt?.name;
+    if (!name) return;
+    setSavePromptBusy(true);
+    const result = await useTxAudioProfileStore.getState().save(name);
+    setSavePromptBusy(false);
+    setSavePrompt(null);
+    if (result.ok) {
+      void doDisconnect();
+    } else {
+      // Keep the connection so the operator can retry; surface the error.
+      setError(result.error ?? 'Could not save TX audio profile.');
+    }
+  }, [savePrompt, doDisconnect]);
+
+  const onSavePromptDiscard = useCallback(() => {
+    setSavePrompt(null);
+    void doDisconnect();
+  }, [doDisconnect]);
+
+  const onSavePromptCancel = useCallback(() => setSavePrompt(null), []);
 
   const handleRetry = useCallback(() => {
     setError(null);
@@ -637,22 +680,33 @@ export function ConnectPanel({ compact = false }: ConnectPanelProps = {}) {
 
   if (status === 'Connected') {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        {!compact && (
-          <span className="chip accent">
-            <span className="k">RADIO</span>
-            <span className="v mono">{endpoint ?? '—'}</span>
-          </span>
+      <>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          {!compact && (
+            <span className="chip accent">
+              <span className="k">RADIO</span>
+              <span className="v mono">{endpoint ?? '—'}</span>
+            </span>
+          )}
+          {error && (
+            <span className="label-xs" style={{ color: 'var(--tx)' }}>
+              {error}
+            </span>
+          )}
+          <button type="button" onClick={handleDisconnect} disabled={inflight} className="btn">
+            {inflight ? 'Disconnecting…' : 'Disconnect'}
+          </button>
+        </div>
+        {savePrompt && (
+          <TxAudioProfileSavePrompt
+            profileName={savePrompt.name}
+            busy={savePromptBusy}
+            onSave={() => void onSavePromptSave()}
+            onDiscard={onSavePromptDiscard}
+            onCancel={onSavePromptCancel}
+          />
         )}
-        {error && (
-          <span className="label-xs" style={{ color: 'var(--tx)' }}>
-            {error}
-          </span>
-        )}
-        <button type="button" onClick={handleDisconnect} disabled={inflight} className="btn">
-          {inflight ? 'Disconnecting…' : 'Disconnect'}
-        </button>
-      </div>
+      </>
     );
   }
 
