@@ -59,7 +59,7 @@ describe('workspace grid collision policy', () => {
     { i: 'below', x: 0, y: 2, w: 6, h: 2 },
   ];
 
-  it('reorders a colliding panel into the dragged panel old slot', () => {
+  it('pushes a colliding panel out of the dragged panel target', () => {
     const layout = cloneLayout(baseLayout);
     const dragged = layout[0]!;
 
@@ -73,7 +73,7 @@ describe('workspace grid collision policy', () => {
     });
     expect(next.find((item) => item.i === 'below')).toMatchObject({
       x: 0,
-      y: 0,
+      y: 4,
     });
     expectNoCollisions(next);
   });
@@ -94,7 +94,7 @@ describe('workspace grid collision policy', () => {
       h: 2,
     });
     expect(next.find((item) => item.i === 'right')).toMatchObject({
-      x: 0,
+      x: 14,
       y: 2,
       w: 10,
       h: 2,

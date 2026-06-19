@@ -3,11 +3,10 @@
 import { getCompactor } from 'react-grid-layout/core';
 import type { Compactor, Layout, LayoutItem } from 'react-grid-layout';
 
-// Keep the workspace sparse (no automatic gap-filling). Dragging temporarily
-// allows overlap so the operator can drop a panel where they mean it; the
-// final drag-stop layout is normalized by autoFitDroppedPanel below before it
-// is persisted.
-export const WORKSPACE_DRAG_COMPACTOR = getCompactor(null, true, false);
+// Keep the workspace sparse (no automatic gap-filling), but let RGL displace
+// occupied tiles during the live drag. The final drag-stop layout is normalized
+// by autoFitDroppedPanel below before it is persisted.
+export const WORKSPACE_DRAG_COMPACTOR = getCompactor(null, false, false);
 
 export const WORKSPACE_RESIZE_COMPACTOR: Compactor = {
   type: null,
@@ -20,9 +19,9 @@ export function autoFitDroppedPanel(
   cols: number,
   previousItem?: LayoutItem | null,
 ): Layout {
-  const dropped =
-    findDroppedItem(layout) ??
-    (previousItem ? layout.find((item) => item.i === previousItem.i) : undefined);
+  const dropped = previousItem
+    ? layout.find((item) => item.i === previousItem.i)
+    : findDroppedItem(layout);
   if (!dropped) return cloneLayout(layout);
 
   const base = cloneLayout(layout);
