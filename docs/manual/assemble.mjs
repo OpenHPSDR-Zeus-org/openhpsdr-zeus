@@ -14,6 +14,13 @@ const OUT = join(BUILD, 'Zeus-Operator-Manual.html');
 const EDITION = process.env.MANUAL_EDITION || 'June 2026 Edition';
 const COVERS = process.env.MANUAL_COVERS || 'Covers the Zeus 0.9.x release line and the 0.10.0 development series';
 
+// Cover logo, inlined as a data URI so the print engine never depends on a
+// relative file path (headless Chrome prints from build/, the asset lives in
+// assets/). assets/zeus_manual_logo.jpeg is the brand emblem.
+const LOGO_DATA_URI =
+  'data:image/jpeg;base64,' +
+  readFileSync(join(HERE, 'assets', 'zeus_manual_logo.jpeg')).toString('base64');
+
 marked.setOptions({ gfm: true, breaks: false });
 mkdirSync(BUILD, { recursive: true });
 
@@ -62,7 +69,7 @@ const css = `
   @page{ size:Letter; margin:20mm 18mm 18mm 18mm; }
   a{ color:var(--accent); text-decoration:none; }
   .cover{ page-break-after:always; height:247mm; display:flex; flex-direction:column; justify-content:center; align-items:center; background:linear-gradient(160deg,var(--panel-top),var(--panel-bot)); color:#eef2f8; text-align:center; margin:-20mm -18mm 0 -18mm; padding:0 22mm; }
-  .cover .bolt{ font-size:54pt; color:var(--amber); line-height:1; margin-bottom:6mm; }
+  .cover .logo{ width:84mm; max-width:62%; height:auto; border-radius:7mm; box-shadow:0 5mm 16mm rgba(0,0,0,0.5); margin-bottom:12mm; }
   .cover h1{ font-size:46pt; margin:0; letter-spacing:1px; font-weight:800; }
   .cover .king{ font-size:15pt; color:var(--amber); letter-spacing:5px; text-transform:uppercase; margin-top:3mm; }
   .cover .sub{ font-size:18pt; color:#cdd6e4; margin-top:14mm; font-weight:300; }
@@ -83,7 +90,7 @@ const css = `
   h2,h3,h4{ break-after:avoid; } table,blockquote,pre{ break-inside:avoid; }
 `;
 
-const cover = `<div class="cover"><div class="bolt">&#9889;</div><h1>ZEUS</h1><div class="king">The King of SDRs</div><div class="sub">Operator's Manual</div><div class="ed">${EDITION}</div><div class="covers">${COVERS}</div></div>`;
+const cover = `<div class="cover"><img class="logo" src="${LOGO_DATA_URI}" alt="Zeus — Software Defined Radio" /><div class="king">The King of SDRs</div><div class="sub">Operator's Manual</div><div class="ed">${EDITION}</div><div class="covers">${COVERS}</div></div>`;
 const doc = `<!doctype html><html><head><meta charset="utf-8"><title>Zeus Operator's Manual</title><style>${css}</style></head><body>${cover}<div class="toc"><h2>Table of Contents</h2>${tocHtml}</div>${chapterHtml.join('\n')}</body></html>`;
 
 writeFileSync(OUT, doc, 'utf8');
