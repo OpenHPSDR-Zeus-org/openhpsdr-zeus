@@ -210,6 +210,19 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Equal(1, root.GetProperty("schemaVersion").GetInt32());
         Assert.True(root.GetProperty("readinessScore").GetInt32() >= 0);
         Assert.Equal("opt-in-only-until-benchmark-and-g2-on-air-acceptance", root.GetProperty("rolloutGate").GetString());
+        Assert.True(root.GetProperty("rxAudioLevelerProfileApiAvailable").GetBoolean());
+        Assert.Equal("/api/dsp/rx-audio-leveler-profile", root.GetProperty("rxAudioLevelerProfileEndpoint").GetString());
+        Assert.Equal("current", root.GetProperty("rxAudioLevelerDefaultProfile").GetString());
+        Assert.Equal("stable-speech-candidate", root.GetProperty("rxAudioLevelerCandidateProfile").GetString());
+        Assert.True(root.GetProperty("rxAudioLevelerCandidateProfileAvailable").GetBoolean());
+        Assert.True(root.GetProperty("rxAudioLevelerCandidateProfileExperimental").GetBoolean());
+        Assert.Equal("candidate-profile-api-ready", root.GetProperty("rxAudioLevelerCapabilityStatus").GetString());
+        var levelerProfiles = root.GetProperty("rxAudioLevelerSupportedProfiles")
+            .EnumerateArray()
+            .Select(item => item.GetString())
+            .ToArray();
+        Assert.Contains("current", levelerProfiles);
+        Assert.Contains("stable-speech-candidate", levelerProfiles);
         Assert.True(root.GetProperty("frontendSceneAvailable").GetBoolean());
         Assert.Equal("NR2", root.GetProperty("smartNrProfile").GetString());
         Assert.False(root.GetProperty("readyForExternalEngineBakeoff").GetBoolean());
@@ -238,6 +251,7 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Contains("dsp-benchmark-acceptance-plan", tools);
         Assert.Contains("dsp-live-runtime-evidence", tools);
         Assert.Contains("g2-live-capture", tools);
+        Assert.Contains("rx-audio-leveler-profile-api", tools);
         Assert.Contains("external-engine-live-bakeoff-watch", tools);
         Assert.Contains("external-post-demod-bakeoff:rnnoise", tools);
         Assert.Contains("external-post-demod-bakeoff:deepfilternet", tools);

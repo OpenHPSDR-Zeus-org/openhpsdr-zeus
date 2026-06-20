@@ -54,7 +54,19 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Empty(diag.ExternalEngineBakeoffConstraints);
         Assert.Contains("ready-for-external-engine-bakeoff", diag.Evidence);
         Assert.Contains("external-engine-live-bakeoff-watch", diag.CandidateTools);
+        Assert.Contains("rx-audio-leveler-profile-api", diag.CandidateTools);
+        Assert.Contains("rx-audio-leveler-profile-api-available", diag.Evidence);
+        Assert.Contains("rx-audio-leveler-stable-speech-candidate-available", diag.Evidence);
         Assert.Contains(diag.ExternalEngineCandidates, c => c.RequiredControls.Contains("rx-audio-suite-route"));
+        Assert.True(diag.RxAudioLevelerProfileApiAvailable);
+        Assert.Equal("/api/dsp/rx-audio-leveler-profile", diag.RxAudioLevelerProfileEndpoint);
+        Assert.Equal("current", diag.RxAudioLevelerDefaultProfile);
+        Assert.Equal("stable-speech-candidate", diag.RxAudioLevelerCandidateProfile);
+        Assert.True(diag.RxAudioLevelerCandidateProfileAvailable);
+        Assert.True(diag.RxAudioLevelerCandidateProfileExperimental);
+        Assert.Equal("candidate-profile-api-ready", diag.RxAudioLevelerCapabilityStatus);
+        Assert.Contains("current", diag.RxAudioLevelerSupportedProfiles);
+        Assert.Contains("stable-speech-candidate", diag.RxAudioLevelerSupportedProfiles);
     }
 
     [Fact]

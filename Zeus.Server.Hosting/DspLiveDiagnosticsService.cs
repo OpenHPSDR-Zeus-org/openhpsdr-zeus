@@ -9,6 +9,15 @@ namespace Zeus.Server;
 
 public static class DspLiveDiagnosticsService
 {
+    private const string RxAudioLevelerProfileEndpoint = "/api/dsp/rx-audio-leveler-profile";
+    private const string RxAudioLevelerDefaultProfile = "current";
+    private const string RxAudioLevelerCandidateProfile = "stable-speech-candidate";
+    private static readonly string[] RxAudioLevelerSupportedProfiles =
+    [
+        RxAudioLevelerDefaultProfile,
+        RxAudioLevelerCandidateProfile,
+    ];
+
     public static DspLiveDiagnosticsDto Build(
         SmartNrConditionDto condition,
         DspLiveRuntimeEvidenceDto? runtimeEvidence = null,
@@ -30,7 +39,11 @@ public static class DspLiveDiagnosticsService
             "dsp-live-runtime-evidence",
             "g2-live-capture",
             "g2-rx-peak-hunt",
+            "rx-audio-leveler-profile-api",
         };
+
+        evidence.Add("rx-audio-leveler-profile-api-available");
+        evidence.Add("rx-audio-leveler-stable-speech-candidate-available");
 
         int score = 100;
         if (condition.WdspNativeLoadable)
@@ -315,6 +328,14 @@ public static class DspLiveDiagnosticsService
             ExternalEngineBakeoffStatus: externalBakeoff.Status,
             ExternalEngineBakeoffConstraints: externalBakeoff.Constraints,
             RolloutGate: "opt-in-only-until-benchmark-and-g2-on-air-acceptance",
+            RxAudioLevelerProfileApiAvailable: true,
+            RxAudioLevelerProfileEndpoint: RxAudioLevelerProfileEndpoint,
+            RxAudioLevelerSupportedProfiles: RxAudioLevelerSupportedProfiles,
+            RxAudioLevelerDefaultProfile: RxAudioLevelerDefaultProfile,
+            RxAudioLevelerCandidateProfile: RxAudioLevelerCandidateProfile,
+            RxAudioLevelerCandidateProfileAvailable: true,
+            RxAudioLevelerCandidateProfileExperimental: true,
+            RxAudioLevelerCapabilityStatus: "candidate-profile-api-ready",
             WdspActive: condition.WdspActive,
             WdspNativeLoadable: condition.WdspNativeLoadable,
             WdspEmnrPost2Available: condition.WdspEmnrPost2Available,
