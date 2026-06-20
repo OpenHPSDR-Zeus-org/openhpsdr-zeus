@@ -1005,7 +1005,8 @@ public class DspPipelineService : BackgroundService,
         IEnumerable<IRxAudioSink> audioSinks,
         ILoggerFactory loggerFactory,
         CwSidetoneSource? sidetone = null,
-        FrontendDspSceneDiagnosticsService? frontendDspScene = null)
+        FrontendDspSceneDiagnosticsService? frontendDspScene = null,
+        DisplaySettingsStore? displaySettings = null)
     {
         _radio = radio;
         _hub = hub;
@@ -1015,7 +1016,72 @@ public class DspPipelineService : BackgroundService,
         _sidetone = sidetone;
         _frontendDspScene = frontendDspScene;
         _loggerFactory = loggerFactory;
+        _displaySettings = displaySettings;
         _log = loggerFactory.CreateLogger<DspPipelineService>();
+    }
+
+    // Persisted TX display analyzer config (live TX waterfall feature). Optional
+    // so test constructions of DspPipelineService keep working; when null the
+    // engine just runs at its built-in defaults. Display-only — never affects
+    // the transmitted signal.
+    private readonly DisplaySettingsStore? _displaySettings;
+    // dB added to the TX panadapter/waterfall pixels (Thetis TXDisplayCalOffset).
+    // Read on the hot Tick path; written from the connect path + endpoint.
+    private double _txDisplayCalOffsetDb;
+
+    // Default TX display analyzer params — mirror WdspDspEngine's constants and
+    // the frontend's TX_DISPLAY_* defaults. Used when the persisted value is null.
+    private const int DefaultTxDisplayFftSize = 16384;
+    private const int DefaultTxDisplayWindow = 2;
+    private const double DefaultTxDisplayAvgTauMs = 175.0;
+    private const double TxDisplayCalOffsetAbsDb = 60.0;
+
+    /// <summary>Seed a freshly constructed engine with the persisted TX display
+    /// config BEFORE its TX channel opens, so the analyzer comes up with the
+    /// operator's FFT/window/smoothing rather than engine defaults. Also seeds
+    /// the cal-offset field read by <see cref="Tick"/>. Display-only — never
+    /// touches the transmitted signal.</summary>
+    private void SeedTxDisplayConfig(WdspDspEngine wdsp)
+    {
+        var dto = _displaySettings?.Get();
+        Volatile.Write(ref _txDisplayCalOffsetDb, ResolveCalOffset(dto));
+        wdsp.ConfigureTxDisplayAnalyzer(
+            dto?.TxDisplayFftSize ?? DefaultTxDisplayFftSize,
+            dto?.TxDisplayWindow ?? DefaultTxDisplayWindow,
+            (dto?.TxDisplayAvgTauMs ?? DefaultTxDisplayAvgTauMs) / 1000.0);
+    }
+
+    /// <summary>Live update from the /api/display-settings endpoint — pushes the
+    /// new cal offset + analyzer config to the running engine (if any). Safe to
+    /// call with no radio connected; the values are re-seeded on next connect.
+    /// Display-only.</summary>
+    public void ApplyTxDisplaySettings(DisplaySettingsDto dto)
+    {
+        Volatile.Write(ref _txDisplayCalOffsetDb, ResolveCalOffset(dto));
+        int fft = dto.TxDisplayFftSize ?? DefaultTxDisplayFftSize;
+        int win = dto.TxDisplayWindow ?? DefaultTxDisplayWindow;
+        double tauSec = (dto.TxDisplayAvgTauMs ?? DefaultTxDisplayAvgTauMs) / 1000.0;
+        var engine = CurrentEngine;
+        if (engine is null) return;
+        lock (_engineLock)
+        {
+            engine.ConfigureTxDisplayAnalyzer(fft, win, tauSec);
+        }
+    }
+
+    private static double ResolveCalOffset(DisplaySettingsDto? dto)
+    {
+        double v = dto?.TxDisplayCalOffsetDb ?? 0.0;
+        if (double.IsNaN(v) || double.IsInfinity(v)) return 0.0;
+        return Math.Clamp(v, -TxDisplayCalOffsetAbsDb, TxDisplayCalOffsetAbsDb);
+    }
+
+    // Add a dB offset to every pixel of a display buffer (TX cal offset).
+    private static void AddDbOffset(float[] buf, double db)
+    {
+        if (db == 0.0) return;
+        float d = (float)db;
+        for (int i = 0; i < buf.Length; i++) buf[i] += d;
     }
 
     private void PublishAudio(in AudioFrame frame)
@@ -2866,6 +2932,9 @@ public class DspPipelineService : BackgroundService,
 
         var wdsp = new WdspDspEngine(_loggerFactory.CreateLogger<WdspDspEngine>());
         int channelId = wdsp.OpenChannel(rate, Width);
+        // Seed the operator's persisted TX display config before TXA opens so
+        // the analyzer comes up at their FFT/window/smoothing. Display-only.
+        SeedTxDisplayConfig(wdsp);
         // P1 DAC runs at 48 kHz; keep TXA at the 48/48/48 profile Hermes is
         // calibrated against.
         wdsp.OpenTxChannel(outputRateHz: 48_000);
@@ -3704,6 +3773,9 @@ public class DspPipelineService : BackgroundService,
         {
             var wdsp = new WdspDspEngine(_loggerFactory.CreateLogger<WdspDspEngine>());
             newChannelId = wdsp.OpenChannel(rateHz, Width);
+            // Seed the operator's persisted TX display config before TXA opens
+            // so the analyzer comes up at their FFT/window/smoothing. Display-only.
+            SeedTxDisplayConfig(wdsp);
             // G2 MkII DUC on P2 expects 192 kHz TX IQ. WDSP upsamples internally
             // (48k mic → 96k DSP → 192k out) and CFIR compensates the sinc
             // droop. Feeding 48 kHz IQ to a 192 kHz DUC as we did before
@@ -4471,6 +4543,18 @@ public class DspPipelineService : BackgroundService,
             {
                 wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
                 if (wf) wfSource = "rx";
+            }
+
+            // TX display calibration offset (Thetis TXDisplayCalOffset). Pure
+            // dB shift of the transmitted-signal trace/waterfall so the operator
+            // can sit the in-passband level where they want it — display-only,
+            // never the air. Applied only to TX-sourced pixels (tx / PS
+            // feedback); RX pixels keep their own calibration.
+            double txCal = Volatile.Read(ref _txDisplayCalOffsetDb);
+            if (txCal != 0.0)
+            {
+                if (pan && (panSource == "tx" || panSource == "ps-feedback")) AddDbOffset(panBuf, txCal);
+                if (wf && (wfSource == "tx" || wfSource == "ps-feedback")) AddDbOffset(wfBuf, txCal);
             }
 
             // Flip to display order (low freq left, high freq right). WDSP emits

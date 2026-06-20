@@ -178,6 +178,16 @@ public interface IDspEngine : IDisposable
     /// see issue #81. No-op on Synthetic.</summary>
     bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut);
 
+    /// <summary>Reconfigure the TX display analyzer (and the PS-feedback
+    /// analyzer, which shares the TX display span). <paramref name="fftSize"/>
+    /// is the analyzer FFT size (power of two); <paramref name="windowType"/>
+    /// is the WDSP <c>win_type</c>; <paramref name="avgTauSec"/> is the visual
+    /// log-recursive smoothing time-constant in seconds. Pure display — does
+    /// NOT change the transmitted audio, drive, or PA. Out-of-range values are
+    /// clamped/ignored by the implementation. No-op on Synthetic and when TXA
+    /// is not open.</summary>
+    void ConfigureTxDisplayAnalyzer(int fftSize, int windowType, double avgTauSec);
+
     /// <summary>PureSignal-feedback panadapter / waterfall pixels in dBm,
     /// sourced from a separate WDSP analyzer fed with the post-PA loopback
     /// IQ pumped through <see cref="FeedPsFeedbackBlock"/>. Returns false
