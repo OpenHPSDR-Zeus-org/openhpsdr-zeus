@@ -313,6 +313,25 @@ function RosterRow({
       <StatusDot status={op.status} />
       <div style={{ minWidth: 0, flex: 1 }}>
         <CallsignButton callsign={op.callsign} onOpen={onOpen} prominent />
+        {/* Frequency / mode — only present for friends sharing their freq
+            (the relay strips freqHz for everyone else). */}
+        {freq !== '—' && (
+          <div
+            className="mono"
+            style={{
+              fontSize: 9.5,
+              color: 'var(--accent-bright)',
+              letterSpacing: '0.02em',
+              marginTop: 1,
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {freq}
+            {op.mode ? <span style={{ color: 'var(--fg-3)' }}> · {op.mode}</span> : null}
+          </div>
+        )}
       </div>
       {/* Action icons — grouped + spaced away from the callsign */}
       <div
