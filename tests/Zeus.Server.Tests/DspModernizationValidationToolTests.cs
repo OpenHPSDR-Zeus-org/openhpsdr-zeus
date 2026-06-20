@@ -27,6 +27,7 @@ public sealed class DspModernizationValidationToolTests
         "strong-adjacent",
         "noise-only-gating",
         "agc-level-step",
+        "rx-audio-leveler-passband",
         "squelch-transition",
         "tx-two-tone",
         "tx-voice-like",
@@ -6444,6 +6445,7 @@ public sealed class DspModernizationValidationToolTests
                 Assert.Contains("ANAN-7000DLE", ReadStringArray(root, "crossRadioValidationNonG2TargetIds"));
                 Assert.Equal(RequiredCrossRadioSourceScenarioIds.Length, root.GetProperty("crossRadioValidationScenarioCount").GetInt32());
                 Assert.Contains("weak-cw-carrier", ReadStringArray(root, "crossRadioValidationScenarioIds"));
+                Assert.Contains("rx-audio-leveler-passband", ReadStringArray(root, "crossRadioValidationScenarioIds"));
                 Assert.Equal(RequiredCrossRadioSourceComparisonIds.Length, root.GetProperty("crossRadioValidationComparisonCount").GetInt32());
                 Assert.Contains("current-zeus", ReadStringArray(root, "crossRadioValidationComparisonIds"));
                 Assert.False(root.GetProperty("crossRadioValidationDefaultBehaviorChangeApproved").GetBoolean());
@@ -6784,10 +6786,12 @@ public sealed class DspModernizationValidationToolTests
                 Assert.Equal(RequiredCrossRadioSourceComparisonIds.Length - 1, crossRadioRoot.GetProperty("missingRequiredSourceComparisonCount").GetInt32());
                 Assert.Contains("tx-puresignal-safe-bypass", ReadStringArray(crossRadioRoot, "scenarioIds"));
                 Assert.Contains("candidate-under-test", ReadStringArray(crossRadioRoot, "comparisonIds"));
+                Assert.Contains("rx-audio-leveler-passband", ReadStringArray(crossRadioRoot, "missingRequiredSourceScenarioIds"));
                 Assert.Contains("tx-puresignal-safe-bypass", ReadStringArray(crossRadioRoot, "missingRequiredSourceScenarioIds"));
                 Assert.Contains("candidate-under-test", ReadStringArray(crossRadioRoot, "missingRequiredSourceComparisonIds"));
 
                 var source = crossRadioRoot.GetProperty("sourceReports").EnumerateArray().Single();
+                Assert.Contains("rx-audio-leveler-passband", ReadStringArray(source, "missingRequiredScenarioIds"));
                 Assert.Contains("tx-puresignal-safe-bypass", ReadStringArray(source, "missingRequiredScenarioIds"));
                 Assert.Contains("candidate-under-test", ReadStringArray(source, "missingRequiredComparisonIds"));
 
@@ -16339,8 +16343,8 @@ public sealed class DspModernizationValidationToolTests
             wdspSourceDriftLikelyDefectCount = 0,
             benchmarkPlanStatus = "ready",
             benchmarkPlanScenarioCount = 13,
-            benchmarkPlanRequiredAcceptanceScenarioFamilyCount = 12,
-            benchmarkPlanCoveredAcceptanceScenarioFamilyCount = 12,
+            benchmarkPlanRequiredAcceptanceScenarioFamilyCount = 13,
+            benchmarkPlanCoveredAcceptanceScenarioFamilyCount = 13,
             benchmarkPlanMissingAcceptanceScenarioFamilyCount = 0,
             benchmarkPlanMissingAcceptanceScenarioFamilyIds = Array.Empty<string>(),
             benchmarkPlanScenarioMissingRequiredComparisonCount = 0,
@@ -16957,8 +16961,8 @@ public sealed class DspModernizationValidationToolTests
             wdspSourceDriftLikelyDefectCount = 0,
             benchmarkPlanStatus = "ready",
             benchmarkPlanScenarioCount = 13,
-            benchmarkPlanRequiredAcceptanceScenarioFamilyCount = 12,
-            benchmarkPlanCoveredAcceptanceScenarioFamilyCount = 12,
+            benchmarkPlanRequiredAcceptanceScenarioFamilyCount = 13,
+            benchmarkPlanCoveredAcceptanceScenarioFamilyCount = 13,
             benchmarkPlanMissingAcceptanceScenarioFamilyCount = 0,
             benchmarkPlanMissingAcceptanceScenarioFamilyIds = Array.Empty<string>(),
             benchmarkPlanScenarioMissingRequiredComparisonCount = 0,

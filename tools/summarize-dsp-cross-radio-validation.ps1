@@ -486,6 +486,7 @@ $requiredSourceScenarioIds = @(
     "strong-adjacent",
     "noise-only-gating",
     "agc-level-step",
+    "rx-audio-leveler-passband",
     "squelch-transition",
     "tx-two-tone",
     "tx-voice-like",
