@@ -25,12 +25,84 @@ import {
   type ChatOperator,
 } from '../../state/chat-store';
 import { useQrzStore } from '../../state/qrz-store';
+import { ConfirmDialog } from '../ConfirmDialog';
 import { QrzCard } from '../../components/design/QrzCard';
 import { qrzStationToContact } from '../../components/design/qrz-contact';
 import type { Contact } from '../../components/design/data';
 import type { QrzStation } from '../../api/qrz';
 
 const MAX_MESSAGE_CHARS = 2000;
+
+/**
+ * A single-line text prompt rendered as a proper in-app dialog (wraps
+ * ConfirmDialog with an input) — replaces window.prompt so it matches Zeus
+ * chrome. Enter submits; empty input is a no-op. The input grabs focus after
+ * ConfirmDialog's focus trap settles on Cancel.
+ */
+function PromptDialog({
+  title,
+  label,
+  placeholder,
+  confirmLabel,
+  onSubmit,
+  onCancel,
+}: {
+  title: string;
+  label: string;
+  placeholder?: string;
+  confirmLabel: string;
+  onSubmit: (value: string) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState('');
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  useEffect(() => {
+    const id = window.setTimeout(() => {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, []);
+  const submit = () => {
+    const v = value.trim();
+    if (v) onSubmit(v);
+  };
+  return (
+    <ConfirmDialog
+      title={title}
+      confirmLabel={confirmLabel}
+      intent="primary"
+      onConfirm={submit}
+      onCancel={onCancel}
+    >
+      <label style={{ display: 'flex', flexDirection: 'column', gap: 6, fontSize: 12.5, color: 'var(--fg-1)' }}>
+        <span>{label}</span>
+        <input
+          ref={inputRef}
+          className="mono"
+          value={value}
+          placeholder={placeholder}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          style={{
+            padding: '6px 8px',
+            borderRadius: 'var(--r-sm)',
+            border: '1px solid var(--line-strong)',
+            background: '#0c0c10',
+            color: '#d8d8dc',
+            fontSize: 13,
+            outline: 'none',
+          }}
+        />
+      </label>
+    </ConfirmDialog>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Utility helpers
@@ -723,26 +795,17 @@ function GroupManagementStrip({
   members: string[];
 }) {
   const [open, setOpen] = useState(false);
+  const [dialog, setDialog] = useState<
+    null | { k: 'add' } | { k: 'remove'; call: string } | { k: 'delete' }
+  >(null);
   const addMember = useChatStore((s) => s.addMember);
   const removeMember = useChatStore((s) => s.removeMember);
   const deleteRoom = useChatStore((s) => s.deleteRoom);
   const setActiveRoom = useChatStore((s) => s.setActiveRoom);
 
-  const handleAdd = () => {
-    const call = window.prompt('Add member — enter callsign:');
-    if (call && call.trim()) void addMember(roomId, call.trim().toUpperCase());
-  };
-
-  const handleRemove = (call: string) => {
-    if (window.confirm(`Remove ${call} from this group?`)) void removeMember(roomId, call);
-  };
-
-  const handleDelete = () => {
-    if (window.confirm('Delete this group room? This cannot be undone.')) {
-      void deleteRoom(roomId);
-      setActiveRoom(PUBLIC_ROOM);
-    }
-  };
+  const handleAdd = () => setDialog({ k: 'add' });
+  const handleRemove = (call: string) => setDialog({ k: 'remove', call });
+  const handleDelete = () => setDialog({ k: 'delete' });
 
   return (
     <div
@@ -841,6 +904,49 @@ function GroupManagementStrip({
             </button>
           </div>
         </div>
+      )}
+
+      {dialog?.k === 'add' && (
+        <PromptDialog
+          title="Add member"
+          label="Callsign"
+          placeholder="e.g. N9WAR"
+          confirmLabel="Add"
+          onSubmit={(v) => {
+            void addMember(roomId, v.toUpperCase());
+            setDialog(null);
+          }}
+          onCancel={() => setDialog(null)}
+        />
+      )}
+      {dialog?.k === 'remove' && (
+        <ConfirmDialog
+          title="Remove member"
+          confirmLabel="Remove"
+          intent="danger"
+          onConfirm={() => {
+            void removeMember(roomId, dialog.call);
+            setDialog(null);
+          }}
+          onCancel={() => setDialog(null)}
+        >
+          Remove <strong>{dialog.call}</strong> from this group?
+        </ConfirmDialog>
+      )}
+      {dialog?.k === 'delete' && (
+        <ConfirmDialog
+          title="Delete group"
+          confirmLabel="Delete"
+          intent="danger"
+          onConfirm={() => {
+            void deleteRoom(roomId);
+            setActiveRoom(PUBLIC_ROOM);
+            setDialog(null);
+          }}
+          onCancel={() => setDialog(null)}
+        >
+          Delete this group room? This cannot be undone.
+        </ConfirmDialog>
       )}
     </div>
   );
@@ -970,12 +1076,10 @@ export function ChatPanel() {
     [relationFor, removeFriend, requestFriend],
   );
 
-  const onBan = useCallback(
-    (callsign: string) => {
-      if (window.confirm(`Ban ${callsign} from ZeusChat?`)) void ban(callsign);
-    },
-    [ban],
-  );
+  const [banTarget, setBanTarget] = useState<string | null>(null);
+  const [creatingRoom, setCreatingRoom] = useState(false);
+
+  const onBan = useCallback((callsign: string) => setBanTarget(callsign), []);
 
   // Tab ordering: public first, then groups, then DMs
   const orderedRooms = useMemo(() => {
@@ -1036,10 +1140,7 @@ export function ChatPanel() {
   );
 
   // Admin: create group room
-  const handleCreateRoom = () => {
-    const name = window.prompt('New group name:');
-    if (name && name.trim()) void createRoom(name.trim());
-  };
+  const handleCreateRoom = () => setCreatingRoom(true);
 
   // Golden thread border for private rooms
   const threadTopBorder = isPrivateRoom
@@ -1520,6 +1621,36 @@ export function ChatPanel() {
       {/* ── QRZ profile overlay ── */}
       {profileCall ? (
         <ProfileOverlay callsign={profileCall} onClose={() => setProfileCall(null)} />
+      ) : null}
+
+      {/* ── Moderation / room dialogs (proper in-app, not window.*) ── */}
+      {banTarget ? (
+        <ConfirmDialog
+          title="Ban operator"
+          confirmLabel="Ban"
+          intent="danger"
+          onConfirm={() => {
+            void ban(banTarget);
+            setBanTarget(null);
+          }}
+          onCancel={() => setBanTarget(null)}
+        >
+          Ban <strong>{banTarget}</strong> from ZeusChat? They’ll be disconnected and blocked from
+          reconnecting.
+        </ConfirmDialog>
+      ) : null}
+      {creatingRoom ? (
+        <PromptDialog
+          title="New group"
+          label="Group name"
+          placeholder="e.g. Net Control"
+          confirmLabel="Create"
+          onSubmit={(v) => {
+            void createRoom(v);
+            setCreatingRoom(false);
+          }}
+          onCancel={() => setCreatingRoom(false)}
+        />
       ) : null}
     </div>
   );
