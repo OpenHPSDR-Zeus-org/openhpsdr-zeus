@@ -14,6 +14,7 @@ using Zeus.Dsp.Wdsp;
 using Zeus.Plugins.Host;
 using Zeus.Protocol1;
 using Zeus.Protocol1.Discovery;
+using Zeus.Server.Diagnostics;
 using Zeus.Server.Tci;
 
 namespace Zeus.Server;
@@ -67,6 +68,15 @@ public static class ZeusHost
         // POST numeric mode values keep working.
         builder.Services.Configure<JsonOptions>(o =>
             o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+
+        // Self-diagnostic log capture (the "Report a problem" footer button). A
+        // singleton ring buffer always retains the last ~1000 formatted log lines
+        // (you can't capture logs retroactively), and the report ships the last
+        // 100. The provider and the DI singleton MUST be the same instance so the
+        // report builder snapshots what the provider has been filling.
+        var diagnosticLogBuffer = new DiagnosticLogBuffer();
+        builder.Services.AddSingleton(diagnosticLogBuffer);
+        builder.Logging.AddProvider(new RingBufferLoggerProvider(diagnosticLogBuffer));
 
         // Resolve TCI bind settings from configuration before DI builds, because
         // Kestrel's listeners have to be declared now. TCI shares Kestrel (rather
@@ -209,7 +219,7 @@ public static class ZeusHost
         //  - Server mode → WebSocketAudioSink (default): bit-for-bit
         //    equivalent of the pre-seam direct hub broadcast.
         //  - Desktop mode → NativeAudioSink (Phase 2b): pushes RX audio
-        //    straight to the OS default output device via miniaudio,
+        //    straight to the selected OS output device via miniaudio,
         //    bypassing the WS path entirely. The SPA's audio decoder is
         //    opted out by Phase 2c so the browser never tries to play
         //    audio it isn't being sent.
@@ -344,12 +354,41 @@ public static class ZeusHost
         // Localhost proxy to the HamClock sidecar's propagation engine. The first
         // P.533-14 prediction for a cold path can take ~20 s upstream; allow for it.
         builder.Services.AddHttpClient("Propagation", c => c.Timeout = TimeSpan.FromSeconds(25));
+        // Production download manifest (downloads.openhpsdrzeus.com) for in-app
+        // update checks. Plain JSON — no GitHub API headers.
+        builder.Services.AddHttpClient("ZeusUpdates", c =>
+        {
+            c.Timeout = TimeSpan.FromSeconds(15);
+            c.DefaultRequestHeaders.UserAgent.ParseAdd("OpenHPSDR-Zeus-Updater/1.0");
+            c.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+        });
         builder.Services.AddSingleton<CredentialStore>();
         builder.Services.AddSingleton<BandMemoryStore>();
         builder.Services.AddSingleton<LayoutStore>();
         // Relaunch helper for the prefs-database (profile) selector — switching
         // the active DB applies on the next launch, so the endpoint relaunches.
         builder.Services.AddSingleton<AppRestartService>();
+
+        // Self-diagnostic "Report a problem" feature: read-only probes, the
+        // symptom→recipe registry, the known-issue rules (seeded from docs/rca +
+        // docs/lessons), and the report builder. All strictly read-only — the
+        // tx-ps probe reads PsEnabled/HwPeak but never arms PS (burn-zone).
+        builder.Services.AddSingleton<IDiagnosticProbe, EnvironmentProbe>();
+        builder.Services.AddSingleton<IDiagnosticProbe, ConnectionProbe>();
+        builder.Services.AddSingleton<IDiagnosticProbe, BoardProbe>();
+        builder.Services.AddSingleton<IDiagnosticProbe, DspAudioProbe>();
+        builder.Services.AddSingleton<IDiagnosticProbe, TxPsProbe>();
+        builder.Services.AddSingleton<IKnownIssueRule, PsNotArmedRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, IqWriteGateRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, RxAuxBypassRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, AudioUnderrunRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, Hl2DriveModelRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, RxaAudioSilenceRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, DisconnectionRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, PsStartupArmedRule>();
+        builder.Services.AddSingleton<SymptomRegistry>();
+        builder.Services.AddSingleton<DiagnosticReportBuilder>();
+
         builder.Services.AddSingleton<DspSettingsStore>();
         builder.Services.AddSingleton<CfcPresetStore>();
         builder.Services.AddSingleton<PaSettingsStore>();
@@ -360,8 +399,14 @@ public static class ZeusHost
         builder.Services.AddSingleton<DisplayIntelligenceSettingsStore>();
         builder.Services.AddSingleton<ToolbarSettingsStore>();
         builder.Services.AddSingleton<NrUiPrefsStore>();
+        builder.Services.AddSingleton<AudioDeviceSettingsStore>();
         builder.Services.AddSingleton<TxStationProfileStore>();
         builder.Services.AddSingleton<TxFidelityPolicyStore>();
+        // Unified TX Audio Profile store — the single operator-named macro that
+        // replaces both the named audio-suite TX profiles and the fixed 3-up TX
+        // station profiles. Registered before RadioService is resolved so the
+        // optional ctor param is injected and the startup scalar overlay runs.
+        builder.Services.AddSingleton<TxAudioProfileStore>();
         builder.Services.AddSingleton<RepoUpdateService>();
         builder.Services.AddSingleton<ThemeSettingsStore>();
         builder.Services.AddSingleton<BottomPinStore>();
@@ -490,6 +535,7 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioChainSettingsStore>();
         builder.Services.AddSingleton<AudioChainMasterBypassService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioChainMasterBypassService>());
+        builder.Services.AddHostedService<RxAudioProfileStartupService>();
 
         // AudioProcessingModeService — operator's Native-vs-VST route selector.
         // Default is Native (Brian's in-process chain) so a fresh operator's TX
@@ -501,6 +547,16 @@ public static class ZeusHost
         builder.Services.AddSingleton<AudioProcessingModeStore>();
         builder.Services.AddSingleton<AudioProcessingModeService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<AudioProcessingModeService>());
+
+        // TxAudioProfileService — orchestrates the unified TX Audio Profile
+        // system: capture (mic/leveler/CFC/bandpass/processing-mode/chain shape/
+        // VST blobs + native plugin dumps/fidelity), apply (write-through the
+        // live Set* paths — PureSignal untouched), and the last-loaded pointer.
+        // Registered as a hosted service AFTER AudioProcessingModeService so its
+        // StartAsync (seed starters + background-replay last-loaded chain) runs
+        // once the engine route has begun replaying. Never blocks startup.
+        builder.Services.AddSingleton<TxAudioProfileService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<TxAudioProfileService>());
 
         // HamClockService — optional, on-demand embed of OpenHamClock (MIT,
         // github.com/accius/openhamclock) as a Zeus panel. Entirely inert until
@@ -548,6 +604,14 @@ public static class ZeusHost
         builder.Services.AddSingleton<SpotBroadcastService>();
         builder.Services.AddHostedService(sp => sp.GetRequiredService<SpotBroadcastService>());
         builder.Services.AddSingleton<TciManagementService>();
+
+        // ZeusChat — operator-to-operator chat over the Cloudflare relay.
+        // Singleton (API surface) + hosted service (relay connection lifecycle),
+        // same shape as SpotBroadcastService above. Opt-in persisted via
+        // ChatEnabledStore; default OFF.
+        builder.Services.AddSingleton<ChatEnabledStore>();
+        builder.Services.AddSingleton<ChatService>();
+        builder.Services.AddHostedService(sp => sp.GetRequiredService<ChatService>());
 
         var app = builder.Build();
 

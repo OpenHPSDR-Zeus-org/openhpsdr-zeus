@@ -7,25 +7,21 @@
 // See ATTRIBUTIONS.md at the repository root for the full provenance
 // statement and per-component attribution.
 //
-// UpdatesPanel — Settings → Updates. Shows how far the running git checkout is
-// behind its configured upstream and offers a one-click fast-forward pull
-// (GET/POST /api/system/update*, backed by RepoUpdateService). A pull updates
-// source only: the panel makes the required rebuild + restart explicit and
-// points at scripts/update.* rather than trying to rebuild a running binary.
+// UpdatesPanel — Settings -> Updates. Reports the latest PRODUCTION build from
+// the Zeus download domain (downloads.openhpsdrzeus.com, published from `main`
+// only) and opens the matching installer / DMG / AppImage / tarball for this
+// platform. Source checkouts see the same domain status; they update their
+// source manually with scripts/update.*.
 
-import { useCallback, useEffect, useState } from 'react';
-import {
-  fetchUpdateStatus,
-  pullUpdate,
-  type RepoUpdateStatus,
-  type RepoUpdateResult,
-} from '../api/client';
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from 'react';
+import { fetchUpdateStatus, type RepoUpdateStatus } from '../api/client';
 
-const labelStyle: React.CSSProperties = { fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--fg-2)' };
-const valueStyle: React.CSSProperties = { fontSize: 12, color: 'var(--fg-1)', fontFamily: 'monospace' };
-const hintStyle: React.CSSProperties = { fontSize: 10, lineHeight: 1.4, color: 'var(--fg-3)' };
+const labelStyle: CSSProperties = { fontSize: 11, fontWeight: 600, letterSpacing: '0.06em', color: 'var(--fg-2)' };
+const valueStyle: CSSProperties = { fontSize: 12, color: 'var(--fg-1)', fontFamily: 'monospace' };
+const hintStyle: CSSProperties = { fontSize: 10, lineHeight: 1.4, color: 'var(--fg-3)' };
+const linkStyle: CSSProperties = { color: 'var(--accent)', textDecoration: 'none' };
 
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
+function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div style={{ display: 'flex', gap: 10, alignItems: 'baseline' }}>
       <span style={{ ...labelStyle, minWidth: 92 }}>{label}</span>
@@ -44,11 +40,34 @@ function fmtChecked(iso: string | null): string {
   return mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`;
 }
 
+function fmtBytes(bytes: number | null): string {
+  if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) return '';
+  const mib = bytes / (1024 * 1024);
+  return `${mib.toFixed(mib >= 10 ? 0 : 1)} MB`;
+}
+
+function openExternal(url: string | null | undefined) {
+  if (!url) return;
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
+function statusLabel(status: RepoUpdateStatus): string {
+  if (status.updateAvailable && status.latestVersion) {
+    return `Version ${status.latestVersion} available`;
+  }
+  if (!status.latestVersion && !status.error) {
+    return 'Checking releases';
+  }
+  if (!status.error) {
+    return 'Up to date';
+  }
+  return 'Status unknown';
+}
+
 export function UpdatesPanel() {
   const [status, setStatus] = useState<RepoUpdateStatus | null>(null);
   const [checking, setChecking] = useState(false);
-  const [pulling, setPulling] = useState(false);
-  const [result, setResult] = useState<RepoUpdateResult | null>(null);
+  const [result, setResult] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const check = useCallback(async (fetch: boolean) => {
@@ -64,7 +83,7 @@ export function UpdatesPanel() {
   }, []);
 
   // Quick local-only read on mount (no network), then a fetch in the background
-  // so the panel paints instantly but still reflects the real upstream state.
+  // so the panel paints instantly but still reflects the real release state.
   useEffect(() => {
     void (async () => {
       await check(false);
@@ -72,30 +91,26 @@ export function UpdatesPanel() {
     })();
   }, [check]);
 
-  const doPull = async () => {
-    setPulling(true);
-    setResult(null);
-    try {
-      const r = await pullUpdate();
-      setResult(r);
-      await check(false);
-    } catch (err) {
-      setResult({
-        ok: false,
-        newSha: null,
-        requiresRebuild: false,
-        message: err instanceof Error ? err.message : 'Update failed',
-      });
-    } finally {
-      setPulling(false);
-    }
+  const doUpdate = () => {
+    if (!status) return;
+    const url = status.releaseDownloadUrl ?? status.releaseUrl;
+    openExternal(url);
+    setResult(
+      url
+        ? status.releaseDownloadUrl
+          ? `Opened ${status.releaseAssetName ?? 'the latest Zeus download'}.`
+          : 'Opened the Zeus downloads page.'
+        : 'No download is available for this platform.',
+    );
   };
 
-  const behind = status?.behind ?? 0;
-  const upToDate = status?.isGitRepo && behind === 0 && !status.error;
+  const action = status?.updateAction ?? 'none';
+  const updateAvailable = status?.updateAvailable ?? false;
+  const canUpdate = action === 'download' || action === 'openRelease';
+  const assetSize = fmtBytes(status?.releaseAssetSizeBytes ?? null);
 
   return (
-    <div style={{ maxWidth: 600 }}>
+    <div style={{ maxWidth: 640 }}>
       <h3
         style={{
           margin: '0 0 14px',
@@ -113,33 +128,39 @@ export function UpdatesPanel() {
         <div style={{ fontSize: 12, color: 'var(--tx)', marginBottom: 12 }}>{loadError}</div>
       )}
 
-      {status && !status.isGitRepo && (
-        <div style={{ fontSize: 12, color: 'var(--fg-1)', lineHeight: 1.6 }}>
-          Zeus isn’t running from a git checkout, so in-app updates aren’t available. To update,
-          re-clone or pull the repository and rebuild — see the “Updating” section of the README.
-        </div>
-      )}
-
-      {status?.isGitRepo && (
+      {status && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
           <section style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <Row label="Branch">{status.branch ?? '—'}</Row>
-            <Row label="Installed">
-              {status.currentShortSha ?? '—'}
-              {status.currentSubject ? (
-                <span style={{ color: 'var(--fg-3)', fontFamily: 'inherit' }}> · {status.currentSubject}</span>
-              ) : null}
+            <Row label="Installed">{status.installedVersion ?? 'unknown'}</Row>
+            <Row label="Latest">{status.latestVersion ?? (checking ? 'checking...' : '-')}</Row>
+            <Row label="Platform">
+              {(status.runtimePlatform ?? 'unknown')}/{status.runtimeArchitecture ?? 'unknown'}
             </Row>
-            <Row label="Upstream">{status.upstreamRef ?? '—'}</Row>
-            {status.latestRemoteSha && (
-              <Row label="Available">
-                {status.latestRemoteSha}
-                {status.latestRemoteSubject ? (
-                  <span style={{ color: 'var(--fg-3)', fontFamily: 'inherit' }}> · {status.latestRemoteSubject}</span>
-                ) : null}
+            {status.releaseUrl && (
+              <Row label="Release">
+                <a href={status.releaseUrl} target="_blank" rel="noreferrer" style={linkStyle}>
+                  {status.releaseName ?? 'openhpsdrzeus.com'}
+                </a>
+              </Row>
+            )}
+            {status.releaseAssetName && (
+              <Row label="Download">
+                {status.releaseAssetName}
+                {assetSize && (
+                  <span style={{ color: 'var(--fg-3)', fontFamily: 'inherit' }}> - {assetSize}</span>
+                )}
               </Row>
             )}
           </section>
+
+          {status.isGitRepo && (
+            <div style={hintStyle}>
+              Running from source{status.branch ? ` — ${status.branch}` : ''}
+              {status.currentShortSha ? ` @ ${status.currentShortSha}` : ''}. Update the source
+              with <code>scripts/update.ps1</code> (Windows) or <code>scripts/update.sh</code>{' '}
+              (macOS/Linux), then restart Zeus.
+            </div>
+          )}
 
           <section
             style={{
@@ -156,28 +177,16 @@ export function UpdatesPanel() {
               style={{
                 fontSize: 13,
                 fontWeight: 700,
-                color: upToDate ? 'var(--fg-1)' : 'var(--power)',
+                color: updateAvailable ? 'var(--power)' : 'var(--fg-1)',
               }}
             >
-              {upToDate
-                ? 'Up to date'
-                : behind > 0
-                  ? `${behind} update${behind === 1 ? '' : 's'} available`
-                  : 'Status unknown'}
+              {statusLabel(status)}
             </span>
-            {status.ahead > 0 && (
-              <span style={hintStyle}>· {status.ahead} local commit{status.ahead === 1 ? '' : 's'} ahead</span>
-            )}
             {status.checkedUtc && (
               <span style={{ ...hintStyle, marginLeft: 'auto' }}>checked {fmtChecked(status.checkedUtc)}</span>
             )}
           </section>
 
-          {status.dirty && (
-            <div style={{ fontSize: 11, color: 'var(--tx)' }}>
-              Working tree has uncommitted changes — commit or stash them before updating.
-            </div>
-          )}
           {status.error && (
             <div style={{ fontSize: 11, color: 'var(--tx)' }}>{status.error}</div>
           )}
@@ -186,53 +195,35 @@ export function UpdatesPanel() {
             <button
               type="button"
               className="btn sm"
-              disabled={checking || pulling}
+              disabled={checking}
               onClick={() => void check(true)}
             >
-              {checking ? 'CHECKING…' : 'CHECK FOR UPDATES'}
+              {checking ? 'CHECKING...' : 'CHECK FOR UPDATES'}
             </button>
             <button
               type="button"
               className="btn sm active"
-              disabled={!status.canFastForward || pulling || checking}
-              onClick={() => void doPull()}
+              disabled={!canUpdate || checking}
+              onClick={() => doUpdate()}
               title={
-                status.canFastForward
-                  ? 'Fast-forward the checkout to the latest upstream commit'
-                  : status.dirty
-                    ? 'Commit or stash local changes first'
-                    : behind === 0
-                      ? 'Already up to date'
-                      : 'Cannot fast-forward (local commits diverge from upstream)'
+                action === 'download'
+                  ? 'Open the latest Zeus download for this platform'
+                  : action === 'openRelease'
+                    ? 'Open the Zeus downloads page'
+                    : 'Already up to date'
               }
             >
-              {pulling ? 'UPDATING…' : 'UPDATE NOW'}
+              UPDATE NOW
             </button>
           </div>
 
           {result && (
-            <div
-              style={{
-                fontSize: 12,
-                color: result.ok ? 'var(--fg-1)' : 'var(--tx)',
-                lineHeight: 1.5,
-              }}
-            >
-              {result.message}
-              {result.requiresRebuild && (
-                <div style={{ ...hintStyle, marginTop: 6 }}>
-                  Source updated — the running app is still on the old build. Rebuild and restart
-                  Zeus to apply: run <code>scripts/update.ps1</code> (Windows) or{' '}
-                  <code>scripts/update.sh</code> (macOS/Linux), then relaunch.
-                </div>
-              )}
-            </div>
+            <div style={{ fontSize: 12, color: 'var(--fg-1)', lineHeight: 1.5 }}>{result}</div>
           )}
 
           <div style={hintStyle}>
-            “Update now” fast-forwards your local checkout to the latest upstream commit. It changes
-            source only — Zeus keeps running the previously-built binaries until you rebuild and
-            restart. The update script handles the rebuild for both the backend and the web UI.
+            Update now opens the latest installer or package for this platform. Run the downloaded
+            update and restart Zeus to apply it.
           </div>
         </div>
       )}

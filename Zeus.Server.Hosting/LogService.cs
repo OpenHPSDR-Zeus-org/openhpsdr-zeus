@@ -202,6 +202,60 @@ public sealed class LogService : IDisposable
         }, ct);
     }
 
+    public async Task<AdifImportResponse> ImportAdifAsync(string adif, CancellationToken ct = default)
+    {
+        return await Task.Run(() =>
+        {
+            var records = AdifParser.Parse(adif);
+            var existingKeys = _logs.FindAll()
+                .Select(BuildImportKey)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var errors = new List<AdifImportError>();
+            var imported = 0;
+            var duplicates = 0;
+            var skipped = 0;
+            var importedUtc = DateTime.UtcNow;
+
+            for (var i = 0; i < records.Count; i++)
+            {
+                var recordNumber = i + 1;
+                if (!TryCreateDocumentFromAdifRecord(records[i], importedUtc, out var doc, out var error))
+                {
+                    skipped++;
+                    if (errors.Count < 25)
+                        errors.Add(new AdifImportError(recordNumber, error));
+                    continue;
+                }
+
+                var key = BuildImportKey(doc);
+                if (existingKeys.Contains(key))
+                {
+                    duplicates++;
+                    continue;
+                }
+
+                _logs.Insert(doc);
+                existingKeys.Add(key);
+                imported++;
+            }
+
+            _log.LogInformation(
+                "Imported ADIF logbook records total={Total} imported={Imported} duplicates={Duplicates} skipped={Skipped}",
+                records.Count,
+                imported,
+                duplicates,
+                skipped);
+
+            return new AdifImportResponse(
+                TotalRecords: records.Count,
+                ImportedCount: imported,
+                DuplicateCount: duplicates,
+                SkippedCount: skipped,
+                Errors: errors);
+        }, ct);
+    }
+
     public void Dispose()
     {
         _db?.Dispose();
@@ -278,6 +332,175 @@ public sealed class LogService : IDisposable
             RecentQsos: recent);
     }
 
+    internal static bool TryCreateDocumentFromAdifRecord(
+        AdifRecord record,
+        DateTime createdUtc,
+        out LogEntryDocument doc,
+        out string error)
+    {
+        doc = new LogEntryDocument();
+        error = string.Empty;
+
+        var fields = record.Fields;
+        var callsign = FieldValue(fields, "CALL");
+        if (string.IsNullOrWhiteSpace(callsign))
+        {
+            error = "missing CALL";
+            return false;
+        }
+
+        var qsoDate = FieldValue(fields, "QSO_DATE");
+        if (string.IsNullOrWhiteSpace(qsoDate))
+        {
+            error = "missing QSO_DATE";
+            return false;
+        }
+
+        var timeOn = FieldValue(fields, "TIME_ON");
+        if (string.IsNullOrWhiteSpace(timeOn))
+        {
+            error = "missing TIME_ON";
+            return false;
+        }
+
+        if (!TryParseAdifDateTime(qsoDate, timeOn, out var qsoUtc))
+        {
+            error = "invalid QSO_DATE or TIME_ON";
+            return false;
+        }
+
+        var mode = FieldValue(fields, "MODE");
+        if (string.IsNullOrWhiteSpace(mode))
+        {
+            error = "missing MODE";
+            return false;
+        }
+
+        var band = FieldValue(fields, "BAND");
+        var frequencyMhz = ParseAdifNumber(FieldValue(fields, "FREQ"));
+        if (string.IsNullOrWhiteSpace(band) && !frequencyMhz.HasValue)
+        {
+            error = "missing BAND or FREQ";
+            return false;
+        }
+
+        var qrzLogId = FieldValue(fields, "APP_QRZLOG_LOGID", "APP_QRZ_LOGID");
+        doc = new LogEntryDocument
+        {
+            Id = Guid.NewGuid().ToString(),
+            QsoDateTimeUtc = qsoUtc,
+            Callsign = callsign.Trim().ToUpperInvariant(),
+            Name = FieldValue(fields, "NAME"),
+            FrequencyMhz = frequencyMhz,
+            Band = band ?? string.Empty,
+            Mode = mode.Trim().ToUpperInvariant(),
+            RstSent = FieldValue(fields, "RST_SENT") ?? string.Empty,
+            RstRcvd = FieldValue(fields, "RST_RCVD") ?? string.Empty,
+            Grid = FieldValue(fields, "GRIDSQUARE", "GRID"),
+            Country = FieldValue(fields, "COUNTRY"),
+            Dxcc = ParseAdifInteger(FieldValue(fields, "DXCC")),
+            CqZone = ParseAdifInteger(FieldValue(fields, "CQZ", "CQ_ZONE")),
+            ItuZone = ParseAdifInteger(FieldValue(fields, "ITUZ", "ITU_ZONE")),
+            State = FieldValue(fields, "STATE"),
+            Comment = FieldValue(fields, "COMMENT", "NOTES"),
+            CreatedUtc = createdUtc,
+            QrzLogId = qrzLogId,
+            QrzUploadedUtc = string.IsNullOrWhiteSpace(qrzLogId) ? null : createdUtc,
+            AdifFields = fields
+                .Where(kv => !string.IsNullOrWhiteSpace(kv.Key))
+                .ToDictionary(kv => kv.Key.Trim().ToUpperInvariant(), kv => kv.Value, StringComparer.OrdinalIgnoreCase),
+        };
+
+        return true;
+    }
+
+    private static string BuildImportKey(LogEntryDocument doc)
+    {
+        var bandOrFreq = !string.IsNullOrWhiteSpace(doc.Band)
+            ? doc.Band.Trim().ToUpperInvariant()
+            : doc.FrequencyMhz?.ToString("F6", CultureInfo.InvariantCulture) ?? string.Empty;
+
+        return string.Join(
+            "|",
+            NormalizeCallsign(doc.Callsign),
+            ToUtc(doc.QsoDateTimeUtc).Ticks.ToString(CultureInfo.InvariantCulture),
+            bandOrFreq,
+            EmptyToNull(doc.Mode)?.ToUpperInvariant() ?? string.Empty);
+    }
+
+    private static string? FieldValue(IReadOnlyDictionary<string, string> fields, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (fields.TryGetValue(name, out var value))
+            {
+                var trimmed = value.Trim();
+                if (trimmed.Length > 0)
+                    return trimmed;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool TryParseAdifDateTime(string qsoDate, string timeOn, out DateTime qsoUtc)
+    {
+        qsoUtc = default;
+        if (!DateTime.TryParseExact(
+                qsoDate.Trim(),
+                "yyyyMMdd",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var date))
+        {
+            return false;
+        }
+
+        var time = timeOn.Trim();
+        if (time.Length != 4 && time.Length != 6)
+            return false;
+
+        if (!int.TryParse(time[..2], NumberStyles.None, CultureInfo.InvariantCulture, out var hour)
+            || !int.TryParse(time.Substring(2, 2), NumberStyles.None, CultureInfo.InvariantCulture, out var minute))
+        {
+            return false;
+        }
+
+        var second = 0;
+        if (time.Length == 6
+            && !int.TryParse(time.Substring(4, 2), NumberStyles.None, CultureInfo.InvariantCulture, out second))
+        {
+            return false;
+        }
+
+        if (hour is < 0 or > 23 || minute is < 0 or > 59 || second is < 0 or > 59)
+            return false;
+
+        qsoUtc = new DateTime(date.Year, date.Month, date.Day, hour, minute, second, DateTimeKind.Utc);
+        return true;
+    }
+
+    private static double? ParseAdifNumber(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        if (!double.TryParse(value.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+            return null;
+
+        return parsed > 0 && double.IsFinite(parsed) ? parsed : null;
+    }
+
+    private static int? ParseAdifInteger(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        return int.TryParse(value.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
+    }
+
     /// <summary>Internal so AdifUtcTimezoneTests can pin the
     /// <see cref="DateTime.Kind"/> behaviour without standing up a LiteDB
     /// round-trip. The method itself remains a private detail of the ADIF
@@ -296,7 +519,8 @@ public sealed class LogService : IDisposable
         // because callers downstream rely on it being UTC).
         AppendAdifField(sb, "QSO_DATE", doc.QsoDateTimeUtc.ToUniversalTime().ToString("yyyyMMdd"));
         AppendAdifField(sb, "TIME_ON", doc.QsoDateTimeUtc.ToUniversalTime().ToString("HHmmss"));
-        AppendAdifField(sb, "FREQ", doc.FrequencyMhz.ToString("F6", CultureInfo.InvariantCulture));
+        if (doc.FrequencyMhz.HasValue)
+            AppendAdifField(sb, "FREQ", doc.FrequencyMhz.Value.ToString("F6", CultureInfo.InvariantCulture));
         AppendAdifField(sb, "BAND", doc.Band);
         AppendAdifField(sb, "MODE", doc.Mode);
         AppendAdifField(sb, "RST_SENT", doc.RstSent);
@@ -319,8 +543,43 @@ public sealed class LogService : IDisposable
         if (!string.IsNullOrEmpty(doc.Comment))
             AppendAdifField(sb, "COMMENT", doc.Comment);
 
+        AppendAdditionalAdifFields(sb, doc);
         sb.AppendLine("<EOR>");
     }
+
+    private static void AppendAdditionalAdifFields(StringBuilder sb, LogEntryDocument doc)
+    {
+        if (doc.AdifFields is null || doc.AdifFields.Count == 0)
+            return;
+
+        foreach (var (fieldName, value) in doc.AdifFields.OrderBy(kv => kv.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            if (ManagedAdifFields.Contains(fieldName))
+                continue;
+
+            AppendAdifField(sb, fieldName, value);
+        }
+    }
+
+    private static readonly HashSet<string> ManagedAdifFields = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CALL",
+        "QSO_DATE",
+        "TIME_ON",
+        "FREQ",
+        "BAND",
+        "MODE",
+        "RST_SENT",
+        "RST_RCVD",
+        "NAME",
+        "GRIDSQUARE",
+        "COUNTRY",
+        "DXCC",
+        "CQZ",
+        "ITUZ",
+        "STATE",
+        "COMMENT",
+    };
 
     private static void AppendAdifField(StringBuilder sb, string fieldName, string value)
     {
@@ -384,7 +643,7 @@ internal sealed class LogEntryDocument
     public DateTime QsoDateTimeUtc { get; set; }
     public string Callsign { get; set; } = string.Empty;
     public string? Name { get; set; }
-    public double FrequencyMhz { get; set; }
+    public double? FrequencyMhz { get; set; }
     public string Band { get; set; } = string.Empty;
     public string Mode { get; set; } = string.Empty;
     public string RstSent { get; set; } = string.Empty;
@@ -399,6 +658,7 @@ internal sealed class LogEntryDocument
     public DateTime CreatedUtc { get; set; }
     public string? QrzLogId { get; set; }
     public DateTime? QrzUploadedUtc { get; set; }
+    public Dictionary<string, string>? AdifFields { get; set; }
 }
 
 public sealed record WorkedCallsignSummary(
@@ -424,7 +684,7 @@ public sealed record WorkedCallsignRecentQso(
     DateTime QsoDateTimeUtc,
     string? Band,
     string? Mode,
-    double FrequencyMhz,
+    double? FrequencyMhz,
     string? RstSent,
     string? RstRcvd,
     string? Name,

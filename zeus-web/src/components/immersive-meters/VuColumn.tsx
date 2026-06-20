@@ -11,6 +11,7 @@
 
 import type { CSSProperties } from 'react';
 import { dbToFrac, fmtDb, isSilent } from './dbScale';
+import { GlassDome } from '../meters/render/GlassDome';
 import { usePeakHoldFrac } from './usePeakHold';
 import { immersiveZoneTickColor, type ZoneTick } from '../meters/meterCatalog';
 
@@ -262,6 +263,8 @@ export function VuColumn({ valueDb, name, sub, defsId, zoneTicks }: VuColumnProp
             })}
           </g>
         )}
+        {/* Liquid-metal glass over the VU column — static specular. */}
+        <GlassDome defsId="vuColGlass" x={0} y={0} width={60} height={160} />
       </svg>
       <div style={numStyle}>
         {silent ? '−∞' : fmtDb(valueDb)}

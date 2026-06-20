@@ -70,6 +70,7 @@ import { HamClockPanel } from './panels/HamClockPanel';
 import { SpotsPanel } from './panels/SpotsPanel';
 import { SpaceWeatherPanel } from './panels/SpaceWeatherPanel';
 import { UrlEmbedPanel } from './panels/UrlEmbedPanel';
+import { ChatPanel } from './panels/ChatPanel';
 
 export type PanelCategory =
   | 'spectrum'
@@ -120,8 +121,14 @@ const VALID_PANEL_CATEGORIES = new Set<string>(PANEL_CATEGORIES);
  *  `<def.component />`. Multi-instance panels with per-instance config
  *  (just `meters` today) take a typed prop pair instead; `PanelTile` knows
  *  to switch on `def.id === 'meters'` for that wiring. Headerless panels
- *  receive `onRemove` so the close button they own can drop the tile. */
-export type PanelComponentProps = { onRemove?: () => void };
+ *  receive chrome actions so the close/lock buttons they own can mutate the
+ *  tile. */
+export type PanelComponentProps = {
+  onRemove?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
+};
 
 export interface PanelDef {
   id: string;
@@ -407,6 +414,15 @@ export const PANELS: Record<string, PanelDef> = {
     category: 'tools',
     tags: ['spots', 'pota', 'sota', 'activation', 'dx', 'cluster', 'tune', 'park', 'summit'],
     component: SpotsPanel,
+    minW: 6,
+    minH: 8,
+  },
+  chat: {
+    id: 'chat',
+    name: 'Chat',
+    category: 'tools',
+    tags: ['chat', 'message', 'operator', 'qrz', 'dx'],
+    component: ChatPanel,
     minW: 6,
     minH: 8,
   },

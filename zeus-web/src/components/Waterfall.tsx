@@ -224,6 +224,9 @@ export function Waterfall({
     let enhBuf: Float32Array | null = null;
     let terrainBuf: Float32Array | null = null;
     let stitchBuf: Float32Array | null = null;
+    // Scroll speed is a rare toggle; cache the last value pushed to the renderer
+    // so a steady redraw loop skips the store read + GL uniform update per frame.
+    let lastScrollSpeed = -1;
     // Visibility gating: skip the rAF redraw when the waterfall tile is
     // scrolled offscreen or the tab is hidden. We still push frames into
     // the history texture so when visibility resumes the operator sees a
@@ -241,7 +244,8 @@ export function Waterfall({
 
     const redraw = () => {
       if (contextLost || !renderer) return;
-      const { wfDbMin, wfDbMax, wfTxDbMin, wfTxDbMax } = useDisplaySettingsStore.getState();
+      const { wfDbMin, wfDbMax, wfTxDbMin, wfTxDbMax, waterfallScrollSpeed } =
+        useDisplaySettingsStore.getState();
       const { moxOn, tunOn } = useTxStore.getState();
       const keyed = moxOn || tunOn;
       const pop = useSignalEnhanceStore.getState();
@@ -253,7 +257,10 @@ export function Waterfall({
       const popIntensity = popOn ? Math.max(0, Math.min(1, pop.popRenderIntensity / 100)) : 0;
       const reliefDepth = rxRenderable ? Math.max(0, Math.min(1, pop.waterfallReliefDepth / 100)) : 0;
       const smoothness = rxRenderable ? Math.max(0, Math.min(1, pop.waterfallSmoothness / 100)) : 0;
-      renderer.setScrollSpeed(useDisplaySettingsStore.getState().waterfallScrollSpeed);
+      if (waterfallScrollSpeed !== lastScrollSpeed) {
+        renderer.setScrollSpeed(waterfallScrollSpeed);
+        lastScrollSpeed = waterfallScrollSpeed;
+      }
       // Mirror DbScale.tsx — keyed (MOX/TUN) renders the TX waterfall
       // window so the operator's RX noise-floor view stays put.
       const dbMin = popOn ? 0 : keyed ? wfTxDbMin : wfDbMin;
@@ -392,8 +399,12 @@ export function Waterfall({
         // No refill hold here any more (issue #597 Phase 2): rows are
         // stamped with the LO their data was captured at, so the shared
         // shift planner places them correctly even mid-retune.
-        // Feed the auto-range tracker — it's a no-op when AUTO is off.
-        if (receiver === 'A') useDisplaySettingsStore.getState().updateAutoRange(wfDb);
+        // Feed the RX auto-range tracker — it's a no-op when AUTO is off, and
+        // while keyed (TX pixels are a hotter domain; the Panadapter ingest
+        // owns the TX auto-range fit so it works on every waterfall renderer).
+        if (receiver === 'A' && !useTxStore.getState().moxOn && !useTxStore.getState().tunOn) {
+          useDisplaySettingsStore.getState().updateAutoRange(wfDb);
+        }
       }
       // RX only: substitute the per-bin floor-subtracted texture row so weak
       // coherent carriers get shape before the colormap. Gated off while keyed

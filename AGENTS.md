@@ -23,6 +23,30 @@ bd close <id>         # Complete work
 bd dolt push          # Push beads data to remote
 ```
 
+## Automatic Development Workflow
+
+- For each new feature, bug fix, or similarly scoped development task,
+  automatically work in a dedicated worktree from `develop` unless you are
+  already in a task-specific worktree/branch created for that task.
+- Start new work with `pwsh scripts/start-work.ps1 feature "<short name>"` or
+  `pwsh scripts/start-work.ps1 fix "<short name>"`. Pass `-Issue <id>` when a
+  beads issue exists or was just created.
+- Use branch names such as `feature/<short-descriptive-name>` or
+  `fix/<short-descriptive-name>`.
+- Worktrees live beside the primary checkout under
+  `openhpsdr-zeus.Worktrees/<branch_with_underscores>/`.
+- Finish with `pwsh scripts/finish-work.ps1 -Message "<commit subject>"`. The
+  script commits, rebases onto `OpenHPSDR-Zeus-org/develop`, runs the standard
+  test gates, pushes the branch, pushes beads data, and opens a PR into
+  `develop` when `gh` is available. It leaves passive beads JSONL exports out
+  of feature-branch commits.
+- The workflow scripts configure `core.hooksPath=.githooks`; the hooks block
+  direct commits on `main` and `develop`.
+- After the PR merges, run `pwsh scripts/cleanup-merged-worktrees.ps1` to
+  fast-forward the primary checkout and remove clean merged worktrees.
+- Never copy files manually from a worktree into the primary checkout. Git
+  branch + PR + pull is the consolidation path.
+
 ## Non-Interactive Shell Commands
 
 **ALWAYS use non-interactive flags** with file operations to avoid hanging on confirmation prompts.

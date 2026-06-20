@@ -61,6 +61,8 @@ native/build-miniaudio/
 # Playwright-MCP accessibility snapshots and console logs — regenerated
 # on every browser-automation run; do not track.
 .playwright-mcp/
+zeus-web/test-results/
+zeus-web/playwright-report/
 
 # Ad-hoc screenshot captures (debug PNGs) in the repo root. Real docs
 # imagery lives under docs/ when we need it.
@@ -93,3 +95,7 @@ installers/dmg_temp/
 # fixtures are intentionally kept tracked; git keeps tracking already-tracked paths
 # even when ignored. Everything else under tmp/ is scratch and stays untracked.)
 /tmp/
+
+# Operator manual — generated output + local deps (source lives on docs/operator-manual)
+docs/manual/node_modules/
+docs/manual/build/

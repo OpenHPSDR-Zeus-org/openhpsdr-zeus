@@ -42,10 +42,11 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
+import { ChevronLeft, ChevronRight, Download, Upload } from 'lucide-react';
 import { WorkspaceContext } from './layout/WorkspaceContext';
 import { FlexWorkspace } from './layout/FlexWorkspace';
+import { WorkspaceErrorBoundary } from './layout/WorkspaceErrorBoundary';
 import { currentDetachedWorkspaceLayoutId } from './layout/workspace-windows';
 import { ConfirmDialog } from './layout/ConfirmDialog';
 import { AfGainSlider } from './components/AfGainSlider';
@@ -68,25 +69,29 @@ import { PsToggleButton } from './components/PsToggleButton';
 import { PaTempChip } from './components/PaTempChip';
 import { QrzStatusPill } from './components/QrzStatusPill';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
+import ReportProblemButton from './components/report-problem/ReportProblemButton';
+import ReportProblemModal from './components/report-problem/ReportProblemModal';
 import type { SettingsTabId } from './components/SettingsMenu';
 import { SignalIntelligenceController } from './components/SignalIntelligenceController';
 import { SmartNrController } from './components/SmartNrController';
 import { DspSceneDiagnosticsPublisher } from './components/DspSceneDiagnosticsPublisher';
 import { AudioPlaybackDiagnosticsPublisher } from './components/AudioPlaybackDiagnosticsPublisher';
+import { useTxAudioProfileDirtyTracker } from './state/tx-audio-profile-tracker';
+import { useEasterEggStore } from './state/easter-egg-store';
 import { ThemeApplier } from './components/ThemeApplier';
-import { TxStationProfileActivator } from './components/TxStationProfileActivator';
+import { StartupUpdatePrompt } from './components/StartupUpdatePrompt';
 import { StepFavorites } from './components/toolbar/StepFavorites';
 import { TunButton } from './components/TunButton';
 import { BOARD_LABELS } from './api/radio';
 import { useFilterRibbonOpenSync } from './components/filter/filterRibbonShared';
 import { CONTACTS, bandOf } from './components/design/data';
-import { bearingDeg, distanceKm, dayNightAt } from './components/design/geo';
+import { bearingDeg, distanceKm } from './components/design/geo';
 import { startRealtime } from './realtime/ws-client';
 import { getServerBaseUrl, isCapacitorRuntime } from './serverUrl';
 import { getAudioClient } from './audio/audio-client';
 import { setAudioHostMode } from './audio/host-mode';
 import { useMicUplink } from './audio/use-mic-uplink';
-import { fetchState } from './api/client';
+import { fetchState, fetchUpdateStatus, type RepoUpdateStatus } from './api/client';
 import { useConnectionStore } from './state/connection-store';
 import { useRadioStore } from './state/radio-store';
 import { useQrzStore } from './state/qrz-store';
@@ -103,8 +108,8 @@ import { registerServiceWorker } from './service-worker/registerSW';
 import { UpdatePrompt } from './service-worker/UpdatePrompt';
 import { useDesktopViewportLock, useIsMobileViewport } from './mobile/use-mobile-viewport';
 import type L from 'leaflet';
-import type { QrzStation } from './api/qrz';
 import type { Contact } from './components/design/data';
+import { qrzStationToContact } from './components/design/qrz-contact';
 
 const SettingsView = lazy(async () => {
   const module = await import('./components/SettingsMenu');
@@ -131,6 +136,8 @@ export default function App() {
   );
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [installUpdate, setInstallUpdate] = useState<(() => Promise<void>) | null>(null);
+  const [startupUpdate, setStartupUpdate] = useState<RepoUpdateStatus | null>(null);
+  const [startupUpdateDismissed, setStartupUpdateDismissed] = useState(false);
   const [confirmResetLayout, setConfirmResetLayout] = useState<{
     id: string;
     name: string;
@@ -155,6 +162,9 @@ export default function App() {
   // Clicking Connect on a discovered radio doesn't refresh radio-store on
   // its own (only the manual-connect path does).
   useEffect(() => { radioLoad(); }, [radioLoad, connected]);
+  // Track unsaved TX Audio Profile edits (dirty flag) for the disconnect/close
+  // save prompt. Mounted once here so it spans the whole session.
+  useTxAudioProfileDirtyTracker();
   const brandSub = radioConnected !== 'Unknown'
     ? BOARD_LABELS[radioConnected]
     : 'Not Connected';
@@ -178,12 +188,25 @@ export default function App() {
   }, [loadLayoutsForRadio, radioConnected, radioLoaded]);
   const activeLayoutId = useLayoutStore((s) => s.activeLayoutId);
 
+  // Recover action for the workspace error boundary: reset the active layout to
+  // its default panel arrangement, which clears whatever layout/panel state
+  // drove a render to throw and blank the workspace.
+  const resetActiveWorkspaceLayout = useCallback(() => {
+    useLayoutStore.getState().resetActiveLayout();
+  }, []);
+
   useKeyboardShortcuts();
   useMicUplink();
   useFilterRibbonOpenSync();
 
   const topbarControlsRef = useRef<HTMLDivElement | null>(null);
   const [topbarScroll, setTopbarScroll] = useState({ canLeft: false, canRight: false });
+
+  // Hidden HARDWARE diagnostics folder — easter egg. Tapping the brand-mark
+  // lightning bolt unlocks the folder for this session (it re-locks on the next
+  // launch; counting + threshold live in easter-egg-store). Deliberately exposes
+  // no hover, cursor, or title affordance so the bolt never advertises itself.
+  const registerBoltClick = useEasterEggStore((s) => s.registerBoltClick);
   const syncTopbarScroll = useCallback(() => {
     const el = topbarControlsRef.current;
     if (!el) return;
@@ -231,6 +254,23 @@ export default function App() {
     if (install) {
       setInstallUpdate(() => install);
     }
+  }, []);
+
+  useEffect(() => {
+    const ctrl = new AbortController();
+    fetchUpdateStatus(true, ctrl.signal)
+      .then((next) => {
+        // A newer production build (from the download domain) is available and
+        // we have somewhere to send the operator — prompt on startup.
+        const actionableRelease =
+          next.updateAvailable
+          && (next.updateAction === 'download' || next.updateAction === 'openRelease');
+        if (actionableRelease) setStartupUpdate(next);
+      })
+      .catch(() => {
+        /* Settings -> Updates exposes manual retry and detailed errors. */
+      });
+    return () => ctrl.abort();
   }, []);
 
   useEffect(() => {
@@ -335,6 +375,7 @@ export default function App() {
         hash === 'rotator' ||
         hash === 'pa' ||
         hash === 'server' ||
+        hash === 'updates' ||
         hash === 'about'
       ) {
         setSettingsView(true, hash as SettingsTabId);
@@ -397,24 +438,39 @@ export default function App() {
   const logPublishInFlight = useLoggerStore((s) => s.publishInFlight);
   const logPublishResult = useLoggerStore((s) => s.lastPublishResult);
   const logPublishError = useLoggerStore((s) => s.publishError);
+  const logImportInFlight = useLoggerStore((s) => s.importInFlight);
+  const logImportResult = useLoggerStore((s) => s.lastImportResult);
+  const logImportError = useLoggerStore((s) => s.importError);
   const logSelectedIds = useLoggerStore((s) => s.selectedIds);
   const logPublishSelected = useLoggerStore((s) => s.publishSelectedToQrz);
   const logExportAdif = useLoggerStore((s) => s.exportAdif);
+  const logImportAdifFile = useLoggerStore((s) => s.importAdifFile);
   const workedSummary = useLoggerStore((s) => s.workedSummary);
   const workedSummaryLoading = useLoggerStore((s) => s.workedSummaryLoading);
   const loadWorkedSummary = useLoggerStore((s) => s.loadWorkedSummary);
   const clearWorkedSummary = useLoggerStore((s) => s.clearWorkedSummary);
   const qrzHasApiKey = useQrzStore((s) => s.hasApiKey);
 
-  const logbookTitle = logPublishInFlight
-    ? 'Logbook · Uploading…'
-    : logPublishError
-      ? `Logbook · ${logPublishError.length > 28 ? 'Publish failed' : logPublishError}`
-      : logPublishResult
-        ? logPublishResult.failedCount > 0
-          ? `Logbook · ${logPublishResult.successCount} ok, ${logPublishResult.failedCount} failed`
-          : `Logbook · Published ${logPublishResult.successCount}`
-        : 'Logbook';
+  const logImportInputRef = useRef<HTMLInputElement | null>(null);
+  let logbookTitle = 'Logbook';
+  if (logImportInFlight) {
+    logbookTitle = 'Logbook · Importing…';
+  } else if (logImportError) {
+    logbookTitle = `Logbook · ${logImportError.length > 28 ? 'Import failed' : logImportError}`;
+  } else if (logImportResult) {
+    const importParts = [`Imported ${logImportResult.importedCount}`];
+    if (logImportResult.duplicateCount > 0) importParts.push(`${logImportResult.duplicateCount} duplicates`);
+    if (logImportResult.skippedCount > 0) importParts.push(`${logImportResult.skippedCount} skipped`);
+    logbookTitle = `Logbook · ${importParts.join(', ')}`;
+  } else if (logPublishInFlight) {
+    logbookTitle = 'Logbook · Uploading…';
+  } else if (logPublishError) {
+    logbookTitle = `Logbook · ${logPublishError.length > 28 ? 'Publish failed' : logPublishError}`;
+  } else if (logPublishResult) {
+    logbookTitle = logPublishResult.failedCount > 0
+      ? `Logbook · ${logPublishResult.successCount} ok, ${logPublishResult.failedCount} failed`
+      : `Logbook · Published ${logPublishResult.successCount}`;
+  }
 
   const logSelectedCount = logSelectedIds.size;
   const publishDisabled = logSelectedCount === 0 || logPublishInFlight || !qrzHasApiKey;
@@ -424,8 +480,32 @@ export default function App() {
       ? 'Select one or more rows to publish'
       : 'Publish selected QSOs to QRZ logbook';
 
+  const handleLogImportFile = useCallback((event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = '';
+    if (file) void logImportAdifFile(file);
+  }, [logImportAdifFile]);
+
   const logbookActions = useMemo(() => (
     <>
+      <input
+        ref={logImportInputRef}
+        type="file"
+        accept=".adi,.adif,.txt,text/plain"
+        onChange={handleLogImportFile}
+        style={{ display: 'none' }}
+      />
+      <button
+        type="button"
+        className="btn ghost sm"
+        onClick={() => logImportInputRef.current?.click()}
+        disabled={logImportInFlight}
+        title="Import an ADIF logbook file"
+        aria-label="Import ADIF logbook file"
+      >
+        <Upload size={13} strokeWidth={2.2} aria-hidden="true" />
+        {logImportInFlight ? 'Importing…' : 'Import'}
+      </button>
       <button
         type="button"
         className="btn ghost sm"
@@ -441,11 +521,14 @@ export default function App() {
         onClick={() => void logExportAdif()}
         title="Export all log entries to ADIF file"
       >
+        <Download size={13} strokeWidth={2.2} aria-hidden="true" />
         Export
       </button>
     </>
   ), [
+    handleLogImportFile,
     logExportAdif,
+    logImportInFlight,
     logPublishInFlight,
     logPublishSelected,
     logSelectedCount,
@@ -768,17 +851,21 @@ export default function App() {
       <SignalIntelligenceController />
       <SmartNrController />
       <DspSceneDiagnosticsPublisher />
-      <TxStationProfileActivator />
       <div
         className="detached-workspace-app"
         data-screen-label={`Detached Workspace · ${detachedLayoutName ?? detachedLayoutId}`}
       >
         <div className="workspace-area detached-workspace-area">
           <AlertBanner />
-          <FlexWorkspace
+          <WorkspaceErrorBoundary
             key={detachedLayoutId}
-            layoutId={detachedLayoutId}
-          />
+            onReset={resetActiveWorkspaceLayout}
+          >
+            <FlexWorkspace
+              key={detachedLayoutId}
+              layoutId={detachedLayoutId}
+            />
+          </WorkspaceErrorBoundary>
         </div>
         {disconnectedOverlay}
       </div>
@@ -801,8 +888,7 @@ export default function App() {
           <SignalIntelligenceController />
           <SmartNrController />
           <DspSceneDiagnosticsPublisher />
-          <TxStationProfileActivator />
-          <AudioPlaybackDiagnosticsPublisher />
+              <AudioPlaybackDiagnosticsPublisher />
           <Suspense fallback={null}>
             <MobileApp />
           </Suspense>
@@ -819,7 +905,6 @@ export default function App() {
     <SignalIntelligenceController />
     <SmartNrController />
     <DspSceneDiagnosticsPublisher />
-    <TxStationProfileActivator />
     <AudioPlaybackDiagnosticsPublisher />
     <div className="app" data-screen-label="01 Main Console" style={{ position: 'relative' }}>
       {/* Left layout bar — issue #241. Spans the full app height; lists named
@@ -845,7 +930,11 @@ export default function App() {
                 className="brand-mark-wave brand-mark-wave--bottom"
                 d="M3.2 15.8c1.55 1.2 3.1 1.2 4.65 0l.75-.58c1.55-1.2 3.1-1.2 4.65 0l.75.58c1.55 1.2 3.1 1.2 4.65 0l1.15-.88"
               />
-              <path className="brand-mark-bolt" d="M13.4 2.5 7 12.1h4.15l-1.2 9.4L17 10.55h-4.25l.65-8.05Z" />
+              <path
+                className="brand-mark-bolt"
+                d="M13.4 2.5 7 12.1h4.15l-1.2 9.4L17 10.55h-4.25l.65-8.05Z"
+                onClick={registerBoltClick}
+              />
             </svg>
           </div>
           <div className="brand-text">
@@ -943,7 +1032,12 @@ export default function App() {
             />
           </Suspense>
         ) : (
-          <FlexWorkspace key={activeLayoutId} />
+          <WorkspaceErrorBoundary
+            key={activeLayoutId}
+            onReset={resetActiveWorkspaceLayout}
+          >
+            <FlexWorkspace key={activeLayoutId} />
+          </WorkspaceErrorBoundary>
         )}
       </div>
 
@@ -984,6 +1078,7 @@ export default function App() {
         </span>
         <RotatorStatusPill />
         <QrzStatusPill />
+        <ReportProblemButton />
         {/* Reset acts on the active layout's tile arrangement. Disabled
             while the Settings view is showing (no active workspace to
             mutate). Add Panel now lives inside the workspace surface. */}
@@ -1022,7 +1117,13 @@ export default function App() {
           <p>This keeps the layout tab but replaces its current panel positions.</p>
         </ConfirmDialog>
       )}
+      <StartupUpdatePrompt
+        status={!startupUpdateDismissed ? startupUpdate : null}
+        onDismiss={() => setStartupUpdateDismissed(true)}
+        onOpenSettings={() => setSettingsView(true, 'updates')}
+      />
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
+      <ReportProblemModal />
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>
@@ -1030,93 +1131,3 @@ export default function App() {
   );
 }
 
-// QRZ XML gives us a sparser record than the design-time Contact type; fill
-// the design-only fields ("local", "rig", "ant", "age"…) with em-dashes so
-// QrzCard still renders without needing a schema change.
-/** "2008-05-12" → 2008. Returns null for empty/unparseable values. */
-function licenseYear(efdate: string | null): number | null {
-  if (!efdate) return null;
-  const m = /(\d{4})/.exec(efdate);
-  if (!m) return null;
-  const y = Number(m[1]);
-  return y >= 1900 && y <= 2100 ? y : null;
-}
-
-/** Contact's wall-clock time from the QRZ GMT offset, e.g. "03:14". */
-function localTimeFromOffset(gmtOffset: number | null, tz: string | null): string {
-  if (gmtOffset == null) return '—';
-  const utcMs = Date.now() + new Date().getTimezoneOffset() * 60_000;
-  const d = new Date(utcMs + gmtOffset * 3_600_000);
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mm = String(d.getMinutes()).padStart(2, '0');
-  return tz ? `${hh}:${mm} ${tz}` : `${hh}:${mm}`;
-}
-
-/** "LoTW · eQSL · Direct" summary, or "—" when nothing is known. */
-function qslSummary(s: QrzStation): string {
-  const parts: string[] = [];
-  if (s.acceptsLotw) parts.push('LoTW');
-  if (s.acceptsEqsl) parts.push('eQSL');
-  if (s.acceptsMailQsl) parts.push('Direct');
-  if (s.qslManager) parts.push(`via ${s.qslManager}`);
-  return parts.length ? parts.join(' · ') : '—';
-}
-
-function qrzStationToContact(s: QrzStation | null, home: QrzStation | null): Contact | null {
-  if (!s || s.lat == null || s.lon == null) return null;
-  const bearing = home?.lat != null && home?.lon != null
-    ? bearingDeg(home.lat, home.lon, s.lat, s.lon)
-    : 0;
-  const distance = home?.lat != null && home?.lon != null
-    ? distanceKm(home.lat, home.lon, s.lat, s.lon)
-    : 0;
-  const first = (s.firstName || s.name || '').trim().charAt(0).toUpperCase();
-  const last = (s.name || '').trim().split(/\s+/).pop()?.charAt(0).toUpperCase() ?? '';
-  const initials = (first + last) || s.callsign.slice(0, 2);
-  const location = [s.city, s.state, s.country].filter(Boolean).join(', ') || (s.country ?? '—');
-  const fullName = [s.firstName, s.name].filter(Boolean).join(' ') || '—';
-
-  const licYear = licenseYear(s.licenseEffectiveDate);
-  const licensedYears = licYear != null ? new Date().getFullYear() - licYear : null;
-  const distanceMi = distance * 0.621371;
-  const distanceLabel = distance > 0
-    ? `${Math.round(distance).toLocaleString()} km · ${Math.round(distanceMi).toLocaleString()} mi`
-    : null;
-
-  return {
-    callsign: s.callsign,
-    name: fullName,
-    location,
-    grid: s.grid ?? '—',
-    cq: s.cqZone != null ? String(s.cqZone).padStart(2, '0') : '—',
-    itu: s.ituZone != null ? String(s.ituZone).padStart(2, '0') : '—',
-    latlon: `${Math.abs(s.lat).toFixed(2)}°${s.lat >= 0 ? 'N' : 'S'} / ${Math.abs(s.lon).toFixed(2)}°${s.lon >= 0 ? 'E' : 'W'}`,
-    lat: s.lat,
-    lon: s.lon,
-    local: localTimeFromOffset(s.gmtOffset, s.timeZone),
-    qsl: qslSummary(s),
-    licensed: licYear != null ? String(licYear) : '—',
-    initials,
-    flag: '',
-    bearing,
-    distance,
-    age: 0,
-    class: s.licenseClass ?? '—',
-    rig: '—',
-    ant: '—',
-    power: '—',
-    qth: s.city ?? s.country ?? '—',
-    email: s.email ?? '—',
-    photoUrl: s.imageUrl ?? undefined,
-    qrzUrl: `https://www.qrz.com/db/${s.callsign}`,
-    // Enrichment
-    licenseCodes: s.licenseCodes,
-    licensedYears,
-    qslLotw: s.acceptsLotw,
-    qslEqsl: s.acceptsEqsl,
-    qslMail: s.acceptsMailQsl,
-    qslManager: s.qslManager,
-    dayNight: dayNightAt(s.lat, s.lon),
-    distanceLabel,
-  };
-}

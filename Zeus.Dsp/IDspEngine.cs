@@ -74,6 +74,30 @@ public interface IDspEngine : IDisposable
     void SetCtunShift(int channelId, int shiftHz);
     void SetAgcTop(int channelId, double topDb);
 
+    /// <summary>
+    /// Set the AGC threshold ("knee") in dBm (WDSP <c>SetRXAAGCThresh</c>) — the
+    /// signal-relative level below which the AGC applies increasing gain up to
+    /// the <see cref="SetAgcTop"/> cap. The engine supplies the FFT size + sample
+    /// rate WDSP needs for the dBm conversion; the caller passes the value in
+    /// WDSP's dBm scale (per-board meter-offset conversion happens upstream).
+    /// No-op on Synthetic.
+    /// </summary>
+    void SetAgcThresh(int channelId, double threshDbm);
+
+    /// <summary>
+    /// Read back the AGC max-gain ("top") in dB. After a threshold change WDSP
+    /// recomputes the top; this exposes it for display mirroring. Returns the
+    /// last set top on Synthetic.
+    /// </summary>
+    double GetAgcTop(int channelId);
+
+    /// <summary>
+    /// Read the current AGC threshold ("knee") in dBm (WDSP scale). Used to
+    /// capture WDSP's per-mode default knee before the operator first overrides
+    /// it, so disengaging the knee can restore that default. 0 on Synthetic.
+    /// </summary>
+    double GetAgcThresh(int channelId);
+
     /// <summary>Apply the AGC mode + custom/fixed params (Thetis parity §4).
     /// Drives SetRXAAGCMode/Slope/Hang/Decay/HangThreshold (and SetRXAAGCFixed
     /// in Fixed mode). The AGC max-gain ("top") is NOT touched here — it keeps
@@ -153,6 +177,16 @@ public interface IDspEngine : IDisposable
     /// (via bin clipping) so the panadapter axis does not move on MOX —
     /// see issue #81. No-op on Synthetic.</summary>
     bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut);
+
+    /// <summary>Reconfigure the TX display analyzer (and the PS-feedback
+    /// analyzer, which shares the TX display span). <paramref name="fftSize"/>
+    /// is the analyzer FFT size (power of two); <paramref name="windowType"/>
+    /// is the WDSP <c>win_type</c>; <paramref name="avgTauSec"/> is the visual
+    /// log-recursive smoothing time-constant in seconds. Pure display — does
+    /// NOT change the transmitted audio, drive, or PA. Out-of-range values are
+    /// clamped/ignored by the implementation. No-op on Synthetic and when TXA
+    /// is not open.</summary>
+    void ConfigureTxDisplayAnalyzer(int fftSize, int windowType, double avgTauSec);
 
     /// <summary>PureSignal-feedback panadapter / waterfall pixels in dBm,
     /// sourced from a separate WDSP analyzer fed with the post-PA loopback

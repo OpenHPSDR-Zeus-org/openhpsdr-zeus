@@ -5,6 +5,7 @@ using Zeus.Server;
 
 namespace Zeus.Server.Tests;
 
+[Trait("Category", "DspModernization")]
 public sealed class FrontendDspSceneDiagnosticsServiceTests
 {
     private static readonly JsonSerializerOptions CamelCaseJson = new()

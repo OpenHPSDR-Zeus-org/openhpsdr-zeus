@@ -404,6 +404,10 @@ export type CfcPresetDto = {
   updatedUtc: string;
 };
 
+// Legacy station-profile shape. The endpoints are retired (superseded by the
+// unified TX Audio Profile system); this type is retained only as the in-tree
+// seed-catalog shape used by tx-station-profile.ts (CFC starter constants +
+// spectral-density transform consumed by CfcSettingsPanel and the profile seeds).
 export type TxStationProfileDto = {
   id: string;
   label: string;
@@ -421,8 +425,54 @@ export type TxStationProfileDto = {
   spectralDensity: number;
 };
 
-export type TxStationProfilesResponseDto = {
-  profiles: TxStationProfileDto[];
+// Unified, operator-named "TX Audio Profile". A single macro that captures the
+// ENTIRE TX audio-shaping state — mic/leveler scalars, the whole TxLeveling and
+// CFC configs, the TX bandpass, the Audio Suite chain (processing mode + order +
+// parked + master bypass) and EVERY plugin's settings (VST opaque blobs + native
+// per-plugin LiteDB dumps), plus the fidelity-policy spectral-density target.
+// Mirrors Zeus.Contracts.TxAudioProfileDto. REPLACES the old fixed-3 station
+// profiles and the TX audio-suite named profiles.
+export type TxAudioProfileDto = {
+  id: string;
+  name: string;
+  micGainDb: number;
+  levelerMaxGainDb: number;
+  txLeveling: TxLevelingConfigDto;
+  cfcConfig: CfcConfigDto;
+  lowCutHz: number;
+  highCutHz: number;
+  processingMode: 'native' | 'vst';
+  masterBypass: boolean;
+  chainOrder: string[];
+  chainParked: string[];
+  vstPluginStates: Record<string, string>;
+  nativePluginStates: Record<string, Record<string, string>>;
+  targetSpectralDensity: number;
+  createdUtc: string;
+  updatedUtc: string;
+};
+
+export type TxAudioProfilesResponseDto = {
+  profiles: TxAudioProfileDto[];
+};
+
+// The persisted "last loaded profile" pointer the dropdown shows as selected.
+// The BACKEND applies this at startup — the frontend never applies it.
+export type LastLoadedTxAudioProfileDto = {
+  id: string | null;
+};
+
+// Response from POST /api/tx-audio-profiles/{id}/apply: the applied profile plus
+// a full live StateDto so the UI snaps without a second round-trip.
+export type ApplyTxAudioProfileResultDto = {
+  profile: TxAudioProfileDto;
+  state: RadioStateDto;
+  pluginIds: string[];
+  parked: string[];
+  processingMode: 'native' | 'vst';
+  engineActive: boolean;
+  engineAvailable: boolean;
+  masterBypass: boolean;
 };
 
 export type TxFidelityPolicyDto = {
@@ -2397,38 +2447,65 @@ function normalizeCfcPresetsResponse(raw: unknown): CfcPresetDto[] {
     .filter((preset): preset is CfcPresetDto => preset !== null);
 }
 
-function normalizeTxStationProfile(raw: unknown): TxStationProfileDto | null {
+function normalizeStringRecord(raw: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (raw && typeof raw === 'object') {
+    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+      if (typeof v === 'string') out[k] = v;
+    }
+  }
+  return out;
+}
+
+function normalizeTxAudioProfile(raw: unknown): TxAudioProfileDto | null {
   if (!raw || typeof raw !== 'object') return null;
   const r = raw as Record<string, unknown>;
-  const id = typeof r.id === 'string' ? r.id.trim() : '';
+  const id = typeof r.id === 'string' ? r.id.trim().toLowerCase() : '';
   if (!id) return null;
+  const nativeStates: Record<string, Record<string, string>> = {};
+  if (r.nativePluginStates && typeof r.nativePluginStates === 'object') {
+    for (const [pid, snap] of Object.entries(r.nativePluginStates as Record<string, unknown>)) {
+      nativeStates[pid] = normalizeStringRecord(snap);
+    }
+  }
   return {
     id,
-    label: typeof r.label === 'string' ? r.label : id,
-    summary: typeof r.summary === 'string' ? r.summary : '',
-    applyTitle: typeof r.applyTitle === 'string' ? r.applyTitle : '',
-    audioSuiteRoute: r.audioSuiteRoute === 'vst' ? 'vst' : 'native',
-    audioSuiteBypassed:
-      typeof r.audioSuiteBypassed === 'boolean' ? r.audioSuiteBypassed : true,
-    audioSuiteProfileName:
-      typeof r.audioSuiteProfileName === 'string' ? r.audioSuiteProfileName : '',
-    micGainDb: typeof r.micGainDb === 'number' ? r.micGainDb : 0,
-    levelerMaxGainDb:
-      typeof r.levelerMaxGainDb === 'number' ? r.levelerMaxGainDb : 8,
+    name: typeof r.name === 'string' && r.name.trim() ? r.name : id,
+    micGainDb: clampInt(r.micGainDb, -40, 10, 0),
+    levelerMaxGainDb: typeof r.levelerMaxGainDb === 'number' ? r.levelerMaxGainDb : 8,
     txLeveling: normalizeTxLeveling(r.txLeveling),
     cfcConfig: normalizeCfc(r.cfcConfig),
-    lowCutHz: clampInt(r.lowCutHz, 20, 600, 150),
-    highCutHz: clampInt(r.highCutHz, 1500, 6000, 2900),
-    spectralDensity: clampInt(r.spectralDensity, 0, 100, 50),
+    lowCutHz: clampInt(r.lowCutHz, 0, 10000, 150),
+    highCutHz: clampInt(r.highCutHz, 0, 10000, 2900),
+    processingMode: r.processingMode === 'vst' ? 'vst' : 'native',
+    masterBypass: typeof r.masterBypass === 'boolean' ? r.masterBypass : false,
+    chainOrder: Array.isArray(r.chainOrder)
+      ? r.chainOrder.filter((s): s is string => typeof s === 'string')
+      : [],
+    chainParked: Array.isArray(r.chainParked)
+      ? r.chainParked.filter((s): s is string => typeof s === 'string')
+      : [],
+    vstPluginStates: normalizeStringRecord(r.vstPluginStates),
+    nativePluginStates: nativeStates,
+    targetSpectralDensity: clampInt(r.targetSpectralDensity, 0, 100, 55),
+    createdUtc: typeof r.createdUtc === 'string' ? r.createdUtc : '',
+    updatedUtc: typeof r.updatedUtc === 'string' ? r.updatedUtc : '',
   };
 }
 
-function normalizeTxStationProfileResponse(raw: unknown): TxStationProfileDto[] {
+function normalizeTxAudioProfilesResponse(raw: unknown): TxAudioProfileDto[] {
   const r = raw as { profiles?: unknown };
   const profiles = Array.isArray(r?.profiles) ? r.profiles : [];
   return profiles
-    .map(normalizeTxStationProfile)
-    .filter((profile): profile is TxStationProfileDto => profile !== null);
+    .map(normalizeTxAudioProfile)
+    .filter((p): p is TxAudioProfileDto => p !== null);
+}
+
+function normalizeLastLoadedTxAudioProfile(raw: unknown): LastLoadedTxAudioProfileDto {
+  if (!raw || typeof raw !== 'object') return { id: null };
+  const r = raw as Record<string, unknown>;
+  const id = typeof r.id === 'string' && r.id.trim() ? r.id.trim().toLowerCase() : null;
+  return { id };
 }
 
 function normalizeTxFidelityPolicy(raw: unknown): TxFidelityPolicyDto {
@@ -4908,8 +4985,10 @@ export function restartApp(
   );
 }
 
-/** Status of the local git checkout vs its configured upstream
- *  (GET /api/system/update). Mirrors Zeus.Contracts.RepoUpdateStatus. */
+export type UpdateAction = 'none' | 'download' | 'openRelease';
+
+/** Status of the local install vs the latest production build on the download
+ *  domain (GET /api/system/update). Mirrors Zeus.Contracts.RepoUpdateStatus. */
 export interface RepoUpdateStatus {
   isGitRepo: boolean;
   branch: string | null;
@@ -4926,18 +5005,24 @@ export interface RepoUpdateStatus {
   remoteUrl: string | null;
   checkedUtc: string | null;
   error: string | null;
+  installedVersion: string;
+  runtimePlatform: string;
+  runtimeArchitecture: string;
+  updateAvailable: boolean;
+  updateAction: UpdateAction;
+  latestVersion: string | null;
+  releaseTag: string | null;
+  releaseName: string | null;
+  releaseUrl: string | null;
+  releasePublishedUtc: string | null;
+  releaseAssetName: string | null;
+  releaseDownloadUrl: string | null;
+  releaseAssetSizeBytes: number | null;
+  releaseAssetDigest: string | null;
 }
 
-/** Result of POST /api/system/update/pull. Mirrors Zeus.Contracts.RepoUpdateResult. */
-export interface RepoUpdateResult {
-  ok: boolean;
-  newSha: string | null;
-  requiresRebuild: boolean;
-  message: string;
-}
-
-/** Check how far the running checkout is behind upstream. `fetch=false` skips
- *  the network and reports the last-known counts. */
+/** Read the latest production build vs the installed version. `fetch=false`
+ *  skips the network and reports the last-known local version. */
 export function fetchUpdateStatus(
   fetch = true,
   signal?: AbortSignal,
@@ -4946,16 +5031,6 @@ export function fetchUpdateStatus(
     `/api/system/update?fetch=${fetch ? 'true' : 'false'}`,
     { signal },
     (raw) => raw as RepoUpdateStatus,
-  );
-}
-
-/** Fast-forward the checkout to upstream. Source only — a rebuild + restart is
- *  still required (result.requiresRebuild). */
-export function pullUpdate(signal?: AbortSignal): Promise<RepoUpdateResult> {
-  return jsonFetch(
-    '/api/system/update/pull',
-    { method: 'POST', signal },
-    (raw) => raw as RepoUpdateResult,
   );
 }
 
@@ -6191,13 +6266,112 @@ export async function setTxMonitor(
   );
 }
 
-export function fetchTxStationProfiles(
+// ---- Unified TX Audio Profiles -----------------------------------------
+// These REPLACE /api/tx/station-profiles* and the TX /api/tx-audio-suite/profiles*
+// routes. The RX route (/api/rx-audio-suite/profiles*) is untouched.
+
+export function fetchTxAudioProfiles(
   signal?: AbortSignal,
-): Promise<TxStationProfileDto[]> {
+): Promise<TxAudioProfileDto[]> {
   return jsonFetch(
-    '/api/tx/station-profiles',
+    '/api/tx-audio-profiles',
     { signal },
-    normalizeTxStationProfileResponse,
+    normalizeTxAudioProfilesResponse,
+  );
+}
+
+// Save the LIVE state as a profile named <name>. The body carries ONLY the
+// name; the backend snapshots everything (single source of truth — the client
+// never assembles the profile body). Re-saving the same name/slug overwrites.
+export function saveTxAudioProfile(
+  name: string,
+  signal?: AbortSignal,
+): Promise<TxAudioProfileDto> {
+  return jsonFetch(
+    '/api/tx-audio-profiles',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name }),
+      signal,
+    },
+    (raw) => {
+      const p = normalizeTxAudioProfile(raw);
+      if (!p) throw new ApiError(500, 'Malformed TX audio profile response');
+      return p;
+    },
+  );
+}
+
+// Apply a profile by id to LIVE state (write-through Set* paths; PureSignal is
+// never touched). Records last-loaded server-side and returns a full StateDto so
+// the live UI snaps without a second round-trip.
+export function applyTxAudioProfile(
+  id: string,
+  signal?: AbortSignal,
+): Promise<ApplyTxAudioProfileResultDto> {
+  return jsonFetch(
+    `/api/tx-audio-profiles/${encodeURIComponent(id)}/apply`,
+    { method: 'POST', signal },
+    (raw) => {
+      const r = (raw ?? {}) as Record<string, unknown>;
+      const profile = normalizeTxAudioProfile(r.profile);
+      if (!profile) throw new ApiError(500, 'Malformed apply response');
+      return {
+        profile,
+        state: normalizeState(r.state),
+        pluginIds: Array.isArray(r.pluginIds)
+          ? (r.pluginIds.filter((s): s is string => typeof s === 'string'))
+          : [],
+        parked: Array.isArray(r.parked)
+          ? (r.parked.filter((s): s is string => typeof s === 'string'))
+          : [],
+        processingMode: r.processingMode === 'vst' ? 'vst' : 'native',
+        engineActive: r.engineActive === true,
+        engineAvailable: r.engineAvailable === true,
+        masterBypass: r.masterBypass === true,
+      };
+    },
+  );
+}
+
+export async function deleteTxAudioProfile(
+  id: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  return jsonFetch(
+    `/api/tx-audio-profiles/${encodeURIComponent(id)}`,
+    { method: 'DELETE', signal },
+    (raw) => {
+      const r = (raw ?? {}) as { deleted?: unknown };
+      return typeof r.deleted === 'string' ? r.deleted : id;
+    },
+  );
+}
+
+export function fetchLastLoadedTxAudioProfile(
+  signal?: AbortSignal,
+): Promise<LastLoadedTxAudioProfileDto> {
+  return jsonFetch(
+    '/api/tx-audio-profiles/last-loaded',
+    { signal },
+    normalizeLastLoadedTxAudioProfile,
+  );
+}
+
+export function setLastLoadedTxAudioProfile(
+  id: string | null,
+  signal?: AbortSignal,
+): Promise<LastLoadedTxAudioProfileDto> {
+  return jsonFetch(
+    '/api/tx-audio-profiles/last-loaded',
+    {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ id }),
+      signal,
+    },
+    normalizeLastLoadedTxAudioProfile,
   );
 }
 
@@ -6224,33 +6398,6 @@ export function saveTxFidelityPolicy(
       signal,
     },
     normalizeTxFidelityPolicy,
-  );
-}
-
-export function saveTxStationProfile(
-  profile: TxStationProfileDto,
-  signal?: AbortSignal,
-): Promise<TxStationProfileDto> {
-  return jsonFetch(
-    `/api/tx/station-profiles/${encodeURIComponent(profile.id)}`,
-    {
-      method: 'PUT',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(profile),
-      signal,
-    },
-    (raw) => normalizeTxStationProfile(raw) ?? profile,
-  );
-}
-
-export async function resetTxStationProfile(
-  id: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  await jsonFetch(
-    `/api/tx/station-profiles/${encodeURIComponent(id)}`,
-    { method: 'DELETE', signal },
-    () => null,
   );
 }
 

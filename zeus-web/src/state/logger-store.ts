@@ -46,6 +46,7 @@ import { create } from 'zustand';
 import type {
   LogEntry,
   CreateLogEntryRequest,
+  AdifImportResponse,
   QrzPublishResponse,
   WorkedCallsignSummary,
 } from '../api/log';
@@ -54,6 +55,7 @@ import {
   getWorkedCallsignSummary,
   createLogEntry,
   exportToAdif,
+  importAdif,
   publishToQrz,
 } from '../api/log';
 
@@ -62,6 +64,9 @@ type LoggerState = {
   totalCount: number;
   loading: boolean;
   error: string | null;
+  importInFlight: boolean;
+  importError: string | null;
+  lastImportResult: AdifImportResponse | null;
   publishInFlight: boolean;
   publishError: string | null;
   lastPublishResult: QrzPublishResponse | null;
@@ -76,6 +81,8 @@ type LoggerState = {
   clearWorkedSummary: () => void;
   addLogEntry: (request: CreateLogEntryRequest) => Promise<LogEntry | null>;
   exportAdif: () => Promise<void>;
+  importAdifFile: (file: File) => Promise<AdifImportResponse | null>;
+  clearImportResult: () => void;
   publishSelectedToQrz: (logEntryIds: string[]) => Promise<void>;
   clearPublishResult: () => void;
   toggleSelected: (id: string) => void;
@@ -88,6 +95,9 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
   totalCount: 0,
   loading: false,
   error: null,
+  importInFlight: false,
+  importError: null,
+  lastImportResult: null,
   publishInFlight: false,
   publishError: null,
   lastPublishResult: null,
@@ -158,6 +168,26 @@ export const useLoggerStore = create<LoggerState>((set, get) => ({
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Failed to export ADIF' });
     }
+  },
+
+  importAdifFile: async (file: File) => {
+    set({ importInFlight: true, importError: null, lastImportResult: null, error: null });
+    try {
+      const result = await importAdif(file);
+      set({ lastImportResult: result, importInFlight: false });
+      await get().loadEntries();
+      return result;
+    } catch (err) {
+      set({
+        importError: err instanceof Error ? err.message : 'Failed to import ADIF',
+        importInFlight: false,
+      });
+      return null;
+    }
+  },
+
+  clearImportResult: () => {
+    set({ lastImportResult: null, importError: null });
   },
 
   publishSelectedToQrz: async (logEntryIds: string[]) => {

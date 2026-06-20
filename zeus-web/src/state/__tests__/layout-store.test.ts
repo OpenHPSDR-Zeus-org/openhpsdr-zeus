@@ -94,6 +94,50 @@ describe('layout-store / workspace tile mutators', () => {
     expect(after).toMatchObject({ x: 7, y: 7, w: 5, h: 5 });
   });
 
+  it('updateTilePlacement ignores a locked workspace', () => {
+    const target = useLayoutStore.getState().workspace.tiles[0]!;
+    useLayoutStore.setState({
+      workspace: { ...useLayoutStore.getState().workspace, locked: true },
+      layouts: [
+        {
+          id: 'default',
+          name: 'Default',
+          layoutJson: JSON.stringify({
+            ...useLayoutStore.getState().workspace,
+            locked: true,
+          }),
+        },
+      ],
+    });
+    const before = useLayoutStore.getState().workspace;
+
+    useLayoutStore
+      .getState()
+      .updateTilePlacement(target.uid, { x: 7, y: 7, w: 5, h: 5 });
+
+    expect(useLayoutStore.getState().workspace).toBe(before);
+  });
+
+  it('updateTilePlacement ignores a locked tile', () => {
+    const target = useLayoutStore.getState().workspace.tiles[0]!;
+    useLayoutStore.getState().setTileLockedInLayout('default', target.uid, true);
+    const before = useLayoutStore.getState().workspace;
+
+    useLayoutStore
+      .getState()
+      .updateTilePlacement(target.uid, { x: 7, y: 7, w: 5, h: 5 });
+
+    const after = useLayoutStore.getState().workspace;
+    expect(after).toBe(before);
+    expect(after.tiles.find((t) => t.uid === target.uid)).toMatchObject({
+      locked: true,
+      x: target.x,
+      y: target.y,
+      w: target.w,
+      h: target.h,
+    });
+  });
+
   it('updateTilePlacement is a no-op when nothing changed', () => {
     const target = useLayoutStore.getState().workspace.tiles[0]!;
     const beforeRef = useLayoutStore.getState().workspace;
@@ -105,6 +149,75 @@ describe('layout-store / workspace tile mutators', () => {
     });
     const afterRef = useLayoutStore.getState().workspace;
     expect(afterRef).toBe(beforeRef);
+  });
+
+  it('updateTilePlacementsInLayout mutates changed tile placements in one pass', () => {
+    const before = useLayoutStore.getState().workspace;
+    const [first, second] = before.tiles;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+
+    useLayoutStore.getState().updateTilePlacementsInLayout('default', [
+      { uid: first!.uid, x: 3, y: 4, w: first!.w, h: first!.h },
+      { uid: second!.uid, x: 9, y: 10, w: second!.w, h: second!.h },
+    ]);
+
+    const after = useLayoutStore.getState().workspace;
+    expect(after.tiles.find((t) => t.uid === first!.uid)).toMatchObject({
+      x: 3,
+      y: 4,
+    });
+    expect(after.tiles.find((t) => t.uid === second!.uid)).toMatchObject({
+      x: 9,
+      y: 10,
+    });
+  });
+
+  it('updateTilePlacementsInLayout skips locked tiles but updates unlocked tiles', () => {
+    const before = useLayoutStore.getState().workspace;
+    const [first, second] = before.tiles;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    useLayoutStore.getState().setTileLockedInLayout('default', first!.uid, true);
+
+    useLayoutStore.getState().updateTilePlacementsInLayout('default', [
+      { uid: first!.uid, x: 3, y: 4, w: first!.w, h: first!.h },
+      { uid: second!.uid, x: 9, y: 10, w: second!.w, h: second!.h },
+    ]);
+
+    const after = useLayoutStore.getState().workspace;
+    expect(after.tiles.find((t) => t.uid === first!.uid)).toMatchObject({
+      x: first!.x,
+      y: first!.y,
+      locked: true,
+    });
+    expect(after.tiles.find((t) => t.uid === second!.uid)).toMatchObject({
+      x: 9,
+      y: 10,
+    });
+  });
+
+  it('setWorkspaceLockedInLayout toggles workspace lock state', () => {
+    useLayoutStore.getState().setWorkspaceLockedInLayout('default', true);
+    expect(useLayoutStore.getState().workspace.locked).toBe(true);
+
+    useLayoutStore.getState().setWorkspaceLockedInLayout('default', false);
+    expect(useLayoutStore.getState().workspace).not.toHaveProperty('locked');
+  });
+
+  it('updateTilePlacementsInLayout is a no-op when nothing changed', () => {
+    const before = useLayoutStore.getState().workspace;
+    useLayoutStore.getState().updateTilePlacementsInLayout(
+      'default',
+      before.tiles.map((t) => ({
+        uid: t.uid,
+        x: t.x,
+        y: t.y,
+        w: t.w,
+        h: t.h,
+      })),
+    );
+    expect(useLayoutStore.getState().workspace).toBe(before);
   });
 
   it('updateTileInstanceConfig stores the opaque config blob', () => {

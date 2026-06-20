@@ -23,6 +23,8 @@
   position: relative;
   width: 100%;
   height: 100%;
+  /* The workspace NEVER scrolls — it fits the viewport like a hardware front
+   * panel. FlexWorkspace shrinks the grid cell size to fit instead. */
   overflow: hidden;
   /* v3 Lifted Dark: workspace ground is the distinct mid-grey "table"
    * (--bg-workspace), so the chrome (--bg-0) and the panels (--bg-1) each
@@ -63,6 +65,19 @@
   transition: transform var(--dur-fast) var(--ease-out),
     width var(--dur-fast) var(--ease-out),
     height var(--dur-fast) var(--ease-out);
+}
+
+/* Premium reflow: while the operator is actively dragging or resizing, let the
+ * OTHER tiles glide to their new slots instead of snapping instantly. Scoped to
+ * the live interaction (the --interacting class is toggled by WorkspaceCanvas)
+ * and to non-dragged tiles, so idle tiles keep `transition: none` and are never
+ * promoted to a GPU compositor layer — preserving the WebGL-panadapter cost
+ * guard the base .react-grid-item rule above exists for. absoluteStrategy
+ * positions tiles via top/left, so those are the properties we ease. */
+.all-panels-grid--interacting
+  .react-grid-item:not(.react-draggable-dragging):not(.resizing) {
+  transition: top var(--dur-fast) var(--ease-out),
+    left var(--dur-fast) var(--ease-out);
 }
 
 /* Drop placeholder — accent-blue ghost where the dragged tile will land. */
@@ -111,6 +126,9 @@
 .all-panels-grid .react-grid-item.resizing .react-resizable-handle::after {
   border-color: var(--accent);
   opacity: 1;
+}
+.all-panels-grid .react-grid-item[data-tile-locked='true'] .react-resizable-handle {
+  display: none;
 }
 
 /* Workspace tile — beveled chrome wrapping the panel body. Mirrors the
@@ -171,6 +189,10 @@
 .workspace-tile-header:active {
   cursor: grabbing;
 }
+.workspace-tile--locked .workspace-tile-header,
+.workspace-tile--locked .workspace-tile-header:active {
+  cursor: default;
+}
 
 .workspace-tile-drag-handle {
   display: inline-flex;
@@ -190,6 +212,13 @@
 .workspace-tile-drag-handle:hover {
   color: var(--power);
 }
+.workspace-tile--locked .workspace-tile-drag-handle,
+.workspace-tile--locked .workspace-tile-header:hover .workspace-tile-drag-handle,
+.workspace-tile--locked .workspace-tile-drag-handle:hover {
+  color: var(--fg-3);
+  cursor: default;
+  opacity: 0.55;
+}
 
 .workspace-tile-title {
   flex: 1;
@@ -207,7 +236,8 @@
   user-select: none;
 }
 
-.workspace-tile-close {
+.workspace-tile-close,
+.workspace-tile-lock {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -221,11 +251,24 @@
   transition: background var(--dur-fast), color var(--dur-fast);
   flex-shrink: 0;
 }
+.workspace-tile-lock.is-locked {
+  color: var(--power);
+  background: color-mix(in srgb, var(--power) 10%, transparent);
+}
+.workspace-tile-lock.is-inherited {
+  color: var(--fg-2);
+  opacity: 0.78;
+}
 .workspace-tile-close:hover {
   color: var(--tx);
   background: var(--bg-2);
 }
-.workspace-tile-close:focus-visible {
+.workspace-tile-lock:hover {
+  color: var(--power);
+  background: var(--bg-2);
+}
+.workspace-tile-close:focus-visible,
+.workspace-tile-lock:focus-visible {
   outline: 1px solid var(--accent);
   outline-offset: 1px;
 }
@@ -262,6 +305,117 @@
   overflow: hidden;
 }
 
+.tx-audio-profile-picker {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.tx-audio-profile-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  height: 26px;
+  min-width: 0;
+  padding: 0 6px 0 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+  color: var(--fg-1);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tx-audio-profile-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.tx-audio-profile-trigger:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.tx-audio-profile-trigger-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tx-audio-profile-caret {
+  flex: 0 0 auto;
+  color: var(--fg-2);
+  transition: transform var(--dur-fast) var(--ease-out), color var(--dur-fast);
+}
+
+.tx-audio-profile-trigger[aria-expanded='true'] .tx-audio-profile-caret {
+  color: var(--fg-0);
+  transform: rotate(180deg);
+}
+
+.tx-audio-profile-menu {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0;
+  right: 0;
+  min-width: 140px;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 3px;
+  border: 1px solid var(--panel-edge);
+  border-radius: var(--r-md);
+  background: linear-gradient(180deg, var(--panel-top), var(--panel-bot));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  z-index: 260;
+}
+
+.tx-audio-profile-option {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 24px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--fg-1);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tx-audio-profile-option:hover,
+.tx-audio-profile-option:focus-visible {
+  background: var(--bg-3);
+  color: var(--fg-0);
+  outline: none;
+}
+
+.tx-audio-profile-option.is-active {
+  background: var(--accent-soft);
+  color: var(--fg-0);
+}
+
+.tx-audio-profile-option--placeholder {
+  color: var(--fg-3);
+  cursor: default;
+}
+
+.tx-audio-profile-option--placeholder:hover,
+.tx-audio-profile-option--placeholder:focus-visible {
+  background: transparent;
+  color: var(--fg-3);
+}
+
 /* Panels with internal scrolling or fixed-height roots need a resolved flex
  * height from the tile body. That keeps their internals from expanding past
  * the panel bounds when the window is resized. */
@@ -273,6 +427,7 @@
 .workspace-tile[data-panel-id='logbook'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='qrz'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='dsp'] > .workspace-tile-body,
+.workspace-tile[data-panel-id='chat'] > .workspace-tile-body,
 .workspace-tile[data-panel-id='filterpresets'] > .workspace-tile-body {
   display: flex;
   flex-direction: column;
@@ -286,6 +441,7 @@
 .workspace-tile[data-panel-id='logbook'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='qrz'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='dsp'] > .workspace-tile-body > *,
+.workspace-tile[data-panel-id='chat'] > .workspace-tile-body > *,
 .workspace-tile[data-panel-id='filterpresets'] > .workspace-tile-body > * {
   flex: 1 1 auto;
   min-height: 0;
@@ -519,6 +675,7 @@
   outline-offset: 2px;
   opacity: 1;
 }
+
 
 /* Categorized AddPanel modal — left rail of category chips, right pane of
  * panel cards. Stacks the rail vertically so all categories are reachable
@@ -1059,6 +1216,27 @@
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+.layout-settings-lock-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  background: var(--bg-0);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+.layout-settings-lock-row input {
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.layout-settings-lock-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
 }
 .layout-settings-field-label {
   font-size: 10px;

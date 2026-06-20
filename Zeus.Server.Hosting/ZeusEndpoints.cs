@@ -13,6 +13,7 @@ using Zeus.Dsp.Wdsp;
 using Zeus.Protocol1;
 using Zeus.Protocol1.Discovery;
 using Zeus.Protocol2;
+using Zeus.Server.Diagnostics;
 using Zeus.Server.Tci;
 
 namespace Zeus.Server;
@@ -35,6 +36,20 @@ public static class ZeusEndpoints
             var version = attr?.InformationalVersion ?? "unknown";
             return Results.Ok(new { version });
         });
+
+        // Self-diagnostic "Report a problem" feature. The picker fetches the
+        // symptom list; submitting a symptom + free text returns a redacted,
+        // paste-ready report (Markdown + last-100 log lines) plus a prefilled
+        // GitHub "new issue" URL. Strictly read-only.
+        app.MapGet("/api/diagnostics/symptoms",
+            (DiagnosticReportBuilder diag) => Results.Ok(diag.Symptoms()));
+
+        app.MapPost("/api/diagnostics/report",
+            (DiagnosticRequest req, DiagnosticReportBuilder diag) =>
+            {
+                log.LogInformation("api.diagnostics.report symptom={Symptom}", req.SymptomId ?? "(none)");
+                return Results.Ok(diag.Build(req));
+            });
 
         // Capabilities snapshot — host-mode + platform metadata. Frontend
         // fetches once on app mount; future feature gates will reattach as
@@ -69,23 +84,14 @@ public static class ZeusEndpoints
                 return Results.Ok(saved);
             });
 
-        // Self-update from the git checkout. GET reports how far behind the
-        // configured upstream the running source is (fetch=false skips the
-        // network and reports the last-known counts); POST fast-forwards. Neither
-        // rebuilds/restarts — the UI tells the operator to run scripts/update.*
-        // and restart. Backed by RepoUpdateService.
+        // Self-update status. The latest PRODUCTION build is read from the Zeus
+        // download domain (downloads.openhpsdrzeus.com), which is published from
+        // `main` only — never develop/nightly. The GET response carries the
+        // platform-matched installer/DMG/AppImage/tarball URL + its SHA-256; the
+        // app opens that download. Zeus never pulls/rebuilds/restarts itself.
         app.MapGet("/api/system/update",
             async (RepoUpdateService updates, bool? fetch, CancellationToken ct) =>
                 Results.Ok(await updates.GetStatusAsync(fetch ?? true, ct)));
-
-        app.MapPost("/api/system/update/pull",
-            async (RepoUpdateService updates, CancellationToken ct) =>
-            {
-                var result = await updates.PullAsync(ct);
-                log.LogInformation("api.system.update.pull ok={Ok} newSha={Sha} msg={Msg}",
-                    result.Ok, result.NewSha, result.Message);
-                return Results.Ok(result);
-            });
 
         // Native RX audio (miniaudio) — desktop-mode mute control. The
         // Mute/Unmute button in the Photino window POSTs here to silence
@@ -98,7 +104,7 @@ public static class ZeusEndpoints
             var sink = sp.GetService<NativeAudioSink>();
             return sink is null
                 ? Results.Ok(new { supported = false, muted = false })
-                : Results.Ok(new { supported = true, muted = sink.IsMuted });
+                : Results.Ok(new { supported = true, muted = sink.IsMuted, diagnostics = sink.GetDiagnostics() });
         });
         app.MapPost("/api/audio/native/mute", (NativeMuteRequest body, IServiceProvider sp) =>
         {
@@ -107,6 +113,8 @@ public static class ZeusEndpoints
             sink.SetMuted(body.Muted);
             return Results.Ok(new { supported = true, muted = sink.IsMuted });
         });
+        app.MapGet("/api/audio/devices", GetNativeAudioDevices);
+        app.MapPut("/api/audio/devices", SetNativeAudioDevices);
 
         static IResult GetAudioSuitePreview(RadioService radio)
         {
@@ -325,127 +333,71 @@ public static class ZeusEndpoints
             });
         });
 
-        // Audio Suite profiles — named snapshots of the processing route
-        // (Native/VST), active plugin order, parked set, master bypass, and
-        // VST plugin state blobs. Lets the operator save a whole rack layout
-        // and recall it in one click, including switching back to the route
-        // the profile was saved with.
-        app.MapGet("/api/audio-suite/profiles", (AudioProfileService profiles) =>
+        // NOTE: the legacy TX audio-suite profile endpoints
+        // (/api/audio-suite/profiles* and /api/tx-audio-suite/profiles*) and the
+        // TX station-profile endpoints (/api/tx/station-profiles*) are RETIRED —
+        // their capability is folded into the unified TX Audio Profile endpoints
+        // below. AudioProfileService is retained internally only as VST-capture
+        // machinery, reused by TxAudioProfileService.
+
+        // ---- Unified TX Audio Profiles ----------------------------------
+        // The single operator-named macro that captures the ENTIRE TX-audio
+        // shaping state. REPLACES /api/tx-audio-suite/profiles* and
+        // /api/tx/station-profiles*. The RX route (/api/rx-audio-suite/...) is
+        // a separate, untouched system.
+        app.MapGet("/api/tx-audio-profiles", (TxAudioProfileService svc) =>
+            Results.Ok(new TxAudioProfilesResponse(svc.List())));
+
+        // POST save-current-as-name. The body carries only the name; the backend
+        // snapshots the live state (single source of truth).
+        app.MapPost("/api/tx-audio-profiles", async (
+            SaveTxAudioProfileRequest req, TxAudioProfileService svc, CancellationToken ct) =>
         {
-            var list = profiles.List().Select(p => new
-            {
-                name = p.Name,
-                processingMode = p.ProcessingMode.ToString().ToLowerInvariant(),
-                order = p.Order,
-                parked = p.Parked,
-                masterBypass = p.MasterBypass,
-                createdUtc = p.CreatedUtc,
-                updatedUtc = p.UpdatedUtc,
-            });
-            return Results.Ok(new { profiles = list });
-        });
-        app.MapGet("/api/tx-audio-suite/profiles", (AudioProfileService profiles) =>
-        {
-            var list = profiles.List().Select(p => new
-            {
-                name = p.Name,
-                processingMode = p.ProcessingMode.ToString().ToLowerInvariant(),
-                order = p.Order,
-                parked = p.Parked,
-                masterBypass = p.MasterBypass,
-                createdUtc = p.CreatedUtc,
-                updatedUtc = p.UpdatedUtc,
-            });
-            return Results.Ok(new { profiles = list });
-        });
-        // PUT saves (or overwrites) the named profile from the CURRENT
-        // live chain config.
-        app.MapPut("/api/audio-suite/profiles/{name}", async (string name, AudioProfileService profiles) =>
-        {
-            if (string.IsNullOrWhiteSpace(name))
+            if (req is null || string.IsNullOrWhiteSpace(req.Name))
                 return Results.BadRequest(new { error = "profile name is required" });
-            var entry = await profiles.SaveCurrentAsync(name.Trim());
+            var saved = await svc.SaveCurrentAsync(req.Name, ct);
+            return Results.Ok(saved);
+        });
+
+        // POST apply by id — drives the live state and records last-loaded.
+        // Returns the applied profile plus the resulting StateDto so the frontend
+        // snaps the live UI to it without a second round-trip.
+        app.MapPost("/api/tx-audio-profiles/{id}/apply", async (
+            string id, TxAudioProfileService svc, RadioService radio,
+            ChainOrderService chainOrder, AudioProcessingModeService mode,
+            AudioChainMasterBypassService masterBypass, CancellationToken ct) =>
+        {
+            var applied = await svc.ApplyAsync(id, ct);
+            if (applied is null)
+                return Results.NotFound(new { error = $"no TX audio profile '{id}'" });
             return Results.Ok(new
             {
-                name = entry.Name,
-                processingMode = entry.ProcessingMode.ToString().ToLowerInvariant(),
-                order = entry.Order,
-                parked = entry.Parked,
-                masterBypass = entry.MasterBypass,
-                vstStates = entry.PluginStates.Count,
-                createdUtc = entry.CreatedUtc,
-                updatedUtc = entry.UpdatedUtc,
+                profile = applied,
+                state = radio.Snapshot(),
+                pluginIds = chainOrder.CurrentOrder,
+                parked = chainOrder.ParkedIds,
+                processingMode = mode.Mode.ToString().ToLowerInvariant(),
+                engineActive = mode.EngineActive,
+                engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
+                masterBypass = masterBypass.IsBypassed,
             });
         });
-        app.MapPut("/api/tx-audio-suite/profiles/{name}", async (string name, AudioProfileService profiles) =>
+
+        app.MapDelete("/api/tx-audio-profiles/{id}", (string id, TxAudioProfileService svc) =>
+            svc.Delete(id)
+                ? Results.Ok(new { deleted = TxAudioProfileStore.NormalizeId(id) })
+                : Results.NotFound(new { error = $"no TX audio profile '{id}'" }));
+
+        // GET/PUT the persisted "last loaded profile" pointer. The dropdown reads
+        // this to show the selected profile; the backend applies it at startup.
+        app.MapGet("/api/tx-audio-profiles/last-loaded", (TxAudioProfileService svc) =>
+            Results.Ok(new LastLoadedTxAudioProfileDto(svc.LastLoadedId)));
+
+        app.MapPut("/api/tx-audio-profiles/last-loaded", (
+            LastLoadedTxAudioProfileDto req, TxAudioProfileService svc) =>
         {
-            if (string.IsNullOrWhiteSpace(name))
-                return Results.BadRequest(new { error = "profile name is required" });
-            var entry = await profiles.SaveCurrentAsync(name.Trim());
-            return Results.Ok(new
-            {
-                name = entry.Name,
-                processingMode = entry.ProcessingMode.ToString().ToLowerInvariant(),
-                order = entry.Order,
-                parked = entry.Parked,
-                masterBypass = entry.MasterBypass,
-                vstStates = entry.PluginStates.Count,
-                createdUtc = entry.CreatedUtc,
-                updatedUtc = entry.UpdatedUtc,
-            });
-        });
-        // POST applies the named profile to the live chain.
-        app.MapPost("/api/audio-suite/profiles/{name}/apply", async (
-            string name,
-            AudioProfileService profiles,
-            ChainOrderService chainOrder,
-            AudioProcessingModeService mode,
-            AudioChainMasterBypassService masterBypass,
-            CancellationToken ct) =>
-        {
-            var profile = await profiles.ApplyAsync(name, ct);
-            if (profile is not null)
-                return Results.Ok(new
-                {
-                    pluginIds = chainOrder.CurrentOrder,
-                    processingMode = mode.Mode.ToString().ToLowerInvariant(),
-                    engineActive = mode.EngineActive,
-                    engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
-                    masterBypass = masterBypass.IsBypassed,
-                });
-            return Results.NotFound(new { error = $"no audio profile named '{name}'" });
-        });
-        app.MapPost("/api/tx-audio-suite/profiles/{name}/apply", async (
-            string name,
-            AudioProfileService profiles,
-            ChainOrderService chainOrder,
-            AudioProcessingModeService mode,
-            AudioChainMasterBypassService masterBypass,
-            CancellationToken ct) =>
-        {
-            var profile = await profiles.ApplyAsync(name, ct);
-            if (profile is not null)
-                return Results.Ok(new
-                {
-                    pluginIds = chainOrder.CurrentOrder,
-                    processingMode = mode.Mode.ToString().ToLowerInvariant(),
-                    engineActive = mode.EngineActive,
-                    engineAvailable = AudioProcessingModeService.FindEngineExe() is not null,
-                    masterBypass = masterBypass.IsBypassed,
-                });
-            return Results.NotFound(new { error = $"no audio profile named '{name}'" });
-        });
-        app.MapDelete("/api/audio-suite/profiles/{name}", (string name, AudioProfileService profiles) =>
-        {
-            return profiles.Delete(name)
-                ? Results.Ok(new { deleted = name })
-                : Results.NotFound(new { error = $"no audio profile named '{name}'" });
-        });
-        app.MapDelete("/api/tx-audio-suite/profiles/{name}", (string name, AudioProfileService profiles) =>
-        {
-            return profiles.Delete(name)
-                ? Results.Ok(new { deleted = name })
-                : Results.NotFound(new { error = $"no audio profile named '{name}'" });
+            svc.SetLastLoadedId(req?.Id);
+            return Results.Ok(new LastLoadedTxAudioProfileDto(svc.LastLoadedId));
         });
 
         app.MapGet("/api/rx-audio-suite/profiles", (RxAudioProfileService profiles) =>
@@ -460,7 +412,11 @@ public static class ZeusEndpoints
                 createdUtc = p.CreatedUtc,
                 updatedUtc = p.UpdatedUtc,
             });
-            return Results.Ok(new { profiles = list });
+            return Results.Ok(new
+            {
+                profiles = list,
+                selectedProfile = profiles.SelectedProfileName,
+            });
         });
         app.MapPut("/api/rx-audio-suite/profiles/{name}", async (string name, RxAudioProfileService profiles) =>
         {
@@ -475,6 +431,7 @@ public static class ZeusEndpoints
                 parked = entry.Parked,
                 masterBypass = entry.MasterBypass,
                 vstStates = entry.PluginStates.Count,
+                selectedProfile = profiles.SelectedProfileName,
                 createdUtc = entry.CreatedUtc,
                 updatedUtc = entry.UpdatedUtc,
             });
@@ -497,6 +454,7 @@ public static class ZeusEndpoints
                     engineAvailable = rxVst.EngineAvailable,
                     activePlugins = rxVst.ActivePluginCount,
                     degradedBlocks = rxVst.DegradedBlocks,
+                    selectedProfile = profiles.SelectedProfileName,
                     masterBypass = masterBypass.IsRxBypassed,
                 });
             return Results.NotFound(new { error = $"no RX audio profile named '{name}'" });
@@ -833,6 +791,7 @@ public static class ZeusEndpoints
             var keying = hardware.KeyingSnapshot(externalPtt.Snapshot());
             var power = hardware.PowerCalibrationSnapshot();
             bool hostTxActive = tx.IsMoxOn || tx.IsTunOn || tx.IsTwoToneOn;
+            bool txStageActive = hostTxActive || radioState.TxMonitorEnabled;
             bool requiresMicUplink = tx.IsMoxOn && !tx.IsTunOn && !tx.IsTwoToneOn;
             var txStage = dsp.CurrentEngine?.GetTxStageMeters() ?? TxStageMeters.Silent;
             var activePower = string.Equals(power.ActiveProtocol, "P2", StringComparison.OrdinalIgnoreCase)
@@ -865,7 +824,7 @@ public static class ZeusEndpoints
                     hostTxActive,
                     micUplink,
                     requiresMicUplink),
-                stage = BuildTxStageDiagnostics(txStage, hostTxActive),
+                stage = BuildTxStageDiagnostics(txStage, txStageActive),
                 egress = BuildTxEgressHealth(
                     generatedUtc,
                     ring.TotalWritten,
@@ -1228,6 +1187,9 @@ public static class ZeusEndpoints
             return r.SetAgcTop(req.TopDb);
         });
 
+        // (Removed /api/agc/threshold + /disengage with the AGC knee — AGC-T is
+        // the single manual AGC control now.)
+
         app.MapPost("/api/rx/agc", (AgcSetRequest req, RadioService r) =>
         {
             log.LogInformation(
@@ -1290,37 +1252,9 @@ public static class ZeusEndpoints
             return Results.Ok(saved);
         });
 
-        app.MapGet("/api/tx/station-profiles", (TxStationProfileStore store) =>
-            Results.Ok(new TxStationProfilesResponse(store.GetAll())));
-
-        app.MapPut("/api/tx/station-profiles/{id}", (string id, TxStationProfileDto req, TxStationProfileStore store) =>
-        {
-            var routeId = id.Trim().ToLowerInvariant();
-            if (!TryValidateTxStationProfileId(routeId, out var idErr))
-                return Results.BadRequest(new { error = idErr });
-            if (!string.Equals(req.Id, routeId, StringComparison.OrdinalIgnoreCase))
-                return Results.BadRequest(new { error = "profile id must match route id" });
-
-            var profile = req with { Id = routeId };
-            if (!TryValidateTxStationProfile(profile, out var err))
-                return Results.BadRequest(new { error = err });
-
-            var saved = store.Upsert(profile);
-            log.LogInformation(
-                "api.tx.stationProfile id={Id} mic={Mic:F1} leveler={Leveler:F1} low={Low} high={High} density={Density}",
-                saved.Id, saved.MicGainDb, saved.LevelerMaxGainDb, saved.LowCutHz, saved.HighCutHz, saved.SpectralDensity);
-            return Results.Ok(saved);
-        });
-
-        app.MapDelete("/api/tx/station-profiles/{id}", (string id, TxStationProfileStore store) =>
-        {
-            var routeId = id.Trim().ToLowerInvariant();
-            if (!TryValidateTxStationProfileId(routeId, out var idErr))
-                return Results.BadRequest(new { error = idErr });
-            var removed = store.Delete(routeId);
-            log.LogInformation("api.tx.stationProfile.reset id={Id} removed={Removed}", routeId, removed);
-            return Results.Ok(new { id = routeId, removed });
-        });
+        // /api/tx/station-profiles* RETIRED — the fixed 3-up TX station-profile
+        // system is folded into the unified TX Audio Profiles (the three are now
+        // seeded as named, editable profiles). See /api/tx-audio-profiles*.
 
         app.MapPost("/api/rx/afGain", (RxAfGainSetRequest req, RadioService r) =>
         {
@@ -1838,14 +1772,20 @@ public static class ZeusEndpoints
         // browsers / devices instead of living in per-origin localStorage.
         app.MapGet("/api/display-settings", (DisplaySettingsStore store) => Results.Ok(store.Get()));
 
-        app.MapPut("/api/display-settings", (DisplaySettingsSetRequest req, DisplaySettingsStore store) =>
+        app.MapPut("/api/display-settings", (DisplaySettingsSetRequest req, DisplaySettingsStore store, DspPipelineService dsp) =>
         {
             if (string.IsNullOrWhiteSpace(req.Mode) || string.IsNullOrWhiteSpace(req.Fit))
                 return Results.BadRequest(new { error = "mode and fit required" });
             store.SaveMode(req.Mode, req.Fit, req.RxTraceColor,
                 req.DbMin, req.DbMax, req.TxDbMin, req.TxDbMax,
-                req.WfDbMin, req.WfDbMax, req.WfTxDbMin, req.WfTxDbMax);
-            return Results.Ok(store.Get());
+                req.WfDbMin, req.WfDbMax, req.WfTxDbMin, req.WfTxDbMax,
+                req.TxDisplayCalOffsetDb, req.TxDisplayFftSize,
+                req.TxDisplayWindow, req.TxDisplayAvgTauMs);
+            var saved = store.Get();
+            // Push the (validated, merged) TX display config to the running
+            // engine so the change is live without a reconnect. Display-only.
+            dsp.ApplyTxDisplaySettings(saved);
+            return Results.Ok(saved);
         });
 
         // Signal Intelligence weak-signal display policy. The frontend owns the
@@ -2502,6 +2442,110 @@ public static class ZeusEndpoints
             return Results.Ok(qrz.GetStatus());
         });
 
+        // ── ZeusChat — operator-to-operator chat over the Cloudflare relay ──
+        app.MapGet("/api/chat/status", (ChatService chat) => chat.GetStatus());
+
+        app.MapPost("/api/chat/enable", (ChatEnableRequest req, ChatService chat) =>
+        {
+            log.LogInformation("api.chat.enable enabled={Enabled}", req.Enabled);
+            return Results.Ok(chat.SetEnabled(req.Enabled));
+        });
+
+        app.MapPost("/api/chat/send", async (ChatSendRequest req, ChatService chat, HttpContext ctx) =>
+        {
+            if (string.IsNullOrWhiteSpace(req.Text))
+                return Results.BadRequest(new { error = "message text required" });
+            try
+            {
+                await chat.SendMessageAsync(req.Text, req.Room, ctx.RequestAborted);
+                return Results.Ok(new { ok = true });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status409Conflict);
+            }
+        });
+
+        app.MapGet("/api/chat/messages", (ChatService chat, int? limit) =>
+            Results.Ok(new { messages = chat.GetMessages(limit ?? 200) }));
+
+        app.MapGet("/api/chat/roster", (ChatService chat) =>
+            Results.Ok(new { operators = chat.GetRoster() }));
+
+        // Friend graph (consent gate for seeing another operator's frequency).
+        app.MapGet("/api/chat/friends", (ChatService chat) => Results.Ok(chat.GetFriends()));
+
+        // request / accept / deny / remove all take { callsign } and share the
+        // same 400 (empty) / 409 (not connected) error mapping as /send.
+        static async Task<IResult> FriendAction(
+            Func<string, CancellationToken, Task> action, ChatFriendRequest req, HttpContext ctx)
+        {
+            if (string.IsNullOrWhiteSpace(req.Callsign))
+                return Results.BadRequest(new { error = "callsign required" });
+            try
+            {
+                await action(req.Callsign, ctx.RequestAborted);
+                return Results.Ok(new { ok = true });
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status409Conflict);
+            }
+        }
+
+        app.MapPost("/api/chat/friends/request", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
+            FriendAction(chat.SendFriendRequestAsync, req, ctx));
+        app.MapPost("/api/chat/friends/accept", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
+            FriendAction(chat.AcceptFriendAsync, req, ctx));
+        app.MapPost("/api/chat/friends/deny", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
+            FriendAction(chat.DenyFriendAsync, req, ctx));
+        app.MapPost("/api/chat/friends/remove", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
+            FriendAction(chat.RemoveFriendAsync, req, ctx));
+
+        // Rooms, DMs, history, moderation, eye toggle — all share the 400/409 map.
+        static async Task<IResult> Run(Func<Task> action)
+        {
+            try { await action(); return Results.Ok(new { ok = true }); }
+            catch (ArgumentException ex) { return Results.BadRequest(new { error = ex.Message }); }
+            catch (InvalidOperationException ex)
+            {
+                return Results.Json(new { error = ex.Message }, statusCode: StatusCodes.Status409Conflict);
+            }
+        }
+
+        app.MapGet("/api/chat/rooms", (ChatService chat) => Results.Ok(new { rooms = chat.GetRooms() }));
+
+        app.MapPost("/api/chat/dm", (ChatDmRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.SendDmAsync(req.To, req.Text, ctx.RequestAborted)));
+
+        app.MapPost("/api/chat/history", (ChatRoomRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.RequestHistoryAsync(req.Room, ctx.RequestAborted)));
+
+        app.MapPost("/api/chat/freq-visibility", (ChatFreqVisibilityRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.SetFreqVisibilityAsync(req.Public, ctx.RequestAborted)));
+
+        // Admin/moderation (relay enforces that the caller is actually an admin).
+        app.MapPost("/api/chat/admin/room/create", (ChatRoomCreateRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.CreateRoomAsync(req.Name, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/room/delete", (ChatRoomRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.DeleteRoomAsync(req.Room, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/room/add", (ChatRoomMemberRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.AddMemberAsync(req.Room, req.Callsign, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/room/remove", (ChatRoomMemberRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.RemoveMemberAsync(req.Room, req.Callsign, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/ban", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.BanAsync(req.Callsign, ctx.RequestAborted)));
+        app.MapPost("/api/chat/admin/unban", (ChatFriendRequest req, ChatService chat, HttpContext ctx) =>
+            Run(() => chat.UnbanAsync(req.Callsign, ctx.RequestAborted)));
+
         // Point-to-point propagation (DE → DX). Proxies the HamClock sidecar's
         // ITU-R P.533-14 engine; always returns 200 with an {available:false}
         // payload when the engine is offline so the QRZ card can degrade quietly.
@@ -2551,6 +2595,27 @@ public static class ZeusEndpoints
                 System.Text.Encoding.UTF8.GetBytes(adif),
                 "text/plain",
                 fileName);
+        });
+
+        app.MapPost("/api/log/import/adif", async (LogService logService, HttpContext ctx) =>
+        {
+            using var reader = new StreamReader(
+                ctx.Request.Body,
+                System.Text.Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: true);
+            var adif = await reader.ReadToEndAsync(ctx.RequestAborted);
+            if (string.IsNullOrWhiteSpace(adif))
+                return Results.BadRequest(new { error = "ADIF file is empty" });
+
+            try
+            {
+                var response = await logService.ImportAdifAsync(adif, ctx.RequestAborted);
+                return Results.Ok(response);
+            }
+            catch (FormatException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
         });
 
         app.MapPost("/api/log/publish/qrz", async (QrzPublishRequest req, QrzService qrz, LogService logService, HttpContext ctx) =>
@@ -2682,6 +2747,112 @@ public static class ZeusEndpoints
     }
 
     // ---------- helpers (formerly local functions in Program.cs) -------------
+
+    private static IResult GetNativeAudioDevices(IServiceProvider sp)
+    {
+        var sink = sp.GetService<NativeAudioSink>();
+        var mic = sp.GetService<NativeMicCapture>();
+        if (sink is null && mic is null)
+        {
+            return Results.Ok(new NativeAudioDevicesResponse(
+                Supported: false,
+                InputDeviceId: null,
+                OutputDeviceId: null,
+                ActiveInputDeviceId: null,
+                ActiveOutputDeviceId: null,
+                Inputs: [],
+                Outputs: [],
+                Error: null));
+        }
+
+        try
+        {
+            var snapshot = MiniAudioDevices.Enumerate();
+            return Results.Ok(BuildNativeAudioDevicesResponse(
+                sink,
+                mic,
+                snapshot,
+                supported: true,
+                error: null));
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
+        {
+            return Results.Ok(BuildNativeAudioDevicesResponse(
+                sink,
+                mic,
+                MiniAudioDeviceSnapshot.Empty,
+                supported: false,
+                error: ex.Message));
+        }
+    }
+
+    private static async Task<IResult> SetNativeAudioDevices(
+        NativeAudioDevicesSetRequest body,
+        IServiceProvider sp,
+        CancellationToken ct)
+    {
+        var sink = sp.GetService<NativeAudioSink>();
+        var mic = sp.GetService<NativeMicCapture>();
+        if (sink is null && mic is null)
+            return Results.NotFound(new { error = "native audio not active in this host mode" });
+
+        string? inputDeviceId = NormalizeDeviceId(body?.InputDeviceId);
+        string? outputDeviceId = NormalizeDeviceId(body?.OutputDeviceId);
+
+        MiniAudioDeviceSnapshot snapshot;
+        try
+        {
+            snapshot = MiniAudioDevices.Enumerate();
+        }
+        catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
+        {
+            return Results.BadRequest(new { error = $"native audio device enumeration unavailable: {ex.Message}" });
+        }
+
+        if (inputDeviceId is not null && snapshot.Inputs.All(d => d.Id != inputDeviceId))
+            return Results.BadRequest(new { error = "inputDeviceId is not in the current native input device list" });
+        if (outputDeviceId is not null && snapshot.Outputs.All(d => d.Id != outputDeviceId))
+            return Results.BadRequest(new { error = "outputDeviceId is not in the current native output device list" });
+
+        if (mic is not null)
+            await mic.SetInputDeviceAsync(inputDeviceId, ct);
+        if (sink is not null)
+            await sink.SetOutputDeviceAsync(outputDeviceId, ct);
+
+        return Results.Ok(BuildNativeAudioDevicesResponse(
+            sink,
+            mic,
+            snapshot,
+            supported: true,
+            error: null));
+    }
+
+    private static NativeAudioDevicesResponse BuildNativeAudioDevicesResponse(
+        NativeAudioSink? sink,
+        NativeMicCapture? mic,
+        MiniAudioDeviceSnapshot snapshot,
+        bool supported,
+        string? error)
+    {
+        return new NativeAudioDevicesResponse(
+            Supported: supported,
+            InputDeviceId: mic?.ConfiguredInputDeviceId,
+            OutputDeviceId: sink?.ConfiguredOutputDeviceId,
+            ActiveInputDeviceId: mic?.ActiveInputDeviceId,
+            ActiveOutputDeviceId: sink?.ActiveOutputDeviceId,
+            Inputs: snapshot.Inputs.Select(ToNativeAudioDeviceDto).ToArray(),
+            Outputs: snapshot.Outputs.Select(ToNativeAudioDeviceDto).ToArray(),
+            Error: error);
+    }
+
+    private static NativeAudioDeviceDto ToNativeAudioDeviceDto(MiniAudioDeviceInfo device) =>
+        new(device.Id, device.Name, device.IsDefault);
+
+    private static string? NormalizeDeviceId(string? deviceId)
+    {
+        var trimmed = deviceId?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
 
     static bool TryParseIpEndpoint(string raw, out IPEndPoint ep)
     {
@@ -3680,6 +3851,17 @@ public static class ZeusEndpoints
 }
 
 internal sealed record NativeMuteRequest(bool Muted);
+internal sealed record NativeAudioDevicesSetRequest(string? InputDeviceId, string? OutputDeviceId);
+internal sealed record NativeAudioDeviceDto(string Id, string Name, bool IsDefault);
+internal sealed record NativeAudioDevicesResponse(
+    bool Supported,
+    string? InputDeviceId,
+    string? OutputDeviceId,
+    string? ActiveInputDeviceId,
+    string? ActiveOutputDeviceId,
+    IReadOnlyList<NativeAudioDeviceDto> Inputs,
+    IReadOnlyList<NativeAudioDeviceDto> Outputs,
+    string? Error);
 internal sealed record PreviewSetRequest(bool Enabled, bool? MeterOnly = null);
 internal sealed record ChainOrderSetRequest(List<string> PluginIds);
 internal sealed record ChainMembershipSetRequest(bool Active);

@@ -91,6 +91,14 @@ public sealed class StreamingHub
     // they see the current spots without waiting for the next TCI spot event.
     private volatile byte[]? _spotPayload;
 
+    // Supplies the ChatEvent (0x35) snapshot frames pushed to each new WS
+    // client on attach: current status, the live roster, and the message
+    // history. Set once by ChatService at startup (mirrors the SpotList
+    // push-on-attach, but chat has three distinct envelopes so a single
+    // cached payload won't do). Null until ChatService wires it up; absent
+    // chat support simply skips the push.
+    private volatile Func<IReadOnlyList<byte[]>>? _chatSnapshotProvider;
+
     // ---- Step 1 drop-counter probe for issue #299 -----------------------
     // Each per-client send queue is bounded to MaxBacklogPerClient=4 with
     // FullMode=DropOldest (lines 318-324). When the producer outruns
@@ -289,6 +297,16 @@ public sealed class StreamingHub
         // arrived before it connected (e.g. a skimmer that was already running).
         var spotSnap = _spotPayload;
         if (spotSnap is not null) session.TryEnqueue(spotSnap);
+
+        // Push the current chat snapshot (status + roster + history) so a
+        // late-joining client renders the conversation without waiting for the
+        // next relay event. Same push-on-attach pattern as the spot list.
+        var chatProvider = _chatSnapshotProvider;
+        if (chatProvider is not null)
+        {
+            foreach (var frame in chatProvider())
+                session.TryEnqueue(frame);
+        }
 
         try
         {
@@ -713,6 +731,33 @@ public sealed class StreamingHub
     public void BroadcastSpots(byte[] payload)
     {
         _spotPayload = payload;
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
+    /// <summary>
+    /// Registers the provider that yields the ChatEvent (0x35) snapshot frames
+    /// (status + roster + history) pushed to each new WS client on attach.
+    /// Called once by ChatService at startup. Mirrors how the spot list is
+    /// cached for push-on-attach, but chat has three distinct envelopes so a
+    /// provider is used instead of a single cached payload.
+    /// </summary>
+    public void SetChatSnapshotProvider(Func<IReadOnlyList<byte[]>> provider)
+    {
+        _chatSnapshotProvider = provider;
+    }
+
+    /// <summary>
+    /// Broadcasts a pre-encoded ChatEvent (0x35) frame ([type][UTF-8 JSON]) to
+    /// every connected client. ChatService builds the frame via
+    /// <see cref="Zeus.Contracts.ChatEventFrame"/> so the envelope shapes stay
+    /// in one place. Same fan-out shape as <see cref="BroadcastSpots"/>.
+    /// </summary>
+    public void BroadcastChatEvent(byte[] payload)
+    {
+        if (_clients.IsEmpty) return;
         foreach (var client in _clients.Values)
         {
             if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);

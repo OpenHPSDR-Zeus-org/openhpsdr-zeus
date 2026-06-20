@@ -899,6 +899,14 @@ public sealed record StateDto(
     // adjusts AgcOffsetDb, which is added to the user baseline AgcTopDb.
     bool AutoAgcEnabled = false,
     double AgcOffsetDb = 0.0,
+    // AGC threshold ("knee") in operator/displayed dBm — the signal-relative
+    // level below which the AGC applies increasing gain (up to the AgcTopDb
+    // cap). This is the smooth, signal-relative control Thetis exposes via the
+    // panadapter knee line (WDSP SetRXAAGCThresh). NULL = operator has not set
+    // the knee, so WDSP's per-mode default threshold is left in effect (no
+    // behavioural change vs. pre-#741). When set, the server converts displayed
+    // dBm → WDSP scale with the per-board RX meter offset before pushing it.
+    double? AgcThresholdDbm = null,
 
     // ---- PureSignal predistortion (TXA-side; WDSP calcc/iqc stages) ----
     // PsEnabled is the master arm bit. Persisted server-side as a standing
@@ -1291,6 +1299,8 @@ public sealed record PreampSetRequest(bool On);
 
 public sealed record AgcGainSetRequest(double TopDb);
 
+public sealed record AgcThresholdSetRequest(double ThresholdDbm);
+
 public sealed record RxAfGainSetRequest(double Db);
 
 public sealed record AttenuatorSetRequest(int Db);
@@ -1670,7 +1680,20 @@ public sealed record DisplaySettingsDto(
     double? WfDbMin,
     double? WfDbMax,
     double? WfTxDbMin,
-    double? WfTxDbMax);
+    double? WfTxDbMax,
+    // TX display analyzer parameters (issue: live TX waterfall). All
+    // display-only — they shape the transmitted-signal panadapter/waterfall
+    // visualization and never touch the transmitted audio, drive, or PA.
+    // Null on legacy rows / requests → server falls back to its defaults.
+    //   TxDisplayCalOffsetDb — dB added to the TX trace/waterfall pixels so the
+    //     operator can calibrate the absolute level (Thetis TXDisplayCalOffset).
+    //   TxDisplayFftSize     — WDSP TX analyzer FFT size (power of two).
+    //   TxDisplayWindow      — WDSP analyzer window type (win_type).
+    //   TxDisplayAvgTauMs    — TX trace visual smoothing time-constant (ms).
+    double? TxDisplayCalOffsetDb = null,
+    int? TxDisplayFftSize = null,
+    int? TxDisplayWindow = null,
+    double? TxDisplayAvgTauMs = null);
 
 public sealed record DisplaySettingsSetRequest(
     string Mode,
@@ -1683,7 +1706,11 @@ public sealed record DisplaySettingsSetRequest(
     double? WfDbMin = null,
     double? WfDbMax = null,
     double? WfTxDbMin = null,
-    double? WfTxDbMax = null);
+    double? WfTxDbMax = null,
+    double? TxDisplayCalOffsetDb = null,
+    int? TxDisplayFftSize = null,
+    int? TxDisplayWindow = null,
+    double? TxDisplayAvgTauMs = null);
 
 // Server-side mirror of the frontend Signal Intelligence weak-signal display
 // controls. The DSP math remains in zeus-web's signal-estimator; this DTO lets
@@ -1916,20 +1943,74 @@ public sealed record TxStationProfileDto(
 
 public sealed record TxStationProfilesResponse(IReadOnlyList<TxStationProfileDto> Profiles);
 
+// ---- TX Audio Profiles (unified) ----------------------------------------
+// A single operator-named macro that captures the ENTIRE TX-audio shaping
+// state in one recallable snapshot. This REPLACES both the named audio-suite
+// plugin profiles and the fixed 3-up TX station profiles — there is now one
+// profile concept. Captured fields are a superset of everything proven
+// reachable, reusing the existing nested records verbatim (TxLevelingConfig /
+// CfcConfig) so there is no parallel schema.
+//
+// EXCLUDED on purpose (not audio-shaping / global): drive %, tune drive,
+// pre-key delay, PureSignal, two-tone, TX monitor/preview, the named
+// CFC/filter preset libraries, installed VST3 registrations, CESSB(auto).
+//
+// ProcessingMode is "native" or "vst" (lower-case) to keep Zeus.Contracts free
+// of any dependency on the server-side AudioProcessingMode enum — matching how
+// the existing audio-suite endpoints already serialise that field.
+public sealed record TxAudioProfileDto(
+    string Id,                       // slug, lowercased; PK; seeds: studio-ssb / essb-wide / dx-punch
+    string Name,                     // operator display name (captured by the Save dialog)
+    // ---- mic / leveler scalars (reuse RadioService Set* clamps) ----
+    int MicGainDb,                   // [-40,10]
+    double LevelerMaxGainDb,         // [0,20]
+    // ---- whole-config reuse ----
+    TxLevelingConfig TxLeveling,     // leveler on/decay, ALC max-gain/decay, CPDR on/gain
+    CfcConfig CfcConfig,             // enabled/postEq/preComp/prePeq + 10 bands x2
+    // ---- TX bandpass + per-mode-family memory ----
+    int LowCutHz, int HighCutHz,     // operator-typed positive magnitudes; server re-signs per mode-family
+    // ---- audio processing mode + suite chain state ----
+    string ProcessingMode,           // "native" | "vst"
+    bool MasterBypass,
+    List<string> ChainOrder,         // active plugin ids, head-first
+    List<string> ChainParked,        // installed-but-out-of-chain ids
+    // ---- EVERY plugin's settings ----
+    Dictionary<string, string> VstPluginStates,                       // zeusId -> base64 getStateInformation
+    Dictionary<string, Dictionary<string, string>> NativePluginStates, // zeusId -> {settingKey -> jsonValue}
+    // ---- fidelity policy ----
+    int TargetSpectralDensity,       // [0,100]
+    DateTime CreatedUtc, DateTime UpdatedUtc);
+
+public sealed record TxAudioProfilesResponse(IReadOnlyList<TxAudioProfileDto> Profiles);
+
+// POST body for "save current live state as <Name>". The backend snapshots the
+// live state — the client never assembles the profile body (avoids the
+// frontend-clobbers-server pattern).
+public sealed record SaveTxAudioProfileRequest(string Name);
+
+// PUT body for the persisted "last loaded profile" pointer. Null/empty Id
+// clears it (nothing is applied at startup).
+public sealed record LastLoadedTxAudioProfileDto(string? Id);
+
 public sealed record TxFidelityPolicyDto(
     string ProfileId,
     int TargetSpectralDensity);
 
-/// <summary>Status of the local git checkout relative to its configured
-/// upstream, for the Settings -> Updates panel (GET /api/system/update).
-/// <para>When <see cref="IsGitRepo"/> is false the app is running from a
-/// non-git build and the UI falls back to manual-update guidance. All SHAs are
-/// short form. <see cref="Behind"/>/<see cref="Ahead"/> count commits relative
-/// to <see cref="UpstreamRef"/> (e.g. "upstream/main"). <see cref="CanFastForward"/>
-/// is true only when behind &gt; 0, HEAD is an ancestor of the upstream tip, and
-/// the working tree is clean. <see cref="Error"/> carries a human message when a
-/// git call failed (e.g. offline fetch); the rest of the fields hold the last
-/// locally-known values in that case.</para></summary>
+/// <summary>Status of the local install relative to the latest available Zeus
+/// PRODUCTION build, for the Settings -> Updates panel (GET /api/system/update).
+/// <para>The latest build is read from the download domain
+/// (downloads.openhpsdrzeus.com), published from <c>main</c> only. The
+/// <c>Release*</c> fields describe the platform-matched download asset when a
+/// network check has completed: <see cref="ReleaseDownloadUrl"/> +
+/// <see cref="ReleaseAssetName"/> + <see cref="ReleaseAssetDigest"/> (sha256).
+/// <see cref="UpdateAction"/> is "download" when a matching asset exists,
+/// "openRelease" when only the website is available, or "none".
+/// <see cref="IsGitRepo"/>/<see cref="Branch"/>/<see cref="CurrentShortSha"/> are
+/// diagnostics for source checkouts; the git fast-forward path was removed, so
+/// <see cref="Behind"/>/<see cref="Ahead"/>/<see cref="CanFastForward"/>/
+/// <see cref="UpstreamRef"/> are always 0/false/null. <see cref="Error"/> carries
+/// a human message when the network check failed; the rest of the fields hold the
+/// last locally-known values.</para></summary>
 public sealed record RepoUpdateStatus(
     bool IsGitRepo,
     string? Branch,
@@ -1945,14 +2026,20 @@ public sealed record RepoUpdateStatus(
     string? LatestRemoteSubject,
     string? RemoteUrl,
     string? CheckedUtc,
-    string? Error);
-
-/// <summary>Result of a fast-forward pull (POST /api/system/update/pull).
-/// <see cref="RequiresRebuild"/> is true whenever source actually changed —
-/// the running binaries are stale until the operator rebuilds and restarts
-/// (see scripts/update.*). <see cref="Message"/> is operator-facing.</summary>
-public sealed record RepoUpdateResult(
-    bool Ok,
-    string? NewSha,
-    bool RequiresRebuild,
-    string Message);
+    string? Error)
+{
+    public string InstalledVersion { get; init; } = "unknown";
+    public string RuntimePlatform { get; init; } = "unknown";
+    public string RuntimeArchitecture { get; init; } = "unknown";
+    public bool UpdateAvailable { get; init; }
+    public string UpdateAction { get; init; } = "none";
+    public string? LatestVersion { get; init; }
+    public string? ReleaseTag { get; init; }
+    public string? ReleaseName { get; init; }
+    public string? ReleaseUrl { get; init; }
+    public string? ReleasePublishedUtc { get; init; }
+    public string? ReleaseAssetName { get; init; }
+    public string? ReleaseDownloadUrl { get; init; }
+    public long? ReleaseAssetSizeBytes { get; init; }
+    public string? ReleaseAssetDigest { get; init; }
+}

@@ -1,0 +1,124 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+// Copyright (C) 2025-2026 Brian Keating (EI6LF),
+//                         Douglas J. Cerrato (KB2UKA), and contributors.
+
+using System.Text;
+using Zeus.Server;
+
+namespace Zeus.Server.Tests;
+
+public sealed class AdifImportTests
+{
+    [Fact]
+    public void Parser_HandlesHeaderAndLengthTaggedRecords()
+    {
+        const string adif = """
+            ADIF Export
+            <ADIF_VER:5>3.1.6<PROGRAMID:4>Zeus<EOH>
+            <CALL:5>N9WAR<QSO_DATE:8>20260619<TIME_ON:6>142205<FREQ:6>14.250<BAND:3>20M<MODE:3>SSB<EOR>
+            <CALL:5>EI6LF<QSO_DATE:8>20260620<TIME_ON:4>0830<BAND:3>40M<MODE:2>CW<EOR>
+            """;
+
+        var records = AdifParser.Parse(adif);
+
+        Assert.Equal(2, records.Count);
+        Assert.Equal("N9WAR", records[0].Fields["CALL"]);
+        Assert.Equal("142205", records[0].Fields["TIME_ON"]);
+        Assert.Equal("EI6LF", records[1].Fields["CALL"]);
+        Assert.Equal("0830", records[1].Fields["TIME_ON"]);
+    }
+
+    [Fact]
+    public void Mapping_ImportsBandOnlyQsoAndPreservesExtraAdifFields()
+    {
+        const string adif = """
+            <ADIF_VER:5>3.1.6<EOH>
+            <CALL:5>N9WAR<QSO_DATE:8>20260619<TIME_ON:4>1422<BAND:3>20M<MODE:3>SSB
+            <RST_SENT:2>59<RST_RCVD:2>57<GRIDSQUARE:4>EN61<NOTES:11>net checkin
+            <TIME_OFF:6>143000<STATION_CALLSIGN:5>N9WAR<APP_QRZLOG_LOGID:7>QRZ-123<EOR>
+            """;
+        var record = AdifParser.Parse(adif).Single();
+
+        var ok = LogService.TryCreateDocumentFromAdifRecord(
+            record,
+            new DateTime(2026, 6, 19, 14, 30, 0, DateTimeKind.Utc),
+            out var doc,
+            out var error);
+
+        Assert.True(ok, error);
+        Assert.Equal("N9WAR", doc.Callsign);
+        Assert.Equal(new DateTime(2026, 6, 19, 14, 22, 0, DateTimeKind.Utc), doc.QsoDateTimeUtc);
+        Assert.Null(doc.FrequencyMhz);
+        Assert.Equal("20M", doc.Band);
+        Assert.Equal("SSB", doc.Mode);
+        Assert.Equal("net checkin", doc.Comment);
+        Assert.Equal("QRZ-123", doc.QrzLogId);
+        Assert.NotNull(doc.QrzUploadedUtc);
+        Assert.Equal("143000", doc.AdifFields!["TIME_OFF"]);
+        Assert.Equal("N9WAR", doc.AdifFields["STATION_CALLSIGN"]);
+
+        var sb = new StringBuilder();
+        LogService.AppendAdifRecord(sb, doc);
+        var exported = sb.ToString();
+
+        Assert.DoesNotContain("<FREQ:", exported);
+        Assert.Contains("<TIME_OFF:6>143000", exported);
+        Assert.Contains("<STATION_CALLSIGN:5>N9WAR", exported);
+        Assert.Contains("<APP_QRZLOG_LOGID:7>QRZ-123", exported);
+    }
+
+    [Fact]
+    public void Mapping_RejectsRecordsMissingMinimumQsoFields()
+    {
+        var record = new AdifRecord(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["CALL"] = "N0CALL",
+            ["QSO_DATE"] = "20260619",
+            ["TIME_ON"] = "1422",
+            ["BAND"] = "20M",
+        });
+
+        var ok = LogService.TryCreateDocumentFromAdifRecord(
+            record,
+            DateTime.UtcNow,
+            out _,
+            out var error);
+
+        Assert.False(ok);
+        Assert.Equal("missing MODE", error);
+    }
+
+    [Fact]
+    public void Mapping_ParsesFrequencyAndSixDigitUtcTime()
+    {
+        var record = new AdifRecord(new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["CALL"] = "ei6lf",
+            ["QSO_DATE"] = "20260620",
+            ["TIME_ON"] = "083015",
+            ["FREQ"] = "7.185",
+            ["MODE"] = "lsb",
+            ["DXCC"] = "245",
+            ["CQZ"] = "14",
+            ["ITUZ"] = "27",
+        });
+
+        var ok = LogService.TryCreateDocumentFromAdifRecord(
+            record,
+            DateTime.UtcNow,
+            out var doc,
+            out var error);
+
+        Assert.True(ok, error);
+        Assert.Equal("EI6LF", doc.Callsign);
+        Assert.Equal(new DateTime(2026, 6, 20, 8, 30, 15, DateTimeKind.Utc), doc.QsoDateTimeUtc);
+        Assert.Equal(7.185, doc.FrequencyMhz);
+        Assert.Equal(string.Empty, doc.Band);
+        Assert.Equal("LSB", doc.Mode);
+        Assert.Equal(245, doc.Dxcc);
+        Assert.Equal(14, doc.CqZone);
+        Assert.Equal(27, doc.ItuZone);
+    }
+}

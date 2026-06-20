@@ -56,6 +56,10 @@
   color: var(--fg-0);
   background: var(--bg-2);
 }
+.am-h-gear:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: -2px;
+}
 .am-h-gear.on {
   background: var(--accent-soft);
   color: var(--fg-0);

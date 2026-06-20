@@ -416,8 +416,12 @@ public sealed class ChainOrderService
     /// set exactly which attached plugins are parked, then order the
     /// active ones to match <paramref name="desiredOrder"/>. Plugins in
     /// the profile that aren't currently installed are ignored; plugins
-    /// installed since the profile was saved that the profile doesn't
-    /// mention stay active and are appended after the profile's order.
+    /// the profile doesn't mention (e.g. an empty profile, or a VST
+    /// installed since the profile was saved) inherit the default
+    /// membership rule — native <see cref="DefaultOrder"/> plugins stay
+    /// active and are appended after the profile's order, but third-party
+    /// VSTs default to PARKED (same as <see cref="OnPluginAttached"/>) so
+    /// applying a profile never floods the live chain with every VST.
     /// Persists once, raises <see cref="OrderChanged"/> once, and
     /// broadcasts once — so applying a profile is a single re-slot, not
     /// a flurry of per-plugin park/un-park events.
@@ -429,12 +433,24 @@ public sealed class ChainOrderService
         List<string>? snapshot = null;
         lock (_sync)
         {
-            // Park exactly the attached plugins the profile says to park;
-            // un-park everything else. Non-installed IDs are ignored.
+            // Park the attached plugins the profile says to park. For a
+            // plugin the profile mentions in NEITHER list (e.g. an empty /
+            // starter profile, or a third-party VST installed since the
+            // profile was saved) inherit the default membership rule from
+            // OnPluginAttached: native DefaultOrder plugins activate, but
+            // a scanned third-party VST (not in DefaultOrder) defaults to
+            // PARKED so applying a profile never floods the live chain with
+            // every installed VST. Non-installed IDs are ignored.
+            var orderSet = new HashSet<string>(desiredOrder, StringComparer.Ordinal);
             var parkSet = new HashSet<string>(desiredParked, StringComparer.Ordinal);
             _parked.Clear();
             foreach (var id in _attached)
-                if (parkSet.Contains(id)) _parked.Add(id);
+            {
+                if (parkSet.Contains(id))
+                    _parked.Add(id);
+                else if (!orderSet.Contains(id) && IndexInDefaultOrder(id) < 0)
+                    _parked.Add(id);
+            }
 
             // Build the target active order: the profile's order filtered
             // to currently-active plugins, then any active plugins the

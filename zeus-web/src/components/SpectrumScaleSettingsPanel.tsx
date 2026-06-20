@@ -6,8 +6,15 @@
 
 import type { CSSProperties } from 'react';
 import {
+  DEFAULT_TX_DISPLAY_AVG_TAU_MS,
+  DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
   FIXED_DB_MAX,
   FIXED_DB_MIN,
+  TX_DISPLAY_AVG_TAU_MAX_MS,
+  TX_DISPLAY_AVG_TAU_MIN_MS,
+  TX_DISPLAY_CAL_OFFSET_ABS_DB,
+  TX_DISPLAY_FFT_SIZES,
+  TX_DISPLAY_WINDOWS,
   TX_FIXED_DB_MAX,
   TX_FIXED_DB_MIN,
   useDisplaySettingsStore,
@@ -116,6 +123,15 @@ export function SpectrumScaleSettingsPanel() {
   const setWfTxDbRange = useDisplaySettingsStore((s) => s.setWfTxDbRange);
   const resetDbRanges = useDisplaySettingsStore((s) => s.resetDbRanges);
 
+  const txCalOffsetDb = useDisplaySettingsStore((s) => s.txDisplayCalOffsetDb);
+  const txFftSize = useDisplaySettingsStore((s) => s.txDisplayFftSize);
+  const txWindow = useDisplaySettingsStore((s) => s.txDisplayWindow);
+  const txAvgTauMs = useDisplaySettingsStore((s) => s.txDisplayAvgTauMs);
+  const setTxDisplayParams = useDisplaySettingsStore((s) => s.setTxDisplayParams);
+  const resetTxDisplayParams = useDisplaySettingsStore((s) => s.resetTxDisplayParams);
+  const txAutoRange = useDisplaySettingsStore((s) => s.txAutoRange);
+  const setTxAutoRange = useDisplaySettingsStore((s) => s.setTxAutoRange);
+
   return (
     <section>
       <div style={sectionHead}>
@@ -180,6 +196,147 @@ export function SpectrumScaleSettingsPanel() {
           defaultMax={TX_FIXED_DB_MAX}
           onChange={setWfTxDbRange}
         />
+      </div>
+
+      <div style={sectionHead}>
+        <h3 style={sectionH3}>TX Display Analyzer</h3>
+        <p style={sectionP}>
+          Shapes the live transmitted-signal panadapter &amp; waterfall during MOX/TUN.
+          Display-only — never affects the transmitted audio, drive, or PA.
+        </p>
+        <button type="button" className="btn sm" onClick={resetTxDisplayParams} style={allResetButton}>
+          Reset
+        </button>
+      </div>
+
+      <div style={card}>
+        <div style={autoRow}>
+          <label style={switchLabel}>
+            <input
+              type="checkbox"
+              checked={txAutoRange}
+              onChange={(event) => setTxAutoRange(event.currentTarget.checked)}
+              style={{ accentColor: 'var(--accent)' }}
+            />
+            Auto-range TX
+          </label>
+          <span style={autoHint}>
+            Fits the TX panadapter + waterfall to the live signal while keyed so it
+            isn't slammed to full-scale. A manual TX window edit (or scale drag)
+            turns this off.
+          </span>
+        </div>
+        <div style={rangeRow}>
+          <div style={rangeText}>
+            <span style={rangeTitle}>Cal Offset</span>
+            <span style={rangeDetail}>
+              dB shift of the TX trace/waterfall level. Lower this if the audio reads too
+              hot inside the bandwidth filter.
+            </span>
+          </div>
+          <label style={rangeLabel}>
+            dB
+            <input
+              type="number"
+              min={-TX_DISPLAY_CAL_OFFSET_ABS_DB}
+              max={TX_DISPLAY_CAL_OFFSET_ABS_DB}
+              step={1}
+              value={Math.round(txCalOffsetDb)}
+              onChange={(e) => {
+                const n = readNumber(e.currentTarget.value);
+                if (n !== null) setTxDisplayParams({ calOffsetDb: n });
+              }}
+              style={numberInput}
+            />
+          </label>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => setTxDisplayParams({ calOffsetDb: DEFAULT_TX_DISPLAY_CAL_OFFSET_DB })}
+            title={`Reset to ${DEFAULT_TX_DISPLAY_CAL_OFFSET_DB} dB`}
+            style={resetButton}
+          >
+            Reset
+          </button>
+        </div>
+
+        <div style={rangeRow}>
+          <div style={rangeText}>
+            <span style={rangeTitle}>Smoothing</span>
+            <span style={rangeDetail}>
+              Visual averaging time-constant (ms). Lower = more responsive/alive,
+              higher = smoother envelope.
+            </span>
+          </div>
+          <label style={rangeLabel}>
+            ms
+            <input
+              type="number"
+              min={TX_DISPLAY_AVG_TAU_MIN_MS}
+              max={TX_DISPLAY_AVG_TAU_MAX_MS}
+              step={5}
+              value={Math.round(txAvgTauMs)}
+              onChange={(e) => {
+                const n = readNumber(e.currentTarget.value);
+                if (n !== null) setTxDisplayParams({ avgTauMs: n });
+              }}
+              style={numberInput}
+            />
+          </label>
+          <button
+            type="button"
+            className="btn sm"
+            onClick={() => setTxDisplayParams({ avgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS })}
+            title={`Reset to ${DEFAULT_TX_DISPLAY_AVG_TAU_MS} ms`}
+            style={resetButton}
+          >
+            Reset
+          </button>
+        </div>
+
+        <div style={rangeRow}>
+          <div style={rangeText}>
+            <span style={rangeTitle}>FFT Size</span>
+            <span style={rangeDetail}>Analyzer bin count — larger = finer resolution, heavier compute.</span>
+          </div>
+          <label style={rangeLabel}>
+            Bins
+            <select
+              value={txFftSize}
+              onChange={(e) => setTxDisplayParams({ fftSize: Number(e.currentTarget.value) })}
+              style={numberInput}
+            >
+              {TX_DISPLAY_FFT_SIZES.map((sz) => (
+                <option key={sz} value={sz}>
+                  {sz}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span style={resetButton} />
+        </div>
+
+        <div style={rangeRow}>
+          <div style={rangeText}>
+            <span style={rangeTitle}>Window</span>
+            <span style={rangeDetail}>FFT window function. Hann is the default; Blackman-Harris trades resolution for lower sidelobes.</span>
+          </div>
+          <label style={{ ...rangeLabel, flex: '0 0 132px' }}>
+            Type
+            <select
+              value={txWindow}
+              onChange={(e) => setTxDisplayParams({ window: Number(e.currentTarget.value) })}
+              style={numberInput}
+            >
+              {TX_DISPLAY_WINDOWS.map((w) => (
+                <option key={w.value} value={w.value}>
+                  {w.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <span style={resetButton} />
+        </div>
       </div>
     </section>
   );

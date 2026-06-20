@@ -30,6 +30,7 @@ import {
   ResponsiveGridLayout,
   useContainerWidth,
   type Layout,
+  type LayoutItem,
 } from 'react-grid-layout';
 import { absoluteStrategy } from 'react-grid-layout/core';
 import { Plus, Puzzle, Settings } from 'lucide-react';
@@ -37,9 +38,17 @@ import { useWorkspace } from './WorkspaceContext';
 import { parseLayoutOrDefault, useLayoutStore } from '../state/layout-store';
 import { getPanelDef } from './panels';
 import {
-  WORKSPACE_DRAG_COMPACTOR,
   WORKSPACE_RESIZE_COMPACTOR,
+  autoFitDroppedPanel,
+  createWorkspaceDragCompactor,
+  resolveResizeOverlaps,
+  type WorkspaceDragStartSnapshot,
 } from './workspaceGrid';
+import {
+  deriveWorkspaceLayout,
+  reconcileReportedToStored,
+  type DeriveTile,
+} from './lockedWorkspaceLayout';
 import { usePluginPanels } from '../plugins/runtime/usePluginPanels';
 import {
   EMPTY_WORKSPACE_LAYOUT,
@@ -101,8 +110,9 @@ export function FlexWorkspace({
   const syncToServerBeforeUnload = useLayoutStore((s) => s.syncToServerBeforeUnload);
   const addTileToLayout = useLayoutStore((s) => s.addTileToLayout);
   const removeTileFromLayout = useLayoutStore((s) => s.removeTileFromLayout);
-  const updateTilePlacementInLayout = useLayoutStore(
-    (s) => s.updateTilePlacementInLayout,
+  const setTileLockedInLayout = useLayoutStore((s) => s.setTileLockedInLayout);
+  const updateTilePlacementsInLayout = useLayoutStore(
+    (s) => s.updateTilePlacementsInLayout,
   );
   // Modal visibility lifted into the store so the trigger button can live
   // in the LeftLayoutBar — the workspace just renders the modal when the
@@ -125,22 +135,26 @@ export function FlexWorkspace({
     () => new Set(workspace.tiles.map((t) => t.panelId)),
     [workspace.tiles],
   );
+  const workspaceLocked = workspace.locked === true;
 
   const onLayoutChange = useCallback(
     (next: Layout) => {
+      if (workspaceLocked) return;
       // RGL fires onLayoutChange on every render with the current layout
       // (including the very first paint). Diff each item against the store
       // and only PUT through when something actually moved.
-      for (const item of next) {
-        updateTilePlacementInLayout(targetLayoutId, item.i, {
+      updateTilePlacementsInLayout(
+        targetLayoutId,
+        next.map((item) => ({
+          uid: item.i,
           x: item.x,
           y: item.y,
           w: item.w,
           h: item.h,
-        });
-      }
+        })),
+      );
     },
-    [targetLayoutId, updateTilePlacementInLayout],
+    [targetLayoutId, updateTilePlacementsInLayout, workspaceLocked],
   );
 
   const onAddPanel = useCallback(
@@ -156,10 +170,14 @@ export function FlexWorkspace({
     <div className={`flex-workspace ${terminatorActive ? 'terminator' : ''}`}>
       <WorkspaceCanvas
         tiles={workspace.tiles}
+        workspaceLocked={workspaceLocked}
         isLoaded={isLoaded}
         layoutId={targetLayoutId}
         onLayoutChange={onLayoutChange}
         onRequestRemoveTile={(uid, title) => setPendingRemoveTile({ uid, title })}
+        onToggleTileLock={(uid, locked, lockedHeightPx) =>
+          setTileLockedInLayout(targetLayoutId, uid, locked, lockedHeightPx)
+        }
       />
       <TerminatorLines active={terminatorActive} />
       {showAddPanelModal && !addPanelOpen && (
@@ -205,18 +223,26 @@ export function FlexWorkspace({
 
 interface WorkspaceCanvasProps {
   tiles: WorkspaceTile[];
+  workspaceLocked: boolean;
   isLoaded: boolean;
   layoutId: string;
   onLayoutChange: (next: Layout) => void;
   onRequestRemoveTile: (uid: string, title: string) => void;
+  onToggleTileLock: (
+    uid: string,
+    locked: boolean,
+    lockedHeightPx?: number,
+  ) => void;
 }
 
 function WorkspaceCanvas({
   tiles,
+  workspaceLocked,
   isLoaded,
   layoutId,
   onLayoutChange,
   onRequestRemoveTile,
+  onToggleTileLock,
 }: WorkspaceCanvasProps) {
   // useContainerWidth from RGL's modern API: ResizeObserver-backed parent
   // measurement. mounted=false on first paint to avoid the 1280-px width
@@ -233,6 +259,9 @@ function WorkspaceCanvas({
   const [containerHeight, setContainerHeight] = useState(0);
   const [gridInteraction, setGridInteraction] =
     useState<GridInteraction>(null);
+  const draggingRef = useRef(false);
+  const skipPostDropLayoutChangeRef = useRef(false);
+  const dragStartRef = useRef<WorkspaceDragStartSnapshot | null>(null);
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -243,60 +272,120 @@ function WorkspaceCanvas({
     ro.observe(el);
     return () => ro.disconnect();
   }, [containerRef]);
-  // The actual vertical extent of the current layout, in grid rows. The
-  // default layout is authored to be exactly WORKSPACE_TARGET_ROWS tall, but
-  // the operator adds/rearranges panels freely — once the layout is taller
-  // than the target, dividing the viewport by a fixed target would render the
-  // grid taller than the container and force an outer scrollbar. Tracking the
-  // real extent keeps the workspace fitting the viewport no matter how many
-  // panels are docked.
-  const layoutRows = useMemo(
-    () => tiles.reduce((max, t) => Math.max(max, t.y + t.h), 0),
+  // The workspace must NEVER show a scrollbar — it fits the viewport like a
+  // hardware front panel. So the grid is fit-to-viewport: the cell size is
+  // sized so the whole layout fits the container height.
+  //
+  // deriveWorkspaceLayout owns the whole fit. With no locked tiles it
+  // reproduces the legacy uniform shrink (divisor = max(layoutRows, target), so
+  // rearranging within the design fold never rescales a panel; only a layout
+  // taller than the fold shrinks the cell). When a tile is locked AND the
+  // layout would overflow, it instead pins rowHeight at the authored height —
+  // so locked tiles render at their exact authored pixel size, invariant to the
+  // workspace getting longer/shorter — and shrinks only the unlocked tiles to
+  // fit, recompacting around the static locked tiles. The result is a RENDER
+  // layout; the stored layout is untouched (see reconcile below).
+  const deriveTiles = useMemo<DeriveTile[]>(
+    () =>
+      tiles.map((t) => {
+        const def = getPanelDef(t.panelId, pluginPanelKey);
+        const w = def?.maxW !== undefined ? Math.min(t.w, def.maxW) : t.w;
+        const h = def?.maxH !== undefined ? Math.min(t.h, def.maxH) : t.h;
+        return {
+          uid: t.uid,
+          x: t.x,
+          y: t.y,
+          w,
+          h,
+          locked: workspaceLocked || t.locked === true,
+          minH: def?.minH ?? WORKSPACE_TILE_MIN_H,
+          ...(t.lockedHeightPx !== undefined
+            ? { lockedHeightPx: t.lockedHeightPx }
+            : {}),
+        };
+      }),
+    [tiles, pluginPanelKey, workspaceLocked],
+  );
+
+  const derived = useMemo(
+    () =>
+      deriveWorkspaceLayout(deriveTiles, {
+        containerHeight,
+        authoredRowHeightPx: WORKSPACE_ROW_HEIGHT_PX,
+        gridMarginPx: WORKSPACE_GRID_MARGIN_PX,
+        rowGapShare: WORKSPACE_ROW_GAP_SHARE,
+        targetRows: WORKSPACE_TARGET_ROWS,
+        minRowHeightPx: 0.1,
+      }),
+    [deriveTiles, containerHeight],
+  );
+  const { rowHeight, rowMargin } = derived;
+
+  // Stored geometry, keyed by uid, for reconciling RGL's echo of the derived
+  // (possibly shrunk) render layout back to what we persist. Refs keep the
+  // persist callback stable without going stale.
+  const storedByUid = useMemo(
+    () => new Map(tiles.map((t) => [t.uid, { x: t.x, y: t.y, w: t.w, h: t.h }])),
     [tiles],
   );
-  // Fit-to-viewport divisor: never smaller than the default target (so a
-  // sparse layout doesn't balloon its tiles to fill the screen — it just
-  // leaves empty space at the bottom, matching the prior behaviour), and
-  // grows to the layout's real height when the operator stacks panels past
-  // the default fold. Dense layouts shrink rather than asking the workspace
-  // shell for a scrollbar.
-  const targetRows = Math.max(layoutRows, WORKSPACE_TARGET_ROWS);
+  const derivedRef = useRef(derived);
+  derivedRef.current = derived;
+  const storedByUidRef = useRef(storedByUid);
+  storedByUidRef.current = storedByUid;
+  // All persistence flows through here so the shrunk render geometry never
+  // reaches the store. When nothing is compensated this is the identity, so the
+  // common path is byte-identical to the legacy behaviour.
+  const persist = useCallback(
+    (next: Layout) => {
+      onLayoutChange(
+        reconcileReportedToStored(
+          next,
+          derivedRef.current,
+          storedByUidRef.current,
+        ),
+      );
+    },
+    [onLayoutChange],
+  );
 
-  // Shrink-to-fit rowHeight: solve containerHeight ≈ rowHeight*N + margin*(N-1)
-  // + 2*containerPadding, but cap at WORKSPACE_ROW_HEIGHT_PX so resizing a
-  // window taller doesn't inject empty vertical space inside fixed-control
-  // panels. Margin and containerPadding here mirror the props passed to
-  // ResponsiveGridLayout below — keep them in sync if those change. The row
-  // gap shrinks with very dense layouts so gaps alone can never make the grid
-  // taller than the viewport.
-  const rowMargin = useMemo(() => {
-    if (containerHeight <= 0 || targetRows <= 1) return WORKSPACE_GRID_MARGIN_PX;
-    return Math.min(
-      WORKSPACE_GRID_MARGIN_PX,
-      containerHeight / (targetRows * WORKSPACE_ROW_GAP_SHARE),
-    );
-  }, [containerHeight, targetRows]);
+  const placementByUid = useMemo(
+    () => new Map(derived.placements.map((p) => [p.uid, p])),
+    [derived],
+  );
 
-  const rowHeight = useMemo(() => {
-    if (containerHeight <= 0) return WORKSPACE_ROW_HEIGHT_PX;
-    const containerPadding = 0;
-    const inner =
-      containerHeight - 2 * containerPadding - rowMargin * Math.max(0, targetRows - 1);
-    return Math.min(
-      WORKSPACE_ROW_HEIGHT_PX,
-      Math.max(0.1, inner / Math.max(1, targetRows)),
-    );
-  }, [containerHeight, rowMargin, targetRows]);
+  // When locking a tile, capture its current on-screen pixel height so the
+  // store can hold it there afterwards. The capture is the live rendered size,
+  // so clicking lock never resizes the panel (see deriveWorkspaceLayout).
+  const handleToggleTileLock = useCallback(
+    (uid: string, locked: boolean) => {
+      if (!locked) {
+        onToggleTileLock(uid, false);
+        return;
+      }
+      const p = placementByUid.get(uid);
+      const lockedHeightPx = p
+        ? derived.rowHeight * p.h + Math.max(0, p.h - 1) * derived.rowMargin
+        : undefined;
+      onToggleTileLock(uid, true, lockedHeightPx);
+    },
+    [onToggleTileLock, placementByUid, derived.rowHeight, derived.rowMargin],
+  );
 
+  const workspaceDragCompactor = useMemo(
+    () => createWorkspaceDragCompactor(() => dragStartRef.current),
+    [],
+  );
   const workspaceCompactor =
     gridInteraction === 'resize'
       ? WORKSPACE_RESIZE_COMPACTOR
-      : WORKSPACE_DRAG_COMPACTOR;
+      : workspaceDragCompactor;
 
   const onPointerDownCapture = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const target = event.target;
       if (!(target instanceof Element)) return;
+      if (workspaceLocked) return;
+      if (target.closest('[data-tile-locked="true"]')) return;
 
       if (target.closest('.react-resizable-handle')) {
         setGridInteraction('resize');
@@ -305,17 +394,99 @@ function WorkspaceCanvas({
 
       if (
         target.closest('.workspace-tile-header') &&
-        !target.closest('.workspace-tile-close')
+        !target.closest('.workspace-tile-close') &&
+        !target.closest('.workspace-tile-lock')
       ) {
         setGridInteraction('drag');
       }
     },
-    [],
+    [workspaceLocked],
   );
 
-  const onDragStart = useCallback(() => setGridInteraction('drag'), []);
-  const onResizeStart = useCallback(() => setGridInteraction('resize'), []);
-  const onInteractionStop = useCallback(() => setGridInteraction(null), []);
+  const onDragStart = useCallback((
+    layout: Layout,
+    oldItem: LayoutItem | null,
+  ) => {
+    draggingRef.current = true;
+    skipPostDropLayoutChangeRef.current = false;
+    dragStartRef.current = oldItem
+      ? {
+          item: { ...oldItem },
+          layout: layout.map((item) => ({ ...item })),
+        }
+      : null;
+    setGridInteraction('drag');
+  }, []);
+  const onResizeStart = useCallback(() => {
+    // Mark the gesture active so the per-frame onLayoutChange persist is
+    // suppressed: live resize uses the free (overlap-allowed) compactor, and we
+    // resolve the overlap once on stop rather than persisting overlapping
+    // geometry mid-drag.
+    draggingRef.current = true;
+    setGridInteraction('resize');
+  }, []);
+  const onDragStop = useCallback((
+    layout: Layout,
+    oldItem: LayoutItem | null,
+    newItem: LayoutItem | null,
+  ) => {
+    const dragStart = dragStartRef.current;
+    const finalItem = dragStart
+      ? layout.find((item) => item.i === dragStart.item.i)
+      : newItem;
+    const moved = dragStart && finalItem
+      ? dragStart.item.x !== finalItem.x || dragStart.item.y !== finalItem.y
+      : Boolean(
+          oldItem &&
+            newItem &&
+            (oldItem.x !== newItem.x || oldItem.y !== newItem.y),
+        );
+    const previousDropItem = moved
+      ? dragStart ?? (oldItem ? { item: { ...oldItem }, layout: [] } : null)
+      : null;
+    draggingRef.current = false;
+    dragStartRef.current = null;
+    setGridInteraction(null);
+
+    if (previousDropItem) {
+      skipPostDropLayoutChangeRef.current = true;
+      window.setTimeout(() => {
+        skipPostDropLayoutChangeRef.current = false;
+      }, 250);
+      persist(
+        autoFitDroppedPanel(layout, WORKSPACE_GRID_COLS, previousDropItem),
+      );
+    }
+  }, [persist]);
+  const onResizeStop = useCallback((
+    layout: Layout,
+    oldItem: LayoutItem | null,
+    newItem: LayoutItem | null,
+  ) => {
+    draggingRef.current = false;
+    dragStartRef.current = null;
+    setGridInteraction(null);
+    const resizedId = newItem?.i ?? oldItem?.i;
+    if (!resizedId) return;
+    // Keep the resized tile's new size; nudge only the neighbours it now
+    // overlaps to their nearest free slot (no cascade). Guard the post-resize
+    // echo for a beat so RGL's re-render doesn't re-persist the raw layout.
+    skipPostDropLayoutChangeRef.current = true;
+    window.setTimeout(() => {
+      skipPostDropLayoutChangeRef.current = false;
+    }, 250);
+    persist(resolveResizeOverlaps(layout, resizedId, WORKSPACE_GRID_COLS));
+  }, [persist]);
+  const handleLayoutChange = useCallback(
+    (next: Layout) => {
+      if (draggingRef.current || skipPostDropLayoutChangeRef.current) {
+        return;
+      }
+
+      persist(next);
+    },
+    [persist],
+  );
 
   // RGL needs a stable per-render layouts.lg array. Memoise against the
   // tile list identity so we don't push a new prop on every parent render.
@@ -325,17 +496,22 @@ function WorkspaceCanvas({
     () => ({
       lg: tiles.map((t) => {
         const def = getPanelDef(t.panelId, pluginPanelKey);
-        // Clamp persisted size to the panel's maxW/maxH. RGL only enforces
-        // these caps during resize drags, so a tile saved wider than its cap
-        // (e.g. a Filter Presets tile placed before it gained maxW) would
-        // otherwise keep sprawling on load. Clamping here snaps it back into
-        // the right-column stack; the next onLayoutChange persists the fix.
-        const w = def?.maxW !== undefined ? Math.min(t.w, def.maxW) : t.w;
-        const h = def?.maxH !== undefined ? Math.min(t.h, def.maxH) : t.h;
+        const tileLocked = workspaceLocked || t.locked === true;
+        // Geometry comes from the derived render layout: locked tiles stay at
+        // their authored size while unlocked tiles shrink to fit (see
+        // deriveWorkspaceLayout). The placement is already clamped to the
+        // panel's maxW/maxH (deriveTiles does the clamp before solving), so a
+        // tile saved wider than its cap snaps back here and the next persist
+        // writes the fix.
+        const placement = placementByUid.get(t.uid);
+        const w = placement?.w ?? t.w;
+        const h = placement?.h ?? t.h;
+        const x = placement?.x ?? t.x;
+        const y = placement?.y ?? t.y;
         return {
           i: t.uid,
-          x: t.x,
-          y: t.y,
+          x,
+          y,
           w,
           h,
           // Per-panel legibility floor when the panel declares one, else the
@@ -346,10 +522,13 @@ function WorkspaceCanvas({
           minH: def?.minH ?? WORKSPACE_TILE_MIN_H,
           ...(def?.maxW !== undefined ? { maxW: def.maxW } : {}),
           ...(def?.maxH !== undefined ? { maxH: def.maxH } : {}),
+          static: tileLocked,
+          isDraggable: !tileLocked,
+          isResizable: !tileLocked,
         };
       }),
     }),
-    [tiles, pluginPanelKey],
+    [tiles, pluginPanelKey, workspaceLocked, placementByUid],
   );
 
   return (
@@ -363,7 +542,9 @@ function WorkspaceCanvas({
         <div style={{ minHeight: 80 }} aria-hidden />
       ) : (
         <ResponsiveGridLayout
-          className="all-panels-grid"
+          className={`all-panels-grid${
+            gridInteraction ? ' all-panels-grid--interacting' : ''
+          }`}
           width={width}
           breakpoints={{ lg: 0 }}
           cols={{ lg: WORKSPACE_GRID_COLS }}
@@ -391,25 +572,34 @@ function WorkspaceCanvas({
           // excludes the X so close clicks still register.
           dragConfig={{
             handle: '.workspace-tile-header',
-            cancel: '.workspace-tile-close',
+            cancel: '.workspace-tile-close, .workspace-tile-lock',
             bounded: false,
           }}
           onDragStart={onDragStart}
-          onDragStop={onInteractionStop}
+          onDragStop={onDragStop}
           onResizeStart={onResizeStart}
-          onResizeStop={onInteractionStop}
-          onLayoutChange={onLayoutChange}
+          onResizeStop={onResizeStop}
+          onLayoutChange={handleLayoutChange}
           layouts={rglLayouts}
         >
-          {tiles.map((tile) => (
-            <div key={tile.uid} data-tile-uid={tile.uid}>
-              <PanelTile
-                tile={tile}
-                layoutId={layoutId}
-                onRequestRemoveTile={onRequestRemoveTile}
-              />
-            </div>
-          ))}
+          {tiles.map((tile) => {
+            const effectiveLocked = workspaceLocked || tile.locked === true;
+            return (
+              <div
+                key={tile.uid}
+                data-tile-uid={tile.uid}
+                data-tile-locked={effectiveLocked ? 'true' : undefined}
+              >
+                <PanelTile
+                  tile={tile}
+                  layoutId={layoutId}
+                  workspaceLocked={workspaceLocked}
+                  onRequestRemoveTile={onRequestRemoveTile}
+                  onToggleTileLock={handleToggleTileLock}
+                />
+              </div>
+            );
+          })}
         </ResponsiveGridLayout>
       )}
     </div>
@@ -419,7 +609,9 @@ function WorkspaceCanvas({
 interface PanelTileProps {
   tile: WorkspaceTile;
   layoutId: string;
+  workspaceLocked: boolean;
   onRequestRemoveTile: (uid: string, title: string) => void;
+  onToggleTileLock: (uid: string, locked: boolean) => void;
 }
 
 // Memoised so a parent re-render (e.g. another tile's drag updating the
@@ -429,7 +621,9 @@ interface PanelTileProps {
 const PanelTile = memo(function PanelTile({
   tile,
   layoutId,
+  workspaceLocked,
   onRequestRemoveTile,
+  onToggleTileLock,
 }: PanelTileProps) {
   const def = getPanelDef(tile.panelId);
   if (!def) {
@@ -437,11 +631,16 @@ const PanelTile = memo(function PanelTile({
       <UnavailablePanelTile
         tile={tile}
         layoutId={layoutId}
+        workspaceLocked={workspaceLocked}
         onRequestRemoveTile={onRequestRemoveTile}
+        onToggleTileLock={onToggleTileLock}
       />
     );
   }
   const handleRemove = () => onRequestRemoveTile(tile.uid, def.name);
+  const handleToggleLock = () => onToggleTileLock(tile.uid, tile.locked !== true);
+  const tileLocked = tile.locked === true;
+  const effectiveLocked = workspaceLocked || tileLocked;
   // Headerless panels own their entire tile surface and draw their own
   // header (if any). They MUST include an element with class
   // `.workspace-tile-header` so RGL drag picks up, and a
@@ -449,16 +648,34 @@ const PanelTile = memo(function PanelTile({
   if (def.headerless) {
     return (
       <div
-        className="workspace-tile workspace-tile--headerless"
+        className={`workspace-tile workspace-tile--headerless${
+          effectiveLocked ? ' workspace-tile--locked' : ''
+        }`}
         data-panel-id={tile.panelId}
       >
-        <PanelBody tile={tile} layoutId={layoutId} onRemove={handleRemove} />
+        <PanelBody
+          tile={tile}
+          layoutId={layoutId}
+          onRemove={handleRemove}
+          tileLocked={tileLocked}
+          workspaceLocked={workspaceLocked}
+          onToggleLock={handleToggleLock}
+        />
       </div>
     );
   }
   return (
-    <div className="workspace-tile" data-panel-id={tile.panelId}>
-      <TileChrome title={def.name} onRemove={handleRemove} />
+    <div
+      className={`workspace-tile${effectiveLocked ? ' workspace-tile--locked' : ''}`}
+      data-panel-id={tile.panelId}
+    >
+      <TileChrome
+        title={def.name}
+        onRemove={handleRemove}
+        locked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={handleToggleLock}
+      />
       <div className="workspace-tile-body">
         <PanelBody tile={tile} layoutId={layoutId} />
       </div>
@@ -470,21 +687,54 @@ function PanelBody({
   tile,
   layoutId,
   onRemove,
+  tileLocked = false,
+  workspaceLocked = false,
+  onToggleLock,
 }: {
   tile: WorkspaceTile;
   layoutId: string;
   onRemove?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
 }) {
   // Per-tile config-bound rendering for multi-instance / configurable
   // panels. Single-instance panels just render their component as-is.
   if (tile.panelId === 'hero') {
-    return <HeroPanel tile={tile} layoutId={layoutId} onRemove={onRemove} />;
+    return (
+      <HeroPanel
+        tile={tile}
+        layoutId={layoutId}
+        onRemove={onRemove}
+        tileLocked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={onToggleLock}
+      />
+    );
   }
   if (tile.panelId === 'metergroup') {
-    return <MeterGroupTileBody tile={tile} layoutId={layoutId} onRemove={onRemove} />;
+    return (
+      <MeterGroupTileBody
+        tile={tile}
+        layoutId={layoutId}
+        onRemove={onRemove}
+        tileLocked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={onToggleLock}
+      />
+    );
   }
   if (tile.panelId === 'urlembed') {
-    return <UrlEmbedTileBody tile={tile} layoutId={layoutId} onRemove={onRemove} />;
+    return (
+      <UrlEmbedTileBody
+        tile={tile}
+        layoutId={layoutId}
+        onRemove={onRemove}
+        tileLocked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={onToggleLock}
+      />
+    );
   }
   const def = getPanelDef(tile.panelId);
   if (!def) return null;
@@ -493,26 +743,49 @@ function PanelBody({
   // onRemove so their close button can drop the tile (matches the meter
   // group special-case above without pulling in its per-tile config).
   if (def.headerless && onRemove) {
-    return <Component onRemove={onRemove} />;
+    return (
+      <Component
+        onRemove={onRemove}
+        tileLocked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={onToggleLock}
+      />
+    );
   }
   return <Component />;
 }
 
 function UnavailablePanelTile({
   tile,
+  workspaceLocked,
   onRequestRemoveTile,
+  onToggleTileLock,
 }: PanelTileProps) {
   const handleRemove = useCallback(
     () => onRequestRemoveTile(tile.uid, 'Unavailable panel'),
     [onRequestRemoveTile, tile.uid],
+  );
+  const handleToggleLock = useCallback(
+    () => onToggleTileLock(tile.uid, tile.locked !== true),
+    [onToggleTileLock, tile.locked, tile.uid],
   );
   const openPlugins = useCallback(() => {
     useLayoutStore.getState().setSettingsView(true, 'plugins');
   }, []);
 
   return (
-    <div className="workspace-tile workspace-tile--unavailable">
-      <TileChrome title="Unavailable panel" onRemove={handleRemove} />
+    <div
+      className={`workspace-tile workspace-tile--unavailable${
+        workspaceLocked || tile.locked ? ' workspace-tile--locked' : ''
+      }`}
+    >
+      <TileChrome
+        title="Unavailable panel"
+        onRemove={handleRemove}
+        locked={tile.locked === true}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={handleToggleLock}
+      />
       <div className="workspace-tile-body workspace-unavailable-panel">
         <div className="workspace-unavailable-panel-icon" aria-hidden>
           <Puzzle size={18} />
@@ -545,10 +818,16 @@ function MeterGroupTileBody({
   tile,
   layoutId,
   onRemove,
+  tileLocked,
+  workspaceLocked,
+  onToggleLock,
 }: {
   tile: WorkspaceTile;
   layoutId: string;
   onRemove?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
 }) {
   const updateTileInstanceConfig = useLayoutStore(
     (s) => s.updateTileInstanceConfigInLayout,
@@ -594,7 +873,14 @@ function MeterGroupTileBody({
   }, [config.widgets.length, config.direction, layoutId, updateTilePlacement]);
 
   return (
-    <MeterGroupPanel config={config} setConfig={setConfig} onRemove={onRemove} />
+    <MeterGroupPanel
+      config={config}
+      setConfig={setConfig}
+      onRemove={onRemove}
+      tileLocked={tileLocked}
+      workspaceLocked={workspaceLocked}
+      onToggleLock={onToggleLock}
+    />
   );
 }
 
@@ -602,10 +888,16 @@ function UrlEmbedTileBody({
   tile,
   layoutId,
   onRemove,
+  tileLocked,
+  workspaceLocked,
+  onToggleLock,
 }: {
   tile: WorkspaceTile;
   layoutId: string;
   onRemove?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
 }) {
   const updateTileInstanceConfig = useLayoutStore(
     (s) => s.updateTileInstanceConfigInLayout,
@@ -622,6 +914,13 @@ function UrlEmbedTileBody({
   );
 
   return (
-    <UrlEmbedPanel config={config} setConfig={setConfig} onRemove={onRemove} />
+    <UrlEmbedPanel
+      config={config}
+      setConfig={setConfig}
+      onRemove={onRemove}
+      tileLocked={tileLocked}
+      workspaceLocked={workspaceLocked}
+      onToggleLock={onToggleLock}
+    />
   );
 }

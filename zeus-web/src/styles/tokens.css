@@ -200,6 +200,38 @@
   --panel-bot:    var(--bg-1);
   --panel-edge:   var(--line);
   --panel-shadow: none;
+
+  /* ===== Liquid-metal meter kit (KB2UKA) =================================
+     Bespoke instrument treatment for every meter: a machined chrome bezel, a
+     domed glass with a traveling caustic, a recessed well, and a quicksilver
+     (mercury) fill. METER-SCOPED — all derived from the existing near-black
+     surfaces + white/cool speculars, NOT a global palette change. Consumed by
+     components/meters/render/. ===================================== */
+  /* recessed well — concave machined pocket */
+  --meter-well-floor:  #050608;
+  --meter-well-edge:   #1b1d23;
+  /* domed glass + specular sheen */
+  --meter-glass-dome:  rgba(255,255,255,0.30);
+  --meter-glass-top:   rgba(255,255,255,0.13);
+  --meter-glass-bot:   rgba(255,255,255,0.00);
+  --meter-sheen:       rgba(255,255,255,0.04);
+  --meter-sheen-soft:  rgba(255,255,255,0.00);
+  /* traveling caustic — wet-light highlight gliding across the glass */
+  --meter-caustic:     rgba(176,210,255,0.022);
+  --meter-caustic-soft:rgba(176,210,255,0.00);
+  /* machined chrome bezel — warm key edge (TL) → mid sweep → deep shadow (BR) */
+  --meter-bezel-hi:    rgba(255,251,242,0.62);
+  --meter-bezel-mid:   rgba(150,156,170,0.28);
+  --meter-bezel-lo:    #070809;
+  --meter-bezel-ring:  rgba(255,255,255,0.12);
+  --meter-bezel-hi-sm: rgba(255,251,242,0.46);
+  /* quicksilver / mercury fill — reflective liquid-metal volume shading */
+  --meter-fill-base:   rgba(0,0,0,0.55);
+  --meter-fill-hot:    rgba(255,255,255,0.20);
+  --meter-mercury-hi:  rgba(255,255,255,0.58);
+  --meter-mercury-lo:  rgba(120,130,150,0.10);
+  /* outer instrument bloom (cool, very faint) */
+  --gauge-glow:        rgba(120,150,210,0.10);
 }
 
 /* Font swapping via [data-fonts] — v3 Lifted Dark defaults to Inter */

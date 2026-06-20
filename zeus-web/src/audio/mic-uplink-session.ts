@@ -13,6 +13,7 @@ import { startMicUplink, type MicUplinkHandle } from './mic-uplink';
 import { useMicUplinkDiagnosticsStore } from './mic-uplink-diagnostics-store';
 import { createMicUplinkAutoGain } from './mic-uplink-gain';
 import { sendMicPcm } from '../realtime/ws-client';
+import { useAudioDeviceStore } from '../state/audio-device-store';
 import { useTxStore } from '../state/tx-store';
 import { warnOnce } from '../util/logger';
 
@@ -91,7 +92,8 @@ export async function ensureMicUplinkRunning(): Promise<boolean> {
   }
 
   if (!starting) {
-    starting = startMicUplink(onMicBlock)
+    const inputDeviceId = useAudioDeviceStore.getState().browserInputDeviceId || undefined;
+    starting = startMicUplink(onMicBlock, inputDeviceId)
       .then((h) => {
         handle = h;
         useTxStore.getState().setMicError(null);
@@ -115,6 +117,15 @@ export async function ensureMicUplinkRunning(): Promise<boolean> {
   return handle !== null;
 }
 
+export async function restartMicUplinkRunning(): Promise<void> {
+  const shouldRestart = consumers > 0;
+  if (starting) {
+    try { await starting; } catch { /* ensureMicUplinkRunning owns visible errors */ }
+  }
+  await stopMicUplinkRunning();
+  if (shouldRestart) await ensureMicUplinkRunning();
+}
+
 export async function stopMicUplinkRunning(): Promise<void> {
   const h = handle;
   handle = null;
@@ -128,4 +139,23 @@ export async function stopMicUplinkRunning(): Promise<void> {
 
 export function isMicUplinkRunning(): boolean {
   return handle !== null;
+}
+
+/** Geometry of the live mic spectrum tap, or null when no tap is available. */
+export function getMicSpectrumInfo(): { binCount: number; fftSize: number; sampleRate: number } | null {
+  if (!handle?.getSpectrum || !handle.spectrumBinCount) return null;
+  return {
+    binCount: handle.spectrumBinCount,
+    fftSize: handle.spectrumFftSize ?? handle.spectrumBinCount * 2,
+    sampleRate: handle.spectrumSampleRate ?? 48000,
+  };
+}
+
+/**
+ * Fill `out` (length must equal the current bin count) with the latest mic FFT
+ * magnitudes in dBFS. Returns false when no live analyser is running — e.g.
+ * desktop/native audio mode, or before the operator has granted the mic.
+ */
+export function getMicSpectrum(out: Float32Array): boolean {
+  return handle?.getSpectrum?.(out) ?? false;
 }

@@ -1,0 +1,107 @@
+name: Publish Website Downloads
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-downloads-main
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build main installers
+    uses: ./.github/workflows/release.yml
+    with:
+      mode: download-main
+      ref: main
+    secrets: inherit
+    permissions:
+      contents: read
+
+  publish:
+    name: Publish to downloads.openhpsdrzeus.com
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      DOWNLOAD_BASE_URL: https://downloads.openhpsdrzeus.com
+      ZEUS_DOWNLOAD_VERSION: ${{ needs.build.outputs.version }}
+      ZEUS_DOWNLOAD_CHANNEL: main
+      ZEUS_DOWNLOAD_BRANCH: main
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Display artifact structure
+        run: find release-artifacts -maxdepth 3 -type f -print | sort
+
+      - name: Fetch current download manifest
+        run: |
+          if ! curl -fsSL "$DOWNLOAD_BASE_URL/manifest.json" -o existing-manifest.json; then
+            printf '{ "schema": 1, "updatedAt": null, "latest": null, "versions": [] }\n' > existing-manifest.json
+          fi
+
+      - name: Generate download manifest
+        run: node tools/update-download-manifest.mjs release-artifacts existing-manifest.json manifest.json
+
+      - name: Upload installers to R2
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            name="$(basename "$file")"
+            key="versions/${ZEUS_DOWNLOAD_VERSION}/${name}"
+            case "$name" in
+              *.exe) content_type="application/vnd.microsoft.portable-executable" ;;
+              *.dmg) content_type="application/x-apple-diskimage" ;;
+              *.tar.gz) content_type="application/gzip" ;;
+              *.AppImage) content_type="application/octet-stream" ;;
+              *) content_type="application/octet-stream" ;;
+            esac
+            npx --yes wrangler@4.103.0 r2 object put "openhpsdrzeus-downloads/${key}" \
+              --file "$file" \
+              --content-type "$content_type" \
+              --remote
+          done < <(find release-artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.tar.gz' -o -name '*.AppImage' \) -print0)
+
+      - name: Upload manifests to R2
+        run: |
+          npx --yes wrangler@4.103.0 r2 object put openhpsdrzeus-downloads/manifest.json \
+            --file manifest.json \
+            --content-type application/json \
+            --remote
+          npx --yes wrangler@4.103.0 r2 object put openhpsdrzeus-downloads/latest.json \
+            --file latest.json \
+            --content-type application/json \
+            --remote
+          npx --yes wrangler@4.103.0 r2 object put "openhpsdrzeus-downloads/versions/${ZEUS_DOWNLOAD_VERSION}/manifest.json" \
+            --file latest.json \
+            --content-type application/json \
+            --remote
+
+      - name: Verify public manifest
+        run: |
+          curl -fsSL "$DOWNLOAD_BASE_URL/manifest.json" | node -e "
+          const chunks = [];
+          process.stdin.on('data', c => chunks.push(c));
+          process.stdin.on('end', () => {
+            const manifest = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            if (manifest.latest !== process.env.ZEUS_DOWNLOAD_VERSION) {
+              throw new Error(`latest mismatch: ${manifest.latest} !== ${process.env.ZEUS_DOWNLOAD_VERSION}`);
+            }
+            console.log(`Published ${manifest.latest} with ${manifest.versions[0].assets.length} assets`);
+          });
+          "

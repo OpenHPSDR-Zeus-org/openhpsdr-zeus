@@ -4,6 +4,8 @@
 
 Zeus is a cross-platform, web-frontend HPSDR client for original-protocol (Protocol 1) radios — Hermes, Mercury/Penelope/Metis, ANAN-class boards, and similar. It replaces the Windows-only **Thetis** client with a .NET 10 backend (`Zeus.Server`) and a Vite + React frontend, keeping **WDSP** as the DSP engine via P/Invoke.
 
+**Cross-platform is a hard requirement: all code MUST work on every platform Zeus runs on** — macOS, Windows, Linux (x64 + arm64), and Raspberry Pi. Do not ship platform-specific breakage: watch native/WDSP loading, file paths, clocks/timers, file/DB I/O (LiteDB), and line endings. CI runs macOS/Windows/Linux on every PR — a change isn't done until it's green on all of them.
+
 **Reference implementation:** Thetis (C# / WinForms). This is the *sole* authoritative source for protocol and DSP behavior.
 
 ## Autonomous-Agent Boundaries
@@ -15,6 +17,38 @@ AI agents opening PRs against this repo may autonomously fix:
 - **Build / CI fixes** — missing NuGet refs, csproj typos, dotnet version bumps, workflow YAML breakage, Vite / npm config fixes
 - **Protocol / WDSP compliance fixes** — where the Zeus behavior diverges from Thetis and Thetis source confirms Zeus is wrong. *Exception:* if the fix changes a default that an operator will feel (TX power cap, filter bandwidth, AGC curve, meter scaling), that is red-light — see below.
 - **Docs and lessons updates** — additions to `docs/lessons/`, `docs/rca/`, `README.md`. Renames and restructuring are red-light. **README scope:** `README.md` stays tight — one-line radio status per board and a high-level feature list only. Extensive feature write-ups, per-panel guides, and step-by-step how-tos belong in the [GitHub wiki](https://github.com/Kb2uka/openhpsdr-zeus/wiki), not the README.
+
+## Hard Rules — PureSignal (KB2UKA standing orders)
+
+**PureSignal is a burn-zone subsystem. No change to PureSignal logic, persistence,
+arm/disarm behaviour, or calibration defaults is permitted without explicit approval
+from KB2UKA (Douglas J. Cerrato). This is a hard rule — not red-light, not a flag,
+a full stop.**
+
+What this covers — any modification (however small) to:
+- `PureSignal` arm state (`PsEnabled`) persistence or startup initialisation
+- `PsSettingsStore`, `PsSettingsEntry`, or any LiteDB field that feeds `PsEnabled`
+- `RadioService.PersistPsState`, `ApplyPsHwPeakForConnection`, or the PS startup
+  rehydration path in `RadioService` initial state
+- The PS-A master arm endpoints (`/api/tx/ps`) or their StateDto wiring
+- `HwPeakByBoard` / `TxAttnByBoard` default values or per-board resolution logic
+- Any change that causes PureSignal to arm automatically without an explicit
+  operator action
+
+**Why it matters:** Zeus runs against real HF power amplifiers. An inadvertently
+armed PureSignal on an external-tap feedback chain (e.g. G2 + RF2K-S) can
+saturate the feedback ADC before the operator has made any transmit decision.
+The no-persist rule on PsEnabled (established in PR #229, re-broken in d4247284)
+exists specifically to prevent silent auto-arm on restart.
+
+**Standing invariant:** `PsEnabled` MUST always initialise to `false` on server
+startup, regardless of what is stored on disk. The operator arms PS manually,
+every session, no exceptions. This is not a UX convenience trade-off — it is a
+safety rule.
+
+If you believe a PureSignal change is necessary, stop, open a GitHub issue
+describing the rationale, and wait for KB2UKA to approve the approach before
+writing a single line of code.
 
 **Red-light (flag for maintainer review, do NOT merge without approval):**
 - **Visual design** — colors, fonts, layout, spacing, typography. The Zeus aesthetic is faithful to the **Hermes Lite 2 hardware front panel**: near-black beveled panel chrome (`--panel-top`/`--panel-bot` gradient) on a blue-gray workspace (`--bg-app` `#657486`), Archivo Narrow type, and a restrained accent system — `--accent` blue `#4a9eff` for focus/state, `--tx` red `#e63a2b` for TX/gain-reduction, `--power` yellow `#ffc93a` for output power, `--orange` `#f28524` reserved for the QRZ button. The single-hue amber `#FFA028` is the **panadapter WebGL trace + meter peak-tick** color (signal-strength visualization, varying alpha — see `gl/panadapter.ts` and `docs/lessons/dev-conventions.md`); it is not a global UI accent and must not be applied to chrome, buttons, or controls. **Source of truth for the global palette is `zeus-web/src/styles/tokens.css`.** Use the existing token variables, never raw hex. Do not propose palette changes.
@@ -148,29 +182,11 @@ bd close <id>         # Complete work
 
 ## Beads — Team Sync (Zeus-specific)
 
-The auto-generated block above mentions `refs/dolt/data` on the git remote as the default sync path. **Zeus does NOT use that.** Zeus syncs its bd Dolt database to a dedicated public DoltHub repo:
-
-> **DoltHub:** https://www.dolthub.com/repositories/kb2uka/openhpsdr-zeus
-
-### One-time teammate setup
-
-```bash
-dolt login                                                                   # browser flow → associate a key
-bd dolt remote add origin https://doltremoteapi.dolthub.com/kb2uka/openhpsdr-zeus
-bd dolt pull origin main                                                     # fetch the team's issues
-```
-
-### Day-to-day
-
-```bash
-bd dolt pull origin main      # before starting work
-# ... bd create / bd update / bd close ...
-bd dolt push origin main      # after edits, before signing off
-```
-
-### What's tracked in git vs. DoltHub
-
-- **`.beads/config.yaml`** (in git) — team-wide bd config including `sync.remote`. Edit here for team-wide defaults.
-- **`.beads/issues.jsonl`** / **`interactions.jsonl`** (in git) — passive exports for human grep and zero-dependency reading. **Do not edit by hand** — bd regenerates them. **Do not commit them inside a feature-branch PR** — the merge-conflict tax is real once more than one person uses bd. Snapshot commits to `develop` are fine.
-- **`.beads/metadata.json`** (gitignored) — per-clone `project_id` + local `dolt_database` name. Local state, never committed.
-- **`.beads/embeddeddolt/`** (gitignored) — the actual Dolt DB. Never committed; this is what `bd dolt push` ships.
+Zeus syncs the bd Dolt DB through the GitHub repo remote using bd's
+`refs/dolt/data` storage. Do not re-point the bd `origin` remote at DoltHub
+for normal agent work; DoltHub API remotes require separate DoltHub
+credentials and fail with `PermissionDenied` on GitHub-authenticated machines.
+The one-time setup, repair command for stale DoltHub remotes, day-to-day
+`bd dolt pull/push --remote origin` loop, and git-vs-Dolt tracking rules live
+in **[`.beads/README.md`](.beads/README.md) → "Zeus team sync"**. Read it
+before your first `bd dolt push`.

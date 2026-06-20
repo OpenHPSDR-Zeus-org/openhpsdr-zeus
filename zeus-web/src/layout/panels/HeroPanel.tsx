@@ -54,8 +54,10 @@ import { LeafletWorldMap } from '../../components/design/LeafletWorldMap';
 import { LeafletMapErrorBoundary } from '../../components/design/LeafletMapErrorBoundary';
 import { setRx2, type Rx2AudioMode } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
+import { useTxStore } from '../../state/tx-store';
 import { useRotatorStore } from '../../state/rotator-store';
 import { useLayoutStore } from '../../state/layout-store';
+import { TileLockButton } from '../TileChrome';
 import {
   clampSplit,
   mergeInstanceSplit,
@@ -71,6 +73,9 @@ interface HeroPanelProps {
   onRemove?: () => void;
   tile?: WorkspaceTile;
   layoutId?: string;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
 }
 
 const RX_AUDIO_MODES: readonly { mode: Rx2AudioMode; label: string; title: string }[] = [
@@ -86,7 +91,14 @@ const RX_AUDIO_MODES: readonly { mode: Rx2AudioMode; label: string; title: strin
 // the ⌥ map-mode hint, the HZ/PX readout, and the close X. Interactive
 // controls inside stop mousedown propagation so a click on a chip / slider /
 // input doesn't initiate a tile drag (mirrors the MetersPanel pattern).
-export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
+export function HeroPanel({
+  onRemove,
+  tile,
+  layoutId,
+  tileLocked = false,
+  workspaceLocked = false,
+  onToggleLock,
+}: HeroPanelProps = {}) {
   const {
     terminatorActive,
     imageMode,
@@ -116,6 +128,9 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
   const rx2AudioMode = useConnectionStore((s) => s.rx2AudioMode);
   const rxFocus = useConnectionStore((s) => s.rxFocus);
   const setRxFocus = useConnectionStore((s) => s.setRxFocus);
+  // During TX the waterfall region shows the live transmitted spectrum
+  // (WDSP TX analyzer pixels, streamed by the server while keyed).
+  const keyed = useTxStore((s) => s.moxOn || s.tunOn);
   const updateTileInstanceConfig = useLayoutStore(
     (s) => s.updateTileInstanceConfigInLayout,
   );
@@ -246,7 +261,11 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
         <span
           className="workspace-tile-drag-handle"
           aria-hidden="true"
-          title="Drag to reposition"
+          title={
+            tileLocked || workspaceLocked
+              ? 'Panel position is locked'
+              : 'Drag to reposition'
+          }
         >
           <GripVertical size={12} />
         </span>
@@ -351,6 +370,13 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
             </span>
           )}
         </div>
+        {onToggleLock ? (
+          <TileLockButton
+            locked={tileLocked}
+            workspaceLocked={workspaceLocked}
+            onToggleLock={onToggleLock}
+          />
+        ) : null}
         {onRemove ? (
           <button
             type="button"
@@ -457,7 +483,17 @@ export function HeroPanel({ onRemove, tile, layoutId }: HeroPanelProps = {}) {
             onPointerDown={onSplitterPointerDown}
           />
           {connected && (
-            rx2Enabled ? (
+            keyed ? (
+              // On TX both receivers transmit the same audio, and the server
+              // feeds the WDSP TX analyzer's pixels into the main display
+              // stream while keyed (DspPipelineService, issue #81). So a single
+              // full-width waterfall shows the live transmitted spectrum
+              // scrolling — paired with the panadapter above (also TX while
+              // keyed) it forms a real TX panafall. The TX dB window
+              // (wfTxDbMin/Max) and the left-edge WfDbScale drag let the
+              // operator set the in-passband brightness independently of RX.
+              <WaterfallSurface transparent={bgActive} />
+            ) : rx2Enabled ? (
               <div style={stitchedGridStyle}>
                 <div style={{ minWidth: 0, minHeight: 0 }}>
                   <WaterfallSurface

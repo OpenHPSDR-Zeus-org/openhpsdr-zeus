@@ -3060,7 +3060,7 @@ public sealed class HardwareDiagnosticsService : IHostedService, IDisposable
                 "/api/rx-audio-suite/processing-mode",
                 "/api/audio-suite/chain/meters",
                 "/api/tx/fidelity-policy",
-                "/api/tx/station-profiles",
+                "/api/tx-audio-profiles",
                 "/api/tx/ps/feedback-source",
                 "/api/tx/ps/feedback-attenuation",
                 "/api/tx/ps/monitor",

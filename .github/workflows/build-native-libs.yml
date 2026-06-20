@@ -356,6 +356,81 @@ jobs:
           # files land in the artifact alongside libwdsp.so.
           path: Zeus.Dsp/runtimes/linux-${{ matrix.arch }}/native/
 
+  build-macos:
+    name: Build macOS Native Libraries
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          # fftw bottle ships both fftw3 (double, for WDSP) and fftw3f
+          # (single, for libspecbleach / NR4). cmake is preinstalled on
+          # macos-14 but brew keeps this aligned with release.yml.
+          brew install fftw cmake
+
+      - name: Configure CMake
+        run: |
+          cmake -S native/wdsp -B native/build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DWDSP_WITH_NR3=OFF \
+            -DWDSP_WITH_NR4=ON
+
+      - name: Build
+        run: cmake --build native/build --config Release --parallel
+
+      - name: Verify SBNR exports
+        run: |
+          # macOS nm prefixes C symbols with an underscore.
+          count=$(nm -gU native/build/libwdsp.dylib | grep -c "_SetRXASBNR" || true)
+          echo "Found $count _SetRXASBNR* exports"
+          if [ "$count" -ne 8 ]; then
+            echo "ERROR: Expected 8 _SetRXASBNR* exports, got $count. NR4 did not link correctly."
+            exit 1
+          fi
+
+      - name: Stage dylib + bundled FFTW
+        run: |
+          set -eux
+          destDir="Zeus.Dsp/runtimes/osx-arm64/native"
+          mkdir -p "$destDir"
+          cp native/build/libwdsp.dylib "$destDir/libwdsp.dylib"
+
+          fftw_lib="$(brew --prefix fftw)/lib"
+          cp "${fftw_lib}/libfftw3.3.dylib"  "$destDir/libfftw3.3.dylib"
+          cp "${fftw_lib}/libfftw3f.3.dylib" "$destDir/libfftw3f.3.dylib"
+
+          install_name_tool \
+            -change "${fftw_lib}/libfftw3.3.dylib"  @loader_path/libfftw3.3.dylib \
+            -change "${fftw_lib}/libfftw3f.3.dylib" @loader_path/libfftw3f.3.dylib \
+            "$destDir/libwdsp.dylib"
+
+          if otool -L "$destDir/libwdsp.dylib" | grep -q '/opt/homebrew'; then
+            echo "ERROR: Homebrew absolute paths still present after install_name_tool rewrite"
+            otool -L "$destDir/libwdsp.dylib"
+            exit 1
+          fi
+          otool -L "$destDir/libwdsp.dylib"
+
+      # ---------- miniaudio (desktop-mode RX sink + TX mic capture) -------
+      #
+      # Pure C, CoreAudio backend. macOS frameworks (CoreAudio /
+      # AudioToolbox / AudioUnit / CoreFoundation) come from the SDK that
+      # ships with Xcode CLT on macos-14.
+      - name: Build & stage miniaudio
+        run: |
+          set -eux
+          cmake -S native/miniaudio -B native/build-miniaudio -DCMAKE_BUILD_TYPE=Release
+          cmake --build native/build-miniaudio --config Release --parallel
+          cp native/build-miniaudio/libminiaudio.dylib Zeus.Dsp/runtimes/osx-arm64/native/libminiaudio.dylib
+          otool -L Zeus.Dsp/runtimes/osx-arm64/native/libminiaudio.dylib
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wdsp-osx-arm64
+          path: Zeus.Dsp/runtimes/osx-arm64/native/
+
   # ---------- zeus-vst-bridge (in-process VST3 host) ------------------
   #
   # The bridge hosts VST3 plugins via Steinberg's MIT-licensed vst3sdk,

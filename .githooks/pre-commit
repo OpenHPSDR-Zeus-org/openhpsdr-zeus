@@ -35,3 +35,14 @@ if ! is_expected_identity "$committer_ident"; then
   echo "  $expected_handle" >&2
   exit 1
 fi
+
+branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+case "$branch" in
+  main|develop)
+    if [ "${ZEUS_ALLOW_PROTECTED_BRANCH_COMMIT:-}" != "1" ]; then
+      echo "Refusing commit on protected branch '$branch'." >&2
+      echo "Start scoped work with: pwsh scripts/start-work.ps1 feature '<short name>'" >&2
+      exit 1
+    fi
+    ;;
+esac

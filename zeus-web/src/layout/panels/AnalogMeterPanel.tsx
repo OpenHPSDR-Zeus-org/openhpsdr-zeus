@@ -10,7 +10,20 @@
 // is the `.workspace-tile-close` element wired to the injected onRemove.
 
 import { AnalogMeterPanel as AnalogMeterTile } from '../../components/analog-meter/AnalogMeterPanel';
+import type { PanelComponentProps } from '../panels';
 
-export function AnalogMeterPanel({ onRemove }: { onRemove?: () => void }) {
-  return <AnalogMeterTile onClose={onRemove} />;
+export function AnalogMeterPanel({
+  onRemove,
+  tileLocked,
+  workspaceLocked,
+  onToggleLock,
+}: PanelComponentProps) {
+  return (
+    <AnalogMeterTile
+      onClose={onRemove}
+      tileLocked={tileLocked}
+      workspaceLocked={workspaceLocked}
+      onToggleLock={onToggleLock}
+    />
+  );
 }

@@ -90,6 +90,9 @@ public class TxAudioIngestTests
         public void SetVfoHz(int channelId, long vfoHz) { }
         public void SetCtunShift(int channelId, int shiftHz) { }
         public void SetAgcTop(int channelId, double topDb) { }
+        public void SetAgcThresh(int channelId, double threshDbm) { }
+        public double GetAgcTop(int channelId) => 0.0;
+        public double GetAgcThresh(int channelId) => 0.0;
         public void SetAgc(int channelId, AgcConfig cfg) { }
         public void SetSquelch(int channelId, SquelchConfig cfg) { }
         public void SetTxLeveling(int channelId, TxLevelingConfig cfg) { }
@@ -102,6 +105,7 @@ public class TxAudioIngestTests
         public int ReadAudio(int channelId, Span<float> output) => 0;
         public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;
         public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
+        public void ConfigureTxDisplayAnalyzer(int fftSize, int windowType, double avgTauSec) { }
         public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
         public int OpenTxChannel(int outputRateHz = 48_000) => 0;
         public void SetMox(bool moxOn) { }

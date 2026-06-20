@@ -60,6 +60,12 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
     let mouseY = 0;
     let visible = false;
     let raf = 0;
+    // Reading offsetWidth/Height forces a synchronous layout. The readout pill
+    // only resizes when its text changes, so cache the dims and re-measure only
+    // on a digit change instead of every animation frame.
+    let lastReadoutText = '';
+    let cachedLw = 0;
+    let cachedLh = 0;
 
     const apply = () => {
       raf = 0;
@@ -132,12 +138,18 @@ export function FilterCursorOverlay({ containerRef, receiver = 'A' }: FilterCurs
       const readout = readoutRef.current;
       if (readout) {
         if (tuneHz !== null) {
-          readout.textContent = formatTuneHz(tuneHz);
+          const text = formatTuneHz(tuneHz);
           readout.style.display = '';
+          if (text !== lastReadoutText) {
+            readout.textContent = text;
+            lastReadoutText = text;
+            cachedLw = readout.offsetWidth;
+            cachedLh = readout.offsetHeight;
+          }
           // Edge-aware placement: nudge the pill to the cursor, flip side near
           // the right edge, and keep it clear of the top/bottom rails.
-          const lw = readout.offsetWidth;
-          const lh = readout.offsetHeight;
+          const lw = cachedLw;
+          const lh = cachedLh;
           let lx = cursorX + 12;
           if (lx + lw > rectW - 4) lx = cursorX - 12 - lw;
           lx = Math.max(4, Math.min(lx, rectW - lw - 4));

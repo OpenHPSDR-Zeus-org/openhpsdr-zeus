@@ -24,6 +24,7 @@ import {
   type FormEvent,
 } from 'react';
 import { GripVertical, ArrowRight, ExternalLink, X, Globe } from 'lucide-react';
+import { TileLockButton } from '../TileChrome';
 import {
   EMPTY_URL_EMBED_CONFIG,
   normalizeEmbedUrl,
@@ -38,6 +39,9 @@ interface UrlEmbedPanelProps {
   setConfig?: (next: UrlEmbedConfig) => void;
   /** Drop this tile (injected for headerless panels). */
   onRemove?: () => void;
+  tileLocked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
 }
 
 // External pages run in their own origin so they can't reach the Zeus
@@ -50,6 +54,9 @@ export function UrlEmbedPanel({
   config = EMPTY_URL_EMBED_CONFIG,
   setConfig,
   onRemove,
+  tileLocked = false,
+  workspaceLocked = false,
+  onToggleLock,
 }: UrlEmbedPanelProps) {
   const committedUrl = config.url;
   const [draft, setDraft] = useState(committedUrl);
@@ -90,7 +97,11 @@ export function UrlEmbedPanel({
         <span
           className="workspace-tile-drag-handle"
           aria-hidden="true"
-          title="Drag to reposition"
+          title={
+            tileLocked || workspaceLocked
+              ? 'Panel position is locked'
+              : 'Drag to reposition'
+          }
         >
           <GripVertical size={12} />
         </span>
@@ -138,6 +149,13 @@ export function UrlEmbedPanel({
           >
             <ExternalLink size={13} />
           </a>
+        ) : null}
+        {onToggleLock ? (
+          <TileLockButton
+            locked={tileLocked}
+            workspaceLocked={workspaceLocked}
+            onToggleLock={onToggleLock}
+          />
         ) : null}
         <button
           type="button"

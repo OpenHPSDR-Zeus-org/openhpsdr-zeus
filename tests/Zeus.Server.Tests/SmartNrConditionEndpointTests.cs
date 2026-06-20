@@ -222,6 +222,10 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Contains(root.GetProperty("status").GetString(), new[]
         {
             "dsp-engine-unavailable",
+            // On Linux/CI without FFTW, libwdsp.so can't load and the
+            // diagnostics correctly report this — a legitimate non-ready
+            // status the allow-list was simply missing.
+            "wdsp-native-unloadable",
             "frontend-scene-missing",
             "smart-nr-runtime-misaligned",
             "smart-nr-apply-pending",
@@ -649,15 +653,7 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Contains("/api/dsp/modernization-snapshot.missingEvidence", telemetry);
     }
 
-    private sealed class Factory : WebApplicationFactory<Program>
+    private sealed class Factory : IsolatedPrefsFactory
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.UseEnvironment("Test");
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IHostedService>();
-            });
-        }
     }
 }

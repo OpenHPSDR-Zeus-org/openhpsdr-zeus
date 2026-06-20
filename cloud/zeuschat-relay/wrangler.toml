@@ -1,0 +1,43 @@
+name = "zeuschat-relay"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+
+# Branded custom domain (Cloudflare auto-creates the DNS record on deploy).
+# Requires the openhpsdrzeus.com zone to live on this Cloudflare account.
+# chat.openhpsdrzeus.com is the canonical relay endpoint (Zeus default).
+routes = [
+  { pattern = "chat.openhpsdrzeus.com", custom_domain = true },
+]
+
+# Keep the *.workers.dev URL alive too, as a fallback endpoint.
+workers_dev = true
+
+# QRZ-login enforcement is on by default. For local `wrangler dev`, override
+# with: wrangler dev --var QRZ_VERIFY:off
+[vars]
+QRZ_VERIFY = "on"
+
+# Chat room Durable Object (WebSocket Hibernation).
+[[durable_objects.bindings]]
+name = "CHAT_ROOM"
+class_name = "ChatRoom"
+
+# Per-IP connection rate limiter Durable Object (protects the QRZ-verify path
+# from connection-spam; 30 attempts / 60s / IP).
+[[durable_objects.bindings]]
+name = "RATE_DO"
+class_name = "RateLimiter"
+
+# SQLite-backed DO namespaces (free-plan compatible).
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ChatRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["RateLimiter"]
+
+# RELAY_SHARED_SECRET is NOT set here. Provide it out-of-band so it stays out
+# of source control:
+#   wrangler secret put RELAY_SHARED_SECRET
+# Leave unset for local `wrangler dev` (open, no auth).

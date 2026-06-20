@@ -145,6 +145,24 @@ interface LayoutState {
     uid: string,
     layout: Pick<WorkspaceTile, 'x' | 'y' | 'w' | 'h'>,
   ) => void;
+  /** Replace multiple tile grid placements in a specific layout atomically. */
+  updateTilePlacementsInLayout: (
+    layoutId: string,
+    placements: Array<
+      Pick<WorkspaceTile, 'uid' | 'x' | 'y' | 'w' | 'h'>
+    >,
+  ) => void;
+  /** Toggle whether every tile in a layout is pinned in place. */
+  setWorkspaceLockedInLayout: (layoutId: string, locked: boolean) => void;
+  /** Toggle whether one tile is pinned to its current grid space. When locking,
+   *  `lockedHeightPx` is the tile's current on-screen pixel height, captured so
+   *  the tile can be held at exactly that size while the workspace reflows. */
+  setTileLockedInLayout: (
+    layoutId: string,
+    uid: string,
+    locked: boolean,
+    lockedHeightPx?: number,
+  ) => void;
   /** Replace a tile's instanceConfig blob. */
   updateTileInstanceConfig: (uid: string, instanceConfig: unknown) => void;
   /** Replace a tile's instanceConfig blob in a specific layout. */
@@ -453,9 +471,11 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     const workspace = layoutId === get().activeLayoutId
       ? get().workspace
       : parseLayoutOrDefault(target!.layoutJson);
+    if (workspace.locked) return;
     let changed = false;
     const tiles = workspace.tiles.map((t) => {
       if (t.uid !== uid) return t;
+      if (t.locked) return t;
       if (
         t.x === layout.x &&
         t.y === layout.y &&
@@ -466,6 +486,67 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       }
       changed = true;
       return { ...t, ...layout };
+    });
+    if (!changed) return;
+    applyWorkspaceMutationForLayout(set, get, layoutId, { ...workspace, tiles });
+  },
+
+  updateTilePlacementsInLayout: (layoutId, placements) => {
+    const target = findActive(get().layouts, layoutId);
+    if (!target && layoutId !== get().activeLayoutId) return;
+    if (placements.length === 0) return;
+    const workspace = layoutId === get().activeLayoutId
+      ? get().workspace
+      : parseLayoutOrDefault(target!.layoutJson);
+    if (workspace.locked) return;
+    const nextPlacements = new Map(
+      placements.map((p) => [
+        p.uid,
+        { x: p.x, y: p.y, w: p.w, h: p.h },
+      ]),
+    );
+    let changed = false;
+    const tiles = workspace.tiles.map((t) => {
+      const next = nextPlacements.get(t.uid);
+      if (!next) return t;
+      if (t.locked) return t;
+      if (
+        t.x === next.x &&
+        t.y === next.y &&
+        t.w === next.w &&
+        t.h === next.h
+      ) {
+        return t;
+      }
+      changed = true;
+      return { ...t, ...next };
+    });
+    if (!changed) return;
+    applyWorkspaceMutationForLayout(set, get, layoutId, { ...workspace, tiles });
+  },
+
+  setWorkspaceLockedInLayout: (layoutId, locked) => {
+    const target = findActive(get().layouts, layoutId);
+    if (!target && layoutId !== get().activeLayoutId) return;
+    const workspace = layoutId === get().activeLayoutId
+      ? get().workspace
+      : parseLayoutOrDefault(target!.layoutJson);
+    if ((workspace.locked === true) === locked) return;
+    applyWorkspaceMutationForLayout(set, get, layoutId, withWorkspaceLocked(workspace, locked));
+  },
+
+  setTileLockedInLayout: (layoutId, uid, locked, lockedHeightPx) => {
+    const target = findActive(get().layouts, layoutId);
+    if (!target && layoutId !== get().activeLayoutId) return;
+    const workspace = layoutId === get().activeLayoutId
+      ? get().workspace
+      : parseLayoutOrDefault(target!.layoutJson);
+    let changed = false;
+    const tiles = workspace.tiles.map((t) => {
+      if (t.uid !== uid) return t;
+      if ((t.locked === true) === locked) return t;
+      changed = true;
+      return withTileLocked(t, locked, lockedHeightPx);
     });
     if (!changed) return;
     applyWorkspaceMutationForLayout(set, get, layoutId, { ...workspace, tiles });
@@ -514,6 +595,36 @@ function applyWorkspaceMutationForLayout(
     // Test / unhydrated state — just update workspace.
     set({ workspace: next });
   }
+}
+
+function withWorkspaceLocked(
+  workspace: WorkspaceLayout,
+  locked: boolean,
+): WorkspaceLayout {
+  if (locked) return { ...workspace, locked: true };
+  const next = { ...workspace };
+  delete next.locked;
+  return next;
+}
+
+function withTileLocked(
+  tile: WorkspaceTile,
+  locked: boolean,
+  lockedHeightPx?: number,
+): WorkspaceTile {
+  if (locked) {
+    const next: WorkspaceTile = { ...tile, locked: true };
+    if (typeof lockedHeightPx === 'number' && lockedHeightPx > 0) {
+      next.lockedHeightPx = lockedHeightPx;
+    } else {
+      delete next.lockedHeightPx;
+    }
+    return next;
+  }
+  const next = { ...tile };
+  delete next.locked;
+  delete next.lockedHeightPx;
+  return next;
 }
 
 function saveKey(radioKey: string, layoutId: string): string {

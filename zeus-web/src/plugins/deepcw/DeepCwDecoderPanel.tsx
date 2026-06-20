@@ -25,7 +25,12 @@ const STATE_LABEL: Record<DeepCwState, string> = {
   held: 'HELD',
 };
 
-export function DeepCwDecoderPanel({ onRemove }: PanelComponentProps) {
+export function DeepCwDecoderPanel({
+  onRemove,
+  tileLocked,
+  workspaceLocked,
+  onToggleLock,
+}: PanelComponentProps) {
   const {
     state,
     text,
@@ -69,6 +74,9 @@ export function DeepCwDecoderPanel({ onRemove }: PanelComponentProps) {
       <TileChrome
         title="CW Decoder · DeepCW"
         onRemove={handleRemove}
+        locked={tileLocked}
+        workspaceLocked={workspaceLocked}
+        onToggleLock={onToggleLock}
         rightSlot={
           <button
             type="button"

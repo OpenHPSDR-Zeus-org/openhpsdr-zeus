@@ -24,7 +24,7 @@ public sealed class PsEndpointPersistenceTests : IDisposable
     }
 
     [Fact]
-    public async Task PostPsArm_RehydratesThroughStateAfterHostRestart()
+    public async Task PostPsArm_DoesNotRehydrateThroughStateAfterHostRestart()
     {
         using (var first = new Factory(_dbPath))
         using (var client = first.CreateClient())
@@ -36,6 +36,7 @@ public sealed class PsEndpointPersistenceTests : IDisposable
             Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
             using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
             Assert.True(body.RootElement.GetProperty("psEnabled").GetBoolean());
+            // auto=false was persisted; psEnabled itself is a live value from the active session
             Assert.False(body.RootElement.GetProperty("psAuto").GetBoolean());
         }
 
@@ -46,19 +47,19 @@ public sealed class PsEndpointPersistenceTests : IDisposable
 
             Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
             using var body = await JsonDocument.ParseAsync(await resp.Content.ReadAsStreamAsync());
-            Assert.True(body.RootElement.GetProperty("psEnabled").GetBoolean());
+            // Master arm must NOT survive a restart — always boots false
+            Assert.False(body.RootElement.GetProperty("psEnabled").GetBoolean());
+            // Cal-mode DOES persist — auto=false should survive
             Assert.False(body.RootElement.GetProperty("psAuto").GetBoolean());
         }
     }
 
-    private sealed class Factory(string dbPath) : WebApplicationFactory<Program>
+    private sealed class Factory(string dbPath) : IsolatedPrefsFactory
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        protected override void ConfigureExtra(IWebHostBuilder builder)
         {
-            builder.UseEnvironment("Test");
             builder.ConfigureServices(services =>
             {
-                services.RemoveAll<IHostedService>();
                 services.RemoveAll<PsSettingsStore>();
                 services.AddSingleton(sp => new PsSettingsStore(
                     sp.GetRequiredService<ILogger<PsSettingsStore>>(),

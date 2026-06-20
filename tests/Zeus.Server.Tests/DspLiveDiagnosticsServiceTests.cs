@@ -5,6 +5,7 @@ using Zeus.Server;
 
 namespace Zeus.Server.Tests;
 
+[Trait("Category", "DspModernization")]
 public sealed class DspLiveDiagnosticsServiceTests
 {
     [Fact]

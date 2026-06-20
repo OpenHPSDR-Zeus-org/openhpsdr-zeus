@@ -42,11 +42,17 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  DEFAULT_TX_DISPLAY_AVG_TAU_MS,
+  DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
+  DEFAULT_TX_DISPLAY_FFT_SIZE,
+  DEFAULT_TX_DISPLAY_WINDOW,
   DEFAULT_WF_SCROLL_SPEED,
   FIXED_DB_MAX,
   FIXED_DB_MIN,
+  TX_DISPLAY_CAL_OFFSET_ABS_DB,
+  TX_DISPLAY_AVG_TAU_MAX_MS,
   WATERFALL_SCROLL_SPEED_MAX,
   WATERFALL_SCROLL_SPEED_MIN,
   TX_FIXED_DB_MAX,
@@ -200,5 +206,118 @@ describe('display-settings-store', () => {
       wfTxDbMin: TX_FIXED_DB_MIN,
       wfTxDbMax: TX_FIXED_DB_MAX,
     });
+  });
+});
+
+describe('TX display analyzer params', () => {
+  beforeEach(() => {
+    // Stub fetch so the debounced server save is a no-op (and never leaks a
+    // rejected promise / pending timer into later tests).
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
+    useDisplaySettingsStore.setState({
+      txDisplayCalOffsetDb: DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
+      txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
+      txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
+      txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
+    });
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('updates a single param and leaves the rest untouched', () => {
+    useDisplaySettingsStore.getState().setTxDisplayParams({ fftSize: 32768 });
+    const s = useDisplaySettingsStore.getState();
+    expect(s.txDisplayFftSize).toBe(32768);
+    expect(s.txDisplayCalOffsetDb).toBe(DEFAULT_TX_DISPLAY_CAL_OFFSET_DB);
+    expect(s.txDisplayWindow).toBe(DEFAULT_TX_DISPLAY_WINDOW);
+    expect(s.txDisplayAvgTauMs).toBe(DEFAULT_TX_DISPLAY_AVG_TAU_MS);
+  });
+
+  it('clamps the cal offset to ±limit', () => {
+    useDisplaySettingsStore.getState().setTxDisplayParams({ calOffsetDb: 9999 });
+    expect(useDisplaySettingsStore.getState().txDisplayCalOffsetDb).toBe(TX_DISPLAY_CAL_OFFSET_ABS_DB);
+    useDisplaySettingsStore.getState().setTxDisplayParams({ calOffsetDb: -9999 });
+    expect(useDisplaySettingsStore.getState().txDisplayCalOffsetDb).toBe(-TX_DISPLAY_CAL_OFFSET_ABS_DB);
+  });
+
+  it('clamps smoothing tau to the allowed range', () => {
+    useDisplaySettingsStore.getState().setTxDisplayParams({ avgTauMs: 99999 });
+    expect(useDisplaySettingsStore.getState().txDisplayAvgTauMs).toBe(TX_DISPLAY_AVG_TAU_MAX_MS);
+  });
+
+  it('ignores a non-power-of-two FFT size', () => {
+    useDisplaySettingsStore.getState().setTxDisplayParams({ fftSize: 12345 });
+    expect(useDisplaySettingsStore.getState().txDisplayFftSize).toBe(DEFAULT_TX_DISPLAY_FFT_SIZE);
+  });
+
+  it('ignores an unknown window type', () => {
+    useDisplaySettingsStore.getState().setTxDisplayParams({ window: 99 });
+    expect(useDisplaySettingsStore.getState().txDisplayWindow).toBe(DEFAULT_TX_DISPLAY_WINDOW);
+  });
+
+  it('resets all params to defaults', () => {
+    const s = useDisplaySettingsStore.getState();
+    s.setTxDisplayParams({ calOffsetDb: -15, fftSize: 8192, window: 5, avgTauMs: 400 });
+    s.resetTxDisplayParams();
+    expect(useDisplaySettingsStore.getState()).toMatchObject({
+      txDisplayCalOffsetDb: DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
+      txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
+      txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
+      txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
+    });
+  });
+});
+
+describe('TX auto-range', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({}) })));
+    useDisplaySettingsStore.setState({
+      txAutoRange: true,
+      txDbMin: -80,
+      txDbMax: 20,
+      wfTxDbMin: -80,
+      wfTxDbMax: 20,
+    });
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  // Synthetic TX frame: a wide noise floor with a passband block ~12% of the
+  // width — the shape the WDSP TX analyzer produces (signal occupies only a
+  // fraction of the full-span display).
+  function txFrame(floorDb: number, peakDb: number): Float32Array {
+    const n = 1024;
+    const px = new Float32Array(n).fill(floorDb);
+    for (let i = 450; i < 574; i++) px[i] = peakDb;
+    return px;
+  }
+
+  it('fits both TX windows to the signal instead of clamping at full-scale', () => {
+    const px = txFrame(-50, -10);
+    const s = useDisplaySettingsStore.getState();
+    for (let k = 0; k < 80; k++) s.updateTxAutoRange(px);
+    const r = useDisplaySettingsStore.getState();
+    // Ceiling settles just above the -10 dB peak — far below the +20 that was
+    // saturating the whole passband — so the signal is visible, not maxed out.
+    expect(r.txDbMax).toBeGreaterThan(-10);
+    expect(r.txDbMax).toBeLessThan(6);
+    // Floor sits below the signal so the passband fills the window.
+    expect(r.txDbMin).toBeLessThan(-10);
+    // Panadapter and waterfall windows track together.
+    expect(r.wfTxDbMax).toBeCloseTo(r.txDbMax, 0);
+    expect(r.wfTxDbMin).toBeCloseTo(r.txDbMin, 0);
+  });
+
+  it('is a no-op while turned off', () => {
+    useDisplaySettingsStore.setState({ txAutoRange: false });
+    useDisplaySettingsStore.getState().updateTxAutoRange(txFrame(-50, -10));
+    const r = useDisplaySettingsStore.getState();
+    expect(r.txDbMin).toBe(-80);
+    expect(r.txDbMax).toBe(20);
+  });
+
+  it('a manual TX window edit switches auto-range off', () => {
+    useDisplaySettingsStore.getState().setTxDbRange(-76, 14);
+    expect(useDisplaySettingsStore.getState().txAutoRange).toBe(false);
   });
 });

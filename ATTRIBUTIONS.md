@@ -32,9 +32,9 @@ GPL v3 works.
 Zeus is maintained by:
 
 - **Brian Keating (EI6LF)** — project lead
-- **Douglas J. Cerrato (KB2UKA)** — contributor
+- **Douglas J. Cerrato (KB2UKA)** — maintainer
+- **Christian Suarez (N9WAR)** — maintainer
 - **Ramón Martínez (EA5IUE)** — contributor
-- **Christian (N9WAR)** — contributor
 
 Additional contributions are visible in `git log` and in the repository's
 pull-request history.

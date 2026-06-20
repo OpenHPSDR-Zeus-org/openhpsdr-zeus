@@ -68,6 +68,29 @@ export const FIXED_DB_MAX = -50;
 export const TX_FIXED_DB_MIN = -80;
 export const TX_FIXED_DB_MAX = 20;
 
+// TX display analyzer params (live TX waterfall). Display-only — they shape the
+// transmitted-signal panadapter/waterfall, never the air. Defaults mirror the
+// backend WdspDspEngine constants. Window ints are WDSP win_type values
+// (analyzer.c new_window): 0 Rectangular, 1 Blackman-Harris, 2 Hann (default),
+// 3 Flat-top, 4 Hamming, 5 Kaiser, 6 Blackman-Harris 7-term.
+export const TX_DISPLAY_FFT_SIZES = [2048, 4096, 8192, 16384, 32768, 65536] as const;
+export const TX_DISPLAY_WINDOWS: readonly { value: number; label: string }[] = [
+  { value: 2, label: 'Hann' },
+  { value: 1, label: 'Blackman-Harris' },
+  { value: 6, label: 'Blackman-Harris 7' },
+  { value: 3, label: 'Flat-top' },
+  { value: 4, label: 'Hamming' },
+  { value: 5, label: 'Kaiser' },
+  { value: 0, label: 'Rectangular' },
+];
+export const DEFAULT_TX_DISPLAY_CAL_OFFSET_DB = 0;
+export const DEFAULT_TX_DISPLAY_FFT_SIZE = 16384;
+export const DEFAULT_TX_DISPLAY_WINDOW = 2;
+export const DEFAULT_TX_DISPLAY_AVG_TAU_MS = 175;
+export const TX_DISPLAY_CAL_OFFSET_ABS_DB = 60;
+export const TX_DISPLAY_AVG_TAU_MIN_MS = 0;
+export const TX_DISPLAY_AVG_TAU_MAX_MS = 2000;
+
 const STORAGE_KEY = 'zeus.display.dbRange';
 const TX_STORAGE_KEY = 'zeus.display.txDbRange';
 const WF_STORAGE_KEY = 'zeus.display.wfDbRange';
@@ -276,6 +299,38 @@ function scheduleDbRangeSave(): void {
   }, 1000);
 }
 
+// Debounced server save for the TX display analyzer params. Slider drags
+// (cal offset, smoothing) fire many updates; batch into one PUT. Shorter quiet
+// period than the dB-range save since these are discrete control tweaks, not a
+// continuous finger-drag on the panadapter scale.
+let txDisplayTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleTxDisplaySave(): void {
+  if (txDisplayTimer) clearTimeout(txDisplayTimer);
+  txDisplayTimer = setTimeout(() => {
+    const s = useDisplaySettingsStore.getState();
+    void updateDisplaySettings(
+      s.panBackground,
+      s.backgroundImageFit,
+      s.rxTraceColor,
+      s.dbMin,
+      s.dbMax,
+      s.txDbMin,
+      s.txDbMax,
+      s.wfDbMin,
+      s.wfDbMax,
+      s.wfTxDbMin,
+      s.wfTxDbMax,
+      {
+        calOffsetDb: s.txDisplayCalOffsetDb,
+        fftSize: s.txDisplayFftSize,
+        window: s.txDisplayWindow,
+        avgTauMs: s.txDisplayAvgTauMs,
+      },
+    );
+  }, 500);
+}
+
 // Exponential smoothing constant for the auto-range tracker. 0.1 trades
 // flicker resistance for responsiveness — band-change artifacts fade over
 // ~30 frames at 30 Hz (~1 s).
@@ -286,6 +341,19 @@ const SMOOTHING = 0.1;
 // sit right at the darkest index.
 const AUTO_FLOOR_MARGIN_DB = 8;
 const AUTO_CEIL_MARGIN_DB = 6;
+
+// TX auto-range margins/percentiles. Unlike RX (sparse signals against a wide
+// noise floor), the TX signal is a continuous block occupying only a fraction
+// of the full-span display, so p5/p95 would both land in the floor. We fit on
+// a low floor percentile and a high peak percentile instead, and converge
+// faster (0.3) so the window settles within a few frames of key-down. The
+// peak percentile (not the absolute max) keeps a single hot bin from throwing
+// the ceiling.
+const TX_AUTO_FLOOR_MARGIN_DB = 6;
+const TX_AUTO_CEIL_MARGIN_DB = 8;
+const TX_AUTO_SMOOTHING = 0.3;
+const TX_AUTO_FLOOR_PCT = 0.1;
+const TX_AUTO_PEAK_PCT = 0.995;
 
 // Guard against degenerate ranges (e.g. silent input producing p5==p95).
 const MIN_SPAN_DB = 20;
@@ -310,6 +378,20 @@ export type DisplaySettingsState = {
   // parity — see TX_FIXED_DB_MIN/MAX constants.
   txDbMin: number;
   txDbMax: number;
+  // TX display analyzer params (live TX waterfall). Display-only — they shape
+  // the transmitted-signal panadapter/waterfall FFT + level, never the air.
+  // calOffsetDb shifts the trace/waterfall level (Thetis TXDisplayCalOffset);
+  // fftSize/window are the WDSP analyzer config; avgTauMs is the visual
+  // smoothing time-constant. Persisted server-side; applied to the engine live.
+  txDisplayCalOffsetDb: number;
+  txDisplayFftSize: number;
+  txDisplayWindow: number;
+  txDisplayAvgTauMs: number;
+  // TX display auto-range. While keyed, fit the TX panadapter + waterfall
+  // windows to the live transmitted signal so the trace is never slammed to
+  // full-scale (the WDSP TX analyzer reads far hotter than the RX one). On by
+  // default; a manual TX window edit or scale-drag switches it off.
+  txAutoRange: boolean;
   colormap: ColormapId;
   waterfallScrollSpeed: number;
   // Panadapter background overlay mode + (optional) user image. See the
@@ -339,6 +421,21 @@ export type DisplaySettingsState = {
   setTxDbRange: (txDbMin: number, txDbMax: number) => void;
   setWfDbRange: (wfDbMin: number, wfDbMax: number) => void;
   setWfTxDbRange: (wfTxDbMin: number, wfTxDbMax: number) => void;
+  // Update one or more TX display analyzer params; persisted + pushed to the
+  // engine (debounced). Omitted fields are left unchanged.
+  setTxDisplayParams: (p: {
+    calOffsetDb?: number;
+    fftSize?: number;
+    window?: number;
+    avgTauMs?: number;
+  }) => void;
+  resetTxDisplayParams: () => void;
+  // Toggle TX auto-range. Turning it off restores the operator's saved TX
+  // windows (mirrors setAutoRange for RX).
+  setTxAutoRange: (v: boolean) => void;
+  // Fit the TX windows to a frame of live TX pixels (no-op when off / empty).
+  // Driven from the waterfall ingest while keyed.
+  updateTxAutoRange: (pixels: Float32Array) => void;
   resetDbRanges: () => void;
   updateAutoRange: (wfDb: Float32Array) => void;
   // Shift dbMin and dbMax together by `deltaDb`. Used by the draggable dB
@@ -403,6 +500,11 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   wfTxDbMax: initialWfTxRange.wfTxDbMax,
   txDbMin: initialTxRange.txDbMin,
   txDbMax: initialTxRange.txDbMax,
+  txDisplayCalOffsetDb: DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
+  txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
+  txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
+  txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
+  txAutoRange: true,
   colormap: 'blue',
   waterfallScrollSpeed: initialWaterfallScrollSpeed,
   // Defaults until the server-side fetch lands (see hydrateFromServer at the
@@ -515,7 +617,8 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   },
   setTxDbRange: (txDbMin, txDbMax) => {
     const next = sanitizeRange(txDbMin, txDbMax, TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
-    set({ txDbMin: next.min, txDbMax: next.max });
+    // A manual TX window edit takes over from auto-range.
+    set({ txAutoRange: false, txDbMin: next.min, txDbMax: next.max });
     writeSavedTxRange(next.min, next.max);
     scheduleDbRangeSave();
   },
@@ -527,9 +630,81 @@ export const useDisplaySettingsStore = create<DisplaySettingsState>((set, get) =
   },
   setWfTxDbRange: (wfTxDbMin, wfTxDbMax) => {
     const next = sanitizeRange(wfTxDbMin, wfTxDbMax, TX_FIXED_DB_MIN, TX_FIXED_DB_MAX);
-    set({ wfTxDbMin: next.min, wfTxDbMax: next.max });
+    set({ txAutoRange: false, wfTxDbMin: next.min, wfTxDbMax: next.max });
     writeSavedWfTxRange(next.min, next.max);
     scheduleDbRangeSave();
+  },
+  setTxDisplayParams: (p) => {
+    const clampNum = (v: number, lo: number, hi: number) =>
+      Math.max(lo, Math.min(hi, v));
+    const next: Partial<DisplaySettingsState> = {};
+    if (typeof p.calOffsetDb === 'number' && Number.isFinite(p.calOffsetDb)) {
+      next.txDisplayCalOffsetDb = clampNum(
+        p.calOffsetDb,
+        -TX_DISPLAY_CAL_OFFSET_ABS_DB,
+        TX_DISPLAY_CAL_OFFSET_ABS_DB,
+      );
+    }
+    if (typeof p.fftSize === 'number' && (TX_DISPLAY_FFT_SIZES as readonly number[]).includes(p.fftSize)) {
+      next.txDisplayFftSize = p.fftSize;
+    }
+    if (typeof p.window === 'number' && TX_DISPLAY_WINDOWS.some((w) => w.value === p.window)) {
+      next.txDisplayWindow = p.window;
+    }
+    if (typeof p.avgTauMs === 'number' && Number.isFinite(p.avgTauMs)) {
+      next.txDisplayAvgTauMs = clampNum(p.avgTauMs, TX_DISPLAY_AVG_TAU_MIN_MS, TX_DISPLAY_AVG_TAU_MAX_MS);
+    }
+    if (Object.keys(next).length === 0) return;
+    // No localStorage mirror — server is authoritative for these params.
+    set(next);
+    scheduleTxDisplaySave();
+  },
+  resetTxDisplayParams: () => {
+    set({
+      txDisplayCalOffsetDb: DEFAULT_TX_DISPLAY_CAL_OFFSET_DB,
+      txDisplayFftSize: DEFAULT_TX_DISPLAY_FFT_SIZE,
+      txDisplayWindow: DEFAULT_TX_DISPLAY_WINDOW,
+      txDisplayAvgTauMs: DEFAULT_TX_DISPLAY_AVG_TAU_MS,
+      txAutoRange: true,
+    });
+    scheduleTxDisplaySave();
+  },
+  setTxAutoRange: (v) => {
+    if (v) {
+      set({ txAutoRange: true });
+    } else {
+      // Off restores the operator's saved TX windows (mirrors setAutoRange).
+      const tx = readSavedTxRange();
+      const wf = readSavedWfTxRange();
+      set({
+        txAutoRange: false,
+        txDbMin: tx.txDbMin,
+        txDbMax: tx.txDbMax,
+        wfTxDbMin: wf.wfTxDbMin,
+        wfTxDbMax: wf.wfTxDbMax,
+      });
+    }
+  },
+  updateTxAutoRange: (pixels) => {
+    if (!get().txAutoRange || pixels.length === 0) return;
+    const [floor, peak] = txFloorPeak(pixels);
+    let targetMin = floor - TX_AUTO_FLOOR_MARGIN_DB;
+    let targetMax = peak + TX_AUTO_CEIL_MARGIN_DB;
+    if (targetMax - targetMin < MIN_SPAN_DB) {
+      const mid = 0.5 * (targetMin + targetMax);
+      targetMin = mid - MIN_SPAN_DB / 2;
+      targetMax = mid + MIN_SPAN_DB / 2;
+    }
+    const s = TX_AUTO_SMOOTHING;
+    const { txDbMin, txDbMax, wfTxDbMin, wfTxDbMax } = get();
+    // EMA toward the target so the window settles smoothly over a few frames
+    // instead of jumping every tick. Both TX windows track the same signal.
+    set({
+      txDbMin: txDbMin * (1 - s) + targetMin * s,
+      txDbMax: txDbMax * (1 - s) + targetMax * s,
+      wfTxDbMin: wfTxDbMin * (1 - s) + targetMin * s,
+      wfTxDbMax: wfTxDbMax * (1 - s) + targetMax * s,
+    });
   },
   resetDbRanges: () => {
     set({
@@ -611,6 +786,24 @@ function percentiles(arr: Float32Array): [number, number] {
   const lowIdx = Math.min(n - 1, Math.max(0, Math.floor(0.05 * n)));
   const highIdx = Math.min(n - 1, Math.max(0, Math.floor(0.95 * n)));
   return [sorted[lowIdx] ?? FIXED_DB_MIN, sorted[highIdx] ?? FIXED_DB_MAX];
+}
+
+// TX floor/peak for auto-range. Filters out non-finite / sentinel bins (e.g.
+// out-of-span edges set to the invalid-bin sentinel) so they don't drag the
+// floor, then returns [low-percentile floor, high-percentile peak]. The peak
+// percentile (not the absolute max) ignores a lone hot bin.
+function txFloorPeak(arr: Float32Array): [number, number] {
+  const vals: number[] = [];
+  for (let i = 0; i < arr.length; i++) {
+    const v = arr[i] ?? Number.NaN;
+    if (Number.isFinite(v) && v > -250) vals.push(v);
+  }
+  if (vals.length === 0) return [TX_FIXED_DB_MIN, TX_FIXED_DB_MAX];
+  vals.sort((a, b) => a - b);
+  const n = vals.length;
+  const floorIdx = Math.min(n - 1, Math.max(0, Math.floor(TX_AUTO_FLOOR_PCT * n)));
+  const peakIdx = Math.min(n - 1, Math.max(0, Math.floor(TX_AUTO_PEAK_PCT * n)));
+  return [vals[floorIdx] ?? TX_FIXED_DB_MIN, vals[peakIdx] ?? TX_FIXED_DB_MAX];
 }
 
 // Decode a data:URL produced by canvas.toDataURL() into a Blob the multipart
@@ -717,6 +910,12 @@ async function hydrateFromServer(): Promise<void> {
           wfTxDbMax: wfTxRange!.max,
         }
       : {}),
+    // TX display analyzer params — server wins when present; null means never
+    // stored, so the in-memory default stands.
+    ...(server.txDisplayCalOffsetDb !== null ? { txDisplayCalOffsetDb: server.txDisplayCalOffsetDb } : {}),
+    ...(server.txDisplayFftSize !== null ? { txDisplayFftSize: server.txDisplayFftSize } : {}),
+    ...(server.txDisplayWindow !== null ? { txDisplayWindow: server.txDisplayWindow } : {}),
+    ...(server.txDisplayAvgTauMs !== null ? { txDisplayAvgTauMs: server.txDisplayAvgTauMs } : {}),
   });
 
   if (!serverHasDbRange || serverRangeWasCorrupt) {

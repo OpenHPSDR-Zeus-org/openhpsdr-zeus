@@ -4,7 +4,7 @@
 // Copyright (C) 2026 Brian Keating (EI6LF) and contributors.
 //
 // Desktop-mode RX audio sink: drains demodulated audio (mono float32 48 kHz,
-// produced by DspPipelineService) directly into the OS default playback
+// produced by DspPipelineService) directly into the selected OS playback
 // device via miniaudio. The WebSocket fan-out is skipped entirely in this
 // mode — the SPA's audio-decoder is opted out by Phase 2c.
 //
@@ -21,7 +21,7 @@ namespace Zeus.Server;
 
 /// <summary>
 /// <see cref="IRxAudioSink"/> implementation that pushes RX audio straight
-/// to the OS default playback device via miniaudio. Used in desktop mode
+/// to the selected OS playback device via miniaudio. Used in desktop mode
 /// (<see cref="ZeusHostMode.Desktop"/>) in place of
 /// <see cref="WebSocketAudioSink"/>.
 ///
@@ -69,10 +69,34 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     // jitter.
     private const int RingCapacity = 65_536;
 
-    // Hold roughly 20 ms before starting or resuming playback. Without this
-    // small cushion, the OS callback can run the ring to a handful of samples
-    // and splice that partial tail into silence, which presents as RX crackle.
-    private const int PlaybackPrebufferSamples = 960;
+    // Floor for the prebuffer cushion: hold ~120 ms before starting/resuming
+    // playback, and refill to this depth after every (re)buffer.
+    //
+    // Why 120 ms and why adaptive (#742): the producer is the DSP RX tick, which
+    // publishes audio in BURSTS gated to ~33 ms (MaybeTickInline) on the RX
+    // packet thread — the same thread that also runs the squelch/leveler/plugin
+    // chain and the panadapter/waterfall work. The consumer is the miniaudio
+    // device callback draining steadily every device period. Between bursts the
+    // consumer drains with no production, so the ring must hold at least one
+    // inter-tick gap; any tick delayed by GC / CPU load / scheduler latency
+    // drains further. The old 60 ms (2880) was only ~2 tick intervals — a single
+    // delayed tick left too little margin and the callback short-read a silence
+    // tail (heard as crackle): a G2 report showed ~4.6% of callbacks short-read
+    // (222k silence samples) while the DSP side was provably healthy.
+    //
+    // 120 ms ≈ 3.6 tick intervals — absorbs a stalled tick with headroom. The
+    // EFFECTIVE target is also made adaptive at runtime to the negotiated device
+    // period (see OnPlaybackData): miniaudio may ignore our 480-frame request and
+    // hand us a larger callback, in which case the cushion grows to ≥ 4 callbacks
+    // so a big-period default device can't outrun a thin fixed cushion. Pure
+    // latency-vs-robustness trade — managed only, identical on every platform.
+    // (History: 20 ms underran badly, 60 ms underran under load — both #733/#742.)
+    private const int PlaybackPrebufferSamples = 5760;
+
+    // Effective prebuffer cushion actually in force — max(floor, 4×callbackFrames),
+    // recomputed per callback once the device's real period is known. Reported in
+    // diagnostics so a report shows the cushion that was active.
+    private volatile int _effectivePrebufferSamples = PlaybackPrebufferSamples;
 
     // ~250 ms @ 48 kHz mono = 12000 samples ≈ 48 KB. Power of two for the
     // mask wrap. The preview path is sourced from mic capture (one block
@@ -84,6 +108,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     private const int PreviewRingCapacity = 16_384;
 
     private readonly ILogger<NativeAudioSink> _log;
+    private readonly AudioDeviceSettingsStore? _deviceSettings;
     // Service-provider-based lookup for TxService, used to subscribe to
     // TxActiveChanged in StartAsync. NativeAudioSink can NOT take TxService
     // as a constructor dep directly: DspPipelineService depends on
@@ -94,6 +119,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     private readonly IServiceProvider? _services;
     private readonly FloatSpscRing _ring = new(RingCapacity);
     private readonly FloatSpscRing _previewRing = new(PreviewRingCapacity);
+    private readonly object _deviceSync = new();
 
     // Resolved on Start, kept so Stop can detach the handler cleanly.
     // Null when no TxService was available (legacy test ctor or
@@ -102,6 +128,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     private Action<bool>? _txActiveHandler;
 
     private MiniAudioOutput? _output;
+    private string? _activeOutputDeviceId;
     private bool _disposed;
 
     // Mute flag for the Photino-side Mute/Unmute button. Read on the DSP
@@ -123,6 +150,32 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
 
     public bool IsMuted => _muted;
     public bool IsEnabled => _previewEnabled;
+    public string? ConfiguredOutputDeviceId => _deviceSettings?.Get().OutputDeviceId;
+    public string? ActiveOutputDeviceId => _activeOutputDeviceId;
+
+    /// <summary>Snapshot of native-output health: cumulative underrun/overrun
+    /// sample counts (the RX crackle, issue #733), rebuffer events, and the
+    /// live ring depth vs the prebuffer cushion. Relaxed reads — safe from any
+    /// thread, exact-enough for telemetry.</summary>
+    public Diagnostics GetDiagnostics() => new(
+        UnderrunSamplesTotal: Interlocked.Read(ref _underrunSamplesTotal),
+        OverrunSamplesTotal: Interlocked.Read(ref _overrunSamplesTotal),
+        RebufferEvents: Interlocked.Read(ref _rebufferEvents),
+        RingDepthSamples: _ring.Count,
+        RingCapacitySamples: RingCapacity,
+        PrebufferSamples: _effectivePrebufferSamples,
+        SampleRateHz: FrameRateHz,
+        Rebuffering: _rebuffering);
+
+    public readonly record struct Diagnostics(
+        long UnderrunSamplesTotal,
+        long OverrunSamplesTotal,
+        long RebufferEvents,
+        int RingDepthSamples,
+        int RingCapacitySamples,
+        int PrebufferSamples,
+        int SampleRateHz,
+        bool Rebuffering);
 
     public void SetMuted(bool muted)
     {
@@ -165,11 +218,21 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     private long _overrunSamples;
     private long _totalSamplesIn;
     private long _totalSamplesOut;
+    // Cumulative (never reset by the 5 s log) — surfaced via GetDiagnostics()
+    // so output-buffer underruns (the RX crackle, issue #733) are measurable
+    // from /api/audio/native rather than only by log-diving.
+    private long _underrunSamplesTotal;
+    private long _overrunSamplesTotal;
+    private long _rebufferEvents;
     private DateTime _lastLogUtc = DateTime.UtcNow;
 
-    public NativeAudioSink(ILogger<NativeAudioSink> log, IServiceProvider? services = null)
+    public NativeAudioSink(
+        ILogger<NativeAudioSink> log,
+        AudioDeviceSettingsStore? deviceSettings = null,
+        IServiceProvider? services = null)
     {
         _log = log;
+        _deviceSettings = deviceSettings;
         _services = services;
     }
 
@@ -182,26 +245,10 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     /// </summary>
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        if (_output != null) return Task.CompletedTask;
-        try
+        lock (_deviceSync)
         {
-            _output = new MiniAudioOutput(
-                onFrames: OnPlaybackData,
-                onNotify: OnDeviceNotification,
-                preferSampleRate: FrameRateHz,
-                preferChannels: 2,
-                periodFrames: 480,   // ≈10 ms @ 48 kHz
-                periods: 2);
-            _output.Start();
-            _log.LogInformation(
-                "audio.native.rx open rate={Rate}Hz channels={Channels} version={Version}",
-                _output.SampleRate, _output.Channels, MiniAudioInterop.Version());
-        }
-        catch (Exception ex)
-        {
-            _log.LogWarning(ex, "audio.native.rx open failed; RX audio output disabled");
-            _output?.Dispose();
-            _output = null;
+            if (_output != null) return Task.CompletedTask;
+            OpenOutputLocked(ConfiguredOutputDeviceId);
         }
 
         // Subscribe to TX-active edges so we can drain the ring on TX-on.
@@ -232,9 +279,93 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
             _tx.TxActiveChanged -= _txActiveHandler;
             _txActiveHandler = null;
         }
+        lock (_deviceSync)
+        {
+            try { _output?.Stop(); }
+            catch (Exception ex) { _log.LogWarning(ex, "audio.native.rx stop threw"); }
+        }
+        return Task.CompletedTask;
+    }
+
+    public Task SetOutputDeviceAsync(string? deviceId, CancellationToken cancellationToken = default)
+    {
+        string? normalized = NormalizeDeviceId(deviceId);
+        _deviceSettings?.SetOutputDeviceId(normalized);
+
+        lock (_deviceSync)
+        {
+            CloseOutputLocked(dispose: true);
+            _ring.Clear();
+            _previewRing.Clear();
+            _rebuffering = true;
+            OpenOutputLocked(normalized);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void OpenOutputLocked(string? requestedDeviceId)
+    {
+        try
+        {
+            _output = CreateOutput(requestedDeviceId);
+            _output.Start();
+            _activeOutputDeviceId = NormalizeDeviceId(requestedDeviceId);
+            _log.LogInformation(
+                "audio.native.rx open device={Device} rate={Rate}Hz channels={Channels} version={Version}",
+                _activeOutputDeviceId is null ? "default" : "selected",
+                _output.SampleRate, _output.Channels, MiniAudioInterop.Version());
+            return;
+        }
+        catch (Exception ex) when (!string.IsNullOrWhiteSpace(requestedDeviceId))
+        {
+            _log.LogWarning(ex, "audio.native.rx selected output open failed; falling back to default");
+            CloseOutputLocked(dispose: true);
+        }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "audio.native.rx open failed; RX audio output disabled");
+            CloseOutputLocked(dispose: true);
+            return;
+        }
+
+        try
+        {
+            _output = CreateOutput(null);
+            _output.Start();
+            _activeOutputDeviceId = null;
+            _log.LogInformation(
+                "audio.native.rx open device=default rate={Rate}Hz channels={Channels} version={Version}",
+                _output.SampleRate, _output.Channels, MiniAudioInterop.Version());
+        }
+        catch (Exception fallbackEx)
+        {
+            _log.LogWarning(fallbackEx, "audio.native.rx default fallback open failed; RX audio output disabled");
+            CloseOutputLocked(dispose: true);
+        }
+    }
+
+    private MiniAudioOutput CreateOutput(string? deviceId) =>
+        new(
+            onFrames: OnPlaybackData,
+            onNotify: OnDeviceNotification,
+            deviceIdHex: NormalizeDeviceId(deviceId),
+            preferSampleRate: FrameRateHz,
+            preferChannels: 2,
+            periodFrames: 480,
+            periods: 2);
+
+    private void CloseOutputLocked(bool dispose)
+    {
         try { _output?.Stop(); }
         catch (Exception ex) { _log.LogWarning(ex, "audio.native.rx stop threw"); }
-        return Task.CompletedTask;
+        if (dispose)
+        {
+            try { _output?.Dispose(); }
+            catch (Exception ex) { _log.LogWarning(ex, "audio.native.rx dispose threw"); }
+        }
+        _output = null;
+        _activeOutputDeviceId = null;
     }
 
     /// <summary>
@@ -287,11 +418,28 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         int written = _ring.Write(src);
         if (written < src.Length)
         {
-            Interlocked.Add(ref _overrunSamples, src.Length - written);
+            int dropped = src.Length - written;
+            Interlocked.Add(ref _overrunSamples, dropped);
+            Interlocked.Add(ref _overrunSamplesTotal, dropped);
         }
         Interlocked.Add(ref _totalSamplesIn, src.Length);
 
         MaybeLog();
+    }
+
+    // Effective prebuffer/refill cushion for a device callback of
+    // <paramref name="totalFrames"/> frames: the larger of the 120 ms floor and
+    // four callbacks deep, capped to leave one callback of ring headroom (a
+    // target ≥ capacity would wedge rebuffering forever). #742.
+    internal static int ComputePrebufferTarget(int totalFrames)
+    {
+        if (totalFrames <= 0) return PlaybackPrebufferSamples;
+        int desired = Math.Max(PlaybackPrebufferSamples, totalFrames * 4);
+        // Keep one callback of ring headroom; a target >= capacity would wedge
+        // rebuffering forever. For an absurd period (> half the ring) just
+        // degrade to whatever headroom remains rather than throw.
+        int ceiling = Math.Max(1, RingCapacity - totalFrames);
+        return Math.Min(desired, ceiling);
     }
 
     private void OnPlaybackData(Span<float> output, uint frameCount, uint channels)
@@ -308,11 +456,17 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
             ? stackalloc float[totalFrames]
             : new float[totalFrames];
 
+        // Size the cushion to the LARGER of the 120 ms floor and 4× this device's
+        // actual callback (the negotiated period may exceed our 480-frame
+        // request). #742.
+        int prebufferTarget = ComputePrebufferTarget(totalFrames);
+        _effectivePrebufferSamples = prebufferTarget;
+
         bool rxSilence = false;
         int queued = _ring.Count;
         if (_rebuffering)
         {
-            if (queued >= PlaybackPrebufferSamples)
+            if (queued >= prebufferTarget)
             {
                 _rebuffering = false;
             }
@@ -325,12 +479,14 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         {
             _rebuffering = true;
             rxSilence = true;
+            Interlocked.Increment(ref _rebufferEvents);
         }
 
         if (rxSilence)
         {
             mono.Clear();
             Interlocked.Add(ref _underrunSamples, totalFrames);
+            Interlocked.Add(ref _underrunSamplesTotal, totalFrames);
         }
         else
         {
@@ -341,7 +497,9 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
                 // ring between Count and Read.
                 mono[read..].Clear();
                 _rebuffering = true;
-                Interlocked.Add(ref _underrunSamples, totalFrames - read);
+                int shortfall = totalFrames - read;
+                Interlocked.Add(ref _underrunSamples, shortfall);
+                Interlocked.Add(ref _underrunSamplesTotal, shortfall);
             }
         }
 
@@ -429,12 +587,19 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
             inS, outS, under, over);
     }
 
+    private static string? NormalizeDeviceId(string? deviceId)
+    {
+        var trimmed = deviceId?.Trim();
+        return string.IsNullOrWhiteSpace(trimmed) ? null : trimmed;
+    }
+
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        try { _output?.Dispose(); }
-        catch (Exception ex) { _log.LogWarning(ex, "audio.native.rx dispose threw"); }
-        _output = null;
+        lock (_deviceSync)
+        {
+            CloseOutputLocked(dispose: true);
+        }
     }
 }

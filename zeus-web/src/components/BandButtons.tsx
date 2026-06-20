@@ -49,9 +49,14 @@ import {
   setMode,
   setVfo,
   type BandMemoryEntry,
+  type RadioStateDto,
   type RxMode,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
+import {
+  BAND_MEMORY_UPDATED_EVENT,
+  type BandMemoryUpdatedDetail,
+} from '../util/band-memory';
 import { BANDS, bandOf } from './design/data';
 import { toolbarFavDragMime } from './toolbar/toolbarFavoriteDrag';
 
@@ -60,6 +65,11 @@ type BandEntry = {
   centerHz: number;
   rangeStart: number;
   rangeEnd: number;
+};
+
+type PendingBandHzSave = {
+  band: string;
+  hz: number;
 };
 
 // HF bands only (160m-10m) for Hermes Lite 2 coverage
@@ -74,6 +84,10 @@ const HF_BANDS: readonly BandEntry[] = BANDS.slice(0, 10).map((b) => ({
 // the VFO doesn't hammer the server on every pixel of knob travel.
 const SAVE_DEBOUNCE_MS = 500;
 
+function withRestoredMode(state: RadioStateDto, mode: RxMode): RadioStateDto {
+  return { ...state, mode };
+}
+
 export function BandButtons() {
   const vfoHz = useConnectionStore((s) => s.vfoHz);
   const mode = useConnectionStore((s) => s.mode);
@@ -86,7 +100,7 @@ export function BandButtons() {
   // band click can apply the saved (hz, mode) without an extra round-trip.
   const memoryRef = useRef<Map<string, BandMemoryEntry>>(new Map());
   const saveTimerRef = useRef<number | null>(null);
-  const pendingSaveRef = useRef<BandMemoryEntry | null>(null);
+  const pendingSaveRef = useRef<PendingBandHzSave | null>(null);
   const lastBandRef = useRef<string>(currentBand);
 
   // Initial load of server-persisted band memory
@@ -104,6 +118,19 @@ export function BandButtons() {
     return () => ac.abort();
   }, []);
 
+  useEffect(() => {
+    const onBandMemoryUpdated = (event: Event) => {
+      const { detail } = event as CustomEvent<BandMemoryUpdatedDetail>;
+      if (!detail) return;
+      memoryRef.current.set(detail.band, detail);
+    };
+
+    window.addEventListener(BAND_MEMORY_UPDATED_EVENT, onBandMemoryUpdated);
+    return () => {
+      window.removeEventListener(BAND_MEMORY_UPDATED_EVENT, onBandMemoryUpdated);
+    };
+  }, []);
+
   const clearSaveTimer = useCallback(() => {
     if (saveTimerRef.current !== null) {
       window.clearTimeout(saveTimerRef.current);
@@ -117,8 +144,12 @@ export function BandButtons() {
 
     pendingSaveRef.current = null;
     clearSaveTimer();
-    memoryRef.current.set(pending.band, pending);
-    saveBandMemory(pending.band, pending.hz, pending.mode).catch(() => {
+    const remembered = memoryRef.current.get(pending.band);
+    if (!remembered) return;
+
+    const next = { ...remembered, hz: pending.hz };
+    memoryRef.current.set(next.band, next);
+    saveBandMemory(next.band, next.hz, next.mode).catch(() => {
       /* best-effort — next tune will retry */
     });
   }, [clearSaveTimer]);
@@ -130,9 +161,9 @@ export function BandButtons() {
     };
   }, [clearSaveTimer]);
 
-  // Track current band + debounced save of (hz, mode) for that band.
-  // Crossing bands flushes the previous band's pending row so a quick
-  // mode-change-then-band-click does not drop the old band's mode memory.
+  // Track current band + debounced save of the last Hz for that band. The
+  // remembered mode is preserved from DB/user mode changes, never inferred
+  // from transient mode snapshots during band switching.
   useEffect(() => {
     const band = bandOf(vfoHz);
     setCurrentBand(band);
@@ -142,34 +173,47 @@ export function BandButtons() {
     }
     if (band === '—') return;
 
-    pendingSaveRef.current = { band, hz: vfoHz, mode };
+    pendingSaveRef.current = { band, hz: vfoHz };
     clearSaveTimer();
     saveTimerRef.current = window.setTimeout(flushPendingSave, SAVE_DEBOUNCE_MS);
-  }, [clearSaveTimer, flushPendingSave, vfoHz, mode]);
+  }, [clearSaveTimer, flushPendingSave, vfoHz]);
 
   const selectBand = useCallback(
     (band: BandEntry) => {
+      if (band.name !== currentBand) flushPendingSave();
       const stored = memoryRef.current.get(band.name);
       const targetHz = stored?.hz ?? band.centerHz;
       const targetMode: RxMode | null = stored?.mode ?? null;
 
-      useConnectionStore.setState({ vfoHz: targetHz });
-      setVfo(targetHz)
-        .then(applyState)
-        .catch(() => {
-          /* next state poll will reconcile */
-        });
+      useConnectionStore.setState(
+        targetMode && targetMode !== mode
+          ? { vfoHz: targetHz, mode: targetMode }
+          : { vfoHz: targetHz },
+      );
 
-      if (targetMode && targetMode !== mode) {
-        useConnectionStore.setState({ mode: targetMode });
-        setMode(targetMode)
-          .then(applyState)
-          .catch(() => {
+      void (async () => {
+        let modeRestored = !targetMode || targetMode === mode;
+        if (targetMode && targetMode !== mode) {
+          try {
+            applyState(withRestoredMode(await setMode(targetMode), targetMode));
+            modeRestored = true;
+          } catch {
             /* next state poll will reconcile */
-          });
-      }
+          }
+        }
+        try {
+          const next = await setVfo(targetHz);
+          applyState(
+            targetMode && modeRestored
+              ? withRestoredMode(next, targetMode)
+              : next,
+          );
+        } catch {
+          /* next state poll will reconcile */
+        }
+      })();
     },
-    [applyState, mode],
+    [applyState, currentBand, flushPendingSave, mode],
   );
 
   return (

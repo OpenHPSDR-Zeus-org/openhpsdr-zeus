@@ -49,7 +49,7 @@ public sealed record LogEntry(
     DateTime QsoDateTimeUtc,
     string Callsign,
     string? Name,
-    double FrequencyMhz,
+    double? FrequencyMhz,
     string Band,
     string Mode,
     string RstSent,
@@ -85,6 +85,17 @@ public sealed record CreateLogEntryRequest(
 public sealed record LogEntriesResponse(
     IEnumerable<LogEntry> Entries,
     int TotalCount);
+
+public sealed record AdifImportResponse(
+    int TotalRecords,
+    int ImportedCount,
+    int DuplicateCount,
+    int SkippedCount,
+    IEnumerable<AdifImportError> Errors);
+
+public sealed record AdifImportError(
+    int RecordNumber,
+    string Message);
 
 public sealed record QrzPublishRequest(
     IEnumerable<string> LogEntryIds);

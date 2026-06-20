@@ -170,16 +170,34 @@ public class DspPipelineService : BackgroundService,
     private AdaptiveSquelchState _adaptiveSquelch = new();
 
     private const double RxLevelerTargetRmsDb = -18.0;
-    private const double RxLevelerGateRmsDb = -72.0;
-    private const double RxLevelerMaxBoostDb = 36.0;
+    // Softened (issue #733): raise the gate so near-noise-floor signals pass
+    // through unprocessed (clean static), and cap the boost so the leveler
+    // gently lifts weak audio instead of pumping it ~36 dB toward target — the
+    // big boost + fast slews were the "crackle on anything above the noise
+    // floor" zipper. The CUT/peak-guard safety below is unchanged, so loud
+    // signals are still caught.
+    private const double RxLevelerGateRmsDb = -50.0;
+    // Soft-gate window above the hard gate: the upward boost ramps 0 -> full
+    // across [GateRms, GateRms + GateSoftWindow] instead of snapping on at the
+    // gate. Without this, a hair-trigger AGC-T move that nudges a weak signal
+    // across the gate toggled the full boost on/off — an ~18 dB output step
+    // heard as crackle / "audio fell off the planet". WDSP's own AGC-T is 1:1
+    // and Thetis-faithful; this always-on leveler (which Thetis lacks) was the
+    // amplifier. The boost ramp is continuous with the belowGate=0 region.
+    private const double RxLevelerGateSoftWindowDb = 8.0;
+    // Cap the upward boost low (was 10 dB) so the leveler no longer fights the
+    // operator's AGC-T: AGC-T sets weak-signal loudness (Thetis-like) and the
+    // leveler only nudges. The downward CUT below is unchanged — it stays the
+    // blast-guard that catches a sudden strong signal.
+    private const double RxLevelerMaxBoostDb = 3.0;
     private const double RxLevelerMaxCutDb = -24.0;
     private const double RxLevelerBoostSlewDbPerBlock = 2.0;
-    private const double RxLevelerFastBoostSlewDbPerBlock = 3.5;
+    private const double RxLevelerFastBoostSlewDbPerBlock = 2.5;
     private const double RxLevelerFastBoostHeadroomDb = 6.0;
-    private const double RxLevelerVeryFastBoostSlewDbPerBlock = 6.0;
+    private const double RxLevelerVeryFastBoostSlewDbPerBlock = 3.0;
     private const double RxLevelerVeryFastBoostHeadroomDb = 10.0;
     private const double RxLevelerVeryFastBoostGateRmsDb = -45.0;
-    private const double RxLevelerCrestCatchupBoostSlewDbPerBlock = 7.5;
+    private const double RxLevelerCrestCatchupBoostSlewDbPerBlock = 3.0;
     private const double RxLevelerCrestCatchupHeadroomDb = 16.0;
     private const double RxLevelerCrestCatchupMinCrestDb = 8.0;
     private const double RxLevelerCrestCatchupMaxRmsDb = -28.0;
@@ -293,6 +311,19 @@ public class DspPipelineService : BackgroundService,
             : RxLevelerTargetRmsDb - inputRmsDbfs;
         desiredDb = Math.Clamp(desiredDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
 
+        // Soft gate: taper the upward BOOST to zero as the input approaches the
+        // floor, so crossing the gate can never snap the full boost on/off (the
+        // AGC-T hair-trigger). Cuts (desiredDb < 0, the loud-signal blast-guard)
+        // are NEVER tapered. Continuous with belowGate: at the gate the factor is
+        // 0, reaching full boost RxLevelerGateSoftWindowDb above it.
+        if (!belowGate && desiredDb > 0.0)
+        {
+            double gateFactor = Math.Clamp(
+                (inputRmsDbfs - RxLevelerGateRmsDb) / RxLevelerGateSoftWindowDb,
+                0.0, 1.0);
+            desiredDb *= gateFactor;
+        }
+
         double peakHeadroomDb = double.NaN;
         bool peakLimited = false;
         if (peak > 1.0e-9)
@@ -307,6 +338,16 @@ public class DspPipelineService : BackgroundService,
 
         double currentDb = double.IsFinite(state.GainDb) ? state.GainDb : 0.0;
         currentDb = Math.Clamp(currentDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+
+        // True when the gain we are currently holding would, on its own, drive
+        // this block's peak past the limiter target — i.e. a gain "held" high
+        // across a quiet gap (pause memory / catch-up) is about to be dumped onto
+        // a louder block. The raw input-peak gate below (peak > target) misses
+        // this case because the danger is gain × peak, not peak alone: a signal
+        // whose input peak is modest still blasts the speaker if the held gain is
+        // large. When this is set we cut as urgently as a clipping peak would.
+        bool currentGainOverdrivesPeak =
+            double.IsFinite(peakHeadroomDb) && currentDb > peakHeadroomDb;
 
         double nextDb = currentDb;
         if (belowGate)
@@ -370,18 +411,29 @@ public class DspPipelineService : BackgroundService,
         }
         else if (!belowGate)
         {
-            double cutSlewDb = (peak > RxLevelerPeakTarget || peakLimited)
+            double cutSlewDb = (peak > RxLevelerPeakTarget || peakLimited || currentGainOverdrivesPeak)
                 ? Math.Max(RxLevelerSmoothCutDb, currentDb - desiredDb)
                 : RxLevelerSmoothCutDb;
             nextDb = Math.Max(desiredDb, currentDb - cutSlewDb);
         }
         nextDb = Math.Clamp(nextDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
 
+        // Hard per-block peak guard. The smooth boost/cut slews above track
+        // loudness gently; this is the safety floor that stops a held-high gain
+        // from ever being *applied* to a block whose peak would then exceed the
+        // limiter target. Without it, gain banked across a quiet gap gets dumped
+        // onto the first loud-ish block of a new signal and rides the soft-limit
+        // ceiling for several blocks before the slew catches up — the "sudden
+        // strong signal blasts the speaker" failure this leveler exists to stop.
+        // Cutting straight to the peak-safe gain is inaudible next to that blast.
+        if (!belowGate && double.IsFinite(peakHeadroomDb) && nextDb > peakHeadroomDb)
+            nextDb = Math.Clamp(peakHeadroomDb, RxLevelerMaxCutDb, RxLevelerMaxBoostDb);
+
         int rampSamples = Math.Clamp(Math.Min(samples.Length, RxLevelerGainRampMaxSamples), 1, Math.Max(1, samples.Length));
         double preLimitPeak = 0.0;
         int outputLimitSampleCount = 0;
         double appliedEndDb = belowGate ? 0.0 : nextDb;
-        bool emergencyCut = !belowGate && desiredDb < currentDb && (peak > RxLevelerPeakTarget || peakLimited);
+        bool emergencyCut = !belowGate && nextDb < currentDb && (peak > RxLevelerPeakTarget || peakLimited || currentGainOverdrivesPeak);
         for (int i = 0; i < samples.Length; i++)
         {
             float clean = SanitizeAudioSample(samples[i]);
@@ -662,6 +714,21 @@ public class DspPipelineService : BackgroundService,
     private int _appliedCtunOffsetHz;
     private int _appliedTxLowHz;
     private int _appliedTxHighHz;
+
+    // Derive the TX bandpass edges WDSP should use from the live mode, ignoring
+    // the sign already stored in StateDto. WDSP selects the SSB sideband from
+    // the sign of the bandpass (negative = LSB-family, positive = USB-family),
+    // so the sign MUST track the current mode — not whatever a stale prefs DB or
+    // a mode writer that forgot to re-sign happened to leave behind. Re-deriving
+    // from the magnitudes via the single source of truth (SignedFilterForMode)
+    // is idempotent for well-formed state, so this never overrides an operator's
+    // deliberate width edit.
+    private static (int low, int high) SignedTxFilterFor(StateDto s)
+    {
+        int loAbs = Math.Min(Math.Abs(s.TxFilterLowHz), Math.Abs(s.TxFilterHighHz));
+        int hiAbs = Math.Max(Math.Abs(s.TxFilterLowHz), Math.Abs(s.TxFilterHighHz));
+        return RadioService.SignedFilterForMode(s.Mode, loAbs, hiAbs);
+    }
     private double _appliedAgcTopDb;
     private double _appliedAgcOffsetDb;
     private double _appliedRxAfGainDb;
@@ -867,6 +934,8 @@ public class DspPipelineService : BackgroundService,
     // the freeze is backend (pan pixout never goes fresh); if both advance like
     // RX1, the freeze is frontend rendering.
     private long _dispFlagLogMs;
+    // 1 Hz throttle for the TX pixel dB-range diagnostic (see Tick).
+    private long _txPixelDbgMs;
     private int _dispTicks, _rx1PanCnt, _rx1WfCnt, _rx2PanCnt, _rx2WfCnt;
     private readonly float[] _audioBuf = new float[AudioDrainCapacity];
     private readonly float[] _rx2AudioBuf = new float[AudioDrainCapacity];
@@ -958,7 +1027,8 @@ public class DspPipelineService : BackgroundService,
         IEnumerable<IRxAudioSink> audioSinks,
         ILoggerFactory loggerFactory,
         CwSidetoneSource? sidetone = null,
-        FrontendDspSceneDiagnosticsService? frontendDspScene = null)
+        FrontendDspSceneDiagnosticsService? frontendDspScene = null,
+        DisplaySettingsStore? displaySettings = null)
     {
         _radio = radio;
         _hub = hub;
@@ -968,7 +1038,72 @@ public class DspPipelineService : BackgroundService,
         _sidetone = sidetone;
         _frontendDspScene = frontendDspScene;
         _loggerFactory = loggerFactory;
+        _displaySettings = displaySettings;
         _log = loggerFactory.CreateLogger<DspPipelineService>();
+    }
+
+    // Persisted TX display analyzer config (live TX waterfall feature). Optional
+    // so test constructions of DspPipelineService keep working; when null the
+    // engine just runs at its built-in defaults. Display-only — never affects
+    // the transmitted signal.
+    private readonly DisplaySettingsStore? _displaySettings;
+    // dB added to the TX panadapter/waterfall pixels (Thetis TXDisplayCalOffset).
+    // Read on the hot Tick path; written from the connect path + endpoint.
+    private double _txDisplayCalOffsetDb;
+
+    // Default TX display analyzer params — mirror WdspDspEngine's constants and
+    // the frontend's TX_DISPLAY_* defaults. Used when the persisted value is null.
+    private const int DefaultTxDisplayFftSize = 16384;
+    private const int DefaultTxDisplayWindow = 2;
+    private const double DefaultTxDisplayAvgTauMs = 175.0;
+    private const double TxDisplayCalOffsetAbsDb = 60.0;
+
+    /// <summary>Seed a freshly constructed engine with the persisted TX display
+    /// config BEFORE its TX channel opens, so the analyzer comes up with the
+    /// operator's FFT/window/smoothing rather than engine defaults. Also seeds
+    /// the cal-offset field read by <see cref="Tick"/>. Display-only — never
+    /// touches the transmitted signal.</summary>
+    private void SeedTxDisplayConfig(WdspDspEngine wdsp)
+    {
+        var dto = _displaySettings?.Get();
+        Volatile.Write(ref _txDisplayCalOffsetDb, ResolveCalOffset(dto));
+        wdsp.ConfigureTxDisplayAnalyzer(
+            dto?.TxDisplayFftSize ?? DefaultTxDisplayFftSize,
+            dto?.TxDisplayWindow ?? DefaultTxDisplayWindow,
+            (dto?.TxDisplayAvgTauMs ?? DefaultTxDisplayAvgTauMs) / 1000.0);
+    }
+
+    /// <summary>Live update from the /api/display-settings endpoint — pushes the
+    /// new cal offset + analyzer config to the running engine (if any). Safe to
+    /// call with no radio connected; the values are re-seeded on next connect.
+    /// Display-only.</summary>
+    public void ApplyTxDisplaySettings(DisplaySettingsDto dto)
+    {
+        Volatile.Write(ref _txDisplayCalOffsetDb, ResolveCalOffset(dto));
+        int fft = dto.TxDisplayFftSize ?? DefaultTxDisplayFftSize;
+        int win = dto.TxDisplayWindow ?? DefaultTxDisplayWindow;
+        double tauSec = (dto.TxDisplayAvgTauMs ?? DefaultTxDisplayAvgTauMs) / 1000.0;
+        var engine = CurrentEngine;
+        if (engine is null) return;
+        lock (_engineLock)
+        {
+            engine.ConfigureTxDisplayAnalyzer(fft, win, tauSec);
+        }
+    }
+
+    private static double ResolveCalOffset(DisplaySettingsDto? dto)
+    {
+        double v = dto?.TxDisplayCalOffsetDb ?? 0.0;
+        if (double.IsNaN(v) || double.IsInfinity(v)) return 0.0;
+        return Math.Clamp(v, -TxDisplayCalOffsetAbsDb, TxDisplayCalOffsetAbsDb);
+    }
+
+    // Add a dB offset to every pixel of a display buffer (TX cal offset).
+    private static void AddDbOffset(float[] buf, double db)
+    {
+        if (db == 0.0) return;
+        float d = (float)db;
+        for (int i = 0; i < buf.Length; i++) buf[i] += d;
     }
 
     private void PublishAudio(in AudioFrame frame)
@@ -2819,6 +2954,9 @@ public class DspPipelineService : BackgroundService,
 
         var wdsp = new WdspDspEngine(_loggerFactory.CreateLogger<WdspDspEngine>());
         int channelId = wdsp.OpenChannel(rate, Width);
+        // Seed the operator's persisted TX display config before TXA opens so
+        // the analyzer comes up at their FFT/window/smoothing. Display-only.
+        SeedTxDisplayConfig(wdsp);
         // P1 DAC runs at 48 kHz; keep TXA at the 48/48/48 profile Hermes is
         // calibrated against.
         wdsp.OpenTxChannel(outputRateHz: 48_000);
@@ -2992,11 +3130,18 @@ public class DspPipelineService : BackgroundService,
         // notches hold their absolute RF frequency across a retune. The engine
         // no-ops when the value is unchanged, so this is cheap to call here.
         engine.SetNotchTuneFrequencyHz(s.RadioLoHz);
-        if (s.TxFilterLowHz != _appliedTxLowHz || s.TxFilterHighHz != _appliedTxHighHz)
+        // Re-sign the TX bandpass from the LIVE mode instead of trusting the
+        // sign stored in StateDto. WDSP picks the SSB sideband from the sign of
+        // the bandpass edges; a state that comes up with Mode=LSB but a positive
+        // TX filter (legacy prefs DB, or a writer that set the mode without
+        // re-signing the TX width) would otherwise transmit USB. This is
+        // idempotent for well-formed state, so it never fights an operator edit.
+        var (txLow, txHigh) = SignedTxFilterFor(s);
+        if (txLow != _appliedTxLowHz || txHigh != _appliedTxHighHz)
         {
-            engine.SetTxFilter(s.TxFilterLowHz, s.TxFilterHighHz);
-            _appliedTxLowHz = s.TxFilterLowHz;
-            _appliedTxHighHz = s.TxFilterHighHz;
+            engine.SetTxFilter(txLow, txHigh);
+            _appliedTxLowHz = txLow;
+            _appliedTxHighHz = txHigh;
         }
         if (s.AgcTopDb != _appliedAgcTopDb || s.AgcOffsetDb != _appliedAgcOffsetDb)
         {
@@ -3006,6 +3151,11 @@ public class DspPipelineService : BackgroundService,
             _appliedAgcTopDb = s.AgcTopDb;
             _appliedAgcOffsetDb = s.AgcOffsetDb;
         }
+        // (Removed: the manual AGC "knee" push. WDSP's threshold and AGC-T are
+        // the SAME register (max_gain) — driving both independently clobbered
+        // each other and made AGC-T hair-trigger. AGC-T is now the single
+        // manual control via SetRXAAGCTop above; Auto-AGC tracks the noise floor
+        // on top of it. See the AGC knee removal commit.)
         if (s.RxAfGainDb != _appliedRxAfGainDb)
         {
             engine.SetRxAfGainDb(channel, s.RxAfGainDb);
@@ -3337,7 +3487,10 @@ public class DspPipelineService : BackgroundService,
         // OpenTxChannel).
         engine.SetTxMode(s.Mode);
         engine.SetFilter(channelId, s.FilterLowHz, s.FilterHighHz);
-        engine.SetTxFilter(s.TxFilterLowHz, s.TxFilterHighHz);
+        // Sign the TX bandpass from the live mode (see SignedTxFilterFor) so a
+        // fresh engine doesn't key up with a USB-positive default while in LSB.
+        var (txOpenLow, txOpenHigh) = SignedTxFilterFor(s);
+        engine.SetTxFilter(txOpenLow, txOpenHigh);
         engine.SetVfoHz(channelId, s.VfoHz);
         // Replay the WDSP shift on fresh-channel open so a connect landing
         // with VfoHz != RadioLoHz (persisted across restart) is demodulating
@@ -3384,8 +3537,8 @@ public class DspPipelineService : BackgroundService,
         _appliedLowHz = s.FilterLowHz;
         _appliedHighHz = s.FilterHighHz;
         _appliedCtunOffsetHz = ctunShiftHz;
-        _appliedTxLowHz = s.TxFilterLowHz;
-        _appliedTxHighHz = s.TxFilterHighHz;
+        _appliedTxLowHz = txOpenLow;
+        _appliedTxHighHz = txOpenHigh;
         _appliedAgcTopDb = s.AgcTopDb;
         _appliedAgcOffsetDb = s.AgcOffsetDb;
         _appliedRxAfGainDb = s.RxAfGainDb;
@@ -3617,6 +3770,9 @@ public class DspPipelineService : BackgroundService,
         {
             var wdsp = new WdspDspEngine(_loggerFactory.CreateLogger<WdspDspEngine>());
             newChannelId = wdsp.OpenChannel(rateHz, Width);
+            // Seed the operator's persisted TX display config before TXA opens
+            // so the analyzer comes up at their FFT/window/smoothing. Display-only.
+            SeedTxDisplayConfig(wdsp);
             // G2 MkII DUC on P2 expects 192 kHz TX IQ. WDSP upsamples internally
             // (48k mic → 96k DSP → 192k out) and CFIR compensates the sinc
             // droop. Feeding 48 kHz IQ to a 192 kHz DUC as we did before
@@ -4384,6 +4540,45 @@ public class DspPipelineService : BackgroundService,
             {
                 wf = engine.TryGetDisplayPixels(channel, DisplayPixout.Waterfall, wfBuf);
                 if (wf) wfSource = "rx";
+            }
+
+            // TX display calibration offset (Thetis TXDisplayCalOffset). Pure
+            // dB shift of the transmitted-signal trace/waterfall so the operator
+            // can sit the in-passband level where they want it — display-only,
+            // never the air. Applied only to TX-sourced pixels (tx / PS
+            // feedback); RX pixels keep their own calibration.
+            double txCal = Volatile.Read(ref _txDisplayCalOffsetDb);
+            if (txCal != 0.0)
+            {
+                if (pan && (panSource == "tx" || panSource == "ps-feedback")) AddDbOffset(panBuf, txCal);
+                if (wf && (wfSource == "tx" || wfSource == "ps-feedback")) AddDbOffset(wfBuf, txCal);
+            }
+
+            // Diagnostic (1 Hz): log the actual TX panadapter pixel dB range so
+            // we can confirm where the transmitted signal sits relative to the
+            // display window (the TX analyzer reads far hotter than RX). Helps
+            // verify the frontend TX auto-range is fitting sane values.
+            if (pan && panSource == "tx")
+            {
+                long txDbgNow = Environment.TickCount64;
+                if (txDbgNow - _txPixelDbgMs >= 1000)
+                {
+                    _txPixelDbgMs = txDbgNow;
+                    float pmin = float.PositiveInfinity, pmax = float.NegativeInfinity;
+                    double psum = 0; int pcnt = 0;
+                    for (int i = 0; i < panBuf.Length; i++)
+                    {
+                        float v = panBuf[i];
+                        if (!float.IsFinite(v)) continue;
+                        if (v < pmin) pmin = v;
+                        if (v > pmax) pmax = v;
+                        psum += v; pcnt++;
+                    }
+                    if (pcnt > 0)
+                        _log.LogInformation(
+                            "tx.display.pixels min={Min:F1} max={Max:F1} mean={Mean:F1} dB (window default {Lo}..{Hi}; calOffset={Cal:F1})",
+                            pmin, pmax, psum / pcnt, -80, 20, txCal);
+                }
             }
 
             // Flip to display order (low freq left, high freq right). WDSP emits

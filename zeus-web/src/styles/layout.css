@@ -144,8 +144,8 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 3px;
-  padding: 6px 2px 5px;
+  gap: 0;
+  padding: 8px 2px;
   color: var(--fg-2);
   background: transparent;
   border: 1px solid transparent;
@@ -153,7 +153,7 @@
   box-shadow: none;
   cursor: pointer;
   text-align: center;
-  min-height: 50px;
+  min-height: 40px;
   position: relative;
   transition: background var(--dur-fast), border-color var(--dur-fast),
     color var(--dur-fast);
@@ -200,11 +200,11 @@
      current colour so it picks up the active state. */
   font-family: var(--font-sans);
   font-weight: 700;
-  font-size: 16px;
+  font-size: 17px;
   letter-spacing: 0;
   text-transform: uppercase;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -212,21 +212,29 @@
   border: 1px solid currentColor;
   opacity: 0.85;
 }
+/* Icon-only bar: the layout name is not shown inline (it wrapped mid-word in
+   the narrow column). The full name is revealed on hover via the tab's native
+   `title` tooltip. The span is kept in the DOM but visually hidden so screen
+   readers still announce the layout name. */
 .left-layout-bar .lb-tab-name {
-  font-family: var(--font-sans);
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  line-height: 1.1;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  line-clamp: 2;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
   overflow: hidden;
-  word-break: break-word;
-  hyphens: auto;
-  max-width: 100%;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.left-layout-bar .lb-lock-indicator {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  color: var(--power);
+  opacity: 0.82;
+  filter: drop-shadow(0 0 4px rgba(255, 201, 58, 0.25));
+  pointer-events: none;
 }
 .left-layout-bar .lb-gear {
   position: absolute;
@@ -2214,15 +2222,36 @@
 .meter-bar {
   position: relative;
   height: 10px;
-  background: #000;
+  /* recessed liquid-metal well — concave machined pocket, lit upper-left */
+  background: radial-gradient(125% 145% at 34% 22%,
+    var(--meter-well-edge) 0%, var(--meter-well-floor) 58%, var(--meter-well-floor) 100%);
   border: 1px solid rgba(0,0,0,0.8);
-  border-radius: 0;
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.8);
+  border-radius: var(--r-xs);
+  box-shadow:
+    inset 0 2px 5px rgba(0,0,0,0.88),
+    inset 0 -1px 1.5px rgba(176,210,255,0.05),
+    inset 0 0 0 1px rgba(0,0,0,0.60),
+    inset 0 0 12px rgba(0,0,0,0.50);
   overflow: hidden;
+}
+/* liquid-metal glass cover on every shared bar — static domed specular
+   (::before) only. The drifting sheen band (::after) was removed along with
+   the rest of the moving liquid-metal lighting. Above the fill, pointer-
+   events:none. */
+.meter-bar::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 3;
+  border-radius: inherit;
+  background: radial-gradient(64% 130% at 32% 16%,
+    var(--meter-glass-dome) 0%, var(--meter-glass-top) 46%, var(--meter-glass-bot) 100%);
 }
 .meter-fill {
   position: absolute; inset: 0 auto 0 0;
-  background: linear-gradient(90deg, #00c853 0%, var(--signal) 60%, var(--tx) 100%);
+  /* quicksilver volume shading over the live hue ramp — polished liquid metal */
+  background:
+    linear-gradient(180deg, var(--meter-mercury-hi) 0%, rgba(255,255,255,0.30) 9%,
+      rgba(255,255,255,0.04) 22%, var(--meter-mercury-lo) 30%, rgba(0,0,0,0) 52%,
+      rgba(0,0,0,0.16) 84%, rgba(0,0,0,0.30) 100%),
+    linear-gradient(90deg, #00c853 0%, var(--signal) 60%, var(--tx) 100%);
   transition: width 120ms;
 }
 .meter-ticks { position: absolute; inset: 0; pointer-events: none; }
@@ -2514,8 +2543,8 @@
 .qrz-grid-rows { display: flex; flex-direction: column; gap: 0; }
 .qrz-grid-rows .qrz-row { border-bottom: 1px dotted rgba(255,255,255,0.06); }
 .qrz-footer {
-  display: flex; align-items: center; padding-top: 6px; margin-top: 2px;
-  border-top: 1px solid rgba(74,158,255,0.2);
+  display: flex; align-items: center; padding-bottom: 6px; margin-bottom: 2px;
+  border-bottom: 1px solid rgba(74,158,255,0.2);
 }
 /* SP / LP rotator buttons inline in the QRZ footer — only rendered when a
  * rotator is connected and both home + contact have coordinates. Sized to
@@ -2820,12 +2849,90 @@
 .cs-input:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(46,142,255,0.15);
+  box-shadow: inset 0 1px 2px rgba(0,0,0,0.6), 0 0 0 1px var(--accent-soft);
 }
-.cs-input:focus { outline: none; border-color: var(--accent); box-shadow: inset 0 1px 2px rgba(0,0,0,0.6), 0 0 0 1px var(--accent-soft); }
 
 /* ===== Logbook ===== */
+.logbook-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+.logbook-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.logbook-panel-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
 .logbook { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--bg-1); }
+.log-search {
+  flex: 1 1 190px;
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 6px;
+  min-width: 140px;
+  max-width: 280px;
+  margin-right: auto;
+  color: var(--fg-2);
+}
+.log-search input {
+  min-width: 0;
+  height: 22px;
+  padding: 2px 6px;
+  color: var(--fg-0);
+  background: var(--bg-0);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-xs);
+  font: 600 11px/1.2 var(--font-sans);
+  outline: none;
+}
+.log-search input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-line);
+}
+.log-search-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--fg-2);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  cursor: pointer;
+}
+.log-search-clear:hover {
+  color: var(--fg-0);
+  background: var(--bg-0);
+  border-color: var(--line-strong);
+}
+.logbook-visibility-toggle {
+  width: 28px;
+  min-width: 28px;
+  height: 24px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.logbook-visibility-toggle.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--btn-active-text);
+}
 .log-head {
   display: grid;
   grid-template-columns: 2rem 60px 55px 85px 70px 50px 70px 1fr;
@@ -2849,6 +2956,13 @@
   cursor: pointer;
 }
 .log-rows { flex: 1; overflow-y: auto; min-height: 0; }
+.log-empty {
+  padding: 2rem 1rem;
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+}
 .log-row {
   display: grid;
   grid-template-columns: 2rem 60px 55px 85px 70px 50px 70px 1fr;
@@ -2897,6 +3011,7 @@
 }
 .log-sync-pill {
   flex-shrink: 0;
+  margin-left: auto;
   color: var(--accent);
   font-size: 9px;
   font-weight: 800;
@@ -4165,3 +4280,9 @@
   text-shadow: 0 0 6px var(--accent-soft);
   animation: cwCursorBlink 1s steps(2) infinite;
 }
+
+/* ===== Liquid-metal meter kit (KB2UKA) — glass drift animations REMOVED ====
+   The moving sheen + caustic light sweeps were removed per operator request.
+   The static domed-glass specular (the GlassDome / MeterGlass / LiquidMetal-
+   Frame dome layer and .meter-bar::before) is kept; the drift band elements
+   and their @keyframes are gone from the render components and this file. == */

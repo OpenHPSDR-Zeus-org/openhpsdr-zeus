@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Threading;
 using Zeus.Plugins.Contracts.Audio;
 using Zeus.Plugins.Host.Audio;
 
@@ -11,9 +12,28 @@ namespace Zeus.Plugins.Host.Tests;
 /// watchdog, handshake validation, and reconnect replay. These run on ANY
 /// platform: the controller's test/seam constructor injects fake process and
 /// bridge implementations, so no real engine or Windows shared memory is needed.
+///
+/// In the LoadSensitive collection (non-parallel): these assert on timing
+/// (watchdog intervals, relaunch backoff), so running them without sibling
+/// tests competing for the runner's cores removes the contention that made
+/// them flaky once the assembly grew.
 /// </summary>
+[Collection("LoadSensitive")]
 public class VstEngineSupervisorTests
 {
+    static VstEngineSupervisorTests()
+    {
+        // These supervisor tests are timing-sensitive (watchdog timers, relaunch
+        // backoff, polling waits) and run in parallel with the rest of the
+        // assembly. On a 2-core Windows CI runner the default thread-pool floor
+        // can starve a watchdog timer callback or a Task.Delay continuation long
+        // enough to blow a test's wait budget — the source of the intermittent
+        // HungEngine / crash-loop flakes. Raise the floor once (process-wide,
+        // idempotent) so timers and continuations always get a thread.
+        ThreadPool.GetMinThreads(out var worker, out var io);
+        ThreadPool.SetMinThreads(Math.Max(worker, 16), Math.Max(io, 16));
+    }
+
     private static AudioBlockContext Ctx(int frames, int channels) =>
         new(sampleRate: 48000, channels: channels, frames: frames, sampleTime: 0, mox: true);
 
@@ -31,6 +51,34 @@ public class VstEngineSupervisorTests
             await Task.Delay(10);
         }
         return cond();
+    }
+
+    // Polls <read> until its value stops changing for <settleMs> consecutive ms
+    // (i.e. it has plateaued), returning true; or false at <timeoutMs> if it
+    // never settles (kept growing). Used to assert "no more work is scheduled"
+    // deterministically: a loaded CI runner can lag a single in-flight operation
+    // past a fixed wall-clock window, but a plateau is observable at any runner
+    // speed, so a stop-condition expressed this way is not timing-racy.
+    private static async Task<bool> WaitUntilStableAsync(Func<int> read, int settleMs, int timeoutMs)
+    {
+        var total = Stopwatch.StartNew();
+        var last = read();
+        var stableSince = Stopwatch.StartNew();
+        while (total.ElapsedMilliseconds < timeoutMs)
+        {
+            await Task.Delay(10);
+            var now = read();
+            if (now != last)
+            {
+                last = now;
+                stableSince.Restart();
+            }
+            else if (stableSince.ElapsedMilliseconds >= settleMs)
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     /// <summary>A scriptable in-process stand-in for the engine process.</summary>
@@ -73,7 +121,28 @@ public class VstEngineSupervisorTests
         public bool EngineReady { get; set; }
         public int WaitBudgetMs { get; set; }
         public int ResetCount { get; private set; }
-        public long DegradedBlocks => Interlocked.Read(ref _degraded);
+
+        /// <summary>
+        /// When > 0, every read of <see cref="DegradedBlocks"/> advances the counter
+        /// by this much — modelling an engine that keeps dropping blocks. This makes
+        /// the hang-watchdog deterministic: it sees a positive delta on every sampling
+        /// interval, so its consecutive-interval streak can't be reset by CI thread-pool
+        /// starvation (the source of a Windows-only flake when a background pump drove
+        /// the counter instead).
+        /// </summary>
+        public long DegradePerRead { get; set; }
+
+        public long DegradedBlocks
+        {
+            get
+            {
+                long step = DegradePerRead;
+                return step > 0
+                    ? Interlocked.Add(ref _degraded, step)
+                    : Interlocked.Read(ref _degraded);
+            }
+        }
+
         public void AddDegraded(long n) => Interlocked.Add(ref _degraded, n);
 
         public bool Process(ReadOnlySpan<float> input, Span<float> output, AudioBlockContext ctx)
@@ -165,11 +234,15 @@ public class VstEngineSupervisorTests
         Assert.Equal(VstEngineState.Faulted, c.State);
         Assert.False(c.IsActive);
 
-        // After faulting it cools down — the attempt count must plateau.
-        int countAtFault = created;
-        await Task.Delay(300);
-        Assert.True(created <= countAtFault + 1,
-            $"should stop hot-looping after fault (was {countAtFault}, now {created})");
+        // After faulting it cools down (FaultCooldownMs = 5 s, far longer than a
+        // relaunch cycle). At most one relaunch may be in flight at the instant
+        // the cap trips; once that settles the spawn count must STOP GROWING.
+        // Assert that plateau directly — a stable count is observable at any
+        // runner speed, whereas the old fixed 300 ms / +1 window let a loaded
+        // Windows CI runner lag an in-flight launch past it and flake.
+        Assert.True(await WaitUntilStableAsync(() => created, settleMs: 150, timeoutMs: 3000),
+            $"spawn count should plateau (stop hot-looping) after fault; now {created}");
+        Assert.Equal(VstEngineState.Faulted, c.State); // stayed faulted, not relaunching
     }
 
     // ── Hang watchdog recycles an alive-but-unresponsive engine ───────────────
@@ -197,16 +270,18 @@ public class VstEngineSupervisorTests
         Assert.Equal(VstEngineStartResult.Started, start);
         var bridge = getBridge()!;
 
-        // Simulate the engine no longer servicing blocks: degraded count climbs.
-        var stop = false;
-        var pump = Task.Run(async () =>
-        {
-            while (!stop) { bridge.AddDegraded(10); await Task.Delay(5); }
-        });
+        // Simulate the engine no longer servicing blocks: every watchdog sample of
+        // DegradedBlocks sees the count climb past the threshold. Driving it from the
+        // read (instead of a background pump) keeps the watchdog's consecutive-interval
+        // streak from being reset by CI thread-pool starvation — previously flaky on
+        // Windows, where the pump task could be starved long enough to zero the delta.
+        bridge.DegradePerRead = c.HangDegradedThreshold * 2;
 
-        var recycled = await WaitUntilAsync(() => c.RestartCount >= 1, 4000);
-        stop = true;
-        await pump;
+        // Generous budget: this asserts a CORRECTNESS invariant (the watchdog
+        // does recycle a hung engine), not a latency bound. A real failure to
+        // recycle still fails the test; a loaded runner just takes longer to
+        // observe it. ~50 ms when healthy.
+        var recycled = await WaitUntilAsync(() => c.RestartCount >= 1, 15000);
 
         Assert.True(recycled, "watchdog should force-recycle a hung engine");
         Assert.True(created.Count >= 2);

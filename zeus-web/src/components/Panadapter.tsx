@@ -43,7 +43,12 @@
 // License for details.
 
 import { useEffect, useRef, type CSSProperties } from 'react';
-import { createPanRenderer, hexToRgbFloats } from '../gl/panadapter';
+import {
+  cancelPendingPanContextLoss,
+  createPanRenderer,
+  hexToRgbFloats,
+  schedulePanContextLoss,
+} from '../gl/panadapter';
 import { planForFrame } from '../gl/frame-plan';
 import { cancelDrawBusFrame, requestDrawBusFrame } from '../realtime/draw-bus';
 import { registerFrameConsumer, selectDisplaySlice, useDisplayStore } from '../state/display-store';
@@ -97,6 +102,11 @@ export function Panadapter({
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
+
+    // A previous unmount may have scheduled a deferred context loss for this
+    // canvas; cancel it now that we're reusing the canvas so we don't tear down
+    // the context we're about to (re)create (mirrors Waterfall.tsx, #629).
+    cancelPendingPanContextLoss(canvas);
 
     const gl = canvas.getContext('webgl2', { antialias: true, alpha: true, premultipliedAlpha: true });
     if (!gl) {
@@ -327,6 +337,16 @@ export function Panadapter({
         }
       }
 
+      // While keyed, fit the TX display windows to the live transmitted signal
+      // (no-op when TX auto-range is off). The panadapter is the always-present
+      // TX surface, so it drives the fit regardless of which waterfall renderer
+      // is active. Receiver A only — that's the slice the server feeds TX
+      // pixels into; RX2 (receiver B) keeps its own RX window during TX.
+      if (receiver === 'A' && slice.panValid && slice.panDb) {
+        const { moxOn, tunOn } = useTxStore.getState();
+        if (moxOn || tunOn) useDisplaySettingsStore.getState().updateTxAutoRange(slice.panDb);
+      }
+
       requestRedraw();
     });
 
@@ -408,6 +428,12 @@ export function Panadapter({
       document.removeEventListener('visibilitychange', onVisibilityChange);
       cancelDrawBusFrame(redraw);
       renderer.dispose();
+      // Free the ANGLE context slot on real unmounts, deferred so a StrictMode
+      // (or quick drag-induced) remount can cancel it and reuse the canvas
+      // rather than losing a live context (#629). dispose() frees GL objects;
+      // this releases the context itself so contexts don't accumulate across
+      // repeated workspace rearranges.
+      schedulePanContextLoss(canvas, gl);
       releaseFrameConsumer();
     };
   }, [receiver, stitched]);

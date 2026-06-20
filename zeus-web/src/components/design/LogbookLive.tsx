@@ -42,10 +42,11 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useLoggerStore } from '../../state/logger-store';
 import type { LogEntry } from '../../api/log';
 import { formatQsoDateUtc, formatQsoTimeUtc } from './logbook-formatters';
+import { filterLogEntries } from './logbook-search';
 
 function compactList(parts: Array<string | null | undefined>): string {
   return parts.filter((p): p is string => !!p).join(' · ');
@@ -63,10 +64,15 @@ function logMeta(entry: LogEntry): string {
   ]) || '—';
 }
 
+function formatFrequencyMhz(freq: number | null | undefined): string | null {
+  return typeof freq === 'number' && Number.isFinite(freq) ? freq.toFixed(3) : null;
+}
+
 function logRowTitle(entry: LogEntry): string {
+  const frequency = formatFrequencyMhz(entry.frequencyMhz);
   return compactList([
     `${entry.callsign} ${formatQsoDateUtc(entry.qsoDateTimeUtc)} ${formatQsoTimeUtc(entry.qsoDateTimeUtc)}Z`,
-    `${entry.frequencyMhz.toFixed(3)} MHz`,
+    frequency ? `${frequency} MHz` : null,
     entry.band,
     entry.mode,
     `RST ${entry.rstSent}/${entry.rstRcvd}`,
@@ -77,10 +83,18 @@ function logRowTitle(entry: LogEntry): string {
   ]);
 }
 
-export function LogbookLive() {
+type LogbookLiveProps = {
+  searchText: string;
+  hideQrzPublished: boolean;
+};
+
+export function LogbookLive({ searchText, hideQrzPublished }: LogbookLiveProps) {
   const entries = useLoggerStore((s) => s.entries);
   const totalCount = useLoggerStore((s) => s.totalCount);
   const loading = useLoggerStore((s) => s.loading);
+  const lastImportResult = useLoggerStore((s) => s.lastImportResult);
+  const importError = useLoggerStore((s) => s.importError);
+  const clearImportResult = useLoggerStore((s) => s.clearImportResult);
   const lastPublishResult = useLoggerStore((s) => s.lastPublishResult);
   const publishError = useLoggerStore((s) => s.publishError);
   const clearPublishResult = useLoggerStore((s) => s.clearPublishResult);
@@ -88,22 +102,30 @@ export function LogbookLive() {
   const toggleSelected = useLoggerStore((s) => s.toggleSelected);
   const setSelectedIds = useLoggerStore((s) => s.setSelectedIds);
   const selectAllRef = useRef<HTMLInputElement>(null);
-  const selectedVisibleCount = entries.reduce(
+  const query = searchText.trim();
+  const filteredEntries = useMemo(
+    () => filterLogEntries(entries, searchText, { hideQrzPublished }),
+    [entries, hideQrzPublished, searchText],
+  );
+  const filtersActive = query.length > 0 || hideQrzPublished;
+  const visibleIds = useMemo(() => new Set(filteredEntries.map((entry) => entry.id)), [filteredEntries]);
+  const selectedVisibleCount = filteredEntries.reduce(
     (count, entry) => count + (selectedIds.has(entry.id) ? 1 : 0),
     0,
   );
-  const allVisibleSelected = entries.length > 0 && selectedVisibleCount === entries.length;
+  const allVisibleSelected = filteredEntries.length > 0 && selectedVisibleCount === filteredEntries.length;
   const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
 
   useEffect(() => {
-    // Self-clear publish feedback (shown in the Logbook header) after a few seconds.
-    if (lastPublishResult || publishError) {
+    // Self-clear import/publish feedback (shown in the Logbook header) after a few seconds.
+    if (lastImportResult || importError || lastPublishResult || publishError) {
       const timer = setTimeout(() => {
+        clearImportResult();
         clearPublishResult();
       }, 4000);
       return () => clearTimeout(timer);
     }
-  }, [lastPublishResult, publishError, clearPublishResult]);
+  }, [lastImportResult, importError, lastPublishResult, publishError, clearImportResult, clearPublishResult]);
 
   useEffect(() => {
     if (selectAllRef.current) {
@@ -139,11 +161,16 @@ export function LogbookLive() {
             ref={selectAllRef}
             type="checkbox"
             checked={allVisibleSelected}
+            disabled={filteredEntries.length === 0}
             onChange={() => {
-              setSelectedIds(allVisibleSelected ? [] : entries.map((entry) => entry.id));
+              setSelectedIds(
+                allVisibleSelected
+                  ? [...selectedIds].filter((id) => !visibleIds.has(id))
+                  : [...selectedIds, ...filteredEntries.map((entry) => entry.id)],
+              );
             }}
-            aria-label={allVisibleSelected ? 'Clear selected log entries' : 'Select all log entries'}
-            title={allVisibleSelected ? 'Clear selected log entries' : 'Select all log entries'}
+            aria-label={allVisibleSelected ? 'Clear selected visible log entries' : 'Select visible log entries'}
+            title={allVisibleSelected ? 'Clear selected visible log entries' : 'Select visible log entries'}
           />
         </span>
         <span title="QSO date in UTC">Date·UTC</span>
@@ -155,7 +182,14 @@ export function LogbookLive() {
         <span>Name · QTH · Notes</span>
       </div>
       <div className="log-rows">
-        {entries.map((entry) => (
+        {filteredEntries.length === 0 && (
+          <div className="log-empty">
+            {query
+              ? `No log entries match "${query}".`
+              : 'No unpublished log entries to show.'}
+          </div>
+        )}
+        {filteredEntries.map((entry) => (
           <button
             key={entry.id}
             type="button"
@@ -180,7 +214,7 @@ export function LogbookLive() {
             </span>
             <span className="t-call">{entry.callsign}</span>
             <span className="t-freq log-cell-stack">
-              <span>{entry.frequencyMhz.toFixed(3)}</span>
+              <span>{formatFrequencyMhz(entry.frequencyMhz) ?? '—'}</span>
               <span className="log-sub">{entry.band || '—'}</span>
             </span>
             <span className="t-mode">{entry.mode}</span>
@@ -204,7 +238,11 @@ export function LogbookLive() {
       </div>
       <div className="log-foot">
         <span style={{ flex: 1 }} />
-        <span className="label-xs">{entries.length} of {totalCount}</span>
+        <span className="label-xs">
+          {filtersActive
+            ? `${filteredEntries.length} of ${entries.length} visible · ${totalCount} total`
+            : `${entries.length} of ${totalCount}`}
+        </span>
       </div>
     </div>
   );

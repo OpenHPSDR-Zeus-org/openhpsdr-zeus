@@ -51,6 +51,52 @@ public sealed class PluginSettingsStore : IDisposable
     private ILiteCollection<SettingDoc> CollectionFor(string pluginId)
         => _db.GetCollection<SettingDoc>(CollectionName(pluginId));
 
+    /// <summary>
+    /// Opaque snapshot of one plugin's ENTIRE LiteDB collection (every
+    /// <see cref="SettingDoc"/>: knobs + per-plugin bypass). Mirrors how VST
+    /// blobs round-trip — key/value in, key/value out, the host never
+    /// interprets the values. This is the complete, plugin-agnostic capture of
+    /// a NATIVE plugin's state for the TX Audio Profile system, without
+    /// touching the <c>IAudioPlugin</c>/<c>IPluginSettings</c> contracts.
+    /// </summary>
+    public IReadOnlyDictionary<string, string> DumpCollection(string pluginId)
+    {
+        if (string.IsNullOrWhiteSpace(pluginId)) return new Dictionary<string, string>();
+        lock (_lock)
+        {
+            var coll = CollectionFor(pluginId);
+            var outp = new Dictionary<string, string>(StringComparer.Ordinal);
+            // last-writer-wins on duplicate keys, matching ScopedSettings.GetAsync's
+            // OrderByDescending(Id) defensive read: ascending Id means the highest
+            // Id (latest write) lands last and overwrites stale duplicates.
+            foreach (var d in coll.Query().OrderBy(x => x.Id).ToList())
+                outp[d.Key] = d.JsonValue;
+            return outp;
+        }
+    }
+
+    /// <summary>
+    /// Restore: replace the collection's contents for the supplied keys with a
+    /// saved snapshot. DeleteMany+Insert per key under the same lock — the
+    /// identical idempotent pattern as <c>ScopedSettings.SetAsync</c> (the
+    /// PR #387 "Id=0 upsert grows unbounded" fix), so a restore can't strand
+    /// the live value behind stale duplicates. Keys not present in the snapshot
+    /// are left untouched (a partial snapshot never wipes unrelated settings).
+    /// </summary>
+    public void RestoreCollection(string pluginId, IReadOnlyDictionary<string, string> snapshot)
+    {
+        if (string.IsNullOrWhiteSpace(pluginId) || snapshot is null) return;
+        lock (_lock)
+        {
+            var coll = CollectionFor(pluginId);
+            foreach (var kv in snapshot)
+            {
+                coll.DeleteMany(x => x.Key == kv.Key);
+                coll.Insert(new SettingDoc { Key = kv.Key, JsonValue = kv.Value });
+            }
+        }
+    }
+
     internal static string CollectionName(string pluginId)
         => "plugin_" + pluginId.Replace('.', '_').Replace('-', '_');
 

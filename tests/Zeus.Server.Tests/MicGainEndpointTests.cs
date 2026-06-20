@@ -130,21 +130,14 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         Assert.Equal(10, radio.Snapshot().MicGainDb);
     }
 
-    public sealed class Factory : WebApplicationFactory<Program>
+    public sealed class Factory : IsolatedPrefsFactory
     {
         public StubEngine TestEngine { get; } = new();
 
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        protected override void ConfigureExtra(IWebHostBuilder builder)
         {
-            builder.UseEnvironment("Test");
             builder.ConfigureServices(services =>
             {
-                // Replace every IHostedService registration so the real
-                // DspPipelineService, TxMetersService, TxAudioIngestStartup
-                // and TxTuneDriver do not spin up — we're only testing
-                // the HTTP handler.
-                services.RemoveAll<IHostedService>();
-
                 // Swap the DspPipelineService singleton for a stubbed
                 // subclass whose CurrentEngine is our recording stub.
                 services.RemoveAll<DspPipelineService>();
@@ -179,6 +172,9 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         public void SetVfoHz(int channelId, long vfoHz) { }
         public void SetCtunShift(int channelId, int shiftHz) { }
         public void SetAgcTop(int channelId, double topDb) { }
+        public void SetAgcThresh(int channelId, double threshDbm) { }
+        public double GetAgcTop(int channelId) => 0.0;
+        public double GetAgcThresh(int channelId) => 0.0;
         public void SetAgc(int channelId, AgcConfig cfg) { }
         public void SetSquelch(int channelId, SquelchConfig cfg) { }
         public List<TxLevelingConfig> TxLevelingCalls { get; } = new();
@@ -192,6 +188,7 @@ public class MicGainEndpointTests : IClassFixture<MicGainEndpointTests.Factory>
         public int ReadAudio(int channelId, Span<float> output) => 0;
         public bool TryGetDisplayPixels(int channelId, DisplayPixout which, Span<float> dbOut) => false;
         public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
+        public void ConfigureTxDisplayAnalyzer(int fftSize, int windowType, double avgTauSec) { }
         public bool TryGetPsFeedbackDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
         public int OpenTxChannel(int outputRateHz = 48_000) => 0;
         public void SetMox(bool moxOn) { }

@@ -100,7 +100,15 @@ public sealed class SyntheticDspEngine : IDspEngine
 
     public void SetCtunShift(int channelId, int shiftHz) { /* synthetic has no IF stage */ }
 
-    public void SetAgcTop(int channelId, double topDb) { /* synthetic has no AGC */ }
+    public void SetAgcTop(int channelId, double topDb) { _synthAgcTopDb = topDb; }
+
+    public void SetAgcThresh(int channelId, double threshDbm) { /* synthetic has no AGC */ }
+
+    public double GetAgcTop(int channelId) => _synthAgcTopDb;
+
+    public double GetAgcThresh(int channelId) => 0.0;
+
+    private double _synthAgcTopDb = 80.0;
 
     public void SetAgc(int channelId, AgcConfig cfg)
     {
@@ -242,6 +250,9 @@ public sealed class SyntheticDspEngine : IDspEngine
     // Returning false tells DspPipelineService.Tick to leave the display alone
     // while MOX is on, matching the existing "no new data" semantics.
     public bool TryGetTxDisplayPixels(DisplayPixout which, Span<float> dbOut) => false;
+
+    // Synthetic has no TX analyzer to reconfigure — no-op.
+    public void ConfigureTxDisplayAnalyzer(int fftSize, int windowType, double avgTauSec) { }
 
     // Synthetic has no PS feedback path either — the PS-Monitor toggle is a
     // no-op here, same shape as TryGetTxDisplayPixels.

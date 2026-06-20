@@ -12,6 +12,7 @@
 // arc + +dB region uses --accent, base chrome uses --fg-* / --bg-* / --line.
 
 import { Fragment } from 'react';
+import { GlassDome } from '../meters/render/GlassDome';
 import {
   FACE,
   pt,
@@ -342,6 +343,15 @@ export function AnalogMeterFace({
 
         <NeedleShadow angleDeg={angle} />
         <Needle angleDeg={angle} peakAngleDeg={peakAngle} />
+        {/* Liquid-metal glass dome over the dial — static upper-left specular,
+            the "instrument under curved glass" tell. */}
+        <GlassDome
+          defsId="analogMeterGlass"
+          x={0}
+          y={FACE.h * 0.05}
+          width={FACE.w}
+          height={FACE.h * 0.95}
+        />
       </svg>
     </div>
   );

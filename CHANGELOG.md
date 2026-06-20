@@ -10,6 +10,113 @@ see the corresponding GitHub Release page.
 
 ---
 
+## [0.10.0] — 2026-06-20
+
+> **🎉 The biggest Zeus release yet — and truly the N9WAR feature release.** Around 145 pull requests land here. This is the release where the original Zeus and Christian Suarez's (N9WAR) Zeus become one, bringing whole new subsystems to operators for the first time: built-in operator chat, DX/POTA/SOTA spotting, space-weather, a true second receiver, AI net-monitoring, one-click self-diagnostics, a GPU waterfall, and a full operator's manual — on top of a deep receive/transmit audio overhaul.
+
+### Operator collaboration & chat
+
+**Built-in operator chat.** Zeus now has a real-time chat system so operators running Zeus can talk to each other right inside the app — public rooms plus private one-to-one direct messages. *(#692, #743)*
+
+**Friends, consent, and moderation.** Add other operators as friends; chat respects a consent model with basic moderation tools so you control who can reach you. *(#750, #751, #765)*
+
+**Optional callsign + frequency sharing.** When chat is on you can optionally broadcast your callsign and current frequency to others — Zeus clearly discloses what will be shared before you enable it, and you can keep your frequency private. *(#765)*
+
+**Real licensed operators only.** Chat runs through a hosted relay that requires a valid QRZ login, with rate limiting to prevent spam, so the people you talk to are real licensed hams. *(#692)*
+
+### Receiver & DSP
+
+**A true second receiver (RX2).** On Protocol-2 radios (ANAN G2 class) Zeus can now run a genuine second receiver on its own slice of spectrum and its own band — full pan/zoom, click-to-tune, and crosshair on both panes, not just a second view of the same signal.
+
+**Smart noise reduction (NR5).** A modernized adaptive noise-reduction engine cleans up background hiss while protecting speech, with a silence gate to mute dead air between transmissions; sensitivity and gating are adjustable.
+
+**Signal smarts on the panadapter.** Zeus can highlight signals, snap your tuning to the nearest one, and mark peaks automatically — easier weak-signal hunting.
+
+**Adaptive RX squelch.** A new receive squelch with a fixed-threshold mode and an adaptive mode that follows band conditions, so quiet bands stay quiet without clipping real signals.
+
+**AGC brought in line with Thetis — one consistent AGC-T control.** Receive AGC now behaves like Thetis: a single authoritative AGC-T control, with Auto-AGC that tracks the band noise floor (and now watches the radio's own ADC peak/gain) for fast, stable leveling. *(#741, #754, #764)*
+
+**A new DSP settings area.** AGC, squelch, and receive-bandwidth controls in plain, labeled sections, plus saveable filter-bandwidth presets.
+
+**Wider spectrum on ANAN G2.** Protocol-2 radios can now run at 768 and 1536 kHz sample rates for a wider visible span.
+
+**Cleaner receive audio.** Multiple fixes eliminate periodic crackle and dropouts from audio-buffer underruns, and stop a "leveler blast" where audio could briefly jump loud. *(#730, #735, #755)*
+
+### Transmit & PureSignal
+
+**Live TX waterfall + configurable TX display.** While transmitting you now get a live waterfall of your own signal, with a choice of what the TX analyzer shows. *(#760)*
+
+**Live transmit EQ analyzer.** A real-time parametric-EQ view of your transmit audio so you can see the shape of your signal as you adjust it. *(#729)*
+
+**TX fidelity advisor with full-chain auto-tune.** A transmit-quality advisor that can automatically tune your entire transmit dynamics chain for cleaner audio. *(#696)*
+
+**Pre-key (MOX) delay for external amplifiers.** An optional delay between keying and RF so an amplifier's transmit/receive relay can finish switching before RF arrives, protecting the amp. *(#630, #633)*
+
+**Lower-sideband transmit fix** so LSB no longer transmits as USB. *(#728)*
+
+**PureSignal stays safe.** PureSignal continues to start disarmed every session — an attempt by the new base to persist its armed state was deliberately reverted to keep the no-auto-arm safety rule. *(#719)*
+
+### Audio processing chain (transmit & receive)
+
+**Plugins on receive, too.** The plugin/VST audio chain — previously transmit-only — now also runs on the receive path, with its own bypass and chain ordering.
+
+**Crash-proof VST hosting.** Third-party VST plugins now run in a separate, self-healing process so a misbehaving plugin can't take down the radio, with native plugin editors that open in place. *(#698, #702)*
+
+**Named TX audio profiles.** All your transmit-audio settings are unified into named profiles you can save, switch between, and create fresh from a one-tap "+ (New)" button, with a prompt to save unsaved changes. *(#701, #744)*
+
+**Off-air monitoring.** Audition your processed audio off the air before you transmit; persistent compressor presets and live in/out/gain-reduction meters per block. *(#591)*
+
+### Spotting, recording & operating aids
+
+**DX/POTA/SOTA spotting panel.** Pulls in DX-cluster and POTA/SOTA activation spots with configurable feeds and filtering, and lets you tune straight to a spot.
+
+**Space-weather panel.** Shows current propagation/space-weather conditions to help judge band openings.
+
+**Logbook ADIF import + search.** Import existing ADIF logs and search/filter with quick QRZ lookups. *(#685, #695, #737)*
+
+**Voyeur net-monitor (AI transcription) as a plugin.** Unattended net monitoring that records a net, transcribes speech to text, enriches it with callsign/QRZ info, and can summarize "what was discussed" — now an installable plugin with an in-app model-download button (no terminal) and a searchable archive with audio replay. *(#601, #602, #604)*
+
+**HamClock as an embeddable panel**, plus a general embed-any-URL panel to dock an external web page inside your workspace.
+
+**Browser-based CW decoder.** A new in-app machine-learning Morse decoder decodes CW straight in the browser.
+
+### Diagnostics & help
+
+**"Report a Problem" self-diagnostic.** A one-click button gathers a redacted health report — connection, board, DSP/audio, transmit/PureSignal state — automatically flags known issues (audio underruns, PureSignal not armed, drive-model mismatches, accidental RX-aux bypass, and more), and hands you a clean report plus plain-language instructions for filing it on GitHub — no log digging required. *(#740)*
+
+**Release-aware update prompts.** Zeus checks the official download site (not a developer repo) and prompts you when a new released version is available, with an in-app updates panel. *(#686, #748)*
+
+### UI & workspace
+
+**Workspace & panel locking.** Lock the whole workspace, or individual panels, so layouts don't get nudged or resized by accident. *(#708, #757)*
+
+**Smoother panels and tuning.** Many workspace fixes (midpoint panel swapping, drag/crash fixes, hidden empty categories, compact icon tabs), refreshed "liquid-metal" meters with a glass-domed needle gauge, butter-smooth view-centered panadapter tuning, and a new GPU-accelerated (WebGPU) waterfall. *(#732, #758, #762, #710, #712, #752, #747)*
+
+**More robust under failures.** A workspace error boundary stops one broken panel from taking down the whole layout. *(#715)*
+
+**Brand refresh.** New canonical Zeus logo (black + white) and brand assets, and the new operator's manual. *(#767, #768)*
+
+### Documentation
+
+**The Zeus Operator's Manual.** A full operator's manual now ships with the project as a living document, regenerated each release. *(#767)*
+
+---
+
+### ⚠️ Heads-up: external port control is temporarily out
+
+External **antenna / open-collector / PTT port switching** that earlier builds had is **not in this release** — it regressed when the codebases were merged and is being re-ported. **It will return in the next update.** If you rely on Zeus to switch antennas or external accessories, hold off or keep your previous setup for now.
+
+---
+
+### 🙏 Thanks
+
+- **Christian Suarez (N9WAR)** — an enormous shout-out. This release is built on your work; the chat, the new panels, the second receiver, and the bulk of what's new here are yours. This is the N9WAR feature release.
+- **Brian (EI6LF)** — for the Zeus visual design and the plugin system that the whole audio chain runs on.
+- **Doug (KB2UKA)** — for merging the original Zeus and N9WAR's Zeus into one codebase and doing all the integration fixes this cycle (the AGC/AGC-T rework, the receive-audio crackle fixes, the self-diagnostic tool, and more).
+- **Every operator in the OpenHPSDR Zeus community** — thank you for testing, reporting, and pushing Zeus forward. This release is for you.
+
+---
+
 ## [0.9.1] — 2026-06-14
 
 > **🩹 Hotfix: the waterfall is back on Windows, plus a new amplifier-friendly TX delay.** A regression in 0.9.0 left the waterfall blank on many Windows machines while the panadapter kept working. This release fixes that, and adds an optional pre-key TX delay that protects external amplifiers.

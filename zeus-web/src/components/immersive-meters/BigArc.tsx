@@ -25,6 +25,7 @@
 
 import type { CSSProperties } from 'react';
 import { dbToFrac, fmtDb, isSilent } from './dbScale';
+import { GlassDome } from '../meters/render/GlassDome';
 import { usePeakHoldFrac } from './usePeakHold';
 import { immersiveZoneTickColor, type ZoneTick } from '../meters/meterCatalog';
 
@@ -508,6 +509,8 @@ export function BigArc(props: BigArcProps) {
           fill="var(--immersive-lamp-needle)"
           style={{ filter: 'drop-shadow(0 0 5px var(--immersive-lamp-hub-glow))' }}
         />
+        {/* Liquid-metal glass over the arc face — static specular. */}
+        <GlassDome defsId="bigArcGlass" x={0} y={0} width={240} height={150} />
       </svg>
 
       <div style={readoutStyle}>

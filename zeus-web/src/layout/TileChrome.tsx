@@ -10,7 +10,7 @@
 // inside the panel body don't initiate a drag, so the panel's own controls
 // keep working.
 
-import { GripVertical, X } from 'lucide-react';
+import { GripVertical, LockKeyhole, LockKeyholeOpen, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 export interface TileChromeProps {
@@ -19,15 +19,26 @@ export interface TileChromeProps {
   /** Optional extra header buttons rendered between the title and the
    *  remove X (e.g. a panel-specific gear icon). */
   rightSlot?: ReactNode;
+  locked?: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock?: () => void;
 }
 
-export function TileChrome({ title, onRemove, rightSlot }: TileChromeProps) {
+export function TileChrome({
+  title,
+  onRemove,
+  rightSlot,
+  locked = false,
+  workspaceLocked = false,
+  onToggleLock,
+}: TileChromeProps) {
+  const effectiveLocked = locked || workspaceLocked;
   return (
     <div className="workspace-tile-header">
       <span
         className="workspace-tile-drag-handle"
         aria-hidden="true"
-        title="Drag to reposition"
+        title={effectiveLocked ? 'Panel position is locked' : 'Drag to reposition'}
       >
         <GripVertical size={12} />
       </span>
@@ -35,6 +46,13 @@ export function TileChrome({ title, onRemove, rightSlot }: TileChromeProps) {
         {title}
       </span>
       {rightSlot}
+      {onToggleLock ? (
+        <TileLockButton
+          locked={locked}
+          workspaceLocked={workspaceLocked}
+          onToggleLock={onToggleLock}
+        />
+      ) : null}
       <button
         type="button"
         className="workspace-tile-close"
@@ -50,5 +68,44 @@ export function TileChrome({ title, onRemove, rightSlot }: TileChromeProps) {
         <X size={12} />
       </button>
     </div>
+  );
+}
+
+interface TileLockButtonProps {
+  locked: boolean;
+  workspaceLocked?: boolean;
+  onToggleLock: () => void;
+}
+
+export function TileLockButton({
+  locked,
+  workspaceLocked = false,
+  onToggleLock,
+}: TileLockButtonProps) {
+  const effectiveLocked = locked || workspaceLocked;
+  const Icon = effectiveLocked ? LockKeyhole : LockKeyholeOpen;
+  const title = locked
+    ? 'Unlock panel position'
+    : workspaceLocked
+      ? 'Workspace is locked; click to also lock this panel'
+      : 'Lock panel to this grid space';
+  return (
+    <button
+      type="button"
+      className={`workspace-tile-lock${locked ? ' is-locked' : ''}${
+        !locked && workspaceLocked ? ' is-inherited' : ''
+      }`}
+      aria-label={locked ? 'Unlock panel position' : 'Lock panel position'}
+      aria-pressed={locked}
+      title={title}
+      onClick={(e) => {
+        e.stopPropagation();
+        onToggleLock();
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+    >
+      <Icon size={12} aria-hidden />
+    </button>
   );
 }

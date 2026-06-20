@@ -42,9 +42,8 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
-import { useCallback, useState } from 'react';
+import { useCallback } from 'react';
 import { setTun } from '../api/client';
-import { ensureTxStationProfileActivated } from '../audio/tx-station-profile-activation';
 import { useConnectionStore } from '../state/connection-store';
 import { useTxStore } from '../state/tx-store';
 
@@ -58,45 +57,28 @@ export function TunButton() {
   const connected = useConnectionStore((s) => s.status === 'Connected');
   const tunOn = useTxStore((s) => s.tunOn);
   const setTunOn = useTxStore((s) => s.setTunOn);
-  const [arming, setArming] = useState(false);
 
   const click = useCallback(() => {
     const next = !tunOn;
-    void (async () => {
-      if (next) {
-        setArming(true);
-        try {
-          await ensureTxStationProfileActivated();
-        } catch (err) {
-          console.warn('TX profile activation failed; TUN cancelled', err);
-          setArming(false);
-          return;
-        }
-        setArming(false);
-      }
-      setTunOn(next);
-      setTun(next)
-        .catch(() => {
-          setTunOn(!next);
-        });
-    })();
+    setTunOn(next);
+    setTun(next).catch(() => {
+      setTunOn(!next);
+    });
   }, [tunOn, setTunOn]);
 
   return (
     <button
       type="button"
-      disabled={!connected || arming}
+      disabled={!connected}
       onClick={click}
       className={`btn tx-btn ${tunOn ? 'active' : ''}`}
       title={
-        arming
-          ? 'Applying TX profile before tune'
-          : tunOn
-            ? 'TUN on — single-tone carrier'
-            : 'TUN off (single-tone carrier for tuning)'
+        tunOn
+          ? 'TUN on — single-tone carrier'
+          : 'TUN off (single-tone carrier for tuning)'
       }
     >
-      {arming ? 'ARM' : 'TUNE'}
+      TUNE
     </button>
   );
 }

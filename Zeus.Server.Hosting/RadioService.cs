@@ -165,15 +165,22 @@ public sealed class RadioService : IDisposable
     private long _lastTickMs = long.MinValue;
     private int _lastAppliedEffectiveDb = -1;   // so the first send always fires
 
-    // Auto-AGC control-loop state. Adjusts AGC-T (the WDSP max-gain cap) so
-    // the band noise floor lands near a fixed reference, mirroring Thetis'
-    // noise-floor calibration. Closed-looping on the live S-meter (the prior
-    // implementation) ramped to max gain on quiet bands and clipped when
-    // signal returned.
-    private const int AgcNoiseFloorWindowSamples = 12; // 12 × 500 ms = 6 s
+    // Auto-AGC control-loop state. Tracks the band noise floor and places the
+    // effective AGC-T so the floor lands near a fixed reference (Thetis-style
+    // noise-floor calibration). The follower JUMPS to the target each tick
+    // rather than slewing — Thetis does the same, and the smoothing lives in the
+    // floor estimate (the percentile window), not the follower. The old slewed
+    // version (0.5 dB/tick into a 1.5 dB deadband after a full 6 s window) took
+    // ~30 s to settle a band change; jumping to a fast, short-window floor (with
+    // a fast-attack re-seed on a band-scale tune) settles in ~1-2 s like Thetis.
+    private const int AgcNoiseFloorWindowSamples = 6;  // 6 × 500 ms = 3 s window (was 12 / 6 s)
+    private const int AgcNoiseFloorMinSamples = 3;     // act after ~1.5 s; don't wait for a full window
     private const double AgcNoiseFloorPercentile = 0.20;
-    private const double AgcDeadbandDb = 1.5;
-    private const double AgcSlewPerTickDb = 0.5;
+    private const double AgcDeadbandDb = 0.5;          // narrow no-move zone (was 1.5) — closes the last bit of error
+    // A VFO move this large means a band change: drop the floor window so it
+    // re-seeds to the new band's noise within ~1.5 s instead of averaging the
+    // old band in (Thetis fast-attack on band/freq delta > 0.5 MHz).
+    private const double AgcFastAttackVfoDeltaHz = 500_000.0;
     private const double AgcMinEffectiveAgcT = 20.0;
     private const double AgcMaxEffectiveAgcT = 100.0;
     private const double AgcCutStressThresholdDb = -10.0;
@@ -181,6 +188,7 @@ public sealed class RadioService : IDisposable
     private const double AgcAdcPressureThresholdDbfs = -6.0;
     private double _agcOffsetDb;
     private long _lastAgcTickMs = long.MinValue;
+    private long _lastAutoAgcVfoHz = long.MinValue;
     private readonly double[] _noiseFloorWindow = new double[AgcNoiseFloorWindowSamples];
     private int _noiseFloorWindowIdx;
     private int _noiseFloorWindowFill;
@@ -243,7 +251,7 @@ public sealed class RadioService : IDisposable
     // to its internal test-tone generator (dev / tests without a hub).
     private readonly Zeus.Protocol1.ITxIqSource? _txIqSource;
 
-    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null)
+    public RadioService(ILoggerFactory loggerFactory, DspSettingsStore dspSettingsStore, PaSettingsStore paStore, FilterPresetStore? filterPresetStore = null, Zeus.Protocol1.ITxIqSource? txIqSource = null, PreferredRadioStore? preferredRadioStore = null, PsSettingsStore? psStore = null, RadioStateStore? radioStateStore = null, CwSettingsStore? cwSettingsStore = null, TxAudioProfileStore? txAudioProfileStore = null)
     {
         _loggerFactory = loggerFactory;
         _log = loggerFactory.CreateLogger<RadioService>();
@@ -285,6 +293,38 @@ public sealed class RadioService : IDisposable
         // TxLevelingConfig defaults so first-connect behaviour is unchanged
         // (Thetis §6.1-6.3). The Leveler max-gain stays on LevelerMaxGainDb.
         var persistedTxLeveling = _dspSettingsStore.GetTxLeveling() ?? new TxLevelingConfig();
+
+        // TX Audio Profile startup overlay. If the operator has a "last loaded"
+        // unified TX Audio Profile, its scalar/config values overlay the
+        // per-setting stores BEFORE _state is built, so the radio comes up on
+        // that profile rather than the last ad-hoc live values. The heavier
+        // chain/plugin-state replay runs later via TxAudioProfileService.
+        // StartAsync. When there is NO last-loaded id (fresh install / never
+        // used profiles) nothing is overlaid — byte-identical to current
+        // defaults. PureSignal and every excluded field are untouched.
+        int? overlayMicGain = null;
+        double? overlayLevelerMaxGain = null;
+        int? overlayTxFilterLow = null, overlayTxFilterHigh = null;
+        if (txAudioProfileStore is not null)
+        {
+            var lastId = txAudioProfileStore.GetLastLoadedId();
+            var lastProfile = string.IsNullOrWhiteSpace(lastId) ? null : txAudioProfileStore.Get(lastId);
+            if (lastProfile is not null)
+            {
+                persistedCfc = lastProfile.CfcConfig ?? persistedCfc;
+                persistedTxLeveling = lastProfile.TxLeveling ?? persistedTxLeveling;
+                overlayMicGain = Math.Clamp(lastProfile.MicGainDb, -40, 10);
+                overlayLevelerMaxGain = Math.Clamp(lastProfile.LevelerMaxGainDb, 0.0, 20.0);
+                // Re-sign the operator-typed positive magnitudes for the startup
+                // mode so the TX bandpass comes up correctly.
+                int loAbs = Math.Min(Math.Abs(lastProfile.LowCutHz), Math.Abs(lastProfile.HighCutHz));
+                int hiAbs = Math.Max(Math.Abs(lastProfile.LowCutHz), Math.Abs(lastProfile.HighCutHz));
+                var startupMode = radioStateStore?.Get()?.Mode ?? RxMode.USB;
+                var (sLo, sHi) = SignedFilterForMode(startupMode, loAbs, hiAbs);
+                overlayTxFilterLow = sLo;
+                overlayTxFilterHigh = sHi;
+            }
+        }
 
         // Seed the last-preset cache from persisted store for all modes so
         // the first mode-switch in a session recalls the correct slot.
@@ -373,19 +413,24 @@ public sealed class RadioService : IDisposable
             AdcOverloadWarning: false,
             FilterPresetName: rsSnap?.FilterPresetName ?? "VAR1",
             FilterAdvancedPaneOpen: filterPresetStore?.GetAdvancedPaneOpen() ?? false,
-            TxFilterLowHz: rsSnap?.TxFilterLowHz ?? 150,
-            TxFilterHighHz: rsSnap?.TxFilterHighHz ?? 2850,
+            TxFilterLowHz: overlayTxFilterLow ?? rsSnap?.TxFilterLowHz ?? 150,
+            TxFilterHighHz: overlayTxFilterHigh ?? rsSnap?.TxFilterHighHz ?? 2850,
             RxAfGainDb: rsSnap?.RxAfGainDb ?? 0.0,
             // 0 dB unity matches the engine's TXA fresh-open default; legacy
-            // rows missing the field hydrate to that same default.
-            MicGainDb: Math.Clamp(rsSnap?.MicGainDb ?? 0, -40, 10),
+            // rows missing the field hydrate to that same default. A last-loaded
+            // TX Audio Profile overlays its mic gain ahead of the snapshot.
+            MicGainDb: overlayMicGain ?? Math.Clamp(rsSnap?.MicGainDb ?? 0, -40, 10),
             // 8.0 dB matches WdspDspEngine.DefaultLevelerMaxGainDb. Clamp range
             // widened to 0..20 for Thetis parity (radio.cs leveler top 0..20).
-            LevelerMaxGainDb: Math.Clamp(rsSnap?.LevelerMaxGainDb ?? 8.0, 0.0, 20.0),
+            LevelerMaxGainDb: overlayLevelerMaxGain ?? Math.Clamp(rsSnap?.LevelerMaxGainDb ?? 8.0, 0.0, 20.0),
             AutoAgcEnabled: rsSnap?.AutoAgcEnabled ?? false,
             AgcOffsetDb: 0.0,       // always reset — control-loop accumulator
+            // AGC knee removed: AGC-T is the single manual AGC control, so the
+            // threshold is never operator-driven (it and AGC-T are the same WDSP
+            // register — driving both clobbered each other). Always null.
+            AgcThresholdDbm: null,
             // PS persisted fields (or DTO defaults when not persisted yet).
-            PsEnabled: ps?.Enabled ?? false,
+            PsEnabled: false, // master arm is never persisted — operator must re-arm each session
             PsAuto: ps?.Auto ?? true,
             PsPtol: ps?.Ptol ?? false,
             PsAutoAttenuate: ps?.AutoAttenuate ?? true,
@@ -446,7 +491,7 @@ public sealed class RadioService : IDisposable
     /// callers don't drop fields by writing only what they touched. Called
     /// from SetPs, SetPsAdvanced, SetPsFeedbackSource, and SetTwoTone.
     ///
-    /// PsEnabled is persisted as the operator's standing PS preference.
+    /// PsEnabled is NOT persisted — master arm resets to false each session.
     /// TwoToneEnabled remains session-only because it can key the transmitter.
     /// PsHwPeak IS persisted per-connected-board via the HwPeakByBoard dictionary;
     /// when no board is currently connected the HwPeak portion of the write
@@ -481,7 +526,6 @@ public sealed class RadioService : IDisposable
         }
         _psStore.Upsert(new PsSettingsEntry
         {
-            Enabled = snap.PsEnabled,
             Auto = snap.PsAuto,
             Ptol = snap.PsPtol,
             AutoAttenuate = snap.PsAutoAttenuate,
@@ -1450,7 +1494,16 @@ public sealed class RadioService : IDisposable
         };
     }
 
-    private static (int low, int high) SignedFilterForMode(RxMode mode, int loAbs, int hiAbs)
+    // Re-sign a positive (abs) TX/RX bandpass magnitude pair per the mode's
+    // sideband convention. WDSP selects the SSB sideband from the SIGN of the
+    // bandpass edges (negative = LSB-family, positive = USB-family), so this is
+    // the single source of truth for that mapping. Exposed to DspPipelineService
+    // so the engine-apply seam can re-derive the sign from the live mode rather
+    // than trusting whatever sign happens to be stored in StateDto — see the
+    // call site in DspPipelineService for why (legacy DB / split-on-B paths can
+    // leave a positive value behind on an LSB mode and transmit the wrong
+    // sideband). Idempotent for well-formed state.
+    internal static (int low, int high) SignedFilterForMode(RxMode mode, int loAbs, int hiAbs)
     {
         return mode switch
         {
@@ -1767,6 +1820,18 @@ public sealed class RadioService : IDisposable
                 _noiseFloorWindowIdx = 0;
             }
 
+            // Fast-attack: a band-scale VFO move makes the old band's samples
+            // meaningless, so drop the window and re-seed to the new band's floor
+            // (Thetis re-seeds in ~1 s on a > 0.5 MHz change). A small in-band
+            // tune does NOT reset — only a band-change-scale jump.
+            if (_lastAutoAgcVfoHz != long.MinValue &&
+                Math.Abs(_state.VfoHz - _lastAutoAgcVfoHz) > AgcFastAttackVfoDeltaHz)
+            {
+                _noiseFloorWindowFill = 0;
+                _noiseFloorWindowIdx = 0;
+            }
+            _lastAutoAgcVfoHz = _state.VfoHz;
+
             if (_lastAgcTickMs != long.MinValue && nowMs - _lastAgcTickMs < 500)
                 return;
             _lastAgcTickMs = nowMs;
@@ -1778,7 +1843,11 @@ public sealed class RadioService : IDisposable
                 if (_noiseFloorWindowFill < _noiseFloorWindow.Length) _noiseFloorWindowFill++;
             }
 
-            bool windowReady = _noiseFloorWindowFill >= _noiseFloorWindow.Length;
+            // Act as soon as we have a few samples (~1.5 s) — don't wait to fill
+            // the whole window. The percentile is computed over however many
+            // samples we have, which is enough to place the floor and start
+            // converging fast.
+            bool windowReady = _noiseFloorWindowFill >= AgcNoiseFloorMinSamples;
             double desiredOffset = _agcOffsetDb;
             if (windowReady)
             {
@@ -1824,11 +1893,13 @@ public sealed class RadioService : IDisposable
             }
 
             double delta = desiredOffset - _agcOffsetDb;
+            // Deadband: ignore sub-0.5 dB wobble so a jumpy floor estimate can't
+            // dither the gain every tick. Above it, JUMP straight to the target
+            // (no slew) — the floor window is the smoother, so the target moves
+            // gently in steady state and snaps only on a real band change.
             if (Math.Abs(delta) < AgcDeadbandDb) return;
 
-            _agcOffsetDb = delta > 0
-                ? Math.Min(desiredOffset, _agcOffsetDb + AgcSlewPerTickDb)
-                : Math.Max(desiredOffset, _agcOffsetDb - AgcSlewPerTickDb);
+            _agcOffsetDb = desiredOffset;
 
             _state = _state with { AgcOffsetDb = _agcOffsetDb };
             newOffset = _agcOffsetDb;
@@ -2183,13 +2254,34 @@ public sealed class RadioService : IDisposable
     public StateDto SetAgcTop(double topDb)
     {
         double clamped = Math.Clamp(topDb, -20.0, 120.0);
-        Mutate(s => s with { AgcTopDb = clamped });
-        // Persist so the operator's choice survives a server restart. Only
-        // the user-baseline (AgcTopDb) is persisted — the auto-AGC offset
-        // is recomputed live and isn't worth saving.
+        // Grabbing the AGC-T slider takes MANUAL control. The value pushed to
+        // WDSP is the EFFECTIVE AGC-T = AgcTopDb + AgcOffsetDb, where the offset
+        // is the Auto-AGC control-loop accumulator. If Auto-AGC kept running,
+        // that offset would stack on the new baseline (a momentary "blast" the
+        // instant you adjust) and the loop would then re-target away from the
+        // slider ("sits too low/high vs where the slider is") — issue #733. So
+        // disable Auto-AGC and zero its offset + recalibration window here, all
+        // under _sync (Mutate invokes fn exactly once inside the lock). Net
+        // effect: the effective AGC-T equals the slider EXACTLY. Auto-AGC is a
+        // deliberate mode the operator re-enables from its own toggle.
+        Mutate(s =>
+        {
+            _agcOffsetDb = 0.0;
+            _lastAgcTickMs = long.MinValue;
+            _noiseFloorWindowFill = 0;
+            _noiseFloorWindowIdx = 0;
+            return s with { AgcTopDb = clamped, AgcOffsetDb = 0.0, AutoAgcEnabled = false };
+        });
+        // Persist only the user-baseline (AgcTopDb); the offset is live-recomputed.
         _dspSettingsStore.SetAgcTopDb(clamped);
         return Snapshot();
     }
+
+    // (Removed: the manual AGC "knee" / threshold control. In WDSP the threshold
+    // and AGC-T are the SAME register (max_gain); exposing both as independent
+    // operator controls made them clobber each other and made AGC-T hair-trigger.
+    // AGC-T (SetAgcTop) is now the single manual AGC control; Auto-AGC tracks the
+    // noise floor on top of it.)
 
     // Master RX AF gain in dB. −50 dB is effectively silent (0.003 linear),
     // 0 dB matches the fresh-open default, +20 dB is a 10× linear boost for

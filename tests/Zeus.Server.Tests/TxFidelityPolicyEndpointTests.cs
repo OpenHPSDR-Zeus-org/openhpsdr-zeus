@@ -84,14 +84,12 @@ public sealed class TxFidelityPolicyEndpointTests : IDisposable
         Assert.Equal(HttpStatusCode.BadRequest, resp.StatusCode);
     }
 
-    private sealed class Factory(string dbPath) : WebApplicationFactory<Program>
+    private sealed class Factory(string dbPath) : IsolatedPrefsFactory
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        protected override void ConfigureExtra(IWebHostBuilder builder)
         {
-            builder.UseEnvironment("Test");
             builder.ConfigureServices(services =>
             {
-                services.RemoveAll<IHostedService>();
                 services.RemoveAll<TxFidelityPolicyStore>();
                 services.AddSingleton(sp => new TxFidelityPolicyStore(
                     sp.GetRequiredService<ILogger<TxFidelityPolicyStore>>(),

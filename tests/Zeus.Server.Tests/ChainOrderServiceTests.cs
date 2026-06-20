@@ -483,6 +483,78 @@ public class ChainOrderServiceTests
         finally { if (File.Exists(dbPath)) File.Delete(dbPath); }
     }
 
+    /// <summary>
+    /// Regression: applying an EMPTY profile (ChainOrder=[], ChainParked=[])
+    /// must NOT flood the live chain with every installed third-party VST.
+    /// Before the fix, ApplyMembershipAndOrder cleared the parked set and
+    /// re-parked only the profile's (empty) ChainParked list, so every
+    /// scanned VST that OnPluginAttached had default-parked became active.
+    /// A plugin the profile mentions in neither list must inherit the
+    /// default membership rule: native DefaultOrder plugins stay active,
+    /// third-party VSTs default to PARKED.
+    /// </summary>
+    [Fact]
+    public void ApplyMembershipAndOrder_Empty_Profile_Default_Parks_ThirdParty_Vsts()
+    {
+        var (svc, store, _, dbPath) = MakeService();
+        try
+        {
+            var eq = ChainOrderService.DefaultOrder[3];   // native v2 default
+            var comp = ChainOrderService.DefaultOrder[4]; // native v2 default
+            var vstA = "com.example.thirdparty.vstA";
+            var vstB = "com.example.thirdparty.vstB";
+
+            svc.OnPluginAttached(eq, new[] { eq });
+            svc.OnPluginAttached(comp, new[] { eq, comp });
+            svc.OnPluginAttached(vstA, new[] { eq, comp, vstA });
+            svc.OnPluginAttached(vstB, new[] { eq, comp, vstA, vstB });
+
+            // On attach, the two VSTs are already default-parked; only the
+            // native defaults are in the runtime chain.
+            Assert.Equal(new[] { eq, comp }, svc.CurrentOrder);
+
+            // Apply an empty profile — the kind the starter profiles ship.
+            svc.ApplyMembershipAndOrder(
+                new List<string>(), new List<string>());
+
+            // VSTs must stay PARKED; only the native defaults are active.
+            Assert.Equal(new[] { eq, comp }, svc.CurrentOrder);
+            Assert.Contains(vstA, svc.ParkedForTest);
+            Assert.Contains(vstB, svc.ParkedForTest);
+        }
+        finally { store.Dispose(); File.Delete(dbPath); }
+    }
+
+    /// <summary>
+    /// A profile that explicitly lists a third-party VST in ChainOrder must
+    /// activate it — the default-park rule only applies to VSTs the profile
+    /// doesn't mention. Proves the fix doesn't break operator-curated chains.
+    /// </summary>
+    [Fact]
+    public void ApplyMembershipAndOrder_Activates_Vst_The_Profile_Lists()
+    {
+        var (svc, store, _, dbPath) = MakeService();
+        try
+        {
+            var eq = ChainOrderService.DefaultOrder[3];
+            var vstA = "com.example.thirdparty.vstA";
+            var vstB = "com.example.thirdparty.vstB";
+
+            svc.OnPluginAttached(eq, new[] { eq });
+            svc.OnPluginAttached(vstA, new[] { eq, vstA });
+            svc.OnPluginAttached(vstB, new[] { eq, vstA, vstB });
+
+            // Profile curated to run [eq, vstA]; vstB unmentioned → parked.
+            svc.ApplyMembershipAndOrder(
+                new List<string> { eq, vstA }, new List<string>());
+
+            Assert.Equal(new[] { eq, vstA }, svc.CurrentOrder);
+            Assert.Contains(vstB, svc.ParkedForTest);
+            Assert.DoesNotContain(vstA, svc.ParkedForTest);
+        }
+        finally { store.Dispose(); File.Delete(dbPath); }
+    }
+
     private sealed class AddOnePlugin : IAudioPlugin
     {
         public string DisplayName => "add+1";
