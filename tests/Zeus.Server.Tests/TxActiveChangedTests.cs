@@ -123,6 +123,11 @@ public class TxActiveChangedTests : IDisposable
     public void NativeAudioSink_RebuffersUntilEnoughRxSamplesAreQueued()
     {
         var sink = new NativeAudioSink(NullLogger<NativeAudioSink>.Instance);
+        // Reference the cushion so the test tracks the constant (raised to ~60 ms
+        // in issue #733) instead of hardcoding it.
+        int prebuffer = sink.GetDiagnostics().PrebufferSamples;
+
+        // A fragment below the cushion plays as silence (still rebuffering).
         var shortFrame = BuildMonoFrame(200);
         sink.Publish(in shortFrame);
 
@@ -132,31 +137,42 @@ public class TxActiveChangedTests : IDisposable
         Assert.All(output, s => Assert.Equal(0f, s));
         Assert.Equal(200, sink.CurrentRingDepth);
 
-        var refill = BuildMonoFrame(800);
+        // Refill past the cushion → playback resumes on the next render.
+        var refill = BuildMonoFrame(prebuffer);
         sink.Publish(in refill);
         sink.RenderPlaybackForTest(output, 480, 2);
 
         Assert.Contains(output, s => s > 0f);
-        Assert.Equal(520, sink.CurrentRingDepth);
+        Assert.Equal(200 + prebuffer - 480, sink.CurrentRingDepth);
     }
 
     [Fact]
     public void NativeAudioSink_RebuffersInsteadOfSplicingPartialRxTailIntoSilence()
     {
         var sink = new NativeAudioSink(NullLogger<NativeAudioSink>.Instance);
-        var frame = BuildMonoFrame(1000);
+        int prebuffer = sink.GetDiagnostics().PrebufferSamples;
+
+        // Publish just over the cushion (with a tail that won't divide evenly
+        // into 480-sample renders) so playback starts.
+        int initial = prebuffer + 40;
+        var frame = BuildMonoFrame(initial);
         sink.Publish(in frame);
 
         var output = new float[480 * 2];
-        sink.RenderPlaybackForTest(output, 480, 2);
-        Assert.Equal(520, sink.CurrentRingDepth);
 
-        sink.RenderPlaybackForTest(output, 480, 2);
-        Assert.Equal(40, sink.CurrentRingDepth);
+        // Drain in 480-sample reads while a full render's worth remains.
+        int depth = initial;
+        while (depth >= 480)
+        {
+            sink.RenderPlaybackForTest(output, 480, 2);
+            depth -= 480;
+            Assert.Equal(depth, sink.CurrentRingDepth);
+        }
 
+        // Tail < one render → the sink rebuffers (silence) rather than splicing
+        // the partial tail; the tail stays queued.
         sink.RenderPlaybackForTest(output, 480, 2);
-
         Assert.All(output, s => Assert.Equal(0f, s));
-        Assert.Equal(40, sink.CurrentRingDepth);
+        Assert.Equal(depth, sink.CurrentRingDepth);
     }
 }

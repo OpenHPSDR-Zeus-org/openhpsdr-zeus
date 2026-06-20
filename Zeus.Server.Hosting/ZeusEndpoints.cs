@@ -97,7 +97,7 @@ public static class ZeusEndpoints
             var sink = sp.GetService<NativeAudioSink>();
             return sink is null
                 ? Results.Ok(new { supported = false, muted = false })
-                : Results.Ok(new { supported = true, muted = sink.IsMuted });
+                : Results.Ok(new { supported = true, muted = sink.IsMuted, diagnostics = sink.GetDiagnostics() });
         });
         app.MapPost("/api/audio/native/mute", (NativeMuteRequest body, IServiceProvider sp) =>
         {

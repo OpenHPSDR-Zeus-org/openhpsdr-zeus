@@ -2224,10 +2224,25 @@ public sealed class RadioService : IDisposable
     public StateDto SetAgcTop(double topDb)
     {
         double clamped = Math.Clamp(topDb, -20.0, 120.0);
-        Mutate(s => s with { AgcTopDb = clamped });
-        // Persist so the operator's choice survives a server restart. Only
-        // the user-baseline (AgcTopDb) is persisted — the auto-AGC offset
-        // is recomputed live and isn't worth saving.
+        // Grabbing the AGC-T slider takes MANUAL control. The value pushed to
+        // WDSP is the EFFECTIVE AGC-T = AgcTopDb + AgcOffsetDb, where the offset
+        // is the Auto-AGC control-loop accumulator. If Auto-AGC kept running,
+        // that offset would stack on the new baseline (a momentary "blast" the
+        // instant you adjust) and the loop would then re-target away from the
+        // slider ("sits too low/high vs where the slider is") — issue #733. So
+        // disable Auto-AGC and zero its offset + recalibration window here, all
+        // under _sync (Mutate invokes fn exactly once inside the lock). Net
+        // effect: the effective AGC-T equals the slider EXACTLY. Auto-AGC is a
+        // deliberate mode the operator re-enables from its own toggle.
+        Mutate(s =>
+        {
+            _agcOffsetDb = 0.0;
+            _lastAgcTickMs = long.MinValue;
+            _noiseFloorWindowFill = 0;
+            _noiseFloorWindowIdx = 0;
+            return s with { AgcTopDb = clamped, AgcOffsetDb = 0.0, AutoAgcEnabled = false };
+        });
+        // Persist only the user-baseline (AgcTopDb); the offset is live-recomputed.
         _dspSettingsStore.SetAgcTopDb(clamped);
         return Snapshot();
     }
