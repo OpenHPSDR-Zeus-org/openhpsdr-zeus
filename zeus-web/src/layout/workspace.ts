@@ -138,16 +138,46 @@ export function newTileUid(): string {
   return `tile-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-/** Compute a placement for a brand-new tile: use its default span and place
- *  it at y = max(existing y+h), x = 0. RGL compacts upward into any free
- *  space at render time. */
+/** Compute a placement for a brand-new tile. The fixed-lattice workspace does
+ *  NOT compact at render time, so this finds a home for the tile itself:
+ *  first-fit, scanning top-to-bottom then left-to-right for the first slot the
+ *  tile's footprint fits without overlapping an existing tile. That fills any
+ *  free space the operator has opened up (e.g. after removing a panel) instead
+ *  of always appending at the bottom — which would extend the layout downward
+ *  and shrink every other panel to keep the workspace inside the viewport.
+ *  Only when no interior gap fits does it append below everything. */
 export function placeTileInGrid(
   panelId: string,
   others: WorkspaceTile[],
 ): { x: number; y: number; w: number; h: number } {
   const span = defaultSpanFor(panelId);
-  const maxY = others.reduce((m, t) => Math.max(m, t.y + t.h), 0);
-  return { x: 0, y: maxY, w: span.w, h: span.h };
+  const w = Math.min(span.w, WORKSPACE_GRID_COLS);
+  const h = span.h;
+  const maxX = WORKSPACE_GRID_COLS - w;
+  const bottom = others.reduce((m, t) => Math.max(m, t.y + t.h), 0);
+
+  for (let y = 0; y <= bottom; y += 1) {
+    for (let x = 0; x <= maxX; x += 1) {
+      const candidate = { x, y, w, h };
+      if (!others.some((t) => tilesOverlap(candidate, t))) {
+        return candidate;
+      }
+    }
+  }
+  // Nothing fits inside the current extent — append below everything (free).
+  return { x: 0, y: bottom, w, h };
+}
+
+function tilesOverlap(
+  a: { x: number; y: number; w: number; h: number },
+  b: { x: number; y: number; w: number; h: number },
+): boolean {
+  return (
+    a.x < b.x + b.w &&
+    a.x + a.w > b.x &&
+    a.y < b.y + b.h &&
+    a.y + a.h > b.y
+  );
 }
 
 /** Best-effort parser + validator for the opaque /api/ui/layout JSON blob.
