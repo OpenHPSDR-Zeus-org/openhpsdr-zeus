@@ -1937,9 +1937,9 @@ function FilterMiniPanSurface({
         onPointerCancel={onPointerUp}
         onPointerLeave={onPointerLeave}
       />
-      {/* Liquid-metal glass over the bandwidth pan — wet sheen + caustic,
+      {/* Liquid-metal glass over the bandwidth pan — static specular,
           pointer-events:none so dragging the filter still works through it. */}
-      <MeterGlass caustic sheenWidth="12%" />
+      <MeterGlass />
       {editingWidth ? (
         <input
           autoFocus

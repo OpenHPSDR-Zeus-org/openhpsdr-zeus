@@ -387,7 +387,7 @@ function MeterRow({
               }}
             />
           )}
-          {/* Liquid-metal glass cover — domed specular + drifting sheen. */}
+          {/* Liquid-metal glass cover — static domed specular. */}
           <MeterGlass radius={2} />
         </div>
       </div>
