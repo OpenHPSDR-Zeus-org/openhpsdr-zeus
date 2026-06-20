@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 import { describe, expect, it } from 'vitest';
-import { moveElement } from 'react-grid-layout/core';
 import type { Layout } from 'react-grid-layout';
 
 import {
@@ -9,6 +8,8 @@ import {
   WORKSPACE_RESIZE_COMPACTOR,
   autoFitDroppedPanel,
   createWorkspaceDragCompactor,
+  resolveResizeOverlaps,
+  tidyWorkspacePlacements,
 } from './workspaceGrid';
 
 function cloneLayout(layout: Layout): Layout {
@@ -30,97 +31,137 @@ function expectNoCollisions(layout: Layout) {
   }
 }
 
-function expectStableCompaction(layout: Layout) {
-  const once = WORKSPACE_DRAG_COMPACTOR.compact(layout, 24);
-  const twice = WORKSPACE_DRAG_COMPACTOR.compact(once, 24);
-  expect(twice).toEqual(once);
-}
-
-function fitMovedElement(
-  layout: Layout,
-  dragged: Layout[number],
-  x: number | undefined,
-  y: number | undefined,
-) {
-  const previous = { ...dragged };
-  const previousLayout = cloneLayout(layout);
-  return autoFitDroppedPanel(
-    moveElement(
-      layout,
-      dragged,
-      x,
-      y,
-      true,
-      WORKSPACE_DRAG_COMPACTOR.preventCollision,
-      WORKSPACE_DRAG_COMPACTOR.type,
-      24,
-      WORKSPACE_DRAG_COMPACTOR.allowOverlap,
-    ),
-    24,
-    { item: previous, layout: previousLayout },
+/** Build a drop snapshot: `previous` is where the dragged tile started; `dropped`
+ *  is the full layout with the dragged tile moved to the drop cell (overlap
+ *  allowed, as the live free compactor leaves it). */
+function drop(
+  original: Layout,
+  draggedId: string,
+  to: { x: number; y: number },
+): Layout {
+  const previous = original.find((i) => i.i === draggedId)!;
+  const dropped = cloneLayout(original).map((i) =>
+    i.i === draggedId ? { ...i, x: to.x, y: to.y, moved: true } : i,
   );
+  return autoFitDroppedPanel(dropped, 24, {
+    item: { ...previous },
+    layout: cloneLayout(original),
+  });
 }
 
-function dragAndCompact(
-  layout: Layout,
-  dragged: Layout[number],
-  x: number | undefined,
-  y: number | undefined,
-) {
-  const dragStart = { item: { ...dragged }, layout: cloneLayout(layout) };
-  const compactor = createWorkspaceDragCompactor(() => dragStart);
-  return compactor.compact(
-    moveElement(
-      layout,
-      dragged,
-      x,
-      y,
-      true,
-      compactor.preventCollision,
-      compactor.type,
-      24,
-      compactor.allowOverlap,
-    ),
-    24,
-  );
-}
-
-describe('workspace grid collision policy', () => {
-  const baseLayout: Layout = [
-    { i: 'dragged', x: 0, y: 0, w: 6, h: 2 },
-    { i: 'below', x: 0, y: 2, w: 6, h: 2 },
-  ];
-
-  it('keeps drag layouts sparse while clearing transient moved flags', () => {
-    const next = WORKSPACE_DRAG_COMPACTOR.compact(
-      [{ i: 'dragged', x: 3, y: 4, w: 5, h: 2, moved: true }],
-      24,
-    );
-
+describe('free-grid live compactors are inert', () => {
+  it('drag compactor moves nothing — only clears the moved flag', () => {
+    const layout: Layout = [
+      { i: 'a', x: 0, y: 0, w: 6, h: 4, moved: true },
+      { i: 'b', x: 0, y: 4, w: 6, h: 4 },
+      { i: 'c', x: 6, y: 0, w: 6, h: 6 },
+    ];
+    const next = WORKSPACE_DRAG_COMPACTOR.compact(cloneLayout(layout), 24);
     expect(next).toEqual([
-      { i: 'dragged', x: 3, y: 4, w: 5, h: 2, moved: false },
+      { i: 'a', x: 0, y: 0, w: 6, h: 4, moved: false },
+      { i: 'b', x: 0, y: 4, w: 6, h: 4, moved: false },
+      { i: 'c', x: 6, y: 0, w: 6, h: 6, moved: false },
     ]);
   });
 
-  it('swaps a lower panel into the dragged panel old slot during live drag', () => {
-    const layout = cloneLayout(baseLayout);
-    const dragged = layout[0]!;
+  it('createWorkspaceDragCompactor also leaves neighbours untouched', () => {
+    const layout: Layout = [
+      { i: 'dragged', x: 0, y: 6, w: 6, h: 2, moved: true },
+      { i: 'other', x: 0, y: 0, w: 6, h: 2 },
+    ];
+    const compactor = createWorkspaceDragCompactor(() => null);
+    const next = compactor.compact(cloneLayout(layout), 24);
+    expect(next.find((i) => i.i === 'other')).toMatchObject({ x: 0, y: 0 });
+    expect(next.find((i) => i.i === 'dragged')).toMatchObject({ x: 0, y: 6 });
+  });
 
-    const next = dragAndCompact(layout, dragged, undefined, 2);
+  it('resize compactor leaves an overlap for the stop handler to resolve', () => {
+    // Live resize uses the free compactor: it does not push neighbours. (The
+    // overlap is resolved on resize stop by resolveResizeOverlaps.)
+    const layout: Layout = [
+      { i: 'top', x: 0, y: 0, w: 6, h: 4 },
+      { i: 'below', x: 0, y: 2, w: 6, h: 2 },
+    ];
+    const next = WORKSPACE_RESIZE_COMPACTOR.compact(cloneLayout(layout), 24);
+    expect(next.find((i) => i.i === 'below')).toMatchObject({ x: 0, y: 2 });
+  });
+});
 
-    expect(next.find((item) => item.i === 'dragged')).toMatchObject({
+describe('drop placement — move-only + swap', () => {
+  const base: Layout = [
+    { i: 'a', x: 0, y: 0, w: 6, h: 4 },
+    { i: 'b', x: 0, y: 4, w: 6, h: 4 },
+  ];
+
+  it('keeps a panel exactly where it is dropped on empty space', () => {
+    const next = drop(base, 'a', { x: 12, y: 0 });
+    expect(next.find((i) => i.i === 'a')).toMatchObject({ x: 12, y: 0 });
+    expect(next.find((i) => i.i === 'b')).toMatchObject({ x: 0, y: 4 });
+    expectNoCollisions(next);
+  });
+
+  it('does not move other panels when one is dropped into a free gap', () => {
+    const layout: Layout = [
+      { i: 'a', x: 0, y: 0, w: 6, h: 4 },
+      { i: 'b', x: 0, y: 4, w: 6, h: 4 },
+      { i: 'c', x: 6, y: 0, w: 6, h: 10 },
+    ];
+    const next = drop(layout, 'a', { x: 12, y: 0 });
+    // b and c are completely undisturbed — the reported bug must not recur.
+    expect(next.find((i) => i.i === 'b')).toMatchObject({ x: 0, y: 4 });
+    expect(next.find((i) => i.i === 'c')).toMatchObject({ x: 6, y: 0 });
+    expectNoCollisions(next);
+  });
+
+  it('swaps two same-footprint panels dropped squarely onto each other', () => {
+    const next = drop(base, 'a', { x: 0, y: 4 });
+    expect(next.find((i) => i.i === 'a')).toMatchObject({ x: 0, y: 4 });
+    expect(next.find((i) => i.i === 'b')).toMatchObject({ x: 0, y: 0 });
+    expectNoCollisions(next);
+  });
+
+  it('relocates (does not swap) on a glancing overlap', () => {
+    // Drop `a` only one row into `b` (overlap is 1 of b's 4 rows, < 50%) → no
+    // swap; `a` relocates to the nearest free slot and `b` stays exactly put.
+    const next = drop(base, 'a', { x: 0, y: 1 });
+    expect(next.find((i) => i.i === 'b')).toMatchObject({ x: 0, y: 4 });
+    // `a` did not take `b`'s slot — it settled into free space instead.
+    expect(next.find((i) => i.i === 'a')).not.toMatchObject({ x: 0, y: 4 });
+    expectNoCollisions(next);
+  });
+
+  it('never moves a locked panel a tile is dropped onto', () => {
+    const layout: Layout = [
+      { i: 'dragged', x: 0, y: 0, w: 6, h: 4 },
+      { i: 'locked', x: 0, y: 4, w: 6, h: 4, static: true },
+    ];
+    const next = drop(layout, 'dragged', { x: 0, y: 4 });
+    expect(next.find((i) => i.i === 'locked')).toMatchObject({
       x: 0,
-      y: 2,
-      moved: false,
+      y: 4,
+      static: true,
     });
-    expect(next.find((item) => item.i === 'below')).toMatchObject({
+    // The dragged tile relocates off the locked footprint; nothing else moves.
+    expectNoCollisions(next);
+  });
+
+  it('keeps a large panel at full size when relocating around a locked tile', () => {
+    const layout: Layout = [
+      { i: 'locked', x: 0, y: 0, w: 24, h: 4, static: true },
+      { i: 'hero', x: 0, y: 6, w: 18, h: 20 },
+    ];
+    // Drop hero up onto the locked banner — it must not shrink, just relocate.
+    const next = drop(layout, 'hero', { x: 0, y: 0 });
+    expect(next.find((i) => i.i === 'hero')).toMatchObject({ w: 18, h: 20 });
+    expect(next.find((i) => i.i === 'locked')).toMatchObject({
       x: 0,
       y: 0,
+      static: true,
     });
     expectNoCollisions(next);
   });
 
-  it('swaps the covered panel into the old slot and keeps the stack tight', () => {
+  it('places a large dropped panel without an exponential search blowup', () => {
     const layout: Layout = cloneLayout([
       { i: 'filter', x: 0, y: 0, w: 12, h: 10 },
       { i: 'filterpresets', x: 12, y: 0, w: 6, h: 10 },
@@ -131,417 +172,65 @@ describe('workspace grid collision policy', () => {
       { i: 'txmeters', x: 18, y: 26, w: 6, h: 12 },
       { i: 'dsp', x: 18, y: 38, w: 6, h: 10 },
     ]);
-    const dragged = layout[1]!;
-
-    const next = dragAndCompact(layout, dragged, 18, 16);
-
-    expect(next.find((item) => item.i === 'filterpresets')).toMatchObject({
-      x: 18,
-      y: 16,
-      moved: false,
-    });
-    expect(next.find((item) => item.i === 'tx')).toMatchObject({
-      x: 12,
-      y: 0,
-    });
-    expect(next.find((item) => item.i === 'txmeters')).toMatchObject({ y: 26 });
-    expect(next.find((item) => item.i === 'dsp')).toMatchObject({ y: 38 });
-    expectNoCollisions(next);
-  });
-
-  it('keeps the dragged tile pinned to the pointer when no swap fires', () => {
-    // Root cause of the "quick back and forth" report: the compactor used to
-    // pack the dragged tile upward on any frame that did not fire a swap, then
-    // RGL dragged it back toward the pointer — a 2-cycle at the swap boundary.
-    // A live drag now pins the dragged tile to its pointer cell unconditionally,
-    // so dragging `below` into empty space leaves it where the pointer is rather
-    // than snapping it back up against `above`.
-    const layout: Layout = cloneLayout([
-      { i: 'above', x: 0, y: 0, w: 6, h: 2 },
-      { i: 'below', x: 0, y: 2, w: 6, h: 2 },
-    ]);
-    const below = layout[1]!;
-
-    const next = dragAndCompact(layout, below, 0, 6);
-
-    expect(next.find((i) => i.i === 'below')).toMatchObject({ x: 0, y: 6 });
-    expect(next.find((i) => i.i === 'above')).toMatchObject({ x: 0, y: 0 });
-    expectNoCollisions(next);
-  });
-
-  it('keeps a neighbour swap engaged across the touch boundary', () => {
-    // Reproduces the boundary jitter with one compactor instance (one live
-    // drag). Once `below` engages at full overlap it must stay displaced when
-    // the dragged tile jitters back to the touching row — engagement is sticky,
-    // so the neighbour never snaps home and back (the visible flicker).
-    const base: Layout = cloneLayout([
-      { i: 'dragged', x: 0, y: 0, w: 6, h: 2 },
-      { i: 'below', x: 0, y: 2, w: 6, h: 2 },
-    ]);
-    const dragStart = { item: { ...base[0]! }, layout: cloneLayout(base) };
-    const compactor = createWorkspaceDragCompactor(() => dragStart);
-
-    const step = (y: number) => {
-      const work = cloneLayout(base);
-      const item = work.find((i) => i.i === 'dragged')!;
-      return compactor.compact(
-        moveElement(
-          work,
-          item,
-          0,
-          y,
-          true,
-          compactor.preventCollision,
-          compactor.type,
-          24,
-          compactor.allowOverlap,
-        ),
-        24,
-      );
-    };
-
-    // Engage the swap (full overlap of `below`), then jitter up one row so the
-    // tiles only touch. `below` stays out of its original slot.
-    expect(step(2).find((i) => i.i === 'below')).toMatchObject({ x: 0, y: 0 });
-    const boundary = step(1);
-    expect(boundary.find((i) => i.i === 'below')?.y).not.toBe(2);
-    expectNoCollisions(boundary);
-  });
-
-  // Drive the live-drag compactor with a hand-placed dragged tile so the
-  // vertical overlap with `below` (original slot y=10, h=10) is exact:
-  // overlap = (dy + 10) - 10 = dy rows for the dragged tile at y = dy.
-  // (moveElement would resolve the collision and snap the tile fully onto the
-  // neighbour, so it can't express a partial overlap.)
-  function makeSwapStepper() {
-    const base: Layout = cloneLayout([
-      { i: 'dragged', x: 0, y: 0, w: 6, h: 10 },
-      { i: 'below', x: 0, y: 10, w: 6, h: 10 },
-    ]);
-    const dragStart = { item: { ...base[0]! }, layout: cloneLayout(base) };
-    const compactor = createWorkspaceDragCompactor(() => dragStart);
-    return (dy: number) =>
-      compactor.compact(
-        cloneLayout([
-          { i: 'dragged', x: 0, y: dy, w: 6, h: 10, moved: true },
-          { i: 'below', x: 0, y: 10, w: 6, h: 10 },
-        ]),
-        24,
-      );
-  }
-
-  it('waits for the midpoint before swapping a tall neighbour', () => {
-    // Premium reorder feel: a neighbour only commits to swapping once the
-    // dragged tile has covered half of it, not on the first row of contact.
-    // Two h=10 tiles → engage threshold is 5 rows of overlap.
-    const step = makeSwapStepper();
-
-    // 4 rows of overlap (< 5): no swap. `below` is pushed down under the
-    // floating dragged tile, not lifted into the vacated top row.
-    expect(step(4).find((i) => i.i === 'below')?.y).not.toBe(0);
-    // 5 rows (the midpoint): the swap commits and `below` lifts into the top
-    // row the dragged tile is vacating.
-    expect(step(5).find((i) => i.i === 'below')?.y).toBe(0);
-  });
-
-  it('holds a committed swap through the hysteresis deadband', () => {
-    // Once engaged at the midpoint (50%), the swap holds until the dragged tile
-    // is pulled back past a quarter overlap (25%). h=10 tiles → engage at 5
-    // rows, release below 2.5 rows.
-    const step = makeSwapStepper();
-
-    expect(step(5).find((i) => i.i === 'below')).toMatchObject({ y: 0 }); // engage
-    expect(step(3).find((i) => i.i === 'below')?.y).toBe(0); // deadband: held
-    expect(step(2).find((i) => i.i === 'below')?.y).not.toBe(0); // released
-  });
-
-  it('never moves a locked panel when another panel is dragged onto it', () => {
-    // A locked (static) panel must stay pinned even while another panel is
-    // dragged across it — previously the magnetic swap shoved it aside mid-drag
-    // and it only snapped back on drop.
-    const dragStart = {
-      item: { i: 'dragged', x: 0, y: 0, w: 6, h: 2 },
-      layout: cloneLayout([
-        { i: 'dragged', x: 0, y: 0, w: 6, h: 2 },
-        { i: 'locked', x: 0, y: 2, w: 6, h: 2, static: true },
-      ]),
-    };
-    const compactor = createWorkspaceDragCompactor(() => dragStart);
-    // Live-drag frame: the dragged panel has been moved onto the locked slot.
-    const frame: Layout = cloneLayout([
-      { i: 'dragged', x: 0, y: 2, w: 6, h: 2, moved: true },
-      { i: 'locked', x: 0, y: 2, w: 6, h: 2, static: true },
-    ]);
-
-    const next = compactor.compact(frame, 24);
-
-    expect(next.find((i) => i.i === 'locked')).toMatchObject({
-      x: 0,
-      y: 2,
-      static: true,
-    });
-  });
-
-  it('swaps a colliding panel into the dragged panel old slot on drop', () => {
-    const layout = cloneLayout(baseLayout);
-    const dragged = layout[0]!;
-
-    const next = fitMovedElement(layout, dragged, undefined, 2);
-
-    expect(next.find((item) => item.i === 'dragged')).toMatchObject({
-      x: 0,
-      y: 2,
-      w: 6,
-      h: 2,
-    });
-    expect(next.find((item) => item.i === 'below')).toMatchObject({
-      x: 0,
-      y: 0,
-    });
-    expectNoCollisions(next);
-  });
-
-  it('pushes an occupied gap panel out of the dropped panel target', () => {
-    const layout: Layout = cloneLayout([
-      { i: 'dragged', x: 0, y: 0, w: 10, h: 2, minW: 2, minH: 2 },
-      { i: 'right', x: 14, y: 0, w: 10, h: 2 },
-    ]);
-    const dragged = layout[0]!;
-
-    const next = fitMovedElement(layout, dragged, 8, 0);
-
-    expect(next.find((item) => item.i === 'dragged')).toMatchObject({
-      x: 8,
-      y: 0,
-      w: 10,
-      h: 2,
-    });
-    expect(next.find((item) => item.i === 'right')).toMatchObject({
-      x: 0,
-      y: 2,
-      w: 10,
-      h: 2,
-    });
-    expectNoCollisions(next);
-  });
-
-  it('does not move static panels when another panel is dropped on them', () => {
-    const layout: Layout = cloneLayout([
-      { i: 'dragged', x: 0, y: 0, w: 6, h: 2 },
-      { i: 'locked', x: 0, y: 2, w: 6, h: 2, static: true },
-    ]);
-    const dragged = layout[0]!;
-
-    const next = fitMovedElement(layout, dragged, undefined, 2);
-
-    expect(next.find((item) => item.i === 'locked')).toMatchObject({
-      x: 0,
-      y: 2,
-      static: true,
-    });
-    expect(next.find((item) => item.i === 'dragged')).toMatchObject({
-      x: 0,
-      y: 4,
-    });
-    expectNoCollisions(next);
-  });
-
-  it('displaces occupied panels when the dropped footprint is covered', () => {
-    const layout: Layout = cloneLayout([
-      { i: 'dragged', x: 0, y: 0, w: 12, h: 8, minW: 4, minH: 2 },
-      { i: 'left-block', x: 0, y: 0, w: 8, h: 6 },
-      { i: 'right-block', x: 8, y: 2, w: 16, h: 4 },
-    ]);
-    const dragged = layout[0]!;
-
-    const next = fitMovedElement(layout, dragged, 2, 2);
-
-    expect(next.find((item) => item.i === 'dragged')).toMatchObject({
-      x: 2,
-      y: 2,
-      w: 12,
-      h: 8,
-    });
-    expectNoCollisions(next);
-  });
-
-  it('pushes a colliding panel down when the previous slot is blocked', () => {
-    const layout: Layout = cloneLayout([
-      { i: 'dragged', x: 0, y: 0, w: 6, h: 2 },
-      { i: 'old-slot-neighbor', x: 6, y: 0, w: 6, h: 2 },
-      { i: 'wide', x: 0, y: 2, w: 12, h: 2 },
-    ]);
-    const dragged = layout[0]!;
-
-    const next = fitMovedElement(layout, dragged, undefined, 2);
-
-    expect(next.find((item) => item.i === 'dragged')).toMatchObject({
-      x: 0,
-      y: 2,
-      w: 6,
-      h: 2,
-    });
-    expect(next.find((item) => item.i === 'wide')).toMatchObject({
-      x: 0,
-      y: 4,
-      w: 12,
-      h: 2,
-    });
-    expectNoCollisions(next);
-  });
-
-  it('snaps the dragged panel up against the occupied slot once clear', () => {
-    const layout = cloneLayout(baseLayout);
-    const dragged = layout[0]!;
-
-    const next = fitMovedElement(layout, dragged, undefined, 4);
-
-    expect(next.find((item) => item.i === 'dragged')?.y).toBe(2);
-    expect(next.find((item) => item.i === 'below')?.y).toBe(0);
-  });
-
-  it('keeps large panadapter drag compaction stable', () => {
-    const layout: Layout = cloneLayout([
-      { i: 'filter', x: 0, y: 0, w: 12, h: 10 },
-      { i: 'filterpresets', x: 12, y: 0, w: 6, h: 10 },
-      { i: 'hero', x: 0, y: 10, w: 18, h: 38, minW: 8, minH: 8 },
-      { i: 'vfo', x: 18, y: 0, w: 6, h: 11 },
-      { i: 'smeter', x: 18, y: 11, w: 6, h: 5 },
-      { i: 'tx', x: 18, y: 16, w: 6, h: 10 },
-      { i: 'txmeters', x: 18, y: 26, w: 6, h: 12 },
-      { i: 'dsp', x: 18, y: 38, w: 6, h: 10 },
-    ]);
-    const dragged = layout.find((item) => item.i === 'hero')!;
-    const next = dragAndCompact(layout, dragged, 6, 16);
-
-    expect(next.find((item) => item.i === 'hero')).toMatchObject({
-      x: 6,
-      moved: false,
-    });
-    expectNoCollisions(next);
-    expectStableCompaction(next);
-  });
-
-  it('keeps large panadapter final drop stable through prop resync', () => {
-    const layout: Layout = cloneLayout([
-      { i: 'filter', x: 0, y: 0, w: 12, h: 10 },
-      { i: 'filterpresets', x: 12, y: 0, w: 6, h: 10 },
-      { i: 'hero', x: 0, y: 10, w: 18, h: 38, minW: 8, minH: 8 },
-      { i: 'vfo', x: 18, y: 0, w: 6, h: 11 },
-      { i: 'smeter', x: 18, y: 11, w: 6, h: 5 },
-      { i: 'tx', x: 18, y: 16, w: 6, h: 10 },
-      { i: 'txmeters', x: 18, y: 26, w: 6, h: 12 },
-      { i: 'dsp', x: 18, y: 38, w: 6, h: 10 },
-    ]);
-    const dragged = layout.find((item) => item.i === 'hero')!;
-    const dragStart = { item: { ...dragged }, layout: cloneLayout(layout) };
-    const moved = moveElement(
-      layout,
-      dragged,
-      6,
-      16,
-      true,
-      WORKSPACE_DRAG_COMPACTOR.preventCollision,
-      WORKSPACE_DRAG_COMPACTOR.type,
-      24,
-      WORKSPACE_DRAG_COMPACTOR.allowOverlap,
-    );
-
-    const dropped = autoFitDroppedPanel(moved, 24, dragStart);
-    const resynced = WORKSPACE_DRAG_COMPACTOR.compact(dropped, 24);
-
-    expect(resynced).toEqual(dropped);
-    expectNoCollisions(dropped);
-  });
-
-  it('auto-fits a large dropped panel without an exponential search blowup', () => {
-    // Regression guard: autoFitDroppedPanel used to sweep every (y,x,w,h) of
-    // the dropped panel's footprint, each running full collision resolution.
-    // For the ~18×38 panadapter/hero tile that is hundreds of thousands of
-    // resolves — a multi-second main-thread freeze on drop. The full-size /
-    // origin fast path collapses the common case to a single resolve. The
-    // threshold is deliberately generous (the bug took seconds; the fix is
-    // sub-millisecond) so it flags a complexity regression, not CI jitter.
-    const layout: Layout = cloneLayout([
-      { i: 'filter', x: 0, y: 0, w: 12, h: 10 },
-      { i: 'filterpresets', x: 12, y: 0, w: 6, h: 10 },
-      { i: 'hero', x: 0, y: 10, w: 18, h: 38, minW: 8, minH: 8 },
-      { i: 'vfo', x: 18, y: 0, w: 6, h: 11 },
-      { i: 'smeter', x: 18, y: 11, w: 6, h: 5 },
-      { i: 'tx', x: 18, y: 16, w: 6, h: 10 },
-      { i: 'txmeters', x: 18, y: 26, w: 6, h: 12 },
-      { i: 'dsp', x: 18, y: 38, w: 6, h: 10 },
-    ]);
-    const dragged = layout.find((item) => item.i === 'hero')!;
-
     const start = performance.now();
-    const next = fitMovedElement(layout, dragged, 6, 4);
+    const next = drop(layout, 'hero', { x: 6, y: 4 });
     const elapsedMs = performance.now() - start;
-
     expect(elapsedMs).toBeLessThan(250);
-    // Full size is preserved — the dropped panel is placed, not shrunk.
-    expect(next.find((item) => item.i === 'hero')).toMatchObject({
-      w: 18,
-      h: 38,
-    });
+    expect(next.find((i) => i.i === 'hero')).toMatchObject({ w: 18, h: 38 });
+    expectNoCollisions(next);
+  });
+});
+
+describe('resolveResizeOverlaps — local, no cascade', () => {
+  it('nudges only the overlapped neighbour aside when a tile grows', () => {
+    const layout: Layout = [
+      { i: 'top', x: 0, y: 0, w: 6, h: 4 }, // already grown into `below`
+      { i: 'below', x: 0, y: 2, w: 6, h: 2 },
+      { i: 'far', x: 0, y: 10, w: 6, h: 2 },
+    ];
+    const next = resolveResizeOverlaps(layout, 'top', 24);
+    expect(next.find((i) => i.i === 'top')).toMatchObject({ y: 0, h: 4 });
+    // `below` hops to the nearest free slot, `far` is left exactly where it was.
+    expect(next.find((i) => i.i === 'far')).toMatchObject({ y: 10 });
     expectNoCollisions(next);
   });
 
-  it('never shrinks a repositioned panel to fit around a locked panel', () => {
-    // A dropped panel overlapping a locked (static) panel must keep its full
-    // size and relocate below it — repositioning must never resize the panel.
-    const layout: Layout = cloneLayout([
-      { i: 'locked', x: 0, y: 0, w: 24, h: 4, static: true },
-      { i: 'dragged', x: 0, y: 0, w: 10, h: 6, moved: true },
-    ]);
-    const previous = {
-      item: { i: 'dragged', x: 0, y: 10, w: 10, h: 6 },
-      layout: [] as Layout,
-    };
-
-    const next = autoFitDroppedPanel(layout, 24, previous);
-
-    // Full size preserved (not squeezed into the gap), and the lock is intact.
-    expect(next.find((i) => i.i === 'dragged')).toMatchObject({ w: 10, h: 6 });
+  it('does not move a locked neighbour', () => {
+    const layout: Layout = [
+      { i: 'top', x: 0, y: 0, w: 6, h: 4 },
+      { i: 'locked', x: 0, y: 2, w: 6, h: 2, static: true },
+    ];
+    const next = resolveResizeOverlaps(layout, 'top', 24);
     expect(next.find((i) => i.i === 'locked')).toMatchObject({
       x: 0,
-      y: 0,
+      y: 2,
       static: true,
     });
-    expectNoCollisions(next);
   });
+});
 
-  it('pushes a lower panel down when resize grows into it', () => {
-    const layout = cloneLayout(baseLayout);
-    layout[0]!.h = 4;
-
-    const next = WORKSPACE_RESIZE_COMPACTOR.compact(layout, 24);
-
-    expect(next.find((item) => item.i === 'dragged')?.h).toBe(4);
-    expect(next.find((item) => item.i === 'below')?.y).toBe(4);
-  });
-
-  it('cascades resize pushes through stacked panels', () => {
-    const layout: Layout = [
-      { i: 'resized', x: 0, y: 0, w: 6, h: 5 },
-      { i: 'middle', x: 0, y: 2, w: 6, h: 2 },
-      { i: 'bottom', x: 0, y: 4, w: 6, h: 2 },
-    ];
-
-    const next = WORKSPACE_RESIZE_COMPACTOR.compact(layout, 24);
-
-    expect(next.find((item) => item.i === 'middle')?.y).toBe(5);
-    expect(next.find((item) => item.i === 'bottom')?.y).toBe(7);
-  });
-
-  it('does not compact existing vertical gaps during resize', () => {
+describe('tidyWorkspacePlacements — explicit pack', () => {
+  it('closes vertical gaps while keeping each column', () => {
     const layout: Layout = [
       { i: 'top', x: 0, y: 0, w: 6, h: 2 },
       { i: 'lower', x: 0, y: 6, w: 6, h: 2 },
+      { i: 'side', x: 6, y: 4, w: 6, h: 2 },
     ];
+    const next = tidyWorkspacePlacements(layout);
+    expect(next.find((i) => i.i === 'lower')).toMatchObject({ x: 0, y: 2 });
+    expect(next.find((i) => i.i === 'side')).toMatchObject({ x: 6, y: 0 });
+    expectNoCollisions(next);
+  });
 
-    const next = WORKSPACE_RESIZE_COMPACTOR.compact(layout, 24);
-
-    expect(next.find((item) => item.i === 'lower')?.y).toBe(6);
+  it('packs movable tiles around a locked tile without moving it', () => {
+    const layout: Layout = [
+      { i: 'locked', x: 0, y: 4, w: 6, h: 2, static: true },
+      { i: 'below', x: 0, y: 8, w: 6, h: 2 },
+    ];
+    const next = tidyWorkspacePlacements(layout);
+    expect(next.find((i) => i.i === 'locked')).toMatchObject({ y: 4 });
+    // `below` magnets up to just under the locked tile, not through it.
+    expect(next.find((i) => i.i === 'below')).toMatchObject({ x: 0, y: 6 });
+    expectNoCollisions(next);
   });
 });
