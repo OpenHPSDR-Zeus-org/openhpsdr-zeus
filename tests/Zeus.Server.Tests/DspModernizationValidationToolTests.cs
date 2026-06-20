@@ -9996,7 +9996,16 @@ public sealed class DspModernizationValidationToolTests
         var repoRoot = FindRepoRoot();
         var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-frontend-profile-guard-{Guid.NewGuid():N}");
         Directory.CreateDirectory(outputRoot);
-        using var server = JsonRouteServer.Start(_ => null);
+        using var server = JsonRouteServer.Start(request =>
+            request.Path == "/api/dsp/live-diagnostics"
+                ? JsonSerializer.Serialize(new
+                {
+                    status = "ready-for-live-benchmark",
+                    readyForLiveBenchmark = true,
+                    frontendSceneFresh = true,
+                    radioVfoHz = 14_313_000
+                }, CamelCaseJson)
+                : null);
 
         try
         {
@@ -10014,9 +10023,12 @@ public sealed class DspModernizationValidationToolTests
 
             Assert.NotEqual(0, run.ExitCode);
             Assert.Contains("RX audio leveler profile API is not reachable", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Contains("rxAudioLevelerProfileApiAvailable=missing", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Contains("not-advertised", run.CombinedOutput, StringComparison.Ordinal);
 
             var requestPaths = server.Requests.Select(request => request.Path).ToArray();
             Assert.Contains("/api/dsp/rx-audio-leveler-profile", requestPaths);
+            Assert.Contains("/api/dsp/live-diagnostics", requestPaths);
             Assert.DoesNotContain("/api/connect/p2", requestPaths);
             Assert.DoesNotContain("/api/radio/lo", requestPaths);
             Assert.DoesNotContain("/api/vfo", requestPaths);
@@ -10304,13 +10316,23 @@ public sealed class DspModernizationValidationToolTests
 
         try
         {
-            var closedPort = GetUnusedTcpPort();
+            using var server = JsonRouteServer.Start(request =>
+                request.Path == "/api/dsp/live-diagnostics"
+                    ? JsonSerializer.Serialize(new
+                    {
+                        status = "ready-for-live-benchmark",
+                        readyForLiveBenchmark = true,
+                        rxAudioLevelerProfileApiAvailable = false,
+                        rxAudioLevelerCapabilityStatus = "legacy-backend",
+                        radioVfoHz = 14_313_000
+                    }, CamelCaseJson)
+                    : null);
             var run = await RunPowerShellAsync(
                 powerShell,
                 repoRoot,
                 Path.Combine(repoRoot, "tools", "capture-rx-leveler-ab.ps1"),
                 TimeSpan.FromSeconds(20),
-                "-BaseUrl", $"http://127.0.0.1:{closedPort}",
+                "-BaseUrl", server.BaseUrl,
                 "-Samples", "1",
                 "-IntervalMs", "100",
                 "-TimeoutSec", "2",
@@ -10319,7 +10341,13 @@ public sealed class DspModernizationValidationToolTests
             Assert.NotEqual(0, run.ExitCode);
             Assert.Contains("RX audio leveler profile API is not reachable", run.CombinedOutput, StringComparison.Ordinal);
             Assert.Contains("/api/dsp/rx-audio-leveler-profile", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Contains("rxAudioLevelerProfileApiAvailable=False", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Contains("legacy-backend", run.CombinedOutput, StringComparison.Ordinal);
             Assert.DoesNotContain("watch-dsp-live-diagnostics failed", run.CombinedOutput, StringComparison.Ordinal);
+
+            var requestPaths = server.Requests.Select(request => request.Path).ToArray();
+            Assert.Contains("/api/dsp/rx-audio-leveler-profile", requestPaths);
+            Assert.Contains("/api/dsp/live-diagnostics", requestPaths);
         }
         finally
         {

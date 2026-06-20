@@ -100,6 +100,69 @@ function New-Directory {
     return $fullPath
 }
 
+function Get-ObjectValue {
+    param(
+        $Object,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    if ($null -eq $Object) {
+        return $null
+    }
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($null -ne $property) {
+        return $property.Value
+    }
+
+    foreach ($candidate in @($Object.PSObject.Properties)) {
+        if ([string]::Equals($candidate.Name, $Name, [StringComparison]::OrdinalIgnoreCase)) {
+            return $candidate.Value
+        }
+    }
+
+    return $null
+}
+
+function Get-LevelerCapabilityHint {
+    param([Parameter(Mandatory = $true)][string]$Base)
+
+    $requestArgs = @{
+        Uri = "$Base/api/dsp/live-diagnostics"
+        Method = "GET"
+        TimeoutSec = $TimeoutSec
+    }
+
+    if ($SkipCertificateCheck -and (Get-Command Invoke-RestMethod).Parameters.ContainsKey("SkipCertificateCheck")) {
+        $requestArgs["SkipCertificateCheck"] = $true
+    }
+
+    try {
+        $diagnostics = Invoke-RestMethod @requestArgs
+    }
+    catch {
+        return "Live diagnostics capability check also failed at $($requestArgs["Uri"]): $($_.Exception.Message)"
+    }
+
+    $status = [string](Get-ObjectValue $diagnostics "status")
+    $capabilityStatus = [string](Get-ObjectValue $diagnostics "rxAudioLevelerCapabilityStatus")
+    $apiAvailable = Get-ObjectValue $diagnostics "rxAudioLevelerProfileApiAvailable"
+    $endpoint = [string](Get-ObjectValue $diagnostics "rxAudioLevelerProfileEndpoint")
+    $candidate = [string](Get-ObjectValue $diagnostics "rxAudioLevelerCandidateProfile")
+    if ([string]::IsNullOrWhiteSpace($endpoint)) {
+        $endpoint = "/api/dsp/rx-audio-leveler-profile"
+    }
+    if ([string]::IsNullOrWhiteSpace($capabilityStatus)) {
+        $capabilityStatus = "not-advertised"
+    }
+    if ([string]::IsNullOrWhiteSpace($candidate)) {
+        $candidate = $CandidateProfile
+    }
+
+    $apiAvailableText = if ($null -eq $apiAvailable) { "missing" } else { [string]$apiAvailable }
+    return "Live diagnostics status='$status' reports rxAudioLevelerProfileApiAvailable=$apiAvailableText, rxAudioLevelerCapabilityStatus='$capabilityStatus', endpoint='$endpoint', candidateProfile='$candidate'. If these fields are missing or not candidate-profile-api-ready, the active backend is not the updated WDSP v2 profile-switch build."
+}
+
 function Invoke-LevelerProfileApi {
     param(
         [Parameter(Mandatory = $true)][string]$Base,
@@ -126,7 +189,8 @@ function Invoke-LevelerProfileApi {
         return Invoke-RestMethod @requestArgs
     }
     catch {
-        throw "RX audio leveler profile API is not reachable at $($requestArgs["Uri"]). Start the updated WDSP v2 backend before running A/B capture. $($_.Exception.Message)"
+        $capabilityHint = Get-LevelerCapabilityHint -Base $Base
+        throw "RX audio leveler profile API is not reachable at $($requestArgs["Uri"]). Start the updated WDSP v2 backend before running A/B capture. $capabilityHint $($_.Exception.Message)"
     }
 }
 
