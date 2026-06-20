@@ -3157,6 +3157,168 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task RxAgcTopCapAbSummaryPlanOnlyDeclaresReadOnlyManualWorkflow()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell AGC scorer smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var plan = await RunPowerShellAsync(
+            powerShell,
+            repoRoot,
+            Path.Combine(repoRoot, "tools", "summarize-dsp-rx-agc-top-cap-ab.ps1"),
+            "-PlanOnly",
+            "-RequireActiveAudio",
+            "-MinActiveAudioSamples", "3");
+
+        Assert.Equal(0, plan.ExitCode);
+        using var doc = JsonDocument.Parse(plan.StandardOutput);
+        var root = doc.RootElement;
+        Assert.Equal("summarize-dsp-rx-agc-top-cap-ab", root.GetProperty("tool").GetString());
+        Assert.True(root.GetProperty("noWritesByScript").GetBoolean());
+        Assert.Equal(80.0, root.GetProperty("baselineAgcTopDb").GetDouble(), precision: 1);
+        Assert.Equal(50.0, root.GetProperty("candidateAgcTopDb").GetDouble(), precision: 1);
+        Assert.True(root.GetProperty("requireActiveAudio").GetBoolean());
+        Assert.Contains("/api/agcGain", ReadStringArray(root, "disallowedEndpoints"));
+        Assert.Contains("/api/connect/p2", ReadStringArray(root, "disallowedEndpoints"));
+        Assert.Contains("performs no radio writes", string.Join(" ", ReadStringArray(root, "commandSteps")), StringComparison.Ordinal);
+    }
+
+    [SkippableFact]
+    public async Task RxAgcTopCapAbSummaryAcceptsImprovedActiveAgcTraceForOptInReview()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell AGC scorer smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-agc-top-cap-ready-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+
+        try
+        {
+            var baselinePath = Path.Combine(outputRoot, "current-live-diagnostics-summary.json");
+            var candidatePath = Path.Combine(outputRoot, "candidate-live-diagnostics-summary.json");
+            await WriteAgcTopCapWatcherReportAsync(
+                baselinePath,
+                agcMovementDb: 14.0,
+                activeAgcMovementDb: 10.0,
+                audioRmsMovementDb: 1.2);
+            await WriteAgcTopCapWatcherReportAsync(
+                candidatePath,
+                agcMovementDb: 4.0,
+                activeAgcMovementDb: 3.0,
+                audioRmsMovementDb: 0.8,
+                audioPeakMaxDbfs: -6.0);
+
+            var reportPath = Path.Combine(outputRoot, "rx-agc-top-cap-ab-live-comparison.json");
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-rx-agc-top-cap-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-BaselinePath", baselinePath,
+                "-CandidatePath", candidatePath,
+                "-ReportPath", reportPath,
+                "-BundleDir", outputRoot,
+                "-NoMarkdown",
+                "-JsonOnly",
+                "-RequireActiveAudio",
+                "-MinActiveAudioSamples", "3");
+
+            Assert.Equal(0, run.ExitCode);
+            Assert.True(File.Exists(reportPath), run.CombinedOutput);
+
+            using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = doc.RootElement;
+            Assert.True(root.GetProperty("noWritesByScript").GetBoolean());
+            Assert.True(root.GetProperty("readyForOptInReview").GetBoolean(), run.CombinedOutput);
+            Assert.False(root.GetProperty("promotionReady").GetBoolean());
+            Assert.Equal("requires-safe-runtime-api-and-cross-radio-proof", root.GetProperty("promotionStatus").GetString());
+            Assert.Equal("ready-for-opt-in-review", root.GetProperty("evidenceStatus").GetString());
+            Assert.False(root.GetProperty("runtimeApiAvailable").GetBoolean());
+            Assert.True(root.GetProperty("manualOperatorCapture").GetBoolean());
+            Assert.Equal(10.0, root.GetProperty("agcMovementImprovementDb").GetDouble(), precision: 3);
+            Assert.Equal(7.0, root.GetProperty("activeAgcMovementImprovementDb").GetDouble(), precision: 3);
+            Assert.Equal(0.4, root.GetProperty("audioRmsMovementImprovementDb").GetDouble(), precision: 3);
+            Assert.True(root.GetProperty("activeAudioReady").GetBoolean());
+            Assert.Contains("/api/agcGain", ReadStringArray(root, "disallowedEndpoints"));
+            Assert.False(Path.IsPathRooted(root.GetProperty("baselinePath").GetString() ?? ""));
+            Assert.False(Path.IsPathRooted(root.GetProperty("candidatePath").GetString() ?? ""));
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task RxAgcTopCapAbSummaryFailsClosedWithoutAgcImprovement()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell AGC scorer smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-agc-top-cap-not-ready-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+
+        try
+        {
+            var baselinePath = Path.Combine(outputRoot, "current-live-diagnostics-summary.json");
+            var candidatePath = Path.Combine(outputRoot, "candidate-live-diagnostics-summary.json");
+            await WriteAgcTopCapWatcherReportAsync(
+                baselinePath,
+                agcMovementDb: 4.0,
+                activeAgcMovementDb: 3.0,
+                audioRmsMovementDb: 0.8);
+            await WriteAgcTopCapWatcherReportAsync(
+                candidatePath,
+                agcMovementDb: 6.0,
+                activeAgcMovementDb: 4.0,
+                audioRmsMovementDb: 0.8);
+
+            var reportPath = Path.Combine(outputRoot, "rx-agc-top-cap-ab-live-comparison.json");
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-rx-agc-top-cap-ab.ps1"),
+                TimeSpan.FromSeconds(40),
+                "-BaselinePath", baselinePath,
+                "-CandidatePath", candidatePath,
+                "-ReportPath", reportPath,
+                "-NoMarkdown",
+                "-JsonOnly",
+                "-RequireActiveAudio",
+                "-MinActiveAudioSamples", "3",
+                "-FailOnNotReady");
+
+            Assert.NotEqual(0, run.ExitCode);
+            Assert.True(File.Exists(reportPath), run.CombinedOutput);
+            using var doc = JsonDocument.Parse(await File.ReadAllTextAsync(reportPath));
+            var root = doc.RootElement;
+            Assert.False(root.GetProperty("readyForOptInReview").GetBoolean());
+            Assert.Equal("agc-movement-not-improved", root.GetProperty("evidenceStatus").GetString());
+            Assert.Contains("agc-movement-not-improved", ReadStringArray(root, "failures"));
+            Assert.False(root.GetProperty("promotionReady").GetBoolean());
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task RxLevelerFixtureBenchmarkToolExportsCandidateEvidence()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler benchmark smoke runs on Windows.");
@@ -18646,6 +18808,90 @@ public sealed class DspModernizationValidationToolTests
                 "Write-TextFile -Path $ReportPath -Value $json",
                 "Write-TextFile -Path $JsonlPath -Value '{\"ok\":true}'",
                 "if ($JsonOnly) { $json }"));
+    }
+
+    private static Task WriteAgcTopCapWatcherReportAsync(
+        string path,
+        double agcMovementDb,
+        double activeAgcMovementDb,
+        double audioRmsMovementDb,
+        double voiceLikeAgcMovementDb = 0.2,
+        int activeAudioSampleCount = 3,
+        double audioPeakMaxDbfs = -6.0,
+        bool pumpingRisk = false)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        var report = new
+        {
+            schemaVersion = 1,
+            tool = "watch-dsp-live-diagnostics",
+            trendStatus = "ready-trace",
+            readyForBenchmarkTrace = true,
+            sampleCount = 3,
+            okSampleCount = 3,
+            failedSampleCount = 0,
+            readySampleCount = 3,
+            hardBlockerSampleCount = 0,
+            captureReadinessWatch = new
+            {
+                status = "ready",
+                preflightReady = true,
+                hardGatePass = true,
+                strictPreflightPass = true,
+                okSampleCount = 3,
+                failedSampleCount = 0,
+                readySampleCount = 3,
+                hardBlockerSampleCount = 0
+            },
+            signalOccupancyWatch = new
+            {
+                activeAudioSampleCount,
+                activeAudioPct = activeAudioSampleCount == 0 ? 0.0 : 100.0
+            },
+            agcGainDb = new
+            {
+                count = 3,
+                min = -70.0,
+                max = -70.0 + agcMovementDb,
+                avg = -70.0 + (agcMovementDb / 2.0),
+                movement = agcMovementDb
+            },
+            agcStabilityWatch = new
+            {
+                pumpingRisk,
+                activeAgcGainDb = new { movement = activeAgcMovementDb },
+                voiceLikeAgcGainDb = new { movement = voiceLikeAgcMovementDb },
+                quietNoEvidenceAgcGainDb = new { movement = 0.1 }
+            },
+            audioRmsDbfs = new
+            {
+                count = 3,
+                min = -30.0,
+                max = -30.0 + audioRmsMovementDb,
+                avg = -30.0 + (audioRmsMovementDb / 2.0),
+                movement = audioRmsMovementDb
+            },
+            audioPeakDbfs = new
+            {
+                count = 3,
+                min = audioPeakMaxDbfs - 1.0,
+                max = audioPeakMaxDbfs,
+                avg = audioPeakMaxDbfs - 0.5,
+                movement = 1.0
+            },
+            adcHeadroomDb = new { count = 3, min = 36.0, max = 38.0, avg = 37.0, movement = 2.0 },
+            latencyMs = new { count = 3, min = 1.0, max = 2.0, avg = 1.5, movement = 1.0 },
+            readinessScore = new { count = 3, min = 92.0, max = 92.0, avg = 92.0, movement = 0.0 },
+            runtimeEvidenceSampleCount = 3,
+            audioFreshSampleCount = 3,
+            rxMetersFreshSampleCount = 3,
+            squelchClosedPct = 0.0,
+            hardConstraintSampleCount = 0,
+            constraintCounts = Array.Empty<object>(),
+            hardConstraintCounts = Array.Empty<object>()
+        };
+
+        return File.WriteAllTextAsync(path, JsonSerializer.Serialize(report, CamelCaseJson));
     }
 
     private static async Task<string> WriteRxLevelerAbEvidenceFixtureAsync(
