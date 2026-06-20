@@ -314,97 +314,112 @@ function RosterRow({
       <div style={{ minWidth: 0, flex: 1 }}>
         <CallsignButton callsign={op.callsign} onOpen={onOpen} prominent />
       </div>
-      {/* DM button — appears on hover */}
-      {hovered && (
-        <button
-          type="button"
-          onClick={() => onDm(op.callsign)}
-          title={`Message ${op.callsign}`}
-          aria-label={`Start DM with ${op.callsign}`}
-          style={{
-            flexShrink: 0,
-            background: 'none',
-            border: 'none',
-            padding: '0 2px',
-            cursor: 'pointer',
-            fontSize: 11,
-            lineHeight: 1,
-            color: 'var(--accent-bright)',
-            opacity: 0.8,
-          }}
-        >
-          {/* Inline chat bubble SVG */}
-          <svg
-            width="13"
-            height="13"
-            viewBox="0 0 16 16"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-            aria-hidden="true"
-          >
-            <path
-              d="M2 2h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H5l-3 3V3a1 1 0 0 1 1-1z"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
-      )}
-      {/* Admin ban button — subtle, appears on hover */}
-      {isAdmin && hovered && (
-        <button
-          type="button"
-          onClick={() => onBan(op.callsign)}
-          title={`Ban ${op.callsign}`}
-          aria-label={`Ban ${op.callsign}`}
-          style={{
-            flexShrink: 0,
-            background: 'none',
-            border: 'none',
-            padding: '0 2px',
-            cursor: 'pointer',
-            fontSize: 11,
-            lineHeight: 1,
-            color: 'var(--tx)',
-            opacity: 0.6,
-          }}
-        >
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 16 16"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-            aria-hidden="true"
-          >
-            <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.5" />
-            <line x1="3" y1="13" x2="13" y2="3" stroke="currentColor" strokeWidth="1.5" />
-          </svg>
-        </button>
-      )}
-      {/* Star control */}
-      <button
-        type="button"
-        onClick={() => onStar(op.callsign)}
-        title={star.title}
-        aria-label={`${star.title} — ${op.callsign}`}
-        aria-pressed={relation === 'friend'}
+      {/* Action icons — grouped + spaced away from the callsign */}
+      <div
         style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
           flexShrink: 0,
-          background: 'none',
-          border: 'none',
-          padding: '0 2px',
-          cursor: 'pointer',
-          fontSize: 12,
-          lineHeight: 1,
-          color: star.color,
-          opacity: starVisible ? 1 : 0,
-          transition: 'opacity var(--dur-fast) var(--ease-out)',
+          marginLeft: 8,
         }}
       >
-        {star.glyph}
-      </button>
+        {/* DM button — appears on hover */}
+        {hovered && (
+          <button
+            type="button"
+            onClick={() => onDm(op.callsign)}
+            title={`Message ${op.callsign}`}
+            aria-label={`Start DM with ${op.callsign}`}
+            style={{
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              lineHeight: 1,
+              color: 'var(--accent-bright)',
+              opacity: 0.8,
+            }}
+          >
+            {/* Inline chat bubble SVG */}
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 16 16"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
+            >
+              <path
+                d="M2 2h12a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H5l-3 3V3a1 1 0 0 1 1-1z"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        )}
+        {/* Admin ban button — subtle, appears on hover */}
+        {isAdmin && hovered && (
+          <button
+            type="button"
+            onClick={() => onBan(op.callsign)}
+            title={`Ban ${op.callsign}`}
+            aria-label={`Ban ${op.callsign}`}
+            style={{
+              flexShrink: 0,
+              display: 'flex',
+              alignItems: 'center',
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              lineHeight: 1,
+              color: 'var(--tx)',
+              opacity: 0.6,
+            }}
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 16 16"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+              aria-hidden="true"
+            >
+              <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.5" />
+              <line x1="3" y1="13" x2="13" y2="3" stroke="currentColor" strokeWidth="1.5" />
+            </svg>
+          </button>
+        )}
+        {/* Star control */}
+        <button
+          type="button"
+          onClick={() => onStar(op.callsign)}
+          title={star.title}
+          aria-label={`${star.title} — ${op.callsign}`}
+          aria-pressed={relation === 'friend'}
+          style={{
+            flexShrink: 0,
+            display: 'flex',
+            alignItems: 'center',
+            background: 'none',
+            border: 'none',
+            padding: 0,
+            cursor: 'pointer',
+            fontSize: 12,
+            lineHeight: 1,
+            color: star.color,
+            opacity: starVisible ? 1 : 0,
+            transition: 'opacity var(--dur-fast) var(--ease-out)',
+          }}
+        >
+          {star.glyph}
+        </button>
+      </div>
     </div>
   );
 }
@@ -981,6 +996,8 @@ export function ChatPanel() {
   const loadFriends = useChatStore((s) => s.loadFriends);
   const setActiveRoom = useChatStore((s) => s.setActiveRoom);
   const openDm = useChatStore((s) => s.openDm);
+  const closeDm = useChatStore((s) => s.closeDm);
+  const hiddenDms = useChatStore((s) => s.hiddenDms);
   const setFreqVisibility = useChatStore((s) => s.setFreqVisibility);
   const requestFriend = useChatStore((s) => s.requestFriend);
   const acceptFriend = useChatStore((s) => s.acceptFriend);
@@ -1083,11 +1100,12 @@ export function ChatPanel() {
 
   // Tab ordering: public first, then groups, then DMs
   const orderedRooms = useMemo(() => {
+    const hidden = new Set(hiddenDms);
     const pub = rooms.filter((r) => r.kind === 'public');
     const grp = rooms.filter((r) => r.kind === 'group');
-    const dms = rooms.filter((r) => r.kind === 'dm');
+    const dms = rooms.filter((r) => r.kind === 'dm' && !hidden.has(r.id));
     return [...pub, ...grp, ...dms];
-  }, [rooms]);
+  }, [rooms, hiddenDms]);
 
   const activeRoomObj = useMemo(
     () => rooms.find((r) => r.id === activeRoom) ?? null,
@@ -1131,13 +1149,8 @@ export function ChatPanel() {
     return { color: 'var(--power)', bg: 'var(--power-soft)', label: 'Connecting…' };
   })();
 
-  // Handle DM tab close: just navigate back to public
-  const handleTabClose = useCallback(
-    (id: string) => {
-      if (activeRoom === id) setActiveRoom(PUBLIC_ROOM);
-    },
-    [activeRoom, setActiveRoom],
-  );
+  // Close (hide) a DM tab; a new message or reopening brings it back.
+  const handleTabClose = useCallback((id: string) => closeDm(id), [closeDm]);
 
   // Admin: create group room
   const handleCreateRoom = () => setCreatingRoom(true);

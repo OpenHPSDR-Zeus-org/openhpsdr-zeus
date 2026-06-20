@@ -104,6 +104,9 @@ export type ChatStoreState = {
   activeRoom: string;
   messagesByRoom: Record<string, ChatMessage[]>;
   unreadByRoom: Record<string, number>;
+  // DM room ids the operator has closed (hidden from the tab bar until a new
+  // message arrives or they reopen the DM). Session-local.
+  hiddenDms: string[];
 
   // Friend graph (consent gate for seeing freq).
   acceptedFriends: string[];
@@ -119,6 +122,7 @@ export type ChatStoreState = {
   loadFriends: () => Promise<void>;
   setActiveRoom: (room: string) => void;
   openDm: (callsign: string) => void;
+  closeDm: (room: string) => void;
   requestRoomHistory: (room: string) => Promise<void>;
   setFreqVisibility: (isPublic: boolean) => Promise<void>;
   requestFriend: (callsign: string) => Promise<void>;
@@ -189,6 +193,7 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
   activeRoom: PUBLIC_ROOM,
   messagesByRoom: {},
   unreadByRoom: {},
+  hiddenDms: [],
   acceptedFriends: [],
   incomingRequests: [],
   outgoingRequests: [],
@@ -277,9 +282,21 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
       const rooms = exists
         ? s.rooms
         : [...s.rooms, { id, name: callsign.toUpperCase(), kind: 'dm' as const, members: [me, callsign.toUpperCase()].filter(Boolean) }];
-      return { rooms, activeRoom: id, unreadByRoom: { ...s.unreadByRoom, [id]: 0 } };
+      return {
+        rooms,
+        activeRoom: id,
+        unreadByRoom: { ...s.unreadByRoom, [id]: 0 },
+        hiddenDms: s.hiddenDms.filter((x) => x !== id), // reopening un-hides
+      };
     });
     if (get().messagesByRoom[id] === undefined) void get().requestRoomHistory(id);
+  },
+
+  closeDm: (room) => {
+    set((s) => ({
+      hiddenDms: s.hiddenDms.includes(room) ? s.hiddenDms : [...s.hiddenDms, room],
+      activeRoom: s.activeRoom === room ? PUBLIC_ROOM : s.activeRoom,
+    }));
   },
 
   requestRoomHistory: async (room) => {
@@ -359,6 +376,8 @@ export const useChatStore = create<ChatStoreState>((set, get) => ({
             unreadByRoom: bump
               ? { ...s.unreadByRoom, [room]: (s.unreadByRoom[room] ?? 0) + 1 }
               : s.unreadByRoom,
+            // A new message in a closed DM brings its tab back.
+            hiddenDms: s.hiddenDms.includes(room) ? s.hiddenDms.filter((x) => x !== room) : s.hiddenDms,
           };
         });
         return;
