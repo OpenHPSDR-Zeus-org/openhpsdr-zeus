@@ -69,14 +69,34 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     // jitter.
     private const int RingCapacity = 65_536;
 
-    // Hold roughly 60 ms before starting or resuming playback. This is also the
-    // steady-state ring depth — after each (re)buffer the ring refills to this
-    // level — so a larger cushion gives more tolerance to DSP-tick jitter (CPU
-    // load, GC pauses, scheduler latency) before the ring drains and the OS
-    // callback splices a silence tail into the audio, which presents as RX
-    // crackle. 60 ms absorbs several DSP blocks of jitter for imperceptible
-    // added RX latency. (Was 20 ms / 960, which underran under load — issue #733.)
-    private const int PlaybackPrebufferSamples = 2880;
+    // Floor for the prebuffer cushion: hold ~120 ms before starting/resuming
+    // playback, and refill to this depth after every (re)buffer.
+    //
+    // Why 120 ms and why adaptive (#742): the producer is the DSP RX tick, which
+    // publishes audio in BURSTS gated to ~33 ms (MaybeTickInline) on the RX
+    // packet thread — the same thread that also runs the squelch/leveler/plugin
+    // chain and the panadapter/waterfall work. The consumer is the miniaudio
+    // device callback draining steadily every device period. Between bursts the
+    // consumer drains with no production, so the ring must hold at least one
+    // inter-tick gap; any tick delayed by GC / CPU load / scheduler latency
+    // drains further. The old 60 ms (2880) was only ~2 tick intervals — a single
+    // delayed tick left too little margin and the callback short-read a silence
+    // tail (heard as crackle): a G2 report showed ~4.6% of callbacks short-read
+    // (222k silence samples) while the DSP side was provably healthy.
+    //
+    // 120 ms ≈ 3.6 tick intervals — absorbs a stalled tick with headroom. The
+    // EFFECTIVE target is also made adaptive at runtime to the negotiated device
+    // period (see OnPlaybackData): miniaudio may ignore our 480-frame request and
+    // hand us a larger callback, in which case the cushion grows to ≥ 4 callbacks
+    // so a big-period default device can't outrun a thin fixed cushion. Pure
+    // latency-vs-robustness trade — managed only, identical on every platform.
+    // (History: 20 ms underran badly, 60 ms underran under load — both #733/#742.)
+    private const int PlaybackPrebufferSamples = 5760;
+
+    // Effective prebuffer cushion actually in force — max(floor, 4×callbackFrames),
+    // recomputed per callback once the device's real period is known. Reported in
+    // diagnostics so a report shows the cushion that was active.
+    private volatile int _effectivePrebufferSamples = PlaybackPrebufferSamples;
 
     // ~250 ms @ 48 kHz mono = 12000 samples ≈ 48 KB. Power of two for the
     // mask wrap. The preview path is sourced from mic capture (one block
@@ -143,7 +163,7 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         RebufferEvents: Interlocked.Read(ref _rebufferEvents),
         RingDepthSamples: _ring.Count,
         RingCapacitySamples: RingCapacity,
-        PrebufferSamples: PlaybackPrebufferSamples,
+        PrebufferSamples: _effectivePrebufferSamples,
         SampleRateHz: FrameRateHz,
         Rebuffering: _rebuffering);
 
@@ -407,6 +427,21 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         MaybeLog();
     }
 
+    // Effective prebuffer/refill cushion for a device callback of
+    // <paramref name="totalFrames"/> frames: the larger of the 120 ms floor and
+    // four callbacks deep, capped to leave one callback of ring headroom (a
+    // target ≥ capacity would wedge rebuffering forever). #742.
+    internal static int ComputePrebufferTarget(int totalFrames)
+    {
+        if (totalFrames <= 0) return PlaybackPrebufferSamples;
+        int desired = Math.Max(PlaybackPrebufferSamples, totalFrames * 4);
+        // Keep one callback of ring headroom; a target >= capacity would wedge
+        // rebuffering forever. For an absurd period (> half the ring) just
+        // degrade to whatever headroom remains rather than throw.
+        int ceiling = Math.Max(1, RingCapacity - totalFrames);
+        return Math.Min(desired, ceiling);
+    }
+
     private void OnPlaybackData(Span<float> output, uint frameCount, uint channels)
     {
         // miniaudio's buffer is interleaved float32 sized frameCount * channels.
@@ -421,11 +456,17 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
             ? stackalloc float[totalFrames]
             : new float[totalFrames];
 
+        // Size the cushion to the LARGER of the 120 ms floor and 4× this device's
+        // actual callback (the negotiated period may exceed our 480-frame
+        // request). #742.
+        int prebufferTarget = ComputePrebufferTarget(totalFrames);
+        _effectivePrebufferSamples = prebufferTarget;
+
         bool rxSilence = false;
         int queued = _ring.Count;
         if (_rebuffering)
         {
-            if (queued >= PlaybackPrebufferSamples)
+            if (queued >= prebufferTarget)
             {
                 _rebuffering = false;
             }
