@@ -2865,6 +2865,122 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task ValidationReportRejectsAgcFixtureMetricsWithoutWdspMeterProvenance()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell modernization validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-agc-meter-provenance-stale-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteAgcFixtureArtifactManifest(bundleDir);
+            WriteAgcFixtureMetrics(bundleDir, includeMeterProvenance: false);
+
+            var validationReport = Path.Combine(bundleDir, "validation-agc-meter-stale.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsPresent").GetBoolean());
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsWdspBackedEvidence").GetBoolean());
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsAgcMeterScenarioPresent").GetBoolean());
+            Assert.False(validationRoot.GetProperty("offlineFixtureMetricsAgcMeterProvenanceReady").GetBoolean());
+            Assert.Equal("not-ready", validationRoot.GetProperty("offlineFixtureMetricsAgcMeterProvenanceStatus").GetString());
+            Assert.Equal(1, validationRoot.GetProperty("offlineFixtureMetricsAgcMeterComparisonCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("offlineFixtureMetricsAgcMeterMissingMeterCount").GetInt32());
+
+            var errorCodes = validationRoot.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("offline-fixture-agc-meter-provenance-missing", errorCodes);
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ValidationReportAcceptsAgcFixtureMetricsWithWdspMeterProvenance()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell modernization validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-agc-meter-provenance-ready-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteAgcFixtureArtifactManifest(bundleDir);
+            WriteAgcFixtureMetrics(bundleDir, includeMeterProvenance: true);
+
+            var validationReport = Path.Combine(bundleDir, "validation-agc-meter-ready.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsPresent").GetBoolean());
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsWdspBackedEvidence").GetBoolean());
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsAgcMeterScenarioPresent").GetBoolean());
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsAgcMeterProvenanceReady").GetBoolean());
+            Assert.Equal("ready", validationRoot.GetProperty("offlineFixtureMetricsAgcMeterProvenanceStatus").GetString());
+            Assert.Equal(1, validationRoot.GetProperty("offlineFixtureMetricsAgcMeterComparisonCount").GetInt32());
+            Assert.Equal(1, validationRoot.GetProperty("offlineFixtureMetricsAgcMeterReadyComparisonCount").GetInt32());
+            Assert.Equal(8, validationRoot.GetProperty("offlineFixtureMetricsAgcMeterSampleCount").GetInt32());
+            Assert.Equal(0, validationRoot.GetProperty("offlineFixtureMetricsAgcMeterMetricMismatchCount").GetInt32());
+
+            var errorCodes = validationRoot.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.DoesNotContain(errorCodes, code => code is not null && code.StartsWith("offline-fixture-agc-meter-", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task RxLevelerFixtureBenchmarkToolExportsCandidateEvidence()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler benchmark smoke runs on Windows.");
@@ -16804,6 +16920,104 @@ public sealed class DspModernizationValidationToolTests
         File.WriteAllText(
             Path.Combine(bundleDir, "artifact-manifest.json"),
             JsonSerializer.Serialize(manifest, CamelCaseJson));
+    }
+
+    private static void WriteAgcFixtureArtifactManifest(string bundleDir)
+    {
+        Directory.CreateDirectory(Path.Combine(bundleDir, "artifacts"));
+
+        var manifest = new
+        {
+            schemaVersion = 1,
+            artifacts = new object[]
+            {
+                new
+                {
+                    id = "offline-fixture-metrics",
+                    kind = "metrics-json",
+                    source = "tools/run-dsp-wdsp-fixture-evidence.ps1",
+                    path = "artifacts/offline-fixture-metrics.json",
+                    required = true,
+                    scenarioIds = new[] { "agc-level-step" },
+                    comparisonIds = new[] { "current-zeus" }
+                }
+            }
+        };
+
+        File.WriteAllText(
+            Path.Combine(bundleDir, "artifact-manifest.json"),
+            JsonSerializer.Serialize(manifest, CamelCaseJson));
+    }
+
+    private static void WriteAgcFixtureMetrics(
+        string bundleDir,
+        bool includeMeterProvenance,
+        bool mismatchMetric = false)
+    {
+        var metricsPath = Path.Combine(bundleDir, "artifacts", "offline-fixture-metrics.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(metricsPath)!);
+
+        var metrics = new
+        {
+            schemaVersion = 1,
+            tool = "dsp-fixture-evidence",
+            evidenceEngine = "wdsp",
+            wdspRuntimeRid = "win-x64",
+            wdspRuntimeSha256 = ValidWdspRuntimeSha256,
+            wdspRuntimeStatus = "found",
+            scenarioCount = 1,
+            comparisonIds = new[] { "current-zeus" },
+            scenarios = new object[]
+            {
+                new
+                {
+                    scenarioId = "agc-level-step",
+                    scenarioName = "AGC level step and pumping",
+                    fixtureStatus = "offline-fixture-ready",
+                    signalPath = "RX IQ/RX audio",
+                    comparisons = new object[] { AgcFixtureComparison(includeMeterProvenance, mismatchMetric) }
+                }
+            }
+        };
+
+        File.WriteAllText(metricsPath, JsonSerializer.Serialize(metrics, CamelCaseJson));
+    }
+
+    private static Dictionary<string, object?> AgcFixtureComparison(
+        bool includeMeterProvenance,
+        bool mismatchMetric)
+    {
+        const double meterMovementDb = 2.75;
+        var metricMovementDb = mismatchMetric ? 1.25 : meterMovementDb;
+        var comparison = new Dictionary<string, object?>
+        {
+            ["comparisonId"] = "current-zeus",
+            ["source"] = "wdsp-fixture-runner",
+            ["profile"] = "current-zeus",
+            ["metrics"] = new Dictionary<string, object?>
+            {
+                ["AGC gain movement"] = metricMovementDb,
+                ["windowed RMS movement"] = 0.35,
+                ["processing elapsed ms"] = 4.2,
+                ["throughput ratio"] = 5.0
+            },
+            ["gates"] = new object[]
+            {
+                new { id = "agc-meter-fixture-generated", passed = true, status = "pass" }
+            }
+        };
+
+        if (includeMeterProvenance)
+        {
+            comparison["rxStageMeters"] = new
+            {
+                source = "WDSP RXA_AGC_GAIN meter",
+                agcGainSampleCount = 8,
+                agcGainMovementDb = meterMovementDb
+            };
+        }
+
+        return comparison;
     }
 
     private static void WriteTxFixtureArtifactManifest(string bundleDir)

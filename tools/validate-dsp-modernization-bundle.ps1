@@ -5783,6 +5783,150 @@ function Get-MetricResultMetricIds {
     return @($metricIds.ToArray() | Select-Object -Unique)
 }
 
+function Get-MetricValueById {
+    param(
+        $Metrics,
+        [Parameter(Mandatory = $true)][string]$MetricId
+    )
+
+    if ($null -eq $Metrics) {
+        return $null
+    }
+
+    $targetMetricId = ConvertTo-MetricId $MetricId
+    if ([string]::IsNullOrWhiteSpace($targetMetricId)) {
+        return $null
+    }
+
+    if ($Metrics -is [System.Collections.IDictionary]) {
+        foreach ($key in @($Metrics.Keys)) {
+            if ([string]::Equals((ConvertTo-MetricId ([string]$key)), $targetMetricId, [StringComparison]::Ordinal)) {
+                return $Metrics[$key]
+            }
+        }
+
+        return $null
+    }
+
+    foreach ($property in @($Metrics.PSObject.Properties)) {
+        if ([string]::Equals((ConvertTo-MetricId $property.Name), $targetMetricId, [StringComparison]::Ordinal)) {
+            return $property.Value
+        }
+    }
+
+    return $null
+}
+
+function Get-OfflineFixtureAgcMeterProvenance {
+    param($MetricsJson)
+
+    $result = [ordered]@{
+        scenarioPresent = $false
+        ready = $false
+        status = "agc-level-step-not-present"
+        comparisonCount = 0
+        readyComparisonCount = 0
+        sampleCount = 0
+        missingMeterCount = 0
+        invalidSourceCount = 0
+        missingSampleCount = 0
+        missingMovementCount = 0
+        missingMetricCount = 0
+        metricMismatchCount = 0
+        maxMetricMismatchDb = 0.0
+    }
+
+    foreach ($scenario in (Get-JsonArray $MetricsJson "scenarios")) {
+        $scenarioIds = @(Get-ArtifactIndexFileScenarioIds $scenario)
+        if ($scenarioIds.Count -eq 0) {
+            $scenarioId = [string](Get-JsonValue $scenario "scenarioId")
+            if (-not [string]::IsNullOrWhiteSpace($scenarioId)) {
+                $scenarioIds = @($scenarioId)
+            }
+        }
+
+        $hasAgcScenario = $false
+        foreach ($scenarioId in @($scenarioIds)) {
+            if ([string]::Equals([string]$scenarioId, "agc-level-step", [StringComparison]::OrdinalIgnoreCase)) {
+                $hasAgcScenario = $true
+                break
+            }
+        }
+        if (-not $hasAgcScenario) {
+            continue
+        }
+
+        $result["scenarioPresent"] = $true
+        foreach ($comparison in (Get-JsonArray $scenario "comparisons")) {
+            $result["comparisonCount"] = [int]$result["comparisonCount"] + 1
+            $comparisonReady = $true
+
+            $metrics = Get-JsonValue $comparison "metrics"
+            $metricValue = Get-NumericValue (Get-MetricValueById -Metrics $metrics -MetricId "AGC gain movement")
+            if ($null -eq $metricValue) {
+                $result["missingMetricCount"] = [int]$result["missingMetricCount"] + 1
+                $comparisonReady = $false
+            }
+
+            $rxStageMeters = Get-JsonValue $comparison "rxStageMeters"
+            if ($null -eq $rxStageMeters) {
+                $result["missingMeterCount"] = [int]$result["missingMeterCount"] + 1
+                $comparisonReady = $false
+            }
+            else {
+                $source = [string](Get-JsonValue $rxStageMeters "source")
+                if (-not [string]::Equals($source, "WDSP RXA_AGC_GAIN meter", [StringComparison]::Ordinal)) {
+                    $result["invalidSourceCount"] = [int]$result["invalidSourceCount"] + 1
+                    $comparisonReady = $false
+                }
+
+                $sampleCount = [int](Get-NumericValueOrDefault (Get-JsonValue $rxStageMeters "agcGainSampleCount"))
+                if ($sampleCount -le 0) {
+                    $result["missingSampleCount"] = [int]$result["missingSampleCount"] + 1
+                    $comparisonReady = $false
+                }
+                else {
+                    $result["sampleCount"] = [int]$result["sampleCount"] + $sampleCount
+                }
+
+                $meterMovement = Get-NumericValue (Get-JsonValue $rxStageMeters "agcGainMovementDb")
+                if ($null -eq $meterMovement) {
+                    $result["missingMovementCount"] = [int]$result["missingMovementCount"] + 1
+                    $comparisonReady = $false
+                }
+                elseif ($null -ne $metricValue) {
+                    $mismatch = [Math]::Abs([double]$metricValue - [double]$meterMovement)
+                    if ($mismatch -gt 0.000001) {
+                        $result["metricMismatchCount"] = [int]$result["metricMismatchCount"] + 1
+                        $result["maxMetricMismatchDb"] = [Math]::Max([double]$result["maxMetricMismatchDb"], $mismatch)
+                        $comparisonReady = $false
+                    }
+                }
+            }
+
+            if ($comparisonReady) {
+                $result["readyComparisonCount"] = [int]$result["readyComparisonCount"] + 1
+            }
+        }
+    }
+
+    if (-not (Test-Truthy $result.scenarioPresent)) {
+        $result["status"] = "agc-level-step-not-present"
+    }
+    elseif ([int]$result.comparisonCount -le 0) {
+        $result["status"] = "agc-level-step-comparison-missing"
+    }
+    elseif ([int]$result.readyComparisonCount -eq [int]$result.comparisonCount) {
+        $result["ready"] = $true
+        $result["status"] = "ready"
+    }
+    else {
+        $result["status"] = "not-ready"
+    }
+
+    return $result
+}
+
 function Get-GateOutcomeSummary {
     param($Entry)
 
@@ -5948,6 +6092,19 @@ $offlineFixtureMetricsEvidence = [ordered]@{
     wdspRuntimeSha256 = ""
     wdspRuntimeStatus = ""
     runtimeArtifactHashStatus = "not-evaluated"
+    agcMeterProvenanceReady = $false
+    agcMeterProvenanceStatus = "not-evaluated"
+    agcMeterScenarioPresent = $false
+    agcMeterComparisonCount = 0
+    agcMeterReadyComparisonCount = 0
+    agcMeterSampleCount = 0
+    agcMeterMissingMeterCount = 0
+    agcMeterInvalidSourceCount = 0
+    agcMeterMissingSampleCount = 0
+    agcMeterMissingMovementCount = 0
+    agcMeterMissingMetricCount = 0
+    agcMeterMetricMismatchCount = 0
+    agcMeterMaxMetricMismatchDb = 0.0
     status = "not-evaluated"
 }
 $nativeStageTimingArtifactId = "native-stage-timing-report"
@@ -8984,6 +9141,7 @@ else {
                             }
                         }
                     }
+                    $agcMeterProvenance = Get-OfflineFixtureAgcMeterProvenance $artifactJson
 
                     $offlineFixtureMetricsEvidence["present"] = $true
                     $offlineFixtureMetricsEvidence["artifactId"] = $artifactId
@@ -9002,6 +9160,19 @@ else {
                     $offlineFixtureMetricsEvidence["wdspRuntimeLength"] = $sourceRuntimeLength
                     $offlineFixtureMetricsEvidence["wdspRuntimeSha256"] = $sourceRuntimeSha256
                     $offlineFixtureMetricsEvidence["wdspRuntimeStatus"] = $sourceRuntimeStatus
+                    $offlineFixtureMetricsEvidence["agcMeterProvenanceReady"] = Test-Truthy $agcMeterProvenance.ready
+                    $offlineFixtureMetricsEvidence["agcMeterProvenanceStatus"] = [string]$agcMeterProvenance.status
+                    $offlineFixtureMetricsEvidence["agcMeterScenarioPresent"] = Test-Truthy $agcMeterProvenance.scenarioPresent
+                    $offlineFixtureMetricsEvidence["agcMeterComparisonCount"] = [int]$agcMeterProvenance.comparisonCount
+                    $offlineFixtureMetricsEvidence["agcMeterReadyComparisonCount"] = [int]$agcMeterProvenance.readyComparisonCount
+                    $offlineFixtureMetricsEvidence["agcMeterSampleCount"] = [int]$agcMeterProvenance.sampleCount
+                    $offlineFixtureMetricsEvidence["agcMeterMissingMeterCount"] = [int]$agcMeterProvenance.missingMeterCount
+                    $offlineFixtureMetricsEvidence["agcMeterInvalidSourceCount"] = [int]$agcMeterProvenance.invalidSourceCount
+                    $offlineFixtureMetricsEvidence["agcMeterMissingSampleCount"] = [int]$agcMeterProvenance.missingSampleCount
+                    $offlineFixtureMetricsEvidence["agcMeterMissingMovementCount"] = [int]$agcMeterProvenance.missingMovementCount
+                    $offlineFixtureMetricsEvidence["agcMeterMissingMetricCount"] = [int]$agcMeterProvenance.missingMetricCount
+                    $offlineFixtureMetricsEvidence["agcMeterMetricMismatchCount"] = [int]$agcMeterProvenance.metricMismatchCount
+                    $offlineFixtureMetricsEvidence["agcMeterMaxMetricMismatchDb"] = [double]$agcMeterProvenance.maxMetricMismatchDb
                     $offlineFixtureMetricsEvidence["status"] = if ($sourceWdspBacked) { "ready" } else { "not-ready" }
 
                     if (-not $sourceWdspBacked) {
@@ -9018,6 +9189,25 @@ else {
                         -not [string]::IsNullOrWhiteSpace($sourceRuntimeStatus) -and
                         -not [string]::Equals($sourceRuntimeStatus, "found", [StringComparison]::OrdinalIgnoreCase)) {
                         Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "offline-fixture-runtime-not-found" "Artifact '$artifactId' is WDSP-backed but reports wdspRuntimeStatus='$sourceRuntimeStatus'."
+                        $artifactValidationOk = $false
+                        $offlineFixtureMetricsEvidence["status"] = "not-ready"
+                    }
+                    if ($sourceWdspBacked -and
+                        (Test-Truthy $agcMeterProvenance.scenarioPresent) -and
+                        -not (Test-Truthy $agcMeterProvenance.ready)) {
+                        if ([int]$agcMeterProvenance.missingMeterCount -gt 0 -or
+                            [int]$agcMeterProvenance.invalidSourceCount -gt 0 -or
+                            [int]$agcMeterProvenance.missingSampleCount -gt 0 -or
+                            [int]$agcMeterProvenance.missingMovementCount -gt 0 -or
+                            [int]$agcMeterProvenance.comparisonCount -le 0) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "offline-fixture-agc-meter-provenance-missing" "Artifact '$artifactId' agc-level-step metrics must include WDSP RXA_AGC_GAIN rxStageMeters provenance with positive sample count and agcGainMovementDb; status='$($agcMeterProvenance.status)', missingMeterCount=$($agcMeterProvenance.missingMeterCount), invalidSourceCount=$($agcMeterProvenance.invalidSourceCount), missingSampleCount=$($agcMeterProvenance.missingSampleCount), missingMovementCount=$($agcMeterProvenance.missingMovementCount)."
+                        }
+                        if ([int]$agcMeterProvenance.missingMetricCount -gt 0) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "offline-fixture-agc-meter-metric-missing" "Artifact '$artifactId' agc-level-step comparisons must include the AGC gain movement metric backed by WDSP RXA_AGC_GAIN samples; missingMetricCount=$($agcMeterProvenance.missingMetricCount)."
+                        }
+                        if ([int]$agcMeterProvenance.metricMismatchCount -gt 0) {
+                            Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "offline-fixture-agc-meter-metric-mismatch" "Artifact '$artifactId' agc-level-step AGC gain movement metric must match rxStageMeters.agcGainMovementDb; mismatchCount=$($agcMeterProvenance.metricMismatchCount), maxMismatchDb=$($agcMeterProvenance.maxMetricMismatchDb)."
+                        }
                         $artifactValidationOk = $false
                         $offlineFixtureMetricsEvidence["status"] = "not-ready"
                     }
@@ -17632,6 +17822,19 @@ $report = [ordered]@{
     offlineFixtureMetricsWdspRuntimeSha256 = $offlineFixtureMetricsEvidence.wdspRuntimeSha256
     offlineFixtureMetricsWdspRuntimeStatus = $offlineFixtureMetricsEvidence.wdspRuntimeStatus
     offlineFixtureMetricsRuntimeArtifactHashStatus = $offlineFixtureMetricsEvidence.runtimeArtifactHashStatus
+    offlineFixtureMetricsAgcMeterProvenanceReady = $offlineFixtureMetricsEvidence.agcMeterProvenanceReady
+    offlineFixtureMetricsAgcMeterProvenanceStatus = $offlineFixtureMetricsEvidence.agcMeterProvenanceStatus
+    offlineFixtureMetricsAgcMeterScenarioPresent = $offlineFixtureMetricsEvidence.agcMeterScenarioPresent
+    offlineFixtureMetricsAgcMeterComparisonCount = $offlineFixtureMetricsEvidence.agcMeterComparisonCount
+    offlineFixtureMetricsAgcMeterReadyComparisonCount = $offlineFixtureMetricsEvidence.agcMeterReadyComparisonCount
+    offlineFixtureMetricsAgcMeterSampleCount = $offlineFixtureMetricsEvidence.agcMeterSampleCount
+    offlineFixtureMetricsAgcMeterMissingMeterCount = $offlineFixtureMetricsEvidence.agcMeterMissingMeterCount
+    offlineFixtureMetricsAgcMeterInvalidSourceCount = $offlineFixtureMetricsEvidence.agcMeterInvalidSourceCount
+    offlineFixtureMetricsAgcMeterMissingSampleCount = $offlineFixtureMetricsEvidence.agcMeterMissingSampleCount
+    offlineFixtureMetricsAgcMeterMissingMovementCount = $offlineFixtureMetricsEvidence.agcMeterMissingMovementCount
+    offlineFixtureMetricsAgcMeterMissingMetricCount = $offlineFixtureMetricsEvidence.agcMeterMissingMetricCount
+    offlineFixtureMetricsAgcMeterMetricMismatchCount = $offlineFixtureMetricsEvidence.agcMeterMetricMismatchCount
+    offlineFixtureMetricsAgcMeterMaxMetricMismatchDb = $offlineFixtureMetricsEvidence.agcMeterMaxMetricMismatchDb
     nativeStageTimingReportPresent = $nativeStageTimingEvidence.present
     nativeStageTimingReportReady = $nativeStageTimingEvidence.readyForReview
     nativeStageTimingReportStatus = $nativeStageTimingEvidence.status
