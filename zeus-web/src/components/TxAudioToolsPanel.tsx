@@ -170,8 +170,10 @@ function RouteStatusPill({
 
 function selectStyle(disabled: boolean): CSSProperties {
   return {
-    minWidth: 180,
+    flex: '1 1 0',
+    minWidth: 0,
     maxWidth: 280,
+    width: '100%',
     height: 26,
     padding: '3px 8px',
     borderRadius: 4,
@@ -218,6 +220,7 @@ function DeviceSelect({
         display: 'flex',
         alignItems: 'center',
         gap: 6,
+        flex: '1 1 0',
         minWidth: 0,
         color: 'var(--fg-2)',
         fontSize: 10,

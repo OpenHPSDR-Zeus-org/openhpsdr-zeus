@@ -112,6 +112,35 @@ describe('deriveWorkspaceLayout — locking is inert', () => {
   });
 });
 
+describe('deriveWorkspaceLayout — locking is inert (short layout)', () => {
+  it('does not grow unlocked tiles when the layout fits below authored density', () => {
+    // A short docked column: layoutRows (12) < target (48), so the no-lock
+    // uniform path already runs BELOW authored R (the target-row divisor shrinks
+    // it) even though the layout would fit at R. Locking must stay inert here —
+    // it must not jump rowHeight up toward R and grow the unlocked neighbour.
+    const base: DeriveTile[] = [
+      tile({ uid: 'a', x: 0, y: 0, w: 12, h: 8 }),
+      tile({ uid: 'b', x: 0, y: 8, w: 12, h: 4 }),
+    ];
+    const before = deriveWorkspaceLayout(base, opts(600));
+    expect(before.rowHeight).toBeLessThan(R); // shrunk by the target-row divisor
+
+    const capturedPx = renderedPx(before, 'a');
+    const after = deriveWorkspaceLayout(
+      base.map((t) =>
+        t.uid === 'a' ? { ...t, locked: true, lockedHeightPx: capturedPx } : t,
+      ),
+      opts(600),
+    );
+
+    // No upward jump: the locked tile keeps its captured height and the
+    // unlocked neighbour does not grow.
+    expect(after.rowHeight).toBeCloseTo(before.rowHeight, 4);
+    expect(renderedPx(after, 'a')).toBeCloseTo(capturedPx, 3);
+    expect(renderedPx(after, 'b')).toBeCloseTo(renderedPx(before, 'b'), 3);
+  });
+});
+
 describe('deriveWorkspaceLayout — frozen size', () => {
   const layout = (fillH: number): DeriveTile[] => [
     tile({

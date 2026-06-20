@@ -52,7 +52,21 @@ export function AddPanelModal({ existingPanels, onAdd, onClose }: AddPanelModalP
     onClose,
   });
 
-  const availablePanels = getAllPanels().filter((panel) => {
+  const allPanels = getAllPanels();
+
+  // Only surface category chips that actually hold at least one panel. Three
+  // categories (amplifiers / tuners / switches) are defined for future panels
+  // but have no members today — rendering them as chips produced dead filters
+  // that always landed on an empty "No panels match" pane. Derive the rail
+  // from the live registry (plugin panels included) so a category appears the
+  // moment a panel claims it and disappears if it ever empties out. Order
+  // follows PANEL_CATEGORIES.
+  const categoriesWithPanels = new Set(allPanels.map((panel) => panel.category));
+  const visibleCategories = PANEL_CATEGORIES.filter((cat) =>
+    categoriesWithPanels.has(cat),
+  );
+
+  const availablePanels = allPanels.filter((panel) => {
     // Single-instance panels disappear from the list once added; multi-
     // instance panels stay visible (the badge changes to "+ Add another").
     if (existingPanels.has(panel.id) && !panel.multiInstance) return false;
@@ -117,7 +131,7 @@ export function AddPanelModal({ existingPanels, onAdd, onClose }: AddPanelModalP
           >
             All
           </button>
-          {PANEL_CATEGORIES.map((cat) => (
+          {visibleCategories.map((cat) => (
             <button
               key={cat}
               type="button"
