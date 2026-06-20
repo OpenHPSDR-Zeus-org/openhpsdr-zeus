@@ -24,7 +24,11 @@ for c in \
 done
 if [ -z "$CHROME" ]; then echo "ERROR: no Chrome/Chromium found for PDF printing." >&2; exit 1; fi
 
+# MANUAL_CHROME_EXTRA_FLAGS lets CI pass extra flags (e.g. --no-sandbox
+# --disable-dev-shm-usage, which headless Chrome needs on GitHub runners).
+# Empty for local builds, so nothing changes on a developer machine.
 "$CHROME" --headless --disable-gpu --no-pdf-header-footer --virtual-time-budget=4000 \
+  ${MANUAL_CHROME_EXTRA_FLAGS:-} \
   --print-to-pdf="$OUTPDF" "file://$HERE/build/Zeus-Operator-Manual.html"
 
 echo "Zeus Operator's Manual -> $OUTPDF"

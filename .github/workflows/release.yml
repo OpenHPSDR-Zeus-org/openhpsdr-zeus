@@ -571,10 +571,46 @@ jobs:
           name: wdsp-native-linux-arm64
           path: staged/linux-arm64/
 
+  # Build the operator's manual PDF once (GitHub's ubuntu-latest image ships
+  # Node + google-chrome, which docs/manual/build.sh uses as its headless print
+  # engine) and share it as an artifact. Every packaging job drops this PDF into
+  # its publish payload so the manual ships *inside* each installer. Built fresh
+  # from the chapter sources each release — no PDF binary committed to git.
+  build-manual:
+    name: Build operator's manual PDF
+    needs: determine-version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Build the operator's manual PDF
+        # --no-sandbox / --disable-dev-shm-usage are required for headless Chrome
+        # under the runner's user namespace; harmless locally (the flag is unset
+        # for developer builds).
+        env:
+          MANUAL_CHROME_EXTRA_FLAGS: "--no-sandbox --disable-dev-shm-usage"
+        run: |
+          chmod +x docs/manual/build.sh
+          docs/manual/build.sh
+      - name: Upload manual PDF artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: operator-manual-pdf
+          path: docs/manual/build/Zeus-Operator-Manual.pdf
+          if-no-files-found: error
+
   build-release:
     name: Build (${{ matrix.config.os }})
     needs:
       - determine-version
+      - build-manual
       - build-native-windows
       - build-native-linux
       - build-native-linux-arm64
@@ -733,6 +769,26 @@ jobs:
             -p:VersionSuffix=${{ needs.determine-version.outputs.version-suffix }} \
             -p:DebugType=embedded \
             -p:DebugSymbols=false
+
+      # Drop the operator's manual PDF (built once by build-manual) into the
+      # publish payload BEFORE packaging. Every installer script bundles the
+      # whole publish dir (Windows .iss recursesubdirs, Linux `cp -r publish/*`,
+      # macOS `cp -r publish/* Resources/app/`), so this one copy ships the
+      # manual inside every installer with no per-packager edits.
+      - name: Download operator's manual PDF
+        uses: actions/download-artifact@v4
+        with:
+          name: operator-manual-pdf
+          path: manual-pdf
+
+      - name: Bundle operator's manual into the payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          dest="OpenhpsdrZeus/bin/Release/net10.0/${{ matrix.config.rid }}/publish"
+          cp "manual-pdf/Zeus-Operator-Manual.pdf" "$dest/Zeus-Operator-Manual.pdf"
+          echo "Bundled operator's manual into ${{ matrix.config.rid }} payload:"
+          ls -la "$dest/Zeus-Operator-Manual.pdf"
 
       - name: Verify Windows installer payload
         if: matrix.config.os == 'windows'
