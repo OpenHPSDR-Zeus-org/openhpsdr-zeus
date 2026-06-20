@@ -208,6 +208,53 @@ describe('workspace grid collision policy', () => {
     expectNoCollisions(boundary);
   });
 
+  // Drive the live-drag compactor with a hand-placed dragged tile so the
+  // vertical overlap with `below` (original slot y=10, h=10) is exact:
+  // overlap = (dy + 10) - 10 = dy rows for the dragged tile at y = dy.
+  // (moveElement would resolve the collision and snap the tile fully onto the
+  // neighbour, so it can't express a partial overlap.)
+  function makeSwapStepper() {
+    const base: Layout = cloneLayout([
+      { i: 'dragged', x: 0, y: 0, w: 6, h: 10 },
+      { i: 'below', x: 0, y: 10, w: 6, h: 10 },
+    ]);
+    const dragStart = { item: { ...base[0]! }, layout: cloneLayout(base) };
+    const compactor = createWorkspaceDragCompactor(() => dragStart);
+    return (dy: number) =>
+      compactor.compact(
+        cloneLayout([
+          { i: 'dragged', x: 0, y: dy, w: 6, h: 10, moved: true },
+          { i: 'below', x: 0, y: 10, w: 6, h: 10 },
+        ]),
+        24,
+      );
+  }
+
+  it('waits for the midpoint before swapping a tall neighbour', () => {
+    // Premium reorder feel: a neighbour only commits to swapping once the
+    // dragged tile has covered half of it, not on the first row of contact.
+    // Two h=10 tiles → engage threshold is 5 rows of overlap.
+    const step = makeSwapStepper();
+
+    // 4 rows of overlap (< 5): no swap. `below` is pushed down under the
+    // floating dragged tile, not lifted into the vacated top row.
+    expect(step(4).find((i) => i.i === 'below')?.y).not.toBe(0);
+    // 5 rows (the midpoint): the swap commits and `below` lifts into the top
+    // row the dragged tile is vacating.
+    expect(step(5).find((i) => i.i === 'below')?.y).toBe(0);
+  });
+
+  it('holds a committed swap through the hysteresis deadband', () => {
+    // Once engaged at the midpoint (50%), the swap holds until the dragged tile
+    // is pulled back past a quarter overlap (25%). h=10 tiles → engage at 5
+    // rows, release below 2.5 rows.
+    const step = makeSwapStepper();
+
+    expect(step(5).find((i) => i.i === 'below')).toMatchObject({ y: 0 }); // engage
+    expect(step(3).find((i) => i.i === 'below')?.y).toBe(0); // deadband: held
+    expect(step(2).find((i) => i.i === 'below')?.y).not.toBe(0); // released
+  });
+
   it('never moves a locked panel when another panel is dragged onto it', () => {
     // A locked (static) panel must stay pinned even while another panel is
     // dragged across it — previously the magnetic swap shoved it aside mid-drag

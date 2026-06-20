@@ -592,14 +592,37 @@ function collides(a: LayoutItem, b: LayoutItem) {
   return true;
 }
 
-// Hysteresis thresholds for the live magnetic swap (grid rows). A neighbour
-// engages once the dragged tile overlaps it by at least ENGAGE rows, and only
-// disengages once they are separated by more than RELEASE rows (a strict gap).
-// The band between them — the touch boundary, where RGL's grid-rounding jitters
-// the dragged tile by a single row — is a deadband: a neighbour that is already
-// committed stays committed across it, so the swap can't flicker on and off.
-const SWAP_ENGAGE_ROWS = 1;
-const SWAP_RELEASE_ROWS = 0;
+// Hysteresis thresholds for the live magnetic swap, expressed as a fraction of
+// the SMALLER of the two tiles' heights so the feel scales with panel size.
+//
+// ENGAGE at the midpoint (50%): a neighbour only commits to swapping once the
+// dragged tile has clearly taken its slot — covered half of it — rather than
+// flipping on the first row of contact. On the real workspace, where panels run
+// 8–38 rows tall, a fixed 1-row trigger fired almost on touch and read as
+// twitchy; a midpoint trigger reads as deliberate, the premium reorder feel.
+//
+// RELEASE lower (25%): a committed swap holds until the dragged tile is pulled
+// back past a quarter overlap. The band between 25% and 50% is the deadband
+// that kills the boundary flicker (RGL's grid-rounding jitters the dragged tile
+// by a row at the touch line; a committed neighbour rides across it unmoved).
+//
+// A 1-row floor keeps 1–2 row control tiles snapping sanely instead of needing
+// a sub-row overlap the integer grid can never express.
+const SWAP_ENGAGE_FRACTION = 0.5;
+const SWAP_RELEASE_FRACTION = 0.25;
+const SWAP_MIN_ENGAGE_ROWS = 1;
+
+// Engage / release overlap (in grid rows) for one dragged↔neighbour pair.
+function swapThresholdRows(
+  anchor: LayoutItem,
+  neighbor: LayoutItem,
+): { engage: number; release: number } {
+  const span = Math.max(1, Math.min(anchor.h, neighbor.h));
+  return {
+    engage: Math.max(SWAP_MIN_ENGAGE_ROWS, span * SWAP_ENGAGE_FRACTION),
+    release: span * SWAP_RELEASE_FRACTION,
+  };
+}
 
 // Signed vertical overlap between the dragged anchor and a neighbour, in rows:
 // positive when they overlap, zero when edges touch, negative (a gap) when they
@@ -625,9 +648,10 @@ function updateSwapEngagement(
   engaged: Set<string>,
 ): boolean {
   const overlap = verticalOverlapRows(anchor, previous);
+  const { engage, release } = swapThresholdRows(anchor, previous);
   if (engaged.has(id)) {
-    if (overlap < SWAP_RELEASE_ROWS) engaged.delete(id);
-  } else if (overlap >= SWAP_ENGAGE_ROWS) {
+    if (overlap < release) engaged.delete(id);
+  } else if (overlap >= engage) {
     engaged.add(id);
   }
   return engaged.has(id);
