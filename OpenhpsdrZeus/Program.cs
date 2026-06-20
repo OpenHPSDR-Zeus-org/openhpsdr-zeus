@@ -41,6 +41,7 @@
 // Zeus is distributed WITHOUT ANY WARRANTY; see the GNU General Public
 // License for details.
 
+using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
@@ -371,8 +372,17 @@ public partial class Program
             .RegisterWebMessageReceivedHandler((sender, msg) =>
             {
                 if (sender is not PhotinoWindow owner) return;
-                if (!TryReadWorkspaceWindowRequest(msg, out var request)) return;
-                OpenWorkspaceWindow(owner, detachedWorkspaceWindows, request, iconPath);
+                if (TryReadWorkspaceWindowRequest(msg, out var request))
+                {
+                    OpenWorkspaceWindow(owner, detachedWorkspaceWindows, request, iconPath);
+                    return;
+                }
+                // External links (e.g. the "Report a problem" → GitHub button):
+                // window.open to an external site is unreliable inside the Photino
+                // webview, so the frontend posts a zeus.openExternal message and the
+                // host opens it in the operator's real browser via the OS opener.
+                if (TryReadOpenExternalRequest(msg, out var externalUrl))
+                    OpenExternalUrl(externalUrl);
             })
             .Load(new Uri(startUrl));
 
@@ -564,6 +574,48 @@ public partial class Program
         {
             detachedWorkspaceWindows.Remove(child);
             Console.Error.WriteLine($"detached workspace open failed: {ex.Message}");
+        }
+    }
+
+    private static bool TryReadOpenExternalRequest(string message, out string url)
+    {
+        url = "";
+        try
+        {
+            var parsed = JsonSerializer.Deserialize<WorkspaceWindowRequest>(message, WebMessageJsonOptions);
+            if (parsed?.Type != "zeus.openExternal") return false;
+            if (string.IsNullOrWhiteSpace(parsed.Url)) return false;
+            if (!Uri.TryCreate(parsed.Url, UriKind.Absolute, out var uri)) return false;
+            // Only http/https — never hand an arbitrary scheme/command to the OS opener.
+            if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) return false;
+            url = uri.AbsoluteUri;
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static void OpenExternalUrl(string url)
+    {
+        // Cross-platform OS browser launch. The URL is already validated http/https
+        // by the caller; ArgumentList (not a concatenated string) avoids any shell
+        // interpretation of the URL.
+        try
+        {
+            ProcessStartInfo psi;
+            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+                psi = new ProcessStartInfo { FileName = url, UseShellExecute = true };
+            else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+                psi = new ProcessStartInfo { FileName = "open", ArgumentList = { url }, UseShellExecute = false };
+            else
+                psi = new ProcessStartInfo { FileName = "xdg-open", ArgumentList = { url }, UseShellExecute = false };
+            Process.Start(psi);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"openExternal failed: {ex.Message}");
         }
     }
 

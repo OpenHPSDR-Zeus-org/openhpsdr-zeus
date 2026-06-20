@@ -13,6 +13,7 @@ using Zeus.Dsp.Wdsp;
 using Zeus.Protocol1;
 using Zeus.Protocol1.Discovery;
 using Zeus.Protocol2;
+using Zeus.Server.Diagnostics;
 using Zeus.Server.Tci;
 
 namespace Zeus.Server;
@@ -35,6 +36,20 @@ public static class ZeusEndpoints
             var version = attr?.InformationalVersion ?? "unknown";
             return Results.Ok(new { version });
         });
+
+        // Self-diagnostic "Report a problem" feature. The picker fetches the
+        // symptom list; submitting a symptom + free text returns a redacted,
+        // paste-ready report (Markdown + last-100 log lines) plus a prefilled
+        // GitHub "new issue" URL. Strictly read-only.
+        app.MapGet("/api/diagnostics/symptoms",
+            (DiagnosticReportBuilder diag) => Results.Ok(diag.Symptoms()));
+
+        app.MapPost("/api/diagnostics/report",
+            (DiagnosticRequest req, DiagnosticReportBuilder diag) =>
+            {
+                log.LogInformation("api.diagnostics.report symptom={Symptom}", req.SymptomId ?? "(none)");
+                return Results.Ok(diag.Build(req));
+            });
 
         // Capabilities snapshot — host-mode + platform metadata. Frontend
         // fetches once on app mount; future feature gates will reattach as
