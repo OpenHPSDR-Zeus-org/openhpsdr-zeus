@@ -13,6 +13,7 @@ import {
   setVfo,
   setVfoB,
   type BandMemoryEntry,
+  type RadioStateDto,
   type RxMode,
   type TxVfo,
 } from '../../api/client';
@@ -37,6 +38,10 @@ const BAND_OPTIONS: readonly ToolbarOption[] = HF_BANDS.map((b) => ({
 }));
 
 const SAVE_DEBOUNCE_MS = 500;
+
+function withRestoredMode(state: RadioStateDto, receiver: TxVfo, mode: RxMode): RadioStateDto {
+  return receiver === 'B' ? { ...state, modeB: mode } : { ...state, mode };
+}
 
 export function BandFavorites() {
   const vfoHz = useConnectionStore((s) => s.vfoHz);
@@ -119,23 +124,37 @@ export function BandFavorites() {
 
       viewCenterFor(activeReceiver).markOptimisticTune();
       useConnectionStore.setState(
-        activeReceiver === 'B' ? { vfoBHz: targetHz } : { vfoHz: targetHz },
+        activeReceiver === 'B'
+          ? targetMode && targetMode !== activeMode
+            ? { vfoBHz: targetHz, modeB: targetMode }
+            : { vfoBHz: targetHz }
+          : targetMode && targetMode !== activeMode
+          ? { vfoHz: targetHz, mode: targetMode }
+          : { vfoHz: targetHz },
       );
       const postVfo = activeReceiver === 'B' ? setVfoB : setVfo;
 
       void (async () => {
+        let modeRestored = !targetMode || targetMode === activeMode;
         if (targetMode && targetMode !== activeMode) {
-          useConnectionStore.setState(
-            activeReceiver === 'B' ? { modeB: targetMode } : { mode: targetMode },
-          );
           try {
-            applyState(await setMode(targetMode, undefined, activeReceiver));
+            applyState(withRestoredMode(
+              await setMode(targetMode, undefined, activeReceiver),
+              activeReceiver,
+              targetMode,
+            ));
+            modeRestored = true;
           } catch {
             /* next state poll reconciles */
           }
         }
         try {
-          applyState(await postVfo(targetHz));
+          const next = await postVfo(targetHz);
+          applyState(
+            targetMode && modeRestored
+              ? withRestoredMode(next, activeReceiver, targetMode)
+              : next,
+          );
         } catch {
           /* next state poll reconciles */
         }

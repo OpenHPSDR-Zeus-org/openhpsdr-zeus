@@ -49,6 +49,7 @@ import {
   setMode,
   setVfo,
   type BandMemoryEntry,
+  type RadioStateDto,
   type RxMode,
 } from '../api/client';
 import { useConnectionStore } from '../state/connection-store';
@@ -73,6 +74,10 @@ const HF_BANDS: readonly BandEntry[] = BANDS.slice(0, 10).map((b) => ({
 // Debounce the "save current (hz, mode) for the current band" write so tuning
 // the VFO doesn't hammer the server on every pixel of knob travel.
 const SAVE_DEBOUNCE_MS = 500;
+
+function withRestoredMode(state: RadioStateDto, mode: RxMode): RadioStateDto {
+  return { ...state, mode };
+}
 
 export function BandButtons() {
   const vfoHz = useConnectionStore((s) => s.vfoHz);
@@ -161,15 +166,22 @@ export function BandButtons() {
       );
 
       void (async () => {
+        let modeRestored = !targetMode || targetMode === mode;
         if (targetMode && targetMode !== mode) {
           try {
-            applyState(await setMode(targetMode));
+            applyState(withRestoredMode(await setMode(targetMode), targetMode));
+            modeRestored = true;
           } catch {
             /* next state poll will reconcile */
           }
         }
         try {
-          applyState(await setVfo(targetHz));
+          const next = await setVfo(targetHz);
+          applyState(
+            targetMode && modeRestored
+              ? withRestoredMode(next, targetMode)
+              : next,
+          );
         } catch {
           /* next state poll will reconcile */
         }

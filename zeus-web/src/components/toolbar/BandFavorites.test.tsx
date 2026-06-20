@@ -134,4 +134,55 @@ describe('BandFavorites', () => {
 
     unmount();
   });
+
+  it('keeps focused-receiver band memory when the tune response echoes the departing mode', async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchBandMemory).mockResolvedValue([
+      { band: '40m', hz: 7_150_000, mode: 'LSB' },
+      { band: '20m', hz: 14_210_000, mode: 'USB' },
+    ]);
+    vi.mocked(setVfoB).mockImplementation(async (hz) => ({
+      ...currentStateDto(),
+      vfoBHz: hz,
+      modeB: hz === 14_210_000 ? 'LSB' : currentStateDto().modeB,
+    }));
+    useConnectionStore.setState({ vfoBHz: 7_150_000, modeB: 'LSB' });
+
+    const { container, unmount } = render(createElement(BandFavorites));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    vi.clearAllMocks();
+
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>('button'));
+    const twentyMeters = buttons.find((button) => button.textContent === '20m');
+    const fortyMeters = buttons.find((button) => button.textContent === '40m');
+
+    await act(async () => {
+      twentyMeters?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(useConnectionStore.getState().modeB).toBe('USB');
+
+    await act(async () => {
+      fortyMeters?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(saveBandMemory).toHaveBeenCalledWith('20m', 14_210_000, 'USB');
+    expect(saveBandMemory).not.toHaveBeenCalledWith('20m', 14_210_000, 'LSB');
+
+    await act(async () => {
+      twentyMeters?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(setMode).toHaveBeenLastCalledWith('USB', undefined, 'B');
+
+    unmount();
+  });
 });
