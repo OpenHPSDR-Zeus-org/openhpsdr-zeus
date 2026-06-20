@@ -174,8 +174,8 @@ export function FlexWorkspace({
         layoutId={targetLayoutId}
         onLayoutChange={onLayoutChange}
         onRequestRemoveTile={(uid, title) => setPendingRemoveTile({ uid, title })}
-        onToggleTileLock={(uid, locked) =>
-          setTileLockedInLayout(targetLayoutId, uid, locked)
+        onToggleTileLock={(uid, locked, lockedHeightPx) =>
+          setTileLockedInLayout(targetLayoutId, uid, locked, lockedHeightPx)
         }
       />
       <TerminatorLines active={terminatorActive} />
@@ -227,7 +227,11 @@ interface WorkspaceCanvasProps {
   layoutId: string;
   onLayoutChange: (next: Layout) => void;
   onRequestRemoveTile: (uid: string, title: string) => void;
-  onToggleTileLock: (uid: string, locked: boolean) => void;
+  onToggleTileLock: (
+    uid: string,
+    locked: boolean,
+    lockedHeightPx?: number,
+  ) => void;
 }
 
 function WorkspaceCanvas({
@@ -294,6 +298,9 @@ function WorkspaceCanvas({
           h,
           locked: workspaceLocked || t.locked === true,
           minH: def?.minH ?? WORKSPACE_TILE_MIN_H,
+          ...(t.lockedHeightPx !== undefined
+            ? { lockedHeightPx: t.lockedHeightPx }
+            : {}),
         };
       }),
     [tiles, pluginPanelKey, workspaceLocked],
@@ -343,6 +350,24 @@ function WorkspaceCanvas({
   const placementByUid = useMemo(
     () => new Map(derived.placements.map((p) => [p.uid, p])),
     [derived],
+  );
+
+  // When locking a tile, capture its current on-screen pixel height so the
+  // store can hold it there afterwards. The capture is the live rendered size,
+  // so clicking lock never resizes the panel (see deriveWorkspaceLayout).
+  const handleToggleTileLock = useCallback(
+    (uid: string, locked: boolean) => {
+      if (!locked) {
+        onToggleTileLock(uid, false);
+        return;
+      }
+      const p = placementByUid.get(uid);
+      const lockedHeightPx = p
+        ? derived.rowHeight * p.h + Math.max(0, p.h - 1) * derived.rowMargin
+        : undefined;
+      onToggleTileLock(uid, true, lockedHeightPx);
+    },
+    [onToggleTileLock, placementByUid, derived.rowHeight, derived.rowMargin],
   );
 
   const workspaceDragCompactor = useMemo(
@@ -548,7 +573,7 @@ function WorkspaceCanvas({
                   layoutId={layoutId}
                   workspaceLocked={workspaceLocked}
                   onRequestRemoveTile={onRequestRemoveTile}
-                  onToggleTileLock={onToggleTileLock}
+                  onToggleTileLock={handleToggleTileLock}
                 />
               </div>
             );

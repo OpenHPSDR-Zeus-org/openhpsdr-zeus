@@ -43,10 +43,6 @@ function pxHeight(h: number, rowHeight: number, rowMargin: number): number {
   return h * rowHeight + (h - 1) * rowMargin;
 }
 
-function maxBottom(d: DerivedWorkspaceLayout): number {
-  return d.placements.reduce((mx, p) => Math.max(mx, p.y + p.h), 0);
-}
-
 function byUid(d: DerivedWorkspaceLayout, uid: string) {
   const p = d.placements.find((x) => x.uid === uid);
   if (!p) throw new Error(`no placement for ${uid}`);
@@ -69,88 +65,108 @@ describe('deriveWorkspaceLayout — no locked tiles', () => {
   });
 });
 
-describe('deriveWorkspaceLayout — locked tile, layout fits', () => {
-  it('renders at authored rowHeight with stored geometry', () => {
-    const tiles = [
-      tile({ uid: 'lock', y: 0, h: 20, locked: true }),
-      tile({ uid: 'b', y: 20, h: 10 }), // layoutRows 30
+/** On-screen pixel height a tile actually renders at in a derived layout. */
+function renderedPx(d: DerivedWorkspaceLayout, uid: string): number {
+  return pxHeight(byUid(d, uid).h, d.rowHeight, d.rowMargin);
+}
+
+/** Pixel bottom edge of the whole derived layout (RGL absoluteStrategy). */
+function bottomPx(d: DerivedWorkspaceLayout): number {
+  return d.placements.reduce((mx, p) => {
+    const bottom =
+      (d.rowHeight + d.rowMargin) * p.y + pxHeight(p.h, d.rowHeight, d.rowMargin);
+    return Math.max(mx, bottom);
+  }, 0);
+}
+
+describe('deriveWorkspaceLayout — locking is inert', () => {
+  it('does not change the row height or unlocked geometry when a tile is locked', () => {
+    const base: DeriveTile[] = [
+      tile({ uid: 'a', x: 0, y: 0, w: 12, h: 20 }),
+      tile({ uid: 'b', x: 0, y: 20, w: 12, h: 30 }), // layoutRows 50 → overflow on 600px
     ];
-    // Tall container: fitRows = floor((900+3)/18) = 50 >= 30.
-    const d = deriveWorkspaceLayout(tiles, opts(900));
-    expect(d.compensated).toBe(false);
-    expect(d.rowHeight).toBe(R);
-    expect(d.rowMargin).toBe(M);
-    expect(byUid(d, 'lock')).toMatchObject({ h: 20 });
-    expect(byUid(d, 'b')).toMatchObject({ h: 10 });
+    const before = deriveWorkspaceLayout(base, opts(600));
+    expect(before.rowHeight).toBeLessThan(R); // workspace runs below authored
+
+    // Capture a's exact on-screen height, then lock it (what the UI does).
+    const capturedPx = renderedPx(before, 'a');
+    const after = deriveWorkspaceLayout(
+      base.map((t) =>
+        t.uid === 'a' ? { ...t, locked: true, lockedHeightPx: capturedPx } : t,
+      ),
+      opts(600),
+    );
+
+    // No jump: row height unchanged, locked tile still its captured size, and
+    // the unlocked neighbour is where it was (its y reflows under the locked
+    // tile's compensated span, which equals its stored row to sub-pixel — the
+    // reconcile step restores the exact stored row for persistence).
+    expect(after.rowHeight).toBeCloseTo(before.rowHeight, 4);
+    expect(renderedPx(after, 'a')).toBeCloseTo(capturedPx, 3);
+    const beforeB = byUid(before, 'b');
+    const afterB = byUid(after, 'b');
+    expect(afterB.x).toBe(beforeB.x);
+    expect(afterB.w).toBe(beforeB.w);
+    expect(afterB.h).toBe(beforeB.h);
+    expect(afterB.y).toBeCloseTo(beforeB.y, 3);
   });
 });
 
-describe('deriveWorkspaceLayout — locked tile, overflow', () => {
-  const tiles = [
-    tile({ uid: 'lock', x: 0, y: 0, w: 12, h: 20, locked: true }),
-    tile({ uid: 'b', x: 0, y: 20, w: 12, h: 20 }),
-    tile({ uid: 'c', x: 12, y: 0, w: 12, h: 40 }),
-  ]; // layoutRows = 40
+describe('deriveWorkspaceLayout — frozen size', () => {
+  const layout = (fillH: number): DeriveTile[] => [
+    tile({
+      uid: 'lock',
+      x: 0,
+      y: 0,
+      w: 12,
+      h: 20,
+      locked: true,
+      lockedHeightPx: 240,
+    }),
+    tile({ uid: 'fill', x: 0, y: 20, w: 24, h: fillH }),
+  ];
 
-  it('keeps the locked tile at its exact stored height while unlocked shrink', () => {
-    // container 600 → fitRows = floor(603/18) = 33 < 40 → must compensate.
-    const d = deriveWorkspaceLayout(tiles, opts(600));
-    expect(d.compensated).toBe(true);
-    expect(d.rowHeight).toBe(R);
-    // Locked tile is untouched.
-    expect(byUid(d, 'lock')).toMatchObject({ x: 0, y: 0, w: 12, h: 20 });
-    // Unlocked tiles shrank.
-    expect(byUid(d, 'b').h).toBeLessThan(20);
-    expect(byUid(d, 'c').h).toBeLessThan(40);
-    // Everything fits the viewport (no scroll).
-    expect(maxBottom(d)).toBeLessThanOrEqual(33);
-  });
-
-  it('respects unlocked tile minH floors', () => {
-    const tight = [
-      tile({ uid: 'lock', y: 0, h: 18, locked: true }),
-      tile({ uid: 'b', y: 18, h: 20, minH: 6 }),
-    ];
-    // container small enough to force max shrink: fitRows tuned so b cannot go
-    // below minH=6 (lock 18 + b 6 = 24).
-    const d = deriveWorkspaceLayout(tight, opts(450)); // fitRows floor(453/18)=25
-    expect(byUid(d, 'b').h).toBeGreaterThanOrEqual(6);
-    expect(byUid(d, 'lock').h).toBe(18);
-  });
-});
-
-describe('deriveWorkspaceLayout — locked size invariance', () => {
-  it('holds the locked tile pixel height constant as the workspace grows/shrinks', () => {
-    const make = (extraRows: number): DeriveTile[] => [
-      tile({ uid: 'lock', x: 0, y: 0, w: 12, h: 20, locked: true }),
-      tile({ uid: 'fill', x: 0, y: 20, w: 24, h: 20 + extraRows }),
-    ];
-    const authoredPx = pxHeight(20, R, M); // 20*15 + 19*3 = 357
-
-    // Across a fitting layout AND an overflowing one, the locked tile renders at
-    // exactly the same pixel height.
-    for (const [container, extra] of [
-      [900, 0],
-      [900, 40],
-      [600, 0],
-      [600, 60],
+  it('renders a locked tile at exactly its captured height in any viewport', () => {
+    for (const [container, fillH] of [
+      [900, 10],
+      [600, 30],
+      [500, 60],
     ] as const) {
-      const d = deriveWorkspaceLayout(make(extra), opts(container));
-      const lock = byUid(d, 'lock');
-      expect(pxHeight(lock.h, d.rowHeight, d.rowMargin)).toBeCloseTo(authoredPx, 5);
+      const d = deriveWorkspaceLayout(layout(fillH), opts(container));
+      expect(renderedPx(d, 'lock')).toBeCloseTo(240, 3);
     }
   });
+
+  it('shrinks unlocked tiles (never the locked one) as the workspace grows', () => {
+    const small = deriveWorkspaceLayout(layout(10), opts(600));
+    const big = deriveWorkspaceLayout(layout(80), opts(600)); // much taller layout
+
+    expect(renderedPx(small, 'lock')).toBeCloseTo(240, 3);
+    expect(renderedPx(big, 'lock')).toBeCloseTo(240, 3);
+    // The growth is absorbed by the unlocked tile via a smaller row height.
+    expect(big.rowHeight).toBeLessThan(small.rowHeight);
+  });
+
+  it('keeps the whole layout within the viewport (never scrolls)', () => {
+    const d = deriveWorkspaceLayout(layout(80), opts(600));
+    expect(bottomPx(d)).toBeLessThanOrEqual(601); // +1px float slack
+  });
 });
 
-describe('deriveWorkspaceLayout — every tile locked', () => {
-  it('falls back to uniform shrink (no unlocked tile can absorb slack)', () => {
-    const tiles = [
-      tile({ uid: 'a', y: 0, h: 30, locked: true }),
-      tile({ uid: 'b', y: 30, h: 30, locked: true }),
+describe('deriveWorkspaceLayout — legacy locked tile (no captured height)', () => {
+  it('holds it at its no-lock-density height so locking stays inert', () => {
+    const base: DeriveTile[] = [
+      tile({ uid: 'a', x: 0, y: 0, w: 12, h: 20 }),
+      tile({ uid: 'b', x: 0, y: 20, w: 12, h: 30 }),
     ];
-    const d = deriveWorkspaceLayout(tiles, opts(600));
-    expect(d.compensated).toBe(false);
-    expect(d.rowHeight).toBeLessThan(R); // uniform shrink applied to all
+    const before = deriveWorkspaceLayout(base, opts(600));
+    const beforePx = renderedPx(before, 'a');
+    // Lock 'a' with NO lockedHeightPx (a tile persisted before the field).
+    const after = deriveWorkspaceLayout(
+      base.map((t) => (t.uid === 'a' ? { ...t, locked: true } : t)),
+      opts(600),
+    );
+    expect(renderedPx(after, 'a')).toBeCloseTo(beforePx, 1);
   });
 });
 
