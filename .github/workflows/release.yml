@@ -1396,3 +1396,116 @@ jobs:
             release-artifacts/linux-appimage/* \
             release-artifacts/linux-arm64-tarball/* \
             release-artifacts/macos-arm64-dmg/*
+
+  # ---------- Website download publish (tagged releases only) -------------
+  #
+  # Publishes the freshly-built installers / DMG / AppImages / tarballs to the
+  # Cloudflare R2 bucket behind downloads.openhpsdrzeus.com, which feeds both
+  # the openhpsdrzeus.com #download section and the in-app updater.
+  #
+  # Gated on is-release=true AND is-draft!=true, so it runs ONLY for a real
+  # tagged production release (a v*.*.* tag push) — never for a DRAFT dispatch,
+  # a dry-run, a nightly, or a push to main. The version published is therefore
+  # the clean tag SemVer (e.g. 0.10.0), not a rolling main.<date>.<sha> build.
+  #
+  # Reuses the artifacts already built by build-release (no second build), so a
+  # release notarizes macOS exactly once. To re-publish without re-tagging,
+  # re-run this single job from the release run.
+  publish-downloads:
+    name: Publish to downloads.openhpsdrzeus.com
+    needs: [determine-version, build-release]
+    if: needs.determine-version.outputs.is-release == 'true' && needs.determine-version.outputs.is-draft != 'true'
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      DOWNLOAD_BASE_URL: https://downloads.openhpsdrzeus.com
+      ZEUS_DOWNLOAD_VERSION: ${{ needs.determine-version.outputs.version }}
+      ZEUS_DOWNLOAD_CHANNEL: release
+      ZEUS_DOWNLOAD_BRANCH: ${{ github.ref_name }}
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Display artifact structure
+        run: find release-artifacts -maxdepth 3 -type f -print | sort
+
+      - name: Fetch current download manifest
+        run: |
+          if ! curl -fsSL "$DOWNLOAD_BASE_URL/manifest.json" -o existing-manifest.json; then
+            printf '{ "schema": 1, "updatedAt": null, "latest": null, "versions": [] }\n' > existing-manifest.json
+          fi
+
+      - name: Render release notes from CHANGELOG
+        run: |
+          # Extract THIS release's section from CHANGELOG.md — the block from the
+          # first '## [' heading to the next — matching the create-release job's
+          # convention, then render it to HTML for the website download panel.
+          # This job only runs for a published tagged release (is-release &&
+          # !is-draft gating), so draft/dev notes never reach the site.
+          awk '/^## \[/{c++} c==2{exit} c{print}' CHANGELOG.md > whats-new.md
+          if [ -s whats-new.md ]; then
+            npx --yes marked@12.0.2 -i whats-new.md -o release-notes.html
+            echo "ZEUS_RELEASE_NOTES_HTML_FILE=$PWD/release-notes.html" >> "$GITHUB_ENV"
+            echo "Rendered $(wc -c < release-notes.html) bytes of release notes for the download page."
+          else
+            echo "::warning::CHANGELOG.md produced no notes section; publishing without notes."
+          fi
+
+      - name: Generate download manifest
+        run: node tools/update-download-manifest.mjs release-artifacts existing-manifest.json manifest.json
+
+      - name: Upload installers to R2
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' file; do
+            name="$(basename "$file")"
+            key="versions/${ZEUS_DOWNLOAD_VERSION}/${name}"
+            case "$name" in
+              *.exe) content_type="application/vnd.microsoft.portable-executable" ;;
+              *.dmg) content_type="application/x-apple-diskimage" ;;
+              *.tar.gz) content_type="application/gzip" ;;
+              *.AppImage) content_type="application/octet-stream" ;;
+              *) content_type="application/octet-stream" ;;
+            esac
+            npx --yes wrangler@4.103.0 r2 object put "openhpsdrzeus-downloads/${key}" \
+              --file "$file" \
+              --content-type "$content_type" \
+              --remote
+          done < <(find release-artifacts -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.tar.gz' -o -name '*.AppImage' \) -print0)
+
+      - name: Upload manifests to R2
+        run: |
+          npx --yes wrangler@4.103.0 r2 object put openhpsdrzeus-downloads/manifest.json \
+            --file manifest.json \
+            --content-type application/json \
+            --remote
+          npx --yes wrangler@4.103.0 r2 object put openhpsdrzeus-downloads/latest.json \
+            --file latest.json \
+            --content-type application/json \
+            --remote
+          npx --yes wrangler@4.103.0 r2 object put "openhpsdrzeus-downloads/versions/${ZEUS_DOWNLOAD_VERSION}/manifest.json" \
+            --file latest.json \
+            --content-type application/json \
+            --remote
+
+      - name: Verify public manifest
+        run: |
+          curl -fsSL "$DOWNLOAD_BASE_URL/manifest.json" | node -e "
+          const chunks = [];
+          process.stdin.on('data', c => chunks.push(c));
+          process.stdin.on('end', () => {
+            const manifest = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+            if (manifest.latest !== process.env.ZEUS_DOWNLOAD_VERSION) {
+              throw new Error(`latest mismatch: ${manifest.latest} !== ${process.env.ZEUS_DOWNLOAD_VERSION}`);
+            }
+            console.log(`Published ${manifest.latest} with ${manifest.versions[0].assets.length} assets`);
+          });
+          "
