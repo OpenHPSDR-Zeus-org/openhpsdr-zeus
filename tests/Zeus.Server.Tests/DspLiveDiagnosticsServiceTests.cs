@@ -55,8 +55,11 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("ready-for-external-engine-bakeoff", diag.Evidence);
         Assert.Contains("external-engine-live-bakeoff-watch", diag.CandidateTools);
         Assert.Contains("rx-audio-leveler-profile-api", diag.CandidateTools);
+        Assert.Contains("rx-agc-top-cap-fixture-candidate", diag.CandidateTools);
         Assert.Contains("rx-audio-leveler-profile-api-available", diag.Evidence);
         Assert.Contains("rx-audio-leveler-stable-speech-candidate-available", diag.Evidence);
+        Assert.Contains("rx-agc-top-cap-fixture-candidate-available", diag.Evidence);
+        Assert.Contains("rx-agc-top-cap-fixture-only", diag.Evidence);
         Assert.Contains(diag.ExternalEngineCandidates, c => c.RequiredControls.Contains("rx-audio-suite-route"));
         Assert.True(diag.RxAudioLevelerProfileApiAvailable);
         Assert.Equal("/api/dsp/rx-audio-leveler-profile", diag.RxAudioLevelerProfileEndpoint);
@@ -67,6 +70,16 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Equal("candidate-profile-api-ready", diag.RxAudioLevelerCapabilityStatus);
         Assert.Contains("current", diag.RxAudioLevelerSupportedProfiles);
         Assert.Contains("stable-speech-candidate", diag.RxAudioLevelerSupportedProfiles);
+        Assert.True(diag.RxAgcTopCapCandidateAvailable);
+        Assert.False(diag.RxAgcTopCapCandidateRuntimeApiAvailable);
+        Assert.Equal("wdsp-rxa-agc-top-cap-50db-candidate", diag.RxAgcTopCapCandidateProfile);
+        Assert.Equal(50.0, diag.RxAgcTopCapCandidateTopDb);
+        Assert.Equal(80.0, diag.RxAgcTopCapBaselineTopDb);
+        Assert.True(diag.RxAgcTopCapCandidateExperimental);
+        Assert.True(diag.RxAgcTopCapCandidateFixtureOnly);
+        Assert.True(diag.RxAgcTopCapCandidateRequiresRuntimeOptIn);
+        Assert.Equal("fixture-only-no-runtime-api", diag.RxAgcTopCapCapabilityStatus);
+        Assert.Contains("cross-radio proof", diag.RxAgcTopCapPromotionRequirement);
     }
 
     [Fact]

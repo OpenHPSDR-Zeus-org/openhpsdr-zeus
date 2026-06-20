@@ -1151,6 +1151,24 @@ export type DspLiveDiagnosticsDto = {
   externalEngineBakeoffStatus: string;
   externalEngineBakeoffConstraints: string[];
   rolloutGate: string;
+  rxAudioLevelerProfileApiAvailable: boolean;
+  rxAudioLevelerProfileEndpoint: string;
+  rxAudioLevelerSupportedProfiles: string[];
+  rxAudioLevelerDefaultProfile: string;
+  rxAudioLevelerCandidateProfile: string;
+  rxAudioLevelerCandidateProfileAvailable: boolean;
+  rxAudioLevelerCandidateProfileExperimental: boolean;
+  rxAudioLevelerCapabilityStatus: string;
+  rxAgcTopCapCandidateAvailable: boolean;
+  rxAgcTopCapCandidateRuntimeApiAvailable: boolean;
+  rxAgcTopCapCandidateProfile: string | null;
+  rxAgcTopCapCandidateTopDb: number | null;
+  rxAgcTopCapBaselineTopDb: number | null;
+  rxAgcTopCapCandidateExperimental: boolean | null;
+  rxAgcTopCapCandidateFixtureOnly: boolean | null;
+  rxAgcTopCapCandidateRequiresRuntimeOptIn: boolean | null;
+  rxAgcTopCapCapabilityStatus: string | null;
+  rxAgcTopCapPromotionRequirement: string | null;
   wdspActive: boolean;
   wdspNativeLoadable: boolean;
   wdspEmnrPost2Available: boolean;
@@ -3467,6 +3485,24 @@ function normalizeDspLiveDiagnostics(raw: unknown): DspLiveDiagnosticsDto {
     externalEngineBakeoffStatus: diagString(r.externalEngineBakeoffStatus) ?? 'external-engine-bakeoff-preflight-required',
     externalEngineBakeoffConstraints: diagStringArray(r.externalEngineBakeoffConstraints),
     rolloutGate: diagString(r.rolloutGate) ?? 'opt-in-only',
+    rxAudioLevelerProfileApiAvailable: Boolean(r.rxAudioLevelerProfileApiAvailable),
+    rxAudioLevelerProfileEndpoint: diagString(r.rxAudioLevelerProfileEndpoint) ?? '',
+    rxAudioLevelerSupportedProfiles: diagStringArray(r.rxAudioLevelerSupportedProfiles),
+    rxAudioLevelerDefaultProfile: diagString(r.rxAudioLevelerDefaultProfile) ?? 'current',
+    rxAudioLevelerCandidateProfile: diagString(r.rxAudioLevelerCandidateProfile) ?? '',
+    rxAudioLevelerCandidateProfileAvailable: Boolean(r.rxAudioLevelerCandidateProfileAvailable),
+    rxAudioLevelerCandidateProfileExperimental: Boolean(r.rxAudioLevelerCandidateProfileExperimental),
+    rxAudioLevelerCapabilityStatus: diagString(r.rxAudioLevelerCapabilityStatus) ?? 'not-advertised',
+    rxAgcTopCapCandidateAvailable: Boolean(r.rxAgcTopCapCandidateAvailable),
+    rxAgcTopCapCandidateRuntimeApiAvailable: Boolean(r.rxAgcTopCapCandidateRuntimeApiAvailable),
+    rxAgcTopCapCandidateProfile: diagString(r.rxAgcTopCapCandidateProfile),
+    rxAgcTopCapCandidateTopDb: diagNumber(r.rxAgcTopCapCandidateTopDb),
+    rxAgcTopCapBaselineTopDb: diagNumber(r.rxAgcTopCapBaselineTopDb),
+    rxAgcTopCapCandidateExperimental: diagBool(r.rxAgcTopCapCandidateExperimental),
+    rxAgcTopCapCandidateFixtureOnly: diagBool(r.rxAgcTopCapCandidateFixtureOnly),
+    rxAgcTopCapCandidateRequiresRuntimeOptIn: diagBool(r.rxAgcTopCapCandidateRequiresRuntimeOptIn),
+    rxAgcTopCapCapabilityStatus: diagString(r.rxAgcTopCapCapabilityStatus),
+    rxAgcTopCapPromotionRequirement: diagString(r.rxAgcTopCapPromotionRequirement),
     wdspActive: Boolean(r.wdspActive),
     wdspNativeLoadable: Boolean(r.wdspNativeLoadable),
     wdspEmnrPost2Available: Boolean(r.wdspEmnrPost2Available),

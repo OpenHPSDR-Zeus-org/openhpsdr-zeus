@@ -495,7 +495,17 @@ public sealed record DspLiveDiagnosticsDto(
     string[] NextBenchmarkScenarios,
     string[] BenchmarkAcceptanceGates,
     DspExternalEngineCandidateDto[] ExternalEngineCandidates,
-    string DiagnosticRecommendation);
+    string DiagnosticRecommendation,
+    bool RxAgcTopCapCandidateAvailable = false,
+    bool RxAgcTopCapCandidateRuntimeApiAvailable = false,
+    string? RxAgcTopCapCandidateProfile = null,
+    double? RxAgcTopCapCandidateTopDb = null,
+    double? RxAgcTopCapBaselineTopDb = null,
+    bool? RxAgcTopCapCandidateExperimental = null,
+    bool? RxAgcTopCapCandidateFixtureOnly = null,
+    bool? RxAgcTopCapCandidateRequiresRuntimeOptIn = null,
+    string? RxAgcTopCapCapabilityStatus = null,
+    string? RxAgcTopCapPromotionRequirement = null);
 
 // Read-only audit of what the connected/effective hardware can do versus
 // what Zeus currently exposes as a safe control. This is deliberately

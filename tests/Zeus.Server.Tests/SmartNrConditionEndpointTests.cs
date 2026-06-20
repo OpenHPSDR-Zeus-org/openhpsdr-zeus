@@ -217,6 +217,16 @@ public sealed class SmartNrConditionEndpointTests
         Assert.True(root.GetProperty("rxAudioLevelerCandidateProfileAvailable").GetBoolean());
         Assert.True(root.GetProperty("rxAudioLevelerCandidateProfileExperimental").GetBoolean());
         Assert.Equal("candidate-profile-api-ready", root.GetProperty("rxAudioLevelerCapabilityStatus").GetString());
+        Assert.True(root.GetProperty("rxAgcTopCapCandidateAvailable").GetBoolean());
+        Assert.False(root.GetProperty("rxAgcTopCapCandidateRuntimeApiAvailable").GetBoolean());
+        Assert.Equal("wdsp-rxa-agc-top-cap-50db-candidate", root.GetProperty("rxAgcTopCapCandidateProfile").GetString());
+        Assert.Equal(50.0, root.GetProperty("rxAgcTopCapCandidateTopDb").GetDouble(), precision: 1);
+        Assert.Equal(80.0, root.GetProperty("rxAgcTopCapBaselineTopDb").GetDouble(), precision: 1);
+        Assert.True(root.GetProperty("rxAgcTopCapCandidateExperimental").GetBoolean());
+        Assert.True(root.GetProperty("rxAgcTopCapCandidateFixtureOnly").GetBoolean());
+        Assert.True(root.GetProperty("rxAgcTopCapCandidateRequiresRuntimeOptIn").GetBoolean());
+        Assert.Equal("fixture-only-no-runtime-api", root.GetProperty("rxAgcTopCapCapabilityStatus").GetString());
+        Assert.Contains("cross-radio proof", root.GetProperty("rxAgcTopCapPromotionRequirement").GetString());
         var levelerProfiles = root.GetProperty("rxAudioLevelerSupportedProfiles")
             .EnumerateArray()
             .Select(item => item.GetString())
@@ -252,6 +262,7 @@ public sealed class SmartNrConditionEndpointTests
         Assert.Contains("dsp-live-runtime-evidence", tools);
         Assert.Contains("g2-live-capture", tools);
         Assert.Contains("rx-audio-leveler-profile-api", tools);
+        Assert.Contains("rx-agc-top-cap-fixture-candidate", tools);
         Assert.Contains("external-engine-live-bakeoff-watch", tools);
         Assert.Contains("external-post-demod-bakeoff:rnnoise", tools);
         Assert.Contains("external-post-demod-bakeoff:deepfilternet", tools);

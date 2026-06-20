@@ -12,6 +12,11 @@ public static class DspLiveDiagnosticsService
     private const string RxAudioLevelerProfileEndpoint = "/api/dsp/rx-audio-leveler-profile";
     private const string RxAudioLevelerDefaultProfile = "current";
     private const string RxAudioLevelerCandidateProfile = "stable-speech-candidate";
+    private const string RxAgcTopCapCandidateProfile = "wdsp-rxa-agc-top-cap-50db-candidate";
+    private const double RxAgcTopCapBaselineTopDb = 80.0;
+    private const double RxAgcTopCapCandidateTopDb = 50.0;
+    private const string RxAgcTopCapCapabilityStatus = "fixture-only-no-runtime-api";
+    private const string RxAgcTopCapPromotionRequirement = "requires guarded G2 live A/B and cross-radio proof before runtime exposure";
     private static readonly string[] RxAudioLevelerSupportedProfiles =
     [
         RxAudioLevelerDefaultProfile,
@@ -40,10 +45,13 @@ public static class DspLiveDiagnosticsService
             "g2-live-capture",
             "g2-rx-peak-hunt",
             "rx-audio-leveler-profile-api",
+            "rx-agc-top-cap-fixture-candidate",
         };
 
         evidence.Add("rx-audio-leveler-profile-api-available");
         evidence.Add("rx-audio-leveler-stable-speech-candidate-available");
+        evidence.Add("rx-agc-top-cap-fixture-candidate-available");
+        evidence.Add("rx-agc-top-cap-fixture-only");
 
         int score = 100;
         if (condition.WdspNativeLoadable)
@@ -388,7 +396,17 @@ public static class DspLiveDiagnosticsService
             NextBenchmarkScenarios: nextBenchmarkScenarios,
             BenchmarkAcceptanceGates: benchmarkPlan.GlobalAcceptanceGates,
             ExternalEngineCandidates: externalCandidates,
-            DiagnosticRecommendation: Recommendation(status, condition, actions));
+            DiagnosticRecommendation: Recommendation(status, condition, actions),
+            RxAgcTopCapCandidateAvailable: true,
+            RxAgcTopCapCandidateRuntimeApiAvailable: false,
+            RxAgcTopCapCandidateProfile: RxAgcTopCapCandidateProfile,
+            RxAgcTopCapCandidateTopDb: RxAgcTopCapCandidateTopDb,
+            RxAgcTopCapBaselineTopDb: RxAgcTopCapBaselineTopDb,
+            RxAgcTopCapCandidateExperimental: true,
+            RxAgcTopCapCandidateFixtureOnly: true,
+            RxAgcTopCapCandidateRequiresRuntimeOptIn: true,
+            RxAgcTopCapCapabilityStatus: RxAgcTopCapCapabilityStatus,
+            RxAgcTopCapPromotionRequirement: RxAgcTopCapPromotionRequirement);
     }
 
     private static string Status(SmartNrConditionDto condition, List<string> constraints, int score)

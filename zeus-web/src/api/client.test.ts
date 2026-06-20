@@ -1808,6 +1808,24 @@ describe('POST helpers', () => {
       externalEngineBakeoffStatus: 'external-engine-bakeoff-preflight-required',
       externalEngineBakeoffConstraints: ['replacement-preflight-required'],
       rolloutGate: 'opt-in-only-until-benchmark-and-g2-on-air-acceptance',
+      rxAudioLevelerProfileApiAvailable: true,
+      rxAudioLevelerProfileEndpoint: '/api/dsp/rx-audio-leveler-profile',
+      rxAudioLevelerSupportedProfiles: ['current', 'stable-speech-candidate'],
+      rxAudioLevelerDefaultProfile: 'current',
+      rxAudioLevelerCandidateProfile: 'stable-speech-candidate',
+      rxAudioLevelerCandidateProfileAvailable: true,
+      rxAudioLevelerCandidateProfileExperimental: true,
+      rxAudioLevelerCapabilityStatus: 'candidate-profile-api-ready',
+      rxAgcTopCapCandidateAvailable: true,
+      rxAgcTopCapCandidateRuntimeApiAvailable: false,
+      rxAgcTopCapCandidateProfile: 'wdsp-rxa-agc-top-cap-50db-candidate',
+      rxAgcTopCapCandidateTopDb: 50,
+      rxAgcTopCapBaselineTopDb: 80,
+      rxAgcTopCapCandidateExperimental: true,
+      rxAgcTopCapCandidateFixtureOnly: true,
+      rxAgcTopCapCandidateRequiresRuntimeOptIn: true,
+      rxAgcTopCapCapabilityStatus: 'fixture-only-no-runtime-api',
+      rxAgcTopCapPromotionRequirement: 'requires guarded G2 live A/B and cross-radio proof before runtime exposure',
       wdspActive: true,
       wdspNativeLoadable: true,
       wdspEmnrPost2Available: true,
@@ -1876,6 +1894,24 @@ describe('POST helpers', () => {
     expect(diag.readyForExternalEngineBakeoff).toBe(false);
     expect(diag.externalEngineBakeoffStatus).toBe('external-engine-bakeoff-preflight-required');
     expect(diag.externalEngineBakeoffConstraints).toContain('replacement-preflight-required');
+    expect(diag.rxAudioLevelerProfileApiAvailable).toBe(true);
+    expect(diag.rxAudioLevelerProfileEndpoint).toBe('/api/dsp/rx-audio-leveler-profile');
+    expect(diag.rxAudioLevelerSupportedProfiles).toEqual(['current', 'stable-speech-candidate']);
+    expect(diag.rxAudioLevelerDefaultProfile).toBe('current');
+    expect(diag.rxAudioLevelerCandidateProfile).toBe('stable-speech-candidate');
+    expect(diag.rxAudioLevelerCandidateProfileAvailable).toBe(true);
+    expect(diag.rxAudioLevelerCandidateProfileExperimental).toBe(true);
+    expect(diag.rxAudioLevelerCapabilityStatus).toBe('candidate-profile-api-ready');
+    expect(diag.rxAgcTopCapCandidateAvailable).toBe(true);
+    expect(diag.rxAgcTopCapCandidateRuntimeApiAvailable).toBe(false);
+    expect(diag.rxAgcTopCapCandidateProfile).toBe('wdsp-rxa-agc-top-cap-50db-candidate');
+    expect(diag.rxAgcTopCapCandidateTopDb).toBe(50);
+    expect(diag.rxAgcTopCapBaselineTopDb).toBe(80);
+    expect(diag.rxAgcTopCapCandidateExperimental).toBe(true);
+    expect(diag.rxAgcTopCapCandidateFixtureOnly).toBe(true);
+    expect(diag.rxAgcTopCapCandidateRequiresRuntimeOptIn).toBe(true);
+    expect(diag.rxAgcTopCapCapabilityStatus).toBe('fixture-only-no-runtime-api');
+    expect(diag.rxAgcTopCapPromotionRequirement).toContain('cross-radio proof');
     expect(diag.frontendSceneFresh).toBe(true);
     expect(diag.runtimeAligned).toBe(true);
     expect(diag.rxChainFilterLowHz).toBe(300);
