@@ -76,23 +76,6 @@ The Server tab matters when Zeus is a separate app from the server — for examp
 
 The tab also shows a **Mobile browser HTTPS** box. Browsers will only grant microphone access over HTTPS (or to `localhost`), so transmitting voice from a phone browser on your LAN requires an HTTPS address. If the server was started with LAN HTTPS enabled, the secure addresses are listed here as tappable links; if the box says none were reported, restart the server with LAN HTTPS turned on. This is a LAN-only feature — Zeus does not expose your radio to the public internet.
 
-### The hidden HARDWARE diagnostics folder
-
-Zeus has a deep, read-only **HARDWARE** diagnostics folder aimed at troubleshooting and protocol-level investigation. It is hidden on purpose so it never clutters everyday operating, and it **re-locks every time you launch Zeus** — a fresh session never lists it.
-
-To reveal it, tap the lightning-bolt in the **brand-mark** (the Zeus logo in the top-left corner) **four times**. The HARDWARE tab then appears in the Settings tab column for the rest of that session. There is no hover hint or cursor change on the bolt — it doesn't advertise itself.
-
-Inside, a status strip summarizes connection, board, protocol, DSP, RX/TX health, and PA supply, and the data is organized into sub-tabs:
-
-- **Overview** — discovered-radio inventory (firmware/gateware versions, MAC/IP), the board capability fingerprint, receiver topology (ADC/DDC/filter-bank audit), and a "hardware potential" survey of sample rates and features.
-- **RX / DSP** — the live DSP runtime, RX audio path, RX meters, an RX dynamic-range advisor (ADC headroom, AGC, preamp, attenuation), and Smart-NR scene intelligence.
-- **TX / PTT** — hardware keying and external-PTT ownership, TX egress (mic ingest, IQ ring, packet flow), PA supply alarms and thermal telemetry, and PureSignal feedback health.
-- **I/O** — decoded user analog/digital lines and guarded action bindings.
-- **Protocol** — live Protocol-1 and Protocol-2 telemetry and a network-health profile (frame loss, hi-priority flow).
-- **Mapping** — a raw capture tool for reverse-engineering radio status bytes, with **Baseline**/**Mark** snapshots and a **Reset Map** button.
-
-Everything here is monitoring and capture; it does not change radio behavior. It's a place to read what's really happening when you (or a developer) are chasing a problem.
-
 ### Report a problem
 
 At the bottom transport bar there's a **⚠ Report a problem** button. It opens a self-diagnostic helper written for operators, not programmers:
@@ -126,7 +109,7 @@ For the mouse: click on the panadapter or waterfall to tune there, drag to pan, 
 
 **No microphone on a phone browser:** you need an HTTPS LAN address (see the Server tab's Mobile browser HTTPS box). On a wrapped phone app, allow the local-network prompt.
 
-When in doubt, use **Report a problem** — it captures the right diagnostic state automatically. Deeper, board-specific symptoms can be inspected in the hidden **HARDWARE** folder, and the wiki's Troubleshooting page covers known quirks and missing-library issues.
+When in doubt, use **Report a problem** — it captures the right diagnostic state automatically, and the wiki's Troubleshooting page covers known quirks and missing-library issues.
 
 ### Transmit band guard (Band Plan)
 
