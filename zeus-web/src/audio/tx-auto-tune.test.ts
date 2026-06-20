@@ -2,7 +2,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { CFC_CONFIG_DEFAULT, type CfcConfigDto } from '../api/client';
+import {
+  CFC_CONFIG_DEFAULT,
+  TX_LEVELING_CONFIG_DEFAULT,
+  type CfcConfigDto,
+  type TxLevelingConfigDto,
+} from '../api/client';
 import {
   recommendTxAutoTune,
   type TxAutoTuneSample,
@@ -19,12 +24,17 @@ function cfc(preCompDb = 1): CfcConfigDto {
   };
 }
 
+function leveling(overrides: Partial<TxLevelingConfigDto> = {}): TxLevelingConfigDto {
+  return { ...TX_LEVELING_CONFIG_DEFAULT, ...overrides };
+}
+
 function settings(overrides: Partial<TxAutoTuneSettings> = {}): TxAutoTuneSettings {
   return {
     micGainDb: -6,
     levelerMaxGainDb: 6,
     drivePercent: 80,
     cfcConfig: cfc(),
+    txLeveling: leveling(),
     targetSpectralDensity: 95,
     keyed: false,
     audioSuiteActive: true,
@@ -39,6 +49,8 @@ function sample(overrides: Partial<TxAutoTuneSample> = {}): TxAutoTuneSample {
     outPkDbfs: -7,
     outAvDbfs: -18,
     audioSuiteOutputDbfs: -7,
+    compPkDbfs: -8,
+    compAvDbfs: -20,
     alcGrDb: 3,
     lvlrGrDb: 3,
     cfcGrDb: 2,
@@ -153,5 +165,73 @@ describe('recommendTxAutoTune', () => {
 
     expect(plan.settings.drivePercent).toBe(95);
     expect(plan.actions).toContain('drive +5% after clean keyed sample');
+  });
+
+  it('eases ALC make-up gain when the ALC limiter is slamming', () => {
+    const plan = recommendTxAutoTune(
+      settings({ txLeveling: leveling({ alcMaxGainDb: 3 }) }),
+      samples({ alcGrDb: 12 }),
+    );
+
+    expect(plan.settings.txLeveling.alcMaxGainDb).toBe(2);
+    expect(plan.actions.join(' ')).toContain('ALC max gain -1');
+    expect(plan.changed).toBe(true);
+  });
+
+  it('backs the CPDR compressor off when it pinches the crest', () => {
+    const plan = recommendTxAutoTune(
+      settings({ txLeveling: leveling({ compressorEnabled: true, compressorGainDb: 6 }) }),
+      samples({
+        outPkDbfs: -7,
+        outAvDbfs: -10, // pinched chain crest -> protecting, no re-raise
+        compPkDbfs: -8,
+        compAvDbfs: -12, // pinched compressor crest
+      }),
+    );
+
+    expect(plan.settings.txLeveling.compressorGainDb).toBe(4);
+    expect(plan.settings.txLeveling.compressorEnabled).toBe(true);
+    expect(plan.actions.join(' ')).toContain('compressor -2');
+  });
+
+  it('engages ALC make-up and the compressor on a clean keyed max-density sample', () => {
+    const plan = recommendTxAutoTune(
+      settings({
+        keyed: true,
+        drivePercent: 90,
+        targetSpectralDensity: 100,
+        txLeveling: leveling({ alcMaxGainDb: 3, compressorEnabled: false, compressorGainDb: 0 }),
+      }),
+      samples({
+        micPkDbfs: -14,
+        outPkDbfs: -6,
+        outAvDbfs: -18, // wide-open 12 dB crest with output headroom
+        alcGrDb: 2,
+        lvlrGrDb: 2,
+        cfcGrDb: 1,
+        psFeedbackLevel: 150,
+        swr: 1.2,
+      }),
+    );
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.settings.txLeveling.alcMaxGainDb).toBe(4);
+    expect(plan.settings.txLeveling.compressorEnabled).toBe(true);
+    expect(plan.settings.txLeveling.compressorGainDb).toBe(2);
+    expect(plan.settings.cfcConfig.prePeqDb).toBeGreaterThan(0);
+    expect(plan.actions.join(' ')).toContain('compressor on');
+  });
+
+  it('slows a pumping leveler instead of leaving it chasing syllables', () => {
+    const pumping = Array.from({ length: 40 }, (_, i) =>
+      sample({ lvlrGrDb: i < 30 ? 2 : 12 }),
+    );
+    const plan = recommendTxAutoTune(
+      settings({ txLeveling: leveling({ levelerDecayMs: 50 }) }),
+      pumping,
+    );
+
+    expect(plan.settings.txLeveling.levelerDecayMs).toBe(90);
+    expect(plan.actions.join(' ')).toContain('leveler decay slower');
   });
 });

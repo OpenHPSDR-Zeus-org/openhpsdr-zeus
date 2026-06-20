@@ -144,6 +144,8 @@ function autoTuneSampleFromDiagnostics(
       micPkDbfs: diag.stage.micPkDbfs ?? finiteDbfs(tx.wdspMicPk) ?? finiteDbfs(tx.micDbfs),
       outPkDbfs: diag.stage.outPkDbfs ?? finiteDbfs(tx.outPk),
       outAvDbfs: diag.stage.outAvDbfs ?? finiteDbfs(tx.outAv),
+      compPkDbfs: diag.stage.compPkDbfs ?? finiteDbfs(tx.compPk),
+      compAvDbfs: diag.stage.compAvDbfs ?? finiteDbfs(tx.compAv),
       audioSuiteOutputDbfs: chain.outputDbfs,
       alcGrDb: Number.isFinite(diag.stage.alcGrDb) ? diag.stage.alcGrDb : tx.alcGr,
       lvlrGrDb: Number.isFinite(diag.stage.lvlrGrDb) ? diag.stage.lvlrGrDb : tx.lvlrGr,
@@ -208,6 +210,17 @@ function cfcConfigChanged(a: TxAutoTuneSettings['cfcConfig'], b: TxAutoTuneSetti
       band.compLevelDb !== other.compLevelDb ||
       band.postGainDb !== other.postGainDb;
   });
+}
+
+function txLevelingChanged(a: TxLevelingConfigDto, b: TxLevelingConfigDto): boolean {
+  return (
+    a.alcMaxGainDb !== b.alcMaxGainDb ||
+    a.alcDecayMs !== b.alcDecayMs ||
+    a.levelerEnabled !== b.levelerEnabled ||
+    a.levelerDecayMs !== b.levelerDecayMs ||
+    a.compressorEnabled !== b.compressorEnabled ||
+    a.compressorGainDb !== b.compressorGainDb
+  );
 }
 
 function autoTuneMessage(plan: TxAutoTunePlan): string {
@@ -325,6 +338,7 @@ function AudioSuitePreviewToggle() {
 function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: number }) {
   const status = useConnectionStore((s) => s.status);
   const applyState = useConnectionStore((s) => s.applyState);
+  const setTxLevelingLocal = useConnectionStore((s) => s.setTxLeveling);
   const hydrateTxFromState = useTxStore((s) => s.hydrateFromState);
   const tunOn = useTxStore((s) => s.tunOn);
   const setMicGainDb = useTxStore((s) => s.setMicGainDb);
@@ -366,6 +380,13 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
         hydrateTxFromState(state);
         setCfcConfigLocal(state.cfc);
       }
+      const beforeLeveling = useConnectionStore.getState().txLeveling;
+      if (txLevelingChanged(beforeLeveling, plan.settings.txLeveling)) {
+        setTxLevelingLocal(plan.settings.txLeveling);
+        const state = await setTxLeveling(plan.settings.txLeveling, signal);
+        applyState(state);
+        hydrateTxFromState(state);
+      }
       if (plan.settings.drivePercent !== before.drivePercent) {
         const drive = await setDrive(plan.settings.drivePercent, signal);
         setDrivePercent(drive.drivePercent);
@@ -378,6 +399,7 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
       setDrivePercent,
       setLevelerMaxGainDb,
       setMicGainDb,
+      setTxLevelingLocal,
     ],
   );
 
@@ -446,6 +468,7 @@ function TxFidelityAutoTune({ targetSpectralDensity }: { targetSpectralDensity: 
           levelerMaxGainDb: tx.levelerMaxGainDb,
           drivePercent: tx.drivePercent,
           cfcConfig: tx.cfcConfig,
+          txLeveling: useConnectionStore.getState().txLeveling,
           targetSpectralDensity,
           keyed: tx.moxOn,
           audioSuiteActive: !audio.masterBypassed && (tx.moxOn || tx.txMonitorEnabled),

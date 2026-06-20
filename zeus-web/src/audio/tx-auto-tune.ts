@@ -1,15 +1,42 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-import type { CfcConfigDto } from '../api/client';
+import type { CfcConfigDto, TxLevelingConfigDto } from '../api/client';
 
 const DBFS_FLOOR = -200;
 const MIN_VOICED_SAMPLES = 8;
+
+// CFC pre-comp / pre-PEQ are unbounded on the server; the frontend owns the
+// ±12 dB operational window (matches the CFC panel + withPreComp).
+const CFC_SHAPE_MIN = -12;
+const CFC_SHAPE_MAX = 12;
+
+// TxLeveling clamps. The hard server bounds (RadioService.SetTxLeveling) are
+// ALC max [0,120], ALC decay [1,50], leveler decay [1,5000], comp gain [0,20].
+// Auto Tune uses TIGHTER operational ceilings when it RAISES a value so it
+// never drives the chain to an extreme in a single bounded run, but it clamps
+// the carried-forward config only to the hard bounds — so a no-op run never
+// rewrites an operator-set value that already sits above the operational cap.
+const ALC_MAX_HARD_MIN = 0;
+const ALC_MAX_HARD_MAX = 120;
+const ALC_MAX_RAISE_GUARD = 6; // only auto-raise ALC make-up below this
+const ALC_MAX_RAISE_CEIL = 8; // and never above this via a raise step
+const ALC_DECAY_MIN = 1;
+const ALC_DECAY_MAX = 50;
+const LEVELER_DECAY_MIN = 1;
+const LEVELER_DECAY_MAX = 5000;
+const LEVELER_DECAY_DENSITY_CEIL = 180; // smooth-for-density target
+const LEVELER_DECAY_PUMP_CEIL = 400; // slow the leveler to stop pumping
+const COMP_GAIN_HARD_MIN = 0;
+const COMP_GAIN_HARD_MAX = 20;
+const COMP_GAIN_RAISE_CEIL = 10; // operational density ceiling
 
 export type TxAutoTuneSample = {
   micPkDbfs: number | null;
   outPkDbfs: number | null;
   outAvDbfs: number | null;
   audioSuiteOutputDbfs: number | null;
+  compPkDbfs: number | null;
+  compAvDbfs: number | null;
   alcGrDb: number;
   lvlrGrDb: number;
   cfcGrDb: number;
@@ -28,6 +55,7 @@ export type TxAutoTuneSettings = {
   levelerMaxGainDb: number;
   drivePercent: number;
   cfcConfig: CfcConfigDto;
+  txLeveling: TxLevelingConfigDto;
   targetSpectralDensity: number;
   keyed: boolean;
   audioSuiteActive: boolean;
@@ -44,8 +72,10 @@ export type TxAutoTuneStats = {
   audioSuiteOutP95Dbfs: number | null;
   audioSuiteOutMaxDbfs: number | null;
   crestMedianDb: number | null;
+  compCrestMedianDb: number | null;
   alcP95Db: number;
   lvlrP95Db: number;
+  lvlrGrSpreadDb: number;
   cfcP95Db: number;
   swrP95: number;
   psFeedbackMedian: number | null;
@@ -127,6 +157,15 @@ function crestValues(samples: ReadonlyArray<TxAutoTuneSample>): number[] {
   return out;
 }
 
+function compCrestValues(samples: ReadonlyArray<TxAutoTuneSample>): number[] {
+  const out: number[] = [];
+  for (const s of samples) {
+    if (!validDbfs(s.compPkDbfs) || !validDbfs(s.compAvDbfs) || s.compAvDbfs > s.compPkDbfs) continue;
+    out.push(s.compPkDbfs - s.compAvDbfs);
+  }
+  return out;
+}
+
 function sumDeltas(samples: ReadonlyArray<TxAutoTuneSample>, pick: (s: TxAutoTuneSample) => number | null): number {
   let total = 0;
   for (const sample of samples) {
@@ -158,8 +197,40 @@ function withPreComp(config: CfcConfigDto, deltaDb: number, forceEnable: boolean
     next.enabled = true;
     next.postEqEnabled = true;
   }
-  next.preCompDb = roundTenth(clamp(next.preCompDb + deltaDb, -12, 12));
+  next.preCompDb = roundTenth(clamp(next.preCompDb + deltaDb, CFC_SHAPE_MIN, CFC_SHAPE_MAX));
   return next;
+}
+
+function withPrePeq(config: CfcConfigDto, deltaDb: number, forceEnable: boolean): CfcConfigDto {
+  const next = cloneCfc(config);
+  if (forceEnable) next.enabled = true;
+  next.prePeqDb = roundTenth(clamp(next.prePeqDb + deltaDb, CFC_SHAPE_MIN, CFC_SHAPE_MAX));
+  return next;
+}
+
+// Carry the operator's leveling config forward, clamped only to the HARD server
+// bounds so a run that touches nothing rewrites no value. Tuning rules below
+// apply their own tighter operational ceilings when they actively raise a value.
+function clampLeveling(c: TxLevelingConfigDto): TxLevelingConfigDto {
+  return {
+    alcMaxGainDb: clamp(c.alcMaxGainDb, ALC_MAX_HARD_MIN, ALC_MAX_HARD_MAX),
+    alcDecayMs: roundInt(clamp(c.alcDecayMs, ALC_DECAY_MIN, ALC_DECAY_MAX)),
+    levelerEnabled: c.levelerEnabled,
+    levelerDecayMs: roundInt(clamp(c.levelerDecayMs, LEVELER_DECAY_MIN, LEVELER_DECAY_MAX)),
+    compressorEnabled: c.compressorEnabled,
+    compressorGainDb: roundTenth(clamp(c.compressorGainDb, COMP_GAIN_HARD_MIN, COMP_GAIN_HARD_MAX)),
+  };
+}
+
+function levelingChanged(a: TxLevelingConfigDto, b: TxLevelingConfigDto): boolean {
+  return (
+    a.alcMaxGainDb !== b.alcMaxGainDb ||
+    a.alcDecayMs !== b.alcDecayMs ||
+    a.levelerEnabled !== b.levelerEnabled ||
+    a.levelerDecayMs !== b.levelerDecayMs ||
+    a.compressorEnabled !== b.compressorEnabled ||
+    a.compressorGainDb !== b.compressorGainDb
+  );
 }
 
 function settingChanged(a: TxAutoTuneSettings, b: TxAutoTuneSettings): boolean {
@@ -177,7 +248,8 @@ function settingChanged(a: TxAutoTuneSettings, b: TxAutoTuneSettings): boolean {
         band.freqHz !== other.freqHz ||
         band.compLevelDb !== other.compLevelDb ||
         band.postGainDb !== other.postGainDb;
-    })
+    }) ||
+    levelingChanged(a.txLeveling, b.txLeveling)
   );
 }
 
@@ -194,9 +266,12 @@ export function summarizeTxAutoTuneSamples(samples: ReadonlyArray<TxAutoTuneSamp
   const out = values(samples, (s) => s.outPkDbfs);
   const suiteOut = values(samples, (s) => s.audioSuiteOutputDbfs);
   const crest = crestValues(samples);
+  const compCrest = compCrestValues(samples);
   const alc = grValues(samples, (s) => s.alcGrDb);
   const lvlr = grValues(samples, (s) => s.lvlrGrDb);
   const cfc = grValues(samples, (s) => s.cfcGrDb);
+  const lvlrP95 = percentile(lvlr, 0.95) ?? 0;
+  const lvlrP50 = percentile(lvlr, 0.5) ?? 0;
   const swr = samples
     .map((s) => s.swr)
     .filter((v) => Number.isFinite(v) && v > 0);
@@ -219,8 +294,10 @@ export function summarizeTxAutoTuneSamples(samples: ReadonlyArray<TxAutoTuneSamp
     audioSuiteOutP95Dbfs: percentile(suiteOut, 0.95),
     audioSuiteOutMaxDbfs: maxOrNull(suiteOut),
     crestMedianDb: percentile(crest, 0.5),
+    compCrestMedianDb: percentile(compCrest, 0.5),
     alcP95Db: percentile(alc, 0.95) ?? 0,
-    lvlrP95Db: percentile(lvlr, 0.95) ?? 0,
+    lvlrP95Db: lvlrP95,
+    lvlrGrSpreadDb: Math.max(0, lvlrP95 - lvlrP50),
     cfcP95Db: percentile(cfc, 0.95) ?? 0,
     swrP95: percentile(swr, 0.95) ?? 1,
     psFeedbackMedian: percentile(psFeedback, 0.5),
@@ -244,6 +321,7 @@ export function recommendTxAutoTune(
     levelerMaxGainDb: roundHalf(clamp(current.levelerMaxGainDb, 0, 20)),
     drivePercent: roundInt(clamp(current.drivePercent, 0, 100)),
     cfcConfig: cloneCfc(current.cfcConfig),
+    txLeveling: clampLeveling(current.txLeveling),
   };
   const actions: string[] = [];
   const blockers: string[] = [];
@@ -333,6 +411,53 @@ export function recommendTxAutoTune(
     actions.push('CFC pre-comp -0.4 dB');
   }
 
+  // ---- Protective leveling/compressor easing -------------------------------
+  // When the ALC safety limiter is slamming, its make-up gain is fighting the
+  // limiter — ease it so the upstream mic cut actually buys headroom instead of
+  // being clawed back. Bounded -1 dB per run, floored at 0.
+  if (stats.alcP95Db > 11 && next.txLeveling.alcMaxGainDb > ALC_MAX_HARD_MIN) {
+    next.txLeveling = {
+      ...next.txLeveling,
+      alcMaxGainDb: roundTenth(clamp(next.txLeveling.alcMaxGainDb - 1, ALC_MAX_HARD_MIN, ALC_MAX_HARD_MAX)),
+    };
+    actions.push('ALC max gain -1 dB');
+  }
+
+  // CPDR compressor over-squash: a pinched compressor crest (or a pinched chain
+  // crest while the compressor is doing the squashing) means the compander is
+  // flattening the speech. Back its gain off, disabling it once it reaches 0.
+  const compPinched =
+    next.txLeveling.compressorEnabled &&
+    next.txLeveling.compressorGainDb > COMP_GAIN_HARD_MIN &&
+    ((stats.compCrestMedianDb !== null && stats.compCrestMedianDb < 5) ||
+      (stats.crestMedianDb !== null && stats.crestMedianDb < 6));
+  if (compPinched) {
+    const reduced = roundTenth(clamp(next.txLeveling.compressorGainDb - 2, COMP_GAIN_HARD_MIN, COMP_GAIN_HARD_MAX));
+    next.txLeveling = {
+      ...next.txLeveling,
+      compressorGainDb: reduced,
+      compressorEnabled: reduced > 0,
+    };
+    actions.push(reduced > 0 ? 'compressor -2 dB' : 'compressor off');
+  }
+
+  // Leveler pumping: heavy leveler GR that swings sample-to-sample with a fast
+  // decay is audible breathing. Slow the leveler so it rides the average
+  // instead of chasing every syllable. Bounded toward the pump ceiling.
+  if (
+    stats.lvlrP95Db > 8 &&
+    stats.lvlrGrSpreadDb > 6 &&
+    next.txLeveling.levelerDecayMs < LEVELER_DECAY_PUMP_CEIL
+  ) {
+    const slower = roundInt(
+      clamp(next.txLeveling.levelerDecayMs * 1.4 + 20, LEVELER_DECAY_MIN, LEVELER_DECAY_PUMP_CEIL),
+    );
+    if (slower > next.txLeveling.levelerDecayMs) {
+      next.txLeveling = { ...next.txLeveling, levelerDecayMs: slower };
+      actions.push('leveler decay slower');
+    }
+  }
+
   const protecting = suiteHot || outputHot || micHot || dynamicsHot;
   const mayRaise = blockers.length === 0 && !protecting;
   const target = clamp(current.targetSpectralDensity, 0, 100);
@@ -380,11 +505,89 @@ export function recommendTxAutoTune(
       next.drivePercent = roundInt(clamp(next.drivePercent + 5, 0, 100));
       actions.push('drive +5% after clean keyed sample');
     }
+
+    // ---- Density-raising leveling/compressor (clean chain only) -----------
+    // mayRaise already guarantees the chain is not protecting (ALC/leveler/CFC
+    // GR moderate, crest >= 6, nothing hot), so these only add controlled
+    // density when there is genuine headroom.
+
+    // Smooth, dense leveling for higher targets: a very fast leveler that is
+    // barely working leaves the audio peaky. Lengthen its decay toward the
+    // density ceiling so quiet passages stay up without pumping.
+    if (
+      target >= 70 &&
+      stats.lvlrP95Db < 4 &&
+      stats.lvlrGrSpreadDb < 4 &&
+      next.txLeveling.levelerDecayMs < LEVELER_DECAY_DENSITY_CEIL
+    ) {
+      const slower = roundInt(
+        clamp(next.txLeveling.levelerDecayMs + 40, LEVELER_DECAY_MIN, LEVELER_DECAY_DENSITY_CEIL),
+      );
+      if (slower > next.txLeveling.levelerDecayMs) {
+        next.txLeveling = { ...next.txLeveling, levelerDecayMs: slower };
+        actions.push('leveler decay +40 ms for density');
+      }
+    }
+
+    // ALC make-up headroom: when the ALC is barely engaging on a clean chain,
+    // a little more make-up gain lifts the average without touching the
+    // limiter. Bounded +1 dB, only below the raise guard/ceiling.
+    if (
+      target >= 80 &&
+      stats.alcP95Db < 5 &&
+      next.txLeveling.alcMaxGainDb < ALC_MAX_RAISE_GUARD
+    ) {
+      next.txLeveling = {
+        ...next.txLeveling,
+        alcMaxGainDb: roundTenth(
+          clamp(next.txLeveling.alcMaxGainDb + 1, ALC_MAX_HARD_MIN, ALC_MAX_RAISE_CEIL),
+        ),
+      };
+      actions.push('ALC max gain +1 dB');
+    }
+
+    // Presence pre-PEQ for high targets: a small CFC pre-PEQ lift adds speech
+    // articulation density once compression is already controlled.
+    if (
+      target >= 85 &&
+      stats.cfcP95Db < 4 &&
+      stats.crestMedianDb !== null &&
+      stats.crestMedianDb >= 7 &&
+      next.cfcConfig.prePeqDb < 4
+    ) {
+      next.cfcConfig = withPrePeq(next.cfcConfig, 0.4, true);
+      actions.push('CFC pre-PEQ +0.4 dB');
+    }
+
+    // CPDR compressor for max density: the compander is the strongest clean
+    // talk-power lever. Only engage it on a wide-open crest with real output
+    // headroom so it tightens dynamics instead of pinching them.
+    if (
+      target >= 90 &&
+      stats.alcP95Db < 6 &&
+      stats.crestMedianDb !== null &&
+      stats.crestMedianDb > 10 &&
+      stats.outP95Dbfs !== null &&
+      stats.outP95Dbfs <= -5 &&
+      next.txLeveling.compressorGainDb < COMP_GAIN_RAISE_CEIL
+    ) {
+      const enabling = !next.txLeveling.compressorEnabled || next.txLeveling.compressorGainDb <= 0;
+      const step = enabling ? 2 : 1;
+      next.txLeveling = {
+        ...next.txLeveling,
+        compressorEnabled: true,
+        compressorGainDb: roundTenth(
+          clamp(next.txLeveling.compressorGainDb + step, COMP_GAIN_HARD_MIN, COMP_GAIN_RAISE_CEIL),
+        ),
+      };
+      actions.push(enabling ? `compressor on +${step} dB` : `compressor +${step} dB`);
+    }
   }
 
   next.micGainDb = roundInt(clamp(next.micGainDb, -40, 10));
   next.levelerMaxGainDb = roundHalf(clamp(next.levelerMaxGainDb, 0, 20));
   next.drivePercent = roundInt(clamp(next.drivePercent, 0, 100));
+  next.txLeveling = clampLeveling(next.txLeveling);
   const changed = settingChanged(current, next);
   let summary = 'Auto tune held current settings';
   if (stats.voicedSampleCount < MIN_VOICED_SAMPLES) {
