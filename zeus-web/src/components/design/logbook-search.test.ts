@@ -78,6 +78,13 @@ describe('logbook search', () => {
     expect(filterLogEntries(entries, '2026 14:22').map((qso) => qso.id)).toEqual(['a', 'b']);
   });
 
+  it('handles imported entries without a frequency', () => {
+    const imported = entry({ id: 'imported', callsign: 'K1ABC', frequencyMhz: null, band: '20M', mode: 'SSB' });
+
+    expect(logEntrySearchText(imported)).not.toContain('null');
+    expect(filterLogEntries([imported], 'k1abc 20m ssb').map((qso) => qso.id)).toEqual(['imported']);
+  });
+
   it('can hide QRZ-published entries', () => {
     expect(isQrzPublished(entries[0]!)).toBe(true);
     expect(filterLogEntries(entries, ' ', { hideQrzPublished: true }).map((qso) => qso.id)).toEqual(['b']);

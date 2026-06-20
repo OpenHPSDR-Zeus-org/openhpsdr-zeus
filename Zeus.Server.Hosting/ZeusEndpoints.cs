@@ -97,7 +97,7 @@ public static class ZeusEndpoints
             var sink = sp.GetService<NativeAudioSink>();
             return sink is null
                 ? Results.Ok(new { supported = false, muted = false })
-                : Results.Ok(new { supported = true, muted = sink.IsMuted });
+                : Results.Ok(new { supported = true, muted = sink.IsMuted, diagnostics = sink.GetDiagnostics() });
         });
         app.MapPost("/api/audio/native/mute", (NativeMuteRequest body, IServiceProvider sp) =>
         {
@@ -2509,6 +2509,27 @@ public static class ZeusEndpoints
                 System.Text.Encoding.UTF8.GetBytes(adif),
                 "text/plain",
                 fileName);
+        });
+
+        app.MapPost("/api/log/import/adif", async (LogService logService, HttpContext ctx) =>
+        {
+            using var reader = new StreamReader(
+                ctx.Request.Body,
+                System.Text.Encoding.UTF8,
+                detectEncodingFromByteOrderMarks: true);
+            var adif = await reader.ReadToEndAsync(ctx.RequestAborted);
+            if (string.IsNullOrWhiteSpace(adif))
+                return Results.BadRequest(new { error = "ADIF file is empty" });
+
+            try
+            {
+                var response = await logService.ImportAdifAsync(adif, ctx.RequestAborted);
+                return Results.Ok(response);
+            }
+            catch (FormatException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
         });
 
         app.MapPost("/api/log/publish/qrz", async (QrzPublishRequest req, QrzService qrz, LogService logService, HttpContext ctx) =>

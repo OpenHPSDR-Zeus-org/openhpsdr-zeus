@@ -422,8 +422,12 @@ public sealed class DspPipelineAudioSanitizerTests
     }
 
     [Fact]
-    public void ApplyRxAudioLeveler_LiftsWeakAudioTowardSpeechLevel()
+    public void ApplyRxAudioLeveler_GentlyLiftsWeakAudioToBoostCap()
     {
+        // #733: weak -40 dBFS audio is still lifted, but only by the softened
+        // +10 dB boost cap, so it lands near -30 dBFS instead of being pumped
+        // all the way to the -18 dB speech target. The big boost toward target
+        // was the above-noise-floor crackle.
         var state = new DspPipelineService.RxAudioLevelerState();
         float[] block = new float[1024];
 
@@ -433,11 +437,11 @@ public sealed class DspPipelineAudioSanitizerTests
             DspPipelineService.ApplyRxAudioLeveler(block, ref state);
         }
 
-        Assert.InRange(Rms(block), 0.10f, 0.15f);
-        Assert.True(state.GainDb > 20.0);
+        Assert.InRange(Rms(block), 0.031f, 0.032f);
+        Assert.Equal(10.0, state.GainDb, precision: 6);
         Assert.True(state.DiagnosticsValid);
         Assert.Equal(state.GainDb, state.AppliedGainDb, precision: 6);
-        Assert.InRange(state.OutputRmsDbfs, -20.5, -16.5);
+        Assert.InRange(state.OutputRmsDbfs, -30.5, -29.5);
         Assert.False(state.OutputLimited);
         Assert.Equal(0, state.OutputLimitSampleCount);
         Assert.Equal(0.0, state.OutputLimitReductionDb, precision: 6);
@@ -452,37 +456,43 @@ public sealed class DspPipelineAudioSanitizerTests
         Array.Fill(block, 0.01f);
         DspPipelineService.ApplyRxAudioLeveler(block, ref state);
 
-        Assert.Equal(6.0, state.GainDb, precision: 6);
+        // #733: the very-fast boost slew was backed off 6 -> 3 dB/block, so the
+        // first block ramps to +3 dB (not +6) and the second to +6 dB (not +12).
+        Assert.Equal(3.0, state.GainDb, precision: 6);
         Assert.True(state.BoostSlewLimited);
-        Assert.Equal(6.0, state.GainDeltaDb, precision: 6);
+        Assert.Equal(3.0, state.GainDeltaDb, precision: 6);
         Assert.InRange(block[0], 0.0099f, 0.0102f);
-        Assert.InRange(block[255], 0.0199f, 0.0201f);
-        Assert.InRange(block[^1], 0.0199f, 0.0201f);
+        Assert.InRange(block[255], 0.0140f, 0.0142f);
+        Assert.InRange(block[^1], 0.0140f, 0.0142f);
 
         Array.Fill(block, 0.01f);
         DspPipelineService.ApplyRxAudioLeveler(block, ref state);
 
-        Assert.Equal(12.0, state.GainDb, precision: 6);
+        Assert.Equal(6.0, state.GainDb, precision: 6);
         Assert.True(state.BoostSlewLimited);
-        Assert.InRange(block[0], 0.0199f, 0.0201f);
-        Assert.InRange(block[255], 0.0397f, 0.0399f);
-        Assert.InRange(block[^1], 0.0397f, 0.0399f);
+        Assert.InRange(block[0], 0.0140f, 0.0143f);
+        Assert.InRange(block[255], 0.0198f, 0.0201f);
+        Assert.InRange(block[^1], 0.0198f, 0.0201f);
     }
 
     [Fact]
-    public void ApplyRxAudioLeveler_KeepsDeepFloorBoostConservative()
+    public void ApplyRxAudioLeveler_LeavesDeepFloorBelowGateUnprocessed()
     {
+        // #733: the leveler gate was raised -72 -> -50 dBFS. A -60 dBFS deep-floor
+        // signal now sits *below* the gate, so it passes through unprocessed as
+        // clean static rather than getting a conservative boost. This is the whole
+        // point of the softening: don't lift near-noise-floor audio at all.
         var state = new DspPipelineService.RxAudioLevelerState();
         float[] block = new float[1024];
 
         Array.Fill(block, 0.001f);
         DspPipelineService.ApplyRxAudioLeveler(block, ref state);
 
-        Assert.Equal(3.5, state.GainDb, precision: 6);
-        Assert.True(state.BoostSlewLimited);
-        Assert.Equal(3.5, state.GainDeltaDb, precision: 6);
+        Assert.Equal(0.0, state.GainDb, precision: 6);
+        Assert.False(state.BoostSlewLimited);
+        Assert.Equal(0.0, state.GainDeltaDb, precision: 6);
         Assert.InRange(state.InputRmsDbfs, -60.1, -59.9);
-        Assert.InRange(block[^1], 0.00149f, 0.00151f);
+        Assert.InRange(block[^1], 0.00099f, 0.00101f);
         Assert.False(state.OutputLimited);
     }
 
@@ -531,7 +541,8 @@ public sealed class DspPipelineAudioSanitizerTests
         }
 
         double heldGainDb = state.GainDb;
-        Assert.True(heldGainDb > 20.0);
+        // #733: weak audio now banks the +10 dB boost cap (was >20 dB pre-#733).
+        Assert.Equal(10.0, heldGainDb, precision: 6);
         Assert.True(state.PauseHoldBlocks > 0);
 
         Array.Fill(block, 0.00001f);
@@ -548,7 +559,7 @@ public sealed class DspPipelineAudioSanitizerTests
 
         Assert.False(state.BoostSlewLimited);
         Assert.Equal(heldGainDb, state.AppliedGainDb, precision: 6);
-        Assert.InRange(Rms(block), 0.10f, 0.15f);
+        Assert.InRange(Rms(block), 0.031f, 0.032f);
     }
 
     [Fact]
@@ -564,7 +575,7 @@ public sealed class DspPipelineAudioSanitizerTests
         }
 
         double heldGainDb = state.GainDb;
-        Assert.True(heldGainDb > 20.0);
+        Assert.Equal(10.0, heldGainDb, precision: 6); // #733: capped at +10 dB boost.
 
         for (int i = 0; i < 14; i++)
         {
@@ -582,7 +593,7 @@ public sealed class DspPipelineAudioSanitizerTests
 
         Assert.False(state.BoostSlewLimited);
         Assert.Equal(heldGainDb, state.AppliedGainDb, precision: 6);
-        Assert.InRange(Rms(block), 0.10f, 0.15f);
+        Assert.InRange(Rms(block), 0.031f, 0.032f);
     }
 
     [Fact]
@@ -598,7 +609,7 @@ public sealed class DspPipelineAudioSanitizerTests
         }
 
         double heldGainDb = state.GainDb;
-        Assert.True(heldGainDb > 20.0);
+        Assert.Equal(10.0, heldGainDb, precision: 6); // #733: capped at +10 dB boost.
 
         for (int i = 0; i < 20; i++)
         {
@@ -613,17 +624,23 @@ public sealed class DspPipelineAudioSanitizerTests
         Assert.InRange(decayedGainDb, heldGainDb - 9.1, heldGainDb - 8.9);
         Assert.Equal(0, state.PauseHoldBlocks);
 
+        // #733: the gate moved to -50 dBFS, so the crest signal must sit above it
+        // for crest-catchup to engage (the pre-#733 -59 dBFS input is now floor).
+        // Peaks at -30 dBFS / RMS ~-39 dBFS keep the high-crest "weak speech"
+        // shape inside the crest-catchup band (RMS <= -28, peak >= -52, crest >= 8).
         for (int i = 0; i < block.Length; i++)
-            block[i] = i % 16 == 0 ? 0.0032f : 0.0008f;
+            block[i] = i % 16 == 0 ? 0.032f : 0.008f;
 
         DspPipelineService.ApplyRxAudioLeveler(block, ref state);
 
+        // Crest-catchup slew is now 3.0 dB/block (was 7.5), so the banked gain
+        // steps back up by 3 dB on the first crest block after the gap.
         Assert.True(state.BoostSlewLimited);
-        Assert.Equal(decayedGainDb + 7.5, state.AppliedGainDb, precision: 6);
-        Assert.Equal(7.5, state.GainDeltaDb, precision: 6);
-        Assert.InRange(state.InputRmsDbfs, -59.5, -58.5);
-        Assert.InRange(state.InputPeakDbfs, -50.1, -49.8);
-        Assert.InRange(Rms(block), 0.0105f, 0.0145f);
+        Assert.Equal(decayedGainDb + 3.0, state.AppliedGainDb, precision: 6);
+        Assert.Equal(3.0, state.GainDeltaDb, precision: 6);
+        Assert.InRange(state.InputRmsDbfs, -39.5, -38.5);
+        Assert.InRange(state.InputPeakDbfs, -30.1, -29.7);
+        Assert.InRange(Rms(block), 0.0168f, 0.0172f);
     }
 
     [Fact]
@@ -662,7 +679,7 @@ public sealed class DspPipelineAudioSanitizerTests
             DspPipelineService.ApplyRxAudioLeveler(block, ref state);
         }
 
-        Assert.True(state.GainDb > 20.0);
+        Assert.Equal(10.0, state.GainDb, precision: 6); // #733: capped at +10 dB boost.
 
         Array.Fill(block, 0.9f);
         DspPipelineService.ApplyRxAudioLeveler(block, ref state);
@@ -690,7 +707,7 @@ public sealed class DspPipelineAudioSanitizerTests
             DspPipelineService.ApplyRxAudioLeveler(block, ref state);
         }
 
-        Assert.True(state.GainDb > 20.0);
+        Assert.Equal(10.0, state.GainDb, precision: 6); // #733: capped at +10 dB boost.
 
         Array.Fill(block, 0.45f);
         DspPipelineService.ApplyRxAudioLeveler(block, ref state);

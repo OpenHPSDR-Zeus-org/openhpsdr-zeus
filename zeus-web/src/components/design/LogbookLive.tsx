@@ -64,10 +64,15 @@ function logMeta(entry: LogEntry): string {
   ]) || '—';
 }
 
+function formatFrequencyMhz(freq: number | null | undefined): string | null {
+  return typeof freq === 'number' && Number.isFinite(freq) ? freq.toFixed(3) : null;
+}
+
 function logRowTitle(entry: LogEntry): string {
+  const frequency = formatFrequencyMhz(entry.frequencyMhz);
   return compactList([
     `${entry.callsign} ${formatQsoDateUtc(entry.qsoDateTimeUtc)} ${formatQsoTimeUtc(entry.qsoDateTimeUtc)}Z`,
-    `${entry.frequencyMhz.toFixed(3)} MHz`,
+    frequency ? `${frequency} MHz` : null,
     entry.band,
     entry.mode,
     `RST ${entry.rstSent}/${entry.rstRcvd}`,
@@ -87,6 +92,9 @@ export function LogbookLive({ searchText, hideQrzPublished }: LogbookLiveProps) 
   const entries = useLoggerStore((s) => s.entries);
   const totalCount = useLoggerStore((s) => s.totalCount);
   const loading = useLoggerStore((s) => s.loading);
+  const lastImportResult = useLoggerStore((s) => s.lastImportResult);
+  const importError = useLoggerStore((s) => s.importError);
+  const clearImportResult = useLoggerStore((s) => s.clearImportResult);
   const lastPublishResult = useLoggerStore((s) => s.lastPublishResult);
   const publishError = useLoggerStore((s) => s.publishError);
   const clearPublishResult = useLoggerStore((s) => s.clearPublishResult);
@@ -109,14 +117,15 @@ export function LogbookLive({ searchText, hideQrzPublished }: LogbookLiveProps) 
   const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
 
   useEffect(() => {
-    // Self-clear publish feedback (shown in the Logbook header) after a few seconds.
-    if (lastPublishResult || publishError) {
+    // Self-clear import/publish feedback (shown in the Logbook header) after a few seconds.
+    if (lastImportResult || importError || lastPublishResult || publishError) {
       const timer = setTimeout(() => {
+        clearImportResult();
         clearPublishResult();
       }, 4000);
       return () => clearTimeout(timer);
     }
-  }, [lastPublishResult, publishError, clearPublishResult]);
+  }, [lastImportResult, importError, lastPublishResult, publishError, clearImportResult, clearPublishResult]);
 
   useEffect(() => {
     if (selectAllRef.current) {
@@ -205,7 +214,7 @@ export function LogbookLive({ searchText, hideQrzPublished }: LogbookLiveProps) 
             </span>
             <span className="t-call">{entry.callsign}</span>
             <span className="t-freq log-cell-stack">
-              <span>{entry.frequencyMhz.toFixed(3)}</span>
+              <span>{formatFrequencyMhz(entry.frequencyMhz) ?? '—'}</span>
               <span className="log-sub">{entry.band || '—'}</span>
             </span>
             <span className="t-mode">{entry.mode}</span>

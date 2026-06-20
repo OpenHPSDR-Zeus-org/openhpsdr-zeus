@@ -10,6 +10,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { SettingsView } from './SettingsMenu';
 import { useCapabilitiesStore } from '../state/capabilities-store';
 import { useRadioStore } from '../state/radio-store';
+import { useEasterEggStore } from '../state/easter-egg-store';
 import {
   UNKNOWN_BOARD_CAPABILITIES,
   type BoardCapabilities,
@@ -271,5 +272,66 @@ describe('SettingsView — RADIO tab gating', () => {
     expect(container.textContent).toContain('ANAN-G2 Options');
     expect(container.textContent).toContain('Dither Enabled');
     expect(container.textContent).toContain('Random Enabled');
+  });
+});
+
+describe('SettingsView — hidden HARDWARE folder (easter egg)', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+
+  beforeEach(() => {
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    seed();
+    stubSettingsFetch();
+    // Default locked state — a fresh session never lists HARDWARE.
+    useEasterEggStore.setState({ hardwareUnlocked: false });
+  });
+
+  afterEach(() => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+    vi.unstubAllGlobals();
+    useEasterEggStore.setState({ hardwareUnlocked: false });
+  });
+
+  it('hides the HARDWARE tab by default', async () => {
+    await act(async () => {
+      root.render(<SettingsView onClose={() => {}} />);
+      await flushEffects();
+    });
+    const tabs = Array.from(
+      container.querySelectorAll('[role="tablist"] button'),
+    ).map((b) => b.textContent?.trim() ?? '');
+    expect(tabs).not.toContain('HARDWARE');
+  });
+
+  it('bounces back to PA when opened on the locked HARDWARE tab', async () => {
+    await act(async () => {
+      root.render(<SettingsView onClose={() => {}} initialTab="hardware" />);
+      await flushEffects();
+    });
+    const tabs = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[role="tablist"] button'),
+    );
+    expect(tabs.map((b) => b.textContent?.trim() ?? '')).not.toContain('HARDWARE');
+    // PA is the fallback and becomes the active tab.
+    const pa = tabs.find((b) => b.textContent?.trim() === 'PA SETTINGS');
+    expect(pa?.getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('shows the HARDWARE tab once unlocked', async () => {
+    useEasterEggStore.setState({ hardwareUnlocked: true });
+    await act(async () => {
+      root.render(<SettingsView onClose={() => {}} />);
+      await flushEffects();
+    });
+    const tabs = Array.from(
+      container.querySelectorAll('[role="tablist"] button'),
+    ).map((b) => b.textContent?.trim() ?? '');
+    expect(tabs).toContain('HARDWARE');
   });
 });

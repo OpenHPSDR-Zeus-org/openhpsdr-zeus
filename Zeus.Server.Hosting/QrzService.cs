@@ -477,7 +477,8 @@ public sealed class QrzService
         // award credit and DXCC matching for anyone outside UTC.
         AppendAdifField(sb, "QSO_DATE", entry.QsoDateTimeUtc.ToUniversalTime().ToString("yyyyMMdd"));
         AppendAdifField(sb, "TIME_ON", entry.QsoDateTimeUtc.ToUniversalTime().ToString("HHmmss"));
-        AppendAdifField(sb, "FREQ", entry.FrequencyMhz.ToString("F6", System.Globalization.CultureInfo.InvariantCulture));
+        if (entry.FrequencyMhz.HasValue)
+            AppendAdifField(sb, "FREQ", entry.FrequencyMhz.Value.ToString("F6", System.Globalization.CultureInfo.InvariantCulture));
         AppendAdifField(sb, "BAND", entry.Band);
         AppendAdifField(sb, "MODE", entry.Mode);
         AppendAdifField(sb, "RST_SENT", entry.RstSent);

@@ -170,16 +170,22 @@ public class DspPipelineService : BackgroundService,
     private AdaptiveSquelchState _adaptiveSquelch = new();
 
     private const double RxLevelerTargetRmsDb = -18.0;
-    private const double RxLevelerGateRmsDb = -72.0;
-    private const double RxLevelerMaxBoostDb = 36.0;
+    // Softened (issue #733): raise the gate so near-noise-floor signals pass
+    // through unprocessed (clean static), and cap the boost so the leveler
+    // gently lifts weak audio instead of pumping it ~36 dB toward target — the
+    // big boost + fast slews were the "crackle on anything above the noise
+    // floor" zipper. The CUT/peak-guard safety below is unchanged, so loud
+    // signals are still caught.
+    private const double RxLevelerGateRmsDb = -50.0;
+    private const double RxLevelerMaxBoostDb = 10.0;
     private const double RxLevelerMaxCutDb = -24.0;
     private const double RxLevelerBoostSlewDbPerBlock = 2.0;
-    private const double RxLevelerFastBoostSlewDbPerBlock = 3.5;
+    private const double RxLevelerFastBoostSlewDbPerBlock = 2.5;
     private const double RxLevelerFastBoostHeadroomDb = 6.0;
-    private const double RxLevelerVeryFastBoostSlewDbPerBlock = 6.0;
+    private const double RxLevelerVeryFastBoostSlewDbPerBlock = 3.0;
     private const double RxLevelerVeryFastBoostHeadroomDb = 10.0;
     private const double RxLevelerVeryFastBoostGateRmsDb = -45.0;
-    private const double RxLevelerCrestCatchupBoostSlewDbPerBlock = 7.5;
+    private const double RxLevelerCrestCatchupBoostSlewDbPerBlock = 3.0;
     private const double RxLevelerCrestCatchupHeadroomDb = 16.0;
     private const double RxLevelerCrestCatchupMinCrestDb = 8.0;
     private const double RxLevelerCrestCatchupMaxRmsDb = -28.0;

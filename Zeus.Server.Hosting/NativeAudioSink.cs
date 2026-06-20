@@ -69,10 +69,14 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     // jitter.
     private const int RingCapacity = 65_536;
 
-    // Hold roughly 20 ms before starting or resuming playback. Without this
-    // small cushion, the OS callback can run the ring to a handful of samples
-    // and splice that partial tail into silence, which presents as RX crackle.
-    private const int PlaybackPrebufferSamples = 960;
+    // Hold roughly 60 ms before starting or resuming playback. This is also the
+    // steady-state ring depth — after each (re)buffer the ring refills to this
+    // level — so a larger cushion gives more tolerance to DSP-tick jitter (CPU
+    // load, GC pauses, scheduler latency) before the ring drains and the OS
+    // callback splices a silence tail into the audio, which presents as RX
+    // crackle. 60 ms absorbs several DSP blocks of jitter for imperceptible
+    // added RX latency. (Was 20 ms / 960, which underran under load — issue #733.)
+    private const int PlaybackPrebufferSamples = 2880;
 
     // ~250 ms @ 48 kHz mono = 12000 samples ≈ 48 KB. Power of two for the
     // mask wrap. The preview path is sourced from mic capture (one block
@@ -129,6 +133,30 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     public string? ConfiguredOutputDeviceId => _deviceSettings?.Get().OutputDeviceId;
     public string? ActiveOutputDeviceId => _activeOutputDeviceId;
 
+    /// <summary>Snapshot of native-output health: cumulative underrun/overrun
+    /// sample counts (the RX crackle, issue #733), rebuffer events, and the
+    /// live ring depth vs the prebuffer cushion. Relaxed reads — safe from any
+    /// thread, exact-enough for telemetry.</summary>
+    public Diagnostics GetDiagnostics() => new(
+        UnderrunSamplesTotal: Interlocked.Read(ref _underrunSamplesTotal),
+        OverrunSamplesTotal: Interlocked.Read(ref _overrunSamplesTotal),
+        RebufferEvents: Interlocked.Read(ref _rebufferEvents),
+        RingDepthSamples: _ring.Count,
+        RingCapacitySamples: RingCapacity,
+        PrebufferSamples: PlaybackPrebufferSamples,
+        SampleRateHz: FrameRateHz,
+        Rebuffering: _rebuffering);
+
+    public readonly record struct Diagnostics(
+        long UnderrunSamplesTotal,
+        long OverrunSamplesTotal,
+        long RebufferEvents,
+        int RingDepthSamples,
+        int RingCapacitySamples,
+        int PrebufferSamples,
+        int SampleRateHz,
+        bool Rebuffering);
+
     public void SetMuted(bool muted)
     {
         _muted = muted;
@@ -170,6 +198,12 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
     private long _overrunSamples;
     private long _totalSamplesIn;
     private long _totalSamplesOut;
+    // Cumulative (never reset by the 5 s log) — surfaced via GetDiagnostics()
+    // so output-buffer underruns (the RX crackle, issue #733) are measurable
+    // from /api/audio/native rather than only by log-diving.
+    private long _underrunSamplesTotal;
+    private long _overrunSamplesTotal;
+    private long _rebufferEvents;
     private DateTime _lastLogUtc = DateTime.UtcNow;
 
     public NativeAudioSink(
@@ -364,7 +398,9 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         int written = _ring.Write(src);
         if (written < src.Length)
         {
-            Interlocked.Add(ref _overrunSamples, src.Length - written);
+            int dropped = src.Length - written;
+            Interlocked.Add(ref _overrunSamples, dropped);
+            Interlocked.Add(ref _overrunSamplesTotal, dropped);
         }
         Interlocked.Add(ref _totalSamplesIn, src.Length);
 
@@ -402,12 +438,14 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
         {
             _rebuffering = true;
             rxSilence = true;
+            Interlocked.Increment(ref _rebufferEvents);
         }
 
         if (rxSilence)
         {
             mono.Clear();
             Interlocked.Add(ref _underrunSamples, totalFrames);
+            Interlocked.Add(ref _underrunSamplesTotal, totalFrames);
         }
         else
         {
@@ -418,7 +456,9 @@ internal sealed class NativeAudioSink : IRxAudioSink, IPreviewAudioSink, IHosted
                 // ring between Count and Read.
                 mono[read..].Clear();
                 _rebuffering = true;
-                Interlocked.Add(ref _underrunSamples, totalFrames - read);
+                int shortfall = totalFrames - read;
+                Interlocked.Add(ref _underrunSamples, shortfall);
+                Interlocked.Add(ref _underrunSamplesTotal, shortfall);
             }
         }
 

@@ -144,4 +144,38 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
 
         Assert.Equal(-1.5, radio.Snapshot().AgcOffsetDb);
     }
+
+    // ── issue #733: AGC-T slider must be authoritative ────────────────────────
+    [Fact]
+    public void SetAgcTop_TakesManualControl_DisablesAutoAndZeroesOffset()
+    {
+        using var radio = NewRadio();
+        radio.SetAgcTop(45.0); // low baseline leaves the loop headroom to raise gain
+        radio.SetAutoAgc(true);
+        // Drive the auto-AGC loop to a non-zero positive offset (a weak -100 dBm
+        // signal makes the loop raise gain — same scenario as the step-raise test).
+        for (int i = 0; i < 13; i++)
+            radio.HandleRxMeterForAutoAgc(-100.0, i * 500);
+        Assert.True(radio.Snapshot().AgcOffsetDb > 0.0,
+            "precondition: auto-AGC accrued a positive offset");
+
+        var snap = radio.SetAgcTop(55.0);
+
+        // Grabbing the slider takes manual control: slider authoritative, offset
+        // cleared, auto disabled — so EFFECTIVE AGC-T (= AgcTopDb + AgcOffsetDb,
+        // the value pushed to WDSP) equals the slider exactly: no offset stacking
+        // (the "blast on adjust") and no loop re-target ("sits too low/high").
+        Assert.Equal(55.0, snap.AgcTopDb);
+        Assert.Equal(0.0, snap.AgcOffsetDb);
+        Assert.False(snap.AutoAgcEnabled);
+        Assert.Equal(55.0, snap.AgcTopDb + snap.AgcOffsetDb);
+    }
+
+    [Fact]
+    public void SetAgcTop_ClampsBaselineToRange()
+    {
+        using var radio = NewRadio();
+        Assert.Equal(120.0, radio.SetAgcTop(200.0).AgcTopDb);
+        Assert.Equal(-20.0, radio.SetAgcTop(-50.0).AgcTopDb);
+    }
 }

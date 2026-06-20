@@ -23,13 +23,16 @@ export function isQrzPublished(entry: LogEntry): boolean {
 }
 
 export function logEntrySearchText(entry: LogEntry): string {
+  const frequencyFixed = typeof entry.frequencyMhz === 'number' && Number.isFinite(entry.frequencyMhz)
+    ? entry.frequencyMhz.toFixed(3)
+    : null;
   return compactSearchParts([
     entry.callsign,
     formatQsoDateUtc(entry.qsoDateTimeUtc),
     formatQsoTimeUtc(entry.qsoDateTimeUtc),
     entry.qsoDateTimeUtc,
-    entry.frequencyMhz.toFixed(3),
-    entry.frequencyMhz.toString(),
+    frequencyFixed,
+    entry.frequencyMhz,
     entry.band,
     entry.mode,
     entry.rstSent,
