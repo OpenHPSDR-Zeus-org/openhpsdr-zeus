@@ -295,6 +295,10 @@ export type RadioStateDto = {
   txFilterHighHz: number;
   sampleRate: number;
   agcTopDb: number;
+  // AGC threshold ("knee") in dBm. Null = operator hasn't set it; the WDSP
+  // per-mode default is in effect. Independent of agcTopDb max-gain and of
+  // auto-AGC — the knee is the absolute signal level above which AGC engages.
+  agcThresholdDbm: number | null;
   // AGC mode + custom/fixed params (separate from agcTopDb max-gain).
   agc: AgcConfigDto;
   // RX squelch (mode-aware single control).
@@ -2312,6 +2316,10 @@ export function normalizeState(raw: unknown): RadioStateDto {
     // Default 80 matches WdspDspEngine.ApplyAgcDefaults and the Thetis
     // AGC_MEDIUM preset. Missing from older servers — tolerate absence.
     agcTopDb: typeof r.agcTopDb === 'number' ? r.agcTopDb : 80,
+    // AGC threshold (knee). Null when the operator hasn't set it (server sends
+    // null) or when an older server omits the field entirely — both mean
+    // "WDSP mode default in effect", so the UI shows the unset readout.
+    agcThresholdDbm: typeof r.agcThresholdDbm === 'number' ? r.agcThresholdDbm : null,
     // StateDto.Agc is nullable on the server (older clients) — fall back to the
     // Med default so the UI always has a mode to render.
     agc: normalizeAgc(r.agc),
@@ -5687,6 +5695,32 @@ export function setAgcTop(
       body: JSON.stringify({ topDb }),
       signal,
     },
+    normalizeState,
+  );
+}
+
+export function setAgcThreshold(
+  thresholdDbm: number,
+  signal?: AbortSignal,
+): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/agc/threshold',
+    {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thresholdDbm }),
+      signal,
+    },
+    normalizeState,
+  );
+}
+
+// Disengage the AGC knee → server clears the override (agcThresholdDbm = null)
+// and restores WDSP's per-mode default threshold.
+export function disengageAgcThreshold(signal?: AbortSignal): Promise<RadioStateDto> {
+  return jsonFetch(
+    '/api/agc/threshold/disengage',
+    { method: 'POST', signal },
     normalizeState,
   );
 }

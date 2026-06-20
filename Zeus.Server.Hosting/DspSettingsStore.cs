@@ -149,6 +149,53 @@ public sealed class DspSettingsStore : IDisposable
         }
     }
 
+    // AGC threshold ("knee") in operator/displayed dBm (#741). Null = operator
+    // has never set the knee, so RadioService leaves WDSP's per-mode default
+    // threshold in effect. Mirrors the AgcTopDb persistence pattern above.
+    public double? GetAgcThresholdDbm(string profileId = "default")
+    {
+        var e = _entries.FindOne(x => x.ProfileId == profileId);
+        return e?.AgcThresholdDbm;
+    }
+
+    public void SetAgcThresholdDbm(double dbm, string profileId = "default")
+    {
+        var existing = _entries.FindOne(x => x.ProfileId == profileId);
+        if (existing is null)
+        {
+            var nrSeed = new NrConfig();
+            _entries.Insert(new DspSettingsEntry
+            {
+                ProfileId = profileId,
+                NrMode = nrSeed.NrMode,
+                AnfEnabled = nrSeed.AnfEnabled,
+                SnbEnabled = nrSeed.SnbEnabled,
+                NbpNotchesEnabled = nrSeed.NbpNotchesEnabled,
+                NbMode = nrSeed.NbMode,
+                NbThreshold = nrSeed.NbThreshold,
+                AgcThresholdDbm = dbm,
+                UpdatedUtc = DateTime.UtcNow,
+            });
+        }
+        else
+        {
+            existing.AgcThresholdDbm = dbm;
+            existing.UpdatedUtc = DateTime.UtcNow;
+            _entries.Update(existing);
+        }
+    }
+
+    // Clear the persisted AGC knee (disengage → null) so a fresh connect leaves
+    // WDSP's per-mode default in effect. No-op when no row exists yet (#741).
+    public void ClearAgcThresholdDbm(string profileId = "default")
+    {
+        var existing = _entries.FindOne(x => x.ProfileId == profileId);
+        if (existing is null) return;
+        existing.AgcThresholdDbm = null;
+        existing.UpdatedUtc = DateTime.UtcNow;
+        _entries.Update(existing);
+    }
+
     // AGC mode + custom params (issue: DSP controls Thetis parity §4). Persisted
     // as nullable scalars on the existing DspSettingsEntry — null AgcMode means
     // "never written" so RadioService falls back to the Med default on first run.
@@ -536,6 +583,9 @@ public sealed class DspSettingsEntry
     // AGC top (max gain) in dB. Null on legacy rows (pre-AGC-persist) so
     // RadioService can fall back to the baseline default for first-run.
     public double? AgcTopDb { get; set; }
+    // AGC threshold ("knee") in operator/displayed dBm (#741). Null = never set
+    // → WDSP's per-mode default threshold stays in effect.
+    public double? AgcThresholdDbm { get; set; }
     // AGC mode + custom params (issue: DSP controls Thetis parity §4). AgcMode
     // null on legacy rows → GetAgc() returns null → RadioService uses the Med
     // default. Custom/fixed params null = "use the canned preset".

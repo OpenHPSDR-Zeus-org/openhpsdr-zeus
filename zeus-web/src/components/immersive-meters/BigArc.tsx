@@ -509,8 +509,8 @@ export function BigArc(props: BigArcProps) {
           fill="var(--immersive-lamp-needle)"
           style={{ filter: 'drop-shadow(0 0 5px var(--immersive-lamp-hub-glow))' }}
         />
-        {/* Liquid-metal glass over the arc face — wet specular + sheen. */}
-        <GlassDome defsId="bigArcGlass" x={0} y={0} width={240} height={150} caustic={false} />
+        {/* Liquid-metal glass over the arc face — static specular. */}
+        <GlassDome defsId="bigArcGlass" x={0} y={0} width={240} height={150} />
       </svg>
 
       <div style={readoutStyle}>

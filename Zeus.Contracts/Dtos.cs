@@ -899,6 +899,14 @@ public sealed record StateDto(
     // adjusts AgcOffsetDb, which is added to the user baseline AgcTopDb.
     bool AutoAgcEnabled = false,
     double AgcOffsetDb = 0.0,
+    // AGC threshold ("knee") in operator/displayed dBm — the signal-relative
+    // level below which the AGC applies increasing gain (up to the AgcTopDb
+    // cap). This is the smooth, signal-relative control Thetis exposes via the
+    // panadapter knee line (WDSP SetRXAAGCThresh). NULL = operator has not set
+    // the knee, so WDSP's per-mode default threshold is left in effect (no
+    // behavioural change vs. pre-#741). When set, the server converts displayed
+    // dBm → WDSP scale with the per-board RX meter offset before pushing it.
+    double? AgcThresholdDbm = null,
 
     // ---- PureSignal predistortion (TXA-side; WDSP calcc/iqc stages) ----
     // PsEnabled is the master arm bit. Persisted server-side as a standing
@@ -1290,6 +1298,8 @@ public sealed record SampleRateSetRequest(int Rate);
 public sealed record PreampSetRequest(bool On);
 
 public sealed record AgcGainSetRequest(double TopDb);
+
+public sealed record AgcThresholdSetRequest(double ThresholdDbm);
 
 public sealed record RxAfGainSetRequest(double Db);
 

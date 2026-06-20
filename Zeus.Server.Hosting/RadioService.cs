@@ -417,6 +417,10 @@ public sealed class RadioService : IDisposable
             LevelerMaxGainDb: overlayLevelerMaxGain ?? Math.Clamp(rsSnap?.LevelerMaxGainDb ?? 8.0, 0.0, 20.0),
             AutoAgcEnabled: rsSnap?.AutoAgcEnabled ?? false,
             AgcOffsetDb: 0.0,       // always reset — control-loop accumulator
+            // Persisted AGC knee, or null when the operator has never set it
+            // (WDSP's per-mode default threshold stays in effect — no change
+            // vs. pre-#741). Pushed to WDSP from DspPipelineService when non-null.
+            AgcThresholdDbm: _dspSettingsStore.GetAgcThresholdDbm(),
             // PS persisted fields (or DTO defaults when not persisted yet).
             PsEnabled: false, // master arm is never persisted — operator must re-arm each session
             PsAuto: ps?.Auto ?? true,
@@ -2244,6 +2248,33 @@ public sealed class RadioService : IDisposable
         });
         // Persist only the user-baseline (AgcTopDb); the offset is live-recomputed.
         _dspSettingsStore.SetAgcTopDb(clamped);
+        return Snapshot();
+    }
+
+    // AGC threshold ("knee") in operator/displayed dBm. This is the smooth,
+    // signal-relative AGC control (Thetis panadapter knee → WDSP SetRXAAGCThresh)
+    // — distinct from the AgcTopDb max-gain cap. Clamp matches Thetis's
+    // SetRXAAGCThresh range ([-160, 2] dBm). The displayed-dBm → WDSP-scale
+    // conversion (per-board RX meter offset) happens at the engine push in
+    // DspPipelineService, where that offset is already computed for meters.
+    // Setting the knee does NOT disturb Auto-AGC (which acts on the top), so —
+    // unlike SetAgcTop — we leave AutoAgcEnabled/AgcOffsetDb alone.
+    public StateDto SetAgcThreshold(double dbm)
+    {
+        double clamped = Math.Clamp(dbm, -160.0, 2.0);
+        Mutate(s => s with { AgcThresholdDbm = clamped });
+        _dspSettingsStore.SetAgcThresholdDbm(clamped);
+        return Snapshot();
+    }
+
+    // Disengage the AGC knee: clear the operator override (→ null) and persist
+    // the cleared state. The DSP pipeline sees AgcThresholdDbm go null and
+    // restores WDSP's captured per-mode default threshold, so AGC returns to its
+    // default behaviour (#741).
+    public StateDto DisengageAgcThreshold()
+    {
+        Mutate(s => s with { AgcThresholdDbm = null });
+        _dspSettingsStore.ClearAgcThresholdDbm();
         return Snapshot();
     }
 

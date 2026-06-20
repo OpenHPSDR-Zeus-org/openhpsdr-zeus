@@ -349,8 +349,7 @@ export function SMeter(props: SMeterProps) {
               boxShadow: '0 0 6px rgba(255,176,60,0.9)',
             }}
           />
-          {/* Liquid-metal glass cover — domed upper-left specular + a slow
-              drifting sheen band gliding across the wet glass. */}
+          {/* Liquid-metal glass cover — static domed upper-left specular. */}
           <div
             aria-hidden
             className="absolute inset-0 overflow-hidden"
@@ -359,17 +358,7 @@ export function SMeter(props: SMeterProps) {
               background:
                 'radial-gradient(64% 130% at 32% 16%, var(--meter-glass-dome) 0%, var(--meter-glass-top) 46%, var(--meter-glass-bot) 100%)',
             }}
-          >
-            <div
-              className="lm-sheen absolute inset-y-0"
-              style={{
-                left: 0,
-                width: '16%',
-                background:
-                  'linear-gradient(100deg, transparent 0%, var(--meter-sheen) 50%, transparent 100%)',
-              }}
-            />
-          </div>
+          />
         </div>
 
         {/* Tick scale — marks always draw; labels thin out responsively. */}

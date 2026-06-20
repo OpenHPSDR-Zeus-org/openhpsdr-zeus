@@ -178,4 +178,75 @@ public sealed class RadioServiceAutoAgcTests : IDisposable
         Assert.Equal(120.0, radio.SetAgcTop(200.0).AgcTopDb);
         Assert.Equal(-20.0, radio.SetAgcTop(-50.0).AgcTopDb);
     }
+
+    // ── issue #741: AGC threshold ("knee") control ────────────────────────────
+    [Fact]
+    public void FreshRadio_HasNoAgcThreshold_UntilOperatorSetsIt()
+    {
+        using var radio = NewRadio();
+        // Null = WDSP's per-mode default threshold stays in effect (no change
+        // vs. pre-#741); the knee is strictly opt-in.
+        Assert.Null(radio.Snapshot().AgcThresholdDbm);
+    }
+
+    [Fact]
+    public void SetAgcThreshold_ClampsToThetisRange()
+    {
+        using var radio = NewRadio();
+        Assert.Equal(2.0, radio.SetAgcThreshold(50.0).AgcThresholdDbm);
+        Assert.Equal(-160.0, radio.SetAgcThreshold(-500.0).AgcThresholdDbm);
+        Assert.Equal(-95.0, radio.SetAgcThreshold(-95.0).AgcThresholdDbm);
+    }
+
+    [Fact]
+    public void SetAgcThreshold_PersistsAcrossRadioInstances()
+    {
+        using (var radio = NewRadio())
+            radio.SetAgcThreshold(-100.0);
+
+        // A fresh RadioService on the SAME prefs DB hydrates the persisted knee.
+        using var reopened = NewRadio();
+        Assert.Equal(-100.0, reopened.Snapshot().AgcThresholdDbm);
+    }
+
+    [Fact]
+    public void SetAgcThreshold_DoesNotDisturbAutoAgc()
+    {
+        using var radio = NewRadio();
+        radio.SetAutoAgc(true);
+
+        var snap = radio.SetAgcThreshold(-90.0);
+
+        // The knee is independent of the max-gain auto-AGC loop — setting it must
+        // NOT disable auto-AGC or zero the offset (contrast SetAgcTop, which does).
+        Assert.True(snap.AutoAgcEnabled);
+        Assert.Equal(-90.0, snap.AgcThresholdDbm);
+    }
+
+    [Fact]
+    public void DisengageAgcThreshold_ClearsKneeToNull()
+    {
+        using var radio = NewRadio();
+        radio.SetAgcThreshold(-95.0);
+        Assert.Equal(-95.0, radio.Snapshot().AgcThresholdDbm);
+
+        var snap = radio.DisengageAgcThreshold();
+
+        // Disengage returns to null so the DSP pipeline restores WDSP's default.
+        Assert.Null(snap.AgcThresholdDbm);
+    }
+
+    [Fact]
+    public void DisengageAgcThreshold_PersistsClear_AcrossRadioInstances()
+    {
+        using (var radio = NewRadio())
+        {
+            radio.SetAgcThreshold(-95.0);
+            radio.DisengageAgcThreshold();
+        }
+
+        // A fresh RadioService on the same prefs DB must NOT re-engage the knee.
+        using var reopened = NewRadio();
+        Assert.Null(reopened.Snapshot().AgcThresholdDbm);
+    }
 }

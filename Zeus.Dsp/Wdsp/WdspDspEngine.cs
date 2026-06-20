@@ -702,6 +702,33 @@ public sealed class WdspDspEngine : IDspEngine
         _log.LogInformation("wdsp.setAgcTop channel={Id} topDb={TopDb:F1}", channelId, topDb);
     }
 
+    public void SetAgcThresh(int channelId, double threshDbm)
+    {
+        if (!_channels.TryGetValue(channelId, out var state)) return;
+        // WDSP converts the dBm threshold using the channel's FFT size + sample
+        // rate (RxaInSize matches the analyzer config set in OpenChannel).
+        NativeMethods.SetRXAAGCThresh(channelId, threshDbm, RxaInSize, state.SampleRateHz);
+        _log.LogInformation(
+            "wdsp.setAgcThresh channel={Id} threshDbm={Thresh:F1} size={Size} rate={Rate}",
+            channelId, threshDbm, RxaInSize, state.SampleRateHz);
+    }
+
+    public double GetAgcTop(int channelId)
+    {
+        if (!_channels.TryGetValue(channelId, out _)) return 0.0;
+        double top = 0.0;
+        NativeMethods.GetRXAAGCTop(channelId, ref top);
+        return top;
+    }
+
+    public double GetAgcThresh(int channelId)
+    {
+        if (!_channels.TryGetValue(channelId, out var state)) return 0.0;
+        double thresh = 0.0;
+        NativeMethods.GetRXAAGCThresh(channelId, ref thresh, RxaInSize, state.SampleRateHz);
+        return thresh;
+    }
+
     public void SetAgc(int channelId, AgcConfig cfg)
     {
         ArgumentNullException.ThrowIfNull(cfg);

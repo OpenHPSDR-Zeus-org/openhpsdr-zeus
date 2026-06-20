@@ -19,12 +19,21 @@ import {
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import { viewCenterFor } from '../../state/view-center';
+import {
+  BAND_MEMORY_UPDATED_EVENT,
+  type BandMemoryUpdatedDetail,
+} from '../../util/band-memory';
 import { BANDS, bandOf } from '../design/data';
 import { ToolbarFavorites, type ToolbarOption } from './ToolbarFavorites';
 
 type BandEntry = {
   name: string;
   centerHz: number;
+};
+
+type PendingBandHzSave = {
+  band: string;
+  hz: number;
 };
 
 const HF_BANDS: readonly BandEntry[] = BANDS.slice(0, 10).map((b) => ({
@@ -58,7 +67,7 @@ export function BandFavorites() {
   const [currentBand, setCurrentBand] = useState<string>(() => bandOf(activeVfoHz));
   const memoryRef = useRef<Map<string, BandMemoryEntry>>(new Map());
   const saveTimerRef = useRef<number | null>(null);
-  const pendingSaveRef = useRef<BandMemoryEntry | null>(null);
+  const pendingSaveRef = useRef<PendingBandHzSave | null>(null);
   const lastBandRef = useRef<string>(currentBand);
 
   useEffect(() => {
@@ -75,6 +84,19 @@ export function BandFavorites() {
     return () => ac.abort();
   }, []);
 
+  useEffect(() => {
+    const onBandMemoryUpdated = (event: Event) => {
+      const { detail } = event as CustomEvent<BandMemoryUpdatedDetail>;
+      if (!detail) return;
+      memoryRef.current.set(detail.band, detail);
+    };
+
+    window.addEventListener(BAND_MEMORY_UPDATED_EVENT, onBandMemoryUpdated);
+    return () => {
+      window.removeEventListener(BAND_MEMORY_UPDATED_EVENT, onBandMemoryUpdated);
+    };
+  }, []);
+
   const clearSaveTimer = useCallback(() => {
     if (saveTimerRef.current !== null) {
       window.clearTimeout(saveTimerRef.current);
@@ -88,8 +110,12 @@ export function BandFavorites() {
 
     pendingSaveRef.current = null;
     clearSaveTimer();
-    memoryRef.current.set(pending.band, pending);
-    saveBandMemory(pending.band, pending.hz, pending.mode).catch(() => { /* next tune retries */ });
+    const remembered = memoryRef.current.get(pending.band);
+    if (!remembered) return;
+
+    const next = { ...remembered, hz: pending.hz };
+    memoryRef.current.set(next.band, next);
+    saveBandMemory(next.band, next.hz, next.mode).catch(() => { /* next tune retries */ });
   }, [clearSaveTimer]);
 
   useEffect(() => {
@@ -108,10 +134,10 @@ export function BandFavorites() {
     }
     if (band === '—') return;
 
-    pendingSaveRef.current = { band, hz: activeVfoHz, mode: activeMode };
+    pendingSaveRef.current = { band, hz: activeVfoHz };
     clearSaveTimer();
     saveTimerRef.current = window.setTimeout(flushPendingSave, SAVE_DEBOUNCE_MS);
-  }, [activeVfoHz, activeMode, clearSaveTimer, flushPendingSave]);
+  }, [activeVfoHz, clearSaveTimer, flushPendingSave]);
 
   const onSelect = useCallback(
     (key: string) => {

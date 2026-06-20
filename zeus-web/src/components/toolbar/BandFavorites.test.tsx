@@ -11,9 +11,11 @@ import {
   setVfo,
   setVfoB,
   type RadioStateDto,
+  type RxMode,
 } from '../../api/client';
 import { useConnectionStore } from '../../state/connection-store';
 import { useToolbarFavoritesStore } from '../../state/toolbar-favorites-store';
+import { BAND_MEMORY_UPDATED_EVENT, type BandMemoryUpdatedDetail } from '../../util/band-memory';
 import { BandFavorites } from './BandFavorites';
 
 function currentStateDto(): RadioStateDto {
@@ -50,6 +52,17 @@ function resetStores() {
   });
 }
 
+function dispatchBandMemoryUpdated(
+  band: string,
+  hz: number,
+  mode: RxMode,
+) {
+  window.dispatchEvent(new CustomEvent<BandMemoryUpdatedDetail>(
+    BAND_MEMORY_UPDATED_EVENT,
+    { detail: { band, hz, mode } },
+  ));
+}
+
 describe('BandFavorites', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -83,6 +96,9 @@ describe('BandFavorites', () => {
 
   it('flushes focused receiver mode memory before changing bands', async () => {
     vi.useFakeTimers();
+    vi.mocked(fetchBandMemory).mockResolvedValue([
+      { band: '40m', hz: 7_200_000, mode: 'LSB' },
+    ]);
     const { container, unmount } = render(createElement(BandFavorites));
     await act(async () => {
       await Promise.resolve();
@@ -91,6 +107,7 @@ describe('BandFavorites', () => {
 
     act(() => {
       useConnectionStore.setState({ modeB: 'CWU' });
+      dispatchBandMemoryUpdated('40m', 7_200_000, 'CWU');
     });
     const twentyMeters = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
       .find((button) => button.textContent === '20m');
@@ -131,6 +148,35 @@ describe('BandFavorites', () => {
     expect(setVfo).not.toHaveBeenCalled();
     expect(useConnectionStore.getState().mode).toBe('USB');
     expect(useConnectionStore.getState().modeB).toBe('DIGU');
+
+    unmount();
+  });
+
+  it('does not overwrite focused-receiver band mode from a transient mode snapshot', async () => {
+    vi.useFakeTimers();
+    vi.mocked(fetchBandMemory).mockResolvedValue([
+      { band: '40m', hz: 7_200_000, mode: 'LSB' },
+    ]);
+    const { container, unmount } = render(createElement(BandFavorites));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    vi.clearAllMocks();
+
+    act(() => {
+      useConnectionStore.setState({ modeB: 'CWU' });
+    });
+    const twentyMeters = Array.from(container.querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent === '20m');
+
+    await act(async () => {
+      twentyMeters?.click();
+      await Promise.resolve();
+    });
+
+    expect(twentyMeters).toBeTruthy();
+    expect(saveBandMemory).toHaveBeenCalledWith('40m', 7_200_000, 'LSB');
+    expect(saveBandMemory).not.toHaveBeenCalledWith('40m', 7_200_000, 'CWU');
 
     unmount();
   });

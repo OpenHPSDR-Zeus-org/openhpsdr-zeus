@@ -11,11 +11,11 @@
 //   chrome bezel (gradient-border padding wrapper)
 //     └ recessed well (concave pocket, clipped)
 //         ├ {children}            — the live meter (bars / needle / readout)
-//         └ glass overlay         — domed specular + drifting sheen + caustic
+//         └ glass overlay         — static domed specular highlight
 //
 // Token-only, DISPLAY-ONLY. The glass overlay is pointer-events:none so it
-// never intercepts the meter's own interactions. Drift animations live in
-// layout.css and are paused by prefers-reduced-motion + off-screen.
+// never intercepts the meter's own interactions. (The moving sheen / caustic
+// light sweeps were removed.)
 
 import type { CSSProperties, ReactNode } from 'react';
 
@@ -43,10 +43,8 @@ export interface LiquidMetalFrameProps {
   warmHalo?: boolean;
   /** Outer cool instrument bloom. Default false. */
   glow?: boolean;
-  /** Draw the glass overlay (dome + sheen + caustic). Default true. */
+  /** Draw the glass overlay (static domed specular). Default true. */
   glass?: boolean;
-  /** Draw the moving sheen/caustic. Default true; false = static glass. */
-  animate?: boolean;
   className?: string;
   style?: CSSProperties;
   /** Style applied to the inner well (e.g. min-height, padding). */
@@ -60,7 +58,6 @@ export function LiquidMetalFrame({
   warmHalo = false,
   glow = false,
   glass = true,
-  animate = true,
   className,
   style,
   wellStyle,
@@ -127,34 +124,6 @@ export function LiquidMetalFrame({
                 opacity: 0.45,
               }}
             />
-            {animate && (
-              <>
-                {/* slow traveling caustic — cool wet-light blob */}
-                <div
-                  className="lm-caustic"
-                  style={{
-                    position: 'absolute',
-                    insetBlock: 0,
-                    left: 0,
-                    width: '30%',
-                    background:
-                      'radial-gradient(60% 130% at 50% 40%, var(--meter-caustic) 0%, var(--meter-caustic-soft) 100%)',
-                  }}
-                />
-                {/* drifting sheen band */}
-                <div
-                  className="lm-sheen"
-                  style={{
-                    position: 'absolute',
-                    insetBlock: 0,
-                    left: 0,
-                    width: '16%',
-                    background:
-                      'linear-gradient(100deg, transparent 0%, var(--meter-sheen) 50%, transparent 100%)',
-                  }}
-                />
-              </>
-            )}
           </div>
         )}
       </div>

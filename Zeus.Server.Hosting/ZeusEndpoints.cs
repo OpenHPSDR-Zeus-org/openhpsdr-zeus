@@ -1187,6 +1187,23 @@ public static class ZeusEndpoints
             return r.SetAgcTop(req.TopDb);
         });
 
+        // AGC threshold ("knee", #741) — the smooth signal-relative AGC control,
+        // distinct from the /api/agcGain max-gain cap. Value is operator/displayed
+        // dBm; RadioService clamps to [-160, 2] and the engine push converts to
+        // WDSP's scale with the per-board meter offset.
+        app.MapPost("/api/agc/threshold", (AgcThresholdSetRequest req, RadioService r) =>
+        {
+            log.LogInformation("api.agc.threshold thresholdDbm={Thresh:F1}", req.ThresholdDbm);
+            return r.SetAgcThreshold(req.ThresholdDbm);
+        });
+
+        // Disengage the AGC knee → restore WDSP's per-mode default threshold (#741).
+        app.MapPost("/api/agc/threshold/disengage", (RadioService r) =>
+        {
+            log.LogInformation("api.agc.threshold.disengage");
+            return r.DisengageAgcThreshold();
+        });
+
         app.MapPost("/api/rx/agc", (AgcSetRequest req, RadioService r) =>
         {
             log.LogInformation(

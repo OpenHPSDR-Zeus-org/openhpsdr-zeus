@@ -91,6 +91,9 @@ export type ConnectionState = {
   txFilterHighHz: number;
   sampleRate: number;
   agcTopDb: number;
+  // AGC threshold ("knee") in dBm. Null = operator hasn't set it (WDSP mode
+  // default in effect). Independent of agcTopDb and auto-AGC.
+  agcThresholdDbm: number | null;
   agc: AgcConfigDto;
   squelch: SquelchConfigDto;
   txLeveling: TxLevelingConfigDto;
@@ -179,6 +182,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
   txFilterHighHz: 2850,
   sampleRate: 192_000,
   agcTopDb: 45,
+  agcThresholdDbm: null,
   agc: { ...AGC_CONFIG_DEFAULT },
   squelch: { ...SQUELCH_CONFIG_DEFAULT },
   txLeveling: { ...TX_LEVELING_CONFIG_DEFAULT },
@@ -235,6 +239,7 @@ export const useConnectionStore = create<ConnectionState>((set) => ({
         txFilterHighHz: s.txFilterHighHz,
         sampleRate: s.sampleRate,
         agcTopDb: s.agcTopDb,
+        agcThresholdDbm: s.agcThresholdDbm ?? null,
         agc: s.agc,
         squelch: s.squelch,
         txLeveling: s.txLeveling,

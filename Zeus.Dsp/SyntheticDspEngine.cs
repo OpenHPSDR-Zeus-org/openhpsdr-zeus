@@ -100,7 +100,15 @@ public sealed class SyntheticDspEngine : IDspEngine
 
     public void SetCtunShift(int channelId, int shiftHz) { /* synthetic has no IF stage */ }
 
-    public void SetAgcTop(int channelId, double topDb) { /* synthetic has no AGC */ }
+    public void SetAgcTop(int channelId, double topDb) { _synthAgcTopDb = topDb; }
+
+    public void SetAgcThresh(int channelId, double threshDbm) { /* synthetic has no AGC */ }
+
+    public double GetAgcTop(int channelId) => _synthAgcTopDb;
+
+    public double GetAgcThresh(int channelId) => 0.0;
+
+    private double _synthAgcTopDb = 80.0;
 
     public void SetAgc(int channelId, AgcConfig cfg)
     {

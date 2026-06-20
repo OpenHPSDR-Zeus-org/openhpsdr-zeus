@@ -1,4 +1,37 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+//
+// Zeus — OpenHPSDR Protocol-1 / Protocol-2 client.
+//
+// Workspace grid placement — FIXED-LATTICE model.
+//
+// The workspace is a free grid, not a packing grid. A panel sits exactly where
+// the operator drops it and STAYS there; moving one panel never reflows the
+// others. This is a deliberate replacement of the old magnetic-compaction
+// engine, whose global vertical re-pack was the root cause of the "I moved one
+// and they all moved" reports — compaction inherently cascades, so it could
+// never be tuned away.
+//
+// The rules, end to end:
+//   - During a live drag/resize NOTHING reflows. The dragged tile floats over
+//     its neighbours (transient overlap is fine — RGL lifts it on top) and the
+//     neighbours hold their cells. The live compactors below are therefore the
+//     identity (they only strip RGL's transient `moved` flag).
+//   - On DROP (placeDroppedPanel): the dragged tile lands where it was dropped.
+//       • lands on empty space → it just stays there (gaps are allowed).
+//       • lands squarely on ONE movable same-footprint-ish neighbour → the two
+//         SWAP and nothing else moves.
+//       • lands overlapping anything else (or a locked tile) → only the dragged
+//         tile relocates, to the nearest free slot to the drop point. Every
+//         other tile is left untouched.
+//   - On RESIZE STOP (resolveResizeOverlaps): the resized tile keeps its new
+//     size; only the neighbours it now overlaps hop to their nearest free slot.
+//     One pass, each to a globally-free cell, so there is no cascade.
+//   - Tidy (tidyWorkspacePlacements): an explicit, operator-invoked pack that
+//     closes vertical gaps. Horizontal placement stays operator-directed (x is
+//     preserved); locked tiles never move. This is the ONLY path that packs.
+//
+// Locked (static) tiles are inert everywhere: they are never relocated, and the
+// free-slot search treats them as immovable obstacles.
 
 import type { Compactor, Layout, LayoutItem } from 'react-grid-layout';
 
@@ -7,280 +40,192 @@ export interface WorkspaceDragStartSnapshot {
   layout: Layout;
 }
 
-// Keep horizontal placement operator-directed, but make vertical placement
-// magnetic: when a tile is dragged into an occupied slot, the displaced tile
-// should swap into the dragged tile's old slot and the stack should close up.
-export const WORKSPACE_DRAG_COMPACTOR = createWorkspaceDragCompactor();
-
-export function createWorkspaceDragCompactor(
-  getDragStart?: () => WorkspaceDragStartSnapshot | null,
-): Compactor {
-  // Per-drag hysteresis state. `engaged` holds the ids of neighbours currently
-  // committed to a swap; it is rebuilt whenever the drag snapshot identity
-  // changes (a new gesture) and dropped when the drag ends (snapshot null).
-  // Carrying it across frames is what gives the swap a deadband — without it
-  // the swap re-derives from scratch every frame and flickers at the boundary.
-  let session: {
-    dragStart: WorkspaceDragStartSnapshot;
-    engaged: Set<string>;
-  } | null = null;
-  return {
-    type: null,
-    allowOverlap: false,
-    compact: (layout, cols) => {
-      const dragStart = getDragStart?.() ?? null;
-      if (!dragStart) {
-        session = null;
-      } else if (!session || session.dragStart !== dragStart) {
-        session = { dragStart, engaged: new Set() };
-      }
-      return compactDragMagnetic(
-        layout,
-        cols,
-        dragStart,
-        session?.engaged ?? null,
-      );
-    },
-  };
-}
-
-export const WORKSPACE_RESIZE_COMPACTOR: Compactor = {
+// Live-interaction compactor: the identity. It never moves a tile — it only
+// clears RGL's transient `moved` flag so the echoed layout is clean. Both drag
+// and resize use this; all real placement happens on drop / resize-stop.
+//
+// allowOverlap:true lets the dragged tile float over its neighbours during the
+// gesture (resolved on drop); preventCollision is intentionally omitted (falsy)
+// so RGL does not try to shove neighbours aside while dragging.
+const FREE_COMPACTOR: Compactor = {
   type: null,
-  allowOverlap: false,
-  compact: compactResizePushDown,
+  allowOverlap: true,
+  compact: (layout) => clearMovedFlags(layout),
 };
 
-function compactDragMagnetic(
-  layout: Layout,
-  cols: number,
-  dragStart: WorkspaceDragStartSnapshot | null,
-  engaged: Set<string> | null,
-): Layout {
-  const priorityId = layout.find((item) => item.moved)?.i;
-  if (!priorityId || !dragStart) {
-    return compactPushDownWithPriority(layout, priorityId).map((item) => ({
-      ...item,
-      moved: false,
-    }));
-  }
+export const WORKSPACE_DRAG_COMPACTOR = FREE_COMPACTOR;
+export const WORKSPACE_RESIZE_COMPACTOR = FREE_COMPACTOR;
 
-  const dragLayout = layoutFromDragStart(layout, priorityId, dragStart);
-  const swapped = swapDisplacedIntoPreviousSlot(
-    dragLayout,
-    cols,
-    priorityId,
-    dragStart,
-    engaged,
-  );
-  // During a live drag keep the dragged tile pinned to the pointer cell, even
-  // on frames where no swap fires. Toggling preservePriority with the swap
-  // (the old behaviour) let compactMagnetUp yank the tile upward the instant
-  // its overlap dipped below a collision; RGL then dragged it back toward the
-  // pointer next frame — the preserve-toggle 2-cycle that read as a "quick
-  // back and forth" at the swap boundary. A live session pins unconditionally.
-  const preservePriority = engaged ? true : swapped.displaced;
-  return compactMagnetUp(
-    swapped.layout,
-    priorityId,
-    preservePriority,
-  ).map((item) => ({
-    ...item,
-    moved: false,
-  }));
+// Kept for call-site compatibility with the old magnetic engine. The drag
+// snapshot is no longer needed for live compaction (nothing reflows mid-drag);
+// it is captured by FlexWorkspace and handed to placeDroppedPanel on drop.
+export function createWorkspaceDragCompactor(
+  _getDragStart?: () => WorkspaceDragStartSnapshot | null,
+): Compactor {
+  return FREE_COMPACTOR;
 }
 
+// Fraction of the smaller tile's area that must be covered for a drop to count
+// as "squarely on" a neighbour and trigger a swap rather than a relocate. Below
+// this, a glancing overlap just relocates the dragged tile to free space.
+const SWAP_OVERLAP_FRACTION = 0.5;
+
+/**
+ * Resolve a dropped panel into the fixed lattice. The dragged tile lands where
+ * it was dropped; if that overlaps a single movable neighbour squarely the two
+ * swap, otherwise the dragged tile (and ONLY the dragged tile) relocates to the
+ * nearest free slot. No other tile is ever moved.
+ *
+ * `previous` is the drag-start snapshot (item = the tile's original placement,
+ * layout = the full layout at drag start). It is what lets a swap put the
+ * displaced neighbour into the dragged tile's vacated slot.
+ *
+ * Named `autoFitDroppedPanel` for call-site continuity with the old engine.
+ */
 export function autoFitDroppedPanel(
   layout: Layout,
   cols: number,
   previous?: LayoutItem | WorkspaceDragStartSnapshot | null,
 ): Layout {
   const dragStart = normalizeDragStart(previous);
-  const previousItem = dragStart?.item ?? null;
-  const dropped = previousItem
-    ? layout.find((item) => item.i === previousItem.i)
-    : findDroppedItem(layout);
-  if (!dropped) return clearMovedFlags(cloneLayout(layout));
+  const next = clearMovedFlags(cloneLayout(layout));
+  const draggedId = dragStart?.item.i ?? findDroppedItem(layout)?.i;
+  if (!draggedId) return next;
+  const dragged = next.find((item) => item.i === draggedId);
+  if (!dragged) return next;
 
-  const dragLayout = dragStart?.layout.length
-    ? layoutFromDragStart(layout, dropped.i, dragStart)
-    : layout;
-  const swapped = swapDisplacedIntoPreviousSlot(
-    dragLayout,
-    cols,
-    dropped.i,
-    dragStart?.layout.length ? dragStart : null,
-    null,
-  );
-  const base = swapped.layout;
-  const target = base.find((item) => item.i === dropped.i);
-  if (!target) return clearMovedFlags(base);
+  // Snap the drop point into the grid (clamp x; floor y to a row).
+  const maxX = Math.max(0, cols - dragged.w);
+  const dropX = clampInt(dragged.x, 0, maxX);
+  const dropY = Math.max(0, Math.round(dragged.y));
+  dragged.x = dropX;
+  dragged.y = dropY;
 
-  const minW = boundedMin(target.minW, 1, cols);
-  const maxW = boundedMax(target.maxW, minW, cols);
-  const minH = boundedMin(target.minH, 1, Number.MAX_SAFE_INTEGER);
-  const maxH = boundedMax(target.maxH, minH, Number.MAX_SAFE_INTEGER);
-  const startW = clamp(target.w, minW, maxW);
-  const startH = clamp(target.h, minH, maxH);
+  const others = next.filter((item) => item.i !== draggedId);
+  const colliders = others.filter((item) => collides(dragged, item));
 
-  const footprintX = clamp(target.x, 0, Math.max(0, cols - startW));
-  const footprintY = Math.max(0, Math.round(target.y));
+  // Dropped onto empty space — it stays exactly here; nothing else moves.
+  if (colliders.length === 0) return next;
 
-  // Repositioning must NEVER resize the panel — only the explicit corner-resize
-  // handle changes a panel's size. Every placement below therefore keeps the
-  // dragged panel at its full (startW × startH) footprint and moves *other*
-  // panels out of the way (resolveAnchorCollisions pushes movable neighbours
-  // down). The old code shrank the dropped panel to fit leftover space, which
-  // is what made panels change size on a plain reposition.
-  const placeFullSize = (x: number, y: number) => {
-    const trial = cloneLayout(base);
-    const trialTarget = trial.find((item) => item.i === target.i);
-    if (!trialTarget) return null;
-    trialTarget.x = x;
-    trialTarget.y = y;
-    trialTarget.w = startW;
-    trialTarget.h = startH;
-    return resolveAnchorCollisions(trial, target.i, cols, previousItem);
-  };
-
-  // Fast path — full size at the drop origin. The overwhelmingly common case:
-  // resolveAnchorCollisions shoves movable neighbours aside so the panel lands
-  // exactly where it was dropped. Keeping this O(1) (rather than sweeping a
-  // footprint) is also what stops a large tile such as the ~18×38 panadapter/
-  // hero from freezing the main thread for seconds on drop.
-  const originResolved = placeFullSize(footprintX, footprintY);
-  if (originResolved) {
-    return clearMovedFlags(
-      compactMagnetUp(originResolved.layout, target.i, swapped.displaced),
-    );
-  }
-
-  // Origin blocked (a static/locked panel sits in the drop cell). Keep the
-  // panel's size and search straight down the same column for the nearest
-  // full-size slot rather than shrinking it. Bounded by the layout height, so
-  // it stays cheap.
-  const layoutBottom = base.reduce(
-    (bottom, item) => Math.max(bottom, item.y + item.h),
-    0,
-  );
-  for (let y = footprintY + 1; y <= layoutBottom; y += 1) {
-    const resolved = placeFullSize(footprintX, y);
-    if (resolved) {
-      return clearMovedFlags(
-        compactMagnetUp(resolved.layout, target.i, swapped.displaced),
-      );
+  // Squarely onto exactly one movable neighbour → swap, if the swap leaves the
+  // layout collision-free (a same-footprint swap always does; an odd-sized one
+  // only when it happens to fit, otherwise we fall through to relocate).
+  const origin = dragStart?.item ?? null;
+  if (colliders.length === 1 && origin) {
+    const target = colliders[0]!;
+    if (!target.static && overlapIsSquare(dragged, target)) {
+      const tx = target.x;
+      const ty = target.y;
+      dragged.x = tx;
+      dragged.y = ty;
+      target.x = clampInt(origin.x, 0, Math.max(0, cols - target.w));
+      target.y = Math.max(0, Math.round(origin.y));
+      if (!anyCollision(next)) return next;
+      // Swap would overlap a third tile — undo and relocate instead.
+      dragged.x = dropX;
+      dragged.y = dropY;
+      target.x = tx;
+      target.y = ty;
     }
   }
 
-  // Last resort: drop it full size below everything, which is always free.
-  const tail = cloneLayout(base);
-  const tailTarget = tail.find((item) => item.i === target.i);
-  if (tailTarget) {
-    tailTarget.x = footprintX;
-    tailTarget.y = layoutBottom;
-    tailTarget.w = startW;
-    tailTarget.h = startH;
+  // Otherwise relocate ONLY the dragged tile to the nearest free slot to the
+  // drop point. Neighbours (including locked tiles) are obstacles, never moved.
+  const slot = nearestFreeSlot(next, dragged, cols, dropX, dropY);
+  if (slot) {
+    dragged.x = slot.x;
+    dragged.y = slot.y;
+  } else {
+    // Pathological — drop below everything, which is always free.
+    dragged.x = dropX;
+    dragged.y = others.reduce((b, it) => Math.max(b, it.y + it.h), 0);
   }
-  return clearMovedFlags(compactMagnetUp(tail, target.i, swapped.displaced));
-}
-
-function compactResizePushDown(layout: Layout): Layout {
-  return compactPushDownWithPriority(layout);
-}
-
-function swapDisplacedIntoPreviousSlot(
-  layout: Layout,
-  cols: number,
-  priorityId: string | undefined,
-  dragStart: WorkspaceDragStartSnapshot | null,
-  engaged: Set<string> | null,
-): { layout: Layout; displaced: boolean } {
-  const next = cloneLayout(layout);
-  if (!priorityId || !dragStart || dragStart.item.i !== priorityId) {
-    return { layout: next, displaced: false };
-  }
-
-  const anchor = next.find((item) => item.i === priorityId);
-  if (!anchor) return { layout: next, displaced: false };
-
-  const previousById = new Map(dragStart.layout.map((item) => [item.i, item]));
-  const originalOrder = new Map(
-    dragStart.layout.map((item, index) => [item.i, index]),
-  );
-  const candidates = next
-    .filter((item) => item.i !== priorityId)
-    .map((item) => ({ item, previous: previousById.get(item.i) }))
-    .filter(
-      (
-        candidate,
-      ): candidate is { item: LayoutItem; previous: LayoutItem } => {
-        if (candidate.previous === undefined) return false;
-        // A locked (static) panel never moves — not even transiently while
-        // another panel is dragged over it. Excluding it here keeps it pinned;
-        // the dragged panel flows around it and resolveAnchorCollisions keeps
-        // it out of the locked footprint on drop.
-        if (candidate.item.static) return false;
-        // Live drag: gate engagement through the per-drag hysteresis set so a
-        // neighbour holds its swapped slot across the touch boundary instead of
-        // flickering. Drop / one-shot compaction (engaged === null) keeps the
-        // immediate collision test — there is no next frame to flicker into.
-        if (engaged) {
-          return updateSwapEngagement(
-            candidate.item.i,
-            candidate.previous,
-            anchor,
-            engaged,
-          );
-        }
-        return (
-          placementChanged(candidate.item, candidate.previous) ||
-          collides(candidate.previous, anchor) ||
-          collides(candidate.item, anchor)
-        );
-      },
-    )
-    .sort((a, b) =>
-      compareDisplacedCandidates(a, b, anchor, originalOrder),
-    );
-
-  for (const { item, previous } of candidates) {
-    const slot = nearestOpenSlot(
-      next,
-      item,
-      anchor,
-      cols,
-      previous,
-      dragStart.item,
-    );
-    if (slot === null) continue;
-    item.x = slot.x;
-    item.y = slot.y;
-    return { layout: next, displaced: true };
-  }
-
-  return { layout: next, displaced: false };
-}
-
-function layoutFromDragStart(
-  layout: Layout,
-  priorityId: string,
-  dragStart: WorkspaceDragStartSnapshot,
-): Layout {
-  const current = new Map(layout.map((item) => [item.i, item]));
-  const anchor = current.get(priorityId);
-  const next: LayoutItem[] = dragStart.layout.map((item) => {
-    if (item.i !== priorityId) return { ...item, moved: false };
-    return { ...(anchor ?? item), moved: true };
-  });
-
-  for (const item of layout) {
-    if (!dragStart.layout.some((startItem) => startItem.i === item.i)) {
-      next.push({ ...item });
-    }
-  }
-
   return next;
 }
 
+/**
+ * Resolve overlaps created by a resize. The resized tile keeps its new
+ * geometry; each movable neighbour it now overlaps relocates to its nearest
+ * free slot (single pass — every relocation targets a globally-free cell, so no
+ * cascade). Locked neighbours are left in place (a resize into a locked tile is
+ * a rare edge the operator can clear with Tidy).
+ */
+export function resolveResizeOverlaps(
+  layout: Layout,
+  resizedId: string,
+  cols: number,
+): Layout {
+  const next = clearMovedFlags(cloneLayout(layout));
+  const resized = next.find((item) => item.i === resizedId);
+  if (!resized) return next;
+
+  const overlapped = next
+    .filter((item) => item.i !== resizedId && !item.static)
+    .filter((item) => collides(resized, item))
+    .sort((a, b) => a.y - b.y || a.x - b.x);
+
+  for (const item of overlapped) {
+    // A prior relocation may already have cleared this one.
+    if (!collides(resized, item)) continue;
+    const slot = nearestFreeSlot(next, item, cols, item.x, item.y);
+    if (slot) {
+      item.x = slot.x;
+      item.y = slot.y;
+    }
+  }
+  return next;
+}
+
+/**
+ * Operator-invoked "Tidy": pack movable tiles upward to close vertical gaps,
+ * keeping each tile's column (x) and never moving a locked (static) tile. This
+ * is the only function that compacts — it runs on an explicit button press, not
+ * as a side effect of a drag.
+ */
+export function tidyWorkspacePlacements(layout: Layout): Layout {
+  const next = cloneLayout(layout);
+  const order = new Map(next.map((item, index) => [item.i, index]));
+  const statics = next.filter((item) => item.static);
+  const movers = next
+    .filter((item) => !item.static)
+    .sort(
+      (a, b) =>
+        a.y - b.y ||
+        a.x - b.x ||
+        (order.get(a.i) ?? 0) - (order.get(b.i) ?? 0),
+    );
+
+  // Seed the obstacle set with the static tiles so movers magnet up *around*
+  // them rather than through them.
+  const placed: LayoutItem[] = [...statics];
+  for (const item of movers) {
+    item.y = Math.max(0, item.y);
+    // Pull up while the cell above is clear.
+    while (item.y > 0) {
+      const trial = { ...item, y: item.y - 1 };
+      if (placed.some((p) => collides(trial, p))) break;
+      item.y -= 1;
+    }
+    // If it still overlaps something (e.g. landed on a static tile), push it
+    // just below the obstacle.
+    let guard = 0;
+    let hit = placed.find((p) => collides(item, p));
+    while (hit && guard < placed.length + 1) {
+      item.y = hit.y + hit.h;
+      hit = placed.find((p) => collides(item, p));
+      guard += 1;
+    }
+    placed.push(item);
+  }
+  return clearMovedFlags(next);
+}
+
+/**
+ * Magnet movable tiles upward to close vertical gaps around static tiles, used
+ * by the locked-tile pixel-height solver (lockedWorkspaceLayout). Kept separate
+ * from tidyWorkspacePlacements because the solver feeds it synthetic fractional
+ * spans and an optional priority tile.
+ */
 export function compactMagnetUp(
   layout: Layout,
   priorityId?: string,
@@ -316,6 +261,56 @@ export function compactMagnetUp(
   return next;
 }
 
+// ---------------------------------------------------------------------------
+// helpers
+// ---------------------------------------------------------------------------
+
+function nearestFreeSlot(
+  layout: LayoutItem[],
+  item: LayoutItem,
+  cols: number,
+  prefX: number,
+  prefY: number,
+): { x: number; y: number } | null {
+  const maxX = cols - item.w;
+  if (maxX < 0) return null;
+  const others = layout.filter((other) => other.i !== item.i);
+  const layoutBottom = layout.reduce(
+    (bottom, other) => Math.max(bottom, other.y + other.h),
+    0,
+  );
+  // One full tile-height of slack below the stack guarantees a free row exists.
+  const maxY = layoutBottom + item.h;
+
+  let best: { x: number; y: number; dist: number } | null = null;
+  for (let y = 0; y <= maxY; y += 1) {
+    for (let x = 0; x <= maxX; x += 1) {
+      const candidate = { ...item, x, y };
+      if (others.some((other) => collides(candidate, other))) continue;
+      const dist = Math.abs(x - prefX) + Math.abs(y - prefY);
+      if (
+        !best ||
+        dist < best.dist ||
+        (dist === best.dist && (y < best.y || (y === best.y && x < best.x)))
+      ) {
+        best = { x, y, dist };
+      }
+      // Drop point itself is free — nothing can beat distance 0.
+      if (dist === 0) return { x, y };
+    }
+  }
+  return best ? { x: best.x, y: best.y } : null;
+}
+
+function overlapIsSquare(a: LayoutItem, b: LayoutItem): boolean {
+  const overlapW = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x);
+  const overlapH = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+  if (overlapW <= 0 || overlapH <= 0) return false;
+  const overlapArea = overlapW * overlapH;
+  const minArea = Math.min(a.w * a.h, b.w * b.h);
+  return minArea > 0 && overlapArea >= minArea * SWAP_OVERLAP_FRACTION;
+}
+
 function moveBelowCollisions(item: LayoutItem, placed: LayoutItem[]) {
   let collision = firstCollision(placed, item);
   while (collision) {
@@ -344,205 +339,6 @@ function normalizeDragStart(
   return { item: { ...previous }, layout: [] };
 }
 
-function placementChanged(item: LayoutItem, previous: LayoutItem): boolean {
-  return (
-    item.x !== previous.x ||
-    item.y !== previous.y ||
-    item.w !== previous.w ||
-    item.h !== previous.h
-  );
-}
-
-function compareDisplacedCandidates(
-  a: { item: LayoutItem; previous: LayoutItem },
-  b: { item: LayoutItem; previous: LayoutItem },
-  anchor: LayoutItem,
-  originalOrder: Map<string, number>,
-) {
-  const aOldSlotHit = collides(a.previous, anchor);
-  const bOldSlotHit = collides(b.previous, anchor);
-  if (aOldSlotHit !== bOldSlotHit) return aOldSlotHit ? -1 : 1;
-
-  const aCurrentHit = collides(a.item, anchor);
-  const bCurrentHit = collides(b.item, anchor);
-  if (aCurrentHit !== bCurrentHit) return aCurrentHit ? -1 : 1;
-
-  const aDistance = rectDistance(a.previous, anchor);
-  const bDistance = rectDistance(b.previous, anchor);
-  return (
-    aDistance - bDistance ||
-    (originalOrder.get(a.item.i) ?? 0) - (originalOrder.get(b.item.i) ?? 0)
-  );
-}
-
-function rectDistance(a: LayoutItem, b: LayoutItem): number {
-  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
-}
-
-function compactPushDownWithPriority(
-  layout: Layout,
-  priorityId?: string,
-): Layout {
-  const next = layout.map((item) => ({ ...item }));
-  const originalOrder = new Map(next.map((item, index) => [item.i, index]));
-  const maxPasses = Math.max(1, next.length * next.length);
-
-  for (let pass = 0; pass < maxPasses; pass += 1) {
-    let moved = false;
-    const ordered = [...next].sort((a, b) =>
-      compareItems(a, b, originalOrder, priorityId),
-    );
-
-    for (let i = 0; i < ordered.length; i += 1) {
-      const anchor = ordered[i]!;
-      for (let j = i + 1; j < ordered.length; j += 1) {
-        const candidate = ordered[j]!;
-        if (!collides(anchor, candidate)) continue;
-
-        if (candidate.static) {
-          if (!anchor.static) {
-            const y = candidate.y + candidate.h;
-            if (anchor.y < y) {
-              anchor.y = y;
-              moved = true;
-            }
-          }
-          continue;
-        }
-
-        const y = anchor.y + anchor.h;
-        if (candidate.y < y) {
-          candidate.y = y;
-          moved = true;
-        }
-      }
-    }
-
-    if (!moved) break;
-  }
-
-  return next;
-}
-
-function resolveAnchorCollisions(
-  layout: Layout,
-  anchorId: string,
-  cols: number,
-  preferredSlot?: LayoutItem | null,
-): { layout: LayoutItem[] } | null {
-  const next = cloneLayout(layout);
-  const originalPlacement = new Map(
-    next.map((item) => [item.i, { x: item.x, y: item.y }]),
-  );
-  const maxPasses = Math.max(1, next.length * next.length);
-
-  for (let pass = 0; pass < maxPasses; pass += 1) {
-    const anchor = next.find((item) => item.i === anchorId);
-    if (!anchor) return null;
-
-    const collisions = next
-      .filter((item) => item.i !== anchorId && collides(anchor, item));
-
-    if (collisions.some((item) => item.static)) return null;
-
-    const movableCollisions = collisions
-      .sort((a, b) => Math.abs(a.x - anchor.x) - Math.abs(b.x - anchor.x));
-
-    if (movableCollisions.length === 0) {
-      return anyCollision(next) ? null : { layout: next };
-    }
-
-    let moved = false;
-    for (const item of movableCollisions) {
-      const slot = nearestOpenSlot(
-        next,
-        item,
-        anchor,
-        cols,
-        originalPlacement.get(item.i) ?? item,
-        preferredSlot,
-      );
-      if (slot === null) return null;
-      if (slot.x !== item.x || slot.y !== item.y) {
-        item.x = slot.x;
-        item.y = slot.y;
-        moved = true;
-      }
-    }
-
-    if (!moved) return null;
-  }
-
-  return anyCollision(next) ? null : { layout: next };
-}
-
-function nearestOpenSlot(
-  layout: LayoutItem[],
-  item: LayoutItem,
-  anchor: LayoutItem,
-  cols: number,
-  originalPlacement: Pick<LayoutItem, 'x' | 'y'>,
-  preferredSlot?: Pick<LayoutItem, 'x' | 'y'> | null,
-): Pick<LayoutItem, 'x' | 'y'> | null {
-  const maxX = cols - item.w;
-  if (maxX < 0) return null;
-
-  const layoutBottom = layout.reduce(
-    (bottom, candidate) => Math.max(bottom, candidate.y + candidate.h),
-    0,
-  );
-  const tallestItem = layout.reduce(
-    (height, candidate) => Math.max(height, candidate.h),
-    item.h,
-  );
-  const maxY = layoutBottom + tallestItem * Math.max(1, layout.length);
-
-  let best: {
-    x: number;
-    y: number;
-    preferredDistance: number;
-    distance: number;
-  } | null = null;
-
-  for (let y = 0; y <= maxY; y += 1) {
-    for (let x = 0; x <= maxX; x += 1) {
-      const candidate = { ...item, x, y };
-      if (collides(candidate, anchor)) continue;
-      if (
-        layout.some((other) => {
-          if (other.i === item.i || other.i === anchor.i) return false;
-          return collides(candidate, other);
-        })
-      ) {
-        continue;
-      }
-
-      const preferredDistance = preferredSlot
-        ? Math.abs(x - preferredSlot.x) + Math.abs(y - preferredSlot.y)
-        : 0;
-      const distance =
-        Math.abs(x - originalPlacement.x) + Math.abs(y - originalPlacement.y);
-      if (
-        !best ||
-        preferredDistance < best.preferredDistance ||
-        (preferredDistance === best.preferredDistance &&
-          distance < best.distance) ||
-        (preferredDistance === best.preferredDistance &&
-          distance === best.distance &&
-          y < best.y) ||
-        (preferredDistance === best.preferredDistance &&
-          distance === best.distance &&
-          y === best.y &&
-          x < best.x)
-      ) {
-        best = { x, y, preferredDistance, distance };
-      }
-    }
-  }
-
-  return best ? { x: best.x, y: best.y } : null;
-}
-
 function findDroppedItem(layout: Layout): LayoutItem | undefined {
   const moved = layout.filter((item) => item.moved);
   return moved[moved.length - 1];
@@ -552,12 +348,7 @@ function compareItems(
   a: LayoutItem,
   b: LayoutItem,
   originalOrder: Map<string, number>,
-  priorityId?: string,
 ) {
-  if (priorityId) {
-    if (a.i === priorityId && b.i !== priorityId) return -1;
-    if (b.i === priorityId && a.i !== priorityId) return 1;
-  }
   return (
     a.y - b.y ||
     a.x - b.x ||
@@ -592,81 +383,6 @@ function collides(a: LayoutItem, b: LayoutItem) {
   return true;
 }
 
-// Hysteresis thresholds for the live magnetic swap, expressed as a fraction of
-// the SMALLER of the two tiles' heights so the feel scales with panel size.
-//
-// ENGAGE at the midpoint (50%): a neighbour only commits to swapping once the
-// dragged tile has clearly taken its slot — covered half of it — rather than
-// flipping on the first row of contact. On the real workspace, where panels run
-// 8–38 rows tall, a fixed 1-row trigger fired almost on touch and read as
-// twitchy; a midpoint trigger reads as deliberate, the premium reorder feel.
-//
-// RELEASE lower (25%): a committed swap holds until the dragged tile is pulled
-// back past a quarter overlap. The band between 25% and 50% is the deadband
-// that kills the boundary flicker (RGL's grid-rounding jitters the dragged tile
-// by a row at the touch line; a committed neighbour rides across it unmoved).
-//
-// A 1-row floor keeps 1–2 row control tiles snapping sanely instead of needing
-// a sub-row overlap the integer grid can never express.
-const SWAP_ENGAGE_FRACTION = 0.5;
-const SWAP_RELEASE_FRACTION = 0.25;
-const SWAP_MIN_ENGAGE_ROWS = 1;
-
-// Engage / release overlap (in grid rows) for one dragged↔neighbour pair.
-function swapThresholdRows(
-  anchor: LayoutItem,
-  neighbor: LayoutItem,
-): { engage: number; release: number } {
-  const span = Math.max(1, Math.min(anchor.h, neighbor.h));
-  return {
-    engage: Math.max(SWAP_MIN_ENGAGE_ROWS, span * SWAP_ENGAGE_FRACTION),
-    release: span * SWAP_RELEASE_FRACTION,
-  };
-}
-
-// Signed vertical overlap between the dragged anchor and a neighbour, in rows:
-// positive when they overlap, zero when edges touch, negative (a gap) when they
-// are apart. Returns -Infinity when their columns don't overlap at all, so a
-// neighbour off to the side never engages and any engaged one releases at once.
-function verticalOverlapRows(anchor: LayoutItem, neighbor: LayoutItem): number {
-  if (anchor.x + anchor.w <= neighbor.x || anchor.x >= neighbor.x + neighbor.w) {
-    return Number.NEGATIVE_INFINITY;
-  }
-  return (
-    Math.min(anchor.y + anchor.h, neighbor.y + neighbor.h) -
-    Math.max(anchor.y, neighbor.y)
-  );
-}
-
-// Advance the per-drag engagement set for one neighbour and report whether it
-// is currently committed to a swap. Engage on real overlap, release only on a
-// clear gap; the touch boundary in between is sticky.
-function updateSwapEngagement(
-  id: string,
-  previous: LayoutItem,
-  anchor: LayoutItem,
-  engaged: Set<string>,
-): boolean {
-  const overlap = verticalOverlapRows(anchor, previous);
-  const { engage, release } = swapThresholdRows(anchor, previous);
-  if (engaged.has(id)) {
-    if (overlap < release) engaged.delete(id);
-  } else if (overlap >= engage) {
-    engaged.add(id);
-  }
-  return engaged.has(id);
-}
-
-function boundedMin(value: number | undefined, fallback: number, ceiling: number) {
-  const min = Number.isFinite(value) ? value! : fallback;
-  return clamp(Math.round(min), fallback, ceiling);
-}
-
-function boundedMax(value: number | undefined, floor: number, ceiling: number) {
-  const max = Number.isFinite(value) ? value! : ceiling;
-  return Math.max(floor, clamp(Math.round(max), floor, ceiling));
-}
-
-function clamp(value: number, min: number, max: number) {
+function clampInt(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, Math.round(value)));
 }

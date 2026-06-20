@@ -168,6 +168,25 @@ internal static partial class NativeMethods
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXAAGCTop(int channel, double max_agc);
 
+    // AGC threshold ("knee"), in dBm. size = FFT/buffer size, rate = sample rate;
+    // WDSP uses them to convert the dBm threshold to its internal level scale.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void SetRXAAGCThresh(int channel, double thresh, double size, double rate);
+
+    // Reads back the AGC max-gain ("top") WDSP recomputed after a threshold
+    // change (out param). Declared for the Thetis-style top read-back/mirror.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void GetRXAAGCTop(int channel, ref double max_agc);
+
+    // Reads the current AGC threshold ("knee"), in dBm (out param). Used to
+    // capture WDSP's per-mode default knee before the operator overrides it, so
+    // "disengage" can restore it. size/rate match SetRXAAGCThresh.
+    [LibraryImport(LibraryName)]
+    [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
+    internal static partial void GetRXAAGCThresh(int channel, ref double thresh, double size, double rate);
+
     [LibraryImport(LibraryName)]
     [UnmanagedCallConv(CallConvs = [typeof(CallConvCdecl)])]
     internal static partial void SetRXAAGCAttack(int channel, int attack);
