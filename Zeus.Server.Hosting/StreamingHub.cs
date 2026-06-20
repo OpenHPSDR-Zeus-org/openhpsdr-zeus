@@ -91,6 +91,11 @@ public sealed class StreamingHub
     // they see the current spots without waiting for the next TCI spot event.
     private volatile byte[]? _spotPayload;
 
+    // Latest serialised DiagnosticsHealth (0x36) payload. Set by
+    // BroadcastDiagnostics on the publisher's timer; pushed to each new WS
+    // client on attach so a dashboard renders current health immediately.
+    private volatile byte[]? _diagnosticsPayload;
+
     // Supplies the ChatEvent (0x35) snapshot frames pushed to each new WS
     // client on attach: current status, the live roster, and the message
     // history. Set once by ChatService at startup (mirrors the SpotList
@@ -297,6 +302,11 @@ public sealed class StreamingHub
         // arrived before it connected (e.g. a skimmer that was already running).
         var spotSnap = _spotPayload;
         if (spotSnap is not null) session.TryEnqueue(spotSnap);
+
+        // Push the latest diagnostics health frame (0x36) so a dashboard that
+        // attaches between publisher ticks renders current health immediately.
+        var diagSnap = _diagnosticsPayload;
+        if (diagSnap is not null) session.TryEnqueue(diagSnap);
 
         // Push the current chat snapshot (status + roster + history) so a
         // late-joining client renders the conversation without waiting for the
@@ -758,6 +768,21 @@ public sealed class StreamingHub
     public void BroadcastChatEvent(byte[] payload)
     {
         if (_clients.IsEmpty) return;
+        foreach (var client in _clients.Values)
+        {
+            if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
+        }
+    }
+
+    /// <summary>
+    /// Broadcasts a pre-encoded DiagnosticsHealth (0x36) frame
+    /// ([type][UTF-8 JSON of <see cref="Zeus.Contracts.DiagnosticsHealthDto"/>]) to every
+    /// connected client and caches it for push-on-attach. Same fan-out shape as
+    /// <see cref="BroadcastSpots"/>; called by DiagnosticsFramePublisher on its timer.
+    /// </summary>
+    public void BroadcastDiagnostics(byte[] payload)
+    {
+        _diagnosticsPayload = payload;
         foreach (var client in _clients.Values)
         {
             if (!client.TryEnqueue(payload)) System.Threading.Interlocked.Increment(ref _dropsOther);
