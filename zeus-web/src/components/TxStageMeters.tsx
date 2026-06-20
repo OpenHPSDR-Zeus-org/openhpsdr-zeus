@@ -25,6 +25,9 @@ import { useConnectionStore } from '../state/connection-store';
 import { usePaStore } from '../state/pa-store';
 import { useRadioStore } from '../state/radio-store';
 import { useBallisticReading } from './meters/useBallisticReading';
+import { recessedWellBackground, recessedWellShadow } from './meters/render/recessedWell';
+import { mercuryGradientCss } from './meters/render/fillGradient';
+import { MeterGlass } from './meters/render/MeterGlass';
 
 // ────────────────────────────────────────────────────────────────────────────
 // Overdrive indicator (re-exported so App.tsx can keep wiring it as the
@@ -315,17 +318,12 @@ function MeterRow({
           style={{
             position: 'relative',
             height: 14,
-            background: 'var(--meter-bg)',
+            // Recessed liquid-metal well + the warm amber "lit instrument on a
+            // black bench" halo.
+            background: recessedWellBackground(),
             border: '1px solid var(--line)',
             borderRadius: 2,
-            // v3 Lifted Dark: warm amber halo around the meter well — the
-            // "lit instruments on a black bench" look. Inner inset stays
-            // for depth; outer halos give the column a soft glow.
-            boxShadow:
-              'inset 0 1px 3px rgba(0,0,0,0.8),' +
-              ' inset 0 0 0 1px rgba(255,255,255,0.03),' +
-              ' 0 0 18px rgba(255,140,40,0.18),' +
-              ' 0 0 6px rgba(255,170,80,0.12)',
+            boxShadow: recessedWellShadow({ warmHalo: true }),
             overflow: 'hidden',
           }}
         >
@@ -367,7 +365,7 @@ function MeterRow({
               top: 0,
               bottom: 0,
               width: `${pct}%`,
-              background: gradient ?? color,
+              background: `${mercuryGradientCss()}, ${gradient ?? color}`,
               transition: 'width 120ms linear, background 150ms',
               pointerEvents: 'none',
             }}
@@ -389,6 +387,8 @@ function MeterRow({
               }}
             />
           )}
+          {/* Liquid-metal glass cover — domed specular + drifting sheen. */}
+          <MeterGlass radius={2} />
         </div>
       </div>
       <div

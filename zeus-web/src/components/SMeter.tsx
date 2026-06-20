@@ -48,6 +48,8 @@ import {
   initialSMeterPeakHoldState,
   stepSMeterPeakHold,
 } from './sMeterPeakHold';
+import { recessedWellBackground, recessedWellShadow } from './meters/render/recessedWell';
+import { mercuryGradientCss } from './meters/render/fillGradient';
 
 // RX scale: amateur-radio S-units. S9 = -73 dBm on HF. Each S-unit = 6 dB.
 // Above S9 labelled in dB over S9 (+10, +20, +40, +60).
@@ -298,9 +300,8 @@ export function SMeter(props: SMeterProps) {
           style={{
             height: 26,
             borderRadius: 'var(--r-sm)',
-            background: 'var(--bg-meter)',
-            boxShadow:
-              'inset 0 0 0 1px rgba(0,0,0,0.6), inset 0 1px 4px rgba(0,0,0,0.7), 0 1px 0 rgba(255,255,255,0.05)',
+            background: recessedWellBackground(),
+            boxShadow: recessedWellShadow(),
           }}
         >
           {/* Signal fill — clipped to the current level, warm halo glow. */}
@@ -309,7 +310,9 @@ export function SMeter(props: SMeterProps) {
             className="absolute inset-0 transition-[clip-path] duration-75 ease-out"
             style={{
               clipPath: `inset(0 ${(1 - fraction) * 100}% 0 0)`,
-              background: rampBg,
+              // Quicksilver volume shading composited over the live hue ramp —
+              // the bar reads as polished liquid metal rather than a flat LED.
+              background: `${mercuryGradientCss()}, ${rampBg}`,
               boxShadow: fraction > 0.01 ? 'var(--meter-halo)' : 'none',
             }}
           />
@@ -346,6 +349,27 @@ export function SMeter(props: SMeterProps) {
               boxShadow: '0 0 6px rgba(255,176,60,0.9)',
             }}
           />
+          {/* Liquid-metal glass cover — domed upper-left specular + a slow
+              drifting sheen band gliding across the wet glass. */}
+          <div
+            aria-hidden
+            className="absolute inset-0 overflow-hidden"
+            style={{
+              pointerEvents: 'none',
+              background:
+                'radial-gradient(64% 130% at 32% 16%, var(--meter-glass-dome) 0%, var(--meter-glass-top) 46%, var(--meter-glass-bot) 100%)',
+            }}
+          >
+            <div
+              className="lm-sheen absolute inset-y-0"
+              style={{
+                left: 0,
+                width: '16%',
+                background:
+                  'linear-gradient(100deg, transparent 0%, var(--meter-sheen) 50%, transparent 100%)',
+              }}
+            />
+          </div>
         </div>
 
         {/* Tick scale — marks always draw; labels thin out responsively. */}

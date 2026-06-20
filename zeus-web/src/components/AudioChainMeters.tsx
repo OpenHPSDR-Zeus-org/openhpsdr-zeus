@@ -14,6 +14,9 @@
 // not a bug.
 
 import { useEffect, useRef, useState } from 'react';
+import { recessedWellBackground, recessedWellShadow } from './meters/render/recessedWell';
+import { mercuryGradientCss } from './meters/render/fillGradient';
+import { MeterGlass } from './meters/render/MeterGlass';
 
 const POLL_MS = 66; // ~15 Hz
 const PEAK_HOLD_MS = 1200; // peak-tick decay
@@ -98,11 +101,11 @@ function LevelBar({ label, db }: { label: string; db: number }) {
           position: 'relative',
           flex: 1,
           height: 10,
-          background: 'var(--bg-meter)',
+          background: recessedWellBackground(),
           border: '1px solid var(--line)',
           borderRadius: 3,
           overflow: 'hidden',
-          boxShadow: 'inset 0 1px 2px rgba(0, 0, 0, 0.5)',
+          boxShadow: recessedWellShadow(),
         }}
       >
         <div
@@ -112,8 +115,7 @@ function LevelBar({ label, db }: { label: string; db: number }) {
             top: 0,
             bottom: 0,
             width: `${frac * 100}%`,
-            background:
-              'linear-gradient(to right, var(--ok) 0%, var(--ok) 65%, var(--power) 85%, var(--tx) 100%)',
+            background: `${mercuryGradientCss()}, linear-gradient(to right, var(--ok) 0%, var(--ok) 65%, var(--power) 85%, var(--tx) 100%)`,
             transition: 'width 0.05s linear',
           }}
         />
@@ -130,6 +132,7 @@ function LevelBar({ label, db }: { label: string; db: number }) {
             }}
           />
         )}
+        <MeterGlass radius={3} />
       </div>
       <span
         style={{

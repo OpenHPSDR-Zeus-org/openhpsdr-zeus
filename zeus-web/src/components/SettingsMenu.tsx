@@ -33,6 +33,7 @@ import { TciSettingsPanel } from './TciSettingsPanel';
 import { RadioSelector } from './RadioSelector';
 import { usePaStore } from '../state/pa-store';
 import { useRadioStore } from '../state/radio-store';
+import { useEasterEggStore } from '../state/easter-egg-store';
 import { PsSettingsPanel } from './PsSettingsPanel';
 import { TxAudioToolsPanel } from './TxAudioToolsPanel';
 import { DspSettingsPanel } from './DspSettingsPanel';
@@ -107,9 +108,18 @@ export function SettingsView({ initialTab, onClose }: Props) {
     (s) => s.capabilities.supportsG2AdcOptions,
   );
   const hasRadioOptions = hasHl2OptionalToggles || supportsG2AdcOptions;
+  // HARDWARE is a hidden diagnostics folder — unlocked only via the header
+  // brand-mark easter egg (see easter-egg-store). It re-locks on every launch,
+  // so a fresh session never lists it.
+  const hardwareUnlocked = useEasterEggStore((s) => s.hardwareUnlocked);
   const visibleTabs = useMemo(
-    () => TABS.filter((t) => t.id !== 'radio' || hasRadioOptions),
-    [hasRadioOptions],
+    () =>
+      TABS.filter(
+        (t) =>
+          (t.id !== 'radio' || hasRadioOptions) &&
+          (t.id !== 'hardware' || hardwareUnlocked),
+      ),
+    [hasRadioOptions, hardwareUnlocked],
   );
 
   // If the operator was sitting on the RADIO tab and the board changed
@@ -120,6 +130,13 @@ export function SettingsView({ initialTab, onClose }: Props) {
       setActive('pa');
     }
   }, [active, hasRadioOptions]);
+
+  // Effective tab for rendering. If the stored `active` tab isn't currently
+  // visible — a hidden HARDWARE folder, or RADIO opened via initialTab without
+  // board options — fall back to PA so the operator never lands on a hidden
+  // tabpanel. Deriving this (rather than bouncing in an effect) avoids racing
+  // the initialTab effect, which could otherwise re-select a hidden tab.
+  const activeTab = visibleTabs.some((t) => t.id === active) ? active : 'pa';
 
   useEffect(() => {
     if (initialTab) setActive(initialTab);
@@ -169,7 +186,7 @@ export function SettingsView({ initialTab, onClose }: Props) {
           className="settings-view-tabs"
         >
           {visibleTabs.map((t) => {
-            const isActive = t.id === active;
+            const isActive = t.id === activeTab;
             return (
               <button
                 key={t.id}
@@ -186,28 +203,28 @@ export function SettingsView({ initialTab, onClose }: Props) {
         </nav>
 
         <div role="tabpanel" className="settings-view-panel">
-          {active === 'pa' && <PaSettingsPanel />}
-          {active === 'hardware' && <HardwareDiagnosticsPanel />}
-          {active === 'ps' && <PsSettingsPanel />}
-          {active === 'tx-audio' && <TxAudioToolsPanel />}
-          {active === 'dsp' && <DspSettingsPanel />}
-          {active === 'bandplan' && <BandPlanEditor />}
-          {active === 'qrz' && <QrzSettingsPanel />}
-          {active === 'rotator' && <RotatorSettingsPanel />}
-          {active === 'tci' && <TciSettingsPanel />}
-          {active === 'display' && <DisplayPanel />}
-          {active === 'plugins' && <PluginsPanel />}
-          {active === 'hamclock' && <HamClockSettingsPanel />}
-          {active === 'spots' && <SpotsSettingsPanel />}
-          {active === 'server' && <ServerUrlPanel />}
-          {active === 'radio' && hasRadioOptions && <RadioOptionsPanel />}
-          {active === 'calibration' && <CalibrationPanel />}
-          {active === 'updates' && <UpdatesPanel />}
-          {active === 'about' && <AboutPanel />}
+          {activeTab === 'pa' && <PaSettingsPanel />}
+          {activeTab === 'hardware' && hardwareUnlocked && <HardwareDiagnosticsPanel />}
+          {activeTab === 'ps' && <PsSettingsPanel />}
+          {activeTab === 'tx-audio' && <TxAudioToolsPanel />}
+          {activeTab === 'dsp' && <DspSettingsPanel />}
+          {activeTab === 'bandplan' && <BandPlanEditor />}
+          {activeTab === 'qrz' && <QrzSettingsPanel />}
+          {activeTab === 'rotator' && <RotatorSettingsPanel />}
+          {activeTab === 'tci' && <TciSettingsPanel />}
+          {activeTab === 'display' && <DisplayPanel />}
+          {activeTab === 'plugins' && <PluginsPanel />}
+          {activeTab === 'hamclock' && <HamClockSettingsPanel />}
+          {activeTab === 'spots' && <SpotsSettingsPanel />}
+          {activeTab === 'server' && <ServerUrlPanel />}
+          {activeTab === 'radio' && hasRadioOptions && <RadioOptionsPanel />}
+          {activeTab === 'calibration' && <CalibrationPanel />}
+          {activeTab === 'updates' && <UpdatesPanel />}
+          {activeTab === 'about' && <AboutPanel />}
         </div>
       </div>
 
-      {active === 'pa' && (
+      {activeTab === 'pa' && (
         <div className="settings-view-footer">
           <button type="button" className="btn sm" onClick={handleCancel} disabled={paInflight}>
             CANCEL

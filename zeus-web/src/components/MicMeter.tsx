@@ -47,6 +47,7 @@ import { useTxStore } from '../state/tx-store';
 import { useMicPeakStore } from '../audio/mic-peak-store';
 import { useCapabilitiesStore } from '../state/capabilities-store';
 import { useBallisticReading } from './meters/useBallisticReading';
+import { mercuryGradientCss } from './meters/render/fillGradient';
 
 // Pre-TX mic level indicator. The worklet measures peak dBFS on the raw
 // browser capture *before* any gain; the server then applies
@@ -170,9 +171,11 @@ export function MicMeter() {
           className="meter-fill"
           style={{
             width: `${fraction * 100}%`,
-            background: clipping
-              ? 'linear-gradient(90deg, var(--power), var(--tx))'
-              : 'linear-gradient(90deg, #2e7a2e, var(--accent))',
+            background: `${mercuryGradientCss()}, ${
+              clipping
+                ? 'linear-gradient(90deg, var(--power), var(--tx))'
+                : 'linear-gradient(90deg, #2e7a2e, var(--accent))'
+            }`,
           }}
         />
         {/* Peak-hold marker, matches .meter-peak style */}

@@ -57,6 +57,7 @@ import {
 } from '../../dsp/signal-estimator';
 import { setFilter } from '../../api/client';
 import { formatCutOffset, formatFilterWidth, nudgeStepHz } from './filterPresets';
+import { MeterGlass } from '../meters/render/MeterGlass';
 import type { Rx2AudioMode, RxMode, TxVfo } from '../../api/client';
 import {
   DB_FLOOR,
@@ -1936,6 +1937,9 @@ function FilterMiniPanSurface({
         onPointerCancel={onPointerUp}
         onPointerLeave={onPointerLeave}
       />
+      {/* Liquid-metal glass over the bandwidth pan — wet sheen + caustic,
+          pointer-events:none so dragging the filter still works through it. */}
+      <MeterGlass caustic sheenWidth="12%" />
       {editingWidth ? (
         <input
           autoFocus

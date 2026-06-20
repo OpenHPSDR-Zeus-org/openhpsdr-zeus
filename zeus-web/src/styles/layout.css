@@ -2223,15 +2223,48 @@
 .meter-bar {
   position: relative;
   height: 10px;
-  background: #000;
+  /* recessed liquid-metal well — concave machined pocket, lit upper-left */
+  background: radial-gradient(125% 145% at 34% 22%,
+    var(--meter-well-edge) 0%, var(--meter-well-floor) 58%, var(--meter-well-floor) 100%);
   border: 1px solid rgba(0,0,0,0.8);
-  border-radius: 0;
-  box-shadow: inset 0 1px 2px rgba(0,0,0,0.8);
+  border-radius: var(--r-xs);
+  box-shadow:
+    inset 0 2px 5px rgba(0,0,0,0.88),
+    inset 0 -1px 1.5px rgba(176,210,255,0.05),
+    inset 0 0 0 1px rgba(0,0,0,0.60),
+    inset 0 0 12px rgba(0,0,0,0.50);
   overflow: hidden;
+}
+/* liquid-metal glass cover on every shared bar — domed specular (::before)
+   + a drifting sheen band (::after). Above the fill, pointer-events:none. */
+.meter-bar::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 3;
+  border-radius: inherit;
+  background: radial-gradient(64% 130% at 32% 16%,
+    var(--meter-glass-dome) 0%, var(--meter-glass-top) 46%, var(--meter-glass-bot) 100%);
+}
+.meter-bar::after {
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 3;
+  border-radius: inherit;
+  background: linear-gradient(100deg, transparent 42%, var(--meter-sheen) 50%, transparent 58%);
+  background-size: 280% 100%;
+  animation: meterBarSheen 6.9s linear infinite;
+}
+@keyframes meterBarSheen {
+  from { background-position: 220% 0; }
+  to   { background-position: -60% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .meter-bar::after { animation: none; opacity: 0.25; }
 }
 .meter-fill {
   position: absolute; inset: 0 auto 0 0;
-  background: linear-gradient(90deg, #00c853 0%, var(--signal) 60%, var(--tx) 100%);
+  /* quicksilver volume shading over the live hue ramp — polished liquid metal */
+  background:
+    linear-gradient(180deg, var(--meter-mercury-hi) 0%, rgba(255,255,255,0.30) 9%,
+      rgba(255,255,255,0.04) 22%, var(--meter-mercury-lo) 30%, rgba(0,0,0,0) 52%,
+      rgba(0,0,0,0.16) 84%, rgba(0,0,0,0.30) 100%),
+    linear-gradient(90deg, #00c853 0%, var(--signal) 60%, var(--tx) 100%);
   transition: width 120ms;
 }
 .meter-ticks { position: absolute; inset: 0; pointer-events: none; }
@@ -4260,4 +4293,60 @@
   color: var(--accent-bright);
   text-shadow: 0 0 6px var(--accent-soft);
   animation: cwCursorBlink 1s steps(2) infinite;
+}
+
+/* ===== Liquid-metal meter kit (KB2UKA) — glass drift animations =========
+   Compositor-only translateX sweeps for the glass sheen + caustic. Two
+   variants: %-based for the DOM LiquidMetalFrame (.lm-sheen / .lm-caustic),
+   px-var-based for the SVG GlassDome (.meter-sheen-drift / .meter-caustic-
+   drift, driven by --sheen-travel / --caustic-travel). Paused by
+   prefers-reduced-motion. ============================================== */
+@keyframes lmSheenSweep {
+  0%   { transform: translateX(-150%); opacity: 0; }
+  10%  { opacity: 1; }
+  85%  { opacity: 1; }
+  100% { transform: translateX(760%); opacity: 0; }
+}
+@keyframes lmCausticSweep {
+  0%   { transform: translateX(-130%); opacity: 0; }
+  22%  { opacity: 1; }
+  78%  { opacity: 1; }
+  100% { transform: translateX(390%); opacity: 0; }
+}
+.lm-sheen {
+  animation: lmSheenSweep 6.9s linear infinite;
+  will-change: transform, opacity;
+}
+.lm-caustic {
+  animation: lmCausticSweep 11.25s ease-in-out infinite;
+  animation-delay: -3.2s;
+  will-change: transform, opacity;
+}
+
+/* SVG GlassDome variants — translate by the supplied user-unit travel. */
+@keyframes meterSheenDrift {
+  from { transform: translateX(0); }
+  to   { transform: translateX(var(--sheen-travel, 120px)); }
+}
+@keyframes meterCausticDrift {
+  from { transform: translateX(0); }
+  to   { transform: translateX(var(--caustic-travel, 160px)); }
+}
+.meter-sheen-drift {
+  animation: meterSheenDrift 6.9s linear infinite;
+  will-change: transform;
+}
+.meter-caustic-drift {
+  animation: meterCausticDrift 11.25s ease-in-out infinite;
+  animation-delay: -3.2s;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lm-sheen, .lm-caustic,
+  .meter-sheen-drift, .meter-caustic-drift {
+    animation: none;
+  }
+  .lm-sheen, .meter-sheen-drift { opacity: 0.4; }
+  .lm-caustic, .meter-caustic-drift { opacity: 0.5; }
 }
