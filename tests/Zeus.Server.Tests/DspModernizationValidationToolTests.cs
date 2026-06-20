@@ -2826,7 +2826,7 @@ public sealed class DspModernizationValidationToolTests
                 TimeSpan.FromMinutes(2),
                 "-BundleDir", bundleDir,
                 "-ScenarioIds", "agc-level-step",
-                "-ComparisonIds", "current-zeus",
+                "-ComparisonIds", "current-zeus,candidate-under-test",
                 "-Force",
                 "-JsonOnly");
 
@@ -2840,7 +2840,8 @@ public sealed class DspModernizationValidationToolTests
             Assert.Equal("wdsp", root.GetProperty("evidenceEngine").GetString());
             var scenario = root.GetProperty("scenarios").EnumerateArray().Single();
             Assert.Equal("agc-level-step", scenario.GetProperty("scenarioId").GetString());
-            var comparison = scenario.GetProperty("comparisons").EnumerateArray().Single();
+            var comparisons = scenario.GetProperty("comparisons").EnumerateArray().ToArray();
+            var comparison = comparisons.Single(item => item.GetProperty("comparisonId").GetString() == "current-zeus");
             var metrics = comparison.GetProperty("metrics");
             Assert.True(metrics.TryGetProperty("AGC gain movement", out var agcGainMovement));
             Assert.True(comparison.TryGetProperty("rxStageMeters", out var rxStageMeters));
@@ -2854,6 +2855,20 @@ public sealed class DspModernizationValidationToolTests
             using var audioDoc = JsonDocument.Parse(await File.ReadAllTextAsync(audioFullPath));
             var audioMeters = audioDoc.RootElement.GetProperty("rxStageMeters");
             Assert.Equal(rxStageMeters.GetProperty("agcGainMovementDb").GetDouble(), audioMeters.GetProperty("agcGainMovementDb").GetDouble(), precision: 6);
+
+            var candidate = comparisons.Single(item => item.GetProperty("comparisonId").GetString() == "candidate-under-test");
+            Assert.Equal("wdsp-rxa-agc-top-cap-50db-candidate", candidate.GetProperty("profile").GetString());
+            var candidateMetrics = candidate.GetProperty("metrics");
+            var candidateMeters = candidate.GetProperty("rxStageMeters");
+            Assert.Equal(candidateMeters.GetProperty("agcGainMovementDb").GetDouble(), candidateMetrics.GetProperty("AGC gain movement").GetDouble(), precision: 6);
+            Assert.True(candidateMetrics.GetProperty("AGC gain movement").GetDouble() < agcGainMovement.GetDouble());
+            Assert.True(candidateMetrics.GetProperty("windowed RMS movement").GetDouble() < metrics.GetProperty("windowed RMS movement").GetDouble());
+            var candidateDiagnostics = candidate.GetProperty("candidateDiagnostics");
+            Assert.Equal("fixture-only-rx-agc-top-cap", candidateDiagnostics.GetProperty("profileKind").GetString());
+            Assert.Equal(50.0, candidateDiagnostics.GetProperty("rxAgcTopDb").GetDouble(), precision: 1);
+            Assert.Equal(30.0, candidateDiagnostics.GetProperty("rxAgcTopReductionDb").GetDouble(), precision: 1);
+            Assert.False(candidateDiagnostics.GetProperty("defaultBehaviorChanged").GetBoolean());
+            Assert.True(candidateDiagnostics.GetProperty("requiresRuntimeOptIn").GetBoolean());
         }
         finally
         {

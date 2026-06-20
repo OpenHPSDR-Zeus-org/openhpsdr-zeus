@@ -335,7 +335,7 @@ internal static class WdspFixtureEvidenceTool
 
     private static FixtureRunResult RunFixture(DspBenchmarkFixture fixture, string comparisonId)
     {
-        var profile = ComparisonProfile.For(comparisonId, fixture.Path);
+        var profile = ComparisonProfile.For(comparisonId, fixture);
         return fixture.Path switch
         {
             DspBenchmarkPath.RxIq => RunRxFixture(fixture, profile),
@@ -361,7 +361,9 @@ internal static class WdspFixtureEvidenceTool
                 engine.SetMode(channel, RxMode.USB);
                 engine.SetFilter(channel, 150, 2850);
                 engine.SetVfoHz(channel, 14_200_000);
-                engine.SetAgcTop(channel, 80.0);
+                engine.SetAgcTop(channel, profile.RxAgcTopDb);
+                if (profile.RxAgc is not null)
+                    engine.SetAgc(channel, profile.RxAgc);
                 engine.SetNoiseReduction(channel, new NrConfig(NrMode: profile.NrMode));
             });
 
@@ -376,6 +378,7 @@ internal static class WdspFixtureEvidenceTool
             sw.Stop();
             float[] analysis = Tail(audio, AnalysisSamples);
             var metrics = MeasureStage(stages, "rx-analyze-audio", "RXA output analysis", () => DspBenchmarkAnalyzer.AnalyzeAudio(analysis, AudioSampleRateHz, fixture.ExpectedTonesHz));
+            var rxStageMeters = rxMeters.ToSummary();
             return new FixtureRunResult(
                 Profile: profile.Label,
                 SampleRateHz: AudioSampleRateHz,
@@ -386,8 +389,8 @@ internal static class WdspFixtureEvidenceTool
                 IntermodulationProxy: 0.0,
                 SamplePreview: PreviewAudio(analysis),
                 TxMeters: null,
-                RxStageMeters: rxMeters.ToSummary(),
-                CandidateDiagnostics: null,
+                RxStageMeters: rxStageMeters,
+                CandidateDiagnostics: BuildRxCandidateDiagnostics(profile, rxStageMeters),
                 StageProbes: stages);
         }
         finally
@@ -764,6 +767,35 @@ internal static class WdspFixtureEvidenceTool
             ["headroomTrimDb"] = Math.Abs(profile.TxPanelGainTrimDb),
             ["pureSignalPathStatus"] = "not-applied; fixture-only candidate must stay disabled while PureSignal is armed until hardware safe-bypass evidence exists",
         };
+    }
+
+    private static object? BuildRxCandidateDiagnostics(
+        ComparisonProfile profile,
+        IReadOnlyDictionary<string, object?> rxStageMeters)
+    {
+        if (!profile.HasRxAgcTopCap && profile.RxAgc is null)
+            return null;
+
+        var result = new Dictionary<string, object?>
+        {
+            ["schemaVersion"] = 1,
+            ["profileKind"] = profile.RxProfileKind,
+            ["defaultBehaviorChanged"] = false,
+            ["requiresRuntimeOptIn"] = true,
+            ["rxAgcMode"] = profile.RxAgc?.Mode.ToString() ?? AgcMode.Med.ToString(),
+            ["rxAgcTopDb"] = profile.RxAgcTopDb,
+            ["baselineRxAgcTopDb"] = 80.0,
+            ["rxAgcTopReductionDb"] = Math.Round(Math.Max(0.0, 80.0 - profile.RxAgcTopDb), 6),
+            ["fixtureOnly"] = true,
+            ["promotionStatus"] = "offline-fixture-only; requires G2 live A/B and cross-radio proof before runtime exposure",
+        };
+
+        if (rxStageMeters.TryGetValue("agcGainMovementDb", out object? movement) && movement is double movementDb && double.IsFinite(movementDb))
+            result["rxAgcGainMovementDb"] = Math.Round(movementDb, 6);
+        if (rxStageMeters.TryGetValue("agcGainSampleCount", out object? sampleCount))
+            result["rxAgcGainSampleCount"] = sampleCount;
+
+        return result;
     }
 
     private static double ComputeWantedSnrDb(DspBenchmarkMetrics metrics)
@@ -1375,7 +1407,10 @@ internal static class WdspFixtureEvidenceTool
         string Label,
         NrMode NrMode,
         double TxOutputTrimDb = 0.0,
-        double TxPanelGainTrimDb = 0.0)
+        double TxPanelGainTrimDb = 0.0,
+        AgcConfig? RxAgc = null,
+        double RxAgcTopDb = 80.0,
+        string RxProfileKind = "")
     {
         public bool HasTxOutputTrim => Math.Abs(TxOutputTrimDb) > 0.000_001;
 
@@ -1389,10 +1424,12 @@ internal static class WdspFixtureEvidenceTool
             ? Math.Pow(10.0, TxPanelGainTrimDb / 20.0)
             : 1.0;
 
-        public static ComparisonProfile For(string comparisonId, DspBenchmarkPath path)
+        public bool HasRxAgcTopCap => RxAgcTopDb < 79.999;
+
+        public static ComparisonProfile For(string comparisonId, DspBenchmarkFixture fixture)
         {
             string normalized = NormalizeComparisonId(comparisonId);
-            if (path == DspBenchmarkPath.TxAudio)
+            if (fixture.Path == DspBenchmarkPath.TxAudio)
             {
                 if (TryGetTxPanelGainTrimDb(normalized, out double trimDb))
                     return new(normalized, $"wdsp-txa-panel-gain-headroom-trim-{Math.Abs(trimDb):0.##}db-candidate", NrMode.Off, TxPanelGainTrimDb: trimDb);
@@ -1404,6 +1441,12 @@ internal static class WdspFixtureEvidenceTool
                     _ => new(normalized, "wdsp-txa-current-defaults", NrMode.Off),
                 };
             }
+
+            if (TryGetRxAgcTopCapDb(normalized, out double topCapDb))
+                return new(normalized, $"wdsp-rxa-agc-top-cap-{topCapDb:0.##}db-candidate", NrMode.Off, RxAgcTopDb: topCapDb, RxProfileKind: "fixture-only-rx-agc-top-cap");
+
+            if (fixture.Name == "agc-level-step" && normalized == "candidate-under-test")
+                return new(normalized, "wdsp-rxa-agc-top-cap-50db-candidate", NrMode.Off, RxAgcTopDb: 50.0, RxProfileKind: "fixture-only-rx-agc-top-cap");
 
             return normalized switch
             {
@@ -1440,6 +1483,35 @@ internal static class WdspFixtureEvidenceTool
             }
 
             trimDb = -magnitude;
+            return true;
+        }
+
+        private static bool TryGetRxAgcTopCapDb(string normalizedComparisonId, out double topCapDb)
+        {
+            topCapDb = 0.0;
+            const string prefix = "candidate-rx-agc-top-";
+            if (!normalizedComparisonId.StartsWith(prefix, StringComparison.Ordinal))
+                return false;
+
+            string suffix = normalizedComparisonId[prefix.Length..];
+            if (suffix.EndsWith("db", StringComparison.Ordinal))
+                suffix = suffix[..^2];
+
+            suffix = suffix.Replace('p', '.');
+            if (!double.TryParse(
+                    suffix,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out double parsedTopDb) ||
+                !double.IsFinite(parsedTopDb) ||
+                parsedTopDb < 20.0 ||
+                parsedTopDb > 80.0)
+            {
+                topCapDb = 0.0;
+                return false;
+            }
+
+            topCapDb = parsedTopDb;
             return true;
         }
     }
