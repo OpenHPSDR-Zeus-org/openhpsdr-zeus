@@ -258,6 +258,7 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("weak-cw-carrier", ids);
         Assert.Contains("ssb-like-speech", ids);
         Assert.Contains("agc-level-step", ids);
+        Assert.Contains("rx-audio-leveler-passband", ids);
         Assert.Contains("tx-two-tone", ids);
         Assert.Contains("tx-puresignal-safe-bypass", ids);
         Assert.Contains("wdsp-channel-lifecycle", ids);
@@ -283,6 +284,14 @@ public sealed class DspLiveDiagnosticsServiceTests
         Assert.Contains("TX compressor peak", txVoiceLike.RequiredMetrics);
         Assert.Contains("TX output average", txVoiceLike.RequiredMetrics);
 
+        var rxLeveler = Assert.Single(plan.Scenarios, s => s.Id == "rx-audio-leveler-passband");
+        Assert.Equal("opt-in-fixture-and-live-a-b-ready", rxLeveler.FixtureStatus);
+        Assert.Contains("candidate-under-test", rxLeveler.RequiredComparisons);
+        Assert.Contains("RMS movement", rxLeveler.RequiredMetrics);
+        Assert.Contains("windowed RMS movement", rxLeveler.RequiredMetrics);
+        Assert.Contains("rx audio leveler fixture benchmark", rxLeveler.RequiredArtifacts);
+        Assert.Contains(rxLeveler.AcceptanceGates, gate => gate.Contains("passband loudness movement", StringComparison.Ordinal));
+
         var lifecycle = Assert.Single(plan.Scenarios, s => s.Id == "wdsp-channel-lifecycle");
         Assert.Contains("state transition success", lifecycle.RequiredMetrics);
         Assert.Contains("meter escape", lifecycle.RequiredMetrics);
@@ -307,6 +316,7 @@ public sealed class DspLiveDiagnosticsServiceTests
             ("noise-only-gating", ["noise-only-gating", "noise-only", "squelch-noise-only", "false-open-noise"]),
             ("agc-pumping", ["agc-level-step", "agc-pumping", "agc-pump", "agc-step", "level-step"]),
             ("squelch-transition", ["squelch-transition", "squelch-open-close", "squelch-threshold-transition", "ssql-transition"]),
+            ("rx-audio-leveler-passband", ["rx-audio-leveler-passband", "rx-leveler-passband", "audio-leveler-passband"]),
             ("tx-two-tone", ["tx-two-tone", "two-tone-tx", "tx-linearity-two-tone"]),
             ("tx-voice-like", ["tx-voice-like", "tx-voice", "tx-speech", "tx-ssb-voice"]),
             ("puresignal-safe-bypass", ["puresignal-safe-bypass", "puresignal-bypass", "pure-signal-safe-bypass", "pure-signal-bypass", "tx-puresignal-safe-bypass"]),
@@ -343,6 +353,7 @@ public sealed class DspLiveDiagnosticsServiceTests
             "noise-only-gating",
             "agc-level-step",
             "squelch-transition",
+            "rx-audio-leveler-passband",
         ];
 
         foreach (var scenarioId in rxScenarioIds)

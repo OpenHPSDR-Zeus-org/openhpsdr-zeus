@@ -287,8 +287,18 @@ public sealed class SmartNrConditionEndpointTests
         var ids = scenarios.Select(item => item.GetProperty("id").GetString()).ToArray();
         Assert.Contains("weak-cw-carrier", ids);
         Assert.Contains("ssb-like-speech", ids);
+        Assert.Contains("rx-audio-leveler-passband", ids);
         Assert.Contains("tx-puresignal-safe-bypass", ids);
         Assert.Contains("wdsp-channel-lifecycle", ids);
+
+        var rxLeveler = scenarios.Single(item => item.GetProperty("id").GetString() == "rx-audio-leveler-passband");
+        Assert.Equal("opt-in-fixture-and-live-a-b-ready", rxLeveler.GetProperty("fixtureStatus").GetString());
+        Assert.Contains(
+            rxLeveler.GetProperty("requiredComparisons").EnumerateArray().Select(item => item.GetString()),
+            item => item == "candidate-under-test");
+        Assert.Contains(
+            rxLeveler.GetProperty("requiredArtifacts").EnumerateArray().Select(item => item.GetString()),
+            item => item == "G2 RX leveler A/B summary");
 
         var pureSignal = scenarios.Single(item => item.GetProperty("id").GetString() == "tx-puresignal-safe-bypass");
         Assert.Equal("hardware-capture-required", pureSignal.GetProperty("fixtureStatus").GetString());

@@ -234,6 +234,21 @@ public static class DspBenchmarkPlanCatalog
             ],
             artifacts: ["fixture metrics JSON", "squelch trace"]),
         Scenario(
+            id: "rx-audio-leveler-passband",
+            name: "RX audio leveler passband stability",
+            phase: "offline-fixture-and-g2-live",
+            signalPath: "RX audio",
+            fixtureStatus: "opt-in-fixture-and-live-a-b-ready",
+            appliesTo: ["RX audio leveler", "AGC", "post-demod audio"],
+            metrics: ["RMS movement", "windowed RMS movement", "overshoot", "peak", "audio discontinuity", "latency", "processing elapsed ms", "throughput ratio"],
+            gates:
+            [
+                "Stable-speech candidate must reduce passband loudness movement without adding output limiting.",
+                "Active audio and frontend passband evidence must both be present before promotion review.",
+                "Current/default RX audio leveler behavior must remain unchanged unless explicitly approved.",
+            ],
+            artifacts: ["rx audio leveler fixture benchmark", "G2 RX leveler A/B summary", "live diagnostics trace comparison"]),
+        Scenario(
             id: "tx-two-tone",
             name: "TX two-tone linearity and limiter safety",
             phase: "offline-and-g2-bench",
