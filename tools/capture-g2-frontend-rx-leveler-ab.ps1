@@ -164,6 +164,50 @@ function Get-LevelerCapabilityHint {
     return "Live diagnostics status='$status' reports rxAudioLevelerProfileApiAvailable=$apiAvailableText, rxAudioLevelerCapabilityStatus='$capabilityStatus', endpoint='$endpoint', candidateProfile='$candidate'. If these fields are missing or not candidate-profile-api-ready, the active backend is not the updated WDSP v2 profile-switch build."
 }
 
+function Get-StringArrayValue {
+    param(
+        $Object,
+        [Parameter(Mandatory = $true)][string]$Name
+    )
+
+    $value = Get-ObjectValue $Object $Name
+    if ($null -eq $value) {
+        return @()
+    }
+
+    if ($value -is [System.Array]) {
+        return @($value | ForEach-Object { [string]$_ } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    }
+
+    $text = [string]$value
+    if ([string]::IsNullOrWhiteSpace($text)) {
+        return @()
+    }
+
+    return @($text)
+}
+
+function Assert-LevelerProfileSupportsCandidate {
+    param(
+        $ProfileResponse,
+        [Parameter(Mandatory = $true)][string]$Endpoint
+    )
+
+    if ([string]::Equals($CandidateProfile, "current", [StringComparison]::OrdinalIgnoreCase)) {
+        return
+    }
+
+    $supportedProfiles = @(Get-StringArrayValue $ProfileResponse "supportedProfiles")
+    foreach ($profile in $supportedProfiles) {
+        if ([string]::Equals($profile, $CandidateProfile, [StringComparison]::OrdinalIgnoreCase)) {
+            return
+        }
+    }
+
+    $supportedText = if ($supportedProfiles.Count -gt 0) { $supportedProfiles -join ", " } else { "<none-advertised>" }
+    throw "RX audio leveler candidate profile '$CandidateProfile' is not advertised by $Endpoint. Supported profiles: $supportedText. Start the updated WDSP v2 backend or pass -CandidateProfile with an advertised profile before running the G2 frontend A/B capture."
+}
+
 function Write-TextFile {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -834,6 +878,8 @@ function Assert-LevelerProfileEndpoint {
         [string]::IsNullOrWhiteSpace([string]$profile.activeProfile)) {
         throw "RX audio leveler profile API response is missing profile/activeProfile fields at $Base/api/dsp/rx-audio-leveler-profile."
     }
+
+    Assert-LevelerProfileSupportsCandidate -ProfileResponse $profile -Endpoint "$Base/api/dsp/rx-audio-leveler-profile"
 
     return $profile
 }

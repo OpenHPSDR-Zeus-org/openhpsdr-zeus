@@ -8107,6 +8107,65 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task RxLevelerAbCaptureRefusesUnsupportedCandidateBeforeWatcher()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell profile support guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-rx-leveler-ab-profile-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+        var watcherPath = Path.Combine(outputRoot, "fake-watch-dsp-live-diagnostics.ps1");
+
+        try
+        {
+            await WriteRxLevelerAbFakeWatcherAsync(watcherPath, requireExistingOutputParents: true);
+
+            using var server = JsonRouteServer.Start(new Dictionary<string, string>
+            {
+                ["/api/dsp/rx-audio-leveler-profile"] = JsonSerializer.Serialize(new
+                {
+                    profile = "current",
+                    activeProfile = "current",
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current" },
+                    experimental = false
+                }, CamelCaseJson)
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(20),
+                "-BaseUrl", server.BaseUrl,
+                "-WatchScriptPath", watcherPath,
+                "-Samples", "1",
+                "-IntervalMs", "1",
+                "-TimeoutSec", "2",
+                "-OutputRoot", outputRoot);
+
+            Assert.NotEqual(0, run.ExitCode);
+            Assert.Contains("stable-speech-candidate", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Contains("is not advertised", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Contains("Supported profiles: current", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain("watch-dsp-live-diagnostics failed", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.DoesNotContain(server.Requests, request =>
+                string.Equals(request.Method, "PUT", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(request.Path, "/api/dsp/rx-audio-leveler-profile", StringComparison.Ordinal));
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task RxLevelerAbCaptureRequireActiveAudioRejectsSilentTrace()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell active-audio guard smoke runs on Windows.");
@@ -10044,6 +10103,65 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task G2FrontendRxLevelerAbCaptureRefusesUnsupportedCandidateBeforeRadioMutation()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell profile support guard smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var outputRoot = Path.Combine(Path.GetTempPath(), $"zeus-g2-frontend-profile-support-guard-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outputRoot);
+
+        try
+        {
+            using var server = JsonRouteServer.Start(new Dictionary<string, string>
+            {
+                ["/api/dsp/rx-audio-leveler-profile"] = JsonSerializer.Serialize(new
+                {
+                    profile = "current",
+                    activeProfile = "current",
+                    defaultProfile = "current",
+                    supportedProfiles = new[] { "current" },
+                    experimental = false
+                }, CamelCaseJson)
+            });
+
+            var run = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "capture-g2-frontend-rx-leveler-ab.ps1"),
+                TimeSpan.FromSeconds(20),
+                "-BaseUrl", server.BaseUrl,
+                "-SkipBrowserLaunch",
+                "-OutputRoot", outputRoot,
+                "-FrontendReadyTimeoutSec", "1",
+                "-SettleMs", "0",
+                "-SkipP2SocketPreflight");
+
+            Assert.NotEqual(0, run.ExitCode);
+            Assert.Contains("stable-speech-candidate", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Contains("is not advertised", run.CombinedOutput, StringComparison.Ordinal);
+            Assert.Contains("Supported profiles: current", run.CombinedOutput, StringComparison.Ordinal);
+
+            var requestPaths = server.Requests.Select(request => request.Path).ToArray();
+            Assert.Contains("/api/dsp/rx-audio-leveler-profile", requestPaths);
+            Assert.DoesNotContain("/api/connect/p2", requestPaths);
+            Assert.DoesNotContain("/api/radio/lo", requestPaths);
+            Assert.DoesNotContain("/api/vfo", requestPaths);
+            Assert.DoesNotContain("/api/mode", requestPaths);
+        }
+        finally
+        {
+            if (Directory.Exists(outputRoot))
+            {
+                Directory.Delete(outputRoot, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task G2FrontendRxLevelerAbCaptureContinueOnStaleFrontendDoesNotCaptureOrReportOk()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell frontend preflight guard smoke runs on Windows.");
@@ -10067,7 +10185,8 @@ public sealed class DspModernizationValidationToolTests
                     "/api/dsp/rx-audio-leveler-profile" => JsonSerializer.Serialize(new
                     {
                         profile = "current",
-                        activeProfile = "current"
+                        activeProfile = "current",
+                        supportedProfiles = new[] { "current", "stable-speech-candidate" }
                     }, CamelCaseJson),
                     "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
                     {
@@ -10154,7 +10273,8 @@ public sealed class DspModernizationValidationToolTests
                     "/api/dsp/rx-audio-leveler-profile" => JsonSerializer.Serialize(new
                     {
                         profile = "current",
-                        activeProfile = "current"
+                        activeProfile = "current",
+                        supportedProfiles = new[] { "current", "stable-speech-candidate" }
                     }, CamelCaseJson),
                     "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
                     {
@@ -10242,7 +10362,8 @@ public sealed class DspModernizationValidationToolTests
                     "/api/dsp/rx-audio-leveler-profile" => JsonSerializer.Serialize(new
                     {
                         profile = "current",
-                        activeProfile = "current"
+                        activeProfile = "current",
+                        supportedProfiles = new[] { "current", "stable-speech-candidate" }
                     }, CamelCaseJson),
                     "/api/dsp/live-diagnostics" => JsonSerializer.Serialize(new
                     {
