@@ -5927,6 +5927,158 @@ function Get-OfflineFixtureAgcMeterProvenance {
     return $result
 }
 
+function Get-OfflineFixtureAgcCandidateEvidence {
+    param($MetricsJson)
+
+    $result = [ordered]@{
+        scenarioPresent = $false
+        baselinePresent = $false
+        candidatePresent = $false
+        candidateDiagnosticsPresent = $false
+        ready = $false
+        status = "not-captured"
+        profileKind = ""
+        rxAgcTopDb = $null
+        defaultBehaviorChanged = $false
+        requiresRuntimeOptIn = $false
+        fixtureOnly = $false
+        baselineAgcMovementDb = $null
+        candidateAgcMovementDb = $null
+        agcMovementImprovementDb = $null
+        baselineWindowedRmsMovementDb = $null
+        candidateWindowedRmsMovementDb = $null
+        windowedRmsMovementImprovementDb = $null
+        baselineSignalSinadDb = $null
+        candidateSignalSinadDb = $null
+        signalSinadDeltaDb = $null
+        candidatePeak = $null
+        candidateClippingCount = 0
+    }
+
+    $baseline = $null
+    $candidate = $null
+    foreach ($scenario in (Get-JsonArray $MetricsJson "scenarios")) {
+        $scenarioIds = @(Get-ArtifactIndexFileScenarioIds $scenario)
+        if ($scenarioIds.Count -eq 0) {
+            $scenarioId = [string](Get-JsonValue $scenario "scenarioId")
+            if (-not [string]::IsNullOrWhiteSpace($scenarioId)) {
+                $scenarioIds = @($scenarioId)
+            }
+        }
+
+        $hasAgcScenario = $false
+        foreach ($scenarioId in @($scenarioIds)) {
+            if ([string]::Equals([string]$scenarioId, "agc-level-step", [StringComparison]::OrdinalIgnoreCase)) {
+                $hasAgcScenario = $true
+                break
+            }
+        }
+        if (-not $hasAgcScenario) {
+            continue
+        }
+
+        $result["scenarioPresent"] = $true
+        foreach ($comparison in (Get-JsonArray $scenario "comparisons")) {
+            $comparisonId = ConvertTo-ComparisonId ([string](Get-JsonValue $comparison "comparisonId"))
+            if ($comparisonId -eq "current-zeus") {
+                $baseline = $comparison
+                $result["baselinePresent"] = $true
+            }
+            elseif ($comparisonId -eq "candidate-under-test") {
+                $candidate = $comparison
+                $result["candidatePresent"] = $true
+            }
+        }
+    }
+
+    if (-not (Test-Truthy $result.scenarioPresent)) {
+        $result["status"] = "agc-level-step-not-present"
+        return $result
+    }
+    if (-not (Test-Truthy $result.baselinePresent)) {
+        $result["status"] = "current-baseline-missing"
+        return $result
+    }
+    if (-not (Test-Truthy $result.candidatePresent)) {
+        $result["status"] = "candidate-not-captured"
+        return $result
+    }
+
+    $baselineMetrics = Get-JsonValue $baseline "metrics"
+    $candidateMetrics = Get-JsonValue $candidate "metrics"
+    $candidateDiagnostics = Get-JsonValue $candidate "candidateDiagnostics"
+    if ($null -ne $candidateDiagnostics) {
+        $result["candidateDiagnosticsPresent"] = $true
+        $result["profileKind"] = [string](Get-JsonValue $candidateDiagnostics "profileKind")
+        $result["rxAgcTopDb"] = Get-NumericValue (Get-JsonValue $candidateDiagnostics "rxAgcTopDb")
+        $result["defaultBehaviorChanged"] = Test-Truthy (Get-JsonValue $candidateDiagnostics "defaultBehaviorChanged")
+        $result["requiresRuntimeOptIn"] = Test-Truthy (Get-JsonValue $candidateDiagnostics "requiresRuntimeOptIn")
+        $result["fixtureOnly"] = Test-Truthy (Get-JsonValue $candidateDiagnostics "fixtureOnly")
+    }
+
+    $baselineAgc = Get-NumericValue (Get-MetricValueById -Metrics $baselineMetrics -MetricId "AGC gain movement")
+    $candidateAgc = Get-NumericValue (Get-MetricValueById -Metrics $candidateMetrics -MetricId "AGC gain movement")
+    $baselineRms = Get-NumericValue (Get-MetricValueById -Metrics $baselineMetrics -MetricId "windowed RMS movement")
+    $candidateRms = Get-NumericValue (Get-MetricValueById -Metrics $candidateMetrics -MetricId "windowed RMS movement")
+    $baselineSinad = Get-NumericValue (Get-MetricValueById -Metrics $baselineMetrics -MetricId "signal SINAD")
+    $candidateSinad = Get-NumericValue (Get-MetricValueById -Metrics $candidateMetrics -MetricId "signal SINAD")
+    $candidatePeak = Get-NumericValue (Get-MetricValueById -Metrics $candidateMetrics -MetricId "peak")
+    $candidateClips = [int](Get-NumericValueOrDefault (Get-JsonValue $candidate "clippingCount"))
+
+    $result["baselineAgcMovementDb"] = $baselineAgc
+    $result["candidateAgcMovementDb"] = $candidateAgc
+    $result["baselineWindowedRmsMovementDb"] = $baselineRms
+    $result["candidateWindowedRmsMovementDb"] = $candidateRms
+    $result["baselineSignalSinadDb"] = $baselineSinad
+    $result["candidateSignalSinadDb"] = $candidateSinad
+    $result["candidatePeak"] = $candidatePeak
+    $result["candidateClippingCount"] = $candidateClips
+
+    if ($null -ne $baselineAgc -and $null -ne $candidateAgc) {
+        $result["agcMovementImprovementDb"] = [double]$baselineAgc - [double]$candidateAgc
+    }
+    if ($null -ne $baselineRms -and $null -ne $candidateRms) {
+        $result["windowedRmsMovementImprovementDb"] = [double]$baselineRms - [double]$candidateRms
+    }
+    if ($null -ne $baselineSinad -and $null -ne $candidateSinad) {
+        $result["signalSinadDeltaDb"] = [double]$candidateSinad - [double]$baselineSinad
+    }
+
+    if (-not (Test-Truthy $result.candidateDiagnosticsPresent)) {
+        $result["status"] = "candidate-diagnostics-missing"
+    }
+    elseif (-not [string]::Equals([string]$result.profileKind, "fixture-only-rx-agc-top-cap", [StringComparison]::Ordinal)) {
+        $result["status"] = "candidate-profile-kind-invalid"
+    }
+    elseif (Test-Truthy $result.defaultBehaviorChanged) {
+        $result["status"] = "default-behavior-changed"
+    }
+    elseif (-not (Test-Truthy $result.requiresRuntimeOptIn) -or -not (Test-Truthy $result.fixtureOnly)) {
+        $result["status"] = "candidate-not-opt-in"
+    }
+    elseif ($null -eq $result.rxAgcTopDb -or [double]$result.rxAgcTopDb -lt 20.0 -or [double]$result.rxAgcTopDb -gt 80.0) {
+        $result["status"] = "candidate-agc-top-invalid"
+    }
+    elseif ($null -eq $result.agcMovementImprovementDb -or [double]$result.agcMovementImprovementDb -le 0.0) {
+        $result["status"] = "agc-movement-not-improved"
+    }
+    elseif ($null -eq $result.windowedRmsMovementImprovementDb -or [double]$result.windowedRmsMovementImprovementDb -le 0.0) {
+        $result["status"] = "windowed-rms-not-improved"
+    }
+    elseif ($null -ne $result.signalSinadDeltaDb -and [double]$result.signalSinadDeltaDb -lt -0.5) {
+        $result["status"] = "signal-sinad-regression"
+    }
+    elseif ($candidateClips -gt 0) {
+        $result["status"] = "candidate-clipping"
+    }
+    else {
+        $result["ready"] = $true
+        $result["status"] = "ready"
+    }
+
+    return $result
+}
+
 function Get-GateOutcomeSummary {
     param($Entry)
 
@@ -6105,6 +6257,23 @@ $offlineFixtureMetricsEvidence = [ordered]@{
     agcMeterMissingMetricCount = 0
     agcMeterMetricMismatchCount = 0
     agcMeterMaxMetricMismatchDb = 0.0
+    agcCandidatePresent = $false
+    agcCandidateReady = $false
+    agcCandidateStatus = "not-evaluated"
+    agcCandidateProfileKind = ""
+    agcCandidateRxAgcTopDb = $null
+    agcCandidateDefaultBehaviorChanged = $false
+    agcCandidateRequiresRuntimeOptIn = $false
+    agcCandidateFixtureOnly = $false
+    agcCandidateBaselineAgcMovementDb = $null
+    agcCandidateAgcMovementDb = $null
+    agcCandidateAgcMovementImprovementDb = $null
+    agcCandidateBaselineWindowedRmsMovementDb = $null
+    agcCandidateWindowedRmsMovementDb = $null
+    agcCandidateWindowedRmsMovementImprovementDb = $null
+    agcCandidateSignalSinadDeltaDb = $null
+    agcCandidatePeak = $null
+    agcCandidateClippingCount = 0
     status = "not-evaluated"
 }
 $nativeStageTimingArtifactId = "native-stage-timing-report"
@@ -9142,6 +9311,7 @@ else {
                         }
                     }
                     $agcMeterProvenance = Get-OfflineFixtureAgcMeterProvenance $artifactJson
+                    $agcCandidateEvidence = Get-OfflineFixtureAgcCandidateEvidence $artifactJson
 
                     $offlineFixtureMetricsEvidence["present"] = $true
                     $offlineFixtureMetricsEvidence["artifactId"] = $artifactId
@@ -9173,6 +9343,23 @@ else {
                     $offlineFixtureMetricsEvidence["agcMeterMissingMetricCount"] = [int]$agcMeterProvenance.missingMetricCount
                     $offlineFixtureMetricsEvidence["agcMeterMetricMismatchCount"] = [int]$agcMeterProvenance.metricMismatchCount
                     $offlineFixtureMetricsEvidence["agcMeterMaxMetricMismatchDb"] = [double]$agcMeterProvenance.maxMetricMismatchDb
+                    $offlineFixtureMetricsEvidence["agcCandidatePresent"] = Test-Truthy $agcCandidateEvidence.candidatePresent
+                    $offlineFixtureMetricsEvidence["agcCandidateReady"] = Test-Truthy $agcCandidateEvidence.ready
+                    $offlineFixtureMetricsEvidence["agcCandidateStatus"] = [string]$agcCandidateEvidence.status
+                    $offlineFixtureMetricsEvidence["agcCandidateProfileKind"] = [string]$agcCandidateEvidence.profileKind
+                    $offlineFixtureMetricsEvidence["agcCandidateRxAgcTopDb"] = $agcCandidateEvidence.rxAgcTopDb
+                    $offlineFixtureMetricsEvidence["agcCandidateDefaultBehaviorChanged"] = Test-Truthy $agcCandidateEvidence.defaultBehaviorChanged
+                    $offlineFixtureMetricsEvidence["agcCandidateRequiresRuntimeOptIn"] = Test-Truthy $agcCandidateEvidence.requiresRuntimeOptIn
+                    $offlineFixtureMetricsEvidence["agcCandidateFixtureOnly"] = Test-Truthy $agcCandidateEvidence.fixtureOnly
+                    $offlineFixtureMetricsEvidence["agcCandidateBaselineAgcMovementDb"] = $agcCandidateEvidence.baselineAgcMovementDb
+                    $offlineFixtureMetricsEvidence["agcCandidateAgcMovementDb"] = $agcCandidateEvidence.candidateAgcMovementDb
+                    $offlineFixtureMetricsEvidence["agcCandidateAgcMovementImprovementDb"] = $agcCandidateEvidence.agcMovementImprovementDb
+                    $offlineFixtureMetricsEvidence["agcCandidateBaselineWindowedRmsMovementDb"] = $agcCandidateEvidence.baselineWindowedRmsMovementDb
+                    $offlineFixtureMetricsEvidence["agcCandidateWindowedRmsMovementDb"] = $agcCandidateEvidence.candidateWindowedRmsMovementDb
+                    $offlineFixtureMetricsEvidence["agcCandidateWindowedRmsMovementImprovementDb"] = $agcCandidateEvidence.windowedRmsMovementImprovementDb
+                    $offlineFixtureMetricsEvidence["agcCandidateSignalSinadDeltaDb"] = $agcCandidateEvidence.signalSinadDeltaDb
+                    $offlineFixtureMetricsEvidence["agcCandidatePeak"] = $agcCandidateEvidence.candidatePeak
+                    $offlineFixtureMetricsEvidence["agcCandidateClippingCount"] = [int]$agcCandidateEvidence.candidateClippingCount
                     $offlineFixtureMetricsEvidence["status"] = if ($sourceWdspBacked) { "ready" } else { "not-ready" }
 
                     if (-not $sourceWdspBacked) {
@@ -9208,6 +9395,13 @@ else {
                         if ([int]$agcMeterProvenance.metricMismatchCount -gt 0) {
                             Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "offline-fixture-agc-meter-metric-mismatch" "Artifact '$artifactId' agc-level-step AGC gain movement metric must match rxStageMeters.agcGainMovementDb; mismatchCount=$($agcMeterProvenance.metricMismatchCount), maxMismatchDb=$($agcMeterProvenance.maxMetricMismatchDb)."
                         }
+                        $artifactValidationOk = $false
+                        $offlineFixtureMetricsEvidence["status"] = "not-ready"
+                    }
+                    if ($sourceWdspBacked -and
+                        (Test-Truthy $agcCandidateEvidence.candidatePresent) -and
+                        -not (Test-Truthy $agcCandidateEvidence.ready)) {
+                        Add-ArtifactIssue $errors $warnings -Required:$effectiveRequired "offline-fixture-agc-candidate-not-ready" "Artifact '$artifactId' agc-level-step candidate-under-test must prove opt-in fixture-only AGC improvement before it can be used as candidate evidence; status='$($agcCandidateEvidence.status)', profileKind='$($agcCandidateEvidence.profileKind)', defaultBehaviorChanged=$($agcCandidateEvidence.defaultBehaviorChanged), requiresRuntimeOptIn=$($agcCandidateEvidence.requiresRuntimeOptIn), agcImprovementDb=$($agcCandidateEvidence.agcMovementImprovementDb), windowedRmsImprovementDb=$($agcCandidateEvidence.windowedRmsMovementImprovementDb), signalSinadDeltaDb=$($agcCandidateEvidence.signalSinadDeltaDb), clippingCount=$($agcCandidateEvidence.candidateClippingCount)."
                         $artifactValidationOk = $false
                         $offlineFixtureMetricsEvidence["status"] = "not-ready"
                     }
@@ -17835,6 +18029,23 @@ $report = [ordered]@{
     offlineFixtureMetricsAgcMeterMissingMetricCount = $offlineFixtureMetricsEvidence.agcMeterMissingMetricCount
     offlineFixtureMetricsAgcMeterMetricMismatchCount = $offlineFixtureMetricsEvidence.agcMeterMetricMismatchCount
     offlineFixtureMetricsAgcMeterMaxMetricMismatchDb = $offlineFixtureMetricsEvidence.agcMeterMaxMetricMismatchDb
+    offlineFixtureMetricsAgcCandidatePresent = $offlineFixtureMetricsEvidence.agcCandidatePresent
+    offlineFixtureMetricsAgcCandidateReady = $offlineFixtureMetricsEvidence.agcCandidateReady
+    offlineFixtureMetricsAgcCandidateStatus = $offlineFixtureMetricsEvidence.agcCandidateStatus
+    offlineFixtureMetricsAgcCandidateProfileKind = $offlineFixtureMetricsEvidence.agcCandidateProfileKind
+    offlineFixtureMetricsAgcCandidateRxAgcTopDb = $offlineFixtureMetricsEvidence.agcCandidateRxAgcTopDb
+    offlineFixtureMetricsAgcCandidateDefaultBehaviorChanged = $offlineFixtureMetricsEvidence.agcCandidateDefaultBehaviorChanged
+    offlineFixtureMetricsAgcCandidateRequiresRuntimeOptIn = $offlineFixtureMetricsEvidence.agcCandidateRequiresRuntimeOptIn
+    offlineFixtureMetricsAgcCandidateFixtureOnly = $offlineFixtureMetricsEvidence.agcCandidateFixtureOnly
+    offlineFixtureMetricsAgcCandidateBaselineAgcMovementDb = $offlineFixtureMetricsEvidence.agcCandidateBaselineAgcMovementDb
+    offlineFixtureMetricsAgcCandidateAgcMovementDb = $offlineFixtureMetricsEvidence.agcCandidateAgcMovementDb
+    offlineFixtureMetricsAgcCandidateAgcMovementImprovementDb = $offlineFixtureMetricsEvidence.agcCandidateAgcMovementImprovementDb
+    offlineFixtureMetricsAgcCandidateBaselineWindowedRmsMovementDb = $offlineFixtureMetricsEvidence.agcCandidateBaselineWindowedRmsMovementDb
+    offlineFixtureMetricsAgcCandidateWindowedRmsMovementDb = $offlineFixtureMetricsEvidence.agcCandidateWindowedRmsMovementDb
+    offlineFixtureMetricsAgcCandidateWindowedRmsMovementImprovementDb = $offlineFixtureMetricsEvidence.agcCandidateWindowedRmsMovementImprovementDb
+    offlineFixtureMetricsAgcCandidateSignalSinadDeltaDb = $offlineFixtureMetricsEvidence.agcCandidateSignalSinadDeltaDb
+    offlineFixtureMetricsAgcCandidatePeak = $offlineFixtureMetricsEvidence.agcCandidatePeak
+    offlineFixtureMetricsAgcCandidateClippingCount = $offlineFixtureMetricsEvidence.agcCandidateClippingCount
     nativeStageTimingReportPresent = $nativeStageTimingEvidence.present
     nativeStageTimingReportReady = $nativeStageTimingEvidence.readyForReview
     nativeStageTimingReportStatus = $nativeStageTimingEvidence.status

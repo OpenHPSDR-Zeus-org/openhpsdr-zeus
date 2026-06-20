@@ -803,6 +803,21 @@ function Get-EvidenceGateRecords {
                 -Detail "fixtureReady=$rxLevelerFixtureReady; present=$rxLevelerLivePresent; readyForReview=$(Get-JsonValue $Validation "rxLevelerAbLiveComparisonReadyForReview"); evidenceStatus=$(Get-JsonValue $Validation "rxLevelerAbLiveComparisonEvidenceStatus"); activeAudio=$(Get-JsonValue $Validation "rxLevelerAbLiveComparisonActiveAudioReady"); passband=$(Get-JsonValue $Validation "rxLevelerAbLiveComparisonPassbandReady"); controlMemory=$(Get-JsonValue $Validation "rxLevelerAbLiveComparisonControlMemoryReady"); optimization=$(Get-JsonValue $Validation "rxLevelerAbLiveComparisonOptimizationReady"); captureStability=$(Get-JsonValue $Validation "rxLevelerAbLiveComparisonCaptureStabilityStatus"); promotion=$(Get-JsonValue $Validation "rxLevelerAbLiveComparisonPromotionReady"); improvements=$(Get-JsonValue $Validation "rxLevelerAbLiveComparisonMaterialImprovementCount"); regressions=$(Get-JsonValue $Validation "rxLevelerAbLiveComparisonRegressionCount"); bundleRelative=$(Get-JsonValue $Validation "rxLevelerAbLiveComparisonBundleRelativePaths"); absolutePaths=$(Get-JsonValue $Validation "rxLevelerAbLiveComparisonAbsolutePathCount")" `
                 -Remediation "Run guarded G2 frontend RX leveler A/B capture on active passband audio, then summarize-dsp-rx-leveler-ab.ps1 with -BundleDir so rx-leveler-ab-live-comparison proves promotion-ready opt-in improvement evidence.")) | Out-Null
 
+    $agcFixtureCandidatePresent = Test-Truthy (Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidatePresent")
+    $agcFixtureCandidateReady = Test-Truthy (Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateReady")
+    $agcFixtureCandidateStatus = [string](Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateStatus")
+    if ([string]::IsNullOrWhiteSpace($agcFixtureCandidateStatus)) {
+        $agcFixtureCandidateStatus = if ($agcFixtureCandidatePresent) { "not-ready" } else { "not-captured" }
+    }
+    $gates.Add((New-EvidenceGateRecord `
+                -GateId "agc-fixture-opt-in-proof" `
+                -Name "AGC fixture opt-in candidate proof" `
+                -Ready:($agcFixtureCandidateReady -or -not $agcFixtureCandidatePresent) `
+                -Status $agcFixtureCandidateStatus `
+                -RequiredForAcceptance:$false `
+                -Detail "present=$agcFixtureCandidatePresent; ready=$agcFixtureCandidateReady; profileKind=$(Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateProfileKind"); topDb=$(Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateRxAgcTopDb"); defaultChanged=$(Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateDefaultBehaviorChanged"); optIn=$(Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateRequiresRuntimeOptIn"); fixtureOnly=$(Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateFixtureOnly"); agcBaseline=$(Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateBaselineAgcMovementDb"); agcCandidate=$(Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateAgcMovementDb"); agcImprovement=$(Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateAgcMovementImprovementDb"); rmsBaseline=$(Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateBaselineWindowedRmsMovementDb"); rmsCandidate=$(Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateWindowedRmsMovementDb"); rmsImprovement=$(Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateWindowedRmsMovementImprovementDb"); sinadDelta=$(Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateSignalSinadDeltaDb"); clipping=$(Get-JsonValue $Validation "offlineFixtureMetricsAgcCandidateClippingCount")" `
+                -Remediation "Regenerate WDSP-backed agc-level-step fixture evidence with current-zeus and candidate-under-test, then keep the AGC candidate fixture-only and opt-in until G2 live A/B plus cross-radio evidence prove it beyond offline fixtures.")) | Out-Null
+
     $sourceDriftReady = Test-Truthy (Get-JsonValue $Validation "wdspSourceDriftReportReady")
     $sourceDriftStatus = [string](Get-JsonValue $Validation "wdspSourceDriftReportStatus")
     if ([string]::IsNullOrWhiteSpace($sourceDriftStatus)) {

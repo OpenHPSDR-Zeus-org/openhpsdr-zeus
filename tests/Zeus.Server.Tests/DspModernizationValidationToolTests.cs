@@ -2996,6 +2996,167 @@ public sealed class DspModernizationValidationToolTests
     }
 
     [SkippableFact]
+    public async Task ValidationReportMarksAgcFixtureCandidateReadyWhenOptInAndImproved()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell modernization validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-agc-candidate-ready-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteAgcFixtureArtifactManifest(bundleDir);
+            WriteAgcFixtureMetrics(bundleDir, includeMeterProvenance: true, includeCandidate: true);
+
+            var validationReport = Path.Combine(bundleDir, "validation-agc-candidate-ready.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsAgcCandidatePresent").GetBoolean());
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsAgcCandidateReady").GetBoolean());
+            Assert.Equal("ready", validationRoot.GetProperty("offlineFixtureMetricsAgcCandidateStatus").GetString());
+            Assert.Equal("fixture-only-rx-agc-top-cap", validationRoot.GetProperty("offlineFixtureMetricsAgcCandidateProfileKind").GetString());
+            Assert.Equal(50.0, validationRoot.GetProperty("offlineFixtureMetricsAgcCandidateRxAgcTopDb").GetDouble(), precision: 1);
+            Assert.False(validationRoot.GetProperty("offlineFixtureMetricsAgcCandidateDefaultBehaviorChanged").GetBoolean());
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsAgcCandidateRequiresRuntimeOptIn").GetBoolean());
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsAgcCandidateFixtureOnly").GetBoolean());
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsAgcCandidateAgcMovementImprovementDb").GetDouble() > 0);
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsAgcCandidateWindowedRmsMovementImprovementDb").GetDouble() > 0);
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsAgcCandidateSignalSinadDeltaDb").GetDouble() >= -0.5);
+
+            var errorCodes = validationRoot.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.DoesNotContain("offline-fixture-agc-candidate-not-ready", errorCodes);
+
+            var summaryReport = Path.Combine(bundleDir, "summary-agc-candidate-ready.json");
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-modernization-validation-report.ps1"),
+                "-ValidationReportPath", validationReport,
+                "-ReportPath", summaryReport,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.Equal(0, summary.ExitCode);
+            using var summaryDoc = JsonDocument.Parse(await File.ReadAllTextAsync(summaryReport));
+            var gate = summaryDoc.RootElement.GetProperty("evidenceGates")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("gateId").GetString() == "agc-fixture-opt-in-proof");
+            Assert.True(gate.GetProperty("ready").GetBoolean());
+            Assert.False(gate.GetProperty("requiredForAcceptance").GetBoolean());
+            Assert.Equal("ready", gate.GetProperty("status").GetString());
+            Assert.Contains("agcImprovement=", gate.GetProperty("detail").GetString(), StringComparison.Ordinal);
+            Assert.DoesNotContain("agc-fixture-opt-in-proof", ReadStringArray(summaryDoc.RootElement, "advisoryEvidenceGateProblemIds"));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
+    public async Task ValidationReportRejectsAgcFixtureCandidateWithoutOptInOrImprovement()
+    {
+        Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell modernization validator smoke runs on Windows.");
+
+        var powerShell = FindPowerShell();
+        Skip.If(powerShell is null, "PowerShell executable was not found.");
+
+        var repoRoot = FindRepoRoot();
+        var bundleDir = Path.Combine(Path.GetTempPath(), $"zeus-agc-candidate-unsafe-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(bundleDir);
+
+        try
+        {
+            WriteSourcePlanScopeBundle(bundleDir);
+            WriteAgcFixtureArtifactManifest(bundleDir);
+            WriteAgcFixtureMetrics(
+                bundleDir,
+                includeMeterProvenance: true,
+                includeCandidate: true,
+                candidateDefaultBehaviorChanged: true,
+                candidateNoImprovement: true);
+
+            var validationReport = Path.Combine(bundleDir, "validation-agc-candidate-unsafe.json");
+            var validation = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "validate-dsp-modernization-bundle.ps1"),
+                "-BundleDir", bundleDir,
+                "-ArtifactManifestPath", Path.Combine(bundleDir, "artifact-manifest.json"),
+                "-ReportPath", validationReport,
+                "-AllowPreflight",
+                "-JsonOnly");
+
+            Assert.NotEqual(0, validation.ExitCode);
+            Assert.True(File.Exists(validationReport), validation.CombinedOutput);
+
+            using var validationDoc = JsonDocument.Parse(await File.ReadAllTextAsync(validationReport));
+            var validationRoot = validationDoc.RootElement;
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsAgcCandidatePresent").GetBoolean());
+            Assert.False(validationRoot.GetProperty("offlineFixtureMetricsAgcCandidateReady").GetBoolean());
+            Assert.Equal("default-behavior-changed", validationRoot.GetProperty("offlineFixtureMetricsAgcCandidateStatus").GetString());
+            Assert.True(validationRoot.GetProperty("offlineFixtureMetricsAgcCandidateDefaultBehaviorChanged").GetBoolean());
+
+            var errorCodes = validationRoot.GetProperty("errors")
+                .EnumerateArray()
+                .Select(issue => issue.GetProperty("code").GetString())
+                .ToArray();
+            Assert.Contains("offline-fixture-agc-candidate-not-ready", errorCodes);
+
+            var summaryReport = Path.Combine(bundleDir, "summary-agc-candidate-unsafe.json");
+            var summary = await RunPowerShellAsync(
+                powerShell,
+                repoRoot,
+                Path.Combine(repoRoot, "tools", "summarize-dsp-modernization-validation-report.ps1"),
+                "-ValidationReportPath", validationReport,
+                "-ReportPath", summaryReport,
+                "-NoMarkdown",
+                "-JsonOnly");
+
+            Assert.Equal(0, summary.ExitCode);
+            using var summaryDoc = JsonDocument.Parse(await File.ReadAllTextAsync(summaryReport));
+            var gate = summaryDoc.RootElement.GetProperty("evidenceGates")
+                .EnumerateArray()
+                .Single(item => item.GetProperty("gateId").GetString() == "agc-fixture-opt-in-proof");
+            Assert.False(gate.GetProperty("ready").GetBoolean());
+            Assert.False(gate.GetProperty("requiredForAcceptance").GetBoolean());
+            Assert.Equal("default-behavior-changed", gate.GetProperty("status").GetString());
+            Assert.Contains("agc-fixture-opt-in-proof", ReadStringArray(summaryDoc.RootElement, "advisoryEvidenceGateProblemIds"));
+        }
+        finally
+        {
+            if (Directory.Exists(bundleDir))
+            {
+                Directory.Delete(bundleDir, recursive: true);
+            }
+        }
+    }
+
+    [SkippableFact]
     public async Task RxLevelerFixtureBenchmarkToolExportsCandidateEvidence()
     {
         Skip.IfNot(RuntimeInformation.IsOSPlatform(OSPlatform.Windows), "PowerShell RX leveler benchmark smoke runs on Windows.");
@@ -16967,10 +17128,30 @@ public sealed class DspModernizationValidationToolTests
     private static void WriteAgcFixtureMetrics(
         string bundleDir,
         bool includeMeterProvenance,
-        bool mismatchMetric = false)
+        bool mismatchMetric = false,
+        bool includeCandidate = false,
+        bool candidateDefaultBehaviorChanged = false,
+        bool candidateNoImprovement = false)
     {
         var metricsPath = Path.Combine(bundleDir, "artifacts", "offline-fixture-metrics.json");
         Directory.CreateDirectory(Path.GetDirectoryName(metricsPath)!);
+        var comparisons = new List<object>
+        {
+            AgcFixtureComparison(
+                "current-zeus",
+                includeMeterProvenance,
+                mismatchMetric)
+        };
+        if (includeCandidate)
+        {
+            comparisons.Add(AgcFixtureComparison(
+                "candidate-under-test",
+                includeMeterProvenance,
+                mismatchMetric: false,
+                candidate: true,
+                candidateDefaultBehaviorChanged: candidateDefaultBehaviorChanged,
+                candidateNoImprovement: candidateNoImprovement));
+        }
 
         var metrics = new
         {
@@ -16981,7 +17162,9 @@ public sealed class DspModernizationValidationToolTests
             wdspRuntimeSha256 = ValidWdspRuntimeSha256,
             wdspRuntimeStatus = "found",
             scenarioCount = 1,
-            comparisonIds = new[] { "current-zeus" },
+            comparisonIds = includeCandidate
+                ? new[] { "current-zeus", "candidate-under-test" }
+                : new[] { "current-zeus" },
             scenarios = new object[]
             {
                 new
@@ -16990,7 +17173,7 @@ public sealed class DspModernizationValidationToolTests
                     scenarioName = "AGC level step and pumping",
                     fixtureStatus = "offline-fixture-ready",
                     signalPath = "RX IQ/RX audio",
-                    comparisons = new object[] { AgcFixtureComparison(includeMeterProvenance, mismatchMetric) }
+                    comparisons = comparisons.ToArray()
                 }
             }
         };
@@ -16999,20 +17182,35 @@ public sealed class DspModernizationValidationToolTests
     }
 
     private static Dictionary<string, object?> AgcFixtureComparison(
+        string comparisonId,
         bool includeMeterProvenance,
-        bool mismatchMetric)
+        bool mismatchMetric,
+        bool candidate = false,
+        bool candidateDefaultBehaviorChanged = false,
+        bool candidateNoImprovement = false)
     {
-        const double meterMovementDb = 2.75;
+        var meterMovementDb = candidate
+            ? candidateNoImprovement ? 55.0 : 20.946762
+            : 50.948448;
+        var rmsMovementDb = candidate
+            ? candidateNoImprovement ? 6.0 : 3.902742
+            : 5.600222;
+        var signalSinadDb = candidate
+            ? candidateNoImprovement ? -25.25 : -24.293599
+            : -24.510386;
+        var peak = candidate ? 0.791623 : 0.861257;
         var metricMovementDb = mismatchMetric ? 1.25 : meterMovementDb;
         var comparison = new Dictionary<string, object?>
         {
-            ["comparisonId"] = "current-zeus",
+            ["comparisonId"] = comparisonId,
             ["source"] = "wdsp-fixture-runner",
-            ["profile"] = "current-zeus",
+            ["profile"] = candidate ? "wdsp-rxa-agc-top-cap-50db-candidate" : "current-zeus",
             ["metrics"] = new Dictionary<string, object?>
             {
                 ["AGC gain movement"] = metricMovementDb,
-                ["windowed RMS movement"] = 0.35,
+                ["windowed RMS movement"] = rmsMovementDb,
+                ["signal SINAD"] = signalSinadDb,
+                ["peak"] = peak,
                 ["processing elapsed ms"] = 4.2,
                 ["throughput ratio"] = 5.0
             },
@@ -17029,6 +17227,20 @@ public sealed class DspModernizationValidationToolTests
                 source = "WDSP RXA_AGC_GAIN meter",
                 agcGainSampleCount = 8,
                 agcGainMovementDb = meterMovementDb
+            };
+        }
+        if (candidate)
+        {
+            comparison["candidateDiagnostics"] = new
+            {
+                schemaVersion = 1,
+                profileKind = "fixture-only-rx-agc-top-cap",
+                defaultBehaviorChanged = candidateDefaultBehaviorChanged,
+                requiresRuntimeOptIn = true,
+                fixtureOnly = true,
+                rxAgcTopDb = 50.0,
+                baselineRxAgcTopDb = 80.0,
+                rxAgcTopReductionDb = 30.0
             };
         }
 
