@@ -69,6 +69,8 @@ import { PsToggleButton } from './components/PsToggleButton';
 import { PaTempChip } from './components/PaTempChip';
 import { QrzStatusPill } from './components/QrzStatusPill';
 import { RotatorStatusPill } from './components/RotatorStatusPill';
+import ReportProblemButton from './components/report-problem/ReportProblemButton';
+import ReportProblemModal from './components/report-problem/ReportProblemModal';
 import type { SettingsTabId } from './components/SettingsMenu';
 import { SignalIntelligenceController } from './components/SignalIntelligenceController';
 import { SmartNrController } from './components/SmartNrController';
@@ -1075,6 +1077,7 @@ export default function App() {
         </span>
         <RotatorStatusPill />
         <QrzStatusPill />
+        <ReportProblemButton />
         {/* Reset acts on the active layout's tile arrangement. Disabled
             while the Settings view is showing (no active workspace to
             mutate). Add Panel now lives inside the workspace surface. */}
@@ -1119,6 +1122,7 @@ export default function App() {
         onOpenSettings={() => setSettingsView(true, 'updates')}
       />
       <UpdatePrompt show={updateAvailable} onUpdate={installUpdate} />
+      <ReportProblemModal />
     </div>
     </SpectrumWheelActionsContext.Provider>
     </WorkspaceContext.Provider>

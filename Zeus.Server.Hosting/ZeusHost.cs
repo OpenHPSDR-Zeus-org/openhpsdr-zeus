@@ -14,6 +14,7 @@ using Zeus.Dsp.Wdsp;
 using Zeus.Plugins.Host;
 using Zeus.Protocol1;
 using Zeus.Protocol1.Discovery;
+using Zeus.Server.Diagnostics;
 using Zeus.Server.Tci;
 
 namespace Zeus.Server;
@@ -67,6 +68,15 @@ public static class ZeusHost
         // POST numeric mode values keep working.
         builder.Services.Configure<JsonOptions>(o =>
             o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+
+        // Self-diagnostic log capture (the "Report a problem" footer button). A
+        // singleton ring buffer always retains the last ~1000 formatted log lines
+        // (you can't capture logs retroactively), and the report ships the last
+        // 100. The provider and the DI singleton MUST be the same instance so the
+        // report builder snapshots what the provider has been filling.
+        var diagnosticLogBuffer = new DiagnosticLogBuffer();
+        builder.Services.AddSingleton(diagnosticLogBuffer);
+        builder.Logging.AddProvider(new RingBufferLoggerProvider(diagnosticLogBuffer));
 
         // Resolve TCI bind settings from configuration before DI builds, because
         // Kestrel's listeners have to be declared now. TCI shares Kestrel (rather
@@ -358,6 +368,26 @@ public static class ZeusHost
         // Relaunch helper for the prefs-database (profile) selector — switching
         // the active DB applies on the next launch, so the endpoint relaunches.
         builder.Services.AddSingleton<AppRestartService>();
+
+        // Self-diagnostic "Report a problem" feature: read-only probes, the
+        // symptom→recipe registry, the known-issue rules (seeded from docs/rca +
+        // docs/lessons), and the report builder. All strictly read-only — the
+        // tx-ps probe reads PsEnabled/HwPeak but never arms PS (burn-zone).
+        builder.Services.AddSingleton<IDiagnosticProbe, EnvironmentProbe>();
+        builder.Services.AddSingleton<IDiagnosticProbe, ConnectionProbe>();
+        builder.Services.AddSingleton<IDiagnosticProbe, BoardProbe>();
+        builder.Services.AddSingleton<IDiagnosticProbe, DspAudioProbe>();
+        builder.Services.AddSingleton<IDiagnosticProbe, TxPsProbe>();
+        builder.Services.AddSingleton<IKnownIssueRule, PsNotArmedRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, IqWriteGateRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, RxAuxBypassRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, Hl2DriveModelRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, RxaAudioSilenceRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, DisconnectionRule>();
+        builder.Services.AddSingleton<IKnownIssueRule, PsStartupArmedRule>();
+        builder.Services.AddSingleton<SymptomRegistry>();
+        builder.Services.AddSingleton<DiagnosticReportBuilder>();
+
         builder.Services.AddSingleton<DspSettingsStore>();
         builder.Services.AddSingleton<CfcPresetStore>();
         builder.Services.AddSingleton<PaSettingsStore>();
